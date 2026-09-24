@@ -17,6 +17,28 @@ with mock_gtk():
     import restore_page as rp
 
 
+class _FakeStyleContext:
+    """Records style classes added to / removed from a widget."""
+
+    def __init__(self):
+        self.classes = set()
+
+    def add_class(self, name):
+        self.classes.add(name)
+
+    def remove_class(self, name):
+        self.classes.discard(name)
+
+
+def _recording_style_context(widget):
+    """Return the widget's style context, creating a recording one on demand."""
+    context = getattr(widget, "_style_context", None)
+    if context is None:
+        context = _FakeStyleContext()
+        widget._style_context = context
+    return context
+
+
 class _FakeEntry:
     """Entry-like fake that records its text value."""
 
@@ -51,6 +73,9 @@ class _FakeEntry:
     def set_halign(self, *args):
         pass
 
+    def get_style_context(self):
+        return _recording_style_context(self)
+
 
 class _FakeCheckButton:
     """CheckButton-like fake that records its active state."""
@@ -73,6 +98,9 @@ class _FakeCheckButton:
 
     def set_hexpand(self, *args):
         pass
+
+    def get_style_context(self):
+        return _recording_style_context(self)
 
 
 class _FakeComboBoxText:
@@ -98,6 +126,9 @@ class _FakeComboBoxText:
 
     def connect(self, *args):
         pass
+
+    def get_style_context(self):
+        return _recording_style_context(self)
 
 
 class _FakeApp:
@@ -459,6 +490,33 @@ class TestRestoreAdvancedLabel(unittest.TestCase):
         app._restore_update_advanced_label()
         self.assertIn('foreground="orange"', self._label_markup(expander))
 
+    def test_non_default_var_value_turns_orange(self):
+        app, _expander = self._create_page()
+        self._install_default_widgets(app)
+        app.restore_var_widgets["pv_rate_limit"].set_text("50M")
+        app._restore_update_advanced_label()
+        context = app.restore_var_widgets["pv_rate_limit"].get_style_context()
+        self.assertIn("zfsu-nondefault", context.classes)
+        other = app.restore_var_widgets["depth"].get_style_context()
+        self.assertNotIn("zfsu-nondefault", other.classes)
+
+    def test_reverting_var_value_removes_orange(self):
+        app, _expander = self._create_page()
+        self._install_default_widgets(app)
+        widget = app.restore_var_widgets["pv_rate_limit"]
+        widget.set_text("50M")
+        app._restore_update_advanced_label()
+        widget.set_text("")
+        app._restore_update_advanced_label()
+        self.assertNotIn("zfsu-nondefault", widget.get_style_context().classes)
+
+    def test_pause_scrubs_value_turns_orange(self):
+        app, _expander = self._create_page()
+        self._install_default_widgets(app)
+        app.restore_pause_scrubs.set_active(True)
+        app._restore_update_advanced_label()
+        self.assertIn("zfsu-nondefault", app.restore_pause_scrubs.get_style_context().classes)
+
     def test_load_config_refreshes_label(self):
         app, expander = self._create_page()
         self._install_default_widgets(app)
@@ -501,6 +559,9 @@ class _StatefulComboBoxText:
     def connect(self, signal, callback, *args):
         self._callbacks = getattr(self, "_callbacks", {})
         self._callbacks[signal] = callback
+
+    def get_style_context(self):
+        return _recording_style_context(self)
 
     def __getattr__(self, name):
         if name.startswith("_"):

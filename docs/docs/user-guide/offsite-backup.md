@@ -20,15 +20,15 @@ tab to configure the equivalent workflow.
    ```bash
    sudo zfssendoffsite
    ```
-
+   
    Offsite backups are not globally serialized with daily backups or restores.
    Multiple operations can run concurrently when they operate on disjoint
-   datasets; per-dataset locks still prevent collisions on the same datasets.
+   dataset trees; per-dataset locks still prevent collisions on the same datasets although some operations may be delayed or terminated.
 
 3. Export and remove the pool:
    
    ```bash
-   sudo zpool export z22tb
+   sudo zpool export <pool>
    ```
 
 ## What Gets Copied
@@ -43,18 +43,20 @@ threeamigos/proxmox ──→ fivebays ─────────────�
 NVME1 ───────────────────┘
 ```
 
-| Step | Source        | Destination | Notes                  |
-| ---- | ------------- | ----------- | ---------------------- |
-| 1    | `temp`        | `<offsite>` | Excludes `temp/temp`   |
-| 2    | `threeamigos` | `fivebays`  | `proxmox` subtree only |
-| 3    | `NVME1`       | `fivebays`  | All datasets           |
+| Step | Source        | Destination | Notes                                          |
+| ---- | ------------- | ----------- | ---------------------------------------------- |
+| 1    | `temp`        | `<offsite>` | Excludes `temp/temp`                           |
+| 2    | `threeamigos` | `fivebays`  | `proxmox` subtree only                         |
+| 3    | `NVME1`       | `fivebays`  | All datasets                                   |
 | 4    | `fivebays`    | `<offsite>` | `threeamigos/proxmox` and `NVME1/proxmox` only |
 
 The `<offsite>` token is replaced at run time with the first online offsite
 pool marked as an offsite candidate in the pool registry.  When the
-destination is just `<offsite>`, the source dataset tree is appended under
-that pool (for example, `temp` → `z22tb/temp` and `fivebays` →
-`z22tb/fivebays`).
+destination is just `<offsite>`, the source dataset tree is appended under that pool. For example, 
+
+- `temp`→`<offsite>` becomes `temp`→`z22tb/temp` and 
+
+- `fivebays`→`<offsite>` becomes `fivebays`→`z22tb/fivebays`
 
 ### Scope alignment with daily backup
 
@@ -67,14 +69,14 @@ daily backup must roll those `@offsite` snapshots back, which is logged as a
 
 This is also the key to running daily and offsite backups concurrently.  When
 scopes are aligned, both jobs create `@offsite` and `@dailybackup` snapshots on
-the same source datasets, so the common snapshot found by GUID is always the
+the same source datasets, so the common snapshot (identified by GUID) is always the
 newest snapshot on the destination and no rollback is needed.  Per-dataset
 locks in `zfs-send-receive` serialize access to shared datasets, so the two
 jobs take turns on overlapping datasets rather than corrupting snapshot
 histories.
 
 Configure the offsite source and includes to match the daily backup source, or
-narrow the daily backup to the same subtree the offsite snapshots.
+narrow the daily backup to the same subtree as the offsite backups.
 
 ## Snapshot Label and Holds
 
@@ -111,18 +113,17 @@ before applying holds to existing snapshots.
 
 ## Pause Scrubs During Send/Receive
 
-The Offsite tab has an option to **pause scrubs on the source and destination
+The Offsite tab in the GUI has an option to **pause scrubs on the source and destination
 pools while each offsite step is running**. This reduces I/O contention during
 the offsite copy and resumes scrubs automatically when the step finishes.
 
 - Enable it in the Offsite tab → **Advanced** →
   **Pause scrubs on source/destination pools during each step**.
 - Only the pools used by the current step are paused.
-- Pools whose scrub has already finished or that are not online are skipped;
-  they are not marked as user-paused.
+- Pools whose scrub has already finished or that are not online are ignored and scrubs are not paused or resumed.
 - In dry-run mode the option logs what it would pause/resume but does not
   change scrub state.
-- When a step finishes, the runner attempts to resume any scrub it paused. If
+- When a step finishes, ZFSutilities attempts to resume any scrub it paused. If
   the scrub was already resumed by another process or finished on its own, the
   session log records that fact instead of silently doing nothing.
 
@@ -167,8 +168,7 @@ counts). The same safety checks apply as when pruning from the GUI.
 
 Use the **Retention** tab in the GUI to prune `@offsite` snapshots. Select the
 pool whose retention policy you want to apply and click **Prune**. This runs the
-retention policy against all snapshot labels on that pool, including the `s`
-(offsite) bucket.
+retention policy against all filesystems and volumes on that pool.
 
 - Dry-run mode is respected if the **Dry Run** toggle is active.
 - The **Prune** button is disabled while a retention job is running.

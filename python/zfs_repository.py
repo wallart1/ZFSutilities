@@ -6,6 +6,7 @@ raise subprocess.CalledProcessError on failure so callers can decide how to
 handle errors; write methods swallow the exception and return success/failure.
 """
 
+import json
 import os
 import re
 import shlex
@@ -131,6 +132,27 @@ class HoldRow:
 
 
 @dataclass
+class LoopPartition:
+    """One mountable entry on a loop device backing a zvol.
+
+    When the loop device has a partition table, one entry per partition; when
+    it does not, a single entry for the loop device itself. `has_filesystem`
+    is False for partitions with no detectable filesystem (or a bare loop
+    device with no filesystem).
+    """
+
+    device: str
+    fstype: str
+    mountpoint: str
+    has_filesystem: bool
+
+
+def zvol_device_path(dataset: str) -> str:
+    """Return the /dev/zvol block-device path for a ZFS volume dataset."""
+    return f"/dev/zvol/{dataset}"
+
+
+@dataclass
 class AshiftInfo:
     """Configured and effective pool ashift values."""
 
@@ -236,6 +258,50 @@ def _parse_importable_pools_config(raw: str) -> dict[str, list[str]]:
     return pools
 
 
+def _parse_lsblk_partitions(raw: str, loop_dev: str) -> list[LoopPartition]:
+    """Parse `lsblk --json` output for *loop_dev* into LoopPartition entries.
+
+    If the device has child partitions (type "part"), one entry per child is
+    returned; otherwise a single entry describes the loop device itself.
+    """
+    data = json.loads(raw)
+    devices = data.get("blockdevices", [])
+    base_name = os.path.basename(loop_dev)
+    row = next((blk for blk in devices if blk.get("name") == base_name), None)
+    if row is None and devices:
+        row = devices[0]
+    if row is None:
+        return []
+    children = row.get("children") or []
+    entries = children if children else [row]
+    partitions = []
+    for entry in entries:
+        fstype = entry.get("fstype") or ""
+        partitions.append(
+            LoopPartition(
+                device=f"/dev/{entry.get('name', '')}",
+                fstype=fstype,
+                mountpoint=entry.get("mountpoint") or "",
+                has_filesystem=bool(fstype),
+            )
+        )
+    return partitions
+
+
+def _parse_loop_attach_output(raw: str) -> str:
+    """Return the /dev/loopN path from `losetup --show` output."""
+    return raw.strip().splitlines()[0].strip() if raw.strip() else ""
+
+
+def _parse_loop_find_output(raw: str) -> str | None:
+    """Return the /dev/loopN path from `losetup -j` output, or None."""
+    for line in raw.splitlines():
+        line = line.strip()
+        if line.startswith("/dev/"):
+            return line.split(":", 1)[0].strip()
+    return None
+
+
 def _validate_by_id_path(path: str) -> None:
     """Raise ValueError unless *path* is an absolute /dev/disk/by-id path."""
     if not path.startswith(_BY_ID_PREFIX) or ".." in path or any(c.isspace() for c in path):
@@ -308,7 +374,7 @@ def build_create_pool_command(
         paths = list(by_id_paths)
         for i in range(0, len(paths), 2):
             cmd.append("mirror")
-            cmd += paths[i:i + 2]
+            cmd += paths[i : i + 2]
     else:
         if topology != "stripe":
             cmd.append(topology)
@@ -1050,6 +1116,58 @@ class ZfsRepository:
             log_msg(f"WARN: Failed to set {prop}={value} on {dataset}: {result.stderr.strip()}")
             return False
         return True
+
+    # ------------------------------------------------------------------
+    # Loop device operations (zvol mounting)
+    # ------------------------------------------------------------------
+
+    def _cmd(self, *args: str) -> list[str]:
+        """Prefix *args* with sudo when the repository was built with sudo=True."""
+        return (["sudo"] if self.sudo else []) + list(args)
+
+    def loop_attach(self, zvol_dev: str) -> str:
+        """Attach *zvol_dev* to a new read-only loop device with partition scan.
+
+        Returns the /dev/loopN path. Read-only on purpose: these volumes are
+        often live VM disks or backup targets. Raises
+        subprocess.CalledProcessError on failure.
+        """
+        result = self._run(
+            self._cmd("losetup", "--find", "--show", "--partscan", "--read-only", zvol_dev)
+        )
+        return _parse_loop_attach_output(result.stdout)
+
+    def loop_find(self, zvol_dev: str) -> str | None:
+        """Return the /dev/loopN device attached to *zvol_dev*, or None."""
+        result = self._run(self._cmd("losetup", "-j", zvol_dev), check=False)
+        if result.returncode != 0:
+            return None
+        return _parse_loop_find_output(result.stdout)
+
+    def loop_detach(self, loop_dev: str) -> bool:
+        """Detach *loop_dev*. Returns True on success."""
+        result = self._run(self._cmd("losetup", "-d", loop_dev), check=False)
+        return result.returncode == 0
+
+    def loop_partitions(self, loop_dev: str) -> list[LoopPartition]:
+        """List partitions (or the bare device) on *loop_dev*.
+
+        Raises subprocess.CalledProcessError if *loop_dev* is not available.
+        """
+        result = self._run(
+            self._cmd("lsblk", "--json", "--output", "NAME,TYPE,FSTYPE,MOUNTPOINT,SIZE", loop_dev)
+        )
+        return _parse_lsblk_partitions(result.stdout, loop_dev)
+
+    def device_mountpoint(self, device: str) -> str | None:
+        """Return the mountpoint *device* is mounted at, or None if unmounted."""
+        result = self._run(
+            self._cmd("findmnt", "--noheadings", "--output", "TARGET", device), check=False
+        )
+        if result.returncode != 0:
+            return None
+        target = result.stdout.strip().splitlines()
+        return target[0].strip() if target else None
 
     # ------------------------------------------------------------------
     # Version / topology reads

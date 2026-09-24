@@ -129,6 +129,11 @@ zfslockctl wait <dataset> <type>    Wait for lock availability
 In two-node mode, `status`, `wait`, `release`, and `cleanup` forward to the
 storage node when the dataset is storage-owned.
 
+`zfslockctl wait` polls every `ZFSLOCK_WAIT_INTERVAL` seconds (default 30)
+using the same `_zfslock_sanitize_interval` rules as the library: positive
+fractional values are accepted, and invalid or non-positive values fall back
+to `1` second.
+
 ### Python client
 
 `python/zfs_lock_manager.py` provides `list_active_locks()`, which returns all

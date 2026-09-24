@@ -314,9 +314,7 @@ class TestDiskRepositorySmartWear(unittest.TestCase):
     def test_no_wear_attributes_returns_none(self):
         payload = {
             "ata_smart_attributes": {
-                "table": [
-                    {"id": 9, "name": "Power_On_Hours", "value": 100, "raw": {"value": 1234}}
-                ]
+                "table": [{"id": 9, "name": "Power_On_Hours", "value": 100, "raw": {"value": 1234}}]
             }
         }
         self.assertIsNone(self._wear_with_json(payload))

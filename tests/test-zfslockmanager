@@ -1032,13 +1032,13 @@ test_remote_poll_interval_fallback() {
         done
     }
 
-    local acquired=1
+    local poll_acquired=1
     if ZFSLOCK_REMOTE_POLL_INTERVAL=abc \
         zfslock_acquire "remotepool/pollfb" "w" "poll fallback test" \
         >/dev/null 2>&1; then
-        [[ "$zfslock_id" == "REMOTE:$response_lockfile" ]] || acquired=0
+        [[ "$zfslock_id" == "REMOTE:$response_lockfile" ]] || poll_acquired=0
     else
-        acquired=0
+        poll_acquired=0
     fi
 
     # Restore the overridden functions before releasing so the remote
@@ -1050,11 +1050,11 @@ test_remote_poll_interval_fallback() {
         unset -f sleep 2>/dev/null || true
     fi
 
-    if [[ $acquired == 1 ]] && grep -qx "0.1" "$sleep_log" \
+    if [[ $poll_acquired == 1 ]] && grep -qx "0.1" "$sleep_log" \
         && ! grep -q "abc" "$sleep_log"; then
         test_pass
     else
-        test_fail "acquired=$acquired sleep_log=$(tr '\n' ' ' < "$sleep_log" 2>/dev/null)"
+        test_fail "acquired=$poll_acquired sleep_log=$(tr '\n' ' ' < "$sleep_log" 2>/dev/null)"
     fi
     zfslock_release "$zfslock_id" 2>/dev/null || true
 

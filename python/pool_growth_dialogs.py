@@ -1041,11 +1041,7 @@ def _populate_target_store(
         if detach_targets:
             # The detach rule is authoritative: mirror members re-enable a row
             # even when a greyed parent group would have inherited greying.
-            if (
-                node.vdev_type == "disk"
-                and parent is not None
-                and parent.vdev_type == "mirror"
-            ):
+            if node.vdev_type == "disk" and parent is not None and parent.vdev_type == "mirror":
                 foreground = None
                 greyed = False
             else:
@@ -1101,9 +1097,7 @@ def _build_target_tree(
     page.pack_start(hint, False, False, 0)
 
     store = Gtk.TreeStore(str, str, str, str, object, str)
-    _populate_target_store(
-        store, state, caps, gate_raidz=gate_raidz, detach_targets=detach_targets
-    )
+    _populate_target_store(store, state, caps, gate_raidz=gate_raidz, detach_targets=detach_targets)
     view = Gtk.TreeView(model=store)
     view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
     view.get_selection().connect("changed", _on_target_changed, store, state, on_change)

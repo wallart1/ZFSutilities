@@ -4,6 +4,78 @@ Session notes, progress notes, and notes to myself. Per the root `AGENTS.md`
 Hard Rules, these live here — never in AGENTS.md (which is user-owned). I
 maintain this file and remove obsolete entries as work evolves.
 
+## 2026-09-19 — Migrate Pool smoke-test failure: double-prefix bug + holding namespace
+
+- Smoke test (holding-pool migration of zfstest2 via zfstest3) failed in
+  `zfs-migrate-send`: `cannot open 'zfstest2/zfstest2/zfstest1': dataset does
+  not exist`. Root cause: `on_disks_migrate_pool` captured `row.name` from
+  `zfs list -H` (FULL names including the pool prefix) into
+  `datasets_by_pool`, but `_copy_steps`/`_build_verify_step`/holding destroy
+  compose `f"{pool}/{dataset}"` — double prefix (`pool/pool/...`). Unit tests
+  missed it because fixtures passed already-relative names. Fix: capture now
+  strips the pool prefix; fixtures return full names like real zfs.
+- User-directed design (approved over hard-blocking): holding-mode copies now
+  land in a reserved namespace `<holding>/migrate_<source>/<dataset>`
+  (`holding_migration_namespace()` in pool_migrate.py), so a pool that also
+  receives backups/offsite copies (zfstest3 in the smoke test) stays usable as
+  a holding pool. Namespace is deterministic (resume-safe across re-runs);
+  cutover removes it with a single `zfs destroy -r
+  <holding>/migrate_<source>`.
+- Handler re-validates the source pool's dataset layout at execution
+  (`_source_layout_changed`) and aborts with an explanation before the lock
+  when the tree changed after the review.
+- Golden `TestBuildMigrationSteps.test_holding_mode_cutover_sequence`
+  regenerated (10 steps now; per-dataset destroys collapsed into one
+  namespace destroy).
+
+## 2026-09-19 — Development-cycle wrap-up (review, tests, docs)
+
+- Resolved the open PREEXISTING.md item: ran `ruff format` across `python/`
+  and `tests/` (31 files); `ruff format --check` and `ruff check` are now
+  clean repo-wide. PREEXISTING.md has no open entries.
+- Removed `var_widgets_differ_from_defaults` from `gui_helpers.py`: all four
+  production callers had moved to `style_var_widgets_nondefault`, leaving it
+  exercised only by its own tests (dead code per the single-call-site
+  policy). Its test class and the `python-modules.md` table reference went
+  with it.
+- Added a profuse comment above the `loop\d+(p\d+)?` partition-row regex in
+  `get_tree_selection_items` (>10-char regexes must be documented per
+  coding-policies.md).
+- Fixed `test_docs_integrity` AGENTS.md reference extraction to skip
+  blockquote lines — the root AGENTS.md "Pre-existing issues" example quotes
+  a `zfs_repository.py/test_zfs_repository.py` fragment that is illustrative,
+  not a real path, and made `test_all_references_exist` fail. Added a
+  regression test.
+- Full suite green after the above.
+
+## 2026-09-19 — Datasets page: zvol loop mounting
+
+- Mount on a ZFS volume now attaches the volume's `/dev/zvol/…` device to a
+  read-only loop device (`losetup --find --show --partscan --read-only`;
+  read-only chosen with the user because these zvols are live VM disks via
+  iSCSI and active backup targets). Partitions then appear as rows under the
+  volume's tree entry (Type column = filesystem, or `No filesystem` when no
+  fs is detected; bare device with fs listed as one row). Partitions mount
+  under `paths.get_zvol_mount_dir()` (default `/mnt/zfsutilities`, env
+  `ZFSUTILITIES_ZVOL_MOUNT_DIR`) and are browseable once mounted. Unmount
+  symmetry (user-approved): partition row = umount; volume row = unmount
+  partitions then `losetup -d`.
+- New `ZfsRepository` methods: `loop_attach`, `loop_find`, `loop_detach`,
+  `loop_partitions` (+ `LoopPartition` dataclass and `_parse_lsblk_partitions`
+  pure parser), `device_mountpoint`; module helper `zvol_device_path`.
+  gui_helpers grew `load_volume_loop_children`, `reload_row_children`,
+  `find_tree_iter_by_full_name`; `on_row_expanded` refactored into
+  `_load_children_for_row` (watch this if row kinds change). Partition rows
+  are detected structurally (parent row Type == `volume`, name matches
+  `loop\d+(p\d+)?`) — snapshot rows under volumes must keep being checked
+  before that branch (done in `get_tree_selection_items` via the regex and in
+  `update_mounted_states` via the snapshot-first ordering).
+- Volume rows have no zfs `mounted` property (always `-`); button sensitivity
+  for volumes derives from `losetup -j` state in
+  `update_ds_button_sensitivity`.
+- Docs: gtk-gui.md button table + new "Mounting ZFS volumes (zvols)"
+  subsection; python-modules.md zfs_repository/paths entries.
+
 ## 2026-09-18 — Agent Working Conditions, Phase 6 (golden files) + Phase 6b/6c complete
 
 - New helpers: `assert_golden` in `tests/test-lib.sh` (with `TESTS_UPDATED`
@@ -193,3 +265,172 @@ maintain this file and remove obsolete entries as work evolves.
   default branch. Image `zfsutilities-dev` exists locally. Flagged to user:
   ~/.config/zfsutilities/docs_viewer_state.json (mtime Sep 11) shows test
   pollution (theme slate) — left untouched; user may want to reset it.
+- **2026-09-18 pre-existing issues sweep.** (1)
+  `test_gui_infrastructure.py::test_capture_theme_parses_reported_scheme`
+  pollution: verified already fixed at HEAD (Release 0.104.0 wraps the test in
+  `temp_config_dir` + `temp_user_config_dir`); ran the test and the full
+  TestDocsViewerStatePersistence class — real ~/.config/zfsutilities/
+  docs_viewer_state.json mtime+sha256 unchanged (67a83655..., Sep 11). Content
+  (zoom 1.1, 951x1004@965,36) does not match any mock geometry, so it reads as
+  genuine user state, not residue; left untouched. (2) bin/zfslockctl cmd_wait
+  integer-only ZFSLOCK_WAIT_INTERVAL validation: replaced with the shared
+  `_zfslock_sanitize_interval` (same call as zfslockmanager: default 30,
+  fallback 1, fractional allowed). Added tests/test-zfslockctl (6 tests:
+  validation, no-sleep availability, fractional reaches sleep, abc/0 fallback;
+  sleep-stub pattern from test-zfslockmanager; suite fails on the old code,
+  passes on the fixed). Doc: lock-manager.md zfslockctl section now states the
+  shared interval semantics. PREEXISTING.md had no entries (nothing to
+  remove; 0 remain).
+
+2026-09-19 — Retention Advanced Prune Options UX fix: the red frame was retitled
+"Ignore Retention Policies - Danger Zone" while holding the filter rows, with the
+actual "Ignore retention policies" toggle below it — same words for section and
+toggle, and the filters were silently inert in normal prune mode. Fix (python/
+retention_page.py): toggle + explanatory caption now sit at the top of the
+expander; frame renamed "Mass Delete Filters - Danger Zone"; includes/excludes/
+startwith/endwith/snapshot_has are desensitized when the toggle is off
+(_sync_releaseholds_widget replaced by _sync_mass_delete_filter_sensitivity;
+releaseholds stays sensitive in both modes); checkbox tooltip corrected ("filters
+in the 'Mass Delete Filters' frame below"). Tests: test_retention_page.py label,
+tooltip, and new filter-sensitivity tests. Docs: user-guide/retention.md Advanced
+Prune Options section and gtk-gui.md Retention passages (also fixed a stale
+"Release Holds only when ignore mode is active" claim — it applies in both modes).
+Full tests/run-tests green (3668 passed, 0 failed, 1 env skip). No new
+pre-existing issues discovered this turn; 1 entry remains in PREEXISTING.md
+(repo-wide ruff format drift, from an earlier session).
+
+2026-09-19 — Wrap-up cycle (steps 1-4). (1) Resolved both PREEXISTING.md
+entries: documented the 18-char `vm-(\d+)-disk-\d+` regex in
+gui_helpers.py `diagnose_dataset_busy`; `_MigrateState` gained a
+`holding_pools` field (all imported non-root pools) so empty imported pools
+are now offered as holding-pool candidates (`_holding_candidates` draws from
+it; `on_disks_migrate_pool` populates it). (2) Policy review: ruff check and
+ruff format clean on python/ and tests/ (one pre-existing format nit in
+docs/docs/developer-guide/testing.md, recorded); shellcheck clean after
+renaming the `acquired` local to `poll_acquired` in tests/test-zfslockmanager
+(SC2178/SC2128 false positive from the same-named array in
+bin/zfslockmanager). (3) Tests: new TestHoldingCandidates class in
+test_pool_migrate_dialogs.py (empty pool offered/accepted as holding pool,
+source-only reports no holding pool). Full tests/run-tests green (73 suites,
+3718 passed, 0 failed, 1 env skip). (4) Docs: gtk-gui.md Migrate Pool
+holding-pool bullet now states that any imported non-root pool qualifies,
+even an empty one; test_docs_integrity.py passes. New PREEXISTING.md entries
+(2, unfrozen per instructions): undocumented 21-char bash regex in
+bin/zfslockmanager `_zfslock_sanitize_interval`; the testing.md ruff-format
+nit.
+
+2026-09-19 — Disks-page view-scoping + Migrate Pool silent-source fix (user
+report). Symptoms: with the page pool selector on empty pool zfstest1 and the
+Dataset Tuning view open, Migrate Pool was clickable and opened the wizard
+preselected on zfstest2 with zfstest1 absent from the Source drop-down. Root
+causes: (1) the Disks-page action bar was not view-aware, so pool/disk
+buttons stayed sensitive in Dataset Tuning (and dataset buttons in
+Inventory); (2) on_disks_migrate_pool silently fell back to pools[0] when the
+selector's pool was not a migratable source (empty or root pool). Fixes
+(python/disks_page.py): new `_current_disks_view()` helper (unknown view
+names fall back to "inventory" so mocked-app tests keep working) and a view
+gate in update_disks_button_sensitivity — pool/disk buttons (Create Pool,
+growth/maintenance six, SMART Details, Surface Test) require the Inventory
+view, Apply Profile/Rewrite Data require the Tuning view, with pointing
+tooltips; `_on_view_radio_toggled` now refreshes sensitivity. Fix
+(python/pool_migrate_dialogs.py): a preselected pool that cannot be a source
+now shows an info dialog (root-pool wording vs. empty-pool wording that
+mentions holding-pool eligibility) and returns before the wizard opens; the
+pools[0] fallback remains only for an empty preselection. Tests: new
+TestViewScopedButtonSensitivity in test_disks_page.py; three new
+TestHandlerGuards tests (valid preselection used, empty pool explains and
+skips, root pool explains and skips); test_disks_page_dataset_tuning.py
+_make_app pins the tuning view; the radio-toggle test patches the sensitivity
+update. Docs: gtk-gui.md Actions lead-in explains view-aware bar; Migrate
+Pool section documents the refuse-to-open behavior. Full tests/run-tests
+green.
+
+2026-09-19 — Fixed GLib warning "expected enumeration type PangoWrapMode, but
+got GtkWrapMode instead" seen while opening the Apply Profile dialog: the
+Description cell renderer in show_apply_profile_dialog
+(python/disks_page.py) set wrap-mode to Gtk.WrapMode.WORD; CellRendererText
+requires Pango.WrapMode (Gtk.WrapMode is only valid on Gtk.TextView, whose
+set_wrap_mode call sites are unchanged). Now imports Pango and uses
+Pango.WrapMode.WORD with an explanatory comment.
+
+2026-09-19 — Apply Profile dialog picker made taller and vertically
+resizable (user request): the profile-list scrolled window in
+show_apply_profile_dialog (python/disks_page.py) had min_content_height 150
+and was packed with expand=False, so only the command preview grew when the
+dialog was resized. Now min_content_height is 240 and it packs with
+expand=True, so resizing the dialog vertically shares space between the
+profile list and the preview (Gtk.Dialog was already user-resizable).
+Tests: test_apply_profile_picker_is_tall_and_expands; also fixed
+test_apply_profile_picker_description_renderer_wraps, which still asserted
+the pre-Pango Gtk.WrapMode and had been missed by the earlier suite run.
+
+2026-09-19 — Moved dataset tuning from Disks page to Datasets page (user
+request). New python/profile_dialogs.py holds the Apply Profile picker/preview
+(now taking pool_has_special as a parameter instead of reading the Disks-page
+pool selector/cache), the profile manager/editor, and Rewrite Data execution;
+on_apply_profile/on_rewrite_data take an explicit dataset list and an optional
+refresh callback. Datasets page gains Apply Profile… / Rewrite Data /
+Advanced: Manage Profiles… buttons (action_dispatch "datasets" spec);
+on_datasets_apply_profile collects the tunable tree selection (pool/dataset
+rows, filesystem/volume; snapshots/holds/partitions excluded and logged),
+computes profile_match once for the first dataset, derives pool_has_special
+from ZfsRepository.pool_topology, shows the dialog once, and applies the
+chosen profile equally to all selected datasets. Disks page: entire Dataset
+Tuning view removed (view switcher now Inventory and Topology + Performance);
+apply/rewrite/manage buttons and sensitivity branches removed. Profile store
+unchanged; workload_profiles.py notes the future dataset/pool profile split;
+ashift remains informational (Migrate Pool rewrites a pool). Tests: new
+TestProfileActions in test_datasets_page.py (sensitivity gating, dialog-once
+delegation, selection filtering, pool_has_special from repository); the old
+test_disks_page_dataset_tuning.py is being migrated to
+test_profile_dialogs.py.
+
+2026-09-19 (cont.) — Critical catch during the profile-dialogs move: an
+earlier commit had created python/profile_dialogs.py holding the schedule
+profile dialogs (show_add_profile_dialog / show_recall_profile_dialog /
+_show_profile_scope_warnings), and action_dispatch.py already imported those.
+Creating the new workload-profile module by overwriting that file would have
+broken every backup/offsite/restore "Add Profile to Schedule" flow (the GUI
+would not even import). Restored the three schedule-dialog functions into
+the merged module (docstring now covers both families); the test-migration
+subagent surfaced the ImportError and it was fixed in scope, so its
+PREEXISTING.md entry was removed. Test migration: test_disks_page_dataset_tuning.py
+became test_profile_dialogs.py (view-specific and disks-gating tests deleted
+as superseded; handler tests call on_apply_profile/on_rewrite_data with
+explicit dataset lists); tests/requirements.manifest and testing.md suite
+table updated.
+
+2026-09-24 — Development-cycle wrap-up (steps 1-4). (1) Resolved both
+PREEXISTING.md entries: documented the 21-char `^[0-9]+([.][0-9]+)?$` regex in
+`bin/zfslockmanager _zfslock_sanitize_interval` (pattern, `[.]` rationale,
+rejection list); fixed the ruff-format nit in testing.md line 525 and a second
+unreported one in tests/python/test_datasets_page.py — `ruff format --check`
+and `ruff check` are clean repo-wide. (2) Policy review found 5 violations in
+the changeset, all fixed: `_build_rewrite_command` now sources bashinit and
+uses log_msg instead of echo (matches the command_builders BashStep pattern;
+new test pins it); `_source_layout_changed` docstring summary collapsed to one
+line; uppercase non-exported globals in tests/test-zfslockctl lowercased
+(`_bg_lock_pid`, `_bg_lock_rcfile`, `_waiter_pid`); single-call-site helpers
+gained direct unit tests (new TestVolumeLoopHelpers in test_dataset_actions.py,
+TestSourcePoolMemberHelpers in test_pool_migrate_dialogs.py). New pre-existing
+entry recorded: tests/test-zfslockmanager has the same uppercase-globals
+pattern in committed code, left untouched. shellcheck -S warning clean. (3)
+Test review: added missing get_zvol_mount_dir default/env-override tests to
+test_paths.py; full tests/run-tests green (73 suites, 0 failed, 1 env skip).
+(4) Docs: testing.md bash-suite table gained the test-zfslockctl row and the
+duplicated test_profile_dialogs rows were merged; data-structures.md two
+"Disks tab Apply Profile" references now say Datasets tab; commands.md
+zfslockctl wait section documents the ZFSLOCK_WAIT_INTERVAL fractional/fallback
+semantics. modules.md: the user's hand-edited lettered sub-list under
+zfs-send-receive was re-indented from 3 to 4 spaces (whitespace only — at 3
+spaces Python-Markdown flattens the nested list, which test_docs_integrity
+rejects; wording untouched). test_docs_integrity.py: 23 passed.
+
+2026-09-24 (cont.) — Final full run after docs edits: 4 failures, all in
+tests/python/test_disk_surface_test.py (Errno 13 on
+/run/lock/zfsutilities/.surface_test_state.lock — the directory is now
+root-owned drwxr-xr-x, recreated Sep 21). Environment issue per
+tests/AGENTS.md rule 4; unrelated to the changeset; recorded in
+PREEXISTING.md (2 entries remain: this, and the test-zfslockmanager
+uppercase-globals item). Everything else green: 73 suites, 1 env skip,
+test_docs_integrity 23/23, ruff check/format clean, shellcheck clean.

@@ -63,9 +63,7 @@ _BY_ID_DIR = "/dev/disk/by-id"
 # subsequent backups, plus ~30+ character snapshot-name suffixes), so keep pool
 # names short enough that full dataset/snapshot paths stay well inside limits.
 MAX_POOL_NAME_LEN = 32
-_POOL_NAME_CHARS = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.: "
-)
+_POOL_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.: ")
 _RESERVED_EXACT = ("mirror", "raidz", "draid")
 _RESERVED_PREFIXES = ("mirror", "raidz", "draid", "spare")
 
@@ -143,9 +141,7 @@ def disk_eligibility(
             reasons.append(f"member of imported pool '{imported}'")
         importable = _match_pool(disk, importable_member_paths)
         if importable is not None:
-            reasons.append(
-                f"member of importable pool '{importable}' (import or destroy it first)"
-            )
+            reasons.append(f"member of importable pool '{importable}' (import or destroy it first)")
         if not disk.by_id:
             reasons.append("no /dev/disk/by-id path")
         if disk.disk_type == "unknown":
@@ -154,12 +150,10 @@ def disk_eligibility(
             reasons.append("zvol-backed device")
         if not reasons and disk.transport == "usb":
             warnings.append(
-                "USB-attached disk: not recommended for pool membership "
-                "(bandwidth/reliability)"
+                "USB-attached disk: not recommended for pool membership (bandwidth/reliability)"
             )
         results.append(
-            EligibilityResult(disk=disk, eligible=not reasons, reasons=reasons,
-                              warnings=warnings)
+            EligibilityResult(disk=disk, eligible=not reasons, reasons=reasons, warnings=warnings)
         )
     return results
 
@@ -357,8 +351,7 @@ def estimate_effective_capacity(
         # Striped 2-way mirrors: half the disks hold parity copies and there
         # is no padding loss, so effective capacity equals raw usable.
         raw = (num_disks // 2) * min_disk_bytes
-        return CapacityEstimate(raw_usable_bytes=raw, effective_bytes=raw,
-                                efficiency_fraction=1.0)
+        return CapacityEstimate(raw_usable_bytes=raw, effective_bytes=raw, efficiency_fraction=1.0)
 
     spec = TOPOLOGIES.get(topology)
     if spec is None:
@@ -370,12 +363,10 @@ def estimate_effective_capacity(
 
     if spec.name == "stripe":
         raw = num_disks * min_disk_bytes
-        return CapacityEstimate(raw_usable_bytes=raw, effective_bytes=raw,
-                                efficiency_fraction=1.0)
+        return CapacityEstimate(raw_usable_bytes=raw, effective_bytes=raw, efficiency_fraction=1.0)
     if spec.name == "mirror":
         raw = min_disk_bytes
-        return CapacityEstimate(raw_usable_bytes=raw, effective_bytes=raw,
-                                efficiency_fraction=1.0)
+        return CapacityEstimate(raw_usable_bytes=raw, effective_bytes=raw, efficiency_fraction=1.0)
 
     parity = spec.parity
     raw_usable = (num_disks - parity) * min_disk_bytes

@@ -44,15 +44,15 @@ from dataset_actions import (
 )
 from datasets_page import (
     expand_selected_datasets,
+    on_datasets_apply_profile,
+    on_datasets_manage_profiles,
+    on_datasets_rewrite_data,
     refresh_datasets_page,
     update_ds_button_sensitivity,
 )
 from disk_actions import on_disks_smart_details
 from disks_page import (
-    on_disks_apply_profile,
-    on_disks_manage_profiles,
     on_disks_refresh,
-    on_disks_rewrite_data,
     on_disks_surface_test,
     update_disks_button_sensitivity,
 )
@@ -197,9 +197,6 @@ PAGE_SPECS = {
             ("Detach…", "media-eject", "_disks_detach_btn"),
             ("Add Infra Vdev…", "drive-harddisk", "_disks_add_infra_vdev_btn"),
             ("Migrate Pool…", "edit-copy", "_disks_migrate_pool_btn"),
-            ("Apply Profile…", "dialog-apply", "_disks_apply_profile_btn"),
-            ("Rewrite Data", "document-edit", "_disks_rewrite_data_btn"),
-            ("Advanced: Manage Profiles…", "preferences-system", "_disks_manage_profiles_btn"),
             (None, None, None),  # spacer
             ("SMART Details", "dialog-information", "_disks_smart_details_btn"),
             ("Surface Test…", "drive-harddisk", "_disks_surface_test_btn"),
@@ -238,6 +235,9 @@ PAGE_SPECS = {
             ("Browse", "folder-open", "_ds_browse_btn"),
             ("Mount", "media-mount", "_ds_mount_btn"),
             ("Unmount", "media-eject", "_ds_unmount_btn"),
+            ("Apply Profile…", "dialog-apply", "_ds_apply_profile_btn"),
+            ("Rewrite Data", "document-edit", "_ds_rewrite_data_btn"),
+            ("Advanced: Manage Profiles…", "preferences-system", "_ds_manage_profiles_btn"),
             ("Refresh", "view-refresh", None),
             ("Expand Selected", "zoom-in", "_ds_expand_selected_btn"),
             ("Collapse All", "list-remove", None),
@@ -444,9 +444,6 @@ ACTION_HANDLERS = {
         "Detach…": on_disks_detach_device,
         "Add Infra Vdev…": on_disks_add_infra_vdev,
         "Migrate Pool…": on_disks_migrate_pool,
-        "Apply Profile…": on_disks_apply_profile,
-        "Rewrite Data": on_disks_rewrite_data,
-        "Advanced: Manage Profiles…": on_disks_manage_profiles,
         "SMART Details": on_disks_smart_details,
         "Surface Test…": on_disks_surface_test,
         "Refresh": on_disks_refresh,
@@ -477,6 +474,9 @@ ACTION_HANDLERS = {
         "Browse": on_datasets_browse,
         "Mount": on_datasets_mount,
         "Unmount": on_datasets_unmount,
+        "Apply Profile…": on_datasets_apply_profile,
+        "Rewrite Data": on_datasets_rewrite_data,
+        "Advanced: Manage Profiles…": on_datasets_manage_profiles,
         "Refresh": _handler_datasets_refresh,
         "Expand Selected": expand_selected_datasets,
         "Collapse All": lambda app: app.datasets_view.collapse_all(),

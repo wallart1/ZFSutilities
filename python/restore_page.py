@@ -19,7 +19,8 @@ from gui_helpers import (
     bold_label,
     set_button_markup,
     style_expander_label,
-    var_widgets_differ_from_defaults,
+    style_var_widgets_nondefault,
+    style_widget_value_nondefault,
 )
 from logging_config import log_msg
 from restore_runner import (
@@ -245,10 +246,12 @@ def create_restore_page(app, ctx):
     app.restore_pause_scrubs.connect("toggled", lambda w, a=app: check_restore_dirty(a))
 
     def _update_advanced_label(*_args):
-        non_default = var_widgets_differ_from_defaults(
+        non_default = style_var_widgets_nondefault(
             app.restore_var_widgets, RESTORE_DEFAULTS["variables"]
         )
-        if app.restore_pause_scrubs.get_active():
+        pause_scrubs = app.restore_pause_scrubs.get_active()
+        style_widget_value_nondefault(app.restore_pause_scrubs, pause_scrubs)
+        if pause_scrubs:
             non_default = True
         style_expander_label(adv_expander, "Advanced", non_default)
 

@@ -703,9 +703,7 @@ class TestDiskWearWarnings(unittest.TestCase):
     def _disk(self, path, wear, model="", parent=None):
         import types
 
-        return types.SimpleNamespace(
-            path=path, model=model, wear_percent=wear, parent_path=parent
-        )
+        return types.SimpleNamespace(path=path, model=model, wear_percent=wear, parent_path=parent)
 
     def setUp(self):
         dp._disk_wear_cache["time"] = 0.0
@@ -1285,7 +1283,11 @@ class TestCollectRunningTasksDatasetRunner(unittest.TestCase):
         runner.running = True
         runner.label = "Dataset action"
         runner.operation_detail = operation_detail
-        runner.steps = [("s1", [], False, False), ("s2", [], False, False), ("s3", [], False, False)]
+        runner.steps = [
+            ("s1", [], False, False),
+            ("s2", [], False, False),
+            ("s3", [], False, False),
+        ]
         runner._finally_step = None
         runner.current_step = 1
         runner._in_lock_wait = False

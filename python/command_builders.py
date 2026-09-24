@@ -377,7 +377,7 @@ def build_retention_command(
             arr = " ".join(shlex.quote(i) for i in items)
             selection_parts += f"{var_name}=({arr}); "
         elif items:
-            selection_parts += f'{var_name}={shlex.quote(items[0])}; '
+            selection_parts += f"{var_name}={shlex.quote(items[0])}; "
     base_script += selection_parts
     if pools:
         pool_list = " ".join(shlex.quote(p) for p in pools)
@@ -481,7 +481,7 @@ def build_backup_prune_command(
         "declare -A _prune_seen=(); "
         "prune_datasets=(); "
         f"{step_parts}"
-        'if [[ ${#prune_datasets[@]} -eq 0 ]]; then '
+        "if [[ ${#prune_datasets[@]} -eq 0 ]]; then "
         'log_msg "WARN: No backup datasets to prune; skipping prune step."; '
         "exit 0; "
         "fi; "

@@ -1,12 +1,11 @@
 """Disks tab UI — disk inventory and pool topology.
 
-Slow block-device and ZFS calls run in a background thread so the GTK main
-thread stays responsive.
+The page content sits behind a view switcher (radio row) with Inventory and
+Topology and Performance views. Slow block-device and ZFS calls run in a
+background thread so the GTK main thread stays responsive.
 """
 
 import os
-import shlex
-import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -15,37 +14,17 @@ from types import SimpleNamespace
 
 import gi
 import node_config
-import zfs_lock_manager as zlm
 
 gi.require_version("Gtk", "3.0")
 
-from command_builders import BashStep
 from disk_repository import DiskInfo, DiskRepository
-from feature_config import (
-    delete_workload_profile,
-    get_workload_profiles,
-    is_builtin_workload_profile,
-    reset_workload_profiles,
-    save_workload_profiles,
-)
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     bold_label,
     configure_treeview_column,
-    create_dialog,
     setup_row_scroll,
 )
 from logging_config import log_msg
-from workload_profiles import (
-    LIVE_PROPERTIES,
-    ZFS_GET_PROPERTIES,
-    build_apply_plan,
-    build_zfs_set_commands,
-    match_profile,
-    profile_has_warning,
-    warning_text,
-    zfs_set_commands_with_entries,
-)
 from zfs_repository import TopologyNode, ZfsRepository
 
 # Foreground color used to tint the rows in one pane that correlate with the
@@ -54,9 +33,9 @@ from zfs_repository import TopologyNode, ZfsRepository
 # selected inventory disk in the Pool Topology.
 POOL_MEMBER_HIGHLIGHT_FG = "#00797A"
 
-# Minimum height of the Pool Topology (center) pane. Keeps the topology tree
-# usable on short windows and drives the page-level vertical scrollbar instead
-# of letting the pane be squashed by its neighbors.
+# Minimum height of the Inventory and Topology view. Keeps the panes usable
+# on short windows and drives the page-level vertical scrollbar instead of
+# letting the view be squashed by its neighbors.
 DISKS_TOPOLOGY_MIN_HEIGHT = 260
 
 # Disk pane ListStore columns:
@@ -93,25 +72,6 @@ DISKS_TOPOLOGY_MIN_HEIGHT = 260
     COL_T_HIGHLIGHT,
 ) = range(8)
 
-# Dataset tuning pane ListStore columns:
-#   0 name, 1 type, 2 used (size), 3 recordsize, 4 compression, 5 atime,
-#   6 logbias, 7 sync, 8 primarycache, 9 special_small_blocks, 10 volblocksize,
-#   11 profile_match
-(
-    COL_DS_NAME,
-    COL_DS_TYPE,
-    COL_DS_USED,
-    COL_DS_RECORDSIZE,
-    COL_DS_COMPRESSION,
-    COL_DS_ATIME,
-    COL_DS_LOGBIAS,
-    COL_DS_SYNC,
-    COL_DS_PRIMARYCACHE,
-    COL_DS_SPECIAL_SMALL_BLOCKS,
-    COL_DS_VOLBLOCKSIZE,
-    COL_DS_PROFILE_MATCH,
-) = range(12)
-
 
 @dataclass
 class DiskInventoryData:
@@ -119,42 +79,6 @@ class DiskInventoryData:
 
     disks: list[DiskInfo]
     topologies: dict[str, TopologyNode]
-
-
-def _user_friendly_property_error(dataset: str, exc: Exception) -> str:
-    """Return a user-friendly explanation for a failed property read on *dataset*.
-
-    Common ZFS failures are mapped to plain-language messages with actionable
-    recommendations. Raw ZFS stderr/usage text is never returned.
-    """
-    if isinstance(exc, subprocess.CalledProcessError):
-        stderr = (exc.stderr or "").strip()
-        first_line = stderr.splitlines()[0] if stderr else ""
-        lower = first_line.lower()
-
-        if "invalid property" in lower:
-            return (
-                "the ZFS command requested an unsupported property. "
-                "This usually indicates a bug in the requested property list; "
-                "please report it if the problem persists."
-            )
-        if "dataset does not exist" in lower:
-            return (
-                "the dataset was not found. It may have been deleted or the pool "
-                "may not be imported."
-            )
-        if "permission denied" in lower or "not authorized" in lower:
-            return (
-                "permission was denied. Run ZFS Utilities as root or ensure "
-                "passwordless sudo is configured for zfs/zpool commands."
-            )
-
-        return (
-            "the ZFS command failed. Check that the pool is imported, the "
-            "dataset exists, and ZFS is healthy."
-        )
-
-    return f"an unexpected error occurred: {exc}"
 
 
 def _set_combo_active_text(combo: Gtk.ComboBoxText, text: str) -> bool:
@@ -306,16 +230,57 @@ def create_disks_page(app):
     app._disks_syncing_selection = False
 
     page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    page_box.set_margin_start(10)
+    page_box.set_margin_end(10)
+    page_box.set_margin_top(10)
+    page_box.set_margin_bottom(10)
 
-    # --- Pane 1: disk inventory ---
-    top_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-    top_box.set_margin_start(10)
-    top_box.set_margin_end(10)
-    top_box.set_margin_top(10)
-    top_box.set_margin_bottom(10)
+    # --- View switcher: radio row across the top of the page ---
+    app._disks_view_radios = {}
+    view_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    group = None
+    for view_name, label_text in (
+        ("inventory", "Inventory and Topology"),
+        ("performance", "Performance"),
+    ):
+        if group is None:
+            radio = Gtk.RadioButton(label=label_text)
+            group = radio
+        else:
+            radio = Gtk.RadioButton.new_from_widget(group)
+            radio.set_label(label_text)
+        app._disks_view_radios[view_name] = radio
+        radio.connect("toggled", _on_view_radio_toggled, view_name, app)
+        view_row.pack_start(radio, False, False, 0)
+    page_box.pack_start(view_row, False, False, 0)
+
+    page_box.pack_start(Gtk.Separator(), False, False, 0)
+
+    # --- Pool selector (drives the topology view) ---
+    controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    controls.set_halign(Gtk.Align.START)
+    app._disks_pool_selector = Gtk.ComboBoxText()
+    app._disks_pool_selector.connect("changed", _on_pool_selector_changed, app)
+    controls.pack_start(app._disks_pool_selector, False, False, 0)
+
+    hint = Gtk.Label(label="Select a pool for its vdev topology")
+    hint.set_halign(Gtk.Align.START)
+    controls.pack_start(hint, False, False, 0)
+    page_box.pack_start(controls, False, False, 0)
+
+    # --- View stack: one named child per view-switcher target ---
+    app._disks_view_stack = Gtk.Stack()
+    page_box.pack_start(app._disks_view_stack, True, True, 0)
+
+    # --- View: Inventory and Topology ---
+    inventory_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    # Minimum height keeps the panes usable on short windows and drives the
+    # page-level vertical scrollbar instead of letting the view be squashed.
+    inventory_box.set_size_request(-1, DISKS_TOPOLOGY_MIN_HEIGHT)
+    app._disks_view_stack.add_named(inventory_box, "inventory")
 
     title = bold_label("Disk Inventory")
-    top_box.pack_start(title, False, False, 0)
+    inventory_box.pack_start(title, False, False, 0)
 
     desc = Gtk.Label(
         label="Physical block devices and partitions detected on this system "
@@ -323,9 +288,9 @@ def create_disks_page(app):
     )
     desc.set_halign(Gtk.Align.START)
     desc.set_line_wrap(True)
-    top_box.pack_start(desc, False, False, 0)
+    inventory_box.pack_start(desc, False, False, 0)
 
-    top_box.pack_start(Gtk.Separator(), False, False, 0)
+    inventory_box.pack_start(Gtk.Separator(), False, False, 0)
 
     app.disks_store = Gtk.ListStore(
         str, str, str, str, str, str, str, str, str, str, str, str, bool
@@ -374,31 +339,12 @@ def create_disks_page(app):
     disks_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
     disks_scrolled.add(app.disks_view)
     setup_row_scroll(disks_scrolled, app.disks_view)
-    top_box.pack_start(disks_scrolled, True, True, 0)
+    inventory_box.pack_start(disks_scrolled, True, True, 0)
 
-    page_box.pack_start(top_box, True, True, 0)
-
-    # --- Pane 2: pool topology ---
-    mid_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-    mid_box.set_margin_start(10)
-    mid_box.set_margin_end(10)
-    mid_box.set_margin_top(10)
-    mid_box.set_margin_bottom(10)
-    mid_box.set_size_request(-1, DISKS_TOPOLOGY_MIN_HEIGHT)
+    inventory_box.pack_start(Gtk.Separator(), False, False, 0)
 
     topo_title = bold_label("Pool Topology")
-    mid_box.pack_start(topo_title, False, False, 0)
-
-    controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-    controls.set_halign(Gtk.Align.START)
-    app._disks_pool_selector = Gtk.ComboBoxText()
-    app._disks_pool_selector.connect("changed", _on_pool_selector_changed, app)
-    controls.pack_start(app._disks_pool_selector, False, False, 0)
-
-    hint = Gtk.Label(label="Select a pool to view its vdev topology and dataset tuning")
-    hint.set_halign(Gtk.Align.START)
-    controls.pack_start(hint, False, False, 0)
-    mid_box.pack_start(controls, False, False, 0)
+    inventory_box.pack_start(topo_title, False, False, 0)
 
     app.disks_topology_store = Gtk.TreeStore(str, str, str, str, str, str, str, bool)
     app.disks_topology_view = Gtk.TreeView(model=app.disks_topology_store)
@@ -428,85 +374,24 @@ def create_disks_page(app):
     topo_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
     topo_scrolled.add(app.disks_topology_view)
     setup_row_scroll(topo_scrolled, app.disks_topology_view)
-    mid_box.pack_start(topo_scrolled, True, True, 0)
+    inventory_box.pack_start(topo_scrolled, True, True, 0)
 
-    page_box.pack_start(mid_box, True, True, 0)
+    # --- View: Performance (placeholder for forthcoming monitoring sections) ---
+    perf_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    app._disks_view_stack.add_named(perf_box, "performance")
 
-    # --- Pane 3: dataset tuning ---
-    bottom_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-    bottom_box.set_margin_start(10)
-    bottom_box.set_margin_end(10)
-    bottom_box.set_margin_top(10)
-    bottom_box.set_margin_bottom(10)
+    perf_title = bold_label("Performance")
+    perf_box.pack_start(perf_title, False, False, 0)
 
-    ds_title = bold_label("Dataset Tuning")
-    bottom_box.pack_start(ds_title, False, False, 0)
+    perf_box.pack_start(Gtk.Separator(), False, False, 0)
 
-    ds_desc = Gtk.Label(
-        label="Read-only view of dataset properties. Select one or more datasets "
-        "and use Apply Profile to tune live properties."
+    perf_desc = Gtk.Label(
+        label="Pool and device performance monitoring sections will appear "
+        "here in a future release."
     )
-    ds_desc.set_halign(Gtk.Align.START)
-    ds_desc.set_line_wrap(True)
-    bottom_box.pack_start(ds_desc, False, False, 0)
-
-    bottom_box.pack_start(Gtk.Separator(), False, False, 0)
-
-    app.disks_dataset_store = Gtk.ListStore(
-        str, str, str, str, str, str, str, str, str, str, str, str
-    )
-    app.disks_dataset_view = Gtk.TreeView(model=app.disks_dataset_store)
-    app.disks_dataset_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
-    app.disks_dataset_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
-    app.disks_dataset_view.get_selection().connect("changed", _on_dataset_selection_changed, app)
-    # Pool whose datasets are currently shown in the store; used to restore
-    # selection and scroll position across refreshes of the same pool.
-    app._disks_dataset_view_pool = None
-
-    ds_cols = [
-        (COL_DS_NAME, "Name", 250),
-        (COL_DS_TYPE, "Type", 80),
-        (COL_DS_USED, "Size", 90),
-        (COL_DS_RECORDSIZE, "Recordsize", 90),
-        (COL_DS_COMPRESSION, "Compression", 100),
-        (COL_DS_ATIME, "Atime", 60),
-        (COL_DS_LOGBIAS, "Logbias", 80),
-        (COL_DS_SYNC, "Sync", 80),
-        (COL_DS_PRIMARYCACHE, "Primarycache", 100),
-        (COL_DS_SPECIAL_SMALL_BLOCKS, "Special small blocks", 130),
-        (COL_DS_VOLBLOCKSIZE, "Volblocksize", 100),
-        (COL_DS_PROFILE_MATCH, "Profile match", 130),
-    ]
-    for col_idx, title_text, width in ds_cols:
-        renderer = Gtk.CellRendererText()
-        col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
-        configure_treeview_column(col, width=width)
-        app.disks_dataset_view.append_column(col)
-
-    app.enable_treeview_copy(app.disks_dataset_view)
-
-    ds_scrolled = Gtk.ScrolledWindow()
-    ds_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    ds_scrolled.add(app.disks_dataset_view)
-    setup_row_scroll(ds_scrolled, app.disks_dataset_view)
-    bottom_box.pack_start(ds_scrolled, True, True, 0)
-
-    app._disks_rewrite_guidance_label = Gtk.Label(
-        label=(
-            "Rewrite Data requires OpenZFS 2.3.4+, the pool's physical_rewrite feature, and a "
-            "filesystem dataset (volumes cannot be rewritten). On older versions, rewrite "
-            "existing data by creating a new dataset with the desired profile and using "
-            "send/receive."
-        )
-    )
-    app._disks_rewrite_guidance_label.set_halign(Gtk.Align.START)
-    app._disks_rewrite_guidance_label.set_line_wrap(True)
-    app._disks_rewrite_guidance_label.set_no_show_all(True)
-    if not app.ctx.zfs_caps.supports("zfs_rewrite"):
-        app._disks_rewrite_guidance_label.show()
-    bottom_box.pack_start(app._disks_rewrite_guidance_label, False, False, 0)
-
-    page_box.pack_start(bottom_box, True, True, 0)
+    perf_desc.set_halign(Gtk.Align.START)
+    perf_desc.set_line_wrap(True)
+    perf_box.pack_start(perf_desc, False, False, 0)
 
     refresh_disks_page(app)
 
@@ -516,6 +401,13 @@ def create_disks_page(app):
     scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
     scrolled.add(page_box)
     return scrolled
+
+
+def _on_view_radio_toggled(radio, view_name, app):
+    """Show the Disks page view selected in the view-switcher radio row."""
+    if radio.get_active():
+        app._disks_view_stack.set_visible_child_name(view_name)
+        update_disks_button_sensitivity(app)
 
 
 def _make_disks_refresh_callback(app):
@@ -593,9 +485,8 @@ def refresh_disks_page(app):
     elif pool_names:
         selector.set_active(0)
 
-    # Repopulate topology and dataset views for selected pool
+    # Repopulate topology for the selected pool
     _repopulate_topology_for_selected_pool(app)
-    _repopulate_dataset_tuning_for_selected_pool(app)
 
     # Highlight every disk that belongs to the selected pool
     _highlight_pool_disks(app, selector.get_active_text())
@@ -731,9 +622,8 @@ def _on_topology_selection_changed(selection, app):
 
 
 def _on_pool_selector_changed(selector, app):
-    """Refresh the topology and dataset views when the pool selector changes."""
+    """Refresh the topology view when the pool selector changes."""
     _repopulate_topology_for_selected_pool(app)
-    _repopulate_dataset_tuning_for_selected_pool(app)
 
 
 def _repopulate_topology_for_selected_pool(app):
@@ -748,214 +638,44 @@ def _repopulate_topology_for_selected_pool(app):
     _sync_topology_highlight_from_inventory(app)
 
 
-def _load_dataset_tuning(app, pool_name):
-    """Populate the dataset tuning store for *pool_name*."""
-    store = app.disks_dataset_store
-    repo = app.ctx.zfs_repository
-    profiles = get_workload_profiles(app.config)
-    try:
-        datasets = repo.list_datasets(pool_name)
-    except Exception as exc:  # pragma: no cover - defensive
-        log_msg(f"WARN: Could not list datasets for {pool_name}: {exc}")
-        return
-
-    for row in datasets:
-        # Skip snapshots/bookmarks if any appear in the listing.
-        if row.ds_type not in ("filesystem", "volume"):
-            continue
-        try:
-            props = repo.get_properties(row.name, list(ZFS_GET_PROPERTIES))
-        except Exception as exc:  # pragma: no cover - defensive
-            log_msg(
-                f"WARN: Could not read properties for {row.name}: "
-                f"{_user_friendly_property_error(row.name, exc)}"
-            )
-            continue
-
-        profile_match = match_profile(profiles, row.ds_type, props)
-        store.append(
-            [
-                row.name,
-                row.ds_type,
-                row.used,
-                props.get("recordsize", "-"),
-                props.get("compression", "-"),
-                props.get("atime", "-"),
-                props.get("logbias", "-"),
-                props.get("sync", "-"),
-                props.get("primarycache", "-"),
-                props.get("special_small_blocks", "-"),
-                props.get("volblocksize", "-"),
-                profile_match,
-            ]
-        )
+_DISKS_VIEWS = ("inventory", "performance")
 
 
-def _dataset_view_state(app):
-    """Capture the dataset view's selection (dataset names) and scroll offset."""
-    names = [row["name"] for row in _selected_dataset_rows(app)]
-    vpos = 0.0
-    get_adj = getattr(app.disks_dataset_view, "get_vadjustment", None)
-    if callable(get_adj):
-        adj = get_adj()
-        if adj is not None:
-            vpos = adj.get_value()
-    return names, vpos
+def _current_disks_view(app) -> str:
+    """Return the visible Disks-page view ("inventory" when unknown/unset).
 
-
-def _restore_dataset_view_state(app, names, vpos):
-    """Re-select the named datasets and restore the vertical scroll offset.
-
-    The scroll value is applied from an idle callback because the adjustment's
-    ``upper`` is not recalculated until the view lays out the refilled model;
-    setting it synchronously would clamp back to the top.
+    Test fakes use a mocked stack whose get_visible_child_name() is not a
+    real view name; those fall back to the default view so the sensitivity
+    rules behave as they did before the view switcher existed.
     """
-    if names:
-        selection = app.disks_dataset_view.get_selection()
-        selection.unselect_all()
-        store = app.disks_dataset_store
-        it = store.get_iter_first()
-        while it is not None:
-            if store.get_value(it, COL_DS_NAME) in names:
-                selection.select_iter(it)
-            it = store.iter_next(it)
-        update_disks_button_sensitivity(app)
-
-    get_adj = getattr(app.disks_dataset_view, "get_vadjustment", None)
-    if not callable(get_adj):
-        return
-    adj = get_adj()
-    if adj is None:
-        return
-
-    def _apply_scroll():
-        upper = adj.get_upper()
-        page = adj.get_page_size()
-        adj.set_value(max(0.0, min(float(vpos), max(0.0, upper - page))))
-        return False
-
-    GLib.idle_add(_apply_scroll)
-
-
-def _repopulate_dataset_tuning_for_selected_pool(app):
-    """Clear and refill the dataset tuning store for the currently selected pool.
-
-    When the same pool is refreshed, the previous selection (matched by
-    dataset name, not row path) and vertical scroll position are restored so
-    refreshes do not reset the view. Switching pools starts fresh.
-    """
-    pool_name = app._disks_pool_selector.get_active_text()
-    saved_state = None
-    if pool_name and getattr(app, "_disks_dataset_view_pool", None) == pool_name:
-        saved_state = _dataset_view_state(app)
-    app.disks_dataset_store.clear()
-    if pool_name:
-        _load_dataset_tuning(app, pool_name)
-    app._disks_dataset_view_pool = pool_name
-    if saved_state is not None:
-        _restore_dataset_view_state(app, *saved_state)
-
-
-def _on_dataset_selection_changed(selection, app):
-    """Update action button sensitivity when dataset selection changes."""
-    update_disks_button_sensitivity(app)
-
-
-def _pool_has_special_vdev(topology: TopologyNode | None) -> bool:
-    """Return True if the topology tree contains a 'special' vdev node."""
-    if topology is None:
-        return False
-    if topology.vdev_type == "special":
-        return True
-    return any(_pool_has_special_vdev(child) for child in topology.children)
-
-
-def _selected_dataset_rows(app):
-    """Return a list of dataset store rows for the current dataset selection."""
-    selection = app.disks_dataset_view.get_selection()
-    model, pathlist = selection.get_selected_rows()
-    rows = []
-    for path in pathlist:
-        tree_iter = model.get_iter(path)
-        rows.append(
-            {
-                "name": model.get_value(tree_iter, COL_DS_NAME),
-                "type": model.get_value(tree_iter, COL_DS_TYPE),
-            }
-        )
-    return rows
+    stack = getattr(app, "_disks_view_stack", None)
+    view = stack.get_visible_child_name() if stack is not None else None
+    return view if view in _DISKS_VIEWS else "inventory"
 
 
 def update_disks_button_sensitivity(app):
-    """Enable action buttons based on the current disk/dataset selection."""
+    """Enable action buttons based on the current view and selection."""
     selection = app.disks_view.get_selection()
     _model, pathlist = selection.get_selected_rows()
     single_selection = len(pathlist) == 1
     btn = getattr(app, "_disks_smart_details_btn", None)
     if btn:
-        btn.set_sensitive(single_selection)
-
-    dataset_view = getattr(app, "disks_dataset_view", None)
-    if dataset_view is not None:
-        ds_selection = dataset_view.get_selection()
-        _model, ds_pathlist = ds_selection.get_selected_rows()
-        ds_count = len(ds_pathlist)
-    else:
-        ds_count = 0
+        btn.set_sensitive(single_selection and _current_disks_view(app) == "inventory")
 
     runner_busy = bool(
         getattr(app, "dataset_runner", None) and getattr(app.dataset_runner, "running", False)
     )
     compute_host = node_config.is_two_node() and not node_config.is_storage_host()
-
-    apply_btn = getattr(app, "_disks_apply_profile_btn", None)
-    if apply_btn:
-        if compute_host:
-            apply_btn.set_sensitive(False)
-            apply_btn.set_tooltip_text(
-                "Applying profiles is available only on the storage host"
-            )
-        else:
-            apply_btn.set_sensitive(ds_count > 0 and not runner_busy)
-            apply_btn.set_tooltip_text("")
-
-    rewrite_btn = getattr(app, "_disks_rewrite_data_btn", None)
-    if rewrite_btn:
-        if compute_host:
-            rewrite_btn.set_sensitive(False)
-            rewrite_btn.set_tooltip_text(
-                "Rewrite Data is available only on the storage host"
-            )
-        else:
-            caps = app.ctx.zfs_caps
-            dataset_view = getattr(app, "disks_dataset_view", None)
-            ds_rows = (
-                _selected_dataset_rows(app) if dataset_view is not None else []
-            )
-            all_filesystems = bool(ds_rows) and all(
-                row["type"] == "filesystem" for row in ds_rows
-            )
-            can_rewrite = all_filesystems and caps.supports("zfs_rewrite")
-            rewrite_btn.set_sensitive(can_rewrite)
-            if not can_rewrite:
-                if not caps.supports("zfs_rewrite"):
-                    rewrite_btn.set_tooltip_text(caps.requires("zfs_rewrite"))
-                elif ds_rows and not all_filesystems:
-                    rewrite_btn.set_tooltip_text(
-                        "Rewrite Data supports filesystem datasets only"
-                    )
-                else:
-                    rewrite_btn.set_tooltip_text("")
-            else:
-                rewrite_btn.set_tooltip_text("")
-
-    manage_btn = getattr(app, "_disks_manage_profiles_btn", None)
-    if manage_btn:
-        manage_btn.set_sensitive(True)
+    inventory_active = _current_disks_view(app) == "inventory"
 
     create_btn = getattr(app, "_disks_create_pool_btn", None)
     if create_btn:
-        if compute_host:
+        if not inventory_active:
+            create_btn.set_sensitive(False)
+            create_btn.set_tooltip_text(
+                "Switch to the Inventory and Topology view to use this action"
+            )
+        elif compute_host:
             create_btn.set_sensitive(False)
             create_btn.set_tooltip_text("Pool creation is available only on the storage host")
         elif runner_busy:
@@ -966,7 +686,7 @@ def update_disks_button_sensitivity(app):
             create_btn.set_tooltip_text("")
 
     # Phase 4 pool-growth/maintenance buttons share the Create Pool gating:
-    # compute-host disable (taking precedence) then runner-busy disable.
+    # view disable (taking precedence), then compute-host, then runner-busy.
     growth_attrs = (
         ("_disks_add_vdev_btn", "Pool growth is available only on the storage host"),
         ("_disks_attach_btn", "Pool growth is available only on the storage host"),
@@ -979,7 +699,10 @@ def update_disks_button_sensitivity(app):
         btn = getattr(app, attr, None)
         if btn is None:
             continue
-        if compute_host:
+        if not inventory_active:
+            btn.set_sensitive(False)
+            btn.set_tooltip_text("Switch to the Inventory and Topology view to use this action")
+        elif compute_host:
             btn.set_sensitive(False)
             btn.set_tooltip_text(host_tooltip)
         elif runner_busy:
@@ -992,7 +715,12 @@ def update_disks_button_sensitivity(app):
     surf_btn = getattr(app, "_disks_surface_test_btn", None)
     if surf_btn:
         selected_hdd = single_selection and _selected_disk_is_hdd(app)
-        if compute_host:
+        if not inventory_active:
+            surf_btn.set_sensitive(False)
+            surf_btn.set_tooltip_text(
+                "Switch to the Inventory and Topology view to use this action"
+            )
+        elif compute_host:
             surf_btn.set_sensitive(False)
             surf_btn.set_tooltip_text("Surface tests run on the storage host")
         elif runner_busy:
@@ -1069,7 +797,7 @@ def _topology_node_matches_disk(node_name: str, disk_path: str) -> bool:
     if node_name == disk_path or os.path.basename(node_name) == os.path.basename(disk_path):
         return True
     if node_name.startswith(disk_path):
-        rest = node_name[len(disk_path):]
+        rest = node_name[len(disk_path) :]
         if rest.isdigit() or (rest.startswith("p") and rest[1:].isdigit()):
             return True
     try:
@@ -1159,7 +887,7 @@ def _path_matches_any_device(row_path: str, device_paths: set[str]) -> bool:
         if dev == row_path or os.path.basename(dev) == row_base:
             return True
         if dev.startswith(row_path):
-            rest = dev[len(row_path):]
+            rest = dev[len(row_path) :]
             if rest.isdigit() or (rest.startswith("p") and rest[1:].isdigit()):
                 return True
         try:
@@ -1194,827 +922,3 @@ def _populate_topology_store(store, parent_iter, node: TopologyNode) -> None:
     it = store.append(parent_iter, row)
     for child in node.children:
         _populate_topology_store(store, it, child)
-
-
-# ---------------------------------------------------------------------------
-# Rewrite Data action
-# ---------------------------------------------------------------------------
-
-
-def _build_rewrite_command(ds_name: str, mountpoint: str) -> str:
-    """Build the bash script that rewrites *ds_name* in place via its mountpoint.
-
-    ``zfs rewrite`` operates on file/directory paths inside a mounted
-    filesystem, not on dataset names, so the script:
-
-    1. Records whether the dataset is already mounted.
-    2. Mounts it (non-recursively) only if it is not mounted; the mount must
-       succeed or the script exits non-zero.
-    3. Runs ``zfs rewrite -P -r -x -v <mountpoint>`` — physical rewrite (so
-       rewritten blocks do not inflate later incremental send streams),
-       recursive, never crossing filesystem mount points (so child datasets
-       mounted beneath this one are not rewritten), verbose for log progress.
-    4. Unmounts the dataset only if this script mounted it, restoring the
-       prior state. An unmount failure is reported but does not mask the
-       rewrite's exit code.
-    """
-    q_ds = shlex.quote(ds_name)
-    q_mp = shlex.quote(mountpoint)
-    return (
-        f'mounted_before=$(zfs get -H -o value mounted {q_ds})\n'
-        "mounted_by_us=0\n"
-        'if [[ "$mounted_before" != "yes" ]]; then\n'
-        f"    if ! zfs mount {q_ds}; then\n"
-        f'        echo "ERROR: could not mount {ds_name} to rewrite data" >&2\n'
-        "        exit 1\n"
-        "    fi\n"
-        "    mounted_by_us=1\n"
-        "fi\n"
-        f"zfs rewrite -P -r -x -v {q_mp}\n"
-        "rewrite_rc=$?\n"
-        'if [[ "$mounted_by_us" == "1" ]]; then\n'
-        f"    if ! zfs unmount {q_ds}; then\n"
-        f'        echo "WARN: could not unmount {ds_name} after rewrite" >&2\n'
-        "    fi\n"
-        "fi\n"
-        "exit $rewrite_rc\n"
-    )
-
-
-def on_disks_rewrite_data(app):
-    """Rewrite data on the selected filesystem datasets using ``zfs rewrite -P``.
-
-    Requires at least one selected filesystem dataset, OpenZFS 2.3+, the
-    pool's physical_rewrite feature, and a running dataset_runner. Unmounted
-    datasets are mounted temporarily and returned to their prior state
-    afterwards. Acquires one write lock per dataset, runs one BashStep per
-    dataset sequentially, and refreshes the page on completion.
-    """
-    if node_config.is_two_node() and not node_config.is_storage_host():
-        log_msg("WARN: Rewrite Data is available only on the storage host")
-        return
-    datasets = _selected_dataset_rows(app)
-    if not datasets:
-        log_msg("WARN: Select at least one dataset to rewrite data")
-        return
-
-    non_filesystems = [ds["name"] for ds in datasets if ds["type"] != "filesystem"]
-    if non_filesystems:
-        log_msg(
-            "WARN: Rewrite Data supports filesystem datasets only; "
-            "zfs rewrite cannot act on a volume's block device "
-            f"({', '.join(non_filesystems)})"
-        )
-        return
-
-    if not app.ctx.zfs_caps.supports("zfs_rewrite"):
-        log_msg("WARN: Rewrite Data requires OpenZFS 2.3+")
-        return
-
-    runner = getattr(app, "dataset_runner", None)
-    if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
-        return
-
-    repo = app.ctx.zfs_repository
-    mountpoints = {}
-    for ds in datasets:
-        ds_name = ds["name"]
-        try:
-            props = repo.get_properties(ds_name, ["mountpoint"])
-        except Exception as exc:  # pragma: no cover - defensive
-            log_msg(
-                f"WARN: Could not read properties for {ds_name}: "
-                f"{_user_friendly_property_error(ds_name, exc)}"
-            )
-            return
-        mountpoint = props.get("mountpoint", "-")
-        if mountpoint in ("none", "legacy", "-"):
-            log_msg(
-                f"WARN: Cannot rewrite data for {ds_name}: "
-                f"mountpoint is '{mountpoint}'"
-            )
-            return
-        mountpoints[ds_name] = mountpoint
-
-    pools = []
-    for ds in datasets:
-        pool = ds["name"].split("/", 1)[0]
-        if pool not in pools:
-            pools.append(pool)
-    for pool in pools:
-        if not app.ctx.zfs_caps.supports_pool_feature(pool, "physical_rewrite"):
-            log_msg(
-                f"WARN: Rewrite Data requires the physical_rewrite pool feature on {pool} "
-                f"(zpool set feature@physical_rewrite=enabled {pool})"
-            )
-            return
-
-    if len(datasets) == 1:
-        dialog_text = f"Rewrite data on {datasets[0]['name']}?"
-    else:
-        dialog_text = f"Rewrite data on {len(datasets)} datasets?"
-    dialog = Gtk.MessageDialog(
-        transient_for=app,
-        modal=True,
-        message_type=Gtk.MessageType.WARNING,
-        buttons=Gtk.ButtonsType.YES_NO,
-        text=dialog_text,
-    )
-    secondary = (
-        "zfs rewrite -P rewrites existing blocks in place (physical rewrite, "
-        "preserving snapshot and incremental-send boundaries) so they match "
-        "the current dataset properties. Datasets are mounted temporarily "
-        "if they are not currently mounted and returned to their prior state "
-        "afterwards. Requires the pool's physical_rewrite feature. This may "
-        "take a long time and cannot be undone."
-    )
-    if len(datasets) > 1:
-        secondary += "\n\n" + "\n".join(ds["name"] for ds in datasets)
-    dialog.format_secondary_text(secondary)
-    response = dialog.run()
-    dialog.destroy()
-    if response != Gtk.ResponseType.YES:
-        return
-
-    dataset_names = [ds["name"] for ds in datasets]
-    lock_ids = zlm.acquire_multiple("w", dataset_names)
-
-    steps = [
-        BashStep(
-            ["bash", "-c", _build_rewrite_command(ds_name, mountpoints[ds_name])],
-            f"Rewrite data on {ds_name}",
-            is_rsync=False,
-            fatal=False,
-        )
-        for ds_name in dataset_names
-    ]
-
-    def _on_complete(cancelled=False, rc=None):
-        for lock_id in lock_ids:
-            zlm.release(lock_id)
-        target = (
-            dataset_names[0]
-            if len(dataset_names) == 1
-            else f"{len(dataset_names)} datasets"
-        )
-        if cancelled:
-            log_msg(f"INFO: Rewrite Data cancelled for {target}")
-        elif rc:
-            log_msg(f"WARN: Rewrite Data failed for {target} (rc={rc})")
-        else:
-            log_msg(f"INFO: Rewrite Data complete for {target}")
-        update_disks_button_sensitivity(app)
-        refresh_disks_page(app)
-
-    runner.operation_detail = (
-        f"Rewrite Data: {dataset_names[0]}"
-        if len(dataset_names) == 1
-        else f"Rewrite Data: {len(dataset_names)} datasets"
-    )
-    runner.set_steps(steps)
-    update_disks_button_sensitivity(app)
-    runner.start(on_complete=_on_complete)
-
-
-# ---------------------------------------------------------------------------
-# Workload profile management dialog
-# ---------------------------------------------------------------------------
-
-
-def on_disks_manage_profiles(app):
-    """Open the workload profile manager."""
-    show_manage_profiles_dialog(app)
-
-
-def _profile_applies_to_text(profile: dict) -> str:
-    """Return a human-readable applies-to string for a profile."""
-    applies_to = profile.get("applies_to", [])
-    if "filesystem" in applies_to and "volume" in applies_to:
-        return "filesystem, volume"
-    if "filesystem" in applies_to:
-        return "filesystem"
-    if "volume" in applies_to:
-        return "volume"
-    return ""
-
-
-def show_manage_profiles_dialog(app):
-    """Show the Manage Workload Profiles dialog."""
-    dialog = create_dialog(
-        "Manage Workload Profiles",
-        app,
-        [
-            (Gtk.STOCK_CLOSE, Gtk.ResponseType.CLOSE),
-        ],
-        default_response=Gtk.ResponseType.CLOSE,
-        size=(700, 500),
-    )
-    content = dialog.get_content_area()
-
-    store = Gtk.ListStore(str, str, str, str)
-    view = Gtk.TreeView(model=store)
-    view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
-    view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
-
-    cols = [
-        (0, "Name", 180),
-        (1, "Applies to", 120),
-        (2, "Description", 350),
-        (3, "Kind", 80),
-    ]
-    for col_idx, title_text, width in cols:
-        renderer = Gtk.CellRendererText()
-        col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
-        configure_treeview_column(col, width=width)
-        view.append_column(col)
-
-    scrolled = Gtk.ScrolledWindow()
-    scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    scrolled.set_min_content_height(250)
-    scrolled.add(view)
-    content.pack_start(scrolled, True, True, 0)
-
-    btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-    btn_box.set_halign(Gtk.Align.START)
-
-    add_btn = Gtk.Button(label="Add")
-    edit_btn = Gtk.Button(label="Edit")
-    delete_btn = Gtk.Button(label="Delete")
-    reset_btn = Gtk.Button(label="Reset to Defaults")
-
-    btn_box.pack_start(add_btn, False, False, 0)
-    btn_box.pack_start(edit_btn, False, False, 0)
-    btn_box.pack_start(delete_btn, False, False, 0)
-    btn_box.pack_start(reset_btn, False, False, 0)
-    content.pack_start(btn_box, False, False, 0)
-
-    def _refresh_list():
-        store.clear()
-        profiles = get_workload_profiles(app.config)
-        for name, profile in profiles.items():
-            store.append(
-                [
-                    name,
-                    _profile_applies_to_text(profile),
-                    profile.get("description", ""),
-                    "built-in" if is_builtin_workload_profile(name) else "custom",
-                ]
-            )
-
-    def _selected_name():
-        selection = view.get_selection()
-        model, pathlist = selection.get_selected_rows()
-        if not pathlist:
-            return None
-        tree_iter = model.get_iter(pathlist[0])
-        return model.get_value(tree_iter, 0)
-
-    def _selected_is_builtin() -> bool:
-        name = _selected_name()
-        return name is not None and is_builtin_workload_profile(name)
-
-    def _on_selection_changed(_selection):
-        # Seeded profiles are immutable: no editing or deleting them.
-        builtin = _selected_is_builtin()
-        edit_btn.set_sensitive(not builtin)
-        delete_btn.set_sensitive(not builtin)
-        tooltip = (
-            "Built-in profiles cannot be modified; use Reset to Defaults to restore them"
-            if builtin
-            else ""
-        )
-        edit_btn.set_tooltip_text(tooltip)
-        delete_btn.set_tooltip_text(tooltip)
-
-    def _on_add(_btn):
-        show_profile_editor_dialog(app)
-        _refresh_list()
-
-    def _on_edit(_btn):
-        name = _selected_name()
-        if name is None:
-            log_msg("WARN: Select a profile to edit")
-            return
-        if is_builtin_workload_profile(name):
-            log_msg(f"WARN: Workload profile {name!r} is built in and cannot be edited")
-            return
-        profiles = get_workload_profiles(app.config)
-        if name not in profiles:
-            log_msg(f"WARN: Profile {name} no longer exists")
-            _refresh_list()
-            return
-        show_profile_editor_dialog(app, name)
-        _refresh_list()
-
-    def _on_delete(_btn):
-        name = _selected_name()
-        if name is None:
-            log_msg("WARN: Select a profile to delete")
-            return
-        if is_builtin_workload_profile(name):
-            log_msg(f"WARN: Workload profile {name!r} is built in and cannot be deleted")
-            return
-        confirm = Gtk.MessageDialog(
-            transient_for=dialog,
-            modal=True,
-            message_type=Gtk.MessageType.QUESTION,
-            buttons=Gtk.ButtonsType.YES_NO,
-            text=f"Delete profile {name}?",
-        )
-        confirm.format_secondary_text("This cannot be undone.")
-        response = confirm.run()
-        confirm.destroy()
-        if response == Gtk.ResponseType.YES:
-            delete_workload_profile(app.config, name)
-            _refresh_list()
-
-    def _on_reset(_btn):
-        confirm = Gtk.MessageDialog(
-            transient_for=dialog,
-            modal=True,
-            message_type=Gtk.MessageType.WARNING,
-            buttons=Gtk.ButtonsType.YES_NO,
-            text="Reset workload profiles to defaults?",
-        )
-        confirm.format_secondary_text(
-            "All custom profiles will be discarded and the seeded defaults will be restored."
-        )
-        response = confirm.run()
-        confirm.destroy()
-        if response == Gtk.ResponseType.YES:
-            reset_workload_profiles(app.config)
-            _refresh_list()
-
-    add_btn.connect("clicked", _on_add)
-    edit_btn.connect("clicked", _on_edit)
-    delete_btn.connect("clicked", _on_delete)
-    reset_btn.connect("clicked", _on_reset)
-    view.get_selection().connect("changed", _on_selection_changed)
-
-    _refresh_list()
-    _on_selection_changed(view.get_selection())
-    dialog.show_all()
-    dialog.run()
-    dialog.destroy()
-
-
-def show_profile_editor_dialog(app, name=None):
-    """Show the Add/Edit Workload Profile dialog and persist on OK.
-
-    When *name* is None a new profile is created. When *name* is provided the
-    existing profile is edited (the name field is read-only). Built-in
-    (seeded) profiles are immutable and cannot be opened for editing.
-    """
-    if name is not None and is_builtin_workload_profile(name):
-        log_msg(f"WARN: Workload profile {name!r} is built in and cannot be edited")
-        return
-    profiles = get_workload_profiles(app.config)
-    existing = profiles.get(name, {}) if name else {}
-    is_edit = name is not None
-
-    dialog = create_dialog(
-        "Edit Profile" if is_edit else "Add Profile",
-        app,
-        [
-            (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL),
-            (Gtk.STOCK_OK, Gtk.ResponseType.OK),
-        ],
-        default_response=Gtk.ResponseType.OK,
-        size=(500, 600),
-    )
-    content = dialog.get_content_area()
-
-    grid = Gtk.Grid()
-    grid.set_column_spacing(10)
-    grid.set_row_spacing(10)
-    grid.set_margin_top(10)
-    grid.set_margin_bottom(10)
-    grid.set_margin_start(10)
-    grid.set_margin_end(10)
-    content.pack_start(grid, False, False, 0)
-
-    def _add_row(row, label_text, widget):
-        label = Gtk.Label(label=label_text)
-        label.set_halign(Gtk.Align.START)
-        grid.attach(label, 0, row, 1, 1)
-        grid.attach(widget, 1, row, 1, 1)
-        return widget
-
-    row = 0
-    name_entry = Gtk.Entry()
-    name_entry.set_text(name or "")
-    name_entry.set_sensitive(not is_edit)
-    _add_row(row, "Name:", name_entry)
-    row += 1
-
-    desc_entry = Gtk.Entry()
-    desc_entry.set_text(existing.get("description", ""))
-    _add_row(row, "Description:", desc_entry)
-    row += 1
-
-    fs_check = Gtk.CheckButton(label="filesystem")
-    fs_check.set_active("filesystem" in existing.get("applies_to", []))
-    vol_check = Gtk.CheckButton(label="volume")
-    vol_check.set_active("volume" in existing.get("applies_to", []))
-    applies_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-    applies_box.pack_start(fs_check, False, False, 0)
-    applies_box.pack_start(vol_check, False, False, 0)
-    _add_row(row, "Applies to:", applies_box)
-    row += 1
-
-    prop_entries: dict[str, Gtk.Entry] = {}
-    live_props = existing.get("properties", {})
-    for prop in LIVE_PROPERTIES:
-        entry = Gtk.Entry()
-        entry.set_text(live_props.get(prop, ""))
-        entry.set_placeholder_text("e.g. zstd")
-        _add_row(row, f"{prop}:", entry)
-        prop_entries[prop] = entry
-        row += 1
-
-    volblock_entry = Gtk.Entry()
-    volblock_entry.set_text(live_props.get("volblocksize", ""))
-    volblock_entry.set_placeholder_text("creation-only, e.g. 16K")
-    _add_row(row, "volblocksize (creation-only):", volblock_entry)
-    prop_entries["volblocksize"] = volblock_entry
-    row += 1
-
-    ashift_entry = Gtk.Entry()
-    ashift_entry.set_text(live_props.get("ashift", ""))
-    ashift_entry.set_placeholder_text("informational only, auto-detected")
-    ashift_entry.set_editable(False)
-    ashift_entry.set_can_focus(False)
-    _add_row(row, "pool blocksize (informational):", ashift_entry)
-    row += 1
-
-    notes_buf = Gtk.TextBuffer()
-    notes_buf.set_text(existing.get("notes", ""))
-    notes_tv = Gtk.TextView(buffer=notes_buf)
-    notes_tv.set_editable(True)
-    notes_tv.set_wrap_mode(Gtk.WrapMode.WORD)
-    notes_sw = Gtk.ScrolledWindow()
-    notes_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    notes_sw.set_min_content_height(80)
-    notes_sw.add(notes_tv)
-    _add_row(row, "Notes:", notes_sw)
-    row += 1
-
-    dialog.show_all()
-    while True:
-        response = dialog.run()
-        if response != Gtk.ResponseType.OK:
-            dialog.destroy()
-            return
-
-        new_name = name_entry.get_text().strip()
-        if not new_name:
-            _show_validation_error(dialog, "Profile name is required.")
-            continue
-
-        if not is_edit and any(p.lower() == new_name.lower() for p in profiles):
-            _show_validation_error(dialog, f"A profile named {new_name} already exists.")
-            continue
-
-        applies_to = []
-        if fs_check.get_active():
-            applies_to.append("filesystem")
-        if vol_check.get_active():
-            applies_to.append("volume")
-        if not applies_to:
-            _show_validation_error(dialog, "Select at least one of filesystem or volume.")
-            continue
-
-        properties: dict[str, str] = {}
-        for prop, entry in prop_entries.items():
-            value = entry.get_text().strip()
-            if value:
-                properties[prop] = value
-        if not properties:
-            _show_validation_error(dialog, "At least one property value is required.")
-            continue
-
-        notes = notes_buf.get_text(
-            notes_buf.get_start_iter(),
-            notes_buf.get_end_iter(),
-            True,
-        )
-
-        description = desc_entry.get_text().strip()
-        new_profile = {
-            "description": description,
-            "applies_to": applies_to,
-            "properties": properties,
-            "notes": notes,
-        }
-
-        if is_edit:
-            profiles[name] = new_profile
-        else:
-            profiles[new_name] = new_profile
-        save_workload_profiles(app.config, profiles)
-        dialog.destroy()
-        return
-
-
-def _show_validation_error(parent, message):
-    """Show a modal error dialog and block until dismissed."""
-    err = Gtk.MessageDialog(
-        transient_for=parent,
-        modal=True,
-        message_type=Gtk.MessageType.ERROR,
-        buttons=Gtk.ButtonsType.OK,
-        text=message,
-    )
-    err.run()
-    err.destroy()
-
-
-# ---------------------------------------------------------------------------
-# Apply Profile dialog and execution
-# ---------------------------------------------------------------------------
-
-
-def show_apply_profile_dialog(app, datasets):
-    """Show the Apply Profile dialog and return (response, profile_name, profile)."""
-    profiles = get_workload_profiles(app.config)
-    profile_names = list(profiles.keys())
-    if not profile_names:
-        log_msg("WARN: No workload profiles configured")
-        return Gtk.ResponseType.CANCEL, None, None
-
-    pool_name = app._disks_pool_selector.get_active_text()
-    topology = app._disks_inventory_cache.get().topologies.get(pool_name)
-    pool_has_special = _pool_has_special_vdev(topology)
-
-    first_match = datasets[0].get("profile_match", "custom") if datasets else "custom"
-    default_name = None
-    for name in profile_names:
-        if name == first_match:
-            default_name = name
-            break
-    if default_name is None:
-        default_name = profile_names[0]
-
-    dialog = create_dialog(
-        "Apply Profile",
-        app,
-        [
-            (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL),
-            (Gtk.STOCK_OK, Gtk.ResponseType.OK),
-        ],
-        default_response=Gtk.ResponseType.OK,
-        size=(700, 500),
-    )
-    content = dialog.get_content_area()
-
-    warning_label = Gtk.Label()
-    warning_label.set_halign(Gtk.Align.START)
-    warning_label.set_line_wrap(True)
-    warning_label.set_no_show_all(True)
-    content.pack_start(warning_label, False, False, 0)
-
-    confirm_check = Gtk.CheckButton(label="I understand and want to apply this profile")
-    confirm_check.set_no_show_all(True)
-    content.pack_start(confirm_check, False, False, 0)
-
-    selector_label = Gtk.Label(label="Select a profile:")
-    selector_label.set_halign(Gtk.Align.START)
-    content.pack_start(selector_label, False, False, 0)
-
-    picker_store = Gtk.ListStore(str, str, str)
-    for name in profile_names:
-        profile = profiles.get(name, {})
-        picker_store.append(
-            [name, _profile_applies_to_text(profile), profile.get("description", "")]
-        )
-
-    picker_view = Gtk.TreeView(model=picker_store)
-    picker_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
-    picker_selection = picker_view.get_selection()
-    picker_selection.set_mode(Gtk.SelectionMode.SINGLE)
-
-    name_renderer = Gtk.CellRendererText()
-    name_col = Gtk.TreeViewColumn("Profile", name_renderer, text=0)
-    configure_treeview_column(name_col, width=150)
-    picker_view.append_column(name_col)
-
-    applies_renderer = Gtk.CellRendererText()
-    applies_col = Gtk.TreeViewColumn("Applies to", applies_renderer, text=1)
-    configure_treeview_column(applies_col, width=100)
-    picker_view.append_column(applies_col)
-
-    desc_renderer = Gtk.CellRendererText()
-    desc_renderer.set_property("wrap-mode", Gtk.WrapMode.WORD)
-    desc_renderer.set_property("wrap-width", 350)
-    desc_col = Gtk.TreeViewColumn("Description", desc_renderer, text=2)
-    configure_treeview_column(desc_col, width=350)
-    picker_view.append_column(desc_col)
-
-    picker_sw = Gtk.ScrolledWindow()
-    picker_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    picker_sw.set_min_content_height(150)
-    picker_sw.add(picker_view)
-    content.pack_start(picker_sw, False, False, 0)
-
-    def _select_profile_row(name):
-        for i, row_name in enumerate(profile_names):
-            if row_name == name:
-                picker_selection.select_path(i)
-                return True
-        return False
-
-    if not _select_profile_row(default_name):
-        _select_profile_row(profile_names[0])
-
-    preview_label = Gtk.Label(label="Planned commands:")
-    preview_label.set_halign(Gtk.Align.START)
-    content.pack_start(preview_label, False, False, 0)
-
-    preview_sw = Gtk.ScrolledWindow()
-    preview_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    preview_sw.set_min_content_height(200)
-    preview_buf = Gtk.TextBuffer()
-    preview_tv = Gtk.TextView(buffer=preview_buf)
-    preview_tv.set_editable(False)
-    preview_tv.set_cursor_visible(False)
-    preview_tv.set_monospace(True)
-    preview_sw.add(preview_tv)
-    content.pack_start(preview_sw, True, True, 0)
-
-    current_name = default_name
-
-    def _read_selected_name():
-        # Gtk.TreeSelection.get_selected() returns (model, iter) in real GTK.
-        # Some test mocks return MagicMocks instead; callers fall back to the
-        # tracked value in that case.
-        model, tree_iter = picker_selection.get_selected()
-        if tree_iter is not None:
-            value = model.get_value(tree_iter, 0)
-            if isinstance(value, str):
-                return value
-        return None
-
-    def _get_active_profile_name():
-        return _read_selected_name() or current_name
-
-    def _update_preview(*_args):
-        name = _get_active_profile_name()
-        profile = profiles.get(name, {})
-        has_warning = profile_has_warning(name, profile, pool_has_special)
-        text = warning_text(name, profile, pool_has_special)
-        if has_warning and text:
-            warning_label.set_text(f"Warning: {text}")
-            warning_label.show()
-            confirm_check.show()
-        else:
-            warning_label.hide()
-            confirm_check.hide()
-            confirm_check.set_active(False)
-
-        lines = []
-        repo = app.ctx.zfs_repository
-        for ds in datasets:
-            ds_name = ds["name"]
-            ds_type = ds["type"]
-            try:
-                live_props = repo.get_properties(ds_name, list(ZFS_GET_PROPERTIES))
-            except Exception as exc:  # pragma: no cover - defensive
-                lines.append(
-                    f"# Could not read properties for {ds_name}: "
-                    f"{_user_friendly_property_error(ds_name, exc)}"
-                )
-                continue
-            plan = build_apply_plan(profile, ds_name, ds_type, live_props)
-            for entry in plan:
-                lines.append(f"# {entry['explanation']}")
-            commands = build_zfs_set_commands(plan)
-            lines.extend(commands)
-            lines.append("")
-        preview_buf.set_text("\n".join(lines).rstrip("\n"))
-
-    def _on_selection_changed(*_args):
-        nonlocal current_name
-        raw = _read_selected_name()
-        if isinstance(raw, str):
-            current_name = raw
-        _update_preview()
-
-    picker_selection.connect("changed", _on_selection_changed)
-    _update_preview()
-
-    dialog.show_all()
-    while True:
-        response = dialog.run()
-        if response != Gtk.ResponseType.OK:
-            dialog.destroy()
-            return Gtk.ResponseType.CANCEL, None, None
-        name = _get_active_profile_name()
-        profile = profiles.get(name, {})
-        if profile_has_warning(name, profile, pool_has_special) and not confirm_check.get_active():
-            continue
-        dialog.destroy()
-        return Gtk.ResponseType.OK, name, profile
-
-
-def on_disks_apply_profile(app):
-    """Apply the selected workload profile to the selected datasets."""
-    if node_config.is_two_node() and not node_config.is_storage_host():
-        log_msg("WARN: Applying profiles is available only on the storage host")
-        return
-    datasets = _selected_dataset_rows(app)
-    if not datasets:
-        log_msg("WARN: Select at least one dataset to apply a profile")
-        return
-
-    # Attach profile-match display to each selected row.
-    selection = app.disks_dataset_view.get_selection()
-    model, pathlist = selection.get_selected_rows()
-    for idx, path in enumerate(pathlist):
-        tree_iter = model.get_iter(path)
-        datasets[idx]["profile_match"] = model.get_value(tree_iter, COL_DS_PROFILE_MATCH)
-
-    response, _profile_name, profile = show_apply_profile_dialog(app, datasets)
-    if response != Gtk.ResponseType.OK:
-        return
-
-    runner = getattr(app, "dataset_runner", None)
-    if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
-        return
-
-    repo = app.ctx.zfs_repository
-    all_commands = []
-    ds_commands: list[tuple[str, str, list[tuple[str, dict]]]] = []
-    for ds in datasets:
-        ds_name = ds["name"]
-        ds_type = ds["type"]
-        try:
-            live_props = repo.get_properties(ds_name, list(ZFS_GET_PROPERTIES))
-        except Exception as exc:  # pragma: no cover - defensive
-            log_msg(
-                f"WARN: Could not read properties for {ds_name}: "
-                f"{_user_friendly_property_error(ds_name, exc)}"
-            )
-            continue
-        plan = build_apply_plan(profile, ds_name, ds_type, live_props)
-        cmd_pairs = zfs_set_commands_with_entries(plan)
-        if cmd_pairs:
-            all_commands.extend(cmd for cmd, _entry in cmd_pairs)
-            ds_commands.append((ds_name, ds_type, cmd_pairs))
-
-    if not all_commands:
-        dialog = Gtk.MessageDialog(
-            transient_for=app,
-            modal=True,
-            message_type=Gtk.MessageType.INFO,
-            buttons=Gtk.ButtonsType.OK,
-            text="No changes to apply",
-        )
-        dialog.format_secondary_text("All selected datasets already match the chosen profile.")
-        dialog.run()
-        dialog.destroy()
-        return
-
-    dataset_names = [ds["name"] for ds in datasets]
-    lock_ids = zlm.acquire_multiple("w", dataset_names)
-
-    steps = []
-    for ds_name, _ds_type, cmd_pairs in ds_commands:
-        for cmd, entry in cmd_pairs:
-            desc = f"Set {entry['property']}={entry['value']} on {ds_name}"
-            steps.append(
-                BashStep(
-                    ["bash", "-c", cmd],
-                    desc,
-                    is_rsync=False,
-                    fatal=False,
-                )
-            )
-
-    def _on_complete(cancelled=False, rc=None):
-        for lock_id in lock_ids:
-            zlm.release(lock_id)
-        if cancelled:
-            log_msg("INFO: Apply Profile cancelled")
-        elif rc:
-            log_msg(f"WARN: Apply Profile failed (rc={rc})")
-        elif all_commands:
-            log_msg(f"INFO: Apply Profile complete: {len(all_commands)} command(s)")
-        update_disks_button_sensitivity(app)
-        refresh_disks_page(app)
-
-    runner.operation_detail = (
-        f"Apply Profile: {dataset_names[0]}"
-        if len(dataset_names) == 1
-        else f"Apply Profile: {len(dataset_names)} datasets"
-    )
-    runner.set_steps(steps)
-    update_disks_button_sensitivity(app)
-    runner.start(on_complete=_on_complete)

@@ -92,6 +92,10 @@ def _extract_candidates(text):
     candidates = []
     seen = set()
     for line_no, line in enumerate(text.splitlines(), 1):
+        # Blockquoted lines are example/illustrative text (e.g. quoted agent
+        # responses in AGENTS.md), not project references — skip them.
+        if line.lstrip().startswith(">"):
+            continue
         for span in re.findall(r"`([^`]+)`", line):
             # Command strings like `tests/run-tests test-<name>` are skipped
             # here; the prose pass below still picks up the path sub-token.
@@ -102,9 +106,7 @@ def _extract_candidates(text):
                 candidates.append((line_no, token))
         for match in _PROSE_TOKEN_RE.finditer(line):
             token = _clean_token(match.group(1))
-            if token.startswith(KNOWN_TOP_LEVEL_PREFIXES) or token.endswith(
-                KNOWN_FILE_EXTENSIONS
-            ):
+            if token.startswith(KNOWN_TOP_LEVEL_PREFIXES) or token.endswith(KNOWN_FILE_EXTENSIONS):
                 candidates.append((line_no, token))
         for fname in KNOWN_ROOT_FILES:
             if re.search(r"(?<![\w./-])" + re.escape(fname) + r"(?![\w/-])", line):
@@ -455,9 +457,7 @@ class TestAgentsMdReferences(unittest.TestCase):
 
     def test_root_agents_md_meets_extraction_floor(self):
         text = self._read(os.path.join(REPO_ROOT, "AGENTS.md"))
-        _problems, _ignored, _allowlisted, candidates = _validate_agents_md_text(
-            text, "AGENTS.md"
-        )
+        _problems, _ignored, _allowlisted, candidates = _validate_agents_md_text(text, "AGENTS.md")
         tokens = sorted({token for _line, token in candidates})
         self.assertGreaterEqual(
             len(tokens),
@@ -472,22 +472,15 @@ class TestAgentsMdReferences(unittest.TestCase):
         for path in AGENTS_MD_FILES:
             label = os.path.relpath(path, REPO_ROOT)
             text = self._read(path)
-            problems, _ignored, _allowlisted, _candidates = _validate_agents_md_text(
-                text, label
-            )
+            problems, _ignored, _allowlisted, _candidates = _validate_agents_md_text(text, label)
             failures.extend(problems)
             failures.extend(_validate_branch_mentions(text, label))
         if failures:
             self.fail("Stale references in AGENTS.md files:\n  " + "\n  ".join(failures))
 
     def test_checker_flags_bogus_reference(self):
-        text = (
-            "See bin/no-such-script-here and docs/no-such-guide.md "
-            "for details.\n"
-        )
-        problems, _ignored, _allowlisted, _candidates = _validate_agents_md_text(
-            text, "synthetic"
-        )
+        text = "See bin/no-such-script-here and docs/no-such-guide.md for details.\n"
+        problems, _ignored, _allowlisted, _candidates = _validate_agents_md_text(text, "synthetic")
         joined = "\n".join(problems)
         self.assertIn("bin/no-such-script-here", joined)
         self.assertIn("docs/no-such-guide.md", joined)
@@ -499,10 +492,16 @@ class TestAgentsMdReferences(unittest.TestCase):
 
     def test_placeholder_token_validates_parent_dir(self):
         text = "Run pytest tests/python/test_<name>.py -x --tb=short.\n"
-        problems, _ignored, _allowlisted, _candidates = _validate_agents_md_text(
-            text, "synthetic"
-        )
+        problems, _ignored, _allowlisted, _candidates = _validate_agents_md_text(text, "synthetic")
         self.assertEqual(problems, [])
+
+    def test_blockquote_example_lines_are_skipped(self):
+        # AGENTS.md quotes example agent responses in blockquotes; path-like
+        # text there is illustrative and must not be validated as references.
+        text = "> Two ruff format nits remain in foo.py/test_bar.py — example.\n"
+        problems, _ignored, _allowlisted, candidates = _validate_agents_md_text(text, "synthetic")
+        self.assertEqual(problems, [])
+        self.assertEqual(candidates, [])
 
     def test_git_ignored_path_is_skipped(self):
         # docs/site/ is gitignored generated content; a missing file under it

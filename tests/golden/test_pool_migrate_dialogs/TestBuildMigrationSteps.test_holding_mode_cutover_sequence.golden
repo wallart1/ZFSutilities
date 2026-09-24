@@ -1,11 +1,10 @@
 zpool export pool1
 zpool destroy pool1
 zpool create pool1_mig raidz1 /dev/disk/by-id/ata-TESTsda /dev/disk/by-id/ata-TESTsdb /dev/disk/by-id/ata-TESTsdc
-bash -c 'source '"'"'REPO_ROOT/bin/zfs-migrate-send'"'"'; sourcefs=pool2/data; destfs=pool1_mig/data; snapname=migrate-2026-09-10T14:30-04:00; zfs_migrate_send'
-bash -c 'source '"'"'REPO_ROOT/bin/zfs-migrate-send'"'"'; sourcefs=pool2/vm-100-disk-0; destfs=pool1_mig/vm-100-disk-0; snapname=migrate-2026-09-10T14:30-04:00; zfs_migrate_send'
-bash -c 'set -o pipefail; s=$(zfs list -rH -t filesystem,volume -o name pool2/data | wc -l); d=$(zfs list -rH -t filesystem,volume -o name pool1_mig/data | wc -l); echo "verify data: source datasets=$s, destination datasets=$d"; test "$s" -gt 0 && test "$d" -eq "$s"'
-bash -c 'set -o pipefail; s=$(zfs list -rH -t filesystem,volume -o name pool2/vm-100-disk-0 | wc -l); d=$(zfs list -rH -t filesystem,volume -o name pool1_mig/vm-100-disk-0 | wc -l); echo "verify vm-100-disk-0: source datasets=$s, destination datasets=$d"; test "$s" -gt 0 && test "$d" -eq "$s"'
-zfs destroy -r pool2/data
-zfs destroy -r pool2/vm-100-disk-0
+bash -c 'source '"'"'REPO_ROOT/bin/zfs-migrate-send'"'"'; sourcefs=pool2/migrate_pool1/data; destfs=pool1_mig/data; snapname=migrate-2026-09-10T14:30-04:00; zfs_migrate_send'
+bash -c 'source '"'"'REPO_ROOT/bin/zfs-migrate-send'"'"'; sourcefs=pool2/migrate_pool1/vm-100-disk-0; destfs=pool1_mig/vm-100-disk-0; snapname=migrate-2026-09-10T14:30-04:00; zfs_migrate_send'
+bash -c 'set -o pipefail; s=$(zfs list -rH -t filesystem,volume -o name pool2/migrate_pool1/data | wc -l); d=$(zfs list -rH -t filesystem,volume -o name pool1_mig/data | wc -l); echo "verify data: source datasets=$s, destination datasets=$d"; test "$s" -gt 0 && test "$d" -eq "$s"'
+bash -c 'set -o pipefail; s=$(zfs list -rH -t filesystem,volume -o name pool2/migrate_pool1/vm-100-disk-0 | wc -l); d=$(zfs list -rH -t filesystem,volume -o name pool1_mig/vm-100-disk-0 | wc -l); echo "verify vm-100-disk-0: source datasets=$s, destination datasets=$d"; test "$s" -gt 0 && test "$d" -eq "$s"'
+zfs destroy -r pool2/migrate_pool1
 zpool export pool2
 zpool import pool1_mig pool1

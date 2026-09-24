@@ -22,19 +22,19 @@ For the complete algorithm, see the
 
 Each bucket in a retention policy has two parameters:
 
-- **`retain`** — how many snapshots of this bucket are kept. When a bucket has
+- **`retain`** — how many snapshots of this bucket are kept in phase 3. When a bucket has
   more than this many snapshots, the oldest snapshots are deleted first. The
   most recent snapshot in each bucket is protected so it can serve as the base
   for the next incremental backup, unless `retain=0`.
 - **`minage`** — the minimum age, in days, before a snapshot in this bucket is
-  allowed to be deleted. It is **not** a maximum age: setting `minage=65` does
+  allowed to be deleted in phase 3. It is **not** a maximum age: setting `minage=65` does
   not mean snapshots are deleted after 65 days; it means they cannot be deleted
   until they are at least 65 days old. A snapshot older than `minage` is still
   kept if it is within the `retain` count (or is the most recent snapshot and
   `retain > 0`).
 
 For example, an offsite (`s`) bucket configured as `retain=4 minage=65` keeps
-up to four offsite snapshots and never deletes any of them until each one is at
+up to four offsite snapshots and never deletes any of them until it is at
 least 65 days old. A snapshot that is 80 days old will be kept if it is one of
 the four newest offsite snapshots for that dataset.
 
@@ -73,22 +73,22 @@ currently online, and each online pool is pruned using the same buckets.
 The `<offsite>` row appears in the GUI Retention tab's **Prune** pool list with
 its health column showing the resolved pool names (or `not online` when none are
 attached). It is also supported by scheduled retention profiles and by the
-headless `profile_runner.py`.
+batch `profile_runner.py`.
 
-This avoids keeping per-pool policies for removable pools that are frequently
+This avoids keeping separate per-pool policies for removable pools that are frequently
 offline and ensures pruning still runs against whichever offsite pool happens to
 be connected.
 
 ## Snapshot Buckets
 
-| Bucket | Label   | When created                      |
-| ------ | ------- | --------------------------------- |
-| `d`    | daily   | Every run of `zfsdailybackup`     |
-| `w`    | weekly  | Every weekly run (if configured)  |
-| `m`    | monthly | Every monthly run (if configured) |
-| `s`    | offsite | Every run of `zfssendoffsite`     |
+| Bucket | Label   | When created                  |
+| ------ | ------- | ----------------------------- |
+| `d`    | daily   | Every run of `zfsdailybackup` |
+| `w`    | weekly  | Every weekly run              |
+| `m`    | monthly | Every monthly run             |
+| `s`    | offsite | Every run of `zfssendoffsite` |
 
-## Running Retention Manually
+## Running Retention Manually (Pruning)
 
 When called directly, `zfsretain` defaults to **dry-run mode** — it reports
 what would be deleted without deleting anything. To actually delete, you must
@@ -111,7 +111,7 @@ When `zfscleanup` is invoked without a specific pool, it processes the pools
 registered in the JSON config. If the config pool list is empty, it falls back
 to all online pools so retention is not silently skipped.
 
-## Held Snapshots
+## Held and Busy Snapshots
 
 By default, `zfsretain` sets `$skipbusy='Y'`, meaning if a snapshot has a ZFS
 hold (or is otherwise busy) and cannot be deleted, a warning is logged and
@@ -145,7 +145,7 @@ determine safety. `zfssendoffsite` places a hold named
 successfully replicates. These serve as receipts.
 
 For deletion to be safe, the incremental chain must remain intact: there must
-be another snapshot that both the source and the counterpart share. If the
+be another snapshot that both the source and the destination datasets share. If the
 offsite pool is offline and no other snapshot of the source dataset has the appropriate hold tag, deletion is blocked:
 
 ```
@@ -186,10 +186,18 @@ sudo -E ./zfscleanup fivebays '' dailybackup
 ## Advanced Prune Options
 
 The Retention tab provides an **Advanced Prune Options** card for fine-tuning
-what the **Prune** button deletes. By default, **Prune** runs `zfscleanup` and
-applies the configured retention policies. When **Ignore retention policies** is
-checked, **Prune** instead deletes every matching snapshot regardless of
-retention counts.
+what the **Prune** button deletes. The card is built around the **Ignore
+retention policies** toggle at the top:
+
+- **Unchecked** (default) — **Prune** runs `zfscleanup` for each selected pool
+  and applies the configured retention policies. Only the **Release Holds**
+  setting from the card is used in this mode.
+- **Checked** — **Prune** instead runs `zfsmassdelsnaps` and deletes every
+  matching snapshot regardless of retention counts, restricted by the **Mass
+  Delete Filters** frame below the toggle.
+
+A caption under the toggle restates this, and the filter fields are greyed out
+while the toggle is unchecked, so the card explains itself without this manual.
 
 !!! warning "Ignore retention policies can break incremental chains"
     When **Ignore retention policies** is enabled, snapshots are deleted without
@@ -197,17 +205,22 @@ retention counts.
     with an offsite or backup pool and break future incremental backups. Use this
     mode only when you are certain the snapshots are no longer needed.
 
-### Filter options
+### Mass Delete Filters frame
 
-| Field              | Purpose                                                                |
-| ------------------ | ---------------------------------------------------------------------- |
-| **Includes**       | Space-separated dataset name substrings to include                     |
-| **Excludes**       | Space-separated dataset name substrings to exclude                     |
-| **Start With**     | Skip datasets until this substring is seen                             |
-| **End With**       | Stop processing datasets after this substring                          |
-| **Snapshot Has**   | Only consider snapshots whose full name contains this substring        |
-| **Release Holds**  | Release ZFS holds before deleting; applies in both normal and ignore-retention prune |
-| **Ignore Retention Policies** | When enabled, the **Prune** button deletes all matching snapshots regardless of retention policy |
+The red **Mass Delete Filters - Danger Zone** frame contains the filter fields
+used by the ignore-retention prune:
+
+| Field             | Purpose                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| **Includes**      | Space-separated dataset name substrings to include                                   |
+| **Excludes**      | Space-separated dataset name substrings to exclude                                   |
+| **Start With**    | Skip datasets until this substring is seen                                           |
+| **End With**      | Stop processing datasets after this substring                                        |
+| **Snapshot Has**  | Only consider snapshots whose full name contains this substring                      |
+| **Release Holds** | Release ZFS holds before deleting; applies in both normal and ignore-retention prune |
+
+These fields have no effect on a normal (respect-policies) prune except
+**Release Holds**.
 
 ### Modes
 
@@ -242,12 +255,12 @@ The repository ships a legacy-style default retention policy in
 for deployment). It defines the `default` retention policy used when the JSON
 config does not yet contain a `retention` section:
 
-| Bucket | Name | Retain | Min age (days) | Purpose              |
-| ------ | ---- | ------ | -------------- | -------------------- |
-| 0      | `d`  | 3      | 0              | Daily snapshots      |
-| 1      | `w`  | 2      | 0              | Weekly snapshots     |
-| 2      | `m`  | 2      | 0              | Monthly snapshots    |
-| 3      | `s`  | 4      | 65             | Offsite snapshots    |
+| Bucket | Name | Retain | Min age (days) | Purpose           |
+| ------ | ---- | ------ | -------------- | ----------------- |
+| 0      | `d`  | 3      | 0              | Daily snapshots   |
+| 1      | `w`  | 2      | 0              | Weekly snapshots  |
+| 2      | `m`  | 2      | 0              | Monthly snapshots |
+| 3      | `s`  | 4      | 65             | Offsite snapshots |
 
 On a fresh install, `install-single-node` and `install-two-node` import this
 policy into `/var/lib/zfsutilities/config.json` as the `default` retention

@@ -19,7 +19,13 @@ gi = import_or_skip_gi("gi")
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
-from gui_helpers import build_full_dataset_name, on_row_expanded
+from gui_helpers import (
+    build_full_dataset_name,
+    find_tree_iter_by_full_name,
+    get_tree_selection_items,
+    on_row_expanded,
+    reload_row_children,
+)
 from zfs_repository import ZfsRepository
 
 SNAPSHOT_CMD = "zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones -d 1"
@@ -413,3 +419,179 @@ class TestRootDatasetExpansion(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _tree_with_volume():
+    """Pool root with a volume child ready for expansion."""
+    store = Gtk.TreeStore(str, str, str, str, str, str, str, bool, bool, str)
+    root = store.append(None, ["threeamigos", "", "", "", "", "", "", False, True, None])
+    vol = store.append(root, ["vm-100", "", "volume", "", "", "", "", False, False, None])
+    store.append(vol, ["(loading...)", "", "", "", "", "", "", True, False, None])
+    view = Gtk.TreeView(model=store)
+    return store, view, vol
+
+
+class TestVolumeLoopExpansion(unittest.TestCase):
+    """Volume rows list loop partitions when a loop device is attached."""
+
+    _VOL = "threeamigos/vm-100"
+    _FIND_CMD = "losetup -j /dev/zvol/threeamigos/vm-100"
+    _LSBLK_CMD = "lsblk --json --output NAME,TYPE,FSTYPE,MOUNTPOINT,SIZE /dev/loop0"
+
+    _LSBLK_WITH_PARTS = """
+    {
+      "blockdevices": [
+        {
+          "name": "loop0", "type": "loop", "fstype": null, "mountpoint": null,
+          "children": [
+            {"name": "loop0p1", "type": "part", "fstype": "ext4",
+             "mountpoint": null, "size": "4G"},
+            {"name": "loop0p2", "type": "part", "fstype": null,
+             "mountpoint": null, "size": "1G"}
+          ]
+        }
+      ]
+    }
+    """
+
+    def _attached_repo(self):
+        return _make_repo(
+            {
+                self._FIND_CMD: "/dev/loop0: []: (/dev/zvol/threeamigos/vm-100)\n",
+                self._LSBLK_CMD: self._LSBLK_WITH_PARTS,
+            }
+        )
+
+    def test_expansion_lists_loop_partitions(self):
+        store, view, vol = _tree_with_volume()
+        view._zfs_repo = self._attached_repo()
+        on_row_expanded(view, vol, store.get_path(vol))
+
+        children = []
+        child = store.iter_children(vol)
+        while child:
+            children.append(
+                (
+                    store.get_value(child, 0),
+                    store.get_value(child, 2),
+                    store.get_value(child, 8),
+                )
+            )
+            child = store.iter_next(child)
+
+        self.assertEqual(
+            children,
+            [
+                ("loop0p1", "ext4", False),
+                ("loop0p2", "No filesystem", False),
+            ],
+        )
+
+    def test_expansion_without_loop_shows_no_partitions(self):
+        store, view, vol = _tree_with_volume()
+        view._zfs_repo = _make_repo({})  # losetup -j returns nothing
+        on_row_expanded(view, vol, store.get_path(vol))
+
+        names = []
+        child = store.iter_children(vol)
+        while child:
+            names.append(store.get_value(child, 0))
+            child = store.iter_next(child)
+
+        self.assertEqual(names, ["(empty)"])
+
+    def test_bare_loop_device_with_fs_listed_as_single_row(self):
+        lsblk_bare = """
+        {
+          "blockdevices": [
+            {"name": "loop0", "type": "loop", "fstype": "xfs",
+             "mountpoint": null, "size": "50G"}
+          ]
+        }
+        """
+        store, view, vol = _tree_with_volume()
+        view._zfs_repo = _make_repo(
+            {
+                self._FIND_CMD: "/dev/loop0: []: (/dev/zvol/threeamigos/vm-100)\n",
+                self._LSBLK_CMD: lsblk_bare,
+            }
+        )
+        on_row_expanded(view, vol, store.get_path(vol))
+
+        child = store.iter_children(vol)
+        self.assertEqual(store.get_value(child, 0), "loop0")
+        self.assertEqual(store.get_value(child, 2), "xfs")
+
+    def test_selection_items_for_partitions(self):
+        store, view, vol = _tree_with_volume()
+        view._zfs_repo = self._attached_repo()
+        on_row_expanded(view, vol, store.get_path(vol))
+
+        # Select only the first partition row (loop0p1, has filesystem).
+        part = store.iter_children(vol)
+        selection = view.get_selection()
+        selection.get_selected_rows = lambda: (store, [store.get_path(part)])
+        items = get_tree_selection_items(view)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["type"], "volume-partition")
+        self.assertEqual(items[0]["device"], "/dev/loop0p1")
+        self.assertEqual(items[0]["volume"], self._VOL)
+        self.assertEqual(items[0]["fstype"], "ext4")
+        self.assertTrue(items[0]["has_filesystem"])
+
+        # Second partition row (loop0p2) has no filesystem.
+        nofs = store.iter_next(part)
+        selection.get_selected_rows = lambda: (store, [store.get_path(nofs)])
+        items = get_tree_selection_items(view)
+        self.assertEqual(items[0]["fstype"], "No filesystem")
+        self.assertFalse(items[0]["has_filesystem"])
+
+    def test_snapshot_rows_under_volume_are_not_partitions(self):
+        store, view, vol = _tree_with_volume()
+        repo = _make_repo(
+            {
+                self._FIND_CMD: "/dev/loop0: []: (/dev/zvol/threeamigos/vm-100)\n",
+                self._LSBLK_CMD: self._LSBLK_WITH_PARTS,
+                f"{SNAPSHOT_CMD} threeamigos/vm-100": (
+                    "threeamigos/vm-100@snap1\t2025-01-01\tsnapshot\t0B\t-\t5G\t-\t-\n"
+                ),
+                f"{DATASET_CMD} threeamigos/vm-100": (
+                    "threeamigos/vm-100\t2025-01-01\tvolume\t5G\t-\t5G\t-\t-\t-\n"
+                ),
+            }
+        )
+        view._zfs_repo = repo
+        on_row_expanded(view, vol, store.get_path(vol))
+
+        # Select the snapshot row (children order: partitions, then @snap1).
+        snap_iter = None
+        child = store.iter_children(vol)
+        while child:
+            if store.get_value(child, 0).startswith("@"):
+                snap_iter = child
+                break
+            child = store.iter_next(child)
+        self.assertIsNotNone(snap_iter)
+        selection = view.get_selection()
+        selection.get_selected_rows = lambda: (store, [store.get_path(snap_iter)])
+        items = get_tree_selection_items(view)
+        self.assertEqual(items[0]["type"], "snapshot")
+
+    def test_reload_row_children_after_detach(self):
+        store, view, vol = _tree_with_volume()
+        view._zfs_repo = self._attached_repo()
+        on_row_expanded(view, vol, store.get_path(vol))
+        self.assertIsNotNone(store.iter_children(vol))
+
+        found = find_tree_iter_by_full_name(store, self._VOL)
+        self.assertIsNotNone(found)
+
+        # Detach: losetup -j now finds nothing; children collapse to "(empty)".
+        store.set_value(vol, 7, True)
+        reload_row_children(store, vol, repo=_make_repo({}))
+        names = []
+        child = store.iter_children(vol)
+        while child:
+            names.append(store.get_value(child, 0))
+            child = store.iter_next(child)
+        self.assertEqual(names, ["(empty)"])

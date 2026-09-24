@@ -66,6 +66,7 @@ from pool_migrate import (
     MIGRATION_MODES,
     check_destination_capacity,
     generate_temp_pool_name,
+    holding_migration_namespace,
     migration_snapshot_bare_name,
     migration_snapshot_name,
     plan_migration_steps,
@@ -96,9 +97,10 @@ class _MigrateState:
     """Mutable Migrate-Pool dialog state."""
 
     pools: list[str]  # migratable source pools (sorted)
+    holding_pools: list[str]  # imported non-root pools eligible as holding pools (sorted)
     pool_name: str  # "" until a pool is picked
     mode: str  # MIGRATE_NEW_DISKS or MIGRATE_HOLDING_POOL
-    datasets_by_pool: dict[str, list[str]]  # top-level datasets per pool
+    datasets_by_pool: dict[str, list[str]]  # top-level datasets per pool, pool-relative
     pool_alloc: dict[str, int]  # allocated bytes per imported pool
     pool_free: dict[str, int]  # free bytes per imported pool
     eligibility: list[EligibilityResult]
@@ -154,8 +156,13 @@ def _dest_label(state: _MigrateState) -> str:
 
 
 def _holding_candidates(state: _MigrateState) -> list[str]:
-    """Holding pools: every migratable pool except the source."""
-    return [pool for pool in state.pools if pool != state.pool_name]
+    """Holding pools: every other imported non-root pool, even an empty one.
+
+    An empty pool cannot be a migration *source* (nothing to copy), but it is
+    often the ideal *holding* pool, so candidates come from ``holding_pools``
+    rather than the dataset-bearing ``pools`` (source) list.
+    """
+    return [pool for pool in state.holding_pools if pool != state.pool_name]
 
 
 def _candidate_pool_capacity_bytes(topology: str, disks: list[DiskInfo]) -> int | None:
@@ -270,12 +277,8 @@ def _migrate_problems(state: _MigrateState) -> list[str]:
         )
         if problems:
             return problems
-        capacity = _candidate_pool_capacity_bytes(
-            state.topology, _source_pool_member_disks(state)
-        )
-        problem = _capacity_problem(
-            capacity, alloc, "the pool rebuilt on the source pool's disks"
-        )
+        capacity = _candidate_pool_capacity_bytes(state.topology, _source_pool_member_disks(state))
+        problem = _capacity_problem(capacity, alloc, "the pool rebuilt on the source pool's disks")
         if problem:
             return [problem]
 
@@ -302,16 +305,14 @@ def _migrate_warnings(state: _MigrateState) -> list[str]:
     ]
     if state.mode == MIGRATE_HOLDING_POOL:
         warnings.append(
-            "the holding pool must stay online and untouched until the "
-            "migration finishes"
+            "the holding pool must stay online and untouched until the migration finishes"
         )
     if state.mode == MIGRATE_NEW_DISKS:
         alloc = state.pool_alloc.get(state.pool_name, 0)
         capacity = _candidate_pool_capacity_bytes(state.topology, state.selected)
         if capacity is not None and alloc > 0 and capacity < alloc * 1.1:
             warnings.append(
-                "the new pool has less than 10% headroom over the source "
-                "pool's allocated data"
+                "the new pool has less than 10% headroom over the source pool's allocated data"
             )
         for result in state.eligibility:
             if result.disk in state.selected:
@@ -329,9 +330,7 @@ def _plan_lines(state: _MigrateState) -> list[str]:
     datasets = state.datasets_by_pool.get(state.pool_name, [])
     if not datasets:
         return []
-    steps = plan_migration_steps(
-        state.pool_name, datasets, state.mode, _dest_label(state)
-    )
+    steps = plan_migration_steps(state.pool_name, datasets, state.mode, _dest_label(state))
     return [step.description for step in steps]
 
 
@@ -388,8 +387,18 @@ def _copy_steps(
     datasets,
     snap_bare: str,
     rate_limit: str = "",
+    src_namespace: str = "",
+    dest_namespace: str = "",
 ) -> list[BashStep]:
-    """Snapshot + replicate + verify steps for one copy direction."""
+    """Snapshot + replicate + verify steps for one copy direction.
+
+    *src_namespace* / *dest_namespace* insert a reserved path component
+    between pool and dataset so holding-mode copies land at
+    ``<pool>/<namespace>/<dataset>`` and can never collide with
+    backup/offsite copies of the same datasets.
+    """
+    src_prefix = f"{src_pool}/{src_namespace}" if src_namespace else src_pool
+    dest_prefix = f"{dest_pool}/{dest_namespace}" if dest_namespace else dest_pool
     steps = [
         BashStep(
             build_recursive_snapshot_command(src_pool, snap_bare),
@@ -402,18 +411,18 @@ def _copy_steps(
         steps.append(
             BashStep(
                 build_migration_send_receive_command(
-                    f"{src_pool}/{dataset}",
-                    f"{dest_pool}/{dataset}",
+                    f"{src_prefix}/{dataset}",
+                    f"{dest_prefix}/{dataset}",
                     snap_bare,
                     rate_limit=rate_limit,
                 ),
-                f"Migrate {src_pool}/{dataset} -> {dest_pool}/{dataset}",
+                f"Migrate {src_prefix}/{dataset} -> {dest_prefix}/{dataset}",
                 is_rsync=False,
                 fatal=True,
             )
         )
     for dataset in datasets:
-        steps.append(_build_verify_step(src_pool, dest_pool, dataset))
+        steps.append(_build_verify_step(src_prefix, dest_prefix, dataset))
     return steps
 
 
@@ -438,9 +447,7 @@ def build_migration_steps(
                 fatal=True,
             ),
             BashStep(
-                build_pool_import_rename_command(
-                    request.temp_pool, request.source_pool
-                ),
+                build_pool_import_rename_command(request.temp_pool, request.source_pool),
                 f"Import {request.temp_pool} as {request.source_pool}",
                 is_rsync=False,
                 fatal=True,
@@ -449,12 +456,16 @@ def build_migration_steps(
         return copy, cutover
 
     # Holding-pool mode: copy out, then rebuild on the freed disks and swap.
+    # Copies live in a reserved namespace on the holding pool so they cannot
+    # collide with backup/offsite copies of the same datasets.
+    namespace = holding_migration_namespace(request.source_pool)
     copy = _copy_steps(
         request.source_pool,
         request.holding_pool,
         datasets,
         request.snap_bare,
         rate_limit=request.rate_limit,
+        dest_namespace=namespace,
     )
     cutover = [
         BashStep(
@@ -489,16 +500,16 @@ def build_migration_steps(
         datasets,
         request.snap_bare,
         rate_limit=request.rate_limit,
+        src_namespace=namespace,
     )[1:]
-    for dataset in datasets:
-        cutover.append(
-            BashStep(
-                build_destroy_dataset_command(f"{request.holding_pool}/{dataset}"),
-                f"Remove migration copy {request.holding_pool}/{dataset}",
-                is_rsync=False,
-                fatal=True,
-            )
+    cutover.append(
+        BashStep(
+            build_destroy_dataset_command(f"{request.holding_pool}/{namespace}"),
+            f"Remove migration namespace {request.holding_pool}/{namespace}",
+            is_rsync=False,
+            fatal=True,
         )
+    )
     cutover += [
         BashStep(
             build_pool_export_command(request.holding_pool),
@@ -507,9 +518,7 @@ def build_migration_steps(
             fatal=True,
         ),
         BashStep(
-            build_pool_import_rename_command(
-                request.temp_pool, request.source_pool
-            ),
+            build_pool_import_rename_command(request.temp_pool, request.source_pool),
             f"Import {request.temp_pool} as {request.source_pool}",
             is_rsync=False,
             fatal=True,
@@ -723,9 +732,7 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
         problems = _migrate_problems(state)
         lines = _plan_lines(state)
         if lines:
-            plan_buf.set_text(
-                "\n".join(f"{index + 1}. {line}" for index, line in enumerate(lines))
-            )
+            plan_buf.set_text("\n".join(f"{index + 1}. {line}" for index, line in enumerate(lines)))
         else:
             plan_buf.set_text("(select a source pool)")
         warnings = _migrate_warnings(state)
@@ -735,9 +742,7 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
             )
         else:
             warnings_label.set_text("")
-        typed_hint.set_text(
-            f"Type the pool name '{state.pool_name}' exactly to enable Migrate."
-        )
+        typed_hint.set_text(f"Type the pool name '{state.pool_name}' exactly to enable Migrate.")
         migrate_btn.set_sensitive(not problems)
         migrate_btn.set_tooltip_text(problems[0] if problems else "")
 
@@ -869,6 +874,30 @@ def _root_pool_name(repository) -> str | None:
     return None
 
 
+def _source_layout_changed(repository, request) -> str | None:
+    """Return a reason when the source pool's dataset layout changed, else None.
+
+    Compares the live dataset list against the reviewed plan; datasets
+    renamed, added, or removed while the wizard was open invalidate the plan.
+    """
+    try:
+        rows = repository.list_datasets(request.source_pool, depth=1)
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"could not re-read the dataset list ({exc})"
+    current = {row.name for row in rows if row.name and row.name != request.source_pool}
+    planned = {f"{request.source_pool}/{name}" for name in request.datasets}
+    added = sorted(current - planned)
+    removed = sorted(planned - current)
+    if not added and not removed:
+        return None
+    parts = []
+    if added:
+        parts.append(f"added: {', '.join(added)}")
+    if removed:
+        parts.append(f"removed: {', '.join(removed)}")
+    return "datasets " + "; ".join(parts)
+
+
 def on_disks_migrate_pool(app) -> None:
     """Migrate a pool to new disks or via a holding pool (Disks page action)."""
     if node_config.is_two_node() and not node_config.is_storage_host():
@@ -906,11 +935,15 @@ def on_disks_migrate_pool(app) -> None:
         except Exception as exc:  # pragma: no cover - defensive
             log_msg(f"WARN: Could not list datasets of pool '{pool_name}': {exc}")
             rows = []
+        # `zfs list -H` returns full dataset names including the pool prefix;
+        # the migration plan composes "<pool>/<dataset>", so store pool-
+        # relative names (row.name minus the leading "pool/").
         datasets_by_pool[pool_name] = [
-            row.name for row in rows if row.name and row.name != pool_name
+            row.name[len(pool_name) + 1 :] for row in rows if row.name and row.name != pool_name
         ]
 
     root_pool = _root_pool_name(repository)
+    holding_pools = [pool_name for pool_name in pools_all if pool_name != root_pool]
     pools = [
         pool_name
         for pool_name in pools_all
@@ -935,8 +968,27 @@ def on_disks_migrate_pool(app) -> None:
     existing_names = set(data.topologies) | repository.list_importable_pool_names()
 
     preselected = app._disks_pool_selector.get_active_text()
+    if preselected and preselected not in pools:
+        # The Disks-page selector points at a pool that cannot be a migration
+        # source (it hosts the root filesystem or has no datasets). Opening
+        # the wizard with a silently substituted source pool would migrate a
+        # pool the user did not pick, so explain and stop instead.
+        if preselected == root_pool:
+            reason = (
+                f"Pool '{preselected}' hosts the root filesystem and "
+                "cannot be exported or migrated."
+            )
+        else:
+            reason = (
+                f"Pool '{preselected}' has no datasets to migrate. An empty "
+                "pool can still be used as a holding pool for another "
+                "pool's migration."
+            )
+        _show_info_dialog(app, "Pool cannot be migrated", reason)
+        return
     state = _MigrateState(
         pools=pools,
+        holding_pools=holding_pools,
         pool_name=preselected if preselected in pools else (pools[0] if pools else ""),
         mode=MIGRATE_NEW_DISKS,
         datasets_by_pool=datasets_by_pool,
@@ -952,10 +1004,26 @@ def on_disks_migrate_pool(app) -> None:
     if request is None:
         return
 
+    # The review data was captured when the wizard opened; the pool may have
+    # changed in the meantime (rename, create, destroy). Running a stale plan
+    # fails cryptically mid-copy, so re-validate before anything starts.
+    changed = _source_layout_changed(repository, request)
+    if changed:
+        log_msg(
+            f"WARN: Migrate Pool aborted for '{request.source_pool}': "
+            f"pool changed after the review ({changed})"
+        )
+        _show_info_dialog(
+            app,
+            "Pool layout changed",
+            f"The dataset layout of pool '{request.source_pool}' changed after "
+            f"the Migrate Pool review ({changed}). Re-open Migrate Pool and "
+            "review the plan again.",
+        )
+        return
+
     copy_steps, cutover_steps = build_migration_steps(request)
-    lock_id = zlm.acquire(
-        request.source_pool, "w", f"Migrate pool {request.source_pool}"
-    )
+    lock_id = zlm.acquire(request.source_pool, "w", f"Migrate pool {request.source_pool}")
 
     def _copy_complete(cancelled=False, rc=None):
         if cancelled or rc:
@@ -999,10 +1067,7 @@ def on_disks_migrate_pool(app) -> None:
                 "retrying"
             )
             return
-        log_msg(
-            f"INFO: Pool '{request.source_pool}' migrated successfully "
-            f"(mode: {request.mode})"
-        )
+        log_msg(f"INFO: Pool '{request.source_pool}' migrated successfully (mode: {request.mode})")
         if is_iscsi_managed_pool(request.source_pool):
             repair_step = BashStep(
                 [resolve_local_bin("repair-iscsi-luns") or "repair-iscsi-luns"],
@@ -1014,8 +1079,7 @@ def on_disks_migrate_pool(app) -> None:
             def _repair_complete(cancelled=False, rc=None):
                 if cancelled:
                     log_msg(
-                        f"INFO: iSCSI LUN re-registration for "
-                        f"'{request.source_pool}' cancelled"
+                        f"INFO: iSCSI LUN re-registration for '{request.source_pool}' cancelled"
                     )
                 elif rc:
                     log_msg(
@@ -1023,10 +1087,7 @@ def on_disks_migrate_pool(app) -> None:
                         f"'{request.source_pool}' failed (rc={rc})"
                     )
                 else:
-                    log_msg(
-                        f"INFO: iSCSI LUNs re-registered for "
-                        f"'{request.source_pool}'"
-                    )
+                    log_msg(f"INFO: iSCSI LUNs re-registered for '{request.source_pool}'")
                 _finish_refresh(app)
 
             runner.set_steps([repair_step])

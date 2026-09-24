@@ -609,6 +609,13 @@ zfslock_check() {
 # poll knob may legitimately be 0 and is governed by numeric format alone.
 _zfslock_sanitize_interval() {
     local value="$1" fallback="$2" allow_zero="${3:-N}"
+    # The regex ^[0-9]+([.][0-9]+)?$ matches a non-negative decimal number
+    # with an optional fractional part: one or more digits, optionally
+    # followed by a literal dot and one or more digits. The dot is written
+    # as a character class ([.]) rather than \. because the right-hand side
+    # of =~ is an unquoted ERE where a backslash would need doubling. This
+    # deliberately rejects negative numbers, empty strings, and locale
+    # decimal commas, so the result is always safe to pass to sleep.
     if [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
         if [[ "$allow_zero" == "Y" ]] || awk -v v="$value" 'BEGIN { exit !(v > 0) }'; then
             printf '%s\n' "$value"

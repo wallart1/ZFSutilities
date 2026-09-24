@@ -24,6 +24,13 @@ ALL_KNOWN_PROPERTIES = LIVE_PROPERTIES + CREATION_ONLY_PROPERTIES
 # ``ashift`` is intentionally excluded because it is a pool/vdev property.
 ZFS_GET_PROPERTIES = LIVE_PROPERTIES + ("volblocksize",)
 
+# Scope note: every property above is a dataset-scope tuning knob (``ashift``
+# is pool/vdev-scope but only informational here — it cannot be changed after
+# pool creation, and Migrate Pool is how a pool is rewritten with a new
+# ashift). When pool-scoped, live-settable properties are added later, the
+# profile store should split into dataset profiles (Datasets page) and pool
+# profiles (Pools page) rather than mixing both scopes in one profile.
+
 
 def properties_for_profile(profile: dict, ds_type: str) -> dict[str, str]:
     """Return profile properties that apply to the given dataset type.

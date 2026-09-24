@@ -37,7 +37,8 @@ from gui_helpers import (
     set_button_markup_red,
     show_error,
     style_expander_label,
-    var_widgets_differ_from_defaults,
+    style_var_widgets_nondefault,
+    style_widget_value_nondefault,
 )
 from logging_config import log_msg
 from offsite_runner import detect_offsite_pools
@@ -369,11 +370,37 @@ def create_retention_page(app, ctx):
     advanced_exp.add(advanced_box)
     outer.pack_start(advanced_exp, False, False, 0)
 
+    mass_delete_cfg = get_retention_mass_delete_config(ctx.config)
+    variables = {
+        key: mass_delete_cfg.get(key, MASS_DELETE_DEFAULTS[key]) for key in MASS_DELETE_DEFAULTS
+    }
+    app._ret_mass_delete_widgets = {}
+    app._ret_mass_delete_original = dict(variables)
+
+    ignore_check = Gtk.CheckButton(label="Ignore retention policies")
+    ignore_check.set_tooltip_text(
+        "When checked, Prune deletes every matching snapshot regardless of "
+        "retention counts. The filter fields in the 'Mass Delete Filters' "
+        "frame below restrict which snapshots are matched."
+    )
+    ignore_check.set_active(variables["ignore_retention_policies"])
+    app._ret_ignore_retention_check = ignore_check
+    advanced_box.pack_start(ignore_check, False, False, 0)
+
+    mode_caption = Gtk.Label()
+    mode_caption.set_markup(
+        "<i>When checked, Prune deletes every matching snapshot regardless of "
+        "retention counts, restricted by the Mass Delete Filters below. "
+        "When unchecked, Prune applies each pool's retention policy and only "
+        "Release Holds below is used.</i>"
+    )
+    mode_caption.set_halign(Gtk.Align.START)
+    mode_caption.set_line_wrap(True)
+    advanced_box.pack_start(mode_caption, False, False, 0)
+
     danger_frame = Gtk.Frame()
     danger_label = Gtk.Label()
-    danger_label.set_markup(
-        "<span color='red'><b>Ignore Retention Policies - Danger Zone</b></span>"
-    )
+    danger_label.set_markup("<span color='red'><b>Mass Delete Filters - Danger Zone</b></span>")
     danger_label.set_halign(Gtk.Align.START)
     danger_frame.set_label_widget(danger_label)
     app._ret_danger_label = danger_label
@@ -387,13 +414,6 @@ def create_retention_page(app, ctx):
     danger_grid.set_margin_top(5)
     danger_grid.set_margin_bottom(5)
     danger_frame.add(danger_grid)
-
-    mass_delete_cfg = get_retention_mass_delete_config(ctx.config)
-    variables = {
-        key: mass_delete_cfg.get(key, MASS_DELETE_DEFAULTS[key]) for key in MASS_DELETE_DEFAULTS
-    }
-    app._ret_mass_delete_widgets = {}
-    app._ret_mass_delete_original = dict(variables)
 
     row = 0
     for key in MASS_DELETE_VARIABLES:
@@ -430,28 +450,22 @@ def create_retention_page(app, ctx):
         widget = app._ret_mass_delete_widgets[key]
         widget.connect("changed", lambda *_a: _update_ret_status(app))
 
-    ignore_check = Gtk.CheckButton(label="Ignore retention policies")
-    ignore_check.set_tooltip_text(
-        "When checked, Prune deletes every matching snapshot regardless of "
-        "retention counts. The filters below restrict which snapshots are matched."
-    )
-    ignore_check.set_active(variables["ignore_retention_policies"])
-    app._ret_ignore_retention_check = ignore_check
-    advanced_box.pack_start(ignore_check, False, False, 0)
     ignore_check.connect(
         "toggled",
         lambda *_a: (
-            _sync_releaseholds_widget(app, app._ret_ignore_retention_check.get_active()),
+            _sync_mass_delete_filter_sensitivity(app, app._ret_ignore_retention_check.get_active()),
             _update_ret_status(app),
         ),
     )
-    _sync_releaseholds_widget(app, variables["ignore_retention_policies"])
+    _sync_mass_delete_filter_sensitivity(app, variables["ignore_retention_policies"])
 
     def _update_advanced_label(*_args):
-        non_default = var_widgets_differ_from_defaults(
+        non_default = style_var_widgets_nondefault(
             app._ret_mass_delete_widgets, MASS_DELETE_DEFAULTS
         )
-        if app._ret_ignore_retention_check.get_active():
+        ignore_retention = app._ret_ignore_retention_check.get_active()
+        style_widget_value_nondefault(app._ret_ignore_retention_check, ignore_retention)
+        if ignore_retention:
             non_default = True
         style_expander_label(advanced_exp, "Advanced Prune Options", non_default)
 
@@ -605,18 +619,21 @@ def _store_to_buckets(app):
     return buckets
 
 
-def _sync_releaseholds_widget(app, ignore_active):
-    """Keep releaseholds sensitive in both prune modes.
+def _sync_mass_delete_filter_sensitivity(app, ignore_active):
+    """Grey out mass-delete filters that do not apply in the current mode.
 
-    Previously this dropdown was only enabled when Ignore retention policies
-    was checked.  It is now configurable in both modes, so the widget stays
-    sensitive and its value is preserved across toggles.
+    The includes/excludes/startwith/endwith/snapshot_has filters are only
+    consulted when Ignore retention policies is checked, so they are
+    desensitized in normal prune mode to make that explicit. Values are
+    preserved across toggles; only editability changes. releaseholds applies
+    in both modes, so it stays sensitive.
     """
     widgets = getattr(app, "_ret_mass_delete_widgets", None)
     if not isinstance(widgets, dict):
         return
-    rh_widget = widgets["releaseholds"]
-    rh_widget.set_sensitive(True)
+    for key in list(MASS_DELETE_VARIABLES) + ["snapshot_has"]:
+        widgets[key].set_sensitive(ignore_active)
+    widgets["releaseholds"].set_sensitive(True)
 
 
 def _mass_delete_is_dirty(app):
@@ -865,4 +882,4 @@ def _on_ret_revert(btn, app, ctx):
         ignore_check = getattr(app, "_ret_ignore_retention_check", None)
         if ignore_check is not None:
             ignore_check.set_active(orig.get("ignore_retention_policies", False))
-        _sync_releaseholds_widget(app, orig.get("ignore_retention_policies", False))
+        _sync_mass_delete_filter_sensitivity(app, orig.get("ignore_retention_policies", False))

@@ -2,7 +2,7 @@
 
 ## Identifying What to Restore
 
-What you restore is always a snapshot. A copy of that snapshot becomes a snapshot of the restored dataset.
+In ZFS parlance, what you restore is always a snapshot. Restoring a snapshot results in a restored dataset that has the same snapshot.
 
 List snapshots for a backup dataset:
 
@@ -72,15 +72,14 @@ For details of the two-step restore, see the
 
 ## Pause Scrubs During Restore
 
-The Restore tab has an option to **pause scrubs on the source and destination
+The Restore tab in the GUI has an option to **pause scrubs on the source and destination
 pools while the restore step is running**. This reduces I/O contention while
 large snapshot data is being read and written, and resumes scrubs automatically
 when the restore finishes.
 
 - Enable it in the Restore tab → **Advanced** →
   **Pause scrubs on source/destination pools during each step**.
-- Pools whose scrub has already finished or that are not online are skipped;
-  they are not marked as user-paused.
+- Pools that are not scrubbing at runtime are ignored.
 - In dry-run mode the option logs what it would pause/resume but does not
   change scrub state.
 
@@ -93,14 +92,13 @@ also available on the Backup and Offsite tabs:
   (default **Y**). When enabled, `zfs-send-receive` re-reads the received
   stream to detect corruption. This applies to both Part 1 (full copy) and
   Part 2 (incremental copy).
-- `pv_rate_limit` — Optional rate limit passed to `pv` during the transfer,
+- `pv_rate_limit` — Optional rate limit used during the transfer,
   for example `100M` to cap throughput at 100 MB/s. Leave blank for no limit.
 
 ## Preserving Target Holds During a Restore
 
 A ZFS send stream does not include snapshot holds, so a restore normally loses
-any hold tags that existed on the destination. `zfsrestore` and `zfsfullcopy`
-now preserve those target holds automatically:
+any hold tags that existed on the destination. `zfsrestore` and `zfsfullcopy`preserve those target holds automatically:
 
 1. Before the destination dataset is destroyed/recreated, all holds on its
    snapshots are captured to a temporary file.
@@ -138,14 +136,4 @@ sudo zfsreapplyholds --apply pool/dest /tmp/dest-holds.tsv
 In dry-run mode, `zfsrestore`/`zfsfullcopy` log the holds that would be
 reapplied without modifying the destination.
 
-## Checking Holds Before Deletion
-
-If a snapshot has holds, you must release them before it can be deleted:
-
-```bash
-zfs holds -r pool/dataset@snapshot
-zfs release <holdname> pool/dataset@snapshot
-```
-
-Or use [`zfsdelholds`](../commands-and-modules/commands.md#zfsdelholds) to
-release all holds matching a pattern.
+# 

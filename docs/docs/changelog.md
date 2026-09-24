@@ -1,5 +1,86 @@
 # Changelog
 
+## 0.105.0
+
+*Released 2026-09-24*
+
+### Added
+
+- **Zvol loop mounting (Datasets page)** — Mount on a ZFS volume attaches its
+  `/dev/zvol/...` device to a read-only loop device (`losetup --find --show
+  --partscan --read-only`), and the volume's partitions appear as rows under
+  its tree entry (Type column shows the filesystem, or `No filesystem`).
+  Partitions mount read-only under `/mnt/zfsutilities` (override with
+  `ZFSUTILITIES_ZVOL_MOUNT_DIR`) and are browseable once mounted. Unmount is
+  symmetric: a partition row unmounts the partition; a volume row unmounts its
+  partitions then detaches the loop device, with busy-process warnings. New
+  `ZfsRepository` methods (`loop_attach`, `loop_find`, `loop_detach`,
+  `loop_partitions`, `device_mountpoint`), a `LoopPartition` dataclass, and
+  `paths.get_zvol_mount_dir()`.
+
+- **Rewrite Data action (Datasets page)** — Rewrites datasets in place with
+  `zfs rewrite -P -r -x -v` (physical, recursive, never crossing mount
+  points), temporarily mounting unmounted datasets and restoring their prior
+  state. Gated on OpenZFS 2.3+ and the pool's `physical_rewrite` feature;
+  storage-host only in two-node configurations.
+
+- **Dataset Tuning moved from the Disks page to the Datasets page** — Apply
+  Profile, Rewrite Data, and Advanced: Manage Profiles now operate on the
+  Datasets tree selection (snapshots, holds, and loop partitions excluded).
+  The Disks page drops its Dataset Tuning pane; its view switcher is now
+  Inventory / Topology + Performance, and every action bar button is
+  view-scoped with pointing tooltips.
+
+- **Migrate Pool holding-pool improvements** — Holding-mode copies now land
+  in a reserved namespace `<holding>/migrate_<source>/<dataset>` so a pool
+  that also receives backups stays usable as a holding pool; cutover removes
+  the namespace with a single recursive destroy. Any imported non-root pool
+  qualifies as a holding candidate, including an empty one. The handler
+  re-validates the source pool's dataset layout at execution and aborts with
+  an explanation when the tree changed after the review, and a preselected
+  pool that cannot be a source (root or empty) now explains why instead of
+  silently falling back to another pool.
+
+- **`zfslockctl wait` fractional intervals** — `ZFSLOCK_WAIT_INTERVAL` now
+  accepts positive fractional seconds with the same sanitize semantics as
+  `zfslockmanager` (invalid/non-positive values fall back to 1 second). New
+  `tests/test-zfslockctl` suite covers validation, the no-sleep fast path,
+  and the fallback.
+
+### Changed
+
+- **Retention Advanced Prune Options UX** — the danger frame is retitled
+  "Mass Delete Filters - Danger Zone" and its filter fields are desensitized
+  unless "Ignore retention policies" is on (previously they were silently
+  inert); the toggle and an explanatory caption sit at the top of the
+  expander. Release Holds stays usable in both modes.
+
+- **Generated BashStep scripts use `log_msg`** — the Rewrite Data script
+  sources `~/bashinit` and logs through `log_msg`, matching every other
+  generated step.
+
+- **`gui_helpers.var_widgets_differ_from_defaults` removed** — superseded by
+  `style_var_widgets_nondefault`; all callers migrated.
+
+- Repo-wide `ruff format` pass; `ruff format --check` and `ruff check` are
+  clean.
+
+### Fixed
+
+- **Migrate Pool holding-mode double-prefix bug** — `on_disks_migrate_pool`
+  captured full `zfs list` names into `datasets_by_pool` while the step
+  builders composed `pool/dataset`, producing nonexistent paths like
+  `pool/pool/dataset`; names are now captured pool-relative and fixtures
+  return full names like the real command.
+
+- **GLib warning on the Apply Profile dialog** — the description cell
+  renderer used `Gtk.WrapMode` where `CellRendererText` requires
+  `Pango.WrapMode`.
+
+- **Apply Profile dialog picker** — the profile list is now taller
+  (240 px minimum) and vertically resizable, so enlarging the dialog shares
+  space between the list and the command preview.
+
 ## 0.104.0
 
 *Released 2026-09-18*

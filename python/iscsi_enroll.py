@@ -84,10 +84,7 @@ def _short_name_is_valid(text: str) -> bool:
 def log_manual_enrollment_steps(pool_name: str) -> None:
     """Log the three manual steps that enroll *pool_name* in two-node iSCSI."""
     short = derive_target_short(pool_name)
-    log_msg(
-        f"INFO:   1. add [{pool_name}]=\"{short}\" to POOL_TARGET in node.conf "
-        "on both nodes"
-    )
+    log_msg(f'INFO:   1. add [{pool_name}]="{short}" to POOL_TARGET in node.conf on both nodes')
     log_msg("INFO:   2. run 'sudo setup-iscsi-targets' on the storage host")
     log_msg("INFO:   3. run 'sudo rescan-storage' on the compute host")
 

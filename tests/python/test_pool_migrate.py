@@ -31,6 +31,7 @@ from pool_migrate import (
     MigrationStep,
     check_destination_capacity,
     generate_temp_pool_name,
+    holding_migration_namespace,
     migration_snapshot_bare_name,
     migration_snapshot_name,
     plan_migration_steps,
@@ -102,6 +103,29 @@ class TestGenerateTempPoolName(unittest.TestCase):
             generate_temp_pool_name("", set())
 
 
+class TestHoldingMigrationNamespace(unittest.TestCase):
+    def test_namespace_is_source_pool_prefixed(self):
+        self.assertEqual(holding_migration_namespace("zfstest2"), "migrate_zfstest2")
+
+    def test_empty_source_rejected(self):
+        with self.assertRaises(ValueError):
+            holding_migration_namespace("")
+
+    def test_holding_plan_mentions_namespace(self):
+        steps = plan_migration_steps("temp", ["proxmox"], MIGRATE_HOLDING_POOL, "fivebays")
+        copies = [step.description for step in steps if step.kind == STEP_COPY]
+        self.assertIn("fivebays/migrate_temp", copies[0])
+        self.assertIn("holding-pool namespace", copies[1])
+        destroy = [step.description for step in steps if step.kind == STEP_DESTROY_HOLDING]
+        self.assertIn("migration namespace", destroy[0])
+
+    def test_new_disks_plan_mentions_plain_dest(self):
+        steps = plan_migration_steps("temp", ["proxmox"], MIGRATE_NEW_DISKS, "temp_mig")
+        copies = [step.description for step in steps if step.kind == STEP_COPY]
+        self.assertIn("temp_mig", copies[0])
+        self.assertNotIn("migrate_temp", copies[0])
+
+
 class TestPlanMigrationSteps(unittest.TestCase):
     def test_new_disks_plan_order(self):
         datasets = ["vm-100-disk-0", "proxmox", "iso"]
@@ -126,9 +150,7 @@ class TestPlanMigrationSteps(unittest.TestCase):
             self.assertTrue(step.description)
 
     def test_holding_pool_plan_extra_steps(self):
-        steps = plan_migration_steps(
-            "temp", ["proxmox"], MIGRATE_HOLDING_POOL, "fivebays"
-        )
+        steps = plan_migration_steps("temp", ["proxmox"], MIGRATE_HOLDING_POOL, "fivebays")
         self.assertEqual(
             [step.kind for step in steps],
             [
@@ -147,9 +169,7 @@ class TestPlanMigrationSteps(unittest.TestCase):
         )
 
     def test_mode_constants_distinct(self):
-        self.assertEqual(
-            set(MIGRATION_MODES), {MIGRATE_NEW_DISKS, MIGRATE_HOLDING_POOL}
-        )
+        self.assertEqual(set(MIGRATION_MODES), {MIGRATE_NEW_DISKS, MIGRATE_HOLDING_POOL})
         self.assertNotEqual(MIGRATE_NEW_DISKS, MIGRATE_HOLDING_POOL)
 
     def test_empty_source_rejected(self):
@@ -248,22 +268,22 @@ class TestBuildMigrationSendReceiveCommand(unittest.TestCase):
         return [argv[0], argv[1], normalize_repo_root(argv[2])]
 
     def test_basic_argv(self):
-        argv = build_migration_send_receive_command(
-            "temp/proxmox", "temp_mig/proxmox", "migrate-x"
-        )
+        argv = build_migration_send_receive_command("temp/proxmox", "temp_mig/proxmox", "migrate-x")
         golden.check(self, self._normalized(argv))
 
     def test_rate_limit_assignment_emitted(self):
         argv = build_migration_send_receive_command(
             "temp/proxmox", "temp_mig/proxmox", "migrate-x", rate_limit="100m"
         )
-        golden.check(self, self._normalized(argv), name="TestBuildMigrationSendReceiveCommand.rate_limit")
+        golden.check(
+            self, self._normalized(argv), name="TestBuildMigrationSendReceiveCommand.rate_limit"
+        )
 
     def test_rate_limit_assignment_omitted(self):
-        argv = build_migration_send_receive_command(
-            "temp/proxmox", "temp_mig/proxmox", "migrate-x"
+        argv = build_migration_send_receive_command("temp/proxmox", "temp_mig/proxmox", "migrate-x")
+        golden.check(
+            self, self._normalized(argv), name="TestBuildMigrationSendReceiveCommand.no_rate_limit"
         )
-        golden.check(self, self._normalized(argv), name="TestBuildMigrationSendReceiveCommand.no_rate_limit")
         self.assertNotIn("pv_rate_limit", argv[2])
 
     def test_invalid_rate_limit_rejected(self):
@@ -274,9 +294,7 @@ class TestBuildMigrationSendReceiveCommand(unittest.TestCase):
                 )
 
     def test_names_with_spaces_are_quoted(self):
-        argv = build_migration_send_receive_command(
-            "my pool/ds", "dest pool/ds", "migrate-x"
-        )
+        argv = build_migration_send_receive_command("my pool/ds", "dest pool/ds", "migrate-x")
         golden.check(self, self._normalized(argv))
 
     def test_empty_source_rejected(self):

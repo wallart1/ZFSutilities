@@ -1426,3 +1426,618 @@ class TestDeleteSnapshots(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVolumeLoopActions(unittest.TestCase):
+    """Mount/Unmount/Browse for zvol loop devices and their partitions."""
+
+    def _import_under_mock(self):
+        with mock_gtk():
+            import dataset_actions as da
+
+            return da
+
+    def _make_app(self):
+        app = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        return app
+
+    def _volume_item(self, **kw):
+        item = {
+            "type": "dataset",
+            "name": "tank/vm-100-disk-0",
+            "zfs_type": "volume",
+            "mounted": False,
+        }
+        item.update(kw)
+        return item
+
+    def _part_item(self, **kw):
+        item = {
+            "type": "volume-partition",
+            "name": "loop0p1",
+            "device": "/dev/loop0p1",
+            "volume": "tank/vm-100-disk-0",
+            "fstype": "ext4",
+            "has_filesystem": True,
+            "mounted": False,
+        }
+        item.update(kw)
+        return item
+
+    def test_mount_volume_attaches_readonly_loop_and_reloads_children(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = None
+        repo.loop_attach.return_value = "/dev/loop0"
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
+            patch.object(da, "find_tree_iter_by_full_name", return_value=MagicMock()),
+            patch.object(da, "reload_row_children") as mock_reload,
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            da.on_datasets_mount(app)
+
+        repo.loop_attach.assert_called_once_with("/dev/zvol/tank/vm-100-disk-0")
+        mock_zlm.lock.assert_called_once_with(
+            "tank/vm-100-disk-0", "w", "loop-mount tank/vm-100-disk-0"
+        )
+        mock_reload.assert_called_once()
+        mock_log.assert_any_call(
+            "INFO: Attached tank/vm-100-disk-0 to read-only loop device /dev/loop0"
+        )
+        mock_refresh.assert_called_once_with(app)
+
+    def test_mount_volume_skips_attach_when_already_attached(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = "/dev/loop0"
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
+            patch.object(da, "find_tree_iter_by_full_name", return_value=MagicMock()),
+            patch.object(da, "reload_row_children") as mock_reload,
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg"),
+            patch.object(da, "zlm"),
+        ):
+            da.on_datasets_mount(app)
+
+        repo.loop_attach.assert_not_called()
+        mock_reload.assert_called_once()
+
+    def test_mount_volume_warns_when_attach_fails(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = None
+        repo.loop_attach.return_value = ""
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
+            patch.object(da, "reload_row_children") as mock_reload,
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm"),
+        ):
+            da.on_datasets_mount(app)
+
+        mock_log.assert_any_call("WARN: Error attaching tank/vm-100-disk-0 to a loop device")
+        mock_reload.assert_not_called()
+        mock_refresh.assert_not_called()
+
+    def test_mount_partition_mounts_at_derived_mountpoint(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._part_item()]),
+            patch.object(da.paths, "get_zvol_mount_dir", return_value="/tmp/zm"),
+            patch.object(da.os, "makedirs") as mock_makedirs,
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            da.on_datasets_mount(app)
+
+        mountpoint = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
+        mock_makedirs.assert_called_once_with(mountpoint, exist_ok=True)
+        mock_subprocess.run.assert_called_once_with(
+            ["sudo", "mount", "/dev/loop0p1", mountpoint],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        mock_log.assert_any_call(f"INFO: Mounted /dev/loop0p1 at {mountpoint} (read-only)")
+        mock_refresh.assert_called_once_with(app)
+
+    def test_mount_partition_without_filesystem_warns(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[self._part_item(fstype="No filesystem", has_filesystem=False)],
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            da.on_datasets_mount(app)
+
+        mock_log.assert_any_call("WARN: Cannot mount /dev/loop0p1: no filesystem detected")
+        mock_subprocess.run.assert_not_called()
+        mock_refresh.assert_not_called()
+
+    def test_mount_partition_warns_when_mount_fails(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._part_item()]),
+            patch.object(da.paths, "get_zvol_mount_dir", return_value="/tmp/zm"),
+            patch.object(da.os, "makedirs"),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(
+                returncode=32, stderr="mount: /dev/loop0p1: unknown filesystem type"
+            )
+            da.on_datasets_mount(app)
+
+        mock_log.assert_any_call(
+            "WARN: Error mounting /dev/loop0p1: mount: /dev/loop0p1: unknown filesystem type"
+        )
+        mock_refresh.assert_not_called()
+
+    def test_browse_partition_opens_mountpoint(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        app.ctx.zfs_repository.device_mountpoint.return_value = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
+
+        with (
+            patch.object(
+                da, "get_tree_selection_items", return_value=[self._part_item(mounted=True)]
+            ),
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "log_msg"),
+        ):
+            da.on_datasets_browse(app)
+
+        mock_subprocess.Popen.assert_called_once_with(
+            ["xdg-open", "/tmp/zm/tank/vm-100-disk-0/loop0p1"]
+        )
+
+    def test_browse_unmounted_partition_warns(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        app.ctx.zfs_repository.device_mountpoint.return_value = None
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._part_item()]),
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "log_msg") as mock_log,
+        ):
+            da.on_datasets_browse(app)
+
+        mock_log.assert_any_call("WARN: /dev/loop0p1 is not mounted; mount the partition first")
+        mock_subprocess.Popen.assert_not_called()
+
+    def test_unmount_partition_umounts_mountpoint(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.device_mountpoint.return_value = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[self._part_item(mounted=True)],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            da.on_datasets_unmount(app)
+
+        mock_subprocess.run.assert_called_once_with(
+            ["sudo", "umount", "/tmp/zm/tank/vm-100-disk-0/loop0p1"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        mock_log.assert_any_call(
+            "INFO: Unmounted /dev/loop0p1 from /tmp/zm/tank/vm-100-disk-0/loop0p1"
+        )
+        mock_refresh.assert_called_once_with(app)
+
+    def test_unmount_partition_shows_busy_dialog(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.device_mountpoint.return_value = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[self._part_item(mounted=True)],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[(1234, "bash")]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            da.on_datasets_unmount(app)
+
+        mock_subprocess.run.assert_not_called()
+        mock_refresh.assert_not_called()
+
+    def test_unmount_volume_unmounts_partitions_then_detaches(self):
+        from zfs_repository import LoopPartition
+
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = "/dev/loop0"
+        repo.loop_partitions.return_value = [
+            LoopPartition("/dev/loop0p1", "ext4", "/tmp/zm/tank/vm-100-disk-0/loop0p1", True),
+            LoopPartition("/dev/loop0p2", "", "", False),
+        ]
+        repo.loop_detach.return_value = True
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
+            patch.object(da, "find_tree_iter_by_full_name", return_value=MagicMock()),
+            patch.object(da, "reload_row_children") as mock_reload,
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            da.on_datasets_unmount(app)
+
+        mock_subprocess.run.assert_called_once_with(
+            ["sudo", "umount", "/tmp/zm/tank/vm-100-disk-0/loop0p1"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        repo.loop_detach.assert_called_once_with("/dev/loop0")
+        mock_log.assert_any_call("INFO: Detached tank/vm-100-disk-0 from loop device /dev/loop0")
+        mock_reload.assert_called_once()
+        mock_refresh.assert_called_once_with(app)
+
+    def test_unmount_volume_aborts_detach_when_partition_busy(self):
+        from zfs_repository import LoopPartition
+
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = "/dev/loop0"
+        repo.loop_partitions.return_value = [
+            LoopPartition("/dev/loop0p1", "ext4", "/tmp/zm/tank/vm-100-disk-0/loop0p1", True),
+        ]
+        repo.loop_detach.return_value = True
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
+            patch.object(da, "get_busy_processes", return_value=[(1234, "vi")]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            da.on_datasets_unmount(app)
+
+        mock_subprocess.run.assert_not_called()
+        repo.loop_detach.assert_not_called()
+        mock_refresh.assert_not_called()
+
+    def test_unmount_volume_without_loop_does_nothing(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        app.ctx.zfs_repository.loop_find.return_value = None
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            da.on_datasets_unmount(app)
+
+        mock_subprocess.run.assert_not_called()
+        mock_refresh.assert_not_called()
+
+
+class TestVolumeLoopHelpers(unittest.TestCase):
+    """Direct unit tests for the single-call-site volume mount helpers."""
+
+    def _import_under_mock(self):
+        with mock_gtk():
+            import dataset_actions as da
+
+            return da
+
+    def _make_app(self):
+        app = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        return app
+
+    def _volume_item(self):
+        return {
+            "type": "dataset",
+            "name": "tank/vm-100-disk-0",
+            "zfs_type": "volume",
+            "mounted": False,
+        }
+
+    def _part_item(self, **kw):
+        item = {
+            "type": "volume-partition",
+            "name": "loop0p1",
+            "device": "/dev/loop0p1",
+            "volume": "tank/vm-100-disk-0",
+            "fstype": "ext4",
+            "has_filesystem": True,
+            "mounted": False,
+        }
+        item.update(kw)
+        return item
+
+    def test_mount_volume_helper_attaches_and_reloads_children(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = None
+        repo.loop_attach.return_value = "/dev/loop0"
+
+        with (
+            patch.object(da, "find_tree_iter_by_full_name", return_value=MagicMock()),
+            patch.object(da, "reload_row_children") as mock_reload,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            result = da._mount_one_volume(self._volume_item(), repo, app)
+
+        self.assertTrue(result)
+        repo.loop_attach.assert_called_once_with("/dev/zvol/tank/vm-100-disk-0")
+        mock_zlm.lock.assert_called_once_with(
+            "tank/vm-100-disk-0", "w", "loop-mount tank/vm-100-disk-0"
+        )
+        mock_reload.assert_called_once()
+        mock_log.assert_any_call(
+            "INFO: Attached tank/vm-100-disk-0 to read-only loop device /dev/loop0"
+        )
+
+    def test_mount_volume_helper_skips_attach_when_already_attached(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = "/dev/loop0"
+
+        with (
+            patch.object(da, "find_tree_iter_by_full_name", return_value=None),
+            patch.object(da, "reload_row_children") as mock_reload,
+            patch.object(da, "log_msg"),
+            patch.object(da, "zlm"),
+        ):
+            result = da._mount_one_volume(self._volume_item(), repo, app)
+
+        self.assertTrue(result)
+        repo.loop_attach.assert_not_called()
+        mock_reload.assert_not_called()
+
+    def test_mount_volume_helper_returns_false_when_attach_fails(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = None
+        repo.loop_attach.return_value = ""
+
+        with (
+            patch.object(da, "reload_row_children") as mock_reload,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm"),
+        ):
+            result = da._mount_one_volume(self._volume_item(), repo, app)
+
+        self.assertFalse(result)
+        mock_reload.assert_not_called()
+        mock_log.assert_any_call("WARN: Error attaching tank/vm-100-disk-0 to a loop device")
+
+    def test_mount_partition_helper_mounts_at_derived_mountpoint(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+
+        with (
+            patch.object(da.paths, "get_zvol_mount_dir", return_value="/tmp/zm"),
+            patch.object(da.os, "makedirs") as mock_makedirs,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            result = da._mount_one_volume_partition(self._part_item(), repo, app)
+
+        self.assertTrue(result)
+        mountpoint = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
+        mock_makedirs.assert_called_once_with(mountpoint, exist_ok=True)
+        mock_subprocess.run.assert_called_once_with(
+            ["sudo", "mount", "/dev/loop0p1", mountpoint],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        mock_log.assert_any_call(f"INFO: Mounted /dev/loop0p1 at {mountpoint} (read-only)")
+
+    def test_mount_partition_helper_refuses_partition_without_filesystem(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+
+        with (
+            patch.object(da.os, "makedirs") as mock_makedirs,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            result = da._mount_one_volume_partition(
+                self._part_item(fstype="No filesystem", has_filesystem=False), repo, app
+            )
+
+        self.assertFalse(result)
+        mock_makedirs.assert_not_called()
+        mock_subprocess.run.assert_not_called()
+        mock_log.assert_any_call("WARN: Cannot mount /dev/loop0p1: no filesystem detected")
+
+    def test_mount_partition_helper_returns_false_when_mount_fails(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+
+        with (
+            patch.object(da.paths, "get_zvol_mount_dir", return_value="/tmp/zm"),
+            patch.object(da.os, "makedirs"),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=32, stderr="mount: unknown")
+            result = da._mount_one_volume_partition(self._part_item(), repo, app)
+
+        self.assertFalse(result)
+        mock_log.assert_any_call("WARN: Error mounting /dev/loop0p1: mount: unknown")
+
+    def test_unmount_partition_helper_umounts_resolved_mountpoint(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.device_mountpoint.return_value = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
+
+        with (
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            result = da._unmount_one_volume_partition(self._part_item(mounted=True), repo, app)
+
+        self.assertTrue(result)
+        mock_subprocess.run.assert_called_once_with(
+            ["sudo", "umount", "/tmp/zm/tank/vm-100-disk-0/loop0p1"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        mock_log.assert_any_call(
+            "INFO: Unmounted /dev/loop0p1 from /tmp/zm/tank/vm-100-disk-0/loop0p1"
+        )
+
+    def test_unmount_partition_helper_warns_dialog_when_busy(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.device_mountpoint.return_value = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
+
+        with (
+            patch.object(da, "get_busy_processes", return_value=[(1234, "bash")]),
+            patch.object(da, "_warn_busy") as mock_warn_busy,
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            result = da._unmount_one_volume_partition(self._part_item(mounted=True), repo, app)
+
+        self.assertFalse(result)
+        mock_warn_busy.assert_called_once()
+        mock_subprocess.run.assert_not_called()
+
+    def test_unmount_partition_helper_returns_false_when_not_mounted(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.device_mountpoint.return_value = None
+
+        with patch.object(da, "subprocess") as mock_subprocess:
+            result = da._unmount_one_volume_partition(self._part_item(mounted=True), repo, app)
+
+        self.assertFalse(result)
+        mock_subprocess.run.assert_not_called()
+
+    def test_unmount_volume_helper_unmounts_partitions_then_detaches(self):
+        from zfs_repository import LoopPartition
+
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = "/dev/loop0"
+        repo.loop_partitions.return_value = [
+            LoopPartition("/dev/loop0p1", "ext4", "/tmp/zm/tank/vm-100-disk-0/loop0p1", True),
+            LoopPartition("/dev/loop0p2", "", "", False),
+        ]
+        repo.loop_detach.return_value = True
+
+        with (
+            patch.object(da, "find_tree_iter_by_full_name", return_value=MagicMock()),
+            patch.object(da, "reload_row_children") as mock_reload,
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            result = da._unmount_one_volume(self._volume_item(), repo, app)
+
+        self.assertTrue(result)
+        mock_subprocess.run.assert_called_once_with(
+            ["sudo", "umount", "/tmp/zm/tank/vm-100-disk-0/loop0p1"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        repo.loop_detach.assert_called_once_with("/dev/loop0")
+        mock_reload.assert_called_once()
+        mock_log.assert_any_call("INFO: Detached tank/vm-100-disk-0 from loop device /dev/loop0")
+
+    def test_unmount_volume_helper_aborts_when_a_partition_is_busy(self):
+        from zfs_repository import LoopPartition
+
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = "/dev/loop0"
+        repo.loop_partitions.return_value = [
+            LoopPartition("/dev/loop0p1", "ext4", "/tmp/zm/tank/vm-100-disk-0/loop0p1", True),
+        ]
+
+        with (
+            patch.object(da, "get_busy_processes", return_value=[(1234, "vi")]),
+            patch.object(da, "_warn_busy") as mock_warn_busy,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            result = da._unmount_one_volume(self._volume_item(), repo, app)
+
+        self.assertFalse(result)
+        mock_warn_busy.assert_called_once()
+        mock_subprocess.run.assert_not_called()
+        repo.loop_detach.assert_not_called()
+
+    def test_unmount_volume_helper_returns_false_without_loop_device(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = None
+
+        with patch.object(da, "subprocess") as mock_subprocess:
+            result = da._unmount_one_volume(self._volume_item(), repo, app)
+
+        self.assertFalse(result)
+        mock_subprocess.run.assert_not_called()
+        repo.loop_detach.assert_not_called()

@@ -18,15 +18,18 @@ from zfs_repository import (
     AshiftInfo,
     HoldRow,
     ImportablePoolCache,
+    LoopPartition,
     PoolRow,
     SnapshotRow,
     ZfsRepository,
+    _parse_lsblk_partitions,
     build_add_vdev_command,
     build_attach_command,
     build_create_pool_command,
     build_detach_command,
     build_replace_command,
     is_dataset_encrypted,
+    zvol_device_path,
 )
 
 
@@ -558,9 +561,7 @@ class TestBuildCreatePoolCommand(unittest.TestCase):
     def test_raid10_preserves_ashift_and_profile_options(self):
         paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b", "c", "d", "e", "f")]
         options = [("compression", "zstd")]
-        cmd = build_create_pool_command(
-            "tank", "raid10", paths, ashift=12, options=options
-        )
+        cmd = build_create_pool_command("tank", "raid10", paths, ashift=12, options=options)
         golden.check(self, cmd)
 
     def test_raid10_rejects_below_minimum_and_odd_counts(self):
@@ -1139,8 +1140,9 @@ class TestGetDeviceLabelAshift(unittest.TestCase):
     def test_invokes_zdb_on_device(self):
         repo = ZfsRepository(sudo=False)
         calls = []
-        repo._run = lambda cmd, *a, **k: calls.append(cmd) or subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="ashift: 12\n"
+        repo._run = lambda cmd, *a, **k: (
+            calls.append(cmd)
+            or subprocess.CompletedProcess(args=[], returncode=0, stdout="ashift: 12\n")
         )
         self.assertEqual(repo.get_device_label_ashift("/dev/disk/by-id/ata-X"), 12)
         self.assertEqual(calls[0], ["zdb", "-l", "/dev/disk/by-id/ata-X"])
@@ -1209,3 +1211,137 @@ errors: No known data errors
         root = ZfsRepository._parse_topology(self._SAMPLE_STATUS)
         self.assertIsNotNone(root)
         self.assertEqual(root.name, "fivebays")
+
+
+class TestLoopDeviceOperations(unittest.TestCase):
+    """Loop attach/find/detach and lsblk partition parsing for zvol mounting."""
+
+    def _repo_with(self, returncode=0, stdout="", captured=None):
+        repo = ZfsRepository(sudo=True)
+        calls = captured if captured is not None else []
+
+        def _run(cmd, check=True, timeout=None):
+            calls.append((list(cmd), check))
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=returncode, stdout=stdout, stderr=""
+            )
+
+        repo._run = _run
+        return repo
+
+    def test_zvol_device_path(self):
+        self.assertEqual(zvol_device_path("tank/vm-100-disk-0"), "/dev/zvol/tank/vm-100-disk-0")
+
+    def test_loop_attach_uses_readonly_partscan(self):
+        captured = []
+        repo = self._repo_with(stdout="/dev/loop7\n", captured=captured)
+        dev = repo.loop_attach("/dev/zvol/tank/vol1")
+        self.assertEqual(dev, "/dev/loop7")
+        cmd, check = captured[0]
+        self.assertEqual(
+            cmd,
+            [
+                "sudo",
+                "losetup",
+                "--find",
+                "--show",
+                "--partscan",
+                "--read-only",
+                "/dev/zvol/tank/vol1",
+            ],
+        )
+        self.assertTrue(check)
+
+    def test_loop_find_parses_attached_device(self):
+        repo = self._repo_with(stdout="/dev/loop3: []: (/dev/zvol/tank/vol1)\n")
+        self.assertEqual(repo.loop_find("/dev/zvol/tank/vol1"), "/dev/loop3")
+
+    def test_loop_find_returns_none_when_not_attached(self):
+        repo = self._repo_with(stdout="")
+        self.assertIsNone(repo.loop_find("/dev/zvol/tank/vol1"))
+
+    def test_loop_find_returns_none_on_error(self):
+        repo = self._repo_with(returncode=1, stdout="")
+        self.assertIsNone(repo.loop_find("/dev/zvol/tank/vol1"))
+
+    def test_loop_detach_returns_true_on_success(self):
+        repo = self._repo_with()
+        self.assertTrue(repo.loop_detach("/dev/loop3"))
+
+    def test_loop_detach_returns_false_on_failure(self):
+        repo = self._repo_with(returncode=1)
+        self.assertFalse(repo.loop_detach("/dev/loop3"))
+
+    def test_loop_partitions_uses_lsblk_json(self):
+        captured = []
+        repo = self._repo_with(stdout='{"blockdevices": []}', captured=captured)
+        repo.loop_partitions("/dev/loop3")
+        cmd, _check = captured[0]
+        self.assertEqual(cmd[:2], ["sudo", "lsblk"])
+        self.assertIn("--json", cmd)
+
+    def test_device_mountpoint_returns_target(self):
+        repo = self._repo_with(stdout="/mnt/zfsutilities/tank/vol1/loop0p1\n")
+        self.assertEqual(
+            repo.device_mountpoint("/dev/loop0p1"), "/mnt/zfsutilities/tank/vol1/loop0p1"
+        )
+
+    def test_device_mountpoint_returns_none_when_unmounted(self):
+        repo = self._repo_with(returncode=1, stdout="")
+        self.assertIsNone(repo.device_mountpoint("/dev/loop0p1"))
+
+
+class TestParseLsblkPartitions(unittest.TestCase):
+    """_parse_lsblk_partitions: partitions vs bare-device normalization."""
+
+    def test_partitions_with_and_without_filesystem(self):
+        raw = """
+        {
+          "blockdevices": [
+            {
+              "name": "loop0", "type": "loop", "fstype": null, "mountpoint": null,
+              "children": [
+                {"name": "loop0p1", "type": "part", "fstype": "ext4",
+                 "mountpoint": "/mnt/x", "size": "10G"},
+                {"name": "loop0p2", "type": "part", "fstype": null,
+                 "mountpoint": null, "size": "2G"}
+              ]
+            }
+          ]
+        }
+        """
+        parts = _parse_lsblk_partitions(raw, "/dev/loop0")
+        self.assertEqual(
+            parts,
+            [
+                LoopPartition("/dev/loop0p1", "ext4", "/mnt/x", True),
+                LoopPartition("/dev/loop0p2", "", "", False),
+            ],
+        )
+
+    def test_bare_device_with_filesystem_becomes_single_entry(self):
+        raw = """
+        {
+          "blockdevices": [
+            {"name": "loop0", "type": "loop", "fstype": "xfs",
+             "mountpoint": null, "size": "50G"}
+          ]
+        }
+        """
+        parts = _parse_lsblk_partitions(raw, "/dev/loop0")
+        self.assertEqual(parts, [LoopPartition("/dev/loop0", "xfs", "", True)])
+
+    def test_bare_device_without_filesystem_has_none(self):
+        raw = """
+        {
+          "blockdevices": [
+            {"name": "loop0", "type": "loop", "fstype": null,
+             "mountpoint": null, "size": "50G"}
+          ]
+        }
+        """
+        parts = _parse_lsblk_partitions(raw, "/dev/loop0")
+        self.assertEqual(parts, [LoopPartition("/dev/loop0", "", "", False)])
+
+    def test_empty_output_returns_no_partitions(self):
+        self.assertEqual(_parse_lsblk_partitions('{"blockdevices": []}', "/dev/loop0"), [])

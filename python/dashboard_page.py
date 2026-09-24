@@ -1853,7 +1853,9 @@ def _collect_running_tasks(app):
             op_name = f"Expand {op.subject}: {op.pool}"
         else:
             op_name = f"Remove vdev {op.subject}: {op.pool}"
-        op_status = f"{op.progress_percent:.1f}% done" if op.progress_percent is not None else "In progress"
+        op_status = (
+            f"{op.progress_percent:.1f}% done" if op.progress_percent is not None else "In progress"
+        )
         tasks.append(
             {
                 "name": op_name,

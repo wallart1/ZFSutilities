@@ -64,10 +64,18 @@ class TestZfsCapabilitiesGating(unittest.TestCase):
 
     def test_version_matrix(self):
         expectations = {
-            (2, 1, 0): {"draid": True, "json_output": False, "zfs_rewrite": False,
-                        "ssb_on_zvols": False},
-            (2, 2, 0): {"draid": True, "json_output": False, "zfs_rewrite": False,
-                        "ssb_on_zvols": False},
+            (2, 1, 0): {
+                "draid": True,
+                "json_output": False,
+                "zfs_rewrite": False,
+                "ssb_on_zvols": False,
+            },
+            (2, 2, 0): {
+                "draid": True,
+                "json_output": False,
+                "zfs_rewrite": False,
+                "ssb_on_zvols": False,
+            },
             (2, 3, 0): {
                 "draid": True,
                 "json_output": True,

@@ -236,7 +236,7 @@ Top-level keys:
 | `pools`                                                               | array of strings or objects          | Registered pool names. String entries are supported for backward compatibility; v14 migrates them to `{"name", "offsite_candidate"}` objects |
 | [zfscheckagainst](../commands-and-modules/modules.md#zfscheckagainst) | object                               | Nested fss table: `backup_derived_active`, `offsite_derived_active`, `backup_derived`, `offsite_derived`, `user_entries`. Each row contains `source_root`, `dest_root`, `label`, optional `comment`. |
 | `retention`                                                           | object keyed by pool name | Per-pool retention policy. Each value is an array of `{name, retain, minage}` entries. Key `default` is the fallback |
-| `workload_profiles`                                                   | object keyed by profile name | Pre-defined and user-defined workload profiles used by the Disks tab Apply Profile action. Each value follows the profile schema below |
+| `workload_profiles`                                                   | object keyed by profile name | Pre-defined and user-defined workload profiles used by the Datasets tab Apply Profile action. Each value follows the profile schema below |
 | `prune_label`                                                         | string                    | Default snapshot label used by the Retention tab prune runner (default `dailybackup`)                                |
 | `prune_pools_order`                                                   | array of strings          | Persisted order of pools in the Retention tab Prune list                                                             |
 | `retention_mass_delete`                                               | object                    | Settings for the Retention tab Advanced Prune Options card (`includes`, `excludes`, `startwith`, `endwith`, `snapshot_has`, `releaseholds`, `ignore_retention_policies`) |
@@ -289,7 +289,7 @@ The Python config API is split across two modules:
 
 ### `workload_profiles` object
 
-Persisted by the Disks tab Apply Profile workflow and seeded by migration v25.
+Persisted by the Datasets tab Apply Profile workflow and seeded by migration v25.
 Each profile has this schema:
 
 | Key           | Type                      | Purpose                                                                           |

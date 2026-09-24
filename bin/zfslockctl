@@ -477,8 +477,8 @@ cmd_wait() {
     log_msg "INFO: Press Ctrl+C to cancel."
 
     local attempts=0
-    local _wait_interval="${ZFSLOCK_WAIT_INTERVAL:-30}"
-    [[ "$_wait_interval" =~ ^[0-9]+$ && $_wait_interval -ge 1 ]] || _wait_interval=1
+    local _wait_interval
+    _wait_interval=$(_zfslock_sanitize_interval "${ZFSLOCK_WAIT_INTERVAL:-30}" 1)
 
     while true; do
         ((attempts++))

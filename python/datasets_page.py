@@ -8,8 +8,10 @@ in a separate window, so holds are always visible in the tree.
 import subprocess
 
 import gi
+import node_config
 
 gi.require_version("Gtk", "3.0")
+from feature_config import get_workload_profiles
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     TreeSearch,
@@ -28,6 +30,15 @@ from gui_helpers import (
     setup_row_scroll,
 )
 from logging_config import log_msg
+from profile_dialogs import (
+    _topology_has_special_vdev,
+    on_apply_profile,
+    on_rewrite_data,
+    show_apply_profile_dialog,
+    show_manage_profiles_dialog,
+)
+from workload_profiles import ZFS_GET_PROPERTIES, match_profile
+from zfs_repository import zvol_device_path
 
 # ---------------------------------------------------------------------------
 # Page builder
@@ -366,8 +377,26 @@ def _on_ds_selection_changed(selection, app):
     update_ds_button_sensitivity(app)
 
 
+def _is_mountable(item, volume_loop_attached):
+    """Return True if the Mount action applies to *item* right now."""
+    if item["type"] == "volume-partition":
+        return item.get("has_filesystem", False) and not item.get("mounted", False)
+    if item["type"] in ("pool", "dataset") and item.get("zfs_type") == "volume":
+        # Volumes have no zfs "mounted" property; loop-attach state decides.
+        return not volume_loop_attached.get(item["name"], False)
+    return not item.get("mounted", False)
+
+
+def _is_unmountable(item, volume_loop_attached):
+    """Return True if the Unmount action applies to *item* right now."""
+    if item["type"] in ("pool", "dataset") and item.get("zfs_type") == "volume":
+        return volume_loop_attached.get(item["name"], False)
+    return item.get("mounted", False)
+
+
 def update_ds_button_sensitivity(app):
     """Enable/disable action buttons based on the current selection."""
+    repo = app.ctx.zfs_repository
     items = get_tree_selection_items(app.datasets_view)
     types = {i["type"] for i in items} if items else set()
 
@@ -376,23 +405,50 @@ def update_ds_button_sensitivity(app):
     can_hold = "snapshot" in types and types <= {"snapshot", "hold"}
     can_rollback = len(items) == 1 and types == {"snapshot"}
 
+    browsable_types = ("pool", "dataset", "snapshot", "volume-partition")
     single = items[0] if len(items) == 1 else None
-    single_browsable = single is not None and single["type"] in ("pool", "dataset", "snapshot")
+    single_browsable = single is not None and single["type"] in browsable_types
     single_mounted = single_browsable and single.get("mounted", False)
 
-    all_browsable = bool(items) and all(i["type"] in ("pool", "dataset", "snapshot") for i in items)
-    any_mounted = any(i.get("mounted", False) for i in items)
-    any_unmounted = any(not i.get("mounted", False) for i in items)
+    all_browsable = bool(items) and all(i["type"] in browsable_types for i in items)
+
+    # Volume items report mounted='-' from ZFS, so ask losetup whether a loop
+    # device is attached to decide which of Mount/Unmount applies.
+    volume_loop_attached = {}
+    for i in items:
+        if i["type"] in ("pool", "dataset") and i.get("zfs_type") == "volume":
+            try:
+                attached = repo.loop_find(zvol_device_path(i["name"])) is not None
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                attached = False
+            volume_loop_attached[i["name"]] = attached
 
     can_browse = single_mounted
-    can_mount = all_browsable and any_unmounted
-    can_unmount = all_browsable and any_mounted
+    can_mount = all_browsable and any(_is_mountable(i, volume_loop_attached) for i in items)
+    can_unmount = all_browsable and any(_is_unmountable(i, volume_loop_attached) for i in items)
 
     can_expand_selected = bool(items) and any(
         i["type"] in ("pool", "dataset", "snapshot") for i in items
     )
 
     can_show_big_stuff = len(items) == 1 and types == {"pool"}
+
+    # Apply Profile / Rewrite Data act on pool/dataset rows only; a selection
+    # containing snapshots, holds, or volume partitions disables them.
+    def _is_tunable(i):
+        if i["type"] not in ("pool", "dataset"):
+            return False
+        return (i.get("zfs_type") or "filesystem") in ("filesystem", "volume")
+
+    can_apply_profile = bool(items) and all(_is_tunable(i) for i in items)
+    can_rewrite = (
+        bool(items)
+        and all(
+            i["type"] in ("pool", "dataset") and (i.get("zfs_type") or "filesystem") == "filesystem"
+            for i in items
+        )
+        and app.ctx.zfs_caps.supports("zfs_rewrite")
+    )
 
     for attr, sensitive in [
         ("_ds_snapshot_btn", can_snapshot),
@@ -402,12 +458,95 @@ def update_ds_button_sensitivity(app):
         ("_ds_browse_btn", can_browse),
         ("_ds_mount_btn", can_mount),
         ("_ds_unmount_btn", can_unmount),
+        ("_ds_apply_profile_btn", can_apply_profile),
+        ("_ds_rewrite_data_btn", can_rewrite),
+        ("_ds_manage_profiles_btn", True),
         ("_ds_expand_selected_btn", can_expand_selected),
         ("_ds_showbigstuff_btn", can_show_big_stuff),
     ]:
         btn = getattr(app, attr, None)
         if btn:
             btn.set_sensitive(sensitive)
+
+
+# ---------------------------------------------------------------------------
+# Workload profile actions (Apply Profile, Rewrite Data, Manage Profiles)
+# ---------------------------------------------------------------------------
+
+
+def _profile_refresh(app):
+    """Post-run refresh for profile actions: buttons plus a full tree reload."""
+    update_ds_button_sensitivity(app)
+    refresh_datasets_page(app)
+
+
+def _selected_tunable_datasets(app):
+    """Return tunable {name, type} dicts for the current tree selection.
+
+    Only pool/dataset rows whose zfs_type is filesystem or volume are
+    returned; snapshots, holds, and volume partitions are skipped. The
+    returned dicts feed the Apply Profile and Rewrite Data dialogs.
+    """
+    datasets = []
+    skipped = 0
+    for item in get_tree_selection_items(app.datasets_view):
+        if item["type"] not in ("pool", "dataset"):
+            skipped += 1
+            continue
+        ds_type = item.get("zfs_type") or "filesystem"
+        if ds_type not in ("filesystem", "volume"):
+            skipped += 1
+            continue
+        datasets.append({"name": item["name"], "type": ds_type})
+    return datasets, skipped
+
+
+def on_datasets_apply_profile(app):
+    """Apply a workload profile to the selected datasets.
+
+    The profile picker dialog is shown exactly once; the chosen profile is
+    applied equally to every selected dataset (per-dataset plans adapt the
+    property set to each dataset's type and live values).
+    """
+    if node_config.is_two_node() and not node_config.is_storage_host():
+        log_msg("WARN: Applying profiles is available only on the storage host")
+        return
+    datasets, skipped = _selected_tunable_datasets(app)
+    if not datasets:
+        log_msg("WARN: Select at least one dataset to apply a profile")
+        return
+    if skipped:
+        log_msg(f"INFO: Apply Profile ignores {skipped} selected non-dataset row(s)")
+
+    # Pick the dialog's default profile from the first dataset's live match.
+    repo = app.ctx.zfs_repository
+    first = datasets[0]
+    try:
+        live_props = repo.get_properties(first["name"], list(ZFS_GET_PROPERTIES))
+        match = match_profile(get_workload_profiles(app.config), first["type"], live_props)
+    except Exception:  # pragma: no cover - defensive
+        match = "custom"
+    for ds in datasets:
+        ds["profile_match"] = match
+
+    pool = first["name"].split("/", 1)[0]
+    pool_has_special = _topology_has_special_vdev(repo.pool_topology(pool))
+
+    response, _profile_name, profile = show_apply_profile_dialog(app, datasets, pool_has_special)
+    if response != Gtk.ResponseType.OK:
+        return
+    on_apply_profile(app, datasets, profile, refresh=lambda: _profile_refresh(app))
+
+
+def on_datasets_rewrite_data(app):
+    """Rewrite data on the selected filesystem datasets using zfs rewrite."""
+    datasets, _skipped = _selected_tunable_datasets(app)
+    on_rewrite_data(app, datasets, refresh=lambda: _profile_refresh(app))
+
+
+def on_datasets_manage_profiles(app):
+    """Open the workload profile manager."""
+    show_manage_profiles_dialog(app)
 
 
 # ---------------------------------------------------------------------------
@@ -433,18 +572,24 @@ def update_mounted_states(app):
             ds_type = store.get_value(tree_iter, 2)
             mounted = False
 
-            if ds_type in ("filesystem", "volume", "pool"):
+            parent_iter = store.iter_parent(tree_iter)
+            if ds_type == "snapshot":
+                if parent_iter is not None:
+                    dataset = build_full_dataset_name(store, parent_iter)
+                    snap_name = name.lstrip("@")
+                    mounted = f"{dataset}@{snap_name}" in mounted_snaps
+            elif parent_iter is not None and store.get_value(parent_iter, 2) == "volume":
+                # Loop partition row: mounted means the partition is mounted.
+                try:
+                    mounted = repo.device_mountpoint(f"/dev/{name}") is not None
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    pass
+            elif ds_type in ("filesystem", "volume", "pool"):
                 full_name = build_full_dataset_name(store, tree_iter)
                 try:
                     mounted = repo.get_property(full_name, "mounted") == "yes"
                 except (subprocess.CalledProcessError, FileNotFoundError):
                     pass
-            elif ds_type == "snapshot":
-                parent_iter = store.iter_parent(tree_iter)
-                if parent_iter is not None:
-                    dataset = build_full_dataset_name(store, parent_iter)
-                    snap_name = name.lstrip("@")
-                    mounted = f"{dataset}@{snap_name}" in mounted_snaps
 
             fg_color = _row_fg_color(mounted, ds_type)
             store.set(tree_iter, 8, mounted, 9, fg_color)

@@ -37,7 +37,8 @@ from gui_helpers import (
     bold_label,
     show_warning_dialog,
     style_expander_label,
-    var_widgets_differ_from_defaults,
+    style_var_widgets_nondefault,
+    style_widget_value_nondefault,
 )
 from logging_config import log_msg
 from profile_validation import validate_gui_settings
@@ -384,12 +385,19 @@ def create_backup_page(app, ctx):
     app.backup_pause_scrubs.connect("toggled", lambda _w, t=tracker: t.check())
 
     def _update_advanced_label(*_args):
-        non_default = var_widgets_differ_from_defaults(
+        non_default = style_var_widgets_nondefault(
             app.backup_var_widgets, BACKUP_DEFAULTS["variables"]
         )
-        if app.backup_zfs_keys_path.get_text() or app.backup_zfs_keys_dest.get_text():
+        zfs_keys_non_default = bool(
+            app.backup_zfs_keys_path.get_text() or app.backup_zfs_keys_dest.get_text()
+        )
+        style_widget_value_nondefault(app.backup_zfs_keys_path, zfs_keys_non_default)
+        style_widget_value_nondefault(app.backup_zfs_keys_dest, zfs_keys_non_default)
+        if zfs_keys_non_default:
             non_default = True
-        if app.backup_pause_scrubs.get_active():
+        pause_scrubs = app.backup_pause_scrubs.get_active()
+        style_widget_value_nondefault(app.backup_pause_scrubs, pause_scrubs)
+        if pause_scrubs:
             non_default = True
         style_expander_label(advanced_exp, "Advanced", non_default)
 

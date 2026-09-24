@@ -105,7 +105,7 @@ the GUI tabs and the bash scripts.
 
 ### `workload_profiles.py`
 
-Pure-logic workload profile helpers used by the Disks tab Apply Profile workflow.
+Pure-logic workload profile helpers used by the Datasets tab Apply Profile workflow.
 Contains no GTK code and no direct subprocess calls; all ZFS I/O is delegated to
 ``ZfsRepository`` callers.
 
@@ -204,6 +204,7 @@ code.
 | `get_log_dir()` | Log directory |
 | `get_run_dir()` | Transient runtime-state directory |
 | `get_lock_dir()` | Advisory-lock directory |
+| `get_zvol_mount_dir()` | Base directory for mounting zvol loop partitions (default `/mnt/zfsutilities`) |
 | `get_config_path()` | Main JSON config file path |
 | `get_profiles_dir()` | Profile directory (created on demand) |
 | `get_history_path()` | Backup-history JSON file path |
@@ -278,6 +279,7 @@ and tests easy to mock.
 | `DatasetRow` | One row from `zfs list -H -o name,creation,type,used,avail,refer,origin,clones,mounted` |
 | `SnapshotRow` | One row from `zfs list -t snapshot -H -o ...` |
 | `HoldRow` | One row from `zfs holds -H <snapshot>` |
+| `LoopPartition` | One mountable entry on a loop device backing a zvol (partition or bare device, with/without filesystem) |
 | `ZfsRepository` | Wraps all `zfs`/`zpool` subprocess commands |
 
 **Key functions:**
@@ -286,10 +288,16 @@ and tests easy to mock.
 | -------- | ------- |
 | `get_default_repository()` | Returns a module-level default `ZfsRepository` instance |
 | `is_dataset_encrypted(path)` | Return `True` if *path* resides on an encrypted ZFS dataset |
+| `zvol_device_path(dataset)` | Return the `/dev/zvol/…` block-device path for a ZFS volume |
 | `get_property(dataset, prop)` | Value of a single ZFS property |
 | `get_properties(dataset, props)` | Values for a list of ZFS properties; missing properties return `"-"` |
 | `get_all_properties(dataset)` | All ZFS properties for *dataset* |
 | `set_property(dataset, prop, value)` | Set a ZFS property; returns success/failure |
+| `loop_attach(zvol_dev)` | Attach a zvol device to a new read-only, partition-scanned loop device (`losetup --find --show --partscan --read-only`); returns the `/dev/loopN` path |
+| `loop_find(zvol_dev)` | Return the loop device currently attached to a zvol device, or `None` |
+| `loop_detach(loop_dev)` | Detach a loop device (`losetup -d`); returns success/failure |
+| `loop_partitions(loop_dev)` | Parse `lsblk --json` into `LoopPartition` entries (partitions, or the bare device when there is no partition table) |
+| `device_mountpoint(device)` | Return the mountpoint a block device is mounted at, or `None` (`findmnt`) |
 | `build_create_pool_command()` | Pure `zpool create` argv builder (by-id paths, topology minimums) |
 | `build_add_vdev_command()` | Pure `zpool add` argv builder for data and special/log/cache vdevs |
 | `build_attach_command()` | Pure `zpool attach` argv builder (mirror grow / RAIDZ expansion) |
@@ -516,6 +524,7 @@ re-importing the migrated pool under the source pool's name so every
 | `migration_snapshot_name()` | Bucket-less `@migrate-<timestamp>` name (retention never prunes it) |
 | `migration_snapshot_bare_name()` | Strip the leading `@` for the zfs argv builders |
 | `generate_temp_pool_name()` | Valid unused temporary pool name (`<source>_mig`, `_mig2`, …) |
+| `holding_migration_namespace()` | Reserved holding-pool dataset namespace (`migrate_<source>`) so holding copies can never collide with backup/offsite paths |
 | `plan_migration_steps()` | Ordered `MigrationStep` plan for new-disks or holding-pool mode |
 | `check_destination_capacity()` | Refuse/warn when destination free space is short of source allocated |
 | `verify_trees_match()` | Per-dataset `used`-bytes comparison between source and migrated trees |
@@ -541,7 +550,11 @@ pipeline and an optional bandwidth limit — per top-level dataset, then
 per-dataset tree verification) and the cutover
 phase, which starts only after a second typed confirmation — export the
 source pool, then re-import the migrated pool under the source pool's name
-(new disks) or destroy/rebuild/copy-back/swap (holding pool). The pool
+(new disks) or destroy/rebuild/copy-back/swap (holding pool). Holding-mode
+copies land under `<holding>/migrate_<source>/<dataset>` and the cutover
+removes that namespace with a single destroy. Before anything starts, the
+handler re-reads the source pool's dataset layout and aborts with an
+explanation when it changed after the review. The pool
 hosting the root filesystem is never offered; both phases hold a `zlm`
 write lock on the source pool and run in the session log.
 
@@ -552,6 +565,7 @@ write lock on the source pool and run in the session log.
 | `show_migrate_pool_dialog()` | Run the dialog; returns a `MigrationRequest` or None |
 | `build_request()` | Build the execution request from a validated dialog state |
 | `build_migration_steps()` | Build the (copy, cutover) `BashStep` lists for a request |
+| `_source_layout_changed()` | Compare the request's dataset list against a fresh pool listing; abort reason when stale |
 | `on_disks_migrate_pool()` | Disks-page action: gates, data gathering, two-phase runner execution |
 
 **Called modules / imported helpers:**
@@ -961,9 +975,11 @@ functions in `disk_repository.py`.
 
 ### `disks_page.py`
 
-The **Disks** tab UI: disk inventory TreeView, pool selector, vdev topology
-TreeView, and dataset-tuning pane. Slow block-device and ZFS calls are cached in
-a background loader following the `ImportablePoolCache` pattern.
+The **Disks** tab UI: a radio-button view switcher (Inventory and Topology,
+Performance) over a `Gtk.Stack`, holding the disk inventory TreeView, pool
+selector, vdev topology TreeView, and a placeholder Performance view. Slow
+block-device and ZFS calls are cached in a background loader following the
+`ImportablePoolCache` pattern.
 
 **Key classes:**
 
@@ -977,15 +993,10 @@ a background loader following the `ImportablePoolCache` pattern.
 | Function | Purpose |
 | -------- | ------- |
 | `create_disks_page(app)` | Build and return the Disks tab widget |
-| `refresh_disks_page(app)` | Repopulate disk inventory, topology, and dataset stores |
+| `_on_view_radio_toggled(radio, view_name, app)` | Switch the visible view in response to the view-switcher radio row |
+| `refresh_disks_page(app)` | Repopulate disk inventory and topology stores |
 | `on_disks_refresh(app)` | Invalidate cache and refresh the page |
-| `update_disks_button_sensitivity(app)` | Enable/disable action buttons based on selection |
-| `show_apply_profile_dialog(app, datasets)` | Preview and confirm applying a workload profile |
-| `on_disks_apply_profile(app)` | Apply the selected profile to selected datasets |
-| `on_disks_rewrite_data(app)` | Run `zfs rewrite -P -r -x -v <mountpoint>` on the selected filesystem datasets, sequentially with one write lock each (requires the pool's `physical_rewrite` feature; temporarily mounts a dataset if needed and restores its prior mount state) |
-| `_build_rewrite_command(ds_name, mountpoint)` | Bash script for one rewrite: mount-if-needed, `zfs rewrite -P -r -x -v`, restore prior mount state |
-| `show_manage_profiles_dialog(app)` | Open the workload profile manager |
-| `show_profile_editor_dialog(app, name=None)` | Add or edit a workload profile |
+| `update_disks_button_sensitivity(app)` | Enable/disable action buttons based on the active view and selection |
 
 **Called modules / imported helpers:**
 
@@ -993,11 +1004,40 @@ a background loader following the `ImportablePoolCache` pattern.
 | ------ | ------------------------ |
 | `disk_repository` | `DiskRepository`, `DiskInfo` |
 | `zfs_repository` | `ZfsRepository`, `TopologyNode` |
-| `gui_helpers` | `bold_label`, `configure_treeview_column`, `create_dialog`, `setup_row_scroll` |
+| `gui_helpers` | `bold_label`, `configure_treeview_column`, `setup_row_scroll` |
+| `logging_config` | `log_msg` |
+
+---
+
+### `profile_dialogs.py`
+
+Workload-profile dialogs and execution, shared by page actions that operate
+on a caller-supplied dataset list: the Apply Profile picker/preview, the
+profile manager and editor, and Rewrite Data (`zfs rewrite -P`). Selection
+collection and page refresh live with the calling page (the Datasets tab);
+pool topology facts the dialog needs are passed in. Execution acquires one
+`zlm` write lock per dataset and runs `zfs set` / `zfs rewrite` BashSteps
+under the dataset runner.
+
+**Key functions:**
+
+| Function | Purpose |
+| -------- | ------- |
+| `show_apply_profile_dialog(app, datasets, pool_has_special)` | Preview and confirm applying a workload profile to a dataset list |
+| `on_apply_profile(app, datasets, profile, refresh)` | Run the `zfs set` steps for the chosen profile (requires the dialog to have been confirmed) |
+| `show_manage_profiles_dialog(app)` / `show_profile_editor_dialog(app, name)` | Workload profile manager and add/edit dialog |
+| `on_rewrite_data(app, datasets, refresh)` | Run `zfs rewrite -P -r -x -v` on filesystem datasets, one write lock each |
+| `_build_rewrite_command(ds_name, mountpoint)` | Bash script for one rewrite: mount-if-needed, rewrite, restore prior mount state |
+| `_topology_has_special_vdev(topology)` | Whether a pool topology tree contains a special vdev |
+
+**Called modules / imported helpers:**
+
+| Module | Purpose in this module |
+| ------ | ------------------------ |
 | `feature_config` | Workload profile getters/setters |
 | `workload_profiles` | Profile matching, apply plan, and command builders |
 | `zfs_lock_manager` | Advisory locks for dataset actions |
-| `logging_config` | `log_msg` |
+| `gui_helpers` | `create_dialog`, `configure_treeview_column` |
 
 ---
 
@@ -1244,7 +1284,9 @@ share a common snapshot before a source snapshot can be deleted safely.
 ### `datasets_page.py`
 
 Datasets tab: a lazy-loading tree of datasets, snapshots, and holds. Each pool
-is represented by its root dataset at the top level.
+is represented by its root dataset at the top level. Also hosts the
+dataset-tuning actions: Apply Profile (one dialog for the whole multi-select),
+Rewrite Data, and the workload profile manager.
 
 **Key functions:**
 
@@ -1255,12 +1297,18 @@ is represented by its root dataset at the top level.
 | `update_mounted_states()` | Refresh only the mounted flag/color of visible rows after a mount or unmount |
 | `expand_selected_datasets()` | Expand selected rows recursively |
 | `update_ds_button_sensitivity()` | Enable/disable action buttons |
+| `on_datasets_apply_profile()` | Collect the tunable tree selection, show the profile picker once, and apply the chosen profile to every selected dataset |
+| `on_datasets_rewrite_data()` | Rewrite the selected filesystem datasets in place (`zfs rewrite -P`) |
+| `on_datasets_manage_profiles()` | Open the workload profile manager |
 
 **Called modules / imported helpers:**
 
 | Module | Purpose in this module |
 | ------ | ------------------------ |
 | `gui_helpers` | Tree building, search, selection helpers |
+| `profile_dialogs` | Apply Profile / Rewrite Data / profile manager dialogs and execution |
+| `workload_profiles` | Profile matching against live properties |
+| `feature_config` | Workload profile store |
 | `logging_config` | `log_msg` |
 
 **Data structures consumed / produced:**
@@ -1752,7 +1800,8 @@ Reusable GTK helpers and utility functions used by nearly every page.
 | `get_busy_processes()` / `diagnose_dataset_busy()` | Find and explain why a dataset is busy |
 | `get_mounted_snapshots()` | Parse `mount -t zfs` output to detect explicitly mounted snapshots (the `.zfs/snapshot` directory alone is an automount stub) |
 | `show_error_dialog()` / `show_warning_dialog()` | Modal error/warning message dialogs |
-| `style_expander_label()` / `var_widgets_differ_from_defaults()` | Color an Advanced expander label orange when any child value differs from its defaults |
+| `style_expander_label()` | Color an Advanced expander label orange when any child value differs from its defaults |
+| `style_widget_value_nondefault()` / `style_var_widgets_nondefault()` | Color the non-default values themselves orange (via a `zfsu-nondefault` CSS class) in addition to the expander label |
 | `create_info_panel()` | Build the shared log/info panel |
 | `create_menu_bar()` | Build the application menu bar |
 | `confirm_and_minimize_width()` | Reset column widths and shrink window |

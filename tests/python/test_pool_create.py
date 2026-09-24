@@ -116,9 +116,7 @@ class TestDiskEligibility(unittest.TestCase):
             importable={"z22tb": ["/dev/disk/by-id/ata-TESTsda"]},
         )[0]
         self.assertFalse(result.eligible)
-        self.assertTrue(
-            any("member of importable pool 'z22tb'" in r for r in result.reasons)
-        )
+        self.assertTrue(any("member of importable pool 'z22tb'" in r for r in result.reasons))
 
     def test_basename_fallback_match(self):
         result = _eligibility(
@@ -140,15 +138,11 @@ class TestDiskEligibility(unittest.TestCase):
             os.symlink(kernel_path, by_id_path)
             disk = _disk(kernel_path, by_id="wwn-0xTEST")
             with self.subTest(source="imported"):
-                result = _eligibility(
-                    [disk], imported={"poola": [by_id_path]}
-                )[0]
+                result = _eligibility([disk], imported={"poola": [by_id_path]})[0]
                 self.assertFalse(result.eligible)
                 self.assertIn("member of imported pool 'poola'", result.reasons)
             with self.subTest(source="importable"):
-                result = _eligibility(
-                    [disk], importable={"poolb": [by_id_path]}
-                )[0]
+                result = _eligibility([disk], importable={"poolb": [by_id_path]})[0]
                 self.assertFalse(result.eligible)
                 self.assertTrue(
                     any("member of importable pool 'poolb'" in r for r in result.reasons)
@@ -166,11 +160,15 @@ class TestPartitionPolicy(unittest.TestCase):
     def _layout(self, parent_type="NVMe"):
         parent = _disk("/dev/nvme0n1", disk_type=parent_type, by_id="nvme-TEST1")
         part1 = _disk(
-            "/dev/nvme0n1p1", disk_type="part", parent_path="/dev/nvme0n1",
+            "/dev/nvme0n1p1",
+            disk_type="part",
+            parent_path="/dev/nvme0n1",
             by_id="nvme-TEST1-part1",
         )
         part2 = _disk(
-            "/dev/nvme0n1p2", disk_type="part", parent_path="/dev/nvme0n1",
+            "/dev/nvme0n1p2",
+            disk_type="part",
+            parent_path="/dev/nvme0n1",
             by_id="nvme-TEST1-part2",
         )
         return [parent, part1, part2]
@@ -203,8 +201,9 @@ class TestPartitionPolicy(unittest.TestCase):
             self.assertTrue(any("rotating" in r for r in part.reasons))
 
     def test_partition_with_unknown_parent_is_ineligible(self):
-        part = _disk("/dev/sda1", disk_type="part", parent_path="/dev/sda",
-                     by_id="ata-TESTsda-part1")
+        part = _disk(
+            "/dev/sda1", disk_type="part", parent_path="/dev/sda", by_id="ata-TESTsda-part1"
+        )
         result = _eligibility([part])[0]
         self.assertFalse(result.eligible)
         self.assertIn("partition with unknown parent disk", result.reasons)
@@ -279,9 +278,21 @@ class TestValidatePoolName(unittest.TestCase):
         self.assertNotEqual(error, "")
 
     def test_valid_names(self):
-        for name in ("mypool", "pool_1", "a.b-c", "NVME1", "MIRROR", "cache",
-                     "special", "c0", "c12t0d0", "loggy", "my:pool", "my pool",
-                     "x" * MAX_POOL_NAME_LEN):
+        for name in (
+            "mypool",
+            "pool_1",
+            "a.b-c",
+            "NVME1",
+            "MIRROR",
+            "cache",
+            "special",
+            "c0",
+            "c12t0d0",
+            "loggy",
+            "my:pool",
+            "my pool",
+            "x" * MAX_POOL_NAME_LEN,
+        ):
             with self.subTest(name=name):
                 self.assert_valid(name)
 
@@ -429,14 +440,11 @@ class TestEstimateEffectiveCapacity(unittest.TestCase):
         self.assertAlmostEqual(est.efficiency_fraction, (16 / 30) / 0.6, places=4)
 
     def test_large_blocks_reach_n_minus_p_over_n(self):
-        for topology, num_disks, parity in (("raidz1", 3, 1), ("raidz2", 5, 2),
-                                            ("raidz3", 5, 3)):
+        for topology, num_disks, parity in (("raidz1", 3, 1), ("raidz2", 5, 2), ("raidz3", 5, 3)):
             with self.subTest(topology=topology):
                 est = estimate_effective_capacity(topology, num_disks, TB, 1024 * 1024)
                 asymptote = (num_disks - parity) / num_disks
-                self.assertAlmostEqual(
-                    est.effective_bytes / (num_disks * TB), asymptote, places=2
-                )
+                self.assertAlmostEqual(est.effective_bytes / (num_disks * TB), asymptote, places=2)
                 self.assertLessEqual(est.effective_bytes, est.raw_usable_bytes)
                 self.assertAlmostEqual(est.efficiency_fraction, 1.0, delta=0.01)
 

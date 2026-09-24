@@ -1,0 +1,292 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2153,SC2154
+# test-zfslockctl — Unit tests for the zfslockctl CLI tool.
+# Covers cmd_wait lock-type validation and ZFSLOCK_WAIT_INTERVAL semantics:
+# fractional values must reach the retry sleep, invalid or non-positive values
+# must fall back to 1 second, matching the shared _zfslock_sanitize_interval
+# implementation in zfslockmanager.
+# Uses a temporary lock directory so tests do not interfere with production
+# locks and do not require root.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+
+# Redirect the lock directory to a temp location before sourcing zfslockctl:
+# its header sources zfslockmanager, which binds these paths at source time.
+ZFSLOCK_DIR="$_mock_zfs_state_dir/locks"
+zfslock_locks_dir="$ZFSLOCK_DIR/.locks"
+zfslock_pids_dir="$ZFSLOCK_DIR/.pids"
+mkdir -p "$zfslock_locks_dir" "$zfslock_pids_dir"
+
+# Keep node-config resolution single-node regardless of host configuration.
+export ZFSLOCK_REMOTE_DISABLED=1
+
+# ---------------------------------------------------------------------------
+# Load the real zfslockctl (overrides the test-lib stubs as needed).
+# ---------------------------------------------------------------------------
+
+# zfslockctl's standard executable header is not sourced-context friendly:
+# it re-sources bashinit (redefining log_msg), runs
+# `source_helper rootcheck; rootcheck`, and ends with an unconditional
+# `main "$@"`. Adjust for the test context: preserve test-lib's quiet log_msg,
+# let the header load the real zfslockmanager but skip rootcheck (tests do not
+# require root), neutralize the CLI entry point, and collect the header's
+# stderr (cmd_help output) in the per-test log file.
+_test_log_msg_copy=$(declare -f log_msg)
+_test_source_helper_copy=$(declare -f source_helper)
+source_helper() {
+    if [[ "$1" == "zfslockmanager" ]]; then
+        source "$mydir/bin/zfslockmanager"
+    fi
+}
+set --
+
+# shellcheck source=bin/zfslockctl
+source "$mydir/bin/zfslockctl" 2>>"$_TEST_LOG_FILE"
+
+eval "$_test_log_msg_copy"
+eval "$_test_source_helper_copy"
+unset _test_log_msg_copy _test_source_helper_copy
+
+# ---------------------------------------------------------------------------
+# Background-process helpers
+# ---------------------------------------------------------------------------
+# Lock-manager reentry logic treats same-PID acquires as re-entrant.
+# To test cross-process conflicts we start real child processes.
+# Keep in sync with the helper block in tests/test-zfslockmanager.
+# ---------------------------------------------------------------------------
+
+_bg_lock_pid=""
+_bg_lock_rcfile=""
+
+# Start a background bash process that tries to acquire a lock.
+# Globals set: _bg_lock_pid, _bg_lock_rcfile
+_bg_lock_start() {
+    local dataset="$1" type="$2" description="$3"
+    local hold_time="${4:-infinity}"
+    local id="${RANDOM}_$$"
+    local script="$_mock_zfs_state_dir/bg_lock_${id}.sh"
+    _bg_lock_rcfile="$_mock_zfs_state_dir/bg_lock_rc_${id}"
+    cat > "$script" <<EOF
+#!/usr/bin/bash
+source "$mydir/bin/bashinit"
+export ZFSUTILITIES_SESSION_LOG_DIR="$_mock_zfs_state_dir/logs"
+bashinit
+source "$mydir/bin/zfslockmanager"
+export ZFSLOCK_DIR="$ZFSLOCK_DIR"
+export zfslock_locks_dir="$zfslock_locks_dir"
+export zfslock_pids_dir="$zfslock_pids_dir"
+mkdir -p "$zfslock_locks_dir" "$zfslock_pids_dir"
+zfslock_init
+zfslock_acquire "$dataset" "$type" "$description"
+rc=\$?
+echo \$rc > "$_bg_lock_rcfile"
+[[ \$rc -eq 0 ]] && sleep $hold_time
+EOF
+    bash "$script" > /dev/null 2>&1 &
+    _bg_lock_pid=$!
+}
+
+# Wait for the background lock holder's rc file and print its rc.
+_bg_lock_wait_rc() {
+    local rcfile="$_bg_lock_rcfile"
+    local tries=0
+    while [[ ! -f "$rcfile" && $tries -lt 200 ]]; do
+        sleep 0.05
+        ((tries++))
+    done
+    [[ -f "$rcfile" ]] && cat "$rcfile" || echo "255"
+}
+
+# Terminate the background process and clean up its rc file.
+_bg_lock_kill() {
+    if [[ -n "$_bg_lock_pid" ]]; then
+        # Kill the foreground sleep child first so it is not orphaned when the
+        # parent bash process exits.
+        pkill -P "$_bg_lock_pid" 2>/dev/null || true
+        kill "$_bg_lock_pid" 2>/dev/null || true
+        wait "$_bg_lock_pid" 2>/dev/null || true
+    fi
+    rm -f "$_bg_lock_rcfile"
+}
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+cleanup_test_locks() {
+    rm -rf "$ZFSLOCK_DIR" 2>/dev/null
+    mkdir -p "$zfslock_locks_dir" "$zfslock_pids_dir" 2>/dev/null
+}
+
+# Start cmd_wait against a blocked dataset with sleep stubbed to record its
+# arguments (instead of waiting), then wait for the first recorded sleep.
+# The caller stops the waiter and asserts on the recorded arguments.
+# Globals set: _waiter_pid (subshell running cmd_wait).
+_run_blocked_waiter() {
+    local dataset="$1" knob="$2" sleep_log="$3" rcfile="$4"
+    rm -f "$sleep_log" "$rcfile"
+    (
+        _SLEEP_STUB_LOG="$sleep_log"
+        sleep() { printf '%s\n' "$*" >> "$_SLEEP_STUB_LOG"; }
+        ZFSLOCK_WAIT_INTERVAL="$knob" cmd_wait "$dataset" "w"
+        echo $? > "$rcfile"
+    ) &
+    _waiter_pid=$!
+    local tries=0
+    while [[ ! -s "$sleep_log" && $tries -lt 100 ]]; do
+        sleep 0.05
+        ((tries++))
+    done
+}
+
+_stop_waiter() {
+    kill "$_waiter_pid" 2>/dev/null || true
+    wait "$_waiter_pid" 2>/dev/null || true
+}
+
+# Acquire a background holder lock, failing the current test if it cannot.
+# Usage: _start_holder_or_fail <dataset> <test-label>
+_start_holder_or_fail() {
+    local dataset="$1" label="$2"
+    _bg_lock_start "$dataset" "w" "holder" 3600
+    local bg_rc
+    bg_rc=$(_bg_lock_wait_rc)
+    if [[ "$bg_rc" -ne 0 ]]; then
+        _bg_lock_kill
+        test_start "$label"
+        test_fail "Background lock could not be acquired (rc=$bg_rc)"
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# cmd_wait validation and immediate availability
+# ---------------------------------------------------------------------------
+
+test_wait_validation_and_immediate_availability() {
+    echo ""
+    echo "=== cmd_wait Validation Tests ==="
+    cleanup_test_locks
+
+    test_start "Missing dataset or type is rejected"
+    cmd_wait "onlydataset" > /dev/null 2>&1
+    assert_rc 1 $?
+
+    test_start "Invalid lock type is rejected"
+    cmd_wait "test/validation" "rw" > /dev/null 2>&1
+    assert_rc 1 $?
+
+    test_start "Available lock returns success without sleeping"
+    local sleep_log="$_mock_zfs_state_dir/wait_avail_sleep_log"
+    rm -f "$sleep_log"
+    local rc
+    (
+        _SLEEP_STUB_LOG="$sleep_log"
+        sleep() { printf '%s\n' "$*" >> "$_SLEEP_STUB_LOG"; }
+        cmd_wait "test/validation" "w"
+    )
+    rc=$?
+    if [[ "$rc" -eq 0 && ! -s "$sleep_log" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc sleep_log=$(tr '\n' ' ' < "$sleep_log" 2>/dev/null)"
+    fi
+    cleanup_test_locks
+}
+
+# ---------------------------------------------------------------------------
+# ZFSLOCK_WAIT_INTERVAL semantics (shared with zfslockmanager)
+# ---------------------------------------------------------------------------
+
+test_wait_fractional_interval_reaches_sleep() {
+    echo ""
+    echo "=== cmd_wait Fractional Interval Tests ==="
+    cleanup_test_locks
+
+    local label="Fractional ZFSLOCK_WAIT_INTERVAL reaches the retry sleep"
+    _start_holder_or_fail "test/fractional" "$label" || return
+
+    test_start "$label"
+    local sleep_log="$_mock_zfs_state_dir/wait_frac_sleep_log"
+    local rcfile="$_mock_zfs_state_dir/wait_frac_rc"
+    _run_blocked_waiter "test/fractional" "0.05" "$sleep_log" "$rcfile"
+
+    # Release the holder so the waiter observes availability and exits.
+    _bg_lock_kill
+    local tries=0
+    while [[ ! -f "$rcfile" && $tries -lt 100 ]]; do
+        sleep 0.05
+        ((tries++))
+    done
+    _stop_waiter
+
+    local rc
+    rc=$(cat "$rcfile" 2>/dev/null || echo 255)
+    if [[ "$rc" -eq 0 ]] && grep -qx "0.05" "$sleep_log"; then
+        test_pass
+    else
+        test_fail "rc=$rc sleep_log=$(tr '\n' ' ' < "$sleep_log" 2>/dev/null)"
+    fi
+    cleanup_test_locks
+}
+
+test_wait_invalid_interval_falls_back() {
+    echo ""
+    echo "=== cmd_wait Invalid Interval Fallback Tests ==="
+    cleanup_test_locks
+
+    local label="Non-numeric ZFSLOCK_WAIT_INTERVAL falls back to a 1-second sleep"
+    _start_holder_or_fail "test/fallback" "$label" || return
+
+    test_start "$label"
+    local sleep_log="$_mock_zfs_state_dir/wait_fb_sleep_log"
+    local rcfile="$_mock_zfs_state_dir/wait_fb_rc"
+    _run_blocked_waiter "test/fallback" "abc" "$sleep_log" "$rcfile"
+    _stop_waiter
+
+    if grep -qx "1" "$sleep_log" && ! grep -q "abc" "$sleep_log"; then
+        test_pass
+    else
+        test_fail "sleep_log=$(tr '\n' ' ' < "$sleep_log" 2>/dev/null)"
+    fi
+    _bg_lock_kill
+    cleanup_test_locks
+}
+
+test_wait_zero_interval_falls_back() {
+    cleanup_test_locks
+
+    local label="Zero ZFSLOCK_WAIT_INTERVAL falls back to a 1-second sleep"
+    _start_holder_or_fail "test/zerofallback" "$label" || return
+
+    test_start "$label"
+    local sleep_log="$_mock_zfs_state_dir/wait_zb_sleep_log"
+    local rcfile="$_mock_zfs_state_dir/wait_zb_rc"
+    _run_blocked_waiter "test/zerofallback" "0" "$sleep_log" "$rcfile"
+    _stop_waiter
+
+    if grep -qx "1" "$sleep_log"; then
+        test_pass
+    else
+        test_fail "sleep_log=$(tr '\n' ' ' < "$sleep_log" 2>/dev/null)"
+    fi
+    _bg_lock_kill
+    cleanup_test_locks
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+test_wait_validation_and_immediate_availability
+test_wait_fractional_interval_reaches_sleep
+test_wait_invalid_interval_falls_back
+test_wait_zero_interval_falls_back
+
+test_summary

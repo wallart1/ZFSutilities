@@ -17,6 +17,28 @@ def _clear_cached_modules(*names):
             sys.modules.pop(name, None)
 
 
+class _FakeStyleContext:
+    """Records style classes added to / removed from a widget."""
+
+    def __init__(self):
+        self.classes = set()
+
+    def add_class(self, name):
+        self.classes.add(name)
+
+    def remove_class(self, name):
+        self.classes.discard(name)
+
+
+def _recording_style_context(widget):
+    """Return the widget's style context, creating a recording one on demand."""
+    context = getattr(widget, "_style_context", None)
+    if context is None:
+        context = _FakeStyleContext()
+        widget._style_context = context
+    return context
+
+
 class _FakeEntry:
     """Entry stand-in that stores text and records connected callbacks."""
 
@@ -40,6 +62,9 @@ class _FakeEntry:
         cb = self._callbacks.get(signal)
         if cb:
             cb()
+
+    def get_style_context(self):
+        return _recording_style_context(self)
 
 
 class _FakeLabel:
@@ -1156,7 +1181,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
 
             label = app._ret_danger_label
             markups = [c[0][0] for c in label.set_markup.call_args_list]
-            expected = "<span color='red'><b>Ignore Retention Policies - Danger Zone</b></span>"
+            expected = "<span color='red'><b>Mass Delete Filters - Danger Zone</b></span>"
             self.assertIn(expected, markups)
 
     def test_ignore_checkbox_has_tooltip(self):
@@ -1171,7 +1196,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
 
             tooltip = app._ret_ignore_retention_check.set_tooltip_text.call_args[0][0]
             self.assertIn("Prune deletes every matching snapshot", tooltip)
-            self.assertIn("filters", tooltip)
+            self.assertIn("Mass Delete Filters", tooltip)
 
     def test_loads_saved_mass_delete_config(self):
         with temp_config_dir():
@@ -1352,6 +1377,40 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             rh_widget = app._ret_mass_delete_widgets["releaseholds"]
             app._ret_ignore_retention_check.set_active.assert_called_with(False)
             rh_widget.set_sensitive.assert_called_with(True)
+
+    def test_filters_desensitized_when_not_ignoring(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+            app = self._make_app(rp, {"retention": {"default": []}})
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            for key in rp.MASS_DELETE_VARIABLES + ["snapshot_has"]:
+                app._ret_mass_delete_widgets[key].set_sensitive.assert_called_with(False)
+
+    def test_filters_sensitive_when_ignoring(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+            app = self._make_app(
+                rp,
+                {
+                    "retention": {"default": []},
+                    "retention_mass_delete": {
+                        "ignore_retention_policies": True,
+                    },
+                },
+            )
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            for key in rp.MASS_DELETE_VARIABLES + ["snapshot_has"]:
+                app._ret_mass_delete_widgets[key].set_sensitive.assert_called_with(True)
 
     def test_releaseholds_enabled_when_ignoring(self):
         with temp_config_dir():
@@ -1561,8 +1620,8 @@ class TestRetentionAdvancedLabel(unittest.TestCase):
             rp._load_pool_into_store = MagicMock()
 
             expanders = []
-            rp.Gtk.Expander.side_effect = (
-                lambda *a, **k: expanders.append(MagicMock()) or expanders[-1]
+            rp.Gtk.Expander.side_effect = lambda *a, **k: (
+                expanders.append(MagicMock()) or expanders[-1]
             )
 
             app = _AppNamespace({"retention": {"default": []}})
@@ -1634,6 +1693,35 @@ class TestRetentionAdvancedLabel(unittest.TestCase):
         app._ret_update_advanced_label()
         self.assertIn('foreground="orange"', self._label_markup(expander))
 
+    def test_non_default_var_value_turns_orange(self):
+        rp, app, _expander = self._create_page()
+        self._install_default_widgets(rp, app)
+        app._ret_mass_delete_widgets["includes"].set_text("vm-")
+        app._ret_update_advanced_label()
+        context = app._ret_mass_delete_widgets["includes"].get_style_context()
+        self.assertIn("zfsu-nondefault", context.classes)
+        other = app._ret_mass_delete_widgets["excludes"].get_style_context()
+        self.assertNotIn("zfsu-nondefault", other.classes)
+
+    def test_reverting_var_value_removes_orange(self):
+        rp, app, _expander = self._create_page()
+        self._install_default_widgets(rp, app)
+        widget = app._ret_mass_delete_widgets["includes"]
+        widget.set_text("vm-")
+        app._ret_update_advanced_label()
+        widget.set_text("")
+        app._ret_update_advanced_label()
+        self.assertNotIn("zfsu-nondefault", widget.get_style_context().classes)
+
+    def test_ignore_retention_value_turns_orange(self):
+        rp, app, _expander = self._create_page()
+        self._install_default_widgets(rp, app)
+        app._ret_ignore_retention_check.set_active(True)
+        app._ret_update_advanced_label()
+        self.assertIn(
+            "zfsu-nondefault", app._ret_ignore_retention_check.get_style_context().classes
+        )
+
 
 class _StatefulComboBoxText:
     """ComboBoxText stand-in that records items and the active index."""
@@ -1653,6 +1741,9 @@ class _StatefulComboBoxText:
             return self._items[self._active]
         return None
 
+    def get_style_context(self):
+        return _recording_style_context(self)
+
     def __getattr__(self, name):
         if name.startswith("_"):
             raise AttributeError(name)
@@ -1670,6 +1761,9 @@ class _FakeCheckButton:
 
     def get_active(self):
         return self._active
+
+    def get_style_context(self):
+        return _recording_style_context(self)
 
 
 if __name__ == "__main__":

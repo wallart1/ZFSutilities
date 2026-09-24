@@ -343,38 +343,126 @@ class TestStyleExpanderLabel(unittest.TestCase):
         gui_helpers.style_expander_label(expander, "Advanced", True)
 
 
-class TestVarWidgetsDifferFromDefaults(unittest.TestCase):
-    """var_widgets_differ_from_defaults compares widget values to defaults."""
+class _FakeStyleContext:
+    """Records style classes added to / removed from a widget."""
 
-    def test_all_default_returns_false(self):
+    def __init__(self):
+        self.classes = set()
+
+    def add_class(self, name):
+        self.classes.add(name)
+
+    def remove_class(self, name):
+        self.classes.discard(name)
+
+
+class _FakeStyledWidget:
+    """Widget fake exposing a recording style context."""
+
+    def __init__(self, style_context=None):
+        self._style_context = style_context if style_context is not None else _FakeStyleContext()
+
+    def get_style_context(self):
+        return self._style_context
+
+
+class TestStyleWidgetValueNondefault(unittest.TestCase):
+    """style_widget_value_nondefault toggles the orange CSS class."""
+
+    def _run(self, widget, non_default):
         gui_helpers = _import_gui_helpers()
+        with patch.object(gui_helpers, "ensure_nondefault_css"):
+            gui_helpers.style_widget_value_nondefault(widget, non_default)
+        return gui_helpers, widget
 
+    def test_adds_class_when_non_default(self):
+        gui_helpers, widget = self._run(_FakeStyledWidget(), True)
+        self.assertIn(gui_helpers.NON_DEFAULT_VALUE_CLASS, widget.get_style_context().classes)
+
+    def test_removes_class_when_default(self):
+        gui_helpers, widget = self._run(_FakeStyledWidget(), False)
+        self.assertNotIn(gui_helpers.NON_DEFAULT_VALUE_CLASS, widget.get_style_context().classes)
+
+    def test_toggle_back_removes_class(self):
+        gui_helpers, widget = self._run(_FakeStyledWidget(), True)
+        self._run(widget, False)
+        self.assertNotIn(gui_helpers.NON_DEFAULT_VALUE_CLASS, widget.get_style_context().classes)
+
+    def test_widget_without_style_context_is_noop(self):
+        gui_helpers = _import_gui_helpers()
+        with patch.object(gui_helpers, "ensure_nondefault_css"):
+            gui_helpers.style_widget_value_nondefault(_FakeValueEntry("x"), True)
+
+    def test_none_style_context_is_noop(self):
+        gui_helpers = _import_gui_helpers()
+        with patch.object(gui_helpers, "ensure_nondefault_css"):
+            gui_helpers.style_widget_value_nondefault(_FakeStyledWidget(None), True)
+
+
+class TestStyleVarWidgetsNondefault(unittest.TestCase):
+    """style_var_widgets_nondefault styles each widget and reports any diff."""
+
+    @staticmethod
+    def _styled_value_widget(value):
+        """_FakeStyledWidget that reports *value* as an Entry/Combo value."""
+        widget = _FakeStyledWidget()
+        widget.get_text = lambda: value
+        widget.get_active_text = lambda: value
+        return widget
+
+    def test_all_default_returns_false_and_no_classes(self):
+        gui_helpers = _import_gui_helpers()
         widgets = {
-            "includes": _FakeValueEntry(""),
-            "doincrementals": _FakeValueCombo("Y"),
+            "includes": self._styled_value_widget(""),
+            "doincrementals": self._styled_value_widget("Y"),
         }
         defaults = {"includes": "", "doincrementals": "Y"}
-        self.assertFalse(gui_helpers.var_widgets_differ_from_defaults(widgets, defaults))
 
-    def test_differing_entry_returns_true(self):
+        with patch.object(gui_helpers, "ensure_nondefault_css"):
+            result = gui_helpers.style_var_widgets_nondefault(widgets, defaults)
+
+        self.assertFalse(result)
+        for widget in widgets.values():
+            self.assertNotIn(
+                gui_helpers.NON_DEFAULT_VALUE_CLASS, widget.get_style_context().classes
+            )
+
+    def test_differing_entry_styles_only_that_widget(self):
         gui_helpers = _import_gui_helpers()
+        widgets = {key: _FakeStyledWidget() for key in ("includes", "doincrementals")}
+        widgets["includes"].get_text = lambda: "vm-"
+        widgets["includes"].get_active_text = lambda: None
+        widgets["doincrementals"].get_active_text = lambda: "Y"
+        widgets["doincrementals"].get_text = lambda: ""
+        defaults = {"includes": "", "doincrementals": "Y"}
 
-        widgets = {"includes": _FakeValueEntry("vm-")}
+        with patch.object(gui_helpers, "ensure_nondefault_css"):
+            result = gui_helpers.style_var_widgets_nondefault(widgets, defaults)
+
+        self.assertTrue(result)
+        self.assertIn(
+            gui_helpers.NON_DEFAULT_VALUE_CLASS, widgets["includes"].get_style_context().classes
+        )
+        self.assertNotIn(
+            gui_helpers.NON_DEFAULT_VALUE_CLASS,
+            widgets["doincrementals"].get_style_context().classes,
+        )
+
+    def test_reverting_value_removes_class(self):
+        gui_helpers = _import_gui_helpers()
+        widgets = {"includes": _FakeStyledWidget()}
         defaults = {"includes": ""}
-        self.assertTrue(gui_helpers.var_widgets_differ_from_defaults(widgets, defaults))
 
-    def test_differing_combo_returns_true(self):
-        gui_helpers = _import_gui_helpers()
+        with patch.object(gui_helpers, "ensure_nondefault_css"):
+            widgets["includes"].get_text = lambda: "vm-"
+            gui_helpers.style_var_widgets_nondefault(widgets, defaults)
+            widgets["includes"].get_text = lambda: ""
+            result = gui_helpers.style_var_widgets_nondefault(widgets, defaults)
 
-        widgets = {"doincrementals": _FakeValueCombo("N")}
-        defaults = {"doincrementals": "Y"}
-        self.assertTrue(gui_helpers.var_widgets_differ_from_defaults(widgets, defaults))
-
-    def test_missing_default_key_compares_to_empty(self):
-        gui_helpers = _import_gui_helpers()
-
-        widgets = {"unknown": _FakeValueEntry("x")}
-        self.assertTrue(gui_helpers.var_widgets_differ_from_defaults(widgets, {}))
+        self.assertFalse(result)
+        self.assertNotIn(
+            gui_helpers.NON_DEFAULT_VALUE_CLASS, widgets["includes"].get_style_context().classes
+        )
 
 
 if __name__ == "__main__":

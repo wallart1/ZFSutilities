@@ -44,10 +44,12 @@ def temp_user_config_dir():
     read or write the developer's real home directory during a test. Use
     around GUI-object construction that loads saved per-user UI state.
     """
-    with tempfile.TemporaryDirectory() as tmpdir, patch.dict(
-        os.environ, {"XDG_CONFIG_HOME": tmpdir}
+    with (
+        tempfile.TemporaryDirectory() as tmpdir,
+        patch.dict(os.environ, {"XDG_CONFIG_HOME": tmpdir}),
     ):
         yield tmpdir
+
 
 import backup_config
 import config_core

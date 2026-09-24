@@ -29,6 +29,7 @@ MIGRATION_MODES = (MIGRATE_NEW_DISKS, MIGRATE_HOLDING_POOL)
 
 _MIGRATION_LABEL = "migrate"
 _TEMP_SUFFIX = "_mig"
+_HOLDING_NS_PREFIX = "migrate_"
 _HEADROOM_FRACTION = 1.1
 
 # Allowed used-byte difference between source and destination datasets during
@@ -86,6 +87,22 @@ def migration_snapshot_bare_name(snapshot_name: str) -> str:
     return snapshot_name[1:]
 
 
+def holding_migration_namespace(source_pool: str) -> str:
+    """Return the reserved holding-pool dataset namespace for a migration.
+
+    Holding-mode copies land under ``<holding-pool>/migrate_<source>/<dataset>``
+    so they can never collide with backup/offsite copies (which map to
+    ``<pool>/<dataset-path>``) no matter which pool is chosen as the holding
+    pool. The name is deterministic per source pool (no timestamps), so a
+    re-run after an abort or a deferred cutover probes the same paths and
+    finds its receive resume tokens. The namespace is reserved for migration
+    use and destroyed as a whole at cutover.
+    """
+    if not source_pool:
+        raise ValueError("source pool must not be empty")
+    return f"{_HOLDING_NS_PREFIX}{source_pool}"
+
+
 def generate_temp_pool_name(source_pool: str, existing_names: set[str]) -> str:
     """Return a valid, unused temporary pool name derived from *source_pool*.
 
@@ -137,10 +154,17 @@ def plan_migration_steps(
             f"Snapshot all datasets on '{source_pool}' recursively",
         )
     ]
+    # Copies land in a reserved namespace on the holding pool so they
+    # cannot collide with backup/offsite copies of the same datasets.
+    copy_dest = (
+        f"{dest_label}/{holding_migration_namespace(source_pool)}"
+        if mode == MIGRATE_HOLDING_POOL
+        else dest_label
+    )
     steps += [
         MigrationStep(
             STEP_COPY,
-            f"Replicate '{dataset}' (snapshots and descendants) to '{dest_label}'",
+            f"Replicate '{dataset}' (snapshots and descendants) to '{copy_dest}'",
             dataset=dataset,
         )
         for dataset in top_level_datasets
@@ -181,7 +205,7 @@ def plan_migration_steps(
         steps += [
             MigrationStep(
                 STEP_COPY,
-                f"Copy '{dataset}' back from the holding pool",
+                f"Copy '{dataset}' back from the holding-pool namespace",
                 dataset=dataset,
             )
             for dataset in top_level_datasets
@@ -201,14 +225,13 @@ def plan_migration_steps(
         steps.append(
             MigrationStep(
                 STEP_IMPORT_RENAME,
-                f"Import '{source_pool}{_TEMP_SUFFIX}' under the name "
-                f"'{source_pool}'",
+                f"Import '{source_pool}{_TEMP_SUFFIX}' under the name '{source_pool}'",
             )
         )
         steps.append(
             MigrationStep(
                 STEP_DESTROY_HOLDING,
-                f"Destroy the migration datasets on holding pool '{dest_label}'",
+                f"Destroy the migration namespace on holding pool '{dest_label}'",
             )
         )
     return steps

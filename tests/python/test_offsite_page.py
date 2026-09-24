@@ -580,10 +580,30 @@ class _StatefulComboBoxText:
         self._callbacks = getattr(self, "_callbacks", {})
         self._callbacks[signal] = callback
 
+    def get_style_context(self):
+        context = getattr(self, "_style_context", None)
+        if context is None:
+            context = _FakeStyleContext()
+            self._style_context = context
+        return context
+
     def __getattr__(self, name):
         if name.startswith("_"):
             raise AttributeError(name)
         return lambda *args, **kwargs: None
+
+
+class _FakeStyleContext:
+    """Records style classes added to / removed from a widget."""
+
+    def __init__(self):
+        self.classes = set()
+
+    def add_class(self, name):
+        self.classes.add(name)
+
+    def remove_class(self, name):
+        self.classes.discard(name)
 
 
 class _NoOpWidget:
@@ -592,6 +612,13 @@ class _NoOpWidget:
     def connect(self, signal, callback, *args):
         self._callbacks = getattr(self, "_callbacks", {})
         self._callbacks[signal] = callback
+
+    def get_style_context(self):
+        context = getattr(self, "_style_context", None)
+        if context is None:
+            context = _FakeStyleContext()
+            self._style_context = context
+        return context
 
     def set_tooltip_text(self, *args):
         pass
@@ -718,6 +745,33 @@ class TestOffsiteAdvancedLabel(unittest.TestCase):
         app.offsite_pause_scrubs.set_active(True)
         app._offsite_update_advanced_label()
         self.assertIn('foreground="orange"', self._label_markup(expander))
+
+    def test_non_default_var_value_turns_orange(self):
+        op, app, _expander = self._create_page()
+        self._install_default_widgets(op, app)
+        app.offsite_var_widgets["includes"].set_text("vm-")
+        app._offsite_update_advanced_label()
+        context = app.offsite_var_widgets["includes"].get_style_context()
+        self.assertIn("zfsu-nondefault", context.classes)
+        other = app.offsite_var_widgets["excludes"].get_style_context()
+        self.assertNotIn("zfsu-nondefault", other.classes)
+
+    def test_reverting_var_value_removes_orange(self):
+        op, app, _expander = self._create_page()
+        self._install_default_widgets(op, app)
+        widget = app.offsite_var_widgets["includes"]
+        widget.set_text("vm-")
+        app._offsite_update_advanced_label()
+        widget.set_text("")
+        app._offsite_update_advanced_label()
+        self.assertNotIn("zfsu-nondefault", widget.get_style_context().classes)
+
+    def test_pause_scrubs_value_turns_orange(self):
+        op, app, _expander = self._create_page()
+        self._install_default_widgets(op, app)
+        app.offsite_pause_scrubs.set_active(True)
+        app._offsite_update_advanced_label()
+        self.assertIn("zfsu-nondefault", app.offsite_pause_scrubs.get_style_context().classes)
 
     def test_load_config_refreshes_label(self):
         op, app, expander = self._create_page()

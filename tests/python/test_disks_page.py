@@ -292,12 +292,64 @@ class TestCreateDisksPage(unittest.TestCase):
             dp.Gtk.PolicyType.AUTOMATIC,
         )
         page.add.assert_called()
-        # The center Pool Topology pane enforces a minimum height so the
+        # The Inventory and Topology view enforces a minimum height so the
         # page-level scrollbar engages instead of squashing it.
         dp.Gtk.Box.return_value.set_size_request.assert_any_call(
             -1,
             dp.DISKS_TOPOLOGY_MIN_HEIGHT,
         )
+
+    def test_create_disks_page_builds_view_switcher(self):
+        """A radio row drives a stack with inventory and performance views."""
+        dp = _import_disks_page()
+        app = MagicMock()
+        app.config = {"pools": []}
+        app.enable_treeview_copy = MagicMock()
+        app.ctx = MagicMock()
+
+        with patch.object(dp, "refresh_disks_page"):
+            dp.create_disks_page(app)
+
+        self.assertEqual(
+            set(app._disks_view_radios),
+            {"inventory", "performance"},
+        )
+        # The first radio is created with its label directly; the rest join
+        # the group and receive their label via set_label().
+        self.assertEqual(
+            dp.Gtk.RadioButton.call_args_list[0].kwargs["label"],
+            "Inventory and Topology",
+        )
+        set_labels = [
+            call.args[0]
+            for call in dp.Gtk.RadioButton.new_from_widget.return_value.set_label.call_args_list
+        ]
+        self.assertEqual(set_labels, ["Performance"])
+        # Each view has a named stack child, inventory first.
+        child_names = [call.args[1] for call in app._disks_view_stack.add_named.call_args_list]
+        self.assertEqual(child_names, ["inventory", "performance"])
+
+    def test_view_radio_toggled_switches_stack_child(self):
+        dp = _import_disks_page()
+        app = MagicMock()
+
+        radio = MagicMock()
+        radio.get_active.return_value = True
+        with patch.object(dp, "update_disks_button_sensitivity") as update:
+            dp._on_view_radio_toggled(radio, "performance", app)
+
+        app._disks_view_stack.set_visible_child_name.assert_called_once_with("performance")
+        update.assert_called_once_with(app)
+
+    def test_view_radio_toggled_ignores_inactive_radio(self):
+        dp = _import_disks_page()
+        app = MagicMock()
+
+        radio = MagicMock()
+        radio.get_active.return_value = False
+        dp._on_view_radio_toggled(radio, "performance", app)
+
+        app._disks_view_stack.set_visible_child_name.assert_not_called()
 
 
 class TestDiskInventoryCache(unittest.TestCase):
@@ -434,7 +486,9 @@ class TestRefreshDisksPage(unittest.TestCase):
             "progress_percent": 60,
             "eta": None,
         }
-        with patch.object(dst, "load_surface_test_state", return_value={"tests": {"/dev/sdc": running}}):
+        with patch.object(
+            dst, "load_surface_test_state", return_value={"tests": {"/dev/sdc": running}}
+        ):
             dp.refresh_disks_page(app)
         self.assertEqual(app.disks_store.rows[0][dp.COL_D_HEALTH], "60%")
 
@@ -453,7 +507,9 @@ class TestRefreshDisksPage(unittest.TestCase):
             "progress_percent": 20,
             "eta": None,
         }
-        with patch.object(dst, "load_surface_test_state", return_value={"tests": {"/dev/sdc": running}}):
+        with patch.object(
+            dst, "load_surface_test_state", return_value={"tests": {"/dev/sdc": running}}
+        ):
             dp.refresh_disks_page(app)
         self.assertEqual(app.disks_store.rows[0][dp.COL_D_HEALTH], "20%")
 
@@ -1056,6 +1112,53 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
             dp.update_disks_button_sensitivity(app)
             btn.set_sensitive.assert_called_with(expected)
             btn.reset_mock()
+
+
+class TestViewScopedButtonSensitivity(unittest.TestCase):
+    """Pool/disk actions require the Inventory view."""
+
+    def _app_with_view(self, view):
+        app = _make_app()
+        app._disks_view_stack.get_visible_child_name.return_value = view
+        app.dataset_runner.running = False
+        migrate_btn = MagicMock()
+        app._disks_migrate_pool_btn = migrate_btn
+        return app, migrate_btn
+
+    def test_migrate_pool_disabled_outside_inventory_view(self):
+        dp = _import_disks_page()
+        app, migrate_btn = self._app_with_view("performance")
+        dp.update_disks_button_sensitivity(app)
+        migrate_btn.set_sensitive.assert_called_with(False)
+        self.assertIn("Inventory and Topology", migrate_btn.set_tooltip_text.call_args.args[0])
+
+    def test_migrate_pool_enabled_in_inventory_view(self):
+        dp = _import_disks_page()
+        app, migrate_btn = self._app_with_view("inventory")
+        dp.update_disks_button_sensitivity(app)
+        migrate_btn.set_sensitive.assert_called_with(True)
+        migrate_btn.set_tooltip_text.assert_called_with("")
+
+    def test_view_radio_toggle_updates_button_sensitivity(self):
+        dp = _import_disks_page()
+        app, migrate_btn = self._app_with_view("inventory")
+        radio = MagicMock()
+        radio.get_active.return_value = True
+        migrate_btn.reset_mock()
+        # Simulate the stack having switched to the Performance view.
+        app._disks_view_stack.get_visible_child_name.return_value = "performance"
+        dp._on_view_radio_toggled(radio, "performance", app)
+        app._disks_view_stack.set_visible_child_name.assert_called_once_with("performance")
+        migrate_btn.set_sensitive.assert_called_with(False)
+
+    def test_inactive_radio_does_nothing(self):
+        dp = _import_disks_page()
+        app, migrate_btn = self._app_with_view("inventory")
+        radio = MagicMock()
+        radio.get_active.return_value = False
+        dp._on_view_radio_toggled(radio, "performance", app)
+        app._disks_view_stack.set_visible_child_name.assert_not_called()
+        migrate_btn.set_sensitive.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -621,8 +621,7 @@ DEFAULT_WORKLOAD_PROFILES = {
     },
     "vm-os-btrfs": {
         "description": (
-            "Linux OS system disks (BTRFS root + /home) on zvols. Mixed, "
-            "latency-sensitive IO."
+            "Linux OS system disks (BTRFS root + /home) on zvols. Mixed, latency-sensitive IO."
         ),
         "applies_to": ["volume"],
         "properties": {
@@ -691,8 +690,7 @@ DEFAULT_WORKLOAD_PROFILES = {
     },
     "backup-archive": {
         "description": (
-            "Backup targets and long-term archives: rsync trees, "
-            "restic/borg repos, tarballs."
+            "Backup targets and long-term archives: rsync trees, restic/borg repos, tarballs."
         ),
         "applies_to": ["filesystem"],
         "properties": {

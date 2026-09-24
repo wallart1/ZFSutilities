@@ -588,9 +588,7 @@ class TestDialogFlow(unittest.TestCase):
         with _handler_session(pgd, app, driver) as mock_zlm:
             self.assertEqual(len(app.dataset_runner.steps), 1)
             step = app.dataset_runner.steps[0]
-            self.assertEqual(
-                step.command, _expected_add_command(topology="stripe", ids=("sdc",))
-            )
+            self.assertEqual(step.command, _expected_add_command(topology="stripe", ids=("sdc",)))
             self.assertEqual(step.description, "Add vdev to pool pool1")
             mock_zlm.acquire.assert_called_once_with("pool1", "w", "Add vdev to pool1")
             app.dataset_runner.finish()
@@ -1126,9 +1124,7 @@ class TestAttachPureHelpers(unittest.TestCase):
         pgd = _import_dialogs()
         mirror = _mirror_topology()
         disks = [_disk("/dev/sdz")]  # sdy missing from the inventory
-        state = _attach_state(
-            pgd, topologies={"pool1": mirror}, disks=disks, selected=disks
-        )
+        state = _attach_state(pgd, topologies={"pool1": mirror}, disks=disks, selected=disks)
         store = _FakeTreeStore()
         pgd._populate_target_store(store, state, _caps())
         rows = [row for _parent, row in store.rows]
@@ -2100,9 +2096,7 @@ class TestDetachPureHelpers(unittest.TestCase):
         disks = [_disk("/dev/sdz"), _disk("/dev/sdy")]
         state = _detach_state(pgd, topologies={"pool1": mirror}, disks=disks)
         store = _FakeTreeStore()
-        pgd._populate_target_store(
-            store, state, _caps(), gate_raidz=False, detach_targets=True
-        )
+        pgd._populate_target_store(store, state, _caps(), gate_raidz=False, detach_targets=True)
         rows = [row for _parent, row in store.rows]
         fg = pgd._TCOL_FG
         # Pool root and the mirror group row are not detachable targets.

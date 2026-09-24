@@ -1,7 +1,6 @@
 # GTK GUI Reference
 
-The `zfsutilities_gui.py` application (in `python/`) is a GTK3
-graphical frontend for the ZFSutilities scripts. It must be run as root:
+The `zfsutilities_gui.py` application graphical frontend for the ZFSutilities scripts. It must be run as root:
 
 ```bash
 sudo zfsutilities-gui
@@ -49,7 +48,7 @@ Choosing **Cancel** keeps the window open so the tasks can finish normally.
 ## The Main Window
 
 When you open the ZFS Utilities GUI, the main window is titled **ZFS Utilities**.
-It is divided into three areas: the menu bar at the top, the working area in the
+It is vertically divided into three areas: the menu bar at the top, the working area in the
 middle, and the log panel at the bottom.
 
 ### Menu bar
@@ -86,19 +85,19 @@ The middle of the window is split into three parts:
 
 The sidebar tabs are:
 
-| Tab | What it is for |
-| --- | -------------- |
-| [Dashboard](#dashboard-tab) | At-a-glance system health, recent operations, and warnings |
-| [Backup](#backup-tab) | Configure and run the daily backup |
-| [Offsite](#offsite-tab) | Configure and run offsite backups |
-| [Restore](#restore-tab) | Restore datasets from backups |
-| [Schedule](#schedule-tab) | Manage scheduled profiles |
-| [Disks](#disks-tab) | Physical disk inventory, pool topology, and pool growth |
-| [Pools](#pools-tab) | Register pools and manage scrubs |
-| [Datasets](#datasets-tab) | Browse datasets and manage snapshots/holds |
-| [Retention](#retention-tab) | Per-pool retention policies and pruning |
-| [Checkagainst](#checkagainst-tab) | Edit snapshot safety checks |
-| [Logs](#logs-tab) | Browse, search, and delete session log files |
+| Tab                               | What it is for                                             |
+| --------------------------------- | ---------------------------------------------------------- |
+| [Dashboard](#dashboard-tab)       | At-a-glance system health, recent operations, and warnings |
+| [Backup](#backup-tab)             | Configure and run the daily backup                         |
+| [Offsite](#offsite-tab)           | Configure and run offsite backups                          |
+| [Restore](#restore-tab)           | Restore datasets from backups                              |
+| [Schedule](#schedule-tab)         | Manage scheduled profiles                                  |
+| [Disks](#disks-tab)               | Physical disk inventory, pool topology, and pool growth    |
+| [Pools](#pools-tab)               | Register pools and manage scrubs                           |
+| [Datasets](#datasets-tab)         | Browse datasets and manage snapshots/holds                 |
+| [Retention](#retention-tab)       | Per-pool retention policies and pruning                    |
+| [Checkagainst](#checkagainst-tab) | Edit snapshot safety checks                                |
+| [Logs](#logs-tab)                 | Browse, search, and delete session log files               |
 
 ### Bottom panel
 
@@ -139,32 +138,37 @@ warnings for each missing section. Configure them through the relevant tabs:
 ## Disks Tab
 
 The **Disks** tab shows the physical storage layer underneath your ZFS pools.
-The tab content scrolls vertically as a whole when the window is too short to
-show all three panes at once; the Pool Topology pane in the center also keeps
-a minimum height so it stays usable instead of being squashed.
+A row of radio buttons across the top of the tab switches between two
+views: **Inventory and Topology** (the Disk Inventory and Pool Topology
+sections) and **Performance** (a placeholder for forthcoming
+performance-monitoring sections). The pool drop-down under the radio row
+selects the pool whose vdev topology is shown. The tab content scrolls
+vertically as a whole when the window is too short; the Inventory and
+Topology view also keeps a minimum height so it stays usable instead of
+being squashed.
 
 ### Disk inventory
 
-The upper pane lists every physical block device detected on the system, plus
+The Disk Inventory pane lists every physical block device detected on the system, plus
 any partitions that belong to those devices. The system boot disk — the disk
 hosting the root filesystem, however it is layered (plain partition, LVM,
 BTRFS subvolume, or ZFS) — and all of its partitions are always hidden, so
 they can never be offered by the create-pool wizard or any of the pool-growth
 pickers:
 
-| Column | Meaning |
-| --- | --- |
-| Name | Kernel device node (e.g. `/dev/sda` or `/dev/sda1`) |
-| by-id | Best `/dev/disk/by-id` symlink name for the device or partition |
-| Model | Device model string from `lsblk` (blank for partitions) |
-| Serial | Device serial number (blank for partitions) |
-| Size | Capacity in human-readable units |
-| Type | `HDD`, `SSD`, `NVMe`, `part`, or `unknown` |
-| Log-sec | Logical sector size |
-| Phy-sec | Physical sector size |
-| Transport | Transport type (e.g. `sata`, `nvme`, `sas`) |
-| Pools | Pool membership determined from vdev topology |
-| SMART | Overall SMART health (`PASSED`, `FAILED`, or `n/a`) |
+| Column    | Meaning                                                                                                                                                                                                                                        |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Name      | Kernel device node (e.g. `/dev/sda` or `/dev/sda1`)                                                                                                                                                                                            |
+| by-id     | Best `/dev/disk/by-id` symlink name for the device or partition                                                                                                                                                                                |
+| Model     | Device model string from `lsblk` (blank for partitions)                                                                                                                                                                                        |
+| Serial    | Device serial number (blank for partitions)                                                                                                                                                                                                    |
+| Size      | Capacity in human-readable units                                                                                                                                                                                                               |
+| Type      | `HDD`, `SSD`, `NVMe`, `part`, or `unknown`                                                                                                                                                                                                     |
+| Log-sec   | Logical sector size                                                                                                                                                                                                                            |
+| Phy-sec   | Physical sector size                                                                                                                                                                                                                           |
+| Transport | Transport type (e.g. `sata`, `nvme`, `sas`)                                                                                                                                                                                                    |
+| Pools     | Pool membership determined from vdev topology                                                                                                                                                                                                  |
+| SMART     | Overall SMART health (`PASSED`, `FAILED`, or `n/a`)                                                                                                                                                                                            |
 | Wear/Test | For SSD/NVMe, the wear percentage from SMART data (`85%`). For HDDs, the surface self-test status (see [Surface Test](#surface-test)): `-`, `42% (1h 23m)` while running, or `Passed`/`Failed`/`Aborted`/`Canceled`. `-` when neither applies. |
 
 Device scans and SMART probes can be slow, so the inventory is loaded in a
@@ -179,7 +183,7 @@ is teal text only.
 
 ### Pool topology
 
-The middle pane shows the vdev topology of the pool selected in the drop-down.
+The Pool Topology pane shows the vdev topology of the pool selected in the drop-down.
 The tree is shown fully expanded every time it is refreshed (Refresh button or
 pool change). Selecting a node highlights the corresponding member disks and
 partitions in the inventory view (their text is drawn in teal): the pool node
@@ -191,13 +195,13 @@ tints every topology device that resides on the selected disk (a whole disk
 tints all of its partitions; a partition tints just that device), no matter
 which pool's topology is being displayed:
 
-| Column | Meaning |
-| --- | --- |
-| Name | Pool, vdev label, or full device path |
-| Type | `mirror`, `raidz1/2/3`, `stripe`, `disk`, `special`, `log`, `cache`, `spare` |
-| State | ZFS state for the vdev or device |
-| Read / Write / Cksum | Error counters from `zpool status` |
-| Blocksize | Effective pool blocksize for the vdev, shown in bytes (512 bytes, 4096 bytes, …) |
+| Column               | Meaning                                                                          |
+| -------------------- | -------------------------------------------------------------------------------- |
+| Name                 | Pool, vdev label, or full device path                                            |
+| Type                 | `mirror`, `raidz1/2/3`, `stripe`, `disk`, `special`, `log`, `cache`, `spare`     |
+| State                | ZFS state for the vdev or device                                                 |
+| Read / Write / Cksum | Error counters from `zpool status`                                               |
+| Blocksize            | Effective pool blocksize for the vdev, shown in bytes (512 bytes, 4096 bytes, …) |
 
 ### Creating Pools
 
@@ -368,7 +372,12 @@ Pick the source pool and one of two destination modes:
 - **Holding pool** — pick another imported pool with free space at least equal
   to the source pool's allocated data; the source pool is then destroyed and
   rebuilt with the chosen topology on its own freed disks before the data is
-  copied back.
+  copied back. Any other imported non-root pool qualifies, even an empty one —
+  a pool only needs datasets to be a migration *source*, not a holding pool.
+  Holding-mode copies land in a reserved namespace
+  (`<holding-pool>/migrate_<source-pool>/<dataset>`) so they can never collide
+  with backup or offsite copies of the same datasets — a pool that also
+  receives backups is a valid holding pool.
 
 The review page lists every step that will run, from the recursive migration
 snapshot through one `zfs send -Rw` replication step per top-level dataset
@@ -381,99 +390,47 @@ copy. Every copy is resumable: an interrupted transfer leaves a receive
 resume token on the destination, and re-running Migrate Pool resumes from
 that token instead of starting over, with live `pv` progress shown in the
 status area. Typed confirmation of the source pool name starts the copy
-phase. When the copy finishes, a second
+phase. If the pool's dataset layout changed after the review (a dataset was
+renamed, added, or removed while the wizard was open), the run is aborted
+before anything starts with an explanation — re-open Migrate Pool and review
+the plan again. When the copy finishes, a second
 typed confirmation gates the cutover: the source pool is exported and the
 migrated pool is re-imported under the source pool's name, so every
 `pool/dataset` path — and everything that references it — survives the swap.
 If cutover is deferred, the migration snapshot and copies remain in place and
-rerunning Migrate Pool finishes the job (resuming any interrupted copy).
+rerunning Migrate Pool finishes the job (resuming any interrupted copy); in
+holding mode the cutover also removes the migration namespace from the
+holding pool.
 After a successful cutover, if the migrated pool is enrolled in two-node iSCSI
 (`POOL_TARGET`), a follow-up `repair-iscsi-luns` step rebuilds its backstores
 and LUN mappings and rescans the compute host automatically.
 Cutover refuses to start while the
 pool's scrub is running or paused. The pool hosting the root filesystem is
-never offered for migration.
+never offered for migration, and a pool with no datasets is never offered as
+a source (there is nothing to copy); if the Disks-page pool selector points
+at such a pool when you start Migrate Pool, the run refuses to open with an
+explanation instead of silently switching to another pool.
 
-### Dataset Tuning
+### Workload profiles
 
-The lower pane shows a read-only grid of live ZFS properties for every dataset
-and zvol in the selected pool:
-
-| Column | Meaning |
-| --- | --- |
-| Name | Dataset path |
-| Type | `filesystem` or `volume` |
-| Size | Space consumed by the dataset and its descendants (`used`) |
-| Recordsize / Volblocksize | Logical block size (live or creation-only) |
-| Compression | Compression algorithm |
-| Atime | Access-time behavior |
-| Logbias | Throughput/latency bias |
-| Sync | Synchronous-write policy |
-| Primarycache | Cache inclusion policy |
-| Special small blocks | Small-block special-vdev threshold |
-| Profile match | First seeded profile whose live properties match the dataset |
-
-Select one or more datasets and click **Apply Profile…** to change live
-properties with `zfs set` so they match a workload profile. A treeview lists
-every profile with its applies-to types and a wrapped description of what it
-is for; the profile matching the first selected dataset is pre-selected
-(single selection). A preview lists the
-exact commands that will run. Profiles that may be unsafe (for example,
-`sync=disabled`) show a warning and require explicit confirmation.
-
-Live properties such as recordsize and compression only affect newly written
-data; existing blocks keep the old layout until rewritten. `volblocksize` on a
-zvol is fixed at creation and can never be changed afterward — a profile's
-volblocksize only takes effect on zvols created later. The pool's root dataset
-appears in the list: applying a profile there changes the values that children
-inherit by default, so it is the place to set pool-wide defaults.
-
-After applying a profile, existing data still has the old block layout. Select one
-or more filesystem datasets and click **Rewrite Data** to run `zfs rewrite -P -r
--x -v <mountpoint>` on each in turn, which physically rewrites existing blocks in
-place so they match the current properties. Requirements and behavior:
-
-- **OpenZFS 2.3.4+/2.4+** — the `zfs rewrite` command did not exist earlier; on
-  older versions a guidance label explains that you can create a new dataset
-  with the desired profile and migrate using the Restore page instead.
-- **The pool's `physical_rewrite` feature must be enabled** (`zpool set
-  feature@physical_rewrite=enabled <pool>`). The action always uses physical
-  rewrite (`-P`), which preserves block birth times so rewritten data is not
-  re-sent by later incremental send streams (important for the daily backup and
-  offsite flows).
-- **Filesystem datasets only.** `zfs rewrite` rewrites files by path inside a
-  mounted filesystem; a zvol is a block device with no file paths, so volumes
-  cannot be rewritten (the zfs(8) tool silently ignores block-device paths).
-  The Rewrite Data button is insensitive when a volume is selected.
-- **Mount handling.** `zfs rewrite` operates on paths, so the dataset must be
-  mounted. If it is not mounted, the action mounts it temporarily, rewrites,
-  and unmounts it afterwards; a dataset that was already mounted is left
-  mounted. Recursion (`-r`) never crosses mount points (`-x`), so child datasets
-  mounted beneath the selected one are not rewritten — rewrite each dataset
-  individually.
-
-This may take a long time and cannot be undone.
-
-Use **Advanced: Manage Profiles…** to add, edit, delete, or reset the workload
-profiles stored in the JSON config. The seeded (built-in) profiles are
-immutable — they cannot be edited or deleted, are labelled *built-in* in the
-manager, and can only be restored together via **Reset to Defaults**; custom
-profiles you add remain fully editable and deletable.
+Dataset tuning lives on the [Datasets](#datasets-tab) tab: select one or
+more datasets there and use **Apply Profile…** to change live properties
+with `zfs set`, **Rewrite Data** to restripe existing blocks in place, and
+**Advanced: Manage Profiles…** to maintain the profiles themselves. Profiles
+hold dataset-scope properties (recordsize, compression, atime, logbias,
+sync, primarycache, special_small_blocks, and the creation-only
+volblocksize). The pool's blocksize (ashift) is pool-scope and cannot be
+changed on a live pool — it is recorded in a profile for information only;
+use Migrate Pool to rewrite a pool with a different blocksize.
 
 ### Actions
 
-- **Apply Profile…** — apply the selected workload profile to the selected
-  dataset(s). Storage host only on two-node systems; disabled while a dataset
-  action is running.
-- **Rewrite Data** — run `zfs rewrite -P -r -x -v <mountpoint>` on one or more
-  selected filesystem datasets (volumes cannot be rewritten; the button is
-  insensitive when a volume is in the selection). The datasets are rewritten
-  sequentially, each with its own write lock. Requires OpenZFS 2.3.4+/2.4+ and
-  the pool's physical_rewrite feature. An unmounted dataset is mounted
-  temporarily and returned to its prior state afterwards; recursion never
-  crosses mount points. Storage host only on two-node systems; disabled while a
-  dataset action is running.
-- **Advanced: Manage Profiles…** — open the workload profile manager.
+The pool- and disk-scoped actions (Create Pool, Add Data Vdev, Expand Vdev,
+Replace, Detach, Add Infra Vdev, Migrate Pool, SMART Details, Surface Test)
+are enabled in the **Inventory and Topology** view and greyed out in the
+**Performance** view; hover for a tooltip pointing at the view where the
+action lives.
+
 - **Create Pool…** — open the create-pool wizard to build a new pool from
   unused disks (see [Creating Pools](#creating-pools)). Storage host only on
   two-node systems; disabled while a dataset action is running. The system
@@ -523,15 +480,15 @@ A surface test is a SMART self-test run by the drive's own firmware. **Fast**
 
 ### Feature requirements
 
-| Feature | Minimum OpenZFS |
-| --- | --- |
-| Read-only Disks views | 2.1+ |
-| Apply Profile (live property changes) | 2.1+ |
-| Rewrite Data | 2.3.4+/2.4+ (`zfs rewrite`), plus the pool's `physical_rewrite` feature |
-| Create Pool | 2.1+ (standard `zpool create`; no separate feature gate) |
-| Add Data Vdev / Expand Vdev (mirror tasks) / Replace / Detach / Add Infra Vdev | 2.1+ (standard `zpool add`/`attach`/`replace`/`detach`; no separate feature gate) |
-| RAIDZ expansion (Expand Vdev on a raidz group) | 2.3+ |
-| Migrate Pool | 2.1+ (standard `zfs snapshot`/`send`/`receive` and `zpool export`/`import`; no separate feature gate) |
+| Feature                                                                        | Minimum OpenZFS                                                                                       |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| Read-only Disks views                                                          | 2.1+                                                                                                  |
+| Apply Profile (live property changes)                                          | 2.1+                                                                                                  |
+| Rewrite Data                                                                   | 2.3.4+/2.4+ (`zfs rewrite`), plus the pool's `physical_rewrite` feature                               |
+| Create Pool                                                                    | 2.1+ (standard `zpool create`; no separate feature gate)                                              |
+| Add Data Vdev / Expand Vdev (mirror tasks) / Replace / Detach / Add Infra Vdev | 2.1+ (standard `zpool add`/`attach`/`replace`/`detach`; no separate feature gate)                     |
+| RAIDZ expansion (Expand Vdev on a raidz group)                                 | 2.3+                                                                                                  |
+| Migrate Pool                                                                   | 2.1+ (standard `zfs snapshot`/`send`/`receive` and `zpool export`/`import`; no separate feature gate) |
 
 ## Startup Version Check (Two-Node)
 
@@ -602,12 +559,12 @@ for details on the priority tokens.
     When multiple GUI runners are active at the same time (for example, a Backup
     and an Offsite job running concurrently), each runner writes its
     messages to its own session log so the logs do not cross-write.
-
+    
     Scheduled backup profiles also stream rsync pull-step output (both remote
     pulls and local pulls that resolve to the current host) to
     `/var/log/zfsutilities/rsync-pull.log` instead of the session log, so the
     GUI Logs tab is not flooded with file-list progress from routine rsync jobs.
-
+    
     For how the single-writer log mechanism works, see
     [Architecture — Session logging](../developer-guide/architecture.md#session-logging).
 
@@ -718,19 +675,19 @@ confirmation before resizing the window.
 
 The sidebar exposes these pages:
 
-| Tab                               | Purpose                                                                                  |
-| --------------------------------- | ---------------------------------------------------------------------------------------- |
-| [Dashboard](#dashboard-tab)       | At-a-glance system health, recent operations, and warnings                               |
-| [Backup](#backup-tab)             | Configure and run [`zfsdailybackup`](../commands-and-modules/commands.md#zfsdailybackup) |
-| [Offsite](#offsite-tab)           | Configure and run [`zfssendoffsite`](../commands-and-modules/commands.md#zfssendoffsite) |
-| [Restore](#restore-tab)           | Configure and run [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore)         |
-| [Schedule](#schedule-tab)         | Manage scheduled jobs                                                                    |
-| [Disks](#disks-tab)               | Physical disk inventory, pool topology, pool growth, and dataset tuning                  |
-| [Pools](#pools-tab)               | Pool registry + live `zpool list` status + scrub manager                                 |
+| Tab                               | Purpose                                                                                         |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [Dashboard](#dashboard-tab)       | At-a-glance system health, recent operations, and warnings                                      |
+| [Backup](#backup-tab)             | Configure and run [`zfsdailybackup`](../commands-and-modules/commands.md#zfsdailybackup)        |
+| [Offsite](#offsite-tab)           | Configure and run [`zfssendoffsite`](../commands-and-modules/commands.md#zfssendoffsite)        |
+| [Restore](#restore-tab)           | Configure and run [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore)                |
+| [Schedule](#schedule-tab)         | Manage scheduled jobs                                                                           |
+| [Disks](#disks-tab)               | Physical disk inventory, pool topology, and pool growth                                         |
+| [Pools](#pools-tab)               | Pool registry + live `zpool list` status + scrub manager                                        |
 | [Datasets](#datasets-tab)         | Collapsible dataset tree with inline snapshot/hold management (pool root datasets at top level) |
-| [Retention](#retention-tab)       | Per-pool retention policies + prune runner                                               |
-| [Checkagainst](#checkagainst-tab) | Edit the [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst) table   |
-| [Logs](#logs-tab)                 | Browse, search, and prune session log files                                              |
+| [Retention](#retention-tab)       | Per-pool retention policies + prune runner                                                      |
+| [Checkagainst](#checkagainst-tab) | Edit the [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst) table          |
+| [Logs](#logs-tab)                 | Browse, search, and prune session log files                                                     |
 
 ## Dataset Selection Criteria
 
@@ -830,12 +787,14 @@ The **Advanced** expander on the [Backup](#backup-tab), [Offsite](#offsite-tab),
 and [Restore](#restore-tab) tabs also exposes the variables below. They control
 send/receive behaviour, holds, and verification rather than dataset selection.
 The **Advanced Prune Options** expander on the
-[Retention](#retention-tab) tab holds the mass-delete filters and the
-*Ignore retention policies* danger option.
+[Retention](#retention-tab) tab holds the *Ignore retention policies* toggle
+and the *Mass Delete Filters* danger-zone frame that restricts mass deletes.
 
 The expander label turns **orange** whenever any value inside the expander
 differs from its default, so hidden non-default parameters are visible at a
-glance even while the expander is collapsed.
+glance even while the expander is collapsed. When the expander is open, the
+differing values themselves are also shown in orange, so you can see exactly
+which fields have been changed from their defaults.
 
 | Variable                  | Tabs                     | Type | Purpose                                                                                             |
 | ------------------------- | ------------------------ | ---- | --------------------------------------------------------------------------------------------------- |
@@ -906,14 +865,14 @@ and click **Cancel Selected Tasks** to stop them. The cancel button is enabled
 only when the selection contains at least one real task; selecting the
 *"No running tasks"* placeholder row keeps it disabled.
 
-| Task type     | Source                                                                   | Cancel behaviour                                |
-| ------------- | ------------------------------------------------------------------------ | ----------------------------------------------- |
-| **GUI**       | Backup, Offsite, Restore, or Prune started from their respective tabs    | Graceful cancel (SIGTERM the runner subprocess) |
-| **Dataset action** | Disks-page operations — Migrate Pool, Create Pool, vdev growth (Add Data Vdev, Attach, Replace, Detach, Add Infra Vdev), Apply Profile, Rewrite Data, Enroll iSCSI — started from their dialogs | Graceful cancel (SIGTERM the runner subprocess). Shown with its operation name and Step N/M status. |
-| **Scrub**     | Pool scrubs started from the Pools tab or detected as externally running | `zpool scrub -s <pool>`. While running, the progress text includes an ETA when `zpool status` reports remaining time. |
-| **ZFS-native operation** | In-progress resilver, RAIDZ expansion, or vdev removal on any pool, discovered from live `zpool status` on every refresh | Cannot be cancelled from the GUI; ZFS offers no cancel for these. The status shows percent done. |
-| **Profile**   | `profile_runner.py` jobs launched by **Run Now** in the Schedule tab       | SIGTERM the profile-runner process              |
-| **Scheduled** | `profile_runner.py` jobs launched by cron                                | SIGTERM the profile-runner process              |
+| Task type                | Source                                                                                                                                                                                                                                   | Cancel behaviour                                                                                                      |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **GUI**                  | Backup, Offsite, Restore, or Prune started from their respective tabs                                                                                                                                                                    | Graceful cancel (SIGTERM the runner subprocess)                                                                       |
+| **Dataset action**       | Disks-page pool operations — Migrate Pool, Create Pool, vdev growth (Add Data Vdev, Attach, Replace, Detach, Add Infra Vdev), Enroll iSCSI — and Datasets-page profile actions (Apply Profile, Rewrite Data), started from their dialogs | Graceful cancel (SIGTERM the runner subprocess). Shown with its operation name and Step N/M status.                   |
+| **Scrub**                | Pool scrubs started from the Pools tab or detected as externally running                                                                                                                                                                 | `zpool scrub -s <pool>`. While running, the progress text includes an ETA when `zpool status` reports remaining time. |
+| **ZFS-native operation** | In-progress resilver, RAIDZ expansion, or vdev removal on any pool, discovered from live `zpool status` on every refresh                                                                                                                 | Cannot be cancelled from the GUI; ZFS offers no cancel for these. The status shows percent done.                      |
+| **Profile**              | `profile_runner.py` jobs launched by **Run Now** in the Schedule tab                                                                                                                                                                     | SIGTERM the profile-runner process                                                                                    |
+| **Scheduled**            | `profile_runner.py` jobs launched by cron                                                                                                                                                                                                | SIGTERM the profile-runner process                                                                                    |
 
 The operation name shown on a **Dataset action** row (for example,
 *Migrate Pool: fivebays*) is set by the dialog that started the action before
@@ -941,14 +900,14 @@ user-paused and remain paused until you explicitly resume them from the
 
 Lists every currently held (non-stale) ZFS dataset lock. Each row shows:
 
-| Column        | Meaning                                                                  |
-| ------------- | ------------------------------------------------------------------------ |
-| **Dataset**   | Locked dataset path                                                      |
-| **Type**      | Lock type: `r` (shared read), `w` (exclusive write), or `x` (exclusive destroy) |
-| **PID**       | Process ID holding the lock                                              |
-| **Script**    | Name of the script or process that acquired the lock                     |
-| **Acquired**  | ISO timestamp when the lock was acquired                                 |
-| **Description** | Optional description written when the lock was acquired                |
+| Column          | Meaning                                                                         |
+| --------------- | ------------------------------------------------------------------------------- |
+| **Dataset**     | Locked dataset path                                                             |
+| **Type**        | Lock type: `r` (shared read), `w` (exclusive write), or `x` (exclusive destroy) |
+| **PID**         | Process ID holding the lock                                                     |
+| **Script**      | Name of the script or process that acquired the lock                            |
+| **Acquired**    | ISO timestamp when the lock was acquired                                        |
+| **Description** | Optional description written when the lock was acquired                         |
 
 The list refreshes automatically with the rest of the Dashboard. Stale locks
 (whose owning process has exited) are not shown here; they are reported in the
@@ -958,11 +917,11 @@ The list refreshes automatically with the rest of the Dashboard. Stale locks
 
 A scrollable table showing the last **10** history entries:
 
-| Column          | Meaning                                                                                                                            |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Date/Time**   | When the operation finished (`YYYY-MM-DDTHH:MM±TZ`)                                                                                |
-| **Type**        | `backup`, `offsite`, `restore`, or `prune`                                                                                         |
-| **Name**        | GUI label or scheduled profile name                                                                                                |
+| Column            | Meaning                                                                                                                           |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **Date/Time**     | When the operation finished (`YYYY-MM-DDTHH:MM±TZ`)                                                                               |
+| **Type**          | `backup`, `offsite`, `restore`, or `prune`                                                                                        |
+| **Name**          | GUI label or scheduled profile name                                                                                               |
 | **Message Level** | Highest message level issued during the operation, from its session log: green `✓` INFO/VERB/DEBUG, amber `⚠` WARN, red `✗` FATAL |
 
 The list refreshes automatically with the rest of the Dashboard.
@@ -996,11 +955,11 @@ remote host cannot be reached, its version is shown as *unknown*.
 
 ### Actions
 
-| Button                    | Behaviour                                                                                       |
-| ------------------------- | ----------------------------------------------------------------------------------------------- |
-| **Refresh**               | Re-gather all dashboard data immediately                                                        |
-| **Fix Locks**             | Removes stale locks and refreshes the view                                                      |
-| **Cancel Selected Tasks** | Cancels the selected rows in the **Running Tasks** list                                         |
+| Button                    | Behaviour                                                                                                                                                                                                                                                                                       |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Refresh**               | Re-gather all dashboard data immediately                                                                                                                                                                                                                                                        |
+| **Fix Locks**             | Removes stale locks and refreshes the view                                                                                                                                                                                                                                                      |
+| **Cancel Selected Tasks** | Cancels the selected rows in the **Running Tasks** list                                                                                                                                                                                                                                         |
 | **View Log**              | Switches to the Logs tab and selects the session log for the selected **Running Tasks** or **Recent Operations** row. The log path is cached when the button becomes sensitive, so the action still opens the intended log even if a background refresh changes the selection before you click. |
 
 ---
@@ -1017,7 +976,7 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
 - **Pull Steps** — Editable list of rsync pull operations. The frame header has
   an **Active** checkbox; unchecking it bypasses every pull step while still
   running the other backup steps. Each row has three columns:
-
+  
   - **Source** — the remote hostname or IP and file path to pull from. Examples:
     `proxmox1:/etc`, `192.168.1.50:/root`, `backup-server.local:/home`.
   - **Destination path** — the local directory where pulled files are placed.
@@ -1027,9 +986,9 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
     quoting for patterns that contain spaces. See
     [Daily Backup — Rsync Exclude Patterns](daily-backup.md#rsync-exclude-patterns)
     for details and examples.
-
+  
   Add or remove rows with the buttons; reorder by dragging rows.
-
+  
   A pull-step failure is **non-fatal**: it is logged as a warning, the backup
   continues with the remaining steps, and the job returns the failing pull's
   return code at the end. When an rsync step fails, a short human-readable
@@ -1049,7 +1008,7 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
   [dataset-selection criteria](#dataset-selection-criteria)
   (`includes`, `excludes`, `depth`, `startwith`, `endwith`), [advanced options](#advanced-options),
   and:
-
+  
   - **ZFS Keys Backup** — Two entries:
     - **ZFS keys source** — rsync endpoint where the key files currently live
       (e.g. `/mnt/ZFSkeys/` or `storage-host:/backups/zfs-keys/`)
@@ -1059,7 +1018,7 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
       for the security implications.
 
 - **Post-Backup Steps** — Three checkboxes and a command entry:
-
+  
   - **Clear snapshot name memory** after sending
   - **Prune snapshots** when the backup finishes — prunes only the datasets
     the active send/receive steps back up, on both the source and destination
@@ -1122,11 +1081,11 @@ This tab configures offsite backups ([`zfssendoffsite`](../commands-and-modules/
 | Button                       | Behavior                                                                                                                                                                                                                                                         |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Run Offsite**              | Detects the offsite pool, then shows a confirmation dialog with the new snapshot name and detected pool.<br>Click **OK** to proceed, **Cancel** to abort, or **Generate** to build a new snapshot name and review again.<br>Then launches the send/receive steps |
-| **Cancel**                   | Appears while a job is running. Click to immediately terminate the job.                                                                                                                                                                                                                                   |
+| **Cancel**                   | Appears while a job is running. Click to immediately terminate the job.                                                                                                                                                                                          |
 | **Select All / Select None** | Mark every step active or inactive                                                                                                                                                                                                                               |
-| **Save Config**              | Persists the tab state; turns **red** when there are unsaved changes.                                                                                                                                                                                                                 |
+| **Save Config**              | Persists the tab state; turns **red** when there are unsaved changes.                                                                                                                                                                                            |
 | **Revert Config**            | Reloads from JSON and refreshes the detected pool label                                                                                                                                                                                                          |
-| **Add Profile to Schedule**  | Saves a copy of the current offsite settings as a profile in the Schedule tab.                                                                                                                                                                                              |
+| **Add Profile to Schedule**  | Saves a copy of the current offsite settings as a profile in the Schedule tab.                                                                                                                                                                                   |
 | **Recall Profile**           | Loads a previously-saved offsite profile into this tab for editing or on-demand execution                                                                                                                                                                        |
 
 !!! note "Concurrent GUI runners"
@@ -1147,7 +1106,7 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
   Backup tab. The destination dataset is the one that was originally backed up.
   Any pre-existing dataset with the same name as the destination will be
   destroyed before being restored from the source.
-
+  
   Enable **Auto-determine destination** to have the GUI compute the destination
   from the source. When
   the checkbox is active, the destination entry is disabled and populated with
@@ -1155,7 +1114,7 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
   destination is restored and the entry becomes editable again. The computed
   destination is also refreshed when the Restore tab is opened or when the
   source entry changes while auto-destination is enabled.
-
+  
   Enable **Restore entire subtree (recursive)** to restore the named dataset
   and all of its descendants. When unchecked (the default), only the named
   dataset is restored. The Advanced **depth** field overrides this checkbox if
@@ -1165,14 +1124,14 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
   [dataset-selection criteria](#dataset-selection-criteria)
   (`depth`, `includes`, `excludes`, `startwith`, `endwith`), the snapshot
   **label**, and:
-
-  | Option                            | Purpose                                                                                  |
-  | --------------------------------- | ---------------------------------------------------------------------------------------- |
+  
+  | Option                            | Purpose                                                                                          |
+  | --------------------------------- | ------------------------------------------------------------------------------------------------ |
   | **label**                         | Snapshot label for matching. Only snapshots with this label are considered as source candidates. |
-  | **Pause scrubs during each step** | Pause ZFS scrubs on the source and destination pools while the restore step is running.  |
+  | **Pause scrubs during each step** | Pause ZFS scrubs on the source and destination pools while the restore step is running.          |
 
 - **Restore Steps** — Two checkboxes:
-
+  
   - **Part 1** — Full copy of the oldest available source snapshot
   - **Part 2** — Incremental copy of remaining snapshots
 
@@ -1184,11 +1143,11 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
 
 | Button                      | Behavior                                                                                                                                                                  |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Run Restore**             | Validates entries, warns if Part 1 is selected, then launches the restore                                                                                |
+| **Run Restore**             | Validates entries, warns if Part 1 is selected, then launches the restore                                                                                                 |
 | **Cancel**                  | Stops a running restore                                                                                                                                                   |
-| **Save Config**             | Saves settings; turns **red** when there are unsaved changes                                                                                                                             |
-| **Revert Config**           | Reloads from saved settings                                                                                                                                           |
-| **Add Profile to Schedule** | Saves the current restore settings as a profile in the Schedule tab.                                                                                            |
+| **Save Config**             | Saves settings; turns **red** when there are unsaved changes                                                                                                              |
+| **Revert Config**           | Reloads from saved settings                                                                                                                                               |
+| **Add Profile to Schedule** | Saves the current restore settings as a profile in the Schedule tab.                                                                                                      |
 | **Recall Profile**          | Loads a previously-saved Schedule tab profile into this tab for editing or on-demand execution. Click the Add Profile to Schedule button to save changes to the schedule. |
 
 !!! note "Concurrent GUI runners"
@@ -1336,17 +1295,17 @@ Vixie cron does not understand this syntax, so the GUI writes a plain weekday
 to `/etc/cron.d/zfsutilities` and `profile_runner.py` applies the ordinal
 check at runtime.
 
-| Example | Meaning |
-| ------- | ------- |
-| `6#1`   | First Saturday of the month |
-| `6#2`   | Second Saturday of the month |
-| `6#3`   | Third Saturday of the month |
-| `6#4`   | Fourth Saturday of the month |
-| `6#5`   | Fifth Saturday of the month (may not occur) |
-| `6#L`   | Last Saturday of the month |
-| `6#1,3` | First and third Saturdays |
-| `6#1,3-5` | First, third, fourth, and fifth Saturdays |
-| `6#1,L` | First and last Saturdays |
+| Example   | Meaning                                     |
+| --------- | ------------------------------------------- |
+| `6#1`     | First Saturday of the month                 |
+| `6#2`     | Second Saturday of the month                |
+| `6#3`     | Third Saturday of the month                 |
+| `6#4`     | Fourth Saturday of the month                |
+| `6#5`     | Fifth Saturday of the month (may not occur) |
+| `6#L`     | Last Saturday of the month                  |
+| `6#1,3`   | First and third Saturdays                   |
+| `6#1,3-5` | First, third, fourth, and fifth Saturdays   |
+| `6#1,L`   | First and last Saturdays                    |
 
 **Not supported:** textual weekday or month names (`MON`, `JAN`), cron
 special strings (`@daily`, `@hourly`), `L`/`W` qualifiers for non-weekday
@@ -1355,11 +1314,11 @@ reference, see [crontab.guru](https://crontab.guru/).
 
 ### Actions
 
-| Button     | Behavior                                                                                                                                                                 |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Button     | Behavior                                                                                                                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Save**   | Saves all pending changes (active toggles, comments, and cron parameters) and regenerates `/etc/cron.d/zfsutilities`. Turns **red** when any row, comment, or cron field has unsaved changes. |
-| **Revert** | Restores all pending changes to their last-saved values.                                                                                                                 |
-| **Delete** | Removes the selected profile file and its cron entry (with confirmation)                                                                                                 |
+| **Revert** | Restores all pending changes to their last-saved values.                                                                                                                                      |
+| **Delete** | Removes the selected profile file and its cron entry (with confirmation)                                                                                                                      |
 
 Toggling the **Active** checkbox marks that profile as dirty. The change
 is committed when you click **Save**.
@@ -1405,7 +1364,7 @@ The table is split into four sections:
 - **Offsite-derived entries** — rows generated from active Offsite tab
   send/receive steps.
 - **User entries** — manually maintained rows that always override
-  derived rows for the same `(source_root, label)` pair.
+  derived rows for the same `(label, source_root)` pair.
 - **Merged fss table** — read-only preview of the effective runtime table
   after the active derived sections and user entries are merged.
 
@@ -1421,9 +1380,6 @@ For the full algorithm and return codes, see the
 
 ### Layout
 
-The tab content scrolls vertically when the derived and user-entry tables do
-not fit in the window.
-
 The two derived sections are read-only tables. Each has an **Active**
 checkbox at the top:
 
@@ -1431,17 +1387,17 @@ checkbox at the top:
   runtime table.
 - When unchecked, the section is ignored.
 
-The bottom **User entries** section is an editable, reorderable table.
+The **User entries** section is an editable, reorderable table.
 Drag rows to reorder them; click a cell to edit it.
 
-| Column                  | Meaning                                                                                                                                                                      |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Snapshot label**      | Snapshot label to match. This entry applies only to snapshots carrying this label (e.g. `dailybackup`, `offsite`).                                                           |
-| **Source root**         | Source dataset tree this row applies to. A snapshot's dataset must be this root or one of its descendants. `<offsite>` may appear anywhere and expands per offsite-candidate pool at run-time. |
-| **Destination root**    | Destination dataset tree where the counterpart is expected. The counterpart is built by replacing the source-root prefix of the snapshot's dataset with this value. `<offsite>` may appear anywhere and expands per offsite-candidate pool at run-time. |
-| **Comment**             | Optional note stored in the saved configuration and shown in this table. Use for documenting the entry's purpose.                                                            |
+| Column               | Meaning                                                                                                                                                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Snapshot label**   | Snapshot label to match. This entry applies only to snapshots carrying this label (e.g. `dailybackup`, `offsite`).                                                                                                                                      |
+| **Source root**      | The root of the Source dataset tree this row applies to. A snapshot's dataset must be this root or one of its descendants. `<offsite>` may appear anywhere. In effect, it creates a separate row for each offsite-designated pool.                      |
+| **Destination root** | Destination dataset tree where the counterpart is expected. The counterpart is built by replacing the source-root prefix of the snapshot's dataset with this value. `<offsite>` may appear anywhere and expands per offsite-candidate pool at run-time. |
+| **Comment**          | Optional note stored in the saved configuration and shown in this table. Use for documenting the entry's purpose.                                                                                                                                       |
 
-Hover over any column header to see a tooltip explaining the field.
+Hover your mouse pointer over any column header to see a tooltip explaining the field.
 
 ### How the counterpart dataset is constructed
 
@@ -1450,18 +1406,18 @@ source-root prefix with the destination-root prefix.
 
 For example, with a snapshot dataset of `poolA/data/vm-101-disk-0`:
 
-| Source root            | Destination root            | Counterpart dataset                     |
-| ---------------------- | --------------------------- | --------------------------------------- |
-| `poolA/data`           | `poolB/poolA/data`          | `poolB/poolA/data/vm-101-disk-0`        |
-| `poolB/poolA/data`     | `poolA/data`                | `poolA/data/vm-101-disk-0`              |
+| Source root        | Destination root   | Counterpart dataset              |
+| ------------------ | ------------------ | -------------------------------- |
+| `poolA/data`       | `poolB/poolA/data` | `poolB/poolA/data/vm-101-disk-0` |
+| `poolB/poolA/data` | `poolA/data`       | `poolA/data/vm-101-disk-0`       |
 
 For the project's normal Backup/Restore pool names, a snapshot on
 `threeamigos/proxmox/vm-101-disk-0@dailybackup-…-d` produces:
 
-| Source root            | Destination root            | Counterpart dataset                            |
-| ---------------------- | --------------------------- | ---------------------------------------------- |
-| `threeamigos`          | `fivebays/threeamigos`      | `fivebays/threeamigos/proxmox/vm-101-disk-0`   |
-| `fivebays/threeamigos` | `threeamigos`               | `threeamigos/proxmox/vm-101-disk-0`            |
+| Source root            | Destination root       | Counterpart dataset                          |
+| ---------------------- | ---------------------- | -------------------------------------------- |
+| `threeamigos`          | `fivebays/threeamigos` | `fivebays/threeamigos/proxmox/vm-101-disk-0` |
+| `fivebays/threeamigos` | `threeamigos`          | `threeamigos/proxmox/vm-101-disk-0`          |
 
 ### Special value `<offsite>`
 
@@ -1471,17 +1427,17 @@ an offsite candidate in the [Pools tab](#pools-tab).
 
 Examples using a snapshot dataset of `poolA/data/vm-101-disk-0`:
 
-| Source root         | Destination root | Counterpart dataset(s)                                   |
-| ------------------- | ---------------- | -------------------------------------------------------- |
-| `poolA/data`        | `<offsite>`      | `z22tb/poolA/data/vm-101-disk-0`, `z40tb/poolA/data/vm-101-disk-0`, … |
-| `<offsite>/temp`    | `temp`           | `temp/vm-101-disk-0` (after replacing `z22tb/temp`, `z40tb/temp`, …) |
+| Source root      | Destination root | Counterpart dataset(s)                                                |
+| ---------------- | ---------------- | --------------------------------------------------------------------- |
+| `poolA/data`     | `<offsite>`      | `z22tb/poolA/data/vm-101-disk-0`, `z40tb/poolA/data/vm-101-disk-0`, … |
+| `<offsite>/temp` | `temp`           | `temp/vm-101-disk-0` (after replacing `z22tb/temp`, `z40tb/temp`, …)  |
 
 ### Merged fss table preview
 
 The **Merged fss table** section at the bottom of the tab is a read-only,
 live-updating preview of the table that `zfscheckagainst` will actually use.
 It is built by merging the active derived sections and the user entries with
-this precedence for the same `(source_root, label)` key:
+this precedence for the same `(label, source_root)` key:
 
 1. **User entries** — highest precedence.
 2. **Offsite-derived entries**.
@@ -1511,26 +1467,26 @@ For each active step `source → dest` with label `dailybackup` (Backup) or
 
 The actual destination root is the destination path that `zfs-send-receive`
 will use. When the Offsite Destination column contains `<offsite>`, the
-derived row keeps the placeholder literal. `zfscheckagainst` expands it to
+derived row keeps the placeholder as-is. `zfscheckagainst` expands it to
 every pool marked as an offsite candidate in the [Pools tab](#pools-tab) at
 run time, so one derived row can verify against all candidate pools.
 
 If you edit the Backup or Offsite tab and return to Checkagainst while it is
 still open, the **Get Entries** button turns **red** to show that the derived
 rows no longer match the current Backup/Offsite configurations. Click **Get
-Entries** to refresh the derived sections; the tab becomes dirty so you can
+Entries** to refresh the derived sections; the **Save** then turns red so you can
 save the updated rows.
 
 ### Actions
 
-| Button          | Behavior                                                                                                              |
-| --------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Button          | Behavior                                                                                                                                                                                                                           |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Get Entries** | Refresh the Backup-derived and Offsite-derived sections from the current Backup/Offsite configs. The button label turns **red** when the displayed derived rows are stale; clicking it updates the tables and marks the tab dirty. |
-| **Add pair...** | Open an assistant that asks for snapshot label, source root, destination root, and comment; it appends the forward row and the reverse row to the user table. |
-| **Add Row**     | Appends a new empty row to the user table.                                                                            |
-| **Remove Row**  | Deletes the selected row(s) from the user table.                                                                      |
-| **Save**        | Saves the whole `checkagainst` object after validation. Turns **red** while there are unsaved changes.                |
-| **Revert**      | Discards all changes and reloads from the last saved object.                                                          |
+| **Add pair...** | Open an assistant that asks for snapshot label, source root, destination root, and comment; it appends the forward row **and** the reverse row to the user table.                                                                  |
+| **Add Row**     | Appends a new empty row to the user table.                                                                                                                                                                                         |
+| **Remove Row**  | Deletes the selected row(s) from the user table.                                                                                                                                                                                   |
+| **Save**        | Saves the whole `checkagainst` page after validation. Turns **red** while there are unsaved changes.                                                                                                                               |
+| **Revert**      | Discards all changes and reloads from the last saved page.                                                                                                                                                                         |
 
 A status label below the table shows **orange** "Unsaved changes" while
 edits are pending, or a **red** validation error if a row is missing a
@@ -1540,15 +1496,14 @@ required field (Source root, Destination root, or Snapshot label).
 
 The **User entries** table is maintained manually: use **Add pair...** or
 **Add row** to create rows, **Remove Row** to delete them, and **Save** to
-persist. Rows you delete stay deleted — nothing re-adds them automatically.
+persist.
 
 ---
 
 ## Pools Tab
 
 This tab shows every pool known to the system (from `zpool list`), pools
-that are present but not yet imported (`zpool import`), and lets you maintain
-the pool registry stored in JSON. It also contains the **Scrub Manager** for
+that are present but not yet imported (`zpool import`), and pools that you add manually. The tab also contains the **Scrub Manager** for
 starting, pausing, resuming, and stopping pool scrubs.
 
 ### Pool table
@@ -1561,49 +1516,46 @@ actions operate on every selected row.
 
 **Pool name column:**
 
-| Style          | Meaning                                                                                                |
-| -------------- | ------------------------------------------------------------------------------------------------------ |
-| **Red**  | Pool is online or importable but *not* in the registry. Select the pool, click **Add** then **Save** to register it. |
-| Orange | Pool is registered but currently offline (not returned by `zpool list` and not importable).                         |
-| Default color  | Pool is registered and online.                                                                                      |
+| Style         | Meaning                                                                                                              |
+| ------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **Red**       | Pool is online or importable but *not* in the registry. Select the pool, click **Add** then **Save** to register it. |
+| Orange        | Pool is registered but currently offline.                                                                            |
+| Default color | Pool is registered and online.                                                                                       |
 
 The **Offsite** column shows a checkbox for every registered pool. Checking it
-marks that pool as an offsite candidate; the Offsite tab detects the first
-online candidate at run time. Unregistered pools cannot be marked as offsite
-candidates. The checkbox state is saved with the registry when you click
-**Save**.
+marks that pool as an offsite candidate; the Offsite tab detects an online candidate at run time. Unregistered pools cannot be marked as offsite candidates
 
 **Health column:**
 
-| Style          | Meaning                                              |
-| -------------- | ---------------------------------------------------- |
-| Green    | `ONLINE`                                             |
-| Blue, bold     | `IMPORTABLE` (devices are present but the pool is not imported) |
-| Orange, bold   | `DEGRADED`                                           |
-| Orange, normal | `OFFLINE` (not present in `zpool list` or `zpool import`) |
-| Red      | Any other state (`FAULTED`, `UNAVAIL`, `REMOVED`, …) |
+| Style          | Meaning                                                                               |
+| -------------- | ------------------------------------------------------------------------------------- |
+| Green          | `ONLINE`                                                                              |
+| Blue, bold     | `IMPORTABLE` (the pool is present but is not imported)                                |
+| Orange, bold   | `DEGRADED`(a device in the pool is not operational but the pool is still operational) |
+| Orange, normal | `OFFLINE` (the pool is registered but not ONLINE or IMPORTABLE)                       |
+| Red            | Any other state (`FAULTED`, `UNAVAIL`, `REMOVED`, …)                                  |
 
 **Errors column:**
 
-| Style          | Meaning                                                              |
-| -------------- | -------------------------------------------------------------------- |
-| Green          | `No errors` — `zpool status` reports no data or vdev errors          |
-| Red, bold      | Error summary from `zpool status` (vdev READ/WRITE/CKSUM counters or permanent data errors) |
-| Default color  | `—` — pool is offline or status could not be fetched                 |
+| Style             | Meaning                                                                |
+| ----------------- | ---------------------------------------------------------------------- |
+| Green             | `No errors` — `zpool status` reports no data or vdev errors            |
+| Red, bold         | Error summary. Vdev READ/WRITE/CKSUM counters or permanent data errors |
+| Default color `—` | Pool is offline or status could not be obtained                        |
 
 ### Actions — Pool Registry
 
-| Button      | Behavior                                                                                                   |
-| ----------- | ---------------------------------------------------------------------------------------------------------- |
-| **Watch**   | Opens a [Pool Watch window](#pool-watch-windows) for each selected online registered pool                  |
-| **Details** | Writes `zpool status` output and `zpool get all` output for the single selected pool to the log panel |
-| **Add**     | Adds the selected unregistered pool to the registry (or opens a dialog to type a name if none is selected) |
-| **Remove**  | Removes all selected registered pools from the registry (not from ZFS) after confirmation                  |
+| Button      | Behavior                                                                                                                                                    |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Watch**   | Opens a [Pool Watch window](#pool-watch-windows) for the selected online registered pool. Multiple watch windows are supported.                             |
+| **Details** | Writes `zpool status` output and `zpool get all` output for the single selected pool to the log panel                                                       |
+| **Add**     | Adds the selected unregistered pool to the registry (or opens a dialog to type a name if none is selected)                                                  |
+| **Remove**  | Removes all selected registered pools from the registry (not from ZFS) after confirmation                                                                   |
 | **Import**  | Enabled only when at least one selected pool is `IMPORTABLE`. Imports those pools directly, or opens a dialog listing importable pools if none are selected |
-| **Export**  | Confirms, then runs `zpool export` on all selected online pools                                                        |
-| **Save**    | Saves registry changes; turns **red** while there are unsaved changes                                                  |
-| **Revert**  | Reloads registry from the last saved settings                                                                          |
-| **Refresh** | Re-runs `zpool list`, rescans importable pools, and refreshes the table                                                |
+| **Export**  | Confirms, then runs `zpool export` on all selected online pools                                                                                             |
+| **Save**    | Saves registry changes; turns **red** while there are unsaved changes                                                                                       |
+| **Revert**  | Reloads registry from the last saved settings                                                                                                               |
+| **Refresh** | Re-runs `zpool list`, rescans importable pools, and refreshes the table                                                                                     |
 
 Action buttons enable or disable automatically based on the current selection.
 For example, **Watch** is only available when at least one selected pool is
@@ -1611,9 +1563,7 @@ registered and online, **Details** requires exactly one selected pool,
 **Export** requires at least one selected online pool, and **Import** is
 enabled only for `IMPORTABLE` pools.
 
-The importable-pool scan runs in the background and is cached for a few
-seconds so the table stays responsive. Click **Refresh** to force an
-immediate rescan.
+The importable-pool scan runs in the background on a schedule. Click **Refresh** to force an immediate rescan.
 
 Right-click any cell to open a context menu with **Copy** actions (cell value
 or full row, tab-separated) and **Send details to log**, which writes the raw
@@ -1628,12 +1578,12 @@ scrubs. The queue is saved to disk automatically and survives GUI restarts.
 
 #### Controls
 
-| Control                  | Purpose                                                                             |
-| ------------------------ | ----------------------------------------------------------------------------------- |
-| **Simultaneous scrubs**  | Target number of scrubs running at the same time (1–10). Default: **1**.            |
-| **Refresh every (s)**    | How often the scrub status table updates (1–300 seconds). Default: **10**.          |
-| **System weekly scrub**  | Enable the pre-installed `zfs-scrub-weekly@<pool>.timer` for every registered pool  |
-| **System monthly scrub** | Enable the pre-installed `zfs-scrub-monthly@<pool>.timer` for every registered pool |
+| Control                  | Purpose                                                                    |
+| ------------------------ | -------------------------------------------------------------------------- |
+| **Simultaneous scrubs**  | Target number of scrubs running at the same time (1–10). Default: **1**.   |
+| **Refresh every (s)**    | How often the scrub status table updates (1–300 seconds). Default: **10**. |
+| **System weekly scrub**  | Enable the ZFS pre-installed weekly scrub timer for every registered pool  |
+| **System monthly scrub** | Enable the ZFS pre-installed monthly scrub timer for every registered pool |
 
 The system-scrub toggles are independent of the ZFS Utilities schedule.
 They modify systemd timer units directly and persist across GUI restarts.
@@ -1645,43 +1595,46 @@ Columns: **Pool**, **Status**, **Progress**, **Last Scrub**, **Scan Line**.
 `Last Scrub` shows the date the last scrub finished or was canceled; it is
 blank (`—`) if the pool has never been scrubbed.
 
+`Scan Line` shows additional information provided by ZFS.
+
 Drag rows to reorder scrub priority — pools at the top of the list are
-preferred over lower ones when the manager chooses the next scrub to start.
-Multi-select rows with Ctrl+click or Shift+click, then use the action
-buttons to control them. The order is saved with the scrub queue and
+preferred over lower ones when the manager chooses the next scrub to start. The order is saved with the scrub queue and
 survives GUI restarts.
+
+Multi-select rows with Ctrl+click or Shift+click, then use the action
+buttons to control them. 
 
 #### Actions — Scrub Manager
 
-| Button                      | Behavior                                                                                          |
-| --------------------------- | ------------------------------------------------------------------------------------------------- |
-| **Start Scrub**             | Adds selected pools to the pending queue. Pools that are currently paused are re-queued as pending. The manager automatically starts them up to the target. |
-| **Pause Scrub**             | Pauses selected active or pending scrubs (`zpool scrub -p`)                                       |
-| **Resume Scrub**            | Returns selected paused pools to the pending queue. They resume when a scrub slot is available and do not preempt scrubs that are already running. |
-| **Stop Scrub**              | Stops selected scrubs (`zpool scrub -s`) and removes them from the queue                          |
-| **Add Profile to Schedule** | Saves selected pools and all settings as a scheduled profile                                      |
+| Button                      | Behavior                                                                                                                                                                           |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Start Scrub**             | Adds selected pools to the pending queue. Selected pools that are currently paused are re-queued as pending. The manager automatically starts them when a scrub slot is available. |
+| **Pause Scrub**             | Pauses selected active or pending scrubs (`zpool scrub -p`)                                                                                                                        |
+| **Resume Scrub**            | Returns selected paused pools to the pending queue. They resume when a scrub slot is available and do not preempt scrubs that are already running.                                 |
+| **Stop Scrub**              | Stops selected scrubs (`zpool scrub -s`) and removes them from the queue                                                                                                           |
+| **Add Profile to Schedule** | Saves selected pools and all settings as a scheduled profile. When the profile runs, it is as if the **Start Scrub** button were clicked.                                          |
 
 After any scrub action, the status table refreshes in a short burst so state
 changes appear quickly even when the normal refresh interval is long.
 
-Scrub actions are independent of backup, restore, prune, and dataset-deletion
+Scrub actions are independent and run simultaneously with backup, restore, prune, and dataset-deletion
 jobs.  They use live `zpool status` to decide whether a requested transition is
 valid, so pressing **Pause Scrub** does not fail just because a backup is
-running on a dataset in the same pool.
+running on a dataset in the same pool. (Backups may temporarily pause some scrubs while the backup is running.)
 
 #### How the queue works
 
 1. **Pending** — pools waiting to be scrubbed. A pool is added here when
    you press **Start Scrub**, even if `zpool status` currently shows a prior
-   finished or canceled scrub; the manager still starts a fresh scrub. The manager starts pending pools until the simultaneous target is reached.
+   finished or canceled scrub; the manager still starts a fresh scrub. The manager repeatedly starts pending scrubs until the simultaneous target is reached.
 2. **Active** — pools currently **scrubbing**.
 3. **Paused** — pools that were paused manually or by lowering the target.
    A manually paused pool stays paused until you press **Resume Scrub** or
    **Start Scrub**; either action returns it to the pending queue. It then
    waits for an available scrub slot and does not preempt running scrubs.
-   Pools paused only because the target was lowered are resumed automatically
+   Scrubs paused only because the target was lowered are resumed automatically
    when the target is raised again or a running scrub finishes.
-4. **Finished** — pools whose scrub completed or was canceled. Finished
+4. **Finished** — pools whose scrubs were completed or were canceled. Finished
    entries are automatically replaced when a new scrub starts on the same pool.
 
 If you lower the simultaneous target below the current active count, the
@@ -1702,41 +1655,35 @@ The divider between the main content area and the log panel can be dragged to
 resize the log.
 
 A **Pop Out** button (window icon) next to the **Log** level dropdown detaches the
-log viewer (search controls + text view + Show More) into an independent window.
+log viewer into an independent window.
 While popped out, the viewer pane is removed from the Logs tab; it is restored
-when the pop-out window is closed or docked again. The pop-out window's size and
-position are remembered across sessions.
+when the pop-out window is closed or docked again. 
 
 ### Search and Clear
 
 Above the text view, a search bar provides:
 
-- **Search entry** — type a query and press Enter (or click **Search**)
+- **Search entry** — type some search text and press Enter (or click **Search**)
 - **Search** button — finds and highlights every match. The current match is
   highlighted in **orange**; all other matches are highlighted in **yellow**.
-- **Reset** button — clears highlights and empties the search field
+- **Reset** button — clears highlights and empties the search entry field
 - **Previous / Next** arrow buttons — cycle through matches, wrapping around at
   the first/last match. A counter shows the current position (e.g. `3 / 12`).
   The viewer scrolls so the current match is visible.
-- Searches are **case-insensitive**.
-- Navigation keeps working while new log lines arrive: matches are tracked by
-  character position, so appending to the log stream cannot disable the
-  **Previous / Next** buttons, and matches in newly added lines are folded into
+- Search text is **case-insensitive**.
+- Navigation keeps working while new log lines arrive: matches in newly added lines are folded into
   the highlight set and counter automatically.
 
 A **Clear** button next to the **Input** entry empties the log buffer, clears
 search highlights, and resets the warning/error indicator.
 
-Job progress is shown as text in the log stream. Each running step logs its
-description, and `zfs receive` summary lines report bytes transferred. A
-status label below the log view displays the current step and progress text,
-including `pv` progress lines for interactive runs and for profiles started
-with **Run Now** from the Schedule tab. The `pv` progress lines update the
-status label but are not written to the session log, so the log stream is not
-flooded with one update per second.
+A
+status area below the log view displays the current job step and progress text,
+including progress lines for interactive runs and for profiles started
+with **Run Now** from the Schedule tab.
 
 In the [Logs tab](#logs-tab), the log viewer also has its own status label.
-When you select a **Running** log, the viewer shows the latest `pv` progress
+When you select a **Running** log, the viewer shows the latest progress
 line for that specific task.
 
 ### Warning and error indicator
@@ -1783,9 +1730,9 @@ A sortable table with columns:
 | **Type**      | `backup`, `offsite`, `restore`, `prune` — the operation type             |
 | **Name**      | `gui` for GUI runs, or `profile-<name>` for scheduled/cron runs          |
 | **Status**    | `Done`, `Failed`, `Cancelled`, `Running`, `Warn`, or `Fatal`.            |
-| **Log Size**  | Size of the log file on disk                                           |
-| **Duration**  | Total elapsed time in `HH:MM:SS`                                       |
-| **Transfer**  | Total bytes transferred during ZFS send/receive steps                  |
+| **Log Size**  | Size of the log file on disk                                             |
+| **Duration**  | Total elapsed time in `HH:MM:SS`                                         |
+| **Transfer**  | Total bytes transferred during ZFS send/receive steps                    |
 
 Click any column heading to change the sort order.
 
@@ -1810,9 +1757,7 @@ Right-click any row to open a context menu:
   automatically loads all existing content and shows new lines as they arrive.
   Auto-scroll to the bottom occurs only if the scroll position was already near
   the bottom; if you have scrolled up to read earlier output, your position is
-  preserved. To prevent unbounded memory growth on very long-running jobs, the
-  live viewer keeps only the most recent **2 MB** of characters in the text
-  buffer and drops older content.
+  preserved.
 
 - **Large logs** — log files larger than **1 MB** are opened tail-first. The
   viewer shows a header indicating that the beginning is skipped and displays a
@@ -1820,20 +1765,13 @@ Right-click any row to open a context menu:
   entire file from the start. This prevents the GUI from hanging if a session
   log grows very large.
 
-- **Reused or appended logs** — if a session log file is reused or appended to,
-  the log list and viewer show the status, duration, and transfer bytes from the
-  **final** run, because `log_index.py` treats the last `# END` trailer as
-  authoritative.
-
-- **Pop Out** — a button in the search bar detaches the entire viewer (search
-  controls + text view + Show More) into an independent window. While popped out,
+- **Pop Out** — a button in the search bar detaches the entire viewer into an independent window. While popped out,
   the Log Viewer pane is removed from the Logs tab; it is restored when the
-  pop-out window is closed or docked again. The pop-out window remembers its
-  size, position, and popped-out state across GUI restarts and release updates.
+  pop-out window is closed or docked again.
 
 - **Search bar** — above the text view:
-
-  - **Search entry** — type a query and press Enter (or click **Search**)
+  
+  - **Search entry** — type some search text and press Enter (or click **Search**)
   - **Search** button — finds and highlights every occurrence. The current
     match is highlighted in **orange**; all other matches are highlighted in
     **yellow**.
@@ -1843,8 +1781,8 @@ Right-click any row to open a context menu:
     The viewer scrolls so the current match is visible.
   - Searches are **case-insensitive**.
   - The search query is **retained** when you switch to a different log file;
-    the search automatically reruns against the newly loaded text.
-  - While you watch a **Running** log, the viewer keeps appending new output;
+    the search automatically reruns against the newly loaded log.
+  - While you watch a **Running** log, the viewer shows the new output;
     **Previous / Next** keep working and matches in the newly arrived lines are
     added to the highlights and counter without disturbing your scroll
     position.
@@ -1853,13 +1791,12 @@ Right-click any row to open a context menu:
 
 A **success-rate summary** appears above the log list (e.g. *"Success rate (30 days): 95 % (19 / 20)"*). It is computed from the backup history file and updates automatically every time the log list refreshes.
 
-A **Retention (days)** spin button above the log list sets how long session
-files are kept. The default is **30 days**. Old files are pruned automatically
+A **Retention (days)** spin button above the log list sets how long logs are kept. The default is **30 days**. Old files are pruned automatically
 when the GUI starts and whenever a scheduled run starts; they can also be
 removed manually via the **Prune Old** action button.
 
 !!! warning "Setting retention to 0"
-    A value of **0** means **all** session log files will be deleted. Use this with caution.
+    A value of **0** means **all** log files will be deleted. Use this with caution.
 
 ### Actions
 
@@ -1867,25 +1804,25 @@ removed manually via the **Prune Old** action button.
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Refresh**         | Rescan `/var/log/zfsutilities/sessions/` and refresh the list. The list also refreshes automatically whenever files are created, modified, or deleted in the sessions directory. |
 | **Delete Selected** | Remove the selected log file(s) after confirmation                                                                                                                               |
-| **Prune Old**       | Delete all session files older than the retention setting                                                                                                                        |
+| **Prune Old**       | Delete all logs older than the retention setting                                                                                                                                 |
 
 ---
 
 ## Datasets Tab
 
 This tab displays a hierarchical, collapsible tree of all datasets, snapshots,
-and hold tags. Each pool is represented by its root dataset at the top level.
+and hold tags.
 
 ### Tree conventions
 
 The dataset tree uses typography to indicate row kind:
 
-| Style            | Meaning                                                     |
-| ---------------- | ----------------------------------------------------------- |
-| **Bold**         | Pool root dataset (top-level row)                           |
-| Normal           | Regular dataset                                             |
-| Normal `[clone]` | Dataset that is a ZFS clone (origin shown in last column)   |
-| *Italic*         | Snapshot or hold tag |
+| Style            | Meaning                                                   |
+| ---------------- | --------------------------------------------------------- |
+| **Bold**         | Pool root dataset (top-level row)                         |
+| Normal           | Regular dataset                                           |
+| Normal `[clone]` | Dataset that is a ZFS clone (origin shown in last column) |
+| *Italic*         | Snapshot or hold tag                                      |
 
 Holds are shown as children of their snapshot. Expanding a snapshot
 row reveals any hold tags attached to it.
@@ -1907,19 +1844,22 @@ parent row.
 The list supports multi-select; action buttons are enabled or disabled
 based on what is selected.
 
-| Button               | Enabled when                                     | Behavior                                                                                                                                                                                                         |
-| -------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Snapshot**         | Exactly one pool or dataset selected             | Creates a new snapshot (prompts for name; suggests `manual-YYYY-mm-ddTHH:MM`)                                                                                                                                    |
-| **Delete**           | Only snapshots and/or holds selected             | Releases the selected hold tags, then destroys the selected snapshots (`zfs destroy`). If a selected snapshot still has holds that were not selected, the operation is aborted and the unselected hold tags are listed so you can select them as well. |
-| **Add Hold**         | At least one snapshot selected                   | Prompts for a tag (default `keep`) and applies it to each selected snapshot                                                                                                                                      |
-| **Rollback**         | Exactly one snapshot selected                    | Rolls the dataset back to that snapshot (destroys newer snapshots)                                                                                                                                               |
-| **Browse**           | Exactly one mounted filesystem or snapshot selected | Opens the selected item in the default file manager. Filesystems (including pool root datasets) open at their ZFS mountpoint; snapshots open via `.zfs/snapshot/<name>`.                                      |
-| **Mount**            | One or more unmounted filesystems or snapshots selected | Mounts each selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for each selected snapshot. Unmounted ancestor datasets are mounted first so the target's mountpoint is not hidden. Disabled for volumes and holds. |
-| **Unmount**          | One or more mounted filesystems or snapshots selected | Unmounts each selected filesystem (`sudo zfs unmount`) or snapshot (`sudo umount` on its `.zfs/snapshot/<name>` path). Pool root datasets can be unmounted. Unmounting a filesystem also unmounts its mounted children (see the note below). If processes are still using it, a warning dialog lists them and asks you to close them before retrying.                |
-| **Refresh**          | Always                                           | Re-reads all datasets, snapshots, and holds while preserving the tree's vertical scroll position and current selection whenever possible                                                                         |
-| **Expand Selected**  | One or more pool/dataset/snapshot rows selected  | Recursively expands each selected row and its lazy-loaded descendants. Placeholder rows and hold tags are skipped.                                                                                               |
-| **Collapse All**     | Always                                           | Collapses the entire tree                                                                                                                                                                                        |
-| **Show Big Stuff**   | Exactly one pool root dataset selected           | Runs [`zfsshowbigstuff`](../commands-and-modules/commands.md#zfsshowbigstuff) on the selected pool and streams the output to the log panel. Useful for quickly finding the largest datasets in a pool.          |
+| Button                         | Enabled when                                                                                                                          | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Snapshot**                   | Exactly one dataset is selected                                                                                                       | Creates a new snapshot (prompts for name; suggests `manual-YYYY-mm-ddTHH:MM`)                                                                                                                                                                                                                                                                                                                                                                    |
+| **Delete**                     | Only snapshots and/or holds selected                                                                                                  | Releases the selected hold tags, then destroys the selected snapshots (`zfs destroy`). If a selected snapshot still has holds that were not selected, the operation is aborted and the unselected hold tags are listed so you can select them as well.                                                                                                                                                                                           |
+| **Add Hold**                   | At least one snapshot selected                                                                                                        | Prompts for a tag (default `keep`) and applies it to each selected snapshot                                                                                                                                                                                                                                                                                                                                                                      |
+| **Rollback**                   | Exactly one snapshot selected                                                                                                         | Rolls the dataset back to that snapshot (destroys newer snapshots and data updates)                                                                                                                                                                                                                                                                                                                                                              |
+| **Browse**                     | Exactly one mounted filesystem, snapshot, or volume partition selected                                                                | Opens the selected item in the default file manager. Filesystems (including pool root datasets) open at their ZFS mountpoint; snapshots open via `.zfs/snapshot/<name>`; volume partitions open at their loop-mount directory.                                                                                                                                                                                                                   |
+| **Mount**                      | One or more mountable filesystems, snapshots, or volumes selected                                                                     | Mounts each selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for each selected snapshot. Unmounted ancestor datasets are mounted first so the target's mountpoint is not hidden. A selected volume is attached to a read-only loop device and its partitions are listed under the volume's entry (see below). Partitions labeled `No filesystem` cannot be mounted. Disabled for holds.                                         |
+| **Unmount**                    | One or more mounted filesystems, snapshots, volume partitions, or loop-attached volumes selected                                      | Unmounts each selected filesystem (`sudo zfs unmount`) or snapshot (`sudo umount` on its `.zfs/snapshot/<name>` path). Pool root datasets can be unmounted. Unmounting a filesystem also unmounts its mounted children (see the note below). Unmounting a volume detaches its loop device after unmounting its mounted partitions. If processes are still using an item, a warning dialog lists them and asks you to close them before retrying. |
+| **Apply Profile…**             | Every selected item is a pool/dataset row (filesystem or volume); snapshots, holds, and volume partitions in the selection disable it | Shows the workload-profile picker **once** and applies the chosen profile equally to every selected dataset. A preview lists the exact `zfs set` commands; profiles that may be unsafe (e.g. `sync=disabled`) require explicit confirmation. Applying to a pool root sets pool-wide inheritance defaults. See [Workload profiles](#workload-profiles).                                                                                           |
+| **Rewrite Data**               | Every selected item is a filesystem dataset, and OpenZFS 2.3.4+/2.4+ with the pool's `physical_rewrite` feature                       | Runs `zfs rewrite -P -r -x -v <mountpoint>` on each selected dataset in turn, physically rewriting existing blocks so they match the current properties (see [Workload profiles](#workload-profiles)). Volumes cannot be rewritten. Unmounted datasets are mounted temporarily and returned to their prior state. This may take a long time and cannot be undone.                                                                                |
+| **Advanced: Manage Profiles…** | Always                                                                                                                                | Opens the workload profile manager: add, edit, delete, or reset profiles (built-in profiles are immutable). See [Workload profiles](#workload-profiles).                                                                                                                                                                                                                                                                                         |
+| **Refresh**                    | Always                                                                                                                                | Re-reads all datasets, snapshots, and holds while preserving the tree's vertical scroll position and current selection whenever possible.                                                                                                                                                                                                                                                                                                        |
+| **Expand Selected**            | One or more pool/dataset/snapshot rows selected                                                                                       | Recursively expands each selected row and its descendants.                                                                                                                                                                                                                                                                                                                                                                                       |
+| **Collapse All**               | Always                                                                                                                                | Collapses the entire tree                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **Show Big Stuff**             | Exactly one pool root dataset selected                                                                                                | Runs [`zfsshowbigstuff`](../commands-and-modules/commands.md#zfsshowbigstuff) on the selected pool and streams the output to the log panel. Useful for quickly finding the largest datasets in a pool.                                                                                                                                                                                                                                           |
 
 Right-click any cell for a context menu:
 
@@ -1943,6 +1883,33 @@ Right-click any cell for a context menu:
     want only one dataset unmounted, unmount the child (leaf) dataset and
     leave its parents mounted.
 
+### Mounting ZFS volumes (zvols)
+
+A ZFS **volume** is a block device, not a filesystem, so it cannot be mounted
+directly. Clicking **Mount** with a volume selected instead attaches the
+volume's `/dev/zvol/…` device to a **read-only loop device** with partition
+scanning (`losetup --find --show --partscan --read-only`). The attach is
+read-only because these volumes are often live VM disks (in use via iSCSI) or
+active backup targets; a read-write attach could corrupt them.
+
+Once attached, the volume's entry in the Datasets tree lists what the loop
+device contains:
+
+- **Partitioned volume** — one row per partition (`loop0p1`, …). The row's
+  Type column shows the filesystem (`ext4`, `xfs`, …). Each partition with a
+  filesystem can be mounted with **Mount** (read-only, under
+  `/mnt/zfsutilities/<volume-path>/<partition>`) and then browsed with
+  **Browse**. A partition without a filesystem is listed with Type
+  `No filesystem` and cannot be mounted or browsed.
+- **Whole-device filesystem** — if the volume has no partition table but does
+  have a filesystem, the loop device itself (`loop0`) is listed as a single
+  mountable/browseable row.
+
+Unmounting a mounted partition row (`sudo umount`) releases just that
+partition. Unmounting the volume row itself unmounts any mounted partitions
+and then detaches the loop device (`losetup -d`), removing the partition rows
+from the tree.
+
 ---
 
 ## Retention Tab
@@ -1965,7 +1932,7 @@ The label above the editor table shows which pool is currently being edited
 The editor table has four columns:
 
 - **Bucket** — the single-letter bucket key (`d`, `w`, `m`, `s`, or a custom
-  letter). The GUI groups snapshots by this letter during pruning. You can add
+  letter). ZFSutilities groups snapshots by this letter during pruning. You can add
   or remove bucket rows with the **Add Bucket** / **Remove Bucket** buttons.
 - **Type** — a read-only display name derived from the bucket letter (`d`→Daily,
   `w`→Weekly, `m`→Monthly, `s`→Offsite). Custom buckets show the uppercase letter.
@@ -2003,10 +1970,6 @@ reorder the pool list. Select one or more, set the snapshot label (default
 sequence. Pools without an explicit policy are pruned using the `default`
 policy.
 
-The label is persisted in the JSON config under `prune_label` and survives
-across GUI restarts. Changing the label marks the page dirty; click **Save**
-to persist it, or **Revert** to restore the saved value.
-
 The **Prune** button becomes **Cancel** while a prune job is running;
 output streams to the log panel at the bottom of the window, and any
 interactive prompts may be responded to in the **Input** entry next to the **Send**
@@ -2015,11 +1978,19 @@ button.
 #### What happens during a prune
 
 By default, for each selected pool, the GUI runs a prune job that applies the
-pool's retention policy to all datasets. It prunes in three phases: offsite
-same-month deduplication (only for `@offsite` snapshots), same-day
-deduplication within each bucket, and bucket-count enforcement. The most
-recent snapshot in each bucket is protected as the incremental backup base.
-Clone snapshots (`c` bucket) are skipped entirely.
+pool's retention policy to all datasets. It prunes in three phases:
+
+1. offsite
+   same-month deduplication (only for `@offsite` snapshots), 
+
+2. same-day
+   deduplication within each bucket, and 
+
+3. bucket-count enforcement. 
+   The most
+   recent snapshot in each bucket is protected as the incremental backup base.
+
+Clone origin snapshots (`c` bucket) are skipped entirely.
 
 Before any snapshot is destroyed, `zfscheckagainst` verifies it is not the
 last common snapshot shared with a counterpart dataset (e.g. an offsite pool).
@@ -2033,20 +2004,27 @@ For the full algorithm, see the
 #### Ignore retention policies
 
 The **Advanced Prune Options** card lets you change what the **Prune** button
-deletes. Open the card and check **Ignore Retention Policies** to run
+deletes. The **Ignore Retention Policies** toggle sits at the top of the card:
+check it to run
 [`zfsmassdelsnaps`](../commands-and-modules/commands.md#zfsmassdelsnaps) instead
 of `zfscleanup`. In this mode, **Prune** lists every matching snapshot and
-deletes them after confirmation, bypassing retention counts, `minage`, and
-`zfscheckagainst`.
+deletes them after confirmation, bypassing retention counts, minimum age, and
+counterpart snapshot checking (Checkagainst).
 
-Available filters:
+Below the toggle, the red **Mass Delete Filters - Danger Zone** frame restricts
+which snapshots a mass delete matches:
 
 - **Includes / Excludes / Start With / End With** — dataset name filters passed
   to `zfsbuildfsarray`
 - **Snapshot Has** — only snapshots whose full name contains this substring are
   considered
-- **Release Holds** — release ZFS holds before deleting (only when ignore mode
-  is active)
+- **Release Holds** — release ZFS holds before deleting; this one applies in
+  both normal and ignore-retention prune
+
+The filter fields only apply when **Ignore Retention Policies** is checked, so
+they are greyed out otherwise; **Release Holds** stays editable in both modes.
+An inline caption under the toggle restates this, so the card explains itself
+without the manual.
 
 Dry Run previews the affected snapshots without deleting anything. Before
 confirming a real delete, the candidate list is followed by an estimated amount
@@ -2068,7 +2046,6 @@ the selected pool. Each window:
 - Has its own dataset tree, refreshed every 30 seconds
 - Starts collapsed; use **Expand All** / **Collapse All**
 - Can be opened for multiple pools simultaneously
-- Runs its own refresh timer, stopped automatically when the window is closed
 - Clicking **Watch** again for a pool that already has a window brings that
   window to the front instead of creating a duplicate
 

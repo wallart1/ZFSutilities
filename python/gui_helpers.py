@@ -2,6 +2,7 @@
 Shared GTK helper utilities used by multiple page modules.
 """
 
+import os
 import re
 import subprocess
 
@@ -12,7 +13,7 @@ gi.require_version("Gtk", "3.0")
 from backup_config import MSG_LEVELS, log_msg, set_log_sink
 from gi.repository import Gdk, GLib, Gtk, Pango
 from logging_config import DEFAULT_MSG_LEVEL
-from zfs_repository import get_default_repository
+from zfs_repository import get_default_repository, zvol_device_path
 
 
 def set_monospace_font(renderer):
@@ -42,6 +43,69 @@ def style_expander_label(expander, label_text, non_default):
         label.set_markup(f"<b>{label_text}</b>")
 
 
+# CSS class marking widgets (Entry, ComboBoxText, CheckButton) whose value
+# differs from the default, so non-default values are visible at a glance.
+NON_DEFAULT_VALUE_CLASS = "zfsu-nondefault"
+_NON_DEFAULT_CSS = f"""
+.{NON_DEFAULT_VALUE_CLASS} {{
+    color: orange;
+}}
+"""
+_nondefault_css_installed = False
+
+
+def ensure_nondefault_css():
+    """Install the non-default-value CSS provider once per process.
+
+    No-op when there is no default screen (headless/test environments) or
+    when the provider is already installed.
+    """
+    global _nondefault_css_installed
+    if _nondefault_css_installed:
+        return
+    screen = Gdk.Screen.get_default()
+    if screen is None:
+        return
+    provider = Gtk.CssProvider()
+    provider.load_from_data(_NON_DEFAULT_CSS.encode("utf-8"))
+    Gtk.StyleContext.add_provider_for_screen(
+        screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
+    _nondefault_css_installed = True
+
+
+def style_widget_value_nondefault(widget, non_default):
+    """Color a widget's value orange (via CSS class) when non-default.
+
+    Widgets without a style context (test fakes) are skipped silently.
+    """
+    ensure_nondefault_css()
+    get_style_context = getattr(widget, "get_style_context", None)
+    if not callable(get_style_context):
+        return
+    context = get_style_context()
+    if context is None:
+        return
+    if non_default:
+        context.add_class(NON_DEFAULT_VALUE_CLASS)
+    else:
+        context.remove_class(NON_DEFAULT_VALUE_CLASS)
+
+
+def style_var_widgets_nondefault(widgets, defaults):
+    """Style each var widget orange when its value differs from defaults.
+
+    Returns True if any widget value differs.
+    """
+    non_default = False
+    for key, widget in widgets.items():
+        differs = _widget_value(widget) != defaults.get(key, "")
+        style_widget_value_nondefault(widget, differs)
+        if differs:
+            non_default = True
+    return non_default
+
+
 def _widget_value(widget):
     """Return the current string value of a var widget (Entry or ComboBoxText)."""
     get_active_text = getattr(widget, "get_active_text", None)
@@ -55,14 +119,6 @@ def _widget_value(widget):
         if isinstance(value, str):
             return value
     return ""
-
-
-def var_widgets_differ_from_defaults(widgets, defaults):
-    """Return True if any var widget's value differs from the defaults dict."""
-    for key, widget in widgets.items():
-        if _widget_value(widget) != defaults.get(key, ""):
-            return True
-    return False
 
 
 ACTIVE_COLUMN_WIDTH = 60
@@ -339,8 +395,6 @@ def on_row_expanded(view, tree_iter, path, _data=None):
     """Load children on demand when a row is expanded."""
     store = view.get_model()
     loaded = store.get_value(tree_iter, 7)
-    name = store.get_value(tree_iter, 0)
-    ds_type = store.get_value(tree_iter, 2)
     if loaded:
         return
 
@@ -348,12 +402,30 @@ def on_row_expanded(view, tree_iter, path, _data=None):
     store.set_value(tree_iter, 7, True)
 
     repo = getattr(view, "_zfs_repo", None) or get_default_repository()
+    _load_children_for_row(store, tree_iter, repo)
 
-    # Determine what to load based on node type
+
+def _row_child_kind(name, ds_type):
+    """Classify a tree row for child loading: 'dataset', 'snapshot', or 'other'."""
     if ds_type in ("filesystem", "volume") or (not name.startswith("@") and ds_type != "hold"):
+        return "dataset"
+    if name.startswith("@") or ds_type == "snapshot":
+        return "snapshot"
+    return "other"
+
+
+def _load_children_for_row(store, tree_iter, repo):
+    """Populate a row's children: loop partitions, snapshots, sub-datasets, holds."""
+    name = store.get_value(tree_iter, 0)
+    ds_type = store.get_value(tree_iter, 2)
+    kind = _row_child_kind(name, ds_type)
+
+    if kind == "dataset":
         full_name = build_full_dataset_name(store, tree_iter)
+        if ds_type == "volume":
+            load_volume_loop_children(store, tree_iter, full_name, repo=repo)
         load_dataset_children(store, tree_iter, full_name, repo=repo)
-    elif name.startswith("@") or ds_type == "snapshot":
+    elif kind == "snapshot":
         full_name = build_full_dataset_name(store, tree_iter)
         load_snapshot_children(store, tree_iter, full_name, repo=repo)
 
@@ -368,12 +440,7 @@ def on_row_expanded(view, tree_iter, path, _data=None):
         child = store.iter_next(child)
 
     if not has_real:
-        if ds_type in ("filesystem", "volume") or (not name.startswith("@") and ds_type != "hold"):
-            label = "(empty)"
-        elif name.startswith("@") or ds_type == "snapshot":
-            label = "(no holds)"
-        else:
-            label = "(empty)"
+        label = "(no holds)" if kind == "snapshot" else "(empty)"
         store.append(tree_iter, [label, "", "", "", "", "", "", True, False, None])
 
     # Now safe to remove dummy — row still has at least one child
@@ -383,6 +450,62 @@ def on_row_expanded(view, tree_iter, path, _data=None):
         if store.get_value(child, 0) == "(loading...)":
             store.remove(child)
         child = next_child
+
+
+def reload_row_children(store, tree_iter, repo=None):
+    """Reload a row's children in place (e.g. after a loop attach/detach)."""
+    repo = repo or get_default_repository()
+    child = store.iter_children(tree_iter)
+    while child:
+        nxt = store.iter_next(child)
+        store.remove(child)
+        child = nxt
+    store.set_value(tree_iter, 7, False)
+    _load_children_for_row(store, tree_iter, repo)
+
+
+def load_volume_loop_children(store, vol_iter, vol_name, repo=None):
+    """Append loop-partition rows under a volume row; return True if any added.
+
+    Does nothing when the volume has no loop device attached. Partition rows
+    are leaves: the Type column holds the filesystem type, or the literal
+    "No filesystem" when no filesystem is detected.
+    """
+    repo = repo or get_default_repository()
+    try:
+        loop_dev = repo.loop_find(zvol_device_path(vol_name))
+        if not loop_dev:
+            return False
+        for part in repo.loop_partitions(loop_dev):
+            type_val = part.fstype if part.has_filesystem else "No filesystem"
+            mounted = bool(part.mountpoint)
+            store.append(
+                vol_iter,
+                [os.path.basename(part.device), "", type_val, "", "", "", "", True, mounted, None],
+            )
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        log_msg(f"WARN: Could not load loop partitions for {vol_name}: {e}")
+        return False
+    return True
+
+
+def find_tree_iter_by_full_name(store, full_name):
+    """Return the tree iter whose build_full_dataset_name equals full_name, or None."""
+    found = None
+
+    def _walk(tree_iter):
+        nonlocal found
+        while tree_iter and found is None:
+            if build_full_dataset_name(store, tree_iter) == full_name:
+                found = tree_iter
+                return
+            child = store.iter_children(tree_iter)
+            if child:
+                _walk(child)
+            tree_iter = store.iter_next(tree_iter)
+
+    _walk(store.get_iter_first())
+    return found
 
 
 def get_mounted_snapshots():
@@ -815,6 +938,15 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
             pass
 
     # 6. iSCSI LUN exposure (zvols only)
+    # Regex: vm-(\d+)-disk-\d+
+    # Used with re.fullmatch, so it must match the ENTIRE base name, not a
+    # substring. Purpose: recognize a Proxmox-style zvol base name
+    # ("vm-<vmid>-disk-<disknum>", e.g. "vm-207-disk-2") so we can check the
+    # targetcli block backstores for an iSCSI LUN still exposing this zvol.
+    # Group 1 captures the VM ID (e.g. "207"); only the match itself (not the
+    # groups) is used here — a match means "this zvol follows the Proxmox
+    # naming convention and might be shared via targetcli". Non-conforming
+    # base names skip this check entirely.
     bsname = target.split("/")[-1]
     vmid_match = re.fullmatch(r"vm-(\d+)-disk-\d+", bsname)
     if vmid_match:
@@ -855,10 +987,7 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
                 if lun_info:
                     log_msg(f"WARN:   → Zvol is exposed as an iSCSI LUN on {lun_info}.")
                 else:
-                    log_msg(
-                        f"WARN:   → Zvol has an iSCSI backstore ({bsname}) "
-                        f"but no LUN mapping."
-                    )
+                    log_msg(f"WARN:   → Zvol has an iSCSI backstore ({bsname}) but no LUN mapping.")
                 log_msg("WARN:     Use 'remove-vm-disk' or targetcli to tear down iSCSI first.")
                 found_cause = True
         except (subprocess.CalledProcessError, FileNotFoundError):
@@ -1364,6 +1493,10 @@ def get_tree_selection_items(view):
                             "dataset": full_dataset, "mounted": bool}
       {"type": "hold",     "tag": tag, "snapshot": snap_short,
                             "dataset": full_dataset, "mounted": bool}
+      {"type": "volume-partition", "name": loop partition (e.g. loop0p1),
+                            "device": /dev/loop0p1, "volume": full volume,
+                            "fstype": fs type or "No filesystem",
+                            "has_filesystem": bool, "mounted": bool}
     """
     selection = view.get_selection()
     model, paths = selection.get_selected_rows()
@@ -1376,7 +1509,30 @@ def get_tree_selection_items(view):
         ds_type = model.get_value(tree_iter, 2)
         mounted = model.get_value(tree_iter, 8)
 
-        if ds_type == "hold":
+        parent_iter = model.iter_parent(tree_iter)
+        # Loop-partition child rows under a volume are named like "loop0" or
+        # "loop0p1": "loop" + device number, optionally followed by "p" and a
+        # partition number. The regex matches exactly that shape so snapshot
+        # or dataset children of a volume are never misclassified.
+        if (
+            parent_iter is not None
+            and model.get_value(parent_iter, 2) == "volume"
+            and re.fullmatch(r"loop\d+(p\d+)?", name)
+        ):
+            volume = build_full_dataset_name(model, parent_iter)
+            items.append(
+                {
+                    "type": "volume-partition",
+                    "name": name,
+                    "device": f"/dev/{name}",
+                    "volume": volume,
+                    "zfs_type": ds_type,
+                    "fstype": ds_type,
+                    "has_filesystem": ds_type not in ("", "No filesystem"),
+                    "mounted": mounted,
+                }
+            )
+        elif ds_type == "hold":
             parent_iter = model.iter_parent(tree_iter)
             snap_name = model.get_value(parent_iter, 0).lstrip("@")
             ds_iter = model.iter_parent(parent_iter)

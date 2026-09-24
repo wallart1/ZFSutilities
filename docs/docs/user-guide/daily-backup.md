@@ -7,7 +7,7 @@ The daily backup job ([`zfsdailybackup`](../commands-and-modules/commands.md#zfs
 is the main ZFSutilities operation. It:
 
 1. Pulls custom rsync backups from remote hosts
-2. Snapshots source datasets and copies them to their destination pools
+2. Snapshots datasets and copies them to their destination pools
 3. Applies retention policies to prune old snapshots
 
 `zfsdailybackup` is intended as a starting template. Sites customize it
@@ -29,15 +29,20 @@ datasets; per-dataset locks still prevent collisions on the same datasets.
 Different steps have different consequences when they fail:
 
 - **Pre-backup script** — fatal. The entire backup aborts immediately.
+
 - **Pull steps (rsync)** — non-fatal. The failure is logged as a warning, but
   the backup continues with the remaining steps. This lets a single unreachable
   remote host prevent only its own pull rather than canceling the whole job.
+
 - **ZFS keys backup (rsync)** — non-fatal. The failure is logged as a warning
   and the backup continues.
+
 - **Send/receive steps** — fatal. A ZFS transfer failure aborts the remaining
   backup steps.
-- **Retention/prune step** — non-fatal. A per-dataset pruning failure is logged
-  as a warning and `zfscleanup` continues with the next dataset/pool. When
+
+- **Snapshot retention/prune step** — non-fatal. A per-dataset pruning failure is logged
+  as a warning and `zfscleanup` continues with the next dataset/pool. 
+  ****In the GUI:**** When
   send/receive steps are active, the prune step derives the backup's dataset
   list — each step's source subtree filtered by the Backup tab's Advanced
   dataset-selection criteria (`includes`, `excludes`, `startwith`, `endwith`)
@@ -45,8 +50,8 @@ Different steps have different consequences when they fail:
   destination name. With no active send/receive steps it falls back to
   whole-pool pruning of the configured pools, filtered by the same criteria.
 
-The post-backup command, if enabled, always runs after the step list finishes,
-even when a fatal failure aborted the backup early.
+- The post-backup command, if enabled, always runs after the step list finishes,
+  even when a fatal failure aborted the backup early.
 
 ## Pre-Backup Command
 
@@ -105,12 +110,12 @@ You need the ZFS keys → to unlock the destination dataset → to read the
 backed-up keys
 ```
 
-**Therefore, the ZFS keys backup is NOT a substitute for an independent,
-offline copy of your encryption keys.**
+***Therefore, the ZFS keys backup is NOT a substitute for an independent,
+offline copy of your encryption keys.***
 
 ### Recommended Key Storage
 
-Keep at least one additional copy of your ZFS encryption keys **outside the
+Keep at least two additional copies of your ZFS encryption keys **outside the
 ZFS pools**:
 
 - Store the keys on a **removable USB device**.
@@ -119,7 +124,7 @@ ZFS pools**:
   down on the device, on the host, or in any password manager that lives on
   systems protected by these same keys.
 
-This offline copy ensures you can recover your data even if the backup
+These offline copies ensure you can recover your data even if the backup
 destination is inaccessible or the keys stored within it cannot be retrieved.
 
 ## Skipping Individual Steps
@@ -151,8 +156,8 @@ each rsync-pull flag individually:
 sudo ./zfsdailybackup "pull_rocky='N'; pull_tweety='N'; pull_stewie='N'"
 ```
 
-The GUI uses a single **Active** checkbox to disable the entire pull-step group;
-that setting is applied by the Python/profile layer, not by `zfsdailybackup`.
+The GUI uses a single **Active** checkbox to disable the entire pull-step group, and also an **Active** checkbox for each pull step;
+these settings are applied by the Python/profile layer, not by `zfsdailybackup`.
 
 ## Rsync Exclude Patterns
 
@@ -173,10 +178,8 @@ substring syntax used elsewhere in ZFSutilities. Common examples:
 - `/absolute/path` — exclude a path relative to the transfer root
 - `dir/**` — exclude everything under `dir`
 
-Patterns containing spaces can be entered with shell-style quoting, because the
-Excludes cell is parsed with `shlex.split`. The exclude list is saved per step
-in the main JSON configuration (`backup.pull_steps[*].excludes`) as a list of
-strings.
+Patterns containing spaces can be entered with shell-style quoting. The exclude list is saved per step
+in the main JSON configuration (`backup.pull_steps[*].excludes`).
 
 ### Default Excludes
 
@@ -220,8 +223,8 @@ resume automatically when the step finishes.
 - The option is off by default; enable it in the Backup tab → **Advanced** →
   **Pause scrubs on source/destination pools during each step**.
 - Only the pools used by the current step are paused, not every pool in the job.
-- Pools whose scrub has already finished or that are not online are skipped;
-  they are not marked as user-paused.
+- Any pool whose scrub has already finished or that are not online is skipped;
+  it is not marked as paused.
 - Pre/post scripts, rsync pulls, and retention are not affected.
 - In dry-run mode the option logs what it would pause/resume but does not
   change scrub state.
@@ -229,27 +232,11 @@ resume automatically when the step finishes.
   the scrub was already resumed by another process or finished on its own, the
   session log records that fact instead of silently doing nothing.
 
-## What a Successful Run Looks Like
-
-```
-[zfsdailybackup:45] *** Step: Sending NVME1 to fivebays ***
-[zfs-send-receive:88] Snapshot fivebays/NVME1@dailybackup-2026-02-21T02:00-05:00-d already exists.
-...
-[zfsdailybackup:60] *** Retention: fivebays ***
-[zfsretain:32] Phase 0: Removing offsite same-month duplicates ...
-[zfsretain:58] Phase 1: Removing same-day duplicates ...
-[zfsretain:84] Phase 2: Pruning by bucket counts ...
-*** zfsdailybackup completed. ***
-```
-
 ## Common Issues
 
 ### "scope mismatch" warning during send/receive
 
-A backup step reports that it must roll back destination snapshots whose labels
-differ from the snapshot being sent.  This happens when a backup and an offsite
-job send overlapping datasets to the same destination but snapshot different
-subsets: the destination has `@offsite` snapshots that the backup source does
+A backup step reports that it must roll back destination snapshots that are not present among the snapshots in the source.  This happens when snapshots are added to a backup destination without first adding them to the source. The destination has snapshots that the backup source does
 not.
 
 **Cause**: The offsite profile snapshots a narrower subtree than the daily
@@ -261,12 +248,16 @@ the offsite source/includes, or change the offsite job to cover the same tree
 as the backup.  The GUI and the profile runner warn about this configuration
 before the rollback occurs.
 
+**Cause**: A snapshot was added to the destination without copying it from the source.
+
+**Action**: Never add snapshots to datasets that are backup destinations. Always use a ZFSutilities backup or copy operation to propogate a snapshot from the head of a backup chain to each subsequent step in the chain in turn.
+
 ### "A common snapshot ... was NOT found"
 
 The source and destination have no snapshot in common. This prevents an
 incremental transfer. The script will ask whether to do a full copy.
 
-**Cause**: The destination pool was re-created, no backup has ever run, or a
+**Cause**: The destination pool was incorrectly re-created, no backup has ever run, or a
 required destination snapshot was deleted.
 
 **Action**: If expected, answer `y` to proceed with a full copy. Be aware a

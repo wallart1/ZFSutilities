@@ -837,3 +837,312 @@ class TestDatasetsContextMenu(unittest.TestCase):
         logged = mock_log.call_args[0][0]
         self.assertIn("INFO: Details for hold 'keep' on tank/data@snap1 (hold)", logged)
         self.assertIn("tag: keep", logged)
+
+
+class TestVolumeLoopButtonSensitivity(unittest.TestCase):
+    """Mount/Unmount/Browse sensitivity for volumes and loop partitions."""
+
+    def _make_app(self, items, loop_attached=None):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        app.ctx.zfs_repository.loop_find.return_value = "/dev/loop0" if loop_attached else None
+        with patch.object(dp, "get_tree_selection_items", return_value=items):
+            dp.update_ds_button_sensitivity(app)
+        return app
+
+    def _volume_item(self):
+        return {
+            "type": "dataset",
+            "name": "tank/vm-100-disk-0",
+            "zfs_type": "volume",
+            "mounted": False,
+        }
+
+    def _part_item(self, **kw):
+        item = {
+            "type": "volume-partition",
+            "name": "loop0p1",
+            "device": "/dev/loop0p1",
+            "volume": "tank/vm-100-disk-0",
+            "fstype": "ext4",
+            "has_filesystem": True,
+            "mounted": False,
+        }
+        item.update(kw)
+        return item
+
+    def test_unattached_volume_enables_mount(self):
+        app = self._make_app([self._volume_item()], loop_attached=False)
+        app.ctx.zfs_repository.loop_find.assert_called_once_with("/dev/zvol/tank/vm-100-disk-0")
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_attached_volume_enables_unmount(self):
+        app = self._make_app([self._volume_item()], loop_attached=True)
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_unmounted_partition_with_fs_enables_mount(self):
+        app = self._make_app([self._part_item()])
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_mounted_partition_enables_browse_and_unmount(self):
+        app = self._make_app([self._part_item(mounted=True)])
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_partition_without_fs_disables_mount_and_browse(self):
+        app = self._make_app([self._part_item(fstype="No filesystem", has_filesystem=False)])
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_volume_plus_mixed_selection_keeps_mount_enabled(self):
+        app = self._make_app(
+            [
+                self._volume_item(),
+                {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+            ],
+            loop_attached=False,
+        )
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(True)
+
+
+class TestUpdateMountedStatesVolumePartitions(unittest.TestCase):
+    """update_mounted_states detects mounted loop partitions under volumes."""
+
+    def test_partition_mounted_state_from_findmnt(self):
+        store = MagicMock()
+
+        def _make_iter(name, ds_type, parent):
+            it = MagicMock()
+            it._row = {"name": name, "type": ds_type, "parent": parent}
+            return it
+
+        root = _make_iter("tank", "pool", None)
+        vol = _make_iter("vm-100-disk-0", "volume", root)
+        part_mounted = _make_iter("loop0p1", "ext4", vol)
+        part_unmounted = _make_iter("loop0p2", "xfs", vol)
+
+        children = {
+            root: [vol],
+            vol: [part_mounted, part_unmounted],
+            part_mounted: [],
+            part_unmounted: [],
+        }
+        siblings = {vol: None, part_mounted: part_unmounted, part_unmounted: None}
+
+        def _get_value(it, col):
+            if col == 0:
+                return it._row["name"]
+            if col == 2:
+                return it._row["type"]
+            return None
+
+        store.get_value = _get_value
+        store.iter_children = lambda it: children[it][0] if children[it] else None
+        store.iter_next = lambda it: siblings.get(it)
+        store.iter_parent = lambda it: it._row["parent"]
+        store.get_iter_first.return_value = root
+
+        set_calls = {}
+
+        def _set(it, *args):
+            set_calls[it] = dict(zip(args[::2], args[1::2]))
+
+        store.set = _set
+
+        repo = MagicMock()
+        repo.device_mountpoint = lambda dev: "/mnt/x" if dev == "/dev/loop0p1" else None
+
+        app = MagicMock()
+        app.datasets_store = store
+        app.ctx.zfs_repository = repo
+
+        with patch.object(dp, "update_ds_button_sensitivity"):
+            dp.update_mounted_states(app)
+
+        self.assertTrue(set_calls[part_mounted][8])
+        self.assertFalse(set_calls[part_unmounted][8])
+
+
+class TestProfileActions(unittest.TestCase):
+    """Apply Profile / Rewrite Data / Manage Profiles on the Datasets page."""
+
+    # ---- button sensitivity -------------------------------------------------
+
+    def _sensitivity_app(self, items, rewrite_capable=True):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        app.ctx.zfs_caps.supports.return_value = rewrite_capable
+        with patch.object(dp, "get_tree_selection_items", return_value=items):
+            dp.update_ds_button_sensitivity(app)
+        return app
+
+    def test_apply_profile_enabled_for_filesystem_dataset(self):
+        app = self._sensitivity_app(
+            [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True}]
+        )
+        app._ds_apply_profile_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_apply_profile_enabled_for_mixed_filesystem_and_volume(self):
+        app = self._sensitivity_app(
+            [
+                {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+                {"type": "dataset", "name": "tank/vol0", "zfs_type": "volume", "mounted": "-"},
+            ]
+        )
+        app._ds_apply_profile_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_apply_profile_enabled_for_pool_root(self):
+        app = self._sensitivity_app(
+            [{"type": "pool", "name": "tank", "zfs_type": "filesystem", "mounted": True}]
+        )
+        app._ds_apply_profile_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_apply_profile_disabled_with_snapshot_in_selection(self):
+        app = self._sensitivity_app(
+            [
+                {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+                {"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": True},
+            ]
+        )
+        app._ds_apply_profile_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_apply_profile_disabled_for_empty_selection(self):
+        app = self._sensitivity_app([])
+        app._ds_apply_profile_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_rewrite_enabled_for_all_filesystems(self):
+        app = self._sensitivity_app(
+            [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True}]
+        )
+        app._ds_rewrite_data_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_rewrite_disabled_when_volume_selected(self):
+        app = self._sensitivity_app(
+            [
+                {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+                {"type": "dataset", "name": "tank/vol0", "zfs_type": "volume", "mounted": "-"},
+            ]
+        )
+        app._ds_rewrite_data_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_rewrite_disabled_when_capability_missing(self):
+        app = self._sensitivity_app(
+            [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True}],
+            rewrite_capable=False,
+        )
+        app._ds_rewrite_data_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_manage_profiles_always_sensitive(self):
+        app = self._sensitivity_app([])
+        app._ds_manage_profiles_btn.set_sensitive.assert_called_once_with(True)
+
+    # ---- on_datasets_apply_profile ------------------------------------------
+
+    def _handler_app(self, items):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        app.ctx.zfs_repository.get_properties.return_value = {"compression": "lz4"}
+        app.ctx.zfs_repository.pool_topology.return_value = None
+        return app
+
+    def test_apply_profile_dialog_shown_once_with_all_tunable_datasets(self):
+        items = [
+            {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+            {"type": "dataset", "name": "tank/b", "zfs_type": "filesystem", "mounted": True},
+            {"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": True},
+        ]
+        app = self._handler_app(items)
+        profile = {"applies_to": ["filesystem"], "properties": {"compression": "zstd"}}
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(
+                dp, "show_apply_profile_dialog", return_value=(dp.Gtk.ResponseType.OK, "p", profile)
+            ) as dialog,
+            patch.object(dp, "on_apply_profile") as apply,
+        ):
+            dp.on_datasets_apply_profile(app)
+        dialog.assert_called_once()
+        passed = dialog.call_args.args[1]
+        self.assertEqual([d["name"] for d in passed], ["tank/a", "tank/b"])
+        for ds in passed:
+            self.assertIn("profile_match", ds)
+        apply.assert_called_once()
+        self.assertEqual(apply.call_args.args, (app, passed, profile))
+
+    def test_apply_profile_dialog_cancel_runs_nothing(self):
+        items = [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True}]
+        app = self._handler_app(items)
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(
+                dp,
+                "show_apply_profile_dialog",
+                return_value=(dp.Gtk.ResponseType.CANCEL, None, None),
+            ),
+            patch.object(dp, "on_apply_profile") as apply,
+        ):
+            dp.on_datasets_apply_profile(app)
+        apply.assert_not_called()
+
+    def test_apply_profile_pool_has_special_comes_from_repository(self):
+        items = [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True}]
+        app = self._handler_app(items)
+        special = MagicMock(vdev_type="special", children=[])
+        app.ctx.zfs_repository.pool_topology.return_value = MagicMock(
+            vdev_type="pool", children=[special]
+        )
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(
+                dp,
+                "show_apply_profile_dialog",
+                return_value=(dp.Gtk.ResponseType.CANCEL, None, None),
+            ) as dialog,
+            patch.object(dp, "on_apply_profile"),
+        ):
+            dp.on_datasets_apply_profile(app)
+        app.ctx.zfs_repository.pool_topology.assert_called_once_with("tank")
+        self.assertTrue(dialog.call_args.args[2])
+
+    def test_apply_profile_without_tunable_selection_warns(self):
+        items = [{"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": True}]
+        app = self._handler_app(items)
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "show_apply_profile_dialog") as dialog,
+            patch.object(dp, "on_apply_profile") as apply,
+        ):
+            with patch.object(dp, "log_msg") as log:
+                dp.on_datasets_apply_profile(app)
+        dialog.assert_not_called()
+        apply.assert_not_called()
+        self.assertTrue(any("apply a profile" in str(c) for c in log.call_args_list))
+
+    def test_rewrite_data_delegates_with_tunable_selection(self):
+        items = [
+            {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+            {"type": "dataset", "name": "tank/vol0", "zfs_type": "volume", "mounted": "-"},
+        ]
+        app = self._handler_app(items)
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "on_rewrite_data") as rewrite,
+        ):
+            dp.on_datasets_rewrite_data(app)
+        rewrite.assert_called_once()
+        passed = rewrite.call_args.args[1]
+        self.assertEqual([d["name"] for d in passed], ["tank/a", "tank/vol0"])
+
+    def test_manage_profiles_opens_dialog(self):
+        app = self._handler_app([])
+        with patch.object(dp, "show_manage_profiles_dialog") as manager:
+            dp.on_datasets_manage_profiles(app)
+        manager.assert_called_once_with(app)

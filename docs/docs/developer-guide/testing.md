@@ -207,6 +207,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-zfsdelfs` | iSCSI teardown/rebuild manifest cleanup for `zfsdelfs` |
 | `test-zfsdelsnap` | Snapshot deletion safety checks, hold release, `zfscheckagainst` dependency sourcing, user-hold blocking |
 | `test-zfsfullcopy` | `zfsfullcopy` full-copy wrapper: overrides, required parameters, single `send-receive` invocation, parameter forwarding |
+| `test-zfslockctl` | `zfslockctl cmd_wait` availability and interval validation: fractional `ZFSLOCK_WAIT_INTERVAL`, invalid/zero fallback, no-sleep fast path |
 | `test-zfslockmanager` | Lock acquire/release, conflict detection, hierarchy, stale cleanup, headless abort, multi-lock acquisition, timing-knob sanitization, `source_helper` loading context |
 | `test-zfslockmanager-remote` | Remote lock hold/check/conflict protocol |
 | `test-zfslockmanager-soak` | Randomized timing-conflict scenarios for the lock manager at realistic timings — including wait/retry loops and headless timed waits (skipped by default; see "Soak suites") |
@@ -348,7 +349,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_disk_repository` | `disk_repository.py` — lsblk, by-id, and smartctl subprocess isolation, wear/self-test parsing, boot-disk filtering |
 | `test_disk_surface_test` | `disk_surface_test.py` — SMART self-test state machine, JSON persistence under flock, cell-text formatting, start/cancel dialog, Disks-page sensitivity gating and dashboard cancel dispatch |
 | `test_disks_page` | Disks tab UI, including topology-selection highlighting in the inventory |
-| `test_disks_page_dataset_tuning` | Disks tab dataset-tuning pane (including the Size column), Apply Profile picker treeview/dialog/execution, Rewrite Data gating, workload profile manager |
+| `test_profile_dialogs` | Apply Profile picker treeview/dialog/execution, Rewrite Data gating, workload profile manager/editor (driven from the Datasets page); Add/Recall schedule-profile dialogs and duplicate-name overwrite handling |
 | `test_disks_page_growth_buttons` | Disks tab pool-growth button sensitivity gating (Add Data Vdev, Expand Vdev, Replace, Detach, Add Infra Vdev, Migrate Pool): compute-host, runner-busy, tooltip precedence |
 | `test_docs_integrity` | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability; AGENTS.md repo-relative path and `Branch:` reference validation |
 | `test_docs_viewer` | Standalone documentation viewer launcher |
@@ -380,7 +381,6 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_pool_migrate_dialogs` | `pool_migrate_dialogs.py` — Migrate Pool dialog problems/warnings/plan, scrub-block gate, handler guards, two-phase copy/cutover execution, iSCSI repair chaining |
 | `test_pool_watch` | Per-pool dataset watch window |
 | `test_pools_page` | Pools tab registry UI |
-| `test_profile_dialogs` | Add/Recall profile dialogs, duplicate-name overwrite handling |
 | `test_profile_integration` | Concurrent profile execution: disjoint datasets, same-dataset conflict, backup+prune serialization |
 | `test_profile_manager` | Profile CRUD, update, name validation, listing, existence checks, lifecycle logging, condition defaults |
 | `test_profile_runner` | Backup/offsite/restore/retention profile step building, rsync failure diagnosis in headless runs |
@@ -522,7 +522,7 @@ golden-file workflow (see "Golden Files" above):
 ```python
 import golden
 
-golden.check(self, step.command)   # list: one element per line
+golden.check(self, step.command)  # list: one element per line
 ```
 
 `golden.check(testcase, actual, name=None)` resolves the golden as

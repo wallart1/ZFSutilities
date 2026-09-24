@@ -8,7 +8,7 @@
 # when any of its capabilities is absent. Skips never fail the run.
 gi tests/python/test_datasets_tree.py
 gi tests/python/test_dashboard_page.py
-gi tests/python/test_disks_page_dataset_tuning.py
+gi tests/python/test_profile_dialogs.py
 gi tests/python/test_main.py
 gi tests/python/test_offsite_page.py
 gi tests/python/test_pool_create_wizard.py

@@ -498,9 +498,7 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
                 "step(s)' source and destination datasets (derived at prune time)."
             )
             steps.append(
-                _build_backup_prune_command(
-                    parent_dir, label, active_sr, variables, dryrun=dryrun
-                )
+                _build_backup_prune_command(parent_dir, label, active_sr, variables, dryrun=dryrun)
             )
         else:
             pools = get_pool_names(config) or None
@@ -750,9 +748,7 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
         time.sleep(10)
 
     if queue.given_up:
-        _scrub_log(
-            "WARN: Scrub profile gave up on: " + ", ".join(sorted(queue.given_up))
-        )
+        _scrub_log("WARN: Scrub profile gave up on: " + ", ".join(sorted(queue.given_up)))
         return 1
     _scrub_log("INFO: Scrub profile complete")
     return 0

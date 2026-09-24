@@ -58,9 +58,8 @@ def _node_config(two_node=True, storage=True, pools=()):
     nc = MagicMock()
     nc.load_node_config.return_value = ie_config
     nc.is_two_node.side_effect = lambda config=None: (config or ie_config)["mode"] == "two-node"
-    nc.is_storage_host.side_effect = (
-        lambda config=None: (config or ie_config)["this_host"]
-        == (config or ie_config)["storage_host"]
+    nc.is_storage_host.side_effect = lambda config=None: (
+        (config or ie_config)["this_host"] == (config or ie_config)["storage_host"]
     )
     return nc
 
@@ -298,9 +297,7 @@ class TestOfferDialog(unittest.TestCase):
             result = ie.offer_iscsi_enrollment(app, "newpool", on_done=lambda: done_calls.append(1))
             self.assertTrue(result)
             app.dataset_runner.finish(rc=3)
-        self.assertTrue(
-            any("WARN" in line and "failed (rc=3)" in line for line in logs), logs
-        )
+        self.assertTrue(any("WARN" in line and "failed (rc=3)" in line for line in logs), logs)
         self.assertEqual(done_calls, [1])
 
 

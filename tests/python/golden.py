@@ -58,9 +58,7 @@ def check(testcase, actual, name=None):
         return
     if not path.exists():
         suite = type(testcase).__module__.rsplit(".", 1)[-1]
-        raise AssertionError(
-            f"golden {path} missing — run UPDATE_GOLDEN=1 tests/run-tests {suite}"
-        )
+        raise AssertionError(f"golden {path} missing — run UPDATE_GOLDEN=1 tests/run-tests {suite}")
     expected_text = path.read_text()
     if expected_text != actual_text:
         diff = "\n".join(

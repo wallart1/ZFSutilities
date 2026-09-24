@@ -87,13 +87,13 @@ class TestDisksGrowthButtons(unittest.TestCase):
             with self.subTest(label=label):
                 self.assertIs(getattr(action_dispatch, handler_name), handlers[label])
 
-    def test_growth_buttons_between_create_pool_and_apply_profile(self):
+    def test_growth_buttons_after_create_pool(self):
         buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
         labels = [label for label, _icon, _attr in buttons if label is not None]
         first_growth = labels.index("Add Data Vdev…")
         last_growth = labels.index("Migrate Pool…")
         self.assertLess(labels.index("Create Pool…"), first_growth)
-        self.assertLess(last_growth, labels.index("Apply Profile…"))
+        self.assertLess(first_growth, last_growth)
 
 
 class TestCollectScrubConfig(unittest.TestCase):
@@ -293,7 +293,7 @@ class TestOffsiteDirtyAttr(unittest.TestCase):
 
 
 class TestDatasetsPageSpec(unittest.TestCase):
-    """Datasets page exposes Expand Selected next to Collapse All."""
+    """Datasets page exposes profile actions and tree expansion buttons."""
 
     def test_expand_selected_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
@@ -312,6 +312,34 @@ class TestDatasetsPageSpec(unittest.TestCase):
             ("Show Big Stuff", "zoom-fit-best", "_ds_showbigstuff_btn"),
             buttons,
         )
+
+    def test_apply_profile_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
+        self.assertIn(
+            ("Apply Profile…", "dialog-apply", "_ds_apply_profile_btn"),
+            buttons,
+        )
+
+    def test_rewrite_data_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
+        self.assertIn(
+            ("Rewrite Data", "document-edit", "_ds_rewrite_data_btn"),
+            buttons,
+        )
+
+    def test_manage_profiles_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
+        self.assertIn(
+            ("Advanced: Manage Profiles…", "preferences-system", "_ds_manage_profiles_btn"),
+            buttons,
+        )
+
+    def test_profile_buttons_not_on_disks_page(self):
+        buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
+        labels = [label for label, _icon, _attr in buttons if label is not None]
+        self.assertNotIn("Apply Profile…", labels)
+        self.assertNotIn("Rewrite Data", labels)
+        self.assertNotIn("Advanced: Manage Profiles…", labels)
 
 
 class TestPoolsPageSpec(unittest.TestCase):
@@ -391,6 +419,24 @@ class TestDatasetsHandlers(unittest.TestCase):
     def test_show_big_stuff_handler(self):
         handler = action_dispatch.ACTION_HANDLERS["datasets"]["Show Big Stuff"]
         self.assertIs(handler, action_dispatch.on_datasets_show_big_stuff)
+
+    def test_apply_profile_handler(self):
+        handler = action_dispatch.ACTION_HANDLERS["datasets"]["Apply Profile…"]
+        self.assertIs(handler, action_dispatch.on_datasets_apply_profile)
+
+    def test_rewrite_data_handler(self):
+        handler = action_dispatch.ACTION_HANDLERS["datasets"]["Rewrite Data"]
+        self.assertIs(handler, action_dispatch.on_datasets_rewrite_data)
+
+    def test_manage_profiles_handler(self):
+        handler = action_dispatch.ACTION_HANDLERS["datasets"]["Advanced: Manage Profiles…"]
+        self.assertIs(handler, action_dispatch.on_datasets_manage_profiles)
+
+    def test_profile_handlers_not_on_disks_page(self):
+        handlers = action_dispatch.ACTION_HANDLERS["disks"]
+        self.assertNotIn("Apply Profile…", handlers)
+        self.assertNotIn("Rewrite Data", handlers)
+        self.assertNotIn("Advanced: Manage Profiles…", handlers)
 
 
 class TestRetentionPageSpec(unittest.TestCase):

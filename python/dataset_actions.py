@@ -12,6 +12,7 @@ from datetime import datetime
 import gi
 
 gi.require_version("Gtk", "3.0")
+import paths
 import zfs_lock_manager as zlm
 from backup_config import log_msg
 from command_builders import BashStep
@@ -25,11 +26,14 @@ from gui_helpers import (
     add_scrolled_text_view,
     create_dialog,
     diagnose_dataset_busy,
+    find_tree_iter_by_full_name,
     get_busy_processes,
     get_mounted_snapshots,
     get_snapshot_mountpoint,
     get_tree_selection_items,
+    reload_row_children,
 )
+from zfs_repository import zvol_device_path
 
 # ---------------------------------------------------------------------------
 # Local helpers
@@ -505,7 +509,24 @@ def on_datasets_browse(app):
             log_msg(f"WARN: Error browsing snapshot {full_snap}: {e}")
         return
 
-    log_msg("WARN: Select a filesystem or snapshot to browse")
+    if item_type == "volume-partition":
+        device = item["device"]
+        try:
+            mountpoint = repo.device_mountpoint(device)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_msg(f"WARN: Error resolving mountpoint for {device}: {e}")
+            return
+        if not mountpoint:
+            log_msg(f"WARN: {device} is not mounted; mount the partition first")
+            return
+        try:
+            subprocess.Popen(["xdg-open", mountpoint])
+            log_msg(f"VERB: Opened {mountpoint}")
+        except FileNotFoundError as e:
+            log_msg(f"WARN: Error opening file manager: {e}")
+        return
+
+    log_msg("WARN: Select a filesystem, snapshot, or mounted volume partition to browse")
 
 
 def _mount_one_dataset(item, repo, app):
@@ -600,17 +621,78 @@ def _mount_one_snapshot(item, repo, app):
     return False
 
 
+def _volume_partition_mountpoint(item):
+    """Return the mountpoint path for a loop partition of a zvol."""
+    parts = item["volume"].split("/") + [item["name"]]
+    return os.path.join(paths.get_zvol_mount_dir(), *parts)
+
+
+def _mount_one_volume(item, repo, app):
+    """Attach a zvol to a read-only loop device; return True if processed.
+
+    The volume row's children are reloaded afterwards so its partitions
+    appear in the tree.
+    """
+    dataset = item["name"]
+    try:
+        with zlm.lock(dataset, "w", f"loop-mount {dataset}"):
+            loop_dev = repo.loop_find(zvol_device_path(dataset))
+            if not loop_dev:
+                loop_dev = repo.loop_attach(zvol_device_path(dataset))
+                if not loop_dev:
+                    log_msg(f"WARN: Error attaching {dataset} to a loop device")
+                    return False
+                log_msg(f"INFO: Attached {dataset} to read-only loop device {loop_dev}")
+            tree_iter = find_tree_iter_by_full_name(app.datasets_store, dataset)
+            if tree_iter is not None:
+                reload_row_children(app.datasets_store, tree_iter, repo=repo)
+            return True
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot attach loop device for {dataset}: {exc}")
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        log_msg(f"WARN: Error attaching loop device for {dataset}: {e}")
+    return False
+
+
+def _mount_one_volume_partition(item, repo, app):
+    """Mount a loop partition at its derived mountpoint; return True if mounted.
+
+    The loop device is read-only, so the partition mounts read-only.
+    """
+    device = item["device"]
+    if not item.get("has_filesystem", False):
+        log_msg(f"WARN: Cannot mount {device}: no filesystem detected")
+        return False
+    mountpoint = _volume_partition_mountpoint(item)
+    try:
+        os.makedirs(mountpoint, exist_ok=True)
+    except OSError as e:
+        log_msg(f"WARN: Error creating mountpoint {mountpoint}: {e}")
+        return False
+    result = subprocess.run(
+        ["sudo", "mount", device, mountpoint],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        log_msg(f"WARN: Error mounting {device}: {result.stderr.strip()}")
+        return False
+    log_msg(f"INFO: Mounted {device} at {mountpoint} (read-only)")
+    return True
+
+
 def on_datasets_mount(app):
-    """Mount all selected filesystems and snapshots."""
+    """Mount all selected filesystems, snapshots, and volume loop devices."""
     repo = _repo(app)
     items = get_tree_selection_items(app.datasets_view)
     if not items:
         log_msg("WARN: Select an item to mount")
         return
 
-    targets = [i for i in items if i["type"] in ("pool", "dataset", "snapshot")]
+    targets = [i for i in items if i["type"] in ("pool", "dataset", "snapshot", "volume-partition")]
     if not targets:
-        log_msg("WARN: Select filesystems or snapshots to mount")
+        log_msg("WARN: Select filesystems, snapshots, or volumes to mount")
         return
 
     processed = False
@@ -619,6 +701,10 @@ def on_datasets_mount(app):
             continue
         if item["type"] in ("pool", "dataset") and item.get("zfs_type") == "filesystem":
             processed = _mount_one_dataset(item, repo, app) or processed
+        elif item["type"] in ("pool", "dataset") and item.get("zfs_type") == "volume":
+            processed = _mount_one_volume(item, repo, app) or processed
+        elif item["type"] == "volume-partition":
+            processed = _mount_one_volume_partition(item, repo, app) or processed
         elif item["type"] == "snapshot":
             processed = _mount_one_snapshot(item, repo, app) or processed
 
@@ -761,6 +847,109 @@ def _unmount_one_snapshot(item, repo, app):
     return False
 
 
+def _warn_busy(app, title, detail):
+    """Show a warning dialog listing busy processes blocking an unmount."""
+    dialog = Gtk.MessageDialog(
+        transient_for=app,
+        modal=True,
+        message_type=Gtk.MessageType.WARNING,
+        buttons=Gtk.ButtonsType.OK,
+        text=title,
+    )
+    dialog.format_secondary_text(detail)
+    dialog.run()
+    dialog.destroy()
+
+
+def _unmount_one_volume_partition(item, repo, app):
+    """Unmount a mounted loop partition; return True on success."""
+    device = item["device"]
+    try:
+        mountpoint = repo.device_mountpoint(device)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        log_msg(f"WARN: Error resolving mountpoint for {device}: {e}")
+        return False
+    if not mountpoint:
+        return False
+
+    procs = get_busy_processes(mountpoint)
+    if procs:
+        proc_list = "\n".join(f"  • {name} (PID {pid})" for pid, name in procs)
+        _warn_busy(
+            app,
+            "Partition is busy",
+            f"{device} is currently in use by:\n\n{proc_list}\n\n"
+            "Please close the listed application(s), then try unmounting again.",
+        )
+        return False
+
+    result = subprocess.run(
+        ["sudo", "umount", mountpoint], capture_output=True, text=True, check=False
+    )
+    if result.returncode == 0:
+        log_msg(f"INFO: Unmounted {device} from {mountpoint}")
+        return True
+
+    stderr = result.stderr.strip()
+    if "busy" in stderr.lower():
+        log_msg(
+            f"WARN: Partition {device} is busy. "
+            "Please close any file manager windows and try again."
+        )
+    else:
+        log_msg(f"WARN: Error unmounting {device}: {stderr}")
+    return False
+
+
+def _unmount_one_volume(item, repo, app):
+    """Detach a volume's loop device, unmounting its partitions first."""
+    dataset = item["name"]
+    try:
+        loop_dev = repo.loop_find(zvol_device_path(dataset))
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        log_msg(f"WARN: Error finding loop device for {dataset}: {e}")
+        return False
+    if not loop_dev:
+        return False
+
+    try:
+        parts = repo.loop_partitions(loop_dev)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        log_msg(f"WARN: Error listing partitions on {loop_dev}: {e}")
+        return False
+
+    mounted_parts = [p for p in parts if p.mountpoint]
+    for part in mounted_parts:
+        procs = get_busy_processes(part.mountpoint)
+        if procs:
+            proc_list = "\n".join(f"  • {name} (PID {pid})" for pid, name in procs)
+            _warn_busy(
+                app,
+                "Partition is busy",
+                f"{part.device} is currently in use by:\n\n{proc_list}\n\n"
+                "Please close the listed application(s), then try unmounting again.",
+            )
+            return False
+
+    for part in mounted_parts:
+        result = subprocess.run(
+            ["sudo", "umount", part.mountpoint], capture_output=True, text=True, check=False
+        )
+        if result.returncode != 0:
+            log_msg(f"WARN: Error unmounting {part.device}: {result.stderr.strip()}")
+            return False
+        log_msg(f"INFO: Unmounted {part.device} from {part.mountpoint}")
+
+    if not repo.loop_detach(loop_dev):
+        log_msg(f"WARN: Error detaching {loop_dev} from {dataset}")
+        return False
+    log_msg(f"INFO: Detached {dataset} from loop device {loop_dev}")
+    tree_iter = find_tree_iter_by_full_name(app.datasets_store, dataset)
+    if tree_iter is not None:
+        reload_row_children(app.datasets_store, tree_iter, repo=repo)
+    return True
+
+
 def on_datasets_unmount(app):
     """Unmount all selected filesystems and snapshots, warning if any are busy."""
     repo = _repo(app)
@@ -769,18 +958,26 @@ def on_datasets_unmount(app):
         log_msg("WARN: Select an item to unmount")
         return
 
-    targets = [i for i in items if i["type"] in ("pool", "dataset", "snapshot")]
+    targets = [i for i in items if i["type"] in ("pool", "dataset", "snapshot", "volume-partition")]
     if not targets:
-        log_msg("WARN: Select filesystems or snapshots to unmount")
+        log_msg("WARN: Select filesystems, snapshots, or volumes to unmount")
         return
 
     changed = False
     for item in targets:
-        if not item.get("mounted", False):
-            continue
         if item["type"] in ("pool", "dataset") and item.get("zfs_type") == "filesystem":
+            if not item.get("mounted", False):
+                continue
             changed = _unmount_one_dataset(item, repo, app) or changed
+        elif item["type"] in ("pool", "dataset") and item.get("zfs_type") == "volume":
+            changed = _unmount_one_volume(item, repo, app) or changed
+        elif item["type"] == "volume-partition":
+            if not item.get("mounted", False):
+                continue
+            changed = _unmount_one_volume_partition(item, repo, app) or changed
         elif item["type"] == "snapshot":
+            if not item.get("mounted", False):
+                continue
             changed = _unmount_one_snapshot(item, repo, app) or changed
 
     if changed:

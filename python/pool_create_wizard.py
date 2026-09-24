@@ -249,8 +249,7 @@ def _estimate_text(state: _WizardState, profile: dict) -> str:
     ]
     if len({disk.size_bytes for disk in state.selected}) > 1:
         lines.append(
-            "Mixed disk sizes: vdev usable capacity = smallest member "
-            f"({format_bytes(min_bytes)})."
+            f"Mixed disk sizes: vdev usable capacity = smallest member ({format_bytes(min_bytes)})."
         )
     return "\n".join(lines)
 
@@ -434,9 +433,7 @@ def _build_disks_page(dialog, state: _WizardState, ctx: _WizardContext, on_chang
         ("Status", _COL_STATUS, 320),
     ):
         renderer = Gtk.CellRendererText()
-        tree_column = Gtk.TreeViewColumn(
-            title, renderer, text=column_index, foreground=_COL_FG
-        )
+        tree_column = Gtk.TreeViewColumn(title, renderer, text=column_index, foreground=_COL_FG)
         configure_treeview_column(tree_column, width=width)
         view.append_column(tree_column)
 
@@ -459,9 +456,7 @@ def _build_disks_page(dialog, state: _WizardState, ctx: _WizardContext, on_chang
 def _build_topology_page(dialog, state: _WizardState, ctx: _WizardContext, on_change):
     page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
 
-    info = Gtk.Label(
-        label="Choose the redundancy layout for the new pool's data vdevs."
-    )
+    info = Gtk.Label(label="Choose the redundancy layout for the new pool's data vdevs.")
     info.set_halign(Gtk.Align.START)
     info.set_line_wrap(True)
     page.pack_start(info, False, False, 0)
@@ -566,9 +561,7 @@ def _build_settings_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
         name_feedback.set_text("Pool name OK" if ok else error)
         for disk in state.selected:
             if disk.path not in state.label_ashifts:
-                state.label_ashifts[disk.path] = _probe_label_ashift(
-                    ctx.repository, disk.path
-                )
+                state.label_ashifts[disk.path] = _probe_label_ashift(ctx.repository, disk.path)
         recommended = recommend_ashift(state.selected, state.label_ashifts)
         ashift_hint.set_text(
             f"Recommended pool blocksize for these disks: {_format_blocksize(recommended)}"
@@ -655,14 +648,10 @@ def _build_review_page(dialog, state: _WizardState, ctx: _WizardContext, on_chan
             dry_status.set_text("Dry run succeeded.")
         else:
             dry_status.set_markup(
-                "<span foreground='red'>"
-                "Dry run failed — fix the problem before creating."
-                "</span>"
+                "<span foreground='red'>Dry run failed — fix the problem before creating.</span>"
             )
         summary.set_text(_review_summary(state, ctx))
-        typed_hint.set_text(
-            f"Type the pool name '{state.pool_name}' exactly to enable Create."
-        )
+        typed_hint.set_text(f"Type the pool name '{state.pool_name}' exactly to enable Create.")
 
     state.page_refresh["review"] = _refresh_review
     return page
@@ -732,9 +721,7 @@ def show_create_pool_wizard(app, eligibility, profiles, existing_names):
     if not profiles:
         log_msg("WARN: No filesystem workload profiles configured")
         return None
-    state = _WizardState(
-        eligibility=list(eligibility), profile_name=next(iter(profiles))
-    )
+    state = _WizardState(eligibility=list(eligibility), profile_name=next(iter(profiles)))
     ctx = _WizardContext(
         app=app,
         profiles=profiles,

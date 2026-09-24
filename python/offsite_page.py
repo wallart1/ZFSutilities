@@ -34,7 +34,8 @@ from gui_helpers import (
     setup_row_scroll,
     show_warning_dialog,
     style_expander_label,
-    var_widgets_differ_from_defaults,
+    style_var_widgets_nondefault,
+    style_widget_value_nondefault,
 )
 from logging_config import log_msg
 from offsite_runner import build_offsite_step_command, detect_offsite_pool
@@ -304,10 +305,12 @@ def create_offsite_page(app, ctx):
     app.offsite_pause_scrubs.connect("toggled", lambda _w, t=tracker: t.check())
 
     def _update_advanced_label(*_args):
-        non_default = var_widgets_differ_from_defaults(
+        non_default = style_var_widgets_nondefault(
             app.offsite_var_widgets, OFFSITE_DEFAULTS["variables"]
         )
-        if app.offsite_pause_scrubs.get_active():
+        pause_scrubs = app.offsite_pause_scrubs.get_active()
+        style_widget_value_nondefault(app.offsite_pause_scrubs, pause_scrubs)
+        if pause_scrubs:
             non_default = True
         style_expander_label(adv_exp, "Advanced", non_default)
 

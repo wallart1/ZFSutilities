@@ -57,6 +57,15 @@ def get_lock_dir() -> str:
     return _env_or_default("ZFSUTILITIES_LOCK_DIR", "/run/lock/zfsutilities")
 
 
+def get_zvol_mount_dir() -> str:
+    """Return the base directory for mounting zvol partitions via loop devices.
+
+    Partitions of a loop-attached ZFS volume are mounted read-only under
+    ``<base>/<volume-path-components>/<loop-partition-name>``.
+    """
+    return _env_or_default("ZFSUTILITIES_ZVOL_MOUNT_DIR", "/mnt/zfsutilities")
+
+
 # ---------------------------------------------------------------------------
 # Derived file paths
 # ---------------------------------------------------------------------------

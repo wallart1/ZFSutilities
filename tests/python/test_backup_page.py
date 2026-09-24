@@ -39,6 +39,19 @@ class _FakeListStore:
         return iter(self._rows)
 
 
+class _FakeStyleContext:
+    """Records style classes added to / removed from a widget."""
+
+    def __init__(self):
+        self.classes = set()
+
+    def add_class(self, name):
+        self.classes.add(name)
+
+    def remove_class(self, name):
+        self.classes.discard(name)
+
+
 class _FakeWidgetBase:
     """Minimal widget stand-in for the backup page unit tests."""
 
@@ -60,6 +73,13 @@ class _FakeWidgetBase:
     def connect(self, signal, callback, *args):
         self._callbacks = getattr(self, "_callbacks", {})
         self._callbacks[signal] = callback
+
+    def get_style_context(self):
+        context = getattr(self, "_style_context", None)
+        if context is None:
+            context = _FakeStyleContext()
+            self._style_context = context
+        return context
 
 
 class _FakeEntry(_FakeWidgetBase):
@@ -842,6 +862,48 @@ class TestBackupAdvancedLabel(unittest.TestCase):
         app.backup_zfs_keys_path.set_text("host:/keys")
         app._backup_update_advanced_label()
         self.assertIn('foreground="orange"', label.set_markup.call_args[0][0])
+
+    def test_non_default_var_value_turns_orange(self):
+        backup_page, app, _label = self._create_page()
+        self._install_default_widgets(backup_page, app)
+        app.backup_var_widgets["includes"].set_text("vm-")
+        app._backup_update_advanced_label()
+        context = app.backup_var_widgets["includes"].get_style_context()
+        self.assertIn("zfsu-nondefault", context.classes)
+        other = app.backup_var_widgets["excludes"].get_style_context()
+        self.assertNotIn("zfsu-nondefault", other.classes)
+
+    def test_reverting_var_value_removes_orange(self):
+        backup_page, app, _label = self._create_page()
+        self._install_default_widgets(backup_page, app)
+        widget = app.backup_var_widgets["includes"]
+        widget.set_text("vm-")
+        app._backup_update_advanced_label()
+        widget.set_text("")
+        app._backup_update_advanced_label()
+        self.assertNotIn("zfsu-nondefault", widget.get_style_context().classes)
+
+    def test_non_default_combo_value_turns_orange(self):
+        backup_page, app, _label = self._create_page()
+        self._install_default_widgets(backup_page, app)
+        widget = app.backup_var_widgets["doincrementals"]
+        widget.set_active(1)  # "N" vs default "Y"
+        app._backup_update_advanced_label()
+        self.assertIn("zfsu-nondefault", widget.get_style_context().classes)
+
+    def test_pause_scrubs_value_turns_orange(self):
+        backup_page, app, _label = self._create_page()
+        self._install_default_widgets(backup_page, app)
+        app.backup_pause_scrubs.set_active(True)
+        app._backup_update_advanced_label()
+        self.assertIn("zfsu-nondefault", app.backup_pause_scrubs.get_style_context().classes)
+
+    def test_zfs_keys_value_turns_orange(self):
+        backup_page, app, _label = self._create_page()
+        self._install_default_widgets(backup_page, app)
+        app.backup_zfs_keys_path.set_text("host:/keys")
+        app._backup_update_advanced_label()
+        self.assertIn("zfsu-nondefault", app.backup_zfs_keys_path.get_style_context().classes)
 
     def test_load_config_refreshes_label(self):
         backup_page, app, label = self._create_page()

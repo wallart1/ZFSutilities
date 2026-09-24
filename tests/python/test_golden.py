@@ -49,8 +49,7 @@ def test_canonical_string_normalizes_trailing_newlines():
 def test_golden_path_uses_module_class_and_method_names(golden_root):
     stub = _GoldenStub("some_method")
     assert (
-        golden.golden_path(stub)
-        == golden_root / "test_golden" / "_GoldenStub.some_method.golden"
+        golden.golden_path(stub) == golden_root / "test_golden" / "_GoldenStub.some_method.golden"
     )
 
 

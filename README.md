@@ -86,7 +86,7 @@ cron syntax:
 - A GTK3-capable desktop environment or window manager (X11 or Wayland)
 
 - WebKit2 for the embedded documentation viewer:
-  
+
   ```bash
   apt install gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0
   ```
@@ -104,7 +104,7 @@ cron syntax:
 
 - MkDocs and the Material theme (required; the installer builds the HTML
   documentation site from `docs/docs/`):
-  
+
   ```bash
   pip install mkdocs mkdocs-material
   ```
@@ -117,45 +117,45 @@ directions between the storage host and the compute host.
 ## Download and Install
 
 1. Clone the repository:
-   
+
    ```bash
    git clone https://github.com/wallart1/ZFSutilities.git
    cd ZFSutilities
    ```
 
 2. Run the appropriate installer as root:
-   
+
    For a **single-node** setup (compute and storage on the same host):
-   
+
    ```bash
    sudo ./bin/install-single-node
    ```
-   
+
    For a **two-node** setup (storage host plus a separate compute host):
-   
+
    ```bash
    sudo ./bin/install-two-node
    ```
-   
+
    The installer deploys a versioned installation under
    `/usr/local/lib/zfsutilities/`, configures `PATH`, and creates two desktop
    launcher symlinks in the installing user's home directory:
    **ZFSutilities GUI** and **ZFSutilities Documentation**.
 
 3. Launch the GUI from the terminal:
-   
+
    ```bash
    sudo zfsutilities-gui
    ```
-   
+
    Or launch the standalone documentation viewer:
-   
+
    ```bash
    zfsutilities-docs
    ```
-   
-   Individual scripts are also available on `PATH` after installation:
-   
+
+   Individual scripts are also available on `PATH` after installation. For example:
+
    ```bash
    sudo zfsdailybackup
    sudo zfssendoffsite
@@ -166,22 +166,21 @@ directions between the storage host and the compute host.
 
 ## Versioned Upgrades
 
-Deploy a new version without touching the running system:
+First download a new version of the repository as described above, under **Download and Install**. Use a new directory to store it.
 
+Deploy a new version without affecting the running system:
 ```bash
-cd /path/to/ZFSutilities
+cd /path/to/newly-downloaded-ZFSutilities-repository
 sudo ./bin/deploy-version
 sudo switch-version <version>
 ```
 
 Roll back instantly:
-
 ```bash
 sudo switch-version previous
 ```
 
 List deployed versions:
-
 ```bash
 sudo switch-version --list
 ```

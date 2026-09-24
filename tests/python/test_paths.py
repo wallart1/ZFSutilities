@@ -83,6 +83,13 @@ class TestPathDefaults(unittest.TestCase):
     def test_profile_lock_dir_default(self):
         self.assertEqual(paths.get_profile_lock_dir(), "/run/lock/zfsutilities/profiles")
 
+    def test_zvol_mount_dir_default(self):
+        self.assertEqual(paths.get_zvol_mount_dir(), "/mnt/zfsutilities")
+
+    def test_zvol_mount_dir_env_override(self):
+        with patch_environ(ZFSUTILITIES_ZVOL_MOUNT_DIR="/tmp/zvol-mounts"):
+            self.assertEqual(paths.get_zvol_mount_dir(), "/tmp/zvol-mounts")
+
 
 class TestUserPaths(unittest.TestCase):
     """Verify per-user path helpers for non-root GUI components."""

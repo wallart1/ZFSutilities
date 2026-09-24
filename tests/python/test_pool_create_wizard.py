@@ -431,9 +431,15 @@ class TestPureHelpers(unittest.TestCase):
         self.assertEqual(
             cmd,
             [
-                "zpool", "create", "tank",
-                "mirror", pairs[0], pairs[1],
-                "mirror", pairs[2], pairs[3],
+                "zpool",
+                "create",
+                "tank",
+                "mirror",
+                pairs[0],
+                pairs[1],
+                "mirror",
+                pairs[2],
+                pairs[3],
             ],
         )
 
@@ -1278,7 +1284,8 @@ class TestIscsiEnrollmentOffer(unittest.TestCase):
     def test_enrollment_offer_invoked_when_registration_declined(self):
         """Declining the registry offer must not suppress the iSCSI offer."""
         app, offer = self._drive_success(
-            two_node=True, register_response=3  # Gtk.ResponseType.NO
+            two_node=True,
+            register_response=3,  # Gtk.ResponseType.NO
         )
         self.assertEqual(app.known_pools, [])
         offer.assert_called_once_with(app, "newpool")

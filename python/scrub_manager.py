@@ -788,8 +788,7 @@ class ScrubQueue:
             self._start_failures.pop(pool_name, None)
             self.given_up.add(pool_name)
             log_msg(
-                f"WARN: Giving up on scrub for '{pool_name}' after "
-                f"{count} failed start attempts"
+                f"WARN: Giving up on scrub for '{pool_name}' after {count} failed start attempts"
             )
             return True
         self._start_failures[pool_name] = count

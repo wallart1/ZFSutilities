@@ -75,9 +75,7 @@ def _default_datasets():
 def _state(pmd, pools=None, datasets=None, disks=None, **overrides):
     """Build a Migrate-Pool dialog state with sane defaults."""
     disks = (
-        disks
-        if disks is not None
-        else [_disk("/dev/sda"), _disk("/dev/sdb"), _disk("/dev/sdz")]
+        disks if disks is not None else [_disk("/dev/sda"), _disk("/dev/sdb"), _disk("/dev/sdz")]
     )
     results = disk_eligibility(disks, {}, {})
     pools = pools if pools is not None else ["pool1", "pool2"]
@@ -85,6 +83,7 @@ def _state(pmd, pools=None, datasets=None, disks=None, **overrides):
     free = {pool: 40 * TB for pool in pools}
     state = pmd._MigrateState(
         pools=pools,
+        holding_pools=list(pools),
         pool_name=pools[0] if pools else "",
         mode=pmd.MIGRATE_NEW_DISKS,
         datasets_by_pool=datasets if datasets is not None else _default_datasets(),
@@ -181,9 +180,7 @@ class TestPureHelpers(unittest.TestCase):
     def test_problems_refuse_insufficient_holding_space(self):
         pmd = _import_dialogs()
         free = {"pool1": 40 * TB, "pool2": 10**6}
-        state = _state(
-            pmd, mode=pmd.MIGRATE_HOLDING_POOL, holding_pool="pool2", pool_free=free
-        )
+        state = _state(pmd, mode=pmd.MIGRATE_HOLDING_POOL, holding_pool="pool2", pool_free=free)
         problems = pmd._migrate_problems(state)
         self.assertTrue(any("insufficient" in p for p in problems), problems)
 
@@ -265,6 +262,7 @@ class TestPureHelpers(unittest.TestCase):
         pmd = _import_dialogs()
         state = _state(pmd, mode=pmd.MIGRATE_HOLDING_POOL, holding_pool="pool2")
         lines = pmd._plan_lines(state)
+        self.assertTrue(any("'pool2/migrate_pool1'" in line for line in lines), lines)
         self.assertTrue(any("'pool2'" in line for line in lines), lines)
 
     def test_build_request_new_disks(self):
@@ -279,9 +277,7 @@ class TestPureHelpers(unittest.TestCase):
 
     def test_build_request_holding_mode(self):
         pmd = _import_dialogs()
-        state = _state(
-            pmd, mode=pmd.MIGRATE_HOLDING_POOL, holding_pool="pool2", typed="pool1"
-        )
+        state = _state(pmd, mode=pmd.MIGRATE_HOLDING_POOL, holding_pool="pool2", typed="pool1")
         request = pmd.build_request(state)
         self.assertEqual(request.holding_pool, "pool2")
         self.assertEqual(request.new_pool_topology, "mirror")
@@ -296,6 +292,79 @@ class TestPureHelpers(unittest.TestCase):
         self.assertEqual(pmd.build_request(state).rate_limit, "100m")
         state = _state(pmd, typed="pool1")
         self.assertEqual(pmd.build_request(state).rate_limit, "")
+
+
+class TestHoldingCandidates(unittest.TestCase):
+    """Holding-pool eligibility: empty imported pools are valid holding
+    pools even though they are never migration sources (a source needs
+    datasets to copy)."""
+
+    def test_empty_pool_is_offered_as_holding_candidate(self):
+        pmd = _import_dialogs()
+        state = _state(pmd, pools=["pool1"], holding_pools=["pool1", "empty2"])
+        self.assertEqual(pmd._holding_candidates(state), ["empty2"])
+
+    def test_empty_pool_is_accepted_as_holding_pool(self):
+        pmd = _import_dialogs()
+        free = {"pool1": 10**9, "empty2": 40 * TB}
+        state = _state(
+            pmd,
+            pools=["pool1"],
+            holding_pools=["pool1", "empty2"],
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="empty2",
+            pool_free=free,
+            typed="pool1",
+        )
+        self.assertEqual(pmd._migrate_problems(state), [])
+
+    def test_only_source_imported_reports_no_holding_pool(self):
+        pmd = _import_dialogs()
+        state = _state(
+            pmd,
+            pools=["pool1"],
+            holding_pools=["pool1"],
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="",
+        )
+        self.assertEqual(
+            pmd._migrate_problems(state),
+            ["No other imported pool is available as a holding pool"],
+        )
+
+
+class TestSourcePoolMemberHelpers(unittest.TestCase):
+    """Direct tests for the holding-mode source-pool member helpers."""
+
+    def test_member_disks_returns_source_pool_leaf_disks(self):
+        pmd = _import_dialogs()
+        state = _state(pmd)
+        members = pmd._source_pool_member_disks(state)
+        self.assertEqual([d.path for d in members], ["/dev/sda", "/dev/sdb"])
+
+    def test_member_disks_empty_when_pool_topology_missing(self):
+        pmd = _import_dialogs()
+        state = _state(pmd, pool_name="nope")
+        self.assertEqual(pmd._source_pool_member_disks(state), [])
+
+    def test_member_disks_skips_leaves_without_matching_disk(self):
+        pmd = _import_dialogs()
+        state = _state(pmd, disks=[_disk("/dev/sda"), _disk("/dev/sdz")])
+        members = pmd._source_pool_member_disks(state)
+        self.assertEqual([d.path for d in members], ["/dev/sda"])
+
+    def test_by_ids_resolves_every_leaf(self):
+        pmd = _import_dialogs()
+        state = _state(pmd)
+        self.assertEqual(
+            pmd._source_pool_by_ids(state),
+            ["/dev/disk/by-id/ata-TESTsda", "/dev/disk/by-id/ata-TESTsdb"],
+        )
+
+    def test_by_ids_empty_when_any_leaf_unresolved(self):
+        pmd = _import_dialogs()
+        state = _state(pmd, disks=[_disk("/dev/sda"), _disk("/dev/sdz")])
+        self.assertEqual(pmd._source_pool_by_ids(state), [])
 
 
 class TestBuildMigrationSteps(unittest.TestCase):
@@ -355,10 +424,53 @@ class TestBuildMigrationSteps(unittest.TestCase):
             ),
         )
         _copy, cutover = pmd.build_migration_steps(request)
-        # export, destroy, create, 2 copy-back, 2 verify, 2 destroy-copy,
+        # export, destroy, create, 2 copy-back, 2 verify, 1 namespace destroy,
         # export holding, import-rename
-        self.assertEqual(len(cutover), 11)
+        self.assertEqual(len(cutover), 10)
         golden.check(self, _plan_text(cutover))
+
+    def test_holding_copy_steps_use_reserved_namespace(self):
+        """Holding-mode copies land under <holding>/migrate_<source>/ so they
+        can never collide with backup/offsite copies of the same datasets."""
+        pmd = _import_dialogs()
+        request = _request(
+            pmd,
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="pool2",
+            new_pool_by_id=(
+                "/dev/disk/by-id/ata-TESTsda",
+                "/dev/disk/by-id/ata-TESTsdb",
+            ),
+        )
+        copy, cutover = pmd.build_migration_steps(request)
+        texts = [" ".join(step.command) for step in copy[1:3]]
+        joined = " ".join(texts)
+        self.assertIn("pool2/migrate_pool1/data", joined)
+        self.assertIn("pool2/migrate_pool1/vm-100-disk-0", joined)
+        for text in texts:
+            self.assertNotIn("pool2/pool2/", text)
+        copyback = [
+            s
+            for s in cutover
+            if s.command[0:2] == ["bash", "-c"] and "zfs_migrate_send" in s.command[2]
+        ]
+        self.assertEqual(len(copyback), 2)
+        for step in copyback:
+            self.assertIn("sourcefs=pool2/migrate_pool1/", step.command[2])
+            self.assertIn("destfs=pool1_mig/", step.command[2])
+        destroys = [s for s in cutover if s.command[0:2] == ["zfs", "destroy"]]
+        self.assertEqual(len(destroys), 1)
+        self.assertEqual(destroys[0].command[3], "pool2/migrate_pool1")
+
+    def test_copy_paths_are_single_prefixed(self):
+        """Regression: captured dataset names are full zfs paths; the composed
+        copy/verify paths must contain the pool prefix exactly once."""
+        pmd = _import_dialogs()
+        copy, _cutover = pmd.build_migration_steps(_request(pmd))
+        for step in copy:
+            text = " ".join(step.command)
+            self.assertNotIn("pool1/pool1/", text)
+            self.assertNotIn("pool1_mig/pool1_mig/", text)
 
 
 class TestRootPoolName(unittest.TestCase):
@@ -374,9 +486,7 @@ class TestRootPoolName(unittest.TestCase):
     def test_no_root_mount_returns_none(self):
         pmd = _import_dialogs()
         repo = MagicMock()
-        repo.list_dataset_info.return_value = [
-            {"name": "pool1/data", "mountpoint": "/data"}
-        ]
+        repo.list_dataset_info.return_value = [{"name": "pool1/data", "mountpoint": "/data"}]
         self.assertIsNone(pmd._root_pool_name(repo))
 
     def test_read_failure_returns_none(self):
@@ -407,9 +517,7 @@ class TestCutoverConfirm(unittest.TestCase):
 
     def test_cancel_returns_false(self):
         pmd = _import_dialogs()
-        ok = self._run_confirm(
-            pmd, "pool1", [pmd.Gtk.ResponseType.CANCEL]
-        )
+        ok = self._run_confirm(pmd, "pool1", [pmd.Gtk.ResponseType.CANCEL])
         self.assertFalse(ok)
 
 
@@ -455,9 +563,7 @@ class TestDialogFlow(unittest.TestCase):
 
     def test_cancel_returns_none(self):
         pmd = _import_dialogs()
-        request = self._run_dialog(
-            pmd, _state(pmd), lambda pmd_, _st: pmd_.Gtk.ResponseType.CANCEL
-        )
+        request = self._run_dialog(pmd, _state(pmd), lambda pmd_, _st: pmd_.Gtk.ResponseType.CANCEL)
         self.assertIsNone(request)
 
     def test_scrub_blocked_shows_info_and_does_not_migrate(self):
@@ -478,9 +584,7 @@ class TestDialogFlow(unittest.TestCase):
         app = MagicMock()
         with (
             patch.object(pmd, "create_dialog", return_value=fake),
-            patch.object(
-                pmd, "scrub_blocks_pool_op", return_value="scrub is running on pool1"
-            ),
+            patch.object(pmd, "scrub_blocks_pool_op", return_value="scrub is running on pool1"),
             patch.object(pmd, "_show_info_dialog") as mock_info,
         ):
             request = pmd.show_migrate_pool_dialog(app, state)
@@ -581,9 +685,7 @@ def _make_app(pools=("pool1", "pool2"), root_pool=None):
     data = MagicMock()
     data.disks = [_disk("/dev/sda"), _disk("/dev/sdb"), _disk("/dev/sdz")]
     leaf_map = {"pool1": ["/dev/sda", "/dev/sdb"], "pool2": ["/dev/sdz"]}
-    data.topologies = {
-        pool: _topology(pool, leaf_map.get(pool, ["/dev/sdz"])) for pool in pools
-    }
+    data.topologies = {pool: _topology(pool, leaf_map.get(pool, ["/dev/sdz"])) for pool in pools}
     app._disks_inventory_cache = MagicMock()
     app._disks_inventory_cache.get.return_value = data
     app._disks_syncing_selection = False
@@ -626,6 +728,7 @@ def _make_app(pools=("pool1", "pool2"), root_pool=None):
     repo.list_datasets.side_effect = lambda pool, depth=None: [
         _dataset_row(pool),
         _dataset_row(f"{pool}/data"),
+        _dataset_row(f"{pool}/vm-100-disk-0"),
     ]
     mount_info = []
     if root_pool:
@@ -712,6 +815,56 @@ class TestHandlerGuards(unittest.TestCase):
         dialog.assert_not_called()
         info.assert_called_once()
 
+    def test_preselected_valid_source_opens_wizard_with_that_pool(self):
+        pmd = _import_dialogs()
+        app = _make_app(pools=("pool1", "pool2"))
+        app._disks_pool_selector.get_active_text.return_value = "pool2"
+        with (
+            patch.object(pmd, "show_migrate_pool_dialog", return_value=None) as dialog,
+            patch.object(pmd, "_show_info_dialog") as info,
+            capture_logs(),
+        ):
+            pmd.on_disks_migrate_pool(app)
+        info.assert_not_called()
+        state = dialog.call_args.args[1]
+        self.assertEqual(state.pool_name, "pool2")
+
+    def test_preselected_empty_pool_explains_and_skips_wizard(self):
+        pmd = _import_dialogs()
+        app = _make_app(pools=("pool1", "pool2"))
+        app._disks_pool_selector.get_active_text.return_value = "pool2"
+        # pool2 is imported but has no datasets, so it cannot be a source.
+        app.ctx.zfs_repository.list_datasets.side_effect = lambda pool, depth=None: (
+            [_dataset_row(pool)]
+            if pool == "pool2"
+            else [_dataset_row(pool), _dataset_row(f"{pool}/data")]
+        )
+        with (
+            patch.object(pmd, "show_migrate_pool_dialog") as dialog,
+            patch.object(pmd, "_show_info_dialog") as info,
+            capture_logs(),
+        ):
+            pmd.on_disks_migrate_pool(app)
+        dialog.assert_not_called()
+        info.assert_called_once()
+        message = info.call_args.args[2]
+        self.assertIn("no datasets", message)
+        self.assertIn("holding pool", message)
+
+    def test_preselected_root_pool_explains_and_skips_wizard(self):
+        pmd = _import_dialogs()
+        app = _make_app(pools=("pool1", "pool2"), root_pool="pool1")
+        app._disks_pool_selector.get_active_text.return_value = "pool1"
+        with (
+            patch.object(pmd, "show_migrate_pool_dialog") as dialog,
+            patch.object(pmd, "_show_info_dialog") as info,
+            capture_logs(),
+        ):
+            pmd.on_disks_migrate_pool(app)
+        dialog.assert_not_called()
+        info.assert_called_once()
+        self.assertIn("root filesystem", info.call_args.args[2])
+
     def test_dialog_cancel_starts_nothing(self):
         pmd = _import_dialogs()
         app = _make_app()
@@ -777,9 +930,90 @@ class TestHandlerExecution(unittest.TestCase):
         with stack:
             self.assertEqual(len(app.dataset_runner.steps), 5)
             app.dataset_runner.finish(rc=0)
-            self.assertEqual(len(app.dataset_runner.steps), 11)
+            self.assertEqual(len(app.dataset_runner.steps), 10)
             app.dataset_runner.finish(rc=0)
             mock_zlm.release.assert_called_once_with("/lock/pool1")
+
+
+class TestSourceLayoutRevalidation(unittest.TestCase):
+    """Execution-time re-validation of the reviewed dataset layout."""
+
+    def _app_with_changing_layout(self):
+        """App whose pool1 dataset list changes between dialog capture and
+        the execution-time re-validation (vm-100-disk-0 renamed to newdata)."""
+        app = _make_app()
+        repo = app.ctx.zfs_repository
+        calls = {"n": 0}
+
+        def listing(pool, depth=None):
+            calls["n"] += 1
+            rows = [
+                _dataset_row(pool),
+                _dataset_row(f"{pool}/data"),
+                _dataset_row(f"{pool}/vm-100-disk-0"),
+            ]
+            if calls["n"] > 2 and pool == "pool1":
+                rows = [
+                    _dataset_row(pool),
+                    _dataset_row(f"{pool}/data"),
+                    _dataset_row(f"{pool}/newdata"),
+                ]
+            return rows
+
+        repo.list_datasets.side_effect = listing
+        return app
+
+    def test_layout_change_aborts_before_lock(self):
+        pmd = _import_dialogs()
+        app = self._app_with_changing_layout()
+        request = _request(pmd)
+        mock_zlm = MagicMock()
+        nc = MagicMock()
+        nc.is_two_node.return_value = False
+        with (
+            patch.object(pmd, "show_migrate_pool_dialog", return_value=request),
+            patch.object(pmd, "_show_info_dialog") as info,
+            patch.object(pmd, "node_config", nc),
+            patch.object(pmd, "zlm", mock_zlm),
+            capture_logs() as logs,
+        ):
+            pmd.on_disks_migrate_pool(app)
+        mock_zlm.acquire.assert_not_called()
+        self.assertEqual(app.dataset_runner.steps, [])
+        self.assertFalse(app.dataset_runner.running)
+        info.assert_called_once()
+        self.assertTrue(any("changed after the review" in m for m in logs))
+
+    def test_matching_layout_proceeds(self):
+        # Exercised by TestHandlerExecution (the fixture returns a stable
+        # layout); this pins the helper's contract directly.
+        pmd = _import_dialogs()
+        repo = MagicMock()
+        repo.list_datasets.return_value = [
+            _dataset_row("pool1"),
+            _dataset_row("pool1/data"),
+            _dataset_row("pool1/vm-100-disk-0"),
+        ]
+        self.assertIsNone(pmd._source_layout_changed(repo, _request(pmd)))
+
+    def test_added_and_removed_datasets_reported(self):
+        pmd = _import_dialogs()
+        repo = MagicMock()
+        repo.list_datasets.return_value = [
+            _dataset_row("pool1"),
+            _dataset_row("pool1/data"),
+            _dataset_row("pool1/brand-new"),
+        ]
+        reason = pmd._source_layout_changed(repo, _request(pmd))
+        self.assertIn("added: pool1/brand-new", reason)
+        self.assertIn("removed: pool1/vm-100-disk-0", reason)
+
+    def test_listing_error_reported(self):
+        pmd = _import_dialogs()
+        repo = MagicMock()
+        repo.list_datasets.side_effect = OSError("boom")
+        reason = pmd._source_layout_changed(repo, _request(pmd))
+        self.assertIn("could not re-read", reason)
 
 
 class TestCutoverIscsiRepair(unittest.TestCase):
@@ -821,24 +1055,18 @@ class TestCutoverIscsiRepair(unittest.TestCase):
         _pmd, app, logs = self._run_cutover(managed=False)
         # The cutover step list (2 steps) was not replaced by a repair step.
         self.assertEqual(len(app.dataset_runner.steps), 2)
-        self.assertTrue(
-            any("not enrolled in two-node iSCSI" in line for line in logs), logs
-        )
+        self.assertTrue(any("not enrolled in two-node iSCSI" in line for line in logs), logs)
         self.assertTrue(any("setup-iscsi-targets" in line for line in logs), logs)
 
     def test_unmanaged_pool_single_node_finishes_silently(self):
         _pmd, app, logs = self._run_cutover(managed=False, two_node_hint=False)
         self.assertEqual(len(app.dataset_runner.steps), 2)
-        self.assertFalse(
-            any("not enrolled in two-node iSCSI" in line for line in logs), logs
-        )
+        self.assertFalse(any("not enrolled in two-node iSCSI" in line for line in logs), logs)
         self.assertFalse(any("setup-iscsi-targets" in line for line in logs), logs)
 
     def test_repair_failure_logs_warn(self):
         _pmd, _app, logs = self._run_cutover(managed=True, final_rc=4)
-        self.assertTrue(
-            any("WARN" in line and "failed (rc=4)" in line for line in logs), logs
-        )
+        self.assertTrue(any("WARN" in line and "failed (rc=4)" in line for line in logs), logs)
 
 
 if __name__ == "__main__":

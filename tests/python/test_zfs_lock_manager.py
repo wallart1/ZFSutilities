@@ -123,9 +123,7 @@ class TestScriptName(unittest.TestCase):
     """_script_name() must produce a name that appears in /proc cmdlines."""
 
     def test_plain_script_returns_basename(self):
-        with patch.object(
-            sys, "argv", ["/usr/local/lib/zfsutilities/current/bin/zfsdailybackup"]
-        ):
+        with patch.object(sys, "argv", ["/usr/local/lib/zfsutilities/current/bin/zfsdailybackup"]):
             self.assertEqual(zlm._script_name(), "zfsdailybackup")
 
     def test_python_dash_m_package_returns_package_name(self):
