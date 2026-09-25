@@ -120,7 +120,7 @@ pruning continues with the next snapshot.
 When a destroy fails, `zfsdelsnap` automatically runs
 [`zfs-diagnose-busy`](../commands-and-modules/modules.md#zfs-diagnose-busy)
 to check all known causes — holds, clone dependents, mounted snapshots, open
-files, active sends/receives, bookmarks, iSCSI LUNs, running workloads, and
+files, active sends/receives, iSCSI LUNs, running workloads, and
 NFS/SMB shares — and prints specific guidance for whatever it finds.
 
 If `zfs-diagnose-busy` is missing from the deployment, `zfsdelsnap` logs a

@@ -123,6 +123,70 @@ test_empty_source() {
     fi
 }
 
+test_bookmark_never_selected_as_common() {
+    # A user bookmark sharing a GUID with a destination snapshot must never
+    # be selected as the common point. The mock mirrors real zfs type
+    # filtering (bookmarks are listed only when -t asks for them) and records
+    # the -t argument via a file (zfs runs inside command substitutions). The
+    # bookmark is listed first (newest createtxg), so a regression that lists
+    # bookmarks would match it and return a '#name'.
+    _tol_type_file="$_mock_zfs_state_dir/commsnap-list-type.txt"
+    : > "$_tol_type_file"
+    zfs() {
+        local _type="" _o="" _a _prev="" _ds
+        for _a in "$@"; do
+            case "$_prev" in
+                -t) _type="$_a" ;;
+                -o) _o="$_a" ;;
+            esac
+            _prev="$_a"
+        done
+        _ds="${!#}"
+        printf '%s' "$_type" > "$_tol_type_file"
+        [[ "$1" != "list" ]] && return 0
+        if [[ "$_ds" == "pool/src" ]]; then
+            if [[ "$_type" == *"bookmark"* && "$_o" == "name" ]]; then
+                echo "pool/src#mark"
+            elif [[ "$_type" == *"snap"* && "$_o" == "name" ]]; then
+                echo "pool/src@snapB"
+                echo "pool/src@snap1"
+            elif [[ "$_type" == *"snap"* && "$_o" == "guid" ]]; then
+                echo "guidB"
+                echo "guid1"
+            fi
+        elif [[ "$_ds" == "pool/dest" ]]; then
+            if [[ "$_type" == *"snap"* && "$_o" == "name" ]]; then
+                echo "pool/dest@oldsnap"
+            elif [[ "$_type" == *"snap"* && "$_o" == "guid" ]]; then
+                echo "guidB"
+            fi
+        fi
+        return 0
+    }
+    commsnap_mostrecent=""
+    local result
+    result=$(getcommonsnap "pool/src" "pool/dest")
+    rc=$?
+    unset -f zfs 2>/dev/null || true
+    local _tol_list_type
+    _tol_list_type=$(cat "$_tol_type_file" 2>/dev/null || true)
+
+    test_start "Bookmark sharing a GUID is never the common snapshot"
+    if [[ "$_tol_list_type" != "snap" ]]; then
+        test_fail "zfs list type was '$_tol_list_type', expected 'snap'"
+        return
+    fi
+    if [[ "$result" == "#"* ]]; then
+        test_fail "Bookmark name returned as common point: '$result'"
+        return
+    fi
+    if [[ "$result" == "@oldsnap" && "$rc" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "result='$result' rc=$rc"
+    fi
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -134,6 +198,7 @@ main() {
     test_common_found_not_most_recent
     test_no_common
     test_empty_source
+    test_bookmark_never_selected_as_common
     teardown_test_env
     test_summary
 }

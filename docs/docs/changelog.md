@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.107.0
+
+*Released 2026-09-25*
+
+### Added
+
+- **Snapshot holds survive full copies** — `zfs-send-receive` now preserves
+  destination snapshot holds on every full copy (`doincrementals='N'` or
+  `force='Y'`), whether invoked directly or through `zfsrestore` or
+  `zfsfullcopy`: existing holds are captured before anything is transferred
+  and reapplied afterwards. Governed by the new `$preserve_target_holds`
+  variable (default `'Y'`); set it to `'N'` to disable. If the capture fails
+  the run aborts before any transfer (exit `8`). Plain incremental runs and
+  dry runs skip the bookkeeping entirely.
+
+- **`zfsreapplyholds --release`** — new mode that releases every snapshot
+  hold under a dataset subtree (with `--dry-run` support). The sourced
+  library API (`reapplyholds_capture()`, `reapplyholds_release()`,
+  `reapplyholds_apply()`) accepts a trailing optional `no_lock` argument so
+  a caller that already holds higher-level locks — notably the Migrate Pool
+  executor — can skip the script's own locking.
+
+- **Migrate Pool preserves snapshot holds** — holds never travel in
+  `zfs send` streams, and holding-pool mode destroys the source pool, so
+  holds would previously be lost. The migration now captures the source
+  pool's holds at the end of the copy phase, releases them before the
+  source-pool destroy in holding mode, and reapplies them once the migrated
+  pool carries the source pool's name again. If cutover fails after the
+  holds were released, the captured TSV is kept and its path logged with
+  the manual `zfsreapplyholds --apply` command.
+
+- **Holding-pool rebuilds may use extra disks** — the rebuilt pool is no
+  longer restricted to the source pool's own disks. A new disk picker lists
+  the source members (pre-selected, freed by the cutover destroy) plus any
+  eligible unused disks; the rebuild set must still have by-id identities
+  for every selected disk. In new-disks mode the temporary pool is now
+  created at the start of the copy phase, before the first receive.
+
+### Changed
+
+- **`zfsrestore` / `zfsfullcopy`** — their private hold-preservation code is
+  deleted; both wrappers inherit the behavior from `zfs-send-receive`.
+
+- **ZFS bookmarks are tolerated but never acted upon** — all remaining
+  bookmark handling was removed: `zfscommsnap` considers snapshots only (a
+  bookmark can never be selected as the common point or incremental base),
+  and the bookmark busy-reason was dropped from `zfs-diagnose-busy` and the
+  GUI's `BusyReason` reporting. `zfscheckrunningvms` no longer enumerates
+  with `-t all`, so bookmark names can never enter the VM-disk scan.
+  User-created bookmarks are simply ignored everywhere.
+
+### Fixed
+
+- **`zfsreapplyholds` robustness** — hold enumeration now uses `mapfile`
+  instead of `while read`, so callers that override `read()` can no longer
+  break the loops; capturing holds of a missing dataset now succeeds with no
+  output instead of failing.
+
 ## 0.106.0
 
 *Released 2026-09-24*

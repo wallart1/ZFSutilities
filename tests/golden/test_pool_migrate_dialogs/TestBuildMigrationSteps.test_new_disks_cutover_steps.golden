@@ -1,2 +1,4 @@
 zpool export pool1
 zpool import pool1_mig pool1
+bash -c 'source '"'"'REPO_ROOT/bin/zfsreapplyholds'"'"'; reapplyholds_apply pool1 /tmp/migrate-holds-pool1-test.tsv N Y'
+rm -f /tmp/migrate-holds-pool1-test.tsv

@@ -11,8 +11,9 @@ resumable ``zfs-migrate-send`` step — ``zfs send -Rw`` received with
 bandwidth limit — per top-level dataset, then a dataset-tree verification
 step), and the cutover phase (export the source
 pool, then — for new disks — re-import the migrated pool under the source
-pool's name, or — for holding pool — destroy the source, rebuild it on the
-freed disks with the chosen topology, copy back, and swap). The cutover
+pool's name, or — for holding pool — destroy the source, rebuild it from
+the user-selected disks (the freed source members plus any eligible unused
+disks) with the chosen topology, copy back, and swap). The cutover
 phase starts only after a second typed confirmation, since it takes the
 pool briefly offline.
 
@@ -22,9 +23,11 @@ ZFS I/O is delegated to ``ZfsRepository`` via the app context.
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
-from dataclasses import dataclass, field
+import tempfile
+from dataclasses import dataclass, field, replace
 
 import gi
 
@@ -41,6 +44,7 @@ from iscsi_enroll import is_iscsi_managed_pool, log_manual_enrollment_steps
 from logging_config import log_msg
 from path_utils import resolve_local_bin
 from pool_create import (
+    _BY_ID_DIR,
     TOPOLOGIES,
     EligibilityResult,
     disk_eligibility,
@@ -74,6 +78,8 @@ from pool_migrate import (
 from pools_page import on_pools_refresh
 from zfs_repository import (
     TopologyNode,
+    build_apply_holds_command,
+    build_capture_holds_command,
     build_create_pool_command,
     build_destroy_dataset_command,
     build_migration_send_receive_command,
@@ -81,6 +87,7 @@ from zfs_repository import (
     build_pool_export_command,
     build_pool_import_rename_command,
     build_recursive_snapshot_command,
+    build_release_holds_command,
 )
 
 # Custom dialog response id for the Migrate/Cut Over buttons. Distinct from
@@ -111,8 +118,24 @@ class _MigrateState:
     holding_pool: str = ""
     topology: str = "mirror"
     selected: list[DiskInfo] = field(default_factory=list)
+    holding_selected: list[DiskInfo] = field(
+        default_factory=list
+    )  # checked rows of the holding-mode rebuild picker (source members + unused disks)
     typed: str = ""  # review typed confirmation (source pool name)
     rate_limit: str = ""  # optional pv -L rate; empty = unlimited
+
+
+@dataclass
+class _HoldingPickerState:
+    """Duck-typed picker state for the holding-mode rebuild disk picker.
+
+    Mirrors the ``.eligibility``/``.selected`` attributes the shared disk
+    picker reads and writes, so the combined row model (unused disks plus
+    synthetic source-member rows) can live outside ``_MigrateState``.
+    """
+
+    eligibility: list[EligibilityResult]
+    selected: list[DiskInfo] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -120,11 +143,17 @@ class MigrationRequest:
     """Confirmed migration inputs handed from the dialog to the executor.
 
     ``temp_pool`` is the destination pool for new-disks mode and the
-    rebuilt pool's temporary name for holding mode; ``holding_pool``,
-    ``new_pool_topology``, and ``new_pool_by_id`` are holding mode only.
+    rebuilt pool's temporary name for holding mode; ``holding_pool`` is
+    holding mode only; ``new_pool_topology`` and ``new_pool_by_id`` describe
+    the pool to create in both modes (the temp pool on the selected disks,
+    or the rebuilt pool on the selected rebuild disks).
     ``snap_bare`` is the migration snapshot name without the leading ``@``.
     ``rate_limit`` is an optional pv ``-L`` rate for the copy steps; empty
-    means unlimited bandwidth.
+    means unlimited bandwidth. ``holds_file`` is the TSV path where the
+    source pool's snapshot holds are captured for reapplication; the
+    executor creates it before the run and removes it once the holds are
+    reapplied (it is kept, with its path logged, when cutover fails after
+    the holds were released from the source).
     """
 
     source_pool: str
@@ -136,6 +165,7 @@ class MigrationRequest:
     new_pool_topology: str = "mirror"
     new_pool_by_id: tuple[str, ...] = ()
     rate_limit: str = ""
+    holds_file: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +238,67 @@ def _source_pool_by_ids(state: _MigrateState) -> list[str]:
     return by_ids
 
 
+# Status text for the synthetic picker rows representing the source pool's
+# leaf members: they are in use now but become free when the cutover destroys
+# the source pool.
+_MEMBER_ROW_WARNING = "source pool member — freed by the cutover destroy"
+
+
+def _holding_member_rows(state: _MigrateState) -> list[EligibilityResult]:
+    """Synthetic eligible picker rows for the source pool's leaf members."""
+    return [
+        EligibilityResult(disk=disk, eligible=True, reasons=[], warnings=[_MEMBER_ROW_WARNING])
+        for disk in _source_pool_member_disks(state)
+    ]
+
+
+def _holding_picker_rows(state: _MigrateState) -> list[EligibilityResult]:
+    """Holding-mode rebuild picker rows: eligible unused disks (source
+    members filtered out so they never appear twice) plus the member rows."""
+    members = _source_pool_member_disks(state)
+    rows = [result for result in state.eligibility if result.disk not in members]
+    return rows + _holding_member_rows(state)
+
+
+def _holding_rebuild_disks(state: _MigrateState) -> list[DiskInfo]:
+    """Checked rebuild disks: source members (in leaf order) then additional
+    unused disks, mirroring the order fed to ``zpool create``."""
+    members = _source_pool_member_disks(state)
+    checked_members = [disk for disk in members if disk in state.holding_selected]
+    extras = [disk for disk in state.holding_selected if disk not in members]
+    return checked_members + extras
+
+
+def _holding_rebuild_by_ids(state: _MigrateState) -> list[str] | None:
+    """By-id paths for the checked rebuild set (source members first, then
+    additional unused disks).
+
+    Returns None when a checked disk has no by-id identity — fail closed,
+    matching ``_source_pool_by_ids``.
+    """
+    root = state.topologies.get(state.pool_name)
+    if root is None:
+        return []
+    leaves = _leaf_paths_by_pool({state.pool_name: root}).get(state.pool_name, [])
+    members = _source_pool_member_disks(state)
+    by_ids: list[str] = []
+    for leaf in leaves:
+        disk = _find_disk(leaf, state.disks)
+        if disk is None or disk not in state.holding_selected:
+            continue
+        by_id = resolve_member_by_id(leaf, state.disks)
+        if by_id is None:
+            return None
+        by_ids.append(by_id)
+    for disk in state.holding_selected:
+        if disk in members:
+            continue
+        if not disk.by_id:
+            return None
+        by_ids.append(os.path.join(_BY_ID_DIR, disk.by_id))
+    return by_ids
+
+
 def _capacity_problem(
     capacity_bytes: int | None,
     alloc_bytes: int,
@@ -277,8 +368,28 @@ def _migrate_problems(state: _MigrateState) -> list[str]:
         )
         if problems:
             return problems
-        capacity = _candidate_pool_capacity_bytes(state.topology, _source_pool_member_disks(state))
-        problem = _capacity_problem(capacity, alloc, "the pool rebuilt on the source pool's disks")
+        rebuild_disks = _holding_rebuild_disks(state)
+        if not rebuild_disks:
+            return ["Select at least one disk for the rebuilt pool"]
+        members = _source_pool_member_disks(state)
+        for disk in state.holding_selected:
+            if disk in members:
+                continue
+            for result in state.eligibility:
+                if result.disk == disk and not result.eligible:
+                    return list(result.reasons) or [f"disk {result.disk.path} is not eligible"]
+        spec = TOPOLOGIES.get(state.topology)
+        if spec is None:
+            return [f"unknown topology: {state.topology!r}"]
+        if len(rebuild_disks) < spec.min_disks:
+            return [f"{state.topology} requires at least {spec.min_disks} disks"]
+        problems = validate_vdev_selection(rebuild_disks)
+        if problems:
+            return problems
+        if _holding_rebuild_by_ids(state) is None:
+            return ["a selected rebuild disk has no by-id identity"]
+        capacity = _candidate_pool_capacity_bytes(state.topology, rebuild_disks)
+        problem = _capacity_problem(capacity, alloc, "the rebuilt pool's disks")
         if problem:
             return [problem]
 
@@ -307,6 +418,9 @@ def _migrate_warnings(state: _MigrateState) -> list[str]:
         warnings.append(
             "the holding pool must stay online and untouched until the migration finishes"
         )
+        mixed = mixed_size_warning(_holding_rebuild_disks(state))
+        if mixed:
+            warnings.append(mixed)
     if state.mode == MIGRATE_NEW_DISKS:
         alloc = state.pool_alloc.get(state.pool_name, 0)
         capacity = _candidate_pool_capacity_bytes(state.topology, state.selected)
@@ -330,7 +444,16 @@ def _plan_lines(state: _MigrateState) -> list[str]:
     datasets = state.datasets_by_pool.get(state.pool_name, [])
     if not datasets:
         return []
-    steps = plan_migration_steps(state.pool_name, datasets, state.mode, _dest_label(state))
+    rebuild_disk_count = (
+        len(_holding_rebuild_disks(state)) if state.mode == MIGRATE_HOLDING_POOL else None
+    )
+    steps = plan_migration_steps(
+        state.pool_name,
+        datasets,
+        state.mode,
+        _dest_label(state),
+        rebuild_disk_count=rebuild_disk_count,
+    )
     return [step.description for step in steps]
 
 
@@ -338,7 +461,12 @@ def build_request(state: _MigrateState) -> MigrationRequest:
     """Build the execution request for a validated dialog state."""
     by_ids: tuple[str, ...] = ()
     if state.mode == MIGRATE_HOLDING_POOL:
-        by_ids = tuple(_source_pool_by_ids(state))
+        ids = _holding_rebuild_by_ids(state)
+        by_ids = tuple(ids) if ids else ()
+    else:
+        by_ids = tuple(
+            os.path.join(_BY_ID_DIR, disk.by_id) for disk in state.selected if disk.by_id
+        )
     return MigrationRequest(
         source_pool=state.pool_name,
         mode=state.mode,
@@ -429,7 +557,16 @@ def _copy_steps(
 def build_migration_steps(
     request: MigrationRequest,
 ) -> tuple[list[BashStep], list[BashStep]]:
-    """Build the (copy, cutover) step lists for one migration request."""
+    """Build the (copy, cutover) step lists for one migration request.
+
+    The copy phase ends with a fatal capture of the source pool's snapshot
+    holds: holds never travel in send streams, and in holding mode the
+    source pool (holds included) is destroyed, so the captured TSV is the
+    only record of them. The holds are reapplied as the last cutover step,
+    after the migrated pool has been imported under the source pool's name
+    (so the captured ``<pool>/<dataset>@<snap>`` paths match verbatim and
+    the copy-back receives never meet a held snapshot).
+    """
     datasets = list(request.datasets)
     if request.mode == MIGRATE_NEW_DISKS:
         copy = _copy_steps(
@@ -438,6 +575,30 @@ def build_migration_steps(
             datasets,
             request.snap_bare,
             rate_limit=request.rate_limit,
+        )
+        # The temp pool must exist before the first receive; create it from
+        # the selected disks right after the migration snapshot.
+        copy.insert(
+            1,
+            BashStep(
+                build_create_pool_command(
+                    request.temp_pool,
+                    request.new_pool_topology,
+                    list(request.new_pool_by_id),
+                ),
+                f"Create new pool {request.temp_pool} "
+                f"({request.new_pool_topology}) on the selected disks",
+                is_rsync=False,
+                fatal=True,
+            ),
+        )
+        copy.append(
+            BashStep(
+                build_capture_holds_command(request.source_pool, request.holds_file),
+                f"Capture snapshot holds on {request.source_pool} to {request.holds_file}",
+                is_rsync=False,
+                fatal=True,
+            )
         )
         cutover = [
             BashStep(
@@ -451,6 +612,19 @@ def build_migration_steps(
                 f"Import {request.temp_pool} as {request.source_pool}",
                 is_rsync=False,
                 fatal=True,
+            ),
+            BashStep(
+                build_apply_holds_command(request.source_pool, request.holds_file),
+                f"Reapply captured snapshot holds to {request.source_pool} "
+                f"from {request.holds_file}",
+                is_rsync=False,
+                fatal=True,
+            ),
+            BashStep(
+                ["rm", "-f", request.holds_file],
+                f"Remove captured holds file {request.holds_file}",
+                is_rsync=False,
+                fatal=False,
             ),
         ]
         return copy, cutover
@@ -467,10 +641,27 @@ def build_migration_steps(
         rate_limit=request.rate_limit,
         dest_namespace=namespace,
     )
+    copy.append(
+        BashStep(
+            build_capture_holds_command(request.source_pool, request.holds_file),
+            f"Capture snapshot holds on {request.source_pool} to {request.holds_file}",
+            is_rsync=False,
+            fatal=True,
+        )
+    )
+    # Held snapshots cannot be destroyed, so the source pool's holds must be
+    # released after capture and before zpool destroy.
     cutover = [
         BashStep(
             build_pool_export_command(request.source_pool),
             f"Export source pool {request.source_pool}",
+            is_rsync=False,
+            fatal=True,
+        ),
+        BashStep(
+            build_release_holds_command(request.source_pool),
+            f"Release all snapshot holds on {request.source_pool} "
+            f"(captured in {request.holds_file})",
             is_rsync=False,
             fatal=True,
         ),
@@ -502,14 +693,6 @@ def build_migration_steps(
         rate_limit=request.rate_limit,
         src_namespace=namespace,
     )[1:]
-    cutover.append(
-        BashStep(
-            build_destroy_dataset_command(f"{request.holding_pool}/{namespace}"),
-            f"Remove migration namespace {request.holding_pool}/{namespace}",
-            is_rsync=False,
-            fatal=True,
-        )
-    )
     cutover += [
         BashStep(
             build_pool_export_command(request.holding_pool),
@@ -523,6 +706,24 @@ def build_migration_steps(
             is_rsync=False,
             fatal=True,
         ),
+        BashStep(
+            build_apply_holds_command(request.source_pool, request.holds_file),
+            f"Reapply captured snapshot holds to {request.source_pool} from {request.holds_file}",
+            is_rsync=False,
+            fatal=True,
+        ),
+        BashStep(
+            build_destroy_dataset_command(f"{request.holding_pool}/{namespace}"),
+            f"Remove migration namespace {request.holding_pool}/{namespace}",
+            is_rsync=False,
+            fatal=True,
+        ),
+        BashStep(
+            ["rm", "-f", request.holds_file],
+            f"Remove captured holds file {request.holds_file}",
+            is_rsync=False,
+            fatal=False,
+        ),
     ]
     return copy, cutover
 
@@ -535,15 +736,6 @@ def build_migration_steps(
 def _combo_text(combo) -> str:
     text = combo.get_active_text()
     return text if isinstance(text, str) else ""
-
-
-def _on_source_pool_changed(combo, state: _MigrateState, on_change) -> None:
-    text = _combo_text(combo)
-    if text:
-        state.pool_name = text
-    if state.holding_pool == state.pool_name:
-        state.holding_pool = ""
-    on_change()
 
 
 def _on_mode_toggled(radio, mode: str, state: _MigrateState, on_change) -> None:
@@ -667,12 +859,61 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
     holding_hint.set_line_wrap(True)
     holding_hint.set_text(
         "All data is copied to the holding pool first; the source pool is "
-        "then destroyed and rebuilt with the topology chosen above before "
+        "then destroyed and rebuilt with the topology chosen above — from its "
+        "own freed disks and any additional disks you select below — before "
         "the data is copied back. The holding pool needs free space at "
         "least equal to the source pool's allocated data."
     )
     holding_box.pack_start(holding_hint, False, False, 0)
+    holding_picker_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    holding_box.pack_start(holding_picker_box, True, True, 0)
     content.pack_start(holding_box, True, True, 0)
+
+    holding_picker_state = _HoldingPickerState(eligibility=[])
+    holding_picker_page = None
+
+    def _rebuild_holding_picker() -> None:
+        """Repaint the rebuild-disk picker for the current source pool.
+
+        Source members are pre-checked (the user may uncheck them); unused
+        disks the user checked keep their state across source-pool changes.
+        """
+        nonlocal holding_picker_page
+
+        def _on_holding_toggled():
+            state.holding_selected = list(holding_picker_state.selected)
+            _refresh()
+
+        if holding_picker_page is not None:
+            holding_picker_box.remove(holding_picker_page)
+        rows = _holding_picker_rows(state)
+        row_keys = {row.disk.by_id or row.disk.path for row in rows}
+        # Drop rows that no longer exist (stale members of a previous source
+        # pool) so they cannot leak into the rebuild set as extras.
+        state.holding_selected = [
+            disk for disk in state.holding_selected if (disk.by_id or disk.path) in row_keys
+        ]
+        member_keys = {disk.by_id or disk.path for disk in _source_pool_member_disks(state)}
+        previous_keys = {disk.by_id or disk.path for disk in state.holding_selected}
+        preselect = member_keys | (previous_keys - member_keys)
+        holding_picker_state.eligibility = rows
+        holding_picker_state.selected = [
+            row.disk for row in rows if (row.disk.by_id or row.disk.path) in preselect
+        ]
+        # The displayed selection is authoritative: keep dialog state in sync
+        # even when the user never touches the picker (all members checked).
+        state.holding_selected = list(holding_picker_state.selected)
+        holding_picker_page = _build_disk_picker(
+            holding_picker_state,
+            _on_holding_toggled,
+            "Disks for the rebuilt pool — source members (freed by the "
+            "cutover destroy) are pre-selected; add any eligible unused "
+            "disks. Disks left unselected simply stay free.",
+            rows=rows,
+            preselect=preselect,
+        )
+        holding_picker_box.pack_start(holding_picker_page, True, True, 0)
+        holding_picker_box.show_all()
 
     rate_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     rate_label = Gtk.Label(
@@ -769,11 +1010,22 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
         radio.connect("toggled", _on_topology_toggled, name, state, _refresh)
     typed_entry.connect("changed", _on_typed_changed, state, _refresh)
     rate_entry.connect("changed", _on_rate_limit_changed, state, _refresh)
+
+    def _on_source_changed(combo):
+        text = _combo_text(combo)
+        if text:
+            state.pool_name = text
+        if state.holding_pool == state.pool_name:
+            state.holding_pool = ""
+        _rebuild_holding_picker()
+        _refresh()
+
     _populate_holding_combo()
-    pool_combo.connect("changed", _on_source_pool_changed, state, _refresh)
+    pool_combo.connect("changed", _on_source_changed)
     holding_combo.connect("changed", _on_holding_changed, state, _refresh)
 
     dialog.show_all()
+    _rebuild_holding_picker()
     try:
         while True:
             _refresh()
@@ -895,6 +1147,25 @@ def _source_layout_changed(repository, request) -> str | None:
     if removed:
         parts.append(f"removed: {', '.join(removed)}")
     return "datasets " + "; ".join(parts)
+
+
+def _discard_holds_file(holds_file: str) -> None:
+    """Best-effort removal of a captured-holds TSV (a missing file is fine)."""
+    if not holds_file:
+        return
+    try:
+        os.unlink(holds_file)
+    except OSError:
+        pass
+
+
+def _log_holds_file_preservation(source_pool: str, holds_file: str) -> None:
+    """Log where the captured holds survive a failed/cancelled cutover."""
+    log_msg(
+        f"INFO: Snapshot holds captured from '{source_pool}' are preserved in "
+        f"{holds_file}; once the pool is imported, reapply them with: "
+        f"zfsreapplyholds --apply {source_pool} {holds_file}"
+    )
 
 
 def on_disks_migrate_pool(app) -> None:
@@ -1021,12 +1292,20 @@ def on_disks_migrate_pool(app) -> None:
         )
         return
 
+    # Reserve the captured-holds TSV before the run starts; the copy phase
+    # captures the source pool's holds into it so they can be reapplied once
+    # the migrated pool carries the source pool's name.
+    fd, holds_file = tempfile.mkstemp(prefix=f"migrate-holds-{request.source_pool}-", suffix=".tsv")
+    os.close(fd)
+    request = replace(request, holds_file=holds_file)
+
     copy_steps, cutover_steps = build_migration_steps(request)
     lock_id = zlm.acquire(request.source_pool, "w", f"Migrate pool {request.source_pool}")
 
     def _copy_complete(cancelled=False, rc=None):
         if cancelled or rc:
             zlm.release(lock_id)
+            _discard_holds_file(request.holds_file)
             _finish_refresh(app)
             if cancelled:
                 log_msg(f"INFO: Migrate pool cancelled for {request.source_pool}")
@@ -1042,6 +1321,7 @@ def on_disks_migrate_pool(app) -> None:
         )
         if not _show_cutover_confirm(app, request):
             zlm.release(lock_id)
+            _discard_holds_file(request.holds_file)
             _finish_refresh(app)
             log_msg(
                 f"INFO: Cutover deferred for '{request.source_pool}'; the "
@@ -1058,6 +1338,7 @@ def on_disks_migrate_pool(app) -> None:
         _finish_refresh(app)
         if cancelled:
             log_msg(f"INFO: Migrate pool cutover cancelled for {request.source_pool}")
+            _log_holds_file_preservation(request.source_pool, request.holds_file)
             return
         if rc:
             log_msg(
@@ -1065,7 +1346,9 @@ def on_disks_migrate_pool(app) -> None:
                 f"(rc={rc}) — the pool may be left exported; investigate before "
                 "retrying"
             )
+            _log_holds_file_preservation(request.source_pool, request.holds_file)
             return
+        _discard_holds_file(request.holds_file)
         log_msg(f"INFO: Pool '{request.source_pool}' migrated successfully (mode: {request.mode})")
         if is_iscsi_managed_pool(request.source_pool):
             repair_step = BashStep(

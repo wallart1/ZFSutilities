@@ -1022,13 +1022,25 @@ Pick the source pool and one of two destination modes:
   under a temporary name like `<pool>_mig`), or
 - **Holding pool** — pick another imported pool with free space at least equal
   to the source pool's allocated data; the source pool is then destroyed and
-  rebuilt with the chosen topology on its own freed disks before the data is
-  copied back. Any other imported non-root pool qualifies, even an empty one —
+  rebuilt with the chosen topology before the data is copied back. Any other
+  imported non-root pool qualifies, even an empty one —
   a pool only needs datasets to be a migration *source*, not a holding pool.
-  Holding-mode copies land in a reserved namespace
-  (`<holding-pool>/migrate_<source-pool>/<dataset>`) so they can never collide
-  with backup or offsite copies of the same datasets — a pool that also
-  receives backups is a valid holding pool.
+  The holding pool is a temporary waystation, not a destination: it keeps its
+  name and its own datasets, and only the reserved migration namespace inside
+  it is removed afterwards. Holding-mode copies land in that reserved
+  namespace (`<holding-pool>/migrate_<source-pool>/<dataset>`) so they can
+  never collide with backup or offsite copies of the same datasets — a pool
+  that also receives backups is a valid holding pool. The rebuilt pool's
+  disks are your choice: the source pool's own disks (pre-selected, since the
+  cutover destroy frees them) plus any eligible unused disks — so the new
+  topology can use the old disks, new disks, or any mix. Disks you leave
+  unselected simply stay free for later use.
+
+Choose **New disks** when you have unused disks to build the new pool on (the
+old disks are freed untouched and remain re-importable). Choose **Holding
+pool** when the new topology should be built from the existing disks — alone
+or combined with additional unused disks — or whenever you have no spare
+disks at all.
 
 The review page lists every step that will run, from the recursive migration
 snapshot through one `zfs send -Rw` replication step per top-level dataset
@@ -1046,12 +1058,36 @@ renamed, added, or removed while the wizard was open), the run is aborted
 before anything starts with an explanation — re-open Migrate Pool and review
 the plan again. When the copy finishes, a second
 typed confirmation gates the cutover: the source pool is exported and the
-migrated pool is re-imported under the source pool's name, so every
-`pool/dataset` path — and everything that references it — survives the swap.
-If cutover is deferred, the migration snapshot and copies remain in place and
-rerunning Migrate Pool finishes the job (resuming any interrupted copy); in
+migrated pool is re-imported under the source pool's name — a permanent
+rename written to the pool label, so every future import uses the normal
+pool name — and every `pool/dataset` path, and everything that references
+it, survives the swap.
+
+Aborting a migration is safe at every point before the destructive steps:
+stopping during the copy phase loses nothing (the source pool is untouched);
+after the export but before the destroy, the source pool re-imports intact;
+in holding mode after the source pool is destroyed, the complete verified
+copy remains on the holding pool, so re-running Migrate Pool resumes the
+copies and finishes the job. Your regular backups are never touched by a
+migration. If cutover is deferred, the migration snapshot and copies remain
+in place; in
 holding mode the cutover also removes the migration namespace from the
 holding pool.
+
+Snapshot holds survive the migration. ZFS send streams never carry holds, so
+Migrate Pool captures every hold on the source pool (including its own, such
+as offsite receipts) into a temporary file before the cutover, then reapplies
+them once the migrated pool has been imported under the source pool's name —
+in both destination modes. In holding mode the holds are released after
+capture and before the source pool is destroyed (a held snapshot cannot be
+destroyed, so the destroy would fail otherwise). Holds are never placed on
+the holding-pool copy, so removing the migration namespace cannot fail on a
+hold. If the cutover fails or is cancelled after the holds were released,
+the captured file is kept and its path logged, together with the
+`zfsreapplyholds --apply` command that restores the holds once the pool is
+imported again. Holds placed on the source pool *while* a migration is
+running (after the capture step) are not preserved.
+
 After a successful cutover, if the migrated pool is enrolled in two-node iSCSI
 (`POOL_TARGET`), a follow-up `repair-iscsi-luns` step rebuilds its backstores
 and LUN mappings and rescans the compute host automatically.

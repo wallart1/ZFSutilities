@@ -309,9 +309,12 @@ and tests easy to mock.
 | `build_recursive_snapshot_command()`     | Pure `zfs snapshot -r` argv builder for migration snapshots                                                                                            |
 | `build_migration_send_receive_command()` | Pure `bash -c` argv sourcing `zfs-migrate-send` for a resumable, pv-instrumented migration copy (optional `rate_limit` for `pv -L`)                    |
 | `build_pool_export_command()`            | Pure `zpool export` argv builder                                                                                                                       |
-| `build_pool_import_rename_command()`     | Pure `zpool import <temp> <name>` argv builder (cutover rename)                                                                                        |
+| `build_pool_import_rename_command()`     | Pure `zpool import <temp> <name>` argv builder; the rename is permanent (written to the pool label), so later imports use the plain one-name form     |
 | `build_pool_destroy_command()`           | Pure `zpool destroy` argv builder (holding-mode migration only)                                                                                        |
 | `build_destroy_dataset_command()`        | Pure `zfs destroy -r` argv builder for dropping migration copies                                                                                       |
+| `build_capture_holds_command()`          | Pure `bash -c` argv sourcing `zfsreapplyholds` to capture all snapshot holds under a dataset to a TSV (runs no_lock — the executor holds the pool write lock) |
+| `build_release_holds_command()`          | Pure `bash -c` argv sourcing `zfsreapplyholds` to release every hold under a dataset (no_lock), so `zpool destroy` cannot fail on a held snapshot     |
+| `build_apply_holds_command()`            | Pure `bash -c` argv sourcing `zfsreapplyholds` to reapply captured holds from a TSV (no_lock)                                                          |
 
 **Called modules / imported helpers:** none (uses `subprocess` directly).
 
@@ -515,10 +518,18 @@ construction is delegated to the migration argv builders in
 `zfs_repository`. Migration exists because ZFS cannot change a vdev's
 redundancy class in place (stripe to raidz, mirror to raidz, width or ashift
 changes): snapshot the source pool, replicate every top-level dataset to a
-destination (a new pool on new disks, or an existing holding pool with enough
-free space), verify the copy, then cut over by exporting the source pool and
-re-importing the migrated pool under the source pool's name so every
-`pool/dataset` path is preserved.
+destination (a new pool built on selected disks, or an existing holding pool
+with enough free space), verify the copy, then cut over by exporting the
+source pool and re-importing the migrated pool under the source pool's name —
+a permanent rename written to the pool label, so every later import uses the
+plain one-name form — so every `pool/dataset` path is preserved. A holding
+pool is a temporary waystation, never consumed or renamed: only the reserved
+`migrate_<source>` namespace inside it is destroyed at cutover. Snapshot holds
+never travel in send streams, so the plan also captures the source pool's
+holds after the outward verify step and reapplies them once the migrated pool
+carries the source pool's name again; in holding mode a release step runs
+after capture and before the source destroy (held snapshots cannot be
+destroyed, so `zpool destroy` would fail while any hold remains).
 
 **Key functions:**
 
@@ -528,7 +539,7 @@ re-importing the migrated pool under the source pool's name so every
 | `migration_snapshot_bare_name()` | Strip the leading `@` for the zfs argv builders                                                                            |
 | `generate_temp_pool_name()`      | Valid unused temporary pool name (`<source>_mig`, `_mig2`, …)                                                              |
 | `holding_migration_namespace()`  | Reserved holding-pool dataset namespace (`migrate_<source>`) so holding copies can never collide with backup/offsite paths |
-| `plan_migration_steps()`         | Ordered `MigrationStep` plan for new-disks or holding-pool mode                                                            |
+| `plan_migration_steps()`         | Ordered `MigrationStep` plan for new-disks or holding-pool mode, including the hold capture/release/reapply steps          |
 | `check_destination_capacity()`   | Refuse/warn when destination free space is short of source allocated                                                       |
 | `verify_trees_match()`           | Per-dataset `used`-bytes comparison between source and migrated trees                                                      |
 
@@ -553,13 +564,33 @@ pipeline and an optional bandwidth limit — per top-level dataset, then
 per-dataset tree verification) and the cutover
 phase, which starts only after a second typed confirmation — export the
 source pool, then re-import the migrated pool under the source pool's name
-(new disks) or destroy/rebuild/copy-back/swap (holding pool). Holding-mode
+(new disks) or destroy/rebuild/copy-back/swap (holding pool). In holding
+mode the user chooses the rebuild disks: the source pool's members
+(pre-selected, since the cutover destroy frees them) plus any eligible
+unused disks, so the new topology may use the old disks, new disks, or any
+mix; disks left unselected simply stay free. Holding-mode
 copies land under `<holding>/migrate_<source>/<dataset>` and the cutover
-removes that namespace with a single destroy. Before anything starts, the
+removes that namespace with a single destroy. Aborting before the cutover
+loses nothing (the source pool is untouched); after the source destroy in
+holding mode the verified copy remains on the holding pool and the resumable
+copies can be re-run to finish. Before anything starts, the
 handler re-reads the source pool's dataset layout and aborts with an
 explanation when it changed after the review. The pool
 hosting the root filesystem is never offered; both phases hold a `zlm`
 write lock on the source pool.
+
+Snapshot holds are preserved end to end. The executor creates a TSV
+(`tempfile.mkstemp`) before the run; the copy phase ends by capturing every
+hold on the source pool into it (`reapplyholds_capture`, run with locking
+skipped since the executor already holds the pool write lock). Holding-mode
+cutover releases all source holds after capture and before the destroy
+(held snapshots cannot be destroyed); the last cutover step reapplies the
+captured holds once the migrated pool has been imported under the source
+pool's name, and a non-fatal step removes the TSV. The TSV is never applied
+to the holding tree, so the namespace destroy cannot fail on a hold. On
+cutover failure or cancel the TSV is kept and its path logged with the
+manual `zfsreapplyholds --apply` command; holds placed on the source while a
+migration is running (after the capture step) are not preserved.
 
 **Key functions:**
 
@@ -1801,7 +1832,7 @@ Reusable GTK helpers and utility functions used by nearly every page.
 | `build_full_dataset_name()`                                          | Walk tree parents to build the full ZFS name                                                                                  |
 | Tree loading helpers                                                 | Load pools, datasets, and snapshots on demand                                                                                 |
 | `get_busy_processes()` / `diagnose_dataset_busy()`                   | Find and explain why a dataset is busy                                                                                        |
-| `collect_dataset_busy_reasons()` / `BusyReason`                      | Structured, non-logging counterpart to `diagnose_dataset_busy`; returns categorized reasons (clone, hold, mounted, busy processes, receive token, send, bookmark, iSCSI, VM, NFS/SMB) with resolvable flags and action hints so callers such as pool-export recovery can act on them |
+| `collect_dataset_busy_reasons()` / `BusyReason`                      | Structured, non-logging counterpart to `diagnose_dataset_busy`; returns categorized reasons (clone, hold, mounted, busy processes, receive token, send, iSCSI, VM, NFS/SMB) with resolvable flags and action hints so callers such as pool-export recovery can act on them |
 | `create_scrolled_dialog()`                                           | Resizable dialog whose content area scrolls, with the default size capped to 90 % of the monitor workarea so large wizards never open off-screen |
 | `get_mounted_snapshots()`                                            | Parse `mount -t zfs` output to detect explicitly mounted snapshots (the `.zfs/snapshot` directory alone is an automount stub) |
 | `show_error_dialog()` / `show_warning_dialog()`                      | Modal error/warning message dialogs                                                                                           |

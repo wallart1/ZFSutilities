@@ -94,9 +94,76 @@ test_returns_zero_when_no_running_vms() {
     test_pass
 }
 
+test_bookmarks_are_never_enumerated() {
+    test_start "User bookmarks are tolerated but never enumerated as VM disks"
+
+    # Mirror real zfs type filtering: the bookmark entry is only listed when
+    # the caller explicitly asks for bookmarks, and the -t argument is
+    # recorded (via a file — zfs runs inside command substitutions) so the
+    # assertions below can pin it down.
+    _tol_type_file="$_mock_zfs_state_dir/list-type.txt"
+    : > "$_tol_type_file"
+    zfs() {
+        local _type="" _o="" _a _prev=""
+        for _a in "$@"; do
+            case "$_prev" in
+                -t) _type="$_a" ;;
+                -o) _o="$_a" ;;
+            esac
+            _prev="$_a"
+        done
+        printf '%s' "$_type" > "$_tol_type_file"
+        if [[ "$_type" == *"bookmark"* ]]; then
+            echo "pool/vm-100-disk-0#nightly"
+            return 0
+        fi
+        if [[ "$_type" == *"volume"* && "$_o" == "name" ]]; then
+            echo "pool/vm-100-disk-0"
+        fi
+        return 0
+    }
+    qm() {
+        if [[ "$1" == "list" ]]; then
+            echo "VMID NAME                 STATUS    MEM(MB)    BOOTDISK(GB) PID"
+            echo "100  vm1                  running   4096       50             1234"
+        elif [[ "$1" == "config" ]]; then
+            echo "scsi0: pool:vm-100-disk-0,size=32G"
+        fi
+    }
+    pct() {
+        if [[ "$1" == "list" ]]; then
+            echo "VMID STATUS    LOCK         NAME"
+        fi
+    }
+
+    running_vms=""
+    checkrunningvms "pool/dataset" >/dev/null 2>&1 || true
+    local _output="$running_vms"
+
+    unset -f zfs qm pct 2>/dev/null || true
+
+    local _recorded_list_type
+    _recorded_list_type=$(cat "$_tol_type_file" 2>/dev/null || true)
+    if [[ "$_recorded_list_type" == *"bookmark"* || "$_recorded_list_type" == "all" ]]; then
+        test_fail "zfs list was asked for bookmarks (type='$_recorded_list_type')"
+        return
+    fi
+    if [[ "$_output" == *"#nightly"* ]]; then
+        test_fail "Bookmark name leaked into the running-VM report: $_output"
+        return
+    fi
+    if [[ "$_output" != *"pool/vm-100-disk-0"* ]]; then
+        test_fail "Expected the real zvol in the running-VM report, got: $_output"
+        return
+    fi
+
+    test_pass
+}
+
 test_returns_two_when_tools_missing
 test_returns_two_for_empty_argument
 test_returns_zero_when_no_running_vms
+test_bookmarks_are_never_enumerated
 
 test_summary
 teardown_test_env

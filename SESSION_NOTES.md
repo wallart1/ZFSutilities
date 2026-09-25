@@ -562,3 +562,75 @@ Verified with `mkdocs build` (clean) and `test_docs_integrity.py` (23 passed).
 - PREEXISTING.md remains empty (no pre-existing issues discovered this
   cycle; remaining long lines in older test fixtures are pre-existing
   style deviations, left as-is).
+
+## 2026-09-25 — Migrate Pool preserves snapshot holds (both modes)
+
+Migrate Pool now captures the source pool's snapshot holds before the
+cutover and reapplies them once the migrated pool is imported under the
+source pool's name — in both destination modes. Holds never travel in send
+streams, so without this the migrated pool lost all holds; in holding mode
+they were destroyed with the source pool (and held snapshots would have
+blocked `zpool destroy` outright).
+
+- `bin/zfsreapplyholds`: new `reapplyholds_release()` (enumerate + `zfs
+  release` every hold under a subtree) and a trailing optional no_lock
+  argument on capture/release/apply that skips zfslockmanager (the Migrate
+  Pool executor holds a pool write lock for the whole run, and a headless
+  step taking a second lock would abort). CLI gains `--release`.
+- `python/zfs_repository.py`: pure argv builders `build_capture_holds_command`,
+  `build_release_holds_command`, `build_apply_holds_command` (bash -c argv
+  sourcing zfsreapplyholds with no_lock=Y).
+- `python/pool_migrate.py`: new step kinds `capture_holds`, `release_holds`,
+  `reapply_holds` in `plan_migration_steps` (capture after outward verify in
+  both modes; release before source destroy in holding mode; reapply after
+  import-rename in both modes).
+- `python/pool_migrate_dialogs.py`: `MigrationRequest.holds_file` (mkstemp TSV
+  created by the executor); capture as the last copy-phase step (fatal);
+  holding cutover inserts release between export and destroy; reapply as the
+  last cutover step before the (moved) namespace destroy and a non-fatal TSV
+  removal. Holding-namespace destroy moved after the reapply so plan and
+  executed step order match and the holding copy survives an apply failure.
+  On cutover failure/cancel the TSV is kept and its path logged with the
+  manual `zfsreapplyholds --apply` command; on copy failure/defer/success it
+  is removed.
+- Tests: `test-zfsreapplyholds` 11→16 (release, dry-run release, no-lock
+  opt-out, CLI release, CLI rejects file); new `TestBuildHoldsCommands` in
+  test_zfs_repository.py; plan/step-order assertions updated in
+  test_pool_migrate.py and test_pool_migrate_dialogs.py; three goldens
+  regenerated; `test_support.normalize_repo_root` generalized to normalize
+  both wrapper-script paths.
+- Docs: commands.md (zfsreapplyholds --release + no_lock contract),
+  python-modules.md (builders + plan/dialog narrative), gtk-gui.md Migrate
+  Pool holds paragraph, testing.md suite row.
+
+## 2026-09-25 — Development cycle wrap-up
+
+- Resolved both PREEXISTING.md entries: reformatted
+  tests/python/test_pool_migrate_dialogs.py (ruff nits); removed bookmark
+  handling entirely (dead `converttobookmark` default in zfs-send-receive;
+  `-t snap,bookmark` and `#name` output in zfscommsnap; the bookmark busy
+  reason in zfs-diagnose-busy and gui_helpers.py; `ZfsRepository.list_bookmarks`;
+  the now-unreachable `#bookmark` rollback edge in handle_commsnap_rc; mock
+  plumbing in tests). Installation note rewritten to state bookmarks are
+  ignored, not merely untested.
+- Code review against coding-policies.md: fixed a stale sourced-helper header
+  line in zfsreapplyholds, restored `local` declarations dropped in the
+  mapfile conversion (`_hold_line`, `_line`), and a stale `while read`
+  comment in tests/test-zfs-send-receive-holds.
+- Test review: new mock-based suite needs no requirements.manifest entry;
+  full run green (bash + python, one skip: zfslockmanager-soak by design).
+- New PREEXISTING.md entries (left for later, code freeze): ruff format nits
+  in three untouched test files; SC2115 in tests/test-rsync-dailybackup;
+  zfs-send-receive header lacks the policy-required global-variable list.
+
+## 2026-09-25 — Bookmark tolerance policy
+
+Policy: user bookmarks are tolerated but never acted upon. Audit found no
+code creating, destroying, sending, or deciding from bookmarks; the one
+enumeration that could see them (`bin/zfscheckrunningvms` used
+`zfs list -t all`) now asks for `-t filesystem,volume`, so bookmark names
+can never enter the VM-disk scan. Regression tests: test-zfscommsnap
+(bookmark sharing a GUID is never the common point; pins the `-t snap`
+argument) and test-zfscheckrunningvms (bookmarks never enumerated or
+reported as VM disks). Installation note and modules.md zfscommsnap entry
+state the policy.

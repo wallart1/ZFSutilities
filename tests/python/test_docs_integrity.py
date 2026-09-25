@@ -40,7 +40,9 @@ from test_support import (
 # (threeamigos/proxmox), host roles (storage/compute), and generic noun pairs
 # (pool/dataset, zfs/zpool) from being treated as paths. MIN_ROOT_CANDIDATES
 # is an extraction floor so a broken regex cannot degrade the suite to a
-# vacuous pass.
+# vacuous pass. The floor tracks the deliberately slimmed root AGENTS.md
+# (references README.md and docs/docs/ for project details); raise it if the
+# file grows again.
 
 AGENTS_MD_FILES = [
     os.path.join(REPO_ROOT, "AGENTS.md"),
@@ -63,7 +65,7 @@ KNOWN_ROOT_FILES = frozenset(
 
 KNOWN_FILE_EXTENSIONS = (".md", ".py", ".sh", ".yml", ".yaml", ".toml", ".json", ".txt")
 
-MIN_ROOT_CANDIDATES = 10
+MIN_ROOT_CANDIDATES = 6
 
 AUTHOR_MACHINE_ALLOWLIST = ("/NFS1/",)
 

@@ -34,9 +34,11 @@ function checkrunningvms {
     # Extract the pool name from target dataset (first path component)
     local target_pool="${target_dataset%%/*}"
 
-    # Get list of all zvols and datasets under target
+    # Get list of all zvols and datasets under target. Bookmarks (and
+    # snapshots) are deliberately excluded: user bookmarks are tolerated but
+    # never acted upon, and only filesystems/volumes can be VM disks.
     local datasets
-    datasets=$(zfs list -H -o name -r -t all "$target_dataset" 2>/dev/null)
+    datasets=$(zfs list -H -o name -r -t filesystem,volume "$target_dataset" 2>/dev/null)
     if [[ -z "$datasets" ]]; then
         return 0  # No datasets found, nothing to check
     fi

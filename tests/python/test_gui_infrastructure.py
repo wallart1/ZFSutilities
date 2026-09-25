@@ -2381,7 +2381,6 @@ class TestGuiHelpersMisc(unittest.TestCase):
         repo.get_property.side_effect = lambda _target, prop: properties.get(prop, "-")
         repo.get_recursive_snapshot_clones.return_value = list(snapshot_clones)
         repo.list_holds.return_value = [types.SimpleNamespace(tag=tag) for tag in holds]
-        repo.list_bookmarks.return_value = []
         return repo
 
     def _no_subprocess(self):

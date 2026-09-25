@@ -677,12 +677,20 @@ def _on_target_changed(
 
 
 def _build_disk_picker(
-    state: _AddVdevState | _InfraVdevState, on_change, hint_text: str, single: bool = False
+    state: _AddVdevState | _InfraVdevState,
+    on_change,
+    hint_text: str,
+    single: bool = False,
+    rows: list | None = None,
+    preselect: set | None = None,
 ):
     """Build the checkbox disk-inventory picker shared by the growth dialogs.
 
     With *single* True (Attach) ticking a row unticks every other row so the
-    operation always has exactly one new device selected.
+    operation always has exactly one new device selected. *rows* overrides the
+    inventory list (default ``state.eligibility``) so callers can append
+    synthetic rows; *preselect* is a set of row keys (``disk.by_id or
+    disk.path``) checked when the picker is built.
     """
     page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
 
@@ -692,14 +700,15 @@ def _build_disk_picker(
     page.pack_start(hint, False, False, 0)
 
     store = Gtk.ListStore(bool, str, str, str, str, str, bool, str)
-    for result in state.eligibility:
+    for result in rows if rows is not None else state.eligibility:
         disk = result.disk
         status = "; ".join(result.reasons) or "; ".join(result.warnings) or "eligible"
         foreground = None if result.eligible else _INELIGIBLE_FG
+        key = disk.by_id or disk.path
         store.append(
             [
-                False,
-                disk.by_id or disk.path,
+                preselect is not None and key in preselect,
+                key,
                 disk.size_human,
                 disk.model,
                 disk.transport,

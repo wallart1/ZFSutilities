@@ -24,9 +24,12 @@ from zfs_repository import (
     ZfsRepository,
     _parse_lsblk_partitions,
     build_add_vdev_command,
+    build_apply_holds_command,
     build_attach_command,
+    build_capture_holds_command,
     build_create_pool_command,
     build_detach_command,
+    build_release_holds_command,
     build_replace_command,
     is_dataset_encrypted,
     zvol_device_path,
@@ -881,6 +884,50 @@ class TestBuildDetachCommand(unittest.TestCase):
     def test_rejects_empty_pool_name(self):
         with self.assertRaises(ValueError):
             build_detach_command("", "/dev/disk/by-id/ata-X")
+
+
+class TestBuildHoldsCommands(unittest.TestCase):
+    """The holds builders source zfsreapplyholds and run it with no_lock=Y
+    (the migration executor already holds the pool write lock)."""
+
+    def _script_body(self, cmd):
+        self.assertEqual(cmd[0:2], ["bash", "-c"])
+        body = cmd[2]
+        self.assertIn("source", body)
+        self.assertIn("zfsreapplyholds", body)
+        return body
+
+    def test_capture_command(self):
+        body = self._script_body(build_capture_holds_command("tank", "/tmp/holds.tsv"))
+        self.assertIn("reapplyholds_capture tank /tmp/holds.tsv Y", body)
+
+    def test_capture_command_quotes_paths_with_spaces(self):
+        body = self._script_body(build_capture_holds_command("tank", "/tmp/my holds/tank.tsv"))
+        self.assertIn("reapplyholds_capture tank '/tmp/my holds/tank.tsv' Y", body)
+
+    def test_capture_rejects_empty_args(self):
+        with self.assertRaises(ValueError):
+            build_capture_holds_command("", "/tmp/holds.tsv")
+        with self.assertRaises(ValueError):
+            build_capture_holds_command("tank", "")
+
+    def test_release_command(self):
+        body = self._script_body(build_release_holds_command("tank"))
+        self.assertIn("reapplyholds_release tank N Y", body)
+
+    def test_release_rejects_empty_pool(self):
+        with self.assertRaises(ValueError):
+            build_release_holds_command("")
+
+    def test_apply_command(self):
+        body = self._script_body(build_apply_holds_command("tank", "/tmp/holds.tsv"))
+        self.assertIn("reapplyholds_apply tank /tmp/holds.tsv N Y", body)
+
+    def test_apply_rejects_empty_args(self):
+        with self.assertRaises(ValueError):
+            build_apply_holds_command("", "/tmp/holds.tsv")
+        with self.assertRaises(ValueError):
+            build_apply_holds_command("tank", "")
 
 
 class TestRunPoolCommand(unittest.TestCase):

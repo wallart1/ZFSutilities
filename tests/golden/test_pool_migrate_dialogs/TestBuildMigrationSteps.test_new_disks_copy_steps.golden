@@ -1,5 +1,7 @@
 zfs snapshot -r pool1@migrate-2026-09-10T14:30-04:00
+zpool create pool1_mig mirror /dev/disk/by-id/ata-TESTsda /dev/disk/by-id/ata-TESTsdb
 bash -c 'source '"'"'REPO_ROOT/bin/zfs-migrate-send'"'"'; sourcefs=pool1/data; destfs=pool1_mig/data; snapname=migrate-2026-09-10T14:30-04:00; zfs_migrate_send'
 bash -c 'source '"'"'REPO_ROOT/bin/zfs-migrate-send'"'"'; sourcefs=pool1/vm-100-disk-0; destfs=pool1_mig/vm-100-disk-0; snapname=migrate-2026-09-10T14:30-04:00; zfs_migrate_send'
 bash -c 'set -o pipefail; s=$(zfs list -rH -t filesystem,volume -o name pool1/data | wc -l); d=$(zfs list -rH -t filesystem,volume -o name pool1_mig/data | wc -l); echo "verify data: source datasets=$s, destination datasets=$d"; test "$s" -gt 0 && test "$d" -eq "$s"'
 bash -c 'set -o pipefail; s=$(zfs list -rH -t filesystem,volume -o name pool1/vm-100-disk-0 | wc -l); d=$(zfs list -rH -t filesystem,volume -o name pool1_mig/vm-100-disk-0 | wc -l); echo "verify vm-100-disk-0: source datasets=$s, destination datasets=$d"; test "$s" -gt 0 && test "$d" -eq "$s"'
+bash -c 'source '"'"'REPO_ROOT/bin/zfsreapplyholds'"'"'; reapplyholds_capture pool1 /tmp/migrate-holds-pool1-test.tsv Y'

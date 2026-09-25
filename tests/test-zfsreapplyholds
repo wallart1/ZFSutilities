@@ -218,6 +218,106 @@ test_cli_apply_dry_run() {
     fi
 }
 
+test_reapplyholds_release_removes_all_holds() {
+    test_start "reapplyholds_release releases every hold under the subtree"
+    mock_zfs_dataset_exists "pool/dest"
+    mock_zfs_snap_exists "pool/dest@snap1"
+    mock_zfs_snap_exists "pool/dest@snap2"
+    mock_zfs_snap_list_for "pool/dest" $'pool/dest@snap1\npool/dest@snap2'
+    mock_zfs_holds "pool/dest@snap1" "tag1" "tag2"
+    mock_zfs_holds "pool/dest@snap2" "tag3"
+
+    reapplyholds_release "pool/dest"
+    local rc=$?
+    assert_rc 0 "$rc"
+
+    [[ -z "${_mock_zfs_holds[pool/dest@snap1]:-}" && -z "${_mock_zfs_holds[pool/dest@snap2]:-}" ]]
+    if [[ $? -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "All holds should have been released"
+    fi
+}
+
+test_reapplyholds_release_dry_run() {
+    test_start "reapplyholds_release dry-run logs without releasing holds"
+    mock_zfs_dataset_exists "pool/dryrel"
+    mock_zfs_snap_exists "pool/dryrel@snap1"
+    mock_zfs_snap_list_for "pool/dryrel" "pool/dryrel@snap1"
+    mock_zfs_holds "pool/dryrel@snap1" "keeptag"
+
+    reapplyholds_release "pool/dryrel" "Y"
+    local rc=$?
+    assert_rc 0 "$rc"
+
+    assert_contains "${_mock_zfs_holds[pool/dryrel@snap1]}" "keeptag"
+}
+
+test_no_lock_skips_lock_manager() {
+    test_start "no_lock=Y skips the lock manager entirely"
+    # Lock stubs that fail the test if called; the migration executor already
+    # holds the pool write lock, so hold steps must not lock again.
+    local _orig_init _orig_wait _orig_release
+    _orig_init=$(declare -f zfslock_init)
+    _orig_wait=$(declare -f zfslock_wait_or_resolve)
+    _orig_release=$(declare -f zfslock_release)
+    zfslock_init() { test_fail "zfslock_init must not be called with no_lock=Y"; return 1; }
+    zfslock_wait_or_resolve() { test_fail "zfslock_wait_or_resolve must not be called with no_lock=Y"; return 1; }
+    zfslock_release() { test_fail "zfslock_release must not be called with no_lock=Y"; return 1; }
+
+    mock_zfs_dataset_exists "pool/nolock"
+    mock_zfs_snap_exists "pool/nolock@snap1"
+    mock_zfs_snap_list_for "pool/nolock" "pool/nolock@snap1"
+    mock_zfs_holds "pool/nolock@snap1" "tag1"
+
+    local _tsv="$_mock_zfs_state_dir/nolock.tsv"
+    reapplyholds_capture "pool/nolock" "$_tsv" "Y"
+    assert_rc 0 "$?"
+
+    reapplyholds_release "pool/nolock" "N" "Y"
+    assert_rc 0 "$?"
+
+    printf 'pool/nolock@snap1\ttag1\n' > "$_tsv"
+    reapplyholds_apply "pool/nolock" "$_tsv" "N" "Y"
+    assert_rc 0 "$?"
+    assert_contains "${_mock_zfs_holds[pool/nolock@snap1]}" "tag1"
+
+    # Restore the cooperative stubs for the remaining tests in this suite.
+    eval "$_orig_init"
+    eval "$_orig_wait"
+    eval "$_orig_release"
+    test_pass
+}
+
+test_cli_release_invokes_helper() {
+    test_start "CLI --release invokes reapplyholds_release"
+    mock_zfs_dataset_exists "pool/cli"
+    mock_zfs_snap_exists "pool/cli@snap1"
+    mock_zfs_snap_list_for "pool/cli" "pool/cli@snap1"
+    mock_zfs_holds "pool/cli@snap1" "reltag"
+
+    local rc=0
+    _zfsreapplyholds_main --release pool/cli >"$_mock_zfs_state_dir/release.out" 2>&1 \
+        || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_mock_zfs_state_dir/release.out")" "Released hold reltag"
+    [[ -z "${_mock_zfs_holds[pool/cli@snap1]:-}" ]]
+    if [[ $? -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "CLI --release should release the hold"
+    fi
+}
+
+test_cli_release_rejects_input_file() {
+    test_start "CLI --release rejects an unexpected input file"
+    local rc
+    ( _zfsreapplyholds_main --release pool/cli /tmp/some.tsv ) \
+        >"$_mock_zfs_state_dir/release-file.out" 2>&1
+    rc=$?
+    assert_rc 8 "$rc"
+}
+
 # ------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------
@@ -228,11 +328,16 @@ test_reapplyholds_capture_missing_dataset
 test_reapplyholds_apply_restores_holds
 test_reapplyholds_apply_skips_missing_snapshots
 test_reapplyholds_apply_dry_run
+test_reapplyholds_release_removes_all_holds
+test_reapplyholds_release_dry_run
+test_no_lock_skips_lock_manager
 test_cli_help_exits_zero
 test_cli_unknown_option_fails
 test_cli_capture_invokes_helper
 test_cli_apply_invokes_helper
 test_cli_apply_dry_run
+test_cli_release_invokes_helper
+test_cli_release_rejects_input_file
 
 teardown_test_env
 test_summary

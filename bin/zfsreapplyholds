@@ -2,14 +2,22 @@
 # Capture and reapply ZFS snapshot holds for a dataset subtree.
 #
 # This script is both a standalone command and a sourceable helper.
-# When sourced, it defines reapplyholds_capture() and reapplyholds_apply().
+# When sourced, it defines reapplyholds_capture(), reapplyholds_release(),
+# and reapplyholds_apply().
 #
 # Usage:
 #   zfsreapplyholds [--dry-run] --capture <dataset> [output-file]
+#   zfsreapplyholds [--dry-run] --release <dataset>
 #   zfsreapplyholds [--dry-run] --apply <dataset> [input-file]
 #
 # If output-file is omitted for --capture, holds are written to stdout.
 # If input-file is omitted or is "-" for --apply, holds are read from stdin.
+#
+# When sourced, this script defines reapplyholds_capture(),
+# reapplyholds_release(), and reapplyholds_apply(). Each accepts a trailing
+# optional no_lock argument ("Y" = skip the zfslockmanager locking): pass it
+# only when the caller already holds the dataset locks (e.g. the Migrate Pool
+# executor holds a pool write lock for the whole run).
 
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
@@ -30,59 +38,142 @@ source_helper zfslockmanager
 # Capture all snapshot holds under a dataset to a TSV file.
 #   $1  dataset/subtree to inspect
 #   $2  output file (optional; default stdout)
+#   $3  no_lock (optional; "Y" skips locking — caller must hold the locks)
 # Each output line is: <snapshot><tab><hold-tag>
 reapplyholds_capture() {
     local dataset="$1"
     local output_file="${2:-}"
+    local no_lock="${3:-N}"
 
     rootcheck
-    zfslock_init
+    if [[ "$no_lock" != "Y" ]]; then
+        zfslock_init
+    fi
 
     if ! zfs list -H -o name "$dataset" >/dev/null 2>&1; then
         log_msg "INFO: Dataset $dataset does not exist; no target holds to capture."
         return 0
     fi
 
-    if ! zfslock_wait_or_resolve "$dataset" "r" "zfsreapplyholds-capture"; then
-        log_msg "WARN: Could not acquire read lock on ${dataset}; aborting hold capture."
-        return 1
+    if [[ "$no_lock" != "Y" ]]; then
+        if ! zfslock_wait_or_resolve "$dataset" "r" "zfsreapplyholds-capture"; then
+            log_msg "WARN: Could not acquire read lock on ${dataset}; aborting hold capture."
+            return 1
+        fi
+        local _capture_lock="$zfslock_id"
     fi
-    local _capture_lock="$zfslock_id"
 
     # Enumerate snapshots and query holds directly so the function works with
-    # test mocks as well as the real zfs binary.
-    local _snap _hold_line _snap_name _tag
-    while IFS= read -r _snap; do
+    # test mocks as well as the real zfs binary. mapfile (not `while read`)
+    # keeps the loops correct even when a caller overrides read().
+    local _snap _snap_name _tag _hold_line
+    local -a _cap_snaps=() _cap_hold_lines=()
+    mapfile -t _cap_snaps < <(zfs list -Hrt snapshot -o name "$dataset")
+    for _snap in "${_cap_snaps[@]}"; do
         [[ -z "$_snap" ]] && continue
-        while IFS= read -r _hold_line; do
+        mapfile -t _cap_hold_lines < <(zfs holds -H "$_snap")
+        for _hold_line in "${_cap_hold_lines[@]}"; do
             [[ -z "$_hold_line" ]] && continue
             # zfs holds -H output: <snapshot> <tag> <timestamp>
             _snap_name=$(echo "$_hold_line" | awk '{print $1}')
             _tag=$(echo "$_hold_line" | awk '{print $2}')
             printf '%s\t%s\n' "$_snap_name" "$_tag"
-        done < <(zfs holds -H "$_snap")
-    done < <(zfs list -Hrt snapshot -o name "$dataset") >"${output_file:-/dev/stdout}"
+        done
+    done >"${output_file:-/dev/stdout}"
 
-    zfslock_release "$_capture_lock"
+    if [[ "$no_lock" != "Y" ]]; then
+        zfslock_release "$_capture_lock"
+    fi
+}
+
+# Release all snapshot holds under a dataset subtree.
+#   $1  dataset/subtree to inspect
+#   $2  dry-run flag (optional; "Y" logs but does not release holds)
+#   $3  no_lock (optional; "Y" skips locking — caller must hold the locks)
+# Used by Migrate Pool before the source pool is destroyed: held snapshots
+# cannot be destroyed, so zpool destroy would fail while any hold remains.
+# The holds are expected to have been captured first (reapplyholds_capture)
+# so they can be reapplied afterwards.
+reapplyholds_release() {
+    local dataset="$1"
+    local dryrun="${2:-N}"
+    local no_lock="${3:-N}"
+
+    rootcheck
+    if [[ "$no_lock" != "Y" ]]; then
+        zfslock_init
+    fi
+
+    if ! zfs list -H -o name "$dataset" >/dev/null 2>&1; then
+        log_msg "INFO: Dataset $dataset does not exist; no holds to release."
+        return 0
+    fi
+
+    if [[ "$no_lock" != "Y" ]]; then
+        if ! zfslock_wait_or_resolve "$dataset" "w" "zfsreapplyholds-release"; then
+            log_msg "WARN: Could not acquire write lock on ${dataset}; aborting hold release."
+            return 1
+        fi
+        local _release_lock="$zfslock_id"
+    fi
+
+    local _snap _snap_name _tag _hold_line
+    local -a _rel_snaps=() _rel_hold_lines=()
+    local _released=0
+    local _skipped=0
+    mapfile -t _rel_snaps < <(zfs list -Hrt snapshot -o name "$dataset")
+    for _snap in "${_rel_snaps[@]}"; do
+        [[ -z "$_snap" ]] && continue
+        mapfile -t _rel_hold_lines < <(zfs holds -H "$_snap")
+        for _hold_line in "${_rel_hold_lines[@]}"; do
+            [[ -z "$_hold_line" ]] && continue
+            # zfs holds -H output: <snapshot> <tag> <timestamp>
+            _snap_name=$(echo "$_hold_line" | awk '{print $1}')
+            _tag=$(echo "$_hold_line" | awk '{print $2}')
+            if [[ "$dryrun" == "Y" ]]; then
+                log_msg "INFO: Dry-run: Would release hold $_tag on $_snap_name."
+                continue
+            fi
+            if zfs release "$_tag" "$_snap_name" 2>/dev/null; then
+                log_msg "INFO: Released hold $_tag on $_snap_name."
+                ((_released++))
+            else
+                log_msg "WARN: Failed to release hold $_tag on $_snap_name."
+                ((_skipped++))
+            fi
+        done
+    done
+
+    if [[ "$no_lock" != "Y" ]]; then
+        zfslock_release "$_release_lock"
+    fi
+
+    log_msg "INFO: Released $_released holds on $dataset ($_skipped failed)."
 }
 
 # Apply captured snapshot holds from a TSV file to a dataset subtree.
 #   $1  dataset/subtree root (used for locking and logging)
 #   $2  input file (use "-" or omit for stdin)
 #   $3  dry-run flag (optional; "Y" logs but does not apply holds)
+#   $4  no_lock (optional; "Y" skips locking — caller must hold the locks)
 reapplyholds_apply() {
     local dataset="$1"
     local input_file="${2:--}"
     local dryrun="${3:-N}"
+    local no_lock="${4:-N}"
 
     rootcheck
-    zfslock_init
-
-    if ! zfslock_wait_or_resolve "$dataset" "w" "zfsreapplyholds-apply"; then
-        log_msg "WARN: Could not acquire write lock on ${dataset}; aborting hold reapply."
-        return 1
+    if [[ "$no_lock" != "Y" ]]; then
+        zfslock_init
     fi
-    local _apply_lock="$zfslock_id"
+
+    if [[ "$no_lock" != "Y" ]]; then
+        if ! zfslock_wait_or_resolve "$dataset" "w" "zfsreapplyholds-apply"; then
+            log_msg "WARN: Could not acquire write lock on ${dataset}; aborting hold reapply."
+            return 1
+        fi
+        local _apply_lock="$zfslock_id"
+    fi
 
     local _applied=0
     local _skipped=0
@@ -93,9 +184,15 @@ reapplyholds_apply() {
         _input_stream="$input_file"
     fi
 
-    local snap tag
-    while IFS=$'\t' read -r snap tag; do
-        [[ -z "$snap" || -z "$tag" ]] && continue
+    local snap tag _line
+    local -a _apply_lines=()
+    mapfile -t _apply_lines < <(cat -- "$_input_stream")
+    for _line in "${_apply_lines[@]}"; do
+        # TSV with exactly two fields; snapshot names cannot contain tabs, so
+        # parameter expansion (not read) splits the pair.
+        snap="${_line%%$'\t'*}"
+        tag="${_line#*$'\t'}"
+        [[ -z "$snap" || -z "$tag" || "$snap" == "$_line" ]] && continue
 
         if ! zfs list -H -t snapshot -o name "$snap" >/dev/null 2>&1; then
             log_msg "WARN: Restored snapshot $snap no longer exists; skipping hold $tag."
@@ -116,9 +213,11 @@ reapplyholds_apply() {
                 ((_skipped++))
             fi
         fi
-    done < <(cat -- "$_input_stream")
+    done
 
-    zfslock_release "$_apply_lock"
+    if [[ "$no_lock" != "Y" ]]; then
+        zfslock_release "$_apply_lock"
+    fi
 
     log_msg "INFO: Reapplied $_applied holds on $dataset ($_skipped skipped)."
 }
@@ -130,16 +229,20 @@ reapplyholds_apply() {
 function _zfsreapplyholds_usage() {
     cat <<'EOF'
 Usage: zfsreapplyholds [--dry-run] --capture <dataset> [output-file]
+       zfsreapplyholds [--dry-run] --release <dataset>
        zfsreapplyholds [--dry-run] --apply <dataset> [input-file]
 
-Capture or reapply ZFS snapshot holds for a dataset subtree.
+Capture, release, or reapply ZFS snapshot holds for a dataset subtree.
 
   --capture    Write all snapshot holds under <dataset> to a TSV file.
                Each line is: <snapshot><tab><hold-tag>
                If output-file is omitted, writes to stdout.
+  --release    Release all snapshot holds under <dataset>. Used by Migrate
+               Pool before destroying the source pool; capture first so the
+               holds can be reapplied afterwards.
   --apply      Read a TSV file and apply each hold to the named snapshot.
                If input-file is omitted or is "-", reads from stdin.
-  --dry-run    Log what would be done without applying holds.
+  --dry-run    Log what would be done without changing holds.
   -h, --help   Show this help message.
 EOF
 }
@@ -156,6 +259,10 @@ function _zfsreapplyholds_main() {
         case "$1" in
             --capture)
                 mode="capture"
+                shift
+                ;;
+            --release)
+                mode="release"
                 shift
                 ;;
             --apply)
@@ -199,6 +306,14 @@ function _zfsreapplyholds_main() {
     case "$mode" in
         capture)
             reapplyholds_capture "$dataset" "$file"
+            ;;
+        release)
+            if [[ -n "$file" ]]; then
+                log_msg "FATAL: --release does not take an input file."
+                _zfsreapplyholds_usage >&2
+                exit 8
+            fi
+            reapplyholds_release "$dataset" "$dryrun"
             ;;
         apply)
             reapplyholds_apply "$dataset" "${file:--}" "$dryrun"

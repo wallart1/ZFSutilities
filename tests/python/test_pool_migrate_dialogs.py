@@ -81,20 +81,25 @@ def _state(pmd, pools=None, datasets=None, disks=None, **overrides):
     pools = pools if pools is not None else ["pool1", "pool2"]
     alloc = {pool: 10**9 for pool in pools}
     free = {pool: 40 * TB for pool in pools}
+    topologies = _default_topologies()
+    pool_name = pools[0] if pools else ""
+    # Mirror the wizard: holding mode pre-selects every source-pool member.
+    member_paths = set(pmd._leaf_paths_by_pool(topologies).get(pool_name, []))
     state = pmd._MigrateState(
         pools=pools,
         holding_pools=list(pools),
-        pool_name=pools[0] if pools else "",
+        pool_name=pool_name,
         mode=pmd.MIGRATE_NEW_DISKS,
         datasets_by_pool=datasets if datasets is not None else _default_datasets(),
         pool_alloc=alloc,
         pool_free=free,
         eligibility=results,
         disks=disks,
-        topologies=_default_topologies(),
+        topologies=topologies,
         existing_names=set(pools),
         snap_name=SNAP,
         selected=[r.disk for r in results if r.eligible and r.disk.path != "/dev/sdz"],
+        holding_selected=[d for d in disks if d.path in member_paths],
     )
     for key, value in overrides.items():
         setattr(state, key, value)
@@ -102,12 +107,20 @@ def _state(pmd, pools=None, datasets=None, disks=None, **overrides):
 
 
 def _request(pmd, mode=None, **overrides):
+    mode = mode or pmd.MIGRATE_NEW_DISKS
+    defaults = {"holds_file": "/tmp/migrate-holds-pool1-test.tsv"}
+    if mode == pmd.MIGRATE_NEW_DISKS:
+        defaults["new_pool_by_id"] = (
+            "/dev/disk/by-id/ata-TESTsda",
+            "/dev/disk/by-id/ata-TESTsdb",
+        )
     request = pmd.MigrationRequest(
         source_pool="pool1",
-        mode=mode or pmd.MIGRATE_NEW_DISKS,
+        mode=mode,
         datasets=("data", "vm-100-disk-0"),
         snap_bare="migrate-2026-09-10T14:30-04:00",
         temp_pool="pool1_mig",
+        **defaults,
         **overrides,
     )
     return request
@@ -274,6 +287,10 @@ class TestPureHelpers(unittest.TestCase):
         self.assertEqual(request.datasets, ("data", "vm-100-disk-0"))
         self.assertEqual(request.snap_bare, "migrate-2026-09-10T14:30-04:00")
         self.assertEqual(request.holding_pool, "")
+        self.assertEqual(
+            request.new_pool_by_id,
+            ("/dev/disk/by-id/ata-TESTsda", "/dev/disk/by-id/ata-TESTsdb"),
+        )
 
     def test_build_request_holding_mode(self):
         pmd = _import_dialogs()
@@ -367,20 +384,153 @@ class TestSourcePoolMemberHelpers(unittest.TestCase):
         self.assertEqual(pmd._source_pool_by_ids(state), [])
 
 
+class TestHoldingRebuildSelection(unittest.TestCase):
+    """Holding-mode rebuild disk selection: source members plus optional
+    additional unused disks."""
+
+    def test_picker_rows_exclude_members_from_unused_and_append_member_rows(self):
+        pmd = _import_dialogs()
+        rows = pmd._holding_picker_rows(_state(pmd))
+        self.assertEqual(
+            [row.disk.path for row in rows],
+            ["/dev/sdz", "/dev/sda", "/dev/sdb"],
+        )
+        member_rows = [row for row in rows if row.disk.path in ("/dev/sda", "/dev/sdb")]
+        self.assertTrue(all(row.eligible for row in member_rows))
+        self.assertTrue(
+            all("freed by the cutover destroy" in row.warnings[0] for row in member_rows)
+        )
+
+    def test_rebuild_disks_order_members_first_then_extras(self):
+        pmd = _import_dialogs()
+        sdc = _disk("/dev/sdc")
+        state = _state(
+            pmd,
+            disks=[_disk("/dev/sda"), _disk("/dev/sdb"), sdc],
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="pool2",
+            holding_selected=[_disk("/dev/sda"), _disk("/dev/sdb"), sdc],
+        )
+        self.assertEqual(
+            [d.path for d in pmd._holding_rebuild_disks(state)],
+            ["/dev/sda", "/dev/sdb", "/dev/sdc"],
+        )
+
+    def test_rebuild_by_ids_returns_union_members_first(self):
+        pmd = _import_dialogs()
+        sdc = _disk("/dev/sdc")
+        state = _state(
+            pmd,
+            disks=[_disk("/dev/sda"), _disk("/dev/sdb"), sdc],
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="pool2",
+            holding_selected=[_disk("/dev/sda"), _disk("/dev/sdb"), sdc],
+        )
+        self.assertEqual(
+            pmd._holding_rebuild_by_ids(state),
+            [
+                "/dev/disk/by-id/ata-TESTsda",
+                "/dev/disk/by-id/ata-TESTsdb",
+                "/dev/disk/by-id/ata-TESTsdc",
+            ],
+        )
+
+    def test_rebuild_by_ids_fails_closed_without_by_id(self):
+        pmd = _import_dialogs()
+        state = _state(
+            pmd,
+            disks=[_disk("/dev/sda", by_id=""), _disk("/dev/sdb")],
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="pool2",
+        )
+        self.assertIsNone(pmd._holding_rebuild_by_ids(state))
+
+    def test_problems_require_a_rebuild_disk(self):
+        pmd = _import_dialogs()
+        state = _state(
+            pmd,
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="pool2",
+            holding_selected=[],
+            typed="pool1",
+        )
+        self.assertEqual(
+            pmd._migrate_problems(state),
+            ["Select at least one disk for the rebuilt pool"],
+        )
+
+    def test_problems_enforce_topology_minimum_on_union(self):
+        pmd = _import_dialogs()
+        state = _state(
+            pmd,
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="pool2",
+            topology="raidz2",
+            typed="pool1",
+        )
+        self.assertEqual(
+            pmd._migrate_problems(state),
+            ["raidz2 requires at least 4 disks"],
+        )
+
+    def test_problems_fail_closed_when_member_has_no_by_id(self):
+        pmd = _import_dialogs()
+        state = _state(
+            pmd,
+            disks=[_disk("/dev/sda", by_id=""), _disk("/dev/sdb")],
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="pool2",
+            typed="pool1",
+        )
+        self.assertEqual(
+            pmd._migrate_problems(state),
+            ["a selected rebuild disk has no by-id identity"],
+        )
+
+    def test_build_request_includes_additional_unused_disks(self):
+        pmd = _import_dialogs()
+        sdc = _disk("/dev/sdc")
+        state = _state(
+            pmd,
+            disks=[_disk("/dev/sda"), _disk("/dev/sdb"), sdc],
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="pool2",
+            holding_selected=[_disk("/dev/sda"), _disk("/dev/sdb"), sdc],
+            typed="pool1",
+        )
+        request = pmd.build_request(state)
+        self.assertEqual(
+            request.new_pool_by_id,
+            (
+                "/dev/disk/by-id/ata-TESTsda",
+                "/dev/disk/by-id/ata-TESTsdb",
+                "/dev/disk/by-id/ata-TESTsdc",
+            ),
+        )
+
+
 class TestBuildMigrationSteps(unittest.TestCase):
     """Execution plan composition for both migration modes."""
 
     def test_new_disks_copy_steps(self):
         pmd = _import_dialogs()
         copy, _cutover = pmd.build_migration_steps(_request(pmd))
-        self.assertEqual(len(copy), 5)  # snapshot + 2 copies + 2 verifies
+        # snapshot + create pool + 2 copies + 2 verifies + hold capture
+        self.assertEqual(len(copy), 7)
+        self.assertEqual(copy[1].command[0:2], ["zpool", "create"])
         golden.check(self, _plan_text(copy))
 
     def test_copy_steps_carry_rate_limit(self):
         pmd = _import_dialogs()
         request = _request(pmd, rate_limit="100m")
         copy, cutover = pmd.build_migration_steps(request)
-        for step in copy[1:3]:
+        sends = [
+            s
+            for s in copy
+            if s.command[0:2] == ["bash", "-c"] and "zfs_migrate_send" in s.command[2]
+        ]
+        self.assertEqual(len(sends), 2)
+        for step in sends:
             self.assertIn("pv_rate_limit=100m", step.command[2])
         # Holding mode: copy-out and copy-back both honor the limit.
         holding = _request(
@@ -424,9 +574,10 @@ class TestBuildMigrationSteps(unittest.TestCase):
             ),
         )
         _copy, cutover = pmd.build_migration_steps(request)
-        # export, destroy, create, 2 copy-back, 2 verify, 1 namespace destroy,
-        # export holding, import-rename
-        self.assertEqual(len(cutover), 10)
+        # export, release holds, destroy, create, 2 copy-back, 2 verify,
+        # export holding, import-rename, reapply holds, namespace destroy,
+        # remove holds file
+        self.assertEqual(len(cutover), 13)
         golden.check(self, _plan_text(cutover))
 
     def test_holding_copy_steps_use_reserved_namespace(self):
@@ -531,9 +682,7 @@ class TestDialogFlow(unittest.TestCase):
         fake.run.side_effect = respond
         app = MagicMock()
         with (
-            patch.object(
-                pmd, "create_scrolled_dialog", return_value=(fake, MagicMock())
-            ),
+            patch.object(pmd, "create_scrolled_dialog", return_value=(fake, MagicMock())),
             patch.object(pmd, "scrub_blocks_pool_op", return_value=None),
         ):
             return pmd.show_migrate_pool_dialog(app, state)
@@ -585,9 +734,7 @@ class TestDialogFlow(unittest.TestCase):
         ]
         app = MagicMock()
         with (
-            patch.object(
-                pmd, "create_scrolled_dialog", return_value=(fake, MagicMock())
-            ),
+            patch.object(pmd, "create_scrolled_dialog", return_value=(fake, MagicMock())),
             patch.object(pmd, "scrub_blocks_pool_op", return_value="scrub is running on pool1"),
             patch.object(pmd, "_show_info_dialog") as mock_info,
         ):
@@ -886,14 +1033,15 @@ class TestHandlerExecution(unittest.TestCase):
         request = _request(pmd)
         mock_zlm, stack = _drive_handler(pmd, app, request)
         with stack:
-            # Copy phase started.
-            self.assertEqual(len(app.dataset_runner.steps), 5)
+            # Copy phase started (snapshot, create pool, 2 copies, 2
+            # verifies, hold capture).
+            self.assertEqual(len(app.dataset_runner.steps), 7)
             self.assertTrue(app.dataset_runner.running)
             self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
             app.dataset_runner.finish(rc=0)
             # Cutover phase started after confirmation; the detail persists
             # across the runner restart.
-            self.assertEqual(len(app.dataset_runner.steps), 2)
+            self.assertEqual(len(app.dataset_runner.steps), 4)
             self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
             app.dataset_runner.finish(rc=0)
             mock_zlm.release.assert_called_once_with("/lock/pool1")
@@ -932,9 +1080,9 @@ class TestHandlerExecution(unittest.TestCase):
         )
         mock_zlm, stack = _drive_handler(pmd, app, request)
         with stack:
-            self.assertEqual(len(app.dataset_runner.steps), 5)
+            self.assertEqual(len(app.dataset_runner.steps), 6)
             app.dataset_runner.finish(rc=0)
-            self.assertEqual(len(app.dataset_runner.steps), 10)
+            self.assertEqual(len(app.dataset_runner.steps), 13)
             app.dataset_runner.finish(rc=0)
             mock_zlm.release.assert_called_once_with("/lock/pool1")
 
@@ -1057,14 +1205,14 @@ class TestCutoverIscsiRepair(unittest.TestCase):
 
     def test_unmanaged_pool_skips_repair_and_logs_hint(self):
         _pmd, app, logs = self._run_cutover(managed=False)
-        # The cutover step list (2 steps) was not replaced by a repair step.
-        self.assertEqual(len(app.dataset_runner.steps), 2)
+        # The cutover step list (4 steps) was not replaced by a repair step.
+        self.assertEqual(len(app.dataset_runner.steps), 4)
         self.assertTrue(any("not enrolled in two-node iSCSI" in line for line in logs), logs)
         self.assertTrue(any("setup-iscsi-targets" in line for line in logs), logs)
 
     def test_unmanaged_pool_single_node_finishes_silently(self):
         _pmd, app, logs = self._run_cutover(managed=False, two_node_hint=False)
-        self.assertEqual(len(app.dataset_runner.steps), 2)
+        self.assertEqual(len(app.dataset_runner.steps), 4)
         self.assertFalse(any("not enrolled in two-node iSCSI" in line for line in logs), logs)
         self.assertFalse(any("setup-iscsi-targets" in line for line in logs), logs)
 

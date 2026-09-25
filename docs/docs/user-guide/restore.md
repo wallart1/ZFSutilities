@@ -99,35 +99,35 @@ also available on the Backup and Offsite tabs:
 
 ## Preserving Target Holds During a Restore
 
-A ZFS send stream does not include snapshot holds, so a restore normally loses
-any hold tags that existed on the destination. `zfsrestore` and
-[`zfsfullcopy`](../commands-and-modules/modules.md#zfsfullcopy) preserve those
-target holds automatically:
+A ZFS send stream does not include snapshot holds, so a full copy normally
+loses any hold tags that existed on the destination snapshots.
+`zfs-send-receive` preserves those target holds automatically on every full
+copy (`doincrementals='N'`, or `force='Y'`) — whether invoked through
+`zfsrestore`, `zfsfullcopy`, or directly:
 
-1. Before the destination dataset is destroyed/recreated, all holds on its
-   snapshots are captured to a temporary file.
-2. After the two-step restore finishes, the captured holds are reapplied to the
+1. Before any dataset is touched, all holds under the destination are captured
+   to a temporary file. If the capture fails, the run aborts before
+   transferring anything, so hold tags are never silently lost.
+2. After the transfer completes, the captured holds are reapplied to the
    restored snapshots.
 
-This behavior is on by default. To disable it, set:
+This behavior is on by default and is controlled by `$preserve_target_holds`.
+To disable it, set:
 
 ```bash
 sudo zfsrestore "preserve_target_holds='N'"
 ```
 
-If a restore fails after the holds have been captured, `zfsrestore` leaves the
-temporary holds file in place and logs its path. You can use that file to
-diagnose the failure or to reapply the holds manually once the problem is
-resolved:
+Hold preservation does not run for plain incremental backups or in dry-run
+mode, since nothing is destroyed in either case. Note that if the restore
+itself fails mid-run, the captured-holds temp file is left in place (under
+`/tmp`, named `zfs-send-receive-target-holds.*`); it can be applied manually:
 
 ```bash
-sudo zfsreapplyholds --apply pool/dest /tmp/zfsrestore-target-holds.XXXXXX
+sudo zfsreapplyholds --apply pool/dest /tmp/zfs-send-receive-target-holds.XXXXXX
 ```
 
-The residual temp file is removed automatically the next time `zfsrestore`
-runs.
-
-You can also capture and reapply holds manually with the
+You can also capture and reapply holds yourself with the
 [`zfsreapplyholds`](../commands-and-modules/commands.md#zfsreapplyholds)
 helper:
 
@@ -136,9 +136,5 @@ sudo zfsreapplyholds --capture pool/dest /tmp/dest-holds.tsv
 # ... perform the restore ...
 sudo zfsreapplyholds --apply pool/dest /tmp/dest-holds.tsv
 ```
-
-In dry-run mode, `zfsrestore`/`zfsfullcopy`
-([sourceable wrapper](../commands-and-modules/modules.md#zfsfullcopy)) log the
-holds that would be reapplied without modifying the destination.
 
 # 

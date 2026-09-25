@@ -28,6 +28,7 @@ function send-receive {
     source_helper zfsdelallsnaps
     source_helper zfsdelallholds
     source_helper zfsholds
+    source_helper zfsreapplyholds
     source_helper iscsi-lib.sh
     source_helper transfer-lib.sh
     source_helper zfsdelfs
@@ -369,10 +370,10 @@ function send-receive {
     local overrides=''
     [[ $3 != '' ]] && overrides=$3
     [[ $nextsnap = "" ]] && nextsnap=$(zfssnapbuild)
-    [[ $converttobookmark = "" ]] && converttobookmark='N'
     [[ $doincrementals = "" ]] && doincrementals="Y"
     [[ $dointermediates = "" ]] && dointermediates="Y"
     [[ $releaseholds = "" ]] && releaseholds="N"
+    [[ $preserve_target_holds = "" ]] && preserve_target_holds='Y'
     [[ $autoproceed = "" ]] && autoproceed='Y'
     # Glob prefix check on declare -p output: test whether a variable is an
     # indexed or associative array.
@@ -394,6 +395,27 @@ function send-receive {
     [[ $dryrun = '' ]] && dryrun='N'
 
     [[ $overrides != '' ]] && overrides "$overrides"
+
+    # Preserve destination hold tags across full copies. Capture before any
+    # dataset is touched — nothing has been mutated yet, so a capture failure
+    # can abort safely rather than risk silently dropping user hold tags.
+    # Reapplied just before the normal return below. Internal fatal exits
+    # skip the reapply, the same exposure the wrappers had when they owned
+    # this. Plain incremental runs (no force) destroy nothing, so the gate
+    # keeps the daily hot path free of extra hold bookkeeping.
+    local _sr_holds_file=""
+    if [[ $preserve_target_holds = 'Y' && $dryrun = 'N' \
+          && ( $doincrementals != 'Y' || $force = 'Y' ) ]]; then
+        _sr_holds_file=$(mktemp -t zfs-send-receive-target-holds.XXXXXX)
+        if ! reapplyholds_capture "$destfs" "$_sr_holds_file"; then
+            rm -f "$_sr_holds_file"
+            _sr_holds_file=""
+            log_msg "FATAL: Could not capture existing holds on $destfs." \
+                "Aborting to avoid losing target hold tags." \
+                "Set preserve_target_holds='N' to skip hold preservation."
+            exit 8
+        fi
+    fi
 
     buildfsarray
 
@@ -755,6 +777,13 @@ function send-receive {
 
     done
     echo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
+    if [[ -n "$_sr_holds_file" ]]; then
+        if [[ -s "$_sr_holds_file" ]]; then
+            reapplyholds_apply "$destfs" "$_sr_holds_file" 'N' \
+                || log_msg "WARN: Hold reapply on $destfs incomplete; see messages above."
+        fi
+        rm -f "$_sr_holds_file"
+    fi
     doincrementals=$save_doincrementals
     receive_s_option=$save_receive_s_option
     nextsnap=$save_nextsnap

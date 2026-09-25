@@ -39,8 +39,7 @@ local \
     snapseconds \
     snapdaysold \
     i \
-    j \
-    snaptype
+    j
 
 local -i i=0 j=0
 
@@ -50,7 +49,7 @@ fs_s_fs=$(echo "$fs_s" | awk -F'@' '{print $1}')
 # awk -F'@' '{print $2}'  —  Extract snapshot name from a "dataset@snapshot" string.
 # (Snapshot name extraction is currently unused; only the dataset path is needed.)
 readarray -t snaparray_s < \
-    <(zfs list -t snap,bookmark -o name -S createtxg -H -d1 "$fs_s_fs" 2>/dev/null)
+    <(zfs list -t snap -o name -S createtxg -H -d1 "$fs_s_fs" 2>/dev/null)
 snaparraylen_s=${#snaparray_s[@]}
 if [[ "$snaparraylen_s" = "0" ]]; then echo ""; return 8; fi
 # If just the most recent snap was requested, send it back and return to caller
@@ -65,7 +64,7 @@ if [[ $commsnap_mostrecent = "OLDEST" ]]; then
     return 0
 fi
 readarray -t guidarray_s < \
-    <(zfs list -t snap,bookmark -o guid -S createtxg -H -d1 "$fs_s_fs" 2>/dev/null)
+    <(zfs list -t snap -o guid -S createtxg -H -d1 "$fs_s_fs" 2>/dev/null)
 readarray -t snaparray_d < <(zfs list -t snap -o name -S createtxg -H -d1 "$fs_d" 2>/dev/null)
 readarray -t guidarray_d < <(zfs list -t snap -o guid -S createtxg -H -d1 "$fs_d" 2>/dev/null)
 snaparraylen_d=${#snaparray_d[@]}
@@ -115,35 +114,18 @@ if [[ $commsnap_find_another = 'Y' ]]; then
     exit 8
 fi
 if [[ $found_a_match = true ]]; then
-    # awk '{print $3}'  —  zfs get -H outputs "name\tproperty\tvalue".
-    #   Extract the type value ("snapshot" or "bookmark").
-    snaptype=$(zfs get -H type "${snaparray_s[$match_i]}" | awk '{print $3}')
-    if [[ $snaptype = 'snapshot' ]]; then snapseparator='@'
-    elif [[ $snaptype = 'bookmark' ]]; then snapseparator='#'
-    else
-        log_msg "FATAL: Unexpected snap type = \"$snaptype\" snap: ${snaparray_s[$match_i]}." >&2
-        exit 8
-    fi
     if [[ $match_j -eq 0 ]]; then   # Common snap was found, and it's the most recent in dest.
-        # awk -F'[@#]' '{print $2}'  —  Split on @ or # to extract the snapshot/bookmark name.
-        echo "$snapseparator""$(echo "${snaparray_d[$match_j]}" | awk -F'[@#]' '{print $2}')"
+        # awk -F'@' '{print $2}'  —  Extract snapshot name from the common snapshot.
+        echo '@'"$(echo "${snaparray_d[$match_j]}" | awk -F'@' '{print $2}')"
         return 0
     else
         # Send back the common snapshot name.
-        echo "$snapseparator""$(echo "${snaparray_d[$match_j]}" | awk -F'[@#]' '{print $2}')"
+        echo '@'"$(echo "${snaparray_d[$match_j]}" | awk -F'@' '{print $2}')"
         return 16     # The destination snapshot is not the most recent one.
     fi
 fi
 # if no common snap, return the most recent source snap
-# awk '{print $3}'  —  Extract type from zfs get output (see comment above).
-snaptype=$(zfs get -H type "${snaparray_s[0]}" | awk '{print $3}')
-if [[ $snaptype = 'snapshot' ]]; then snapseparator='@'
-elif [[ $snaptype = 'bookmark' ]]; then snapseparator='#'
-else
-    log_msg "FATAL: Unexpected snap type = \"$snaptype\" snap: ${snaparray_s[0]}." >&2
-    exit 8
-fi
-# awk -F'[@#]' '{print $2}'  —  Extract snapshot/bookmark name from the most recent source snap.
-echo "$snapseparator""$(echo "${snaparray_s[0]}" | awk -F'[@#]' '{print $2}')"
+# awk -F'@' '{print $2}'  —  Extract snapshot name from the most recent source snap.
+echo '@'"$(echo "${snaparray_s[0]}" | awk -F'@' '{print $2}')"
 return 4
 }

@@ -1050,24 +1050,7 @@ def collect_dataset_busy_reasons(target, repo=None):
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
-    # 5. Bookmarks (snapshots only)
-    if is_snapshot:
-        try:
-            dataset, snap_name = target.split("@", 1)
-            bmarks = repo.list_bookmarks(dataset, snap_name)
-            if bmarks:
-                reasons.append(
-                    BusyReason(
-                        category="bookmark",
-                        dataset=target,
-                        detail=f"Snapshot is referenced by bookmark(s): {' '.join(bmarks)}",
-                        action="Destroy the bookmark(s) first with 'zfs destroy <bookmark>'.",
-                    )
-                )
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            pass
-
-    # 6. iSCSI LUN exposure (zvols only)
+    # 5. iSCSI LUN exposure (zvols only)
     if vmid_match:
         try:
             result = subprocess.run(
@@ -1120,7 +1103,7 @@ def collect_dataset_busy_reasons(target, repo=None):
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
-    # 7. Running VM using the zvol
+    # 6. Running VM using the zvol
     if vmid_match:
         vmid = vmid_match.group(1)
         try:
@@ -1144,7 +1127,7 @@ def collect_dataset_busy_reasons(target, repo=None):
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
-    # 8. NFS / SMB shares
+    # 7. NFS / SMB shares
     for prop, label in [("sharenfs", "NFS"), ("sharesmb", "SMB")]:
         try:
             value = subprocess.run(

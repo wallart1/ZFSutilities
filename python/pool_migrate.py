@@ -7,10 +7,13 @@ the pure argv builders in ``zfs_repository`` and the GTK wizard in
 Migration exists because ZFS cannot change a vdev's redundancy class in
 place (stripe to raidz, mirror to raidz, width changes, ashift changes).
 The copy-based method snapshots the source pool, replicates every top-level
-dataset to a destination (a new pool built on new disks, or an existing
+dataset to a destination (a new pool built on selected disks, or an existing
 holding pool with enough free space), verifies the copy, and finally cuts
 over: the source pool is exported and the migrated pool is re-imported
 under the source pool's name so every ``pool/dataset`` path is preserved.
+In holding-pool mode the source pool is destroyed and rebuilt as part of the
+cutover, so the new topology may use the source pool's freed disks and/or any
+eligible unused disks.
 """
 
 from __future__ import annotations
@@ -45,6 +48,9 @@ STEP_IMPORT_RENAME = "import_rename"
 STEP_DESTROY_SOURCE = "destroy_source"
 STEP_CREATE_POOL = "create_pool"
 STEP_DESTROY_HOLDING = "destroy_holding"
+STEP_CAPTURE_HOLDS = "capture_holds"
+STEP_RELEASE_HOLDS = "release_holds"
+STEP_REAPPLY_HOLDS = "reapply_holds"
 
 
 @dataclass(frozen=True)
@@ -130,14 +136,18 @@ def plan_migration_steps(
     top_level_datasets: list[str],
     mode: str,
     dest_label: str,
+    rebuild_disk_count: int | None = None,
 ) -> list[MigrationStep]:
     """Return the ordered step plan for one migration.
 
     *mode* is ``MIGRATE_NEW_DISKS`` (*dest_label* is the temporary new pool)
     or ``MIGRATE_HOLDING_POOL`` (*dest_label* is the existing holding pool);
     in holding mode the plan gains destroy/create/copy-back/destroy-holding
-    steps around the same snapshot-copy-verify core. Destructive steps are
-    described as such; the wizard gates them behind typed confirmation.
+    steps around the same snapshot-copy-verify core. *rebuild_disk_count* is
+    the number of disks the rebuilt pool will be created from (holding mode
+    only); it is included in the create-step description when given.
+    Destructive steps are described as such; the wizard gates them behind
+    typed confirmation.
     """
     if not source_pool:
         raise ValueError("source pool must not be empty")
@@ -147,6 +157,8 @@ def plan_migration_steps(
         raise ValueError(f"unknown migration mode: {mode!r}")
     if not dest_label:
         raise ValueError("destination label must not be empty")
+    if rebuild_disk_count is not None and rebuild_disk_count < 1:
+        raise ValueError("rebuild disk count must be positive")
 
     steps = [
         MigrationStep(
@@ -154,6 +166,13 @@ def plan_migration_steps(
             f"Snapshot all datasets on '{source_pool}' recursively",
         )
     ]
+    if mode == MIGRATE_NEW_DISKS:
+        steps.append(
+            MigrationStep(
+                STEP_CREATE_POOL,
+                f"Create the new pool '{dest_label}' on the selected disks",
+            )
+        )
     # Copies land in a reserved namespace on the holding pool so they
     # cannot collide with backup/offsite copies of the same datasets.
     copy_dest = (
@@ -175,6 +194,15 @@ def plan_migration_steps(
             "Verify the copied dataset tree against the source",
         )
     )
+    # Holds never travel in send streams, so the copies have none. Capture
+    # the source pool's holds now (read-only) so they can be reapplied onto
+    # the migrated pool once it has the source pool's name again.
+    steps.append(
+        MigrationStep(
+            STEP_CAPTURE_HOLDS,
+            f"Capture snapshot holds on '{source_pool}' for preservation",
+        )
+    )
     steps.append(
         MigrationStep(
             STEP_EXPORT_SOURCE,
@@ -188,7 +216,21 @@ def plan_migration_steps(
                 f"Import '{dest_label}' under the name '{source_pool}'",
             )
         )
+        steps.append(
+            MigrationStep(
+                STEP_REAPPLY_HOLDS,
+                f"Reapply the captured snapshot holds to '{source_pool}'",
+            )
+        )
     else:
+        # Held snapshots cannot be destroyed, so the source pool's holds must
+        # be released (after capture) before the pool is destroyed.
+        steps.append(
+            MigrationStep(
+                STEP_RELEASE_HOLDS,
+                f"Release all snapshot holds on '{source_pool}' (captured for reapply)",
+            )
+        )
         steps.append(
             MigrationStep(
                 STEP_DESTROY_SOURCE,
@@ -198,7 +240,8 @@ def plan_migration_steps(
         steps.append(
             MigrationStep(
                 STEP_CREATE_POOL,
-                f"Create the new pool on the freed disks (temporary name "
+                f"Create the rebuilt pool on {rebuild_disk_count} selected disk"
+                f"{'s' if rebuild_disk_count != 1 else ''} (temporary name "
                 f"'{source_pool}{_TEMP_SUFFIX}')",
             )
         )
@@ -226,6 +269,12 @@ def plan_migration_steps(
             MigrationStep(
                 STEP_IMPORT_RENAME,
                 f"Import '{source_pool}{_TEMP_SUFFIX}' under the name '{source_pool}'",
+            )
+        )
+        steps.append(
+            MigrationStep(
+                STEP_REAPPLY_HOLDS,
+                f"Reapply the captured snapshot holds to '{source_pool}'",
             )
         )
         steps.append(

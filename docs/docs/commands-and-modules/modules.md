@@ -906,7 +906,6 @@ diagnose_dataset_busy <dataset_or_snapshot> [stderr_from_failed_destroy]
 | ZFS holds            | `zfs holds` lists tags on the snapshot                        |
 | Mounted / open files | `mounted=yes` plus `fuser`/`lsof` on the mountpoint           |
 | Active send/receive  | `receive_resume_token` present, or `zfs send` process running |
-| Bookmarks            | `zfs list -t bookmark` shows references to the snapshot       |
 | iSCSI LUN            | `targetcli` shows the zvol as a backstore/LUN                 |
 | Running VM           | `qm status` reports `running` for the VM ID                   |
 | NFS/SMB share        | `sharenfs` or `sharesmb` is not `off`                         |
@@ -942,7 +941,9 @@ progress.
 ### `zfscommsnap`
 
 Finds the most recent (or oldest) common snapshot between a source and
-destination dataset.
+destination dataset. Only snapshots are ever considered — user bookmarks
+are tolerated but never enumerated, so a bookmark can never be selected as
+the common point or incremental base.
 
 ```bash
 source_helper zfscommsnap
@@ -1195,7 +1196,6 @@ zfsfullcopy [overrides]
 | `$nextsnap`                         | no       | If set, limits copy to this snapshot                                     | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
 | `$label`                            | no       | Snapshot label to match                                                  | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
 | `$autoproceed`, `$force`, `$dryrun` | no       | Forwarded to `zfs-send-receive`                                          | [Execution Control](../developer-guide/global-variables.md#execution-control) |
-| `$preserve_target_holds`            | no       | `'Y'` = capture and reapply destination holds (default)                  | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
 
 **Called modules:**
 
@@ -1203,7 +1203,6 @@ zfsfullcopy [overrides]
 | ----------------------------------------------- | ------------------------------------------ |
 | [zfs-send-receive](modules.md#zfs-send-receive) | Perform two-step full copy                 |
 | [zfsoverrides](modules.md#zfsoverrides)         | Apply command-line parameter overrides     |
-| [zfsreapplyholds](../commands-and-modules/commands.md#zfsreapplyholds) | Capture/reapply destination snapshot holds |
 
 **Data structures consumed / produced:**
 
@@ -1218,12 +1217,10 @@ zfsfullcopy [overrides]
 2. Set full-copy parameters (`doincrementals='N'`,
    `commsnap_mostrecent='OLDEST'`, `force='Y'`, `releaseholds='Y'`,
    `releaseholds_tags=('offsite-*')`).
-3. If `$preserve_target_holds='Y'`, capture all existing holds on `$destfs`
-   before it is destroyed.
-4. Call `send-receive` once. `zfs-send-receive` performs the full copy of the
-   oldest snapshot and the incremental catch-up to the target internally.
-5. If `$preserve_target_holds='Y'`, reapply the captured holds to the restored
-   snapshots.
+3. Call `send-receive` once. `zfs-send-receive` performs the full copy of the
+   oldest snapshot and the incremental catch-up to the target internally —
+   including preservation of destination hold tags
+   (`$preserve_target_holds`, default `'Y'`).
 
 **Return codes:**
 
@@ -1589,6 +1586,14 @@ stream (`-I <oldest>`) sends every snapshot from that oldest base up to the
 target snapshot. This preserves the complete snapshot history on the
 destination.
 
+Because a full copy destroys and recreates destination snapshots — and send
+streams do not carry hold tags — `send-receive` preserves destination holds
+itself: when `$preserve_target_holds='Y'` (the default), it captures all hold
+tags under `$destfs` before the transfer and reapplies them on completion.
+This applies to any caller of `send-receive` (direct calls included), runs
+only for full copies (`doincrementals='N'`, or `force='Y'`) and never in
+dry-run mode, and aborts before transferring anything if the capture fails.
+
 ```bash
 source_helper zfs-send-receive
 # Set parameters, then:
@@ -1629,6 +1634,7 @@ arguments. Callers set the variables below, then invoke `send-receive`.
 | `$space_check_min_buffer`                                        | 1 GiB           | Minimum destination buffer required by the space check. Set to `0` for small test pools.                                                                                                                | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$releaseholds`                                                  | `'N'`           | `'Y'` = release matching holds before deleting destination snapshots during full copy/rollback                                                                                                          | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
 | `$releaseholds_tags`                                             | `('offsite-*')` | Hold tag patterns released when `$releaseholds='Y'`                                                                                                                                                     | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
+| `$preserve_target_holds`                                         | `'Y'`           | `'Y'` = capture and reapply destination hold tags around a full copy (no-op on plain incrementals and in dry-run)                                                                                       | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$includes` / `$excludes` / `$startwith` / `$endwith` / `$depth` | varies          | Dataset filters (delegated to `zfsbuildfsarray`)                                                                                                                                                        | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 
 **Data structures consumed/produced:**

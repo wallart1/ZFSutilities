@@ -609,6 +609,72 @@ def build_destroy_dataset_command(dataset: str, recursive: bool = True) -> list[
     return cmd
 
 
+def _build_holds_command(script_args: list[str]) -> list[str]:
+    """Compose a ``bash -c`` argv that sources zfsreapplyholds and runs one
+    of its library functions with locking skipped.
+
+    Pure function: no subprocess. The migration executor holds a pool write
+    lock for the whole run, so the holds helpers must not take their own
+    zfs locks (a headless subprocess would abort on the conflict).
+    """
+    script = path_utils.resolve_local_bin(
+        "zfsreapplyholds", script_dir=os.path.dirname(os.path.realpath(__file__))
+    )
+    if not script:
+        raise ValueError("zfsreapplyholds script could not be located")
+    return ["bash", "-c", "; ".join([f"source {shlex.quote(script)}"] + script_args)]
+
+
+def build_capture_holds_command(dataset: str, output_file: str) -> list[str]:
+    """Build the argv that captures all snapshot holds under *dataset*.
+
+    Pure function: no subprocess. Sources ``zfsreapplyholds`` and runs
+    ``reapplyholds_capture <dataset> <output-file> Y`` (no_lock: the caller
+    must already hold the dataset locks). Each output line is
+    ``<snapshot><tab><hold-tag>``. Raises ValueError on empty names.
+    """
+    if not dataset:
+        raise ValueError("dataset must not be empty")
+    if not output_file:
+        raise ValueError("output file must not be empty")
+    return _build_holds_command(
+        [f"reapplyholds_capture {shlex.quote(dataset)} {shlex.quote(output_file)} Y"]
+    )
+
+
+def build_release_holds_command(dataset: str) -> list[str]:
+    """Build the argv that releases all snapshot holds under *dataset*.
+
+    Pure function: no subprocess. Sources ``zfsreapplyholds`` and runs
+    ``reapplyholds_release <dataset> N Y`` (dry-run off, no_lock: the caller
+    must already hold the dataset locks). Used by Migrate Pool immediately
+    before the source pool is destroyed — held snapshots cannot be
+    destroyed, so ``zpool destroy`` would fail while any hold remains. The
+    holds are expected to have been captured first so they can be reapplied
+    onto the rebuilt pool. Raises ValueError on an empty name.
+    """
+    if not dataset:
+        raise ValueError("dataset must not be empty")
+    return _build_holds_command([f"reapplyholds_release {shlex.quote(dataset)} N Y"])
+
+
+def build_apply_holds_command(dataset: str, input_file: str) -> list[str]:
+    """Build the argv that reapplies captured holds (TSV) under *dataset*.
+
+    Pure function: no subprocess. Sources ``zfsreapplyholds`` and runs
+    ``reapplyholds_apply <dataset> <input-file> N Y`` (dry-run off, no_lock:
+    the caller must already hold the dataset locks). Raises ValueError on
+    empty names.
+    """
+    if not dataset:
+        raise ValueError("dataset must not be empty")
+    if not input_file:
+        raise ValueError("input file must not be empty")
+    return _build_holds_command(
+        [f"reapplyholds_apply {shlex.quote(dataset)} {shlex.quote(input_file)} N Y"]
+    )
+
+
 class ZfsRepository:
     """Wrap zfs/zpool subprocess calls for testability and isolation."""
 
@@ -1072,15 +1138,6 @@ class ZfsRepository:
             for line in result.stdout.strip().split("\n")
             if line.strip() and line.strip() != "-"
         ]
-
-    def list_bookmarks(self, dataset: str, snap_name: str | None = None) -> list[str]:
-        """Return bookmark names under *dataset*, optionally filtering by snapshot name."""
-        result = self._run(self._zfs("list", "-t", "bookmark", "-H", "-o", "name", "-r", dataset))
-        names = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
-        if snap_name is not None:
-            suffix = f"#{snap_name}"
-            names = [name for name in names if name.endswith(suffix)]
-        return names
 
     # ------------------------------------------------------------------
     # Dataset / snapshot writes

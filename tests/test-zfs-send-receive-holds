@@ -1,0 +1,266 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-zfs-send-receive-holds — Tests for destination hold preservation in
+# zfs-send-receive's full-copy path ($preserve_target_holds). The real
+# zfs-send-receive and the real zfsreapplyholds helper run against the shared
+# zfs mock; run in subshells so internal `exit 8` aborts cannot kill the
+# suite.
+
+# shellcheck disable=SC2218
+# (source() override below is intentionally not active for test-lib.sh itself.)
+builtin source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+# zfs-send-receive sources helpers with $mydir-relative paths; in the repo
+# layout $mydir must be the bin/ directory.
+repo_root="$mydir"
+mydir="$mydir/bin"
+
+# Prevent re-sourcing bashinit / rootcheck / zfslockmanager / bashsetx /
+# iscsi-lib inside send-receive from overwriting our mocks, enabling xtrace,
+# or requiring a real node configuration.
+source() {
+    local expanded="${1/#\~/$HOME}"
+    [[ "$expanded" == "$HOME/bashinit" ]] && return 0
+    # With the local-bashinit bootstrap, zfs-send-receive sources bashinit from
+    # its own directory. Skip that as well so test mocks remain in place.
+    [[ "$expanded" == "$repo_root/bin/bashinit" ]] && return 0
+    [[ "$expanded" == *"rootcheck" ]] && return 0
+    [[ "$expanded" == *"zfslockmanager" ]] && return 0
+    [[ "$expanded" == *"bashsetx" ]] && return 0
+    [[ "$expanded" == *"iscsi-lib.sh" ]] && return 0
+    builtin source "$@"
+}
+
+# iscsi-lib.sh is skipped above; provide the functions send-receive/delfs call.
+iscsi_rebuild_torn_down() { :; }
+iscsi_teardown_zvol() { return 0; }
+
+# Auto-answer interactive prompts (which use read -p); delegate everything
+# else to the real builtin so `while read` data loops terminate at EOF.
+read() {
+    local _a
+    for _a in "$@"; do
+        if [[ "$_a" == -*p* ]]; then
+            response="y"
+            return 0
+        fi
+    done
+    # shellcheck disable=SC2162
+    # Caller flags (e.g. -r) are forwarded verbatim.
+    builtin read "$@"
+}
+
+_TEST_LOG="$_mock_zfs_state_dir/sendrecv-holds.log"
+
+set_msg_level() {
+    msg_level="$1"
+}
+
+capture_stderr() {
+    exec 2>"$_TEST_LOG"
+}
+
+restore_stderr() {
+    exec 2>&1
+}
+
+get_stderr_log() {
+    cat "$(get_test_log_file)" 2>/dev/null
+}
+
+clear_log() {
+    : > "$_TEST_LOG"
+    : > "$(get_test_log_file)"
+}
+
+reset_mocks() {
+    _mock_zfs_fs_list=""
+    _mock_zfs_snap_list=""
+    _mock_zfs_props=()
+    _mock_zfs_snaps=()
+    _mock_zfs_datasets=()
+    _mock_zfs_snap_lists=()
+    _mock_zfs_guid_lists=()
+    _mock_zfs_holds=()
+    _mock_zfs_clones=()
+    _mock_zfs_send_size="1000000"
+    _mock_zpool_list=""
+    clear_log
+}
+
+# Shared mock world: one source dataset with one snapshot, replicated to a
+# destination that carries a user hold tag on its snapshot.
+_setup_full_copy_world() {
+    reset_mocks
+    set_msg_level INFO
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:receive_resume_token"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/src/data@snap1:creation"]="1700000000"
+    _mock_zfs_props["pool/dest/data@snap1:creation"]="1700000000"
+    _mock_zfs_snaps["pool/src/data@snap1"]=1
+    _mock_zfs_snaps["pool/dest/data@snap1"]=1
+    _mock_zfs_datasets["pool/dest/data"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_snap_lists["pool/dest/data"]="pool/dest/data@snap1"
+    _mock_zfs_snap_lists["pool/dest"]="pool/dest/data@snap1"
+    _mock_zfs_guid_lists["pool/src/data"]="guid1"
+    _mock_zfs_guid_lists["pool/dest/data"]="guid1"
+    _mock_zfs_holds["pool/dest/data@snap1"]="kept-tag"
+}
+
+source "$mydir/zfs-send-receive"
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+test_full_copy_preserves_destination_holds() {
+    test_start "Full copy captures and reapplies destination holds"
+    _setup_full_copy_world
+
+    capture_stderr
+    (
+        # Parameters are set as variables (like real callers do) — the
+        # overrides string is evaluated too late for nextsnap's default.
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" "Applied hold kept-tag to pool/dest/data@snap1"
+    assert_contains "$log" "Reapplied 1 holds on pool/dest"
+    # Capture precedes the transfer; reapply follows it.
+    local _copy_line _apply_line
+    _copy_line=$(grep -n "Doing a full copy" <<<"$log" | head -n1 | cut -d: -f1)
+    _apply_line=$(grep -n "Applied hold" <<<"$log" | head -n1 | cut -d: -f1)
+    if [[ -n "$_copy_line" && -n "$_apply_line" && "$_copy_line" -lt "$_apply_line" ]]
+    then
+        test_pass
+    else
+        test_fail "Hold capture should precede the copy and reapply follow it"
+    fi
+}
+
+test_incremental_run_skips_hold_preservation() {
+    test_start "Incremental run without force does no hold bookkeeping"
+    _setup_full_copy_world
+
+    capture_stderr
+    (
+        doincrementals='Y'; dointermediates='Y'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    if [[ "$log" == *"Reapplied"* || "$log" == *"Applied hold"* ]]; then
+        test_fail "Hold bookkeeping should not run on plain incremental copies"
+    else
+        test_pass
+    fi
+}
+
+test_dry_run_skips_hold_preservation() {
+    test_start "Dry-run full copy does no hold bookkeeping"
+    _setup_full_copy_world
+
+    capture_stderr
+    (
+        dryrun='Y'; doincrementals='N'; force='Y'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    if [[ "$log" == *"Reapplied"* || "$log" == *"Applied hold"* ]]; then
+        test_fail "Hold bookkeeping should not run in dry-run mode"
+    else
+        test_pass
+    fi
+}
+
+test_capture_failure_aborts_before_any_transfer() {
+    test_start "Hold capture failure aborts the full copy before any transfer"
+    _setup_full_copy_world
+
+    capture_stderr
+    (
+        # Force the capture's lock acquisition to fail inside this subshell.
+        zfslock_wait_or_resolve() { return 1; }
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 8 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" "Could not capture existing holds on pool/dest"
+    if [[ "$log" == *"About to copy the following datasets"* ]]; then
+        test_fail "Nothing should start after a failed hold capture"
+    else
+        test_pass
+    fi
+}
+
+test_preserve_target_holds_N_skips_bookkeeping() {
+    test_start "preserve_target_holds=N disables hold bookkeeping"
+    _setup_full_copy_world
+
+    capture_stderr
+    (
+        preserve_target_holds='N'
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    if [[ "$log" == *"Reapplied"* || "$log" == *"Applied hold"* ]]; then
+        test_fail "Hold bookkeeping should not run when preserve_target_holds=N"
+    else
+        test_pass
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Run tests
+# ---------------------------------------------------------------------------
+
+test_full_copy_preserves_destination_holds
+test_incremental_run_skips_hold_preservation
+test_dry_run_skips_hold_preservation
+test_capture_failure_aborts_before_any_transfer
+test_preserve_target_holds_N_skips_bookkeeping
+
+teardown_test_env
+test_summary

@@ -285,6 +285,7 @@ declare -gA _mock_zfs_datasets=()
 declare -gA _mock_zfs_snap_lists=()
 declare -gA _mock_zfs_guid_lists=()
 declare -gA _mock_zfs_holds=()
+declare -gA _mock_zfs_clones=()
 _mock_zfs_send_size="0"
 _mock_zpool_list=""
 _mock_zfs_last_sequence=""  # tracks -s / -S passed to zfs list
@@ -460,7 +461,7 @@ zfs() {
             fi
 
             # Snapshot-specific checks
-            if [[ "$type" == *"snapshot"* || "$type" == *"snap"* || "$type" == *"bookmark"* ]]; then
+            if [[ "$type" == *"snapshot"* || "$type" == *"snap"* ]]; then
                 # Snapshot existence check when a specific snapshot name is given
                 if [[ "$specific_arg" == *"@"* ]]; then
                     if [[ -n "${_mock_zfs_snaps[$specific_arg]+x}" ]]; then
@@ -478,6 +479,23 @@ zfs() {
                     elif [[ -n "$_mock_zfs_guid_list" ]]; then
                         echo -e "$_mock_zfs_guid_list"
                     fi
+                elif [[ "$outcols" == "clones" ]]; then
+                    # Clone-dependency listings: one row per snapshot, defaulting
+                    # to "-" (no clones). Suites can set _mock_zfs_clones[<snap>].
+                    # mapfile (not `while read`) so suites that override read()
+                    # cannot spin this loop.
+                    local _clones_src="" _one_snap
+                    if [[ -n "${_mock_zfs_snap_lists[$specific_arg]+x}" ]]; then
+                        _clones_src="${_mock_zfs_snap_lists[$specific_arg]}"
+                    else
+                        _clones_src="$_mock_zfs_snap_list"
+                    fi
+                    local -a _clones_snaps=()
+                    mapfile -t _clones_snaps <<< "$_clones_src"
+                    for _one_snap in "${_clones_snaps[@]}"; do
+                        [[ -n "$_one_snap" ]] || continue
+                        echo "${_mock_zfs_clones[$_one_snap]:--}"
+                    done
                 else
                     if [[ -n "${_mock_zfs_snap_lists[$specific_arg]+x}" ]]; then
                         echo -e "${_mock_zfs_snap_lists[$specific_arg]}"

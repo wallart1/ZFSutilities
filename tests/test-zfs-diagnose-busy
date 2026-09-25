@@ -123,12 +123,6 @@ zfs() {
                 esac
                 ((arg_idx++))
             done
-            if [[ "$type" == *"bookmark"* ]]; then
-                if [[ -n "${_mock_zfs_list_values[bookmarks]+x}" ]]; then
-                    echo -e "${_mock_zfs_list_values[bookmarks]}"
-                fi
-                return 0
-            fi
             if [[ "$outcols" == "clones" ]]; then
                 if [[ -n "${_mock_zfs_list_values[${specific_arg}:clones]+x}" ]]; then
                     echo -e "${_mock_zfs_list_values[${specific_arg}:clones]}"

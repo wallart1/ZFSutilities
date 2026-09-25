@@ -2,7 +2,8 @@
 
 Also covers the migration argv builders added to zfs_repository.py
 (build_recursive_snapshot_command, build_migration_send_receive_command,
-build_pool_export_command, build_pool_import_rename_command).
+build_pool_export_command, build_pool_import_rename_command, and the
+holds capture/release/apply builders).
 """
 
 import os
@@ -20,12 +21,15 @@ from pool_migrate import (
     MIGRATE_HOLDING_POOL,
     MIGRATE_NEW_DISKS,
     MIGRATION_MODES,
+    STEP_CAPTURE_HOLDS,
     STEP_COPY,
     STEP_CREATE_POOL,
     STEP_DESTROY_HOLDING,
     STEP_DESTROY_SOURCE,
     STEP_EXPORT_SOURCE,
     STEP_IMPORT_RENAME,
+    STEP_REAPPLY_HOLDS,
+    STEP_RELEASE_HOLDS,
     STEP_SNAPSHOT,
     STEP_VERIFY,
     MigrationStep,
@@ -134,12 +138,15 @@ class TestPlanMigrationSteps(unittest.TestCase):
             [step.kind for step in steps],
             [
                 STEP_SNAPSHOT,
+                STEP_CREATE_POOL,
                 STEP_COPY,
                 STEP_COPY,
                 STEP_COPY,
                 STEP_VERIFY,
+                STEP_CAPTURE_HOLDS,
                 STEP_EXPORT_SOURCE,
                 STEP_IMPORT_RENAME,
+                STEP_REAPPLY_HOLDS,
             ],
         )
         self.assertEqual(
@@ -149,6 +156,29 @@ class TestPlanMigrationSteps(unittest.TestCase):
         for step in steps:
             self.assertTrue(step.description)
 
+    def test_holding_create_step_mentions_disk_count(self):
+        steps = plan_migration_steps(
+            "temp",
+            ["proxmox"],
+            MIGRATE_HOLDING_POOL,
+            "fivebays",
+            rebuild_disk_count=3,
+        )
+        create = [step for step in steps if step.kind == STEP_CREATE_POOL]
+        self.assertEqual(len(create), 1)
+        self.assertIn("3 selected disks", create[0].description)
+        self.assertNotIn("freed disks", create[0].description)
+
+    def test_rebuild_disk_count_must_be_positive(self):
+        with self.assertRaises(ValueError):
+            plan_migration_steps(
+                "temp",
+                ["proxmox"],
+                MIGRATE_HOLDING_POOL,
+                "fivebays",
+                rebuild_disk_count=0,
+            )
+
     def test_holding_pool_plan_extra_steps(self):
         steps = plan_migration_steps("temp", ["proxmox"], MIGRATE_HOLDING_POOL, "fivebays")
         self.assertEqual(
@@ -157,13 +187,16 @@ class TestPlanMigrationSteps(unittest.TestCase):
                 STEP_SNAPSHOT,
                 STEP_COPY,
                 STEP_VERIFY,
+                STEP_CAPTURE_HOLDS,
                 STEP_EXPORT_SOURCE,
+                STEP_RELEASE_HOLDS,
                 STEP_DESTROY_SOURCE,
                 STEP_CREATE_POOL,
                 STEP_COPY,
                 STEP_VERIFY,
                 STEP_EXPORT_SOURCE,
                 STEP_IMPORT_RENAME,
+                STEP_REAPPLY_HOLDS,
                 STEP_DESTROY_HOLDING,
             ],
         )

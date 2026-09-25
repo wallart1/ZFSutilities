@@ -26,14 +26,16 @@ def normalize_repo_root(text):
     """Replace this checkout's absolute path with the literal ``REPO_ROOT``.
 
     Golden files use ``REPO_ROOT`` so they are machine-independent, but the
-    migrate-send wrapper path is shlex-quoted only when the checkout path
+    sourced wrapper paths are shlex-quoted only when the checkout path
     needs it. Canonicalize to the always-quoted form so goldens match on any
     checkout path (with or without spaces).
     """
-    script = os.path.join(REPO_ROOT, "bin", "zfs-migrate-send")
-    text = text.replace(f"'{script}'", "\x00SCRIPT\x00")
-    text = text.replace(script, "\x00SCRIPT\x00")
-    return text.replace("\x00SCRIPT\x00", "'REPO_ROOT/bin/zfs-migrate-send'")
+    for name in ("zfs-migrate-send", "zfsreapplyholds"):
+        script = os.path.join(REPO_ROOT, "bin", name)
+        text = text.replace(f"'{script}'", "\x00SCRIPT\x00")
+        text = text.replace(script, "\x00SCRIPT\x00")
+        text = text.replace("\x00SCRIPT\x00", f"'REPO_ROOT/bin/{name}'")
+    return text
 
 
 @contextlib.contextmanager

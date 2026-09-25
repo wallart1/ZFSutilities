@@ -143,21 +143,7 @@ function diagnose_dataset_busy {
     fi
 
     # ------------------------------------------------------------------
-    # 5. Bookmarks
-    # ------------------------------------------------------------------
-    if [[ "$is_snapshot" == true ]]; then
-        local bmarks
-        bmarks=$(zfs list -t bookmark -H -o name -r "${target%%@*}" 2>/dev/null \
-            | grep "#${target#*@}" || true)
-        if [[ -n "$bmarks" ]]; then
-            log_msg "WARN:   → Snapshot is referenced by bookmark(s): ${bmarks}"
-            log_msg "WARN:     Destroy the bookmark(s) first with 'zfs destroy <bookmark>'."
-            found_cause=true
-        fi
-    fi
-
-    # ------------------------------------------------------------------
-    # 6. iSCSI LUN exposure (zvols only)
+    # 5. iSCSI LUN exposure (zvols only)
     # ------------------------------------------------------------------
     local bsname="${target##*/}"
     if is_vm_disk_basename "$bsname"; then
@@ -196,7 +182,7 @@ function diagnose_dataset_busy {
     fi
 
     # ------------------------------------------------------------------
-    # 7. Running VM using the zvol
+    # 6. Running VM using the zvol
     # ------------------------------------------------------------------
     if is_vm_disk_basename "$bsname"; then
         local vmid="${bsname#vm-}"
@@ -213,7 +199,7 @@ function diagnose_dataset_busy {
     fi
 
     # ------------------------------------------------------------------
-    # 8. NFS / SMB shares
+    # 7. NFS / SMB shares
     # ------------------------------------------------------------------
     local sharenfs sharesmb
     sharenfs=$(zfs get -H -o value sharenfs "$target" 2>/dev/null)

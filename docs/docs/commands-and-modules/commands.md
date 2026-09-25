@@ -1857,7 +1857,9 @@ receives it with `zfs receive -u -F -s -v`, resuming from a receive resume
 token when the destination already has one. `-v` logs each dataset as it is
 received so progress through the tree is visible in the session log. The
 Python GUI invokes it through a `bash -c` wrapper built by
-`build_migration_send_receive_command()`.
+`build_migration_send_receive_command()`. The destination pool must already
+exist — the wizard creates it in a separate `zpool create` step before the
+first receive; this script never creates pools or datasets itself.
 
 ```bash
 sourcefs=temp/proxmox destfs=temp_mig/proxmox snapname=migrate-… \
@@ -2075,25 +2077,25 @@ sudo zfsrestore [overrides]
 | `$depth`                    | Recursion depth (`''` = full subtree, `0` = named dataset only)           | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 | `$includes`, `$excludes`    | Dataset filters                                                           | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 | `$nextsnap`                 | Snapshot name limit (optional; `'notneeded'` to look up newest on source) | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
-| `$preserve_target_holds`    | `'Y'` = capture and reapply destination holds (default)                   | [Execution Control](../developer-guide/global-variables.md#zfs-sendreceive)        |
 
 The restore sends the oldest source snapshot as a full stream, then sends
 an incremental stream with intermediates to catch up to the newest source
 snapshot. Both steps are performed inside a single `zfs-send-receive`
 invocation. By default the dataset list is built with unlimited recursion,
 so the named dataset and all of its descendants are restored. Set `depth=0`
-to restore only the named dataset.
+to restore only the named dataset. Destination hold tags are preserved by
+`zfs-send-receive` itself during the full copy (`$preserve_target_holds`,
+default `'Y'`).
 
 **Called modules:**
 
 | Module                                                              | Purpose in this command                                                     |
 | -------------------------------------------------------------------| --------------------------------------------------------------------------- |
 | [zfssnapbuild](modules.md#zfssnapbuild)| Inhibited (`$nextsnap='notneeded'`)                                         |
-| [zfs-send-receive](modules.md#zfs-send-receive)| Perform full then incremental copy                                          |
+| [zfs-send-receive](modules.md#zfs-send-receive)| Perform full then incremental copy, preserving destination holds            |
 | [zfsoverrides](modules.md#zfsoverrides)| Apply override string(s)                                                    |
 | [zfsremoveleadingqualifiers](modules.md#zfsremoveleadingqualifiers)| Strip leading qualifiers when building destination zvol paths               |
 | [`ensure-restored-vm-iscsi`](#ensure-restored-vm-iscsi) (two-node)| Re-export restored VM disk zvols as iSCSI LUNs after the final send-receive |
-| [zfsreapplyholds](#zfsreapplyholds)| Capture/reapply destination snapshot holds                                  |
 
 **Data structures consumed / produced:**
 
@@ -2107,15 +2109,12 @@ to restore only the named dataset.
 2. Set full-copy parameters (`doincrementals='N'`,
    `force='Y'`, `releaseholds='Y'`, `releaseholds_tags=('offsite-*')`,
    `commsnap_mostrecent='OLDEST'`).
-3. If `$preserve_target_holds='Y'`, capture all existing holds on `$destfs`
-   before it is destroyed.
-4. Call `send-receive` once. `zfs-send-receive` performs the full copy of the
-   oldest snapshot and the incremental catch-up to the target internally.
-5. In two-node mode, call `ensure-restored-vm-iscsi` after the send-receive
+3. Call `send-receive` once. `zfs-send-receive` performs the full copy of the
+   oldest snapshot and the incremental catch-up to the target internally —
+   including preservation of destination hold tags.
+4. In two-node mode, call `ensure-restored-vm-iscsi` after the send-receive
    to recreate missing iSCSI LUNs for restored VM disk zvols.  EFI disks are matched
    to the `efidisk0:` entry by their 4 MiB size, independent of the zvol disk number.
-6. If `$preserve_target_holds='Y'`, reapply the captured holds to the restored
-   snapshots.
 
 **Return codes:**
 
@@ -2567,14 +2566,18 @@ Sorts by: `used`, `usedds`, `usedsnap`, `written`, `quota`, `refer`,
 
 ### `zfsreapplyholds`
 
-Capture and reapply ZFS snapshot holds for a dataset subtree. This is used
-automatically by [`zfsrestore`](#zfsrestore) and
-[`zfsfullcopy`](modules.md#zfsfullcopy)
-to preserve destination holds across a restore, and can be run standalone when
-you need to manage the capture/apply steps yourself.
+Capture, release, and reapply ZFS snapshot holds for a dataset subtree. This is used
+automatically by [`zfsrestore`](#zfsrestore),
+[`zfsfullcopy`](modules.md#zfsfullcopy), and Migrate Pool (via
+`build_capture_holds_command` / `build_release_holds_command` /
+`build_apply_holds_command` in
+[python-modules](python-modules.md#zfs_repositorypy)) to preserve snapshot holds
+across a restore or migration, and can be run standalone when you need to
+manage the steps yourself.
 
 ```bash
 sudo zfsreapplyholds [--dry-run] --capture <dataset> [output-file]
+sudo zfsreapplyholds [--dry-run] --release <dataset>
 sudo zfsreapplyholds [--dry-run] --apply <dataset> [input-file]
 ```
 
@@ -2583,10 +2586,11 @@ sudo zfsreapplyholds [--dry-run] --apply <dataset> [input-file]
 | Argument    | Description                                                                     |
 | ----------- | ------------------------------------------------------------------------------- |
 | `--capture` | Capture all holds under `<dataset>` and write them as TSV (`snapshot<tab>tag`). |
+| `--release` | Release every hold under `<dataset>` (Migrate Pool uses this after capture, before destroying the source pool — held snapshots cannot be destroyed). |
 | `--apply`   | Read a TSV file and apply each hold to the named snapshot.                      |
-| `--dry-run` | Log what would be applied without adding holds.                                 |
+| `--dry-run` | Log what would be done without changing holds.                                  |
 | `<dataset>` | Root dataset or subtree to lock and operate on.                                 |
-| `[file]`    | File to write (`--capture`) or read (`--apply`). Omit/`"-"` for stdout/stdin.   |
+| `[file]`    | File to write (`--capture`) or read (`--apply`). Omit/`"-"` for stdout/stdin. Not accepted with `--release`. |
 
 **Globals:** none.
 
@@ -2595,20 +2599,30 @@ Existing holds on the destination are captured before `zfsrestore` destroys it,
 so tags that belong to the target (for example `offsite-<pool>` receipts) are
 not lost.
 
+When sourced, this script defines `reapplyholds_capture()`,
+`reapplyholds_release()`, and `reapplyholds_apply()`. Each accepts a trailing
+optional **no_lock** argument (`"Y"` skips the zfslockmanager locking). Pass it
+only when the caller already holds the dataset locks — the Migrate Pool
+executor holds a pool write lock for the whole migration run, so its holds
+steps run with no_lock `Y`; taking a second lock from a headless step would
+abort on the conflict.
+
 **Called modules:**
 
 | Module                                      | Purpose in this command                    |
 | -------------------------------------------| ------------------------------------------ |
-| [zfslockmanager](modules.md#zfslockmanager)| Lock the dataset root during capture/apply |
+| [zfslockmanager](modules.md#zfslockmanager)| Lock the dataset root during capture/release/apply (skipped with no_lock) |
 
 **Data structures consumed / produced:** none.
 
 **Internal flow:**
 
-1. Acquire a read lock (`--capture`) or write lock (`--apply`) on the dataset root.
-2. For capture, list snapshots recursively and query `zfs holds -H` for each one.
-3. For apply, read each TSV line and run `zfs hold <tag> <snapshot>` for existing snapshots.
-4. Release the lock and report applied/skipped counts.
+1. Acquire a read lock (`--capture`) or write lock (`--release`/`--apply`) on the dataset root.
+2. List snapshots recursively and query `zfs holds -H` for each one.
+3. For capture, write each `<snapshot><tab><tag>` pair to the output.
+4. For release, run `zfs release <tag> <snapshot>` for each hold found.
+5. For apply, read each TSV line and run `zfs hold <tag> <snapshot>` for existing snapshots.
+6. Release the lock and report applied/released/skipped counts.
 
 **Return codes:**
 

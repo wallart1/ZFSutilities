@@ -20,7 +20,6 @@ _run_zfsrestore() {
 
     local _send_receive_rc="${ZFSRESTORE_SEND_RECEIVE_RC:-0}"
     local _iscsi_rc="${ZFSRESTORE_ISCSI_RC:-0}"
-    local _reapply_rc="${ZFSRESTORE_REAPPLY_RC:-0}"
     cat > "$_mock_bin/zfs-send-receive" <<'EOF'
 send-receive() {
     echo "send-receive called with: $*" >> "$ZFSRESTORE_STATE/send-receive.calls"
@@ -66,19 +65,6 @@ exit $_iscsi_rc
 EOF
     chmod +x "$_mock_bin/ensure-restored-vm-iscsi"
 
-    cat > "$_mock_bin/zfsreapplyholds" <<'EOF'
-reapplyholds_capture() {
-    echo "capture: $*" >> "$ZFSRESTORE_STATE/reapply.calls"
-    if [[ -n "$2" ]]; then
-        printf '%s\t%s\n' "${destfs}@placeholder" "kept" > "$2"
-    fi
-}
-reapplyholds_apply() {
-    echo "apply: $*" >> "$ZFSRESTORE_STATE/reapply.calls"
-    return $_reapply_rc
-}
-EOF
-
     (
         # shellcheck disable=SC2034
         # Intentionally set for sourced zfsrestore script.
@@ -88,10 +74,6 @@ EOF
         # shellcheck disable=SC2034
         # Intentionally set for sourced zfsrestore script.
         fsarray=()
-        # Redirect mktemp to a predictable path inside the test state.
-        mktemp() {
-            echo "$_state_dir/zfsrestore-target-holds.current"
-        }
         # shellcheck source=/dev/null
         source "$_mock_bin/zfsrestore"
     ) >"$_state_dir/out" 2>"$_state_dir/err"
@@ -203,123 +185,6 @@ test_zfsrestore_sets_full_copy_parameters() {
         "commsnap_mostrecent=OLDEST"
 }
 
-test_zfsrestore_preserves_target_holds() {
-    test_start "zfsrestore captures and reapplies target holds"
-    local _state_dir
-    _state_dir="$_mock_zfs_state_dir/zfsrestore_preserve_holds"
-    mkdir -p "$_state_dir"
-    _run_zfsrestore "$_state_dir" "restoresourcefs=pool/src; destfs=pool/dest"
-    local rc
-    rc=$(cat "$_state_dir/rc")
-    assert_rc 0 "$rc"
-
-    local _calls
-    _calls=$(cat "$_state_dir/reapply.calls")
-    assert_contains "$_calls" "capture: pool/dest"
-    assert_contains "$_calls" "apply: pool/dest"
-    # Capture must run before apply.
-    local _cap_line _apply_line
-    _cap_line=$(grep -n "capture:" "$_state_dir/reapply.calls" | head -n1 | cut -d: -f1)
-    _apply_line=$(grep -n "apply:" "$_state_dir/reapply.calls" | head -n1 | cut -d: -f1)
-    if [[ "$_cap_line" -lt "$_apply_line" ]]; then
-        test_pass
-    else
-        test_fail "Capture should run before apply"
-    fi
-}
-
-test_zfsrestore_skips_hold_preservation_when_disabled() {
-    test_start "zfsrestore skips hold preservation when preserve_target_holds=N"
-    local _state_dir
-    _state_dir="$_mock_zfs_state_dir/zfsrestore_no_preserve_holds"
-    mkdir -p "$_state_dir"
-    _run_zfsrestore "$_state_dir" \
-        "restoresourcefs=pool/src; destfs=pool/dest; preserve_target_holds='N'"
-    local rc
-    rc=$(cat "$_state_dir/rc")
-    assert_rc 0 "$rc"
-
-    if [[ -f "$_state_dir/reapply.calls" ]]; then
-        test_fail "Hold helpers should not be called when disabled"
-    else
-        test_pass
-    fi
-}
-
-test_zfsrestore_dry_run_applies_holds_logged() {
-    test_start "zfsrestore passes dry-run flag to hold reapply"
-    local _state_dir
-    _state_dir="$_mock_zfs_state_dir/zfsrestore_dryrun_holds"
-    mkdir -p "$_state_dir"
-    _run_zfsrestore "$_state_dir" \
-        "restoresourcefs=pool/src; destfs=pool/dest; dryrun='Y'"
-    local rc
-    rc=$(cat "$_state_dir/rc")
-    assert_rc 0 "$rc"
-
-    assert_contains "$(cat "$_state_dir/reapply.calls")" "apply: pool/dest"
-    assert_contains "$(cat "$_state_dir/reapply.calls")" "Y"
-}
-
-test_zfsrestore_removes_temp_file_on_success() {
-    test_start "zfsrestore removes captured-holds temp file on success"
-    local _state_dir
-    _state_dir="$_mock_zfs_state_dir/zfsrestore_success_temp"
-    mkdir -p "$_state_dir"
-    _run_zfsrestore "$_state_dir" \
-        "restoresourcefs=pool/src; destfs=pool/dest"
-    local rc
-    rc=$(cat "$_state_dir/rc")
-    assert_rc 0 "$rc"
-    if [[ -e "$_state_dir/zfsrestore-target-holds.current" ]]; then
-        test_fail "Temp file should have been removed on success"
-    else
-        test_pass
-    fi
-}
-
-test_zfsrestore_preserves_temp_file_on_failure() {
-    test_start "zfsrestore preserves captured-holds temp file on failure"
-    local _state_dir
-    _state_dir="$_mock_zfs_state_dir/zfsrestore_failure_temp"
-    mkdir -p "$_state_dir"
-    clear_test_log_file
-    ZFSRESTORE_SEND_RECEIVE_RC=1 _run_zfsrestore "$_state_dir" \
-        "restoresourcefs=pool/src; destfs=pool/dest"
-    local rc
-    rc=$(cat "$_state_dir/rc")
-    if [[ "$rc" -eq 0 ]]; then
-        test_fail "Expected non-zero exit code on failure, got $rc"
-        return
-    fi
-    if [[ ! -e "$_state_dir/zfsrestore-target-holds.current" ]]; then
-        test_fail "Temp file should have been preserved on failure"
-        return
-    fi
-    if grep -q "leaving captured-holds temp file for diagnosis" \
-            "$_state_dir/err"; then
-        test_pass
-    else
-        test_fail "Expected log message about residual captured-holds file"
-    fi
-}
-
-test_zfsrestore_cleans_residual_temp_file_on_startup() {
-    test_start "zfsrestore removes residual captured-holds temp file on startup"
-    local _state_dir
-    _state_dir="$_mock_zfs_state_dir/zfsrestore_residual_temp"
-    mkdir -p "$_state_dir"
-    local _residual="$_state_dir/zfsrestore-target-holds.residual"
-    touch "$_residual"
-    TMPDIR="$_state_dir" _run_zfsrestore "$_state_dir" \
-        "restoresourcefs=pool/src; destfs=pool/dest"
-    if [[ -e "$_residual" ]]; then
-        test_fail "Residual temp file should have been removed on startup"
-    else
-        test_pass
-    fi
-}
-
 test_zfsrestore_propagates_ensure_restored_iscsi_failure() {
     test_start "zfsrestore propagates ensure-restored-vm-iscsi failure"
     local _state_dir
@@ -331,30 +196,6 @@ test_zfsrestore_propagates_ensure_restored_iscsi_failure() {
     rc=$(cat "$_state_dir/rc")
     if [[ "$rc" -eq 0 ]]; then
         test_fail "Expected non-zero exit code on iSCSI failure, got $rc"
-        return
-    fi
-    if [[ ! -e "$_state_dir/zfsrestore-target-holds.current" ]]; then
-        test_fail "Temp file should have been preserved on iSCSI failure"
-        return
-    fi
-    test_pass
-}
-
-test_zfsrestore_propagates_reapplyholds_apply_failure() {
-    test_start "zfsrestore propagates reapplyholds_apply failure"
-    local _state_dir
-    _state_dir="$_mock_zfs_state_dir/zfsrestore_reapply_failure"
-    mkdir -p "$_state_dir"
-    ZFSRESTORE_REAPPLY_RC=1 _run_zfsrestore "$_state_dir" \
-        "restoresourcefs=pool/src; destfs=pool/dest"
-    local rc
-    rc=$(cat "$_state_dir/rc")
-    if [[ "$rc" -eq 0 ]]; then
-        test_fail "Expected non-zero exit code on reapply failure, got $rc"
-        return
-    fi
-    if [[ ! -e "$_state_dir/zfsrestore-target-holds.current" ]]; then
-        test_fail "Temp file should have been preserved on reapply failure"
         return
     fi
     test_pass
@@ -371,14 +212,7 @@ test_zfsrestore_requires_restoresourcefs
 test_zfsrestore_requires_destfs
 test_zfsrestore_calls_send_receive_once
 test_zfsrestore_sets_full_copy_parameters
-test_zfsrestore_preserves_target_holds
-test_zfsrestore_skips_hold_preservation_when_disabled
-test_zfsrestore_dry_run_applies_holds_logged
-test_zfsrestore_removes_temp_file_on_success
-test_zfsrestore_preserves_temp_file_on_failure
-test_zfsrestore_cleans_residual_temp_file_on_startup
 test_zfsrestore_propagates_ensure_restored_iscsi_failure
-test_zfsrestore_propagates_reapplyholds_apply_failure
 
 teardown_test_env
 test_summary

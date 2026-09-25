@@ -221,7 +221,8 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-zfslockmanager-soak` | Randomized timing-conflict scenarios for the lock manager at realistic timings — including wait/retry loops and headless timed waits (skipped by default; see "Soak suites") |
 | `test-zfsmassdelsnaps` | Mass snapshot deletion: ignore/respect retention, dry-run, approval, releaseholds forwarding |
 | `test-zfsmount` | Lock acquisition before mount/unmount per dataset |
-| `test-zfsreapplyholds` | Capture/apply snapshot holds, CLI argument parsing, dry-run apply |
+| `test-zfsreapplyholds` | Capture/release/apply snapshot holds, no-lock opt-out, CLI argument parsing, dry-run apply/release |
+| `test-zfs-send-receive-holds` | `zfs-send-receive` destination hold preservation: capture/reapply ordering on full copies, skip on plain incrementals, dry-run, and `preserve_target_holds='N'`; capture failure aborts before any transfer |
 | `test-zfsrestore` | `zfsrestore` full-copy wrapper: overrides, legacy second overrides, required parameters, single `send-receive` invocation, parameter forwarding |
 | `test-zfsrestoresendstream` | Lock acquisition before each zfs receive destination |
 | `test-zfsresume` | Lock acquisition before reading resume token |

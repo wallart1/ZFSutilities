@@ -33,6 +33,17 @@ For an overview of all documentation sections, return to the
     retention, and iSCSI lifecycle scripts may interact with the root pool in
     unexpected ways. Proceed at your own risk.
 
+!!! note "ZFS bookmarks"
+    ZFSutilities never creates, destroys, sends, or makes decisions from ZFS
+    bookmarks — they are tolerated but never acted upon. No script
+    enumerates them (the one scan that used `-t all` now asks for
+    filesystems and volumes only, and the common-snapshot search considers
+    snapshots exclusively), so a bookmark can never be chosen as an
+    incremental base, reported as a VM disk, or otherwise affect backups,
+    snapshot retention, or pool migration. Bookmarks present in backup or
+    destination pools are **untested** — ZFSutilities never replicates
+    bookmarks, so any found there were created by other tooling.
+
 ### Proxmox VE (optional on single node and storage node)
 
 Proxmox VE is **required** on a two-node compute host and on a single-node host
