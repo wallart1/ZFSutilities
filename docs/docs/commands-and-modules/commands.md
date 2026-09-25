@@ -2985,36 +2985,57 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 
 ### `remove-vm`
 
-Removes a VM's zvols and Proxmox config without archiving. Scans all pools for
-`vm-<vmid>-disk-*` zvols, lists them along with any iSCSI target/LUN mappings,
-stops the VM if it is running, asks for confirmation, then destroys each zvol
-using `zfsdelfs`. Finally removes the Proxmox VM definition.
+Removes a VM's referenced zvols and Proxmox config without archiving. Reads the
+VM config to find the zvols that actually belong to the VM, then scans all
+pools for additional zvols named `vm-<vmid>-disk-*` and classifies them. The
+zvols referenced by the VM config are listed along with any iSCSI target/LUN
+mappings, the VM is stopped if it is running, confirmation is requested, and
+each selected zvol is destroyed using `zfsdelfs`. Finally the Proxmox VM
+definition is removed.
+
+Matching zvols that are referenced by a *different* VM (for example a disk
+moved or attached to another VM without renaming the underlying zvol) are
+reported as reassigned and are **never** destroyed. Matching zvols not
+referenced by any VM config (detached/orphaned disks) are reported as orphaned
+and are destroyed only when `--cleanup-orphans` is passed. This protects other
+VMs from accidental data loss while still allowing leftover disks to be
+cleaned up on request.
 
 ```bash
-sudo remove-vm <vmid>
+sudo remove-vm [--cleanup-orphans] <vmid>
 ```
 
 **Arguments:**
 
-| Argument | Description     |
-| -------- | --------------- |
-| `$1`     | VM ID to remove |
+| Argument            | Description                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------- |
+| `$1`                | VM ID to remove                                                                    |
+| `--cleanup-orphans` | Also destroy matching zvols that are not referenced by any VM config               |
 
 **Flow:**
 
-1. **Discover zvols** — Scans all pools for zvols matching `vm-<vmid>-disk-<N>`.
+1. **Discover referenced zvols** — Reads `/etc/pve/qemu-server/<vmid>.conf` and
+   resolves each referenced disk to its zvol. In single-node mode this parses
+   the local ZFS disk lines; in two-node mode it resolves iSCSI target/LUN
+   pairs on the storage host.
+2. **Scan all pools** — Scans all pools for zvols matching `vm-<vmid>-disk-<N>`.
    In two-node mode this runs on the storage host.
-2. **Collect iSCSI info** (two-node) — Looks up the target and LUN for each
-   backstore derived from the zvol name.
-3. **Stop VM** — If a Proxmox config exists and the VM is running, it is stopped.
-4. **Confirm** — Lists the zvols (with sizes and iSCSI info) and asks whether to
-   proceed.
-5. **Destroy zvols** — Calls `zfsdelfs` on each zvol with `autoproceed='Y'` so
-   only one confirmation is required. `zfsdelfs` handles snapshots, holds, clone
-   dependents, and iSCSI teardown.
-6. **Save iSCSI config / rescan** (two-node) — Persists the updated targetcli
+3. **Classify** — Compares every matching zvol against all VM configs. Zvols
+   referenced by the target VM are selected for removal; zvols referenced by
+   another VM are reported as reassigned and skipped; zvols referenced by no
+   config are reported as orphaned and skipped unless `--cleanup-orphans` is
+   set.
+4. **Collect iSCSI info** (two-node) — Looks up the target and LUN for each
+   backstore derived from the selected zvol names.
+5. **Stop VM** — If a Proxmox config exists and the VM is running, it is stopped.
+6. **Confirm** — Lists the selected zvols (with sizes and iSCSI info) plus any
+   reassigned/orphaned zvols, and asks whether to proceed.
+7. **Destroy zvols** — Calls `zfsdelfs` on each selected zvol with
+   `autoproceed='Y'` so only one confirmation is required. `zfsdelfs` handles
+   snapshots, holds, clone dependents, and iSCSI teardown.
+8. **Save iSCSI config / rescan** (two-node) — Persists the updated targetcli
    configuration and rescans the compute host.
-7. **Remove config** — Deletes `/etc/pve/qemu-server/<vmid>.conf`.
+9. **Remove config** — Deletes `/etc/pve/qemu-server/<vmid>.conf`.
 
 **Globals:**
 
@@ -3028,7 +3049,7 @@ sudo remove-vm <vmid>
 
 | Script| Purpose in this command                                            |
 | ----------------------------| ------------------------------------------------------------------ |
-| [zfsdelfs](commands.md#zfsdelfs)| Destroy each zvol and its snapshots/holds, handling iSCSI teardown |
+| [zfsdelfs](commands.md#zfsdelfs)| Destroy each selected zvol and its snapshots/holds, handling iSCSI teardown |
 | [safe-iscsi-save](two-node.md#safe-iscsi-save-storage-node) (two-node)| Persist iSCSI configuration after teardown                         |
 | [rescan-storage](two-node.md#rescan-storage-both) (two-node)| Refresh compute-host device view                                   |
 
@@ -3037,7 +3058,7 @@ sudo remove-vm <vmid>
 | Structure                          | Role                                     | Reference                                                                                            |
 | ---------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | Node config                        | Determines single-node vs two-node paths | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
-| `/etc/pve/qemu-server/<vmid>.conf` | Removed if present                       | —                                                                                                    |
+| `/etc/pve/qemu-server/<vmid>.conf` | Source of referenced-disk truth; removed if present | —                                                                    |
 
 **Return codes:**
 

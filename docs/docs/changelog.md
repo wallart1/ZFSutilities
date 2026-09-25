@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.106.0
+
+*Released 2026-09-24*
+
+### Added
+
+- **`remove-vm --cleanup-orphans`** — `remove-vm` now reads the Proxmox VM
+  config to find the zvols the VM actually references, then classifies every
+  matching `vm-<vmid>-disk-*` zvol against all VM configs: config-referenced
+  zvols are removed as before; zvols referenced by a *different* VM (moved or
+  attached without renaming) are reported as reassigned and never destroyed;
+  zvols referenced by no config (detached/orphaned disks) are reported as
+  orphaned and destroyed only when the new `--cleanup-orphans` flag is
+  passed. Two-node mode resolves config references and size/iSCSI lookups on
+  the storage host, passing data as SSH arguments rather than stdin.
+  `tests/test-remove-vm` covers orphan, reassigned, `--cleanup-orphans`, and
+  two-node reassigned cases.
+
+- **Pool export failure recovery (Pools tab)** — a failed pool export is now
+  diagnosed and recovered instead of just logging an error: mounted
+  filesystems with no other blockers are auto-unmounted, then the user is
+  asked per-blocker whether to stop running VMs, tear down iSCSI LUNs and
+  backstores, disable NFS/SMB shares, or terminate busy processes (SIGTERM
+  with a SIGKILL escalation prompt), after which the export is retried.
+  Remaining unresolvable blockers are summarized in a dialog. Built on a new
+  structured `collect_dataset_busy_reasons()` / `BusyReason` API in
+  `gui_helpers` (the non-logging counterpart to `diagnose_dataset_busy`) and
+  new `ZfsRepository` methods `export_pool_detailed()`, `unmount_filesystem()`,
+  and `dataset_for_mountpoint()`.
+
+- **`create_scrolled_dialog()` (gui_helpers)** — resizable dialog whose
+  content area scrolls, with the default size capped to 90 % of the monitor
+  workarea so large wizards never open off-screen. The Create Pool wizard,
+  all five pool-growth dialogs, and the Migrate Pool wizard now use it.
+
+- **`tests/run-tests --log <file>`** — persists the full harness console
+  stream (including failing-suite dumps and the summary) to a file,
+  replacing the redirect-and-read shell pattern; documented in the testing
+  guide.
+
+### Changed
+
+- **`remove-vm` default behavior** — without `--cleanup-orphans`, only the
+  zvols referenced by the VM's config are destroyed; previously every
+  matching zvol was destroyed regardless of ownership.
+
+### Fixed
+
+- **Pool watch window dataset tree** — the `PoolWatchWindow` TreeStore
+  schema now matches the Datasets tab (10 columns, adding `mounted` and
+  `fg_color`); it previously declared 8 columns.
+
+- **Python GUI layer architecture** — the pool-export auto-unmount no longer
+  reaches into `ZfsRepository`'s private `_run`/`_zfs`; it calls the new
+  public `unmount_filesystem()` method.
+
 ## 0.105.1
 
 *Released 2026-09-24*

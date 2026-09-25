@@ -291,7 +291,7 @@ def _drive_handler(pgd, app, driver):
     nc = MagicMock()
     nc.is_two_node.return_value = False
     patches = [
-        patch.object(pgd, "create_dialog", return_value=driver.fake_dlg),
+        patch.object(pgd, "create_scrolled_dialog", return_value=(driver.fake_dlg, MagicMock())),
         patch.object(pgd, "_AddVdevState", spy_state),
         patch.object(pgd, "node_config", nc),
         patch.object(pgd.Gtk, "MessageDialog"),
@@ -679,7 +679,7 @@ class TestDialogFlow(unittest.TestCase):
         nc = MagicMock()
         nc.is_two_node.return_value = False
         with (
-            patch.object(pgd, "create_dialog", return_value=driver.fake_dlg),
+            patch.object(pgd, "create_scrolled_dialog", return_value=(driver.fake_dlg, MagicMock())),
             patch.object(pgd, "_AddVdevState", spy_state),
             patch.object(pgd, "node_config", nc),
             patch.object(pgd.Gtk, "MessageDialog") as msg_dialog,
@@ -946,7 +946,7 @@ class _AttachDriver:
         nc = MagicMock()
         nc.is_two_node.return_value = False
         patches = [
-            patch.object(self.pgd, "create_dialog", return_value=self.fake_dlg),
+            patch.object(self.pgd, "create_scrolled_dialog", return_value=(self.fake_dlg, MagicMock())),
             patch.object(self.pgd, "_AttachState", spy_state),
             patch.object(self.pgd, "node_config", nc),
             patch.object(self.pgd.Gtk, "MessageDialog", self.msg_dialog),
@@ -1485,7 +1485,7 @@ class TestAttachDialogFlow(unittest.TestCase):
         nc = MagicMock()
         nc.is_two_node.return_value = False
         with (
-            patch.object(pgd, "create_dialog", return_value=driver.fake_dlg),
+            patch.object(pgd, "create_scrolled_dialog", return_value=(driver.fake_dlg, MagicMock())),
             patch.object(pgd, "_AttachState", spy_state),
             patch.object(pgd, "node_config", nc),
             patch.object(pgd.Gtk, "MessageDialog") as msg_dialog,
@@ -1612,7 +1612,7 @@ class _ReplaceDriver:
         nc = MagicMock()
         nc.is_two_node.return_value = False
         patches = [
-            patch.object(self.pgd, "create_dialog", return_value=self.fake_dlg),
+            patch.object(self.pgd, "create_scrolled_dialog", return_value=(self.fake_dlg, MagicMock())),
             patch.object(self.pgd, "_ReplaceState", spy_state),
             patch.object(self.pgd, "node_config", nc),
             patch.object(self.pgd.Gtk, "MessageDialog", self.msg_dialog),
@@ -1925,7 +1925,7 @@ class TestReplaceDialogFlow(unittest.TestCase):
         nc = MagicMock()
         nc.is_two_node.return_value = False
         with (
-            patch.object(pgd, "create_dialog", return_value=driver.fake_dlg),
+            patch.object(pgd, "create_scrolled_dialog", return_value=(driver.fake_dlg, MagicMock())),
             patch.object(pgd, "_ReplaceState", spy_state),
             patch.object(pgd, "node_config", nc),
             patch.object(pgd.Gtk, "MessageDialog") as msg_dialog,
@@ -2034,7 +2034,7 @@ class _DetachDriver:
         nc = MagicMock()
         nc.is_two_node.return_value = False
         patches = [
-            patch.object(self.pgd, "create_dialog", return_value=self.fake_dlg),
+            patch.object(self.pgd, "create_scrolled_dialog", return_value=(self.fake_dlg, MagicMock())),
             patch.object(self.pgd, "_DetachState", spy_state),
             patch.object(self.pgd, "node_config", nc),
             patch.object(self.pgd.Gtk, "MessageDialog", self.msg_dialog),
@@ -2327,7 +2327,7 @@ class TestDetachDialogFlow(unittest.TestCase):
         nc = MagicMock()
         nc.is_two_node.return_value = False
         with (
-            patch.object(pgd, "create_dialog", return_value=driver.fake_dlg),
+            patch.object(pgd, "create_scrolled_dialog", return_value=(driver.fake_dlg, MagicMock())),
             patch.object(pgd, "_DetachState", spy_state),
             patch.object(pgd, "node_config", nc),
             patch.object(pgd.Gtk, "MessageDialog") as msg_dialog,
@@ -2435,7 +2435,7 @@ def _infra_handler(pgd, app, driver, yes_no=True, scrub_blocker=None):
     nc.is_two_node.return_value = False
     yes_no_dialog = MagicMock(return_value=yes_no)
     patches = [
-        patch.object(pgd, "create_dialog", return_value=driver.fake_dlg),
+        patch.object(pgd, "create_scrolled_dialog", return_value=(driver.fake_dlg, MagicMock())),
         patch.object(pgd, "_InfraVdevState", spy_state),
         patch.object(pgd, "node_config", nc),
         patch.object(pgd.Gtk, "MessageDialog"),

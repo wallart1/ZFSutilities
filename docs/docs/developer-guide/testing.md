@@ -44,7 +44,15 @@ tests/run-tests --jobs 1
 
 # Show the 10 slowest bash suites at the end (N optional, default 10)
 tests/run-tests --slowest 10
+
+# Persist the full console stream to a file (overwrites any previous file)
+tests/run-tests --log /tmp/zfs-run.log
 ```
+
+The `--log` option captures the harness's own console output, including
+failing-suite dumps and the overall summary; it pairs with the
+redirect-and-read pattern in `tests/AGENTS.md` so a truncated interactive
+console never forces a full-suite rerun.
 
 Test counts are intentionally not maintained in documentation — use
 `--list` whenever a current number is needed.
@@ -178,7 +186,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-node-lib` | `find_zfsutility_script` resolution across `bin/`, `lib/`, and `python/` layouts |
 | `test-paths` | `paths.sh` defaults, composed paths, legacy paths, and environment overrides |
 | `test-proxmox-required-guards` | Proxmox scripts fail fast when `qm`/`pct` are absent |
-| `test-remove-vm` | `remove-vm` VMID validation, zvol listing, and user confirmation |
+| `test-remove-vm` | `remove-vm` VMID validation, config-referenced/orphan/reassigned zvol classification, `--cleanup-orphans`, and user confirmation |
 | `test-rename-vm-disk` | `rename-vm-disk` VM-config reference discovery (single- and two-node) |
 | `test-repair-iscsi-luns` | `repair-iscsi-luns` backstore/target parsing and zvol discovery |
 | `test-repair-vm-disk-sizes` | `repair-vm-disk-sizes` size byte-to-human conversion, by-path/storage-ref size resolution, config line repair, dry-run |

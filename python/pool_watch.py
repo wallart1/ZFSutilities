@@ -55,8 +55,10 @@ class PoolWatchWindow(Gtk.Window):
         header_box.pack_start(self.auto_label, False, False, 0)
         list_box.pack_start(header_box, False, False, 0)
 
-        # TreeStore: same 8 columns as Datasets tab (add loaded boolean)
-        self.store = Gtk.TreeStore(str, str, str, str, str, str, str, bool)
+        # TreeStore: same 10 columns as the Datasets tab.
+        # Columns: name, creation, type, used, avail, refer, origin/clones,
+        #          loaded, mounted, fg_color
+        self.store = Gtk.TreeStore(str, str, str, str, str, str, str, bool, bool, str)
         self.view = Gtk.TreeView(model=self.store)
         self.view._zfs_repo = parent_window.ctx.zfs_repository
         self.view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
@@ -130,9 +132,9 @@ class PoolWatchWindow(Gtk.Window):
         self.store.clear()
 
         pool = self.pool_name
-        pool_iter = self.store.append(None, [pool, "", "", "", "", "", "", False])
+        pool_iter = self.store.append(None, [pool, "", "", "", "", "", "", False, False, None])
         # Dummy child so the expand arrow appears
-        self.store.append(pool_iter, ["(loading...)", "", "", "", "", "", "", True])
+        self.store.append(pool_iter, ["(loading...)", "", "", "", "", "", "", True, False, None])
 
         self.summary_label.set_text("")
         restore_expanded_rows(self.store, self.view, expanded)

@@ -502,3 +502,63 @@ Verified with `mkdocs build` (clean) and `test_docs_integrity.py` (23 passed).
   `test_docs_integrity.py` (23 passed) and `mkdocs build` (clean aside from the
   pre-existing MkDocs 2.0 incompatibility warning).
 - PREEXISTING.md is now empty; no new out-of-scope issues were discovered.
+
+## 2026-09-24 — remove-vm config-aware removal
+
+- Rewrote `bin/remove-vm` discovery: it now reads the Proxmox VM config to
+  find the zvols referenced by the VM (like `archive-vm` does) instead of
+  destroying every zvol whose name matches `vm-<vmid>-disk-*`.
+- Matching zvols are classified against *all* VM configs:
+  - referenced by the target VM → destroyed (default),
+  - referenced by another VM (moved/attached without renaming) → reported as
+    reassigned and never destroyed (protects other VMs from data loss),
+  - referenced by no config (detached/orphaned) → reported as orphaned and
+    destroyed only with the new `--cleanup-orphans` flag.
+- Two-node mode: candidate scan and size/iSCSI lookups run on the storage
+  host via SSH; config ref resolution passes target/lun/owner triples as SSH
+  arguments (not stdin, which carries the remote script).
+- Updated `docs/docs/commands-and-modules/commands.md` `remove-vm` section
+  for the new flow and flag.
+- Extended `tests/test-remove-vm` (6 → 11 tests) with orphan, reassigned,
+  --cleanup-orphans, and two-node reassigned cases; test SSH mock now
+  distinguishes the three storage-host helper invocations by their `-s`
+  arguments.
+- Verified: shellcheck clean on `bin/remove-vm` and `tests/test-remove-vm`;
+  `tests/run-tests test-remove-vm` passes; full `tests/run-tests` passes
+  (74 suites, 3761 passed, 0 failed, 1 skipped);
+  `test_docs_integrity.py` passes (23 passed).
+
+## 2026-09-24 — development cycle wrap-up (review, tests, docs)
+
+- Step 1: PREEXISTING.md had no open entries; nothing to resolve.
+- Step 2 (coding-standards review of the uncommitted remove-vm / pool-export
+  recovery / scrolled-dialog / --log work):
+  - Removed two unused `create_dialog` imports (ruff F401) in
+    `pool_create_wizard.py` and `pool_growth_dialogs.py`.
+  - Restored the profuse regex comment for `vm-(\d+)-disk-\d+` in
+    `gui_helpers.collect_dataset_busy_reasons` (lost in the refactor) and
+    added profuse comments for the two >10-char regexes in
+    `pool_actions.py` (`cannot unmount ...` and the IQN/LUN parser), per
+    coding-policies.md.
+  - Moved the auto-unmount subprocess in `pool_actions._unmount_pool_filesystems`
+    behind a new public `ZfsRepository.unmount_filesystem()` so no GUI-layer
+    code calls the repository's private `_run`/`_zfs` anymore.
+  - Wrapped three >100-char lines in `bin/remove-vm`; fixed a ruff format
+    nit in `pool_watch.py`.
+- Step 3 (test review): updated two `test_pool_actions.py` recovery tests to
+  mock `unmount_filesystem`; added tests for `unmount_filesystem`
+  (test_zfs_repository.py), `collect_dataset_busy_reasons` /
+  `diagnose_dataset_busy` (test_gui_infrastructure.py), and the iSCSI /
+  NFS-unshare / declined-approval export recovery paths
+  (test_pool_actions.py). Full `tests/run-tests` passes (74 suites, 3772
+  passed, 0 failed, 1 skipped soak).
+- Step 4 (docs): documented `create_scrolled_dialog`,
+  `collect_dataset_busy_reasons`/`BusyReason`, `export_pool_detailed`,
+  `unmount_filesystem`, `dataset_for_mountpoint`, and the export-recovery
+  behavior in python-modules.md; refreshed the scrolled-dialog helper
+  references and the test-remove-vm row in testing.md.
+  `test_docs_integrity.py` passes (23); `mkdocs build` clean apart from the
+  pre-existing MkDocs 2.0/Material warning.
+- PREEXISTING.md remains empty (no pre-existing issues discovered this
+  cycle; remaining long lines in older test fixtures are pre-existing
+  style deviations, left as-is).

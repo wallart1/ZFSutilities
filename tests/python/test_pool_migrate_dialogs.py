@@ -531,7 +531,9 @@ class TestDialogFlow(unittest.TestCase):
         fake.run.side_effect = respond
         app = MagicMock()
         with (
-            patch.object(pmd, "create_dialog", return_value=fake),
+            patch.object(
+                pmd, "create_scrolled_dialog", return_value=(fake, MagicMock())
+            ),
             patch.object(pmd, "scrub_blocks_pool_op", return_value=None),
         ):
             return pmd.show_migrate_pool_dialog(app, state)
@@ -583,7 +585,9 @@ class TestDialogFlow(unittest.TestCase):
         ]
         app = MagicMock()
         with (
-            patch.object(pmd, "create_dialog", return_value=fake),
+            patch.object(
+                pmd, "create_scrolled_dialog", return_value=(fake, MagicMock())
+            ),
             patch.object(pmd, "scrub_blocks_pool_op", return_value="scrub is running on pool1"),
             patch.object(pmd, "_show_info_dialog") as mock_info,
         ):

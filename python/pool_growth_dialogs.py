@@ -33,7 +33,7 @@ from command_builders import BashStep
 from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from gi.repository import Gtk
-from gui_helpers import configure_treeview_column, create_dialog
+from gui_helpers import configure_treeview_column, create_scrolled_dialog
 from logging_config import log_msg
 from pool_create import TOPOLOGIES, EligibilityResult, disk_eligibility
 from pool_create_wizard import _leaf_paths_by_pool
@@ -869,15 +869,13 @@ def show_add_vdev_dialog(app, pools, eligibility, preselected_pool):
     state = _AddVdevState(pools=pools, pool_name=initial_pool, eligibility=list(eligibility))
     ctx = _GrowthDialogContext(app=app, repository=app.ctx.zfs_repository)
 
-    dialog = create_dialog(
+    dialog, content = create_scrolled_dialog(
         "Add Data Vdev",
         app,
         [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)],
         size=(820, 700),
     )
     confirm_btn = dialog.add_button("Add", _RESPONSE_CONFIRM)
-
-    content = dialog.get_content_area()
 
     pool_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     pool_label = Gtk.Label(label="Pool:")
@@ -1142,15 +1140,13 @@ def show_attach_dialog(app, pools, topologies, eligibility, disks, preselected_p
     )
     ctx = _GrowthDialogContext(app=app, repository=app.ctx.zfs_repository)
 
-    dialog = create_dialog(
+    dialog, content = create_scrolled_dialog(
         "Expand Vdev",
         app,
         [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)],
         size=(820, 700),
     )
     confirm_btn = dialog.add_button("Expand", _RESPONSE_CONFIRM)
-
-    content = dialog.get_content_area()
 
     pool_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     pool_label = Gtk.Label(label="Pool:")
@@ -1269,15 +1265,13 @@ def show_replace_dialog(app, pools, topologies, eligibility, disks, preselected_
     )
     ctx = _GrowthDialogContext(app=app, repository=app.ctx.zfs_repository)
 
-    dialog = create_dialog(
+    dialog, content = create_scrolled_dialog(
         "Replace Device",
         app,
         [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)],
         size=(820, 700),
     )
     confirm_btn = dialog.add_button("Replace", _RESPONSE_CONFIRM)
-
-    content = dialog.get_content_area()
 
     pool_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     pool_label = Gtk.Label(label="Pool:")
@@ -1386,15 +1380,13 @@ def show_detach_dialog(app, pools, topologies, disks, preselected_pool):
     )
     ctx = _GrowthDialogContext(app=app, repository=app.ctx.zfs_repository)
 
-    dialog = create_dialog(
+    dialog, content = create_scrolled_dialog(
         "Detach Device",
         app,
         [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)],
         size=(820, 560),
     )
     confirm_btn = dialog.add_button("Detach", _RESPONSE_CONFIRM)
-
-    content = dialog.get_content_area()
 
     pool_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     pool_label = Gtk.Label(label="Pool:")
@@ -1488,15 +1480,13 @@ def show_add_infra_vdev_dialog(app, pools, eligibility, preselected_pool):
     state = _InfraVdevState(pools=pools, pool_name=initial_pool, eligibility=list(eligibility))
     ctx = _GrowthDialogContext(app=app, repository=app.ctx.zfs_repository)
 
-    dialog = create_dialog(
+    dialog, content = create_scrolled_dialog(
         "Add Infrastructure Vdev",
         app,
         [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)],
         size=(820, 700),
     )
     confirm_btn = dialog.add_button("Add", _RESPONSE_CONFIRM)
-
-    content = dialog.get_content_area()
 
     pool_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     pool_label = Gtk.Label(label="Pool:")

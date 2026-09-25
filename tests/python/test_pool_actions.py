@@ -1,8 +1,10 @@
 """Tests for pool_actions.py — pool registry add/remove/save/revert."""
 
 import os
+import subprocess
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -11,6 +13,18 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 from test_support import mock_gtk
+
+
+def _fake_reason(category, dataset, detail, resolvable=False, action="", data=None):
+    """Return a SimpleNamespace that looks like a gui_helpers.BusyReason."""
+    return SimpleNamespace(
+        category=category,
+        dataset=dataset,
+        detail=detail,
+        resolvable=resolvable,
+        action=action,
+        data=data or {},
+    )
 
 
 def _import_pool_actions():
@@ -472,7 +486,7 @@ class TestOnPoolsExport(unittest.TestCase):
             patch.object(pa, "refresh_pools_page") as mock_refresh,
             patch.object(pa, "refresh_scrub_table") as mock_scrub_refresh,
             patch.object(pa, "schedule_scrub_refresh_burst") as mock_burst,
-            patch.object(app.ctx.zfs_repository, "export_pool", return_value=True),
+            patch.object(app.ctx.zfs_repository, "export_pool_detailed", return_value=(True, "")),
         ):
             pa.Gtk.MessageDialog = msg_dialog
             pa.on_pools_export(app)
@@ -480,6 +494,420 @@ class TestOnPoolsExport(unittest.TestCase):
         mock_refresh.assert_called_once_with(app)
         mock_scrub_refresh.assert_called_once_with(app)
         mock_burst.assert_called_once_with(app)
+
+    def test_export_auto_unmounts_and_retries_on_unmount_failure(self):
+        pa = _import_pool_actions()
+        app = self._make_app_with_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        row = MagicMock()
+        row.name = "tank/data"
+        row.ds_type = "filesystem"
+        row.mounted = "yes"
+
+        export_results = [
+            (False, "cannot unmount '/mnt/tank/data': unmount failed"),
+            (True, ""),
+        ]
+
+        with (
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "refresh_scrub_table") as mock_scrub_refresh,
+            patch.object(pa, "schedule_scrub_refresh_burst") as mock_burst,
+            patch.object(pa, "log_msg"),
+            patch.object(
+                app.ctx.zfs_repository,
+                "export_pool_detailed",
+                side_effect=export_results,
+            ) as mock_export,
+            patch.object(
+                app.ctx.zfs_repository,
+                "dataset_for_mountpoint",
+                return_value="tank/data",
+            ),
+            patch.object(
+                app.ctx.zfs_repository,
+                "list_datasets",
+                return_value=[row],
+            ),
+            patch.object(
+                app.ctx.zfs_repository,
+                "unmount_filesystem",
+                return_value=(True, ""),
+            ),
+            patch.object(pa, "diagnose_dataset_busy") as mock_diagnose,
+            patch.object(
+                pa,
+                "collect_dataset_busy_reasons",
+                return_value=[
+                    _fake_reason(
+                        category="mounted",
+                        dataset="tank/data",
+                        detail="Dataset is mounted at /mnt/tank/data.",
+                        resolvable=True,
+                        data={"mountpoint": "/mnt/tank/data", "busy": False},
+                    )
+                ],
+            ),
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+            mock_diagnose.assert_called_once()
+            self.assertEqual(mock_export.call_count, 2)
+            mock_refresh.assert_called_once_with(app)
+            mock_scrub_refresh.assert_called_once_with(app)
+            mock_burst.assert_called_once_with(app)
+
+    def test_export_approval_stop_vm_then_retry(self):
+        pa = _import_pool_actions()
+        app = self._make_app_with_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        export_results = [
+            (False, "cannot unmount '/tank': unmount failed"),
+            (True, ""),
+        ]
+
+        with (
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "log_msg"),
+            patch.object(
+                app.ctx.zfs_repository,
+                "export_pool_detailed",
+                side_effect=export_results,
+            ) as mock_export,
+            patch.object(
+                app.ctx.zfs_repository,
+                "dataset_for_mountpoint",
+                return_value=None,
+            ),
+            patch.object(
+                app.ctx.zfs_repository,
+                "list_datasets",
+                return_value=[
+                    MagicMock(name="tank/proxmox/vm-105-disk-0", ds_type="volume", mounted="no")
+                ],
+            ),
+            patch.object(pa, "diagnose_dataset_busy"),
+            patch.object(
+                pa,
+                "collect_dataset_busy_reasons",
+                return_value=[
+                    _fake_reason(
+                        category="vm",
+                        dataset="tank/proxmox/vm-105-disk-0",
+                        detail="VM 105 is RUNNING and may be using tank/proxmox/vm-105-disk-0.",
+                        resolvable=True,
+                        data={"vmid": "105"},
+                    )
+                ],
+            ),
+            patch.object(
+                subprocess,
+                "run",
+                return_value=MagicMock(returncode=0, stderr=""),
+            ) as mock_run,
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+            mock_run.assert_any_call(
+                ["qm", "stop", "105"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(mock_export.call_count, 2)
+            mock_refresh.assert_called_once_with(app)
+
+    def test_export_approval_terminate_process_then_retry(self):
+        pa = _import_pool_actions()
+        app = self._make_app_with_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        export_results = [
+            (False, "cannot unmount '/mnt/tank/data': unmount failed"),
+            (True, ""),
+        ]
+
+        with (
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "log_msg"),
+            patch.object(
+                app.ctx.zfs_repository,
+                "export_pool_detailed",
+                side_effect=export_results,
+            ) as mock_export,
+            patch.object(
+                app.ctx.zfs_repository,
+                "dataset_for_mountpoint",
+                return_value="tank/data",
+            ),
+            patch.object(
+                app.ctx.zfs_repository,
+                "list_datasets",
+                return_value=[MagicMock(name="tank/data", ds_type="filesystem", mounted="yes")],
+            ),
+            patch.object(
+                app.ctx.zfs_repository,
+                "unmount_filesystem",
+                return_value=(True, ""),
+            ),
+            patch.object(pa, "diagnose_dataset_busy"),
+            patch.object(
+                pa,
+                "collect_dataset_busy_reasons",
+                return_value=[
+                    _fake_reason(
+                        category="busy_processes",
+                        dataset="tank/data",
+                        detail="Open processes: bash",
+                        resolvable=True,
+                        data={"mountpoint": "/mnt/tank/data", "pids": [1234], "names": "bash"},
+                    )
+                ],
+            ),
+            patch.object(
+                subprocess,
+                "run",
+                return_value=MagicMock(returncode=0, stderr=""),
+            ) as mock_run,
+            patch.object(pa, "time"),
+            patch.object(pa, "os") as mock_pa_os,
+        ):
+            mock_pa_os.kill.side_effect = ProcessLookupError(1234)
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+            mock_run.assert_any_call(
+                ["kill", "-TERM", "1234"],
+                check=False,
+            )
+            self.assertEqual(mock_export.call_count, 2)
+            mock_refresh.assert_called_once_with(app)
+
+    def test_export_approval_remove_iscsi_then_retry(self):
+        pa = _import_pool_actions()
+        app = self._make_app_with_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        export_results = [
+            (False, "cannot unmount '/tank': unmount failed"),
+            (True, ""),
+        ]
+
+        with (
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "log_msg"),
+            patch.object(
+                app.ctx.zfs_repository,
+                "export_pool_detailed",
+                side_effect=export_results,
+            ) as mock_export,
+            patch.object(
+                app.ctx.zfs_repository,
+                "dataset_for_mountpoint",
+                return_value=None,
+            ),
+            patch.object(
+                app.ctx.zfs_repository,
+                "list_datasets",
+                return_value=[MagicMock(name="tank/proxmox/vm-105-disk-0", ds_type="volume")],
+            ),
+            patch.object(pa, "diagnose_dataset_busy"),
+            patch.object(
+                pa,
+                "collect_dataset_busy_reasons",
+                return_value=[
+                    _fake_reason(
+                        category="iscsi",
+                        dataset="tank/proxmox/vm-105-disk-0",
+                        detail="Zvol is exposed as an iSCSI LUN on "
+                        "iqn.2026-02.local.stewie:threeamigos (LUN 3).",
+                        resolvable=True,
+                        data={
+                            "bsname": "vm-105-disk-0",
+                            "lun_info": "iqn.2026-02.local.stewie:threeamigos (LUN 3)",
+                        },
+                    )
+                ],
+            ),
+            patch.object(
+                subprocess,
+                "run",
+                return_value=MagicMock(returncode=0, stderr=""),
+            ) as mock_run,
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+            mock_run.assert_any_call(
+                [
+                    "targetcli",
+                    "/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns",
+                    "delete",
+                    "lun3",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            mock_run.assert_any_call(
+                ["targetcli", "/backstores/block", "delete", "vm-105-disk-0"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(mock_export.call_count, 2)
+            mock_refresh.assert_called_once_with(app)
+
+    def test_export_approval_disable_nfs_share_then_retry(self):
+        pa = _import_pool_actions()
+        app = self._make_app_with_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        export_results = [
+            (False, "cannot unmount '/tank': unmount failed"),
+            (True, ""),
+        ]
+
+        with (
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "log_msg"),
+            patch.object(
+                app.ctx.zfs_repository,
+                "export_pool_detailed",
+                side_effect=export_results,
+            ) as mock_export,
+            patch.object(
+                app.ctx.zfs_repository,
+                "dataset_for_mountpoint",
+                return_value=None,
+            ),
+            patch.object(
+                app.ctx.zfs_repository,
+                "list_datasets",
+                return_value=[MagicMock(name="tank/proxmox/vm-105-disk-0", ds_type="volume")],
+            ),
+            patch.object(
+                app.ctx.zfs_repository,
+                "set_property",
+                return_value=True,
+            ) as mock_set_property,
+            patch.object(pa, "diagnose_dataset_busy"),
+            patch.object(
+                pa,
+                "collect_dataset_busy_reasons",
+                return_value=[
+                    _fake_reason(
+                        category="nfs",
+                        dataset="tank/data",
+                        detail="Dataset is shared via NFS (on).",
+                        resolvable=True,
+                        action="Unshare with 'zfs set sharenfs=off tank/data' before destroying.",
+                        data={"prop": "sharenfs", "value": "on"},
+                    )
+                ],
+            ),
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+            mock_set_property.assert_called_once_with("tank/data", "sharenfs", "off")
+            self.assertEqual(mock_export.call_count, 2)
+            mock_refresh.assert_called_once_with(app)
+
+    def test_export_declined_approval_aborts_retry(self):
+        pa = _import_pool_actions()
+        app = self._make_app_with_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        msg_dialog = MagicMock()
+        # First YES confirms the export itself; the NO declines the recovery
+        # approval ("Stop VM 105?"), which must abort the retry.
+        msg_dialog.return_value.run.side_effect = [
+            pa.Gtk.ResponseType.YES,
+            pa.Gtk.ResponseType.NO,
+        ]
+
+        with (
+            patch.object(pa, "refresh_pools_page") as mock_refresh,
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(pa, "log_msg") as mock_log,
+            patch.object(
+                app.ctx.zfs_repository,
+                "export_pool_detailed",
+                return_value=(False, "cannot unmount '/tank': unmount failed"),
+            ) as mock_export,
+            patch.object(
+                app.ctx.zfs_repository,
+                "dataset_for_mountpoint",
+                return_value=None,
+            ),
+            patch.object(
+                app.ctx.zfs_repository,
+                "list_datasets",
+                return_value=[MagicMock(name="tank/proxmox/vm-105-disk-0", ds_type="volume")],
+            ),
+            patch.object(pa, "diagnose_dataset_busy"),
+            patch.object(
+                pa,
+                "collect_dataset_busy_reasons",
+                return_value=[
+                    _fake_reason(
+                        category="vm",
+                        dataset="tank/proxmox/vm-105-disk-0",
+                        detail="VM 105 is RUNNING and may be using tank/proxmox/vm-105-disk-0.",
+                        resolvable=True,
+                        data={"vmid": "105"},
+                    )
+                ],
+            ),
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+            self.assertEqual(mock_export.call_count, 1)
+            logged = "\n".join(call.args[0] for call in mock_log.call_args_list)
+            self.assertIn("cancelled by user", logged)
+            mock_refresh.assert_called_once_with(app)
 
 
 if __name__ == "__main__":

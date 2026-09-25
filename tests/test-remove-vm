@@ -37,14 +37,46 @@ EOF
 setup_pve_config() {
     local pve_dir="$1"
     local vmid="$2"
+    local mode="${3:-single-node}"
     mkdir -p "$pve_dir"
-    cat > "${pve_dir}/${vmid}.conf" << EOF
+    if [[ "$mode" == "single-node" ]]; then
+        cat > "${pve_dir}/${vmid}.conf" << EOF
 name: test-vm
 scsi0: threeamigos:vm-${vmid}-disk-0,size=10G
+EOF
+    else
+        cat > "${pve_dir}/${vmid}.conf" << EOF
+name: test-vm
+scsi0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-0,format=raw,discard=on,iothread=1,size=10G
+EOF
+    fi
+}
+
+# Add a config for a second VM whose scsi0 references the given disk string
+# (single-node "pool:vm-..." style or two-node by-path style).
+setup_second_vm_config() {
+    local pve_dir="$1"
+    local vmid="$2"
+    local disk_ref="$3"
+    mkdir -p "$pve_dir"
+    cat > "${pve_dir}/${vmid}.conf" << EOF
+name: other-vm
+scsi0: ${disk_ref}
 EOF
 }
 
 # Run remove-vm in a subshell so an exit/die does not kill the test harness.
+#
+# Arguments:
+#   $1 mode          single-node | two-node
+#   $2 pve_dir       directory holding the Proxmox VM configs
+#   $3 vmid          VM ID to remove
+#   $4 stdin_input   confirmation input ("y"/"n"/"")
+#   $5 zvols_list    space-separated zvol paths the mock ZFS reports
+#   $6 iscsi_state   optional; newline-separated "zvol target lun" lines
+#                    describing the mock storage host. Defaults to every zvol
+#                    exported as lun <disk-num> of the threeamigos target.
+#   $7 extra_args    optional; extra command-line args for remove-vm
 run_remove() {
     local mode="$1"
     local pve_dir="$2"
@@ -55,6 +87,23 @@ run_remove() {
         zvols_list="$5"
     else
         zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    fi
+
+    local iscsi_state=""
+    if [[ $# -ge 6 && -n "$6" ]]; then
+        iscsi_state="$6"
+    else
+        local disk num
+        for disk in $zvols_list; do
+            num="${disk##*-disk-}"
+            iscsi_state+="${disk} iqn.2026-02.local.stewie:threeamigos ${num}"$'\n'
+        done
+        iscsi_state="${iscsi_state%$'\n'}"
+    fi
+
+    local extra_args=""
+    if [[ $# -ge 7 ]]; then
+        extra_args="$7"
     fi
 
     local capture_dir="$_mock_zfs_state_dir/capture"
@@ -71,6 +120,10 @@ run_remove() {
         export NODE_LIB="$mydir/lib/node-lib.sh"
         export PVE_CONF_DIR="$pve_dir"
         export _capture_dir="$capture_dir"
+
+        # Make the fixtures visible to the mock functions below.
+        export _test_iscsi_state="$iscsi_state"
+        export _test_zvols_list="$zvols_list"
 
         # Mock executables
         cat > "$_mock_zfs_state_dir/zfsdelfs" << 'EOF'
@@ -146,21 +199,69 @@ EOF
             done
 
             if [[ $has_bash -eq 1 && $has_s -eq 1 ]]; then
-                # Discovery helper: output one zvol per line with iSCSI info.
-                local disk
-                for disk in $zvols_list; do
-                    echo -e "${disk}\t10G\tiqn.2026-02.local.stewie:threeamigos\t0"
+                # Collect the arguments that follow "-s".
+                local -a sargs=()
+                local seen_s=0
+                for arg in "$@"; do
+                    if [[ $seen_s -eq 1 ]]; then
+                        sargs+=("$arg")
+                    elif [[ "$arg" == "-s" ]]; then
+                        seen_s=1
+                    fi
                 done
+
+                if [[ ${#sargs[@]} -gt 0 && "${sargs[0]}" == iqn.* ]]; then
+                    # resolve_two_node_refs: args are target lun owner triples.
+                    # The owner is taken from the triple (the config owner),
+                    # matching what the real storage-host helper prints.
+                    local i=0 t l owner z t2 l2
+                    while [[ $i -lt ${#sargs[@]} ]]; do
+                        t="${sargs[$i]}"
+                        l="${sargs[$((i+1))]}"
+                        owner="${sargs[$((i+2))]}"
+                        i=$((i+3))
+                        while read -r z t2 l2; do
+                            [[ -n "$z" ]] || continue
+                            if [[ "$t2" == "$t" && "$l2" == "$l" ]]; then
+                                echo -e "${z}\t${owner}"
+                            fi
+                        done <<< "$_test_iscsi_state"
+                    done
+                elif [[ ${#sargs[@]} -gt 0 && "${sargs[0]}" == */* ]]; then
+                    # lookup_storage_info_for_zvols: args are zvol paths;
+                    # prints zvol, size, target, lun.
+                    local z z2 t2 l2
+                    for z in "${sargs[@]}"; do
+                        while read -r z2 t2 l2; do
+                            [[ -n "$z2" ]] || continue
+                            if [[ "$z2" == "$z" ]]; then
+                                echo -e "${z2}\t10G\t${t2}\t${l2}"
+                            fi
+                        done <<< "$_test_iscsi_state"
+                    done
+                elif [[ ${#sargs[@]} -gt 0 ]]; then
+                    # collect_candidate_zvols: single vmid arg; the scan on
+                    # the storage host reports all mock zvols.
+                    local z
+                    for z in $_test_zvols_list; do
+                        echo "$z"
+                    done
+                fi
                 return 0
             fi
 
             return 0
         }
 
-        source "$mydir/bin/remove-vm" "$vmid"
+        # shellcheck disable=SC2086
+        source "$mydir/bin/remove-vm" $extra_args "$vmid"
     ) 2>&1 <<EOF
 $stdin_input
 EOF
+}
+
+zfsdelfs_calls() {
+    cat "$_mock_zfs_state_dir/capture/zfsdelfs_calls" 2>/dev/null || true
 }
 
 # ------------------------------------------------------------------
@@ -211,7 +312,7 @@ test_single_node_lists_zvols_and_removes() {
     fi
 
     local calls
-    calls=$(cat "$_mock_zfs_state_dir/capture/zfsdelfs_calls" 2>/dev/null || true)
+    calls=$(zfsdelfs_calls)
     if [[ "$calls" != *"threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
         test_fail "zfsdelfs was not called for the zvol; calls:\n$calls"
         return
@@ -268,7 +369,7 @@ test_two_node_includes_iscsi_info() {
 
     local vmid="311"
     local pve_dir="$_mock_zfs_state_dir/pve3"
-    setup_pve_config "$pve_dir" "$vmid"
+    setup_pve_config "$pve_dir" "$vmid" two-node
 
     local out rc
     out=$(run_remove two-node "$pve_dir" "$vmid" "y")
@@ -297,7 +398,7 @@ test_two_node_removes_via_ssh() {
 
     local vmid="312"
     local pve_dir="$_mock_zfs_state_dir/pve4"
-    setup_pve_config "$pve_dir" "$vmid"
+    setup_pve_config "$pve_dir" "$vmid" two-node
 
     local out rc
     out=$(run_remove two-node "$pve_dir" "$vmid" "y")
@@ -309,7 +410,7 @@ test_two_node_removes_via_ssh() {
     fi
 
     local calls
-    calls=$(cat "$_mock_zfs_state_dir/capture/zfsdelfs_calls" 2>/dev/null || true)
+    calls=$(zfsdelfs_calls)
     if [[ "$calls" != *"threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
         test_fail "Remote zfsdelfs call missing; calls:\n$calls"
         return
@@ -328,6 +429,200 @@ test_two_node_removes_via_ssh() {
     test_pass
 }
 
+test_single_node_orphan_warned_not_removed() {
+    test_start "Single-node: orphaned matching zvol is warned about but kept"
+
+    local vmid="320"
+    local pve_dir="$_mock_zfs_state_dir/pve5"
+    setup_pve_config "$pve_dir" "$vmid"
+
+    local out rc
+    out=$(run_remove single-node "$pve_dir" "$vmid" "y" \
+        "threeamigos/proxmox/vm-${vmid}-disk-0 threeamigos/proxmox/vm-${vmid}-disk-5")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" != *"Orphaned zvols"* ]]; then
+        test_fail "Orphan warning missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"vm-${vmid}-disk-5"* ]]; then
+        test_fail "Orphan zvol not listed; output:\n$out"
+        return
+    fi
+
+    local calls
+    calls=$(zfsdelfs_calls)
+    if [[ "$calls" != *"vm-${vmid}-disk-0"* ]]; then
+        test_fail "Referenced zvol was not destroyed; calls:\n$calls"
+        return
+    fi
+    if [[ "$calls" == *"vm-${vmid}-disk-5"* ]]; then
+        test_fail "Orphan zvol should not have been destroyed; calls:\n$calls"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_cleanup_orphans_removes() {
+    test_start "Single-node: --cleanup-orphans also removes orphaned zvols"
+
+    local vmid="321"
+    local pve_dir="$_mock_zfs_state_dir/pve6"
+    setup_pve_config "$pve_dir" "$vmid"
+
+    local out rc
+    out=$(run_remove single-node "$pve_dir" "$vmid" "y" \
+        "threeamigos/proxmox/vm-${vmid}-disk-0 threeamigos/proxmox/vm-${vmid}-disk-5" \
+        "" "--cleanup-orphans")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    local calls
+    calls=$(zfsdelfs_calls)
+    if [[ "$calls" != *"vm-${vmid}-disk-0"* ]]; then
+        test_fail "Referenced zvol was not destroyed; calls:\n$calls"
+        return
+    fi
+    if [[ "$calls" != *"vm-${vmid}-disk-5"* ]]; then
+        test_fail "Orphan zvol was not destroyed with --cleanup-orphans; calls:\n$calls"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_reassigned_not_removed() {
+    test_start "Single-node: reassigned zvol referenced by another VM is kept"
+
+    local vmid="330"
+    local other_vmid="331"
+    local pve_dir="$_mock_zfs_state_dir/pve7"
+    setup_pve_config "$pve_dir" "$vmid"
+    setup_second_vm_config "$pve_dir" "$other_vmid" \
+        "threeamigos:vm-${vmid}-disk-5,size=10G"
+
+    local out rc
+    out=$(run_remove single-node "$pve_dir" "$vmid" "y" \
+        "threeamigos/proxmox/vm-${vmid}-disk-0 threeamigos/proxmox/vm-${vmid}-disk-5")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" != *"Reassigned zvols"* ]]; then
+        test_fail "Reassigned warning missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"referenced by VM ${other_vmid}"* ]]; then
+        test_fail "Reassigned zvol does not name the owning VM; output:\n$out"
+        return
+    fi
+
+    local calls
+    calls=$(zfsdelfs_calls)
+    if [[ "$calls" != *"vm-${vmid}-disk-0"* ]]; then
+        test_fail "Referenced zvol was not destroyed; calls:\n$calls"
+        return
+    fi
+    if [[ "$calls" == *"vm-${vmid}-disk-5"* ]]; then
+        test_fail "Reassigned zvol should not have been destroyed; calls:\n$calls"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_cleanup_orphans_keeps_reassigned() {
+    test_start "Single-node: --cleanup-orphans still protects reassigned zvols"
+
+    local vmid="332"
+    local other_vmid="333"
+    local pve_dir="$_mock_zfs_state_dir/pve8"
+    setup_pve_config "$pve_dir" "$vmid"
+    setup_second_vm_config "$pve_dir" "$other_vmid" \
+        "threeamigos:vm-${vmid}-disk-5,size=10G"
+
+    local out rc
+    out=$(run_remove single-node "$pve_dir" "$vmid" "y" \
+        "threeamigos/proxmox/vm-${vmid}-disk-0 threeamigos/proxmox/vm-${vmid}-disk-5" \
+        "" "--cleanup-orphans")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    local calls
+    calls=$(zfsdelfs_calls)
+    if [[ "$calls" != *"vm-${vmid}-disk-0"* ]]; then
+        test_fail "Referenced zvol was not destroyed; calls:\n$calls"
+        return
+    fi
+    if [[ "$calls" == *"vm-${vmid}-disk-5"* ]]; then
+        test_fail "Reassigned zvol should not have been destroyed; calls:\n$calls"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_reassigned_not_removed() {
+    test_start "Two-node: reassigned zvol referenced by another VM is kept"
+
+    local vmid="340"
+    local other_vmid="341"
+    local pve_dir="$_mock_zfs_state_dir/pve9"
+    # Target VM config has no disk lines; the other VM references lun 0,
+    # which maps to the zvol named after the target VM.
+    mkdir -p "$pve_dir"
+    cat > "${pve_dir}/${vmid}.conf" << EOF
+name: test-vm
+EOF
+    setup_second_vm_config "$pve_dir" "$other_vmid" \
+        "/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-0,format=raw,discard=on,iothread=1,size=10G"
+
+    local out rc
+    out=$(run_remove two-node "$pve_dir" "$vmid" "y" \
+        "threeamigos/proxmox/vm-${vmid}-disk-0")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    if [[ "$out" != *"Reassigned zvols"* ]]; then
+        test_fail "Reassigned warning missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"referenced by VM ${other_vmid}"* ]]; then
+        test_fail "Reassigned zvol does not name the owning VM; output:\n$out"
+        return
+    fi
+
+    local calls
+    calls=$(zfsdelfs_calls)
+    if [[ -n "$calls" ]]; then
+        test_fail "zfsdelfs should not have been called; calls:\n$calls"
+        return
+    fi
+
+    test_pass
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -337,5 +632,10 @@ test_single_node_lists_zvols_and_removes
 test_single_node_aborts_on_no
 test_two_node_includes_iscsi_info
 test_two_node_removes_via_ssh
+test_single_node_orphan_warned_not_removed
+test_single_node_cleanup_orphans_removes
+test_single_node_reassigned_not_removed
+test_single_node_cleanup_orphans_keeps_reassigned
+test_two_node_reassigned_not_removed
 
 test_summary

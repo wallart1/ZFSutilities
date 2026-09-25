@@ -2,6 +2,11 @@
 Pool tab action handlers — extracted from pools_page.py.
 """
 
+import os
+import re
+import subprocess
+import time
+
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -9,8 +14,10 @@ from backup_config import log_msg, save_pools
 from gi.repository import Gtk
 from gui_helpers import (
     add_scrolled_text_view,
+    collect_dataset_busy_reasons,
     configure_treeview_column,
     create_dialog,
+    diagnose_dataset_busy,
     set_button_markup_red,
 )
 from pool_watch import PoolWatchWindow
@@ -310,7 +317,7 @@ def on_pools_import(app):
 
 
 def on_pools_export(app):
-    """Export all selected pools."""
+    """Export all selected pools, with diagnosis and recovery on failure."""
     selected = [n for n, h in _get_selected_rows(app)]
     if not selected:
         log_msg("WARN: Select at least one pool to export")
@@ -335,10 +342,15 @@ def on_pools_export(app):
         return
 
     for pool_name in selected:
-        if app.ctx.zfs_repository.export_pool(pool_name):
+        success, stderr = app.ctx.zfs_repository.export_pool_detailed(pool_name)
+        if success:
             log_msg(f"INFO: Pool '{pool_name}' exported successfully")
-        else:
-            log_msg(f"WARN: Error exporting pool '{pool_name}'")
+            continue
+
+        log_msg(f"WARN: Error exporting pool '{pool_name}'")
+        if _try_export_with_recovery(app, pool_name, stderr):
+            log_msg(f"INFO: Pool '{pool_name}' exported successfully after resolving blockers")
+
     refresh_pools_page(app)
     refresh_scrub_table(app)
     schedule_scrub_refresh_burst(app)
@@ -489,3 +501,339 @@ def _get_selected_rows(app):
         tree_iter = model.get_iter(path)
         rows.append((model.get_value(tree_iter, COL_NAME), model.get_value(tree_iter, COL_HEALTH)))
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Pool export failure recovery
+# ---------------------------------------------------------------------------
+
+
+def _extract_unmount_failure(stderr):
+    """Return the mountpoint from a 'cannot unmount' zpool export error, or None."""
+    for line in stderr.splitlines():
+        # Regex: cannot unmount '([^']+)': unmount failed
+        # Anchors on zpool export's literal "cannot unmount '<mountpoint>':
+        # unmount failed" diagnostic; group 1 captures the quoted mountpoint
+        # (any run of non-quote characters) so the caller can resolve which
+        # dataset blocked the export.
+        match = re.search(r"cannot unmount '([^']+)': unmount failed", line)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _collect_export_blockers(repo, pool):
+    """Return BusyReason objects for every dataset in *pool* that blocks export."""
+    blockers = []
+    try:
+        datasets = [r.name for r in repo.list_datasets(pool=pool)]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return blockers
+
+    for dataset in datasets:
+        blockers.extend(collect_dataset_busy_reasons(dataset, repo=repo))
+    return blockers
+
+
+def _unmount_pool_filesystems(repo, pool, blockers):
+    """Unmount mounted filesystems in *pool* that have no other blocker.
+
+    Filesystems with busy processes or active shares are skipped; those are
+    handled via approval dialogs. Returns (all_succeeded, error_message).
+    """
+    blocked = {b.dataset for b in blockers if b.category in ("busy_processes", "nfs", "smb")}
+    try:
+        rows = [
+            r
+            for r in repo.list_datasets(pool=pool)
+            if r.ds_type == "filesystem" and r.mounted == "yes"
+        ]
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        return False, str(exc)
+
+    rows.sort(key=lambda r: r.name.count("/"), reverse=True)
+    for row in rows:
+        if row.name in blocked:
+            continue
+        success, stderr = repo.unmount_filesystem(row.name)
+        if success:
+            log_msg(f"INFO: Unmounted {row.name}")
+        else:
+            return False, stderr.strip()
+    return True, ""
+
+
+def _approve_and_stop_vms(app, blockers):
+    """Ask per-VM approval and stop any approved VMs. Returns False if declined."""
+    vm_blockers = [b for b in blockers if b.category == "vm"]
+    if not vm_blockers:
+        return True
+
+    vmids = sorted({b.data["vmid"] for b in vm_blockers if b.data})
+    for vmid in vmids:
+        dialog = Gtk.MessageDialog(
+            transient_for=app,
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text=f"Stop VM {vmid}?",
+        )
+        dialog.format_secondary_text(
+            f"VM {vmid} is running and preventing the pool export. "
+            "Stopping it will shut the VM down."
+        )
+        response = dialog.run()
+        dialog.destroy()
+        if response != Gtk.ResponseType.YES:
+            return False
+        result = subprocess.run(["qm", "stop", vmid], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            log_msg(f"WARN: Failed to stop VM {vmid}: {result.stderr.strip()}")
+            return False
+        log_msg(f"INFO: Stopped VM {vmid}")
+    return True
+
+
+def _approve_and_remove_iscsi(app, blockers):
+    """Ask per-LUN approval and tear down any approved iSCSI LUNs/backstores."""
+    iscsi_blockers = [b for b in blockers if b.category == "iscsi"]
+    if not iscsi_blockers:
+        return True
+
+    for reason in iscsi_blockers:
+        bsname = reason.data.get("bsname") if reason.data else None
+        lun_info = reason.data.get("lun_info", "") if reason.data else ""
+        dialog = Gtk.MessageDialog(
+            transient_for=app,
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text=f"Remove iSCSI LUN for {bsname}?",
+        )
+        dialog.format_secondary_text(
+            f"{reason.detail} Removing it will disconnect any initiator using this LUN."
+        )
+        response = dialog.run()
+        dialog.destroy()
+        if response != Gtk.ResponseType.YES:
+            return False
+        if not bsname:
+            continue
+
+        # Remove the LUN mapping first, then the backstore.
+        removed_lun = False
+        if lun_info:
+            # Regex: (iqn\.\S+)\s*\(LUN\s*(\d+)\)
+            # Parses the lun_info string produced by collect_dataset_busy_reasons
+            # (e.g. "iqn.2023-01.com.example:t1 (LUN 3)"); group 1 captures the
+            # full IQN (non-whitespace run starting with "iqn."), group 2 the
+            # LUN number. \S and \s are used because targetcli output contains
+            # no spaces inside IQNs but may pad around the "(LUN n)" suffix.
+            m = re.search(r"(iqn\.\S+)\s*\(LUN\s*(\d+)\)", lun_info)
+            if m:
+                iqn, lun_num = m.groups()
+                result = subprocess.run(
+                    ["targetcli", f"/iscsi/{iqn}/tpg1/luns", "delete", f"lun{lun_num}"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    log_msg(
+                        f"WARN: Failed to remove LUN {lun_num} from {iqn}: {result.stderr.strip()}"
+                    )
+                    return False
+                removed_lun = True
+                log_msg(f"INFO: Removed LUN {lun_num} from {iqn}")
+
+        # Some backstores have no LUN mapping; still try to remove the backstore.
+        result = subprocess.run(
+            ["targetcli", "/backstores/block", "delete", bsname],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0 and not removed_lun:
+            log_msg(f"WARN: Failed to remove iSCSI backstore {bsname}: {result.stderr.strip()}")
+            return False
+        if result.returncode == 0:
+            log_msg(f"INFO: Removed iSCSI backstore {bsname}")
+    return True
+
+
+def _approve_and_unshare(app, blockers, repo):
+    """Ask per-share approval and disable any approved NFS/SMB shares."""
+    share_blockers = [b for b in blockers if b.category in ("nfs", "smb")]
+    if not share_blockers:
+        return True
+
+    for reason in share_blockers:
+        prop = reason.data.get("prop") if reason.data else None
+        dialog = Gtk.MessageDialog(
+            transient_for=app,
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text=f"Disable {reason.category.upper()} share on {reason.dataset}?",
+        )
+        dialog.format_secondary_text(
+            f"{reason.detail} Disabling the share will disconnect any client using it."
+        )
+        response = dialog.run()
+        dialog.destroy()
+        if response != Gtk.ResponseType.YES:
+            return False
+        if not prop or not repo.set_property(reason.dataset, prop, "off"):
+            log_msg(f"WARN: Failed to disable {reason.category.upper()} share on {reason.dataset}")
+            return False
+        log_msg(f"INFO: Disabled {reason.category.upper()} share on {reason.dataset}")
+    return True
+
+
+def _approve_and_terminate_processes(app, blockers):
+    """Ask per-mountpoint approval and terminate any approved busy processes."""
+    proc_blockers = [b for b in blockers if b.category == "busy_processes"]
+    if not proc_blockers:
+        return True
+
+    for reason in proc_blockers:
+        pids = reason.data.get("pids", []) if reason.data else []
+        names = reason.data.get("names", "") if reason.data else ""
+        mountpoint = reason.data.get("mountpoint", "") if reason.data else ""
+        dialog = Gtk.MessageDialog(
+            transient_for=app,
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="Terminate processes using the pool?",
+        )
+        proc_list = "\n".join(f"  • {name}" for name in sorted(set(names.split())))
+        dialog.format_secondary_text(
+            f"The following processes are using {mountpoint}:\n\n{proc_list}\n\n"
+            "Terminating them may lose unsaved work in those applications."
+        )
+        response = dialog.run()
+        dialog.destroy()
+        if response != Gtk.ResponseType.YES:
+            return False
+        for pid in pids:
+            try:
+                subprocess.run(["kill", "-TERM", str(pid)], check=False)
+            except OSError as exc:
+                log_msg(f"WARN: Could not signal PID {pid}: {exc}")
+        # Give SIGTERM a moment to take effect.
+        time.sleep(1)
+        survivors = [pid for pid in pids if _pid_exists(pid)]
+        if survivors:
+            dialog2 = Gtk.MessageDialog(
+                transient_for=app,
+                modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.YES_NO,
+                text="Processes did not terminate. Force kill?",
+            )
+            dialog2.format_secondary_text(
+                f"PIDs {', '.join(str(p) for p in survivors)} did not respond to SIGTERM."
+            )
+            response2 = dialog2.run()
+            dialog2.destroy()
+            if response2 != Gtk.ResponseType.YES:
+                return False
+            for pid in survivors:
+                try:
+                    subprocess.run(["kill", "-KILL", str(pid)], check=False)
+                except OSError as exc:
+                    log_msg(f"WARN: Could not kill PID {pid}: {exc}")
+        log_msg(f"INFO: Terminated processes using {mountpoint}")
+    return True
+
+
+def _pid_exists(pid):
+    """Return True if *pid* is still alive."""
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return False
+
+
+def _show_export_blockers_dialog(app, pool, blockers):
+    """Show a non-actionable summary of why the pool export failed."""
+    lines = [f"Pool '{pool}' cannot be exported because the following blockers remain:\n"]
+    for reason in blockers:
+        lines.append(f"• {reason.dataset}: {reason.detail}")
+        if reason.action:
+            lines.append(f"  → {reason.action}")
+    dialog = Gtk.MessageDialog(
+        transient_for=app,
+        modal=True,
+        message_type=Gtk.MessageType.WARNING,
+        buttons=Gtk.ButtonsType.OK,
+        text="Pool export blocked",
+    )
+    dialog.format_secondary_text("\n".join(lines))
+    dialog.run()
+    dialog.destroy()
+
+
+def _try_export_with_recovery(app, pool_name, stderr):
+    """Diagnose and attempt to resolve blockers preventing pool export.
+
+    Returns True if the pool was successfully exported after recovery.
+    """
+    repo = app.ctx.zfs_repository
+
+    mountpoint = _extract_unmount_failure(stderr)
+    dataset = None
+    if mountpoint:
+        dataset = repo.dataset_for_mountpoint(mountpoint, pool=pool_name)
+    if dataset:
+        diagnose_dataset_busy(dataset, stderr_text=stderr, repo=repo)
+    else:
+        log_msg(f"WARN: Could not determine which dataset blocked export of '{pool_name}'")
+        if stderr.strip():
+            log_msg(f"WARN: zpool export stderr: {stderr.strip()}")
+
+    blockers = _collect_export_blockers(repo, pool_name)
+    resolvable = [b for b in blockers if b.resolvable]
+    unresolvable = [b for b in blockers if not b.resolvable]
+
+    if unresolvable:
+        for reason in unresolvable:
+            log_msg(f"WARN: {reason.dataset}: {reason.detail}")
+
+    if not resolvable and not unresolvable:
+        log_msg(
+            "WARN: No specific blockers identified. Common causes are active sends/receives, "
+            "scrubs, or processes holding the pool through a different path."
+        )
+        return False
+
+    if not resolvable:
+        _show_export_blockers_dialog(app, pool_name, unresolvable)
+        return False
+
+    # Safe auto-unmount of filesystems that have no other blocker.
+    unmount_ok, unmount_err = _unmount_pool_filesystems(repo, pool_name, blockers)
+    if not unmount_ok:
+        log_msg(f"WARN: Auto-unmount of filesystems failed: {unmount_err}")
+
+    # Approval-driven resolution of side-effect blockers.
+    approved = True
+    approved &= _approve_and_stop_vms(app, blockers)
+    approved &= _approve_and_remove_iscsi(app, blockers)
+    approved &= _approve_and_unshare(app, blockers, repo)
+    approved &= _approve_and_terminate_processes(app, blockers)
+
+    if not approved:
+        log_msg(f"INFO: Export of '{pool_name}' cancelled by user")
+        return False
+
+    success, stderr2 = repo.export_pool_detailed(pool_name)
+    if success:
+        return True
+
+    log_msg(f"WARN: Export of '{pool_name}' still failed after recovery: {stderr2.strip()}")
+    return False

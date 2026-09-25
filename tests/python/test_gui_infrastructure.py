@@ -2321,6 +2321,144 @@ class TestGuiHelpersMisc(unittest.TestCase):
                 destroy_with_parent=True,
             )
 
+    def test_create_scrolled_dialog_returns_dialog_and_box(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            app = MagicMock()
+            buttons = [("Cancel", 1)]
+            dlg, box = gui_helpers.create_scrolled_dialog("Title", app, buttons)
+            self.assertIs(dlg, gui_helpers.Gtk.Dialog.return_value)
+            self.assertIs(box, gui_helpers.Gtk.Box.return_value)
+            dlg.set_resizable.assert_called_once_with(True)
+            content = dlg.get_content_area.return_value
+            content.pack_start.assert_called_once()
+            scrolled = gui_helpers.Gtk.ScrolledWindow.return_value
+            scrolled.add.assert_called_once_with(box)
+
+    def test_create_scrolled_dialog_caps_size_to_monitor(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            app = MagicMock()
+            app.get_window.return_value = MagicMock()
+            screen = MagicMock()
+            workarea = MagicMock()
+            workarea.width = 1000
+            workarea.height = 800
+            screen.get_monitor_workarea.return_value = workarea
+            app.get_screen.return_value = screen
+
+            dlg, _box = gui_helpers.create_scrolled_dialog(
+                "Title", app, [("Cancel", 1)], size=(2000, 2000)
+            )
+            # 90 % of 1000/800 capped to minimums
+            dlg.set_default_size.assert_called_once_with(900, 720)
+
+    def test_create_scrolled_dialog_uses_size_when_it_fits(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            app = MagicMock()
+            app.get_window.return_value = MagicMock()
+            screen = MagicMock()
+            workarea = MagicMock()
+            workarea.width = 2000
+            workarea.height = 1500
+            screen.get_monitor_workarea.return_value = workarea
+            app.get_screen.return_value = screen
+
+            dlg, _box = gui_helpers.create_scrolled_dialog(
+                "Title", app, [("Cancel", 1)], size=(600, 500)
+            )
+            dlg.set_default_size.assert_called_once_with(600, 500)
+
+    def _make_busy_repo(self, properties, snapshot_clones=(), holds=()):
+        """Fake ZfsRepository whose get_property returns *properties* by name."""
+        import types
+
+        repo = MagicMock()
+        repo.get_property.side_effect = lambda _target, prop: properties.get(prop, "-")
+        repo.get_recursive_snapshot_clones.return_value = list(snapshot_clones)
+        repo.list_holds.return_value = [types.SimpleNamespace(tag=tag) for tag in holds]
+        repo.list_bookmarks.return_value = []
+        return repo
+
+    def _no_subprocess(self):
+        """Patch subprocess.run so collector-only paths never shell out."""
+        return patch(
+            "subprocess.run",
+            side_effect=FileNotFoundError("stubbed out in test"),
+        )
+
+    def test_busy_reasons_snapshot_clone_and_hold(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            repo = self._make_busy_repo(
+                {"clones": "tank/clone"},
+                holds=("keep",),
+            )
+            with self._no_subprocess():
+                reasons = gui_helpers.collect_dataset_busy_reasons("tank/data@snap", repo=repo)
+            categories = {r.category for r in reasons}
+            self.assertEqual(categories, {"clone", "hold"})
+            by_category = {r.category: r for r in reasons}
+            self.assertIn("tank/clone", by_category["clone"].detail)
+            self.assertIn("keep", by_category["hold"].detail)
+            self.assertIn("zfs release", by_category["hold"].action)
+
+    def test_busy_reasons_mounted_with_busy_processes(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            repo = self._make_busy_repo(
+                {"mounted": "yes", "mountpoint": "/mnt/tank", "receive_resume_token": "-"}
+            )
+            with (
+                self._no_subprocess(),
+                patch.object(gui_helpers, "get_busy_processes", return_value=[(1234, "bash")]),
+            ):
+                reasons = gui_helpers.collect_dataset_busy_reasons("tank/data", repo=repo)
+            categories = {r.category for r in reasons}
+            self.assertEqual(categories, {"mounted", "busy_processes"})
+            by_category = {r.category: r for r in reasons}
+            self.assertTrue(by_category["mounted"].resolvable)
+            self.assertIn("/mnt/tank", by_category["mounted"].detail)
+            self.assertEqual(by_category["busy_processes"].data["pids"], [1234])
+            self.assertIn("bash", by_category["busy_processes"].detail)
+            self.assertIn("Stop the processes", by_category["busy_processes"].action)
+
+    def test_busy_reasons_empty_when_nothing_found(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            repo = self._make_busy_repo({"mounted": "no", "receive_resume_token": "-"})
+            with self._no_subprocess():
+                reasons = gui_helpers.collect_dataset_busy_reasons("tank/data", repo=repo)
+            self.assertEqual(reasons, [])
+
+    def test_diagnose_dataset_busy_logs_reason_details_and_actions(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            repo = self._make_busy_repo({"clones": "tank/clone"}, holds=("keep",))
+            with self._no_subprocess(), capture_logs() as logs:
+                gui_helpers.diagnose_dataset_busy("tank/data@snap", stderr_text="boom", repo=repo)
+            text = "\n".join(logs)
+            self.assertIn("WARN: ZFS reported: boom", text)
+            self.assertIn("Snapshot has clone dependents: tank/clone", text)
+            self.assertIn("Snapshot has holds: keep", text)
+
+    def test_diagnose_dataset_busy_reports_no_cause_found(self):
+        with mock_gtk(fresh=True):
+            import gui_helpers
+
+            repo = self._make_busy_repo({"mounted": "no", "receive_resume_token": "-"})
+            with self._no_subprocess(), capture_logs() as logs:
+                gui_helpers.diagnose_dataset_busy("tank/data", repo=repo)
+            self.assertIn("No specific cause identified", "\n".join(logs))
+
     def test_add_scrolled_text_view(self):
         with mock_gtk():
             import importlib

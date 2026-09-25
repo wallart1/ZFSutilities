@@ -223,6 +223,77 @@ class TestZfsRepositoryWrites(unittest.TestCase):
     def test_export_pool_returns_false_on_failure(self):
         self.assertFalse(self._repo(1).export_pool("tank"))
 
+    def test_export_pool_detailed_returns_success_and_stderr(self):
+        success, stderr = self._repo(0).export_pool_detailed("tank")
+        self.assertTrue(success)
+        self.assertEqual(stderr, "boom")
+
+    def test_export_pool_detailed_returns_failure_and_stderr(self):
+        success, stderr = self._repo(1).export_pool_detailed("tank")
+        self.assertFalse(success)
+        self.assertEqual(stderr, "boom")
+
+    def test_unmount_filesystem_returns_true_on_success(self):
+        success, _stderr = self._repo(0).unmount_filesystem("tank/data")
+        self.assertTrue(success)
+
+    def test_unmount_filesystem_returns_false_and_stderr_on_failure(self):
+        success, stderr = self._repo(1).unmount_filesystem("tank/data")
+        self.assertFalse(success)
+        self.assertEqual(stderr, "boom")
+
+    def test_unmount_filesystem_invokes_zfs_unmount(self):
+        repo = ZfsRepository(sudo=False)
+        calls = []
+
+        def _run(cmd, check=True, timeout=None):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        repo._run = _run
+        repo.unmount_filesystem("tank/data")
+        self.assertEqual(calls, [["zfs", "unmount", "tank/data"]])
+
+    def test_dataset_for_mountpoint_uses_findmnt_source(self):
+        repo = ZfsRepository(sudo=False)
+
+        def _run(cmd, check=True, timeout=None):
+            if cmd[0] == "findmnt":
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout="tank/data\n", stderr=""
+                )
+            return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="")
+
+        repo._run = _run
+        self.assertEqual(repo.dataset_for_mountpoint("/mnt/tank/data"), "tank/data")
+
+    def test_dataset_for_mountpoint_falls_back_to_zfs_list(self):
+        repo = ZfsRepository(sudo=False)
+
+        def _run(cmd, check=True, timeout=None):
+            if cmd[0] == "findmnt":
+                return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="")
+            if cmd[0] == "zfs":
+                return subprocess.CompletedProcess(
+                    args=cmd,
+                    returncode=0,
+                    stdout="tank/data\t/mnt/tank/data\ntank/other\t/mnt/tank/other\n",
+                    stderr="",
+                )
+            return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="")
+
+        repo._run = _run
+        self.assertEqual(repo.dataset_for_mountpoint("/mnt/tank/data"), "tank/data")
+
+    def test_dataset_for_mountpoint_returns_none_when_not_found(self):
+        repo = ZfsRepository(sudo=False)
+
+        def _run(cmd, check=True, timeout=None):
+            return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="")
+
+        repo._run = _run
+        self.assertIsNone(repo.dataset_for_mountpoint("/mnt/missing"))
+
     def test_start_scrub_returns_true_on_success(self):
         self.assertTrue(self._repo(0).start_scrub("tank"))
 

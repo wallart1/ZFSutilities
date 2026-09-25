@@ -1,11 +1,12 @@
 #!/usr/bin/bash
-# remove-vm <vmid>
-# Removes a VM's zvols and Proxmox config without archiving.
+# remove-vm [--cleanup-orphans] <vmid>
+# Removes a VM's referenced zvols and Proxmox config without archiving.
 #
-# Discovers all vm-<vmid>-disk-* zvols across pools, lists them along with any
-# iSCSI target/LUN information, asks for confirmation, then destroys them using
-# zfsdelfs (which handles snapshots, holds, clone-dependency checks, and iSCSI
-# teardown). Finally removes the VM definition.
+# Reads the VM config to find the zvols that actually belong to the VM, then
+# scans all pools for additional zvols named vm-<vmid>-disk-*. Matching zvols
+# that are referenced by another VM are reported as reassigned and are never
+# destroyed. Matching zvols not referenced by any VM are reported as orphaned
+# and are destroyed only when --cleanup-orphans is passed.
 #
 # Install to: /usr/local/lib/zfsutilities/bin/remove-vm on BOTH hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
@@ -37,26 +38,51 @@ fi
 my_host=$(hostname -s)
 pve_conf_dir="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 
+# Return 0 if $1 is a Proxmox disk key: one or more lowercase letters
+# followed by one or more digits (e.g. scsi0, virtio12).
+is_disk_key() {
+    local key="$1" digits letters
+    digits="${key##*[a-z]}"
+    letters="${key%"$digits"}"
+    [[ -n "$letters" && "$letters" =~ ^[a-z]+$ && "$digits" =~ ^[0-9]+$ ]]
+}
+
 usage() {
-    log_msg "INFO: Usage: remove-vm <vmid>"
+    log_msg "INFO: Usage: remove-vm [--cleanup-orphans] <vmid>"
     echo ""
-    log_msg "INFO:   vmid   VM ID to remove"
+    log_msg "INFO:   vmid              VM ID to remove"
+    log_msg "INFO:   --cleanup-orphans Also destroy matching zvols not referenced"
+    log_msg "INFO:                     by any VM config (detached/orphaned disks)"
     echo ""
     log_msg "INFO: Steps:"
-    log_msg "INFO:   1. Scan pools for vm-<vmid>-disk-* zvols"
-    log_msg "INFO:   2. List zvols and any iSCSI target/LUN mappings"
-    log_msg "INFO:   3. Stop the VM if it is running"
-    log_msg "INFO:   4. Ask for confirmation"
-    log_msg "INFO:   5. Destroy zvols using zfsdelfs"
-    log_msg "INFO:   6. Remove the Proxmox VM config"
+    log_msg "INFO:   1. Read the VM config to find referenced zvols"
+    log_msg "INFO:   2. Scan pools for vm-<vmid>-disk-* zvols"
+    log_msg "INFO:   3. Classify zvols as referenced, reassigned, or orphaned"
+    log_msg "INFO:   4. List zvols and any iSCSI target/LUN mappings"
+    log_msg "INFO:   5. Stop the VM if it is running"
+    log_msg "INFO:   6. Ask for confirmation"
+    log_msg "INFO:   7. Destroy selected zvols using zfsdelfs"
+    log_msg "INFO:   8. Remove the Proxmox VM config"
     echo ""
     log_msg "INFO: Example: remove-vm 904"
+    log_msg "INFO: Example: remove-vm --cleanup-orphans 904"
     exit 1
 }
 
-[[ $# -eq 1 ]] || usage
+# --- Argument parsing ---
+cleanup_orphans=false
+pos_args=()
+for arg in "$@"; do
+    case "$arg" in
+        --cleanup-orphans) cleanup_orphans=true ;;
+        -h|--help) usage ;;
+        *) pos_args+=("$arg") ;;
+    esac
+done
 
-vmid="$1"
+[[ ${#pos_args[@]} -eq 1 ]] || usage
+
+vmid="${pos_args[0]}"
 [[ "$vmid" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $vmid"; exit 1; }
 [[ $EUID -eq 0 || ${REMOVE_VM_TEST_NO_ROOT:-0} == "1" ]] || {
     log_msg "FATAL: Must run as root (use sudo)"
@@ -66,100 +92,371 @@ vmid="$1"
 # --- If not on the compute host, delegate (two-node only) ---
 if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
     remote_script=$(remote_zfsutility_script "$compute_host" "remove-vm")
-    exec ssh -t root@"$compute_host" \
-        "$remote_script '$vmid'"
+    if [[ "$cleanup_orphans" == true ]]; then
+        exec ssh -t root@"$compute_host" \
+            "$remote_script --cleanup-orphans '$vmid'"
+    else
+        exec ssh -t root@"$compute_host" \
+            "$remote_script '$vmid'"
+    fi
 fi
 
 proxmoxconfig="${pve_conf_dir}/${vmid}.conf"
 
 # =====================================================================
-# Discover zvols (and iSCSI info in two-node mode)
+# Discover zvols
 # =====================================================================
 
-declare -a zvols=()
-declare -a sizes=()
-declare -a targets=()
-declare -a luns=()
-
-if is_single_node; then
-    while IFS= read -r zvol; do
-        [[ -n "$zvol" ]] || continue
-        zvols+=("$zvol")
-        size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
-        sizes+=("$size")
-        targets+=("")
-        luns+=("")
-    # Select zvols named <pool>/proxmox/vm-<vmid>-disk-<n> (grep -F for the
-    # literal prefix, then anchor the end with a digit check).
-    done < <(zfs list -H -t volume -o name 2>/dev/null \
-        | grep -F "/proxmox/vm-${vmid}-disk-" \
-        | while IFS= read -r zvol; do
-            disk_suffix="${zvol##*disk-}"
-            [[ "$disk_suffix" =~ ^[0-9]+$ ]] || continue
-            [[ "$zvol" == *"/proxmox/vm-${vmid}-disk-${disk_suffix}" ]] || continue
-            echo "$zvol"
-        done | sort)
-else
-    # Two-node: discover on the storage host and collect target/LUN info.
-    discover_out=$(ssh root@"$storage_host" bash -s "$vmid" << 'SSHEOF'
+# Collect candidate zvols named vm-<vmid>-disk-<digits> across all pools.
+# Prints one zvol path per line. In two-node mode the scan runs on the
+# storage host, where the zvols actually live.
+collect_candidate_zvols() {
+    if is_single_node; then
+        zfs list -H -t volume -o name 2>/dev/null \
+            | grep -F "/proxmox/vm-${vmid}-disk-" \
+            | while IFS= read -r zvol; do
+                disk_suffix="${zvol##*disk-}"
+                [[ "$disk_suffix" =~ ^[0-9]+$ ]] || continue
+                [[ "$zvol" == *"/proxmox/vm-${vmid}-disk-${disk_suffix}" ]] || continue
+                echo "$zvol"
+            done | sort
+    else
+        ssh root@"$storage_host" bash -s "$vmid" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
 vmid="$1"
-
-# Feed the loop sorted zvol names; keep only names ending in
-# vm-<vmid>-disk-<digits> (grep -F matches the literal prefix; the suffix
-# digit check anchors the end).
-while IFS= read -r zvol; do
+zfs list -H -t volume -o name 2>/dev/null \
+    | grep -F "/proxmox/vm-${vmid}-disk-" \
+    | while IFS= read -r zvol; do
         disk_suffix="${zvol##*disk-}"
         [[ "$disk_suffix" =~ ^[0-9]+$ ]] || continue
         [[ "$zvol" == *"/proxmox/vm-${vmid}-disk-${disk_suffix}" ]] || continue
-        size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
-        disknum="$disk_suffix"
-        backstore="vm-${vmid}-disk-${disknum}"
+        echo "$zvol"
+    done | sort
+SSHEOF
+    fi
+}
+
+# Single-node: parse a Proxmox config and print "zvol vmid" lines for every
+# ZFS-backed disk reference that points to a candidate zvol name.
+parse_single_node_refs_from_config() {
+    local config="$1" owner_vmid="$2"
+    local line key rest storage disk_part disk_num zvol
+
+    [[ -f "$config" ]] || return 0
+    while IFS= read -r line; do
+        [[ "$line" =~ ^\[.+\] ]] && break
+        key="${line%%:*}"
+        [[ "$key" == "$line" ]] && continue
+        is_disk_key "$key" || continue
+        rest="${line#"${key}":}"
+        rest="${rest#"${rest%%[![:space:]]*}"}"
+        storage="${rest%%:*}"
+        [[ -n "$storage" && "$rest" == "$storage":* ]] || continue
+        disk_part="${rest#"$storage":}"
+        [[ "$disk_part" == "vm-"*"-disk-"* ]] || continue
+        disk_num="${disk_part##*vm-"${vmid}"-disk-}"
+        disk_num="${disk_num%%[!0-9]*}"
+        [[ "$disk_part" == "vm-${vmid}-disk-${disk_num}"* ]] || continue
+        zfs list -H -t volume -o name 2>/dev/null \
+            | while IFS= read -r zvol; do
+                if [[ "$zvol" == *"/proxmox/vm-${vmid}-disk-${disk_num}" ]]; then
+                    printf '%s\t%s\n' "$zvol" "$owner_vmid"
+                    break
+                fi
+            done
+    done < "$config"
+}
+
+# Two-node: parse a Proxmox config and print "target lun vmid" lines for every
+# iSCSI disk reference. target is the full IQN.
+parse_two_node_refs_from_config() {
+    local config="$1" owner_vmid="$2"
+    local line key rest after target lun
+
+    [[ -f "$config" ]] || return 0
+    while IFS= read -r line; do
+        [[ "$line" =~ ^\[.+\] ]] && break
+        key="${line%%:*}"
+        [[ "$key" == "$line" ]] && continue
+        is_disk_key "$key" || continue
+        rest="${line#"${key}":}"
+        [[ "$rest" == *"ip-"[0-9.]*":3260-iscsi-iqn."*"-lun-"[0-9]* ]] || continue
+        after="${rest##*-iscsi-}"
+        target="${after%-lun-*}"
+        lun="${after##*-lun-}"
+        lun="${lun%%[!0-9]*}"
+        [[ -n "$target" && "$target" == iqn.* && -n "$lun" ]] || continue
+        printf '%s\t%s\t%s\n' "$target" "$lun" "$owner_vmid"
+    done < "$config"
+}
+
+# Two-node: resolve a list of "target lun vmid" lines on the storage host to
+# "zvol vmid" lines. Empty input produces empty output.
+resolve_two_node_refs() {
+    local refs="$1"
+    [[ -n "$refs" ]] || return 0
+
+    # Pass the ref triples as positional arguments; the remote script reads
+    # its program from stdin, so data must not share that stdin.
+    local -a args=()
+    local r_target r_lun r_owner
+    while IFS=$'\t' read -r r_target r_lun r_owner; do
+        [[ -n "$r_target" && -n "$r_lun" && -n "$r_owner" ]] || continue
+        args+=("$r_target" "$r_lun" "$r_owner")
+    done <<< "$refs"
+    [[ ${#args[@]} -gt 0 ]] || return 0
+
+    ssh root@"$storage_host" bash -s "${args[@]}" << 'SSHEOF'
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
+set -e
+
+while [[ $# -ge 3 ]]; do
+    target="$1"; lun="$2"; owner_vmid="$3"
+    shift 3
+
+    backstore=""
+    while IFS= read -r lun_line; do
+        [[ "$lun_line" == *"lun${lun}"* ]] || continue
+        after_lun="${lun_line#*"lun${lun}"}"
+        [[ -z "$after_lun" || "$after_lun" =~ ^[0-9] ]] && continue
+        [[ "$lun_line" == *"block/"* ]] || continue
+        backstore="${lun_line#*"block/"}"
+        backstore="${backstore%%[[:space:]]*}"
+        break
+    done < <(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null || true)
+    [[ -n "$backstore" ]] || continue
+
+    zvol_line=$(targetcli /backstores/block ls 2>/dev/null \
+        | grep -F " ${backstore} " | head -1 || true)
+    zvol=""
+    if [[ "$zvol_line" == *"/dev/zvol/"* ]]; then
+        zvol="${zvol_line#*"/dev/zvol/"}"
+        zvol="${zvol%%[ )]*}"
+    fi
+    [[ -n "$zvol" ]] || continue
+
+    printf '%s\t%s\n' "$zvol" "$owner_vmid"
+done
+SSHEOF
+}
+
+# Collect zvol -> owner_vmid mapping for the target VM's config.
+collect_target_referenced_zvols() {
+    if is_single_node; then
+        parse_single_node_refs_from_config "$proxmoxconfig" "$vmid"
+    else
+        local refs
+        refs=$(parse_two_node_refs_from_config "$proxmoxconfig" "$vmid")
+        resolve_two_node_refs "$refs"
+    fi
+}
+
+# Collect zvol -> owner_vmid mapping for all *other* VM configs.
+collect_other_referenced_zvols() {
+    if is_single_node; then
+        local conf
+        for conf in "$pve_conf_dir"/*.conf; do
+            [[ -f "$conf" ]] || continue
+            local other_vmid
+            other_vmid=$(basename "$conf" .conf)
+            [[ "$other_vmid" =~ ^[0-9]+$ ]] || continue
+            [[ "$other_vmid" == "$vmid" ]] && continue
+            parse_single_node_refs_from_config "$conf" "$other_vmid"
+        done
+    else
+        local refs=""
+        local conf
+        for conf in "$pve_conf_dir"/*.conf; do
+            [[ -f "$conf" ]] || continue
+            local other_vmid
+            other_vmid=$(basename "$conf" .conf)
+            [[ "$other_vmid" =~ ^[0-9]+$ ]] || continue
+            [[ "$other_vmid" == "$vmid" ]] && continue
+            refs+=$(parse_two_node_refs_from_config "$conf" "$other_vmid")
+            [[ -n "$refs" ]] && refs+=$'\n'
+        done
+        # Trim trailing newline before sending.
+        refs="${refs%$'\n'}"
+        resolve_two_node_refs "$refs"
+    fi
+}
+
+# Two-node: given a list of zvol paths, look up each one's size, iSCSI target,
+# and LUN on the storage host (where the zvols live). Prints
+# "zvol<tab>size<tab>target<tab>lun" lines; target and lun are empty when the
+# zvol is not exported.
+lookup_storage_info_for_zvols() {
+    local zvol_list="$1"
+    [[ -n "$zvol_list" ]] || return 0
+
+    # Pass the zvol list as positional arguments; the remote script reads its
+    # program from stdin, so data must not share that stdin.
+    local -a args=()
+    local z
+    while IFS= read -r z; do
+        [[ -n "$z" ]] && args+=("$z")
+    done <<< "$zvol_list"
+    [[ ${#args[@]} -gt 0 ]] || return 0
+
+    ssh root@"$storage_host" bash -s "${args[@]}" << 'SSHEOF'
+mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+source "$mydir/bashinit"
+bashinit
+
+for zvol in "$@"; do
+    size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
+    backstore="${zvol##*/}"
+    target=""
+    lun=""
+    while IFS= read -r t; do
+        [[ -n "$t" ]] || continue
+        lun_line=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
+            | grep " ${backstore} " | head -1 || true)
+        found_lun=""
+        if [[ -n "$lun_line" ]]; then
+            found_lun="${lun_line#*lun}"
+            found_lun="${found_lun%%[!0-9]*}"
+        fi
+        if [[ -n "$found_lun" ]]; then
+            target="$t"
+            lun="$found_lun"
+            break
+        fi
+    done < <(targetcli /iscsi ls 2>/dev/null | while IFS= read -r _t_line; do
+        read -ra _t_words <<< "$_t_line"
+        for _t in "${_t_words[@]}"; do
+            case "$_t" in iqn.*) printf '%s\n' "$_t" ;; esac
+        done
+    done)
+    printf '%s\t%s\t%s\t%s\n' "$zvol" "$size" "$target" "$lun"
+done
+SSHEOF
+}
+
+# =====================================================================
+# Classify zvols
+# =====================================================================
+
+declare -a remove_zvols=()
+declare -a remove_sizes=()
+declare -a remove_targets=()
+declare -a remove_luns=()
+
+declare -a orphan_zvols=()
+declare -a orphan_sizes=()
+declare -a orphan_targets=()
+declare -a orphan_luns=()
+
+declare -a reassigned_zvols=()
+declare -a reassigned_sizes=()
+declare -a reassigned_vmids=()
+declare -a reassigned_targets=()
+declare -a reassigned_luns=()
+
+declare -A target_ref_zvols=()
+declare -A other_ref_zvols=()
+declare -A candidate_seen=()
+
+# Populate target_ref_zvols[<zvol>]=1 and other_ref_zvols[<zvol>]=<vmid>
+build_reference_maps() {
+    local line zvol owner
+
+    while IFS=$'\t' read -r zvol owner; do
+        [[ -n "$zvol" ]] || continue
+        target_ref_zvols["$zvol"]=1
+    done < <(collect_target_referenced_zvols)
+
+    while IFS=$'\t' read -r zvol owner; do
+        [[ -n "$zvol" ]] || continue
+        other_ref_zvols["$zvol"]="$owner"
+    done < <(collect_other_referenced_zvols)
+}
+
+# Build the candidate list and classify each zvol.
+classify_zvols() {
+    local candidate_zvols
+    candidate_zvols=$(collect_candidate_zvols)
+    [[ -n "$candidate_zvols" ]] || return 0
+
+    local -a candidates=()
+    while IFS= read -r zvol; do
+        [[ -n "$zvol" ]] || continue
+        candidates+=("$zvol")
+    done <<< "$candidate_zvols"
+    [[ ${#candidates[@]} -gt 0 ]] || return 0
+
+    # In two-node mode, resolve size and iSCSI info for every candidate in
+    # one storage-host call (zvols live on the storage host).
+    local storage_info=""
+    if is_two_node; then
+        storage_info=$(lookup_storage_info_for_zvols "$candidate_zvols")
+    fi
+
+    local zvol size target lun
+    for zvol in "${candidates[@]}"; do
+        [[ -z "${candidate_seen[$zvol]:-}" ]] || continue
+        candidate_seen["$zvol"]=1
 
         target=""
         lun=""
-        while IFS= read -r t; do
-            # The selected LUN line starts with "lun<n>"; take the digits.
-            lun_line=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
-                | grep " ${backstore} " | head -1)
-            found_lun=""
-            if [[ -n "$lun_line" ]]; then
-                found_lun="${lun_line#*lun}"
-                found_lun="${found_lun%%[!0-9]*}"
-            fi
-            if [[ -n "$found_lun" ]]; then
-                target="$t"
-                lun="$found_lun"
-                break
-            fi
-        done < <(targetcli /iscsi ls 2>/dev/null | while IFS= read -r _t_line; do
-            # targetcli separates each target name from its dotted leader
-            # with a space, so the IQN is a whole token.
-            read -ra _t_words <<< "$_t_line"
-            for _t in "${_t_words[@]}"; do
-                case "$_t" in iqn.*) printf '%s\n' "$_t" ;; esac
-            done
-        done)
+        if is_two_node; then
+            size="unknown"
+            local line
+            while IFS=$'\t' read -r _z _s _t _l; do
+                if [[ "$_z" == "$zvol" ]]; then
+                    size="$_s"
+                    target="$_t"
+                    lun="$_l"
+                    break
+                fi
+            done <<< "$storage_info"
+        else
+            size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
+        fi
 
-        printf '%s\t%s\t%s\t%s\n' "$zvol" "$size" "$target" "$lun"
-    done < <(zfs list -H -t volume -o name 2>/dev/null \
-        | grep -F "/proxmox/vm-${vmid}-disk-" | sort)
-SSHEOF
-    ) || { log_msg "FATAL: SSH to $storage_host failed"; exit 1; }
+        if [[ -n "${target_ref_zvols[$zvol]:-}" ]]; then
+            remove_zvols+=("$zvol")
+            remove_sizes+=("$size")
+            remove_targets+=("$target")
+            remove_luns+=("$lun")
+        elif [[ -n "${other_ref_zvols[$zvol]:-}" ]]; then
+            reassigned_zvols+=("$zvol")
+            reassigned_sizes+=("$size")
+            reassigned_vmids+=("${other_ref_zvols[$zvol]}")
+            reassigned_targets+=("$target")
+            reassigned_luns+=("$lun")
+        else
+            orphan_zvols+=("$zvol")
+            orphan_sizes+=("$size")
+            orphan_targets+=("$target")
+            orphan_luns+=("$lun")
+        fi
+    done
+}
 
-    while IFS=$'\t' read -r zvol size target lun; do
-        [[ -n "$zvol" ]] || continue
-        zvols+=("$zvol")
-        sizes+=("$size")
-        targets+=("$target")
-        luns+=("$lun")
-    done <<< "$discover_out"
+build_reference_maps
+classify_zvols
+
+# When --cleanup-orphans is set, promote orphans to the removal list.
+if [[ "$cleanup_orphans" == true ]]; then
+    remove_zvols+=("${orphan_zvols[@]}")
+    remove_sizes+=("${orphan_sizes[@]}")
+    remove_targets+=("${orphan_targets[@]}")
+    remove_luns+=("${orphan_luns[@]}")
+    orphan_zvols=()
+    orphan_sizes=()
+    orphan_targets=()
+    orphan_luns=()
 fi
 
-if [[ ${#zvols[@]} -eq 0 && ! -f "$proxmoxconfig" ]]; then
+if [[ ${#remove_zvols[@]} -eq 0 && ${#orphan_zvols[@]} -eq 0 \
+    && ${#reassigned_zvols[@]} -eq 0 && ! -f "$proxmoxconfig" ]]; then
     log_msg "INFO: No zvols or Proxmox config found for VM ${vmid}."
     exit 0
 fi
@@ -170,6 +467,9 @@ fi
 
 log_msg "INFO: === remove-vm ==="
 log_msg "INFO:   VM: ${vmid}"
+if [[ "$cleanup_orphans" == true ]]; then
+    log_msg "INFO:   Mode: --cleanup-orphans (orphaned matching zvols will be removed)"
+fi
 if [[ -f "$proxmoxconfig" ]]; then
     log_msg "INFO:   Config: ${proxmoxconfig}"
 else
@@ -177,23 +477,68 @@ else
 fi
 echo ""
 
-if [[ ${#zvols[@]} -gt 0 ]]; then
+if [[ ${#remove_zvols[@]} -gt 0 ]]; then
     log_msg "INFO:   Zvols to remove:"
-    for i in "${!zvols[@]}"; do
+    for i in "${!remove_zvols[@]}"; do
         if is_two_node; then
-            if [[ -n "${targets[$i]}" ]]; then
-                log_msg "INFO:     ${zvols[$i]} (size: ${sizes[$i]}," \
-                    "iSCSI: ${targets[$i]} LUN ${luns[$i]})"
+            if [[ -n "${remove_targets[$i]}" ]]; then
+                log_msg "INFO:     ${remove_zvols[$i]} (size: ${remove_sizes[$i]}," \
+                    "iSCSI: ${remove_targets[$i]} LUN ${remove_luns[$i]})"
             else
-                log_msg "INFO:     ${zvols[$i]} (size: ${sizes[$i]}, iSCSI: not mapped)"
+                log_msg "INFO:     ${remove_zvols[$i]} (size: ${remove_sizes[$i]}," \
+                    "iSCSI: not mapped)"
             fi
         else
-            log_msg "INFO:     ${zvols[$i]} (size: ${sizes[$i]})"
+            log_msg "INFO:     ${remove_zvols[$i]} (size: ${remove_sizes[$i]})"
         fi
     done
     echo ""
-else
-    log_msg "INFO:   No zvols found."
+fi
+
+if [[ ${#reassigned_zvols[@]} -gt 0 ]]; then
+    log_msg "WARN:   Reassigned zvols (referenced by another VM, will NOT be removed):"
+    for i in "${!reassigned_zvols[@]}"; do
+        if is_two_node; then
+            if [[ -n "${reassigned_targets[$i]}" ]]; then
+                log_msg "WARN:     ${reassigned_zvols[$i]} (size: ${reassigned_sizes[$i]}," \
+                    "iSCSI: ${reassigned_targets[$i]} LUN ${reassigned_luns[$i]}," \
+                    "referenced by VM ${reassigned_vmids[$i]})"
+            else
+                log_msg "WARN:     ${reassigned_zvols[$i]} (size: ${reassigned_sizes[$i]}," \
+                    "iSCSI: not mapped, referenced by VM ${reassigned_vmids[$i]})"
+            fi
+        else
+            log_msg "WARN:     ${reassigned_zvols[$i]} (size: ${reassigned_sizes[$i]}," \
+                "referenced by VM ${reassigned_vmids[$i]})"
+        fi
+    done
+    echo ""
+fi
+
+if [[ ${#orphan_zvols[@]} -gt 0 ]]; then
+    log_msg "WARN:   Orphaned zvols (not referenced by any VM config, will NOT be removed):"
+    for i in "${!orphan_zvols[@]}"; do
+        if is_two_node; then
+            if [[ -n "${orphan_targets[$i]}" ]]; then
+                log_msg "WARN:     ${orphan_zvols[$i]} (size: ${orphan_sizes[$i]}," \
+                    "iSCSI: ${orphan_targets[$i]} LUN ${orphan_luns[$i]})"
+            else
+                log_msg "WARN:     ${orphan_zvols[$i]} (size: ${orphan_sizes[$i]}," \
+                    "iSCSI: not mapped)"
+            fi
+        else
+            log_msg "WARN:     ${orphan_zvols[$i]} (size: ${orphan_sizes[$i]})"
+        fi
+    done
+    if [[ "$cleanup_orphans" != true ]]; then
+        log_msg "INFO:   Pass --cleanup-orphans to remove these as well."
+    fi
+    echo ""
+fi
+
+if [[ ${#remove_zvols[@]} -eq 0 && ${#orphan_zvols[@]} -eq 0 \
+    && ${#reassigned_zvols[@]} -gt 0 ]]; then
+    log_msg "INFO:   No zvols will be removed (only reassigned zvols were found)."
     echo ""
 fi
 
@@ -228,11 +573,11 @@ fi
 # Remove zvols using zfsdelfs
 # =====================================================================
 
-if [[ ${#zvols[@]} -gt 0 ]]; then
+if [[ ${#remove_zvols[@]} -gt 0 ]]; then
     log_msg "INFO:   Removing zvols..."
     if is_single_node; then
         zfsdelfs_path=$(find_zfsutility_script zfsdelfs) || exit 1
-        for zvol in "${zvols[@]}"; do
+        for zvol in "${remove_zvols[@]}"; do
             log_msg "INFO:     Destroying ${zvol}..."
             if ! "$zfsdelfs_path" "$zvol" '' '' '' "autoproceed='Y'"; then
                 log_msg "FATAL: Failed to remove ${zvol}"
@@ -241,7 +586,7 @@ if [[ ${#zvols[@]} -gt 0 ]]; then
         done
     else
         remote_zfsdelfs=$(remote_zfsutility_script "$storage_host" "zfsdelfs")
-        for zvol in "${zvols[@]}"; do
+        for zvol in "${remove_zvols[@]}"; do
             log_msg "INFO:     Destroying ${zvol}..."
             if ! ssh root@"$storage_host" \
                     "$remote_zfsdelfs '$zvol' '' '' '' \"autoproceed='Y'\""; then

@@ -14,6 +14,7 @@
 #                                      #   min 2; --jobs 1 is the serial debug mode)
 #   ./tests/run-tests --slowest N      # Print the N slowest bash suites at the end
 #                                      #   (default 10 when N omitted)
+#   ./tests/run-tests --log <file>     # Also write full console output to <file>
 #
 # Environment preflight: capabilities (gi, pv, zfs, root, test pools) are
 # detected up front; suites whose declared requirements (see
@@ -52,6 +53,7 @@ with_soak=""
 jobs=""
 slowest_mode=""
 slowest_n=10
+log_file=""
 declare -A explicit_suite=()
 
 # ---------------------------------------------------------------------------
@@ -122,6 +124,22 @@ if [[ $# -gt 0 ]]; then
             ((++arg_i))
             continue
         fi
+        # --log <file> / --log=<file>: persist the harness console stream.
+        if [[ "$arg" == "--log" ]]; then
+            if [[ $((arg_i + 1)) -lt ${#args[@]} ]]; then
+                log_file="${args[$((arg_i + 1))]}"
+                ((arg_i += 2))
+            else
+                echo "run-tests: --log requires a file path (e.g. --log /tmp/run.log)" >&2
+                exit 2
+            fi
+            continue
+        fi
+        if [[ "$arg" =~ ^--log=(.+)$ ]]; then
+            log_file="${BASH_REMATCH[1]}"
+            ((++arg_i))
+            continue
+        fi
         # Skip unrecognized flags and stray numbers
         if [[ "$arg" == -* || "$arg" =~ ^[0-9]+$ ]]; then
             ((++arg_i))
@@ -148,6 +166,16 @@ if [[ $# -gt 0 ]]; then
         have_test_arg=1
         ((++arg_i))
     done
+fi
+
+# ---------------------------------------------------------------------------
+# Optional persistent console log
+# ---------------------------------------------------------------------------
+
+if [[ -n "${log_file:-}" ]]; then
+    mkdir -p -- "$(dirname -- "$log_file")"
+    exec > >(tee -- "$log_file") 2>&1
+    echo "run-tests: full output also written to $log_file"
 fi
 
 # If no test names were given (only flags), default to the full suite.

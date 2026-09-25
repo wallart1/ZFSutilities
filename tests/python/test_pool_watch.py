@@ -67,6 +67,44 @@ class TestPoolWatchWindow(unittest.TestCase):
         self.assertEqual(store.append.call_count, 2)  # pool node + dummy child
         win.summary_label.set_text.assert_called_once_with("")
 
+    def test_store_schema_matches_datasets_tab(self):
+        parent = self._make_parent()
+        with (
+            patch.object(PoolWatchWindow, "refresh"),
+            patch.object(PoolWatchWindow, "_start_timer"),
+            patch.object(pool_watch.Gtk, "TreeStore") as mock_tree_store,
+        ):
+            PoolWatchWindow("tank", parent)
+        mock_tree_store.assert_called_once_with(
+            str, str, str, str, str, str, str, bool, bool, str
+        )
+
+    def test_refresh_appends_ten_column_rows(self):
+        parent = self._make_parent()
+        with (
+            patch.object(PoolWatchWindow, "_start_timer"),
+            patch.object(PoolWatchWindow, "refresh"),
+        ):
+            win = PoolWatchWindow("tank", parent)
+
+        store = MagicMock()
+        store.append.return_value = MagicMock()
+        win.store = store
+        win.scrolled = MagicMock()
+        win.summary_label = MagicMock()
+        win.view = MagicMock()
+
+        with (
+            patch.object(pool_watch, "get_expanded_rows", return_value=set()),
+            patch.object(pool_watch, "restore_expanded_rows"),
+        ):
+            PoolWatchWindow.refresh(win)
+
+        self.assertEqual(store.append.call_count, 2)
+        for call in store.append.call_args_list:
+            _parent, row = call.args
+            self.assertEqual(len(row), 10)
+
     def test_start_stop_timer(self):
         parent = self._make_parent()
         with (

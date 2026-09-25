@@ -36,7 +36,7 @@ from command_builders import BashStep
 from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from gi.repository import Gtk
-from gui_helpers import create_dialog
+from gui_helpers import create_dialog, create_scrolled_dialog
 from iscsi_enroll import is_iscsi_managed_pool, log_manual_enrollment_steps
 from logging_config import log_msg
 from path_utils import resolve_local_bin
@@ -573,14 +573,13 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
     Returns a ``MigrationRequest`` when the user confirms migration,
     or ``None`` when the dialog is cancelled.
     """
-    dialog = create_dialog(
+    dialog, content = create_scrolled_dialog(
         "Migrate Pool",
         app,
         [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)],
         size=(860, 760),
     )
     migrate_btn = dialog.add_button("Migrate", _RESPONSE_MIGRATE)
-    content = dialog.get_content_area()
 
     caption = Gtk.Label()
     caption.set_halign(Gtk.Align.START)

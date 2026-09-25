@@ -815,8 +815,18 @@ class ZfsRepository:
 
     def export_pool(self, pool: str) -> bool:
         """Export one pool by name."""
+        success, _stderr = self.export_pool_detailed(pool)
+        return success
+
+    def export_pool_detailed(self, pool: str) -> tuple[bool, str]:
+        """Export one pool by name, returning success and stderr."""
         result = self._run(self._zpool("export", pool), check=False)
-        return result.returncode == 0
+        return result.returncode == 0, result.stderr
+
+    def unmount_filesystem(self, dataset: str) -> tuple[bool, str]:
+        """Unmount one filesystem dataset, returning success and stderr."""
+        result = self._run(self._zfs("unmount", dataset), check=False)
+        return result.returncode == 0, result.stderr
 
     def create_pool_dry_run(self, cmd: list[str]) -> tuple[int, str]:
         """Run a `zpool create` argv as a dry run, injecting `-n` after `create`.
@@ -1168,6 +1178,33 @@ class ZfsRepository:
             return None
         target = result.stdout.strip().splitlines()
         return target[0].strip() if target else None
+
+    def dataset_for_mountpoint(self, mountpoint: str, pool: str | None = None) -> str | None:
+        """Return the ZFS dataset mounted at *mountpoint*, or None if not found."""
+        result = self._run(
+            self._cmd("findmnt", "--noheadings", "--output", "SOURCE", mountpoint),
+            check=False,
+        )
+        if result.returncode == 0:
+            source = result.stdout.strip().splitlines()
+            if source and source[0].strip() and "/" in source[0].strip():
+                return source[0].strip()
+
+        cmd = self._zfs("list", "-H", "-o", "name,mountpoint", "-t", "filesystem")
+        if pool is not None:
+            cmd.extend(["-r", pool])
+        result = self._run(cmd, check=False)
+        if result.returncode != 0:
+            return None
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            if parts[1].strip() == mountpoint:
+                return parts[0].strip()
+        return None
 
     # ------------------------------------------------------------------
     # Version / topology reads

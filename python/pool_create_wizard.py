@@ -28,7 +28,7 @@ from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from feature_config import get_workload_profiles
 from gi.repository import Gtk
-from gui_helpers import configure_treeview_column, create_dialog
+from gui_helpers import configure_treeview_column, create_scrolled_dialog
 from iscsi_enroll import offer_iscsi_enrollment
 from logging_config import log_msg
 from pool_create import (
@@ -729,7 +729,7 @@ def show_create_pool_wizard(app, eligibility, profiles, existing_names):
         repository=app.ctx.zfs_repository,
     )
 
-    dialog = create_dialog(
+    dialog, content = create_scrolled_dialog(
         "Create Pool",
         app,
         [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)],
@@ -739,7 +739,6 @@ def show_create_pool_wizard(app, eligibility, profiles, existing_names):
     next_btn = dialog.add_button("Next", _RESPONSE_NEXT)
     create_btn = dialog.add_button("Create", _RESPONSE_CREATE)
 
-    content = dialog.get_content_area()
     caption = Gtk.Label()
     caption.set_halign(Gtk.Align.START)
     content.pack_start(caption, False, False, 0)

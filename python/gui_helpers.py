@@ -5,6 +5,7 @@ Shared GTK helper utilities used by multiple page modules.
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 
 import gi
 
@@ -755,6 +756,65 @@ def create_dialog(title, parent, buttons, default_response=None, size=None):
     return dialog
 
 
+def _cap_dialog_size(size, parent):
+    """Return *size* capped to 90 % of the parent monitor workarea."""
+    if not size:
+        return None
+    try:
+        if parent is None or not parent.get_window():
+            return size
+        screen = parent.get_screen()
+        monitor = screen.get_monitor_at_window(parent.get_window())
+        workarea = screen.get_monitor_workarea(monitor)
+        max_width = max(int(workarea.width * 0.9), 400)
+        max_height = max(int(workarea.height * 0.9), 300)
+        return (min(size[0], max_width), min(size[1], max_height))
+    except Exception:
+        return size
+
+
+def create_scrolled_dialog(title, parent, buttons, default_response=None, size=None):
+    """Create a resizable Gtk.Dialog whose content area scrolls.
+
+    Returns a ``(dialog, content_box)`` tuple. Widgets should be packed into
+    *content_box*; the action-area buttons remain fixed at the bottom. The
+    default size is capped to the available monitor workarea so the dialog
+    never opens off-screen.
+    """
+    dialog = Gtk.Dialog(title=title, transient_for=parent, modal=True, destroy_with_parent=True)
+    for btn_text, response in buttons:
+        dialog.add_button(btn_text, response)
+    if default_response is not None:
+        dialog.set_default_response(default_response)
+    dialog.set_resizable(True)
+
+    capped_size = _cap_dialog_size(size, parent)
+    if capped_size:
+        dialog.set_default_size(*capped_size)
+
+    content = dialog.get_content_area()
+    content.set_spacing(10)
+    content.set_margin_start(10)
+    content.set_margin_end(10)
+    content.set_margin_top(10)
+    content.set_margin_bottom(10)
+
+    scrolled = Gtk.ScrolledWindow()
+    scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+    scrolled.set_hexpand(True)
+    scrolled.set_vexpand(True)
+    content.pack_start(scrolled, True, True, 0)
+
+    inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    inner.set_margin_start(10)
+    inner.set_margin_end(10)
+    inner.set_margin_top(10)
+    inner.set_margin_bottom(10)
+    scrolled.add(inner)
+
+    return dialog, inner
+
+
 def add_scrolled_text_view(
     parent, text, monospace=True, wrap_mode=Gtk.WrapMode.NONE, min_height=None
 ):
@@ -833,40 +893,72 @@ def get_busy_processes(path):
     return processes
 
 
-def diagnose_dataset_busy(target, stderr_text="", repo=None):
-    """Diagnose why a ZFS dataset or snapshot cannot be destroyed.
+@dataclass
+class BusyReason:
+    """One reason a ZFS dataset or snapshot cannot be destroyed or exported."""
 
-    Logs specific causes via log_msg so the user knows what to fix.
+    category: str
+    dataset: str
+    detail: str
+    resolvable: bool = False
+    action: str = ""
+    data: dict | None = None
+
+
+def collect_dataset_busy_reasons(target, repo=None):
+    """Return structured reasons why *target* cannot be destroyed or exported.
+
+    This is the non-logging counterpart to ``diagnose_dataset_busy``. Callers
+    that need to act on the reasons (for example, pool export recovery) can
+    iterate the returned list; callers that only need human-readable output
+    should call ``diagnose_dataset_busy`` instead.
     """
     repo = repo or get_default_repository()
-    found_cause = False
+    reasons = []
     is_snapshot = "@" in target
-
-    if stderr_text:
-        log_msg(f"WARN: ZFS reported: {stderr_text.strip()}")
-    log_msg(f"WARN: Diagnosing why {target} cannot be destroyed...")
+    # Regex: vm-(\d+)-disk-\d+
+    # Used with re.fullmatch, so it must match the ENTIRE base name, not a
+    # substring. Purpose: recognize a Proxmox-style zvol base name
+    # ("vm-<vmid>-disk-<disknum>", e.g. "vm-207-disk-2") so we can check the
+    # targetcli block backstores for an iSCSI LUN still exposing this zvol
+    # and detect whether the owning VM is running. Group 1 captures the VM ID
+    # (e.g. "207"). A match means "this zvol follows the Proxmox naming
+    # convention and might belong to a VM"; non-conforming base names skip
+    # the iSCSI and VM-running checks entirely.
+    bsname = target.split("/")[-1]
+    vmid_match = re.fullmatch(r"vm-(\d+)-disk-\d+", bsname)
 
     # 1. Clone dependents
     if is_snapshot:
         try:
             clones = repo.get_property(target, "clones")
             if clones and clones != "-":
-                log_msg(f"WARN:   → Snapshot has clone dependents: {clones}")
-                log_msg(
-                    "WARN:     Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
+                reasons.append(
+                    BusyReason(
+                        category="clone",
+                        dataset=target,
+                        detail=f"Snapshot has clone dependents: {clones}",
+                        action=(
+                            "Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
+                        ),
+                    )
                 )
-                found_cause = True
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
     else:
         try:
             clone_snaps = repo.get_recursive_snapshot_clones(target)
             if clone_snaps:
-                log_msg(f"WARN:   → One or more snapshots of {target} have clone dependents.")
-                log_msg(
-                    "WARN:     Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
+                reasons.append(
+                    BusyReason(
+                        category="clone",
+                        dataset=target,
+                        detail=f"One or more snapshots of {target} have clone dependents.",
+                        action=(
+                            "Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
+                        ),
+                    )
                 )
-                found_cause = True
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
@@ -876,9 +968,14 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
             holds = repo.list_holds(target)
             if holds:
                 tags = sorted({hold.tag for hold in holds})
-                log_msg(f"WARN:   → Snapshot has holds: {' '.join(tags)}")
-                log_msg("WARN:     Use 'releaseholds' option or 'zfs release <tag> <snap>'.")
-                found_cause = True
+                reasons.append(
+                    BusyReason(
+                        category="hold",
+                        dataset=target,
+                        detail=f"Snapshot has holds: {' '.join(tags)}",
+                        action="Use 'releaseholds' option or 'zfs release <tag> <snap>'.",
+                    )
+                )
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
@@ -887,15 +984,35 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
         mounted = repo.get_property(target, "mounted")
         if mounted == "yes":
             mountpoint = repo.get_property(target, "mountpoint")
-            log_msg(f"WARN:   → Dataset is mounted at {mountpoint}.")
             procs = get_busy_processes(mountpoint)
+            reasons.append(
+                BusyReason(
+                    category="mounted",
+                    dataset=target,
+                    detail=f"Dataset is mounted at {mountpoint}.",
+                    resolvable=True,
+                    action=(
+                        "No open processes detected (try unmounting first)." if not procs else ""
+                    ),
+                    data={"mountpoint": mountpoint, "busy": bool(procs)},
+                )
+            )
             if procs:
                 names = " ".join({name for _pid, name in procs})
-                log_msg(f"WARN:     Open processes: {names}")
-                log_msg("WARN:     Stop the processes or unmount before destroying.")
-            else:
-                log_msg("WARN:     No open processes detected (try unmounting first).")
-            found_cause = True
+                reasons.append(
+                    BusyReason(
+                        category="busy_processes",
+                        dataset=target,
+                        detail=f"Open processes: {names}",
+                        resolvable=True,
+                        action="Stop the processes or unmount before destroying.",
+                        data={
+                            "mountpoint": mountpoint,
+                            "pids": [pid for pid, _ in procs],
+                            "names": names,
+                        },
+                    )
+                )
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
@@ -903,11 +1020,14 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
     try:
         token = repo.get_property(target, "receive_resume_token")
         if token and token != "-":
-            log_msg(
-                "WARN:   → Dataset has an active or interrupted receive (resume token present)."
+            reasons.append(
+                BusyReason(
+                    category="receive_token",
+                    dataset=target,
+                    detail="Dataset has an active or interrupted receive (resume token present).",
+                    action="Abort with 'zfs receive -A <dataset>' or allow it to complete.",
+                )
             )
-            log_msg("WARN:     Abort with 'zfs receive -A <dataset>' or allow it to complete.")
-            found_cause = True
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
@@ -919,9 +1039,14 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
             check=False,
         )
         if result.returncode == 0 and result.stdout.strip():
-            log_msg(f"WARN:   → An active 'zfs send' involving {target} is running.")
-            log_msg("WARN:     Wait for it to complete before destroying.")
-            found_cause = True
+            reasons.append(
+                BusyReason(
+                    category="send",
+                    dataset=target,
+                    detail="An active 'zfs send' involving this dataset is running.",
+                    action="Wait for it to complete before destroying.",
+                )
+            )
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
@@ -931,24 +1056,18 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
             dataset, snap_name = target.split("@", 1)
             bmarks = repo.list_bookmarks(dataset, snap_name)
             if bmarks:
-                log_msg(f"WARN:   → Snapshot is referenced by bookmark(s): {' '.join(bmarks)}")
-                log_msg("WARN:     Destroy the bookmark(s) first with 'zfs destroy <bookmark>'.")
-                found_cause = True
+                reasons.append(
+                    BusyReason(
+                        category="bookmark",
+                        dataset=target,
+                        detail=f"Snapshot is referenced by bookmark(s): {' '.join(bmarks)}",
+                        action="Destroy the bookmark(s) first with 'zfs destroy <bookmark>'.",
+                    )
+                )
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
     # 6. iSCSI LUN exposure (zvols only)
-    # Regex: vm-(\d+)-disk-\d+
-    # Used with re.fullmatch, so it must match the ENTIRE base name, not a
-    # substring. Purpose: recognize a Proxmox-style zvol base name
-    # ("vm-<vmid>-disk-<disknum>", e.g. "vm-207-disk-2") so we can check the
-    # targetcli block backstores for an iSCSI LUN still exposing this zvol.
-    # Group 1 captures the VM ID (e.g. "207"); only the match itself (not the
-    # groups) is used here — a match means "this zvol follows the Proxmox
-    # naming convention and might be shared via targetcli". Non-conforming
-    # base names skip this check entirely.
-    bsname = target.split("/")[-1]
-    vmid_match = re.fullmatch(r"vm-(\d+)-disk-\d+", bsname)
     if vmid_match:
         try:
             result = subprocess.run(
@@ -985,11 +1104,19 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
                     pass
 
                 if lun_info:
-                    log_msg(f"WARN:   → Zvol is exposed as an iSCSI LUN on {lun_info}.")
+                    detail = f"Zvol is exposed as an iSCSI LUN on {lun_info}."
                 else:
-                    log_msg(f"WARN:   → Zvol has an iSCSI backstore ({bsname}) but no LUN mapping.")
-                log_msg("WARN:     Use 'remove-vm-disk' or targetcli to tear down iSCSI first.")
-                found_cause = True
+                    detail = f"Zvol has an iSCSI backstore ({bsname}) but no LUN mapping."
+                reasons.append(
+                    BusyReason(
+                        category="iscsi",
+                        dataset=target,
+                        detail=detail,
+                        resolvable=True,
+                        action="Use 'remove-vm-disk' or targetcli to tear down iSCSI first.",
+                        data={"bsname": bsname, "lun_info": lun_info},
+                    )
+                )
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
@@ -1004,9 +1131,16 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
                 check=True,
             )
             if "running" in result.stdout:
-                log_msg(f"WARN:   → VM {vmid} is RUNNING and may be using {target}.")
-                log_msg("WARN:     Stop the VM before destroying this zvol.")
-                found_cause = True
+                reasons.append(
+                    BusyReason(
+                        category="vm",
+                        dataset=target,
+                        detail=f"VM {vmid} is RUNNING and may be using {target}.",
+                        resolvable=True,
+                        action="Stop the VM before destroying this zvol.",
+                        data={"vmid": vmid},
+                    )
+                )
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
@@ -1020,13 +1154,38 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
                 check=True,
             ).stdout.strip()
             if value and value != "off" and value != "-":
-                log_msg(f"WARN:   → Dataset is shared via {label} ({value}).")
-                log_msg(f"WARN:     Unshare with 'zfs set {prop}=off {target}' before destroying.")
-                found_cause = True
+                reasons.append(
+                    BusyReason(
+                        category=label.lower(),
+                        dataset=target,
+                        detail=f"Dataset is shared via {label} ({value}).",
+                        resolvable=True,
+                        action=(f"Unshare with 'zfs set {prop}=off {target}' before destroying."),
+                        data={"prop": prop, "value": value},
+                    )
+                )
         except (subprocess.CalledProcessError, FileNotFoundError):
             pass
 
-    if not found_cause:
+    return reasons
+
+
+def diagnose_dataset_busy(target, stderr_text="", repo=None):
+    """Diagnose why a ZFS dataset or snapshot cannot be destroyed.
+
+    Logs specific causes via log_msg so the user knows what to fix.
+    """
+    if stderr_text:
+        log_msg(f"WARN: ZFS reported: {stderr_text.strip()}")
+    log_msg(f"WARN: Diagnosing why {target} cannot be destroyed...")
+
+    reasons = collect_dataset_busy_reasons(target, repo=repo)
+    for reason in reasons:
+        log_msg(f"WARN:   → {reason.detail}")
+        if reason.action:
+            log_msg(f"WARN:     {reason.action}")
+
+    if not reasons:
         log_msg("WARN:   → No specific cause identified. Common remaining reasons:")
         log_msg("WARN:       • The dataset is referenced by a child snapshot that is busy.")
         log_msg("WARN:       • A process has the dataset open through a different path.")
