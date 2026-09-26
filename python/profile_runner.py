@@ -40,9 +40,6 @@ from command_builders import (
     build_pre_backup_command as _build_pre_backup_command,
 )
 from command_builders import (
-    build_retention_command as _build_retention_command,
-)
-from command_builders import (
     build_rsync_command as _build_rsync_command,
 )
 from command_builders import (
@@ -57,7 +54,6 @@ from feature_config import (
     generate_offsite_snapshot_name,
     generate_snapshot_name,
     get_offsite_candidate_names,
-    get_pool_names,
     remove_snapfile,
 )
 from logging_config import log_msg, session_log_context
@@ -501,25 +497,9 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
                 _build_backup_prune_command(parent_dir, label, active_sr, variables, dryrun=dryrun)
             )
         else:
-            pools = get_pool_names(config) or None
-            prune_selection = {
-                key: variables.get(key, "")
-                for key in ("includes", "excludes", "startwith", "endwith")
-                if variables.get(key, "").strip()
-            }
             log_msg(
-                "INFO: No active send/receive steps; prune step falls back to "
-                "whole-pool pruning of the configured pools."
-            )
-            if prune_selection:
-                log_msg(
-                    "INFO: Dataset selection forwarded to prune step: "
-                    + " ".join(f"{k}={v}" for k, v in prune_selection.items())
-                )
-            steps.append(
-                _build_retention_command(
-                    parent_dir, label, pools=pools, dryrun=dryrun, **prune_selection
-                )
+                "INFO: No active send/receive steps; skipping prune step "
+                "(no new snapshots to prune)."
             )
 
     if not steps:

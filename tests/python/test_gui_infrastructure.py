@@ -3701,8 +3701,17 @@ class TestHandleEditingKeyPress(unittest.TestCase):
             model.iter_next.return_value = None
 
         event = self._make_event(keyval)
-        gh.Gtk.TreePath = _FakeTreePath
-        gh.GLib.idle_add = lambda fn, *a, **k: fn(*a, **k) or False
+        # gh.Gtk / gh.GLib are session-shared module mocks; patch via
+        # addCleanup so the overrides cannot leak into other suites that
+        # import the same modules in this pytest-xdist worker.
+        tree_path_patcher = patch.object(gh.Gtk, "TreePath", _FakeTreePath)
+        tree_path_patcher.start()
+        self.addCleanup(tree_path_patcher.stop)
+        idle_add_patcher = patch.object(
+            gh.GLib, "idle_add", lambda fn, *a, **k: fn(*a, **k) or False
+        )
+        idle_add_patcher.start()
+        self.addCleanup(idle_add_patcher.stop)
         return widget, treeview, model, event
 
     def test_tab_moves_to_next_editable_column(self):

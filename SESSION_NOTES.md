@@ -634,3 +634,115 @@ can never enter the VM-disk scan. Regression tests: test-zfscommsnap
 argument) and test-zfscheckrunningvms (bookmarks never enumerated or
 reported as VM disks). Installation note and modules.md zfscommsnap entry
 state the policy.
+
+## 2026-09-25 — Remove datesubtract, getlinecount, zfscleanupbadoffsiteholds, backup-installed-programs
+
+Deleted the four scripts plus tests/test-datesubtract. zfscleanupbadoffsiteholds
+entries removed from tests/test-lock-coverage and the lock-manager doc; docs
+(commands.md, testing.md, daily-backup.md) updated. backup-installed-programs
+was obsolete: only zfsdailybackup used it, production cron runs profile_runner
+(not zfsdailybackup), and stewie's installed-programs outputs were stale since
+June. Stripped it from bin/zfsdailybackup (source_helper, remote scp push,
+local/remote run steps, run_installed_programs variable) and from
+tests/test-zfsdailybackup. python/config_migrations.py left untouched
+(historical migration chain). Deletions staged via git rm; commit only on
+explicit instruction. Full suite green; shellcheck clean on touched bash files.
+
+## 2026-09-25 — Skip prune step when no send/receive steps are active
+
+Backup-type jobs (GUI Backup tab and scheduled/CLI backup profiles) no longer
+fall back to whole-pool pruning when retention is enabled but no send/receive
+steps are active. The prune step is now skipped with an INFO log ("No active
+send/receive steps; skipping prune step (no new snapshots to prune)."), since
+no new snapshots were created. If this leaves a profile with no steps,
+run_backup_profile keeps its existing "No active steps to run" WARN/rc=1, and
+the GUI keeps its existing no-steps guard.
+
+Removed the now-dead command_builders.build_retention_command (its two callers
+were the only ones), its imports in backup_page/profile_runner (plus the
+now-unused get_pool_names imports), TestBuildRetentionCommand and its 7 golden
+files, and the matching mock in test_page_runners. Rewrote the four tests that
+pinned the old fallback. Updated the Prune checkbox tooltip and docs
+(profiles.md, gtk-gui.md x2, daily-backup.md, python-modules.md). Full suite
+green; ruff clean.
+
+## 2026-09-25 — Resolve all four PREEXISTING.md entries (wrap-up)
+
+1. Ruff format nits: ran `ruff format` on the three untouched test files
+   (test_pool_create_wizard.py, test_pool_growth_dialogs.py,
+   test_pool_watch.py).
+2. Shellcheck SC2115 in tests/test-rsync-dailybackup: changed both
+   `rm -rf "$DEST_DIR"/*` to `rm -rf "${DEST_DIR:?}"/*`; shellcheck clean,
+   suite green.
+3. zfs-send-receive header: documented the full global set (selection and
+   snapshot naming, transfer behavior, execution control, tuning, and the
+   globals set for callers) per the coding-policy header template, pointing
+   to docs/docs/developer-guide/global-variables.md. shellcheck clean.
+4. `<offsite>` retention policy key: resolved in the engine.
+   `zfsconfig_get_retention <pool>` now resolves retention[pool] →
+   retention["<offsite>"] when <pool> is an offsite candidate →
+   retention["default"] → legacy zfsretainpol-<pool> files. This matches the
+   documented behavior in retention.md and the GUI's prune-list treatment of
+   a `<offsite>` policy row. Added six tests to tests/test-zfsconfig
+   (resolution order, direct `<offsite>` lookup, rc=1 when nothing found —
+   the last required pointing ZFSCONFIG_LEGACY_DIR at an empty temp dir so
+   the repo's bin/zfsretainpol-default sample doesn't satisfy the legacy
+   fallback). Updated bin/zfsconfig doc comments and the modules.md
+   zfsconfig/zfsretain sections. Removed the entry from PREEXISTING.md.
+
+## 2026-09-25 — Development-cycle wrap-up (steps 1-4)
+
+Resolved the remaining two PREEXISTING.md entries from earlier sessions: ran
+`ruff format` on the three test files and fixed SC2115 in
+tests/test-rsync-dailybackup with `${DEST_DIR:?}`. Full code review against
+docs/docs/developer-guide/coding-policies.md: ruff check/format and
+`shellcheck -S warning` clean across bin/, lib/, tests/. One new pre-existing
+entry recorded: the undocumented >10-char regex in bin/zfsconfig's legacy
+fallback.
+
+Test-suite review findings: no stale references to the deleted scripts or
+build_retention_command outside SESSION_NOTES and pytest cache; the
+run_installed_programs references in config_migrations.py are the
+intentionally preserved historical migration chain. Found and fixed a real
+test bug exposed by xdist scheduling: TestHandleEditingKeyPress._setup in
+test_gui_infrastructure.py assigned `gh.Gtk.TreePath` and `gh.GLib.idle_add`
+directly on the session-shared module mocks without restoring them; once the
+deletions in this cycle shifted -n 3 worker distribution, the leaked
+synchronous idle_add made two pool_watch refresh tests fail with MagicMock
+TypeErrors. Fixed with patch.object + addCleanup. Full suite green after the
+fix (74 suites, 0 failed; only environment-gated skips).
+
+Docs: updated modules.md (zfsconfig_get_retention resolution order, zfsretain
+step 2) and data-structures.md (retention section now names the `<offsite>`
+key and points at retention.md). test_docs_integrity.py: 23 passed.
+
+Correction to the wrap-up note above: PREEXISTING.md initially retained the
+three resolved entries (ruff nits, SC2115, zfs-send-receive header) alongside
+the removed `<offsite>` entry; they have now been removed per the rule that
+addressed issues leave the file. One open entry remains: the zfsconfig legacy
+regex documentation nit.
+
+## 2026-09-26 — Development-cycle wrap-up (numbered steps 1-4)
+
+Step 1: resolved the last PREEXISTING.md entry — documented the legacy
+`zfsretainpol-*` parsing regex in `bin/zfsconfig` field by field per the
+coding policies. PREEXISTING.md now has zero open entries.
+
+Step 2 (coding-policy review): fixed two >100-char lines in `bin/list-vm-disks`
+(the two TABLE_ROWS+= statements) by adding a `_table_row` join helper with two
+call sites; profusely documented the two >10-char token-splitting regexes in
+`_wrap_cell`. Full `shellcheck -S warning` (bin/, lib/, tests/) and
+`ruff check` / `ruff format --check` clean. Verified no stale references to
+the removed scripts/APIs outside SESSION_NOTES, the intentionally preserved
+config_migrations.py chain, and the off-limits changelog.
+
+Step 3 (test review): no missing/obsolete tests found; coverage of the new
+behavior (prune skip, <offsite> resolution, guest-exec batching, table
+rendering) is complete. Full suite green: 74 suites, 0 failed (one
+environment-gated soak skip).
+
+Step 4 (docs): docs/docs/ verified consistent with the working tree (no stale
+references to removed scripts or the old prune fallback outside the
+off-limits changelog); `test_docs_integrity.py` passes. No new pre-existing
+issues discovered during steps 2-4, so nothing was recorded; code frozen per
+wrap-up instructions.

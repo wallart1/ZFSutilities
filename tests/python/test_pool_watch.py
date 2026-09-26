@@ -75,9 +75,7 @@ class TestPoolWatchWindow(unittest.TestCase):
             patch.object(pool_watch.Gtk, "TreeStore") as mock_tree_store,
         ):
             PoolWatchWindow("tank", parent)
-        mock_tree_store.assert_called_once_with(
-            str, str, str, str, str, str, str, bool, bool, str
-        )
+        mock_tree_store.assert_called_once_with(str, str, str, str, str, str, str, bool, bool, str)
 
     def test_refresh_appends_ten_column_rows(self):
         parent = self._make_parent()

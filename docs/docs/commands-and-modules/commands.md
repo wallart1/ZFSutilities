@@ -14,13 +14,10 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 
 ## Jump to
 
-- [`backup-installed-programs`](#backup-installed-programs)
 - [`check-prerequisites`](#check-prerequisites)
 - [`cleanup-zfsutilities-legacy`](#cleanup-zfsutilities-legacy)
-- [`datesubtract`](#datesubtract)
 - [`deploy-version`](#deploy-version)
 - [`ensure-restored-vm-iscsi`](#ensure-restored-vm-iscsi)
-- [`getlinecount`](#getlinecount)
 - [`git-release`](#git-release)
 - [`install-single-node`](#install-single-node)
 - [`install-two-node`](#install-two-node)
@@ -41,7 +38,6 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfsaddisk`](#zfsaddisk)
 - [`zfsallthepools`](#zfsallthepools)
 - [`zfscleanup`](#zfscleanup)
-- [`zfscleanupbadoffsiteholds`](#zfscleanupbadoffsiteholds)
 - [`zfsdailybackup`](#zfsdailybackup)
 - [`zfsdelallsnaps`](#zfsdelallsnaps)
 - [`zfsdelfs`](#zfsdelfs)
@@ -74,30 +70,6 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfsstatus`](#zfsstatus)
 - [`zfsunmount`](#zfsunmount)
 - [`zfswatcharc`](#zfswatcharc)
-
----
-
-### `backup-installed-programs`
-
-Saves a list of manually-installed apt packages to a file called
-`installed-programs` in the current directory.
-
-```bash
-sudo backup-installed-programs
-```
-
-**Arguments:** none.
-
-**Globals:** none.
-
-Uses `apt-mark showmanual` to generate the list. Logs success or failure.
-On failure, removes the partial output file.
-
-**Called modules:** none.
-
-**Data structures consumed / produced:** none.
-
-**Return codes:** non-zero if `apt-mark` or output writing fails; partial output is removed.
 
 ---
 
@@ -186,37 +158,6 @@ warning.
 | ---- | ------------------------- |
 | `0`  | Success (or cancellation) |
 | `1`  | A fatal error occurred    |
-
----
-
-### `datesubtract`
-
-Calculates the number of days, months, and years between two dates.
-
-```bash
-datesubtract "2025-01-01" "2026-01-01"
-```
-
-**Arguments:**
-
-| Argument | Description                                   |
-| -------- | --------------------------------------------- |
-| `$1`     | Start date (any format accepted by `date -d`) |
-| `$2`     | End date                                      |
-
-**Globals:** none.
-
-Outputs days, months (decimal), and years (decimal).
-
-**Called modules:** none.
-
-**Data structures consumed / produced:** none.
-
-**Return codes:**
-
-| Code | Meaning                 |
-| ---- | ----------------------- |
-| `0`  | Completed successfully. |
 
 ---
 
@@ -329,28 +270,6 @@ the zvol disk number.
 | ---- | ------------------------------------------------ |
 | `0`  | Success, or no VM disk zvols required processing |
 | `1`  | Usage error (no zvol arguments supplied)         |
-
----
-
-### `getlinecount`
-
-Counts files and total lines in the project root directory (non-recursive).
-Hard-coded to `/NFS1/dan(NFS1)/zfsutilities-dev`. Intended as a development
-utility.
-
-**Arguments:** none.
-
-**Globals:** none.
-
-**Called modules:** none.
-
-**Data structures consumed / produced:** none.
-
-**Return codes:**
-
-| Code | Meaning                 |
-| ---- | ----------------------- |
-| `0`  | Completed successfully. |
 
 ---
 
@@ -1176,50 +1095,6 @@ Calls [`zfsretain`](modules.md#zfsretain) for each pool.
 
 ---
 
-### `zfscleanupbadoffsiteholds`
-
-Removes incorrectly self-referencing holds from an offsite pool. A
-self-referencing hold is one where the hold name is `offsite-<pool>` on a
-snapshot that already resides in `<pool>` — a bug from earlier versions of
-`applyholds`.
-
-```bash
-sudo zfscleanupbadoffsiteholds <pool> [dryrun]
-```
-
-**Arguments:**
-
-| Argument | Description                                            |
-| -------- | ------------------------------------------------------ |
-| `$1`     | Pool to inspect                                        |
-| `$2`     | `dryrun` = show what would be removed without removing |
-
-**Globals:** none.
-
-Lists snapshot holds via `zfs list -Hrt snapshot ... | xargs zfs holds -H`,
-then releases any hold whose name matches `offsite-<pool>` on a snapshot within
-that same pool.
-
-**Called modules:** none.
-
-**Data structures consumed / produced:** none.
-
-**Internal flow:**
-
-1. Validate that `$1` names an existing pool.
-2. List every snapshot in the pool and query its holds.
-3. For each hold matching `offsite-*`, compare the pool embedded in the hold tag with the snapshot's own pool.
-4. If they match (self-referencing hold), release the hold unless `dryrun` was requested.
-
-**Return codes:**
-
-| Code | Meaning                              |
-| ---- | ------------------------------------ |
-| `0`  | Scan completed.                      |
-| `1`  | Pool name missing or pool not found. |
-
----
-
 ### `zfsdailybackup`
 
 Main daily backup orchestrator. Runs the full backup sequence:
@@ -1253,7 +1128,6 @@ sudo zfsdailybackup [overrides]
 | `receive_F_option`           | `'F'`   | Force rollback of destination modifications on receive           |
 | `pre_backup_script_enabled`  | `'N'`   | Enable a pre-backup command                                      |
 | `pre_backup_script`          | `''`    | Command to run before backup steps (when enabled)                |
-| `run_installed_programs`     | `'Y'`   | Save the installed-package list via `backup-installed-programs`  |
 
 **Global variables read:**
 
@@ -1281,7 +1155,6 @@ sudo zfsdailybackup "dryrun='Y'"
 | [zfs-send-receive](modules.md#zfs-send-receive)| Copy `threeamigos/proxmox` → `fivebays` and `NVME1` → `fivebays` |
 | [zfsoverrides](modules.md#zfsoverrides)| Apply command-line parameter overrides                           |
 | [zfscleanup](commands.md#zfscleanup)| Prune snapshots after sends                                      |
-| [backup-installed-programs](commands.md#backup-installed-programs)| Save package list on remote/local hosts                          |
 | [rsync-dailybackup](modules.md#rsync-dailybackup)| Perform rsync pulls from remote/local hosts                      |
 
 **Data structures consumed / produced:**

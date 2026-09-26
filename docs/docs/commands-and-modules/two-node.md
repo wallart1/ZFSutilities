@@ -487,7 +487,9 @@ rescan (and optionally re-login).
 Lists all zvols currently exported as iSCSI LUNs, together with the VM that
 owns each disk, the VM name, the host-side device names, and (when the VM is
 running and the QEMU guest agent is available) the device names seen inside the
-guest.
+guest.  Results are printed as one table per iSCSI target (two-node) or per
+pool (single-node); long values such as by-path names wrap onto multiple lines
+inside their table cells, and the table width follows the terminal.
 
 ```bash
 sudo list-vm-disks [--with-devices]
@@ -524,14 +526,17 @@ sudo list-vm-disks [--with-devices]
    disks that have been moved between VMs.
 2. On the compute host, build a LUN-to-host-device map from
    `/dev/disk/by-path/ip-${storage_ip}*`.
-3. For running VMs, use `qm guest exec` to list the guest's
-   `/dev/disk/by-path` entries and resolve the symlink to the guest's
-   `/dev/sdX`.  SCSI disks are matched by disk key (`scsiN` →
+3. For each running VM, issue a single `qm guest exec` that walks all of that
+   VM's scsi disks and lists the guest's `/dev/disk/by-path` entries and the
+   resolved `/dev/sdX` targets, so a VM with N scsi disks costs one guest
+   round-trip instead of N.  SCSI disks are matched by disk key (`scsiN` →
    `*scsi-0:0:N:0` inside the guest).
 4. In single-node mode, enumerate local pools and their `vm-*` zvols directly
    and merge with the VM/guest maps.
 5. In two-node mode, gather LUN/zvol metadata from the storage host and merge
-   with the VM/guest maps from the compute host.
+   with the VM/guest maps from the compute host.  ZFS sizes, clone origins,
+   and snapshot clone dependents are looked up with one batched `zfs get` and
+   one `zfs list -t snapshot` per pool rather than one invocation per zvol.
 6. Annotate each zvol with clone relationships:
     - `[clone of <snapshot>]` if the zvol is a ZFS clone, where `<snapshot>`
       is the full origin snapshot dataset name (e.g.

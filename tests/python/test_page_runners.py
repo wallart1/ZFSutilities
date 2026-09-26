@@ -179,9 +179,6 @@ class TestBackupPageRun(unittest.TestCase):
             build_post_backup_command=MagicMock(
                 return_value=BashStep(["echo", "post"], "Post-backup")
             ),
-            build_retention_command=MagicMock(
-                return_value=BashStep(["echo", "retain"], "Retention")
-            ),
         )
 
     def test_prepare_session_log_called(self):

@@ -634,7 +634,6 @@ offsite, restore, and retention runners.
 | `build_rsync_command(source, dest, remote_log_path=None)`          | Build an rsync pull/push command                                                                                                                                                                               |
 | `build_send_receive_command(...)`                                  | Build the `bash` command for a ZFS send/receive step                                                                                                                                                           |
 | `build_pre_backup_command(cmd)` / `build_post_backup_command(cmd)` | Wrap user pre/post commands                                                                                                                                                                                    |
-| `build_retention_command(...)`                                     | Build the `zfscleanup` invocation (accepts the dataset selection criteria forwarded to `zfsbuildfsarray`)                                                                                                      |
 | `build_backup_prune_command(...)`                                  | Build a non-fatal prune `BashStep` that prunes only the datasets the backup's active send/receive steps back up (destination names re-derived at prune time via `zfscleanup`'s explicit `prune_datasets` mode) |
 
 **Called modules / imported helpers:** none (stdlib only).

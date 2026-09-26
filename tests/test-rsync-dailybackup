@@ -34,7 +34,7 @@ test_no_jobs_returns_zero() {
 test_local_rsync_copies_files() {
     test_start "Local rsync job copies files"
     rsync_dailybackup_jobs=("$SRC_DIR/|$DEST_DIR/|")
-    rm -rf "$DEST_DIR"/*
+    rm -rf "${DEST_DIR:?}"/*
     rsync-dailybackup
     local rc=$?
     assert_rc 0 "$rc"
@@ -44,7 +44,7 @@ test_local_rsync_copies_files() {
 
 test_exclude_pattern_honored() {
     test_start "Exclude pattern skips matched files"
-    rm -rf "$DEST_DIR"/*
+    rm -rf "${DEST_DIR:?}"/*
     rsync_dailybackup_jobs=("$SRC_DIR/|$DEST_DIR/|*.txt")
     rsync-dailybackup
     local rc=$?

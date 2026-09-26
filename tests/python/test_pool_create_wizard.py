@@ -305,9 +305,7 @@ def _drive_wizard(pcw, app, driver, patch_zlm=True):
     nc = MagicMock()
     nc.is_two_node.return_value = False
     patches = [
-        patch.object(
-            pcw, "create_scrolled_dialog", return_value=(driver.fake_dlg, MagicMock())
-        ),
+        patch.object(pcw, "create_scrolled_dialog", return_value=(driver.fake_dlg, MagicMock())),
         patch.object(pcw, "_WizardState", spy_state),
         patch.object(pcw, "node_config", nc),
         patch.object(pcw.Gtk, "MessageDialog"),

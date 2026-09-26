@@ -90,7 +90,6 @@ test_local_pull_failure_continues() {
         mydir="$mydir/bin"
         ZFSUTILITIES_BIN_DIR="$RSYNC_HELPER_DIR"
         source "$mydir/zfsdailybackup" "$DISABLE_ALL_STEPS"
-        backup-installed-programs() { return 5; }
         rsync-dailybackup() { return 6; }
         _run_local_pull
     } 2>&1)

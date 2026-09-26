@@ -88,6 +88,14 @@ targetcli() {
 #   qm list
 #   qm guest exec <vmid> -- /bin/sh -c "..."
 #   qm guest exec-status <vmid> <pid>
+# qm list / guest-exec / guest-exec-status mock.
+# Proxmox invocation forms:
+#   qm list
+#   qm guest exec <vmid> -- /bin/sh -c "..."
+#   qm guest exec-status <vmid> <pid>
+# guest exec calls are counted in a state file because the product invokes qm
+# through command substitution (subshells would lose a plain variable counter).
+_qm_guest_exec_log="$_mock_zfs_state_dir/qm_guest_execs"
 _qm_guest_output=""
 _qm_exec_returns_status=false
 _qm_exec_status_exited="true"
@@ -101,6 +109,7 @@ qm() {
             ;;
         guest)
             if [[ "$subcmd" == "exec" ]]; then
+                printf '%s\n' "$vmid" >> "$_qm_guest_exec_log"
                 if [[ "$_qm_exec_returns_status" == true ]]; then
                     printf '{"exited": %s, "exitcode": 0, "out-data": "%s"}\n' \
                         "$_qm_exec_status_exited" "$_qm_guest_output"
@@ -148,10 +157,13 @@ source "$old_mydir/bin/list-vm-disks"
 reset_mocks() {
     _mock_zfs_fs_list=""
     _mock_zfs_props=()
+    _mock_zfs_snap_list=""
+    _mock_zfs_clones=()
     _mock_zpool_list=""
     _qm_guest_output=""
     _qm_exec_returns_status=false
     _qm_exec_status_exited="true"
+    : > "$_qm_guest_exec_log"
     vm_map_vmid=()
     vm_map_name=()
     vm_map_key=()
@@ -160,6 +172,10 @@ reset_mocks() {
     guest_dev=()
     guest_bypath=()
     running_vm=()
+    zfs_prop_volsize=()
+    zfs_prop_origin=()
+    zfs_snap_clones=()
+    TABLE_ROWS=()
 }
 
 setup_two_node_zfs() {
@@ -266,7 +282,7 @@ test_build_guest_device_map_running() {
     test_start "build_guest_device_map queries guest agent for running VM"
     reset_mocks
     write_two_node_configs
-    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+    _qm_guest_output="0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
 
     build_vm_disk_map
     build_running_vm_set
@@ -285,7 +301,7 @@ test_build_guest_device_map_stopped() {
     test_start "build_guest_device_map leaves stopped VM guest info empty"
     reset_mocks
     write_two_node_configs
-    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+    _qm_guest_output="0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
 
     build_vm_disk_map
     build_running_vm_set
@@ -302,7 +318,7 @@ test_build_guest_device_map_base64() {
     test_start "build_guest_device_map decodes base64 out-data"
     reset_mocks
     write_two_node_configs
-    local _guest_lines=$'/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n'
+    local _guest_lines=$'0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n'
     _qm_guest_output=$(printf '%s' "$_guest_lines" | base64 -w0)
 
     build_vm_disk_map
@@ -323,7 +339,7 @@ test_build_guest_device_map_exited_one() {
     reset_mocks
     write_two_node_configs
     _qm_exec_status_exited="1"
-    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+    _qm_guest_output="0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
 
     build_vm_disk_map
     build_running_vm_set
@@ -343,7 +359,7 @@ test_build_guest_device_map_immediate_status() {
     reset_mocks
     write_two_node_configs
     _qm_exec_returns_status=true
-    local _guest_lines=$'/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n'
+    local _guest_lines=$'0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n'
     _qm_guest_output=$(printf '%s' "$_guest_lines" | base64 -w0)
 
     build_vm_disk_map
@@ -364,20 +380,21 @@ test_two_node_output_compute_host() {
     reset_mocks
     setup_two_node_zfs
     write_two_node_configs
-    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+    _qm_guest_output="0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
     _test_hostname="tweety"
 
     local output
     output=$(run_two_node 2>&1)
 
     local ok=1
-    [[ "$output" == *"VMID:   100"* ]] || ok=0
-    [[ "$output" == *"Name:   webserver"* ]] || ok=0
-    [[ "$output" == *"Host:   /dev/loop0"* ]] || ok=0
-    [[ "$output" == *"Guest:  /dev/sda"* ]] || ok=0
-    [[ "$output" == *"VMID:   200"* ]] || ok=0
-    [[ "$output" == *"Name:   dbserver"* ]] || ok=0
-    [[ "$output" == *"Host:   /dev/loop1"* ]] || ok=0
+    # Table structure: header row, borders, wrapped cells.
+    [[ "$output" == *"| LUN"* ]] || ok=0
+    [[ "$output" == *"vm-100-disk-0"* ]] || ok=0
+    [[ "$output" == *"webserver"* ]] || ok=0
+    [[ "$output" == *"/dev/loop0"* ]] || ok=0
+    [[ "$output" == *"/dev/sda"* ]] || ok=0
+    [[ "$output" == *"dbserver"* ]] || ok=0
+    [[ "$output" == *"/dev/loop1"* ]] || ok=0
 
     if [[ $ok -eq 1 ]]; then
         test_pass
@@ -391,14 +408,14 @@ test_two_node_output_storage_host() {
     reset_mocks
     setup_two_node_zfs
     write_two_node_configs
-    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+    _qm_guest_output="0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
     _test_hostname="stewie"
 
     local output
     output=$(run_two_node 2>&1)
 
-    if [[ "$output" == *"VMID:   100"* && "$output" == *"Name:   webserver"* ]] &&\
-       [[ "$output" == *"Host:   /dev/loop0"* ]]; then
+    if [[ "$output" == *"webserver"* && "$output" == *"/dev/loop0"* ]] &&\
+       [[ "$output" == *"| LUN"* ]]; then
         test_pass
     else
         test_fail "Storage-host output missing expected fields:\n$output"
@@ -420,7 +437,7 @@ EOF
     mock_zfs_fs_list $'threeamigos/proxmox/vm-100-disk-0'
     mock_zfs_prop "threeamigos/proxmox/vm-100-disk-0" "volsize" "50G"
     mock_zfs_prop "threeamigos/proxmox/vm-100-disk-0" "origin" "-"
-    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+    _qm_guest_output="0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
 
     # Re-source node-lib.sh so is_single_node reflects the new config.
     source "$mydir/lib/node-lib.sh"
@@ -429,11 +446,12 @@ EOF
     output=$(run_single_node 2>&1)
 
     local ok=1
-    [[ "$output" == *"VMID:   100"* ]] || ok=0
-    [[ "$output" == *"Name:   webserver"* ]] || ok=0
-    [[ "$output" == *"Guest:  /dev/sda"* ]] || ok=0
-    # Single-node has no iSCSI host line.
-    [[ "$output" != *"Host:"* ]] || ok=0
+    [[ "$output" == *"vm-100-disk-0"* ]] || ok=0
+    [[ "$output" == *"webserver"* ]] || ok=0
+    [[ "$output" == *"/dev/sda"* ]] || ok=0
+    [[ "$output" == *"| Disk"* ]] || ok=0
+    # Single-node has no iSCSI host column.
+    [[ "$output" != *"| Host"* ]] || ok=0
 
     # Restore two-node config for remaining tests.
     export NODE_CONF="$node_conf_two"
@@ -450,7 +468,7 @@ test_emit_vm_data_machine_readable() {
     test_start "emit_vm_data produces expected machine-readable records"
     reset_mocks
     write_two_node_configs
-    _qm_guest_output="/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n"
+    _qm_guest_output="0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
     _test_hostname="tweety"
 
     build_vm_disk_map
@@ -531,8 +549,9 @@ EOF
     # Re-source node-lib.sh so is_single_node reflects the new config.
     source "$mydir/lib/node-lib.sh"
 
+    # Pin a wide terminal so the long origin name is not hard-broken.
     local output
-    output=$(run_single_node 2>&1)
+    output=$(COLUMNS=300 run_single_node 2>&1)
 
     # Restore two-node config for remaining tests.
     export NODE_CONF="$node_conf_two"
@@ -543,6 +562,126 @@ EOF
         test_pass
     else
         test_fail "Expected full origin snapshot name in single-node output:\n$output"
+    fi
+}
+
+test_build_guest_device_map_one_exec_per_vm() {
+    test_start "build_guest_device_map uses one guest exec for all disks of a VM"
+    reset_mocks
+    rm -f "$pve_dir"/*.conf
+    cat > "$pve_dir/100.conf" << 'EOF'
+name: multidisk
+scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0,format=raw,size=50G
+scsi1: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-1,format=raw,size=50G
+EOF
+    # Literal \n sequences: the mock wraps this into JSON out-data and the
+    # product unescapes them after extraction.
+    _qm_guest_output='0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n1\n/dev/sdb\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:1:0'
+
+    build_vm_disk_map
+    build_running_vm_set
+    build_guest_device_map
+
+    local _execs=0
+    [[ -f "$_qm_guest_exec_log" ]] && _execs=$(wc -l < "$_qm_guest_exec_log")
+
+    local ok=1
+    [[ "${guest_dev[threeamigos:0]}" == "/dev/sda" ]] || ok=0
+    [[ "${guest_dev[threeamigos:1]}" == "/dev/sdb" ]] || ok=0
+    local _wrap_rhs="/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:1:0"
+    [[ "${guest_bypath[threeamigos:1]}" == "$_wrap_rhs" ]] || ok=0
+    [[ "$_execs" -eq 1 ]] || ok=0
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Expected one exec with both disks: execs=$_execs $(declare -p guest_dev guest_bypath)"
+    fi
+}
+
+test_emit_lun_data_cloned_by() {
+    test_start "emit_lun_data shows which VMs clone a zvol"
+    reset_mocks
+    setup_two_node_zfs
+    mock_zfs_snap_list $'threeamigos/proxmox/vm-100-disk-0@keep-a\nthreeamigos/proxmox/vm-200-disk-0@keep-b'
+    _mock_zfs_clones["threeamigos/proxmox/vm-100-disk-0@keep-a"]="threeamigos/proxmox/vm-300-disk-0,threeamigos/proxmox/vm-400-disk-1"
+    _test_hostname="stewie"
+
+    local output
+    output=$(emit_lun_data)
+
+    if [[ "$output" == *"[cloned by: vm-300, vm-400]"* ]]; then
+        test_pass
+    else
+        test_fail "Expected cloned-by list in output:\n$output"
+    fi
+}
+
+test_wrap_cell_separator_breaks() {
+    test_start "_wrap_cell breaks lines at separator characters"
+    reset_mocks
+
+    local out
+    out=$(_wrap_cell "aa/bb/cc/dd" 5)
+
+    if [[ "$out" == $'aa/bb\n/cc\n/dd' ]]; then
+        test_pass
+    else
+        test_fail "Unexpected wrap result: '$out'"
+    fi
+}
+
+test_wrap_cell_hard_breaks_long_tokens() {
+    test_start "_wrap_cell hard-breaks tokens longer than the width"
+    reset_mocks
+
+    local out
+    out=$(_wrap_cell "abcdefgh" 3)
+
+    if [[ "$out" == $'abc\ndef\ngh' ]]; then
+        test_pass
+    else
+        test_fail "Unexpected hard-break result: '$out'"
+    fi
+}
+
+test_wrap_cell_respects_embedded_newlines() {
+    test_start "_wrap_cell keeps embedded newlines as line boundaries"
+    reset_mocks
+
+    local out
+    out=$(_wrap_cell $'ab\ncdef' 10)
+
+    if [[ "$out" == $'ab\ncdef' ]]; then
+        test_pass
+    else
+        test_fail "Unexpected newline handling: '$out'"
+    fi
+}
+
+test_print_table_wraps_cells() {
+    test_start "print_table wraps long cells within the width budget"
+    reset_mocks
+    TABLE_ROWS=("0"$'\x1f'"100"$'\x1f'"pci-0000:00:10.0-scsi-0:0:0:0")
+
+    local output
+    output=$(print_table 30 "LUN" "VMID" "Path")
+
+    local ok=1
+    [[ "$output" == *"| LUN"* ]] || ok=0
+    # No rendered line may exceed the requested width.
+    local _line
+    while IFS= read -r _line; do
+        ((${#_line} <= 30)) || ok=0
+    done <<< "$output"
+    # The wrapped path spills onto multiple physical rows.
+    [[ "$output" == *"pci"* ]] || ok=0
+    [[ "$output" == *":0:0:0"* ]] || ok=0
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Unexpected table output:\n$output"
     fi
 }
 
@@ -566,6 +705,12 @@ test_emit_vm_data_machine_readable
 test_emit_lun_data_machine_readable
 test_emit_lun_data_clone_origin_full_name
 test_single_node_clone_origin_full_name
+test_build_guest_device_map_one_exec_per_vm
+test_emit_lun_data_cloned_by
+test_wrap_cell_separator_breaks
+test_wrap_cell_hard_breaks_long_tokens
+test_wrap_cell_respects_embedded_newlines
+test_print_table_wraps_cells
 
 # ------------------------------------------------------------------------------
 # Cleanup

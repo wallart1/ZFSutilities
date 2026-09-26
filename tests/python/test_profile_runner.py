@@ -410,7 +410,7 @@ class TestRunBackupProfile(unittest.TestCase):
             self.assertIn("--exclude=*.tmp", bash_script)
             self.assertIn("--exclude=cache/", bash_script)
 
-    def test_retention_step_uses_config_pool_order(self):
+    def test_prune_step_skipped_when_no_sr_steps_active(self):
         with temp_config_dir():
             profile = {
                 "config": {
@@ -423,10 +423,10 @@ class TestRunBackupProfile(unittest.TestCase):
                 }
             }
             config = {"pools": [{"name": "z2"}, {"name": "z1"}]}
-            with mock_subprocess() as m:
+            with mock_subprocess() as m, patch.object(profile_runner, "log_msg") as mock_log:
                 m.set_command_handler(".*", lambda cmd, **kwargs: m._completed("", rc=0))
                 rc = profile_runner.run_backup_profile(profile, config, "/bin")
-            self.assertEqual(rc, 0)
+            self.assertEqual(rc, 1)
             bash_scripts = [
                 call[0][2]
                 for call in m.calls
@@ -435,10 +435,13 @@ class TestRunBackupProfile(unittest.TestCase):
                 and call[0][0] == "bash"
                 and len(call[0]) > 2
             ]
-            self.assertEqual(len(bash_scripts), 1)
-            self.assertIn("for pool in z2 z1; do", bash_scripts[0])
+            self.assertEqual(bash_scripts, [])
+            mock_log.assert_any_call(
+                "INFO: No active send/receive steps; skipping prune step "
+                "(no new snapshots to prune)."
+            )
 
-    def test_retention_step_forwards_dataset_selection(self):
+    def test_prune_step_skipped_even_with_dataset_selection_criteria(self):
         with temp_config_dir():
             profile = {
                 "config": {
@@ -457,10 +460,10 @@ class TestRunBackupProfile(unittest.TestCase):
                 }
             }
             config = {"pools": [{"name": "z2"}]}
-            with mock_subprocess() as m:
+            with mock_subprocess() as m, patch.object(profile_runner, "log_msg") as mock_log:
                 m.set_command_handler(".*", lambda cmd, **kwargs: m._completed("", rc=0))
                 rc = profile_runner.run_backup_profile(profile, config, "/bin")
-            self.assertEqual(rc, 0)
+            self.assertEqual(rc, 1)
             bash_scripts = [
                 call[0][2]
                 for call in m.calls
@@ -469,11 +472,11 @@ class TestRunBackupProfile(unittest.TestCase):
                 and call[0][0] == "bash"
                 and len(call[0]) > 2
             ]
-            self.assertEqual(len(bash_scripts), 1)
-            self.assertIn("includes=(proxmox); ", bash_scripts[0])
-            self.assertIn("excludes=(vm-100 =z2/scratch); ", bash_scripts[0])
-            self.assertIn("startwith==z2/a; ", bash_scripts[0])
-            self.assertIn("endwith=z; ", bash_scripts[0])
+            self.assertEqual(bash_scripts, [])
+            mock_log.assert_any_call(
+                "INFO: No active send/receive steps; skipping prune step "
+                "(no new snapshots to prune)."
+            )
 
     def test_retention_step_derives_dataset_list_from_sr_steps(self):
         with temp_config_dir():

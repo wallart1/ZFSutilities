@@ -11,6 +11,8 @@ ZFSCONFIG_PATH=$(mktemp)
 export ZFSCONFIG_PATH
 ZFSLOCK_DIR=$(mktemp -d)
 export ZFSLOCK_DIR
+ZFSCONFIG_LEGACY_DIR=$(mktemp -d)
+export ZFSCONFIG_LEGACY_DIR
 
 clear_zfsconfig_cache() {
     unset _ZFSCONFIG_POOLS_CACHE _ZFSCONFIG_OFFSITE_CACHE _ZFSCONFIG_CA_CACHE
@@ -248,6 +250,91 @@ test_get_checkagainst_backward_compatible_flat_list() {
 }
 
 # ------------------------------------------------------------------------------
+# zfsconfig_get_retention
+# ------------------------------------------------------------------------------
+
+test_get_retention_pool_entry() {
+    test_start "Pool-specific retention entry wins"
+    write_config '{
+  "retention": {
+    "tank": [{"name": "d", "retain": 7, "minage": 1}],
+    "default": [{"name": "d", "retain": 3, "minage": 1}]
+  }
+}'
+    local result
+    result=$(zfsconfig_get_retention "tank")
+    assert_equals "bktname[0]='d'; bktretain[0]=7; minage[0]=1" "$result"
+}
+
+test_get_retention_falls_back_to_default() {
+    test_start "Missing pool entry falls back to default"
+    write_config '{
+  "retention": {
+    "default": [{"name": "d", "retain": 3, "minage": 1}]
+  }
+}'
+    local result
+    result=$(zfsconfig_get_retention "tank")
+    assert_equals "bktname[0]='d'; bktretain[0]=3; minage[0]=1" "$result"
+}
+
+test_get_retention_offsite_candidate_uses_offsite_policy() {
+    test_start "Offsite-candidate pool inherits the <offsite> policy"
+    write_config '{
+  "pools": [
+    {"name": "tank", "offsite_candidate": false},
+    {"name": "z22tb", "offsite_candidate": true}
+  ],
+  "retention": {
+    "<offsite>": [{"name": "s", "retain": 2, "minage": 7}],
+    "default": [{"name": "d", "retain": 3, "minage": 1}]
+  }
+}'
+    local result
+    result=$(zfsconfig_get_retention "z22tb")
+    assert_equals "bktname[0]='s'; bktretain[0]=2; minage[0]=7" "$result"
+    # A non-offsite pool still falls back to default.
+    result=$(zfsconfig_get_retention "tank")
+    assert_equals "bktname[0]='d'; bktretain[0]=3; minage[0]=1" "$result"
+}
+
+test_get_retention_pool_entry_wins_over_offsite() {
+    test_start "Pool-specific entry wins over <offsite> for an offsite candidate"
+    write_config '{
+  "pools": [
+    {"name": "z22tb", "offsite_candidate": true}
+  ],
+  "retention": {
+    "z22tb": [{"name": "w", "retain": 4, "minage": 2}],
+    "<offsite>": [{"name": "s", "retain": 2, "minage": 7}]
+  }
+}'
+    local result
+    result=$(zfsconfig_get_retention "z22tb")
+    assert_equals "bktname[0]='w'; bktretain[0]=4; minage[0]=2" "$result"
+}
+
+test_get_retention_offsite_key_resolves_directly() {
+    test_start "The <offsite> key resolves when requested by name"
+    write_config '{
+  "retention": {
+    "<offsite>": [{"name": "s", "retain": 2, "minage": 7}]
+  }
+}'
+    local result
+    result=$(zfsconfig_get_retention "<offsite>")
+    assert_equals "bktname[0]='s'; bktretain[0]=2; minage[0]=7" "$result"
+}
+
+test_get_retention_no_buckets_rc1() {
+    test_start "No retention entry anywhere exits 1"
+    write_config '{}'
+    zfsconfig_get_retention "tank" >/dev/null 2>&1
+    local rc=$?
+    assert_rc 1 "$rc"
+}
+
+# ------------------------------------------------------------------------------
 # Path resolution
 # ------------------------------------------------------------------------------
 
@@ -320,12 +407,18 @@ test_get_checkagainst_defaults_counterpart_to_dash
 test_get_checkagainst_merges_nested_sections
 test_get_checkagainst_active_flags_disable_sections
 test_get_checkagainst_backward_compatible_flat_list
+test_get_retention_pool_entry
+test_get_retention_falls_back_to_default
+test_get_retention_offsite_candidate_uses_offsite_policy
+test_get_retention_pool_entry_wins_over_offsite
+test_get_retention_offsite_key_resolves_directly
+test_get_retention_no_buckets_rc1
 test_default_config_path
 test_legacy_fallback_when_new_missing
 test_get_pools_uses_shared_lock
 
 rm -f "$ZFSCONFIG_PATH"
-rm -rf "$ZFSLOCK_DIR"
+rm -rf "$ZFSLOCK_DIR" "$ZFSCONFIG_LEGACY_DIR"
 
 test_summary
 teardown_test_env

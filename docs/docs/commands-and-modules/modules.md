@@ -612,7 +612,7 @@ zfsconfig_invalidate
 | `zfsconfig_get_pools`              | —         | Print one pool name per line from `config.pools`. Accepts string entries or `{"name", "offsite_candidate"}` objects                 |
 | `zfsconfig_get_offsite_candidates` | —         | Print one offsite-candidate pool name per line (pools with `offsite_candidate: true`)                                               |
 | `zfsconfig_get_checkagainst`       | —         | Print entries: `<source_root> <dest_root> <label>` (the JSON `comment` field is not emitted)                                        |
-| `zfsconfig_get_retention`          | `<pool>`  | Emit `bktname[i]/bktretain[i]/minage[i]` fragment for `<pool>` (falls back to `default`, then to legacy `zfsretainpol-<pool>` file) |
+| `zfsconfig_get_retention`          | `<pool>`  | Emit `bktname[i]/bktretain[i]/minage[i]` fragment for `<pool>`. Resolution order: pool entry, then `<offsite>` when `<pool>` is an offsite candidate, then `default`, then legacy `zfsretainpol-<pool>` file |
 | `zfsconfig_invalidate`             | —         | Drop the in-shell cache                                                                                                             |
 | `poolarray`                        | —         | Fills `$zfspoolarray` from `config.pools`                                                                                           |
 
@@ -1534,8 +1534,9 @@ Delegates each deletion to [`zfsdelsnap`](#zfsdelsnap), which runs
 1. Parse `$1` as "`<dataset> [leadingqualifiestodelete]`" and normalize `$2`
    into a leading-`@` label.
 2. Load the retention policy for the target pool via
-   `zfsconfig_get_retention`. Falls back to the `default` policy, then to
-   legacy `zfsretainpol-<pool>` files. Returns `8` if no policy is found.
+   `zfsconfig_get_retention`. Falls back to the `<offsite>` policy for
+   offsite-candidate pools, then the `default` policy, then to legacy
+   `zfsretainpol-<pool>` files. Returns `8` if no policy is found.
 3. Build `$snaparray` from `zfs list -Ht snapshot -o name,creation -s creation`
    for the target dataset.
 4. **Phase 0** (only when `$label = @offsite`). For each `@offsite` snapshot,

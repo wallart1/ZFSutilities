@@ -444,9 +444,9 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
   - **Prune snapshots** when the backup finishes — prunes only the datasets
     the active send/receive steps back up, on both the source and destination
     sides (the backup's dataset list is re-derived at prune time; each source
-    dataset is pruned together with its mapped destination name); falls back
-    to whole-pool pruning of the configured pools when no send/receive steps
-    are active. See [Daily Backup — Step Failure Handling](daily-backup.md#step-failure-handling).
+    dataset is pruned together with its mapped destination name); skipped when
+    no send/receive steps are active, since no new snapshots were created. See
+    [Daily Backup — Step Failure Handling](daily-backup.md#step-failure-handling).
   - **Run post-backup command** — Enable a custom command that runs after all
     backup steps finish. It executes even if a fatal error aborts the backup early.
 
@@ -1823,8 +1823,8 @@ On the **Backup** tab, the same criteria (`includes`, `excludes`, `startwith`,
 post-backup prune step: the prune step re-derives each step's source dataset
 list at run time and prunes it on **both sides** — every source dataset and
 its mapped destination name (via `zfscleanup`'s explicit `prune_datasets`
-mode). When no send/receive steps are active, the prune step falls back to
-whole-pool pruning of the configured pools, filtered by these criteria.
+mode). When no send/receive steps are active, the prune step is skipped —
+no new snapshots were created, so there is nothing to prune.
 
 ### Execution sequence
 

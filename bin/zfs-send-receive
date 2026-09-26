@@ -1,10 +1,54 @@
 #!/usr/bin/bash
 # This is the main workhorse of the ZFSutilities project. Use it to do almost any task that
 # involves copying ZFS data from a source to a destination.
-
-# $1    $sourcefs
-# $2    $destfs
-# $3    $overrides
+#
+# $1    $sourcefs (required) — source dataset (pool or top-level dataset)
+# $2    $destfs (required) — destination pool or dataset
+# $3    $overrides (optional) — parameter overrides applied via zfsoverrides
+#
+# Global variables read (callers may set any of these; unset variables take the
+# documented default). The full reference with defaults is
+# docs/docs/developer-guide/global-variables.md.
+#
+# Selection and snapshot naming:
+#     $includes / $excludes   Arrays of dataset substrings to keep/drop ('=' prefix = exact).
+#                             Defaults to empty arrays (keep all).
+#     $nextsnap               Name of the new snapshot to create before sending;
+#                             'notneeded' uses the source's most recent existing snapshot.
+#     $label                  Snapshot label for common-snapshot matching.
+#     $commsnap_mostrecent    'OLDEST' uses the oldest source snapshot as the incremental base.
+#     $sourcefsremovequalifiers  Leading path components to strip when building the
+#                             destination path. Default 0.
+# Transfer behavior:
+#     $doincrementals         'Y' (default) sends incrementally from the most recent common
+#                             snapshot; 'N' does a full (two-step) copy.
+#     $dointermediates        'Y' (default) includes intermediate snapshots (-I); 'N' uses -i.
+#     $force                  'Y' destroys the destination before a full copy.
+#     $allow_destructive      'Y' permits destructive destination preparation.
+#     $preserve_target_holds  'Y' (default) captures and reapplies destination holds around
+#                             full copies; no-op on plain incremental runs and in dry-run.
+#     $verify_after_transfer  'Y' compares source/destination snapshot GUIDs after receive.
+#     $releaseholds           'Y' releases matching holds when destroying snapshots.
+# Execution control:
+#     $autoproceed            'Y' (default) suppresses "press enter" confirmations.
+#     $dryrun                 'Y' reports actions without executing. Default 'N'.
+#     $overrides (via $3)     Same effect as setting globals, via zfsoverrides.
+# Tuning:
+#     $receive_F_option       Set to 'F' to force rollback of destination modifications.
+#     $receive_s_option       Set to 's' to enable resumable receives (-s).
+#     $resumablethreshold     Bytes above which receives are made resumable. Default 50 GB.
+#     $pvthreshold            Bytes above which pv progress display is used. Default 300 MB.
+#     $pv_rate_limit          Rate limit passed to pv -L (e.g. '200M'); empty = unlimited.
+#
+# Global variables set for callers/children:
+#     $fsarray                Selected source datasets (from buildfsarray).
+#     $fs / $restorefs        Current dataset and its mapped destination suffix in the loop.
+#     $commsnap               Common snapshot used as the incremental base.
+#     $sendoptions / $receiveoptions / $incremental_args  The zfs send/receive options for the
+#                             current transfer step.
+#     $datatosend             Estimated transfer size in bytes for the current step.
+#     $nextsnap / $doincrementals / $receive_s_option     Restored to their entry values on
+#                             return (callers' settings are preserved).
 
 function send-receive {
     local _sr_start_seconds=$SECONDS

@@ -455,13 +455,24 @@ runs are preserved alongside the new one.
 sudo list-vm-disks
 ```
 
-Each line shows the LUN number, disk name, size, and clone annotations:
+Output is a table per iSCSI target. Each row shows the LUN number, disk name,
+VM ownership, Proxmox disk key, size, host and guest device names, and clone
+annotations. Long values such as by-path names wrap onto multiple lines inside
+their cells, and the table width follows the terminal:
 
 ```
-  lun25   vm-904-disk-0   4M    [cloned by: vm-310, vm-315]
-  lun26   vm-904-disk-1   50G   [cloned by: vm-310, vm-315]
-  lun27   vm-310-disk-0   4M    [clone of threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c]
-  lun28   vm-310-disk-1   50G   [clone of threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c]
++-----+---------------+------+-----------+-------+------+---------------------------------+---------------------------------+----------------------------------+
+| LUN | Disk          | VMID | Name      | Key   | Size | Host                            | Guest                           | Clone                            |
++-----+---------------+------+-----------+-------+------+---------------------------------+---------------------------------+----------------------------------+
+| 25  | vm-904-disk-0 | 904  | source-vm | scsi0 | 4M   | /dev/sdd                        | /dev/sda                        | [cloned by: vm-310, vm-315]      |
+|     |               |      |           |       |      | /dev/disk/by-path/ip-10.0.0.1   | /dev/disk/by-path/pci-0000:00   |                                  |
+|     |               |      |           |       |      | :3260-iscsi-iqn.2026-02.local.s | :10.0-scsi-0:0:0:0              |                                  |
+|     |               |      |           |       |      | torage-host:threeamigos-lun-25  |                                 |                                  |
+| 27  | vm-310-disk-0 | 310  | clone-vm  | scsi0 | 4M   | /dev/sdf                        | /dev/sda                        | [clone of threeamigos/proxmox/vm |
+|     |               |      |           |       |      | /dev/disk/by-path/ip-10.0.0.1   | /dev/disk/by-path/pci-0000:00   | -904-disk-0@clone-2026-07-30T12: |
+|     |               |      |           |       |      | :3260-iscsi-iqn.2026-02.local.s | :10.0-scsi-0:0:0:0              | 00-0400-c]                       |
+|     |               |      |           |       |      | torage-host:threeamigos-lun-27  |                                 |                                  |
++-----+---------------+------+-----------+-------+------+---------------------------------+---------------------------------+----------------------------------+
 ```
 
 You can also query ZFS directly on the storage node:

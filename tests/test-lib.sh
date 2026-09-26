@@ -479,6 +479,21 @@ zfs() {
                     elif [[ -n "$_mock_zfs_guid_list" ]]; then
                         echo -e "$_mock_zfs_guid_list"
                     fi
+                elif [[ "$outcols" == "name,clones" ]]; then
+                    # Clone-dependency listings with snapshot names: one
+                    # "name<TAB>clones" row per snapshot, defaulting to "-".
+                    local _clones_src="" _one_snap
+                    if [[ -n "${_mock_zfs_snap_lists[$specific_arg]+x}" ]]; then
+                        _clones_src="${_mock_zfs_snap_lists[$specific_arg]}"
+                    else
+                        _clones_src="$_mock_zfs_snap_list"
+                    fi
+                    local -a _clones_snaps=()
+                    mapfile -t _clones_snaps <<< "$_clones_src"
+                    for _one_snap in "${_clones_snaps[@]}"; do
+                        [[ -n "$_one_snap" ]] || continue
+                        printf '%s\t%s\n' "$_one_snap" "${_mock_zfs_clones[$_one_snap]:--}"
+                    done
                 elif [[ "$outcols" == "clones" ]]; then
                     # Clone-dependency listings: one row per snapshot, defaulting
                     # to "-" (no clones). Suites can set _mock_zfs_clones[<snap>].
@@ -521,26 +536,58 @@ zfs() {
             ;;
 
         get)
-            local prop="" dataset="" output_value_only=0
+            local outcols="" output_value_only=0
+            local -a _props=()
             while [[ $# -gt 0 ]]; do
                 case "$1" in
                     -H*|-p*) shift ;;
                     -o)
-                        if [[ "$2" == "value" ]]; then
-                            output_value_only=1
-                        fi
-                        shift 2
-                        ;;
+                        outcols="$2"
+                        [[ "$2" == "value" ]] && output_value_only=1
+                        shift 2 ;;
+                    -r) shift ;;
                     *)
-                        if [[ -z "$prop" ]]; then
-                            prop="$1"
-                        else
-                            dataset="$1"
-                        fi
-                        shift
-                        ;;
+                        _props+=("$1")
+                        shift ;;
                 esac
             done
+
+            # Batched form: zfs get -H -o name,property,value <prop,...> -r <dataset>
+            if [[ "$outcols" == "name,property,value" ]]; then
+                local dataset="${_props[-1]}"
+                unset '_props[-1]'
+                local -A _ds=()
+                local -a _propnames=()
+                local _line _d _p
+                for _p in "${_props[@]}"; do
+                    local -a _tmp=()
+                    IFS=',' read -r -a _tmp <<< "$_p"
+                    _propnames+=("${_tmp[@]}")
+                done
+                while IFS= read -r _line; do
+                    [[ -n "$_line" ]] || continue
+                    if [[ "$_line" == "$dataset" || "$_line" == "$dataset"/* ]]; then
+                        _ds["$_line"]=1
+                    fi
+                done <<< "$_mock_zfs_fs_list"
+                for _d in "${!_mock_zfs_props[@]}"; do
+                    _line="${_d%:*}"
+                    if [[ "$_line" == "$dataset" || "$_line" == "$dataset"/* ]]; then
+                        _ds["$_line"]=1
+                    fi
+                done
+                while IFS= read -r _d; do
+                    [[ -n "$_d" ]] || continue
+                    for _p in "${_propnames[@]}"; do
+                        printf '%s\t%s\t%s\n' \
+                            "$_d" "$_p" "${_mock_zfs_props[$_d:$_p]:--}"
+                    done
+                done < <(printf '%s\n' "${!_ds[@]}" | sort)
+                return 0
+            fi
+
+            # Legacy form: zfs get -H [-o value] <prop> <dataset>
+            local prop="${_props[0]:-}" dataset="${_props[1]:-}"
             local key="$dataset:$prop"
             local value
             if [[ -n "${_mock_zfs_props[$key]+x}" ]]; then

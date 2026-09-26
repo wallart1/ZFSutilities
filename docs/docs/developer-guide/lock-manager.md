@@ -382,7 +382,6 @@ Scripts and modules that have lock integration:
 | PVE-send-to-archive   | `w`       | archived zvols                                  |
 | zfshold / zfsholds    | `w`/`r`   | affected datasets                               |
 | zfsdelallholds*       | `w`       | parent dataset of the snapshot                  |
-| zfscleanupbadoffsiteholds | `w`   | parent dataset of snapshots with self-referencing offsite holds |
 | zfsresume             | `w`       | resumable destination                           |
 | dataset_actions.py    | `w`       | dataset for snapshot/delete/hold/rollback/umount |
 | retention_actions.py  | `w`       | pool-level pre-flight check before prune        |

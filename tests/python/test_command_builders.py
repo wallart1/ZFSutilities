@@ -293,59 +293,6 @@ class TestBuildPrePostBackupCommands(unittest.TestCase):
         golden.check(self, step.command)
 
 
-class TestBuildRetentionCommand(unittest.TestCase):
-    def test_basic(self):
-        step = command_builders.build_retention_command("/bin", "dailybackup")
-        self.assertTrue(step.fatal)
-        self.assertEqual(step.description, "Prune snapshots")
-        golden.check(self, step.command)
-
-    def test_dryrun(self):
-        step = command_builders.build_retention_command("/bin", "dailybackup", dryrun=True)
-        self.assertEqual(step.description, "Prune snapshots")
-        golden.check(self, step.command)
-
-    def test_pools_list_loops_in_order(self):
-        step = command_builders.build_retention_command(
-            "/bin", "dailybackup", pools=["archive", "tank"]
-        )
-        self.assertEqual(step.description, "Prune snapshots (archive, tank)")
-        golden.check(self, step.command)
-
-    def test_retention_command_includes_releaseholds_tags(self):
-        step = command_builders.build_retention_command("/bin", "dailybackup")
-        golden.check(self, step.command)
-
-    def test_no_selection_assignments_by_default(self):
-        step = command_builders.build_retention_command("/bin", "dailybackup")
-        bash_script = step.command[2]
-        golden.check(self, step.command)
-        self.assertNotIn("includes=", bash_script)
-        self.assertNotIn("excludes=", bash_script)
-        self.assertNotIn("startwith=", bash_script)
-        self.assertNotIn("endwith=", bash_script)
-
-    def test_selection_criteria_emitted(self):
-        step = command_builders.build_retention_command(
-            "/bin",
-            "dailybackup",
-            includes="proxmox =tank/a",
-            excludes="vm-100 scratch",
-            startwith="=tank/a",
-            endwith="z",
-        )
-        golden.check(self, step.command)
-
-    def test_selection_criteria_accept_iterables_and_quote(self):
-        step = command_builders.build_retention_command(
-            "/bin",
-            "dailybackup",
-            includes=["proxmox"],
-            excludes=["vm-100 disk", "scratch"],
-        )
-        golden.check(self, step.command)
-
-
 class TestBuildBackupPruneCommand(unittest.TestCase):
     def test_basic(self):
         step = command_builders.build_backup_prune_command(

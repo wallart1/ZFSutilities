@@ -53,8 +53,8 @@ Different steps have different consequences when they fail:
   list — each step's source subtree filtered by the Backup tab's Advanced
   dataset-selection criteria (`includes`, `excludes`, `startwith`, `endwith`)
   — and prunes it on both sides: every source dataset and its mapped
-  destination name. With no active send/receive steps it falls back to
-  whole-pool pruning of the configured pools, filtered by the same criteria.
+  destination name. With no active send/receive steps the prune step is
+  skipped — no new snapshots were created, so there is nothing to prune.
 
 - The post-backup command, if enabled, always runs after the step list finishes,
   even when a fatal failure aborted the backup early.
@@ -147,12 +147,6 @@ Available overrides include: `backup_threeamigos`, `backup_NVME1`, `prune`,
 and the rsync-pull flags for each configured host. See the
 [`zfsdailybackup` command reference](../commands-and-modules/commands.md#zfsdailybackup)
 for the full list.
-
-To skip the package-list backup step that runs before rsync on each pull host:
-
-```bash
-sudo ./zfsdailybackup "run_installed_programs='N'"
-```
 
 To skip **all** pull steps at once (for example, when the remote hosts are
 unreachable and you only want to run ZFS send/receive and retention), disable

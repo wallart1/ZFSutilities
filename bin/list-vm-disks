@@ -62,6 +62,11 @@ declare -A guest_dev
 declare -A guest_bypath
 declare -A running_vm
 
+# Batched ZFS property/snapshot lookups, keyed by dataset / snapshot name.
+declare -A zfs_prop_volsize
+declare -A zfs_prop_origin
+declare -A zfs_snap_clones
+
 # --- VM config parsing --------------------------------------------------------
 # Populates vm_map_* keyed by:
 #   two-node: <target_short>:<lun>
@@ -196,16 +201,28 @@ build_running_vm_set() {
 }
 
 # --- Guest device map ---------------------------------------------------------
-# For each running VM's attached disk, query the guest agent for the /dev/sdX
-# and /dev/disk/by-path names seen inside the VM.  Only SCSI disks are mapped
-# reliably by their Proxmox disk key (scsiN -> scsi-0:0:N:0 in the guest).
+# One qemu-guest-agent round-trip per running VM: a single guest exec walks all
+# of that VM's scsi disks and reports the /dev/sdX and /dev/disk/by-path names
+# seen inside the guest.  Only SCSI disks are mapped reliably by their Proxmox
+# disk key (scsiN -> scsi-0:0:N:0 in the guest).
 build_guest_device_map() {
-    local disk_id vmid disk_key
+    local disk_id vmid disk_key num
+    declare -A vm_disks=()
+
     for disk_id in "${!vm_map_vmid[@]}"; do
         vmid="${vm_map_vmid[$disk_id]}"
         [[ -n "${running_vm[$vmid]:-}" ]] || continue
         disk_key="${vm_map_key[$disk_id]}"
-        _query_guest_disk "$vmid" "$disk_key" "$disk_id"
+        [[ "$disk_key" == scsi* ]] || continue
+        num="${disk_key#scsi}"
+        [[ "$num" =~ ^[0-9]+$ ]] || continue
+        vm_disks["$vmid"]+="$disk_id "
+    done
+
+    local v
+    for v in "${!vm_disks[@]}"; do
+        # shellcheck disable=SC2086
+        _query_guest_disks "$v" ${vm_disks[$v]}
     done
 }
 
@@ -218,7 +235,7 @@ _decode_guest_output() {
     [[ -z "$raw" ]] && return 0
 
     decoded=$(printf '%s' "$raw" | base64 -d 2>/dev/null) || decoded=""
-    if [[ "$decoded" == /dev/* ]]; then
+    if [[ "$decoded" == *"/dev/"* || "$decoded" == /dev/* ]]; then
         printf '%s' "$decoded"
     else
         printf '%s' "$raw" | sed 's/\\n/\n/g'
@@ -242,62 +259,166 @@ _json_field() {
     printf '%s' "${rest%%${_end}}"
 }
 
-_query_guest_disk() {
-    local vmid="$1" disk_key="$2" disk_id="$3"
-    local scsi_num=""
+# Query one running VM for all its scsi guest disks.  The guest prints three
+# lines per disk (scsi number, /dev/sdX, /dev/disk/by-path/...) with no
+# spaces, because the JSON field extraction below ends values at whitespace.
+# $1 is the vmid, remaining args are the script disk_ids for that VM's scsi
+# disks.
+_query_guest_disks() {
+    local vmid="$1"; shift
+    local disk_id num
+    local -A num_to_disk=()
+    local -a nums=()
 
-    if [[ "$disk_key" == scsi* ]]; then
-        scsi_num="${disk_key#scsi}"
-        [[ "$scsi_num" =~ ^[0-9]+$ ]] || return 0
-    else
-        return 0
-    fi
+    for disk_id in "$@"; do
+        num="${vm_map_key[$disk_id]#scsi}"
+        num_to_disk["$num"]="$disk_id"
+        nums+=("$num")
+    done
 
     # Proxmox scsiN maps to SCSI target/lun 0:0:N:0 inside a Linux guest.
+    # The guest prints three lines per disk (scsi number, device, by-path)
+    # with no spaces so the naive JSON field extraction survives.
+    local num_list
+    num_list=$(IFS=' '; printf '%s' "${nums[*]}")
+
     local guest_cmd
     guest_cmd=$(printf '%s' \
-        "for l in /dev/disk/by-path/*scsi-0:0:${scsi_num}:0; do " \
+        "for n in $num_list; do " \
+        "for l in /dev/disk/by-path/*scsi-0:0:\${n}:0; do " \
         "[ -L \"\$l\" ] || continue; " \
         "d=\$(readlink -f \"\$l\" 2>/dev/null); " \
-        "[ -b \"\$d\" ] && printf '%s\\n%s\\n' \"\$d\" \"\$l\" && break; " \
-        "done")
+        "[ -b \"\$d\" ] && printf '%s\\n%s\\n%s\\n' \"\$n\" \"\$d\" \"\$l\" && break; " \
+        "done; done")
 
     local exec_result pid
     exec_result=$(qm guest exec "$vmid" -- /bin/sh -c "$guest_cmd" 2>/dev/null) || return 0
 
-    # Some Proxmox versions return the completed status directly from guest exec.
     local exited out_raw out
+    out=""
     exited=$(_json_field "$exec_result" "exited")
     if [[ "$exited" == "true" || "$exited" == "1" ]]; then
         out_raw=$(_json_field "$exec_result" "out-data")
         out=$(_decode_guest_output "$out_raw")
-        if [[ -n "$out" ]]; then
-            guest_dev["$disk_id"]=$(echo "$out" | head -1)
-            guest_bypath["$disk_id"]=$(echo "$out" | tail -1)
-        fi
-        return 0
+    else
+        pid=$(_json_field "$exec_result" "pid")
+        pid="${pid%%[!0-9]*}"
+        [[ -n "$pid" ]] || return 0
+
+        local status
+        local -i i
+        for (( i=1; i<=LIST_VM_DISKS_GUEST_POLL_MAX; i++ )); do
+            status=$(qm guest exec-status "$vmid" "$pid" 2>/dev/null) || return 0
+            exited=$(_json_field "$status" "exited")
+            if [[ "$exited" == "true" || "$exited" == "1" ]]; then
+                out_raw=$(_json_field "$status" "out-data")
+                out=$(_decode_guest_output "$out_raw")
+                break
+            fi
+            sleep "$LIST_VM_DISKS_GUEST_POLL_SLEEP"
+        done
     fi
 
-    pid=$(_json_field "$exec_result" "pid")
-    pid="${pid%%[!0-9]*}"
-    [[ -n "$pid" ]] || return 0
+    [[ -n "$out" ]] || return 0
 
-    local status
-    local -i i
-    for (( i=1; i<=LIST_VM_DISKS_GUEST_POLL_MAX; i++ )); do
-        status=$(qm guest exec-status "$vmid" "$pid" 2>/dev/null) || return 0
-        exited=$(_json_field "$status" "exited")
-        if [[ "$exited" == "true" || "$exited" == "1" ]]; then
-            out_raw=$(_json_field "$status" "out-data")
-            out=$(_decode_guest_output "$out_raw")
-            if [[ -n "$out" ]]; then
-                guest_dev["$disk_id"]=$(echo "$out" | head -1)
-                guest_bypath["$disk_id"]=$(echo "$out" | tail -1)
+    # The guest printed three lines per disk: scsi number, device, by-path.
+    local g_num g_dev g_path
+    while read -r g_num; do
+        read -r g_dev || break
+        read -r g_path || break
+        disk_id="${num_to_disk[$g_num]:-}"
+        [[ -n "$disk_id" ]] || continue
+        guest_dev["$disk_id"]="$g_dev"
+        guest_bypath["$disk_id"]="$g_path"
+    done <<< "$out"
+}
+
+# --- Batched ZFS lookups ------------------------------------------------------
+# Load volsize and origin for every dataset under a pool in one zfs call.
+load_zfs_props() {
+    local pool="$1"
+    local name prop value
+    while IFS=$'\t' read -r name prop value; do
+        [[ -n "$name" ]] || continue
+        case "$prop" in
+            volsize) zfs_prop_volsize["$name"]="$value" ;;
+            origin)  zfs_prop_origin["$name"]="$value" ;;
+        esac
+    done < <(zfs get -H -o name,property,value volsize,origin -r "$pool" 2>/dev/null)
+}
+
+# Load snapshot -> clones mappings for every snapshot under a pool in one
+# zfs call.
+load_zfs_clones() {
+    local pool="$1"
+    local snap clones
+    while IFS=$'\t' read -r snap clones; do
+        [[ "$snap" == *"@"* ]] || continue
+        zfs_snap_clones["$snap"]="$clones"
+    done < <(zfs list -H -t snapshot -o name,clones -r "$pool" 2>/dev/null)
+}
+
+# Formatted clone annotation for a zvol: "[clone of <origin>]" and/or
+# "[cloned by: vm-X, vm-Y]" from the batched snapshot maps.
+_build_clone_info() {
+    local zvol="$1"
+    local clone_info="" origin
+
+    origin="${zfs_prop_origin[$zvol]:--}"
+    if [[ "$origin" != "-" && -n "$origin" ]]; then
+        clone_info="[clone of ${origin}]"
+    fi
+
+    local clone_list
+    clone_list=$(_clone_list_for "$zvol")
+    if [[ -n "$clone_list" ]]; then
+        clone_info+="${clone_info:+ }[cloned by: ${clone_list}]"
+    fi
+
+    printf '%s' "$clone_info"
+}
+
+# Sorted, unique "vm-X, vm-Y" list of VM numbers that clone the given zvol,
+# derived from the batched snapshot clones map.
+_clone_list_for() {
+    local zvol="$1"
+    local snap clones _base _mid _c _list _m
+    local -a _clones=()
+    local -a _vmids=()
+    local -A _seen=()
+
+    for snap in "${!zfs_snap_clones[@]}"; do
+        [[ "$snap" == "$zvol@"* ]] || continue
+        clones="${zfs_snap_clones[$snap]}"
+        [[ -n "$clones" && "$clones" != "-" ]] || continue
+        local -a _clones=()
+        IFS=',' read -r -a _clones <<< "$clones"
+        for _c in "${_clones[@]}"; do
+            _c="${_c#"${_c%%[![:space:]]*}"}"
+            _base="${_c##*/}"
+            if [[ "$_base" == vm-*-disk-* ]]; then
+                _mid="${_base#vm-}"
+                _mid="${_mid%%-disk-*}"
+                if [[ "$_mid" =~ ^[0-9]+$ && -z "${_seen[$_mid]:-}" ]]; then
+                    _seen["$_mid"]=1
+                    _vmids+=("$_mid")
+                fi
             fi
-            return 0
-        fi
-        sleep "$LIST_VM_DISKS_GUEST_POLL_SLEEP"
+        done
     done
+
+    [[ ${#_vmids[@]} -gt 0 ]] || return 0
+
+    local IFS=$'\n'
+    local -a _sorted=()
+    mapfile -t _sorted < <(printf '%s\n' "${_vmids[@]}" | sort -u)
+    unset IFS
+
+    _list=""
+    for _m in "${_sorted[@]}"; do
+        _list+="${_list:+, }vm-$_m"
+    done
+    printf '%s' "$_list"
 }
 
 # --- Machine-readable data emission -------------------------------------------
@@ -320,10 +441,12 @@ emit_vm_data() {
 }
 
 emit_lun_data() {
-    local backstores target line lun bsname zvol size origin clone_info clone_list targetshort
+    local backstores target line lun bsname zvol size origin clone_info targetshort
     local rest
+    local -a rec_target=() rec_lun=() rec_bsname=() rec_zvol=()
     backstores=$(targetcli /backstores/block ls 2>/dev/null)
 
+    # First pass: collect the LUN records from targetcli in listing order.
     while IFS= read -r target; do
         targetshort="${target##*:}"
         while IFS= read -r line; do
@@ -341,32 +464,10 @@ emit_lun_data() {
             [[ "$rest" == */dev/zvol/* ]] || zvol="${rest%%[ )]*}"
             [[ -z "$zvol" ]] && continue
 
-            size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "?")
-
-            clone_info=""
-            origin=$(zfs get -H -o value origin "$zvol" 2>/dev/null)
-            if [[ "$origin" != "-" && -n "$origin" ]]; then
-                clone_info="[clone of ${origin}]"
-            fi
-
-            clone_list=$(zfs list -H -t snapshot -o clones -r "$zvol" 2>/dev/null \
-                | grep -v '^-$' \
-                | while IFS= read -r _clone; do
-                      _base="${_clone##*/}"
-                      if [[ "$_base" == vm-*-disk-* ]]; then
-                          _mid="${_base#vm-}"
-                          _mid="${_mid%%-disk-*}"
-                          [[ "$_mid" =~ ^[0-9]+$ ]] && printf '%s\n' "$_mid"
-                      fi
-                  done \
-                | sort -u \
-                | awk '{printf "%svm-%s", (NR>1?", ":""), $1}')
-            if [[ -n "$clone_list" ]]; then
-                clone_info+="${clone_info:+ }[cloned by: ${clone_list}]"
-            fi
-
-            printf 'LUN|%s|%s|%s|%s|%s|%s\n' \
-                "$targetshort" "$lun" "$bsname" "$zvol" "$size" "$clone_info"
+            rec_target+=("$targetshort")
+            rec_lun+=("$lun")
+            rec_bsname+=("$bsname")
+            rec_zvol+=("$zvol")
         done < <(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null)
     done < <(targetcli /iscsi ls 2>/dev/null | while IFS= read -r _t_line; do
         # targetcli separates each target name from its dotted leader with a
@@ -376,6 +477,29 @@ emit_lun_data() {
             case "$_t" in iqn.*) printf '%s\n' "$_t" ;; esac
         done
     done)
+
+    # Second pass: one batched zfs call per pool for sizes and clone info.
+    local -A pools=()
+    local r
+    for r in "${rec_zvol[@]}"; do
+        pools["${r%%/*}"]=1
+    done
+    local pool
+    for pool in "${!pools[@]}"; do
+        load_zfs_props "$pool"
+        load_zfs_clones "$pool"
+    done
+
+    local -i i
+    for (( i=0; i<${#rec_zvol[@]}; i++ )); do
+        zvol="${rec_zvol[$i]}"
+        size="${zfs_prop_volsize[$zvol]:-?}"
+        clone_info=$(_build_clone_info "$zvol")
+
+        printf 'LUN|%s|%s|%s|%s|%s|%s\n' \
+            "${rec_target[$i]}" "${rec_lun[$i]}" "${rec_bsname[$i]}" \
+            "$zvol" "$size" "$clone_info"
+    done
 }
 
 # --- Internal gather modes ----------------------------------------------------
@@ -392,6 +516,205 @@ if [[ "$gather_lun_info" == true ]]; then
     emit_lun_data
     exit 0
 fi
+
+# --- Table rendering ----------------------------------------------------------
+# Rows are collected in TABLE_ROWS as unit-separator-joined cells; a cell may
+# contain embedded newlines, each of which starts a new physical line.
+TABLE_ROWS=()
+declare -a _table_headers=()
+
+_table_width() {
+    if [[ -n "${COLUMNS:-}" ]]; then
+        printf '%s' "$COLUMNS"
+    elif [[ -t 1 ]]; then
+        local _sz
+        _sz=$(stty size 2>/dev/null) || _sz=""
+        if [[ -n "$_sz" ]]; then
+            printf '%s' "${_sz##* }"
+        else
+            printf '120'
+        fi
+    else
+        printf '120'
+    fi
+}
+
+# _wrap_cell <text> <width> — print wrapped lines of text.  Words keep a
+# leading separator character so packed lines rejoin exactly ("a/b" wraps as
+# "a" "/b").  Tokens longer than the width are hard-broken.  Embedded
+# newlines in the text always start a new line.
+#
+# The two token-splitting patterns below exceed 10 characters, so each field
+# is documented here per the coding policies:
+#   ^([^][/ :,]+)           — anchored at the start of the remaining text;
+#                             capture group 1 is one or more characters that
+#                             are NOT a separator: `]` or `[` close/open
+#                             bracket (listed first so `]` is not treated as
+#                             the bracket-class closer), `/` slash, space,
+#                             colon, or comma.  This is a plain word chunk.
+#   ^([/ :,]+)([^][/ :,]*)  — anchored at the start; group 1 is one or more
+#                             separator characters (slash, space, colon,
+#                             comma — `[` and `]` never appear here because
+#                             the previous pattern consumed any plain chunk
+#                             first, so a leading `[`/`]` falls through to
+#                             the else branch as its own word); group 2 is
+#                             zero or more non-separator characters (same
+#                             negated class as above) — the plain chunk that
+#                             follows the separator run.  Keeping the
+#                             separator run glued to the front of the
+#                             following chunk is what makes packed lines
+#                             rejoin exactly after wrapping.
+_wrap_cell() {
+    local text="$1" width="$2"
+    local para rest line word
+    local -a words=()
+
+    while IFS= read -r para || [[ -n "$para" ]]; do
+        words=()
+        rest="$para"
+        while [[ -n "$rest" ]]; do
+            if [[ "$rest" =~ ^([^][/ :,]+) ]]; then
+                # Plain chunk up to the next separator.
+                words+=("${BASH_REMATCH[1]}")
+                rest="${rest#"${BASH_REMATCH[1]}"}"
+            elif [[ "$rest" =~ ^([/ :,]+)([^][/ :,]*) ]]; then
+                # Separator run plus the following chunk: keep the separator
+                # on the front of the word so packed lines rejoin exactly.
+                words+=("${BASH_REMATCH[1]}${BASH_REMATCH[2]}")
+                rest="${rest#"${BASH_REMATCH[1]}${BASH_REMATCH[2]}"}"
+            else
+                words+=("$rest")
+                rest=""
+            fi
+        done
+
+        line=""
+        for word in "${words[@]}"; do
+            if [[ -z "$line" ]]; then
+                line="$word"
+            elif (( ${#line} + ${#word} <= width )); then
+                line+="$word"
+            else
+                printf '%s\n' "$line"
+                line="$word"
+            fi
+            while (( ${#line} > width )); do
+                printf '%s\n' "${line:0:$width}"
+                line="${line:$width}"
+            done
+        done
+        printf '%s\n' "$line"
+    done <<< "$text"
+}
+
+# print_table <width> <header...> — render TABLE_ROWS with wrapping cells.
+# Rows are split on the unit separator with plain parameter expansion: read
+# would stop at the first newline inside a multi-line cell.
+_split_table_row() {
+    local rest="$1"
+    local us=$'\x1f'
+    _row_cells=()
+    while true; do
+        _row_cells+=("${rest%%"$us"*}")
+        [[ "$rest" == *"$us"* ]] || break
+        rest="${rest#*"$us"}"
+    done
+}
+
+print_table() {
+    local width="$1"; shift
+    local -a headers=("$@")
+    local ncols=${#headers[@]}
+    local i row cell _l
+
+    # Natural width per column.
+    local -a nat=()
+    for (( i=0; i<ncols; i++ )); do
+        nat+=(${#headers[$i]})
+    done
+    for row in "${TABLE_ROWS[@]}"; do
+        _split_table_row "$row"
+        local -a _cells=("${_row_cells[@]}")
+        for (( i=0; i<ncols; i++ )); do
+            cell="${_cells[$i]:-}"
+            while IFS= read -r _l || [[ -n "$_l" ]]; do
+                if (( ${#_l} > nat[i] )); then
+                    nat[i]=${#_l}
+                fi
+            done <<< "$cell"
+        done
+    done
+
+    # Shrink columns to the width budget, widest first, floor of 4.
+    local -a w=("${nat[@]}")
+    local total=0 x
+    for x in "${w[@]}"; do
+        total=$(( total + x ))
+    done
+    local budget=$(( width - (ncols * 3 + 1) ))
+    local wi
+    while (( total > budget )); do
+        wi=-1
+        local wmax=4
+        for (( i=0; i<ncols; i++ )); do
+            if (( w[i] > wmax )); then
+                wmax=${w[i]}
+                wi=$i
+            fi
+        done
+        [[ $wi -lt 0 ]] && break
+        w[wi]=$(( w[wi] - 1 ))
+        total=$(( total - 1 ))
+    done
+
+    # Border: "+" + ("-" * (w+2)) per column.
+    local border="+"
+    for (( i=0; i<ncols; i++ )); do
+        printf -v x '%*s' $(( w[i] + 2 )) ''
+        border+="${x// /-}+"
+    done
+
+    _print_table_line() {
+        local -a _c=("$@")
+        local -a _tl=()
+        local h=1 li
+        for (( li=0; li<h; li++ )); do
+            printf '|'
+            for (( i=0; i<ncols; i++ )); do
+                unset _tl
+                local -a _tl=()
+                mapfile -t _tl < <(_wrap_cell "${_c[$i]:-}" "${w[i]}")
+                (( ${#_tl[@]} > h )) && h=${#_tl[@]}
+                printf ' %-*s |' "${w[i]}" "${_tl[$li]:-}"
+            done
+            printf '\n'
+        done
+    }
+
+    printf '%s\n' "$border"
+    _print_table_line "${headers[@]}"
+    printf '%s\n' "$border"
+    for row in "${TABLE_ROWS[@]}"; do
+        _split_table_row "$row"
+        local -a _cells=("${_row_cells[@]}")
+        _print_table_line "${_cells[@]}"
+    done
+    printf '%s\n' "$border"
+}
+
+# Compose and print the collected TABLE_ROWS, then reset them.
+_flush_disk_table() {
+    local width
+    width=$(_table_width)
+    print_table "$width" "${_table_headers[@]}"
+    TABLE_ROWS=()
+}
+
+# Join the arguments into one unit-separator-delimited table row.
+_table_row() {
+    local IFS=$'\x1f'
+    printf '%s' "$*"
+}
 
 # --- Data parsing from the remote helper --------------------------------------
 parse_vm_data() {
@@ -448,38 +771,13 @@ gather_lun_info() {
 }
 
 # --- Output printing ----------------------------------------------------------
-print_disk_block() {
-    local disk_id="$1" bsname="$2" size="$3" clone_info="$4"
-    local out_vmid out_name out_key out_host_dev out_host_bypath
-    local out_guest_dev out_guest_bypath
-
-    out_vmid="${vm_map_vmid[$disk_id]:--}"
-    out_name="${vm_map_name[$disk_id]:--}"
-    out_key="${vm_map_key[$disk_id]:--}"
-    out_host_dev="${host_dev[$disk_id]:--}"
-    out_host_bypath="${host_bypath[$disk_id]:--}"
-    out_guest_dev="${guest_dev[$disk_id]:--}"
-    out_guest_bypath="${guest_bypath[$disk_id]:--}"
-
-    printf '  Disk:   %s\n' "$bsname"
-    printf '  VMID:   %s\n' "$out_vmid"
-    printf '  Name:   %s\n' "$out_name"
-    printf '  Key:    %s\n' "$out_key"
-    printf '  Size:   %s\n' "$size"
-    if is_two_node; then
-        printf '  Host:   %s  %s\n' "$out_host_dev" "$out_host_bypath"
-    fi
-    printf '  Guest:  %s  %s\n' "$out_guest_dev" "$out_guest_bypath"
-    if [[ -n "$clone_info" ]]; then
-        printf '  Clone:  %s\n' "$clone_info"
-    fi
-    echo ""
-}
-
 print_two_node_output() {
     local lun_data="$1"
     local current_target=""
     local -a fields
+
+    _table_headers=("LUN" "Disk" "VMID" "Name" "Key" "Size" "Host" "Guest" "Clone")
+    TABLE_ROWS=()
 
     log_msg "INFO: === VM Disk Inventory ==="
     echo ""
@@ -492,15 +790,25 @@ print_two_node_output() {
         local disk_id="${targetshort}:${lun}"
 
         if [[ "$current_target" != "$targetshort" ]]; then
+            [[ -n "$current_target" ]] && _flush_disk_table
             [[ -n "$current_target" ]] && echo ""
             log_msg "INFO: Target: ${iqn_prefix}:${targetshort}"
-            log_msg "INFO: ---------------------------------------------------------------"
             current_target="$targetshort"
         fi
 
-        printf '  LUN:    lun%s\n' "$lun"
-        print_disk_block "$disk_id" "$bsname" "$size" "$clone_info"
+        [[ -n "$clone_info" ]] || clone_info="-"
+
+        local host_cell guest_cell
+        host_cell="${host_dev[$disk_id]:--}"$'\n'"${host_bypath[$disk_id]:--}"
+        guest_cell="${guest_dev[$disk_id]:--}"$'\n'"${guest_bypath[$disk_id]:--}"
+
+        TABLE_ROWS+=("$(_table_row \
+            "$lun" "$bsname" "${vm_map_vmid[$disk_id]:--}" \
+            "${vm_map_name[$disk_id]:--}" "${vm_map_key[$disk_id]:--}" \
+            "$size" "$host_cell" "$guest_cell" "$clone_info")")
     done <<< "$lun_data"
+
+    [[ -n "$current_target" ]] && _flush_disk_table
 }
 
 # --- Single-node mode ---------------------------------------------------------
@@ -509,22 +817,30 @@ run_single_node() {
     build_running_vm_set
     build_guest_device_map
 
+    _table_headers=("Disk" "VMID" "Name" "Key" "Size" "Guest" "Clone")
+
     log_msg "INFO: === VM Disk Inventory (single-node) ==="
     echo ""
 
-    local pool zvols zvol bsname size disk_id origin clone_info clone_list
+    local pool zvols zvol bsname size disk_id clone_info
     local base rest vmid_part disk_part
     for pool in $(zpool list -H -o name 2>/dev/null); do
         zvols=$(zfs list -H -t volume -o name -r "$pool" 2>/dev/null \
             | grep -F '/proxmox/vm-' || true)
         [[ -n "$zvols" ]] || continue
 
+        zfs_prop_volsize=()
+        zfs_prop_origin=()
+        zfs_snap_clones=()
+        load_zfs_props "$pool"
+        load_zfs_clones "$pool"
+
         log_msg "INFO: Pool: $pool"
-        log_msg "INFO: ---------------------------------------------------------------"
+        TABLE_ROWS=()
 
         while IFS= read -r zvol; do
             bsname="${zvol##*/}"
-            size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "?")
+            size="${zfs_prop_volsize[$zvol]:-?}"
             disk_id=""
 
             base="${zvol##*/}"
@@ -537,30 +853,19 @@ run_single_node() {
                 fi
             fi
 
-            clone_info=""
-            origin=$(zfs get -H -o value origin "$zvol" 2>/dev/null)
-            if [[ "$origin" != "-" && -n "$origin" ]]; then
-                clone_info="[clone of ${origin}]"
-            fi
+            clone_info=$(_build_clone_info "$zvol")
+            [[ -n "$clone_info" ]] || clone_info="-"
 
-            clone_list=$(zfs list -H -t snapshot -o clones -r "$zvol" 2>/dev/null \
-                | grep -v '^-$' \
-                | while IFS= read -r _clone; do
-                      _base="${_clone##*/}"
-                      if [[ "$_base" == vm-*-disk-* ]]; then
-                          _mid="${_base#vm-}"
-                          _mid="${_mid%%-disk-*}"
-                          [[ "$_mid" =~ ^[0-9]+$ ]] && printf '%s\n' "$_mid"
-                      fi
-                  done \
-                | sort -u \
-                | awk '{printf "%svm-%s", (NR>1?", ":""), $1}')
-            if [[ -n "$clone_list" ]]; then
-                clone_info+="${clone_info:+ }[cloned by: ${clone_list}]"
-            fi
+            local guest_cell
+            guest_cell="${guest_dev[$disk_id]:--}"$'\n'"${guest_bypath[$disk_id]:--}"
 
-            print_disk_block "$disk_id" "$bsname" "$size" "$clone_info"
+            TABLE_ROWS+=("$(_table_row \
+                "$bsname" "${vm_map_vmid[$disk_id]:--}" \
+                "${vm_map_name[$disk_id]:--}" "${vm_map_key[$disk_id]:--}" \
+                "$size" "$guest_cell" "$clone_info")")
         done <<< "$zvols"
+
+        _flush_disk_table
         echo ""
     done
 }

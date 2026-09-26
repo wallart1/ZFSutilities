@@ -11,8 +11,10 @@
 #   zfsconfig_get_offsite_candidates # Print offsite-candidate pool names, one per line
 #   zfsconfig_get_checkagainst       # Print entries: "<dataset> <quals> <counterpart> <label>"
 #   zfsconfig_get_retention <pool>   # Emit bash-sourceable bktname[]/bktretain[]/minage[]
-#                                    # for <pool>, or 'default' if no pool entry exists.
-#                                    # Falls back to legacy zfsretainpol-<pool> files in
+#                                    # for <pool>. Resolution order: the pool's own entry,
+#                                    # then the special '<offsite>' entry when <pool> is an
+#                                    # offsite candidate, then 'default'. Falls back to
+#                                    # legacy zfsretainpol-<pool> files in
 #                                    # $ZFSCONFIG_LEGACY_DIR (default: helper's dir).
 #   poolarray                        # Compatibility shim: fills $zfspoolarray from pools
 #
@@ -176,10 +178,12 @@ PYEOF
 
 # zfsconfig_get_retention <pool>
 #   Prints a bash-sourceable fragment: `bktname[i]='...'; bktretain[i]=N; minage[i]=N`
-#   for the given pool, falling back to 'default'. If the JSON has neither, falls
-#   back to parsing legacy zfsretainpol-<pool> files from $ZFSCONFIG_LEGACY_DIR
-#   (default: the directory containing this helper). Exit status: 0 if any
-#   buckets were emitted, 1 otherwise.
+#   for the given pool. Resolution order: the pool's own entry in the JSON
+#   retention section, then the special '<offsite>' entry when <pool> is marked
+#   as an offsite candidate, then 'default'. If the JSON has none of those,
+#   falls back to parsing legacy zfsretainpol-<pool> files from
+#   $ZFSCONFIG_LEGACY_DIR (default: the directory containing this helper).
+#   Exit status: 0 if any buckets were emitted, 1 otherwise.
 zfsconfig_get_retention() {
     local pool="$1"
     local legacy_dir="${ZFSCONFIG_LEGACY_DIR:-$(dirname "${BASH_SOURCE[0]}")}"
@@ -204,10 +208,42 @@ except Exception:
     cfg = {}
 
 retention = cfg.get("retention") or {}
-buckets = retention.get(pool) or retention.get("default")
+buckets = retention.get(pool)
+if not buckets and pool != "<offsite>":
+    # An offsite-candidate pool inherits the special '<offsite>' policy before
+    # falling back to 'default'.
+    for entry in cfg.get("pools", []) or []:
+        if (
+            isinstance(entry, dict)
+            and entry.get("name") == pool
+            and entry.get("offsite_candidate")
+        ):
+            buckets = retention.get("<offsite>")
+            break
+buckets = buckets or retention.get("default")
 
 if not buckets:
     # Legacy fallback: parse zfsretainpol-<pool> then zfsretainpol-default.
+    # Pattern documentation (required because the regex exceeds 10 characters):
+    #   bktname\[\d+\]='(\w+)'
+    #       Matches a legacy bucket-name assignment: the literal "bktname[",
+    #       one or more digits (the bucket index, discarded), the literal
+    #       "]='", then capture group 1: one or more word characters (letters,
+    #       digits, underscore) — the bucket name — followed by a single quote.
+    #   ;
+    #       A literal semicolon ends the assignment.
+    #   \s*bktretain\[\d+\]=(\d+)
+    #       Optional whitespace, then a retain-count assignment: the literal
+    #       "bktretain[", digits (index, discarded), "] =", then capture group
+    #       2: one or more digits — the number of snapshots to retain.
+    #   ;
+    #       A literal semicolon ends the assignment.
+    #   \s*minage\[\d+\]=(\d+)
+    #       Optional whitespace, then a minimum-age assignment: the literal
+    #       "minage[", digits (index, discarded), "] =", then capture group 3:
+    #       one or more digits — the minimum snapshot age in days.
+    # re.search (not fullmatch) is used so leading indentation or trailing
+    # content on the line is tolerated.
     pat = re.compile(
         r"bktname\[\d+\]='(\w+)';\s*bktretain\[\d+\]=(\d+);\s*minage\[\d+\]=(\d+)"
     )

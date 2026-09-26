@@ -56,7 +56,6 @@ _write_trailer() {
 }
 trap _write_trailer EXIT
 source_helper zfscleanup
-source_helper backup-installed-programs
 source_helper rsync-dailybackup
 
 autoresume='Y'
@@ -75,7 +74,6 @@ prune='Y'
 dryrun='N'
 pre_backup_script_enabled='N'
 pre_backup_script=''
-run_installed_programs='Y'
 
 nextsnap=$(zfssnapbuild)
 
@@ -105,7 +103,7 @@ fi
 push_rsync_scripts() {
     local host="$1"
     log_msg "INFO: Pushing rsync scripts and node config to ${host}..."
-    scp -q "$mydir/rsync-dailybackup" "$mydir/backup-installed-programs" "root@${host}:/home/dan/" \
+    scp -q "$mydir/rsync-dailybackup" "root@${host}:/home/dan/" \
         || { log_msg "WARN: Failed to push scripts to ${host}"; return 1; }
     scp -q ~/bashinit "root@${host}:/root/bashinit" \
         || log_msg "WARN: could not push bashinit to ${host}"
@@ -121,9 +119,6 @@ _run_remote_pull() {
     if ! push_rsync_scripts "$host"; then
         rc=1
     fi
-    if [[ $rc -eq 0 && $run_installed_programs = 'Y' ]]; then
-        ssh root@"$host" /home/dan/backup-installed-programs || rc=$?
-    fi
     if [[ $rc -eq 0 ]]; then
         ssh root@"$host" /home/dan/rsync-dailybackup || rc=$?
     fi
@@ -135,12 +130,7 @@ _run_remote_pull() {
 
 _run_local_pull() {
     local rc=0
-    if [[ $run_installed_programs = 'Y' ]]; then
-        ( backup-installed-programs ) || rc=$?
-    fi
-    if [[ $rc -eq 0 ]]; then
-        ( rsync-dailybackup ) || rc=$?
-    fi
+    ( rsync-dailybackup ) || rc=$?
     if [[ $rc -ne 0 ]]; then
         log_msg "WARN: Local pull failed (rc=${rc}); continuing to next step."
     fi

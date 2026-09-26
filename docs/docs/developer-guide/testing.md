@@ -166,7 +166,6 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-check-prerequisites` | `check-prerequisites` tool version checks (mkdocs major-version gating) |
 | `test-cleanup-zfsutilities-legacy` | `cleanup-zfsutilities-legacy` prompt, `--yes`, `--dry-run`, and non-symlink guards |
 | `test-clone-vm` | `clone-vm` storage heredoc bootstrap and lock sourcing |
-| `test-datesubtract` | `datesubtract` usage errors and day/month/year output via `log_msg` |
 | `test-deploy-version` | Root-level script selection, exclusions, retention-policy file filtering, critical-script validation, no production wiring, and VERSION-file casing |
 | `test-detach-vm-disk` | `detach-vm-disk` iSCSI manifest removal |
 | `test-enroll-efi-keys-vm` | `enroll-efi-keys-vm` EFI-disk and iSCSI by-path parsing for Secure Boot enrollment |
@@ -176,7 +175,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-installer-checks` | Installer prerequisite checks and desktop-launcher helper functions |
 | `test-installer-retention` | Installer default retention profile initialization and preservation of existing user profiles |
 | `test-iscsi-add-encrypted-luns` | Encrypted-LUN config path resolution (modern + legacy fallback) and targetcli invocation |
-| `test-list-vm-disks` | `list-vm-disks` VM disk maps: configs, LUN/host-device maps, running VMs |
+| `test-list-vm-disks` | `list-vm-disks` VM disk maps: configs, LUN/host-device maps, running VMs, guest-agent queries, table rendering |
 | `test-lock-coverage` | Static checks that locked scripts source zfslockmanager, initialize it, and acquire locks |
 | `test-logging` | `log_msg` writes all messages to the session log file and ignores `msg_level`; unset `ZFSUTILITIES_LOG_FILE` handling; `ask_yn`, `warn`, and `die` helpers |
 | `test-migration` | One-time migration of config/history/profiles/system files with legacy symlinks |

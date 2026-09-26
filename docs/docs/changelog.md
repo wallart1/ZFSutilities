@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.108.0
+
+*Released 2026-09-26*
+
+### Added
+
+- **`<offsite>` retention policy key** — `zfsconfig_get_retention <pool>` now
+  resolves retention policies in order: the pool's own entry, then the special
+  `retention["<offsite>"]` entry when the pool is marked `offsite_candidate`,
+  then `default`, then the legacy `zfsretainpol-<pool>` files. Offsite
+  pools therefore pick up a single shared policy without per-pool entries,
+  matching the behavior documented in the Retention guide and the GUI's
+  prune-list treatment of an `<offsite>` row.
+
+- **`list-vm-disks` terminal-width tables** — the human-readable inventory is
+  now rendered as one bordered table per iSCSI target (two-node) or pool
+  (single-node), with long values such as by-path names and clone annotations
+  wrapping onto multiple lines inside their cells. Machine-readable
+  `VM|`/`LUN|` emission is unchanged.
+
+### Changed
+
+- **`list-vm-disks` performance** — guest device names are gathered with one
+  qemu-guest-agent round-trip per running VM instead of one per disk, and
+  zvol sizes, clone origins, and snapshot clone dependents are looked up with
+  one batched `zfs get` and one `zfs list -t snapshot` per pool instead of
+  several invocations per zvol.
+
+- **Backup prune no longer falls back to whole-pool pruning** — in both the
+  GUI Backup tab and scheduled/CLI backup profiles, when retention is enabled
+  but no send/receive steps are active, the post-backup prune step is now
+  skipped (logged at INFO level) instead of falling back to whole-pool
+  pruning of the configured pools: no new snapshots were created, so there is
+  nothing to prune. A profile whose only step was that prune now reports "No
+  active steps to run" (WARN, rc=1). The `build_retention_command` Python
+  builder that implemented the fallback is removed;
+  `build_backup_prune_command` (per-backup-dataset pruning) is unchanged.
+
+- **`zfsdailybackup` drops the installed-programs step** — the script no
+  longer runs `backup-installed-programs` on pull hosts or locally, no longer
+  pushes it via scp, and the `run_installed_programs` global variable is
+  removed.
+
+- **`zfs-send-receive` header** now documents its full global-variable set
+  per the coding-policy header template.
+
+### Removed
+
+- **Obsolete scripts deleted** — `datesubtract`, `getlinecount`,
+  `zfscleanupbadoffsiteholds`, and `backup-installed-programs` (plus the
+  `test-datesubtract` suite). All were unused: `getlinecount` was a
+  development utility, `datesubtract` had no callers,
+  `zfscleanupbadoffsiteholds` fixed a one-time legacy hold-tagging bug that
+  no longer recurs, and `backup-installed-programs` was consumed only by
+  `zfsdailybackup`, which production scheduling no longer runs.
+
 ## 0.107.0
 
 *Released 2026-09-25*

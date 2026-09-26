@@ -12,7 +12,6 @@ from command_builders import (
     build_backup_prune_command,
     build_post_backup_command,
     build_pre_backup_command,
-    build_retention_command,
     build_rsync_command,
     build_send_receive_command,
     parse_rsync_endpoint,
@@ -24,7 +23,6 @@ from feature_config import (
     generate_snapshot_name,
     get_backup_config,
     get_offsite_config,
-    get_pool_names,
     refresh_checkagainst_derived,
     remove_snapfile,
     save_backup_config,
@@ -345,8 +343,8 @@ def create_backup_page(app, ctx):
     app.backup_post_retention.set_tooltip_text(
         "Apply retention policies after the backup. Visits only the datasets "
         "the active send/receive steps back up, on both the source and "
-        "destination sides; falls back to whole-pool "
-        "pruning of the configured pools when no send/receive steps are active."
+        "destination sides; skipped when no send/receive steps are active, "
+        "since no new snapshots were created."
     )
     post_grid.attach(app.backup_post_retention, 0, 1, 2, 1)
 
@@ -699,30 +697,9 @@ def on_backup_run(app, ctx):
                 )
             )
         else:
-            pools = get_pool_names(ctx.config) or None
-            prune_selection = {
-                key: variables.get(key, "")
-                for key in ("includes", "excludes", "startwith", "endwith")
-                if variables.get(key, "").strip()
-            }
             log_msg(
-                "INFO: No active send/receive steps; prune step falls back to "
-                "whole-pool pruning of the configured pools."
-            )
-            if prune_selection:
-                log_msg(
-                    "INFO: Dataset selection forwarded to prune step: "
-                    + " ".join(f"{k}={v}" for k, v in prune_selection.items())
-                )
-            steps.append(
-                build_retention_command(
-                    ctx.parent_dir,
-                    label,
-                    pools=pools,
-                    dryrun=dryrun,
-                    fatal=False,
-                    **prune_selection,
-                )
+                "INFO: No active send/receive steps; skipping prune step "
+                "(no new snapshots to prune)."
             )
 
     # Finally: post-backup script (runs even on fatal error)

@@ -1,3 +1,0 @@
-bash
--c
-source ~/bashinit; bashinit; mydir="/bin"; source "$mydir/zfscleanup"; autoproceed="Y"; releaseholds="Y"; releaseholds_tags=("offsite-*"); cleanup "" "" dailybackup

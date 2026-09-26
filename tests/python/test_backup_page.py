@@ -439,7 +439,6 @@ class TestBackupRunDialog(unittest.TestCase):
             build_rsync_command=MagicMock(),
             build_send_receive_command=MagicMock(),
             build_post_backup_command=MagicMock(),
-            build_retention_command=MagicMock(),
             build_backup_prune_command=MagicMock(),
             _do_generate_snap=MagicMock(),
         )
@@ -529,7 +528,7 @@ class TestBackupRunDialog(unittest.TestCase):
                 "remote:/src", "/dst", excludes=["*.tmp", "cache/"]
             )
 
-    def test_retention_step_uses_pool_registry_order(self):
+    def test_prune_step_skipped_when_no_sr_steps_active(self):
         with mock_gtk():
             import backup_page
 
@@ -550,17 +549,15 @@ class TestBackupRunDialog(unittest.TestCase):
                 "variables": {"label": "dailybackup"},
                 "post_steps": {"run_retention": True, "remove_snapfile": False},
             }
-            backup_page.on_backup_run(app, app.ctx)
+            with patch.object(backup_page, "log_msg") as mock_log:
+                backup_page.on_backup_run(app, app.ctx)
 
-            backup_page.build_retention_command.assert_called_once_with(
-                app.ctx.parent_dir,
-                "dailybackup",
-                pools=["z2", "z1"],
-                dryrun=False,
-                fatal=False,
-            )
+        app.backup_runner.set_steps.assert_not_called()
+        mock_log.assert_any_call(
+            "INFO: No active send/receive steps; skipping prune step (no new snapshots to prune)."
+        )
 
-    def test_retention_step_forwards_dataset_selection(self):
+    def test_prune_step_skipped_even_with_dataset_selection_criteria(self):
         with mock_gtk():
             import backup_page
 
@@ -586,19 +583,13 @@ class TestBackupRunDialog(unittest.TestCase):
                 },
                 "post_steps": {"run_retention": True, "remove_snapfile": False},
             }
-            backup_page.on_backup_run(app, app.ctx)
+            with patch.object(backup_page, "log_msg") as mock_log:
+                backup_page.on_backup_run(app, app.ctx)
 
-            backup_page.build_retention_command.assert_called_once_with(
-                app.ctx.parent_dir,
-                "dailybackup",
-                pools=["z2"],
-                dryrun=False,
-                fatal=False,
-                includes="proxmox",
-                excludes="vm-100 =z2/scratch",
-                startwith="=z2/a",
-                endwith="z",
-            )
+        app.backup_runner.set_steps.assert_not_called()
+        mock_log.assert_any_call(
+            "INFO: No active send/receive steps; skipping prune step (no new snapshots to prune)."
+        )
 
     def test_retention_step_uses_backup_dataset_list_when_sr_steps_active(self):
         with mock_gtk():
@@ -629,7 +620,6 @@ class TestBackupRunDialog(unittest.TestCase):
                 dryrun=False,
                 fatal=False,
             )
-            backup_page.build_retention_command.assert_not_called()
 
     def test_backup_runs_while_offsite_active(self):
         """Backup should no longer bail out just because offsite is running."""
@@ -638,6 +628,7 @@ class TestBackupRunDialog(unittest.TestCase):
 
         app = _FakeBackupApp()
         app.backup_nextsnap_entry.set_text("@daily-2026-06-11T12:00-d")
+        app.backup_sr_store.append([True, "threeamigos/proxmox", "fivebays"])
         app.offsite_runner.running = True
         dialog_mock = MagicMock()
         dialog_mock.run.return_value = backup_page.Gtk.ResponseType.OK
@@ -664,6 +655,7 @@ class TestBackupRunDialog(unittest.TestCase):
 
         app = _FakeBackupApp()
         app.backup_nextsnap_entry.set_text("@daily-2026-06-11T12:00-d")
+        app.backup_sr_store.append([True, "threeamigos/proxmox", "fivebays"])
         app.restore_runner.running = True
         dialog_mock = MagicMock()
         dialog_mock.run.return_value = backup_page.Gtk.ResponseType.OK
