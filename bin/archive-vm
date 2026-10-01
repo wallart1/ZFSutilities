@@ -1,7 +1,8 @@
 #!/usr/bin/bash
 # archive-vm <vmid>
-# Archives a VM: promotes dependent clones, archives zvols + config,
-# verifies the archive, and optionally removes the VM.
+# Archives a VM: verifies it is stopped (never stops it), offers to promote
+# dependent clones, archives zvols + config, verifies the archive, and
+# optionally removes the VM.
 #
 # Install to: /usr/local/lib/zfsutilities/bin/archive-vm on BOTH hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
@@ -42,11 +43,12 @@ usage() {
     log_msg "INFO:   vmid   VM ID to retire"
     echo ""
     log_msg "INFO: Steps:"
-    log_msg "INFO:   1. Discover ZFS clones that depend on this VM"
-    log_msg "INFO:   2. Optionally promote clones (sever dependency)"
-    log_msg "INFO:   3. Archive zvols and Proxmox config"
-    log_msg "INFO:   4. Verify archive integrity"
-    log_msg "INFO:   5. Optionally remove the VM"
+    log_msg "INFO:   1. Verify the VM is stopped (the script never stops it)"
+    log_msg "INFO:   2. Discover ZFS clones that depend on this VM"
+    log_msg "INFO:   3. Optionally promote clones (sever dependency)"
+    log_msg "INFO:   4. Archive zvols and Proxmox config"
+    log_msg "INFO:   5. Verify archive integrity"
+    log_msg "INFO:   6. Optionally remove the VM"
     echo ""
     log_msg "INFO: Example: archive-vm 904"
     exit 1
@@ -335,6 +337,15 @@ if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
         "$remote_script '$vmid'"
 fi
 
+# --- The VM must already be stopped; archive-vm never stops it ---
+vm_status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
+[[ "$vm_status" == "stopped" ]] || {
+    log_msg "FATAL: VM ${vmid} is not stopped (status: ${vm_status:-unknown})."
+    log_msg "FATAL: The VM must be stopped before it can be archived."
+    log_msg "FATAL: Stop the VM (e.g. 'qm stop ${vmid}' or the Proxmox GUI), then re-run archive-vm."
+    exit 1
+}
+
 log_msg "INFO: === archive-vm ==="
 log_msg "INFO:   VM: ${vmid}"
 echo ""
@@ -365,7 +376,9 @@ fi
 
 declare -A clone_vmids
 if [[ -n "$clone_info" ]]; then
-    log_msg "INFO:   Found dependent clones:"
+    # Pass 1: collect dependent clones (clone zvol, clone VMID, origin),
+    # skipping clones that belong to the VM being archived itself.
+    clone_records=""
     while IFS=$'\t' read -r zvol origin; do
         # Extract the VM ID from a zvol path via parameter expansion.
         # Example: "threeamigos/proxmox/vm-105-disk-0" -> "105"
@@ -377,23 +390,41 @@ if [[ -n "$clone_info" ]]; then
         fi
         if [[ -n "$clone_vmid" && "$clone_vmid" != "$vmid" ]]; then
             clone_vmids["$clone_vmid"]=1
-            log_msg "INFO:     VM ${clone_vmid}: ${zvol}"
-            log_msg "INFO:       origin: ${origin}"
+            clone_records+="${zvol}"$'\t'"${clone_vmid}"$'\t'"${origin}"$'\n'
         fi
     done <<< "$clone_info"
-    echo ""
 
-    if ask_yn "Promote all clones to sever dependency on VM ${vmid}?"; then
-        for clone_vmid in "${!clone_vmids[@]}"; do
-            echo ""
-            log_msg "INFO: Promoting VM ${clone_vmid}..."
-            promote_vm_clone=$(find_zfsutility_script promote-vm-clone)
-            "$promote_vm_clone" "$clone_vmid" \
-                || { log_msg "FATAL: Promotion failed for VM ${clone_vmid}"; exit 1; }
-        done
+    if [[ -n "$clone_records" ]]; then
+        # Pass 2: report each VM disk with the clones that depend on it,
+        # grouped by the origin dataset (the disk the clone was made from).
+        log_msg "INFO:   Found disks with dependent clones:"
+        declare -A reported_disks=()
+        while IFS=$'\t' read -r zvol clone_vmid origin; do
+            [[ -n "$zvol" ]] || continue
+            origin_disk="${origin%%@*}"
+            if [[ -z "${reported_disks[$origin_disk]:-}" ]]; then
+                reported_disks["$origin_disk"]=1
+                log_msg "INFO:     Disk ${origin_disk}:"
+            fi
+            log_msg "INFO:       clone VM ${clone_vmid}: ${zvol}"
+            log_msg "INFO:         origin: ${origin}"
+        done <<< "$clone_records"
+        echo ""
+
+        if ask_yn "Do you want this script to promote these clones (sever the clone dependencies)?"; then
+            for clone_vmid in "${!clone_vmids[@]}"; do
+                echo ""
+                log_msg "INFO: Promoting VM ${clone_vmid}..."
+                promote_vm_clone=$(find_zfsutility_script promote-vm-clone)
+                "$promote_vm_clone" "$clone_vmid" \
+                    || { log_msg "FATAL: Promotion failed for VM ${clone_vmid}"; exit 1; }
+            done
+        else
+            log_msg "INFO:   Skipping clone promotion."
+            log_msg "WARN: VM removal may fail while snapshots are held by clones."
+        fi
     else
-        log_msg "INFO:   Skipping clone promotion."
-        log_msg "WARN: Archiving may fail if snapshots are held by clones."
+        log_msg "INFO:   No dependent clones found."
     fi
 else
     log_msg "INFO:   No dependent clones found."
@@ -687,14 +718,6 @@ log_msg "INFO: --- Step 4: VM removal ---"
 if ! ask_yn "Remove VM ${vmid}?"; then
     log_msg "INFO: VM ${vmid} preserved. Archive is under: ${archive_base}"
     exit 0
-fi
-
-# Stop the VM if running
-vm_status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
-if [[ "$vm_status" == "running" ]]; then
-    log_msg "INFO:   Stopping VM ${vmid}..."
-    qm stop "$vmid" 2>/dev/null || true
-    sleep 2
 fi
 
 # Remove disks

@@ -1,8 +1,10 @@
 #!/usr/bin/bash
 # shellcheck disable=SC1090,SC2034,SC2154
 
-# Start the documentation server (if not already running).  An optional path
-# argument is accepted for compatibility but ignored:
+# Start the documentation server (if not already running).  Before the server
+# is started, the static site in docs/site/ (used by the GUI's embedded viewer
+# and the standalone viewer) is refreshed with `mkdocs build`.  An optional
+# path argument is accepted for compatibility but ignored:
 #
 #   ./startdocserver
 #   ./startdocserver user-guide/restore/
@@ -33,6 +35,7 @@ else
 fi
 url_base="http://localhost:8000"
 logfile=~/docserver.log
+build_logfile=~/docserver-build.log
 max_wait=30
 
 function is_server_running {
@@ -93,6 +96,18 @@ function _stop_server {
     sleep 1
 }
 
+function _refresh_static_site {
+    # Rebuild docs/site/ so the GUI's embedded viewer and the standalone
+    # viewer show current content.  `mkdocs serve` only rebuilds in memory,
+    # so the static tree would otherwise lag behind the live server.
+    log_msg "INFO: Refreshing static site in docs/site/..."
+    if (cd "${docs_dir}" && python3 -m mkdocs build --clean) >> "${build_logfile}" 2>&1; then
+        log_msg "INFO: Static site refreshed (build log: ${build_logfile})"
+    else
+        log_msg "WARN: Static site build failed (see ${build_logfile}); the live server is unaffected."
+    fi
+}
+
 function start_server {
     log_msg "INFO: Starting documentation server..."
     cd "${docs_dir}"
@@ -100,6 +115,7 @@ function start_server {
         log_msg "FATAL: mkdocs is not installed. The documentation server requires MkDocs."
         exit 1
     fi
+    _refresh_static_site
     log_msg "INFO: Documentation server running in mkdocs live-reload mode"
     # --livereload is the default in recent MkDocs, but passing it explicitly
     # makes the intent clear and guards against environments where the

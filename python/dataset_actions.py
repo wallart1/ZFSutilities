@@ -529,23 +529,40 @@ def on_datasets_browse(app):
     log_msg("WARN: Select a filesystem, snapshot, or mounted volume partition to browse")
 
 
+def _unmounted_mountable_ancestors(dataset, repo):
+    """Return *dataset*'s unmounted ancestors, root-first, that can be mounted.
+
+    Ancestors with canmount=off are skipped: they can never be mounted, and
+    ZFS auto-creates their mountpoint directory when a descendant mounts, so
+    the target's path is not lost.
+    """
+    parts = dataset.split("/")
+    ancestors = []
+    for i in range(1, len(parts)):
+        candidate = "/".join(parts[:i])
+        if repo.get_property(candidate, "mounted") == "yes":
+            continue
+        if repo.get_property(candidate, "canmount") == "off":
+            log_msg(f"INFO: Skipping {candidate} (canmount=off)")
+            continue
+        ancestors.append(candidate)
+    return ancestors
+
+
 def _mount_one_dataset(item, repo, app):
     """Mount a single filesystem/pool dataset; return True if processed.
 
     Any unmounted ancestor datasets are mounted first so the target's
-    mountpoint is not hidden by a later parent mount.
+    mountpoint is not hidden by a later parent mount. Ancestors with
+    canmount=off are skipped; they cannot be mounted and ZFS auto-creates
+    their mountpoint directory when the target mounts.
     """
     dataset = item["name"]
 
-    # Build ancestor list from root to target, e.g. tank -> tank/vm-100.
-    parts = dataset.split("/")
-    candidates = ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
-
-    targets_to_mount = []
     try:
-        for candidate in candidates:
-            if repo.get_property(candidate, "mounted") != "yes":
-                targets_to_mount.append(candidate)
+        targets_to_mount = _unmounted_mountable_ancestors(dataset, repo)
+        if repo.get_property(dataset, "mounted") != "yes":
+            targets_to_mount.append(dataset)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         log_msg(f"WARN: Error checking mount state for {dataset}: {e}")
         return False
@@ -713,6 +730,75 @@ def on_datasets_mount(app):
         GLib.timeout_add_seconds(1, lambda a: update_mounted_states(a) or False, app)
 
 
+def _recover_orphaned_mount(target, repo):
+    """Best-effort recovery for an orphaned mount of *target*; True if unmounted.
+
+    An orphaned mount is a dataset the kernel still lists as mounted whose
+    mountpoint path is no longer reachable (its parent mount is missing), so
+    umount(2) fails with ENOENT — which libzfs renders as the misleading
+    "no such pool or dataset". Recovery remounts the unmounted ancestors,
+    root-first, and retries the unmount. If the retry still fails, every
+    ancestor mounted here is unmounted again (best effort) to restore the
+    original state.
+    """
+    try:
+        ancestors = _unmounted_mountable_ancestors(target, repo)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        log_msg(f"WARN: Error checking mount state for {target}: {e}")
+        return False
+
+    if not ancestors:
+        # Nothing to remount; an identical retry cannot succeed.
+        return False
+
+    try:
+        with zlm.locks("w", ancestors + [target]):
+            for ancestor in ancestors:
+                result = subprocess.run(
+                    ["sudo", "zfs", "mount", ancestor],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    log_msg(
+                        f"WARN: Error remounting {ancestor} while recovering {target}: "
+                        f"{result.stderr.strip()}"
+                    )
+                    return False
+                log_msg(f"INFO: Remounted {ancestor} to recover orphaned mount")
+
+            result = subprocess.run(
+                ["sudo", "zfs", "unmount", target],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                return True
+
+            for ancestor in reversed(ancestors):
+                restore = subprocess.run(
+                    ["sudo", "zfs", "unmount", ancestor],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if restore.returncode != 0:
+                    log_msg(
+                        f"WARN: Could not restore unmounted state of {ancestor}: "
+                        f"{restore.stderr.strip()}"
+                    )
+            log_msg(
+                f"WARN: Could not unmount {target} after remounting its parents: "
+                f"{result.stderr.strip()}"
+            )
+            return False
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot recover orphaned mount of {target}: {exc}")
+        return False
+
+
 def _unmount_one_dataset(item, repo, app):
     """Unmount a single filesystem/pool dataset; return True on success.
 
@@ -778,7 +864,22 @@ def _unmount_one_dataset(item, repo, app):
                     continue
 
                 stderr = result.stderr.strip()
-                if "busy" in stderr.lower():
+                if "no such pool or dataset" in stderr:
+                    # Orphaned mount: the kernel still lists the dataset as
+                    # mounted, but its mountpoint path is unreachable.
+                    if _recover_orphaned_mount(target, repo):
+                        any_unmounted = True
+                        log_msg(f"INFO: Unmounted {target}")
+                        continue
+                    log_msg(
+                        f"WARN: {target} looks mounted but its mountpoint is "
+                        "not reachable (orphaned mount) and could not be "
+                        "recovered by remounting its parents. Remount the "
+                        "parent dataset(s) manually and retry; if that fails "
+                        "the mount is detached from the namespace and a "
+                        "reboot is required."
+                    )
+                elif "busy" in stderr.lower():
                     log_msg(
                         f"WARN: Dataset {target} is busy. "
                         "Please close any file manager windows and try again."

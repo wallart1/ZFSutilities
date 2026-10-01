@@ -207,10 +207,11 @@ until after `VERSION` and `changelog.md` are final, then rebuild once before
 testing the embedded docs viewer or deploying.
 
 The embedded docs viewer requires a built site. On a fresh repo checkout used
-for GUI development, run `mkdocs build` in `docs/` before opening the viewer.
-Production deployments do not require a manual build: `deploy-version` (called
-by both installers) rebuilds `docs/site/` in the versioned installation
-directory automatically.
+for GUI development, run `mkdocs build` in `docs/` before opening the viewer,
+or run `startdocserver`, which rebuilds `docs/site/` each time it starts or
+restarts the server. Production deployments do not require a manual build:
+`deploy-version` (called by both installers) rebuilds `docs/site/` in the
+versioned installation directory automatically.
 
 ## Committing Changes to `bashinit`
 

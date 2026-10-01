@@ -683,7 +683,7 @@ def on_backup_run(app, ctx):
         active_sr = [(r[1], r[2]) for r in app.backup_sr_store if r[0]]
         if active_sr:
             log_msg(
-                f"INFO: Prune step restricted to the {len(active_sr)} send/receive "
+                f"VERB: Prune step restricted to the {len(active_sr)} send/receive "
                 "step(s)' source and destination datasets (derived at prune time)."
             )
             steps.append(

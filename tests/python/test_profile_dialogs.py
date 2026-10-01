@@ -509,6 +509,44 @@ class TestApplyProfileDialog(unittest.TestCase):
             ],
         )
 
+    def test_apply_profile_picker_lists_only_volume_profiles_for_volume(self):
+        pd = _import_profile_dialogs()
+
+        datasets = [{"name": "pool1/vol0", "type": "volume", "profile_match": "custom"}]
+        app = self._dialog_app({})
+
+        _result, _dialog, stores, _views = self._run_dialog(
+            pd, app, datasets, [pd.Gtk.ResponseType.CANCEL]
+        )
+
+        # "small-files" applies to filesystems only and must be filtered out.
+        self.assertEqual(
+            stores[0].rows,
+            [
+                ["general", "filesystem, volume", "General-purpose mixed files."],
+                ["scratch", "filesystem, volume", "Temporary data that can be lost on power loss."],
+            ],
+        )
+
+    def test_apply_profile_dialog_returns_cancel_when_no_applicable_profiles(self):
+        pd = _import_profile_dialogs()
+        app = self._dialog_app({})
+        app.config["workload_profiles"] = {
+            "small-files": self._profiles()["small-files"],
+        }
+        datasets = [{"name": "pool1/vol0", "type": "volume", "profile_match": "custom"}]
+
+        with capture_logs() as logs:
+            response, name, profile = pd.show_apply_profile_dialog(app, datasets)
+
+        self.assertEqual(response, pd.Gtk.ResponseType.CANCEL)
+        self.assertIsNone(name)
+        self.assertIsNone(profile)
+        self.assertTrue(
+            any("No workload profiles apply to volume datasets" in line for line in logs),
+            logs,
+        )
+
     def test_apply_profile_picker_preselects_first_dataset_match(self):
         pd = _import_profile_dialogs()
 
@@ -645,7 +683,7 @@ class TestApplyProfileDialog(unittest.TestCase):
         self.assertIsNone(name)
         self.assertIsNone(profile)
         self.assertTrue(
-            any("No workload profiles configured" in line for line in logs),
+            any("No workload profiles apply to filesystem datasets" in line for line in logs),
             logs,
         )
 
@@ -792,6 +830,7 @@ class _FakeEntry:
         self._values = values
         self._keys = keys
         self._idx = idx
+        self.sensitive = None
 
     def get_text(self):
         return str(self._values.get(self._keys[self._idx], ""))
@@ -800,7 +839,7 @@ class _FakeEntry:
         pass
 
     def set_sensitive(self, value):
-        pass
+        self.sensitive = value
 
     def set_editable(self, value):
         pass
@@ -854,11 +893,14 @@ class _FakeProfileEditor:
         self._check_counter = [0]
         self._dialog_run_idx = 0
         self._patches = []
+        self.entries = []
 
     def _make_entry(self, *args, **kwargs):
         idx = self._entry_counter[0]
         self._entry_counter[0] += 1
-        return _FakeEntry(self.values, self.ENTRY_KEYS, idx)
+        entry = _FakeEntry(self.values, self.ENTRY_KEYS, idx)
+        self.entries.append(entry)
+        return entry
 
     def _make_check(self, *args, **kwargs):
         idx = self._check_counter[0]
@@ -1319,7 +1361,8 @@ class TestManageProfilesDialog(unittest.TestCase):
     def test_manage_profiles_edit_profile(self):
         pd = _import_profile_dialogs()
         app = self._dialog_app()
-        # Custom profiles are editable; built-in ones are not.
+        # Custom profiles are edited in place; built-ins are edited as a
+        # template for a new profile.
         app.config["workload_profiles"] = {
             "custom": {
                 "description": "Custom settings.",
@@ -1359,7 +1402,7 @@ class TestManageProfilesDialog(unittest.TestCase):
                 edit_handler(edit_btn)
                 mock_editor.assert_called_once_with(app, "custom")
 
-    def test_manage_profiles_edit_builtin_profile_refused(self):
+    def test_manage_profiles_edit_builtin_profile_opens_editor(self):
         pd = _import_profile_dialogs()
         app = self._dialog_app()
         buttons = []
@@ -1390,7 +1433,43 @@ class TestManageProfilesDialog(unittest.TestCase):
 
             with patch.object(pd, "show_profile_editor_dialog") as mock_editor:
                 edit_handler(edit_btn)
-                mock_editor.assert_not_called()
+                mock_editor.assert_called_once_with(app, "general")
+
+    def test_manage_profiles_builtin_selection_editable_delete_disabled(self):
+        pd = _import_profile_dialogs()
+        app = self._dialog_app()
+        buttons = []
+
+        def make_button(*args, **kwargs):
+            btn = MagicMock()
+            buttons.append(btn)
+            return btn
+
+        store = GtkListStoreAdapter([["general", "filesystem, volume", "Balanced settings."]])
+        view = _make_tree_view(store, [0])
+
+        with (
+            patch.object(
+                pd,
+                "create_dialog",
+                return_value=MagicMock(run=MagicMock(return_value=pd.Gtk.ResponseType.CLOSE)),
+            ),
+            patch.object(pd.Gtk, "Button", side_effect=make_button),
+            patch.object(pd.Gtk, "ListStore", return_value=store),
+            patch.object(pd.Gtk, "TreeView", return_value=view),
+            patch("feature_config.save_config"),
+        ):
+            pd.show_manage_profiles_dialog(app)
+
+            edit_btn, delete_btn = buttons[1], buttons[2]
+            selection = view.get_selection.return_value
+            changed_handler = selection.connect.call_args[0][1]
+            changed_handler(selection)
+
+            edit_btn.set_sensitive.assert_called_with(True)
+            delete_btn.set_sensitive.assert_called_with(False)
+            delete_tooltip = delete_btn.set_tooltip_text.call_args[0][0]
+            self.assertIn("cannot be deleted", delete_tooltip)
 
     def test_manage_profiles_delete_profile(self):
         pd = _import_profile_dialogs()
@@ -1625,19 +1704,172 @@ class TestProfileEditorDialog(unittest.TestCase):
         self.assertEqual(profiles["custom"]["properties"]["volblocksize"], "32K")
         self.assertNotIn("ashift", profiles["custom"]["properties"])
 
-    def test_manage_profiles_edit_builtin_profile_refused(self):
-        """The editor refuses to open for seeded (immutable) profiles."""
+    def test_edit_builtin_profile_saves_as_new_custom_profile(self):
+        """Editing a built-in is a template: save requires a new name."""
         pd = _import_profile_dialogs()
         app = self._app()
 
+        values = {
+            "name": "general-fast",
+            "description": "General-purpose, faster variant.",
+            "filesystem": True,
+            "volume": False,
+            "recordsize": "128K",
+            "compression": "lz4",
+            "atime": "off",
+            "logbias": "latency",
+            "sync": "standard",
+            "primarycache": "all",
+            "special_small_blocks": "0",
+            "volblocksize": "",
+            "ashift": "",
+            "notes": "Tuned copy of general.",
+        }
+
+        editor = _FakeProfileEditor(pd, values, [pd.Gtk.ResponseType.OK])
         with (
-            _FakeProfileEditor(pd, {}, [pd.Gtk.ResponseType.OK]),
+            editor,
+            patch("feature_config.save_config"),
+        ):
+            pd.show_profile_editor_dialog(app, "general")
+
+        # The name field stays editable when a built-in is opened for editing.
+        self.assertTrue(editor.entries[0].sensitive)
+
+        profiles = app.config["workload_profiles"]
+        self.assertIn("general-fast", profiles)
+        self.assertEqual(
+            profiles["general-fast"]["description"], "General-purpose, faster variant."
+        )
+        self.assertEqual(profiles["general-fast"]["applies_to"], ["filesystem"])
+        # The built-in itself is untouched.
+        self.assertEqual(profiles["general"]["description"], "Balanced.")
+
+    def test_edit_builtin_profile_cannot_save_under_builtin_name(self):
+        pd = _import_profile_dialogs()
+        app = self._app()
+
+        values = {
+            "name": "media",
+            "description": "Attempt to shadow a built-in.",
+            "filesystem": True,
+            "volume": True,
+            "recordsize": "1M",
+            "compression": "lz4",
+            "atime": "off",
+            "logbias": "latency",
+            "sync": "standard",
+            "primarycache": "all",
+            "special_small_blocks": "0",
+            "volblocksize": "",
+            "ashift": "",
+            "notes": "",
+        }
+
+        with (
+            _FakeProfileEditor(pd, values, [pd.Gtk.ResponseType.OK, pd.Gtk.ResponseType.CANCEL]),
             patch("feature_config.save_config") as mock_save,
         ):
             pd.show_profile_editor_dialog(app, "general")
 
         mock_save.assert_not_called()
-        self.assertEqual(app.config["workload_profiles"]["general"]["description"], "Balanced.")
+        profiles = app.config["workload_profiles"]
+        self.assertNotIn("media", profiles)
+        self.assertEqual(profiles["general"]["description"], "Balanced.")
+
+    def test_edit_builtin_profile_overwrites_custom_after_confirmation(self):
+        pd = _import_profile_dialogs()
+        app = self._app()
+        app.config["workload_profiles"]["custom"] = {
+            "description": "Old custom.",
+            "applies_to": ["filesystem"],
+            "properties": {"compression": "lz4"},
+            "notes": "",
+        }
+
+        # Case-variant of the existing custom name: must overwrite the
+        # existing entry, not create a case-duplicate.
+        values = {
+            "name": "Custom",
+            "description": "Rebuilt from general.",
+            "filesystem": True,
+            "volume": False,
+            "recordsize": "128K",
+            "compression": "zstd",
+            "atime": "off",
+            "logbias": "latency",
+            "sync": "standard",
+            "primarycache": "all",
+            "special_small_blocks": "0",
+            "volblocksize": "",
+            "ashift": "",
+            "notes": "",
+        }
+
+        with (
+            _FakeProfileEditor(pd, values, [pd.Gtk.ResponseType.OK]),
+            patch("feature_config.save_config"),
+            patch.object(
+                pd.Gtk,
+                "MessageDialog",
+                return_value=MagicMock(run=MagicMock(return_value=pd.Gtk.ResponseType.YES)),
+            ) as mock_message_dialog,
+        ):
+            pd.show_profile_editor_dialog(app, "general")
+
+        confirm_text = mock_message_dialog.call_args.kwargs["text"]
+        self.assertIn("already exists", confirm_text)
+        self.assertIn("custom", confirm_text)
+
+        profiles = app.config["workload_profiles"]
+        self.assertNotIn("Custom", profiles)
+        self.assertEqual(profiles["custom"]["description"], "Rebuilt from general.")
+        self.assertEqual(profiles["custom"]["properties"]["compression"], "zstd")
+        # The built-in itself is untouched.
+        self.assertEqual(profiles["general"]["description"], "Balanced.")
+
+    def test_edit_builtin_profile_overwrite_declined_saves_nothing(self):
+        pd = _import_profile_dialogs()
+        app = self._app()
+        app.config["workload_profiles"]["custom"] = {
+            "description": "Old custom.",
+            "applies_to": ["filesystem"],
+            "properties": {"compression": "lz4"},
+            "notes": "",
+        }
+
+        values = {
+            "name": "custom",
+            "description": "Rebuilt from general.",
+            "filesystem": True,
+            "volume": False,
+            "recordsize": "128K",
+            "compression": "zstd",
+            "atime": "off",
+            "logbias": "latency",
+            "sync": "standard",
+            "primarycache": "all",
+            "special_small_blocks": "0",
+            "volblocksize": "",
+            "ashift": "",
+            "notes": "",
+        }
+
+        with (
+            _FakeProfileEditor(pd, values, [pd.Gtk.ResponseType.OK, pd.Gtk.ResponseType.CANCEL]),
+            patch("feature_config.save_config") as mock_save,
+            patch.object(
+                pd.Gtk,
+                "MessageDialog",
+                return_value=MagicMock(run=MagicMock(return_value=pd.Gtk.ResponseType.NO)),
+            ),
+        ):
+            pd.show_profile_editor_dialog(app, "general")
+
+        mock_save.assert_not_called()
+        profiles = app.config["workload_profiles"]
+        self.assertEqual(profiles["custom"]["description"], "Old custom.")
+        self.assertEqual(profiles["general"]["description"], "Balanced.")
 
     def test_manage_profiles_validation(self):
         pd = _import_profile_dialogs()

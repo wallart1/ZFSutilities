@@ -9,12 +9,13 @@ The documentation can be viewed in three ways:
 
 1. **Embedded viewer in the GTK GUI** — choose **Help → Documentation**. This
    opens the built-in WebKit viewer and displays the pre-built site in
-   `docs/site/`. It does **not** automatically refresh when Markdown source
-   files change.
+   `docs/site/`. The static site is refreshed each time `startdocserver`
+   starts or restarts the server; it is not rebuilt while the server keeps
+   running.
 2. **Standalone documentation viewer** — open the **ZFSutilities Documentation**
    symlink in the installing user's home directory, or run `zfsutilities-docs`.
    This is the same viewer as the embedded one and also displays the pre-built
-   `docs/site/` content without auto-refresh.
+   `docs/site/` content, refreshed at the same times.
 3. **Web browser via `startdocserver`** — run `startdocserver`, then open
    `http://<host>:8000` in a web browser. This is the only option that provides
    MkDocs live reload: edits saved in `docs/docs/` are rebuilt and the browser
@@ -22,9 +23,11 @@ The documentation can be viewed in three ways:
 
 !!! tip "Live updates while editing"
     If you are actively editing documentation, use `startdocserver` and a web
-    browser. The embedded and standalone viewers show the most recent static
-    build and only update after the next `mkdocs build` or the next
-    `deploy-version` run.
+    browser. The embedded and standalone viewers show the static build in
+    `docs/site/`, which `startdocserver` rebuilds whenever it starts or
+    restarts the server (`startdocserver --restart` forces a refresh). While
+    the server keeps running, they only update after the next `mkdocs build`
+    or `deploy-version` run.
 
 ## Automatic Installation
 
@@ -59,8 +62,7 @@ that the current docs originate from. This is handled automatically:
   serving from the correct directory. If a stale server is running (e.g.
   started from an old repo checkout or a previous deployed version), it stops
   the old process and restarts from the current directory. PID discovery falls
-  back through `lsof`, `fuser`, `pgrep -f 'mkdocs serve'`, and
-  `pgrep -f 'http.server 8000'`.
+  back through `lsof`, `fuser`, and `pgrep -f 'mkdocs serve'`.
 - **[switch-version](../commands-and-modules/two-node.md#switch-version-any-host)** stops any running documentation server after switching
   versions. The next invocation of `startdocserver` will start fresh from the
   newly activated version. It detects `mkdocs serve` processes.
@@ -101,6 +103,11 @@ The `startdocserver` script starts the documentation server in the background
 verifies that it is serving from the expected directory; if not, it stops the
 stale server and restarts from the correct directory.  Server output is logged
 to `~/docserver.log`.
+
+Before the server starts, the script rebuilds the static site in `docs/site/`
+with `mkdocs build --clean` so the embedded and standalone viewers show
+current content; build output is logged to `~/docserver-build.log`.  A failed
+static build logs a WARN and does not prevent the live server from starting.
 
 The server runs in MkDocs live-reload mode and auto-rebuilds on source
 changes; the browser page is refreshed automatically via a livereload

@@ -23,6 +23,7 @@ gi.require_version("Gtk", "3.0")
 
 from command_builders import BashStep
 from feature_config import (
+    DEFAULT_WORKLOAD_PROFILES,
     delete_workload_profile,
     get_workload_profiles,
     is_builtin_workload_profile,
@@ -378,17 +379,22 @@ def show_manage_profiles_dialog(app):
         return name is not None and is_builtin_workload_profile(name)
 
     def _on_selection_changed(_selection):
-        # Seeded profiles are immutable: no editing or deleting them.
+        # Seeded profiles cannot be overwritten or deleted, but they can be
+        # opened for editing and saved under a new name.
         builtin = _selected_is_builtin()
-        edit_btn.set_sensitive(not builtin)
+        edit_btn.set_sensitive(True)
         delete_btn.set_sensitive(not builtin)
-        tooltip = (
-            "Built-in profiles cannot be modified; use Reset to Defaults to restore them"
+        edit_btn.set_tooltip_text(
+            "Built-in profiles cannot be overwritten; saving edits requires a new "
+            "profile name or an existing custom profile"
             if builtin
             else ""
         )
-        edit_btn.set_tooltip_text(tooltip)
-        delete_btn.set_tooltip_text(tooltip)
+        delete_btn.set_tooltip_text(
+            "Built-in profiles cannot be deleted; use Reset to Defaults to restore them"
+            if builtin
+            else ""
+        )
 
     def _on_add(_btn):
         show_profile_editor_dialog(app)
@@ -399,11 +405,8 @@ def show_manage_profiles_dialog(app):
         if name is None:
             log_msg("WARN: Select a profile to edit")
             return
-        if is_builtin_workload_profile(name):
-            log_msg(f"WARN: Workload profile {name!r} is built in and cannot be edited")
-            return
         profiles = get_workload_profiles(app.config)
-        if name not in profiles:
+        if name not in profiles and not is_builtin_workload_profile(name):
             log_msg(f"WARN: Profile {name} no longer exists")
             _refresh_list()
             return
@@ -462,19 +465,29 @@ def show_manage_profiles_dialog(app):
     dialog.destroy()
 
 
+def _is_builtin_profile_name(name: str) -> bool:
+    """Return True if *name* matches a seeded profile name (case-insensitive)."""
+    lowered = name.lower()
+    return any(builtin.lower() == lowered for builtin in DEFAULT_WORKLOAD_PROFILES)
+
+
 def show_profile_editor_dialog(app, name=None):
     """Show the Add/Edit Workload Profile dialog and persist on OK.
 
     When *name* is None a new profile is created. When *name* is provided the
     existing profile is edited (the name field is read-only). Built-in
-    (seeded) profiles are immutable and cannot be opened for editing.
+    (seeded) profiles can be opened for editing as a starting point, but they
+    cannot be overwritten: the name field stays editable and saving requires
+    a new profile name or an existing custom profile (with an overwrite
+    confirmation, like the Save Profile to Schedule actions).
     """
-    if name is not None and is_builtin_workload_profile(name):
-        log_msg(f"WARN: Workload profile {name!r} is built in and cannot be edited")
-        return
     profiles = get_workload_profiles(app.config)
-    existing = profiles.get(name, {}) if name else {}
     is_edit = name is not None
+    editing_builtin = is_edit and is_builtin_workload_profile(name)
+    if is_edit:
+        existing = profiles.get(name) or DEFAULT_WORKLOAD_PROFILES.get(name, {})
+    else:
+        existing = {}
 
     dialog = create_dialog(
         "Edit Profile" if is_edit else "Add Profile",
@@ -505,9 +518,21 @@ def show_profile_editor_dialog(app, name=None):
         return widget
 
     row = 0
+    if editing_builtin:
+        notice = Gtk.Label()
+        notice.set_markup(
+            f"Editing built-in profile <b>{name}</b>. Built-in profiles cannot be "
+            "overwritten — save under a new name or overwrite an existing "
+            "custom profile."
+        )
+        notice.set_halign(Gtk.Align.START)
+        notice.set_line_wrap(True)
+        grid.attach(notice, 0, row, 2, 1)
+        row += 1
+
     name_entry = Gtk.Entry()
     name_entry.set_text(name or "")
-    name_entry.set_sensitive(not is_edit)
+    name_entry.set_sensitive(not is_edit or editing_builtin)
     _add_row(row, "Name:", name_entry)
     row += 1
 
@@ -575,7 +600,33 @@ def show_profile_editor_dialog(app, name=None):
             _show_validation_error(dialog, "Profile name is required.")
             continue
 
-        if not is_edit and any(p.lower() == new_name.lower() for p in profiles):
+        overwrite_name = None
+        if editing_builtin:
+            if _is_builtin_profile_name(new_name):
+                _show_validation_error(
+                    dialog,
+                    f"{new_name} is a built-in profile and cannot be overwritten.\n"
+                    "Save under a new name or an existing custom profile.",
+                )
+                continue
+            overwrite_name = next(
+                (p for p in profiles if p.lower() == new_name.lower()),
+                None,
+            )
+            if overwrite_name is not None:
+                confirm = Gtk.MessageDialog(
+                    transient_for=dialog,
+                    modal=True,
+                    message_type=Gtk.MessageType.QUESTION,
+                    buttons=Gtk.ButtonsType.YES_NO,
+                    text=f"Profile '{overwrite_name}' already exists.",
+                )
+                confirm.format_secondary_text("Overwrite it with these settings?")
+                response = confirm.run()
+                confirm.destroy()
+                if response != Gtk.ResponseType.YES:
+                    continue
+        elif not is_edit and any(p.lower() == new_name.lower() for p in profiles):
             _show_validation_error(dialog, f"A profile named {new_name} already exists.")
             continue
 
@@ -611,8 +662,10 @@ def show_profile_editor_dialog(app, name=None):
             "notes": notes,
         }
 
-        if is_edit:
+        if is_edit and not editing_builtin:
             profiles[name] = new_profile
+        elif overwrite_name is not None:
+            profiles[overwrite_name] = new_profile
         else:
             profiles[new_name] = new_profile
         save_workload_profiles(app.config, profiles)
@@ -641,13 +694,20 @@ def _show_validation_error(parent, message):
 def show_apply_profile_dialog(app, datasets, pool_has_special=False):
     """Show the Apply Profile dialog and return (response, profile_name, profile).
 
-    *pool_has_special* gates the small-files warning and is supplied by the
-    caller (True when the dataset's pool has a special allocation vdev).
+    The picker lists only profiles whose ``applies_to`` includes the first
+    dataset's ZFS type. *pool_has_special* gates the small-files warning and
+    is supplied by the caller (True when the dataset's pool has a special
+    allocation vdev).
     """
-    profiles = get_workload_profiles(app.config)
+    ds_type = datasets[0].get("type", "filesystem") if datasets else "filesystem"
+    profiles = {
+        name: profile
+        for name, profile in get_workload_profiles(app.config).items()
+        if ds_type in profile.get("applies_to", [])
+    }
     profile_names = list(profiles.keys())
     if not profile_names:
-        log_msg("WARN: No workload profiles configured")
+        log_msg(f"WARN: No workload profiles apply to {ds_type} datasets")
         return Gtk.ResponseType.CANCEL, None, None
 
     first_match = datasets[0].get("profile_match", "custom") if datasets else "custom"

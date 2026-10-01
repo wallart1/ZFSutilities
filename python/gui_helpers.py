@@ -2488,23 +2488,24 @@ class UIStateManager:
             lw["x"] = p_x
             lw["y"] = p_y
 
-        # Persist any additional registered pop-out windows.
+        # Persist any additional registered pop-out windows.  Hidden windows
+        # omit the geometry keys entirely: save_ui_state merges dicts, so
+        # writing explicit None values would wipe the last-saved geometry and
+        # the window would lose its remembered size and position across
+        # restarts.
         for state_key, window in self._popouts.items():
-            pw_state = {
-                "popped_out": window.get_visible(),
-                "width": None,
-                "height": None,
-                "x": None,
-                "y": None,
+            if not window.get_visible():
+                state[state_key] = {"popped_out": False}
+                continue
+            p_width, p_height = window.get_size()
+            p_x, p_y = window.get_position()
+            state[state_key] = {
+                "popped_out": True,
+                "width": p_width,
+                "height": p_height,
+                "x": p_x,
+                "y": p_y,
             }
-            if window.get_visible():
-                p_width, p_height = window.get_size()
-                p_x, p_y = window.get_position()
-                pw_state["width"] = p_width
-                pw_state["height"] = p_height
-                pw_state["x"] = p_x
-                pw_state["y"] = p_y
-            state[state_key] = pw_state
 
         # Persist TreeView column widths.  Skip TreeViews that are not yet
         # realized.  Save the user's intended width (fixed_width) rather than

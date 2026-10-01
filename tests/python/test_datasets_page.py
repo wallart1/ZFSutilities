@@ -990,14 +990,23 @@ class TestProfileActions(unittest.TestCase):
         )
         app._ds_apply_profile_btn.set_sensitive.assert_called_once_with(True)
 
-    def test_apply_profile_enabled_for_mixed_filesystem_and_volume(self):
+    def test_apply_profile_disabled_for_multi_select(self):
+        app = self._sensitivity_app(
+            [
+                {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+                {"type": "dataset", "name": "tank/b", "zfs_type": "filesystem", "mounted": True},
+            ]
+        )
+        app._ds_apply_profile_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_apply_profile_disabled_for_mixed_filesystem_and_volume(self):
         app = self._sensitivity_app(
             [
                 {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
                 {"type": "dataset", "name": "tank/vol0", "zfs_type": "volume", "mounted": "-"},
             ]
         )
-        app._ds_apply_profile_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_apply_profile_btn.set_sensitive.assert_called_once_with(False)
 
     def test_apply_profile_enabled_for_pool_root(self):
         app = self._sensitivity_app(
@@ -1053,12 +1062,8 @@ class TestProfileActions(unittest.TestCase):
         app.ctx.zfs_repository.pool_topology.return_value = None
         return app
 
-    def test_apply_profile_dialog_shown_once_with_all_tunable_datasets(self):
-        items = [
-            {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
-            {"type": "dataset", "name": "tank/b", "zfs_type": "filesystem", "mounted": True},
-            {"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": True},
-        ]
+    def test_apply_profile_dialog_shown_for_single_tunable_dataset(self):
+        items = [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True}]
         app = self._handler_app(items)
         profile = {"applies_to": ["filesystem"], "properties": {"compression": "zstd"}}
         with (
@@ -1071,11 +1076,28 @@ class TestProfileActions(unittest.TestCase):
             dp.on_datasets_apply_profile(app)
         dialog.assert_called_once()
         passed = dialog.call_args.args[1]
-        self.assertEqual([d["name"] for d in passed], ["tank/a", "tank/b"])
+        self.assertEqual([d["name"] for d in passed], ["tank/a"])
         for ds in passed:
             self.assertIn("profile_match", ds)
         apply.assert_called_once()
         self.assertEqual(apply.call_args.args, (app, passed, profile))
+
+    def test_apply_profile_multi_selection_warns_and_shows_no_dialog(self):
+        items = [
+            {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+            {"type": "dataset", "name": "tank/b", "zfs_type": "filesystem", "mounted": True},
+        ]
+        app = self._handler_app(items)
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "show_apply_profile_dialog") as dialog,
+            patch.object(dp, "on_apply_profile") as apply,
+        ):
+            with patch.object(dp, "log_msg") as log:
+                dp.on_datasets_apply_profile(app)
+        dialog.assert_not_called()
+        apply.assert_not_called()
+        self.assertTrue(any("single dataset" in str(c) for c in log.call_args_list))
 
     def test_apply_profile_dialog_cancel_runs_nothing(self):
         items = [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True}]

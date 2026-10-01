@@ -60,6 +60,18 @@ fuser() {
     return 1
 }
 
+_python3_args_file=""
+_python3_cwd_file=""
+_python3_rc=0
+
+# Records to files (not variables) because _refresh_static_site invokes
+# python3 inside a subshell.
+python3() {
+    [[ -n "$_python3_args_file" ]] && echo "$*" >> "$_python3_args_file"
+    [[ -n "$_python3_cwd_file" ]] && echo "$PWD" > "$_python3_cwd_file"
+    return "${_python3_rc}"
+}
+
 _get_server_cwd() {
     echo "$_mock_server_cwd"
 }
@@ -80,6 +92,9 @@ reset_mocks() {
     _mock_server_cwd=""
     _stop_server_called=""
     _start_server_called=""
+    _python3_args_file=""
+    _python3_cwd_file=""
+    _python3_rc=0
 }
 
 # =============================================================================
@@ -257,6 +272,46 @@ test_main_restart_flag_starts_when_not_running() {
     fi
 }
 
+test_refresh_static_site_runs_mkdocs_build() {
+    reset_mocks
+    local tmplog args_file cwd_file args cwd resolved_docs
+    tmplog=$(mktemp)
+    args_file=$(mktemp)
+    cwd_file=$(mktemp)
+    build_logfile="$tmplog"
+    _python3_args_file="$args_file"
+    _python3_cwd_file="$cwd_file"
+    resolved_docs=$(readlink -f "$docs_dir")
+    test_start "_refresh_static_site runs mkdocs build --clean in the docs directory"
+    if ! _refresh_static_site; then
+        test_fail "Expected rc 0 on successful build"
+    else
+        args=$(cat "$args_file")
+        cwd=$(readlink -f "$(cat "$cwd_file")")
+        if [[ "$args" == "-m mkdocs build --clean" && "$cwd" == "$resolved_docs" ]]; then
+            test_pass
+        else
+            test_fail "args='$args' cwd='$cwd'"
+        fi
+    fi
+    rm -f "$tmplog" "$args_file" "$cwd_file"
+}
+
+test_refresh_static_site_survives_build_failure() {
+    reset_mocks
+    local tmplog
+    tmplog=$(mktemp)
+    build_logfile="$tmplog"
+    _python3_rc=1
+    test_start "_refresh_static_site returns 0 when the build fails"
+    if _refresh_static_site; then
+        test_pass
+    else
+        test_fail "Expected rc 0 on build failure"
+    fi
+    rm -f "$tmplog"
+}
+
 # =============================================================================
 # Run
 # =============================================================================
@@ -274,5 +329,7 @@ test_main_leaves_correct_server
 test_main_starts_when_not_running
 test_main_restart_flag_stops_running_server
 test_main_restart_flag_starts_when_not_running
+test_refresh_static_site_runs_mkdocs_build
+test_refresh_static_site_survives_build_failure
 
 test_summary

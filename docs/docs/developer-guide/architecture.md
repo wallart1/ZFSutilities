@@ -38,7 +38,9 @@ read output variables like `fsarray` (the list of datasets built by
 directly (`calledbybash` returns true). It generates a filename like
 `YYYY-MM-DD_HH-MM-SS_cli_<scriptname>.log` in
 `/var/log/zfsutilities/sessions/` and exports it as
-`ZFSUTILITIES_LOG_FILE`. Bash `log_msg` appends to this file when the
+`ZFSUTILITIES_LOG_FILE` when the file can be created (a non-root user
+cannot write the root-owned session directory, so messages go to stderr
+only). Bash `log_msg` appends to this file when the
 variable is set.
 
 Both the GTK GUI (`BackupRunner`) and scheduled cron runs
@@ -139,6 +141,17 @@ bytes of the final run rather than an earlier one.
 
 The index is advisory: if it is missing or corrupt, the Logs tab falls back to
 scanning the log files directly and rebuilds the index.
+
+The index is persisted only when an entry actually changed: `update()` and
+`set_status()` compare the recomputed entry against a pre-update snapshot and
+leave the index clean when nothing differs. This matters because the index file
+lives in the sessions directory, which `create_logs_page()` watches with a
+`Gio.FileMonitor` so new session logs appear without a manual refresh. The
+monitor ignores events for hidden files (the index, its atomic-rename temp
+files, and lock files are all dotfiles), so the GUI's own index writes never
+trigger a rescan — without both safeguards the monitor/rescan/save cycle feeds
+back on itself and rewrites the index file continuously while the GUI sits
+idle.
 
 ## Core Components
 

@@ -413,9 +413,43 @@ class TestScrubQueue(unittest.TestCase):
         """Finished entries for pools that no longer exist must not inflate counts."""
         q = sm.ScrubQueue(target=1)
         q.finished.add("ghost")
-        q.tick({})
+        for _ in range(sm.MAX_POOL_MISSING_TICKS):
+            q.tick({})
         self.assertNotIn("ghost", q.finished)
         self.assertEqual(q.summary()["finished"], 0)
+
+    def test_tick_keeps_active_pool_through_transient_listing_gap(self):
+        """A single missed pool observation must not evict an active pool."""
+        q = sm.ScrubQueue(target=1)
+        scanning = {"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)}
+        q.tick(scanning)
+        self.assertIn("tank", q.active)
+        q.tick({})  # transient zpool-list failure in this tick
+        self.assertIn("tank", q.active)
+        q.tick(scanning)  # pool reappears; miss counter resets
+        self.assertIn("tank", q.active)
+        q.tick({})
+        q.tick({})
+        self.assertIn("tank", q.active)
+
+    def test_tick_drops_active_pool_after_consecutive_misses(self):
+        """A pool missing for enough consecutive ticks is dropped from active."""
+        q = sm.ScrubQueue(target=1)
+        scanning = {"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)}
+        q.tick(scanning)
+        self.assertIn("tank", q.active)
+        for _ in range(sm.MAX_POOL_MISSING_TICKS):
+            q.tick({})
+        self.assertNotIn("tank", q.active)
+
+    def test_tick_keeps_paused_pool_through_transient_listing_gap(self):
+        """A single missed pool observation must not evict a paused pool."""
+        q = sm.ScrubQueue(target=1)
+        q.paused.add("tank")
+        q.paused_by_user.add("tank")
+        q.tick({})
+        self.assertIn("tank", q.paused)
+        self.assertIn("tank", q.paused_by_user)
 
     def test_reload_picks_up_external_changes(self):
         """A long-lived instance must see state saved by another instance."""
@@ -558,6 +592,63 @@ class TestScrubQueue(unittest.TestCase):
         self.assertIn("tank", q.paused)
         self.assertIn("tank", q.paused_by_user)
         mock_resume.assert_not_called()
+
+    def _clobber_persisted_state(self):
+        """Simulate another process saving queue state that lost all buckets."""
+        feature_config.save_scrub_state(
+            {"pending": [], "active": [], "paused": [], "finished": [], "target": 1}
+        )
+
+    @staticmethod
+    def _external_scrub_reports(mock_log):
+        return [
+            call
+            for call in mock_log.call_args_list
+            if call.args and str(call.args[0]).find("External scrub detected on 'tank'") != -1
+        ]
+
+    def test_tick_external_scrub_logged_once(self):
+        """An external scrub is reported once at VERB, even if persisted state is lost."""
+        q = sm.ScrubQueue(target=1)
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)}
+        with patch.object(sm, "log_msg") as mock_log:
+            q.tick(states)
+            self._clobber_persisted_state()
+            q.reload()
+            q.tick(states)
+        reports = self._external_scrub_reports(mock_log)
+        self.assertEqual(len(reports), 1)
+        self.assertTrue(str(reports[0].args[0]).startswith("VERB:"))
+        self.assertIn("tank", q.active)
+
+    def test_tick_external_scrub_reported_again_after_new_episode(self):
+        """Once the external scrub ends, a new external scrub is reported again."""
+        q = sm.ScrubQueue(target=1)
+        scanning = {"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)}
+        finished = {"tank": sm.ScrubInfo(state=sm.ScrubState.FINISHED)}
+        with patch.object(sm, "log_msg") as mock_log:
+            q.tick(scanning)
+            self._clobber_persisted_state()
+            q.reload()
+            q.tick(finished)
+            self._clobber_persisted_state()
+            q.reload()
+            q.tick(scanning)
+        self.assertEqual(len(self._external_scrub_reports(mock_log)), 2)
+
+    def test_tick_pending_pool_external_start_logged_once(self):
+        """A pending pool externally started is reported once at VERB."""
+        q = sm.ScrubQueue(target=1)
+        q.add_pending(["tank"])
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)}
+        with patch.object(sm, "log_msg") as mock_log:
+            q.tick(states)
+            q.pending.add("tank")
+            q.tick(states)
+        reports = self._external_scrub_reports(mock_log)
+        self.assertEqual(len(reports), 1)
+        self.assertTrue(str(reports[0].args[0]).startswith("VERB:"))
+        self.assertIn("tank", q.active)
 
     def test_remove_pools(self):
         q = sm.ScrubQueue(target=1)

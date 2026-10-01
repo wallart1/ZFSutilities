@@ -56,6 +56,7 @@ done
 declare -A vm_map_vmid
 declare -A vm_map_name
 declare -A vm_map_key
+declare -A vm_map_scsihw
 declare -A host_dev
 declare -A host_bypath
 declare -A guest_dev
@@ -72,7 +73,7 @@ declare -A zfs_snap_clones
 #   two-node: <target_short>:<lun>
 #   single-node: <pool>:<zvol_vmid>:<zvol_disknum>
 build_vm_disk_map() {
-    local conf vmid name line key
+    local conf vmid name line key value
 
     for conf in "$pve_conf_dir"/*.conf; do
         [[ -f "$conf" ]] || continue
@@ -88,6 +89,15 @@ build_vm_disk_map() {
         while IFS= read -r line; do
             key="${line%%:*}"
             [[ "$key" == "$line" ]] && continue
+            # The SCSI hardware type decides how scsiN disks appear inside
+            # the guest (see _query_guest_disks); capture the first value.
+            if [[ "$key" == "scsihw" && -z "${vm_map_scsihw[$vmid]:-}" ]]; then
+                value="${line#*:}"
+                value="${value#"${value%%[![:space:]]*}"}"
+                [[ -n "$value" ]] && value="${value%$'\r'}"
+                [[ -n "$value" ]] && vm_map_scsihw["$vmid"]="$value"
+                continue
+            fi
             # Only Proxmox disk keys (bus name followed by digits).
             case "$key" in
                 scsi[0-9]*|ide[0-9]*|sata[0-9]*|virtio[0-9]*|efidisk[0-9]*) ;;
@@ -204,7 +214,8 @@ build_running_vm_set() {
 # One qemu-guest-agent round-trip per running VM: a single guest exec walks all
 # of that VM's scsi disks and reports the /dev/sdX and /dev/disk/by-path names
 # seen inside the guest.  Only SCSI disks are mapped reliably by their Proxmox
-# disk key (scsiN -> scsi-0:0:N:0 in the guest).
+# disk key; the guest SCSI address depends on the VM's scsihw type
+# (see _addr_pattern_for_scsihw).
 build_guest_device_map() {
     local disk_id vmid disk_key num
     declare -A vm_disks=()
@@ -224,6 +235,21 @@ build_guest_device_map() {
         # shellcheck disable=SC2086
         _query_guest_disks "$v" ${vm_disks[$v]}
     done
+}
+
+# The guest by-path encodes the SCSI address H:C:T:L.  With the default
+# multi-disk controllers (lsi, virtio-scsi) Proxmox scsiN is target N
+# (*scsi-0:0:N:0); with virtio-scsi-single every disk gets its own
+# controller and appears as target 0, lun N (*scsi-0:0:0:N) — observed in
+# the QEMU command line as channel=0,scsi-id=0,lun=N per disk.  The pattern
+# has no trailing wildcard, so -partN partition links never match.
+_addr_pattern_for_scsihw() {
+    local scsihw="$1"
+    if [[ "$scsihw" == "virtio-scsi-single" ]]; then
+        printf '%s' '*scsi-0:0:0:${n}'
+    else
+        printf '%s' '*scsi-0:0:${n}:0'
+    fi
 }
 
 # Proxmox/qemu-ga returns out-data base64-encoded. Decode it if possible; otherwise
@@ -276,16 +302,18 @@ _query_guest_disks() {
         nums+=("$num")
     done
 
-    # Proxmox scsiN maps to SCSI target/lun 0:0:N:0 inside a Linux guest.
     # The guest prints three lines per disk (scsi number, device, by-path)
     # with no spaces so the naive JSON field extraction survives.
     local num_list
     num_list=$(IFS=' '; printf '%s' "${nums[*]}")
 
+    local addr_pattern
+    addr_pattern=$(_addr_pattern_for_scsihw "${vm_map_scsihw[$vmid]:-}")
+
     local guest_cmd
     guest_cmd=$(printf '%s' \
         "for n in $num_list; do " \
-        "for l in /dev/disk/by-path/*scsi-0:0:\${n}:0; do " \
+        "for l in /dev/disk/by-path/${addr_pattern}; do " \
         "[ -L \"\$l\" ] || continue; " \
         "d=\$(readlink -f \"\$l\" 2>/dev/null); " \
         "[ -b \"\$d\" ] && printf '%s\\n%s\\n%s\\n' \"\$n\" \"\$d\" \"\$l\" && break; " \

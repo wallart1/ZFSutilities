@@ -534,8 +534,12 @@ data before destruction.
 sudo archive-vm <vmid>
 ```
 
-The script stops the VM, discovers any clone VMs that still depend on its
-zvol snapshots, and (if any exist) asks you to promote them first. It then
+The script verifies that the VM is stopped — if the VM is running, it
+reports that, tells you the VM must be stopped first, and terminates without
+making any changes. It then discovers any clone VMs that still depend on its
+zvol snapshots and, if any exist, reports the identity of the disks with
+dependent clones and asks whether you want the script to promote them
+(severing the clone dependencies). It then
 reads the Proxmox VM config to determine which disks are currently attached
 and archives only those referenced zvols. Any zvols that match the VM ID but
 are no longer referenced in the config are left behind with a warning, so you

@@ -182,12 +182,20 @@ diverging:
   the `finished` bucket, and `tick()` drops `finished` entries for pools that no
   longer exist, so the summary counts never double-count a pool.
 * Long-lived GUI/Dashboard instances call `ScrubQueue.reload()` (a locked
-  re-read of `scrub_state.json`) immediately before each `tick()`, so a headless
-  profile's pending/active changes are reflected instead of being overwritten by
-  a stale in-memory copy on the next save. The reload→tick→save sequence is not
-  transactional, so a save by the other process in that window can still be
-  overwritten; both sides reconcile against live `zpool status` on every tick,
-  so the queues converge on the next cycle.
+  re-read of `scrub_state.json`) immediately before each `tick()`, and the
+  headless scrub-profile loop does the same on every 10-second poll, so
+  pending/active changes made by another process are reflected instead of
+  being overwritten by a stale in-memory copy on the next save. The
+  reload→tick→save sequence is not transactional, so a save by the other
+  process in that window can still be overwritten; both sides reconcile
+  against live `zpool status` on every tick, so the queues converge on the
+  next cycle.
+* A pool that is absent from the live pool list (offline, exported, or a
+  transient `zpool list` failure in that process) is dropped from the
+  `active`/`paused`/`finished` buckets only after several consecutive ticks
+  (`MAX_POOL_MISSING_TICKS`), so a single missed observation cannot evict a
+  scrubbing pool from the persisted state and make another process re-detect
+  it as an external scrub on every refresh.
 
 ### 7. Headless `profile_runner.py` waits for profile and dataset locks
 

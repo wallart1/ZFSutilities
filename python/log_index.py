@@ -239,10 +239,16 @@ class LogIndex:
         """Return the entry for *path*, or None."""
         return self._data.get(_key(path))
 
-    def _set(self, path, entry):
-        """Store *entry* for *path* and mark the index dirty."""
-        self._data[_key(path)] = entry
-        self._dirty = True
+    def _set(self, path, entry, old=None):
+        """Store *entry* for *path*, marking the index dirty only on change.
+
+        *old* is the pre-update snapshot of the stored entry. Callers that
+        mutate an entry in place must pass it: without a snapshot the stored
+        value and *entry* are the same object and a change cannot be detected.
+        """
+        if entry != old:
+            self._data[_key(path)] = entry
+            self._dirty = True
 
     def remove(self, path):
         """Remove the entry for *path*."""
@@ -254,14 +260,18 @@ class LogIndex:
     def update(self, path):
         """Create or incrementally update the entry for *path*.
 
-        Returns the resulting entry.
+        Returns the resulting entry. The index is marked dirty only when the
+        entry actually changed, so rescanning unchanged files does not
+        rewrite the index file.
         """
         entry = self.get(path)
         if entry is None:
             entry = scan_file(path)
-        else:
-            entry = update_entry_incrementally(entry, path)
-        self._set(path, entry)
+            self._set(path, entry)
+            return entry
+        old = dict(entry)
+        entry = update_entry_incrementally(entry, path)
+        self._set(path, entry, old)
         return entry
 
     def set_status(self, path, status, duration=None, bytes_transferred=None):
@@ -273,12 +283,15 @@ class LogIndex:
         entry = self.get(path)
         if entry is None:
             entry = scan_file(path)
+            old = None
+        else:
+            old = dict(entry)
         entry["status"] = status
         if duration is not None:
             entry["duration"] = duration
         if bytes_transferred is not None:
             entry["bytes_transferred"] = bytes_transferred
-        self._set(path, entry)
+        self._set(path, entry, old)
 
     def remove_missing(self, existing_paths):
         """Remove entries whose files are no longer in *existing_paths*."""

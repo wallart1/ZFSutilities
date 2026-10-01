@@ -29,9 +29,14 @@ function bashinit {
         local session_log_dir="${ZFSUTILITIES_SESSION_LOG_DIR}"
         local logfile="${session_log_dir}/${ts}_cli_${script_name}.log"
         if mkdir -p "${session_log_dir}" 2>/dev/null; then
-            # Touch the file so it exists even if no messages are written
-            touch "${logfile}" 2>/dev/null || true
-            export ZFSUTILITIES_LOG_FILE="${logfile}"
+            # Touch the file so it exists even if no messages are written.
+            # Export the path only when the file is actually writable: as a
+            # non-root user the root-owned session dir makes the touch fail,
+            # and an exported but unwritable path would make every later
+            # log_msg append print a Permission-denied error.
+            if touch "${logfile}" 2>/dev/null; then
+                export ZFSUTILITIES_LOG_FILE="${logfile}"
+            fi
         fi
     fi
 
@@ -120,7 +125,10 @@ function log_msg {
     local caller_line="${BASH_LINENO[0]}"
     local long_prefix_str
     if [[ -n "$caller_file" ]]; then
-        long_prefix_str="$(realpath "$caller_file"):$caller_line:"
+        # Fall back to the raw caller path when realpath cannot resolve it
+        # (e.g. a relative script path after the script has cd'd elsewhere);
+        # an unresolvable prefix must never abort the caller under set -e.
+        long_prefix_str="$(realpath "$caller_file" 2>/dev/null || printf '%s' "$caller_file"):$caller_line:"
     else
         long_prefix_str="zfsutilities:"
     fi
@@ -167,7 +175,7 @@ function msg_prefix {
         local caller_line="${BASH_LINENO[0]}"
         local msgprefix
         if [[ -n "$caller_file" ]]; then
-            msgprefix="$(realpath "$caller_file"):$caller_line:"
+            msgprefix="$(realpath "$caller_file" 2>/dev/null || printf '%s' "$caller_file"):$caller_line:"
         else
             msgprefix="zfsutilities:"
         fi

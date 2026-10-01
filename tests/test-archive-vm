@@ -1,6 +1,7 @@
 #!/usr/bin/bash
 # shellcheck disable=SC1090,SC2034,SC2154
-# test-archive-vm — Unit tests for archive-vm snapshot and archive handling.
+# test-archive-vm — Unit tests for archive-vm: stopped-VM gate, dependent
+# clone reporting/promotion, and snapshot/archive handling.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
@@ -62,6 +63,8 @@ run_archive() {
     local vmid="$6"
     local stdin_input="${_mock_read_response:-}"
     local ssh_snap_exists="${_mock_ssh_snapshot_exists:-1}"
+    local vm_status_mock="${_mock_vm_status:-stopped}"
+    local clone_info_mock="${_mock_clone_info:-}"
 
     # Preserve the mocked date from the outer shell.
     local date_iso="$_mock_date_iso"
@@ -70,7 +73,14 @@ run_archive() {
 
     local capture_dir="$_mock_zfs_state_dir/capture"
     mkdir -p "$capture_dir"
-    rm -f "$capture_dir/snapshots" "$capture_dir/ssh"
+    rm -f "$capture_dir/snapshots" "$capture_dir/ssh" "$capture_dir/promotions"
+
+    local promote_stub="$capture_dir/promote-vm-clone-stub"
+    cat > "$promote_stub" << 'EOF'
+#!/usr/bin/bash
+echo "PROMOTE:$1" >> "$_capture_dir/promotions"
+EOF
+    chmod +x "$promote_stub"
 
     (
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
@@ -95,19 +105,14 @@ run_archive() {
         export _capture_dir="$capture_dir"
         export _mock_ssh_snapshot_exists="$ssh_snap_exists"
         export _mock_ssh_snapshot_error="${_mock_ssh_snapshot_error:-}"
+        export _mock_vm_status="$vm_status_mock"
+        export _mock_clone_info="$clone_info_mock"
+        export _mock_promote_stub="$promote_stub"
 
-        # Provide alternating ask_yn responses: yes for archive, no for removal.
-        _ask_yn_count=0
-        ask_yn() {
-            local rc
-            if [[ $_ask_yn_count -eq 0 ]]; then
-                rc=0
-            else
-                rc=1
-            fi
-            ((_ask_yn_count++))
-            return "$rc"
-        }
+        # Note: ask_yn cannot be mocked here — sourcing archive-vm re-runs
+        # bashinit (via ~/bashinit), which unconditionally redefines it.
+        # Interactive answers are driven through the subshell's stdin feed
+        # ($_mock_read_response) in prompt order.
 
         # Capture a copy of test-lib's zfs mock so we can wrap it.
         eval "_test_lib_zfs() $(declare -f zfs | tail -n +2)"
@@ -115,7 +120,22 @@ run_archive() {
             if [[ "$1" == "snapshot" ]]; then
                 echo "SNAP:$2" >> "$_capture_dir/snapshots"
             fi
+            # Dependent-clone discovery: feed canned name<TAB>origin rows.
+            if [[ "$*" == *"list -H -o name,origin"* ]]; then
+                [[ -n "${_mock_clone_info:-}" ]] && printf '%s\n' "$_mock_clone_info"
+                return 0
+            fi
             _test_lib_zfs "$@"
+        }
+
+        # Route promote-vm-clone to a stub that records its VMID argument.
+        eval "_test_lib_find_script() $(declare -f find_zfsutility_script | tail -n +2)"
+        find_zfsutility_script() {
+            if [[ "${1:-}" == "promote-vm-clone" ]]; then
+                echo "$_mock_promote_stub"
+                return 0
+            fi
+            _test_lib_find_script "$@"
         }
 
         # Capture ssh invocations and return canned storage-host answers.
@@ -182,7 +202,7 @@ run_archive() {
         }
 
         scp() { return 0; }
-        qm() { echo "status: stopped"; }
+        qm() { echo "status: ${_mock_vm_status:-stopped}"; }
 
         # Mock ZFS state for all configured zvols.
         _mock_zfs_fs_list=$(echo "$_mock_zvols_list" | tr ' ' '\n')
@@ -218,6 +238,7 @@ EOF
 
     cat "$capture_dir/snapshots" 2>/dev/null || true
     cat "$capture_dir/ssh" 2>/dev/null || true
+    cat "$capture_dir/promotions" 2>/dev/null || true
     return $rc
 }
 
@@ -227,6 +248,7 @@ EOF
 
 reset_mocks() {
     unset _mock_read_response _mock_ssh_snapshot_exists _mock_ssh_snapshot_error
+    unset _mock_vm_status _mock_clone_info _mock_zvols_list
 }
 
 test_single_node_uses_existing_snapshot() {
@@ -574,6 +596,159 @@ n"
     test_pass
 }
 
+test_running_vm_aborts_before_archive() {
+    reset_mocks
+    test_start "Running VM: script reports it, instructs stop, and terminates"
+
+    local vmid="230"
+    local pve_dir="$_mock_zfs_state_dir/pve10"
+    local archive="$_mock_zfs_state_dir/archive10"
+    local mount="$_mock_zfs_state_dir/mount10"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_vm_status="running"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected non-zero exit code; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"is not stopped (status: running)"* ]]; then
+        test_fail "Running-VM report missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"must be stopped before it can be archived"* ]]; then
+        test_fail "Stop instruction missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Snapshot to archive"* || "$out" == *"SNAP:"* ]]; then
+        test_fail "Archive proceeded despite running VM; output:\n$out"
+        return
+    fi
+    local sidecar="${mount}/threeamigos/proxmox/vm-${vmid}-disk-0.original_volblocksize"
+    if [[ -f "$sidecar" ]]; then
+        test_fail "Sidecar written despite running VM"
+        return
+    fi
+
+    test_pass
+}
+
+test_reports_disks_with_dependent_clones() {
+    reset_mocks
+    test_start "Dependent clones: source disks reported, script promotion offered"
+
+    local vmid="231"
+    local pve_dir="$_mock_zfs_state_dir/pve11"
+    local archive="$_mock_zfs_state_dir/archive11"
+    local mount="$_mock_zfs_state_dir/mount11"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    local src_disk="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_clone_info="$(printf 'threeamigos/proxmox/vm-310-disk-0\t%s@clone-2026-07-30T12:00-0400-c\nthreeamigos/proxmox/vm-315-disk-0\t%s@clone-2026-08-01T09:15-0400-c' \
+        "$src_disk" "$src_disk")"
+    # stdin answers in prompt order: promote clones=n, archive base path,
+    # proceed with archive=y, remove VM=n.
+    _mock_read_response="n
+${archive}
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Found disks with dependent clones:"* ]]; then
+        test_fail "Dependent-clone report header missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Disk ${src_disk}:"* ]]; then
+        test_fail "Source disk identity missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"clone VM 310: threeamigos/proxmox/vm-310-disk-0"* ]]; then
+        test_fail "Clone VM 310 entry missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"clone VM 315: threeamigos/proxmox/vm-315-disk-0"* ]]; then
+        test_fail "Clone VM 315 entry missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"origin: ${src_disk}@clone-2026-07-30T12:00-0400-c"* ]]; then
+        test_fail "Clone origin missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"VM removal may fail while snapshots are held by clones"* ]]; then
+        test_fail "Skip-promotion warning missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"PROMOTE:"* ]]; then
+        test_fail "Promotion ran despite declining; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_promotes_clones_when_confirmed() {
+    reset_mocks
+    test_start "Dependent clones: confirmed promotion runs promote-vm-clone per clone VM"
+
+    local vmid="232"
+    local pve_dir="$_mock_zfs_state_dir/pve12"
+    local archive="$_mock_zfs_state_dir/archive12"
+    local mount="$_mock_zfs_state_dir/mount12"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    local src_disk="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_clone_info="$(printf 'threeamigos/proxmox/vm-310-disk-0\t%s@clone-2026-07-30T12:00-0400-c' "$src_disk")"
+    # stdin answers in prompt order: promote clones=y, archive base path,
+    # proceed with archive=y, remove VM=n.
+    _mock_read_response="y
+${archive}
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"PROMOTE:310"* ]]; then
+        test_fail "promote-vm-clone not invoked for clone VM 310; output:\n$out"
+        return
+    fi
+    local promote_count
+    promote_count=$(printf '%s\n' "$out" | grep -c '^PROMOTE:')
+    if [[ "$promote_count" -ne 1 ]]; then
+        test_fail "Expected exactly one promotion, got ${promote_count}; output:\n$out"
+        return
+    fi
+    local _wrap_rhs="Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"
+    if [[ "$out" != *"$_wrap_rhs"* ]]; then
+        test_fail "Archive did not proceed after promotion; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -587,5 +762,8 @@ test_single_node_archives_only_referenced_disks
 test_single_node_warns_on_orphaned_zvol
 test_two_node_prompt_mentions_storage_host
 test_no_error_message_level
+test_running_vm_aborts_before_archive
+test_reports_disks_with_dependent_clones
+test_promotes_clones_when_confirmed
 
 test_summary

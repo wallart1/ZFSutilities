@@ -1100,8 +1100,8 @@ explanation instead of silently switching to another pool.
 
 ### Workload profiles
 
-Dataset tuning lives on the [Datasets](#datasets-tab) tab: select one or
-more datasets there and use **Apply Profile…** to change live properties
+Dataset tuning lives on the [Datasets](#datasets-tab) tab: select a dataset
+there and use **Apply Profile…** to change live properties
 with `zfs set`, **Rewrite Data** to restripe existing blocks in place, and
 **Advanced: Manage Profiles…** to maintain the profiles themselves. Profiles
 hold dataset-scope properties (recordsize, compression, atime, logbias,
@@ -1109,6 +1109,12 @@ sync, primarycache, special_small_blocks, and the creation-only
 volblocksize). The pool's blocksize (ashift) is pool-scope and cannot be
 changed on a live pool — it is recorded in a profile for information only;
 use Migrate Pool to rewrite a pool with a different blocksize.
+
+Built-in (seeded) profiles can be opened for editing as a starting point,
+but they cannot be overwritten: saving from a built-in requires a new
+profile name, or an existing custom profile to overwrite (after the same
+confirmation the Save Profile to Schedule actions use). Built-in profiles
+cannot be deleted; Reset to Defaults restores them.
 
 ### Actions
 
@@ -1383,11 +1389,11 @@ based on what is selected.
 | **Add Hold**                   | At least one snapshot selected                                                                                                        | Prompts for a tag (default `keep`) and applies it to each selected snapshot                                                                                                                                                                                                                                                                                                                                                                      |
 | **Rollback**                   | Exactly one snapshot selected                                                                                                         | Rolls the dataset back to that snapshot (destroys newer snapshots and data updates)                                                                                                                                                                                                                                                                                                                                                              |
 | **Browse**                     | Exactly one mounted filesystem, snapshot, or volume partition selected                                                                | Opens the selected item in the default file manager. Filesystems (including pool root datasets) open at their ZFS mountpoint; snapshots open via `.zfs/snapshot/<name>`; volume partitions open at their loop-mount directory.                                                                                                                                                                                                                   |
-| **Mount**                      | One or more mountable filesystems, snapshots, or volumes selected                                                                     | Mounts each selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for each selected snapshot. Unmounted ancestor datasets are mounted first so the target's mountpoint is not hidden. A selected volume is attached to a read-only loop device and its partitions are listed under the volume's entry (see below). Partitions labeled `No filesystem` cannot be mounted. Disabled for holds.                                         |
+| **Mount**                      | One or more mountable filesystems, snapshots, or volumes selected                                                                     | Mounts each selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for each selected snapshot. Unmounted ancestor datasets are mounted first so the target's mountpoint is not hidden. Ancestors with `canmount=off` are skipped — they cannot be mounted, and ZFS creates their mountpoint directory automatically when the target mounts. A selected volume is attached to a read-only loop device and its partitions are listed under the volume's entry (see below). Partitions labeled `No filesystem` cannot be mounted. Disabled for holds.                                         |
 | **Unmount**                    | One or more mounted filesystems, snapshots, volume partitions, or loop-attached volumes selected                                      | Unmounts each selected filesystem (`sudo zfs unmount`) or snapshot (`sudo umount` on its `.zfs/snapshot/<name>` path). Pool root datasets can be unmounted. Unmounting a filesystem also unmounts its mounted children (see the note below). Unmounting a volume detaches its loop device after unmounting its mounted partitions. If processes are still using an item, a warning dialog lists them and asks you to close them before retrying. |
-| **Apply Profile…**             | Every selected item is a pool/dataset row (filesystem or volume); snapshots, holds, and volume partitions in the selection disable it | Shows the workload-profile picker **once** and applies the chosen profile equally to every selected dataset. A preview lists the exact `zfs set` commands; profiles that may be unsafe (e.g. `sync=disabled`) require explicit confirmation. Applying to a pool root sets pool-wide inheritance defaults. See [Workload profiles](#workload-profiles).                                                                                           |
+| **Apply Profile…**             | Exactly one pool/dataset row (filesystem or volume) selected; snapshots, holds, volume partitions, and multi-selections disable it | Shows the workload-profile picker for the selected dataset; the list contains only the profiles whose *applies to* includes the dataset's type (filesystem or volume). A preview lists the exact `zfs set` commands; profiles that may be unsafe (e.g. `sync=disabled`) require explicit confirmation. Applying to a pool root sets pool-wide inheritance defaults. See [Workload profiles](#workload-profiles).          |
 | **Rewrite Data**               | Every selected item is a filesystem dataset, and OpenZFS 2.3.4+/2.4+ with the pool's `physical_rewrite` feature                       | Runs `zfs rewrite -P -r -x -v <mountpoint>` on each selected dataset in turn, physically rewriting existing blocks so they match the current properties (see [Workload profiles](#workload-profiles)). Volumes cannot be rewritten. Unmounted datasets are mounted temporarily and returned to their prior state. This may take a long time and cannot be undone.                                                                                |
-| **Advanced: Manage Profiles…** | Always                                                                                                                                | Opens the workload profile manager: add, edit, delete, or reset profiles (built-in profiles are immutable). See [Workload profiles](#workload-profiles).                                                                                                                                                                                                                                                                                         |
+| **Advanced: Manage Profiles…** | Always                                                                                                                                | Opens the workload profile manager: add, edit, delete, or reset profiles. Built-in profiles can be opened for editing as a starting point but cannot be overwritten — saving requires a new profile name or an existing custom profile (with an overwrite confirmation); they also cannot be deleted. See [Workload profiles](#workload-profiles).                                                                                                        |
 | **Refresh**                    | Always                                                                                                                                | Re-reads all datasets, snapshots, and holds while preserving the tree's vertical scroll position and current selection whenever possible.                                                                                                                                                                                                                                                                                                        |
 | **Expand Selected**            | One or more pool/dataset/snapshot rows selected                                                                                       | Recursively expands each selected row and its descendants.                                                                                                                                                                                                                                                                                                                                                                                       |
 | **Collapse All**               | Always                                                                                                                                | Collapses the entire tree                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -1406,14 +1412,26 @@ Right-click any cell for a context menu:
   checking property values that are not shown in the tree columns.
 
 !!! note "Unmounting a parent dataset cascades to its children"
-    Unmounting a filesystem also unmounts any of its mounted children. For
-    example, unmounting `zfstest3/zfstest2` also unmounts
+    Unmounting a filesystem also unmounts any of its mounted children, deepest
+    first. For example, unmounting `zfstest3/zfstest2` also unmounts
     `zfstest3/zfstest2/zfstest1`. This is inherent ZFS/Linux behavior, not a
     GUI limitation: a child's mount always lives underneath its parent's
     mountpoint, so a parent cannot be unmounted while a child is still mounted
     beneath it. The plain `zfs unmount` command behaves the same way. If you
     want only one dataset unmounted, unmount the child (leaf) dataset and
     leave its parents mounted.
+
+!!! note "Orphaned mounts (dataset shows mounted but its path is missing)"
+    If a dataset is listed as mounted but its mountpoint directory cannot be
+    reached (for example after a parent was lazily unmounted), `zfs unmount`
+    fails with the misleading `no such pool or dataset` error. When the GUI
+    hits this during **Unmount**, it first tries to recover automatically: it
+    remounts the unmounted parent dataset(s) and retries the unmount. If the
+    recovery fails, a warning explains the situation — remount the parent
+    dataset(s) and retry; if that also fails, the mount is detached from the
+    namespace and a reboot is required. Never try to `mkdir` the missing
+    mountpoint: that creates a new directory that the real mount is not
+    attached to and only masks the problem.
 
 ### Mounting ZFS volumes (zvols)
 
@@ -1770,7 +1788,8 @@ Right-click any row to open a context menu:
 
 - **Pop Out** — a button in the search bar detaches the entire viewer into an independent window. While popped out,
   the Log Viewer pane is removed from the Logs tab; it is restored when the
-  pop-out window is closed or docked again.
+  pop-out window is closed or docked again. The pop-out window's size and
+  position are remembered across GUI restarts.
 
 - **Search bar** — above the text view:
   

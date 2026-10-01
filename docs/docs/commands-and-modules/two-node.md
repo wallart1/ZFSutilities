@@ -529,8 +529,11 @@ sudo list-vm-disks [--with-devices]
 3. For each running VM, issue a single `qm guest exec` that walks all of that
    VM's scsi disks and lists the guest's `/dev/disk/by-path` entries and the
    resolved `/dev/sdX` targets, so a VM with N scsi disks costs one guest
-   round-trip instead of N.  SCSI disks are matched by disk key (`scsiN` →
-   `*scsi-0:0:N:0` inside the guest).
+   round-trip instead of N.  SCSI disks are matched by disk key, using the
+   VM's `scsihw` type to translate `scsiN` into the guest SCSI address:
+   `scsiN` → `*scsi-0:0:N:0` (target N) with the default multi-disk
+   controllers (`lsi`, `virtio-scsi`), and `scsiN` → `*scsi-0:0:0:N`
+   (target 0, lun N — one controller per disk) with `virtio-scsi-single`.
 4. In single-node mode, enumerate local pools and their `vm-*` zvols directly
    and merge with the VM/guest maps.
 5. In two-node mode, gather LUN/zvol metadata from the storage host and merge

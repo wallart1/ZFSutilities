@@ -208,17 +208,18 @@ def _on_logs_popout_toggled(button, app, viewer_box, viewer_frame, outer):
         # Remove the entire viewer pane from the Logs tab and host it in the
         # pop-out window.  viewer_box must be explicitly removed from its
         # frame before it can be reparented into the pop-out window.
-        # Apply saved geometry before showing so the window manager honours
-        # the requested position.
+        # Apply saved geometry after the window is shown so the window
+        # manager honours the requested size and position, matching the
+        # info-panel pop-out in gui_helpers.
         outer.remove(viewer_frame)
         viewer_frame.remove(viewer_box)
         app.logs_popout_window.box.pack_start(viewer_box, True, True, 0)
+        app.logs_popout_window.show_all()
         state = get_ui_state(app.config).get("logs_log_window", {})
         if state.get("width") and state.get("height"):
             app.logs_popout_window.resize(state["width"], state["height"])
         if state.get("x") is not None and state.get("y") is not None:
             app.logs_popout_window.move(state["x"], state["y"])
-        app.logs_popout_window.show_all()
     else:
         # Persist geometry before reparenting/hiding.
         if hasattr(app, "_ui_state") and app._ui_state is not None:
@@ -532,6 +533,13 @@ def _on_dir_changed(_monitor, _file_obj, _other_file, event_type, app):
         Gio.FileMonitorEvent.CHANGES_DONE_HINT,
     ):
         return
+    # The log index and its atomic-rename temp files also live in this
+    # directory; reacting to our own index writes would retrigger the
+    # rescan continuously. Session logs never start with ".".
+    if _file_obj is not None:
+        basename = _file_obj.get_basename()
+        if basename and basename.startswith("."):
+            return
     if app._logs_sync_debounce_id is not None:
         GLib.source_remove(app._logs_sync_debounce_id)
     app._logs_sync_debounce_id = GLib.timeout_add(500, _do_sync_log_list, app)
@@ -597,12 +605,13 @@ def _tail_log_file(app):
             if index is not None:
                 entry = index.get(path)
                 if entry is None:
-                    entry = index.update(path)
+                    index.update(path)
                 else:
                     from log_index import update_entry_incrementally
 
+                    old = dict(entry)
                     update_entry_incrementally(entry, path)
-                    index._set(path, entry)
+                    index._set(path, entry, old)
                 index.save()
 
             filtered = _filter_log_text(text, app.logs_viewer_level)

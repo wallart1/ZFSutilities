@@ -490,7 +490,7 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
         ]
         if active_sr:
             log_msg(
-                f"INFO: Prune step restricted to the {len(active_sr)} send/receive "
+                f"VERB: Prune step restricted to the {len(active_sr)} send/receive "
                 "step(s)' source and destination datasets (derived at prune time)."
             )
             steps.append(
@@ -700,6 +700,10 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
 
     while True:
         states = get_all_pool_scrub_states()
+        # Long-lived queue instances reload before each tick (same as the GUI
+        # Pools tab / Dashboard) so changes made by another process are
+        # reflected instead of being overwritten by a stale in-memory copy.
+        queue.reload()
         queue.tick(states)
         summary = queue.summary()
         if summary != last_summary:

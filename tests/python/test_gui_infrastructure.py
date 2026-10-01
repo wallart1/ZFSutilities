@@ -2188,7 +2188,40 @@ class TestUIStateManagerPopouts(unittest.TestCase):
             args = mock_save.call_args[0][1]
             self.assertIn("logs_log_window", args)
             self.assertFalse(args["logs_log_window"]["popped_out"])
-            self.assertIsNone(args["logs_log_window"]["width"])
+            # Geometry keys must be omitted entirely: save_ui_state merges
+            # dicts, so explicit None values would wipe previously saved
+            # geometry and the pop-out would lose its remembered size and
+            # position across restarts.
+            for key in ("width", "height", "x", "y"):
+                self.assertNotIn(key, args["logs_log_window"])
+
+    @patch("backup_config.save_ui_state")
+    def test_do_save_hidden_popout_preserves_saved_geometry_via_merge(self, mock_save):
+        with mock_gtk():
+            import gui_helpers
+
+            win = MagicMock()
+            win.get_window.return_value = None
+            win.get_size.return_value = (100, 100)
+            win.get_position.return_value = (0, 0)
+            win.vpaned.get_position.return_value = 0
+            win.popout_window = None
+            saved_geometry = {"width": 800, "height": 600, "x": 100, "y": 200}
+            config = {"ui_state": {"logs_log_window": dict(saved_geometry)}}
+            mgr = gui_helpers.UIStateManager(win, config)
+
+            popout = MagicMock()
+            popout.get_visible.return_value = False
+            mgr._popouts["logs_log_window"] = popout
+
+            mgr._do_save()
+
+            # The update dict carries only popped_out, so save_ui_state's
+            # merge keeps the geometry already stored in the config.
+            args = mock_save.call_args[0][1]
+            self.assertEqual(args["logs_log_window"], {"popped_out": False})
+            for key, val in saved_geometry.items():
+                self.assertEqual(config["ui_state"]["logs_log_window"][key], val)
 
     @patch("backup_config.save_ui_state")
     def test_do_save_keeps_distinct_state_per_popout(self, mock_save):

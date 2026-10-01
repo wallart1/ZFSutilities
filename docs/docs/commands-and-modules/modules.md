@@ -104,8 +104,8 @@ rootcheck
 **Internal flow:**
 
 1. `bashinit` derives `$mydir` from `BASH_SOURCE[1]` only when it is not already set.
-2. If the script is executed directly and log inheritance is not enabled, it creates a timestamped log file under `$ZFSUTILITIES_LOG_DIR` and exports `$ZFSUTILITIES_LOG_FILE`.
-3. `log_msg` builds a `realpath(file):line:` prefix, writes the message to stderr (with color when connected to a terminal), and appends a timestamped copy to the session log when one is owned by the process.
+2. If the script is executed directly and log inheritance is not enabled, it creates a timestamped log file under `$ZFSUTILITIES_LOG_DIR` and exports `$ZFSUTILITIES_LOG_FILE` when the file is writable (otherwise messages go to stderr only).
+3. `log_msg` builds a `realpath(file):line:` prefix (falling back to the raw caller path when `realpath` cannot resolve it, e.g. a relative script path after a `cd`), writes the message to stderr (with color when connected to a terminal), and appends a timestamped copy to the session log when one is owned by the process.
 4. `ask_yn` loops until the user enters `y`, `yes`, `n`, or `no`. An optional second argument sets the default answer used when the user presses Enter (`N` if omitted).
 5. `warn` is a thin wrapper around `log_msg` that prefixes the message with `WARN:`.
 6. `die` logs `FATAL:` and sources `bashfatal` to terminate with exit code `1`.

@@ -424,6 +424,119 @@ class TestLogIndex(unittest.TestCase):
                 self.assertTrue(os.path.exists(file_locking.LOG_INDEX_LOCK_PATH))
 
 
+class TestLogIndexDirtyTracking(unittest.TestCase):
+    """The index must only be marked dirty when entry data actually changes.
+
+    This prevents the idle GUI from rewriting the index file on every
+    directory-monitor rescan (the index lives in the monitored directory).
+    """
+
+    def setUp(self):
+        self._orig_lock = file_locking.LOG_INDEX_LOCK_PATH
+        self._lock_tmp = tempfile.TemporaryDirectory()
+        file_locking.LOG_INDEX_LOCK_PATH = os.path.join(self._lock_tmp.name, ".log_index.lock")
+
+    def tearDown(self):
+        file_locking.LOG_INDEX_LOCK_PATH = self._orig_lock
+        self._lock_tmp.cleanup()
+
+    def _write_finished_log(self, tmpdir):
+        path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_x.log")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(
+                "2026-06-22 07:00:00  /a:1: WARN: host down\n"
+                "# END: rc=0, duration=5.0s, bytes=1024\n"
+            )
+        # Old mtime so scan_file reports a stable finished status.
+        os.utime(path, (time.time() - 60, time.time() - 60))
+        return path
+
+    def test_update_unchanged_log_leaves_index_clean(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write_finished_log(tmpdir)
+            with patch("log_index.SESSION_LOG_DIR", tmpdir):
+                index = li.LogIndex.load()
+                index.update(path)
+                self.assertTrue(index._dirty)
+                index.save()
+                self.assertFalse(index._dirty)
+
+                index.update(path)
+                self.assertFalse(index._dirty)
+
+    def test_update_after_append_marks_dirty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write_finished_log(tmpdir)
+            with patch("log_index.SESSION_LOG_DIR", tmpdir):
+                index = li.LogIndex.load()
+                index.update(path)
+                index.save()
+                self.assertFalse(index._dirty)
+
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write("# END: rc=0, duration=9.0s\n")
+                index.update(path)
+
+        self.assertTrue(index._dirty)
+
+    def test_set_status_with_identical_values_is_noop(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write_finished_log(tmpdir)
+            with patch("log_index.SESSION_LOG_DIR", tmpdir):
+                index = li.LogIndex.load()
+                index.update(path)
+                index.save()
+                self.assertFalse(index._dirty)
+
+                entry = index.get(path)
+                index.set_status(
+                    path,
+                    status=entry["status"],
+                    duration=entry["duration"],
+                    bytes_transferred=entry["bytes_transferred"],
+                )
+
+        self.assertFalse(index._dirty)
+
+    def test_set_status_with_changed_values_marks_dirty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._write_finished_log(tmpdir)
+            with patch("log_index.SESSION_LOG_DIR", tmpdir):
+                index = li.LogIndex.load()
+                index.update(path)
+                index.save()
+                self.assertFalse(index._dirty)
+
+                index.set_status(path, status="Failed", duration=9.0)
+
+        self.assertTrue(index._dirty)
+
+    def test_rescan_cycle_does_not_rewrite_index_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path1 = self._write_finished_log(tmpdir)
+            path2 = os.path.join(tmpdir, "2026-06-22_08-00-00_offsite_gui.log")
+            with open(path2, "w", encoding="utf-8") as fh:
+                fh.write("2026-06-22 08:00:00  /a:1: INFO: ok\n# END: rc=0, duration=2.0s\n")
+            os.utime(path2, (time.time() - 60, time.time() - 60))
+
+            with patch("log_index.SESSION_LOG_DIR", tmpdir):
+                index = li.LogIndex.load()
+                for path in (path1, path2):
+                    index.update(path)
+                index.save()
+                index_path = os.path.join(tmpdir, ".log_index.json")
+                before = os.stat(index_path)
+
+                # A full no-op rescan cycle, as the Logs tab performs it.
+                for path in (path1, path2):
+                    index.update(path)
+                index.remove_missing([path1, path2])
+                index.save()
+                after = os.stat(index_path)
+
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+
+
 class TestParseLines(unittest.TestCase):
     def test_empty_text_returns_no_lines(self):
         lines, consumed = li._parse_lines("")

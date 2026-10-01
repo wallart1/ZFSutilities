@@ -483,12 +483,17 @@ and a concurrency target to `/var/lib/zfsutilities/scrub_state.json`. The
 buckets are kept disjoint: a pool appears in at most one of
 pending/active/paused/finished (`add_pending()` removes a re-queued pool from
 `finished`, and `tick()` drops `finished` entries for pools that no longer
-exist). `tick()` also heals stale `paused_by_user` entries (pools in
+exist). A pool absent from the live pool list (offline, exported, or a
+transient `zpool list` failure in that process) is dropped from the
+`active`/`paused`/`finished` buckets only after `MAX_POOL_MISSING_TICKS` (3)
+consecutive ticks, so a single missed observation cannot evict a scrubbing
+pool from the persisted state. `tick()` also heals stale `paused_by_user` entries (pools in
 `paused_by_user` must still be in `paused`). A queued pool whose scrub fails to
 start or resume is retried a few times and then dropped to the in-memory
 `given_up` set after `MAX_SCRUB_START_FAILURES` (3) consecutive failures, so a
 profile cannot spin forever on a pool that refuses to start. Long-lived
-instances (GUI Pools tab, Dashboard) call `reload()` before each `tick()` to
+instances (GUI Pools tab, Dashboard, and the headless scrub-profile polling
+loop) call `reload()` before each `tick()` to
 pick up changes written by other processes, such as a headless scrub profile.
 
 ## iSCSI expected-backstores manifest

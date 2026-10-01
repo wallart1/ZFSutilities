@@ -96,6 +96,7 @@ targetcli() {
 # guest exec calls are counted in a state file because the product invokes qm
 # through command substitution (subshells would lose a plain variable counter).
 _qm_guest_exec_log="$_mock_zfs_state_dir/qm_guest_execs"
+_qm_guest_cmd_log="$_mock_zfs_state_dir/qm_guest_cmds"
 _qm_guest_output=""
 _qm_exec_returns_status=false
 _qm_exec_status_exited="true"
@@ -110,6 +111,9 @@ qm() {
         guest)
             if [[ "$subcmd" == "exec" ]]; then
                 printf '%s\n' "$vmid" >> "$_qm_guest_exec_log"
+                # $7 is the sh -c command string; record it so tests can
+                # assert which guest by-path glob was requested.
+                printf '%s\n' "$7" >> "$_qm_guest_cmd_log"
                 if [[ "$_qm_exec_returns_status" == true ]]; then
                     printf '{"exited": %s, "exitcode": 0, "out-data": "%s"}\n' \
                         "$_qm_exec_status_exited" "$_qm_guest_output"
@@ -164,9 +168,11 @@ reset_mocks() {
     _qm_exec_returns_status=false
     _qm_exec_status_exited="true"
     : > "$_qm_guest_exec_log"
+    : > "$_qm_guest_cmd_log"
     vm_map_vmid=()
     vm_map_name=()
     vm_map_key=()
+    vm_map_scsihw=()
     host_dev=()
     host_bypath=()
     guest_dev=()
@@ -599,6 +605,114 @@ EOF
     fi
 }
 
+test_addr_pattern_for_scsihw() {
+    test_start "_addr_pattern_for_scsihw maps scsihw to the guest glob"
+    reset_mocks
+
+    local ok=1
+    [[ "$(_addr_pattern_for_scsihw virtio-scsi-single)" == '*scsi-0:0:0:${n}' ]] || ok=0
+    [[ "$(_addr_pattern_for_scsihw virtio-scsi)" == '*scsi-0:0:${n}:0' ]] || ok=0
+    [[ "$(_addr_pattern_for_scsihw lsi)" == '*scsi-0:0:${n}:0' ]] || ok=0
+    [[ "$(_addr_pattern_for_scsihw "")" == '*scsi-0:0:${n}:0' ]] || ok=0
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Unexpected addr pattern for virtio-scsi-single"
+    fi
+}
+
+test_build_vm_disk_map_scsihw() {
+    test_start "build_vm_disk_map captures scsihw per VM"
+    reset_mocks
+    rm -f "$pve_dir"/*.conf
+    cat > "$pve_dir/100.conf" << 'EOF'
+name: single-hw
+scsihw: virtio-scsi-single
+scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0,format=raw,size=50G
+EOF
+    cat > "$pve_dir/200.conf" << 'EOF'
+name: default-hw
+scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-1,format=raw,size=50G
+EOF
+
+    build_vm_disk_map
+
+    local ok=1
+    [[ "${vm_map_scsihw[100]}" == "virtio-scsi-single" ]] || ok=0
+    [[ -z "${vm_map_scsihw[200]:-}" ]] || ok=0
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "scsihw map contents: $(declare -p vm_map_scsihw)"
+    fi
+}
+
+test_build_guest_device_map_virtio_scsi_single() {
+    test_start "build_guest_device_map maps all disks with virtio-scsi-single"
+    reset_mocks
+    rm -f "$pve_dir"/*.conf
+    cat > "$pve_dir/100.conf" << 'EOF'
+name: multidisk-single
+scsihw: virtio-scsi-single
+scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0,format=raw,size=50G
+scsi1: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-1,format=raw,size=50G
+EOF
+    # virtio-scsi-single presents disk N as target 0, lun N on its own
+    # controller, so the guest by-paths are scsi-0:0:0:N.
+    _qm_guest_output='0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n1\n/dev/sdb\n/dev/disk/by-path/pci-0000:00:11.0-scsi-0:0:0:1'
+
+    build_vm_disk_map
+    build_running_vm_set
+    build_guest_device_map
+
+    local cmd_log=""
+    [[ -f "$_qm_guest_cmd_log" ]] && cmd_log=$(cat "$_qm_guest_cmd_log")
+
+    local ok=1
+    [[ "${guest_dev[threeamigos:0]}" == "/dev/sda" ]] || ok=0
+    [[ "${guest_dev[threeamigos:1]}" == "/dev/sdb" ]] || ok=0
+    # The single-mode glob puts the disk number in the LUN position.
+    [[ "$cmd_log" == *'scsi-0:0:0:${n}'* ]] || ok=0
+    [[ "$cmd_log" != *'scsi-0:0:${n}:0'* ]] || ok=0
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Guest map: $(declare -p guest_dev) cmd: $cmd_log"
+    fi
+}
+
+test_build_guest_device_map_default_glob_for_scsi1() {
+    test_start "build_guest_device_map keeps 0:0:N:0 glob without virtio-scsi-single"
+    reset_mocks
+    rm -f "$pve_dir"/*.conf
+    cat > "$pve_dir/100.conf" << 'EOF'
+name: multidisk-default
+scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0,format=raw,size=50G
+scsi1: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-1,format=raw,size=50G
+EOF
+    _qm_guest_output='0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n1\n/dev/sdb\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:1:0'
+
+    build_vm_disk_map
+    build_running_vm_set
+    build_guest_device_map
+
+    local cmd_log=""
+    [[ -f "$_qm_guest_cmd_log" ]] && cmd_log=$(cat "$_qm_guest_cmd_log")
+
+    local ok=1
+    [[ "${guest_dev[threeamigos:1]}" == "/dev/sdb" ]] || ok=0
+    [[ "$cmd_log" == *'scsi-0:0:${n}:0'* ]] || ok=0
+
+    if [[ $ok -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Guest map: $(declare -p guest_dev) cmd: $cmd_log"
+    fi
+}
+
 test_emit_lun_data_cloned_by() {
     test_start "emit_lun_data shows which VMs clone a zvol"
     reset_mocks
@@ -706,6 +820,10 @@ test_emit_lun_data_machine_readable
 test_emit_lun_data_clone_origin_full_name
 test_single_node_clone_origin_full_name
 test_build_guest_device_map_one_exec_per_vm
+test_addr_pattern_for_scsihw
+test_build_vm_disk_map_scsihw
+test_build_guest_device_map_virtio_scsi_single
+test_build_guest_device_map_default_glob_for_scsi1
 test_emit_lun_data_cloned_by
 test_wrap_cell_separator_breaks
 test_wrap_cell_hard_breaks_long_tokens

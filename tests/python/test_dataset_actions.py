@@ -661,6 +661,160 @@ class TestUnmountDataset(unittest.TestCase):
             mock_log.assert_any_call("INFO: Unmounted tank/vm-100")
             mock_refresh.assert_called_once_with(app)
 
+    def test_unmount_recovers_orphaned_child_by_remounting_parents(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        class _FakeRow:
+            def __init__(self, name, mounted="yes", ds_type="filesystem"):
+                self.name = name
+                self.mounted = mounted
+                self.ds_type = ds_type
+
+        app.ctx.zfs_repository.list_datasets.return_value = [
+            _FakeRow("tank/vm-100"),
+            _FakeRow("tank/vm-100/sub1"),
+            _FakeRow("tank/vm-100/sub1/deep"),
+        ]
+
+        def _prop(ds, prop):
+            if prop == "mountpoint":
+                return "/tank/vm-100"
+            if prop == "mounted":
+                # Only the pool root is unmounted; recovery remounts it.
+                return "no" if ds == "tank" else "yes"
+            return "on"  # canmount
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        def _result(returncode, stderr=""):
+            return MagicMock(returncode=returncode, stderr=stderr)
+
+        orphan_error = "cannot unmount '/tank/vm-100/sub1/deep': no such pool or dataset"
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            mock_subprocess.run.side_effect = [
+                _result(1, orphan_error),  # orphaned child unmount fails
+                _result(0),  # recovery remounts the pool root
+                _result(0),  # orphaned child unmount retry succeeds
+                _result(0),  # sub1 unmounts
+                _result(0),  # vm-100 unmounts
+            ]
+            da.on_datasets_unmount(app)
+
+            calls = [c.args[0] for c in mock_subprocess.run.call_args_list]
+            self.assertEqual(
+                calls,
+                [
+                    ["sudo", "zfs", "unmount", "tank/vm-100/sub1/deep"],
+                    ["sudo", "zfs", "mount", "tank"],
+                    ["sudo", "zfs", "unmount", "tank/vm-100/sub1/deep"],
+                    ["sudo", "zfs", "unmount", "tank/vm-100/sub1"],
+                    ["sudo", "zfs", "unmount", "tank/vm-100"],
+                ],
+            )
+            mock_zlm.locks.assert_any_call(
+                "w", ["tank/vm-100/sub1/deep", "tank/vm-100/sub1", "tank/vm-100"]
+            )
+            mock_zlm.locks.assert_any_call("w", ["tank", "tank/vm-100/sub1/deep"])
+            mock_log.assert_any_call("INFO: Remounted tank to recover orphaned mount")
+            mock_log.assert_any_call("INFO: Unmounted tank/vm-100/sub1/deep")
+            mock_log.assert_any_call("INFO: Unmounted tank/vm-100/sub1")
+            mock_log.assert_any_call("INFO: Unmounted tank/vm-100")
+            mock_refresh.assert_called_once_with(app)
+
+    def test_unmount_warns_when_orphan_recovery_fails(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        class _FakeRow:
+            def __init__(self, name, mounted="yes", ds_type="filesystem"):
+                self.name = name
+                self.mounted = mounted
+                self.ds_type = ds_type
+
+        app.ctx.zfs_repository.list_datasets.return_value = [
+            _FakeRow("tank/vm-100"),
+            _FakeRow("tank/vm-100/sub1"),
+            _FakeRow("tank/vm-100/sub1/deep"),
+        ]
+
+        def _prop(ds, prop):
+            if prop == "mountpoint":
+                return "/tank/vm-100"
+            if prop == "mounted":
+                return "no" if ds == "tank" else "yes"
+            return "on"  # canmount
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        def _result(returncode, stderr=""):
+            return MagicMock(returncode=returncode, stderr=stderr)
+
+        orphan_error = "cannot unmount '/tank/vm-100/sub1/deep': no such pool or dataset"
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm"),
+        ):
+            mock_subprocess.run.side_effect = [
+                _result(1, orphan_error),  # orphaned child unmount fails
+                _result(0),  # recovery remounts the pool root
+                _result(1, orphan_error),  # retry still fails
+                _result(0),  # restore: pool root unmounted again
+            ]
+            da.on_datasets_unmount(app)
+
+            calls = [c.args[0] for c in mock_subprocess.run.call_args_list]
+            self.assertEqual(
+                calls,
+                [
+                    ["sudo", "zfs", "unmount", "tank/vm-100/sub1/deep"],
+                    ["sudo", "zfs", "mount", "tank"],
+                    ["sudo", "zfs", "unmount", "tank/vm-100/sub1/deep"],
+                    ["sudo", "zfs", "unmount", "tank"],
+                ],
+            )
+            warned = [str(c) for c in mock_log.call_args_list if "orphaned mount" in str(c)]
+            self.assertTrue(warned, "expected an orphaned-mount warning")
+            self.assertFalse(
+                any("Unmounted tank/vm-100/sub1" in str(c) for c in mock_log.call_args_list)
+            )
+            mock_refresh.assert_not_called()
+
     def test_unmounts_pool_root_dataset(self):
         da = self._import_under_mock()
         app = self._make_app()
@@ -819,6 +973,97 @@ class TestMount(unittest.TestCase):
                 check=False,
             )
             mock_log.assert_any_call("INFO: Mounted tank")
+            mock_refresh.assert_called_once_with(app)
+
+    def test_mounts_unmounted_ancestors_before_target(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        def _prop(ds, prop):
+            if prop == "mounted":
+                return "no"
+            return "on"  # canmount
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100/sub",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            da.on_datasets_mount(app)
+
+            mock_zlm.locks.assert_called_once_with("w", ["tank", "tank/vm-100", "tank/vm-100/sub"])
+            calls = [c.args[0] for c in mock_subprocess.run.call_args_list]
+            self.assertEqual(
+                calls,
+                [
+                    ["sudo", "zfs", "mount", "tank"],
+                    ["sudo", "zfs", "mount", "tank/vm-100"],
+                    ["sudo", "zfs", "mount", "tank/vm-100/sub"],
+                ],
+            )
+            mock_log.assert_any_call("INFO: Mounted tank")
+            mock_log.assert_any_call("INFO: Mounted tank/vm-100")
+            mock_log.assert_any_call("INFO: Mounted tank/vm-100/sub")
+            mock_refresh.assert_called_once_with(app)
+
+    def test_mount_skips_ancestor_with_canmount_off(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        def _prop(ds, prop):
+            if prop == "mounted":
+                return "no"
+            return "off" if ds == "tank/vm-100" else "on"  # canmount
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100/sub",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            da.on_datasets_mount(app)
+
+            mock_zlm.locks.assert_called_once_with("w", ["tank", "tank/vm-100/sub"])
+            calls = [c.args[0] for c in mock_subprocess.run.call_args_list]
+            self.assertEqual(
+                calls,
+                [
+                    ["sudo", "zfs", "mount", "tank"],
+                    ["sudo", "zfs", "mount", "tank/vm-100/sub"],
+                ],
+            )
+            mock_log.assert_any_call("INFO: Skipping tank/vm-100 (canmount=off)")
+            mock_log.assert_any_call("INFO: Mounted tank")
+            mock_log.assert_any_call("INFO: Mounted tank/vm-100/sub")
             mock_refresh.assert_called_once_with(app)
 
     def test_warns_when_filesystem_mount_fails(self):

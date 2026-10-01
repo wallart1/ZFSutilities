@@ -529,8 +529,10 @@ for bash suites when the corresponding option is used:
 
 ### `startdocserver`
 
-Starts the documentation server on port `8000`. Serves the MkDocs
-live-reload site; MkDocs is required.
+Starts the documentation server on port `8000`. Before the server starts,
+the static site in `docs/site/` is refreshed with `mkdocs build --clean` so
+the embedded and standalone viewers show current content; then the MkDocs
+live-reload site is served. MkDocs is required.
 
 ```bash
 ./startdocserver [--restart] [path]
@@ -553,18 +555,21 @@ live-reload site; MkDocs is required.
 
 **Data structures consumed / produced:**
 
-| Structure               | Role                            |
-| ----------------------- | ------------------------------- |
-| `~/docserver.log`       | Server stdout/stderr            |
-| `docs/site/`            | Built static documentation site |
-| `http://localhost:8000` | Documentation URL               |
+| Structure               | Role                                              |
+| ----------------------- | ------------------------------------------------- |
+| `~/docserver.log`       | Server stdout/stderr                              |
+| `~/docserver-build.log` | Static-site (`mkdocs build`) output               |
+| `docs/site/`            | Built static documentation site (refreshed at each server start) |
+| `http://localhost:8000` | Documentation URL                                 |
 
 **Internal flow:**
 
 1. Locate the docs directory relative to the script (`docs` or `../docs`).
 2. Probe `localhost:8000` to see if a server is already running.
 3. If the running server serves the wrong directory, stop it.
-4. Start `mkdocs serve --livereload`.
+4. Refresh `docs/site/` with `mkdocs build --clean` (failure logs a WARN and
+   does not block the server).
+5. Start `mkdocs serve --livereload`.
 
 **Return codes:**
 
@@ -2727,21 +2732,24 @@ sudo archive-vm <vmid>
 
 **Flow:**
 
-1. **Discover clones** — Finds all VMs whose zvols depend on snapshots of the VM's zvols
-2. **Promote clones** — If any clones exist, asks whether to promote each one (calls
+1. **Verify VM stopped** — Refuses to run if the VM is running; the script never
+   stops the VM itself. Stop the VM first, then re-run
+2. **Discover clones** — Finds all VMs whose zvols depend on snapshots of the VM's zvols
+3. **Promote clones** — If any clones exist, reports the identity of the disks with
+   dependent clones and asks whether the script should promote them (calls
    `promote-vm-clone`), severing the dependency so the VM can be removed
-3. **Discover referenced zvols** — Reads `/etc/pve/qemu-server/<vmid>.conf` and resolves each
+4. **Discover referenced zvols** — Reads `/etc/pve/qemu-server/<vmid>.conf` and resolves each
    referenced disk to its zvol. In single-node mode this parses the local ZFS disk lines; in
    two-node mode it resolves iSCSI target/LUN pairs on the storage host. Any orphaned zvols
    that match the VM ID but are not referenced in the config are reported as warnings and
    are not archived.
-4. **Archive zvols** — For each referenced disk, runs `zfs send -cw <snapshot>` into a new ZFS
+5. **Archive zvols** — For each referenced disk, runs `zfs send -cw <snapshot>` into a new ZFS
    dataset under the archive base, setting `volblocksize=1M` for space efficiency. Saves the
    original `volblocksize` to a `.original_volblocksize` sidecar and the disk's Proxmox config
    info (disk key, LUN, target) to a `.disk_info` sidecar.
-5. **Archive config** — Copies `/etc/pve/qemu-server/<vmid>.conf` into the archive mount
-6. **Verify** — Confirms all archived datasets and the config file exist and have expected sizes
-7. **Remove VM** — Asks whether to remove the VM; if yes, removes the Proxmox config
+6. **Archive config** — Copies `/etc/pve/qemu-server/<vmid>.conf` into the archive mount
+7. **Verify** — Confirms all archived datasets and the config file exist and have expected sizes
+8. **Remove VM** — Asks whether to remove the VM; if yes, removes the Proxmox config
    and destroys each referenced zvol (including iSCSI teardown via `remove-vm-disk` in
    two-node mode)
 
@@ -2772,8 +2780,11 @@ sudo archive-vm <vmid>
 
 **Internal flow:**
 
-1. Discover VMs whose zvols depend on snapshots of the target VM's zvols.
-2. Prompt to promote each dependent clone.
+1. Verify the VM is stopped; terminate with instructions if it is running
+   (the script never stops the VM itself).
+2. Discover VMs whose zvols depend on snapshots of the target VM's zvols,
+   report the disks with dependent clones, and prompt whether the script
+   should promote the dependent clones.
 3. Read `/etc/pve/qemu-server/<vmid>.conf` and resolve only the referenced disks to zvols,
    warning about any orphaned zvols that are skipped.
 4. Archive each referenced zvol with `zfs send -cw` into a dataset under the archive base,

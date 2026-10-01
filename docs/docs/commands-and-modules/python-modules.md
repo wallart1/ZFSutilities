@@ -1056,7 +1056,7 @@ under the dataset runner.
 
 | Function                                                                     | Purpose                                                                                     |
 | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `show_apply_profile_dialog(app, datasets, pool_has_special)`                 | Preview and confirm applying a workload profile to a dataset list                           |
+| `show_apply_profile_dialog(app, datasets, pool_has_special)`                 | Preview and confirm applying a workload profile; the picker lists only profiles applicable to the dataset's type            |
 | `on_apply_profile(app, datasets, profile, refresh)`                          | Run the `zfs set` steps for the chosen profile (requires the dialog to have been confirmed) |
 | `show_manage_profiles_dialog(app)` / `show_profile_editor_dialog(app, name)` | Workload profile manager and add/edit dialog                                                |
 | `on_rewrite_data(app, datasets, refresh)`                                    | Run `zfs rewrite -P -r -x -v` on filesystem datasets, one write lock each                   |
@@ -1330,7 +1330,7 @@ Rewrite Data, and the workload profile manager.
 | `update_mounted_states()`        | Refresh only the mounted flag/color of visible rows after a mount or unmount                                             |
 | `expand_selected_datasets()`     | Expand selected rows recursively                                                                                         |
 | `update_ds_button_sensitivity()` | Enable/disable action buttons                                                                                            |
-| `on_datasets_apply_profile()`    | Collect the tunable tree selection, show the profile picker once, and apply the chosen profile to every selected dataset |
+| `on_datasets_apply_profile()`    | Collect the single selected tunable dataset, show the profile picker (only profiles that apply to its type), and apply the chosen profile |
 | `on_datasets_rewrite_data()`     | Rewrite the selected filesystem datasets in place (`zfs rewrite -P`)                                                     |
 | `on_datasets_manage_profiles()`  | Open the workload profile manager                                                                                        |
 
@@ -1614,7 +1614,7 @@ Scrub state parsing, queue management, and start/pause/resume/stop actions.
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ScrubState` | Enum: `NONE`, `PENDING`, `SCANNING`, `PAUSED`, `FINISHED`, `CANCELED`, `UNKNOWN`                                                                                                                                |
 | `ScrubInfo`  | Dataclass with state, progress, remaining time, ETA, errors                                                                                                                                                     |
-| `ScrubQueue` | Persistent pending/active/paused/finished pool sets with concurrency target; buckets are disjoint, stale entries are pruned by `tick()`, and `reload()` re-reads persisted state before each GUI/Dashboard tick |
+| `ScrubQueue` | Persistent pending/active/paused/finished pool sets with concurrency target; buckets are disjoint, stale entries are pruned by `tick()` only after several consecutive misses, and `reload()` re-reads persisted state before each tick in long-lived instances (GUI Pools tab/Dashboard, headless scrub-profile loop) |
 
 **Key functions:**
 
@@ -1666,7 +1666,8 @@ single pool.
 ### `dataset_actions.py`
 
 Action handlers for the Datasets tab: snapshot, delete, hold, rollback, browse,
-and unmount snapshots.
+show-big-stuff, mount, and unmount for filesystems, snapshots, and volume loop
+devices.
 
 **Key functions:**
 
@@ -1676,8 +1677,10 @@ and unmount snapshots.
 | `on_datasets_delete()`                                       | Delete selected datasets/snapshots/holds  |
 | `on_datasets_hold()`                                         | Place holds on selected snapshots         |
 | `on_datasets_rollback()`                                     | Rollback a dataset to a selected snapshot |
-| `on_datasets_show_files()` / `on_datasets_browse_snapshot()` | Open file manager                         |
-| `on_datasets_unmount_snapshot()`                             | Unmount a `.zfs/snapshot` mount           |
+| `on_datasets_browse()`                                       | Open the selected filesystem or snapshot in the default file manager |
+| `on_datasets_show_big_stuff()`                               | Run `zfsshowbigstuff` on the selected pool and log the output |
+| `on_datasets_mount()`                                        | Mount selected filesystems/snapshots/volume loop devices (and volume partitions); unmounted ancestors are mounted first (root-first), skipping `canmount=off` ancestors |
+| `on_datasets_unmount()`                                      | Unmount selected filesystems/snapshots/volume loop devices (and volume partitions); mounted children are unmounted first (deepest-first), with best-effort recovery of orphaned mounts (remount parents, retry) |
 
 **Called modules / imported helpers:**
 
@@ -1687,7 +1690,7 @@ and unmount snapshots.
 | `datasets_page`    | Refresh tree and button sensitivity     |
 | `command_builders` | `BashStep` for destructive operations   |
 | `zfs_lock_manager` | Pre-flight lock checks and direct locks |
-| `logging_config`   | `log_msg`                               |
+| `backup_config`    | `log_msg`                               |
 
 **Data structures consumed / produced:**
 

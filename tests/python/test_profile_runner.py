@@ -836,6 +836,47 @@ class TestRunScrubProfile(unittest.TestCase):
             finally:
                 feature_config.SCRUB_STATE_PATH = orig_path
 
+    def test_reload_picks_up_external_removal_mid_run(self):
+        """The polling loop must reload state, so a pool removed from the
+        queue by another process mid-run is not started from a stale copy."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_path = feature_config.SCRUB_STATE_PATH
+            feature_config.SCRUB_STATE_PATH = os.path.join(tmpdir, "scrub_state.json")
+            try:
+                profile = {"config": {"pools": ["tank", "data"], "simultaneous": 1}}
+                config = {}
+                none = sm.ScrubInfo(state=sm.ScrubState.NONE)
+                scanning = sm.ScrubInfo(state=sm.ScrubState.SCANNING)
+                finished = sm.ScrubInfo(state=sm.ScrubState.FINISHED)
+                state_sequence = [
+                    {"tank": none, "data": none},  # data starts (alphabetical); tank pending
+                    {"tank": none, "data": scanning},  # tank removed externally before this tick
+                    {"tank": none, "data": scanning},
+                    {"tank": none, "data": finished},  # all done; tank was never started
+                ]
+                states_iter = iter(state_sequence)
+                calls = {"n": 0}
+
+                def fake_states():
+                    calls["n"] += 1
+                    if calls["n"] == 2:
+                        # Another process (e.g. the GUI) drops "tank" from the queue.
+                        external = sm.ScrubQueue()
+                        external.remove_pools(["tank"])
+                    return next(states_iter)
+
+                with patch("profile_runner.get_all_pool_scrub_states") as mock_states:
+                    mock_states.side_effect = fake_states
+                    with patch.object(sm, "start_scrub", return_value=True) as mock_start:
+                        with patch("profile_runner.time.sleep"):
+                            with capture_logs():
+                                rc = profile_runner.run_scrub_profile(profile, config, "/bin")
+                self.assertEqual(rc, 0)
+                started = [call.args[0] for call in mock_start.call_args_list]
+                self.assertEqual(started, ["data"])
+            finally:
+                feature_config.SCRUB_STATE_PATH = orig_path
+
     def test_give_up_on_start_failure_returns_rc1(self):
         """A pool that can never start is given up (not retried forever) and rc=1."""
         with tempfile.TemporaryDirectory() as tmpdir:

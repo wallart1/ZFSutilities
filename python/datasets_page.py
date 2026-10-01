@@ -440,7 +440,7 @@ def update_ds_button_sensitivity(app):
             return False
         return (i.get("zfs_type") or "filesystem") in ("filesystem", "volume")
 
-    can_apply_profile = bool(items) and all(_is_tunable(i) for i in items)
+    can_apply_profile = len(items) == 1 and _is_tunable(items[0])
     can_rewrite = (
         bool(items)
         and all(
@@ -502,21 +502,22 @@ def _selected_tunable_datasets(app):
 
 
 def on_datasets_apply_profile(app):
-    """Apply a workload profile to the selected datasets.
+    """Apply a workload profile to the selected dataset.
 
-    The profile picker dialog is shown exactly once; the chosen profile is
-    applied equally to every selected dataset (per-dataset plans adapt the
-    property set to each dataset's type and live values).
+    Enabled for a single pool/dataset row only; the profile picker lists
+    just the profiles that apply to that dataset's type (the per-dataset
+    plan adapts the property set to the dataset's type and live values).
     """
     if node_config.is_two_node() and not node_config.is_storage_host():
         log_msg("WARN: Applying profiles is available only on the storage host")
         return
-    datasets, skipped = _selected_tunable_datasets(app)
+    datasets, _skipped = _selected_tunable_datasets(app)
     if not datasets:
         log_msg("WARN: Select at least one dataset to apply a profile")
         return
-    if skipped:
-        log_msg(f"INFO: Apply Profile ignores {skipped} selected non-dataset row(s)")
+    if len(datasets) > 1:
+        log_msg("WARN: Apply Profile requires a single dataset selection")
+        return
 
     # Pick the dialog's default profile from the first dataset's live match.
     repo = app.ctx.zfs_repository

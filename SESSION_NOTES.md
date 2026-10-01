@@ -4,6 +4,102 @@ Session notes, progress notes, and notes to myself. Per the root `AGENTS.md`
 Hard Rules, these live here — never in AGENTS.md (which is user-owned). I
 maintain this file and remove obsolete entries as work evolves.
 
+## 2026-09-30 — archive-vm: never stops the VM; reports dependent disks and offers script promotion
+
+- Behavior change requested against the #archiving-a-vm docs: `archive-vm`
+  must not stop the VM itself. Added an early gate (after two-node
+  delegation, following the `zfsclone-vm` pattern): if `qm status` is not
+  `stopped`, the script reports the VM is running/not stopped, instructs
+  the user to stop it, and exits 1 before touching anything. Removed the
+  `qm stop` + `sleep` block from the removal step.
+- Step 1 clone handling reworked: clones are collected first, then reported
+  grouped by the source disk (derived from each clone's origin dataset) —
+  `Disk <zvol>:` headers with `clone VM <id>:` entries beneath — and the
+  question is now "Do you want this script to promote these clones (sever
+  the clone dependencies)?". Declining still warns that VM removal may fail
+  while snapshots are held by clones. The "Found dependent clones:" listing
+  with no matching clones now falls through to "No dependent clones found."
+  instead of asking a pointless question.
+- Tests (`tests/test-archive-vm`): harness gained `_mock_vm_status` (qm
+  mock) and `_mock_clone_info` (name/origin rows), a `promote-vm-clone`
+  stub routed via a `find_zfsutility_script` wrapper, and promotion capture.
+  Note: `ask_yn` cannot be mocked in this suite — sourcing archive-vm
+  re-runs bashinit via `~/bashinit`, which unconditionally redefines it —
+  so answers are fed via stdin in prompt order (with clones present the
+  promote question is the first stdin consumer, before the archive-base
+  prompt). Fixed a harness leak: `_mock_zvols_list` set by the orphan-zvol
+  test persisted in the main shell and leaked into later tests
+  (`reset_mocks` now unsets it). Three new tests: running-VM abort,
+  dependent-disk report + declined promotion, confirmed promotion invokes
+  `promote-vm-clone` per clone VM.
+- Docs: `docs/docs/user-guide/proxmox-integration.md` (#archiving-a-vm) and
+  `docs/docs/commands-and-modules/commands.md` (`archive-vm` Flow / Internal
+  flow) updated to match.
+
+## 2026-09-30 — Apply Profile: single-select only; profile list filtered by dataset
+
+
+- Datasets page, Apply Profile…: button now enables only for exactly one
+  selected pool/dataset row (filesystem or volume). Multi-select disables it;
+  `on_datasets_apply_profile()` also guards and warns if reached with more
+  than one tunable dataset.
+- The Apply Profile picker now lists only profiles whose `applies_to` includes
+  the selected dataset's type (filesystem/volume). Empty filtered list logs
+  `WARN: No workload profiles apply to <type> datasets` and cancels.
+- Files: `python/datasets_page.py`, `python/profile_dialogs.py`, tests in
+  `tests/python/test_datasets_page.py` and `tests/python/test_profile_dialogs.py`,
+  docs in `docs/docs/user-guide/gtk-gui.md` (workload-profiles intro + Datasets
+  button table).
+
+## 2026-09-30 — Repeated "External scrub detected" message (scrub_manager)
+
+- User report (production log, stewie 0.108.0, 2026-09-26): the GUI logged
+  `INFO: External scrub detected on 'fivebays'` every 5 minutes for ~9 hours
+  while an externally-started scrub ran (scrub started 09-25 11:35, ended
+  09-26 21:16).
+- Mechanism: the message fires in `ScrubQueue.tick()` whenever a pool reports
+  SCANNING but sits in no queue bucket. The tick adds the pool to `active` and
+  saves, so the repetition means the persisted state lost the pool between
+  refreshes — the GUI reloads from disk before every tick. Concurrent writer
+  unidentified (Sep 26 headless session logs pruned); recorded in
+  PREEXISTING.md.
+- Fix (`python/scrub_manager.py`): external-scrub detection is reported once
+  per episode at VERB level via `ScrubQueue._report_external_scrub()`
+  (in-memory `_external_reported` set — deliberately not persisted, so it
+  survives `reload()` and disk-state clobbering). The episode ends when the
+  pool is no longer SCANNING/PAUSED; a later new external scrub is reported
+  again. Both call sites (pending-externally-started and untracked-detection)
+  use the helper.
+- Tests: three new `TestScrubQueue` tests (logged once despite state clobber;
+  reported again after the episode ends; pending-path once-only, VERB level).
+  `python3 -m pytest tests/python/test_scrub_manager.py` green.
+
+## 2026-09-26 — list-vm-disks: Guest column empty for scsiN (N>0)
+
+
+- User report: `list-vm-disks` showed Guest device names only for scsi0;
+  other scsiN disks showed `-`.
+- Diagnosis (verified read-only on tweety via `ps` QEMU command lines; VM
+  config files themselves are root-only): production VMs use
+  `virtio-scsi-single`. Each `scsiN` disk gets its own virtio-scsi
+  controller and is presented to the guest as `channel=0, scsi-id=0, lun=N`,
+  so the guest by-path is `pci-...-scsi-0:0:0:N`. The script globbed
+  `*scsi-0:0:${n}:0` (target N), which matches scsi0 only by coincidence
+  (its guest address is `0:0:0:0` under both topologies).
+- Fix (bin/list-vm-disks): `build_vm_disk_map` now captures the per-VM
+  `scsihw:` value into `vm_map_scsihw`; `_query_guest_disks` selects the
+  guest glob via `_addr_pattern_for_scsihw` — `*scsi-0:0:0:${n}` (target 0,
+  lun N) for `virtio-scsi-single`, `*scsi-0:0:${n}:0` for everything else
+  (lsi, virtio-scsi, default). Consumed entirely on the compute host during
+  `--gather-vm-info`; the machine-readable emit/parse protocol unchanged.
+- Rejected alternative: size-based matching of guest devices to LUN volsizes.
+  Equal-sized disks on one VM are common and would need an order heuristic
+  that risks silently showing the wrong guest device.
+- Tests: `tests/test-list-vm-disks` qm mock now also records the guest
+  command; new tests for the helper, scsihw parsing, the single-mode glob +
+  mapping, and the default-glob pin. Docs: two-node.md list-vm-disks
+  internal-flow step 3 now documents both mappings.
+
 ## 2026-09-19 — Migrate Pool smoke-test failure: double-prefix bug + holding namespace
 
 - Smoke test (holding-pool migration of zfstest2 via zfstest3) failed in
@@ -746,3 +842,109 @@ references to removed scripts or the old prune fallback outside the
 off-limits changelog); `test_docs_integrity.py` passes. No new pre-existing
 issues discovered during steps 2-4, so nothing was recorded; code frozen per
 wrap-up instructions.
+
+## 2026-09-30 — Manage Profiles: built-in workload profiles editable as templates
+
+Datasets page → Advanced: Manage Profiles… now allows built-in (seeded)
+workload profiles to be opened for editing (Edit stays enabled for them;
+Delete stays disabled). The editor preloads the built-in's values, keeps the
+name field editable, and shows a notice that the built-in cannot be
+overwritten. Saving requires a new profile name (creates a custom profile)
+or an existing custom profile name, which triggers the same
+"already exists. Overwrite it?" confirmation the Save Profile to Schedule
+actions use (schedule profiles themselves are untouched). Saving under any
+built-in name — including a case variant — is refused. Docs
+(user-guide/gtk-gui.md) updated; test_profile_dialogs.py extended.
+
+## 2026-09-30 — startdocserver refreshes docs/site/ on start
+
+Option B (one-shot build) approved. `bin/startdocserver` now runs
+`mkdocs build --clean` in `docs/` synchronously before spawning
+`mkdocs serve` (output to `~/docserver-build.log`); a failed static build
+logs a WARN and does not block the live server. The already-running branch
+is unchanged (no rebuild). Tests added in `tests/test-startdocserver` (the
+python3 mock records to files because `_refresh_static_site` runs the build
+in a subshell). Docs updated: doc-server.md (viewers refresh at each
+server start/restart; removed the nonexistent `http.server 8000` PID-fallback
+claim), commands.md startdocserver section, conventions.md. Verified
+end-to-end (fresh start, already-running, `--restart`); server stopped
+afterwards to restore prior state. Two pre-existing issues filed in
+PREEXISTING.md (relative-path invocation dies after the `cd` into docs/;
+bashinit session-log Permission-denied noise as non-root).
+
+## 2026-09-30 — Datasets page Mount/Unmount ordering + orphaned-mount recovery
+
+Session started from the stewie `zpool export fivebays` incident: an orphaned
+mount (dataset listed as mounted in the kernel mount table while its
+mountpoint path was unreachable, openzfs/zfs#15075 pattern) made
+`zpool export`/`zfs unmount` fail with the misleading "no such pool or
+dataset" and `zfs mount` claim "already mounted". Diagnosis on stewie
+(read-only): the stale mount was created in the Aug 29–Sep 21 boot (which
+ended in a crash); the Sep 28 reboot cleared it; current mount table is
+consistent. Most probable trigger: systemd per-dataset mount units vs
+zfs-mount.service ordering on a crash-recovery boot. Nothing in the repo
+caused it.
+
+Code changes (approved plan, python/dataset_actions.py):
+- `_unmounted_mountable_ancestors()` helper; `_mount_one_dataset()` now skips
+  unmounted ancestors with `canmount=off` (previously the `zfs mount` failure
+  aborted the whole user-requested mount); `on`/`noauto` ancestors still mount
+  first, root-first.
+- `_recover_orphaned_mount()` helper; `_unmount_one_dataset()` detects the
+  "no such pool or dataset" unmount failure and runs best-effort recovery
+  (remount unmounted parents, retry the orphan unmount, restore on failure),
+  falling back to a clear orphaned-mount warning naming the manual remedy and
+  the reboot fallback. Locks are reentrant per-PID (zfs_lock_manager), so the
+  nested `zlm.locks` in recovery is safe.
+- Tests: 4 added in tests/python/test_dataset_actions.py (ancestors mounted
+  before target; canmount=off ancestor skipped without aborting; orphan
+  recovered by parent remount; recovery failure warns and stops).
+- Docs: gtk-gui.md Mount row + new orphaned-mounts note; python-modules.md
+  dataset_actions function table gained on_datasets_mount/on_datasets_unmount
+  rows (removed the nonexistent on_datasets_unmount_snapshot row).
+- PREEXISTING.md: +1 (stale dataset_actions doc section beyond today's rows).
+
+Session 2026-10-01 (GUI idle disk I/O fix):
+
+Symptom: the GUI on stewie (root, v0.108.0) reads/writes ~50 kB/s while idle.
+Verified read-only on stewie: /var/log/zfsutilities/sessions/.log_index.json
+(26,823 bytes) was rewritten every 3.01 s at idle; no other state file was
+being written. Root cause: logs_page's Gio.FileMonitor on the sessions dir
+rescans on any event (500 ms debounce); LogIndex._set() marked the index dirty
+unconditionally, so every rescan rewrote the index (temp file + os.replace,
+both inside the monitored dir), which retriggered the monitor — an endless
+write loop. Installed 0.108.0 code confirmed identical to the repo.
+
+Fix (approved plan): python/log_index.py — _set() now takes the pre-update
+snapshot and only stores/marks dirty on a real change; update() and
+set_status() build that snapshot (in-place mutation made self-comparison
+useless — first attempt failed exactly there). python/logs_page.py —
+_on_dir_changed() ignores events for hidden files (index/temp/lock dotfiles).
+Tests: +5 in test_log_index.py (dirty tracking), +5 in test_logs_page.py
+(monitor filter + no-rewrite rescan regression). Docs: architecture.md
+"Persistent log index" subsection. Production keeps looping until the user
+deploys a new version (deployment out of scope per Hard Rules); idle check
+after deploy: .log_index.json mtime stable while no backups run.
+
+2026-10-01 (Logs page Log Viewer popout geometry not remembered across
+restarts):
+
+Symptom: the popped-out Log Viewer's size/location were lost on GUI restart
+but fine within a single run. Root cause: UIStateManager._do_save
+(python/gui_helpers.py) wrote explicit None width/height/x/y for every
+bind_popout-registered window while hidden, and save_ui_state merges dicts,
+so any debounced save while the popout was docked (including the flush at
+main-window destroy) wiped the saved geometry under ui_state.logs_log_window.
+Within one run the live LogPopoutWindow object retained its own geometry, so
+no restore was exercised. The info-panel popout (log_window key) never had
+the bug because its save branch omits geometry keys when hidden.
+
+Fix: _do_save now writes only {"popped_out": False} for hidden popouts (merge
+preserves geometry); _on_logs_popout_toggled (python/logs_page.py) applies
+resize/move after show_all(), matching the working info-panel popout pattern.
+Tests: test_gui_infrastructure hidden-popout test now asserts geometry keys
+are absent + new merge-preservation test; test_logs_page restore-order test
+inverted to show_all-before-geometry. Docs: gtk-gui.md Pop Out bullet notes
+size/position persist across restarts. Affected suites green (224 passed);
+full suite result recorded in this turn's report.
+

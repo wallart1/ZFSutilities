@@ -41,6 +41,7 @@ changes will be included when I instruct you to perform a commit.
 be tedious."
 16. Update narrative documentation as you work, while context is fresh. Never record test counts
 in documentation. VERSION and changelog remain off-limits per the Hard Rules.
+17. Whenever using a path that starts with `/NFS1/dan(NFS1)/` be sure to quote the whole path.
 
 ## Hard Rules
 

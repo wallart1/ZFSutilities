@@ -15,7 +15,6 @@ relevant to developers working on ZFS Utilities.
 | [Lock Manager](lock-manager.md)                      | The interlock system for preventing conflicting operations          |
 | [Two-Node Configuration](two-node-config.md)         | Centralised config for storage host / compute host scripts          |
 | [Documentation Server](doc-server.md)                | MkDocs configuration and edit-in-MarkText integration               |
-| [Development Provenance](provenance.md)              | AI-assisted development notes and CLAUDE files                      |
 
 ## Repository Structure
 

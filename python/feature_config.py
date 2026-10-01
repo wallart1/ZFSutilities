@@ -783,11 +783,12 @@ def save_workload_profiles(config, profiles):
 
 
 def is_builtin_workload_profile(name: str) -> bool:
-    """Return True for seeded profiles, which are immutable.
+    """Return True for seeded profiles, which cannot be replaced.
 
-    Built-in profiles ship with the software and cannot be edited or deleted;
-    Reset to Defaults restores them. Users can still add, edit, and delete
-    custom profiles under any other name.
+    Built-in profiles ship with the software; they can be opened for editing
+    as a starting point (saving requires a new name or an existing custom
+    profile), but they cannot be overwritten or deleted. Reset to Defaults
+    restores them.
     """
     return name in DEFAULT_WORKLOAD_PROFILES
 

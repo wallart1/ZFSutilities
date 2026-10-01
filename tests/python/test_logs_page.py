@@ -800,6 +800,90 @@ class TestLogIndexIntegration(unittest.TestCase):
                 index = li.LogIndex.load()
                 self.assertIsNone(index.get(path))
 
+    def test_second_scan_does_not_rewrite_index_file(self):
+        """A no-op rescan must not rewrite the persistent index.
+
+        The index lives in the monitored sessions directory; rewriting it on
+        every rescan retriggered the directory monitor in an endless loop.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with _patch_log_dir(tmpdir):
+                path = os.path.join(tmpdir, "2026-06-22_07-00-00_backup_profile-x.log")
+                with open(path, "w") as fh:
+                    fh.write(
+                        "2026-06-22 07:00:00  /a:1: WARN: host down\n"
+                        "# END: rc=0, duration=5.5s, bytes=2048\n"
+                    )
+                os.utime(path, (time.time() - 60, time.time() - 60))
+
+                app = _make_scan_app()
+                lp._scan_logs(app)
+                index_path = os.path.join(tmpdir, ".log_index.json")
+                before = os.stat(index_path)
+
+                lp._scan_logs(app)
+                after = os.stat(index_path)
+
+        self.assertEqual((before.st_ino, before.st_mtime_ns), (after.st_ino, after.st_mtime_ns))
+
+
+class TestOnDirChanged(unittest.TestCase):
+    """Directory-monitor events for hidden index files must not schedule a
+    resync; the GUI's own index writes would otherwise retrigger it forever."""
+
+    def _file(self, name):
+        file_obj = MagicMock()
+        file_obj.get_basename.return_value = name
+        return file_obj
+
+    def _app(self):
+        app = MagicMock()
+        app._logs_sync_debounce_id = None
+        return app
+
+    @patch("logs_page.GLib.timeout_add")
+    def test_hidden_index_files_are_ignored(self, mock_add):
+        app = self._app()
+        for name in (".log_index.json", ".log_index_ab12cd.json"):
+            lp._on_dir_changed(None, self._file(name), None, lp.Gio.FileMonitorEvent.CREATED, app)
+        mock_add.assert_not_called()
+        self.assertIsNone(app._logs_sync_debounce_id)
+
+    @patch("logs_page.GLib.timeout_add")
+    def test_session_log_schedules_debounced_sync(self, mock_add):
+        app = self._app()
+        lp._on_dir_changed(
+            None,
+            self._file("2026-10-01_06-00-01_backup_profile-x.log"),
+            None,
+            lp.Gio.FileMonitorEvent.CREATED,
+            app,
+        )
+        mock_add.assert_called_once()
+        self.assertIs(app._logs_sync_debounce_id, mock_add.return_value)
+
+    @patch("logs_page.GLib.timeout_add")
+    def test_event_without_file_object_still_schedules(self, mock_add):
+        app = self._app()
+        lp._on_dir_changed(None, None, None, lp.Gio.FileMonitorEvent.CHANGED, app)
+        mock_add.assert_called_once()
+
+    @patch("logs_page.GLib.timeout_add")
+    @patch("logs_page.GLib.source_remove")
+    def test_pending_debounce_is_replaced(self, mock_remove, mock_add):
+        app = self._app()
+        pending = object()
+        app._logs_sync_debounce_id = pending
+        lp._on_dir_changed(
+            None,
+            self._file("2026-10-01_06-00-01_backup_gui.log"),
+            None,
+            lp.Gio.FileMonitorEvent.CHANGES_DONE_HINT,
+            app,
+        )
+        mock_remove.assert_called_once_with(pending)
+        mock_add.assert_called_once()
+
 
 class TestCreateLogsPage(unittest.TestCase):
     """Tests for create_logs_page layout."""
@@ -964,13 +1048,14 @@ class TestLogsPopoutToggle(unittest.TestCase):
         app.logs_popout_window.resize.assert_called_once_with(800, 600)
         app.logs_popout_window.move.assert_called_once_with(100, 200)
         app.logs_popout_window.show_all.assert_called_once()
-        # Geometry must be applied before the window is shown.
+        # Geometry must be applied after the window is shown so the window
+        # manager honours the requested size and position.
         calls = app.logs_popout_window.mock_calls
         show_idx = calls.index(call.show_all())
         resize_idx = calls.index(call.resize(800, 600))
         move_idx = calls.index(call.move(100, 200))
-        self.assertGreater(show_idx, resize_idx)
-        self.assertGreater(show_idx, move_idx)
+        self.assertGreater(resize_idx, show_idx)
+        self.assertGreater(move_idx, show_idx)
 
     def test_popout_back_in_restores_pane_and_flushes(self):
         app = MagicMock()

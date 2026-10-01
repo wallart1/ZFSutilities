@@ -62,7 +62,6 @@ nav:
     - Global Variables: 'developer-guide/global-variables.md'
     - Data Structures: 'developer-guide/data-structures.md'
     - Documentation Server: 'developer-guide/doc-server.md'
-    - Development Provenance: 'developer-guide/provenance.md'
   - Commands & Modules:
     - Overview: 'commands-and-modules/index.md'
     - Two-Node Infrastructure: 'commands-and-modules/two-node.md'

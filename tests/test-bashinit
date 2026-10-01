@@ -1,0 +1,118 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-bashinit — Unit tests for the shared bashinit helpers (log_msg,
+# session-log selection).  Each test drives a child script so the
+# directly-executed-script code paths in the bashinit function are exercised
+# the same way real bin/ scripts use them.
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+
+# =============================================================================
+# Tests
+# =============================================================================
+
+test_log_msg_survives_cd_with_relative_script_path() {
+    # Regression: a script invoked via a relative path (e.g. ./bin/startdocserver)
+    # used to die under set -e when log_msg's realpath of BASH_SOURCE failed
+    # after the script cd'd elsewhere.  log_msg must fall back to the raw
+    # caller path instead of aborting.
+    local tmpdir wrapper output rc
+    tmpdir=$(mktemp -d)
+    wrapper="$tmpdir/wrapper.sh"
+    {
+        echo '#!/usr/bin/bash'
+        echo "_bashinit=\"$mydir/bin/bashinit\""
+        echo 'source "$_bashinit"'
+        echo 'bashinit'
+        echo 'set -euo pipefail'
+        echo 'cd /'
+        echo 'log_msg "INFO: survived after cd"'
+        echo 'echo "SCRIPT-OK"'
+    } > "$wrapper"
+    chmod +x "$wrapper"
+    output=$(cd "$tmpdir" && ./wrapper.sh 2>&1)
+    rc=$?
+    test_start "log_msg survives a cd when the script was invoked via a relative path"
+    if [[ "$rc" -eq 0 && "$output" == *"survived after cd"* && "$output" == *"SCRIPT-OK"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_no_session_log_export_when_log_file_unwritable() {
+    # Regression: when the session log directory exists but the log file
+    # cannot be created (e.g. non-root user against the root-owned session
+    # dir), bashinit used to export ZFSUTILITIES_LOG_FILE anyway, so every
+    # later log_msg append printed a Permission-denied error.  The path must
+    # only be exported when the file is actually writable; messages still go
+    # to stderr either way.
+    local tmpdir wrapper output rc
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/sessions"
+    wrapper="$tmpdir/wrapper.sh"
+    {
+        echo '#!/usr/bin/bash'
+        echo "_bashinit=\"$mydir/bin/bashinit\""
+        echo 'source "$_bashinit"'
+        # Simulate an unwritable session dir: make every touch fail.
+        echo 'touch() { return 1; }'
+        echo "export ZFSUTILITIES_SESSION_LOG_DIR=\"$tmpdir/sessions\""
+        echo 'bashinit'
+        echo 'if [[ -z "${ZFSUTILITIES_LOG_FILE:-}" ]]; then echo "NO-EXPORT"; fi'
+        echo 'log_msg "INFO: message without session log"'
+        echo 'echo "SCRIPT-OK"'
+    } > "$wrapper"
+    chmod +x "$wrapper"
+    output=$("$wrapper" 2>&1)
+    rc=$?
+    test_start "session log path is not exported when the log file cannot be created"
+    if [[ "$rc" -eq 0 && "$output" == *"NO-EXPORT"* && "$output" == *"SCRIPT-OK"* \
+        && "$output" == *"message without session log"* && "$output" != *"Permission denied"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_session_log_exported_when_writable() {
+    # Counterpart to the unwritable case: a writable session dir must still
+    # export the session log path and append messages to it.
+    local tmpdir wrapper output rc logfile
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/sessions"
+    wrapper="$tmpdir/wrapper.sh"
+    {
+        echo '#!/usr/bin/bash'
+        echo "_bashinit=\"$mydir/bin/bashinit\""
+        echo 'source "$_bashinit"'
+        echo "export ZFSUTILITIES_SESSION_LOG_DIR=\"$tmpdir/sessions\""
+        echo 'bashinit'
+        echo 'if [[ -n "${ZFSUTILITIES_LOG_FILE:-}" ]]; then echo "EXPORTED"; fi'
+        echo 'log_msg "INFO: message with session log"'
+    } > "$wrapper"
+    chmod +x "$wrapper"
+    output=$("$wrapper" 2>&1)
+    rc=$?
+    logfile=$(ls "$tmpdir/sessions"/*.log 2>/dev/null | head -1)
+    test_start "session log path is exported and written when the directory is writable"
+    if [[ "$rc" -eq 0 && "$output" == *"EXPORTED"* && -n "$logfile" \
+        && "$(cat "$logfile")" == *"message with session log"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output' logfile='${logfile:-none}'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+# =============================================================================
+# Run
+# =============================================================================
+
+test_log_msg_survives_cd_with_relative_script_path
+test_no_session_log_export_when_log_file_unwritable
+test_session_log_exported_when_writable
+
+test_summary

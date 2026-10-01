@@ -639,6 +639,12 @@ def attach_step_scrub_callbacks(
 # gives up on that pool (tick() runs every ~10 s in profile_runner).
 MAX_SCRUB_START_FAILURES = 3
 
+# Consecutive ticks a pool may be absent from the live pool list before the
+# queue drops it from a bucket.  A single missed observation (e.g. a transient
+# zpool-list failure in a concurrent process) must not evict an actively
+# scrubbing pool from the persisted state.
+MAX_POOL_MISSING_TICKS = 3
+
 
 class ScrubQueue:
     """Manages a queue of pool scrubs with a concurrency target.
@@ -794,6 +800,33 @@ class ScrubQueue:
         self._start_failures[pool_name] = count
         return False
 
+    def _record_missing(self, pool_name: str) -> bool:
+        """Count consecutive ticks where the pool is absent from the live list.
+
+        Returns True once the pool has been missing for
+        ``MAX_POOL_MISSING_TICKS`` consecutive ticks, telling the caller it may
+        drop the pool from its bucket.  The counter is in-memory only, so it
+        survives ``reload()``, and a pool that reappears resets its count.
+        """
+        count = self._missing_counts.get(pool_name, 0) + 1
+        if count >= MAX_POOL_MISSING_TICKS:
+            self._missing_counts.pop(pool_name, None)
+            return True
+        self._missing_counts[pool_name] = count
+        return False
+
+    def _report_external_scrub(self, pool_name: str):
+        """Log an externally-started scrub once per episode, at VERB level.
+
+        The flag is in-memory only: it must survive ``reload()`` and disk-state
+        clobbering by other ScrubQueue instances within this process's lifetime,
+        which would otherwise re-issue the message on every tick.
+        """
+        if pool_name in self._external_reported:
+            return
+        self._external_reported.add(pool_name)
+        log_msg(f"VERB: External scrub detected on '{pool_name}'")
+
     def tick(self, states: dict[str, ScrubInfo]):
         """Reconcile queue against live zpool status and target.
 
@@ -803,9 +836,13 @@ class ScrubQueue:
         for pool_name in list(self.active):
             info = states.get(pool_name)
             if info is None:
-                # Pool offline — drop from active
-                self.active.discard(pool_name)
+                # Pool offline — drop from active only after several
+                # consecutive misses so a transient listing gap cannot evict
+                # a scrubbing pool from the persisted state.
+                if self._record_missing(pool_name):
+                    self.active.discard(pool_name)
                 continue
+            self._missing_counts.pop(pool_name, None)
             if info.state == ScrubState.FINISHED:
                 log_msg(f"INFO: Scrub finished on '{pool_name}'")
                 self.active.discard(pool_name)
@@ -833,9 +870,13 @@ class ScrubQueue:
         for pool_name in list(self.paused):
             info = states.get(pool_name)
             if info is None:
-                self.paused.discard(pool_name)
-                self.paused_by_user.discard(pool_name)
+                # Pool offline — drop only after several consecutive misses
+                # (same protection as the active bucket above).
+                if self._record_missing(pool_name):
+                    self.paused.discard(pool_name)
+                    self.paused_by_user.discard(pool_name)
                 continue
+            self._missing_counts.pop(pool_name, None)
             if info.state == ScrubState.FINISHED:
                 log_msg(f"INFO: Paused scrub finished on '{pool_name}'")
                 self.paused.discard(pool_name)
@@ -865,7 +906,7 @@ class ScrubQueue:
                 # Externally started while pending
                 self.pending.discard(pool_name)
                 self.active.add(pool_name)
-                log_msg(f"INFO: External scrub detected on '{pool_name}'")
+                self._report_external_scrub(pool_name)
 
         # Detect externally-started scrubs on pools not yet in any bucket
         tracked = self.pending | self.active | self.paused | self.finished
@@ -874,7 +915,7 @@ class ScrubQueue:
                 continue
             if info.state == ScrubState.SCANNING:
                 self.active.add(pool_name)
-                log_msg(f"INFO: External scrub detected on '{pool_name}'")
+                self._report_external_scrub(pool_name)
             elif info.state == ScrubState.PAUSED:
                 # Externally paused pool that the queue was not tracking.
                 # Treat it as user-paused so it stays paused.
@@ -882,6 +923,14 @@ class ScrubQueue:
                 self.paused_by_user.add(pool_name)
             elif info.state in (ScrubState.FINISHED, ScrubState.CANCELED):
                 self.finished.add(pool_name)
+
+        # End external-scrub reporting episodes: once the pool is no longer
+        # scanning (or paused mid-scrub), a future externally-started scrub is
+        # a new episode and must be reported again.
+        for pool_name in list(self._external_reported):
+            info = states.get(pool_name)
+            if info is None or info.state not in (ScrubState.SCANNING, ScrubState.PAUSED):
+                self._external_reported.discard(pool_name)
 
         # 2. Adjust active count toward target
         active_count = len(self.active)
@@ -981,9 +1030,13 @@ class ScrubQueue:
             info = states.get(pool_name)
             if info is None:
                 # Pool no longer exists (or is not reported by zpool list) —
-                # drop the stale finished entry so it does not inflate counts.
-                self.finished.discard(pool_name)
-            elif info.state == ScrubState.SCANNING:
+                # drop the stale finished entry so it does not inflate counts,
+                # but only after several consecutive misses.
+                if self._record_missing(pool_name):
+                    self.finished.discard(pool_name)
+                continue
+            self._missing_counts.pop(pool_name, None)
+            if info.state == ScrubState.SCANNING:
                 # A new scrub was started on this pool
                 self.finished.discard(pool_name)
                 self.active.add(pool_name)
@@ -1014,6 +1067,8 @@ class ScrubQueue:
         self.paused_by_user: set[str] = set()
         self.given_up: set[str] = set()
         self._start_failures: dict[str, int] = {}
+        self._missing_counts: dict[str, int] = {}
+        self._external_reported: set[str] = set()
         self.target = max(1, target)
         self.order: list[str] = []
         self._start_times: dict[str, float] = {}

@@ -163,6 +163,7 @@ documentation-integrity suite. A scheduled nightly job runs
 |-------|----------------|
 | `test-archive-vm` | `archive-vm` retire-snapshot selection and invocation (single-node and two-node) |
 | `test-attach-vm-disk` | `attach-vm-disk` zvol-path parsing and validation |
+| `test-bashinit` | `bashinit` helpers: `log_msg` survives a `cd` after relative-path invocation; session-log selection when the log file is writable vs unwritable |
 | `test-check-prerequisites` | `check-prerequisites` tool version checks (mkdocs major-version gating) |
 | `test-cleanup-zfsutilities-legacy` | `cleanup-zfsutilities-legacy` prompt, `--yes`, `--dry-run`, and non-symlink guards |
 | `test-clone-vm` | `clone-vm` storage heredoc bootstrap and lock sourcing |
@@ -192,7 +193,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-restart-iscsi-services` | VM running-state detection before iSCSI target restart and main() helper invocation |
 | `test-run-tests-preflight` | Harness self-test: run-tests environment preflight, manifest requirement skips, soak-suite gating, and the pytest exit-5 rule |
 | `test-safe-iscsi-save` | Degraded-config guard for iSCSI saveconfig and encrypted-backstore boot-config stripping |
-| `test-startdocserver` | Server health checks, PID discovery, CWD mismatch, restart logic |
+| `test-startdocserver` | Server health checks, PID discovery, CWD mismatch, restart logic, static-site refresh on start |
 | `test-switch-version` | Version switching, production wiring, prior-version uninstall, rollback, `--uninstall`, `--list`, and obsolete systemd artifact cleanup |
 | `test-test-lib` | Harness assertion helpers: pass/fail/skip counter semantics and golden assertions |
 | `test-unarchive-vm` | `--new-vmid` rewriting, UUID regeneration, conflict handling |

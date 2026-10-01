@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.108.1
+
+*Released 2026-10-01*
+
+### Added
+
+- **Built-in workload profiles editable as templates** — Manage Profiles…
+  now allows built-in (seeded) profiles to be opened for editing (Delete
+  stays disabled). The editor preloads the built-in's values, requires a new
+  profile name or an existing custom profile to overwrite (with the same
+  confirmation the Save Profile to Schedule actions use), and refuses saving
+  under any built-in name, including case variants.
+
+- **`startdocserver` refreshes the static site** — before the live MkDocs
+  server starts, `mkdocs build --clean` refreshes `docs/site/` (build log:
+  `~/docserver-build.log`) so the GUI's embedded and standalone viewers show
+  current content. A failed static build logs a WARN and does not block the
+  live server.
+
+- **`archive-vm` clone-dependency report** — dependent clones are now
+  reported grouped by the source disk (derived from each clone's origin
+  dataset), with a single "promote these clones?" question; declining warns
+  that VM removal may fail while snapshots are held by clones.
+
+### Changed
+
+- **`archive-vm` never stops the VM** — the script now refuses to run while
+  the VM is anything other than `stopped` (exit 1 with instructions to stop
+  it manually) instead of calling `qm stop` itself.
+
+- **Apply Profile is single-select and type-filtered** — the Datasets tab's
+  Apply Profile… button enables for exactly one selected dataset, and the
+  picker lists only profiles whose `applies_to` matches the selected
+  dataset's type (filesystem/volume). Applying one profile to multiple
+  selected datasets at once is no longer offered.
+
+- **Scrub-state eviction requires consecutive misses** — a pool absent from
+  the live pool list (offline, exported, or a transient `zpool list`
+  failure in that process) is dropped from the scrub queue's
+  `active`/`paused`/`finished` buckets only after three consecutive ticks
+  (`MAX_POOL_MISSING_TICKS`), so a single missed observation cannot evict a
+  scrubbing pool from the persisted state. The headless scrub-profile
+  polling loop now also reloads the persisted queue state before each tick,
+  matching the GUI Pools tab and Dashboard.
+
+- **Datasets Mount/Unmount ordering and recovery** — mounting skips
+  unmounted ancestors with `canmount=off` instead of aborting the
+  user-requested mount; unmounting detects the misleading "no such pool or
+  dataset" failure of an orphaned mount and attempts best-effort recovery
+  (remount unmounted parents, retry), falling back to a clear warning with
+  the manual remedy and the reboot fallback.
+
+- **Quieter recurring log messages** — externally-started scrubs are
+  reported once per episode at VERB level instead of every refresh at INFO,
+  and the "Prune step restricted to the N send/receive step(s)" message
+  dropped from INFO to VERB in both the GUI Backup tab and backup profiles.
+
+- **`list-vm-disks` guest-device mapping for `virtio-scsi-single`** — the
+  Guest column now maps `scsiN` disks correctly for VMs configured with
+  `virtio-scsi-single` (one controller per disk: guest address
+  `scsi-0:0:0:N`) in addition to the default multi-disk-controller layout
+  (`scsi-0:0:N:0`). The machine-readable emit/parse protocol is unchanged.
+
+### Fixed
+
+- **GUI idle disk-write loop** — the log index rewrote
+  `.log_index.json` every refresh because every rescan marked the index
+  dirty and the index's own atomic-replace writes retriggered the directory
+  monitor. The index is now marked dirty only when an entry actually
+  changes, and the monitor ignores events for hidden files. This eliminates
+  the constant ~50 kB/s idle disk traffic.
+
+- **Log Viewer pop-out geometry now persists across restarts** — saving UI
+  state while a popout was docked wiped its stored size/position;
+  hidden popouts now save only their docked flag and the geometry is
+  restored after the window is shown.
+
+- **`startdocserver` (and any bash script) invoked via a relative path no
+  longer dies after a `cd`** — `log_msg`/`msg_prefix` fall back to the raw
+  caller path when `realpath` cannot resolve it, instead of aborting the
+  script under `set -e`.
+
+- **Non-root runs no longer spam Permission-denied** — `bashinit` exports
+  `ZFSUTILITIES_LOG_FILE` only when the session log file can actually be
+  created; messages still reach stderr.
+
+### Removed
+
+- **Developer-guide provenance page** — the `provenance.md` page was removed
+  and its nav entry dropped.
+
 ## 0.108.0
 
 *Released 2026-09-26*
