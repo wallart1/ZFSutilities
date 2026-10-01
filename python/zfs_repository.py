@@ -504,26 +504,32 @@ def build_migration_send_receive_command(
     dest_fs: str,
     snap_name: str,
     rate_limit: str = "",
+    from_snap: str = "",
 ) -> list[str]:
     """Build the argv for one migration copy step.
 
     Pure function: no subprocess. Returns a ``bash -c`` argv that sources
     ``zfs-migrate-send`` (the shared transfer library wrapper) and runs
-    ``zfs_migrate_send`` with ``sourcefs``/``destfs``/``snapname`` assigned,
-    so the transfer is resumable (an interrupted copy leaves a receive
-    resume token on the destination; re-running resumes from it) and carries
-    ``pv`` in the pipeline for live progress, optionally rate-limited via
-    *rate_limit* (a ``pv -L`` value such as ``100m``; empty = unlimited).
-    The wrapper sends ``zfs send -Rw <source>@<snap>`` and receives with
+    ``zfs_migrate_send`` with ``sourcefs``/``destfs``/``snapname`` (and
+    ``fromsnap`` when given) assigned, so the transfer is resumable (an
+    interrupted copy leaves a receive resume token on the destination;
+    re-running resumes from it) and carries ``pv`` in the pipeline for live
+    progress, optionally rate-limited via *rate_limit* (a ``pv -L`` value
+    such as ``100m``; empty = unlimited). Without *from_snap* the wrapper
+    sends ``zfs send -Rw <source>@<snap>`` and receives with
     ``zfs receive -u -F -s -v <dest>``: ``-R`` makes a replication stream
     (descendants, snapshots, properties); ``-w`` sends raw so encrypted
     datasets survive; ``-u`` keeps received datasets unmounted so their
     (preserved) mountpoints do not collide with the still-mounted source;
     ``-F`` lets a re-run roll the destination back to the stream; ``-s``
     keeps the receive resumable; ``-v`` logs each dataset as it is received
-    so progress through the tree is visible in the session log. Raises
-    ValueError on empty/invalid names or an invalid *rate_limit*; callers
-    enforce policy (locks, capacity, cutover ordering).
+    so progress through the tree is visible in the session log. With
+    *from_snap* (a bare snapshot name, validated like *snap_name*) the
+    wrapper sends ``zfs send -RIw <source>@<from> <source>@<snap>`` instead:
+    the short cutover catch-up incremental that carries every write made
+    since the migration snapshot, intermediary snapshots included (``-I``).
+    Raises ValueError on empty/invalid names or an invalid *rate_limit*;
+    callers enforce policy (locks, capacity, cutover ordering).
     """
     if not source_fs:
         raise ValueError("source dataset must not be empty")
@@ -531,6 +537,8 @@ def build_migration_send_receive_command(
         raise ValueError("destination dataset must not be empty")
     if not snap_name or "@" in snap_name or "/" in snap_name:
         raise ValueError(f"invalid snapshot name: {snap_name!r}")
+    if from_snap and ("@" in from_snap or "/" in from_snap):
+        raise ValueError(f"invalid from snapshot name: {from_snap!r}")
     if rate_limit and not re.fullmatch(r"[0-9]+[kKmMgGtT]?", rate_limit):
         raise ValueError(f"invalid rate limit: {rate_limit!r}")
     script = path_utils.resolve_local_bin(
@@ -546,6 +554,8 @@ def build_migration_send_receive_command(
         f"destfs={shlex.quote(dest_fs)}",
         f"snapname={shlex.quote(snap_name)}",
     ]
+    if from_snap:
+        parts.append(f"fromsnap={shlex.quote(from_snap)}")
     if rate_limit:
         parts.append(f"pv_rate_limit={shlex.quote(rate_limit)}")
     parts.append("zfs_migrate_send")
@@ -1042,6 +1052,15 @@ class ZfsRepository:
             )
         return rows
 
+    def list_volume_names(self, pool: str) -> list[str]:
+        """Return the names of every zvol below *pool* (recursive).
+
+        Used by the Migrate Pool cutover check to map the pool's zvols to
+        Proxmox VMs before any destructive step runs.
+        """
+        result = self._run(self._zfs("list", "-rH", "-t", "volume", "-o", "name", pool))
+        return [line for line in result.stdout.strip().split("\n") if line]
+
     def list_snapshots(
         self,
         dataset: str,
@@ -1196,12 +1215,15 @@ class ZfsRepository:
         """Attach *zvol_dev* to a new read-only loop device with partition scan.
 
         Returns the /dev/loopN path. Read-only on purpose: these volumes are
-        often live VM disks or backup targets. Raises
+        often live VM disks or backup targets. Waits for udev to finish
+        probing the new partition nodes so an immediate loop_partitions()
+        listing reports filesystem types instead of none. Raises
         subprocess.CalledProcessError on failure.
         """
         result = self._run(
             self._cmd("losetup", "--find", "--show", "--partscan", "--read-only", zvol_dev)
         )
+        self._run(self._cmd("udevadm", "settle", "--timeout=10"), check=False)
         return _parse_loop_attach_output(result.stdout)
 
     def loop_find(self, zvol_dev: str) -> str | None:

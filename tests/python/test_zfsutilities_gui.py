@@ -426,6 +426,106 @@ class TestScheduleTimer(unittest.TestCase):
         self.assertTrue(result)
 
 
+class TestPoolsTimer(unittest.TestCase):
+    """Tests for the Pools-tab pool registry refresh timer lifecycle."""
+
+    def _make_window(self):
+        """Create a ZFSUtilitiesWindow with __init__ bypassed."""
+        gui = _gui_module()
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
+            window = gui.ZFSUtilitiesWindow()
+            window._pools_timer = None
+            window.stack = MagicMock()
+            return window
+
+    @patch("zfsutilities_gui.GLib")
+    def test_pools_page_starts_timer(self, mock_glib):
+        """Switching to Pools refreshes the registry once and starts the interval timer."""
+        gui = _gui_module()
+        window = self._make_window()
+        mock_glib.timeout_add_seconds.return_value = 42
+        with patch("pools_page.refresh_pools_page") as mock_refresh:
+            window._start_stop_pools_timer("pools")
+        mock_refresh.assert_called_once_with(window)
+        mock_glib.timeout_add_seconds.assert_called_once_with(
+            gui.POOLS_REFRESH_SECONDS, window._on_pools_timer_tick
+        )
+        self.assertEqual(window._pools_timer, 42)
+
+    @patch("zfsutilities_gui.GLib")
+    def test_non_pools_page_stops_timer(self, mock_glib):
+        """Switching away from Pools removes the timer."""
+        window = self._make_window()
+        window._pools_timer = 7
+        window._start_stop_pools_timer("backup")
+        mock_glib.source_remove.assert_called_once_with(7)
+        self.assertIsNone(window._pools_timer)
+
+    @patch("zfsutilities_gui.GLib")
+    def test_pools_timer_replaces_existing_timer(self, mock_glib):
+        """Re-entering Pools cancels the old timer before starting a new one."""
+        window = self._make_window()
+        window._pools_timer = 7
+        mock_glib.timeout_add_seconds.return_value = 42
+        with patch("pools_page.refresh_pools_page"):
+            window._start_stop_pools_timer("pools")
+        mock_glib.source_remove.assert_called_once_with(7)
+        self.assertEqual(window._pools_timer, 42)
+
+    def test_timer_tick_refreshes_only_on_pools_page(self):
+        """The tick callback refreshes the registry on Pools and stays alive."""
+        window = self._make_window()
+        window.stack.get_visible_child_name.return_value = "pools"
+        with patch("pools_page.refresh_pools_page") as mock_refresh:
+            self.assertTrue(window._on_pools_timer_tick())
+        mock_refresh.assert_called_once_with(window)
+
+        mock_refresh.reset_mock()
+        window.stack.get_visible_child_name.return_value = "backup"
+        with patch("pools_page.refresh_pools_page") as mock_refresh:
+            self.assertTrue(window._on_pools_timer_tick())
+        mock_refresh.assert_not_called()
+
+
+class TestLogFontHandlers(unittest.TestCase):
+    """The View-menu font handlers dispatch to the matching log widget."""
+
+    def _make_window(self):
+        """Create a ZFSUtilitiesWindow with __init__ bypassed."""
+        gui = _gui_module()
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
+            window = gui.ZFSUtilitiesWindow()
+            window.info_text = MagicMock()
+            window.logs_text = MagicMock()
+            return window
+
+    def test_info_log_larger_uses_info_widget(self):
+        window = self._make_window()
+        controller = MagicMock()
+        with patch("zfsutilities_gui.get_log_font_controller", return_value=controller) as get:
+            window.on_log_font_larger(MagicMock(), "info_log")
+        get.assert_called_once_with(window, "info_log", window.info_text)
+        controller.larger.assert_called_once_with()
+
+    def test_logs_viewer_smaller_and_default_dispatch(self):
+        window = self._make_window()
+        controller = MagicMock()
+        with patch("zfsutilities_gui.get_log_font_controller", return_value=controller) as get:
+            window.on_log_font_smaller(MagicMock(), "logs_viewer")
+            window.on_log_font_default(MagicMock(), "logs_viewer")
+        self.assertEqual(get.call_count, 2)
+        for call_args in get.call_args_list:
+            self.assertEqual(call_args.args, (window, "logs_viewer", window.logs_text))
+        controller.smaller.assert_called_once_with()
+        controller.reset.assert_called_once_with()
+
+    def test_unknown_state_key_is_ignored(self):
+        window = self._make_window()
+        with patch("zfsutilities_gui.get_log_font_controller") as get:
+            window.on_log_font_larger(MagicMock(), "bogus")
+        get.assert_not_called()
+
+
 class TestOnPageChanged(unittest.TestCase):
     """Tests for ZFSUtilitiesWindow.on_page_changed per-tab refresh hooks."""
 
@@ -442,6 +542,7 @@ class TestOnPageChanged(unittest.TestCase):
             window.update_action_buttons = MagicMock()
             window._start_stop_dashboard_timer = MagicMock()
             window._start_stop_scrub_timer = MagicMock()
+            window._start_stop_pools_timer = MagicMock()
             window._start_stop_schedule_timer = MagicMock()
             return window
 
@@ -497,6 +598,17 @@ class TestOnPageChanged(unittest.TestCase):
         window.update_action_buttons.assert_called_once_with("schedule")
         mock_refresh.assert_called_once_with(window)
         window._start_stop_schedule_timer.assert_called_once_with("schedule")
+
+    def test_pools_page_starts_registry_timer(self):
+        """Switching to the Pools tab runs the registry timer start/stop hook."""
+        window = self._make_window({"pools": []})
+        stack = MagicMock()
+        stack.get_visible_child_name.return_value = "pools"
+
+        window.on_page_changed(stack, None)
+
+        window.update_action_buttons.assert_called_once_with("pools")
+        window._start_stop_pools_timer.assert_called_once_with("pools")
 
     @patch("zfsutilities_gui.refresh_dashboard_page")
     def test_dashboard_page_refreshes(self, mock_refresh):

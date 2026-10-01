@@ -312,6 +312,16 @@ test_transfer_do_with_pv_when_inherit() {
     assert_golden test_transfer_do_with_pv_when_inherit "$(cat "$pv_capture" 2>/dev/null)"
 }
 
+test_transfer_do_incremental_appends_second_target() {
+    test_start "transfer_do appends send_target2 after the primary send target"
+    reset_state
+    transfer_do "Send/receive" "-RIw" "-u -F -s -v" "N" "0" "src@from" "pool/dest" \
+        "src@to" 2>/dev/null
+    assert_rc 0 "$?"
+    assert_golden test_transfer_do_incremental_appends_second_target \
+        "$(sort "$_zfs_capture_file" 2>/dev/null)"
+}
+
 test_transfer_do_failure_logs_fatal() {
     test_start "transfer_do logs FATAL with the pipeline rc on failure"
     reset_state
@@ -345,6 +355,7 @@ test_space_check_min_buffer_override
 test_transfer_do_pipeline_no_pv
 test_transfer_do_resume_omits_target
 test_transfer_do_with_pv_when_inherit
+test_transfer_do_incremental_appends_second_target
 test_transfer_do_failure_logs_fatal
 
 test_summary

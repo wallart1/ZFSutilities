@@ -663,10 +663,21 @@ class TestScrubQueue(unittest.TestCase):
         q.add_pending(["tank", "data"])
         q._save()
 
-        q2 = sm.ScrubQueue(target=1)
+        q2 = sm.ScrubQueue()
         self.assertEqual(q2.target, 2)
         self.assertIn("tank", q2.pending)
         self.assertIn("data", q2.pending)
+
+    def test_explicit_target_overrides_persisted(self):
+        """A caller-supplied target must win over the persisted value."""
+        q = sm.ScrubQueue(target=1)
+        q.add_pending(["tank"])
+        q._save()
+
+        q2 = sm.ScrubQueue(target=3)
+        self.assertEqual(q2.target, 3)
+        # The override is persisted so other instances agree on the limit.
+        self.assertEqual(sm.ScrubQueue().target, 3)
 
     def test_save_creates_lock_file(self):
         q = sm.ScrubQueue(target=1)

@@ -13,7 +13,7 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 import golden
-from test_support import capture_logs, mock_subprocess
+from test_support import capture_logs, mock_subprocess, normalize_repo_root
 from zfs_repository import (
     AshiftInfo,
     HoldRow,
@@ -29,6 +29,7 @@ from zfs_repository import (
     build_capture_holds_command,
     build_create_pool_command,
     build_detach_command,
+    build_migration_send_receive_command,
     build_release_holds_command,
     build_replace_command,
     is_dataset_encrypted,
@@ -98,6 +99,17 @@ class TestZfsRepositoryReads(unittest.TestCase):
         self.assertEqual(rows[0].name, "tank/data")
         self.assertEqual(rows[0].ds_type, "filesystem")
         self.assertEqual(rows[0].mounted, "yes")
+
+    def test_list_volume_names_parses_lines(self):
+        repo = self._repo("tank/vm-100-disk-0\ntank/vm-207-disk-0\n")
+        self.assertEqual(
+            repo.list_volume_names("tank"),
+            ["tank/vm-100-disk-0", "tank/vm-207-disk-0"],
+        )
+
+    def test_list_volume_names_empty_output_returns_empty_list(self):
+        repo = self._repo("")
+        self.assertEqual(repo.list_volume_names("tank"), [])
 
     def test_list_snapshots_parses_eight_columns(self):
         stdout = "tank/data@snap1\t2025-01-01\tsnapshot\t100K\t-\t50G\t-\t-\n"
@@ -930,6 +942,46 @@ class TestBuildHoldsCommands(unittest.TestCase):
             build_apply_holds_command("tank", "")
 
 
+class TestBuildMigrationSendReceiveFromSnap(unittest.TestCase):
+    """from_snap turns the migration copy step into the cutover catch-up
+    incremental (zfs send -RIw @from @to)."""
+
+    def _normalized(self, argv):
+        # The sourced script path is resolved from this checkout's absolute
+        # location; normalize it (and its quoting) so the goldens stay
+        # machine-independent.
+        return [argv[0], argv[1], normalize_repo_root(argv[2])]
+
+    def test_from_snap_assignment_emitted(self):
+        argv = build_migration_send_receive_command(
+            "temp/proxmox", "temp_mig/proxmox", "migrate-x-cutover", from_snap="migrate-x"
+        )
+        golden.check(self, self._normalized(argv))
+
+    def test_from_snap_with_rate_limit(self):
+        argv = build_migration_send_receive_command(
+            "temp/proxmox",
+            "temp_mig/proxmox",
+            "migrate-x-cutover",
+            rate_limit="100m",
+            from_snap="migrate-x",
+        )
+        golden.check(
+            self, self._normalized(argv), name="TestBuildMigrationSendReceiveFromSnap.rate_limit"
+        )
+
+    def test_from_snap_omitted_when_empty(self):
+        argv = build_migration_send_receive_command("temp/proxmox", "temp_mig/proxmox", "migrate-x")
+        self.assertNotIn("fromsnap", argv[2])
+
+    def test_invalid_from_snap_rejected(self):
+        for bad in ("a@b", "a/b"):
+            with self.assertRaises(ValueError):
+                build_migration_send_receive_command(
+                    "temp/proxmox", "temp_mig/proxmox", "migrate-x-cutover", from_snap=bad
+                )
+
+
 class TestRunPoolCommand(unittest.TestCase):
     """run_pool_command executes pre-built growth argv via _run."""
 
@@ -1369,6 +1421,28 @@ class TestLoopDeviceOperations(unittest.TestCase):
             ],
         )
         self.assertTrue(check)
+
+    def test_loop_attach_waits_for_udev_settle(self):
+        captured = []
+        repo = self._repo_with(stdout="/dev/loop7\n", captured=captured)
+        repo.loop_attach("/dev/zvol/tank/vol1")
+        # Settle runs right after losetup and must not fail the attach.
+        self.assertEqual(captured[1], (["sudo", "udevadm", "settle", "--timeout=10"], False))
+
+    def test_loop_attach_survives_udev_settle_failure(self):
+        repo = ZfsRepository(sudo=True)
+
+        def _run(cmd, check=True, timeout=None):
+            rc = 1 if cmd[1:3] == ["udevadm", "settle"] else 0
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=rc,
+                stdout="" if rc else "/dev/loop7\n",
+                stderr="",
+            )
+
+        repo._run = _run
+        self.assertEqual(repo.loop_attach("/dev/zvol/tank/vol1"), "/dev/loop7")
 
     def test_loop_find_parses_attached_device(self):
         repo = self._repo_with(stdout="/dev/loop3: []: (/dev/zvol/tank/vol1)\n")

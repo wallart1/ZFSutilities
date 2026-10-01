@@ -1054,7 +1054,47 @@ def create_dashboard_page(app):
     app.dashboard_pool_frame.add(pool_box)
     box.pack_start(app.dashboard_pool_frame, False, False, 0)
 
-    # --- Section 3: Running Tasks ---
+    # --- Section 3: Recent Operations ---
+    app.dashboard_ops_frame = _make_section_frame("Recent Operations")
+    # Columns: datetime, type, name, outcome (markup), log_file (hidden)
+    app.dashboard_ops_store = Gtk.ListStore(str, str, str, str, str)
+    app.dashboard_ops_view = Gtk.TreeView(model=app.dashboard_ops_store)
+    app.dashboard_ops_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+    app.dashboard_ops_view.set_headers_visible(True)
+    app.dashboard_ops_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+
+    for col_idx, title_text, width in [
+        (0, "Date / Time", 150),
+        (1, "Type", 70),
+        (2, "Name", 140),
+        (3, "Message Level", 90),
+    ]:
+        r = Gtk.CellRendererText()
+        r.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
+        if col_idx == 0:
+            set_monospace_font(r)
+        # Message Level column contains Pango markup (colored icons)
+        attr = "markup" if col_idx == 3 else "text"
+        col = Gtk.TreeViewColumn(title_text, r, **{attr: col_idx})
+        configure_treeview_column(col, width=width)
+        app.dashboard_ops_view.append_column(col)
+    app._ui_state.bind_treeview(app.dashboard_ops_view, "dashboard_ops_view")
+
+    ops_scrolled = Gtk.ScrolledWindow()
+    ops_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+    ops_scrolled.set_min_content_height(180)
+    ops_scrolled.add(app.dashboard_ops_view)
+
+    ops_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+    ops_box.set_margin_start(10)
+    ops_box.set_margin_end(10)
+    ops_box.set_margin_top(10)
+    ops_box.set_margin_bottom(10)
+    ops_box.pack_start(ops_scrolled, True, True, 0)
+    app.dashboard_ops_frame.add(ops_box)
+    box.pack_start(app.dashboard_ops_frame, False, False, 0)
+
+    # --- Section 4: Running Tasks ---
     app.dashboard_proc_frame = _make_section_frame("Running Tasks")
     # Columns: task, type, status, task_key (hidden), log_file (hidden)
     app.dashboard_tasks_store = Gtk.ListStore(str, str, str, str, str)
@@ -1090,7 +1130,7 @@ def create_dashboard_page(app):
     app.dashboard_proc_frame.add(tasks_box)
     box.pack_start(app.dashboard_proc_frame, False, False, 0)
 
-    # --- Section 3a: Active Locks ---
+    # --- Section 4a: Active Locks ---
     app.dashboard_locks_frame = _make_section_frame("Active Locks")
     app.dashboard_locks_store = Gtk.ListStore(str, str, str, str, str, str, str)
     app.dashboard_locks_view = Gtk.TreeView(model=app.dashboard_locks_store)
@@ -1130,46 +1170,6 @@ def create_dashboard_page(app):
     locks_box.pack_start(locks_scrolled, True, True, 0)
     app.dashboard_locks_frame.add(locks_box)
     box.pack_start(app.dashboard_locks_frame, False, False, 0)
-
-    # --- Section 4: Recent Operations ---
-    app.dashboard_ops_frame = _make_section_frame("Recent Operations")
-    # Columns: datetime, type, name, outcome (markup), log_file (hidden)
-    app.dashboard_ops_store = Gtk.ListStore(str, str, str, str, str)
-    app.dashboard_ops_view = Gtk.TreeView(model=app.dashboard_ops_store)
-    app.dashboard_ops_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
-    app.dashboard_ops_view.set_headers_visible(True)
-    app.dashboard_ops_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
-
-    for col_idx, title_text, width in [
-        (0, "Date / Time", 150),
-        (1, "Type", 70),
-        (2, "Name", 140),
-        (3, "Message Level", 90),
-    ]:
-        r = Gtk.CellRendererText()
-        r.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
-        if col_idx == 0:
-            set_monospace_font(r)
-        # Message Level column contains Pango markup (colored icons)
-        attr = "markup" if col_idx == 3 else "text"
-        col = Gtk.TreeViewColumn(title_text, r, **{attr: col_idx})
-        configure_treeview_column(col, width=width)
-        app.dashboard_ops_view.append_column(col)
-    app._ui_state.bind_treeview(app.dashboard_ops_view, "dashboard_ops_view")
-
-    ops_scrolled = Gtk.ScrolledWindow()
-    ops_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    ops_scrolled.set_min_content_height(180)
-    ops_scrolled.add(app.dashboard_ops_view)
-
-    ops_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-    ops_box.set_margin_start(10)
-    ops_box.set_margin_end(10)
-    ops_box.set_margin_top(10)
-    ops_box.set_margin_bottom(10)
-    ops_box.pack_start(ops_scrolled, True, True, 0)
-    app.dashboard_ops_frame.add(ops_box)
-    box.pack_start(app.dashboard_ops_frame, False, False, 0)
 
     # --- Section 5: iSCSI Issues ---
     app.dashboard_iscsi_frame = _make_section_frame("iSCSI Issues")

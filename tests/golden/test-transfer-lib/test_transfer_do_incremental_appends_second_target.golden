@@ -1,0 +1,2 @@
+zfs receive -u -F -s -v pool/dest
+zfs send -RIw src@from src@to

@@ -14,7 +14,7 @@ if PYTHON_SRC not in sys.path:
 
 from disk_repository import DiskInfo
 from pool_create import disk_eligibility
-from test_support import capture_logs, mock_gtk, normalize_repo_root, requires_gi
+from test_support import capture_logs, mock_gtk, mock_subprocess, normalize_repo_root, requires_gi
 
 pytestmark = requires_gi
 import golden
@@ -119,6 +119,7 @@ def _request(pmd, mode=None, **overrides):
         mode=mode,
         datasets=("data", "vm-100-disk-0"),
         snap_bare="migrate-2026-09-10T14:30-04:00",
+        cutover_snap_bare="migrate-2026-09-10T14:30-04:00-cutover",
         temp_pool="pool1_mig",
         **defaults,
         **overrides,
@@ -254,10 +255,12 @@ class TestPureHelpers(unittest.TestCase):
         self.assertEqual(state.rate_limit, "100m")
         self.assertEqual(calls, [1])
 
-    def test_warnings_mention_cutover_and_path_preservation(self):
+    def test_warnings_mention_quiesce_window_and_path_preservation(self):
         pmd = _import_dialogs()
         warnings = " ".join(pmd._migrate_warnings(_state(pmd)))
-        self.assertIn("cutover exports", warnings)
+        self.assertIn("quiesced from the cutover snapshot onward", warnings)
+        self.assertIn("writes after that snapshot are lost", warnings)
+        self.assertIn("the window is only seconds", warnings)
         self.assertIn("dataset path survives", warnings)
 
     def test_holding_warnings_mention_holding_pool_uptime(self):
@@ -286,6 +289,7 @@ class TestPureHelpers(unittest.TestCase):
         self.assertEqual(request.temp_pool, "pool1_mig")
         self.assertEqual(request.datasets, ("data", "vm-100-disk-0"))
         self.assertEqual(request.snap_bare, "migrate-2026-09-10T14:30-04:00")
+        self.assertEqual(request.cutover_snap_bare, "migrate-2026-09-10T14:30-04:00-cutover")
         self.assertEqual(request.holding_pool, "")
         self.assertEqual(
             request.new_pool_by_id,
@@ -560,6 +564,33 @@ class TestBuildMigrationSteps(unittest.TestCase):
         _copy, cutover = pmd.build_migration_steps(_request(pmd))
         golden.check(self, _plan_text(cutover))
 
+    def test_new_disks_cutover_starts_with_catchup(self):
+        """Cutover opens with the catch-up snapshot on the still-imported
+        source pool, then one incremental per dataset into the temp pool,
+        before any destructive step runs."""
+        pmd = _import_dialogs()
+        _copy, cutover = pmd.build_migration_steps(_request(pmd))
+        self.assertEqual(
+            cutover[0].command,
+            ["zfs", "snapshot", "-r", "pool1@migrate-2026-09-10T14:30-04:00-cutover"],
+        )
+        catchups = [
+            s
+            for s in cutover
+            if s.command[0:2] == ["bash", "-c"]
+            and "zfs_migrate_send" in s.command[2]
+            and "fromsnap=" in s.command[2]
+        ]
+        self.assertEqual(len(catchups), 2)
+        for step in catchups:
+            self.assertIn("sourcefs=pool1/", step.command[2])
+            self.assertIn("destfs=pool1_mig/", step.command[2])
+            self.assertIn("snapname=migrate-2026-09-10T14:30-04:00-cutover", step.command[2])
+            self.assertIn("fromsnap=migrate-2026-09-10T14:30-04:00", step.command[2])
+        # The destructive export comes only after the catch-up steps.
+        kinds = [s.command[0] for s in cutover]
+        self.assertEqual(kinds.index("zpool"), 3)
+
     def test_holding_mode_cutover_sequence(self):
         pmd = _import_dialogs()
         request = _request(
@@ -574,10 +605,10 @@ class TestBuildMigrationSteps(unittest.TestCase):
             ),
         )
         _copy, cutover = pmd.build_migration_steps(request)
-        # export, release holds, destroy, create, 2 copy-back, 2 verify,
-        # export holding, import-rename, reapply holds, namespace destroy,
-        # remove holds file
-        self.assertEqual(len(cutover), 13)
+        # catch-up snapshot, 2 catch-up incrementals, export, release holds,
+        # destroy, create, 2 copy-back, 2 verify, export holding,
+        # import-rename, reapply holds, namespace destroy, remove holds file
+        self.assertEqual(len(cutover), 16)
         golden.check(self, _plan_text(cutover))
 
     def test_holding_copy_steps_use_reserved_namespace(self):
@@ -600,14 +631,34 @@ class TestBuildMigrationSteps(unittest.TestCase):
         self.assertIn("pool2/migrate_pool1/vm-100-disk-0", joined)
         for text in texts:
             self.assertNotIn("pool2/pool2/", text)
+        # The cutover catch-up incrementals run from the live source pool into
+        # the same reserved namespace.
+        catchups = [
+            s
+            for s in cutover
+            if s.command[0:2] == ["bash", "-c"]
+            and "zfs_migrate_send" in s.command[2]
+            and "fromsnap=" in s.command[2]
+        ]
+        self.assertEqual(len(catchups), 2)
+        for step in catchups:
+            self.assertIn("sourcefs=pool1/", step.command[2])
+            self.assertIn("destfs=pool2/migrate_pool1/", step.command[2])
+            self.assertIn("snapname=migrate-2026-09-10T14:30-04:00-cutover", step.command[2])
+        # Copy-back replays the holding namespace into the rebuilt pool using
+        # the cutover snapshot: a full -R send of the migration snapshot would
+        # omit it and lose everything the catch-up carried.
         copyback = [
             s
             for s in cutover
-            if s.command[0:2] == ["bash", "-c"] and "zfs_migrate_send" in s.command[2]
+            if s.command[0:2] == ["bash", "-c"]
+            and "zfs_migrate_send" in s.command[2]
+            and "sourcefs=pool2/migrate_pool1/" in s.command[2]
         ]
         self.assertEqual(len(copyback), 2)
         for step in copyback:
-            self.assertIn("sourcefs=pool2/migrate_pool1/", step.command[2])
+            self.assertIn("snapname=migrate-2026-09-10T14:30-04:00-cutover", step.command[2])
+            self.assertNotIn("fromsnap=", step.command[2])
             self.assertIn("destfs=pool1_mig/", step.command[2])
         destroys = [s for s in cutover if s.command[0:2] == ["zfs", "destroy"]]
         self.assertEqual(len(destroys), 1)
@@ -670,6 +721,23 @@ class TestCutoverConfirm(unittest.TestCase):
         pmd = _import_dialogs()
         ok = self._run_confirm(pmd, "pool1", [pmd.Gtk.ResponseType.CANCEL])
         self.assertFalse(ok)
+
+    def test_confirm_text_mentions_catchup_snapshot_and_quiesce(self):
+        """The typed confirmation states the catch-up snapshot and the
+        quiesce window, so the user knows what cutover now entails."""
+        pmd = _import_dialogs()
+        fake = MagicMock()
+        fake.run.side_effect = [pmd.Gtk.ResponseType.CANCEL]
+        label = MagicMock()
+        with (
+            patch.object(pmd, "create_dialog", return_value=fake),
+            patch.object(pmd.Gtk, "Label", return_value=label),
+        ):
+            pmd._show_cutover_confirm(MagicMock(), _request(pmd))
+        text = label.set_text.call_args.args[0]
+        self.assertIn("catch-up", text)
+        self.assertIn("quiesced", text)
+        self.assertIn("'pool1'", text)
 
 
 class TestDialogFlow(unittest.TestCase):
@@ -1039,9 +1107,9 @@ class TestHandlerExecution(unittest.TestCase):
             self.assertTrue(app.dataset_runner.running)
             self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
             app.dataset_runner.finish(rc=0)
-            # Cutover phase started after confirmation; the detail persists
-            # across the runner restart.
-            self.assertEqual(len(app.dataset_runner.steps), 4)
+            # Cutover phase started after the layout/VM gates and
+            # confirmation; the detail persists across the runner restart.
+            self.assertEqual(len(app.dataset_runner.steps), 7)
             self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
             app.dataset_runner.finish(rc=0)
             mock_zlm.release.assert_called_once_with("/lock/pool1")
@@ -1082,7 +1150,7 @@ class TestHandlerExecution(unittest.TestCase):
         with stack:
             self.assertEqual(len(app.dataset_runner.steps), 6)
             app.dataset_runner.finish(rc=0)
-            self.assertEqual(len(app.dataset_runner.steps), 13)
+            self.assertEqual(len(app.dataset_runner.steps), 16)
             app.dataset_runner.finish(rc=0)
             mock_zlm.release.assert_called_once_with("/lock/pool1")
 
@@ -1168,6 +1236,217 @@ class TestSourceLayoutRevalidation(unittest.TestCase):
         self.assertIn("could not re-read", reason)
 
 
+class TestRunningVmsOnPool(unittest.TestCase):
+    """_running_vms_on_pool maps zvols to VMs and asks qm (locally or over
+    ssh on the compute host) which of them still run."""
+
+    def _repo(self, zvols):
+        repo = MagicMock()
+        repo.list_volume_names.return_value = list(zvols)
+        return repo
+
+    def _node_config(self, two_node=False, compute_host=""):
+        nc = MagicMock()
+        nc.is_two_node.return_value = two_node
+        nc.load_node_config.return_value = {"compute_host": compute_host}
+        return nc
+
+    def test_single_node_running_vm_reported(self):
+        pmd = _import_dialogs()
+        repo = self._repo(["pool1/vm-100-disk-0", "pool1/vm-207-disk-0", "pool1/data"])
+        with (
+            patch.object(pmd, "node_config", self._node_config()),
+            mock_subprocess() as sub,
+        ):
+            sub.set_command_handler(
+                r"^qm status 100$", lambda cmd, **kw: sub._completed("status: running\n")
+            )
+            sub.set_command_handler(
+                r"^qm status 207$", lambda cmd, **kw: sub._completed("status: stopped\n")
+            )
+            running = pmd._running_vms_on_pool(repo, "pool1")
+        self.assertEqual(running, {"100": ["pool1/vm-100-disk-0"]})
+        self.assertEqual(sub.calls[0][0], ["qm", "status", "100"])
+        self.assertEqual(sub.calls[1][0], ["qm", "status", "207"])
+
+    def test_two_node_checks_compute_host_over_ssh(self):
+        pmd = _import_dialogs()
+        repo = self._repo(["pool1/vm-100-disk-0"])
+        with (
+            patch.object(
+                pmd, "node_config", self._node_config(two_node=True, compute_host="tweety")
+            ),
+            mock_subprocess() as sub,
+        ):
+            sub.set_command_handler(r"^ssh ", lambda cmd, **kw: sub._completed("status: running\n"))
+            running = pmd._running_vms_on_pool(repo, "pool1")
+        self.assertEqual(running, {"100": ["pool1/vm-100-disk-0"]})
+        argv = sub.calls[0][0]
+        self.assertEqual(argv[0], "ssh")
+        self.assertIn("root@tweety", argv)
+        self.assertEqual(argv[-3:], ["qm", "status", "100"])
+
+    def test_non_proxmox_zvols_are_ignored(self):
+        pmd = _import_dialogs()
+        repo = self._repo(["pool1/data", "pool1/subvol-5-disk-0"])
+        with (
+            patch.object(pmd, "node_config", self._node_config()),
+            mock_subprocess() as sub,
+        ):
+            running = pmd._running_vms_on_pool(repo, "pool1")
+        self.assertEqual(running, {})
+        self.assertEqual(sub.calls, [])
+
+    def test_subprocess_failure_skips_vm(self):
+        pmd = _import_dialogs()
+        repo = self._repo(["pool1/vm-100-disk-0"])
+
+        def _boom(cmd, **kw):
+            raise FileNotFoundError("qm not installed")
+
+        with (
+            patch.object(pmd, "node_config", self._node_config()),
+            mock_subprocess() as sub,
+            capture_logs() as logs,
+        ):
+            sub.set_command_handler(r"^qm status", _boom)
+            running = pmd._running_vms_on_pool(repo, "pool1")
+        self.assertEqual(running, {})
+        self.assertTrue(any("Could not check the status of VM 100" in line for line in logs), logs)
+
+    def test_two_node_without_compute_host_skips_check(self):
+        pmd = _import_dialogs()
+        repo = self._repo(["pool1/vm-100-disk-0"])
+        with (
+            patch.object(pmd, "node_config", self._node_config(two_node=True, compute_host="")),
+            mock_subprocess() as sub,
+            capture_logs() as logs,
+        ):
+            running = pmd._running_vms_on_pool(repo, "pool1")
+        self.assertEqual(running, {})
+        self.assertEqual(sub.calls, [])
+        self.assertTrue(any("skipping the running check" in line for line in logs), logs)
+
+
+class TestRunningVmsWarning(unittest.TestCase):
+    def _run(self, pmd, response, running):
+        fake = MagicMock()
+        fake.run.return_value = response
+        with patch.object(pmd, "create_dialog", return_value=fake):
+            return pmd._show_running_vms_warning(MagicMock(), "pool1", running)
+
+    def test_yes_continues(self):
+        pmd = _import_dialogs()
+        self.assertTrue(self._run(pmd, pmd.Gtk.ResponseType.YES, {"100": ["pool1/vm-100-disk-0"]}))
+
+    def test_no_defers(self):
+        pmd = _import_dialogs()
+        self.assertFalse(self._run(pmd, pmd.Gtk.ResponseType.NO, {"100": ["pool1/vm-100-disk-0"]}))
+
+    def test_dialog_lists_vm_ids_and_zvols(self):
+        pmd = _import_dialogs()
+        fake = MagicMock()
+        fake.run.return_value = pmd.Gtk.ResponseType.NO
+        label = MagicMock()
+        with (
+            patch.object(pmd, "create_dialog", return_value=fake),
+            patch.object(pmd.Gtk, "Label", return_value=label),
+        ):
+            pmd._show_running_vms_warning(MagicMock(), "pool1", {"100": ["pool1/vm-100-disk-0"]})
+        text = label.set_text.call_args.args[0]
+        self.assertIn("pool 'pool1'", text)
+        self.assertIn("VM 100", text)
+        self.assertIn("pool1/vm-100-disk-0", text)
+        self.assertIn("writes after that snapshot are lost", text)
+
+
+class TestCutoverGates(unittest.TestCase):
+    """The cutover-time layout re-check and running-VM gate in _copy_complete."""
+
+    def _app_with_late_layout_change(self):
+        """App whose pool1 layout is stable through the pre-copy check but
+        changes before the cutover-time re-check."""
+        app = _make_app()
+        repo = app.ctx.zfs_repository
+        calls = {"n": 0}
+
+        def listing(pool, depth=None):
+            calls["n"] += 1
+            rows = [
+                _dataset_row(pool),
+                _dataset_row(f"{pool}/data"),
+                _dataset_row(f"{pool}/vm-100-disk-0"),
+            ]
+            if calls["n"] > 3 and pool == "pool1":
+                rows = [
+                    _dataset_row(pool),
+                    _dataset_row(f"{pool}/data"),
+                    _dataset_row(f"{pool}/newdata"),
+                ]
+            return rows
+
+        repo.list_datasets.side_effect = listing
+        return app
+
+    def test_layout_change_at_cutover_aborts_without_cutover(self):
+        pmd = _import_dialogs()
+        app = self._app_with_late_layout_change()
+        request = _request(pmd)
+        mock_zlm, stack = _drive_handler(pmd, app, request)
+        with stack:
+            with (
+                patch.object(pmd, "_show_info_dialog") as info,
+                patch.object(pmd, "_show_cutover_confirm") as confirm,
+                capture_logs() as logs,
+            ):
+                app.dataset_runner.finish(rc=0)  # copy phase
+            confirm.assert_not_called()
+            self.assertFalse(app.dataset_runner.running)
+            mock_zlm.release.assert_called_once_with("/lock/pool1")
+            info.assert_called_once()
+            self.assertIn("changed", info.call_args.args[2])
+            self.assertTrue(any("changed at cutover time" in line for line in logs), logs)
+
+    def test_running_vms_gate_offered_before_confirmation(self):
+        pmd = _import_dialogs()
+        app = _make_app()
+        request = _request(pmd)
+        _mock_zlm, stack = _drive_handler(pmd, app, request)
+        with stack:
+            with (
+                patch.object(
+                    pmd, "_running_vms_on_pool", return_value={"100": ["pool1/vm-100-disk-0"]}
+                ) as vm_check,
+                patch.object(pmd, "_show_running_vms_warning", return_value=True) as warn,
+            ):
+                app.dataset_runner.finish(rc=0)
+            vm_check.assert_called_once()
+            warn.assert_called_once()
+            # Confirmed continuation starts the cutover phase.
+            self.assertTrue(app.dataset_runner.running)
+            self.assertEqual(len(app.dataset_runner.steps), 7)
+
+    def test_declined_running_vm_warning_defers_cutover(self):
+        pmd = _import_dialogs()
+        app = _make_app()
+        request = _request(pmd)
+        mock_zlm, stack = _drive_handler(pmd, app, request)
+        with stack:
+            with (
+                patch.object(
+                    pmd, "_running_vms_on_pool", return_value={"100": ["pool1/vm-100-disk-0"]}
+                ),
+                patch.object(pmd, "_show_running_vms_warning", return_value=False),
+                patch.object(pmd, "_show_cutover_confirm") as confirm,
+                capture_logs() as logs,
+            ):
+                app.dataset_runner.finish(rc=0)
+            confirm.assert_not_called()
+            self.assertFalse(app.dataset_runner.running)
+            mock_zlm.release.assert_called_once_with("/lock/pool1")
+            self.assertTrue(any("running VMs declined" in line for line in logs), logs)
+
+
 class TestCutoverIscsiRepair(unittest.TestCase):
     """repair-iscsi-luns chaining after a successful cutover."""
 
@@ -1205,14 +1484,14 @@ class TestCutoverIscsiRepair(unittest.TestCase):
 
     def test_unmanaged_pool_skips_repair_and_logs_hint(self):
         _pmd, app, logs = self._run_cutover(managed=False)
-        # The cutover step list (4 steps) was not replaced by a repair step.
-        self.assertEqual(len(app.dataset_runner.steps), 4)
+        # The cutover step list (7 steps) was not replaced by a repair step.
+        self.assertEqual(len(app.dataset_runner.steps), 7)
         self.assertTrue(any("not enrolled in two-node iSCSI" in line for line in logs), logs)
         self.assertTrue(any("setup-iscsi-targets" in line for line in logs), logs)
 
     def test_unmanaged_pool_single_node_finishes_silently(self):
         _pmd, app, logs = self._run_cutover(managed=False, two_node_hint=False)
-        self.assertEqual(len(app.dataset_runner.steps), 4)
+        self.assertEqual(len(app.dataset_runner.steps), 7)
         self.assertFalse(any("not enrolled in two-node iSCSI" in line for line in logs), logs)
         self.assertFalse(any("setup-iscsi-targets" in line for line in logs), logs)
 

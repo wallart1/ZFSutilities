@@ -226,8 +226,8 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-zfsrestore` | `zfsrestore` full-copy wrapper: overrides, legacy second overrides, required parameters, single `send-receive` invocation, parameter forwarding |
 | `test-zfsrestoresendstream` | Lock acquisition before each zfs receive destination |
 | `test-zfsresume` | Lock acquisition before reading resume token |
-| `test-zfs-migrate-send` | `zfs-migrate-send` fresh-send pipeline (`-Rw`/`-u -F -s -v`), `-nPRw` size estimate, resume via `zfs send -t <token>` (received `-v`), stale/unexpected token abort + fresh retry, failure re-run hint (rc 8), pv/rate-limit plumbing |
-| `test-transfer-lib` | `transfer-lib.sh` pv-arg construction (tty/LOG_INHERIT/headless/rate limit), resume-token validation and stale-string classification, token abort (live + dry-run), space-check math and WARN text, `transfer_do` pipeline argv and FATAL rc |
+| `test-zfs-migrate-send` | `zfs-migrate-send` fresh-send pipeline (`-Rw`/`-u -F -s -v`), `-nPRw` size estimate, incremental catch-up send (`-RIw` with `$fromsnap`, incl. incremental estimate and rc 8), resume via `zfs send -t <token>` (received `-v`), stale/unexpected token abort + fresh retry, failure re-run hint (rc 8), pv/rate-limit plumbing |
+| `test-transfer-lib` | `transfer-lib.sh` pv-arg construction (tty/LOG_INHERIT/headless/rate limit), resume-token validation and stale-string classification, token abort (live + dry-run), space-check math and WARN text, `transfer_do` pipeline argv (incl. the optional second send target) and FATAL rc |
 | `test-zfsretain` | Retention policy phases (offsite dedup, same-day dedup, oldest-first bucket pruning, empty logging, retain=0) |
 | `test-zfsretain-debug` | `zfsretain` sources cleanly and defines the retain function |
 | `test-zfsscruball` | `zfsscruball` state file, `zpool scrub -w` invocation, completed-pool skip |
@@ -365,14 +365,14 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_feature_config` | Per-feature config getters/setters, snapshot name generation, checkagainst entry merge, workload profile immutability |
 | `test_file_locking` | Advisory flock helpers |
 | `test_golden` | `golden.py` golden-file helper — canonical serialization, compare/update modes, missing-golden errors |
-| `test_gui_helpers` | `gui_helpers` utilities, including mounted-snapshot detection via `mount -t zfs` and orange non-default expander labels |
+| `test_gui_helpers` | `gui_helpers` utilities, including mounted-snapshot detection via `mount -t zfs`, orange non-default expander labels, and log font scaling (CSS steps, persistence, restore, View menu wiring) |
 | `test_gui_infrastructure` | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling |
 | `test_installer_retention` | Installer retention profile initialization: default-only on new install and preservation of existing profiles |
 | `test_iscsi_enroll` | `iscsi_enroll.py` — derive_target_short, is_iscsi_managed_pool, enroll argv building, post-create enrollment offer (two-node gating, decline/failure paths) |
 | `test_legacy_retention` | Legacy `zfsretainpol-*` file parsing and pool scanning |
 | `test_log_index` | Persistent session-log metadata index |
 | `test_logging_config` | Message levels, GUI sink, session log env helpers, and session log truncation |
-| `test_logs_page` | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, column-header label tooltips, and pop-out reparenting |
+| `test_logs_page` | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, column-header label tooltips, saved font-scale restore, and pop-out reparenting |
 | `test_main` | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, initial dashboard refresh |
 | `test_migration` | One-time state-file migration helper |
 | `test_node_config` | Two-node configuration loading and resolution |
@@ -386,8 +386,8 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_pool_create_wizard` | `pool_create_wizard.py` — wizard page gating, exact command building (incl. RAID10 mirror pairs), handler guards, Create Pool button sensitivity, scripted end-to-end flow with lock acquire/release and registry offer |
 | `test_pool_growth` | `pool_growth.py` — attach/replace/detach classification, replace-pair and infra-vdev validation, scrub-block check |
 | `test_pool_growth_dialogs` | `pool_growth_dialogs.py` — Add Vdev/Attach/Replace/Detach/Infra-Vdev pure helpers, handler guards, and dialog flows |
-| `test_pool_migrate` | `pool_migrate.py` — migration snapshot/temp-pool naming, step planning, capacity checks, tree verification, migration argv builders |
-| `test_pool_migrate_dialogs` | `pool_migrate_dialogs.py` — Migrate Pool dialog problems/warnings/plan, scrub-block gate, handler guards, two-phase copy/cutover execution, iSCSI repair chaining |
+| `test_pool_migrate` | `pool_migrate.py` — migration snapshot/temp-pool naming, cutover snapshot naming, zvol-to-VMID mapping, step planning (incl. cutover catch-up placement), capacity checks, tree verification, migration argv builders |
+| `test_pool_migrate_dialogs` | `pool_migrate_dialogs.py` — Migrate Pool dialog problems/warnings/plan, scrub-block gate, handler guards, two-phase copy/cutover execution (incl. cutover catch-up steps, cutover-time layout abort, and the running-VM gate), iSCSI repair chaining |
 | `test_pool_watch` | Per-pool dataset watch window |
 | `test_pools_page` | Pools tab registry UI |
 | `test_profile_integration` | Concurrent profile execution: disjoint datasets, same-dataset conflict, backup+prune serialization |
@@ -409,9 +409,9 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_zfs_capabilities` | OpenZFS release-variation gating (incl. patch-level minimums such as `zfs_rewrite` at 2.3.4), pool-feature cross-check parsing |
 | `test_zfs_diagnostics` | `gui_helpers.diagnose_dataset_busy` — detects each known cause via mocked `subprocess.run` |
 | `test_zfs_lock_manager` | `zfs_lock_manager` two-node lock behavior and stale-lock cleanup (including unverifiable holder scripts) |
-| `test_zfs_repository` | `zfs_repository.py` — ZFS/zpool subprocess isolation, importable-pool config parsing, `zpool create` (incl. RAID10 mirror pairs) and pool-growth/migration command building and execution |
+| `test_zfs_repository` | `zfs_repository.py` — ZFS/zpool subprocess isolation, importable-pool config parsing, zvol listing, `zpool create` (incl. RAID10 mirror pairs) and pool-growth/migration command building (incl. incremental `from_snap`) and execution |
 | `test_zfsinfo` | Pool/dataset/snapshot info gathering with mocked `subprocess` |
-| `test_zfsutilities_gui` | Main GUI window behavior, dashboard/scrub/disks timer lifecycle |
+| `test_zfsutilities_gui` | Main GUI window behavior, dashboard/scrub/pools/disks timer lifecycle, and log-font handler dispatch |
 
 Most Python suites are standard `unittest.TestCase` classes executed by
 [pytest](https://docs.pytest.org/) with

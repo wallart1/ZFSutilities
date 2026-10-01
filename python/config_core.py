@@ -163,6 +163,7 @@ UI_STATE_DEFAULTS = {
     },
     "treeview_columns": {},
     "paned_positions": {},
+    "font_sizes": {},
 }
 
 

@@ -443,6 +443,29 @@ class TestOnPoolsImport(unittest.TestCase):
             mock_scrub_refresh.assert_called_once_with(app)
             mock_burst.assert_called_once_with(app)
 
+    def test_import_importable_selected_invalidates_importable_cache(self):
+        """Import invalidates the importable cache so the registry reflects it immediately."""
+        pa = _import_pool_actions()
+        app = self._make_app_with_offline_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+            health="IMPORTABLE",
+        )
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        with (
+            patch.object(pa, "refresh_pools_page"),
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(app.ctx.zfs_repository, "import_pool", return_value=True),
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_import(app)
+
+        app._importable_pool_cache.invalidate.assert_called_once_with()
+
 
 class TestOnPoolsExport(unittest.TestCase):
     """on_pools_export refreshes both pool and scrub tables."""
@@ -494,6 +517,28 @@ class TestOnPoolsExport(unittest.TestCase):
         mock_refresh.assert_called_once_with(app)
         mock_scrub_refresh.assert_called_once_with(app)
         mock_burst.assert_called_once_with(app)
+
+    def test_export_selected_invalidates_importable_cache(self):
+        """Export invalidates the importable cache so the registry reflects it immediately."""
+        pa = _import_pool_actions()
+        app = self._make_app_with_selection(
+            pa,
+            [{"name": "tank", "offsite_candidate": False}],
+            ["tank"],
+        )
+        msg_dialog = MagicMock()
+        msg_dialog.return_value.run.return_value = pa.Gtk.ResponseType.YES
+
+        with (
+            patch.object(pa, "refresh_pools_page"),
+            patch.object(pa, "refresh_scrub_table"),
+            patch.object(pa, "schedule_scrub_refresh_burst"),
+            patch.object(app.ctx.zfs_repository, "export_pool_detailed", return_value=(True, "")),
+        ):
+            pa.Gtk.MessageDialog = msg_dialog
+            pa.on_pools_export(app)
+
+        app._importable_pool_cache.invalidate.assert_called_once_with()
 
     def test_export_auto_unmounts_and_retries_on_unmount_failure(self):
         pa = _import_pool_actions()

@@ -649,7 +649,12 @@ MAX_POOL_MISSING_TICKS = 3
 class ScrubQueue:
     """Manages a queue of pool scrubs with a concurrency target.
 
-    The queue is persisted to disk so it survives GUI restarts.
+    The queue is persisted to disk so it survives GUI restarts. An explicit
+    *target* argument is authoritative: it overrides and re-persists the
+    persisted target (the GUI seeds it from the scrub config, scrub profiles
+    from their ``simultaneous`` setting), so a stale persisted target can
+    never silently ignore the caller's setting. When *target* is omitted,
+    the persisted target is kept.
     """
 
     # -- Persistence --
@@ -1059,7 +1064,9 @@ class ScrubQueue:
         if self._changed_since_save():
             self._save()
 
-    def __init__(self, target: int = 1, *, load_locked: bool = True, save_locked: bool = True):
+    def __init__(
+        self, target: int | None = None, *, load_locked: bool = True, save_locked: bool = True
+    ):
         self.pending: set[str] = set()
         self.active: set[str] = set()
         self.paused: set[str] = set()
@@ -1069,7 +1076,7 @@ class ScrubQueue:
         self._start_failures: dict[str, int] = {}
         self._missing_counts: dict[str, int] = {}
         self._external_reported: set[str] = set()
-        self.target = max(1, target)
+        self.target = 1
         self.order: list[str] = []
         self._start_times: dict[str, float] = {}
         self._last_saved_state: dict | None = None
@@ -1077,9 +1084,10 @@ class ScrubQueue:
         self._save_locked = save_locked
         had_state = os.path.exists(feature_config.SCRUB_STATE_PATH)
         self._load()
-        if not had_state:
-            # No prior state — use the passed target and persist it
-            self.target = max(1, target)
+        if target is not None and max(1, target) != self.target:
+            self.set_target(target)
+        elif not had_state:
+            # No prior state — persist the freshly initialized queue
             self._save()
 
     def _changed_since_save(self) -> bool:

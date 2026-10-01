@@ -204,6 +204,13 @@ def _import_single_pool(app, pool_name):
     return False
 
 
+def _invalidate_importable_cache(app):
+    """Force a fresh importable-pool scan on the next registry refresh."""
+    cache = getattr(app, "_importable_pool_cache", None)
+    if cache is not None:
+        cache.invalidate()
+
+
 def on_pools_import(app):
     """Import selected importable pools, or show importable pools dialog if none selected."""
     selected = _get_selected_rows(app)
@@ -222,6 +229,7 @@ def on_pools_import(app):
         if response == Gtk.ResponseType.YES:
             for pool_name in importable_selected:
                 _import_single_pool(app, pool_name)
+            _invalidate_importable_cache(app)
             refresh_pools_page(app)
             refresh_scrub_table(app)
             schedule_scrub_refresh_burst(app)
@@ -311,6 +319,7 @@ def on_pools_import(app):
         return
 
     _import_single_pool(app, selected_pool)
+    _invalidate_importable_cache(app)
     refresh_pools_page(app)
     refresh_scrub_table(app)
     schedule_scrub_refresh_burst(app)
@@ -351,6 +360,7 @@ def on_pools_export(app):
         if _try_export_with_recovery(app, pool_name, stderr):
             log_msg(f"INFO: Pool '{pool_name}' exported successfully after resolving blockers")
 
+    _invalidate_importable_cache(app)
     refresh_pools_page(app)
     refresh_scrub_table(app)
     schedule_scrub_refresh_burst(app)

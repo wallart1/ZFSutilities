@@ -997,6 +997,21 @@ class TestCreateLogsPage(unittest.TestCase):
         app.connect.assert_called_once()
         self.assertEqual(app.connect.call_args[0][0], "realize")
 
+    @patch("logs_page.restore_log_font_scale")
+    @patch("logs_page._sync_log_list")
+    @patch("logs_page._update_success_rate_label")
+    def test_create_logs_page_restores_saved_font_scale(
+        self, _mock_update, _mock_sync, mock_restore
+    ):
+        """The viewer text widget gets its saved relative font size on creation."""
+        app = MagicMock()
+        app.config = {}
+        app._ui_state.bind_treeview = MagicMock()
+
+        lp.create_logs_page(app)
+
+        mock_restore.assert_called_once_with(app, app.logs_text, lp.LOG_FONT_STATE_LOGS)
+
     @patch("logs_page._sync_log_list")
     @patch("logs_page._update_success_rate_label")
     def test_create_logs_page_binds_log_popout_to_ui_state(self, _mock_update, _mock_sync):

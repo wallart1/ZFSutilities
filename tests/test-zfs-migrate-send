@@ -105,6 +105,7 @@ reset_state() {
     sourcefs="pool/src/ds"
     destfs="pool/dest/ds"
     snapname="migrate-1"
+    fromsnap=""
     pv_rate_limit=""
     ZFSUTILITIES_LOG_INHERIT=""
 }
@@ -182,6 +183,72 @@ test_missing_vars_fails() {
     local log
     log=$(get_log)
     assert_contains "$log" "FATAL"
+}
+
+# ---------------------------------------------------------------------------
+# Incremental catch-up send ($fromsnap)
+# ---------------------------------------------------------------------------
+
+test_incremental_send_pipeline() {
+    test_start "fromsnap runs zfs send -nPRIw/@from then -RIw @from @to | zfs receive -u -F -s -v"
+    reset_state
+    fromsnap="migrate-0"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local calls
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" \
+        "zfs send -nPRIw pool/src/ds@migrate-0 pool/src/ds@migrate-1"
+    assert_contains "$calls" "zfs send -RIw pool/src/ds@migrate-0 pool/src/ds@migrate-1"
+    assert_contains "$calls" "zfs receive -u -F -s -v pool/dest/ds"
+}
+
+test_incremental_send_uses_incremental_estimate() {
+    test_start "fromsnap size estimate comes from the incremental dry-run"
+    reset_state
+    fromsnap="migrate-0"
+    _mock_send_size="1048576"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "Approximately"
+    assert_contains "$log" "1.0Mi"
+    local calls
+    calls=$(get_zfs_calls)
+    # The full-snapshot dry-run must not run when resuming incrementally.
+    if [[ "$calls" == *"zfs send -nPRw pool/src/ds@migrate-1"* ]]; then
+        test_fail "fromsnap must not run the full -nPRw estimate: $calls"
+        return
+    fi
+}
+
+test_incremental_missing_estimate_warns() {
+    test_start "fromsnap warns and continues when the incremental estimate is unavailable"
+    reset_state
+    fromsnap="migrate-0"
+    _mock_send_size=""
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "Unable to get stream size estimate"
+    local calls
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" "zfs send -RIw pool/src/ds@migrate-0 pool/src/ds@migrate-1"
+}
+
+test_incremental_failure_returns_8() {
+    test_start "failed incremental transfer returns 8 with the re-run hint"
+    reset_state
+    fromsnap="migrate-0"
+    _mock_transfer_rc=1
+    zfs_migrate_send 2>/dev/null
+    assert_rc 8 "$?"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "FATAL: Send/receive failed"
+    assert_contains "$log" "re-run Migrate Pool to resume"
 }
 
 # ---------------------------------------------------------------------------
@@ -314,6 +381,10 @@ test_fresh_send_estimates_size
 test_fresh_send_missing_estimate_warns
 test_fresh_send_space_short_warns_only
 test_missing_vars_fails
+test_incremental_send_pipeline
+test_incremental_send_uses_incremental_estimate
+test_incremental_missing_estimate_warns
+test_incremental_failure_returns_8
 test_resume_transfer
 test_resume_transfer_failure_hint
 test_stale_token_aborts_then_fresh_send

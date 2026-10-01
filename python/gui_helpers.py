@@ -107,6 +107,134 @@ def style_var_widgets_nondefault(widgets, defaults):
     return non_default
 
 
+# Relative font sizing for the log text widgets (View menu). Sizes move in
+# steps rather than absolute values; step 0 removes the CSS override so the
+# theme default returns exactly.
+LOG_FONT_STEP_PT = 1.5
+LOG_FONT_MIN_STEPS = -4
+LOG_FONT_MAX_STEPS = 4
+LOG_FONT_FALLBACK_PT = 10.0
+LOG_FONT_CSS_CLASS = "zfsu-log-font"
+LOG_FONT_STATE_INFO = "info_log"
+LOG_FONT_STATE_LOGS = "logs_viewer"
+
+
+def clamp_log_font_steps(steps):
+    """Clamp a relative font step count to the supported range."""
+    return max(LOG_FONT_MIN_STEPS, min(LOG_FONT_MAX_STEPS, steps))
+
+
+def log_font_css(steps, base_pt):
+    """Return the CSS that renders *steps* away from *base_pt* points."""
+    size_pt = round(base_pt + steps * LOG_FONT_STEP_PT, 2)
+    return f".{LOG_FONT_CSS_CLASS} {{ font-size: {size_pt:g}pt; }}"
+
+
+def _widget_font_pt(widget):
+    """Return the widget's current theme font size in points."""
+    get_style_context = getattr(widget, "get_style_context", None)
+    if not callable(get_style_context):
+        return LOG_FONT_FALLBACK_PT
+    context = get_style_context()
+    if context is None:
+        return LOG_FONT_FALLBACK_PT
+    get_font = getattr(context, "get_font", None)
+    if not callable(get_font):
+        return LOG_FONT_FALLBACK_PT
+    try:
+        desc = get_font(Gtk.StateFlags.NORMAL)
+        return desc.get_size() / Pango.SCALE
+    except Exception:
+        return LOG_FONT_FALLBACK_PT
+
+
+class LogFontController:
+    """Relative font sizing for one log Gtk.TextView, persisted in ui_state."""
+
+    def __init__(self, widget, config=None, state_key="info_log"):
+        self.widget = widget
+        self.config = config
+        self.state_key = state_key
+        self.steps = 0
+        self.base_pt = _widget_font_pt(widget)
+        self._provider = None
+
+    def larger(self):
+        return self.set_steps(self.steps + 1)
+
+    def smaller(self):
+        return self.set_steps(self.steps - 1)
+
+    def reset(self):
+        return self.set_steps(0)
+
+    def set_steps(self, steps, persist=True):
+        """Apply *steps* (clamped); return the step count actually applied."""
+        self.steps = clamp_log_font_steps(steps)
+        self._apply()
+        if persist:
+            self._persist()
+        return self.steps
+
+    def css(self):
+        """Return the CSS currently in effect (empty string at default)."""
+        if self.steps == 0:
+            return ""
+        return log_font_css(self.steps, self.base_pt)
+
+    def _apply(self):
+        get_style_context = getattr(self.widget, "get_style_context", None)
+        if not callable(get_style_context):
+            return
+        context = get_style_context()
+        if context is None:
+            return
+        if self._provider is not None:
+            context.remove_provider(self._provider)
+            self._provider = None
+        if self.steps == 0:
+            context.remove_class(LOG_FONT_CSS_CLASS)
+            return
+        context.add_class(LOG_FONT_CSS_CLASS)
+        provider = Gtk.CssProvider()
+        provider.load_from_data(self.css().encode("utf-8"))
+        context.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self._provider = provider
+
+    def _persist(self):
+        if self.config is None:
+            return
+        from backup_config import save_ui_state
+
+        save_ui_state(self.config, {"font_sizes": {self.state_key: self.steps}})
+
+
+def get_log_font_controller(app, state_key, widget):
+    """Return the app's controller for *state_key*, creating it for *widget*."""
+    controllers = getattr(app, "_log_font_controllers", None)
+    if controllers is None:
+        controllers = {}
+        app._log_font_controllers = controllers
+    controller = controllers.get(state_key)
+    if controller is None or controller.widget is not widget:
+        controller = LogFontController(widget, getattr(app, "config", None), state_key)
+        controllers[state_key] = controller
+    return controller
+
+
+def restore_log_font_scale(app, widget, state_key):
+    """Apply the saved relative font size for *state_key* to *widget*."""
+    config = getattr(app, "config", None)
+    if config is None:
+        return
+    from backup_config import get_ui_state
+
+    saved = get_ui_state(config).get("font_sizes", {}).get(state_key)
+    controller = get_log_font_controller(app, state_key, widget)
+    if saved:
+        controller.set_steps(saved, persist=False)
+
+
 def _widget_value(widget):
     """Return the current string value of a var widget (Entry or ComboBoxText)."""
     get_active_text = getattr(widget, "get_active_text", None)
@@ -454,7 +582,11 @@ def _load_children_for_row(store, tree_iter, repo):
 
 
 def reload_row_children(store, tree_iter, repo=None):
-    """Reload a row's children in place (e.g. after a loop attach/detach)."""
+    """Reload a row's children in place (e.g. after a loop attach/detach).
+
+    The row is marked loaded again afterwards so a later expansion does not
+    append a second set of children on top of the reloaded ones.
+    """
     repo = repo or get_default_repository()
     child = store.iter_children(tree_iter)
     while child:
@@ -463,6 +595,7 @@ def reload_row_children(store, tree_iter, repo=None):
         child = nxt
     store.set_value(tree_iter, 7, False)
     _load_children_for_row(store, tree_iter, repo)
+    store.set_value(tree_iter, 7, True)
 
 
 def load_volume_loop_children(store, vol_iter, vol_name, repo=None):
@@ -1632,7 +1765,8 @@ def get_tree_selection_items(view):
       {"type": "pool",     "name": pool_name, "mounted": bool}
       {"type": "dataset",  "name": full_dataset_name, "mounted": bool}
       {"type": "snapshot", "name": snap_short (without @),
-                            "dataset": full_dataset, "mounted": bool}
+                            "dataset": full_dataset, "parent_type": parent
+                            dataset type, "mounted": bool}
       {"type": "hold",     "tag": tag, "snapshot": snap_short,
                             "dataset": full_dataset, "mounted": bool}
       {"type": "volume-partition", "name": loop partition (e.g. loop0p1),
@@ -1697,6 +1831,7 @@ def get_tree_selection_items(view):
                     "type": "snapshot",
                     "name": name.lstrip("@"),
                     "dataset": dataset,
+                    "parent_type": model.get_value(parent_iter, 2),
                     "zfs_type": ds_type,
                     "mounted": mounted,
                 }
@@ -1859,6 +1994,26 @@ def create_menu_bar(app):
     minimize_width_item = Gtk.MenuItem(label="Minimize Width...")
     minimize_width_item.connect("activate", app.on_minimize_width)
     view_menu.append(minimize_width_item)
+
+    view_sep = Gtk.SeparatorMenuItem()
+    view_menu.append(view_sep)
+
+    for font_label, state_key in (
+        ("GUI Log Font", LOG_FONT_STATE_INFO),
+        ("Log Viewer Font", LOG_FONT_STATE_LOGS),
+    ):
+        font_menu = Gtk.Menu()
+        font_item = Gtk.MenuItem(label=font_label)
+        font_item.set_submenu(font_menu)
+        view_menu.append(font_item)
+        for item_label, handler in (
+            ("Larger", app.on_log_font_larger),
+            ("Smaller", app.on_log_font_smaller),
+            ("Default", app.on_log_font_default),
+        ):
+            item = Gtk.MenuItem(label=item_label)
+            item.connect("activate", handler, state_key)
+            font_menu.append(item)
 
     help_menu = Gtk.Menu()
     help_item = Gtk.MenuItem(label="Help")
@@ -2278,6 +2433,8 @@ def create_info_panel(app):
 
     # Create pop-out window (hidden by default)
     app.popout_window = LogPopoutWindow(app, toggle_widget=app._popout_toggle)
+
+    restore_log_font_scale(app, app.info_text, LOG_FONT_STATE_INFO)
 
     set_log_sink(app.log_message)
 

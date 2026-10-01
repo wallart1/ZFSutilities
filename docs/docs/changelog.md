@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.109.0
+
+*Released 2026-10-01*
+
+### Added
+
+- **Migrate Pool cutover catch-up sends** — both migration modes now pause
+  before the destructive cutover steps to take a cutover snapshot
+  (`@migrate-…-cutover`) on the still-imported source pool and send one
+  short incremental (`zfs send -RIw`) per dataset from the migration
+  snapshot down to it. The data-loss window shrinks from "everything
+  written since the migration snapshot" to the seconds between the cutover
+  snapshot and the export, and the confirm dialog states that the pool must
+  be quiesced from the cutover snapshot onward. The cutover snapshot keeps
+  the `migrate` label, so retention never prunes it, and in holding mode
+  the copy-back restores from it, so writes made during the copy survive
+  the roll-back.
+
+- **Cutover re-checks** — at cutover confirmation the source pool's dataset
+  layout is re-verified (the copy phase may have taken hours); a changed
+  layout aborts with an explanation instead of exporting a pool that no
+  longer matches the reviewed plan. VMs whose disks live on the source pool
+  are checked with `qm status` (locally, or over the two-node SSH link) and
+  any running VM is reported before the typed confirmation.
+
+- **Log font controls** — the View menu gains "GUI Log Font" and "Log
+  Viewer Font" submenus with Larger / Smaller / Default entries for the
+  Backup log and the Info pane independently. Sizes move in relative steps
+  (1.5 pt, clamped to ±4), persist in the saved UI state under
+  `font_sizes`, and are restored when the pages are created.
+
+- **Pools tab auto-refresh** — while the Pools tab is visible the pool
+  registry refreshes itself every 30 seconds (the timer stops on other
+  tabs), and pool import/export invalidates the importable-pools cache so
+  the Import Pool dialog never lists stale candidates.
+
+### Changed
+
+- **`zfs-migrate-send` takes an optional from-snapshot** — a new optional
+  `$fromsnap` argument makes the send the cutover incremental
+  (`zfs send -RIw @from @to`); the size-estimate dry-run uses `-nPRIw`
+  over the same range.
+
+- **`transfer_do` can send a second target** — an optional eighth argument,
+  `send_target2`, is appended to the send command when non-empty, giving
+  incremental sends their `@from @to` range.
+
+- **Dashboard "Recent Operations" moved up** — the section now sits above
+  Running Tasks instead of below it.
+
+### Fixed
+
+- **Zvol snapshot loop-mount hardening** — after attaching a snapshot's
+  zvol the mount waits for udev (`udevadm settle --timeout=10`) before
+  scanning partition nodes, so partitions are found on the first try;
+  snapshot partitions are mounted read-only (`mount -o ro`); and snapshots
+  of ZFS volumes disable their Mount action with an explanatory tooltip
+  instead of attempting and failing the mount.
+
+- **Datasets tree fixes** — reloading a row's children (after a loop
+  attach/detach) re-marks the row loaded, so expanding it later no longer
+  appends a duplicate second set of children; the Datasets Delete action
+  now enables only for datasets, snapshots, and holds (a strict whitelist)
+  instead of for anything that is not a pool.
+
+- **`ScrubQueue` explicit target persists** — constructing `ScrubQueue`
+  with an explicit `target` now overrides and re-persists the saved scrub
+  interval; omitting it keeps the persisted value as before.
+
 ## 0.108.1
 
 *Released 2026-10-01*

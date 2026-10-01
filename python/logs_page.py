@@ -24,10 +24,12 @@ from config_core import (
 )
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 from gui_helpers import (
+    LOG_FONT_STATE_LOGS,
     LogPopoutWindow,
     TextViewSearch,
     bold_label,
     configure_treeview_column,
+    restore_log_font_scale,
     set_monospace_font,
 )
 from log_index import LogIndex
@@ -328,6 +330,8 @@ def create_logs_page(app):
     app.logs_text_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
     app.logs_text_scroll.set_min_content_height(200)
     app.logs_text_scroll.add(app.logs_text)
+
+    restore_log_font_scale(app, app.logs_text, LOG_FONT_STATE_LOGS)
 
     # Viewer toolbar: level filter + short-prefix toggle + search + pop-out
     app.logs_viewer_level = DEFAULT_MSG_LEVEL

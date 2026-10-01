@@ -2451,9 +2451,9 @@ class TestCreateDashboardPage(unittest.TestCase):
         expected_titles = [
             "<b>Warnings</b>",
             "<b>Pool Health</b>",
+            "<b>Recent Operations</b>",
             "<b>Running Tasks</b>",
             "<b>Active Locks</b>",
-            "<b>Recent Operations</b>",
             "<b>iSCSI Issues</b>",
             "<b>Configuration</b>",
         ]

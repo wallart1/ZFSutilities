@@ -9,13 +9,16 @@ is two runner phases: the copy phase (recursive migration snapshot, one
 resumable ``zfs-migrate-send`` step — ``zfs send -Rw`` received with
 ``zfs receive -u -F -s``, with ``pv`` in the pipeline and an optional
 bandwidth limit — per top-level dataset, then a dataset-tree verification
-step), and the cutover phase (export the source
+step), and the cutover phase (a catch-up snapshot of the still-imported
+source pool plus one short ``zfs send -RIw`` incremental per dataset so
+writes made during the copy are not lost, then export the source
 pool, then — for new disks — re-import the migrated pool under the source
 pool's name, or — for holding pool — destroy the source, rebuild it from
 the user-selected disks (the freed source members plus any eligible unused
 disks) with the chosen topology, copy back, and swap). The cutover
 phase starts only after a second typed confirmation, since it takes the
-pool briefly offline.
+pool briefly offline; before that confirmation the source layout is
+re-validated and the pool's zvols are checked for running VMs.
 
 All decision logic lives in the pure helpers below or in ``pool_migrate``;
 ZFS I/O is delegated to ``ZfsRepository`` via the app context.
@@ -26,6 +29,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import subprocess
 import tempfile
 from dataclasses import dataclass, field, replace
 
@@ -69,11 +73,13 @@ from pool_migrate import (
     MIGRATE_NEW_DISKS,
     MIGRATION_MODES,
     check_destination_capacity,
+    cutover_snapshot_name,
     generate_temp_pool_name,
     holding_migration_namespace,
     migration_snapshot_bare_name,
     migration_snapshot_name,
     plan_migration_steps,
+    vmids_from_zvols,
 )
 from pools_page import on_pools_refresh
 from zfs_repository import (
@@ -147,7 +153,10 @@ class MigrationRequest:
     holding mode only; ``new_pool_topology`` and ``new_pool_by_id`` describe
     the pool to create in both modes (the temp pool on the selected disks,
     or the rebuilt pool on the selected rebuild disks).
-    ``snap_bare`` is the migration snapshot name without the leading ``@``.
+    ``snap_bare`` is the migration snapshot name without the leading ``@``;
+    ``cutover_snap_bare`` is the matching ``…-cutover`` catch-up snapshot
+    name taken on the still-imported source pool at the start of the
+    cutover phase.
     ``rate_limit`` is an optional pv ``-L`` rate for the copy steps; empty
     means unlimited bandwidth. ``holds_file`` is the TSV path where the
     source pool's snapshot holds are captured for reapplication; the
@@ -160,6 +169,7 @@ class MigrationRequest:
     mode: str
     datasets: tuple[str, ...]
     snap_bare: str
+    cutover_snap_bare: str
     temp_pool: str
     holding_pool: str = ""
     new_pool_topology: str = "mirror"
@@ -406,8 +416,11 @@ def _migrate_warnings(state: _MigrateState) -> list[str]:
     """Warnings for the current migration selection."""
     warnings: list[str] = [
         (
-            "cutover exports the source pool — stop VMs and unmount shares that "
-            "use it before confirming the cutover"
+            "the pool must be quiesced from the cutover snapshot onward: "
+            "cutover takes a catch-up snapshot and then exports the source "
+            "pool — stop VMs and unmount shares that use it before "
+            "confirming the cutover; writes after that snapshot are lost, "
+            "but the window is only seconds"
         ),
         (
             "every dataset path survives the migration: the migrated pool is "
@@ -453,6 +466,8 @@ def _plan_lines(state: _MigrateState) -> list[str]:
         state.mode,
         _dest_label(state),
         rebuild_disk_count=rebuild_disk_count,
+        migration_snap=state.snap_name,
+        cutover_snap=cutover_snapshot_name(state.snap_name),
     )
     return [step.description for step in steps]
 
@@ -472,6 +487,7 @@ def build_request(state: _MigrateState) -> MigrationRequest:
         mode=state.mode,
         datasets=tuple(state.datasets_by_pool.get(state.pool_name, [])),
         snap_bare=migration_snapshot_bare_name(state.snap_name),
+        cutover_snap_bare=migration_snapshot_bare_name(cutover_snapshot_name(state.snap_name)),
         temp_pool=_temp_pool_name(state),
         holding_pool=state.holding_pool if state.mode == MIGRATE_HOLDING_POOL else "",
         new_pool_topology=state.topology,
@@ -554,6 +570,48 @@ def _copy_steps(
     return steps
 
 
+def _catchup_steps(
+    request: MigrationRequest,
+    dest_pool: str,
+    dest_namespace: str = "",
+) -> list[BashStep]:
+    """Cutover snapshot + per-dataset incremental catch-up steps.
+
+    The source pool is still imported at this point, so the recursive cutover
+    snapshot captures every write made since the migration snapshot, and one
+    short ``zfs send -RIw`` incremental per dataset (from the migration
+    snapshot to the cutover snapshot) carries them — intermediary snapshots
+    included — into the same destination the copy phase used, all before any
+    destructive cutover step.
+    """
+    src = request.source_pool
+    dest_prefix = f"{dest_pool}/{dest_namespace}" if dest_namespace else dest_pool
+    steps = [
+        BashStep(
+            build_recursive_snapshot_command(src, request.cutover_snap_bare),
+            f"Cutover snapshot pool {src} (catch-up changes since the copy)",
+            is_rsync=False,
+            fatal=True,
+        )
+    ]
+    for dataset in request.datasets:
+        steps.append(
+            BashStep(
+                build_migration_send_receive_command(
+                    f"{src}/{dataset}",
+                    f"{dest_prefix}/{dataset}",
+                    request.cutover_snap_bare,
+                    rate_limit=request.rate_limit,
+                    from_snap=request.snap_bare,
+                ),
+                f"Catch-up {src}/{dataset} -> {dest_prefix}/{dataset}",
+                is_rsync=False,
+                fatal=True,
+            )
+        )
+    return steps
+
+
 def build_migration_steps(
     request: MigrationRequest,
 ) -> tuple[list[BashStep], list[BashStep]]:
@@ -562,7 +620,11 @@ def build_migration_steps(
     The copy phase ends with a fatal capture of the source pool's snapshot
     holds: holds never travel in send streams, and in holding mode the
     source pool (holds included) is destroyed, so the captured TSV is the
-    only record of them. The holds are reapplied as the last cutover step,
+    only record of them. The cutover phase starts with a catch-up snapshot
+    of the still-imported source pool plus one short incremental per dataset
+    (from the migration snapshot to the cutover snapshot), so writes made
+    while the copy ran are migrated before anything destructive happens.
+    The holds are reapplied as the last cutover step,
     after the migrated pool has been imported under the source pool's name
     (so the captured ``<pool>/<dataset>@<snap>`` paths match verbatim and
     the copy-back receives never meet a held snapshot).
@@ -600,7 +662,7 @@ def build_migration_steps(
                 fatal=True,
             )
         )
-        cutover = [
+        cutover = _catchup_steps(request, request.temp_pool) + [
             BashStep(
                 build_pool_export_command(request.source_pool),
                 f"Export source pool {request.source_pool}",
@@ -650,8 +712,11 @@ def build_migration_steps(
         )
     )
     # Held snapshots cannot be destroyed, so the source pool's holds must be
-    # released after capture and before zpool destroy.
-    cutover = [
+    # released after capture and before zpool destroy. The cutover phase
+    # starts with the catch-up snapshot + incrementals into the holding
+    # namespace, so the copy phase's snapshot is not the last word on the
+    # source pool's data.
+    cutover = _catchup_steps(request, request.holding_pool, namespace) + [
         BashStep(
             build_pool_export_command(request.source_pool),
             f"Export source pool {request.source_pool}",
@@ -683,13 +748,16 @@ def build_migration_steps(
             fatal=True,
         ),
     ]
-    # The migration snapshot already exists on the holding pool (received
-    # with the replication stream), so copy-back skips the snapshot step.
+    # The cutover snapshot already exists in the holding-pool namespace
+    # (received with the catch-up incremental, intermediary snapshots
+    # included), so copy-back skips the snapshot step and sends the cutover
+    # snapshot — a -R full send of the migration snapshot would omit it and
+    # lose everything the catch-up carried.
     cutover += _copy_steps(
         request.holding_pool,
         request.temp_pool,
         datasets,
-        request.snap_bare,
+        request.cutover_snap_bare,
         rate_limit=request.rate_limit,
         src_namespace=namespace,
     )[1:]
@@ -1068,11 +1136,14 @@ def _show_cutover_confirm(app, request: MigrationRequest) -> bool:
     text.set_halign(Gtk.Align.START)
     text.set_line_wrap(True)
     text.set_text(
-        f"The copy phase finished. Cutover now exports pool "
-        f"'{request.source_pool}' and swaps in the migrated pool under that "
-        f"name.\n\nStop every VM and unmount every share that uses "
-        f"'{request.source_pool}' before continuing — they will lose access "
-        f"during the swap."
+        f"The copy phase finished. Cutover now takes a final catch-up "
+        f"snapshot of pool '{request.source_pool}' — carrying over every "
+        f"change made since the copy began — then exports the pool and swaps "
+        f"in the migrated pool under that name.\n\n"
+        f"Stop every VM and unmount every share that uses "
+        f"'{request.source_pool}' now: the pool must be quiesced from the "
+        f"cutover snapshot onward, and writes made after that snapshot are "
+        f"lost (the window is seconds)."
     )
     content.pack_start(text, False, False, 0)
     entry = Gtk.Entry()
@@ -1098,6 +1169,94 @@ def _show_cutover_confirm(app, request: MigrationRequest) -> bool:
                 return True
     finally:
         dialog.destroy()
+
+
+def _show_running_vms_warning(app, source_pool: str, running: dict[str, list[str]]) -> bool:
+    """Yes/No gate when VMs are still running on the source pool's zvols.
+
+    Returns True when the user chooses to continue anyway; False (or a
+    cancelled dialog) defers the cutover, exactly like declining the typed
+    confirmation.
+    """
+    dialog = create_dialog(
+        "Running VMs on source pool",
+        app,
+        [(Gtk.STOCK_NO, Gtk.ResponseType.NO)],
+        size=(640, 360),
+    )
+    dialog.add_button("Continue", Gtk.ResponseType.YES)
+    content = dialog.get_content_area()
+    lines = "\n".join(f"• VM {vmid}: {', '.join(zvols)}" for vmid, zvols in sorted(running.items()))
+    text = Gtk.Label()
+    text.set_halign(Gtk.Align.START)
+    text.set_line_wrap(True)
+    text.set_text(
+        f"These VMs are still running on pool '{source_pool}':\n\n"
+        f"{lines}\n\n"
+        "Stop them before the cutover — the pool must be quiesced from the "
+        "cutover snapshot onward, and writes after that snapshot are lost. "
+        "Continue anyway?"
+    )
+    content.pack_start(text, False, False, 0)
+    dialog.show_all()
+    try:
+        response = dialog.run()
+    finally:
+        dialog.destroy()
+    return response == Gtk.ResponseType.YES
+
+
+def _running_vms_on_pool(repository, source_pool: str) -> dict[str, list[str]]:
+    """Return ``{vmid: zvols}`` for VMs running on *source_pool*'s zvols.
+
+    Mirrors ``iscsi_check_vm_running`` (lib/iscsi-lib.sh): ``qm status`` on
+    the compute host in two-node mode, locally in single-node mode. Every
+    failure is non-fatal — the VM is skipped with a WARN log — so a broken
+    ``qm``/ssh setup never blocks the cutover on its own (the typed
+    confirmation and the export itself still gate it).
+    """
+    try:
+        zvols = repository.list_volume_names(source_pool)
+    except Exception as exc:  # pragma: no cover - defensive
+        log_msg(f"WARN: Could not list zvols of pool '{source_pool}': {exc}")
+        return {}
+    two_node = False
+    compute_host = ""
+    try:
+        two_node = node_config.is_two_node()
+        compute_host = node_config.load_node_config().get("compute_host") or ""
+    except Exception as exc:  # pragma: no cover - defensive
+        log_msg(f"WARN: Could not read the node configuration: {exc}")
+    running: dict[str, list[str]] = {}
+    for vmid, disks in vmids_from_zvols(zvols).items():
+        try:
+            if two_node:
+                if not compute_host:
+                    log_msg(
+                        f"WARN: No compute host configured; skipping the "
+                        f"running check for VM {vmid}"
+                    )
+                    continue
+                argv = [
+                    "ssh",
+                    "-o",
+                    "ConnectTimeout=5",
+                    "-o",
+                    "BatchMode=yes",
+                    f"root@{compute_host}",
+                    "qm",
+                    "status",
+                    vmid,
+                ]
+            else:
+                argv = ["qm", "status", vmid]
+            result = subprocess.run(argv, capture_output=True, text=True, check=False, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            log_msg(f"WARN: Could not check the status of VM {vmid}: {exc}")
+            continue
+        if "status: running" in (result.stdout or ""):
+            running[vmid] = disks
+    return running
 
 
 # ---------------------------------------------------------------------------
@@ -1319,6 +1478,39 @@ def on_disks_migrate_pool(app) -> None:
             f"INFO: Migrate pool copy complete for '{request.source_pool}'; "
             "waiting for cutover confirmation"
         )
+        # The copy phase may have taken hours; the reviewed layout must still
+        # hold before anything destructive runs (same pattern as the pre-copy
+        # check — datasets renamed/added/removed since the review invalidate
+        # the catch-up and copy-back steps that were composed from it).
+        changed = _source_layout_changed(repository, request)
+        if changed:
+            log_msg(
+                f"WARN: Migrate Pool aborted for '{request.source_pool}': "
+                f"pool changed at cutover time ({changed})"
+            )
+            zlm.release(lock_id)
+            _discard_holds_file(request.holds_file)
+            _finish_refresh(app)
+            _show_info_dialog(
+                app,
+                "Pool layout changed",
+                f"The dataset layout of pool '{request.source_pool}' changed "
+                f"since the Migrate Pool review ({changed}). The cutover was "
+                "not run; the migration snapshot and copies remain in place "
+                "— re-open Migrate Pool and review the plan again.",
+            )
+            return
+        running = _running_vms_on_pool(repository, request.source_pool)
+        if running and not _show_running_vms_warning(app, request.source_pool, running):
+            zlm.release(lock_id)
+            _discard_holds_file(request.holds_file)
+            _finish_refresh(app)
+            log_msg(
+                f"INFO: Cutover deferred for '{request.source_pool}' (running "
+                "VMs declined); the migration snapshot and copies remain in "
+                "place — rerun Migrate Pool to finish"
+            )
+            return
         if not _show_cutover_confirm(app, request):
             zlm.release(lock_id)
             _discard_holds_file(request.holds_file)

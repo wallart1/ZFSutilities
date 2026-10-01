@@ -304,6 +304,39 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         app = self._make_app([{"type": "pool", "name": "tank", "mounted": True}])
         app._ds_delete_btn.set_sensitive.assert_called_once_with(False)
 
+    def test_volume_partition_disables_delete(self):
+        app = self._make_app(
+            [
+                {
+                    "type": "volume-partition",
+                    "name": "loop0p1",
+                    "device": "/dev/loop0p1",
+                    "volume": "tank/vm-100-disk-0",
+                    "fstype": "ext4",
+                    "has_filesystem": True,
+                    "mounted": False,
+                }
+            ]
+        )
+        app._ds_delete_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_mixed_partition_and_dataset_disables_delete(self):
+        app = self._make_app(
+            [
+                {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+                {
+                    "type": "volume-partition",
+                    "name": "loop0p1",
+                    "device": "/dev/loop0p1",
+                    "volume": "tank/vm-100-disk-0",
+                    "fstype": "ext4",
+                    "has_filesystem": True,
+                    "mounted": False,
+                },
+            ]
+        )
+        app._ds_delete_btn.set_sensitive.assert_called_once_with(False)
+
     def test_expand_selected_enabled_for_pool(self):
         app = self._make_app([{"type": "pool", "name": "tank", "mounted": True}])
         app._ds_expand_selected_btn.set_sensitive.assert_called_once_with(True)
@@ -900,6 +933,28 @@ class TestVolumeLoopButtonSensitivity(unittest.TestCase):
         app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
         app._ds_unmount_btn.set_sensitive.assert_called_once_with(False)
         app._ds_browse_btn.set_sensitive.assert_called_once_with(False)
+
+    def _snapshot_item(self, parent_type):
+        return {
+            "type": "snapshot",
+            "name": "snap1",
+            "dataset": "tank/vm-100-disk-0",
+            "parent_type": parent_type,
+            "zfs_type": "snapshot",
+            "mounted": False,
+        }
+
+    def test_volume_snapshot_disables_mount_with_tooltip(self):
+        app = self._make_app([self._snapshot_item("volume")])
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with(
+            "Snapshots of ZFS volumes cannot be mounted"
+        )
+
+    def test_filesystem_snapshot_enables_mount_and_clears_tooltip(self):
+        app = self._make_app([self._snapshot_item("filesystem")])
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with("")
 
     def test_volume_plus_mixed_selection_keeps_mount_enabled(self):
         app = self._make_app(

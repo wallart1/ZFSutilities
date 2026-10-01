@@ -43,10 +43,13 @@ from disks_page import create_disks_page, on_disks_refresh, refresh_disks_page
 from docs_viewer import DocsViewerWindow
 from feature_config import get_checkagainst, get_pools
 from gui_helpers import (
+    LOG_FONT_STATE_INFO,
+    LOG_FONT_STATE_LOGS,
     UIStateManager,
     confirm_and_minimize_width,
     create_info_panel,
     create_menu_bar,
+    get_log_font_controller,
 )
 from logging_config import format_log_line_short, log_msg
 from logs_page import create_logs_page
@@ -57,6 +60,9 @@ from restore_page import create_restore_page
 from retention_page import create_retention_page, refresh_prune_pools
 from runner_factory import RunnerFactory
 from schedule_page import create_schedule_page, refresh_schedule_page
+
+# Pool Registry refresh interval while the Pools tab is visible (seconds).
+POOLS_REFRESH_SECONDS = 30
 
 
 def _detect_parent_dir(script_dir):
@@ -572,6 +578,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
                 refresh_schedule_page(self)
             self._start_stop_dashboard_timer(page_name)
             self._start_stop_scrub_timer(page_name)
+            self._start_stop_pools_timer(page_name)
             self._start_stop_disks_timer(page_name)
             self._start_stop_schedule_timer(page_name)
             if page_name == "dashboard":
@@ -613,6 +620,27 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             from pools_page import refresh_scrub_table
 
             refresh_scrub_table(self)
+        return True
+
+    def _start_stop_pools_timer(self, page_name):
+        """Start the pool registry refresh timer when on Pools, stop otherwise."""
+        if getattr(self, "_pools_timer", None) is not None:
+            GLib.source_remove(self._pools_timer)
+            self._pools_timer = None
+        if page_name == "pools":
+            from pools_page import refresh_pools_page
+
+            refresh_pools_page(self)
+            self._pools_timer = GLib.timeout_add_seconds(
+                POOLS_REFRESH_SECONDS, self._on_pools_timer_tick
+            )
+
+    def _on_pools_timer_tick(self):
+        """Callback for pool registry auto-refresh. Returns True to keep timer alive."""
+        if self.stack.get_visible_child_name() == "pools":
+            from pools_page import refresh_pools_page
+
+            refresh_pools_page(self)
         return True
 
     def _start_stop_disks_timer(self, page_name):
@@ -741,6 +769,37 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
     def on_minimize_width(self, _widget):
         """Reset resizable columns to minimum width and shrink the window."""
         confirm_and_minimize_width(self)
+
+    def _log_font_controller_for(self, state_key):
+        """Return the font controller for a log widget, or None if absent."""
+        attr = {
+            LOG_FONT_STATE_INFO: "info_text",
+            LOG_FONT_STATE_LOGS: "logs_text",
+        }.get(state_key)
+        if attr is None:
+            return None
+        widget = getattr(self, attr, None)
+        if widget is None:
+            return None
+        return get_log_font_controller(self, state_key, widget)
+
+    def on_log_font_larger(self, _widget, state_key):
+        """Increase the log text widget's font one step."""
+        controller = self._log_font_controller_for(state_key)
+        if controller is not None:
+            controller.larger()
+
+    def on_log_font_smaller(self, _widget, state_key):
+        """Decrease the log text widget's font one step."""
+        controller = self._log_font_controller_for(state_key)
+        if controller is not None:
+            controller.smaller()
+
+    def on_log_font_default(self, _widget, state_key):
+        """Restore the log text widget's default font size."""
+        controller = self._log_font_controller_for(state_key)
+        if controller is not None:
+            controller.reset()
 
     def on_about(self, widget):
         """Show about dialog."""

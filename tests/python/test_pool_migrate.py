@@ -22,8 +22,10 @@ from pool_migrate import (
     MIGRATE_NEW_DISKS,
     MIGRATION_MODES,
     STEP_CAPTURE_HOLDS,
+    STEP_CATCHUP_COPY,
     STEP_COPY,
     STEP_CREATE_POOL,
+    STEP_CUTOVER_SNAPSHOT,
     STEP_DESTROY_HOLDING,
     STEP_DESTROY_SOURCE,
     STEP_EXPORT_SOURCE,
@@ -34,12 +36,14 @@ from pool_migrate import (
     STEP_VERIFY,
     MigrationStep,
     check_destination_capacity,
+    cutover_snapshot_name,
     generate_temp_pool_name,
     holding_migration_namespace,
     migration_snapshot_bare_name,
     migration_snapshot_name,
     plan_migration_steps,
     verify_trees_match,
+    vmids_from_zvols,
 )
 from test_support import normalize_repo_root
 from zfs_repository import (
@@ -72,6 +76,61 @@ class TestMigrationSnapshotName(unittest.TestCase):
     def test_bare_name_rejects_non_snapshot(self):
         with self.assertRaises(ValueError):
             migration_snapshot_bare_name("pool/ds@migrate-x")
+
+
+class TestCutoverSnapshotName(unittest.TestCase):
+    def test_appends_cutover_suffix(self):
+        self.assertEqual(
+            cutover_snapshot_name("@migrate-2026-09-10T14:30-04:00"),
+            "@migrate-2026-09-10T14:30-04:00-cutover",
+        )
+
+    def test_keeps_migrate_label(self):
+        # Retention prunes only its own label's buckets, so a cutover
+        # snapshot must stay migrate-labelled to be pruning-proof.
+        self.assertTrue(
+            cutover_snapshot_name("@migrate-2026-09-10T14:30-04:00").startswith("@migrate-")
+        )
+
+    def test_rejects_non_migration_snapshot(self):
+        for bad in ("", "migrate-x", "pool/ds@migrate-x", "@dailybackup-2026-09-10d", "@snap"):
+            with self.assertRaises(ValueError):
+                cutover_snapshot_name(bad)
+
+    def test_rejects_dataset_qualified_name(self):
+        with self.assertRaises(ValueError):
+            cutover_snapshot_name("@migrate-x/sub")
+
+    def test_rejects_already_cutover_name(self):
+        with self.assertRaises(ValueError):
+            cutover_snapshot_name("@migrate-2026-09-10T14:30-04:00-cutover")
+
+
+class TestVmidsFromZvols(unittest.TestCase):
+    def test_groups_zvols_by_vmid(self):
+        names = ["tank/vm-100-disk-0", "tank/vm-207-disk-0", "tank/vm-100-disk-1"]
+        self.assertEqual(
+            vmids_from_zvols(names),
+            {
+                "100": ["tank/vm-100-disk-0", "tank/vm-100-disk-1"],
+                "207": ["tank/vm-207-disk-0"],
+            },
+        )
+
+    def test_ignores_non_proxmox_names(self):
+        names = [
+            "tank/data",
+            "tank/vm-100-disk-0",
+            "tank/subvol-100-disk-0",
+            "tank/vm-abc-disk-0",
+        ]
+        self.assertEqual(vmids_from_zvols(names), {"100": ["tank/vm-100-disk-0"]})
+
+    def test_requires_full_base_name_match(self):
+        self.assertEqual(vmids_from_zvols(["tank/xvm-100-disk-0", "tank/vm-100-disk-0-extra"]), {})
+
+    def test_empty_input(self):
+        self.assertEqual(vmids_from_zvols([]), {})
 
 
 class TestGenerateTempPoolName(unittest.TestCase):
@@ -144,6 +203,10 @@ class TestPlanMigrationSteps(unittest.TestCase):
                 STEP_COPY,
                 STEP_VERIFY,
                 STEP_CAPTURE_HOLDS,
+                STEP_CUTOVER_SNAPSHOT,
+                STEP_CATCHUP_COPY,
+                STEP_CATCHUP_COPY,
+                STEP_CATCHUP_COPY,
                 STEP_EXPORT_SOURCE,
                 STEP_IMPORT_RENAME,
                 STEP_REAPPLY_HOLDS,
@@ -151,6 +214,10 @@ class TestPlanMigrationSteps(unittest.TestCase):
         )
         self.assertEqual(
             [step.dataset for step in steps if step.kind == STEP_COPY],
+            datasets,
+        )
+        self.assertEqual(
+            [step.dataset for step in steps if step.kind == STEP_CATCHUP_COPY],
             datasets,
         )
         for step in steps:
@@ -188,6 +255,8 @@ class TestPlanMigrationSteps(unittest.TestCase):
                 STEP_COPY,
                 STEP_VERIFY,
                 STEP_CAPTURE_HOLDS,
+                STEP_CUTOVER_SNAPSHOT,
+                STEP_CATCHUP_COPY,
                 STEP_EXPORT_SOURCE,
                 STEP_RELEASE_HOLDS,
                 STEP_DESTROY_SOURCE,
@@ -200,6 +269,42 @@ class TestPlanMigrationSteps(unittest.TestCase):
                 STEP_DESTROY_HOLDING,
             ],
         )
+
+    def test_catchup_steps_between_holds_capture_and_export(self):
+        for mode, dest in ((MIGRATE_NEW_DISKS, "temp_mig"), (MIGRATE_HOLDING_POOL, "fivebays")):
+            steps = plan_migration_steps("temp", ["proxmox"], mode, dest)
+            kinds = [step.kind for step in steps]
+            self.assertLess(kinds.index(STEP_CAPTURE_HOLDS), kinds.index(STEP_CUTOVER_SNAPSHOT))
+            self.assertLess(kinds.index(STEP_CUTOVER_SNAPSHOT), kinds.index(STEP_CATCHUP_COPY))
+            self.assertLess(kinds.index(STEP_CATCHUP_COPY), kinds.index(STEP_EXPORT_SOURCE))
+
+    def test_catchup_descriptions_mention_snapshots_and_dest(self):
+        steps = plan_migration_steps(
+            "temp",
+            ["proxmox"],
+            MIGRATE_NEW_DISKS,
+            "temp_mig",
+            migration_snap="@migrate-x",
+            cutover_snap="@migrate-x-cutover",
+        )
+        snapshot = next(step for step in steps if step.kind == STEP_CUTOVER_SNAPSHOT)
+        self.assertIn("Take cutover snapshot on 'temp'", snapshot.description)
+        catchup = next(step for step in steps if step.kind == STEP_CATCHUP_COPY)
+        self.assertIn("'@migrate-x' → '@migrate-x-cutover'", catchup.description)
+        self.assertIn("'proxmox'", catchup.description)
+        self.assertIn("'temp_mig'", catchup.description)
+
+    def test_holding_catchup_targets_reserved_namespace(self):
+        steps = plan_migration_steps(
+            "temp",
+            ["proxmox"],
+            MIGRATE_HOLDING_POOL,
+            "fivebays",
+            migration_snap="@migrate-x",
+            cutover_snap="@migrate-x-cutover",
+        )
+        catchup = next(step for step in steps if step.kind == STEP_CATCHUP_COPY)
+        self.assertIn("'fivebays/migrate_temp'", catchup.description)
 
     def test_mode_constants_distinct(self):
         self.assertEqual(set(MIGRATION_MODES), {MIGRATE_NEW_DISKS, MIGRATE_HOLDING_POOL})

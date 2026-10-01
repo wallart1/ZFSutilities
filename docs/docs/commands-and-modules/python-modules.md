@@ -296,7 +296,7 @@ and tests easy to mock.
 | `export_pool_detailed(pool)`             | Export a pool, returning `(success, stderr)` so callers can diagnose failures                                                                          |
 | `unmount_filesystem(dataset)`            | Unmount one filesystem, returning `(success, stderr)`                                                                                                  |
 | `dataset_for_mountpoint(mountpoint)`     | Resolve the dataset mounted at *mountpoint* (`findmnt` with a `zfs list` fallback)                                                                     |
-| `loop_attach(zvol_dev)`                  | Attach a zvol device to a new read-only, partition-scanned loop device (`losetup --find --show --partscan --read-only`); returns the `/dev/loopN` path |
+| `loop_attach(zvol_dev)`                  | Attach a zvol device to a new read-only, partition-scanned loop device (`losetup --find --show --partscan --read-only`), then wait for `udevadm settle` so filesystem types are known before partition listing; returns the `/dev/loopN` path |
 | `loop_find(zvol_dev)`                    | Return the loop device currently attached to a zvol device, or `None`                                                                                  |
 | `loop_detach(loop_dev)`                  | Detach a loop device (`losetup -d`); returns success/failure                                                                                           |
 | `loop_partitions(loop_dev)`              | Parse `lsblk --json` into `LoopPartition` entries (partitions, or the bare device when there is no partition table)                                    |
@@ -307,7 +307,7 @@ and tests easy to mock.
 | `build_replace_command()`                | Pure `zpool replace` argv builder                                                                                                                      |
 | `build_detach_command()`                 | Pure `zpool detach` argv builder                                                                                                                       |
 | `build_recursive_snapshot_command()`     | Pure `zfs snapshot -r` argv builder for migration snapshots                                                                                            |
-| `build_migration_send_receive_command()` | Pure `bash -c` argv sourcing `zfs-migrate-send` for a resumable, pv-instrumented migration copy (optional `rate_limit` for `pv -L`)                    |
+| `build_migration_send_receive_command()` | Pure `bash -c` argv sourcing `zfs-migrate-send` for a resumable, pv-instrumented migration copy (optional `rate_limit` for `pv -L`; optional `from_snap` switches the send to an incremental `-RIw` catch-up) |
 | `build_pool_export_command()`            | Pure `zpool export` argv builder                                                                                                                       |
 | `build_pool_import_rename_command()`     | Pure `zpool import <temp> <name>` argv builder; the rename is permanent (written to the pool label), so later imports use the plain one-name form     |
 | `build_pool_destroy_command()`           | Pure `zpool destroy` argv builder (holding-mode migration only)                                                                                        |
@@ -524,7 +524,11 @@ source pool and re-importing the migrated pool under the source pool's name —
 a permanent rename written to the pool label, so every later import uses the
 plain one-name form — so every `pool/dataset` path is preserved. A holding
 pool is a temporary waystation, never consumed or renamed: only the reserved
-`migrate_<source>` namespace inside it is destroyed at cutover. Snapshot holds
+`migrate_<source>` namespace inside it is destroyed at cutover. Before the
+export, the plan takes a second, cutover snapshot (the migration snapshot's
+name with a `-cutover` suffix) and sends one incremental `-RIw` stream per
+top-level dataset from the migration snapshot to it, so writes made while
+the copy ran are not lost. Snapshot holds
 never travel in send streams, so the plan also captures the source pool's
 holds after the outward verify step and reapplies them once the migrated pool
 carries the source pool's name again; in holding mode a release step runs
@@ -537,9 +541,11 @@ destroyed, so `zpool destroy` would fail while any hold remains).
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `migration_snapshot_name()`      | Bucket-less `@migrate-<timestamp>` name (retention never prunes it)                                                        |
 | `migration_snapshot_bare_name()` | Strip the leading `@` for the zfs argv builders                                                                            |
+| `cutover_snapshot_name()`        | Cutover catch-up snapshot name: the migration snapshot's name with a `-cutover` suffix                                     |
+| `vmids_from_zvols()`             | Map Proxmox zvol names (`vm-<id>-disk-<n>`) to `{vmid: zvols}` for the running-VM check                                    |
 | `generate_temp_pool_name()`      | Valid unused temporary pool name (`<source>_mig`, `_mig2`, …)                                                              |
 | `holding_migration_namespace()`  | Reserved holding-pool dataset namespace (`migrate_<source>`) so holding copies can never collide with backup/offsite paths |
-| `plan_migration_steps()`         | Ordered `MigrationStep` plan for new-disks or holding-pool mode, including the hold capture/release/reapply steps          |
+| `plan_migration_steps()`         | Ordered `MigrationStep` plan for new-disks or holding-pool mode, including the cutover catch-up and hold capture/release/reapply steps |
 | `check_destination_capacity()`   | Refuse/warn when destination free space is short of source allocated                                                       |
 | `verify_trees_match()`           | Per-dataset `used`-bytes comparison between source and migrated trees                                                      |
 
@@ -562,8 +568,19 @@ of the source pool name. Execution is two runner phases: the copy phase
 `zfs send -Rw` received with `zfs receive -u -F -s -v`, with `pv` in the
 pipeline and an optional bandwidth limit — per top-level dataset, then
 per-dataset tree verification) and the cutover
-phase, which starts only after a second typed confirmation — export the
-source pool, then re-import the migrated pool under the source pool's name
+phase, which starts only after a second typed confirmation. Before that
+confirmation two cutover-time gates run: the source pool's dataset layout
+is re-checked (a change since the review aborts the cutover with the copy
+left in place for a re-run), and the pool's zvols are scanned for running
+Proxmox VMs (`qm status` locally, or on the compute host over SSH in
+two-node mode) — any running VM triggers a warning dialog listing the VM
+IDs and their disks that must be declined until they are stopped. The
+cutover itself first catches the destination up: a recursive cutover
+snapshot (migration snapshot name + `-cutover`) and one incremental
+`zfs send -RIw` per top-level dataset from the migration snapshot to it,
+so only writes made after the cutover snapshot — the seconds between it
+and the export — can be lost. Then the source pool is exported and the
+migrated pool is re-imported under the source pool's name
 (new disks) or destroy/rebuild/copy-back/swap (holding pool). In holding
 mode the user chooses the rebuild disks: the source pool's members
 (pre-selected, since the cutover destroy frees them) plus any eligible
@@ -599,7 +616,9 @@ migration is running (after the capture step) are not preserved.
 | `show_migrate_pool_dialog()` | Run the dialog; returns a `MigrationRequest` or None                                     |
 | `build_request()`            | Build the execution request from a validated dialog state                                |
 | `build_migration_steps()`    | Build the (copy, cutover) `BashStep` lists for a request                                 |
-| `_source_layout_changed()`   | Compare the request's dataset list against a fresh pool listing; abort reason when stale |
+| `_source_layout_changed()`   | Compare the request's dataset list against a fresh pool listing; abort reason when stale (checked at start and again at cutover) |
+| `_running_vms_on_pool()`     | Map the pool's zvols to running Proxmox VMs (`qm status` locally or over SSH on the compute host; failures are non-fatal) |
+| `_show_running_vms_warning()` | y/n warning dialog listing running VMs and their disks; declines defer the cutover     |
 | `on_disks_migrate_pool()`    | Disks-page action: gates, data gathering, two-phase runner execution                     |
 
 **Called modules / imported helpers:**
@@ -1614,7 +1633,7 @@ Scrub state parsing, queue management, and start/pause/resume/stop actions.
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ScrubState` | Enum: `NONE`, `PENDING`, `SCANNING`, `PAUSED`, `FINISHED`, `CANCELED`, `UNKNOWN`                                                                                                                                |
 | `ScrubInfo`  | Dataclass with state, progress, remaining time, ETA, errors                                                                                                                                                     |
-| `ScrubQueue` | Persistent pending/active/paused/finished pool sets with concurrency target; buckets are disjoint, stale entries are pruned by `tick()` only after several consecutive misses, and `reload()` re-reads persisted state before each tick in long-lived instances (GUI Pools tab/Dashboard, headless scrub-profile loop) |
+| `ScrubQueue` | Persistent pending/active/paused/finished pool sets with concurrency target; an explicit constructor `target` overrides and re-persists the persisted value, buckets are disjoint, stale entries are pruned by `tick()` only after several consecutive misses, and `reload()` re-reads persisted state before each tick in long-lived instances (GUI Pools tab/Dashboard, headless scrub-profile loop) |
 
 **Key functions:**
 
@@ -1826,6 +1845,7 @@ Reusable GTK helpers and utility functions used by nearly every page.
 | `TextViewSearch`   | Search/navigation for a `Gtk.TextView`; matches are stored as character offsets (not `Gtk.TextIter`s, which buffer edits invalidate) so prev/next keeps working as the buffer grows; `refresh()` folds new text into an active search without scrolling |
 | `LogPopoutWindow`  | Independent window for popping out the info panel                                                                                                                                                                                                       |
 | `UIStateManager`   | Debounced save/restore of window geometry                                                                                                                                                                                                               |
+| `LogFontController` | Relative font sizing for one log `Gtk.TextView` (±4 steps of 1.5 pt via a per-widget CSS class), persisted in `ui_state` under `font_sizes`                                                                                                             |
 
 **Key functions:**
 
@@ -1841,7 +1861,8 @@ Reusable GTK helpers and utility functions used by nearly every page.
 | `style_expander_label()`                                             | Color an Advanced expander label orange when any child value differs from its defaults                                        |
 | `style_widget_value_nondefault()` / `style_var_widgets_nondefault()` | Color the non-default values themselves orange (via a `zfsu-nondefault` CSS class) in addition to the expander label          |
 | `create_info_panel()`                                                | Build the shared log/info panel                                                                                               |
-| `create_menu_bar()`                                                  | Build the application menu bar                                                                                                |
+| `create_menu_bar()`                                                  | Build the application menu bar (includes the View-menu log font submenus)                                                     |
+| `restore_log_font_scale()` / `get_log_font_controller()`             | Apply the saved relative font size to a log widget on creation; return the app's per-widget controller                        |
 | `confirm_and_minimize_width()`                                       | Reset column widths and shrink window                                                                                         |
 
 **Called modules / imported helpers:**
@@ -2042,7 +2063,7 @@ info panel, dry-run toggle, and startup checks.
 2. Create each page and add it to the stack.
 3. Connect the action panel to `action_dispatch.PAGE_SPECS` and
    `ACTION_HANDLERS`.
-4. Start dashboard and scrub refresh timers.
+4. Start the per-tab refresh timers (dashboard, scrub, pools, disks, schedule).
 5. On startup, compare versions with the peer node in a background thread.
 
 **Called modules / imported helpers:**

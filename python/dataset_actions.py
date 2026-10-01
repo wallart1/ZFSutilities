@@ -592,6 +592,9 @@ def _mount_one_dataset(item, repo, app):
 def _mount_one_snapshot(item, repo, app):
     """Mount a single snapshot by accessing its .zfs path; return True if processed."""
     full_snap = f"{item['dataset']}@{item['name']}"
+    if item.get("parent_type") == "volume":
+        log_msg(f"WARN: Cannot mount {full_snap}: snapshots of ZFS volumes cannot be mounted")
+        return False
     try:
         path = get_snapshot_mountpoint(item["dataset"], item["name"], repo=repo)
         parent_mountpoint = path.rsplit("/.zfs/snapshot/", 1)[0]
@@ -687,7 +690,7 @@ def _mount_one_volume_partition(item, repo, app):
         log_msg(f"WARN: Error creating mountpoint {mountpoint}: {e}")
         return False
     result = subprocess.run(
-        ["sudo", "mount", device, mountpoint],
+        ["sudo", "mount", "-o", "ro", device, mountpoint],
         capture_output=True,
         text=True,
         check=False,

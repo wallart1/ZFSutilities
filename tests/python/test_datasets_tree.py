@@ -576,6 +576,42 @@ class TestVolumeLoopExpansion(unittest.TestCase):
         selection.get_selected_rows = lambda: (store, [store.get_path(snap_iter)])
         items = get_tree_selection_items(view)
         self.assertEqual(items[0]["type"], "snapshot")
+        self.assertEqual(items[0]["parent_type"], "volume")
+
+    def _repo_with_loop_and_snapshots(self):
+        return _make_repo(
+            {
+                self._FIND_CMD: "/dev/loop0: []: (/dev/zvol/threeamigos/vm-100)\n",
+                self._LSBLK_CMD: self._LSBLK_WITH_PARTS,
+                f"{SNAPSHOT_CMD} threeamigos/vm-100": (
+                    "threeamigos/vm-100@snap1\t2025-01-01\tsnapshot\t0B\t-\t5G\t-\t-\n"
+                ),
+                f"{DATASET_CMD} threeamigos/vm-100": (
+                    "threeamigos/vm-100\t2025-01-01\tvolume\t5G\t-\t5G\t-\t-\t-\n"
+                ),
+            }
+        )
+
+    def test_reload_marks_row_loaded_so_reexpansion_does_not_duplicate(self):
+        store, view, vol = _tree_with_volume()
+        view._zfs_repo = self._repo_with_loop_and_snapshots()
+        on_row_expanded(view, vol, store.get_path(vol))
+        after_expand = [store.get_value(c, 0) for c in self._iter_children(store, vol)]
+        self.assertEqual(after_expand, ["loop0p1", "loop0p2", "@snap1"])
+
+        reload_row_children(store, vol, repo=view._zfs_repo)
+        self.assertTrue(store.get_value(vol, 7))
+        # Re-expansion (reload removed all children, so GTK collapsed the row)
+        # must not append a second set of children.
+        on_row_expanded(view, vol, store.get_path(vol))
+        after_reexpand = [store.get_value(c, 0) for c in self._iter_children(store, vol)]
+        self.assertEqual(after_reexpand, after_expand)
+
+    def _iter_children(self, store, parent_iter):
+        child = store.iter_children(parent_iter)
+        while child:
+            yield child
+            child = store.iter_next(child)
 
     def test_reload_row_children_after_detach(self):
         store, view, vol = _tree_with_volume()

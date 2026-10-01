@@ -4,6 +4,154 @@ Session notes, progress notes, and notes to myself. Per the root `AGENTS.md`
 Hard Rules, these live here — never in AGENTS.md (which is user-owned). I
 maintain this file and remove obsolete entries as work evolves.
 
+## 2026-10-01 — Development cycle wrap-up (pre-commit review)
+
+- Resolved the last PREEXISTING.md entry: `ScrubQueue.__init__` now treats an
+  explicit `target` as authoritative (applied + persisted via `set_target`
+  semantics); omitted `target` keeps the persisted value. The GUI's scrub
+  config and profile `simultaneous` settings now always take effect.
+  `test_persistence` updated (constructed without `target`), new
+  `test_explicit_target_overrides_persisted`; docs updated
+  (data-structures.md, python-modules.md).
+- Standards review of all uncommitted code against coding-policies.md:
+  ruff check/format clean (one format nit fixed in my own `__init__` line),
+  full shellcheck sweep clean, no source directives needed; verified regex
+  documentation, log levels, line lengths, and `save_ui_state` nested-merge
+  safety for the shared `font_sizes` key.
+- Test review: filled coverage gaps — cutover-confirm dialog text
+  (test_pool_migrate_dialogs), logs-page font restore wiring
+  (test_logs_page), window font-handler dispatch (test_zfsutilities_gui ×3);
+  reviewed regenerated/new goldens. Full suite run twice (before and after
+  docs edits): all suites pass (skip = soak suite by design).
+- Docs pass: verified user-guide/module docs match the cycle's features
+  (migrate catch-up, running-VM gate, zvol mounting, log fonts, pools
+  auto-refresh, dashboard order); added gui_helpers `LogFontController`
+  rows + `zfsutilities_gui` timer-flow fix (python-modules.md), `font_sizes`
+  ui_state row (data-structures.md), three testing.md suite-row updates.
+  Docs integrity suite passes. Recorded one pre-existing docs gap in
+  PREEXISTING.md (Datasets **Delete** row omits dataset deletion) — left
+  unfixed per the freeze.
+
+## 2026-10-01 — Zvol-snapshot-mount plan v3 written (no code changes)
+
+- User supplied two parked plan versions in
+  `/NFS1/dan(NFS1)/zfsutilities-plan/Plans in abeyance/Zvol-snapshot-mount/`.
+  Reviewed both read-only against the tree; v2's architecture is sound, v1 is
+  retired. Spot-verified its load-bearing claims (buildfsarray skipclones
+  pattern, zfsdelsnap clone-dep skip, promote-vm-clone 4× awk, archive-vm
+  Pass-1 own-VM filter, migration receive -F, centralized GUI sensitivity).
+- Wrote `zvol-snapshot-mount-plan-v3.md` next to v1/v2: v2 + four fixes —
+  (1) archive-vm guard must scan raw discovery output (Pass 1 drops the
+  archived VM's own clones, the natural browse-then-archive case); (2)
+  promote-vm-clone marker skip in all four awk blocks; (3) migration
+  pre-flight on source AND destination pools (receive uses -F); (4) reuse the
+  already-shipped `parent_type` field + refreshed line numbers. Plus two
+  implementation notes (dataset-component-only marker test in buildfsarray;
+  wait for the clone's /dev/zvol node before loop_attach).
+- Plan is NOT approved for implementation. Shipped behavior remains:
+  volume-snapshot mounts rejected with WARN + disabled Mount button.
+
+## 2026-10-01 — Datasets page: zvol loop-mount bug cluster (duplicate rows, "No filesystem", Delete gating, btrfs mount, volume snapshots)
+
+- User report (screenshot of threeamigos/proxmox/vm-207-disk-1): after
+  loop-mounting the zvol and then "mounting" a snapshot, two sets of loop0p*
+  rows appeared, the first all "No filesystem"; Delete enabled on partition
+  rows; btrfs partition Mount did nothing. Root causes (verified read-only on
+  stewie: one loop0, still attached, p1 vfat/p2 none/p3 btrfs):
+  1. `reload_row_children` left the row's loaded flag False, so the first
+     post-reload expansion appended a second full set of children (loop rows
+     + snapshots) — the "second device" was the same loop0 listed twice; the
+     volume-snapshot Mount itself was always a silent no-op.
+  2. `lsblk` listed partitions before udev probed them → "No filesystem".
+  3. `can_delete` didn't exclude volume-partition rows.
+  4. Partition mounts lacked `-o ro`; btrfs refuses rw on a ro loop device
+     (vfat silently degrades, which is why p1 worked).
+  5. Snapshots of volumes were never mountable (`.zfs/snapshot` cannot apply
+     to a zvol) — now rejected explicitly.
+- Fixes: loaded flag restored after reload; `udevadm settle --timeout=10`
+  after `losetup` in `ZfsRepository.loop_attach`; `types <= {dataset,
+  snapshot, hold}` for Delete; `mount -o ro`; snapshot items carry
+  `parent_type` (`get_tree_selection_items`), Mount disabled with tooltip
+  "Snapshots of ZFS volumes cannot be mounted" for volume-parent snapshots,
+  and `_mount_one_snapshot` rejects them with a WARN (defensive for
+  multi-select). User decision: NO clone-based volume-snapshot mounting.
+- Tests: regression for reload/re-expand duplication + parent_type assertion
+  (test_datasets_tree), settle argv/failure tests (test_zfs_repository),
+  `-o ro` argv + volume-snapshot rejection (test_dataset_actions), Delete
+  gating + Mount tooltip tests (test_datasets_page).
+- Docs: gtk-gui.md "Mounting ZFS volumes (zvols)" + Mount button row;
+  python-modules.md `loop_attach` row. Stewie's loop0 stays attached until
+  the user unmounts the volume row (expected state, not a bug).
+
+## 2026-10-01 — Dashboard: Recent Operations moved above Running Tasks
+
+- Dashboard section order is now Warnings, Pool Health, Recent Operations,
+  Running Tasks, Active Locks, iSCSI Issues, Configuration. Pure block move in
+  the page builder (`python/dashboard_page.py`) — no logic changes; section
+  banner comments renumbered (Recent Ops 3, Running Tasks 4, Active Locks 4a).
+- Updated `test_section_order_in_top_level_box` in
+  `tests/python/test_dashboard_page.py` and moved the `### Recent Operations`
+  subsection in `docs/docs/user-guide/gtk-gui.md` to match.
+
+## 2026-10-01 — Migrate Pool: cutover catch-up send, running-VM check, cutover-time layout re-check
+
+- Gap closed: cutover used to export the source pool as of the *migration*
+  snapshot, silently dropping every write made while the (possibly long)
+  copy ran. Cutover now takes a recursive `<migration-snapshot>-cutover`
+  snapshot and sends one incremental `zfs send -RIw` per top-level dataset
+  from the migration snapshot to it — both destination modes (new disks
+  send to the temp pool; holding mode sends into the reserved
+  `<holding>/migrate_<source>` namespace, and the copy-back then uses the
+  cutover snapshot). Only writes after the cutover snapshot (seconds before
+  the export) can be lost; the wizard warning states the quiesce window.
+- Two cutover-time gates added before the typed confirmation in
+  `_copy_complete`: (1) `_source_layout_changed` re-check — a structural
+  change aborts the cutover, releases the lock, discards captured holds,
+  and leaves the copy for a re-run; (2) `_running_vms_on_pool` +
+  `_show_running_vms_warning` — zvols are mapped to Proxmox VM IDs
+  (`vm-<id>-disk-<n>`) and checked with `qm status` (locally, or over SSH
+  on the compute host in two-node mode, mirroring `iscsi_check_vm_running`);
+  running VMs trigger a y/n dialog, and declining defers the cutover. All
+  check failures are non-fatal WARNs (the typed confirmation still gates).
+- Plumbing: `pool_migrate.cutover_snapshot_name`/`vmids_from_zvols` +
+  `STEP_CUTOVER_SNAPSHOT`/`STEP_CATCHUP_COPY` in the plan;
+  `zfs_repository.build_migration_send_receive_command(from_snap=…)` emits
+  `fromsnap=` and `list_volume_names(pool)`; `transfer_do` gained an
+  optional 8th arg (`send_target2`) appended to the send command;
+  `zfs-migrate-send` switches to the incremental `-RIw` pipeline (and
+  incremental `-nPRIw` size estimate) when `$fromsnap` is set.
+- Tests: new helper/plan tests in `test_pool_migrate.py`, builder + zvol
+  listing tests in `test_zfs_repository.py` (2 new goldens), warning/
+  cutover-step/gate tests in `test_pool_migrate_dialogs.py` (2 cutover
+  goldens regenerated — catch-up steps added, copy-back snap now
+  `-cutover`), incremental-send tests in `tests/test-zfs-migrate-send`, and
+  a second-send-target test in `tests/test-transfer-lib`.
+- Gotcha: the shell test harness runs without pipefail, so the dry-run
+  estimate-failure branch of `zfs-migrate-send` cannot fire there — tests
+  assert the "Unable to get stream size estimate" path instead.
+- Docs: gtk-gui.md (Migrate Pool), commands.md (`zfs-migrate-send`),
+  modules.md (`transfer_do`), python-modules.md (pool_migrate,
+  pool_migrate_dialogs, zfs_repository builder), testing.md suite rows.
+
+## 2026-10-01 — Pool Registry: auto-refresh so Health shows OFFLINE without clicking Refresh
+
+- Bug: the registry table only refreshed on user actions; nothing re-queried
+  `zpool list` or `ImportablePoolCache` after external changes (e.g. shutting
+  off a pool's devices), so Health stayed stale until **Refresh** was clicked.
+- `zfsutilities_gui.py`: added `POOLS_REFRESH_SECONDS = 30`,
+  `_start_stop_pools_timer`, and `_on_pools_timer_tick` (mirrors the
+  dashboard/scrub/disks/schedule timer pattern): started when the Pools tab
+  becomes visible with an immediate `refresh_pools_page`, tick refreshes only
+  while visible. Wired into `on_page_changed`.
+- `pool_actions.py`: added `_invalidate_importable_cache` and call it in
+  `on_pools_export` and both `on_pools_import` paths so export/import converge
+  immediately instead of waiting on the 30 s cache TTL.
+- Tests: `TestPoolsTimer` in `test_zfsutilities_gui.py` (start/stop/replace/
+  tick), `on_page_changed` hook test plus `_make_window` mock, and cache
+  invalidation tests for export/import in `test_pool_actions.py`.
+- Docs: `docs/docs/user-guide/gtk-gui.md` (Pool Registry actions section) now
+  documents the 30 s auto-refresh and the on-switch immediate refresh.
+
 ## 2026-09-30 — archive-vm: never stops the VM; reports dependent disks and offers script promotion
 
 - Behavior change requested against the #archiving-a-vm docs: `archive-vm`

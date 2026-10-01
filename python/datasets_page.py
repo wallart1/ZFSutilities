@@ -384,6 +384,10 @@ def _is_mountable(item, volume_loop_attached):
     if item["type"] in ("pool", "dataset") and item.get("zfs_type") == "volume":
         # Volumes have no zfs "mounted" property; loop-attach state decides.
         return not volume_loop_attached.get(item["name"], False)
+    if item["type"] == "snapshot" and item.get("parent_type") == "volume":
+        # Snapshots of volumes have no .zfs path and no block device of their
+        # own; there is nothing to mount.
+        return False
     return not item.get("mounted", False)
 
 
@@ -401,7 +405,7 @@ def update_ds_button_sensitivity(app):
     types = {i["type"] for i in items} if items else set()
 
     can_snapshot = len(items) == 1 and types <= {"pool", "dataset"}
-    can_delete = bool(items) and "pool" not in types
+    can_delete = bool(items) and types <= {"dataset", "snapshot", "hold"}
     can_hold = "snapshot" in types and types <= {"snapshot", "hold"}
     can_rollback = len(items) == 1 and types == {"snapshot"}
 
@@ -467,6 +471,17 @@ def update_ds_button_sensitivity(app):
         btn = getattr(app, attr, None)
         if btn:
             btn.set_sensitive(sensitive)
+
+    # Explain the one Mount-disabled case that otherwise looks like a bug:
+    # snapshots of volumes (no .zfs path, no block device of their own).
+    mount_btn = getattr(app, "_ds_mount_btn", None)
+    if mount_btn is not None:
+        mount_btn.set_tooltip_text(
+            "Snapshots of ZFS volumes cannot be mounted"
+            if not can_mount
+            and any(i["type"] == "snapshot" and i.get("parent_type") == "volume" for i in items)
+            else ""
+        )
 
 
 # ---------------------------------------------------------------------------

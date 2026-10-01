@@ -60,6 +60,10 @@ The menu bar runs across the top of the window and contains three menus:
 - **View**
   - **Minimize Width...** — resets every resizable table column to its narrowest
     width and shrinks the window as small as possible.
+  - **GUI Log Font** — enlarges, shrinks, or restores the default size of the
+    bottom log panel's text.
+  - **Log Viewer Font** — enlarges, shrinks, or restores the default size of
+    the Logs tab log viewer's text.
 - **Help**
   - **Documentation** — opens the built-in documentation viewer.
   - **Help with this page** — opens the viewer at the section for the currently
@@ -126,7 +130,9 @@ job.
 The bottom panel shows a scrollable log of all operations. Every line is
 prefixed with a `YYYY-MM-DD HH:MM:SS` timestamp in the system's local time.
 The divider between the main content area and the log panel can be dragged to
-resize the log.
+resize the log. The text size can be changed with
+**View → GUI Log Font** (see [View Menu](#view-menu)) and is remembered across
+GUI restarts.
 
 A **Pop Out** button (window icon) next to the **Log** level dropdown detaches the
 log viewer into an independent window.
@@ -279,6 +285,27 @@ A **Low-space warning threshold** spin button sits above the pool table. It
 sets the capacity percentage at which the Dashboard warns about low space.
 The default is **80 %** (range 50–95 %).
 
+### Recent Operations
+
+A scrollable table showing the last **10** history entries:
+
+| Column            | Meaning                                                                                                                           |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **Date/Time**     | When the operation finished (`YYYY-MM-DDTHH:MM±TZ`)                                                                               |
+| **Type**          | `backup`, `offsite`, `restore`, or `prune`                                                                                        |
+| **Name**          | GUI label or scheduled profile name                                                                                               |
+| **Message Level** | Highest message level issued during the operation, from its session log: green `✓` INFO/VERB/DEBUG, amber `⚠` WARN, red `✗` FATAL |
+
+The list refreshes automatically with the rest of the Dashboard.
+
+A WARN message does **not** mean the operation failed — many scripts warn and
+continue. When a session log is unavailable or contains no levelled messages,
+the cell falls back to the exit-code result (`✓ success`, `✗ failed`).
+
+Each row also stores the operation's session-log path in a hidden column. The
+[**View Log**](#actions) action uses this path to jump to the log in the
+[Logs tab](#logs-tab).
+
 ### Running Tasks
 
 A unified view of all currently running operations. Select one or more rows
@@ -333,27 +360,6 @@ Lists every currently held (non-stale) ZFS dataset lock. Each row shows:
 The list refreshes automatically with the rest of the Dashboard. Stale locks
 (whose owning process has exited) are not shown here; they are reported in the
 **Warnings** section and can be removed with the **Fix Locks** action button.
-
-### Recent Operations
-
-A scrollable table showing the last **10** history entries:
-
-| Column            | Meaning                                                                                                                           |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| **Date/Time**     | When the operation finished (`YYYY-MM-DDTHH:MM±TZ`)                                                                               |
-| **Type**          | `backup`, `offsite`, `restore`, or `prune`                                                                                        |
-| **Name**          | GUI label or scheduled profile name                                                                                               |
-| **Message Level** | Highest message level issued during the operation, from its session log: green `✓` INFO/VERB/DEBUG, amber `⚠` WARN, red `✗` FATAL |
-
-The list refreshes automatically with the rest of the Dashboard.
-
-A WARN message does **not** mean the operation failed — many scripts warn and
-continue. When a session log is unavailable or contains no levelled messages,
-the cell falls back to the exit-code result (`✓ success`, `✗ failed`).
-
-Each row also stores the operation's session-log path in a hidden column. The
-[**View Log**](#actions) action uses this path to jump to the log in the
-[Logs tab](#logs-tab).
 
 ### iSCSI Issues *(two-node only)*
 
@@ -1047,7 +1053,9 @@ snapshot through one `zfs send -Rw` replication step per top-level dataset
 (received with `zfs receive -u -F -s -v`; snapshots, descendants, and
 properties included; encrypted datasets are sent raw; `-v` logs each dataset
 as it is received so progress through the tree is visible in the log) to a
-dataset-tree verification.
+dataset-tree verification, plus the cutover steps that follow the copy (a
+catch-up snapshot with incremental sends, the export/import swap, and in
+holding mode the pool rebuild and copy-back).
 An optional **Bandwidth limit** (a `pv` rate such as `100m`) throttles the
 copy. Every copy is resumable: an interrupted transfer leaves a receive
 resume token on the destination, and re-running Migrate Pool resumes from
@@ -1056,12 +1064,30 @@ status area. Typed confirmation of the source pool name starts the copy
 phase. If the pool's dataset layout changed after the review (a dataset was
 renamed, added, or removed while the wizard was open), the run is aborted
 before anything starts with an explanation — re-open Migrate Pool and review
-the plan again. When the copy finishes, a second
-typed confirmation gates the cutover: the source pool is exported and the
-migrated pool is re-imported under the source pool's name — a permanent
-rename written to the pool label, so every future import uses the normal
-pool name — and every `pool/dataset` path, and everything that references
-it, survives the swap.
+the plan again.
+
+When the copy finishes, the cutover starts with a catch-up: a recursive
+cutover snapshot (the migration snapshot's name with a `-cutover` suffix)
+followed by one incremental `zfs send -RIw` per top-level dataset from the
+migration snapshot to the cutover snapshot, bringing the destination up to
+date with writes made while the copy ran. From the cutover snapshot onward
+the pool must be quiesced — stop VMs and unmount shares and make no other
+writes: the cutover ends by exporting the source pool, so writes made after
+the cutover snapshot are lost, but the window is only seconds. Before the
+catch-up runs, the dataset layout is re-checked at cutover time (the same
+structural check as at start; a change aborts the cutover with an
+explanation and leaves the copy in place for a re-run), and the pool's
+zvols are scanned for running Proxmox VMs (`qm status`, run locally in
+single-node mode or on the compute host over SSH in two-node mode; VMs on
+non-Proxmox zvols are ignored). If any VM is running, a warning dialog
+lists the VM IDs and their disks and asks whether to continue — this is a
+reminder, not an enforcement: the check cannot stop the VMs for you, so
+choose Continue only after shutting them down. A final typed confirmation
+of the source pool name then gates the destructive steps: the source pool
+is exported and the migrated pool is re-imported under the source pool's
+name — a permanent rename written to the pool label, so every future import
+uses the normal pool name — and every `pool/dataset` path, and everything
+that references it, survives the swap.
 
 Aborting a migration is safe at every point before the destructive steps:
 stopping during the copy phase loses nothing (the source pool is untouched);
@@ -1248,6 +1274,13 @@ enabled only for `IMPORTABLE` pools.
 
 The importable-pool scan runs in the background on a schedule. Click **Refresh** to force an immediate rescan.
 
+While the Pools tab is visible, the registry table refreshes itself every 30
+seconds (re-running `zpool list` and picking up background importable-scan
+results), so Health transitions such as `ONLINE` → `OFFLINE` or `IMPORTABLE` →
+`OFFLINE` appear on their own after pool state changes outside the GUI.
+Switching to the Pools tab also refreshes the table immediately. Click
+**Refresh** to refresh without waiting for the interval.
+
 Right-click any cell to open a context menu with **Copy** actions (cell value
 or full row, tab-separated) and **Send details to log**, which writes the raw
 `zpool get all` output for the selected pool to the log panel. **Send details
@@ -1389,7 +1422,7 @@ based on what is selected.
 | **Add Hold**                   | At least one snapshot selected                                                                                                        | Prompts for a tag (default `keep`) and applies it to each selected snapshot                                                                                                                                                                                                                                                                                                                                                                      |
 | **Rollback**                   | Exactly one snapshot selected                                                                                                         | Rolls the dataset back to that snapshot (destroys newer snapshots and data updates)                                                                                                                                                                                                                                                                                                                                                              |
 | **Browse**                     | Exactly one mounted filesystem, snapshot, or volume partition selected                                                                | Opens the selected item in the default file manager. Filesystems (including pool root datasets) open at their ZFS mountpoint; snapshots open via `.zfs/snapshot/<name>`; volume partitions open at their loop-mount directory.                                                                                                                                                                                                                   |
-| **Mount**                      | One or more mountable filesystems, snapshots, or volumes selected                                                                     | Mounts each selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for each selected snapshot. Unmounted ancestor datasets are mounted first so the target's mountpoint is not hidden. Ancestors with `canmount=off` are skipped — they cannot be mounted, and ZFS creates their mountpoint directory automatically when the target mounts. A selected volume is attached to a read-only loop device and its partitions are listed under the volume's entry (see below). Partitions labeled `No filesystem` cannot be mounted. Disabled for holds.                                         |
+| **Mount**                      | One or more mountable filesystems, snapshots, or volumes selected                                                                     | Mounts each selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for each selected snapshot. Unmounted ancestor datasets are mounted first so the target's mountpoint is not hidden. Ancestors with `canmount=off` are skipped — they cannot be mounted, and ZFS creates their mountpoint directory automatically when the target mounts. A selected volume is attached to a read-only loop device and its partitions are listed under the volume's entry (see below). Partitions labeled `No filesystem` cannot be mounted. Snapshots of volumes cannot be mounted; Mount is disabled for them with an explanatory tooltip. Disabled for holds.                                         |
 | **Unmount**                    | One or more mounted filesystems, snapshots, volume partitions, or loop-attached volumes selected                                      | Unmounts each selected filesystem (`sudo zfs unmount`) or snapshot (`sudo umount` on its `.zfs/snapshot/<name>` path). Pool root datasets can be unmounted. Unmounting a filesystem also unmounts its mounted children (see the note below). Unmounting a volume detaches its loop device after unmounting its mounted partitions. If processes are still using an item, a warning dialog lists them and asks you to close them before retrying. |
 | **Apply Profile…**             | Exactly one pool/dataset row (filesystem or volume) selected; snapshots, holds, volume partitions, and multi-selections disable it | Shows the workload-profile picker for the selected dataset; the list contains only the profiles whose *applies to* includes the dataset's type (filesystem or volume). A preview lists the exact `zfs set` commands; profiles that may be unsafe (e.g. `sync=disabled`) require explicit confirmation. Applying to a pool root sets pool-wide inheritance defaults. See [Workload profiles](#workload-profiles).          |
 | **Rewrite Data**               | Every selected item is a filesystem dataset, and OpenZFS 2.3.4+/2.4+ with the pool's `physical_rewrite` feature                       | Runs `zfs rewrite -P -r -x -v <mountpoint>` on each selected dataset in turn, physically rewriting existing blocks so they match the current properties (see [Workload profiles](#workload-profiles)). Volumes cannot be rewritten. Unmounted datasets are mounted temporarily and returned to their prior state. This may take a long time and cannot be undone.                                                                                |
@@ -1443,17 +1476,24 @@ read-only because these volumes are often live VM disks (in use via iSCSI) or
 active backup targets; a read-write attach could corrupt them.
 
 Once attached, the volume's entry in the Datasets tree lists what the loop
-device contains:
+device contains. The GUI runs `udevadm settle` after the attach, so the
+partition filesystem types are known before the rows are listed:
 
 - **Partitioned volume** — one row per partition (`loop0p1`, …). The row's
   Type column shows the filesystem (`ext4`, `xfs`, …). Each partition with a
-  filesystem can be mounted with **Mount** (read-only, under
+  filesystem can be mounted with **Mount** (read-only, `mount -o ro`, under
   `/mnt/zfsutilities/<volume-path>/<partition>`) and then browsed with
   **Browse**. A partition without a filesystem is listed with Type
   `No filesystem` and cannot be mounted or browsed.
 - **Whole-device filesystem** — if the volume has no partition table but does
   have a filesystem, the loop device itself (`loop0`) is listed as a single
   mountable/browseable row.
+
+Partition rows are views of the read-only loop device, not ZFS objects:
+**Delete** never applies to them. Snapshots of volumes cannot be mounted — a
+volume snapshot has no `.zfs/snapshot` path and no block device of its own —
+so **Mount** stays disabled for those rows (hover the button for the
+explanation).
 
 Unmounting a mounted partition row (`sudo umount`) releases just that
 partition. Unmounting the volume row itself unmounts any mounted partitions
@@ -1768,7 +1808,9 @@ Right-click any row to open a context menu:
 
 ### Log viewer (bottom pane)
 
-- **Text view** — The currently-selected log appears here.
+- **Text view** — The currently-selected log appears here. Its text size can
+  be changed with **View → Log Viewer Font** (see [View Menu](#view-menu)) and
+  is remembered across GUI restarts.
 
 - **Level filter** — a dropdown above the text view lets you show only messages
   at the selected priority or higher. It works the same way as the bottom-panel
@@ -2117,8 +2159,17 @@ The GUI's **View** menu contains global display actions.
 | Item                  | Purpose                                                                                                                                  |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | **Minimize Width...** | Reset every resizable table column to its own minimum width, clear saved column widths, and shrink the main window as narrow as possible |
+| **GUI Log Font**      | Change the bottom log panel's text size (**Larger**, **Smaller**, or **Default**)                                                          |
+| **Log Viewer Font**   | Change the Logs tab log viewer's text size (**Larger**, **Smaller**, or **Default**)                                                       |
 
 Choosing **Minimize Width...** flushes any pending save, discards saved widths,
 and resets every resizable column to its own minimum width. The action asks for
 confirmation before resizing the window.
+
+**GUI Log Font** and **Log Viewer Font** size their text relatively rather than
+in absolute values: **Larger** and **Smaller** move the font one step away from
+the theme's default size (within a fixed range), and **Default** removes the
+override so the system theme font returns exactly. The two widgets are sized
+independently, the setting applies to their pop-out windows as well, and each
+choice is saved in the GUI configuration and restored on the next start.
 

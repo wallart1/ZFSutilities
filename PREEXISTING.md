@@ -2,11 +2,12 @@
 
 ---
 
-- 2026-10-01 (repo): `ScrubQueue.__init__` only applies the caller's `target`
-  argument when no `scrub_state.json` exists yet; when prior state exists,
-  `_load()` overwrites `self.target` with the persisted value. As a result,
-  `run_scrub_profile()`'s `simultaneous` profile setting is silently ignored
-  on any system with existing scrub state, while the profile still logs
-  "Scrub profile started on N pool(s), target={simultaneous}" — the logged
-  target may not be the one actually used. Discovered during the
-  scrub-state root-cause audit; not resolved (code freeze).
+- 2026-10-01 (docs): `docs/docs/user-guide/gtk-gui.md` "Snapshot and hold
+  actions" table — the **Delete** row says "Enabled when: Only snapshots
+  and/or holds selected", but `datasets_page.update_ds_button_sensitivity()`
+  (`can_delete = types <= {"dataset", "snapshot", "hold"}`) also enables
+  Delete for dataset rows, and `dataset_actions.on_datasets_delete()` runs
+  `zfsdelfs` pre-flight checks + deletion for selected datasets. Dataset
+  deletion is not documented anywhere in the user guide. Pre-dates this
+  cycle (this cycle only narrowed the condition to exclude pool and
+  volume-partition rows). Not resolved (docs freeze).

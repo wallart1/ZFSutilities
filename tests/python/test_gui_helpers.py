@@ -465,5 +465,200 @@ class TestStyleVarWidgetsNondefault(unittest.TestCase):
         )
 
 
+class _FakeFontStyleContext(_FakeStyleContext):
+    """Style-context fake that also records CSS providers."""
+
+    def __init__(self):
+        super().__init__()
+        self.providers = []
+
+    def add_provider(self, provider, _priority):
+        self.providers.append(provider)
+
+    def remove_provider(self, provider):
+        if provider in self.providers:
+            self.providers.remove(provider)
+
+
+def _font_widget():
+    """Widget fake with a provider-recording style context."""
+    return _FakeStyledWidget(_FakeFontStyleContext())
+
+
+class TestLogFontController(unittest.TestCase):
+    """LogFontController applies relative font steps and persists them."""
+
+    def _controller(self, widget=None, config=None, state_key="info_log"):
+        gui_helpers = _import_gui_helpers()
+        return gui_helpers.LogFontController(
+            widget if widget is not None else _font_widget(), config, state_key
+        )
+
+    def test_css_strings(self):
+        gui_helpers = _import_gui_helpers()
+        self.assertEqual(
+            gui_helpers.log_font_css(2, 10.0),
+            f".{gui_helpers.LOG_FONT_CSS_CLASS} {{ font-size: 13pt; }}",
+        )
+        self.assertEqual(
+            gui_helpers.log_font_css(-4, 10.0),
+            f".{gui_helpers.LOG_FONT_CSS_CLASS} {{ font-size: 4pt; }}",
+        )
+        self.assertEqual(
+            gui_helpers.log_font_css(-1, 10.0),
+            f".{gui_helpers.LOG_FONT_CSS_CLASS} {{ font-size: 8.5pt; }}",
+        )
+
+    def test_default_step_has_no_css(self):
+        controller = self._controller()
+        self.assertEqual(controller.steps, 0)
+        self.assertEqual(controller.css(), "")
+
+    def test_larger_smaller_and_reset_move_steps(self):
+        controller = self._controller()
+        self.assertEqual(controller.larger(), 1)
+        self.assertEqual(controller.smaller(), 0)
+        self.assertEqual(controller.smaller(), -1)
+        self.assertEqual(controller.reset(), 0)
+
+    def test_steps_clamped_to_range(self):
+        gui_helpers = _import_gui_helpers()
+        controller = self._controller()
+        self.assertEqual(controller.set_steps(99), gui_helpers.LOG_FONT_MAX_STEPS)
+        self.assertEqual(controller.set_steps(-99), gui_helpers.LOG_FONT_MIN_STEPS)
+        self.assertEqual(controller.larger(), gui_helpers.LOG_FONT_MIN_STEPS + 1)
+
+    def test_provider_lifecycle_on_style_context(self):
+        gui_helpers = _import_gui_helpers()
+        widget = _font_widget()
+        controller = gui_helpers.LogFontController(widget)
+        ctx = widget.get_style_context()
+
+        # Real GTK returns a fresh CssProvider per call; make the mock do too.
+        with patch.object(gui_helpers, "Gtk") as gtk_mock:
+            gtk_mock.CssProvider.side_effect = MagicMock
+
+            controller.set_steps(2, persist=False)
+            self.assertIn(gui_helpers.LOG_FONT_CSS_CLASS, ctx.classes)
+            self.assertEqual(len(ctx.providers), 1)
+            first = ctx.providers[0]
+
+            controller.set_steps(3, persist=False)
+            self.assertEqual(len(ctx.providers), 1)
+            self.assertIsNot(ctx.providers[0], first)
+
+            controller.set_steps(0, persist=False)
+            self.assertNotIn(gui_helpers.LOG_FONT_CSS_CLASS, ctx.classes)
+            self.assertEqual(ctx.providers, [])
+
+    def test_persist_writes_ui_state(self):
+        gui_helpers = _import_gui_helpers()
+        config = {"ui_state": {}}
+        controller = gui_helpers.LogFontController(_font_widget(), config, "logs_viewer")
+        with patch("backup_config.save_ui_state") as save:
+            controller.set_steps(2)
+        save.assert_called_once_with(config, {"font_sizes": {"logs_viewer": 2}})
+
+    def test_no_persist_without_config(self):
+        gui_helpers = _import_gui_helpers()
+        controller = gui_helpers.LogFontController(_font_widget())
+        with patch("backup_config.save_ui_state") as save:
+            controller.set_steps(1)
+        save.assert_not_called()
+
+    def test_base_pt_read_from_theme_font(self):
+        gui_helpers = _import_gui_helpers()
+
+        class _FontContext(_FakeStyleContext):
+            def get_font(self, _state):
+                return type("Desc", (), {"get_size": lambda _self: 11 * 1024})()
+
+        widget = _FakeStyledWidget(_FontContext())
+        with patch.object(gui_helpers, "Pango", type("P", (), {"SCALE": 1024})):
+            controller = gui_helpers.LogFontController(widget)
+        self.assertEqual(controller.base_pt, 11.0)
+
+    def test_base_pt_fallback_without_style_context(self):
+        gui_helpers = _import_gui_helpers()
+        controller = gui_helpers.LogFontController(object())
+        self.assertEqual(controller.base_pt, gui_helpers.LOG_FONT_FALLBACK_PT)
+
+
+class TestLogFontRestore(unittest.TestCase):
+    """restore_log_font_scale applies saved steps without re-persisting."""
+
+    def _app(self, font_sizes):
+        return type("App", (), {"config": {"ui_state": {"font_sizes": font_sizes}}})()
+
+    def test_restore_applies_saved_steps(self):
+        gui_helpers = _import_gui_helpers()
+        app = self._app({"info_log": 2})
+        widget = _font_widget()
+        gui_helpers.restore_log_font_scale(app, widget, "info_log")
+        controller = app._log_font_controllers["info_log"]
+        self.assertEqual(controller.steps, 2)
+        self.assertIs(controller.widget, widget)
+        # restore must not rewrite the config
+        self.assertEqual(app.config["ui_state"], {"font_sizes": {"info_log": 2}})
+
+    def test_restore_without_saved_entry_stays_default(self):
+        gui_helpers = _import_gui_helpers()
+        app = self._app({})
+        gui_helpers.restore_log_font_scale(app, _font_widget(), "logs_viewer")
+        self.assertEqual(app._log_font_controllers["logs_viewer"].steps, 0)
+
+    def test_restore_without_config_is_noop(self):
+        gui_helpers = _import_gui_helpers()
+        app = type("App", (), {"config": None})()
+        gui_helpers.restore_log_font_scale(app, _font_widget(), "info_log")
+        self.assertFalse(hasattr(app, "_log_font_controllers"))
+
+    def test_controller_reused_for_same_widget(self):
+        gui_helpers = _import_gui_helpers()
+        app = self._app({})
+        widget = _font_widget()
+        first = gui_helpers.get_log_font_controller(app, "info_log", widget)
+        again = gui_helpers.get_log_font_controller(app, "info_log", widget)
+        self.assertIs(first, again)
+
+    def test_controller_recreated_for_new_widget(self):
+        gui_helpers = _import_gui_helpers()
+        app = self._app({})
+        first = gui_helpers.get_log_font_controller(app, "info_log", _font_widget())
+        second = gui_helpers.get_log_font_controller(app, "info_log", _font_widget())
+        self.assertIsNot(first, second)
+
+
+class TestCreateMenuBar(unittest.TestCase):
+    """create_menu_bar wires View-menu font submenus to the app handlers."""
+
+    def test_view_menu_contains_font_submenus(self):
+        with mock_gtk() as gtk_mock:
+            import gui_helpers
+
+            with patch.object(gui_helpers, "Gtk", gtk_mock):
+                app = MagicMock()
+                gui_helpers.create_menu_bar(app)
+
+        labels = [c.kwargs["label"] for c in gtk_mock.MenuItem.call_args_list]
+        self.assertIn("GUI Log Font", labels)
+        self.assertIn("Log Viewer Font", labels)
+        self.assertEqual(labels.count("Larger"), 2)
+        self.assertEqual(labels.count("Smaller"), 2)
+        self.assertEqual(labels.count("Default"), 2)
+
+        connects = gtk_mock.MenuItem.return_value.connect.call_args_list
+        connect_args = [c.args for c in connects]
+        for handler, state_key in (
+            (app.on_log_font_larger, "info_log"),
+            (app.on_log_font_smaller, "info_log"),
+            (app.on_log_font_default, "info_log"),
+            (app.on_log_font_larger, "logs_viewer"),
+            (app.on_log_font_smaller, "logs_viewer"),
+            (app.on_log_font_default, "logs_viewer"),
+        ):
+            self.assertIn(("activate", handler, state_key), connect_args)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -93,16 +93,18 @@ function transfer_pv_args {
 
 # Run one zfs send | pv | zfs receive pipeline under pipefail.
 # Usage: transfer_do <desc> <sendopts> <recvopts> <use_pv> <datatosend> \
-#                    <send_target> <recv_target>
+#                    <send_target> <recv_target> [send_target2]
 #   sendopts/recvopts are space-separated option strings; send_target is
 #   omitted from the send command when sendopts contains -t <token> (the
-#   token already encodes the snapshot).
+#   token already encodes the snapshot). The optional send_target2 is
+#   appended to the send command when non-empty, giving incremental sends
+#   their two snapshot operands (zfs send -RIw <ds>@from <ds>@to).
 # Logs "FATAL: <desc> failed. RC=N" on failure; caller-specific failure
 # handling (lock release, exit codes, re-run hints) stays in the callers.
 # Returns: the pipeline's exit status (nonzero on any pipeline failure).
 function transfer_do {
     local desc="$1" sendopts="$2" recvopts="$3" use_pv="$4" datatosend="$5"
-    local send_target="$6" recv_target="$7"
+    local send_target="$6" recv_target="$7" send_target2="${8:-}"
 
     transfer_pv_args "$datatosend" "$use_pv"
 
@@ -120,6 +122,7 @@ function transfer_do {
     local -a _sendopts=($sendopts)
     local -a send_cmd=(zfs send "${_sendopts[@]}")
     [[ "$sendopts" != *"-t"* ]] && send_cmd+=("$send_target")
+    [[ -n "$send_target2" ]] && send_cmd+=("$send_target2")
 
     # shellcheck disable=SC2206
     # Intentional word splitting: $recvopts is a space-separated option string.

@@ -558,7 +558,7 @@ source_helper transfer-lib.sh
 | `transfer_resume_token_stale <errtext>`                                                      | Classify known stale resume-token errors                                                                 |
 | `transfer_validate_resume_token <token>`                                                     | `zfs send -nP -t <token>`; prints remaining bytes, or the error text with rc 1                           |
 | `transfer_pv_args <datatosend> <use_pv>`                                                     | Build the pv argument array into `transfer_pv_args` (tty / `ZFSUTILITIES_LOG_INHERIT` / `-L` rate limit) |
-| `transfer_do <desc> <sendopts> <recvopts> <use_pv> <datatosend> <send_target> <recv_target>` | Run `zfs send … \| pv … \| zfs receive …` under pipefail; logs `FATAL: <desc> failed` on failure         |
+| `transfer_do <desc> <sendopts> <recvopts> <use_pv> <datatosend> <send_target> [<recv_target> [<send_target2>]]` | Run `zfs send … \| pv … \| zfs receive …` under pipefail (optional second send target for incremental sends); logs `FATAL: <desc> failed` on failure |
 | `transfer_check_space <datatosend> <dest_pool>`                                              | Destination free-space check (10% margin, 1 GiB minimum buffer)                                          |
 
 **Globals:** reads `$pv_rate_limit` (optional `pv -L` rate) and

@@ -1170,6 +1170,38 @@ class TestMount(unittest.TestCase):
             mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap1")
             mock_refresh.assert_called_once_with(app)
 
+    def test_rejects_snapshot_of_volume(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "snapshot",
+                        "dataset": "tank/vm-100-disk-0",
+                        "name": "snap1",
+                        "parent_type": "volume",
+                        "zfs_type": "snapshot",
+                        "mounted": False,
+                    }
+                ],
+            ),
+            patch.object(da, "get_snapshot_mountpoint") as mock_mountpoint,
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+        ):
+            da.on_datasets_mount(app)
+
+            mock_mountpoint.assert_not_called()
+            mock_log.assert_any_call(
+                "WARN: Cannot mount tank/vm-100-disk-0@snap1: "
+                "snapshots of ZFS volumes cannot be mounted"
+            )
+            mock_refresh.assert_not_called()
+
     def test_mounts_multiple_snapshots(self):
         da = self._import_under_mock()
         app = self._make_app()
@@ -1794,7 +1826,7 @@ class TestVolumeLoopActions(unittest.TestCase):
         mountpoint = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
         mock_makedirs.assert_called_once_with(mountpoint, exist_ok=True)
         mock_subprocess.run.assert_called_once_with(
-            ["sudo", "mount", "/dev/loop0p1", mountpoint],
+            ["sudo", "mount", "-o", "ro", "/dev/loop0p1", mountpoint],
             capture_output=True,
             text=True,
             check=False,
@@ -2119,7 +2151,7 @@ class TestVolumeLoopHelpers(unittest.TestCase):
         mountpoint = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
         mock_makedirs.assert_called_once_with(mountpoint, exist_ok=True)
         mock_subprocess.run.assert_called_once_with(
-            ["sudo", "mount", "/dev/loop0p1", mountpoint],
+            ["sudo", "mount", "-o", "ro", "/dev/loop0p1", mountpoint],
             capture_output=True,
             text=True,
             check=False,

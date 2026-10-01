@@ -11,12 +11,19 @@
 # pipeline when useful (terminal or GUI-captured output) and can be
 # rate-limited via $pv_rate_limit.
 #
+# With an optional $fromsnap set, the send becomes the cutover catch-up
+# incremental: `zfs send -RIw <src>@$fromsnap <src>@$snapname` carries every
+# change made since the migration snapshot, intermediary snapshots included
+# (`-I`), into the same destination before any destructive cutover step.
+#
 # Usage: not intended for direct CLI use; the Migrate Pool wizard executes
 #        this script with the variables below assigned.
 # Variables assigned by the caller before sourcing/executing:
 #   $sourcefs      source dataset (e.g. temp/proxmox)
 #   $destfs        destination dataset (e.g. temp_mig/proxmox)
 #   $snapname      bare migration snapshot name (no leading @)
+#   $fromsnap      optional bare from-snapshot name for the incremental
+#                  catch-up send (no leading @); empty = full -Rw send
 #   $pv_rate_limit optional pv -L rate (e.g. 100m); empty = unlimited
 #
 # Returns: 0 on success; 8 on transfer failure (the destination resume token
@@ -40,6 +47,7 @@ source_helper transfer-lib.sh
 
 zfs_migrate_send() {
     local sourcefs="${sourcefs:-}" destfs="${destfs:-}" snapname="${snapname:-}"
+    local fromsnap="${fromsnap:-}"
     if [[ -z "$sourcefs" || -z "$destfs" || -z "$snapname" ]]; then
         log_msg "FATAL: zfs-migrate-send requires sourcefs, destfs, and" \
             "snapname to be set."
@@ -90,9 +98,20 @@ zfs_migrate_send() {
     # Fresh send of the migration snapshot.
     # awk '/^size/ {print $2}' — Extract byte size from the transfer dry-run.
     local datatosend=""
-    if ! datatosend=$(zfs send -nPRw "$sourcefs@$snapname" 2>/dev/null \
-            | awk '/^size/ {print $2}'); then
-        log_msg "WARN: Size estimate dry-run of $sourcefs@$snapname failed."
+    if [[ -n "$fromsnap" ]]; then
+        # Cutover catch-up: a short incremental from the migration snapshot
+        # to the cutover snapshot. -nPRIw mirrors the -RIw pipeline below;
+        # -I includes intermediary snapshots taken between the two.
+        if ! datatosend=$(zfs send -nPRIw "$sourcefs@$fromsnap" \
+                "$sourcefs@$snapname" 2>/dev/null | awk '/^size/ {print $2}'); then
+            log_msg "WARN: Size estimate dry-run of $sourcefs@$fromsnap" \
+                "to $sourcefs@$snapname failed."
+        fi
+    else
+        if ! datatosend=$(zfs send -nPRw "$sourcefs@$snapname" 2>/dev/null \
+                | awk '/^size/ {print $2}'); then
+            log_msg "WARN: Size estimate dry-run of $sourcefs@$snapname failed."
+        fi
     fi
     if [[ -z "$datatosend" ]]; then
         log_msg "WARN: Unable to get stream size estimate of" \
@@ -111,10 +130,20 @@ zfs_migrate_send() {
     # raw so encrypted datasets survive; -u keeps received datasets unmounted;
     # -F lets a re-run roll the destination back; -s always, since migration
     # transfers are full-copy-sized; -v logs each dataset as it is received
-    # so progress through the tree is visible in the session log.
-    if transfer_do "Send/receive" "-Rw" "-u -F -s -v" "Y" "$datatosend" \
-            "$sourcefs@$snapname" "$destfs"; then
-        return 0
+    # so progress through the tree is visible in the session log. With
+    # $fromsnap the send becomes `zfs send -RIw @from @to`: the catch-up
+    # incremental whose -I carries intermediary snapshots (e.g. dailybackup)
+    # so they are not lost when the source is destroyed.
+    if [[ -n "$fromsnap" ]]; then
+        if transfer_do "Send/receive" "-RIw" "-u -F -s -v" "Y" "$datatosend" \
+                "$sourcefs@$fromsnap" "$destfs" "$sourcefs@$snapname"; then
+            return 0
+        fi
+    else
+        if transfer_do "Send/receive" "-Rw" "-u -F -s -v" "Y" "$datatosend" \
+                "$sourcefs@$snapname" "$destfs"; then
+            return 0
+        fi
     fi
     log_msg "FATAL: Migrate Pool transfer interrupted; re-run Migrate Pool" \
         "to resume from the receive resume token on $destfs."

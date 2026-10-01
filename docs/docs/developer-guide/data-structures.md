@@ -263,6 +263,7 @@ Persisted by `UIStateManager` in `python/gui_helpers.py`.
 | `docs_viewer`        | object  | `width`, `height`, `x`, `y`, `maximized`, `zoom`, `theme`                                           |
 | `treeview_columns`   | object  | Map of TreeView state key to `{column_title: width}` dicts                                          |
 | `paned_positions`    | object  | Map of paned state key to divider position (integer pixels)                                         |
+| `font_sizes`         | object  | Map of log-widget state key (`info_log`, `logs_viewer`) to the saved relative font step count       |
 
 ### Python access
 
@@ -479,7 +480,11 @@ consumed by the Pools tab, Dashboard, and `ScrubQueue`.
 | `eta` | `str` or `None` | Estimated completion timestamp (`YYYY-MM-DD HH:MM`) computed from `remaining_seconds` |
 
 `ScrubQueue` persists pending/active/paused/finished/paused_by_user pool sets
-and a concurrency target to `/var/lib/zfsutilities/scrub_state.json`. The
+and a concurrency target to `/var/lib/zfsutilities/scrub_state.json`. An
+explicit `target` passed to the constructor is authoritative: it overrides the
+persisted value and is re-persisted, so the GUI's scrub-config setting and a
+scrub profile's `simultaneous` setting always take effect; omitting `target`
+keeps the persisted value. The
 buckets are kept disjoint: a pool appears in at most one of
 pending/active/paused/finished (`add_pending()` removes a re-queued pool from
 `finished`, and `tick()` drops `finished` entries for pools that no longer

@@ -9,7 +9,9 @@ place (stripe to raidz, mirror to raidz, width changes, ashift changes).
 The copy-based method snapshots the source pool, replicates every top-level
 dataset to a destination (a new pool built on selected disks, or an existing
 holding pool with enough free space), verifies the copy, and finally cuts
-over: the source pool is exported and the migrated pool is re-imported
+over: a cutover catch-up snapshot plus one short incremental per dataset
+migrate the writes made while the copy ran, then the source pool is exported
+and the migrated pool is re-imported
 under the source pool's name so every ``pool/dataset`` path is preserved.
 In holding-pool mode the source pool is destroyed and rebuilt as part of the
 cutover, so the new topology may use the source pool's freed disks and/or any
@@ -18,6 +20,7 @@ eligible unused disks.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -31,6 +34,7 @@ MIGRATE_HOLDING_POOL = "holding_pool"
 MIGRATION_MODES = (MIGRATE_NEW_DISKS, MIGRATE_HOLDING_POOL)
 
 _MIGRATION_LABEL = "migrate"
+_CUTOVER_SUFFIX = "-cutover"
 _TEMP_SUFFIX = "_mig"
 _HOLDING_NS_PREFIX = "migrate_"
 _HEADROOM_FRACTION = 1.1
@@ -43,12 +47,14 @@ _USED_TOLERANCE_FRACTION = 0.01
 STEP_SNAPSHOT = "snapshot"
 STEP_COPY = "copy"
 STEP_VERIFY = "verify"
+STEP_CAPTURE_HOLDS = "capture_holds"
+STEP_CUTOVER_SNAPSHOT = "cutover_snapshot"
+STEP_CATCHUP_COPY = "catchup_copy"
 STEP_EXPORT_SOURCE = "export_source"
 STEP_IMPORT_RENAME = "import_rename"
 STEP_DESTROY_SOURCE = "destroy_source"
 STEP_CREATE_POOL = "create_pool"
 STEP_DESTROY_HOLDING = "destroy_holding"
-STEP_CAPTURE_HOLDS = "capture_holds"
 STEP_RELEASE_HOLDS = "release_holds"
 STEP_REAPPLY_HOLDS = "reapply_holds"
 
@@ -91,6 +97,50 @@ def migration_snapshot_bare_name(snapshot_name: str) -> str:
     if not snapshot_name.startswith("@"):
         raise ValueError(f"not a snapshot name: {snapshot_name!r}")
     return snapshot_name[1:]
+
+
+def cutover_snapshot_name(snapshot_name: str) -> str:
+    """Return the cutover catch-up snapshot name for a migration snapshot.
+
+    Given the full ``@migrate-…`` name captured when the wizard opened, return
+    ``@migrate-…-cutover``: still ``migrate``-labelled, so retention (which
+    prunes only its own label's buckets) never touches it. The cutover
+    snapshot is taken on the still-imported source pool right before the
+    destructive cutover steps, and an incremental send from the migration
+    snapshot to it carries every write made while the long copy ran.
+    """
+    if not snapshot_name.startswith(f"@{_MIGRATION_LABEL}-"):
+        raise ValueError(f"not a migration snapshot name: {snapshot_name!r}")
+    if "/" in snapshot_name or "@" in snapshot_name[1:]:
+        raise ValueError(f"not a bare snapshot name: {snapshot_name!r}")
+    if snapshot_name.endswith(_CUTOVER_SUFFIX):
+        raise ValueError(f"already a cutover snapshot name: {snapshot_name!r}")
+    return f"{snapshot_name}{_CUTOVER_SUFFIX}"
+
+
+# Regex: vm-(\d+)-disk-\d+
+# Used with re.fullmatch on the zvol base name (the part after the last "/"),
+# mirroring gui_helpers.collect_dataset_busy_reasons. Purpose: recognize a
+# Proxmox-style zvol ("vm-<vmid>-disk-<disknum>", e.g. "vm-207-disk-2") so the
+# pool's zvols can be mapped to the VMs that own them. Group 1 captures the
+# VM ID.
+_ZVOL_BASE_RE = re.compile(r"vm-(\d+)-disk-\d+")
+
+
+def vmids_from_zvols(names: list[str]) -> dict[str, list[str]]:
+    """Map Proxmox VM IDs to the zvols they own.
+
+    *names* are full zvol dataset names (``pool/vm-100-disk-0``). Each name
+    whose base name follows the Proxmox ``vm-<id>-disk-<n>`` convention is
+    grouped under its VM ID; non-conforming names are ignored. Returns
+    ``{vmid: [zvol names]}`` with each list in input order.
+    """
+    vmids: dict[str, list[str]] = {}
+    for name in names:
+        match = _ZVOL_BASE_RE.fullmatch(name.split("/")[-1])
+        if match:
+            vmids.setdefault(match.group(1), []).append(name)
+    return vmids
 
 
 def holding_migration_namespace(source_pool: str) -> str:
@@ -137,6 +187,8 @@ def plan_migration_steps(
     mode: str,
     dest_label: str,
     rebuild_disk_count: int | None = None,
+    migration_snap: str = "",
+    cutover_snap: str = "",
 ) -> list[MigrationStep]:
     """Return the ordered step plan for one migration.
 
@@ -146,6 +198,12 @@ def plan_migration_steps(
     steps around the same snapshot-copy-verify core. *rebuild_disk_count* is
     the number of disks the rebuilt pool will be created from (holding mode
     only); it is included in the create-step description when given.
+    *migration_snap* and *cutover_snap* are the full ``@migrate-…`` and
+    ``@migrate-…-cutover`` snapshot names; when given they appear in the
+    catch-up step descriptions. In both modes the plan gains, between the
+    holds capture and the export step, a cutover snapshot plus one
+    incremental catch-up copy per dataset, so writes made after the
+    migration snapshot are migrated before anything destructive runs.
     Destructive steps are described as such; the wizard gates them behind
     typed confirmation.
     """
@@ -203,6 +261,26 @@ def plan_migration_steps(
             f"Capture snapshot holds on '{source_pool}' for preservation",
         )
     )
+    # Writes made after the migration snapshot are caught up at cutover: a
+    # second (cutover) snapshot on the still-imported source pool, then one
+    # short incremental per dataset into the same destination, all before
+    # any destructive step. The data-loss window shrinks to the seconds
+    # between the cutover snapshot and the export.
+    steps.append(
+        MigrationStep(
+            STEP_CUTOVER_SNAPSHOT,
+            f"Take cutover snapshot on '{source_pool}' recursively",
+        )
+    )
+    steps += [
+        MigrationStep(
+            STEP_CATCHUP_COPY,
+            f"Send incremental changes ('{migration_snap}' → '{cutover_snap}') "
+            f"for '{dataset}' to '{copy_dest}'",
+            dataset=dataset,
+        )
+        for dataset in top_level_datasets
+    ]
     steps.append(
         MigrationStep(
             STEP_EXPORT_SOURCE,
