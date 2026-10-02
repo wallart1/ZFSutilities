@@ -289,6 +289,40 @@ test_single_node_config_loading() {
     assert_contains "$output" "compute_host=$this_host"
 }
 
+# Two-node config with the optional expected-device-count variable set.
+expected_devices_conf="$tmp_dir/expected-devices.conf"
+cat > "$expected_devices_conf" << 'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="stewie"
+COMPUTE_HOST="brian"
+STORAGE_IP="10.0.0.1"
+IQN_PREFIX="iqn.2025-01.com.zfsutilities"
+EXPECTED_ISCSI_DEVICES="31"
+declare -A POOL_TARGET=(
+    ["threeamigos"]="threeamigos"
+)
+EOF
+
+test_expected_iscsi_devices_copy_from_conf() {
+    test_start "node-lib.sh copies EXPECTED_ISCSI_DEVICES to expected_iscsi_devices"
+    local output
+    output=$(
+        NODE_CONF="$expected_devices_conf" source "$mydir/lib/node-lib.sh"
+        echo "expected=${expected_iscsi_devices:-UNSET}"
+    )
+    assert_contains "$output" "expected=31"
+}
+
+test_expected_iscsi_devices_defaults_empty() {
+    test_start "node-lib.sh leaves expected_iscsi_devices empty when the conf omits it"
+    local output
+    output=$(
+        NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh"
+        echo "expected=${expected_iscsi_devices:-UNSET}"
+    )
+    assert_contains "$output" "expected=UNSET"
+}
+
 # ------------------------------------------------------------------------------
 # Pool helpers
 # ------------------------------------------------------------------------------
@@ -515,6 +549,8 @@ test_bashinit_safe_under_set_u() {
 
 test_two_node_config_loading
 test_single_node_config_loading
+test_expected_iscsi_devices_copy_from_conf
+test_expected_iscsi_devices_defaults_empty
 
 test_pool_to_target_known
 test_pool_to_target_unknown

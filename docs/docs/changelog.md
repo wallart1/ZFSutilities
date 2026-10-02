@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.111.0
+
+*Released 2026-10-02*
+
+### Added
+
+- **Complete messages reference** — the Messages section of the
+  documentation is now a full manual: every message-emitting script and GUI
+  module (132 sources) is cataloged in ten functional groups, each with a
+  message / meaning / response table. Rows cover every `WARN:`/`FATAL:`/
+  `ERROR:` message plus the informational messages that mark a decision,
+  gate, prompt, or outcome; routine per-item progress lines are omitted.
+  Several documented inaccuracies were corrected along the way (zfsretain's
+  "Phase N" rows replaced with the real removal templates, the
+  zfssendoffsite no-offsite-pools message level, and the zfscheckagainst
+  counterpart-snapshot wording and semantics).
+
+- **`profile_runner.py run <profile> --ignore-schedule`** — new optional
+  flag (placed after the profile name) that runs a profile immediately,
+  bypassing the runtime weekday-ordinal guard that gates scheduled runs.
+  A bypass is logged at `VERB:` level when the profile's weekday field
+  actually contains an ordinal.
+
+### Changed
+
+- **`rescan-storage` low-device warning is configuration-driven** — the
+  minimum iSCSI device count previously hard-coded a site-specific
+  expectation; it now comes from the optional `EXPECTED_ISCSI_DEVICES`
+  variable in `node.conf` (prompted for by `install-two-node`). Unset,
+  empty, zero, or non-numeric values disable the warning.
+
+- **Bash regex policy relaxed** — the developer-guide coding policy now
+  permits regular expressions longer than 10 characters when they are
+  profusely documented in code comments, matching the existing Python
+  wording; several shipped scripts already follow this practice.
+
+### Fixed
+
+- **GUI Run Now could be skipped by weekday ordinals** — clicking Run Now
+  on a profile whose cron weekday field carries an ordinal (for example
+  `6#2`, second Saturday) was skipped by the runtime ordinal guard meant
+  for scheduled runs. Run Now now always executes immediately (it passes
+  the new `--ignore-schedule` flag); cron-triggered runs and manual runs
+  without the flag remain gated.
+
 ## 0.110.0
 
 *Released 2026-10-02*

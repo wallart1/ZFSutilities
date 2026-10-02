@@ -40,6 +40,10 @@ STORAGE_IP="192.168.100.1"
 
 IQN_PREFIX="iqn.2026-02.local.stewie"
 
+# Optional: rescan-storage warns when fewer iSCSI devices than this are
+# visible on the compute host. Unset or empty disables the warning.
+EXPECTED_ISCSI_DEVICES="31"
+
 declare -A POOL_TARGET=(
     [threeamigos]="threeamigos"
     [NVME1]="nvme1"
@@ -249,13 +253,14 @@ Interactive installer for two-node mode:
 
 1. Installs MkDocs (for documentation editing)
 2. Prompts for storage host, compute host, storage IP, IQN prefix,
-   and pool-to-target mappings (auto-detects online pools)
+   pool-to-target mappings (auto-detects online pools), and the optional
+   expected iSCSI device count for `rescan-storage`'s low-count warning
 3. Generates `/etc/zfsutilities/node.conf`
 4. Installs scripts on both hosts via SSH
 5. Installs systemd drop-ins (`boot-config.conf` and `pre-start-backup.conf`)
    and the encrypted-LUNs registry
 6. Verifies SSH key authorization between hosts
-8. If PVE is present on the compute host, patches
+7. If PVE is present on the compute host, patches
    `/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm` to limit automatic iSCSI
    rescans to once per day (eliminates kernel log spam on the storage host)
 
@@ -324,7 +329,7 @@ is unlocked; see [ZFS Key Handling](../installation/zfs-keys.md).
 The names below are the ones used in the config file. After `node-lib.sh` (or
 the repo-root pattern above) processes the config, scripts read the lowercase
 working copies (`node_mode`, `this_host`, `storage_host`, `compute_host`,
-`storage_ip`, `iqn_prefix`, `pool_target`).
+`storage_ip`, `iqn_prefix`, `pool_target`, `expected_iscsi_devices`).
 
 ### Single-node variables
 
@@ -345,6 +350,7 @@ working copies (`node_mode`, `this_host`, `storage_host`, `compute_host`,
 | `STORAGE_IP`   | Config | iSCSI portal IP                                   |
 | `IQN_PREFIX`   | Config | iSCSI IQN prefix                                  |
 | `POOL_TARGET`  | Config | Associative array: pool name -> target short name |
+| `EXPECTED_ISCSI_DEVICES` | Config (optional) | Minimum iSCSI device (LUN) count; `rescan-storage` warns below it. Unset or empty disables the warning |
 
 ## Notable Design Decisions
 

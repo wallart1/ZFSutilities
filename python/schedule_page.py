@@ -845,12 +845,16 @@ def _on_profile_finished(pid, status, user_data):
 
 
 def _run_profile_now(app, profile_name):
-    """Launch profile_runner.py for *profile_name* and stream its output."""
+    """Launch profile_runner.py for *profile_name* and stream its output.
+
+    The run passes --ignore-schedule so it executes immediately instead of
+    being gated by the profile's cron weekday-ordinal check.
+    """
     runner_path = _resolve_profile_runner_path()
     log_msg(f"INFO: Running profile now: {profile_name}")
     try:
         process = subprocess.Popen(
-            [sys.executable, runner_path, "run", profile_name],
+            [sys.executable, runner_path, "run", profile_name, "--ignore-schedule"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

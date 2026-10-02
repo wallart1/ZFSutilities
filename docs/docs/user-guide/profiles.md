@@ -52,6 +52,11 @@ The Dashboard **Running Tasks** list shows a waiting profile with the status
 sudo python3 /usr/local/lib/zfsutilities/current/bin/profile_runner.py run root-backup-daily
 ```
 
+Append `--ignore-schedule` to run immediately even when today does not match
+the profile's cron day-of-week ordinal (for example `6#2`, second Saturday);
+without it, a manual run on a non-matching day is skipped exactly like a
+scheduled run.  The GUI's **Run Now** button uses the same flag.
+
 The runner operates in headless mode.  By default it waits up to 10 minutes
 when a ZFS step encounters a dataset lock conflict, then aborts if the lock is still held.  
 

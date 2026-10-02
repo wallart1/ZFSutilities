@@ -86,8 +86,9 @@ Sourced from `/etc/zfsutilities/node.conf` (falling back to
 `/etc/two-node.conf`) by `node-lib.sh` and the repo-root scripts. The uppercase
 names below are the ones that appear in the config file. After sourcing,
 `node-lib.sh` exposes lowercase working copies — `node_mode`, `this_host`,
-`storage_host`, `compute_host`, `storage_ip`, `iqn_prefix`, and the
-`pool_target` associative array — and scripts use the lowercase names.
+`storage_host`, `compute_host`, `storage_ip`, `iqn_prefix`,
+`expected_iscsi_devices`, and the `pool_target` associative array — and
+scripts use the lowercase names.
 
 | Variable       | Purpose                                                                                                                                           |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -98,6 +99,7 @@ names below are the ones that appear in the config file. After sourcing,
 | `STORAGE_IP`   | IP address of the storage network interface on the storage node (two-node)                                                                        |
 | `IQN_PREFIX`   | iSCSI IQN prefix for targets on the storage node (two-node)                                                                                       |
 | `POOL_TARGET`  | Associative array mapping pool name → iSCSI target short name (two-node). See [Data Structures](data-structures.md#pool_target-associative-array) |
+| `EXPECTED_ISCSI_DEVICES` | Optional minimum iSCSI device (LUN) count; `rescan-storage` warns below it (two-node). Unset or empty disables the warning              |
 
 ## Infrastructure
 

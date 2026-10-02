@@ -199,6 +199,14 @@ if [[ "${skip_config:-}" != "true" ]]; then
     fi
 
     echo ""
+    read -rp "Expected iSCSI LUN count on compute host (optional, Enter to skip): " input_expected
+    expected_devices="${input_expected:-}"
+    if [[ -n "$expected_devices" && ! "$expected_devices" =~ ^[0-9]+$ ]]; then
+        echo "  ⚠ '$expected_devices' is not a number — leaving EXPECTED_ISCSI_DEVICES unset"
+        expected_devices=""
+    fi
+
+    echo ""
     echo "Generating configuration..."
 
     # Write the config file
@@ -217,6 +225,9 @@ STORAGE_IP="${storage_ip}"
 
 # --- iSCSI naming ---
 IQN_PREFIX="${iqn_prefix}"
+
+# --- Optional: minimum iSCSI device count (rescan-storage low-count warning) ---
+EXPECTED_ISCSI_DEVICES="${expected_devices}"
 
 # --- Pool → iSCSI target short-name map ---
 declare -A POOL_TARGET=(
@@ -249,7 +260,10 @@ CONFEOF
     compute_host="${COMPUTE_HOST:-}"
     storage_ip="${STORAGE_IP:-}"
     iqn_prefix="${IQN_PREFIX:-}"
+    expected_iscsi_devices="${EXPECTED_ISCSI_DEVICES:-}"
     declare -A pool_target=()
+    # POOL_TARGET is sourced from the (possibly edited) node.conf above.
+    # shellcheck disable=SC2153
     for _pool in "${!POOL_TARGET[@]}"; do
         pool_target["$_pool"]="${POOL_TARGET[$_pool]}"
     done

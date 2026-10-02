@@ -821,7 +821,7 @@ as the GUI runners but writes its own session logs and history entries.
 | `_check_weekday_ordinal(weekday_field)`                          | Runtime guard for weekday ordinal expressions                                         |
 | `acquire_profile_lock(profile_name, timeout=1.0, log_file=None)` | Acquire the profile lock; wait for an existing run and suppress duplicates on timeout |
 | `release_profile_lock(fd, lock_path)`                            | Release the profile lock                                                              |
-| `main()`                                                         | CLI entry point for cron execution                                                    |
+| `main()`                                                         | CLI entry point: `run <name> [--ignore-schedule]`                                     |
 
 **Internal flow:**
 
@@ -833,6 +833,8 @@ as the GUI runners but writes its own session logs and history entries.
    cleanly instead of running the profile twice.
 4. If the profile's cron weekday field contains an ordinal expression
    (`#1`–`#5` or `#L`), verify today matches it; otherwise skip the run.
+   Immediate runs (`--ignore-schedule`, used by the GUI's Run Now button)
+   bypass this check.
 5. Generate snapshot names and build `BashStep` lists using the same helpers
    as the GUI pages.
 6. Run each step, write the trailer, and append a history entry.

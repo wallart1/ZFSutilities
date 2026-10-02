@@ -632,7 +632,10 @@ exits non-zero.
 
 Select one or more profiles and click **Run Now** in the Actions panel to execute
 them immediately. **Run Now ignores the Active checkbox** — even disabled
-profiles run. Each profile is launched via `profile_runner.py`, so it produces
+profiles run — **and bypasses schedule criteria**: the profile runs right away
+even when today does not match its cron day-of-week ordinal (for example `6#2`,
+second Saturday). That ordinal check gates scheduled runs only. Each profile is
+launched via `profile_runner.py`, so it produces
 its own session log and history entry exactly like a scheduled cron run. Output
 streams to the info panel with a `[profile-name]` prefix so you can tell which
 log line came from which running profile.
@@ -720,7 +723,8 @@ These patterns can be combined within a field (e.g. `1,9-17/2,30`).
 `#` to schedule a specific occurrence of a weekday within the month. Standard
 Vixie cron does not understand this syntax, so the GUI writes a plain weekday
 to `/etc/cron.d/zfsutilities` and `profile_runner.py` applies the ordinal
-check at runtime.
+check at runtime. The runtime check gates scheduled runs only; **Run Now** and
+manual `profile_runner.py run <name> --ignore-schedule` invocations bypass it.
 
 | Example   | Meaning                                     |
 | --------- | ------------------------------------------- |

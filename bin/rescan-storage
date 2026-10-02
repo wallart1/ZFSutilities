@@ -4,6 +4,8 @@
 #
 # Install to: /usr/local/lib/zfsutilities/bin/rescan-storage on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
+# Globals (from node-lib.sh): compute_host, storage_ip, expected_iscsi_devices
+#   (optional minimum device count; unset disables the low-count warning)
 
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
@@ -34,6 +36,24 @@ fi
 
 # === Running on the compute host ===
 
+# Report the visible iSCSI device count and warn when it is below the
+# operator-declared minimum.  The minimum is site-specific, so it comes from
+# the optional EXPECTED_ISCSI_DEVICES variable in node.conf (exposed by
+# node-lib.sh as expected_iscsi_devices); unset, empty, zero, or non-numeric
+# means no expectation is declared and the warning is skipped.  Kept as a
+# function for direct unit testing.
+check_device_count() {
+    local device_count="$1"
+    log_msg "INFO: Total iSCSI devices visible: $device_count"
+
+    if [[ "${expected_iscsi_devices:-}" =~ ^[0-9]+$ ]] \
+        && (( expected_iscsi_devices > 0 )) \
+        && (( device_count < expected_iscsi_devices )); then
+        log_msg "WARN: Expected at least ${expected_iscsi_devices} devices (per node.conf)"
+        log_msg "WARN:   Current count ($device_count) is low — some LUNs may be missing"
+    fi
+}
+
 log_msg "INFO: === rescan-storage ==="
 
 # --- Check iSCSI sessions ---
@@ -55,9 +75,4 @@ log_msg "INFO: ✓ Rescan complete"
 # --- Show device count ---
 device_count=$(find /dev/disk/by-path/ -maxdepth 1 -name "ip-${storage_ip}*" \
     -print 2>/dev/null | wc -l)
-log_msg "INFO: Total iSCSI devices visible: $device_count"
-
-if [[ "$device_count" -lt 31 ]]; then
-    log_msg "WARN: Expected at least 31 devices (29 threeamigos + 2 nvme1)"
-    log_msg "WARN:   Current count ($device_count) is low — some LUNs may be missing"
-fi
+check_device_count "$device_count"

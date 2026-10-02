@@ -102,8 +102,10 @@ This initializes basic runtime variables and sources commonly-used functions.
     command3
     ```
 
-- Avoid regular expressions if possible.  If used, they may not exceed 10
-  characters in length.
+- **Regular expressions**: Avoid regular expressions when possible. All regular
+  expressions longer than 10 characters must be profusely documented in the code
+  comments.
+
 - Use **long option names** when clarity is needed:
 
     ```bash

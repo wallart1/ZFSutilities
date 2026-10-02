@@ -1,0 +1,147 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-rescan-storage — Unit tests for the low-device-count warning.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Extract check_device_count from the script so it can be tested without
+# running the iSCSI rescan machinery around it.
+# ------------------------------------------------------------------
+func_text=$(sed -n '/^check_device_count() {/,/^}$/p' "$mydir/bin/rescan-storage")
+if [[ -z "$func_text" ]]; then
+    echo "FATAL: could not extract check_device_count from bin/rescan-storage" >&2
+    exit 1
+fi
+eval "$func_text"
+
+# The extracted function uses log_msg, which test-lib.sh redirects to a file.
+# Capture the messages in a variable so assertions can grep them.
+_check_log=""
+log_msg() { _check_log+="$*"$'\n'; }
+
+# ------------------------------------------------------------------
+# Test helpers
+# ------------------------------------------------------------------
+reset_mocks() {
+    _check_log=""
+    expected_iscsi_devices=""
+    clear_test_log_file
+}
+
+# Run check_device_count once and print the captured messages.
+run_check() {
+    local count="$1"
+    _check_log=""
+    check_device_count "$count"
+    printf '%s' "$_check_log"
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+test_info_line_always_emitted() {
+    test_start "device count is always reported via INFO"
+    local out
+    out=$(run_check 31)
+    assert_contains "$out" "INFO: Total iSCSI devices visible: 31"
+}
+
+test_below_expected_warns() {
+    test_start "count below EXPECTED_ISCSI_DEVICES warns with the configured minimum"
+    local out
+    expected_iscsi_devices=31
+    out=$(run_check 29)
+    assert_contains "$out" "WARN: Expected at least 31 devices (per node.conf)"
+    assert_contains "$out" "WARN:   Current count (29) is low"
+}
+
+test_at_expected_does_not_warn() {
+    test_start "count exactly at EXPECTED_ISCSI_DEVICES does not warn"
+    local out
+    expected_iscsi_devices=31
+    out=$(run_check 31)
+    if [[ "$out" == *"WARN"* ]]; then
+        test_fail "unexpected WARN: $out"
+    else
+        test_pass
+    fi
+}
+
+test_above_expected_does_not_warn() {
+    test_start "count above EXPECTED_ISCSI_DEVICES does not warn"
+    local out
+    expected_iscsi_devices=31
+    out=$(run_check 40)
+    if [[ "$out" == *"WARN"* ]]; then
+        test_fail "unexpected WARN: $out"
+    else
+        test_pass
+    fi
+}
+
+test_unset_does_not_warn() {
+    test_start "unset EXPECTED_ISCSI_DEVICES disables the warning"
+    local out
+    unset expected_iscsi_devices
+    out=$(run_check 1)
+    if [[ "$out" == *"WARN"* ]]; then
+        test_fail "unexpected WARN: $out"
+    else
+        test_pass
+    fi
+    reset_mocks
+}
+
+test_empty_does_not_warn() {
+    test_start "empty EXPECTED_ISCSI_DEVICES disables the warning"
+    local out
+    expected_iscsi_devices=""
+    out=$(run_check 1)
+    if [[ "$out" == *"WARN"* ]]; then
+        test_fail "unexpected WARN: $out"
+    else
+        test_pass
+    fi
+}
+
+test_non_numeric_does_not_warn() {
+    test_start "non-numeric EXPECTED_ISCSI_DEVICES disables the warning"
+    local out
+    expected_iscsi_devices="many"
+    out=$(run_check 1)
+    if [[ "$out" == *"WARN"* ]]; then
+        test_fail "unexpected WARN: $out"
+    else
+        test_pass
+    fi
+}
+
+test_zero_does_not_warn() {
+    test_start "zero EXPECTED_ISCSI_DEVICES disables the warning"
+    local out
+    expected_iscsi_devices=0
+    out=$(run_check 0)
+    if [[ "$out" == *"WARN"* ]]; then
+        test_fail "unexpected WARN: $out"
+    else
+        test_pass
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+reset_mocks
+test_info_line_always_emitted
+test_below_expected_warns
+test_at_expected_does_not_warn
+test_above_expected_does_not_warn
+test_unset_does_not_warn
+test_empty_does_not_warn
+test_non_numeric_does_not_warn
+test_zero_does_not_warn
+
+teardown_test_env
+test_summary

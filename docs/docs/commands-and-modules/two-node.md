@@ -1277,7 +1277,8 @@ sudo rescan-storage
 3. List active iSCSI sessions; abort if none are found.
 4. Run `iscsiadm -m session --rescan`.
 5. Count `/dev/disk/by-path/ip-${storage_ip}*` devices and warn if the count is
-   unexpectedly low.
+   below the optional `EXPECTED_ISCSI_DEVICES` minimum from the node config
+   (no warning when it is unset).
 
 **Return codes / side effects:**
 

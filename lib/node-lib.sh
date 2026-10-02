@@ -28,11 +28,16 @@
 #   iqn_prefix        iSCSI target IQN prefix
 #   pool_target       associative array: pool name -> target short name
 #                     (copied from POOL_TARGET)
+#   expected_iscsi_devices
+#                     optional minimum iSCSI device (LUN) count used by
+#                     rescan-storage's low-device warning (copied from
+#                     EXPECTED_ISCSI_DEVICES; empty disables the warning)
 #
 #   The node config file itself uses the uppercase names NODE_MODE,
-#   STORAGE_HOST, COMPUTE_HOST, STORAGE_IP, IQN_PREFIX, POOL_TARGET.
-#   Those are externally set (config file / tests) and stay uppercase; this
-#   library exposes lowercase copies for internal use.
+#   STORAGE_HOST, COMPUTE_HOST, STORAGE_IP, IQN_PREFIX, POOL_TARGET,
+#   EXPECTED_ISCSI_DEVICES (optional). Those are externally set (config file /
+#   tests) and stay uppercase; this library exposes lowercase copies for
+#   internal use.
 #
 #   is_single_node          returns 0 in single-node mode
 #   is_two_node             returns 0 in two-node mode
@@ -115,6 +120,8 @@ else
     done
     unset _v
 
+    # POOL_TARGET is declared by the sourced node.conf, not in this file.
+    # shellcheck disable=SC2153
     if ! declare -p POOL_TARGET >/dev/null 2>&1; then
         log_msg "FATAL: $NODE_CONF: POOL_TARGET associative array is not declared"
         exit 1
@@ -125,6 +132,11 @@ else
     done
     unset _pool
 fi
+
+# Optional in either mode (consumed only by two-node iSCSI scripts): the
+# operator-declared minimum iSCSI device count for rescan-storage's
+# low-device warning.  Empty means "no expectation declared" and disables it.
+expected_iscsi_devices="${EXPECTED_ISCSI_DEVICES:-}"
 
 # pool_to_target <pool> -> echoes the full IQN, returns 1 if pool unknown or single-node
 pool_to_target() {

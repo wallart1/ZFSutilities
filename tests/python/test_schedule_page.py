@@ -970,11 +970,11 @@ class TestRunNow(unittest.TestCase):
         self.assertEqual(mock_popen.call_count, 2)
         self.assertEqual(
             mock_popen.call_args_list[0][0][0],
-            [sys.executable, "/fake/profile_runner.py", "run", "p1"],
+            [sys.executable, "/fake/profile_runner.py", "run", "p1", "--ignore-schedule"],
         )
         self.assertEqual(
             mock_popen.call_args_list[1][0][0],
-            [sys.executable, "/fake/profile_runner.py", "run", "p2"],
+            [sys.executable, "/fake/profile_runner.py", "run", "p2", "--ignore-schedule"],
         )
         self.assertEqual(app._running_profiles, {"p1", "p2"})
         self.assertEqual(mock_io_add_watch.call_count, 4)

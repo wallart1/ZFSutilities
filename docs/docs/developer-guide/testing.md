@@ -184,13 +184,14 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-module-dependencies` | Static analysis: root-level bash modules source the modules whose functions they call |
 | `test-move-vm-disk` | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove, validation helpers, state round-trip, heredoc bootstrap |
 | `test-new-vm-disk` | `new-vm-disk` EFI disk-line building with `ms-cert` gating |
-| `test-node-lib` | `find_zfsutility_script` resolution across `bin/`, `lib/`, and `python/` layouts |
+| `test-node-lib` | `find_zfsutility_script` resolution across `bin/`, `lib/`, and `python/` layouts; node.conf loading (single/two-node, `EXPECTED_ISCSI_DEVICES` copy); pool helpers |
 | `test-paths` | `paths.sh` defaults, composed paths, legacy paths, and environment overrides |
 | `test-proxmox-required-guards` | Proxmox scripts fail fast when `qm`/`pct` are absent |
 | `test-remove-vm` | `remove-vm` VMID validation, config-referenced/orphan/reassigned zvol classification, `--cleanup-orphans`, and user confirmation |
 | `test-rename-vm-disk` | `rename-vm-disk` VM-config reference discovery (single- and two-node) |
 | `test-repair-iscsi-luns` | `repair-iscsi-luns` backstore/target parsing and zvol discovery |
 | `test-repair-vm-disk-sizes` | `repair-vm-disk-sizes` size byte-to-human conversion, by-path/storage-ref size resolution, config line repair, dry-run |
+| `test-rescan-storage` | `rescan-storage` low-device-count warning against the optional `EXPECTED_ISCSI_DEVICES` minimum (set/empty/non-numeric/zero) |
 | `test-restart-iscsi-services` | VM running-state detection before iSCSI target restart and main() helper invocation |
 | `test-run-tests-preflight` | Harness self-test: run-tests environment preflight, manifest requirement skips, soak-suite gating, and the pytest exit-5 rule |
 | `test-safe-iscsi-save` | Degraded-config guard for iSCSI saveconfig and encrypted-backstore boot-config stripping |

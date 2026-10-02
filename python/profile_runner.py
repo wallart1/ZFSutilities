@@ -739,11 +739,20 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
 
 
 def main():
-    if len(sys.argv) < 3 or sys.argv[1] != "run":
-        print("Usage: profile_runner.py run <profile_name>", file=sys.stderr)
+    args = sys.argv[1:]
+    if (
+        args[:1] != ["run"]
+        or len(args) not in (2, 3)
+        or (len(args) == 3 and args[2] != "--ignore-schedule")
+    ):
+        print("Usage: profile_runner.py run <profile_name> [--ignore-schedule]", file=sys.stderr)
         sys.exit(1)
 
-    profile_name = sys.argv[2]
+    profile_name = args[1]
+    # --ignore-schedule bypasses the weekday-ordinal guard: cron cannot express
+    # #n/#L ordinals, so cron-triggered runs need the guard, but immediate runs
+    # (GUI Run Now, manual CLI) must execute regardless of the day.
+    ignore_schedule = len(args) == 3
 
     # Load the profile early so the session log filename can reflect the tab
     # type. Reading the profile JSON does not require the execution lock.
@@ -797,7 +806,13 @@ def main():
             log_msg(f"INFO: Running profile: {profile_name} (type={tab_type})")
 
             weekday_field = profile.get("cron", {}).get("weekday", "*")
-            if not _check_weekday_ordinal(weekday_field):
+            if ignore_schedule:
+                if "#" in weekday_field:
+                    log_msg(
+                        f"VERB: Ignoring weekday ordinal '{weekday_field}' for profile "
+                        f"{profile_name} (--ignore-schedule)"
+                    )
+            elif not _check_weekday_ordinal(weekday_field):
                 log_msg(
                     f"INFO: Skipping profile {profile_name}: today does not match "
                     f"weekday ordinal '{weekday_field}'"

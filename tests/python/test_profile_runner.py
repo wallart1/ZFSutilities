@@ -7,7 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stderr
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -1344,6 +1344,109 @@ class TestMainEarlyLogging(unittest.TestCase):
             self.assertIn("skipping duplicate invocation", content)
             mock_trailer.assert_called_once()
             self.assertEqual(mock_trailer.call_args.kwargs.get("rc"), 0)
+
+
+class TestMainWeekdayOrdinalGate(unittest.TestCase):
+    """main() applies the cron weekday-ordinal guard to scheduled runs only.
+
+    --ignore-schedule (GUI Run Now, immediate CLI runs) bypasses the guard so
+    the profile executes regardless of the day.
+    """
+
+    def _patch_now(self, year, month, day):
+        dt = datetime(year, month, day)
+        mock_datetime = MagicMock()
+        mock_datetime.now.return_value = dt
+        return patch.object(profile_runner, "datetime", mock_datetime)
+
+    def _run_main(self, session_log_dir, argv, weekday):
+        """Run main() once; return (runner mock, exit code, session log text)."""
+        profile = {
+            "tab_type": "backup",
+            "cron": {"weekday": weekday},
+            "config": {"variables": {"label": "dailybackup"}},
+        }
+        with tempfile.TemporaryDirectory() as lock_dir:
+            orig_lock_dir = profile_runner.PROFILE_LOCK_DIR
+            profile_runner.PROFILE_LOCK_DIR = lock_dir
+            try:
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(sys, "argv", argv))
+                    stack.enter_context(patch("profile_runner.load_profile", return_value=profile))
+                    stack.enter_context(patch("profile_runner.load_config", return_value={}))
+                    stack.enter_context(patch("profile_runner.prune_old_logs"))
+                    stack.enter_context(patch("profile_runner.add_history_entry"))
+                    stack.enter_context(patch("session_log.write_session_trailer"))
+                    stack.enter_context(patch("session_log.SESSION_LOG_DIR", session_log_dir))
+                    mock_runner = stack.enter_context(
+                        patch("profile_runner.run_backup_profile", return_value=0)
+                    )
+                    try:
+                        profile_runner.main()
+                        code = None
+                    except SystemExit as exc:
+                        code = exc.code
+            finally:
+                profile_runner.PROFILE_LOCK_DIR = orig_lock_dir
+        log_files = [n for n in os.listdir(session_log_dir) if n.endswith(".log")]
+        self.assertEqual(len(log_files), 1)
+        with open(os.path.join(session_log_dir, log_files[0])) as f:
+            content = f.read()
+        return mock_runner, code, content
+
+    def test_ordinal_mismatch_without_flag_skips_profile(self):
+        # 2025-01-04 is the first Saturday; "6#2" matches only the second.
+        with tempfile.TemporaryDirectory() as tmpdir, self._patch_now(2025, 1, 4):
+            mock_runner, code, content = self._run_main(
+                tmpdir, ["profile_runner.py", "run", "Daily"], "6#2"
+            )
+        mock_runner.assert_not_called()
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "INFO: Skipping profile Daily: today does not match weekday ordinal '6#2'",
+            content,
+        )
+
+    def test_ordinal_mismatch_with_ignore_schedule_runs_profile(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self._patch_now(2025, 1, 4):
+            mock_runner, code, content = self._run_main(
+                tmpdir, ["profile_runner.py", "run", "Daily", "--ignore-schedule"], "6#2"
+            )
+        mock_runner.assert_called_once()
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "VERB: Ignoring weekday ordinal '6#2' for profile Daily (--ignore-schedule)",
+            content,
+        )
+
+    def test_ignore_schedule_plain_weekday_omits_bypass_message(self):
+        # No ordinal in the weekday field: nothing to ignore, no VERB line.
+        with tempfile.TemporaryDirectory() as tmpdir, self._patch_now(2025, 1, 4):
+            mock_runner, code, content = self._run_main(
+                tmpdir, ["profile_runner.py", "run", "Daily", "--ignore-schedule"], "*"
+            )
+        mock_runner.assert_called_once()
+        self.assertEqual(code, 0)
+        self.assertNotIn("Ignoring weekday ordinal", content)
+
+    def test_bad_arguments_print_usage_and_exit_1(self):
+        bad_argv = [
+            ["profile_runner.py", "run", "Daily", "--bogus"],
+            ["profile_runner.py", "run", "Daily", "extra"],
+            ["profile_runner.py", "run"],
+            ["profile_runner.py"],
+        ]
+        for argv in bad_argv:
+            with self.subTest(argv=argv):
+                with patch.object(sys, "argv", argv):
+                    with redirect_stderr(io.StringIO()) as err:
+                        with self.assertRaises(SystemExit) as cm:
+                            profile_runner.main()
+                self.assertEqual(cm.exception.code, 1)
+                self.assertIn(
+                    "Usage: profile_runner.py run <profile_name> [--ignore-schedule]",
+                    err.getvalue(),
+                )
 
 
 class TestCheckWeekdayOrdinal(unittest.TestCase):

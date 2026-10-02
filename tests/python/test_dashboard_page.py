@@ -988,7 +988,37 @@ class TestFormatHistoryTimestamp(unittest.TestCase):
         self.assertEqual(dp._format_history_timestamp("not-a-date"), "not-a-date")
 
 
-class TestCollectRunningTasks(unittest.TestCase):
+class CollectRunningTasksIdleHostMixin(unittest.TestCase):
+    """Pin _collect_running_tasks' host-state reads to an idle host.
+
+    Sections 4-6 of the collector read live state: profile lock files
+    (list_running_profiles), the SMART surface-test state file, and a real
+    `pgrep -f profile_runner.py` / `ps` scan. Unpinned, any concurrently
+    matching process breaks the exact task-list assertions — including the
+    pytest runner itself when its command line contains the literal
+    `test_profile_runner.py` path, or a genuine profile run on the host.
+    Tests that exercise those sections with their own mocks (e.g.
+    TestCollectScheduledTasks) override or skip this mixin.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Enter the patches on a stack owned by addCleanup: a `with` block
+        # here would pop them the moment setUp returns.
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(patch.object(dp, "list_running_profiles", return_value=[]))
+        stack.enter_context(
+            patch(
+                "disk_surface_test.load_surface_test_state",
+                return_value={"tests": {}},
+            )
+        )
+        idle_pgrep = stack.enter_context(patch("subprocess.run"))
+        idle_pgrep.return_value = MagicMock(returncode=1, stdout="")
+
+
+class TestCollectRunningTasks(CollectRunningTasksIdleHostMixin):
     def test_no_tasks_when_everything_idle(self):
         app = MagicMock()
         app.backup_runner = None
@@ -1269,7 +1299,7 @@ class TestCollectRunningTasks(unittest.TestCase):
         self.assertIn("threeamigos", queue.active)
 
 
-class TestCollectRunningTasksDatasetRunner(unittest.TestCase):
+class TestCollectRunningTasksDatasetRunner(CollectRunningTasksIdleHostMixin):
     """dataset_runner tasks in _collect_running_tasks (plan section 2)."""
 
     def _dataset_app(self, operation_detail=None):
@@ -1329,7 +1359,7 @@ class TestCollectRunningTasksDatasetRunner(unittest.TestCase):
         self.assertEqual(tasks, [])
 
 
-class TestCollectRunningTasksZfsOperations(unittest.TestCase):
+class TestCollectRunningTasksZfsOperations(CollectRunningTasksIdleHostMixin):
     """ZFS-native operation tasks (resilver/expand/remove) in _collect_running_tasks."""
 
     RESILVER_RAW = """\
@@ -1433,6 +1463,42 @@ class TestCollectRunningTasksZfsOperations(unittest.TestCase):
     def test_empty_status_text_no_zfs_task(self):
         tasks = self._collect_with_status("")
         self.assertEqual(tasks, [])
+
+
+class TestProfileNameFromRunnerArgs(unittest.TestCase):
+    """_profile_name_from_runner_args must keep resolving names with flags.
+
+    profile_runner.py accepts `run <name> --ignore-schedule` (GUI Run Now);
+    the flag must sit after the profile name so this parser still finds it.
+    """
+
+    def test_direct_invocation(self):
+        args = "python3 /usr/local/lib/zfsutilities/current/python/profile_runner.py run daily"
+        self.assertEqual(dp._profile_name_from_runner_args(args), "daily")
+
+    def test_direct_invocation_with_ignore_schedule_flag(self):
+        args = (
+            "python3 /usr/local/lib/zfsutilities/current/python/profile_runner.py "
+            "run daily --ignore-schedule"
+        )
+        self.assertEqual(dp._profile_name_from_runner_args(args), "daily")
+
+    def test_cron_wrapper_with_ignore_schedule_flag(self):
+        args = (
+            "/bin/sh -c root mkdir -p /var/log/zfsutilities "
+            "/run/lock/zfsutilities/profiles && "
+            "python3 /usr/local/lib/zfsutilities/current/python/profile_runner.py "
+            "run root-scrub-monthly --ignore-schedule >> /var/log/zfsutilities/cron.log 2>&1"
+        )
+        self.assertEqual(dp._profile_name_from_runner_args(args), "root-scrub-monthly")
+
+    def test_flag_before_name_is_rejected(self):
+        args = "python3 profile_runner.py run --ignore-schedule daily"
+        self.assertIsNone(dp._profile_name_from_runner_args(args))
+
+    def test_no_run_token_returns_none(self):
+        self.assertIsNone(dp._profile_name_from_runner_args("python3 profile_runner.py daily"))
+        self.assertIsNone(dp._profile_name_from_runner_args(""))
 
 
 class TestCollectScheduledTasks(unittest.TestCase):
