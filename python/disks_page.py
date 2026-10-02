@@ -712,6 +712,22 @@ def update_disks_button_sensitivity(app):
             btn.set_sensitive(True)
             btn.set_tooltip_text("")
 
+    # Proxmox enrollment acts on the selected pool (either view), so unlike
+    # the pool-growth buttons it does not depend on the inventory view.
+    proxmox_btn = getattr(app, "_disks_proxmox_enroll_btn", None)
+    if proxmox_btn:
+        selector = getattr(app, "_disks_pool_selector", None)
+        pool_name = selector.get_active_text() if selector is not None else ""
+        if compute_host:
+            proxmox_btn.set_sensitive(False)
+            proxmox_btn.set_tooltip_text("Proxmox enrollment is available only on the storage host")
+        elif runner_busy:
+            proxmox_btn.set_sensitive(False)
+            proxmox_btn.set_tooltip_text("A dataset action is already running")
+        else:
+            proxmox_btn.set_sensitive(bool(pool_name))
+            proxmox_btn.set_tooltip_text("" if pool_name else "Select a pool to enroll in Proxmox")
+
     surf_btn = getattr(app, "_disks_surface_test_btn", None)
     if surf_btn:
         selected_hdd = single_selection and _selected_disk_is_hdd(app)

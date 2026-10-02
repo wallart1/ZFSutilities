@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.110.0
+
+*Released 2026-10-02*
+
+### Added
+
+- **Proxmox pool enrollment (`enroll-proxmox-pool`)** — new script that
+  registers a ZFS pool as Proxmox VE storage (Datacenter → Storage) so VM
+  disks on it can be managed from the Proxmox GUI. Mode-aware: single-node
+  adds a `zfspool` storage via `pvesm`, backed by the pool's
+  `<pool>/proxmox` VM-disk dataset (created when missing); two-node (run on
+  the storage host) adds an `iscsi` storage on the compute host over SSH,
+  deriving the portal from `STORAGE_IP` and the IQN from `IQN_PREFIX` plus
+  the pool's `POOL_TARGET` short name. The pool must already be enrolled in
+  two-node iSCSI (`enroll-iscsi-pool`) first, because registering an iSCSI
+  storage probes its target. Idempotent (an already-registered storage ID
+  is left unchanged), supports `--dry-run`, and validates custom storage
+  IDs (default: the pool name, or `iscsi-<short name>` in two-node mode).
+
+- **GUI Proxmox enrollment offers** — after Create Pool the GUI now offers
+  to register the new pool with Proxmox (on two-node systems chained
+  directly after the iSCSI enrollment offer), after a Migrate Pool cutover
+  the offer appears again (quietly skipping when the kept pool name is
+  already registered), and the Disks page gains an **Enroll in Proxmox…**
+  button that offers it any time. The offer is gated — no Proxmox, wrong
+  host, pool not iSCSI-enrolled, storage already registered, or a busy
+  runner each skip it with a logged hint of the equivalent manual
+  `sudo enroll-proxmox-pool` steps. Enrollment runs as a non-fatal step,
+  so a failure never looks like a pool-creation failure.
+
+- **Snapshot parent-mount offer** — mounting snapshots whose parent
+  filesystems are unmounted now opens a dialog listing the unmounted
+  parents and the snapshots they block, with a **Mount All** action that
+  mounts the parents root-first before the snapshots themselves; cancelling
+  preserves the previous per-snapshot parent-not-mounted warnings.
+
 ## 0.109.0
 
 *Released 2026-10-01*

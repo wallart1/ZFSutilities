@@ -1452,8 +1452,8 @@ class TestCutoverIscsiRepair(unittest.TestCase):
 
     REPAIR_BIN = "/usr/local/lib/zfsutilities/current/bin/repair-iscsi-luns"
 
-    def _run_cutover(self, managed, final_rc=0, two_node_hint=True):
-        """Drive a migration through cutover completion; return (pmd, app, logs)."""
+    def _run_cutover(self, managed, final_rc=0, two_node_hint=True, cutover_rc=0):
+        """Drive a migration through cutover completion; return (pmd, app, logs, offer)."""
         pmd = _import_dialogs()
         app = _make_app()
         request = _request(pmd)
@@ -1465,15 +1465,16 @@ class TestCutoverIscsiRepair(unittest.TestCase):
             with (
                 patch.object(pmd, "is_iscsi_managed_pool", return_value=managed),
                 patch.object(pmd, "resolve_local_bin", return_value=self.REPAIR_BIN),
+                patch.object(pmd, "offer_proxmox_enrollment") as proxmox_offer,
                 capture_logs() as logs,
             ):
-                app.dataset_runner.finish(rc=0)  # cutover phase → chaining decision
-                if managed:
+                app.dataset_runner.finish(rc=cutover_rc)  # cutover phase → chaining decision
+                if cutover_rc == 0 and managed:
                     app.dataset_runner.finish(rc=final_rc)  # chained repair phase
-        return pmd, app, logs
+        return pmd, app, logs, proxmox_offer
 
     def test_managed_pool_chains_repair_step(self):
-        _pmd, app, _logs = self._run_cutover(managed=True)
+        _pmd, app, _logs, _offer = self._run_cutover(managed=True)
         self.assertEqual(len(app.dataset_runner.steps), 1)
         self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
         step = app.dataset_runner.steps[0]
@@ -1482,22 +1483,39 @@ class TestCutoverIscsiRepair(unittest.TestCase):
         self.assertFalse(step.is_rsync)
         self.assertFalse(step.fatal)
 
+    def test_managed_pool_offers_proxmox_enrollment_after_repair(self):
+        _pmd, app, _logs, offer = self._run_cutover(managed=True)
+        offer.assert_called_once_with(app, "pool1")
+
     def test_unmanaged_pool_skips_repair_and_logs_hint(self):
-        _pmd, app, logs = self._run_cutover(managed=False)
+        _pmd, app, logs, _offer = self._run_cutover(managed=False)
         # The cutover step list (7 steps) was not replaced by a repair step.
         self.assertEqual(len(app.dataset_runner.steps), 7)
         self.assertTrue(any("not enrolled in two-node iSCSI" in line for line in logs), logs)
         self.assertTrue(any("setup-iscsi-targets" in line for line in logs), logs)
 
+    def test_unmanaged_pool_still_offers_proxmox_enrollment(self):
+        _pmd, app, _logs, offer = self._run_cutover(managed=False)
+        offer.assert_called_once_with(app, "pool1")
+
     def test_unmanaged_pool_single_node_finishes_silently(self):
-        _pmd, app, logs = self._run_cutover(managed=False, two_node_hint=False)
+        _pmd, app, logs, _offer = self._run_cutover(managed=False, two_node_hint=False)
         self.assertEqual(len(app.dataset_runner.steps), 7)
         self.assertFalse(any("not enrolled in two-node iSCSI" in line for line in logs), logs)
         self.assertFalse(any("setup-iscsi-targets" in line for line in logs), logs)
 
-    def test_repair_failure_logs_warn(self):
-        _pmd, _app, logs = self._run_cutover(managed=True, final_rc=4)
+    def test_single_node_unmanaged_pool_still_offers_proxmox_enrollment(self):
+        _pmd, app, _logs, offer = self._run_cutover(managed=False, two_node_hint=False)
+        offer.assert_called_once_with(app, "pool1")
+
+    def test_repair_failure_still_offers_proxmox_enrollment(self):
+        _pmd, _app, logs, offer = self._run_cutover(managed=True, final_rc=4)
         self.assertTrue(any("WARN" in line and "failed (rc=4)" in line for line in logs), logs)
+        offer.assert_called_once()
+
+    def test_failed_cutover_skips_proxmox_enrollment(self):
+        _pmd, _app, _logs, offer = self._run_cutover(managed=True, cutover_rc=2)
+        offer.assert_not_called()
 
 
 if __name__ == "__main__":

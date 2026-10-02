@@ -17,6 +17,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`check-prerequisites`](#check-prerequisites)
 - [`cleanup-zfsutilities-legacy`](#cleanup-zfsutilities-legacy)
 - [`deploy-version`](#deploy-version)
+- [`enroll-proxmox-pool`](#enroll-proxmox-pool)
 - [`ensure-restored-vm-iscsi`](#ensure-restored-vm-iscsi)
 - [`git-release`](#git-release)
 - [`install-single-node`](#install-single-node)
@@ -214,6 +215,66 @@ sudo ./bin/deploy-version [version] [group ...]
 | ---- | ------------------------------------------------------------------- |
 | `0`  | Deployment completed                                                |
 | `1`  | Fatal error (wrong directory, missing version, unknown group, etc.) |
+
+---
+
+### `enroll-proxmox-pool`
+
+Registers a ZFS pool as a Proxmox VE storage (Datacenter → Storage) so VM
+disks on it can be managed from the Proxmox GUI. Mode-aware:
+
+- **Single-node:** adds a `zfspool` storage on this host via `pvesm`, backed
+  by the pool's `<pool>/proxmox` VM-disk dataset (created when missing), with
+  content `images,rootdir` and sparse volumes. Default storage ID: the pool
+  name.
+- **Two-node (run on the storage host):** adds an `iscsi` storage on the
+  compute host over SSH, using the pool's iSCSI target — portal from
+  `STORAGE_IP`, IQN from `IQN_PREFIX` plus the `POOL_TARGET` short name — with
+  content `images`. Default storage ID: `iscsi-<short name>`. The pool must
+  already be enrolled via
+  [`enroll-iscsi-pool`](two-node.md#enroll-iscsi-pool-storage-node), because
+  registering an iSCSI storage probes its target.
+
+Idempotent — a storage ID that already exists in `pvesm status` is left
+unchanged. The GUI offers this automatically after Create Pool (both modes)
+and after Migrate Pool cutover; the Disks page's **Enroll in Proxmox…**
+button invokes it any time.
+
+```bash
+sudo enroll-proxmox-pool [--dry-run] <pool> [storage-id]
+```
+
+**Prerequisites:** Proxmox VE — `pvesm` on this host (single-node) or on the
+compute host (two-node). Non-Proxmox hypervisors are not supported.
+
+**Arguments:**
+
+| Argument       | Description                                                                                                                        |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `<pool>`       | Pool name to register                                                                                                              |
+| `[storage-id]` | Proxmox storage ID; derived when omitted (the pool name in single-node mode, `iscsi-<short name>` in two-node mode)                |
+
+**Options:** `--dry-run` — print each planned action without changing
+anything.
+
+**Called modules:**
+
+| Module / Script                                       | Purpose                          |
+| ----------------------------------------------------- | -------------------------------- |
+| [node-lib.sh](modules.md#node-libsh)                  | Mode/hosts/target resolution     |
+| [rootcheck](modules.md#rootcheck)                     | Verify root privileges           |
+
+**Data structures consumed / produced:** reads `node.conf` (`NODE_MODE`,
+`STORAGE_HOST`, `COMPUTE_HOST`, `STORAGE_IP`, `IQN_PREFIX`, `POOL_TARGET`)
+read-only; produces a `/etc/pve/storage.cfg` entry via `pvesm` (on the compute
+host in two-node mode) and the `<pool>/proxmox` dataset in single-node mode.
+
+**Return codes:**
+
+| Code | Meaning                                                                                                 |
+| ---- | ------------------------------------------------------------------------------------------------------- |
+| `0`  | Success, or the storage is already registered                                                           |
+| `1`  | Usage error, missing Proxmox VE, wrong host, unknown pool, pool not enrolled in iSCSI, or `pvesm` failed |
 
 ---
 

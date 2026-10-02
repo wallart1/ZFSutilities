@@ -22,7 +22,7 @@ example `root-backup-daily` or `root-retention-weekly`.
 
 1. Open the GUI tab you want to save (Backup, Offsite, Restore, Retention, or Pools->Scrub).
 2. Configure the settings the way you want them.
-3. Click **Save Profile** and enter a unique suffix.
+3. Click **Add Profile to Schedule** and enter a unique suffix.
 4. The profile is written to `~/.config/zfsutilities/profiles/` as a JSON file.
 
 To edit a profile, recall it from the tab where it was created, change the

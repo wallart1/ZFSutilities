@@ -916,6 +916,28 @@ to the `POOL_TARGET` map in `node.conf` on both nodes (via
 rescans the compute host — so VM disks created on the new pool work over iSCSI
 immediately, with nothing to configure by hand.
 
+You are then offered **Proxmox enrollment**, which registers the pool as a
+Proxmox storage (Datacenter → Storage) so VM disks on it can be managed from
+the Proxmox GUI. The offer is mode-aware and runs `enroll-proxmox-pool`:
+
+- On a single node (with Proxmox VE installed), it adds a `ZFS` storage entry
+  backed by the pool's `<pool>/proxmox` dataset, creating that dataset when it
+  does not exist yet. A dialog shows the storage ID (the pool name by default)
+  and lets you edit it before anything runs.
+- On a two-node configuration, the offer appears on the storage host after the
+  iSCSI enrollment offer — accepting iSCSI enrollment chains straight into it.
+  It adds an `iSCSI` storage entry on the compute host (default ID
+  `iscsi-<short name>`) pointing at the pool's iSCSI target. If you declined
+  iSCSI enrollment, the Proxmox offer is skipped with a logged hint, because
+  the iSCSI target it needs does not exist yet; run `enroll-iscsi-pool` and
+  then `enroll-proxmox-pool` manually to complete both steps.
+
+On hosts without Proxmox VE the offer does not appear at all. If the pool is
+already registered with Proxmox, the offer is skipped with an INFO log line.
+Pools migrated with **Migrate Pool** keep their name through the cutover, so
+their existing Proxmox storage entry stays valid; the offer still appears after
+a successful cutover and quietly skips when the entry already exists.
+
 On a two-node configuration the wizard is available only on the storage host;
 on the compute host the button is disabled with an explanatory tooltip.
 
@@ -1116,11 +1138,14 @@ running (after the capture step) are not preserved.
 
 After a successful cutover, if the migrated pool is enrolled in two-node iSCSI
 (`POOL_TARGET`), a follow-up `repair-iscsi-luns` step rebuilds its backstores
-and LUN mappings and rescans the compute host automatically.
+and LUN mappings and rescans the compute host automatically. The migrated pool
+keeps its name, so its existing Proxmox storage entry stays valid; you are
+nonetheless offered Proxmox enrollment after the cutover (and after the LUN
+repair step), which quietly skips when the pool is already registered.
 Cutover refuses to start while the
 pool's scrub is running or paused. The pool hosting the root filesystem is
-never offered for migration, and a pool with no datasets is never offered as
-a source (there is nothing to copy); if the Disks-page pool selector points
+never offered for migration, and a pool with no datasets is never offered as a
+source (there is nothing to copy); if the Disks-page pool selector points
 at such a pool when you start Migrate Pool, the run refuses to open with an
 explanation instead of silently switching to another pool.
 
@@ -1175,6 +1200,11 @@ action lives.
 - **Migrate Pool…** — copy a pool to new disks (or via a holding pool) to
   change its topology, then swap (see [Migrate Pool](#migrate-pool)). Storage
   host only on two-node systems; disabled while a dataset action is running.
+- **Enroll in Proxmox…** — register the pool selected in the pool drop-down as
+  a Proxmox storage (see [Creating Pools](#creating-pools)). This is the same
+  enrollment offered automatically after Create Pool, made available any time
+  for pools created or imported earlier. Available in both views; storage host
+  only on two-node systems; disabled while a dataset action is running.
 - **SMART Details** — dumps `smartctl -a` output for the selected disk to the
   GUI log panel. Requires a single disk to be selected and `smartctl` to be
   installed; otherwise a warning is logged.
@@ -1418,11 +1448,11 @@ based on what is selected.
 | Button                         | Enabled when                                                                                                                          | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Snapshot**                   | Exactly one dataset is selected                                                                                                       | Creates a new snapshot (prompts for name; suggests `manual-YYYY-mm-ddTHH:MM`)                                                                                                                                                                                                                                                                                                                                                                    |
-| **Delete**                     | Only snapshots and/or holds selected                                                                                                  | Releases the selected hold tags, then destroys the selected snapshots (`zfs destroy`). If a selected snapshot still has holds that were not selected, the operation is aborted and the unselected hold tags are listed so you can select them as well.                                                                                                                                                                                           |
+| **Delete**                     | Only datasets, snapshots, and/or holds selected                                                                                       | Destroys the selected datasets (`zfs destroy`, with their snapshots and holds listed in the confirmation dialog). Releases the selected hold tags, then destroys the selected snapshots. If a selected snapshot still has holds that were not selected, the operation is aborted and the unselected hold tags are listed so you can select them as well.                                                                                                                                                           |
 | **Add Hold**                   | At least one snapshot selected                                                                                                        | Prompts for a tag (default `keep`) and applies it to each selected snapshot                                                                                                                                                                                                                                                                                                                                                                      |
 | **Rollback**                   | Exactly one snapshot selected                                                                                                         | Rolls the dataset back to that snapshot (destroys newer snapshots and data updates)                                                                                                                                                                                                                                                                                                                                                              |
 | **Browse**                     | Exactly one mounted filesystem, snapshot, or volume partition selected                                                                | Opens the selected item in the default file manager. Filesystems (including pool root datasets) open at their ZFS mountpoint; snapshots open via `.zfs/snapshot/<name>`; volume partitions open at their loop-mount directory.                                                                                                                                                                                                                   |
-| **Mount**                      | One or more mountable filesystems, snapshots, or volumes selected                                                                     | Mounts each selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for each selected snapshot. Unmounted ancestor datasets are mounted first so the target's mountpoint is not hidden. Ancestors with `canmount=off` are skipped — they cannot be mounted, and ZFS creates their mountpoint directory automatically when the target mounts. A selected volume is attached to a read-only loop device and its partitions are listed under the volume's entry (see below). Partitions labeled `No filesystem` cannot be mounted. Snapshots of volumes cannot be mounted; Mount is disabled for them with an explanatory tooltip. Disabled for holds.                                         |
+| **Mount**                      | One or more mountable filesystems, snapshots, or volumes selected                                                                     | Mounts each selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for each selected snapshot. Unmounted ancestor datasets are mounted first so the target's mountpoint is not hidden. Ancestors with `canmount=off` are skipped — they cannot be mounted, and ZFS creates their mountpoint directory automatically when the target mounts. If a selected snapshot's parent dataset is unmounted, a dialog first lists the unmounted parent datasets and the snapshots they block and offers to mount them all: confirming mounts the parents root-first and then the snapshots; cancelling skips the mounts, and the snapshots report the parent-not-mounted warning. A selected volume is attached to a read-only loop device and its partitions are listed under the volume's entry (see below). Partitions labeled `No filesystem` cannot be mounted. Snapshots of volumes cannot be mounted; Mount is disabled for them with an explanatory tooltip. Disabled for holds.                                         |
 | **Unmount**                    | One or more mounted filesystems, snapshots, volume partitions, or loop-attached volumes selected                                      | Unmounts each selected filesystem (`sudo zfs unmount`) or snapshot (`sudo umount` on its `.zfs/snapshot/<name>` path). Pool root datasets can be unmounted. Unmounting a filesystem also unmounts its mounted children (see the note below). Unmounting a volume detaches its loop device after unmounting its mounted partitions. If processes are still using an item, a warning dialog lists them and asks you to close them before retrying. |
 | **Apply Profile…**             | Exactly one pool/dataset row (filesystem or volume) selected; snapshots, holds, volume partitions, and multi-selections disable it | Shows the workload-profile picker for the selected dataset; the list contains only the profiles whose *applies to* includes the dataset's type (filesystem or volume). A preview lists the exact `zfs set` commands; profiles that may be unsafe (e.g. `sync=disabled`) require explicit confirmation. Applying to a pool root sets pool-wide inheritance defaults. See [Workload profiles](#workload-profiles).          |
 | **Rewrite Data**               | Every selected item is a filesystem dataset, and OpenZFS 2.3.4+/2.4+ with the pool's `physical_rewrite` feature                       | Runs `zfs rewrite -P -r -x -v <mountpoint>` on each selected dataset in turn, physically rewriting existing blocks so they match the current properties (see [Workload profiles](#workload-profiles)). Volumes cannot be rewritten. Unmounted datasets are mounted temporarily and returned to their prior state. This may take a long time and cannot be undone.                                                                                |

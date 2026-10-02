@@ -27,10 +27,10 @@ handle the iSCSI rescan locally.
 | `remove-vm-disk <pool> <vmid> <disk-num>` | Remove LUN + destroy zvol |
 | `detach-vm-disk <vmid> <disk-key>` | Remove disk from VM config + tear down iSCSI (keeps zvol) |
 | `attach-vm-disk <zvol> <vmid> [dst-key]` | Attach existing zvol to a VM (rebuilds iSCSI if needed) |
-| `list-vm-disks [--with-devices]` | List exported LUNs with VMID, VM name, host/guest device names |
+| `list-vm-disks [--gather-vm-info] [--gather-lun-info]` | List exported LUNs with VMID, VM name, host/guest device names (device info included by default; `--with-devices` is accepted for backward compatibility but no longer changes output) |
 | `resize-vm-disk <pool> <vmid> <disk-num> <new-size>` | Grow zvol online |
 | `clone-vm <src_vmid> <dst_vmid> <new_name>` | Clone a VM (disks + config) |
-| `move-vm-disk <src_vmid> <src_key> <dst_vmid> [dst_key]` | Move a disk from one VM to another |
+| `move-vm-disk [--no-rename] [--continue <state-file>\|--rollback <state-file>] <src_vmid> <src_key> <dst_vmid> [dst_key]` | Move a disk from one VM to another (resumable) |
 | `rescan-storage` | Rescan iSCSI sessions to see new/changed LUNs |
 | `show-lun-map` | Show LUN → /dev/sdX mapping with sizes |
 

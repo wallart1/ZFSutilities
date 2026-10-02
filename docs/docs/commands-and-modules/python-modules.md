@@ -1698,7 +1698,7 @@ devices.
 | `on_datasets_rollback()`                                     | Rollback a dataset to a selected snapshot |
 | `on_datasets_browse()`                                       | Open the selected filesystem or snapshot in the default file manager |
 | `on_datasets_show_big_stuff()`                               | Run `zfsshowbigstuff` on the selected pool and log the output |
-| `on_datasets_mount()`                                        | Mount selected filesystems/snapshots/volume loop devices (and volume partitions); unmounted ancestors are mounted first (root-first), skipping `canmount=off` ancestors |
+| `on_datasets_mount()`                                        | Mount selected filesystems/snapshots/volume loop devices (and volume partitions); unmounted ancestors are mounted first (root-first), skipping `canmount=off` ancestors; for snapshots whose parent is unmounted, a dialog offers to mount the parent datasets root-first before the snapshots |
 | `on_datasets_unmount()`                                      | Unmount selected filesystems/snapshots/volume loop devices (and volume partitions); mounted children are unmounted first (deepest-first), with best-effort recovery of orphaned mounts (remount parents, retry) |
 
 **Called modules / imported helpers:**
@@ -1793,6 +1793,56 @@ look like a pool-creation failure.
 | ----------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `node.conf` `POOL_TARGET` map | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 | `BashStep`                    | [BashStep][ds-bashstep]                                                                              |
+
+---
+
+### `proxmox_enroll.py`
+
+Proxmox storage enrollment offer for newly created or migrated pools. A pool
+is only visible to the Proxmox GUI once it is registered as a Proxmox storage
+(Datacenter → Storage): a `zfspool` entry on the local host in single-node
+mode, an `iscsi` entry on the compute host in two-node mode. After a pool is
+created on the Disks page (chained after the iSCSI enrollment offer in
+two-node mode), after a Migrate Pool cutover, or on demand from the Disks
+page's **Enroll in Proxmox…** button, this module asks whether to run the
+[`enroll-proxmox-pool`](commands.md#enroll-proxmox-pool) script to do that
+automatically, and provides the pure helpers that decide whether the offer
+applies at all. Decision logic is kept in pure helpers (testable without
+GTK); the enrollment itself runs as a non-fatal `BashStep` on the dataset
+runner so an enrollment failure does not look like a pool-creation failure.
+
+**Key functions:**
+
+| Function                                                    | Purpose                                                                                                    |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `derive_storage_id(pool_name, two_node)`                    | Derive the default Proxmox storage ID (the pool name, or `iscsi-<short>` in two-node mode)                 |
+| `storage_id_is_valid(text)`                                 | Validate a Proxmox storage ID (mirrors the bash check)                                                     |
+| `parse_storage_ids(status_text)`                            | Extract storage IDs from `pvesm status` output                                                             |
+| `pvesm_status_argv(config)` / `pvesm_presence_argv(config)` | Build the argv that lists storages / probes for `pvesm` (local in single-node mode, compute-host ssh in two-node mode) |
+| `build_enroll_command(pool_name, storage_id, dry_run)`      | Pure `enroll-proxmox-pool` argv builder                                                                    |
+| `query_storage_ids(config, run)`                            | Registered storage IDs, or None when `pvesm status` is unreadable                                          |
+| `proxmox_present(config, run)`                              | True when the host that runs `pvesm` for the config has it                                                 |
+| `log_manual_enrollment_steps(pool_name, include_iscsi)`     | Log the manual steps that register the pool with Proxmox                                                   |
+| `offer_proxmox_enrollment(app, pool_name, on_done)`         | GTK offer dialog; hands the enrollment step to the dataset runner, or logs the manual steps and returns False |
+| `on_disks_enroll_proxmox(app)`                              | Disks page action: enroll the pool selected in the pool drop-down                                          |
+
+**Called modules / imported helpers:**
+
+| Module                      | Purpose in this module                                                    |
+| --------------------------- | ------------------------------------------------------------------------- |
+| `node_config`               | Mode/host detection                                                       |
+| `iscsi_enroll`              | `derive_target_short` and `is_iscsi_managed_pool` (two-node prerequisites) |
+| `command_builders`          | `BashStep`                                                                |
+| `path_utils`                | `resolve_local_bin`                                                       |
+| `disks_page` / `pools_page` | Post-enrollment refresh and button sensitivity                            |
+| `backup_config`             | `log_msg`                                                                 |
+
+**Data structures consumed / produced:**
+
+| Structure              | Reference                                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `node.conf` mode/hosts | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+| `BashStep`             | [BashStep][ds-bashstep]                                                                              |
 
 ---
 

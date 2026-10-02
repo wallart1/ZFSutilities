@@ -43,6 +43,7 @@ from pool_create import (
     validate_vdev_selection,
 )
 from pools_page import on_pools_refresh, refresh_pools_page
+from proxmox_enroll import offer_proxmox_enrollment
 from zfs_repository import TopologyNode, build_create_pool_command
 
 # Custom dialog response ids for the wizard buttons. Distinct from
@@ -904,7 +905,16 @@ def on_disks_create_pool(app) -> None:
         log_msg(f"INFO: Pool '{pool_name}' created")
         _offer_register_pool(app, pool_name)
         if node_config.is_two_node() and node_config.is_storage_host():
-            offer_iscsi_enrollment(app, pool_name)
+            offered = offer_iscsi_enrollment(
+                app, pool_name, on_done=lambda: offer_proxmox_enrollment(app, pool_name)
+            )
+            if not offered:
+                # Declined, already enrolled, or runner unavailable — the
+                # Proxmox offer's own gates decide what applies (a pool that
+                # is already iSCSI-enrolled can still be offered).
+                offer_proxmox_enrollment(app, pool_name)
+        else:
+            offer_proxmox_enrollment(app, pool_name)
 
     runner.operation_detail = f"Create Pool: {pool_name}"
     runner.set_steps([step])

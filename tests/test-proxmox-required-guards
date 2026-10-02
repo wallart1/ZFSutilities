@@ -87,6 +87,7 @@ GUARDED_SCRIPTS=(
     enroll-efi-keys-vm
     promote-vm-clone
     list-vm-disks
+    enroll-proxmox-pool
 )
 
 for script in "${GUARDED_SCRIPTS[@]}"; do

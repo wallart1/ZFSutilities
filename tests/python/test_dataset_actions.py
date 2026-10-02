@@ -1156,6 +1156,7 @@ class TestMount(unittest.TestCase):
             patch.object(da, "log_msg") as mock_log,
             patch.object(da, "subprocess"),
             patch.object(da, "zlm") as mock_zlm,
+            patch.object(da, "create_dialog") as mock_create_dialog,
             patch.object(da, "get_mounted_snapshots", return_value={"tank/vm-100@snap1"}),
             patch.object(da.os.path, "isdir", return_value=True),
             patch.object(da.os, "listdir", return_value=[]) as mock_listdir,
@@ -1163,6 +1164,7 @@ class TestMount(unittest.TestCase):
             app.ctx.zfs_repository.get_property.side_effect = ["yes", "yes"]
             da.on_datasets_mount(app)
 
+            mock_create_dialog.assert_not_called()
             mock_zlm.lock.assert_called_once_with(
                 "tank/vm-100", "r", "mount snapshot tank/vm-100@snap1"
             )
@@ -1192,6 +1194,7 @@ class TestMount(unittest.TestCase):
             patch.object(da, "get_snapshot_mountpoint") as mock_mountpoint,
             patch.object(da, "update_mounted_states") as mock_refresh,
             patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "create_dialog") as mock_create_dialog,
         ):
             da.on_datasets_mount(app)
 
@@ -1200,6 +1203,9 @@ class TestMount(unittest.TestCase):
                 "WARN: Cannot mount tank/vm-100-disk-0@snap1: "
                 "snapshots of ZFS volumes cannot be mounted"
             )
+            # A volume-parent snapshot is excluded from the parent-mount
+            # offer, so the dialog must never appear for it.
+            mock_create_dialog.assert_not_called()
             mock_refresh.assert_not_called()
 
     def test_mounts_multiple_snapshots(self):
@@ -1319,10 +1325,14 @@ class TestMount(unittest.TestCase):
             ),
             patch.object(da, "update_mounted_states"),
             patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
             patch.object(da, "zlm") as mock_zlm,
+            patch.object(da, "create_dialog") as mock_create_dialog,
+            patch.object(da, "add_scrolled_text_view"),
             patch.object(da.os, "listdir") as mock_listdir,
         ):
             app.ctx.zfs_repository.get_property.return_value = "no"
+            mock_create_dialog.return_value.run.return_value = da.Gtk.ResponseType.CANCEL
             da.on_datasets_mount(app)
 
             mock_log.assert_any_call(
@@ -1332,6 +1342,8 @@ class TestMount(unittest.TestCase):
             mock_zlm.lock.assert_called_once_with(
                 "tank/vm-100", "r", "mount snapshot tank/vm-100@snap1"
             )
+            mock_zlm.locks.assert_not_called()
+            mock_subprocess.run.assert_not_called()
             mock_listdir.assert_not_called()
 
     def test_warns_when_snapshot_does_not_mount(self):
@@ -1466,7 +1478,10 @@ class TestMount(unittest.TestCase):
             patch.object(da, "update_ds_button_sensitivity"),
             patch.object(da, "log_msg") as mock_log,
             patch.object(da, "zlm"),
+            patch.object(da, "create_dialog") as mock_create_dialog,
+            patch.object(da, "add_scrolled_text_view"),
         ):
+            mock_create_dialog.return_value.run.return_value = da.Gtk.ResponseType.CANCEL
             da.on_datasets_mount(app)
 
             mock_log.assert_called_once_with(
@@ -1503,6 +1518,302 @@ class TestMount(unittest.TestCase):
                 "/tank/vm-100/.zfs/snapshot/snap1 is not accessible."
             )
             mock_update.assert_not_called()
+
+    def test_offer_mounts_unmounted_parents_then_snapshot(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        mounted = {"tank": "no", "tank/vm-100": "no"}
+
+        def _prop(ds, prop):
+            if prop == "canmount":
+                return "on"
+            return mounted[ds]
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        def _mount_zfs(cmd, **kwargs):
+            mounted[cmd[-1]] = "yes"
+            return MagicMock(returncode=0, stderr="")
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "snapshot",
+                        "dataset": "tank/vm-100",
+                        "name": "snap1",
+                        "mounted": False,
+                    }
+                ],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tank/vm-100/.zfs/snapshot/snap1",
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da, "create_dialog") as mock_create_dialog,
+            patch.object(da, "add_scrolled_text_view"),
+            patch.object(da, "get_mounted_snapshots", return_value={"tank/vm-100@snap1"}),
+            patch.object(da.os.path, "isdir", return_value=True),
+            patch.object(da.os, "listdir", return_value=[]) as mock_listdir,
+        ):
+            mock_subprocess.run.side_effect = _mount_zfs
+            mock_create_dialog.return_value.run.return_value = da.Gtk.ResponseType.OK
+            da.on_datasets_mount(app)
+
+            mock_zlm.locks.assert_called_once_with("w", ["tank", "tank/vm-100"])
+            calls = [c.args[0] for c in mock_subprocess.run.call_args_list]
+            self.assertEqual(
+                calls,
+                [
+                    ["sudo", "zfs", "mount", "tank"],
+                    ["sudo", "zfs", "mount", "tank/vm-100"],
+                ],
+            )
+            mock_log.assert_any_call("INFO: Mounted tank")
+            mock_log.assert_any_call("INFO: Mounted tank/vm-100")
+            mock_listdir.assert_called_once_with("/tank/vm-100/.zfs/snapshot/snap1")
+            mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap1")
+            mock_refresh.assert_called_once_with(app)
+
+    def test_parent_mount_dialog_lists_datasets_and_snapshots(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "snapshot",
+                        "dataset": "tank/vm-100",
+                        "name": "snap1",
+                        "mounted": False,
+                    }
+                ],
+            ),
+            patch.object(da, "get_snapshot_mountpoint"),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+            patch.object(da, "create_dialog") as mock_create_dialog,
+            patch.object(da, "add_scrolled_text_view") as mock_text_view,
+        ):
+
+            def _prop(ds, prop):
+                return "on" if prop == "canmount" else "no"
+
+            app.ctx.zfs_repository.get_property.side_effect = _prop
+            mock_create_dialog.return_value.run.return_value = da.Gtk.ResponseType.CANCEL
+            da.on_datasets_mount(app)
+
+            mock_create_dialog.assert_called_once_with(
+                "Mount Snapshot(s)",
+                app,
+                [
+                    (da.Gtk.STOCK_CANCEL, da.Gtk.ResponseType.CANCEL),
+                    ("Mount All", da.Gtk.ResponseType.OK),
+                ],
+            )
+            body = mock_text_view.call_args[0][1]
+            self.assertEqual(
+                body,
+                "Parent datasets to mount:\n"
+                "\n"
+                "  tank\n"
+                "  tank/vm-100\n"
+                "\n"
+                "Snapshot(s) to mount after:\n"
+                "\n"
+                "  tank/vm-100@snap1",
+            )
+            self.assertEqual(mock_text_view.call_args[1]["min_height"], 150)
+
+    def test_mounts_shared_parent_once_for_multiple_snapshots(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        mounted = {"tank": "no", "tank/vm-100": "no"}
+
+        def _prop(ds, prop):
+            if prop == "canmount":
+                return "on"
+            return mounted[ds]
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        def _mount_zfs(cmd, **kwargs):
+            mounted[cmd[-1]] = "yes"
+            return MagicMock(returncode=0, stderr="")
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "snapshot",
+                        "dataset": "tank/vm-100",
+                        "name": "snap1",
+                        "mounted": False,
+                    },
+                    {
+                        "type": "snapshot",
+                        "dataset": "tank/vm-100",
+                        "name": "snap2",
+                        "mounted": False,
+                    },
+                ],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                side_effect=lambda ds, snap, repo=None: f"/{ds}/.zfs/snapshot/{snap}",
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da, "create_dialog") as mock_create_dialog,
+            patch.object(da, "add_scrolled_text_view"),
+            patch.object(
+                da,
+                "get_mounted_snapshots",
+                return_value={"tank/vm-100@snap1", "tank/vm-100@snap2"},
+            ),
+            patch.object(da.os.path, "isdir", return_value=True),
+            patch.object(da.os, "listdir", return_value=[]) as mock_listdir,
+        ):
+            mock_subprocess.run.side_effect = _mount_zfs
+            mock_create_dialog.return_value.run.return_value = da.Gtk.ResponseType.OK
+            da.on_datasets_mount(app)
+
+            mock_create_dialog.assert_called_once()
+            mock_zlm.locks.assert_called_once_with("w", ["tank", "tank/vm-100"])
+            calls = [c.args[0] for c in mock_subprocess.run.call_args_list]
+            self.assertEqual(
+                calls,
+                [
+                    ["sudo", "zfs", "mount", "tank"],
+                    ["sudo", "zfs", "mount", "tank/vm-100"],
+                ],
+            )
+            mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap1")
+            mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap2")
+            self.assertEqual(mock_listdir.call_count, 2)
+            mock_refresh.assert_called_once_with(app)
+
+    def test_no_offer_when_parent_canmount_off(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        def _prop(ds, prop):
+            return "off" if prop == "canmount" else "no"
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "snapshot",
+                        "dataset": "tank/vm-100",
+                        "name": "snap1",
+                        "mounted": False,
+                    }
+                ],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tank/vm-100/.zfs/snapshot/snap1",
+            ),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm"),
+            patch.object(da, "create_dialog") as mock_create_dialog,
+            patch.object(da.os, "listdir") as mock_listdir,
+        ):
+            da.on_datasets_mount(app)
+
+            mock_create_dialog.assert_not_called()
+            mock_log.assert_any_call(
+                "WARN: Cannot mount tank/vm-100@snap1: parent dataset "
+                "tank/vm-100 is not mounted. Mount the parent first."
+            )
+            mock_listdir.assert_not_called()
+
+    def test_parent_mount_failure_warns_per_snapshot(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        def _prop(ds, prop):
+            return "on" if prop == "canmount" else "no"
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "snapshot",
+                        "dataset": "tank/vm-100",
+                        "name": "snap1",
+                        "mounted": False,
+                    }
+                ],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tank/vm-100/.zfs/snapshot/snap1",
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm"),
+            patch.object(da, "create_dialog") as mock_create_dialog,
+            patch.object(da, "add_scrolled_text_view"),
+            patch.object(da.os, "listdir") as mock_listdir,
+        ):
+            mock_subprocess.run.return_value = MagicMock(
+                returncode=1, stderr="cannot mount 'tank': mountpoint or dataset is busy"
+            )
+            mock_create_dialog.return_value.run.return_value = da.Gtk.ResponseType.OK
+            da.on_datasets_mount(app)
+
+            mock_subprocess.run.assert_called_once_with(
+                ["sudo", "zfs", "mount", "tank"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            mock_log.assert_any_call(
+                "WARN: Error mounting tank: cannot mount 'tank': mountpoint or dataset is busy"
+            )
+            mock_log.assert_any_call(
+                "WARN: Not all parent datasets mounted; selected snapshots "
+                "that remain blocked will report warnings below."
+            )
+            mock_log.assert_any_call(
+                "WARN: Cannot mount tank/vm-100@snap1: parent dataset "
+                "tank/vm-100 is not mounted. Mount the parent first."
+            )
+            mock_listdir.assert_not_called()
+            mock_refresh.assert_not_called()
 
 
 class TestBrowse(unittest.TestCase):

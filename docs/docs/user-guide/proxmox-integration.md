@@ -31,6 +31,15 @@ zfspool: threeamigos
 
 Proxmox has full read-write access to the storage layer.
 
+After creating a pool from the GUI's Disks page you are offered Proxmox
+enrollment, which runs
+[`enroll-proxmox-pool`](../commands-and-modules/commands.md#enroll-proxmox-pool)
+to add this entry for you (via `pvesm`), creating the pool's
+`<pool>/proxmox` VM-disk dataset first when it does not exist yet. The same
+enrollment is available any time from the Disks page's **Enroll in Proxmox…**
+button. Doing it by hand in the Proxmox GUI works too: add a `ZFS` storage
+whose ZFS pool is `<pool>/proxmox`.
+
 ### Two-node
 
 Proxmox discovers LUNs from the iSCSI target on the storage host. In
@@ -45,6 +54,16 @@ iscsi: iscsi-threeamigos
 
 Proxmox treats these LUNs as **administratively read-only block devices** — it
 can attach and detach them, but cannot create, resize, or delete them.
+
+After creating a pool from the GUI's Disks page on the storage host you are
+offered iSCSI enrollment and then Proxmox enrollment; the latter runs
+[`enroll-proxmox-pool`](../commands-and-modules/commands.md#enroll-proxmox-pool),
+which adds the `iSCSI` entry on the compute host over SSH (via `pvesm`),
+deriving the portal from `STORAGE_IP` and the target from `IQN_PREFIX` plus
+the pool's `POOL_TARGET` short name. The pool must already be enrolled in
+two-node iSCSI, because registering an iSCSI storage probes its target. The
+Disks page's **Enroll in Proxmox…** button offers the same enrollment for
+pools added earlier.
 
 ---
 

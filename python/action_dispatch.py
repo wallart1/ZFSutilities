@@ -98,6 +98,7 @@ from pool_growth_dialogs import (
 from pool_migrate_dialogs import on_disks_migrate_pool
 from pools_page import on_pools_refresh, update_pools_button_sensitivity
 from profile_dialogs import show_add_profile_dialog, show_recall_profile_dialog
+from proxmox_enroll import on_disks_enroll_proxmox
 from restore_page import (
     check_restore_dirty,
     collect_restore_config,
@@ -197,6 +198,7 @@ PAGE_SPECS = {
             ("Detach…", "media-eject", "_disks_detach_btn"),
             ("Add Infra Vdev…", "drive-harddisk", "_disks_add_infra_vdev_btn"),
             ("Migrate Pool…", "edit-copy", "_disks_migrate_pool_btn"),
+            ("Enroll in Proxmox…", "network-server", "_disks_proxmox_enroll_btn"),
             (None, None, None),  # spacer
             ("SMART Details", "dialog-information", "_disks_smart_details_btn"),
             ("Surface Test…", "drive-harddisk", "_disks_surface_test_btn"),
@@ -444,6 +446,7 @@ ACTION_HANDLERS = {
         "Detach…": on_disks_detach_device,
         "Add Infra Vdev…": on_disks_add_infra_vdev,
         "Migrate Pool…": on_disks_migrate_pool,
+        "Enroll in Proxmox…": on_disks_enroll_proxmox,
         "SMART Details": on_disks_smart_details,
         "Surface Test…": on_disks_surface_test,
         "Refresh": on_disks_refresh,

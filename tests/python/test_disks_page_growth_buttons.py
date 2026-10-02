@@ -197,5 +197,66 @@ class TestGrowthButtonSensitivity(unittest.TestCase):
         )
 
 
+class TestProxmoxButtonSensitivity(unittest.TestCase):
+    """update_disks_button_sensitivity gates the Proxmox enrollment button."""
+
+    _ATTR = "_disks_proxmox_enroll_btn"
+    _HOST_TOOLTIP = "Proxmox enrollment is available only on the storage host"
+
+    def _make(self, pool_name="pool1"):
+        dp = _import_disks_page()
+        app = _make_app()
+        btn = MagicMock()
+        setattr(app, self._ATTR, btn)
+        selector = MagicMock()
+        selector.get_active_text.return_value = pool_name
+        app._disks_pool_selector = selector
+        app.dataset_runner.running = False
+        return dp, app, btn
+
+    def test_enabled_with_selected_pool_on_single_host(self):
+        dp, app, btn = self._make()
+        with _single_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(True)
+        btn.set_tooltip_text.assert_called_with("")
+
+    def test_enabled_in_performance_view(self):
+        """The button acts on the selected pool, not the inventory view."""
+        dp, app, btn = self._make()
+        app._disks_view_stack.get_visible_child_name.return_value = "performance"
+        with _single_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(True)
+
+    def test_disabled_without_selected_pool(self):
+        dp, app, btn = self._make(pool_name="")
+        with _single_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(False)
+        btn.set_tooltip_text.assert_called_with("Select a pool to enroll in Proxmox")
+
+    def test_disabled_on_two_node_compute_host(self):
+        dp, app, btn = self._make()
+        with _compute_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(False)
+        btn.set_tooltip_text.assert_called_with(self._HOST_TOOLTIP)
+
+    def test_enabled_on_two_node_storage_host(self):
+        dp, app, btn = self._make()
+        with _storage_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(True)
+
+    def test_disabled_while_runner_busy(self):
+        dp, app, btn = self._make()
+        app.dataset_runner.running = True
+        with _single_host(dp):
+            dp.update_disks_button_sensitivity(app)
+        btn.set_sensitive.assert_called_with(False)
+        btn.set_tooltip_text.assert_called_with(_BUSY_TOOLTIP)
+
+
 if __name__ == "__main__":
     unittest.main()

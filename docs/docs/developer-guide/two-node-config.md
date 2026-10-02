@@ -55,6 +55,10 @@ When you create a new pool that should export VM disks over iSCSI, add its
 Pool wizard's enrollment offer) instead of editing this file by hand — it
 updates the map on both nodes, creates the target, and rescans the compute
 host. See [`enroll-iscsi-pool`](../commands-and-modules/two-node.md#enroll-iscsi-pool-storage-node).
+To then register the pool as a Proxmox storage on the compute host, run
+`sudo enroll-proxmox-pool <pool>` (also offered automatically right after
+iSCSI enrollment). See
+[`enroll-proxmox-pool`](../commands-and-modules/commands.md#enroll-proxmox-pool).
 
 ## Config File: `/etc/zfsutilities/deploy.conf`
 
@@ -308,6 +312,7 @@ is unlocked; see [ZFS Key Handling](../installation/zfs-keys.md).
 | [promote-vm-clone](../commands-and-modules/two-node.md#promote-vm-clone-both)       | Local `zfs promote`                | SSH delegation to storage host                 |
 | [rescan-storage](../commands-and-modules/two-node.md#rescan-storage-both)           | N/A (exits)                        | Rescans iSCSI sessions                         |
 | [enroll-iscsi-pool](../commands-and-modules/two-node.md#enroll-iscsi-pool-storage-node) | N/A (exits)                   | POOL_TARGET on both nodes + target + rescan    |
+| [enroll-proxmox-pool](../commands-and-modules/commands.md#enroll-proxmox-pool) | Adds local `zfspool` storage     | Adds `iscsi` storage on compute host via SSH    |
 | [show-lun-map](../commands-and-modules/two-node.md#show-lun-map-compute-node)       | N/A (exits)                        | Shows LUN-to-device mapping                    |
 | [safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node) | N/A (exits)                        | Saves targetcli config with safety check       |
 | [zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup)                | Skips compute-host pull            | Full cross-host backup                         |

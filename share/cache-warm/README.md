@@ -14,7 +14,8 @@ Without persistent_l2arc support (unavailable in Proxmox VE 9.1), L2ARC is disca
 1. **warm-cache.sh** - Main cache warming script
 2. **identify-hot-vms.sh** - Helper to identify which VMs to prioritize
 3. **monitor-cache.sh** - Real-time cache growth monitoring
-4. **zfs-cache-warm.service** - Optional systemd service for automatic warming
+4. **cache-status.sh** - Quick one-shot cache status check
+5. **zfs-cache-warm.service** - Optional systemd service for automatic warming
 
 ## Installation
 

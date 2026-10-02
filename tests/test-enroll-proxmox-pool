@@ -1,0 +1,570 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-enroll-proxmox-pool — Unit tests for the Proxmox pool enrollment script.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Mocks
+# ------------------------------------------------------------------
+
+# Mock node-lib.sh behavior
+NODE_MODE="two-node"
+storage_host="stewie"
+compute_host="tweety"
+storage_ip="192.168.100.1"
+iqn_prefix="iqn.2026-02.local.stewie"
+declare -A pool_target=(
+    ["threeamigos"]="threeamigos"
+    ["NVME1"]="nvme1"
+)
+is_single_node() { [[ "$NODE_MODE" == "single-node" ]]; }
+is_two_node()    { [[ "$NODE_MODE" == "two-node" ]]; }
+pool_to_target() {
+    local pool="$1"
+    local short="${pool_target[$pool]:-}"
+    [[ -n "$short" ]] && echo "${iqn_prefix}:${short}"
+}
+is_known_pool() { [[ -n "${pool_target[$1]:-}" ]]; }
+
+# Mock hostname so the storage-host check is controllable
+_mock_hostname="stewie"
+hostname() { printf '%s\n' "$_mock_hostname"; }
+
+# Local pvesm mock (single-node path). 'status' dumps a controllable table;
+# any other subcommand (add) is recorded and returns a controllable rc.
+_mock_pvesm_status="Name Type Status Total Used
+local dir active N/A N/A"
+_mock_pvesm_add_rc=0
+_mock_pvesm_calls=()
+pvesm() {
+    if [[ "$1" == "status" ]]; then
+        printf '%s\n' "$_mock_pvesm_status"
+        return 0
+    fi
+    _mock_pvesm_calls+=("$*")
+    return "$_mock_pvesm_add_rc"
+}
+
+# Local zfs mock (single-node path). 'list' succeeds for datasets seeded in
+# _mock_datasets; 'create' is recorded and adds to _mock_datasets.
+_mock_datasets=()
+_mock_zfs_calls=()
+zfs() {
+    if [[ "$1" == "list" ]]; then
+        local ds="${*: -1:1}"
+        local d
+        for d in "${_mock_datasets[@]}"; do
+            [[ "$d" == "$ds" ]] && return 0
+        done
+        return 1
+    fi
+    if [[ "$1" == "create" ]]; then
+        _mock_zfs_calls+=("create $2")
+        _mock_datasets+=("$2")
+        return 0
+    fi
+    return 0
+}
+
+# ssh mock (two-node path). Probes, status dumps, and adds are recognized by
+# pattern; invocations are recorded (except those inside $(...) subshells).
+_mock_ssh_calls=()
+_mock_ssh_rc=0
+_mock_ssh_pvesm_available=true
+_mock_ssh_pvesm_status="Name Type Status Total Used
+local dir active N/A N/A"
+ssh() {
+    _mock_ssh_calls+=("$*")
+    if [[ "$*" == *"command -v pvesm"* ]]; then
+        [[ "$_mock_ssh_pvesm_available" == true ]] && return 0
+        return 1
+    fi
+    if [[ "$*" == *"pvesm status"* ]]; then
+        printf '%s\n' "$_mock_ssh_pvesm_status"
+        return 0
+    fi
+    if [[ "$*" == *"pvesm add"* ]]; then
+        return "$_mock_ssh_rc"
+    fi
+    return 0
+}
+
+# The evaluated script calls find_zfsutility_script to locate helpers; point
+# every resolution at /dev/null (our mocks above are already in place).
+find_zfsutility_script() { echo "/dev/null"; }
+
+# ------------------------------------------------------------------
+# Load the script under test into this shell with node-lib mocked.
+# The script's own TEST_MODE guard prevents main() from auto-running.
+# ------------------------------------------------------------------
+
+ENROLL_PROXMOX_TEST_MODE="Y"
+export ENROLL_PROXMOX_NODE_LIB="/dev/null"
+script_text=$(cat "$mydir/bin/enroll-proxmox-pool")
+eval "$script_text"
+
+# The evaluated script re-sources bashinit, which replaces test-lib.sh's
+# log_msg mock with the real implementation. Restore a capturing mock so log
+# assertions against get_test_log_file work and test output stays quiet.
+log_msg() {
+    if [[ "${1:-}" == "--long-prefix" ]]; then
+        shift
+    fi
+    echo "$*" >> "${_TEST_LOG_FILE}" 2>/dev/null || true
+}
+
+# ------------------------------------------------------------------
+# Test helpers
+# ------------------------------------------------------------------
+
+reset_mocks() {
+    _mock_hostname="stewie"
+    NODE_MODE="two-node"
+    storage_ip="192.168.100.1"
+    _mock_pvesm_status="Name Type Status Total Used
+local dir active N/A N/A"
+    _mock_pvesm_add_rc=0
+    _mock_pvesm_calls=()
+    _mock_datasets=()
+    _mock_zfs_calls=()
+    _mock_ssh_calls=()
+    _mock_ssh_rc=0
+    _mock_ssh_pvesm_available=true
+    _mock_ssh_pvesm_status="Name Type Status Total Used
+local dir active N/A N/A"
+    # Restore the default function mocks (individual tests may unset/override).
+    pvesm() {
+        if [[ "$1" == "status" ]]; then
+            printf '%s\n' "$_mock_pvesm_status"
+            return 0
+        fi
+        _mock_pvesm_calls+=("$*")
+        # A successful add makes the storage visible in pvesm status.
+        if [[ "$1" == "add" && "$_mock_pvesm_add_rc" -eq 0 ]]; then
+            _mock_pvesm_status+=$'\n'"$3 $2 active N/A N/A"
+        fi
+        return "$_mock_pvesm_add_rc"
+    }
+    zfs() {
+        if [[ "$1" == "list" ]]; then
+            local ds="${*: -1:1}"
+            local d
+            for d in "${_mock_datasets[@]}"; do
+                [[ "$d" == "$ds" ]] && return 0
+            done
+            return 1
+        fi
+        if [[ "$1" == "create" ]]; then
+            _mock_zfs_calls+=("create $2")
+            _mock_datasets+=("$2")
+            return 0
+        fi
+        return 0
+    }
+    ssh() {
+        _mock_ssh_calls+=("$*")
+        if [[ "$*" == *"command -v pvesm"* ]]; then
+            [[ "$_mock_ssh_pvesm_available" == true ]] && return 0
+            return 1
+        fi
+        if [[ "$*" == *"pvesm status"* ]]; then
+            printf '%s\n' "$_mock_ssh_pvesm_status"
+            return 0
+        fi
+        if [[ "$*" == *"pvesm add"* ]]; then
+            # A successful add makes the storage visible in pvesm status.
+            if [[ "$_mock_ssh_rc" -eq 0 ]]; then
+                local i j id=""
+                for ((i = 1; i <= $#; i++)); do
+                    if [[ "${!i}" == "iscsi" ]]; then
+                        j=$((i + 1))
+                        id="${!j}"
+                        break
+                    fi
+                done
+                [[ -n "$id" ]] && _mock_ssh_pvesm_status+=$'\n'"$id iscsi active N/A N/A"
+            fi
+            return "$_mock_ssh_rc"
+        fi
+        return 0
+    }
+    clear_test_log_file
+}
+
+# Join the recorded mock invocations (of any kind) into one searchable string.
+all_mock_calls() {
+    printf '%s\n' "${_mock_pvesm_calls[@]}" "${_mock_zfs_calls[@]}" "${_mock_ssh_calls[@]}"
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_script_loads_and_defines_main() {
+    test_start "enroll-proxmox-pool sources and defines main()"
+    if declare -f main >/dev/null 2>&1 && declare -f pvesm_status_has_id >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "main() and pvesm_status_has_id() should be defined after sourcing"
+    fi
+}
+
+test_pvesm_status_has_id() {
+    test_start "pvesm_status_has_id matches the Name column and skips the header"
+    local status="Name Type Status Total Used
+local dir active N/A N/A
+threeamigos zfspool active 100 50"
+    pvesm_status_has_id "$status" threeamigos
+    assert_rc 0 $?
+    pvesm_status_has_id "$status" local
+    assert_rc 0 $?
+    pvesm_status_has_id "$status" otherpool
+    assert_rc 1 $?
+    # The header word itself must not count as a storage ID
+    pvesm_status_has_id "Name Type Status Total Used" Name
+    assert_rc 1 $?
+}
+
+test_storage_id_is_valid() {
+    test_start "storage_id_is_valid accepts PVE IDs and rejects the rest"
+    storage_id_is_valid threeamigos
+    assert_rc 0 $?
+    storage_id_is_valid iscsi-nvme1
+    assert_rc 0 $?
+    storage_id_is_valid MyPool_2.0
+    assert_rc 0 $?
+    storage_id_is_valid "bad id"
+    assert_rc 1 $?
+    storage_id_is_valid "-lead"
+    assert_rc 1 $?
+    storage_id_is_valid ""
+    assert_rc 1 $?
+}
+
+test_single_node_adds_zfspool_storage() {
+    reset_mocks
+    test_start "single-node: registers a zfspool storage backed by <pool>/proxmox"
+    NODE_MODE="single-node"
+    _mock_datasets=("threeamigos" "threeamigos/proxmox")
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 0 $?
+
+    assert_equals "1" "${#_mock_pvesm_calls[@]}"
+    assert_contains "${_mock_pvesm_calls[0]}" "add zfspool threeamigos"
+    assert_contains "${_mock_pvesm_calls[0]}" "--pool threeamigos/proxmox"
+    assert_contains "${_mock_pvesm_calls[0]}" "--content images,rootdir"
+    assert_contains "${_mock_pvesm_calls[0]}" "--sparse 1"
+    assert_equals "0" "${#_mock_zfs_calls[@]}"
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "registered in Proxmox"
+}
+
+test_single_node_creates_missing_proxmox_dataset() {
+    reset_mocks
+    test_start "single-node: creates <pool>/proxmox when missing"
+    NODE_MODE="single-node"
+    _mock_datasets=("threeamigos")
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 0 $?
+
+    assert_equals "1" "${#_mock_zfs_calls[@]}"
+    assert_equals "create threeamigos/proxmox" "${_mock_zfs_calls[0]}"
+    assert_equals "1" "${#_mock_pvesm_calls[@]}"
+}
+
+test_single_node_already_registered() {
+    reset_mocks
+    test_start "single-node: an existing storage ID is left unchanged"
+    NODE_MODE="single-node"
+    _mock_datasets=("threeamigos" "threeamigos/proxmox")
+    _mock_pvesm_status="Name Type Status Total Used
+threeamigos zfspool active 100 50"
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 0 $?
+
+    assert_equals "0" "${#_mock_pvesm_calls[@]}"
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "already registered"
+}
+
+test_single_node_missing_pool_fatal() {
+    reset_mocks
+    test_start "single-node: unknown pool is FATAL"
+    NODE_MODE="single-node"
+    _mock_datasets=()
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 1 $?
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "FATAL: Pool 'threeamigos' not found"
+}
+
+test_single_node_add_failure_fatal() {
+    reset_mocks
+    test_start "single-node: pvesm add failure is FATAL"
+    NODE_MODE="single-node"
+    _mock_datasets=("threeamigos" "threeamigos/proxmox")
+    _mock_pvesm_add_rc=1
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 1 $?
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "pvesm add failed"
+}
+
+test_single_node_without_pvesm_guard() {
+    reset_mocks
+    test_start "single-node without pvesm fails fast with the Proxmox VE guard"
+    NODE_MODE="single-node"
+    _mock_datasets=("threeamigos")
+    unset -f pvesm
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 1 $?
+
+    assert_equals "0" "${#_mock_zfs_calls[@]}"
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "This script requires Proxmox VE"
+    assert_contains "$log" "Non-Proxmox hypervisors are not supported"
+}
+
+test_single_node_invalid_storage_id_fatal() {
+    reset_mocks
+    test_start "single-node: an invalid storage ID is FATAL"
+    NODE_MODE="single-node"
+    _mock_datasets=("threeamigos")
+
+    main threeamigos "bad id" >/dev/null 2>&1
+    assert_rc 1 $?
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "Invalid Proxmox storage ID"
+}
+
+test_two_node_adds_iscsi_storage() {
+    reset_mocks
+    test_start "two-node: registers an iscsi storage on the compute host"
+    _mock_datasets=("threeamigos" "threeamigos/proxmox")
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 0 $?
+
+    local calls
+    calls=$(printf '%s\n' "${_mock_ssh_calls[@]}")
+    assert_contains "$calls" "root@tweety"
+    assert_contains "$calls" "pvesm add iscsi iscsi-threeamigos"
+    assert_contains "$calls" "--portal 192.168.100.1"
+    assert_contains "$calls" "--target iqn.2026-02.local.stewie:threeamigos"
+    assert_contains "$calls" "--content images"
+    assert_equals "0" "${#_mock_pvesm_calls[@]}"
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "registered in Proxmox on tweety"
+}
+
+test_two_node_derives_storage_id_from_short_name() {
+    reset_mocks
+    test_start "two-node: storage ID is derived as iscsi-<short name>"
+    main NVME1 >/dev/null 2>&1
+    assert_rc 0 $?
+
+    local calls
+    calls=$(printf '%s\n' "${_mock_ssh_calls[@]}")
+    assert_contains "$calls" "pvesm add iscsi iscsi-nvme1"
+    assert_contains "$calls" "--target iqn.2026-02.local.stewie:nvme1"
+}
+
+test_two_node_invalid_storage_id_fatal() {
+    reset_mocks
+    test_start "two-node: an invalid storage ID is FATAL"
+    main threeamigos "bad id" >/dev/null 2>&1
+    assert_rc 1 $?
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "Invalid Proxmox storage ID"
+}
+
+test_two_node_non_storage_host_fatal() {
+    reset_mocks
+    test_start "two-node: non-storage host is refused with FATAL"
+    _mock_hostname="tweety"
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 1 $?
+
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "Must run on the storage host"
+    assert_equals "0" "${#_mock_ssh_calls[@]}"
+}
+
+test_two_node_unknown_pool_fatal() {
+    reset_mocks
+    test_start "two-node: a pool without a POOL_TARGET entry points at enroll-iscsi-pool"
+    main scratch >/dev/null 2>&1
+    assert_rc 1 $?
+
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "not enrolled in two-node iSCSI"
+    assert_contains "$log" "enroll-iscsi-pool"
+    assert_equals "0" "${#_mock_ssh_calls[@]}"
+}
+
+test_two_node_empty_storage_ip_fatal() {
+    reset_mocks
+    test_start "two-node: empty STORAGE_IP is FATAL"
+    storage_ip=""
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 1 $?
+
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "STORAGE_IP is empty"
+}
+
+test_two_node_remote_pvesm_missing_fatal() {
+    reset_mocks
+    test_start "two-node: compute host without pvesm is FATAL"
+    _mock_ssh_pvesm_available=false
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 1 $?
+
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "Proxmox VE not found on compute host tweety"
+    assert_contains "$log" "Non-Proxmox hypervisors are not supported"
+}
+
+test_two_node_already_registered() {
+    reset_mocks
+    test_start "two-node: an existing storage ID is left unchanged"
+    _mock_ssh_pvesm_status="Name Type Status Total Used
+iscsi-threeamigos iscsi active N/A N/A"
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 0 $?
+
+    local calls
+    calls=$(printf '%s\n' "${_mock_ssh_calls[@]}")
+    if [[ "$calls" == *"pvesm add"* ]]; then
+        test_fail "Expected no pvesm add for an already-registered storage"
+        return
+    fi
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "already registered"
+}
+
+test_two_node_add_failure_fatal() {
+    reset_mocks
+    test_start "two-node: remote pvesm add failure is FATAL with a hint"
+    _mock_ssh_rc=1
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 1 $?
+
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "pvesm add failed on tweety"
+    assert_contains "$log" "reachable from tweety"
+}
+
+test_dry_run_single_node_makes_no_changes() {
+    reset_mocks
+    test_start "single-node --dry-run creates nothing and logs planned actions"
+    NODE_MODE="single-node"
+    _mock_datasets=("threeamigos")
+
+    main --dry-run threeamigos >/dev/null 2>&1
+    assert_rc 0 $?
+
+    assert_equals "0" "${#_mock_zfs_calls[@]}"
+    assert_equals "0" "${#_mock_pvesm_calls[@]}"
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "DRY-RUN: would create dataset threeamigos/proxmox"
+    assert_contains "$log" "pvesm add zfspool threeamigos"
+}
+
+test_dry_run_two_node_makes_no_changes() {
+    reset_mocks
+    test_start "two-node --dry-run adds nothing and logs the planned command"
+    main --dry-run threeamigos >/dev/null 2>&1
+    assert_rc 0 $?
+
+    local calls
+    calls=$(printf '%s\n' "${_mock_ssh_calls[@]}")
+    if [[ "$calls" == *"pvesm add"* ]]; then
+        test_fail "Expected no pvesm add during dry-run"
+        return
+    fi
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "DRY-RUN:"
+    assert_contains "$log" "pvesm add iscsi iscsi-threeamigos"
+    assert_contains "$log" "--target iqn.2026-02.local.stewie:threeamigos"
+}
+
+test_usage_error_when_pool_missing() {
+    reset_mocks
+    test_start "missing pool argument is a usage error"
+    NODE_MODE="single-node"
+
+    main >/dev/null 2>&1
+    assert_rc 1 $?
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "Usage: enroll-proxmox-pool"
+}
+
+test_unknown_option_fatal() {
+    reset_mocks
+    test_start "unknown option is FATAL"
+    main --bogus threeamigos >/dev/null 2>&1
+    assert_rc 1 $?
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "Unknown option: --bogus"
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_script_loads_and_defines_main
+test_pvesm_status_has_id
+test_storage_id_is_valid
+test_single_node_adds_zfspool_storage
+test_single_node_creates_missing_proxmox_dataset
+test_single_node_already_registered
+test_single_node_missing_pool_fatal
+test_single_node_add_failure_fatal
+test_single_node_without_pvesm_guard
+test_single_node_invalid_storage_id_fatal
+test_two_node_adds_iscsi_storage
+test_two_node_derives_storage_id_from_short_name
+test_two_node_invalid_storage_id_fatal
+test_two_node_non_storage_host_fatal
+test_two_node_unknown_pool_fatal
+test_two_node_empty_storage_ip_fatal
+test_two_node_remote_pvesm_missing_fatal
+test_two_node_already_registered
+test_two_node_add_failure_fatal
+test_dry_run_single_node_makes_no_changes
+test_dry_run_two_node_makes_no_changes
+test_usage_error_when_pool_missing
+test_unknown_option_fatal
+
+test_summary

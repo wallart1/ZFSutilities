@@ -549,6 +549,32 @@ def _unmounted_mountable_ancestors(dataset, repo):
     return ancestors
 
 
+def _mount_dataset_targets(targets, dataset=None):
+    """Mount *targets* root-first under write locks; return True if all mounted.
+
+    The write locks are held only for the duration of the mount commands and
+    are released on any exit path. *dataset* only labels the lock-conflict
+    warning; it defaults to the deepest target.
+    """
+    try:
+        with zlm.locks("w", targets):
+            for target in targets:
+                result = subprocess.run(
+                    ["sudo", "zfs", "mount", target],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    log_msg(f"WARN: Error mounting {target}: {result.stderr.strip()}")
+                    return False
+                log_msg(f"INFO: Mounted {target}")
+            return True
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot mount {dataset or targets[-1]}: {exc}")
+        return False
+
+
 def _mount_one_dataset(item, repo, app):
     """Mount a single filesystem/pool dataset; return True if processed.
 
@@ -570,23 +596,7 @@ def _mount_one_dataset(item, repo, app):
     if not targets_to_mount:
         return False
 
-    try:
-        with zlm.locks("w", targets_to_mount):
-            for target in targets_to_mount:
-                result = subprocess.run(
-                    ["sudo", "zfs", "mount", target],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if result.returncode != 0:
-                    log_msg(f"WARN: Error mounting {target}: {result.stderr.strip()}")
-                    return False
-                log_msg(f"INFO: Mounted {target}")
-            return True
-    except RuntimeError as exc:
-        log_msg(f"WARN: cannot mount {dataset}: {exc}")
-        return False
+    return _mount_dataset_targets(targets_to_mount, dataset)
 
 
 def _mount_one_snapshot(item, repo, app):
@@ -639,6 +649,83 @@ def _mount_one_snapshot(item, repo, app):
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         log_msg(f"WARN: Error mounting snapshot {full_snap}: {e}")
     return False
+
+
+def _snapshot_parent_mount_plan(snap_items, repo):
+    """Return (mount_list, offered) for snapshots whose parent is unmounted.
+
+    mount_list is the deduplicated, root-first list of datasets to mount:
+    each offered snapshot's unmounted ancestors plus its parent. Snapshots
+    whose parent is already mounted, or whose parent has canmount=off and
+    can therefore never be mounted, are not offered.
+    """
+    mount_list = []
+    offered = []
+    for item in snap_items:
+        dataset = item["dataset"]
+        try:
+            if repo.get_property(dataset, "mounted") == "yes":
+                continue
+            if repo.get_property(dataset, "canmount") == "off":
+                continue
+            ancestors = _unmounted_mountable_ancestors(dataset, repo)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_msg(f"WARN: Error checking mount state for {dataset}: {e}")
+            continue
+        offered.append(item)
+        for candidate in ancestors + [dataset]:
+            if candidate not in mount_list:
+                mount_list.append(candidate)
+    return mount_list, offered
+
+
+def _offer_snapshot_parent_mounts(snap_items, repo, app):
+    """Offer to mount the unmounted parents of selected snapshots.
+
+    Shows a dialog listing the unmounted parent datasets and the snapshots
+    they block. Confirming mounts the parents root-first; the per-snapshot
+    automount then runs in the normal dispatch loop. Cancelling skips the
+    parent mounts, leaving the snapshots to report the parent-not-mounted
+    warning.
+    """
+    mount_list, offered = _snapshot_parent_mount_plan(snap_items, repo)
+    if not offered:
+        return
+
+    lines = ["Parent datasets to mount:", ""]
+    lines.extend(f"  {name}" for name in mount_list)
+    lines.extend(["", "Snapshot(s) to mount after:", ""])
+    lines.extend(f"  {item['dataset']}@{item['name']}" for item in offered)
+
+    dialog = create_dialog(
+        "Mount Snapshot(s)",
+        app,
+        [
+            (Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL),
+            ("Mount All", Gtk.ResponseType.OK),
+        ],
+    )
+    content = dialog.get_content_area()
+    header = Gtk.Label()
+    header.set_markup(
+        f"<b>Mount {len(offered)} snapshot(s): {len(mount_list)} unmounted "
+        "parent dataset(s) will be mounted first.</b>"
+    )
+    header.set_halign(Gtk.Align.START)
+    content.add(header)
+    add_scrolled_text_view(content, "\n".join(lines), min_height=150)
+
+    dialog.show_all()
+    response = dialog.run()
+    dialog.destroy()
+    if response != Gtk.ResponseType.OK:
+        return
+
+    if not _mount_dataset_targets(mount_list):
+        log_msg(
+            "WARN: Not all parent datasets mounted; selected snapshots "
+            "that remain blocked will report warnings below."
+        )
 
 
 def _volume_partition_mountpoint(item):
@@ -714,6 +801,16 @@ def on_datasets_mount(app):
     if not targets:
         log_msg("WARN: Select filesystems, snapshots, or volumes to mount")
         return
+
+    pending_snaps = [
+        i
+        for i in targets
+        if i["type"] == "snapshot"
+        and not i.get("mounted", False)
+        and i.get("parent_type") != "volume"
+    ]
+    if pending_snaps:
+        _offer_snapshot_parent_mounts(pending_snaps, repo, app)
 
     processed = False
     for item in targets:

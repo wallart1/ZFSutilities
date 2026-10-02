@@ -205,7 +205,7 @@ sudo ./zfsdailybackup "dryrun='Y'"
 In dry-run mode, the script logs what it would do but skips:
 
 - Pre-backup script execution
-- Remote rsync pulls and local package list backups
+- Remote rsync pulls
 - ZFS snapshot creation and send/receive
 - Snapfile cleanup
 - Retention pruning

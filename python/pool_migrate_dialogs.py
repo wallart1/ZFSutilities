@@ -82,6 +82,7 @@ from pool_migrate import (
     vmids_from_zvols,
 )
 from pools_page import on_pools_refresh
+from proxmox_enroll import offer_proxmox_enrollment
 from zfs_repository import (
     TopologyNode,
     build_apply_holds_command,
@@ -1563,6 +1564,7 @@ def on_disks_migrate_pool(app) -> None:
                 else:
                     log_msg(f"INFO: iSCSI LUNs re-registered for '{request.source_pool}'")
                 _finish_refresh(app)
+                offer_proxmox_enrollment(app, request.source_pool)
 
             runner.set_steps([repair_step])
             update_disks_button_sensitivity(app)
@@ -1575,6 +1577,7 @@ def on_disks_migrate_pool(app) -> None:
                     "Manual enrollment steps:"
                 )
                 log_manual_enrollment_steps(request.source_pool)
+            offer_proxmox_enrollment(app, request.source_pool)
 
     runner.operation_detail = f"Migrate Pool: {request.source_pool}"
     runner.set_steps(copy_steps)

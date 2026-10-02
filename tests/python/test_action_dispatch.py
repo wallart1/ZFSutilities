@@ -37,6 +37,13 @@ class TestDisksPageSpec(unittest.TestCase):
         buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
         self.assertIn(("Refresh", "view-refresh", "_disks_refresh_btn"), buttons)
 
+    def test_enroll_proxmox_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
+        self.assertIn(
+            ("Enroll in Proxmox…", "network-server", "_disks_proxmox_enroll_btn"),
+            buttons,
+        )
+
     def test_post_setup_is_update_sensitivity(self):
         post_setup = action_dispatch.PAGE_SPECS["disks"].get("post_setup")
         self.assertIs(post_setup, action_dispatch.update_disks_button_sensitivity)
@@ -56,6 +63,10 @@ class TestDisksHandlers(unittest.TestCase):
     def test_refresh_handler_registered(self):
         handler = action_dispatch.ACTION_HANDLERS["disks"]["Refresh"]
         self.assertIs(handler, action_dispatch.on_disks_refresh)
+
+    def test_enroll_proxmox_handler_registered(self):
+        handler = action_dispatch.ACTION_HANDLERS["disks"]["Enroll in Proxmox…"]
+        self.assertIs(handler, action_dispatch.on_disks_enroll_proxmox)
 
 
 class TestDisksGrowthButtons(unittest.TestCase):

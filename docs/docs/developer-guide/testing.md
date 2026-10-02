@@ -171,6 +171,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-detach-vm-disk` | `detach-vm-disk` iSCSI manifest removal |
 | `test-enroll-efi-keys-vm` | `enroll-efi-keys-vm` EFI-disk and iSCSI by-path parsing for Secure Boot enrollment |
 | `test-enroll-iscsi-pool` | `enroll-iscsi-pool` POOL_TARGET insertion (multi-line/single-line/no declaration), idempotence, peer-first ordering, storage-host gating, dry-run, single-node no-op |
+| `test-enroll-proxmox-pool` | `enroll-proxmox-pool` storage-ID derivation/validation, pvesm-status parsing, single-node zfspool path (dataset creation, idempotence, missing-pvesm guard), two-node iscsi path (compute-host SSH delegation, iSCSI-enrollment prerequisite), dry-run |
 | `test-ensure-restored-vm-iscsi` | `ensure-restored-vm-iscsi` parsing: zvol basename/pool extraction, by-path LUN extraction, VM-config LUN lookup, EFI disk detection by size, fallback LUN assignment when zvol disk numbers do not match config slots, and storage-side script forwarding |
 | `test-findoffsitepool` | `findoffsitepool` online-candidate selection |
 | `test-installer-checks` | Installer prerequisite checks and desktop-launcher helper functions |
@@ -369,6 +370,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_gui_infrastructure` | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling |
 | `test_installer_retention` | Installer retention profile initialization: default-only on new install and preservation of existing profiles |
 | `test_iscsi_enroll` | `iscsi_enroll.py` — derive_target_short, is_iscsi_managed_pool, enroll argv building, post-create enrollment offer (two-node gating, decline/failure paths) |
+| `test_proxmox_enroll` | `proxmox_enroll.py` — storage-ID derivation/validation, pvesm argv building and status parsing, post-create Proxmox offer (mode gating, iSCSI prerequisite, already-registered skip, decline/failure paths), Disks-page action guards |
 | `test_legacy_retention` | Legacy `zfsretainpol-*` file parsing and pool scanning |
 | `test_log_index` | Persistent session-log metadata index |
 | `test_logging_config` | Message levels, GUI sink, session log env helpers, and session log truncation |

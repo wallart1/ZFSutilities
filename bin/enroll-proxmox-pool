@@ -1,0 +1,287 @@
+#!/usr/bin/bash
+#
+# enroll-proxmox-pool
+# Register a ZFS pool as Proxmox VE storage (Datacenter → Storage).
+#
+# Single-node: adds a 'zfspool' storage entry on this host via pvesm,
+# backed by the pool's <pool>/proxmox VM-disk dataset (created when
+# missing), with content images,rootdir and sparse volumes.
+#
+# Two-node (run on the storage host): adds an 'iscsi' storage entry on the
+# compute host via ssh, using the pool's iSCSI target — portal from
+# STORAGE_IP, IQN from IQN_PREFIX plus the POOL_TARGET short name. The pool
+# must already be enrolled in two-node iSCSI (enroll-iscsi-pool), because
+# pvesm add iscsi probes the target while registering it.
+#
+# Idempotent — a storage ID that already exists in pvesm status is left
+# unchanged.
+#
+# Usage: sudo enroll-proxmox-pool [--dry-run] <pool> [storage-id]
+#     --dry-run      Show each planned action without making changes
+#     <pool>         Pool name to register
+#     [storage-id]   Proxmox storage ID; derived when omitted (the pool
+#                    name in single-node mode, iscsi-<short> in two-node)
+# Environment overrides (used by the test suite):
+#     ENROLL_PROXMOX_NODE_LIB   Path to node-lib.sh
+#     ENROLL_PROXMOX_TEST_MODE  Skip the sourced-main guard (tests only)
+# Returns: 0 on success (or nothing to do), 1 on failure
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+NODE_LIB="${ENROLL_PROXMOX_NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+
+source_helper rootcheck
+rootcheck
+
+usage() {
+    log_msg "INFO: Usage: enroll-proxmox-pool [--dry-run] <pool> [storage-id]"
+    log_msg "INFO:   --dry-run      Show planned actions without making changes"
+    log_msg "INFO:   <pool>         Pool name to register"
+    log_msg "INFO:   [storage-id]   Proxmox storage ID (default: pool name, or"
+    log_msg "INFO:                  iscsi-<short> in two-node mode)"
+    return 1
+}
+
+# In single-node mode the local host must run Proxmox VE. In two-node mode
+# pvesm runs on the compute host instead; that reachability check happens
+# later, after the storage-host check.
+require_proxmox_ve() {
+    if is_single_node && ! command -v pvesm >/dev/null 2>&1; then
+        log_msg "FATAL: This script requires Proxmox VE (pvesm command not found)."
+        log_msg "FATAL:   On a single node without Proxmox there are no VM disks to manage."
+        log_msg "FATAL:   Non-Proxmox hypervisors are not supported."
+        return 1
+    fi
+    return 0
+}
+
+# Verify we are running on the storage host (two-node mode only).
+require_storage_host() {
+    local my_host
+    my_host=$(hostname -s)
+    if [[ "$my_host" != "$storage_host" ]]; then
+        log_msg "FATAL: Must run on the storage host ($storage_host), not $my_host"
+        return 1
+    fi
+    return 0
+}
+
+# Proxmox storage IDs: must start with a letter or digit, then letters,
+# digits, dot, underscore, or hyphen.
+storage_id_is_valid() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+}
+
+# Echo the POOL_TARGET short name for a pool, or return 1 (with a WARN from
+# pool_to_target) when the pool is not enrolled. Success must echo only the
+# short name — callers run this in a command substitution.
+pool_short_name() {
+    local pool="$1" iqn
+    iqn=$(pool_to_target "$pool") || return 1
+    printf '%s\n' "${iqn##*:}"
+}
+
+# Return 0 when a 'pvesm status' dump lists *storage_id* in its Name column.
+# The header line ("Name Type Status ...") is skipped.
+pvesm_status_has_id() {
+    local status="$1" id="$2" name
+    while read -r name _rest; do
+        [[ "$name" == "Name" ]] && continue
+        [[ "$name" == "$id" ]] && return 0
+    done <<< "$status"
+    return 1
+}
+
+storage_id_registered_local() {
+    local status
+    status=$(pvesm status 2>/dev/null) || return 1
+    pvesm_status_has_id "$status" "$1"
+}
+
+storage_id_registered_remote() {
+    local status
+    status=$(ssh -o ConnectTimeout=10 "root@${compute_host}" pvesm status 2>/dev/null) || return 1
+    pvesm_status_has_id "$status" "$1"
+}
+
+# Single-node enrollment: local zfspool storage backed by <pool>/proxmox.
+# Arguments: pool storage_id dry_run(true|false)
+enroll_single_node() {
+    local pool="$1" storage_id="$2" dry_run="$3"
+
+    if ! zfs list -H -o name "$pool" >/dev/null 2>&1; then
+        log_msg "FATAL: Pool '$pool' not found (zfs list)"
+        return 1
+    fi
+
+    # The zfspool entry is backed by the pool's VM-disk dataset; Proxmox
+    # creates zvols inside it, so it must exist before the storage is used.
+    if ! zfs list -H -o name "${pool}/proxmox" >/dev/null 2>&1; then
+        if [[ "$dry_run" == true ]]; then
+            log_msg "INFO: DRY-RUN: would create dataset ${pool}/proxmox"
+        else
+            log_msg "INFO: Creating VM-disk dataset ${pool}/proxmox..."
+            if ! zfs create "${pool}/proxmox"; then
+                log_msg "FATAL: Could not create dataset ${pool}/proxmox"
+                return 1
+            fi
+            log_msg "INFO:   ✓ Dataset ${pool}/proxmox created"
+        fi
+    else
+        log_msg "INFO: Dataset ${pool}/proxmox already exists"
+    fi
+
+    if storage_id_registered_local "$storage_id"; then
+        log_msg "INFO: Storage '$storage_id' is already registered in Proxmox"
+        return 0
+    fi
+
+    if [[ "$dry_run" == true ]]; then
+        log_msg "INFO: DRY-RUN: would run: pvesm add zfspool ${storage_id}" \
+            "--pool ${pool}/proxmox --content images,rootdir --sparse 1"
+        return 0
+    fi
+
+    log_msg "INFO: Adding Proxmox ZFS storage '$storage_id' (pool ${pool}/proxmox)..."
+    if ! pvesm add zfspool "$storage_id" \
+        --pool "${pool}/proxmox" --content images,rootdir --sparse 1; then
+        log_msg "FATAL: pvesm add failed for storage '$storage_id'"
+        return 1
+    fi
+    if storage_id_registered_local "$storage_id"; then
+        log_msg "INFO:   ✓ Storage '$storage_id' registered in Proxmox"
+    else
+        log_msg "WARN: Storage '$storage_id' not visible in pvesm status —" \
+            "verify in the Proxmox GUI (Datacenter → Storage)"
+    fi
+    return 0
+}
+
+# Two-node enrollment: iscsi storage on the compute host, reached over ssh.
+# Arguments: pool storage_id dry_run(true|false)
+enroll_two_node() {
+    local pool="$1" storage_id="$2" dry_run="$3"
+
+    require_storage_host || return 1
+
+    if ! is_known_pool "$pool"; then
+        log_msg "FATAL: Pool '$pool' is not enrolled in two-node iSCSI (no POOL_TARGET entry)."
+        log_msg "FATAL:   Run 'sudo enroll-iscsi-pool $pool' first, then re-run this script."
+        return 1
+    fi
+
+    local iqn
+    iqn=$(pool_to_target "$pool") || return 1
+    if [[ -z "$storage_ip" ]]; then
+        log_msg "FATAL: STORAGE_IP is empty in node.conf (iSCSI portal unknown)"
+        return 1
+    fi
+
+    if ! ssh -o ConnectTimeout=10 "root@${compute_host}" \
+        'command -v pvesm' >/dev/null 2>&1; then
+        log_msg "FATAL: Proxmox VE not found on compute host $compute_host (pvesm missing)."
+        log_msg "FATAL:   Non-Proxmox hypervisors are not supported."
+        return 1
+    fi
+
+    if storage_id_registered_remote "$storage_id"; then
+        log_msg "INFO: Storage '$storage_id' is already registered in Proxmox on $compute_host"
+        return 0
+    fi
+
+    if [[ "$dry_run" == true ]]; then
+        log_msg "INFO: DRY-RUN: would run on $compute_host:"
+        log_msg "INFO: DRY-RUN:   pvesm add iscsi ${storage_id} --portal ${storage_ip}" \
+            "--target ${iqn} --content images"
+        return 0
+    fi
+
+    log_msg "INFO: Adding Proxmox iSCSI storage '$storage_id' on $compute_host (target $iqn)..."
+    if ! ssh -o ConnectTimeout=10 "root@${compute_host}" \
+        pvesm add iscsi "$storage_id" \
+        --portal "$storage_ip" --target "$iqn" --content images; then
+        log_msg "FATAL: pvesm add failed on $compute_host for storage '$storage_id'"
+        log_msg "FATAL:   Check that the iSCSI target $iqn is reachable from $compute_host"
+        return 1
+    fi
+    if storage_id_registered_remote "$storage_id"; then
+        log_msg "INFO:   ✓ Storage '$storage_id' registered in Proxmox on $compute_host"
+    else
+        log_msg "WARN: Storage '$storage_id' not visible in pvesm status on" \
+            "$compute_host — verify in the Proxmox GUI (Datacenter → Storage)"
+    fi
+    return 0
+}
+
+main() {
+
+    local dry_run=false
+    local position_args=()
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --dry-run)  dry_run=true ;;
+            -h|--help)  usage; return 0 ;;
+            --*)
+                log_msg "FATAL: Unknown option: $arg"
+                usage
+                return 1
+                ;;
+            *) position_args+=("$arg") ;;
+        esac
+    done
+
+    require_proxmox_ve || return 1
+
+    local pool="${position_args[0]:-}"
+    local storage_id="${position_args[1]:-}"
+    if [[ -z "$pool" ]]; then
+        usage
+        return 1
+    fi
+
+    log_msg "INFO: === enroll-proxmox-pool: $pool ==="
+
+    if is_single_node; then
+        [[ -z "$storage_id" ]] && storage_id="$pool"
+        if ! storage_id_is_valid "$storage_id"; then
+            log_msg "FATAL: Invalid Proxmox storage ID '$storage_id' (allowed: letters," \
+                "digits, dot, underscore, hyphen; must start with a letter or digit)"
+            return 1
+        fi
+        log_msg "INFO: Pool: $pool → Proxmox ZFS storage '$storage_id' (${pool}/proxmox)"
+        enroll_single_node "$pool" "$storage_id" "$dry_run" || return 1
+    else
+        local short
+        if ! short=$(pool_short_name "$pool"); then
+            log_msg "FATAL: Pool '$pool' is not enrolled in two-node iSCSI (no POOL_TARGET entry)."
+            log_msg "FATAL:   Run 'sudo enroll-iscsi-pool $pool' first, then re-run this script."
+            return 1
+        fi
+        [[ -z "$storage_id" ]] && storage_id="iscsi-${short}"
+        if ! storage_id_is_valid "$storage_id"; then
+            log_msg "FATAL: Invalid Proxmox storage ID '$storage_id' (allowed: letters," \
+                "digits, dot, underscore, hyphen; must start with a letter or digit)"
+            return 1
+        fi
+        log_msg "INFO: Pool: $pool → Proxmox iSCSI storage '$storage_id' (short name: $short)"
+        enroll_two_node "$pool" "$storage_id" "$dry_run" || return 1
+    fi
+
+    log_msg "INFO: === enroll-proxmox-pool complete: $pool ==="
+    return 0
+
+} # end main
+
+# Run main only when executed directly, not when sourced for tests.
+if [[ -z "${ENROLL_PROXMOX_TEST_MODE:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

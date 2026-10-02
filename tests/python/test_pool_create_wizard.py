@@ -1216,7 +1216,10 @@ class TestIscsiEnrollmentOffer(unittest.TestCase):
     """offer_iscsi_enrollment wiring in the create-pool completion callback."""
 
     def _drive_success(self, two_node=False, storage_host=True, register_response=None):
-        """Drive a successful create to completion; return (app, offer mock)."""
+        """Drive a successful create to completion.
+
+        Returns (app, iscsi offer mock, proxmox offer mock).
+        """
         pcw = _import_wizard()
         app = _make_app()
         driver = _WizardDriver(
@@ -1242,15 +1245,20 @@ class TestIscsiEnrollmentOffer(unittest.TestCase):
             with (
                 patch.object(pcw, "node_config", nc),
                 patch.object(pcw, "offer_iscsi_enrollment") as offer,
+                patch.object(pcw, "offer_proxmox_enrollment") as proxmox_offer,
                 dialog_patcher,
                 capture_logs(),
             ):
                 app.dataset_runner.finish(rc=0)
-        return app, offer
+        return app, offer, proxmox_offer
 
     def test_enrollment_offer_invoked_on_success_two_node_storage_host(self):
-        app, offer = self._drive_success(two_node=True, storage_host=True)
-        offer.assert_called_once_with(app, "newpool")
+        app, offer, _proxmox = self._drive_success(two_node=True, storage_host=True)
+        offer.assert_called_once()
+        self.assertEqual(offer.call_args.args, (app, "newpool"))
+        # The Proxmox offer is chained via the iSCSI enrollment's on_done
+        # callback, not invoked directly alongside it.
+        self.assertIn("on_done", offer.call_args.kwargs)
 
     def test_enrollment_offer_skipped_on_failed_create(self):
         pcw = _import_wizard()
@@ -1271,24 +1279,122 @@ class TestIscsiEnrollmentOffer(unittest.TestCase):
             with (
                 patch.object(pcw, "node_config", nc),
                 patch.object(pcw, "offer_iscsi_enrollment") as offer,
+                patch.object(pcw, "offer_proxmox_enrollment") as proxmox_offer,
                 patch.object(pcw.Gtk, "MessageDialog"),
                 capture_logs(),
             ):
                 app.dataset_runner.finish(rc=1)
         offer.assert_not_called()
+        proxmox_offer.assert_not_called()
 
     def test_enrollment_offer_skipped_in_single_node(self):
-        _app, offer = self._drive_success(two_node=False)
+        _app, offer, _proxmox = self._drive_success(two_node=False)
         offer.assert_not_called()
 
     def test_enrollment_offer_invoked_when_registration_declined(self):
         """Declining the registry offer must not suppress the iSCSI offer."""
-        app, offer = self._drive_success(
+        app, offer, _proxmox = self._drive_success(
             two_node=True,
             register_response=3,  # Gtk.ResponseType.NO
         )
         self.assertEqual(app.known_pools, [])
-        offer.assert_called_once_with(app, "newpool")
+        offer.assert_called_once()
+        self.assertEqual(offer.call_args.args, (app, "newpool"))
+
+
+class TestProxmoxEnrollmentOffer(unittest.TestCase):
+    """offer_proxmox_enrollment wiring in the create-pool completion callback."""
+
+    def test_proxmox_offer_chained_after_accepted_iscsi_enrollment(self):
+        pcw = _import_wizard()
+        app = _make_app()
+        driver = _WizardDriver(
+            pcw,
+            [
+                lambda state: (_select_all(state), NEXT)[1],
+                NEXT,
+                lambda state: (_name_pool(state), NEXT)[1],
+                lambda state: (_confirm(state), CREATE)[1],
+            ],
+        )
+        nc = MagicMock()
+        nc.is_two_node.return_value = True
+        nc.is_storage_host.return_value = True
+        with _wizard_session(pcw, app, driver):
+            with (
+                patch.object(pcw, "node_config", nc),
+                patch.object(pcw, "offer_iscsi_enrollment") as offer,
+                patch.object(pcw, "offer_proxmox_enrollment") as proxmox_offer,
+                patch.object(pcw.Gtk, "MessageDialog"),
+                capture_logs(),
+            ):
+                app.dataset_runner.finish(rc=0)
+                # offer_iscsi_enrollment is a MagicMock (truthy return) so the
+                # wizard treats it as accepted: the Proxmox offer must not run
+                # directly…
+                proxmox_offer.assert_not_called()
+                # …but the chained on_done callback invokes it after enrollment.
+                offer.call_args.kwargs["on_done"]()
+        proxmox_offer.assert_called_once_with(app, "newpool")
+
+    def test_proxmox_offer_runs_directly_when_iscsi_offer_declined(self):
+        pcw = _import_wizard()
+        app = _make_app()
+        driver = _WizardDriver(
+            pcw,
+            [
+                lambda state: (_select_all(state), NEXT)[1],
+                NEXT,
+                lambda state: (_name_pool(state), NEXT)[1],
+                lambda state: (_confirm(state), CREATE)[1],
+            ],
+        )
+        nc = MagicMock()
+        nc.is_two_node.return_value = True
+        nc.is_storage_host.return_value = True
+        with _wizard_session(pcw, app, driver):
+            with (
+                patch.object(pcw, "node_config", nc),
+                patch.object(pcw, "offer_iscsi_enrollment", return_value=False) as offer,
+                patch.object(pcw, "offer_proxmox_enrollment") as proxmox_offer,
+                patch.object(pcw.Gtk, "MessageDialog"),
+                capture_logs(),
+            ):
+                app.dataset_runner.finish(rc=0)
+        offer.assert_called_once()
+        proxmox_offer.assert_called_once_with(app, "newpool")
+
+    def test_proxmox_offer_invoked_in_single_node(self):
+        app, offer, proxmox_offer = TestIscsiEnrollmentOffer()._drive_success(two_node=False)
+        offer.assert_not_called()
+        proxmox_offer.assert_called_once_with(app, "newpool")
+
+    def test_proxmox_offer_skipped_when_iscsi_enrollment_cancelled(self):
+        pcw = _import_wizard()
+        app = _make_app()
+        driver = _WizardDriver(
+            pcw,
+            [
+                lambda state: (_select_all(state), NEXT)[1],
+                NEXT,
+                lambda state: (_name_pool(state), NEXT)[1],
+                lambda state: (_confirm(state), CREATE)[1],
+            ],
+        )
+        nc = MagicMock()
+        nc.is_two_node.return_value = True
+        nc.is_storage_host.return_value = True
+        with _wizard_session(pcw, app, driver):
+            with (
+                patch.object(pcw, "node_config", nc),
+                patch.object(pcw, "offer_iscsi_enrollment") as offer,
+                patch.object(pcw, "offer_proxmox_enrollment") as proxmox_offer,
+                patch.object(pcw.Gtk, "MessageDialog"),
+                capture_logs(),
+            ):
+                app.dataset_runner.finish(cancelled=True)
+        offer.assert_not_called()
+        proxmox_offer.assert_not_called()
 
 
 if __name__ == "__main__":
