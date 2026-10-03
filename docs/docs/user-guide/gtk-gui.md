@@ -1343,15 +1343,27 @@ The wizard has four steps:
    other mirror, may fail without data loss; capacity is 50% of raw at 2×2.
    A mixed-size selection warns that vdev capacity is limited by
    its smallest member. A live capacity estimate shows both raw and effective
-   capacity for the selected workload profile's block size.
+   capacity for the pool profile's record size.
 3. **Pool settings** — enter the pool name (validated against `zpool` naming
    rules and checked for collisions with imported and importable pools),
-   choose the pool blocksize, and pick a workload profile whose live
-   filesystem properties are written explicitly as `-O` options — never left
-   to `zpool create` defaults, which drift between releases. The pool
-   blocksize is the GUI name for the ZFS `ashift` property: `512 bytes` =
-   ashift 9, `4096 bytes` = ashift 12, and `8192 bytes` = ashift 13. The
-   wizard computes a **recommended** pool blocksize for the selected disks
+   pick a **pool profile**, and confirm or change the pool blocksize. A pool
+   profile is the pool-scope counterpart of a workload profile: a named
+   bundle of the settings that shape a pool at creation. It supplies the
+   curated pool properties, written explicitly as `-o` options — never left
+   to `zpool create` defaults, which drift between releases — and the pool
+   root's filesystem properties, written as `-O` options so every dataset
+   created below the root inherits them. Two profiles ship seeded
+   (`general` and `archival`); use **Advanced: Manage Pool Profiles…** on the
+   Disks page to review or edit them or add your own (see
+   [Pool profiles](#pool-profiles)). The blocksize is pre-filled from the
+   profile and stays editable: switching profiles re-applies the new
+   profile's blocksize, except when you set the blocksize yourself.
+   The pool blocksize is the GUI name for the ZFS `ashift` property: `512 bytes` =
+   ashift 9, `4096 bytes` = ashift 12, and `8192 bytes` = ashift 13. A
+   profile can store the special choice `recommended`, which adopts the
+   wizard's computed recommendation for the selected disks, or `auto`, which
+   leaves the decision to ZFS. The wizard computes a **recommended** pool
+   blocksize for the selected disks
    and pre-selects it, so the review step shows `-o ashift=<value>` in the
    exact command. The recommendation starts at `4096 bytes` and only ever
    goes up: a blocksize above 4096 recorded in a previous pool's labels on
@@ -1523,16 +1535,54 @@ Pick the source pool and one of two destination modes:
   namespace (`<holding-pool>/migrate_<source-pool>/<dataset>`) so they can
   never collide with backup or offsite copies of the same datasets — a pool
   that also receives backups is a valid holding pool. The rebuilt pool's
-  disks are your choice: the source pool's own disks (pre-selected, since the
-  cutover destroy frees them) plus any eligible unused disks — so the new
-  topology can use the old disks, new disks, or any mix. Disks you leave
-  unselected simply stay free for later use.
+  disks are your choice: the source pool's own data-vdev disks (pre-selected,
+  since the cutover destroy frees them) plus any eligible unused disks — so
+  the new topology can use the old disks, new disks, or any mix. Former
+  infrastructure-vdev disks of the source pool are also listed (freed by the
+  same destroy) but start **unchecked**, each labeled with the class it
+  served — tick one only if you deliberately want it as a data vdev.
+  Disks you leave unselected simply stay free for later use.
 
 Choose **New disks** when you have unused disks to build the new pool on (the
 old disks are freed untouched and remain re-importable). Choose **Holding
 pool** when the new topology should be built from the existing disks — alone
 or combined with additional unused disks — or whenever you have no spare
 disks at all.
+
+The **new pool settings** section decides what the rebuilt pool looks like.
+It defaults to **Match origin pool**, a pseudo-profile derived from the
+source pool itself: the origin's blocksize, its curated pool properties
+(autotrim, autoexpand, autoreplace, failmode, multihost, listsnapshots,
+delegation), and its root dataset's live filesystem properties — carried to
+the new pool as explicit `-o`/`-O` options so nothing silently reverts to
+`zpool create` defaults. Every value stays editable: you can switch to a
+saved pool profile, change the topology radio (which defaults to the origin's
+data-vdev shape when the disk count permits), and above all change the
+**blocksize** — the setting that exists for the sake of which Migrate Pool
+offers this section at all, because it cannot be changed on a live pool. The
+disk recommendation for the selected disks is shown as a hint, and a visible
+warning asks you to confirm when the chosen blocksize is *smaller* than the
+recommendation (a too-small blocksize permanently hurts modern drives).
+Infrastructure vdevs (special, log, cache, spare) are never recreated by the
+migration: when the source pool has them, the review page warns with each
+class and its disks, and a reminder logged after a successful cutover says
+to re-add them with **Add Infra Vdev** — they can be added to (and removed
+from) a live pool at any time, so nothing is foreclosed by doing it after
+the cutover.
+
+Below the settings, a **Non-default pool properties** section appears when
+the source pool has pool properties set away from their defaults beyond the
+curated seven (a `comment`, `compatibility`, `dedup_table_quota`, …). These
+cannot travel through the profile's `zpool create -o` options, so each is
+listed with its origin value and a checkbox: a checked property is
+re-applied with one `zpool set` right after the new pool is imported under
+the source pool's name; uncheck any you do not want to carry over (the
+values themselves are the origin's and are not editable in the dialog).
+The replay steps are part of the reviewed plan and are non-fatal — by the
+time they run the data is already migrated, so a property the running zfs
+build refuses is logged and skipped rather than failing the cutover. The
+curated seven are never listed here: they belong to the pool profile, so a
+deliberately chosen saved profile is never clobbered by origin values.
 
 The review page lists every step that will run, from the recursive migration
 snapshot through one `zfs send -Rw` replication step per top-level dataset
@@ -1541,7 +1591,24 @@ properties included; encrypted datasets are sent raw; `-v` logs each dataset
 as it is received so progress through the tree is visible in the log) to a
 dataset-tree verification, plus the cutover steps that follow the copy (a
 catch-up snapshot with incremental sends, the export/import swap, and in
-holding mode the pool rebuild and copy-back).
+holding mode the pool rebuild and copy-back). The create steps name the
+chosen shape — the new pool's topology and blocksize — so the plan reflects
+the settings above.
+That shape — one snapshot of the whole pool, then one **Replicate** step per
+top-level dataset — is deliberate. The recursive migration snapshot stamps
+every dataset at a single consistent point in time under one snapshot name,
+which becomes the common starting point for every copy and for the cutover
+incremental. The copies themselves are addressed per top-level dataset: a
+pool whose data lives under a single top-level dataset shows a single
+**Replicate** step, and that step — snapshots and descendants — carries the
+pool's entire data; a pool with several top-level datasets gets one
+**Replicate** step, and one cutover catch-up send, per dataset. The source
+pool's root dataset is never replicated: the destination already has a root
+of its own (created with the new pool in new-disk mode, or implied by the
+reserved migration namespace in holding mode), a pool root cannot be received
+over another pool's root, and a root holds no user data — only properties,
+which do not travel in send streams. Per-dataset sends also keep resume
+tokens and the dataset-tree verification scoped to one dataset at a time.
 An optional **Bandwidth limit** (a `pv` rate such as `100m`) throttles the
 copy. Every copy is resumable: an interrupted transfer leaves a receive
 resume token on the destination, and re-running Migrate Pool resumes from
@@ -1622,14 +1689,44 @@ with `zfs set`, **Rewrite Data** to restripe existing blocks in place, and
 hold dataset-scope properties (recordsize, compression, atime, logbias,
 sync, primarycache, special_small_blocks, and the creation-only
 volblocksize). The pool's blocksize (ashift) is pool-scope and cannot be
-changed on a live pool — it is recorded in a profile for information only;
-use Migrate Pool to rewrite a pool with a different blocksize.
+changed on a live pool — the workload-profile editor shows it for
+information only; pool-scope settings live in
+[pool profiles](#pool-profiles), and Migrate Pool is the way to rewrite a
+pool with a different blocksize.
 
 Built-in (seeded) profiles can be opened for editing as a starting point,
 but they cannot be overwritten: saving from a built-in requires a new
 profile name, or an existing custom profile to overwrite (after the same
 confirmation the Save Profile to Schedule actions use). Built-in profiles
 cannot be deleted; Reset to Defaults restores them.
+
+### Pool profiles
+
+Pool-scope tuning lives on the [Disks](#disks-tab) tab: **Create Pool…**
+applies a pool profile when building a new pool, **Migrate Pool…** applies
+one (or the origin-derived "Match origin pool" defaults) when rebuilding a
+pool, and **Advanced: Manage Pool Profiles…** maintains the profiles
+themselves. A pool profile bundles the settings that shape a pool at
+creation:
+
+- the **blocksize** (`ashift`) — `recommended` (adopt the wizard's
+  per-disk recommendation), `auto`, or an explicit `512`/`4096`/`8192`
+  bytes;
+- the curated **pool properties** (`autotrim`, `autoexpand`, `autoreplace`,
+  `failmode`, `multihost`, `listsnapshots`, `delegation`), written
+  explicitly as `-o` options so a new pool never depends on `zpool create`
+  defaults, which drift between releases;
+- the pool root's **filesystem properties**, written as `-O` options using
+  the workload-profile vocabulary (recordsize, compression, …) so every
+  dataset below the root inherits them.
+
+Two profiles ship seeded — `general` (trim on, balanced root defaults) and
+`archival` (trim off, 1M records, zstd) — and the manager follows the
+workload-profile rules: built-ins can be opened as a template but not
+overwritten or deleted, saving from a built-in requires a new name or an
+existing custom profile, and Reset to Defaults restores the seeds. Pool
+property values are picked from their allowed values, so an invalid value
+cannot be entered.
 
 ### Actions
 
@@ -1662,13 +1759,17 @@ action lives.
   [Add Infrastructure Vdev](#add-infrastructure-vdev)). Storage host only on
   two-node systems; disabled while a dataset action is running.
 - **Migrate Pool…** — copy a pool to new disks (or via a holding pool) to
-  change its topology, then swap (see [Migrate Pool](#migrate-pool)). Storage
-  host only on two-node systems; disabled while a dataset action is running.
+  change its topology or blocksize, then swap (see [Migrate Pool](#migrate-pool)).
+  Storage host only on two-node systems; disabled while a dataset action is
+  running.
 - **Enroll in Proxmox…** — register the pool selected in the pool drop-down as
   a Proxmox storage (see [Creating Pools](#creating-pools)). This is the same
   enrollment offered automatically after Create Pool, made available any time
   for pools created or imported earlier. Available in both views; storage host
   only on two-node systems; disabled while a dataset action is running.
+- **Advanced: Manage Pool Profiles…** — maintain the pool profiles that
+  Create Pool and Migrate Pool apply (see [Pool profiles](#pool-profiles)).
+  Always available — it edits saved profiles, not live pools.
 - **SMART Details** — dumps `smartctl -a` output for the selected disk to the
   GUI log panel. Requires a single disk to be selected and `smartctl` to be
   installed; otherwise a warning is logged.

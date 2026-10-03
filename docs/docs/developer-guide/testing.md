@@ -352,7 +352,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_checkagainst_page` | Checkagainst tab table editing and config persistence |
 | `test_command_builders` | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
 | `test_config_core` | JSON config load/save and generic state helpers |
-| `test_config_migrations` | Schema migrations 1→24, idempotency, missing migration errors |
+| `test_config_migrations` | Schema migrations 1→26, idempotency, missing migration errors |
 | `test_cron_manager` | Cron line generation, condition support, human-readable interpretation, next-run computation |
 | `test_dashboard_page` | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators (incl. SSD/NVMe wear), surface-test running-task cancel, async refresh loading state |
 | `test_dataset_actions` | Datasets tab actions (mount/unmount/destroy/holds) driven through BackupRunner |
@@ -367,7 +367,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_disks_page_growth_buttons` | Disks tab pool-growth button sensitivity gating (Add Data Vdev, Expand Vdev, Replace, Detach, Add Infra Vdev, Migrate Pool): compute-host, runner-busy, tooltip precedence |
 | `test_docs_integrity` | MkDocs nav consistency, orphan-file detection, internal link resolution, anchor existence, hook importability; AGENTS.md repo-relative path and `Branch:` reference validation |
 | `test_docs_viewer` | Standalone documentation viewer launcher |
-| `test_feature_config` | Per-feature config getters/setters, snapshot name generation, checkagainst entry merge, workload profile immutability |
+| `test_feature_config` | Per-feature config getters/setters, snapshot name generation, checkagainst entry merge, workload and pool profile quintets/immutability |
 | `test_file_locking` | Advisory flock helpers |
 | `test_golden` | `golden.py` golden-file helper — canonical serialization, compare/update modes, missing-golden errors |
 | `test_gui_helpers` | `gui_helpers` utilities, including mounted-snapshot detection via `mount -t zfs`, orange non-default expander labels, and log font scaling (CSS steps, persistence, restore, View menu wiring) |
@@ -388,12 +388,14 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_path_utils` | Shared path helpers mirroring bash `$mydir` / `find_zfsutility_script` behavior |
 | `test_paths` | Centralized path-resolution module (local and remote deployed layouts) |
 | `test_pool_actions` | Pool registry add/remove/save/revert action handlers |
-| `test_pool_create` | `pool_create.py` — disk eligibility and partition policy, vdev separation, pool-name validation, ashift suggestion, RAIDZ capacity estimator, RAID10 count validation, profile -O options |
-| `test_pool_create_wizard` | `pool_create_wizard.py` — wizard page gating, exact command building (incl. RAID10 mirror pairs), handler guards, Create Pool button sensitivity, scripted end-to-end flow with lock acquire/release and registry offer |
+| `test_pool_create` | `pool_create.py` — disk eligibility and partition policy, vdev separation, pool-name validation, ashift suggestion, RAIDZ capacity estimator, RAID10 count validation, pool-profile `-o`/`-O` option builders |
+| `test_pool_create_wizard` | `pool_create_wizard.py` — wizard page gating, exact command building (incl. RAID10 mirror pairs and profile-driven `-o`/`-O` flags), handler guards, Create Pool button sensitivity, blocksize/profile interplay, scripted end-to-end flow with lock acquire/release and registry offer |
 | `test_pool_growth` | `pool_growth.py` — attach/replace/detach classification, replace-pair and infra-vdev validation, scrub-block check |
 | `test_pool_growth_dialogs` | `pool_growth_dialogs.py` — Add Vdev/Attach/Replace/Detach/Infra-Vdev pure helpers, handler guards, and dialog flows |
 | `test_pool_migrate` | `pool_migrate.py` — migration snapshot/temp-pool naming, cutover snapshot naming, zvol-to-VMID mapping, step planning (incl. cutover catch-up placement), capacity checks, tree verification, migration argv builders |
-| `test_pool_migrate_dialogs` | `pool_migrate_dialogs.py` — Migrate Pool dialog problems/warnings/plan, scrub-block gate, handler guards, two-phase copy/cutover execution (incl. cutover catch-up steps, cutover-time layout abort, and the running-VM gate), iSCSI repair chaining |
+| `test_pool_migrate_dialogs` | `pool_migrate_dialogs.py` — Migrate Pool dialog problems/warnings/plan, origin-derived new-pool settings (Match origin pool defaults, blocksize, infra-vdev warning), scrub-block gate, handler guards, two-phase copy/cutover execution (incl. cutover catch-up steps, cutover-time layout abort, and the running-VM gate), iSCSI repair chaining |
+| `test_pool_profiles` | `pool_profiles.py` — schema constants, profile property filtering and canonical `-o`/`-O` ordering, blocksize resolution/labels/below-recommendation, profile validation, origin pseudo-profile derivation, infra-vdev classification |
+| `test_pool_profile_dialogs` | `pool_profile_dialogs.py` — pool profile manager (list, add, edit, builtin delete guard, reset) and editor (add/edit, builtin save-as-new, overwrite confirm/decline, validation), Disks-page action wiring |
 | `test_pool_watch` | Per-pool dataset watch window |
 | `test_pools_page` | Pools tab registry UI |
 | `test_profile_integration` | Concurrent profile execution: disjoint datasets, same-dataset conflict, backup+prune serialization |

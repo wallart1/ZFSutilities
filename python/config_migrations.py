@@ -2,7 +2,7 @@
 
 import copy
 
-CONFIG_VERSION = 25
+CONFIG_VERSION = 26
 
 
 def _migrate_1_to_2(config):
@@ -295,6 +295,16 @@ def _migrate_24_to_25(config):
     return config
 
 
+def _migrate_25_to_26(config):
+    """Seed default pool profiles for Create Pool and Migrate Pool."""
+    if "pool_profiles" not in config:
+        from feature_config import DEFAULT_POOL_PROFILES
+
+        config["pool_profiles"] = copy.deepcopy(DEFAULT_POOL_PROFILES)
+    config["config_version"] = 26
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -320,6 +330,7 @@ MIGRATIONS = [
     _migrate_22_to_23,
     _migrate_23_to_24,
     _migrate_24_to_25,
+    _migrate_25_to_26,
 ]
 
 

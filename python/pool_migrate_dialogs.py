@@ -14,11 +14,17 @@ source pool plus one short ``zfs send -RIw`` incremental per dataset so
 writes made during the copy are not lost, then export the source
 pool, then — for new disks — re-import the migrated pool under the source
 pool's name, or — for holding pool — destroy the source, rebuild it from
-the user-selected disks (the freed source members plus any eligible unused
-disks) with the chosen topology, copy back, and swap). The cutover
+the user-selected disks (the freed source data members plus any eligible
+unused disks; former infra-vdev members start unchecked so they cannot
+silently join the data vdevs) with the chosen topology, copy back, and
+swap). The cutover
 phase starts only after a second typed confirmation, since it takes the
 pool briefly offline; before that confirmation the source layout is
-re-validated and the pool's zvols are checked for running VMs.
+re-validated and the pool's zvols are checked for running VMs. The source
+pool's non-default properties (SOURCE=local, outside the curated profile
+set) are captured when the dialog opens, offered as checkboxes, and
+replayed with non-fatal ``zpool set`` steps right after the migrated pool
+is imported under the source pool's name.
 
 All decision logic lives in the pure helpers below or in ``pool_migrate``;
 ZFS I/O is delegated to ``ZfsRepository`` via the app context.
@@ -42,6 +48,7 @@ import zfs_lock_manager as zlm
 from command_builders import BashStep
 from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
+from feature_config import get_pool_profiles
 from gi.repository import Gtk
 from gui_helpers import create_dialog, create_scrolled_dialog
 from iscsi_enroll import is_iscsi_managed_pool, log_manual_enrollment_steps
@@ -53,6 +60,7 @@ from pool_create import (
     EligibilityResult,
     disk_eligibility,
     estimate_effective_capacity,
+    recommend_ashift,
     validate_vdev_selection,
 )
 from pool_create_wizard import _leaf_paths_by_pool
@@ -81,8 +89,23 @@ from pool_migrate import (
     plan_migration_steps,
     vmids_from_zvols,
 )
+from pool_profiles import (
+    ASHIFT_BY_LABEL,
+    MATCH_ORIGIN_PROFILE,
+    blocksize_below_recommendation,
+    blocksize_label_for_ashift,
+    data_vdev_leaves,
+    filesystem_options_for_profile,
+    infra_vdev_classes,
+    origin_profile,
+    pool_options_for_profile,
+    replayable_pool_properties,
+    resolve_blocksize,
+    validate_profile,
+)
 from pools_page import on_pools_refresh
 from proxmox_enroll import offer_proxmox_enrollment
+from workload_profiles import LIVE_PROPERTIES
 from zfs_repository import (
     TopologyNode,
     build_apply_holds_command,
@@ -93,6 +116,7 @@ from zfs_repository import (
     build_pool_destroy_command,
     build_pool_export_command,
     build_pool_import_rename_command,
+    build_pool_set_command,
     build_recursive_snapshot_command,
     build_release_holds_command,
 )
@@ -104,6 +128,11 @@ _RESPONSE_MIGRATE = 14
 # Recordsize used for the effective-capacity estimate of a candidate pool
 # (the GUI default; the estimate is advisory, zfs is the final arbiter).
 _ESTIMATE_BLOCK_BYTES = 128 * 1024
+
+# Blocksize combo offered for the new/rebuilt pool: the GUI speaks in bytes
+# (auto = the -o ashift flag is omitted and ZFS decides).
+_BLOCKSIZE_AUTO_LABEL = "auto (let ZFS decide)"
+_MIGRATE_BLOCKSIZE_LABELS = [_BLOCKSIZE_AUTO_LABEL] + [label for label in ASHIFT_BY_LABEL]
 
 
 @dataclass
@@ -130,6 +159,19 @@ class _MigrateState:
     )  # checked rows of the holding-mode rebuild picker (source members + unused disks)
     typed: str = ""  # review typed confirmation (source pool name)
     rate_limit: str = ""  # optional pv -L rate; empty = unlimited
+    # --- New-pool settings (pool-profile driven, Match-origin default) ---
+    pool_profiles: dict = field(default_factory=dict)  # saved pool profiles
+    profile_name: str = MATCH_ORIGIN_PROFILE
+    origin_profile: dict = field(default_factory=dict)  # derived from source pool
+    ashift: int | None = None  # None = auto (flag omitted from the command)
+    blocksize_user_set: bool = False  # user overrode the profile blocksize
+    blocksize_syncing: bool = False  # programmatic combo update in progress
+    label_ashifts: dict = field(default_factory=dict)  # disk path -> prior-pool ashift
+    # Non-default pool properties captured from the source pool (SOURCE=local,
+    # outside the curated profile set) and the subset the user kept checked;
+    # both reset whenever the source pool changes.
+    origin_pool_props: dict[str, str] = field(default_factory=dict)
+    replay_selection: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -163,7 +205,11 @@ class MigrationRequest:
     source pool's snapshot holds are captured for reapplication; the
     executor creates it before the run and removes it once the holds are
     reapplied (it is kept, with its path logged, when cutover fails after
-    the holds were released from the source).
+    the holds were released from the source). ``replay_pool_props`` are the
+    source pool's non-default properties the user kept checked; each is
+    reapplied with one ``zpool set`` right after the migrated pool is
+    imported under the source pool's name (non-fatal: the data is already
+    migrated when they run, so a failed set is logged, not fatal).
     """
 
     source_pool: str
@@ -175,6 +221,10 @@ class MigrationRequest:
     holding_pool: str = ""
     new_pool_topology: str = "mirror"
     new_pool_by_id: tuple[str, ...] = ()
+    new_pool_ashift: int | None = None  # None = auto (flag omitted)
+    new_pool_options: tuple[tuple[str, str], ...] = ()  # pool -o pairs
+    new_pool_fs_options: tuple[tuple[str, str], ...] = ()  # root -O pairs
+    replay_pool_props: tuple[tuple[str, str], ...] = ()  # zpool set pairs
     rate_limit: str = ""
     holds_file: str = ""
 
@@ -254,13 +304,52 @@ def _source_pool_by_ids(state: _MigrateState) -> list[str]:
 # the source pool.
 _MEMBER_ROW_WARNING = "source pool member — freed by the cutover destroy"
 
+# Status text for synthetic rows of former infra-vdev members: freed by the
+# cutover destroy like data members, but deliberately NOT preselected.
+_INFRA_MEMBER_ROW_WARNING = (
+    "former {cls} vdev member — freed by the cutover destroy; tick only to add it to the data vdevs"
+)
+
+
+def _source_pool_data_member_disks(state: _MigrateState) -> list[DiskInfo]:
+    """Inventory rows for the source pool's *data* vdev leaf members.
+
+    Complements ``_source_pool_member_disks`` (all leaves): infrastructure
+    vdev disks are excluded so the holding-mode picker preselects only true
+    data members — a former special/log/cache/spare disk must not silently
+    join the rebuilt pool's data vdevs.
+    """
+    root = state.topologies.get(state.pool_name)
+    if root is None:
+        return []
+    members: list[DiskInfo] = []
+    for leaf in data_vdev_leaves(root):
+        disk = _find_disk(leaf, state.disks)
+        if disk is not None:
+            members.append(disk)
+    return members
+
 
 def _holding_member_rows(state: _MigrateState) -> list[EligibilityResult]:
-    """Synthetic eligible picker rows for the source pool's leaf members."""
-    return [
-        EligibilityResult(disk=disk, eligible=True, reasons=[], warnings=[_MEMBER_ROW_WARNING])
-        for disk in _source_pool_member_disks(state)
-    ]
+    """Synthetic eligible picker rows for the source pool's leaf members.
+
+    Data members keep the plain member warning; former infra-vdev members
+    name the class they served, so moving one into the data vdevs is a
+    deliberate checkbox tick rather than a silent default.
+    """
+    root = state.topologies.get(state.pool_name)
+    if root is None:
+        return []
+    infra_by_leaf = {leaf: cls for cls, leaves in infra_vdev_classes(root) for leaf in leaves}
+    rows: list[EligibilityResult] = []
+    for leaf in _leaf_paths_by_pool({state.pool_name: root}).get(state.pool_name, []):
+        disk = _find_disk(leaf, state.disks)
+        if disk is None:
+            continue
+        cls = infra_by_leaf.get(leaf)
+        warning = _INFRA_MEMBER_ROW_WARNING.format(cls=cls) if cls else _MEMBER_ROW_WARNING
+        rows.append(EligibilityResult(disk=disk, eligible=True, reasons=[], warnings=[warning]))
+    return rows
 
 
 def _holding_picker_rows(state: _MigrateState) -> list[EligibilityResult]:
@@ -308,6 +397,108 @@ def _holding_rebuild_by_ids(state: _MigrateState) -> list[str] | None:
             return None
         by_ids.append(os.path.join(_BY_ID_DIR, disk.by_id))
     return by_ids
+
+
+def _candidate_disks(state: _MigrateState) -> list[DiskInfo]:
+    """Disks the new/rebuilt pool would be built from, per mode."""
+    if state.mode == MIGRATE_HOLDING_POOL:
+        return _holding_rebuild_disks(state)
+    return list(state.selected)
+
+
+def _origin_data_shape(topology) -> str:
+    """Topology keyword matching the source pool's data vdevs.
+
+    Used as the default topology radio when the source pool is picked: the
+    migration starts from the origin's shape and the user changes it only to
+    change the layout. Infra vdev classes (special/log/cache/spare) are
+    skipped; a pool of bare disks is a stripe; anything unrecognized (e.g.
+    striped mirrors, which Migrate Pool does not offer as a single keyword)
+    falls back to mirror.
+    """
+    for child in getattr(topology, "children", None) or []:
+        vdev_type = getattr(child, "vdev_type", "")
+        if vdev_type in TOPOLOGIES:
+            return vdev_type
+        if vdev_type == "disk":
+            return "stripe"
+    return "mirror"
+
+
+def _resolve_pool_profile(state: _MigrateState) -> dict:
+    """The profile dict the new pool's settings come from right now."""
+    if state.profile_name == MATCH_ORIGIN_PROFILE:
+        return state.origin_profile
+    return state.pool_profiles.get(state.profile_name, {})
+
+
+def _recommended_blocksize(state: _MigrateState) -> int | None:
+    """Recommendation for the candidate disks (None without a selection)."""
+    disks = _candidate_disks(state)
+    if not disks:
+        return None
+    return recommend_ashift(disks, state.label_ashifts)
+
+
+def _target_blocksize(state: _MigrateState) -> int | None:
+    """The blocksize the profile choice resolves to right now."""
+    profile = _resolve_pool_profile(state)
+    return resolve_blocksize(profile.get("blocksize", "recommended"), _recommended_blocksize(state))
+
+
+def _probe_label_ashift(repository, device_path: str):
+    """Prior-pool ashift recorded on *device_path*, or None.
+
+    Defensive wrapper around the repository probe: any failure or unexpected
+    return type means "no evidence", never a dialog error.
+    """
+    try:
+        value = repository.get_device_label_ashift(device_path)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _apply_origin_defaults(state: _MigrateState, repository) -> None:
+    """Reset the new-pool settings to values derived from the source pool.
+
+    Called when the source pool changes (and before the dialog opens): the
+    topology radio follows the origin's data-vdev shape and the "Match origin
+    pool" pseudo-profile is rebuilt from the origin's live blocksize, pool
+    properties, and root-filesystem properties. The origin's non-default
+    pool properties (SOURCE=local, outside the curated set) are captured for
+    the replay checkboxes, all checked by default. A fresh pool also clears
+    any explicit blocksize override and prior disk probes.
+    """
+    pool = state.pool_name
+    root = state.topologies.get(pool)
+    origin_ashift = getattr(root, "ashift", None) if root is not None else None
+    pool_props: dict[str, str] = {}
+    fs_props: dict[str, str] = {}
+    origin_pool_props: dict[str, str] = {}
+    if pool:
+        try:
+            pool_props = repository.curated_pool_properties(pool)
+        except Exception as exc:  # pragma: no cover - defensive
+            log_msg(f"WARN: Could not read pool properties of '{pool}': {exc}")
+        try:
+            raw = repository.get_properties(pool, list(LIVE_PROPERTIES))
+            fs_props = {prop: value for prop, value in raw.items() if value not in ("-", "")}
+        except Exception as exc:  # pragma: no cover - defensive
+            log_msg(f"WARN: Could not read root dataset properties of '{pool}': {exc}")
+        try:
+            origin_pool_props = replayable_pool_properties(
+                repository.pool_properties_with_source(pool)
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            log_msg(f"WARN: Could not read the non-default pool properties of '{pool}': {exc}")
+    state.origin_profile = origin_profile(origin_ashift, pool_props, fs_props)
+    state.origin_pool_props = origin_pool_props
+    state.replay_selection = set(origin_pool_props)
+    state.topology = _origin_data_shape(root)
+    state.profile_name = MATCH_ORIGIN_PROFILE
+    state.blocksize_user_set = False
+    state.label_ashifts = {}
 
 
 def _capacity_problem(
@@ -408,6 +599,11 @@ def _migrate_problems(state: _MigrateState) -> list[str]:
     if rate_problem:
         return [rate_problem]
 
+    if state.profile_name != MATCH_ORIGIN_PROFILE:
+        problems = validate_profile(state.pool_profiles.get(state.profile_name, {}))
+        if problems:
+            return problems
+
     if state.typed != state.pool_name:
         return [f"Type the pool name '{state.pool_name}' to confirm"]
     return []
@@ -448,6 +644,35 @@ def _migrate_warnings(state: _MigrateState) -> list[str]:
         mixed = mixed_size_warning(state.selected)
         if mixed:
             warnings.append(mixed)
+    # A blocksize below the disk recommendation permanently hurts modern
+    # drives; warn so the choice is deliberate (Match origin can land here
+    # when the origin was built small and the new disks are larger-sector).
+    recommended = _recommended_blocksize(state)
+    if blocksize_below_recommendation(state.ashift, recommended):
+        warnings.append(
+            f"the chosen pool blocksize ({blocksize_label_for_ashift(state.ashift)}) "
+            f"is smaller than the recommended pool blocksize for these disks "
+            f"({blocksize_label_for_ashift(recommended)}) — a too-small "
+            "blocksize permanently hurts modern drives, so change it unless "
+            "keeping the origin pool's smaller blocksize is intentional"
+        )
+    # Infra vdevs are placement/cache devices, not data: they are not
+    # recreated and their contents do not travel — surface them so they are
+    # re-added by hand after the cutover rather than forgotten.
+    infra = infra_vdev_classes(state.topologies.get(state.pool_name))
+    if infra:
+        described = ", ".join(f"{cls} ({', '.join(paths)})" for cls, paths in infra)
+        warning = (
+            "the source pool's infrastructure vdevs are not recreated: "
+            f"{described}; re-add them after the cutover with Add "
+            "Infrastructure Vdev"
+        )
+        if state.mode == MIGRATE_HOLDING_POOL:
+            warning += (
+                "; their disks are listed unchecked in the rebuild picker — "
+                "tick one only to use it as a data vdev"
+            )
+        warnings.append(warning)
     return warnings
 
 
@@ -469,6 +694,9 @@ def _plan_lines(state: _MigrateState) -> list[str]:
         rebuild_disk_count=rebuild_disk_count,
         migration_snap=state.snap_name,
         cutover_snap=cutover_snapshot_name(state.snap_name),
+        new_pool_topology=state.topology,
+        blocksize_label=blocksize_label_for_ashift(state.ashift),
+        replay_props=tuple(sorted(state.replay_selection)),
     )
     return [step.description for step in steps]
 
@@ -483,6 +711,7 @@ def build_request(state: _MigrateState) -> MigrationRequest:
         by_ids = tuple(
             os.path.join(_BY_ID_DIR, disk.by_id) for disk in state.selected if disk.by_id
         )
+    profile = _resolve_pool_profile(state)
     return MigrationRequest(
         source_pool=state.pool_name,
         mode=state.mode,
@@ -493,6 +722,12 @@ def build_request(state: _MigrateState) -> MigrationRequest:
         holding_pool=state.holding_pool if state.mode == MIGRATE_HOLDING_POOL else "",
         new_pool_topology=state.topology,
         new_pool_by_id=by_ids,
+        new_pool_ashift=state.ashift,
+        new_pool_options=tuple(pool_options_for_profile(profile)),
+        new_pool_fs_options=tuple(filesystem_options_for_profile(profile)),
+        replay_pool_props=tuple(
+            (prop, state.origin_pool_props[prop]) for prop in sorted(state.replay_selection)
+        ),
         rate_limit=state.rate_limit,
     )
 
@@ -613,6 +848,26 @@ def _catchup_steps(
     return steps
 
 
+def _replay_props_steps(request: MigrationRequest) -> list[BashStep]:
+    """Build the `zpool set` steps that replay non-default pool properties.
+
+    The steps run right after the migrated pool is imported under the source
+    pool's name, so the properties land on the final pool identity. Each is
+    non-fatal: by then the data is already migrated, so a property the
+    running zfs build rejects (or a value it refuses) is logged and skipped
+    rather than failing the cutover.
+    """
+    return [
+        BashStep(
+            build_pool_set_command(request.source_pool, prop, value),
+            f"Reapply pool property {prop}={value} on {request.source_pool}",
+            is_rsync=False,
+            fatal=False,
+        )
+        for prop, value in request.replay_pool_props
+    ]
+
+
 def build_migration_steps(
     request: MigrationRequest,
 ) -> tuple[list[BashStep], list[BashStep]]:
@@ -628,7 +883,11 @@ def build_migration_steps(
     The holds are reapplied as the last cutover step,
     after the migrated pool has been imported under the source pool's name
     (so the captured ``<pool>/<dataset>@<snap>`` paths match verbatim and
-    the copy-back receives never meet a held snapshot).
+    the copy-back receives never meet a held snapshot). Between the
+    import-rename and the holds reapply, one non-fatal ``zpool set`` step
+    per checked non-default pool property replays the origin's local
+    settings (comment, compatibility, …) that the profile system cannot
+    carry at create time.
     """
     datasets = list(request.datasets)
     if request.mode == MIGRATE_NEW_DISKS:
@@ -640,7 +899,8 @@ def build_migration_steps(
             rate_limit=request.rate_limit,
         )
         # The temp pool must exist before the first receive; create it from
-        # the selected disks right after the migration snapshot.
+        # the selected disks right after the migration snapshot, carrying the
+        # profile's blocksize and properties (blocksize is creation-only).
         copy.insert(
             1,
             BashStep(
@@ -648,6 +908,9 @@ def build_migration_steps(
                     request.temp_pool,
                     request.new_pool_topology,
                     list(request.new_pool_by_id),
+                    ashift=request.new_pool_ashift,
+                    options=list(request.new_pool_fs_options),
+                    pool_options=list(request.new_pool_options),
                 ),
                 f"Create new pool {request.temp_pool} "
                 f"({request.new_pool_topology}) on the selected disks",
@@ -676,6 +939,9 @@ def build_migration_steps(
                 is_rsync=False,
                 fatal=True,
             ),
+        ]
+        cutover += _replay_props_steps(request)
+        cutover += [
             BashStep(
                 build_apply_holds_command(request.source_pool, request.holds_file),
                 f"Reapply captured snapshot holds to {request.source_pool} "
@@ -742,6 +1008,9 @@ def build_migration_steps(
                 request.temp_pool,
                 request.new_pool_topology,
                 list(request.new_pool_by_id),
+                ashift=request.new_pool_ashift,
+                options=list(request.new_pool_fs_options),
+                pool_options=list(request.new_pool_options),
             ),
             f"Create rebuilt pool {request.temp_pool} "
             f"({request.new_pool_topology}) on the freed disks",
@@ -775,6 +1044,9 @@ def build_migration_steps(
             is_rsync=False,
             fatal=True,
         ),
+    ]
+    cutover += _replay_props_steps(request)
+    cutover += [
         BashStep(
             build_apply_holds_command(request.source_pool, request.holds_file),
             f"Reapply captured snapshot holds to {request.source_pool} from {request.holds_file}",
@@ -825,6 +1097,41 @@ def _on_holding_changed(combo, state: _MigrateState, on_change) -> None:
 def _on_rate_limit_changed(entry, state: _MigrateState, on_change) -> None:
     text = entry.get_text()
     state.rate_limit = text if isinstance(text, str) else ""
+    on_change()
+
+
+def _on_profile_combo_changed(combo, state: _MigrateState, on_change) -> None:
+    text = _combo_text(combo)
+    if text:
+        state.profile_name = text
+    # A fresh profile re-applies its own blocksize choice; only an explicit
+    # blocksize edit by the user survives a profile switch.
+    state.blocksize_user_set = False
+    on_change()
+
+
+def _on_blocksize_combo_changed(combo, state: _MigrateState, on_change) -> None:
+    text = _combo_text(combo)
+    if not text:
+        return
+    if not state.blocksize_syncing:
+        state.blocksize_user_set = True
+    state.ashift = (
+        None if text == _BLOCKSIZE_AUTO_LABEL else ASHIFT_BY_LABEL.get(text, state.ashift)
+    )
+    if not state.blocksize_syncing:
+        on_change()
+
+
+def _on_replay_prop_toggled(check, prop: str, state: _MigrateState, on_change) -> None:
+    """Track one replay checkbox: checked properties travel, unchecked drop."""
+    active = check.get_active()
+    if not isinstance(active, bool):
+        return
+    if active:
+        state.replay_selection.add(prop)
+    else:
+        state.replay_selection.discard(prop)
     on_change()
 
 
@@ -914,6 +1221,74 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
         topology_radios.append((radio, name))
     content.pack_start(topology_box, False, False, 0)
 
+    settings_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    profile_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    profile_label = Gtk.Label(label="Pool profile:")
+    profile_label.set_halign(Gtk.Align.END)
+    profile_row.pack_start(profile_label, False, False, 0)
+    profile_combo = Gtk.ComboBoxText()
+    profile_combo.append_text(MATCH_ORIGIN_PROFILE)
+    for profile_name in state.pool_profiles:
+        profile_combo.append_text(profile_name)
+    profile_combo.set_active(0)
+    profile_combo.set_hexpand(True)
+    profile_row.pack_start(profile_combo, True, True, 0)
+    settings_box.pack_start(profile_row, False, False, 0)
+    profile_desc = Gtk.Label()
+    profile_desc.set_halign(Gtk.Align.START)
+    profile_desc.set_line_wrap(True)
+    settings_box.pack_start(profile_desc, False, False, 0)
+    blocksize_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    blocksize_label = Gtk.Label(label="Pool blocksize:")
+    blocksize_label.set_halign(Gtk.Align.END)
+    blocksize_row.pack_start(blocksize_label, False, False, 0)
+    blocksize_combo = Gtk.ComboBoxText()
+    for blocksize_choice in _MIGRATE_BLOCKSIZE_LABELS:
+        blocksize_combo.append_text(blocksize_choice)
+    blocksize_combo.set_active(0)
+    blocksize_combo.set_hexpand(True)
+    blocksize_row.pack_start(blocksize_combo, True, True, 0)
+    settings_box.pack_start(blocksize_row, False, False, 0)
+    blocksize_hint = Gtk.Label()
+    blocksize_hint.set_halign(Gtk.Align.START)
+    blocksize_hint.set_line_wrap(True)
+    settings_box.pack_start(blocksize_hint, False, False, 0)
+    content.pack_start(settings_box, False, False, 0)
+
+    props_frame = Gtk.Frame(label="Non-default pool properties")
+    props_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+    props_frame.add(props_box)
+    props_hint = Gtk.Label()
+    props_hint.set_halign(Gtk.Align.START)
+    props_hint.set_line_wrap(True)
+    props_hint.set_text(
+        "These pool properties are set away from their defaults on the "
+        "source pool. A checked property is re-applied to the new pool with "
+        "zpool set after it is imported under the source pool's name; "
+        "uncheck any you do not want to carry over. The values are the "
+        "source pool's and cannot be edited here."
+    )
+    props_box.pack_start(props_hint, False, False, 0)
+    content.pack_start(props_frame, False, False, 0)
+
+    def _rebuild_props_section() -> None:
+        """Repaint the replay checkboxes for the current source pool."""
+        for child in list(props_box.get_children())[1:]:
+            props_box.remove(child)
+        for prop in sorted(state.origin_pool_props):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            check = Gtk.CheckButton()
+            check.set_active(prop in state.replay_selection)
+            check.connect("toggled", _on_replay_prop_toggled, prop, state, _refresh)
+            value_label = Gtk.Label(label=f"{prop} = {state.origin_pool_props[prop]}")
+            value_label.set_halign(Gtk.Align.START)
+            value_label.set_line_wrap(True)
+            row.pack_start(check, False, False, 0)
+            row.pack_start(value_label, True, True, 0)
+            props_box.pack_start(row, False, False, 0)
+        props_frame.set_visible(bool(state.origin_pool_props))
+        props_box.show_all()
+
     holding_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
     holding_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     holding_label = Gtk.Label(label="Holding pool:")
@@ -944,8 +1319,10 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
     def _rebuild_holding_picker() -> None:
         """Repaint the rebuild-disk picker for the current source pool.
 
-        Source members are pre-checked (the user may uncheck them); unused
-        disks the user checked keep their state across source-pool changes.
+        Source *data* members are pre-checked (the user may uncheck them);
+        former infra-vdev members start unchecked so they cannot silently
+        join the data vdevs. Unused disks the user checked keep their state
+        across source-pool changes.
         """
         nonlocal holding_picker_page
 
@@ -962,22 +1339,26 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
         state.holding_selected = [
             disk for disk in state.holding_selected if (disk.by_id or disk.path) in row_keys
         ]
-        member_keys = {disk.by_id or disk.path for disk in _source_pool_member_disks(state)}
+        data_member_keys = {
+            disk.by_id or disk.path for disk in _source_pool_data_member_disks(state)
+        }
         previous_keys = {disk.by_id or disk.path for disk in state.holding_selected}
-        preselect = member_keys | (previous_keys - member_keys)
+        preselect = data_member_keys | (previous_keys - data_member_keys)
         holding_picker_state.eligibility = rows
         holding_picker_state.selected = [
             row.disk for row in rows if (row.disk.by_id or row.disk.path) in preselect
         ]
         # The displayed selection is authoritative: keep dialog state in sync
-        # even when the user never touches the picker (all members checked).
+        # even when the user never touches the picker (all data members checked).
         state.holding_selected = list(holding_picker_state.selected)
         holding_picker_page = _build_disk_picker(
             holding_picker_state,
             _on_holding_toggled,
-            "Disks for the rebuilt pool — source members (freed by the "
-            "cutover destroy) are pre-selected; add any eligible unused "
-            "disks. Disks left unselected simply stay free.",
+            "Disks for the rebuilt pool — source data members (freed by the "
+            "cutover destroy) are pre-selected; former infra-vdev members "
+            "start unchecked (tick one only to add it to the data vdevs). "
+            "Add any eligible unused disks. Disks left unselected simply "
+            "stay free.",
             rows=rows,
             preselect=preselect,
         )
@@ -1051,6 +1432,41 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
             )
         else:
             warnings_label.set_text("")
+        # New-pool settings: probe the candidate disks once each, then follow
+        # the chosen profile's blocksize (unless the user overrode it).
+        repository = app.ctx.zfs_repository
+        for disk in _candidate_disks(state):
+            if disk.path not in state.label_ashifts:
+                state.label_ashifts[disk.path] = _probe_label_ashift(repository, disk.path)
+        profile = _resolve_pool_profile(state)
+        recommended = _recommended_blocksize(state)
+        if recommended is not None:
+            blocksize_hint.set_text(
+                "Recommended pool blocksize for these disks: "
+                f"{blocksize_label_for_ashift(recommended)}"
+            )
+        else:
+            blocksize_hint.set_text("Recommended pool blocksize: select the disks for the new pool")
+        if not state.blocksize_user_set:
+            target = _target_blocksize(state)
+            if target is None:
+                state.blocksize_syncing = True
+                try:
+                    blocksize_combo.set_active(0)
+                finally:
+                    state.blocksize_syncing = False
+            else:
+                target_label = blocksize_label_for_ashift(target)
+                if target_label in _MIGRATE_BLOCKSIZE_LABELS:
+                    state.blocksize_syncing = True
+                    try:
+                        blocksize_combo.set_active(_MIGRATE_BLOCKSIZE_LABELS.index(target_label))
+                    finally:
+                        state.blocksize_syncing = False
+            # Adopt the resolved value even without a combo entry (ashift
+            # 14+), so state.ashift cannot go stale.
+            state.ashift = target
+        profile_desc.set_text(profile.get("description", ""))
         typed_hint.set_text(f"Type the pool name '{state.pool_name}' exactly to enable Migrate.")
         migrate_btn.set_sensitive(not problems)
         migrate_btn.set_tooltip_text(problems[0] if problems else "")
@@ -1079,6 +1495,8 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
         radio.connect("toggled", _on_topology_toggled, name, state, _refresh)
     typed_entry.connect("changed", _on_typed_changed, state, _refresh)
     rate_entry.connect("changed", _on_rate_limit_changed, state, _refresh)
+    profile_combo.connect("changed", _on_profile_combo_changed, state, _refresh)
+    blocksize_combo.connect("changed", _on_blocksize_combo_changed, state, _refresh)
 
     def _on_source_changed(combo):
         text = _combo_text(combo)
@@ -1086,6 +1504,15 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
             state.pool_name = text
         if state.holding_pool == state.pool_name:
             state.holding_pool = ""
+        # A different origin pool re-derives everything the new pool defaults
+        # to: the Match-origin profile, the topology radio, the blocksize,
+        # and the non-default property checkboxes.
+        _apply_origin_defaults(state, app.ctx.zfs_repository)
+        profile_combo.set_active(0)
+        for radio, name in topology_radios:
+            if name == state.topology:
+                radio.set_active(True)
+        _rebuild_props_section()
         _rebuild_holding_picker()
         _refresh()
 
@@ -1094,6 +1521,7 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
     holding_combo.connect("changed", _on_holding_changed, state, _refresh)
 
     dialog.show_all()
+    _rebuild_props_section()
     _rebuild_holding_picker()
     try:
         while True:
@@ -1429,7 +1857,11 @@ def on_disks_migrate_pool(app) -> None:
         topologies=data.topologies,
         existing_names=existing_names,
         snap_name=migration_snapshot_name(),
+        pool_profiles=get_pool_profiles(app.config),
     )
+    # The new pool's defaults come from the origin pool (Match origin pool):
+    # its topology shape, blocksize, pool properties, and root properties.
+    _apply_origin_defaults(state, repository)
     request = show_migrate_pool_dialog(app, state)
     if request is None:
         return
@@ -1458,6 +1890,11 @@ def on_disks_migrate_pool(app) -> None:
     fd, holds_file = tempfile.mkstemp(prefix=f"migrate-holds-{request.source_pool}-", suffix=".tsv")
     os.close(fd)
     request = replace(request, holds_file=holds_file)
+
+    # Infra vdevs (special/log/cache/spare) are not recreated by the plan;
+    # remember which the origin had so the success path can remind the user
+    # to re-add them while the information is still at hand.
+    infra_before = infra_vdev_classes(data.topologies.get(request.source_pool))
 
     # The copy phase writes the captured holds into the TSV and the cutover
     # phase consumes it; from here the completion callbacks own the file. If
@@ -1552,6 +1989,13 @@ def on_disks_migrate_pool(app) -> None:
             log_msg(
                 f"INFO: Pool '{request.source_pool}' migrated successfully (mode: {request.mode})"
             )
+            if infra_before:
+                classes = ", ".join(cls for cls, _paths in infra_before)
+                log_msg(
+                    f"INFO: Reminder: pool '{request.source_pool}' had {classes} "
+                    "vdev(s) before the migration and the new pool does not; "
+                    "re-add them with Add Infrastructure Vdev"
+                )
             if is_iscsi_managed_pool(request.source_pool):
                 repair_step = BashStep(
                     [resolve_local_bin("repair-iscsi-luns") or "repair-iscsi-luns"],

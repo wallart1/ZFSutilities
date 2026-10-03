@@ -1,0 +1,14 @@
+zpool
+create
+-o
+ashift=12
+-o
+autotrim=on
+-o
+failmode=continue
+-O
+recordsize=1M
+backup
+mirror
+/dev/disk/by-id/ata-a
+/dev/disk/by-id/ata-b

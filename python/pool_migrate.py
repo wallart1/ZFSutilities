@@ -26,6 +26,7 @@ from datetime import datetime
 
 from disk_repository import format_bytes
 from pool_create import MAX_POOL_NAME_LEN, validate_pool_name
+from pool_profiles import BLOCKSIZE_AUTO
 
 # Migration modes: copy onto a new pool built from unused disks, or onto an
 # existing imported pool used as intermediate holding space.
@@ -52,6 +53,7 @@ STEP_CUTOVER_SNAPSHOT = "cutover_snapshot"
 STEP_CATCHUP_COPY = "catchup_copy"
 STEP_EXPORT_SOURCE = "export_source"
 STEP_IMPORT_RENAME = "import_rename"
+STEP_REAPPLY_POOL_PROPS = "reapply_pool_props"
 STEP_DESTROY_SOURCE = "destroy_source"
 STEP_CREATE_POOL = "create_pool"
 STEP_DESTROY_HOLDING = "destroy_holding"
@@ -181,6 +183,30 @@ def generate_temp_pool_name(source_pool: str, existing_names: set[str]) -> str:
     raise ValueError(f"could not derive a temporary pool name from {source_pool!r}")
 
 
+def _pool_shape_phrase(topology: str, blocksize_label: str) -> str:
+    """Parenthetical describing the pool to create, e.g. ``(raidz2,
+    4096-byte blocks)``. Empty when neither input is given; ``auto``
+    blocksize is omitted (ZFS decides)."""
+    parts = []
+    if topology:
+        parts.append(topology)
+    if blocksize_label and blocksize_label != BLOCKSIZE_AUTO:
+        parts.append(blocksize_label.replace(" bytes", "-byte blocks"))
+    if not parts:
+        return ""
+    return f" ({', '.join(parts)})"
+
+
+def _replay_props_step(source_pool: str, replay_props: tuple[str, ...]) -> MigrationStep:
+    """Planned step that replays the checked non-default pool properties."""
+    count = len(replay_props)
+    return MigrationStep(
+        STEP_REAPPLY_POOL_PROPS,
+        f"Reapply {count} non-default pool propert{'y' if count == 1 else 'ies'} "
+        f"on '{source_pool}' ({', '.join(replay_props)}) with zpool set",
+    )
+
+
 def plan_migration_steps(
     source_pool: str,
     top_level_datasets: list[str],
@@ -189,6 +215,9 @@ def plan_migration_steps(
     rebuild_disk_count: int | None = None,
     migration_snap: str = "",
     cutover_snap: str = "",
+    new_pool_topology: str = "",
+    blocksize_label: str = "",
+    replay_props: tuple[str, ...] = (),
 ) -> list[MigrationStep]:
     """Return the ordered step plan for one migration.
 
@@ -200,9 +229,15 @@ def plan_migration_steps(
     only); it is included in the create-step description when given.
     *migration_snap* and *cutover_snap* are the full ``@migrate-…`` and
     ``@migrate-…-cutover`` snapshot names; when given they appear in the
-    catch-up step descriptions. In both modes the plan gains, between the
-    holds capture and the export step, a cutover snapshot plus one
-    incremental catch-up copy per dataset, so writes made after the
+    catch-up step descriptions. *new_pool_topology* and *blocksize_label*
+    describe the pool that will be created and appear in its create-step
+    description — the blocksize especially, because it is the one setting
+    that cannot be changed after creation. *replay_props* names the source
+    pool's non-default properties the user kept checked; when given, one
+    step right after the import-rename (in both modes) replays them with
+    ``zpool set``. In both modes the plan gains,
+    between the holds capture and the export step, a cutover snapshot plus
+    one incremental catch-up copy per dataset, so writes made after the
     migration snapshot are migrated before anything destructive runs.
     Destructive steps are described as such; the wizard gates them behind
     typed confirmation.
@@ -217,6 +252,7 @@ def plan_migration_steps(
         raise ValueError("destination label must not be empty")
     if rebuild_disk_count is not None and rebuild_disk_count < 1:
         raise ValueError("rebuild disk count must be positive")
+    shape = _pool_shape_phrase(new_pool_topology, blocksize_label)
 
     steps = [
         MigrationStep(
@@ -228,7 +264,7 @@ def plan_migration_steps(
         steps.append(
             MigrationStep(
                 STEP_CREATE_POOL,
-                f"Create the new pool '{dest_label}' on the selected disks",
+                f"Create the new pool '{dest_label}'{shape} on the selected disks",
             )
         )
     # Copies land in a reserved namespace on the holding pool so they
@@ -294,6 +330,8 @@ def plan_migration_steps(
                 f"Import '{dest_label}' under the name '{source_pool}'",
             )
         )
+        if replay_props:
+            steps.append(_replay_props_step(source_pool, replay_props))
         steps.append(
             MigrationStep(
                 STEP_REAPPLY_HOLDS,
@@ -319,7 +357,7 @@ def plan_migration_steps(
             MigrationStep(
                 STEP_CREATE_POOL,
                 f"Create the rebuilt pool on {rebuild_disk_count} selected disk"
-                f"{'s' if rebuild_disk_count != 1 else ''} (temporary name "
+                f"{'s' if rebuild_disk_count != 1 else ''}{shape} (temporary name "
                 f"'{source_pool}{_TEMP_SUFFIX}')",
             )
         )
@@ -349,6 +387,8 @@ def plan_migration_steps(
                 f"Import '{source_pool}{_TEMP_SUFFIX}' under the name '{source_pool}'",
             )
         )
+        if replay_props:
+            steps.append(_replay_props_step(source_pool, replay_props))
         steps.append(
             MigrationStep(
                 STEP_REAPPLY_HOLDS,

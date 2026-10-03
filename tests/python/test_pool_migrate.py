@@ -31,6 +31,7 @@ from pool_migrate import (
     STEP_EXPORT_SOURCE,
     STEP_IMPORT_RENAME,
     STEP_REAPPLY_HOLDS,
+    STEP_REAPPLY_POOL_PROPS,
     STEP_RELEASE_HOLDS,
     STEP_SNAPSHOT,
     STEP_VERIFY,
@@ -309,6 +310,46 @@ class TestPlanMigrationSteps(unittest.TestCase):
     def test_mode_constants_distinct(self):
         self.assertEqual(set(MIGRATION_MODES), {MIGRATE_NEW_DISKS, MIGRATE_HOLDING_POOL})
         self.assertNotEqual(MIGRATE_NEW_DISKS, MIGRATE_HOLDING_POOL)
+
+    def test_replay_props_step_between_import_and_holds(self):
+        for mode, dest in ((MIGRATE_NEW_DISKS, "temp_mig"), (MIGRATE_HOLDING_POOL, "fivebays")):
+            steps = plan_migration_steps(
+                "temp", ["proxmox"], mode, dest, replay_props=("comment", "compatibility")
+            )
+            kinds = [step.kind for step in steps]
+            self.assertIn(STEP_REAPPLY_POOL_PROPS, kinds)
+            self.assertLess(kinds.index(STEP_IMPORT_RENAME), kinds.index(STEP_REAPPLY_POOL_PROPS))
+            self.assertLess(kinds.index(STEP_REAPPLY_POOL_PROPS), kinds.index(STEP_REAPPLY_HOLDS))
+
+    def test_replay_props_description_names_properties(self):
+        steps = plan_migration_steps(
+            "temp",
+            ["proxmox"],
+            MIGRATE_NEW_DISKS,
+            "temp_mig",
+            replay_props=("comment", "compatibility"),
+        )
+        replay = next(step for step in steps if step.kind == STEP_REAPPLY_POOL_PROPS)
+        self.assertIn("2 non-default pool properties", replay.description)
+        self.assertIn("'temp'", replay.description)
+        self.assertIn("(comment, compatibility)", replay.description)
+        self.assertIn("zpool set", replay.description)
+
+    def test_replay_props_description_singular(self):
+        steps = plan_migration_steps(
+            "temp",
+            ["proxmox"],
+            MIGRATE_NEW_DISKS,
+            "temp_mig",
+            replay_props=("comment",),
+        )
+        replay = next(step for step in steps if step.kind == STEP_REAPPLY_POOL_PROPS)
+        self.assertIn("1 non-default pool property ", replay.description)
+
+    def test_no_replay_props_means_no_step(self):
+        for mode, dest in ((MIGRATE_NEW_DISKS, "temp_mig"), (MIGRATE_HOLDING_POOL, "fivebays")):
+            steps = plan_migration_steps("temp", ["proxmox"], mode, dest)
+            self.assertNotIn(STEP_REAPPLY_POOL_PROPS, [step.kind for step in steps])
 
     def test_empty_source_rejected(self):
         with self.assertRaises(ValueError):

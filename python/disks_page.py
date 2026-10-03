@@ -511,6 +511,13 @@ def on_disks_refresh(app):
     log_msg("VERB: Disks refreshed")
 
 
+def on_disks_manage_pool_profiles(app):
+    """Open the pool profile manager."""
+    from pool_profile_dialogs import show_manage_pool_profiles_dialog
+
+    show_manage_pool_profiles_dialog(app)
+
+
 def refresh_surface_test_status(app):
     """Poll running surface tests and update the inventory cells in place.
 

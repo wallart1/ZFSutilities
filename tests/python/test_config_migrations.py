@@ -180,8 +180,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_25(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 25)
+    def test_config_version_is_26(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 26)
 
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
@@ -326,6 +326,38 @@ class TestIndividualMigrations(unittest.TestCase):
         config = {"config_version": 24}
         result1 = config_migrations._migrate_24_to_25(dict(config))
         result2 = config_migrations._migrate_24_to_25(result1)
+        self.assertEqual(result1, result2)
+
+    def test_migrate_25_to_26_seeds_default_pool_profiles(self):
+        config = {"config_version": 25}
+        result = config_migrations._migrate_25_to_26(config)
+        self.assertEqual(result["config_version"], 26)
+        self.assertIn("pool_profiles", result)
+        self.assertIn("general", result["pool_profiles"])
+        self.assertIn("archival", result["pool_profiles"])
+
+    def test_migrate_25_to_26_preserves_existing_pool_profiles(self):
+        config = {
+            "config_version": 25,
+            "pool_profiles": {
+                "custom": {
+                    "description": "My custom pool profile",
+                    "blocksize": "4096 bytes",
+                    "pool_properties": {"autotrim": "off"},
+                    "filesystem_properties": {"compression": "off"},
+                    "notes": "Do not overwrite",
+                }
+            },
+        }
+        result = config_migrations._migrate_25_to_26(config)
+        self.assertEqual(result["config_version"], 26)
+        self.assertEqual(result["pool_profiles"]["custom"]["notes"], "Do not overwrite")
+        self.assertNotIn("general", result["pool_profiles"])
+
+    def test_migrate_25_to_26_is_idempotent(self):
+        config = {"config_version": 25}
+        result1 = config_migrations._migrate_25_to_26(dict(config))
+        result2 = config_migrations._migrate_25_to_26(result1)
         self.assertEqual(result1, result2)
 
     def test_migrate_15_to_16_adds_prune_pools_order(self):
@@ -575,7 +607,7 @@ class TestRunMigrations(unittest.TestCase):
             "offsite": {"offsite_pools": ["z40tb"]},
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 25)
+        self.assertEqual(result["config_version"], 26)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))
         self.assertEqual(result["dashboard"]["refresh_seconds"], 30)
         row = result["checkagainst"]["user_entries"][0]
@@ -603,7 +635,7 @@ class TestRunMigrations(unittest.TestCase):
             },
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 25)
+        self.assertEqual(result["config_version"], 26)
         self.assertIn("retention_verb_messages", result)
         self.assertIs(result["retention_verb_messages"], False)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))

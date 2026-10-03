@@ -19,12 +19,12 @@ from pool_create import (
     EligibilityResult,
     disk_eligibility,
     estimate_effective_capacity,
-    pool_filesystem_options,
     recommend_ashift,
     validate_pool_name,
     validate_raid10_count,
     validate_vdev_selection,
 )
+from pool_profiles import filesystem_options_for_profile, pool_options_for_profile
 from workload_profiles import LIVE_PROPERTIES
 
 TB = 10**12
@@ -471,9 +471,15 @@ class TestEstimateEffectiveCapacity(unittest.TestCase):
             estimate_effective_capacity("stripe", 1, TB, 0)
 
 
-GENERAL_PROFILE = {
-    "applies_to": ["filesystem"],
-    "properties": {
+GENERAL_POOL_PROFILE = {
+    "description": "test profile",
+    "blocksize": "recommended",
+    "pool_properties": {
+        "autotrim": "on",
+        "failmode": "wait",
+        "bogus_pool_prop": "x",  # outside the curated schema: skipped
+    },
+    "filesystem_properties": {
         "recordsize": "128K",
         "compression": "lz4",
         "atime": "off",
@@ -486,34 +492,37 @@ GENERAL_PROFILE = {
 }
 
 
-class TestPoolFilesystemOptions(unittest.TestCase):
-    """pool_filesystem_options maps a profile to explicit -O options."""
+class TestPoolProfileOptionBuilders(unittest.TestCase):
+    """Pool-profile property filters feed -o/-O on the create command."""
 
-    def test_general_profile_emits_all_live_properties_in_canonical_order(self):
-        options = pool_filesystem_options(GENERAL_PROFILE)
+    def test_filesystem_options_emit_live_properties_in_canonical_order(self):
+        options = filesystem_options_for_profile(GENERAL_POOL_PROFILE)
         self.assertEqual(
             options,
-            [(prop, GENERAL_PROFILE["properties"][prop]) for prop in LIVE_PROPERTIES],
+            [
+                (prop, GENERAL_POOL_PROFILE["filesystem_properties"][prop])
+                for prop in LIVE_PROPERTIES
+            ],
         )
         self.assertEqual(options[0], ("recordsize", "128K"))
 
-    def test_volume_only_profile_yields_nothing(self):
-        profile = {
-            "applies_to": ["volume"],
-            "properties": {"volblocksize": "16K", "compression": "lz4"},
-        }
-        self.assertEqual(pool_filesystem_options(profile), [])
+    def test_pool_options_emit_curated_properties_in_canonical_order(self):
+        options = pool_options_for_profile(GENERAL_POOL_PROFILE)
+        self.assertEqual(options, [("autotrim", "on"), ("failmode", "wait")])
 
     def test_unknown_properties_skipped(self):
         profile = {
-            "applies_to": ["filesystem"],
-            "properties": {"recordsize": "128K", "bogus_prop": "x"},
+            "filesystem_properties": {"recordsize": "128K", "bogus_prop": "x"},
+            "pool_properties": {"autotrim": "on"},
         }
-        self.assertEqual(pool_filesystem_options(profile), [("recordsize", "128K")])
+        self.assertEqual(filesystem_options_for_profile(profile), [("recordsize", "128K")])
+        self.assertEqual(pool_options_for_profile(profile), [("autotrim", "on")])
 
     def test_none_or_empty_profile_yields_nothing(self):
-        self.assertEqual(pool_filesystem_options(None), [])
-        self.assertEqual(pool_filesystem_options({}), [])
+        self.assertEqual(filesystem_options_for_profile(None), [])
+        self.assertEqual(filesystem_options_for_profile({}), [])
+        self.assertEqual(pool_options_for_profile(None), [])
+        self.assertEqual(pool_options_for_profile({}), [])
 
 
 if __name__ == "__main__":

@@ -13,7 +13,8 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 from disk_repository import DiskInfo
-from pool_create import disk_eligibility, pool_filesystem_options
+from pool_create import disk_eligibility
+from pool_profiles import filesystem_options_for_profile, pool_options_for_profile
 from test_support import capture_logs, mock_gtk, requires_gi, temp_lock_dir
 
 pytestmark = requires_gi
@@ -60,9 +61,18 @@ def _eligible(disks, imported=None, importable=None):
 
 
 GENERAL_PROFILE = {
-    "description": "General-purpose mixed files.",
-    "applies_to": ["filesystem"],
-    "properties": {
+    "description": "General-purpose pool: trim on, balanced defaults.",
+    "blocksize": "recommended",
+    "pool_properties": {
+        "autotrim": "on",
+        "autoexpand": "off",
+        "autoreplace": "off",
+        "failmode": "wait",
+        "multihost": "off",
+        "listsnapshots": "off",
+        "delegation": "on",
+    },
+    "filesystem_properties": {
         "recordsize": "128K",
         "compression": "lz4",
         "atime": "off",
@@ -221,11 +231,13 @@ def _make_app(disks=None, topologies=None):
 
 
 def _expected_general_command():
-    """The exact argv the happy path should produce (general profile)."""
-    from feature_config import DEFAULT_WORKLOAD_PROFILES
+    """The exact argv the happy path should produce (general pool profile)."""
+    from feature_config import DEFAULT_POOL_PROFILES
 
     expected = ["zpool", "create", "-o", "ashift=12"]
-    for prop, value in pool_filesystem_options(DEFAULT_WORKLOAD_PROFILES["general"]):
+    for prop, value in pool_options_for_profile(DEFAULT_POOL_PROFILES["general"]):
+        expected += ["-o", f"{prop}={value}"]
+    for prop, value in filesystem_options_for_profile(DEFAULT_POOL_PROFILES["general"]):
         expected += ["-O", f"{prop}={value}"]
     expected += [
         "newpool",
@@ -372,11 +384,20 @@ class TestPureHelpers(unittest.TestCase):
 
     def test_recordsize_bytes(self):
         pcw = _import_wizard()
-        self.assertEqual(pcw._recordsize_bytes({"properties": {"recordsize": "8K"}}), 8192)
-        self.assertEqual(pcw._recordsize_bytes({"properties": {"recordsize": "1M"}}), 1048576)
-        self.assertEqual(pcw._recordsize_bytes({"properties": {"recordsize": "16K"}}), 16384)
-        self.assertEqual(pcw._recordsize_bytes({"properties": {}}), 128 * 1024)
-        self.assertEqual(pcw._recordsize_bytes({"properties": {"recordsize": "junk"}}), 128 * 1024)
+        self.assertEqual(
+            pcw._recordsize_bytes({"filesystem_properties": {"recordsize": "8K"}}), 8192
+        )
+        self.assertEqual(
+            pcw._recordsize_bytes({"filesystem_properties": {"recordsize": "1M"}}), 1048576
+        )
+        self.assertEqual(
+            pcw._recordsize_bytes({"filesystem_properties": {"recordsize": "16K"}}), 16384
+        )
+        self.assertEqual(pcw._recordsize_bytes({"filesystem_properties": {}}), 128 * 1024)
+        self.assertEqual(
+            pcw._recordsize_bytes({"filesystem_properties": {"recordsize": "junk"}}),
+            128 * 1024,
+        )
 
     def test_format_bytes(self):
         # format_bytes is shared with disk_repository (imported, not defined here).
@@ -454,14 +475,27 @@ class TestPureHelpers(unittest.TestCase):
 
     def test_settings_problems(self):
         pcw = _import_wizard()
-        state = _state(pcw, pool_name="newpool")
-        self.assertEqual(pcw._settings_problems(state, set()), [])
+        profiles = {"general": GENERAL_PROFILE}
+        state = _state(pcw, pool_name="newpool", profile_name="general")
+        self.assertEqual(pcw._settings_problems(state, set(), profiles), [])
         self.assertEqual(
-            pcw._settings_problems(state, {"newpool"}),
+            pcw._settings_problems(state, {"newpool"}, profiles),
             ["pool 'newpool' already exists (or is importable)"],
         )
         state.pool_name = "mirror"
-        self.assertTrue(pcw._settings_problems(state, set()))
+        self.assertTrue(pcw._settings_problems(state, set(), profiles))
+
+    def test_settings_problems_reject_invalid_profile(self):
+        pcw = _import_wizard()
+        broken = {
+            "blocksize": "weird",
+            "pool_properties": {"autotrim": "maybe"},
+            "filesystem_properties": {"volblocksize": "16K"},
+        }
+        state = _state(pcw, pool_name="newpool", profile_name="broken")
+        problems = pcw._settings_problems(state, set(), {"broken": broken})
+        self.assertEqual(len(problems), 3)
+        self.assertIn("unknown blocksize", problems[0])
 
     def test_review_problems_matrix(self):
         pcw = _import_wizard()
@@ -503,6 +537,20 @@ class TestPureHelpers(unittest.TestCase):
                 "create",
                 "-o",
                 "ashift=12",
+                "-o",
+                "autotrim=on",
+                "-o",
+                "autoexpand=off",
+                "-o",
+                "autoreplace=off",
+                "-o",
+                "failmode=wait",
+                "-o",
+                "multihost=off",
+                "-o",
+                "listsnapshots=off",
+                "-o",
+                "delegation=on",
                 "-O",
                 "recordsize=128K",
                 "-O",
@@ -534,6 +582,17 @@ class TestPureHelpers(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             pcw.build_wizard_command(state, {"general": GENERAL_PROFILE})
+
+    def test_profile_target_ashift_resolution(self):
+        pcw = _import_wizard()
+        resolve = pcw._profile_target_ashift
+        self.assertEqual(resolve({"blocksize": "recommended"}, 13), 13)
+        self.assertEqual(resolve({"blocksize": "recommended"}, None), None)
+        self.assertEqual(resolve({"blocksize": "auto"}, 13), None)
+        self.assertEqual(resolve({"blocksize": "4096 bytes"}, 13), 12)
+        self.assertEqual(resolve({"blocksize": "8192 bytes"}, None), 13)
+        self.assertEqual(resolve({}, 12), 12)  # missing key behaves as recommended
+        self.assertEqual(resolve({"blocksize": "bogus"}, 12), 12)  # unknown → recommendation
 
     def test_estimate_text(self):
         pcw = _import_wizard()
@@ -700,13 +759,14 @@ class _FakeCombo:
 class TestSettingsPageBlocksizeRecommendation(unittest.TestCase):
     """_refresh_settings probes disks and defaults the combo to the recommendation."""
 
-    def _settings(self, pcw, disks, repository=None):
+    def _settings(self, pcw, disks, repository=None, profile=None):
         """Build the settings page; returns (state, ashift_combo, refresh)."""
         combos = []
         factory = MagicMock(side_effect=lambda: combos.append(_FakeCombo()) or combos[-1])
         state = _state(pcw, disks=disks)
+        state.profile_name = "general"
         ctx = SimpleNamespace(
-            profiles={"general": GENERAL_PROFILE},
+            profiles={"general": profile if profile is not None else GENERAL_PROFILE},
             existing_names=set(),
             repository=repository if repository is not None else MagicMock(),
         )
@@ -727,7 +787,7 @@ class TestSettingsPageBlocksizeRecommendation(unittest.TestCase):
         self.assertEqual(state.ashift, 12)
         repository.get_device_label_ashift.assert_called()
         hinted = any(
-            "Recommended pool blocksize for these disks: 4096 bytes" in str(call)
+            "recommended pool blocksize for these disks: 4096 bytes" in str(call).lower()
             for call in pcw.Gtk.Label.return_value.set_text.call_args_list
         )
         self.assertTrue(hinted)
@@ -776,6 +836,53 @@ class TestSettingsPageBlocksizeRecommendation(unittest.TestCase):
         refresh()
         self.assertEqual(combo.active, 1)
         self.assertEqual(state.ashift, 9)
+
+    def test_explicit_profile_blocksize_wins_over_recommendation(self):
+        pcw = _import_wizard()
+        disks = [_disk("/dev/sda", physical_sector=512), _disk("/dev/sdb", physical_sector=512)]
+        repository = MagicMock()
+        repository.get_device_label_ashift.return_value = 13  # recommendation: 8192
+        profile = dict(GENERAL_PROFILE, blocksize="4096 bytes")
+        state, combo, refresh = self._settings(pcw, disks, repository, profile)
+
+        refresh()
+
+        self.assertEqual(combo.active, 2)  # "4096 bytes" from the profile
+        self.assertEqual(state.ashift, 12)
+
+    def test_auto_profile_blocksize_leaves_choice_to_zfs(self):
+        pcw = _import_wizard()
+        disks = [_disk("/dev/sda"), _disk("/dev/sdb")]
+        repository = MagicMock()
+        repository.get_device_label_ashift.return_value = None
+        profile = dict(GENERAL_PROFILE, blocksize="auto")
+        state, combo, refresh = self._settings(pcw, disks, repository, profile)
+
+        refresh()
+
+        self.assertEqual(combo.active, 0)  # "auto (let ZFS decide)"
+        self.assertIsNone(state.ashift)
+
+    def test_profile_change_reapplies_profile_blocksize(self):
+        pcw = _import_wizard()
+        disks = [_disk("/dev/sda"), _disk("/dev/sdb")]
+        repository = MagicMock()
+        repository.get_device_label_ashift.return_value = None
+        state, combo, refresh = self._settings(pcw, disks, repository)
+
+        refresh()
+        combo.active = 1  # user picks "512 bytes"
+        combo.fire("changed")
+        self.assertTrue(state.blocksize_user_set)
+
+        # Switching profiles clears the override: the profile's own
+        # blocksize (recommended here) applies again.
+        pcw._on_profile_changed(MagicMock(), state, lambda: None)
+        self.assertFalse(state.blocksize_user_set)
+
+        refresh()
+        self.assertEqual(combo.active, 2)
+        self.assertEqual(state.ashift, 12)
 
 
 class TestHandlerGuards(unittest.TestCase):
@@ -851,21 +958,21 @@ class TestHandlerGuards(unittest.TestCase):
             pass
         self.assertEqual(app.dataset_runner.steps, [])
 
-    def test_no_filesystem_profiles_bails(self):
+    def test_no_pool_profiles_bails(self):
         pcw = _import_wizard()
         app = _make_app()
         nc = MagicMock()
         nc.is_two_node.return_value = False
         with (
             patch.object(pcw, "node_config", nc),
-            patch.object(pcw, "get_workload_profiles", return_value={}),
+            patch.object(pcw, "get_pool_profiles", return_value={}),
             patch.object(pcw, "show_create_pool_wizard") as wiz,
             capture_logs() as logs,
         ):
             pcw.on_disks_create_pool(app)
         wiz.assert_not_called()
         self.assertTrue(
-            any("No filesystem workload profiles" in line for line in logs),
+            any("No pool profiles" in line for line in logs),
             logs,
         )
 

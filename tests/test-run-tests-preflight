@@ -301,7 +301,8 @@ EOF
     mydir="$saved_mydir"
     local ok=1
     [[ ${suite_requirements[tests/python/test_main.py]} == "gi " ]] || ok=0
-    [[ ${suite_requirements[tests/integration/test-zfs-send-receive-pools]} == "root zfs test-pools " ]] || ok=0
+    [[ ${suite_requirements[tests/integration/test-zfs-send-receive-pools]} \
+        == "root zfs test-pools " ]] || ok=0
     [[ ${#suite_requirements[@]} -eq 2 ]] || ok=0
     if [[ $ok == 1 ]]; then
         test_pass

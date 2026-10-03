@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from math import ceil
 
 from disk_repository import DiskInfo
-from workload_profiles import LIVE_PROPERTIES, properties_for_profile
 
 
 # Topology table: name -> (parity level, minimum member count).
@@ -383,16 +382,3 @@ def estimate_effective_capacity(
         effective_bytes=effective_bytes,
         efficiency_fraction=effective_bytes / raw_usable,
     )
-
-
-def pool_filesystem_options(profile: dict) -> list[tuple[str, str]]:
-    """Return ``[(prop, value), ...]`` of live filesystem properties for -O flags.
-
-    Creation-only (``volblocksize``, ``ashift``) and volume-only properties
-    are skipped; profiles that do not apply to filesystems yield []. Order is
-    canonical (LIVE_PROPERTIES order) so built commands are deterministic.
-    """
-    if not profile:
-        return []
-    applicable = properties_for_profile(profile, "filesystem")
-    return [(prop, applicable[prop]) for prop in LIVE_PROPERTIES if prop in applicable]

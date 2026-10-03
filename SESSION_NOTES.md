@@ -27,77 +27,25 @@ here. Pruned history remains recoverable from git.
   (`docs/site/…/gtk-gui/index.html`, untracked). Adding a page or changing
   docs anchors requires BOTH updating that test's `expected_pages` set and
   rebuilding the site (`cd docs && mkdocs build`), or the full suite fails.
+- bash EXIT traps under `set -e`: any failing statement inside an EXIT-trap
+  handler aborts the rest of the handler (run-tests' kill_pytest_tree had to
+  `|| true` the kill/wait pair). `append_exit_trap` in `bin/bashinit` is the
+  registry to use — never a bare `trap ... EXIT` (it silently clobbers any
+  earlier one). Also: bash 5.2 does not fire an EXIT trap armed inside a
+  bare `while read` loop that is itself a pipeline segment, and a `&`-
+  launched script is SIGINT-immune (POSIX async-subshell SIG_IGN) — use
+  SIGTERM to test interruption paths.
+- GTK dialog modules: `gi.require_version("Gtk", "3.0")` must run BEFORE
+  `from gi.repository import Gtk` — importing Gtk first pins Gdk 4.0 and
+  then `gui_helpers`' `gi.require_version("Gdk", "3.0")` raises. Every
+  dialog module follows the `import gi` → `require_version` → imports
+  order; new ones must too.
+- New gi-guarded python suites must be added to `tests/requirements.manifest`
+  (`gi tests/python/<suite>.py`) — `test_gui_infrastructure` audits manifest
+  ↔ guarded-suite equality and the FULL suite fails otherwise (affected
+  suites alone stay green).
 
 ## Active / parked threads
-
-- **Memory tab + tab reorder (2026-10-02) — implemented, affected suites
-  green; full suite pending; awaiting commit.** Sidebar order changed to
-  dashboard…logs, then Memory, then Disks/Pools/Datasets at the bottom
-  (`PAGE_BUILDERS` in zfsutilities_gui.py — a declarative list so order is
-  unit-tested). New Memory tab (`memory_page.py` + pure data layer
-  `memory_stats.py`): ARC/L2ARC/SLOG value grids, per-device tables from
-  `zpool iostat -v`, and Cairo-drawn rolling charts (`RollingChart` —
-  composition over subclassing Gtk.DrawingArea so it works under the test
-  GTK mocks; auto-scaled Y, dashed c_max reference, ~300-sample window).
-  Refresh interval spinner persists to `memory.refresh_seconds` (default 5 s),
-  timer runs only while visible (scrub-timer pattern). Capability-aware per
-  user feedback: all three sources probed per sample and degrade
-  independently (arcstats/zil/iostat), every kstat field optional ("—").
-  Verified tweety (Proxmox kmod 2.4.4): full arcstats+zil present but zero
-  pools → no-vdev notes are the real path there. zpool iostat human sizes
-  are base-1024 (verified vs `zpool list -Hp`). Note: under mock_gtk, all
-  `Gtk.Label()`/`Gtk.ListStore()` calls return ONE shared mock — page tests
-  give them side_effects for distinct instances (also avoids infinite walk
-  in `_reconcile_rows`). New log message: `INFO: Memory stats refreshed`
-  (zfsutilities_gui.on_refresh only — pools precedent, one home).
-  Follow-up fix (same day): device-table column widths now persist —
-  `_device_table()` takes a state_key and calls
-  `app._ui_state.bind_treeview()` (`memory_l2_view` / `memory_slog_view`),
-  the house pattern every other TreeView uses; also folds the tables into
-  View→Minimize Width. Verified restore end-to-end with a real
-  UIStateManager + GLib idle pump (saved widths applied, min-width clamp,
-  unsaved columns default). Note: `_do_save` skips unrealized TreeViews, so
-  the save half can't be exercised headless — covered instead by
-  test_gui_infrastructure's bind_treeview/_do_save tests.
-
-- **Close-warning truthfulness for surviving tasks (2026-10-02) — implemented,
-  affected suite green; full suite pending; awaiting commit.** User guidance:
-  don't warn on GUI close about scrubs (they survive), Dashboard/Pools info
-  recovers on restart, and "the profile runner will be gone." Verification:
-  scrub/ZFS-op exclusion and restart recovery were already implemented
-  (`_collect_abortable_tasks` since ≤0.99.0); the profile-runner claim is
-  confirmed for Run Now runs — GUI exit breaks the runner's stdout/stderr
-  pipes, so its echo (`profile_runner.py:290`) raises BrokenPipeError →
-  caught at `:312` → step rc=1 → run aborts (bash child EPIPEs too); cron
-  runs are unaffected. Two approved fixes shipped in `_collect_abortable_tasks`
-  (`zfsutilities_gui.py`): GUI-started **scrub profiles** no longer listed
-  (scrubs continue kernel-side; `scrub_state.json` queue resumes on restart;
-  new module helper `_profile_tab_type()` via `profile_manager.load_profile`,
-  "Scheduled: " prefix stripped; unknown type → still listed, conservative),
-  and **Surface Tests** no longer listed (firmware-driven, state file
-  recovers them). Non-scrub Run Now runs still warn — accurate, they abort.
-  gtk-gui.md "Closing the GUI" extended (also fixed its "Cancel" → "No";
-  dialog is YES_NO). Tests: filter test now patches `_profile_tab_type`;
-  three new cases (scrub-profile skip incl. Scheduled prefix-strip,
-  non-scrub/unknown kept, surface test filtered).
-
-- **Scrub Manager "As Of" column rename (2026-10-02) — implemented, full
-  suite green; awaiting commit.** User reported the Pools-page Scrub Manager
-  "Last Scrub" column showing paused/resumed timestamps. Root cause was
-  by-design: `parse_scrub_status()` puts the current scan line's timestamp
-  (in-progress-since / paused-since / finished-on / canceled-on /
-  resilvered-on) into `ScrubInfo.last_scrub`, displayed verbatim. User
-  decision: keep those per-state timestamps and relabel the column "As Of" —
-  no displayed value changes. `ScrubInfo.last_scrub` renamed to `as_of`
-  (field comment states the semantics); pools_page column title → "As Of".
-  Test gap closed: `test_paused` now asserts `as_of` (was unasserted — the
-  gap that let the ambiguity linger); new `test_refresh_shows_paused_scrub_date`
-  locks in the paused-since display; monospace test renamed. Docs: gtk-gui.md
-  Scrub Manager section (column list + As Of description, incl. the ZFS
-  artifact that after a resume the line reports the original start time, not
-  the resume moment); data-structures.md `as_of` row. The Dashboard's own
-  "Last Scrub" column is a separate column and was deliberately left
-  unchanged. mkdocs build clean.
 
 - **Zvol-snapshot-mount plan v3 (2026-10-01) — parked, NOT approved.** Plan
   written next to v1/v2 in
@@ -140,80 +88,90 @@ here. Pruned history remains recoverable from git.
   test-check-prerequisites, python/test_support.py}. Holding back: still
   0.0.x with releases every few days — expect breaking changes before 1.0.
 
-- **/tmp test-litter cleanup pass (2026-10-02).** Fixed the three
-  PREEXISTING.md entries about /tmp accumulation from test activity.
-  Key architectural addition: `append_exit_trap` in `bin/bashinit` — a
-  composable EXIT-trap registry (bash allows only one EXIT trap per shell;
-  bare `trap ... EXIT` registrations were silently clobbering each other:
-  zfslockmanager owned it, test-enroll-iscsi-pool clobbered it). Handlers
-  run in registration order, exit status is preserved ($? is restored
-  before each handler), and subshell semantics are explicit: the arming
-  embeds $BASHPID so an inherited arming is detected, the inherited list is
-  dropped, and only subshell-registered handlers run at subshell exit.
-  Gotchas learned the hard way (all documented in the bashinit comment):
-  (1) naive self-recognition folded `_run_exit_traps` into its own handler
-  list → infinite recursion at subshell exit → segfault; (2) `local x=$?`
-  must be the FIRST statement or $? is already clobbered; (3) bash 5.2
-  does not fire an EXIT trap armed inside a bare `while read` loop that is
-  itself a pipeline segment — brace the loop or register from file scope.
-  test-lib.sh now removes its per-PID log + mock dir at suite exit (failed
-  suites keep the log; path printed on stderr); several suites re-source
-  test-lib inside $(...) subshells, so registration is gated on
-  BASHPID=$$ (top-level shell only). Script-side fixes: repair-iscsi-luns
-  regenerate_manifest now rm+FATAL(exit 8) on empty/failed manifest
-  install (tests point the manifest at a temp dir; main-in-same-shell
-  means the new exit 8 would kill the suite otherwise); zfs-send-receive
-  holds file gets an append_exit_trap cleanup + non-deprecated mktemp;
-  zfsdelsnap removes checkagainst's fssalreadyprinted markers ($PPID and
-  $$ keys) at exit; pool_migrate_dialogs wraps the post-mkstemp section in
-  try/except (discard TSV, release lock if taken, WARN + re-raise), and
-  its tests route mkstemp into a TemporaryDirectory. test-logging unsets
-  ZFSUTILITIES_LOG_FILE/INHERIT/msg_level after each mktemp test (stale
-  exports were re-creating deleted files). New pre-existing entry logged:
-  run-tests py_tmpout interruption leak. Docs: testing.md cleanup +
-  append_exit_trap guidance; messages catalog rows for the two new
-  messages.
-  Acceptance check on the green full run turned up two residuals, both
-  traced: the single retained empty per-PID log came from my own new
-  exit-42 child-suite test (a suite exiting before test_summary is
-  treated as crashed, so retention is by design — the test now reaps
-  that log itself); the five new /tmp/tmp.* dirs are
-  test-safe-iscsi-save's _run_safe_iscsi_save helper leaking its
-  mktemp -d dir per call — logged as a new PREEXISTING.md entry (out
-  of scope). With those explained, the green-run delta is zero.
+## Migrate Pool step-structure docs (2026-10-03)
+  User asked why the plan snapshots the whole pool but replicates per
+  top-level dataset (NVME1's only top-level dataset is proxmox, so one
+  Replicate step carries the entire pool; root dataset never travels —
+  dest has its own root, holds no user data, properties don't travel).
+  Added an explanatory paragraph to the Migrate Pool section of
+  docs/docs/user-guide/gtk-gui.md right after the review-page paragraph
+  (single-home; no messages-manual duplication, no new headings/anchors).
+  Docs build clean (only the known PREEXISTING mkdocs-material banner);
+  docs suites green.
 
-## /tmp test-litter residuals cleared (2026-10-02, second pass)
-  Fixed the two PREEXISTING entries from the acceptance check — the
-  run-tests one turned out worse than documented: cleanup() aborted at
-  kill_pytest_tree on interruption, because the TERMed pytest makes
-  `wait` return 143 and run-tests' set -e kills the EXIT-trap handler
-  mid-function, leaking state_dir TOO (not just py_tmpout). Probes: bash
-  does run the EXIT trap on untrapped SIGTERM, but any failing statement
-  inside the handler aborts the rest under set -e. Fix: `|| true` on the
-  kill/wait pair, guarded py_tmpout removal in cleanup(), and the normal
-  path clears the variable after rm. Regression test extracts the REAL
-  kill_pytest_tree+cleanup and runs them under bash -eu with a live
-  `sleep 30` standing in for pytest (pre-fix simulation: rc=143, both
-  paths leaked). Verification gotcha: a `&`-launched run-tests is
-  SIGINT-immune (POSIX async-subshell SIG_IGN), so live interruption was
-  verified with SIGTERM mid-pytest — py_tmpout removed, zero net-new
-  /tmp/tmp.*, no pytest orphans. Also fixed:
-  test-safe-iscsi-save's _run_safe_iscsi_save rm -rf's its workdir while
-  preserving the runner's rc (callers assert on it); new workdir test
-  uses a private TMPDIR prefix inside the command substitution. Two more
-  cleanup() unit tests in test-run-tests-preflight via the existing
-  sed-extraction idiom (removal + bash -u unset tolerance). One new
-  PREEXISTING entry: safe-iscsi-save's
-  regenerate_expected_backstores_manifest has an unguarded mv -f (leaks
-  its tmpfile only if mv fails; theoretical under root).
+## Pool profiles for Create Pool + Migrate Pool (2026-10-03)
+  Implemented, all affected suites green; awaiting commit. The
+  workload-profile idiom extended to pool scope: named bundles
+  {blocksize, curated pool -o properties, root -O properties, notes} in
+  config key "pool_profiles" (migration v25→v26 seeds general/archival;
+  feature_config quintet + DEFAULT_POOL_PROFILES). New pure module
+  python/pool_profiles.py (resolve_blocksize sentinels: recommended/auto/
+  512|4096|8192 bytes → ashift 9/12/13; origin_profile() builds the
+  never-saved "Match origin pool" pseudo-profile; infra_vdev_classes() for
+  the not-recreated warning). zfs_repository.build_create_pool_command
+  gained pool_options=[(prop,value)] emitted as -o (validated against
+  POOL_PROPERTY_VALUES) + curated_pool_properties() reader. Create Pool
+  settings page: profile picker + blocksize pre-filled from profile
+  (switching profiles re-applies its blocksize unless user set it —
+  state.blocksize_user_set/blocksize_syncing guard against re-entrant
+  combo handlers); pool_create.pool_filesystem_options REMOVED
+  (superseded). Migrate Pool: "New pool settings" section with Match
+  origin default (origin ashift + curated props + root live props via
+  _apply_origin_defaults), topology radio defaults to origin shape,
+  both create-step call sites thread ashift + both option lists; create
+  steps now say "(raidz2, 4096-byte blocks)"; below-recommendation and
+  infra-vdev warnings in _migrate_warnings; post-cutover INFO reminder
+  to re-add infra vdevs. New pool_profile_dialogs.py manager/editor
+  (same built-in rules as workload profiles; pool props are combos from
+  allowed values + "(not set)", fs props free text) wired as Disks-page
+  "Advanced: Manage Pool Profiles…" (handler in disks_page.py per the
+  page-module convention; button registered with attr None = always
+  enabled, not in update_disks_button_sensitivity). Gotchas: gi import
+  order — `gi.require_version("Gtk", "3.0")` must precede
+  `from gi.repository import Gtk` or gui_helpers' Gdk pin fails;
+  TopologyNode requires ashift AND children positionally in tests.
+  PREEXISTING: ashift-picker entry CLOSED; pool-props and infra-vdev
+  entries NARROWED (curated-seven + root props now travel; non-curated
+  pool props still dropped; infra planning UI still absent); new entry
+  for python-modules.md's duplicate `### profile_dialogs.py` headings
+  (anchor collision). 5 entries remain open total. Full suite green after
+  adding test_pool_profile_dialogs to tests/requirements.manifest (gi audit
+  caught it — gotcha promoted above) and testing.md suite rows.
 
-## safe-iscsi-save manifest-install guard (2026-10-02, third pass)
-  Closed the PREEXISTING "temp-file leak edge" entry: the mv -f in
-  regenerate_expected_backstores_manifest is now guarded (rm tmpfile,
-  FATAL: safe-iscsi-save: Could not install regenerated manifest at ...,
-  exit 1 — this script's only failure code, unlike repair-iscsi-luns's
-  exit 8). Empty-manifest branch unchanged (WARN + rm, non-fatal).
-  Test uses a read-only manifest subdir (555) so the -f gate passes but
-  mv fails, plus the private-TMPDIR idiom to make the script's tmpfile
-  leak visible under the test scratch dir. Catalog row added next to the
-  other regenerate rows.
+## Wrap-up cycle 2026-10-03 (pre-commit steps 1-4)
+  Step 1 (PREEXISTING resolution): preflight long line wrapped;
+  python-modules.md duplicate `### profile_dialogs.py` heading
+  disambiguated (schedule add/recall dialogs) — both entries removed.
+  Migration-fidelity gaps closed: (a) non-default pool properties now
+  travel — new zfs_repository.build_pool_set_command() +
+  pool_properties_with_source() reader (`zpool get -H -o
+  property,value,source all`), pool_profiles.replayable_pool_properties()
+  (SOURCE=local, minus feature@*, ashift/altroot/cachefile/version, minus
+  curated seven so saved profiles are never clobbered); Migrate dialog
+  gains a "Non-default pool properties" frame (CheckButton + wrapped
+  value label per prop, explanatory hint per user request; rebuilt on
+  source change via _rebuild_props_section), MigrationRequest.
+  replay_pool_props, plan kind STEP_REAPPLY_POOL_PROPS (after
+  import-rename, before holds reapply, both modes), executor steps
+  fatal=False (data already migrated; refused prop logged not fatal).
+  (b) holding-mode silent absorption fixed — pool_profiles.
+  data_vdev_leaves(); _source_pool_data_member_disks() drives preselect;
+  _holding_member_rows() labels ex-infra rows "former <cls> vdev member"
+  (still eligible; ticking = deliberate choice); holding-mode infra
+  warning extended. Infra-vdev PLANNING itself deferred as a future
+  objective (user decision 2026-10-03) — PREEXISTING entry rewritten as
+  such; 2 entries remain (mkdocs/Zensical + the future objective).
+  Step 2 (standards): ruff check+format clean python/ + tests/python/;
+  shellcheck clean via the documented command (.shellcheckrc already
+  excludes bin/watchall — a naive `for f in bin/*` loop false-positives
+  on it); manual review of the whole uncommitted python changeset found
+  no violations, no new pre-existing issues. Step 3 (tests): coverage
+  gap found and filled — build_create_pool_command pool_options had no
+  direct tests (golden + two ValueError cases); replay/data-leaves/
+  member-rows/origin-defaults/warnings/build-steps tests added across
+  four suites; apply-holds script body says reapplyholds_apply (NOT
+  replayholds_apply) — docstring-name trap. Full suite: 77 suites
+  green, 1 skip = soak suite by design. Step 4 (docs): messages index
+  row for the new property-read WARN; gtk-gui Migrate Pool paragraphs
+  (checkbox semantics + unchecked ex-infra disks); python-modules and
+  data-structures rows for the new functions; integrity suite green.

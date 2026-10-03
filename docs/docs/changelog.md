@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.113.0
+
+*Released 2026-10-03*
+
+### Added
+
+- **Pool profiles** — the pool-scope counterpart of workload profiles:
+  named bundles of the blocksize (`recommended`/`auto`/`512`/`4096`/
+  `8192` bytes), the curated live-settable pool properties (written
+  explicitly as `-o` so a new pool never depends on drifting `zpool
+  create` defaults), and the pool root's filesystem properties (`-O`,
+  workload-profile vocabulary). Create Pool and Migrate Pool both apply
+  them; the new Disks-page **Advanced: Manage Pool Profiles…** dialog
+  edits them. Two built-ins (`general`, `archival`) are seeded by config
+  migration v26 and follow the workload-profile rules: openable as
+  templates, never overwritten or deleted; pool-property values are
+  picked from their allowed values, so an invalid value cannot be
+  entered.
+
+- **Migrate Pool "Match origin pool" settings** — the new-pool settings
+  section derives from the source pool by default: its effective
+  blocksize, curated pool properties, and root live filesystem
+  properties (all carried to the new pool as explicit `-o`/`-O` create
+  options), with the topology radio defaulting to the origin's data-vdev
+  shape and the create steps naming the chosen shape and blocksize.
+  Every value stays editable — above all the blocksize, the one setting
+  that exists for the sake of which Migrate Pool offers the section,
+  because it cannot be changed on a live pool.
+
+- **Non-default pool-property replay in Migrate Pool** — pool properties
+  set away from their defaults beyond the curated seven (`comment`,
+  `compatibility`, `dedup_table_quota`, …) are captured with their
+  SOURCE column when the dialog opens, offered as checkboxes (the dialog
+  explains what checking means), listed in the reviewed plan, and
+  re-applied with one non-fatal `zpool set` per checked property right
+  after the migrated pool is imported under the source pool's name — by
+  then the data is already migrated, so a refused property is logged and
+  skipped rather than failing the cutover. The curated seven stay with
+  the chosen profile, so a deliberately chosen saved profile is never
+  clobbered by origin values.
+
+### Fixed
+
+- **Holding-mode rebuild no longer absorbs infra-vdev disks** — the
+  rebuild-disk picker previously pre-selected every leaf member of the
+  source pool, silently turning former special/log/cache/spare disks
+  into data vdevs of the rebuilt pool. Only true data members are
+  pre-selected now; former infra-vdev disks are still listed (freed by
+  the cutover destroy) but start unchecked, each labeled with the class
+  it served, so adding one to the data vdevs is a deliberate checkbox
+  tick rather than a silent default.
+
 ## 0.112.0
 
 *Released 2026-10-02*

@@ -521,6 +521,92 @@ class TestWorkloadProfiles(unittest.TestCase):
             self.assertNotIn("custom", config["workload_profiles"])
 
 
+class TestPoolProfiles(unittest.TestCase):
+    """Pool profile config helpers."""
+
+    def test_get_pool_profiles_seeds_defaults(self):
+        config = {}
+        profiles = feature_config.get_pool_profiles(config)
+        self.assertIn("general", profiles)
+        self.assertIn("archival", profiles)
+        self.assertEqual(len(profiles), 2)
+
+    def test_seeded_profiles_pass_validation(self):
+        from pool_profiles import validate_profile
+
+        for profile in feature_config.get_pool_profiles({}).values():
+            self.assertEqual(validate_profile(profile), [])
+
+    def test_get_pool_profiles_preserves_user_edits(self):
+        config = {
+            "pool_profiles": {
+                "general": {
+                    "description": "Overridden",
+                    "blocksize": "4096 bytes",
+                    "pool_properties": {"autotrim": "off"},
+                    "filesystem_properties": {"compression": "zstd"},
+                    "notes": "User override",
+                }
+            }
+        }
+        profiles = feature_config.get_pool_profiles(config)
+        self.assertEqual(profiles["general"]["description"], "Overridden")
+        self.assertEqual(profiles["general"]["blocksize"], "4096 bytes")
+
+    def test_get_pool_profiles_returns_deep_copy(self):
+        config = {}
+        profiles = feature_config.get_pool_profiles(config)
+        profiles["general"]["description"] = "mutated"
+        self.assertNotEqual(
+            feature_config.get_pool_profiles(config)["general"]["description"],
+            "mutated",
+        )
+
+    def test_save_pool_profiles(self):
+        with temp_config_dir():
+            config = {}
+            feature_config.save_pool_profiles(config, {"custom": {}})
+            self.assertIn("custom", config["pool_profiles"])
+
+    def test_save_pool_profiles_rejects_non_dict(self):
+        with temp_config_dir():
+            config = {}
+            with self.assertRaises(TypeError):
+                feature_config.save_pool_profiles(config, ["not", "a", "dict"])
+
+    def test_delete_pool_profile(self):
+        with temp_config_dir():
+            config = {}
+            feature_config.get_pool_profiles(config)
+            feature_config.save_pool_profiles(
+                config, {**feature_config.get_pool_profiles(config), "custom": {}}
+            )
+            self.assertTrue(feature_config.delete_pool_profile(config, "custom"))
+            self.assertFalse(feature_config.delete_pool_profile(config, "custom"))
+
+    def test_builtin_pool_profiles_are_immutable(self):
+        self.assertTrue(feature_config.is_builtin_pool_profile("general"))
+        self.assertTrue(feature_config.is_builtin_pool_profile("archival"))
+        self.assertFalse(feature_config.is_builtin_pool_profile("custom"))
+
+    def test_delete_builtin_pool_profile_is_refused(self):
+        with temp_config_dir():
+            config = {}
+            feature_config.get_pool_profiles(config)
+            self.assertFalse(feature_config.delete_pool_profile(config, "general"))
+            self.assertIn("general", feature_config.get_pool_profiles(config))
+
+    def test_reset_pool_profiles(self):
+        with temp_config_dir():
+            config = {}
+            feature_config.get_pool_profiles(config)
+            feature_config.save_pool_profiles(config, {"custom": {"description": "x"}})
+            feature_config.reset_pool_profiles(config)
+            self.assertIn("general", config["pool_profiles"])
+            self.assertIn("archival", config["pool_profiles"])
+            self.assertNotIn("custom", config["pool_profiles"])
+
+
 class TestComputeDestinationRoot(unittest.TestCase):
     """Checkagainst destination-root helper."""
 

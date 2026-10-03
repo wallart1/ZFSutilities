@@ -1464,7 +1464,7 @@ GUI Create Pool wizard (storage host only); offers registry, iSCSI, and Proxmox 
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
-| `WARN: No filesystem workload profiles configured` | No filesystem workload profiles exist, so the wizard cannot proceed | Wizard aborted before opening |
+| `WARN: No pool profiles configured` | No pool profiles exist in the config, so the wizard cannot proceed | Wizard aborted before opening; use Advanced: Manage Pool Profiles on the Disks page |
 | `INFO: Added '...' to pool registry (unsaved)` | The register-pool offer was accepted and the pool appended to the known list | Save in the Pools tab to persist |
 | `WARN: Pool creation is available only on the storage host` | Two-node gate — invoked on the compute node | Action aborted |
 | `WARN: Dataset runner not available` / `A dataset action is already running` | Runner missing / busy guard | Action aborted |
@@ -1513,6 +1513,9 @@ GUI Migrate Pool wizard (storage host only): copy phase, then a destructive cuto
 | `WARN: Dataset runner not available` / `A dataset action is already running` | Runner missing / busy guard | Action aborted |
 | `WARN: No imported pools to migrate` | No imported pools found | Action aborted |
 | `WARN: Could not list datasets of pool '...': ...` | Per-pool dataset listing failed during setup | Continue with an empty list for that pool |
+| `WARN: Could not read pool properties of '...': ...` | The curated pool-property read for the origin-derived defaults failed | The "Match origin pool" pseudo-profile falls back to empty pool properties; the wizard stays usable |
+| `WARN: Could not read root dataset properties of '...': ...` | The origin root dataset's live-property read failed | The "Match origin pool" pseudo-profile falls back to empty filesystem properties; the wizard stays usable |
+| `WARN: Could not read the non-default pool properties of '...': ...` | The SOURCE-aware pool-property read for the replay list failed | The replay checkbox list is empty; set any such properties manually after the cutover |
 | `WARN: Could not scan importable pools: ...` | The importable-devices scan failed during eligibility | Continue with an empty map |
 | `WARN: Migrate Pool aborted for '...': pool changed after the review (...)` | Safety gate — the live dataset layout differs from the reviewed plan before copy starts | Aborted; re-review the plan; nothing runs |
 | `INFO: Migrate pool cancelled for ...` | The copy phase was cancelled | Lock released; holds file discarded; refresh |
@@ -1525,10 +1528,21 @@ GUI Migrate Pool wizard (storage host only): copy phase, then a destructive cuto
 | `INFO: Migrate pool cutover cancelled for ...` | The cutover phase was cancelled mid-run | Holds-preservation info logged next |
 | `WARN: Migrate pool cutover failed for '...' (rc=...) — the pool may be left exported; investigate before retrying` | The cutover phase exited non-zero | Holds file preserved; investigate the export state before retrying |
 | `INFO: Pool '...' migrated successfully (mode: ...)` | Final success | Holds file discarded; iSCSI repair or Proxmox offer follows |
+| `INFO: Reminder: pool '...' had ... vdev(s) before the migration and the new pool does not; re-add them with Add Infrastructure Vdev` | The source pool had infrastructure vdevs (special/log/cache/spare), which are never recreated by the migration | Re-add them after the cutover with Add Infrastructure Vdev (and remove the old ones from the source disks if they were reused) |
 | `INFO: iSCSI LUN re-registration for '...' cancelled` | The post-migration `repair-iscsi-luns` step was cancelled (iSCSI-managed pool) | Refresh; the Proxmox offer still follows |
 | `WARN: iSCSI LUN re-registration for '...' failed (rc=...)` | The repair step exited non-zero | Refresh; the Proxmox offer still follows |
 | `INFO: iSCSI LUNs re-registered for '...'` | The repair step succeeded for an iSCSI-managed pool | Refresh; the Proxmox offer follows |
 | `INFO: Pool '...' is not enrolled in two-node iSCSI, so VM disks on it are not available over iSCSI. Manual enrollment steps:` | Two-node mode but the pool is not iSCSI-managed | Manual enrollment instructions follow |
+
+### [pool_profile_dialogs](../commands-and-modules/python-modules.md#pool_profile_dialogspy)
+
+Pool-profile manager and editor dialogs (Advanced: Manage Pool Profiles on the Disks page). Pool profiles bundle the creation-time pool shape — blocksize, curated pool properties, and root filesystem properties — for Create Pool and Migrate Pool.
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `WARN: Select a pool profile to edit` / `WARN: Select a pool profile to delete` | No pool-profile row selected | Action aborted |
+| `WARN: Pool profile ... no longer exists` | The selected name vanished from the saved profiles | Edit aborted; list refreshed |
+| `WARN: Pool profile '...' is built in and cannot be deleted` | Built-in pool-profile delete guard | Delete aborted |
 
 ### [zfs_repository](../commands-and-modules/python-modules.md#zfs_repositorypy)
 

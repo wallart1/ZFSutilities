@@ -30,6 +30,7 @@ from zfs_repository import (
     build_create_pool_command,
     build_detach_command,
     build_migration_send_receive_command,
+    build_pool_set_command,
     build_release_holds_command,
     build_replace_command,
     is_dataset_encrypted,
@@ -190,6 +191,39 @@ class TestZfsRepositoryReads(unittest.TestCase):
         repo = ZfsRepository(sudo=False)
         repo._run = lambda *a, **k: result
         self.assertEqual(repo.pool_get_all("tank"), "")
+
+    def test_pool_properties_with_source_parses_value_and_source(self):
+        stdout = (
+            "size\t10T\t-\n"
+            "comment\toffsite copy\tlocal\n"
+            "autotrim\toff\tdefault\n"
+            "feature@encryption\tenabled\tlocal\n"
+        )
+        repo = self._repo(stdout)
+        props = repo.pool_properties_with_source("tank")
+        self.assertEqual(
+            props,
+            {
+                "size": ("10T", "-"),
+                "comment": ("offsite copy", "local"),
+                "autotrim": ("off", "default"),
+                "feature@encryption": ("enabled", "local"),
+            },
+        )
+
+    def test_pool_properties_with_source_ignores_short_lines(self):
+        stdout = "size\t10T\ncomment\toffsite\tlocal\n\n"
+        repo = self._repo(stdout)
+        props = repo.pool_properties_with_source("tank")
+        self.assertEqual(props, {"comment": ("offsite", "local")})
+
+    def test_pool_properties_with_source_raises_on_subprocess_error(self):
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, "zpool get")
+        )
+        with self.assertRaises(subprocess.CalledProcessError):
+            repo.pool_properties_with_source("tank")
 
     def test_get_clones_reads_clones_property(self):
         repo = self._repo("tank/data/clone1\n")
@@ -630,6 +664,28 @@ class TestBuildCreatePoolCommand(unittest.TestCase):
         cmd = build_create_pool_command("backup", "raidz2", paths, ashift=12, options=options)
         golden.check(self, cmd)
 
+    def test_pool_options_emit_curated_dash_o_flags(self):
+        paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b")]
+        cmd = build_create_pool_command(
+            "backup",
+            "mirror",
+            paths,
+            ashift=12,
+            options=[("recordsize", "1M")],
+            pool_options=[("autotrim", "on"), ("failmode", "continue")],
+        )
+        golden.check(self, cmd)
+
+    def test_rejects_unknown_pool_property(self):
+        paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b")]
+        with self.assertRaises(ValueError):
+            build_create_pool_command("tank", "mirror", paths, pool_options=[("dedupditto", "1")])
+
+    def test_rejects_bad_pool_property_value(self):
+        paths = [f"/dev/disk/by-id/ata-{d}" for d in ("a", "b")]
+        with self.assertRaises(ValueError):
+            build_create_pool_command("tank", "mirror", paths, pool_options=[("autotrim", "1")])
+
     def test_defaults_emit_no_ashift_or_options(self):
         paths = ["/dev/disk/by-id/ata-X", "/dev/disk/by-id/ata-Y"]
         cmd = build_create_pool_command("tank", "mirror", paths, ashift=None, options=None)
@@ -896,6 +952,31 @@ class TestBuildDetachCommand(unittest.TestCase):
     def test_rejects_empty_pool_name(self):
         with self.assertRaises(ValueError):
             build_detach_command("", "/dev/disk/by-id/ata-X")
+
+
+class TestBuildPoolSetCommand(unittest.TestCase):
+    """build_pool_set_command produces exact, validated zpool set argv."""
+
+    def test_exact_argv(self):
+        cmd = build_pool_set_command("tank", "comment", "offsite copy")
+        golden.check(self, cmd)
+
+    def test_argv_with_containing_spaces_value(self):
+        cmd = build_pool_set_command("tank", "compatibility", "grand-legacy")
+        golden.check(self, cmd)
+
+    def test_rejects_empty_pool(self):
+        with self.assertRaises(ValueError):
+            build_pool_set_command("", "comment", "x")
+
+    def test_rejects_invalid_property_name(self):
+        for prop in ("", "com=ment", "com ment"):
+            with self.assertRaises(ValueError):
+                build_pool_set_command("tank", prop, "x")
+
+    def test_rejects_empty_value(self):
+        with self.assertRaises(ValueError):
+            build_pool_set_command("tank", "comment", "")
 
 
 class TestBuildHoldsCommands(unittest.TestCase):

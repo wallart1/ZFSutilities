@@ -78,6 +78,8 @@ the GUI tabs and the bash scripts.
 | `get_retention()` / `save_retention()`                                       | Per-pool retention policies                                     |
 | `get_workload_profiles()` / `save_workload_profiles()`                       | Workload profile config                                         |
 | `delete_workload_profile()` / `reset_workload_profiles()`                    | Remove/reset workload profiles                                  |
+| `get_pool_profiles()` / `save_pool_profiles()`                               | Pool profile config (seeded on first read)                      |
+| `delete_pool_profile()` / `reset_pool_profiles()`                            | Remove/reset pool profiles (built-ins guarded)                  |
 | `get_archive_path()` / `save_archive_path()`                                 | Offsite archive path                                            |
 | `get_prune_label()` / `save_prune_label()`                                   | Global retention prune label                                    |
 | `get_prune_pools_order()` / `save_prune_pools_order()`                       | Retention Prune pool order                                      |
@@ -98,7 +100,7 @@ the GUI tabs and the bash scripts.
 
 | Structure                                            | Reference                                                                              |
 | ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| JSON config feature sections                         | [backup/offsite/restore/pools/retention/checkagainst/scrub/workload_profiles][ds-json] |
+| JSON config feature sections                         | [backup/offsite/restore/pools/retention/checkagainst/scrub/workload_profiles/pool_profiles][ds-json] |
 | Snapshot name persistence and one-minute reservation | [Snapshot name persistence][ds-snapfile]                                               |
 
 ---
@@ -107,7 +109,9 @@ the GUI tabs and the bash scripts.
 
 Pure-logic workload profile helpers used by the Datasets tab Apply Profile workflow.
 Contains no GTK code and no direct subprocess calls; all ZFS I/O is delegated to
-``ZfsRepository`` callers.
+``ZfsRepository`` callers. Dataset-scope only — the pool-scope counterparts
+(blocksize/ashift, curated pool properties, root `-O` properties) live in
+`pool_profiles.py`.
 
 **Key constants:**
 
@@ -301,7 +305,7 @@ and tests easy to mock.
 | `loop_detach(loop_dev)`                  | Detach a loop device (`losetup -d`); returns success/failure                                                                                           |
 | `loop_partitions(loop_dev)`              | Parse `lsblk --json` into `LoopPartition` entries (partitions, or the bare device when there is no partition table)                                    |
 | `device_mountpoint(device)`              | Return the mountpoint a block device is mounted at, or `None` (`findmnt`)                                                                              |
-| `build_create_pool_command()`            | Pure `zpool create` argv builder (by-id paths, topology minimums)                                                                                      |
+| `build_create_pool_command()`            | Pure `zpool create` argv builder (by-id paths, topology minimums, ashift, `-O` dataset and `-o` pool options from a pool profile)                       |
 | `build_add_vdev_command()`               | Pure `zpool add` argv builder for data and special/log/cache vdevs                                                                                     |
 | `build_attach_command()`                 | Pure `zpool attach` argv builder (mirror grow / RAIDZ expansion)                                                                                       |
 | `build_replace_command()`                | Pure `zpool replace` argv builder                                                                                                                      |
@@ -310,6 +314,7 @@ and tests easy to mock.
 | `build_migration_send_receive_command()` | Pure `bash -c` argv sourcing `zfs-migrate-send` for a resumable, pv-instrumented migration copy (optional `rate_limit` for `pv -L`; optional `from_snap` switches the send to an incremental `-RIw` catch-up) |
 | `build_pool_export_command()`            | Pure `zpool export` argv builder                                                                                                                       |
 | `build_pool_import_rename_command()`     | Pure `zpool import <temp> <name>` argv builder; the rename is permanent (written to the pool label), so later imports use the plain one-name form     |
+| `build_pool_set_command()`               | Pure `zpool set` argv builder for one pool property (non-default property replay after a migration import-rename)                                      |
 | `build_pool_destroy_command()`           | Pure `zpool destroy` argv builder (holding-mode migration only)                                                                                        |
 | `build_destroy_dataset_command()`        | Pure `zfs destroy -r` argv builder for dropping migration copies                                                                                       |
 | `build_capture_holds_command()`          | Pure `bash -c` argv sourcing `zfsreapplyholds` to capture all snapshot holds under a dataset to a TSV (runs no_lock — the executor holds the pool write lock) |
@@ -462,14 +467,12 @@ create` argv is built by `zfs_repository.build_create_pool_command()`.
 | `validate_pool_name()`          | Name syntax, reserved words, length, and collision checks                                                                                        |
 | `recommend_ashift()`            | Recommended pool blocksize (ashift): defaults to 12 (4096 bytes); prior-pool label or reported-sector evidence can only raise it, never lower it |
 | `estimate_effective_capacity()` | Effective capacity estimator for redundancy layouts                                                                                              |
-| `pool_filesystem_options()`     | `-O` filesystem properties from a workload profile for the pool root                                                                             |
 
 **Called modules / imported helpers:**
 
 | Module              | Purpose in this module                      |
 | ------------------- | ------------------------------------------- |
 | `disk_repository`   | `DiskInfo`                                  |
-| `workload_profiles` | `LIVE_PROPERTIES`, `properties_for_profile` |
 
 ---
 
@@ -533,7 +536,10 @@ never travel in send streams, so the plan also captures the source pool's
 holds after the outward verify step and reapplies them once the migrated pool
 carries the source pool's name again; in holding mode a release step runs
 after capture and before the source destroy (held snapshots cannot be
-destroyed, so `zpool destroy` would fail while any hold remains).
+destroyed, so `zpool destroy` would fail while any hold remains). When the
+user kept non-default pool properties checked, the plan also gains a
+reapply step right after the import-rename that replays them with
+`zpool set` (`STEP_REAPPLY_POOL_PROPS`).
 
 **Key functions:**
 
@@ -545,7 +551,7 @@ destroyed, so `zpool destroy` would fail while any hold remains).
 | `vmids_from_zvols()`             | Map Proxmox zvol names (`vm-<id>-disk-<n>`) to `{vmid: zvols}` for the running-VM check                                    |
 | `generate_temp_pool_name()`      | Valid unused temporary pool name (`<source>_mig`, `_mig2`, …)                                                              |
 | `holding_migration_namespace()`  | Reserved holding-pool dataset namespace (`migrate_<source>`) so holding copies can never collide with backup/offsite paths |
-| `plan_migration_steps()`         | Ordered `MigrationStep` plan for new-disks or holding-pool mode, including the cutover catch-up and hold capture/release/reapply steps |
+| `plan_migration_steps()`         | Ordered `MigrationStep` plan for new-disks or holding-pool mode, including the cutover catch-up, hold capture/release/reapply, and pool-property replay steps |
 | `check_destination_capacity()`   | Refuse/warn when destination free space is short of source allocated                                                       |
 | `verify_trees_match()`           | Per-dataset `used`-bytes comparison between source and migrated trees                                                      |
 
@@ -582,10 +588,12 @@ so only writes made after the cutover snapshot — the seconds between it
 and the export — can be lost. Then the source pool is exported and the
 migrated pool is re-imported under the source pool's name
 (new disks) or destroy/rebuild/copy-back/swap (holding pool). In holding
-mode the user chooses the rebuild disks: the source pool's members
+mode the user chooses the rebuild disks: the source pool's data members
 (pre-selected, since the cutover destroy frees them) plus any eligible
 unused disks, so the new topology may use the old disks, new disks, or any
-mix; disks left unselected simply stay free. Holding-mode
+mix; former infra-vdev members are listed but start unchecked (each labeled
+with the class it served), so one joins the data vdevs only by a deliberate
+tick; disks left unselected simply stay free. Holding-mode
 copies land under `<holding>/migrate_<source>/<dataset>` and the cutover
 removes that namespace with a single destroy. Aborting before the cutover
 loses nothing (the source pool is untouched); after the source destroy in
@@ -609,6 +617,15 @@ cutover failure or cancel the TSV is kept and its path logged with the
 manual `zfsreapplyholds --apply` command; holds placed on the source while a
 migration is running (after the capture step) are not preserved.
 
+Non-default pool properties survive the migration too. When the dialog
+opens, the source pool's properties are read with their SOURCE column and
+filtered (`pool_profiles.replayable_pool_properties`) down to the locally
+set ones outside the curated profile set; the dialog shows each as a
+checkbox (all checked by default), and the cutover replays the checked
+subset with one non-fatal `zpool set` step per property, right after the
+import-rename — by then the data is already migrated, so a refused property
+is logged and skipped rather than failing the cutover.
+
 **Key functions:**
 
 | Function                     | Purpose                                                                                  |
@@ -616,7 +633,9 @@ migration is running (after the capture step) are not preserved.
 | `show_migrate_pool_dialog()` | Run the dialog; returns a `MigrationRequest` or None                                     |
 | `build_request()`            | Build the execution request from a validated dialog state                                |
 | `build_migration_steps()`    | Build the (copy, cutover) `BashStep` lists for a request                                 |
+| `_apply_origin_defaults()`   | Derive the Match-origin pseudo-profile, data-vdev topology default, and replayable-property set from the source pool |
 | `_source_layout_changed()`   | Compare the request's dataset list against a fresh pool listing; abort reason when stale (checked at start and again at cutover) |
+| `_source_pool_data_member_disks()` | Source-pool data-vdev member disks only (infra-vdev leaves excluded; drives the holding-mode pre-selection) |
 | `_running_vms_on_pool()`     | Map the pool's zvols to running Proxmox VMs (`qm status` locally or over SSH on the compute host; failures are non-fatal) |
 | `_show_running_vms_warning()` | y/n warning dialog listing running VMs and their disks; declines defer the cutover     |
 | `on_disks_migrate_pool()`    | Disks-page action: gates, data gathering, two-phase runner execution                     |
@@ -627,8 +646,85 @@ migration is running (after the capture step) are not preserved.
 | --------------------- | ------------------------------------------------------------- |
 | `pool_migrate`        | Step planning, capacity checks, snapshot/temp-name generation |
 | `pool_growth_dialogs` | Shared disk picker and typed-entry handlers                   |
+| `pool_profiles`       | Origin-derived defaults, blocksize labels, option builders    |
 | `zfs_repository`      | Migration argv builders                                       |
 | `zfs_lock_manager`    | Source-pool write lock across both phases                     |
+
+---
+
+### `pool_profiles.py`
+
+Pure-logic pool-profile helpers — the pool-scope counterpart of
+`workload_profiles.py`. A pool profile bundles the settings that shape a pool
+at creation: the blocksize (`ashift`, creation-only), the curated settable
+pool properties written explicitly as `-o` (so pools never depend on drifting
+`zpool create` defaults), and the root filesystem's `-O` properties. Used by
+the Create Pool wizard and Migrate Pool (where the default is the
+origin-derived "Match origin pool" pseudo-profile). No GTK and no direct
+subprocess calls.
+
+**Key constants:**
+
+| Constant               | Purpose                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
+| `POOL_PROPERTIES`      | The curated pool properties written as `-o` at create (autotrim, autoexpand, autoreplace, failmode, multihost, listsnapshots, delegation) |
+| `POOL_PROPERTY_VALUES` | Allowed literal values per curated property (editors offer these as choices)                     |
+| `BLOCKSIZE_CHOICES`    | Profile blocksize vocabulary: `recommended`, `auto`, `512 bytes`, `4096 bytes`, `8192 bytes`     |
+| `ASHIFT_BY_LABEL` / `LABEL_BY_ASHIFT` | Translate between choice labels and ashift values (9/12/13)                      |
+| `MATCH_ORIGIN_PROFILE` | Name of the Migrate Pool pseudo-profile (never saved; resolved from the origin pool at open)     |
+
+**Key functions:**
+
+| Function                             | Purpose                                                                                                          |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `pool_properties_for_profile()`      | Curated pool properties from a profile dict                                                                      |
+| `pool_options_for_profile()`         | The same as ordered `-o` `(property, value)` pairs for `build_create_pool_command`                               |
+| `filesystem_properties_for_profile()` / `filesystem_options_for_profile()` | Root `-O` properties, as dict / ordered pairs                                     |
+| `resolve_blocksize()`                | Map a profile blocksize choice to an ashift (`recommended` resolves through `recommend_ashift`; `auto` stays unset so ZFS decides) |
+| `blocksize_label_for_ashift()`       | Human label for an ashift (None → `auto`)                                                                        |
+| `blocksize_below_recommendation()`   | Whether a chosen ashift is below the disk recommendation (drives the Migrate Pool warning)                       |
+| `validate_profile()`                 | Structural validation of a profile dict (used by both wizards and the editor)                                    |
+| `origin_profile()`                   | Build the "Match origin pool" pseudo-profile from the origin pool's ashift, curated pool properties, and root live properties |
+| `infra_vdev_classes()`               | special/log/cache/spare classes in a topology tree (drives the not-recreated warning and post-cutover reminder)   |
+| `data_vdev_leaves()`                 | Data-vdev leaf paths of a topology tree, infra classes excluded (drives the holding-mode pre-selection)          |
+| `replayable_pool_properties()`       | Filter `zpool get all` `{prop: (value, source)}` results down to the locally set, non-curated properties Migrate Pool replays with `zpool set` |
+
+**Called modules / imported helpers:** none (stdlib only).
+
+**Data structures consumed / produced:**
+
+| Structure         | Reference                          |
+| ----------------- | ---------------------------------- |
+| Pool profile objects | [pool_profiles][ds-poolprofiles] |
+
+---
+
+### `pool_profile_dialogs.py`
+
+GTK manager and editor dialogs for pool profiles (Advanced: Manage Pool
+Profiles on the Disks page), mirroring the workload-profile dialog idiom:
+seeded built-ins are immutable (delete is refused; edits must be saved under
+a new name or over an existing custom profile with a Yes/No confirm), and
+Reset to Defaults discards custom profiles and restores the seeds. Pool
+properties are picked from their allowed values plus "(not set)"; filesystem
+properties are free text with the workload-profile vocabulary.
+
+**Key functions:**
+
+| Function                          | Purpose                                                    |
+| --------------------------------- | ----------------------------------------------------------- |
+| `show_manage_pool_profiles_dialog()` | Manager: list, add, edit, delete, reset                    |
+| `show_pool_profile_editor_dialog()`  | Add/edit dialog with validation loop and overwrite confirm |
+
+**Called modules / imported helpers:**
+
+| Module            | Purpose in this module                          |
+| ----------------- | ------------------------------------------------ |
+| `feature_config`  | Pool-profile quintet (get/save/delete/reset)    |
+| `pool_profiles`   | Property schema, blocksize choices, validation  |
+| `workload_profiles` | `LIVE_PROPERTIES` for the root `-O` entries    |
+| `gui_helpers`     | Dialog helpers                                  |
+| `logging_config`  | `log_msg`                                       |
 
 ---
 
@@ -1641,7 +1737,7 @@ CRUD for saved profile JSON files under the profiles directory.
 
 ---
 
-### `profile_dialogs.py`
+### `profile_dialogs.py` (schedule add/recall dialogs)
 
 Simple GTK dialogs for adding a new profile and recalling an existing one.
 
@@ -2264,6 +2360,7 @@ One-time parser for legacy `zfsretainpol-<pool>` bash files.
 [ds-config-migrations]: ../developer-guide/data-structures.md#config-migrations
 [ds-retention]: ../developer-guide/data-structures.md#retention-policy-arrays-bktname-bktretain-minage
 [ds-workload]: ../developer-guide/data-structures.md#workload_profiles-object
+[ds-poolprofiles]: ../developer-guide/data-structures.md#pool_profiles-object
 [ds-memory]: ../developer-guide/data-structures.md#memory-samples-memory_statspy
 
 ---

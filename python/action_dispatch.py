@@ -52,6 +52,7 @@ from datasets_page import (
 )
 from disk_actions import on_disks_smart_details
 from disks_page import (
+    on_disks_manage_pool_profiles,
     on_disks_refresh,
     on_disks_surface_test,
     update_disks_button_sensitivity,
@@ -200,6 +201,7 @@ PAGE_SPECS = {
             ("Add Infra Vdev…", "drive-harddisk", "_disks_add_infra_vdev_btn"),
             ("Migrate Pool…", "edit-copy", "_disks_migrate_pool_btn"),
             ("Enroll in Proxmox…", "network-server", "_disks_proxmox_enroll_btn"),
+            ("Advanced: Manage Pool Profiles…", "preferences-system", None),
             (None, None, None),  # spacer
             ("SMART Details", "dialog-information", "_disks_smart_details_btn"),
             ("Surface Test…", "drive-harddisk", "_disks_surface_test_btn"),
@@ -453,6 +455,7 @@ ACTION_HANDLERS = {
         "Add Infra Vdev…": on_disks_add_infra_vdev,
         "Migrate Pool…": on_disks_migrate_pool,
         "Enroll in Proxmox…": on_disks_enroll_proxmox,
+        "Advanced: Manage Pool Profiles…": on_disks_manage_pool_profiles,
         "SMART Details": on_disks_smart_details,
         "Surface Test…": on_disks_surface_test,
         "Refresh": on_disks_refresh,

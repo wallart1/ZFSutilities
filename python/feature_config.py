@@ -815,6 +815,119 @@ def reset_workload_profiles(config):
     save_workload_profiles(config, profiles)
 
 
+DEFAULT_POOL_PROFILES = {
+    "general": {
+        "description": ("General-purpose pool: trim on, balanced defaults for most workloads."),
+        "blocksize": "recommended",
+        "pool_properties": {
+            "autotrim": "on",
+            "autoexpand": "off",
+            "autoreplace": "off",
+            "failmode": "wait",
+            "multihost": "off",
+            "listsnapshots": "off",
+            "delegation": "on",
+        },
+        "filesystem_properties": {
+            "recordsize": "128K",
+            "compression": "lz4",
+            "atime": "off",
+            "logbias": "latency",
+            "sync": "standard",
+            "primarycache": "all",
+            "special_small_blocks": "0",
+        },
+        "notes": (
+            "Pool properties are written explicitly at creation (-o) so "
+            "nothing is left to zpool create defaults, which drift between "
+            "releases. Blocksize 'recommended' starts at 4096 bytes and only "
+            "rises (prior-pool labels and physical sector size are probed)."
+        ),
+    },
+    "archival": {
+        "description": ("Cold storage and backup-target pool: trim off, large blocks, zstd."),
+        "blocksize": "recommended",
+        "pool_properties": {
+            "autotrim": "off",
+            "autoexpand": "off",
+            "autoreplace": "off",
+            "failmode": "wait",
+            "multihost": "off",
+            "listsnapshots": "off",
+            "delegation": "on",
+        },
+        "filesystem_properties": {
+            "recordsize": "1M",
+            "compression": "zstd",
+            "atime": "off",
+            "logbias": "latency",
+            "sync": "standard",
+            "primarycache": "all",
+            "special_small_blocks": "0",
+        },
+        "notes": (
+            "autotrim stays off: archival pools are written once and read "
+            "many times, and TRIM on mixed HDD layouts buys little. Matches "
+            "the backup-archive workload profile for the pool root."
+        ),
+    },
+}
+
+
+def get_pool_profiles(config):
+    """Return the pool profile dict, seeding defaults if absent.
+
+    The returned dict is a deep copy so callers cannot mutate the canonical
+    config state.
+    """
+    profiles = config.get("pool_profiles")
+    if not isinstance(profiles, dict):
+        profiles = _deep_copy(DEFAULT_POOL_PROFILES)
+        config["pool_profiles"] = profiles
+    return _deep_copy(profiles)
+
+
+def save_pool_profiles(config, profiles):
+    """Persist a pool profile dict to the config."""
+    if not isinstance(profiles, dict):
+        raise TypeError("profiles must be a dict")
+    config["pool_profiles"] = profiles
+    save_config(config)
+
+
+def is_builtin_pool_profile(name: str) -> bool:
+    """Return True for seeded pool profiles, which cannot be replaced.
+
+    Built-in profiles ship with the software; they can be opened for editing
+    as a starting point (saving requires a new name or an existing custom
+    profile), but they cannot be overwritten or deleted. Reset to Defaults
+    restores them.
+    """
+    return name in DEFAULT_POOL_PROFILES
+
+
+def delete_pool_profile(config, name):
+    """Delete a pool profile by name. Returns True if it existed.
+
+    Built-in (seeded) profiles are immutable and are never deleted.
+    """
+    profiles = get_pool_profiles(config)
+    if name not in profiles:
+        return False
+    if is_builtin_pool_profile(name):
+        log_msg(f"WARN: Pool profile {name!r} is built in and cannot be deleted")
+        return False
+    del profiles[name]
+    save_pool_profiles(config, profiles)
+    return True
+
+
+def reset_pool_profiles(config):
+    """Reset pool profiles to the seed set, discarding user additions."""
+    profiles = _deep_copy(DEFAULT_POOL_PROFILES)
+    save_pool_profiles(config, profiles)
+
+
 def import_legacy_retention(config, parent_dir):
     """One-time migration: scan parent_dir for zfsretainpol-* files and add
     missing pools to config['retention']. Returns list of imported pools."""

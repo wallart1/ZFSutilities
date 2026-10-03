@@ -62,6 +62,14 @@ def _topology(pool, leaf_paths):
     )
 
 
+def _topology_with_infra(pool, data_paths, infra_specs):
+    """Pool topology with bare data disks plus ``(class, paths)`` infra classes."""
+    children = [_node(path, "disk") for path in data_paths]
+    for cls, paths in infra_specs:
+        children.append(_node(cls, cls, [_node(path, "disk") for path in paths]))
+    return _node(pool, "pool", children)
+
+
 def _default_topologies():
     return {
         "pool1": _topology("pool1", ["/dev/sda", "/dev/sdb"]),
@@ -84,7 +92,9 @@ def _state(pmd, pools=None, datasets=None, disks=None, **overrides):
     free = {pool: 40 * TB for pool in pools}
     topologies = _default_topologies()
     pool_name = pools[0] if pools else ""
-    # Mirror the wizard: holding mode pre-selects every source-pool member.
+    # Mirror the wizard: holding mode pre-selects the source pool's data
+    # members (the default fixtures have no infra vdevs, so that is every
+    # member).
     member_paths = set(pmd._leaf_paths_by_pool(topologies).get(pool_name, []))
     state = pmd._MigrateState(
         pools=pools,
@@ -270,6 +280,79 @@ class TestPureHelpers(unittest.TestCase):
         warnings = " ".join(pmd._migrate_warnings(state))
         self.assertIn("holding pool must stay online", warnings)
 
+    def test_holding_infra_warning_mentions_unchecked_picker_rows(self):
+        pmd = _import_dialogs()
+        topology = _topology_with_infra(
+            "pool1", ["/dev/sda"], [("special", ["/dev/sdb"]), ("cache", ["/dev/sdq"])]
+        )
+        state = _state(
+            pmd,
+            mode=pmd.MIGRATE_HOLDING_POOL,
+            holding_pool="pool2",
+            topologies={"pool1": topology, "pool2": _topology("pool2", ["/dev/sdz"])},
+        )
+        warnings = " ".join(pmd._migrate_warnings(state))
+        self.assertIn("infrastructure vdevs are not recreated", warnings)
+        self.assertIn("special", warnings)
+        self.assertIn("listed unchecked in the rebuild picker", warnings)
+
+    def test_new_disks_infra_warning_has_no_picker_note(self):
+        pmd = _import_dialogs()
+        topology = _topology_with_infra(
+            "pool1", ["/dev/sda"], [("special", ["/dev/sdb"]), ("cache", ["/dev/sdq"])]
+        )
+        state = _state(
+            pmd,
+            topologies={"pool1": topology, "pool2": _topology("pool2", ["/dev/sdz"])},
+        )
+        warnings = " ".join(pmd._migrate_warnings(state))
+        self.assertIn("infrastructure vdevs are not recreated", warnings)
+        self.assertNotIn("rebuild picker", warnings)
+
+    def test_on_replay_prop_toggled_tracks_selection(self):
+        pmd = _import_dialogs()
+        state = _state(
+            pmd,
+            origin_pool_props={"comment": "x", "compatibility": "off"},
+            replay_selection={"comment"},
+        )
+        calls = []
+        check = MagicMock()
+        check.get_active.return_value = False
+        pmd._on_replay_prop_toggled(check, "comment", state, lambda: calls.append(1))
+        self.assertEqual(state.replay_selection, set())
+        check.get_active.return_value = True
+        pmd._on_replay_prop_toggled(check, "compatibility", state, lambda: calls.append(1))
+        self.assertEqual(state.replay_selection, {"compatibility"})
+        self.assertEqual(calls, [1, 1])
+
+    def test_on_replay_prop_toggled_ignores_non_bool_active(self):
+        pmd = _import_dialogs()
+        state = _state(pmd, replay_selection={"comment"})
+        calls = []
+        check = MagicMock()
+        check.get_active.return_value = MagicMock()
+        pmd._on_replay_prop_toggled(check, "comment", state, lambda: calls.append(1))
+        self.assertEqual(state.replay_selection, {"comment"})
+        self.assertEqual(calls, [])
+
+    def test_plan_lines_include_replay_props_step(self):
+        pmd = _import_dialogs()
+        state = _state(
+            pmd,
+            typed="pool1",
+            origin_pool_props={"comment": "x", "compatibility": "off"},
+            replay_selection={"comment"},
+        )
+        lines = pmd._plan_lines(state)
+        self.assertTrue(
+            any(
+                "Reapply 1 non-default pool property" in line and "comment" in line
+                for line in lines
+            ),
+            lines,
+        )
+
     def test_plan_lines_use_temp_pool_for_new_disks(self):
         pmd = _import_dialogs()
         lines = pmd._plan_lines(_state(pmd))
@@ -314,6 +397,28 @@ class TestPureHelpers(unittest.TestCase):
         self.assertEqual(pmd.build_request(state).rate_limit, "100m")
         state = _state(pmd, typed="pool1")
         self.assertEqual(pmd.build_request(state).rate_limit, "")
+
+    def test_build_request_replay_pool_props_checked_sorted_only(self):
+        pmd = _import_dialogs()
+        state = _state(
+            pmd,
+            typed="pool1",
+            origin_pool_props={
+                "comment": "offsite",
+                "compatibility": "off",
+                "dedup_table_quota": "25%",
+            },
+            replay_selection={"dedup_table_quota", "comment"},
+        )
+        self.assertEqual(
+            pmd.build_request(state).replay_pool_props,
+            (("comment", "offsite"), ("dedup_table_quota", "25%")),
+        )
+        # With nothing checked (or nothing captured) nothing is replayed.
+        state = _state(pmd, typed="pool1", origin_pool_props={"comment": "offsite"})
+        self.assertEqual(pmd.build_request(state).replay_pool_props, ())
+        state = _state(pmd, typed="pool1")
+        self.assertEqual(pmd.build_request(state).replay_pool_props, ())
 
 
 class TestHoldingCandidates(unittest.TestCase):
@@ -387,6 +492,70 @@ class TestSourcePoolMemberHelpers(unittest.TestCase):
         pmd = _import_dialogs()
         state = _state(pmd, disks=[_disk("/dev/sda"), _disk("/dev/sdz")])
         self.assertEqual(pmd._source_pool_by_ids(state), [])
+
+    def test_data_member_disks_exclude_infra_leaves(self):
+        pmd = _import_dialogs()
+        topology = _topology_with_infra(
+            "pool1",
+            ["/dev/sda", "/dev/sdb"],
+            [("special", ["/dev/sdq", "/dev/sqr"]), ("cache", ["/dev/sds"])],
+        )
+        state = _state(
+            pmd,
+            disks=[
+                _disk("/dev/sda"),
+                _disk("/dev/sdb"),
+                _disk("/dev/sdq"),
+                _disk("/dev/sqr"),
+                _disk("/dev/sds"),
+                _disk("/dev/sdz"),
+            ],
+            topologies={"pool1": topology, "pool2": _topology("pool2", ["/dev/sdz"])},
+        )
+        # All leaves are members, but only data leaves are data members.
+        self.assertEqual(
+            [d.path for d in pmd._source_pool_member_disks(state)],
+            ["/dev/sda", "/dev/sdb", "/dev/sdq", "/dev/sqr", "/dev/sds"],
+        )
+        self.assertEqual(
+            [d.path for d in pmd._source_pool_data_member_disks(state)],
+            ["/dev/sda", "/dev/sdb"],
+        )
+
+    def test_data_member_disks_empty_when_pool_topology_missing(self):
+        pmd = _import_dialogs()
+        state = _state(pmd, pool_name="nope")
+        self.assertEqual(pmd._source_pool_data_member_disks(state), [])
+
+    def test_member_rows_name_infra_class(self):
+        pmd = _import_dialogs()
+        topology = _topology_with_infra(
+            "pool1",
+            ["/dev/sda"],
+            [("special", ["/dev/sdb"]), ("log", ["/dev/sdl"]), ("spare", ["/dev/sdsp"])],
+        )
+        state = _state(
+            pmd,
+            disks=[
+                _disk("/dev/sda"),
+                _disk("/dev/sdb"),
+                _disk("/dev/sdl"),
+                _disk("/dev/sdsp"),
+                _disk("/dev/sdz"),
+            ],
+            topologies={"pool1": topology, "pool2": _topology("pool2", ["/dev/sdz"])},
+        )
+        warnings_by_path = {
+            row.disk.path: row.warnings[0] for row in pmd._holding_member_rows(state)
+        }
+        self.assertIn("freed by the cutover destroy", warnings_by_path["/dev/sda"])
+        self.assertNotIn("former", warnings_by_path["/dev/sda"])
+        self.assertIn("former special vdev member", warnings_by_path["/dev/sdb"])
+        self.assertIn("former log vdev member", warnings_by_path["/dev/sdl"])
+        self.assertIn("former spare vdev member", warnings_by_path["/dev/sdsp"])
+        # Every member row is still eligible: checking one (deliberately)
+        # adds it to the rebuilt pool's data vdevs.
+        self.assertTrue(all(row.eligible for row in pmd._holding_member_rows(state)))
 
 
 class TestHoldingRebuildSelection(unittest.TestCase):
@@ -514,6 +683,61 @@ class TestHoldingRebuildSelection(unittest.TestCase):
         )
 
 
+class TestApplyOriginDefaults(unittest.TestCase):
+    """Origin-derived defaults: pseudo-profile plus the replay-property set."""
+
+    def _repo(self, with_source=None, error=None):
+        class _Repo:
+            def curated_pool_properties(self, pool):
+                return {"autotrim": "on"}
+
+            def get_properties(self, pool, props):
+                return {"compression": "zstd"}
+
+            def pool_properties_with_source(self, pool):
+                if error is not None:
+                    raise error
+                return with_source or {}
+
+        return _Repo()
+
+    def test_captures_replayable_props_all_checked(self):
+        pmd = _import_dialogs()
+        repo = self._repo(
+            with_source={
+                "comment": ("offsite", "local"),
+                "compatibility": ("off", "local"),
+                "dedup_table_quota": ("25%", "local"),
+                "autotrim": ("on", "local"),
+                "ashift": ("12", "local"),
+                "altroot": ("/mnt/x", "local"),
+                "feature@encryption": ("enabled", "local"),
+                "size": ("10T", "-"),
+            }
+        )
+        state = _state(pmd, origin_pool_props={"stale": "x"}, replay_selection={"stale"})
+        pmd._apply_origin_defaults(state, repo)
+        self.assertEqual(
+            state.origin_pool_props,
+            {"comment": "offsite", "compatibility": "off", "dedup_table_quota": "25%"},
+        )
+        self.assertEqual(state.replay_selection, {"comment", "compatibility", "dedup_table_quota"})
+        # The pseudo-profile side keeps working off the curated read.
+        self.assertEqual(state.origin_profile["pool_properties"], {"autotrim": "on"})
+
+    def test_read_failure_warns_and_empties(self):
+        pmd = _import_dialogs()
+        state = _state(pmd, origin_pool_props={"stale": "x"}, replay_selection={"stale"})
+        with capture_logs() as logs:
+            pmd._apply_origin_defaults(state, self._repo(error=RuntimeError("boom")))
+        self.assertEqual(state.origin_pool_props, {})
+        self.assertEqual(state.replay_selection, set())
+        self.assertTrue(
+            any("Could not read the non-default pool properties" in line for line in logs),
+            logs,
+        )
+
+
 class TestBuildMigrationSteps(unittest.TestCase):
     """Execution plan composition for both migration modes."""
 
@@ -611,6 +835,76 @@ class TestBuildMigrationSteps(unittest.TestCase):
         # import-rename, reapply holds, namespace destroy, remove holds file
         self.assertEqual(len(cutover), 16)
         golden.check(self, _plan_text(cutover))
+
+    def test_replay_props_steps_after_import_rename(self):
+        """One non-fatal zpool set per checked property, between the
+        import-rename and the holds reapply, in both modes."""
+        pmd = _import_dialogs()
+        requests = [
+            _request(
+                pmd,
+                replay_pool_props=(("comment", "offsite copy"), ("compatibility", "off")),
+            ),
+            _request(
+                pmd,
+                mode=pmd.MIGRATE_HOLDING_POOL,
+                holding_pool="pool2",
+                new_pool_by_id=(
+                    "/dev/disk/by-id/ata-TESTsda",
+                    "/dev/disk/by-id/ata-TESTsdb",
+                ),
+                replay_pool_props=(("comment", "offsite copy"),),
+            ),
+        ]
+        for request in requests:
+            _copy, cutover = pmd.build_migration_steps(request)
+            sets = [
+                (index, step)
+                for index, step in enumerate(cutover)
+                if step.command[0:2] == ["zpool", "set"]
+            ]
+            self.assertEqual(len(sets), len(request.replay_pool_props), request.mode)
+            imports = [
+                index
+                for index, step in enumerate(cutover)
+                if step.command[0:2] == ["zpool", "import"]
+            ]
+            applies = [
+                index
+                for index, step in enumerate(cutover)
+                if step.command[0:2] == ["bash", "-c"] and "reapplyholds_apply" in step.command[2]
+            ]
+            for index, step in sets:
+                self.assertEqual(step.command[-1], request.source_pool)
+                self.assertFalse(step.fatal)
+                self.assertGreater(index, imports[-1])
+                self.assertLess(index, applies[0])
+
+    def test_replay_props_step_argv(self):
+        pmd = _import_dialogs()
+        _copy, cutover = pmd.build_migration_steps(
+            _request(pmd, replay_pool_props=(("comment", "offsite copy"),))
+        )
+        step = next(s for s in cutover if s.command[0:2] == ["zpool", "set"])
+        self.assertEqual(step.command, ["zpool", "set", "comment=offsite copy", "pool1"])
+        self.assertIn("Reapply pool property comment=offsite copy", step.description)
+
+    def test_replay_props_steps_absent_without_props(self):
+        pmd = _import_dialogs()
+        for request in (
+            _request(pmd),
+            _request(
+                pmd,
+                mode=pmd.MIGRATE_HOLDING_POOL,
+                holding_pool="pool2",
+                new_pool_by_id=(
+                    "/dev/disk/by-id/ata-TESTsda",
+                    "/dev/disk/by-id/ata-TESTsdb",
+                ),
+            ),
+        ):
+            _copy, cutover = pmd.build_migration_steps(request)
+            self.assertFalse(any(s.command[0:2] == ["zpool", "set"] for s in cutover))
 
     def test_holding_copy_steps_use_reserved_namespace(self):
         """Holding-mode copies land under <holding>/migrate_<source>/ so they

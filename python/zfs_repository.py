@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import path_utils
 from logging_config import log_msg
 from pool_create import TOPOLOGIES, validate_raid10_count
+from pool_profiles import POOL_PROPERTIES, POOL_PROPERTY_VALUES
 
 
 def is_dataset_encrypted(path):
@@ -325,12 +326,16 @@ def build_create_pool_command(
     by_id_paths: list[str],
     ashift: int | None = None,
     options: list[tuple[str, str]] | None = None,
+    pool_options: list[tuple[str, str]] | None = None,
 ) -> list[str]:
     """Build the exact `zpool create` argv for a new pool.
 
     Pure function: no subprocess. Argument order:
-    ``zpool create [-o ashift=N] [-O prop=value ...] <pool> <mirror|raidzN>
-    <paths…>`` (stripe emits no topology keyword). The special topology
+    ``zpool create [-o ashift=N] [-o prop=value ...] [-O prop=value ...]
+    <pool> <mirror|raidzN> <paths…>`` (stripe emits no topology keyword).
+    *pool_options* are pool-scope properties (``-o``, validated against the
+    curated set in ``pool_profiles``); *options* are dataset-scope properties
+    for the pool root (``-O``). The special topology
     "raid10" requires an even count of at least 4 disks and emits striped
     mirrors: ``<pool> mirror d1 d2 mirror d3 d4 …``. All paths must live under
     /dev/disk/by-id/ (mandatory for stable naming, and the command destroys
@@ -359,10 +364,20 @@ def build_create_pool_command(
             f"pool blocksize must be between 512 bytes (ashift 9) and "
             f"65536 bytes (ashift 16), got {ashift}"
         )
+    for prop, value in pool_options or []:
+        if prop not in POOL_PROPERTIES:
+            raise ValueError(f"unknown pool property: {prop!r}")
+        if value not in POOL_PROPERTY_VALUES[prop]:
+            raise ValueError(
+                f"pool property {prop!r} must be one of "
+                f"{'/'.join(POOL_PROPERTY_VALUES[prop])}, got {value!r}"
+            )
 
     cmd = ["zpool", "create"]
     if ashift is not None:
         cmd += ["-o", f"ashift={ashift}"]
+    for prop, value in pool_options or []:
+        cmd += ["-o", f"{prop}={value}"]
     for prop, value in options or []:
         if not prop or "=" in prop or any(c.isspace() for c in prop):
             raise ValueError(f"invalid property name: {prop!r}")
@@ -591,6 +606,27 @@ def build_pool_import_rename_command(temp_name: str, new_name: str) -> list[str]
     return ["zpool", "import", temp_name, new_name]
 
 
+def build_pool_set_command(pool_name: str, prop: str, value: str) -> list[str]:
+    """Build the exact `zpool set` argv for one pool property.
+
+    Pure function: no subprocess. Used by Migrate Pool to reapply the source
+    pool's non-default pool properties (captured with their SOURCE column and
+    filtered by ``pool_profiles.replayable_pool_properties``) once the
+    migrated pool has been imported under the source pool's name — properties
+    outside the curated profile set cannot travel through the profile's
+    ``zpool create -o`` options. Raises ValueError on an empty pool, an
+    invalid *prop* (empty, containing ``=`` or whitespace), or an empty
+    *value*.
+    """
+    if not pool_name:
+        raise ValueError("pool name must not be empty")
+    if not prop or "=" in prop or any(c.isspace() for c in prop):
+        raise ValueError(f"invalid property name: {prop!r}")
+    if not value:
+        raise ValueError("property value must not be empty")
+    return ["zpool", "set", f"{prop}={value}", pool_name]
+
+
 def build_pool_destroy_command(pool_name: str) -> list[str]:
     """Build the exact `zpool destroy` argv.
 
@@ -765,6 +801,54 @@ class ZfsRepository:
         """Return raw `zpool get all` text for *pool* (empty on failure)."""
         result = self._run(self._zpool("get", "all", pool), check=False, timeout=timeout)
         return result.stdout
+
+    def curated_pool_properties(self, pool: str, timeout: int | None = None) -> dict[str, str]:
+        """Return the curated live-settable pool properties for *pool*.
+
+        Runs ``zpool get -H -o property,value`` for exactly the properties a
+        pool profile can carry (``pool_profiles.POOL_PROPERTIES``), so Create
+        Pool and Migrate Pool can derive settings from an existing pool.
+        Raises ``subprocess.CalledProcessError`` on command failure, matching
+        ``get_properties``.
+        """
+        props = ",".join(POOL_PROPERTIES)
+        result = self._run(
+            self._zpool("get", "-H", "-o", "property,value", props, pool),
+            timeout=timeout,
+        )
+        values: dict[str, str] = {}
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t", 1)
+            if len(parts) == 2:
+                values[parts[0]] = parts[1]
+        return values
+
+    def pool_properties_with_source(
+        self, pool: str, timeout: int | None = None
+    ) -> dict[str, tuple[str, str]]:
+        """Return every pool property of *pool* as ``{property: (value, source)}``.
+
+        Runs ``zpool get -H -o property,value,source all`` so callers can
+        filter by provenance: Migrate Pool keeps only the locally-set
+        (SOURCE=local) properties to reapply on the migrated pool with
+        ``zpool set`` (see ``pool_profiles.replayable_pool_properties``).
+        Raises ``subprocess.CalledProcessError`` on command failure, matching
+        ``curated_pool_properties``.
+        """
+        result = self._run(
+            self._zpool("get", "-H", "-o", "property,value,source", "all", pool),
+            timeout=timeout,
+        )
+        props: dict[str, tuple[str, str]] = {}
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) == 3:
+                props[parts[0]] = (parts[1], parts[2])
+        return props
 
     def pool_status_errors(self, pool: str, timeout: int | None = None) -> dict:
         """Parse `zpool status` and return a structured error report.

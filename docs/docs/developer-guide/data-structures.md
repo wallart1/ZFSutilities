@@ -308,6 +308,35 @@ Properties are divided into two groups:
 
 The pure-logic helpers in `python/workload_profiles.py` (`properties_for_profile`, `match_profile`, `build_apply_plan`, `build_zfs_set_commands`, `profile_has_warning`, `warning_text`) decide which properties apply to a given dataset type and build the preview plan. The Disks tab **Advanced: Manage Profiles…** dialog edits this object directly; changes are persisted immediately through `feature_config.save_workload_profiles()`.
 
+### `pool_profiles` object
+
+Persisted by the Disks tab pool wizards (Create Pool, Migrate Pool) and seeded
+by migration v26. The pool-scope counterpart of `workload_profiles`: it bundles
+the settings that shape a pool at creation. Each profile has this schema:
+
+| Key                      | Type   | Purpose                                                                                        |
+| ------------------------ | ------ | ---------------------------------------------------------------------------------------------- |
+| `description`            | string | Short human-readable description of the pool workload                                          |
+| `blocksize`              | string | `recommended` (resolve through the ashift engine at create time), `auto`, or a label (`512 bytes`, `4096 bytes`, `8192 bytes`) |
+| `pool_properties`        | object | Curated pool properties written as `-o` at `zpool create`, keyed by property name              |
+| `filesystem_properties`  | object | Root filesystem properties written as `-O`, keyed by property name (workload-profile vocabulary) |
+| `notes`                  | string | Context or warning text shown when the profile is selected                                     |
+
+The curated pool properties are `autotrim`, `autoexpand`, `autoreplace`,
+`failmode`, `multihost`, `listsnapshots`, `delegation` — written explicitly so
+pools never depend on `zpool create` defaults that drift between releases.
+Blocksize (`ashift`) is creation-only: it can only be chosen at create (Create
+Pool) or when the pool is rebuilt (Migrate Pool), which is why it lives here
+rather than in a workload profile.
+
+The pure-logic helpers in `python/pool_profiles.py` resolve the blocksize,
+build the ordered `-o`/`-O` option pairs, validate profiles, and derive the
+"Match origin pool" pseudo-profile (never saved — built from the origin pool's
+ashift, curated pool properties, and root live properties each time Migrate
+Pool opens). The Disks tab **Advanced: Manage Pool Profiles…** dialog edits
+this object directly; changes are persisted immediately through
+`feature_config.save_pool_profiles()`.
+
 ### `backup` object
 
 Persisted by the GUI Backup tab and read by [zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup) (via overrides).
@@ -340,7 +369,7 @@ the software release version. When the config structure changes, bump
 **Migration chain** (`config_migrations.py`):
 
 ```python
-CONFIG_VERSION = 25
+CONFIG_VERSION = 26
 
 MIGRATIONS = [
     _migrate_1_to_2,
@@ -367,6 +396,7 @@ MIGRATIONS = [
     _migrate_22_to_23,
     _migrate_23_to_24,
     _migrate_24_to_25,
+    _migrate_25_to_26,
 ]
 ```
 
@@ -456,6 +486,7 @@ Additional `ZfsRepository` methods:
 | `get_properties(dataset, props)` | `dict[str, str]` | Values for a list of ZFS properties; missing properties are returned as `"-"` |
 | `get_all_properties(dataset)` | `dict[str, str]` | All ZFS properties for *dataset* |
 | `set_property(dataset, prop, value)` | `bool` | Run `zfs set <prop>=<value> <dataset>`; returns success/failure |
+| `pool_properties_with_source(pool)` | `dict[str, tuple[str, str]]` | Every pool property as `{property: (value, source)}` from `zpool get -H -o property,value,source all`; Migrate Pool filters it with `pool_profiles.replayable_pool_properties()` to find the locally set properties to replay on the migrated pool |
 | `pool_status_errors(pool)` | `dict` | Parses `zpool status <pool>` and returns `has_errors` (`bool`), `errors_summary` (`str`), `data_errors` (`list` of paths), and `vdev_errors` (`list` of `{name, read, write, cksum}` dicts). Used by the Dashboard and Pools tab to color the **Errors** column. |
 | `version_output()` | `str` | Raw `zfs version` text (empty on failure) |
 | `zdb_pool_config(pool)` | `str` | Raw `zdb -C <pool>` text (empty on failure) |

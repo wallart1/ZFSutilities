@@ -26,7 +26,7 @@ import zfs_lock_manager as zlm
 from command_builders import BashStep
 from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
-from feature_config import get_workload_profiles
+from feature_config import get_pool_profiles
 from gi.repository import Gtk
 from gui_helpers import configure_treeview_column, create_scrolled_dialog
 from iscsi_enroll import offer_iscsi_enrollment
@@ -36,11 +36,17 @@ from pool_create import (
     EligibilityResult,
     disk_eligibility,
     estimate_effective_capacity,
-    pool_filesystem_options,
     recommend_ashift,
     validate_pool_name,
     validate_raid10_count,
     validate_vdev_selection,
+)
+from pool_profiles import (
+    BLOCKSIZE_AUTO,
+    BLOCKSIZE_RECOMMENDED,
+    filesystem_options_for_profile,
+    pool_options_for_profile,
+    validate_profile,
 )
 from pools_page import on_pools_refresh, refresh_pools_page
 from proxmox_enroll import offer_proxmox_enrollment
@@ -163,7 +169,7 @@ def _collect_leaf_paths(node: TopologyNode, leaves: list[str]) -> None:
 def _recordsize_bytes(profile: dict) -> int:
     """Return the profile's recordsize in bytes (binary suffixes), for the
     capacity estimator. Falls back to the ZFS default recordsize."""
-    raw = str(profile.get("properties", {}).get("recordsize", "")).strip().upper()
+    raw = str(profile.get("filesystem_properties", {}).get("recordsize", "")).strip().upper()
     if not raw:
         return _DEFAULT_RECORDSIZE
     multiplier = 1
@@ -194,9 +200,13 @@ def _topology_problems(state: _WizardState) -> list[str]:
     return problems
 
 
-def _settings_problems(state: _WizardState, existing_names: Container[str]) -> list[str]:
+def _settings_problems(
+    state: _WizardState, existing_names: Container[str], profiles: dict
+) -> list[str]:
     ok, error = validate_pool_name(state.pool_name, existing_names)
-    return [] if ok else [error]
+    problems = [] if ok else [error]
+    problems.extend(validate_profile(profiles.get(state.profile_name, {})))
+    return problems
 
 
 def _review_problems(state: _WizardState) -> list[str]:
@@ -217,7 +227,7 @@ def _page_problems(page: str, state: _WizardState, ctx: _WizardContext) -> list[
     if page == "topology":
         return _topology_problems(state)
     if page == "settings":
-        return _settings_problems(state, ctx.existing_names)
+        return _settings_problems(state, ctx.existing_names, ctx.profiles)
     return _review_problems(state)
 
 
@@ -238,7 +248,7 @@ def _estimate_text(state: _WizardState, profile: dict) -> str:
         )
     except ValueError as exc:
         return f"Capacity estimate unavailable: {exc}"
-    recordsize = profile.get("properties", {}).get("recordsize", "128K")
+    recordsize = profile.get("filesystem_properties", {}).get("recordsize", "128K")
     effective = (
         f"Effective at {recordsize} block size: "
         f"{format_bytes(estimate.effective_bytes)} "
@@ -273,16 +283,32 @@ def _review_summary(state: _WizardState, ctx: _WizardContext) -> str:
     return "\n\n".join(parts)
 
 
+def _profile_target_ashift(profile: dict, recommended: int | None) -> int | None:
+    """Resolve a pool profile's blocksize choice against the disk recommendation.
+
+    ``recommended`` adopts the probing engine's answer, ``auto`` defers to ZFS
+    (no ``-o ashift`` flag), and an explicit label wins. An unknown choice
+    falls back to the recommendation.
+    """
+    choice = profile.get("blocksize", BLOCKSIZE_RECOMMENDED)
+    if choice == BLOCKSIZE_RECOMMENDED:
+        return recommended
+    if choice == BLOCKSIZE_AUTO:
+        return None
+    return _BLOCKSIZE_BY_LABEL.get(choice, recommended)
+
+
 def build_wizard_command(state: _WizardState, profiles: dict) -> list[str]:
     """Build the exact ``zpool create`` argv for the current wizard state."""
     by_id_paths = [os.path.join(_BY_ID_DIR, disk.by_id) for disk in state.selected]
-    options = pool_filesystem_options(profiles.get(state.profile_name, {}))
+    profile = profiles.get(state.profile_name, {})
     return build_create_pool_command(
         state.pool_name,
         state.topology,
         by_id_paths,
         ashift=state.ashift,
-        options=options,
+        options=filesystem_options_for_profile(profile),
+        pool_options=pool_options_for_profile(profile),
     )
 
 
@@ -367,6 +393,9 @@ def _on_profile_changed(combo, state: _WizardState, on_change) -> None:
     text = _combo_text(combo)
     if text:
         state.profile_name = text
+    # A fresh profile re-applies its own blocksize choice; only an explicit
+    # blocksize edit by the user survives a profile switch.
+    state.blocksize_user_set = False
     on_change()
 
 
@@ -543,7 +572,7 @@ def _build_settings_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
     ashift_hint.set_line_wrap(True)
     grid.attach(ashift_hint, 1, 3, 1, 1)
 
-    profile_label = Gtk.Label(label="Workload profile:")
+    profile_label = Gtk.Label(label="Pool profile:")
     profile_label.set_halign(Gtk.Align.END)
     grid.attach(profile_label, 0, 4, 1, 1)
     profile_combo = Gtk.ComboBoxText()
@@ -556,6 +585,17 @@ def _build_settings_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
     profile_desc.set_line_wrap(True)
     grid.attach(profile_desc, 1, 5, 1, 1)
 
+    profile_hint = Gtk.Label(
+        label=(
+            "The profile supplies the pool properties (-o) and the pool root's "
+            "filesystem properties (-O); the blocksize above is pre-filled from "
+            "it and stays editable."
+        )
+    )
+    profile_hint.set_halign(Gtk.Align.START)
+    profile_hint.set_line_wrap(True)
+    grid.attach(profile_hint, 1, 6, 1, 1)
+
     def _refresh_settings():
         name = _widget_text(name_entry, state.pool_name)
         ok, error = validate_pool_name(name, ctx.existing_names)
@@ -564,21 +604,35 @@ def _build_settings_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
             if disk.path not in state.label_ashifts:
                 state.label_ashifts[disk.path] = _probe_label_ashift(ctx.repository, disk.path)
         recommended = recommend_ashift(state.selected, state.label_ashifts)
-        ashift_hint.set_text(
-            f"Recommended pool blocksize for these disks: {_format_blocksize(recommended)}"
-        )
-        recommended_label = _BLOCKSIZE_LABEL_BY_ASHIFT.get(recommended)
+        profile = ctx.profiles.get(state.profile_name, {})
+        if profile.get("blocksize", BLOCKSIZE_RECOMMENDED) == BLOCKSIZE_RECOMMENDED:
+            ashift_hint.set_text(
+                "Profile follows the recommended pool blocksize for these disks: "
+                f"{_format_blocksize(recommended)}"
+            )
+        else:
+            ashift_hint.set_text(
+                f"Recommended pool blocksize for these disks: {_format_blocksize(recommended)}"
+            )
         if not state.blocksize_user_set:
-            if recommended_label is not None:
+            target = _profile_target_ashift(profile, recommended)
+            if target is None:
                 state.blocksize_syncing = True
                 try:
-                    ashift_combo.set_active(_BLOCKSIZE_LABELS.index(recommended_label))
+                    ashift_combo.set_active(0)
                 finally:
                     state.blocksize_syncing = False
-            # Always adopt the recommendation even when it has no combo entry
+            else:
+                target_label = _BLOCKSIZE_LABEL_BY_ASHIFT.get(target)
+                if target_label is not None:
+                    state.blocksize_syncing = True
+                    try:
+                        ashift_combo.set_active(_BLOCKSIZE_LABELS.index(target_label))
+                    finally:
+                        state.blocksize_syncing = False
+            # Always adopt the resolved value even when it has no combo entry
             # (e.g. ashift 14+), so state.ashift cannot go stale.
-            state.ashift = recommended
-        profile = ctx.profiles.get(state.profile_name, {})
+            state.ashift = target
         profile_desc.set_text(profile.get("description", ""))
 
     name_entry.connect("changed", _on_name_changed, state, on_change)
@@ -720,7 +774,7 @@ def show_create_pool_wizard(app, eligibility, profiles, existing_names):
     or ``None`` when the wizard is cancelled.
     """
     if not profiles:
-        log_msg("WARN: No filesystem workload profiles configured")
+        log_msg("WARN: No pool profiles configured")
         return None
     state = _WizardState(eligibility=list(eligibility), profile_name=next(iter(profiles)))
     ctx = _WizardContext(
@@ -872,13 +926,9 @@ def on_disks_create_pool(app) -> None:
         _show_no_eligible_disks(app)
         return
 
-    profiles = {
-        name: profile
-        for name, profile in get_workload_profiles(app.config).items()
-        if "filesystem" in profile.get("applies_to", [])
-    }
+    profiles = get_pool_profiles(app.config)
     if not profiles:
-        log_msg("WARN: No filesystem workload profiles configured")
+        log_msg("WARN: No pool profiles configured")
         return
     existing_names = set(data.topologies) | repository.list_importable_pool_names()
 
