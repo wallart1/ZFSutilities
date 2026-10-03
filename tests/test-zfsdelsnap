@@ -270,6 +270,10 @@ test_checkagainst_sources_cleanly() {
             }
             source "$mydir/zfscheckagainst"
             checkagainst "pool/fs@snap" >/dev/null 2>&1 || true
+            # The no-eligible-entry branch touches its print-once marker
+            # keyed on this shell $PPID; remove it so the test leaves no
+            # /tmp litter (the zfsdelsnap exit cleanup is not in play here).
+            rm -f "/tmp/fssalreadyprinted.$PPID"
             if [[ $(type -t checkagainst) == "function" ]]; then
                 echo FUNCTION_DEFINED
             else

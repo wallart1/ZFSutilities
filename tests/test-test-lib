@@ -52,9 +52,65 @@ test_late_failure_counts_as_failure() {
 }
 
 
+# Run a child suite that sources test-lib.sh and reports its PID, so the
+# parent can locate the child's per-PID /tmp artifacts. Prints "PID=<pid>".
+_child_suite() {
+    local libdir
+    libdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    bash -c "
+        source '${libdir}/test-lib.sh'
+        echo \"PID=\$\$\"
+        $1
+    " 2>&1
+}
+
+test_green_suite_removes_its_tmp_artifacts() {
+    test_start "green suite removes its log and mock-state dir at exit"
+    local out pid
+    out=$(_child_suite 'test_summary')
+    pid=$(sed -n 's/^PID=//p' <<<"$out")
+    if [[ ! -e "/tmp/zfsutilities-test-${pid}.log" \
+          && ! -e "/tmp/mock_zfs_state_${pid}" ]]; then
+        test_pass
+    else
+        test_fail "Artifacts for PID ${pid} were not removed at suite exit"
+    fi
+}
+
+test_failed_suite_retains_log_but_removes_state_dir() {
+    test_start "failed suite retains its log and removes the mock-state dir"
+    local out pid
+    out=$(_child_suite 'test_start "inner"; test_fail "boom"; test_summary')
+    pid=$(sed -n 's/^PID=//p' <<<"$out")
+    local log="/tmp/zfsutilities-test-${pid}.log"
+    if [[ -f "$log" && ! -e "/tmp/mock_zfs_state_${pid}" ]] \
+        && grep -q "retained for post-mortem" <<<"$out"; then
+        test_pass
+    else
+        test_fail "Failed suite should keep only its log (PID ${pid})"
+    fi
+    rm -f "$log"
+}
+
+test_suite_exit_status_preserved_through_cleanup() {
+    test_start "suite exit status survives the EXIT cleanup trap"
+    local out rc pid
+    out=$(_child_suite 'exit 42')
+    rc=$?
+    # A suite exiting before test_summary counts as crashed, so its log is
+    # retained by design; this test must reap that log itself.
+    pid=$(sed -n 's/^PID=//p' <<<"$out")
+    rm -f "/tmp/zfsutilities-test-${pid}.log"
+    assert_rc 42 "$rc"
+}
+
+
 test_pass_counter_is_idempotent
 test_fail_counter_is_idempotent
 test_skip_counter_is_idempotent
 test_late_failure_counts_as_failure
+test_green_suite_removes_its_tmp_artifacts
+test_failed_suite_retains_log_but_removes_state_dir
+test_suite_exit_status_preserved_through_cleanup
 
 test_summary

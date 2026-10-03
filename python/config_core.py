@@ -53,6 +53,11 @@ DASHBOARD_DEFAULTS = {
 }
 
 
+MEMORY_DEFAULTS = {
+    "refresh_seconds": 5,
+}
+
+
 def get_profiles_dir():
     """Return the directory where profile JSON files are stored."""
     return _paths_get_profiles_dir()
@@ -94,6 +99,7 @@ def load_config():
     config = {
         "backup": _deep_copy(BACKUP_DEFAULTS),
         "dashboard": _deep_copy(DASHBOARD_DEFAULTS),
+        "memory": _deep_copy(MEMORY_DEFAULTS),
         "config_version": CONFIG_VERSION,
     }
     try:
@@ -274,4 +280,22 @@ def get_dashboard_config(config):
 def save_dashboard_config(config, dashboard_data):
     """Store dashboard config and persist to disk."""
     config["dashboard"] = dict(dashboard_data)
+    save_config(config)
+
+
+def get_memory_config(config):
+    """Return the Memory tab config dict, creating defaults if absent."""
+    memory = config.get("memory")
+    if not isinstance(memory, dict):
+        memory = _deep_copy(MEMORY_DEFAULTS)
+        config["memory"] = memory
+    for key, value in MEMORY_DEFAULTS.items():
+        if key not in memory:
+            memory[key] = value
+    return memory
+
+
+def save_memory_config(config, memory_data):
+    """Store Memory tab config and persist to disk."""
+    config["memory"] = dict(memory_data)
     save_config(config)

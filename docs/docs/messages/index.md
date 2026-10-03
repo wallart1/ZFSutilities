@@ -1036,6 +1036,7 @@ Reconciles targetcli state against the expected-backstores manifest; `--dry-run`
 | `FATAL: Failed to create backstore ...` / `FATAL: Failed to map ... to .../tpg1/lun...` | The targetcli step failed for this entry | The loop continues; fix targetcli and rerun |
 | `INFO: Backed up saveconfig.json to ...` | Safety backup taken before mutation | Informational |
 | `INFO: ✓ Regenerated ...` | The expected-backstores manifest was rewritten from current state | Informational |
+| `FATAL: Regenerated manifest is empty; keeping ... unchanged.` / `FATAL: Could not install regenerated manifest at .... Check permissions on the destination directory.` | The rewritten manifest could not be produced or installed (failed write, unwritable destination) | Temp file removed; the previous manifest is left in place. Script aborts (exit 8) |
 | `WARN: rescan-storage not available at ...` / `WARN: Compute host rescan returned non-zero` | The compute-host rescan failed or is unavailable | Rescan manually |
 | `WARN: Re-logging iSCSI sessions on ... (all LUNs will briefly disconnect)` | The `--force-relogin` path is about to log out/in all sessions | Expected disruption; VM disks disconnect briefly |
 | `WARN: Manifest missing; falling back to discovered zvols` | The manifest is absent; expected set derived from the pool's zvols instead | Recreate the manifest (run `safe-iscsi-save`) |
@@ -1079,6 +1080,7 @@ Refuses to overwrite a good saved config while the target is degraded.
 | -------------- | ------- | -------- |
 | `INFO: ✓ Regenerated expected-backstores manifest` | The manifest was rewritten from loaded backstores | Informational |
 | `WARN: Could not regenerate expected-backstores manifest (no backstores found)` | No backstores are loaded; the old manifest is kept | Check why targetcli is empty; the manifest may be stale |
+| `FATAL: safe-iscsi-save: Could not install regenerated manifest at ...` | The regenerated manifest could not be moved into place (permissions/filesystem); the temp file is removed and the old manifest is kept | Check permissions on the manifest directory and rerun |
 | `INFO: ✓ Boot config generated (... encrypted backstores excluded)` | The boot-time config was written without encrypted references | Informational |
 | `WARN: Failed to generate boot config` | The boot-config filter failed | Boot restore may reference missing encrypted devices |
 | `FATAL: safe-iscsi-save: Config not found: ...` / `FATAL: safe-iscsi-save: Manifest not found: ...` / `FATAL: safe-iscsi-save: Manifest is empty or has no valid entries` | The saved config or manifest is absent/invalid (a hint line suggests the manifest format) | Create/repair the expected-backstores manifest |
@@ -1515,6 +1517,7 @@ GUI Migrate Pool wizard (storage host only): copy phase, then a destructive cuto
 | `WARN: Migrate Pool aborted for '...': pool changed after the review (...)` | Safety gate — the live dataset layout differs from the reviewed plan before copy starts | Aborted; re-review the plan; nothing runs |
 | `INFO: Migrate pool cancelled for ...` | The copy phase was cancelled | Lock released; holds file discarded; refresh |
 | `WARN: Migrate pool copy failed for '...' (rc=...); no destructive step was run` | The copy phase exited non-zero | Aborted before cutover; lock released; holds file discarded |
+| `WARN: Migrate pool start failed for '...' (...); captured-holds file discarded` | Starting the run itself failed (step build, lock acquisition, runner start) after the holds TSV was reserved | Nothing ran; lock released if taken; the error is re-raised — address it and rerun |
 | `INFO: Migrate pool copy complete for '...'; waiting for cutover confirmation` | Copy phase finished; the destructive phase is now gated | Layout re-check and running-VM warning, then the cutover dialog |
 | `WARN: Migrate Pool aborted for '...': pool changed at cutover time (...)` | Safety gate — the layout changed since review at the cutover moment | Cutover aborted; snapshot/copies remain; re-review |
 | `INFO: Cutover deferred for '...' (running VMs declined); the migration snapshot and copies remain in place — rerun Migrate Pool to finish` | The running-VMs warning was declined at cutover | Cutover not run; state preserved for a later rerun |
@@ -1959,6 +1962,7 @@ The GUI application shell: startup config checks, close confirmation, docs ancho
 | `WARN: No documentation anchor for page '...'` | Help-with-page has no docs anchor mapping for the current page | Docs viewer not opened |
 | `VERB: Action: ...` | An action button was clicked but no handler exists for that page+label (dispatch miss) | Nothing executed |
 | `VERB: > ...` | The user sent text via the stdin entry to the running runner | Text forwarded to the subprocess PTY |
+| `INFO: Memory stats refreshed` | The menu **Refresh** ran on the Memory page | Informational; charts/values already updated |
 
 ### [main](../commands-and-modules/python-modules.md#mainpy)
 

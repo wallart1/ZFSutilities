@@ -438,6 +438,7 @@ class TestPageAnchorMapping(unittest.TestCase):
             "restore",
             "schedule",
             "checkagainst",
+            "memory",
             "disks",
             "pools",
             "datasets",

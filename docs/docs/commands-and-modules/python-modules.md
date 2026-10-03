@@ -1518,6 +1518,69 @@ message level, and display the success-rate summary.
 
 ---
 
+### `memory_page.py`
+
+Memory tab: real-time ARC / L2ARC / SLOG monitors with value grids,
+per-device tables, and Cairo-drawn rolling time-series charts that redraw
+on every refresh tick. Samples are collected in a background thread and
+applied on the main loop via `GLib.idle_add`.
+
+**Key functions:**
+
+| Function                              | Purpose                                                            |
+| ------------------------------------- | ------------------------------------------------------------------ |
+| `create_memory_page(app)`             | Build the Memory tab widget and chart instances                    |
+| `refresh_memory_page(app)`            | Collect one sample off-thread and schedule the UI update           |
+| `_apply_memory_sample(app, sample)`   | Synchronously apply a sample to labels, charts, and device tables  |
+| `_on_memory_refresh_changed(spin, app)` | Persist the refresh interval and restart the timer               |
+
+**Key class:**
+
+| Class           | Purpose                                                                     |
+| --------------- | --------------------------------------------------------------------------- |
+| `RollingChart`  | Rolling time-series chart on a `Gtk.DrawingArea` (composition, not subclassing, so it stays usable under the test GTK mocks); 1–2 series, auto-scaled Y axis, optional reference line |
+
+**Called modules / imported helpers:**
+
+| Module           | Purpose in this module                       |
+| ---------------- | -------------------------------------------- |
+| `memory_stats`   | Sample collection, rate computation, formats |
+| `config_core`    | Memory refresh-interval config               |
+| `disk_repository`| `format_bytes`                               |
+| `gui_helpers`    | TreeView column setup                        |
+
+**Data structures consumed / produced:**
+
+| Structure      | Reference                        |
+| -------------- | -------------------------------- |
+| `MemorySample` / `MemoryRates` | [Memory samples][ds-memory] |
+
+---
+
+### `memory_stats.py`
+
+Pure data layer (no GTK) for the Memory tab: parses the ARC/ZIL kstat
+files and `zpool iostat -v` output, collects per-source-degrading
+samples, and computes per-interval rates from cumulative-counter deltas.
+
+**Key functions:**
+
+| Function                                    | Purpose                                                            |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| `parse_arcstats(text)` / `parse_zil_kstats(text)` | kstat body → `{name: value}` (only fields the kernel exposes) |
+| `parse_zpool_iostat_v(text)`                | iostat output → `VdevSample` rows for `logs`/`cache` sections      |
+| `collect_memory_sample()`                   | Probe all three sources; each degrades independently               |
+| `compute_rates(prev, cur)`                  | Counter deltas → `MemoryRates` (counter resets yield `None`)       |
+| `format_rate` / `format_percent` / `format_per_second` | Display formatters ("—" for unknown)                     |
+
+**Data structures consumed / produced:**
+
+| Structure                    | Reference                        |
+| ---------------------------- | -------------------------------- |
+| `MemorySample` / `VdevSample` / `MemoryRates` | [Memory samples][ds-memory] |
+
+---
+
 ## Managers and helpers
 
 ### `path_utils.py`
@@ -2201,6 +2264,7 @@ One-time parser for legacy `zfsretainpol-<pool>` bash files.
 [ds-config-migrations]: ../developer-guide/data-structures.md#config-migrations
 [ds-retention]: ../developer-guide/data-structures.md#retention-policy-arrays-bktname-bktretain-minage
 [ds-workload]: ../developer-guide/data-structures.md#workload_profiles-object
+[ds-memory]: ../developer-guide/data-structures.md#memory-samples-memory_statspy
 
 ---
 

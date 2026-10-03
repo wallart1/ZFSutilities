@@ -1459,127 +1459,145 @@ def on_disks_migrate_pool(app) -> None:
     os.close(fd)
     request = replace(request, holds_file=holds_file)
 
-    copy_steps, cutover_steps = build_migration_steps(request)
-    lock_id = zlm.acquire(request.source_pool, "w", f"Migrate pool {request.source_pool}")
+    # The copy phase writes the captured holds into the TSV and the cutover
+    # phase consumes it; from here the completion callbacks own the file. If
+    # starting the run itself fails (step build, lock acquisition, runner
+    # start), no callback will ever fire, so discard the file (and release
+    # the lock if it was taken) before letting the error surface.
+    lock_id = None
+    try:
+        copy_steps, cutover_steps = build_migration_steps(request)
+        lock_id = zlm.acquire(request.source_pool, "w", f"Migrate pool {request.source_pool}")
 
-    def _copy_complete(cancelled=False, rc=None):
-        if cancelled or rc:
+        def _copy_complete(cancelled=False, rc=None):
+            if cancelled or rc:
+                zlm.release(lock_id)
+                _discard_holds_file(request.holds_file)
+                _finish_refresh(app)
+                if cancelled:
+                    log_msg(f"INFO: Migrate pool cancelled for {request.source_pool}")
+                else:
+                    log_msg(
+                        f"WARN: Migrate pool copy failed for '{request.source_pool}' "
+                        f"(rc={rc}); no destructive step was run"
+                    )
+                return
+            log_msg(
+                f"INFO: Migrate pool copy complete for '{request.source_pool}'; "
+                "waiting for cutover confirmation"
+            )
+            # The copy phase may have taken hours; the reviewed layout must still
+            # hold before anything destructive runs (same pattern as the pre-copy
+            # check — datasets renamed/added/removed since the review invalidate
+            # the catch-up and copy-back steps that were composed from it).
+            changed = _source_layout_changed(repository, request)
+            if changed:
+                log_msg(
+                    f"WARN: Migrate Pool aborted for '{request.source_pool}': "
+                    f"pool changed at cutover time ({changed})"
+                )
+                zlm.release(lock_id)
+                _discard_holds_file(request.holds_file)
+                _finish_refresh(app)
+                _show_info_dialog(
+                    app,
+                    "Pool layout changed",
+                    f"The dataset layout of pool '{request.source_pool}' changed "
+                    f"since the Migrate Pool review ({changed}). The cutover was "
+                    "not run; the migration snapshot and copies remain in place "
+                    "— re-open Migrate Pool and review the plan again.",
+                )
+                return
+            running = _running_vms_on_pool(repository, request.source_pool)
+            if running and not _show_running_vms_warning(app, request.source_pool, running):
+                zlm.release(lock_id)
+                _discard_holds_file(request.holds_file)
+                _finish_refresh(app)
+                log_msg(
+                    f"INFO: Cutover deferred for '{request.source_pool}' (running "
+                    "VMs declined); the migration snapshot and copies remain in "
+                    "place — rerun Migrate Pool to finish"
+                )
+                return
+            if not _show_cutover_confirm(app, request):
+                zlm.release(lock_id)
+                _discard_holds_file(request.holds_file)
+                _finish_refresh(app)
+                log_msg(
+                    f"INFO: Cutover deferred for '{request.source_pool}'; the "
+                    "migration snapshot and copies remain in place — rerun Migrate "
+                    "Pool to finish"
+                )
+                return
+            runner.set_steps(cutover_steps)
+            update_disks_button_sensitivity(app)
+            runner.start(on_complete=_cutover_complete)
+
+        def _cutover_complete(cancelled=False, rc=None):
             zlm.release(lock_id)
-            _discard_holds_file(request.holds_file)
             _finish_refresh(app)
             if cancelled:
-                log_msg(f"INFO: Migrate pool cancelled for {request.source_pool}")
-            else:
+                log_msg(f"INFO: Migrate pool cutover cancelled for {request.source_pool}")
+                _log_holds_file_preservation(request.source_pool, request.holds_file)
+                return
+            if rc:
                 log_msg(
-                    f"WARN: Migrate pool copy failed for '{request.source_pool}' "
-                    f"(rc={rc}); no destructive step was run"
+                    f"WARN: Migrate pool cutover failed for '{request.source_pool}' "
+                    f"(rc={rc}) — the pool may be left exported; investigate before "
+                    "retrying"
                 )
-            return
-        log_msg(
-            f"INFO: Migrate pool copy complete for '{request.source_pool}'; "
-            "waiting for cutover confirmation"
-        )
-        # The copy phase may have taken hours; the reviewed layout must still
-        # hold before anything destructive runs (same pattern as the pre-copy
-        # check — datasets renamed/added/removed since the review invalidate
-        # the catch-up and copy-back steps that were composed from it).
-        changed = _source_layout_changed(repository, request)
-        if changed:
-            log_msg(
-                f"WARN: Migrate Pool aborted for '{request.source_pool}': "
-                f"pool changed at cutover time ({changed})"
-            )
-            zlm.release(lock_id)
+                _log_holds_file_preservation(request.source_pool, request.holds_file)
+                return
             _discard_holds_file(request.holds_file)
-            _finish_refresh(app)
-            _show_info_dialog(
-                app,
-                "Pool layout changed",
-                f"The dataset layout of pool '{request.source_pool}' changed "
-                f"since the Migrate Pool review ({changed}). The cutover was "
-                "not run; the migration snapshot and copies remain in place "
-                "— re-open Migrate Pool and review the plan again.",
-            )
-            return
-        running = _running_vms_on_pool(repository, request.source_pool)
-        if running and not _show_running_vms_warning(app, request.source_pool, running):
-            zlm.release(lock_id)
-            _discard_holds_file(request.holds_file)
-            _finish_refresh(app)
             log_msg(
-                f"INFO: Cutover deferred for '{request.source_pool}' (running "
-                "VMs declined); the migration snapshot and copies remain in "
-                "place — rerun Migrate Pool to finish"
+                f"INFO: Pool '{request.source_pool}' migrated successfully (mode: {request.mode})"
             )
-            return
-        if not _show_cutover_confirm(app, request):
-            zlm.release(lock_id)
-            _discard_holds_file(request.holds_file)
-            _finish_refresh(app)
-            log_msg(
-                f"INFO: Cutover deferred for '{request.source_pool}'; the "
-                "migration snapshot and copies remain in place — rerun Migrate "
-                "Pool to finish"
-            )
-            return
-        runner.set_steps(cutover_steps)
-        update_disks_button_sensitivity(app)
-        runner.start(on_complete=_cutover_complete)
+            if is_iscsi_managed_pool(request.source_pool):
+                repair_step = BashStep(
+                    [resolve_local_bin("repair-iscsi-luns") or "repair-iscsi-luns"],
+                    "Re-register migrated pool iSCSI LUNs",
+                    is_rsync=False,
+                    fatal=False,
+                )
 
-    def _cutover_complete(cancelled=False, rc=None):
-        zlm.release(lock_id)
-        _finish_refresh(app)
-        if cancelled:
-            log_msg(f"INFO: Migrate pool cutover cancelled for {request.source_pool}")
-            _log_holds_file_preservation(request.source_pool, request.holds_file)
-            return
-        if rc:
-            log_msg(
-                f"WARN: Migrate pool cutover failed for '{request.source_pool}' "
-                f"(rc={rc}) — the pool may be left exported; investigate before "
-                "retrying"
-            )
-            _log_holds_file_preservation(request.source_pool, request.holds_file)
-            return
-        _discard_holds_file(request.holds_file)
-        log_msg(f"INFO: Pool '{request.source_pool}' migrated successfully (mode: {request.mode})")
-        if is_iscsi_managed_pool(request.source_pool):
-            repair_step = BashStep(
-                [resolve_local_bin("repair-iscsi-luns") or "repair-iscsi-luns"],
-                "Re-register migrated pool iSCSI LUNs",
-                is_rsync=False,
-                fatal=False,
-            )
+                def _repair_complete(cancelled=False, rc=None):
+                    if cancelled:
+                        log_msg(
+                            f"INFO: iSCSI LUN re-registration for '{request.source_pool}' cancelled"
+                        )
+                    elif rc:
+                        log_msg(
+                            f"WARN: iSCSI LUN re-registration for "
+                            f"'{request.source_pool}' failed (rc={rc})"
+                        )
+                    else:
+                        log_msg(f"INFO: iSCSI LUNs re-registered for '{request.source_pool}'")
+                    _finish_refresh(app)
+                    offer_proxmox_enrollment(app, request.source_pool)
 
-            def _repair_complete(cancelled=False, rc=None):
-                if cancelled:
+                runner.set_steps([repair_step])
+                update_disks_button_sensitivity(app)
+                runner.start(on_complete=_repair_complete)
+            else:
+                if node_config.is_two_node():
                     log_msg(
-                        f"INFO: iSCSI LUN re-registration for '{request.source_pool}' cancelled"
+                        f"INFO: Pool '{request.source_pool}' is not enrolled in two-node "
+                        "iSCSI, so VM disks on it are not available over iSCSI. "
+                        "Manual enrollment steps:"
                     )
-                elif rc:
-                    log_msg(
-                        f"WARN: iSCSI LUN re-registration for "
-                        f"'{request.source_pool}' failed (rc={rc})"
-                    )
-                else:
-                    log_msg(f"INFO: iSCSI LUNs re-registered for '{request.source_pool}'")
-                _finish_refresh(app)
+                    log_manual_enrollment_steps(request.source_pool)
                 offer_proxmox_enrollment(app, request.source_pool)
 
-            runner.set_steps([repair_step])
-            update_disks_button_sensitivity(app)
-            runner.start(on_complete=_repair_complete)
-        else:
-            if node_config.is_two_node():
-                log_msg(
-                    f"INFO: Pool '{request.source_pool}' is not enrolled in two-node "
-                    "iSCSI, so VM disks on it are not available over iSCSI. "
-                    "Manual enrollment steps:"
-                )
-                log_manual_enrollment_steps(request.source_pool)
-            offer_proxmox_enrollment(app, request.source_pool)
-
-    runner.operation_detail = f"Migrate Pool: {request.source_pool}"
-    runner.set_steps(copy_steps)
-    update_disks_button_sensitivity(app)
-    runner.start(on_complete=_copy_complete)
+        runner.operation_detail = f"Migrate Pool: {request.source_pool}"
+        runner.set_steps(copy_steps)
+        update_disks_button_sensitivity(app)
+        runner.start(on_complete=_copy_complete)
+    except Exception as exc:
+        if lock_id is not None:
+            zlm.release(lock_id)
+        _discard_holds_file(holds_file)
+        log_msg(
+            f"WARN: Migrate pool start failed for '{request.source_pool}' "
+            f"({exc}); captured-holds file discarded"
+        )
+        raise

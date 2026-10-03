@@ -54,7 +54,7 @@ _write_trailer() {
         echo "# END: rc=${rc}, duration=${SECONDS}s" >> "$ZFSUTILITIES_LOG_FILE"
     fi
 }
-trap _write_trailer EXIT
+append_exit_trap _write_trailer
 source_helper zfscleanup
 source_helper rsync-dailybackup
 

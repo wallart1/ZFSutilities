@@ -807,12 +807,65 @@ class TestTerminateConfirmation(unittest.TestCase):
         with (
             patch.object(gui, "_collect_running_tasks", return_value=tasks_data),
             patch.object(gui, "_is_descendant_of_current_process") as mock_descendant,
+            patch.object(gui, "_profile_tab_type", return_value="backup"),
         ):
             mock_descendant.side_effect = lambda pid: pid == 1234
             tasks = window._collect_abortable_tasks()
 
         names = [t["name"] for t in tasks]
         self.assertEqual(names, ["Backup", "Daily"])
+
+    def test_collect_abortable_tasks_skips_gui_started_scrub_profiles(self):
+        """GUI-started scrub-profile runs are excluded: their scrubs survive."""
+        window, gui = self._make_window()
+        window.dataset_runner = None
+        tasks_data = [
+            {"name": "Weekly Scrub", "type": "Profile", "status": "PID 1234"},
+            {"name": "Scheduled: Monthly Scrub", "type": "Scheduled", "status": "PID 2345"},
+        ]
+        tab_types = {"Weekly Scrub": "scrub", "Monthly Scrub": "scrub"}
+        with (
+            patch.object(gui, "_collect_running_tasks", return_value=tasks_data),
+            patch.object(gui, "_is_descendant_of_current_process", return_value=True),
+            patch.object(gui, "_profile_tab_type", side_effect=lambda name: tab_types.get(name)),
+        ):
+            tasks = window._collect_abortable_tasks()
+
+        self.assertEqual(tasks, [])
+
+    def test_collect_abortable_tasks_keeps_gui_started_non_scrub_profiles(self):
+        """GUI-started non-scrub profiles and unknown types stay listed."""
+        window, gui = self._make_window()
+        window.dataset_runner = None
+        tasks_data = [
+            {"name": "Daily", "type": "Profile", "status": "PID 1234"},
+            {"name": "Mystery", "type": "Profile", "status": "PID 3456"},
+            {"name": "Scheduled: Nightly", "type": "Scheduled", "status": "PID 5678"},
+        ]
+        tab_types = {"Daily": "backup", "Nightly": "offsite"}
+        with (
+            patch.object(gui, "_collect_running_tasks", return_value=tasks_data),
+            patch.object(gui, "_is_descendant_of_current_process", return_value=True),
+            patch.object(gui, "_profile_tab_type", side_effect=lambda name: tab_types.get(name)),
+        ):
+            tasks = window._collect_abortable_tasks()
+
+        names = [t["name"] for t in tasks]
+        self.assertEqual(names, ["Daily", "Mystery", "Scheduled: Nightly"])
+
+    def test_collect_abortable_tasks_filters_surface_tests(self):
+        """Firmware-driven surface tests are excluded; they survive GUI close."""
+        window, gui = self._make_window()
+        window.dataset_runner = None
+        tasks_data = [
+            {"name": "Backup", "type": "GUI", "status": "Running"},
+            {"name": "Surface Test: /dev/sda", "type": "Surface Test", "status": "30% done"},
+        ]
+        with patch.object(gui, "_collect_running_tasks", return_value=tasks_data):
+            tasks = window._collect_abortable_tasks()
+
+        names = [t["name"] for t in tasks]
+        self.assertEqual(names, ["Backup"])
 
     def test_on_quit_no_tasks_quits(self):
         """Quit menu with no running tasks invokes app.quit()."""
@@ -899,6 +952,99 @@ class TestDisksTimer(unittest.TestCase):
         with patch("disks_page.refresh_surface_test_status") as mock_refresh:
             self.assertTrue(window._on_disks_timer_tick())
         mock_refresh.assert_not_called()
+
+
+class TestMemoryTimer(unittest.TestCase):
+    """Tests for the Memory-tab refresh timer lifecycle."""
+
+    def _make_window(self):
+        """Create a ZFSUtilitiesWindow with __init__ bypassed."""
+        gui = _gui_module()
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
+            window = gui.ZFSUtilitiesWindow()
+            window._memory_timer = None
+            window.stack = MagicMock()
+            window.config = {"memory": {"refresh_seconds": 5}}
+            return window
+
+    @patch("zfsutilities_gui.GLib")
+    def test_memory_page_starts_timer(self, mock_glib):
+        """Switching to Memory refreshes once and starts the configured timer."""
+        window = self._make_window()
+        mock_glib.timeout_add_seconds.return_value = 42
+        with patch("zfsutilities_gui.refresh_memory_page") as mock_refresh:
+            window._start_stop_memory_timer("memory")
+        mock_refresh.assert_called_once_with(window)
+        mock_glib.timeout_add_seconds.assert_called_once_with(5, window._on_memory_timer_tick)
+        self.assertEqual(window._memory_timer, 42)
+
+    @patch("zfsutilities_gui.GLib")
+    def test_non_memory_page_stops_timer(self, mock_glib):
+        """Switching away from Memory removes the timer."""
+        window = self._make_window()
+        window._memory_timer = 7
+        window._start_stop_memory_timer("backup")
+        mock_glib.source_remove.assert_called_once_with(7)
+        self.assertIsNone(window._memory_timer)
+
+    def test_timer_tick_refreshes_only_on_memory_page(self):
+        """The tick callback refreshes on Memory and stays alive."""
+        window = self._make_window()
+        window.stack.get_visible_child_name.return_value = "memory"
+        with patch("zfsutilities_gui.refresh_memory_page") as mock_refresh:
+            self.assertTrue(window._on_memory_timer_tick())
+        mock_refresh.assert_called_once_with(window)
+
+        mock_refresh.reset_mock()
+        window.stack.get_visible_child_name.return_value = "backup"
+        with patch("zfsutilities_gui.refresh_memory_page") as mock_refresh:
+            self.assertTrue(window._on_memory_timer_tick())
+        mock_refresh.assert_not_called()
+
+    def test_destroy_removes_memory_timer(self):
+        window = self._make_window()
+        window._memory_timer = 9
+        window.popout_window = None
+        with patch("zfsutilities_gui.GLib") as mock_glib:
+            window._on_main_destroy(None)
+        mock_glib.source_remove.assert_called_once_with(9)
+        self.assertIsNone(window._memory_timer)
+
+
+class TestSidebarPageOrder(unittest.TestCase):
+    """The sidebar exposes the pages in the agreed order."""
+
+    def test_infrastructure_tabs_are_last(self):
+        """Disks/Pools/Datasets are the final three tabs, Memory just before."""
+        gui = _gui_module()
+        names = [name for name, _title, _builder in gui.PAGE_BUILDERS]
+        self.assertEqual(names[-4:], ["memory", "disks", "pools", "datasets"])
+
+    def test_all_pages_present_exactly_once(self):
+        gui = _gui_module()
+        names = [name for name, _title, _builder in gui.PAGE_BUILDERS]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(
+            set(names),
+            {
+                "dashboard",
+                "backup",
+                "offsite",
+                "restore",
+                "schedule",
+                "retention",
+                "checkagainst",
+                "logs",
+                "memory",
+                "disks",
+                "pools",
+                "datasets",
+            },
+        )
+
+    def test_memory_has_documentation_anchor(self):
+        gui = _gui_module()
+        self.assertEqual(gui.ZFSUtilitiesWindow._PAGE_ANCHORS["memory"], "memory-tab")
 
 
 if __name__ == "__main__":

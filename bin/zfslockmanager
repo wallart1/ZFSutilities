@@ -476,7 +476,10 @@ zfslock_init() {
     if [[ -z "${_zfslock_this_host:-}" ]]; then
         _zfslock_load_node_config
     fi
-    trap _zfslock_cleanup_trap EXIT
+    # Composable registration: a bare `trap ... EXIT` here would discard any
+    # exit cleanup registered earlier in the same shell (e.g. test-lib's
+    # artifact removal or zfsdailybackup's log trailer).
+    append_exit_trap _zfslock_cleanup_trap
 }
 
 # Check if a lock file represents a stale lock

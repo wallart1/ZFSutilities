@@ -70,6 +70,9 @@ test_log_msg_writes_all_levels() {
         test_pass
     fi
     rm -f "$logfile"
+    # Drop the exports with the file: later subshell tests source the real
+    # bashinit, and log_msg appends would recreate the deleted path.
+    unset ZFSUTILITIES_LOG_FILE ZFSUTILITIES_LOG_INHERIT msg_level
 }
 
 test_log_msg_prints_all_to_stderr() {
@@ -123,6 +126,7 @@ test_log_msg_writes_to_file_when_owned() {
         test_pass
     fi
     rm -f "$logfile"
+    unset ZFSUTILITIES_LOG_FILE ZFSUTILITIES_LOG_INHERIT msg_level
 }
 
 test_log_msg_handles_unset_log_file() {
@@ -206,6 +210,7 @@ test_log_msg_log_file_always_long_prefix() {
     assert_contains "$content" "INFO: logged message"
     assert_contains "$content" ": INFO: logged message"
     rm -f "$logfile"
+    unset ZFSUTILITIES_LOG_FILE ZFSUTILITIES_LOG_INHERIT msg_level
 }
 
 test_log_msg_writes_to_file_when_owned

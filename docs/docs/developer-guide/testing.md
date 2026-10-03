@@ -246,7 +246,10 @@ function overrides so every suite can execute as a normal user.
 1. Create `tests/test-<scriptname>` (executable, no extension).
 2. Source `test-lib.sh` at the top.
 3. Define test functions that call `test_start` plus any assertion helpers.
-4. Call `test_summary` at the end.
+4. Call `test_summary` at the end.  The suite's `/tmp` artifacts are cleaned
+   up automatically at exit (failed suites keep their log for post-mortem).
+   If the suite needs its own exit cleanup, register it with
+   `append_exit_trap` rather than a bare `trap ... EXIT`.
 
 If the suite genuinely needs a system binary that other suites mock (rather
 than overriding the command the way `test-lib.sh` mocks do), declare the
@@ -694,6 +697,16 @@ zfs list -r zfstest1 zfstest2
 `test-lib.sh` so the harness stays quiet.  Tests that need to assert on
 `log_msg` output should read the file returned by `get_test_log_file()` (or
 use `get_stderr_log()` from `test-zfs-send-receive-dryrun`).
+* **Automatic `/tmp` cleanup** — every suite's per-PID artifacts
+(`/tmp/zfsutilities-test-<pid>.log` and `/tmp/mock_zfs_state_<pid>`) are
+removed by an exit trap when the suite process ends.  A suite that failed or
+crashed keeps its log for post-mortem (the path is printed on stderr when it
+is retained); green runs leave nothing behind.
+* **Exit cleanup composes** — suites or scripts that need their own exit-time
+cleanup must register it with `append_exit_trap '<command>'` (from
+`bashinit`), never a bare `trap '<command>' EXIT`, which would silently
+discard everything registered earlier in the same shell.  `zfslock_init`
+already registers its lock release this way.
 * **Root check** — [rootcheck](../commands-and-modules/modules.md#rootcheck) is mocked to a no-op.  Any future suite that
 legitimately requires root should check `$EUID` and call `test_skip` when
 non-root.

@@ -542,5 +542,11 @@ test_literal_counterpart_deeply_nested_child
 
 rm -rf "$mock_base"
 
+# This suite sources zfscheckagainst directly (not via zfsdelsnap, which
+# owns the production marker cleanup), so remove the print-once marker the
+# no-eligible-entry tests leave behind. Composable registration keeps the
+# test-lib artifact cleanup alive.
+append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$"'
+
 test_summary
 teardown_test_env

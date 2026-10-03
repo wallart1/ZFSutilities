@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 # test-run-tests-preflight — Unit tests for the run-tests environment preflight.
-# shellcheck disable=SC1090,SC2034,SC2154
+# shellcheck disable=SC1090,SC2034,SC2154,SC2016
 
 # The preflight functions in tests/run-tests are extracted by name with sed
 # (the same convention as tests/test-check-prerequisites) and exercised against
@@ -449,9 +449,104 @@ test_pytest_jobs_capped_by_nproc_when_memory_plentiful
 test_pytest_jobs_capped_by_memory
 test_pytest_jobs_never_below_one
 test_pytest_jobs_scales_with_memory
+# ---------------------------------------------------------------------------
+# cleanup
+# ---------------------------------------------------------------------------
+
+# cleanup() references kill_pytest_tree (not loaded by this suite); stub it.
+kill_pytest_tree() { :; }
+
+test_cleanup_removes_py_tmpout_and_state_dir() {
+    test_start "cleanup removes py_tmpout and the state dir"
+    load_helper_from_run_tests cleanup
+    local py_file state_dir_path
+    py_file=$(mktemp)
+    state_dir_path=$(mktemp -d)
+    py_tmpout="$py_file"
+    state_dir="$state_dir_path"
+    cleanup
+    if [[ ! -e "$py_file" && ! -e "$state_dir_path" ]]; then
+        test_pass
+    else
+        test_fail "cleanup left paths behind: py_tmpout='$py_file' state_dir='$state_dir_path'"
+    fi
+}
+
+test_cleanup_tolerates_unset_py_tmpout() {
+    test_start "cleanup tolerates unset py_tmpout under set -u"
+    # run-tests runs under set -euo pipefail; an interruption before any
+    # Python suite started means py_tmpout is unset when the EXIT trap fires.
+    # Exercise the extracted function in a bash -u subshell to prove it.
+    local extracted state_dir_path out rc=0
+    extracted=$(mktemp)
+    sed -n "/^cleanup() {/,/^}/p" "$RUN_TESTS" > "$extracted"
+    state_dir_path=$(mktemp -d)
+    out=$(bash -uc '
+        kill_pytest_tree() { :; }
+        state_dir=$1
+        source "$2"
+        cleanup
+    ' bash "$state_dir_path" "$extracted" 2>&1) || rc=$?
+    rm -f "$extracted"
+
+    if [[ "$rc" -eq 0 ]] && [[ ! -e "$state_dir_path" ]] && [[ -z "$out" ]]; then
+        test_pass
+    else
+        local state_dir_state
+        state_dir_state=$( [[ -e "$state_dir_path" ]] && echo present || echo gone )
+        test_fail "rc=$rc output='$out' state_dir_state=$state_dir_state"
+    fi
+}
+
+test_cleanup_completes_when_pytest_dies_under_term() {
+    test_start "cleanup finishes teardown after TERMinating a live pytest"
+    # Regression: kill_pytest_tree's wait returns 143 after TERMinating the
+    # pytest PID, and under set -e that aborted cleanup() mid-handler — both
+    # py_tmpout and state_dir leaked on interruption. Exercise the REAL
+    # kill_pytest_tree + cleanup (extracted together) under set -eu with a
+    # live background process standing in for pytest.
+    local extracted py_file state_dir_path out rc=0
+    extracted=$(mktemp)
+    sed -n "/^kill_pytest_tree() {/,/^}/p" "$RUN_TESTS" > "$extracted"
+    sed -n "/^cleanup() {/,/^}/p" "$RUN_TESTS" >> "$extracted"
+    py_file=$(mktemp)
+    state_dir_path=$(mktemp -d)
+    out=$(bash -euc '
+        source "$3"
+        sleep 30 &
+        pytest_pid=$!
+        echo "SLEEP_PID=$pytest_pid"
+        py_tmpout=$1
+        state_dir=$2
+        cleanup
+    ' bash "$py_file" "$state_dir_path" "$extracted" 2>&1) || rc=$?
+    rm -f "$extracted"
+    local sleep_pid noise
+    sleep_pid=$(sed -n 's/^SLEEP_PID=//p' <<<"$out")
+    noise=$(grep -v '^SLEEP_PID=' <<<"$out")
+
+    if [[ "$rc" -eq 0 ]] && [[ ! -e "$py_file" ]] && [[ ! -e "$state_dir_path" ]] \
+        && [[ -n "$sleep_pid" ]] && ! kill -0 "$sleep_pid" 2>/dev/null \
+        && [[ -z "$noise" ]]; then
+        test_pass
+    else
+        local py_tmpout_state state_dir_state sleep_alive
+        py_tmpout_state=$( [[ -e "$py_file" ]] && echo present || echo gone )
+        state_dir_state=$( [[ -e "$state_dir_path" ]] && echo present || echo gone )
+        sleep_alive=$( kill -0 "$sleep_pid" 2>/dev/null && echo yes || echo no )
+        local reason
+        reason="rc=$rc noise='$noise' pytmp=$py_tmpout_state"
+        reason+=" statedir=$state_dir_state sleep=$sleep_alive"
+        test_fail "$reason"
+    fi
+}
+
 test_missing_requirements_with_fabricated_caps
 test_is_skipped_soak_rules
 test_pytest_exit5_with_skips_is_clean
+test_cleanup_removes_py_tmpout_and_state_dir
+test_cleanup_tolerates_unset_py_tmpout
+test_cleanup_completes_when_pytest_dies_under_term
 
 test_summary
 teardown_test_env

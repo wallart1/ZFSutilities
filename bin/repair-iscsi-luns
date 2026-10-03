@@ -343,7 +343,19 @@ regenerate_manifest() {
         printf '%s\n' "${_bs_names[@]}" | sort -V
     } > "$tmpfile"
 
-    mv -f "$tmpfile" "$manifest"
+    # An unreadable or failed write must not be installed as the manifest:
+    # an empty authoritative list would unmap every pool on the next run.
+    if [[ ! -s "$tmpfile" ]]; then
+        rm -f "$tmpfile"
+        log_msg "FATAL: Regenerated manifest is empty; keeping $manifest unchanged."
+        exit 8
+    fi
+    if ! mv -f "$tmpfile" "$manifest"; then
+        rm -f "$tmpfile"
+        log_msg "FATAL: Could not install regenerated manifest at $manifest." \
+            "Check permissions on the destination directory."
+        exit 8
+    fi
     log_msg "INFO:   ✓ Regenerated $manifest"
 }
 

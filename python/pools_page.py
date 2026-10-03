@@ -319,7 +319,7 @@ def create_pools_page(app):
         (0, "Pool", 90),
         (1, "Status", 70),
         (2, "Progress", 65),
-        (3, "Last Scrub", 130),
+        (3, "As Of", 130),
         (4, "Scan Line", 150),
     ]:
         r = Gtk.CellRendererText()
@@ -799,7 +799,7 @@ def refresh_scrub_table(app):
         if display_state == "scanning":
             display_state = "scrubbing"
         progress = f"{info.progress_percent:.1f}%" if info.progress_percent is not None else "—"
-        last = info.last_scrub or "—"
+        last = info.as_of or "—"
         scan = info.scan_line or "—"
         new_data[pool_name] = [pool_name, display_state, progress, last, scan]
 

@@ -450,7 +450,12 @@ function send-receive {
     local _sr_holds_file=""
     if [[ $preserve_target_holds = 'Y' && $dryrun = 'N' \
           && ( $doincrementals != 'Y' || $force = 'Y' ) ]]; then
-        _sr_holds_file=$(mktemp -t zfs-send-receive-target-holds.XXXXXX)
+        _sr_holds_file=$(mktemp "${TMPDIR:-/tmp}/zfs-send-receive-target-holds.XXXXXX")
+        # The normal-completion reap below removes the file; this exit-trap
+        # registration covers the internal fatal exits in between. It is
+        # idempotent (rm of an already-removed file) and composes with the
+        # zfslockmanager exit cleanup installed by zfslock_init below.
+        append_exit_trap '[[ -n "${_sr_holds_file:-}" ]] && rm -f "$_sr_holds_file"'
         if ! reapplyholds_capture "$destfs" "$_sr_holds_file"; then
             rm -f "$_sr_holds_file"
             _sr_holds_file=""

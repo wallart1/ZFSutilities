@@ -43,7 +43,9 @@ class ScrubInfo:
     state: ScrubState = ScrubState.UNKNOWN
     progress_percent: float | None = None
     scan_line: str = ""
-    last_scrub: str = ""
+    # Timestamp ZFS attaches to the current scan line (in-progress-since /
+    # paused-since / finished-on / canceled-on / resilvered-on); empty when none.
+    as_of: str = ""
     errors: int = 0
     remaining_seconds: int | None = None
     eta: datetime | None = None
@@ -130,7 +132,7 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
     m = _SCAN_PROGRESS_RE.search(raw)
     if m:
         info.state = ScrubState.SCANNING
-        info.last_scrub = m.group(1).strip()
+        info.as_of = m.group(1).strip()
         info.progress_percent = _extract_percent(raw)
         info.remaining_seconds = _extract_remaining_seconds(raw)
         if info.remaining_seconds is not None:
@@ -142,7 +144,7 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
     m = _SCAN_PAUSED_RE.search(raw)
     if m:
         info.state = ScrubState.PAUSED
-        info.last_scrub = m.group(1).strip()
+        info.as_of = m.group(1).strip()
         info.progress_percent = _extract_percent(raw)
         info.scan_line = " ".join(scan_lines)
         return info
@@ -151,14 +153,14 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
     if m:
         info.state = ScrubState.FINISHED
         info.errors = int(m.group(2))
-        info.last_scrub = m.group(3).strip()
+        info.as_of = m.group(3).strip()
         info.scan_line = " ".join(scan_lines)
         return info
 
     m = _SCAN_CANCELED_RE.search(raw)
     if m:
         info.state = ScrubState.CANCELED
-        info.last_scrub = m.group(1).strip()
+        info.as_of = m.group(1).strip()
         info.scan_line = " ".join(scan_lines)
         return info
 
@@ -167,7 +169,7 @@ def parse_scrub_status(raw: str) -> ScrubInfo:
         # Treat resilver similarly to a finished scrub for dashboard purposes
         info.state = ScrubState.FINISHED
         info.errors = int(m.group(2))
-        info.last_scrub = m.group(3).strip()
+        info.as_of = m.group(3).strip()
         info.scan_line = " ".join(scan_lines)
         return info
 

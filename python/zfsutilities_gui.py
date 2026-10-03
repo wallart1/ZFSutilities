@@ -53,9 +53,11 @@ from gui_helpers import (
 )
 from logging_config import format_log_line_short, log_msg
 from logs_page import create_logs_page
+from memory_page import create_memory_page, refresh_memory_page
 from offsite_page import create_offsite_page, do_detect_offsite_pool
 from path_utils import get_version
 from pools_page import create_pools_page, on_pools_refresh
+from profile_manager import load_profile
 from restore_page import create_restore_page
 from retention_page import create_retention_page, refresh_prune_pools
 from runner_factory import RunnerFactory
@@ -63,6 +65,24 @@ from schedule_page import create_schedule_page, refresh_schedule_page
 
 # Pool Registry refresh interval while the Pools tab is visible (seconds).
 POOLS_REFRESH_SECONDS = 30
+
+# Sidebar pages in display order: (stack name, sidebar title, page factory).
+# The infrastructure tabs (Memory, Disks, Pools, Datasets) sit at the bottom,
+# below the task-oriented pages.
+PAGE_BUILDERS = [
+    ("dashboard", "Dashboard", create_dashboard_page),
+    ("backup", "Backup", lambda app: create_backup_page(app, app.ctx)),
+    ("offsite", "Offsite", lambda app: create_offsite_page(app, app.ctx)),
+    ("restore", "Restore", lambda app: create_restore_page(app, app.ctx)),
+    ("schedule", "Schedule", create_schedule_page),
+    ("retention", "Retention", lambda app: create_retention_page(app, app.ctx)),
+    ("checkagainst", "Checkagainst", create_checkagainst_page),
+    ("logs", "Logs", create_logs_page),
+    ("memory", "Memory", create_memory_page),
+    ("disks", "Disks", create_disks_page),
+    ("pools", "Pools", create_pools_page),
+    ("datasets", "Datasets", create_datasets_page),
+]
 
 
 def _detect_parent_dir(script_dir):
@@ -113,6 +133,14 @@ def _is_descendant_of_current_process(pid):
             break
         current = ppid
     return False
+
+
+def _profile_tab_type(profile_name):
+    """Return the saved tab_type for *profile_name*, or None if unknown."""
+    profile = load_profile(profile_name)
+    if not isinstance(profile, dict):
+        return None
+    return profile.get("tab_type")
 
 
 class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
@@ -225,17 +253,8 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         self.content_box.pack_start(stack_frame, True, True, 5)
 
         # --- Add pages to the stack ---
-        self.add_stack_page("dashboard", "Dashboard", create_dashboard_page(self))
-        self.add_stack_page("backup", "Backup", create_backup_page(self, self.ctx))
-        self.add_stack_page("offsite", "Offsite", create_offsite_page(self, self.ctx))
-        self.add_stack_page("restore", "Restore", create_restore_page(self, self.ctx))
-        self.add_stack_page("schedule", "Schedule", create_schedule_page(self))
-        self.add_stack_page("disks", "Disks", create_disks_page(self))
-        self.add_stack_page("pools", "Pools", create_pools_page(self))
-        self.add_stack_page("datasets", "Datasets", create_datasets_page(self))
-        self.add_stack_page("retention", "Retention", create_retention_page(self, self.ctx))
-        self.add_stack_page("checkagainst", "Checkagainst", create_checkagainst_page(self))
-        self.add_stack_page("logs", "Logs", create_logs_page(self))
+        for name, title, builder in PAGE_BUILDERS:
+            self.add_stack_page(name, title, builder(self))
 
         # Connect to stack page changes to update action panel
         self.stack.connect("notify::visible-child-name", self.on_page_changed)
@@ -247,6 +266,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         self._start_stop_dashboard_timer(initial_page)
         self._start_stop_scrub_timer(initial_page)
         self._start_stop_disks_timer(initial_page)
+        self._start_stop_memory_timer(initial_page)
 
     def add_stack_page(self, name, title, widget):
         """Add a page to the stack."""
@@ -580,6 +600,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             self._start_stop_scrub_timer(page_name)
             self._start_stop_pools_timer(page_name)
             self._start_stop_disks_timer(page_name)
+            self._start_stop_memory_timer(page_name)
             self._start_stop_schedule_timer(page_name)
             if page_name == "dashboard":
                 refresh_dashboard_page(self)
@@ -662,6 +683,26 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             refresh_surface_test_status(self)
         return True
 
+    def _start_stop_memory_timer(self, page_name):
+        """Start the memory refresh timer when on Memory, stop otherwise."""
+        if getattr(self, "_memory_timer", None) is not None:
+            GLib.source_remove(self._memory_timer)
+            self._memory_timer = None
+        if page_name == "memory":
+            refresh_memory_page(self)
+            from config_core import get_memory_config
+
+            seconds = get_memory_config(self.config).get("refresh_seconds", 5)
+            self._memory_timer = GLib.timeout_add_seconds(
+                max(1, seconds), self._on_memory_timer_tick
+            )
+
+    def _on_memory_timer_tick(self):
+        """Callback for memory auto-refresh. Returns True to keep timer alive."""
+        if self.stack.get_visible_child_name() == "memory":
+            refresh_memory_page(self)
+        return True
+
     def _on_dashboard_timer_tick(self):
         """Callback for dashboard auto-refresh. Returns True to keep timer alive."""
         if self.stack.get_visible_child_name() == "dashboard":
@@ -687,8 +728,11 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
 
         Reuses the Dashboard running-tasks collector but excludes scrubs and
         ZFS-native operations (resilver/expand/remove), which continue
-        independently of the GUI, and profile/scheduled tasks that were not
-        started by this GUI instance.
+        independently of the GUI; surface tests, which run in the drive
+        firmware; scrub profiles started by this GUI, whose scrubs continue
+        without the runner and whose persisted queue resumes when the GUI
+        restarts; and profile/scheduled tasks that were not started by this
+        GUI instance.
         """
         try:
             tasks = _collect_running_tasks(self)
@@ -705,10 +749,23 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
                 # ZFS-native operations (resilver/expand/remove) continue
                 # independently of the GUI; closing cannot abort them.
                 continue
+            if task_type == "Surface Test":
+                # Surface tests run in the drive firmware and continue
+                # independently of the GUI; their persisted state file
+                # restores the entry on the next GUI start.
+                continue
             if task_type in ("Profile", "Scheduled"):
                 status = task.get("status", "")
                 pid_token = status.split()[-1] if status else ""
                 if pid_token.isdigit() and _is_descendant_of_current_process(int(pid_token)):
+                    name = task.get("name", "")
+                    if task_type == "Scheduled":
+                        name = name.removeprefix("Scheduled: ")
+                    if _profile_tab_type(name) == "scrub":
+                        # The scrubs continue in the kernel without the
+                        # runner, and the persisted scrub queue resumes
+                        # ticking when the GUI restarts.
+                        continue
                     abortable.append(task)
                 continue
             abortable.append(task)
@@ -757,6 +814,9 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         if getattr(self, "_dashboard_timer", None) is not None:
             GLib.source_remove(self._dashboard_timer)
             self._dashboard_timer = None
+        if getattr(self, "_memory_timer", None) is not None:
+            GLib.source_remove(self._memory_timer)
+            self._memory_timer = None
         if getattr(self, "_schedule_timer", None) is not None:
             GLib.source_remove(self._schedule_timer)
             self._schedule_timer = None
@@ -856,6 +916,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         "restore": "restore-tab",
         "schedule": "schedule-tab",
         "checkagainst": "checkagainst-tab",
+        "memory": "memory-tab",
         "disks": "disks-tab",
         "pools": "pools-tab",
         "datasets": "datasets-tab",
@@ -900,6 +961,9 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             log_msg("INFO: Schedule refreshed")
         elif page == "disks":
             on_disks_refresh(self)
+        elif page == "memory":
+            refresh_memory_page(self)
+            log_msg("INFO: Memory stats refreshed")
         else:
             log_msg("INFO: Refreshing...")
 

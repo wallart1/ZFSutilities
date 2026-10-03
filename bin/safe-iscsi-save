@@ -73,7 +73,11 @@ regenerate_expected_backstores_manifest() {
     } > "$tmpfile"
 
     if [[ -s "$tmpfile" ]]; then
-        mv -f "$tmpfile" "$manifest"
+        if ! mv -f "$tmpfile" "$manifest"; then
+            rm -f "$tmpfile"
+            log_msg "FATAL: safe-iscsi-save: Could not install regenerated manifest at $manifest"
+            exit 1
+        fi
         log_msg "INFO: ✓ Regenerated expected-backstores manifest"
     else
         rm -f "$tmpfile"

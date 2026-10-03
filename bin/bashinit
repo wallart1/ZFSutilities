@@ -187,6 +187,87 @@ function calledbybash {
     if [[ "${BASH_SOURCE[1]}" = "${0}" ]]; then return 0; else return 1; fi
 }
 
+# Composable EXIT-trap registration.
+# bash allows only one EXIT trap per shell, and several parts of this project
+# need exit-time cleanup (zfslockmanager's lock release, test-lib's artifact
+# removal, per-script temp files). Registering a bare `trap ... EXIT` silently
+# discards whatever was registered before it, so exit cleanup must go through
+# append_exit_trap instead.
+#
+# Usage: append_exit_trap '<handler command string>'
+# Handlers run in registration order when the shell exits. The shell's
+# original exit status is preserved: _run_exit_traps never calls exit.
+#
+# The trap is armed as `_run_exit_traps <BASHPID of arming shell>`, so the
+# handler string itself records whether the arming seen in `trap -p` belongs
+# to this shell or was inherited from a parent shell at fork time.
+#
+# Subshell semantics: a subshell inherits the parent's armed EXIT trap and
+# handler list, but bash fires only traps the subshell arms itself. The first
+# append inside a subshell resets the inherited list (the parent still runs
+# its own handlers at its own exit), so handlers registered in the subshell,
+# and only those, run when the subshell exits. A foreign `trap ... EXIT`
+# present when append runs — installed earlier in this shell, or inherited —
+# is folded into the list so it is not lost to the re-arm. (In the inherited
+# case that handler will also run at the parent's exit; exit handlers are
+# expected to be idempotent cleanup.)
+#
+# Known bash quirk (5.2): a trap armed inside a bare `while read` loop that
+# is itself a pipeline segment (`cmd | while read ...`) does not fire when
+# that segment's subshell exits — brace the loop or register from file scope
+# when the handler must run. Per-iteration arming inside such loops (e.g.
+# zfslock_init from a delsnap pipe loop) shares this quirk with the direct
+# trap it replaces; there is no regression, but no rescue either.
+if ! declare -p _EXIT_TRAP_HANDLERS >/dev/null 2>&1; then
+    _EXIT_TRAP_HANDLERS=()
+fi
+function append_exit_trap {
+    local handler="$1"
+    local armed=""
+    armed="$(trap -p EXIT)"
+    if [[ -n "$armed" ]]; then
+        # `trap -p` prints the canonical form `trap -- '<handler>' EXIT`;
+        # strip the wrapper (quotes optional across bash versions).
+        armed="${armed#trap -- }"
+        armed="${armed% EXIT}"
+        armed="${armed#\'}"
+        armed="${armed%\'}"
+    fi
+    if [[ "$armed" = "_run_exit_traps $BASHPID" ]]; then
+        : # already armed by this shell; append below
+    elif [[ "$armed" = "_run_exit_traps "* ]]; then
+        # Inherited our own arming from a parent shell: drop the inherited
+        # handlers; the parent runs them at its own exit.
+        _EXIT_TRAP_HANDLERS=()
+    elif [[ -n "$armed" ]]; then
+        # Foreign EXIT trap: fold it so it survives the re-arm below.
+        _EXIT_TRAP_HANDLERS+=("$armed")
+    fi
+    _EXIT_TRAP_HANDLERS+=("$handler")
+    # $BASHPID must expand at arm time: the embedded PID in the handler
+    # string is what identifies this shell's own arming to later calls.
+    # shellcheck disable=SC2064
+    trap "_run_exit_traps $BASHPID" EXIT
+}
+function _run_exit_traps {
+    # Args (the arming shell's BASHPID) are ignored; they exist so the armed
+    # handler string records which shell installed the trap.
+    # Capture $? before any other statement: handlers may read it to inspect
+    # the exit status (plain `trap fn EXIT` semantics).
+    local rc=$?
+    local handler
+    # Handlers may read $? to inspect the exit status (plain `trap fn EXIT`
+    # semantics), and a failing handler must not abort the remaining ones.
+    local eflag="${-//[^e]/}"
+    set +e
+    for handler in "${_EXIT_TRAP_HANDLERS[@]}"; do
+        ( exit "$rc" )   # restore $? for the handler about to run
+        eval "$handler"
+    done
+    [[ -n "$eflag" ]] && set -e
+    return 0
+}
+
 # Prompt user for yes/no response with input validation.
 # Usage: if ask_yn "Do you want to continue?" ["Y"|"N"]; then ...
 # Returns 0 for yes, 1 for no. The optional second argument is the default

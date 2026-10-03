@@ -280,6 +280,15 @@ test_missing_backstore_and_lun_created() {
     reset_mocks
     test_start "Missing backstore and LUN are created for unexported zvol"
 
+    # Point the manifest at a nonexistent file in a writable dir: the read
+    # falls back to discovered zvols (same semantics as the missing /etc
+    # manifest), while regenerate_manifest's install succeeds instead of
+    # exiting fatally against the unwritable production path.
+    local _manifest_dir
+    _manifest_dir=$(mktemp -d)
+    local manifest
+    manifest="${_manifest_dir}/expected-backstores.txt"
+
     _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
     _mock_backstores+='(1.0MiB) write-thru activated]'
     _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 '
@@ -288,6 +297,9 @@ test_missing_backstore_and_lun_created() {
     _mock_zfs_list+='mox/vm-209-disk-2'
 
     main >/dev/null 2>&1 || true
+
+    rm -rf "$_manifest_dir"
+    manifest="/etc/rtslib-fb-target/expected-backstores.txt"
 
     local create_backstore_called=false
     local create_lun_called=false
@@ -336,6 +348,13 @@ test_rescan_always_runs() {
     reset_mocks
     test_start "Compute host rescan runs even with no target changes"
 
+    # Nonexistent manifest in a writable dir: keeps the discovered-zvols
+    # fallback and lets the no-changes regenerate install succeed.
+    local _manifest_dir
+    _manifest_dir=$(mktemp -d)
+    local manifest
+    manifest="${_manifest_dir}/expected-backstores.txt"
+
     _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
     _mock_backstores+='(1.0MiB) write-thru activated]'
     _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 '
@@ -345,6 +364,9 @@ test_rescan_always_runs() {
 
     # Run main() directly; suppress output to keep test output clean.
     main >/dev/null 2>&1 || true
+
+    rm -rf "$_manifest_dir"
+    manifest="/etc/rtslib-fb-target/expected-backstores.txt"
 
     if [[ "$RESCAN_STORAGE_CALLED" == true ]]; then
         test_pass
@@ -387,12 +409,22 @@ test_existing_backstore_without_lun_gets_mapped() {
     reset_mocks
     test_start "Existing backstore without LUN mapping gets mapped"
 
+    # Nonexistent manifest in a writable dir: keeps the discovered-zvols
+    # fallback and lets the post-change regenerate install succeed.
+    local _manifest_dir
+    _manifest_dir=$(mktemp -d)
+    local manifest
+    manifest="${_manifest_dir}/expected-backstores.txt"
+
     _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
     _mock_backstores+='(1.0MiB) write-thru activated]'
     _mock_luns_threeamigos=''
     _mock_zfs_list='NAME\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-101-disk-0'
 
     main >/dev/null 2>&1 || true
+
+    rm -rf "$_manifest_dir"
+    manifest="/etc/rtslib-fb-target/expected-backstores.txt"
 
     local create_lun_called=false
     for call in "${_mock_targetcli_calls[@]}"; do
@@ -525,6 +557,46 @@ test_empty_manifest_exports_nothing() {
     fi
 }
 
+test_regenerate_manifest_install_failure() {
+    reset_mocks
+    test_start "Regenerate manifest install failure removes temp file and exits 8"
+
+    _bs_names=("vm-101-disk-0")
+
+    # mktemp inside regenerate_manifest honors TMPDIR, so a private TMPDIR
+    # lets the test verify the temp file was removed on the failed install.
+    # The script under test uses the real bashinit log_msg (its eval-time
+    # source redefines the harness override), so capture stderr for the
+    # FATAL message instead of reading the harness log.
+    local tmp_track bad_dir rc=0 stderr
+    tmp_track=$(mktemp -d)
+    bad_dir=$(mktemp -d)
+    chmod 555 "$bad_dir"
+
+    stderr="$(
+        (
+            export TMPDIR="$tmp_track"
+            manifest="${bad_dir}/expected-backstores.txt"
+            regenerate_manifest
+        ) 2>&1 >/dev/null
+    )" || rc=$?
+
+    chmod 755 "$bad_dir"
+    rm -rf "$bad_dir"
+
+    local leftovers
+    leftovers=$(ls -A "$tmp_track" | wc -l)
+    rm -rf "$tmp_track"
+
+    assert_rc 8 "$rc"
+    assert_contains "$stderr" "FATAL: Could not install regenerated manifest"
+    if [[ "$leftovers" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected the temp manifest to be removed on failed install"
+    fi
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -539,6 +611,7 @@ test_existing_backstore_without_lun_gets_mapped
 test_manifest_entry_creates_missing_backstore
 test_manifest_limits_exported_zvols
 test_empty_manifest_exports_nothing
+test_regenerate_manifest_install_failure
 test_rescan_always_runs
 test_dry_run_makes_no_changes
 

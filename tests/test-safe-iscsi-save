@@ -14,6 +14,7 @@ _run_safe_iscsi_save() {
     local savefile="$2"
     local backstore_count="$3"
     local tmpdir
+    local runner_rc
     tmpdir=$(mktemp -d)
     local script_copy="$tmpdir/safe-iscsi-save"
 
@@ -63,6 +64,11 @@ source "$script_copy"
 RUNNEREOF
 
     bash "$tmpdir/runner" 2>&1
+    runner_rc=$?
+    # The runner's exit status is asserted on by callers, so preserve it
+    # across the workdir teardown.
+    rm -rf "$tmpdir"
+    return "$runner_rc"
 }
 
 # ------------------------------------------------------------------
@@ -256,6 +262,58 @@ RUNNEREOF
     fi
 }
 
+test_helper_removes_workdir() {
+    test_start "Helper removes its temporary work directory"
+    local scratch output rc=0 leftover
+    scratch=$(mktemp -d)
+    echo '{"storage_objects":[],"targets":[]}' > "$scratch/saveconfig.json"
+    printf 'vm-100-disk-0\nvm-101-disk-0\n' > "$scratch/expected-backstores.txt"
+
+    # The TMPDIR prefix sits inside the command substitution, so it scopes to
+    # the helper call only: the helper's mktemp -d lands under $scratch, where
+    # a leftover workdir is visible to this test alone.
+    output=$(TMPDIR="$scratch" _run_safe_iscsi_save \
+        "$scratch/expected-backstores.txt" "$scratch/saveconfig.json" 2) || rc=$?
+    # -mindepth 1: the scratch dir itself is a tmp.* and must not match.
+    leftover=$(find "$scratch" -mindepth 1 -maxdepth 1 -name 'tmp.*' -print -quit)
+
+    if [[ "$rc" -eq 0 ]] && [[ -z "$leftover" ]]; then
+        test_pass
+    else
+        test_fail "Workdir left behind: rc=$rc leftover='$leftover'"
+    fi
+    rm -rf "$scratch"
+}
+
+test_manifest_install_failure_cleans_tmpfile() {
+    test_start "Manifest install failure removes the tmpfile and exits 1"
+    local scratch ro_dir manifest output rc=0 leftover
+    scratch=$(mktemp -d)
+    ro_dir="$scratch/ro"
+    mkdir "$ro_dir"
+    manifest="$ro_dir/expected-backstores.txt"
+    echo '{"storage_objects":[],"targets":[]}' > "$scratch/saveconfig.json"
+    printf 'vm-100-disk-0\nvm-101-disk-0\n' > "$manifest"
+    # Read-only manifest dir: the script's -f gate still passes (reading
+    # works), but mv cannot install the regenerated manifest.
+    chmod 555 "$ro_dir"
+
+    # Private TMPDIR (scoped to the helper call) makes the script's mktemp
+    # tmpfile land under $scratch, where a leak is visible to this test.
+    output=$(TMPDIR="$scratch" _run_safe_iscsi_save \
+        "$manifest" "$scratch/saveconfig.json" 2) || rc=$?
+    leftover=$(find "$scratch" -mindepth 1 -maxdepth 1 -name 'tmp.*' -print -quit)
+    chmod 755 "$ro_dir"
+
+    if [[ "$rc" -ne 0 ]] && [[ "$output" == *"Could not install regenerated manifest"* ]] \
+        && [[ -z "$leftover" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc leftover='$leftover' output='$output'"
+    fi
+    rm -rf "$scratch"
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -265,5 +323,7 @@ test_active_less_than_expected_refuses_save
 test_empty_manifest_refuses_save
 test_manifest_regenerated_after_save
 test_encrypted_backstores_excluded_from_boot_config
+test_helper_removes_workdir
+test_manifest_install_failure_cleans_tmpfile
 
 test_summary

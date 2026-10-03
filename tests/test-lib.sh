@@ -38,6 +38,25 @@ rootcheck() { true; }   # Tests do not require root.
 _TEST_LOG_FILE="/tmp/zfsutilities-test-$$.log"
 : > "${_TEST_LOG_FILE}"
 
+# Remove this suite's /tmp artifacts when the suite process exits. Some
+# suites re-source test-lib.sh inside $(...) subshells for fresh mocks;
+# $BASHPID = $$ only in the suite's top-level shell, so the registration
+# (and with it the cleanup) stays scoped to the process that owns the
+# artifacts. Failed or crashed suites keep their log for post-mortem;
+# green runs delete both artifacts instead of littering /tmp.
+_test_lib_cleanup() {
+    [[ -n "${_mock_zfs_state_dir:-}" ]] && rm -rf "$_mock_zfs_state_dir"
+    if [[ "${TESTS_FAILED:-0}" -gt 0 || "${_TEST_SUMMARY_RC:-1}" -ne 0 ]]; then
+        echo "Test log retained for post-mortem: ${_TEST_LOG_FILE}" >&2
+    else
+        rm -f "$_TEST_LOG_FILE"
+    fi
+}
+if [[ "$BASHPID" = "$$" && -z "${_TEST_LIB_CLEANUP_ARMED:-}" ]]; then
+    _TEST_LIB_CLEANUP_ARMED=1
+    append_exit_trap _test_lib_cleanup
+fi
+
 # Output-reduction flags set by the outer harness.
 _ZFSUTILITIES_TESTS_QUIET="${ZFSUTILITIES_TESTS_QUIET:-}"
 _ZFSUTILITIES_TESTS_FAILURES_ONLY="${ZFSUTILITIES_TESTS_FAILURES_ONLY:-}"

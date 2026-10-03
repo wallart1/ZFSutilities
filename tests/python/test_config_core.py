@@ -251,5 +251,40 @@ class TestConfigLocking(unittest.TestCase):
             self.assertTrue(os.path.exists(lock_path))
 
 
+class TestMemoryConfig(unittest.TestCase):
+    """Memory tab config accessors fill defaults and persist."""
+
+    def test_get_memory_config_defaults(self):
+        config = {}
+        memory = config_core.get_memory_config(config)
+        self.assertEqual(memory["refresh_seconds"], 5)
+        # The defaults are written back so save persists them.
+        self.assertEqual(config["memory"]["refresh_seconds"], 5)
+
+    def test_get_memory_config_preserves_custom_values(self):
+        config = {"memory": {"refresh_seconds": 17}}
+        memory = config_core.get_memory_config(config)
+        self.assertEqual(memory["refresh_seconds"], 17)
+
+    def test_get_memory_config_fills_missing_keys(self):
+        config = {"memory": {}}
+        memory = config_core.get_memory_config(config)
+        self.assertEqual(memory["refresh_seconds"], 5)
+
+    def test_get_memory_config_replaces_non_dict(self):
+        config = {"memory": "broken"}
+        memory = config_core.get_memory_config(config)
+        self.assertEqual(memory["refresh_seconds"], 5)
+
+    def test_save_memory_config_persists(self):
+        with temp_config_dir():
+            config = {}
+            config_core.save_memory_config(config, {"refresh_seconds": 9})
+            with open(config_core.CONFIG_PATH) as f:
+                data = json.load(f)
+            self.assertEqual(data["memory"]["refresh_seconds"], 9)
+            self.assertEqual(config["memory"]["refresh_seconds"], 9)
+
+
 if __name__ == "__main__":
     unittest.main()

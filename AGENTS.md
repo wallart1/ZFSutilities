@@ -6,43 +6,43 @@ This file provides guidance to AI coding assistants when working with code in th
 
 You are a meticulous and expert coding agent. For every task:
 
-1. Enter plan mode and analyze the codebase. You do not need to ask permission to enter plan
-mode.
-2. Propose a clear implementation plan with steps. Include steps for
-- linting/coding standards,
-- testing
-- updating documentation.
-3. Wait for user approval or revision.
-4. Execute only the approved plan.
-5. During iteration, run only the affected test suites (see tests/AGENTS.md). Run the full suite
+1. Prior deployed versions of the codebase may be viewed at @`/usr/local/lib/zfsutilities/versions`.
+2. Read the prompt and investigate/gather needed information. Do this before entering plan mode so that you can use ssh and git.
+3. When not in plan mode, you may ssh dan@stewie to access the production storage node. You may also ssh dan@tweety to access the production compute/Proxmox VMs node. These are non-root IDs. You may look around, but you may not change anything. Do not attempt to access any other system, either directly or indirectly, in any way.
+4. Enter plan mode.
+5. Propose a clear implementation plan with steps. Include steps for
+   - linting/coding standards,
+   - testing
+   - updating documentation.
+6. Wait for user approval or revision.
+7. Execute only the approved plan.
+8. During iteration, run only the affected test suites (see tests/AGENTS.md). Run the full suite
 once, at the end, before responding.
-6. Use concise, professional language.
-7. Do not put any hard-coded or installation-specific data or names in the mainline code. These
+9. Use concise, professional language. Prefer bulleted items over long prose.
+10. Do not put any hard-coded or installation-specific data or names in the mainline code. These
 must be entered by the user at runtime using text-based and GUI dialogs, or dynamically by the
 code, and will usually be saved in a saved configuration file.
-8. Look for and correct any deprecated code and features. Do not implement any deprecated code or
+11. Look for and correct any deprecated code and features. Do not implement any deprecated code or
 features.
-9. Don't be lazy. Take the approach that is correct even though it may be more difficult to
-implement.
-10. If you run across pre-existing errors or bugs that are unrelated to the immediate task,
-identify them with a clear message so that I can put them on my TODO list.
-11. When I give you a plan file to execute, as in "Please execute the plan file ...," that means
+12. Take the approach that is correct even though it may be more difficult to implement.
+13. If you run across pre-existing errors or bugs that are unrelated to the immediate task,
+record them in @PREEXISTING.md so that they can be addressed later.
+14. When I give you a plan file to execute, as in "Please execute the plan file ...," that means
 that I just want you to execute the plan. Do not modify the plan. Do not enter plan mode. Just
 execute the plan.
-12. You may see uncommitted changed files that you did not change. Do not be alarmed by this.
-They are either the user's manual changes or were changed by Kimi in an earlier session. These
-changes will be included when I instruct you to perform a commit.
-13. ACTIVE NOTICE (until further notice): The user is editing the documentation
+15. You may see uncommitted changed files that you did not change. Do not be alarmed by this.
+They are either the user's manual changes or were changed by an agent in an earlier session. Include these changes when I instruct you to perform a commit.
+16. ACTIVE NOTICE (until further notice): The user is editing the documentation
      (`docs/`) by hand. If you come across documentation changes you did not
      make, do not be alarmed and leave them alone — do not revert, reword, or
      "fix" them. You should continue to update documentation. Just don't revert my changes.
-14. Avoid ad hoc workarounds. Make the existing architecture work and use it.
-15. Do not limit or reduce the scope of a task just because it "might take a long time" or "might
+17. Avoid ad hoc workarounds. Make the existing architecture work and use it.
+18. Do not limit or reduce the scope of a task just because it "might take a long time" or "might
 be tedious."
-16. Update narrative documentation as you work, while context is fresh. Never record test counts
+19. Update narrative documentation as you work, while context is fresh. Never record test counts
 in documentation. VERSION and changelog remain off-limits per the Hard Rules.
-17. Whenever using a path that starts with `/NFS1/dan(NFS1)/` be sure to quote the whole path.
-18. In each final report, include a diff-size reading, aka "The Headline Numbers."
+20. Whenever using a path that starts with `/NFS1/dan(NFS1)/` be sure to quote the whole path.
+21. In each final report, include a diff-size reading, aka "The Headline Numbers."
 
 ## Hard Rules
 

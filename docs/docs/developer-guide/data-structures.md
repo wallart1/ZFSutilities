@@ -243,6 +243,7 @@ Top-level keys:
 | `backup`                                                              | object                    | GUI Backup tab settings (see below)                                                                                  |
 | `offsite`                                                             | object                    | GUI Offsite tab settings                                                                                             |
 | `restore`                                                             | object                    | GUI Restore tab settings                                                                                             |
+| `memory`                                                              | object                    | GUI Memory tab settings (see below)                                                                                  |
 | `msg_level`                                                           | string                    | Deprecated. Kept for backward compatibility; no longer used for filtering.                                           |
 | `history_retention_days`                                              | integer                   | How many days of backup log history entries to keep (default `90`)                                                   |
 | `ui_state`                                                            | object                    | Saved GUI window geometry, pop-out state, TreeView column widths, and paned divider positions (see below)            |
@@ -321,6 +322,14 @@ Persisted by the GUI Backup tab and read by [zfsdailybackup](../commands-and-mod
 | `pre_backup_script`         | string                            | Bash command to run before all backup steps                                                                                                                                                                                            |
 | `post_backup_script_enabled`| bool                              | Whether to run the post-backup command                                                                                                                                                                                                 |
 | `post_backup_script`        | string                            | Bash command to run after all backup steps (even on fatal error)                                                                                                                                                                       |
+
+### `memory` object
+
+Persisted by the GUI Memory tab.
+
+| Key              | Type    | Purpose                                                       |
+| ---------------- | ------- | ------------------------------------------------------------- |
+| `refresh_seconds`| integer | Memory-tab auto-refresh interval while visible (default `5`) |
 
 ### Config migrations
 
@@ -474,7 +483,7 @@ consumed by the Pools tab, Dashboard, and `ScrubQueue`.
 | `state` | `ScrubState` | Current scrub state |
 | `progress_percent` | `float` or `None` | Percentage done when scanning/paused |
 | `scan_line` | `str` | Raw scan lines from `zpool status` |
-| `last_scrub` | `str` | Timestamp/description of the last scrub event |
+| `as_of` | `str` | Timestamp ZFS attaches to the current scan line (in-progress-since / paused-since / finished-on / canceled-on / resilvered-on); empty when none |
 | `errors` | `int` | Error count from finished/canceled scrubs |
 | `remaining_seconds` | `int` or `None` | Seconds remaining when `zpool status` reports `HH:MM:SS to go` (or `N days HH:MM:SS to go`) |
 | `eta` | `str` or `None` | Estimated completion timestamp (`YYYY-MM-DD HH:MM`) computed from `remaining_seconds` |
@@ -500,6 +509,35 @@ profile cannot spin forever on a pool that refuses to start. Long-lived
 instances (GUI Pools tab, Dashboard, and the headless scrub-profile polling
 loop) call `reload()` before each `tick()` to
 pick up changes written by other processes, such as a headless scrub profile.
+
+### Memory samples (`memory_stats.py`)
+
+Dataclasses behind the Memory tab. `collect_memory_sample()` probes three
+independent sources (`/proc/spl/kstat/zfs/arcstats`,
+`/proc/spl/kstat/zfs/zil`, `zpool iostat -v`) and each one degrades on its
+own — an unavailable source clears its `*_available` flag and leaves the
+rest of the sample intact, because ZFS/OS releases vary in what they
+expose (Proxmox, older OpenZFS, containers). Parsed kstat dicts contain
+only the fields the running kernel actually exposes; the UI renders
+absent fields as "—".
+
+| Field | Type | Purpose |
+| ----- | ---- | ------- |
+| `MemorySample.monotonic` | `float` | `time.monotonic()` of the collection |
+| `MemorySample.arc` | `dict[str, int]` | arcstats counters present on this host |
+| `MemorySample.zil` | `dict[str, int]` | zil kstat counters (SLOG write path) |
+| `MemorySample.vdevs` | `list[VdevSample]` | `logs`/`cache` vdev rows from `zpool iostat -v` |
+| `MemorySample.arcstats_available` / `zil_available` / `iostat_available` | `bool` | Per-source probe results |
+| `VdevSample.pool` / `vdev` / `section` | `str` | Pool name, vdev name, `"logs"` or `"cache"` |
+| `VdevSample.alloc` / `free` | `int` or `None` | Capacity bytes; `None` when the cell is `-` (leaf devices under a mirror) |
+| `VdevSample.reads` / `writes` / `read_bytes` / `write_bytes` | `int` | Cumulative since boot |
+
+`compute_rates(prev, cur)` derives `MemoryRates` (ARC hits/s and misses/s,
+L2ARC read/write B/s, SLOG commits/s, writes/s, write B/s, per-vdev
+`VdevRates`, and interval hit rates) from counter deltas between two
+samples. A counter that resets (reboot, module reload) is larger in the
+new sample's past, so the rate for that interval is `None` and the UI
+shows "—" rather than a bogus negative.
 
 ## iSCSI expected-backstores manifest
 

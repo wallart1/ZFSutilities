@@ -20,6 +20,13 @@ fi
 bashinit
 unset _local_bashinit
 
+# checkagainst's print-once marker (touched when a snapshot has no eligible
+# counterpart) is keyed on the checkagainst shell's $PPID: this process when
+# delsnap runs in a pipe subshell, or this process's parent when delsnap runs
+# at top level. Remove both possible markers at exit so the table stays
+# once-per-run without littering /tmp.
+append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$"'
+
 
 function delsnap {
     local _local_bashinit

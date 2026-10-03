@@ -366,13 +366,19 @@ kill_pytest_tree() {
     # workers too. Without this an interrupted run orphans the tree, and
     # stacked orphans have been OOM-killed at multi-GB RSS.
     if [[ -n "$pytest_pid" ]] && kill -0 "$pytest_pid" 2>/dev/null; then
-        kill -TERM "$pytest_pid" 2>/dev/null
-        wait "$pytest_pid" 2>/dev/null
+        # || true: run-tests runs under set -e, and cleanup() aborts on the
+        # first failing statement — a non-zero wait (the TERMed pytest exits
+        # 143) would skip the py_tmpout/state_dir removal below.
+        kill -TERM "$pytest_pid" 2>/dev/null || true
+        wait "$pytest_pid" 2>/dev/null || true
     fi
     pytest_pid=""
 }
 cleanup() {
     kill_pytest_tree
+    # py_tmpout is unset if interrupted before any Python suite ran, and is
+    # already removed on the normal path; both cases are no-ops here.
+    [[ -n "${py_tmpout:-}" ]] && rm -f "$py_tmpout"
     rm -rf "$state_dir"
 }
 trap cleanup EXIT
@@ -701,6 +707,7 @@ if [[ ${#python_tests[@]} -gt 0 ]]; then
         fi
 
         rm -f "$py_tmpout"
+        py_tmpout=""
 
         total_suites=$((total_suites + 1))
         total_passed=$((total_passed + py_passed))

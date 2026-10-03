@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.112.0
+
+*Released 2026-10-02*
+
+### Added
+
+- **GUI Memory tab** — new sidebar page monitoring the ZFS memory tiers:
+  ARC, L2ARC, and SLOG value grids, per-device capacity/traffic tables
+  (from `zpool iostat -v`), and Cairo-drawn rolling time-series charts
+  (auto-scaled Y axis, dashed `c_max` reference line). Data collection
+  lives in a pure data layer (`memory_stats.py`) with no GTK
+  dependencies; all three sources (arcstats, zil, iostat) are probed on
+  every sample and degrade independently on hosts that do not expose
+  them, and every kstat field is optional (absent fields render "—").
+  The auto-refresh interval persists to the new `memory.refresh_seconds`
+  config key (default 5 s) and the timer runs only while the tab is
+  visible. Device-table column widths persist like every other
+  TreeView. The sidebar was reordered: task pages stay on top and the
+  infrastructure pages (Memory, Disks, Pools, Datasets) now sit at the
+  bottom.
+
+- **`append_exit_trap` (bashinit)** — composable EXIT-trap registry.
+  bash allows only one EXIT trap per shell, and bare `trap … EXIT`
+  registrations were silently clobbering each other (zfslockmanager vs.
+  test-enroll-iscsi-pool). Handlers run in registration order, the
+  shell's exit status is preserved, and subshell semantics are explicit
+  (an inherited arming is detected and dropped; only subshell-registered
+  handlers run at subshell exit).
+
+### Changed
+
+- **Scrub Manager "As Of" column** — the Pools-page column previously
+  labeled "Last Scrub" shows the timestamp ZFS attaches to the current
+  scan line (in-progress-since / paused-since / finished-on /
+  canceled-on / resilvered-on), so it is now labeled "As Of"
+  (`ScrubInfo.last_scrub` renamed to `as_of`). No displayed values
+  changed; the Dashboard's separate "Last Scrub" column is unaffected.
+
+- **Truthful GUI close warning** — the close warning no longer lists
+  GUI-started scrub profiles (scrubs continue kernel-side and the
+  scrub-state queue resumes on restart) or Surface Tests
+  (firmware-driven, recovered from their state file). Non-scrub Run Now
+  runs still warn, accurately: GUI exit breaks their pipes and aborts
+  the run.
+
+- **Manifest-install failures are fatal** — `repair-iscsi-luns` now
+  aborts (exit 8) with `FATAL: Regenerated manifest is empty…` when a
+  manifest install fails or comes back empty; `safe-iscsi-save`'s
+  regenerated-manifest `mv` is guarded with `FATAL: safe-iscsi-save:
+  Could not install regenerated manifest…` (exit 1). In both cases the
+  temp file is removed and the previous manifest is kept.
+
+### Fixed
+
+- **Test /tmp litter eliminated** — a green full-suite run now leaves
+  zero net-new files in `/tmp`: test-lib removes its per-PID log and
+  mock dir at suite exit; run-tests' cleanup survives interruption (a
+  TERMed pytest no longer aborts the handler under `set -e`, which also
+  leaked the state dir); zfsdelsnap removes checkagainst markers at
+  exit; zfs-send-receive's hold file gets trap-based cleanup;
+  test-logging unsets its exports after each mktemp test;
+  test-safe-iscsi-save's helper removes its workdir.
+
+- **Migrate Pool start failure leaked the holds file** — if starting the
+  run failed after the captured-holds TSV was reserved (step build, lock
+  acquisition, runner start), the file was left behind and the lock
+  could be held. The start path is now wrapped: lock released if taken,
+  file discarded, `WARN: Migrate pool start failed…` logged, and the
+  error re-raised.
+
 ## 0.111.0
 
 *Released 2026-10-02*

@@ -69,7 +69,7 @@ class TestScrubPageWidgets(unittest.TestCase):
 
             app.scrub_summary_label.set_text.assert_called_with("Queue: idle")
 
-    def test_last_scrub_column_uses_monospace_font(self):
+    def test_as_of_column_uses_monospace_font(self):
         with mock_gtk():
             import pools_page as pp
 
@@ -105,7 +105,7 @@ class TestScrubPageWidgets(unittest.TestCase):
 
             canceled = sm.ScrubInfo(
                 state=sm.ScrubState.CANCELED,
-                last_scrub="Fri Jun 12 12:00:13 2026",
+                as_of="Fri Jun 12 12:00:13 2026",
             )
             with patch("pools_page.get_all_pool_scrub_states", return_value={"tank": canceled}):
                 pp.refresh_scrub_table(app)
@@ -114,6 +114,39 @@ class TestScrubPageWidgets(unittest.TestCase):
         self.assertEqual(appended[0], "tank")
         self.assertEqual(appended[1], "canceled")
         self.assertEqual(appended[3], "Fri Jun 12 12:00:13 2026")
+
+    def test_refresh_shows_paused_scrub_date(self):
+        """The As Of column shows the paused-since date while a scrub is paused."""
+        with mock_gtk():
+            import pools_page as pp
+
+            app = MagicMock()
+            app.scrub_store = MagicMock()
+            app.scrub_store.get_iter_first.return_value = None
+            app.scrub_store.append = MagicMock(return_value=MagicMock())
+            app.scrub_queue = MagicMock()
+            app.scrub_queue.state_for_pool.return_value = sm.ScrubState.NONE
+            app.scrub_queue.ordered_names.return_value = ["tank"]
+            app.scrub_queue.summary.return_value = {
+                "active": 0,
+                "pending": 0,
+                "paused": 0,
+                "finished": 0,
+                "target": 1,
+            }
+            app.scrub_summary_label = MagicMock()
+
+            paused = sm.ScrubInfo(
+                state=sm.ScrubState.PAUSED,
+                as_of="Sun May 10 00:24:03 2026",
+            )
+            with patch("pools_page.get_all_pool_scrub_states", return_value={"tank": paused}):
+                pp.refresh_scrub_table(app)
+
+        appended = app.scrub_store.append.call_args[0][0]
+        self.assertEqual(appended[0], "tank")
+        self.assertEqual(appended[1], "paused")
+        self.assertEqual(appended[3], "Sun May 10 00:24:03 2026")
 
 
 class TestScrubReorder(unittest.TestCase):

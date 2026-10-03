@@ -62,6 +62,7 @@ from logs_page import (
     _setup_logs_actions,
     _sync_log_list,
 )
+from memory_page import refresh_memory_page
 from offsite_page import (
     check_offsite_dirty,
     collect_offsite_config,
@@ -276,6 +277,11 @@ PAGE_SPECS = {
             ("Prune Old", "edit-clear", None),
         ],
         "post_setup": _setup_logs_actions,
+    },
+    "memory": {
+        "buttons": [
+            ("Refresh", "view-refresh", None),
+        ],
     },
     "retention": {
         "runner": "retention_runner",
@@ -503,6 +509,9 @@ ACTION_HANDLERS = {
         "Refresh": _sync_log_list,
         "Delete Selected": _on_delete_selected,
         "Prune Old": _on_prune_old,
+    },
+    "memory": {
+        "Refresh": refresh_memory_page,
     },
     "dashboard": {
         "Refresh": on_dashboard_refresh,

@@ -216,7 +216,7 @@ class TestParseScrubStatus(unittest.TestCase):
         info = sm.parse_scrub_status(raw)
         self.assertEqual(info.state, sm.ScrubState.SCANNING)
         self.assertAlmostEqual(info.progress_percent, 12.34)
-        self.assertEqual(info.last_scrub, "Sun May 10 00:24:03 2026")
+        self.assertEqual(info.as_of, "Sun May 10 00:24:03 2026")
 
     def test_paused(self):
         raw = (
@@ -227,19 +227,20 @@ class TestParseScrubStatus(unittest.TestCase):
         info = sm.parse_scrub_status(raw)
         self.assertEqual(info.state, sm.ScrubState.PAUSED)
         self.assertAlmostEqual(info.progress_percent, 50.0)
+        self.assertEqual(info.as_of, "Sun May 10 00:24:03 2026")
 
     def test_finished(self):
         raw = "  scan: scrub repaired 0B in 00:00:02 with 0 errors on Sun May 10 00:24:03 2026\n"
         info = sm.parse_scrub_status(raw)
         self.assertEqual(info.state, sm.ScrubState.FINISHED)
         self.assertEqual(info.errors, 0)
-        self.assertEqual(info.last_scrub, "Sun May 10 00:24:03 2026")
+        self.assertEqual(info.as_of, "Sun May 10 00:24:03 2026")
 
     def test_canceled(self):
         raw = "  scan: scrub canceled on Sun May 10 00:24:03 2026\n"
         info = sm.parse_scrub_status(raw)
         self.assertEqual(info.state, sm.ScrubState.CANCELED)
-        self.assertEqual(info.last_scrub, "Sun May 10 00:24:03 2026")
+        self.assertEqual(info.as_of, "Sun May 10 00:24:03 2026")
 
     def test_resilver_treated_as_finished(self):
         raw = "  scan: resilvered 10G in 01:23:45 with 0 errors on Mon Jan  1 12:00:00 2026\n"
@@ -258,7 +259,7 @@ class TestParseScrubStatus(unittest.TestCase):
         info = sm.parse_scrub_status(raw)
         self.assertEqual(info.state, sm.ScrubState.FINISHED)
         self.assertEqual(info.errors, 0)
-        self.assertEqual(info.last_scrub, "Wed Jun  3 20:50:19 2026")
+        self.assertEqual(info.as_of, "Wed Jun  3 20:50:19 2026")
 
     def test_in_progress_remaining_seconds(self):
         raw = (

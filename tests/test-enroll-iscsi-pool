@@ -61,7 +61,9 @@ find_zfsutility_script() { echo "/dev/null"; }
 # Temp dir for fake node.conf files
 # ------------------------------------------------------------------
 TEST_TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TEST_TMPDIR"' EXIT
+# Composable registration: a bare `trap ... EXIT` here would discard the
+# test-lib artifact cleanup registered when test-lib.sh was sourced.
+append_exit_trap 'rm -rf "$TEST_TMPDIR"'
 
 # Write a fake node.conf with the given content and point the script at it.
 # Output: prints the conf file path.

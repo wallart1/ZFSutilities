@@ -4,6 +4,7 @@ import contextlib
 import os
 import shlex
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -960,26 +961,48 @@ def _make_app(pools=("pool1", "pool2"), root_pool=None):
     return app
 
 
-def _drive_handler(pmd, app, request, confirm_cutover=True):
+def _drive_handler(pmd, app, request, confirm_cutover=True, zlm=None):
     """Run on_disks_migrate_pool with the dialog and cutover confirm scripted."""
-    mock_zlm = MagicMock()
-    mock_zlm.acquire.return_value = "/lock/pool1"
+    if zlm is None:
+        zlm = MagicMock()
+        zlm.acquire.return_value = "/lock/pool1"
     nc = MagicMock()
     nc.is_two_node.return_value = False
+    stack = contextlib.ExitStack()
+    # The handler overwrites request.holds_file with a fresh mkstemp; route
+    # it into a per-drive temp dir so tests that never finish (or that
+    # deliberately keep) the file cannot litter the real /tmp. The created
+    # paths are exposed on the stack for assertions.
+    holds_tmpdir = stack.enter_context(tempfile.TemporaryDirectory(prefix="migrate-holds-test-"))
+    holds_files = []
+    real_mkstemp = tempfile.mkstemp
+
+    def _isolated_mkstemp(*args, **kwargs):
+        kwargs["dir"] = holds_tmpdir
+        fd, path = real_mkstemp(*args, **kwargs)
+        holds_files.append(path)
+        return fd, path
+
+    stack.enter_context(patch.object(pmd.tempfile, "mkstemp", _isolated_mkstemp))
     patches = [
         patch.object(pmd, "show_migrate_pool_dialog", return_value=request),
         patch.object(pmd, "_show_cutover_confirm", return_value=confirm_cutover),
         patch.object(pmd, "node_config", nc),
-        patch.object(pmd, "zlm", mock_zlm),
+        patch.object(pmd, "zlm", zlm),
     ]
-    stack = contextlib.ExitStack()
     for p in patches:
         stack.enter_context(p)
-    with capture_logs():
-        pmd.on_disks_migrate_pool(app)
+    stack.holds_tmpdir = holds_tmpdir
+    stack.holds_files = holds_files
+    try:
+        with capture_logs():
+            pmd.on_disks_migrate_pool(app)
+    except BaseException:
+        stack.close()
+        raise
     # The runner completes asynchronously (FakeDatasetRunner.finish), so the
     # caller must keep the patch stack alive until completion.
-    return mock_zlm, stack
+    return zlm, stack
 
 
 class TestHandlerGuards(unittest.TestCase):
@@ -1124,6 +1147,39 @@ class TestHandlerExecution(unittest.TestCase):
             app.dataset_runner.finish(rc=1)
             mock_zlm.release.assert_called_once_with("/lock/pool1")
             app._disks_inventory_cache.invalidate.assert_called_once()
+
+    def test_start_failure_discards_holds_file(self):
+        """A run that fails to start must not strand the captured-holds TSV."""
+        pmd = _import_dialogs()
+        app = _make_app()
+        request = _request(pmd)
+        zlm = MagicMock()
+        zlm.acquire.side_effect = RuntimeError("lock unavailable")
+        nc = MagicMock()
+        nc.is_two_node.return_value = False
+        with tempfile.TemporaryDirectory(prefix="migrate-holds-test-") as tmpdir:
+            created = []
+            real_mkstemp = tempfile.mkstemp
+
+            def _isolated_mkstemp(*args, **kwargs):
+                kwargs["dir"] = tmpdir
+                fd, path = real_mkstemp(*args, **kwargs)
+                created.append(path)
+                return fd, path
+
+            with (
+                patch.object(pmd.tempfile, "mkstemp", _isolated_mkstemp),
+                patch.object(pmd, "show_migrate_pool_dialog", return_value=request),
+                patch.object(pmd, "node_config", nc),
+                patch.object(pmd, "zlm", zlm),
+                capture_logs() as logs,
+            ):
+                with self.assertRaises(RuntimeError):
+                    pmd.on_disks_migrate_pool(app)
+            self.assertEqual(len(created), 1)
+            self.assertFalse(os.path.exists(created[0]))
+            self.assertTrue(any("start failed" in line for line in logs), logs)
+            zlm.release.assert_not_called()
 
     def test_deferred_cutover_releases_lock_without_cutover(self):
         pmd = _import_dialogs()
