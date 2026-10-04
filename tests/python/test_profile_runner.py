@@ -162,7 +162,7 @@ class TestRunBackupProfile(unittest.TestCase):
                 # Should have logged snapshot name and steps
                 self.assertTrue(any("Backup snapshot:" in msg for msg in logs))
 
-    def test_empty_steps_warns(self):
+    def test_empty_steps_aborts_fatal(self):
         with temp_config_dir():
             profile = {
                 "config": {
@@ -178,7 +178,7 @@ class TestRunBackupProfile(unittest.TestCase):
             with capture_logs() as logs:
                 rc = profile_runner.run_backup_profile(profile, config, "/bin")
             self.assertEqual(rc, 1)
-            self.assertTrue(any("No active steps" in msg for msg in logs))
+            self.assertTrue(any("FATAL: No active steps to run" in msg for msg in logs))
 
     def test_rsync_pull_failure_continues(self):
         with temp_config_dir():
@@ -240,8 +240,8 @@ class TestRunBackupProfile(unittest.TestCase):
                 with capture_logs() as logs:
                     rc = profile_runner.run_backup_profile(profile, config, "/bin")
             self.assertEqual(rc, 1)
-            # Second send/receive should not have run because the first was fatal.
             self.assertFalse(any("tank/src2" in msg for msg in logs))
+            self.assertTrue(any("FATAL: Aborting run because step failed" in msg for msg in logs))
 
     def test_pull_step_uses_remote_log_path(self):
         with temp_config_dir():
@@ -532,7 +532,7 @@ class TestRunOffsiteProfile(unittest.TestCase):
                 with capture_logs() as logs:
                     rc = profile_runner.run_offsite_profile(profile, config, "/bin")
             self.assertEqual(rc, 1)
-            self.assertTrue(any("No offsite pool online" in msg for msg in logs))
+            self.assertTrue(any("FATAL: No offsite pool online." in msg for msg in logs))
 
     def test_uses_live_config_candidates_not_profile(self):
         with temp_config_dir():
@@ -595,7 +595,29 @@ class TestRunRestoreProfile(unittest.TestCase):
         with capture_logs() as logs:
             rc = profile_runner.run_restore_profile(profile, config, "/bin")
         self.assertEqual(rc, 1)
-        self.assertTrue(any("Source and destination must be specified" in msg for msg in logs))
+        self.assertTrue(
+            any("FATAL: Source and destination must be specified" in msg for msg in logs)
+        )
+
+    def test_step_failure_logs_fatal_abort(self):
+        """A failed restore step aborts the run with a task-level FATAL."""
+        profile = {
+            "config": {
+                "source": "tank/vm/100",
+                "dest": "backup/vm/100",
+                "do_part1": True,
+                "do_part2": True,
+                "variables": {},
+            }
+        }
+        config = {}
+        with patch("profile_runner.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = _mock_popen_process(rc=1)
+            with capture_logs() as logs:
+                rc = profile_runner.run_restore_profile(profile, config, "/bin")
+        self.assertEqual(rc, 1)
+        self.assertTrue(any("Step exited with rc=1" in msg for msg in logs))
+        self.assertTrue(any("FATAL: Aborting restore because step failed" in msg for msg in logs))
 
     def test_recursive_flag_forwarded_to_command(self):
         profile = {
@@ -619,13 +641,13 @@ class TestRunRestoreProfile(unittest.TestCase):
 
 
 class TestRunRetentionProfile(unittest.TestCase):
-    def test_no_pools_warns(self):
+    def test_no_pools_aborts_fatal(self):
         profile = {"config": {"prune_label": "dailybackup", "prune_pools": []}}
         config = {}
         with capture_logs() as logs:
             rc = profile_runner.run_retention_profile(profile, config, "/bin")
         self.assertEqual(rc, 1)
-        self.assertTrue(any("No pools selected" in msg for msg in logs))
+        self.assertTrue(any("FATAL: No pools selected for pruning" in msg for msg in logs))
 
     def test_runs_for_each_pool(self):
         profile = {"config": {"prune_label": "dailybackup", "prune_pools": ["tank"]}}
@@ -636,6 +658,25 @@ class TestRunRetentionProfile(unittest.TestCase):
                 rc = profile_runner.run_retention_profile(profile, config, "/bin")
             self.assertEqual(rc, 0)
             self.assertTrue(any("Prune tank" in msg for msg in logs))
+
+    def test_failed_prune_logs_fatal_per_pool(self):
+        """Each failed prune logs its own FATAL; other pools still run."""
+        profile = {"config": {"prune_label": "dailybackup", "prune_pools": ["tank", "data"]}}
+        config = {}
+
+        def _handle(cmd, **kwargs):
+            rc = 1 if 'cleanup "tank"' in cmd[2] else 0
+            return m._completed("", rc=rc)
+
+        with mock_subprocess() as m:
+            m.set_command_handler(".*", _handle)
+            with capture_logs() as logs:
+                rc = profile_runner.run_retention_profile(profile, config, "/bin")
+        self.assertEqual(rc, 1)
+        self.assertTrue(any("FATAL: Prune of tank failed (rc=1)" in msg for msg in logs))
+        self.assertFalse(any("FATAL: Prune of data failed" in msg for msg in logs))
+        # The healthy pool still ran after the failed one.
+        self.assertTrue(any("Prune data" in msg for msg in logs))
 
     def test_expands_offsite_to_all_online_candidates(self):
         profile = {
@@ -673,7 +714,7 @@ class TestRunRetentionProfile(unittest.TestCase):
             f"tank cleanup not found in {scripts}",
         )
 
-    def test_offsite_with_none_online_warns(self):
+    def test_offsite_with_none_online_aborts_fatal(self):
         profile = {
             "config": {
                 "prune_label": "dailybackup",
@@ -688,7 +729,10 @@ class TestRunRetentionProfile(unittest.TestCase):
                     rc = profile_runner.run_retention_profile(profile, config, "/bin")
                 self.assertEqual(rc, 1)
         self.assertTrue(
-            any("No pools selected for pruning after resolving <offsite>" in msg for msg in logs)
+            any(
+                "FATAL: No pools selected for pruning after resolving <offsite>" in msg
+                for msg in logs
+            )
         )
 
 
@@ -765,13 +809,13 @@ class TestWriteRawLine(unittest.TestCase):
 
 
 class TestRunScrubProfile(unittest.TestCase):
-    def test_no_pools_warns(self):
+    def test_no_pools_aborts_fatal(self):
         profile = {"config": {"pools": [], "simultaneous": 1}}
         config = {}
         with capture_logs() as logs:
             rc = profile_runner.run_scrub_profile(profile, config, "/bin")
         self.assertEqual(rc, 1)
-        self.assertTrue(any("No pools specified" in msg for msg in logs))
+        self.assertTrue(any("FATAL: No pools specified for scrub profile" in msg for msg in logs))
 
     def test_runs_and_polls(self):
         import tempfile
@@ -896,7 +940,50 @@ class TestRunScrubProfile(unittest.TestCase):
                                 rc = profile_runner.run_scrub_profile(profile, config, "/bin")
                 self.assertEqual(rc, 1)
                 self.assertTrue(any("Giving up on scrub" in msg for msg in logs))
-                self.assertTrue(any("gave up on" in msg and "tank" in msg for msg in logs))
+                self.assertTrue(
+                    any("FATAL: Scrub profile gave up on" in msg and "tank" in msg for msg in logs)
+                )
+            finally:
+                feature_config.SCRUB_STATE_PATH = orig_path
+
+    def test_timeout_with_paused_pools_warns_and_succeeds(self):
+        """Timing out with only paused pools left is WARN + rc=0.
+
+        Decided behavior (2026-10-04): the paused pools were never scrubbed,
+        but a stop-waiting timeout is not a failed run — only the queue
+        giving up on pools produces FATAL/rc=1.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_path = feature_config.SCRUB_STATE_PATH
+            feature_config.SCRUB_STATE_PATH = os.path.join(tmpdir, "scrub_state.json")
+            try:
+                profile = {"config": {"pools": ["tank"], "simultaneous": 1}}
+                config = {}
+                none = sm.ScrubInfo(state=sm.ScrubState.NONE)
+                scanning = sm.ScrubInfo(state=sm.ScrubState.SCANNING)
+                paused = sm.ScrubInfo(state=sm.ScrubState.PAUSED)
+                calls = {"n": 0}
+
+                def fake_states():
+                    calls["n"] += 1
+                    if calls["n"] == 1:
+                        return {"tank": none}
+                    if calls["n"] == 2:
+                        return {"tank": scanning}
+                    return {"tank": paused}
+
+                with patch("profile_runner.get_all_pool_scrub_states") as mock_states:
+                    mock_states.side_effect = fake_states
+                    with patch.object(sm, "start_scrub", return_value=True):
+                        with patch("profile_runner.time.sleep"):
+                            with capture_logs() as logs:
+                                rc = profile_runner.run_scrub_profile(profile, config, "/bin")
+                self.assertEqual(rc, 0)
+                self.assertTrue(
+                    any("WARN: Scrub profile timed out with paused pools" in msg for msg in logs)
+                )
+                self.assertFalse(any("FATAL:" in msg for msg in logs))
+                self.assertTrue(any("Scrub profile complete" in msg for msg in logs))
             finally:
                 feature_config.SCRUB_STATE_PATH = orig_path
 
@@ -918,7 +1005,7 @@ class TestRunStepList(unittest.TestCase):
                 )
         self.assertEqual(rc, 9)
         self.assertEqual(mock_popen.call_count, 1)
-        self.assertTrue(any("lock conflict" in msg.lower() for msg in logs))
+        self.assertTrue(any("FATAL: Operation aborted due to lock conflict" in msg for msg in logs))
 
     def test_run_command_sets_headless_env(self):
         """profile_runner always sets ZFSUTILITIES_HEADLESS=Y for subprocesses."""
@@ -1045,6 +1132,7 @@ class TestRunStepList(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(mock_popen.call_count, 1)
         self.assertTrue(any("Step exited with rc=1" in msg for msg in logs))
+        self.assertTrue(any("FATAL: Aborting run because step failed" in msg for msg in logs))
 
 
 class TestRsyncFailureDiagnosisInProfileRunner(unittest.TestCase):
@@ -1316,6 +1404,23 @@ class TestMainEarlyLogging(unittest.TestCase):
             self.assertIn("FATAL: Profile not found: Daily", content)
             mock_trailer.assert_called_once()
             self.assertEqual(mock_trailer.call_args.kwargs.get("rc"), 1)
+
+    def test_unknown_tab_type_logs_fatal(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._run_main_early_exit(
+                tmpdir,
+                **{
+                    "profile_runner.load_profile": {
+                        "return_value": {"tab_type": "bogus", "config": {}}
+                    },
+                },
+            )
+            log_files = [n for n in os.listdir(tmpdir) if n.endswith(".log")]
+            self.assertEqual(len(log_files), 1)
+            path = os.path.join(tmpdir, log_files[0])
+            with open(path) as f:
+                content = f.read()
+            self.assertIn("FATAL: Unknown tab type: bogus", content)
 
     def test_lock_held_creates_session_log(self):
         with tempfile.TemporaryDirectory() as tmpdir:

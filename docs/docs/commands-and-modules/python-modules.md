@@ -1125,11 +1125,9 @@ functions in `disk_repository.py`.
 
 ### `disks_page.py`
 
-The **Disks** tab UI: a radio-button view switcher (Inventory and Topology,
-Performance) over a `Gtk.Stack`, holding the disk inventory TreeView, pool
-selector, vdev topology TreeView, and a placeholder Performance view. Slow
-block-device and ZFS calls are cached in a background loader following the
-`ImportablePoolCache` pattern.
+The **Disks** tab UI: the disk inventory TreeView, pool selector, and vdev
+topology TreeView. Slow block-device and ZFS calls are cached in a background
+loader following the `ImportablePoolCache` pattern.
 
 **Key classes:**
 
@@ -1143,10 +1141,9 @@ block-device and ZFS calls are cached in a background loader following the
 | Function                                        | Purpose                                                              |
 | ----------------------------------------------- | -------------------------------------------------------------------- |
 | `create_disks_page(app)`                        | Build and return the Disks tab widget                                |
-| `_on_view_radio_toggled(radio, view_name, app)` | Switch the visible view in response to the view-switcher radio row   |
 | `refresh_disks_page(app)`                       | Repopulate disk inventory and topology stores                        |
 | `on_disks_refresh(app)`                         | Invalidate cache and refresh the page                                |
-| `update_disks_button_sensitivity(app)`          | Enable/disable action buttons based on the active view and selection |
+| `update_disks_button_sensitivity(app)`          | Enable/disable action buttons based on host role, runner state, and selection |
 
 **Called modules / imported helpers:**
 
@@ -1616,7 +1613,7 @@ message level, and display the success-rate summary.
 
 ### `memory_page.py`
 
-Memory tab: real-time ARC / L2ARC / SLOG monitors with value grids,
+Performance tab (ARC / L2ARC / SLOG monitors): value grids,
 per-device tables, and Cairo-drawn rolling time-series charts that redraw
 on every refresh tick. Samples are collected in a background thread and
 applied on the main loop via `GLib.idle_add`.
@@ -1625,7 +1622,7 @@ applied on the main loop via `GLib.idle_add`.
 
 | Function                              | Purpose                                                            |
 | ------------------------------------- | ------------------------------------------------------------------ |
-| `create_memory_page(app)`             | Build the Memory tab widget and chart instances                    |
+| `create_memory_page(app)`             | Build the Performance tab widget and chart instances               |
 | `refresh_memory_page(app)`            | Collect one sample off-thread and schedule the UI update           |
 | `_apply_memory_sample(app, sample)`   | Synchronously apply a sample to labels, charts, and device tables  |
 | `_on_memory_refresh_changed(spin, app)` | Persist the refresh interval and restart the timer               |
@@ -1655,18 +1652,20 @@ applied on the main loop via `GLib.idle_add`.
 
 ### `memory_stats.py`
 
-Pure data layer (no GTK) for the Memory tab: parses the ARC/ZIL kstat
-files and `zpool iostat -v` output, collects per-source-degrading
-samples, and computes per-interval rates from cumulative-counter deltas.
+Pure data layer (no GTK) for the Performance tab: parses the ARC/ZIL kstat
+files and interval-mode `zpool iostat -v` output, collects
+per-source-degrading samples, and computes per-interval rates — kstat
+rates from cumulative-counter deltas, vdev rates direct from the iostat
+window.
 
 **Key functions:**
 
 | Function                                    | Purpose                                                            |
 | ------------------------------------------- | ------------------------------------------------------------------ |
 | `parse_arcstats(text)` / `parse_zil_kstats(text)` | kstat body → `{name: value}` (only fields the kernel exposes) |
-| `parse_zpool_iostat_v(text)`                | iostat output → `VdevSample` rows for `logs`/`cache` sections      |
-| `collect_memory_sample()`                   | Probe all three sources; each degrades independently               |
-| `compute_rates(prev, cur)`                  | Counter deltas → `MemoryRates` (counter resets yield `None`)       |
+| `parse_zpool_iostat_v(text)`                | iostat output → `VdevSample` rows for `logs`/`cache` sections; the last report per vdev wins |
+| `collect_memory_sample()`                   | Probe all three sources; each degrades independently (`-y` iostat with a no-`-y` fallback) |
+| `compute_rates(prev, cur)`                  | Kstat counter deltas + vdev passthrough → `MemoryRates` (counter resets yield `None`) |
 | `format_rate` / `format_percent` / `format_per_second` | Display formatters ("—" for unknown)                     |
 
 **Data structures consumed / produced:**

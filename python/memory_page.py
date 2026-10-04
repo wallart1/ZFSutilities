@@ -1,7 +1,8 @@
-"""Memory tab — real-time ARC, L2ARC, and SLOG monitors.
+"""Performance tab — real-time ARC, L2ARC, and SLOG monitors.
 
 Displays sizes, rates, and hit ratios from /proc/spl/kstat/zfs counters
-plus per-device data from ``zpool iostat -v``, refreshed on a
+plus per-device data from interval-mode ``zpool iostat -v`` (rates over a
+1-second window measured at each refresh), refreshed on a
 user-configurable interval while the tab is visible.  Rolling time-series
 charts are Cairo-drawn on a Gtk.DrawingArea that redraws every refresh
 tick, so the display updates dynamically without any extra charting
@@ -342,7 +343,7 @@ def _reconcile_rows(store, new_rows):
 
 
 def create_memory_page(app):
-    """Build and return the Memory tab widget."""
+    """Build and return the Performance tab widget."""
     app._memory_timer = None
     app._memory_sample = None
     app._memory_refresh_pending = False
@@ -359,7 +360,7 @@ def create_memory_page(app):
 
     # Title + refresh controls
     title = Gtk.Label()
-    title.set_markup("<big><b>Memory</b></big>")
+    title.set_markup("<big><b>Performance</b></big>")
     title.set_halign(Gtk.Align.START)
     box.pack_start(title, False, False, 0)
 

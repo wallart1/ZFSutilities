@@ -568,7 +568,7 @@ def _mount_dataset_targets(targets, dataset=None):
                 if result.returncode != 0:
                     log_msg(f"WARN: Error mounting {target}: {result.stderr.strip()}")
                     return False
-                log_msg(f"INFO: Mounted {target}")
+                log_msg(f"VERB: Mounted {target}")
             return True
     except RuntimeError as exc:
         log_msg(f"WARN: cannot mount {dataset or targets[-1]}: {exc}")
@@ -636,7 +636,7 @@ def _mount_one_snapshot(item, repo, app):
                 return False
 
             if full_snap in get_mounted_snapshots():
-                log_msg(f"INFO: Mounted snapshot {full_snap}")
+                log_msg(f"VERB: Mounted snapshot {full_snap}")
                 return True
 
             log_msg(
@@ -909,7 +909,7 @@ def _unmount_one_dataset(item, repo, app):
     try:
         mountpoint = repo.get_property(dataset, "mountpoint")
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log_msg(f"WARN: Error resolving mountpoint for {dataset}: {e}")
+        log_msg(f"FATAL: Error resolving mountpoint for {dataset}: {e}")
         return False
 
     procs = get_busy_processes(mountpoint)
@@ -929,6 +929,7 @@ def _unmount_one_dataset(item, repo, app):
         dialog.format_secondary_text(detail)
         dialog.run()
         dialog.destroy()
+        log_msg(f"FATAL: Dataset {dataset} is busy; unmount aborted")
         return False
 
     # Build the list of mounted descendants, deepest first, so children are
@@ -958,9 +959,9 @@ def _unmount_one_dataset(item, repo, app):
                 if result.returncode == 0:
                     any_unmounted = True
                     if target == dataset:
-                        log_msg(f"INFO: Unmounted {dataset}")
+                        log_msg(f"VERB: Unmounted {dataset}")
                     else:
-                        log_msg(f"INFO: Unmounted {target}")
+                        log_msg(f"VERB: Unmounted {target}")
                     continue
 
                 stderr = result.stderr.strip()
@@ -969,10 +970,10 @@ def _unmount_one_dataset(item, repo, app):
                     # mounted, but its mountpoint path is unreachable.
                     if _recover_orphaned_mount(target, repo):
                         any_unmounted = True
-                        log_msg(f"INFO: Unmounted {target}")
+                        log_msg(f"VERB: Unmounted {target}")
                         continue
                     log_msg(
-                        f"WARN: {target} looks mounted but its mountpoint is "
+                        f"FATAL: {target} looks mounted but its mountpoint is "
                         "not reachable (orphaned mount) and could not be "
                         "recovered by remounting its parents. Remount the "
                         "parent dataset(s) manually and retry; if that fails "
@@ -981,16 +982,16 @@ def _unmount_one_dataset(item, repo, app):
                     )
                 elif "busy" in stderr.lower():
                     log_msg(
-                        f"WARN: Dataset {target} is busy. "
+                        f"FATAL: Dataset {target} is busy. "
                         "Please close any file manager windows and try again."
                     )
                 else:
-                    log_msg(f"WARN: Error unmounting {target}: {stderr}")
+                    log_msg(f"FATAL: Error unmounting {target}: {stderr}")
                 # Stop at the first failure; trying to unmount a parent after
                 # a child failed would just produce the same error again.
                 break
     except RuntimeError as exc:
-        log_msg(f"WARN: cannot unmount {dataset}: {exc}")
+        log_msg(f"FATAL: cannot unmount {dataset}: {exc}")
         return False
 
     return any_unmounted
@@ -1002,7 +1003,7 @@ def _unmount_one_snapshot(item, repo, app):
     try:
         path = get_snapshot_mountpoint(item["dataset"], item["name"], repo=repo)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log_msg(f"WARN: Error resolving mountpoint for {full_snap}: {e}")
+        log_msg(f"FATAL: Error resolving mountpoint for {full_snap}: {e}")
         return False
 
     procs = get_busy_processes(path)
@@ -1022,6 +1023,7 @@ def _unmount_one_snapshot(item, repo, app):
         dialog.format_secondary_text(detail)
         dialog.run()
         dialog.destroy()
+        log_msg(f"FATAL: Snapshot {full_snap} is busy; unmount aborted")
         return False
 
     try:
@@ -1030,21 +1032,21 @@ def _unmount_one_snapshot(item, repo, app):
                 ["sudo", "umount", path], capture_output=True, text=True, check=False
             )
     except RuntimeError as exc:
-        log_msg(f"WARN: cannot unmount {full_snap}: {exc}")
+        log_msg(f"FATAL: cannot unmount {full_snap}: {exc}")
         return False
 
     if result.returncode == 0:
-        log_msg(f"INFO: Unmounted snapshot {full_snap}")
+        log_msg(f"VERB: Unmounted snapshot {full_snap}")
         return True
 
     stderr = result.stderr.strip()
     if "busy" in stderr.lower():
         log_msg(
-            f"WARN: Snapshot {full_snap} is busy. "
+            f"FATAL: Snapshot {full_snap} is busy. "
             "Please close any file manager windows and try again."
         )
     else:
-        log_msg(f"WARN: Error unmounting {full_snap}: {stderr}")
+        log_msg(f"FATAL: Error unmounting {full_snap}: {stderr}")
     return False
 
 
@@ -1068,7 +1070,7 @@ def _unmount_one_volume_partition(item, repo, app):
     try:
         mountpoint = repo.device_mountpoint(device)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log_msg(f"WARN: Error resolving mountpoint for {device}: {e}")
+        log_msg(f"FATAL: Error resolving mountpoint for {device}: {e}")
         return False
     if not mountpoint:
         return False
@@ -1082,6 +1084,7 @@ def _unmount_one_volume_partition(item, repo, app):
             f"{device} is currently in use by:\n\n{proc_list}\n\n"
             "Please close the listed application(s), then try unmounting again.",
         )
+        log_msg(f"FATAL: Partition {device} is busy; unmount aborted")
         return False
 
     result = subprocess.run(
@@ -1094,11 +1097,11 @@ def _unmount_one_volume_partition(item, repo, app):
     stderr = result.stderr.strip()
     if "busy" in stderr.lower():
         log_msg(
-            f"WARN: Partition {device} is busy. "
+            f"FATAL: Partition {device} is busy. "
             "Please close any file manager windows and try again."
         )
     else:
-        log_msg(f"WARN: Error unmounting {device}: {stderr}")
+        log_msg(f"FATAL: Error unmounting {device}: {stderr}")
     return False
 
 
@@ -1108,7 +1111,7 @@ def _unmount_one_volume(item, repo, app):
     try:
         loop_dev = repo.loop_find(zvol_device_path(dataset))
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log_msg(f"WARN: Error finding loop device for {dataset}: {e}")
+        log_msg(f"FATAL: Error finding loop device for {dataset}: {e}")
         return False
     if not loop_dev:
         return False
@@ -1116,7 +1119,7 @@ def _unmount_one_volume(item, repo, app):
     try:
         parts = repo.loop_partitions(loop_dev)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log_msg(f"WARN: Error listing partitions on {loop_dev}: {e}")
+        log_msg(f"FATAL: Error listing partitions on {loop_dev}: {e}")
         return False
 
     mounted_parts = [p for p in parts if p.mountpoint]
@@ -1130,6 +1133,7 @@ def _unmount_one_volume(item, repo, app):
                 f"{part.device} is currently in use by:\n\n{proc_list}\n\n"
                 "Please close the listed application(s), then try unmounting again.",
             )
+            log_msg(f"FATAL: Partition {part.device} is busy; unmount aborted")
             return False
 
     for part in mounted_parts:
@@ -1137,12 +1141,12 @@ def _unmount_one_volume(item, repo, app):
             ["sudo", "umount", part.mountpoint], capture_output=True, text=True, check=False
         )
         if result.returncode != 0:
-            log_msg(f"WARN: Error unmounting {part.device}: {result.stderr.strip()}")
+            log_msg(f"FATAL: Error unmounting {part.device}: {result.stderr.strip()}")
             return False
         log_msg(f"INFO: Unmounted {part.device} from {part.mountpoint}")
 
     if not repo.loop_detach(loop_dev):
-        log_msg(f"WARN: Error detaching {loop_dev} from {dataset}")
+        log_msg(f"FATAL: Error detaching {loop_dev} from {dataset}")
         return False
     log_msg(f"INFO: Detached {dataset} from loop device {loop_dev}")
     tree_iter = find_tree_iter_by_full_name(app.datasets_store, dataset)

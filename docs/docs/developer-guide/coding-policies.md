@@ -60,7 +60,7 @@ This initializes basic runtime variables and sources commonly-used functions.
 ### Error Handling, Safety, and Messaging
 
 - **Direct errors and messages to `log_msg()`** (provided by `bashinit` for
-  bash, or `backup_config.py` for Python). Each message should begin with a
+  bash, or `logging_config.py` for Python). Each message should begin with a
   priority:
 
     ```
@@ -354,11 +354,12 @@ Avoid single-letter names like `l`, `O`, `I` due to visual ambiguity.
 
 ### Logging
 
-All Python modules import `log_msg` from `backup_config` and use it for all
-output:
+All Python modules import `log_msg` and use it for all output.  It is defined
+in `logging_config.py` and re-exported by `backup_config.py`; either import
+path is valid:
 
 ```python
-from backup_config import log_msg
+from logging_config import log_msg
 
 log_msg("INFO: backup started")
 log_msg("WARN: something unexpected")

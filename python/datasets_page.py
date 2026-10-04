@@ -14,6 +14,7 @@ gi.require_version("Gtk", "3.0")
 from feature_config import get_workload_profiles
 from gi.repository import GLib, Gtk
 from gui_helpers import (
+    UNMOUNTED_FG,
     TreeSearch,
     _row_fg_color,
     append_treeview_copy_items,
@@ -151,10 +152,20 @@ def create_datasets_page(app):
     app.datasets_scrolled = scrolled
     box.pack_start(scrolled, True, True, 0)
 
-    # Summary
+    # Summary row: dataset count on the left, color legend on the right
+    summary_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     app.datasets_summary_label = Gtk.Label()
     app.datasets_summary_label.set_halign(Gtk.Align.START)
-    box.pack_start(app.datasets_summary_label, False, False, 0)
+    summary_row.pack_start(app.datasets_summary_label, False, False, 0)
+
+    app.datasets_legend_label = Gtk.Label()
+    app.datasets_legend_label.set_markup(
+        f"<small><i><span foreground='{UNMOUNTED_FG}'>Teal text</span>"
+        " — unmounted filesystem or snapshot</i></small>"
+    )
+    app.datasets_legend_label.set_halign(Gtk.Align.END)
+    summary_row.pack_start(app.datasets_legend_label, True, False, 0)
+    box.pack_start(summary_row, False, False, 0)
 
     # Connect selection changed for button sensitivity
     app.datasets_view.get_selection().connect("changed", _on_ds_selection_changed, app)

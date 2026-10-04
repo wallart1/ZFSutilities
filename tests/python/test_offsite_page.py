@@ -448,6 +448,46 @@ class TestOffsiteRunDialog(unittest.TestCase):
         for call in mock_log.call_args_list:
             self.assertNotIn("restore", call[0][0].lower())
 
+    def test_no_pool_online_logs_fatal_and_aborts(self):
+        op = _import_offsite_page()
+        op.Gtk.ComboBoxText = _FakeComboBoxText
+
+        app = self._make_app()
+        with (
+            patch.object(op.Gtk, "MessageDialog") as mock_dialog,
+            patch.object(op, "do_detect_offsite_pool", return_value=None),
+            patch.object(op, "log_msg") as mock_log,
+        ):
+            op.on_offsite_run(app, app.ctx)
+
+        mock_log.assert_any_call("FATAL: No offsite pool online.")
+        mock_dialog.assert_not_called()
+        app.offsite_runner.prepare_session_log.assert_not_called()
+
+    def test_no_active_steps_logs_fatal(self):
+        op = _import_offsite_page()
+        op.Gtk.ComboBoxText = _FakeComboBoxText
+
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = op.Gtk.ResponseType.OK
+
+        app = self._make_app()
+        with (
+            patch.object(op.Gtk, "MessageDialog", return_value=dialog_mock),
+            patch.object(op, "do_detect_offsite_pool", return_value="z40tb"),
+            patch.object(
+                op,
+                "collect_offsite_config",
+                return_value={"steps": [], "variables": {}},
+            ),
+            patch.object(op, "log_msg") as mock_log,
+        ):
+            op.on_offsite_run(app, app.ctx)
+
+        mock_log.assert_any_call("FATAL: No active steps to run")
+        app.offsite_runner.set_steps.assert_not_called()
+        app.offsite_runner.start.assert_not_called()
+
 
 class _FakeDirtyTracker:
     """Minimal stand-in for gui_helpers.DirtyTracker under mock GTK."""

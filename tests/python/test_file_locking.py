@@ -1,6 +1,8 @@
 """Tests for file_locking.py — advisory flock helpers."""
 
+import contextlib
 import fcntl
+import importlib
 import multiprocessing
 import os
 import sys
@@ -18,24 +20,57 @@ import file_locking as fl
 class TestLockPathDefaults(unittest.TestCase):
     """Default lock paths live under the centralized lock directory."""
 
+    # conftest.py redirects ZFSUTILITIES_LOCK_DIR to an isolated directory
+    # for test runs, so the defaults only bind when file_locking is reloaded
+    # with the overrides cleared. Only the import-time constants are
+    # inspected here — no locks are created.
+    _ENV_VARS = (
+        "ZFSUTILITIES_LOCK_DIR",
+        "ZFSUTILITIES_CONFIG_LOCK_PATH",
+        "ZFSUTILITIES_HISTORY_LOCK_PATH",
+        "ZFSUTILITIES_LOG_INDEX_LOCK_PATH",
+        "ZFSUTILITIES_SCRUB_STATE_LOCK_PATH",
+        "ZFSUTILITIES_SURFACE_STATE_LOCK_PATH",
+    )
+
     def _expected_default_dir(self):
         return "/run/lock/zfsutilities"
 
+    @contextlib.contextmanager
+    def _defaults_bound(self):
+        """Reload file_locking with the environment overrides cleared."""
+        saved = {var: os.environ.get(var) for var in self._ENV_VARS}
+        for var in self._ENV_VARS:
+            os.environ.pop(var, None)
+        try:
+            yield importlib.reload(fl)
+        finally:
+            for var, value in saved.items():
+                if value is None:
+                    os.environ.pop(var, None)
+                else:
+                    os.environ[var] = value
+            importlib.reload(fl)
+
     def test_config_lock_path_default(self):
         expected = os.path.join(self._expected_default_dir(), ".config.lock")
-        self.assertEqual(fl.CONFIG_LOCK_PATH, expected)
+        with self._defaults_bound() as mod:
+            self.assertEqual(mod.CONFIG_LOCK_PATH, expected)
 
     def test_history_lock_path_default(self):
         expected = os.path.join(self._expected_default_dir(), ".history.lock")
-        self.assertEqual(fl.HISTORY_LOCK_PATH, expected)
+        with self._defaults_bound() as mod:
+            self.assertEqual(mod.HISTORY_LOCK_PATH, expected)
 
     def test_log_index_lock_path_default(self):
         expected = os.path.join(self._expected_default_dir(), ".log_index.lock")
-        self.assertEqual(fl.LOG_INDEX_LOCK_PATH, expected)
+        with self._defaults_bound() as mod:
+            self.assertEqual(mod.LOG_INDEX_LOCK_PATH, expected)
 
     def test_scrub_state_lock_path_default(self):
         expected = os.path.join(self._expected_default_dir(), ".scrub_state.lock")
-        self.assertEqual(fl.SCRUB_STATE_LOCK_PATH, expected)
+        with self._defaults_bound() as mod:
+            self.assertEqual(mod.SCRUB_STATE_LOCK_PATH, expected)
 
 
 class TestEnvironmentOverrides(unittest.TestCase):

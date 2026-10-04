@@ -99,11 +99,26 @@ class TestCreateDatasetsPage(unittest.TestCase):
         self.assertTrue(hasattr(app, "datasets_view"))
         self.assertTrue(hasattr(app, "datasets_search"))
         self.assertTrue(hasattr(app, "datasets_summary_label"))
+        self.assertTrue(hasattr(app, "datasets_legend_label"))
         self.assertIs(app.datasets_scrolled, dp.Gtk.ScrolledWindow.return_value)
         # The Datasets tab builds its own unified context menu, so it does not
         # use the generic copy helper.
         app.enable_treeview_copy.assert_not_called()
         app._ui_state.bind_treeview.assert_called_once_with(app.datasets_view, "datasets_view")
+
+    def test_legend_label_explains_teal_tint(self):
+        app = self._make_app()
+        with patch.object(dp, "refresh_datasets_page"):
+            dp.create_datasets_page(app)
+
+        # mock_gtk shares one Label mock across widgets and tests, so scan
+        # for the exact legend markup rather than asserting on call counts.
+        markups = [args[0] for args, _kwargs in app.datasets_legend_label.set_markup.call_args_list]
+        expected = (
+            f"<small><i><span foreground='{dp.UNMOUNTED_FG}'>Teal text</span>"
+            " — unmounted filesystem or snapshot</i></small>"
+        )
+        self.assertIn(expected, markups)
 
 
 class TestRefreshDatasetsPage(unittest.TestCase):

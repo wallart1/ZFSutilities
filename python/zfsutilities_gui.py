@@ -67,8 +67,8 @@ from schedule_page import create_schedule_page, refresh_schedule_page
 POOLS_REFRESH_SECONDS = 30
 
 # Sidebar pages in display order: (stack name, sidebar title, page factory).
-# The infrastructure tabs (Memory, Disks, Pools, Datasets) sit at the bottom,
-# below the task-oriented pages.
+# The infrastructure tabs (Performance, Disks, Pools, Datasets) sit at the
+# bottom, below the task-oriented pages.
 PAGE_BUILDERS = [
     ("dashboard", "Dashboard", create_dashboard_page),
     ("backup", "Backup", lambda app: create_backup_page(app, app.ctx)),
@@ -78,7 +78,7 @@ PAGE_BUILDERS = [
     ("retention", "Retention", lambda app: create_retention_page(app, app.ctx)),
     ("checkagainst", "Checkagainst", create_checkagainst_page),
     ("logs", "Logs", create_logs_page),
-    ("memory", "Memory", create_memory_page),
+    ("memory", "Performance", create_memory_page),
     ("disks", "Disks", create_disks_page),
     ("pools", "Pools", create_pools_page),
     ("datasets", "Datasets", create_datasets_page),
@@ -684,7 +684,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         return True
 
     def _start_stop_memory_timer(self, page_name):
-        """Start the memory refresh timer when on Memory, stop otherwise."""
+        """Start the memory refresh timer when on Performance, stop otherwise."""
         if getattr(self, "_memory_timer", None) is not None:
             GLib.source_remove(self._memory_timer)
             self._memory_timer = None
@@ -916,7 +916,7 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         "restore": "restore-tab",
         "schedule": "schedule-tab",
         "checkagainst": "checkagainst-tab",
-        "memory": "memory-tab",
+        "memory": "performance-tab",
         "disks": "disks-tab",
         "pools": "pools-tab",
         "datasets": "datasets-tab",

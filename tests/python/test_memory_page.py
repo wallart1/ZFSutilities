@@ -1,4 +1,4 @@
-"""Tests for memory_page.py — Memory tab widgets, notes, and charts."""
+"""Tests for memory_page.py — Performance tab widgets, notes, and charts."""
 
 import os
 import sys
@@ -47,36 +47,36 @@ def _arc_sample(mono, hits=1000, misses=100, size=32648235840, c_max=48318382080
     )
 
 
-def _cache_vdev(pool="fivebays", vdev="CACHE1", read_bytes=1024, write_bytes=2048):
+def _cache_vdev(pool="fivebays", vdev="CACHE1", read_bps=1024, write_bps=2048):
     return ms.VdevSample(
         pool=pool,
         vdev=vdev,
         section="cache",
         alloc=822486237184,
         free=169651208192,
-        reads=10,
-        writes=20,
-        read_bytes=read_bytes,
-        write_bytes=write_bytes,
+        reads_ps=10,
+        writes_ps=20,
+        read_bps=read_bps,
+        write_bps=write_bps,
     )
 
 
-def _log_vdev(pool="fivebays", vdev="mirror-2", write_bytes=5138022):
+def _log_vdev(pool="fivebays", vdev="mirror-2", write_bps=5138022):
     return ms.VdevSample(
         pool=pool,
         vdev=vdev,
         section="logs",
         alloc=16252928,
         free=8031588843,
-        reads=0,
-        writes=48,
-        read_bytes=14,
-        write_bytes=write_bytes,
+        reads_ps=0,
+        writes_ps=48,
+        read_bps=14,
+        write_bps=write_bps,
     )
 
 
 def _make_app():
-    """Return a mock app with a real config dict, ready for the Memory page."""
+    """Return a mock app with a real config dict, ready for the Performance page."""
     app = MagicMock()
     app.config = {}
     app.ctx = MagicMock()
@@ -86,7 +86,7 @@ def _make_app():
 
 class TestCreateMemoryPage(unittest.TestCase):
     def test_page_construction(self):
-        with mock_gtk(fresh=True):
+        with mock_gtk(fresh=True) as gtk:
             import memory_page as mp
 
             app = _make_app()
@@ -100,6 +100,14 @@ class TestCreateMemoryPage(unittest.TestCase):
             self.assertIsNotNone(app._memory_slog_store)
             # Stores must not walk mock iters (reconcile would loop forever).
             self.assertIsNone(app._memory_sample)
+            # The page is titled Performance (the sidebar tab name). Label is
+            # one shared mock, so assert on the recorded markup calls.
+            markups = [
+                call.args[0]
+                for call in gtk.Label.return_value.set_markup.call_args_list
+                if call.args
+            ]
+            self.assertIn("<big><b>Performance</b></big>", markups)
 
     def test_device_tables_bound_for_width_persistence(self):
         """Both device tables register with the UI-state persistence layer."""
@@ -228,8 +236,12 @@ class TestApplyMemorySample(unittest.TestCase):
         appended = [c.args[0] for c in app._memory_l2_store.append.call_args_list]
         self.assertEqual(len(appended), 1)
         self.assertEqual(appended[0][0:2], ["fivebays", "CACHE1"])
+        # Device rates pass through on the very first sample (regression
+        # guard: they must never render as constant 0/s).
+        self.assertEqual(appended[0][3:], [ms.format_rate(1024), ms.format_rate(2048)])
         slog_appended = [c.args[0] for c in app._memory_slog_store.append.call_args_list]
         self.assertEqual(slog_appended[0][0:2], ["fivebays", "mirror-2"])
+        self.assertEqual(slog_appended[0][3:], [ms.format_per_second(48), ms.format_rate(5138022)])
 
         # Devices disappear -> reconcile removes the row.
         tree_iter = MagicMock()

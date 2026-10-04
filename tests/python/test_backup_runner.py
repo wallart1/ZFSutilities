@@ -1065,6 +1065,33 @@ class TestRunnerRobustness(unittest.TestCase):
         self.assertEqual(runner.current_step, 1)
 
 
+class TestLogAttribution(unittest.TestCase):
+    """Runner messages carry the issuer's file:line, not the wrapper's."""
+
+    def test_issuer_log_location_skips_wrapper_frames(self):
+        here = sys._getframe().f_lineno
+        caller_file, caller_line = br._issuer_log_location()
+        self.assertEqual(os.path.basename(caller_file), "test_backup_runner.py")
+        self.assertEqual(caller_line, here + 1)
+
+    def test_runner_log_resolves_issuer_when_not_forwarded(self):
+        runner = br.BackupRunner(MagicMock(), MagicMock())
+        here = sys._getframe().f_lineno
+        with patch.object(br, "log_msg") as mock_log:
+            runner._log("WARN: Step exited with rc=2")
+        kwargs = mock_log.call_args.kwargs
+        self.assertEqual(os.path.basename(kwargs["caller_file"]), "test_backup_runner.py")
+        self.assertEqual(kwargs["caller_line"], here + 2)
+
+    def test_runner_log_explicit_caller_wins(self):
+        runner = br.BackupRunner(MagicMock(), MagicMock())
+        with patch.object(br, "log_msg") as mock_log:
+            runner._runner_log("FATAL: x", caller_file="/some/where.py", caller_line=99)
+        kwargs = mock_log.call_args.kwargs
+        self.assertEqual(kwargs["caller_file"], "/some/where.py")
+        self.assertEqual(kwargs["caller_line"], 99)
+
+
 class TestRsyncFailureLoggingInBackupRunner(unittest.TestCase):
     """BackupRunner writes rsync failure diagnoses into the session log."""
 

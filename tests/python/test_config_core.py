@@ -252,7 +252,7 @@ class TestConfigLocking(unittest.TestCase):
 
 
 class TestMemoryConfig(unittest.TestCase):
-    """Memory tab config accessors fill defaults and persist."""
+    """Performance tab config accessors fill defaults and persist."""
 
     def test_get_memory_config_defaults(self):
         config = {}

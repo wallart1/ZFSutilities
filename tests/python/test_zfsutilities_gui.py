@@ -955,7 +955,7 @@ class TestDisksTimer(unittest.TestCase):
 
 
 class TestMemoryTimer(unittest.TestCase):
-    """Tests for the Memory-tab refresh timer lifecycle."""
+    """Tests for the Performance-tab refresh timer lifecycle."""
 
     def _make_window(self):
         """Create a ZFSUtilitiesWindow with __init__ bypassed."""
@@ -969,7 +969,7 @@ class TestMemoryTimer(unittest.TestCase):
 
     @patch("zfsutilities_gui.GLib")
     def test_memory_page_starts_timer(self, mock_glib):
-        """Switching to Memory refreshes once and starts the configured timer."""
+        """Switching to Performance refreshes once and starts the configured timer."""
         window = self._make_window()
         mock_glib.timeout_add_seconds.return_value = 42
         with patch("zfsutilities_gui.refresh_memory_page") as mock_refresh:
@@ -980,7 +980,7 @@ class TestMemoryTimer(unittest.TestCase):
 
     @patch("zfsutilities_gui.GLib")
     def test_non_memory_page_stops_timer(self, mock_glib):
-        """Switching away from Memory removes the timer."""
+        """Switching away from Performance removes the timer."""
         window = self._make_window()
         window._memory_timer = 7
         window._start_stop_memory_timer("backup")
@@ -988,7 +988,7 @@ class TestMemoryTimer(unittest.TestCase):
         self.assertIsNone(window._memory_timer)
 
     def test_timer_tick_refreshes_only_on_memory_page(self):
-        """The tick callback refreshes on Memory and stays alive."""
+        """The tick callback refreshes on Performance and stays alive."""
         window = self._make_window()
         window.stack.get_visible_child_name.return_value = "memory"
         with patch("zfsutilities_gui.refresh_memory_page") as mock_refresh:
@@ -1015,10 +1015,16 @@ class TestSidebarPageOrder(unittest.TestCase):
     """The sidebar exposes the pages in the agreed order."""
 
     def test_infrastructure_tabs_are_last(self):
-        """Disks/Pools/Datasets are the final three tabs, Memory just before."""
+        """Disks/Pools/Datasets are the final three tabs, Performance just before.
+
+        The Performance page keeps the internal stack name "memory" (it is
+        also the persisted config key), so only the sidebar title changed.
+        """
         gui = _gui_module()
         names = [name for name, _title, _builder in gui.PAGE_BUILDERS]
         self.assertEqual(names[-4:], ["memory", "disks", "pools", "datasets"])
+        titles = {name: title for name, title, _builder in gui.PAGE_BUILDERS}
+        self.assertEqual(titles["memory"], "Performance")
 
     def test_all_pages_present_exactly_once(self):
         gui = _gui_module()
@@ -1042,9 +1048,9 @@ class TestSidebarPageOrder(unittest.TestCase):
             },
         )
 
-    def test_memory_has_documentation_anchor(self):
+    def test_memory_page_has_documentation_anchor(self):
         gui = _gui_module()
-        self.assertEqual(gui.ZFSUtilitiesWindow._PAGE_ANCHORS["memory"], "memory-tab")
+        self.assertEqual(gui.ZFSUtilitiesWindow._PAGE_ANCHORS["memory"], "performance-tab")
 
 
 if __name__ == "__main__":

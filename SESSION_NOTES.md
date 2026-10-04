@@ -175,3 +175,256 @@ here. Pruned history remains recoverable from git.
   row for the new property-read WARN; gtk-gui Migrate Pool paragraphs
   (checkbox semantics + unchecked ex-infra disks); python-modules and
   data-structures rows for the new functions; integrity suite green.
+
+## Memory-tab fix 2026-10-03: SLOG/L2ARC device-table rates always zero
+  Root cause: plain `zpool iostat -v` prints per-second averages SINCE
+  BOOT, not cumulative totals (verified on stewie against
+  /proc/spl/kstat/zfs/<pool>/iostats: 1,042,744 total read ops vs "23"
+  displayed). memory_stats treated them as cumulative counters and
+  delta'd near-constant averages -> ~0/s in the device tables while the
+  kstat-derived labels above the charts were correct. Fix: interval-mode
+  collection `zpool iostat -v -y 1 1` (user pointed at -y; verified:
+  single per-interval report after one full 1-second window, count
+  counts interval reports only), one no-`-y` fallback attempt
+  (`-v 1 2` + parser keeps the LAST report per (pool,vdev)) for pre-0.8
+  zpool; VdevSample ops/byte fields renamed to *_ps/*_bps (per-window
+  rates, not cumulative); compute_rates passes vdev rows through from
+  the current sample (live on first refresh now) while kstat rates stay
+  arcstat-style deltas. Collection blocks ~1s but already runs off-thread
+  behind the _memory_refresh_pending guard. Docs: gtk-gui data-source
+  table + rates paragraph + L2ARC bullet, data-structures field rows +
+  compute_rates paragraph, python-modules key-function rows. No new
+  PREEXISTING items (2 remain open).
+
+## Disks-page all-pools topology 2026-10-03
+  Pool Topology pane now always shows every imported pool as a top-level
+  row (was: only the drop-down-selected pool, rebuilt per selection).
+  Expansion is rule-driven (_apply_topology_expansion): a pool expands
+  fully when it is the selector's pool, holds the topology selection, or
+  contains a teal-tinted device; otherwise collapsed. Selecting an
+  inventory disk/partition in NO pool now clears the whole topology state
+  (tints + selector set_active(-1) + collapse); refresh preserves that
+  deliberately-cleared selector (active -1 with previously non-empty
+  model) instead of snapping to pool 0 every 30s. Selector moved into the
+  Pool Topology section under its title (user request; was above the view
+  stack) and repurposed: follows inventory-disk pool and topology-node
+  pool; growth/migrate/Proxmox dialogs preselect from it unchanged.
+  Topology-node selection now also sets the selector to its containing
+  pool. _on_pool_selector_changed no longer rebuilds the store (highlight
+  + expansion only). GOTCHA that cost two host hangs + a reboot: dialog
+  suites (growth/migrate/create-wizard) reach refresh_disks_page
+  transitively via FakeDatasetRunner.finish() completion callbacks, and
+  their fixtures mocked disks_topology_store as bare MagicMock — the new
+  store walk (while it: iter_next) never terminates on MagicMock and
+  call-history recording grows without bound (RAM+swap full, box hung;
+  cancelled Bash runs leave orphaned pytest trees — always pgrep after a
+  kill). Fix: _NestedTreeStore/_TreeIter fakes + FakeTreeView
+  expand_row/collapse_row + selector get_model list in all three suites.
+  Peak RSS now ~82MB, 141+167 dialog tests green.
+
+## Isolated test lock dir 2026-10-03 (PREEXISTING fix)
+  tests/python/conftest.py now redirects ZFSUTILITIES_LOCK_DIR (only when
+  unset; explicit exports respected) to a per-process mkdtemp cleaned by
+  atexit — python tests never touch /run/lock/zfsutilities again, whatever
+  its ownership or live holders. file_locking/cron_manager/feature_config
+  bind lock paths at import time, and conftest loads before test modules,
+  so the redirect reaches all import-time bindings; xdist workers each get
+  their own dir. Default-literal assertions updated: test_paths (2 tests,
+  patch_environ LOCK_DIR=None), test_file_locking TestLockPathDefaults
+  (reload-under-cleared-env contextmanager, restore-reload in finally),
+  test_cron_manager test_basic (assertIn(cron_manager.PROFILE_LOCK_DIR)),
+  test_dashboard untouched (its literals are parser INPUT, not output);
+  removed test_disk_surface_test's now-redundant per-suite workaround (the
+  origin pattern for this fix). Verified against a simulated unwritable
+  /run/lock/zfsutilities (mkdir + chmod 555): all four originally-failing
+  tests + touched suites green; zero /tmp leftovers after runs. Full-suite
+  check found ONE residual writer: tests/test-zfsdailybackup sources
+  zfsdailybackup -> zfssnapbuild, whose SNAPNAME_LOCK/SNAPNAME_RESERVED
+  env-default to /run/lock/zfsutilities (bash reads those vars, NOT
+  ZFSUTILITIES_LOCK_DIR — python conftest redirect can't reach it; the
+  recreated-dir mechanism from the original incident confirmed live: a
+  uid1000 full suite had recreated the dir with the snapname pair, and a
+  root-run suite would leave it root-owned). Fixed in tests/test-lib.sh
+  bootstrap: default-only SNAPNAME_LOCK/SNAPNAME_RESERVED exports to
+  $$-suffixed /tmp paths (explicit suite overrides still win —
+  test-zfssnapbuild's own exports unaffected) + rm in _test_lib_cleanup;
+  shellcheck clean. Both suites verified: pass, host dir not created,
+  zero /tmp leftovers. PREEXISTING entry removed (2 remain open).
+  AMENDMENT (same task, later finding): second residual writer found via
+  full-suite re-check + strace: test-zfsdelsnap -> zfsdelsnap sources the
+  REAL bin/zfsconfig, whose _zfsconfig_lock_file does mkdir -p
+  "$ZFSLOCK_DIR" (ZFSLOCK_DIR -> ZFSUTILITIES_LOCK_DIR ->
+  /run/lock/zfsutilities) — created the host dir EMPTY (flock path
+  mocked/short-circuited downstream). mkdir -p's chdir-dance makes the
+  mkdir look RELATIVE and invisible to bash -x greps; strace -f -e
+  execve,mkdir is the tool for this. Final design in tests/test-lib.sh
+  bootstrap: ONE per-suite location /tmp/zfsutilities-test-lockdir-$$
+  (flat $$ name, stable across re-sourced subshells — no
+  mktemp-on-resource litter) exported as ZFSUTILITIES_LOCK_DIR +
+  ZFSLOCK_DIR + SNAPNAME_LOCK/SNAPNAME_RESERVED defaults (explicit suite
+  overrides still win: test-zfsconfig/test-zfslockctl/test-archive-vm/
+  test-zfssnapbuild unaffected); _test_lib_cleanup rm -rf's the dir.
+  tests/test-paths (bash) default assertions now re-source lib/paths.sh
+  in a subshell with ZFSUTILITIES_LOCK_DIR and PROFILE_LOCK_DIR cleared
+  (PROFILE binds separately at source time — unsetting only the base is
+  not enough). Verified: writer suite + overriders + test-paths green,
+  host dir not created, zero /tmp leftovers, shellcheck clean.
+
+## CI fix 2026-10-03: install-test-deps.sh missing python3-gi-cairo
+  GitHub Actions `tests` runs failed on main push + v0.112.0 tag
+  (265b33c): ModuleNotFoundError 'cairo' at python/memory_page.py:19
+  (module-level import, Memory-tab RollingChart), cascading to 27 failed
+  + 67 errors across every suite that imports action_dispatch/memory_page
+  (test_action_dispatch collection, profile/pool-profile dialogs,
+  test_zfsutilities_gui timers/sidebar/terminate classes). Root cause:
+  share/dev/install-test-deps.sh installs python3-gi + gir1.2-gtk-3.0 but
+  not python3-gi-cairo; dev host has python3-cairo 1.25.1 +
+  python3-gi-cairo 3.48.2 from the desktop GTK stack, so the 0.112.0
+  wrap-up full suite was green locally and the gap only surfaced in CI.
+  Docs were already correct — developer-guide/index.md GUI deps list
+  python3-gi-cairo; the script never matched it. Fix: one line, add
+  python3-gi-cairo to the apt install list (hard-depends on
+  python3-cairo, pulling it in; also feeds .devcontainer/Dockerfile via
+  the same script). Gotcha for the future: a new GUI dependency is green
+  locally whenever the dev desktop stack happens to provide it — diff the
+  install script against the dev-guide dependency list when adding GUI
+  imports. 0.113.0 (a4c60a4) is still unpushed; fix should ride on main
+  before that push. v0.112.0 tag run stays red in history (published
+  release, not re-tagged).
+
+## Datasets page 2026-10-03: on-page legend for the teal tint
+  User request: explain the teal text on the Datasets page in the GUI
+  itself (it was only documented in gtk-gui.md). Added a bottom summary
+  row in create_datasets_page: dataset count left, new
+  app.datasets_legend_label right — small-italic caption "Teal text —
+  unmounted filesystem or snapshot" whose colored span reuses
+  UNMOUNTED_FG from gui_helpers (stays in sync with _row_fg_color's
+  tint, no hard-coded hex). Tests: legend widget existence + exact
+  markup assertion in test_datasets_page.py. Gotcha re-confirmed:
+  mock_gtk shares one Label mock across widgets AND tests, so
+  set_markup call-count/last-call assertions are unreliable — assert
+  the exact expected markup is present in call_args_list instead.
+  Docs: one clause added to the teal paragraph in gtk-gui.md (file also
+  carries the user's hand edits — left untouched). Awaiting commit.
+
+## Memory→Performance rename + Disks view-switcher removal (2026-10-03)
+  User request: rename the Memory page to "Performance" and remove the
+  Performance radio button/view from the Disks page. Visible rename only:
+  PAGE_BUILDERS title, on-page <big><b> title, _PAGE_ANCHORS
+  memory→"performance-tab" (docs heading "Performance Tab"), docstrings,
+  docs wording (gtk-gui Tabs table + section, python-modules,
+  data-structures, messages index "ran on the Performance page").
+  Internal identifiers KEPT by design: stack key "memory", module
+  memory_page.py, config key memory.refresh_seconds (persisted in user
+  configs — renaming would orphan them); log line "INFO: Memory stats
+  refreshed" stays (it reports memory stats, still accurate).
+  Disks page: whole view-switcher architecture removed — radio row +
+  separator, Gtk.Stack wrapper (inventory_box now packs into page_box
+  directly), Performance placeholder, _on_view_radio_toggled,
+  _DISKS_VIEWS/_current_disks_view, inventory_active gating and the
+  "Switch to the Inventory and Topology view…" tooltips in
+  update_disks_button_sensitivity (gating is now compute-host →
+  runner-busy → selection). Docs site rebuilt for the anchor test
+  (gotcha above). test_disks_page: view-switcher test replaced with
+  has_no_view_switcher (RadioButton/Stack assert_not_called), radio
+  tests + TestViewScopedButtonSensitivity deleted, selector-host test
+  re-identifies page_box as the box that packs hosts[0] (stack anchor
+  gone). Awaiting commit.
+
+## Datasets page 2026-10-03: mount/unmount confirmations demoted to VERB
+  User flagged two production log lines (0.97.0 dataset_actions) —
+  "INFO: Mounted/Unmounted snapshot ..." — as VERB-level noise. Scope
+  user-selected: datasets + snapshots (6 messages: Mounted {target},
+  Mounted/Unmounted snapshot, Unmounted {dataset}/{target} x3 incl.
+  post-orphaned-recovery) now VERB:; zvol loop-mount family and the
+  "Remounted ... to recover orphaned mount" notice stay INFO by design.
+  Messages-manual dataset_actions section: 2 rows retitled VERB, plus 2
+  previously-missing rows added (dataset Mounted/Unmounted success was
+  undocumented). Loop-partition test assertions intentionally untouched
+  (test_dataset_actions 2145/2250/2470/2530). Awaiting commit.
+
+## FATAL for premature task termination (2026-10-03)
+  User flagged three production WARN lines (0.97.0: backup_runner "Step
+  exited with rc=2", dataset_actions unmount "no such pool or dataset",
+  offsite_page "No offsite pool online.") — the tasks were prematurely
+  terminated, so they should be FATAL; "or, instead, the tasks
+  themselves should issue the FATAL: message, not the runners."
+  Design (user-approved "hybrid"): a message that IS the termination
+  record promotes to FATAL in place; step-failure detail stays WARN and
+  the abort decision logs a task-level FATAL (mirroring the GUI
+  backup_runner's existing "FATAL: Aborting ... because step failed"
+  and the bash scripts, which already log FATAL + exit 8 for
+  no-offsite-pool). Applied: profile_runner (no-pool, lock-conflict
+  rc=9, validation aborts incl. scrub no-pools, unknown tab type,
+  scrub gave-up; NEW "FATAL: Aborting run/restore because step failed"
+  and per-pool "FATAL: Prune of X failed (rc=N)" — retention loop
+  deliberately continues to other pools), offsite_page (no-pool,
+  no-active-steps), dataset_actions unmount family (all failure
+  branches promoted; busy-dialog paths gained "X is busy; unmount
+  aborted" FATAL lines — previously dialog-only, no log trace).
+  Deliberate WARN survivors: retention <offsite> skips (both modules),
+  duplicate-invocation skip, non-fatal step continues, "Could not list
+  descendants" degrade path, scrub timeout (rc=0 oddity recorded in
+  PREEXISTING.md), post-backup script rc. backup_runner GUI levels
+  unchanged; its _runner_log now resolves the issuer via
+  _issuer_log_location (skips wrapper frames) so file:line prefixes
+  name the real call site — the user's ghost "backup_runner.py:183"
+  was the wrapper's log_msg call line. Messages manual: offsite_page,
+  dataset_actions, profile_runner sections updated (promoted rows +
+  5 new rows). User also observed the runner/logging internals "seem
+  unreasonably complicated" and it "may be time for another
+  restructure in this area" — noted as a future thread, not acted on.
+  Awaiting commit.
+
+## Wrap-up cycle 2026-10-04
+  Step 1 (PREEXISTING): scrub-profile timeout-with-paused-pools rc
+  semantics DECIDED by user: keep rc=0 (timeout with only paused pools
+  remains a successful run); entry removed from PREEXISTING.md — the
+  WARN at profile_runner.py:727 stays WARN and the rc is now decided,
+  documented behavior, not an open issue. Zensical waiting condition
+  rechecked: PyPI latest is still 0.0.67, no 1.x — toolchain entry
+  stays. Infra-vdev planning UI stays in abeyance (user decision
+  2026-10-03). 2 entries remain.
+  Step 2 (standards): ruff check + format clean (154 files), shellcheck
+  clean via the documented command; manual policy review of the whole
+  uncommitted changeset found no violations (helper call-site rules,
+  regex-documentation rule, log-level prefixes, no site-specific data,
+  test-lib cleanup rm -rf safety verified against all lock-var
+  overriders). Doc inaccuracy found: coding-policies.md said log_msg
+  comes from backup_config — it is defined in logging_config and
+  re-exported; fixed in step 4. No new PREEXISTING items.
+  Step 3 (tests): coverage verified across all 8 features; one missing
+  test added — scrub profile timeout-with-paused-pools pins WARN + rc=0
+  (today's decision) in test_profile_runner.py; all touched python
+  suites green; bash test-paths green with zero lock-dir litter; gating
+  coverage confirmed intact in test_disks_page_growth_buttons (never
+  lived in test_disks_page).
+  Step 4 (docs): all four doc diffs reviewed against code (messages
+  index rows match actual strings incl. the retained timeout WARN;
+  VdevSample field rows; disks_page/memory sections; gtk-gui anchors);
+  coding-policies log_msg wording fixed (2 spots); changelog historical
+  Memory-tab/view-switcher mentions left as history; docs integrity 23
+  passed; site rebuilt clean (only the known PREEXISTING mkdocs banner),
+  performance-tab anchors verified live, zero stale memory-tab refs.
+  Step 5 (full suite, background, no soaks): 77 suites green
+  (4,194 passed, 0 failed, 1 skip = soak suite by design), rc=0. Three
+  non-soak suites over the runner's 5s advisory budget
+  (send-receive-dryrun 9.7s, zfslockmanager 7.6s, archive-vm 6.5s) —
+  advisory timing notes only, all passing; not recorded as PREEXISTING.
+  Post-run checks: no orphaned pytest trees, /run/lock/zfsutilities not
+  created, this run left zero /tmp litter (two EMPTY 0-byte logs from
+  2026-10-03 14:40 — stale litter from an earlier session's cancelled
+  runs — were removed by hand). CODEBASE FROZEN at this point.
+  Wrap-up totals: 1 PREEXISTING issue resolved by decision (scrub rc=0
+  stays; entry removed, test added to pin it), 2 entries remain; 1 test
+  added (timeout-with-paused-pools); 1 doc inaccuracy fixed
+  (coding-policies log_msg source); docs site rebuilt.
+
+## Release 0.114.0 (2026-10-04)
+  Step 7: VERSION bumped to 0.114.0; changelog entry written (Added:
+  all-pools topology + datasets legend; Changed: Performance rename,
+  view-switcher removal, FATAL/VERB policy; Fixed: device rates, CI
+  python3-gi-cairo, test lock-dir isolation). All __pycache__ dirs
+  removed; docs site rebuilt (0.114.0 stamp verified). Final full suite
+  WITH soaks: 77 suites, 0 failed, 0 skipped (soak's 7 tests ran), rc=0.
+  Codebase frozen; no further code changes this session.

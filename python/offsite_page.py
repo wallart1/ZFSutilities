@@ -465,7 +465,7 @@ def on_offsite_run(app, ctx):
 
     offsite_pool = do_detect_offsite_pool(app)
     if offsite_pool is None:
-        log_msg("WARN: No offsite pool online.")
+        log_msg("FATAL: No offsite pool online.")
         return
 
     while True:
@@ -530,7 +530,7 @@ def on_offsite_run(app, ctx):
         steps.append(offsite_step)
 
     if not steps:
-        log_msg("WARN: No active steps to run")
+        log_msg("FATAL: No active steps to run")
         return
 
     log_msg(f"INFO: Snapshot: {nextsnap}")

@@ -284,7 +284,7 @@ def save_dashboard_config(config, dashboard_data):
 
 
 def get_memory_config(config):
-    """Return the Memory tab config dict, creating defaults if absent."""
+    """Return the Performance tab config dict, creating defaults if absent."""
     memory = config.get("memory")
     if not isinstance(memory, dict):
         memory = _deep_copy(MEMORY_DEFAULTS)
@@ -296,6 +296,6 @@ def get_memory_config(config):
 
 
 def save_memory_config(config, memory_data):
-    """Store Memory tab config and persist to disk."""
+    """Store Performance tab config and persist to disk."""
     config["memory"] = dict(memory_data)
     save_config(config)

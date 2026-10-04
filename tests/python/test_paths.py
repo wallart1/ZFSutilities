@@ -27,7 +27,10 @@ class TestPathDefaults(unittest.TestCase):
         self.assertEqual(paths.get_run_dir(), "/run/zfsutilities")
 
     def test_lock_dir_default(self):
-        self.assertEqual(paths.get_lock_dir(), "/run/lock/zfsutilities")
+        # conftest.py redirects ZFSUTILITIES_LOCK_DIR for test runs, so the
+        # pure default is only visible with the override cleared.
+        with patch_environ(ZFSUTILITIES_LOCK_DIR=None):
+            self.assertEqual(paths.get_lock_dir(), "/run/lock/zfsutilities")
 
     def test_config_path_default(self):
         self.assertEqual(paths.get_config_path(), "/var/lib/zfsutilities/config.json")
@@ -81,7 +84,9 @@ class TestPathDefaults(unittest.TestCase):
         self.assertEqual(paths.get_cron_file_path(), "/etc/cron.d/zfsutilities")
 
     def test_profile_lock_dir_default(self):
-        self.assertEqual(paths.get_profile_lock_dir(), "/run/lock/zfsutilities/profiles")
+        # Follows get_lock_dir(), which conftest.py redirects for test runs.
+        with patch_environ(ZFSUTILITIES_LOCK_DIR=None):
+            self.assertEqual(paths.get_profile_lock_dir(), "/run/lock/zfsutilities/profiles")
 
     def test_zvol_mount_dir_default(self):
         self.assertEqual(paths.get_zvol_mount_dir(), "/mnt/zfsutilities")

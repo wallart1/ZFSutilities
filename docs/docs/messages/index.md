@@ -314,10 +314,10 @@ GUI Offsite tab. Builds and launches the offsite run and owns the tab's Save/Rev
 | `INFO: Offsite: previous snapshot name found: ...` | The offsite snapfile had a saved name, preloaded | Informational |
 | `INFO: Offsite: new snapshot name: ...` | A fresh offsite snapshot name was generated | Informational |
 | `WARN: Generate or enter a snapshot name first` | Run Offsite pressed with empty snapshot name | Run aborted |
-| `WARN: No offsite pool online.` | None of the registry's offsite candidates is currently importable/online | Run aborted before the confirmation dialog |
+| `FATAL: No offsite pool online.` | None of the registry's offsite candidates is currently importable/online | Run aborted before the confirmation dialog |
 | `INFO: Offsite backup cancelled` | User cancelled the pre-run confirmation dialog | Run aborted |
 | `INFO: Dry run mode enabled — no changes will be made` | Dry-run active | Dry-run behavior pushed into the step builder |
-| `WARN: No active steps to run` | No active offsite steps | Run aborted |
+| `FATAL: No active steps to run` | No active offsite steps | Run aborted |
 | `INFO: Snapshot: ...` | Final snapshot-name record before the runner starts | Runner starts |
 | `INFO: Offsite config saved to /var/lib/zfsutilities/config.json` | Save Config succeeded after the optional mismatch warning dialog | Dirty tracker marked clean |
 | `WARN: Error saving config: ...` | OSError during save | Save aborted |
@@ -1598,17 +1598,18 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 | `WARN: Cannot open ...: mountpoint is ...` | The dataset mountpoint property is not a path (legacy/none) | Browse aborted |
 | `WARN: Error opening file manager: ...` / `Error browsing snapshot ...: ...` | Launching the file manager failed (mountpoint resolution or xdg-open) | Browse aborted |
 | `VERB: Opened ...` / `Browsing snapshot ...` | The file manager was launched for the dataset/snapshot path | Browse succeeded |
-| `WARN: Error resolving mountpoint for ...: ...` | The mountpoint lookup raised | That item's browse/unmount aborted |
+| `WARN: Error resolving mountpoint for ...: ...` / `FATAL: Error resolving mountpoint for ...: ...` | The mountpoint lookup raised while browsing (WARN) or while unmounting a dataset, snapshot, or loop partition (FATAL) | That item's browse/unmount aborted |
 | `WARN: ... is not mounted; mount the partition first` | A loop partition has no mountpoint | Mount the partition, then browse |
 | `INFO: Skipping ... (canmount=off)` | Gated skip — the ancestor can never be mounted, excluded from the parent-mount plan | That ancestor skipped; target still handled |
 | `WARN: Error mounting ...: ...` | `zfs mount` / read-only `mount` returned non-zero | That mount batch aborted |
+| `VERB: Mounted ...` | Dataset mounted via `zfs mount` under a dataset lock | Continue |
 | `WARN: Error checking mount state for ...: ...` | The mounted/canmount property lookup raised while planning mounts | That snapshot's parent-mount offer/recovery skipped |
 | `WARN: Cannot mount ...: snapshots of ZFS volumes cannot be mounted` | The selected snapshot's parent is a zvol | That snapshot's mount aborted |
 | `WARN: Cannot mount ...: parent dataset ... is not mounted. Mount the parent first.` | The parent filesystem is unmounted | Mount the parent, then retry |
 | `WARN: Cannot mount ...: parent mountpoint ... is missing. A child dataset was mounted before its parent; remount the parent dataset to restore access.` | The parent's mountpoint directory is absent (shadowed namespace) | Remount the parent dataset |
 | `WARN: Cannot mount ...: snapshot path ... is not accessible.` | Listing the `.zfs/snapshot` path failed | That snapshot's mount aborted |
 | `WARN: Cannot mount ...: snapshot did not automount. Verify the parent dataset is healthy and try again.` | Listing the path did not produce a mounted snapshot | Verify parent health and retry |
-| `INFO: Mounted snapshot ...` | Snapshot automount verified | Continue |
+| `VERB: Mounted snapshot ...` | Snapshot automount verified | Continue |
 | `WARN: Error mounting snapshot ...: ...` | Unexpected exception resolving/mounting the snapshot | Aborted |
 | `WARN: Not all parent datasets mounted; selected snapshots that remain blocked will report warnings below.` | After the Mount All dialog, some parent mounts failed | Blocked snapshots warn individually |
 | `WARN: Error attaching ... to a loop device` / `Error attaching loop device for ...: ...` / `cannot attach loop device for ...: ...` | Loop attach failed (no device, subprocess error, or lock conflict) | Volume loop-mount aborted |
@@ -1622,14 +1623,16 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 | `WARN: Could not unmount ... after remounting its parents: ...` | The retry unmount after recovery still failed | Recovery aborted |
 | `WARN: cannot recover orphaned mount of ...: ...` | Lock conflict during recovery | Recovery aborted |
 | `WARN: Could not list descendants of ...: ...` | Listing children for the child-first unmount order failed | Only the dataset itself is unmounted |
-| `WARN: ... looks mounted but its mountpoint is not reachable (orphaned mount) and could not be recovered by remounting its parents. Remount the parent dataset(s) manually and retry; if that fails the mount is detached from the namespace and a reboot is required.` | The unmount failed with "no such pool or dataset" and recovery also failed | Stop; remount parents manually or reboot |
-| `WARN: Dataset ... is busy. Please close any file manager windows and try again.` / `WARN: Snapshot ... is busy. ...` / `WARN: Partition ... is busy. ...` | The unmount stderr contained "busy" | Stop at first failure; close the users and retry |
-| `WARN: Error unmounting ...: ...` | Unmount failed with unrecognized stderr | Stop at first failure |
-| `WARN: cannot unmount ...: ...` | Lock conflict for dataset/snapshot unmount | That unmount aborted |
-| `INFO: Unmounted snapshot ...` | Unmounting the snapshot path succeeded | Continue |
+| `FATAL: ... looks mounted but its mountpoint is not reachable (orphaned mount) and could not be recovered by remounting its parents. Remount the parent dataset(s) manually and retry; if that fails the mount is detached from the namespace and a reboot is required.` | The unmount failed with "no such pool or dataset" and recovery also failed | Stop; remount parents manually or reboot |
+| `FATAL: Dataset ... is busy. Please close any file manager windows and try again.` / `FATAL: Snapshot ... is busy. ...` / `FATAL: Partition ... is busy. ...` | The unmount stderr contained "busy" | Stop at first failure; close the users and retry |
+| `FATAL: Dataset ... is busy; unmount aborted` / `FATAL: Snapshot ... is busy; unmount aborted` / `FATAL: Partition ... is busy; unmount aborted` | The pre-unmount busy check found holder processes; a dialog lists them | That item's unmount aborted |
+| `FATAL: Error unmounting ...: ...` | Unmount failed with unrecognized stderr | Stop at first failure |
+| `FATAL: cannot unmount ...: ...` | Lock conflict for dataset/snapshot unmount | That unmount aborted |
+| `VERB: Unmounted ...` | Dataset unmounted (selected dataset or child-first descendant; also emitted after orphaned-mount recovery) | Continue |
+| `VERB: Unmounted snapshot ...` | Unmounting the snapshot path succeeded | Continue |
 | `INFO: Detached ... from loop device ...` | Volume detach completed | Row children reloaded |
-| `WARN: Error finding loop device for ...: ...` / `WARN: Error listing partitions on ...: ...` | Loop device/partition lookup raised | Volume detach aborted |
-| `WARN: Error detaching ... from ...` | Loop detach returned failure | The loop device stays attached |
+| `FATAL: Error finding loop device for ...: ...` / `FATAL: Error listing partitions on ...: ...` | Loop device/partition lookup raised | Volume detach aborted |
+| `FATAL: Error detaching ... from ...` | Loop detach returned failure | The loop device stays attached |
 
 ### [disks_page](../commands-and-modules/python-modules.md#disks_pagepy)
 
@@ -1976,7 +1979,7 @@ The GUI application shell: startup config checks, close confirmation, docs ancho
 | `WARN: No documentation anchor for page '...'` | Help-with-page has no docs anchor mapping for the current page | Docs viewer not opened |
 | `VERB: Action: ...` | An action button was clicked but no handler exists for that page+label (dispatch miss) | Nothing executed |
 | `VERB: > ...` | The user sent text via the stdin entry to the running runner | Text forwarded to the subprocess PTY |
-| `INFO: Memory stats refreshed` | The menu **Refresh** ran on the Memory page | Informational; charts/values already updated |
+| `INFO: Memory stats refreshed` | The menu **Refresh** ran on the Performance page | Informational; charts/values already updated |
 
 ### [main](../commands-and-modules/python-modules.md#mainpy)
 
@@ -2136,9 +2139,10 @@ Headless runner for scheduled profiles (cron): loads a profile JSON, builds its 
 | `INFO: Profile '...' is already running; waiting for it to finish...` | The profile advisory lock is busy; the runner waits up to the timeout | Wait; a waiting-file is written for the Dashboard |
 | `WARN: Pre-step callback failed: ...` / `WARN: Post-step callback failed: ...` | The scrub-pause/resume callback raised | The step still runs |
 | `WARN: Step exited with rc=...` | A step returned non-zero | Fatal steps abort the run; non-fatal continue |
+| `FATAL: Aborting run because step failed` | A fatal step failed; the remaining steps are skipped | The run aborts with the step's rc |
 | `WARN: ... failed: ...` | Rsync failure diagnosis appended to the step | Informational; run continues per fatality |
 | `WARN: Error running step: ...` | Spawning the step raised | Step counted as rc=1 |
-| `WARN: Operation aborted due to lock conflict in headless mode.` | Step rc=9 — the bash side hit the headless dataset-lock wait limit | The whole run aborts immediately |
+| `FATAL: Operation aborted due to lock conflict in headless mode.` | Step rc=9 — the bash side hit the headless dataset-lock wait limit | The whole run aborts immediately |
 | `VERB: Could not list profiles for scope validation: ...` | Profile listing failed; scope checks skipped | Run continues without scope warnings |
 | `WARN: ...` (scope validation) | A profile-scope warning naming this profile (source/destination overlap across profiles) | Informational; run continues |
 | `INFO: Dry run mode enabled — no changes will be made` | The profile is flagged dry-run | Continue in no-change mode |
@@ -2150,21 +2154,23 @@ Headless runner for scheduled profiles (cron): loads a profile JSON, builds its 
 | `WARN: Skipping ZFS keys backup — destination is not encrypted. Set zfs_keys_dest to an encrypted dataset.` | Safety gate — keys would land on an unencrypted dataset | Keys backup skipped; set an encrypted destination |
 | `VERB: Prune step restricted to the ... send/receive step(s)' source and destination datasets (derived at prune time).` | Prune scope narrowed to the active send/receive datasets | Informational |
 | `INFO: No active send/receive steps; skipping prune step (no new snapshots to prune).` | Retention-after-backup requested but no send/receive steps are active | Prune skipped |
-| `WARN: No active steps to run` | The profile produced zero executable steps | Profile aborts with rc=1 |
+| `FATAL: No active steps to run` | The profile produced zero executable steps | Profile aborts with rc=1 |
 | `INFO: Dry-run: Skipping snapfile cleanup (preserved for real run)` | Dry-run keeps the snapfile for the real run | Cleanup skipped |
 | `INFO: Removed snapshot file` | The snapfile was removed after a successful (non-dry-run) run | Informational |
 | `WARN: Post-backup command exited with rc=...` | The post-backup script failed (runs even after fatal errors) | Informational; rc recorded |
-| `WARN: No offsite pool online.` | No offsite-candidate pool is online | Offsite profile aborts with rc=1 |
+| `FATAL: No offsite pool online.` | No offsite-candidate pool is online | Offsite profile aborts with rc=1 |
 | `INFO: Offsite pool: ...` | The target pool detected for `<offsite>` substitution | Informational |
-| `WARN: Source and destination must be specified` | Restore profile missing source/destination | Aborts with rc=1 |
-| `WARN: No pools selected for pruning` | Retention profile has an empty prune-pools list | Aborts with rc=1 |
+| `FATAL: Source and destination must be specified` | Restore profile missing source/destination | Aborts with rc=1 |
+| `FATAL: Aborting restore because step failed` | The restore step returned non-zero | The run aborts with the step's rc |
+| `FATAL: No pools selected for pruning` | Retention profile has an empty prune-pools list | Aborts with rc=1 |
 | `WARN: <offsite> selected but no offsite pool is online` | `<offsite>` expanded to nothing | Continue with the remaining pools |
-| `WARN: No pools selected for pruning after resolving <offsite>` | The expansion left no pools | Aborts with rc=1 |
-| `WARN: No pools specified for scrub profile` | The scrub profile's pool list is empty | Aborts with rc=1 |
+| `FATAL: No pools selected for pruning after resolving <offsite>` | The expansion left no pools | Aborts with rc=1 |
+| `FATAL: Prune of ... failed (rc=...)` | A retention prune step failed for that pool | That pool's prune aborted; the remaining pools still run |
+| `FATAL: No pools specified for scrub profile` | The scrub profile's pool list is empty | Aborts with rc=1 |
 | `INFO: Scrub profile started on ... pool(s), target=...` | The scrub profile begins with the given concurrency | Informational |
 | `INFO: Scrub queue — active=... pending=... paused=... finished=...` | Queue summary, emitted only when it changes | Informational while polling |
 | `WARN: Scrub profile timed out with paused pools` | Idle with only paused pools remaining (about ten minutes) | Polling loop aborts |
-| `WARN: Scrub profile gave up on: ...` | The queue gave up on pools after repeated start failures | Profile aborts with rc=1 |
+| `FATAL: Scrub profile gave up on: ...` | The queue gave up on pools after repeated start failures | Profile aborts with rc=1 |
 | `INFO: Scrub profile complete` | All queued scrubs finished | Success, rc=0 |
 | `FATAL: Profile not found: ...` | The profile JSON could not be loaded | Session trailer rc=1; exit 1 |
 | `WARN: Profile '...' is already running and did not finish within ... seconds; skipping duplicate invocation` | The lock wait timed out (timeout > 0) | Skipped; exit 0 so cron does not retry-fail |
@@ -2172,7 +2178,7 @@ Headless runner for scheduled profiles (cron): loads a profile JSON, builds its 
 | `INFO: Running profile: ... (type=...)` | Lock acquired; dispatching to the tab-type runner | Informational |
 | `INFO: Skipping profile ...: today does not match weekday ordinal '...'` | The cron weekday #n/#L guard failed at runtime | Skipped; exit 0 |
 | `VERB: Ignoring weekday ordinal '...' for profile ... (--ignore-schedule)` | Immediate run requested (GUI Run Now or CLI `--ignore-schedule`); ordinal guard bypassed | Profile runs regardless of the day |
-| `WARN: Unknown tab type: ...` | No runner is registered for the profile's tab type | rc=1 |
+| `FATAL: Unknown tab type: ...` | No runner is registered for the profile's tab type | rc=1 |
 | `INFO: Profile ... finished (rc=...)` | Final summary before the history entry and session trailer | Exits with rc |
 
 ### [profile_manager](../commands-and-modules/python-modules.md#profile_managerpy)

@@ -7,13 +7,15 @@ sample and degrade individually on hosts that do not expose them
 
 - ``/proc/spl/kstat/zfs/arcstats`` — ARC + L2ARC counters
 - ``/proc/spl/kstat/zfs/zil`` — ZIL/SLOG write counters
-- ``zpool iostat -v`` — per-vdev cache/log capacity and traffic (no ``-L``
-  so device names match ``zpool status``)
+- ``zpool iostat -v -y 1 1`` — per-vdev cache/log capacity and traffic
+  rates over one 1-second window (no ``-L`` so device names match
+  ``zpool status``)
 
 Every kstat field is optional: parsed dicts contain only the fields the
 running kernel actually exposes, and the UI renders absent fields as "—".
-Rates are computed from cumulative-counter deltas between samples
-(arcstat-style), not from interval-blocking commands.
+Kstat rates are computed from cumulative-counter deltas between samples
+(arcstat-style); vdev rates come straight from the iostat report's own
+1-second measurement window, so each collection blocks about one second.
 """
 
 import re
@@ -26,8 +28,17 @@ from disk_repository import format_bytes
 ARCSTATS_PATH = "/proc/spl/kstat/zfs/arcstats"
 ZIL_PATH = "/proc/spl/kstat/zfs/zil"
 
-# Subprocess timeout for `zpool iostat -v` (seconds).
+# Subprocess timeout for the iostat invocation (seconds).
 IOSTAT_TIMEOUT = 10
+
+# Interval-mode iostat: exactly one report of per-interval averages after a
+# 1-second window.  `-y` omits the since-boot report interval mode prints
+# first, whose near-constant averages would make every rate read zero (flag
+# available since OpenZFS 0.8).
+IOSTAT_ARGS = ["zpool", "iostat", "-v", "-y", "1", "1"]
+# Fallback for zpool without `-y`: a since-boot report followed by one
+# 1-second interval report; the parser keeps the last report per vdev.
+IOSTAT_ARGS_FALLBACK = ["zpool", "iostat", "-v", "1", "2"]
 
 # ---------------------------------------------------------------------------
 # Regex: ^(\d+(?:\.\d+)?)([KMGTPE]?)$
@@ -45,23 +56,28 @@ _IOSTAT_VALUE_RE = re.compile(r"^(\d+(?:\.\d+)?)([KMGTPE]?)$")
 # Suffix scale table for _IOSTAT_VALUE_RE matches.
 _SIZE_SUFFIXES = {"": 0, "K": 1, "M": 2, "G": 3, "T": 4, "P": 5, "E": 6}
 
-# Vdev sections of `zpool iostat -v` output that the memory tab tracks.
+# Vdev sections of `zpool iostat -v` output that the Performance tab tracks.
 _TRACKED_SECTIONS = ("logs", "cache")
 
 
 @dataclass
 class VdevSample:
-    """One vdev row from `zpool iostat -v` (cumulative since boot)."""
+    """One vdev row from an interval-mode `zpool iostat -v` report.
+
+    The ops/bandwidth figures are per-second averages over the report's
+    measurement window (1 second), not cumulative counters; ``alloc`` and
+    ``free`` are current byte values.
+    """
 
     pool: str
     vdev: str
     section: str  # "logs" | "cache"
     alloc: int | None  # bytes; None when the cell is "-"
     free: int | None
-    reads: int  # cumulative operations since boot
-    writes: int
-    read_bytes: int
-    write_bytes: int
+    reads_ps: float  # operations per second over the window
+    writes_ps: float
+    read_bps: float  # bytes per second over the window
+    write_bps: float
 
 
 @dataclass
@@ -159,16 +175,18 @@ def _parse_iostat_cell(cell):
 
 
 def parse_zpool_iostat_v(text):
-    """Parse `zpool iostat -v` output into VdevSample rows.
+    """Parse interval-mode `zpool iostat -v` output into VdevSample rows.
 
     Only vdevs under the tracked infrastructure sections ("logs", "cache")
-    are returned.  Rows are matched by structure, not by pool-name lists:
-    the column separator between pool blocks is a flush-left all-dash
-    name, section headers are flush-left rows whose value cells are all
-    dashes, pool rows are flush-left with values, and vdev rows are
-    indented — so output from any OpenZFS release parses the same way.
+    are returned.  When the text contains several reports (the no-``-y``
+    fallback prefixes a since-boot report), the last report's row wins for
+    each (pool, vdev).  Rows are matched by structure, not by pool-name
+    lists: the column separator between pool blocks is a flush-left
+    all-dash name, section headers are flush-left rows whose value cells
+    are all dashes, pool rows are flush-left with values, and vdev rows
+    are indented — so output from any OpenZFS release parses the same way.
     """
-    samples = []
+    samples = {}
     pool = None
     section = "data"
     for line in text.splitlines():
@@ -208,21 +226,19 @@ def parse_zpool_iostat_v(text):
             continue
         if pool is None or section not in _TRACKED_SECTIONS:
             continue
-        reads, writes, read_bytes, write_bytes = tail
-        samples.append(
-            VdevSample(
-                pool=pool,
-                vdev=name,
-                section=section,
-                alloc=alloc,
-                free=free,
-                reads=reads,
-                writes=writes,
-                read_bytes=read_bytes,
-                write_bytes=write_bytes,
-            )
+        reads_ps, writes_ps, read_bps, write_bps = tail
+        samples[(pool, name)] = VdevSample(
+            pool=pool,
+            vdev=name,
+            section=section,
+            alloc=alloc,
+            free=free,
+            reads_ps=reads_ps,
+            writes_ps=writes_ps,
+            read_bps=read_bps,
+            write_bps=write_bps,
         )
-    return samples
+    return list(samples.values())
 
 
 # ---------------------------------------------------------------------------
@@ -251,12 +267,23 @@ def collect_memory_sample(
         pass
     try:
         result = subprocess.run(
-            ["zpool", "iostat", "-v"],
+            IOSTAT_ARGS,
             capture_output=True,
             text=True,
             timeout=timeout,
             check=False,
         )
+        if result.returncode != 0:
+            # A zpool without `-y` (pre-0.8) rejects the flag immediately;
+            # the fallback costs the same 1-second window and prefixes a
+            # since-boot report the parser ignores.
+            result = subprocess.run(
+                IOSTAT_ARGS_FALLBACK,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
         if result.returncode == 0:
             sample.vdevs = parse_zpool_iostat_v(result.stdout)
             sample.iostat_available = True
@@ -302,9 +329,26 @@ def _get(stats, key):
 
 
 def compute_rates(prev, cur):
-    """Derive per-interval MemoryRates from two consecutive samples."""
+    """Derive per-interval MemoryRates from two consecutive samples.
+
+    Kstat counters are cumulative, so their rates need the previous
+    sample; vdev rows already carry per-window rates from the iostat
+    report and pass through directly, so they are live on the very first
+    sample.
+    """
     rates = MemoryRates()
-    if prev is None or cur is None:
+    if cur is None:
+        return rates
+    rates.vdevs = {
+        (v.pool, v.vdev): VdevRates(
+            reads_ps=v.reads_ps,
+            writes_ps=v.writes_ps,
+            read_bps=v.read_bps,
+            write_bps=v.write_bps,
+        )
+        for v in cur.vdevs
+    }
+    if prev is None:
         return rates
     elapsed = cur.monotonic - prev.monotonic
     if elapsed <= 0:
@@ -345,17 +389,6 @@ def compute_rates(prev, cur):
         elapsed,
     )
 
-    prev_vdevs = {(v.pool, v.vdev): v for v in prev.vdevs}
-    for cur_vdev in cur.vdevs:
-        prev_vdev = prev_vdevs.get((cur_vdev.pool, cur_vdev.vdev))
-        if prev_vdev is None:
-            continue
-        rates.vdevs[(cur_vdev.pool, cur_vdev.vdev)] = VdevRates(
-            reads_ps=_delta_rate(prev_vdev.reads, cur_vdev.reads, elapsed),
-            writes_ps=_delta_rate(prev_vdev.writes, cur_vdev.writes, elapsed),
-            read_bps=_delta_rate(prev_vdev.read_bytes, cur_vdev.read_bytes, elapsed),
-            write_bps=_delta_rate(prev_vdev.write_bytes, cur_vdev.write_bytes, elapsed),
-        )
     return rates
 
 

@@ -246,7 +246,7 @@ The sidebar exposes these pages, with the storage-infrastructure tabs
 | [Retention](#retention-tab)       | Per-pool retention policies + prune runner                                                      |
 | [Checkagainst](#checkagainst-tab) | Edit the [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst) table          |
 | [Logs](#logs-tab)                 | Browse, search, and prune session log files                                                     |
-| [Memory](#memory-tab)             | Real-time ARC / L2ARC / SLOG monitors with rolling charts                                       |
+| [Performance](#performance-tab)   | Real-time ARC / L2ARC / SLOG monitors with rolling charts                                      |
 | [Disks](#disks-tab)               | Physical disk inventory, pool topology, and pool growth                                         |
 | [Pools](#pools-tab)               | Pool registry + live `zpool list` status + scrub manager                                        |
 | [Datasets](#datasets-tab)         | Collapsible dataset tree with inline snapshot/hold management (pool root datasets at top level) |
@@ -1162,9 +1162,9 @@ removed manually via the **Prune Old** action button.
 
 ---
 
-## Memory Tab
+## Performance Tab
 
-The **Memory** tab monitors ZFS's memory tiers in real time: the **ARC**
+The **Performance** tab monitors ZFS's memory tiers in real time: the **ARC**
 (the adaptive replacement cache in RAM), the **L2ARC** (read-cache
 devices), and the **SLOG** (intent-log devices). It refreshes
 automatically while visible on a user-configurable interval, and every
@@ -1177,13 +1177,16 @@ dynamically without any external charting dependency.
 | ------ | ----- |
 | `/proc/spl/kstat/zfs/arcstats` | ARC size, target, and breakdown; ARC hits/misses; L2ARC sizes, hit rates, read/write byte totals, and feed count |
 | `/proc/spl/kstat/zfs/zil` | SLOG write counters (writes, commits, bytes written via the log devices) |
-| `zpool iostat -v` | Per-device capacity and cumulative traffic for `cache` and `logs` vdevs across all pools |
+| `zpool iostat -v -y 1 1` | Per-device capacity and traffic rates for `cache` and `logs` vdevs across all pools, measured over one 1-second window per refresh |
 
-Rates (hits/s, misses/s, read/write B/s, commits/s) are computed from the
-deltas of these cumulative counters between refreshes — arcstat-style —
-so nothing blocks waiting on an interval command. The first refresh after
-opening the tab (or after a counter reset, e.g. a reboot) shows "—" for
-rates until a second sample exists.
+Summary rates (hits/s, misses/s, read/write B/s, commits/s) are computed
+from the deltas of these cumulative kstat counters between refreshes —
+arcstat-style — so the first refresh after opening the tab (or after a
+counter reset, e.g. a reboot) shows "—" for those until a second sample
+exists. The per-device table rates come from the iostat report's own
+1-second measurement window and are therefore live on the very first
+refresh; that measurement runs in the background collection thread, so
+the GUI never blocks waiting on it.
 
 ### Data-source availability
 
@@ -1216,7 +1219,8 @@ context.
 - **L2ARC — Cache Devices**: a value grid (size, compressed size,
   read and feed rates, hit rates, feeds), a read/write traffic chart
   (two series), and a per-device table (pool, vdev, capacity
-  alloc/free, read rate, write rate).
+  alloc/free, read rate, write rate — each rate averaged over the
+  iostat 1-second window).
 - **SLOG — Log Devices (ZIL)**: a value grid (write rate, writes/s,
   commits/s), a write-rate chart, and a per-pool/device table with the
   same shape as the L2ARC table.
@@ -1232,7 +1236,7 @@ interval) and auto-scale their Y axes.
 The **Refresh every (s)** spinner sets the auto-refresh interval
 (1–300 seconds, default 5). The value is persisted to the config file
 (`memory.refresh_seconds`) and takes effect immediately — the timer is
-restarted with the new interval. Like the other data tabs, the Memory
+restarted with the new interval. Like the other data tabs, the Performance
 timer only runs while the tab is visible.
 
 ### Actions
@@ -1245,15 +1249,12 @@ timer only runs while the tab is visible.
 
 ## Disks Tab
 
-The **Disks** tab shows the physical storage layer underneath your ZFS pools.
-A row of radio buttons across the top of the tab switches between two
-views: **Inventory and Topology** (the Disk Inventory and Pool Topology
-sections) and **Performance** (a placeholder for forthcoming
-performance-monitoring sections). The pool drop-down under the radio row
-selects the pool whose vdev topology is shown. The tab content scrolls
-vertically as a whole when the window is too short; the Inventory and
-Topology view also keeps a minimum height so it stays usable instead of
-being squashed.
+The **Disks** tab shows the physical storage layer underneath your ZFS pools:
+the Disk Inventory and Pool Topology sections. The pool drop-down inside the
+Pool Topology section marks the selected pool, which the tab's pool actions and
+disk highlights follow. The tab content scrolls
+vertically as a whole when the window is too short; it also keeps a minimum
+height so it stays usable instead of being squashed.
 
 ### Disk inventory
 
@@ -1291,17 +1292,23 @@ is teal text only.
 
 ### Pool topology
 
-The Pool Topology pane shows the vdev topology of the pool selected in the drop-down.
-The tree is shown fully expanded every time it is refreshed (Refresh button or
-pool change). Selecting a node highlights the corresponding member disks and
-partitions in the inventory view (their text is drawn in teal): the pool node
+The Pool Topology pane always shows the vdev topology of every imported pool,
+each pool as a top-level row of one tree. A pool with nothing to show you
+stays collapsed; a pool expands automatically when it is the selected pool,
+when it contains the topology selection, or when one of its devices is
+tinted, and collapses again when none of that applies. Selecting a node
+highlights the corresponding member disks and
+partitions in the inventory (their text is drawn in teal): the pool node
 highlights every device in the pool, a vdev node highlights every device in
-that vdev, and a device node highlights just that device. Clearing the
+that vdev, and a device node highlights just that device; the pool drop-down
+follows the selection's pool. Clearing the
 topology selection restores the pool-wide highlight. Selecting a disk or
 partition in the inventory switches the pool selector to that disk's pool and
 tints every topology device that resides on the selected disk (a whole disk
-tints all of its partitions; a partition tints just that device), no matter
-which pool's topology is being displayed:
+tints all of its partitions; a partition tints just that device) across every
+pool. Selecting a disk or partition that belongs to no pool clears the
+topology pane instead — tints, the pool selection, and expansion all reset,
+so nothing from the previously shown state stays on screen:
 
 | Column               | Meaning                                                                          |
 | -------------------- | -------------------------------------------------------------------------------- |
@@ -1732,9 +1739,8 @@ cannot be entered.
 
 The pool- and disk-scoped actions (Create Pool, Add Data Vdev, Expand Vdev,
 Replace, Detach, Add Infra Vdev, Migrate Pool, SMART Details, Surface Test)
-are enabled in the **Inventory and Topology** view and greyed out in the
-**Performance** view; hover for a tooltip pointing at the view where the
-action lives.
+follow the same gating: on two-node systems they are restricted to the
+storage host, and they are disabled while a dataset action is running.
 
 - **Create Pool…** — open the create-pool wizard to build a new pool from
   unused disks (see [Creating Pools](#creating-pools)). Storage host only on
@@ -2004,7 +2010,8 @@ The **Origin / Clones** column shows:
 - Empty for all other rows
 
 Unmounted filesystems and snapshots are shown in **teal** text so you can spot
-at a glance which items are not currently browseable. Each snapshot has its own
+at a glance which items are not currently browseable; a small legend at the
+bottom of the page restates this. Each snapshot has its own
 mount indicator; the parent dataset's mount state is shown separately on the
 parent row.
 

@@ -380,10 +380,10 @@ class TestUnmount(unittest.TestCase):
                 text=True,
                 check=False,
             )
-            mock_log.assert_any_call("INFO: Unmounted snapshot tank/vm-100@manual-2025-01-01")
+            mock_log.assert_any_call("VERB: Unmounted snapshot tank/vm-100@manual-2025-01-01")
             mock_refresh.assert_called_once_with(app)
 
-    def test_logs_warning_when_locked(self):
+    def test_logs_fatal_when_locked(self):
         da = self._import_under_mock()
         app = self._make_app()
 
@@ -419,11 +419,11 @@ class TestUnmount(unittest.TestCase):
             mock_zlm.lock.assert_called_once()
             mock_subprocess.run.assert_not_called()
             mock_log.assert_called_once_with(
-                "WARN: cannot unmount tank/vm-100@manual-2025-01-01: "
+                "FATAL: cannot unmount tank/vm-100@manual-2025-01-01: "
                 "conflict: cannot acquire w lock on tank/vm-100"
             )
 
-    def test_logs_busy_when_umount_reports_busy(self):
+    def test_logs_fatal_when_umount_reports_busy(self):
         da = self._import_under_mock()
         app = self._make_app()
 
@@ -458,8 +458,46 @@ class TestUnmount(unittest.TestCase):
 
             mock_subprocess.run.assert_called_once()
             mock_log.assert_any_call(
-                "WARN: Snapshot tank/vm-100@manual-2025-01-01 is busy. "
+                "FATAL: Snapshot tank/vm-100@manual-2025-01-01 is busy. "
                 "Please close any file manager windows and try again."
+            )
+
+    def test_logs_fatal_when_umount_stderr_unrecognized(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "snapshot",
+                        "dataset": "tank/vm-100",
+                        "name": "manual-2025-01-01",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(
+                da,
+                "get_snapshot_mountpoint",
+                return_value="/tmp/mnt/tank_vm-100@manual-2025-01-01",
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm"),
+        ):
+            mock_subprocess.run.return_value = MagicMock(
+                returncode=1, stderr="umount: /tmp/mnt/tank_vm-100@manual-2025-01-01: no such file"
+            )
+            da.on_datasets_unmount(app)
+
+            mock_log.assert_any_call(
+                "FATAL: Error unmounting tank/vm-100@manual-2025-01-01: "
+                "umount: /tmp/mnt/tank_vm-100@manual-2025-01-01: no such file"
             )
 
     def test_unmounts_multiple_snapshots(self):
@@ -500,8 +538,8 @@ class TestUnmount(unittest.TestCase):
             da.on_datasets_unmount(app)
 
             self.assertEqual(mock_zlm.lock.call_count, 2)
-            mock_log.assert_any_call("INFO: Unmounted snapshot tank/vm-100@manual-2025-01-01")
-            mock_log.assert_any_call("INFO: Unmounted snapshot tank/vm-100@manual-2025-01-02")
+            mock_log.assert_any_call("VERB: Unmounted snapshot tank/vm-100@manual-2025-01-01")
+            mock_log.assert_any_call("VERB: Unmounted snapshot tank/vm-100@manual-2025-01-02")
             mock_refresh.assert_called_once_with(app)
 
     def test_skips_already_unmounted_items_when_unmounting(self):
@@ -546,7 +584,7 @@ class TestUnmount(unittest.TestCase):
                 "w",
                 "umount snapshot tank/vm-100@manual-2025-01-01",
             )
-            mock_log.assert_any_call("INFO: Unmounted snapshot tank/vm-100@manual-2025-01-01")
+            mock_log.assert_any_call("VERB: Unmounted snapshot tank/vm-100@manual-2025-01-01")
             mock_refresh.assert_called_once_with(app)
 
 
@@ -601,8 +639,43 @@ class TestUnmountDataset(unittest.TestCase):
                 text=True,
                 check=False,
             )
-            mock_log.assert_any_call("INFO: Unmounted tank/vm-100")
+            mock_log.assert_any_call("VERB: Unmounted tank/vm-100")
             mock_refresh.assert_called_once_with(app)
+
+    def test_fatal_when_unmount_stderr_unrecognized(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm"),
+        ):
+            mock_subprocess.run.return_value = MagicMock(
+                returncode=1,
+                stderr="cannot unmount 'tank/vm-100': permission denied",
+            )
+            da.on_datasets_unmount(app)
+
+            mock_log.assert_any_call(
+                "FATAL: Error unmounting tank/vm-100: "
+                "cannot unmount 'tank/vm-100': permission denied"
+            )
+            mock_refresh.assert_not_called()
 
     def test_unmounts_descendants_before_parent(self):
         da = self._import_under_mock()
@@ -656,9 +729,9 @@ class TestUnmountDataset(unittest.TestCase):
                     ["sudo", "zfs", "unmount", "tank/vm-100"],
                 ],
             )
-            mock_log.assert_any_call("INFO: Unmounted tank/vm-100/sub1/deep")
-            mock_log.assert_any_call("INFO: Unmounted tank/vm-100/sub1")
-            mock_log.assert_any_call("INFO: Unmounted tank/vm-100")
+            mock_log.assert_any_call("VERB: Unmounted tank/vm-100/sub1/deep")
+            mock_log.assert_any_call("VERB: Unmounted tank/vm-100/sub1")
+            mock_log.assert_any_call("VERB: Unmounted tank/vm-100")
             mock_refresh.assert_called_once_with(app)
 
     def test_unmount_recovers_orphaned_child_by_remounting_parents(self):
@@ -736,12 +809,12 @@ class TestUnmountDataset(unittest.TestCase):
             )
             mock_zlm.locks.assert_any_call("w", ["tank", "tank/vm-100/sub1/deep"])
             mock_log.assert_any_call("INFO: Remounted tank to recover orphaned mount")
-            mock_log.assert_any_call("INFO: Unmounted tank/vm-100/sub1/deep")
-            mock_log.assert_any_call("INFO: Unmounted tank/vm-100/sub1")
-            mock_log.assert_any_call("INFO: Unmounted tank/vm-100")
+            mock_log.assert_any_call("VERB: Unmounted tank/vm-100/sub1/deep")
+            mock_log.assert_any_call("VERB: Unmounted tank/vm-100/sub1")
+            mock_log.assert_any_call("VERB: Unmounted tank/vm-100")
             mock_refresh.assert_called_once_with(app)
 
-    def test_unmount_warns_when_orphan_recovery_fails(self):
+    def test_unmount_fatal_when_orphan_recovery_fails(self):
         da = self._import_under_mock()
         app = self._make_app()
 
@@ -808,8 +881,16 @@ class TestUnmountDataset(unittest.TestCase):
                     ["sudo", "zfs", "unmount", "tank"],
                 ],
             )
-            warned = [str(c) for c in mock_log.call_args_list if "orphaned mount" in str(c)]
-            self.assertTrue(warned, "expected an orphaned-mount warning")
+            fatal_orphan = [
+                c.args[0]
+                for c in mock_log.call_args_list
+                if c.args and "looks mounted" in c.args[0]
+            ]
+            self.assertTrue(fatal_orphan, "expected an orphaned-mount message")
+            self.assertTrue(
+                all(msg.startswith("FATAL:") for msg in fatal_orphan),
+                f"orphaned-mount message must be FATAL: {fatal_orphan}",
+            )
             self.assertFalse(
                 any("Unmounted tank/vm-100/sub1" in str(c) for c in mock_log.call_args_list)
             )
@@ -849,10 +930,10 @@ class TestUnmountDataset(unittest.TestCase):
                 text=True,
                 check=False,
             )
-            mock_log.assert_any_call("INFO: Unmounted tank")
+            mock_log.assert_any_call("VERB: Unmounted tank")
             mock_refresh.assert_called_once_with(app)
 
-    def test_warns_when_dataset_unmount_busy(self):
+    def test_fatal_when_dataset_unmount_busy(self):
         da = self._import_under_mock()
         app = self._make_app()
 
@@ -880,7 +961,7 @@ class TestUnmountDataset(unittest.TestCase):
 
             mock_gtk.MessageDialog.assert_called_once()
             mock_subprocess.run.assert_not_called()
-            mock_log.assert_not_called()
+            mock_log.assert_any_call("FATAL: Dataset tank/vm-100 is busy; unmount aborted")
             mock_refresh.assert_not_called()
 
 
@@ -937,7 +1018,7 @@ class TestMount(unittest.TestCase):
                 text=True,
                 check=False,
             )
-            mock_log.assert_any_call("INFO: Mounted tank/vm-100")
+            mock_log.assert_any_call("VERB: Mounted tank/vm-100")
             mock_refresh.assert_called_once_with(app)
 
     def test_mounts_pool_root_dataset(self):
@@ -972,7 +1053,7 @@ class TestMount(unittest.TestCase):
                 text=True,
                 check=False,
             )
-            mock_log.assert_any_call("INFO: Mounted tank")
+            mock_log.assert_any_call("VERB: Mounted tank")
             mock_refresh.assert_called_once_with(app)
 
     def test_mounts_unmounted_ancestors_before_target(self):
@@ -1016,9 +1097,9 @@ class TestMount(unittest.TestCase):
                     ["sudo", "zfs", "mount", "tank/vm-100/sub"],
                 ],
             )
-            mock_log.assert_any_call("INFO: Mounted tank")
-            mock_log.assert_any_call("INFO: Mounted tank/vm-100")
-            mock_log.assert_any_call("INFO: Mounted tank/vm-100/sub")
+            mock_log.assert_any_call("VERB: Mounted tank")
+            mock_log.assert_any_call("VERB: Mounted tank/vm-100")
+            mock_log.assert_any_call("VERB: Mounted tank/vm-100/sub")
             mock_refresh.assert_called_once_with(app)
 
     def test_mount_skips_ancestor_with_canmount_off(self):
@@ -1062,8 +1143,8 @@ class TestMount(unittest.TestCase):
                 ],
             )
             mock_log.assert_any_call("INFO: Skipping tank/vm-100 (canmount=off)")
-            mock_log.assert_any_call("INFO: Mounted tank")
-            mock_log.assert_any_call("INFO: Mounted tank/vm-100/sub")
+            mock_log.assert_any_call("VERB: Mounted tank")
+            mock_log.assert_any_call("VERB: Mounted tank/vm-100/sub")
             mock_refresh.assert_called_once_with(app)
 
     def test_warns_when_filesystem_mount_fails(self):
@@ -1169,7 +1250,7 @@ class TestMount(unittest.TestCase):
                 "tank/vm-100", "r", "mount snapshot tank/vm-100@snap1"
             )
             mock_listdir.assert_called_once_with("/tank/vm-100/.zfs/snapshot/snap1")
-            mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap1")
+            mock_log.assert_any_call("VERB: Mounted snapshot tank/vm-100@snap1")
             mock_refresh.assert_called_once_with(app)
 
     def test_rejects_snapshot_of_volume(self):
@@ -1252,8 +1333,8 @@ class TestMount(unittest.TestCase):
             da.on_datasets_mount(app)
 
             self.assertEqual(mock_zlm.lock.call_count, 2)
-            mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap1")
-            mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap2")
+            mock_log.assert_any_call("VERB: Mounted snapshot tank/vm-100@snap1")
+            mock_log.assert_any_call("VERB: Mounted snapshot tank/vm-100@snap2")
             mock_refresh.assert_called_once_with(app)
 
     def test_skips_already_mounted_items_when_mounting(self):
@@ -1298,7 +1379,7 @@ class TestMount(unittest.TestCase):
             mock_zlm.lock.assert_called_once_with(
                 "tank/vm-100", "r", "mount snapshot tank/vm-100@snap2"
             )
-            mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap2")
+            mock_log.assert_any_call("VERB: Mounted snapshot tank/vm-100@snap2")
             mock_refresh.assert_called_once_with(app)
 
     def test_warns_when_snapshot_parent_not_mounted(self):
@@ -1380,7 +1461,7 @@ class TestMount(unittest.TestCase):
                 "Verify the parent dataset is healthy and try again."
             )
             self.assertNotIn(
-                call("INFO: Mounted snapshot tank/vm-100@snap1"), mock_log.call_args_list
+                call("VERB: Mounted snapshot tank/vm-100@snap1"), mock_log.call_args_list
             )
             mock_update.assert_not_called()
 
@@ -1577,10 +1658,10 @@ class TestMount(unittest.TestCase):
                     ["sudo", "zfs", "mount", "tank/vm-100"],
                 ],
             )
-            mock_log.assert_any_call("INFO: Mounted tank")
-            mock_log.assert_any_call("INFO: Mounted tank/vm-100")
+            mock_log.assert_any_call("VERB: Mounted tank")
+            mock_log.assert_any_call("VERB: Mounted tank/vm-100")
             mock_listdir.assert_called_once_with("/tank/vm-100/.zfs/snapshot/snap1")
-            mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap1")
+            mock_log.assert_any_call("VERB: Mounted snapshot tank/vm-100@snap1")
             mock_refresh.assert_called_once_with(app)
 
     def test_parent_mount_dialog_lists_datasets_and_snapshots(self):
@@ -1707,8 +1788,8 @@ class TestMount(unittest.TestCase):
                     ["sudo", "zfs", "mount", "tank/vm-100"],
                 ],
             )
-            mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap1")
-            mock_log.assert_any_call("INFO: Mounted snapshot tank/vm-100@snap2")
+            mock_log.assert_any_call("VERB: Mounted snapshot tank/vm-100@snap1")
+            mock_log.assert_any_call("VERB: Mounted snapshot tank/vm-100@snap2")
             self.assertEqual(mock_listdir.call_count, 2)
             mock_refresh.assert_called_once_with(app)
 
@@ -2265,11 +2346,13 @@ class TestVolumeLoopActions(unittest.TestCase):
             ),
             patch.object(da, "get_busy_processes", return_value=[(1234, "bash")]),
             patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
             patch.object(da, "subprocess") as mock_subprocess,
         ):
             da.on_datasets_unmount(app)
 
         mock_subprocess.run.assert_not_called()
+        mock_log.assert_any_call("FATAL: Partition /dev/loop0p1 is busy; unmount aborted")
         mock_refresh.assert_not_called()
 
     def test_unmount_volume_unmounts_partitions_then_detaches(self):
@@ -2324,12 +2407,45 @@ class TestVolumeLoopActions(unittest.TestCase):
             patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
             patch.object(da, "get_busy_processes", return_value=[(1234, "vi")]),
             patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
             patch.object(da, "subprocess") as mock_subprocess,
         ):
             da.on_datasets_unmount(app)
 
         mock_subprocess.run.assert_not_called()
         repo.loop_detach.assert_not_called()
+        mock_log.assert_any_call("FATAL: Partition /dev/loop0p1 is busy; unmount aborted")
+        mock_refresh.assert_not_called()
+
+    def test_unmount_volume_fatal_when_partition_umount_fails(self):
+        from zfs_repository import LoopPartition
+
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = "/dev/loop0"
+        repo.loop_partitions.return_value = [
+            LoopPartition("/dev/loop0p1", "ext4", "/tmp/zm/tank/vm-100-disk-0/loop0p1", True),
+        ]
+        repo.loop_detach.return_value = True
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(
+                returncode=1, stderr="umount: /tmp/zm/tank/vm-100-disk-0/loop0p1: invalid argument"
+            )
+            da.on_datasets_unmount(app)
+
+        repo.loop_detach.assert_not_called()
+        mock_log.assert_any_call(
+            "FATAL: Error unmounting /dev/loop0p1: "
+            "umount: /tmp/zm/tank/vm-100-disk-0/loop0p1: invalid argument"
+        )
         mock_refresh.assert_not_called()
 
     def test_unmount_volume_without_loop_does_nothing(self):
@@ -2539,14 +2655,37 @@ class TestVolumeLoopHelpers(unittest.TestCase):
         with (
             patch.object(da, "get_busy_processes", return_value=[(1234, "bash")]),
             patch.object(da, "_warn_busy") as mock_warn_busy,
-            patch.object(da, "log_msg"),
+            patch.object(da, "log_msg") as mock_log,
             patch.object(da, "subprocess") as mock_subprocess,
         ):
             result = da._unmount_one_volume_partition(self._part_item(mounted=True), repo, app)
 
         self.assertFalse(result)
         mock_warn_busy.assert_called_once()
+        mock_log.assert_any_call("FATAL: Partition /dev/loop0p1 is busy; unmount aborted")
         mock_subprocess.run.assert_not_called()
+
+    def test_unmount_partition_helper_fatal_on_umount_failure(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.device_mountpoint.return_value = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
+
+        with (
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(
+                returncode=1, stderr="umount: /tmp/zm/tank/vm-100-disk-0/loop0p1: not mounted"
+            )
+            result = da._unmount_one_volume_partition(self._part_item(mounted=True), repo, app)
+
+        self.assertFalse(result)
+        mock_log.assert_any_call(
+            "FATAL: Error unmounting /dev/loop0p1: "
+            "umount: /tmp/zm/tank/vm-100-disk-0/loop0p1: not mounted"
+        )
 
     def test_unmount_partition_helper_returns_false_when_not_mounted(self):
         da = self._import_under_mock()

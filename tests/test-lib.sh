@@ -26,6 +26,20 @@ export PATHS_LIB
 # Disable the automatic Step-5 migration so tests do not touch production paths.
 export ZFSUTILITIES_DISABLE_MIGRATION=1
 
+# Keep every advisory-lock path off the host lock directory
+# (/run/lock/zfsutilities) regardless of its ownership — test runs must
+# never create or touch it. One per-suite location covers the python-side
+# env chain (ZFSUTILITIES_LOCK_DIR, also read by lib/paths.sh and
+# bin/zfsconfig), the bash lock manager (ZFSLOCK_DIR), and zfssnapbuild's
+# snapshot-name lock. Suites that need their own locations still export
+# these variables to override the defaults; $$ stays stable in subshells
+# that re-source test-lib.sh, so no duplicate locations are created.
+: "${ZFSUTILITIES_LOCK_DIR:=/tmp/zfsutilities-test-lockdir-$$}"
+: "${ZFSLOCK_DIR:=$ZFSUTILITIES_LOCK_DIR}"
+: "${SNAPNAME_LOCK:=$ZFSUTILITIES_LOCK_DIR/.snapname.lock}"
+: "${SNAPNAME_RESERVED:=$ZFSUTILITIES_LOCK_DIR/.snapname.reserved}"
+export ZFSUTILITIES_LOCK_DIR ZFSLOCK_DIR SNAPNAME_LOCK SNAPNAME_RESERVED
+
 source "$mydir/bin/bashinit"
 bashinit
 
@@ -46,10 +60,11 @@ _TEST_LOG_FILE="/tmp/zfsutilities-test-$$.log"
 # green runs delete both artifacts instead of littering /tmp.
 _test_lib_cleanup() {
     [[ -n "${_mock_zfs_state_dir:-}" ]] && rm -rf "$_mock_zfs_state_dir"
+    rm -rf "${ZFSUTILITIES_LOCK_DIR:-}"
     if [[ "${TESTS_FAILED:-0}" -gt 0 || "${_TEST_SUMMARY_RC:-1}" -ne 0 ]]; then
         echo "Test log retained for post-mortem: ${_TEST_LOG_FILE}" >&2
     else
-        rm -f "$_TEST_LOG_FILE"
+        rm -f "${_TEST_LOG_FILE}"
     fi
 }
 if [[ "$BASHPID" = "$$" && -z "${_TEST_LIB_CLEANUP_ARMED:-}" ]]; then

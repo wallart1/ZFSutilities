@@ -221,14 +221,6 @@ class TestProxmoxButtonSensitivity(unittest.TestCase):
         btn.set_sensitive.assert_called_with(True)
         btn.set_tooltip_text.assert_called_with("")
 
-    def test_enabled_in_performance_view(self):
-        """The button acts on the selected pool, not the inventory view."""
-        dp, app, btn = self._make()
-        app._disks_view_stack.get_visible_child_name.return_value = "performance"
-        with _single_host(dp):
-            dp.update_disks_button_sensitivity(app)
-        btn.set_sensitive.assert_called_with(True)
-
     def test_disabled_without_selected_pool(self):
         dp, app, btn = self._make(pool_name="")
         with _single_host(dp):

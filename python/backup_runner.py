@@ -5,6 +5,7 @@ Runs sequential steps (rsync pulls, zfs send/receive, post-backup) via
 subprocess.Popen with non-blocking I/O integrated into the GTK main loop.
 """
 
+import inspect
 import os
 import pty
 import re
@@ -59,6 +60,26 @@ def _truncate_rsync_log():
                 os.truncate(RSYNC_LOG_FILE, 0)
     except OSError:
         pass
+
+
+def _issuer_log_location(wrapper_names=("_log", "_runner_log", "_issuer_log_location")):
+    """Return (file, line) of the nearest caller outside the logging wrappers.
+
+    log_msg()'s own caller detection stops at the first frame outside
+    logging_config.py, which for runner messages is the _runner_log wrapper
+    itself — every message would be prefixed with the wrapper's log_msg()
+    call line instead of the code that actually issued the message.
+    """
+    frame = inspect.currentframe()
+    try:
+        while frame is not None:
+            filename = os.path.basename(frame.f_code.co_filename)
+            if filename != "logging_config.py" and frame.f_code.co_name not in wrapper_names:
+                return frame.f_code.co_filename, frame.f_lineno
+            frame = frame.f_back
+        return None, None
+    finally:
+        del frame
 
 
 class BackupRunner:
@@ -173,8 +194,11 @@ class BackupRunner:
 
         If *caller_file* and *caller_line* are provided, they are forwarded to
         log_msg() so the file:line prefix reflects the original message issuer
-        rather than this wrapper.
+        rather than this wrapper. When they are not provided, the wrapper
+        frames are skipped so the prefix still names the original issuer.
         """
+        if caller_file is None or caller_line is None:
+            caller_file, caller_line = _issuer_log_location()
         log_msg(
             msg,
             session_log_file=self._session_log_file,

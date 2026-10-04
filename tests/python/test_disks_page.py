@@ -167,13 +167,17 @@ class FakeTreeView:
         self.store = store
         self._selection = FakeTreeSelection(store, paths)
         self.scrolled_to = []
-        self.expand_all_calls = 0
+        self.expanded = []
+        self.collapsed = []
 
     def get_selection(self):
         return self._selection
 
-    def expand_all(self):
-        self.expand_all_calls += 1
+    def expand_row(self, path, open_all):
+        self.expanded.append((path, open_all))
+
+    def collapse_row(self, path):
+        self.collapsed.append(path)
 
     def scroll_to_cell(self, path, *args, **_kwargs):
         self.scrolled_to.append(path)
@@ -215,6 +219,7 @@ def _make_app(disks=None, topologies=None):
     # Pool selector helpers.
     app._disks_pool_selector.get_active_text.return_value = None
     app._disks_pool_selector.get_active.return_value = -1
+    app._disks_pool_selector.get_model.return_value = []
 
     app.ctx = MagicMock()
     return app
@@ -239,6 +244,24 @@ def _disk(**kwargs):
     }
     defaults.update(kwargs)
     return DiskInfo(**defaults)
+
+
+def _selector_with_model(app, entries):
+    """Give the mocked pool selector a list model and a working set_active().
+
+    *entries* is the ordered list of pool names the selector offers. The
+    side effect mirrors Gtk.ComboBoxText: activating index -1 clears the
+    active text.
+    """
+    model = [[name] for name in entries]
+    app._disks_pool_selector.get_model.return_value = model
+
+    def _set_active(index):
+        app._disks_pool_selector.get_active_text.return_value = (
+            model[index][0] if 0 <= index < len(model) else None
+        )
+
+    app._disks_pool_selector.set_active.side_effect = _set_active
 
 
 def _topology(pool_name="pool1", children=None):
@@ -292,15 +315,15 @@ class TestCreateDisksPage(unittest.TestCase):
             dp.Gtk.PolicyType.AUTOMATIC,
         )
         page.add.assert_called()
-        # The Inventory and Topology view enforces a minimum height so the
-        # page-level scrollbar engages instead of squashing it.
+        # The page content enforces a minimum height so the page-level
+        # scrollbar engages instead of squashing it.
         dp.Gtk.Box.return_value.set_size_request.assert_any_call(
             -1,
             dp.DISKS_TOPOLOGY_MIN_HEIGHT,
         )
 
-    def test_create_disks_page_builds_view_switcher(self):
-        """A radio row drives a stack with inventory and performance views."""
+    def test_create_disks_page_has_no_view_switcher(self):
+        """The page shows its sections directly, with no radio/stack switcher."""
         dp = _import_disks_page()
         app = MagicMock()
         app.config = {"pools": []}
@@ -310,46 +333,65 @@ class TestCreateDisksPage(unittest.TestCase):
         with patch.object(dp, "refresh_disks_page"):
             dp.create_disks_page(app)
 
-        self.assertEqual(
-            set(app._disks_view_radios),
-            {"inventory", "performance"},
+        dp.Gtk.RadioButton.assert_not_called()
+        dp.Gtk.Stack.assert_not_called()
+
+    def test_pool_selector_lives_in_topology_section(self):
+        """The pool selector row is packed inside the Pool Topology section."""
+        dp = _import_disks_page()
+        app = MagicMock()
+        app.config = {"pools": []}
+        app.enable_treeview_copy = MagicMock()
+        app.ctx = MagicMock()
+
+        boxes = []
+
+        def _distinct_box(*_args, **_kwargs):
+            box = MagicMock()
+            boxes.append(box)
+            return box
+
+        with (
+            patch.object(dp.Gtk, "Box", side_effect=_distinct_box),
+            patch.object(dp, "refresh_disks_page"),
+        ):
+            dp.create_disks_page(app)
+
+        selector = app._disks_pool_selector
+        controls = next(
+            box
+            for box in boxes
+            if any(call.args and call.args[0] is selector for call in box.pack_start.call_args_list)
         )
-        # The first radio is created with its label directly; the rest join
-        # the group and receive their label via set_label().
-        self.assertEqual(
-            dp.Gtk.RadioButton.call_args_list[0].kwargs["label"],
-            "Inventory and Topology",
-        )
-        set_labels = [
-            call.args[0]
-            for call in dp.Gtk.RadioButton.new_from_widget.return_value.set_label.call_args_list
+        # The selector row is hosted by the page-content box (the same box
+        # that packs the panes' ScrolledWindow), not by the page-level box.
+        hosts = [
+            box
+            for box in boxes
+            if any(call.args and call.args[0] is controls for call in box.pack_start.call_args_list)
         ]
-        self.assertEqual(set_labels, ["Performance"])
-        # Each view has a named stack child, inventory first.
-        child_names = [call.args[1] for call in app._disks_view_stack.add_named.call_args_list]
-        self.assertEqual(child_names, ["inventory", "performance"])
-
-    def test_view_radio_toggled_switches_stack_child(self):
-        dp = _import_disks_page()
-        app = MagicMock()
-
-        radio = MagicMock()
-        radio.get_active.return_value = True
-        with patch.object(dp, "update_disks_button_sensitivity") as update:
-            dp._on_view_radio_toggled(radio, "performance", app)
-
-        app._disks_view_stack.set_visible_child_name.assert_called_once_with("performance")
-        update.assert_called_once_with(app)
-
-    def test_view_radio_toggled_ignores_inactive_radio(self):
-        dp = _import_disks_page()
-        app = MagicMock()
-
-        radio = MagicMock()
-        radio.get_active.return_value = False
-        dp._on_view_radio_toggled(radio, "performance", app)
-
-        app._disks_view_stack.set_visible_child_name.assert_not_called()
+        self.assertEqual(len(hosts), 1)
+        self.assertTrue(
+            any(
+                call.args and call.args[0] is dp.Gtk.ScrolledWindow.return_value
+                for call in hosts[0].pack_start.call_args_list
+            )
+        )
+        page_box = next(
+            box
+            for box in boxes
+            if any(call.args and call.args[0] is hosts[0] for call in box.pack_start.call_args_list)
+        )
+        self.assertFalse(
+            any(
+                call.args and call.args[0] is controls
+                for call in page_box.pack_start.call_args_list
+            )
+        )
+        # The hint describes the repurposed selector, not topology switching.
+        labels = [c.kwargs.get("label") for c in dp.Gtk.Label.call_args_list]
+        self.assertIn("Selected pool — pool actions and disk highlights follow it", labels)
+        self.assertNotIn("Select a pool for its vdev topology", labels)
 
 
 class TestDiskInventoryCache(unittest.TestCase):
@@ -614,6 +656,8 @@ class TestSelectionAndTopology(unittest.TestCase):
 
         app._disks_pool_selector.set_active.side_effect = _set_active
 
+        dp._repopulate_topology(app)
+
         selection = app.disks_view.get_selection.return_value
         selection.get_selected_rows.return_value = (
             app.disks_store,
@@ -628,6 +672,9 @@ class TestSelectionAndTopology(unittest.TestCase):
         self.assertEqual(app.disks_topology_view.get_selection().selected_paths, [])
         disk_row = app.disks_topology_store.root[0]["children"][0]["row"]
         self.assertTrue(disk_row[dp.COL_T_HIGHLIGHT])
+        # The disk's pool is both selected in the selector and tinted, so it
+        # is the one pool expanded in the all-pools tree.
+        self.assertEqual(app.disks_topology_view.expanded, [((0,), True)])
 
     def test_topology_selection_change_does_not_select_disk_row(self):
         dp = _import_disks_page()
@@ -655,7 +702,7 @@ class TestSelectionAndTopology(unittest.TestCase):
         app.disks_view.get_selection.return_value = disk_selection
         app._disks_pool_selector.get_active_text.return_value = "pool1"
 
-        dp._repopulate_topology_for_selected_pool(app)
+        dp._repopulate_topology(app)
 
         selection = app.disks_topology_view.get_selection()
         selection.paths = [(0, 0)]
@@ -689,24 +736,26 @@ class TestSelectionAndTopology(unittest.TestCase):
         )
         app._disks_pool_selector.get_active_text.return_value = "pool1"
 
-        dp._repopulate_topology_for_selected_pool(app)
+        dp._repopulate_topology(app)
 
         self.assertTrue(app.disks_store.rows[0][dp.COL_D_HIGHLIGHT])
         self.assertFalse(app.disks_store.rows[1][dp.COL_D_HIGHLIGHT])
         self.assertTrue(app.disks_store.rows[2][dp.COL_D_HIGHLIGHT])
 
-    def test_topology_repopulate_expands_tree(self):
+    def test_topology_repopulate_expands_active_pool(self):
         dp = _import_disks_page()
         app = _make_app(
             disks=[_disk(path="/dev/sda", pools=["pool1"])],
-            topologies={"pool1": _topology("pool1")},
+            topologies={"pool1": _topology("pool1"), "pool2": _topology("pool2")},
         )
         app.disks_store = FakeListStore([_disk_row("/dev/sda", "pool1")])
         app._disks_pool_selector.get_active_text.return_value = "pool1"
 
-        dp._repopulate_topology_for_selected_pool(app)
+        dp._repopulate_topology(app)
 
-        self.assertEqual(app.disks_topology_view.expand_all_calls, 1)
+        # The active pool expands fully; the unrelated pool stays collapsed.
+        self.assertEqual(app.disks_topology_view.expanded, [((0,), True)])
+        self.assertEqual(app.disks_topology_view.collapsed, [(1,)])
 
     def test_topology_repopulate_without_topology_does_not_expand(self):
         dp = _import_disks_page()
@@ -717,9 +766,10 @@ class TestSelectionAndTopology(unittest.TestCase):
         app.disks_store = FakeListStore([_disk_row("/dev/sda", "pool1")])
         app._disks_pool_selector.get_active_text.return_value = None
 
-        dp._repopulate_topology_for_selected_pool(app)
+        dp._repopulate_topology(app)
 
-        self.assertEqual(app.disks_topology_view.expand_all_calls, 0)
+        self.assertEqual(app.disks_topology_view.expanded, [])
+        self.assertEqual(app.disks_topology_view.collapsed, [])
 
     def test_highlight_cleared_for_missing_pool(self):
         dp = _import_disks_page()
@@ -847,7 +897,7 @@ class TestTopologySelectionHighlight(unittest.TestCase):
         return app
 
     def _select(self, dp, app, path):
-        dp._repopulate_topology_for_selected_pool(app)
+        dp._repopulate_topology(app)
         selection = app.disks_topology_view.get_selection()
         selection.paths = [path]
         dp._on_topology_selection_changed(selection, app)
@@ -917,7 +967,7 @@ class TestDiskSelectionTopologyHighlight(unittest.TestCase):
         app.disks_store = FakeListStore([_disk_row(p, "pool1") for p in inventory_paths])
         app._disks_pool_selector.get_active_text.return_value = "pool1"
         dp = _import_disks_page()
-        dp._repopulate_topology_for_selected_pool(app)
+        dp._repopulate_topology(app)
         return dp, app
 
     def _select_disk(self, dp, app, row):
@@ -972,11 +1022,16 @@ class TestDiskSelectionTopologyHighlight(unittest.TestCase):
         self.assertTrue(leaf[dp.COL_T_HIGHLIGHT])
 
         app._disks_pool_selector.get_active_text.return_value = "pool2"
-        dp._repopulate_topology_for_selected_pool(app)
+        dp._repopulate_topology(app)
 
-        leaf = app.disks_topology_store.root[0]["children"][0]["children"][0]["row"]
-        self.assertEqual(leaf[dp.COL_T_NAME], "/dev/sdb2")
-        self.assertTrue(leaf[dp.COL_T_HIGHLIGHT])
+        # The store now holds both pools; the whole-disk selection tints its
+        # partition leaves in every pool.
+        pool1_leaf = app.disks_topology_store.root[0]["children"][0]["children"][0]["row"]
+        pool2_leaf = app.disks_topology_store.root[1]["children"][0]["children"][0]["row"]
+        self.assertEqual(pool1_leaf[dp.COL_T_NAME], "/dev/sdb1")
+        self.assertTrue(pool1_leaf[dp.COL_T_HIGHLIGHT])
+        self.assertEqual(pool2_leaf[dp.COL_T_NAME], "/dev/sdb2")
+        self.assertTrue(pool2_leaf[dp.COL_T_HIGHLIGHT])
 
     def test_topology_cell_highlight_func_sets_foreground(self):
         dp = _import_disks_page()
@@ -992,6 +1047,171 @@ class TestDiskSelectionTopologyHighlight(unittest.TestCase):
         model.get_value.return_value = False
         dp._topology_cell_highlight_func(MagicMock(), renderer, model, tree_iter)
         renderer.set_property.assert_called_with("foreground", None)
+
+
+class TestAllPoolsTopology(unittest.TestCase):
+    """The topology pane shows every pool; expansion follows relevance."""
+
+    def test_repopulate_lists_all_pools_as_top_level_rows(self):
+        dp = _import_disks_page()
+        app = _make_app(
+            disks=[],
+            topologies={"beta": _topology("beta"), "alpha": _topology("alpha")},
+        )
+
+        dp._repopulate_topology(app)
+
+        names = [node["row"][dp.COL_T_NAME] for node in app.disks_topology_store.root]
+        types = [node["row"][dp.COL_T_TYPE] for node in app.disks_topology_store.root]
+        self.assertEqual(names, ["alpha", "beta"])  # sorted, like the selector
+        self.assertEqual(types, ["pool", "pool"])
+
+    def test_repopulate_collapses_pools_without_selection_or_highlight(self):
+        dp = _import_disks_page()
+        app = _make_app(
+            disks=[_disk(path="/dev/sda", pools=["alpha"])],
+            topologies={"alpha": _topology("alpha"), "beta": _topology("beta")},
+        )
+        app.disks_store = FakeListStore([_disk_row("/dev/sda", "alpha")])
+
+        dp._repopulate_topology(app)
+
+        self.assertEqual(app.disks_topology_view.expanded, [])
+        self.assertEqual(app.disks_topology_view.collapsed, [(0,), (1,)])
+
+    def test_member_disk_selection_expands_its_pool(self):
+        dp = _import_disks_page()
+        app = _make_app(
+            disks=[
+                _disk(path="/dev/sda", pools=["pool1"]),
+                _disk(path="/dev/sdb", pools=["pool2"]),
+            ],
+            topologies={
+                "pool1": _leaves_topology("pool1", ("/dev/sda",)),
+                "pool2": _leaves_topology("pool2", ("/dev/sdb",)),
+            },
+        )
+        app.disks_store = FakeListStore(
+            [_disk_row("/dev/sda", "pool1"), _disk_row("/dev/sdb", "pool2")]
+        )
+        _selector_with_model(app, ["pool1", "pool2"])
+        app._disks_pool_selector.get_active_text.return_value = "pool1"
+        app._disks_pool_selector.get_active.return_value = 0
+        dp._repopulate_topology(app)
+        view = app.disks_topology_view
+        view.expanded.clear()
+        view.collapsed.clear()
+
+        selection = app.disks_view.get_selection.return_value
+        selection.get_selected_rows.return_value = (app.disks_store, [1])
+        dp._on_disk_selection_changed(selection, app)
+
+        app._disks_pool_selector.set_active.assert_called_with(1)
+        # pool2 holds the tinted device and becomes the active pool; pool1
+        # has neither, so it collapses.
+        self.assertIn(((1,), True), view.expanded)
+        self.assertIn((0,), view.collapsed)
+
+    def test_nonmember_disk_selection_clears_topology(self):
+        dp = _import_disks_page()
+        app = _make_app(
+            disks=[
+                _disk(path="/dev/sda", pools=["pool1"]),
+                _disk(path="/dev/sdd", pools=[]),
+            ],
+            topologies={"pool1": _leaves_topology("pool1", ("/dev/sda",))},
+        )
+        app.disks_store = FakeListStore([_disk_row("/dev/sda", "pool1"), _disk_row("/dev/sdd")])
+        _selector_with_model(app, ["pool1"])
+        app._disks_pool_selector.get_active_text.return_value = "pool1"
+        app._disks_pool_selector.get_active.return_value = 0
+        dp._repopulate_topology(app)
+
+        selection = app.disks_view.get_selection.return_value
+        selection.get_selected_rows.return_value = (app.disks_store, [1])
+        dp._on_disk_selection_changed(selection, app)
+
+        leaf = app.disks_topology_store.root[0]["children"][0]["children"][0]["row"]
+        self.assertFalse(leaf[dp.COL_T_HIGHLIGHT])
+        app._disks_pool_selector.set_active.assert_called_with(-1)
+        # No tint, selection, or active pool remains: every pool collapses.
+        self.assertEqual(app.disks_topology_view.collapsed, [(0,)])
+        # The GTK "changed" signal (simulated here) drops the pool-wide
+        # inventory tint that the cleared selector used to drive.
+        dp._on_pool_selector_changed(app._disks_pool_selector, app)
+        self.assertFalse(app.disks_store.rows[0][dp.COL_D_HIGHLIGHT])
+
+    def test_selector_change_highlights_and_expands_member_disks(self):
+        dp = _import_disks_page()
+        app = _make_app(
+            disks=[
+                _disk(path="/dev/sda", pools=["pool1"]),
+                _disk(path="/dev/sdb", pools=["pool2"]),
+            ],
+            topologies={
+                "pool1": _leaves_topology("pool1", ("/dev/sda",)),
+                "pool2": _leaves_topology("pool2", ("/dev/sdb",)),
+            },
+        )
+        app.disks_store = FakeListStore([_disk_row("/dev/sda"), _disk_row("/dev/sdb")])
+        dp._repopulate_topology(app)
+        view = app.disks_topology_view
+        view.expanded.clear()
+        view.collapsed.clear()
+        app._disks_pool_selector.get_active_text.return_value = "pool2"
+
+        dp._on_pool_selector_changed(app._disks_pool_selector, app)
+
+        self.assertTrue(app.disks_store.rows[1][dp.COL_D_HIGHLIGHT])
+        self.assertFalse(app.disks_store.rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertEqual(view.expanded, [((1,), True)])
+        self.assertEqual(view.collapsed, [(0,)])
+
+    def test_topology_selection_sets_selector_to_containing_pool(self):
+        dp = _import_disks_page()
+        app = _make_app(
+            disks=[_disk(path="/dev/sdb", pools=["pool2"])],
+            topologies={
+                "pool1": _leaves_topology("pool1", ("/dev/sda",)),
+                "pool2": _leaves_topology("pool2", ("/dev/sdb",)),
+            },
+        )
+        app.disks_store = FakeListStore([_disk_row("/dev/sdb", "pool2")])
+        _selector_with_model(app, ["pool1", "pool2"])
+        dp._repopulate_topology(app)
+
+        selection = app.disks_topology_view.get_selection()
+        selection.paths = [(1, 0, 0)]  # /dev/sdb leaf inside pool2
+        dp._on_topology_selection_changed(selection, app)
+
+        app._disks_pool_selector.set_active.assert_called_with(1)
+        self.assertTrue(app.disks_store.rows[0][dp.COL_D_HIGHLIGHT])
+        self.assertIn(((1,), True), app.disks_topology_view.expanded)
+
+    def test_refresh_preserves_deliberately_cleared_selector(self):
+        dp = _import_disks_page()
+        app = _make_app(
+            disks=[],
+            topologies={"pool1": _topology("pool1")},
+        )
+        # The selector offered pool1 but was deliberately cleared (active
+        # -1) by selecting a disk outside every pool.
+        app._disks_pool_selector.get_model.return_value = [["pool1"]]
+
+        dp.refresh_disks_page(app)
+
+        app._disks_pool_selector.set_active.assert_not_called()
+
+    def test_refresh_defaults_to_first_pool_on_initial_build(self):
+        dp = _import_disks_page()
+        app = _make_app(
+            disks=[],
+            topologies={"pool1": _topology("pool1")},
+        )
+
+        dp.refresh_disks_page(app)
+
+        app._disks_pool_selector.set_active.assert_called_with(0)
 
 
 class TestTopologyNodeMatchesDisk(unittest.TestCase):
@@ -1112,53 +1332,6 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
             dp.update_disks_button_sensitivity(app)
             btn.set_sensitive.assert_called_with(expected)
             btn.reset_mock()
-
-
-class TestViewScopedButtonSensitivity(unittest.TestCase):
-    """Pool/disk actions require the Inventory view."""
-
-    def _app_with_view(self, view):
-        app = _make_app()
-        app._disks_view_stack.get_visible_child_name.return_value = view
-        app.dataset_runner.running = False
-        migrate_btn = MagicMock()
-        app._disks_migrate_pool_btn = migrate_btn
-        return app, migrate_btn
-
-    def test_migrate_pool_disabled_outside_inventory_view(self):
-        dp = _import_disks_page()
-        app, migrate_btn = self._app_with_view("performance")
-        dp.update_disks_button_sensitivity(app)
-        migrate_btn.set_sensitive.assert_called_with(False)
-        self.assertIn("Inventory and Topology", migrate_btn.set_tooltip_text.call_args.args[0])
-
-    def test_migrate_pool_enabled_in_inventory_view(self):
-        dp = _import_disks_page()
-        app, migrate_btn = self._app_with_view("inventory")
-        dp.update_disks_button_sensitivity(app)
-        migrate_btn.set_sensitive.assert_called_with(True)
-        migrate_btn.set_tooltip_text.assert_called_with("")
-
-    def test_view_radio_toggle_updates_button_sensitivity(self):
-        dp = _import_disks_page()
-        app, migrate_btn = self._app_with_view("inventory")
-        radio = MagicMock()
-        radio.get_active.return_value = True
-        migrate_btn.reset_mock()
-        # Simulate the stack having switched to the Performance view.
-        app._disks_view_stack.get_visible_child_name.return_value = "performance"
-        dp._on_view_radio_toggled(radio, "performance", app)
-        app._disks_view_stack.set_visible_child_name.assert_called_once_with("performance")
-        migrate_btn.set_sensitive.assert_called_with(False)
-
-    def test_inactive_radio_does_nothing(self):
-        dp = _import_disks_page()
-        app, migrate_btn = self._app_with_view("inventory")
-        radio = MagicMock()
-        radio.get_active.return_value = False
-        dp._on_view_radio_toggled(radio, "performance", app)
-        app._disks_view_stack.set_visible_child_name.assert_not_called()
-        migrate_btn.set_sensitive.assert_not_called()
 
 
 if __name__ == "__main__":

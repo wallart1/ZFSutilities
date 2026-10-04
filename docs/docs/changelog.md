@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.114.0
+
+*Released 2026-10-04*
+
+### Added
+
+- **All-pools Pool Topology (Disks page)** — the topology pane now
+  shows every imported pool as a top-level row of one tree instead of
+  rebuilding around the drop-down selection. Expansion is rule-driven:
+  a pool expands when it is the selected pool, contains the topology
+  selection, or holds a teal-tinted device, and collapses otherwise.
+  Selecting an inventory disk or partition that belongs to no pool now
+  clears the whole pane — tints, pool selection, and expansion — so
+  nothing stale stays on screen, and a background refresh no longer
+  snaps a deliberately cleared selector back to the first pool. The
+  pool selector moved into the Pool Topology section; it follows
+  inventory and topology selections, and the growth/migrate/Proxmox
+  dialogs preselect from it unchanged.
+
+- **Datasets-page color legend** — a small caption at the bottom of the
+  page ("Teal text — unmounted filesystem or snapshot", drawn in the
+  same color the tree uses) explains the teal tint in the GUI itself,
+  sharing the summary row with the dataset count.
+
+### Changed
+
+- **Memory tab renamed "Performance"** — visible rename only: sidebar
+  title, on-page title, and documentation. Internal identifiers stay
+  (`memory_page.py`, stack key `memory`, config key
+  `memory.refresh_seconds`), so existing saved configs keep working.
+
+- **Disks-page view switcher removed** — the Inventory and Topology /
+  Performance radio row, the `Gtk.Stack` wrapper, and the placeholder
+  Performance view are gone; the page shows Disk Inventory and Pool
+  Topology directly. Action-button gating simplifies to host role,
+  runner state, and selection.
+
+- **Premature task termination logs FATAL** — messages that are the
+  termination record now log FATAL in place: profile/backup/offsite
+  validation aborts, the headless lock-conflict abort, unknown tab
+  type, scrub give-up, the dataset/snapshot/partition unmount failure
+  family, and the busy-abort paths (which previously showed only a
+  dialog with no log trace). Step-failure detail stays WARN, with a
+  task-level `FATAL: Aborting … because step failed` when a fatal step
+  aborts a run; a failed retention prune logs a per-pool FATAL and
+  still continues to the remaining pools. Dataset/snapshot mount and
+  unmount success messages are demoted to VERB (the loop-mount family
+  and the orphaned-mount recovery notice stay INFO). Runner log
+  prefixes now name the issuing call site instead of the runner's log
+  wrapper line.
+
+### Fixed
+
+- **Performance-tab device rates were always zero** — plain `zpool
+  iostat -v` prints since-boot averages, not cumulative counters, so
+  delta-ing them produced ~0/s in the SLOG/L2ARC device tables while
+  the kstat-derived figures were correct. Rates are now read from
+  interval-mode `zpool iostat -v -y 1 1` (one 1-second window per
+  refresh, collected off-thread; a no-`-y` fallback covers pre-0.8
+  zpool), so device rates are live on the very first refresh.
+  `VdevSample` ops/byte fields are now per-window rates (`reads_ps`,
+  `writes_ps`, `read_bps`, `write_bps`).
+
+- **CI installs python3-gi-cairo** — the GitHub Actions test runs
+  failed importing `cairo` (a module-level import behind the
+  Performance tab's charts) because the dependency script never
+  matched the documented GUI dependency list; the dev desktop's GTK
+  stack had masked the gap locally.
+
+- **Tests no longer touch the host lock directory** — python
+  (conftest.py) and bash (test-lib.sh) test runs redirect every
+  advisory-lock path (`ZFSUTILITIES_LOCK_DIR`, `ZFSLOCK_DIR`,
+  zfssnapbuild's snapshot-name locks) to isolated per-run temporary
+  directories, so a non-root test run can neither fail on nor recreate
+  `/run/lock/zfsutilities` with the wrong ownership.
+
 ## 0.113.0
 
 *Released 2026-10-03*

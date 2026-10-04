@@ -19,7 +19,9 @@ class TestGenerateCronLine(unittest.TestCase):
         self.assertIn("python3 /opt/runner.py", line)
         self.assertIn("mkdir -p", line)
         self.assertIn("/var/log/zfsutilities", line)
-        self.assertIn("/run/lock/zfsutilities/profiles", line)
+        # The generated line mkdirs the configured profile-lock dir; its
+        # location follows conftest.py's ZFSUTILITIES_LOCK_DIR redirect.
+        self.assertIn(cron_manager.PROFILE_LOCK_DIR, line)
         self.assertTrue(line.rstrip().endswith(">> /var/log/zfsutilities/cron.log 2>&1"))
 
     def test_specific_weekday(self):

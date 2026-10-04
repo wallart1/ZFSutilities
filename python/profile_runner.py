@@ -325,10 +325,11 @@ def _run_step_list(steps, session_log_file=None):
     for step in steps:
         rc = _run_command(step, session_log_file=session_log_file)
         if rc == 9:
-            log_msg("WARN: Operation aborted due to lock conflict in headless mode.")
+            log_msg("FATAL: Operation aborted due to lock conflict in headless mode.")
             return rc
         if rc != 0:
             if step.fatal:
+                log_msg("FATAL: Aborting run because step failed")
                 return rc
             max_rc = max(max_rc, rc)
     return max_rc
@@ -503,7 +504,7 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
             )
 
     if not steps:
-        log_msg("WARN: No active steps to run")
+        log_msg("FATAL: No active steps to run")
         return 1
 
     fatal_rc = _run_step_list(steps, session_log_file=session_log_file)
@@ -545,7 +546,7 @@ def run_offsite_profile(profile, config, parent_dir, session_log_file=None):
     candidates = get_offsite_candidate_names(config)
     offsite_pool = detect_offsite_pool(candidates)
     if offsite_pool is None:
-        log_msg("WARN: No offsite pool online.")
+        log_msg("FATAL: No offsite pool online.")
         return 1
     log_msg(f"INFO: Offsite pool: {offsite_pool}")
     steps = []
@@ -576,7 +577,7 @@ def run_offsite_profile(profile, config, parent_dir, session_log_file=None):
         steps.append(offsite_step)
 
     if not steps:
-        log_msg("WARN: No active steps to run")
+        log_msg("FATAL: No active steps to run")
         return 1
     return _run_step_list(steps, session_log_file=session_log_file)
 
@@ -591,7 +592,7 @@ def run_restore_profile(profile, config, parent_dir, session_log_file=None):
     do_part1 = cfg.get("do_part1", True)
     do_part2 = cfg.get("do_part2", True)
     if not source or not dest:
-        log_msg("WARN: Source and destination must be specified")
+        log_msg("FATAL: Source and destination must be specified")
         return 1
     removequalifiers, destfs = compute_restore_params(source, dest)
     restore_step = build_restore_command(
@@ -612,10 +613,13 @@ def run_restore_profile(profile, config, parent_dir, session_log_file=None):
         enabled=cfg.get("pause_scrubs", False),
         dry_run=dryrun,
     )
-    return _run_command(
+    rc = _run_command(
         restore_step,
         session_log_file=session_log_file,
     )
+    if rc != 0:
+        log_msg("FATAL: Aborting restore because step failed")
+    return rc
 
 
 def run_retention_profile(profile, config, parent_dir, session_log_file=None):
@@ -626,7 +630,7 @@ def run_retention_profile(profile, config, parent_dir, session_log_file=None):
     label = cfg.get("prune_label", "dailybackup").strip() or "dailybackup"
     pools = cfg.get("prune_pools", [])
     if not pools:
-        log_msg("WARN: No pools selected for pruning")
+        log_msg("FATAL: No pools selected for pruning")
         return 1
 
     # Expand <offsite> to all online offsite-candidate pools.
@@ -648,7 +652,7 @@ def run_retention_profile(profile, config, parent_dir, session_log_file=None):
             seen.add(pool)
     pools = expanded
     if not pools:
-        log_msg("WARN: No pools selected for pruning after resolving <offsite>")
+        log_msg("FATAL: No pools selected for pruning after resolving <offsite>")
         return 1
 
     fatal_rc = 0
@@ -672,6 +676,7 @@ def run_retention_profile(profile, config, parent_dir, session_log_file=None):
             session_log_file=session_log_file,
         )
         if rc != 0:
+            log_msg(f"FATAL: Prune of {pool} failed (rc={rc})")
             fatal_rc = rc
     return fatal_rc
 
@@ -682,7 +687,7 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
     pool_names = cfg.get("pools", [])
     simultaneous = cfg.get("simultaneous", 1)
     if not pool_names:
-        log_msg("WARN: No pools specified for scrub profile")
+        log_msg("FATAL: No pools specified for scrub profile")
         return 1
 
     def _scrub_log(msg):
@@ -732,7 +737,7 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
         time.sleep(10)
 
     if queue.given_up:
-        _scrub_log("WARN: Scrub profile gave up on: " + ", ".join(sorted(queue.given_up)))
+        _scrub_log("FATAL: Scrub profile gave up on: " + ", ".join(sorted(queue.given_up)))
         return 1
     _scrub_log("INFO: Scrub profile complete")
     return 0
@@ -829,7 +834,7 @@ def main():
             }
             runner = runners.get(tab_type)
             if runner is None:
-                log_msg(f"WARN: Unknown tab type: {tab_type}")
+                log_msg(f"FATAL: Unknown tab type: {tab_type}")
                 rc = 1
             else:
                 rc = runner(profile, config, parent_dir, _session_log_file)

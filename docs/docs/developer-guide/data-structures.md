@@ -243,7 +243,7 @@ Top-level keys:
 | `backup`                                                              | object                    | GUI Backup tab settings (see below)                                                                                  |
 | `offsite`                                                             | object                    | GUI Offsite tab settings                                                                                             |
 | `restore`                                                             | object                    | GUI Restore tab settings                                                                                             |
-| `memory`                                                              | object                    | GUI Memory tab settings (see below)                                                                                  |
+| `memory`                                                              | object                    | GUI Performance tab settings (see below)                                                                             |
 | `msg_level`                                                           | string                    | Deprecated. Kept for backward compatibility; no longer used for filtering.                                           |
 | `history_retention_days`                                              | integer                   | How many days of backup log history entries to keep (default `90`)                                                   |
 | `ui_state`                                                            | object                    | Saved GUI window geometry, pop-out state, TreeView column widths, and paned divider positions (see below)            |
@@ -354,11 +354,12 @@ Persisted by the GUI Backup tab and read by [zfsdailybackup](../commands-and-mod
 
 ### `memory` object
 
-Persisted by the GUI Memory tab.
+Persisted by the GUI Performance tab (the key name predates the tab's
+current name).
 
 | Key              | Type    | Purpose                                                       |
 | ---------------- | ------- | ------------------------------------------------------------- |
-| `refresh_seconds`| integer | Memory-tab auto-refresh interval while visible (default `5`) |
+| `refresh_seconds`| integer | Performance-tab auto-refresh interval while visible (default `5`) |
 
 ### Config migrations
 
@@ -543,32 +544,34 @@ pick up changes written by other processes, such as a headless scrub profile.
 
 ### Memory samples (`memory_stats.py`)
 
-Dataclasses behind the Memory tab. `collect_memory_sample()` probes three
+Dataclasses behind the Performance tab. `collect_memory_sample()` probes three
 independent sources (`/proc/spl/kstat/zfs/arcstats`,
-`/proc/spl/kstat/zfs/zil`, `zpool iostat -v`) and each one degrades on its
-own — an unavailable source clears its `*_available` flag and leaves the
-rest of the sample intact, because ZFS/OS releases vary in what they
-expose (Proxmox, older OpenZFS, containers). Parsed kstat dicts contain
-only the fields the running kernel actually exposes; the UI renders
-absent fields as "—".
+`/proc/spl/kstat/zfs/zil`, `zpool iostat -v -y 1 1`) and each one degrades
+on its own — an unavailable source clears its `*_available` flag and
+leaves the rest of the sample intact, because ZFS/OS releases vary in what
+they expose (Proxmox, older OpenZFS, containers). Parsed kstat dicts
+contain only the fields the running kernel actually exposes; the UI
+renders absent fields as "—".
 
 | Field | Type | Purpose |
 | ----- | ---- | ------- |
 | `MemorySample.monotonic` | `float` | `time.monotonic()` of the collection |
 | `MemorySample.arc` | `dict[str, int]` | arcstats counters present on this host |
 | `MemorySample.zil` | `dict[str, int]` | zil kstat counters (SLOG write path) |
-| `MemorySample.vdevs` | `list[VdevSample]` | `logs`/`cache` vdev rows from `zpool iostat -v` |
+| `MemorySample.vdevs` | `list[VdevSample]` | `logs`/`cache` vdev rows from interval-mode `zpool iostat -v` |
 | `MemorySample.arcstats_available` / `zil_available` / `iostat_available` | `bool` | Per-source probe results |
 | `VdevSample.pool` / `vdev` / `section` | `str` | Pool name, vdev name, `"logs"` or `"cache"` |
 | `VdevSample.alloc` / `free` | `int` or `None` | Capacity bytes; `None` when the cell is `-` (leaf devices under a mirror) |
-| `VdevSample.reads` / `writes` / `read_bytes` / `write_bytes` | `int` | Cumulative since boot |
+| `VdevSample.reads_ps` / `writes_ps` / `read_bps` / `write_bps` | `float` | Per-second averages over the iostat report's 1-second window (not cumulative counters) |
 
 `compute_rates(prev, cur)` derives `MemoryRates` (ARC hits/s and misses/s,
 L2ARC read/write B/s, SLOG commits/s, writes/s, write B/s, per-vdev
-`VdevRates`, and interval hit rates) from counter deltas between two
-samples. A counter that resets (reboot, module reload) is larger in the
-new sample's past, so the rate for that interval is `None` and the UI
-shows "—" rather than a bogus negative.
+`VdevRates`, and interval hit rates). The kstat fields come from counter
+deltas between two samples; a counter that resets (reboot, module reload)
+is larger in the new sample's past, so the rate for that interval is
+`None` and the UI shows "—" rather than a bogus negative. `VdevRates`
+pass through the current sample's iostat window directly — no deltas, so
+they are live on the first sample too.
 
 ## iSCSI expected-backstores manifest
 

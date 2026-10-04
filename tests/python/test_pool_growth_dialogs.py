@@ -132,6 +132,68 @@ class _FakeTreeStore:
         return len(self.rows) - 1
 
 
+class _TreeIter:
+    """Path-based iterator stand-in for _NestedTreeStore."""
+
+    def __init__(self, path):
+        self.path = path
+
+
+class _NestedTreeStore:
+    """Nested TreeStore stand-in with full iteration.
+
+    refresh_disks_page (reached via the action-runner completion callbacks)
+    populates and walks the topology store, so unlike _FakeTreeStore this
+    fake supports append/iter_children/iter_next/get_value/get_path.
+    """
+
+    def __init__(self):
+        self.root = []
+
+    def clear(self):
+        self.root = []
+
+    def _node(self, parent_path):
+        node = self.root
+        for idx in parent_path:
+            node = node[idx]["children"]
+        return node
+
+    def _row_node(self, path):
+        return self._node(path[:-1])[path[-1]]
+
+    def append(self, parent_iter, row):
+        parent_path = parent_iter.path if parent_iter else ()
+        children = self._node(parent_path)
+        children.append({"row": list(row), "children": []})
+        return _TreeIter(parent_path + (len(children) - 1,))
+
+    def get_iter_first(self):
+        return _TreeIter((0,)) if self.root else None
+
+    def iter_children(self, parent_iter):
+        parent_path = parent_iter.path if parent_iter else ()
+        children = self._node(parent_path)
+        return _TreeIter(parent_path + (0,)) if children else None
+
+    def iter_next(self, it):
+        parent_path, idx = it.path[:-1], it.path[-1]
+        children = self._node(parent_path)
+        return _TreeIter(parent_path + (idx + 1,)) if idx + 1 < len(children) else None
+
+    def get_value(self, it, col):
+        return self._row_node(it.path)["row"][col]
+
+    def get_path(self, it):
+        return it.path
+
+    def get_iter(self, path):
+        return _TreeIter(tuple(path))
+
+    def set_value(self, it, col, value):
+        self._row_node(it.path)["row"][col] = value
+
+
 class FakeTreeSelection:
     """TreeSelection stand-in that reports a configurable path list."""
 
@@ -155,6 +217,12 @@ class FakeTreeView:
 
     def get_selection(self):
         return self._selection
+
+    def expand_row(self, path, open_all):
+        pass
+
+    def collapse_row(self, path):
+        pass
 
 
 class FakeDatasetRunner:
@@ -195,10 +263,11 @@ def _make_app(disks=None, topologies=None):
 
     app._disks_pool_selector = MagicMock()
     app._disks_pool_selector.get_active_text.return_value = "pool1"
+    app._disks_pool_selector.get_model.return_value = [["pool1"]]
     app.disks_store = FakeListStoreIterable()
     app.disks_view = FakeTreeView(app.disks_store, [])
-    app.disks_topology_store = MagicMock()
-    app.disks_topology_view = MagicMock()
+    app.disks_topology_store = _NestedTreeStore()
+    app.disks_topology_view = FakeTreeView(app.disks_topology_store, [])
     app.disks_dataset_store = FakeListStoreIterable()
     app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [])
     app.dataset_runner = FakeDatasetRunner()

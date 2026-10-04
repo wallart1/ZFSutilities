@@ -1,8 +1,7 @@
 """Disks tab UI — disk inventory and pool topology.
 
-The page content sits behind a view switcher (radio row) with Inventory and
-Topology and Performance views. Slow block-device and ZFS calls run in a
-background thread so the GTK main thread stays responsive.
+Slow block-device and ZFS calls run in a background thread so the GTK
+main thread stays responsive.
 """
 
 import os
@@ -33,7 +32,7 @@ from zfs_repository import TopologyNode, ZfsRepository
 # selected inventory disk in the Pool Topology.
 POOL_MEMBER_HIGHLIGHT_FG = "#00797A"
 
-# Minimum height of the Inventory and Topology view. Keeps the panes usable
+# Minimum height of the page content. Keeps the panes usable
 # on short windows and drives the page-level vertical scrollbar instead of
 # letting the view be squashed by its neighbors.
 DISKS_TOPOLOGY_MIN_HEIGHT = 260
@@ -235,49 +234,12 @@ def create_disks_page(app):
     page_box.set_margin_top(10)
     page_box.set_margin_bottom(10)
 
-    # --- View switcher: radio row across the top of the page ---
-    app._disks_view_radios = {}
-    view_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-    group = None
-    for view_name, label_text in (
-        ("inventory", "Inventory and Topology"),
-        ("performance", "Performance"),
-    ):
-        if group is None:
-            radio = Gtk.RadioButton(label=label_text)
-            group = radio
-        else:
-            radio = Gtk.RadioButton.new_from_widget(group)
-            radio.set_label(label_text)
-        app._disks_view_radios[view_name] = radio
-        radio.connect("toggled", _on_view_radio_toggled, view_name, app)
-        view_row.pack_start(radio, False, False, 0)
-    page_box.pack_start(view_row, False, False, 0)
-
-    page_box.pack_start(Gtk.Separator(), False, False, 0)
-
-    # --- Pool selector (drives the topology view) ---
-    controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-    controls.set_halign(Gtk.Align.START)
-    app._disks_pool_selector = Gtk.ComboBoxText()
-    app._disks_pool_selector.connect("changed", _on_pool_selector_changed, app)
-    controls.pack_start(app._disks_pool_selector, False, False, 0)
-
-    hint = Gtk.Label(label="Select a pool for its vdev topology")
-    hint.set_halign(Gtk.Align.START)
-    controls.pack_start(hint, False, False, 0)
-    page_box.pack_start(controls, False, False, 0)
-
-    # --- View stack: one named child per view-switcher target ---
-    app._disks_view_stack = Gtk.Stack()
-    page_box.pack_start(app._disks_view_stack, True, True, 0)
-
-    # --- View: Inventory and Topology ---
+    # --- Disk Inventory and Pool Topology sections ---
     inventory_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
     # Minimum height keeps the panes usable on short windows and drives the
-    # page-level vertical scrollbar instead of letting the view be squashed.
+    # page-level vertical scrollbar instead of letting the content be squashed.
     inventory_box.set_size_request(-1, DISKS_TOPOLOGY_MIN_HEIGHT)
-    app._disks_view_stack.add_named(inventory_box, "inventory")
+    page_box.pack_start(inventory_box, True, True, 0)
 
     title = bold_label("Disk Inventory")
     inventory_box.pack_start(title, False, False, 0)
@@ -346,6 +308,18 @@ def create_disks_page(app):
     topo_title = bold_label("Pool Topology")
     inventory_box.pack_start(topo_title, False, False, 0)
 
+    # --- Pool selector: marks the selected pool inside the topology section ---
+    controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    controls.set_halign(Gtk.Align.START)
+    app._disks_pool_selector = Gtk.ComboBoxText()
+    app._disks_pool_selector.connect("changed", _on_pool_selector_changed, app)
+    controls.pack_start(app._disks_pool_selector, False, False, 0)
+
+    hint = Gtk.Label(label="Selected pool — pool actions and disk highlights follow it")
+    hint.set_halign(Gtk.Align.START)
+    controls.pack_start(hint, False, False, 0)
+    inventory_box.pack_start(controls, False, False, 0)
+
     app.disks_topology_store = Gtk.TreeStore(str, str, str, str, str, str, str, bool)
     app.disks_topology_view = Gtk.TreeView(model=app.disks_topology_store)
     app.disks_topology_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
@@ -376,23 +350,6 @@ def create_disks_page(app):
     setup_row_scroll(topo_scrolled, app.disks_topology_view)
     inventory_box.pack_start(topo_scrolled, True, True, 0)
 
-    # --- View: Performance (placeholder for forthcoming monitoring sections) ---
-    perf_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-    app._disks_view_stack.add_named(perf_box, "performance")
-
-    perf_title = bold_label("Performance")
-    perf_box.pack_start(perf_title, False, False, 0)
-
-    perf_box.pack_start(Gtk.Separator(), False, False, 0)
-
-    perf_desc = Gtk.Label(
-        label="Pool and device performance monitoring sections will appear "
-        "here in a future release."
-    )
-    perf_desc.set_halign(Gtk.Align.START)
-    perf_desc.set_line_wrap(True)
-    perf_box.pack_start(perf_desc, False, False, 0)
-
     refresh_disks_page(app)
 
     # Wrap the page so the whole tab scrolls vertically on short windows
@@ -401,13 +358,6 @@ def create_disks_page(app):
     scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
     scrolled.add(page_box)
     return scrolled
-
-
-def _on_view_radio_toggled(radio, view_name, app):
-    """Show the Disks page view selected in the view-switcher radio row."""
-    if radio.get_active():
-        app._disks_view_stack.set_visible_child_name(view_name)
-        update_disks_button_sensitivity(app)
 
 
 def _make_disks_refresh_callback(app):
@@ -440,6 +390,7 @@ def refresh_disks_page(app):
         selected_path = model.get_value(tree_iter, COL_D_NAME)
 
     selected_pool = selector.get_active_text()
+    had_choices = len(selector.get_model()) > 0
 
     data = app._disks_inventory_cache.get(callback=_make_disks_refresh_callback(app))
 
@@ -482,14 +433,16 @@ def refresh_disks_page(app):
         selector.append_text(pool_name)
     if selected_pool in pool_names:
         _set_combo_active_text(selector, selected_pool)
+    elif selected_pool is None and had_choices:
+        # The selector was deliberately cleared (a disk outside every pool is
+        # selected); keep it cleared instead of snapping back to the first
+        # pool on every background refresh.
+        pass
     elif pool_names:
         selector.set_active(0)
 
-    # Repopulate topology for the selected pool
-    _repopulate_topology_for_selected_pool(app)
-
-    # Highlight every disk that belongs to the selected pool
-    _highlight_pool_disks(app, selector.get_active_text())
+    # Repopulate the all-pools topology view
+    _repopulate_topology(app)
 
     # Restore disk selection
     if selected_path:
@@ -581,26 +534,34 @@ def on_disks_surface_test(app):
 
 
 def _on_disk_selection_changed(selection, app):
-    """When a disk/partition is selected, tint its devices in the topology.
+    """When a disk/partition is selected, tint its devices across all pools.
 
-    The pool selector still switches to the disk's pool, but the topology
-    pane never selects a node: the devices residing on the selected disk are
-    tinted teal instead (see _sync_topology_highlight_from_inventory).
+    The pool selector follows the disk's pool, but the topology pane never
+    selects a node: the devices residing on the selected disk are tinted
+    teal instead (see _sync_topology_highlight_from_inventory). A disk or
+    partition that belongs to no pool clears the topology pane instead —
+    tints, pool selector, and expansion all reset so nothing stale from the
+    previously shown state stays on screen.
     """
     if getattr(app, "_disks_syncing_selection", False):
         return
     model, pathlist = selection.get_selected_rows()
+    selector = app._disks_pool_selector
     if pathlist:
         tree_iter = model.get_iter(pathlist[0])
         pools_str = model.get_value(tree_iter, COL_D_POOLS)
         if pools_str:
             first_pool = pools_str.split(", ")[0]
-            selector = app._disks_pool_selector
             if selector.get_active_text() != first_pool:
                 _set_combo_active_text(selector, first_pool)
-            _repopulate_topology_for_selected_pool(app)
+            _sync_topology_highlight_from_inventory(app)
+        else:
+            _clear_topology_highlights(app)
+            if selector.get_active() != -1:
+                selector.set_active(-1)
     else:
         _clear_topology_highlights(app)
+    _apply_topology_expansion(app)
     update_disks_button_sensitivity(app)
 
 
@@ -608,81 +569,71 @@ def _on_topology_selection_changed(selection, app):
     """When a topology node is selected, highlight its devices in the inventory.
 
     A device node highlights that device, a vdev node highlights every device
-    in the vdev, and the pool node highlights every device in the pool. An
-    empty selection (or a node with no devices) restores the pool-wide
-    highlight. The inventory selection is never modified; the correlation is
-    teal foreground text only.
+    in the vdev, and the pool node highlights every device in the pool. The
+    pool selector follows the pool containing the selection, and an empty
+    selection (or a node with no devices) restores the pool-wide highlight.
+    The inventory selection is never modified; the correlation is teal
+    foreground text only.
     """
     if getattr(app, "_disks_syncing_selection", False):
         return
     model, pathlist = selection.get_selected_rows()
+    selector = app._disks_pool_selector
     if pathlist:
+        containing_pool = _topology_selection_pool(model, pathlist[0])
+        if containing_pool and selector.get_active_text() != containing_pool:
+            _set_combo_active_text(selector, containing_pool)
         tree_iter = model.get_iter(pathlist[0])
         device_paths = _topology_subtree_device_paths(model, tree_iter)
         if device_paths:
             _highlight_topology_devices(app, device_paths)
         else:
-            _highlight_pool_disks(app, app._disks_pool_selector.get_active_text())
+            _highlight_pool_disks(app, selector.get_active_text())
     else:
-        _highlight_pool_disks(app, app._disks_pool_selector.get_active_text())
+        _highlight_pool_disks(app, selector.get_active_text())
+    _apply_topology_expansion(app)
     update_disks_button_sensitivity(app)
 
 
 def _on_pool_selector_changed(selector, app):
-    """Refresh the topology view when the pool selector changes."""
-    _repopulate_topology_for_selected_pool(app)
+    """Update inventory highlights and topology expansion for the selected pool."""
+    _highlight_pool_disks(app, selector.get_active_text())
+    _apply_topology_expansion(app)
 
 
-def _repopulate_topology_for_selected_pool(app):
-    """Clear and refill the topology store for the currently selected pool."""
+def _repopulate_topology(app):
+    """Clear and refill the topology store with every pool's vdev tree.
+
+    All pools stay visible as top-level rows; expansion is driven by the
+    selected pool, the topology selection, and teal-tinted devices (see
+    _apply_topology_expansion).
+    """
     app.disks_topology_store.clear()
     data = app._disks_inventory_cache.get()
-    pool_name = app._disks_pool_selector.get_active_text()
-    if pool_name and pool_name in data.topologies:
+    for pool_name in sorted(data.topologies.keys()):
         _populate_topology_store(app.disks_topology_store, None, data.topologies[pool_name])
-        app.disks_topology_view.expand_all()
-    _highlight_pool_disks(app, pool_name)
+    _highlight_pool_disks(app, app._disks_pool_selector.get_active_text())
     _sync_topology_highlight_from_inventory(app)
-
-
-_DISKS_VIEWS = ("inventory", "performance")
-
-
-def _current_disks_view(app) -> str:
-    """Return the visible Disks-page view ("inventory" when unknown/unset).
-
-    Test fakes use a mocked stack whose get_visible_child_name() is not a
-    real view name; those fall back to the default view so the sensitivity
-    rules behave as they did before the view switcher existed.
-    """
-    stack = getattr(app, "_disks_view_stack", None)
-    view = stack.get_visible_child_name() if stack is not None else None
-    return view if view in _DISKS_VIEWS else "inventory"
+    _apply_topology_expansion(app)
 
 
 def update_disks_button_sensitivity(app):
-    """Enable action buttons based on the current view and selection."""
+    """Enable action buttons based on the current selection."""
     selection = app.disks_view.get_selection()
     _model, pathlist = selection.get_selected_rows()
     single_selection = len(pathlist) == 1
     btn = getattr(app, "_disks_smart_details_btn", None)
     if btn:
-        btn.set_sensitive(single_selection and _current_disks_view(app) == "inventory")
+        btn.set_sensitive(single_selection)
 
     runner_busy = bool(
         getattr(app, "dataset_runner", None) and getattr(app.dataset_runner, "running", False)
     )
     compute_host = node_config.is_two_node() and not node_config.is_storage_host()
-    inventory_active = _current_disks_view(app) == "inventory"
 
     create_btn = getattr(app, "_disks_create_pool_btn", None)
     if create_btn:
-        if not inventory_active:
-            create_btn.set_sensitive(False)
-            create_btn.set_tooltip_text(
-                "Switch to the Inventory and Topology view to use this action"
-            )
-        elif compute_host:
+        if compute_host:
             create_btn.set_sensitive(False)
             create_btn.set_tooltip_text("Pool creation is available only on the storage host")
         elif runner_busy:
@@ -692,8 +643,8 @@ def update_disks_button_sensitivity(app):
             create_btn.set_sensitive(True)
             create_btn.set_tooltip_text("")
 
-    # Phase 4 pool-growth/maintenance buttons share the Create Pool gating:
-    # view disable (taking precedence), then compute-host, then runner-busy.
+    # Pool-growth/maintenance buttons share the Create Pool gating:
+    # compute-host, then runner-busy.
     growth_attrs = (
         ("_disks_add_vdev_btn", "Pool growth is available only on the storage host"),
         ("_disks_attach_btn", "Pool growth is available only on the storage host"),
@@ -706,10 +657,7 @@ def update_disks_button_sensitivity(app):
         btn = getattr(app, attr, None)
         if btn is None:
             continue
-        if not inventory_active:
-            btn.set_sensitive(False)
-            btn.set_tooltip_text("Switch to the Inventory and Topology view to use this action")
-        elif compute_host:
+        if compute_host:
             btn.set_sensitive(False)
             btn.set_tooltip_text(host_tooltip)
         elif runner_busy:
@@ -719,8 +667,7 @@ def update_disks_button_sensitivity(app):
             btn.set_sensitive(True)
             btn.set_tooltip_text("")
 
-    # Proxmox enrollment acts on the selected pool (either view), so unlike
-    # the pool-growth buttons it does not depend on the inventory view.
+    # Proxmox enrollment acts on the selected pool.
     proxmox_btn = getattr(app, "_disks_proxmox_enroll_btn", None)
     if proxmox_btn:
         selector = getattr(app, "_disks_pool_selector", None)
@@ -738,12 +685,7 @@ def update_disks_button_sensitivity(app):
     surf_btn = getattr(app, "_disks_surface_test_btn", None)
     if surf_btn:
         selected_hdd = single_selection and _selected_disk_is_hdd(app)
-        if not inventory_active:
-            surf_btn.set_sensitive(False)
-            surf_btn.set_tooltip_text(
-                "Switch to the Inventory and Topology view to use this action"
-            )
-        elif compute_host:
+        if compute_host:
             surf_btn.set_sensitive(False)
             surf_btn.set_tooltip_text("Surface tests run on the storage host")
         elif runner_busy:
@@ -877,6 +819,64 @@ def _sync_topology_highlight_from_inventory(app) -> None:
     if not isinstance(disk_path, str):
         return
     _highlight_topology_nodes_for_disk(app, disk_path)
+
+
+def _topology_selection_pool(model, path) -> str | None:
+    """Return the top-level pool-row name that contains topology *path*."""
+    indices = path.get_indices() if hasattr(path, "get_indices") else list(path)
+    if not indices:
+        return None
+    try:
+        top_iter = model.get_iter((indices[0],))
+    except (IndexError, TypeError, ValueError):
+        return None
+    if top_iter is None:
+        return None
+    name = model.get_value(top_iter, COL_T_NAME)
+    return name if isinstance(name, str) else None
+
+
+def _subtree_has_highlight(store, tree_iter) -> bool:
+    """Return True if any row in the subtree at *tree_iter* is teal-tinted."""
+    if store.get_value(tree_iter, COL_T_HIGHLIGHT):
+        return True
+    child = store.iter_children(tree_iter)
+    while child is not None:
+        if _subtree_has_highlight(store, child):
+            return True
+        child = store.iter_next(child)
+    return False
+
+
+def _apply_topology_expansion(app) -> None:
+    """Expand pool rows that are relevant; collapse the rest.
+
+    A pool row is expanded — fully, so tinted leaves inside mirror/raidz
+    groups stay visible — when it is the pool picked in the selector,
+    contains the topology selection, or contains a teal-tinted device.
+    Pools with no selection or highlight stay collapsed.
+    """
+    store = app.disks_topology_store
+    view = app.disks_topology_view
+    active_pool = app._disks_pool_selector.get_active_text()
+
+    selected_pool = None
+    rows = view.get_selection().get_selected_rows()
+    if isinstance(rows, tuple) and len(rows) == 2 and rows[1]:
+        selected_pool = _topology_selection_pool(rows[0], rows[1][0])
+
+    it = store.get_iter_first()
+    while it:
+        pool_name = store.get_value(it, COL_T_NAME)
+        relevant = _subtree_has_highlight(store, it) or (
+            isinstance(pool_name, str) and pool_name in (active_pool, selected_pool)
+        )
+        path = store.get_path(it)
+        if relevant:
+            view.expand_row(path, True)
+        else:
+            view.collapse_row(path)
+        it = store.iter_next(it)
 
 
 def _topology_subtree_device_paths(model, tree_iter) -> set[str]:
