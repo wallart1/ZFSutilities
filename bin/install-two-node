@@ -39,7 +39,7 @@ NODE_CONF="${ZFSUTILITIES_SYSTEM_CONFIG_DIR}/node.conf"
 deploy_conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR}/deploy.conf"
 encrypted_conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR}/iscsi-encrypted-luns.conf"
 
-installer_lib="$script_dir/installer-lib.sh"
+installer_lib="$repo_dir/lib/installer-lib.sh"
 [[ -f "$installer_lib" ]] || die "Missing: $installer_lib"
 source "$installer_lib"
 
@@ -89,7 +89,7 @@ check_partial_uninstall "$repo_dir" || true
 # ------------------------------------------------------------------
 # Prerequisites check (interactive)
 # ------------------------------------------------------------------
-check_prereqs="$repo_dir/check-prerequisites"
+check_prereqs="$script_dir/check-prerequisites"
 if [[ -f "$check_prereqs" ]]; then
     if ! run_interactive_prerequisites --two-node "$check_prereqs"; then
         exit 1

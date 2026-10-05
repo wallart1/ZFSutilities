@@ -94,9 +94,16 @@ sudo check-prerequisites [--single-node|--two-node] [--list-failures]
 
 Checks the following categories: core ZFS utilities (`bash`, `zfs`, `zpool`,
 `pv`, `rsync`, `smartctl`), optional Proxmox VE, GTK GUI packages, two-node
-tools (`ssh`, `scp`, `iscsiadm`), and documentation tools (`pip3`, `mkdocs<2`,
-`mkdocs-material`). MkDocs 2.x is incompatible with this project; the installer
-and prerequisite checker both enforce `mkdocs<2`.
+tools (`ssh`, `scp`, `iscsiadm`), and documentation tools. `pip3` is required;
+`mkdocs` and `mkdocs-material` are pip-installed by the installer's doc-server
+step, so their absence is reported as a warning, not a failure. MkDocs 2.x is
+incompatible with this project; the prerequisite checker fails when `mkdocs`
+>= 2 is installed. When the ZFS tools are missing and apt has no installation
+candidate for `zfsutils-linux` (probed at runtime), the core section appends a
+note that Debian carries the package in the `contrib` archive. A functional
+probe (`modinfo zfs`) also verifies the ZFS kernel module is built — on Debian
+`zfs-dkms` builds it only when the matching kernel headers are installed, so a
+missing module is remediated with `linux-headers-$(uname -r)`.
 
 **Called modules:** none.
 

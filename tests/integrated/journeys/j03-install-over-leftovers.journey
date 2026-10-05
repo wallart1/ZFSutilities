@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# j03-install-over-leftovers.journey — cycle-1 journey.
+#
+# A user whose previous uninstall was interrupted (version base present,
+# current symlink gone — the state check_partial_uninstall exists to
+# detect) reruns the installer: it must warn about the remnants, offer
+# cleanup, run the uninstaller when accepted, and complete the install.
+#
+# Guest state required: none — creates and installs its own guest.
+# Snapshots produced: os-installed (clean Debian), installed.
+
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+journey_main() {
+    local base="${ITF_BASE_HOSTS[0]}"
+    local gname="j03"
+    local guest_hostname="itfj03"
+
+    itf_step info "journey start" \
+        "j03 install over leftovers; sw-source=$ITF_SW_SOURCE repo=$ITF_GITHUB_REPO"
+
+    # ------------------------------------------------------------------
+    # Stage A+B: fresh OS + first-time install (shared stages)
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_os "$gname" "$guest_hostname" || return 1
+    local guest_ip="$J_GUEST_IP"
+
+    itf_journey_stage_install "$guest_ip" || return 1
+    itf_journey_verify_installed "$guest_ip"
+
+    if itf_guest_snapshot "$base" "$J_VMID" installed > /dev/null 2>&1; then
+        itf_step pass "snapshot installed" "checkpoint before simulating the partial uninstall"
+    else
+        itf_step fail "snapshot installed"
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage P: simulate an interrupted uninstall
+    # ------------------------------------------------------------------
+
+    # The minimal faithful partial state per check_partial_uninstall's
+    # detection: version base still populated, current symlink gone (an
+    # uninstall that died before/while unwiring).  Wiring and config are
+    # deliberately left in place — stale wiring is exactly the condition
+    # the installer warns about.
+    local partial_log
+    partial_log="$ITF_RUN_DIR/guest-partial.log"
+    itf_guest_exec "$guest_ip" \
+        "rm -f /usr/local/lib/zfsutilities/current \
+         && test -d /usr/local/lib/zfsutilities/versions \
+         && echo 'partial state ready: versions present, current gone'" \
+        > "$partial_log" 2>&1 \
+        && itf_step pass "partial state staged" "current symlink removed, versions remain" \
+        || { itf_step fail "partial state staged" "see guest-partial.log"; return 1; }
+    itf_artifact "partial-state" "$partial_log"
+
+    # ------------------------------------------------------------------
+    # Stage I: the installer must detect, offer cleanup, and complete
+    # ------------------------------------------------------------------
+
+    # Prompt sequence: "Run uninstall-zfsutilities now to clean up
+    # remnants?" [Y/n] → y; the cleanup uninstaller runs with --yes (no
+    # prompts, software-only: node.conf survives); prerequisites are
+    # still present (no remediation prompts); Step 2 then finds the
+    # existing single-node config → "Reconfigure? (y/N)" → Enter (keep);
+    # deploy prompts nothing.
+    itf_journey_run_installer "$guest_ip" 'y\n\n' "install over leftovers completes" || return 1
+
+    local inst_log="$ITF_RUN_DIR/guest-install.log"
+    if grep -q 'Remnants of a previous ZFSutilities installation detected' "$inst_log" \
+        && grep -q 'Cleanup complete' "$inst_log"; then
+        itf_step pass "leftovers detected and cleaned" \
+            "warning shown, uninstaller ran, install continued"
+    else
+        itf_step fail "leftovers detected and cleaned" \
+            "expected the remnants warning and cleanup in guest-install.log"
+        return 1
+    fi
+
+    itf_journey_verify_installed "$guest_ip"
+
+    itf_step info "journey stage reached" "install-over-leftovers complete"
+    return 0
+}

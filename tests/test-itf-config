@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# test-itf-config — Unit tests for tests/integrated/lib/config-lib.sh
+# (site configuration loading and fail-closed validation).
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+ITF_CONFIG_LIB="$mydir/tests/integrated/lib/config-lib.sh"
+tmp_dir=$(mktemp -d)
+
+# run_config_load <path>
+#
+# Loads a site config in an isolated subshell: itf_config_die exits the
+# subshell (not the suite), and the sourced ITF_* variables cannot leak
+# into the test shell.  Leaves $load_rc / $load_err for assertions.
+run_config_load() {
+    # load_out is intentionally captured-and-discarded (keeps load stdout
+    # out of the test log); assertions read load_rc / load_err.
+    # shellcheck disable=SC2034
+    load_out=$( (
+        # shellcheck disable=SC1090
+        source "$ITF_CONFIG_LIB"
+        ITF_SITE_CONFIG="$1" itf_config_load
+    ) 2>"$tmp_dir/load.err" )
+    load_rc=$?
+    load_err="$(cat "$tmp_dir/load.err")"
+}
+
+write_valid_config() {
+    cat > "$tmp_dir/valid.conf" <<'EOF'
+ITF_BASE_HOSTS=(zfstestvm1 zfstestvm2)
+ITF_SSH_USER=testuser
+ITF_VMID_FIRST=8000
+ITF_VMID_LAST=8099
+ITF_GUEST_STORAGE=itfguests
+ITF_ISO_STORAGE=itfiso
+ITF_ISO_DIR=/mnt/itf-iso
+ITF_ACTION_LOG=/var/log/itf-actions.log
+ITF_BRIDGE=vmbr0
+ITF_GUEST_MEMORY_MB=8192
+ITF_GUEST_CORES=4
+ITF_GUEST_SYSTEM_DISK_GB=32
+ITF_GUEST_POOL_DISK_GB=100
+ITF_DEBIAN_ISO_URL=https://cdimage.example.invalid/debian-netinst.iso
+ITF_ISO_NAME=itf-debian-netinst.iso
+ITF_SW_SOURCE=release
+ITF_GITHUB_REPO=owner/repo
+EOF
+}
+
+# ------------------------------------------------------------------------------
+# Fail-closed loading
+# ------------------------------------------------------------------------------
+
+test_missing_config_is_fail_closed() {
+    test_start "missing site config aborts with an example-file pointer"
+    run_config_load "$tmp_dir/does-not-exist.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "site configuration not found"
+    assert_contains "$load_err" "config.example"
+}
+
+test_committed_example_passes_validation() {
+    test_start "committed site/config.example validates as-is"
+    run_config_load "$mydir/tests/integrated/site/config.example"
+    assert_rc 0 "$load_rc"
+}
+
+test_valid_config_loads_with_defaults() {
+    test_start "valid config loads and applies neutral defaults"
+    write_valid_config
+    local out
+    out=$( (
+        # shellcheck disable=SC1090
+        source "$ITF_CONFIG_LIB"
+        ITF_SITE_CONFIG="$tmp_dir/valid.conf" itf_config_load
+        echo "${ITF_HTTP_PORT}|${ITF_GUEST_NET_MODEL}|${ITF_RUNS_DIR}|${ITF_CACHE_DIR}"
+    ) 2>/dev/null )
+    assert_rc 0 $?
+    assert_equals \
+        "8000|virtio|$mydir/tests/integrated/results|$mydir/tests/integrated/cache" \
+        "$out"
+}
+
+# ------------------------------------------------------------------------------
+# Validation
+# ------------------------------------------------------------------------------
+
+test_missing_required_keys_reported() {
+    test_start "missing required keys are all reported and load aborts"
+    cat > "$tmp_dir/missing.conf" <<'EOF'
+ITF_SSH_USER=u
+ITF_VMID_FIRST=8000
+ITF_VMID_LAST=8099
+EOF
+    run_config_load "$tmp_dir/missing.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_BASE_HOSTS must name at least one base host"
+    assert_contains "$load_err" "missing required key ITF_GUEST_STORAGE"
+    assert_contains "$load_err" "missing required key ITF_BRIDGE"
+    assert_contains "$load_err" "missing required key ITF_GITHUB_REPO"
+}
+
+test_invalid_values_reported_together() {
+    test_start "invalid values are reported all at once, load aborts"
+    cat > "$tmp_dir/bad.conf" <<'EOF'
+ITF_BASE_HOSTS=(host-a)
+ITF_SSH_USER=u
+ITF_VMID_FIRST=9000
+ITF_VMID_LAST=8000
+ITF_GUEST_STORAGE=itfstore
+ITF_ISO_STORAGE=itfstore
+ITF_ISO_DIR=relative/path
+ITF_ACTION_LOG=var/log/itf-actions.log
+ITF_BRIDGE=vmbr0
+ITF_GUEST_MEMORY_MB=512
+ITF_GUEST_CORES=2
+ITF_GUEST_SYSTEM_DISK_GB=8
+ITF_GUEST_POOL_DISK_GB=0
+ITF_DEBIAN_ISO_URL=ftp://nope.invalid/x.iso
+ITF_ISO_NAME=debian-netinst.iso
+ITF_SW_SOURCE=git
+ITF_GITHUB_REPO=owner/repo
+EOF
+    run_config_load "$tmp_dir/bad.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_VMID_FIRST must be <= ITF_VMID_LAST"
+    assert_contains "$load_err" "ITF_GUEST_STORAGE and ITF_ISO_STORAGE must differ"
+    assert_contains "$load_err" "ITF_ISO_DIR must be an absolute path"
+    assert_contains "$load_err" "ITF_ACTION_LOG must be an absolute path"
+    assert_contains "$load_err" "ITF_GUEST_MEMORY_MB must be an integer >= 1024"
+    assert_contains "$load_err" "ITF_DEBIAN_ISO_URL must be an http(s) URL"
+    assert_contains "$load_err" "ITF_ISO_NAME must start with 'itf-'"
+    assert_contains "$load_err" "ITF_SW_SOURCE must be 'release' or 'dev-tarball'"
+}
+
+test_storage_name_charset_enforced() {
+    test_start "storage names with invalid characters are rejected"
+    write_valid_config
+    sed 's/^ITF_GUEST_STORAGE=.*/ITF_GUEST_STORAGE="itf guests!"/' \
+        "$tmp_dir/valid.conf" > "$tmp_dir/charset.conf"
+    run_config_load "$tmp_dir/charset.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_GUEST_STORAGE has invalid characters"
+}
+
+test_vmid_bounds_enforced() {
+    test_start "VMID bounds must be numeric with FIRST <= LAST"
+    write_valid_config
+    sed -e 's/^ITF_VMID_FIRST=.*/ITF_VMID_FIRST=abc/' \
+        "$tmp_dir/valid.conf" > "$tmp_dir/vmid.conf"
+    run_config_load "$tmp_dir/vmid.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_VMID_FIRST must be an integer >= 100"
+}
+
+test_missing_config_is_fail_closed
+test_committed_example_passes_validation
+test_valid_config_loads_with_defaults
+test_missing_required_keys_reported
+test_invalid_values_reported_together
+test_storage_name_charset_enforced
+test_vmid_bounds_enforced
+
+rm -rf "$tmp_dir"
+teardown_test_env
+test_summary

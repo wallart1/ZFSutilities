@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# j02-uninstall-reinstall.journey — cycle-1 journey.
+#
+# A user who installed ZFSutilities (j01 flow) then removes it with
+# `uninstall-zfsutilities --purge --yes` must end up with a clean
+# machine (wiring, versions, configs, state all gone), and a fresh
+# reinstall on that same machine must work end-to-end.
+#
+# Guest state required: none — creates and installs its own guest.
+# Snapshots produced: os-installed (clean Debian), installed.
+
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+journey_main() {
+    local base="${ITF_BASE_HOSTS[0]}"
+    local gname="j02"
+    local guest_hostname="itfj02"
+
+    itf_step info "journey start" \
+        "j02 uninstall/reinstall; sw-source=$ITF_SW_SOURCE repo=$ITF_GITHUB_REPO"
+
+    # ------------------------------------------------------------------
+    # Stage A+B: fresh OS + first-time install (shared stages)
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_os "$gname" "$guest_hostname" || return 1
+    local guest_ip="$J_GUEST_IP"
+
+    itf_journey_stage_install "$guest_ip" || return 1
+    itf_journey_verify_installed "$guest_ip"
+
+    if itf_guest_snapshot "$base" "$J_VMID" installed > /dev/null 2>&1; then
+        itf_step pass "snapshot installed" "checkpoint before uninstall"
+    else
+        itf_step fail "snapshot installed"
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage U: purge uninstall must leave a clean machine
+    # ------------------------------------------------------------------
+
+    local un_log un_rc
+    un_log="$ITF_RUN_DIR/guest-uninstall.log"
+    # --purge --yes skips the 1/2/c menu and the confirmation prompt, so
+    # no answer feed is needed.
+    itf_guest_exec "$guest_ip" \
+        "bash -lc 'uninstall-zfsutilities --purge --yes'" > "$un_log" 2>&1
+    un_rc=$?
+    itf_artifact "uninstall-transcript" "$un_log"
+    if [[ $un_rc -eq 0 ]]; then
+        itf_step pass "uninstall completes" "rc=0 (--purge --yes)"
+    else
+        itf_step fail "uninstall completes" "rc=$un_rc — see guest-uninstall.log"
+        return 1
+    fi
+
+    local clean_log
+    clean_log="$ITF_RUN_DIR/guest-uninstall-verify.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    itf_guest_exec "$guest_ip" '
+        for p in \
+            /usr/local/lib/zfsutilities \
+            /etc/profile.d/zfsutilities.sh \
+            /etc/sudoers.d/zfsutilities \
+            /root/bashinit \
+            /etc/zfsutilities \
+            /var/lib/zfsutilities; do
+            if [[ -e "$p" ]]; then
+                echo "LEFTOVER: $p"
+                ls -ld "$p"
+            else
+                echo "gone: $p"
+            fi
+        done
+        if bash -lc "command -v zfsdailybackup" >/dev/null 2>&1; then
+            echo "LEFTOVER: zfsdailybackup still on login PATH"
+        else
+            echo "gone: zfsdailybackup off login PATH"
+        fi
+        echo "scan-complete"
+    ' > "$clean_log" 2>&1
+    itf_artifact "uninstall-verify" "$clean_log"
+    # Positive completion marker: a syntax error or early abort inside the
+    # guest script must fail the step even when no LEFTOVER line was
+    # printed before the abort.
+    if ! grep -q 'scan-complete' "$clean_log"; then
+        itf_step fail "uninstall left clean state" \
+            "scan aborted early — see guest-uninstall-verify.log"
+        return 1
+    fi
+    if grep -q 'LEFTOVER' "$clean_log"; then
+        itf_step fail "uninstall left clean state" "see guest-uninstall-verify.log"
+        return 1
+    fi
+    itf_step pass "uninstall left clean state" "wiring, versions, config, and state all removed"
+
+    # ------------------------------------------------------------------
+    # Stage R: reinstall on the same machine must work
+    # ------------------------------------------------------------------
+
+    # A real user reruns the installer from the checkout that is still
+    # in /root/ZFSutilities (the uninstaller never touches the user's
+    # tree).  Prerequisites are still installed, so the prerequisite
+    # check passes on its first pass and asks nothing; the only prompts
+    # are hostname (Enter = keep detected default) and "Edit this file
+    # now?" (Enter = no).
+    itf_journey_run_installer "$guest_ip" '\n\n' "reinstall completes" || return 1
+    itf_journey_verify_installed "$guest_ip"
+
+    itf_step info "journey stage reached" "uninstall/reinstall complete"
+    return 0
+}

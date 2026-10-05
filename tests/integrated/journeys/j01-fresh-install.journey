@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# j01-fresh-install.journey — flagship cycle-1 journey.
+#
+# A first-time end user on a fresh Debian system: download the latest
+# GitHub release, run the prerequisite checker, run the single-node
+# installer (answering its prompts), create the documented test pools,
+# and verify the installed state.  Later cycles append the daily
+# workflow stages (backup, offsite, retention, scrub, restore,
+# schedule, GUI smoke).
+#
+# Guest state required: none — creates and installs its own guest.
+# Snapshots produced: os-installed (clean Debian), pools-created.
+
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+journey_main() {
+    local base="${ITF_BASE_HOSTS[0]}"
+    local gname="j01"
+    local guest_hostname="itfj01"
+
+    itf_step info "journey start" \
+        "j01 fresh install; sw-source=$ITF_SW_SOURCE repo=$ITF_GITHUB_REPO"
+
+    if itf_iso_fetch > /dev/null 2>&1; then
+        itf_step pass "installer ISO cached" "$ITF_CACHE_DIR/$ITF_ISO_NAME"
+    else
+        itf_step fail "installer ISO cached" "itf iso fetch failed"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage A: OS install (preseed over HTTP, serial console)
+    # Stage B: first-time user installs ZFSutilities
+    # Stage C: verify the installed state
+    # ------------------------------------------------------------------
+    # Shared implementations live in common.sh (factored after J02/J03
+    # adopted them; Stage D below is J01-specific).
+
+    itf_journey_stage_os "$gname" "$guest_hostname" || return 1
+    local vmid="$J_VMID"
+    local guest_ip="$J_GUEST_IP"
+
+    itf_journey_stage_install "$guest_ip" || return 1
+    itf_journey_verify_installed "$guest_ip"
+
+    # ------------------------------------------------------------------
+    # Stage D: the documented three-RAIDZ1 test pools
+    # ------------------------------------------------------------------
+
+    # Attach the pool disk only now.  A second virtio disk present during
+    # the install reorders guest disk enumeration (observed live: the
+    # 100G pool disk became /dev/sda and the OS installed onto it while
+    # the system disk stayed blank — "Boot failed: not a bootable disk").
+    # One disk at install time keeps /dev/sda unambiguous; virtio-scsi
+    # hotplug makes the pool disk appear as the only other disk, /dev/sdb.
+    local wait_sdb
+    # shellcheck disable=SC2016  # expansion runs in the guest
+    wait_sdb='for i in $(seq 1 30); do lsblk -dn -o NAME | grep -qx sdb'
+    wait_sdb+=' && exit 0; sleep 2; done; exit 1'
+    if itf_qm "$base" set "$vmid" --scsi1 "${ITF_GUEST_STORAGE}:${ITF_GUEST_POOL_DISK_GB}" \
+            > "$ITF_RUN_DIR/pooldisk-attach.log" 2>&1 \
+            && itf_guest_exec "$guest_ip" "$wait_sdb"; then
+        itf_step pass "pool disk attached" \
+            "scsi1 (${ITF_GUEST_POOL_DISK_GB}G) hot-plugged, guest sees /dev/sdb"
+    else
+        itf_step fail "pool disk attached" "see pooldisk-attach.log"
+        return 1
+    fi
+
+    local pool_script
+    pool_script="$ITF_RUN_DIR/guest-pools.sh"
+    cat > "$pool_script" <<'EOF'
+#!/bin/bash
+# The user recipe from docs/docs/developer-guide/testing.md on /dev/sdb.
+set -e
+# parted/partprobe are not part of a base Debian install.
+apt-get install -y parted
+parted -s /dev/sdb mklabel gpt
+for i in {1..15}; do
+    if [[ $i -eq 1 ]]; then start="1MiB"; else start="$(( (i-1)*5120 ))MiB"; fi
+    if [[ $i -eq 15 ]]; then end="100%"; else end="$(( i*5120 ))MiB"; fi
+    parted -a optimal -s /dev/sdb mkpart primary "${start}" "${end}"
+done
+partprobe /dev/sdb
+zpool create -f zfstest1 raidz1 /dev/sdb1 /dev/sdb2 /dev/sdb3 /dev/sdb4 /dev/sdb5
+zpool create -f zfstest2 raidz1 /dev/sdb6 /dev/sdb7 /dev/sdb8 /dev/sdb9 /dev/sdb10
+zpool create -f zfstest3 raidz1 /dev/sdb11 /dev/sdb12 /dev/sdb13 /dev/sdb14 /dev/sdb15
+zpool list
+EOF
+    itf_guest_put "$guest_ip" "$pool_script" /root/itf-pools.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-pools.sh" \
+        > "$ITF_RUN_DIR/guest-pools.log" 2>&1; then
+        itf_step pass "test pools created" "zfstest1/2/3 (three RAIDZ1, docs recipe)"
+        itf_artifact "pools" "$ITF_RUN_DIR/guest-pools.log"
+    else
+        itf_step fail "test pools created" "see guest-pools.log"
+        return 1
+    fi
+
+    if itf_guest_snapshot "$base" "$vmid" pools-created > /dev/null 2>&1; then
+        itf_step pass "snapshot pools-created" "fresh-install checkpoint for cycle-1 reuse"
+    else
+        itf_step fail "snapshot pools-created"
+    fi
+
+    itf_step info "journey stage reached" \
+        "fresh-install stages complete; daily-workflow stages land in the next cycle"
+    return 0
+}

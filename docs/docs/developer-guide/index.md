@@ -36,7 +36,12 @@ relevant to developers working on ZFS Utilities.
   from the repo: `ln -sfn /path/to/repo/bin/bashinit ~`. `/root/bashinit`
   is auto-managed as a symlink by `deploy-version` and `switch-version`.
 - `pv` — progress visualization for large transfers (`sudo apt install pv`)
-- `zfsutils-linux` — ZFS userspace utilities (`sudo apt install zfsutils-linux`)
+- `zfsutils-linux` — ZFS userspace utilities (`sudo apt install zfsutils-linux`);
+  on Debian this package is in the `contrib` archive — enable `contrib` in
+  `/etc/apt/sources.list` (or the equivalent `.sources` file) if `apt` reports
+  no installation candidate. On Debian the ZFS kernel module is built by
+  `zfs-dkms` and needs `linux-headers-$(uname -r)`; the prerequisite checker
+  probes for the built module and remediates with the headers package
 - `rsync` — file synchronization (`sudo apt install rsync`)
 - `python3` — required by config helpers, iSCSI scripts, and the GUI
 

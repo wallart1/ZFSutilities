@@ -263,22 +263,25 @@ test_create_desktop_symlinks_creates_links() {
 }
 
 test_create_desktop_symlinks_handles_missing_user() {
-    test_start "create_desktop_symlinks warns when user is empty"
+    test_start "create_desktop_symlinks warns and skips (rc 0) when user is empty"
     clear_test_log_file
     local output
     output=$(create_desktop_symlinks "" 2>&1)
     local rc=$?
     local log_output
     log_output=$(cat "$(get_test_log_file)")
-    if [[ $rc -ne 0 && "$log_output" == *"Cannot determine desktop user"* ]]; then
+    # F-006: an informational skip must NOT fail — callers run under
+    # set -e, and a non-zero return aborted headless installs after a
+    # fully successful deploy.
+    if [[ $rc -eq 0 && "$log_output" == *"Cannot determine desktop user"* ]]; then
         test_pass
     else
-        test_fail "Expected warning for missing user"
+        test_fail "Expected rc 0 with warning for missing user (rc=$rc)"
     fi
 }
 
 test_create_desktop_symlinks_handles_missing_home() {
-    test_start "create_desktop_symlinks warns when home is missing"
+    test_start "create_desktop_symlinks warns and skips (rc 0) when home is missing"
     clear_test_log_file
     get_user_home() { echo ""; }
     local output
@@ -287,10 +290,52 @@ test_create_desktop_symlinks_handles_missing_home() {
     unset -f get_user_home 2>/dev/null || true
     local log_output
     log_output=$(cat "$(get_test_log_file)")
-    if [[ $rc -ne 0 && "$log_output" == *"Home directory for 'erin' not found"* ]]; then
+    if [[ $rc -eq 0 && "$log_output" == *"Home directory for 'erin' not found"* ]]; then
         test_pass
     else
-        test_fail "Expected warning for missing home directory"
+        test_fail "Expected rc 0 with warning for missing home (rc=$rc)"
+    fi
+}
+
+# F-006 regression pins: the skip paths must not abort a set -e caller
+# (the original failure mode — switch-version/install-single-node died
+# silently on headless hosts at the end of a successful install).  The
+# headless condition is forced by unsetting SUDO_USER and pointing
+# DISPLAY at a socket that does not exist; warn/log_msg (normally from
+# bashinit) are stubbed because the lib is sourced standalone.
+test_create_desktop_symlinks_skip_survives_set_e() {
+    test_start "create_desktop_symlinks skip does not abort a set -e caller"
+    local output
+    # shellcheck disable=SC2016  # the subshell script must not expand here
+    output=$(env -u SUDO_USER DISPLAY=:99 bash -c '
+        set -euo pipefail
+        warn()   { echo "WARN: $*"; }
+        log_msg() { echo "$*"; }
+        source "$(dirname "$0")/../lib/desktop-launcher-lib.sh"
+        create_desktop_symlinks "" && echo SURVIVED
+    ' "${BASH_SOURCE[0]}" 2>&1)
+    if [[ "$output" == *"SURVIVED"* ]]; then
+        test_pass
+    else
+        test_fail "set -e caller aborted on the headless skip: $output"
+    fi
+}
+
+test_remove_desktop_symlinks_skip_survives_set_e() {
+    test_start "remove_desktop_symlinks skip does not abort a set -e caller"
+    local output
+    # shellcheck disable=SC2016  # the subshell script must not expand here
+    output=$(env -u SUDO_USER DISPLAY=:99 bash -c '
+        set -euo pipefail
+        warn()   { echo "WARN: $*"; }
+        log_msg() { echo "$*"; }
+        source "$(dirname "$0")/../lib/desktop-launcher-lib.sh"
+        remove_desktop_symlinks "" && echo SURVIVED
+    ' "${BASH_SOURCE[0]}" 2>&1)
+    if [[ "$output" == *"SURVIVED"* ]]; then
+        test_pass
+    else
+        test_fail "set -e caller aborted on the headless skip: $output"
     fi
 }
 
@@ -336,6 +381,8 @@ test_get_user_home_uses_getent
 test_create_desktop_symlinks_creates_links
 test_create_desktop_symlinks_handles_missing_user
 test_create_desktop_symlinks_handles_missing_home
+test_create_desktop_symlinks_skip_survives_set_e
+test_remove_desktop_symlinks_skip_survives_set_e
 test_remove_desktop_symlinks_removes_links
 
 # ------------------------------------------------------------------
@@ -440,10 +487,13 @@ test_partial_uninstall_runs_cleanup_when_confirmed() {
     export ZFSUTILITIES_VERSION_BASE="$tmpdir/version_base"
     mkdir -p "$tmpdir/version_base"
 
-    # Mock ask_yn to return yes and create a fake uninstaller in the repo path.
+    # Mock ask_yn to return yes and create a fake uninstaller in the repo
+    # layout position (bin/ — the F-008 fix; the repo-root fallback never
+    # matched a real checkout because the file ships in bin/).
     ask_yn() { return 0; }
-    printf '#!/usr/bin/bash\necho "fake-uninstall"\n' > "$tmpdir/uninstall-zfsutilities"
-    chmod +x "$tmpdir/uninstall-zfsutilities"
+    mkdir -p "$tmpdir/bin"
+    printf '#!/usr/bin/bash\necho "fake-uninstall"\n' > "$tmpdir/bin/uninstall-zfsutilities"
+    chmod +x "$tmpdir/bin/uninstall-zfsutilities"
 
     local output
     output=$(check_partial_uninstall "$tmpdir" 2>&1)
@@ -513,6 +563,90 @@ test_install_doc_server_pins_mkdocs() {
 }
 
 test_install_doc_server_pins_mkdocs
+
+# ------------------------------------------------------------------
+# Interactive prerequisites remediation (from installer-lib.sh)
+# ------------------------------------------------------------------
+
+# F-004 guard: the package list must reach apt_install as separate
+# arguments.  run_interactive_prerequisites used to glue
+# collect_apt_packages output into one string and call
+# apt_install "$packages" — apt then received the entire space-joined
+# list as a single package name and every remediation run failed with
+# "Unable to locate package <all names>".  The path was unreachable
+# before the F-002/F-003 path fixes, so it had never run on a fresh
+# system.
+test_run_interactive_prerequisites_splits_package_args() {
+    test_start "remediation passes each package to apt_install as its own argument"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Fake checker: fails (with machine-readable rows) until the mock
+    # apt_install marks the system installed, then passes the re-check.
+    cat > "$tmpdir/check-prerequisites" <<'EOF'
+#!/usr/bin/bash
+if [[ "${@: -1}" == "--list-failures" ]]; then
+    printf 'core|zfs|zfsutils-linux|command not found\n'
+    printf 'core|pv|pv|command not found\n'
+    exit 1
+fi
+[[ -f "$FAKE_CHECK_STATE/installed" ]] || exit 1
+exit 0
+EOF
+    chmod +x "$tmpdir/check-prerequisites"
+
+    FAKE_CHECK_STATE="$tmpdir"
+    export FAKE_CHECK_STATE
+
+    ask_yn() { return 0; }
+    apt_install() {
+        printf '%s\n' "$@" > "$FAKE_CHECK_STATE/apt_args"
+        touch "$FAKE_CHECK_STATE/installed"
+        return 0
+    }
+
+    local output rc
+    output=$(run_interactive_prerequisites --single-node "$tmpdir/check-prerequisites" 2>&1)
+    rc=$?
+
+    unset -f ask_yn apt_install 2>/dev/null || true
+    unset FAKE_CHECK_STATE
+    export -n FAKE_CHECK_STATE 2>/dev/null || true
+
+    local args_file="$tmpdir/apt_args"
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected rc=0, got $rc: $output"
+    fi
+    if [[ "$(wc -l < "$args_file")" -ne 2 ]]; then
+        failed=1
+        echo "    Expected 2 separate apt_install arguments, got:"
+        cat "$args_file"
+    fi
+    # One package name per argument: no argument may contain a space
+    # (the glued-string failure mode).
+    if grep -q ' ' "$args_file"; then
+        failed=1
+        echo "    apt_install received a glued multi-package argument:"
+        cat "$args_file"
+    fi
+    if ! grep -qx 'zfsutils-linux' "$args_file" || ! grep -qx 'pv' "$args_file"; then
+        failed=1
+        echo "    Expected zfsutils-linux and pv as separate arguments, got:"
+        cat "$args_file"
+    fi
+
+    rm -rf "$tmpdir"
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "apt_install did not receive one package per argument"
+    fi
+}
+
+test_run_interactive_prerequisites_splits_package_args
 
 # ------------------------------------------------------------------
 # Two-node iSCSI stack installation helpers (from installer-lib.sh)

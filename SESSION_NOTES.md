@@ -9,6 +9,17 @@ here. Pruned history remains recoverable from git.
 
 ## Persistent gotchas (not documented in docs/)
 
+- Backslash line-joins keep the continuation line's indent, so
+  `"arg-part-a" \` + indented `"part-b"` becomes **two arguments**, not
+  one concatenated string — for one-argument payloads (ssh command
+  strings, sed programs) build them in a variable with `+=`.  Inside
+  unquoted heredocs, `\`+newline joins with the indent intact, so
+  source-wrapping payload lines only ever changes inter-word spaces.
+  When verifying a heredoc edit by extraction, aim at the RIGHT block
+  (files can hold several with the same marker) and keep `<<MARKER` in
+  the opener, or the "payload" executes as live script (a `cd /root` +
+  `set -e` block aborts harmlessly as non-root, but the check is
+  vacuous — 0 rendered lines means the check proved nothing).
 - The bash test harness (`tests/run-tests`) runs suites **without pipefail**,
   so a failure branch that depends on a pipeline's non-zero exit code cannot
   fire under the harness (e.g. the dry-run estimate-failure branch of
@@ -421,10 +432,598 @@ here. Pruned history remains recoverable from git.
   (coding-policies log_msg source); docs site rebuilt.
 
 ## Release 0.114.0 (2026-10-04)
-  Step 7: VERSION bumped to 0.114.0; changelog entry written (Added:
-  all-pools topology + datasets legend; Changed: Performance rename,
-  view-switcher removal, FATAL/VERB policy; Fixed: device rates, CI
-  python3-gi-cairo, test lock-dir isolation). All __pycache__ dirs
-  removed; docs site rebuilt (0.114.0 stamp verified). Final full suite
-  WITH soaks: 77 suites, 0 failed, 0 skipped (soak's 7 tests ran), rc=0.
-  Codebase frozen; no further code changes this session.
+Step 7: VERSION bumped to 0.114.0; changelog entry written (Added:
+all-pools topology + datasets legend; Changed: Performance rename,
+view-switcher removal, FATAL/VERB policy; Fixed: device rates, CI
+python3-gi-cairo, test lock-dir isolation). All __pycache__ dirs
+removed; docs site rebuilt (0.114.0 stamp verified). Final full suite
+WITH soaks: 77 suites, 0 failed, 0 skipped (soak's 7 tests ran), rc=0.
+Codebase frozen; no further code changes this session.
+
+## Integrated testing environment — master plan approved, Phase 0 complete (2026-10-04)
+Master plan formally approved: end-user-simulator orchestrator under
+`tests/integrated/` (journeys, not suites, in guests; CLI + GUI smoke;
+release tarballs + dev tarballs; findings FINDINGS.md + in-repo
+repair-plans with approval gates; zfsutilities-plan/ is user-only).
+Base VM access verified (dan + passwordless sudo on both). Phase 0
+inventory done — artifacts in `tests/integrated/results/phase0/`
+(PHASE0-REPORT.md + raw outputs): both base VMs clean PVE 9.2 on
+trixie, 4 vCPU, 3.8G RAM, 14.7G local-lvm, no VMs; nested virt already
+works (vmx + kvm_intel — no host CPU change needed). Resource request +
+manual steps delivered: zfstestvm1 RAM→12G, +200G second disk (itfiso
+20G ext4 + itfguests lvmthin, storage.cfg entries by user), vmbr9
+10.200.0.1/24 isolated bridge + NAT systemd unit, dev route
+10.200.0.0/24 via 10.0.0.28, optional dist-upgrade (183 pkgs pending,
+9.2.2 vs vm2's 9.2.21). Confinement: VMIDs 8000–8099, storages
+itfguests/itfiso only, append-only /var/log/itf-actions.log audit.
+Awaiting user's resource application; Phase 1 (itf MVP) is next and
+independent of it.
+
+Phase 0 execution wrap (same day, user delegated 3b/3c "pick it up
+from here"): 3a landed (11G RAM, 6 vCPU, 200G /dev/sdb). GOTCHAS hit:
+(1) in-place 9.2.2→9.2.21 dist-upgrade under OVMF+pre-enrolled-keys
+Secure Boot → shim "ERROR Verification failed: (0x1A) Security
+Violation" at boot (vm2 was fine because installed from newer media);
+user fixed by switching the VM BIOS to SeaBIOS — PVE installs carry a
+BIOS-boot partition alongside the ESP, so SeaBIOS boots the same disk.
+(2) pve-manager was stuck at 9.2.2 because vm1's apt had enterprise
+repos active and NO no-subscription file (trixie deb822 .sources under
+/etc/apt/sources.list.d/ — plain `^deb` grep sees nothing); fixed by
+mirroring vm2's layout: `Enabled: false` on pve-enterprise+ceph
+stanzas, new proxmox.sources with pve-no-subscription. (3) PVE
+storage.cfg SectionConfig requires a BLANK LINE before each new
+section — appending `dir: itfiso` directly after the last section's
+final line silently swallows it into the previous section (itfguests
+parsed, itfiso did not); rewrote the file with blank-line separation
+(backup: storage.cfg.bak-itf). (4) parted is not in minimal PVE —
+install it. DONE and verified: 9.2.21/kernel 7.0.14, itfiso (19.5G
+dir) + itfguests (170.8G lvmthin) active, vmbr9 10.200.0.1/24,
+ip_forward=1 + persistent itf-nat.service MASQUERADE (excludes
+10.0.0.0/16), /var/log/itf-actions.log, vmbr0 untouched. REMAINING
+(user, root on dev): `sudo ip route add 10.200.0.0/24 via 10.0.0.28` +
+NM persistence (`nmcli connection modify "Wired connection 1"
++ipv4.routes "10.200.0.0/24 10.0.0.28"`); dev has NO passwordless
+sudo for dan.
+
+NETWORK MODEL CORRECTED (user clarification, same evening): vmbr9 is
+NOT a general guest network — it is the future **iSCSI point-to-point
+link** for the two-node cycle (production parity: physical storage
+interconnect). ALL other traffic (management ssh, preseed HTTP,
+downloads) runs on the regular LAN: guests attach to vmbr0 and take
+DHCP from 10.0.0.1. Applied: removed itf-nat.service + forwarding
+sysctl + rule (verified clean); vmbr9 demoted to `inet manual` pure L2
+bridge (no address); dev route NEVER needed. Guest IP discovery via
+qemu guest agent (`qm guest cmd <vmid> network-get-interfaces`),
+agent installed by preseed. Cycle-2 open point: cross-base-VM
+point-to-point emulation (VLAN vs private subnet on vmbr0 L2) —
+decide at cycle-2 planning. Phase 0 now has ZERO outstanding user
+actions; preflight expectations updated (no route/NAT checks; vmbr0
+DHCP model).
+
+Phase 1 COMPLETE (2026-10-04, later same day): itf orchestrator MVP
+built under `tests/integrated/`. Files: `itf` driver CLI (preflight,
+guest create/start/stop/destroy/snapshot/rollback/ip/wait-ssh/list, iso
+fetch/upload, journey list/run, status, manual-steps, version; usage is
+parsed from the header comment `sed -n '/^Usage:/,$p'` — keep header
+contiguous), `lib/config-lib.sh` (fail-closed site config; ITF_SITE_CONFIG
+override; all-problems-at-once validation; ISO name must start `itf-`),
+`lib/ssh-lib.sh` (base=ssh+sudo -n, guest=root ssh direct, dev HTTP
+server for preseed, itf_dev_ip), `lib/base-lib.sh` THE GUARD (qm verb
+allow-lists read vs mutate; every standalone numeric token=VMID in range
+(except after `-`-prefixed option tokens); `storage:payload` tokens
+must name itf storages with slash-free payloads; `--opt=value` value
+part checked too; absolute paths only under ITF_ISO_DIR; mutate verbs
+audit-logged BEFORE exec via append-only log; itf_read exact+prefix
+allow-list — and it RE-QUOTES args per-token `%q` so the inner
+`bash -c` on the base can't misparse metacharacters like `(vmx|svm)`),
+`lib/guest-lib.sh` (SeaBIOS+virtio-scsi+serial0/vga serial0 guest
+recipe — required for `qm terminal` installs; vmid pick from free range;
+DHCP IP via guest agent; ISO fetch ≥50MiB sanity + guarded upload via
+/tmp stage + `mv`; full Debian preseed: root locked/key-only, no user,
+serial console GRUB cmdline, openssh+qemu-guest-agent, late_command
+authorized_keys), `lib/report-lib.sh` (run dirs with steps.tsv/report.md,
+counters RESET per itf_report_init — was missing, caught by suite),
+`lib/serial_console.py` (python3-stdlib expect-replacement over
+`ssh -tt … qm terminal`; chosen because dev lacks `expect` and dan has
+no sudo to install it; ruff-clean, context-manager log). Site config:
+`site/config.example` uses REPLACE-ME placeholders that are
+schema-valid-but-unusable (`.invalid` domain, reserved TLD) so a copy
+loads but an unedited copy fails loudly at connect/download — the
+committed example is asserted to PASS validation by test suite.
+Supporting: FINDINGS.md (status flow open→planned→fixed→verified/accepted),
+README.md + journeys/README.md (journey contract) + repair-plans/README.md
+(approval-gate loop), .gitignore adds site/config, results/run-*/,
+cache/ — but NOT results/ itself because results/phase0/ is the committed
+Phase-0 report. Tests: tests/test-itf-config (7), test-itf-base-guard
+(17), test-itf-report (11) — all green via run-tests; guard suite
+overrides itf_base_exec as capture (never ssh). BUGS the suites caught
+in the libs (all fixed): (1) itf_qm_check had INVERTED return semantics
+(ok=1 on pass) — valid calls were refused AND refused calls would have
+EXECUTED; (2) `${#arr[@]:-0}` is bad substitution in bash → use
+`${arr[*]:-}`; (3) itf_read raw `$*` shipping metacharacters to inner
+bash -c. TEST GOTCHA: command substitution `out=$(itf_step …)` runs in
+a subshell — counter/capture assertions must use `> file` redirection
+instead (hit twice). shellcheck documented command EXTENDED (coding-
+policies.md) with `tests/integrated/itf tests/integrated/lib/*.sh`;
+clean at -S warning; ruff clean. Docs: new developer-guide/integrated-
+testing.md + nav after Testing + testing.md cross-link section +
+mkdocs rebuild (site build rc=0, docs integrity 23 + docserver 15
+green). Full suite run at wrap. Phase 2 next: J01–J03 journeys; FIRST
+live verification of preseed/serial-install against the real ISO is the
+Phase-2 kickoff activity (boot-cmd tuning may be needed); Debian
+netinst ISO URL goes in the real site/config (user or agent fetch —
+cdimage.debian.org current stable netinst).
+
+## Phase 2 — J01 live bring-up: serial-install debugging saga (2026-10-04/05)
+
+J01 run live against the real base VM (zfstestvm1) — the serial-install
+pipeline needed seven hardening passes; each failure mode was diagnosed
+from the unbuffered serial transcript + http.log + qm counters:
+
+1. ATTEMPT 1 (run-220803): a MANUAL debug http.server I left on :8000
+   (serving /tmp/itf-httpcheck) silently shadowed every journey serve —
+   python http.server bind failure is INVISIBLE if you discard its
+   stderr; itf_http_serve wrote a pidfile for a dead process and said
+   "serving". Guest got 404 → d-i fell back interactive → sat at
+   hostname prompt (diskwrite 0 = installer waiting on input).
+   FIXES: itf_http_serve now fails loudly (kill-0 + marker-file GET
+   readiness probe; busy/stale-pidfile/loopback-shadow handling; log to
+   <pidfile>.log); journey gained a "preseed URL serves" fetch gate +
+   "preseed fetched by guest" http.log gate (127.0.0.1 GETs excluded).
+2. Driver FALSE-PASS: serial_console.py rc 0 on EOF-after-steps —
+   "install ran to completion" was a lie. rc semantics redefined:
+   0 = --exit-after pattern matched (checked every iteration, against
+   the full buffer, valid even with prompt-answer steps pending);
+   2 = ended with steps incomplete; 4 = steps done but ended without
+   the pattern (EOF/timeout); exit-reason note written to the log.
+3. ATTEMPT 3: hostname prompt STILL appeared with the preseed fetched —
+   network preseed loads AFTER network config, and hostname is asked
+   DURING it; auto=true does not default it (no DHCP host-name on the
+   LAN). FIX: hostname/domain/interface now also on the KERNEL BOOT
+   LINE (applies at every stage); driver's 3rd step answers the prompt
+   anyway via new --step-timeout (skip-if-not-seen in 120s).
+4. Root password prompt: preseed had `passwd/root-password-crypted
+   string !` — wrong debconf TYPE (string); then `password !` — trixie
+   user-setup ignores the "!" lock and prompts anyway. FIX: random
+   never-recorded SHA-512 hash per render (openssl passwd -6); root SSH
+   stays key-only (sshd default PermitRootLogin prohibit-password).
+5. ATTEMPT 4: serial TYPING GARBAGE — boot-line echo showed "auto=truel="
+   (" url" swallowed) → kernel got garbage → interactive language menu.
+   One-shot writes to the serial can drop chars. FIX: send_bytes()
+   paced writes (--send-chunk 16, --chunk-delay 0.08).
+6. ATTEMPT 6 (run-232014): got furthest (partman→base system→
+   "Configuring apt"), then d-i WEDGED — UI clock stopped ticking,
+   disk counters frozen, 1.5GB written. Not a dialog; suspected
+   apt-setup fetch hang / newt-screen death under nested virt.
+   Strict gate worked as designed (timeout rc=4 → journey FAIL).
+   Also pre-emptively added `grub-installer/bootdev /dev/sda` (two
+   disks present would prompt for the GRUB device) and raised the
+   serial driver timeout 1800→3600s (nested-virt installs are slow).
+7. ATTEMPT 7 launched with all of the above — monitoring.
+
+Tests: new tests/test-itf-ssh (4 tests: serve/fetch/stop round-trip
+incl. second-serve refusal; busy 0.0.0.0 port; loopback-shadow
+squatter; stale pidfile) — caught that a bare-connect readiness probe
+is insufficient (SO_REUSEADDR lets specific+wildcard binds coexist;
+readiness must GET our own marker file). Suite green; shellcheck/ruff
+clean. Bash gotcha: `var=$(...) 2>/dev/null` does NOT silence stderr
+from inside the substitution on this bash — put the redirect INSIDE.
+
+### Phase 2 addendum — custom boot ISO + installer syslog (2026-10-05)
+
+Attempts 7-10 outcomes: (7) boot line garbled AGAIN ("auto=tr") despite
+paced 16-byte/80ms writes — the qm-terminal→ISOLINUX serial input path
+is fundamentally lossy under nested virt; each garble costs a full
+reinstall. DECISION: stop typing entirely — itf_iso_customize() (guest-
+lib) builds a custom boot ISO per journey: 7z-extract the cached netinst,
+replace isolinux/isolinux.cfg (SERIAL 0 115200, PROMPT 0, TIMEOUT 20,
+default label with our full kernel APPEND incl. hostname/domain/
+interface + console=ttyS0), rebuild with genisoimage (dev has 7z +
+genisoimage; xorriso absent). Constant remote name itf-boot.iso on
+itfiso (overwritten; .append stamp skips rebuilds). Journey serial step
+is now WATCH-ONLY (driver --wait/--send made optional; exit-pattern is
+the success gate). Attempt 8 fail: customize printed info lines to
+STDOUT which the journey's $(...) folded into the ide2 volid — the
+confinement guard correctly REFUSED the create (info now goes to
+stderr; only the ISO name on stdout). Attempt 9/11 boot the custom ISO:
+auto-boot + preseed fetch ~60s after resume — zero keystrokes. (9)
+wedged at "Configuring apt" (deterministic, 2/2 preseeded runs, kvm
+0.5% cpu, zero guest packets, zero disk — a hard block inside d-i).
+ADDED for visibility: d-i `log=<base-ip>` boot param + itf_syslog_start/
+stop (socat UDP-514 listener on the base as root, per-vmid /tmp log,
+pulled back as installer-syslog.log artifact; hostname -I added to the
+itf_read allow-list). Bash gotchas: `local` declarations must precede
+first use under set -u (base_ip: unbound at boot_append); `exec 3<>/
+dev/tcp/... 2>/dev/null` does NOT silence the connect diagnostic — the
+redirect applies left-to-right, so wrap the group: `{ exec 3<>...; }
+2>/dev/null`.
+
+### Phase 2 addendum 2 — the "wedge" was a dialog; install reaches completion (2026-10-05)
+
+Attempt 15 caught the wedge ON SCREEN: it is apt-cdrom-setup's "Scan
+extra installation media?" modal — NOT a hang. Deterministic because the
+preseed never answered it; the ticking d-i status clock made it look
+alive while three runs sat forever at a yes/no box. Fixes landed in
+itf_preseed_render: apt-setup/cdrom/set-first|set-next|set-double false.
+Attempt 16 then sailed through media scan into a NEW modal — "HTTP
+proxy information" (mirror/country=manual drives the explicit mirror
+flow). Fixes: mirror/http/proxy preseeded BLANK + the apt-setup battery
+(services-select security,updates; non-free-firmware true; non-free/
+contrib false). Attempt 17: FULL unattended install, driver exit rc 0
+at the finishing reboot, preseed GET gate green.
+
+Syslog capture now works end-to-end: the d-i kernel parameter is
+`log_host=<ip>` (NOT `log=`) — verified in the initrd itself
+(lib/debian-installer-startup.d/S10syslog parses log_host=/log_port=
+into busybox syslogd -R; extract initrd via 7z + zcat|cpio -idm).
+Attempt 17 captured 3,054 lines (installer-syslog.log artifact).
+Dev→base UDP leg validated with a cross-test datagram; listener round
+trip validated via itf_syslog_start/stop against zfstestvm1.
+
+Attempt 17's remaining failure: the finishing reboot landed BACK in the
+installer (boot order was ide2;scsi0 — d-i ejects the tray but the QEMU
+reset closes it again), so the installed system never booted → no guest
+agent → IP discovery timeout → journey rc 1. Fixes: guest create now
+uses disk-first boot order (scsi0;ide2 — blank disk is unbootable so
+first boot still falls through to the ISO) AND the journey detaches the
+ISO after the install reboot (`qm set --ide2 none,media=cdrom`, guard
+dry-run accepted, non-fatal info step).
+
+Hygiene fixes from the same window: test-itf-ssh got an EXIT-trap
+cleanup (killed runs leaked squatter http.servers holding ports — found
+one live on :20965); itf_iso_upload removes its /tmp staging file when
+put/mv fails (three stale itf-iso-upload-* files cleaned off the base).
+pkill/pgrep self-avoidance: bracket the FIRST character ([8]000), never
+a trailing digit (8000[0] needs a fifth digit and matches nothing).
+
+### Phase 2 addendum 3 — J01 green through Stage A; two live product findings (2026-10-05)
+
+Attempt 18 exposed the disk-order trap: with the pool disk attached at
+create, Linux virtio-scsi enumeration under nested virt is a RACE — which
+disk is /dev/sda flips between boots (attempt 18: install landed on the
+100G pool disk, system disk blank → SeaBIOS "not a bootable disk" boot
+loop; attempt 19: install landed correctly on the 32G but post-boot
+enumeration flipped anyway; root is UUID-based so it booted fine).
+Fixes: itf_guest_create's pooldisk is now OPT-IN (was defaulting from
+site config — the journey's flag removal initially changed nothing; the
+audit log /var/log/itf-actions.log on the base proved scsi1 still in the
+create line), and J01 Stage D hot-plugs the pool disk after install
+(`qm set --scsi1 itfguests:100`, guard dry-run accepted, in-guest
+wait for /dev/sdb). SeaBIOS boots scsi0-first deterministically; the
+blank-disk fall-through boots the ISO on first boot.
+
+itf_guest_ip parser bug: `qm guest cmd network-get-interfaces` returns a
+BARE LIST (qm unwraps the envelope); the inline python did .get() on it
+and crash-looped. Fixed to accept list or {"result": [...]} (live-proven:
+guest IP 10.0.0.254 discovered in-run).
+
+Attempt 20: FULL Stage A green (unattended install → disk reboot → agent
+→ IP → root SSH → os-installed snapshot), Stage B reached the product:
+release 0.114.0 source tarball downloaded in-guest per README, curl +
+check-prerequisites ran, then `sudo ./bin/install-single-node` died on
+its first line of work. TWO findings live-confirmed (FINDINGS.md):
+F-001 mkdocs apt-name remediation (guest-prereq.log line 22:
+`install: "mkdocs<2"`), F-002 installer-lib.sh resolved from bin/ while
+shipped in lib/ (since 0.96.0; install-two-node identical). Repair plan
+002 drafted; BOTH await user approval — no product-code changes made.
+
+Note: releases carry no built assets; README documents clone/tarball +
+`./bin/install-single-node`, so the repo layout is the user surface the
+journey exercises (api.github.com tarball of the tag). The source
+tarball includes repo metadata (AGENTS.md, SESSION_NOTES.md, tests/) —
+same as a clone; acceptable for cycle 1, revisit if built release
+assets ever appear.
+
+### Phase 2 addendum 4 — F-001/F-002 repairs executed + verified; F-003 discovered (2026-10-05)
+
+User approved and I executed repairs 001 and 002:
+- F-001: check-prerequisites treats mkdocs/mkdocs-material absence as
+  informational warnings (the installer's doc-server step installs them —
+  via pip on stock Debian, via apt on trixie where the packages exist);
+  only mkdocs >= 2 still fails, now with an empty apt-package column and
+  a pip remediation hint in installer-lib.sh.  docs (commands.md,
+  messages index) updated.
+- F-002: both installers resolve installer-lib.sh from lib/ via
+  $repo_dir.  NEW guard suite tests/test-installer-structure walks bin/*
+  for "$var/...sh" references and asserts the targets exist; proven
+  red on the old tree (via a transient stash — see the disclosure in
+  the session report; state fully restored) and green on the fixed tree.
+  test-check-prerequisites extended for the warn rows / v2 row (gotcha:
+  sealing PATH for fakeroot-based runs requires an absolute fakeroot
+  path pinned BEFORE and `env PATH=...` for the script only — bash
+  applies PATH= prefix-assignments to the command lookup itself, and
+  the fakeroot wrapper needs getopt/cat from PATH; awk/cut/grep had to
+  be symlinked into the stub dir).
+
+Attempt 23 (dev-tarball source mode — working-tree tar minus .git/.zcode/
+docs site/cache/site-config, second itf_http_serve for Stage B) verified
+both repairs live: checker output shows the two ⚠ mkdocs rows with 10
+genuine apt-remediable failures, and the installer runs banner → doc
+server → Step 2 config (hostname itfj01, generated node.conf) → Step 3
+deploy.  It then died at deploy-version:163 `rsync: command not found`
+(rc=127) — NEW finding F-003: both installers resolve check-prerequisites
+as $repo_dir/check-prerequisites (repo root) but it ships in bin/, so the
+[[ -f ]] guard silently skips the ENTIRE prerequisites step on a fresh
+tree; the step that would have installed rsync (and zfs/pv/smartmontools/
+GTK/pip) never runs.  Same layout-drift family as F-002, hidden until
+F-002 was fixed.  Plan 003 drafted, AWAITING APPROVAL; journey install
+answers are currently '\n\n' (hostname default, decline edit) and must
+flip back to 'y y \n \n' once F-003 is repaired (comment in the journey).
+
+J01 Stage B/D design note: Stage C deliberately verifies only deployment
+artifacts (current symlink, VERSION, node.conf, PATH link, config.json);
+zfs presence is exercised by Stage D's pools, which is where F-003 would
+have surfaced next if the deploy step hadn't crashed first.
+
+Attempt 22 lesson (feed alignment): with prereq prompts absent (F-003),
+'y y \n \n' misaligned — first y became the hostname, second y opened
+nano on a pipe ("Standard input is not a terminal").  Feeds must match
+the ACTUAL prompt sequence of the tree under test.
+
+Full suite green after the repairs (run logged /tmp/zfs-run-repairs.log);
+guest 8000 destroyed post-verification; no stray listeners dev/base.
+Site config still ITF_SW_SOURCE=dev-tarball pending the F-003 decision.
+
+### Phase 2 addendum 5 — F-003 repaired; F-004 found at the next layer (2026-10-05)
+
+User approved plan 003; executed.  Both installers now resolve
+check-prerequisites via $script_dir (bin/).  Guard test extended:
+test-installer-structure gained test_installer_path_references_exist —
+every "$repo_dir/…" / "$script_dir/…" reference in the two INSTALLERS must
+exist (-e, files or dirs like share/two-node).  Scoped to the installers
+deliberately: bin/zfsconfig:74 iterates CANDIDATE paths (bin/python then
+python/ at root) where a missing first candidate is normal — a bin/-wide
+-e check would false-positive there.  Red side proven by a plain
+working-tree swap (cp installer aside, sed the bug back in, run, restore)
+— no git stash this time.
+
+Attempt 24 (run-20261005-120247, dev-tarball, feed back to y y ⏎ ⏎):
+the prereq step now RUNS — "=== Checking Prerequisites ===", 10 failures
+explained, both remediation prompts asked and answered, apt reached …
+and died: `E: Unable to locate package zfsutils-linux rsync
+smartmontools …` — the ENTIRE list as ONE apt argument.  F-004:
+run_interactive_prerequisites glues collect_apt_packages output into a
+single string and calls `apt_install "$packages"` (installer-lib.sh:324);
+apt_install itself is fine ("$@"); all other callers pass bare words.
+Host-side repro: `apt-get install -s 'pv rsync'` → same E: signature.
+This path was unreachable before F-002/F-003 — never once run on a fresh
+system.  Plan 004 drafted (mapfile into an array, apt_install
+"${pkg_list[@]}"), AWAITING APPROVAL.  F-003 status: fixed with the step
+live-confirmed running; full rerun-green completes together with 004.
+
+Layer-peeling pattern holding: each repair unblocks the next hidden
+defect in this never-exercised fresh-install path.  F-004 is the last
+gate before the first full J01 green (prereqs install → re-check →
+rc=0 → Stage C verify → Stage D pools on real zpool).
+
+Full suite green after the F-003 changes (82 suites; guard suite now
+3 tests).  Guest 8000 destroyed; dev/base clean; site config still
+dev-tarball for the F-004 verification rerun.
+
+### Phase 2 addendum 6 — F-004 repaired + live-confirmed; F-005: Debian contrib (2026-10-05)
+
+User approved plan 004; executed.  run_interactive_prerequisites now
+mapfiles collect_apt_packages into an array and calls
+apt_install "${pkg_list[@]}" (installer-lib.sh:326); display line uses
+${pkg_list[*]} (display-only).  Guard test
+test_run_interactive_prerequisites_splits_package_args added to
+test-installer-checks: fake checker (fails → --list-failures rows →
+passes once mock apt_install touches a flag), captured apt args must be
+exactly one package per line with no spaces.  Red proven by swapping
+in "${pkg_list[*]}" (the glued-arg bug) — file swap, no git.  31/31.
+Note: test-installer-checks has a PRE-EXISTING info-level SC2013 (line
+~811, template-token walk) — not introduced by this work; left alone.
+
+Attempt 25 (run-20261005-123403): F-004 fix live-confirmed — apt error
+changed from the glued "Unable to locate package <all names>" to a
+normal per-package error.  NEW finding F-005: zfsutils-linux is in
+Debian contrib ONLY (verified against the trixie contrib Packages
+index; Ubuntu/Mint carry it in main — the dev host is Mint, so this is
+invisible in development).  Stock Debian netinst enables
+main+non-free-firmware, not contrib → the README requirement line, the
+dev-guide apt line, and the installer remediation all dead-end at
+"E: Package 'zfsutils-linux' has no installation candidate".  Plan 005
+drafted: runtime apt-cache probe in check-prerequisites that appends a
+contrib hint ONLY when no candidate exists + README/dev-guide note +
+journey preseed flips contrib=true (models the docs-following user).
+AWAITING APPROVAL.
+
+J01 stays 16 pass / 2 fail (install aborts at the apt run) until 005.
+Full suite green (82 suites, guard now 31-test suite counted).  Guests
+destroyed; dev/base clean; site config still dev-tarball.
+
+### Phase 2 addendum 7 — F-005 executed; F-006: headless launcher skip (2026-10-05)
+
+User approved ("Do F-004 and F-004/F-005 now"); F-004 was already executed
+last turn, so this turn executed plan 005:
+- check-prerequisites: after the core checks, when a failure names
+  zfsutils-linux AND `apt-cache policy` shows no candidate, print a
+  Debian-contrib note (informational; human mode only; probe skipped
+  when apt-cache is absent).  test-check-prerequisites helper gained
+  ZFS_STUB / APT_CANDIDATE knobs (sealed-PATH stubs); 4 new tests, 14/14.
+- Docs: README Requirements + developer-guide prerequisites + commands.md
+  check-prerequisites section + messages/index.md note row.
+- Harness: preseed apt-setup/contrib=true (guest models the
+  docs-following user; stock-main guest was the F-005 reproduction).
+
+Attempt 26 (run-20261005-132650): the remediation SUCCEEDED end-to-end —
+`✓ Installed: zfsutils-linux rsync smartmontools python3-gi
+gir1.2-gtk-3.0 python3-pip pv gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0`
+(zfsutils-linux/zfs-dkms fetched from trixie/contrib), re-check passed,
+MkDocs step installed, deploy-version + switch-version completed ALL
+wiring (current symlink, PATH profile, sudoers, bashinit, lib symlinks).
+F-003/F-004/F-005 all verified.  THEN the installer exited rc=1 with no
+error and no summary: F-006 — create_desktop_symlinks returns 1 on the
+headless skip paths (no X → no desktop user; lib/desktop-launcher-lib.sh
+:73/:80), unguarded at switch-version:228 inside the set -e chain; the
+lib-missing stub two lines up returns 0, and two existing tests pin the
+faulty rc≠0 contract (they must flip with the fix).  Plan 006 drafted,
+AWAITING APPROVAL.  J01 16/2 — install is one soft-skip away from the
+first full green (rc=0 → Stage C → Stage D pools on the zfs-dkms-built
+modules).
+
+Full suite green (82/4244/0/1).  Guests destroyed; dev/base clean; site
+config still dev-tarball.
+
+### Phase 2 addendum 8 — F-006 repaired: installer rc=0 at last (2026-10-05)
+
+User approved plan 006; executed with one disclosed scope extension:
+remove_desktop_symlinks had the IDENTICAL return-1 skip paths, unguarded
+at switch-version:262 inside uninstall_wiring (would abort MID-UNWIRE on
+headless hosts; J02's uninstall journey would hit it) — fixed identically
+under the same finding.  All four launcher skip paths now return 0 with
+their warnings intact (matching the lib-missing stub contract at
+switch-version:64).  test-installer-checks: the two pinned rc≠0
+assertions flipped to rc-0-with-warning, plus two set -e subshell pins
+(`env -u SUDO_USER DISPLAY=:99` forces the headless condition; warn/
+log_msg stubbed — the lib sources standalone).  Red proven by reverting
+the create-no-user return via file swap (2 tests fail), green 33/33;
+test-switch-version 8/8.
+
+Attempt 27 (run-20261005-140352): install-single-node rc=0 — FIRST
+complete first-time-user install on headless fresh Debian.  Two new
+downstream items:
+- Stage C fail = HARNESS bug (fixed in-journey): itf_guest_exec runs
+  non-login ssh, so /etc/profile.d PATH wiring is invisible to
+  `command -v zfsdailybackup`; the check now uses bash -lc + a direct
+  -x layout check.
+- Stage D fail = F-007 (finding, AT GATE): the documented test-pool
+  recipe (developer-guide/testing.md) uses parted/partprobe with no
+  install preamble; fresh Debian netinst has neither (`parted: command
+  not found` live-confirmed right after the successful install).
+  Plan 007 is docs-only (one apt-get install -y parted preamble line).
+
+Attempt 28 (run-20261005-142540, with the Stage C fix): 19 pass / 2
+fail — rc=0 stable, Stage C green; only Stage D's parted (F-007) keeps
+J01 from full green.  Full suite green (82/4246/0/1).  Guests
+destroyed; dev/base clean; site config still dev-tarball.
+
+### Cycle-1 findings F-007..F-010, J01 fully green, J02/J03 authored (2026-10-05)
+
+Attempt 29 (run-20261005-144938): 19/2 — F-007's parted preamble works
+(Stage D proceeds into ZFS).  NEW F-009: on stock Debian the remediation
+installs zfs-dkms (pulled by zfsutils-linux) but NOT
+linux-headers-$(uname -r); dkms registers ("added") and never builds, so
+`zpool create` dies with "The ZFS modules cannot be auto-loaded".
+Live-diagnosed in guest: modinfo zfs fails, headers absent, gcc/make
+present.  Fix (verified by attempt 30): functional zfs-kernel-module
+check in check-prerequisites (modinfo probe -> headers remediation row;
+4 new tests in test-check-prerequisites, 18/18).
+
+Attempt 30 (run-20261005-151307): J01 FULLY GREEN (21 pass / 0 fail,
+three RAIDZ1 test pools ONLINE) — the complete first-time-user journey
+works end-to-end on headless fresh Debian for the first time.
+
+F-008 (static find, J03 design review): check_partial_uninstall's
+cleanup fallback resolved the uninstaller at repo root; ships in bin/.
+Fixed (dev repo) + guard test extended to installer-lib.sh.
+
+Journeys refactored: common.sh now carries stage_os / stage_install /
+verify_installed (J_PIDFILE globals for the EXIT trap); J01 refactored
+onto it post-attempt-30 (shellcheck clean; validating rerun pending);
+J02 (uninstall --purge --yes -> clean-state assertions -> reinstall ->
+verify) and J03 (partial state -> installer's cleanup offer -> install
+completes; exercises F-008) authored.  Feed formats per tree state:
+fresh `y\ny\n\n\n`, post-purge reinstall `\n\n`, over-leftovers `y\n\n`.
+
+F-010 (J02 first run, run-20261005-154247): uninstall-zfsutilities
+crashed instantly — `line 88: ZFSUTILITIES_LEGACY_CONFIG_DIR: unbound
+variable`.  load_uninstall_config read SIX legacy vars bare under main's
+set -euo pipefail; bashinit->paths.sh defines five, but CONFIG_DIR is
+defined by NO product file (only cleanup-zfsutilities-legacy reads it,
+with its own default).  So every real uninstall invocation crashed
+before removing anything; masked in unit tests (harness exports
+CONFIG_DIR, test-lib's bashinit bootstrap supplies the rest via
+paths.sh).  Fix: six `:-` defaults mirroring cleanup-zfsutilities-legacy
+/ paths.sh resolved values; new red/green guard test in
+test-uninstall-zfsutilities (11/11).  Guest 8000 destroyed; J02 rerun
+launched against the fixed dev tarball.
+
+F-011 (J02 green run's transcript, cosmetic): during --purge the
+uninstaller removes /var/log/zfsutilities then logs its summary; each
+remaining log_msg leaked "No such file or directory" — bashinit:161's
+append guard (`>> file 2>/dev/null || true`) loses because bash
+evaluates the failing >> BEFORE the 2>/dev/null takes effect (proven on
+bash 5.2 host-side).  Fix: reorder to `2>/dev/null >>` + wrapper test in
+test-bashinit (red/green).  Trailers in zfsdailybackup/zfs-send-receive
+share the pattern but are unreachable in this flow — left alone, noted
+in plan 011.
+
+J02 harness hardening: clean-state scan had a done/fi typo that aborted
+the login-PATH check AFTER the six path checks; the grep-LEFTOVER
+criterion couldn't see the abort.  Fixed + added a positive
+"scan-complete" marker so any future early abort fails the step.
+
+J01 refactor-validation run (run-20261005-170408) aborted at
+"guest ssh reachable": HARNESS bug, not the refactor — DHCP recycled
+10.0.0.254 from an earlier campaign guest, and StrictHostKeyChecking=
+accept-new rejects CHANGED keys, so all probes failed on mismatch while
+sshd was actually up (banner answered post-mortem).  Guests that drew
+fresh IPs never hit it.  Fix: ssh-lib.sh guest helpers now share
+_ITF_GUEST_SSH_OPTS (StrictHostKeyChecking=no + UserKnownHostsFile=
+/dev/null) — disposable guests must never consult the operator's
+known_hosts.  Proven live against the same mismatched-key guest before
+destroying it; test-itf-ssh green.
+
+### Cycle-1 close: all journeys green, all findings verified (2026-10-05)
+
+Closing runs on the current working tree (dev-tarball source):
+- J01 run-20261005-172712: 21/0 — validates the common.sh refactor;
+  three RAIDZ1 pools per the docs recipe.
+- J02 run-20261005-174959: 22/0 — final confirmation; uninstall
+  transcript tail is clean (F-011 live-verified: zero "No such file or
+  directory" after the log dir is removed), clean-state scan ran to its
+  scan-complete marker INCLUDING the login-PATH check (the earlier green
+  J02 run had never executed that check due to the done/fi harness bug).
+- J03 run-20261005-164113: 22/0 — F-008 live-verified (Remnants warning
+  → cleanup → install completes).
+
+FINDINGS: F-001..F-011 all verified.  Release-tarball source mode stays
+unavailable until a release carries the fixes (user's release process).
+
+Post-campaign hygiene: base VM has 0 guests and 0 itf syslog listeners;
+dev has no stray http servers.  Full suite run once at close (see wrap
+report).  Cycle-2 candidates live in the Phase 3+ roadmap of the master
+plan (two-node, upgrades, GUI click-through, failure injection).
+
+## Wrap-up cycle 2026-10-05 (steps 1-6, pre-version)
+
+Step 1 (PREEXISTING): attach-vm-disk two-node bug RESOLVED — the zvol
+existence check + volsize read are now node-aware: compute-host two-node
+invocations validate over one SSH round trip (name+volsize from a single
+`zfs list -H -o name,volsize`); single-node and storage-host invocations
+validate locally as before.  Removes the latent `size=unknown` in the
+VM disk line too.  test-attach-vm-disk gained 4 script-execution tests
+(stub PATH with hostname/zfs/ssh/qm/id fakes + generated node.conf);
+red/green proven by file swap.  Docs: two-node.md flow step + messages
+index rows (local vs storage-host FATAL variants).  Zensical recheck:
+0.0.68, still no 1.x (entry stays parked).  Infra-vdev planning UI
+stays in abeyance (user decision 2026-10-03).
+
+Step 2 (standards): all files touched by this changeset wrapped to
+<=100 columns (itf driver/libs/journeys + check-prerequisites + 3 test
+files).  warn() in check-prerequisites now joins "$*" like log_msg
+(single-arg callers unaffected).  common.sh's EXIT trap became a
+_journey_exit_cleanup function; two long one-arg command strings became
+local-var (+=) builds.  Heredoc payloads verified byte-level: the two
+wrapped payload lines (PRESEED grub sed, dl_script latest_url) differ
+only by inter-word spaces at the join points — functionally identical.
+shellcheck (documented command incl. itf) + ruff clean.  Two standards
+debts recorded in PREEXISTING.md: itf strict-mode adoption (needs live
+re-validation at cycle-2 kickoff) and legacy >100-col lines in untouched
+test files.
+
+Step 3 (suite review): resize-vm-disk / remove-vm-disk checked — they
+delegate compute->storage BEFORE their local zfs checks, so the attach
+bug does not extend to them.  No obsolete/incorrect tests found.
+
+Step 4 (docs): integrated-testing.md suite list updated (test-itf-ssh
++ serve/fetch/stop coverage).  docs integrity suite green; docs site
+rebuilt (rc=0; the known mkdocs-material MkDocs-2.0 warning — parked
+toolchain decision).
+
+Step 5: full suite without soaks run once in the background — all green
+(no failures, soak suite skipped by design).
+
+Step 6: codebase frozen at this point.  VERSION/changelog untouched;
+commit awaits explicit user confirmation.

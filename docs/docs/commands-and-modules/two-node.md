@@ -599,7 +599,10 @@ sudo attach-vm-disk <zvol> <vmid> [dst-disk-key]
 
 1. Validate arguments and delegate to the compute host in two-node mode.
 2. Parse the zvol path into pool, source VMID, and disk number.
-3. Verify the zvol exists and read its `volsize`.
+3. Verify the zvol exists and read its `volsize` — locally in single-node
+   mode and when invoked on the storage host; over SSH on the storage host
+   when invoked on the compute host in two-node mode (the zvol lives on the
+   storage host, which local `zfs` on the compute host cannot see).
 4. Determine the destination disk key (auto-detect next free `scsiN`).
 5. In two-node mode, SSH to the storage host to create/reuse the backstore and
    LUN, then save iSCSI config and rescan.

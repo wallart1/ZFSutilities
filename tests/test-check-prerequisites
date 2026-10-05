@@ -106,16 +106,63 @@ run_check_prerequisites_with_mock_env() {
 EOF
     chmod +x "$tmp_bin/bash"
 
-    for cmd in zfs zpool pv rsync smartctl python3 pip3; do
+    for cmd in pv rsync smartctl python3 pip3; do
         ln -s /bin/true "$tmp_bin/$cmd"
     done
 
-    # mkdocs 1.x
-    cat > "$tmp_bin/mkdocs" << 'EOF'
+    # ZFS tooling: ZFS_STUB=absent leaves zfs/zpool out of the stub PATH
+    # (drives the contrib-note probe); present otherwise.
+    if [[ "${ZFS_STUB:-present}" != "absent" ]]; then
+        ln -s /bin/true "$tmp_bin/zfs"
+        ln -s /bin/true "$tmp_bin/zpool"
+    fi
+
+    # apt-cache: stubbed only when APT_CANDIDATE is set ("(none)" or a
+    # version string); no stub = apt-cache invisible = the probe is
+    # skipped entirely (the no-apt / not-installed degradation path).
+    if [[ -n "${APT_CANDIDATE:-}" ]]; then
+        cat > "$tmp_bin/apt-cache" << EOF
 #!/usr/bin/bash
-echo "mkdocs, version 1.6.0"
+echo "zfsutils-linux:"
+echo "  Installed: (none)"
+echo "  Candidate: $APT_CANDIDATE"
 EOF
-    chmod +x "$tmp_bin/mkdocs"
+        chmod +x "$tmp_bin/apt-cache"
+    fi
+
+    # modinfo drives the zfs-kernel-module functional check
+    # (MODINFO_STUB=ok | missing); no stub = kmod invisible = the module
+    # probe is skipped.  uname is stubbed unconditionally so the
+    # expected headers-package name is deterministic (uname is used
+    # nowhere else in the script).
+    cat > "$tmp_bin/uname" << 'EOF'
+#!/usr/bin/bash
+[[ "$1" == "-r" ]] && echo "6.1-test-amd64" || echo Linux
+EOF
+    chmod +x "$tmp_bin/uname"
+    if [[ -n "${MODINFO_STUB:-}" ]]; then
+        if [[ "$MODINFO_STUB" == "ok" ]]; then
+            ln -s /bin/true "$tmp_bin/modinfo"
+        else
+            ln -s /bin/false "$tmp_bin/modinfo"
+        fi
+    fi
+
+    # mkdocs: version comes from MKDOCS_STUB_VERSION ("none" = absent)
+    local mkdocs_version="${MKDOCS_STUB_VERSION:-1.6.0}"
+    if [[ "$mkdocs_version" != "none" ]]; then
+        cat > "$tmp_bin/mkdocs" << EOF
+#!/usr/bin/bash
+echo "mkdocs, version $mkdocs_version"
+EOF
+        chmod +x "$tmp_bin/mkdocs"
+    fi
+
+    # Real text utilities the script shells out to (check_mkdocs_version,
+    # check_apt_pkg); everything else on the host stays invisible.
+    ln -s /usr/bin/awk "$tmp_bin/awk"
+    ln -s /usr/bin/cut "$tmp_bin/cut"
+    ln -s /usr/bin/grep "$tmp_bin/grep"
 
     # dpkg simulates all requested packages as installed
     cat > "$tmp_bin/dpkg" << 'EOF'
@@ -127,17 +174,24 @@ EOF
     chmod +x "$tmp_bin/dpkg"
 
     # pveversion is handled by the caller via PATH order; we leave it absent here.
+    # fakeroot is pinned to its absolute path: the PATH= prefix below would
+    # otherwise hide it from the command lookup.
     local maybe_fakeroot=()
     if [[ $EUID -ne 0 ]]; then
         if command -v fakeroot >/dev/null 2>&1; then
-            maybe_fakeroot=(fakeroot)
+            maybe_fakeroot=("$(command -v fakeroot)")
         else
             rm -rf "$tmp_bin"
             return 255
         fi
     fi
 
-    PATH="$tmp_bin:$PATH" "${maybe_fakeroot[@]}" "$PREREQ_SCRIPT" "$@"
+    # The stub dir is the ONLY PATH entry for the script itself: host-wide
+    # installs (an apt python3-mkdocs in /usr/bin, a pip mkdocs in
+    # ~/.local/bin) must stay invisible so absent/present variants are
+    # deterministic per host.  `env` applies the seal only to the script —
+    # a PATH= prefix would also hide fakeroot's own wrapper internals.
+    "${maybe_fakeroot[@]}" env PATH="$tmp_bin" "$PREREQ_SCRIPT" "$@"
     local rc=$?
     rm -rf "$tmp_bin"
     return $rc
@@ -237,6 +291,286 @@ test_mkdocs_version_10_x
 test_mkdocs_version_malformed
 test_proxmox_absent_warning
 test_proxmox_present_pass
+
+test_mkdocs_absent_is_informational() {
+    test_start "absent mkdocs warns and does not fail the check"
+    local output rc
+    output=$(MKDOCS_STUB_VERSION=none run_check_prerequisites_with_mock_env --single-node 2>&1)
+    rc=$?
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 with mkdocs absent, got $rc"
+        return
+    fi
+    if [[ "$output" != *"⚠ mkdocs not installed"* ]]; then
+        test_fail "Expected 'mkdocs not installed' warning in output"
+        return
+    fi
+    if [[ "$output" == *"✗ mkdocs"* ]]; then
+        test_fail "mkdocs absence must not produce a failure line"
+        return
+    fi
+    test_pass
+}
+
+test_mkdocs_absent_not_in_list_failures() {
+    test_start "absent mkdocs produces no --list-failures row"
+    local output rc
+    output=$(MKDOCS_STUB_VERSION=none \
+        run_check_prerequisites_with_mock_env --single-node --list-failures 2>&1)
+    rc=$?
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 with mkdocs absent, got $rc"
+        return
+    fi
+    if [[ "$output" == *"mkdocs"* ]]; then
+        test_fail "No mkdocs row expected in --list-failures output: $output"
+        return
+    fi
+    test_pass
+}
+
+test_mkdocs_v2_failure_has_no_apt_package() {
+    test_start "mkdocs 2.x fails without an apt package field"
+    local output rc row
+    output=$(MKDOCS_STUB_VERSION=2.0.1 \
+        run_check_prerequisites_with_mock_env --single-node --list-failures 2>&1)
+    rc=$?
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected exit 1 with mkdocs 2.x, got $rc"
+        return
+    fi
+    row=$(printf '%s\n' "$output" | grep -m1 '^docs|mkdocs|')
+    if [[ -z "$row" ]]; then
+        test_fail "Expected a docs|mkdocs failure row: $output"
+        return
+    fi
+    local expected
+    expected="docs|mkdocs||mkdocs 2.x is incompatible with this project;"
+    expected+=" pin to mkdocs<2"
+    if [[ "$row" != "$expected" ]]; then
+        test_fail "Unexpected row shape (package column must be empty): $row"
+        return
+    fi
+    test_pass
+}
+
+test_mkdocs_absent_is_informational
+test_mkdocs_absent_not_in_list_failures
+test_mkdocs_v2_failure_has_no_apt_package
+
+# ---------------------------------------------------------------------------
+# Debian contrib note for zfsutils-linux (F-005)
+# ---------------------------------------------------------------------------
+
+test_contrib_note_shown_when_no_candidate() {
+    test_start "contrib note appears when zfs is missing and apt has no candidate"
+
+    local output rc
+    output=$(ZFS_STUB=absent APT_CANDIDATE='(none)' \
+             run_check_prerequisites_with_mock_env --single-node 2>&1)
+    rc=$?
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected exit 1 with zfs missing, got $rc"
+        return
+    fi
+    if [[ "$output" != *"zfsutils-linux is in the contrib archive"* ]]; then
+        test_fail "Expected the Debian contrib note in output"
+        return
+    fi
+    test_pass
+}
+
+test_contrib_note_absent_when_candidate_exists() {
+    test_start "no contrib note when apt has an installation candidate"
+
+    local output rc
+    output=$(ZFS_STUB=absent APT_CANDIDATE='2.3.9-1' \
+             run_check_prerequisites_with_mock_env --single-node 2>&1)
+    rc=$?
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected exit 1 with zfs missing, got $rc"
+        return
+    fi
+    if [[ "$output" == *"contrib archive"* ]]; then
+        test_fail "Contrib note must not appear when a candidate exists"
+        return
+    fi
+    test_pass
+}
+
+test_contrib_note_absent_when_zfs_present() {
+    test_start "no contrib note when the ZFS tools are present"
+
+    local output rc
+    output=$(APT_CANDIDATE='(none)' \
+             run_check_prerequisites_with_mock_env --single-node 2>&1)
+    rc=$?
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 with everything present, got $rc"
+        return
+    fi
+    if [[ "$output" == *"contrib archive"* ]]; then
+        test_fail "Contrib note must not appear when zfs is present"
+        return
+    fi
+    test_pass
+}
+
+test_contrib_note_absent_without_apt_cache() {
+    test_start "no contrib note and no crash when apt-cache is unavailable"
+
+    local output rc
+    output=$(ZFS_STUB=absent \
+             run_check_prerequisites_with_mock_env --single-node 2>&1)
+    rc=$?
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected exit 1 with zfs missing, got $rc"
+        return
+    fi
+    if [[ "$output" == *"contrib archive"* ]]; then
+        test_fail "Contrib note must not appear when apt-cache is unavailable"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# zfs-kernel-module functional check (F-009)
+# ---------------------------------------------------------------------------
+
+test_module_row_when_not_built() {
+    test_start "zfs present but module not built fails with a headers remediation"
+
+    local output rc row
+    output=$(MODINFO_STUB=missing \
+             run_check_prerequisites_with_mock_env --single-node --list-failures 2>&1)
+    rc=$?
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected exit 1 with module missing, got $rc"
+        return
+    fi
+    row=$(printf '%s\n' "$output" | grep -m1 '^core|zfs-kernel-module|')
+    local expected
+    expected="core|zfs-kernel-module|linux-headers-6.1-test-amd64|"
+    expected+="kernel module not built (zfs-dkms needs the matching headers)"
+    if [[ "$row" != "$expected" ]]; then
+        test_fail "Unexpected module row: $row"
+        return
+    fi
+    test_pass
+}
+
+test_no_module_row_when_built() {
+    test_start "built zfs module passes and adds no failure"
+
+    local output rc
+    output=$(MODINFO_STUB=ok \
+             run_check_prerequisites_with_mock_env --single-node 2>&1)
+    rc=$?
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 with module built, got $rc"
+        return
+    fi
+    if [[ "$output" != *"✓ zfs-kernel-module"* || "$output" == *"✗ zfs-kernel-module"* ]]; then
+        test_fail "Expected a passing zfs-kernel-module check: $output"
+        return
+    fi
+    test_pass
+}
+
+test_module_check_skipped_without_modinfo() {
+    test_start "module check silently skipped when modinfo is unavailable"
+
+    local output rc
+    output=$(run_check_prerequisites_with_mock_env --single-node 2>&1)
+    rc=$?
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 without modinfo, got $rc"
+        return
+    fi
+    if [[ "$output" == *"zfs-kernel-module"* ]]; then
+        test_fail "zfs-kernel-module must not appear without modinfo"
+        return
+    fi
+    test_pass
+}
+
+test_module_row_alongside_missing_zfs_tools() {
+    test_start "fresh-Debian shape: zfs tools AND module both remediated"
+
+    local output rc rows
+    output=$(ZFS_STUB=absent MODINFO_STUB=missing \
+             run_check_prerequisites_with_mock_env --single-node --list-failures 2>&1)
+    rc=$?
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected exit 1, got $rc"
+        return
+    fi
+    rows=$(printf '%s\n' "$output" | grep -c '^core|')
+    if [[ "$rows" -lt 3 ]]; then
+        test_fail "Expected zfs + zpool + zfs-kernel-module rows, got $rows"
+        return
+    fi
+    if ! printf '%s\n' "$output" | grep -q '^core|zfs|zfsutils-linux|' \
+        || ! printf '%s\n' "$output" | grep -q '^core|zfs-kernel-module|linux-headers-'; then
+        test_fail "Expected both zfsutils-linux and headers rows: $output"
+        return
+    fi
+    test_pass
+}
+
+test_contrib_note_shown_when_no_candidate
+test_contrib_note_absent_when_candidate_exists
+test_contrib_note_absent_when_zfs_present
+test_contrib_note_absent_without_apt_cache
+test_module_row_when_not_built
+test_no_module_row_when_built
+test_module_check_skipped_without_modinfo
+test_module_row_alongside_missing_zfs_tools
 
 test_summary
 teardown_test_env

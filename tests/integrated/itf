@@ -1,0 +1,357 @@
+#!/usr/bin/env bash
+# tests/integrated/itf — orchestrator CLI for the integrated testing
+# environment.
+#
+# itf plays a first-time end user of ZFSutilities on disposable nested
+# guests created on the base Proxmox test VMs.  Everything it does on a
+# base system goes through the confinement guard in lib/base-lib.sh; see
+# docs/docs/developer-guide/integrated-testing.md for the full model.
+#
+# Usage:
+#   itf preflight                     verify dev + base-host readiness
+#   itf guest create NAME [opts]      create (and optionally start) a guest
+#   itf guest start|stop BASE VMID
+#   itf guest destroy BASE VMID
+#   itf guest snapshot BASE VMID SNAP
+#   itf guest rollback BASE VMID SNAP [--start]
+#   itf guest ip BASE VMID [timeout]  discover guest IP via guest agent
+#   itf guest wait-ssh IP [timeout]
+#   itf guest list [BASE]
+#   itf iso fetch                     download installer ISO to dev cache
+#   itf iso upload [BASE]             upload cached ISO to base ISO storage
+#   itf journey list                  list available journeys
+#   itf journey run NAME              execute a journey under a run report
+#   itf status [BASE...]              base + guest + recent-run overview
+#   itf manual-steps                  what a human must do before running
+#   itf version
+#
+# Environment: ITF_DRY_RUN=1 prints guarded base commands instead of
+# executing them.
+
+set -u
+
+ITF_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$ITF_BIN_DIR/lib/config-lib.sh"
+# shellcheck disable=SC1091
+source "$ITF_BIN_DIR/lib/ssh-lib.sh"
+# shellcheck disable=SC1091
+source "$ITF_BIN_DIR/lib/base-lib.sh"
+# shellcheck disable=SC1091
+source "$ITF_BIN_DIR/lib/guest-lib.sh"
+# shellcheck disable=SC1091
+source "$ITF_BIN_DIR/lib/report-lib.sh"
+
+itf_usage() {
+    sed -n '2,/^$/p' "$0" | sed 's/^# \?//' | sed -n '/^Usage:/,$p'
+    exit "${1:-0}"
+}
+
+# ---------------------------------------------------------------------------
+# preflight
+# ---------------------------------------------------------------------------
+
+cmd_preflight() {
+    itf_config_load
+    itf_report_init preflight || return 1
+    local base tool fail_total=0
+
+    for tool in ssh scp curl python3; do
+        if command -v "$tool" > /dev/null 2>&1; then
+            itf_step pass "dev tool: $tool"
+        else
+            itf_step fail "dev tool: $tool" "missing on dev"
+            fail_total=1
+        fi
+    done
+    if [[ -f "$ITF_SSH_KEY" ]]; then
+        itf_step pass "dev ssh public key" "$ITF_SSH_KEY"
+    else
+        itf_step fail "dev ssh public key" "$ITF_SSH_KEY not found"
+        fail_total=1
+    fi
+
+    for base in "${ITF_BASE_HOSTS[@]}"; do
+        local who
+        who="$(itf_base_exec "$base" whoami 2>/dev/null)" || who=""
+        if [[ "$who" == "root" ]]; then
+            itf_step pass "[$base] ssh + passwordless sudo"
+        else
+            itf_step fail "[$base] ssh + passwordless sudo" "got '${who:-nothing}'"
+            fail_total=1
+            continue
+        fi
+
+        local ver
+        ver="$(itf_read "$base" pveversion 2>/dev/null)" || ver=""
+        if [[ -n "$ver" ]]; then
+            itf_step pass "[$base] pveversion" "$ver"
+        else
+            itf_step fail "[$base] pveversion" "no output"
+            fail_total=1
+        fi
+
+        local sm
+        sm="$(itf_pvesm "$base" status 2>/dev/null)" || sm=""
+        local st
+        for st in "$ITF_GUEST_STORAGE" "$ITF_ISO_STORAGE"; do
+            if printf '%s' "$sm" | awk -v s="$st" '$1==s && $3=="active" {f=1} END {exit !f}'; then
+                itf_step pass "[$base] storage $st active"
+            else
+                itf_step fail "[$base] storage $st active" "not found/inactive in pvesm status"
+                fail_total=1
+            fi
+        done
+
+        # Guest-disk headroom: system + pool disk + 10 GiB snapshot margin.
+        # pvesm status columns: Name Type Status Total Used Available %
+        local avail_kib need_kib
+        avail_kib="$(printf '%s' "$sm" | awk -v s="$ITF_GUEST_STORAGE" '$1==s {print $6}')"
+        need_kib=$(( (ITF_GUEST_SYSTEM_DISK_GB + ITF_GUEST_POOL_DISK_GB + 10) * 1024 * 1024 ))
+        if [[ "$avail_kib" =~ ^[0-9]+$ ]] && (( avail_kib >= need_kib )); then
+            itf_step pass "[$base] guest-storage headroom" "$(( avail_kib / 1024 / 1024 )) GiB free"
+        else
+            itf_step fail "[$base] guest-storage headroom" \
+                "need $(( need_kib / 1024 / 1024 )) GiB, have ${avail_kib:-unknown}"
+            fail_total=1
+        fi
+
+        # Base RAM must cover the guest plus PVE itself.
+        local mem_total mem_gib
+        mem_total="$(itf_read "$base" free -h 2>/dev/null | awk '/^Mem:/ {print $2}')"
+        mem_gib="${mem_total%Gi}"
+        if [[ "$mem_gib" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
+            && awk -v have="$mem_gib" -v need="$(( ITF_GUEST_MEMORY_MB / 1024 + 1 ))" \
+                'BEGIN { exit !(have >= need) }'; then
+            itf_step pass "[$base] base RAM" "$mem_total total"
+        else
+            itf_step fail "[$base] base RAM" \
+                "$mem_total total, need >= $(( ITF_GUEST_MEMORY_MB / 1024 + 1 )) GiB"
+            fail_total=1
+        fi
+
+        local virtflags
+        virtflags="$(itf_read "$base" grep -c -E '(vmx|svm)' /proc/cpuinfo \
+            2>/dev/null)" || virtflags=0
+        if [[ "$virtflags" =~ ^[0-9]+$ && "$virtflags" -gt 0 ]]; then
+            itf_step pass "[$base] nested virtualization" "vmx/svm on $virtflags CPUs"
+        else
+            itf_step fail "[$base] nested virtualization" "no vmx/svm in /proc/cpuinfo"
+            fail_total=1
+        fi
+
+        if itf_read "$base" ip link show "$ITF_BRIDGE" > /dev/null 2>&1; then
+            itf_step pass "[$base] bridge $ITF_BRIDGE"
+        else
+            itf_step fail "[$base] bridge $ITF_BRIDGE" "not present"
+            fail_total=1
+        fi
+
+        if itf_read "$base" test -f "$ITF_ACTION_LOG" 2>/dev/null; then
+            itf_step pass "[$base] action log" "$ITF_ACTION_LOG"
+        else
+            itf_step fail "[$base] action log" "$ITF_ACTION_LOG missing"
+            fail_total=1
+        fi
+
+        local inrange
+        inrange="$(itf_qm "$base" list 2>/dev/null \
+            | awk -v f="$ITF_VMID_FIRST" -v l="$ITF_VMID_LAST" \
+                'NR>1 && $1>=f && $1<=l {n++} END {print n+0}')"
+        itf_step info "[$base] reserved VMIDs in use" \
+            "$inrange guests in ${ITF_VMID_FIRST}-${ITF_VMID_LAST}"
+
+        if itf_read "$base" ls -l "$ITF_ISO_DIR/template/iso" 2>/dev/null \
+            | grep -q "$ITF_ISO_NAME"; then
+            itf_step pass "[$base] installer ISO" "$ITF_ISO_NAME present"
+        else
+            itf_step fail "[$base] installer ISO" \
+                "$ITF_ISO_NAME not on $ITF_ISO_DIR/template/iso —" \
+                "run: itf iso fetch && itf iso upload $base"
+            fail_total=1
+        fi
+    done
+
+    itf_report_finish > /dev/null || fail_total=1
+    echo "itf: preflight result: $ITF_RUN_DIR/report.md"
+    return "$fail_total"
+}
+
+# ---------------------------------------------------------------------------
+# guest
+# ---------------------------------------------------------------------------
+
+cmd_guest() {
+    itf_config_load
+    local sub="${1:-}"
+    [[ -z "$sub" ]] && itf_usage 2
+    shift
+
+    case "$sub" in
+        create)
+            (( $# < 1 )) && { echo "usage: itf guest create NAME [opts]" >&2; return 2; }
+            itf_guest_create "$@"
+            ;;
+        start|stop)
+            (( $# < 2 )) && { echo "usage: itf guest $sub BASE VMID" >&2; return 2; }
+            "itf_guest_$sub" "$1" "$2"
+            ;;
+        destroy)
+            (( $# < 2 )) && { echo "usage: itf guest destroy BASE VMID" >&2; return 2; }
+            itf_guest_destroy "$1" "$2"
+            ;;
+        snapshot)
+            (( $# < 3 )) && { echo "usage: itf guest snapshot BASE VMID SNAP" >&2; return 2; }
+            itf_guest_snapshot "$1" "$2" "$3"
+            ;;
+        rollback)
+            (( $# < 3 )) && {
+                echo "usage: itf guest rollback BASE VMID SNAP [--start]" >&2
+                return 2
+            }
+            itf_guest_rollback "$1" "$2" "$3" "${4:-}"
+            ;;
+        ip)
+            (( $# < 2 )) && { echo "usage: itf guest ip BASE VMID [timeout]" >&2; return 2; }
+            itf_guest_ip "$1" "$2" "${3:-300}"
+            ;;
+        wait-ssh)
+            (( $# < 1 )) && { echo "usage: itf guest wait-ssh IP [timeout]" >&2; return 2; }
+            itf_wait_ssh "$1" "${2:-900}"
+            ;;
+        list)
+            local base="${1:-${ITF_BASE_HOSTS[0]}}"
+            itf_qm "$base" list | awk -v f="$ITF_VMID_FIRST" -v l="$ITF_VMID_LAST" \
+                'NR==1 || ($1>=f && $1<=l)'
+            ;;
+        *)
+            echo "itf: unknown guest subcommand: $sub" >&2
+            itf_usage 2
+            ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# iso / journey / status / manual-steps / version
+# ---------------------------------------------------------------------------
+
+cmd_iso() {
+    itf_config_load
+    local sub="${1:-}"
+    case "$sub" in
+        fetch) itf_iso_fetch ;;
+        upload) itf_iso_upload "${2:-${ITF_BASE_HOSTS[0]}}" ;;
+        *) echo "usage: itf iso fetch|upload [BASE]" >&2; return 2 ;;
+    esac
+}
+
+cmd_journey() {
+    itf_config_load
+    local sub="${1:-}"
+    case "$sub" in
+        list)
+            local j
+            for j in "$ITF_ROOT"/journeys/*.journey; do
+                [[ -f "$j" ]] || continue
+                basename "$j" .journey
+            done
+            ;;
+        run)
+            local name="${2:-}"
+            [[ -z "$name" ]] && { echo "usage: itf journey run NAME" >&2; return 2; }
+            local jfile="$ITF_ROOT/journeys/$name.journey"
+            [[ -f "$jfile" ]] || { echo "itf: no such journey: $name" >&2; return 2; }
+            # shellcheck disable=SC1090
+            source "$jfile"
+            if [[ $(type -t journey_main 2>/dev/null) != "function" ]]; then
+                echo "itf: journey file does not define journey_main: $jfile" >&2
+                return 2
+            fi
+            # Consumed by itf_report_init (report-lib.sh) in this same shell.
+            # shellcheck disable=SC2034
+            ITF_RUN_CALLER="journey:$name"
+            itf_report_init "$name" || return 1
+            journey_main
+            local rc=$?
+            if (( rc != 0 )); then
+                itf_step fail "journey $name" "aborted with rc=$rc"
+            fi
+            itf_report_finish || rc=1
+            echo "itf: report: $ITF_RUN_DIR/report.md"
+            return "$rc"
+            ;;
+        *)
+            echo "usage: itf journey list|run NAME" >&2
+            return 2
+            ;;
+    esac
+}
+
+cmd_status() {
+    itf_config_load
+    local -a bases=("$@")
+    (( ${#bases[@]} == 0 )) && bases=("${ITF_BASE_HOSTS[@]}")
+    local base
+    for base in "${bases[@]}"; do
+        echo "== $base =="
+        itf_read "$base" pveversion 2>/dev/null || echo "(unreachable)"
+        itf_qm "$base" list 2>/dev/null | awk -v f="$ITF_VMID_FIRST" -v l="$ITF_VMID_LAST" \
+            'NR==1 || ($1>=f && $1<=l)'
+    done
+    echo "== recent runs =="
+    local run
+    for run in $(ls -1t "$ITF_RUNS_DIR" 2>/dev/null | head -3); do
+        local summary
+        summary="$(grep -m1 '^- total:' "$ITF_RUNS_DIR/$run/report.md" 2>/dev/null)"
+        echo "$run ${summary:+ → $summary}"
+    done
+}
+
+cmd_manual_steps() {
+    itf_config_load
+    local needed=0
+    echo "itf: manual steps currently required:"
+    if [[ ! -f "$ITF_ROOT/site/config" ]]; then
+        echo "  1. Create the site configuration:"
+        echo "       cp $ITF_ROOT/site/config.example $ITF_ROOT/site/config"
+        echo "     Edit it for your test environment."
+        needed=1
+    fi
+    if [[ ! -s "$ITF_CACHE_DIR/$ITF_ISO_NAME" ]]; then
+        echo "  2. Fetch the installer ISO (automated):"
+        echo "       $0 iso fetch"
+        needed=1
+    fi
+    if (( needed == 0 )); then
+        echo "  (none — environment looks prepared; run '$0 preflight' for the full check)"
+    fi
+}
+
+cmd_version() {
+    local repo_version
+    repo_version="$(cat "$ITF_BIN_DIR/../../VERSION" 2>/dev/null || echo unknown)"
+    echo "itf (tests/integrated) — repo version $repo_version"
+}
+
+main() {
+    local cmd="${1:-}"
+    [[ -z "$cmd" ]] && itf_usage 2
+    shift
+
+    case "$cmd" in
+        -h|--help|help) itf_usage 0 ;;
+        preflight) cmd_preflight "$@" ;;
+        guest) cmd_guest "$@" ;;
+        iso) cmd_iso "$@" ;;
+        journey) cmd_journey "$@" ;;
+        status) cmd_status "$@" ;;
+        manual-steps) cmd_manual_steps "$@" ;;
+        version) cmd_version "$@" ;;
+        *)
+            echo "itf: unknown command: $cmd" >&2
+            itf_usage 2
+            ;;
+    esac
+}
+
+main "$@"

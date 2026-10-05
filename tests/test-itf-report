@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# test-itf-report — Unit tests for tests/integrated/lib/report-lib.sh
+# (progressive PASS/FAIL/SKIP run reports).
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+tmp_dir=$(mktemp -d)
+ITF_RUNS_DIR="$tmp_dir/runs"
+
+# shellcheck disable=SC1090
+source "$mydir/tests/integrated/lib/report-lib.sh"
+
+# ------------------------------------------------------------------------------
+# Ordering rules
+# ------------------------------------------------------------------------------
+
+test_step_before_init_refused() {
+    test_start "itf_step before itf_report_init is refused"
+    local out rc
+    out="$(itf_step pass early "dropped step" 2>&1)"
+    rc=$?
+    assert_rc 1 "$rc"
+    assert_contains "$out" "before itf_report_init"
+    assert_contains "$out" "early"
+}
+
+test_artifact_before_init_refused() {
+    test_start "itf_artifact before itf_report_init is refused"
+    local rc
+    itf_artifact "label" "$tmp_dir/nothing" > /dev/null 2>&1
+    rc=$?
+    assert_rc 1 "$rc"
+}
+
+# ------------------------------------------------------------------------------
+# Run scaffolding
+# ------------------------------------------------------------------------------
+
+test_init_creates_run_scaffold() {
+    test_start "itf_report_init creates meta/report/steps files"
+    ITF_RUN_CALLER="test-suite"
+    itf_report_init demo > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_contains "$ITF_RUN_DIR" "$ITF_RUNS_DIR/run-"
+    assert_contains "$ITF_RUN_DIR" "-demo"
+    [[ -f "$ITF_RUN_DIR/meta.txt" ]]
+    assert_rc 0 $?
+    [[ -f "$ITF_RUN_DIR/report.md" ]]
+    assert_rc 0 $?
+    [[ -f "$ITF_RUN_DIR/steps.tsv" ]]
+    assert_rc 0 $?
+    assert_contains "$(cat "$ITF_RUN_DIR/meta.txt")" "tag:      demo"
+    assert_contains "$(cat "$ITF_RUN_DIR/meta.txt")" "caller:   test-suite"
+    assert_contains "$(cat "$ITF_RUN_DIR/report.md")" "# itf run: demo"
+    unset ITF_RUN_CALLER
+}
+
+test_init_resets_counters() {
+    test_start "a new run starts with fresh step counters"
+    itf_step pass "leftover from previous run" > /dev/null 2>&1
+    itf_step fail "leftover failure" > /dev/null 2>&1
+    itf_report_init demo2 > /dev/null 2>&1
+    assert_equals 0 "$ITF_STEPS_TOTAL"
+    assert_equals 0 "$ITF_STEPS_PASS"
+    assert_equals 0 "$ITF_STEPS_FAIL"
+    assert_equals 0 "$ITF_STEPS_SKIP"
+    assert_equals 0 "$ITF_STEPS_INFO"
+}
+
+# ------------------------------------------------------------------------------
+# Step recording
+# ------------------------------------------------------------------------------
+
+test_step_writes_tsv_and_markdown() {
+    test_start "steps land in steps.tsv and report.md progressively"
+    itf_step pass "step one" "detail here" > /dev/null 2>&1
+    assert_rc 0 $?
+    local row
+    row="$(tail -1 "$ITF_RUN_DIR/steps.tsv")"
+    assert_contains "$row" $'pass\tstep one\tdetail here'
+    assert_contains "$(cat "$ITF_RUN_DIR/report.md")" "**PASS** step one — detail here"
+}
+
+test_step_invalid_status_coerced_to_info() {
+    test_start "unknown step status is coerced to info, not dropped"
+    local out rc
+    # Redirect (not command substitution): the counter assertions below
+    # must see increments from THIS shell, not a subshell copy.
+    itf_step bogus "weird status" > "$tmp_dir/step.out" 2>&1
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$tmp_dir/step.out")" "invalid step status 'bogus'"
+    local row
+    row="$(tail -1 "$ITF_RUN_DIR/steps.tsv")"
+    assert_contains "$row" $'info\tweird status'
+    assert_equals 1 "$ITF_STEPS_INFO"
+}
+
+test_step_skip_and_info_recorded() {
+    test_start "skip and info statuses round-trip"
+    itf_step skip "skipped step" > /dev/null 2>&1
+    assert_contains "$(cat "$ITF_RUN_DIR/report.md")" "*SKIP* skipped step"
+    itf_step info "informational" > /dev/null 2>&1
+    assert_contains "$(cat "$ITF_RUN_DIR/report.md")" "INFO informational"
+    # pass (writes_tsv) + info (coerced) + skip + info from this test
+    assert_equals 4 "$ITF_STEPS_TOTAL"
+}
+
+# ------------------------------------------------------------------------------
+# Artifacts and summary
+# ------------------------------------------------------------------------------
+
+test_artifact_copied_and_recorded() {
+    test_start "artifacts are copied into the run dir and listed"
+    echo "evidence" > "$tmp_dir/artifact.log"
+    itf_artifact "label" "$tmp_dir/artifact.log" > /dev/null 2>&1
+    assert_rc 0 $?
+    [[ -f "$ITF_RUN_DIR/artifact.log" ]]
+    assert_rc 0 $?
+    assert_contains "$(cat "$ITF_RUN_DIR/artifact.log")" "evidence"
+    assert_contains "$(cat "$ITF_RUN_DIR/report.md")" "ARTIFACT [label] artifact.log"
+}
+
+test_artifact_missing_source_refused() {
+    test_start "artifacts with a missing source are refused"
+    itf_artifact "label" "$tmp_dir/gone.log" > /dev/null 2>&1
+    assert_rc 1 $?
+}
+
+test_finish_fails_run_when_any_step_failed() {
+    test_start "itf_report_finish returns 1 when any step failed"
+    itf_report_init mixed > /dev/null 2>&1
+    itf_step pass "ok" > /dev/null 2>&1
+    itf_step fail "not ok" > /dev/null 2>&1
+    local out rc
+    out="$(itf_report_finish)"
+    rc=$?
+    assert_rc 1 "$rc"
+    assert_contains "$out" "fail=1"
+    assert_contains "$(cat "$ITF_RUN_DIR/report.md")" "## Summary"
+    assert_contains "$(cat "$ITF_RUN_DIR/report.md")" "total: 2"
+}
+
+test_finish_passes_clean_run() {
+    test_start "itf_report_finish returns 0 for a clean run"
+    itf_report_init clean > /dev/null 2>&1
+    itf_step pass "ok" > /dev/null 2>&1
+    itf_step skip "not needed" > /dev/null 2>&1
+    itf_report_finish > /dev/null 2>&1
+    assert_rc 0 $?
+}
+
+test_step_before_init_refused
+test_artifact_before_init_refused
+
+test_init_creates_run_scaffold
+test_init_resets_counters
+test_step_writes_tsv_and_markdown
+test_step_invalid_status_coerced_to_info
+test_step_skip_and_info_recorded
+
+test_artifact_copied_and_recorded
+test_artifact_missing_source_refused
+test_finish_fails_run_when_any_step_failed
+test_finish_passes_clean_run
+
+rm -rf "$tmp_dir"
+teardown_test_env
+test_summary

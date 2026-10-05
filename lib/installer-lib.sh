@@ -162,6 +162,10 @@ prerequisite_description() {
         bash)                 echo "The GNU Bourne-Again shell" ;;
         zfs)                  echo "The ZFS userspace command-line tool" ;;
         zpool)                echo "The ZFS pool administration tool" ;;
+        zfs-kernel-module)
+            echo "The ZFS kernel module (on Debian built by zfs-dkms, which needs the"
+            echo "matching kernel headers)"
+            ;;
         pv)                   echo "Pipe Viewer, used for transfer progress bars" ;;
         rsync)                echo "File synchronization tool used by pull backups" ;;
         "python3")            echo "The Python 3 interpreter" ;;
@@ -214,6 +218,11 @@ prerequisite_remediation() {
     local name="$1"
     local package="$2"
     case "$name" in
+        mkdocs)
+            # The only failing mkdocs state is version 2.x (incompatible
+            # with this project); the fix is a pip pin, not an apt package.
+            echo "Run: pip3 install 'mkdocs<2'"
+            ;;
         rtslib-fb-targetctl)
             # The service is provided by python3-rtslib-fb, but installing
             # targetcli-fb pulls in the full LIO target stack including the service.
@@ -266,7 +275,7 @@ run_interactive_prerequisites() {
     local mode="$1"
     local check_prereqs="$2"
     local failures
-    local packages
+    local -a pkg_list
 
     echo "=== Checking Prerequisites ==="
     echo ""
@@ -298,8 +307,10 @@ run_interactive_prerequisites() {
         return 1
     fi
 
-    packages=$(collect_apt_packages | tr '\n' ' ')
-    if [[ -z "$packages" ]]; then
+    # One package name per line; keep the list as an array so each name
+    # reaches apt-get as its own argument.
+    mapfile -t pkg_list < <(collect_apt_packages)
+    if (( ${#pkg_list[@]} == 0 )); then
         echo ""
         echo "✗ No installable packages were identified. Please install the items manually."
         return 1
@@ -308,15 +319,15 @@ run_interactive_prerequisites() {
     echo ""
     echo "The installer will run:"
     echo "  apt-get update"
-    echo "  apt-get install -y $packages"
+    echo "  apt-get install -y ${pkg_list[*]}"
 
     if ! ask_yn "Proceed with installation?" "Y"; then
         echo ""
-        echo "Aborted. Please install the items manually, then re-run the installer."
+        echo "Aborted. Please install the items manually and re-run the installer."
         return 1
     fi
 
-    if ! apt_install "$packages"; then
+    if ! apt_install "${pkg_list[@]}"; then
         echo ""
         echo "✗ Automatic installation failed. Please install the items manually and re-run."
         return 1
@@ -543,15 +554,15 @@ check_partial_uninstall() {
     local uninstaller=""
     if [[ -x "$version_base/current/bin/uninstall-zfsutilities" ]]; then
         uninstaller="$version_base/current/bin/uninstall-zfsutilities"
-    elif [[ -x "$repo_dir/uninstall-zfsutilities" ]]; then
-        uninstaller="$repo_dir/uninstall-zfsutilities"
+    elif [[ -x "$repo_dir/bin/uninstall-zfsutilities" ]]; then
+        uninstaller="$repo_dir/bin/uninstall-zfsutilities"
     fi
 
     if [[ -z "$uninstaller" ]]; then
         echo "✗ ERROR: uninstall-zfsutilities not found." >&2
         echo "   Expected one of:" >&2
         echo "     $version_base/current/bin/uninstall-zfsutilities" >&2
-        echo "     $repo_dir/uninstall-zfsutilities" >&2
+        echo "     $repo_dir/bin/uninstall-zfsutilities" >&2
         return 1
     fi
 

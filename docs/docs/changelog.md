@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.115.0
+
+*Released 2026-10-05*
+
+### Added
+
+- **Integrated testing framework (`itf`)** — a developer-side orchestrator
+  (`tests/integrated/`) that exercises the product exactly as a
+  first-time end user: it creates disposable nested guests on the base
+  Proxmox test VMs, installs Debian unattended from a custom boot ISO
+  (preseed over HTTP, watch-only serial console, installer syslog
+  capture), downloads ZFSutilities the way a user would (release
+  tarball or dev tarball), runs the interactive installer, and asserts
+  on real outcomes — with run reports, a findings/repair-plan workflow
+  gated on explicit approval, and journeys for fresh install (three
+  RAIDZ1 test pools per the documented recipe), uninstall/reinstall,
+  and install over leftovers. Every base-host command flows through a
+  confinement guard: qm verb allow-lists, a reserved VMID range,
+  itf-only storages, path confinement, and an append-only audit log
+  written before each mutation. The framework itself has four
+  mock-based suites; a new developer-guide page (Integrated Testing)
+  documents the model.
+
+- **ZFS kernel-module prerequisite check** — `check-prerequisites`
+  functionally probes the module (`modinfo zfs`), not just the
+  userspace tools: on Debian the remediation installs `zfs-dkms`,
+  which registers but never builds without the matching kernel
+  headers, leaving `zpool` unusable. A missing module is remediated
+  with `linux-headers-$(uname -r)`.
+
+- **Debian `contrib` hint** — when the ZFS tools are missing and apt
+  has no installation candidate for `zfsutils-linux` (probed at
+  runtime), the checker prints an informational note that Debian
+  carries the package in the `contrib` archive; README and the
+  developer guide explain it too.
+
+### Changed
+
+- **Absent mkdocs/mkdocs-material no longer fail the prerequisite
+  check** — the installer's documentation-server step pip-installs
+  them after the gate, so their absence is now a warning; only mkdocs
+  ≥ 2 still fails (it is incompatible with this project), with a pip
+  remediation hint instead of an apt package. A fresh system that
+  previously failed the gate now passes it.
+
+- **Headless desktop-launcher skips are soft** —
+  `create_desktop_symlinks`/`remove_desktop_symlinks` return 0 with
+  their warnings on the no-desktop-user and no-home skip paths
+  (previously 1), so install and uninstall no longer abort mid-wiring
+  under `set -e` on hosts without a desktop.
+
+### Fixed
+
+- **`attach-vm-disk` works in two-node mode again** — the documented
+  compute-host invocation validated the zvol with local `zfs`, which
+  can never see a storage-host zvol (both invocation paths were dead
+  since the two-node layout change). The existence check and the
+  volsize read now go over a single SSH round trip to the storage
+  host, which also removes the latent `size=unknown` from the written
+  VM disk line. Single-node and storage-host invocations validate
+  locally as before.
+
+- **First-time-user install chain (live-found by the itf journeys)** —
+  both installers resolved `installer-lib.sh` from `bin/` (it ships in
+  `lib/`) and `check-prerequisites` from the repo root (it ships in
+  `bin/`), so a fresh-tree install died at its first step or silently
+  skipped the entire prerequisites step (since 0.96.0); the interactive
+  remediation passed the whole apt package list as one glued argument;
+  the uninstaller crashed instantly on unbound legacy configuration
+  variables on every real invocation; the partial-uninstall fallback
+  looked for the uninstaller at the repo root; `log_msg` leaked "No
+  such file or directory" after `--purge` removed the log directory;
+  and the documented test-pool recipe gained its missing `parted`
+  install preamble. Each repair is pinned by a regression test.
+
 ## 0.114.0
 
 *Released 2026-10-04*

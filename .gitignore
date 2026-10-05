@@ -30,9 +30,15 @@ ROADMAP
 bashcodingpolicy
 pythoncodingpolicy
 Screenshot*
+.zcode/
 
 # NFS
 .nfs*
+
+# Integrated testing (itf): real site config, transient run artifacts, ISO cache
+tests/integrated/site/config
+tests/integrated/results/run-*/
+tests/integrated/cache/
 
 # Allow README/docs screenshots
 !docs/images/*.png

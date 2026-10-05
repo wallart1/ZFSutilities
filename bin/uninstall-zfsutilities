@@ -84,13 +84,18 @@ load_uninstall_config() {
     legacy_deploy_conf="${ZFSUTILITIES_LEGACY_DEPLOY_CONF:-/etc/zfsutilities-deploy.conf}"
     config_path="${ZFSUTILITIES_CONFIG_PATH:-${state_dir}/config.json}"
     config_dir="${ZFSUTILITIES_CONFIG_DIR:-${state_dir}}"
-    legacy_config_path="${ZFSUTILITIES_LEGACY_CONFIG_PATH}"
-    legacy_config_dir="${ZFSUTILITIES_LEGACY_CONFIG_DIR}"
+    # Legacy-path defaults mirror lib/paths.sh's resolved values (via
+    # ZFSUTILITIES_LEGACY_CONFIG_HOME=/root/.config) and
+    # cleanup-zfsutilities-legacy's CONFIG_DIR default; they cover the
+    # degraded/partial-uninstall case where the bashinit -> paths.sh chain
+    # did not define these (this script must run under set -u).
+    legacy_config_path="${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}"
+    legacy_config_dir="${ZFSUTILITIES_LEGACY_CONFIG_DIR:-/root/.config/zfsutilities}"
     history_path="${ZFSUTILITIES_HISTORY_PATH:-${state_dir}/history.json}"
-    legacy_history_path="${ZFSUTILITIES_LEGACY_HISTORY_PATH}"
-    legacy_profiles_dir="${ZFSUTILITIES_LEGACY_PROFILES_DIR}"
-    legacy_nextsnap_file="${ZFSUTILITIES_LEGACY_NEXTSNAP_FILE}"
-    legacy_offsite_nextsnap_file="${ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE}"
+    legacy_history_path="${ZFSUTILITIES_LEGACY_HISTORY_PATH:-/root/.config/zfsutilities-history.json}"
+    legacy_profiles_dir="${ZFSUTILITIES_LEGACY_PROFILES_DIR:-/root/.config/profiles}"
+    legacy_nextsnap_file="${ZFSUTILITIES_LEGACY_NEXTSNAP_FILE:-/root/.config/zfsutilities_nextsnap}"
+    legacy_offsite_nextsnap_file="${ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE:-/root/.config/zfsutilities_offsite_nextsnap}"
     cache_dir="${ZFSUTILITIES_CACHE_DIR:-/root/.cache/zfsutilities}"
     log_dir="${ZFSUTILITIES_LOG_DIR:-/var/log/zfsutilities}"
     cron_file="${ZFSUTILITIES_CRON_FILE:-/etc/cron.d/zfsutilities}"

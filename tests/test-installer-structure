@@ -1,0 +1,109 @@
+#!/usr/bin/bash
+# test-installer-structure — Installer layout structural checks.
+#
+# F-002 guard: bin/ scripts must resolve every library they load from the
+# shipped repo layout.  bin/install-single-node and bin/install-two-node
+# pointed at bin/installer-lib.sh while the file ships in lib/ — every
+# fresh install from a clone/tarball since 0.96.0 died on its first line
+# of real work; only upgrades overlaying existing trees hid it.
+#
+# F-003 guard: the installers must also resolve every non-library path
+# they reference.  Both pointed at $repo_dir/check-prerequisites (repo
+# root) while the file ships in bin/, so the [[ -f ]] guard silently
+# skipped the ENTIRE prerequisites step — nothing installed zfs/rsync/
+# GTK packages and the installer later died at deploy-version (rsync:
+# command not found).  Same layout-drift family as F-002.
+
+# shellcheck source=test-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Resolves a value like '$repo_dir/lib/x.sh' or '$script_dir/y.sh' to a
+# path relative to the repo root; bin/ is $script_dir for bin scripts.
+# shellcheck disable=SC2016  # the $ names are literal, not expansions
+_resolve_ref() {
+    local ref="$1"
+    case "$ref" in
+        '$repo_dir'/*)  printf '%s' "${ref#'$repo_dir'/}" ;;
+        '$script_dir'/*) printf 'bin/%s' "${ref#'$script_dir'/}" ;;
+        *)              return 1 ;;
+    esac
+}
+
+test_installer_lib_assignment_resolves() {
+    test_start "installers load installer-lib.sh from the shipped layout"
+    local script assign ref rel
+    for script in install-single-node install-two-node; do
+        assign=$(grep -m1 '^installer_lib=' "$repo_root/bin/$script" 2>/dev/null) || {
+            test_fail "no installer_lib assignment in bin/$script"
+            return
+        }
+        ref="${assign#installer_lib=\"}"
+        ref="${ref%\"}"
+        rel="$(_resolve_ref "$ref")" || {
+            test_fail "bin/$script: unresolvable installer_lib=$ref"
+            return
+        }
+        if [[ ! -f "$repo_root/$rel" ]]; then
+            test_fail "bin/$script references $rel which does not exist"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_bin_lib_references_exist() {
+    test_start "every variable-based .sh reference in bin/ exists in the layout"
+    local script ref rel missing=0
+    for script in "$repo_root"/bin/*; do
+        while IFS= read -r ref; do
+            rel="$(_resolve_ref "$ref")" || continue
+            if [[ ! -f "$repo_root/$rel" ]]; then
+                test_fail "$(basename "$script") references $ref -> $rel (missing)"
+                missing=1
+            fi
+        done < <(grep -hoE '"\$[A-Za-z_]+/[A-Za-z0-9_./-]+\.sh"' "$script" 2>/dev/null \
+                    | sed -e 's/^"//' -e 's/"$//')
+    done
+    if (( missing )); then
+        return
+    fi
+    test_pass
+}
+
+# Every path the installer components reference through $repo_dir/$script_dir
+# is load-bearing (no candidate-fallback lists in these scripts), so each must
+# exist in the shipped layout — file or directory.  Covers the two installers
+# plus lib/installer-lib.sh (F-008: the partial-uninstall cleanup fallback
+# pointed at $repo_dir/uninstall-zfsutilities — repo root — while the file
+# ships in bin/).  Scoped to the installer components on purpose: other bin/
+# scripts (e.g. zfsconfig) iterate candidate paths where a missing first
+# candidate is normal.
+test_installer_path_references_exist() {
+    test_start "every path reference in the installer components exists in the layout"
+    local comp ref rel missing=0
+    for comp in bin/install-single-node bin/install-two-node lib/installer-lib.sh; do
+        while IFS= read -r ref; do
+            rel="$(_resolve_ref "$ref")" || continue
+            if [[ ! -e "$repo_root/$rel" ]]; then
+                test_fail "$comp references $ref -> $rel (missing)"
+                missing=1
+            fi
+        done < <(grep -hoE '"\$[A-Za-z_]+/[A-Za-z0-9_./-]+"' "$repo_root/$comp" 2>/dev/null \
+                    | sed -e 's/^"//' -e 's/"$//')
+    done
+    if (( missing )); then
+        return
+    fi
+    test_pass
+}
+
+test_installer_lib_assignment_resolves
+test_bin_lib_references_exist
+test_installer_path_references_exist
+
+test_summary
+teardown_test_env

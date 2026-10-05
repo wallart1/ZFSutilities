@@ -1,0 +1,60 @@
+# itf site configuration — EXAMPLE.
+#
+# Copy to: tests/integrated/site/config   (gitignored — never commit real
+# values) and replace every REPLACE-ME value for your test environment.
+# The placeholder values are deliberately schema-valid (so a copy loads)
+# but unusable (an unedited copy fails at connect/download time instead
+# of silently doing anything).  Every key is validated at load time
+# (lib/config-lib.sh); the orchestrator refuses to run when this file is
+# missing or invalid.
+
+# Base Proxmox hosts that host the nested test guests (first entry is the
+# default target for commands that accept none).
+ITF_BASE_HOSTS=(REPLACE-ME-base-host)
+
+# Unprivileged SSH user on the base hosts; itf reaches root via "sudo -n".
+ITF_SSH_USER=REPLACE-ME-user
+
+# Reserved VMID range for orchestrator-created guests.  The guard refuses
+# any qm operation touching a VMID outside this range.
+ITF_VMID_FIRST=8000
+ITF_VMID_LAST=8099
+
+# PVE storages dedicated to the orchestrator (created manually on the base
+# host; the orchestrator never writes the base system's own storages).
+ITF_GUEST_STORAGE=itfguests
+ITF_ISO_STORAGE=itfiso
+ITF_ISO_DIR=/mnt/itf-iso
+
+# Append-only audit log for orchestrator actions on the base host.
+ITF_ACTION_LOG=/var/log/itf-actions.log
+
+# Bridge the guests attach to (management + downloads; DHCP comes from the
+# existing network).  The isolated iSCSI bridge for the two-node cycle is
+# NOT used for guest management traffic.
+ITF_BRIDGE=vmbr0
+
+# Guest sizing defaults.
+ITF_GUEST_MEMORY_MB=8192
+ITF_GUEST_CORES=4
+ITF_GUEST_SYSTEM_DISK_GB=32
+# Size of the optional data disk journeys hot-plug AFTER the OS install
+# (never present during the install — see itf_guest_create).
+ITF_GUEST_POOL_DISK_GB=100
+
+# Installer ISO: download URL and the name it gets on the ISO storage.
+# The name MUST start with "itf-" (upload guard).
+ITF_DEBIAN_ISO_URL=https://REPLACE-ME.invalid/debian-netinst.iso
+ITF_ISO_NAME=itf-debian-netinst.iso
+
+# Software under test: "release" (GitHub release tarballs — the new-user
+# experience) or "dev-tarball" (verify a repair from this repository).
+ITF_SW_SOURCE=release
+ITF_GITHUB_REPO=REPLACE-ME-owner/REPLACE-ME-repo
+
+# Optional overrides:
+# ITF_HTTP_PORT=8000          # preseed HTTP server port on dev
+# ITF_DEV_IP=10.0.0.1         # force the dev IP advertised to installers
+# ITF_SSH_KEY=~/.ssh/id_ed25519.pub   # key installed into guests
+# ITF_RUNS_DIR=/path/to/dir   # run reports (default: tests/integrated/results)
+# ITF_CACHE_DIR=/path/to/dir  # ISO cache (default: tests/integrated/cache)

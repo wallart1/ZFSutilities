@@ -742,6 +742,81 @@ test_missing_desktop_lib_tolerated() {
     fi
 }
 
+test_config_load_survives_unset_legacy_vars() {
+    test_start "load_uninstall_config survives unset legacy vars under set -u (F-010)"
+
+    # Green: the real function must tolerate the degraded environment
+    # (bashinit -> paths.sh chain absent) that a partial uninstall runs in.
+    local out
+    out=$( (
+        unset ZFSUTILITIES_LEGACY_CONFIG_PATH ZFSUTILITIES_LEGACY_CONFIG_DIR \
+              ZFSUTILITIES_LEGACY_HISTORY_PATH ZFSUTILITIES_LEGACY_PROFILES_DIR \
+              ZFSUTILITIES_LEGACY_NEXTSNAP_FILE \
+              ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE \
+              ZFSUTILITIES_LEGACY_CONFIG_HOME
+        set -u
+        load_uninstall_config
+        printf '%s\n' "$legacy_config_path" "$legacy_config_dir" \
+            "$legacy_history_path" "$legacy_profiles_dir" \
+            "$legacy_nextsnap_file" "$legacy_offsite_nextsnap_file"
+    ) 2>&1 )
+    local rc=$?
+
+    local expected
+    expected="/root/.config/zfsutilities.json
+/root/.config/zfsutilities
+/root/.config/zfsutilities-history.json
+/root/.config/profiles
+/root/.config/zfsutilities_nextsnap
+/root/.config/zfsutilities_offsite_nextsnap"
+
+    # Red control: a copy of the script with exactly the six legacy
+    # defaults stripped, sourced through the degraded partial-uninstall
+    # environment (stub bashinit, no paths.sh vars), must crash with an
+    # unbound-variable error — proving the test bites (the pre-F-010
+    # defect).
+    local tmpdir red_out red_rc
+    tmpdir=$(mktemp -d)
+    local strip_defaults
+    strip_defaults='s/\$\{(ZFSUTILITIES_LEGACY_(CONFIG_PATH|CONFIG_DIR|HISTORY_PATH|'
+    strip_defaults+='PROFILES_DIR|NEXTSNAP_FILE|OFFSITE_NEXTSNAP_FILE)):-[^}]*\}/\${\1}/g'
+    sed -E "$strip_defaults" "$UNINSTALL_SCRIPT" > "$tmpdir/stripped"
+    printf '#!/usr/bin/bash\nbashinit() { return 0; }\n' > "$tmpdir/bashinit"
+    printf '#!/usr/bin/bash\nrootcheck() { true; }\n' > "$tmpdir/rootcheck"
+    chmod +x "$tmpdir/rootcheck"
+    red_out=$(HOME="$tmpdir" bash -c '
+        set -u
+        source "'"$tmpdir"'/stripped" >/dev/null 2>&1
+        load_uninstall_config' 2>&1)
+    red_rc=$?
+    rm -rf "$tmpdir"
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    load_uninstall_config crashed under set -u with legacy vars unset (rc=$rc): $out"
+    fi
+    if [[ "$out" != "$expected" ]]; then
+        failed=1
+        echo "    Legacy defaults wrong; got:"
+        echo "$out"
+    fi
+    if [[ $red_rc -eq 0 ]]; then
+        failed=1
+        echo "    Red control did not fail — test does not exercise the defect"
+    fi
+    if [[ "$red_out" != *"unbound variable"* ]]; then
+        failed=1
+        echo "    Red control crashed for the wrong reason: $red_out"
+    fi
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Legacy-var defaults under set -u regressed"
+    fi
+}
+
 # ------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------
@@ -756,6 +831,7 @@ test_missing_bashinit_fallback
 test_restartability_partial_uninstall
 test_all_nodes_ssh
 test_missing_desktop_lib_tolerated
+test_config_load_survives_unset_legacy_vars
 
 test_summary
 teardown_test_env

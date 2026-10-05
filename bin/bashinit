@@ -158,7 +158,11 @@ function log_msg {
         local _ts
         _ts=$(date '+%Y-%m-%d %H:%M:%S')
         local long_full="${long_prefix_str} $*"
-        echo -e "${_ts}  ${long_full}" >> "${ZFSUTILITIES_LOG_FILE}" 2>/dev/null || true
+        # stderr must be redirected BEFORE the append redirection is
+        # evaluated: if the log file vanished (e.g. the uninstaller just
+        # removed the log dir), bash reports the failed >> open to the
+        # then-current stderr, escaping a trailing 2>/dev/null.
+        echo -e "${_ts}  ${long_full}" 2>/dev/null >> "${ZFSUTILITIES_LOG_FILE}" || true
     fi
 }
 

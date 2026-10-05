@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# test-itf-ssh — Unit tests for tests/integrated/lib/ssh-lib.sh
+# (dev-side HTTP preseed server lifecycle: a silently dead server turns
+# into an unattended guest install that falls back to interactive
+# prompts, so bind failures must be loud).
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+tmp_dir=$(mktemp -d)
+
+# Kill any HTTP server this suite spawned (its --directory is under
+# $tmp_dir) and drop the temp tree even when a test aborts mid-body —
+# a killed run otherwise leaks squatter servers that hold their ports.
+cleanup() {
+    pkill -f "http[.]server .*--directory $tmp_dir" 2>/dev/null || true
+    rm -rf "$tmp_dir"
+}
+trap cleanup EXIT
+
+# shellcheck disable=SC1090
+source "$mydir/tests/integrated/lib/ssh-lib.sh"
+
+# Pick a port that is free right now (retry to avoid clashing with
+# parallel test runs; connect-refused means free).
+pick_port() {
+    local p _
+    for _ in 1 2 3 4 5 6 7 8; do
+        p=$((17000 + RANDOM % 20000))
+        if ! (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then
+            echo "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Raw HTTP/1.0 GET via bash /dev/tcp (no curl dependency; the server
+# closes the connection, so cat terminates).
+http_get() {
+    local port="$1" path="$2"
+    (
+        exec 3<>"/dev/tcp/127.0.0.1/$port" || return 1
+        printf 'GET %s HTTP/1.0\r\n\r\n' "$path" >&3
+        cat <&3
+    ) 2>/dev/null
+}
+
+# ------------------------------------------------------------------------------
+# itf_http_serve / itf_http_stop
+# ------------------------------------------------------------------------------
+
+test_http_serve_round_trip() {
+    test_start "itf_http_serve serves the directory; second serve refused; stop kills it"
+    local port pidfile serve_dir out rc body srv_pid
+    port="$(pick_port)"
+    assert_rc 0 $?
+    ITF_HTTP_PORT="$port"
+    pidfile="$tmp_dir/http.pid"
+    serve_dir="$tmp_dir/serve"
+    mkdir -p "$serve_dir"
+    echo "preseed-body" > "$serve_dir/preseed-j01.cfg"
+
+    out="$(itf_http_serve "$serve_dir" "$pidfile" 2>&1)"
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$out" "serving $serve_dir"
+    [[ -f "$pidfile" ]]
+    assert_rc 0 $?
+    [[ -f "$tmp_dir/http.log" ]]
+    assert_rc 0 $?
+    srv_pid="$(cat "$pidfile")"
+
+    body="$(http_get "$port" /preseed-j01.cfg)"
+    assert_rc 0 $?
+    assert_contains "$body" "preseed-body"
+
+    out="$(itf_http_serve "$serve_dir" "$pidfile" 2>&1)"
+    rc=$?
+    assert_rc 1 "$rc"
+    assert_contains "$out" "already running"
+
+    itf_http_stop "$pidfile"
+    assert_rc 0 $?
+    [[ ! -e "$pidfile" ]]
+    assert_rc 0 $?
+    sleep 0.3
+    kill -0 "$srv_pid" 2>/dev/null
+    local alive=$?
+    if [[ $alive -eq 0 ]]; then
+        kill "$srv_pid" 2>/dev/null || true
+    fi
+    assert_rc 1 "$alive"
+}
+
+test_http_serve_refuses_busy_port() {
+    test_start "itf_http_serve fails loudly and writes no pidfile when the port is taken"
+    local port pidfile serve_dir out rc squatter
+    port="$(pick_port)"
+    assert_rc 0 $?
+    ITF_HTTP_PORT="$port"
+    python3 -m http.server "$port" --bind 0.0.0.0 --directory "$tmp_dir" \
+        >/dev/null 2>&1 &
+    squatter=$!
+    sleep 0.5
+
+    pidfile="$tmp_dir/busy.pid"
+    serve_dir="$tmp_dir/serve-busy"
+    mkdir -p "$serve_dir"
+    out="$(itf_http_serve "$serve_dir" "$pidfile" 2>&1)"
+    rc=$?
+    assert_rc 1 "$rc"
+    assert_contains "$out" "busy"
+    [[ ! -e "$pidfile" ]]
+    assert_rc 0 $?
+
+    kill "$squatter" 2>/dev/null || true
+    wait "$squatter" 2>/dev/null || true
+}
+
+test_http_serve_refuses_loopback_shadow() {
+    test_start "a squatter on 127.0.0.1 shadowing the wildcard bind is detected"
+    local port pidfile serve_dir out rc squatter
+    port="$(pick_port)"
+    assert_rc 0 $?
+    ITF_HTTP_PORT="$port"
+    mkdir -p "$tmp_dir/shadow"
+    python3 -m http.server "$port" --bind 127.0.0.1 --directory "$tmp_dir/shadow" \
+        >/dev/null 2>&1 &
+    squatter=$!
+    sleep 0.5
+
+    pidfile="$tmp_dir/shadow.pid"
+    serve_dir="$tmp_dir/serve-shadow"
+    mkdir -p "$serve_dir"
+    echo "real" > "$serve_dir/preseed-j01.cfg"
+    out="$(itf_http_serve "$serve_dir" "$pidfile" 2>&1)"
+    rc=$?
+    assert_rc 1 "$rc"
+    assert_contains "$out" "busy"
+    [[ ! -e "$pidfile" ]]
+    assert_rc 0 $?
+    # No marker file leaked into the served directory.
+    compgen -G "$serve_dir/.itf-ready-*" > /dev/null
+    assert_rc 1 $?
+
+    kill "$squatter" 2>/dev/null || true
+    wait "$squatter" 2>/dev/null || true
+}
+
+test_http_serve_cleans_stale_pidfile() {
+    test_start "a stale pidfile does not block a fresh serve"
+    local port pidfile dead_pid out rc body
+    port="$(pick_port)"
+    assert_rc 0 $?
+    # shellcheck disable=SC2034
+    ITF_HTTP_PORT="$port"
+    bash -c 'exit 0' &
+    dead_pid=$!
+    wait "$dead_pid" 2>/dev/null || true
+
+    pidfile="$tmp_dir/stale.pid"
+    echo "$dead_pid" > "$pidfile"
+    mkdir -p "$tmp_dir/serve-stale"
+    echo "stale-ok" > "$tmp_dir/serve-stale/preseed-j01.cfg"
+
+    out="$(itf_http_serve "$tmp_dir/serve-stale" "$pidfile" 2>&1)"
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$out" "serving"
+    body="$(http_get "$port" /preseed-j01.cfg)"
+    assert_rc 0 $?
+    assert_contains "$body" "stale-ok"
+    itf_http_stop "$pidfile"
+}
+
+# ------------------------------------------------------------------------------
+# Invocation list
+# ------------------------------------------------------------------------------
+
+test_http_serve_round_trip
+test_http_serve_refuses_busy_port
+test_http_serve_refuses_loopback_shadow
+test_http_serve_cleans_stale_pidfile
+
+rm -rf "$tmp_dir"
+teardown_test_env
+test_summary

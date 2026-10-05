@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+# test-itf-base-guard — Unit tests for tests/integrated/lib/base-lib.sh
+# (the confinement guard for all base-host access).
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+# Site-scope values the guard reads; the guard libraries deliberately do
+# not source each other, so provide them directly (no config file).
+ITF_VMID_FIRST=8000
+ITF_VMID_LAST=8099
+ITF_GUEST_STORAGE=itfguests
+ITF_ISO_STORAGE=itfiso
+ITF_ISO_DIR=/mnt/itf-iso
+ITF_ACTION_LOG=/var/log/itf-actions.log
+
+# shellcheck disable=SC1090
+source "$mydir/tests/integrated/lib/base-lib.sh"
+
+tmp_dir=$(mktemp -d)
+
+# Capture every would-be remote command by overriding the transport layer
+# (itf_base_exec lives in ssh-lib, which is intentionally not sourced
+# here): no test below may reach a real host.
+_itf_exec_calls=""
+itf_base_exec() {
+    _itf_exec_calls+="$1 :: $2"$'\n'
+    return 0
+}
+itf_exec_count() {
+    printf '%s' "$_itf_exec_calls" | grep -c ''
+}
+reset_exec_calls() {
+    _itf_exec_calls=""
+}
+
+# guard_check <args...>  →  sets guard_rc / guard_err from itf_qm_check
+guard_check() {
+    guard_err="$(itf_qm_check "$@" 2>&1 >/dev/null)"
+    guard_rc=$?
+}
+
+# ------------------------------------------------------------------------------
+# itf_qm_check — argument-level confinement
+# ------------------------------------------------------------------------------
+
+test_check_accepts_guarded_lifecycle_call() {
+    test_start "a fully guarded lifecycle call passes validation silently"
+    guard_check create 8042 --name g1 --scsi0 itfguests:32 \
+        --ide2 itfiso:iso/itf-debian-netinst.iso,media=cdrom --boot order=ide2\;scsi0
+    assert_rc 0 "$guard_rc"
+    assert_equals "" "$guard_err"
+}
+
+test_check_accepts_read_verbs() {
+    test_start "read verbs (status/config/guest) pass for in-range VMIDs"
+    guard_check status 8042
+    assert_rc 0 "$guard_rc"
+    guard_check guest cmd 8042 network-get-interfaces
+    assert_rc 0 "$guard_rc"
+}
+
+test_verb_not_allowlisted() {
+    test_start "verbs outside the allow-list are refused"
+    guard_check migrate 8042
+    assert_rc 1 "$guard_rc"
+    assert_contains "$guard_err" "migrate' is not allow-listed"
+    guard_check resize 8042 --disk scsi0 +5G
+    assert_rc 1 "$guard_rc"
+}
+
+test_vmid_outside_range_refused() {
+    test_start "VMIDs outside the reserved range are refused"
+    guard_check start 123
+    assert_rc 1 "$guard_rc"
+    assert_contains "$guard_err" "VMID 123 is outside the reserved range 8000-8099"
+    # Production-style low VMIDs must never pass through the guard.
+    guard_check destroy 101 --destroy-unreferenced-disks 1 --purge
+    assert_rc 1 "$guard_rc"
+}
+
+test_option_values_not_treated_as_vmids() {
+    test_start "numeric option values are not mistaken for VMIDs"
+    guard_check set 8042 --cores 4 --memory 2048
+    assert_rc 0 "$guard_rc"
+    guard_check shutdown 8042 --timeout 90
+    assert_rc 0 "$guard_rc"
+}
+
+test_base_storages_refused() {
+    test_start "the base system's own storages can never be referenced"
+    guard_check set 8042 --scsi0 local:20
+    assert_rc 1 "$guard_rc"
+    assert_contains "$guard_err" "storage 'local' is not an itf storage"
+    guard_check set 8042 --scsi0 local-lvm:20
+    assert_rc 1 "$guard_rc"
+    guard_check set 8042 --ide2=local:iso.iso,media=cdrom
+    assert_rc 1 "$guard_rc"
+    assert_contains "$guard_err" "storage 'local' is not an itf storage"
+}
+
+test_itf_storage_references_accepted() {
+    test_start "itf storage references pass validation"
+    guard_check set 8042 --scsi0 itfguests:32
+    assert_rc 0 "$guard_rc"
+    guard_check set 8042 --ide2 itfiso:iso/itf-debian-netinst.iso,media=cdrom
+    assert_rc 0 "$guard_rc"
+}
+
+test_storage_payload_traversal_refused() {
+    test_start "storage payloads with '..' or unsafe characters are refused"
+    guard_check set 8042 --ide2 itfiso:../local/secret.iso
+    assert_rc 1 "$guard_rc"
+    assert_contains "$guard_err" "unsafe characters"
+    guard_check set 8042 --ide2 itfiso:iso/../../etc/shadow
+    assert_rc 1 "$guard_rc"
+    guard_check set 8042 --scsi0 "itfguests:32; rm -rf /"
+    assert_rc 1 "$guard_rc"
+    guard_check set 8042 --ide2 "itfiso:iso/x.iso,media=cdrom;evil"
+    assert_rc 1 "$guard_rc"
+}
+
+test_absolute_paths_confined() {
+    test_start "absolute paths are only allowed inside the ISO directory"
+    guard_check set 8042 --args /etc/passwd
+    assert_rc 1 "$guard_rc"
+    assert_contains "$guard_err" "outside $ITF_ISO_DIR"
+    guard_check set 8042 --args /mnt/itf-iso/extra.iso
+    assert_rc 0 "$guard_rc"
+}
+
+# ------------------------------------------------------------------------------
+# itf_qm / itf_pvesm / itf_read — execution-level confinement
+# ------------------------------------------------------------------------------
+
+test_qm_refusal_never_reaches_host() {
+    test_start "a refused qm call returns 22 without touching the host"
+    reset_exec_calls
+    local out rc
+    out="$(itf_qm testbase start 123 2>&1)"
+    rc=$?
+    assert_rc 22 "$rc"
+    assert_contains "$out" "REFUSED"
+    assert_equals 0 "$(itf_exec_count)"
+}
+
+test_qm_dry_run_marks_log_and_skips_exec() {
+    test_start "dry-run audit-logs with a DRY-RUN marker and does not execute"
+    reset_exec_calls
+    local rc
+    # Redirect (not command substitution): itf_base_exec's capture must
+    # land in this shell's _itf_exec_calls, not a subshell copy.
+    ITF_DRY_RUN=1 itf_qm testbase start 8042 > "$tmp_dir/dryrun.out" 2>&1
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$tmp_dir/dryrun.out")" "[dry-run] testbase: qm start 8042"
+    # Exactly one remote call: the audit-log append, marked DRY-RUN.
+    # (The logged line is %q-escaped, hence the backslashes.)
+    assert_equals 1 "$(itf_exec_count)"
+    assert_contains "$_itf_exec_calls" 'qm\ DRY-RUN:\ qm\ start\ 8042'
+    assert_contains "$_itf_exec_calls" ">> /var/log/itf-actions.log"
+}
+
+test_qm_audit_logs_before_executing() {
+    test_start "mutating qm calls write the audit log before executing"
+    reset_exec_calls
+    itf_qm testbase start 8042 > /dev/null 2>&1
+    assert_equals 2 "$(itf_exec_count)"
+    local first second
+    first="$(printf '%s' "$_itf_exec_calls" | head -1)"
+    second="$(printf '%s' "$_itf_exec_calls" | sed -n 2p)"
+    assert_contains "$first" ">> /var/log/itf-actions.log"
+    assert_equals "testbase :: qm start 8042" "$second"
+}
+
+test_qm_read_verb_not_audit_logged() {
+    test_start "read-only qm calls are not audit-logged"
+    reset_exec_calls
+    itf_qm testbase status 8042 > /dev/null 2>&1
+    assert_equals 1 "$(itf_exec_count)"
+    assert_contains "$_itf_exec_calls" "qm status 8042"
+    if printf '%s' "$_itf_exec_calls" | grep -q ">> /var/log/itf-actions.log"; then
+        test_fail "read-only call should not touch the audit log"
+    else
+        test_pass
+    fi
+}
+
+test_pvesm_status_is_the_only_subcommand() {
+    test_start "pvesm is restricted to status"
+    reset_exec_calls
+    itf_pvesm testbase status > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_equals 1 "$(itf_exec_count)"
+    assert_contains "$_itf_exec_calls" "pvesm status"
+    local rc
+    itf_pvesm testbase create > /dev/null 2>&1
+    rc=$?
+    assert_rc 22 "$rc"
+    assert_equals 1 "$(itf_exec_count)"
+}
+
+test_read_allowlist_exact_entries() {
+    test_start "exact-match read commands pass, others are refused"
+    reset_exec_calls
+    itf_read testbase pveversion > /dev/null 2>&1
+    assert_rc 0 $?
+    itf_read testbase free -h > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_contains "$_itf_exec_calls" "free -h"
+    local rc
+    itf_read testbase "cat /etc/shadow" > /dev/null 2>&1
+    rc=$?
+    assert_rc 22 "$rc"
+    itf_read testbase rm -rf / > /dev/null 2>&1
+    rc=$?
+    assert_rc 22 "$rc"
+    assert_equals 2 "$(itf_exec_count)"
+}
+
+test_read_prefix_rules() {
+    test_start "prefix-scoped reads are confined to their target"
+    reset_exec_calls
+    itf_read testbase ip link show vmbr0 > /dev/null 2>&1
+    assert_rc 0 $?
+    itf_read testbase ip -d link show vmbr9 > /dev/null 2>&1
+    assert_rc 0 $?
+    itf_read testbase test -f /var/log/itf-actions.log > /dev/null 2>&1
+    assert_rc 0 $?
+    itf_read testbase tail -20 /var/log/itf-actions.log > /dev/null 2>&1
+    assert_rc 0 $?
+    itf_read testbase ls -l /mnt/itf-iso > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_equals 5 "$(itf_exec_count)"
+    local rc
+    itf_read testbase ls -l /etc > /dev/null 2>&1
+    rc=$?
+    assert_rc 22 "$rc"
+    itf_read testbase tail -5 /var/log/syslog > /dev/null 2>&1
+    rc=$?
+    assert_rc 22 "$rc"
+    itf_read testbase ip addr show > /dev/null 2>&1
+    rc=$?
+    assert_rc 22 "$rc"
+    assert_equals 5 "$(itf_exec_count)"
+}
+
+test_read_quoting_preserves_metacharacters() {
+    test_start "read commands re-quote args so the remote bash -c is safe"
+    reset_exec_calls
+    itf_read testbase grep -c -E '(vmx|svm)' /proc/cpuinfo > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_contains "$_itf_exec_calls" 'grep -c -E \(vmx\|svm\) /proc/cpuinfo'
+}
+
+test_check_accepts_guarded_lifecycle_call
+test_check_accepts_read_verbs
+test_verb_not_allowlisted
+test_vmid_outside_range_refused
+test_option_values_not_treated_as_vmids
+test_base_storages_refused
+test_itf_storage_references_accepted
+test_storage_payload_traversal_refused
+test_absolute_paths_confined
+
+test_qm_refusal_never_reaches_host
+test_qm_dry_run_marks_log_and_skips_exec
+test_qm_audit_logs_before_executing
+test_qm_read_verb_not_audit_logged
+test_pvesm_status_is_the_only_subcommand
+test_read_allowlist_exact_entries
+test_read_prefix_rules
+test_read_quoting_preserves_metacharacters
+
+rm -rf "$tmp_dir"
+teardown_test_env
+test_summary

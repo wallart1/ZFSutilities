@@ -622,6 +622,9 @@ On the development VM, `/dev/sdb` is a 75 GiB empty virtual disk. It can be
 partitioned and used to create three small RAIDZ1 test pools:
 
 ```bash
+# parted/partprobe are not part of a base Debian install.
+apt-get install -y parted
+
 # Create a GPT label and 15 ~5 GiB partitions.
 parted -s /dev/sdb mklabel gpt
 for i in {1..15}; do
@@ -690,6 +693,17 @@ zfs list -r zfstest1 zfstest2
 | Resume token handling | Partial receive leaves a token; re-run resumes and completes |
 | Space check skip | Large `space_check_min_buffer` causes skip |
 | Clone dataset copy | Clone replicates as an independent dataset |
+
+## Integrated End-User Testing
+
+Beyond the mock-based suites and the real-pool integration suite above,
+the repository includes an orchestrator (`tests/integrated/itf`) that
+exercises the product as a first-time end user on disposable nested
+guests in the base Proxmox test VMs — fresh install from a release
+tarball, daily workflows, uninstall/reinstall — under a strict
+confinement guard for the base hosts. See
+[Integrated Testing](integrated-testing.md) and
+`tests/integrated/README.md`.
 
 ## Tips and Gotchas
 

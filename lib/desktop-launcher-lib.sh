@@ -58,7 +58,10 @@ get_user_home() {
 
 # Create desktop symlinks for the GUI and documentation viewer in the given
 # user's home directory.  Existing files/symlinks with the same names are
-# replaced.  Prints status messages and returns 0 on success.
+# replaced.  Prints status messages and returns 0 on success.  Headless
+# hosts (no detectable desktop user / home) are an informational skip,
+# not an error — callers run under `set -e`, and switch-version's
+# lib-missing fallback stub defines the same soft contract.
 create_desktop_symlinks() {
     local user="${1}"
     local home
@@ -70,13 +73,13 @@ create_desktop_symlinks() {
                 "\"\$HOME/ZFSutilities GUI\""
         log_msg "INFO:       ln -s /usr/local/lib/zfsutilities/current/bin/zfsutilities-docs" \
                 "\"\$HOME/ZFSutilities Documentation\""
-        return 1
+        return 0
     fi
 
     home=$(get_user_home "${user}")
     if [[ -z "${home}" || ! -d "${home}" ]]; then
         warn "  ⚠ Home directory for '${user}' not found; skipping home-directory symlinks."
-        return 1
+        return 0
     fi
 
     local gui_link="${home}/ZFSutilities GUI"
@@ -99,21 +102,23 @@ create_desktop_symlinks() {
 
 # Remove desktop symlinks for the GUI and documentation viewer from the given
 # user's home directory.  Missing links are silently ignored.  Prints status
-# messages for removed links and returns 0 on success.
+# messages for removed links and returns 0 on success.  As with the create
+# path, headless hosts are an informational skip, not an error (callers run
+# under `set -e`).
 remove_desktop_symlinks() {
     local user="${1}"
     local home
 
     if [[ -z "${user}" ]]; then
         warn "  ⚠ Cannot determine desktop user; skipping home-directory symlink removal."
-        return 1
+        return 0
     fi
 
     home=$(get_user_home "${user}")
     if [[ -z "${home}" || ! -d "${home}" ]]; then
         warn "  ⚠ Home directory for '${user}' not found;" \
             "skipping home-directory symlink removal."
-        return 1
+        return 0
     fi
 
     local name link

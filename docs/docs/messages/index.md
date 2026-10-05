@@ -896,7 +896,8 @@ See also [ensure-restored-vm-iscsi](#ensure-restored-vm-iscsi) under Restore and
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `FATAL: Zvol path must be <pool>/proxmox/vm-<vmid>-disk-<num>, got: ...` | Zvol path shape validation | Script aborts |
-| `FATAL: Zvol does not exist: ...` | The zvol to attach is missing | Script aborts |
+| `FATAL: Zvol does not exist: ...` | The zvol to attach is missing (local check: single-node or storage-host invocation) | Script aborts |
+| `FATAL: Zvol does not exist on <storage host> (or the storage host is unreachable): ...` | Two-node compute-host invocation: the remote existence/volsize query returned nothing | Script aborts; verify the zvol on the storage host and SSH reachability |
 | `FATAL: VM config not found: ...` | The destination VM has no config | Script aborts; create the VM first |
 | `FATAL: Destination key ... already exists in VM ... config` | The requested slot is occupied | Script aborts; choose a free slot |
 | `FATAL: Could not determine LUN number from storage host` | The remote ensure step returned neither marker | Script aborts; check targetcli on the storage host |
@@ -1760,7 +1761,11 @@ Output uses `✓`/`⚠`/`✗` markers for pass/warn/fail.
 | -------------- | ------- | -------- |
 | `✗: ... — ... (install: ...)` | A required prerequisite failed its check (command/package/module/service missing); the parenthetical names the package to install | Install the listed packages; the script exits 1 at the end if any failure was recorded |
 | `✗: mkdocs — mkdocs 2.x is incompatible with this project; pin to mkdocs<2` | The installed mkdocs major version is 2 or newer | Install `mkdocs<2` |
+| `Note: on Debian, zfsutils-linux is in the contrib archive — ...` | The ZFS tools are missing AND apt has no installation candidate for `zfsutils-linux` (the probe runs only in that case) | Enable the `contrib` archive in `/etc/apt/sources.list` (or the equivalent `.sources` file), then rerun |
+| `✗: zfs-kernel-module — kernel module not built (zfs-dkms needs the matching headers)` | The `modinfo zfs` probe found no built module (checked whenever kmod is available) | Install the matching headers so `zfs-dkms` builds (`apt-get install linux-headers-$(uname -r)`); installing the headers triggers the dkms build |
 | `⚠: pveversion not found — ...` | Proxmox VE is optional for this host class (required only on a two-node compute host) | Informational; installation can continue |
+| `⚠: mkdocs not installed — the installer's documentation-server step installs it (pip 'mkdocs<2')` | MkDocs is absent; the installer pip-installs it after the prerequisite gate | Informational; installation can continue |
+| `⚠: mkdocs-material not installed — the installer's documentation-server step installs it (pip)` | The Material theme is absent; the installer pip-installs it after the prerequisite gate | Informational; installation can continue |
 | `⚠: DISPLAY not set — GUI requires an X11 or Wayland session` | No graphical session | Informational; the GUI will not run until started from a session |
 | `✗: ... required prerequisite(s) missing. Install them before proceeding.` | Final tally with at least one failure | Install the prerequisites and rerun |
 | `⚠: ... optional item(s) missing — installation can continue but some features may be unavailable.` | Final tally with warnings only | Informational |

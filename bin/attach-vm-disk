@@ -89,13 +89,29 @@ fi
 backstore_name="vm-${srcvmid}-disk-${disknum}"
 zvol_dev="/dev/zvol/${zvol}"
 
-# --- Validate zvol exists ---
-if ! zfs list -H -o name "$zvol" 2>/dev/null | grep -q .; then
-    log_msg "FATAL: Zvol does not exist: $zvol"
-    exit 1
+# --- Validate zvol exists (node-aware) ---
+# In two-node mode the zvol lives on the storage host while this script's
+# documented invocation host is the compute host, where local zfs cannot
+# see it.  A compute-host invocation therefore runs both the existence
+# check and the volsize read on the storage host over SSH (single round
+# trip: name and volsize from one zfs list).  Single-node and
+# storage-host invocations validate locally.
+if is_two_node && [[ "$my_host" == "$compute_host" ]]; then
+    if ! zvol_info=$(ssh -o ConnectTimeout=10 root@"$storage_host" \
+            "zfs list -H -o name,volsize '$zvol'" 2>/dev/null) \
+            || [[ -z "$zvol_info" ]]; then
+        log_msg "FATAL: Zvol does not exist on $storage_host" \
+            "(or the storage host is unreachable): $zvol"
+        exit 1
+    fi
+    zvol_size="${zvol_info#*$'\t'}"
+else
+    if ! zfs list -H -o name "$zvol" 2>/dev/null | grep -q .; then
+        log_msg "FATAL: Zvol does not exist: $zvol"
+        exit 1
+    fi
+    zvol_size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
 fi
-
-zvol_size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")
 
 # --- Delegate to compute host if run on storage node (two-node only) ---
 if is_two_node && [[ "$my_host" != "$compute_host" ]]; then

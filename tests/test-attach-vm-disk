@@ -1,5 +1,6 @@
 #!/usr/bin/bash
-# test-attach-vm-disk — Unit tests for attach-vm-disk argument validation.
+# test-attach-vm-disk — Unit tests for attach-vm-disk argument validation
+# and node-aware zvol validation (two-node SSH vs local).
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
@@ -150,6 +151,218 @@ test_invalid_vmids() {
 }
 
 # ------------------------------------------------------------------
+# Script-level tests: node-aware zvol validation
+#
+# bin/attach-vm-disk is executed for real under a stub PATH.  In
+# two-node mode the zvol lives on the storage host, so a compute-host
+# invocation must run the existence check and the volsize read over SSH;
+# single-node and storage-host invocations validate locally.  The stubs
+# below record every local zfs / remote ssh invocation so the tests can
+# pin which node answered the query.
+# ------------------------------------------------------------------
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ATTACH_STUB_DIR=""
+ATTACH_RC=0
+ATTACH_OUTPUT=""
+
+# run_attach_stubbed <fake-host> <node-mode> <local-zfs-mode> <ssh-zfs-row> [script args...]
+#   fake-host      short hostname the hostname stub reports (this host)
+#   node-mode      "two-node" or "single-node" written into the temp node.conf
+#   local-zfs-mode "present" (local zfs resolves the zvol) or "absent" (never)
+#   ssh-zfs-row    row the ssh stub returns for the remote
+#                  "zfs list -H -o name,volsize" query ("" makes it fail)
+# On return: ATTACH_RC, ATTACH_OUTPUT, and the call logs at
+# $ATTACH_STUB_DIR/zfs.calls and $ATTACH_STUB_DIR/ssh.calls.
+run_attach_stubbed() {
+    local fake_host="$1" node_mode="$2" zfs_mode="$3" ssh_zfs_row="$4"
+    shift 4
+
+    rm -rf "$ATTACH_STUB_DIR"
+    ATTACH_STUB_DIR=$(mktemp -d)
+    ATTACH_RC=0
+
+    cat > "$ATTACH_STUB_DIR/hostname" << EOF
+#!/usr/bin/bash
+[[ "\$1" == "-s" ]] && echo "$fake_host"
+exit 0
+EOF
+
+    cat > "$ATTACH_STUB_DIR/id" << 'EOF'
+#!/usr/bin/bash
+if [[ "$1" == "-u" ]]; then
+    echo 0
+else
+    /usr/bin/id "$@"
+fi
+EOF
+
+    cat > "$ATTACH_STUB_DIR/zfs" << 'EOF'
+#!/usr/bin/bash
+echo "$*" >> "$ATTACH_STUB_DIR/zfs.calls"
+if [[ "$ATTACH_ZFS_MODE" == "present" ]]; then
+    if [[ "$1" == "list" ]]; then
+        printf 'tank/proxmox/vm-105-disk-0\t32G\n'
+    elif [[ "$1" == "get" ]]; then
+        printf '32G\n'
+    fi
+    exit 0
+fi
+exit 1
+EOF
+
+    cat > "$ATTACH_STUB_DIR/ssh" << 'EOF'
+#!/usr/bin/bash
+echo "$*" >> "$ATTACH_STUB_DIR/ssh.calls"
+if [[ "$*" == *"realpath /usr/local/lib/zfsutilities/current/bin"* ]]; then
+    echo "/usr/local/lib/zfsutilities/0.114.0/bin"
+    exit 0
+fi
+if [[ "$*" == *"zfs list -H -o name,volsize"* ]]; then
+    if [[ -n "$ATTACH_SSH_ZFS_ROW" ]]; then
+        printf '%s\n' "$ATTACH_SSH_ZFS_ROW"
+        exit 0
+    fi
+    exit 1
+fi
+exit 0
+EOF
+
+    cat > "$ATTACH_STUB_DIR/qm" << 'EOF'
+#!/usr/bin/bash
+if [[ "$1" == "status" ]]; then
+    echo "status: stopped"
+fi
+exit 0
+EOF
+    chmod +x "$ATTACH_STUB_DIR"/{hostname,id,zfs,ssh,qm}
+
+    cat > "$ATTACH_STUB_DIR/node.conf" << EOF
+NODE_MODE="$node_mode"
+STORAGE_HOST="stor"
+COMPUTE_HOST="comp"
+STORAGE_IP="192.168.100.1"
+IQN_PREFIX="iqn.2026-02.local:zfsutil"
+declare -A POOL_TARGET=( [tank]="tank-lun" )
+EOF
+
+    local run_env=(
+        ATTACH_STUB_DIR="$ATTACH_STUB_DIR"
+        ATTACH_ZFS_MODE="$zfs_mode"
+        ATTACH_SSH_ZFS_ROW="$ssh_zfs_row"
+        NODE_CONF="$ATTACH_STUB_DIR/node.conf"
+        PATH="$ATTACH_STUB_DIR:$PATH"
+    )
+    ATTACH_OUTPUT=$(env "${run_env[@]}" \
+        bash "$REPO_ROOT/bin/attach-vm-disk" "$@" 2>&1) || ATTACH_RC=$?
+}
+
+test_two_node_compute_host_validates_via_ssh() {
+    test_start "two-node compute host: zvol validation and volsize read go over SSH"
+
+    run_attach_stubbed comp two-node absent \
+        $'tank/proxmox/vm-105-disk-0\t32G' \
+        tank/proxmox/vm-105-disk-0 9001
+
+    if [[ "$ATTACH_OUTPUT" == *"Zvol does not exist"* ]]; then
+        test_fail "Local zfs cannot see the zvol on the compute host; validation must" \
+            "not use it. Output: $ATTACH_OUTPUT"
+        return
+    fi
+    if ! grep -q "zfs list -H -o name,volsize 'tank/proxmox/vm-105-disk-0'" \
+            "$ATTACH_STUB_DIR/ssh.calls"; then
+        test_fail "Expected remote zfs list over SSH, calls:" \
+            "$(cat "$ATTACH_STUB_DIR/ssh.calls")"
+        return
+    fi
+    if [[ -s "$ATTACH_STUB_DIR/zfs.calls" ]]; then
+        test_fail "Local zfs must not be consulted on the compute host, calls:" \
+            "$(cat "$ATTACH_STUB_DIR/zfs.calls")"
+        return
+    fi
+    # /etc/pve/qemu-server/9001.conf does not exist on a dev host: reaching
+    # the VM-config check proves validation (and the SSH volsize read) passed.
+    if [[ "$ATTACH_OUTPUT" != *"VM config not found"* ]]; then
+        test_fail "Expected to proceed past zvol validation to the VM config check." \
+            "Output: $ATTACH_OUTPUT"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_compute_host_remote_zvol_missing() {
+    test_start "two-node compute host: missing remote zvol fails naming the storage host"
+
+    run_attach_stubbed comp two-node absent "" \
+        tank/proxmox/vm-105-disk-0 9001
+
+    if [[ "$ATTACH_RC" -ne 1 ]]; then
+        test_fail "Expected exit code 1, got $ATTACH_RC. Output: $ATTACH_OUTPUT"
+        return
+    fi
+    if [[ "$ATTACH_OUTPUT" != *"Zvol does not exist on stor"* ]]; then
+        test_fail "Expected FATAL naming the storage host. Output: $ATTACH_OUTPUT"
+        return
+    fi
+    if [[ "$ATTACH_OUTPUT" == *"VM config not found"* ]]; then
+        test_fail "Must not proceed past a failed validation. Output: $ATTACH_OUTPUT"
+        return
+    fi
+    test_pass
+}
+
+test_single_node_validates_locally() {
+    test_start "single-node: zvol validation stays local (no SSH)"
+
+    run_attach_stubbed devhost single-node present \
+        $'tank/proxmox/vm-105-disk-0\t32G' \
+        tank/proxmox/vm-105-disk-0 9001
+
+    if ! grep -q "list -H -o name tank/proxmox/vm-105-disk-0" \
+            "$ATTACH_STUB_DIR/zfs.calls"; then
+        test_fail "Expected local zfs list. Calls:" \
+            "$(cat "$ATTACH_STUB_DIR/zfs.calls")"
+        return
+    fi
+    if [[ -s "$ATTACH_STUB_DIR/ssh.calls" ]]; then
+        test_fail "Single-node validation must not use SSH. Calls:" \
+            "$(cat "$ATTACH_STUB_DIR/ssh.calls")"
+        return
+    fi
+    if [[ "$ATTACH_OUTPUT" != *"VM config not found"* ]]; then
+        test_fail "Expected to proceed past zvol validation. Output: $ATTACH_OUTPUT"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_storage_host_delegates() {
+    test_start "two-node storage host: validates locally, then delegates to the compute host"
+
+    run_attach_stubbed stor two-node present \
+        $'tank/proxmox/vm-105-disk-0\t32G' \
+        tank/proxmox/vm-105-disk-0 9001
+
+    if [[ "$ATTACH_RC" -ne 0 ]]; then
+        test_fail "Expected delegated run to exit 0, got $ATTACH_RC. Output: $ATTACH_OUTPUT"
+        return
+    fi
+    if ! grep -q "list -H -o name tank/proxmox/vm-105-disk-0" \
+            "$ATTACH_STUB_DIR/zfs.calls"; then
+        test_fail "Storage host has the zvol locally; expected local zfs list. Calls:" \
+            "$(cat "$ATTACH_STUB_DIR/zfs.calls")"
+        return
+    fi
+    if ! grep -q "root@comp.*/attach-vm-disk 'tank/proxmox/vm-105-disk-0' '9001' ''" \
+            "$ATTACH_STUB_DIR/ssh.calls"; then
+        test_fail "Expected delegation exec line to the compute host. Calls:" \
+            "$(cat "$ATTACH_STUB_DIR/ssh.calls")"
+        return
+    fi
+    test_pass
+}
+
+# ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
 test_parse_valid_zvol_path
@@ -161,5 +374,11 @@ test_valid_disk_key_formats
 test_invalid_disk_key_formats
 test_valid_vmids
 test_invalid_vmids
+test_two_node_compute_host_validates_via_ssh
+test_two_node_compute_host_remote_zvol_missing
+test_single_node_validates_locally
+test_two_node_storage_host_delegates
+
+rm -rf "$ATTACH_STUB_DIR"
 
 test_summary

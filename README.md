@@ -75,7 +75,12 @@ cron syntax:
 
 - Python 3 (for the GTK GUI)
 
-- ZFS userland utilities (`zfsutils-linux`)
+- ZFS userland utilities (`zfsutils-linux`) — on Debian this package is in the
+  `contrib` archive; enable `contrib` in `/etc/apt/sources.list` (or the
+  equivalent `.sources` file) if `apt` reports no installation candidate.
+  Debian also builds the ZFS kernel module via `zfs-dkms`, which needs the
+  matching kernel headers — the prerequisite checker remediates this with
+  `linux-headers-$(uname -r)`
 
 - `pv` (progress visualization)
 

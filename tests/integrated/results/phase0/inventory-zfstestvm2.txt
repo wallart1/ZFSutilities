@@ -1,0 +1,59 @@
+=== pveversion ===
+pve-manager/9.2.21/4f6e0ac86f9e8c7f (running kernel: 7.0.14-20-pve)
+=== os ===
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+13.7
+7.0.14-20-pve
+=== cpu ===
+4
+virt flags: vmx
+model name	: 12th Gen Intel(R) Core(TM) i7-12700
+=== kvm modules ===
+kvm_intel             507904  0
+kvm                  1445888  1 kvm_intel
+=== mem ===
+               total        used        free      shared  buff/cache   available
+Mem:           3.8Gi       1.5Gi       2.0Gi        47Mi       523Mi       2.3Gi
+Swap:          3.8Gi          0B       3.8Gi
+=== df ===
+Filesystem            Size  Used Avail Use% Mounted on
+/dev/mapper/pve-root   23G  5.9G   16G  28% /
+/dev/mapper/pve-root   23G  5.9G   16G  28% /
+=== pvesm status ===
+Name             Type     Status     Total (KiB)      Used (KiB) Available (KiB)        %
+local             dir     active        23396760         6113264        16069648   26.13%
+local-lvm     lvmthin     active        15429632               0        15429632    0.00%
+=== storage.cfg ===
+dir: local
+	path /var/lib/vz
+	content iso,vztmpl,backup,import
+
+lvmthin: local-lvm
+	thinpool data
+	vgname pve
+	content rootdir,images
+=== vgs/lvs ===
+  pve <49.50g <6.13g
+  data  14.71g pve
+  root <22.84g pve
+  swap   3.81g pve
+=== network ===
+auto lo
+iface lo inet loopback
+
+iface nic0 inet manual
+
+auto vmbr0
+iface vmbr0 inet static
+	address 10.0.0.81/16
+	gateway 10.0.0.1
+	bridge-ports nic0
+	bridge-stp off
+	bridge-fd 0
+
+
+source /etc/network/interfaces.d/*
+=== qm list ===
+=== pct list ===
+=== upgradable count ===
+0

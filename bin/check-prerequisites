@@ -15,7 +15,9 @@
 #   proxmox  — pveversion (warn if absent; required only on two-node compute host)
 #   gui      — python3, python3-gi, gir1.2-gtk-3.0, DISPLAY
 #   two-node — ssh, scp, open-iscsi (only in --two-node mode)
-#   docs     — pip3, mkdocs, mkdocs-material (required)
+#   docs     — pip3 (required); mkdocs and mkdocs-material are
+#              pip-installed by the installer's doc-server step, so their
+#              absence is informational — only mkdocs >= 2 fails the check
 #
 # Exit codes:
 #   0  All required prerequisites are present
@@ -99,7 +101,8 @@ fail() {
 
 warn() {
     if [[ -z "$list_failures" ]]; then
-        echo "  ⚠ $1"
+        # Multi-argument calls join with single spaces, like log_msg.
+        echo "  ⚠ $*"
     fi
     ((++warn_count))
 }
@@ -170,6 +173,41 @@ check_cmd "core" "zpool" "zfsutils-linux"
 check_cmd "core" "pv" "pv"
 check_cmd "core" "rsync" "rsync"
 check_cmd "core" "smartctl" "smartmontools"
+
+# Debian ships zfsutils-linux in the contrib archive only; a stock
+# install (main + non-free-firmware) has no apt candidate for it, so the
+# install hints above would dead-end at "no installation candidate".
+# Probe apt only when the ZFS tools are actually missing — the note is
+# informational and never changes the check outcome.
+if [[ -z "$list_failures" ]] && command -v apt-cache >/dev/null 2>&1; then
+    for _pkg in "${fail_pkgs[@]}"; do
+        [[ "$_pkg" == "zfsutils-linux" ]] || continue
+        _cand=$(apt-cache policy zfsutils-linux 2>/dev/null | awk '/^ *Candidate:/{print $2}')
+        if [[ -z "$_cand" || "$_cand" == "(none)" ]]; then
+            echo "  Note: on Debian, zfsutils-linux is in the contrib archive — enable"
+            echo "        contrib in /etc/apt/sources.list (or the equivalent .sources"
+            echo "        file) if apt reports no installation candidate."
+        fi
+        break
+    done
+fi
+
+# The userspace tools alone are not a working ZFS stack: on Debian the
+# kernel module arrives via zfs-dkms, which only builds when the
+# matching kernel headers are installed — the remediation above pulls
+# zfs-dkms but not the headers, leaving ZFS registered-but-unbuilt
+# ("The ZFS modules cannot be auto-loaded" at first zpool use).  Probe
+# the module whenever kmod is available (systems with prebuilt modules
+# — Ubuntu, PVE — pass this without the headers).  Installing the
+# headers package triggers dkms to build every registered module.
+if command -v modinfo >/dev/null 2>&1; then
+    if modinfo zfs >/dev/null 2>&1; then
+        pass "zfs-kernel-module"
+    else
+        fail "core" "zfs-kernel-module" "linux-headers-$(uname -r)" \
+             "kernel module not built (zfs-dkms needs the matching headers)"
+    fi
+fi
 if [[ -z "$list_failures" ]]; then
     echo ""
 fi
@@ -239,20 +277,26 @@ if [[ -z "$list_failures" ]]; then
     echo "=== Documentation ==="
 fi
 check_cmd "docs" "pip3" "python3-pip"
+# apt carries no mkdocs/mkdocs-material packages — the installer's
+# doc-server step pip-installs them after this gate, so absence here is
+# informational.  mkdocs >= 2 remains a hard failure: MkDocs 2.x is
+# incompatible with this project.
 if command -v mkdocs >/dev/null 2>&1; then
     if check_mkdocs_version; then
         pass "mkdocs"
     else
-        fail "docs" "mkdocs" '"mkdocs<2"' \
+        fail "docs" "mkdocs" "" \
             "mkdocs 2.x is incompatible with this project; pin to mkdocs<2"
     fi
 else
-    fail "docs" "mkdocs" '"mkdocs<2"' "not installed"
+    warn "mkdocs not installed — the installer's documentation-server step" \
+        "installs it (pip 'mkdocs<2')"
 fi
 if python3 -c "import material" >/dev/null 2>&1; then
     pass "mkdocs-material"
 else
-    fail "docs" "mkdocs-material" "mkdocs-material" "not installed"
+    warn "mkdocs-material not installed — the installer's documentation-server" \
+        "step installs it (pip)"
 fi
 if [[ -z "$list_failures" ]]; then
     echo ""

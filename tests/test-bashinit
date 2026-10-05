@@ -69,7 +69,8 @@ test_no_session_log_export_when_log_file_unwritable() {
     rc=$?
     test_start "session log path is not exported when the log file cannot be created"
     if [[ "$rc" -eq 0 && "$output" == *"NO-EXPORT"* && "$output" == *"SCRIPT-OK"* \
-        && "$output" == *"message without session log"* && "$output" != *"Permission denied"* ]]; then
+        && "$output" == *"message without session log"* \
+        && "$output" != *"Permission denied"* ]]; then
         test_pass
     else
         test_fail "rc=$rc output='$output'"
@@ -107,6 +108,41 @@ test_session_log_exported_when_writable() {
     rm -rf "$tmpdir"
 }
 
+test_log_msg_silent_when_session_log_dir_removed() {
+    # Regression (itf F-011): the uninstaller removes /var/log/zfsutilities
+    # and then logs its final summary; every log_msg used to leak
+    # "No such file or directory" to the terminal because the failing >>
+    # redirection is evaluated before the trailing 2>/dev/null takes
+    # effect. The append must be fully best-effort: message on stderr, no
+    # redirection noise, rc=0.
+    local tmpdir wrapper output rc
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/sessions"
+    wrapper="$tmpdir/wrapper.sh"
+    {
+        echo '#!/usr/bin/bash'
+        echo "_bashinit=\"$mydir/bin/bashinit\""
+        echo 'source "$_bashinit"'
+        echo "export ZFSUTILITIES_SESSION_LOG_DIR=\"$tmpdir/sessions\""
+        echo 'bashinit'
+        echo "rm -rf \"$tmpdir/sessions\""
+        echo 'log_msg "INFO: message after log dir removed"'
+        echo 'echo "SCRIPT-OK"'
+    } > "$wrapper"
+    chmod +x "$wrapper"
+    output=$("$wrapper" 2>&1)
+    rc=$?
+    test_start "log_msg stays silent when the session log dir vanishes mid-run"
+    if [[ "$rc" -eq 0 && "$output" == *"SCRIPT-OK"* \
+        && "$output" == *"message after log dir removed"* \
+        && "$output" != *"No such file or directory"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
 # =============================================================================
 # Run
 # =============================================================================
@@ -114,5 +150,6 @@ test_session_log_exported_when_writable() {
 test_log_msg_survives_cd_with_relative_script_path
 test_no_session_log_export_when_log_file_unwritable
 test_session_log_exported_when_writable
+test_log_msg_silent_when_session_log_dir_removed
 
 test_summary
