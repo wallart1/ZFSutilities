@@ -27,6 +27,8 @@ tests/integrated/itf manual-steps   # anything a human must still do
 tests/integrated/itf preflight      # full dev + base-host readiness check
 tests/integrated/itf iso fetch      # download the installer ISO
 tests/integrated/itf iso upload     # push it to the base ISO storage
+tests/integrated/itf template build # post-install baseline template (once
+                                    # per release; one unattended install)
 tests/integrated/itf journey list
 tests/integrated/itf journey run <name>
 tests/integrated/itf watch          # tail the active run — NOT the console
@@ -40,11 +42,12 @@ Every run (journey or preflight) writes a progressive report under
 
 | Path | Purpose |
 |------|---------|
-| `itf` | driver CLI (`preflight`, `guest …`, `iso …`, `journey …`, `status`, `manual-steps`) |
+| `itf` | driver CLI (`preflight`, `guest …`, `iso …`, `template …`, `journey …`, `status`, `manual-steps`) |
 | `lib/config-lib.sh` | site configuration load + fail-closed validation |
 | `lib/ssh-lib.sh` | dev↔base, dev↔guest transports; preseed HTTP server |
-| `lib/base-lib.sh` | **the guard**: allow-listed qm verbs, VMID range, itf-only storages, audit log, dry-run |
-| `lib/guest-lib.sh` | guest lifecycle, ISO fetch/upload, preseed rendering, IP discovery |
+| `lib/base-lib.sh` | **the guard**: allow-listed qm verbs, VMID range, itf-only storages, audit log, dry-run, baseline-template protection |
+| `lib/guest-lib.sh` | guest lifecycle (create/clone/start/stop/snapshot/destroy), ISO fetch/upload, preseed rendering, IP discovery |
+| `lib/template-lib.sh` | post-install baseline template: build/stamp/status/destroy |
 | `lib/report-lib.sh` | progressive PASS/FAIL/SKIP run reports |
 | `lib/serial_console.py` | `qm terminal` driver for OS-install automation (python3 stdlib) |
 | `journeys/` | end-user journeys (see `journeys/README.md`) |
@@ -62,6 +65,11 @@ Every run (journey or preflight) writes a progressive report under
   every mutating call is appended to an audit log on the base host before
   it runs.
 - `ITF_DRY_RUN=1` prints guarded commands instead of executing them.
+- The **baseline template** is durable infrastructure: the guard refuses
+  everyday mutating verbs against the VMID carrying the template's name
+  (`itf template build`/`destroy` manage it, clone is exempt).  Journeys
+  get post-install guests as **full clones** — independent of the
+  template, so a rebuild can never break a running journey's guest.
 - Base changes beyond that (creating the itf storages, the reserved VMID
   policy, the audit log) are *manual steps the orchestrator emits
   instructions for* — a human applies them, `itf preflight` verifies.
@@ -89,7 +97,8 @@ by rerunning the journey on a dev-built tarball.  See
 |-------|-------|--------|
 | 0 | inventory, resource request, manual base setup, confinement rules | complete (`results/phase0/`) |
 | 1 | orchestrator MVP: driver, guard libs, site schema, own tests, docs | complete |
-| 2 | cycle-1 journeys (fresh install, uninstall/reinstall, install-over-leftovers) | next |
-| 3+ | two-node cycle, release upgrades, GUI automation, failure injection, OS matrix | planned |
+| 2 | cycle-1 journeys (fresh install, uninstall/reinstall, install-over-leftovers) | complete |
+| 2.5 | post-install baseline template (`qm template` + full clone): j02/j03 convert to clone-start, j04 validates; journeys begin at the installed state without reinstalling | complete |
+| 3+ | two-node cycle, release upgrades, GUI automation, failure injection, OS matrix (multiple template names) | planned |
 
 Developer-facing detail: `docs/docs/developer-guide/integrated-testing.md`.

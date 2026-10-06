@@ -16,6 +16,11 @@ if PYTHON_SRC not in sys.path:
 
 import file_locking as fl
 
+# Generous ceiling for the child-process "lock held" handshake: under a full
+# tests/run-tests pass, pytest-xdist workers can starve the freshly spawned
+# child long past 5s before it reaches its queue.put().
+HANDSHAKE_TIMEOUT = 60
+
 
 class TestLockPathDefaults(unittest.TestCase):
     """Default lock paths live under the centralized lock directory."""
@@ -116,7 +121,7 @@ class TestFileLockExclusivity(unittest.TestCase):
             proc = multiprocessing.Process(target=self._acquire_and_hold, args=(lock_path, queue))
             proc.start()
             try:
-                self.assertEqual(queue.get(timeout=5), "held")
+                self.assertEqual(queue.get(timeout=HANDSHAKE_TIMEOUT), "held")
                 # The lock is now held by the subprocess. Our attempt to
                 # acquire it should time out quickly.
                 with self.assertRaises(TimeoutError):
@@ -150,7 +155,7 @@ class TestSharedLocksAllowConcurrentReaders(unittest.TestCase):
             proc = multiprocessing.Process(target=self._hold_shared_lock, args=(lock_path, queue))
             proc.start()
             try:
-                self.assertEqual(queue.get(timeout=5), "held")
+                self.assertEqual(queue.get(timeout=HANDSHAKE_TIMEOUT), "held")
                 # A second shared lock should be granted immediately.
                 with fl.file_lock(lock_path, fcntl.LOCK_SH):
                     pass

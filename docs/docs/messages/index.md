@@ -427,7 +427,7 @@ Builds the two-part restore script. The messages below are emitted inside the ge
 | `INFO: No counterpart snapshot for ... on ...` | The candidate snapshot's GUID is not on the counterpart, so it is not a common snapshot | Counts as verified; deletion may proceed |
 | `WARN: Cannot verify counterpart - pool(s) offline: ...` | Every counterpart pool for the matched fss rows is offline and no hold-based verification succeeded | Deletion blocked for safety (return 6); bring the counterpart pool(s) online and rerun |
 | `WARN: Dataset to check ... does not exist or is offline.` | The counterpart dataset cannot be listed | That destination root is skipped; other fss rows are still checked |
-| `INFO: Offline pool ...: another snapshot carries hold '...' — incremental chain intact.` | The counterpart pool is offline, but the `offsite-<pool>` hold on another snapshot proves the chain is intact | Counts as verified; deletion may proceed |
+| `VERB: Offline pool ...: another snapshot carries hold '...' — incremental chain intact.` | The counterpart pool is offline, but the `offsite-<pool>` hold on another snapshot proves the chain is intact | Counts as verified; deletion may proceed |
 | `WARN: <offsite> used in source root but no offsite candidate pools are configured. Skipping fss row: ...` / `WARN: <offsite> placeholder used but no offsite candidate pools are configured. Snapshot: ...` | The fss table uses the `<offsite>` placeholder while the JSON config lists no offsite-candidate pools | The fss row is skipped, or the snapshot counts as unverifiable (deletion may be blocked) |
 | `FATAL: Unexpected RC=... from .../zfscommsnap.` / `FATAL: Internal error = ...` | An unexpected return code from the common-snapshot helper or an internal inconsistency | Script aborts (exit 8) |
 
@@ -1588,11 +1588,14 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
-| `WARN: Select ...` (exactly one dataset to snapshot / something to delete / one or more snapshots to hold / exactly one snapshot to roll back to / exactly one pool to show big stuff / exactly one item to browse / an item to mount / filesystems, snapshots, or volumes to mount / an item to unmount / filesystems, snapshots, or volumes to unmount / a filesystem, snapshot, or mounted volume partition to browse) | Selection guard for the corresponding action | Action aborted |
+| `WARN: Select ...` (one or more datasets to snapshot / something to delete / one or more snapshots to hold / exactly one snapshot to roll back to / exactly one pool to show big stuff / exactly one item to browse / an item to mount / filesystems, snapshots, or volumes to mount / an item to unmount / filesystems, snapshots, or volumes to unmount / a filesystem, snapshot, or mounted volume partition to browse) | Selection guard for the corresponding action | Action aborted |
 | `WARN: Snapshot name cannot contain spaces or slashes` | Snapshot-name validation failed | Re-enter the name |
-| `INFO: Creating snapshot: ...` | Name validated and dialog confirmed; the snapshot command runs under a dataset lock | Continue to create |
-| `INFO: Snapshot created: ...` | The snapshot command succeeded | Page refreshed |
-| `WARN: Error creating snapshot` | The snapshot command returned failure | Inspect the ZFS error |
+| `INFO: Creating snapshot: ...` | Single-selection name validated and dialog confirmed; the snapshot command runs under a dataset lock | Continue to create |
+| `INFO: Creating snapshot '...' on N datasets` | Multi-selection dialog confirmed; each dataset is snapshotted in turn under one locks set | Continue to create |
+| `INFO: Snapshot created: ...` | The snapshot command succeeded for that dataset | Page refreshed once anything was created |
+| `WARN: Error creating snapshot` | Single-selection snapshot command returned failure | Inspect the ZFS error |
+| `WARN: Error creating snapshot: ...` | The snapshot command failed for that dataset in a multi-selection batch | Remaining datasets still attempted |
+| `WARN: Created snapshot on N of M datasets` | Multi-selection summary — at least one dataset failed | Check the per-dataset warnings above |
 | `WARN: cannot snapshot ... / cannot destroy ... / cannot delete snapshots: ... / cannot release holds: ... / cannot set holds: ... / cannot rollback ...: ...` (ending with the lock error) | A dataset lock could not be acquired for that action | Action aborted; another operation holds the dataset |
 | `WARN: Error: zfs command not found` | The `zfs binary is missing from PATH | Action aborted |
 | `WARN: cannot destroy ...: dataset is locked by another operation` | Pre-flight lock check failed before the destroy dialog | Delete of all selected datasets aborted |

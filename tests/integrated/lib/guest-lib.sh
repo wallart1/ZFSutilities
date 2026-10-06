@@ -122,6 +122,61 @@ itf_guest_create() {
 # itf_guest_start <base> <vmid>
 itf_guest_start() { itf_qm "$1" start "$2"; }
 
+# itf_guest_clone <name> [--base B] [--vmid V] [--mem MB] [--cores N]
+#
+# Full-clones the post-install baseline template (template-lib) and echoes
+# the new VMID on stdout (everything else to stderr, like
+# itf_guest_create).  Full clone by design: block storages such as the
+# lvmthin itfguests have no linked clones, a thin-pool full clone copies
+# only allocated blocks, and the clone is independent of the template —
+# later template rebuilds cannot break a running journey's guest.
+itf_guest_clone() {
+    local name="$1"
+    shift
+    local base="${ITF_BASE_HOSTS[0]}" vmid="" mem="" cores=""
+    local key
+
+    while (( $# > 0 )); do
+        key="$1"
+        case "$key" in
+            --base) base="$2"; shift 2 ;;
+            --vmid) vmid="$2"; shift 2 ;;
+            --mem) mem="$2"; shift 2 ;;
+            --cores) cores="$2"; shift 2 ;;
+            *) echo "itf: unknown itf_guest_clone option: $key" >&2; return 2 ;;
+        esac
+    done
+
+    local tmpl_vmid
+    tmpl_vmid="$(itf_template_vmid "$base")" || return 1
+    if [[ -z "$tmpl_vmid" ]]; then
+        echo "itf: no baseline template '$ITF_TEMPLATE_NAME' on $base — " \
+            "run: itf template build" >&2
+        return 1
+    fi
+
+    if [[ -z "$vmid" ]]; then
+        vmid="$(itf_vmid_pick "$base")" || return 1
+    elif ! itf_vmid_in_range "$vmid"; then
+        echo "itf: --vmid $vmid outside reserved range ${ITF_VMID_FIRST}-${ITF_VMID_LAST}" >&2
+        return 2
+    fi
+
+    itf_qm "$base" clone "$tmpl_vmid" "$vmid" --name "$name" --full 1 >&2 || return 1
+    # Templates built from install journeys carry the installer-time CPU
+    # freeze (stage_os pairs freeze with an explicit resume so the serial
+    # console catches the first boot byte); a clone has no such pairing
+    # and would sit paused forever if started as-is.  Clear unconditionally.
+    itf_qm "$base" set "$vmid" --freeze 0 >&2 || return 1
+    if [[ -n "$mem" || -n "$cores" ]]; then
+        local -a sargs=(set "$vmid")
+        [[ -n "$mem" ]] && sargs+=(--memory "$mem")
+        [[ -n "$cores" ]] && sargs+=(--cores "$cores")
+        itf_qm "$base" "${sargs[@]}" >&2 || return 1
+    fi
+    echo "$vmid"
+}
+
 # itf_guest_stop <base> <vmid>
 #
 # Graceful shutdown with a hard-stop fallback after 90s.

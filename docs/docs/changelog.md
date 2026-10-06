@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.117.0
+
+*Released 2026-10-06*
+
+### Added
+
+- **`itf` post-install baseline template** — `itf template build` builds
+  a baseline guest once through the real first-time-user path (OS
+  install → product install → `apt full-upgrade` → reboot onto a new
+  kernel when one arrives → boot-health gate: newest kernel running, ZFS
+  module loadable, wiring intact), then converts it to a Proxmox
+  template. Journeys whose scenario begins after installation clone it
+  (`itf_journey_stage_from_template`) and reach the post-install point
+  in a minute or two instead of repeating the ~15–20-minute install:
+  j02/j03 now clone-start, and the new j04-post-install-baseline journey
+  proves a full clone end to end (wiring, documented test pools,
+  `check-prerequisites`, ZFS round trip). Full clones by design (LVM-thin
+  has no linked clones, and a clone is independent of later template
+  rebuilds); rebuilds are always from scratch and refused while the
+  existing stamp is fresh (`--force` overrides). The stamp rides the PVE
+  description field (colon-free; PVE percent-encodes colons on
+  read-back); `itf template status` and `itf status`/`preflight` surface
+  it. The confinement guard gains the template/clone/delsnapshot verbs,
+  name-based protection for the template VM (clone exempt — reading the
+  template is its purpose; override scoped to build/destroy), and
+  exemption of `--description` values from the storage-reference shape
+  check. Clone-start clears the installer-time CPU freeze at both the
+  template build and every clone (a clone started without its paired
+  resume sits in QEMU prelaunch forever).
+
+- **Multi-select Snapshot (Datasets page)** — the Snapshot button now
+  enables for any selection of filesystem and volume rows (snapshots,
+  holds, and volume partitions disable it) and creates the named
+  snapshot on every selected dataset: one prompt (multi-selection lists
+  the datasets), one batch lock set, per-dataset success/failure
+  logging, and a summary warning when any dataset failed. A failure on
+  one dataset (for example the name already exists there) does not stop
+  the remaining ones. Single-selection behavior is unchanged.
+
+### Changed
+
+- **`zfscheckagainst` hold-verified reassurance demoted to VERB** — the
+  per-snapshot "Offline pool …: another snapshot carries hold '…' —
+  incremental chain intact." line now logs at VERB instead of INFO. It
+  fires for every snapshot while an offsite counterpart pool is offline;
+  the verification outcome is unchanged (still counts as verified, and
+  deletion may proceed).
+
+### Fixed
+
+- **Zvol mounted-state display follows the loop device** — volume rows
+  on the Datasets page rendered as mounted-looking (untinted, Mount
+  enabled / Unmount disabled) even when no loop device was attached,
+  because zvols report no ZFS `mounted` property. The row's mounted flag
+  is now the loop-attach state everywhere, resolved with one bulk
+  `losetup` listing per pass (new `ZfsRepository.loop_attached_paths()`):
+  unattached volumes are tinted teal like unmounted filesystems (legend
+  reworded), attached volume rows keep Browse disabled (their partition
+  rows are the browsable leaves), and Mount skips already-attached
+  volumes — the row state and the Mount/Unmount buttons always agree.
+
+- **Test-infra hardening** — the file-locking suite's child-process
+  "lock held" handshake tolerates full-suite pytest-xdist load (the
+  starvation-prone 5s queue wait is now 60s), and the itf unit-test
+  files conform to the 100-column limit with documented shellcheck
+  directives for guard-scope configuration shellcheck cannot see.
+
 ## 0.116.0
 
 *Released 2026-10-06*

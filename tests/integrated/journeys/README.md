@@ -37,10 +37,25 @@ guest (ZFS state, wiring files, session logs, exit codes, GUI rendering).
 4. Snapshot the clean OS (`itf guest snapshot … installed`) so later
    journeys can skip reinstallation.
 
+## Steps common to clone-start journeys
+
+Scenarios that begin *after* installation skip all of the above:
+
+1. `itf_journey_stage_from_template <gname>` full-clones the post-install
+   baseline template (`itf template build`), starts the clone, discovers
+   its IP, waits for SSH, and snapshots `as-cloned` as the journey's
+   rollback checkpoint.
+2. Fail-fast PREP contract: a missing or unstamped template is a FAIL
+   step with the exact `itf template build` command — never a half-run.
+3. The template carries a current OS (updates are applied and
+   boot-health-gated at build time), so clones need no per-journey
+   `apt upgrade`.
+
 ## Current set
 
 | Journey | Scenario |
 |---------|----------|
 | j01-fresh-install | flagship: install from release, test pools, backup/retention/scrub/restore, schedule, GUI smoke |
-| j02-uninstall-reinstall | purge, assert clean state, reinstall, assert working |
-| j03-install-over-leftovers | partial-uninstall recovery path |
+| j02-uninstall-reinstall | clone start, purge, assert clean state, reinstall, assert working |
+| j03-install-over-leftovers | clone start, staged partial uninstall, installer detects/cleans/completes |
+| j04-post-install-baseline | validates the template path end to end: clone, wiring, pools, product surface |

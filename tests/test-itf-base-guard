@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # test-itf-base-guard — Unit tests for tests/integrated/lib/base-lib.sh
 # (the confinement guard for all base-host access).
+#
+# File-wide: the ITF_* assignments below (site-scope guard values, plus
+# per-test template-protection names) are read by the sourced guard
+# libraries at runtime; shellcheck cannot follow those sources, so their
+# usage is invisible to it.
+# shellcheck disable=SC2034
 
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
 setup_test_env
@@ -25,6 +31,12 @@ tmp_dir=$(mktemp -d)
 _itf_exec_calls=""
 itf_base_exec() {
     _itf_exec_calls+="$1 :: $2"$'\n'
+    # Tests that need `qm list` answers (template protection) set
+    # _QM_LIST_REPLY to a qm-list-shaped table.  The resolver runs inside
+    # $( ), so the reply reaches it without polluting this shell's capture.
+    if [[ -n "${_QM_LIST_REPLY:-}" && "$2" == "qm list" ]]; then
+        printf '%s\n' "$_QM_LIST_REPLY"
+    fi
     return 0
 }
 itf_exec_count() {
@@ -253,6 +265,116 @@ test_read_quoting_preserves_metacharacters() {
     assert_contains "$_itf_exec_calls" 'grep -c -E \(vmx\|svm\) /proc/cpuinfo'
 }
 
+# ------------------------------------------------------------------------------
+# Baseline-template protection (name-resolved)
+# ------------------------------------------------------------------------------
+
+# qm list shape the protection resolver consumes; 8001 is the template.
+QM_TABLE='      VMID NAME                 STATUS     MEM(MB)    BOOTDISK    PID
+ 8001 itf-template stopped    8192          0          0
+ 8002 j04      running    8192      32768       1234'
+
+test_clone_and_template_verbs_allowed() {
+    test_start "clone/template lifecycle verbs pass argument validation"
+    guard_check clone 8001 8005 --name g2 --full 1
+    assert_rc 0 "$guard_rc"
+    assert_equals "" "$guard_err"
+    guard_check template 8001
+    assert_rc 0 "$guard_rc"
+    # The clone target is a VMID too and gets the range check.
+    guard_check clone 8001 123 --name g2 --full 1
+    assert_rc 1 "$guard_rc"
+    assert_contains "$guard_err" "VMID 123 is outside the reserved range"
+}
+
+test_snapshot_verbs_allowed() {
+    test_start "listsnapshot is read-only; delsnapshot passes validation"
+    guard_check listsnapshot 8042
+    assert_rc 0 "$guard_rc"
+    guard_check delsnapshot 8042 os-installed
+    assert_rc 0 "$guard_rc"
+}
+
+test_description_values_exempt_from_storage_shape() {
+    test_start "--description values are free text, not storage references"
+    guard_check set 8042 \
+        --description "itf-stamp| sw-source=release version=1.0 built=2026-01-01T00:00:00Z"
+    assert_rc 0 "$guard_rc"
+    assert_equals "" "$guard_err"
+    guard_check set 8042 --description "local: a user note with a colon"
+    assert_rc 0 "$guard_rc"
+    guard_check set 8042 --description=local:note
+    assert_rc 0 "$guard_rc"
+    # Storage references outside description values are still enforced.
+    guard_check set 8042 --scsi0 local:20
+    assert_rc 1 "$guard_rc"
+    assert_contains "$guard_err" "storage 'local' is not an itf storage"
+}
+
+test_template_protection_blocks_mutation() {
+    test_start "mutating verbs against the baseline template are refused"
+    reset_exec_calls
+    ITF_TEMPLATE_NAME=itf-template
+    _QM_LIST_REPLY="$QM_TABLE"
+    local out rc
+    out="$(itf_qm testbase destroy 8001 --destroy-unreferenced-disks 1 --purge 2>&1)"
+    rc=$?
+    assert_rc 22 "$rc"
+    assert_contains "$out" "baseline template"
+    # Refused before audit or execution: nothing ran in this shell.
+    assert_equals 0 "$(itf_exec_count)"
+    itf_qm testbase snapshot 8001 snap1 > /dev/null 2>&1
+    rc=$?
+    assert_rc 22 "$rc"
+    itf_qm testbase set 8001 --memory 512 > /dev/null 2>&1
+    rc=$?
+    assert_rc 22 "$rc"
+    unset ITF_TEMPLATE_NAME _QM_LIST_REPLY
+}
+
+test_template_protection_clone_exempt() {
+    test_start "cloning the template is allowed — that is its purpose"
+    reset_exec_calls
+    ITF_TEMPLATE_NAME=itf-template
+    _QM_LIST_REPLY="$QM_TABLE"
+    itf_qm testbase clone 8001 8005 --name g2 --full 1 > /dev/null 2>&1
+    assert_rc 0 $?
+    # Audit-log append first, then the guarded execution.
+    assert_equals 2 "$(itf_exec_count)"
+    assert_contains "$(printf '%s' "$_itf_exec_calls" | sed -n 2p)" \
+        "testbase :: qm clone 8001 8005 --name g2 --full 1"
+    unset ITF_TEMPLATE_NAME _QM_LIST_REPLY
+}
+
+test_template_protection_override_and_scope() {
+    test_start "override allows template management; other VMIDs unaffected"
+    reset_exec_calls
+    ITF_TEMPLATE_NAME=itf-template
+    _QM_LIST_REPLY="$QM_TABLE"
+    ITF_TEMPLATE_OVERRIDE=1 itf_qm testbase destroy 8001 --purge > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_equals 2 "$(itf_exec_count)"
+    assert_contains "$(printf '%s' "$_itf_exec_calls" | sed -n 2p)" \
+        "testbase :: qm destroy 8001 --purge"
+    # A non-template VMID needs no override.
+    reset_exec_calls
+    itf_qm testbase destroy 8002 --purge > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_equals 2 "$(itf_exec_count)"
+    unset ITF_TEMPLATE_NAME _QM_LIST_REPLY
+}
+
+test_template_protection_inactive_without_name() {
+    test_start "unset template name disables protection (guard standalone)"
+    reset_exec_calls
+    unset ITF_TEMPLATE_NAME
+    _QM_LIST_REPLY="$QM_TABLE"
+    itf_qm testbase destroy 8001 --purge > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_equals 2 "$(itf_exec_count)"
+    unset _QM_LIST_REPLY
+}
+
 test_check_accepts_guarded_lifecycle_call
 test_check_accepts_read_verbs
 test_verb_not_allowlisted
@@ -271,6 +393,14 @@ test_pvesm_status_is_the_only_subcommand
 test_read_allowlist_exact_entries
 test_read_prefix_rules
 test_read_quoting_preserves_metacharacters
+
+test_clone_and_template_verbs_allowed
+test_snapshot_verbs_allowed
+test_description_values_exempt_from_storage_shape
+test_template_protection_blocks_mutation
+test_template_protection_clone_exempt
+test_template_protection_override_and_scope
+test_template_protection_inactive_without_name
 
 rm -rf "$tmp_dir"
 teardown_test_env

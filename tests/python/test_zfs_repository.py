@@ -1537,6 +1537,21 @@ class TestLoopDeviceOperations(unittest.TestCase):
         repo = self._repo_with(returncode=1, stdout="")
         self.assertIsNone(repo.loop_find("/dev/zvol/tank/vol1"))
 
+    def test_loop_attached_paths_lists_backing_files(self):
+        repo = self._repo_with(stdout="/dev/zvol/tank/vol1\n\n/dev/zvol/tank/vm-100-disk-0\n")
+        self.assertEqual(
+            repo.loop_attached_paths(),
+            {"/dev/zvol/tank/vol1", "/dev/zvol/tank/vm-100-disk-0"},
+        )
+
+    def test_loop_attached_paths_empty_when_no_loops(self):
+        repo = self._repo_with(stdout="")
+        self.assertEqual(repo.loop_attached_paths(), set())
+
+    def test_loop_attached_paths_empty_on_error(self):
+        repo = self._repo_with(returncode=1, stdout="")
+        self.assertEqual(repo.loop_attached_paths(), set())
+
     def test_loop_detach_returns_true_on_success(self):
         repo = self._repo_with()
         self.assertTrue(repo.loop_detach("/dev/loop3"))

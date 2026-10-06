@@ -39,6 +39,8 @@ test_artifact_before_init_refused() {
 
 test_init_creates_run_scaffold() {
     test_start "itf_report_init creates meta/report/steps files"
+    # Read by the sourced report-lib's itf_report_init, not in this file.
+    # shellcheck disable=SC2034
     ITF_RUN_CALLER="test-suite"
     itf_report_init demo > /dev/null 2>&1
     assert_rc 0 $?

@@ -1266,3 +1266,173 @@ continuation line remain — harmless for word-split consumers).
 Uncommitted at wrap-up: everything in this cycle's four features plus the
 wrap-up additions above (incl. serial_console.py reformat and the
 zfsmassdelsnaps regression test).
+
+## Datasets page 2026-10-06: zvols rendered mounted-looking while unattached
+  User screenshot: vm-201-disk-3 / vm-205-disk-3 (volumes) showed untinted
+  text with Mount enabled / Unmount disabled. Root cause: zvols report no
+  ZFS `mounted` property, so both row-population paths set mounted=False,
+  but _row_fg_color never tinted type "volume" — display said mounted,
+  buttons (which correctly use loop-attach state) said unmounted. Fix:
+  volume rows' mounted flag now IS the loop-attach state everywhere —
+  new ZfsRepository.loop_attached_paths() (one bulk `losetup
+  --noheadings -O BACK-FILE` per pass, degrades to empty set) feeds
+  load_dataset_children (lazy expansion) and update_mounted_states
+  (lazy-fetched once per walk); _row_fg_color tints "volume" like
+  filesystem/snapshot. Legend reworded "unmounted filesystem/snapshot or
+  unattached volume". Browse guard added in update_ds_button_sensitivity:
+  an attached volume row now reports mounted=True, which would have lit
+  Browse, but on_datasets_browse has no volume branch — volume rows keep
+  Browse disabled (partition rows are the browsable leaves). Side effect
+  (correct): on_datasets_mount's `if item.get("mounted"): continue` now
+  skips already-attached volumes, matching _is_mountable. Tests added in
+  test_zfs_repository (loop_attached_paths parsing), test_datasets_tree
+  (expansion tint/un tint via canned losetup output), test_datasets_page
+  (volume-row flag+tint in update_mounted_states; attached volume keeps
+  Browse off; legend rewording), test_dataset_actions (attached volume
+  row skipped by on_datasets_mount entirely — no zlm.lock, no reload).
+  Docs: gtk-gui.md teal paragraph + zvols section explain the tint
+  follows the loop device. Awaiting commit.
+
+## Datasets page 2026-10-06: Snapshot action for multiple selection
+  Snapshot button now enables when every selected row is a filesystem or
+  volume (pool/dataset rows; snapshots/holds/volume-partitions disable it)
+  — same predicate family Rewrite Data uses (_is_tunable hoisted above the
+  can_* block in update_ds_button_sensitivity). on_datasets_snapshot
+  follows the Add Hold pattern: prompt once (single keeps the exact old
+  "Dataset:" dialog + zlm.lock with description; multi gets "Datasets
+  (N):" + scrolled monospace list, zlm.locks("w", names), per-dataset
+  INFO/WARN, one "Created snapshot on N of M datasets" WARN summary when
+  any failed, single refresh iff anything was created). Handler filter
+  (_snapshot_target_datasets) mirrors the sensitivity predicate so a
+  stale button state degrades to acting on qualifying rows only. New
+  TestSnapshot class in test_dataset_actions (handler was previously
+  untested — _input_dialog must be patched directly: under mock_gtk,
+  entry.get_text().strip() is a MagicMock and `" " in name` raises).
+  Docs: gtk-gui.md Snapshot table row + messages/index.md dataset_actions
+  section (selection-guard wording, four new multi-batch rows). Awaiting
+  commit.
+
+## zfscheckagainst 2026-10-06: offline-pool hold-verified message demoted INFO→VERB
+  The routine reassurance line fired for every snapshot when an offsite
+  counterpart pool is offline ("Offline pool ...: another snapshot carries
+  hold '...' — incremental chain intact.", bin/zfscheckagainst:271) is now
+  VERB, matching the severity ladder and earlier INFO→VERB demotions.
+  Verification outcome unchanged: still counts as verified, deletion may
+  proceed. messages/index.md zfscheckagainst row prefix updated (meaning/
+  response columns untouched). No test asserts the text; test-zfscheckagainst
+  and test_docs_integrity re-run green. Awaiting commit with the pending
+  changeset.
+
+## itf post-install baseline template 2026-10-06 (awaiting commit)
+  New `itf template` subsystem: a post-install baseline guest built via
+  the real first-time-user path (stage_os → stage_install → apt
+  full-upgrade + reboot-if-new-kernel + ZFS/wiring boot-health gate) then
+  `qm template`d. Journeys clone-start via itf_journey_stage_from_template
+  (full clone, `as-cloned` snapshot). j02/j03 converted off their per-run
+  netinst; j04-post-install-baseline added (clone → wiring verify → docs
+  pools → check-prerequisites all-present → ZFS round trip). Guard gains
+  template/clone verbs + name-based template protection (ITF_TEMPLATE_NAME,
+  default itf-template; clone exempt; ITF_TEMPLATE_OVERRIDE=1 scoped to
+  build/destroy). Stamp = one-line `itf-stamp|` in the PVE description
+  field (qm set --description / qm config); freshness compares
+  sw-source+version (release) or +rev (dev-tarball); rebuilds always
+  from scratch, old template destroyed before rename so name resolution
+  stays unique. Design facts: itfguests is lvmthin → NO linked clones
+  (file-based/ZFS only) — full clone copies only allocated blocks and is
+  journey-independent; SSH already clone-safe (throwaway known_hosts).
+  Gotchas: guard's name→VMID resolution runs inside $( ) so the mocked
+  itf_base_exec call-capture loses it (assert in parent only); guard
+  tests must unset ITF_TEMPLATE_NAME to keep exec counts stable;
+  release-path freshness probes GitHub (stub _itf_template_would_version
+  in unit tests). Unit tests: test-itf-template new + base-guard/config
+  extensions. Roadmap row 2.5 added per user request. Awaiting commit.
+
+  Live verification on zfstestvm1 (2026-10-06): template build succeeded
+  on the SECOND run after two real bugs the first run exposed. (1) Guard
+  refused the stamp write — a colon token matched the storage-reference
+  shape, so description values are now exempt from that check AND the
+  stamp marker is colon-free `itf-stamp|`. (2) `qm template` refuses
+  snapshot-carrying VMs — stage_os's os-installed snapshot — so the build
+  now clears snapshots first (new delsnapshot/listsnapshot verbs;
+  listsnapshot's arrow field is `` `-> `` , awk `$i ~ /->$/`, skip the
+  `current` pseudo-entry). Template: itf-template = vmid 8000, stamped
+  sw-source=dev-tarball version=0.116.0 rev=afbb9bf. Full clone takes
+  ~2¼ min on lvmthin. dev-tarball stamps record the commit rev, not
+  dirty-tree state (site ITF_SW_SOURCE=dev-tarball, so the baseline
+  includes uncommitted working-tree changes).
+
+  First j04 run failed: clone started but the guest agent reported no
+  IPv4 in 600s. Root cause: stage_os creates install VMs with `--freeze`
+  (serial console captures the first boot byte) and pairs it with an
+  explicit resume; the template config carried freeze:1, clones inherit
+  it, and stage_from_template starts WITHOUT resume — the clone sat
+  paused in QEMU's prelaunch runstate (qm status shows "prelaunch", not
+  "stopped"/"paused"). Proven live: one `qm resume` → running → agent
+  answered with an IP within a minute. Fixed both ends: template build
+  clears freeze before conversion, and itf_guest_clone clears it on
+  every clone (covers templates built before the fix; current 8000
+  keeps freeze:1 in config — harmless, cleared at clone time). The
+  current template also displays %3A in its stamp timestamp: PVE
+  percent-encodes colons in description values on read-back; render now
+  uses hyphens (built=…T18-36-09Z), re-stamped at next rebuild.
+
+  Diagnostic gotchas from the live runs: itf's ONLY base host is
+  zfstestvm1 (site config ITF_BASE_HOSTS) — dan@tweety's sudo is
+  NOPASSWD for product binaries only, so `sudo -n bash -c` fails there
+  by design; never probe tweety for itf guest state. `itf watch` is
+  post-mortem by design when the newest run is finished (it parks on
+  the latest run dir), and its `tail -F` stream garbles on terminal
+  resize — Ctrl-C and rerun. j04 re-run with the freeze fix: GREEN
+  (run-20261006-150042, 14 steps, 12 pass / 0 fail / 2 info) in exactly
+  4 minutes clone-to-finish — the post-install baseline promise
+  delivered. Guest 8001 left running for post-mortem per journey
+  convention (itf guest destroy zfstestvm1 8001).
+
+## Wrap-up 2026-10-06 (post-0.116.0 changeset): six-step protocol complete
+  Step 1 (PREEXISTING): test_file_locking shared-lock handshake flake
+  resolved — the multiprocessing.Queue "held" wait now uses a 60s
+  HANDSHAKE_TIMEOUT constant (raised from 5s; full-suite xdist load can
+  starve the child well past 5s). Applied to both the exclusive-lock and
+  shared-lock tests (identical exposure). mkdocs-material/Zensical entry
+  NOT resolved (awaiting Zensical 1.x, user toolchain decision);
+  infra-vdev planning UI (abeyance, future objective) and itf strict-mode
+  debt (cycle-2 kickoff with live J01-J03 re-validation) untouched by
+  design. One new entry recorded: shellcheck's documented multi-file
+  invocation masks SC2034 warnings in files outside tests/integrated/lib/
+  (bisected; standalone checks show six in test-itf-base-guard's
+  pre-existing block + one in test-itf-report) — fix pattern established
+  in test-itf-template's file-wide directive, apply on next touch.
+  Step 2 (standards): ruff check + format clean (216 files); documented
+  shellcheck command clean after adding a file-wide SC2034 disable to
+  test-itf-template, a per-line disable at the new base-guard template-
+  protection test, and wrapping 8 new over-100-column lines (template-lib
+  apt payload + awk snapshot parser + tag_name sed comment, itf preflight
+  message, base-lib verb list, guest-lib hint, config echo, test-itf-
+  template stamp literal/assert). Lesson: `VAR="a" \` + next-line `"b"`
+  is an env-prefix for a command, NOT a concatenated assignment — base-lib
+  verb list broke that way (bash -n and shellcheck both pass it; only the
+  unit suites caught it) and now uses `+=`. Echo argument-splits join
+  with a space — subshell field vars instead.
+  Step 3 (tests): coverage review found no missing/obsolete/incorrect
+  tests — multi-snapshot (9 handler + 3 sensitivity tests incl. both
+  lock-failure paths), zvol tint both directions + Browse guard + Mount
+  skip, itf stamp/clone/freshness/guard all covered; no stale assertions
+  of the old single-only Snapshot or untinted-volume behavior remain.
+  Step 4 (docs): messages/index.md + gtk-gui.md + integrated-testing.md
+  verified against final code (log strings, prefixes, itf status/preflight
+  wiring); test_docs_integrity green; site/ rebuilt (known mkdocs-material
+  MkDocs-2.0 warning, exit 0). Step 5 (full suite, background, no soaks):
+  84 suites, 4371 passed / 0 failed / 1 skipped (root-gated, expected);
+  the handshake fix held under load. Step 6: codebase FROZEN here.
+  Uncommitted at freeze: the cycle's four features plus the wrap-up
+  additions above. Awaiting version/commit instructions.
+
+## PREEXISTING prompt 2026-10-06 (post-freeze follow-up)
+  Resolved the shellcheck multi-file-masking entry: file-wide SC2034
+  disable (established pattern) in test-itf-base-guard, per-line in
+  test-itf-report; standalone sweep of every tests/test-* file now clean
+  alongside the documented command; both suites green. Entry removed.
+  Zensical rechecked same-day: still 0.0.68 (no 1.x) — mkdocs entry stays
+  blocked on the release + user toolchain decision. infra-vdev (abeyance)
+  and itf strict-mode (cycle-2 kickoff + live J01–J03 campaign) untouched
+  per their recorded deferrals. PREEXISTING: 3 entries remain.

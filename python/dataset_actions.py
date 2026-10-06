@@ -103,33 +103,23 @@ def _confirm_yes_no(parent, primary, secondary):
 # ---------------------------------------------------------------------------
 
 
-def on_datasets_snapshot(app):
-    """Create a snapshot on the selected dataset."""
-    items = get_tree_selection_items(app.datasets_view)
-    ds_items = [i for i in items if i["type"] in ("pool", "dataset")]
-    if len(ds_items) != 1:
-        log_msg("WARN: Select exactly one dataset to snapshot")
-        return
-    dataset = ds_items[0]["name"]
+def _snapshot_target_datasets(items):
+    """Return the pool/dataset rows in *items* that can be snapshotted.
 
-    now = datetime.now()
-    suggested = now.strftime("manual-%Y-%m-%dT%H:%M")
-    ds_label = Gtk.Label()
-    ds_label.set_markup(f"<b>Dataset:</b> {dataset}")
-    ds_label.set_halign(Gtk.Align.START)
-    ds_label.set_selectable(True)
-    response, snap_name = _input_dialog(
-        app,
-        "Create Snapshot",
-        [ds_label, Gtk.Label(label="Snapshot name (without @):")],
-        suggested,
-    )
-    if response != Gtk.ResponseType.OK or not snap_name:
-        return
-    if " " in snap_name or "/" in snap_name:
-        log_msg("WARN: Snapshot name cannot contain spaces or slashes")
-        return
+    Filesystems and volumes (including pool roots, which are filesystems)
+    qualify; snapshots, holds, and volume partitions are skipped. This
+    mirrors the Snapshot button's sensitivity predicate.
+    """
+    return [
+        i
+        for i in items
+        if i["type"] in ("pool", "dataset")
+        and (i.get("zfs_type") or "filesystem") in ("filesystem", "volume")
+    ]
 
+
+def _snapshot_one(app, dataset, snap_name):
+    """Create a single snapshot under a dataset lock."""
     full_snap = f"{dataset}@{snap_name}"
     log_msg(f"INFO: Creating snapshot: {full_snap}")
     try:
@@ -143,6 +133,79 @@ def on_datasets_snapshot(app):
         log_msg(f"WARN: cannot snapshot {dataset}: {exc}")
     except FileNotFoundError:
         log_msg("WARN: Error: zfs command not found")
+
+
+def _snapshot_many(app, datasets, snap_name):
+    """Create *snap_name* on every dataset in *datasets* under one lock set.
+
+    Each dataset is snapshotted independently: a failure on one (e.g. the
+    name already exists there) is logged and the remaining datasets are
+    still attempted. The page refreshes once if anything was created.
+    """
+    log_msg(f"INFO: Creating snapshot '{snap_name}' on {len(datasets)} datasets")
+    created = 0
+    try:
+        with zlm.locks("w", datasets):
+            repo = _repo(app)
+            for dataset in datasets:
+                full_snap = f"{dataset}@{snap_name}"
+                if repo.snapshot(full_snap):
+                    created += 1
+                    log_msg(f"INFO: Snapshot created: {full_snap}")
+                else:
+                    log_msg(f"WARN: Error creating snapshot: {full_snap}")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot snapshot {', '.join(datasets)}: {exc}")
+    except FileNotFoundError:
+        log_msg("WARN: Error: zfs command not found")
+    if created < len(datasets):
+        log_msg(f"WARN: Created snapshot on {created} of {len(datasets)} datasets")
+    if created:
+        refresh_datasets_page(app)
+
+
+def on_datasets_snapshot(app):
+    """Create a snapshot on each selected filesystem/volume dataset."""
+    items = get_tree_selection_items(app.datasets_view)
+    ds_items = _snapshot_target_datasets(items)
+    if not ds_items:
+        log_msg("WARN: Select one or more datasets to snapshot")
+        return
+    datasets = [i["name"] for i in ds_items]
+
+    now = datetime.now()
+    suggested = now.strftime("manual-%Y-%m-%dT%H:%M")
+    widgets = []
+    if len(datasets) == 1:
+        ds_label = Gtk.Label()
+        ds_label.set_markup(f"<b>Dataset:</b> {datasets[0]}")
+        ds_label.set_halign(Gtk.Align.START)
+        ds_label.set_selectable(True)
+        widgets.append(ds_label)
+    else:
+        count_label = Gtk.Label()
+        count_label.set_markup(f"<b>Datasets ({len(datasets)}):</b>")
+        count_label.set_halign(Gtk.Align.START)
+        widgets.append(count_label)
+        list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        add_scrolled_text_view(list_box, "\n".join(datasets), min_height=150)
+        widgets.append(list_box)
+    response, snap_name = _input_dialog(
+        app,
+        "Create Snapshots" if len(datasets) > 1 else "Create Snapshot",
+        widgets + [Gtk.Label(label="Snapshot name (without @):")],
+        suggested,
+    )
+    if response != Gtk.ResponseType.OK or not snap_name:
+        return
+    if " " in snap_name or "/" in snap_name:
+        log_msg("WARN: Snapshot name cannot contain spaces or slashes")
+        return
+
+    if len(datasets) == 1:
+        _snapshot_one(app, datasets[0], snap_name)
+    else:
+        _snapshot_many(app, datasets, snap_name)
 
 
 def on_datasets_delete(app):

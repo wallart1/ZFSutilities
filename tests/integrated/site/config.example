@@ -20,6 +20,11 @@ ITF_SSH_USER=REPLACE-ME-user
 ITF_VMID_FIRST=8000
 ITF_VMID_LAST=8099
 
+# Name of the post-install baseline template on the base hosts (built by
+# "itf template build").  Journeys full-clone it to start at the
+# post-install point instead of repeating the OS + product install.
+ITF_TEMPLATE_NAME=itf-template
+
 # PVE storages dedicated to the orchestrator (created manually on the base
 # host; the orchestrator never writes the base system's own storages).
 ITF_GUEST_STORAGE=itfguests

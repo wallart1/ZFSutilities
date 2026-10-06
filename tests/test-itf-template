@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# test-itf-template — Unit tests for tests/integrated/lib/template-lib.sh
+# (post-install baseline template: stamp, name resolution, clone, freshness).
+#
+# File-wide: the ITF_* assignments below are guard/site configuration read
+# by the sourced libs at runtime; shellcheck cannot follow those sources
+# (they are resolved through variables test-lib.sh sets), so their usage
+# is invisible to it.
+# shellcheck disable=SC2034
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+ITF_ROOT="$mydir/tests/integrated"
+
+# Guard-scope values, mirroring test-itf-base-guard: the libs deliberately
+# do not source each other's configuration.
+ITF_BASE_HOSTS=(testbase)
+ITF_VMID_FIRST=8000
+ITF_VMID_LAST=8099
+ITF_GUEST_STORAGE=itfguests
+ITF_ISO_STORAGE=itfiso
+ITF_ISO_DIR=/mnt/itf-iso
+ITF_ACTION_LOG=/var/log/itf-actions.log
+ITF_TEMPLATE_NAME=itf-template
+ITF_SW_SOURCE=dev-tarball
+
+# shellcheck disable=SC1090
+source "$ITF_ROOT/lib/base-lib.sh"
+# shellcheck disable=SC1090
+source "$ITF_ROOT/lib/guest-lib.sh"
+# shellcheck disable=SC1090
+source "$ITF_ROOT/lib/template-lib.sh"
+
+tmp_dir=$(mktemp -d)
+
+# qm list / qm config answers for the mocked transport.  8001 is the
+# template, 8002 a journey guest, 8005 a foreign-description VM.
+QM_TABLE='      VMID NAME                 STATUS     MEM(MB)    BOOTDISK    PID
+ 8001 itf-template stopped    8192          0          0
+ 8002 j04      running    8192      32768       1234'
+QM_STAMP='itf-stamp| sw-source=release version=0.1.0 rev=abcd123'
+QM_STAMP+=' kernel=6.1.0-1-amd64 built=2026-01-01T00:00:00Z'
+# Observed `qm listsnapshot` shape (PVE 9.2): tree arrows, a date column,
+# and the `current` "You are here!" pseudo-entry that is not a snapshot.
+QM_LISTSNAP='`-> os-installed                2026-10-06 13:56:24     no-description
+ `-> current                                            You are here!'
+
+_itf_exec_calls=""
+itf_base_exec() {
+    _itf_exec_calls+="$1 :: $2"$'\n'
+    case "$2" in
+        "qm list") printf '%s\n' "$QM_TABLE" ;;
+        # clear_snapshots runs on the BUILD VM (not the protected
+        # template), so the mock answers for vmid 8002 here.
+        "qm listsnapshot 8002") printf '%s\n' "$QM_LISTSNAP" ;;
+        "qm config 8001")
+            printf 'name: itf-template\nstatus: stopped\ndescription: %s\n' "$QM_STAMP"
+            ;;
+        "qm config 8005") printf 'name: foreign\ndescription: just some notes\n' ;;
+    esac
+    return 0
+}
+reset_exec_calls() {
+    _itf_exec_calls=""
+}
+
+# ------------------------------------------------------------------------------
+# Stamp render / parse / read
+# ------------------------------------------------------------------------------
+
+test_stamp_round_trip() {
+    test_start "stamp render → parse round trip keeps every field"
+    local stamp parsed rc
+    stamp="$(itf_template_stamp_render dev-tarball 9.9.9 6.1.2-3-amd64 abcd123)"
+    parsed="$(itf_template_stamp_parse "$stamp")"
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$parsed" "sw-source=dev-tarball"
+    assert_contains "$parsed" "version=9.9.9"
+    assert_contains "$parsed" "rev=abcd123"
+    assert_contains "$parsed" "kernel=6.1.2-3-amd64"
+    assert_contains "$parsed" "built=20"
+    # Colon-free by construction: PVE percent-encodes colons in qm config
+    # descriptions, which would mangle the stamp on read-back.
+    if [[ "$stamp" == *:* ]]; then
+        test_fail "stamp contains a colon: $stamp"
+    else
+        test_pass
+    fi
+}
+
+test_stamp_parse_rejects_foreign() {
+    test_start "blank or foreign descriptions fail stamp parsing"
+    itf_template_stamp_parse "" > /dev/null 2>&1
+    assert_rc 1 $?
+    itf_template_stamp_parse "just some notes" > /dev/null 2>&1
+    assert_rc 1 $?
+    # Marker without the field payload is not a stamp either.
+    itf_template_stamp_parse "itf-stamp:" > /dev/null 2>&1
+    assert_rc 1 $?
+}
+
+test_stamp_read_from_qm_config() {
+    test_start "stamp read pulls the description out of qm config output"
+    local s rc
+    s="$(itf_template_stamp_read testbase 8001)"
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_equals "${QM_STAMP#itf-stamp| }" "$s"
+    # A foreign description must not parse as a stamp.
+    itf_template_stamp_read testbase 8005 > /dev/null 2>&1
+    assert_rc 1 $?
+}
+
+# ------------------------------------------------------------------------------
+# Name resolution
+# ------------------------------------------------------------------------------
+
+test_template_vmid_resolves_by_name() {
+    test_start "template VMID is resolved by name from qm list"
+    assert_equals "8001" "$(itf_template_vmid testbase)"
+    local missing
+    missing="$(ITF_TEMPLATE_NAME=absent-template itf_template_vmid testbase)"
+    assert_equals "" "$missing"
+}
+
+# ------------------------------------------------------------------------------
+# Clone
+# ------------------------------------------------------------------------------
+
+test_guest_clone_command_shape() {
+    test_start "itf_guest_clone full-clones the template into a fresh VMID"
+    reset_exec_calls
+    # Redirect, not command substitution: the call capture must land in
+    # this shell's _itf_exec_calls, not a subshell copy (same pattern as
+    # test-itf-base-guard's dry-run test).  The VMID comes back via file.
+    local rc
+    itf_guest_clone gc1 > "$tmp_dir/clone.out" 2>/dev/null
+    rc=$?
+    assert_rc 0 "$rc"
+    # First free VMID in the range (8001 template and 8002 guest are used).
+    assert_equals "8000" "$(cat "$tmp_dir/clone.out")"
+    assert_contains "$_itf_exec_calls" \
+        "testbase :: qm clone 8001 8000 --name gc1 --full 1"
+    # The installer-time CPU freeze must never ride into a clone: a
+    # started-but-frozen clone sits in prelaunch forever (observed live:
+    # j04's 600s IP wait expired against a never-booting guest).
+    assert_contains "$_itf_exec_calls" \
+        "testbase :: qm set 8000 --freeze 0"
+}
+
+test_guest_clone_without_template_fails() {
+    test_start "clone fails with a build hint when no template exists"
+    local out rc
+    out="$(ITF_TEMPLATE_NAME=absent-template itf_guest_clone gc1 2>&1)"
+    rc=$?
+    assert_rc 1 "$rc"
+    assert_contains "$out" "no baseline template"
+    assert_contains "$out" "itf template build"
+}
+
+# ------------------------------------------------------------------------------
+# Snapshot clearing (qm template refuses snapshot-carrying VMs)
+# ------------------------------------------------------------------------------
+
+test_clear_snapshots_deletes_all_but_current() {
+    test_start "snapshot cleanup deletes real snapshots, keeps the current marker"
+    reset_exec_calls
+    # vmid 8002 = a build VM, not the protected template (8001).
+    itf_template_clear_snapshots testbase 8002 > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_contains "$_itf_exec_calls" \
+        "testbase :: qm delsnapshot 8002 os-installed"
+    # The `current` pseudo-entry is the you-are-here marker, not a snapshot.
+    if printf '%s' "$_itf_exec_calls" | grep -q "delsnapshot 8002 current"; then
+        test_fail "current pseudo-entry must not be passed to delsnapshot"
+    else
+        test_pass
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Freshness
+# ------------------------------------------------------------------------------
+
+test_fresh_detection_dev_tarball() {
+    test_start "freshness follows the repo VERSION and rev for dev-tarball"
+    local ver rev fresh_stamp
+    ver="$(cat "$ITF_ROOT/../../VERSION")"
+    rev="$(git -C "$ITF_ROOT/../.." rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    fresh_stamp="sw-source=dev-tarball version=$ver rev=$rev kernel=x built=y"
+    _itf_template_fresh "$fresh_stamp" dev-tarball > /dev/null 2>&1
+    assert_rc 0 $?
+    # Stale version, stale rev, and no stamp at all must all rebuild.
+    _itf_template_fresh "sw-source=dev-tarball version=0.0.0 rev=$rev kernel=x built=y" \
+        dev-tarball > /dev/null 2>&1
+    assert_rc 1 $?
+    _itf_template_fresh "sw-source=dev-tarball version=$ver rev=0000000 kernel=x built=y" \
+        dev-tarball > /dev/null 2>&1
+    assert_rc 1 $?
+    _itf_template_fresh "" dev-tarball > /dev/null 2>&1
+    assert_rc 1 $?
+}
+
+test_fresh_detection_release_ignores_rev() {
+    test_start "release freshness compares source+version only"
+    # No network in unit tests: pin the would-version probe to 0.1.0.
+    local orig
+    orig="$(declare -f _itf_template_would_version)"
+    _itf_template_would_version() {
+        [[ "$1" == release ]] && printf '0.1.0'
+        return 0
+    }
+    _itf_template_fresh \
+        "sw-source=release version=0.1.0 rev=anything kernel=x built=y" \
+        release > /dev/null 2>&1
+    assert_rc 0 $?
+    _itf_template_fresh \
+        "sw-source=dev-tarball version=0.1.0 rev=anything kernel=x built=y" \
+        release > /dev/null 2>&1
+    assert_rc 1 $?
+    eval "$orig"
+}
+
+test_stamp_round_trip
+test_stamp_parse_rejects_foreign
+test_stamp_read_from_qm_config
+test_template_vmid_resolves_by_name
+test_guest_clone_command_shape
+test_guest_clone_without_template_fails
+test_clear_snapshots_deletes_all_but_current
+test_fresh_detection_dev_tarball
+test_fresh_detection_release_ignores_rev
+
+rm -rf "$tmp_dir"
+teardown_test_env
+test_summary

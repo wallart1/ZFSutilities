@@ -6,35 +6,26 @@
 # detect) reruns the installer: it must warn about the remnants, offer
 # cleanup, run the uninstaller when accepted, and complete the install.
 #
-# Guest state required: none — creates and installs its own guest.
-# Snapshots produced: os-installed (clean Debian), installed.
+# Guest state required: post-install baseline template (itf template build).
+# Snapshots produced: as-cloned (post-install checkpoint).
 
 # shellcheck source=common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 journey_main() {
-    local base="${ITF_BASE_HOSTS[0]}"
     local gname="j03"
-    local guest_hostname="itfj03"
 
     itf_step info "journey start" \
         "j03 install over leftovers; sw-source=$ITF_SW_SOURCE repo=$ITF_GITHUB_REPO"
 
     # ------------------------------------------------------------------
-    # Stage A+B: fresh OS + first-time install (shared stages)
+    # Stage T: clone start from the post-install baseline template
     # ------------------------------------------------------------------
 
-    itf_journey_stage_os "$gname" "$guest_hostname" || return 1
+    itf_journey_stage_from_template "$gname" || return 1
     local guest_ip="$J_GUEST_IP"
 
-    itf_journey_stage_install "$guest_ip" || return 1
     itf_journey_verify_installed "$guest_ip"
-
-    if itf_guest_snapshot "$base" "$J_VMID" installed > /dev/null 2>&1; then
-        itf_step pass "snapshot installed" "checkpoint before simulating the partial uninstall"
-    else
-        itf_step fail "snapshot installed"
-    fi
 
     # ------------------------------------------------------------------
     # Stage P: simulate an interrupted uninstall

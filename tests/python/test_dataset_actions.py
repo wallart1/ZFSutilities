@@ -170,6 +170,158 @@ def _configure_dialog_cancel(module):
     module.create_dialog = dialog
 
 
+class TestSnapshot(unittest.TestCase):
+    """on_datasets_snapshot creates one snapshot per selected dataset."""
+
+    def _import_under_mock(self):
+        with mock_gtk():
+            import dataset_actions as da
+
+            return da
+
+    def _run(self, da, items, name="manual-test", response=None, snapshot_results=None):
+        """Run the handler with the name dialog patched; return the mocks."""
+        app = _make_app()
+        app.datasets_view = MagicMock()
+        repo = app.ctx.zfs_repository
+        if snapshot_results is not None:
+            repo.snapshot.side_effect = snapshot_results
+        else:
+            repo.snapshot.return_value = True
+        if response is None:
+            response = da.Gtk.ResponseType.OK
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=items),
+            patch.object(da, "_input_dialog") as mock_dialog,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "refresh_datasets_page") as mock_refresh,
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            mock_dialog.return_value = (response, name)
+            da.on_datasets_snapshot(app)
+        return app, mock_dialog, mock_log, mock_refresh, mock_zlm
+
+    def test_single_dataset_snapshots_under_lock(self):
+        da = self._import_under_mock()
+        app, _dlg, mock_log, mock_refresh, mock_zlm = self._run(
+            da, [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem"}]
+        )
+
+        mock_zlm.lock.assert_called_once_with("tank/a", "w", "snapshot tank/a@manual-test")
+        app.ctx.zfs_repository.snapshot.assert_called_once_with("tank/a@manual-test")
+        mock_log.assert_any_call("INFO: Snapshot created: tank/a@manual-test")
+        mock_refresh.assert_called_once_with(app)
+
+    def test_multiple_filesystems_and_volumes_snapshot_together(self):
+        da = self._import_under_mock()
+        items = [
+            {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem"},
+            {"type": "dataset", "name": "tank/vol", "zfs_type": "volume"},
+            {"type": "pool", "name": "backup", "zfs_type": "filesystem"},
+        ]
+        app, _dlg, mock_log, mock_refresh, mock_zlm = self._run(da, items)
+
+        mock_zlm.locks.assert_called_once_with("w", ["tank/a", "tank/vol", "backup"])
+        self.assertEqual(
+            app.ctx.zfs_repository.snapshot.call_args_list,
+            [
+                call("tank/a@manual-test"),
+                call("tank/vol@manual-test"),
+                call("backup@manual-test"),
+            ],
+        )
+        mock_log.assert_any_call("INFO: Snapshot created: tank/vol@manual-test")
+        mock_log.assert_any_call("INFO: Snapshot created: backup@manual-test")
+        self.assertNotIn(call("WARN: Created snapshot on 2 of 3 datasets"), mock_log.call_args_list)
+        mock_refresh.assert_called_once_with(app)
+
+    def test_multi_dialog_lists_dataset_count(self):
+        da = self._import_under_mock()
+        items = [
+            {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem"},
+            {"type": "dataset", "name": "tank/b", "zfs_type": "filesystem"},
+        ]
+        _app, mock_dialog, _log, _refresh, _zlm = self._run(da, items)
+
+        self.assertEqual(mock_dialog.call_args.args[1], "Create Snapshots")
+
+    def test_single_dialog_title_unchanged(self):
+        da = self._import_under_mock()
+        _app, mock_dialog, _log, _refresh, _zlm = self._run(
+            da, [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem"}]
+        )
+
+        self.assertEqual(mock_dialog.call_args.args[1], "Create Snapshot")
+
+    def test_partial_failure_continues_and_summarizes(self):
+        da = self._import_under_mock()
+        items = [
+            {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem"},
+            {"type": "dataset", "name": "tank/b", "zfs_type": "filesystem"},
+            {"type": "dataset", "name": "tank/c", "zfs_type": "filesystem"},
+        ]
+        app, _dlg, mock_log, mock_refresh, _zlm = self._run(
+            da, items, snapshot_results=[True, False, True]
+        )
+
+        self.assertEqual(app.ctx.zfs_repository.snapshot.call_count, 3)
+        mock_log.assert_any_call("WARN: Error creating snapshot: tank/b@manual-test")
+        mock_log.assert_any_call("INFO: Snapshot created: tank/c@manual-test")
+        mock_log.assert_any_call("WARN: Created snapshot on 2 of 3 datasets")
+        mock_refresh.assert_called_once_with(app)
+
+    def test_all_failures_skip_refresh(self):
+        da = self._import_under_mock()
+        items = [
+            {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem"},
+            {"type": "dataset", "name": "tank/b", "zfs_type": "filesystem"},
+        ]
+        _app, _dlg, mock_log, mock_refresh, _zlm = self._run(
+            da, items, snapshot_results=[False, False]
+        )
+
+        mock_log.assert_any_call("WARN: Created snapshot on 0 of 2 datasets")
+        mock_refresh.assert_not_called()
+
+    def test_dialog_cancel_does_nothing(self):
+        da = self._import_under_mock()
+        app, _dlg, _log, mock_refresh, mock_zlm = self._run(
+            da,
+            [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem"}],
+            response=da.Gtk.ResponseType.CANCEL,
+        )
+
+        app.ctx.zfs_repository.snapshot.assert_not_called()
+        mock_zlm.lock.assert_not_called()
+        mock_zlm.locks.assert_not_called()
+        mock_refresh.assert_not_called()
+
+    def test_invalid_name_aborts(self):
+        da = self._import_under_mock()
+        app, _dlg, mock_log, mock_refresh, _zlm = self._run(
+            da,
+            [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem"}],
+            name="bad name",
+        )
+
+        mock_log.assert_called_once_with("WARN: Snapshot name cannot contain spaces or slashes")
+        app.ctx.zfs_repository.snapshot.assert_not_called()
+        mock_refresh.assert_not_called()
+
+    def test_no_snapshot_capable_rows_warns(self):
+        da = self._import_under_mock()
+        items = [
+            {"type": "snapshot", "name": "snap", "dataset": "tank/a"},
+            {"type": "hold", "tag": "keep", "snapshot": "snap", "dataset": "tank/a"},
+        ]
+        app, mock_dialog, mock_log, mock_refresh, _zlm = self._run(da, items)
+
+        mock_log.assert_called_once_with("WARN: Select one or more datasets to snapshot")
+        mock_dialog.assert_not_called()
+        app.ctx.zfs_repository.snapshot.assert_not_called()
+        mock_refresh.assert_not_called()
+
+
 class TestDeleteDatasetsRunner(unittest.TestCase):
     """_delete_datasets delegates to app.dataset_runner via BashStep."""
 
@@ -2179,6 +2331,32 @@ class TestVolumeLoopActions(unittest.TestCase):
 
         repo.loop_attach.assert_not_called()
         mock_reload.assert_called_once()
+
+    def test_mount_skips_volume_whose_row_reports_attached(self):
+        """A volume row flagged mounted (loop-attached) is not processed at all."""
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[self._volume_item(mounted=True)],
+            ),
+            patch.object(da, "find_tree_iter_by_full_name") as mock_find,
+            patch.object(da, "reload_row_children") as mock_reload,
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg"),
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            da.on_datasets_mount(app)
+
+        repo.loop_attach.assert_not_called()
+        mock_find.assert_not_called()
+        mock_reload.assert_not_called()
+        mock_zlm.lock.assert_not_called()
+        mock_refresh.assert_not_called()
 
     def test_mount_volume_warns_when_attach_fails(self):
         da = self._import_under_mock()

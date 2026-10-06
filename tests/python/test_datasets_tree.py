@@ -20,6 +20,7 @@ gi = import_or_skip_gi("gi")
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 from gui_helpers import (
+    UNMOUNTED_FG,
     build_full_dataset_name,
     find_tree_iter_by_full_name,
     get_tree_selection_items,
@@ -30,6 +31,7 @@ from zfs_repository import ZfsRepository
 
 SNAPSHOT_CMD = "zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones -d 1"
 DATASET_CMD = "zfs list -H -o name,creation,type,used,avail,refer,origin,clones,mounted -r -d 1"
+LOOP_LIST_CMD = "losetup --noheadings -O BACK-FILE"
 
 
 def _make_repo(stdout_map):
@@ -89,6 +91,52 @@ class TestDatasetRowExpansion(unittest.TestCase):
                 ("vm-100", "volume"),
             ],
         )
+
+    def test_expansion_tints_unattached_volume_child(self):
+        """A volume with no loop device attached renders unmounted (teal)."""
+        repo = _make_repo(
+            {
+                f"{SNAPSHOT_CMD} threeamigos/proxmox": "",
+                f"{DATASET_CMD} threeamigos/proxmox": (
+                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\tyes\n"
+                    "threeamigos/proxmox/vm-100\t2025-01-01\tvolume\t5G\t-\t5G\t-\t-\t-\n"
+                ),
+                LOOP_LIST_CMD: "",
+            }
+        )
+        store, view, ds = self._tree_with_dataset()
+        view._zfs_repo = repo
+        on_row_expanded(view, ds, store.get_path(ds))
+
+        child = store.iter_children(ds)
+        while child and store.get_value(child, 2) != "volume":
+            child = store.iter_next(child)
+        self.assertIsNotNone(child)
+        self.assertFalse(store.get_value(child, 8))
+        self.assertEqual(store.get_value(child, 9), UNMOUNTED_FG)
+
+    def test_expansion_untints_loop_attached_volume_child(self):
+        """A volume whose zvol path has a loop device attached renders mounted."""
+        repo = _make_repo(
+            {
+                f"{SNAPSHOT_CMD} threeamigos/proxmox": "",
+                f"{DATASET_CMD} threeamigos/proxmox": (
+                    "threeamigos/proxmox\t2025-01-01\tfilesystem\t100G\t500G\t50G\t-\t-\tyes\n"
+                    "threeamigos/proxmox/vm-100\t2025-01-01\tvolume\t5G\t-\t5G\t-\t-\t-\n"
+                ),
+                LOOP_LIST_CMD: "/dev/zvol/threeamigos/proxmox/vm-100\n",
+            }
+        )
+        store, view, ds = self._tree_with_dataset()
+        view._zfs_repo = repo
+        on_row_expanded(view, ds, store.get_path(ds))
+
+        child = store.iter_children(ds)
+        while child and store.get_value(child, 2) != "volume":
+            child = store.iter_next(child)
+        self.assertIsNotNone(child)
+        self.assertTrue(store.get_value(child, 8))
+        self.assertIsNone(store.get_value(child, 9))
 
     def test_expansion_loads_only_exact_dataset_snapshots(self):
         repo = _make_repo(

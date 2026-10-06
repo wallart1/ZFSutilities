@@ -1,40 +1,31 @@
 #!/usr/bin/env bash
 # j02-uninstall-reinstall.journey — cycle-1 journey.
 #
-# A user who installed ZFSutilities (j01 flow) then removes it with
-# `uninstall-zfsutilities --purge --yes` must end up with a clean
+# A user who installed ZFSutilities (template build flow) then removes it
+# with `uninstall-zfsutilities --purge --yes` must end up with a clean
 # machine (wiring, versions, configs, state all gone), and a fresh
 # reinstall on that same machine must work end-to-end.
 #
-# Guest state required: none — creates and installs its own guest.
-# Snapshots produced: os-installed (clean Debian), installed.
+# Guest state required: post-install baseline template (itf template build).
+# Snapshots produced: as-cloned (post-install checkpoint).
 
 # shellcheck source=common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 journey_main() {
-    local base="${ITF_BASE_HOSTS[0]}"
     local gname="j02"
-    local guest_hostname="itfj02"
 
     itf_step info "journey start" \
         "j02 uninstall/reinstall; sw-source=$ITF_SW_SOURCE repo=$ITF_GITHUB_REPO"
 
     # ------------------------------------------------------------------
-    # Stage A+B: fresh OS + first-time install (shared stages)
+    # Stage T: clone start from the post-install baseline template
     # ------------------------------------------------------------------
 
-    itf_journey_stage_os "$gname" "$guest_hostname" || return 1
+    itf_journey_stage_from_template "$gname" || return 1
     local guest_ip="$J_GUEST_IP"
 
-    itf_journey_stage_install "$guest_ip" || return 1
     itf_journey_verify_installed "$guest_ip"
-
-    if itf_guest_snapshot "$base" "$J_VMID" installed > /dev/null 2>&1; then
-        itf_step pass "snapshot installed" "checkpoint before uninstall"
-    else
-        itf_step fail "snapshot installed"
-    fi
 
     # ------------------------------------------------------------------
     # Stage U: purge uninstall must leave a clean machine

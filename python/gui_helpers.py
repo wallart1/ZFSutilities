@@ -264,9 +264,11 @@ def _row_fg_color(mounted, ds_type):
     """Return the foreground color for a dataset/snapshot row.
 
     Unmounted filesystems and snapshots are tinted so users can spot them
-    immediately. Placeholders, holds, and pools keep the default color.
+    immediately; volumes are tinted when no loop device is attached (their
+    mounted flag holds the loop-attach state). Placeholders, holds, and pools
+    keep the default color.
     """
-    if not mounted and ds_type in ("filesystem", "snapshot"):
+    if not mounted and ds_type in ("filesystem", "snapshot", "volume"):
         return UNMOUNTED_FG
     return None
 
@@ -710,13 +712,22 @@ def load_dataset_children(store, ds_iter, ds_name, repo=None):
     # Load sub-datasets
     try:
         children = repo.list_datasets(pool=ds_name, depth=1)
+        children = [row for row in children if row.name != ds_name and row.ds_type != "snapshot"]
+        # Volumes report mounted='-' from ZFS; their mounted flag is the
+        # loop-attach state, resolved with one bulk losetup listing.
+        loop_attached = (
+            repo.loop_attached_paths()
+            if any(row.ds_type == "volume" for row in children)
+            else set()
+        )
         for row in children:
-            if row.name == ds_name or row.ds_type == "snapshot":
-                continue
             row_data = [row.creation, row.ds_type, row.used, row.avail, row.refer]
             origin_val = row.origin if row.origin != "-" else ""
             short_name = row.name.rsplit("/", 1)[-1]
-            mounted = row.mounted == "yes"
+            if row.ds_type == "volume":
+                mounted = zvol_device_path(row.name) in loop_attached
+            else:
+                mounted = row.mounted == "yes"
             fg_color = _row_fg_color(mounted, row.ds_type)
             child_iter = store.append(
                 ds_iter,

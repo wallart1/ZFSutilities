@@ -63,10 +63,11 @@ tests/integrated/itf manual-steps     # outstanding human setup, if any
 tests/integrated/itf preflight        # dev + base-host readiness report
 tests/integrated/itf iso fetch        # download the installer ISO
 tests/integrated/itf iso upload       # push it to the base ISO storage
+tests/integrated/itf template build   # rebuild the post-install baseline
 tests/integrated/itf journey list
 tests/integrated/itf journey run j01-fresh-install
 tests/integrated/itf watch            # tail the active run — NOT a console
-tests/integrated/itf status           # guests + active/recent runs overview
+tests/integrated/itf status           # guests + template + runs overview
 ```
 
 Every run produces a progressive report under
@@ -94,7 +95,10 @@ blind the driver for the rest of the run. While a run is active
 
 To follow a run, use `itf watch [TAG]` — it tails the live report and
 serial transcript of the active run (or a named one) from the first
-byte, reading transcripts only and touching no console.
+byte, reading transcripts only and touching no console. With no active
+run it parks on the newest run's final screen (post-mortem mode). The
+output is a plain `tail -F` stream, not a full-screen viewer: resizing
+the terminal garbles the wrap — Ctrl-C and rerun `itf watch` to redraw.
 
 ## Journeys
 
@@ -115,6 +119,44 @@ guest ssh/scp traffic uses `StrictHostKeyChecking=no` with a throwaway
 known-hosts file: a fresh guest at a previously used address presents a
 *different* host key, which `accept-new` rejects as a mismatch.
 
+## Post-install baseline template
+
+Journeys whose scenario begins *after* installation start from a
+**baseline template**: a guest built once through the real first-time
+user path (OS install → product install → OS package updates → boot
+health gate) and converted to a Proxmox template (`itf template build`).
+`itf_journey_stage_from_template` full-clones it, so the journey is at
+the post-install point in a minute or two instead of repeating the
+~15–20-minute install.
+
+- **Full clones, by design.** The itf guest storage is LVM-thin, which
+  does not support Proxmox linked clones — and full clones are the
+  safer shape anyway: each clone is independent of the template, so a
+  template rebuild can never break a running journey's guest. A
+  thin-pool full clone copies only allocated blocks, so it stays fast.
+- **Rebuilds are from scratch, never in-place upgrades.** The baseline
+  must keep first-time-user fidelity — no version-dir drift, no
+  upgrade-path contamination. `itf template build` refuses when the
+  existing template already reflects the current release (or repo rev,
+  for dev tarballs); `--force` overrides. A rebuild costs one
+  unattended install and doubles as a smoke run.
+- **OS currency is a build-time property.** The build applies all
+  pending package updates *after* the product install and reboots onto
+  a new kernel when one arrives, gated on: newest kernel running, ZFS
+  module loadable, product wiring intact. Every clone inherits a
+  current, proven-bootable OS — this also proves an installed system
+  survives a routine `apt full-upgrade`.
+- **The stamp rides in the PVE description field** (`qm set
+  --description`, read via `qm config`): software source, product
+  version, repo rev, kernel, and build time travel with the template
+  with no new write paths on the base host. `itf template status` and
+  `itf preflight` surface it.
+- **The template is protected by the guard.** Mutating qm verbs against
+  the VMID carrying the template's name are refused (clone is exempt —
+  reading the template is its purpose); `itf template build`/`destroy`
+  are the sanctioned management paths and are audit-logged like every
+  other mutation.
+
 ## Findings and repair loop
 
 Failures observed through the end-user surface become entries in
@@ -133,11 +175,13 @@ The itf libraries have their own mock-based suites in the default
 `tests/run-tests` set:
 
 ```bash
-tests/run-tests test-itf-config test-itf-base-guard test-itf-report test-itf-ssh
+tests/run-tests test-itf-config test-itf-base-guard test-itf-report \
+    test-itf-ssh test-itf-template
 ```
 
 They cover fail-closed site-config loading, example-file validity, the
 confinement guard's refusals (VMID range, non-itf storages, non-allow-
-listed verbs, path confinement), dry-run behavior, audit ordering, the
-run-report writer, and the dev-host HTTP serve/fetch/stop round-trip
-used to deliver preseeds and dev tarballs to guests.
+listed verbs, path confinement, baseline-template protection), dry-run
+behavior, audit ordering, the run-report writer, the dev-host HTTP
+serve/fetch/stop round-trip used to deliver preseeds and dev tarballs to
+guests, and the template stamp/resolution/clone/freshness logic.

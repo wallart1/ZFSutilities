@@ -2026,7 +2026,10 @@ The **Origin / Clones** column shows:
 
 Unmounted filesystems and snapshots are shown in **teal** text so you can spot
 at a glance which items are not currently browseable; a small legend at the
-bottom of the page restates this. Each snapshot has its own
+bottom of the page restates this. Volumes are tinted the same way while no loop
+device is attached (see [Mounting ZFS volumes](#mounting-zfs-volumes-zvols)
+below), so an untinted volume row always has **Unmount** rather than **Mount**
+available. Each snapshot has its own
 mount indicator; the parent dataset's mount state is shown separately on the
 parent row.
 
@@ -2037,7 +2040,7 @@ based on what is selected.
 
 | Button                         | Enabled when                                                                                                                          | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Snapshot**                   | Exactly one dataset is selected                                                                                                       | Creates a new snapshot (prompts for name; suggests `manual-YYYY-mm-ddTHH:MM`)                                                                                                                                                                                                                                                                                                                                                                    |
+| **Snapshot**                   | One or more dataset or pool-root rows (filesystems or volumes) selected; snapshots, holds, and volume partitions disable it             | Creates a new snapshot on each selected dataset (prompts once for a name; suggests `manual-YYYY-mm-ddTHH:MM`). With multiple datasets selected, the dialog lists them and the snapshot is created on each in turn; per-dataset success and failure are logged, and a failure (e.g. the name already exists on that dataset) does not stop the remaining datasets.                                                                                                                                                     |
 | **Delete**                     | Only datasets, snapshots, and/or holds selected                                                                                       | Destroys the selected datasets (`zfs destroy`, with their snapshots and holds listed in the confirmation dialog). Releases the selected hold tags, then destroys the selected snapshots. If a selected snapshot still has holds that were not selected, the operation is aborted and the unselected hold tags are listed so you can select them as well.                                                                                                                                                           |
 | **Add Hold**                   | At least one snapshot selected                                                                                                        | Prompts for a tag (default `keep`) and applies it to each selected snapshot                                                                                                                                                                                                                                                                                                                                                                      |
 | **Rollback**                   | Exactly one snapshot selected                                                                                                         | Rolls the dataset back to that snapshot (destroys newer snapshots and data updates)                                                                                                                                                                                                                                                                                                                                                              |
@@ -2094,6 +2097,13 @@ volume's `/dev/zvol/…` device to a **read-only loop device** with partition
 scanning (`losetup --find --show --partscan --read-only`). The attach is
 read-only because these volumes are often live VM disks (in use via iSCSI) or
 active backup targets; a read-write attach could corrupt them.
+
+The volume row's mount state follows the loop device: while no loop device is
+attached the row is drawn in teal like an unmounted filesystem (volumes report
+no ZFS `mounted` property of their own), and attaching via **Mount** clears
+the tint — detaching via **Unmount** restores it. The row's state and the
+Mount/Unmount buttons always agree, since both ask the same loop-device
+listing.
 
 Once attached, the volume's entry in the Datasets tree lists what the loop
 device contains. The GUI runs `udevadm settle` after the attach, so the

@@ -303,6 +303,11 @@ def _parse_loop_find_output(raw: str) -> str | None:
     return None
 
 
+def _parse_loop_backing_files(raw: str) -> set[str]:
+    """Return the set of backing-file paths from `losetup -O BACK-FILE` output."""
+    return {line.strip() for line in raw.splitlines() if line.strip()}
+
+
 def _validate_by_id_path(path: str) -> None:
     """Raise ValueError unless *path* is an absolute /dev/disk/by-id path."""
     if not path.startswith(_BY_ID_PREFIX) or ".." in path or any(c.isspace() for c in path):
@@ -1316,6 +1321,18 @@ class ZfsRepository:
         if result.returncode != 0:
             return None
         return _parse_loop_find_output(result.stdout)
+
+    def loop_attached_paths(self) -> set[str]:
+        """Return the backing-file paths of all attached loop devices.
+
+        One losetup listing answers "is this zvol loop-attached?" for many
+        volumes at once; per-volume lookups should use loop_find() instead.
+        Returns an empty set when losetup fails (no loop support, no /dev).
+        """
+        result = self._run(self._cmd("losetup", "--noheadings", "-O", "BACK-FILE"), check=False)
+        if result.returncode != 0:
+            return set()
+        return _parse_loop_backing_files(result.stdout)
 
     def loop_detach(self, loop_dev: str) -> bool:
         """Detach *loop_dev*. Returns True on success."""

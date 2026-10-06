@@ -268,7 +268,7 @@ function checkagainst {
                             done < <(zfs list -Ht snapshot -o name -s creation \
                                      "$_source_dataset" 2>/dev/null)
                             if [[ $_has_other = true ]]; then
-                                log_msg "INFO: Offline pool $_candidate_pool: another snapshot" \
+                                log_msg "VERB: Offline pool $_candidate_pool: another snapshot" \
                                     "carries hold '$_hold_tag' — incremental chain intact."
                                 _entry_found=true
                                 break

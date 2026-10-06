@@ -74,12 +74,22 @@ test_valid_config_loads_with_defaults() {
         # shellcheck disable=SC1090
         source "$ITF_CONFIG_LIB"
         ITF_SITE_CONFIG="$tmp_dir/valid.conf" itf_config_load
-        echo "${ITF_HTTP_PORT}|${ITF_GUEST_NET_MODEL}|${ITF_RUNS_DIR}|${ITF_CACHE_DIR}"
+        fields="${ITF_HTTP_PORT}|${ITF_GUEST_NET_MODEL}|${ITF_RUNS_DIR}"
+        echo "${fields}|${ITF_CACHE_DIR}|${ITF_TEMPLATE_NAME}"
     ) 2>/dev/null )
     assert_rc 0 $?
     assert_equals \
-        "8000|virtio|$mydir/tests/integrated/results|$mydir/tests/integrated/cache" \
+        "8000|virtio|$mydir/tests/integrated/results|$mydir/tests/integrated/cache|itf-template" \
         "$out"
+}
+
+test_template_name_validated() {
+    test_start "template names with invalid characters are rejected"
+    write_valid_config
+    echo 'ITF_TEMPLATE_NAME="bad name!"' >> "$tmp_dir/valid.conf"
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_TEMPLATE_NAME has invalid characters"
 }
 
 # ------------------------------------------------------------------------------
@@ -157,6 +167,7 @@ test_vmid_bounds_enforced() {
 test_missing_config_is_fail_closed
 test_committed_example_passes_validation
 test_valid_config_loads_with_defaults
+test_template_name_validated
 test_missing_required_keys_reported
 test_invalid_values_reported_together
 test_storage_name_charset_enforced

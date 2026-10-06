@@ -161,7 +161,7 @@ def create_datasets_page(app):
     app.datasets_legend_label = Gtk.Label()
     app.datasets_legend_label.set_markup(
         f"<small><i><span foreground='{UNMOUNTED_FG}'>Teal text</span>"
-        " — unmounted filesystem or snapshot</i></small>"
+        " — unmounted filesystem/snapshot or unattached volume</i></small>"
     )
     app.datasets_legend_label.set_halign(Gtk.Align.END)
     summary_row.pack_start(app.datasets_legend_label, True, False, 0)
@@ -415,7 +415,15 @@ def update_ds_button_sensitivity(app):
     items = get_tree_selection_items(app.datasets_view)
     types = {i["type"] for i in items} if items else set()
 
-    can_snapshot = len(items) == 1 and types <= {"pool", "dataset"}
+    # Snapshot and Apply Profile / Rewrite Data act on pool/dataset rows
+    # only; a selection containing snapshots, holds, or volume partitions
+    # disables them.
+    def _is_tunable(i):
+        if i["type"] not in ("pool", "dataset"):
+            return False
+        return (i.get("zfs_type") or "filesystem") in ("filesystem", "volume")
+
+    can_snapshot = bool(items) and all(_is_tunable(i) for i in items)
     can_delete = bool(items) and types <= {"dataset", "snapshot", "hold"}
     can_hold = "snapshot" in types and types <= {"snapshot", "hold"}
     can_rollback = len(items) == 1 and types == {"snapshot"}
@@ -438,7 +446,14 @@ def update_ds_button_sensitivity(app):
                 attached = False
             volume_loop_attached[i["name"]] = attached
 
-    can_browse = single_mounted
+    # A loop-attached volume row reports mounted=True, but Browse has no
+    # target for the volume itself; its partition rows are the browsable
+    # leaves, so the volume row keeps Browse disabled.
+    can_browse = single_mounted and not (
+        single is not None
+        and single["type"] in ("pool", "dataset")
+        and single.get("zfs_type") == "volume"
+    )
     can_mount = all_browsable and any(_is_mountable(i, volume_loop_attached) for i in items)
     can_unmount = all_browsable and any(_is_unmountable(i, volume_loop_attached) for i in items)
 
@@ -447,13 +462,6 @@ def update_ds_button_sensitivity(app):
     )
 
     can_show_big_stuff = len(items) == 1 and types == {"pool"}
-
-    # Apply Profile / Rewrite Data act on pool/dataset rows only; a selection
-    # containing snapshots, holds, or volume partitions disables them.
-    def _is_tunable(i):
-        if i["type"] not in ("pool", "dataset"):
-            return False
-        return (i.get("zfs_type") or "filesystem") in ("filesystem", "volume")
 
     can_apply_profile = len(items) == 1 and _is_tunable(items[0])
     can_rewrite = (
@@ -593,6 +601,18 @@ def update_mounted_states(app):
     store = app.datasets_store
     mounted_snaps = get_mounted_snapshots()
 
+    # Loop-attach state for volume rows, fetched once on first need.
+    loop_attached = None
+
+    def _volume_attached(full_name):
+        nonlocal loop_attached
+        if loop_attached is None:
+            try:
+                loop_attached = repo.loop_attached_paths()
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                loop_attached = set()
+        return zvol_device_path(full_name) in loop_attached
+
     def _walk(tree_iter):
         while tree_iter:
             name = store.get_value(tree_iter, 0)
@@ -611,7 +631,11 @@ def update_mounted_states(app):
                     mounted = repo.device_mountpoint(f"/dev/{name}") is not None
                 except (subprocess.CalledProcessError, FileNotFoundError):
                     pass
-            elif ds_type in ("filesystem", "volume", "pool"):
+            elif ds_type == "volume":
+                # Volumes have no zfs "mounted" property; loop-attach state
+                # decides, matching the Mount/Unmount button logic.
+                mounted = _volume_attached(build_full_dataset_name(store, tree_iter))
+            elif ds_type in ("filesystem", "pool"):
                 full_name = build_full_dataset_name(store, tree_iter)
                 try:
                     mounted = repo.get_property(full_name, "mounted") == "yes"

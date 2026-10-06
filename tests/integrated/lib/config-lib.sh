@@ -56,6 +56,7 @@ to run without a site configuration (fail-closed by design)."
     ITF_GUEST_NET_MODEL="${ITF_GUEST_NET_MODEL:-virtio}"
     ITF_GUEST_OSTYPE="${ITF_GUEST_OSTYPE:-l26}"
     ITF_SSH_KEY="${ITF_SSH_KEY:-$HOME/.ssh/id_ed25519.pub}"
+    ITF_TEMPLATE_NAME="${ITF_TEMPLATE_NAME:-itf-template}"
 
     itf_config_validate \
         || itf_config_die "site configuration validation failed (see messages above)"
@@ -126,6 +127,13 @@ itf_config_validate() {
     _itf_req_var ITF_ACTION_LOG "append-only audit log on the base host"
 
     _itf_req_var ITF_BRIDGE "PVE bridge guests attach to"
+    # The template name doubles as a guest hostname during builds, so it
+    # stays within hostname/volid-safe characters.
+    if [[ -n "${ITF_TEMPLATE_NAME:-}" \
+            && ! "${ITF_TEMPLATE_NAME:-}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
+        echo "itf-config: ITF_TEMPLATE_NAME has invalid characters: $ITF_TEMPLATE_NAME" >&2
+        problems=1
+    fi
     _itf_req_num ITF_GUEST_MEMORY_MB 1024 "guest memory in MiB"
     _itf_req_num ITF_GUEST_CORES 1 "guest vCPU count"
     _itf_req_num ITF_GUEST_SYSTEM_DISK_GB 4 "guest system disk in GiB"

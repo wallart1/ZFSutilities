@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # common.sh — shared journey stages, factored from j01-fresh-install.
 #
-# Two composable stages every cycle-1 journey starts with:
+# Composable stages:
 #   itf_journey_stage_os <gname> <hostname>
 #       Fresh Debian guest: custom serial-console ISO + preseed install,
 #       IP discovery, root SSH, os-installed snapshot.
@@ -10,6 +10,11 @@
 #       First-time-user product install: download (per ITF_SW_SOURCE),
 #       expected-to-fail prerequisite check on the fresh system,
 #       install-single-node with piped answers, installed-state verify.
+#   itf_journey_stage_from_template <gname>
+#       Clone start: full-clone the post-install baseline template
+#       (itf template build) instead of installing — the fast path for
+#       journeys whose scenario begins after installation.
+#       Sets globals J_VMID and J_GUEST_IP on success.
 #
 # HTTP-server shutdown on abort paths goes through the J_PIDFILE /
 # J_PIDFILE2 globals: an EXIT trap cannot see function-locals after the
@@ -409,4 +414,77 @@ itf_journey_verify_installed() {
         && itf_step pass "installed state verified" "see guest-verify.log" \
         || itf_step fail "installed state verified" "see guest-verify.log"
     itf_artifact "install-verify" "$verify_log"
+}
+
+# itf_journey_stage_from_template <gname>
+#
+# Clone start: full-clone the post-install baseline template and snapshot
+# `as-cloned` as the journey's rollback checkpoint.  Fails fast with a
+# PREP hint when the template is missing or carries no stamp — per the
+# journey contract, never half-run.  Sets J_VMID and J_GUEST_IP.
+itf_journey_stage_from_template() {
+    local gname="$1"
+    local base="${ITF_BASE_HOSTS[0]}"
+    local tmpl_vmid stamp vmid guest_ip
+
+    tmpl_vmid="$(itf_template_vmid "$base")"
+    if [[ -z "$tmpl_vmid" ]]; then
+        itf_step fail "baseline template available" \
+            "no '$ITF_TEMPLATE_NAME' on $base — PREP: itf template build"
+        return 1
+    fi
+    if ! stamp="$(itf_template_stamp_read "$base" "$tmpl_vmid" 2>/dev/null)"; then
+        itf_step fail "baseline template available" \
+            "vmid $tmpl_vmid has no readable itf stamp — PREP: itf template build --force"
+        return 1
+    fi
+    itf_step pass "baseline template available" \
+        "$ITF_TEMPLATE_NAME (vmid $tmpl_vmid): ${stamp#itf-stamp| }"
+
+    vmid="$(itf_guest_clone "$gname" --base "$base" \
+        2>"$ITF_RUN_DIR/guest-clone.log")"
+    if [[ -n "$vmid" ]]; then
+        itf_step pass "guest cloned from template" \
+            "vmid $vmid — post-install baseline in minutes, not a reinstall"
+    else
+        itf_step fail "guest cloned from template" "see guest-clone.log"
+        return 1
+    fi
+    # Remember the guest for post-mortem/diagnostics even if we abort.
+    echo "$base $vmid" > "$ITF_RUN_DIR/guest.txt"
+
+    if itf_guest_start "$base" "$vmid" > "$ITF_RUN_DIR/guest-start.log" 2>&1; then
+        itf_step pass "guest started" "vmid $vmid"
+    else
+        itf_step fail "guest started" "see guest-start.log"
+        return 1
+    fi
+
+    guest_ip="$(itf_guest_ip "$base" "$vmid" 600)"
+    if [[ -n "$guest_ip" ]]; then
+        itf_step pass "guest IP discovered" "$guest_ip"
+        echo "$base $vmid $guest_ip" > "$ITF_RUN_DIR/guest.txt"
+    else
+        itf_step fail "guest IP discovered" "guest agent reported nothing in 600s"
+        return 1
+    fi
+
+    if itf_wait_ssh "$guest_ip" 300; then
+        itf_step pass "guest ssh reachable" "root@${guest_ip}"
+    else
+        itf_step fail "guest ssh reachable"
+        return 1
+    fi
+
+    if itf_guest_snapshot "$base" "$vmid" as-cloned > /dev/null 2>&1; then
+        itf_step pass "snapshot as-cloned" "post-install checkpoint for this journey"
+    else
+        itf_step fail "snapshot as-cloned"
+    fi
+
+    # shellcheck disable=SC2034  # consumed by the journey scripts
+    J_VMID="$vmid"
+    # shellcheck disable=SC2034  # consumed by the journey scripts
+    J_GUEST_IP="$guest_ip"
+    return 0
 }

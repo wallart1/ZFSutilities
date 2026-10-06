@@ -3,7 +3,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
@@ -116,7 +116,7 @@ class TestCreateDatasetsPage(unittest.TestCase):
         markups = [args[0] for args, _kwargs in app.datasets_legend_label.set_markup.call_args_list]
         expected = (
             f"<small><i><span foreground='{dp.UNMOUNTED_FG}'>Teal text</span>"
-            " — unmounted filesystem or snapshot</i></small>"
+            " — unmounted filesystem/snapshot or unattached volume</i></small>"
         )
         self.assertIn(expected, markups)
 
@@ -308,6 +308,29 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         app._ds_delete_btn.set_sensitive.assert_called_once_with(True)
         app._ds_hold_btn.set_sensitive.assert_called_once_with(False)
         app._ds_rollback_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_multiple_filesystems_and_volumes_enable_snapshot(self):
+        app = self._make_app(
+            [
+                {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+                {"type": "dataset", "name": "tank/vol", "zfs_type": "volume", "mounted": False},
+                {"type": "pool", "name": "backup", "zfs_type": "filesystem", "mounted": True},
+            ]
+        )
+        app._ds_snapshot_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_mixed_dataset_and_snapshot_disables_snapshot(self):
+        app = self._make_app(
+            [
+                {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+                {"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": True},
+            ]
+        )
+        app._ds_snapshot_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_snapshot_disabled_when_empty(self):
+        app = self._make_app([])
+        app._ds_snapshot_btn.set_sensitive.assert_called_once_with(False)
 
     def test_single_snapshot_enables_rollback(self):
         app = self._make_app(
@@ -898,13 +921,15 @@ class TestVolumeLoopButtonSensitivity(unittest.TestCase):
             dp.update_ds_button_sensitivity(app)
         return app
 
-    def _volume_item(self):
-        return {
+    def _volume_item(self, **kw):
+        item = {
             "type": "dataset",
             "name": "tank/vm-100-disk-0",
             "zfs_type": "volume",
             "mounted": False,
         }
+        item.update(kw)
+        return item
 
     def _part_item(self, **kw):
         item = {
@@ -930,6 +955,13 @@ class TestVolumeLoopButtonSensitivity(unittest.TestCase):
         app = self._make_app([self._volume_item()], loop_attached=True)
         app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
         app._ds_unmount_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_attached_volume_keeps_browse_disabled(self):
+        """A loop-attached volume row (mounted flag set) has no browse target."""
+        app = self._make_app([self._volume_item(mounted=True)], loop_attached=True)
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_unmount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_browse_btn.set_sensitive.assert_called_once_with(False)
 
     def test_unmounted_partition_with_fs_enables_mount(self):
         app = self._make_app([self._part_item()])
@@ -1039,6 +1071,68 @@ class TestUpdateMountedStatesVolumePartitions(unittest.TestCase):
 
         self.assertTrue(set_calls[part_mounted][8])
         self.assertFalse(set_calls[part_unmounted][8])
+
+
+class TestUpdateMountedStatesVolumes(unittest.TestCase):
+    """update_mounted_states derives volume rows' mounted flag from loop state."""
+
+    def _run_with_loops(self, loop_paths):
+        store = MagicMock()
+
+        def _make_iter(name, ds_type, parent):
+            it = MagicMock()
+            it._row = {"name": name, "type": ds_type, "parent": parent}
+            return it
+
+        root = _make_iter("tank", "pool", None)
+        vol = _make_iter("vm-100-disk-0", "volume", root)
+
+        children = {root: [vol], vol: []}
+        siblings = {vol: None}
+
+        def _get_value(it, col):
+            if col == 0:
+                return it._row["name"]
+            if col == 2:
+                return it._row["type"]
+            return None
+
+        store.get_value = _get_value
+        store.iter_children = lambda it: children[it][0] if children[it] else None
+        store.iter_next = lambda it: siblings.get(it)
+        store.iter_parent = lambda it: it._row["parent"]
+        store.get_iter_first.return_value = root
+
+        set_calls = {}
+
+        def _set(it, *args):
+            set_calls[it] = dict(zip(args[::2], args[1::2]))
+
+        store.set = _set
+
+        repo = MagicMock()
+        repo.loop_attached_paths.return_value = loop_paths
+
+        app = MagicMock()
+        app.datasets_store = store
+        app.ctx.zfs_repository = repo
+
+        with patch.object(dp, "update_ds_button_sensitivity"):
+            dp.update_mounted_states(app)
+
+        return set_calls[vol], repo
+
+    def test_unattached_volume_row_tinted_teal(self):
+        flags, repo = self._run_with_loops(set())
+        self.assertFalse(flags[8])
+        self.assertEqual(flags[9], dp.UNMOUNTED_FG)
+        # The volume row's state came from the loop listing, not zfs get.
+        self.assertNotIn(call("tank/vm-100-disk-0", "mounted"), repo.get_property.call_args_list)
+
+    def test_loop_attached_volume_row_untinted(self):
+        flags, _repo = self._run_with_loops({"/dev/zvol/tank/vm-100-disk-0"})
+        self.assertTrue(flags[8])
+        self.assertIsNone(flags[9])
 
 
 class TestProfileActions(unittest.TestCase):

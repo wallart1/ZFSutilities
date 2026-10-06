@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# j04-post-install-baseline.journey — baseline-template validation journey.
+#
+# Proves the post-install baseline template end to end: a full clone
+# comes up as a working installed system (wiring, login PATH, product
+# surface), takes the documented test pools, and performs real work
+# through the installed product.  This is also the starting pattern for
+# the cycle-2 daily-workflow journeys: clone from the template, then
+# drive the scenario.
+#
+# Guest state required: post-install baseline template (itf template build).
+# Snapshots produced: as-cloned (post-install checkpoint), pools-created.
+
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+journey_main() {
+    local base="${ITF_BASE_HOSTS[0]}"
+    local gname="j04"
+
+    itf_step info "journey start" \
+        "j04 post-install baseline; sw-source=$ITF_SW_SOURCE repo=$ITF_GITHUB_REPO"
+
+    # ------------------------------------------------------------------
+    # Stage T: clone start from the post-install baseline template
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_from_template "$gname" || return 1
+    local vmid="$J_VMID"
+    local guest_ip="$J_GUEST_IP"
+
+    itf_journey_verify_installed "$guest_ip"
+
+    # ------------------------------------------------------------------
+    # Stage D: the documented three-RAIDZ1 test pools (j01 recipe)
+    # ------------------------------------------------------------------
+
+    # Attach the pool disk post-boot, as at install time: virtio-scsi
+    # hotplug makes it the only other disk, /dev/sdb.
+    local wait_sdb
+    # shellcheck disable=SC2016  # expansion runs in the guest
+    wait_sdb='for i in $(seq 1 30); do lsblk -dn -o NAME | grep -qx sdb'
+    wait_sdb+=' && exit 0; sleep 2; done; exit 1'
+    if itf_qm "$base" set "$vmid" --scsi1 "${ITF_GUEST_STORAGE}:${ITF_GUEST_POOL_DISK_GB}" \
+            > "$ITF_RUN_DIR/pooldisk-attach.log" 2>&1 \
+            && itf_guest_exec "$guest_ip" "$wait_sdb"; then
+        itf_step pass "pool disk attached" \
+            "scsi1 (${ITF_GUEST_POOL_DISK_GB}G) hot-plugged, guest sees /dev/sdb"
+    else
+        itf_step fail "pool disk attached" "see pooldisk-attach.log"
+        return 1
+    fi
+
+    local pool_script
+    pool_script="$ITF_RUN_DIR/guest-pools.sh"
+    cat > "$pool_script" <<'EOF'
+#!/bin/bash
+# The user recipe from docs/docs/developer-guide/testing.md on /dev/sdb.
+set -e
+# parted/partprobe are not part of a base Debian install.
+apt-get install -y parted
+parted -s /dev/sdb mklabel gpt
+for i in {1..15}; do
+    if [[ $i -eq 1 ]]; then start="1MiB"; else start="$(( (i-1)*5120 ))MiB"; fi
+    if [[ $i -eq 15 ]]; then end="100%"; else end="$(( i*5120 ))MiB"; fi
+    parted -a optimal -s /dev/sdb mkpart primary "${start}" "${end}"
+done
+partprobe /dev/sdb
+zpool create -f zfstest1 raidz1 /dev/sdb1 /dev/sdb2 /dev/sdb3 /dev/sdb4 /dev/sdb5
+zpool create -f zfstest2 raidz1 /dev/sdb6 /dev/sdb7 /dev/sdb8 /dev/sdb9 /dev/sdb10
+zpool create -f zfstest3 raidz1 /dev/sdb11 /dev/sdb12 /dev/sdb13 /dev/sdb14 /dev/sdb15
+zpool list
+EOF
+    itf_guest_put "$guest_ip" "$pool_script" /root/itf-pools.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-pools.sh" \
+        > "$ITF_RUN_DIR/guest-pools.log" 2>&1; then
+        itf_step pass "test pools created" "zfstest1/2/3 (three RAIDZ1, docs recipe)"
+        itf_artifact "pools" "$ITF_RUN_DIR/guest-pools.log"
+    else
+        itf_step fail "test pools created" "see guest-pools.log"
+        return 1
+    fi
+
+    if itf_guest_snapshot "$base" "$vmid" pools-created > /dev/null 2>&1; then
+        itf_step pass "snapshot pools-created" \
+            "clone-start + pools checkpoint for cycle-2 reuse"
+    else
+        itf_step fail "snapshot pools-created"
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage W: real work through the installed product
+    # ------------------------------------------------------------------
+
+    # The prerequisite checker is the one product CLI a user can run on
+    # any installed system with no scenario setup: after a clone it must
+    # report everything present and exit 0 — proving the wiring came
+    # through the template intact, not just the files.
+    local pre_log
+    pre_log="$ITF_RUN_DIR/guest-prereq-postclone.log"
+    if itf_guest_exec "$guest_ip" \
+            "bash -lc 'check-prerequisites --single-node'" > "$pre_log" 2>&1; then
+        itf_step pass "product surface works post-clone" \
+            "check-prerequisites reports all-present (rc=0)"
+        itf_artifact "prereq-postclone" "$pre_log"
+    else
+        itf_step fail "product surface works post-clone" \
+            "see guest-prereq-postclone.log"
+        return 1
+    fi
+
+    # And the ZFS substrate the product drives: a dataset + snapshot
+    # round trip on a test pool, from the login shell the product wired.
+    local zfs_log
+    zfs_log="$ITF_RUN_DIR/guest-zfs-roundtrip.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if itf_guest_exec "$guest_ip" '
+        set -e
+        zfs create zfstest1/j04
+        zfs snapshot zfstest1/j04@baseline-check
+        zfs list -t snapshot -o name,creation -s creation | tail -3
+        zfs destroy zfstest1/j04@baseline-check
+        echo "zfs-roundtrip-ok"
+    ' > "$zfs_log" 2>&1 && grep -q zfs-roundtrip-ok "$zfs_log"; then
+        itf_step pass "ZFS substrate round trip" \
+            "dataset + snapshot + destroy on zfstest1 (see guest-zfs-roundtrip.log)"
+        itf_artifact "zfs-roundtrip" "$zfs_log"
+    else
+        itf_step fail "ZFS substrate round trip" "see guest-zfs-roundtrip.log"
+        return 1
+    fi
+
+    itf_step info "journey stage reached" \
+        "post-install baseline validated: clone, wiring, pools, product surface"
+    return 0
+}

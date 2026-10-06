@@ -10,6 +10,8 @@
 # Usage:
 #   itf preflight                     verify dev + base-host readiness
 #   itf guest create NAME [opts]      create (and optionally start) a guest
+#   itf guest clone NAME [opts]       full-clone a guest from the baseline
+#                                     template (post-install starting point)
 #   itf guest start|stop BASE VMID
 #   itf guest destroy BASE VMID
 #   itf guest snapshot BASE VMID SNAP
@@ -19,6 +21,11 @@
 #   itf guest list [BASE]
 #   itf iso fetch                     download installer ISO to dev cache
 #   itf iso upload [BASE]             upload cached ISO to base ISO storage
+#   itf template status               baseline template presence + stamp
+#   itf template build [--sw-source ..] [--force]
+#                                     rebuild the post-install baseline
+#                                     template (one unattended install)
+#   itf template destroy              remove the baseline template
 #   itf journey list                  list available journeys
 #   itf journey run NAME              execute a journey under a run report
 #   itf watch [TAG]                   tail a run's live report + serial
@@ -42,6 +49,8 @@ source "$ITF_BIN_DIR/lib/ssh-lib.sh"
 source "$ITF_BIN_DIR/lib/base-lib.sh"
 # shellcheck disable=SC1091
 source "$ITF_BIN_DIR/lib/guest-lib.sh"
+# shellcheck disable=SC1091
+source "$ITF_BIN_DIR/lib/template-lib.sh"
 # shellcheck disable=SC1091
 source "$ITF_BIN_DIR/lib/report-lib.sh"
 
@@ -173,6 +182,26 @@ cmd_preflight() {
                 "run: itf iso fetch && itf iso upload $base"
             fail_total=1
         fi
+
+        # The baseline template is optional infrastructure: absent is
+        # informational (cycle-1 journeys install from scratch), present
+        # but unstamped is broken.
+        local tmpl_vmid tmpl_stamp
+        tmpl_vmid="$(itf_template_vmid "$base")"
+        if [[ -n "$tmpl_vmid" ]]; then
+            if tmpl_stamp="$(itf_template_stamp_read "$base" "$tmpl_vmid" 2>/dev/null)"; then
+                itf_step pass "[$base] baseline template" \
+                    "$ITF_TEMPLATE_NAME (vmid $tmpl_vmid): ${tmpl_stamp#itf-stamp| }"
+            else
+                itf_step fail "[$base] baseline template" \
+                    "vmid $tmpl_vmid carries no readable itf stamp — rebuild: " \
+                    "itf template build --force"
+                fail_total=1
+            fi
+        else
+            itf_step info "[$base] baseline template" \
+                "absent (optional) — create with: itf template build"
+        fi
     done
 
     itf_report_finish > /dev/null || fail_total=1
@@ -194,6 +223,10 @@ cmd_guest() {
         create)
             (( $# < 1 )) && { echo "usage: itf guest create NAME [opts]" >&2; return 2; }
             itf_guest_create "$@"
+            ;;
+        clone)
+            (( $# < 1 )) && { echo "usage: itf guest clone NAME [opts]" >&2; return 2; }
+            itf_guest_clone "$@"
             ;;
         start|stop)
             (( $# < 2 )) && { echo "usage: itf guest $sub BASE VMID" >&2; return 2; }
@@ -245,6 +278,27 @@ cmd_iso() {
         fetch) itf_iso_fetch ;;
         upload) itf_iso_upload "${2:-${ITF_BASE_HOSTS[0]}}" ;;
         *) echo "usage: itf iso fetch|upload [BASE]" >&2; return 2 ;;
+    esac
+}
+
+cmd_template() {
+    itf_config_load
+    local sub="${1:-}"
+    [[ -z "$sub" ]] && { echo "usage: itf template status|build|destroy" >&2; return 2; }
+    shift
+    case "$sub" in
+        status) itf_template_status ;;
+        build)
+            ITF_RUN_CALLER="template:build"
+            itf_report_init template-build || return 1
+            itf_template_build "$@"
+            local rc=$?
+            itf_report_finish || rc=1
+            echo "itf: report: $ITF_RUN_DIR/report.md"
+            return "$rc"
+            ;;
+        destroy) itf_template_destroy ;;
+        *) echo "usage: itf template status|build|destroy" >&2; return 2 ;;
     esac
 }
 
@@ -327,6 +381,8 @@ cmd_status() {
         itf_qm "$base" list 2>/dev/null | awk -v f="$ITF_VMID_FIRST" -v l="$ITF_VMID_LAST" \
             'NR==1 || ($1>=f && $1<=l)'
     done
+    echo "== baseline template =="
+    itf_template_status
     echo "== active run =="
     local -a runs=()
     mapfile -t runs < <(ls -1d "$ITF_RUNS_DIR"/run-* 2>/dev/null | sort -r)
@@ -415,6 +471,7 @@ main() {
         preflight) cmd_preflight "$@" ;;
         guest) cmd_guest "$@" ;;
         iso) cmd_iso "$@" ;;
+        template) cmd_template "$@" ;;
         journey) cmd_journey "$@" ;;
         status) cmd_status "$@" ;;
         watch) cmd_watch "$@" ;;
