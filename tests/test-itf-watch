@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# test-itf-watch — Unit tests for itf watch target resolution
+# (report-lib.sh: itf_watch_resolve on top of itf_run_state).
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+tmp_dir=$(mktemp -d)
+ITF_RUNS_DIR="$tmp_dir/runs"
+mkdir -p "$ITF_RUNS_DIR"
+
+# shellcheck disable=SC1090
+source "$mydir/tests/integrated/lib/report-lib.sh"
+
+# make_run <dir-name> <pid|-> [finished]
+#
+# Fixture run directory with a crafted meta.txt.  pid "-" leaves the
+# pid line out (very old runs predate the marker).
+make_run() {
+    local name="$1" pid="$2" finished="${3:-}"
+    local dir="$ITF_RUNS_DIR/$name"
+    mkdir -p "$dir"
+    {
+        echo "tag:      ${name#run-*-}"
+        echo "started:  $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        echo "caller:   test-suite"
+        [[ "$pid" != "-" ]] && echo "pid:      $pid"
+    } > "$dir/meta.txt"
+    [[ -n "$finished" ]] && echo "finished: 2026-01-01T00:00:00Z" >> "$dir/meta.txt"
+}
+
+# ------------------------------------------------------------------------------
+# Tag-qualified resolution
+# ------------------------------------------------------------------------------
+
+test_tag_match_picks_newest() {
+    test_start "a tag resolves to the newest run whose name contains it"
+    make_run run-20260101-010101-j01-alpha $$
+    make_run run-20260101-020202-j01-beta $$
+    make_run run-20260101-030303-j02-gamma $$
+    assert_equals "$ITF_RUNS_DIR/run-20260101-020202-j01-beta" \
+        "$(itf_watch_resolve j01)"
+}
+
+test_tag_without_match_refused() {
+    test_start "a tag matching nothing is refused (rc 1, no output)"
+    make_run run-20260101-010101-j01-alpha $$
+    local out rc
+    out="$(itf_watch_resolve nope)"
+    rc=$?
+    assert_rc 1 "$rc"
+    assert_equals "" "$out"
+}
+
+# ------------------------------------------------------------------------------
+# Default resolution (no tag)
+# ------------------------------------------------------------------------------
+
+test_running_preferred_over_newer_finished() {
+    test_start "no tag: a running run wins over newer done/interrupted runs"
+    make_run run-20260101-010101-j01-alpha $$
+    make_run run-20260101-020202-j01-beta $$ finished
+    true &
+    local dead=$!
+    wait "$dead"
+    make_run run-20260101-030303-j02-gamma "$dead"
+    assert_equals "$ITF_RUNS_DIR/run-20260101-010101-j01-alpha" \
+        "$(itf_watch_resolve)"
+}
+
+test_fallback_to_newest_when_none_running() {
+    test_start "no tag, none running: falls back to the newest run of any state"
+    make_run run-20260101-010101-j01-alpha $$ finished
+    make_run run-20260101-020202-j01-beta $$ finished
+    true &
+    local dead=$!
+    wait "$dead"
+    make_run run-20260101-030303-j02-gamma "$dead"
+    assert_equals "$ITF_RUNS_DIR/run-20260101-030303-j02-gamma" \
+        "$(itf_watch_resolve)"
+}
+
+test_no_runs_refused() {
+    test_start "an empty runs directory is refused (rc 1)"
+    ITF_RUNS_DIR="$tmp_dir/runs-empty"
+    mkdir -p "$ITF_RUNS_DIR"
+    local out rc
+    out="$(itf_watch_resolve)"
+    rc=$?
+    assert_rc 1 "$rc"
+    assert_equals "" "$out"
+    ITF_RUNS_DIR="$tmp_dir/runs"
+}
+
+test_runs_dir_missing_refused() {
+    test_start "a missing runs directory is refused (rc 1)"
+    ITF_RUNS_DIR="$tmp_dir/does-not-exist"
+    local rc
+    itf_watch_resolve > /dev/null 2>&1
+    rc=$?
+    assert_rc 1 "$rc"
+    ITF_RUNS_DIR="$tmp_dir/runs"
+}
+
+test_tag_match_picks_newest
+test_tag_without_match_refused
+
+test_running_preferred_over_newer_finished
+test_fallback_to_newest_when_none_running
+test_no_runs_refused
+test_runs_dir_missing_refused
+
+rm -rf "$tmp_dir"
+teardown_test_env
+test_summary

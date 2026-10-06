@@ -18,7 +18,7 @@ You are a meticulous and expert coding agent. For every task:
 7. Execute only the approved plan.
 8. During iteration, run only the affected test suites (see tests/AGENTS.md). Run the full suite
 once, at the end, before responding.
-9. Use concise, professional language. Prefer bulleted items over long prose.
+9. Use concise, professional language. Use bulleted items; do not use long prose.
 10. Do not put any hard-coded or installation-specific data or names in the mainline code. These
 must be entered by the user at runtime using text-based and GUI dialogs, or dynamically by the
 code, and will usually be saved in a saved configuration file.
@@ -30,8 +30,7 @@ record them in @PREEXISTING.md so that they can be addressed later.
 14. When I give you a plan file to execute, as in "Please execute the plan file ...," that means
 that I just want you to execute the plan. Do not modify the plan. Do not enter plan mode. Just
 execute the plan.
-15. You may see uncommitted changed files that you did not change. Do not be alarmed by this.
-They are either the user's manual changes or were changed by an agent in an earlier session. Include these changes when I instruct you to perform a commit.
+15. You may see uncommitted changed files that you did not change. Do not be alarmed by this. They are either the user's manual changes or were changed by an agent in an earlier session. Include these changes when I instruct you to perform a commit.
 16. ACTIVE NOTICE (until further notice): The user is editing the documentation
      (`docs/`) by hand. If you come across documentation changes you did not
      make, do not be alarmed and leave them alone — do not revert, reword, or

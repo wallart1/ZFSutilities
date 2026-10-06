@@ -9,7 +9,10 @@ Pruning happens in three phases:
 1. **Offsite same-month pruning** (`@offsite` label only) — keeps only the most
    recent offsite snapshot per month for each dataset.
 2. **Same-day pruning** — keeps only the most recent snapshot per day within
-   each bucket. Older snapshots from the same day are removed.
+   each bucket. Older snapshots from the same day are removed. This applies to
+   every bucket (`d`, `w`, `m`, `s`) and ignores snapshots of other labels that
+   happen to sit between same-day duplicates; it never merges snapshots from
+   different buckets, and it is not subject to `minage`.
 3. **Bucket count limits** — for the buckets `d`, `w`, `m`, `s`, keeps only
    the N most recent snapshots as specified in the pool's retention policy. When a bucket overflows, the oldest snapshots are deleted first. The most recent snapshot in each bucket is protected so it can serve as the base for the next incremental backup, unless the bucket is configured with `retain=0`.
 

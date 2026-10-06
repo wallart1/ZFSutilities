@@ -29,6 +29,7 @@ tests/integrated/itf iso fetch      # download the installer ISO
 tests/integrated/itf iso upload     # push it to the base ISO storage
 tests/integrated/itf journey list
 tests/integrated/itf journey run <name>
+tests/integrated/itf watch          # tail the active run — NOT the console
 ```
 
 Every run (journey or preflight) writes a progressive report under
@@ -66,6 +67,11 @@ Every run (journey or preflight) writes a progressive report under
   instructions for* — a human applies them, `itf preflight` verifies.
 - The base VMs themselves sit under daily ZFSutilities snapshots — the
   recovery net behind the guardrails.
+- **While a run is active, keep hands off the consoles** (`itf status`
+  shows active runs; `itf manual-steps` prints the standing rule): the
+  guest's xterm.js console is the same serial line the orchestrator
+  drives, noVNC is look-don't-touch, and a base-VM console is root with
+  no guardrails. Watch runs with `itf watch` instead.
 - Guests are disposable: any state in them may be destroyed at any time
   (`itf guest destroy`, snapshot/rollback).
 

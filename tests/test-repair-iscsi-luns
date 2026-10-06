@@ -561,6 +561,13 @@ test_regenerate_manifest_install_failure() {
     reset_mocks
     test_start "Regenerate manifest install failure removes temp file and exits 8"
 
+    # The failure is injected by making the manifest dir unwritable; root
+    # ignores mode bits, so the install succeeds and the test cannot run.
+    if [[ $EUID -eq 0 ]]; then
+        test_skip "Requires non-root (root ignores the 0555 install-dir gate)"
+        return
+    fi
+
     _bs_names=("vm-101-disk-0")
 
     # mktemp inside regenerate_manifest honors TMPDIR, so a private TMPDIR

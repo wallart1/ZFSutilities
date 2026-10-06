@@ -38,64 +38,92 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
         epilog="example: --wait 'installer menu' --send $'\\x1b' "
-               "--wait 'boot:' --send 'install auto=true ... ---\\n'",
+        "--wait 'boot:' --send 'install auto=true ... ---\\n'",
     )
     ap.add_argument("--host", required=True, help="base host to ssh to")
     ap.add_argument("--user", required=True, help="ssh user on the base host")
     ap.add_argument("--vmid", required=True, help="guest VMID")
-    ap.add_argument("--wait", action="append", default=[], metavar="REGEX",
-                    help="pattern to wait for (repeatable)")
-    ap.add_argument("--send", action="append", default=[], metavar="TEXT",
-                    help="bytes sent once the matching --wait pattern is "
-                    "seen (repeatable, sent verbatim)")
-    ap.add_argument("--exit-after", default="",
-                    help="stop capturing when this regex matches")
-    ap.add_argument("--kick", default="",
-                    help="bytes sent blindly when no output has arrived "
-                    "within --kick-delay (e.g. a menu keypress that forces "
-                    "a redraw when the console was attached after the "
-                    "bootloader had already painted its screen)")
-    ap.add_argument("--kick-delay", type=float, default=4.0,
-                    help="seconds of total silence before --kick fires")
-    ap.add_argument("--timeout", type=int, default=900,
-                    help="overall timeout in seconds")
-    ap.add_argument("--send-delay", type=float, default=2.0,
-                    help="pause after a match, before sending")
-    ap.add_argument("--step-timeout", type=float, default=0.0,
-                    help="skip a step whose pattern has not appeared "
-                         "within this many seconds of the step becoming "
-                         "current (0 = wait forever) — lets an optional "
-                         "prompt-answer step be skipped when its dialog "
-                         "never shows")
-    ap.add_argument("--send-chunk", type=int, default=16,
-                    help="send keystrokes in chunks of this many bytes")
-    ap.add_argument("--chunk-delay", type=float, default=0.08,
-                    help="pause between chunks — a full line blasted down "
-                         "the serial in one write can drop characters "
-                         "(observed: 'url' swallowed, breaking auto=)")
-    ap.add_argument("--log", required=True,
-                    help="transcript log file (append)")
+    ap.add_argument(
+        "--wait",
+        action="append",
+        default=[],
+        metavar="REGEX",
+        help="pattern to wait for (repeatable)",
+    )
+    ap.add_argument(
+        "--send",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help="bytes sent once the matching --wait pattern is seen (repeatable, sent verbatim)",
+    )
+    ap.add_argument("--exit-after", default="", help="stop capturing when this regex matches")
+    ap.add_argument(
+        "--kick",
+        default="",
+        help="bytes sent blindly when no output has arrived "
+        "within --kick-delay (e.g. a menu keypress that forces "
+        "a redraw when the console was attached after the "
+        "bootloader had already painted its screen)",
+    )
+    ap.add_argument(
+        "--kick-delay", type=float, default=4.0, help="seconds of total silence before --kick fires"
+    )
+    ap.add_argument("--timeout", type=int, default=900, help="overall timeout in seconds")
+    ap.add_argument(
+        "--send-delay", type=float, default=2.0, help="pause after a match, before sending"
+    )
+    ap.add_argument(
+        "--step-timeout",
+        type=float,
+        default=0.0,
+        help="skip a step whose pattern has not appeared "
+        "within this many seconds of the step becoming "
+        "current (0 = wait forever) — lets an optional "
+        "prompt-answer step be skipped when its dialog "
+        "never shows",
+    )
+    ap.add_argument(
+        "--send-chunk", type=int, default=16, help="send keystrokes in chunks of this many bytes"
+    )
+    ap.add_argument(
+        "--chunk-delay",
+        type=float,
+        default=0.08,
+        help="pause between chunks — a full line blasted down "
+        "the serial in one write can drop characters "
+        "(observed: 'url' swallowed, breaking auto=)",
+    )
+    ap.add_argument("--log", required=True, help="transcript log file (append)")
     args = ap.parse_args()
 
     if len(args.wait) != len(args.send):
-        print("serial_console: --wait and --send must come in pairs",
-              file=sys.stderr)
+        print("serial_console: --wait and --send must come in pairs", file=sys.stderr)
         return 3
     if not args.wait and not args.exit_after:
-        print("serial_console: nothing to do — pass --wait/--send steps "
-              "and/or --exit-after", file=sys.stderr)
+        print(
+            "serial_console: nothing to do — pass --wait/--send steps and/or --exit-after",
+            file=sys.stderr,
+        )
         return 3
 
     cmd = [
-        "ssh", "-tt",
-        "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+        "ssh",
+        "-tt",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
         f"{args.user}@{args.host}",
         f"sudo -n qm terminal {args.vmid}",
     ]
     try:
         proc = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, bufsize=0,
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=0,
         )
     except OSError as exc:
         print(f"serial_console: cannot spawn ssh: {exc}", file=sys.stderr)
@@ -110,10 +138,10 @@ def main() -> int:
         overrun the bootloader's serial input and drop characters."""
         out = memoryview(data)
         while out:
-            piece = out[:args.send_chunk]
+            piece = out[: args.send_chunk]
             proc.stdin.write(piece)
             proc.stdin.flush()
-            out = out[len(piece):]
+            out = out[len(piece) :]
             if out:
                 time.sleep(args.chunk_delay)
 
@@ -152,8 +180,10 @@ def main() -> int:
                     item = b""
                 if item is None:
                     eof = True
-                    note(f"console ended "
-                         f"({'steps incomplete' if step_idx < len(steps) else 'after steps'})")
+                    note(
+                        f"console ended "
+                        f"({'steps incomplete' if step_idx < len(steps) else 'after steps'})"
+                    )
                 elif item:
                     buf += item
                     log.write(item)
@@ -178,31 +208,40 @@ def main() -> int:
             if eof or time.monotonic() > deadline:
                 timed_out = time.monotonic() > deadline and not eof
                 if timed_out:
-                    note(f"exit reason: timeout without exit pattern "
-                         f"({step_idx}/{len(steps)} steps done)")
+                    note(
+                        f"exit reason: timeout without exit pattern "
+                        f"({step_idx}/{len(steps)} steps done)"
+                    )
                 else:
-                    note(f"exit reason: console ended without exit pattern "
-                         f"({step_idx}/{len(steps)} steps done)")
+                    note(
+                        f"exit reason: console ended without exit pattern "
+                        f"({step_idx}/{len(steps)} steps done)"
+                    )
                 rc = 2 if step_idx < len(steps) else 4
                 break
 
             # Silence breaker: if nothing at all has arrived, the screen
             # may already be painted (attached too late); a blind
             # keypress forces the bootloader to repaint.
-            if args.kick and not kicked and not buf \
-                    and time.monotonic() - started_at > args.kick_delay:
+            if (
+                args.kick
+                and not kicked
+                and not buf
+                and time.monotonic() - started_at > args.kick_delay
+            ):
                 send_bytes(args.kick.encode())
                 kicked = True
                 note(f"kicked silent console with {args.kick!r}")
 
             if step_idx < len(steps):
                 wait_re, send_text = steps[step_idx]
-                if args.step_timeout > 0 and \
-                        time.monotonic() - step_started > args.step_timeout:
+                if args.step_timeout > 0 and time.monotonic() - step_started > args.step_timeout:
                     step_idx += 1
                     step_started = time.monotonic()
-                    note(f"step {step_idx}/{len(steps)}: pattern not seen "
-                         f"within {args.step_timeout:g}s — skipping")
+                    note(
+                        f"step {step_idx}/{len(steps)}: pattern not seen "
+                        f"within {args.step_timeout:g}s — skipping"
+                    )
                 elif wait_re.search(text):
                     settled = time.monotonic()
                     while time.monotonic() - settled < args.send_delay:

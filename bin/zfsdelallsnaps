@@ -109,7 +109,7 @@ function delallsnaps {
                 printf "%-60s  (%d days old)\n" "$snap" "$age_days"
             done
             if [[ $autoproceed != "Y" ]]; then
-                read -rp "Press enter to continue."
+                ask_line "Press enter to continue."
             fi
             local _delallsnaps_failed=0
             for snap in "${snaparray[@]}"; do

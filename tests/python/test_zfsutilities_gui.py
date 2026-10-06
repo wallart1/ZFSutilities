@@ -289,19 +289,19 @@ class TestDatasetRunnerIntegration(unittest.TestCase):
         gui = _gui_module()
         with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
-            window.backup_runner = None
-            window.offsite_runner = None
-            window.restore_runner = None
-            window.retention_runner = None
+            window._input_registry = gui.InputRequestRegistry()
             window.dataset_runner = MagicMock()
+            window.dataset_runner.label = "Dataset action"
             window.dataset_runner.running = True
+            window.dataset_runner.step_active = True
+            window._runners = [window.dataset_runner]
             window.stdin_entry = MagicMock()
-            window.stdin_entry.get_text.return_value = "yes\n"
+            window.stdin_entry.get_text.return_value = "yes"
 
             with patch("zfsutilities_gui.log_msg"):
                 window._send_stdin_text()
 
-            window.dataset_runner.send_input.assert_called_once_with("yes\n")
+            window.dataset_runner.send_input.assert_called_once_with("yes")
 
 
 class TestDashboardTimer(unittest.TestCase):
@@ -1051,6 +1051,239 @@ class TestSidebarPageOrder(unittest.TestCase):
     def test_memory_page_has_documentation_anchor(self):
         gui = _gui_module()
         self.assertEqual(gui.ZFSUtilitiesWindow._PAGE_ANCHORS["memory"], "performance-tab")
+
+
+class TestInputRoutingLadder(unittest.TestCase):
+    """Operator input routes to the task that asked (MVS console model)."""
+
+    def _make_window(self):
+        gui = _gui_module()
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
+            window = gui.ZFSUtilitiesWindow()
+            window._input_registry = gui.InputRequestRegistry()
+            window.stdin_entry = MagicMock()
+            window.stdin_send_btn = MagicMock()
+            window.log_message = MagicMock()
+            window.input_strip = MagicMock()
+            window.input_strip.get_children.return_value = []
+            window.input_strip_frame = MagicMock()
+            return window, gui
+
+    def _runner(self, window, label, running=False, step_active=False):
+        runner = MagicMock()
+        runner.label = label
+        runner.running = running
+        runner.step_active = step_active
+        return runner
+
+    def _set_input(self, window, text):
+        window.stdin_entry.get_text.return_value = text
+
+    def test_numbered_reply_routes_to_issuing_runner(self):
+        window, _ = self._make_window()
+        runner_a = self._runner(window, "Backup")
+        runner_b = self._runner(window, "Restore")
+        window._input_registry.register(runner_a, "u1", "First?")
+        request_b = window._input_registry.register(runner_b, "u2", "Second?")
+        self._set_input(window, f"{request_b.number} y")
+        window._send_stdin_text()
+        runner_b.send_input.assert_called_once_with("y")
+        runner_a.send_input.assert_not_called()
+
+    def test_cross_routed_answers_reach_both_runners(self):
+        """Two simultaneous prompts: each reply lands on its own task."""
+        window, _ = self._make_window()
+        runner_a = self._runner(window, "Backup")
+        runner_b = self._runner(window, "Dataset action")
+        first = window._input_registry.register(runner_a, "u1", "Proceed?")
+        second = window._input_registry.register(runner_b, "u2", "Approve deletion?")
+        for number, runner, answer in [
+            (second.number, runner_b, "y"),
+            (first.number, runner_a, "n"),
+        ]:
+            self._set_input(window, f"{number} {answer}")
+            window._send_stdin_text()
+        runner_b.send_input.assert_called_once_with("y")
+        runner_a.send_input.assert_called_once_with("n")
+
+    def test_unknown_number_rejected_with_warning(self):
+        window, _ = self._make_window()
+        runner = self._runner(window, "Backup")
+        window._input_registry.register(runner, "u1", "Proceed?")
+        self._set_input(window, "9 y")
+        window._send_stdin_text()
+        runner.send_input.assert_not_called()
+        warned = [c.args[0] for c in window.log_message.call_args_list]
+        self.assertTrue(any("numbered 9" in msg for msg in warned))
+
+    def test_bare_text_answers_sole_outstanding(self):
+        window, _ = self._make_window()
+        runner = self._runner(window, "Prune")
+        window._input_registry.register(runner, "u1", "Approve deletion?")
+        self._set_input(window, "y")
+        window._send_stdin_text()
+        runner.send_input.assert_called_once_with("y")
+
+    def test_bare_text_with_two_holds_rejected(self):
+        window, _ = self._make_window()
+        runner_a = self._runner(window, "Backup")
+        runner_b = self._runner(window, "Restore")
+        window._input_registry.register(runner_a, "u1", "One?")
+        window._input_registry.register(runner_b, "u2", "Two?")
+        self._set_input(window, "y")
+        window._send_stdin_text()
+        runner_a.send_input.assert_not_called()
+        runner_b.send_input.assert_not_called()
+        warned = [c.args[0] for c in window.log_message.call_args_list]
+        self.assertTrue(any("WARN:" in msg for msg in warned))
+
+    def test_bare_text_falls_back_to_sole_live_step(self):
+        window, _ = self._make_window()
+        live = self._runner(window, "Backup", running=True, step_active=True)
+        idle = self._runner(window, "Restore", running=True, step_active=False)
+        window._runners = [live, idle]
+        self._set_input(window, "hello")
+        window._send_stdin_text()
+        live.send_input.assert_called_once_with("hello")
+        idle.send_input.assert_not_called()
+
+    def test_bare_text_with_two_live_steps_rejected(self):
+        window, _ = self._make_window()
+        live_a = self._runner(window, "Backup", running=True, step_active=True)
+        live_b = self._runner(window, "Restore", running=True, step_active=True)
+        window._runners = [live_a, live_b]
+        self._set_input(window, "hello")
+        window._send_stdin_text()
+        live_a.send_input.assert_not_called()
+        live_b.send_input.assert_not_called()
+
+    def test_bare_text_with_nothing_live_rejected(self):
+        window, _ = self._make_window()
+        window._runners = []
+        self._set_input(window, "hello")
+        window._send_stdin_text()
+        warned = [c.args[0] for c in window.log_message.call_args_list]
+        self.assertTrue(any("Input ignored" in msg for msg in warned))
+
+    def test_numbered_reply_echoes_via_runner_log(self):
+        window, _ = self._make_window()
+        runner = self._runner(window, "Restore")
+        request = window._input_registry.register(runner, "u1", "Proceed?")
+        self._set_input(window, f"{request.number} y")
+        window._send_stdin_text()
+        echoed = [c.args[0] for c in runner.log_input.call_args_list]
+        self.assertEqual(echoed, [f"VERB: > {request.number} y"])
+
+
+class TestInputEventLifecycle(unittest.TestCase):
+    """Input-hold events maintain the registry and the action strip."""
+
+    def _make_window(self):
+        gui = _gui_module()
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
+            window = gui.ZFSUtilitiesWindow()
+            window._input_registry = gui.InputRequestRegistry()
+            window.stdin_entry = MagicMock()
+            window.stdin_entry.get_sensitive.return_value = False
+            window.stdin_send_btn = MagicMock()
+            window._runners = []
+            window.input_strip = MagicMock()
+            window.input_strip.get_children.return_value = []
+            window.input_strip_frame = MagicMock()
+            return window, gui
+
+    def _runner(self, label):
+        runner = MagicMock()
+        runner.label = label
+        runner.running = False
+        runner.step_active = False
+        return runner
+
+    def test_req_registers_hold_and_logs_numbered_line(self):
+        window, _ = self._make_window()
+        runner = self._runner("Restore")
+        window._on_input_event(runner, "req", "u1", "Proceed?")
+        request = window._input_registry.by_uuid("u1")
+        self.assertIsNotNone(request)
+        self.assertEqual(request.number, 1)
+        logged = [c.args[0] for c in runner.log_input.call_args_list]
+        self.assertEqual(logged, ["INFO: [Input 1][Restore] Proceed?"])
+
+    def test_ack_releases_hold(self):
+        window, _ = self._make_window()
+        runner = self._runner("Restore")
+        window._on_input_event(runner, "req", "u1", "Proceed?")
+        window._on_input_event(runner, "ack", "u1", None)
+        self.assertIsNone(window._input_registry.by_uuid("u1"))
+        logged = [c.args[0] for c in runner.log_input.call_args_list]
+        self.assertIn("VERB: [Input 1] closed", logged)
+
+    def test_clear_withdraws_all_runner_holds(self):
+        window, _ = self._make_window()
+        runner_a = self._runner("Restore")
+        runner_b = self._runner("Backup")
+        window._on_input_event(runner_a, "req", "u1", "One?")
+        window._on_input_event(runner_b, "req", "u2", "Two?")
+        window._on_input_event(runner_a, "clear", None, None)
+        self.assertIsNone(window._input_registry.by_uuid("u1"))
+        self.assertIsNotNone(window._input_registry.by_uuid("u2"))
+
+    def test_rereq_updates_prompt_keeps_number(self):
+        window, _ = self._make_window()
+        runner = self._runner("Restore")
+        window._on_input_event(runner, "req", "u1", "Proceed?")
+        window._on_input_event(runner, "req", "u1", "Proceed? (re-asked)")
+        request = window._input_registry.by_uuid("u1")
+        self.assertEqual(request.number, 1)
+        self.assertEqual(request.prompt, "Proceed? (re-asked)")
+        self.assertEqual(len(window._input_registry.outstanding()), 1)
+
+    def test_strip_refreshed_and_framed_by_holds(self):
+        window, gui = self._make_window()
+        with patch.object(gui, "Gtk") as mock_gtk:
+            window.input_strip.get_children.return_value = ["stale"]
+            window._on_input_event(self._runner("Restore"), "req", "u1", "Proceed?")
+        window.input_strip.remove.assert_called_once_with("stale")
+        mock_gtk.ListBoxRow.assert_called_once()
+        window.input_strip_frame.set_visible.assert_called_once_with(True)
+
+
+class TestStdinEnableRecompute(unittest.TestCase):
+    """Entry sensitivity is recomputed, never last-writer-wins."""
+
+    def _make_window(self):
+        gui = _gui_module()
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
+            window = gui.ZFSUtilitiesWindow()
+            window._input_registry = gui.InputRequestRegistry()
+            window.stdin_entry = MagicMock()
+            window.stdin_entry.get_sensitive.return_value = False
+            window.stdin_send_btn = MagicMock()
+            return window, gui
+
+    def _runner(self, running):
+        runner = MagicMock()
+        runner.running = running
+        return runner
+
+    def test_hold_keeps_entry_live_when_no_runner_runs(self):
+        window, _ = self._make_window()
+        window._runners = [self._runner(False)]
+        window._input_registry.register(self._runner(True), "u1", "Proceed?")
+        window._set_stdin_enabled(False)
+        window.stdin_entry.set_sensitive.assert_called_with(True)
+
+    def test_all_idle_and_no_holds_disables(self):
+        window, _ = self._make_window()
+        window._runners = [self._runner(False), self._runner(False)]
+        window._set_stdin_enabled(True)
+        window.stdin_entry.set_sensitive.assert_called_with(False)
+
+    def test_any_running_runner_enables(self):
+        window, _ = self._make_window()
+        window._runners = [self._runner(False), self._runner(True)]
+        window._set_stdin_enabled(False)
+        window.stdin_entry.set_sensitive.assert_called_with(True)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,10 @@ setup_test_env
 # Helpers
 # ------------------------------------------------------------------
 
+# Shared iSCSI by-path target for the qm config fixtures below; spelled out
+# once here so fixture lines stay within 100 columns.
+_vm_by_path="/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie"
+
 setup_node_config() {
     local mode="${1:-single-node}"
     NODE_CONF_FILE="$_mock_zfs_state_dir/node.conf"
@@ -47,7 +51,7 @@ EOF
     else
         cat > "${pve_dir}/${vmid}.conf" << EOF
 name: test-vm
-scsi0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-0,format=raw,discard=on,iothread=1,size=10G
+scsi0: ${_vm_by_path}:threeamigos-lun-0,format=raw,discard=on,iothread=1,size=10G
 EOF
     fi
 }
@@ -592,7 +596,7 @@ test_two_node_reassigned_not_removed() {
 name: test-vm
 EOF
     setup_second_vm_config "$pve_dir" "$other_vmid" \
-        "/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-0,format=raw,discard=on,iothread=1,size=10G"
+        "${_vm_by_path}:threeamigos-lun-0,format=raw,discard=on,iothread=1,size=10G"
 
     local out rc
     out=$(run_remove two-node "$pve_dir" "$vmid" "y" \

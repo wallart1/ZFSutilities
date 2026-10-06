@@ -249,7 +249,8 @@ RUNNEREOF
     local rc=$?
 
     local names
-    names=$(python3 -c "import json; print(' '.join([so['name'] for so in json.load(open('$bootfile')).get('storage_objects', [])]))" 2>/dev/null || true)
+    names=$(python3 -c "import json; print(' '.join([so['name'] for so in \
+json.load(open('$bootfile')).get('storage_objects', [])]))" 2>/dev/null || true)
 
     rm -rf "$tmpdir"
 
@@ -287,6 +288,14 @@ test_helper_removes_workdir() {
 
 test_manifest_install_failure_cleans_tmpfile() {
     test_start "Manifest install failure removes the tmpfile and exits 1"
+
+    # The failure is injected by making the manifest dir unwritable; root
+    # ignores mode bits, so the install succeeds and the test cannot run.
+    if [[ $EUID -eq 0 ]]; then
+        test_skip "Requires non-root (root ignores the 0555 install-dir gate)"
+        return
+    fi
+
     local scratch ro_dir manifest output rc=0 leftover
     scratch=$(mktemp -d)
     ro_dir="$scratch/ro"

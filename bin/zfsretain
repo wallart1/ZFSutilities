@@ -185,17 +185,14 @@ function retain {
         done
     fi
 
-    # These variables are used to compare values between two snapshots.
-    # NOTE: The older item is <x>1, and the newer item is <x>2.
-    #   OLDER               NEWER
-    snapsnap1="";    snapsnap2=""
-    snapfs1="";      snapfs2=""
-    snaplabel1="";   snaplabel2=""
-    snapbucket1="";  snapbucket2=""
-    snapymd1="";     snapymd2=""
-
-    # Phase 1 - Remove excess same-day snapshots
+    # Phase 1 - Remove excess same-day snapshots.
+    # One pass over the creation-sorted list, keeping the most recent snapshot
+    # for each (dataset, label, bucket, day). Unlike a consecutive-pair scan,
+    # snapshots of other labels or buckets interleaved between same-day
+    # duplicates do not affect the comparison. Same-day dedup applies to every
+    # bucket; it never crosses bucket boundaries.
     declare -A phase1_removed=()    # Track snapshots removed (or would be removed) in Phase 1
+    declare -A _day_latest
     declare -i i_retain
     for ((i_retain=0; i_retain<snaparraylen; i_retain++))
     do
@@ -206,14 +203,14 @@ function retain {
         snaplabel2=$(echo "${snaparray[$i]}"  | awk -F'@' '{print $2}' | awk -F'-' '{print $1}')
         snapbucket2=$(echo "${snaparray[$i]}" | awk '{print $1}'       | awk -F'-' '{print $NF}')
         # awk '{print $6 $3 $4}'  —  Build a compact "YearMonthDay" string from creation date.
-        #   Example: "Mon May 11 12:00 2026" -> "2026May11"
+        #   (Field 1 is the snapshot name; the creation date starts at field 2.)
+        #   Example: "pool/fs@... Mon May 11 12:00 2026" -> "2026May11"
         snapymd2=$(echo "${snaparray[$i]}"    | awk '{print $6 $3 $4}')
 
         # Skip clone snapshots and bucket 'c' snapshots entirely
         if [[ $snaplabel2 == 'clone' ]] || [[ $snapbucket2 == 'c' ]]; then
             _retain_verb "Keeping $snapsnap2 — clone label or bucket 'c' is excluded" \
                 "from retention."
-            snapsnap1=""; snaplabel1=""; snapfs1=""; snapbucket1=""; snapymd1=""
             continue
         fi
 
@@ -221,8 +218,6 @@ function retain {
         if [[ $snaplabel2 != "${label:1}" ]]; then
             _retain_verb "Keeping $snapsnap2 — label '$snaplabel2' does not match" \
                 "target label '${label:1}'."
-            # Reset comparison values so we don't compare across label boundaries
-            snapsnap1=""; snaplabel1=""; snapfs1=""; snapbucket1=""; snapymd1=""
             continue
         fi
 
@@ -230,45 +225,34 @@ function retain {
         if [[ -n "${snapshot_has:-}" && "$snapsnap2" != *"$snapshot_has"* ]]; then
             _retain_verb "Keeping $snapsnap2 — does not contain required substring" \
                 "'$snapshot_has'."
-            # Reset comparison values so we don't compare across label boundaries
-            snapsnap1=""; snaplabel1=""; snapfs1=""; snapbucket1=""; snapymd1=""
             continue
         fi
 
         # Skip snapshots that were removed (or would be removed) in Phase 0
         if [[ -n "${phase0_removed[$snapsnap2]}" ]]; then
             _retain_verb "Keeping $snapsnap2 — already selected for removal in Phase 0."
-            # Reset comparison values so we don't compare across label boundaries
-            snapsnap1=""; snaplabel1=""; snapfs1=""; snapbucket1=""; snapymd1=""
             continue
         fi
 
-        # Determine whether two snapshots are related and were taken on the same day.
-        # If so, remove the older snapshot.
-        if [[ $snapfs1 = "$snapfs2" ]] \
-          && [[ $snaplabel1 = "$snaplabel2" ]] \
-          && [[ $snapbucket1 = "$snapbucket2" ]] \
-          && [[ $snapymd1 = "$snapymd2" ]]; then
+        # If a snapshot of this dataset/label/bucket was already taken on the
+        # same day, remove the older one and remember this (newer) snapshot.
+        _day_key="$snapfs2|$snaplabel2|$snapbucket2|$snapymd2"
+        if [[ -n "${_day_latest[$_day_key]}" ]]; then
+            _prev_snap="${_day_latest[$_day_key]}"
             _retain_verb "Keeping $snapsnap2 — most recent same-day snapshot for" \
-                "bucket '$snapbucket2'."
-            phase1_removed["$snapsnap1"]=1    # Track for Phase 2 exclusion
+                "bucket '$snapbucket2' (replaces $_prev_snap)."
+            phase1_removed["$_prev_snap"]=1    # Track for Phase 2 exclusion
             if [[ $dryrun != "N" ]]; then
-                log_msg "INFO: Would remove $snapsnap1 ---Same-day."
+                log_msg "INFO: Would remove $_prev_snap ---Same-day."
             else
-                log_msg "INFO: Removing $snapsnap1 --- Same-day."
+                log_msg "INFO: Removing $_prev_snap --- Same-day."
                 if [[ $autoproceed != 'Y' ]]; then
                     read -rp 'Press enter to continue.'
                 fi
-                delsnap "$snapsnap1" "0" "$relholds"
+                delsnap "$_prev_snap" "0" "$relholds"
             fi
         fi
-
-        # Rotate comparison values and proceed with the next snapshot
-        snapsnap1=$snapsnap2
-        snaplabel1=$snaplabel2
-        snapfs1=$snapfs2
-        snapbucket1=$snapbucket2
-        snapymd1=$snapymd2
+        _day_latest["$_day_key"]="$snapsnap2"
     done
 
     # =============================================================

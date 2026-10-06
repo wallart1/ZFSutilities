@@ -2327,6 +2327,23 @@ def create_info_panel(app):
     panel_box.pack_start(app.info_search.widget, False, False, 0)
     panel_box.pack_start(app.log_scrolled, True, True, 0)
 
+    # Held input requests (MVS console model): prompts that need an answer
+    # stay here with stable action numbers until answered — they never
+    # scroll away with the log.  Hidden entirely while nothing is held, so
+    # the pop-out panel re-parents it with everything else.
+    app.input_strip_frame = Gtk.Frame()
+    app.input_strip_frame.set_shadow_type(Gtk.ShadowType.IN)
+    app.input_strip_frame.set_no_show_all(True)
+    app.input_strip_scroll = Gtk.ScrolledWindow()
+    app.input_strip_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    # Cap the strip near four rows; further held prompts scroll inside it.
+    app.input_strip_scroll.set_max_content_height(96)
+    app.input_strip = Gtk.ListBox()
+    app.input_strip.set_selection_mode(Gtk.SelectionMode.NONE)
+    app.input_strip_scroll.add(app.input_strip)
+    app.input_strip_frame.add(app.input_strip_scroll)
+    panel_box.pack_start(app.input_strip_frame, False, False, 0)
+
     app._log_auto_scroll = True
     app._log_programmatic_scroll = False
     app.info_text.connect("size-allocate", app._on_log_size_allocate)

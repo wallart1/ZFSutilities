@@ -155,6 +155,24 @@ test_ignore_approval_no_cancels() {
     fi
 }
 
+test_ignore_approval_y_prefix_cancels() {
+    echo "=== Ignore mode: y-prefix answer cancels (strict y/yes) ==="
+    reset_state
+    snapshot_label="dailybackup"
+    snapshot_has="dailybackup"
+    ignore_retention_policies="Y"
+    _mock_fsarray_pool1=("pool1/fs")
+    mock_zfs_snap_list_for "pool1/fs" "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d"
+    mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
+    mass_delete_snapshots pool1 <<< "yolo" >/dev/null
+    test_start "A y-prefix answer (yolo) does not approve deletion"
+    if [[ ${#_mock_delsnap_calls[@]} -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected no deletions, got: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
 test_ignore_approval_yes_deletes() {
     echo "=== Ignore mode: approval Y deletes ==="
     reset_state
@@ -374,6 +392,7 @@ test_estimate_space_freed_nonnumeric() {
 test_no_matching_snapshots
 test_ignore_dryrun_lists_only
 test_ignore_approval_no_cancels
+test_ignore_approval_y_prefix_cancels
 test_ignore_approval_yes_deletes
 test_ignore_releaseholds_passed
 test_respect_no_matching_snapshots

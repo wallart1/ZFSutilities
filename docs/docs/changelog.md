@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.116.0
+
+*Released 2026-10-06*
+
+### Added
+
+- **Numbered input requests (MVS console model)** — questions asked by
+  GUI-launched jobs are held on screen in a strip between the log and the
+  Input box, each with a stable action number and the asking task's name,
+  and never scroll away with the log. The operator answers as
+  `N response` (a bare number sends an empty line for press-enter
+  prompts); a bare answer is accepted only when it is unambiguous —
+  exactly one held question, or exactly one running job. Input is never
+  routed to a task by a fixed priority order. New language-agnostic
+  helpers make jobs participatable from both languages: bash
+  `ask_yn`/`ask_line` in `bashinit` and a dependency-free Python
+  `input_hold` module (the runner puts its package on `PYTHONPATH` for
+  child processes). The protocol is env-gated
+  (`ZFSUTILITIES_INPUT_HOLD=Y`, set only by the GUI runner) and invisible
+  everywhere else: terminal and cron runs prompt normally. The
+  GUI-reachable prompting scripts (zfs-send-receive, zfsdelallsnaps,
+  zfsmassdelsnaps, zfslockmanager) were converted from raw `read` prompts
+  to the helpers.
+
+- **`itf watch` and active-run awareness** — a new integrated-testing
+  subcommand tails a run's live report and serial transcripts from the
+  first byte as the safe alternative to opening a Proxmox console, which
+  collides with the serial line the orchestrator drives. `itf status`
+  now always shows an "== active run ==" block (pid, elapsed, hands-off
+  hint) and marks summary-less recent runs as interrupted; run metadata
+  records the orchestrator pid and a finish stamp so run state is
+  derived, not guessed. `itf manual-steps` prints the standing
+  console-discipline rule (base host names come from the site config).
+
+### Changed
+
+- **`zfsmassdelsnaps` approval is strict** — the deletion-approval prompt
+  now accepts exactly `y`/`yes` (Enter or anything else cancels);
+  previously any answer starting with `y` (for example `yolo`) approved
+  the deletion.
+
+### Fixed
+
+- **`zfsretain` same-day dedup now works in every bucket and ignores
+  interleaving** — Phase 1 compared only consecutive entries of the
+  creation-sorted list and reset on every skipped snapshot, so snapshots
+  of other labels created between same-day duplicates suppressed the
+  dedup entirely (visible as multiple same-day `-w` snapshots surviving
+  each prune). The pass now keeps the most recent snapshot per
+  (dataset, label, bucket, day) in one interleaving-proof scan, matching
+  what the documentation always promised. Same-day pairs from different
+  buckets are still both kept.
+
+- **Dev container build hygiene** — a `.dockerignore` allowlist keeps the
+  1.7 GB gitignored ITF apt cache out of the image build context (the
+  context was ~1.8 GB over NFS), and the developer guide documents when
+  the image must be rebuilt and why permission-based failure-injection
+  tests self-skip when the suite runs as root.
+
 ## 0.115.0
 
 *Released 2026-10-05*

@@ -128,7 +128,8 @@ function log_msg {
         # Fall back to the raw caller path when realpath cannot resolve it
         # (e.g. a relative script path after the script has cd'd elsewhere);
         # an unresolvable prefix must never abort the caller under set -e.
-        long_prefix_str="$(realpath "$caller_file" 2>/dev/null || printf '%s' "$caller_file"):$caller_line:"
+        long_prefix_str="$(realpath "$caller_file" 2>/dev/null \
+|| printf '%s' "$caller_file"):$caller_line:"
     else
         long_prefix_str="zfsutilities:"
     fi
@@ -179,7 +180,8 @@ function msg_prefix {
         local caller_line="${BASH_LINENO[0]}"
         local msgprefix
         if [[ -n "$caller_file" ]]; then
-            msgprefix="$(realpath "$caller_file" 2>/dev/null || printf '%s' "$caller_file"):$caller_line:"
+            msgprefix="$(realpath "$caller_file" 2>/dev/null \
+|| printf '%s' "$caller_file"):$caller_line:"
         else
             msgprefix="zfsutilities:"
         fi
@@ -272,28 +274,100 @@ function _run_exit_traps {
     return 0
 }
 
+# --- Input-hold protocol (numbered GUI prompts) -------------------------
+# The Python GUI runner sets ZFSUTILITIES_INPUT_HOLD=Y for child shells and
+# intercepts two side-channel marker lines from the merged output stream:
+#   ZFSU-INPUT-REQ|<uuid>|<prompt text>   a prompt is now waiting for input
+#   ZFSU-INPUT-ACK|<uuid>                 the read returned; release the hold
+# The GUI holds each request on screen with an action number and routes the
+# operator reply "N answer" to the exact process that asked.  REQ with an
+# already-known uuid updates the held prompt text in place, so a validation
+# loop re-asking the same question keeps its action number.  Emission is
+# gated on the env var: plain terminal sessions never emit markers and
+# prompt normally via read -rp.
+
+# True when the numbered input-hold protocol is active (Python GUI runner).
+function _input_hold_active {
+    [[ "${ZFSUTILITIES_INPUT_HOLD:-}" == "Y" ]]
+}
+
+# Emit a REQ marker for the prompt and print the request uuid on stdout.
+# Usage: id=$(_input_hold_req "$id" "$prompt")  — pass an empty id to start
+# a new hold, or the previous id to re-announce it (update the held text)
+# after an invalid answer.  Outside the GUI this is a pure id generator.
+function _input_hold_req {
+    local uuid="${1:-}"
+    local prompt="${2:-}"
+    if [[ -z "$uuid" ]]; then
+        uuid="inp-${BASHPID}-${RANDOM}-${SECONDS}"
+    fi
+    if _input_hold_active; then
+        printf 'ZFSU-INPUT-REQ|%s|%s\n' "$uuid" "$prompt" >&2
+    fi
+    printf '%s' "$uuid"
+}
+
+# Emit an ACK marker releasing the hold for the uuid (no-op outside the GUI).
+function _input_hold_ack {
+    if _input_hold_active; then
+        printf 'ZFSU-INPUT-ACK|%s\n' "${1:-}" >&2
+    fi
+    return 0
+}
+
 # Prompt user for yes/no response with input validation.
 # Usage: if ask_yn "Do you want to continue?" ["Y"|"N"]; then ...
 # Returns 0 for yes, 1 for no. The optional second argument is the default
 # answer used when the user presses Enter (N if omitted).
+# Under the GUI input-hold protocol the question is held on screen with an
+# action number instead of being printed by read -rp.
 function ask_yn {
     local prompt="${1:-Continue?}"
     local default="${2:-N}"
     local response
+    local suffix=" [y/N]"
+    [[ "$default" == "Y" ]] && suffix=" [Y/n]"
+    local read_prompt="${prompt}${suffix}: "
+    local hold_id=""
     while true; do
+        hold_id=$(_input_hold_req "$hold_id" "$read_prompt")
+        if _input_hold_active; then
+            read -r response
+        else
+            read -rp "$read_prompt" response
+        fi
         if [[ "$default" == "Y" ]]; then
-            read -rp "${prompt} [Y/n]: " response
             response="${response:-Y}"
         else
-            read -rp "${prompt} [y/N]: " response
             response="${response:-N}"
         fi
         case "${response,,}" in
-            y|yes) return 0 ;;
-            n|no)  return 1 ;;
-            *)     echo "  Please answer y or n." ;;
+            y|yes) _input_hold_ack "$hold_id"; return 0 ;;
+            n|no)  _input_hold_ack "$hold_id"; return 1 ;;
+            *)     echo "  Please answer y or n." >&2 ;;
         esac
     done
+}
+
+# Prompt for one free-text line (path, menu choice, press-enter gate).
+# Usage: ask_line "Prompt text" [varname]
+# Stores the answer in varname (default REPLY) and returns read's status.
+# The varname must not be "var".  Under the GUI input-hold protocol the
+# prompt is held on screen with an action number instead of being printed
+# by read -rp.
+function ask_line {
+    local prompt="${1:-}"
+    local var="${2:-REPLY}"
+    local hold_id
+    hold_id=$(_input_hold_req "" "$prompt")
+    if _input_hold_active; then
+        read -r "${var?}"
+    else
+        read -rp "$prompt" "${var?}"
+    fi
+    local rc=$?
+    _input_hold_ack "$hold_id"
+    return "$rc"
 }
 
 # Source a sibling script or library through find_zfsutility_script.

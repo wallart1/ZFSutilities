@@ -129,6 +129,34 @@ duplicate lines, captures raw output (dataset lists, `zfs receive` progress,
 separators, etc.), and keeps GUI infrastructure messages from leaking into
 session logs.
 
+## Interactive Prompts
+
+Jobs launched by the GUI must ask questions through the input-hold helpers so
+the question is held on screen with an action number and the operator's answer
+is routed back to the exact job that asked:
+
+- **Bash** (after `bashinit` is sourced): `ask_yn "Question?" ["Y"|"N"]` for
+  yes/no (returns 0 for yes, 1 for no), and `ask_line "Prompt:" [varname]` for
+  any other single-line answer (stores the answer in `varname`, default
+  `REPLY`; returns `read`'s exit status). Do not write raw `read -rp` prompts
+  in code the GUI can run.
+- **Python** (for jobs and user scripts the GUI launches): `import input_hold`
+  (the GUI puts its package on `PYTHONPATH` for child processes), then
+  `input_hold.ask_yn("Question?")` or `input_hold.ask_line("Prompt:")`.
+
+Both helpers emit two side-channel marker lines on stderr —
+`ZFSU-INPUT-REQ|<uuid>|<prompt text>` before the read and
+`ZFSU-INPUT-ACK|<uuid>` after it returns — but only when
+`ZFSUTILITIES_INPUT_HOLD=Y`, which `BackupRunner._spawn_process` sets for
+every job it launches. In any other context (terminal, cron, Run Now) the
+helpers prompt normally and emit nothing. `ask_yn` re-asks invalid answers
+under the same uuid, so a held message keeps its action number; `ask_line` is
+stateless, so a call site that re-asks in its own loop takes a new number.
+Prompt text must be a single line — the runner splits the stream on newlines
+before parsing markers. `BackupRunner` intercepts the markers before display
+and session-log writes and forwards them to the GUI registry; the markers
+themselves never appear in logs or in the GUI.
+
 ## Message Priorities
 
 Messages may begin with one of the following priority tokens (lowest to

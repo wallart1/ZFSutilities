@@ -234,7 +234,7 @@ function send-receive {
                 log_msg "WARN: About to destroy destination dataset $dest AND all of its child" \
                     "datasets and snapshots, ignoring holds, in preparation for a full transfer" \
                     "from $fs."
-                read -rp "Press enter to continue."
+                ask_line "Press enter to continue."
             fi
             local saved_fsarray=("${fsarray[@]}")
             if ! autoproceed="$autoproceed" delfs "$dest"; then
@@ -248,7 +248,7 @@ function send-receive {
                 log_msg "WARN: About to delete all snapshots of destination dataset $dest," \
                     "ignoring holds, in preparation for a full transfer from $fs.\n\t(Child" \
                     "datasets will NOT be touched.)"
-                read -rp "Press enter to continue."
+                ask_line "Press enter to continue."
             fi
             local _save_releaseholds_tags=("${releaseholds_tags[@]}")
             releaseholds_tags=('offsite-*')
@@ -351,7 +351,7 @@ function send-receive {
                 local response
                 local eof_count=0
                 while true; do
-                    read -rp $'\t'"$readprompt" response
+                    ask_line $'\t'"$readprompt" response
                     if [[ -z "$response" ]]; then
                         ((eof_count++))
                         if [[ $eof_count -ge 3 ]];
@@ -481,7 +481,7 @@ function send-receive {
 
     log_msg "INFO: About to copy the following datasets to $destfs:"
     for (( i=0; i<${#fsarray[@]}; i++)); do echo "${fsarray[i]}"; done
-    [[ $autoproceed != "Y" ]] && read -rp "Press enter to continue."
+    [[ $autoproceed != "Y" ]] && ask_line "Press enter to continue."
     autoproceed='Y'
 
     save_doincrementals=$doincrementals
@@ -575,7 +575,7 @@ function send-receive {
                             local choice
                             local eof_count=0
                             while true; do
-                                read -rp "Choice [A/S/Q]: " choice
+                                ask_line "Choice [A/S/Q]: " choice
                                 if [[ -z "$choice" ]]; then
                                     ((eof_count++))
                                     if [[ $eof_count -ge 3 ]]; then
@@ -740,7 +740,7 @@ function send-receive {
         if [[ $doincrementals != "Y" ]]; then
             log_msg "INFO: Doing a full copy of $fs to $destfs$restorefs."
             receive_F_option='F'
-            [[ $autoproceed != 'Y' ]] && read -rp "Press enter to continue."
+            [[ $autoproceed != 'Y' ]] && ask_line "Press enter to continue."
         fi
 
         if [[ $do_prepare -eq 1 ]]; then

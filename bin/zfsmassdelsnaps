@@ -131,10 +131,7 @@ function _mass_delete_respect_retention {
     fi
 
     log_msg "INFO: Approve deletion of ${#candidates[@]} snapshots?"
-    log_msg "INFO: Type y in the Input box and press Enter to proceed."
-    local response
-    read -r response
-    if [[ "$response" != [yY]* ]]; then
+    if ! ask_yn "Approve deletion of ${#candidates[@]} snapshots?"; then
         log_msg "INFO: Deletion cancelled by user."
         return 0
     fi
@@ -163,10 +160,7 @@ function _list_and_approve {
     fi
 
     log_msg "INFO: Approve deletion of $# snapshots?"
-    log_msg "INFO: Type y in the Input box and press Enter to proceed."
-    local response
-    read -r response
-    if [[ "$response" != [yY]* ]]; then
+    if ! ask_yn "Approve deletion of $# snapshots?"; then
         log_msg "INFO: Deletion cancelled by user."
         return 0
     fi

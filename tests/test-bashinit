@@ -11,6 +11,93 @@ source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
 # Tests
 # =============================================================================
 
+test_input_hold_markers_emitted_under_protocol() {
+    # ask_yn/ask_line announce prompts to the GUI with ZFSU-INPUT-* marker
+    # lines only when ZFSUTILITIES_INPUT_HOLD=Y; without it a terminal
+    # session must see no marker noise.
+    local tmpdir wrapper hold_output plain_output
+    tmpdir=$(mktemp -d)
+    wrapper="$tmpdir/wrapper.sh"
+    {
+        echo '#!/usr/bin/bash'
+        echo "_bashinit=\"$mydir/bin/bashinit\""
+        echo 'source "$_bashinit"'
+        echo '[[ -n "${HOLD:-}" ]] && export ZFSUTILITIES_INPUT_HOLD=Y'
+        echo 'if ask_yn "Proceed with test?"; then echo "ANSWER-YES"; else echo "ANSWER-NO"; fi'
+        echo 'ask_line "Enter word:" word'
+        echo "echo \"WORD=\$word\""
+    } > "$wrapper"
+    chmod +x "$wrapper"
+    hold_output=$(printf 'y\nhello\n' | HOLD=Y "$wrapper" 2>&1)
+    plain_output=$(printf 'y\nhello\n' | "$wrapper" 2>&1)
+    test_start "input-hold markers emitted only under ZFSUTILITIES_INPUT_HOLD=Y"
+    if [[ "$hold_output" == *"ZFSU-INPUT-REQ|"*"Proceed with test? [y/N]: "* \
+        && "$hold_output" == *"ZFSU-INPUT-ACK|"* \
+        && "$hold_output" == *"ANSWER-YES"* && "$hold_output" == *"WORD=hello"* \
+        && "$plain_output" != *"ZFSU-INPUT-"* \
+        && "$plain_output" == *"ANSWER-YES"* && "$plain_output" == *"WORD=hello"* ]]; then
+        test_pass
+    else
+        test_fail "hold='$hold_output' plain='$plain_output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_ask_yn_reask_keeps_request_uuid() {
+    # An invalid answer re-asks under the same request id, so the GUI keeps
+    # the held message's action number instead of allocating a new one.
+    local tmpdir wrapper output req_ids
+    tmpdir=$(mktemp -d)
+    wrapper="$tmpdir/wrapper.sh"
+    {
+        echo '#!/usr/bin/bash'
+        echo "_bashinit=\"$mydir/bin/bashinit\""
+        echo 'source "$_bashinit"'
+        echo 'export ZFSUTILITIES_INPUT_HOLD=Y'
+        echo 'if ask_yn "Proceed with test?"; then echo "ANSWER-YES"; fi'
+    } > "$wrapper"
+    chmod +x "$wrapper"
+    output=$(printf 'x\ny\n' | "$wrapper" 2>&1)
+    req_ids=$(printf '%s\n' "$output" | grep '^ZFSU-INPUT-REQ|' | cut -d'|' -f2 | sort -u)
+    test_start "ask_yn re-ask reuses the request uuid across one validation loop"
+    if [[ "$(printf '%s\n' "$req_ids" | grep -c .)" -eq 1 \
+        && "$output" == *"Please answer y or n."* \
+        && "$output" == *"ANSWER-YES"* ]]; then
+        test_pass
+    else
+        test_fail "ids='$req_ids' output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_ask_line_returns_read_status() {
+    # ask_line must return the underlying read's exit status so converted
+    # EOF-sensitive call sites keep their behavior, and must store the
+    # answer in the named variable.
+    local tmpdir wrapper output rc
+    tmpdir=$(mktemp -d)
+    wrapper="$tmpdir/wrapper.sh"
+    {
+        echo '#!/usr/bin/bash'
+        echo "_bashinit=\"$mydir/bin/bashinit\""
+        echo 'source "$_bashinit"'
+        echo 'ask_line "Enter:" answer'
+        echo 'rc=$?'
+        echo "echo \"ANSWER=\$answer RC=\$rc\""
+        echo 'exit 0'
+    } > "$wrapper"
+    chmod +x "$wrapper"
+    output=$(: | "$wrapper" 2>&1)
+    rc=$?
+    test_start "ask_line stores the answer and returns read's status"
+    if [[ "$rc" -eq 0 && "$output" == *"ANSWER= RC=1"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
 test_log_msg_survives_cd_with_relative_script_path() {
     # Regression: a script invoked via a relative path (e.g. ./bin/startdocserver)
     # used to die under set -e when log_msg's realpath of BASH_SOURCE failed
@@ -147,6 +234,9 @@ test_log_msg_silent_when_session_log_dir_removed() {
 # Run
 # =============================================================================
 
+test_input_hold_markers_emitted_under_protocol
+test_ask_yn_reask_keeps_request_uuid
+test_ask_line_returns_read_status
 test_log_msg_survives_cd_with_relative_script_path
 test_no_session_log_export_when_log_file_unwritable
 test_session_log_exported_when_writable

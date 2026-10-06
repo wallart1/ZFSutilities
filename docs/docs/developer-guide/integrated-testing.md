@@ -65,7 +65,8 @@ tests/integrated/itf iso fetch        # download the installer ISO
 tests/integrated/itf iso upload       # push it to the base ISO storage
 tests/integrated/itf journey list
 tests/integrated/itf journey run j01-fresh-install
-tests/integrated/itf status           # guests + recent runs overview
+tests/integrated/itf watch            # tail the active run — NOT a console
+tests/integrated/itf status           # guests + active/recent runs overview
 ```
 
 Every run produces a progressive report under
@@ -73,6 +74,27 @@ Every run produces a progressive report under
 `steps.tsv` for tooling, `report.md` for humans, plus artifacts (logs,
 `zfs list -t snapshot` listings, GUI screenshots). `itf journey run`
 exits non-zero when any step failed.
+
+### Console discipline while a run is active
+
+The install phase of every journey is driven over the guest's **serial
+console** (`qm terminal`, `lib/serial_console.py`). The Proxmox web UI's
+xterm.js console on an itf guest attaches to the *same* serial socket:
+a second session interleaves keystrokes and splits output, wait-patterns
+miss, wrong bytes reach the installer — and even briefly attaching can
+blind the driver for the rest of the run. While a run is active
+(`itf status` shows an active run with its pid):
+
+- Never open an itf guest's xterm.js/serial console.
+- Guest noVNC (VGA) is look-don't-touch: no typing, no power buttons —
+  the journey owns the guest's power state.
+- Leave the base-VM consoles alone entirely: the confinement guard
+  constrains the orchestrator, not a human at a base console, who is
+  root with no guardrails.
+
+To follow a run, use `itf watch [TAG]` — it tails the live report and
+serial transcript of the active run (or a named one) from the first
+byte, reading transcripts only and touching no console.
 
 ## Journeys
 

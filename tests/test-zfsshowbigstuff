@@ -193,7 +193,15 @@ test_largest_shows_requested_number_of_datasets() {
         export -f stdbuf
 
         mock_zpool_list "threeamigos"
-        mock_zfs_fs_list $'NAME\tUSED\tUSEDDS\tUSEDSNAP\tWRITTEN\tQUOTA\tREFER\tREFQUOTA\tRESERVATION\nthreeamigos\t100G\t50G\t50G\t0\t-\t50G\t-\t-\nthreeamigos/a\t90G\t45G\t45G\t0\t-\t45G\t-\t-\nthreeamigos/b\t80G\t40G\t40G\t0\t-\t40G\t-\t-\nthreeamigos/c\t70G\t35G\t35G\t0\t-\t35G\t-\t-\nthreeamigos/d\t60G\t30G\t30G\t0\t-\t30G\t-\t-\nthreeamigos/e\t50G\t25G\t25G\t0\t-\t25G\t-\t-\nthreeamigos/f\t40G\t20G\t20G\t0\t-\t20G\t-\t-'
+        mock_zfs_fs_list \
+$'NAME\tUSED\tUSEDDS\tUSEDSNAP\tWRITTEN\tQUOTA\tREFER\tREFQUOTA\tRESERVATION\n'\
+$'threeamigos\t100G\t50G\t50G\t0\t-\t50G\t-\t-\n'\
+$'threeamigos/a\t90G\t45G\t45G\t0\t-\t45G\t-\t-\n'\
+$'threeamigos/b\t80G\t40G\t40G\t0\t-\t40G\t-\t-\n'\
+$'threeamigos/c\t70G\t35G\t35G\t0\t-\t35G\t-\t-\n'\
+$'threeamigos/d\t60G\t30G\t30G\t0\t-\t30G\t-\t-\n'\
+$'threeamigos/e\t50G\t25G\t25G\t0\t-\t25G\t-\t-\n'\
+$'threeamigos/f\t40G\t20G\t20G\t0\t-\t20G\t-\t-'
         mock_zfs_dataset_exists "threeamigos"
         source "$SHOWBIG_SCRIPT" "threeamigos" "largest" 5 2>&1
     ) && rc=0 || rc=$?
@@ -222,7 +230,15 @@ test_smallest_shows_requested_number_of_datasets() {
         export -f stdbuf
 
         mock_zpool_list "threeamigos"
-        mock_zfs_fs_list $'NAME\tUSED\tUSEDDS\tUSEDSNAP\tWRITTEN\tQUOTA\tREFER\tREFQUOTA\tRESERVATION\nthreeamigos\t100G\t50G\t50G\t0\t-\t50G\t-\t-\nthreeamigos/a\t90G\t45G\t45G\t0\t-\t45G\t-\t-\nthreeamigos/b\t80G\t40G\t40G\t0\t-\t40G\t-\t-\nthreeamigos/c\t70G\t35G\t35G\t0\t-\t35G\t-\t-\nthreeamigos/d\t60G\t30G\t30G\t0\t-\t30G\t-\t-\nthreeamigos/e\t50G\t25G\t25G\t0\t-\t25G\t-\t-\nthreeamigos/f\t40G\t20G\t20G\t0\t-\t20G\t-\t-'
+        mock_zfs_fs_list \
+$'NAME\tUSED\tUSEDDS\tUSEDSNAP\tWRITTEN\tQUOTA\tREFER\tREFQUOTA\tRESERVATION\n'\
+$'threeamigos\t100G\t50G\t50G\t0\t-\t50G\t-\t-\n'\
+$'threeamigos/a\t90G\t45G\t45G\t0\t-\t45G\t-\t-\n'\
+$'threeamigos/b\t80G\t40G\t40G\t0\t-\t40G\t-\t-\n'\
+$'threeamigos/c\t70G\t35G\t35G\t0\t-\t35G\t-\t-\n'\
+$'threeamigos/d\t60G\t30G\t30G\t0\t-\t30G\t-\t-\n'\
+$'threeamigos/e\t50G\t25G\t25G\t0\t-\t25G\t-\t-\n'\
+$'threeamigos/f\t40G\t20G\t20G\t0\t-\t20G\t-\t-'
         mock_zfs_dataset_exists "threeamigos"
         source "$SHOWBIG_SCRIPT" "threeamigos" "smallest" 3 2>&1
     ) && rc=0 || rc=$?

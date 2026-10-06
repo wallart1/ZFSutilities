@@ -15,6 +15,13 @@ module that issues them. Each entry is a table whose columns describe:
     that mark a decision, gate, prompt, or outcome. Routine per-item progress
     lines are omitted. New entries are added as scripts and modules evolve.
 
+!!! note "Answering prompts"
+    In a terminal, answer a prompt by typing at it. When the same script runs
+    as a GUI job, its prompts are held on screen as numbered input requests
+    and are answered in the Input entry as `N response` — see
+    [the GUI bottom panel](../user-guide/gtk-gui.md#bottom-panel). Rows below
+    describe the answer itself (for example "y proceeds") either way.
+
 ---
 
 
@@ -458,7 +465,7 @@ Builds the two-part restore script. The messages below are emitted inside the ge
 | `INFO: No snapshots would be removed by retention policies.` | Retention-respecting dry run found no candidates | Informational; nothing to do |
 | `INFO: The following ... snapshots would be removed:` | Retention-respecting plan; continues to the approval prompt unless dry-run | Review the list, then answer the prompt |
 | `INFO: Dry run - no snapshots were deleted.` | Dry-run final marker | Informational |
-| `INFO: Approve deletion of ... snapshots?` / `INFO: Type y in the Input box and press Enter to proceed.` | Approval prompt (both modes) | y proceeds with deletion; anything else cancels |
+| `INFO: Approve deletion of ... snapshots?` / `Approve deletion of ... snapshots? [y/N]: ` (held input request) | Approval prompt (both modes) | y proceeds with deletion (reply to the held request, e.g. `3 y`); anything else cancels |
 | `INFO: Deletion cancelled by user.` | The operator declined at the approval prompt | Nothing is deleted |
 | `INFO: No snapshots matched the criteria.` | Ignore-retention mode found no snapshots | Informational; nothing to do |
 | `INFO: About to delete the following ... snapshots.` | Ignore-retention plan summary | Review before approving |
@@ -1983,7 +1990,12 @@ The GUI application shell: startup config checks, close confirmation, docs ancho
 | `INFO: Documentation editor set to: ...` | The editor-choice dialog was confirmed and the command persisted | Future edit links use this editor |
 | `WARN: No documentation anchor for page '...'` | Help-with-page has no docs anchor mapping for the current page | Docs viewer not opened |
 | `VERB: Action: ...` | An action button was clicked but no handler exists for that page+label (dispatch miss) | Nothing executed |
-| `VERB: > ...` | The user sent text via the stdin entry to the running runner | Text forwarded to the subprocess PTY |
+| `VERB: > ...` | The user sent text via the stdin entry; it is echoed under the runner the input-hold ladder routed it to | Answer forwarded to that runner's subprocess |
+| `WARN: No outstanding input message numbered ...` | The reply named an action number that is not currently held | Input rejected; check the held-message strip for live numbers |
+| `WARN: Input ignored - nothing is asking; reply to a held message as 'N response' (e.g. '3 y')` | Bare input arrived while no question is held and no single job is live (or several are) | Input rejected with a hint; input is never routed by a fixed priority order |
+| `INFO: [Input N][task] ...` | A job's question was held as numbered input request N | Answer it in the Input entry as `N response` |
+| `VERB: [Input N] closed` | The held question N was answered and released | Informational |
+| `VERB: [Input N] withdrawn (task ended)` | The task that held question N exited or was cancelled, releasing the hold | Informational |
 | `INFO: Memory stats refreshed` | The menu **Refresh** ran on the Performance page | Informational; charts/values already updated |
 
 ### [main](../commands-and-modules/python-modules.md#mainpy)

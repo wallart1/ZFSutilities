@@ -825,6 +825,18 @@ runner aborted unexpectedly. Cancel/abort paths invoke it as
 `INFO: <label> complete` only when `rc == 0` and `WARN: <label> failed (rc=N)`
 otherwise, so completion messages in the log always reflect the real result.
 
+**Input-hold protocol:** `_spawn_process()` arms the numbered input-hold
+protocol for every job it launches (`ZFSUTILITIES_INPUT_HOLD=Y`, plus this
+package on `PYTHONPATH` so Python jobs can `import input_hold`). The runner
+intercepts `ZFSU-INPUT-REQ`/`ZFSU-INPUT-ACK` marker lines from the merged
+output before display and session-log writes and forwards them to the GUI
+through the optional `input_event_func` constructor callback; step exit,
+cancel, and finish emit a `clear` event so no hold outlives its process.
+`step_active` reports whether the current step subprocess is alive (the
+routing backstop for prompts from jobs that do not use the helpers), and
+`log_input()` writes an operator-input line to this runner's session log so
+input exchanges are attributed to the runner being answered.
+
 **Called modules / imported helpers:**
 
 | Module             | Purpose in this module                              |
@@ -843,6 +855,40 @@ otherwise, so completion messages in the log always reflect the real result.
 | Session log files | [Session log index][ds-log]  |
 | Session log index | [Session log index][ds-log]  |
 | Backup history    | [Backup history][ds-history] |
+
+---
+
+### `input_hold.py`
+
+Python twin of the bash `ask_yn`/`ask_line` input-hold helpers in
+`bashinit`, for jobs and user scripts the GUI launches. Dependency-free
+(no GUI imports) so any Python child process can use it; when
+`ZFSUTILITIES_INPUT_HOLD` is unset it prompts normally via `input()` and
+emits nothing.
+
+**Key functions:**
+
+| Function                    | Purpose                                                       |
+| --------------------------- | ------------------------------------------------------------- |
+| `hold_active()`             | True when running under the GUI input-hold protocol           |
+| `ask_yn(prompt, default=..)`| Yes/no question; re-asks invalid answers under the same uuid  |
+| `ask_line(prompt)`          | One free-text line, returned verbatim                         |
+
+---
+
+### `input_requests.py`
+
+GUI-side registry of outstanding numbered input requests and the routing
+ladder for operator replies (MVS console model). Pure logic, no GTK
+imports, so the ladder is unit-testable with fake runners.
+
+**Key class / functions:**
+
+| Name                 | Purpose                                                        |
+| -------------------- | -------------------------------------------------------------- |
+| `InputRequestRegistry`| Assigns monotonic numbers, updates re-asked prompts in place, releases on ack/clear |
+| `parse_user_input(text)` | Splits a reply into (number, answer); `"3 y"` → `(3, "y")`  |
+| `sole_live_runner(runners)` | The single runner with a live step, or `None` when ambiguous |
 
 ---
 
@@ -997,8 +1043,8 @@ snap different subsets, which would force the daily backup to roll back
 
 ### `runner_factory.py`
 
-Creates `BackupRunner` instances pre-bound to the main window's log and
-progress callbacks.
+Creates `BackupRunner` instances pre-bound to the main window's log,
+progress, and input-hold event callbacks (`input_event_func`).
 
 **Key class:**
 

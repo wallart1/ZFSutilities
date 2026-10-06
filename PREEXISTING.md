@@ -9,7 +9,7 @@
   already analyzed in SESSION_NOTES.md's Zensical thread; recorded here so
   it can be prompted for a decision. Not resolved (code freeze).
   Zensical is under development. We are waiting for a 1.x.x release.
-  (Rechecked 2026-10-05: PyPI shows 0.0.68; still no 1.x.)
+  (Rechecked 2026-10-06: PyPI shows 0.0.68; still no 1.x.)
 
 - (future objective, migration/create fidelity — narrowed 2026-10-03):
   No creation path (Create Pool wizard or Migrate Pool) can *plan*
@@ -38,10 +38,3 @@
   cycle-2 kickoff: adopt strict mode + guard the deliberate
   failure-accumulation sites, then run a full J01–J03 campaign to
   re-validate.
-
-- (coding-standards debt, legacy test files): a handful of untouched
-  `tests/test-*` files carry over-100-column lines (notably
-  test-list-vm-disk, test-enroll-efi-keys-vm, test-zfslockmanager;
-  counts vary) predating the integrated-testing changeset. All files
-  touched by the integrated-testing changeset were wrapped to ≤100
-  columns during the 2026-10-05 wrap-up review.

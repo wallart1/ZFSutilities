@@ -112,6 +112,124 @@ test_phase1_same_day() {
     fi
 }
 
+test_phase1_same_day_interleaved() {
+    echo "=== Phase 1: Same-day dedup with interleaved foreign-label snapshots ==="
+    reset_mocks
+    # Mirrors the 2026-10-04 stewie case: three same-day 'w' snapshots with
+    # other-label snapshots created between them.
+    local _wrap_snaplist=$'pool/fs@dailybackup-2026-10-04T06:00-04:00-w\tSun Oct 4 6:36 2026\n'
+    _wrap_snaplist+=$'pool/fs@BaseInstall-2026-10-04T12:25\tSun Oct 4 12:33 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T12:34-04:00-w\tSun Oct 4 12:38 2026\n'
+    _wrap_snaplist+=$'pool/fs@ITEinitConf-2026-10-04T17:02\tSun Oct 4 17:04 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T23:07-04:00-w\tSun Oct 4 23:35 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-05T06:00-04:00-d\tMon Oct 5 6:18 2026'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2026-10-04T06:00-04:00-w\n'
+    _wrap_snaplist+=$'pool/fs@BaseInstall-2026-10-04T12:25\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T12:34-04:00-w\n'
+    _wrap_snaplist+=$'pool/fs@ITEinitConf-2026-10-04T17:02\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T23:07-04:00-w\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-05T06:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
+    retain "pool/fs" "dailybackup"
+    test_start "Same-day 'w' dedup survives interleaved foreign-label snapshots"
+    local _rm1 _rm2 _keep_w _keep_d _foreign1 _foreign2
+    _rm1="pool/fs@dailybackup-2026-10-04T06:00-04:00-w"
+    _rm2="pool/fs@dailybackup-2026-10-04T12:34-04:00-w"
+    _keep_w="pool/fs@dailybackup-2026-10-04T23:07-04:00-w"
+    _keep_d="pool/fs@dailybackup-2026-10-05T06:00-04:00-d"
+    _foreign1="pool/fs@BaseInstall-2026-10-04T12:25"
+    _foreign2="pool/fs@ITEinitConf-2026-10-04T17:02"
+    if [[ "${_mock_delsnap_calls[*]}" == *"$_rm1"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" == *"$_rm2"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_keep_w"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_keep_d"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_foreign1"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_foreign2"* ]]; then
+        test_pass
+    else
+        test_fail "Unexpected deletions: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_phase1_same_day_chain() {
+    echo "=== Phase 1: Chain of three same-day snapshots collapses to newest ==="
+    reset_mocks
+    local _wrap_snaplist=$'pool/fs@dailybackup-2026-10-04T06:00-04:00-d\tSun Oct 4 6:00 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T12:34-04:00-d\tSun Oct 4 12:34 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T23:07-04:00-d\tSun Oct 4 23:07 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-05T06:00-04:00-d\tMon Oct 5 6:00 2026'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2026-10-04T06:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T12:34-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T23:07-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-05T06:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
+    retain "pool/fs" "dailybackup"
+    test_start "Removes two older same-day snapshots, keeps newest and next day"
+    local _rm1 _rm2 _keep1 _keep2
+    _rm1="pool/fs@dailybackup-2026-10-04T06:00-04:00-d"
+    _rm2="pool/fs@dailybackup-2026-10-04T12:34-04:00-d"
+    _keep1="pool/fs@dailybackup-2026-10-04T23:07-04:00-d"
+    _keep2="pool/fs@dailybackup-2026-10-05T06:00-04:00-d"
+    if [[ "${_mock_delsnap_calls[*]}" == *"$_rm1"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" == *"$_rm2"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_keep1"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_keep2"* ]]; then
+        test_pass
+    else
+        test_fail "Unexpected deletions: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_phase1_same_day_weekly_and_monthly() {
+    echo "=== Phase 1: Same-day dedup fires for 'w' and 'm' buckets ==="
+    reset_mocks
+    local _wrap_snaplist=$'pool/fs@dailybackup-2026-10-01T06:00-04:00-m\tThu Oct 1 6:00 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-01T22:00-04:00-m\tThu Oct 1 22:00 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T06:00-04:00-w\tSun Oct 4 6:00 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T23:07-04:00-w\tSun Oct 4 23:07 2026'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2026-10-01T06:00-04:00-m\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-01T22:00-04:00-m\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T06:00-04:00-w\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T23:07-04:00-w'
+    mock_zfs_snap_list "$_wrap_snaplist"
+    retain "pool/fs" "dailybackup"
+    test_start "Removes older same-day 'm' and 'w' snapshots, keeps newer of each"
+    local _rm_m _rm_w _keep_m _keep_w
+    _rm_m="pool/fs@dailybackup-2026-10-01T06:00-04:00-m"
+    _rm_w="pool/fs@dailybackup-2026-10-04T06:00-04:00-w"
+    _keep_m="pool/fs@dailybackup-2026-10-01T22:00-04:00-m"
+    _keep_w="pool/fs@dailybackup-2026-10-04T23:07-04:00-w"
+    if [[ "${_mock_delsnap_calls[*]}" == *"$_rm_m"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" == *"$_rm_w"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_keep_m"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_keep_w"* ]]; then
+        test_pass
+    else
+        test_fail "Unexpected deletions: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
+test_phase1_same_day_cross_bucket_kept() {
+    echo "=== Phase 1: Same-day snapshots in different buckets are both kept ==="
+    reset_mocks
+    local _wrap_snaplist=$'pool/fs@dailybackup-2026-10-04T06:00-04:00-d\tSun Oct 4 6:00 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T23:07-04:00-w\tSun Oct 4 23:07 2026'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2026-10-04T06:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T23:07-04:00-w'
+    mock_zfs_snap_list "$_wrap_snaplist"
+    retain "pool/fs" "dailybackup"
+    test_start "Keeps same-day snapshots that landed in different buckets"
+    if [[ "${#_mock_delsnap_calls[@]}" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Unexpected deletions: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
 test_phase2_bucket_overflow() {
     echo "=== Phase 2: Bucket overflow ==="
     reset_mocks
@@ -531,6 +649,10 @@ test_verb_messages_disabled() {
 
 main() {
     test_phase1_same_day
+    test_phase1_same_day_interleaved
+    test_phase1_same_day_chain
+    test_phase1_same_day_weekly_and_monthly
+    test_phase1_same_day_cross_bucket_kept
     test_phase2_bucket_overflow
     test_phase2_oldest_first
     test_phase2_protect_most_recent

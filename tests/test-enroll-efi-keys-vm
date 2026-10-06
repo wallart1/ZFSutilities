@@ -16,6 +16,13 @@ func_text+=$'\n'
 func_text+=$(sed -n '/^update_efidisk_config() {/,/^}$/p' "$old_mydir/bin/enroll-efi-keys-vm")
 eval "$func_text"
 
+# Shared iSCSI by-path targets for the qm config fixtures below; spelled
+# out once here so the fixture lines stay within 100 columns.
+_efi_by_path="/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie"
+_efi_lun13="${_efi_by_path}:threeamigos-lun-13"
+_efi_lun8="${_efi_by_path}:threeamigos-lun-8"
+_efi_lun9="${_efi_by_path}:threeamigos-lun-9"
+
 # ------------------------------------------------------------------
 # Tests
 # ------------------------------------------------------------------
@@ -23,8 +30,8 @@ eval "$func_text"
 test_parse_efidisk_line_basic() {
     test_start "parse_efidisk_line extracts by-path, size, and ms-cert flag"
     local conf_file="$_mock_zfs_state_dir/209.conf"
-    cat > "$conf_file" << 'EOF'
-efidisk0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13,format=raw,efitype=4m,pre-enrolled-keys=1,size=1M
+    cat > "$conf_file" << EOF
+efidisk0: ${_efi_lun13},format=raw,efitype=4m,pre-enrolled-keys=1,size=1M
 EOF
     local parsed by_path size has_ms_cert
     parsed=$(parse_efidisk_line "$conf_file")
@@ -39,8 +46,8 @@ EOF
 test_parse_efidisk_line_with_ms_cert() {
     test_start "parse_efidisk_line detects ms-cert=2023k"
     local conf_file="$_mock_zfs_state_dir/209-pending.conf"
-    cat > "$conf_file" << 'EOF'
-efidisk0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13,efitype=4m,format=raw,ms-cert=2023k,pre-enrolled-keys=1,size=1M
+    cat > "$conf_file" << EOF
+efidisk0: ${_efi_lun13},efitype=4m,format=raw,ms-cert=2023k,pre-enrolled-keys=1,size=1M
 EOF
     local parsed by_path size has_ms_cert
     parsed=$(parse_efidisk_line "$conf_file")
@@ -81,10 +88,10 @@ test_parse_iscsi_by_path_rejects_invalid() {
 test_update_efidisk_config() {
     test_start "update_efidisk_config adds ms-cert, sets size=4M, drops pending"
     local conf_file="$_mock_zfs_state_dir/209-update.conf"
-    cat > "$conf_file" << 'EOF'
+    cat > "$conf_file" << EOF
 bios: ovmf
-efidisk0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13,format=raw,efitype=4m,pre-enrolled-keys=1,size=1M
-scsi0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-8,format=raw,discard=on,iothread=1,size=100G
+efidisk0: ${_efi_lun13},format=raw,efitype=4m,pre-enrolled-keys=1,size=1M
+scsi0: ${_efi_lun8},format=raw,discard=on,iothread=1,size=100G
 
 [PENDING]
 efidisk0: /dev/disk/by-path/...,efitype=4m,format=raw,ms-cert=2023k,pre-enrolled-keys=1,size=1M
@@ -104,11 +111,11 @@ EOF
 test_update_efidisk_config_preserves_data_disk_sizes() {
     test_start "update_efidisk_config leaves scsi data disk size= untouched"
     local conf_file="$_mock_zfs_state_dir/209-data.conf"
-    cat > "$conf_file" << 'EOF'
+    cat > "$conf_file" << EOF
 bios: ovmf
-efidisk0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13,format=raw,efitype=4m,pre-enrolled-keys=1,size=1M
-scsi0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-8,format=raw,discard=on,iothread=1,size=100G
-scsi1: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-9,format=raw,discard=on,iothread=1,size=2T
+efidisk0: ${_efi_lun13},format=raw,efitype=4m,pre-enrolled-keys=1,size=1M
+scsi0: ${_efi_lun8},format=raw,discard=on,iothread=1,size=100G
+scsi1: ${_efi_lun9},format=raw,discard=on,iothread=1,size=2T
 EOF
     update_efidisk_config "$conf_file"
     local line0 line1

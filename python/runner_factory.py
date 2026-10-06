@@ -6,10 +6,11 @@ from backup_runner import BackupRunner
 class RunnerFactory:
     """Creates BackupRunner instances sharing the same GUI callbacks."""
 
-    def __init__(self, log_func, set_stdin_enabled_func, progress_func=None):
+    def __init__(self, log_func, set_stdin_enabled_func, progress_func=None, input_event_func=None):
         self.log_func = log_func
         self.set_stdin_enabled_func = set_stdin_enabled_func
         self.progress_func = progress_func
+        self.input_event_func = input_event_func
 
     def create(self, label, on_start=None):
         """Return a new BackupRunner with the given label and optional start callback."""
@@ -19,4 +20,5 @@ class RunnerFactory:
             self.progress_func,
             label=label,
             on_start=on_start,
+            input_event_func=self.input_event_func,
         )

@@ -810,7 +810,8 @@ setup_remote_agent() {
 #!/usr/bin/bash
 # Run as the "storage node" in this test; do not inherit the compute-side
 # two-node override variables, or the agent will try to forward recursively.
-unset ZFSLOCK_REMOTE_HOST ZFSLOCK_REMOTE_POOLS ZFSLOCK_REMOTE_BIN ZFSLOCK_THIS_HOST ZFSLOCK_REMOTE_DISABLED
+unset ZFSLOCK_REMOTE_HOST ZFSLOCK_REMOTE_POOLS ZFSLOCK_REMOTE_BIN \
+    ZFSLOCK_THIS_HOST ZFSLOCK_REMOTE_DISABLED
 export ZFSLOCK_DIR="$_remote_lock_dir"
 export zfslock_locks_dir="$_remote_lock_dir/.locks"
 export zfslock_pids_dir="$_remote_lock_dir/.pids"
@@ -844,7 +845,8 @@ cmd_check() {
         c_type=\$(_zfslock_read_field "\$zfslock_conflict_info" "type") || c_type=""
         c_pid=\$(_zfslock_read_field "\$zfslock_conflict_info" "pid") || c_pid=""
         c_script=\$(_zfslock_read_field "\$zfslock_conflict_info" "script") || c_script=""
-        printf '{"available": false, "conflict": {"dataset":"%s","type":"%s","pid":"%s","script":"%s","acquired":"","description":""}}\n' \
+        printf '{"available": false, "conflict": {"dataset":"%s","type":"%s",\
+"pid":"%s","script":"%s","acquired":"","description":""}}\n' \
             "\$c_dataset" "\$c_type" "\$c_pid" "\$c_script"
     fi
 }
@@ -943,7 +945,8 @@ test_remote_conflict() {
     local holder_script="$_mock_zfs_state_dir/remote_holder.sh"
     cat > "$holder_script" <<EOF
 #!/usr/bin/bash
-unset ZFSLOCK_REMOTE_HOST ZFSLOCK_REMOTE_POOLS ZFSLOCK_REMOTE_BIN ZFSLOCK_THIS_HOST ZFSLOCK_REMOTE_DISABLED
+unset ZFSLOCK_REMOTE_HOST ZFSLOCK_REMOTE_POOLS ZFSLOCK_REMOTE_BIN \
+    ZFSLOCK_THIS_HOST ZFSLOCK_REMOTE_DISABLED
 export ZFSLOCK_DIR="$_remote_lock_dir"
 export zfslock_locks_dir="$_remote_lock_dir/.locks"
 export zfslock_pids_dir="$_remote_lock_dir/.pids"

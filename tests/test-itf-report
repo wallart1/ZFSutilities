@@ -151,6 +151,49 @@ test_finish_passes_clean_run() {
     assert_rc 0 $?
 }
 
+# ------------------------------------------------------------------------------
+# Run lifecycle markers (pid / finished / itf_run_state)
+# ------------------------------------------------------------------------------
+
+test_init_records_pid() {
+    test_start "itf_report_init records the orchestrator pid in meta.txt"
+    itf_report_init pids > /dev/null 2>&1
+    assert_contains "$(cat "$ITF_RUN_DIR/meta.txt")" "pid:      $$"
+}
+
+test_finish_stamps_meta_finished() {
+    test_start "itf_report_finish stamps finished: into meta.txt on the failing path"
+    itf_report_init mixed3 > /dev/null 2>&1
+    itf_step fail "boom" > /dev/null 2>&1
+    itf_report_finish > /dev/null 2>&1
+    assert_contains "$(cat "$ITF_RUN_DIR/meta.txt")" "finished:"
+}
+
+test_run_state_running_then_done() {
+    test_start "itf_run_state: running while alive, done after finish"
+    itf_report_init states > /dev/null 2>&1
+    assert_equals "running" "$(itf_run_state "$ITF_RUN_DIR")"
+    itf_report_finish > /dev/null 2>&1
+    assert_equals "done" "$(itf_run_state "$ITF_RUN_DIR")"
+}
+
+test_run_state_interrupted_for_dead_pid() {
+    test_start "itf_run_state: interrupted for a dead pid without finished:"
+    itf_report_init deadpid > /dev/null 2>&1
+    # A reaped child's pid: guaranteed dead for the check below.
+    true &
+    local dead=$!
+    wait "$dead"
+    sed -i "s/^pid:.*/pid:      $dead/" "$ITF_RUN_DIR/meta.txt"
+    assert_equals "interrupted" "$(itf_run_state "$ITF_RUN_DIR")"
+}
+
+test_run_state_unknown_without_meta() {
+    test_start "itf_run_state: unknown for a run dir without meta.txt"
+    mkdir -p "$ITF_RUNS_DIR/run-19990101-000000-bare"
+    assert_equals "unknown" "$(itf_run_state "$ITF_RUNS_DIR/run-19990101-000000-bare")"
+}
+
 test_step_before_init_refused
 test_artifact_before_init_refused
 
@@ -164,6 +207,12 @@ test_artifact_copied_and_recorded
 test_artifact_missing_source_refused
 test_finish_fails_run_when_any_step_failed
 test_finish_passes_clean_run
+
+test_init_records_pid
+test_finish_stamps_meta_finished
+test_run_state_running_then_done
+test_run_state_interrupted_for_dead_pid
+test_run_state_unknown_without_meta
 
 rm -rf "$tmp_dir"
 teardown_test_env

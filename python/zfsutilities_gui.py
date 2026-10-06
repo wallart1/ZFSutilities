@@ -13,7 +13,7 @@ from typing import ClassVar
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk
+from gi.repository import GLib, Gtk, Pango
 
 # Ensure the script's own directory is on sys.path for sibling imports
 _script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -50,6 +50,11 @@ from gui_helpers import (
     create_info_panel,
     create_menu_bar,
     get_log_font_controller,
+)
+from input_requests import (
+    InputRequestRegistry,
+    parse_user_input,
+    sole_live_runner,
 )
 from logging_config import format_log_line_short, log_msg
 from logs_page import create_logs_page
@@ -205,6 +210,9 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         # --- Bottom: Info Panel ---
         # Create the info panel before the tab pages so the GUI log sink is
         # installed when Backup/Offsite/Pools page constructors run.
+        # The input-hold registry must exist before any runner can raise a
+        # numbered prompt into the panel's action strip.
+        self._input_registry = InputRequestRegistry()
         create_info_panel(self)
 
         self.create_sidebar_and_stack()
@@ -213,13 +221,23 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         # Create runners after the info panel exists so log/stdin callbacks
         # and widgets are already available.
         runner_factory = RunnerFactory(
-            self.log_message, self._set_stdin_enabled, self._update_progress
+            self.log_message,
+            self._set_stdin_enabled,
+            self._update_progress,
+            input_event_func=self._on_input_event,
         )
         self.backup_runner = runner_factory.create("Backup")
         self.offsite_runner = runner_factory.create("Offsite backup")
         self.restore_runner = runner_factory.create("Restore")
         self.retention_runner = runner_factory.create("Prune")
         self.dataset_runner = runner_factory.create("Dataset action")
+        self._runners = [
+            self.backup_runner,
+            self.offsite_runner,
+            self.restore_runner,
+            self.retention_runner,
+            self.dataset_runner,
+        ]
 
         self._ui_state.restore()
 
@@ -801,7 +819,10 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         return not self._confirm_terminate()
 
     def _on_main_destroy(self, _widget):
-        """Clean up pop-out window and log timers when main window closes."""
+        """Clean up pop-out window, log timers, and held prompts on close."""
+        if getattr(self, "_input_registry", None) is not None:
+            self._input_registry.release_all()
+            self._refresh_input_strip()
         if self.popout_window is not None:
             self.popout_window.destroy()
             self.popout_window = None
@@ -992,11 +1013,64 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         self._render_info_panel()
 
     def _set_stdin_enabled(self, enabled):
-        """Enable or disable the stdin entry and send button."""
+        """Recompute stdin entry sensitivity (runners report state changes).
+
+        The argument is advisory: with several runners sharing one entry a
+        blind set would let one runner's step boundary grey out the entry
+        while another runner still waits at a prompt, so sensitivity is
+        always recomputed from the whole picture.
+        """
+        self._recompute_stdin_enabled()
+
+    def _recompute_stdin_enabled(self):
+        """Entry is live while any prompt is held or any runner is active."""
+        runners = self._all_runners()
+        enabled = bool(self._input_registry.outstanding()) or any(
+            runner.running for runner in runners
+        )
+        was_enabled = self.stdin_entry.get_sensitive()
         self.stdin_entry.set_sensitive(enabled)
         self.stdin_send_btn.set_sensitive(enabled)
-        if enabled:
+        if enabled and not was_enabled:
             self.stdin_entry.grab_focus()
+
+    def _all_runners(self):
+        """Every task runner sharing the info panel, oldest first."""
+        return [runner for runner in getattr(self, "_runners", []) if runner is not None]
+
+    def _on_input_event(self, runner, event, uuid, text):
+        """Handle input-hold protocol events raised by a runner."""
+        if event == "req":
+            request = self._input_registry.register(runner, uuid, text)
+            runner.log_input(f"INFO: [Input {request.number}][{request.label}] {text}")
+        elif event == "ack":
+            request = self._input_registry.release_uuid(uuid)
+            if request is not None:
+                runner.log_input(f"VERB: [Input {request.number}] closed")
+        elif event == "clear":
+            for request in self._input_registry.release_runner(runner):
+                runner.log_input(f"VERB: [Input {request.number}] withdrawn (task ended)")
+        self._refresh_input_strip()
+        self._recompute_stdin_enabled()
+
+    def _refresh_input_strip(self):
+        """Rebuild the held-message rows from the registry."""
+        strip = self.input_strip
+        for row in list(strip.get_children()):
+            strip.remove(row)
+        for request in self._input_registry.outstanding():
+            row_text = request.row_text()
+            label = Gtk.Label(label=row_text)
+            label.set_halign(Gtk.Align.START)
+            label.set_ellipsize(Pango.EllipsizeMode.END)
+            label.set_tooltip_text(row_text)
+            row = Gtk.ListBoxRow()
+            row.set_selectable(False)
+            row.set_activatable(False)
+            row.add(label)
+            strip.add(row)
+        strip.show_all()
+        self.input_strip_frame.set_visible(bool(strip.get_children()))
 
     def _on_stdin_activate(self, entry):
         """Handle Enter key in the stdin entry."""
@@ -1007,24 +1081,41 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         self._send_stdin_text()
 
     def _send_stdin_text(self):
-        """Send entry text to the running subprocess."""
+        """Route the entry text to the task it answers (MVS console model).
+
+        "N response" answers held message N.  Bare text answers the sole
+        held message when exactly one is outstanding, else the sole runner
+        with a live step (e.g. a prompting user script that predates the
+        input-hold helpers).  Anything ambiguous is rejected with a hint —
+        input is never routed by a fixed priority order.
+        """
         text = self.stdin_entry.get_text()
         self.stdin_entry.set_text("")
-        # Send to whichever runner is active
-        runner = None
-        if self.backup_runner and self.backup_runner.running:
-            runner = self.backup_runner
-        elif self.offsite_runner and self.offsite_runner.running:
-            runner = self.offsite_runner
-        elif self.restore_runner and self.restore_runner.running:
-            runner = self.restore_runner
-        elif self.retention_runner and self.retention_runner.running:
-            runner = self.retention_runner
-        elif self.dataset_runner and self.dataset_runner.running:
-            runner = self.dataset_runner
-        if runner:
-            log_msg(f"VERB: > {text}")
-            runner.send_input(text)
+        number, answer = parse_user_input(text)
+        if number is not None:
+            request = self._input_registry.by_number(number)
+            if request is None:
+                self.log_message(f"WARN: No outstanding input message numbered {number}")
+                return
+            self._deliver_input(request.runner, text, answer)
+            return
+        request = self._input_registry.sole_outstanding()
+        if request is not None:
+            self._deliver_input(request.runner, text, text)
+            return
+        runner = sole_live_runner(self._all_runners())
+        if runner is not None:
+            self._deliver_input(runner, text, text)
+            return
+        self.log_message(
+            "WARN: Input ignored - nothing is asking; "
+            "reply to a held message as 'N response' (e.g. '3 y')"
+        )
+
+    def _deliver_input(self, runner, echoed_text, answer):
+        """Echo the operator line and send the answer to the asking task."""
+        runner.log_input(f"VERB: > {echoed_text}")
+        runner.send_input(answer)
 
 
 if __name__ == "__main__":

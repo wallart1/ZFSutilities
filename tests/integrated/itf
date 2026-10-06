@@ -21,7 +21,10 @@
 #   itf iso upload [BASE]             upload cached ISO to base ISO storage
 #   itf journey list                  list available journeys
 #   itf journey run NAME              execute a journey under a run report
-#   itf status [BASE...]              base + guest + recent-run overview
+#   itf watch [TAG]                   tail a run's live report + serial
+#                                     transcript (Ctrl-C stops) — the safe
+#                                     alternative to opening a PVE console
+#   itf status [BASE...]              base + guest + active/recent-run overview
 #   itf manual-steps                  what a human must do before running
 #   itf version
 #
@@ -232,7 +235,7 @@ cmd_guest() {
 }
 
 # ---------------------------------------------------------------------------
-# iso / journey / status / manual-steps / version
+# iso / journey / status / watch / manual-steps / version
 # ---------------------------------------------------------------------------
 
 cmd_iso() {
@@ -271,6 +274,8 @@ cmd_journey() {
             # shellcheck disable=SC2034
             ITF_RUN_CALLER="journey:$name"
             itf_report_init "$name" || return 1
+            echo "itf: journey $name running (pid $$) — hands off guest/base" \
+                "consoles; watch safely: itf watch"
             journey_main
             local rc=$?
             if (( rc != 0 )); then
@@ -287,6 +292,30 @@ cmd_journey() {
     esac
 }
 
+# _status_print_running <run-dir>
+#
+# One "active run" line: tag, pid, elapsed time, and the hands-off hint
+# that keeps human consoles away from the serial line the orchestrator
+# is driving.
+_status_print_running() {
+    local run="$1" meta="$1/meta.txt"
+    local pid started_raw started age
+    pid="$(awk -F': *' '/^pid:/{print $2; exit}' "$meta" 2>/dev/null)"
+    started_raw="$(awk -F': *' '/^started:/{print $2; exit}' "$meta" 2>/dev/null)"
+    started="$(date -u -d "$started_raw" +%s 2>/dev/null)" || started=""
+    age=""
+    if [[ "$started" =~ ^[0-9]+$ ]]; then
+        age=$(( $(date -u +%s) - started ))
+        if (( age >= 3600 )); then
+            age="$(( age / 3600 ))h$(( (age % 3600) / 60 ))m"
+        else
+            age="$(( age / 60 ))m"
+        fi
+    fi
+    echo "  $(basename "$run")  pid ${pid:-?}${age:+, ${age} elapsed} — hands off" \
+        "guest/base consoles; watch: itf watch"
+}
+
 cmd_status() {
     itf_config_load
     local -a bases=("$@")
@@ -298,13 +327,47 @@ cmd_status() {
         itf_qm "$base" list 2>/dev/null | awk -v f="$ITF_VMID_FIRST" -v l="$ITF_VMID_LAST" \
             'NR==1 || ($1>=f && $1<=l)'
     done
+    echo "== active run =="
+    local -a runs=()
+    mapfile -t runs < <(ls -1d "$ITF_RUNS_DIR"/run-* 2>/dev/null | sort -r)
+    local run state shown=0
+    for run in "${runs[@]}"; do
+        state="$(itf_run_state "$run")"
+        [[ "$state" == "running" ]] || continue
+        _status_print_running "$run"
+        shown=1
+    done
+    (( shown )) || echo "  none"
     echo "== recent runs =="
-    local run
     for run in $(ls -1t "$ITF_RUNS_DIR" 2>/dev/null | head -3); do
         local summary
         summary="$(grep -m1 '^- total:' "$ITF_RUNS_DIR/$run/report.md" 2>/dev/null)"
+        if [[ -z "$summary" ]] \
+                && [[ "$(itf_run_state "$ITF_RUNS_DIR/$run")" == "interrupted" ]]; then
+            summary="(interrupted)"
+        fi
         echo "$run ${summary:+ → $summary}"
     done
+}
+
+cmd_watch() {
+    itf_config_load
+    local tag="${1:-}"
+    local run state
+    run="$(itf_watch_resolve "$tag")" || {
+        echo "itf: no runs${tag:+ matching '$tag'} found under $ITF_RUNS_DIR" >&2
+        return 2
+    }
+    state="$(itf_run_state "$run")"
+    echo "itf: watching $(basename "$run") [$state] — run dir: $run"
+    echo "itf: following steps.tsv, report.md, serial-install.log, serial-console.log"
+    echo "itf: files yet to be created are picked up as the run writes them"
+    echo "itf: Ctrl-C to stop — this reads transcripts only and touches no console"
+    # tail -F retries not-yet-existing files; stderr (the cannot-open
+    # chatter for files the run has not created yet) is noise, not signal.
+    exec tail -n +1 -F \
+        "$run/steps.tsv" "$run/report.md" \
+        "$run/serial-install.log" "$run/serial-console.log" 2> /dev/null
 }
 
 cmd_manual_steps() {
@@ -325,6 +388,15 @@ cmd_manual_steps() {
     if (( needed == 0 )); then
         echo "  (none — environment looks prepared; run '$0 preflight' for the full check)"
     fi
+    echo ""
+    echo "itf: standing operator rule — while a journey or preflight run is active:"
+    echo "  - never open an itf guest's xterm.js/serial console in the PVE web UI:"
+    echo "    the orchestrator drives that same serial line, and interleaved"
+    echo "    keystrokes corrupt the install"
+    echo "  - guest noVNC is look-don't-touch: no typing, no power buttons"
+    echo "  - leave the base VM consoles (${ITF_BASE_HOSTS[*]}) alone entirely —"
+    echo "    a human there is root with no guardrails"
+    echo "  - check with '$0 status', watch safely with '$0 watch'"
 }
 
 cmd_version() {
@@ -345,6 +417,7 @@ main() {
         iso) cmd_iso "$@" ;;
         journey) cmd_journey "$@" ;;
         status) cmd_status "$@" ;;
+        watch) cmd_watch "$@" ;;
         manual-steps) cmd_manual_steps "$@" ;;
         version) cmd_version "$@" ;;
         *)

@@ -653,7 +653,9 @@ test_reports_disks_with_dependent_clones() {
         "$(dirname "$mount/etc/pve/qemu-server")"
     setup_pve_config "$pve_dir" "$vmid"
     local src_disk="threeamigos/proxmox/vm-${vmid}-disk-0"
-    _mock_clone_info="$(printf 'threeamigos/proxmox/vm-310-disk-0\t%s@clone-2026-07-30T12:00-0400-c\nthreeamigos/proxmox/vm-315-disk-0\t%s@clone-2026-08-01T09:15-0400-c' \
+    _mock_clone_info="$(printf \
+'threeamigos/proxmox/vm-310-disk-0\t%s@clone-2026-07-30T12:00-0400-c\n'\
+'threeamigos/proxmox/vm-315-disk-0\t%s@clone-2026-08-01T09:15-0400-c' \
         "$src_disk" "$src_disk")"
     # stdin answers in prompt order: promote clones=n, archive base path,
     # proceed with archive=y, remove VM=n.
@@ -714,7 +716,9 @@ test_promotes_clones_when_confirmed() {
         "$(dirname "$mount/etc/pve/qemu-server")"
     setup_pve_config "$pve_dir" "$vmid"
     local src_disk="threeamigos/proxmox/vm-${vmid}-disk-0"
-    _mock_clone_info="$(printf 'threeamigos/proxmox/vm-310-disk-0\t%s@clone-2026-07-30T12:00-0400-c' "$src_disk")"
+    _mock_clone_info="$(printf \
+'threeamigos/proxmox/vm-310-disk-0\t%s@clone-2026-07-30T12:00-0400-c' \
+        "$src_disk")"
     # stdin answers in prompt order: promote clones=y, archive base path,
     # proceed with archive=y, remove VM=n.
     _mock_read_response="y

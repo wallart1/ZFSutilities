@@ -1,0 +1,9 @@
+# The devcontainer build needs exactly two files from the context (see
+# .devcontainer/Dockerfile); everything else — including the gitignored
+# ITF apt cache under tests/integrated/cache/ — would otherwise be sent
+# to the daemon as build context.
+*
+!requirements-dev.txt
+!share
+!share/dev
+!share/dev/install-test-deps.sh

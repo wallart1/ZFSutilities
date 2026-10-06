@@ -1126,5 +1126,146 @@ class TestRsyncFailureLoggingInBackupRunner(unittest.TestCase):
         self.assertIn("failed:", content.lower())
 
 
+class TestInputHoldProtocol(unittest.TestCase):
+    """ZFSU-INPUT-* markers become GUI events, never display or log lines."""
+
+    def _make_runner(self):
+        events = []
+        runner = br.BackupRunner(
+            MagicMock(),
+            MagicMock(),
+            input_event_func=lambda r, e, u, t: events.append((e, u, t)),
+        )
+        return runner, events
+
+    def _feed(self, runner, data):
+        with patch("os.read", return_value=data):
+            runner._on_stderr(0, br.GLib.IOCondition.IN)
+
+    def test_req_marker_becomes_event_not_log_line(self):
+        runner, events = self._make_runner()
+        with patch("session_log.write_raw_line") as mock_raw:
+            self._feed(runner, b"ZFSU-INPUT-REQ|inp-1-2-3|Proceed? (y/N): \n")
+        self.assertEqual(events, [("req", "inp-1-2-3", "Proceed? (y/N):")])
+        runner.log.assert_not_called()
+        mock_raw.assert_not_called()
+
+    def test_ack_marker_becomes_event_not_log_line(self):
+        runner, events = self._make_runner()
+        with patch("session_log.write_raw_line") as mock_raw:
+            self._feed(runner, b"ZFSU-INPUT-ACK|inp-1-2-3\n")
+        self.assertEqual(events, [("ack", "inp-1-2-3", None)])
+        runner.log.assert_not_called()
+        mock_raw.assert_not_called()
+
+    def test_marker_and_line_in_one_chunk(self):
+        runner, events = self._make_runner()
+        with patch("session_log.write_raw_line"):
+            self._feed(
+                runner,
+                b"INFO: before\nZFSU-INPUT-REQ|u1|Go?\nINFO: after\n",
+            )
+        self.assertEqual(events, [("req", "u1", "Go?")])
+        logged = [call.args[0] for call in runner.log.call_args_list]
+        self.assertEqual(logged, ["INFO: before", "INFO: after"])
+
+    def test_plain_lines_produce_no_events(self):
+        runner, events = self._make_runner()
+        with patch("session_log.write_raw_line"):
+            self._feed(runner, b"INFO: ordinary line\n")
+        self.assertEqual(events, [])
+        runner.log.assert_called_once_with("INFO: ordinary line")
+
+    def test_finish_emits_clear(self):
+        runner, events = self._make_runner()
+        with patch("backup_runner.log_msg"):
+            runner._finish(rc=0)
+        self.assertIn(("clear", None, None), events)
+
+    def test_step_exit_emits_clear_after_drain(self):
+        runner, events = self._make_runner()
+        runner.running = True
+        runner.steps = [BashStep(["true"], "step", is_rsync=False, fatal=False)]
+        runner.current_step = 0
+        fake_process = MagicMock()
+        fake_process.poll.return_value = 0
+        fake_process.stdout.fileno.return_value = 3
+        fake_process.stdout.closed = True
+        fake_process.stderr.fileno.return_value = 4
+        fake_process.stderr.closed = True
+        runner.process = fake_process
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            _patch_log_dirs(tmpdir),
+            patch("backup_runner.GLib.idle_add"),
+        ):
+            runner.prepare_session_log()
+            runner._check_process()
+        self.assertIn(("clear", None, None), events)
+
+    def test_cancel_emits_clear(self):
+        runner, events = self._make_runner()
+        runner.steps = [BashStep(["true"], "step", is_rsync=False, fatal=False)]
+        runner.current_step = 0
+        runner.process = None
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            _patch_log_dirs(tmpdir),
+            patch("backup_runner.log_msg"),
+        ):
+            runner.prepare_session_log()
+            runner.cancel()
+        self.assertIn(("clear", None, None), events)
+
+    def test_step_active_reflects_live_process(self):
+        runner, _ = self._make_runner()
+        self.assertFalse(runner.step_active)
+        runner.running = True
+        self.assertFalse(runner.step_active)  # no process yet
+        fake_process = MagicMock()
+        fake_process.poll.return_value = None
+        runner.process = fake_process
+        self.assertTrue(runner.step_active)
+        fake_process.poll.return_value = 0
+        self.assertFalse(runner.step_active)
+        runner.running = False
+        self.assertFalse(runner.step_active)
+
+    def test_spawn_arms_protocol_and_pythonpath(self):
+        runner, _ = self._make_runner()
+        runner.steps = [BashStep(["true"], "step", is_rsync=False, fatal=False)]
+        captured = {}
+
+        def fake_popen(_cmd, **kwargs):
+            captured.update(kwargs)
+            fake = MagicMock()
+            fake.stdout.fileno.return_value = 3
+            fake.stderr.fileno.return_value = 4
+            return fake
+
+        with (
+            patch("backup_runner.pty.openpty", return_value=(10, 11)),
+            patch("backup_runner.termios.tcgetattr", return_value=[0, 1, 2, 0]),
+            patch("backup_runner.termios.tcsetattr"),
+            patch("backup_runner.subprocess.Popen", side_effect=fake_popen),
+            patch("backup_runner.os.close"),
+            patch("backup_runner.os.set_blocking"),
+        ):
+            self.assertTrue(runner._spawn_process("desc", ["true"], is_rsync=False))
+        child_env = captured["env"]
+        self.assertEqual(child_env["ZFSUTILITIES_INPUT_HOLD"], "Y")
+        self.assertIn(
+            os.path.realpath(os.path.join(os.path.dirname(br.__file__))),
+            [os.path.realpath(p) for p in child_env["PYTHONPATH"].split(os.pathsep)],
+        )
+
+    def test_log_input_uses_runner_session_log(self):
+        runner, _ = self._make_runner()
+        with patch("backup_runner.log_msg") as mock_log_msg:
+            runner.log_input("VERB: > 3 y")
+        mock_log_msg.assert_called_once()
+        self.assertEqual(mock_log_msg.call_args.args[0], "VERB: > 3 y")
+
+
 if __name__ == "__main__":
     unittest.main()

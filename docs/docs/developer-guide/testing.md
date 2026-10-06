@@ -139,16 +139,26 @@ the suite in it from a repo checkout:
 
 ```bash
 docker build -f .devcontainer/Dockerfile -t zfsutilities-dev .
-docker run --rm --init -v "$PWD:/workspace" -w /workspace zfsutilities-dev xvfb-run -a bash tests/run-tests
+docker run --rm --init -e PYTHONDONTWRITEBYTECODE=1 -v "$PWD:/workspace" -w /workspace zfsutilities-dev xvfb-run -a bash tests/run-tests
 ```
+
+Rebuild the image whenever `share/dev/install-test-deps.sh` or
+`requirements-dev.txt` changes — dependencies are baked in at build time, so a
+stale image keeps failing even after the fix lands in the repo (an image built
+before the `python3-gi-cairo` addition fails every GUI-importing suite with
+`ModuleNotFoundError`, the same failure CI hit on v0.112.0).
 
 The GUI suites instantiate real GTK widgets, so the container (which has no
 display) runs the suite under `xvfb-run`. `--init` gives the container a real
 init process (`xvfb-run` waits on a signal from `Xvfb` and misbehaves as PID
 1), and invoking the suite through `bash` keeps the command identical on any
-volume/filesystem. Inside the container the run is
+volume/filesystem. `PYTHONDONTWRITEBYTECODE=1` keeps the run from leaving
+root-owned `__pycache__` directories throughout the user-owned checkout.
+Inside the container the run is
 green; the only skips are the soak suite (excluded from default runs) and the
-integration suite (no test pools in a container).
+integration suite (no test pools in a container). A few individual tests that
+inject failures through filesystem permissions also skip themselves when the
+suite runs as root (the container does), since root ignores mode bits.
 
 `.github/workflows/tests.yml` runs on every push and pull request: install
 dependencies, run the suite under `xvfb-run -a`, then run the

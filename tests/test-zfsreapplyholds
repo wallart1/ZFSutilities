@@ -39,7 +39,8 @@ test_reapplyholds_capture_writes_tsv() {
 
     local _content _expected
     _content=$(sort < "$_out")
-    _expected=$(printf 'pool/dest@snap1\ttag1\npool/dest@snap1\ttag2\npool/dest@snap2\ttag3\n' | sort)
+    _expected=$(printf 'pool/dest@snap1\ttag1\npool/dest@snap1\ttag2\n'\
+'pool/dest@snap2\ttag3\n' | sort)
     assert_equals "$_expected" "$_content"
 }
 
@@ -262,7 +263,10 @@ test_no_lock_skips_lock_manager() {
     _orig_wait=$(declare -f zfslock_wait_or_resolve)
     _orig_release=$(declare -f zfslock_release)
     zfslock_init() { test_fail "zfslock_init must not be called with no_lock=Y"; return 1; }
-    zfslock_wait_or_resolve() { test_fail "zfslock_wait_or_resolve must not be called with no_lock=Y"; return 1; }
+    zfslock_wait_or_resolve() {
+        test_fail "zfslock_wait_or_resolve must not be called with no_lock=Y"
+        return 1
+    }
     zfslock_release() { test_fail "zfslock_release must not be called with no_lock=Y"; return 1; }
 
     mock_zfs_dataset_exists "pool/nolock"

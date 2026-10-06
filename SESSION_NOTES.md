@@ -1027,3 +1027,242 @@ Step 5: full suite without soaks run once in the background — all green
 
 Step 6: codebase frozen at this point.  VERSION/changelog untouched;
 commit awaits explicit user confirmation.
+
+## Dev container maintenance 2026-10-05: zfsutilities-dev rebuilt after drift
+
+User task: "Ensure that the Docker container on the dev host is
+maintained." Findings: the image had been built 2026-09-18 and silently
+predated the python3-gi-cairo addition to share/dev/install-test-deps.sh
+(0.114.0) — `import cairo` failed in-image, so the documented container
+suite run would have gone red exactly like CI did on v0.112.0. Nothing
+rebuilds the image automatically and no rebuild-trigger guidance existed
+in the docs.
+
+Work done:
+- `.dockerignore` added (allowlist idiom: `*` then re-include
+  requirements-dev.txt + share/dev/install-test-deps.sh — the only two
+  files the Dockerfile COPYs). Without it the build context was ~1.8G
+  over NFS because gitignored tests/integrated/cache/ (1.7G ITF apt
+  cache) still enters the docker context; .gitignore does not affect
+  docker.
+- Base refreshed (docker pull ubuntu:24.04) and image rebuilt from
+  c6d4981 working tree (new image e0da665452c0). Fast gates green:
+  cairo 1.25.1 + Gtk3 import, entrypoint-provisioned /dev/loop0/1,
+  deployed-layout symlinks, zfs/shellcheck/pv/rsync/smartctl/xvfb-run
+  all present.
+- developer-guide/testing.md (dev-container section, additive):
+  rebuild-trigger sentences + `-e PYTHONDONTWRITEBYTECODE=1` added to
+  the documented docker run command (avoids root-owned __pycache__ in
+  the user-owned checkout) + a sentence that some chmod-based
+  failure-injection tests self-skip as root. Site rebuilt via mkdocs.
+- First full in-container suite run: 2 failures — test-safe-iscsi-save
+  Test 8 and test-repair-iscsi-luns Test 12. Root cause: both inject
+  "install failure" via chmod 555 on the destination dir and expect mv
+  to fail; the container runs as root and root ignores mode bits, so
+  the scripts succeed (rc=0). Environment assumption, not a product
+  bug (host + GitHub CI run non-root). Fix per tests/AGENTS.md
+  environment-skip philosophy: EUID-0 test_skip guards with reason
+  "Requires non-root (root ignores the 0555 install-dir gate)".
+  Verified both suites green on host as dan (22 passed, guard inert)
+  and in container as root (2 tests SKIP with reason).
+- Final full in-container suite: GREEN — 82 suites, 4254 passed,
+  0 failed, 1 suite skipped (integration, no test pools), python layer
+  3330 passed + 170 subtests; docker rc=0. ~8 minutes wall clock.
+- Housekeeping: docker image prune reclaimed 540MB (old image chain +
+  stale base); docker state now exactly ubuntu:24.04 +
+  zfsutilities-dev:latest, no stray containers.
+- Gotchas: `docker run ... | tail` reports tail's rc — use PIPESTATUS
+  for the real exit code; in-image mkdocs is correctly pinned <2 (the
+  host's MkDocs-2.0 warning is the pre-existing PREEXISTING.md item,
+  untouched).
+
+Uncommitted at wrap-up: .dockerignore (new), testing.md (additive),
+tests/test-safe-iscsi-save + tests/test-repair-iscsi-luns (EUID-0 skip
+guards), this note. No product code touched. VERSION/changelog
+untouched; commit awaits explicit user confirmation.
+
+## itf console discipline + run visibility (2026-10-05)
+
+User concern: using the Proxmox consoles on the journey test VMs while
+integrated testing runs interferes with the tests. Assessed, then
+implemented the two approved items (PVE tag marker via `qm set` was
+explicitly out of scope; console-session detection rejected — needs new
+sudoers surface for a bounded-cost accident).
+
+Interference mechanics (drove the design): the install phase is driven
+over the guest's serial line (`qm terminal` + serial_console.py); the
+PVE web UI xterm.js console attaches to the SAME socket — interleaved
+keystrokes/split output, and attaching after the bootloader painted can
+blind the driver. noVNC is a separate input (kernel cmdline is
+console=ttyS0 only) but exposes power buttons. Base-VM consoles are root
+outside the guard.
+
+Shipped:
+- report-lib.sh: meta.txt now records `pid:` at init and `finished:` at
+  finish; new `itf_run_state` (running|done|interrupted|unknown — pid
+  liveness via kill -0; PID-reuse caveat documented, cosmetic-only) and
+  `itf_watch_resolve` (tag match → newest running → newest any state;
+  name sort -r, not mtime — run dirs are append-heavy).
+- itf driver: `status` gains an always-shown "== active run ==" block
+  (pid/elapsed/hands-off hint) and `(interrupted)` markers on
+  summary-less recent runs (immediately useful: the aborted 17:26:43
+  j01 attempt now labels itself); new `watch [TAG]` subcommand execs
+  `tail -n +1 -F` over steps.tsv/report.md/serial-install.log/
+  serial-console.log (GNU tail -F retries not-yet-created files; stderr
+  suppressed); manual-steps prints a standing hands-off rule (base host
+  names from site config, nothing hard-coded); journey run emits a
+  one-line banner with pid + watch hint.
+- Tests: test-itf-report extended (pid/finished stamps, run-state
+  lifecycle incl. reaped-child pid for interrupted); new test-itf-watch
+  (target resolution incl. running-over-newer-done preference).
+  GOTCHA: fixture tests sharing one runs dir must isolate the
+  "empty dir" case in its own subdir — earlier fixtures leak otherwise.
+- Docs: integrated-testing.md gains "Console discipline while a run is
+  active" subsection + watch in the Running block;
+  tests/integrated/README.md quick-start line + safety-model bullet.
+  Site rebuilt (mkdocs rc=0; host MkDocs-2.0 warning is the known
+  PREEXISTING item).
+
+Legacy note: run dirs created before this change have no pid/finished
+markers — completed old runs surface as `(interrupted)` in status until
+they scroll out of the top-3. Semantics are correct going forward.
+
+Uncommitted at wrap-up: tests/integrated/{itf,README.md},
+tests/integrated/lib/report-lib.sh, tests/test-itf-report,
+tests/test-itf-watch (new), docs/docs/developer-guide/
+integrated-testing.md, this note — plus the pre-existing user/agent
+changes (testing.md, two iscsi test files, .dockerignore, earlier
+notes). No product code touched. VERSION/changelog untouched; commit
+awaits explicit user confirmation.
+
+## zfsretain Phase 1 same-day dedup — all buckets, interleaving-proof (2026-10-05)
+
+Trigger: stewie session log
+`/var/log/zfsutilities/sessions/2026-10-05_06-00-01_backup_profile-root-backup-dailybackup.log`.
+User requirement: same-day snapshots must be pruned within ALL buckets, not
+just `d`.
+
+Diagnosis: on Sun 2026-10-04 three dailybackup runs (06:00 scheduled, ~12:34
+midday profile/GUI, 23:07 re-run) left three same-day `-w` snapshots per
+dataset. Old Phase 1 compared only CONSECUTIVE entries of the creation-sorted
+list and reset its comparison state on every skip (foreign label, clone/c,
+snapshot_has, phase0), so the interleaved `BaseInstall`/`ITEinitConf`
+snapshots suppressed the dedup entirely — zero `--- Same-day.` lines in the
+log. Phase 2 couldn't clean up either (w minage=14 blocked; zfsdelsnap WARNs
+"only 0/7 days old"). Weekday `-d` duplicates usually sit adjacent in the
+list, which made the bug look like "dedup only works for d". Docs already
+promised "most recent per day within each bucket" — code just didn't deliver.
+
+Fix (bin/zfsretain Phase 1 rewritten): single pass with assoc array
+`_day_latest` keyed `fs|label|bucket|ymd` (Phase 0 `_month_latest` pattern) —
+most-recent-wins per key, immune to interleaving, chains of 3+ collapse to
+newest, skip branches just `continue`. Bucket stays in the key: cross-bucket
+same-day pairs are both kept (within-bucket policy, user-confirmed). Same-day
+removals still bypass minage (delsnap minage 0), messages unchanged.
+
+Tests (tests/test-zfsretain): test_phase1_same_day_interleaved (stewie
+scenario, red-proof for the old code), _chain (3 same-day), _weekly_and_
+monthly (w + m pairs), _cross_bucket_kept (pins within-bucket scope). Suite
+21/21 green. shellcheck clean both files; ruff clean (serial_console.py
+format nit is pre-existing uncommitted itf WIP, left alone).
+
+Expected on stewie after deploy: next dailybackup-label prune removes the
+leftover Oct-4 same-day `w` duplicates with `--- Same-day.`; 09-27 `-w`
+stays until minage 14 as designed.
+
+GOTCHA for test data: creation rows are `name<TAB>creation`, so awk field $1
+is the NAME and the date starts at $2 — `awk '{print $6 $3 $4}'` yields
+YearMonthDay only because of that leading name field.
+
+## MVS-style numbered input requests (2026-10-05)
+
+User rejected the old stdin priority chain (documented as PREEXISTING last
+turn, entry now removed — addressed). Model: IBM MVS console WTOR. Every
+prompt from a GUI-launched job is HELD on screen with a stable action number
+(`3  [Restore]  <prompt>` strip between log and Input entry); operator
+answers `N response`; routing ladder: numbered → sole held → sole live step;
+never a priority order (user: "don't ever use that priority chain").
+
+Design (user decisions): sole-outstanding bare text allowed; sole-LIVE-STEP
+backstop for unmarked prompts (user scripts); GUI-reachable conversion scope
+only but LANGUAGE-AGNOSTIC helpers (bash ask_yn/ask_line + python
+input_hold.py; PYTHONPATH prepended to child env).
+
+Protocol: `ZFSUTILITIES_INPUT_HOLD=Y` (set ONLY by BackupRunner._spawn_process
+— profile_runner must never see it) gates `ZFSU-INPUT-REQ|<uuid>|<prompt>` /
+`ZFSU-INPUT-ACK|<uuid>` on stderr. Runner intercepts before display/session
+log; GUI registry assigns monotonic numbers; ack/clear (step exit, cancel,
+finish) release holds. ask_yn re-REQs same uuid on invalid answer (number
+stays); ask_line is stateless (call-site loops take new numbers).
+
+Converted: zfs-send-receive (6 sites), zfsdelallsnaps, zfsmassdelsnaps (2,
+ask_yn tightened y-prefix→strict y/yes — "yolo" no longer approves deletes),
+zfslockmanager (2). Not converted: CLI-only scripts (VM-disk tools,
+installers); zfsdelallholds (releaseholds=Y on all GUI paths).
+
+Tests: test_input_requests.py + test_input_hold.py (caught 2 real bugs:
+python helper emitted markers ungated; markers lacked trailing \n —
+runner splits on newlines, so they'd never parse), TestInputHoldProtocol in
+test_backup_runner.py, TestInputRoutingLadder/TestInputEventLifecycle/
+TestStdinEnableRecompute in test_zfsutilities_gui.py, 3 new test-bashinit
+cases. Old priority-chain test rewritten to sole-live-step. Docs: gtk-gui.md
+bottom panel + tab notes, messages/index.md approval row + answering note,
+conventions.md "Interactive Prompts" section. Awaiting commit.
+
+GOTCHA: `read -rp`/`input()` prompts are invisible when stdin is piped
+(bash only shows -p prompts on a tty; python input() prompt goes to stdout)
+— piped smoke tests look like the prompt vanished; assert on markers, not
+prompt text. grab_focus now only on disabled→enabled transition (recompute
+fires on every input event; per-spawn grab would steal focus constantly).
+
+## Development cycle wrap-up 2026-10-06 (six-step strict sequence)
+
+Step 1 PREEXISTING: column-wrap debt resolved — all tests/test-* files now
+≤100 columns (11 files; by-path prefix vars + unquoted heredocs with
+${var}, $'...' concatenation splits, backslash splices inside unquoted
+heredocs — generated scripts stay byte-identical); shellcheck clean; the
+11 affected suites green. Zensical recheck refreshed (PyPI 0.0.68, still
+no 1.x). Entries 2 (infra-vdev planning UI abeyance) and 3 (itf strict
+mode, cycle-2 kickoff) remain by recorded user decision. 3 entries left.
+
+Step 2 standards: project shellcheck command green; ruff check green;
+ruff format green after reformatting tests/integrated/lib/serial_console.py
+(committed in 0.115.0 without formatting — mechanical argparse rewrap, no
+behavior change; module compiles, --help OK, no unit tests import it).
+Fixed missing profuse regex documentation on input_requests._NUMBERED_RE.
+No site-specific names anywhere in the new product code.
+
+Step 3 tests: added test_ignore_approval_y_prefix_cancels to
+test-zfsmassdelsnaps (pins the strict y/yes approval change — "yolo" no
+longer approves deletion). Reviewed all new suites (input_hold,
+input_requests, GUI ladder/lifecycle/recompute, backup-runner protocol,
+bashinit hold helpers, zfsretain phase-1, itf report/watch) — coverage
+thorough, no stale assertions. Affected suites green.
+
+Step 4 docs: messages/index.md zfsutilities_gui table updated (VERB: >
+row reworded for routing; added WARN no-such-number, WARN input-ignored,
+INFO/VERB [Input N] held/closed/withdrawn rows); python-modules.md gained
+input_hold.py + input_requests.py sections (placed between backup_runner
+and offsite_runner — first insert orphaned backup_runner's data-structures
+table, repaired) and input-hold protocol paragraph in backup_runner.py +
+input_event_func mention in runner_factory.py. Docs integrity suite
+green; mkdocs build rc=0 (host mkdocs-2.0 warning = known PREEXISTING).
+
+Step 5: full suite without soaks, background — ALL GREEN, zero failures,
+one expected skip (integration, no test pools). Over-budget >5s advisories
+are the runner's timing notes on known-slow suites, not failures.
+
+Step 6: codebase frozen at this point. VERSION/changelog untouched;
+commit awaits explicit user confirmation.
+
+GOTCHA (wrapping bash fixtures ≤100 cols): quoted heredocs cannot wrap —
+switch to unquoted <<EOF + ${prefix_var} only after checking the body has
+no $/backtick that must stay literal; single-quoted \n strings split as
+'part1'\<newline>'part2' (never mix with $'...' — it interprets \n);
+inside unquoted heredocs backslash-newline splices, so wrapping heredoc
+CONTENT keeps generated scripts byte-identical (leading spaces of the
+continuation line remain — harmless for word-split consumers).
+
+Uncommitted at wrap-up: everything in this cycle's four features plus the
+wrap-up additions above (incl. serial_console.py reformat and the
+zfsmassdelsnaps regression test).

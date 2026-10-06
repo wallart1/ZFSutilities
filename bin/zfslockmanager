@@ -59,7 +59,7 @@
 ZFSLOCK_DIR="${ZFSLOCK_DIR:-/run/lock/zfsutilities}"
 zfslock_locks_dir="$ZFSLOCK_DIR/.locks"
 zfslock_pids_dir="$ZFSLOCK_DIR/.pids"
-ZFSLOCK_WAIT_INTERVAL="${ZFSLOCK_WAIT_INTERVAL:-30}"    # Seconds between retry attempts when waiting
+ZFSLOCK_WAIT_INTERVAL="${ZFSLOCK_WAIT_INTERVAL:-30}"  # Seconds between lock-wait retries
 
 # Global variables set by functions
 zfslock_id=""               # Set by zfslock_acquire on success
@@ -1117,7 +1117,7 @@ zfslock_wait_or_resolve() {
         echo ""
 
         local choice
-        read -rp "Choice [W/R/S/A/F]: " choice
+        ask_line "Choice [W/R/S/A/F]: " choice
 
         case "${choice^^}" in
             W|"")
@@ -1152,7 +1152,7 @@ zfslock_wait_or_resolve() {
                 ;;
             F)
                 echo "WARNING: Force-releasing a lock may cause data corruption!"
-                read -rp "Are you sure? Type 'yes' to confirm: " confirm
+                ask_line "Are you sure? Type 'yes' to confirm: " confirm
                 if [[ "$confirm" == "yes" ]]; then
                     local remote_host="" remote_lockfile=""
                     remote_host=$(_zfslock_read_field "$lockfile" "remote_host") || remote_host=""

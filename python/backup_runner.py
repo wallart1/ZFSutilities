@@ -40,6 +40,21 @@ _SESSION_LOG_SIZE_CHECK_INTERVAL = 5  # seconds
 #   "sending tank/data@snap" -> no match
 _ZFS_RECEIVED_RE = re.compile(r"received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds")
 
+# Regex: ^ZFSU-INPUT-(REQ|ACK)\|([^|]+)(?:\|(.*))?$
+# Purpose: Intercept the input-hold side-channel markers emitted by the
+#          prompt helpers in bin/bashinit and python/input_hold.py when the
+#          runner sets ZFSUTILITIES_INPUT_HOLD=Y.  REQ announces a prompt
+#          the GUI must hold on screen with an action number; ACK announces
+#          the read returned.  Never displayed or written to session logs.
+# Group 1: Marker kind    e.g. "REQ", "ACK"
+# Group 2: Request uuid   e.g. "inp-1234-29841-0"
+# Group 3: Prompt text (REQ only), remainder after the second pipe
+# Examples:
+#   "ZFSU-INPUT-REQ|inp-1-2-3|Proceed? (y/N): " -> match
+#   "ZFSU-INPUT-ACK|inp-1-2-3"                  -> match
+#   "INFO: sending tank/data@snap"              -> no match
+_INPUT_MARKER_RE = re.compile(r"^ZFSU-INPUT-(REQ|ACK)\|([^|]+)(?:\|(.*))?$")
+
 
 def _ensure_rsync_log_dir():
     os.makedirs(RSYNC_LOG_DIR, exist_ok=True)
@@ -62,7 +77,9 @@ def _truncate_rsync_log():
         pass
 
 
-def _issuer_log_location(wrapper_names=("_log", "_runner_log", "_issuer_log_location")):
+def _issuer_log_location(
+    wrapper_names=("_log", "_runner_log", "_issuer_log_location", "log_input"),
+):
     """Return (file, line) of the nearest caller outside the logging wrappers.
 
     log_msg()'s own caller detection stops at the first frame outside
@@ -86,11 +103,18 @@ class BackupRunner:
     """Runs a sequence of backup steps asynchronously."""
 
     def __init__(
-        self, log_func, set_stdin_enabled_func, progress_func=None, label="Backup", on_start=None
+        self,
+        log_func,
+        set_stdin_enabled_func,
+        progress_func=None,
+        label="Backup",
+        on_start=None,
+        input_event_func=None,
     ):
         self.log = log_func
         self.set_stdin_enabled = set_stdin_enabled_func
         self.progress = progress_func
+        self.input_event = input_event_func
         self.label = label
         self.on_start = on_start
         self.steps = []
@@ -247,6 +271,7 @@ class BackupRunner:
         self._cleanup_io()
         self._write_raw_line(f"INFO: {self.label} cancelled")
         self._log(f"INFO: {self.label} cancelled")
+        self._clear_input_events()
         self.set_stdin_enabled(False)
         if self.progress:
             self.progress(None, None)
@@ -265,6 +290,29 @@ class BackupRunner:
                 os.write(self._pty_master_fd, (text + "\n").encode())
             except (BrokenPipeError, OSError):
                 pass
+
+    @property
+    def step_active(self):
+        """True while this runner's current step subprocess is alive."""
+        return bool(self.running) and self.process is not None and self.process.poll() is None
+
+    def _emit_input_event(self, event, uuid=None, text=None):
+        """Forward an input-hold protocol event to the GUI, if wired."""
+        if self.input_event:
+            self.input_event(self, event, uuid, text)
+
+    def _clear_input_events(self):
+        """Tell the GUI to drop every hold owned by this runner."""
+        self._emit_input_event("clear")
+
+    def log_input(self, msg):
+        """Log an operator-input line to this runner's session log and panel.
+
+        Used by the GUI for input-hold exchanges ("VERB: > 3 y" and
+        friends) so they are attributed to the runner the operator is
+        answering, not to whichever session log happens to be current.
+        """
+        self._runner_log(msg)
 
     def _update_progress(self, text=None):
         if not self.progress:
@@ -300,6 +348,14 @@ class BackupRunner:
             child_env = os.environ.copy()
             if self._session_log_file:
                 child_env["ZFSUTILITIES_LOG_INHERIT"] = "Y"
+            # Arm the input-hold protocol for this job: its prompt helpers
+            # (bash ask_yn/ask_line, python input_hold) announce questions
+            # as ZFSU-INPUT-* markers this runner intercepts.  Put this
+            # package on PYTHONPATH so python jobs can `import input_hold`.
+            child_env["ZFSUTILITIES_INPUT_HOLD"] = "Y"
+            package_dir = os.path.dirname(os.path.abspath(__file__))
+            prior = child_env.get("PYTHONPATH")
+            child_env["PYTHONPATH"] = f"{package_dir}{os.pathsep}{prior}" if prior else package_dir
             # For ZFS steps, merge stdout into stderr so that bash stdout
             # (echo separators) and stderr (log_msg / zfs output) keep their
             # original order in the captured session log. Rsync steps keep
@@ -447,6 +503,11 @@ class BackupRunner:
                         segment = segment.strip()
                         if not segment:
                             continue
+                        marker = _INPUT_MARKER_RE.match(segment)
+                        if marker:
+                            kind = marker.group(1).lower()
+                            self._emit_input_event(kind, marker.group(2), marker.group(3))
+                            continue
                         if _PV_RATE_RE.search(segment):
                             self._current_pv_text = segment
                             self._update_progress(self._step_progress_text(segment))
@@ -527,6 +588,9 @@ class BackupRunner:
             if rc is not None:
                 self._log(f"DEBUG: Step {self.current_step} process exited rc={rc}")
                 self._drain_remaining()
+                # Any hold registered from drain-tail markers belongs to a
+                # dead process; release this runner's holds after the drain.
+                self._clear_input_events()
 
                 if not self._is_finally and self.current_step < len(self.steps):
                     step = self.steps[self.current_step]
@@ -673,6 +737,7 @@ class BackupRunner:
     def _finish(self, rc=0):
         self.running = False
         try:
+            self._clear_input_events()
             self.set_stdin_enabled(False)
             if self.progress:
                 self.progress(None, None)

@@ -7,7 +7,8 @@
 # ITF_RUNS_DIR (default: tests/integrated/results, gitignored):
 #
 #   results/run-<timestamp>-<tag>/
-#       meta.txt     tag, start time, caller
+#       meta.txt     tag, start time, caller, orchestrator pid (finished:
+#                    is stamped in by itf_report_finish)
 #       steps.tsv    one line per step: <utc-ts> <status> <name> <detail>
 #       report.md    human-readable report, written progressively
 #       <artifact>   anything the journey saves alongside (logs, listings,
@@ -49,6 +50,7 @@ itf_report_init() {
         echo "tag:      $tag"
         echo "started:  $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
         echo "caller:   ${ITF_RUN_CALLER:-interactive}"
+        echo "pid:      $$"
     } > "$ITF_RUN_DIR/meta.txt"
     {
         echo "# itf run: $tag"
@@ -132,6 +134,9 @@ itf_report_finish() {
         echo "itf: itf_report_finish called before itf_report_init" >&2
         return 1
     fi
+    # The meta marker lands before the summary rc matters so both the
+    # passing and failing paths leave a finished run behind.
+    echo "finished: $(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$ITF_RUN_DIR/meta.txt"
     {
         echo ""
         echo "## Summary"
@@ -141,6 +146,63 @@ itf_report_finish() {
         echo "- finished: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     } >> "$ITF_RUN_DIR/report.md"
     echo "itf: run finished: total=$ITF_STEPS_TOTAL pass=$ITF_STEPS_PASS" \
-        " fail=$ITF_STEPS_FAIL skip=$ITF_STEPS_SKIP"
+        " fail=$ITF_STEPS_FAIL skip=$ITF_STEPS_SKIP info=$ITF_STEPS_INFO"
     (( ITF_STEPS_FAIL == 0 ))
+}
+
+# itf_run_state <run-dir>
+#
+# Prints the state of a run directory: running | done | interrupted |
+# unknown.  "running" means the orchestrator pid from meta.txt is still
+# alive and itf_report_finish never stamped its finished: line (crash,
+# Ctrl-C).  A recycled pid can mislabel an old interrupted run as
+# running, but the consequence is cosmetic: one stale line in itf status.
+itf_run_state() {
+    local run_dir="${1:-}" meta pid
+    meta="$run_dir/meta.txt"
+    if [[ ! -f "$meta" ]]; then
+        echo "unknown"
+        return 0
+    fi
+    if grep -q '^finished:' "$meta"; then
+        echo "done"
+        return 0
+    fi
+    pid="$(awk -F': *' '/^pid:/{print $2; exit}' "$meta")"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2> /dev/null; then
+        echo "running"
+    else
+        echo "interrupted"
+    fi
+}
+
+# itf_watch_resolve [tag]
+#
+# Prints the run directory `itf watch` should follow; rc 1 with no
+# output when nothing matches.  With a tag: the newest run whose
+# directory name contains it.  Without: the newest running run, else
+# the newest run of any state (post-mortem reading of an interrupted
+# run is exactly when the transcript is wanted).
+itf_watch_resolve() {
+    local tag="${1:-}" run
+    local -a runs=()
+    [[ -d "$ITF_RUNS_DIR" ]] || return 1
+    mapfile -t runs < <(ls -1d "$ITF_RUNS_DIR"/run-* 2> /dev/null | sort -r)
+    (( ${#runs[@]} > 0 )) || return 1
+    if [[ -n "$tag" ]]; then
+        for run in "${runs[@]}"; do
+            if [[ "$(basename "$run")" == *"$tag"* ]]; then
+                echo "$run"
+                return 0
+            fi
+        done
+        return 1
+    fi
+    for run in "${runs[@]}"; do
+        if [[ "$(itf_run_state "$run")" == "running" ]]; then
+            echo "$run"
+            return 0
+        fi
+    done
+    echo "${runs[0]}"
 }

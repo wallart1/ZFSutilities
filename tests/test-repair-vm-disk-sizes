@@ -55,8 +55,9 @@ reset_counters() {
     : > "$_mock_zfs_last_zvol_file"
 }
 
-BY_PATH_LUN8="/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-8"
-BY_PATH_LUN13="/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie:threeamigos-lun-13"
+_BY_PATH_PREFIX="/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-iqn.2026-02.local.stewie"
+BY_PATH_LUN8="${_BY_PATH_PREFIX}:threeamigos-lun-8"
+BY_PATH_LUN13="${_BY_PATH_PREFIX}:threeamigos-lun-13"
 
 # ------------------------------------------------------------------
 # Tests

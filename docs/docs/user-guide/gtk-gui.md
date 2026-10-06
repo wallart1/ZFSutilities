@@ -119,15 +119,29 @@ job.
   warnings, and errors appear while a job runs.
 - **Search bar** — above the log area. Type text and use the buttons to find and
   highlight messages.
-- **Input** box and **Send** button — when a running job asks a question, type
-  your answer in the **Input** box and click **Send** (or press Enter).
+- **Held input requests** — when a job asks a question, the question appears in
+  a strip between the log area and the **Input** box and stays there until it
+  is answered; it never scrolls away with the log. Each held message starts
+  with a stable action number and the asking task's name, for example
+  `3  [Restore]  Roll back and transfer? (y=proceed, n=skip this dataset)`.
+- **Input** box and **Send** button — type the number of the held message, a
+  space, and your answer (for example `3 y`) and click **Send** (or press
+  Enter); the answer goes to exactly the task that asked, and the held message
+  is released. When exactly one question is held, the number may be omitted and
+  the bare answer sent. A number alone (for example `3`) sends an empty line,
+  which answers "press enter" prompts. Input without a number is only accepted
+  when it is unambiguous — one held question, or exactly one running job —
+  otherwise it is rejected with a hint. Input is never routed to a task by a
+  fixed priority order.
 - **Log** dropdown — chooses which message levels are shown in the bottom panel:
   `DEBUG`, `VERB`, `INFO`, `WARN`, or `FATAL`. The default is `INFO`. This only
   filters the on-screen view; everything is still written to the session log
   files.
 - **Short prefix** toggle — when on, each log line shows only the date and time;
   when off, it shows the full source-location prefix.
-- **Clear** button — empties the visible log text.
+- **Clear** button — empties the visible log text. Held input requests are not
+  part of the log, so **Clear** never dismisses a question that still needs an
+  answer.
 - **Pop-out button** — the window-icon button at the far right detaches the
   bottom panel into its own separate window; click it again to put the panel
   back.
@@ -479,8 +493,8 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
 | **Recall Profile**          | Loads a previously-saved profile into this tab so you can edit it and/or run on demand (see [Recalling profiles](#recalling-and-editing-profiles))                                                         |
 
 While a backup runs, messages stream to the log panel and any interactive
-prompts from the job may be responded to in the **Input** entry next to the
-**Send** button.
+prompts from the job are held as numbered input requests above the **Input**
+entry; answer them as `N response` (see [Bottom panel](#bottom-panel)).
 
 !!! note "Concurrent GUI runners"
     The Backup, Offsite, and Restore tabs are no longer globally serialized.
@@ -572,8 +586,9 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
   - **Part 2** — Incremental copy of remaining snapshots
 
 - **Notes** — A reminder that Part 1 is destructive on the destination.
-  Part 1 asks once for confirmation of the dataset list and then proceeds
-  automatically; Part 2 runs incrementally without prompting.
+  Part 1 asks once for confirmation of the dataset list (held as a numbered
+  input request) and then proceeds automatically; Part 2 runs incrementally
+  without prompting.
 
 ### Actions
 
@@ -852,8 +867,8 @@ policy.
 
 The **Prune** button becomes **Cancel** while a prune job is running;
 output streams to the log panel at the bottom of the window, and any
-interactive prompts may be responded to in the **Input** entry next to the **Send**
-button.
+interactive prompts are held as numbered input requests above the **Input**
+entry; answer them as `N response` (see [Bottom panel](#bottom-panel)).
 
 #### What happens during a prune
 

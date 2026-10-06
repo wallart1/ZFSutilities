@@ -17,6 +17,10 @@ by_path_dir="$tmp_dir/by-path"
 
 mkdir -p "$pve_dir" "$by_path_dir"
 
+# Shared iSCSI by-path prefix for the qm config fixtures below; the full
+# prefix is spelled out once here so fixture lines stay within 100 columns.
+lun_by_path_prefix="/dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host"
+
 # Override script paths so tests do not touch real Proxmox / iSCSI state.
 export LIST_VM_DISKS_CONF_DIR="$pve_dir"
 export LIST_VM_DISKS_BY_PATH_DIR="$by_path_dir"
@@ -194,13 +198,13 @@ setup_two_node_zfs() {
 
 write_two_node_configs() {
     rm -f "$pve_dir"/*.conf
-    cat > "$pve_dir/100.conf" << 'EOF'
+    cat > "$pve_dir/100.conf" << EOF
 name: webserver
-scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0,format=raw,discard=on,iothread=1,size=50G
+scsi0: ${lun_by_path_prefix}:threeamigos-lun-0,format=raw,discard=on,iothread=1,size=50G
 EOF
-    cat > "$pve_dir/200.conf" << 'EOF'
+    cat > "$pve_dir/200.conf" << EOF
 name: dbserver
-scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-1,format=raw,discard=on,iothread=1,size=100G
+scsi0: ${lun_by_path_prefix}:threeamigos-lun-1,format=raw,discard=on,iothread=1,size=100G
 EOF
 }
 
@@ -233,9 +237,9 @@ test_build_vm_disk_map_moved_disk() {
     test_start "build_vm_disk_map shows actual VMID after disk move"
     reset_mocks
     rm -f "$pve_dir"/*.conf
-    cat > "$pve_dir/300.conf" << 'EOF'
+    cat > "$pve_dir/300.conf" << EOF
 name: moved-here
-scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0,format=raw,size=50G
+scsi0: ${lun_by_path_prefix}:threeamigos-lun-0,format=raw,size=50G
 EOF
 
     build_vm_disk_map
@@ -575,14 +579,15 @@ test_build_guest_device_map_one_exec_per_vm() {
     test_start "build_guest_device_map uses one guest exec for all disks of a VM"
     reset_mocks
     rm -f "$pve_dir"/*.conf
-    cat > "$pve_dir/100.conf" << 'EOF'
+    cat > "$pve_dir/100.conf" << EOF
 name: multidisk
-scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0,format=raw,size=50G
-scsi1: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-1,format=raw,size=50G
+scsi0: ${lun_by_path_prefix}:threeamigos-lun-0,format=raw,size=50G
+scsi1: ${lun_by_path_prefix}:threeamigos-lun-1,format=raw,size=50G
 EOF
     # Literal \n sequences: the mock wraps this into JSON out-data and the
     # product unescapes them after extraction.
-    _qm_guest_output='0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n1\n/dev/sdb\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:1:0'
+    _qm_guest_output='0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0'\
+'\n1\n/dev/sdb\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:1:0'
 
     build_vm_disk_map
     build_running_vm_set
@@ -601,7 +606,8 @@ EOF
     if [[ $ok -eq 1 ]]; then
         test_pass
     else
-        test_fail "Expected one exec with both disks: execs=$_execs $(declare -p guest_dev guest_bypath)"
+        test_fail "Expected one exec with both disks: execs=$_execs" \
+            "$(declare -p guest_dev guest_bypath)"
     fi
 }
 
@@ -626,14 +632,14 @@ test_build_vm_disk_map_scsihw() {
     test_start "build_vm_disk_map captures scsihw per VM"
     reset_mocks
     rm -f "$pve_dir"/*.conf
-    cat > "$pve_dir/100.conf" << 'EOF'
+    cat > "$pve_dir/100.conf" << EOF
 name: single-hw
 scsihw: virtio-scsi-single
-scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0,format=raw,size=50G
+scsi0: ${lun_by_path_prefix}:threeamigos-lun-0,format=raw,size=50G
 EOF
-    cat > "$pve_dir/200.conf" << 'EOF'
+    cat > "$pve_dir/200.conf" << EOF
 name: default-hw
-scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-1,format=raw,size=50G
+scsi0: ${lun_by_path_prefix}:threeamigos-lun-1,format=raw,size=50G
 EOF
 
     build_vm_disk_map
@@ -653,15 +659,16 @@ test_build_guest_device_map_virtio_scsi_single() {
     test_start "build_guest_device_map maps all disks with virtio-scsi-single"
     reset_mocks
     rm -f "$pve_dir"/*.conf
-    cat > "$pve_dir/100.conf" << 'EOF'
+    cat > "$pve_dir/100.conf" << EOF
 name: multidisk-single
 scsihw: virtio-scsi-single
-scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0,format=raw,size=50G
-scsi1: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-1,format=raw,size=50G
+scsi0: ${lun_by_path_prefix}:threeamigos-lun-0,format=raw,size=50G
+scsi1: ${lun_by_path_prefix}:threeamigos-lun-1,format=raw,size=50G
 EOF
     # virtio-scsi-single presents disk N as target 0, lun N on its own
     # controller, so the guest by-paths are scsi-0:0:0:N.
-    _qm_guest_output='0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n1\n/dev/sdb\n/dev/disk/by-path/pci-0000:00:11.0-scsi-0:0:0:1'
+    _qm_guest_output='0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0'\
+'\n1\n/dev/sdb\n/dev/disk/by-path/pci-0000:00:11.0-scsi-0:0:0:1'
 
     build_vm_disk_map
     build_running_vm_set
@@ -688,12 +695,13 @@ test_build_guest_device_map_default_glob_for_scsi1() {
     test_start "build_guest_device_map keeps 0:0:N:0 glob without virtio-scsi-single"
     reset_mocks
     rm -f "$pve_dir"/*.conf
-    cat > "$pve_dir/100.conf" << 'EOF'
+    cat > "$pve_dir/100.conf" << EOF
 name: multidisk-default
-scsi0: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-0,format=raw,size=50G
-scsi1: /dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2026-02.local.storage-host:threeamigos-lun-1,format=raw,size=50G
+scsi0: ${lun_by_path_prefix}:threeamigos-lun-0,format=raw,size=50G
+scsi1: ${lun_by_path_prefix}:threeamigos-lun-1,format=raw,size=50G
 EOF
-    _qm_guest_output='0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0\n1\n/dev/sdb\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:1:0'
+    _qm_guest_output='0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0'\
+'\n1\n/dev/sdb\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:1:0'
 
     build_vm_disk_map
     build_running_vm_set
@@ -717,8 +725,10 @@ test_emit_lun_data_cloned_by() {
     test_start "emit_lun_data shows which VMs clone a zvol"
     reset_mocks
     setup_two_node_zfs
-    mock_zfs_snap_list $'threeamigos/proxmox/vm-100-disk-0@keep-a\nthreeamigos/proxmox/vm-200-disk-0@keep-b'
-    _mock_zfs_clones["threeamigos/proxmox/vm-100-disk-0@keep-a"]="threeamigos/proxmox/vm-300-disk-0,threeamigos/proxmox/vm-400-disk-1"
+    mock_zfs_snap_list $'threeamigos/proxmox/vm-100-disk-0@keep-a\n'\
+$'threeamigos/proxmox/vm-200-disk-0@keep-b'
+    _mock_zfs_clones["threeamigos/proxmox/vm-100-disk-0@keep-a"]\
+="threeamigos/proxmox/vm-300-disk-0,threeamigos/proxmox/vm-400-disk-1"
     _test_hostname="stewie"
 
     local output

@@ -135,7 +135,8 @@ test_release_removes_lock() {
     test_start "release removes a lock file"
     _cleanup_remote_locks
     local lockfile="$REMOTE_LOCK_DIR/.locks/threeamigos%2Frelease.lock"
-    echo '{"dataset":"threeamigos/release","type":"w","pid":"1","script":"test","acquired":"2026-01-01T00:00:00","description":""}' > "$lockfile"
+    echo '{"dataset":"threeamigos/release","type":"w","pid":"1","script":"test",'\
+'"acquired":"2026-01-01T00:00:00","description":""}' > "$lockfile"
     local rc
     _run_agent release "$lockfile" && rc=0 || rc=$?
     assert_rc 0 "$rc"
@@ -150,7 +151,8 @@ test_cleanup_removes_stale_locks() {
     test_start "cleanup removes stale locks"
     _cleanup_remote_locks
     local lockfile="$REMOTE_LOCK_DIR/.locks/stale%2Fdataset.lock"
-    echo '{"dataset":"stale/dataset","type":"w","pid":"99999","script":"test","acquired":"2026-01-01T00:00:00","description":""}' > "$lockfile"
+    echo '{"dataset":"stale/dataset","type":"w","pid":"99999","script":"test",'\
+'"acquired":"2026-01-01T00:00:00","description":""}' > "$lockfile"
     local rc
     _run_agent cleanup && rc=0 || rc=$?
     assert_rc 0 "$rc"

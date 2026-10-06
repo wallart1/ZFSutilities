@@ -1483,7 +1483,11 @@ Applies retention policies to a pool or dataset in three phases:
 
 1. **Phase 0** — For `@offsite` snapshots, remove all but the most recent
    offsite snapshot per month per dataset
-2. **Phase 1** — Remove same-day duplicate snapshots within each bucket
+2. **Phase 1** — Remove same-day duplicate snapshots within each bucket. The
+   pass walks the full creation-sorted snapshot list and keeps the most recent
+   snapshot per (dataset, label, bucket, day); snapshots of other labels or
+   buckets created between same-day duplicates do not affect the comparison.
+   Same-day removals bypass `minage`
 3. **Phase 2** — Prune by bucket retention count (keep N most recent). Deletes
    the oldest snapshots first until only the retain count remains. Empty
    snapshots (`written=0`) are logged as `(empty)` but are not preferred over
