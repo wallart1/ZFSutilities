@@ -67,9 +67,9 @@ run_archive() {
     local clone_info_mock="${_mock_clone_info:-}"
 
     # Preserve the mocked date from the outer shell.
-    local date_iso="$_mock_date_iso"
-    local date_dow="$_mock_date_dow"
-    local date_dom="$_mock_date_dom"
+    local date_iso="$_mock_date_utc"
+    local date_dow="Sun"
+    local date_dom="15"
 
     local capture_dir="$_mock_zfs_state_dir/capture"
     mkdir -p "$capture_dir"
@@ -186,9 +186,9 @@ EOF
                     elif [[ "$_mock_ssh_snapshot_exists" == "1" ]]; then
                         echo "${_mock_zvol}@dailybackup-2026-07-14T07:00-04:00-d"
                     else
-                        echo "SNAP:${_mock_zvol}@retire-${_mock_date_iso}-d" \
+                        echo "SNAP:${_mock_zvol}@retire-${_mock_date_utc}-d" \
                             >> "$_capture_dir/snapshots"
-                        echo "${_mock_zvol}@retire-${_mock_date_iso}-d"
+                        echo "${_mock_zvol}@retire-${_mock_date_utc}-d"
                     fi
                 elif [[ "$stdin" == *"zfs list -H -t volume"* ]]; then
                     echo "$_mock_zvol"
@@ -313,7 +313,7 @@ n"
         return
     fi
 
-    local expected_snap="threeamigos/proxmox/vm-${vmid}-disk-0@retire-2026-07-14T11:23-04:00-d"
+    local expected_snap="threeamigos/proxmox/vm-${vmid}-disk-0@retire-2026-07-14T15:23Z-d"
     if [[ "$out" != *"Snapshot to archive: ${expected_snap}"* ]]; then
         test_fail "Expected snapshot ${expected_snap} not used; output:\n$out"
         return
@@ -384,7 +384,7 @@ n"
         return
     fi
 
-    local expected_snap="threeamigos/proxmox/vm-${vmid}-disk-0@retire-2026-07-14T11:23-04:00-d"
+    local expected_snap="threeamigos/proxmox/vm-${vmid}-disk-0@retire-2026-07-14T15:23Z-d"
     if [[ "$out" != *"Snapshot to archive: ${expected_snap}"* ]]; then
         test_fail "Expected retire snapshot not used; output:\n$out"
         return

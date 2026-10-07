@@ -1,0 +1,141 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC1091,SC2034,SC2154
+# test-snapshot-names — Static checks pinning every snapshot-name producer to
+# the canonical UTC helper, plus a cross-implementation consistency matrix
+# against python snapshot_naming.  The timezone bug this guards against: a
+# producer rendering its own timestamp with `date -Iminutes` embeds the local
+# UTC offset, and "+" is illegal in ZFS snapshot names (UTC/east-of-UTC hosts
+# failed with "invalid character '+' in name").  All producers must go
+# through snapname_timestamp (bash) / snapshot_naming (python), which render
+# UTC with a literal Z.
+
+# shellcheck source=tests/test-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# Source zfssnapbuild with isolated lock/reserved paths.  The lowercase
+# working copies bind at source time, so the env overrides must precede the
+# source (same pattern as tests/test-zfssnapbuild).
+export SNAPNAME_LOCK="/tmp/zfs_snapname_lock_names_$$"
+export SNAPNAME_RESERVED="/tmp/zfs_snapname_reserved_names_$$"
+export ZFSUTILITIES_RUN_NEXTSNAP_PREFIX="/tmp/zfsutilities_run_names_$$_"
+source "$mydir/bin/zfssnapbuild"
+
+test_helper_defined() {
+    test_start "bashinit defines snapname_timestamp"
+    grep -q 'function snapname_timestamp' "$mydir/bin/bashinit" &&
+        test_pass || test_fail "snapname_timestamp missing from bin/bashinit"
+}
+
+test_bash_producers_use_helper() {
+    test_start "Bash producers build names via snapname_timestamp"
+    local failures=""
+    local script pattern count expected
+    while IFS='|' read -r script pattern expected; do
+        [[ -z "$script" ]] && continue
+        count=$(grep -cF "$pattern" "$mydir/bin/$script")
+        if [[ "$count" -lt "$expected" ]]; then
+            failures="${failures} ${script}(${pattern} x${count}<${expected})"
+        fi
+    done << 'EOF'
+zfssnapbuild|currdate=$(snapname_timestamp)|1
+zfsclone-vm|@clone-$(snapname_timestamp)-c|2
+archive-vm|@retire-$(snapname_timestamp)-d|2
+EOF
+    if [[ -z "$failures" ]]; then
+        test_pass
+    else
+        test_fail "Call sites not using the helper:${failures}"
+    fi
+}
+
+test_no_raw_iminutes_producers() {
+    test_start "No bin/lib script renders a raw date -Iminutes timestamp"
+    local hits
+    hits=$(grep -rnE '\$\((date|-u date|command date) +-Iminutes\)' \
+        "$mydir/bin" "$mydir/lib" 2>/dev/null)
+    if [[ -z "$hits" ]]; then
+        test_pass
+    else
+        test_fail "Raw -Iminutes command substitutions found:\n$hits"
+    fi
+}
+
+test_python_producers_use_helper() {
+    test_start "Python producers build names via snapshot_naming"
+    local failures=""
+    grep -q 'snapshot_timestamp(now)' "$mydir/python/feature_config.py" ||
+        failures="${failures} feature_config"
+    grep -q 'snapshot_timestamp(now)' "$mydir/python/pool_migrate.py" ||
+        failures="${failures} pool_migrate"
+    if [[ -z "$failures" ]]; then
+        test_pass
+    else
+        test_fail "Builders not delegating to snapshot_naming:${failures}"
+    fi
+}
+
+test_bash_python_name_consistency() {
+    # Cross-implementation pin: for each matrix instant, build the name via
+    # the REAL zfssnapbuild (mocked to that instant) under three zones and
+    # via python snapshot_naming, and require identical output.  Covers
+    # month starts, Sundays, both DST-transition days, an ordinary weekday,
+    # and the local-Saturday/UTC-Sunday edge.
+    test_start "zfssnapbuild and python snapshot_naming agree across zones"
+    local iso epoch py_name bash_name instant tz failures=""
+    while IFS='|' read -r iso; do
+        [[ -z "$iso" ]] && continue
+        epoch=$(command date -d "$iso" +%s)
+        py_name=$(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from datetime import datetime, timezone
+from snapshot_naming import snapshot_timestamp, bucket_for
+when = datetime.fromtimestamp(int(sys.argv[2]), timezone.utc)
+print(f"@dailybackup-{snapshot_timestamp(when)}-{bucket_for(when)}")
+' "$mydir/python" "$epoch")
+        instant="${py_name#@dailybackup-}"
+        instant="${instant%-[dwms]}"
+        for tz in UTC America/New_York Asia/Tokyo; do
+            rm -f "${ZFSUTILITIES_RUN_NEXTSNAP_PREFIX}"*
+            bash_name=$( (
+                export TZ=$tz
+                mock_date_utc "$instant"
+                bucket=""
+                zfssnapbuild
+            ) 2>/dev/null )
+            if [[ "$bash_name" != "$py_name" ]]; then
+                failures="${failures} ${iso}/${tz}: bash='${bash_name}' py='${py_name}'"
+            fi
+        done
+    done << 'EOF'
+2026-10-01T03:07Z
+2026-11-01T03:07Z
+2026-10-11T00:30Z
+2026-10-07T01:46Z
+2026-03-08T07:05Z
+2026-11-01T06:15Z
+2026-10-10T23:30-04:00
+EOF
+    if [[ -z "$failures" ]]; then
+        test_pass
+    else
+        test_fail "Divergent implementations:${failures}"
+    fi
+}
+
+main() {
+    test_helper_defined
+    test_bash_producers_use_helper
+    test_no_raw_iminutes_producers
+    test_python_producers_use_helper
+    test_bash_python_name_consistency
+    rm -f "$SNAPNAME_LOCK" "$SNAPNAME_RESERVED"
+    # Covers both the run dir and stray nextsnap files buildsnapfilename may
+    # have created directly under /tmp with this suite's PID in the prefix.
+    rm -rf "/tmp/zfsutilities_run_names_$$"*
+    teardown_test_env
+    test_summary
+}
+
+main "$@"

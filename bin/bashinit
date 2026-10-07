@@ -274,6 +274,29 @@ function _run_exit_traps {
     return 0
 }
 
+# --- Snapshot-name timestamps (UTC canonical) ----------------------------
+# Snapshot names embed the capture time so they sort and compare identically
+# on every host regardless of its timezone. The canonical rendering is UTC
+# with a "Z" suffix (e.g. 2026-10-07T01:46Z): "Z" is legal in ZFS names,
+# whereas the "+00:00"/"+02:00" offsets `date -Iminutes` emits on UTC and
+# east-of-UTC hosts are not ("+" is rejected by zfs). Every producer of a
+# timestamped snapshot name must go through this helper; legacy names with
+# "-HH:MM" offsets remain valid and are parsed alongside the Z form.
+
+# Print the canonical UTC snapshot-name timestamp. With no argument the
+# current time is used; an optional epoch-seconds argument makes the output
+# deterministic for tests.
+function snapname_timestamp {
+    local epoch="${1:-}"
+    local ts
+    if [[ -n "$epoch" ]]; then
+        ts=$(date -u -d "@$epoch" -Iminutes)
+    else
+        ts=$(date -u -Iminutes)
+    fi
+    printf '%s\n' "${ts%+00:00}Z"
+}
+
 # --- Input-hold protocol (numbered GUI prompts) -------------------------
 # The Python GUI runner sets ZFSUTILITIES_INPUT_HOLD=Y for child shells and
 # intercepts two side-channel marker lines from the merged output stream:

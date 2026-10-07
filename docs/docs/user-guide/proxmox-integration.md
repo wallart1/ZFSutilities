@@ -488,8 +488,8 @@ their cells, and the table width follows the terminal:
 |     |               |      |           |       |      | :3260-iscsi-iqn.2026-02.local.s | :10.0-scsi-0:0:0:0              |                                  |
 |     |               |      |           |       |      | torage-host:threeamigos-lun-25  |                                 |                                  |
 | 27  | vm-310-disk-0 | 310  | clone-vm  | scsi0 | 4M   | /dev/sdf                        | /dev/sda                        | [clone of threeamigos/proxmox/vm |
-|     |               |      |           |       |      | /dev/disk/by-path/ip-10.0.0.1   | /dev/disk/by-path/pci-0000:00   | -904-disk-0@clone-2026-07-30T12: |
-|     |               |      |           |       |      | :3260-iscsi-iqn.2026-02.local.s | :10.0-scsi-0:0:0:0              | 00-0400-c]                       |
+|     |               |      |           |       |      | /dev/disk/by-path/ip-10.0.0.1   | /dev/disk/by-path/pci-0000:00   | -904-disk-0@clone-2026-07-30T16: |
+|     |               |      |           |       |      | :3260-iscsi-iqn.2026-02.local.s | :10.0-scsi-0:0:0:0              | 00Z-c]                           |
 |     |               |      |           |       |      | torage-host:threeamigos-lun-27  |                                 |                                  |
 +-----+---------------+------+-----------+-------+------+---------------------------------+---------------------------------+----------------------------------+
 ```

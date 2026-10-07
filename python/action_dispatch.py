@@ -50,7 +50,7 @@ from datasets_page import (
     refresh_datasets_page,
     update_ds_button_sensitivity,
 )
-from disk_actions import on_disks_smart_details
+from disk_actions import on_disks_smart_details, on_disks_wipe_labels
 from disks_page import (
     on_disks_manage_pool_profiles,
     on_disks_refresh,
@@ -202,6 +202,7 @@ PAGE_SPECS = {
             ("Migrate Pool…", "edit-copy", "_disks_migrate_pool_btn"),
             ("Enroll in Proxmox…", "network-server", "_disks_proxmox_enroll_btn"),
             ("Advanced: Manage Pool Profiles…", "preferences-system", None),
+            ("Wipe Labels…", "edit-clear-all", "_disks_wipe_btn"),
             (None, None, None),  # spacer
             ("SMART Details", "dialog-information", "_disks_smart_details_btn"),
             ("Surface Test…", "drive-harddisk", "_disks_surface_test_btn"),
@@ -456,6 +457,7 @@ ACTION_HANDLERS = {
         "Migrate Pool…": on_disks_migrate_pool,
         "Enroll in Proxmox…": on_disks_enroll_proxmox,
         "Advanced: Manage Pool Profiles…": on_disks_manage_pool_profiles,
+        "Wipe Labels…": on_disks_wipe_labels,
         "SMART Details": on_disks_smart_details,
         "Surface Test…": on_disks_surface_test,
         "Refresh": on_disks_refresh,

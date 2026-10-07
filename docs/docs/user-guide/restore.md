@@ -24,8 +24,8 @@ data is not located in any listed mountpoint, use `zfs mount` to mount the
 dataset first.
 
 ```bash
-ls /<mountpoint>/.zfs/snapshot/dailybackup-2026-02-21T02:00-05:00-d/
-cp /<mountpoint>/.zfs/snapshot/dailybackup-2026-02-21T02:00-05:00-d/path/to/file /destination/
+ls /<mountpoint>/.zfs/snapshot/dailybackup-2026-02-21T07:00Z-d/
+cp /<mountpoint>/.zfs/snapshot/dailybackup-2026-02-21T07:00Z-d/path/to/file /destination/
 ```
 
 ## Restoring a Dataset (full copy)

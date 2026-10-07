@@ -39,6 +39,24 @@
   one dataset (for example the name already exists there) does not stop
   the remaining ones. Single-selection behavior is unchanged.
 
+- **Wipe Labels (Disks page) and `zfswipe`** — a new Disks-page action and
+  standalone script that wipe leftover labels and signatures (ZFS labels,
+  persistent-L2ARC headers, partition tables, filesystem signatures) from an
+  *inactive* disk so it can be reused as a pool device. The wipe is an
+  escalating ladder — `zpool labelclear -f` on the device and each partition,
+  then `wipefs -a`, then `dd` zeroing the first and last 1 MiB of every node —
+  re-probing after each step and stopping as soon as the device probes clean.
+  Anything not verifiably inactive is refused: a node of the backing disk that
+  belongs to an imported pool, or anything mounted or in use as swap on the
+  backing disk — so the boot disk (ZFS-root pool member or mounted non-ZFS
+  root) can never be wiped by mistake. Both the CLI and the GUI collect a
+  typed confirmation (type the kernel device name exactly); the dialog shows
+  the device identity, the warnings (importable-pool destruction, the `dd`
+  ranges, not-a-secure-erase), and the exact command before unlocking the Wipe
+  button. The wipe runs as a runner step under a write lock keyed on the
+  device path, then refreshes the Disks and Pools pages; pool-creation "no
+  eligible disks" messages now point at the action.
+
 ### Changed
 
 - **`zfscheckagainst` hold-verified reassurance demoted to VERB** — the
@@ -47,6 +65,26 @@
   fires for every snapshot while an offsite counterpart pool is offline;
   the verification outcome is unchanged (still counts as verified, and
   deletion may proceed).
+
+- **Snapshot names embed UTC timestamps (`…T17:30Z…`)** — the timestamp in
+  every newly created snapshot name is UTC with a literal `Z` suffix, so the
+  same run produces the same name on hosts in any timezone. This is also a
+  legality fix: `+` is not allowed in ZFS snapshot names, so the
+  `+HH:MM` offsets the old local-time rendering emitted made snapshot
+  creation FATAL on UTC and east-of-UTC hosts (west-of-UTC hosts silently
+  worked). One clock: the `d`/`w`/`m`/`s` retention bucket follows the UTC
+  instant encoded in the name, so the name and its bucket can never disagree
+  (a run within the offset hours around local midnight can be dated by the
+  UTC calendar day). All producers go through single helpers
+  (`snapname_timestamp` in `bashinit`; `snapshot_naming.py` in Python); GUI
+  surfaces stay on the local clock. Names created by earlier releases carry a
+  local `-HH:MM` offset instead — both forms are valid forever, every
+  consumer parses both, and nothing is ever renamed. The Schedule page's Next
+  Run column now shows the retention bucket for snapshot-creating profiles
+  and, only when the UTC and local calendar dates differ, a short
+  local-to-UTC translation. Two-node note: the remote `archive-vm` path
+  sources the deployed `bashinit`, so both nodes must run this release or
+  newer for retirement snapshots to use the new format.
 
 ### Fixed
 
@@ -66,6 +104,15 @@
   starvation-prone 5s queue wait is now 60s), and the itf unit-test
   files conform to the 100-column limit with documented shellcheck
   directives for guard-scope configuration shellcheck cannot see.
+
+- **Integration send-receive suite can pass again** — the suite armed a bare
+  `trap cleanup EXIT`, which the lock manager's exit-trap re-arm folded into
+  the transfer subshell's own exit; the subshell then destroyed every
+  just-transferred dataset before the destination assertions ran. Because the
+  suite skips wherever no test pools exist, the breakage was invisible on
+  every ordinary run. Cleanup is now registered through `append_exit_trap`
+  per the project's exit-trap convention, and the suite passes against real
+  test pools (validated in the development container).
 
 ## 0.116.0
 

@@ -252,12 +252,13 @@ flowchart TD
 
 ## Snapshot Naming
 
-Format: `@<label>-<yyyy-mm-dd>T<hh:mm><tz>-<bucket>`
+Format: `@<label>-<yyyy-mm-dd>T<hh:mm>Z-<bucket>` (UTC, "Zulu"; legacy names
+carry a local UTC offset instead — both forms parse)
 
 Examples:
 
-- `@dailybackup-2026-02-21T02:00-05:00-d`
-- `@offsite-2026-02-21T10:00-05:00-s`
+- `@dailybackup-2026-02-21T07:00Z-d`
+- `@offsite-2026-02-21T15:00Z-s`
 
 Built by [zfssnapbuild](../commands-and-modules/modules.md#zfssnapbuild). The label becomes the first field split on `-`;
 the bucket is the last field split on `-`.

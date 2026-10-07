@@ -71,6 +71,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfsstatus`](#zfsstatus)
 - [`zfsunmount`](#zfsunmount)
 - [`zfswatcharc`](#zfswatcharc)
+- [`zfswipe`](#zfswipe)
 
 ---
 
@@ -2755,6 +2756,71 @@ Simpler than `zfsmount unmount` — no interactivity.
 | -------- | --------------------------------- |
 | `0`      | Completed successfully.           |
 | non-zero | Invalid input or command failure. |
+
+---
+
+### `zfswipe`
+
+Wipes disk labels and signatures from an **inactive** disk so it can be
+reused as a pool device. This is the script behind the Disks page **Wipe
+Labels…** action; it can also be run standalone. A device qualifies as
+inactive only when neither it, nor any partition of its backing disk, is a
+member of an imported pool, and nothing on the backing disk is mounted or in
+use as swap — the boot disk can never be wiped by mistake.
+
+The wipe uses a fallback ladder that stops as soon as the device probes
+clean (`wipefs` signature listing):
+
+1. `zpool labelclear -f` on the device and each of its partitions — removes
+   ZFS labels and persistent-L2ARC headers only.
+2. `wipefs -a` — removes every visible signature including the partition
+   table and tells the kernel.
+3. `dd` — zeroes the first and last 1 MiB of the device and of each
+   partition (512-byte-accurate tail offsets). This is blind: it destroys
+   whatever sits in those ranges. Not a secure erase — data between the
+   wiped ranges survives.
+
+```bash
+sudo zfswipe <device> [--confirmed]
+```
+
+**Arguments:**
+
+| Argument      | Description                                                                                          |
+| ------------- | ---------------------------------------------------------------------------------------------------- |
+| `$1`          | Device path (`/dev/sdb`, `/dev/nvme0n1p2`, `/dev/disk/by-id/...`)                                    |
+| `--confirmed` | Skip the interactive typed confirmation (the GUI passes this after collecting its own typed dialog) |
+
+**Globals:** none.
+
+**Prerequisites:** `zpool` must be available (the inactivity check depends
+on it). `wipefs` and the kernel re-read tools (`partprobe`, `blockdev`,
+`udevadm`) are probed at runtime; missing ones degrade the ladder, never
+abort it — `dd` always works.
+
+Prompts for the device name to be typed exactly before wiping, unless
+`--confirmed` is given.
+
+**Called modules:** [rootcheck](modules.md#rootcheck).
+
+**Data structures consumed / produced:** none.
+
+**Internal flow:**
+
+1. Resolve the device, verify it is a block device, and verify root.
+2. Refuse when the backing disk is not inactive (pool-membership scan over
+   `zpool status`, mount/swap scan over `lsblk`).
+3. Log the wipe plan, collect the typed confirmation, and short-circuit
+   when no signatures are detectable.
+4. Run the ladder with a re-probe after each step, ending with the `dd`
+   fallback and a forced partition-table re-read.
+
+**Return codes:**
+
+| Code | Meaning                                                   |
+| ---- | --------------------------------------------------------- |
+| `0`  | Device verified clean (or nothing to do / cancelled).     |
+| `8`  | Refused (not inactive, bad arguments) or the wipe failed. |
 
 ---
 

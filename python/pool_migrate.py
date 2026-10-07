@@ -27,6 +27,7 @@ from datetime import datetime
 from disk_repository import format_bytes
 from pool_create import MAX_POOL_NAME_LEN, validate_pool_name
 from pool_profiles import BLOCKSIZE_AUTO
+from snapshot_naming import snapshot_timestamp
 
 # Migration modes: copy onto a new pool built from unused disks, or onto an
 # existing imported pool used as intermediate holding space.
@@ -78,20 +79,15 @@ class MigrationStep:
 def migration_snapshot_name(when: datetime | None = None) -> str:
     """Return the bucket-less migration snapshot name for *when* (now if None).
 
-    Format ``@migrate-<yyyy-mm-dd>T<hh:mm><tz>`` follows the project snapshot
-    convention but omits the bucket suffix: retention only prunes snapshots
-    whose label matches its own (``dailybackup``, ``offsite``, …), so a
-    ``migrate``-labelled snapshot is never retention-eligible.
+    Format ``@migrate-<yyyy-mm-dd>T<hh:mm>Z`` follows the project snapshot
+    convention (UTC with a ``Z`` suffix) but omits the bucket suffix:
+    retention only prunes snapshots whose label matches its own
+    (``dailybackup``, ``offsite``, …), so a ``migrate``-labelled snapshot is
+    never retention-eligible.  A caller-supplied aware datetime keeps its
+    instant (rendered UTC); a naive datetime is assumed to be local time.
     """
     now = when or datetime.now()
-    if now.tzinfo is None:
-        # Naive datetimes are assumed to be local time; an aware datetime
-        # keeps the offset it was given (snapshot names follow the caller's
-        # offset, not the machine's).
-        now = now.astimezone()
-    datestr = now.strftime("%Y-%m-%dT%H:%M%z")
-    datestr = datestr[:-2] + ":" + datestr[-2:]
-    return f"@{_MIGRATION_LABEL}-{datestr}"
+    return f"@{_MIGRATION_LABEL}-{snapshot_timestamp(now)}"
 
 
 def migration_snapshot_bare_name(snapshot_name: str) -> str:

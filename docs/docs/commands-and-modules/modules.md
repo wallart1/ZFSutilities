@@ -70,6 +70,7 @@ rootcheck
 | `log_msg`                | Logs messages with `file:line:` prefix to stderr and to the session log                                                                                                                    |
 | `msg_prefix`             | Emits the same `file:line:` prefix without the message body                                                                                                                                |
 | `calledbybash`           | Returns true when the current file was executed directly (not sourced)                                                                                                                     |
+| `snapname_timestamp`     | Renders the canonical snapshot-name timestamp — UTC with a literal `Z` suffix (`2026-10-07T01:46Z`); optional epoch argument selects a specific instant (deterministic across zones)       |
 | `ask_yn`                 | Prompts for yes/no with an optional default answer (`Y`/`N`)                                                                                                                               |
 | `die`                    | Logs a `FATAL` message and terminates the process                                                                                                                                          |
 | `warn`                   | Logs a `WARN` message                                                                                                                                                                      |
@@ -1760,10 +1761,12 @@ Generates a snapshot name in the standard format.
 ```bash
 source_helper zfssnapbuild
 nextsnap=$(zfssnapbuild)
-# Returns e.g. "@dailybackup-2026-02-24T02:00-05:00-d"
+# Returns e.g. "@dailybackup-2026-02-24T07:00Z-d"
 ```
 
-Format: `@<label>-<yyyy-mm-dd>T<hh:mm><tz>-<bucket>`
+Format: `@<label>-<yyyy-mm-dd>T<hh:mm>Z-<bucket>` — the timestamp is UTC
+("Zulu"). Snapshot names from earlier releases carry a local UTC offset
+(`...T02:00-05:00...`) instead; both forms are valid and parsed everywhere.
 
 **Arguments:** none.
 
@@ -1784,16 +1787,19 @@ Format: `@<label>-<yyyy-mm-dd>T<hh:mm><tz>-<bucket>`
 4. Acquire the global snapshot-name lock (`/run/lock/zfsutilities/.snapname.lock`). The
    lock is held only while the name is being generated and recorded.
 5. Normalize `$label`: default to `@dailybackup`, ensure it starts with `@`.
-6. Compute the bucket if `$bucket` is unset:
+6. Render the timestamp with `snapname_timestamp` (defined in `bashinit`):
+   UTC with a literal `Z` suffix, the one rendering legal in ZFS names on
+   every host. When `$bucket` is unset, compute it from that same UTC
+   instant (one clock):
    
-    - `m` if the current day is the 1st of the month (takes precedence over Sunday).
+    - `m` if the UTC day is the 1st of the month (takes precedence over Sunday).
    
-    - `w` if the current day is Sunday.
+    - `w` if the UTC day is Sunday.
    
     - `d` otherwise.
    
     - Hard-code `s` when the label is `@offsite`.
-7. Build the name as `@<label>-<ISO-8601-minutes>-<bucket>`, record it in the
+7. Build the name as `@<label>-<UTC-minutes-Z>-<bucket>`, record it in the
    one-minute reservation file (`/run/lock/zfsutilities/.snapname.reserved`), release the
    lock, write the name to the snapfile, and print it.
 8. `removesnapfile` deletes the snapfile; orchestrators such as

@@ -543,7 +543,7 @@ sudo list-vm-disks [--with-devices]
 6. Annotate each zvol with clone relationships:
     - `[clone of <snapshot>]` if the zvol is a ZFS clone, where `<snapshot>`
       is the full origin snapshot dataset name (e.g.
-      `threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c`).
+      `threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T16:00Z-c`).
     - `[cloned by: vm-N, vm-M]` if any of its snapshots have clone dependents.
 
 **Return codes / side effects:**

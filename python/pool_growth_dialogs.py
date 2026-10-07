@@ -1625,8 +1625,8 @@ def on_disks_add_vdev(app) -> None:
             app,
             "No eligible disks",
             "Every disk is a pool member, partitioned, or lacks a /dev/disk/by-id "
-            "path. Free a disk first (export or destroy its pool, or remove its "
-            "partitions).",
+            "path. Free a disk first (export or destroy its pool, wipe its labels, or "
+            "remove its partitions).",
         )
         return
 
@@ -1750,8 +1750,8 @@ def on_disks_replace_device(app) -> None:
             app,
             "No eligible disks",
             "Every disk is a pool member, partitioned, or lacks a /dev/disk/by-id "
-            "path. Free a disk first (export or destroy its pool, or remove its "
-            "partitions).",
+            "path. Free a disk first (export or destroy its pool, wipe its labels, or "
+            "remove its partitions).",
         )
         return
 
@@ -1823,8 +1823,8 @@ def on_disks_attach_device(app) -> None:
             app,
             "No eligible disks",
             "Every disk is a pool member, partitioned, or lacks a /dev/disk/by-id "
-            "path. Free a disk first (export or destroy its pool, or remove its "
-            "partitions).",
+            "path. Free a disk first (export or destroy its pool, wipe its labels, or "
+            "remove its partitions).",
         )
         return
 
@@ -1897,8 +1897,8 @@ def on_disks_add_infra_vdev(app) -> None:
             app,
             "No eligible disks",
             "Every disk is a pool member, partitioned, or lacks a /dev/disk/by-id "
-            "path. Free a disk first (export or destroy its pool, or remove its "
-            "partitions).",
+            "path. Free a disk first (export or destroy its pool, wipe its labels, or "
+            "remove its partitions).",
         )
         return
 

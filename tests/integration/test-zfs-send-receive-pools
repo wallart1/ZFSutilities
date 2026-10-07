@@ -33,6 +33,11 @@ COMMON_OVERRIDES="autoproceed='Y'; sourcefsremovequalifiers=1; verify_after_tran
 # Path to the script under test.
 SEND_RECEIVE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/bin/zfs-send-receive"
 
+# Shared function library: exit-trap registration must go through
+# append_exit_trap, never a bare `trap ... EXIT`.
+BASHINIT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/bin/bashinit"
+source "${BASHINIT}"
+
 # ---------------------------------------------------------------------------
 # Test counters and reporting helpers
 # ---------------------------------------------------------------------------
@@ -572,7 +577,10 @@ main() {
     require_root
     validate_test_pools
 
-    trap cleanup_test_datasets EXIT
+    # append_exit_trap (not a bare trap): send-receive's lock manager re-arms
+    # the EXIT trap inside run_send_receive's subshell; a bare trap here would
+    # be folded into that subshell's exit and destroy the datasets mid-suite.
+    append_exit_trap cleanup_test_datasets
 
     clear_snapfile
 

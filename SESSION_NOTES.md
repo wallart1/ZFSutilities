@@ -1436,3 +1436,213 @@ zfsmassdelsnaps regression test).
   blocked on the release + user toolchain decision. infra-vdev (abeyance)
   and itf strict-mode (cycle-2 kickoff + live J01–J03 campaign) untouched
   per their recorded deferrals. PREEXISTING: 3 entries remain.
+
+## Release 0.117.0 committed 2026-10-06
+  Steps 7-8 of the wrap-up: VERSION → 0.117.0; changelog entry added
+  (Added: itf post-install baseline template, multi-select Snapshot;
+  Changed: zfscheckagainst hold-verified VERB; Fixed: zvol loop-attach
+  mounted-state display, test-infra hardening); all __pycache__ dirs
+  removed; docs site rebuilt. Final suite WITH soaks: 84 suites,
+  4378 passed / 0 failed / 0 skipped — first attempt silently skipped
+  soaks (mistyped --with-soaks flag; totals identical to the no-soak
+  run gave it away — always verify the soak suite ran). Committed after
+  user confirmation:
+    548194da22e7419d74d3e712e942df7d304353ac
+    Release 0.117.0: itf post-install baseline template (j02/j03
+    clone-start, j04), multi-select Snapshot, zvol loop-attach
+    mounted-state tint, zfscheckagainst hold-verified VERB,
+    file-locking soak flake fix
+  32 files +2,019/−104; working tree clean; NOT pushed (push/tag/
+  GitHub release await instruction). No further code changes this
+  session.
+
+## Integration-tier container feasibility probe (2026-10-06)
+User asked whether the project's Docker container can contain the root-run
+integration tests. Verdict: YES, proven end-to-end. The dev host kernel
+runs the ZFS module AND the three test pools (zfstest1/2/3, 24.5G, healthy)
+already live in it — pools are kernel-global, so a privileged
+zfsutilities-dev container (its zfs userspace matches the host kmod
+exactly, 2.2.2-0ubuntu9.5) drives them directly. Full send-receive suite
+GREEN in-container (7 scenarios / 22 asserts, well under a minute) via
+`docker run --rm --privileged -e TZ=America/New_York -v <repo>:/workspace:ro
+-w /workspace zfsutilities-dev bash tests/integration/test-zfs-send-receive-pools`.
+Gotchas proven live: (1) minimal caps (`--device /dev/zfs --cap-add
+SYS_ADMIN`) FAIL — dataset create works but the automount is denied by
+apparmor; `--privileged` required (a leftover dataset from the failed probe
+had to be destroyed). (2) UTC containers trip the zfssnapbuild `+` bug
+(below/PREEXISTING) — inject the host TZ until the product fix lands.
+(3) The read-only repo mount makes the zero-checkout-delta invariant
+structural, and every paths.sh writable location (/run, /var, /etc, locks,
+session logs) is container-local and discarded with --rm — the env-override
+sandbox design remains needed only for bare-metal runs. (4) Rootful docker
+only (rootless cannot grant the caps); hosts without the ZFS kernel module
+(CI) still skip — manifest gating unchanged. Concurrent runs share the
+kernel pool namespace (suite allow-list + unique dataset names guard it).
+TWO new PREEXISTING entries from this probe: the zfssnapbuild timezone
+portability bug, and — the big one — the integration suite itself has been
+UNABLE TO PASS as shipped (bare EXIT trap + `( )` subshell +
+zfslockmanager's append_exit_trap re-arm ⇒ cleanup_test_datasets fires at
+subshell exit and destroys each just-transferred dataset; skipped
+everywhere, so silently rotten). Proven one-line fix (`trap - EXIT` first
+line in run_send_receive's subshell), not applied. Pool-debris
+observations: ancient offsite snapshots on zfstest2 make zfsreapplyholds
+WARN 4×/transfer (harmless; cleaning the pools would silence it), and
+reapplyholds counts already-present holds as failed applies ("Reapplied 0
+(4 skipped)") — borderline nit, left unrecorded. Proposed follow-up (needs
+approval): document the privileged container run mode in testing.md next
+to the dev-container section, repair the suite per the append_exit_trap
+convention, optionally add a run-in-container wrapper.
+
+ADDENDUM (same thread, host blast-radius follow-up): `--privileged` is
+NOT actually required. Verified green (probe + full suite 7 scenarios /
+22 asserts with the trap-fix copy):
+`--cap-add SYS_ADMIN --security-opt apparmor=unconfined --device /dev/zfs
+--network none`. `apparmor=unconfined` is the specific concession that
+unblocks ZFS automounts (docker-default profile denies mount(2) even with
+SYS_ADMIN — refines the earlier "apparmor exception" note). With only
+`--device /dev/zfs`, /dev/sda and /dev/sdb are not mapped at all, and the
+device cgroup closes the mknod dodge (hand-made `b 8 0` node: mknod
+succeeds, open fails EPERM — verified). `--network none` seals the LAN
+including the NFS server; the repo bind-mount still works (passed through
+from the host). Residual radius: CAP_SYS_ADMIN + unconstrained-by-
+apparmor process with full zfs ioctl reach — can act on ANY pool in the
+host kernel (suite allow-list remains the guard) and exhaust host
+resources (no --memory/--cpus yet; candidates given the mock-walk OOM
+precedent). Under full `--privileged` the radius would instead be the
+whole host: every device (raw /dev/sda = host OS disk), all caps, seccomp
+off, and a LAN network position. Recommended documented mode = the
+reduced profile, never --privileged.
+
+## 2026-10-06 — Snapshot-name timezone remediation SHIPPED (uncommitted)
+
+Executed the approved plan: canonical new-name timestamps are UTC rendered
+`YYYY-MM-DDTHH:MMZ` ("+" is illegal in ZFS names; west-offset `-HH:MM` was
+legal, which is why only UTC/east hosts FATALed). One clock: the d/w/m/s
+bucket follows the UTC instant in the name. Dual-format forever — every
+consumer parses legacy offset names and Z names; nothing migrates.
+
+- bash: new `snapname_timestamp [epoch]` in bin/bashinit (single source);
+  zfssnapbuild (timestamp + bucket via the helper), zfsclone-vm ×2, and
+  archive-vm ×2 converted. The archive-vm two-node site runs remotely and
+  sources the DEPLOYED bashinit — same release on both nodes required
+  (existing versioned-deployment assumption; two-node.md example updated).
+- python: new pure `python/snapshot_naming.py` (`snapshot_timestamp`,
+  `bucket_for`); feature_config `_build_snapshot_name` and pool_migrate
+  `migration_snapshot_name` delegate to it (backup_config is a re-export);
+  dashboard docstring reworded. GUI surfaces stay local-clock.
+- Schedule page (user choice "Bucket + edge hint"): Next Run gains
+  `(daily|weekly|monthly|offsite)` for snapshot-creating profiles and, only
+  when UTC date ≠ local date, `· 23:30 Sat = 03:30 Sun UTC — names dated
+  Sun`. Column widened 130→230 with word-wrap for the hint; sort string
+  unchanged; retention/scrub/restore rows undecorated. Cache key now
+  includes the label.
+- tests: test-lib date mock rewritten around `_mock_date_utc` (mock must
+  emulate real `date -u -Iminutes` output — the +00:00 form — because the
+  Z splice belongs to snapname_timestamp; pre-splicing in the mock caused
+  double-Z); zfssnapbuild suite Z expectations + charset guard under three
+  TZs via `unset -f date` subshell + epoch-form TZ-independence + `date -d`
+  round-trip; archive-vm/clone-vm expectations updated (legacy fixtures
+  stay deliberately); zfsretain mixed-format dedup test; NEW
+  tests/test-snapshot-names (static producer pins + cross-implementation
+  matrix: real zfssnapbuild under 3 zones == python for 7 instants incl.
+  DST days) and tests/python/test_snapshot_naming.py (pure helpers +
+  10-epoch × 3-zone bash parity); schedule_page decoration tests (TZ
+  pinned via tzset) + datasets_page creation-first pin.
+- Gotchas: `$mydir` in test-lib is the REPO ROOT (my `../python` path was
+  wrong); grep -F needs unescaped parens in quoted heredocs; shellcheck
+  SC1102 on `$((` — space it `$( (`.
+- Docs: concepts.md naming section is the single home (Z + legacy + one
+  clock + local GUI); gtk-gui.md Schedule affordances; architecture,
+  modules (zfssnapbuild + bashinit function rows), python-modules
+  (snapshot_naming.py section + helper rows), restore/offsite/two-node/
+  proxmox examples → Z; zfsretain comment block shows both forms.
+- PREEXISTING: timezone entry REMOVED (all nine audited sites covered);
+  NEW line-length debt entry (archive-vm:345/:414, verified at HEAD).
+  5 entries remain.
+
+## 2026-10-06 — Disks page Wipe Labels feature SHIPPED (uncommitted)
+
+- New `bin/zfswipe`: wipes labels/signatures from an INACTIVE disk so it can
+  be reused as a pool device. Ladder `zpool labelclear -f` (disk + each
+  partition node) → `wipefs -a` → `dd` (first+last 1 MiB per node, 512-byte
+  tail math via lsblk SIZE), re-probing (`wipefs` listing) after each step;
+  ends early when clean. Guards (all FATAL rc 8): non-block arg, zpool
+  unavailable/list failure, ANY node of the backing disk is an imported-pool
+  member (`zpool status -Lp` leaf scan — also protects the ZFS-root boot
+  disk), anything mounted/swap on the backing disk (non-ZFS-root boot disk).
+  CLI typed confirmation via ask_line (type kernel basename) unless
+  `--confirmed` (GUI passes it — exactly one typed gate per invocation).
+  Post-dd: partprobe → blockdev --rereadpt → udevadm trigger/settle; honest
+  rc 0 with "verification unavailable" INFO when wipefs is absent.
+- New `python/disk_wipe.py`: pure helpers (typed_target, wipe_block_reason —
+  same conservative same-backing-disk rule as the script, wipe_warnings
+  incl. importable-pool destruction + dd disclosure + not-a-secure-erase,
+  build_wipe_command) + typed-confirmation dialog (identity grid, warnings,
+  exact command preview, ladder summary, Wipe button unlocked only by exact
+  kernel basename). Module logs nothing; handler logs outcomes.
+- `disk_actions.on_disks_wipe_labels`: storage-host/runner/selection/inactive
+  gates → dialog → zlm write lock keyed on device path + BashStep
+  (zfswipe <path> --confirmed, fatal) on dataset_runner; _on_complete
+  releases lock, invalidates inventory cache, refreshes Disks + Pools.
+- Wiring: PAGE_SPECS "Wipe Labels…" (`edit-clear-all`, `_disks_wipe_btn`)
+  between Manage Pool Profiles and the spacer; ACTION_HANDLERS entry;
+  update_disks_button_sensitivity gating via `_selected_disk_is_wipeable`
+  (row Pools empty + wipe_block_reason against cached inventory; defensive
+  try/except like _selected_disk_is_hdd).
+- Copy: "No eligible disks" dialogs (growth handlers ×4 + wizard) now say
+  "wipe its labels"; pool_create importable reason "(import, destroy, or
+  wipe it first)"; HDD-partitions reason points at Wipe Labels….
+- Tests: NEW tests/test-zfswipe (20 checks — guards, typed gate, short
+  circuit, wipefs path, dd path with exact seek/count math on non-MiB-aligned
+  sizes, residue rc 8, partition-only target); NEW tests/python/
+  test_disk_wipe.py (helpers, dialog gating under mock_gtk, handler gates +
+  runner/lock wiring); affected suites green (disk_actions, disks_page,
+  action_dispatch, pool_create, growth buttons, module-deps, docs
+  integrity). Standards: ruff format+check clean, shellcheck clean, ≤100
+  cols.
+- Gotchas: sourcing bin/zfswipe in tests re-imports the REAL log_msg (bashinit
+  re-source) — assert on captured stderr text, not the test log file; mock
+  call recordings must go to a FILE (zfsscruball pattern) because
+  zfswipe_main runs in $( ) subshells where array appends don't propagate;
+  test-lib has ask_yn mock but NOT ask_line — define it; command
+  substitution inherits shell functions so `unset -f wipefs` inside $( )
+  simulates absence cleanly.
+- Docs: gtk-gui.md Disks Actions bullet + "Wipe Labels" section (ladder + dd
+  caveats); commands.md zfswipe section + jump list; messages/index.md
+  zfswipe table (Pool and System Maintenance) + disk_actions wipe rows;
+  python-modules.md disk_wipe.py section + disk_actions row updates.
+- PREEXISTING: unchanged (5 entries); no new out-of-scope issues found.
+
+## 2026-10-06 — Wrap-up of post-0.117.0 changeset (six-step protocol)
+
+- Step 1 PREEXISTING: 2 entries RESOLVED and removed. (a) The integration
+  send-receive suite's bare-EXIT-trap self-destruction: repaired the
+  convention-correct way — the suite now sources bashinit and registers
+  cleanup_test_datasets via append_exit_trap (the subshell then RESETS the
+  inherited handler list instead of folding a foreign bare trap into its
+  exit); validated live in the reduced-profile dev container (all scenarios
+  and asserts green, zero dataset debris, and the run doubles as in-container
+  proof of the UTC Z names). (b) archive-vm:345/:414 line-length debt
+  rewrapped. 3 entries remain, each parked by user decision (Zensical
+  toolchain wait, infra-vdev planning UI, itf strict-mode at cycle-2).
+- Step 2 standards: ruff check + format clean; shellcheck clean via the
+  documented invocation (now covering bin/zfswipe and both new suites);
+  100-column limit verified on every changed bash file; new modules follow
+  the init/guard/log_msg/output-globals conventions; no undocumented
+  regexes; no installation-specific data. zfswipe follows the core-helper
+  no-strict-mode pattern (explicit rc handling), like its 94 siblings.
+- Step 3 test review: no missing/obsolete/incorrect tests found. New suites
+  are auto-discovered (find tests/test-*). Legacy offset-format fixtures in
+  python suites are deliberate dual-format parsing tests, not stale. My
+  step-1 rewraps broke no assertions (affected suites re-run green).
+- Step 4 docs: changeset documentation reviewed against code (message rows
+  match shipped log lines, gating lists include Wipe Labels, example
+  conversions arithmetically correct); no edits needed; user hand-edits
+  untouched. Docs site rebuilt; docs-integrity suite green against the new
+  build.
+- Step 5 full suite WITHOUT soaks (background): all suites green, zero
+  failures; the only skip is the soak suite excluded by design in a no-soak
+  run.
+- Step 6: codebase FROZEN. Working tree = the two work items (snapshot-name
+  UTC remediation; Disks page Wipe Labels) + this wrap-up's PREEXISTING
+  fixes + notes updates. Awaiting version/commit instructions.

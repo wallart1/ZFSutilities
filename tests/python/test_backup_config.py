@@ -62,6 +62,11 @@ class TestSnapshotNameGeneration(unittest.TestCase):
             name = backup_config._build_snapshot_name("dailybackup")
             self.assertIn("@dailybackup-", name)
 
+    def test_name_renders_canonical_utc_z(self):
+        with patch_environ():
+            name = backup_config._build_snapshot_name("dailybackup")
+            self.assertRegex(name, r"^@dailybackup-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z-[dwms]$")
+
     def test_offsite_bucket_is_s(self):
         with patch_environ():
             name = backup_config._build_snapshot_name("offsite")

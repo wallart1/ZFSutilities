@@ -17,6 +17,7 @@ from paths import (
     get_scrub_state_path,
     get_snapfile_path,
 )
+from snapshot_naming import bucket_for, snapshot_timestamp
 
 
 def get_backup_config(config):
@@ -1167,15 +1168,8 @@ def remove_snapfile():
 
 def _build_snapshot_name(label):
     now = datetime.now().astimezone()
-    datestr = now.strftime("%Y-%m-%dT%H:%M%z")
-    datestr = datestr[:-2] + ":" + datestr[-2:]
-    day_of_week = now.strftime("%a")
-    day_of_month = now.strftime("%d")
-    bucket = (
-        "s"
-        if label == "offsite"
-        else ("m" if day_of_month == "01" else ("w" if day_of_week == "Sun" else "d"))
-    )
+    datestr = snapshot_timestamp(now)
+    bucket = bucket_for(now, label)
     return f"@{label}-{datestr}-{bucket}"
 
 

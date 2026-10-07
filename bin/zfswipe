@@ -1,0 +1,369 @@
+#!/usr/bin/bash
+# Wipe disk labels and signatures from an inactive disk so it can be reused
+# as a pool device.
+#
+# The device must be inactive: neither it, nor any partition of its backing
+# disk, may be a member of an imported pool, and nothing on the backing disk
+# may be mounted or in use as swap. The script refuses otherwise, so the
+# boot disk (a ZFS-root pool member, or a mounted non-ZFS root) can never be
+# wiped by mistake.
+#
+# The wipe uses a fallback ladder, stopping as soon as the device probes
+# clean:
+#   1. zpool labelclear -f on the device (and each partition, when the
+#      device is a whole disk) — removes ZFS labels and persistent-L2ARC
+#      headers only.
+#   2. wipefs -a — removes every visible signature including the partition
+#      table, and tells the kernel.
+#   3. dd — zero the first and last 1 MiB of the device and of each
+#      partition. Blind: it destroys whatever sits in those ranges
+#      (partition tables, foreign labels, the first/last 1 MiB of data).
+#      Not a secure erase — data between the wiped ranges survives.
+#
+# Positional arguments:
+#   A device path (/dev/sdb, /dev/nvme0n1p2, /dev/disk/by-id/...).
+#
+# Options:
+#   --confirmed  Skip the interactive typed confirmation. Used by the GUI,
+#                which collects its own typed confirmation first.
+#
+# Returns:
+#   0 device verified clean (or nothing to do / cancelled), 8 on refusal or
+#   failure.
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+# Bytes wiped at the head and tail of every device node by the dd fallback.
+_ZFSWIPE_EDGE_BYTES=1048576
+_ZFSWIPE_SECTOR=512
+
+# Block-device predicate, isolated so tests can override it.
+function _zfswipe_is_block {
+    [[ -b "$1" ]]
+}
+
+# Resolve *device* to a canonical /dev path; FATAL when it is not a block
+# device. Sets _zfswipe_device and _zfswipe_basename.
+function _zfswipe_resolve {
+    local device="$1"
+    _zfswipe_device=$(realpath "$device" 2>/dev/null) || _zfswipe_device="$device"
+    if ! _zfswipe_is_block "$_zfswipe_device"; then
+        log_msg "FATAL: ${device} is not a block device."
+        return 8
+    fi
+    _zfswipe_basename=$(basename "$_zfswipe_device")
+    return 0
+}
+
+# Print the whole-disk path backing *node* (the disk itself, or the parent
+# of a partition). Empty output when it cannot be determined.
+function _zfswipe_disk_of {
+    local node="$1"
+    local type pkname
+    type=$(lsblk -ndro TYPE "$node" 2>/dev/null)
+    case "$type" in
+        disk) printf '%s\n' "$node" ;;
+        part)
+            pkname=$(lsblk -ndro PKNAME "$node" 2>/dev/null)
+            [[ -n "$pkname" ]] && printf '/dev/%s\n' "$pkname"
+            ;;
+    esac
+}
+
+# Print the device nodes to wipe for target *target*: the disk plus each of
+# its partitions (partition vdev labels live at partition edges, so a
+# whole-disk wipe must reach them too). For a partition target, only the
+# partition itself.
+function _zfswipe_nodes {
+    local target="$1"
+    local line name type
+    if [[ "$(lsblk -ndro TYPE "$target" 2>/dev/null)" == "part" ]]; then
+        printf '%s\n' "$target"
+        return 0
+    fi
+    while IFS= read -r line; do
+        name=$(printf '%s\n' "$line" | awk '{print $1}')
+        type=$(printf '%s\n' "$line" | awk '{print $2}')
+        [[ "$type" == "disk" || "$type" == "part" ]] && printf '%s\n' "$name"
+    done < <(lsblk -nrpo NAME,TYPE "$target" 2>/dev/null)
+}
+
+# FATAL unless the backing disk of *target* is inactive: none of its nodes
+# is a member of an imported pool, and nothing on it is mounted or used as
+# swap.
+function _zfswipe_check_inactive {
+    local target="$1"
+    local disk node pool leaf resolved pools rc mounts
+    disk=$(_zfswipe_disk_of "$target")
+    if [[ -z "$disk" ]]; then
+        log_msg "FATAL: Could not determine the backing disk of ${target}."
+        return 8
+    fi
+
+    if ! command -v zpool >/dev/null 2>&1; then
+        log_msg "FATAL: zpool is not available; cannot verify the disk is inactive."
+        return 8
+    fi
+
+    local -A target_nodes=()
+    while IFS= read -r node; do
+        [[ -n "$node" ]] && target_nodes["$node"]=1
+    done < <(_zfswipe_nodes "$disk")
+
+    pools=$(zpool list -Hpo name 2>/dev/null)
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        log_msg "FATAL: zpool list failed (rc=${rc}); cannot verify the disk is inactive."
+        return 8
+    fi
+    while IFS= read -r pool; do
+        [[ -z "$pool" ]] && continue
+        while IFS= read -r leaf; do
+            [[ -z "$leaf" ]] && continue
+            resolved=$(realpath "$leaf" 2>/dev/null)
+            [[ -n "$resolved" ]] && leaf="$resolved"
+            if [[ -n "${target_nodes[$leaf]:-}" ]]; then
+                log_msg "FATAL: ${_zfswipe_device} is a member of imported pool" \
+                    "'${pool}'. Only inactive disks can be wiped."
+                return 8
+            fi
+        done < <(zpool status -Lp "$pool" 2>/dev/null | awk '$1 ~ /^\//{print $1}')
+    done <<< "$pools"
+
+    while IFS= read -r node; do
+        [[ -z "$node" ]] && continue
+        mounts=$(lsblk -nrpo MOUNTPOINTS "$node" 2>/dev/null | grep -v '^$')
+        if [[ -n "$mounts" ]]; then
+            log_msg "FATAL: ${node} is mounted or in use as swap" \
+                "(${mounts//$'\n'/ }). Only inactive disks can be wiped."
+            return 8
+        fi
+    done < <(_zfswipe_nodes "$disk")
+    return 0
+}
+
+# Probe *node* for leftover signatures. Sets _zfswipe_probe to "clean",
+# "dirty", or "unknown" (wipefs unavailable or errored). A node that no
+# longer exists counts as clean — wipefs/dd removing the partition table
+# deletes its nodes.
+function _zfswipe_probe_node {
+    local node="$1"
+    local listing rc
+    _zfswipe_probe=unknown
+    if ! _zfswipe_is_block "$node"; then
+        _zfswipe_probe=clean
+        return 0
+    fi
+    if ! command -v wipefs >/dev/null 2>&1; then
+        return 0
+    fi
+    listing=$(wipefs "$node" 2>/dev/null)
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        return 0
+    fi
+    if [[ -n "$listing" ]]; then
+        _zfswipe_probe=dirty
+    else
+        _zfswipe_probe=clean
+    fi
+    return 0
+}
+
+# Probe every node of *nodes* (name-ref array). Sets _zfswipe_probe to the
+# combined verdict; "clean" only when no node reports dirty and every node
+# could actually be probed.
+function _zfswipe_probe_all {
+    local -n _probe_nodes=$1
+    local node saw_unknown=0
+    for node in "${_probe_nodes[@]}"; do
+        _zfswipe_probe_node "$node"
+        if [[ "$_zfswipe_probe" == "dirty" ]]; then
+            _zfswipe_probe=dirty
+            return 0
+        fi
+        [[ "$_zfswipe_probe" == "unknown" ]] && saw_unknown=1
+    done
+    if [[ $saw_unknown -eq 1 ]]; then
+        _zfswipe_probe=unknown
+    else
+        _zfswipe_probe=clean
+    fi
+}
+
+# Ladder step 1: zpool labelclear -f on every node. A non-zero rc on a node
+# is expected and neutral when that node holds no ZFS labels.
+function _zfswipe_labelclear {
+    local -n _lc_nodes=$1
+    local node rc
+    for node in "${_lc_nodes[@]}"; do
+        zpool labelclear -f "$node" >/dev/null 2>&1
+        rc=$?
+        log_msg "VERB: zpool labelclear -f ${node} returned rc=${rc}"
+    done
+}
+
+# Ladder step 2: wipefs -a on the target. Returns non-zero when unavailable
+# or failed; the caller then falls through to dd.
+function _zfswipe_wipefs {
+    local target="$1" rc
+    if ! command -v wipefs >/dev/null 2>&1; then
+        log_msg "WARN: wipefs is not available; falling back to dd."
+        return 1
+    fi
+    wipefs -a "$target" >/dev/null 2>&1
+    rc=$?
+    log_msg "VERB: wipefs -a ${target} returned rc=${rc}"
+    return "$rc"
+}
+
+# Ladder step 3: dd — zero the first and last 1 MiB of every existing node.
+# Tail offsets use 512-byte arithmetic so non-MiB-aligned sizes are exact.
+function _zfswipe_dd {
+    local target="$1"
+    local node size tail_seek tail_count
+    local -a nodes=()
+    while IFS= read -r node; do
+        [[ -n "$node" ]] && _zfswipe_is_block "$node" && nodes+=("$node")
+    done < <(_zfswipe_nodes "$target")
+    for node in "${nodes[@]}"; do
+        size=$(lsblk -ndbo SIZE "$node" 2>/dev/null)
+        if [[ ! "$size" =~ ^[0-9]+$ ]] || (( size < _ZFSWIPE_EDGE_BYTES * 2 )); then
+            log_msg "WARN: Could not determine a usable size for ${node}; skipping dd on it."
+            continue
+        fi
+        tail_seek=$(( (size - _ZFSWIPE_EDGE_BYTES) / _ZFSWIPE_SECTOR ))
+        tail_count=$(( size / _ZFSWIPE_SECTOR - tail_seek ))
+        log_msg "VERB: dd zeroing the first and last 1 MiB of ${node}"
+        dd if=/dev/zero of="$node" bs="$_ZFSWIPE_SECTOR" count=2048 conv=fsync \
+            >/dev/null 2>&1 || return $?
+        dd if=/dev/zero of="$node" bs="$_ZFSWIPE_SECTOR" seek="$tail_seek" \
+            count="$tail_count" conv=fsync >/dev/null 2>&1 || return $?
+    done
+    _zfswipe_reread_pt "$target"
+    return 0
+}
+
+# Ask the kernel to drop stale partition nodes after a blind dd wipe. All
+# attempts are best-effort; the WARN tells the operator what to do when the
+# kernel could not be convinced.
+function _zfswipe_reread_pt {
+    local target="$1"
+    local disk
+    disk=$(_zfswipe_disk_of "$target")
+    [[ -z "$disk" ]] && disk="$target"
+    if command -v partprobe >/dev/null 2>&1; then
+        partprobe "$disk" 2>/dev/null
+        return 0
+    fi
+    if command -v blockdev >/dev/null 2>&1; then
+        blockdev --rereadpt "$disk" 2>/dev/null
+        return 0
+    fi
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm trigger "$disk" 2>/dev/null
+        udevadm settle 2>/dev/null
+        return 0
+    fi
+    log_msg "WARN: Could not re-read the partition table of ${disk}. Run" \
+        "partprobe ${disk} (or rescan-storage, or reboot) before reusing the disk."
+    return 1
+}
+
+function zfswipe_main {
+    local device="${1:-}"
+    local confirmed="${2:-}"
+    local node
+
+    if [[ -z "$device" ]]; then
+        log_msg "FATAL: A device path must be specified."
+        return 8
+    fi
+    _zfswipe_resolve "$device" || return 8
+    source_helper rootcheck
+    rootcheck
+
+    _zfswipe_check_inactive "$_zfswipe_device" || return 8
+
+    local -a wipe_nodes=()
+    while IFS= read -r node; do
+        [[ -n "$node" ]] && wipe_nodes+=("$node")
+    done < <(_zfswipe_nodes "$_zfswipe_device")
+
+    log_msg "INFO: Wipe plan for ${_zfswipe_device} (${wipe_nodes[*]}):"
+    log_msg "INFO:   1. zpool labelclear -f (ZFS labels and L2ARC headers)"
+    if command -v wipefs >/dev/null 2>&1; then
+        log_msg "INFO:   2. wipefs -a (all signatures, incl. the partition table)"
+    else
+        log_msg "INFO:   2. wipefs -a (unavailable on this system)"
+    fi
+    log_msg "INFO:   3. dd (zero the first and last 1 MiB of each device;"
+    log_msg "INFO:      destroys any data in those ranges; not a secure erase)"
+
+    if [[ "$confirmed" != "--confirmed" ]]; then
+        log_msg "INFO: Type the device name to confirm the wipe."
+        if ! ask_line "Type '${_zfswipe_basename}' to confirm the wipe: "; then
+            log_msg "INFO: Wipe cancelled — no changes were made."
+            return 0
+        fi
+        if [[ "$REPLY" != "$_zfswipe_basename" ]]; then
+            log_msg "INFO: Wipe cancelled — confirmation did not match." \
+                "Expected '${_zfswipe_basename}', got '${REPLY}'."
+            return 0
+        fi
+    fi
+
+    _zfswipe_probe_all wipe_nodes
+    if [[ "$_zfswipe_probe" == "clean" ]]; then
+        log_msg "INFO: ${_zfswipe_device} has no detectable signatures; nothing to do."
+        return 0
+    fi
+
+    local -a methods=()
+    _zfswipe_labelclear wipe_nodes
+    _zfswipe_probe_all wipe_nodes
+    if [[ "$_zfswipe_probe" == "clean" ]]; then
+        log_msg "INFO: ${_zfswipe_device} verified clean after zpool labelclear."
+        return 0
+    fi
+    methods+=("zpool labelclear")
+
+    if _zfswipe_wipefs "$_zfswipe_device"; then
+        methods+=("wipefs")
+        _zfswipe_probe_all wipe_nodes
+        if [[ "$_zfswipe_probe" == "clean" ]]; then
+            log_msg "INFO: ${_zfswipe_device} verified clean after wipefs."
+            return 0
+        fi
+        log_msg "WARN: Signatures remain on ${_zfswipe_device}; falling back to dd."
+    fi
+
+    _zfswipe_dd "$_zfswipe_device" || return 8
+    methods+=("dd")
+    _zfswipe_probe_all wipe_nodes
+    if [[ "$_zfswipe_probe" == "dirty" ]]; then
+        log_msg "WARN: ${_zfswipe_device} still shows signatures after dd;" \
+            "it may be in use or faulty."
+        return 8
+    fi
+    if [[ "$_zfswipe_probe" == "unknown" ]]; then
+        log_msg "INFO: ${_zfswipe_device} wiped by dd; verification is unavailable" \
+            "(no wipefs) — re-check the device before reuse."
+    else
+        log_msg "INFO: ${_zfswipe_device} verified clean after dd."
+    fi
+    log_msg "INFO: Wipe complete on ${_zfswipe_device}" \
+        "(methods: $(printf '%s, ' "${methods[@]}")dd)."
+    return 0
+}
+
+if calledbybash; then
+    zfswipe_main "$@"
+fi

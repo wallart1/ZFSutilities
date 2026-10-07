@@ -152,6 +152,36 @@ test_phase1_same_day_interleaved() {
     fi
 }
 
+test_phase1_same_day_mixed_formats() {
+    echo "=== Phase 1: Same-day dedup across legacy-offset and Z name formats ==="
+    reset_mocks
+    # Mixed old (-04:00) and new (Z) names in one list: the label is the
+    # first hyphen-field and the bucket the last in both formats, and
+    # same-day grouping uses the creation column, so dedup must treat the
+    # formats identically.
+    local _wrap_snaplist=$'pool/fs@dailybackup-2026-10-04T06:00-04:00-w\tSun Oct 4 6:10 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T12:34Z-w\tSun Oct 4 12:40 2026\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-05T06:00Z-d\tMon Oct 5 6:20 2026'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2026-10-04T06:00-04:00-w\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-04T12:34Z-w\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2026-10-05T06:00Z-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
+    retain "pool/fs" "dailybackup"
+    test_start "Same-day dedup collapses legacy and Z names together"
+    local _rm _keep_w _keep_d
+    _rm="pool/fs@dailybackup-2026-10-04T06:00-04:00-w"
+    _keep_w="pool/fs@dailybackup-2026-10-04T12:34Z-w"
+    _keep_d="pool/fs@dailybackup-2026-10-05T06:00Z-d"
+    if [[ "${_mock_delsnap_calls[*]}" == *"$_rm"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_keep_w"* ]] \
+        && [[ "${_mock_delsnap_calls[*]}" != *"$_keep_d"* ]]; then
+        test_pass
+    else
+        test_fail "Unexpected deletions: ${_mock_delsnap_calls[*]}"
+    fi
+}
+
 test_phase1_same_day_chain() {
     echo "=== Phase 1: Chain of three same-day snapshots collapses to newest ==="
     reset_mocks
@@ -650,6 +680,7 @@ test_verb_messages_disabled() {
 main() {
     test_phase1_same_day
     test_phase1_same_day_interleaved
+    test_phase1_same_day_mixed_formats
     test_phase1_same_day_chain
     test_phase1_same_day_weekly_and_monthly
     test_phase1_same_day_cross_bucket_kept

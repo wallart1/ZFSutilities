@@ -211,7 +211,7 @@ if is_single_node; then
         exit 1
     fi
 
-    snap_suffix="@clone-$(date -Iminutes)-c"
+    snap_suffix="@clone-$(snapname_timestamp)-c"
 
     zfslock_init
 
@@ -340,7 +340,7 @@ if [[ ${#disk_keys[@]} -eq 0 ]]; then
 fi
 
 # Snapshot name — same for all disks in this operation, kept as clone origin
-snap_suffix="@clone-$(date -Iminutes)-c"
+snap_suffix="@clone-$(snapname_timestamp)-c"
 
 zfslock_init
 

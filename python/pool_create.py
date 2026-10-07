@@ -140,7 +140,9 @@ def disk_eligibility(
             reasons.append(f"member of imported pool '{imported}'")
         importable = _match_pool(disk, importable_member_paths)
         if importable is not None:
-            reasons.append(f"member of importable pool '{importable}' (import or destroy it first)")
+            reasons.append(
+                f"member of importable pool '{importable}' (import, destroy, or wipe it first)"
+            )
         if not disk.by_id:
             reasons.append("no /dev/disk/by-id path")
         if disk.disk_type == "unknown":
@@ -193,7 +195,7 @@ def _apply_partition_policy(
     if disk.disk_type == "HDD":
         reasons.append(
             "has partitions; partitioned rotating disks are not supported — "
-            "remove the partitions to use the whole disk"
+            "remove the partitions (Disks page: Wipe Labels…) to use the whole disk"
         )
     else:
         reasons.append(

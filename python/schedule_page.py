@@ -22,7 +22,7 @@ from cron_manager import (
     next_run_times,
     write_cron_file,
 )
-from gi.repository import GLib, Gtk
+from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
     ACTIVE_COLUMN_WIDTH,
     bold_label,
@@ -40,6 +40,7 @@ from profile_manager import (
     load_profile,
     save_profile,
 )
+from snapshot_naming import bucket_for
 
 COL_ACTIVE = 0
 COL_NAME = 1
@@ -49,10 +50,11 @@ COL_COMMENT = 4
 COL_NEXT_RUN = 5
 COL_NEXT_RUN_SORT = 6
 
-# Cache for expensive next-run computations keyed by the cron dict and the
-# current minute.  The result only changes once per minute, so caching by
-# minute avoids stale values while still skipping redundant work.
-_NEXT_RUN_CACHE: dict[tuple[frozenset, datetime], tuple[str, str]] = {}
+# Cache for expensive next-run computations keyed by the cron dict, the
+# current minute, and the snapshot label (the bucket/edge decoration depends
+# on it).  The result only changes once per minute, so caching by minute
+# avoids stale values while still skipping redundant work.
+_NEXT_RUN_CACHE: dict[tuple[frozenset, datetime, str | None], tuple[str, str]] = {}
 
 
 def _interactive_runner_active(app):
@@ -123,7 +125,7 @@ def create_schedule_page(app):
         (COL_TYPE, "Type", 70),
         (COL_SCHEDULE, "Schedule", 90),
         (COL_COMMENT, "Comment", 180),
-        (COL_NEXT_RUN, "Next Run", 130),
+        (COL_NEXT_RUN, "Next Run", 230),
     ]:
         r = Gtk.CellRendererText()
         if col_idx == COL_COMMENT:
@@ -133,6 +135,10 @@ def create_schedule_page(app):
             r.set_property("editable", False)
         if col_idx == COL_NEXT_RUN:
             set_monospace_font(r)
+            # The bucket/UTC-edge decoration can exceed one line; wrap it
+            # within the column instead of stretching or truncating.
+            r.set_property("wrap-mode", Pango.WrapMode.WORD)
+            r.set_property("wrap-width", 215)
         col = Gtk.TreeViewColumn(title_text, r, text=col_idx)
         configure_treeview_column(col, width=width)
         if col_idx in (COL_NAME, COL_TYPE, COL_COMMENT):
@@ -312,11 +318,43 @@ def load_schedule_config(app, cron):
             entry.set_text(cron.get(key, "*"))
 
 
-def _next_run_strings(cron):
-    """Return (display_string, sort_string) for the next cron execution."""
+def _snapshot_label_for(profile):
+    """Return the snapshot label whose bucket a profile's next run lands in.
+
+    Backup profiles name snapshots with their configured label; offsite
+    profiles always use ``offsite``.  Other tab types do not create
+    snapshots, so they carry no bucket (None) and get no decoration.
+    """
+    tab_type = profile.get("tab_type", "")
+    if tab_type == "offsite":
+        return "offsite"
+    if tab_type == "backup":
+        variables = (profile.get("config") or {}).get("variables") or {}
+        label = str(variables.get("label") or "dailybackup").strip()
+        return label or "dailybackup"
+    return None
+
+
+# Retention-bucket letters (snapshot_naming.bucket_for) as Schedule-page
+# words: the Next Run column shows which bucket the next run's snapshot will
+# land in, decided by the UTC instant embedded in the name.
+_BUCKET_WORDS = {"d": "daily", "w": "weekly", "m": "monthly", "s": "offsite"}
+
+
+def _next_run_strings(cron, label=None):
+    """Return (display_string, sort_string) for the next cron execution.
+
+    With *label* (the snapshot label a backup/offsite profile names its
+    snapshots with), the display appends the retention bucket the next
+    run's UTC instant will produce, and — only when the UTC date differs
+    from the local date — a hint translating the local clock time to UTC,
+    because the snapshot name's date and bucket follow the UTC calendar
+    day.  The sort string stays the plain local timestamp either way.
+    """
     cache_key = (
         frozenset(cron.items()),
         datetime.now(timezone.utc).replace(second=0, microsecond=0),
+        label,
     )
     cached = _NEXT_RUN_CACHE.get(cache_key)
     if cached is not None:
@@ -337,7 +375,18 @@ def _next_run_strings(cron):
         )
     else:
         dt = times[0]
-        result = dt.strftime("%a %b %d %Y %H:%M"), dt.strftime("%Y-%m-%d %H:%M")
+        display = dt.strftime("%a %b %d %Y %H:%M")
+        if label:
+            display += f" ({_BUCKET_WORDS[bucket_for(dt, label)]})"
+            local = dt.astimezone()
+            utc = dt.astimezone(timezone.utc)
+            if utc.date() != local.date():
+                display += (
+                    f" · {local.strftime('%H:%M %a')}"
+                    f" = {utc.strftime('%H:%M %a')} UTC"
+                    f" — names dated {utc.strftime('%a')}"
+                )
+        result = display, dt.strftime("%Y-%m-%d %H:%M")
     _NEXT_RUN_CACHE[cache_key] = result
     return result
 
@@ -431,7 +480,8 @@ def _build_schedule_rows(profiles):
     for profile in profiles:
         cron = profile.get("cron", {})
         sched = _format_cron(cron)
-        next_run, next_run_sort = _next_run_strings(cron)
+        label = _snapshot_label_for(profile)
+        next_run, next_run_sort = _next_run_strings(cron, label)
         rows.append(
             [
                 profile.get("active", False),
@@ -599,7 +649,7 @@ def _update_next_run_for_iter(app, tree_iter):
     if profile is None:
         return
     cron = profile.get("cron", {})
-    next_run, next_run_sort = _next_run_strings(cron)
+    next_run, next_run_sort = _next_run_strings(cron, _snapshot_label_for(profile))
     app.schedule_store.set_value(tree_iter, COL_NEXT_RUN, next_run)
     app.schedule_store.set_value(tree_iter, COL_NEXT_RUN_SORT, next_run_sort)
 

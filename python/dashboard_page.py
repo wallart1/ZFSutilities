@@ -652,9 +652,11 @@ def _log_peer_version_result(local_version, peer_host, peer_version):
 def _format_history_timestamp(ts):
     """Convert an ISO timestamp to the project-standard display format.
 
-    ZFS snapshot names use ``%Y-%m-%dT%H:%M%z`` (e.g. ``2026-05-28T14:32-0400``).
-    History entries store ``datetime.now().isoformat()`` which is naive, so the
-    parsed value is interpreted as local time before formatting.
+    Snapshot names embed UTC instants rendered ``YYYY-MM-DDTHH:MMZ`` (legacy
+    names embed a local offset); this display formatter stays local-clock for
+    the human surface.  History entries store ``datetime.now().isoformat()``
+    which is naive, so the parsed value is interpreted as local time before
+    formatting.
 
     Returns the original string unchanged if parsing fails.
     """

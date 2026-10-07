@@ -102,7 +102,7 @@ ensure_retire_snapshot() {
                     exit 1
                 }
             fi
-            snap_name="@retire-$(date -Iminutes)-d"
+            snap_name="@retire-$(snapname_timestamp)-d"
             if ! zfs snapshot "${zvol}${snap_name}"; then
                 zfslock_release "$zfslock_id"
                 { log_msg "FATAL: Failed to create snapshot ${zvol}${snap_name}"; exit 1; }
@@ -129,7 +129,7 @@ if [[ -z "$snap" ]]; then
         echo "__ARCHIVE_VM_ERROR__"
         exit 1
     fi
-    snap_name="@retire-$(date -Iminutes)-d"
+    snap_name="@retire-$(snapname_timestamp)-d"
     if ! zfs snapshot "${zvol}${snap_name}"; then
         zfslock_release "$zfslock_id"
         log_msg "FATAL: Failed to create snapshot ${zvol}${snap_name}"
@@ -342,7 +342,8 @@ vm_status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
 [[ "$vm_status" == "stopped" ]] || {
     log_msg "FATAL: VM ${vmid} is not stopped (status: ${vm_status:-unknown})."
     log_msg "FATAL: The VM must be stopped before it can be archived."
-    log_msg "FATAL: Stop the VM (e.g. 'qm stop ${vmid}' or the Proxmox GUI), then re-run archive-vm."
+    log_msg "FATAL: Stop the VM (e.g. 'qm stop ${vmid}' or the Proxmox GUI),"
+    log_msg "FATAL: then re-run archive-vm."
     exit 1
 }
 
@@ -411,7 +412,8 @@ if [[ -n "$clone_info" ]]; then
         done <<< "$clone_records"
         echo ""
 
-        if ask_yn "Do you want this script to promote these clones (sever the clone dependencies)?"; then
+        if ask_yn "Do you want this script to promote these clones" \
+            "(sever the clone dependencies)?"; then
             for clone_vmid in "${!clone_vmids[@]}"; do
                 echo ""
                 log_msg "INFO: Promoting VM ${clone_vmid}..."

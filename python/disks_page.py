@@ -697,6 +697,23 @@ def update_disks_button_sensitivity(app):
                 "" if selected_hdd else "Select a single HDD to run a surface test"
             )
 
+    wipe_btn = getattr(app, "_disks_wipe_btn", None)
+    if wipe_btn:
+        wipeable = single_selection and _selected_disk_is_wipeable(app)
+        if compute_host:
+            wipe_btn.set_sensitive(False)
+            wipe_btn.set_tooltip_text("Disk wipe is available only on the storage host")
+        elif runner_busy:
+            wipe_btn.set_sensitive(False)
+            wipe_btn.set_tooltip_text("A dataset action is already running")
+        else:
+            wipe_btn.set_sensitive(bool(wipeable))
+            wipe_btn.set_tooltip_text(
+                ""
+                if wipeable
+                else "Select a single disk that belongs to no pool to wipe its labels"
+            )
+
 
 def _selected_disk_is_hdd(app) -> bool:
     """Return True when the Disk Inventory selection is exactly one HDD row."""
@@ -709,6 +726,32 @@ def _selected_disk_is_hdd(app) -> bool:
         return model.get_value(tree_iter, COL_D_TYPE) == "HDD"
     except (IndexError, ValueError):
         return False
+
+
+def _selected_disk_is_wipeable(app) -> bool:
+    """Return True when the selection is one inactive disk eligible for wiping.
+
+    Uses ``wipe_block_reason`` (same rule as the handler and the zfswipe
+    script): neither the row nor anything else on its backing disk may belong
+    to an imported pool.
+    """
+    selection = app.disks_view.get_selection()
+    model, pathlist = selection.get_selected_rows()
+    if len(pathlist) != 1:
+        return False
+    try:
+        tree_iter = model.get_iter(pathlist[0])
+        if model.get_value(tree_iter, COL_D_POOLS):
+            return False
+        path = model.get_value(tree_iter, COL_D_NAME)
+    except (IndexError, ValueError):
+        return False
+
+    from disk_wipe import wipe_block_reason
+
+    data = app._disks_inventory_cache.get()
+    disk = next((d for d in data.disks if d.path == path), None)
+    return disk is not None and wipe_block_reason(disk, data.disks) is None
 
 
 def _highlight_pool_disks(app, pool_name):

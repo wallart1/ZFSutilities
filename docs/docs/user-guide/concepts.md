@@ -82,7 +82,7 @@ A **ZFS snapshot** is a read-only, point-in-time copy of a dataset. Snapshots:
 - Are named with an `@` separator appended to the dataset name:
 
 ```
-threeamigos/data@dailybackup-2026-02-21T02:00-05:00-d
+threeamigos/data@dailybackup-2026-02-21T07:00Z-d
 ```
 
 Snapshots can be listed with:
@@ -98,18 +98,35 @@ zfs list -t snapshot -r threeamigos/data
 This project uses a structured naming format for all snapshots:
 
 ```
-@<label>-<yyyy-mm-dd>T<hh:mm><tz>-<bucket>
+@<label>-<yyyy-mm-dd>T<hh:mm>Z-<bucket>
 ```
 
 | Component    | Example       | Meaning                                                                                           |
 | ------------ | ------------- | ------------------------------------------------------------------------------------------------- |
 | `label`      | `dailybackup` | User-defined purpose for the snapshot. Reserved labels are `dailybackup`, `offsite`, and `clone`. |
 | `yyyy-mm-dd` | `2026-02-21`  | Date when the ZFSutilities job was run.                                                           |
-| `T<hh:mm>`   | `T02:00`      | Time when the ZFSutilities job was run. This may differ from the ZFS dataset creation time.       |
-| `<tz>`       | `-05:00`      | Timezone offset.                                                                                  |
+| `T<hh:mm>`   | `T07:00`      | Time when the ZFSutilities job was run. This may differ from the ZFS dataset creation time.       |
+| `Z`          | `Z`           | The timestamp is UTC ("Zulu").                                                                    |
 | `bucket`     | `d`           | Retention bucket (see below).                                                                     |
 
-**Full example:** `@dailybackup-2026-02-21T02:00-05:00-d`
+**Full example:** `@dailybackup-2026-02-21T07:00Z-d`
+
+The name's timestamp is UTC so the same run produces the same name on hosts
+in any timezone — a requirement for two-node operations, where the compute
+and storage nodes may sit in different zones. The `Z` suffix is also a
+legality matter: `+` is not allowed in ZFS snapshot names, so the
+`+HH:MM` offsets ISO timestamps would emit east of UTC cannot be used.
+
+Snapshots created by earlier releases carry a local UTC offset instead
+(`@dailybackup-2026-02-21T02:00-05:00-d`). Both forms are valid and every
+consumer parses both; a mixed population of old- and new-format names on
+one pool is expected for years. Nothing ever renames an existing snapshot —
+destroying and recreating one to change its name would lose its identity.
+
+The GUI stays on your local clock: the Creation column and the Schedule page
+show local times, and UTC appears only where it changes an outcome (the
+snapshot name itself, and the Schedule page's bucket/edge indicators
+described in the GTK GUI guide).
 
 You can use custom labels for snapshots you create manually. Custom labels are
 generally ignored by automated retention and backup scripts, with the exception
@@ -123,10 +140,16 @@ The trailing letter groups snapshots for retention purposes:
 | Bucket | Label       | Kept by                                                                         |
 | ------ | ----------- | ------------------------------------------------------------------------------- |
 | `d`    | dailybackup | Daily backup                                                                    |
-| `w`    | dailybackup | When a daily backup falls on a Sunday<br/>Overrides "d"                         |
-| `m`    | dailybackup | When a daily backup falls on the first day of a month<br/>Overrides "d" and "w" |
+| `w`    | dailybackup | When a daily backup's UTC instant falls on a Sunday<br/>Overrides "d"           |
+| `m`    | dailybackup | When a daily backup's UTC instant falls on the first day of a month<br/>Overrides "d" and "w" |
 | `s`    | offsite     | Set by offsite backup scripts when creating an offsite backup                   |
 | `c`    | clone       | Set when creating a ZFS clone. Not subject to retention policies.               |
+
+The bucket letter follows the UTC instant encoded in the name — one clock.
+For runs scheduled within the offset hours around local midnight, that can
+differ from the local calendar day: a Saturday 23:30 America/New_York run is
+already Sunday UTC, so its snapshot is dated Sunday and lands in the
+weekly bucket. Daytime runs (for example 06:00 local) are unaffected.
 
 ### How Retention Works
 
@@ -264,9 +287,9 @@ from a template snapshot.
 
 ```
 source-dataset
-    ├── @clone-2026-03-04T10:00-05:00-c   (clone origin snapshot)
+    ├── @clone-2026-03-04T10:00-05:00-c   (clone origin snapshot, legacy name)
     │       └── clone-a   (clone — new dataset)
-    └── @clone-2026-03-05T10:00-05:00-c   (another clone origin snapshot)
+    └── @clone-2026-03-05T15:00Z-c        (another clone origin snapshot)
             └── clone-b   (another new dataset)
 ```
 
@@ -276,7 +299,7 @@ When a clone is created, a snapshot of the source dataset is taken and named
 with the label `clone` and bucket `c`:
 
 ```
-@clone-<yyyy-mm-dd>T<hh:mm><tz>-c
+@clone-<yyyy-mm-dd>T<hh:mm>Z-c
 ```
 
 This snapshot is the **clone origin** — it is the point in time when the clone

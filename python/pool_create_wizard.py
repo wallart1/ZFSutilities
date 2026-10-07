@@ -866,8 +866,8 @@ def _show_no_eligible_disks(app) -> None:
     )
     dialog.format_secondary_text(
         "Every disk is a pool member, partitioned, or lacks a /dev/disk/by-id "
-        "path. Free a disk first (export or destroy its pool, or remove its "
-        "partitions)."
+        "path. Free a disk first (export or destroy its pool, wipe its labels, or "
+        "remove its partitions)."
     )
     dialog.run()
     dialog.destroy()

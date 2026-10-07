@@ -327,10 +327,14 @@ _mock_zfs_guid_list=""
 _mock_zfs_state_dir="/tmp/mock_zfs_state_$$"
 mkdir -p "$_mock_zfs_state_dir"
 
-# Date mocking
-_mock_date_iso="2025-06-15T10:00-04:00"
-_mock_date_dow="Sun"
-_mock_date_dom="15"
+# Date mocking: the canonical snapshot-name timestamp is UTC rendered with a
+# literal Z (snapname_timestamp in bin/bashinit), so the mock state is the Z
+# string itself.  mock_date accepts the historic local-ISO instant and
+# normalizes it to the same instant in Z form; mock_date_utc takes the Z
+# string directly.  Weekday/day-of-month no longer need mock state: the
+# bucket rules parse the Z timestamp with the real date, which is
+# deterministic for a fixed input.
+_mock_date_utc="2025-06-15T14:00Z"
 
 # ask_yn mocking
 _mock_ask_yn_rc=0
@@ -398,9 +402,14 @@ mock_zpool_list() {
 }
 
 mock_date() {
-    _mock_date_iso="$1"
-    _mock_date_dow="${2:-Sun}"
-    _mock_date_dom="${3:-15}"
+    local ts="${1:-2025-06-15T10:00-04:00}"
+    local z
+    z=$(command date -u -d "$ts" -Iminutes)
+    _mock_date_utc="${z%+00:00}Z"
+}
+
+mock_date_utc() {
+    _mock_date_utc="$1"
 }
 
 mock_ask_yn() {
@@ -714,18 +723,34 @@ zpool() {
 }
 
 date() {
-    if [[ "$1" == "-Iminutes" ]]; then
-        echo "$_mock_date_iso"
-        return 0
-    fi
-    if [[ "$1" == "-d" ]]; then
-        shift 2
-        case "$1" in
-            +%a) echo "$_mock_date_dow" ;;
-            +%d) echo "$_mock_date_dom" ;;
-            *) command date "$@" ;;
+    if [[ "$1" == "-u" ]]; then
+        case "$2" in
+            -Iminutes)
+                # Emulate the REAL `date -u -Iminutes` output (+00:00 form);
+                # the Z splice is snapname_timestamp's job, not the mock's.
+                echo "${_mock_date_utc%Z}+00:00"
+                return 0
+                ;;
+            -d)
+                if [[ "$3" == @* ]]; then
+                    # snapname_timestamp epoch form: plain delegation is
+                    # deterministic for a fixed epoch.
+                    command date -u -d "$3" -Iminutes
+                    return 0
+                fi
+                # Bucket rules parse the canonical Z name timestamp; the real
+                # date answer for a fixed input is deterministic.
+                case "$4" in
+                    +%a|+%d) command date -u -d "$3" "$4" ;;
+                    *) command date "$@" ;;
+                esac
+                return 0
+                ;;
+            *)
+                command date "$@"
+                return 0
+                ;;
         esac
-        return 0
     fi
     command date "$@"
 }

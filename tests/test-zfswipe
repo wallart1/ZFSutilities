@@ -1,0 +1,383 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-zfswipe — Verify the inactive-disk label wipe ladder and guards.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# Source the script under test (functions only — calledbybash is false when
+# sourced, so zfswipe_main does not auto-run). Sourcing re-imports the real
+# log_msg, so run output is captured from stderr and asserted as text.
+source "${mydir}/bin/zfswipe"
+
+# ---------------------------------------------------------------------------
+# Mocks
+# ---------------------------------------------------------------------------
+
+# Call recordings go to a file, not arrays: zfswipe_main runs inside command
+# substitutions, whose array appends would not propagate back.
+_MOCK_CALLS="$_mock_zfs_state_dir/zfswipe-calls.log"
+
+# Fixture device set: /dev/sdzz (whole disk) with partitions /dev/sdzz1 and
+# /dev/sdzz2. Sizes are deliberately not MiB-aligned so the dd tail math is
+# exercised exactly (512-byte arithmetic, not 1 MiB rounding).
+declare -A _mock_lsblk_type=()
+declare -A _mock_lsblk_pkname=()
+declare -A _mock_lsblk_children=()
+declare -A _mock_lsblk_mounts=()
+declare -A _mock_lsblk_size=()
+declare -A _mock_wipefs_sigs=()
+declare -A _mock_labelclear_rc=()
+declare -A _mock_zpool_leaves=()
+_mock_zpools=""
+_mock_zpool_list_rc=0
+_mock_labelclear_clears_zfs=1
+_mock_wipefs_fail=0
+_mock_dd_clears_sigs=1
+_mock_ask_line_answer=""
+
+function _mock_reset_fixture {
+    mkdir -p "$_mock_zfs_state_dir"
+    : > "$_MOCK_CALLS"
+    _mock_lsblk_type=(
+        ["/dev/sdzz"]="disk"
+        ["/dev/sdzz1"]="part"
+        ["/dev/sdzz2"]="part"
+    )
+    _mock_lsblk_pkname=(
+        ["/dev/sdzz1"]="sdzz"
+        ["/dev/sdzz2"]="sdzz"
+    )
+    _mock_lsblk_children=(
+        ["/dev/sdzz"]="/dev/sdzz disk
+/dev/sdzz1 part
+/dev/sdzz2 part"
+    )
+    _mock_lsblk_mounts=()
+    _mock_lsblk_size=(
+        ["/dev/sdzz"]="20000256"
+        ["/dev/sdzz1"]="10001536"
+        ["/dev/sdzz2"]="9998336"
+    )
+    _mock_wipefs_sigs=()
+    _mock_labelclear_rc=()
+    _mock_zpool_leaves=()
+    _mock_zpools=""
+    _mock_zpool_list_rc=0
+    _mock_labelclear_clears_zfs=1
+    _mock_wipefs_fail=0
+    _mock_dd_clears_sigs=1
+    _mock_ask_line_answer=""
+}
+
+# Override the block-device predicate from the sourced script: a node is a
+# block device iff the lsblk mock knows it.
+function _zfswipe_is_block {
+    [[ -n "${_mock_lsblk_type[$1]:-}" ]]
+}
+
+lsblk() {
+    local node="${*: -1:1}"
+    case "$2" in
+        TYPE)        printf '%s\n' "${_mock_lsblk_type[$node]:-}" ;;
+        PKNAME)      printf '%s\n' "${_mock_lsblk_pkname[$node]:-}" ;;
+        NAME,TYPE)   printf '%s\n' "${_mock_lsblk_children[$node]:-}" ;;
+        MOUNTPOINTS) printf '%s\n' "${_mock_lsblk_mounts[$node]:-}" ;;
+        SIZE)        printf '%s\n' "${_mock_lsblk_size[$node]:-0}" ;;
+    esac
+    return 0
+}
+
+zpool() {
+    if [[ "$1" == "list" ]]; then
+        [[ -n "$_mock_zpools" ]] && printf '%s\n' "$_mock_zpools"
+        return "$_mock_zpool_list_rc"
+    fi
+    if [[ "$1" == "status" ]]; then
+        local pool="$3" leaf
+        for leaf in ${_mock_zpool_leaves[$pool]:-}; do
+            printf '  %s ONLINE 0 0 0\n' "$leaf"
+        done
+        return 0
+    fi
+    if [[ "$1" == "labelclear" ]]; then
+        local node="$3" rc sigs="" tok
+        echo "labelclear $node" >> "$_MOCK_CALLS"
+        rc="${_mock_labelclear_rc[$node]:-0}"
+        if [[ "$rc" == "0" && "$_mock_labelclear_clears_zfs" == "1" ]]; then
+            for tok in ${_mock_wipefs_sigs[$node]:-}; do
+                [[ "$tok" != "zfs_member" ]] && sigs+="${tok} "
+            done
+            _mock_wipefs_sigs[$node]="${sigs% }"
+        fi
+        return "$rc"
+    fi
+    return 0
+}
+
+# Signature listings are stored as one |-joined token line per node.
+wipefs() {
+    if [[ "$1" == "-a" ]]; then
+        local target="$2" node children
+        children=$(printf '%s\n' "${_mock_lsblk_children[$target]:-}" | awk '{print $1}')
+        echo "wipefs -a $target" >> "$_MOCK_CALLS"
+        [[ "$_mock_wipefs_fail" == "1" ]] && return 1
+        for node in "$target" $children; do
+            unset "_mock_wipefs_sigs[$node]"
+        done
+        return 0
+    fi
+    [[ -n "${_mock_wipefs_sigs[$1]:-}" ]] && printf '%s\n' "${_mock_wipefs_sigs[$1]//|/ }"
+    return 0
+}
+
+dd() {
+    local of="" prev="" arg
+    for arg in "$@"; do
+        [[ "$prev" == "of" ]] && of="$arg"
+        prev="$arg"
+    done
+    echo "dd $*" >> "$_MOCK_CALLS"
+    if [[ "$_mock_dd_clears_sigs" == "1" && -n "$of" ]]; then
+        unset "_mock_wipefs_sigs[$of]"
+    fi
+    return 0
+}
+
+partprobe() {
+    echo "partprobe $1" >> "$_MOCK_CALLS"
+    return 0
+}
+
+ask_line() {
+    REPLY="$_mock_ask_line_answer"
+    return 0
+}
+
+export -f lsblk zpool wipefs dd partprobe ask_line _zfswipe_is_block
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+function _run_zfswipe {
+    _zfswipe_output=$(zfswipe_main "$@" 2>&1)
+    _zfswipe_rc=$?
+}
+
+function _called {
+    # Fixed-string match: dd argument lines contain glob metacharacters.
+    grep -qF "$1" "$_MOCK_CALLS"
+}
+
+function _not_called {
+    ! grep -qF "$1" "$_MOCK_CALLS"
+}
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+function test_argument_guards {
+    echo "=== Argument and device guards ==="
+    _mock_reset_fixture
+    _run_zfswipe ""
+    test_start "Missing device argument is fatal"
+    assert_rc 8 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" "FATAL: A device path must be specified."
+
+    _run_zfswipe /dev/sdnope --confirmed
+    test_start "Non-block device is fatal"
+    assert_rc 8 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" "FATAL: /dev/sdnope is not a block device."
+}
+
+function test_inactive_guards {
+    echo "=== Inactivity guards ==="
+    _mock_reset_fixture
+    _mock_zpools="threeamigos"
+    _mock_zpool_leaves["threeamigos"]="/dev/sdzz"
+    _run_zfswipe /dev/sdzz --confirmed
+    test_start "Imported-pool member is refused"
+    assert_rc 8 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" \
+        "FATAL: /dev/sdzz is a member of imported pool 'threeamigos'"
+    test_start "No labelclear ran against the pool member"
+    _not_called "labelclear" && test_pass || test_fail "labelclear ran on a pool member"
+
+    _mock_reset_fixture
+    _mock_zpools="tank"
+    _mock_zpool_leaves["tank"]="/dev/sdzz2"
+    _run_zfswipe /dev/sdzz1 --confirmed
+    test_start "Wiping a partition of a disk with a pool-member sibling is refused"
+    assert_rc 8 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" \
+        "FATAL: /dev/sdzz1 is a member of imported pool 'tank'"
+
+    _mock_reset_fixture
+    _mock_lsblk_mounts["/dev/sdzz1"]="/mnt/data"
+    _run_zfswipe /dev/sdzz --confirmed
+    test_start "Mounted partition is refused"
+    assert_rc 8 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" \
+        "FATAL: /dev/sdzz1 is mounted or in use as swap"
+
+    _mock_reset_fixture
+    _mock_zpool_list_rc=1
+    _run_zfswipe /dev/sdzz --confirmed
+    test_start "zpool list failure is fatal"
+    assert_rc 8 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" "FATAL: zpool list failed (rc=1)"
+}
+
+function test_typed_confirmation {
+    echo "=== Typed confirmation gate ==="
+    _mock_reset_fixture
+    _mock_wipefs_sigs["/dev/sdzz"]="zfs_member"
+    _mock_ask_line_answer="wrong"
+    _run_zfswipe /dev/sdzz
+    test_start "Mismatched typed confirmation cancels without wiping"
+    assert_rc 0 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" \
+        "INFO: Wipe cancelled — confirmation did not match."
+    _not_called "labelclear" && test_pass || test_fail "labelclear ran without confirmation"
+}
+
+function test_already_clean {
+    echo "=== Already-clean device ==="
+    _mock_reset_fixture
+    _run_zfswipe /dev/sdzz --confirmed
+    test_start "Clean device is a no-op"
+    assert_rc 0 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" \
+        "INFO: /dev/sdzz has no detectable signatures; nothing to do."
+    _not_called "labelclear" && test_pass || test_fail "labelclear ran on a clean device"
+}
+
+function test_labelclear_short_circuit {
+    echo "=== labelclear clears ZFS-only labels ==="
+    _mock_reset_fixture
+    _mock_wipefs_sigs["/dev/sdzz"]="zfs_member"
+    _mock_wipefs_sigs["/dev/sdzz1"]="zfs_member"
+    _run_zfswipe /dev/sdzz --confirmed
+    test_start "ZFS labels cleared by labelclear alone; wipefs and dd never run"
+    assert_rc 0 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" \
+        "INFO: /dev/sdzz verified clean after zpool labelclear."
+    if _not_called "wipefs" && _not_called "dd "; then
+        test_pass
+    else
+        test_fail "wipefs/dd ran: $(cat "$_MOCK_CALLS")"
+    fi
+    test_start "labelclear ran on the disk and each partition"
+    if _called "labelclear /dev/sdzz" && _called "labelclear /dev/sdzz1"; then
+        test_pass
+    else
+        test_fail "expected labelclear on /dev/sdzz and /dev/sdzz1, got $(cat "$_MOCK_CALLS")"
+    fi
+}
+
+function test_wipefs_path {
+    echo "=== wipefs clears non-ZFS signatures ==="
+    _mock_reset_fixture
+    _mock_wipefs_sigs["/dev/sdzz"]="zfs_member|gpt"
+    _run_zfswipe /dev/sdzz --confirmed
+    test_start "GPT remaining after labelclear is cleared by wipefs"
+    assert_rc 0 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" \
+        "INFO: /dev/sdzz verified clean after wipefs."
+    _not_called "dd " && test_pass || test_fail "dd ran: $(cat "$_MOCK_CALLS")"
+    test_start "wipefs -a ran on the whole disk"
+    _called "wipefs -a /dev/sdzz" && test_pass || \
+        test_fail "wipefs -a did not run: $(cat "$_MOCK_CALLS")"
+}
+
+function test_dd_fallback_math {
+    echo "=== dd fallback with exact head/tail offsets ==="
+    _mock_reset_fixture
+    _mock_wipefs_sigs["/dev/sdzz"]="gpt"
+    _mock_wipefs_sigs["/dev/sdzz1"]="zfs_member"
+    _mock_labelclear_rc["/dev/sdzz"]=1
+    # Drop the wipefs mock in a subshell so the script sees it as unavailable.
+    _zfswipe_output=$(
+        unset -f wipefs
+        zfswipe_main /dev/sdzz --confirmed 2>&1
+    )
+    _zfswipe_rc=$?
+
+    test_start "dd path succeeds without wipefs (verification unavailable)"
+    assert_rc 0 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" \
+        "INFO: /dev/sdzz wiped by dd; verification is unavailable"
+
+    test_start "dd zeroes the disk head (1 MiB at sector granularity)"
+    _called "dd if=/dev/zero of=/dev/sdzz bs=512 count=2048 conv=fsync" && test_pass || \
+        test_fail "calls: $(cat "$_MOCK_CALLS")"
+
+    test_start "dd zeroes the disk tail with exact non-aligned offsets"
+    # size 20000256 = 39063 sectors (MiB-unaligned); tail_seek
+    # (20000256-1048576)/512 = 37015, tail_count 39063-37015 = 2048.
+    _called "dd if=/dev/zero of=/dev/sdzz bs=512 seek=37015 count=2048 conv=fsync" && \
+        test_pass || test_fail "calls: $(cat "$_MOCK_CALLS")"
+
+    test_start "dd zeroes each partition head and tail"
+    if _called "dd if=/dev/zero of=/dev/sdzz1 bs=512 count=2048 conv=fsync" && \
+        _called "dd if=/dev/zero of=/dev/sdzz1 bs=512 seek=17486 count=2048 conv=fsync"; then
+        test_pass
+    else
+        test_fail "calls: $(cat "$_MOCK_CALLS")"
+    fi
+
+    test_start "kernel partition re-read is requested"
+    _called "partprobe /dev/sdzz" && test_pass || \
+        test_fail "calls: $(cat "$_MOCK_CALLS")"
+}
+
+function test_dd_residue_fails {
+    echo "=== dd residue is a failure ==="
+    _mock_reset_fixture
+    _mock_wipefs_sigs["/dev/sdzz"]="gpt"
+    _mock_wipefs_fail=1
+    _mock_dd_clears_sigs=0
+    _run_zfswipe /dev/sdzz --confirmed
+    test_start "Signatures surviving dd end the run rc=8 with a WARN"
+    assert_rc 8 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" \
+        "WARN: /dev/sdzz still shows signatures after dd"
+}
+
+function test_partition_target {
+    echo "=== Partition target wipes only that partition ==="
+    _mock_reset_fixture
+    _mock_wipefs_sigs["/dev/sdzz1"]="zfs_member"
+    _run_zfswipe /dev/sdzz1 --confirmed
+    test_start "Partition labels cleared without touching siblings"
+    assert_rc 0 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" \
+        "INFO: /dev/sdzz1 verified clean after zpool labelclear."
+    if [[ $(grep -c "^labelclear" "$_MOCK_CALLS") -eq 1 ]] && _called "labelclear /dev/sdzz1"; then
+        test_pass
+    else
+        test_fail "labelclear calls: $(grep '^labelclear' "$_MOCK_CALLS" || true)"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Run
+# ---------------------------------------------------------------------------
+old_mydir="$mydir"
+
+test_argument_guards
+test_inactive_guards
+test_typed_confirmation
+test_already_clean
+test_labelclear_short_circuit
+test_wipefs_path
+test_dd_fallback_math
+test_dd_residue_fails
+test_partition_target
+
+mydir="$old_mydir"
+
+test_summary
+teardown_test_env

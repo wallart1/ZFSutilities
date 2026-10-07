@@ -1,8 +1,12 @@
 #!/usr/bin/bash
 
 # Build a snapshot name for zfsdailybackup utilities
-# @<label>-<yyyy-mm-dd>T<hh:mm><timezone>-<bucket>
-# For example: @dailybackup-2025-06-28T11:58-04:00-d
+# @<label>-<yyyy-mm-dd>T<hh:mm>Z-<bucket>   (timestamp is UTC, "Zulu")
+# For example: @dailybackup-2025-06-28T15:58Z-d
+# Legacy names carrying a local UTC offset (@dailybackup-2025-06-28T11:58-04:00-d)
+# remain valid; every consumer parses both forms. Only newly built names use
+# the UTC rendering, which is legal in ZFS names on all hosts ("+" offsets are
+# not).
 
 # $1 = Optional label value, with or without a leading "@". $label may also be
 # set before sourcing this script. Default = "@dailybackup". Empty label is not
@@ -86,17 +90,18 @@ zfssnapbuild() {
     if [[ $label = "" ]];           then local label="@dailybackup"; fi
     if [[ ${label:0:1} != '@' ]];   then local label='@'$label; fi
     local currdate
-    currdate=$(date -Iminutes)
+    currdate=$(snapname_timestamp)
     if [[ $bucket = "" ]]; then
         # Determine backup bucket: d=daily, w=weekly, m=monthly
         # Monthly takes precedence if the 1st falls on a Sunday.
+        # The bucket follows the UTC instant encoded in the name (one clock).
         testdate="$currdate"
         bucket='d'
-        x=$(date -d "$testdate" +%a)
+        x=$(date -u -d "$testdate" +%a)
         if [[ $x = "Sun" ]]; then
             bucket='w'
         fi
-        x=$(date -d "$testdate" +%d)
+        x=$(date -u -d "$testdate" +%d)
         if [[ $x = "01" ]]; then
             bucket='m'
         fi

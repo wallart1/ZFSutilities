@@ -31,69 +31,94 @@ buildsnapfilename() { echo "$TEST_SNAPFILE"; }
 # Tests
 # =============================================================================
 
-test_new_snapshot_daily() {
+test_new_snapshot_weekly() {
     echo "=== New Snapshot Generation ==="
     rm -f "$TEST_SNAPFILE"
-    mock_date "2025-06-15T10:00-04:00" "Sun" "15"
+    mock_date_utc "2025-06-15T14:00Z"
     bucket=""
     local result
     result=$(zfssnapbuild)
-    test_start "Daily bucket on Sunday (not 1st)"
-    assert_equals "@dailybackup-2025-06-15T10:00-04:00-w" "$result"
+    test_start "Weekly bucket on UTC Sunday (not 1st)"
+    assert_equals "@dailybackup-2025-06-15T14:00Z-w" "$result"
 }
 
 test_new_snapshot_monthly() {
     rm -f "$TEST_SNAPFILE"
-    mock_date "2025-06-01T10:00-04:00" "Sun" "01"
+    mock_date_utc "2025-06-01T14:00Z"
     bucket=""
     local result
     result=$(zfssnapbuild)
-    test_start "Monthly bucket on Sunday 1st"
-    assert_equals "@dailybackup-2025-06-01T10:00-04:00-m" "$result"
+    test_start "Monthly bucket on UTC Sunday 1st (monthly wins)"
+    assert_equals "@dailybackup-2025-06-01T14:00Z-m" "$result"
+}
+
+test_new_snapshot_monthly_midmonth_first() {
+    rm -f "$TEST_SNAPFILE"
+    mock_date_utc "2025-07-01T14:00Z"
+    bucket=""
+    local result
+    result=$(zfssnapbuild)
+    test_start "Monthly bucket on UTC 1st that is not a Sunday"
+    assert_equals "@dailybackup-2025-07-01T14:00Z-m" "$result"
 }
 
 test_new_snapshot_weekday() {
     rm -f "$TEST_SNAPFILE"
-    mock_date "2025-06-10T10:00-04:00" "Tue" "10"
+    mock_date_utc "2025-06-10T14:00Z"
     bucket=""
     local result
     result=$(zfssnapbuild)
-    test_start "Daily bucket on weekday"
-    assert_equals "@dailybackup-2025-06-10T10:00-04:00-d" "$result"
+    test_start "Daily bucket on UTC weekday"
+    assert_equals "@dailybackup-2025-06-10T14:00Z-d" "$result"
+}
+
+test_new_snapshot_one_clock_utc() {
+    rm -f "$TEST_SNAPFILE"
+    # Local New York Sunday 23:30 is already UTC Monday 03:30 — one clock
+    # means the bucket follows the UTC instant, so this is a daily, not a
+    # weekly, despite the local calendar day.
+    mock_date "2025-06-15T23:30-04:00"
+    bucket=""
+    local result
+    result=$(zfssnapbuild)
+    test_start "Bucket follows the UTC instant, not the local calendar day"
+    assert_equals "@dailybackup-2025-06-16T03:30Z-d" "$result"
 }
 
 test_new_snapshot_offsite() {
     rm -f "$TEST_SNAPFILE"
-    mock_date "2025-06-10T10:00-04:00" "Tue" "10"
+    mock_date_utc "2025-06-10T14:00Z"
     bucket=""
     local result
     result=$(zfssnapbuild "offsite")
     test_start "Offsite label forces bucket 's'"
-    assert_equals "@offsite-2025-06-10T10:00-04:00-s" "$result"
+    assert_equals "@offsite-2025-06-10T14:00Z-s" "$result"
 }
 
 test_new_snapshot_custom_label() {
     rm -f "$TEST_SNAPFILE"
-    mock_date "2025-06-10T10:00-04:00" "Tue" "10"
+    mock_date_utc "2025-06-10T14:00Z"
     bucket=""
     local result
     result=$(zfssnapbuild "mybackup")
     test_start "Custom label without @ prefix"
-    assert_equals "@mybackup-2025-06-10T10:00-04:00-d" "$result"
+    assert_equals "@mybackup-2025-06-10T14:00Z-d" "$result"
 }
 
 test_new_snapshot_explicit_bucket() {
     rm -f "$TEST_SNAPFILE"
-    mock_date "2025-06-10T10:00-04:00" "Tue" "10"
+    mock_date_utc "2025-06-10T14:00Z"
     bucket="w"
     local result
     result=$(zfssnapbuild)
     test_start "Explicit bucket variable respected"
-    assert_equals "@dailybackup-2025-06-10T10:00-04:00-w" "$result"
+    assert_equals "@dailybackup-2025-06-10T14:00Z-w" "$result"
 }
 
 test_snapfile_reuse_yes() {
     rm -f "$TEST_SNAPFILE"
+    # Legacy west-offset name: reuse is format-agnostic and must keep
+    # returning whatever the snapfile holds, old or new format alike.
     echo "@dailybackup-2025-01-01T00:00-05:00-d" > "$TEST_SNAPFILE"
     mock_ask_yn 0   # yes
     bucket=""
@@ -107,14 +132,14 @@ test_snapfile_reuse_no() {
     rm -f "$TEST_SNAPFILE"
     echo "@dailybackup-2025-01-01T00:00-05:00-d" > "$TEST_SNAPFILE"
     mock_ask_yn 1   # no
-    mock_date "2025-06-10T10:00-04:00" "Tue" "10"
+    mock_date_utc "2025-06-10T14:00Z"
     bucket=""
     local result newcontent
     result=$(zfssnapbuild)
     newcontent=$(cat "$TEST_SNAPFILE" 2>/dev/null)
     test_start "Reject reuse and generate new snapshot"
-    if [[ "$result" == "@dailybackup-2025-06-10T10:00-04:00-d" ]] &&\
-       [[ "$newcontent" == "@dailybackup-2025-06-10T10:00-04:00-d" ]]; then
+    if [[ "$result" == "@dailybackup-2025-06-10T14:00Z-d" ]] &&\
+       [[ "$newcontent" == "@dailybackup-2025-06-10T14:00Z-d" ]]; then
         test_pass
     else
         test_fail "result='$result' snapfile='$newcontent'"
@@ -131,7 +156,7 @@ test_removesnapfile() {
 
 test_generation_records_reservation() {
     rm -f "$TEST_SNAPFILE" "$SNAPNAME_RESERVED"
-    mock_date "2025-06-10T10:00-04:00" "Tue" "10"
+    mock_date_utc "2025-06-10T14:00Z"
     bucket=""
     local result
     result=$(zfssnapbuild)
@@ -145,7 +170,7 @@ test_generation_records_reservation() {
 
 test_reservation_file_is_line_based() {
     rm -f "$TEST_SNAPFILE" "$SNAPNAME_RESERVED"
-    mock_date "2025-06-10T10:00-04:00" "Tue" "10"
+    mock_date_utc "2025-06-10T14:00Z"
     bucket=""
     local result
     result=$(zfssnapbuild)
@@ -161,7 +186,7 @@ test_reservation_file_is_line_based() {
 
 test_lock_file_is_created() {
     rm -f "$TEST_SNAPFILE" "$SNAPNAME_LOCK" "$SNAPNAME_RESERVED"
-    mock_date "2025-06-10T10:00-04:00" "Tue" "10"
+    mock_date_utc "2025-06-10T14:00Z"
     bucket=""
     local result
     result=$(zfssnapbuild)
@@ -175,13 +200,70 @@ test_lock_file_is_created() {
 }
 
 # =============================================================================
+# Canonical-format guards
+# =============================================================================
+
+test_name_charset_under_tz() {
+    # The original timezone bug: `date -Iminutes` embeds the local UTC
+    # offset, and `+` is illegal in ZFS snapshot names, so UTC and
+    # east-of-UTC hosts produced names `zfs snapshot` rejected.  Generate
+    # with the REAL date (mock bypassed) under three zones and pin the
+    # charset — only legal name characters may ever appear.  The lock and
+    # snapfile overrides are exported by this suite, so the inner shell
+    # inherits them.
+    local tz result
+    for tz in UTC Asia/Tokyo America/New_York; do
+        rm -f "$TEST_RUN_DIR"/nextsnap_*
+        result=$(TZ=$tz bash -c '
+            unset -f date
+            source "$1/bin/bashinit"
+            source "$1/bin/zfssnapbuild"
+            bucket=""
+            zfssnapbuild
+        ' bash "$mydir" 2>/dev/null)
+        test_start "Generated name charset is ZFS-legal under TZ=$tz"
+        if [[ "$result" =~ ^@dailybackup-[A-Za-z0-9_.:-]+-[dwms]$ ]] &&\
+           [[ "$result" != *+* ]]; then
+            test_pass
+        else
+            test_fail "TZ=$tz produced '$result'"
+        fi
+    done
+}
+
+test_epoch_form_is_tz_independent() {
+    test_start "snapname_timestamp epoch form is TZ-independent"
+    local west east
+    west=$(TZ=America/New_York snapname_timestamp 1791326760)
+    east=$(TZ=Asia/Tokyo snapname_timestamp 1791326760)
+    if [[ "$west" == "2026-10-06T22:46Z" && "$east" == "$west" ]]; then
+        test_pass
+    else
+        test_fail "west='$west' east='$east'"
+    fi
+}
+
+test_date_parses_z_round_trip() {
+    test_start "GNU date round-trips the canonical Z timestamp"
+    local epoch
+    epoch=$(command date -d "2026-10-06T22:46Z" +%s)
+    if [[ "$epoch" == "1791326760" ]]; then
+        test_pass
+    else
+        test_fail "date -d parsed epoch '$epoch'"
+    fi
+}
+
+# =============================================================================
 # Main
 # =============================================================================
 
 main() {
-    test_new_snapshot_daily
+    test_new_snapshot_weekly
     test_new_snapshot_monthly
+    test_new_snapshot_monthly_midmonth_first
     test_new_snapshot_weekday
+    test_new_snapshot_one_clock_utc
     test_new_snapshot_offsite
     test_new_snapshot_custom_label
     test_new_snapshot_explicit_bucket
@@ -191,6 +273,9 @@ main() {
     test_generation_records_reservation
     test_reservation_file_is_line_based
     test_lock_file_is_created
+    test_name_charset_under_tz
+    test_epoch_form_is_tz_independent
+    test_date_parses_z_round_trip
     rm -f "$TEST_SNAPFILE" "$SNAPNAME_LOCK" "$SNAPNAME_RESERVED"
     rm -rf "$TEST_RUN_DIR"
     teardown_test_env

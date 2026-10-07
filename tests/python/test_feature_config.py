@@ -11,9 +11,11 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import feature_config
+from snapshot_naming import bucket_for
 from test_support import patch_environ, temp_config_dir
 
 
@@ -254,6 +256,30 @@ class TestSnapshotNameGeneration(unittest.TestCase):
         with patch_environ():
             name = feature_config._build_snapshot_name("dailybackup")
             self.assertIn("@dailybackup-", name)
+
+    def test_name_renders_canonical_utc_z(self):
+        with patch_environ():
+            name = feature_config._build_snapshot_name("dailybackup")
+            self.assertRegex(name, r"^@dailybackup-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z-[dwms]$")
+
+    def test_bucket_matrix_follows_utc_instant(self):
+        new_york = timezone(timedelta(hours=-4))
+        cases = [
+            # UTC 1st of month → monthly, Sunday or not.
+            (datetime(2026, 10, 1, 3, 0, tzinfo=timezone.utc), "dailybackup", "m"),
+            (datetime(2026, 11, 1, 3, 0, tzinfo=timezone.utc), "dailybackup", "m"),
+            # UTC Sunday (not the 1st) → weekly.
+            (datetime(2026, 10, 11, 0, 30, tzinfo=timezone.utc), "dailybackup", "w"),
+            # Ordinary UTC weekday → daily.
+            (datetime(2026, 10, 7, 1, 46, tzinfo=timezone.utc), "dailybackup", "d"),
+            # Local Sat 23:30 New York is already UTC Sunday → weekly: one
+            # clock, the bucket follows the UTC instant in the name.
+            (datetime(2026, 10, 10, 23, 30, tzinfo=new_york), "dailybackup", "w"),
+            # Offsite label always lands in the offsite bucket.
+            (datetime(2026, 10, 7, 1, 46, tzinfo=timezone.utc), "offsite", "s"),
+        ]
+        for when, label, expected in cases:
+            self.assertEqual(bucket_for(when, label), expected, f"{when.isoformat()} {label}")
 
     def test_offsite_bucket_is_s(self):
         with patch_environ():

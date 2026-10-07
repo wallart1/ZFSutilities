@@ -58,6 +58,29 @@ Low-level config I/O and small, cross-cutting configuration helpers.
 
 ---
 
+### `snapshot_naming.py`
+
+The canonical snapshot-name rules, as the single Python source of truth —
+the bash twin is `snapname_timestamp` in `bin/bashinit`, and
+`tests/test-snapshot-names` plus `tests/python/test_snapshot_naming.py` pin
+the two implementations to identical output.
+
+Names embed the instant they were taken as UTC with a literal `Z` suffix
+(`2026-10-07T01:46Z`): `+` is illegal in ZFS snapshot names, so the
+`+HH:MM` offsets ISO timestamps emit east of UTC cannot be used. Legacy
+names with a local offset parse alongside the canonical form everywhere.
+
+**Key functions:**
+
+| Function                    | Purpose                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------- |
+| `snapshot_timestamp(when)`  | Render *when* (now if None) as the canonical `YYYY-MM-DDTHH:MMZ` UTC string    |
+| `bucket_for(when, label)`   | Retention-bucket letter for the UTC instant: `s`/`m`/`w`/`d` precedence rules |
+
+**Called modules / imported helpers:** none (pure).
+
+---
+
 ### `feature_config.py`
 
 Feature-specific getters and setters for the JSON config sections that back
@@ -92,9 +115,10 @@ the GUI tabs and the bash scripts.
 
 **Called modules / imported helpers:**
 
-| Module        | Purpose of this module                         |
-| ------------- | ---------------------------------------------- |
-| `config_core` | `save_config`, `_deep_copy`, default constants |
+| Module            | Purpose of this module                              |
+| ----------------- | --------------------------------------------------- |
+| `config_core`     | `save_config`, `_deep_copy`, default constants      |
+| `snapshot_naming` | Canonical UTC+Z timestamp and bucket-letter rules   |
 
 **Data structures consumed / produced:**
 
@@ -557,9 +581,10 @@ reapply step right after the import-rename that replays them with
 
 **Called modules / imported helpers:**
 
-| Module        | Purpose in this module                                           |
-| ------------- | ---------------------------------------------------------------- |
-| `pool_create` | `validate_pool_name`, `MAX_POOL_NAME_LEN` (temp-name generation) |
+| Module            | Purpose in this module                                           |
+| ----------------- | ---------------------------------------------------------------- |
+| `pool_create`     | `validate_pool_name`, `MAX_POOL_NAME_LEN` (temp-name generation) |
+| `snapshot_naming` | Canonical UTC+Z timestamp for the migration snapshot name        |
 
 ---
 
@@ -1124,13 +1149,52 @@ page layout and action logic can be tested independently.
 | Function                      | Purpose                                                 |
 | ----------------------------- | ------------------------------------------------------- |
 | `on_disks_smart_details(app)` | Dump `smartctl -a` for the selected disk to the GUI log |
+| `on_disks_wipe_labels(app)`   | Wipe Labels handler: gates, typed-confirmation dialog, `zfswipe` runner step |
 
 **Called modules / imported helpers:**
 
-| Module           | Purpose in this module                    |
-| ---------------- | ----------------------------------------- |
-| `disks_page`     | Column constants and selected-disk lookup |
-| `logging_config` | `log_msg`                                 |
+| Module             | Purpose in this module                                  |
+| ------------------ | ------------------------------------------------------- |
+| `disks_page`       | Column constants and selected-disk lookup               |
+| `disk_wipe`        | Wipe eligibility, warnings, dialog, and command building |
+| `command_builders` | `BashStep` for the `zfswipe` runner step                 |
+| `zfs_lock_manager` | Device-keyed write lock while the wipe runs              |
+| `pools_page`       | Post-wipe pools refresh                                  |
+| `node_config`      | Storage-host gating on two-node systems                  |
+| `logging_config`   | `log_msg`                                                |
+
+---
+
+### `disk_wipe.py`
+
+Helpers and typed-confirmation dialog for the Disks page **Wipe Labels…**
+action, which wraps the [`zfswipe`](commands.md#zfswipe) script
+(`zpool labelclear` → `wipefs` → `dd`) that clears leftover signatures from
+an inactive disk so it can be reused as a pool device. Decision logic lives
+in pure helpers (testable without GTK); the module itself issues no log
+messages — the handler in `disk_actions.py` logs the outcomes.
+
+**Key functions:**
+
+| Function                                         | Purpose                                                                   |
+| ------------------------------------------------ | ------------------------------------------------------------------------- |
+| `typed_target(disk)`                             | The exact text the user must type (kernel basename, e.g. `sdb`)           |
+| `wipe_block_reason(disk, disks)`                 | None when wipe-eligible; otherwise why not (self/parent/sibling in pool)  |
+| `wipe_warnings(disk, disks, importable_members)` | Dialog warning lines (importable-pool destruction, partitions, dd scope)  |
+| `build_wipe_command(disk)`                       | `zfswipe <path> --confirmed` argv                                         |
+| `show_wipe_dialog(app, disk, warnings)`          | Identity grid, warnings, exact command, typed entry gating the Wipe button |
+
+**Called modules / imported helpers:**
+
+| Module        | Purpose in this module                 |
+| ------------- | --------------------------------------- |
+| `gui_helpers` | `create_scrolled_dialog`                |
+| `path_utils`  | `resolve_local_bin` to locate `zfswipe` |
+
+The conservative wipe rule is shared with the script and the button
+sensitivity check in `disks_page.py` (`_selected_disk_is_wipeable`): neither
+the device nor anything else on its backing disk may belong to an imported
+pool.
 
 ---
 
@@ -1595,7 +1659,12 @@ Schedule tab: list saved profiles, edit cron lines, preview next run times,
 and enable/disable scheduled entries.
 
 Next-run computation is performed in a background thread and cached per
-cron expression per minute so the UI remains responsive.
+cron expression per minute so the UI remains responsive. For profiles that
+create snapshots, the Next Run display appends the retention bucket the
+run's UTC instant will produce (`(daily)`/`(weekly)`/`(monthly)`/
+`(offsite)`) and, only when the UTC date differs from the local date, a
+short local↔UTC translation hint — snapshot names follow the UTC calendar
+day (see `snapshot_naming.py`).
 
 **Key functions:**
 
@@ -1604,6 +1673,7 @@ cron expression per minute so the UI remains responsive.
 | `create_schedule_page()`                                               | Build the Schedule tab widget                                   |
 | `refresh_schedule_page(sync=False)`                                    | Refresh the schedule list asynchronously (`sync=True` to block) |
 | `collect_schedule_config()` / `load_schedule_config()`                 | UI ↔ cron dict                                                  |
+| `_next_run_strings(cron, label)`                                       | Next-run display + sort strings, with bucket word/UTC edge hint |
 | `_regenerate_cron()`                                                   | Rewrite the cron drop-in file                                   |
 | `_refresh_profile_list()`                                              | Show all profiles of the current tab type                       |
 | `_on_selection_changed()`                                              | Update the detail pane (cron entry + config summary)            |
@@ -1611,13 +1681,14 @@ cron expression per minute so the UI remains responsive.
 
 **Called modules / imported helpers:**
 
-| Module            | Purpose in this module              |
-| ----------------- | ----------------------------------- |
-| `profile_manager` | Profile CRUD                        |
-| `cron_manager`    | Cron line generation/interpretation |
-| `profile_dialogs` | Add/recall profile dialogs          |
-| `gui_helpers`     | Widget helpers                      |
-| `logging_config`  | `log_msg`                           |
+| Module            | Purpose in this module                          |
+| ----------------- | ----------------------------------------------- |
+| `profile_manager` | Profile CRUD                                    |
+| `cron_manager`    | Cron line generation/interpretation             |
+| `snapshot_naming` | Bucket letter for the next run's UTC instant    |
+| `profile_dialogs` | Add/recall profile dialogs                      |
+| `gui_helpers`     | Widget helpers                                  |
+| `logging_config`  | `log_msg`                                       |
 
 ---
 

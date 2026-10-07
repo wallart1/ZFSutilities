@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -698,6 +699,96 @@ class TestNextRunStrings(unittest.TestCase):
         self.assertEqual(sort_str, "")
 
 
+class TestNextRunBucketDecoration(unittest.TestCase):
+    """Bucket word + conditional UTC edge hint on the Next Run display."""
+
+    def setUp(self):
+        # Pin the local zone: the decoration compares the UTC date with the
+        # local date, so the assertions must not depend on the host zone.
+        self._orig_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "America/New_York"
+        time.tzset()
+
+    def tearDown(self):
+        if self._orig_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self._orig_tz
+        time.tzset()
+
+    def _strings(self, when, label=None):
+        with mock_gtk():
+            import schedule_page
+
+        schedule_page._NEXT_RUN_CACHE.clear()
+        with patch("schedule_page.next_run_times", return_value=[when]):
+            return schedule_page._next_run_strings({}, label)
+
+    def test_bucket_word_weekly_on_utc_sunday(self):
+        # 05:00 New York is 09:00 UTC, still Sunday Oct 11 2026.
+        display, sort_str = self._strings(datetime(2026, 10, 11, 5, 0), "dailybackup")
+        self.assertEqual(display, "Sun Oct 11 2026 05:00 (weekly)")
+        self.assertEqual(sort_str, "2026-10-11 05:00")
+        self.assertNotIn("UTC", display)
+
+    def test_bucket_word_monthly_on_utc_first(self):
+        display, _ = self._strings(datetime(2026, 11, 1, 3, 0), "dailybackup")
+        self.assertEqual(display, "Sun Nov 01 2026 03:00 (monthly)")
+
+    def test_bucket_word_offsite(self):
+        display, _ = self._strings(datetime(2026, 10, 7, 6, 0), "offsite")
+        self.assertEqual(display, "Wed Oct 07 2026 06:00 (offsite)")
+
+    def test_daytime_run_gets_bucket_word_but_no_hint(self):
+        display, _ = self._strings(datetime(2026, 10, 7, 6, 0), "dailybackup")
+        self.assertEqual(display, "Wed Oct 07 2026 06:00 (daily)")
+        self.assertNotIn("·", display)
+        self.assertNotIn("UTC", display)
+
+    def test_edge_run_shows_utc_translation_hint(self):
+        # Local Sat 23:30 New York is 03:30 UTC Sunday: the name is dated
+        # Sunday and lands in the weekly bucket.
+        display, sort_str = self._strings(datetime(2026, 10, 10, 23, 30), "dailybackup")
+        self.assertEqual(
+            display,
+            "Sat Oct 10 2026 23:30 (weekly) · 23:30 Sat = 03:30 Sun UTC — names dated Sun",
+        )
+        # The sort string stays the plain local timestamp.
+        self.assertEqual(sort_str, "2026-10-10 23:30")
+
+    def test_no_label_leaves_display_bare(self):
+        # Retention/scrub/restore runs create no snapshots: no decoration.
+        display, _ = self._strings(datetime(2026, 10, 10, 23, 30), None)
+        self.assertEqual(display, "Sat Oct 10 2026 23:30")
+
+    def test_build_rows_decorates_only_snapshot_profiles(self):
+        with mock_gtk():
+            import schedule_page
+
+        backup = {
+            "active": True,
+            "profile_name": "p-backup",
+            "tab_type": "backup",
+            "cron": {},
+            "comment": "",
+            "config": {"variables": {"label": "nightly"}},
+        }
+        retention = {
+            "active": True,
+            "profile_name": "p-ret",
+            "tab_type": "retention",
+            "cron": {},
+            "comment": "",
+        }
+        with patch(
+            "schedule_page.next_run_times",
+            return_value=[datetime(2026, 10, 7, 6, 0)],
+        ):
+            rows = schedule_page._build_schedule_rows([backup, retention])
+        self.assertEqual(rows[0][schedule_page.COL_NEXT_RUN], "Wed Oct 07 2026 06:00 (daily)")
+        self.assertEqual(rows[1][schedule_page.COL_NEXT_RUN], "Wed Oct 07 2026 06:00")
+
+
 class TestUpdateNextRunForIter(unittest.TestCase):
     """Verify _update_next_run_for_iter updates both display and sort columns."""
 
@@ -1326,7 +1417,9 @@ class TestRefreshSchedulePage(unittest.TestCase):
 
         self.assertEqual(
             app.schedule_store.get_value(0, self.COL_NEXT_RUN),
-            "Sun Jun 15 2025 10:00",
+            # SAMPLE_NEXT_RUN's UTC instant (14:00Z) is Sunday: the backup
+            # profile's next run lands in the weekly bucket.
+            "Sun Jun 15 2025 10:00 (weekly)",
         )
         self.assertEqual(
             app.schedule_store.get_value(0, self.COL_NEXT_RUN_SORT),

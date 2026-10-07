@@ -59,16 +59,20 @@ GB = 1024**3
 
 class TestMigrationSnapshotName(unittest.TestCase):
     def test_format_follows_convention_without_bucket(self):
+        # The caller's instant is preserved and rendered canonical UTC+Z.
         when = datetime(2026, 9, 10, 14, 30, tzinfo=timezone(timedelta(hours=-4)))
         name = migration_snapshot_name(when)
-        self.assertEqual(name, "@migrate-2026-09-10T14:30-04:00")
+        self.assertEqual(name, "@migrate-2026-09-10T18:30Z")
 
     def test_default_is_now(self):
         name = migration_snapshot_name()
         self.assertTrue(name.startswith("@migrate-"), name)
         self.assertFalse(name.rsplit("-", 1)[-1] in ("d", "w", "m", "s", "c"))
+        # "+" is illegal in ZFS names — the canonical Z form must never
+        # regress to an embedded UTC offset.
+        self.assertNotIn("+", name)
 
-    def test_bare_name_strips_at(self):
+    def test_bare_name_accepts_legacy_offset_form(self):
         self.assertEqual(
             migration_snapshot_bare_name("@migrate-2026-09-10T14:30-04:00"),
             "migrate-2026-09-10T14:30-04:00",

@@ -632,7 +632,7 @@ The top pane lists every saved profile with columns:
 | **Type**         | `backup`, `offsite`, `restore`, `retention`, or `scrub`       |
 | **Schedule**     | Current cron expression (`min hour day month weekday`)        |
 | **Comment**      | Optional free-form note for the profile                       |
-| **Next Run**     | Next scheduled execution time                                 |
+| **Next Run**     | Next scheduled execution time, plus bucket/UTC notes (below) |
 
 Click any column header to sort by **Profile Name**, **Type**, **Comment**, or **Next Run**.
 Click any row to select it; use **Ctrl**/**Shift**-click to select multiple rows.
@@ -651,6 +651,19 @@ unsaved changes for deleted profiles are discarded.
 optional **Condition**, the condition is evaluated at runtime by `/bin/sh`; a
 matching cron time does not guarantee the profile will run if the condition
 exits non-zero.
+
+For profiles that create snapshots (backup and offsite types), **Next Run**
+also shows which retention bucket the next run's snapshot will land in —
+`06:00 (daily)`, `06:00 (weekly)`, `06:00 (monthly)`, or `(offsite)` —
+decided by the run's UTC instant (cron times themselves stay local; see
+[Snapshot Naming Convention](concepts.md#snapshot-naming-convention)). When
+the run falls within the offset hours around local midnight, so that the UTC
+calendar day differs from yours, a short translation is appended, for
+example `23:30 Sat = 03:30 Sun UTC — names dated Sun`: the snapshot name
+carries the UTC date and bucket, which can differ from the local date.
+Runs at ordinary daytime hours show no UTC text at all, and profile types
+that do not create snapshots (restore, retention, scrub) show a plain
+timestamp.
 
 ### Run Now
 
@@ -1753,9 +1766,9 @@ cannot be entered.
 ### Actions
 
 The pool- and disk-scoped actions (Create Pool, Add Data Vdev, Expand Vdev,
-Replace, Detach, Add Infra Vdev, Migrate Pool, SMART Details, Surface Test)
-follow the same gating: on two-node systems they are restricted to the
-storage host, and they are disabled while a dataset action is running.
+Replace, Detach, Add Infra Vdev, Migrate Pool, Wipe Labels, SMART Details,
+Surface Test) follow the same gating: on two-node systems they are restricted
+to the storage host, and they are disabled while a dataset action is running.
 
 - **Create Pool…** — open the create-pool wizard to build a new pool from
   unused disks (see [Creating Pools](#creating-pools)). Storage host only on
@@ -1791,12 +1804,56 @@ storage host, and they are disabled while a dataset action is running.
 - **Advanced: Manage Pool Profiles…** — maintain the pool profiles that
   Create Pool and Migrate Pool apply (see [Pool profiles](#pool-profiles)).
   Always available — it edits saved profiles, not live pools.
+- **Wipe Labels…** — clear leftover ZFS labels, partition tables, and other
+  signatures from an inactive disk so it can be reused as a pool device (see
+  [Wipe Labels](#wipe-labels)). Requires a single disk that belongs to no
+  pool; storage host only on two-node systems.
 - **SMART Details** — dumps `smartctl -a` output for the selected disk to the
   GUI log panel. Requires a single disk to be selected and `smartctl` to be
   installed; otherwise a warning is logged.
 - **Surface Test…** — run a SMART surface self-test on the selected HDD (see
   [Surface Test](#surface-test)). Storage host only on two-node systems.
 - **Refresh** — reloads the disk inventory and topology from cache.
+
+### Wipe Labels
+
+Clears leftover signatures — ZFS labels from a destroyed or never-imported
+pool, a stale partition table, filesystem superblocks — from a disk so that
+Create Pool or Add Data Vdev accepts it. The button is enabled only for a
+single selected disk (or partition) that belongs to **no** imported pool;
+neither the device nor any sibling partition of its backing disk may be a
+pool member, and nothing on the disk may be mounted. This is the GUI face of
+the [`zfswipe`](../commands-and-modules/commands.md#zfswipe) script.
+
+The confirmation dialog shows the disk's identity (path, by-id, model,
+serial, size), everything it detected (e.g. labels of an importable pool,
+existing partitions), the exact command that will run, and requires the
+**device name to be typed exactly** (e.g. `sdb`) before the Wipe button
+unlocks.
+
+The wipe itself is a fallback ladder that stops as soon as the disk probes
+clean:
+
+1. `zpool labelclear -f` — removes ZFS labels (and persistent-L2ARC headers)
+   only; leaves everything else untouched.
+2. `wipefs -a` — removes every visible signature, including the partition
+   table, and informs the kernel.
+3. `dd` — the always-works fallback: zeroes the first and last 1 MiB of the
+   device and of each partition, then forces a partition-table re-read.
+
+Things to know before wiping:
+
+- **Destructive and one-way.** If labels of an *importable* pool live on the
+  disk, wiping destroys that pool's on-disk configuration — it can never be
+  imported. Wiping a whole disk destroys its partitions and all data on
+  them.
+- **`dd` is blind.** Unlike the first two steps it does not know what it is
+  erasing: partition tables, foreign or corrupt labels that `labelclear`
+  refuses, and any data in the wiped 1 MiB ranges are destroyed. The GPT
+  backup table at the end of the disk is destroyed too, so the old layout is
+  unrecoverable even with recovery tools.
+- **Not a secure erase.** Data between the wiped ranges survives; this
+  prepares a disk for reuse, it does not sanitize one.
 
 ### Surface Test
 

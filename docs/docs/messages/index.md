@@ -1378,6 +1378,33 @@ Emits no log messages; it runs `watchall` around `zpool list`/`zpool status`.
 
 Emits no log messages; the ARC display loop uses plain `echo`/`printf` output.
 
+### [zfswipe](../commands-and-modules/commands.md#zfswipe)
+
+Wipes labels/signatures from an inactive disk (Disks page **Wipe Labels…**,
+or standalone). Ladder: `zpool labelclear -f` → `wipefs -a` → `dd`, stopping
+as soon as the device probes clean.
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `FATAL: A device path must be specified.` | No device argument | Script aborts (exit 8) |
+| `FATAL: ... is not a block device.` | The argument does not resolve to a block device | Script aborts (exit 8) |
+| `FATAL: Could not determine the backing disk of ...` | lsblk could not classify the device as disk/partition | Script aborts (exit 8) |
+| `FATAL: zpool is not available; cannot verify the disk is inactive.` / `FATAL: zpool list failed (rc=...); cannot verify the disk is inactive.` | The inactivity check cannot run | Script aborts (exit 8) |
+| `FATAL: ... is a member of imported pool '...'. Only inactive disks can be wiped.` | The device (or a partition of its backing disk) belongs to a live pool | Script aborts (exit 8); import/destroy the pool or pick another disk |
+| `FATAL: ... is mounted or in use as swap (...). Only inactive disks can be wiped.` | Something on the backing disk is mounted (or swap) | Script aborts (exit 8) |
+| `INFO: Wipe plan for ... (...)` | The ladder about to run, with the device's node list and per-step availability | Informational |
+| `INFO: Type the device name to confirm the wipe.` | Typed-confirmation prompt (skipped with `--confirmed`); the device name must be typed exactly | Type the kernel device name to proceed; a mismatch cancels |
+| `INFO: Wipe cancelled — no changes were made.` / `INFO: Wipe cancelled — confirmation did not match. Expected '...', got '...'.` | The typed confirmation was declined or wrong | Run ends (exit 0); nothing was touched |
+| `INFO: ... has no detectable signatures; nothing to do.` | The initial probe found no signatures | Run ends (exit 0) |
+| `INFO: ... verified clean after zpool labelclear.` / `INFO: ... verified clean after wipefs.` / `INFO: ... verified clean after dd.` | A ladder step sufficed; later steps are skipped | Informational |
+| `WARN: wipefs is not available; falling back to dd.` | `wipefs` is missing from the system | The ladder jumps to `dd` |
+| `WARN: Signatures remain on ...; falling back to dd.` | The probe still lists signatures after `labelclear`/`wipefs` | The ladder continues with `dd` |
+| `WARN: Could not determine a usable size for ...; skipping dd on it.` | The node's size could not be read (or is under 2 MiB) | That node is skipped; others continue |
+| `WARN: Could not re-read the partition table of ... Run partprobe ... (or rescan-storage, or reboot) before reusing the disk.` | No partition-table re-read tool could run after the `dd` wipe | Run `partprobe` manually; stale partition nodes may linger |
+| `WARN: ... still shows signatures after dd; it may be in use or faulty.` | The post-`dd` probe still lists signatures | Script aborts (exit 8); inspect the device |
+| `INFO: ... wiped by dd; verification is unavailable (no wipefs) — re-check the device before reuse.` | `dd` completed but no probe tool exists to confirm cleanliness | Informational |
+| `INFO: Wipe complete on ... (methods: ...).` | Final outcome naming every method that ran | Informational |
+
 ### [zfsreadthru](../commands-and-modules/commands.md#zfsreadthru)
 
 Reads a dataset's data back from disk (scrub-like read pass through the oldest snapshot, then incrementals).
@@ -1668,13 +1695,20 @@ Repository layer for the disk inventory (lsblk parsing and boot-disk hiding).
 
 ### [disk_actions](../commands-and-modules/python-modules.md#disk_actionspy)
 
-GUI Disks tab SMART actions.
+GUI Disks tab SMART actions and the Wipe Labels handler.
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `WARN: Select a disk to view SMART details` | No disk row selected | Action aborted |
 | `WARN: SMART details unavailable for ...` | The details query returned empty or n/a | Dump aborted |
 | `INFO: SMART details for ...:` | Header of the smartctl output dump | Informational |
+| `WARN: Disk wipe is available only on the storage host` | Wipe Labels invoked on a two-node compute host | Action aborted |
+| `WARN: Dataset runner not available` / `WARN: A dataset action is already running` | Shared gate wording (also used by pool-growth handlers) | Action aborted |
+| `WARN: Select a disk to wipe` | No disk row selected | Action aborted |
+| `WARN: ... is not in the disk inventory; refresh and retry` | The selected row is not in the cached inventory | Action aborted |
+| `WARN: ... cannot be wiped: ...` | The selection is not inactive (itself, its parent, or a sibling belongs to an imported pool) | Action aborted |
+| `WARN: Could not scan importable pools: ...` | `list_importable_pool_devices` raised; the wipe dialog opens with no importable-pool warning | Informational |
+| `INFO: Wipe cancelled for ...` / `WARN: Wipe failed for ... (rc=...)` / `INFO: Wipe complete on ...` | Runner step outcome for the `zfswipe` BashStep | Informational / inspect the step log |
 
 ### [disk_surface_test](../commands-and-modules/python-modules.md#disk_surface_testpy)
 

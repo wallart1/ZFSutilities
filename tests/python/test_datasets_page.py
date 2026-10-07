@@ -167,6 +167,22 @@ class TestRefreshDatasetsPage(unittest.TestCase):
         self.assertEqual(app.datasets_store._rows[2]["values"][0], "backup")
         app.datasets_summary_label.set_text.assert_called_once_with("2 datasets")
 
+    def test_root_rows_are_creation_first(self):
+        # The Creation column leads the row: snapshot names embed UTC
+        # instants, but the GUI stays a local-clock human surface, and the
+        # leading creation column is where the eye lands first.
+        app = self._make_app()
+        with (
+            patch.object(dp, "get_expanded_rows", return_value=set()),
+            patch.object(dp, "restore_expanded_rows"),
+        ):
+            dp.refresh_datasets_page(app)
+
+        root_row = app.datasets_store._rows[0]["values"]
+        self.assertEqual(root_row[0], "tank")
+        self.assertEqual(root_row[1], "Mon Jan 1 00:00 2024")
+        self.assertEqual(root_row[2], "filesystem")
+
     def test_pool_filter_restricts_list(self):
         app = self._make_app()
         with (

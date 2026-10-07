@@ -81,7 +81,7 @@ narrow the daily backup to the same subtree as the offsite backups.
 ## Snapshot Label and Holds
 
 Offsite snapshots use the label `offsite` and bucket `s`
-(e.g., `@offsite-2026-02-21T10:00-05:00-s`).
+(e.g., `@offsite-2026-02-21T15:00Z-s`).
 
 Holds named `offsite-<counterpart_pool>` are placed on both source and
 destination snapshots to prevent accidental deletion. These holds also act as
