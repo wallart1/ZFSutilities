@@ -1183,6 +1183,7 @@ Sourced library providing lock acquire/check/release. On conflict, interactive c
 | `WARN: Failed to create lock file ...` / `WARN: Failed to install lock file ...` | The lock file could not be written | Check the locks directory |
 | `WARN: Cannot release lock owned by PID ... (we are ...)` | Ownership gate: another process holds the lock id | Release from the owning process or use force |
 | `FATAL: Lock conflict on '...' in non-interactive mode[; waited ...s]. Aborting.` | Headless gate: a conflict persists and no interactive resolution is possible | The operation aborts; resolve the lock and rerun |
+| `INFO`/`WARN: Lock conflict on '...': held by dataset='...' type=... pid=... script='...' acquired='...' description='...' [host='...']` | Holder details for the lock(s) blocking a headless acquisition — logged once at INFO when the headless wait starts, and again at WARN immediately before the abort | Diagnostic: identifies the blocking holder(s) in the session log; remote conflicts carry `host=` and may omit `acquired`/`description` |
 | `INFO: Removed stale lock on ...; retrying acquisition.` | The conflicting lock's holder is dead; removed without asking | Informational |
 | `WARN: Force-released [remote ]lock on ... (was held by ... PID ...[ on ...])` | The operator force-released a lock via the F menu choice | Audit note; the acquisition retries |
 

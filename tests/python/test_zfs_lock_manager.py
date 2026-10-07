@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -67,8 +68,12 @@ class TestRemoteAcquire(unittest.TestCase):
         proc = self._make_popen("CONFLICT dataset=threeamigos/pve type=w pid=123 script=test")
         with patch("zfs_lock_manager.subprocess.Popen", return_value=proc):
             with patch("zfs_lock_manager.select.select", return_value=([proc.stdout], [], [])):
-                with self.assertRaises(RuntimeError):
+                with self.assertRaises(RuntimeError) as ctx:
                     zlm.acquire("threeamigos/pve", "w")
+        self.assertIn(
+            "CONFLICT dataset=threeamigos/pve type=w pid=123 script=test",
+            str(ctx.exception),
+        )
         proc.kill.assert_called()
 
     @patch.dict(os.environ, {"ZFSLOCK_REMOTE_BIN": "/usr/local/lib/zfsutilities/current/bin"})
@@ -102,14 +107,20 @@ class TestRemoteCheckAndList(unittest.TestCase):
     def test_remote_check_returns_false_when_locked(self):
         result = MagicMock()
         result.returncode = 0
-        result.stdout = '{"available": false, "conflict": {"dataset":"threeamigos/pve","type":"w","pid":"123","script":"test","acquired":"","description":""}}\n'
+        result.stdout = (
+            '{"available": false, "conflict": {"dataset":"threeamigos/pve",'
+            '"type":"w","pid":"123","script":"test","acquired":"","description":""}}\n'
+        )
         with patch("zfs_lock_manager.subprocess.run", return_value=result):
             self.assertFalse(zlm.check("threeamigos/pve", "w"))
 
     def test_remote_list_merges_with_local(self):
         result = MagicMock()
         result.returncode = 0
-        result.stdout = '[\n  {"dataset":"threeamigos/pve","type":"w","pid":"123","script":"test","acquired":"2026-01-01T00:00:00","description":""}\n]\n'
+        result.stdout = (
+            '[\n  {"dataset":"threeamigos/pve","type":"w","pid":"123","script":"test",'
+            '"acquired":"2026-01-01T00:00:00","description":""}\n]\n'
+        )
         with patch("zfs_lock_manager.subprocess.run", return_value=result):
             locks = zlm.list_active_locks()
 
@@ -216,6 +227,90 @@ class TestStaleLockUnverifiableScript(unittest.TestCase):
             self.assertTrue(os.path.isfile(lock_id))
         finally:
             zlm.release(lock_id)
+
+
+class TestLocalConflictDetails(unittest.TestCase):
+    """A local conflict error must name the blocking holder(s)."""
+
+    def setUp(self):
+        self.lock_dir = tempfile.mkdtemp()
+        self._orig_dir = zlm.ZFSLOCK_DIR
+        zlm.ZFSLOCK_DIR = self.lock_dir
+        zlm.ZFSLOCK_LOCKS_DIR = os.path.join(self.lock_dir, ".locks")
+        zlm.ZFSLOCK_PIDS_DIR = os.path.join(self.lock_dir, ".pids")
+        os.makedirs(zlm.ZFSLOCK_LOCKS_DIR, exist_ok=True)
+        os.makedirs(zlm.ZFSLOCK_PIDS_DIR, exist_ok=True)
+        # localpool is not a storage-owned pool, so the lock stays local.
+        zlm._node_config_cache = _TWO_NODE_CFG
+        zlm._remote_holds.clear()
+        zlm._lock_refcounts.clear()
+
+    def tearDown(self):
+        zlm.ZFSLOCK_DIR = self._orig_dir
+        zlm.ZFSLOCK_LOCKS_DIR = os.path.join(self._orig_dir, ".locks")
+        zlm.ZFSLOCK_PIDS_DIR = os.path.join(self._orig_dir, ".pids")
+        zlm._node_config_cache = None
+        zlm._remote_holds.clear()
+        zlm._lock_refcounts.clear()
+
+    def test_local_conflict_message_names_holder(self):
+        # A live holder whose script appears in its cmdline, so stale
+        # cleanup keeps the fabricated lock in place.
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(holder.terminate)
+        self.addCleanup(holder.wait)
+        lockfile = zlm._lock_file("localpool/fs")
+        data = {
+            "dataset": "localpool/fs",
+            "type": "w",
+            "pid": holder.pid,
+            "script": "sleep",
+            "acquired": "2026-10-06T00:25:37-04:00",
+            "description": "holder desc",
+        }
+        with open(lockfile, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.write("\n")
+
+        with self.assertRaises(RuntimeError) as ctx:
+            zlm.acquire("localpool/fs", "w", "contender")
+        msg = str(ctx.exception)
+        self.assertIn("cannot acquire w lock on localpool/fs", msg)
+        self.assertIn("held by dataset='localpool/fs'", msg)
+        self.assertIn("type=write", msg)
+        self.assertIn(f"pid={holder.pid}", msg)
+        self.assertIn("script='sleep'", msg)
+        self.assertIn("description='holder desc'", msg)
+
+    def test_local_conflict_message_names_every_holder(self):
+        holders = [subprocess.Popen(["sleep", "60"]) for _ in range(2)]
+        for proc in holders:
+            self.addCleanup(proc.terminate)
+            self.addCleanup(proc.wait)
+        # One ancestor and one descendant lock both block a write on the
+        # requested dataset in between.
+        blocking = (
+            ("localpool/parent", holders[0]),
+            ("localpool/parent/mid/leaf", holders[1]),
+        )
+        for dataset, proc in blocking:
+            data = {
+                "dataset": dataset,
+                "type": "w",
+                "pid": proc.pid,
+                "script": "sleep",
+                "acquired": "2026-10-06T00:25:37-04:00",
+                "description": f"{dataset} holder",
+            }
+            with open(zlm._lock_file(dataset), "w", encoding="utf-8") as f:
+                json.dump(data, f)
+                f.write("\n")
+
+        with self.assertRaises(RuntimeError) as ctx:
+            zlm.acquire("localpool/parent/mid", "w", "contender")
+        msg = str(ctx.exception)
+        self.assertIn("dataset='localpool/parent'", msg)
+        self.assertIn("dataset='localpool/parent/mid/leaf'", msg)
 
 
 if __name__ == "__main__":

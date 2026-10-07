@@ -260,6 +260,56 @@ def _pool(dataset: str) -> str | None:
     return None
 
 
+def _conflicting_lock_holders(dataset: str, lock_type: str) -> list[dict]:
+    """Return holder details for every lock blocking *lock_type* on *dataset*.
+
+    Mirrors the hierarchy walk in check() (same dataset, ancestors, pool,
+    descendants) but without stopping at the first conflict, so a raised
+    conflict error can name every blocking holder.
+    """
+    type_names = {"r": "read", "w": "write", "x": "destroy"}
+    candidates: list[tuple[str, str]] = [(_lock_file(dataset), "same")]
+    candidates.extend((_lock_file(a), "ancestor") for a in _ancestors(dataset))
+    pool = _pool(dataset)
+    if pool:
+        candidates.append((_lock_file(pool), "ancestor"))
+    prefix = os.path.join(ZFSLOCK_LOCKS_DIR, f"{_encode(dataset)}%2F*.lock")
+    candidates.extend((p, "descendant") for p in glob.glob(prefix))
+
+    holders: list[dict] = []
+    for lockfile, relationship in candidates:
+        if not os.path.isfile(lockfile):
+            continue
+        existing_type = _read_field(lockfile, "type")
+        if existing_type is None:
+            continue
+        if not _hierarchy_conflict(lock_type, existing_type, relationship):
+            continue
+        holders.append(
+            {
+                "dataset": _read_field(lockfile, "dataset") or lockfile,
+                "type": type_names.get(existing_type, existing_type),
+                "pid": _read_pid(lockfile) or 0,
+                "script": _read_field(lockfile, "script") or "",
+                "acquired": _read_field(lockfile, "acquired") or "",
+                "description": _read_field(lockfile, "description") or "",
+            }
+        )
+    return holders
+
+
+def _format_lock_holder(holder: dict) -> str:
+    """Render one conflicting-lock holder dict as a log-friendly fragment."""
+    part = f"held by dataset={holder['dataset']!r} type={holder['type']} pid={holder['pid']}"
+    if holder["script"]:
+        part += f" script={holder['script']!r}"
+    if holder["acquired"]:
+        part += f" acquired={holder['acquired']!r}"
+    if holder["description"]:
+        part += f" description={holder['description']!r}"
+    return part
+
+
 def _get_node_config() -> dict:
     """Return the cached node configuration."""
     global _node_config_cache
@@ -381,7 +431,9 @@ def _acquire_remote(dataset: str, lock_type: str, description: str = "") -> str:
     proc.kill()
     proc.wait()
     if line.startswith("CONFLICT"):
-        raise RuntimeError(f"conflict: cannot acquire {lock_type} lock on {dataset} on {host}")
+        raise RuntimeError(
+            f"conflict: cannot acquire {lock_type} lock on {dataset} on {host}: {line.strip()}"
+        )
     raise RuntimeError(f"remote lock acquisition failed for {dataset}: {line.strip()}")
 
 
@@ -593,6 +645,10 @@ def acquire(dataset: str, lock_type: str, description: str = "") -> str:
         # File exists but we lost the refcount; treat as fresh acquisition.
 
     if not check(dataset, lock_type):
+        holders = _conflicting_lock_holders(dataset, lock_type)
+        if holders:
+            details = "; ".join(_format_lock_holder(h) for h in holders)
+            raise RuntimeError(f"conflict: cannot acquire {lock_type} lock on {dataset}: {details}")
         raise RuntimeError(f"conflict: cannot acquire {lock_type} lock on {dataset}")
 
     timestamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")

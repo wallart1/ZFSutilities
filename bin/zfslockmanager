@@ -605,6 +605,90 @@ zfslock_check() {
     done
 }
 
+# Return 0 when the lock file exists and its type conflicts with the
+# requested type at the given hierarchy relationship. Unlike
+# _zfslock_check_file this has no side effects on zfslock_conflict_info
+# or zfslock_reentry, so it is safe for read-only reporting walks.
+_zfslock_file_conflicts() {
+    local lockfile="$1"
+    local requested_type="$2"
+    local relationship="$3"
+    local existing_type
+
+    [[ -f "$lockfile" ]] || return 1
+    existing_type=$(_zfslock_read_field "$lockfile" "type") || return 1
+    _zfslock_hierarchy_conflict "$requested_type" "$existing_type" "$relationship"
+}
+
+# Walk the same hierarchy as zfslock_check (same dataset, ancestors, pool,
+# descendants) but without stopping at the first conflict, echoing the path
+# of every lock file that blocks the requested type. Used to name every
+# blocking holder in headless conflict logs.
+_zfslock_conflicting_lockfiles() {
+    local dataset="$1"
+    local type="$2"
+    local lockfile parent dataset_encoded
+
+    lockfile=$(_zfslock_file "$dataset")
+    if _zfslock_file_conflicts "$lockfile" "$type" "same"; then
+        echo "$lockfile"
+    fi
+
+    parent="$dataset"
+    while [[ "$parent" == */* ]]; do
+        parent="${parent%/*}"
+        lockfile=$(_zfslock_file "$parent")
+        if _zfslock_file_conflicts "$lockfile" "$type" "ancestor"; then
+            echo "$lockfile"
+        fi
+    done
+
+    if [[ "$dataset" == */* ]]; then
+        local pool="${dataset%%/*}"
+        lockfile=$(_zfslock_file "$pool")
+        if _zfslock_file_conflicts "$lockfile" "$type" "ancestor"; then
+            echo "$lockfile"
+        fi
+    fi
+
+    dataset_encoded=$(_zfslock_encode "$dataset")
+    for lockfile in "$zfslock_locks_dir"/"${dataset_encoded}%2F"*.lock; do
+        [[ -f "$lockfile" ]] || continue
+        if _zfslock_file_conflicts "$lockfile" "$type" "descendant"; then
+            echo "$lockfile"
+        fi
+    done
+}
+
+# Map a lock type code to its human-readable name.
+_zfslock_type_name() {
+    case "$1" in
+        r) echo "read" ;;
+        w) echo "write" ;;
+        x) echo "destroy" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+# Render an "N seconds/minutes/hours/days ago" phrase for a lock's ISO 8601
+# acquired timestamp. Prints nothing when the timestamp is missing or
+# unparseable.
+_zfslock_relative_time() {
+    local acquired="$1"
+    local acquired_epoch diff_seconds
+    acquired_epoch=$(date -d "$acquired" +%s 2>/dev/null) || return 0
+    diff_seconds=$(($(date +%s) - acquired_epoch))
+    if [[ $diff_seconds -lt 60 ]]; then
+        echo "${diff_seconds} seconds ago"
+    elif [[ $diff_seconds -lt 3600 ]]; then
+        echo "$((diff_seconds / 60)) minutes ago"
+    elif [[ $diff_seconds -lt 86400 ]]; then
+        echo "$((diff_seconds / 3600)) hours ago"
+    else
+        echo "$((diff_seconds / 86400)) days ago"
+    fi
+}
+
 # Validate a user-supplied timing-knob value for use as a sleep/poll argument.
 # Prints the value when it is a non-negative decimal number; otherwise prints
 # the fallback. When allow_zero is not "Y" the value must also be greater than
@@ -998,6 +1082,60 @@ _zfslock_is_interactive() {
     [[ -t 0 && "$ZFSUTILITIES_HEADLESS" != "Y" ]]
 }
 
+# Log one line describing a single conflicting lock holder.
+_zfslock_log_one_conflict() {
+    local dataset="$1" lockfile="$2" severity="$3" host="${4:-}"
+    local lock_dataset lock_type lock_pid lock_script lock_acquired lock_desc
+    local relative_time detail
+
+    lock_dataset=$(_zfslock_read_field "$lockfile" "dataset") || lock_dataset=""
+    lock_type=$(_zfslock_read_field "$lockfile" "type") || lock_type=""
+    lock_pid=$(_zfslock_read_field "$lockfile" "pid") || lock_pid=""
+    lock_script=$(_zfslock_read_field "$lockfile" "script") || lock_script=""
+    lock_acquired=$(_zfslock_read_field "$lockfile" "acquired") || lock_acquired=""
+    lock_desc=$(_zfslock_read_field "$lockfile" "description") || lock_desc=""
+
+    detail="held by dataset='${lock_dataset:-$lockfile}'"
+    [[ -n "$lock_type" ]] && detail+=" type=$(_zfslock_type_name "$lock_type")"
+    [[ -n "$lock_pid" ]] && detail+=" pid=$lock_pid"
+    [[ -n "$lock_script" ]] && detail+=" script='$lock_script'"
+    if [[ -n "$lock_acquired" ]]; then
+        relative_time=$(_zfslock_relative_time "$lock_acquired")
+        detail+=" acquired='$lock_acquired'"
+        [[ -n "$relative_time" ]] && detail+=" ($relative_time)"
+    fi
+    [[ -n "$lock_desc" ]] && detail+=" description='$lock_desc'"
+    [[ -n "$host" ]] && detail+=" host='$host'"
+
+    log_msg "$severity: Lock conflict on '$dataset': $detail"
+}
+
+# Log the holder details of every lock blocking a dataset, so a headless
+# abort identifies its blocker in the session log. Local datasets walk the
+# full hierarchy (all blocking holders); remote datasets report the single
+# conflict the storage-node agent returned (already staged in
+# zfslock_conflict_info as a temporary local file).
+_zfslock_log_conflict_details() {
+    local dataset="$1"
+    local type="$2"
+    local severity="$3"
+    local lockfile remote_host
+
+    remote_host=$(_zfslock_remote_host_for_dataset "$dataset")
+    if [[ -n "$remote_host" ]]; then
+        lockfile="$zfslock_conflict_info"
+        if [[ -n "$lockfile" && -f "$lockfile" ]]; then
+            _zfslock_log_one_conflict "$dataset" "$lockfile" "$severity" "$remote_host"
+        fi
+        return 0
+    fi
+
+    while IFS= read -r lockfile; do
+        [[ -n "$lockfile" ]] || continue
+        _zfslock_log_one_conflict "$dataset" "$lockfile" "$severity" ""
+    done < <(_zfslock_conflicting_lockfiles "$dataset" "$type")
+}
+
 # Interactive conflict resolution
 # Returns: 0=lock acquired, 1=user aborted, 2=user skipped
 zfslock_wait_or_resolve() {
@@ -1021,6 +1159,11 @@ zfslock_wait_or_resolve() {
         _headless_deadline=$(($(date +%s) + _headless_wait_seconds))
     fi
 
+    # Holder details are logged once when the headless wait starts (the run
+    # may still succeed after waiting) and again at abort time, when the
+    # holder may have changed. Intermediate retries stay silent.
+    local _logged_initial_details=0
+
     while true; do
         # Throttle repeated acquisition attempts so a closed stdin or a
         # rapidly-reacquired lock cannot spin the CPU.
@@ -1040,9 +1183,14 @@ zfslock_wait_or_resolve() {
         # In non-interactive/headless mode, either wait for the lock or abort.
         if ! _zfslock_is_interactive; then
             if [[ -n "$_headless_deadline" ]]; then
+                if [[ $_logged_initial_details -eq 0 ]]; then
+                    _zfslock_log_conflict_details "$dataset" "$type" "INFO"
+                    _logged_initial_details=1
+                fi
                 local _now
                 _now=$(date +%s)
                 if [[ $_now -ge $_headless_deadline ]]; then
+                    _zfslock_log_conflict_details "$dataset" "$type" "WARN"
                     log_msg "FATAL: Lock conflict on '$dataset' in non-interactive mode; " \
                         "waited ${_headless_wait_seconds}s. Aborting."
                     return 1
@@ -1051,6 +1199,7 @@ zfslock_wait_or_resolve() {
                 _first_pass=1
                 continue
             fi
+            _zfslock_log_conflict_details "$dataset" "$type" "WARN"
             log_msg "FATAL: Lock conflict on '$dataset' in non-interactive mode. Aborting."
             return 1
         fi
@@ -1066,7 +1215,7 @@ zfslock_wait_or_resolve() {
 
         # Display conflict info and prompt user
         local lock_dataset lock_type lock_pid lock_script lock_acquired lock_desc
-        local relative_time
+        local relative_time type_name
 
         lock_dataset=$(_zfslock_read_field "$lockfile" "dataset")
         lock_type=$(_zfslock_read_field "$lockfile" "type")
@@ -1074,28 +1223,8 @@ zfslock_wait_or_resolve() {
         lock_script=$(_zfslock_read_field "$lockfile" "script")
         lock_acquired=$(_zfslock_read_field "$lockfile" "acquired")
         lock_desc=$(_zfslock_read_field "$lockfile" "description")
-        local acquired_epoch
-        acquired_epoch=$(date -d "$lock_acquired" +%s 2>/dev/null) || acquired_epoch=""
-        local diff_seconds
-        diff_seconds=$(($(date +%s) - acquired_epoch))
-        local relative_time
-        if [[ $diff_seconds -lt 60 ]]; then
-            relative_time="${diff_seconds} seconds ago"
-        elif [[ $diff_seconds -lt 3600 ]]; then
-            relative_time="$((diff_seconds / 60)) minutes ago"
-        elif [[ $diff_seconds -lt 86400 ]]; then
-            relative_time="$((diff_seconds / 3600)) hours ago"
-        else
-            relative_time="$((diff_seconds / 86400)) days ago"
-        fi
-
-        local type_name
-        case "$lock_type" in
-            r) type_name="read" ;;
-            w) type_name="write" ;;
-            x) type_name="destroy" ;;
-            *) type_name="$lock_type" ;;
-        esac
+        relative_time=$(_zfslock_relative_time "$lock_acquired")
+        type_name=$(_zfslock_type_name "$lock_type")
 
         echo ""
         echo "CONFLICT: A lock could not be acquired for '$dataset' because another task is using" \

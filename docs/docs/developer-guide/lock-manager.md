@@ -102,6 +102,17 @@ will wait up to that many seconds for the lock to become free before logging
 `ZFSLOCK_WAIT_INTERVAL` seconds (default 30).  `profile_runner.py` exports
 this variable for all bash steps it invokes.
 
+Headless conflicts log the blocking holder(s) so an aborted run identifies
+its blocker in its own session log: one `INFO:` detail line per holder when
+the wait starts (the run may still succeed after waiting) and one `WARN:`
+detail line per holder immediately before the `FATAL:` abort (the holder may
+have changed during the wait). Each line carries the holder's dataset, type,
+pid, script, acquired timestamp, and description. Local acquisitions walk the
+full hierarchy and name *every* blocking lock; remote (storage-node) conflicts
+report the single conflict the agent returned, tagged with `host=` and without
+`acquired`/`description` (the agent's `CONFLICT` wire line carries only
+dataset, type, pid, and script).
+
 The conflict-resolution loop also throttles repeated acquisition attempts with a
 short backoff when a conflict persists, so a closed stdin or an invalid choice
 cannot spin the CPU.

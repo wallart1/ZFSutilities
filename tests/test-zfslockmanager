@@ -547,7 +547,118 @@ test_noninteractive_abort() {
         test_fail "Expected abort rc=1 with FATAL message, got rc=$rc"
     fi
 
+    test_start "Headless immediate abort logs conflicting holder details"
+    local log_file holder_pattern
+    log_file=$(get_test_log_file)
+    holder_pattern="WARN: Lock conflict on 'test/noninteractive': "
+    holder_pattern+="held by dataset='test/noninteractive' type=write "
+    holder_pattern+="pid=[0-9][0-9]* script='[^']*' acquired='[^']*'.*description='holder'"
+    if grep -q "$holder_pattern" "$log_file"; then
+        test_pass
+    else
+        test_fail "Holder detail line missing or incomplete in test log"
+    fi
+
     _bg_lock_kill
+}
+
+# ---------------------------------------------------------------------------
+# Headless wait: holder details at wait start and at abort
+# ---------------------------------------------------------------------------
+
+test_headless_wait_logs_holder_details() {
+    echo ""
+    echo "=== Headless Wait Holder Detail Tests ==="
+    cleanup_test_locks
+
+    _bg_lock_start "test/waitdetails" "w" "holder" 3600
+    local bg_rc
+    bg_rc=$(_bg_lock_wait_rc)
+    if [[ "$bg_rc" -ne 0 ]]; then
+        _bg_lock_kill
+        test_start "Headless wait logs holder at start and at abort"
+        test_fail "Background lock could not be acquired (rc=$bg_rc)"
+        return
+    fi
+
+    test_start "Headless wait logs holder at start and at abort"
+    clear_test_log_file
+    ZFSUTILITIES_HEADLESS=Y ZFSLOCK_HEADLESS_WAIT_SECONDS=1 \
+        zfslock_wait_or_resolve "test/waitdetails" "w" "test" </dev/null >/dev/null 2>&1
+    local rc=$?
+    local log_file info_count warn_count holder_pattern fatal_pattern
+    log_file=$(get_test_log_file)
+    info_count=$(grep -c "INFO: Lock conflict on 'test/waitdetails'" "$log_file")
+    warn_count=$(grep -c "WARN: Lock conflict on 'test/waitdetails'" "$log_file")
+    holder_pattern="WARN: Lock conflict on 'test/waitdetails': "
+    holder_pattern+="held by dataset='test/waitdetails' type=write "
+    holder_pattern+="pid=[0-9][0-9]* .*description='holder'"
+    fatal_pattern="FATAL: Lock conflict on 'test/waitdetails' in non-interactive "
+    fatal_pattern+="mode;[[:space:]]*waited 1s"
+    if [[ "$rc" -eq 1 && "$info_count" -eq 1 && "$warn_count" -eq 1 ]] \
+        && grep -q "$holder_pattern" "$log_file" \
+        && grep -q "$fatal_pattern" "$log_file"; then
+        test_pass
+    else
+        test_fail "rc=$rc info=$info_count warn=$warn_count (want rc=1, 1 INFO + 1 WARN)"
+    fi
+
+    _bg_lock_kill
+}
+
+# ---------------------------------------------------------------------------
+# Headless abort with multiple simultaneous blocking holders
+# ---------------------------------------------------------------------------
+
+test_headless_multiple_holders_logged() {
+    echo ""
+    echo "=== Headless Multiple Holder Tests ==="
+    cleanup_test_locks
+
+    # Two sibling write locks; a destroy request on the parent conflicts
+    # with every descendant, so both holders must be named. (Nested holders
+    # are impossible: an ancestor w lock blocks acquiring a descendant w.)
+    _bg_lock_start "test/multi/childa" "w" "first holder" 3600
+    local first_pid=$_bg_lock_pid
+    local rc1
+    rc1=$(_bg_lock_wait_rc)
+    _bg_lock_start "test/multi/childb" "w" "second holder" 3600
+    local second_pid=$_bg_lock_pid
+    local rc2
+    rc2=$(_bg_lock_wait_rc)
+    if [[ "$rc1" -ne 0 || "$rc2" -ne 0 ]]; then
+        pkill -P "$first_pid" 2>/dev/null || true
+        kill "$first_pid" 2>/dev/null || true
+        pkill -P "$second_pid" 2>/dev/null || true
+        kill "$second_pid" 2>/dev/null || true
+        test_start "Headless abort names every blocking holder"
+        test_fail "Background lock(s) could not be acquired (rc1=$rc1 rc2=$rc2)"
+        return
+    fi
+
+    test_start "Headless abort names every blocking holder"
+    clear_test_log_file
+    ZFSUTILITIES_HEADLESS=Y zfslock_wait_or_resolve "test/multi" "x" "test" \
+        </dev/null >/dev/null 2>&1
+    local rc=$?
+    local log_file warn_count
+    log_file=$(get_test_log_file)
+    warn_count=$(grep -c "WARN: Lock conflict on 'test/multi'" "$log_file")
+    if [[ "$rc" -eq 1 && "$warn_count" -eq 2 ]] \
+        && grep -q "dataset='test/multi/childa' .*description='first holder'" "$log_file" \
+        && grep -q "dataset='test/multi/childb' .*description='second holder'" "$log_file"; then
+        test_pass
+    else
+        test_fail "Expected rc=1 and two holder lines, got rc=$rc warn_count=$warn_count"
+    fi
+
+    pkill -P "$first_pid" 2>/dev/null || true
+    kill "$first_pid" 2>/dev/null || true
+    wait "$first_pid" 2>/dev/null || true
+    pkill -P "$second_pid" 2>/dev/null || true
+    kill "$second_pid" 2>/dev/null || true
+    wait "$second_pid" 2>/dev/null || true
+    zfslock_cleanup_stale >/dev/null 2>&1 || true
 }
 
 # ---------------------------------------------------------------------------
@@ -714,6 +825,16 @@ test_wait_interval_fallback_reaches_sleep() {
         test_pass
     else
         test_fail "rc=$rc sleep_log=$(tr '\n' ' ' < "$sleep_log" 2>/dev/null)"
+    fi
+
+    test_start "Headless wait that eventually succeeds logs initial holder details"
+    local log_file info_count
+    log_file=$(get_test_log_file)
+    info_count=$(grep -c "INFO: Lock conflict on 'test/waitfb'" "$log_file")
+    if [[ "$info_count" -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Expected exactly one initial holder detail line, got $info_count"
     fi
     zfslock_release_all
     zfslock_cleanup_stale > /dev/null 2>&1 || true
@@ -976,6 +1097,23 @@ EOF
         test_fail "Expected rc=1 (conflict), got rc=$rc"
     fi
 
+    test_start "Headless remote conflict logs holder with host"
+    clear_test_log_file
+    ZFSUTILITIES_HEADLESS=Y zfslock_wait_or_resolve "remotepool/conflict" "w" "contender" \
+        </dev/null >/dev/null 2>&1
+    rc=$?
+    local holder_pattern
+    holder_pattern="WARN: Lock conflict on 'remotepool/conflict': "
+    holder_pattern+="held by dataset='remotepool/conflict' type=write "
+    holder_pattern+="pid=[0-9][0-9]*"
+    if [[ "$rc" -eq 1 ]] \
+        && grep -q "$holder_pattern" "$(get_test_log_file)" \
+        && grep -q "host='remotehost'" "$(get_test_log_file)"; then
+        test_pass
+    else
+        test_fail "Expected rc=1 with remote holder detail line including host field"
+    fi
+
     kill "$holder_pid" 2>/dev/null
     wait "$holder_pid" 2>/dev/null
 
@@ -1081,6 +1219,8 @@ test_stale_detection
 test_concurrent_access
 test_path_encoding
 test_noninteractive_abort
+test_headless_wait_logs_holder_details
+test_headless_multiple_holders_logged
 test_stale_conflict_retry
 test_conflict_message
 test_multi_lock_acquisition

@@ -1646,3 +1646,55 @@ consumer parses legacy offset names and Z names; nothing migrates.
 - Step 6: codebase FROZEN. Working tree = the two work items (snapshot-name
   UTC remediation; Disks page Wipe Labels) + this wrap-up's PREEXISTING
   fixes + notes updates. Awaiting version/commit instructions.
+
+## 2026-10-07 — Lock-conflict holder details (changeset + six-step wrap-up)
+
+- Headless lock conflicts now identify their blocking holder(s) in the
+  session log, closing the forensic gap from the 2026-10-06 morning
+  dailybackup rc=9 incident (headless FATAL named no holder; forensics
+  needed root-only /run/lock JSON plus cross-session-log spelunking).
+- bin/zfslockmanager: `_zfslock_conflicting_lockfiles` walks the full
+  hierarchy (same dataset, ancestors, pool, descendants) naming EVERY
+  blocking lock — side-effect-free `_zfslock_file_conflicts` so the
+  reporting walk leaves zfslock_conflict_info/reentry untouched.
+  `_zfslock_log_one_conflict` renders dataset/type/pid/script/acquired
+  (ISO + "N units ago" via `_zfslock_relative_time`) and description,
+  with type names via `_zfslock_type_name`; both helpers were extracted
+  from the interactive conflict prompt, whose behavior is unchanged.
+  `_zfslock_log_conflict_details` logs INFO once when the headless wait
+  starts (run may still succeed) and WARN immediately before the FATAL
+  abort (holder may have changed); intermediate retries stay silent.
+  Remote conflicts log the single agent-staged holder with host= — the
+  CONFLICT wire line carries only dataset/type/pid/script (verified
+  against `_zfslock_remote_acquire` staging), so acquired/description
+  are absent there.
+- python/zfs_lock_manager.py: local acquire()'s conflict RuntimeError
+  names every holder (`_conflicting_lock_holders` mirrors the check()
+  walk without early stop; `_format_lock_holder` renders); remote
+  `_acquire_remote` conflict errors embed the agent's CONFLICT line.
+- Tests: bash suite adds immediate-abort holder line, wait-start INFO +
+  abort WARN + FATAL, two-descendant multi-holder naming, success path
+  logging exactly one INFO (folded into the wait-interval fallback
+  test), and the remote host= line. Python suite pins the remote
+  CONFLICT embed plus local single-holder (all fields) and
+  ancestor+descendant every-holder cases (fabricated lock files with
+  live sleep PIDs so stale cleanup keeps them).
+- Docs: developer-guide/lock-manager.md holder-detail paragraph;
+  messages/index.md one new row for the INFO/WARN detail lines.
+- Wrap-up (six-step, 2026-10-07): standards — rewrapped six new
+  overlong assertion lines in tests/test-zfslockmanager (grep patterns
+  rebuilt with `+=` string appends; a backslash continuation inside the
+  quoted string would embed the next line's leading whitespace and
+  change the pattern); fixed two PRE-EXISTING overlong mock-JSON lines
+  in tests/python/test_zfs_lock_manager.py via implicit concatenation
+  (file already in changeset scope; disclosed in report). shellcheck
+  (documented invocation) and ruff check/format clean; 100-col limit
+  verified on every changed file. Test review — dataset_actions'
+  conflict-message assertions are producer-independent mock
+  side_effects, unaffected by the longer real message; no
+  missing/obsolete tests found. Docs site rebuilt; docs-integrity
+  green. PREEXISTING: 3 entries remain, all parked (Zensical rechecked
+  2026-10-07 — PyPI latest 0.0.68, still no 1.x; infra-vdev planning UI
+  in abeyance; itf strict-mode deferred to cycle-2 kickoff). Full suite
+  (no soaks) running in background at freeze time. Awaiting
+  version/commit instructions.

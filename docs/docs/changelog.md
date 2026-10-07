@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.118.0
+
+*Released 2026-10-07*
+
+### Added
+
+- **Lock conflicts name their holders** — when a headless (cron or GUI
+  background) run is blocked by a lock conflict, the session log now
+  identifies the blocking holder(s) instead of reporting only the bare
+  abort: one detail line per holder at INFO when the headless wait
+  starts (the run may still succeed after waiting) and one at WARN
+  immediately before the FATAL abort (the holder may have changed
+  during the wait). Each line carries the holder's dataset, lock type,
+  pid, script, acquired timestamp with a "N minutes ago" phrase, and
+  description. Local acquisitions walk the full hierarchy (same
+  dataset, ancestors, pool, descendants) and name every blocking lock;
+  remote (storage-node) conflicts report the conflict the agent
+  returned, tagged with `host=`. Python-side acquisitions (the GUI
+  path) raise conflict errors that name every blocking holder the same
+  way, and remote errors embed the agent's CONFLICT line. The
+  interactive conflict prompt is unchanged; its type-name and
+  relative-time rendering were extracted into the shared helpers the
+  new logging reuses.
+
 ## 0.117.0
 
 *Released 2026-10-06*
