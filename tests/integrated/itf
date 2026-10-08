@@ -38,7 +38,13 @@
 # Environment: ITF_DRY_RUN=1 prints guarded base commands instead of
 # executing them.
 
-set -u
+# Strict mode covers the driver's own plumbing (dispatch, preflight,
+# status, list, watch) — any unhandled error fails fast.  The journey and
+# template-build entry points below deliberately capture their rc with
+# "|| rc=$?": errexit is suppressed for their whole extent, preserving the
+# step-failure accumulation and always-finish-the-report contract
+# documented in journeys/README.md.
+set -euo pipefail
 
 ITF_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
@@ -130,7 +136,8 @@ cmd_preflight() {
 
         # Base RAM must cover the guest plus PVE itself.
         local mem_total mem_gib
-        mem_total="$(itf_read "$base" free -h 2>/dev/null | awk '/^Mem:/ {print $2}')"
+        mem_total="$(itf_read "$base" free -h 2>/dev/null | awk '/^Mem:/ {print $2}')" \
+            || mem_total=""
         mem_gib="${mem_total%Gi}"
         if [[ "$mem_gib" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
             && awk -v have="$mem_gib" -v need="$(( ITF_GUEST_MEMORY_MB / 1024 + 1 ))" \
@@ -169,7 +176,7 @@ cmd_preflight() {
         local inrange
         inrange="$(itf_qm "$base" list 2>/dev/null \
             | awk -v f="$ITF_VMID_FIRST" -v l="$ITF_VMID_LAST" \
-                'NR>1 && $1>=f && $1<=l {n++} END {print n+0}')"
+                'NR>1 && $1>=f && $1<=l {n++} END {print n+0}')" || inrange=""
         itf_step info "[$base] reserved VMIDs in use" \
             "$inrange guests in ${ITF_VMID_FIRST}-${ITF_VMID_LAST}"
 
@@ -187,7 +194,7 @@ cmd_preflight() {
         # informational (cycle-1 journeys install from scratch), present
         # but unstamped is broken.
         local tmpl_vmid tmpl_stamp
-        tmpl_vmid="$(itf_template_vmid "$base")"
+        tmpl_vmid="$(itf_template_vmid "$base")" || tmpl_vmid=""
         if [[ -n "$tmpl_vmid" ]]; then
             if tmpl_stamp="$(itf_template_stamp_read "$base" "$tmpl_vmid" 2>/dev/null)"; then
                 itf_step pass "[$base] baseline template" \
@@ -257,8 +264,9 @@ cmd_guest() {
             ;;
         list)
             local base="${1:-${ITF_BASE_HOSTS[0]}}"
+            # An unreachable base prints an empty table, not an abort.
             itf_qm "$base" list | awk -v f="$ITF_VMID_FIRST" -v l="$ITF_VMID_LAST" \
-                'NR==1 || ($1>=f && $1<=l)'
+                'NR==1 || ($1>=f && $1<=l)' || true
             ;;
         *)
             echo "itf: unknown guest subcommand: $sub" >&2
@@ -291,8 +299,8 @@ cmd_template() {
         build)
             ITF_RUN_CALLER="template:build"
             itf_report_init template-build || return 1
-            itf_template_build "$@"
-            local rc=$?
+            local rc=0
+            itf_template_build "$@" || rc=$?
             itf_report_finish || rc=1
             echo "itf: report: $ITF_RUN_DIR/report.md"
             return "$rc"
@@ -330,8 +338,8 @@ cmd_journey() {
             itf_report_init "$name" || return 1
             echo "itf: journey $name running (pid $$) — hands off guest/base" \
                 "consoles; watch safely: itf watch"
-            journey_main
-            local rc=$?
+            local rc=0
+            journey_main || rc=$?
             if (( rc != 0 )); then
                 itf_step fail "journey $name" "aborted with rc=$rc"
             fi
@@ -354,8 +362,9 @@ cmd_journey() {
 _status_print_running() {
     local run="$1" meta="$1/meta.txt"
     local pid started_raw started age
-    pid="$(awk -F': *' '/^pid:/{print $2; exit}' "$meta" 2>/dev/null)"
-    started_raw="$(awk -F': *' '/^started:/{print $2; exit}' "$meta" 2>/dev/null)"
+    pid="$(awk -F': *' '/^pid:/{print $2; exit}' "$meta" 2>/dev/null)" || pid=""
+    started_raw="$(awk -F': *' '/^started:/{print $2; exit}' "$meta" 2>/dev/null)" \
+        || started_raw=""
     started="$(date -u -d "$started_raw" +%s 2>/dev/null)" || started=""
     age=""
     if [[ "$started" =~ ^[0-9]+$ ]]; then
@@ -378,8 +387,9 @@ cmd_status() {
     for base in "${bases[@]}"; do
         echo "== $base =="
         itf_read "$base" pveversion 2>/dev/null || echo "(unreachable)"
+        # Unreachable base: header shows (unreachable); empty table, no abort.
         itf_qm "$base" list 2>/dev/null | awk -v f="$ITF_VMID_FIRST" -v l="$ITF_VMID_LAST" \
-            'NR==1 || ($1>=f && $1<=l)'
+            'NR==1 || ($1>=f && $1<=l)' || true
     done
     echo "== baseline template =="
     itf_template_status
@@ -397,7 +407,8 @@ cmd_status() {
     echo "== recent runs =="
     for run in $(ls -1t "$ITF_RUNS_DIR" 2>/dev/null | head -3); do
         local summary
-        summary="$(grep -m1 '^- total:' "$ITF_RUNS_DIR/$run/report.md" 2>/dev/null)"
+        summary="$(grep -m1 '^- total:' "$ITF_RUNS_DIR/$run/report.md" 2>/dev/null)" \
+            || summary=""
         if [[ -z "$summary" ]] \
                 && [[ "$(itf_run_state "$ITF_RUNS_DIR/$run")" == "interrupted" ]]; then
             summary="(interrupted)"

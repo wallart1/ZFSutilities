@@ -770,6 +770,24 @@ def mock_gtk(fresh=False):
     webkit_mock.UserScriptInjectionTime.START = 0
     webkit_mock.UserScriptInjectionTime.END = 1
 
+    # GLib mock: markup escaping is REAL so markup-composing helpers
+    # (gui_helpers.section_header / show_note) render actual strings under
+    # the mocks and note/header assertions see text, not MagicMock reprs.
+    # Everything else (idle_add, timeout_add, ...) stays auto-mocked.
+    def _markup_escape_text(text):
+        # Same character set as GLib.markup_escape_text; & must go first.
+        return (
+            str(text)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("'", "&apos;")
+            .replace('"', "&quot;")
+        )
+
+    glib_mock = MagicMock()
+    glib_mock.markup_escape_text = _markup_escape_text
+
     modules = {
         "gi": gi_mock,
         "gi.repository": gi_mock.repository,
@@ -777,6 +795,7 @@ def mock_gtk(fresh=False):
         "gi.repository.Pango": pango_mock,
         "gi.repository.Gdk": gdk_mock,
         "gi.repository.GObject": gobject_mock,
+        "gi.repository.GLib": glib_mock,
         "gi.repository.WebKit2": webkit_mock,
     }
 
@@ -785,6 +804,7 @@ def mock_gtk(fresh=False):
     gi_mock.repository.Pango = pango_mock
     gi_mock.repository.Gdk = gdk_mock
     gi_mock.repository.GObject = gobject_mock
+    gi_mock.repository.GLib = glib_mock
     gi_mock.repository.WebKit2 = webkit_mock
 
     # Fresh mode: evict GUI modules so imports inside the context re-bind to

@@ -477,3 +477,24 @@ class TestRetentionHandlers(unittest.TestCase):
 
     def test_on_retention_mass_delete_not_imported(self):
         self.assertFalse(hasattr(action_dispatch, "on_retention_mass_delete"))
+
+
+class TestMemoryPageSpec(unittest.TestCase):
+    """Performance page exposes Refresh and the Alignment Survey dialog."""
+
+    def test_survey_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["memory"]["buttons"]
+        self.assertIn(("Survey…", "document-properties", None), buttons)
+
+    def test_refresh_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["memory"]["buttons"]
+        self.assertIn(("Refresh", "view-refresh", None), buttons)
+
+    def test_survey_handler_wired(self):
+        handler = action_dispatch.ACTION_HANDLERS["memory"]["Survey…"]
+        self.assertIs(handler, action_dispatch.open_alignment_survey)
+        self.assertTrue(callable(handler))
+
+    def test_refresh_handler_still_wired(self):
+        handler = action_dispatch.ACTION_HANDLERS["memory"]["Refresh"]
+        self.assertIs(handler, action_dispatch.refresh_memory_page)

@@ -1199,6 +1199,14 @@ automatically while visible on a user-configurable interval, and every
 refresh redraws rolling time-series charts, so the display updates
 dynamically without any external charting dependency.
 
+The tab hosts two views behind a **Live Charts / Alignment** radio switcher
+below the refresh controls. **Live Charts** is the real-time monitor
+described in this section; **Alignment** analyses blocksize alignment
+across the device, zpool, ZFS, and VM layers and offers tuning advice (see
+[Alignment View](#alignment-view)). The selected view is remembered across
+GUI restarts, and the tab's Refresh button and auto-refresh timer refresh
+whichever view is visible.
+
 ### Data sources
 
 | Source | Feeds |
@@ -1267,11 +1275,78 @@ The **Refresh every (s)** spinner sets the auto-refresh interval
 restarted with the new interval. Like the other data tabs, the Performance
 timer only runs while the tab is visible.
 
+### Alignment View
+
+The **Alignment** view examines the blocksize stack — physical disk →
+zpool (`ashift`) → ZFS dataset (`recordsize` / `volblocksize`) → VM disk
+options — and reports where neighbouring layers disagree, plus tuning
+recommendations drawn from **two bases**:
+
+- **Observed workload**: since-boot request-size histograms
+  (`zpool iostat -r`, per pool and IO class), ARC demand/prefetch
+  hit-rate readouts, and the prefetcher's own vote on how sequential the
+  workload is (the classification approach is inspired by Richard
+  Elling's `kstat-analyzer` from zfs-linux-tools; the rules and thresholds
+  here are this project's own).
+- **Your survey**: the workload you *declare* for a dataset via the
+  **Survey…** button (a workload-profile name per dataset), which sharpens
+  advice when observed traffic is thin — for example on a freshly built
+  pool.
+
+Everything in this view is **advisory only**: it never changes pool or
+dataset properties. `ashift` and `volblocksize` are fixed at creation
+time; `recordsize` changes go through Workload profiles on the Datasets
+tab or Migrate Pool, which this view points at rather than replacing.
+
+The view is built from four sections, refreshed independently of the
+charts view:
+
+- **Memory-tier Observations (since boot)**: ARC demand-data /
+  demand-metadata / prefetch-data hit rates, the prefetcher hit rate,
+  ghost hits as a share of real hits, the share of evictions eligible for
+  L2ARC, and the average L2 hit size (a blocksize-adjacent readout).
+- **Alignment Chain**: one table row per layer — each pool's configured
+  and effective `ashift`, each member disk's logical/physical sector
+  geometry (512e advanced-format disks are called out), each dataset's
+  `recordsize` or `volblocksize` with its property source, and each
+  `vm-<id>-disk-<n>` zvol's PVE disk-line options (`bus`, `discard`,
+  `iothread`, `secs=…`).
+- **Findings & Recommendations**: severity-marked rows (✓ OK / • info /
+  ⚠ WARN) from the analysis rules — for example an `ashift` block smaller
+  than a member's physical sector (every device write becomes a
+  read-modify-write), a `recordsize`/`volblocksize` below the `ashift`
+  block (records padded up), a declared-survey profile whose recordsize
+  disagrees with the effective one, or a dominant observed sync request
+  size far below the dataset's blocksize.
+- **Workload (since boot)**: per pool, the classifier verdict
+  (sequential / random-sync / mixed / insufficient traffic) with its
+  confidence, the dominant sync and overall request sizes, total
+  operations, and the prefetcher hit rate.
+
+Like the charts view, each data source degrades on its own with a note
+naming what is missing: request-size histograms, ARC/prefetcher kstats,
+zfs/zpool reads, and PVE VM configs. The last one matters on two-node
+installs: the GUI runs on the storage node, but `/etc/pve/qemu-server`
+lives on the compute node, so VM-layer options are only read on
+single-node installs and otherwise noted as unavailable.
+
+### Survey dialog
+
+**Survey…** (always enabled on the Performance tab) opens a small dialog
+for the survey half of the recommendation basis: pick a dataset (any
+filesystem or volume from the last Alignment-view sample) and a declared
+workload — a workload-profile name, or **(not surveyed)** to clear the
+entry — then **OK** to save. The survey persists in the config file
+(`alignment_survey`) and the view refreshes immediately so the findings
+pick up the new declaration. Until the Alignment view has collected at
+least one sample, the dialog explains that instead.
+
 ### Actions
 
 | Button          | Behavior                                                              |
 | --------------- | -------------------------------------------------------------------- |
 | **Refresh**     | Collect a fresh sample immediately, outside the auto-refresh cadence |
+| **Survey…**     | Open the workload survey dialog for the Alignment view (see above)   |
 
 ---
 

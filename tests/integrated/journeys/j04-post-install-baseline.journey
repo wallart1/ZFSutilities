@@ -55,7 +55,8 @@ journey_main() {
     pool_script="$ITF_RUN_DIR/guest-pools.sh"
     cat > "$pool_script" <<'EOF'
 #!/bin/bash
-# The user recipe from docs/docs/developer-guide/testing.md on /dev/sdb.
+# The user recipe from docs/docs/developer-guide/testing.md on /dev/sdb,
+# plus a udev settle the documented recipe lacks.
 set -e
 # parted/partprobe are not part of a base Debian install.
 apt-get install -y parted
@@ -66,6 +67,17 @@ for i in {1..15}; do
     parted -a optimal -s /dev/sdb mkpart primary "${start}" "${end}"
 done
 partprobe /dev/sdb
+# udev creates the partition nodes asynchronously after partprobe, so an
+# immediate zpool create races them ("cannot resolve path '/dev/sdbN'";
+# run-20261007-152717-j04-post-install-baseline).  Settle, then wait
+# (bounded) for the last partition node; the final test fails cleanly if
+# it never appears.
+udevadm settle --timeout=30 || true
+for i in $(seq 1 30); do
+    [[ -e /dev/sdb15 ]] && break
+    sleep 1
+done
+[[ -e /dev/sdb15 ]]
 zpool create -f zfstest1 raidz1 /dev/sdb1 /dev/sdb2 /dev/sdb3 /dev/sdb4 /dev/sdb5
 zpool create -f zfstest2 raidz1 /dev/sdb6 /dev/sdb7 /dev/sdb8 /dev/sdb9 /dev/sdb10
 zpool create -f zfstest3 raidz1 /dev/sdb11 /dev/sdb12 /dev/sdb13 /dev/sdb14 /dev/sdb15

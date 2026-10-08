@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.119.0
+
+*Released 2026-10-08*
+
+### Added
+
+- **Performance Alignment view** — the Performance tab gains a second
+  view behind a **Live Charts / Alignment** radio switcher (selection
+  remembered across GUI restarts; the tab's Refresh button and
+  auto-refresh timer refresh whichever view is visible). The Alignment
+  view examines the whole blocksize stack — member-disk sector geometry,
+  pool `ashift` (configured and effective), dataset
+  `recordsize`/`volblocksize` with property sources, and PVE VM disk
+  options — and reports where neighbouring layers disagree, with
+  severity-marked findings and tuning recommendations drawn from two
+  bases: the **observed workload** (since-boot `zpool iostat -r`
+  request-size histograms, ARC and prefetcher kstats, and a per-pool
+  workload classifier with confidence) and **your survey** (the new
+  Survey… button — one declared workload-profile name per dataset,
+  persisted in the config file), which sharpens advice when observed
+  traffic is thin. Everything is **advisory only**: the view never
+  changes pool or dataset properties; `ashift` and `volblocksize` are
+  creation-only and recordsize changes are pointed at Workload profiles
+  and Migrate Pool. Each data source degrades on its own with a note
+  naming what is missing (two-node installs: PVE VM configs live on the
+  compute node, so VM-layer options are noted as unavailable). Backed by
+  new modules `alignment_stats.py` (data layer),
+  `alignment_analysis.py` (pure rules; thresholds are named module
+  constants), `alignment_page.py` (view), and `alignment_dialogs.py`
+  (survey dialog), with `ZfsRepository.dataset_block_properties` feeding
+  the dataset half.
+
+### Changed
+
+- **`itf` driver strict mode** — the driver's own plumbing (dispatch,
+  preflight, status, list, watch) now runs under `set -euo pipefail`
+  and fails fast on unhandled errors; the journey and template-build
+  entry points keep their failure-accumulation and
+  always-finish-the-report contract through explicit rc capture.
+  Live-but-fallible reads (unreachable base host, missing template,
+  empty tables) report empty/(unreachable) instead of aborting. A new
+  `tests/test-itf-driver` suite pins the dispatch contracts against a
+  fixture config whose base host is under the reserved `.invalid` TLD.
+
+- **Shared GUI helpers promoted to `gui_helpers`** — the Performance
+  page's private section-header, note-label, and row-reconcile helpers
+  are now public functions in `gui_helpers` (shared by both Performance
+  views), and they Pango-escape caller text: a bare `&` in a title
+  previously aborted markup parsing and rendered an empty label.
+
+### Fixed
+
+- **`itf` template upgrade-command truncation** — a commit-time line
+  rewrap had split the guest OS-upgrade command into several quoted
+  arguments, truncating it at `-qq` so the guest ran `apt-get` with no
+  command word; the command is now assembled in one variable, and a
+  unit test pins the single-argument contract.
+
+- **Journey exit-trap rc rewrite** — under the driver's strict mode, an
+  EXIT-trap handler ending in a false guard rewrote a green journey
+  run's exit code to 1; the cleanup handler now ends explicitly with
+  success.
+
+- **Journey pool-recipe udev race** — the guest pool script now runs
+  `udevadm settle` and waits (bounded) for the last partition node
+  before `zpool create`, instead of racing asynchronous partition-node
+  creation after `partprobe`.
+
 ## 0.118.0
 
 *Released 2026-10-07*

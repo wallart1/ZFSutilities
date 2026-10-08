@@ -16,6 +16,7 @@ import golden
 from test_support import capture_logs, mock_subprocess, normalize_repo_root
 from zfs_repository import (
     AshiftInfo,
+    DatasetBlockRow,
     HoldRow,
     ImportablePoolCache,
     LoopPartition,
@@ -373,6 +374,49 @@ class TestZfsRepositoryWrites(unittest.TestCase):
         repo = ZfsRepository(sudo=False)
         repo._run = lambda *a, **k: result
         self.assertEqual(repo.pool_status("tank"), "status text")
+
+
+class TestDatasetBlockProperties(unittest.TestCase):
+    """dataset_block_properties parses the recursive zfs get walk."""
+
+    def _repo(self, stdout):
+        result = subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: result
+        return repo
+
+    def test_parses_rows(self):
+        stdout = (
+            "fivebays\trecordsize\t1M\tlocal\n"
+            "fivebays\tvolblocksize\t-\t-\n"
+            "fivebays/proxmox\trecordsize\t128K\tinherited from fivebays\n"
+            "fivebays/proxmox/vm-201-disk-0\tvolblocksize\t16K\t-\n"
+        )
+        rows = self._repo(stdout).dataset_block_properties("fivebays")
+        self.assertEqual(
+            rows,
+            [
+                DatasetBlockRow("fivebays", "recordsize", "1M", "local"),
+                DatasetBlockRow("fivebays", "volblocksize", "-", "-"),
+                DatasetBlockRow(
+                    "fivebays/proxmox", "recordsize", "128K", "inherited from fivebays"
+                ),
+                DatasetBlockRow("fivebays/proxmox/vm-201-disk-0", "volblocksize", "16K", "-"),
+            ],
+        )
+
+    def test_ignores_blank_and_short_lines(self):
+        stdout = "\nfivebays\trecordsize\t128K\nnot-enough-columns\n"
+        rows = self._repo(stdout).dataset_block_properties("fivebays")
+        self.assertEqual(rows, [])
+
+    def test_raises_on_command_failure(self):
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, "zfs get")
+        )
+        with self.assertRaises(subprocess.CalledProcessError):
+            repo.dataset_block_properties("fivebays")
 
 
 class TestZfsRepositorySudo(unittest.TestCase):

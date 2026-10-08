@@ -98,6 +98,9 @@ class TestCreateMemoryPage(unittest.TestCase):
             self.assertIsNotNone(app._memory_slog_labels)
             self.assertIsNotNone(app._memory_l2_store)
             self.assertIsNotNone(app._memory_slog_store)
+            # The page hosts both Performance views behind the switcher.
+            self.assertEqual(set(app._memory_view_radios), {"charts", "alignment"})
+            self.assertIsNotNone(app._memory_view_stack)
             # Stores must not walk mock iters (reconcile would loop forever).
             self.assertIsNone(app._memory_sample)
             # The page is titled Performance (the sidebar tab name). Label is
@@ -126,9 +129,17 @@ class TestCreateMemoryPage(unittest.TestCase):
             app = _make_app()
             mp.create_memory_page(app)
             calls = app._ui_state.bind_treeview.call_args_list
+            # The Alignment view (second Performance view) binds its three
+            # tables first, then the charts view's L2ARC and SLOG tables.
             self.assertEqual(
                 [(c.args[0], c.args[1]) for c in calls],
-                [(views[0], "memory_l2_view"), (views[1], "memory_slog_view")],
+                [
+                    (views[0], "alignment_chain_view"),
+                    (views[1], "alignment_findings_view"),
+                    (views[2], "alignment_workload_view"),
+                    (views[3], "memory_l2_view"),
+                    (views[4], "memory_slog_view"),
+                ],
             )
 
     def test_spin_defaults_from_config(self):

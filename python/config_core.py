@@ -167,6 +167,9 @@ UI_STATE_DEFAULTS = {
         "zoom": 1.0,
         "theme": "default",
     },
+    "performance_view": {
+        "view": "charts",
+    },
     "treeview_columns": {},
     "paned_positions": {},
     "font_sizes": {},

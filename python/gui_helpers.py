@@ -291,6 +291,76 @@ def configure_treeview_column(col, width=None, min_width=20, resizable=True):
         col.set_resizable(True)
 
 
+def section_header(text, subtitle=""):
+    """Return a bold section title label with optional dimmed subtitle.
+
+    *text* and *subtitle* are plain strings: both are Pango-escaped
+    before being embedded in markup, so titles may carry &, <, or >
+    (e.g. "Findings & Recommendations") without breaking the parser.
+    """
+    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    title = Gtk.Label()
+    title.set_markup(f"<b>{GLib.markup_escape_text(text)}</b>")
+    title.set_halign(Gtk.Align.START)
+    box.pack_start(title, False, False, 0)
+    if subtitle:
+        sub = Gtk.Label()
+        sub.set_markup(f"<small><i>{GLib.markup_escape_text(subtitle)}</i></small>")
+        sub.set_halign(Gtk.Align.START)
+        box.pack_start(sub, False, False, 0)
+    return box
+
+
+def note_label():
+    """Return a hidden italic note label (availability placeholders)."""
+    label = Gtk.Label()
+    label.set_halign(Gtk.Align.START)
+    label.set_no_show_all(True)
+    label.hide()
+    return label
+
+
+def show_note(label, text):
+    """Show *label* with italic plain *text* (the availability-note pattern).
+
+    The text is Pango-escaped, so ampersands and angle brackets render
+    literally instead of aborting markup parsing.
+    """
+    label.set_markup(f"<i>{GLib.markup_escape_text(text)}</i>")
+    label.show()
+
+
+def set_text_if_changed(label, text):
+    """Update a label only when the text changed (avoids flicker)."""
+    if label.get_text() != text:
+        label.set_text(text)
+
+
+def reconcile_rows(store, new_rows):
+    """Update a ListStore in place (flicker-free).
+
+    Rows are keyed on their first two columns (pool, vdev) so multiple
+    vdevs of one pool stay distinct.
+    """
+    existing = {}
+    tree_iter = store.get_iter_first()
+    while tree_iter:
+        key = (store.get_value(tree_iter, 0), store.get_value(tree_iter, 1))
+        existing[key] = tree_iter
+        tree_iter = store.iter_next(tree_iter)
+    for key in list(existing):
+        if key not in new_rows:
+            store.remove(existing.pop(key))
+    for key, row in new_rows.items():
+        if key in existing:
+            tree_iter = existing[key]
+            for col_idx, val in enumerate(row):
+                if store.get_value(tree_iter, col_idx) != val:
+                    store.set_value(tree_iter, col_idx, val)
+        else:
+            store.append(list(row))
+
+
 def setup_row_scroll(scrolled_window, treeview):
     """Set the scroll step increment to match the TreeView row height.
 

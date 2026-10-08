@@ -547,6 +547,35 @@ class TestWorkloadProfiles(unittest.TestCase):
             self.assertNotIn("custom", config["workload_profiles"])
 
 
+class TestAlignmentSurvey(unittest.TestCase):
+    """Alignment-view workload survey config helpers."""
+
+    def test_get_alignment_survey_empty_by_default(self):
+        self.assertEqual(feature_config.get_alignment_survey({}), {})
+
+    def test_get_alignment_survey_returns_copy(self):
+        config = {"alignment_survey": {"fivebays/db": "database-postgresql"}}
+        survey = feature_config.get_alignment_survey(config)
+        survey["fivebays/db"] = "mutated"
+        self.assertEqual(
+            feature_config.get_alignment_survey(config)["fivebays/db"],
+            "database-postgresql",
+        )
+
+    def test_save_alignment_survey(self):
+        with temp_config_dir():
+            config = {}
+            survey = {"fivebays/db": "database-postgresql", "fivebays/media": "media"}
+            feature_config.save_alignment_survey(config, survey)
+            self.assertEqual(feature_config.get_alignment_survey(config), survey)
+
+    def test_save_alignment_survey_rejects_non_dict(self):
+        with temp_config_dir():
+            config = {}
+            with self.assertRaises(TypeError):
+                feature_config.save_alignment_survey(config, ["not", "a", "dict"])
+
+
 class TestPoolProfiles(unittest.TestCase):
     """Pool profile config helpers."""
 

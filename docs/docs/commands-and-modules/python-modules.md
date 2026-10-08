@@ -103,6 +103,7 @@ the GUI tabs and the bash scripts.
 | `delete_workload_profile()` / `reset_workload_profiles()`                    | Remove/reset workload profiles                                  |
 | `get_pool_profiles()` / `save_pool_profiles()`                               | Pool profile config (seeded on first read)                      |
 | `delete_pool_profile()` / `reset_pool_profiles()`                            | Remove/reset pool profiles (built-ins guarded)                  |
+| `get_alignment_survey()` / `save_alignment_survey()`                         | Alignment-view workload survey `{dataset: profile name}`        |
 | `get_archive_path()` / `save_archive_path()`                                 | Offsite archive path                                            |
 | `get_prune_label()` / `save_prune_label()`                                   | Global retention prune label                                    |
 | `get_prune_pools_order()` / `save_prune_pools_order()`                       | Retention Prune pool order                                      |
@@ -307,6 +308,7 @@ and tests easy to mock.
 | `DatasetRow`    | One row from `zfs list -H -o name,creation,type,used,avail,refer,origin,clones,mounted`                 |
 | `SnapshotRow`   | One row from `zfs list -t snapshot -H -o ...`                                                           |
 | `HoldRow`       | One row from `zfs holds -H <snapshot>`                                                                  |
+| `DatasetBlockRow` | One row from `zfs get -H -r -t filesystem,volume recordsize,volblocksize` (name, property, value, source) |
 | `LoopPartition` | One mountable entry on a loop device backing a zvol (partition or bare device, with/without filesystem) |
 | `ZfsRepository` | Wraps all `zfs`/`zpool` subprocess commands                                                             |
 
@@ -319,6 +321,7 @@ and tests easy to mock.
 | `zvol_device_path(dataset)`              | Return the `/dev/zvol/…` block-device path for a ZFS volume                                                                                            |
 | `get_property(dataset, prop)`            | Value of a single ZFS property                                                                                                                         |
 | `get_properties(dataset, props)`         | Values for a list of ZFS properties; missing properties return `"-"`                                                                                   |
+| `ZfsRepository.dataset_block_properties(pool)` | `recordsize`/`volblocksize` rows for every filesystem/volume under a pool (Alignment view)                                                        |
 | `get_all_properties(dataset)`            | All ZFS properties for *dataset*                                                                                                                       |
 | `set_property(dataset, prop, value)`     | Set a ZFS property; returns success/failure                                                                                                            |
 | `export_pool_detailed(pool)`             | Export a pool, returning `(success, stderr)` so callers can diagnose failures                                                                          |
@@ -1730,18 +1733,23 @@ message level, and display the success-rate summary.
 
 ### `memory_page.py`
 
-Performance tab (ARC / L2ARC / SLOG monitors): value grids,
-per-device tables, and Cairo-drawn rolling time-series charts that redraw
-on every refresh tick. Samples are collected in a background thread and
-applied on the main loop via `GLib.idle_add`.
+Performance tab: two views behind a **Live Charts / Alignment** radio
+switcher whose selection persists in the UI-state config
+(`performance_view`). The charts view holds the ARC / L2ARC / SLOG
+monitors — value grids, per-device tables, and Cairo-drawn rolling
+time-series charts that redraw on every refresh tick — and the alignment
+view is built by `alignment_page`. Samples are collected in a background
+thread and applied on the main loop via `GLib.idle_add`;
+`refresh_memory_page` dispatches to whichever view is visible.
 
 **Key functions:**
 
 | Function                              | Purpose                                                            |
 | ------------------------------------- | ------------------------------------------------------------------ |
-| `create_memory_page(app)`             | Build the Performance tab widget and chart instances               |
-| `refresh_memory_page(app)`            | Collect one sample off-thread and schedule the UI update           |
+| `create_memory_page(app)`             | Build the Performance tab widget: switcher, view stack, charts     |
+| `refresh_memory_page(app)`            | Dispatch to the visible view's refresh (both run off-thread)       |
 | `_apply_memory_sample(app, sample)`   | Synchronously apply a sample to labels, charts, and device tables  |
+| `_on_memory_view_radio_toggled(radio, app)` | Switch the visible view and persist the selection            |
 | `_on_memory_refresh_changed(spin, app)` | Persist the refresh interval and restart the timer               |
 
 **Key class:**
@@ -1755,9 +1763,10 @@ applied on the main loop via `GLib.idle_add`.
 | Module           | Purpose in this module                       |
 | ---------------- | -------------------------------------------- |
 | `memory_stats`   | Sample collection, rate computation, formats |
-| `config_core`    | Memory refresh-interval config               |
+| `alignment_page` | The Alignment view child of the page's `Gtk.Stack` |
+| `config_core`    | Memory refresh-interval config, view persistence |
 | `disk_repository`| `format_bytes`                               |
-| `gui_helpers`    | TreeView column setup                        |
+| `gui_helpers`    | TreeView column setup, section headers, notes, row reconcile |
 
 **Data structures consumed / produced:**
 
@@ -1790,6 +1799,101 @@ window.
 | Structure                    | Reference                        |
 | ---------------------------- | -------------------------------- |
 | `MemorySample` / `VdevSample` / `MemoryRates` | [Memory samples][ds-memory] |
+
+---
+
+### `alignment_stats.py`
+
+Pure data layer (no GTK) for the Alignment view: parses `zpool iostat -r`
+since-boot request-size histograms, reads the ARC/prefetcher kstats, and
+collects one `AlignmentSample` covering every layer of the blocksize
+chain — member-disk sector geometry, pool `ashift` (configured and
+effective), dataset `recordsize`/`volblocksize` properties, and PVE VM
+disk options from `/etc/pve/qemu-server`. Each source degrades on its own.
+
+**Key functions:**
+
+| Function                                    | Purpose                                                            |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| `parse_zpool_iostat_r(text)`                | `-r` histogram output → `{pool: ReqHistogram}` (structure-matched: pool header carries the fixed column set) |
+| `parse_zfs_size(text)` / `parse_bucket_label(label)` | zfs-get size strings / bucket labels → bytes                |
+| `parse_pve_vm_conf(text, vmid)` / `read_pve_vm_options(conf_dir)` | PVE VM config lines → `{zvol short name: VMOption}`   |
+| `collect_alignment_sample(zfs_repo, disk_repo, ...)` | Probe all sources (zfs/zpool, lsblk sectors, kstats, PVE conf) with per-source degrade flags |
+
+**Data structures consumed / produced:**
+
+| Structure                    | Reference                        |
+| ---------------------------- | -------------------------------- |
+| `AlignmentSample` / `PoolAlignment` / `DatasetBlocks` / `ReqHistogram` / `VMOption` | [Alignment samples][ds-alignment] |
+
+---
+
+### `alignment_analysis.py`
+
+Pure rules engine (no GTK, no subprocess) behind the Alignment view:
+consumes an `AlignmentSample` plus the user's workload survey and emits
+`Finding` rows. Thresholds are named module constants (a pattern borrowed
+from `kstat-analyzer`); the recommendation basis is two-sided — observed
+request-size histograms and ARC/prefetcher counters on one side, the
+declared survey on the other — and every finding is advisory only.
+
+**Key functions:**
+
+| Function                                    | Purpose                                                            |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| `analyse(sample, survey, profiles)`         | Compose the per-layer rule set → `list[Finding]`                   |
+| `classify_workload(hist, prefetch_stats)`   | Histogram + prefetcher vote → `WorkloadVerdict` (sequential / random-sync / mixed / insufficient, with confidence) |
+| `arc_readouts(arc, has_l2arc)`              | Memory-tier observation values as `{label: value-or-None}`         |
+
+**Data structures consumed / produced:**
+
+| Structure                    | Reference                        |
+| ---------------------------- | -------------------------------- |
+| `Finding` / `WorkloadVerdict` | [Alignment findings][ds-alignment] |
+
+---
+
+### `alignment_page.py`
+
+The Alignment view child of the Performance page's view stack: memory-tier
+observations grid, Alignment Chain table (device → pool → dataset → VM),
+Findings & Recommendations table with severity markers, and the per-pool
+Workload readout. Refreshes independently of the charts view with the
+same off-thread collect / `GLib.idle_add` apply pattern and its own
+pending-guard flag.
+
+**Key functions:**
+
+| Function                              | Purpose                                                            |
+| ------------------------------------- | ------------------------------------------------------------------ |
+| `create_alignment_view(app)`          | Build the view box, tables (width-persisted), and value grid       |
+| `refresh_alignment_view(app)`         | Collect an alignment sample off-thread and update on idle          |
+| `_apply_alignment_sample(app, sample)`| Synchronously apply a sample: readouts, chain, findings, workload  |
+
+**Called modules / imported helpers:**
+
+| Module              | Purpose in this module                          |
+| ------------------- | ----------------------------------------------- |
+| `alignment_stats`   | Sample collection                               |
+| `alignment_analysis`| Findings, workload verdicts, memory readouts    |
+| `feature_config`    | Survey and workload-profile reads               |
+| `gui_helpers`       | Section headers, notes, row reconcile           |
+
+---
+
+### `alignment_dialogs.py`
+
+The Survey… dialog (advisory input half of the Alignment view's
+recommendation basis): pick a dataset from the last sample and a declared
+workload profile — or "(not surveyed)" — and save. Registered as the
+always-enabled Survey… button for the Performance page in
+`action_dispatch` (`PAGE_SPECS["memory"]` / `ACTION_HANDLERS["memory"]`).
+
+**Key functions:**
+
+| Function                              | Purpose                                                            |
+| ------------------------------------- | ------------------------------------------------------------------ |
+| `open_alignment_survey(app)`          | Run the dialog; on OK persist via `save_alignment_survey`, log one INFO line, and refresh the Alignment view in place |
 
 ---
 
@@ -2478,6 +2582,7 @@ One-time parser for legacy `zfsretainpol-<pool>` bash files.
 [ds-workload]: ../developer-guide/data-structures.md#workload_profiles-object
 [ds-poolprofiles]: ../developer-guide/data-structures.md#pool_profiles-object
 [ds-memory]: ../developer-guide/data-structures.md#memory-samples-memory_statspy
+[ds-alignment]: ../developer-guide/data-structures.md#alignment-samples-alignment_statspy
 
 ---
 

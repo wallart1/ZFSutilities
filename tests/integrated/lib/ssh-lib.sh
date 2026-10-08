@@ -177,10 +177,12 @@ itf_dev_ip() {
         echo "$ITF_DEV_IP"
         return 0
     fi
+    # Under pipefail a zero-match grep (or head SIGPIPE) would return
+    # non-zero; empty output is the signal the callers already handle.
     hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' \
         | grep -v '^127\.' \
         | grep -v '^172\.(1[6-9]|2[0-9]|3[01])\.' \
-        | head -1
+        | head -1 || true
 }
 
 # _itf_http_probe <port> <path> — raw HTTP/1.0 GET via bash /dev/tcp;

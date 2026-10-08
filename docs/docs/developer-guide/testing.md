@@ -353,6 +353,9 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | Suite | What it covers |
 |-------|----------------|
 | `test_action_dispatch` | Page button specs, action dispatch table, Logs tab button wiring, and Disks tab pool-growth button wiring |
+| `test_alignment_analysis` | `alignment_analysis.py` — analysis rules (ashift vs member sectors, recordsize/volblocksize vs ashift block, survey mismatch, observation-gated advice with traffic thresholds), workload classifier, ARC readouts, degrade paths |
+| `test_alignment_page` | Alignment view: Performance view switcher (radios, stack children, persistence, dispatcher routing), sample application to chain/findings/workload stores and memory-tier readouts, degrade notes, workload-survey dialog save/cancel/hint paths |
+| `test_alignment_stats` | `alignment_stats.py` — `zpool iostat -r` parser (captured multi-pool output), zfs-size/bucket-label parsers, PVE VM-config parsing, sample collection with fake repos and per-source degrade |
 | `test_app_context` | Shared operational state (app context) helpers for GUI pages |
 | `test_backup_config` | Config load/save, defaults, pools, retention, UI state, snapshot name generation, log pruning, message level |
 | `test_backup_history` | History entry schema, load/save/prune, success-rate calculation, human-size parsing, duration formatting |
@@ -380,7 +383,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_feature_config` | Per-feature config getters/setters, snapshot name generation, checkagainst entry merge, workload and pool profile quintets/immutability |
 | `test_file_locking` | Advisory flock helpers |
 | `test_golden` | `golden.py` golden-file helper — canonical serialization, compare/update modes, missing-golden errors |
-| `test_gui_helpers` | `gui_helpers` utilities, including mounted-snapshot detection via `mount -t zfs`, orange non-default expander labels, and log font scaling (CSS steps, persistence, restore, View menu wiring) |
+| `test_gui_helpers` | `gui_helpers` utilities, including mounted-snapshot detection via `mount -t zfs`, orange non-default expander labels, log font scaling (CSS steps, persistence, restore, View menu wiring), and Pango-escaping in section headers / notes |
 | `test_gui_infrastructure` | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling |
 | `test_installer_retention` | Installer retention profile initialization: default-only on new install and preservation of existing profiles |
 | `test_iscsi_enroll` | `iscsi_enroll.py` — derive_target_short, is_iscsi_managed_pool, enroll argv building, post-create enrollment offer (two-node gating, decline/failure paths) |
@@ -390,6 +393,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_logging_config` | Message levels, GUI sink, session log env helpers, and session log truncation |
 | `test_logs_page` | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, column-header label tooltips, saved font-scale restore, and pop-out reparenting |
 | `test_main` | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, initial dashboard refresh |
+| `test_memory_page` | Performance tab: Live Charts / Alignment view switcher, charts value grids/notes/charts, device-table column-width persistence binding, refresh-interval persistence |
 | `test_migration` | One-time state-file migration helper |
 | `test_node_config` | Two-node configuration loading and resolution |
 | `test_offsite_page` | Offsite tab UI, offsite pool detection, and config helpers |

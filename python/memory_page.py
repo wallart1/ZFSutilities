@@ -1,15 +1,20 @@
-"""Performance tab — real-time ARC, L2ARC, and SLOG monitors.
+"""Performance tab — live memory-tier charts and the Alignment view.
 
-Displays sizes, rates, and hit ratios from /proc/spl/kstat/zfs counters
-plus per-device data from interval-mode ``zpool iostat -v`` (rates over a
-1-second window measured at each refresh), refreshed on a
-user-configurable interval while the tab is visible.  Rolling time-series
-charts are Cairo-drawn on a Gtk.DrawingArea that redraws every refresh
-tick, so the display updates dynamically without any extra charting
-dependency.
+Two views share this page behind a radio switcher. "Live Charts" is the
+original monitor: sizes, rates, and hit ratios from
+/proc/spl/kstat/zfs counters plus per-device data from interval-mode
+``zpool iostat -v`` (rates over a 1-second window measured at each
+refresh), refreshed on a user-configurable interval while the tab is
+visible.  Rolling time-series charts are Cairo-drawn on a
+Gtk.DrawingArea that redraws every refresh tick, so the display updates
+dynamically without any extra charting dependency.  "Alignment" (built
+in alignment_page) shows blocksize alignment across device, pool,
+dataset, and VM layers with tuning advice from observed workloads and
+the user survey.  The shared refresh timer refreshes whichever view is
+visible.
 
-Data-source availability follows the model in memory_stats: each source
-(arcstats, zil, zpool iostat) degrades on its own with an explanatory
+Data-source availability follows the model in memory_stats and
+alignment_stats: each source degrades on its own with an explanatory
 note, and absent kstat fields render as "—".
 """
 
@@ -20,10 +25,23 @@ import cairo
 import gi
 
 gi.require_version("Gtk", "3.0")
-from config_core import get_memory_config, save_memory_config
+from alignment_page import create_alignment_view, refresh_alignment_view
+from config_core import (
+    get_memory_config,
+    get_ui_state,
+    save_memory_config,
+    save_ui_state,
+)
 from disk_repository import format_bytes
 from gi.repository import GLib, Gtk
-from gui_helpers import configure_treeview_column
+from gui_helpers import (
+    configure_treeview_column,
+    note_label,
+    reconcile_rows,
+    section_header,
+    set_text_if_changed,
+    show_note,
+)
 from memory_stats import (
     collect_memory_sample,
     compute_rates,
@@ -251,35 +269,6 @@ class RollingChart:
 # ---------------------------------------------------------------------------
 
 
-def _section_header(text, subtitle=""):
-    """Return a bold section title label with optional dimmed subtitle."""
-    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-    title = Gtk.Label()
-    title.set_markup(f"<b>{text}</b>")
-    title.set_halign(Gtk.Align.START)
-    box.pack_start(title, False, False, 0)
-    if subtitle:
-        sub = Gtk.Label()
-        sub.set_markup(f"<small><i>{subtitle}</i></small>")
-        sub.set_halign(Gtk.Align.START)
-        box.pack_start(sub, False, False, 0)
-    return box
-
-
-def _note_label():
-    """Return a hidden italic note label (availability placeholders)."""
-    label = Gtk.Label()
-    label.set_halign(Gtk.Align.START)
-    label.set_no_show_all(True)
-    label.hide()
-    return label
-
-
-def _show_note(label, text):
-    label.set_markup(f"<i>{text}</i>")
-    label.show()
-
-
 def _value_row(grid, row, caption):
     """Add a caption/value row to a Gtk.Grid; return the value label."""
     caption_label = Gtk.Label(label=caption)
@@ -289,12 +278,6 @@ def _value_row(grid, row, caption):
     value.set_halign(Gtk.Align.START)
     grid.attach(value, 1, row, 1, 1)
     return value
-
-
-def _set_text(label, text):
-    """Update a label only when the text changed (avoids flicker)."""
-    if label.get_text() != text:
-        label.set_text(text)
 
 
 def _device_table(app, store_attr, columns, state_key):
@@ -317,29 +300,29 @@ def _device_table(app, store_attr, columns, state_key):
     return view, store
 
 
-def _reconcile_rows(store, new_rows):
-    """Update the ListStore in place, like the scrub table (flicker-free).
+# The two named children of the Performance page's view stack.
+_MEMORY_VIEWS = ("charts", "alignment")
 
-    Rows are keyed on their first two columns (pool, vdev) so multiple
-    vdevs of one pool stay distinct.
-    """
-    existing = {}
-    tree_iter = store.get_iter_first()
-    while tree_iter:
-        key = (store.get_value(tree_iter, 0), store.get_value(tree_iter, 1))
-        existing[key] = tree_iter
-        tree_iter = store.iter_next(tree_iter)
-    for key in list(existing):
-        if key not in new_rows:
-            store.remove(existing.pop(key))
-    for key, row in new_rows.items():
-        if key in existing:
-            tree_iter = existing[key]
-            for col_idx, val in enumerate(row):
-                if store.get_value(tree_iter, col_idx) != val:
-                    store.set_value(tree_iter, col_idx, val)
-        else:
-            store.append(list(row))
+
+def _current_memory_view(app):
+    """Return the name of the Performance view radio that is active."""
+    radios = getattr(app, "_memory_view_radios", {})
+    for name in _MEMORY_VIEWS:
+        radio = radios.get(name)
+        if radio is not None and radio.get_active():
+            return name
+    return "charts"
+
+
+def _on_memory_view_radio_toggled(radio, app):
+    """Switch the visible Performance view and persist the selection."""
+    if not radio.get_active():
+        return
+    view = _current_memory_view(app)
+    stack = getattr(app, "_memory_view_stack", None)
+    if stack is not None:
+        stack.set_visible_child_name(view)
+    save_ui_state(app.config, {"performance_view": {"view": view}})
 
 
 def create_memory_page(app):
@@ -347,6 +330,7 @@ def create_memory_page(app):
     app._memory_timer = None
     app._memory_sample = None
     app._memory_refresh_pending = False
+    app._alignment_refresh_pending = False
 
     scrolled = Gtk.ScrolledWindow()
     scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -376,18 +360,40 @@ def create_memory_page(app):
     controls.pack_start(app._memory_ref_spin, False, False, 0)
     box.pack_start(controls, False, False, 0)
 
+    # --- View switcher: Live Charts / Alignment ---
+    view_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    charts_radio = Gtk.RadioButton.new_with_label_from_widget(None, "Live Charts")
+    alignment_radio = Gtk.RadioButton.new_with_label_from_widget(charts_radio, "Alignment")
+    app._memory_view_radios = {"charts": charts_radio, "alignment": alignment_radio}
+    for radio in (charts_radio, alignment_radio):
+        radio.connect("toggled", _on_memory_view_radio_toggled, app)
+        view_row.pack_start(radio, False, False, 0)
+    box.pack_start(view_row, False, False, 0)
+
+    charts_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+    app._memory_view_stack = Gtk.Stack()
+    app._memory_view_stack.add_named(charts_box, "charts")
+    app._memory_view_stack.add_named(create_alignment_view(app), "alignment")
+    box.pack_start(app._memory_view_stack, True, True, 0)
+
+    saved_view = get_ui_state(app.config).get("performance_view", {}).get("view", "charts")
+    if saved_view not in _MEMORY_VIEWS:
+        saved_view = "charts"
+    app._memory_view_radios[saved_view].set_active(True)
+    app._memory_view_stack.set_visible_child_name(saved_view)
+
     # --- ARC section ---
     version_note = ""
     caps = getattr(app.ctx, "zfs_caps", None)
     if caps is not None and caps.version is not None:
         kmod = caps.version.kmod
         version_note = f"OpenZFS kernel module {kmod[0]}.{kmod[1]}.{kmod[2]}"
-    box.pack_start(
-        _section_header("ARC — Adaptive Replacement Cache", version_note), False, False, 0
+    charts_box.pack_start(
+        section_header("ARC — Adaptive Replacement Cache", version_note), False, False, 0
     )
 
-    app._memory_arc_note = _note_label()
-    box.pack_start(app._memory_arc_note, False, False, 0)
+    app._memory_arc_note = note_label()
+    charts_box.pack_start(app._memory_arc_note, False, False, 0)
 
     arc_grid = Gtk.Grid()
     arc_grid.set_column_spacing(24)
@@ -407,7 +413,7 @@ def create_memory_page(app):
     ):
         arc_labels[caption] = _value_row(arc_grid, row, caption)
     app._memory_arc_labels = arc_labels
-    box.pack_start(arc_grid, False, False, 0)
+    charts_box.pack_start(arc_grid, False, False, 0)
 
     app._memory_arc_size_chart = RollingChart("ARC size", ["size"])
     app._memory_arc_rate_chart = RollingChart(
@@ -416,13 +422,13 @@ def create_memory_page(app):
     charts_arc = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     charts_arc.pack_start(app._memory_arc_size_chart.widget, True, True, 0)
     charts_arc.pack_start(app._memory_arc_rate_chart.widget, True, True, 0)
-    box.pack_start(charts_arc, True, True, 0)
+    charts_box.pack_start(charts_arc, True, True, 0)
 
     # --- L2ARC section ---
-    box.pack_start(_section_header("L2ARC — Cache Devices"), False, False, 0)
+    charts_box.pack_start(section_header("L2ARC — Cache Devices"), False, False, 0)
 
-    app._memory_l2_note = _note_label()
-    box.pack_start(app._memory_l2_note, False, False, 0)
+    app._memory_l2_note = note_label()
+    charts_box.pack_start(app._memory_l2_note, False, False, 0)
 
     l2_grid = Gtk.Grid()
     l2_grid.set_column_spacing(24)
@@ -441,10 +447,10 @@ def create_memory_page(app):
     ):
         l2_labels[caption] = _value_row(l2_grid, row, caption)
     app._memory_l2_labels = l2_labels
-    box.pack_start(l2_grid, False, False, 0)
+    charts_box.pack_start(l2_grid, False, False, 0)
 
     app._memory_l2_chart = RollingChart("L2ARC traffic", ["read", "write"])
-    box.pack_start(app._memory_l2_chart.widget, True, True, 0)
+    charts_box.pack_start(app._memory_l2_chart.widget, True, True, 0)
 
     l2_view, _l2_store = _device_table(
         app,
@@ -452,13 +458,13 @@ def create_memory_page(app):
         ["Pool", "Vdev", "Capacity (alloc/free)", "Read rate", "Write rate"],
         "memory_l2_view",
     )
-    box.pack_start(l2_view, False, False, 0)
+    charts_box.pack_start(l2_view, False, False, 0)
 
     # --- SLOG section ---
-    box.pack_start(_section_header("SLOG — Log Devices (ZIL)"), False, False, 0)
+    charts_box.pack_start(section_header("SLOG — Log Devices (ZIL)"), False, False, 0)
 
-    app._memory_slog_note = _note_label()
-    box.pack_start(app._memory_slog_note, False, False, 0)
+    app._memory_slog_note = note_label()
+    charts_box.pack_start(app._memory_slog_note, False, False, 0)
 
     slog_grid = Gtk.Grid()
     slog_grid.set_column_spacing(24)
@@ -473,10 +479,10 @@ def create_memory_page(app):
     ):
         slog_labels[caption] = _value_row(slog_grid, row, caption)
     app._memory_slog_labels = slog_labels
-    box.pack_start(slog_grid, False, False, 0)
+    charts_box.pack_start(slog_grid, False, False, 0)
 
     app._memory_slog_chart = RollingChart("SLOG writes", ["write"])
-    box.pack_start(app._memory_slog_chart.widget, True, True, 0)
+    charts_box.pack_start(app._memory_slog_chart.widget, True, True, 0)
 
     slog_view, _slog_store = _device_table(
         app,
@@ -484,7 +490,7 @@ def create_memory_page(app):
         ["Pool", "Vdev", "Capacity (alloc/free)", "Writes/s", "Write rate"],
         "memory_slog_view",
     )
-    box.pack_start(slog_view, False, False, 0)
+    charts_box.pack_start(slog_view, False, False, 0)
 
     return scrolled
 
@@ -506,7 +512,11 @@ def _on_memory_refresh_changed(spin, app):
 
 
 def refresh_memory_page(app):
-    """Collect a memory sample off-thread and update the page on idle."""
+    """Refresh whichever Performance view is visible, off-thread."""
+    if _current_memory_view(app) == "alignment":
+        refresh_alignment_view(app)
+        return
+
     if getattr(app, "_memory_refresh_pending", False):
         return
     app._memory_refresh_pending = True
@@ -537,25 +547,27 @@ def _apply_memory_sample(app, sample):
         c_max = arc.get("c_max")
         if size is not None and c_max:
             pct = 100.0 * size / c_max
-            _set_text(
+            set_text_if_changed(
                 labels["Size"],
                 f"{format_bytes(size)} ({pct:.1f}% of max {format_bytes(c_max)})",
             )
         else:
-            _set_text(labels["Size"], format_bytes(size))
-        _set_text(labels["Target (c)"], format_bytes(arc.get("c")))
+            set_text_if_changed(labels["Size"], format_bytes(size))
+        set_text_if_changed(labels["Target (c)"], format_bytes(arc.get("c")))
         breakdown = " / ".join(
             format_bytes(arc.get(k)) for k in ("data_size", "metadata_size", "hdr_size")
         )
-        _set_text(labels["Data / Metadata / Header"], breakdown)
-        _set_text(labels["Hits/s"], format_per_second(rates.arc_hits_ps))
-        _set_text(labels["Misses/s"], format_per_second(rates.arc_misses_ps))
-        _set_text(labels["Hit rate (interval)"], format_percent(rates.arc_hit_rate))
-        _set_text(
+        set_text_if_changed(labels["Data / Metadata / Header"], breakdown)
+        set_text_if_changed(labels["Hits/s"], format_per_second(rates.arc_hits_ps))
+        set_text_if_changed(labels["Misses/s"], format_per_second(rates.arc_misses_ps))
+        set_text_if_changed(labels["Hit rate (interval)"], format_percent(rates.arc_hit_rate))
+        set_text_if_changed(
             labels["Hit rate (since boot)"],
             format_percent(cumulative_hit_rate(arc.get("hits"), arc.get("misses"))),
         )
-        _set_text(labels["Memory throttles"], format_count(arc.get("memory_throttle_count")))
+        set_text_if_changed(
+            labels["Memory throttles"], format_count(arc.get("memory_throttle_count"))
+        )
 
         app._memory_arc_size_chart.set_reference(
             c_max, f"c_max {format_bytes(c_max)}" if c_max else ""
@@ -565,7 +577,7 @@ def _apply_memory_sample(app, sample):
         if interval_rate is not None:
             app._memory_arc_rate_chart.append(sample.monotonic, [interval_rate])
     else:
-        _show_note(
+        show_note(
             app._memory_arc_note,
             "ARC kstats are not available on this host "
             "(/proc/spl/kstat/zfs/arcstats is not readable).",
@@ -574,27 +586,27 @@ def _apply_memory_sample(app, sample):
     # --- L2ARC ---
     cache_vdevs = [v for v in sample.vdevs if v.section == "cache"]
     if not sample.iostat_available:
-        _show_note(
+        show_note(
             app._memory_l2_note,
             "Cache-device data unavailable: `zpool iostat -v` failed; "
             "L2ARC counters below are still live when exposed.",
         )
     elif not cache_vdevs:
-        _show_note(app._memory_l2_note, "No cache vdevs (L2ARC) configured in any pool.")
+        show_note(app._memory_l2_note, "No cache vdevs (L2ARC) configured in any pool.")
     else:
         app._memory_l2_note.hide()
     if sample.arcstats_available:
         labels = app._memory_l2_labels
-        _set_text(labels["Size"], format_bytes(arc.get("l2_size")))
-        _set_text(labels["Compressed size (asize)"], format_bytes(arc.get("l2_asize")))
-        _set_text(labels["Read rate"], format_rate(rates.l2_read_bps))
-        _set_text(labels["Feed (write) rate"], format_rate(rates.l2_write_bps))
-        _set_text(labels["Hit rate (interval)"], format_percent(rates.l2_hit_rate))
-        _set_text(
+        set_text_if_changed(labels["Size"], format_bytes(arc.get("l2_size")))
+        set_text_if_changed(labels["Compressed size (asize)"], format_bytes(arc.get("l2_asize")))
+        set_text_if_changed(labels["Read rate"], format_rate(rates.l2_read_bps))
+        set_text_if_changed(labels["Feed (write) rate"], format_rate(rates.l2_write_bps))
+        set_text_if_changed(labels["Hit rate (interval)"], format_percent(rates.l2_hit_rate))
+        set_text_if_changed(
             labels["Hit rate (since boot)"],
             format_percent(cumulative_hit_rate(arc.get("l2_hits"), arc.get("l2_misses"))),
         )
-        _set_text(labels["Feeds"], format_count(arc.get("l2_feeds")))
+        set_text_if_changed(labels["Feeds"], format_count(arc.get("l2_feeds")))
         app._memory_l2_chart.append(
             sample.monotonic,
             [
@@ -618,20 +630,20 @@ def _apply_memory_sample(app, sample):
             format_rate(vr.read_bps if vr else None),
             format_rate(vr.write_bps if vr else None),
         ]
-    _reconcile_rows(app._memory_l2_store, l2_rows)
+    reconcile_rows(app._memory_l2_store, l2_rows)
 
     # --- SLOG ---
     log_vdevs = [v for v in sample.vdevs if v.section == "logs"]
     if not sample.iostat_available:
-        _show_note(
+        show_note(
             app._memory_slog_note,
             "Log-device data unavailable: `zpool iostat -v` failed; "
             "ZIL counters below are still live when exposed.",
         )
     elif not log_vdevs:
-        _show_note(app._memory_slog_note, "No log vdevs (SLOG) configured in any pool.")
+        show_note(app._memory_slog_note, "No log vdevs (SLOG) configured in any pool.")
     elif not sample.zil_available:
-        _show_note(
+        show_note(
             app._memory_slog_note,
             "ZIL kstats are not exposed by this host; the device table below is still live.",
         )
@@ -639,9 +651,9 @@ def _apply_memory_sample(app, sample):
         app._memory_slog_note.hide()
     if sample.zil_available:
         labels = app._memory_slog_labels
-        _set_text(labels["Write rate"], format_rate(rates.slog_write_bps))
-        _set_text(labels["Writes/s"], format_per_second(rates.slog_writes_ps))
-        _set_text(labels["Commits/s"], format_per_second(rates.slog_commits_ps))
+        set_text_if_changed(labels["Write rate"], format_rate(rates.slog_write_bps))
+        set_text_if_changed(labels["Writes/s"], format_per_second(rates.slog_writes_ps))
+        set_text_if_changed(labels["Commits/s"], format_per_second(rates.slog_commits_ps))
         app._memory_slog_chart.append(
             sample.monotonic,
             [rates.slog_write_bps if rates.slog_write_bps is not None else 0],
@@ -662,4 +674,4 @@ def _apply_memory_sample(app, sample):
             format_per_second(vr.writes_ps if vr else None),
             format_rate(vr.write_bps if vr else None),
         ]
-    _reconcile_rows(app._memory_slog_store, slog_rows)
+    reconcile_rows(app._memory_slog_store, slog_rows)

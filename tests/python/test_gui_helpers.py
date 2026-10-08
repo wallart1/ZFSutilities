@@ -660,5 +660,56 @@ class TestCreateMenuBar(unittest.TestCase):
             self.assertIn(("activate", handler, state_key), connect_args)
 
 
+class TestSectionHeaderAndNoteMarkup(unittest.TestCase):
+    """section_header and show_note must Pango-escape caller text.
+
+    A bare '&' in a title (e.g. "Findings & Recommendations") otherwise
+    aborts markup parsing and renders an empty label — found in the
+    2026-10-07 GUI smoke test.
+    """
+
+    def _fresh_gui_helpers(self):
+        """Import gui_helpers with per-call Box/Label mocks (fresh GTK).
+
+        The shared default mocks merge every widget in the suite into one
+        object, so pack_start histories would accumulate across tests.
+        """
+        with mock_gtk(fresh=True) as gtk:
+            gtk.Label = MagicMock(side_effect=lambda *a, **k: MagicMock())
+            gtk.Box = MagicMock(side_effect=lambda *a, **k: MagicMock())
+            import gui_helpers
+
+        return gui_helpers
+
+    def test_section_header_escapes_title_and_subtitle(self):
+        gui_helpers = self._fresh_gui_helpers()
+        with patch.object(
+            gui_helpers.GLib, "markup_escape_text", side_effect=lambda s: f"[esc:{s}]"
+        ):
+            box = gui_helpers.section_header("Findings & Recommendations", "a < b & c")
+        # pack_start(child, expand, fill, padding): the widget is args[0].
+        title, sub = [c.args[0] for c in box.pack_start.call_args_list]
+        self.assertEqual(
+            title.set_markup.call_args[0][0], "<b>[esc:Findings & Recommendations]</b>"
+        )
+        self.assertEqual(sub.set_markup.call_args[0][0], "<small><i>[esc:a < b & c]</i></small>")
+
+    def test_section_header_without_subtitle_packs_one_label(self):
+        gui_helpers = self._fresh_gui_helpers()
+        with patch.object(gui_helpers.GLib, "markup_escape_text", side_effect=lambda s: s):
+            box = gui_helpers.section_header("Plain title")
+        self.assertEqual(len(box.pack_start.call_args_list), 1)
+
+    def test_show_note_escapes_text(self):
+        gui_helpers = _import_gui_helpers()
+        label = MagicMock()
+        with patch.object(
+            gui_helpers.GLib, "markup_escape_text", side_effect=lambda s: f"[esc:{s}]"
+        ):
+            gui_helpers.show_note(label, "a & b")
+        label.set_markup.assert_called_once_with("<i>[esc:a & b]</i>")
+        label.show.assert_called_once_with()
+
+
 if __name__ == "__main__":
     unittest.main()

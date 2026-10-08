@@ -573,6 +573,40 @@ is larger in the new sample's past, so the rate for that interval is
 pass through the current sample's iostat window directly — no deltas, so
 they are live on the first sample too.
 
+### Alignment samples (`alignment_stats.py`)
+
+Dataclasses behind the Alignment view of the Performance tab.
+`collect_alignment_sample()` probes independent sources — `zpool list` /
+`get_ashift` / pool topology, `lsblk` sector geometry, dataset block
+properties, `zpool iostat -r` histograms, the arcstats/zfetchstats kstat
+files, and `/etc/pve/qemu-server/*.conf` — and each one degrades on its
+own exactly like the memory samples above.
+
+| Field | Type | Purpose |
+| ----- | ---- | ------- |
+| `AlignmentSample.monotonic` | `float` | `time.monotonic()` of the collection |
+| `AlignmentSample.pools` | `list[PoolAlignment]` | One entry per pool: name, `ashift_configured` (zfs-get string), `ashift_effective` (resolved power-of-two or `None`), `members`, `has_cache` |
+| `PoolAlignment.members` | `list[MemberDisk]` | Member leaf paths with `logical_sector` / `physical_sector` bytes from `lsblk` (`None` when unreported) |
+| `AlignmentSample.datasets` | `list[DatasetBlocks]` | One entry per filesystem/volume: `name`, `kind`, `recordsize`/`volblocksize` (zfs-get strings) with per-property `source` |
+| `AlignmentSample.histograms` | `dict[str, ReqHistogram]` | Since-boot request-size histogram per pool from `zpool iostat -r` |
+| `ReqHistogram.buckets` | `dict[int, dict[str, dict[str, int]]]` | `{bucket bytes: {"ind"/"agg": {column: op count}}}`; helpers `ops()`, `dominant_bucket()`, `top_buckets()` take column/kind filters |
+| `AlignmentSample.vm_disks` | `dict[str, VMOption]` | `{zvol short name: VMOption(vmid, disknum, bus, options)}` from local PVE VM configs |
+| `AlignmentSample.arc` / `prefetch` | `dict[str, int]` | arcstats / zfetchstats counters exposed by this host |
+| `AlignmentSample.*_available` | `bool` | Per-source probe results (`pools`, `datasets`, `iostat_r`, `arcstats`, `prefetch`, `pve`) |
+
+`alignment_analysis.analyse()` consumes a sample (plus the survey and
+workload profiles) and produces `Finding(layer, subject, severity,
+message, recommendation)` rows — severity is one of `OK` / `info` / `WARN`
+— and `classify_workload()` produces `WorkloadVerdict(label,
+prefetch_rate, sync_share, confidence)`. Analysis thresholds are named
+module constants in `alignment_analysis.py`.
+
+The survey itself lives in the JSON config as
+`alignment_survey: {dataset: workload-profile name}` (see the
+[feature config helpers](../commands-and-modules/python-modules.md#feature_configpy));
+the selected Performance view persists in the UI-state config as
+`performance_view.view` (`"charts"` or `"alignment"`).
+
 ## iSCSI expected-backstores manifest
 
 Plain-text file, one backstore name per line:

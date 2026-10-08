@@ -61,6 +61,10 @@ itf_journey_stage_os() {
     _journey_exit_cleanup() {
         [[ -n "${J_PIDFILE:-}" ]] && itf_http_stop "$J_PIDFILE"
         [[ -n "${J_PIDFILE2:-}" ]] && itf_http_stop "$J_PIDFILE2"
+        # An EXIT-trap handler must not end in failure: under the driver's
+        # set -e, a false [[ ]] guard as the last command rewrites a
+        # successful run's exit code to 1.
+        return 0
     }
     trap _journey_exit_cleanup EXIT
     # Fetch the URL ourselves before spending a guest install on it: a

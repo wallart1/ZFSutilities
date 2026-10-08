@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# test-itf-driver — Dispatch-level smoke tests for the itf driver
+# (tests/integrated/itf) under its strict mode (set -euo pipefail).
+#
+# The driver runs as a subprocess against a fixture site config whose base
+# host is under the reserved .invalid TLD, so no test can reach a real
+# base host: guard refusals fire before any ssh, and the one test whose
+# transport is attempted fails on instant NXDOMAIN.  These pin the
+# usage/rc contracts of the command dispatch and the empty-tolerant
+# guards added with strict mode (an unreachable base reports
+# empty/(unreachable), never an abort).
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+ITF_DRIVER="$mydir/tests/integrated/itf"
+tmp_dir=$(mktemp -d)
+
+cat > "$tmp_dir/site.conf" <<'EOF'
+ITF_BASE_HOSTS=(base.invalid)
+ITF_SSH_USER=testuser
+ITF_VMID_FIRST=8000
+ITF_VMID_LAST=8099
+ITF_GUEST_STORAGE=itfguests
+ITF_ISO_STORAGE=itfiso
+ITF_ISO_DIR=/mnt/itf-iso
+ITF_ACTION_LOG=/var/log/itf-actions.log
+ITF_BRIDGE=vmbr0
+ITF_GUEST_MEMORY_MB=8192
+ITF_GUEST_CORES=4
+ITF_GUEST_SYSTEM_DISK_GB=32
+ITF_GUEST_POOL_DISK_GB=100
+ITF_DEBIAN_ISO_URL=https://cdimage.example.invalid/debian-netinst.iso
+ITF_ISO_NAME=itf-debian-netinst.iso
+ITF_SW_SOURCE=release
+ITF_GITHUB_REPO=owner/repo
+EOF
+
+# run_itf <args...> — driver subprocess with the fixture config; leaves
+# $run_rc / $run_out / $run_err for assertions.
+run_itf() {
+    run_out=""
+    run_rc=0
+    run_out=$(ITF_SITE_CONFIG="$tmp_dir/site.conf" bash "$ITF_DRIVER" "$@" \
+        2>"$tmp_dir/run.err") || run_rc=$?
+    run_err="$(cat "$tmp_dir/run.err")"
+}
+
+# ------------------------------------------------------------------------------
+# Usage / argument validation (rc 2, no transport)
+# ------------------------------------------------------------------------------
+
+test_journey_list_lists_committed_journeys() {
+    test_start "journey list names every committed journey"
+    run_itf journey list
+    assert_rc 0 "$run_rc"
+    local j
+    for j in j01-fresh-install j02-uninstall-reinstall \
+        j03-install-over-leftovers j04-post-install-baseline; do
+        assert_contains "$run_out" "$j"
+    done
+}
+
+test_journey_run_unknown_name_refused() {
+    test_start "journey run with an unknown name is refused (rc 2)"
+    run_itf journey run no-such-journey
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "no such journey: no-such-journey"
+}
+
+test_journey_run_missing_name_refused() {
+    test_start "journey run without a name prints usage (rc 2)"
+    run_itf journey run
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "usage: itf journey run NAME"
+}
+
+test_guest_destroy_missing_args_refused() {
+    test_start "guest destroy without BASE VMID prints usage (rc 2)"
+    run_itf guest destroy
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "usage: itf guest destroy BASE VMID"
+}
+
+test_guest_destroy_out_of_range_refused_by_guard() {
+    test_start "guest destroy with an out-of-range VMID is refused (rc 22)"
+    run_itf guest destroy base.invalid 9999
+    assert_rc 22 "$run_rc"
+    assert_contains "$run_err" "outside the reserved range"
+}
+
+test_template_usage_refused() {
+    test_start "template with no/bad subcommand prints usage (rc 2)"
+    run_itf template
+    assert_rc 2 "$run_rc"
+    run_itf template badverb
+    assert_rc 2 "$run_rc"
+}
+
+test_unknown_command_refused() {
+    test_start "an unknown top-level command prints usage (rc 2)"
+    run_itf frobnicate
+    assert_rc 2 "$run_rc"
+}
+
+# ------------------------------------------------------------------------------
+# Strict-mode plumbing: unreachable base reports, never aborts
+# ------------------------------------------------------------------------------
+
+test_status_unreachable_base_reported_not_fatal() {
+    test_start "status with an unreachable base exits 0 with (unreachable)"
+    run_itf status
+    assert_rc 0 "$run_rc"
+    assert_contains "$run_out" "== base.invalid =="
+    assert_contains "$run_out" "(unreachable)"
+    assert_contains "$run_out" "no template"
+}
+
+test_journey_list_lists_committed_journeys
+test_journey_run_unknown_name_refused
+test_journey_run_missing_name_refused
+test_guest_destroy_missing_args_refused
+test_guest_destroy_out_of_range_refused_by_guard
+test_template_usage_refused
+test_unknown_command_refused
+test_status_unreachable_base_reported_not_fatal
+
+rm -rf "$tmp_dir"
+teardown_test_env
+test_summary

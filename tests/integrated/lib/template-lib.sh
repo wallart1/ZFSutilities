@@ -129,11 +129,15 @@ _itf_template_fresh() {
 itf_template_os_upgrade() {
     local ip="$1"
     local up_log="$ITF_RUN_DIR/template-upgrade.log"
-    if itf_guest_exec "$ip" \
-        "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get -y -qq " \
-        "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold " \
-        "full-upgrade" \
-        > "$up_log" 2>&1; then
+    # itf_guest_exec takes the whole command as ONE argument — build it in
+    # a variable so line-wrapping can never silently drop words (a split
+    # into several quoted args once truncated the command at "-qq" and the
+    # guest saw apt-get with no command word).
+    local upgrade_cmd
+    upgrade_cmd="apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get -y -qq "
+    upgrade_cmd+="-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "
+    upgrade_cmd+="full-upgrade"
+    if itf_guest_exec "$ip" "$upgrade_cmd" > "$up_log" 2>&1; then
         itf_step pass "template: OS packages updated" "see template-upgrade.log"
     else
         itf_step fail "template: OS packages updated" "see template-upgrade.log"
@@ -230,7 +234,7 @@ itf_template_clear_snapshots() {
 itf_template_status() {
     local base vmid stamp
     for base in "${ITF_BASE_HOSTS[@]}"; do
-        vmid="$(itf_template_vmid "$base")"
+        vmid="$(itf_template_vmid "$base")" || vmid=""
         if [[ -z "$vmid" ]]; then
             echo "  $base: no template '$ITF_TEMPLATE_NAME' (create: itf template build)"
             continue
@@ -366,7 +370,7 @@ itf_template_build() {
 itf_template_destroy() {
     local base="${ITF_BASE_HOSTS[0]}"
     local vmid
-    vmid="$(itf_template_vmid "$base")"
+    vmid="$(itf_template_vmid "$base")" || vmid=""
     if [[ -z "$vmid" ]]; then
         echo "itf: no template '$ITF_TEMPLATE_NAME' on $base" >&2
         return 1

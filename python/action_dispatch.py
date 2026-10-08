@@ -5,6 +5,7 @@ This module separates the declarative page metadata from the window class
 to keep zfsutilities_gui.py focused on UI construction and core behaviour.
 """
 
+from alignment_dialogs import open_alignment_survey
 from backup_config import get_scrub_manager_config, log_msg
 from backup_page import (
     backup_set_all_active,
@@ -284,6 +285,7 @@ PAGE_SPECS = {
     "memory": {
         "buttons": [
             ("Refresh", "view-refresh", None),
+            ("Survey…", "document-properties", None),
         ],
     },
     "retention": {
@@ -517,6 +519,7 @@ ACTION_HANDLERS = {
     },
     "memory": {
         "Refresh": refresh_memory_page,
+        "Survey…": open_alignment_survey,
     },
     "dashboard": {
         "Refresh": on_dashboard_refresh,

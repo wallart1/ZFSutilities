@@ -2304,3 +2304,11 @@ Writes the `/etc/cron.d` file from the active profiles.
 | -------------- | ------- | -------- |
 | `VERB: Cron file updated: ...` | The cron file was successfully rewritten | Informational |
 | `FATAL: Could not write cron file ...: ...` | OSError writing the cron file | Exception re-raised; the caller shows an error dialog |
+
+### [alignment_dialogs](../commands-and-modules/python-modules.md#alignment_dialogspy)
+
+Workload-survey dialog on the Performance tab (Alignment view).
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `INFO: Workload survey saved for ... (...)` | The survey entry was persisted and the Alignment view refreshes in place | Informational |

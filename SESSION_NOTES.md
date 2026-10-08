@@ -1698,3 +1698,177 @@ consumer parses legacy offset names and Z names; nothing migrates.
   in abeyance; itf strict-mode deferred to cycle-2 kickoff). Full suite
   (no soaks) running in background at freeze time. Awaiting
   version/commit instructions.
+
+## Blocksize alignment feature (2026-10-07, IN FLIGHT — relocated from the `blocksize` worktree to the main checkout same day; worktree removed)
+
+Performance-page second view (Live Charts / Alignment radio switcher):
+blocksize alignment chain device→pool→dataset→VM, tuning advice from
+observed `zpool iostat -r` histograms + ARC/prefetch kstats + the user's
+workload survey (Survey… dialog), advisory only. User decisions: switcher
+on Performance page (not a new sidebar page); both bases; advisory only.
+kstat-analyzer-inspired thresholds as named constants in
+alignment_analysis.py.
+
+- New modules: alignment_stats.py (data layer, GTK-free),
+  alignment_analysis.py (pure rules), alignment_page.py (view),
+  alignment_dialogs.py (survey dialog). memory_page hosts the switcher +
+  Gtk.Stack; refresh_memory_page dispatches to the visible view.
+  Repo/config additions: ZfsRepository.dataset_block_properties,
+  feature_config get/save_alignment_survey (config key
+  `alignment_survey`), UI_STATE_DEFAULTS `performance_view` (get_ui_state
+  only returns declared keys — new persistence keys MUST be registered
+  there).
+- Shared memory_page helpers (section_header, note_label, show_note,
+  set_text_if_changed, reconcile_rows) moved to gui_helpers; memory_page
+  now imports them UNALIASED (renamed ~33 call sites) because ruff's
+  isort default (combine-as-imports=false) splits any from-import mixing
+  plain and `x as y` names into six separate statements — the unaliased
+  one-statement import is the house-clean form and matches
+  alignment_page.
+- Test gotchas: mock_gtk's ResponseType.OK is the plain int 1 on every
+  context, so identity comparisons survive across separate mock_gtk()
+  blocks; ListStore mocks ACCUMULATE append history across successive
+  _apply calls in one test — later-applied rows must be read from the
+  tail ([-1]) not [0]; Gtk.RadioButton.new_with_label_from_widget needs
+  a side_effect to give distinct radio mocks (shared default makes both
+  views' get_active() identical); the survey dialog's lazy
+  `from alignment_page import refresh_alignment_view` is patchable at
+  "alignment_page.refresh_alignment_view".
+- Test suites RUN 2026-10-07 after user clarified their other project
+  runs on main, not this branch (itf files in tests/integrated/ +
+  untracked tests/test-itf-driver in the worktree tree were the user's;
+  untouched).
+  First affected-suite pass caught 6 authoring bugs, all fixed: the
+  stewie-fixture test misread the trim-ind column as scrub (parser was
+  right — 1.15M@32K is trim ind, scrub agg is 6); parse_pve_vm_conf vmid semantics — first "fixed" token-derived
+  (matching a self-authored test guess), user correctly challenged it
+  and it was REVERTED to filename-derived: the conf filename is the
+  authoritative current owner of every disk line in it; the id inside
+  vm-<id>-disk-<n> is creation history that goes stale after disk
+  moves. Test now pins the moved-disk case (vm-205-disk-1 in 201.conf
+  → vmid "201"); the pools-unavailable banner test matched both
+  degrade banners (filter by message now); three GUI tests hit
+  build-phase mock call history (Stack.set_visible_child_name from the
+  saved-view restore, note_label()'s construction-time hide) — reset_mock
+  before asserting. Affected suites green; FULL SUITE green twice (no soaks,
+  0 failures) — rerun after the vmid revert. ruff check/format clean, py_compile clean, mkdocs build
+  clean (Zensical warning is the parked PREEXISTING one). Awaiting
+  version/commit instructions.
+- Docs updated: gtk-gui.md (switcher paragraph, Alignment View +
+  Survey dialog subsections, Survey… action row), python-modules.md
+  (four new module sections + feature_config/repo rows + [ds-alignment]
+  link), data-structures.md (Alignment samples section),
+  messages/index.md (alignment_dialogs INFO row — appended, user
+  hand-edits preserved), testing.md (three new suite rows + added the
+  previously-missing test_memory_page row, which was a docs drift).
+
+- Smoke test 2026-10-07 (worktree): user hit one real GUI bug —
+  section_header/show_note embed caller text in Pango markup without
+  escaping, so the "Findings & Recommendations" title (bare &) aborted
+  markup parsing and rendered an empty label (Gtk-WARNING on stderr;
+  invisible under mocked-GTK tests). Fixed in gui_helpers with
+  GLib.markup_escape_text (house precedent at the clone-row renderer);
+  test_support's mock_gtk now provides a REAL markup_escape_text on the
+  fake GLib so note/header assertions see strings (everything else on
+  GLib stays auto-mocked). Worktree gotchas: docs/site is gitignored so
+  a fresh worktree must run `cd docs && mkdocs build` before
+  test_gui_infrastructure's anchor tests and path_utils' local-site
+  resolution pass (they fail with FileNotFound / deployed-path fallback
+  otherwise); the worktree also lacks the user's untracked
+  tests/test-itf-driver, hence 86 suites vs the main tree's 87. Full
+  suite green in the worktree after the docs build.
+- RELOCATED 2026-10-07 to the main checkout per user instruction (fold the
+  changeset into main, drop the worktree). All 25 paths moved
+  worktree→main via tar, byte-verified with cmp; both changesets share
+  base 200577d with disjoint paths, so the union is conflict-free
+  (blocksize: 18 tracked +768/−127 plus 2,900 lines across 7 new files;
+  itf: 9 tracked +117/−23 plus test-itf-driver). Backup tarball kept at
+  /tmp/blocksize-worktree-backup-20261007.tgz (ephemeral). Orphaned
+  test-mock processes left over from worktree suite runs were reaped.
+  The `blocksize` branch label was deleted 2026-10-07 at user request
+  (plain `git branch -d` sufficed — it held no commits beyond main).
+  Post-move verification in the main checkout: ruff check + format clean,
+  mkdocs build clean, affected suites green (the ten alignment/repo/
+  helper/docs suites, incl. test_docs_integrity against the rebuilt site).
+
+## 2026-10-07/08 — itf cycle-2 redo: prior kickoff changeset discarded, re-derived, re-verified
+
+- User instruction: discard the ENTIRE uncommitted cycle-2 kickoff
+  changeset (from the earlier 2026-10-07 session) and redo the work under
+  an approved plan. Safety fence before the discard: /tmp/itf-cycle2-
+  kickoff-changeset.patch plus copies of test-itf-driver, repair-plan 012
+  and SESSION_NOTES (/tmp is ephemeral — the patch is the only durable
+  copy until the tree is committed). The F-012 FINDINGS row and
+  repair-plan 012 went into the discard too (user choice): no tracked
+  record of the documented-recipe udev race remains; live evidence
+  survives in results/run-20261007-152717-j04 (gitignored) and the
+  testing.md recipe itself is unchanged (its fix was never approved).
+- Redone in-tree, same scope re-derived: `itf` driver `set -euo pipefail`
+  (journey/template-build entry points stay errexit-suppressed via
+  `local rc=0; … || rc=$?`; ~10 empty-tolerant guards on live-but-fallible
+  reads — unreachable-base paths report empty/(unreachable), never abort);
+  template-lib upgrade command rebuilt as ONE `+=`-assembled variable
+  (itf_guest_exec takes the whole command as a single argument — the
+  commit-time rewrap in 548194d had split it into four quoted strings,
+  truncating at "-qq"); `_journey_exit_cleanup` return 0 (an EXIT-trap
+  handler ending in a false guard rewrites green rc to 1 under set -e);
+  j01/j04 pool-recipe heredocs hardened with `udevadm settle` + bounded
+  /dev/sdb15 wait; NEW tests/test-itf-driver (dispatch smokes against a
+  .invalid fixture config); os-upgrade single-argument unit pin in
+  test-itf-template; strict-mode design paragraph in
+  developer-guide/integrated-testing.md.
+- Live re-verification on zfstestvm1: prior guests destroyed; template
+  REBUILT on the redone code (vmid 8000, stamped dev-tarball 0.118.0
+  rev=200577d, built 2026-10-08T02:15:14Z — the fixed upgrade command ran
+  live); campaign J01→J02→J03→J04 chained: ALL GREEN rc=0 (J04: 14 steps,
+  12 pass / 0 fail / 2 info). PREEXISTING strict-mode entry removed after
+  the green campaign (2 entries remain, both parked by user decision).
+- GOTCHA (operational): campaign attempt 1 (launched 20:40 EDT) was
+  killed EXTERNALLY at 21:03:54 mid template-build shutdown — script,
+  itf driver, and the ZCode background-exec shell all died silently in
+  the same instant, with the template build ~95% done. No code cause
+  found (every construct at the death site is guarded; no error text;
+  kernel log not readable as dan). Attempt 2, launched fully detached
+  (setsid nohup + own log + watcher), completed cleanly. Long itf
+  campaigns should launch detached, not through a session exec.
+- Standards: shellcheck via the documented command clean (includes the
+  new suite); bash -n + ≤100 columns verified on every changed file;
+  docs site rebuilt (rc=0, known mkdocs-material banner); docs-integrity
+  (23) + startdocserver (15) + page-anchor audit green. Reminder:
+  docs-integrity is a PYTHON suite — its bare name passed to
+  tests/run-tests fails as `bash: test-docs-integrity: No such file or
+  directory`.
+- Awaiting version/commit instructions. 0.118.0 (200577d) is still
+  unpushed, so folding this changeset into it remains an option per the
+  0.117.0-continued precedent.
+
+## 2026-10-08 — six-step wrap-up over the stacked changesets (alignment + itf cycle-2)
+
+- Step 1 PREEXISTING: both remaining entries are user-parked (Zensical
+  1.x wait — rechecked, PyPI now 0.0.69, still no 1.x; infra-vdev
+  planning deferral). No actionable items; recheck date updated in the
+  entry. 2 entries remain.
+- Step 2 standards: ruff check + format clean; documented shellcheck
+  command clean; bash -n + ≤100 cols on every changed bash file;
+  py_compile clean. Reviewer judgment recorded: alignment_stats
+  deliberately imports memory_stats._parse_iostat_cell (private) for the
+  shared iostat cell grammar — documented in both module docstrings,
+  policies silent on it, accepted. Gtk.STOCK_* in alignment_dialogs is
+  the house-wide GTK3 pattern.
+- Step 3 tests: found+fixed one defect — the new
+  TestSectionHeaderAndNoteMarkup class in test_gui_helpers.py sat AFTER
+  the `if __name__ == "__main__"` guard (pytest collected it, but direct
+  execution exits at unittest.main() and never runs those tests); guard
+  moved back to file end. Coverage of all new units verified present;
+  runners auto-discover the new suites (find tests/test-*; pytest
+  tests/python); no manifest entries needed (fully mocked). Affected
+  suites green.
+- Step 4 docs: diffs reviewed accurate vs code (user hand-edits left
+  untouched); docs-integrity green; site rebuilt (rc=0, parked
+  mkdocs-material banner); gui-infrastructure anchor tests green against
+  the rebuilt site.
+- Step 5 full suite (no soaks) launched in background after ALL edits:
+  87 suites, all green, 0 failed, 1 skipped (test-zfslockmanager-soak —
+  soak suites excluded by design in a no-soak run), rc=0. Nothing to
+  resolve; no new pre-existing issues found.
+- Step 6: codebase frozen at this point.

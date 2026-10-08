@@ -133,6 +133,19 @@ class HoldRow:
 
 
 @dataclass
+class DatasetBlockRow:
+    """One line from
+    `zfs get -H -r -o name,property,value,source -t filesystem,volume
+    recordsize,volblocksize <pool>`.
+    """
+
+    name: str
+    prop: str  # "recordsize" | "volblocksize"
+    value: str
+    source: str
+
+
+@dataclass
 class LoopPartition:
     """One mountable entry on a loop device backing a zvol.
 
@@ -1237,6 +1250,45 @@ class ZfsRepository:
             if prop not in values:
                 values[prop] = "-"
         return values
+
+    def dataset_block_properties(
+        self, pool: str, timeout: int | None = None
+    ) -> list[DatasetBlockRow]:
+        """Return per-dataset recordsize/volblocksize rows for *pool*.
+
+        Runs ``zfs get -H -r -o name,property,value,source -t
+        filesystem,volume recordsize,volblocksize <pool>`` — one row per
+        dataset per property, including the pool root dataset. Properties
+        that do not apply to a dataset report value ``"-"`` (recordsize on
+        volumes, volblocksize on filesystems). Raises
+        ``subprocess.CalledProcessError`` on command failure, matching
+        ``get_properties``.
+        """
+        result = self._run(
+            self._zfs(
+                "get",
+                "-H",
+                "-r",
+                "-o",
+                "name,property,value,source",
+                "-t",
+                "filesystem,volume",
+                "recordsize,volblocksize",
+                pool,
+            ),
+            timeout=timeout,
+        )
+        rows = []
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) != 4:
+                continue
+            rows.append(
+                DatasetBlockRow(name=parts[0], prop=parts[1], value=parts[2], source=parts[3])
+            )
+        return rows
 
     def get_recursive_snapshot_clones(self, dataset: str) -> list[str]:
         """Return non-empty clones values for all snapshots under *dataset*."""

@@ -816,6 +816,27 @@ def reset_workload_profiles(config):
     save_workload_profiles(config, profiles)
 
 
+def get_alignment_survey(config):
+    """Return the workload survey as {dataset: profile_name}.
+
+    The survey is the user-declared half of the Alignment view's
+    recommendation basis (observed IO-size histograms are the other half).
+    The returned dict is a copy so callers cannot mutate config state.
+    """
+    survey = config.get("alignment_survey")
+    if not isinstance(survey, dict):
+        return {}
+    return dict(survey)
+
+
+def save_alignment_survey(config, survey):
+    """Persist the workload survey {dataset: profile_name} to the config."""
+    if not isinstance(survey, dict):
+        raise TypeError("survey must be a dict")
+    config["alignment_survey"] = survey
+    save_config(config)
+
+
 DEFAULT_POOL_PROFILES = {
     "general": {
         "description": ("General-purpose pool: trim on, balanced defaults for most workloads."),

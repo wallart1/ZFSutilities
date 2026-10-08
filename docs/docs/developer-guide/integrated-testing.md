@@ -76,6 +76,18 @@ Every run produces a progressive report under
 `zfs list -t snapshot` listings, GUI screenshots). `itf journey run`
 exits non-zero when any step failed.
 
+The driver itself runs under `set -euo pipefail`: its own plumbing —
+dispatch, preflight, status, watch — fails fast on any unhandled error.
+The journey and template-build entry points are deliberately looser:
+the driver invokes both through an `|| rc=$?` wrapper, which suppresses
+errexit for their whole extent so they keep the failure-accumulation
+and always-finish-the-report contract documented in
+`tests/integrated/journeys/README.md` (a failing step records its fail
+and the run continues to cleanup and final report; the driver exits
+non-zero from the captured rc). Journey stage code therefore gates on
+explicit `|| return 1` rather than `set -e`, while anything the driver
+runs directly gets no such tolerance.
+
 ### Console discipline while a run is active
 
 The install phase of every journey is driven over the guest's **serial
