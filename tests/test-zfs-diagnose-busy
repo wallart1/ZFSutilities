@@ -286,7 +286,7 @@ test_diagnose_iscsi_lun() {
     _mock_zfs_get_values["pool/proxmox/vm-105-disk-0:receive_resume_token"]="-"
     _mock_targetcli_backstores="  | o- vm-105-disk-0  [block/vm-105-disk-0]"
     _mock_targetcli_iscsi="iqn.2025-01.local.storage"
-    _mock_targetcli_luns="  | o- lun0  [block/vm-105-disk-0]"
+    _mock_targetcli_luns="  | o- lun0  [block/vm-105-disk-0 (/dev/zvol/pool/proxmox/vm-105-disk-0)]"
     start_capture
     diagnose_dataset_busy "pool/proxmox/vm-105-disk-0"
     local out

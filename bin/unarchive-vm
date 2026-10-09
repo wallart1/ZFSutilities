@@ -568,7 +568,7 @@ except Exception as e:
 
     # Create LUN if missing
     existing_lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-        | grep -F " ${backstore} " \
+        | grep -F "block/${backstore} " \
         | grep -oE 'lun[0-9]+' \
         | head -1)
     existing_lun="${existing_lun#lun}"
@@ -578,7 +578,7 @@ except Exception as e:
     else
         targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${backstore}"
         new_lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-            | grep -F " ${backstore} " \
+            | grep -F "block/${backstore} " \
             | grep -oE 'lun[0-9]+' \
             | head -1)
         new_lun="${new_lun#lun}"
@@ -614,7 +614,10 @@ done
 
 # Save iSCSI config
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
-"$mydir/safe-iscsi-save"
+if ! "$mydir/safe-iscsi-save"; then
+    echo "SAVE_FAILED"
+    exit 1
+fi
 echo "CONFIG_SAVED"
 SSHEOF
     ) || {

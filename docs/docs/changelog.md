@@ -1,5 +1,124 @@
 # Changelog
 
+## 0.120.0
+
+*Released 2026-10-09*
+
+### Added
+
+- **itf two-node cycle (j05)** — the integrated-test framework gains a
+  second, compute-role base host and the `j05-two-node-install` journey,
+  which exercises the complete two-node install live: dual-guest clone,
+  point-to-point link, pools, `install-two-node`, dual-host verify,
+  enrollment, and the first VM with its first LUN (green end-to-end,
+  36 steps). The compute base installs Proxmox VE from a customized
+  auto-install ISO whose build re-patches the grub El Torito boot-image
+  LBA (genisoimage does not), qualifies the autoinstaller fqdn (a bare
+  label aborts it), repairs deb822 `Enabled:` insertion (trailing blank
+  lines previously created a headerless stanza apt rejects), and hardens
+  the reboot probe (an empty answer can no longer skip a required
+  reboot). New `itf` subcommands support the cycle: `iso fetch|upload`
+  for the PVE ISO, `template status|build|destroy` with
+  `--profile storage|compute`, and `guest clone`; two-node site-config
+  keys ship commented in `config.example`. The journey's live runs
+  surfaced seven fresh-install defects (findings F-012…F-018, repair
+  plans 012–018, all verified).
+
+- **Messages-manual coverage for the installer's prereq offers** — the
+  target-stack (targetcli-fb / rtslib-fb-targetctl) and initiator
+  (open-iscsi) install offers, declines, failures, and the iscsid
+  ready-state check are now cataloged in the Messages Reference.
+
+### Changed
+
+- **`deploy-version` reads the modern deploy config first** (F-012) —
+  deployment groups load from
+  `${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/deploy.conf`
+  (where `install-two-node` writes them), with the legacy flat
+  `/etc/zfsutilities-deploy.conf` honored as a fallback. Reading only
+  the legacy path left remote hosts empty on fresh two-node installs,
+  so nothing synced and the installer's compute activation ran
+  `switch-version` on a tree that was never copied.
+
+- **Installer iscsi readiness is now `iscsid.socket`** (F-013) — Debian
+  socket-activates iscsid, so the service unit is disabled by design;
+  the readiness step asserts the listening socket on both the
+  already-installed and freshly-installed paths (previously it returned
+  early when `iscsiadm` existed and `systemctl enable iscsid` started
+  nothing).
+
+- **`setup-iscsi-targets` admits initiators on fresh TPGs** (F-017) —
+  a fresh TPG runs explicit-ACL mode with an empty ACL list and refuses
+  every login (iscsiadm error 24). TPGs that carry no explicit ACLs are
+  now switched to demo mode (`generate_node_acls=1`); the dedicated
+  storage network is the isolation boundary, and a TPG that already
+  carries ACLs is never modified.
+
+- **`enroll-proxmox-pool` ensures `<pool>/proxmox` in two-node mode**
+  (F-015) — the VM-disk dataset is created when missing (dry-run aware,
+  FATAL on failure), matching the single-node contract; previously
+  nothing created it on a fresh two-node install and the first
+  VM-disk operation died at `zfs create`.
+
+- **`safe-iscsi-save` failures abort their callers** (F-016) —
+  new-vm-disk, remove-vm-disk, detach-vm-disk, and
+  restart-iscsi-services now check the save's exit status (a FATAL was
+  previously followed by "✓ Configuration saved"), and unarchive-vm
+  emits `CONFIG_SAVED` only after a successful save (`SAVE_FAILED`
+  otherwise). `new-vm-disk` bootstraps the expected-backstores manifest
+  on first use instead of skipping the add when the file is absent —
+  the manifest is required by the save, so a fresh install's first
+  disk could never persist.
+
+- **VM-disk scripts gate on role, not just Proxmox** (F-014) —
+  new-vm-disk, resize-vm-disk, remove-vm-disk, and list-vm-disks
+  exempt the two-node storage host from the `qm` requirement: the
+  delegated storage half re-invokes them where no Proxmox exists.
+  Production only worked because pve-manager was manually installed
+  on the storage node — undocumented and never ensured by the
+  installer.
+
+- **`rescan-storage` waits for udev before counting devices** (F-018) —
+  on a first login to a fresh LUN the `/dev/disk/by-path` node lands a
+  beat after `iscsiadm --rescan` returns; the count now follows a
+  `udevadm settle`.
+
+### Fixed
+
+- **`archive-vm` two-node IQN colon bug** (production incident,
+  2026-10-09) — referenced LUNs were joined as `target:lun` strings,
+  but an IQN contains its own colon, so the storage-side split on the
+  first colon destroyed the target name and every ref WARNed "no
+  backstore was found" ("No referenced zvols found for VM …"). Target
+  and LUN now travel as separate ssh argv entries, and the `.disk_info`
+  sidecar's LUN lookup is anchored like the rest of the family. The
+  test ssh-mock had mirrored the broken encoding, so the suite was
+  blind; regression tests now pin the argv encoding and grep form.
+
+- **Tree-wide targetcli luns-ls lookup anchoring** — every lookup of a
+  backstore in `…/tpg1/luns ls` output is now anchored on
+  `block/<name> ` (the live-verified line shape is
+  `o- lun3 [block/name (/dev/…)]`). Three defect classes repaired
+  across 12 scripts: space-anchored greps that never matched (dead
+  LUN-exists checks, dead teardown guards in attach-vm-disk,
+  move-vm-disk, rename-vm-disk, unarchive-vm, ensure-restored-vm-iscsi,
+  remove-vm; new-vm-disk's compute-side lookup — F-018), unanchored
+  greps that could match a longer name starting with the wanted one
+  (disk-1 vs disk-10, returning the wrong LUN), and the lun-token grep
+  in enroll-efi-keys-vm (`lun1` matched `lun19`; now digit-delimited).
+  A family-wide guard in `test-iscsi-fresh-install-guards` pins the
+  anchored form (red-proven), and the zfs-diagnose-busy luns fixture
+  was corrected to the real line shape.
+
+- **Documentation drift** — commands-and-modules pages now name the
+  modern `/etc/zfsutilities/deploy.conf` (legacy noted) for
+  deploy-version and install-two-node; enroll-proxmox-pool documents
+  the dataset ensure for both modes; the installation guide describes
+  the socket-activated iscsid daemon; two-node.md's setup-iscsi-targets
+  steps include the demo-ACL bullet; the Messages Reference gained the
+  shared save-failure FATAL, demo-ACL rows, manifest row, deploy
+  fallback row, and `SAVE_FAILED` row.
+
 ## 0.119.0
 
 *Released 2026-10-08*

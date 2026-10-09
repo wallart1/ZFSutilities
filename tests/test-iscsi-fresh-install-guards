@@ -1,0 +1,195 @@
+#!/usr/bin/bash
+# shellcheck disable=SC2016  # the $-names are literal grep -F patterns
+# test-iscsi-fresh-install-guards — Structural checks for the defects a
+# fresh two-node install hits on its first VM-disk operation.
+#
+# F-016 guard: safe-iscsi-save failures were invisible to the callers
+# that persist iSCSI config — new-vm-disk printed "✓ Configuration
+# saved" right after a FATAL save, and unarchive-vm printed
+# CONFIG_SAVED regardless. Every caller must check the exit status.
+#
+# F-016b guard: the expected-backstores manifest is required by
+# safe-iscsi-save, but new-vm-disk skipped adding to it when the file
+# did not exist yet — which is exactly the fresh-install state.
+#
+# F-017 guard: fresh TPGs refuse every initiator (explicit-ACL mode,
+# empty ACL list; iscsiadm error 24). setup-iscsi-targets must enable
+# demo-mode ACLs on TPGs without explicit ACLs, and persist that
+# change.
+#
+# F-018-family guard: every targetcli luns-ls lookup in bin/ must
+# anchor its grep on "block/<name> " — the emitted line slash-prefixes
+# the backstore name, so space-anchored greps never match and bare
+# greps match longer names that start with this one (disk-1 vs
+# disk-10), returning the wrong LUN.
+
+# shellcheck source=test-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+GUARDED_SAVE_CALLERS=(new-vm-disk detach-vm-disk remove-vm-disk
+    restart-iscsi-services)
+
+test_save_callers_check_exit_status() {
+    test_start "safe-iscsi-save callers check its exit status"
+    local script
+    for script in "${GUARDED_SAVE_CALLERS[@]}"; do
+        if ! grep -qF 'if ! "$mydir/safe-iscsi-save"' \
+            "$repo_root/bin/$script"; then
+            test_fail "bin/$script does not check safe-iscsi-save's exit status"
+            return
+        fi
+        if ! grep -qF 'NOT saved' "$repo_root/bin/$script"; then
+            test_fail "bin/$script does not report the failed save"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_unarchive_marker_only_after_save_success() {
+    test_start "unarchive-vm emits CONFIG_SAVED only after a successful save"
+    local line_save line_marker
+    line_save=$(grep -nF 'if ! "$mydir/safe-iscsi-save"' \
+        "$repo_root/bin/unarchive-vm" | head -1 | cut -d: -f1)
+    line_marker=$(grep -nF 'echo "CONFIG_SAVED"' \
+        "$repo_root/bin/unarchive-vm" | head -1 | cut -d: -f1)
+    if [[ -z "$line_save" || -z "$line_marker" \
+        || "$line_save" -ge "$line_marker" ]]; then
+        test_fail "CONFIG_SAVED must come after the guarded save call"
+        return
+    fi
+    if ! grep -qF 'echo "SAVE_FAILED"' "$repo_root/bin/unarchive-vm"; then
+        test_fail "unarchive-vm lacks the SAVE_FAILED marker"
+        return
+    fi
+    test_pass
+}
+
+test_unguarded_save_calls_are_structurally_safe() {
+    test_start "remaining safe-iscsi-save sites are safe by structure"
+    # attach-vm-disk: the save is the heredoc's last statement, so ssh
+    # propagates its status to the caller's || { FATAL } handler.
+    local attach_tail
+    attach_tail=$(grep -n -F -A1 '"$mydir/safe-iscsi-save"' \
+        "$repo_root/bin/attach-vm-disk" | head -2)
+    if [[ "$attach_tail" != *SSHEOF* ]]; then
+        test_fail "attach-vm-disk save call is no longer the heredoc's last statement"
+        return
+    fi
+    # rename-vm-disk: runs under set -e before its save call.
+    local set_line save_line
+    set_line=$(grep -n '^set -e' "$repo_root/bin/rename-vm-disk" | head -1 | cut -d: -f1)
+    save_line=$(grep -nF '"$mydir/safe-iscsi-save"' \
+        "$repo_root/bin/rename-vm-disk" | head -1 | cut -d: -f1)
+    if [[ -z "$set_line" || -z "$save_line" || "$set_line" -ge "$save_line" ]]; then
+        test_fail "rename-vm-disk save call is not covered by set -e"
+        return
+    fi
+    test_pass
+}
+
+test_manifest_add_bootstraps_missing_file() {
+    test_start "new-vm-disk manifest add creates the missing manifest"
+    local script
+    script="$repo_root/bin/new-vm-disk"
+    if ! grep -qF 'mkdir -p "$(dirname "$manifest")"' "$script"; then
+        test_fail "new-vm-disk no longer ensures the manifest directory"
+        return
+    fi
+    if grep -qF 'if [[ -f "$manifest" ]]; then' "$script"; then
+        test_fail "new-vm-disk still skips the add when the manifest is absent"
+        return
+    fi
+    test_pass
+}
+
+test_setup_targets_enables_demo_mode_acls() {
+    test_start "setup-iscsi-targets enables demo-mode ACLs on ACL-less TPGs"
+    local script
+    script="$repo_root/bin/setup-iscsi-targets"
+    if ! grep -qF 'generate_node_acls=1' "$script"; then
+        test_fail "setup-iscsi-targets never enables demo-mode ACLs"
+        return
+    fi
+    # The guard: never flip a TPG that already carries explicit ACLs.
+    if ! grep -qF 'acls" ls 2>/dev/null | grep -q "iqn\."' "$script"; then
+        test_fail "demo-mode flip lacks the explicit-ACL guard"
+        return
+    fi
+    # The flip must participate in the save decision.
+    if ! grep -qF 'acls_fixed -gt 0' "$script"; then
+        test_fail "ACL changes do not trigger a saveconfig"
+        return
+    fi
+    test_pass
+}
+
+test_lun_lookups_anchor_on_block_prefix() {
+    test_start "every luns-ls lookup anchors its grep (F-018 + prefix hazard)"
+    # targetcli emits "o- lun3 [block/<name> (/dev/...)]" — the backstore
+    # name is slash-prefixed. A luns-ls lookup grep that is not anchored
+    # on "block/<name> " either never matches (space-anchored, F-018) or
+    # matches every longer name that starts with this one (disk-1 vs
+    # disk-10), returning the wrong LUN. Lun-number-keyed lookups are
+    # exempt: their downstream parsing carries its own digit guard.
+    # Each luns-ls pipeline is examined with its continuation line (every
+    # lookup in the tree greps on the line directly after the ls).
+    local bad
+    bad=$(awk '
+        /tpg1\/luns/ && /ls/ {
+            pipe = $0
+            if ($0 ~ /\\$/) { getline nxt; pipe = pipe "\n" nxt }
+            if (pipe ~ /grep/ && pipe !~ /block\// && pipe !~ /lun\$\{lun\}/)
+                print FILENAME ":" FNR
+        }
+    ' "$repo_root"/bin/*)
+    if [[ -n "$bad" ]]; then
+        test_fail "unanchored luns-ls grep at: $(echo "$bad" | tr '\n' ' ')"
+        return
+    fi
+    test_pass
+}
+
+test_rescan_settles_before_counting() {
+    test_start "rescan-storage lets udev settle before counting devices"
+    if ! grep -qF "udevadm settle --timeout=10" \
+        "$repo_root/bin/rescan-storage"; then
+        test_fail "rescan-storage counts devices before udev settles"
+        return
+    fi
+    test_pass
+}
+
+test_efi_lun_grep_is_delimited() {
+    test_start "enroll-efi-keys-vm lun-token grep is digit-delimited"
+    # The luns-ls line for lun1 must not match lun19: the grep key needs
+    # the trailing space that follows the lun number in targetcli's
+    # output ("o- lun1 ... [block/...").
+    if grep -qF 'grep -F \"lun${lun}\"'\" "$repo_root/bin/enroll-efi-keys-vm"; then
+        test_fail "enroll-efi-keys-vm greps the lun token without a delimiter"
+        return
+    fi
+    if ! grep -qF 'grep -F \"lun${lun} \"' "$repo_root/bin/enroll-efi-keys-vm"; then
+        test_fail "enroll-efi-keys-vm lun grep lost its trailing-space delimiter"
+        return
+    fi
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_save_callers_check_exit_status
+test_unarchive_marker_only_after_save_success
+test_unguarded_save_calls_are_structurally_safe
+test_manifest_add_bootstraps_missing_file
+test_setup_targets_enables_demo_mode_acls
+test_lun_lookups_anchor_on_block_prefix
+test_rescan_settles_before_counting
+test_efi_lun_grep_is_delimited
+
+test_summary

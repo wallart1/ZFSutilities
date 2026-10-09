@@ -453,7 +453,8 @@ Run ShellCheck from the repository root on the bash modules and tests
 shellcheck -S warning \
     $(find bin -maxdepth 1 -type f ! -name watchall) \
     lib/* tests/test-* tests/integration/* \
-    tests/integrated/itf tests/integrated/lib/*.sh
+    tests/integrated/itf tests/integrated/lib/*.sh \
+    tests/integrated/journeys/*.journey
 ```
 
 When a warning cannot be avoided without changing behavior (for example, a

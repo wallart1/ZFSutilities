@@ -75,11 +75,12 @@ test_valid_config_loads_with_defaults() {
         source "$ITF_CONFIG_LIB"
         ITF_SITE_CONFIG="$tmp_dir/valid.conf" itf_config_load
         fields="${ITF_HTTP_PORT}|${ITF_GUEST_NET_MODEL}|${ITF_RUNS_DIR}"
+        fields+="|${ITF_STORAGE_BASE}|${ITF_COMPUTE_BASE}"
         echo "${fields}|${ITF_CACHE_DIR}|${ITF_TEMPLATE_NAME}"
     ) 2>/dev/null )
     assert_rc 0 $?
     assert_equals \
-        "8000|virtio|$mydir/tests/integrated/results|$mydir/tests/integrated/cache|itf-template" \
+        "8000|virtio|$mydir/tests/integrated/results|zfstestvm1|zfstestvm2|$mydir/tests/integrated/cache|itf-template" \
         "$out"
 }
 
@@ -164,6 +165,94 @@ test_vmid_bounds_enforced() {
     assert_contains "$load_err" "ITF_VMID_FIRST must be an integer >= 100"
 }
 
+write_two_node_config() {
+    write_valid_config
+    cp "$tmp_dir/valid.conf" "$tmp_dir/twonode.conf"
+    cat >> "$tmp_dir/twonode.conf" <<'EOF'
+ITF_COMPUTE_TEMPLATE_NAME="itf-template-pve"
+ITF_PVE_ISO_URL=https://enterprise.example.invalid/proxmox-ve_9.2-1.iso
+ITF_PVE_ISO_NAME=itf-pve-9.2-1.iso
+ITF_ISCSI_STORAGE_IP=192.168.101.1
+ITF_ISCSI_COMPUTE_IP=192.168.101.2
+EOF
+}
+
+test_two_node_keys_load_clean() {
+    test_start "a complete two-node key set loads without complaints"
+    write_two_node_config
+    run_config_load "$tmp_dir/twonode.conf"
+    assert_rc 0 "$load_rc"
+}
+
+test_p2p_ips_validated() {
+    test_start "P2P IPs must be a valid, distinct, all-or-nothing pair"
+    write_two_node_config
+    sed '/^ITF_ISCSI_COMPUTE_IP=/d' "$tmp_dir/twonode.conf" > "$tmp_dir/p2p.conf"
+    run_config_load "$tmp_dir/p2p.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_ISCSI_STORAGE_IP and ITF_ISCSI_COMPUTE_IP"
+    assert_contains "$load_err" "must be set together"
+
+    write_two_node_config
+    sed -i 's/^ITF_ISCSI_STORAGE_IP=.*/ITF_ISCSI_STORAGE_IP=10.0.0.256/' \
+        "$tmp_dir/twonode.conf"
+    run_config_load "$tmp_dir/twonode.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "not a valid IPv4"
+
+    write_two_node_config
+    sed -i 's/^ITF_ISCSI_COMPUTE_IP=.*/ITF_ISCSI_COMPUTE_IP=192.168.101.1/' \
+        "$tmp_dir/twonode.conf"
+    run_config_load "$tmp_dir/twonode.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "must differ"
+}
+
+test_pve_iso_pair_validated() {
+    test_start "PVE ISO keys follow the Debian pair's both-or-neither rule"
+    write_two_node_config
+    sed '/^ITF_PVE_ISO_NAME=/d' "$tmp_dir/twonode.conf" > "$tmp_dir/pveiso.conf"
+    run_config_load "$tmp_dir/pveiso.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "must be set together"
+
+    write_two_node_config
+    sed -i 's/^ITF_PVE_ISO_NAME=.*/ITF_PVE_ISO_NAME=proxmox-ve.iso/' \
+        "$tmp_dir/twonode.conf"
+    run_config_load "$tmp_dir/twonode.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_PVE_ISO_NAME must start with 'itf-'"
+
+    write_two_node_config
+    sed -i 's|^ITF_PVE_ISO_URL=.*|ITF_PVE_ISO_URL=ftp://nope.invalid/x.iso|' \
+        "$tmp_dir/twonode.conf"
+    run_config_load "$tmp_dir/twonode.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_PVE_ISO_URL must be an http(s) URL"
+}
+
+test_compute_template_and_base_validated() {
+    test_start "compute template charset and base membership are enforced"
+    write_two_node_config
+    sed -i 's/^ITF_COMPUTE_TEMPLATE_NAME=.*/ITF_COMPUTE_TEMPLATE_NAME="bad name!"/' \
+        "$tmp_dir/twonode.conf"
+    run_config_load "$tmp_dir/twonode.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_COMPUTE_TEMPLATE_NAME has invalid characters"
+
+    write_two_node_config
+    echo 'ITF_COMPUTE_BASE=notabase' >> "$tmp_dir/twonode.conf"
+    run_config_load "$tmp_dir/twonode.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_COMPUTE_BASE ('notabase') must be one of ITF_BASE_HOSTS"
+
+    write_two_node_config
+    echo 'ITF_STORAGE_BASE=notabase' >> "$tmp_dir/twonode.conf"
+    run_config_load "$tmp_dir/twonode.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_STORAGE_BASE ('notabase') must be one of ITF_BASE_HOSTS"
+}
+
 test_missing_config_is_fail_closed
 test_committed_example_passes_validation
 test_valid_config_loads_with_defaults
@@ -172,6 +261,10 @@ test_missing_required_keys_reported
 test_invalid_values_reported_together
 test_storage_name_charset_enforced
 test_vmid_bounds_enforced
+test_two_node_keys_load_clean
+test_p2p_ips_validated
+test_pve_iso_pair_validated
+test_compute_template_and_base_validated
 
 rm -rf "$tmp_dir"
 teardown_test_env

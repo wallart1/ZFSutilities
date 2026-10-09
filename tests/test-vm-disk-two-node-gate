@@ -1,0 +1,99 @@
+#!/usr/bin/bash
+# shellcheck disable=SC2016,SC1003  # the $-names and trailing \ are
+# literal grep -F patterns, not expansions or escapes
+# test-vm-disk-two-node-gate — Structural checks on the Proxmox gate of
+# the vm-disk family.
+#
+# F-014 guard: new-vm-disk/resize-vm-disk/remove-vm-disk/list-vm-disks
+# re-invoke themselves on the two-node storage host over SSH, but their
+# top-level Proxmox gate was unconditional — on a fresh install the
+# delegated storage half died with "requires Proxmox VE (qm command not
+# found)" before doing any work.  Production only worked because
+# pve-manager/qemu-server happened to be installed on the storage node.
+# The gate must exempt the two-node storage role.
+
+# shellcheck source=test-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+GATED_SCRIPTS=(new-vm-disk resize-vm-disk remove-vm-disk list-vm-disks)
+
+test_gate_exempts_two_node_storage_role() {
+    test_start "Proxmox gate exempts the two-node storage host role"
+    local script
+    for script in "${GATED_SCRIPTS[@]}"; do
+        if ! grep -qF \
+            '&& ! { is_two_node && [[ "$my_host" == "$storage_host" ]]; }; then' \
+            "$repo_root/bin/$script"; then
+            test_fail "bin/$script gate does not exempt the storage role"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_gate_still_demands_qm_elsewhere() {
+    test_start "gate keeps its qm premise and FATAL messages"
+    local script
+    for script in "${GATED_SCRIPTS[@]}"; do
+        if ! grep -qF 'if ! command -v qm >/dev/null 2>&1 \' \
+            "$repo_root/bin/$script"; then
+            test_fail "bin/$script lost the qm premise at the gate"
+            return
+        fi
+        if [[ $(grep -cF 'FATAL: This script requires Proxmox VE' \
+            "$repo_root/bin/$script") -lt 1 ]]; then
+            test_fail "bin/$script lost the FATAL explanation"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_my_host_assigned_once_before_gate() {
+    test_start "my_host assigned exactly once, before the gate reads it"
+    local script assign_line gate_line count
+    for script in "${GATED_SCRIPTS[@]}"; do
+        count=$(grep -cF 'my_host=$(hostname -s)' "$repo_root/bin/$script")
+        assign_line=$(grep -nF 'my_host=$(hostname -s)' \
+            "$repo_root/bin/$script" | head -1 | cut -d: -f1)
+        gate_line=$(grep -nF 'command -v qm' \
+            "$repo_root/bin/$script" | head -1 | cut -d: -f1)
+        if [[ "$count" -ne 1 ]]; then
+            test_fail "bin/$script has $count my_host assignments, want 1"
+            return
+        fi
+        if [[ -z "$assign_line" || -z "$gate_line" \
+            || "$assign_line" -ge "$gate_line" ]]; then
+            test_fail "bin/$script: my_host assignment must precede the gate"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_storage_delegation_present() {
+    test_start "each gated script still delegates its storage half"
+    local script
+    for script in "${GATED_SCRIPTS[@]}"; do
+        if ! grep -qF "remote_zfsutility_script \"\$storage_host\" \"$script\"" \
+            "$repo_root/bin/$script"; then
+            test_fail "bin/$script no longer re-invokes itself on storage"
+            return
+        fi
+    done
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_gate_exempts_two_node_storage_role
+test_gate_still_demands_qm_elsewhere
+test_my_host_assigned_once_before_gate
+test_storage_delegation_present
+
+test_summary

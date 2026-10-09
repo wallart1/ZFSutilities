@@ -196,9 +196,12 @@ else
     log_msg "INFO: BACKSTORE_CREATED"
 fi
 
-# Check if LUN is mapped
+# Check if LUN is mapped. The lun line slash-prefixes the backstore name
+# ("o- lun3 [block/<name> (/dev/...)]"), so anchor on "block/<name> " — a
+# space-anchored name never matches, and a bare name also matches longer
+# names that start with this one.
 lun_line=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-    | grep " ${backstore_name} " | head -1)
+    | grep -F "block/${backstore_name} " | head -1)
 existing_lun=""
 if [[ -n "$lun_line" ]]; then
     existing_lun="${lun_line#*lun}"
@@ -210,7 +213,7 @@ if [[ -n "$existing_lun" ]]; then
 else
     targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${backstore_name}"
     lun_line=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-        | grep " ${backstore_name} " | head -1)
+        | grep -F "block/${backstore_name} " | head -1)
     new_lun=""
     if [[ -n "$lun_line" ]]; then
         new_lun="${lun_line#*lun}"

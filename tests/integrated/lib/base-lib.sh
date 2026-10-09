@@ -159,39 +159,57 @@ itf_qm_check() {
     return "$bad"
 }
 
-# _itf_template_vmid_resolve <base-host>
+# _itf_template_vmid_resolve <base-host> [name]
 #
-# Echoes the VMID of the baseline template, matched by NAME from `qm
-# list` (rebuilds occupy a fresh VMID each time, so the name is the stable
-# identity).  Echoes nothing when no template exists or ITF_TEMPLATE_NAME
-# is unset — the guard runs standalone of the site config, and an unset
-# name simply disables template protection.
+# Echoes the VMID of a baseline template, matched by NAME from `qm list`
+# (rebuilds occupy a fresh VMID each time, so the name is the stable
+# identity).  Defaults to ITF_TEMPLATE_NAME.  Echoes nothing when no
+# template exists or the name is unset — the guard runs standalone of the
+# site config, and unset names simply disable template protection.
 _itf_template_vmid_resolve() {
-    local base="$1"
-    [[ -n "${ITF_TEMPLATE_NAME:-}" ]] || return 0
+    local base="$1" name="${2:-${ITF_TEMPLATE_NAME:-}}"
+    [[ -n "$name" ]] || return 0
     itf_qm "$base" list 2>/dev/null \
-        | awk -v n="$ITF_TEMPLATE_NAME" '$2 == n {print $1; exit}'
+        | awk -v n="$name" '$2 == n {print $1; exit}'
+}
+
+# _itf_template_names
+#
+# Echoes every configured template name, one per line: the storage-role
+# baseline always, the compute-role baseline when the site configures
+# two-node keys.
+_itf_template_names() {
+    local n
+    for n in "${ITF_TEMPLATE_NAME:-}" "${ITF_COMPUTE_TEMPLATE_NAME:-}"; do
+        [[ -n "$n" ]] && printf '%s\n' "$n"
+    done
+    return 0
 }
 
 # _itf_qm_touches_template <base-host> <qm-args...>
 #
-# True when a mutating qm argument vector names the baseline template's
-# VMID as an operand — any standalone numeric token that is not an option
-# value, the same shape itf_qm_check treats as a VMID.
+# Echoes the NAME of the baseline template whose VMID appears in a
+# mutating qm argument vector as an operand — any standalone numeric
+# token that is not an option value, the same shape itf_qm_check treats
+# as a VMID.  Silent (rc 1) when no template is touched.
 _itf_qm_touches_template() {
     local base="$1"
     shift
-    local tmpl_vmid token prev
-    tmpl_vmid="$(_itf_template_vmid_resolve "$base")"
-    [[ -n "$tmpl_vmid" ]] || return 1
-    prev=""
-    for token in "$@"; do
-        if [[ "$token" =~ ^[0-9]+$ && ! "$prev" == -* ]] \
-                && [[ "$token" == "$tmpl_vmid" ]]; then
-            return 0
-        fi
-        prev="$token"
-    done
+    local name tmpl_vmid token prev
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        tmpl_vmid="$(_itf_template_vmid_resolve "$base" "$name")"
+        [[ -n "$tmpl_vmid" ]] || continue
+        prev=""
+        for token in "$@"; do
+            if [[ "$token" =~ ^[0-9]+$ && ! "$prev" == -* ]] \
+                    && [[ "$token" == "$tmpl_vmid" ]]; then
+                printf '%s\n' "$name"
+                return 0
+            fi
+            prev="$token"
+        done
+    done < <(_itf_template_names)
     return 1
 }
 
@@ -228,16 +246,18 @@ itf_qm() {
     done
 
     if _itf_verb_mutating "$1"; then
-        # The baseline template is durable infrastructure: everyday guest
-        # verbs must never mutate it.  `clone` is exempt — it reads the
-        # template and writes a fresh VMID (that is its whole purpose).
-        # Protection is name-resolved and thus needs one `qm list` round
-        # trip; in dry-run that call yields nothing, so dry-run output is
-        # unchanged (dry-run mutates nothing anyway).
+        # The baseline templates are durable infrastructure: everyday
+        # guest verbs must never mutate them.  `clone` is exempt — it
+        # reads the template and writes a fresh VMID (that is its whole
+        # purpose).  Protection is name-resolved and thus needs one
+        # `qm list` round trip per configured template name; in dry-run
+        # that call yields nothing, so dry-run output is unchanged
+        # (dry-run mutates nothing anyway).
+        local tmpl_hit=""
         if [[ "$1" != clone && -z "${ITF_TEMPLATE_OVERRIDE:-}" ]] \
-                && _itf_qm_touches_template "$base" "$@"; then
+                && tmpl_hit="$(_itf_qm_touches_template "$base" "$@")"; then
             echo "itf: REFUSED qm $* on $base: VMID is the baseline template" \
-                "'${ITF_TEMPLATE_NAME}' (itf template build/destroy manage it)" >&2
+                "'${tmpl_hit}' (itf template build/destroy manage it)" >&2
             return 22
         fi
         local marker=""

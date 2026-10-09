@@ -23,6 +23,12 @@ dev (itf orchestrator)
               └── ZFSutilities under test (release or dev tarball)
 ```
 
+Cycle 2 adds a second base host in the **compute role** (see
+[Two-node topology](#two-node-topology)): the storage-role base hosts
+Debian-based guests as before, the compute-role base hosts guests
+installed from the Proxmox VE ISO, and two-node journeys drive one guest
+on each, linked by a point-to-point subnet.
+
 ## Safety model
 
 The base Proxmox hosts are protected by construction, not by convention:
@@ -53,15 +59,18 @@ Everything environment-specific lives in `tests/integrated/site/config`
 (gitignored), created from the committed `site/config.example`. Loading
 is fail-closed: a missing or invalid file aborts with a pointer to the
 example. Validated keys cover the base hosts, SSH user, reserved VMID
-range, itf storages, ISO source, guest sizing, and the software source
-(`release` or `dev-tarball`).
+range, itf storages, ISO sources, guest sizing, and the software source
+(`release` or `dev-tarball`). Two-node keys (role bases, P2P addresses,
+compute template name, PVE ISO source) are optional and activate the
+compute-role machinery only when present; the role bases must be members
+of `ITF_BASE_HOSTS`.
 
 ## Running
 
 ```bash
 tests/integrated/itf manual-steps     # outstanding human setup, if any
 tests/integrated/itf preflight        # dev + base-host readiness report
-tests/integrated/itf iso fetch        # download the installer ISO
+tests/integrated/itf iso fetch        # download the Debian installer ISO
 tests/integrated/itf iso upload       # push it to the base ISO storage
 tests/integrated/itf template build   # rebuild the post-install baseline
 tests/integrated/itf journey list
@@ -69,6 +78,11 @@ tests/integrated/itf journey run j01-fresh-install
 tests/integrated/itf watch            # tail the active run — NOT a console
 tests/integrated/itf status           # guests + template + runs overview
 ```
+
+`iso fetch`/`iso upload` take an optional selector (`debian`, the
+default, or `pve`), and `template build` takes `--base` (target base
+host) and `--profile storage|compute` (storage = Debian + product, the
+default; compute = Proxmox VE from the ISO, see below).
 
 Every run produces a progressive report under
 `tests/integrated/results/run-<timestamp>-<tag>/` (gitignored):
@@ -169,6 +183,48 @@ the post-install point in a minute or two instead of repeating the
   are the sanctioned management paths and are audit-logged like every
   other mutation.
 
+## Two-node topology
+
+The cycle-2 journeys model the production two-node layout (storage node
++ compute/Proxmox node) on the base VMs:
+
+- **Role split across base hosts.** `ITF_STORAGE_BASE` hosts the
+  storage-role guest (Debian + product, cloned from the storage
+  template); `ITF_COMPUTE_BASE` hosts the compute-role guest cloned
+  from the **compute template**. Both role bases must be members of
+  `ITF_BASE_HOSTS`, and the guard's template protection covers both
+  template names.
+- **The compute template is PVE installed from the Proxmox VE ISO** —
+  not a Debian guest with PVE layered on top, because that is what a
+  real compute node runs. `itf template build --profile compute`
+  customizes the cached PVE ISO the way the Debian path customizes its
+  netinst: an embedded answer file (auto-install mode, DHCP networking,
+  ext4 on the first disk, root SSH keys), a serial-console kernel
+  append so the install is watchable and gateable, and a first-boot
+  hook that swaps the enterprise repositories for the no-subscription
+  ones and installs the guest agent. Two mastering details are handled
+  by the rebuild: the relative symlinks 7z refuses to extract are
+  restored from its refusal log, and grub's El Torito boot image gets
+  its embedded absolute-sector reference re-pointed at the rebuilt
+  layout (without that, the guest hangs silently right after
+  "Booting from DVD/CD..."). The compute template carries PVE only —
+  the installer's deploy push to the compute host is part of what the
+  journeys exercise.
+- **The cross-node link rides the shared bridge.** Each guest gets a
+  second NIC (`--net1`), static addresses from the site-configured P2P
+  pair (a dedicated subnet modeling production's storage↔compute link
+  without touching any base network config), `/etc/hosts` entries both
+  ways, and exchanged root SSH keys — the checks the two-node
+  installer performs, driven as journey pre-work.
+- **j05-two-node-install** runs the full scenario: clone both guests,
+  stand up the link, create the documented test pools on the storage
+  guest, run `check-prerequisites --two-node` (expected to fail on the
+  unconfigured compute side), feed `install-two-node` its interactive
+  answers, verify the deployed wiring on both guests, and close the
+  loop with a first-LUN round trip — a VM created and disk provisioned
+  on the compute host must arrive over iSCSI and be saved back on the
+  storage side.
+
 ## Findings and repair loop
 
 Failures observed through the end-user surface become entries in
@@ -188,12 +244,15 @@ The itf libraries have their own mock-based suites in the default
 
 ```bash
 tests/run-tests test-itf-config test-itf-base-guard test-itf-report \
-    test-itf-ssh test-itf-template
+    test-itf-ssh test-itf-template test-itf-driver
 ```
 
 They cover fail-closed site-config loading, example-file validity, the
 confinement guard's refusals (VMID range, non-itf storages, non-allow-
-listed verbs, path confinement, baseline-template protection), dry-run
-behavior, audit ordering, the run-report writer, the dev-host HTTP
-serve/fetch/stop round-trip used to deliver preseeds and dev tarballs to
-guests, and the template stamp/resolution/clone/freshness logic.
+listed verbs, path confinement, baseline-template protection for both
+template names), dry-run behavior, audit ordering, the run-report
+writer, the dev-host HTTP serve/fetch/stop round-trip used to deliver
+preseeds and dev tarballs to guests, the template
+stamp/resolution/clone/freshness logic for both profiles, and the
+driver's dispatch/usage surface (journey listing, ISO selector, profile
+flags).

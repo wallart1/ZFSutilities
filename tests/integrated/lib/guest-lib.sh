@@ -122,10 +122,11 @@ itf_guest_create() {
 # itf_guest_start <base> <vmid>
 itf_guest_start() { itf_qm "$1" start "$2"; }
 
-# itf_guest_clone <name> [--base B] [--vmid V] [--mem MB] [--cores N]
+# itf_guest_clone <name> [--base B] [--template T] [--vmid V] [--mem MB] [--cores N]
 #
-# Full-clones the post-install baseline template (template-lib) and echoes
-# the new VMID on stdout (everything else to stderr, like
+# Full-clones a post-install baseline template (template-lib; default
+# ITF_TEMPLATE_NAME, or the compute profile's name via --template) and
+# echoes the new VMID on stdout (everything else to stderr, like
 # itf_guest_create).  Full clone by design: block storages such as the
 # lvmthin itfguests have no linked clones, a thin-pool full clone copies
 # only allocated blocks, and the clone is independent of the template —
@@ -133,13 +134,14 @@ itf_guest_start() { itf_qm "$1" start "$2"; }
 itf_guest_clone() {
     local name="$1"
     shift
-    local base="${ITF_BASE_HOSTS[0]}" vmid="" mem="" cores=""
+    local base="${ITF_BASE_HOSTS[0]}" template="${ITF_TEMPLATE_NAME:-}" vmid="" mem="" cores=""
     local key
 
     while (( $# > 0 )); do
         key="$1"
         case "$key" in
             --base) base="$2"; shift 2 ;;
+            --template) template="$2"; shift 2 ;;
             --vmid) vmid="$2"; shift 2 ;;
             --mem) mem="$2"; shift 2 ;;
             --cores) cores="$2"; shift 2 ;;
@@ -148,9 +150,9 @@ itf_guest_clone() {
     done
 
     local tmpl_vmid
-    tmpl_vmid="$(itf_template_vmid "$base")" || return 1
+    tmpl_vmid="$(itf_template_vmid "$base" "$template")" || return 1
     if [[ -z "$tmpl_vmid" ]]; then
-        echo "itf: no baseline template '$ITF_TEMPLATE_NAME' on $base — " \
+        echo "itf: no baseline template '$template' on $base — " \
             "run: itf template build" >&2
         return 1
     fi
@@ -255,18 +257,34 @@ itf_iso_path() {
     printf '%s/template/iso/%s' "$ITF_ISO_DIR" "${1:-$ITF_ISO_NAME}"
 }
 
-# itf_iso_fetch
+# itf_iso_fetch [debian|pve]
 #
-# Downloads the installer ISO into the dev-side cache directory.
+# Downloads an installer ISO into the dev-side cache directory.  The
+# selector names the configured ISO (Debian netinst for storage-role
+# installs, Proxmox VE ISO for compute-role installs); it defaults to
+# the Debian one so existing callers keep working.
 itf_iso_fetch() {
+    local sel="${1:-debian}" url name
+    case "$sel" in
+        debian) url="$ITF_DEBIAN_ISO_URL"; name="$ITF_ISO_NAME" ;;
+        pve) url="$ITF_PVE_ISO_URL"; name="$ITF_PVE_ISO_NAME" ;;
+        *)
+            echo "itf: unknown ISO selector: $sel (expected debian|pve)" >&2
+            return 2
+            ;;
+    esac
+    if [[ -z "$url" || -z "$name" ]]; then
+        echo "itf: ISO '$sel' is not configured in the site config" >&2
+        return 1
+    fi
     mkdir -p "$ITF_CACHE_DIR" || return 1
-    local dest="$ITF_CACHE_DIR/$ITF_ISO_NAME"
+    local dest="$ITF_CACHE_DIR/$name"
     if [[ -s "$dest" ]]; then
         echo "itf: ISO already cached: $dest"
         return 0
     fi
-    echo "itf: fetching $ITF_DEBIAN_ISO_URL"
-    curl -fL --retry 3 --progress-bar -o "$dest" "$ITF_DEBIAN_ISO_URL" || {
+    echo "itf: fetching $url"
+    curl -fL --retry 3 --progress-bar -o "$dest" "$url" || {
         rm -f "$dest"
         echo "itf: ISO download failed" >&2
         return 1
@@ -382,6 +400,319 @@ CFG
     fi
     rm -rf "$tree"
     printf '%s' "$append" > "$stamp"
+    fi
+    # Always (re)upload: the base storage must hold this exact ISO even
+    # when the cached build was reused.
+    itf_iso_upload "$base" "$name" >&2 || return 1
+    echo "$name"
+}
+
+# itf_pve_answers_render <outfile> <fqdn>
+#
+# Writes the Proxmox VE auto-installer answer file (answer TOML) for a
+# disposable compute-role guest: root login locked to a random unrecorded
+# password hash with SSH key auth (the installer's [global] root-ssh-keys
+# does what the Debian preseed's late_command did), DHCP networking, one
+# ext4 system disk, and the first-boot hook enabled.  Schema verified
+# against the PVE 9.2 installer (proxmox-auto-installer 9.x).
+itf_pve_answers_render() {
+    local out="$1" fqdn="$2"
+    # The autoinstaller requires a FULLY-qualified name with DHCP
+    # networking ("either a fully-qualified domain name or extended
+    # configuration for usage with DHCP") — a bare label like the
+    # template build hostname aborts the install.  Qualify bare labels
+    # with the same domain the Debian preseed pins (localdomain).
+    [[ "$fqdn" == *.* ]] || fqdn+=".localdomain"
+    local sshkey=""
+    [[ -f "$ITF_SSH_KEY" ]] && sshkey="$(tr -d '\n' < "$ITF_SSH_KEY")"
+    if [[ -z "$sshkey" ]]; then
+        echo "itf: no public key at $ITF_SSH_KEY — guests would be unreachable" >&2
+        return 1
+    fi
+    # A quote in the key comment would break the TOML basic string.
+    if [[ "$sshkey" == *'"'* ]]; then
+        echo "itf: public key at $ITF_SSH_KEY contains a double quote — unusable" >&2
+        return 1
+    fi
+    # Same policy as the Debian preseed: a VALID random crypt hash nobody
+    # records, never a lock value the installer might reject.
+    local rootpw_hash=""
+    rootpw_hash="$(openssl passwd -6 "$(head -c 32 /dev/urandom | base64 | tr -d '\n')")"
+    if [[ -z "$rootpw_hash" || "$rootpw_hash" != \$6\$* ]]; then
+        echo "itf: cannot generate root password hash — is openssl available?" >&2
+        return 1
+    fi
+    cat > "$out" <<TOML
+[global]
+keyboard = "en-us"
+country = "us"
+fqdn = "$fqdn"
+mailto = "root@$fqdn"
+timezone = "UTC"
+root-password-hashed = "$rootpw_hash"
+root-ssh-keys = [
+  "$sshkey",
+]
+reboot-mode = "reboot"
+
+[network]
+source = "from-dhcp"
+
+[disk-setup]
+filesystem = "ext4"
+disk-list = ["sda"]
+
+[first-boot]
+source = "from-iso"
+ordering = "network-online"
+TOML
+    # A TOML syntax error would only surface a full install later — fail
+    # here instead (python3 is already an itf prerequisite).
+    python3 -c "import tomllib, sys; tomllib.load(open(sys.argv[1], 'rb'))" "$out" \
+        || { echo "itf: rendered PVE answer file is not valid TOML" >&2; return 1; }
+    return 0
+}
+
+# itf_pve_first_boot_render <outfile>
+#
+# Writes the first-boot hook the PVE auto-installer copies into the
+# installed system (it rides on the boot ISO as proxmox-first-boot and
+# runs once, after network-online): the day-one admin work on a fresh
+# PVE host — switch apt to the no-subscription repos (the ISO ships
+# enterprise repos no test guest has credentials for) and install the
+# qemu guest agent so the orchestrator can discover the guest's IP.
+itf_pve_first_boot_render() {
+    local out="$1"
+    cat > "$out" <<'HOOK'
+#!/bin/bash
+# Embedded by the itf orchestrator; runs once on the installed system.
+set -e
+src_dir=/etc/apt/sources.list.d
+# Enterprise repos have no credentials here; disable their deb822
+# stanzas and add the pve-no-subscription group for this release.
+# A deb822 file carries no Enabled line while true (the default), so
+# the flag must be joined to the EXISTING stanza: appending after a
+# blank line starts a new headerless stanza that apt rejects
+# ("Malformed stanza 2 (type)").  Rewrite with trailing blanks
+# stripped and exactly one newline, then append the field.
+for f in "$src_dir"/pve-enterprise.sources "$src_dir"/ceph.sources; do
+    [[ -f "$f" ]] || continue
+    grep -q '^Enabled: false' "$f" && continue
+    printf '%s\nEnabled: false\n' "$(cat "$f")" > "$f.new"
+    mv "$f.new" "$f"
+done
+. /etc/os-release
+cat > "$src_dir/proxmox-no-subscription.sources" <<SRC
+Types: deb
+URIs: http://download.proxmox.com/debian/pve
+Suites: ${VERSION_CODENAME}
+Components: pve-no-subscription
+Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+SRC
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq qemu-guest-agent
+systemctl enable --now qemu-guest-agent
+echo "itf-first-boot-ok"
+HOOK
+}
+
+# itf_pve_iso_customize <base-host> <fqdn>
+#
+# Builds and uploads the automated-install boot ISO for a compute-role
+# guest from the cached Proxmox VE ISO (constant remote name
+# "itf-pve-boot.iso", overwritten on rebuild; a stamp file of the
+# rendered answers+hook skips rebuilds while they are unchanged).
+#
+# The PVE auto-installer flow (verified against the 9.2.1 ISO and the
+# upstream assistant's own output):
+#   - grub.cfg's FIRST entry becomes "Install Proxmox VE (Automated)"
+#     with a 10 s menu timeout when auto-installer-mode.toml exists at
+#     the ISO root — the stock grub.cfg already contains the entry, so
+#     no boot-menu surgery is needed;
+#   - the ONLY grub.cfg change here appends console=ttyS0,115200 to that
+#     entry's kernel line so the install is watchable (and gateable)
+#     over `qm terminal`;
+#   - auto-installer-mode.toml (mode = "iso") makes proxmox-fetch-answer
+#     read /cdrom/answer.toml from the medium itself — no network fetch,
+#     no preseed HTTP server needed for PVE installs;
+#   - the [first-boot] from-iso hook rides as proxmox-first-boot at the
+#     ISO root and runs once on the installed system.
+itf_pve_iso_customize() {
+    local base="$1" fqdn="$2"
+    # Qualify BEFORE the stamp below: the cache key must track the name
+    # actually written into the answers file (itf_pve_answers_render
+    # applies the same rule defensively).
+    [[ "$fqdn" == *.* ]] || fqdn+=".localdomain"
+    local name="itf-pve-boot.iso"
+    local out="$ITF_CACHE_DIR/$name"
+    local stamp="$ITF_CACHE_DIR/${name%.iso}.answers"
+
+    # Only the final ISO name goes to stdout; everything informational
+    # goes to stderr (mirrors itf_iso_customize).
+    local work="$ITF_RUN_DIR/pve-iso-build"
+    mkdir -p "$work"
+    if ! itf_pve_answers_render "$work/answer.toml" "$fqdn"; then
+        return 1
+    fi
+    itf_pve_first_boot_render "$work/proxmox-first-boot"
+    # Stamp over the STABLE inputs only — the answers file itself embeds
+    # a fresh random root-password hash on every render, which would
+    # defeat the cache (the cached ISO simply keeps the hash it was
+    # built with).
+    local want_stamp
+    want_stamp="$(printf '%s\n%s\n' "$fqdn" "$ITF_PVE_ISO_NAME"; \
+        cat "$ITF_SSH_KEY" "$work/proxmox-first-boot" \
+        | sha256sum | awk '{print $1}')"
+
+    if [[ -s "$out" && -f "$stamp" && "$(cat "$stamp")" == "$want_stamp" ]]; then
+        echo "itf: custom PVE boot ISO already built: $out" >&2
+    else
+        local tool
+        for tool in 7z genisoimage python3; do
+            if ! command -v "$tool" > /dev/null 2>&1; then
+                echo "itf: $tool is required to customize the PVE boot ISO (not on PATH)" >&2
+                return 1
+            fi
+        done
+        [[ -s "$ITF_CACHE_DIR/$ITF_PVE_ISO_NAME" ]] || {
+            echo "itf: PVE ISO not cached — run 'itf iso fetch pve' first" >&2
+            return 1
+        }
+
+        local tree="$ITF_CACHE_DIR/pve-iso-tree"
+        rm -rf "$tree"
+        mkdir -p "$tree" || return 1
+        # 7z extracts every regular file but REFUSES the ISO's relative
+        # symlinks (the dists/ tree links into proxmox/packages, plus a
+        # root "debian -> ." alias), logging each refusal as
+        # "Dangerous (symbolic) link path was ignored : <path> : <target>"
+        # and exiting non-zero.  The log is therefore the complete list
+        # of what to restore by hand — and the rebuild stays faithful to
+        # the stock repo layout instead of silently dropping links.
+        local xlog="$work/pve-7z.log" xrc=0
+        7z x -y -o"$tree" "$ITF_CACHE_DIR/$ITF_PVE_ISO_NAME" > /dev/null 2> "$xlog" \
+            || xrc=$?
+        if (( xrc != 0 && xrc != 2 )) \
+                || grep -v 'Dangerous \(symbolic \)\?link path was ignored' "$xlog" \
+                    | grep -q '^ERROR'; then
+            rm -rf "$tree"
+            echo "itf: PVE ISO extraction failed (see $xlog)" >&2
+            return 1
+        fi
+        awk -F' : ' '/Dangerous (symbolic )?link path was ignored/ {print $2 "\t" $3}' \
+            "$xlog" > "$work/pve-links.tsv"
+        local rel target n_restore=0 n_bad=0
+        while IFS=$'\t' read -r rel target; do
+            [[ -n "$rel" && -n "$target" ]] || continue
+            mkdir -p "$tree/$(dirname "$rel")"
+            ln -sfn "$target" "$tree/$rel"
+            n_restore=$((n_restore + 1))
+            # Every restored link must resolve back inside the tree
+            # (the root-level "debian -> ." alias resolves to the tree
+            # root itself, which is fine).
+            case "$(readlink -m "$tree/$rel")" in
+                "$tree"|"$tree"/*) ;;
+                *)
+                    echo "itf: restored link escapes tree: $rel -> $target" >&2
+                    n_bad=$((n_bad + 1))
+                    ;;
+            esac
+        done < "$work/pve-links.tsv"
+        if (( n_bad > 0 )); then
+            rm -rf "$tree"
+            return 1
+        fi
+        echo "itf: restored $n_restore symlinks dropped by 7z" >&2
+        if [[ ! -f "$tree/boot/grub/grub.cfg" || ! -f "$tree/boot/linux26" \
+                || ! -f "$tree/boot/grub/i386-pc/eltorito.img" ]]; then
+            rm -rf "$tree"
+            echo "itf: unexpected PVE ISO layout (missing grub/linux26/eltorito)" >&2
+            return 1
+        fi
+
+        cp "$work/answer.toml" "$tree/answer.toml"
+        # genisoimage -r keeps exec bits only where the source tree has
+        # them; the post-hook runs this file on the installed system.
+        install -m 0755 "$work/proxmox-first-boot" "$tree/proxmox-first-boot"
+        printf 'mode = "iso"\npartition_label = "proxmox-ais"\n\n[http]\n' \
+            > "$tree/auto-installer-mode.toml"
+
+        # Serial console on the Automated entry — the only kernel-line
+        # change.  Match the exact stock line to fail loudly if a future
+        # ISO rewords it.
+        if ! grep -q 'linux.*/boot/linux26.*proxmox-start-auto-installer$' \
+                "$tree/boot/grub/grub.cfg"; then
+            rm -rf "$tree"
+            echo "itf: Automated boot entry not found in PVE grub.cfg" >&2
+            return 1
+        fi
+        sed -i \
+            's#\(linux.*/boot/linux26.*proxmox-start-auto-installer\)$#\1 console=ttyS0,115200#' \
+            "$tree/boot/grub/grub.cfg"
+
+        # El Torito BIOS boot via grub's image; -boot-info-table is an
+        # isolinux convention grub does not use, so it is deliberately
+        # omitted here.
+        if ! genisoimage -quiet -r -J -joliet-long \
+                -b boot/grub/i386-pc/eltorito.img \
+                -c boot/boot.cat \
+                -no-emul-boot -boot-load-size 4 \
+                -o "$out" "$tree"; then
+            rm -rf "$tree"
+            echo "itf: PVE ISO rebuild failed" >&2
+            return 1
+        fi
+
+        # grub's El Torito image carries a 16-byte load record at boot
+        # sector offset 8 — {2048-sector count, load LBA, byte size, tag}
+        # — written by xorriso when Proxmox mastered the stock ISO.  The
+        # LBA is an ABSOLUTE sector number, and genisoimage does not
+        # re-patch it: a rebuilt ISO whose layout moved the boot image
+        # makes boot.img fetch its core from whatever now lives at the
+        # stock sector, and the guest hangs silently right after
+        # "Booting from DVD/CD...".  Re-point the LBA at the boot image's
+        # actual sector in the rebuilt ISO — the same patch xorriso
+        # applies at master time — and fail loudly when the field does
+        # not hold the stock value (a future ISO mastering change).
+        if ! python3 - "$ITF_CACHE_DIR/$ITF_PVE_ISO_NAME" "$out" <<'PYEOF'
+import struct
+import sys
+
+
+def boot_rba(path):
+    with open(path, "rb") as f:
+        f.seek(17 * 2048 + 71)
+        cat = struct.unpack("<I", f.read(4))[0]
+        f.seek(cat * 2048)
+        entry = f.read(64)
+    if entry[0] != 1 or entry[30:32] != b"\x55\xaa":
+        raise SystemExit(f"no El Torito catalog found in {path}")
+    boot = entry[32:64]
+    if boot[0] != 0x88 or boot[1] != 0x00:
+        raise SystemExit(f"unexpected El Torito entry in {path}")
+    return struct.unpack("<I", boot[8:12])[0]
+
+
+stock_rba = boot_rba(sys.argv[1])
+new_rba = boot_rba(sys.argv[2])
+with open(sys.argv[2], "r+b") as f:
+    f.seek(new_rba * 2048 + 12)
+    old = struct.unpack("<I", f.read(4))[0]
+    if old != stock_rba:
+        raise SystemExit(
+            f"boot image LBA field holds {old}, expected stock {stock_rba}"
+        )
+    f.seek(new_rba * 2048 + 12)
+    f.write(struct.pack("<I", new_rba))
+PYEOF
+        then
+            rm -rf "$tree" "$out"
+            echo "itf: PVE boot-image LBA re-patch failed" >&2
+            return 1
+        fi
+        rm -rf "$tree"
+        printf '%s' "$want_stamp" > "$stamp"
     fi
     # Always (re)upload: the base storage must hold this exact ISO even
     # when the cached build was reused.

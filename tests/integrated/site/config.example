@@ -52,6 +52,18 @@ ITF_GUEST_POOL_DISK_GB=100
 ITF_DEBIAN_ISO_URL=https://REPLACE-ME.invalid/debian-netinst.iso
 ITF_ISO_NAME=itf-debian-netinst.iso
 
+# Two-node cycle (j05) — uncomment when a second base host takes the
+# compute role.  ITF_STORAGE_BASE/ITF_COMPUTE_BASE must be members of
+# ITF_BASE_HOSTS (defaults: first/second entry).  The P2P pair must be
+# two distinct valid IPv4s; the PVE ISO pair is both-or-neither like the
+# Debian pair, and the compute template name follows the same charset
+# rule as ITF_TEMPLATE_NAME.
+# ITF_ISCSI_STORAGE_IP=192.168.101.1
+# ITF_ISCSI_COMPUTE_IP=192.168.101.2
+# ITF_COMPUTE_TEMPLATE_NAME=itf-template-pve
+# ITF_PVE_ISO_URL=https://REPLACE-ME.invalid/proxmox-ve.iso
+# ITF_PVE_ISO_NAME=itf-pve.iso
+
 # Software under test: "release" (GitHub release tarballs — the new-user
 # experience) or "dev-tarball" (verify a repair from this repository).
 ITF_SW_SOURCE=release

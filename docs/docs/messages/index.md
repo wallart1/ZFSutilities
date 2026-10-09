@@ -717,6 +717,7 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `FATAL: Cannot map pool ... to target` | No iSCSI target mapping for a restored zvol's pool | Script aborts; fix the node config mapping |
 | `FATAL: iSCSI reconstruction failed on ...` | The remote iSCSI rebuild failed | Script aborts; see the remote messages |
 | `INFO: ✓ iSCSI configuration saved` | The storage host's targetcli config was persisted | Informational |
+| `SAVE_FAILED` | The remote `safe-iscsi-save` failed; `CONFIG_SAVED` is only emitted after a successful save | Reconstruction aborts; resolve the save failure and re-run |
 | `INFO: --- Step 3: Restoring Proxmox config ---` | Phase milestone | Informational |
 | `FATAL: Failed to read archived config` | The archived config read returned nothing | Script aborts |
 | `INFO: ✓ Config restored: ...` | The config was written (copied or path-rewritten) | Informational |
@@ -856,7 +857,7 @@ See also [PVE-send-to-archive](#pve-send-to-archive) under Backup and Send/Recei
 
 ## Two-Node iSCSI and VM Disks
 
-Scripts in this group share the `FATAL: This script requires Proxmox VE (qm command not found).` environment gate and several `Pool must be one of: ...` / `vmid must be a number` validation fatals (all abort). The shared non-fatal rescan degradation is `WARN: Could not rescan ... — run 'sudo rescan-storage' on ... manually` / `WARN: Could not reach ...` (the compute host must be rescanned manually).
+Scripts in this group share the `FATAL: This script requires Proxmox VE (qm command not found).` environment gate and several `Pool must be one of: ...` / `vmid must be a number` validation fatals (all abort). The shared non-fatal rescan degradation is `WARN: Could not rescan ... — run 'sudo rescan-storage' on ... manually` / `WARN: Could not reach ...` (the compute host must be rescanned manually). The shared persistence failure is `FATAL: safe-iscsi-save failed — iSCSI configuration NOT saved` (new-vm-disk, remove-vm-disk, detach-vm-disk, restart-iscsi-services): the targetcli changes exist in memory only and may not survive a reboot — resolve the save failure and rerun the save.
 
 See also [ensure-restored-vm-iscsi](#ensure-restored-vm-iscsi) under Restore and [zfscheckrunningvms](#zfscheckrunningvms) under VM Archive and Lifecycle.
 
@@ -873,6 +874,7 @@ See also [ensure-restored-vm-iscsi](#ensure-restored-vm-iscsi) under Restore and
 | `FATAL: Key file must not reside on the pool being encrypted: ...` / `FATAL: Key file must not reside on the zvol being created.` | Lockout guard: the key would live on the storage it encrypts | Script aborts; move the key outside that pool/zvol |
 | `FATAL: Could not acquire write lock on ...` | The `<pool>/proxmox` write lock is unavailable | Script aborts; resolve the lock |
 | `FATAL: Device node ... did not appear after 10s` | The `/dev/zvol` node never appeared after creation | Script aborts; check udev and the pool state |
+| `INFO: ✓ Added to expected-backstores manifest` | The backstore was recorded in the manifest `safe-iscsi-save` requires; the manifest is created on first use when absent | Informational |
 | `WARN: OVMF firmware file not found: ...` | The EFI-vars firmware file is missing; a manual `dd` command is printed | EFI init skipped; install `pve-edk2-firmware` or run the printed command |
 | `WARN: Device not found: ...` | The by-path iSCSI device did not appear within 10s; manual `dd` instructions printed | EFI init skipped; follow the instructions |
 | `WARN: VM ... already has an efidisk0 entry — not replacing:` | An existing efidisk0 is preserved | Informational |
@@ -1011,6 +1013,8 @@ Resumable: a state file (`/tmp/move-vm-disk-...state`) records the last complete
 | `FATAL: Failed to create target` | `targetcli /iscsi create` failed for this pool | The loop continues with the next pool; fix targetcli and rerun |
 | `INFO: ✓ Portal ...:3260 already exists` | Portal presence gate passed | Informational |
 | `WARN: Could not add portal ...:3260` | Portal creation failed | Non-fatal; the target lacks a portal — rerun after fixing targetcli |
+| `INFO: ✓ Demo-mode ACLs enabled (no explicit ACLs present)` | A TPG carrying no explicit ACLs was switched to demo mode (`generate_node_acls=1`) so initiators may log in; the dedicated storage network is the isolation boundary | Informational (persisted with the next save) |
+| `WARN: Could not enable demo-mode ACLs on ...` | The `generate_node_acls` attribute could not be set | Initiator logins may be refused (`iscsiadm` error 24); set the attribute manually |
 | `INFO: ✓ iSCSI configuration saved` | Changes were made and persisted | Informational |
 | `INFO: ✓ No changes needed (all targets already configured)` | Nothing was created or added | Informational |
 | `INFO: Targets created: ... / Targets existing: ... / Portals added: ...` | Final summary counters | Informational |
@@ -1843,6 +1847,7 @@ Removes legacy symlinks and deployed versions; every removal mode asks for confi
 | `INFO:   ✓ ... files synced (run switch-version on ... to activate)` | The version directory reached the host but is not active yet | Run `switch-version <version>` on that host |
 | `INFO: To activate:   sudo switch-version ...` | Final summary includes the activation step | Run the suggested command |
 | `FATAL: deploy-version must be run from the repository root. Wrong: ... Right: ...` | Running from a deployed path would rsync a deployment onto itself | `cd` to the repository root as suggested |
+| `INFO: No ...; using legacy /etc/zfsutilities-deploy.conf` | The modern deploy.conf is absent; the legacy flat file is honored instead | Informational |
 | `FATAL: Unknown deployment group: '...'. Run with --help to list groups.` | The group name matches no deployment group | See the help text |
 
 ### [install-single-node](../commands-and-modules/commands.md#install-single-node)
@@ -1870,6 +1875,17 @@ Echo-based installer; must run on the storage host.
 | `FATAL: Compute host name is required` | Empty input at the compute-host prompt | Rerun and provide the host name |
 | `⚠ No pools configured. You can add them to ... later.` | No pools were entered | Edit the node config later |
 | `⚠ setup-iscsi-targets not found — you must create iSCSI targets manually` | The helper is absent from the repository | Create the targets with targetcli manually |
+| `✓ targetcli found` / `✓ rtslib-fb-targetctl.service found` | The LIO target stack is present on the storage host | Informational |
+| `✗ ... not found` (targetcli / rtslib-fb-targetctl.service) | A target-stack piece is missing; an install offer follows (why-it-matters lines precede it) | y installs `targetcli-fb`; anything else aborts with manual-install guidance |
+| `Install the LIO target stack now (apt-get install targetcli-fb)?` | The target-stack install offer | y installs; anything else aborts cleanly |
+| `✗ Could not install targetcli-fb.` | The package installation failed (manual command printed) | Install manually and re-run the installer |
+| `✓ rtslib-fb-targetctl.service enabled` / `⚠ Could not enable rtslib-fb-targetctl.service` | Post-install service enablement outcome | Verify the service manually if warned |
+| `✓ open-iscsi (iscsiadm) found on ...` / `✓ open-iscsi installed on ...` | The initiator is present (or was installed) on the compute host | Informational |
+| `✗ open-iscsi (iscsiadm) not found on ...` | The initiator is missing; an install offer follows (why-it-matters lines precede it) | y installs via apt; anything else aborts with manual-install guidance |
+| `Install open-iscsi on ... now?` | The initiator install offer | y installs; anything else aborts cleanly |
+| `✗ Could not install open-iscsi on ...` | The apt install failed (manual command printed) | Install manually and re-run the installer |
+| `Ensuring iscsid.socket is active on ...` / `✓ iscsid.socket active on ... (socket-activated iscsid)` | Initiator readiness: Debian socket-activates iscsid, so the listening socket is the state `iscsiadm` (and PVE storage) rely on; checked on both the found and installed paths | Informational |
+| `⚠ Could not verify iscsid.socket on ...` | The socket could not be enabled or verified | Check `systemctl status iscsid.socket` on the compute host |
 | `FATAL: Run this script on the storage host (...), not ...` | Hostname check failed | Rerun on the storage host |
 | `FATAL: Cannot SSH from ... to root@...` | Passwordless SSH between the nodes failed (a fix line suggests `ssh-copy-id`) | Set up SSH keys as suggested and rerun |
 | `⚠ Could not initialize retention profiles on ...` | The remote retention-profile init failed | Initialize the profiles on the compute host |

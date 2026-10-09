@@ -190,7 +190,10 @@ if is_two_node && [[ -n "$backstore_name" ]]; then
 
     # Save config
     log_msg "INFO: Saving iSCSI configuration..."
-    "$mydir/safe-iscsi-save"
+    if ! "$mydir/safe-iscsi-save"; then
+        log_msg "FATAL: safe-iscsi-save failed — iSCSI configuration NOT saved"
+        exit 1
+    fi
     log_msg "INFO: ✓ Configuration saved"
 
     # Rescan on the compute host, using its active deployed version.

@@ -35,14 +35,18 @@ source_helper zfslockmanager
 
 rootcheck
 
-if ! command -v qm >/dev/null 2>&1; then
+my_host=$(hostname -s)
+
+# The two-node storage half re-invokes this script on the storage host
+# over SSH (no Proxmox there); the Proxmox requirement applies only on
+# the host where the VMs live.
+if ! command -v qm >/dev/null 2>&1 \
+    && ! { is_two_node && [[ "$my_host" == "$storage_host" ]]; }; then
     log_msg "FATAL: This script requires Proxmox VE (qm command not found)."
     log_msg "FATAL:   On a single node without Proxmox there are no VMs to manage."
     log_msg "FATAL:   Non-Proxmox hypervisors are not supported."
     exit 1
 fi
-
-my_host=$(hostname -s)
 
 usage() {
     local pool_choices
@@ -341,10 +345,15 @@ if is_two_node && [[ "$my_host" != "$storage_host" ]]; then
     fi
 
     if [[ "$my_host" == "$compute_host" ]]; then
-        # Get LUN number from the storage host (needed for both EFI init and data disk config)
+        # Get LUN number from the storage host (needed for both EFI init and data disk config).
+        # The lun line reads "o- lun3 [block/<name> (/dev/...)]" — the name
+        # is slash-prefixed, so anchor the grep on "block/<name> ": a
+        # space-anchored pattern never matches, and a bare name also matches
+        # longer names that start with it (disk-1 vs disk-10), returning the
+        # wrong LUN.
         lun_num=$(ssh root@"$storage_host" \
             "targetcli \"/iscsi/${target}/tpg1/luns\" ls 2>/dev/null \
-             | grep ' ${backstore_name} ' | grep -oE 'lun[0-9]+' | head -1")
+             | grep -F 'block/${backstore_name} ' | grep -oE 'lun[0-9]+' | head -1")
         lun_num="${lun_num#lun}"
         echo ""
         if [[ -z "$lun_num" ]]; then
@@ -525,12 +534,13 @@ if is_two_node; then
     log_msg "INFO: ✓ LUN added"
 
     # --- Add to expected-backstores manifest ---
+    # safe-iscsi-save refuses to run without this manifest, so the first
+    # disk on a fresh install must create it rather than skip the add.
     manifest="/etc/rtslib-fb-target/expected-backstores.txt"
-    if [[ -f "$manifest" ]]; then
-        if ! grep -q "^${backstore_name}$" "$manifest"; then
-            echo "$backstore_name" >> "$manifest"
-            log_msg "INFO: ✓ Added to expected-backstores manifest"
-        fi
+    mkdir -p "$(dirname "$manifest")"
+    if ! grep -q "^${backstore_name}$" "$manifest" 2>/dev/null; then
+        echo "$backstore_name" >> "$manifest"
+        log_msg "INFO: ✓ Added to expected-backstores manifest"
     fi
 
     # --- Register as encrypted LUN if applicable ---
@@ -546,13 +556,18 @@ if is_two_node; then
 
     # --- Save targetcli config ---
     log_msg "INFO: Saving iSCSI configuration..."
-    "$mydir/safe-iscsi-save"
+    if ! "$mydir/safe-iscsi-save"; then
+        log_msg "FATAL: safe-iscsi-save failed — iSCSI configuration NOT saved"
+        exit 1
+    fi
     log_msg "INFO: ✓ Configuration saved"
 
     # --- Find the LUN number that was assigned ---
     # The selected line starts with "lun<n>"; extract the digits that follow.
+    # Anchor on "block/<name> " so a longer name that starts with this one
+    # (disk-1 vs disk-10) cannot supply the wrong line.
     lun_line=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-        | grep "$backstore_name" | head -1)
+        | grep -F "block/${backstore_name} " | head -1)
     lun_num=""
     if [[ -n "$lun_line" ]]; then
         lun_num="${lun_line#*lun}"

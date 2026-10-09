@@ -1872,3 +1872,249 @@ alignment_analysis.py.
   soak suites excluded by design in a no-soak run), rc=0. Nothing to
   resolve; no new pre-existing issues found.
 - Step 6: codebase frozen at this point.
+
+## 2026-10-08 — itf cycle-2 bring-up (two-node j05 on zfstestvm1+2)
+
+Parts B (harness) + C (suites) landed first; then environment (vm2
+storages mirroring vm1's Phase-0 layout, both ISOs uploaded, vm1 stale
+guests 8001–8004 destroyed, both base OSes apt-upgraded — vm1 rebooted
+onto 7.0.14-22; site config now carries the two-node keys; preflight
+all-green across both bases).
+
+Compute-template bring-up (PVE 9.2-1 ISO → auto-install → template)
+shook out four real bugs, all fixed in-tree:
+
+1. **grub El Torito LBA**: genisoimage does not re-patch grub's boot
+   image; its boot sector carries a 16-byte load record at offset 8
+   {2048-sector count, ABSOLUTE load LBA, byte size, tag} written by
+   xorriso at stock-master time. A rebuilt ISO moves the boot image,
+   boot.img then fetches its core from the stock sector number and the
+   guest hangs silently after "Booting from DVD/CD...". The customize
+   step now re-points the LBA at the rebuilt catalog's RBA (python
+   patch, fail-loud gate on the stock value). Boot catalog pointer at
+   VD+71 is little-endian; sector-count field in the default entry
+   reads `04 00` in both stock and rebuild (LE) — NOT the
+   discriminator; -boot-load-size was never the bug.
+2. **Dotted fqdn required**: with [network] from-dhcp the autoinstaller
+   aborts on a bare-label fqdn ("either a fully-qualified domain name
+   or extended configuration for usage with DHCP must be specified") —
+   the assistant's validate-answer does not catch it. Qualify with
+   .localdomain (same domain as the Debian preseed) BEFORE the ISO
+   stamp is computed so the cache tracks what was written.
+3. **deb822 Enabled join**: stock pve-enterprise/ceph .sources end
+   with a trailing blank line; appending "\nEnabled: false" after it
+   starts a headerless stanza 2 that apt rejects ("Malformed stanza 2
+   (type)"). The first-boot hook now rewrites the file with trailing
+   blanks stripped + exactly one newline, then appends the field INTO
+   the existing stanza. (Also: a deb822 file carries no Enabled line
+   while true — substitution patterns silently match nothing.)
+4. **Reboot-probe silence**: the upgrade stage's reboot decision once
+   swallowed an empty probe answer (transport blip right after the
+   package churn) and skipped a required reboot; the boot gate caught
+   it (running 7.0.2-6 vs installed 7.0.14-22). The probe now always
+   answers yes/no, retries 3×, and fails loudly with its own log —
+   empty can no longer mean "no".
+
+Guest triage without an agent channel: root-ssh keys from answer.toml
+land at install time, so link-local IPv6 through the base
+(ProxyCommand -W [%h]:%p, zone %vmbr0) reaches the guest even when
+discovery can't.
+
+### j05 first live runs (2026-10-08, same evening)
+
+Run 1 died at the P2P gates: the installer's Step 4 checks use plain
+BatchMode ssh (no host-key options) and RELY on the user having ssh'd
+to the peer at least once before installing — that first-connection
+acceptance is now modeled as explicit Stage N pre-work (accept-new pair
+both directions), keeping the gates a verbatim installer mirror.
+
+Run 2 died at stage_download: the serve dir mkdir lived only in the
+install path; clone-start journeys (j05) now mkdir it themselves
+(common.sh).
+
+Run 3 got through clone/link/pools/download/prereq-delta and died at
+install-two-node's compute activation — **F-012** (deploy.conf path
+drift: installer writes /etc/zfsutilities/deploy.conf, deploy-version
+reads /etc/zfsutilities-deploy.conf; no groups found → no compute sync
+→ switch-version on a missing tree, rc=127). Repair plan 012 written;
+PAUSED for user approval per the cycle discipline. The plan's
+"compute-side rsync absent" suspicion is disproven (rsync present on
+PVE compute host).
+
+Failed-run guests destroyed after evidence capture (runs 1-3 dirs
+retain all logs).
+
+Runs 4-5 after plan-012 execution (user-approved 2026-10-08, plus a
+standing grant to continue repo corrections): run 4 installed
+end-to-end (rc=0) after the Stage I feed gained the missing empty
+IQN-default line; run 5 verified the storage host fully (targets
+present) and exposed **F-013** on the compute verify —
+`is-active iscsid` fails because Debian socket-activates iscsid
+(service unit disabled by design, socket listening); tweety shows the
+same production state. Repair 013 executed: readiness step hoisted to
+run on both found/installed paths asserting `iscsid.socket`, journey
+Stage V checks the socket, test-installer-checks 33/33 green with
+file-swap red-proof. j05 run 6 pending.
+
+Run 6: compute verify green after repair 013 (iscsid.socket), Stage W
+advanced to qm create and failed on my journey-side scsihw typo
+(`virtio-scsi` → `virtio-scsi-pci`, fixed). Run 7: qm create green,
+then **F-014** — new-vm-disk's delegated storage half dies at the
+storage guest's own unconditional `command -v qm` gate (the two-node
+design re-invokes 4 scripts on the storage host where no PVE exists).
+Production tweety↔stewie only works because pve-manager/qemu-server
+were manually installed on stewie Aug 22 (live-verified, look-only) —
+undocumented, never ensured by the installer. Repair 014 executed:
+role-aware gate (exempts is_two_node && my_host == storage_host) in
+new-vm-disk/resize-vm-disk/remove-vm-disk/list-vm-disks; new suite
+test-vm-disk-two-node-gate 4/4 green, red-proven vs HEAD; siblings
+green. j05 run 8 pending.
+
+Run 8: F-014 repair verified live (delegated storage half runs past
+the gate), advanced to the zvol create, exposing **F-015** —
+`<pool>/proxmox` parent dataset absent: enroll_two_node never ensures
+it (single-node path is the sole creator tree-wide; no installer/doc
+step). Repair 015 executed: enroll_two_node ensures the dataset
+(dry-run aware, FATAL on failure); 3 new two-node tests in
+test-enroll-proxmox-pool (26/26), red-proven vs HEAD. j05 run 9
+pending.
+
+Run 9: F-014+F-015 verified live (delegated half runs, zvol + LUN
+created); rescan-storage then FATALed "No active iSCSI sessions".
+Live guest forensics: discovery worked but login refused — error 24
+authorization; fresh TPGs run generate_node_acls=0 with an EMPTY ACL
+list; nothing tree-wide manages ACLs (**F-017**, setup-iscsi-targets'
+own comment intended demo mode). Same log exposed **F-016**:
+safe-iscsi-save FATAL was ignored ("✓ Configuration saved" printed
+after it) and the expected-backstores manifest can never bootstrap
+(add guarded on file existing). Repairs 016+017 executed: rc guards
+at 5 call sites + manifest bootstrap + demo-mode ACL flip guarded by
+ACL-presence check; new suite test-iscsi-fresh-install-guards 5/5,
+red-proven vs HEAD; affected iscsi suites green; j05 VM-disk step now
+verifies the scsi0 config line, not just rc. j05 run 10 pending.
+
+Run 10: F-016+F-017 verified live (honest save, manifest bootstrapped,
+session logged in, rescan ran) but the disk still never reached the VM
+config. Guest forensics found **F-018**: (a) compute-side LUN lookup
+greps `' name '` space-anchored while targetcli emits
+"[block/name (/dev/…)]" — never matches, scsi0 line never written
+(storage-side twin unanchored + production-proven); (b) rescan-storage
+counted by-path entries before udev settled (0 reported, device
+appeared seconds later). Repair 018 executed; suite now 7/7 red-proven.
+j05 run 11 pending.
+
+**Run 11 (2026-10-08 23:09): j05 GREEN — 36 steps, 0 fail.** The full
+two-node journey runs end-to-end: dual-guest clone, P2P link, pools,
+install-two-node, dual-host verify, enroll, VM 101 + first LUN with
+scsi0 line, LUN visible on compute, target config saved. All findings
+F-012..F-018 flipped to verified; repair plans 012–018 closed.
+Fresh-install bug families this journey exposed (all repaired in-repo):
+config path drift, socket-activation readiness, delegated-role gates,
+dataset/bootstrap contracts, ACL admission, hidden rc failures, output
+format assumptions, udev settle.
+
+Production incident 2026-10-09: `sudo archive-vm 205` on tweety FATALed
+"No referenced zvols found for VM 205". Root cause (read-only forensics,
+deployed 0.119.0 == tree): two-node discovery joined each ref as
+"target:lun" but an IQN contains its own colon
+(iqn.2026-02.local.stewie:threeamigos — per-pool targets from
+enroll-iscsi-pool); the storage-side helper split refs on the FIRST
+colon → target "iqn.2026-02.local.stewie", lun "threeamigos:11" → no
+such target → every ref WARNed "no backstore was found" → zero zvols.
+Latent since per-pool enrollment; the test ssh-mock mirrored the
+encoding (matched any iqn.*:* arg) instead of executing the helper, so
+the suite was blind. Second latent defect in the same run: the
+.disk_info sidecar's LUN lookup grepped " ${backstore} "
+space-anchored against targetcli's slash-prefixed "[block/name
+(/dev/…)]" luns-ls output — never matched, sidecar silently never
+written in two-node mode (same class as itf F-018 in new-vm-disk; that
+copy was fixed, this one missed). Fixes in bin/archive-vm: target and
+lun now travel as separate ssh argv entries (remote loop consumes
+pairs); sidecar grep anchored on "block/<name> " (slash prefix +
+trailing space — also immune to disk-1 vs disk-10 substring matches,
+a hazard the new-vm-disk F-018 form still has, recorded in
+PREEXISTING.md). Regression tests in test-archive-vm (argv encoding +
+grep-form pin), red-proven vs HEAD by file-swap. Live verification via
+configfs (readable as non-root): threeamigos LUN 11 → disk-0, LUN 12 →
+disk-1; nvme1 LUN 1 → NVME1 disk-3; the three fivebays/* vm-205 zvols
+back no LUNs (stale duplicates — user to decide cleanup; they are
+warned as orphaned and skipped, per the user's requirement that only
+config-referenced items are archived). Deploy reminder: this fix rides
+the pending uncommitted changeset; archive-vm 205 on the nodes will
+succeed only after the user runs deploy-version.
+
+## 2026-10-09 — wrap-up step 1: luns-ls grep family repair
+
+The recorded PREEXISTING entry (new-vm-disk unanchored LUN grep,
+disk-1 vs disk-10 prefix hazard) turned out to be one member of a
+family. A tree-wide scan of every `tpg1/luns ls` pipeline found 19
+lookup/guard sites across 12 scripts in three defect classes:
+
+- unanchored name greps (match, but a prefix name matches the wrong
+  line): new-vm-disk ×2, remove-vm-disk, clone-vm, zfsclone-vm,
+  move-vm-disk ×3, zfs-diagnose-busy
+- space-anchored greps that NEVER match the real line shape
+  `o- lun3 [block/<name> (/dev/...)]` (same class as itf F-018 — dead
+  guards/idempotency checks): attach-vm-disk ×2 (LUN_EXISTS detection
+  dead → duplicate-LUN create path), remove-vm, move-vm-disk:287
+  (teardown guard), unarchive-vm ×2, ensure-restored-vm-iscsi,
+  rename-vm-disk ×2
+- lun-token grep without delimiter (`lun1` matches `lun19`; saved only
+  by a downstream digit check): enroll-efi-keys-vm — now anchored
+  `lun<N> ` so line selection itself is precise
+
+All fixed to the live-verified form `grep -F "block/<name> "` (the
+archive-vm sidecar form, cross-checked against configfs in
+production); positional parsers (list-vm-disks, restart-iscsi-services,
+repair-iscsi-luns) were verified correct and untouched.
+
+Guards: test-iscsi-fresh-install-guards' new-vm-disk-only pin replaced
+with a family-wide awk scan (every luns-ls pipeline must anchor its
+grep on block/, lun-keyed greps exempt); red-proven for both defect
+classes by file-swap. test-zfs-diagnose-busy's luns fixture was
+truncated at `]` (missing the ` (/dev/...)` tail the real format has)
+and went red under the anchored grep — fixture corrected to mirror the
+real line. All suites for touched scripts green. The two remaining
+PREEXISTING entries (Zensical 1.x wait; infra-vdev planning UI) are
+non-actionable by design.
+
+## 2026-10-09 — wrap-up steps 2-4 (standards, tests, docs)
+
+Step 2: shellcheck clean over the full documented lint scope (bin/*,
+lib/*, tests, itf, journeys). One 100-column violation fixed in
+lib/installer-lib.sh (the iscsid.socket ssh assertion wrapped in the
+repo's in-string continuation style). No installation-specific data in
+mainline code; j05 journey pool/device names are itf conventions
+mirroring the documented install recipe.
+
+Step 3: no obsolete pins (old iscsid.service wording, legacy-only
+deploy path, space-anchored luns greps all absent from suites).
+Coverage verified for the whole changed surface; vm-disk family relies
+on structural suites by established design. Added the missing
+enroll-efi-keys-vm lun-token delimiter pin (red-proven by file-swap)
+to test-iscsi-fresh-install-guards.
+
+Step 4: docs drift repaired — messages manual gained the shared
+safe-iscsi-save FATAL template, new-vm-disk manifest row,
+setup-iscsi-targets demo-ACL rows, deploy-version legacy-fallback row,
+unarchive SAVE_FAILED row, and the full installer prereq-offer rows
+for both helpers (target stack + open-iscsi, including the changed
+iscsid.socket ready-state wording — these had never been cataloged).
+commands.md deploy-version/install-two-node rows moved to the modern
+/etc/zfsutilities/deploy.conf path (legacy noted); enroll-proxmox-pool
+dataset ensure now documented for both modes; installation/index.md
+iscsid wording; two-node.md setup-iscsi-targets step list gained the
+demo-ACL bullet. Docs integrity 23/23; site rebuilt (known
+mkdocs-material MkDocs-2.0 warning only — PREEXISTING).
+
+## 2026-10-09 — wrap-up steps 5-6: full suite + freeze
+
+Step 5: full suite without soaks (tests/run-tests --log
+/tmp/zfs-wrapup-full.log), background: 89 suites, all green, zero
+failures; the single skip is test-zfslockmanager-soak (soak suites
+excluded by design in a no-soak run). Nothing to resolve; no new
+pre-existing issues surfaced.
+
+Step 6: codebase frozen at this point. PREEXISTING.md holds 2 entries,
+both non-actionable by design (Zensical 1.x wait; infra-vdev planning
+UI in abeyance per user decision).

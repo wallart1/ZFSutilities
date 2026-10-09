@@ -185,7 +185,7 @@ sudo ./bin/deploy-version [version] [group ...]
 | Argument  | Default                   | Description                                                 |
 | --------- | ------------------------- | ----------------------------------------------------------- |
 | `version` | contents of `./VERSION`   | Version string to deploy                                    |
-| `group`   | all groups in deploy.conf | Deployment group names from `/etc/zfsutilities-deploy.conf` |
+| `group`   | all groups in deploy.conf | Deployment group names from `/etc/zfsutilities/deploy.conf` (legacy `/etc/zfsutilities-deploy.conf` honored) |
 
 **Globals:**
 
@@ -203,14 +203,14 @@ sudo ./bin/deploy-version [version] [group ...]
 
 | Structure                                         | Role                         | Reference                                                                                            |
 | ------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `/etc/zfsutilities-deploy.conf`                   | Deployment group definitions | [Deploy config](../developer-guide/two-node-config.md#config-file-etczfsutilitiesdeployconf) |
+| `/etc/zfsutilities/deploy.conf` (legacy `/etc/zfsutilities-deploy.conf`) | Deployment group definitions | [Deploy config](../developer-guide/two-node-config.md#config-file-etczfsutilitiesdeployconf) |
 | Node config                                       | Legacy remote host list      | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 | `/usr/local/lib/zfsutilities/versions/<version>/` | Deployed version directory   | —                                                                                                    |
 
 **Internal flow:**
 
 1. Parse arguments; read `./VERSION` if no version is supplied.
-2. Load `/etc/zfsutilities-deploy.conf` groups, or fall back to the node config for remote hosts.
+2. Load deployment groups from `/etc/zfsutilities/deploy.conf` (legacy `/etc/zfsutilities-deploy.conf` honored as a fallback), or fall back to the node config for remote hosts.
 3. Build the version directory and copy `bin/`, `lib/`, `python/`, `docs/`,
    and `share/` from the repository.
 4. Rebuild the static docs.
@@ -238,7 +238,9 @@ disks on it can be managed from the Proxmox GUI. Mode-aware:
 - **Two-node (run on the storage host):** adds an `iscsi` storage on the
   compute host over SSH, using the pool's iSCSI target — portal from
   `STORAGE_IP`, IQN from `IQN_PREFIX` plus the `POOL_TARGET` short name — with
-  content `images`. Default storage ID: `iscsi-<short name>`. The pool must
+  content `images`. Default storage ID: `iscsi-<short name>`. The pool's
+  `<pool>/proxmox` VM-disk dataset is created when missing (same contract as
+  single-node). The pool must
   already be enrolled via
   [`enroll-iscsi-pool`](two-node.md#enroll-iscsi-pool-storage-node), because
   registering an iSCSI storage probes its target.
@@ -275,7 +277,8 @@ anything.
 **Data structures consumed / produced:** reads `node.conf` (`NODE_MODE`,
 `STORAGE_HOST`, `COMPUTE_HOST`, `STORAGE_IP`, `IQN_PREFIX`, `POOL_TARGET`)
 read-only; produces a `/etc/pve/storage.cfg` entry via `pvesm` (on the compute
-host in two-node mode) and the `<pool>/proxmox` dataset in single-node mode.
+host in two-node mode) and the `<pool>/proxmox` dataset (both modes; created
+when missing).
 
 **Return codes:**
 
@@ -448,7 +451,7 @@ The installer:
 2. Ensures MkDocs and the documentation server are installed.
 3. Prompts for storage host, compute host, storage-network IP, IQN prefix, and
    pool-to-target mappings.
-4. Generates `/etc/zfsutilities/node.conf` and `/etc/zfsutilities-deploy.conf`.
+4. Generates `/etc/zfsutilities/node.conf` and `/etc/zfsutilities/deploy.conf`.
 5. Verifies bidirectional root SSH between the nodes.
 6. Ensures the iSCSI target/initiator packages are present.
 7. Deploys and activates the versioned installation on both nodes.
@@ -469,7 +472,7 @@ Can also re-run on an existing single-node host to switch it to two-node mode.
 | Structure                                            | Role                         |
 | ---------------------------------------------------- | ---------------------------- |
 | `/etc/zfsutilities/node.conf`                        | Two-node node configuration  |
-| `/etc/zfsutilities-deploy.conf`                      | Deployment group definitions |
+| `/etc/zfsutilities/deploy.conf`                      | Deployment group definitions |
 | `/etc/zfsutilities/iscsi-encrypted-luns.conf`        | Encrypted-LUN mappings       |
 | `/etc/systemd/system/rtslib-fb-targetctl.service.d/` | systemd drop-ins             |
 

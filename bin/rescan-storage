@@ -72,6 +72,13 @@ log_msg "INFO: Rescanning iSCSI sessions..."
 iscsiadm -m session --rescan 2>&1 | sed 's/^/  /'
 log_msg "INFO: ✓ Rescan complete"
 
+# Let udev finish creating device nodes before counting them — on a
+# first login to a fresh LUN the /dev node lands a beat after the
+# rescan returns, and the count below would report 0.
+if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle --timeout=10 >/dev/null 2>&1 || true
+fi
+
 # --- Show device count ---
 device_count=$(find /dev/disk/by-path/ -maxdepth 1 -name "ip-${storage_ip}*" \
     -print 2>/dev/null | wc -l)

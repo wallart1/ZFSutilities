@@ -317,7 +317,7 @@ for zvol in "$@"; do
     while IFS= read -r t; do
         [[ -n "$t" ]] || continue
         lun_line=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
-            | grep " ${backstore} " | head -1 || true)
+            | grep -F "block/${backstore} " | head -1 || true)
         found_lun=""
         if [[ -n "$lun_line" ]]; then
             found_lun="${lun_line#*lun}"

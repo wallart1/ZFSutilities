@@ -116,6 +116,52 @@ test_status_unreachable_base_reported_not_fatal() {
     assert_contains "$run_out" "no template"
 }
 
+# ------------------------------------------------------------------------------
+# Two-node surface: iso selector, template profiles, journey list
+# ------------------------------------------------------------------------------
+
+test_journey_list_includes_two_node_journey() {
+    test_start "journey list names the two-node journey"
+    run_itf journey list
+    assert_rc 0 "$run_rc"
+    assert_contains "$run_out" "j05-two-node-install"
+}
+
+test_iso_unknown_selector_refused() {
+    test_start "iso fetch/upload with a bad selector is refused (rc 2)"
+    run_itf iso fetch ubuntu
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "unknown ISO selector"
+    run_itf iso upload base.invalid fedora
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "usage: itf iso upload"
+}
+
+test_iso_pve_selector_without_config_fails_cleanly() {
+    test_start "iso fetch pve without site-configured PVE keys fails cleanly"
+    run_itf iso fetch pve
+    # Selector understood, keys absent: a clean configuration complaint,
+    # never a network attempt.
+    assert_rc 1 "$run_rc"
+    assert_contains "$run_err" "ISO 'pve' is not configured"
+}
+
+test_template_build_bad_profile_refused() {
+    test_start "template build with a bad profile prints usage (rc 2)"
+    run_itf template build --profile hyperscale
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "--profile must be 'storage' or 'compute'"
+}
+
+test_template_destroy_without_template_fails_cleanly() {
+    test_start "template destroy with no template on the base fails cleanly"
+    run_itf template destroy
+    # The base is unreachable (.invalid): qm list yields nothing, so the
+    # "no template" path is taken, not an abort.
+    assert_rc 1 "$run_rc"
+    assert_contains "$run_err" "no template 'itf-template'"
+}
+
 test_journey_list_lists_committed_journeys
 test_journey_run_unknown_name_refused
 test_journey_run_missing_name_refused
@@ -124,6 +170,11 @@ test_guest_destroy_out_of_range_refused_by_guard
 test_template_usage_refused
 test_unknown_command_refused
 test_status_unreachable_base_reported_not_fatal
+test_journey_list_includes_two_node_journey
+test_iso_unknown_selector_refused
+test_iso_pve_selector_without_config_fails_cleanly
+test_template_build_bad_profile_refused
+test_template_destroy_without_template_fails_cleanly
 
 rm -rf "$tmp_dir"
 teardown_test_env

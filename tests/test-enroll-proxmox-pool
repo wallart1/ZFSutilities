@@ -384,6 +384,54 @@ test_two_node_derives_storage_id_from_short_name() {
     assert_contains "$calls" "--target iqn.2026-02.local.stewie:nvme1"
 }
 
+test_two_node_creates_missing_proxmox_dataset() {
+    reset_mocks
+    test_start "two-node: creates <pool>/proxmox when missing (F-015)"
+    _mock_datasets=("threeamigos")
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 0 $?
+
+    assert_equals "1" "${#_mock_zfs_calls[@]}"
+    assert_equals "create threeamigos/proxmox" "${_mock_zfs_calls[0]}"
+    local calls
+    calls=$(printf '%s\n' "${_mock_ssh_calls[@]}")
+    assert_contains "$calls" "pvesm add iscsi iscsi-threeamigos"
+}
+
+test_two_node_dataset_exists_no_create() {
+    reset_mocks
+    test_start "two-node: existing <pool>/proxmox is not recreated"
+    _mock_datasets=("threeamigos" "threeamigos/proxmox")
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 0 $?
+
+    assert_equals "0" "${#_mock_zfs_calls[@]}"
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "already exists"
+}
+
+test_two_node_dataset_create_failure_fatal() {
+    reset_mocks
+    test_start "two-node: dataset creation failure is FATAL"
+    _mock_datasets=("threeamigos")
+    zfs() {
+        if [[ "$1" == "list" ]]; then
+            return 1
+        fi
+        return 1
+    }
+
+    main threeamigos >/dev/null 2>&1
+    assert_rc 1 $?
+
+    local log
+    log=$(cat "$(get_test_log_file)")
+    assert_contains "$log" "Could not create dataset threeamigos/proxmox"
+}
+
 test_two_node_invalid_storage_id_fatal() {
     reset_mocks
     test_start "two-node: an invalid storage ID is FATAL"
@@ -555,6 +603,9 @@ test_single_node_without_pvesm_guard
 test_single_node_invalid_storage_id_fatal
 test_two_node_adds_iscsi_storage
 test_two_node_derives_storage_id_from_short_name
+test_two_node_creates_missing_proxmox_dataset
+test_two_node_dataset_exists_no_create
+test_two_node_dataset_create_failure_fatal
 test_two_node_invalid_storage_id_fatal
 test_two_node_non_storage_host_fatal
 test_two_node_unknown_pool_fatal

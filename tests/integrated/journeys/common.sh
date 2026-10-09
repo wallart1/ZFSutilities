@@ -2,19 +2,29 @@
 # common.sh — shared journey stages, factored from j01-fresh-install.
 #
 # Composable stages:
-#   itf_journey_stage_os <gname> <hostname>
+#   itf_journey_stage_os <gname> <hostname> [--base B] [--role R]
 #       Fresh Debian guest: custom serial-console ISO + preseed install,
 #       IP discovery, root SSH, os-installed snapshot.
 #       Sets globals J_VMID and J_GUEST_IP on success.
+#   itf_journey_stage_pve_os <gname> <hostname> [--base B] [--role R]
+#       Fresh Proxmox VE guest: auto-installer boot ISO (answers embedded,
+#       no preseed server), serial-watch the install, IP discovery, root
+#       SSH, pve-installed snapshot.  The compute-role counterpart of
+#       stage_os.
 #   itf_journey_stage_install <guest-ip>
 #       First-time-user product install: download (per ITF_SW_SOURCE),
 #       expected-to-fail prerequisite check on the fresh system,
 #       install-single-node with piped answers, installed-state verify.
-#   itf_journey_stage_from_template <gname>
-#       Clone start: full-clone the post-install baseline template
+#   itf_journey_stage_from_template <gname> [--base B] [--template T] [--role R]
+#       Clone start: full-clone a post-install baseline template
 #       (itf template build) instead of installing — the fast path for
 #       journeys whose scenario begins after installation.
 #       Sets globals J_VMID and J_GUEST_IP on success.
+#
+# Stages remember their guest in $ITF_RUN_DIR/guest.txt (base + vmid,
+# + IP once discovered); a --role R labels it per-guest instead
+# (guest-<R>.txt) so a two-guest journey like j05 keeps one record per
+# node.
 #
 # HTTP-server shutdown on abort paths goes through the J_PIDFILE /
 # J_PIDFILE2 globals: an EXIT trap cannot see function-locals after the
@@ -24,7 +34,19 @@
 itf_journey_stage_os() {
     local gname="$1"
     local guest_hostname="$2"
-    local base="${ITF_BASE_HOSTS[0]}"
+    shift 2
+    local base="${ITF_BASE_HOSTS[0]}" role=""
+    while (( $# > 0 )); do
+        case "$1" in
+            --base) base="$2"; shift 2 ;;
+            --role) role="$2"; shift 2 ;;
+            *) echo "itf: unknown itf_journey_stage_os option: $1" >&2; return 2 ;;
+        esac
+    done
+    # Per-guest record file: guest.txt by default, guest-<role>.txt when
+    # the journey labels the stage's role.
+    local guest_file="$ITF_RUN_DIR/guest.txt"
+    [[ -n "$role" ]] && guest_file="$ITF_RUN_DIR/guest-${role}.txt"
     local vmid guest_ip dev_ip preseed_file serve_dir
 
     serve_dir="$ITF_RUN_DIR/serve"
@@ -125,7 +147,7 @@ itf_journey_stage_os() {
         return 1
     fi
     # Remember the guest for post-mortem/diagnostics even if we abort.
-    echo "$base $vmid" > "$ITF_RUN_DIR/guest.txt"
+    echo "$base $vmid" > "$guest_file"
 
     # Installer syslog capture listener on the base (target address was
     # baked into the boot append above).
@@ -219,7 +241,7 @@ itf_journey_stage_os() {
     guest_ip="$(itf_guest_ip "$base" "$vmid" 600)"
     if [[ -n "$guest_ip" ]]; then
         itf_step pass "guest IP discovered" "$guest_ip"
-        echo "$base $vmid $guest_ip" > "$ITF_RUN_DIR/guest.txt"
+        echo "$base $vmid $guest_ip" > "$guest_file"
     else
         itf_step fail "guest IP discovered" "guest agent reported nothing in 600s"
         return 1
@@ -236,6 +258,142 @@ itf_journey_stage_os() {
         itf_step pass "snapshot os-installed" "clean Debian checkpoint for later stages"
     else
         itf_step fail "snapshot os-installed"
+    fi
+
+    # shellcheck disable=SC2034  # consumed by the journey scripts
+    J_VMID="$vmid"
+    # shellcheck disable=SC2034  # consumed by the journey scripts
+    J_GUEST_IP="$guest_ip"
+    return 0
+}
+
+# itf_journey_stage_pve_os <gname> <hostname> [--base B] [--role R]
+#
+# Fresh Proxmox VE guest via the auto-installer: itf_pve_iso_customize
+# embeds the answers (root SSH key, DHCP, single ext4 disk, first-boot
+# repo-hygiene hook) in the boot ISO, so unlike stage_os there is no
+# preseed HTTP server and no installer syslog to arm — the installer
+# streams to the serial console the driver watches.  Success/failure is
+# gated on the transcript actually containing the installer's own
+# "Installation done" line, not merely on the console driver exiting.
+# Sets globals J_VMID and J_GUEST_IP on success.
+itf_journey_stage_pve_os() {
+    local gname="$1"
+    local guest_hostname="$2"
+    shift 2
+    local base="${ITF_COMPUTE_BASE:-${ITF_BASE_HOSTS[0]}}" role=""
+    while (( $# > 0 )); do
+        case "$1" in
+            --base) base="$2"; shift 2 ;;
+            --role) role="$2"; shift 2 ;;
+            *) echo "itf: unknown itf_journey_stage_pve_os option: $1" >&2; return 2 ;;
+        esac
+    done
+    local guest_file="$ITF_RUN_DIR/guest-pve.txt"
+    [[ -n "$role" ]] && guest_file="$ITF_RUN_DIR/guest-${role}.txt"
+    local vmid guest_ip boot_iso
+
+    boot_iso="$(itf_pve_iso_customize "$base" "$guest_hostname" \
+        2>"$ITF_RUN_DIR/iso-customize.log")"
+    if [[ -n "$boot_iso" ]]; then
+        itf_step pass "PVE auto-install ISO ready" \
+            "$boot_iso (answers + first-boot hook embedded)"
+    else
+        itf_step fail "PVE auto-install ISO ready" "see iso-customize.log"
+        return 1
+    fi
+
+    vmid="$(itf_guest_create "$gname" --base "$base" --iso "$boot_iso" \
+        --freeze 2>"$ITF_RUN_DIR/guest-create.log")"
+    if [[ -n "$vmid" ]]; then
+        itf_step pass "guest created (CPU-frozen)" "vmid $vmid"
+    else
+        itf_step fail "guest created" "see guest-create.log"
+        return 1
+    fi
+    echo "$base $vmid" > "$guest_file"
+
+    # Power on FROZEN, attach the serial console, then resume — same
+    # first-byte capture as stage_os.  grub's stock menu auto-boots the
+    # Automated entry after its 10 s timeout, so the driver only WATCHES
+    # (no keystrokes: an arrow key would move the menu selection OFF the
+    # automated entry).
+    local serial_log driver_pid driver_rc
+    serial_log="$ITF_RUN_DIR/serial-install.log"
+    : > "$serial_log"
+
+    if itf_qm "$base" start "$vmid" > "$ITF_RUN_DIR/guest-start.log" 2>&1; then
+        itf_step pass "guest started (frozen)" "vmid $vmid"
+    else
+        itf_step fail "guest started" "see guest-start.log"
+        return 1
+    fi
+
+    # The installer's own exit lines: unconfigured.sh prints
+    # "Installation done, rebooting..." on success; every failure path
+    # funnels into err_reboot's "Installation aborted" (post-hook
+    # failures print their own banner first and may wait 30 s).
+    python3 "$ITF_ROOT/lib/serial_console.py" \
+        --host "$base" --user "$ITF_SSH_USER" --vmid "$vmid" \
+        --exit-after 'Installation done|Installation aborted|hook failed' \
+        --timeout 3600 \
+        --log "$serial_log" > "$ITF_RUN_DIR/serial-console.log" 2>&1 &
+    driver_pid=$!
+    sleep 5
+
+    if itf_qm "$base" resume "$vmid" > "$ITF_RUN_DIR/guest-resume.log" 2>&1; then
+        itf_step info "guest resumed" "boot proceeding with console attached"
+    else
+        itf_step fail "guest resumed" "see guest-resume.log"
+        kill "$driver_pid" 2>/dev/null
+        return 1
+    fi
+
+    wait "$driver_pid"
+    driver_rc=$?
+    itf_artifact "serial-transcript" "$serial_log"
+    if [[ $driver_rc -eq 0 ]] && grep -q 'Installation done' "$serial_log"; then
+        itf_step pass "serial install driven" \
+            "installer reported completion (see serial-install.log)"
+    else
+        itf_step fail "serial install driven" \
+            "driver rc=$driver_rc — see serial-install.log"
+        return 1
+    fi
+
+    # Boot order is disk-first; detach the install ISO anyway so no later
+    # reset can land in a second installer round.
+    if itf_qm "$base" set "$vmid" --ide2 none,media=cdrom \
+            > "$ITF_RUN_DIR/iso-detach.log" 2>&1; then
+        itf_step info "install ISO detached" "guest reboots from disk only"
+    else
+        itf_step info "install ISO detach failed" "see iso-detach.log (non-fatal)"
+    fi
+
+    # The first-boot hook (repo hygiene + qemu-guest-agent) runs on this
+    # first boot of the installed system, so IP discovery deliberately
+    # waits through it.
+    guest_ip="$(itf_guest_ip "$base" "$vmid" 900)"
+    if [[ -n "$guest_ip" ]]; then
+        itf_step pass "guest IP discovered" "$guest_ip"
+        echo "$base $vmid $guest_ip" > "$guest_file"
+    else
+        itf_step fail "guest IP discovered" \
+            "guest agent reported nothing in 900s (first-boot hook installs it)"
+        return 1
+    fi
+
+    if itf_wait_ssh "$guest_ip" 600; then
+        itf_step pass "guest ssh reachable" "root@${guest_ip}"
+    else
+        itf_step fail "guest ssh reachable"
+        return 1
+    fi
+
+    if itf_guest_snapshot "$base" "$vmid" pve-installed > /dev/null 2>&1; then
+        itf_step pass "snapshot pve-installed" "clean PVE checkpoint for later stages"
+    else
+        itf_step fail "snapshot pve-installed"
     fi
 
     # shellcheck disable=SC2034  # consumed by the journey scripts
@@ -270,37 +428,26 @@ itf_journey_run_installer() {
     return 0
 }
 
-# itf_journey_stage_install <guest-ip>
+# itf_journey_stage_download <guest-ip>
 #
-# First-time-user product install: download (per ITF_SW_SOURCE),
-# expected-to-fail prerequisite check on the fresh system, installer
-# run with the fresh-system answer feed.
-itf_journey_stage_install() {
+# Downloads the product tree to /root/ZFSutilities on the guest, the way
+# a user does: the latest published GitHub release, or (dev-tarball
+# source) a tarball of the current working tree fetched from a
+# short-lived second HTTP server.  Site-local and generated content
+# stays out of the dev tarball.  Cleans the server up on every abort
+# path via the J_PIDFILE2 global (see the trap note at the top).
+itf_journey_stage_download() {
     local guest_ip="$1"
-    local feed_format='y\ny\n\n\n'
-
-    local guest_tooling
-    guest_tooling="apt-get update -qq && DEBIAN_FRONTEND=noninteractive"
-    guest_tooling+=" apt-get install -y -qq curl ca-certificates"
-    if itf_guest_exec "$guest_ip" "$guest_tooling" \
-        > "$ITF_RUN_DIR/guest-curl-install.log" 2>&1; then
-        itf_step pass "guest: download tooling" "curl installed (what a user does first)"
-    else
-        itf_step fail "guest: download tooling" "see guest-curl-install.log"
-        return 1
-    fi
-
     local dl_script relver dev_ip
     dev_ip="$(itf_dev_ip)"
     dl_script="$ITF_RUN_DIR/guest-dl.sh"
     if [[ "$ITF_SW_SOURCE" == "dev-tarball" ]]; then
-        # Repair-verification source: a tarball of the current working
-        # tree, fetched from a second short-lived HTTP server (the
-        # Stage A preseed server is already down by now).  Site-local
-        # and generated content stays out of the tarball.
         local repo_root tarball serve_msg
         repo_root="$ITF_ROOT/../.."
         tarball="$ITF_RUN_DIR/serve/zfsutilities-dev.tar.gz"
+        # The install path creates the serve dir for its preseed; the
+        # clone-start path (j05) reaches this stage without one.
+        mkdir -p "$ITF_RUN_DIR/serve"
         if ! tar -czf "$tarball" -C "$repo_root" \
                 --exclude=.git \
                 --exclude=.zcode \
@@ -366,6 +513,30 @@ EOF
         itf_http_stop "$J_PIDFILE2"
         J_PIDFILE2=""
     fi
+    return 0
+}
+
+# itf_journey_stage_install <guest-ip>
+#
+# First-time-user product install: download (per ITF_SW_SOURCE),
+# expected-to-fail prerequisite check on the fresh system, installer
+# run with the fresh-system answer feed.
+itf_journey_stage_install() {
+    local guest_ip="$1"
+    local feed_format='y\ny\n\n\n'
+
+    local guest_tooling
+    guest_tooling="apt-get update -qq && DEBIAN_FRONTEND=noninteractive"
+    guest_tooling+=" apt-get install -y -qq curl ca-certificates"
+    if itf_guest_exec "$guest_ip" "$guest_tooling" \
+        > "$ITF_RUN_DIR/guest-curl-install.log" 2>&1; then
+        itf_step pass "guest: download tooling" "curl installed (what a user does first)"
+    else
+        itf_step fail "guest: download tooling" "see guest-curl-install.log"
+        return 1
+    fi
+
+    itf_journey_stage_download "$guest_ip" || return 1
 
     local pre_log
     pre_log="$ITF_RUN_DIR/guest-prereq.log"
@@ -420,21 +591,34 @@ itf_journey_verify_installed() {
     itf_artifact "install-verify" "$verify_log"
 }
 
-# itf_journey_stage_from_template <gname>
+# itf_journey_stage_from_template <gname> [--base B] [--template T] [--role R]
 #
-# Clone start: full-clone the post-install baseline template and snapshot
-# `as-cloned` as the journey's rollback checkpoint.  Fails fast with a
-# PREP hint when the template is missing or carries no stamp — per the
-# journey contract, never half-run.  Sets J_VMID and J_GUEST_IP.
+# Clone start: full-clone a post-install baseline template (default: the
+# storage profile's ITF_TEMPLATE_NAME) and snapshot `as-cloned` as the
+# journey's rollback checkpoint.  Fails fast with a PREP hint when the
+# template is missing or carries no stamp — per the journey contract,
+# never half-run.  Sets J_VMID and J_GUEST_IP.
 itf_journey_stage_from_template() {
     local gname="$1"
-    local base="${ITF_BASE_HOSTS[0]}"
+    shift
+    local base="${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]}}" role=""
+    local template="${ITF_TEMPLATE_NAME:-}"
+    while (( $# > 0 )); do
+        case "$1" in
+            --base) base="$2"; shift 2 ;;
+            --template) template="$2"; shift 2 ;;
+            --role) role="$2"; shift 2 ;;
+            *) echo "itf: unknown itf_journey_stage_from_template option: $1" >&2; return 2 ;;
+        esac
+    done
+    local guest_file="$ITF_RUN_DIR/guest.txt"
+    [[ -n "$role" ]] && guest_file="$ITF_RUN_DIR/guest-${role}.txt"
     local tmpl_vmid stamp vmid guest_ip
 
-    tmpl_vmid="$(itf_template_vmid "$base")"
+    tmpl_vmid="$(itf_template_vmid "$base" "$template")"
     if [[ -z "$tmpl_vmid" ]]; then
         itf_step fail "baseline template available" \
-            "no '$ITF_TEMPLATE_NAME' on $base — PREP: itf template build"
+            "no '$template' on $base — PREP: itf template build"
         return 1
     fi
     if ! stamp="$(itf_template_stamp_read "$base" "$tmpl_vmid" 2>/dev/null)"; then
@@ -443,31 +627,31 @@ itf_journey_stage_from_template() {
         return 1
     fi
     itf_step pass "baseline template available" \
-        "$ITF_TEMPLATE_NAME (vmid $tmpl_vmid): ${stamp#itf-stamp| }"
+        "$template (vmid $tmpl_vmid): ${stamp#itf-stamp| }"
 
-    vmid="$(itf_guest_clone "$gname" --base "$base" \
-        2>"$ITF_RUN_DIR/guest-clone.log")"
+    vmid="$(itf_guest_clone "$gname" --base "$base" --template "$template" \
+        2>"$ITF_RUN_DIR/guest-clone-${gname}.log")"
     if [[ -n "$vmid" ]]; then
         itf_step pass "guest cloned from template" \
             "vmid $vmid — post-install baseline in minutes, not a reinstall"
     else
-        itf_step fail "guest cloned from template" "see guest-clone.log"
+        itf_step fail "guest cloned from template" "see guest-clone-${gname}.log"
         return 1
     fi
     # Remember the guest for post-mortem/diagnostics even if we abort.
-    echo "$base $vmid" > "$ITF_RUN_DIR/guest.txt"
+    echo "$base $vmid" > "$guest_file"
 
-    if itf_guest_start "$base" "$vmid" > "$ITF_RUN_DIR/guest-start.log" 2>&1; then
+    if itf_guest_start "$base" "$vmid" > "$ITF_RUN_DIR/guest-start-${gname}.log" 2>&1; then
         itf_step pass "guest started" "vmid $vmid"
     else
-        itf_step fail "guest started" "see guest-start.log"
+        itf_step fail "guest started" "see guest-start-${gname}.log"
         return 1
     fi
 
     guest_ip="$(itf_guest_ip "$base" "$vmid" 600)"
     if [[ -n "$guest_ip" ]]; then
         itf_step pass "guest IP discovered" "$guest_ip"
-        echo "$base $vmid $guest_ip" > "$ITF_RUN_DIR/guest.txt"
+        echo "$base $vmid $guest_ip" > "$guest_file"
     else
         itf_step fail "guest IP discovered" "guest agent reported nothing in 600s"
         return 1

@@ -1501,6 +1501,10 @@ sudo setup-iscsi-targets
     - Create the target IQN if it does not already exist.
     - Ensure TPG1 exists.
     - Disable authentication and demo-mode write protect.
+    - Enable demo-mode ACLs (`generate_node_acls=1`) on TPGs that carry no
+      explicit ACLs, so initiators can log in; the dedicated storage network
+      is the isolation boundary. A TPG that already carries ACLs is never
+      modified.
     - Create the portal `${storage_ip}:3260` if it does not already exist.
 5. Save the targetcli configuration if anything changed.
 

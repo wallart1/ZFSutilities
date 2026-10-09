@@ -476,10 +476,12 @@ if [[ -f "$manifest" ]]; then
 fi
 
 # Print only the new LUN number to stdout (captured by caller).
-# Select the line for this backstore, strip everything through the first
-# "lun" token, and keep the leading digits ("... lun3 [block/..." -> "3").
+# Select the line for this backstore (anchored on "block/<name> " so a
+# longer name that starts with this one cannot match), strip everything
+# through the first "lun" token, and keep the leading digits
+# ("... lun3 [block/..." -> "3").
 targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-    | grep -F "$dst_backstore" \
+    | grep -F "block/${dst_backstore} " \
     | while IFS= read -r _lun_line; do
         _lun_rest="${_lun_line#*lun}"
         printf '%s\n' "${_lun_rest%%[!0-9]*}"

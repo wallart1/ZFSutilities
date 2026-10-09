@@ -98,7 +98,7 @@ packages if they are missing:
 - **Storage host:** `targetcli-fb` (provides `targetcli` and the
   `rtslib-fb-targetctl` systemd service)
 - **Compute host:** `open-iscsi` (provides the `iscsiadm` initiator tool and
-  the `iscsid` service)
+  the socket-activated `iscsid` daemon)
 
 ## Quick Start
 

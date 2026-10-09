@@ -45,6 +45,7 @@ echo ""
 created=0
 existing=0
 portals_added=0
+acls_fixed=0
 
 # Iterate over pool_target values (target short names)
 for pool in "${!pool_target[@]}"; do
@@ -81,15 +82,32 @@ for pool in "${!pool_target[@]}"; do
         portal_exists=true
     fi
 
-    if [[ "$portal_exists" == true ]]; then
-        log_msg "INFO:     ✓ Portal ${storage_ip}:3260 already exists"
-    else
-        # Create the portal
-        if targetcli "${tpg_path}/portals" create "${storage_ip}:3260" >/dev/null 2>&1; then
-            portals_added=$((portals_added + 1))
-            log_msg "INFO:     ✓ Portal ${storage_ip}:3260 added"
+        if [[ "$portal_exists" == true ]]; then
+            log_msg "INFO:     ✓ Portal ${storage_ip}:3260 already exists"
         else
-            log_msg "WARN:   Could not add portal ${storage_ip}:3260"
+            # Create the portal
+            if targetcli "${tpg_path}/portals" create "${storage_ip}:3260" >/dev/null 2>&1; then
+                portals_added=$((portals_added + 1))
+                log_msg "INFO:     ✓ Portal ${storage_ip}:3260 added"
+            else
+                log_msg "WARN:   Could not add portal ${storage_ip}:3260"
+            fi
+        fi
+
+    # A fresh TPG defaults to explicit-ACL mode with an empty ACL list,
+    # which refuses every initiator (iscsiadm error 24 — authorization
+    # failure). The dedicated storage network is the isolation boundary
+    # in the two-node model, so admit initiators unless this TPG is under
+    # explicit ACL management — never flip a TPG that already carries ACLs.
+    if ! targetcli "${tpg_path}/acls" ls 2>/dev/null | grep -q "iqn\."; then
+        if targetcli "${tpg_path}" get attribute generate_node_acls 2>/dev/null \
+            | grep -q "generate_node_acls=0"; then
+            if targetcli "${tpg_path}" set attribute generate_node_acls=1 >/dev/null 2>&1; then
+                acls_fixed=$((acls_fixed + 1))
+                log_msg "INFO:     ✓ Demo-mode ACLs enabled (no explicit ACLs present)"
+            else
+                log_msg "WARN:   Could not enable demo-mode ACLs on ${target_short}"
+            fi
         fi
     fi
 done
@@ -97,7 +115,7 @@ done
 echo ""
 
 # Save config if anything changed
-if [[ $created -gt 0 || $portals_added -gt 0 ]]; then
+if [[ $created -gt 0 || $portals_added -gt 0 || $acls_fixed -gt 0 ]]; then
     targetcli saveconfig >/dev/null 2>&1
     log_msg "INFO: ✓ iSCSI configuration saved"
 else

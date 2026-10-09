@@ -73,7 +73,8 @@ run_archive() {
 
     local capture_dir="$_mock_zfs_state_dir/capture"
     mkdir -p "$capture_dir"
-    rm -f "$capture_dir/snapshots" "$capture_dir/ssh" "$capture_dir/promotions"
+    rm -f "$capture_dir/snapshots" "$capture_dir/ssh" "$capture_dir/ssh-argv" \
+        "$capture_dir/promotions"
 
     local promote_stub="$capture_dir/promote-vm-clone-stub"
     cat > "$promote_stub" << 'EOF'
@@ -173,6 +174,9 @@ EOF
                     fi
                 done
                 if [[ $has_target_lun -eq 1 ]]; then
+                    # Record the resolution call's argv one per line so
+                    # tests can assert the target/lun encoding.
+                    printf '%s\n' "$@" >> "$_capture_dir/ssh-argv"
                     local zvol
                     for zvol in $_mock_zvols_list; do
                         echo "$zvol"
@@ -458,6 +462,80 @@ n"
     else
         test_fail "Storage volblocksize lookup not seen; output:\n$out"
     fi
+}
+
+test_two_node_target_and_lun_travel_as_separate_args() {
+    reset_mocks
+    test_start "Two-node: target IQN and LUN pass to ssh as separate args"
+
+    local vmid="215"
+    local pve_dir="$_mock_zfs_state_dir/pve7"
+    local archive="$_mock_zfs_state_dir/archive7"
+    local mount="$_mock_zfs_state_dir/mount7"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_archive two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    local argv_file="$_mock_zfs_state_dir/capture/ssh-argv"
+    if [[ ! -f "$argv_file" ]]; then
+        test_fail "Two-node resolution ssh call not captured; output:\n$out"
+        return
+    fi
+
+    # The IQN itself contains a colon (iqn.YYYY-MM.domain:pool), so the
+    # target must arrive as one argv entry and the LUN as the next; a
+    # joined "target:lun" string gets split apart on the IQN's own colon
+    # and every ref fails to resolve (VM 205 incident).
+    if ! grep -qxF 'iqn.2026-02.local.stewie:threeamigos' "$argv_file" \
+        || ! grep -qxF '0' "$argv_file"; then
+        test_fail "Target/LUN not passed as separate args; argv:\n$(cat "$argv_file")"
+        return
+    fi
+    if grep -qxF 'iqn.2026-02.local.stewie:threeamigos:0' "$argv_file"; then
+        test_fail "Colon-joined target:lun encoding still present; argv:\n$(cat "$argv_file")"
+        return
+    fi
+
+    test_pass
+}
+
+# shellcheck disable=SC2016  # the $-names are literal grep -F patterns
+test_sidecar_lun_lookup_grep_survives_slash_prefix() {
+    test_start "archive-vm: sidecar LUN lookup matches targetcli's slash-prefixed backstore names"
+
+    # targetcli luns-ls prints "[block/<name> (/dev/...)]" — the name is
+    # slash-prefixed, so the found_lun grep must anchor on "block/<name> ".
+    # A space-anchored pattern alone never matches (same class as the
+    # new-vm-disk F-018 fix); an unanchored name would also match disk-1's
+    # line when disk-10 exists.
+    local script="$mydir/bin/archive-vm"
+    local pipeline
+    pipeline=$(sed -n '/found_lun=\$(targetcli/,/head -1)/p' "$script")
+    if [[ -z "$pipeline" ]]; then
+        test_fail "found_lun pipeline not found in archive-vm"
+        return
+    fi
+    if [[ "$pipeline" != *'grep -F "block/${backstore} "'* ]]; then
+        test_fail "Sidecar LUN lookup not slash-anchored:\n$pipeline"
+        return
+    fi
+    if [[ "$pipeline" == *'grep -F " ${backstore} "'* ]]; then
+        test_fail "Sidecar LUN lookup still space-anchored:\n$pipeline"
+        return
+    fi
+
+    test_pass
 }
 
 test_single_node_archives_only_referenced_disks() {
@@ -762,6 +840,8 @@ test_two_node_queries_storage_for_snapshot
 test_two_node_creates_snapshot_on_storage
 test_two_node_storage_snapshot_error_aborts
 test_two_node_fetches_volblocksize_on_storage
+test_two_node_target_and_lun_travel_as_separate_args
+test_sidecar_lun_lookup_grep_survives_slash_prefix
 test_single_node_archives_only_referenced_disks
 test_single_node_warns_on_orphaned_zvol
 test_two_node_prompt_mentions_storage_host

@@ -233,7 +233,8 @@ collect_referenced_zvols() {
         return 0
     fi
 
-    # Two-node path: collect target:lun pairs and resolve them on the
+    # Two-node path: collect target/lun pairs (passed as separate argv
+    # entries, since IQNs contain colons) and resolve them on the
     # storage host. The remote helper also warns about orphaned zvols.
     local -a target_lun_refs=()
     while IFS= read -r config_line; do
@@ -250,7 +251,10 @@ collect_referenced_zvols() {
             lun_and_rest="${after##*-lun-}"
             lun="${lun_and_rest%%[!0-9]*}"
             if [[ -n "$lun" && "$target" == iqn.* && "$target" != *,* ]]; then
-                target_lun_refs+=("${target}:${lun}")
+                # Pass target and lun as separate argv entries: an IQN
+                # already contains a colon (iqn.YYYY-MM.domain:pool), so a
+                # joined "target:lun" string cannot be split back apart.
+                target_lun_refs+=("$target" "$lun")
             fi
         fi
     done < "$proxmoxconfig"
@@ -266,9 +270,10 @@ vmid="$1"
 shift
 
 declare -A referenced_zvols=()
-for ref in "$@"; do
-    IFS=: read -r target lun <<< "$ref"
-    [[ -n "$target" && -n "$lun" ]] || continue
+while [[ $# -ge 2 ]]; do
+    target="$1"
+    lun="$2"
+    shift 2
 
     # Find the backstore name mapped to this target/LUN. Match lun0 without
     # matching lun01: the character after "lun${lun}" must not be a digit.
@@ -598,8 +603,12 @@ for t in $(targetcli "/iscsi" ls 2>/dev/null | while IFS= read -r _t_line; do
     done
 done | sort -u); do
     # Extract the LUN number for this backstore ("lun0" -> "0").
+    # The luns-ls line reads "[block/<name> (/dev/...)]" — the name is
+    # slash-prefixed, so anchor on "block/<name> " (trailing space). A
+    # space-anchored pattern alone never matches, and an unanchored name
+    # would also match disk-1's line when disk-10 exists.
     found_lun=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
-        | grep -F " ${backstore} " \
+        | grep -F "block/${backstore} " \
         | grep -oE 'lun[0-9]+' \
         | head -1)
     found_lun="${found_lun#lun}"

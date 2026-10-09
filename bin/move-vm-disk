@@ -284,7 +284,9 @@ lock_dst="$zfslock_id"
 
 # 1. Remove old lun and backstore.
 echo "phase=teardown_done"
-if targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null | grep -qF " ${srcbackstore} "; then
+# The lun line slash-prefixes the backstore name, so anchor the guard on
+# "block/<name> " — a space-anchored name never matches it.
+if targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null | grep -qF "block/${srcbackstore} "; then
     targetcli "/iscsi/${target}/tpg1/luns" delete "lun${srclun}"
 fi
 if targetcli /backstores/block ls 2>/dev/null | grep -qF " ${srcbackstore} "; then
@@ -317,9 +319,11 @@ if ! targetcli "/iscsi/${target}/tpg1/luns" \
     # Slot was taken; let targetcli assign a new one.
     targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${dstbackstore}"
     # Strip everything through the first "lun" token and keep the leading
-    # digits of the matching line ("... lun3 [block/..." -> "3").
+    # digits of the matching line ("... lun3 [block/..." -> "3"). Anchor
+    # the line selection on "block/<name> " so a longer name that starts
+    # with this one cannot match.
     dstlun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-        | grep -F "${dstbackstore}" \
+        | grep -F "block/${dstbackstore} " \
         | while IFS= read -r _lun_line; do
             _lun_rest="${_lun_line#*lun}"
             printf '%s\n' "${_lun_rest%%[!0-9]*}"
@@ -514,9 +518,11 @@ encrypted_add() {
 # If new backstore/lun exist, tear them down.
 if targetcli /backstores/block ls 2>/dev/null | grep -qF " ${dstbackstore} "; then
     # Strip everything through the first "lun" token and keep the leading
-    # digits of the matching line ("... lun3 [block/..." -> "3").
+    # digits of the matching line ("... lun3 [block/..." -> "3"). Anchor
+    # the line selection on "block/<name> " so a longer name that starts
+    # with this one cannot match.
     lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-        | grep -F "${dstbackstore}" \
+        | grep -F "block/${dstbackstore} " \
         | while IFS= read -r _lun_line; do
             _lun_rest="${_lun_line#*lun}"
             printf '%s\n' "${_lun_rest%%[!0-9]*}"
@@ -921,7 +927,7 @@ if is_two_node && [[ "$no_rename" != "Y" ]] && [[ -z "$dstlun" ]]; then
     # shell expanding _lun_line ("... lun3 [block/..." -> "3").
     dstlun=$(ssh -o ConnectTimeout=10 root@"$storage_host" \
         "targetcli \"/iscsi/${target}/tpg1/luns\" ls 2>/dev/null" \
-        " | grep -F '${dstbackstore}'" \
+        " | grep -F 'block/${dstbackstore} '" \
         " | while IFS= read -r _lun_line; do" \
         "     _lun_rest=\"\${_lun_line#*lun}\";" \
         "     printf '%s\\n' \"\${_lun_rest%%[!0-9]*}\";" \

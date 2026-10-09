@@ -1,0 +1,455 @@
+#!/usr/bin/env bash
+# j05-two-node-install.journey — two-node install end to end.
+#
+# Proves the two-node topology from bare clones to a visible LUN:
+# a storage-role guest (Debian + product, storage template) and a
+# compute-role guest (Proxmox VE, compute template), the admin
+# pre-work a user does (point-to-point link, root SSH both ways),
+# the j01 pool recipe on storage, then install-two-node driven with a
+# derived answer feed — and finally a VM disk created through the
+# installed product, visible on the compute host, with the target
+# config saved safely on storage.
+#
+# Guest state required:
+#   storage template (itf template build) on the storage base
+#   compute template (itf template build --base <compute-base>
+#                     --profile compute)
+# Site config required: ITF_COMPUTE_BASE, ITF_COMPUTE_TEMPLATE_NAME,
+#   ITF_ISCSI_STORAGE_IP / ITF_ISCSI_COMPUTE_IP, ITF_PVE_ISO_*.
+# Snapshots produced: as-cloned (per guest), pools-created (storage).
+#
+# Lab topology: the production dedicated point-to-point link is modeled
+# as a second NIC on the shared LAN bridge carrying a private subnet —
+# no base network config is touched.
+
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+journey_main() {
+    local s_base="${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]}}"
+    local c_base="${ITF_COMPUTE_BASE:-}"
+    if [[ -z "$c_base" || -z "${ITF_COMPUTE_TEMPLATE_NAME:-}" \
+            || -z "${ITF_ISCSI_STORAGE_IP:-}" || -z "${ITF_ISCSI_COMPUTE_IP:-}" ]]; then
+        itf_step fail "site config: two-node keys" \
+            "ITF_COMPUTE_BASE/ITF_COMPUTE_TEMPLATE_NAME/ITF_ISCSI_*_IP required"
+        return 1
+    fi
+    itf_step info "journey start" \
+        "j05 two-node install; storage=$s_base compute=$c_base" \
+        "p2p=${ITF_ISCSI_STORAGE_IP}<->${ITF_ISCSI_COMPUTE_IP}"
+
+    # ------------------------------------------------------------------
+    # Stage T: clone both guests from their role templates
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_from_template j05-storage --base "$s_base" --role storage \
+        || return 1
+    local s_vmid="$J_VMID"
+    local s_ip="$J_GUEST_IP"
+
+    itf_journey_stage_from_template j05-compute --base "$c_base" \
+        --template "$ITF_COMPUTE_TEMPLATE_NAME" --role compute || return 1
+    local c_vmid="$J_VMID"
+    local c_ip="$J_GUEST_IP"
+
+    local s_hostname c_hostname
+    s_hostname="$(itf_guest_exec "$s_ip" 'hostname -s' 2>/dev/null)"
+    c_hostname="$(itf_guest_exec "$c_ip" 'hostname -s' 2>/dev/null)"
+    if [[ -n "$s_hostname" && -n "$c_hostname" && "$s_hostname" != "$c_hostname" ]]; then
+        itf_step pass "guest hostnames" "storage=$s_hostname compute=$c_hostname"
+    else
+        itf_step fail "guest hostnames" "storage=${s_hostname:-?} compute=${c_hostname:-?}"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage N: the admin pre-work a user does before the installer
+    # (point-to-point link, name resolution, root SSH both ways)
+    # ------------------------------------------------------------------
+
+    # Second NIC per guest on the shared bridge (no colon tokens — the
+    # confinement guard accepts this form).
+    local g
+    for g in "$s_base:$s_vmid" "$c_base:$c_vmid"; do
+        if itf_qm "${g%%:*}" set "${g##*:}" --net1 "virtio,bridge=${ITF_BRIDGE}" \
+                > "$ITF_RUN_DIR/net1-attach-${g##*:}.log" 2>&1; then
+            itf_step pass "P2P NIC attached [${g%%:*}]" \
+                "net1 on ${ITF_BRIDGE} (vmid ${g##*:})"
+        else
+            itf_step fail "P2P NIC attached [${g%%:*}]" \
+                "see net1-attach-${g##*:}.log"
+            return 1
+        fi
+    done
+
+    # The hot-plugged NIC lands as the second predictable name (net0 is
+    # the template's only NIC); wait for it inside each guest, then
+    # configure the P2P static persistently (both guests run ifupdown:
+    # Debian classic on storage, ifupdown2 on the PVE host) and bring it
+    # up now.
+    local p2p_if="ens19" side ip net_log
+    for side in storage compute; do
+        [[ "$side" == storage ]] && ip="$ITF_ISCSI_STORAGE_IP" || ip="$ITF_ISCSI_COMPUTE_IP"
+        net_log="$ITF_RUN_DIR/p2p-$side.log"
+        local gip
+        [[ "$side" == storage ]] && gip="$s_ip" || gip="$c_ip"
+        # shellcheck disable=SC2016  # the expansions run in the guest
+        if itf_guest_exec "$gip" "
+            for i in \$(seq 1 30); do [[ -e /sys/class/net/${p2p_if} ]] && break; sleep 2; done
+            [[ -e /sys/class/net/${p2p_if} ]] || exit 3
+            stanza='\\n# itf P2P link (j05)\\nauto ${p2p_if}'
+            stanza+='\\niface ${p2p_if} inet static\\n    address ${ip}/24\\n'
+            grep -q 'iface ${p2p_if} inet static' /etc/network/interfaces \\
+                || printf '%b' \"\$stanza\" >> /etc/network/interfaces
+            ifup ${p2p_if} || { ip link set ${p2p_if} up; ip addr add ${ip}/24 dev ${p2p_if}; }
+            ip -4 addr show ${p2p_if} | grep -q '${ip}/'
+        " > "$net_log" 2>&1; then
+            itf_step pass "P2P address configured [$side]" "$ip/24 on $p2p_if"
+        else
+            itf_step fail "P2P address configured [$side]" "see p2p-$side.log"
+            return 1
+        fi
+    done
+
+    # Name resolution both ways (the installer sshes by short name).
+    # shellcheck disable=SC2029  # hostnames/IPs expand on the client side
+    itf_guest_exec "$s_ip" \
+        "grep -q '${ITF_ISCSI_COMPUTE_IP} ${c_hostname}' /etc/hosts \
+         || echo '${ITF_ISCSI_COMPUTE_IP} ${c_hostname}' >> /etc/hosts" > /dev/null 2>&1
+    # shellcheck disable=SC2029
+    itf_guest_exec "$c_ip" \
+        "grep -q '${ITF_ISCSI_STORAGE_IP} ${s_hostname}' /etc/hosts \
+         || echo '${ITF_ISCSI_STORAGE_IP} ${s_hostname}' >> /etc/hosts" > /dev/null 2>&1
+    itf_step pass "P2P name resolution" \
+        "/etc/hosts entries both directions ($s_hostname / $c_hostname)"
+
+    # Root SSH keys, generated on each guest and exchanged BOTH ways
+    # (the installer verifies storage->compute and compute->storage).
+    local s_pub c_pub
+    itf_guest_exec "$s_ip" \
+        'test -f /root/.ssh/id_ed25519 || ssh-keygen -q -t ed25519 -N "" -f /root/.ssh/id_ed25519' \
+        > /dev/null 2>&1
+    itf_guest_exec "$c_ip" \
+        'test -f /root/.ssh/id_ed25519 || ssh-keygen -q -t ed25519 -N "" -f /root/.ssh/id_ed25519' \
+        > /dev/null 2>&1
+    s_pub="$(itf_guest_exec "$s_ip" 'cat /root/.ssh/id_ed25519.pub' 2>/dev/null)"
+    c_pub="$(itf_guest_exec "$c_ip" 'cat /root/.ssh/id_ed25519.pub' 2>/dev/null)"
+    if [[ -n "$s_pub" && -n "$c_pub" ]]; then
+        # Generated keys carry a host@user comment; the single-quote wrap
+        # is safe for that charset.
+        # shellcheck disable=SC2029
+        itf_guest_exec "$c_ip" \
+            "mkdir -p /root/.ssh && chmod 700 /root/.ssh \
+             && touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys \
+             && grep -qxF '${s_pub}' /root/.ssh/authorized_keys \
+             || echo '${s_pub}' >> /root/.ssh/authorized_keys" > /dev/null 2>&1
+        # shellcheck disable=SC2029
+        itf_guest_exec "$s_ip" \
+            "mkdir -p /root/.ssh && chmod 700 /root/.ssh \
+             && touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys \
+             && grep -qxF '${c_pub}' /root/.ssh/authorized_keys \
+             || echo '${c_pub}' >> /root/.ssh/authorized_keys" > /dev/null 2>&1
+        itf_step pass "root SSH keys exchanged" "both directions"
+    else
+        itf_step fail "root SSH keys exchanged" "key generation produced no public keys"
+        return 1
+    fi
+
+    # First-connection acceptances, both directions.  A real user sshes
+    # to the peer at least once before running the installer (that is
+    # how the host-key prompts get answered); install-two-node's Step 4
+    # checks use plain BatchMode ssh with no host-key options and rely
+    # on that.  The gates below mirror the installer verbatim, so this
+    # one-time accept-new pair is the modeled user pre-work.
+    # shellcheck disable=SC2029  # expansions run on the guests
+    if itf_guest_exec "$s_ip" "
+            ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \\
+                root@${c_hostname} true \\
+            && ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \\
+                root@${c_hostname} \\
+                'ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \\
+                    root@${s_hostname} true'
+        " > "$ITF_RUN_DIR/p2p-first-connect.log" 2>&1; then
+        itf_step pass "P2P first connections accepted" \
+            "host keys recorded both directions (user pre-work)"
+    else
+        itf_step fail "P2P first connections accepted" "see p2p-first-connect.log"
+        return 1
+    fi
+
+    # Reachability gates, mirroring the installer's Step 4 checks.
+    local ssh_log="$ITF_RUN_DIR/p2p-gates.log"
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            ping -c1 -W2 ${ITF_ISCSI_COMPUTE_IP} >/dev/null \\
+            && ping -c1 -W2 ${ITF_ISCSI_STORAGE_IP} >/dev/null \\
+            && ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \\
+                root@${c_hostname} true \\
+            && ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \\
+                root@${c_hostname} \\
+                'ssh -o ConnectTimeout=5 -o BatchMode=yes root@${s_hostname} true'
+        " > "$ssh_log" 2>&1; then
+        itf_step pass "P2P ping + ssh gates" \
+            "storage<->compute reachable; root ssh both directions"
+    else
+        itf_step fail "P2P ping + ssh gates" "see p2p-gates.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage P: the documented three-RAIDZ1 test pools (j01/j04 recipe)
+    # ------------------------------------------------------------------
+
+    local wait_sdb
+    # shellcheck disable=SC2016  # expansion runs in the guest
+    wait_sdb='for i in $(seq 1 30); do lsblk -dn -o NAME | grep -qx sdb'
+    wait_sdb+=' && exit 0; sleep 2; done; exit 1'
+    if itf_qm "$s_base" set "$s_vmid" --scsi1 \
+            "${ITF_GUEST_STORAGE}:${ITF_GUEST_POOL_DISK_GB}" \
+            > "$ITF_RUN_DIR/pooldisk-attach.log" 2>&1 \
+            && itf_guest_exec "$s_ip" "$wait_sdb"; then
+        itf_step pass "pool disk attached" \
+            "scsi1 (${ITF_GUEST_POOL_DISK_GB}G) hot-plugged, storage guest sees /dev/sdb"
+    else
+        itf_step fail "pool disk attached" "see pooldisk-attach.log"
+        return 1
+    fi
+
+    local pool_script
+    pool_script="$ITF_RUN_DIR/guest-pools.sh"
+    cat > "$pool_script" <<'EOF'
+#!/bin/bash
+# The user recipe from docs/docs/developer-guide/testing.md on /dev/sdb,
+# plus a udev settle the documented recipe lacks.
+set -e
+# parted/partprobe are not part of a base Debian install.
+apt-get install -y parted
+parted -s /dev/sdb mklabel gpt
+for i in {1..15}; do
+    if [[ $i -eq 1 ]]; then start="1MiB"; else start="$(( (i-1)*5120 ))MiB"; fi
+    if [[ $i -eq 15 ]]; then end="100%"; else end="$(( i*5120 ))MiB"; fi
+    parted -a optimal -s /dev/sdb mkpart primary "${start}" "${end}"
+done
+partprobe /dev/sdb
+# udev creates the partition nodes asynchronously after partprobe, so an
+# immediate zpool create races them ("cannot resolve path '/dev/sdbN'").
+udevadm settle --timeout=30 || true
+for i in $(seq 1 30); do
+    [[ -e /dev/sdb15 ]] && break
+    sleep 1
+done
+[[ -e /dev/sdb15 ]]
+zpool create -f zfstest1 raidz1 /dev/sdb1 /dev/sdb2 /dev/sdb3 /dev/sdb4 /dev/sdb5
+zpool create -f zfstest2 raidz1 /dev/sdb6 /dev/sdb7 /dev/sdb8 /dev/sdb9 /dev/sdb10
+zpool create -f zfstest3 raidz1 /dev/sdb11 /dev/sdb12 /dev/sdb13 /dev/sdb14 /dev/sdb15
+zpool list
+EOF
+    itf_guest_put "$s_ip" "$pool_script" /root/itf-pools.sh > /dev/null 2>&1
+    if itf_guest_exec "$s_ip" "bash /root/itf-pools.sh" \
+            > "$ITF_RUN_DIR/guest-pools.log" 2>&1; then
+        itf_step pass "test pools created" "zfstest1/2/3 (three RAIDZ1, docs recipe)"
+        itf_artifact "pools" "$ITF_RUN_DIR/guest-pools.log"
+    else
+        itf_step fail "test pools created" "see guest-pools.log"
+        return 1
+    fi
+
+    if itf_guest_snapshot "$s_base" "$s_vmid" pools-created > /dev/null 2>&1; then
+        itf_step pass "snapshot pools-created" "storage-side checkpoint"
+    else
+        itf_step fail "snapshot pools-created"
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage I: current tree on the storage guest, then install-two-node
+    # ------------------------------------------------------------------
+
+    # The clone carries the tree from template-build time; the journey
+    # installs what TODAY's source is (release or dev tarball).
+    itf_journey_stage_download "$s_ip" || return 1
+
+    # Two-node prereq check on the single-node-installed clone: the
+    # two-node extras (targetcli, local iscsiadm) are exactly the delta.
+    local pre_log="$ITF_RUN_DIR/guest-prereq.log"
+    if itf_guest_exec "$s_ip" \
+            "bash -lc 'check-prerequisites --two-node'" > "$pre_log" 2>&1; then
+        itf_step fail "prereq check (two-node delta)" "unexpectedly reported all-present"
+    else
+        itf_step pass "prereq check (two-node delta)" \
+            "reports the missing two-node items a user must handle"
+        itf_artifact "prereq-check" "$pre_log"
+    fi
+
+    # The installer feed, line by line (bin/install-two-node, verified
+    # against source; the clone's single-node config routes Step 2 into
+    # the "upgrading to two-node" branch, so NO reconfigure prompt):
+    #   y                    prereqs: install missing now? [Y]
+    #   y                    prereqs: proceed with apt? [Y]
+    #   (empty)              storage host short name [default: hostname -s]
+    #   <compute hostname>   compute host short name (required)
+    #   <P2P storage IP>     storage network IP [default 192.168.100.1]
+    #   (empty)              IQN prefix [default]
+    #   zfstest1/(empty)     pool -> target short name [default]
+    #   zfstest2/(empty)     " "
+    #   zfstest3/(empty)     " "
+    #   (empty)              pool loop: finish
+    #   (empty)              expected LUN count: skip
+    #   (empty)              edit node.conf? (y/N): no
+    #   y/y                  slack for the ensure_* ask_yn prompts (not
+    #                        expected: prereq remediation installed
+    #                        targetcli and PVE ships open-iscsi; unread
+    #                        input is harmless)
+    local answers="$ITF_RUN_DIR/two-node-answers.txt"
+    local feed
+    feed="y\ny\n\n${c_hostname}\n${ITF_ISCSI_STORAGE_IP}\n"
+    # The IQN-prefix prompt defaults on an EMPTY line; run 4 of this
+    # journey omitted it and every later answer slid up by one (the
+    # first pool name became the IQN prefix, the pool loop's first
+    # read got the leftover empty line and finished instantly, and
+    # POOL_TARGET ended up empty with zero iSCSI targets created).
+    feed+="\n"
+    feed+="zfstest1\n\nzfstest2\n\nzfstest3\n\n"
+    feed+="\n\n\n"
+    feed+="y\ny\n"
+    printf '%b' "$feed" > "$answers"
+    local inst_log="$ITF_RUN_DIR/guest-install.log"
+    itf_guest_exec_feed "$s_ip" "$answers" \
+        "cd /root/ZFSutilities && ./bin/install-two-node" > "$inst_log" 2>&1
+    local inst_rc=$?
+    itf_artifact "install-transcript" "$inst_log"
+    if [[ $inst_rc -eq 0 ]]; then
+        itf_step pass "install-two-node completes" "rc=0 with the derived answer feed"
+    else
+        itf_step fail "install-two-node completes" \
+            "rc=$inst_rc — feed misalignment or installer defect; see guest-install.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage V: verify what the installer left behind on BOTH guests
+    # ------------------------------------------------------------------
+
+    local v_log="$ITF_RUN_DIR/verify-storage.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if itf_guest_exec "$s_ip" '
+        set -e
+        grep -q "NODE_MODE=\"two-node\"" /etc/zfsutilities/node.conf
+        grep -q "STORAGE_HOST=" /etc/zfsutilities/node.conf
+        test -L /usr/local/lib/zfsutilities/current
+        test -x /usr/local/lib/zfsutilities/current/bin/zfsdailybackup
+        ls /usr/local/lib/zfsutilities/versions/
+        test -f /etc/systemd/system/rtslib-fb-targetctl.service.d/boot-config.conf
+        targetcli ls | grep -q iqn
+        echo "storage-verified"
+    ' > "$v_log" 2>&1 && grep -q storage-verified "$v_log"; then
+        itf_step pass "storage host verified" \
+            "node.conf two-node, deployed version, targets — see verify-storage.log"
+    else
+        itf_step fail "storage host verified" "see verify-storage.log"
+        return 1
+    fi
+
+    local vc_log="$ITF_RUN_DIR/verify-compute.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if itf_guest_exec "$c_ip" '
+        set -e
+        grep -q "NODE_MODE=\"two-node\"" /etc/zfsutilities/node.conf
+        test -L /usr/local/lib/zfsutilities/current
+        test -x /usr/local/lib/zfsutilities/current/bin/new-vm-disk
+        grep -q "tdiff > 86400" /usr/share/perl5/PVE/Storage/ISCSIPlugin.pm
+        # Debian socket-activates iscsid (service unit stays disabled by
+        # design); the listening socket is the initiator ready state.
+        systemctl is-active --quiet iscsid.socket
+        systemctl is-active --quiet pvestatd
+        pveversion
+        echo "compute-verified"
+    ' > "$vc_log" 2>&1 && grep -q compute-verified "$vc_log"; then
+        itf_step pass "compute host verified" \
+            "node.conf copied, version activated, PVE patch applied — see verify-compute.log"
+        itf_artifact "verify-compute" "$vc_log"
+    else
+        itf_step fail "compute host verified" "see verify-compute.log"
+        itf_artifact "verify-compute" "$vc_log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage W: real work — a VM disk through the installed product
+    # ------------------------------------------------------------------
+
+    # Register zfstest1 as PVE storage (runs on the storage host per the
+    # two-node model; pvesm add iscsi runs on compute over ssh and logs
+    # PVE into the target).
+    local enroll_log="$ITF_RUN_DIR/enroll-proxmox.log"
+    if itf_guest_exec "$s_ip" "bash -lc 'enroll-proxmox-pool zfstest1'" \
+            > "$enroll_log" 2>&1; then
+        itf_step pass "pool registered as PVE storage" \
+            "iscsi-zfstest1 on the compute host (see enroll-proxmox.log)"
+        itf_artifact "enroll-proxmox" "$enroll_log"
+    else
+        itf_step fail "pool registered as PVE storage" "see enroll-proxmox.log"
+        return 1
+    fi
+
+    # A stopped VM container, then its first disk through the product.
+    local qm_log="$ITF_RUN_DIR/compute-qm.log"
+    if itf_guest_exec "$c_ip" \
+            "bash -lc 'qm create 101 --name j05-vm --scsihw virtio-scsi-pci'" \
+            > "$qm_log" 2>&1; then
+        itf_step pass "VM 101 created (stopped)" "diskless container for the LUN"
+    else
+        itf_step fail "VM 101 created" "see compute-qm.log"
+        return 1
+    fi
+
+    # rc=0 alone once passed while the target-config save silently
+    # failed and the VM config never gained its disk line — the step
+    # must verify the end state, not just the exit status.
+    local disk_log="$ITF_RUN_DIR/new-vm-disk.log"
+    if itf_guest_exec "$c_ip" "bash -lc 'new-vm-disk zfstest1 101 0 1G'" \
+            > "$disk_log" 2>&1 \
+            && grep -q "✓ Configuration saved" "$disk_log" \
+            && itf_guest_exec "$c_ip" \
+                "grep -q '^scsi0: /dev/disk/by-path/' /etc/pve/qemu-server/101.conf"; then
+        itf_step pass "VM disk created" \
+            "vm-101-disk-0 (1G) zvol + LUN + scsi0 config line on zfstest1"
+        itf_artifact "new-vm-disk" "$disk_log"
+    else
+        itf_step fail "VM disk created" "see new-vm-disk.log"
+        itf_artifact "new-vm-disk" "$disk_log"
+        return 1
+    fi
+
+    local rescan_log="$ITF_RUN_DIR/rescan-storage.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if itf_guest_exec "$c_ip" "bash -lc 'rescan-storage && lsblk -dn -o NAME,SERIAL'" \
+            > "$rescan_log" 2>&1 \
+            && grep -Eq 'sd[a-z]' "$rescan_log"; then
+        itf_step pass "LUN visible on compute" \
+            "rescan-storage completed; /dev/sd* present (see rescan-storage.log)"
+        itf_artifact "rescan-storage" "$rescan_log"
+    else
+        itf_step fail "LUN visible on compute" "see rescan-storage.log"
+        return 1
+    fi
+
+    # Persist the (healthy) target config — the installer's documented
+    # first post-install step.
+    local save_log="$ITF_RUN_DIR/safe-iscsi-save.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if itf_guest_exec "$s_ip" "bash -lc 'safe-iscsi-save && ls -l /etc/rtslib-fb-target/'" \
+            > "$save_log" 2>&1 \
+            && grep -q saveconfig.json "$save_log" \
+            && grep -q saveconfig-boot.json "$save_log"; then
+        itf_step pass "target config saved" \
+            "saveconfig.json + saveconfig-boot.json (see safe-iscsi-save.log)"
+        itf_artifact "safe-iscsi-save" "$save_log"
+    else
+        itf_step fail "target config saved" "see safe-iscsi-save.log"
+        return 1
+    fi
+
+    itf_step info "journey stage reached" \
+        "two-node install verified: link, installer, deploy, PVE patch, first LUN"
+    return 0
+}

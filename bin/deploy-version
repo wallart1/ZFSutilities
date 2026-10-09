@@ -7,9 +7,13 @@
 # /usr/local/lib/zfsutilities/versions/<version>/. Does not touch active
 # production wiring — run switch-version for that.
 #
-# Remote deployment targets are read from /etc/zfsutilities-deploy.conf
-# (see DEPLOY_GROUP_* variables below). If that file does not exist, the
-# script falls back to the legacy two-node node-config behaviour.
+# Remote deployment targets are read from
+# ${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/deploy.conf
+# (see DEPLOY_GROUP_* variables below) — the location install-two-node
+# writes. The legacy flat /etc/zfsutilities-deploy.conf is honored as a
+# fallback so pre-existing deployments keep working. If neither file
+# exists, the script falls back to the legacy two-node node-config
+# behaviour.
 
 set -e
 
@@ -38,8 +42,9 @@ usage() {
     log_msg "INFO:"
     log_msg "INFO:   version  Version string (default: read from ./VERSION)"
     log_msg "INFO:   group    One or more deployment-group names defined in"
-    log_msg "INFO:            /etc/zfsutilities-deploy.conf. If omitted, all"
-    log_msg "INFO:            groups are deployed."
+    log_msg "INFO:            ${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/deploy.conf"
+    log_msg "INFO:            (legacy /etc/zfsutilities-deploy.conf also honored)."
+    log_msg "INFO:            If omitted, all groups are deployed."
     log_msg "INFO:"
     log_msg "INFO: Examples:"
     log_msg "INFO:   sudo ./bin/deploy-version                  # deploy current version to all" \
@@ -48,10 +53,12 @@ usage() {
         "groups"
     log_msg "INFO:   sudo ./bin/deploy-version 1.2.0 production # deploy only 'production' group"
     log_msg "INFO:"
-    if [[ -f /etc/zfsutilities-deploy.conf ]]; then
-        log_msg "INFO: Available groups from /etc/zfsutilities-deploy.conf:"
+    local usage_conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/deploy.conf"
+    [[ -f "$usage_conf" ]] || usage_conf="/etc/zfsutilities-deploy.conf"
+    if [[ -f "$usage_conf" ]]; then
+        log_msg "INFO: Available groups from $usage_conf:"
         # shellcheck source=/dev/null
-        source /etc/zfsutilities-deploy.conf
+        source "$usage_conf"
         local var
         for var in ${!DEPLOY_GROUP_*}; do
             local name="${var#DEPLOY_GROUP_}"
@@ -59,7 +66,7 @@ usage() {
             log_msg "INFO:   $name -> $hosts"
         done
     else
-        log_msg "INFO: No /etc/zfsutilities-deploy.conf found."
+        log_msg "INFO: No deploy.conf found (modern or legacy location)."
         log_msg "INFO: Remote deployment falls back to legacy node-config behaviour."
     fi
     exit 0
@@ -99,7 +106,17 @@ version_dir="$version_base/versions/$version"
 # ------------------------------------------------------------------
 # Load deployment-group configuration
 # ------------------------------------------------------------------
-deploy_conf="/etc/zfsutilities-deploy.conf"
+# Modern location first (where install-two-node writes the groups); the
+# legacy flat file is honored as a fallback so deployments that carry it
+# from older installs keep working.  F-012: reading only the legacy path
+# left remote_hosts empty on fresh two-node installs — deploy-version
+# synced nothing and the installer's compute-side activation ran
+# switch-version on a tree that was never copied.
+deploy_conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/deploy.conf"
+if [[ ! -f "$deploy_conf" && -f /etc/zfsutilities-deploy.conf ]]; then
+    log_msg "INFO: No $deploy_conf; using legacy /etc/zfsutilities-deploy.conf"
+    deploy_conf="/etc/zfsutilities-deploy.conf"
+fi
 deploy_group_names=()
 deploy_group_hosts=()
 

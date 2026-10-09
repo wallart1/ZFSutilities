@@ -171,7 +171,7 @@ documentation-integrity suite. A scheduled nightly job runs
 
 | Suite | What it covers |
 |-------|----------------|
-| `test-archive-vm` | `archive-vm` retire-snapshot selection and invocation (single-node and two-node) |
+| `test-archive-vm` | `archive-vm` retire-snapshot selection, two-node target/LUN resolution encoding (separate ssh argv entries, since IQNs contain colons), and invocation (single-node and two-node) |
 | `test-attach-vm-disk` | `attach-vm-disk` zvol-path parsing and validation |
 | `test-bashinit` | `bashinit` helpers: `log_msg` survives a `cd` after relative-path invocation; session-log selection when the log file is writable vs unwritable |
 | `test-check-prerequisites` | `check-prerequisites` tool version checks (mkdocs major-version gating) |
@@ -714,8 +714,10 @@ Beyond the mock-based suites and the real-pool integration suite above,
 the repository includes an orchestrator (`tests/integrated/itf`) that
 exercises the product as a first-time end user on disposable nested
 guests in the base Proxmox test VMs — fresh install from a release
-tarball, daily workflows, uninstall/reinstall — under a strict
-confinement guard for the base hosts. See
+tarball, daily workflows, uninstall/reinstall, and (cycle 2) the
+two-node install across a storage guest and a PVE-from-ISO compute
+guest on separate base hosts — under a strict confinement guard for the
+base hosts. See
 [Integrated Testing](integrated-testing.md) and
 `tests/integrated/README.md`.
 

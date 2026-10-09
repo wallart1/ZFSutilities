@@ -38,7 +38,8 @@ tmp_dir=$(mktemp -d)
 # template, 8002 a journey guest, 8005 a foreign-description VM.
 QM_TABLE='      VMID NAME                 STATUS     MEM(MB)    BOOTDISK    PID
  8001 itf-template stopped    8192          0          0
- 8002 j04      running    8192      32768       1234'
+ 8002 j04      running    8192      32768       1234
+ 8004 itf-template-pve stopped   8192          0          0'
 QM_STAMP='itf-stamp| sw-source=release version=0.1.0 rev=abcd123'
 QM_STAMP+=' kernel=6.1.0-1-amd64 built=2026-01-01T00:00:00Z'
 # Observed `qm listsnapshot` shape (PVE 9.2): tree arrows, a date column,
@@ -72,10 +73,12 @@ reset_exec_calls() {
 test_stamp_round_trip() {
     test_start "stamp render → parse round trip keeps every field"
     local stamp parsed rc
-    stamp="$(itf_template_stamp_render dev-tarball 9.9.9 6.1.2-3-amd64 abcd123)"
+    stamp="$(itf_template_stamp_render storage sw-source dev-tarball \
+        9.9.9 6.1.2-3-amd64 abcd123)"
     parsed="$(itf_template_stamp_parse "$stamp")"
     rc=$?
     assert_rc 0 "$rc"
+    assert_contains "$parsed" "profile=storage"
     assert_contains "$parsed" "sw-source=dev-tarball"
     assert_contains "$parsed" "version=9.9.9"
     assert_contains "$parsed" "rev=abcd123"
@@ -88,6 +91,48 @@ test_stamp_round_trip() {
     else
         test_pass
     fi
+}
+
+test_stamp_compute_round_trip() {
+    test_start "compute-profile stamp uses pve-iso as its source field"
+    local stamp parsed rc
+    stamp="$(itf_template_stamp_render compute pve-iso itf-pve-9.2-1.iso \
+        'pve-manager/9.2.2' 7.0.2-6-pve deadbee)"
+    parsed="$(itf_template_stamp_parse "$stamp")"
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$parsed" "profile=compute"
+    assert_contains "$parsed" "pve-iso=itf-pve-9.2-1.iso"
+    # A source key that is not name-shaped must be refused, not stamped.
+    itf_template_stamp_render storage "bad key" x 1 2 3 > /dev/null 2>&1
+    assert_rc 1 $?
+    # Pre-split stamps (no profile=) still parse for backward compat.
+    itf_template_stamp_parse \
+        "itf-stamp| sw-source=release version=0.1.0 rev=a kernel=k built=2026-01-01T00-00-00Z" \
+        > /dev/null 2>&1
+    assert_rc 0 $?
+    test_pass
+}
+
+test_compute_freshness() {
+    test_start "compute freshness keys on profile + PVE ISO name"
+    local iso="itf-pve-9.2-1.iso"
+    local good bad
+    good="profile=compute pve-iso=$iso version=v kernel=k rev=r built=b"
+    bad="profile=compute pve-iso=itf-pve-9.1-1.iso version=v kernel=k rev=r built=b"
+    ITF_PVE_ISO_NAME=$iso _itf_template_compute_fresh "$good"
+    assert_rc 0 $?
+    ITF_PVE_ISO_NAME=$iso _itf_template_compute_fresh "$bad" > /dev/null 2>&1
+    assert_rc 1 $?
+    # Storage-profile stamps never match compute freshness.
+    ITF_PVE_ISO_NAME=$iso _itf_template_compute_fresh \
+        "profile=storage sw-source=dev-tarball version=v rev=r kernel=k built=b" \
+        > /dev/null 2>&1
+    assert_rc 1 $?
+    # Unset ISO name disables the check (single-node sites).
+    ITF_PVE_ISO_NAME='' _itf_template_compute_fresh "$good" > /dev/null 2>&1
+    assert_rc 1 $?
+    test_pass
 }
 
 test_stamp_parse_rejects_foreign() {
@@ -241,6 +286,7 @@ test_os_upgrade_command_is_one_argument() {
         # subshell and is invisible here by design.
         _guest_cmds+="$#|$2"$'\n'
         case "$2" in
+            *"echo no"*) echo no ;;
             *modprobe*) echo "gate-ok kernel=6.1.0-test zfs=2.3.0" ;;
         esac
         return 0
@@ -258,16 +304,124 @@ test_os_upgrade_command_is_one_argument() {
     itf_report_finish > /dev/null 2>&1 || true
 }
 
+test_guest_clone_named_template() {
+    test_start "clone --template resolves the compute template by name"
+    reset_exec_calls
+    local rc
+    ITF_COMPUTE_TEMPLATE_NAME=itf-template-pve \
+        itf_guest_clone gc2 --template itf-template-pve --base testbase \
+        > "$tmp_dir/clone2.out" 2>/dev/null
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_equals "8000" "$(cat "$tmp_dir/clone2.out")"
+    assert_contains "$_itf_exec_calls" \
+        "testbase :: qm clone 8004 8000 --name gc2 --full 1"
+}
+
+test_os_upgrade_compute_gate() {
+    test_start "compute-profile upgrade gates on pvestatd, not modprobe zfs"
+    ITF_RUNS_DIR="$tmp_dir/runs"
+    # shellcheck disable=SC1090
+    source "$ITF_ROOT/lib/report-lib.sh"
+    ITF_RUN_CALLER="suite"
+    itf_report_init osgate > /dev/null
+    _gate_cmds=""
+    itf_guest_exec() {
+        _gate_cmds+="$2"$'\n'
+        case "$2" in
+            *"echo no"*) echo no ;;
+            *pvestatd*) echo "gate-ok kernel=7.0.2-6-pve pve=pve-manager/9.2.2" ;;
+        esac
+        return 0
+    }
+    itf_template_os_upgrade 10.0.0.9 compute > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_contains "$_gate_cmds" "systemctl is-active --quiet pvestatd"
+    if printf '%s' "$_gate_cmds" | grep -q "modprobe zfs"; then
+        test_fail "compute gate must not probe the ZFS module"
+    else
+        test_pass
+    fi
+    itf_report_finish > /dev/null 2>&1 || true
+}
+
+test_build_profiles_thread_base_and_stages() {
+    test_start "build threads --base/--profile through the right pipeline"
+    ITF_RUNS_DIR="$tmp_dir/runs"
+    ITF_RUN_CALLER="suite"
+    itf_report_init buildtest > /dev/null
+    ITF_PVE_ISO_NAME=itf-pve-9.2-1.iso
+    ITF_COMPUTE_TEMPLATE_NAME=itf-template-pve
+    local seq=""
+    # The build sources journeys/common.sh to reach the stage functions;
+    # intercept that one source so the stubs below stay in force.
+    source() {
+        if [[ "$1" == */journeys/common.sh ]]; then
+            return 0
+        fi
+        builtin source "$@"
+    }
+    itf_journey_stage_os() {
+        seq+="os|$1|$2|$3|$4| "; J_VMID=8002; J_GUEST_IP=10.0.0.2
+    }
+    itf_journey_stage_pve_os() {
+        seq+="pveos|$1|$2|$3|$4| "; J_VMID=8003; J_GUEST_IP=10.0.0.3
+    }
+    itf_journey_stage_install() { seq+="install| "; }
+    itf_journey_verify_installed() { seq+="verify| "; }
+    itf_template_os_upgrade() { seq+="upgrade:$2| "; }
+    itf_guest_exec() {
+        case "$2" in
+            pveversion) echo "pve-manager/9.2.2" ;;
+            *VERSION*) echo "9.9.9" ;;
+            uname*) echo "k-test" ;;
+        esac
+        return 0
+    }
+    reset_exec_calls
+    itf_template_build --force --base testbase > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_contains "$seq" "os|itf-template-build|itf-template|--base|testbase"
+    assert_contains "$seq" "install| "
+    assert_contains "$seq" "upgrade:storage| "
+    assert_contains "$seq" "verify| "
+    # The call capture records the transport form: printf %q escapes
+    # the stamp's spaces and pipe.
+    assert_contains "$_itf_exec_calls" \
+        'testbase :: qm set 8002 --description itf-stamp\|\ profile=storage\ sw-source=dev-tarball'
+    # Compute profile: PVE stage, no product install, compute stamp.
+    seq=""
+    reset_exec_calls
+    itf_template_build --force --profile compute --base testbase > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_contains "$seq" "pveos|itf-template-pve-build|itf-template-pve|--base|testbase"
+    assert_contains "$seq" "upgrade:compute| "
+    if [[ "$seq" == *install* ]]; then
+        test_fail "compute profile must not run the product install stage"
+    else
+        test_pass
+    fi
+    assert_contains "$_itf_exec_calls" \
+        'testbase :: qm set 8003 --description itf-stamp\|\ profile=compute\ pve-iso=itf-pve-9.2-1.iso'
+    unset -f source
+    itf_report_finish > /dev/null 2>&1 || true
+}
+
 test_stamp_round_trip
+test_stamp_compute_round_trip
+test_compute_freshness
 test_stamp_parse_rejects_foreign
 test_stamp_read_from_qm_config
 test_template_vmid_resolves_by_name
 test_guest_clone_command_shape
 test_guest_clone_without_template_fails
+test_guest_clone_named_template
 test_clear_snapshots_deletes_all_but_current
 test_fresh_detection_dev_tarball
 test_fresh_detection_release_ignores_rev
 test_os_upgrade_command_is_one_argument
+test_os_upgrade_compute_gate
+test_build_profiles_thread_base_and_stages
 
 rm -rf "$tmp_dir"
 teardown_test_env

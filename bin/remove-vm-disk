@@ -23,14 +23,18 @@ source_helper zfslockmanager
 
 rootcheck
 
-if ! command -v qm >/dev/null 2>&1; then
+my_host=$(hostname -s)
+
+# The two-node storage half re-invokes this script on the storage host
+# over SSH (no Proxmox there); the Proxmox requirement applies only on
+# the host where the VMs live.
+if ! command -v qm >/dev/null 2>&1 \
+    && ! { is_two_node && [[ "$my_host" == "$storage_host" ]]; }; then
     log_msg "FATAL: This script requires Proxmox VE (qm command not found)."
     log_msg "FATAL:   On a single node without Proxmox there are no VMs to manage."
     log_msg "FATAL:   Non-Proxmox hypervisors are not supported."
     exit 1
 fi
-
-my_host=$(hostname -s)
 
 usage() {
     local pool_choices
@@ -155,8 +159,10 @@ read -rp "  Are you sure you want to destroy $zvol_name? (y/N): " response2
 if is_two_node; then
     # --- Find and remove LUN from target ---
     # The selected LUN line starts with "lun<n>"; take the digits that follow.
+    # Anchor on "block/<name> " so a longer name that starts with this one
+    # (disk-1 vs disk-10) cannot supply the wrong line.
     lun_line=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-        | grep "$backstore_name" | head -1)
+        | grep -F "block/${backstore_name} " | head -1)
     lun_num=""
     if [[ -n "$lun_line" ]]; then
         lun_num="${lun_line#*lun}"
@@ -199,7 +205,10 @@ if is_two_node; then
 
     # --- Save targetcli config ---
     log_msg "INFO: Saving iSCSI configuration..."
-    "$mydir/safe-iscsi-save"
+    if ! "$mydir/safe-iscsi-save"; then
+        log_msg "FATAL: safe-iscsi-save failed — iSCSI configuration NOT saved"
+        exit 1
+    fi
     log_msg "INFO: ✓ Configuration saved"
 
     # --- Trigger rescan on the compute host (unless called remotely) ---

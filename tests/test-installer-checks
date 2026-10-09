@@ -770,6 +770,12 @@ test_ensure_open_iscsi_remote_already_installed() {
         test_fail "Expected found message, got: $output"
         return
     fi
+    # Readiness must also be checked on the already-installed path (PVE
+    # hosts always take it) — not only after a fresh install.
+    if [[ "$output" != *"iscsid.socket active on compute"* ]]; then
+        test_fail "Expected iscsid.socket readiness on found path, got: $output"
+        return
+    fi
     test_pass
 }
 
@@ -806,6 +812,10 @@ test_ensure_open_iscsi_remote_installs_and_enables() {
             echo "install" >> "$marker"
             return 0
         fi
+        if [[ "$*" == *"iscsid.socket"* ]]; then
+            echo "socket" >> "$marker"
+            return 0
+        fi
         return 1
     }
     ask_yn() { return 0; }
@@ -829,6 +839,10 @@ test_ensure_open_iscsi_remote_installs_and_enables() {
     fi
     if [[ "$calls" != *"install"* ]]; then
         test_fail "Expected ssh install command"
+        return
+    fi
+    if [[ "$calls" != *"socket"* ]]; then
+        test_fail "Expected ssh iscsid.socket readiness check"
         return
     fi
     test_pass

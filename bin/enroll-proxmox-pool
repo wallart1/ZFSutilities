@@ -185,6 +185,25 @@ enroll_two_node() {
         return 1
     fi
 
+    # Same contract as single-node enrollment: the VM-disk scripts create
+    # zvols inside <pool>/proxmox, so the dataset must exist before the
+    # storage is used.  This host is the storage host (checked above), so
+    # the pool is local.
+    if ! zfs list -H -o name "${pool}/proxmox" >/dev/null 2>&1; then
+        if [[ "$dry_run" == true ]]; then
+            log_msg "INFO: DRY-RUN: would create dataset ${pool}/proxmox"
+        else
+            log_msg "INFO: Creating VM-disk dataset ${pool}/proxmox..."
+            if ! zfs create "${pool}/proxmox"; then
+                log_msg "FATAL: Could not create dataset ${pool}/proxmox"
+                return 1
+            fi
+            log_msg "INFO:   ✓ Dataset ${pool}/proxmox created"
+        fi
+    else
+        log_msg "INFO: Dataset ${pool}/proxmox already exists"
+    fi
+
     if ! ssh -o ConnectTimeout=10 "root@${compute_host}" \
         'command -v pvesm' >/dev/null 2>&1; then
         log_msg "FATAL: Proxmox VE not found on compute host $compute_host (pvesm missing)."

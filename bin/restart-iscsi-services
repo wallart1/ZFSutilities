@@ -183,7 +183,10 @@ main() {
 
     # Save only if all expected LUNs are active
     echo ""
-    "$mydir/safe-iscsi-save"
+    if ! "$mydir/safe-iscsi-save"; then
+        log_msg "FATAL: safe-iscsi-save failed — iSCSI configuration NOT saved"
+        return 1
+    fi
 
     # Show current status
     echo ""

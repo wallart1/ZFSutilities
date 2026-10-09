@@ -154,7 +154,7 @@ function diagnose_dataset_busy {
                 while IFS= read -r t; do
                     local lun_num
                     lun_num=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
-                        | grep "$bsname" | grep -oE 'lun[0-9]+' | head -1 \
+                        | grep -F "block/${bsname} " | grep -oE 'lun[0-9]+' | head -1 \
                         | sed 's/^lun//')
                     if [[ -n "$lun_num" ]]; then
                         lun_info="${t} (LUN ${lun_num})"

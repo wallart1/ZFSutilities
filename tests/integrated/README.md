@@ -34,6 +34,15 @@ tests/integrated/itf journey run <name>
 tests/integrated/itf watch          # tail the active run — NOT the console
 ```
 
+Two-node cycle (second base host in the compute role) additionally:
+
+```bash
+tests/integrated/itf iso fetch pve            # Proxmox VE ISO for the
+                                              # compute template
+tests/integrated/itf iso upload <compute-base> pve
+tests/integrated/itf template build --base <compute-base> --profile compute
+```
+
 Every run (journey or preflight) writes a progressive report under
 `results/run-<timestamp>-<tag>/` (gitignored): `steps.tsv` for tooling,
 `report.md` for humans, plus artifacts captured along the way.
@@ -46,8 +55,8 @@ Every run (journey or preflight) writes a progressive report under
 | `lib/config-lib.sh` | site configuration load + fail-closed validation |
 | `lib/ssh-lib.sh` | dev↔base, dev↔guest transports; preseed HTTP server |
 | `lib/base-lib.sh` | **the guard**: allow-listed qm verbs, VMID range, itf-only storages, audit log, dry-run, baseline-template protection |
-| `lib/guest-lib.sh` | guest lifecycle (create/clone/start/stop/snapshot/destroy), ISO fetch/upload, preseed rendering, IP discovery |
-| `lib/template-lib.sh` | post-install baseline template: build/stamp/status/destroy |
+| `lib/guest-lib.sh` | guest lifecycle (create/clone/start/stop/snapshot/destroy), ISO fetch/upload (Debian + PVE), preseed/answer rendering, IP discovery |
+| `lib/template-lib.sh` | post-install baseline templates: storage profile (Debian + product) and compute profile (PVE from the ISO) — build/stamp/status/destroy |
 | `lib/report-lib.sh` | progressive PASS/FAIL/SKIP run reports |
 | `lib/serial_console.py` | `qm terminal` driver for OS-install automation (python3 stdlib) |
 | `journeys/` | end-user journeys (see `journeys/README.md`) |
@@ -99,6 +108,7 @@ by rerunning the journey on a dev-built tarball.  See
 | 1 | orchestrator MVP: driver, guard libs, site schema, own tests, docs | complete |
 | 2 | cycle-1 journeys (fresh install, uninstall/reinstall, install-over-leftovers) | complete |
 | 2.5 | post-install baseline template (`qm template` + full clone): j02/j03 convert to clone-start, j04 validates; journeys begin at the installed state without reinstalling | complete |
-| 3+ | two-node cycle, release upgrades, GUI automation, failure injection, OS matrix (multiple template names) | planned |
+| 3 | two-node cycle: compute-role base host + PVE-ISO compute template, P2P cross-node link, j05 two-node install + first-LUN verify | in progress |
+| 3+ | release upgrades, GUI automation, failure injection, OS matrix (more template profiles) | planned |
 
 Developer-facing detail: `docs/docs/developer-guide/integrated-testing.md`.

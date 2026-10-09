@@ -10,8 +10,9 @@
 # Usage:
 #   itf preflight                     verify dev + base-host readiness
 #   itf guest create NAME [opts]      create (and optionally start) a guest
-#   itf guest clone NAME [opts]       full-clone a guest from the baseline
-#                                     template (post-install starting point)
+#   itf guest clone NAME [opts]       full-clone a guest from a baseline
+#                                     template (post-install starting
+#                                     point; --template picks the profile)
 #   itf guest start|stop BASE VMID
 #   itf guest destroy BASE VMID
 #   itf guest snapshot BASE VMID SNAP
@@ -19,13 +20,17 @@
 #   itf guest ip BASE VMID [timeout]  discover guest IP via guest agent
 #   itf guest wait-ssh IP [timeout]
 #   itf guest list [BASE]
-#   itf iso fetch                     download installer ISO to dev cache
-#   itf iso upload [BASE]             upload cached ISO to base ISO storage
-#   itf template status               baseline template presence + stamp
-#   itf template build [--sw-source ..] [--force]
-#                                     rebuild the post-install baseline
-#                                     template (one unattended install)
-#   itf template destroy              remove the baseline template
+#   itf iso fetch [debian|pve]        download installer ISO to dev cache
+#   itf iso upload [BASE] [debian|pve]
+#                                     upload cached ISO to base ISO storage
+#   itf template status               baseline templates presence + stamp
+#   itf template build [--base B] [--profile storage|compute]
+#                                     [--sw-source ..] [--force]
+#                                     rebuild a baseline template (storage:
+#                                     Debian + product; compute: PVE from
+#                                     the auto-installer ISO)
+#   itf template destroy [--base B] [--profile storage|compute]
+#                                     remove a baseline template
 #   itf journey list                  list available journeys
 #   itf journey run NAME              execute a journey under a run report
 #   itf watch [TAG]                   tail a run's live report + serial
@@ -180,36 +185,92 @@ cmd_preflight() {
         itf_step info "[$base] reserved VMIDs in use" \
             "$inrange guests in ${ITF_VMID_FIRST}-${ITF_VMID_LAST}"
 
-        if itf_read "$base" ls -l "$ITF_ISO_DIR/template/iso" 2>/dev/null \
-            | grep -q "$ITF_ISO_NAME"; then
-            itf_step pass "[$base] installer ISO" "$ITF_ISO_NAME present"
+        # The Debian installer ISO serves storage-role installs (guests
+        # and the storage template); a compute-role base boots the PVE
+        # custom ISO, built and uploaded on demand by the template build.
+        if [[ "$base" == "${ITF_STORAGE_BASE:-}" ]]; then
+            if itf_read "$base" ls -l "$ITF_ISO_DIR/template/iso" 2>/dev/null \
+                    | grep -q "$ITF_ISO_NAME"; then
+                itf_step pass "[$base] installer ISO" "$ITF_ISO_NAME present"
+            else
+                itf_step fail "[$base] installer ISO" \
+                    "$ITF_ISO_NAME not on $ITF_ISO_DIR/template/iso —" \
+                    "run: itf iso fetch && itf iso upload $base"
+                fail_total=1
+            fi
         else
-            itf_step fail "[$base] installer ISO" \
-                "$ITF_ISO_NAME not on $ITF_ISO_DIR/template/iso —" \
-                "run: itf iso fetch && itf iso upload $base"
-            fail_total=1
+            itf_step info "[$base] installer ISO" \
+                "not required on a compute-role base"
         fi
+    done
 
-        # The baseline template is optional infrastructure: absent is
-        # informational (cycle-1 journeys install from scratch), present
-        # but unstamped is broken.
-        local tmpl_vmid tmpl_stamp
-        tmpl_vmid="$(itf_template_vmid "$base")" || tmpl_vmid=""
+    # Baseline templates are optional infrastructure: absent is
+    # informational (journeys can install from scratch), present but
+    # unstamped is broken.  Each profile is expected on its role's base.
+    local tmpl_vmid tmpl_stamp
+    if [[ -n "${ITF_STORAGE_BASE:-}" ]]; then
+        tmpl_vmid="$(itf_template_vmid "$ITF_STORAGE_BASE")" || tmpl_vmid=""
         if [[ -n "$tmpl_vmid" ]]; then
-            if tmpl_stamp="$(itf_template_stamp_read "$base" "$tmpl_vmid" 2>/dev/null)"; then
-                itf_step pass "[$base] baseline template" \
+            if tmpl_stamp="$(itf_template_stamp_read "$ITF_STORAGE_BASE" "$tmpl_vmid" \
+                    2>/dev/null)"; then
+                itf_step pass "[$ITF_STORAGE_BASE] storage template" \
                     "$ITF_TEMPLATE_NAME (vmid $tmpl_vmid): ${tmpl_stamp#itf-stamp| }"
             else
-                itf_step fail "[$base] baseline template" \
+                itf_step fail "[$ITF_STORAGE_BASE] storage template" \
                     "vmid $tmpl_vmid carries no readable itf stamp — rebuild: " \
                     "itf template build --force"
                 fail_total=1
             fi
         else
-            itf_step info "[$base] baseline template" \
+            itf_step info "[$ITF_STORAGE_BASE] storage template" \
                 "absent (optional) — create with: itf template build"
         fi
-    done
+    fi
+    if [[ -n "${ITF_COMPUTE_BASE:-}" && -n "${ITF_COMPUTE_TEMPLATE_NAME:-}" ]]; then
+        tmpl_vmid="$(itf_template_vmid "$ITF_COMPUTE_BASE" "$ITF_COMPUTE_TEMPLATE_NAME")" \
+            || tmpl_vmid=""
+        if [[ -n "$tmpl_vmid" ]]; then
+            if tmpl_stamp="$(itf_template_stamp_read "$ITF_COMPUTE_BASE" "$tmpl_vmid" \
+                    2>/dev/null)"; then
+                itf_step pass "[$ITF_COMPUTE_BASE] compute template" \
+                    "$ITF_COMPUTE_TEMPLATE_NAME (vmid $tmpl_vmid): ${tmpl_stamp#itf-stamp| }"
+            else
+                itf_step fail "[$ITF_COMPUTE_BASE] compute template" \
+                    "vmid $tmpl_vmid carries no readable itf stamp — rebuild: " \
+                    "itf template build --base $ITF_COMPUTE_BASE --profile compute --force"
+                fail_total=1
+            fi
+        else
+            itf_step info "[$ITF_COMPUTE_BASE] compute template" \
+                "absent (optional) — create with: itf template build --base" \
+                "$ITF_COMPUTE_BASE --profile compute"
+        fi
+    fi
+
+    # Two-node extras: the PVE ISO is consumed on dev (customize rebuilds
+    # the boot ISO from it), and nothing on the LAN should already hold
+    # the planned point-to-point addresses.
+    if [[ -n "${ITF_COMPUTE_BASE:-}" && -n "${ITF_PVE_ISO_NAME:-}" ]]; then
+        if [[ -s "$ITF_CACHE_DIR/$ITF_PVE_ISO_NAME" ]]; then
+            itf_step pass "[dev] PVE ISO cached" "$ITF_CACHE_DIR/$ITF_PVE_ISO_NAME"
+        else
+            itf_step fail "[dev] PVE ISO cached" "run: itf iso fetch pve"
+            fail_total=1
+        fi
+    fi
+    if [[ -n "${ITF_COMPUTE_BASE:-}" && -n "${ITF_ISCSI_STORAGE_IP:-}" ]]; then
+        local neigh p2p
+        neigh="$(itf_read "$ITF_COMPUTE_BASE" ip neigh show 2>/dev/null)" || neigh=""
+        for p2p in "$ITF_ISCSI_STORAGE_IP" "$ITF_ISCSI_COMPUTE_IP"; do
+            if printf '%s\n' "$neigh" | grep -q "^$p2p "; then
+                itf_step info "[$ITF_COMPUTE_BASE] P2P IP $p2p" \
+                    "already has an ARP entry — verify nothing lives there" \
+                    "before a run assigns it statically"
+            else
+                itf_step pass "[$ITF_COMPUTE_BASE] P2P IP $p2p" "no ARP entry — free"
+            fi
+        done
+    fi
 
     itf_report_finish > /dev/null || fail_total=1
     echo "itf: preflight result: $ITF_RUN_DIR/report.md"
@@ -283,16 +344,27 @@ cmd_iso() {
     itf_config_load
     local sub="${1:-}"
     case "$sub" in
-        fetch) itf_iso_fetch ;;
-        upload) itf_iso_upload "${2:-${ITF_BASE_HOSTS[0]}}" ;;
-        *) echo "usage: itf iso fetch|upload [BASE]" >&2; return 2 ;;
+        fetch) itf_iso_fetch "${2:-debian}" ;;
+        upload)
+            local base="${2:-${ITF_BASE_HOSTS[0]}}"
+            local sel="${3:-debian}"
+            case "$sel" in
+                debian) itf_iso_upload "$base" "$ITF_ISO_NAME" ;;
+                pve) itf_iso_upload "$base" "$ITF_PVE_ISO_NAME" ;;
+                *) echo "usage: itf iso upload [BASE] [debian|pve]" >&2; return 2 ;;
+            esac
+            ;;
+        *) echo "usage: itf iso fetch|upload [BASE] [debian|pve]" >&2; return 2 ;;
     esac
 }
 
 cmd_template() {
     itf_config_load
     local sub="${1:-}"
-    [[ -z "$sub" ]] && { echo "usage: itf template status|build|destroy" >&2; return 2; }
+    [[ -z "$sub" ]] && {
+        echo "usage: itf template status|build|destroy [--base ..] [--profile ..]" >&2
+        return 2
+    }
     shift
     case "$sub" in
         status) itf_template_status ;;
@@ -305,8 +377,11 @@ cmd_template() {
             echo "itf: report: $ITF_RUN_DIR/report.md"
             return "$rc"
             ;;
-        destroy) itf_template_destroy ;;
-        *) echo "usage: itf template status|build|destroy" >&2; return 2 ;;
+        destroy) itf_template_destroy "$@" ;;
+        *)
+            echo "usage: itf template status|build|destroy [--base ..] [--profile ..]" >&2
+            return 2
+            ;;
     esac
 }
 

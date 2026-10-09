@@ -51,6 +51,23 @@ Scenarios that begin *after* installation skip all of the above:
    boot-health-gated at build time), so clones need no per-journey
    `apt upgrade`.
 
+## Steps common to two-node journeys
+
+j05-style scenarios span two guests on two base hosts:
+
+1. Two clone-starts with explicit roles: `itf_journey_stage_from_template
+   <gname> --base <storage-base>` and `--base <compute-base> --template
+   <compute-template> --role compute`.  Per-guest state files keep the
+   VMID/IP pairs apart (`guest-storage.txt`, `guest-compute.txt`).
+2. The cross-node link is admin pre-work driven from the journey: net1
+   NICs on the shared bridge, static P2P addresses from the site config,
+   `/etc/hosts` entries, and root SSH keys exchanged both directions —
+   mirroring what the two-node installer checks.
+3. The compute-side guest comes from the **compute template** (PVE
+   installed from the Proxmox ISO; see the developer guide's two-node
+   section), so the installer's deploy push to the compute host is part
+   of what the journey exercises.
+
 ## Current set
 
 | Journey | Scenario |
@@ -59,3 +76,4 @@ Scenarios that begin *after* installation skip all of the above:
 | j02-uninstall-reinstall | clone start, purge, assert clean state, reinstall, assert working |
 | j03-install-over-leftovers | clone start, staged partial uninstall, installer detects/cleans/completes |
 | j04-post-install-baseline | validates the template path end to end: clone, wiring, pools, product surface |
+| j05-two-node-install | two guests on two base hosts: P2P link, storage-side install, compute-side deploy, first LUN round trip |

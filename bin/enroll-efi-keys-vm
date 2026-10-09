@@ -167,7 +167,7 @@ if [[ "$by_path" == /dev/disk/by-path/* ]]; then
         # the backstore token that follows "block/" on that line.
         lun_line=$(ssh root@"$storage_host" \
             "targetcli '/iscsi/${target}/tpg1/luns' ls 2>/dev/null \
-            | grep -F \"lun${lun}\"" | head -1)
+            | grep -F \"lun${lun} \"" | head -1)
         backstore=""
         if [[ "$lun_line" == *"lun${lun}"* ]]; then
             _efi_after="${lun_line#*"lun${lun}"}"

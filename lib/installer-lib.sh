@@ -436,7 +436,7 @@ ensure_iscsi_target_stack() {
     return 0
 }
 
-# Ensure open-iscsi is installed and the initiator service is enabled on the
+# Ensure open-iscsi is installed and the initiator socket is active on the
 # remote compute host. Returns 0 if ready, non-zero if the user declines or
 # installation fails.
 ensure_open_iscsi_remote() {
@@ -448,40 +448,44 @@ ensure_open_iscsi_remote() {
     if ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${host}" \
         "command -v iscsiadm >/dev/null 2>&1" >/dev/null 2>&1; then
         echo "  ✓ open-iscsi (iscsiadm) found on $host"
+    else
+        echo "  ✗ open-iscsi (iscsiadm) not found on $host"
         echo ""
-        return 0
+        echo "  The iSCSI initiator is required on the compute host so Proxmox VE"
+        echo "  can connect to the storage host's iSCSI targets."
+        echo ""
+
+        if ! ask_yn "Install open-iscsi on $host now?" "Y"; then
+            echo "  Aborted. Install open-iscsi on $host manually and re-run the installer."
+            return 1
+        fi
+
+        echo ""
+        echo "  Installing open-iscsi on $host..."
+        if ssh -o ConnectTimeout=30 "root@${host}" \
+            "apt-get update -qq && apt-get install -y open-iscsi" >/dev/null 2>&1; then
+            echo "  ✓ open-iscsi installed on $host"
+        else
+            echo "  ✗ Could not install open-iscsi on $host." >&2
+            echo "    Install manually and re-run the installer:" >&2
+            echo "      ssh root@${host} apt-get install open-iscsi" >&2
+            return 1
+        fi
     fi
 
-    echo "  ✗ open-iscsi (iscsiadm) not found on $host"
+    # Debian socket-activates iscsid: the service unit stays disabled by
+    # design and the listening socket is the ready state that iscsiadm
+    # (and therefore PVE storage) relies on. Check it on every path —
+    # PVE hosts ship open-iscsi already installed and never see the
+    # install branch above.
     echo ""
-    echo "  The iSCSI initiator is required on the compute host so Proxmox VE"
-    echo "  can connect to the storage host's iSCSI targets."
-    echo ""
-
-    if ! ask_yn "Install open-iscsi on $host now?" "Y"; then
-        echo "  Aborted. Install open-iscsi on $host manually and re-run the installer."
-        return 1
-    fi
-
-    echo ""
-    echo "  Installing open-iscsi on $host..."
-    if ssh -o ConnectTimeout=30 "root@${host}" \
-        "apt-get update -qq && apt-get install -y open-iscsi" >/dev/null 2>&1; then
-        echo "  ✓ open-iscsi installed on $host"
-    else
-        echo "  ✗ Could not install open-iscsi on $host." >&2
-        echo "    Install manually and re-run the installer:" >&2
-        echo "      ssh root@${host} apt-get install open-iscsi" >&2
-        return 1
-    fi
-
-    echo ""
-    echo "  Enabling iscsid.service on $host..."
+    echo "  Ensuring iscsid.socket is active on $host..."
     if ssh -o ConnectTimeout=10 "root@${host}" \
-        "systemctl enable iscsid >/dev/null 2>&1"; then
-        echo "  ✓ iscsid.service enabled on $host"
+        "systemctl enable --now iscsid.socket >/dev/null 2>&1; \
+         systemctl is-active --quiet iscsid.socket"; then
+        echo "  ✓ iscsid.socket active on $host (socket-activated iscsid)"
     else
-        echo "  ⚠ Could not enable iscsid.service on $host" >&2
+        echo "  ⚠ Could not verify iscsid.socket on $host" >&2
     fi
 
     echo ""

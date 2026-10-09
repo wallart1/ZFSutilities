@@ -321,7 +321,9 @@ lock_new="$zfslock_id"
 
 # Tear down old lun and backstore if present.
 if [[ -n "$old_bs" ]]; then
-    if targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null | grep -qF " ${old_bs} "; then
+    # The lun line slash-prefixes the backstore name, so anchor the guard
+    # on "block/<name> " — a space-anchored name never matches it.
+    if targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null | grep -qF "block/${old_bs} "; then
         targetcli "/iscsi/${target}/tpg1/luns" delete "lun${lun}"
     fi
     if targetcli /backstores/block ls 2>/dev/null | grep -qF " ${old_bs} "; then
@@ -353,7 +355,7 @@ if [[ -n "$old_bs" ]]; then
         # Strip everything through the first "lun" token and keep the
         # leading digits ("... lun3 [block/..." -> "3").
         new_lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-            | grep -F " ${new_bs} " \
+            | grep -F "block/${new_bs} " \
             | while IFS= read -r _lun_line; do
                 _lun_rest="${_lun_line#*lun}"
                 printf '%s\n' "${_lun_rest%%[!0-9]*}"

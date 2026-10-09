@@ -575,5 +575,66 @@ test_version_file_references_use_uppercase_filename() {
 
 test_version_file_references_use_uppercase_filename
 
+# F-012: deploy-version must load deployment groups from the location
+# install-two-node writes them to (the system config dir), with the legacy
+# flat file honored as a fallback.  Reading only the legacy path left
+# remote_hosts empty on fresh two-node installs: nothing synced to the
+# compute host and the installer's activation ran switch-version on a
+# tree that was never copied.  Structural pins on the real script, in
+# the test-installer-structure idiom (the EUID gate prevents executing
+# the script directly in the suite).
+test_deploy_conf_modern_path_primary() {
+    test_start "deploy groups load from the modern config-dir path first"
+    local repo_root
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    if grep -q \
+        'deploy_conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/deploy.conf"' \
+        "$repo_root/bin/deploy-version"; then
+        test_pass
+    else
+        test_fail "deploy-version does not read \${ZFSUTILITIES_SYSTEM_CONFIG_DIR}/deploy.conf"
+    fi
+}
+
+test_deploy_conf_legacy_fallback_ordered() {
+    test_start "legacy flat deploy.conf is a fallback, checked after the modern path"
+    local repo_root guard_line primary_line
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    # The fallback must be gated on the modern file being absent...
+    if ! grep -q \
+        'if \[\[ ! -f "$deploy_conf" && -f /etc/zfsutilities-deploy.conf \]\]' \
+        "$repo_root/bin/deploy-version"; then
+        test_fail "no guarded fallback to /etc/zfsutilities-deploy.conf"
+        return
+    fi
+    # ...and it must sit after the modern-path assignment it guards.
+    primary_line="$(grep -n 'deploy_conf="\${ZFSUTILITIES_SYSTEM_CONFIG_DIR' \
+        "$repo_root/bin/deploy-version" | cut -d: -f1 | head -1)"
+    guard_line="$(grep -n '! -f "\$deploy_conf" && -f /etc/zfsutilities-deploy.conf' \
+        "$repo_root/bin/deploy-version" | cut -d: -f1 | head -1)"
+    if [[ -n "$primary_line" && -n "$guard_line" \
+            && "$guard_line" -gt "$primary_line" ]]; then
+        test_pass
+    else
+        test_fail "fallback guard missing or placed before the modern-path assignment"
+    fi
+}
+
+test_deploy_conf_usage_names_both_paths() {
+    test_start "usage text names the modern path and the legacy fallback"
+    local repo_root
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    if grep -q 'legacy /etc/zfsutilities-deploy.conf also honored' \
+        "$repo_root/bin/deploy-version"; then
+        test_pass
+    else
+        test_fail "--help does not mention the legacy fallback"
+    fi
+}
+
+test_deploy_conf_modern_path_primary
+test_deploy_conf_legacy_fallback_ordered
+test_deploy_conf_usage_names_both_paths
+
 test_summary
 teardown_test_env

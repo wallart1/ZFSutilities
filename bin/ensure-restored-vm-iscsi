@@ -338,7 +338,7 @@ fi
 # Strip everything through the first "lun" token and keep the leading
 # digits ("... lun3 [block/..." -> "3").
 current_lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-    | grep -F " ${bsname} " \
+    | grep -F "block/${bsname} " \
     | while IFS= read -r _lun_line; do
         _lun_rest="${_lun_line#*lun}"
         printf '%s\n' "${_lun_rest%%[!0-9]*}"

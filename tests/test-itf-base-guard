@@ -99,6 +99,18 @@ test_option_values_not_treated_as_vmids() {
     assert_rc 0 "$guard_rc"
 }
 
+test_net_option_value_passes() {
+    test_start "--net values (virtio,bridge=vmbr0) pass validation"
+    # j05's cross-node link attach uses exactly this form: the value
+    # carries a comma and an = but no colon, so it must not be mistaken
+    # for a storage reference.
+    guard_check set 8042 --net1 virtio,bridge=vmbr0
+    assert_rc 0 "$guard_rc"
+    assert_equals "" "$guard_err"
+    guard_check set 8042 --net1=virtio,bridge=vmbr0
+    assert_rc 0 "$guard_rc"
+}
+
 test_base_storages_refused() {
     test_start "the base system's own storages can never be referenced"
     guard_check set 8042 --scsi0 local:20
@@ -332,6 +344,29 @@ test_template_protection_blocks_mutation() {
     unset ITF_TEMPLATE_NAME _QM_LIST_REPLY
 }
 
+test_template_protection_covers_compute_template() {
+    test_start "both template names are protected; refusal names the match"
+    reset_exec_calls
+    ITF_TEMPLATE_NAME=itf-template
+    ITF_COMPUTE_TEMPLATE_NAME=itf-template-pve
+    _QM_LIST_REPLY='      VMID NAME                 STATUS     MEM(MB)    BOOTDISK    PID
+ 8001 itf-template stopped    8192          0          0
+ 8004 itf-template-pve stopped    8192          0          0
+ 8005 j05      running    8192      32768       1234'
+    local out rc
+    out="$(itf_qm testbase destroy 8004 --purge 2>&1)"
+    rc=$?
+    assert_rc 22 "$rc"
+    assert_contains "$out" "baseline template 'itf-template-pve'"
+    # The storage-role template keeps its protection alongside.
+    itf_qm testbase snapshot 8001 snap1 > /dev/null 2>&1
+    assert_rc 22 $?
+    # Cloning the compute template stays allowed — that is its purpose.
+    itf_qm testbase clone 8004 8006 --name g3 --full 1 > /dev/null 2>&1
+    assert_rc 0 $?
+    unset ITF_TEMPLATE_NAME ITF_COMPUTE_TEMPLATE_NAME _QM_LIST_REPLY
+}
+
 test_template_protection_clone_exempt() {
     test_start "cloning the template is allowed — that is its purpose"
     reset_exec_calls
@@ -380,6 +415,7 @@ test_check_accepts_read_verbs
 test_verb_not_allowlisted
 test_vmid_outside_range_refused
 test_option_values_not_treated_as_vmids
+test_net_option_value_passes
 test_base_storages_refused
 test_itf_storage_references_accepted
 test_storage_payload_traversal_refused
@@ -398,6 +434,7 @@ test_clone_and_template_verbs_allowed
 test_snapshot_verbs_allowed
 test_description_values_exempt_from_storage_shape
 test_template_protection_blocks_mutation
+test_template_protection_covers_compute_template
 test_template_protection_clone_exempt
 test_template_protection_override_and_scope
 test_template_protection_inactive_without_name
