@@ -1546,7 +1546,8 @@ share a common snapshot before a source snapshot can be deleted safely.
 Datasets tab: a lazy-loading tree of datasets, snapshots, and holds. Each pool
 is represented by its root dataset at the top level. Also hosts the
 dataset-tuning actions: Apply Profile (one dialog for the whole multi-select),
-Rewrite Data, and the workload profile manager.
+Rewrite Data, and the workload profile manager — plus Sever Clone, which runs
+`sever-vm-clone` on the selected clone dataset(s) only.
 
 **Key functions:**
 
@@ -1559,6 +1560,7 @@ Rewrite Data, and the workload profile manager.
 | `update_ds_button_sensitivity()` | Enable/disable action buttons                                                                                            |
 | `on_datasets_apply_profile()`    | Collect the single selected tunable dataset, show the profile picker (only profiles that apply to its type), and apply the chosen profile |
 | `on_datasets_rewrite_data()`     | Rewrite the selected filesystem datasets in place (`zfs rewrite -P`)                                                     |
+| `on_datasets_sever_clone()`      | Sever the selected clone dataset(s) from their origin snapshots: typed confirmation, then one `sever-vm-clone` runner step |
 | `on_datasets_manage_profiles()`  | Open the workload profile manager                                                                                        |
 
 **Called modules / imported helpers:**
@@ -1570,6 +1572,8 @@ Rewrite Data, and the workload profile manager.
 | `workload_profiles` | Profile matching against live properties                             |
 | `feature_config`    | Workload profile store                                               |
 | `logging_config`    | `log_msg`                                                            |
+| `command_builders` | `BashStep` for the sever-vm-clone runner step                        |
+| `path_utils`       | Resolve the sibling `sever-vm-clone` script                          |
 
 **Data structures consumed / produced:**
 

@@ -1387,8 +1387,7 @@ anything, `zfsdelfs` lists every selected dataset and annotates each line with:
 
   If any dataset has clone dependents, the command aborts before any `zfs`
   commands are issued. Run
-  [`promote-vm-clone`](two-node.md#promote-vm-clone-both) on a dependent VM
-  first to cut the dependency, then retry.
+  `sever-vm-clone` on a dependent VM first to cut the dependency, then retry.
 
 - **Locking:** `zfsdelfs` acquires an exclusive destroy lock (`x`) on the
 source subtree before modifying anything. If the lock cannot be acquired, it
@@ -1868,7 +1867,7 @@ incremental pair (`zfs send -nPRIw`) as well.
 | Code | Meaning                                                                       |
 | ---- | ----------------------------------------------------------------------------- |
 | `0`  | Transfer (or resume) completed successfully                                   |
-| `8`  | Transfer failed — re-run Migrate Pool to resume from the receive resume token |
+| `8`  | Transfer failed — re-run the calling operation (`$restart_hint`: Migrate Pool from the wizard, sever-vm-clone for severance) to resume from the receive resume token |
 
 ---
 
@@ -2865,7 +2864,7 @@ Reads `/proc/spl/kstat/zfs/arcstats` at the configured interval and prints ARC s
 ### `archive-vm`
 
 Archives a VM before destruction. Discovers clone dependencies, optionally
-promotes them, archives zvols and Proxmox config, verifies archive integrity,
+severs them, archives zvols and Proxmox config, verifies archive integrity,
 and optionally removes the VM.
 
 ```bash
@@ -2883,9 +2882,9 @@ sudo archive-vm <vmid>
 1. **Verify VM stopped** — Refuses to run if the VM is running; the script never
    stops the VM itself. Stop the VM first, then re-run
 2. **Discover clones** — Finds all VMs whose zvols depend on snapshots of the VM's zvols
-3. **Promote clones** — If any clones exist, reports the identity of the disks with
-   dependent clones and asks whether the script should promote them (calls
-   `promote-vm-clone`), severing the dependency so the VM can be removed
+3. **Sever clones** — If any clones exist, reports the identity of the disks with
+   dependent clones and asks whether the script should sever them (calls
+   `sever-vm-clone`), cutting the dependency so the VM can be removed
 4. **Discover referenced zvols** — Reads `/etc/pve/qemu-server/<vmid>.conf` and resolves each
    referenced disk to its zvol. In single-node mode this parses the local ZFS disk lines; in
    two-node mode it resolves iSCSI target/LUN pairs on the storage host. Any orphaned zvols
@@ -2914,7 +2913,7 @@ sudo archive-vm <vmid>
 
 | Script| Purpose in this command                       |
 | -------------------------------------------------| --------------------------------------------- |
-| [promote-vm-clone](two-node.md#promote-vm-clone-both)| Sever clone dependencies before removal       |
+| sever-vm-clone| Sever clone dependencies before removal       |
 | [remove-vm-disk](two-node.md#remove-vm-disk-both)| Remove VM disks in two-node mode              |
 | [zfs-diagnose-busy](modules.md#zfs-diagnose-busy)| Diagnose destroy failures in single-node mode |
 
@@ -2932,7 +2931,7 @@ sudo archive-vm <vmid>
    (the script never stops the VM itself).
 2. Discover VMs whose zvols depend on snapshots of the target VM's zvols,
    report the disks with dependent clones, and prompt whether the script
-   should promote the dependent clones.
+   should sever the dependent clones.
 3. Read `/etc/pve/qemu-server/<vmid>.conf` and resolve only the referenced disks to zvols,
    warning about any orphaned zvols that are skipped.
 4. Archive each referenced zvol with `zfs send -cw` into a dataset under the archive base,

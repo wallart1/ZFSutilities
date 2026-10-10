@@ -1,0 +1,2883 @@
+#!/usr/bin/bash
+# sever-vm-clone <vmid>
+# sever-vm-clone <dataset> [dataset...]
+# Severs a ZFS-cloned VM's disk zvols from their origin snapshots by copying
+# each clone zvol in full into a fresh, origin-free zvol that is swapped in
+# under the same name, so Proxmox configs and iSCSI references keep working.
+#
+# Why not `zfs promote`: promote inverts the clone relationship instead of
+# severing it. The origin snapshot survives, the space it pins stays allocated
+# for as long as any dataset references it, and every sibling clone re-parents
+# onto the promoted dataset. A full copy leaves both sides with independent
+# blocks and releases the origin snapshot for destruction.
+#
+# Space strategy: the copy is made into a temporary location first — a
+# namespace inside the source pool when that pool has room, otherwise an
+# intermediate holding pool named by the user at the confirmation step (never
+# hard-coded: the ask lists the imported pools that could hold the copies) —
+# and only swapped into the original name after the copy succeeds. Peak extra
+# space is therefore one disk at a time — discovery checks that each source
+# pool has at least largest-disk x 1.1 free and recommends a mode from that.
+#
+# This file implements Phase 1 (family bootstrap, argument guards, discovery,
+# the severance plan display, the confirmation gate — including the
+# tight-space holding-pool ask, the origin-snapshot destruction confirmation
+# with a plan-time copy-back space estimate, and the encryption key check on
+# the holding pool — and the transfer phase: a full copy of each clone zvol
+# into a deterministic temp namespace, same-pool or <holding>/sever_<vmid>/,
+# through the migration engine) and Phase 2, the single-node cutover: a
+# catch-up incremental into the staged copy (the holding pool's copy in
+# holding mode), a source-vs-copy GUID verify before anything is destroyed,
+# hold capture/release on the original, then either the same-pool
+# name-preserving destroy+rename swap under 'x' locks, or the holding-pool
+# variant: a space-feasibility pre-check BEFORE any destruction (destroying
+# the original frees only its diverged/unique bytes; the confirmed origin
+# snapshots' bytes count only while they are actually destroyable — no
+# sibling clones, no holds; a lightly-diverged clone frees little, and an
+# infeasible copy-back aborts with a plain explanation instead of running
+# out of space mid-cutover), destroy of the original (its snapshots
+# individually first — real ZFS refuses a dataset destroy while child
+# snapshots exist, and the -R copy already replicated the history they
+# carry) and the confirmed origin snapshot, an engine copy-back into the
+# source-pool temp namespace,
+# a GUID verify, the rename into place, and only then destruction of the
+# holding-namespace copy — all with --continue/--rollback state-file
+# recovery; then the after-swap finishing — the captured holds are reapplied
+# on the swapped-in zvol, this tool's @sever-* scaffolding snapshots are
+# destroyed, and the temp namespaces are removed once empty — and the
+# origin-snapshot report: the live clone list of every origin snapshot is
+# re-read, and unpinned, hold-free origins are offered for destruction (typed
+# confirmation), which is where the pinned space actually comes back.
+# Single-node needs no iSCSI steps — Proxmox references ZFS-backed
+# disks as <storage>:vm-<id>-disk-<n>, the swap preserves the name, so the
+# configs keep working as-is. Phase 3 is the two-node path: the compute host
+# is the canonical entry (an invocation on the storage host delegates over
+# SSH before any qm guard runs — the storage host has no qm), and every
+# zfs/lock/targetcli operation of the cutover runs inside one
+# 'ssh root@<storage_host> bash -s' heredoc under set -e, locks included
+# (the move-vm-disk storage-script pattern). Per disk the worker discovers
+# the zvol's iSCSI state by anchored targetcli ls parsing (the
+# rename-vm-disk discover_iscsi_state pattern), tears the LUN and backstore
+# down before the destroy (a live backstore pins the device node), swaps the
+# zvol, and re-exports the backstore named for the zvol at the SAME LUN id —
+# only when that slot was taken meanwhile does targetcli auto-assign, the new
+# number is parsed back, and a WARN points at the PVE by-path reference.
+# The expected-backstores manifest and iscsi-encrypted-luns.conf are kept in
+# step, safe-iscsi-save runs per re-export, and rescan-storage fires on the
+# compute host at the end. Holding-pool mode and --continue/--rollback work
+# the same way two-node: the state file travels to the storage host with
+# each worker run and back afterwards, so recovery resumes from the last
+# phase the worker persisted.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/sever-vm-clone on BOTH the storage and compute hosts
+# Run from:   the compute host (or the storage host directly — delegates via SSH)
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source_helper rootcheck
+source_helper zfslockmanager
+# Hold capture/release for the cutover (held snapshots cannot be destroyed;
+# the captured holds are reapplied to the swapped-in zvol). Sourcing is safe:
+# zfsreapplyholds only runs its CLI main when executed directly.
+source_helper zfsreapplyholds
+# Busy-diagnosis for a failed origin-snapshot destroy in the release offer
+# (the zfsdelsnap pattern). Sourcing is safe: zfs-diagnose-busy only defines
+# functions.
+source_helper zfs-diagnose-busy
+
+rootcheck
+
+# --- Two-node: the compute host is the canonical entry -------------------------
+# Delegate BEFORE any qm guard runs: the storage host has no qm, so a guard
+# placed above the delegation would kill the script on the very node that
+# needs the hand-off most (the latent flaw the
+# predecessor script shipped with).
+# Arguments are forwarded verbatim — each quoted with printf %q — and
+# re-validated on the compute host. Recovery modes delegate too: the cutover
+# (and its state file) live on the compute host.
+if is_two_node && [[ "$this_host" != "$compute_host" ]]; then
+    remote_script=$(remote_zfsutility_script "$compute_host" "sever-vm-clone")
+    remote_cmd="$remote_script"
+    for _arg in "$@"; do
+        remote_cmd+=" $(printf '%q' "$_arg")"
+    done
+    unset _arg
+    exec ssh -t root@"$compute_host" "$(input_hold_env_prefix)$remote_cmd"
+fi
+
+if ! command -v qm >/dev/null 2>&1; then
+    log_msg "FATAL: This script requires Proxmox VE (qm command not found)."
+    log_msg "FATAL:   On a single node without Proxmox there are no VMs to manage."
+    log_msg "FATAL:   Non-Proxmox hypervisors are not supported."
+    exit 1
+fi
+
+usage() {
+    log_msg "INFO: Usage: sever-vm-clone [--continue <state-file>|--rollback <state-file>]"
+    log_msg "INFO:          sever-vm-clone <vmid>"
+    log_msg "INFO:          sever-vm-clone <dataset> [dataset...]"
+    echo ""
+    log_msg "INFO:   vmid     Sever every clone zvol of this VM"
+    log_msg "INFO:   dataset  Sever only the named clone zvols; datasets that"
+    log_msg "INFO:            are not clone zvols are skipped with an INFO line"
+    echo ""
+    log_msg "INFO: Recovery options (state file printed by an interrupted cutover):"
+    log_msg "INFO:   --continue <state-file>  Resume the cutover swap from the"
+    log_msg "INFO:                            recorded phase — no re-copy; an"
+    log_msg "INFO:                            interrupted catch-up resumes from"
+    log_msg "INFO:                            its receive resume token"
+    log_msg "INFO:   --rollback <state-file>  Revert an interrupted cutover:"
+    log_msg "INFO:                            destroy the staged copies, remove"
+    log_msg "INFO:                            the @sever-* snapshots, reapply"
+    log_msg "INFO:                            the released holds"
+    echo ""
+    log_msg "INFO: Severance copies each clone zvol in full into a fresh,"
+    log_msg "INFO: origin-free zvol swapped in under the same name, so Proxmox"
+    log_msg "INFO: configs and iSCSI references keep working. Unlike zfs promote,"
+    log_msg "INFO: the origin snapshot's space is released once the source is"
+    log_msg "INFO: destroyed."
+    echo ""
+    log_msg "INFO: After the cutover the live clone list of every origin"
+    log_msg "INFO: snapshot is re-read: snapshots no clone still references and"
+    log_msg "INFO: no hold protects are offered for destruction (typed"
+    log_msg "INFO: confirmation) — that offer is where the pinned space"
+    log_msg "INFO: actually comes back."
+    echo ""
+    log_msg "INFO: Tight space: when a source pool cannot hold a same-pool"
+    log_msg "INFO: copy (largest-disk x 1.1 free), the confirmation step asks"
+    log_msg "INFO: for a holding pool — the copies stage in"
+    log_msg "INFO: <holding>/sever_<vmid>/ and are copied back into the source"
+    log_msg "INFO: pool only after the original (and its confirmed origin"
+    log_msg "INFO: snapshot) are destroyed; a pre-check aborts with a plain"
+    log_msg "INFO: explanation before destroying anything when even that"
+    log_msg "INFO: freed space cannot fit the copy-back."
+    echo ""
+    log_msg "INFO: Examples:"
+    log_msg "INFO:   sever-vm-clone 310"
+    log_msg "INFO:   sever-vm-clone <pool>/<path>/vm-310-disk-0 <pool>/<path>/vm-310-disk-1"
+    exit 1
+}
+
+# True when the argument is a plausible ZFS dataset name (pool/component[/...]).
+# Used to validate arguments before they are embedded in the delegation SSH
+# command; names that pass but do not exist surface later as MISSING records.
+is_zfs_dataset_name() {
+    local name="$1" rest="$1" comp
+    [[ "$name" == */* ]] || return 1
+    while [[ "$rest" == */* ]]; do
+        comp="${rest%%/*}"
+        [[ "$comp" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+        rest="${rest#*/}"
+    done
+    [[ "$rest" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+}
+
+# Echo the owning VM id parsed from a vm-<vmid>-disk-<N> zvol basename,
+# or return 1 when the basename does not carry one.
+vm_of_zvol() {
+    local base="${1##*/}" vmid
+    if [[ "$base" == vm-*-disk-* ]]; then
+        vmid="${base#vm-}"
+        vmid="${vmid%%-disk-*}"
+        if [[ "$vmid" =~ ^[0-9]+$ ]]; then
+            printf '%s\n' "$vmid"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Convert a byte count to a human-readable size (family idiom).
+human_bytes() {
+    local bytes="$1"
+    if command -v numfmt >/dev/null 2>&1 \
+        && [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes > 0 )); then
+        numfmt --to=iec-i "$bytes" 2>/dev/null || printf '%sB' "$bytes"
+    else
+        printf '%sB' "$bytes"
+    fi
+}
+
+# --- Phase 2: cutover (name-preserving swap, both node modes) ------------------
+#
+# One cutover state file per run, with a per-disk phase marker, so a crash in
+# the destroy→rename window is recoverable (--continue resumes; --rollback
+# reverts) — the state-file pattern of bin/move-vm-disk. The whole per-disk
+# cutover runs in a storage-side worker (sever_storage_cutover_script below):
+# a child shell in single-node mode, a 'ssh root@<storage_host> bash -s'
+# heredoc under set -e in two-node mode — locks included, so the x-class
+# guards span the destroy→rename window without an unlock gap. The worker
+# owns the phase markers and rewrites the state file at every transition;
+# the parent pushes the file to the storage host before each worker run and
+# fetches it back after (on failure too, best effort). Per-disk markers, in
+# order (holding-pool-mode markers marked [H]; a same-pool disk never visits
+# them, and a holding disk never skips around them; two-node-only markers
+# marked [2N]):
+#   staged            fresh copy landed in the temp namespace (Phase 1 done)
+#   catchup_done      @<cutover> snapshot taken; catch-up incremental received
+#                     [H] into the holding pool's copy
+#   verified          cutover-snapshot GUID matched source-vs-copy
+#   space_checked     [H] copy-back space-feasibility pre-check passed (runs
+#                     before ANY destruction)
+#   holds_captured    the original zvol's holds written to the holds file
+#   holds_released    holds released (held snapshots cannot be destroyed)
+#   iscsi_detached    [2N] the zvol's iSCSI LUN and backstore torn down (the
+#                     live backstore pins the device node the destroy frees)
+#   source_destroyed  the original clone zvol was destroyed   } crash window:
+#   origin_snap_destroyed [H] the confirmed origin snapshot destroyed (or } every
+#                     accounted skipped: unconfirmed, siblings, held)  } step is
+#   copied_back       [H] engine copy-back landed in the source-pool  } idempotent
+#                     namespace (only after the destructions above)   } so
+#   copyback_verified [H] copy-back's cutover-snapshot GUID matched    } --continue
+#   temp_renamed      the copy was renamed into the original name     } replays
+#   device_ready      /dev/zvol/<name> back via udev
+#   iscsi_reattached  [2N] backstore re-created named for the zvol and
+#                     re-exported at the SAME LUN id (a taken slot falls back
+#                     to auto-assign with a by-path WARN)
+#   swapped           post-swap GUID matched; holds reapplied
+#   holding_freed     [H] the holding-namespace copy destroyed (after the swap)
+#   scaffolding_cleared  this tool's @sever-* snapshots destroyed on the new zvol
+#   done              locks released, holds file removed
+
+declare -a sev_zvols=()        # selected clone zvols, in discovery order
+declare -A sev_origin=()       # zvol -> origin snapshot
+declare -A sev_temp_name=()    # zvol -> temp zvol holding the fresh copy
+declare -A sev_back_name=()    # zvol -> [H] copy-back temp zvol in the source pool
+declare -A sev_recv_snap=()    # zvol -> snapshot the copy received (send base)
+declare -A sev_cut_guid=()     # zvol -> verified cutover-snapshot GUID
+declare -A sev_holds_file=()   # zvol -> captured-holds TSV file
+declare -A sev_phase=()        # zvol -> cutover phase marker
+declare -A sev_referenced=()   # zvol -> referenced bytes (full-copy size, plan gather)
+declare -A sev_isc_target=()   # zvol -> [2N] iSCSI target IQN exporting it
+declare -A sev_isc_lun=()      # zvol -> [2N] iSCSI LUN id exporting it
+declare -A sev_isc_bs=()       # zvol -> [2N] iSCSI backstore name (empty: not exported)
+declare -A sev_isc_enc=()      # zvol -> [2N] "Y" when the zvol is encrypted
+sever_run_snapname=""          # Phase 1 snapshot name (@sever-<ts>)
+sever_cutover_snapname=""      # Phase 2 snapshot name (@sever-<ts>-cutover)
+sever_state_file=""
+sever_mode="run"
+sever_state_key=""
+sever_space_mode="same"        # "same" | "holding" (set at the confirmation gate)
+sev_holding_pool=""            # [H] user-named intermediate pool
+sever_origin_destroy="N"       # [H] origin-snapshot destruction confirmed
+
+# Rank of a phase marker for ordering comparisons; an unknown marker ranks as
+# `staged` so a damaged state file replays from the start — every step is
+# idempotent. Shared by the parent and the storage-side worker (which carries
+# its own copy): keep the two tables identical.
+sever_phase_rank() {
+    case "$1" in
+        staged)               echo 0 ;;
+        catchup_done)         echo 1 ;;
+        verified)             echo 2 ;;
+        space_checked)        echo 3 ;;
+        holds_captured)       echo 4 ;;
+        holds_released)       echo 5 ;;
+        iscsi_detached)       echo 6 ;;
+        source_destroyed)     echo 7 ;;
+        origin_snap_destroyed) echo 8 ;;
+        copied_back)          echo 9 ;;
+        copyback_verified)    echo 10 ;;
+        temp_renamed)         echo 11 ;;
+        device_ready)         echo 12 ;;
+        iscsi_reattached)     echo 13 ;;
+        swapped)              echo 14 ;;
+        holding_freed)        echo 15 ;;
+        scaffolding_cleared)  echo 16 ;;
+        done)                 echo 17 ;;
+        *)                    echo 0 ;;
+    esac
+}
+
+sever_phase_ge() {
+    (( $(sever_phase_rank "$1") >= $(sever_phase_rank "$2") ))
+}
+
+sever_state_write() {
+    local i zvol
+    {
+        printf 'run_snap=%s\n' "${sever_run_snapname:-}"
+        printf 'cutover_snap=%s\n' "${sever_cutover_snapname:-}"
+        printf 'space_mode=%s\n' "${sever_space_mode:-same}"
+        printf 'holding_pool=%s\n' "${sev_holding_pool:-}"
+        printf 'origin_destroy=%s\n' "${sever_origin_destroy:-N}"
+        printf 'diskcount=%s\n' "${#sev_zvols[@]}"
+        for i in "${!sev_zvols[@]}"; do
+            zvol="${sev_zvols[$i]}"
+            printf 'disk%d=%s\n' "$((i + 1))" "$zvol"
+            printf 'temp%d=%s\n' "$((i + 1))" "${sev_temp_name[$zvol]:-}"
+            printf 'back%d=%s\n' "$((i + 1))" "${sev_back_name[$zvol]:-}"
+            printf 'fromsnap%d=%s\n' "$((i + 1))" "${sev_recv_snap[$zvol]:-}"
+            printf 'origin%d=%s\n' "$((i + 1))" "${sev_origin[$zvol]:-}"
+            printf 'guid%d=%s\n' "$((i + 1))" "${sev_cut_guid[$zvol]:-}"
+            printf 'holds%d=%s\n' "$((i + 1))" "${sev_holds_file[$zvol]:-}"
+            printf 'ref%d=%s\n' "$((i + 1))" "${sev_referenced[$zvol]:-}"
+            printf 'itgt%d=%s\n' "$((i + 1))" "${sev_isc_target[$zvol]:-}"
+            printf 'ilun%d=%s\n' "$((i + 1))" "${sev_isc_lun[$zvol]:-}"
+            printf 'ibs%d=%s\n' "$((i + 1))" "${sev_isc_bs[$zvol]:-}"
+            printf 'ienc%d=%s\n' "$((i + 1))" "${sev_isc_enc[$zvol]:-}"
+            printf 'phase%d=%s\n' "$((i + 1))" "${sev_phase[$zvol]:-staged}"
+        done
+    } > "$sever_state_file"
+}
+
+# Read a cutover state file back into the discovery-shaped arrays so
+# --continue/--rollback (and the parent, after every storage-worker run)
+# drive the same per-disk machinery.
+sever_state_read() {
+    local file="$1" i ref zvol
+    [[ -f "$file" ]] || {
+        log_msg "FATAL: State file not found: $file"
+        exit 1
+    }
+    sever_state_file="$file"
+    # shellcheck source=/dev/null disable=SC1090
+    source "$file"
+    if [[ "${diskcount:-0}" -lt 1 || -z "${cutover_snap:-}" ]]; then
+        log_msg "FATAL: State file ${file} is malformed (diskcount/cutover_snap missing)."
+        exit 1
+    fi
+    sever_run_snapname="${run_snap:-}"
+    sever_cutover_snapname="$cutover_snap"
+    sever_space_mode="${space_mode:-same}"
+    sev_holding_pool="${holding_pool:-}"
+    sever_origin_destroy="${origin_destroy:-N}"
+    sev_zvols=()
+    for ((i = 1; i <= diskcount; i++)); do
+        ref="disk$i"
+        zvol="${!ref}"
+        if [[ -z "$zvol" ]]; then
+            log_msg "FATAL: State file ${file} is malformed (disk${i} missing)."
+            exit 1
+        fi
+        sev_zvols+=("$zvol")
+        ref="temp$i";     sev_temp_name["$zvol"]="${!ref}"
+        ref="back$i";     sev_back_name["$zvol"]="${!ref:-}"
+        ref="fromsnap$i"; sev_recv_snap["$zvol"]="${!ref}"
+        ref="origin$i";   sev_origin["$zvol"]="${!ref}"
+        ref="guid$i";     sev_cut_guid["$zvol"]="${!ref:-}"
+        ref="holds$i";    sev_holds_file["$zvol"]="${!ref}"
+        ref="ref$i";      sev_referenced["$zvol"]="${!ref:-}"
+        ref="itgt$i";     sev_isc_target["$zvol"]="${!ref:-}"
+        ref="ilun$i";     sev_isc_lun["$zvol"]="${!ref:-}"
+        ref="ibs$i";      sev_isc_bs["$zvol"]="${!ref:-}"
+        ref="ienc$i";     sev_isc_enc["$zvol"]="${!ref:-}"
+        ref="phase$i";    sev_phase["$zvol"]="${!ref:-staged}"
+        : "${sev_back_name[$zvol]:=}"
+        if [[ -z "${sev_temp_name[$zvol]}" || -z "${sev_recv_snap[$zvol]}" ]]; then
+            log_msg "FATAL: State file ${file} is malformed (temp/fromsnap missing for ${zvol})."
+            exit 1
+        fi
+        if sever_phase_ge "${sev_phase[$zvol]}" "verified" \
+            && [[ -z "${sev_cut_guid[$zvol]}" ]]; then
+                        log_msg "FATAL: State file ${file} is malformed (phase verified without a" \
+                                "GUID for ${zvol})."
+            exit 1
+        fi
+        # A holding-pool disk needs its copy-back name from the state file:
+        # --continue replays the copy-back from it.
+        if [[ -n "${sev_back_name[$zvol]}" ]] \
+            && [[ "${sev_temp_name[$zvol]%%/*}" == "${sev_back_name[$zvol]%%/*}" ]]; then
+                        log_msg "WARN: State file ${file}: holding copy and copy-back of ${zvol}" \
+                                "are in the same pool — treating as same-pool."
+            sev_back_name["$zvol"]=""
+        fi
+    done
+}
+
+# Gate: the owning VM of every disk being swapped must be stopped — the swap
+# destroys the zvol under its live name. Aborts with guidance otherwise; at
+# that point nothing has been destroyed and the staged copies stay put.
+sever_gate_vms_stopped() {
+    local -a running=()
+    local -A seen=()
+    local zvol vmid status
+    for zvol in "${sev_zvols[@]}"; do
+        if ! vmid=$(vm_of_zvol "$zvol"); then
+                        log_msg "WARN: ${zvol}: no owning VM in its name — cannot gate on qm" \
+                                "status; the swap aborts safely (zfs destroy fails) if the zvol" \
+                                "is" \
+                                "busy."
+            continue
+        fi
+        [[ -n "${seen[$vmid]:-}" ]] && continue
+        seen[$vmid]=1
+        status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
+        if [[ "${status:-unknown}" != "stopped" ]]; then
+            running+=("${vmid} (${status:-unknown})")
+        fi
+    done
+    if [[ ${#running[@]} -gt 0 ]]; then
+        log_msg "FATAL: The owning VMs must be stopped for the cutover: ${running[*]}."
+        log_msg "FATAL:   Stop the VM(s), then swap without re-copying:"
+        log_msg "FATAL:   sever-vm-clone --continue ${sever_state_file}"
+        log_msg "FATAL: The fresh copies stay staged in the temp namespace; nothing was destroyed."
+        return 1
+    fi
+    return 0
+}
+
+# WARN-only variant for rollback: cleanup must not be blocked on a running VM
+# (removing snapshots from a live zvol is safe in ZFS).
+sever_warn_vms_running() {
+    local -A seen=()
+    local zvol vmid status
+    for zvol in "${sev_zvols[@]}"; do
+        vmid=$(vm_of_zvol "$zvol") || continue
+        [[ -n "${seen[$vmid]:-}" ]] && continue
+        seen[$vmid]=1
+        status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
+        [[ "${status:-unknown}" == "stopped" ]] \
+            || log_msg "WARN: VM ${vmid} is ${status:-unknown}; rolling back the storage anyway."
+    done
+}
+
+# Sibling clones for the plan-time estimate: every clone except this run's
+# own zvols — by the time the last cutover runs they are all destroyed, so
+# only outside clones keep an origin snapshot pinned.
+sever_plan_siblings() {
+    local clones="${1:-}" item out=""
+    local -a parts=()
+    [[ -n "$clones" && "$clones" != "-" ]] || return 0
+    read -ra parts <<< "${clones//,/ }"
+    for item in "${parts[@]}"; do
+        [[ "$item" == "-" || -z "$item" ]] && continue
+        [[ -n "${sev_origin[$item]:-}" ]] && continue
+        out+="${out:+,}${item}"
+    done
+    [[ -n "$out" ]] && printf '%s\n' "$out"
+    return 0
+}
+
+# --- Origin-snapshot report (where the pinned space comes back) ---------------
+#
+# zfs, run on the host where the zvols live — directly in single-node mode,
+# through ssh in two-node mode (the family's read-only remote-zfs pattern,
+# e.g. move-vm-disk's check_dst_zvol_free). Arguments never contain spaces
+# (dataset/snapshot names and zfs options), so ssh's argument joining is
+# safe; mutations do NOT go through this wrapper — they run inside the
+# storage-side worker heredocs with their locks.
+sev_zfs() {
+    if is_single_node; then
+        zfs "$@"
+    else
+        ssh -o ConnectTimeout=10 root@"$storage_host" zfs "$@"
+    fi
+}
+
+# Destroying the severed clone zvols removed this run's references to their
+# origin snapshots, but each origin snapshot only releases its pinned space
+# once no clone references it at all and no hold protects it. The live clone
+# list of every origin snapshot is re-read (sev_zfs: where the zvols live):
+#   still cloned  reported only — another clone keeps the snapshot alive
+#   held          reported with its hold tags — a hold blocks destruction
+#   unpinned      reported with the reclaimable size; the hold-free ones are
+#                 offered for destruction (typed confirmation)
+# Held and still-cloned snapshots are only ever reported, never destroyed.
+sever_report_origins() {
+    local zvol origin clones tags used size
+    local -A seen=()
+
+    echo ""
+    log_msg "INFO: === Origin snapshot report ==="
+
+    for zvol in "${sev_zvols[@]}"; do
+        origin="${sev_origin[$zvol]:-}"
+        [[ -n "$origin" ]] || continue
+        [[ -z "${seen[$origin]:-}" ]] || continue
+        seen[$origin]=1
+
+        if ! sev_zfs list -t snapshot "$origin" >/dev/null 2>&1; then
+            log_msg "INFO:   ${origin} (origin of ${zvol##*/}) — already destroyed; nothing pinned."
+            continue
+        fi
+
+        clones=$(sev_zfs list -H -o clones "$origin" 2>/dev/null)
+        used=$(sev_zfs get -Hp -o value used "$origin" 2>/dev/null)
+        size=$(human_bytes "${used:-0}")
+
+        if [[ -n "$clones" && "$clones" != "-" ]]; then
+                        log_msg "INFO:   ${origin} — still pinned (${size}): cloned by ${clones};" \
+                                "left in place."
+            continue
+        fi
+
+        tags=$(sev_zfs holds -H "$origin" 2>/dev/null | awk '{print $2}')
+        if [[ -n "$tags" ]]; then
+                        log_msg "INFO:   ${origin} — unpinned but held (${size} stays pinned);" \
+                                "release the hold(s) to make it destroyable:"
+            while IFS= read -r tag; do
+                log_msg "INFO:     hold: ${tag}"
+            done <<< "$tags"
+            continue
+        fi
+
+        log_msg "INFO:   ${origin} — unpinned: no clones, no holds; destroying it releases ${size}."
+        sever_offer_origin_destroy "$origin"
+    done
+}
+
+# Offer to destroy one unpinned, hold-free origin snapshot — the step that
+# actually releases the pinned space. Typed confirmation of the full snapshot
+# name (the zfswipe pattern): a declined offer, a non-matching answer, or an
+# unreadable confirmation leaves the snapshot untouched. The clone and hold
+# checks are repeated under the write lock so a reference that appeared since
+# the report blocks the destroy instead of failing it. The asks run here on
+# the compute host; the locked destroy runs locally in single-node mode and
+# inside a storage-host heredoc in two-node mode (locks inside the heredoc).
+sever_offer_origin_destroy() {
+    local origin="$1"
+    local origin_ds lock clones tags
+    local REPLY
+
+    if ! ask_yn "Destroy ${origin}?"; then
+        log_msg "INFO:     Left in place."
+        return 0
+    fi
+    if ! ask_line "Type '${origin}' to destroy it: "; then
+        log_msg "INFO:     Left in place — no confirmation was read."
+        return 0
+    fi
+    if [[ "$REPLY" != "$origin" ]]; then
+        log_msg "INFO:     Left in place — the confirmation did not match."
+        return 0
+    fi
+
+    if is_two_node; then
+        sever_remote_offer_destroy "$origin" \
+            || log_msg "WARN: The storage-side destroy of ${origin} could not run; left in place."
+        return 0
+    fi
+
+    origin_ds="${origin%@*}"
+    if ! zfslock_wait_or_resolve "$origin_ds" "w" "sever-vm-clone origin release"; then
+        log_msg "WARN: Could not lock ${origin_ds}; ${origin} left in place."
+        return 0
+    fi
+    lock="$zfslock_id"
+
+    # Re-check under the lock: still-cloned and held snapshots are only ever
+    # reported, never destroyed.
+    clones=$(zfs list -H -o clones "$origin" 2>/dev/null)
+    tags=$(zfs holds -H "$origin" 2>/dev/null | awk '{print $2}')
+    if [[ -n "$clones" && "$clones" != "-" ]]; then
+        log_msg "WARN: ${origin} is cloned again (${clones}); left in place."
+        zfslock_release "$lock"
+        return 0
+    fi
+    if [[ -n "$tags" ]]; then
+        log_msg "WARN: ${origin} is held again; left in place."
+        zfslock_release "$lock"
+        return 0
+    fi
+
+    if zfs destroy "$origin"; then
+        log_msg "INFO:     ✓ destroyed — its space is released."
+    else
+        log_msg "WARN: Could not destroy ${origin}."
+        diagnose_dataset_busy "$origin"
+    fi
+    zfslock_release "$lock"
+}
+
+# Two-node arm of the destroy offer: the confirmation already happened on the
+# compute host; this heredoc takes the write lock on the storage host,
+# repeats the clone/hold re-checks under it, destroys, and releases.
+sever_remote_offer_destroy() {
+    local origin="$1" remote_bin
+    remote_bin=$(remote_zfsutilities_bin "$storage_host") \
+        || remote_bin="/usr/local/lib/zfsutilities/current/bin"
+    ssh -o ConnectTimeout=10 root@"$storage_host" bash -s "$remote_bin" "$origin" << 'SSHEOF'
+# shellcheck disable=SC1091,SC2154
+# (bashinit/helpers are sourced at runtime; zfslock_id is set by the sourced
+# zfslockmanager.)
+mydir="$1"; shift
+origin="$1"
+source "$mydir/bashinit"
+bashinit
+source_helper zfslockmanager
+source_helper zfs-diagnose-busy
+
+set -e
+zfslock_init
+
+origin_ds="${origin%@*}"
+if ! zfslock_wait_or_resolve "$origin_ds" "w" "sever-vm-clone origin release"; then
+    log_msg "WARN: Could not lock ${origin_ds}; ${origin} left in place."
+    exit 0
+fi
+lock="$zfslock_id"
+
+# Re-check under the lock: still-cloned and held snapshots are only ever
+# reported, never destroyed.
+clones=$(zfs list -H -o clones "$origin" 2>/dev/null) || clones=""
+tags=$(zfs holds -H "$origin" 2>/dev/null | awk '{print $2}')
+if [[ -n "$clones" && "$clones" != "-" ]]; then
+    log_msg "WARN: ${origin} is cloned again (${clones}); left in place."
+    zfslock_release "$lock"
+    exit 0
+fi
+if [[ -n "$tags" ]]; then
+    log_msg "WARN: ${origin} is held again; left in place."
+    zfslock_release "$lock"
+    exit 0
+fi
+
+if zfs destroy "$origin"; then
+    log_msg "INFO:     ✓ destroyed — its space is released."
+else
+    log_msg "WARN: Could not destroy ${origin}."
+    diagnose_dataset_busy "$origin"
+fi
+zfslock_release "$lock"
+SSHEOF
+}
+
+# Revert an interrupted run (before the destroy — past it there is no way
+# back): destroy the staged copies, remove every @sever-* snapshot this tool
+# left on the originals, reapply the released holds, drop the state file.
+# The per-disk work runs in the storage-side worker (rollback command) with
+# its locks; the parent only drives the sequence.
+sever_rollback() {
+    local zvol
+    sever_state_read "$sever_state_file"
+
+    log_msg "INFO: === Rolling back sever-vm-clone ==="
+    log_msg "INFO:   State file: ${sever_state_file}"
+
+    for zvol in "${sev_zvols[@]}"; do
+        if sever_phase_ge "${sev_phase[$zvol]}" "source_destroyed"; then
+                        log_msg "FATAL: Rollback impossible for ${zvol}: the original zvol was" \
+                                "already destroyed (phase ${sev_phase[$zvol]})."
+                        log_msg "FATAL:   Complete the swap instead: sever-vm-clone --continue" \
+                                "${sever_state_file}"
+            exit 1
+        fi
+    done
+
+    sever_warn_vms_running
+
+    for zvol in "${sev_zvols[@]}"; do
+        if ! sever_run_storage_worker rollback "$zvol"; then
+            log_msg "FATAL: Rollback of ${zvol} failed."
+                        log_msg "FATAL:   Resolve the cause, then re-run: sever-vm-clone" \
+                                "--rollback ${sever_state_file}"
+            exit 1
+        fi
+    done
+
+    sever_run_storage_worker cleanup "" \
+        || log_msg "WARN: Temp namespace cleanup reported failures; remove leftovers manually."
+
+    rm -f "$sever_state_file"
+    log_msg "INFO: === Rollback complete ==="
+}
+
+# Cutover driver: gate the VMs (qm lives here on the compute host), then swap
+# each disk in sequence through the storage-side worker, clean the temp
+# namespaces, rescan iSCSI in two-node mode, and run the origin-snapshot
+# report. Both node modes use the same worker; only its execution differs
+# (local child shell vs SSH heredoc).
+sever_cutover() {
+    local zvol i=0 any_isc="N"
+    echo ""
+    log_msg "INFO: === Phase 2: cutover (name-preserving swap; the owning VMs must be stopped) ==="
+
+    if [[ "$sever_mode" == "run" ]]; then
+        sever_cutover_snapname="sever-$(snapname_timestamp)-cutover"
+        sever_state_file="/tmp/sever-vm-clone-${sever_state_key}-$(date +%s).state"
+        for zvol in "${sev_zvols[@]}"; do
+            i=$((i + 1))
+            sev_phase[$zvol]="staged"
+            sev_cut_guid[$zvol]=""
+            sev_holds_file[$zvol]="${sever_state_file}.holds${i}"
+        done
+    fi
+    # Persist the staged records before any gate that can abort: an abort
+    # then leaves a --continue handle that skips the (long) full re-copy.
+    sever_state_write
+
+    if ! sever_gate_vms_stopped; then
+        exit 1
+    fi
+
+    for zvol in "${sev_zvols[@]}"; do
+        if [[ "${sev_phase[$zvol]}" == "done" ]]; then
+            log_msg "INFO: Skipping ${zvol}: already severed (phase done)."
+            continue
+        fi
+        if ! sever_run_storage_worker cutover "$zvol"; then
+                        log_msg "FATAL: Cutover aborted at ${zvol} (phase ${sev_phase[$zvol]});" \
+                                "the remaining disks are untouched."
+                        log_msg "FATAL:   Resolve the cause, then re-run: sever-vm-clone" \
+                                "--continue ${sever_state_file}"
+            exit 1
+        fi
+    done
+
+    sever_run_storage_worker cleanup "" \
+        || log_msg "WARN: Temp namespace cleanup reported failures; remove leftovers manually."
+
+    # Two-node: make the compute host's iSCSI sessions pick up the
+    # re-exported LUN(s). The swap preserved every LUN id, so the /dev/disk/
+    # by-path names the PVE configs reference are unchanged. Derived from the
+    # state file's iSCSI records, not the in-run markers, so a resumed run
+    # (whose discovery already happened earlier) rescans too.
+    for zvol in "${sev_zvols[@]}"; do
+        if [[ -n "${sev_isc_bs[$zvol]:-}" ]]; then
+            any_isc="Y"
+        fi
+    done
+    if is_two_node && [[ "$any_isc" == "Y" ]]; then
+        log_msg "INFO: Rescanning iSCSI on ${compute_host} so the re-exported LUN(s) appear..."
+        if ! "$mydir/rescan-storage"; then
+            log_msg "WARN: rescan-storage failed; run it on ${compute_host} manually."
+        fi
+    fi
+
+    sever_report_origins
+
+    echo ""
+    log_msg "INFO: === Severance complete ==="
+    for zvol in "${sev_zvols[@]}"; do
+                log_msg "INFO:   ✓ ${zvol} — origin-free (origin was ${sev_origin[$zvol]}; see" \
+                        "the origin snapshot report above)"
+    done
+    rm -f "$sever_state_file"
+    log_msg "INFO: State file removed — nothing left to continue or roll back."
+}
+
+# --- Storage-side cutover worker ------------------------------------------------
+#
+# Run as a child shell on the host where the zvols live — directly in
+# single-node mode, streamed to the storage host as a
+# 'ssh root@<storage_host> bash -s' heredoc in two-node mode (the pattern of
+# the Phase-1 transfer worker and move-vm-disk's storage script). Everything
+# that touches zfs, the locks, or targetcli happens INSIDE this worker under
+# set -e, so the destroy-class locks span the whole destroy→rename window
+# with no unlock gap, and a crash exit drops them through the lock manager's
+# EXIT trap. Non-interactive: over SSH there is no TTY, so a lock conflict
+# aborts with its holder details.
+#
+# The worker owns the phase markers: it rewrites the cutover state file after
+# every phase transition (in two-node mode the parent pushes the file before
+# each run and fetches it back after — on failure too, best effort), so
+# --continue resumes from the last completed step. Every step is idempotent.
+#
+# Arguments:
+#   $1 bin_dir      directory holding bashinit/zfslockmanager/zfs-migrate-send
+#   $2 node_mode    "single" | "two" (the latter adds the iSCSI rewire)
+#   $3 command      "cutover" | "rollback" | "cleanup"
+#   $4 state_file   the cutover state file (same path on both nodes)
+#   $5 results_file machine-readable markers are appended here for the parent
+#   $6 zvol         the disk this invocation severs (empty for "cleanup")
+sever_storage_cutover_script() {
+    cat << 'SSHEOF'
+# shellcheck disable=SC1091,SC2154
+# (bashinit/helpers are sourced at runtime; zfslock_id and friends are set
+# by the sourced zfslockmanager.)
+mydir="$1"; shift
+node_mode="$1"; shift
+worker_cmd="$1"; shift
+statefile="$1"; shift
+results="$1"; shift
+zvol_arg="${1:-}"
+
+source "$mydir/bashinit"
+bashinit
+
+source_helper zfslockmanager
+# Hold capture/release for the cutover; sourcing is safe (the CLI main only
+# runs when the helper is executed directly).
+source_helper zfsreapplyholds
+
+set -e
+
+zfslock_init
+
+# --- State (same file format the parent reads and writes) ---------------------
+declare -a sev_zvols=()
+declare -A sev_origin=() sev_temp_name=() sev_back_name=() sev_recv_snap=()
+declare -A sev_cut_guid=() sev_holds_file=() sev_phase=() sev_referenced=()
+declare -A sev_isc_target=() sev_isc_lun=() sev_isc_bs=() sev_isc_enc=()
+sever_run_snapname=""
+sever_cutover_snapname=""
+sever_state_file="$statefile"
+sever_space_mode="same"
+sev_holding_pool=""
+sever_origin_destroy="N"
+
+# Convert a byte count to a human-readable size (the parent's family idiom).
+human_bytes() {
+    local bytes="$1"
+    if command -v numfmt >/dev/null 2>&1 \
+        && [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes > 0 )); then
+        numfmt --to=iec-i "$bytes" 2>/dev/null || printf '%sB' "$bytes"
+    else
+        printf '%sB' "$bytes"
+    fi
+}
+
+# shell-quote one value for the engine child-shell command (dataset names
+# cannot contain quoting characters; quoting anyway keeps the builder honest).
+sever_shq() { printf '%q' "$1"; }
+
+# Phase-marker ranks — identical to the parent's table (see its comment).
+sever_phase_rank() {
+    case "$1" in
+        staged)               echo 0 ;;
+        catchup_done)         echo 1 ;;
+        verified)             echo 2 ;;
+        space_checked)        echo 3 ;;
+        holds_captured)       echo 4 ;;
+        holds_released)       echo 5 ;;
+        iscsi_detached)       echo 6 ;;
+        source_destroyed)     echo 7 ;;
+        origin_snap_destroyed) echo 8 ;;
+        copied_back)          echo 9 ;;
+        copyback_verified)    echo 10 ;;
+        temp_renamed)         echo 11 ;;
+        device_ready)         echo 12 ;;
+        iscsi_reattached)     echo 13 ;;
+        swapped)              echo 14 ;;
+        holding_freed)        echo 15 ;;
+        scaffolding_cleared)  echo 16 ;;
+        done)                 echo 17 ;;
+        *)                    echo 0 ;;
+    esac
+}
+
+sever_phase_ge() {
+    (( $(sever_phase_rank "$1") >= $(sever_phase_rank "$2") ))
+}
+
+sever_phase_set() {
+    sev_phase["$1"]="$2"
+    sever_state_write
+}
+
+sever_state_write() {
+    local i zvol
+    {
+        printf 'run_snap=%s\n' "${sever_run_snapname:-}"
+        printf 'cutover_snap=%s\n' "${sever_cutover_snapname:-}"
+        printf 'space_mode=%s\n' "${sever_space_mode:-same}"
+        printf 'holding_pool=%s\n' "${sev_holding_pool:-}"
+        printf 'origin_destroy=%s\n' "${sever_origin_destroy:-N}"
+        printf 'diskcount=%s\n' "${#sev_zvols[@]}"
+        for i in "${!sev_zvols[@]}"; do
+            zvol="${sev_zvols[$i]}"
+            printf 'disk%d=%s\n' "$((i + 1))" "$zvol"
+            printf 'temp%d=%s\n' "$((i + 1))" "${sev_temp_name[$zvol]:-}"
+            printf 'back%d=%s\n' "$((i + 1))" "${sev_back_name[$zvol]:-}"
+            printf 'fromsnap%d=%s\n' "$((i + 1))" "${sev_recv_snap[$zvol]:-}"
+            printf 'origin%d=%s\n' "$((i + 1))" "${sev_origin[$zvol]:-}"
+            printf 'guid%d=%s\n' "$((i + 1))" "${sev_cut_guid[$zvol]:-}"
+            printf 'holds%d=%s\n' "$((i + 1))" "${sev_holds_file[$zvol]:-}"
+            printf 'ref%d=%s\n' "$((i + 1))" "${sev_referenced[$zvol]:-}"
+            printf 'itgt%d=%s\n' "$((i + 1))" "${sev_isc_target[$zvol]:-}"
+            printf 'ilun%d=%s\n' "$((i + 1))" "${sev_isc_lun[$zvol]:-}"
+            printf 'ibs%d=%s\n' "$((i + 1))" "${sev_isc_bs[$zvol]:-}"
+            printf 'ienc%d=%s\n' "$((i + 1))" "${sev_isc_enc[$zvol]:-}"
+            printf 'phase%d=%s\n' "$((i + 1))" "${sev_phase[$zvol]:-staged}"
+        done
+    } > "$statefile"
+}
+
+sever_state_read_worker() {
+    local i ref zvol
+    # shellcheck source=/dev/null disable=SC1090
+    source "$statefile"
+    if [[ "${diskcount:-0}" -lt 1 || -z "${cutover_snap:-}" ]]; then
+        log_msg "FATAL: State file ${statefile} is malformed (diskcount/cutover_snap missing)."
+        exit 1
+    fi
+    sever_run_snapname="${run_snap:-}"
+    sever_cutover_snapname="$cutover_snap"
+    sever_space_mode="${space_mode:-same}"
+    sev_holding_pool="${holding_pool:-}"
+    sever_origin_destroy="${origin_destroy:-N}"
+    sev_zvols=()
+    for ((i = 1; i <= diskcount; i++)); do
+        ref="disk$i"
+        zvol="${!ref}"
+        if [[ -z "$zvol" ]]; then
+            log_msg "FATAL: State file ${statefile} is malformed (disk${i} missing)."
+            exit 1
+        fi
+        sev_zvols+=("$zvol")
+        ref="temp$i";     sev_temp_name["$zvol"]="${!ref}"
+        ref="back$i";     sev_back_name["$zvol"]="${!ref:-}"
+        ref="fromsnap$i"; sev_recv_snap["$zvol"]="${!ref}"
+        ref="origin$i";   sev_origin["$zvol"]="${!ref}"
+        ref="guid$i";     sev_cut_guid["$zvol"]="${!ref:-}"
+        ref="holds$i";    sev_holds_file["$zvol"]="${!ref}"
+        ref="ref$i";      sev_referenced["$zvol"]="${!ref:-}"
+        ref="itgt$i";     sev_isc_target["$zvol"]="${!ref:-}"
+        ref="ilun$i";     sev_isc_lun["$zvol"]="${!ref:-}"
+        ref="ibs$i";      sev_isc_bs["$zvol"]="${!ref:-}"
+        ref="ienc$i";     sev_isc_enc["$zvol"]="${!ref:-}"
+        ref="phase$i";    sev_phase["$zvol"]="${!ref:-staged}"
+    done
+}
+
+# --- Shared per-disk helpers ----------------------------------------------------
+
+# GUID of a snapshot, or failure when it cannot be read as a number.
+sever_snap_guid() {
+    local g
+    g=$(zfs get -Hp -o value guid "$1" 2>/dev/null) || return 1
+    [[ "$g" =~ ^[0-9]+$ ]] || return 1
+    printf '%s\n' "$g"
+}
+
+# Wait for the /dev/zvol device node of a zvol to (re)appear after the swap —
+# the rename recreates it under the same name via udev. Tests point
+# SEVER_ZVOL_DEV_PREFIX at a fake tree (the ZFSLOCK_DIR knob pattern).
+SEVER_ZVOL_DEV_PREFIX="${SEVER_ZVOL_DEV_PREFIX:-/dev/zvol}"
+sever_wait_zvol_node() {
+    local dev="${SEVER_ZVOL_DEV_PREFIX}/$1" i
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm settle --timeout=10 >/dev/null 2>&1 || true
+    fi
+    for i in $(seq 1 20); do
+        [[ -b "$dev" ]] && return 0
+        sleep 0.5
+    done
+    [[ -b "$dev" ]]
+}
+
+# Release per-disk cutover locks in reverse acquisition order; empty arguments
+# are skipped (same-pool disks hold no copy-back lock).
+sever_release_locks() {
+    local lock
+    for lock in "$@"; do
+        [[ -n "$lock" ]] && zfslock_release "$lock"
+    done
+    return 0
+}
+
+# True when the disk is staged in the holding pool (a copy-back temp name is
+# recorded): its cutover then runs the holding-pool variant — pre-check,
+# confirmed origin-snapshot destruction, copy-back — around the same swap.
+sever_is_holding() {
+    [[ -n "${sev_back_name[$1]:-}" ]]
+}
+
+# Sibling clones inside a `clones` property value, excluding one name ($2 =
+# the zvol whose cutover is running — its own clone entry is on its way out).
+# Another disk of this run that still exists DOES count as a sibling: it
+# blocks the snapshot until its own cutover destroys it. "-" and empty mean
+# no clones at all. Prints a comma-joined list; nothing when no siblings.
+sever_origin_siblings() {
+    local clones="${1:-}" self="${2:-}" item out=""
+    local -a parts=()
+    [[ -n "$clones" && "$clones" != "-" ]] || return 0
+    read -ra parts <<< "${clones//,/ }"
+    for item in "${parts[@]}"; do
+        [[ "$item" == "-" || -z "$item" ]] && continue
+        [[ "$item" == "$self" ]] && continue
+        out+="${out:+,}${item}"
+    done
+    [[ -n "$out" ]] && printf '%s\n' "$out"
+    return 0
+}
+
+# Destroyability of one origin snapshot from fresh reads (the cutover runs
+# where the zvols live): prints the reason and returns 1 unless the snapshot
+# exists, no sibling clone references it, and no hold protects it. $2 is the
+# zvol whose cutover is running (its own clone entry is excluded). Whether
+# destruction was confirmed is the caller's gate ($sever_origin_destroy),
+# not this check.
+sever_origin_reason() {
+    local snap="$1" self="${2:-}" clones siblings tags
+    if ! zfs list -t snapshot "$snap" >/dev/null 2>&1; then
+        printf 'already destroyed'
+        return 1
+    fi
+    clones=$(zfs list -H -o clones "$snap" 2>/dev/null) || clones=""
+    siblings=$(sever_origin_siblings "$clones" "$self")
+    if [[ -n "$siblings" ]]; then
+        printf 'still cloned by %s' "$siblings"
+        return 1
+    fi
+    tags=$(zfs holds -H "$snap" 2>/dev/null | awk '{print $2}')
+    if [[ -n "$tags" ]]; then
+        printf 'held (%s)' "${tags%%$'\n'*}"
+        return 1
+    fi
+    printf 'destroyable'
+    return 0
+}
+
+# [H] Space-feasibility pre-check for one holding-pool disk — the hard gate
+# that runs BEFORE any destruction of that disk. Fresh numbers:
+#   available = pool free now
+#             + what destroying the original frees — its `used`, the bytes
+#               unique to the clone; the blocks it shares with the origin
+#               snapshot only free with that snapshot
+#             + what destroying the confirmed origin snapshot frees — its
+#               `used`, counted only while it is actually destroyable (no
+#               sibling clones, no holds)
+#   need      = the full copy-back size (the cutover snapshot's referenced
+#               size) x 1.1 headroom, the family margin
+# Idempotent by construction: an original or snapshot that no longer exists
+# contributes 0 because its bytes are already reflected in `free now`.
+sever_holding_space_precheck() {
+    local zvol="$1"
+    local pool="${zvol%%/*}"
+    local osnap="${sev_origin[$zvol]}"
+    local free ref_now need freed_orig=0 freed_snap=0 reason snap_used
+
+    free=$(zpool list -H -p -o free "$pool" 2>/dev/null) || free=""
+    if [[ -z "$free" || "$free" == "-" ]]; then
+                log_msg "FATAL: Cannot read the free space of pool ${pool} — aborting BEFORE" \
+                        "destroying anything."
+                log_msg "FATAL:   Check the pool (zpool list -H -p -o free ${pool}), then re-run:" \
+                        "sever-vm-clone --continue ${sever_state_file}"
+        return 1
+    fi
+    ref_now=$(zfs list -H -p -o referenced "$zvol" 2>/dev/null) || ref_now=""
+    [[ "$ref_now" =~ ^[0-9]+$ ]] || ref_now="${sev_referenced[$zvol]:-0}"
+    need=$(( ref_now * 11 / 10 ))
+    if zfs list -H -o name "$zvol" >/dev/null 2>&1; then
+        freed_orig=$(zfs list -H -p -o used "$zvol" 2>/dev/null) || freed_orig=""
+        [[ "$freed_orig" =~ ^[0-9]+$ ]] || freed_orig=0
+    fi
+    if [[ "$sever_origin_destroy" == "Y" ]]; then
+        reason=$(sever_origin_reason "$osnap" "$zvol") || true
+        if [[ "$reason" == "destroyable" ]]; then
+            snap_used=$(zfs get -Hp -o value used "$osnap" 2>/dev/null) || snap_used=""
+            [[ "$snap_used" =~ ^[0-9]+$ ]] || snap_used=0
+            freed_snap=$snap_used
+        elif [[ "$reason" != "already destroyed" ]]; then
+                        log_msg "WARN: Origin snapshot ${osnap} is ${reason} — its space will not" \
+                                "be freed and is not counted."
+        fi
+    fi
+    if (( free + freed_orig + freed_snap < need )); then
+                log_msg "FATAL: The copy-back of ${zvol} would not fit in pool ${pool} — aborting" \
+                        "BEFORE destroying anything."
+                log_msg "FATAL:   free now $(human_bytes "$free") + destroying the original" \
+                        "$(human_bytes "$freed_orig") (its diverged data only)"
+                log_msg "FATAL:   + destroying origin snapshot ${osnap}" \
+                        "$(human_bytes "$freed_snap") =" \
+                        "$(human_bytes $((free + freed_orig + freed_snap))) available,"
+                log_msg "FATAL:   but the copy-back needs $(human_bytes "$need") (full copy" \
+                        "$(human_bytes "$ref_now") x 1.1 headroom)."
+                log_msg "FATAL: A lightly-diverged clone frees little: nearly all its blocks are" \
+                        "shared with the"
+        log_msg "FATAL: origin snapshot and only free when that snapshot is destroyed too."
+                log_msg "FATAL:   Make room in ${pool} (or make ${osnap} destroyable), then" \
+                        "re-run: sever-vm-clone --continue ${sever_state_file}"
+        log_msg "FATAL:   Or revert everything: sever-vm-clone --rollback ${sever_state_file}"
+                log_msg "FATAL: Nothing was destroyed; the fresh copies are safe in the holding" \
+                        "pool ${sev_holding_pool}."
+        return 1
+    fi
+        log_msg "INFO: Copy-back space pre-check for ${zvol}: free $(human_bytes "$free") +" \
+                "original's diverged data $(human_bytes "$freed_orig") + origin snapshot" \
+                "$(human_bytes "$freed_snap") =" \
+                "$(human_bytes $((free + freed_orig + freed_snap)))" \
+                ">= copy-back need $(human_bytes "$need") — feasible."
+    return 0
+}
+
+# [H] Destroy the confirmed origin snapshot of one holding-pool disk once the
+# original zvol is gone — the destruction the pre-check counted on. A
+# snapshot that is unconfirmed, already gone, still cloned, or held is
+# skipped with its reason logged (idempotent either way). Destroy-class lock
+# on the snapshot's parent dataset; the destroyability is re-checked under
+# the lock, and a reference that appeared since the pre-check aborts the
+# cutover instead of letting the copy-back run out of room.
+sever_destroy_confirmed_origin() {
+    local zvol="$1"
+    local osnap="${sev_origin[$zvol]}"
+    local reason origin_ds lock
+
+    if [[ "$sever_origin_destroy" != "Y" ]]; then
+                log_msg "INFO: Origin snapshot ${osnap} was not confirmed for destruction — kept;" \
+                        "its space stays allocated."
+        return 0
+    fi
+    reason=$(sever_origin_reason "$osnap" "$zvol") || true
+    case "$reason" in
+        destroyable) ;;
+        already_destroyed)
+            log_msg "INFO: Origin snapshot ${osnap} is already gone."
+            return 0
+            ;;
+        *)
+                        log_msg "WARN: Origin snapshot ${osnap} is ${reason} — kept; its space" \
+                                "stays allocated and was not counted."
+            return 0
+            ;;
+    esac
+
+        log_msg "INFO: Destroying the confirmed origin snapshot ${osnap} (its space makes room" \
+                "for the copy-back)..."
+    origin_ds="${osnap%@*}"
+    if ! zfslock_wait_or_resolve "$origin_ds" "x" "sever-vm-clone origin snapshot destroy"; then
+        log_msg "FATAL: Could not acquire destroy lock on ${origin_ds}."
+        return 1
+    fi
+    lock="$zfslock_id"
+    reason=$(sever_origin_reason "$osnap" "$zvol") || true
+    if [[ "$reason" != "destroyable" ]]; then
+        zfslock_release "$lock"
+                log_msg "FATAL: Origin snapshot ${osnap} became ${reason} since the pre-check" \
+                        "counted its space."
+                log_msg "FATAL:   Make it destroyable again (or free other space in" \
+                        "${osnap%%/*}), then re-run: sever-vm-clone --continue ${sever_state_file}"
+        return 1
+    fi
+    if ! zfs destroy "$osnap"; then
+        zfslock_release "$lock"
+                log_msg "FATAL: zfs destroy ${osnap} failed — aborting before the copy-back (its" \
+                        "freed space was counted on)."
+                log_msg "FATAL:   Resolve (busy? held?), then re-run: sever-vm-clone --continue" \
+                        "${sever_state_file}"
+        return 1
+    fi
+    zfslock_release "$lock"
+    log_msg "INFO: ✓ ${osnap} destroyed — its pinned space is released for the copy-back."
+    return 0
+}
+
+# [H] Copy one staged holding-pool copy back into the source pool: a full
+# engine copy of <holding copy>@<cutover snapshot> into the source-pool temp
+# namespace (the same <pool>/proxmox/sever_<vmid>/ shape as the same-pool
+# mode), refreservation=none after the receive. Only ever called after the
+# original zvol (and the confirmed origin snapshot) were destroyed — that
+# destruction is what made the room. Idempotent: a copy-back that already
+# landed (crash before the marker) is detected by its cutover snapshot GUID
+# and reused; a suspended one resumes from its receive resume token.
+sever_copyback_disk() {
+    local zvol="$1"
+    local back="${sev_back_name[$zvol]}"
+    local temp="${sev_temp_name[$zvol]}"
+    local cut_snap="$sever_cutover_snapname"
+    local parent ns_root ns_lock back_guid migsend rc
+
+    # The source-pool temp namespace, created once under a write lock on the
+    # <pool>/proxmox namespace root (the Phase-1 worker's pattern).
+    parent="$(dirname "$back")"
+    ns_root="${parent%/*}"
+    if ! zfslock_wait_or_resolve "$ns_root" "w" "sever-vm-clone copy-back namespace"; then
+        log_msg "FATAL: Could not acquire write lock on ${ns_root}."
+        return 1
+    fi
+    ns_lock="$zfslock_id"
+    if ! zfs list -H -o name "$parent" >/dev/null 2>&1; then
+        log_msg "INFO: Creating temp namespace ${parent}."
+        if ! zfs create -p "$parent"; then
+            zfslock_release "$ns_lock"
+            log_msg "FATAL: Could not create ${parent}."
+            return 1
+        fi
+    fi
+    zfslock_release "$ns_lock"
+
+    back_guid=$(sever_snap_guid "${back}@${cut_snap}") || back_guid=""
+    if [[ -n "$back_guid" ]]; then
+        # The receive finished before the phase marker was written (crash, or
+        # an earlier --continue): reuse instead of erroring into the receive.
+        if [[ "$back_guid" != "${sev_cut_guid[$zvol]}" ]]; then
+                        log_msg "FATAL: ${back}@${cut_snap} exists with GUID ${back_guid}," \
+                                "expected ${sev_cut_guid[$zvol]} — not the verified copy."
+            return 1
+        fi
+        log_msg "INFO: Copy-back already landed on ${back}; skipping the send."
+    else
+        log_msg "INFO: Copying ${temp}@${cut_snap} back into ${back} (full engine copy)..."
+        migsend=$(find_zfsutility_script zfs-migrate-send) || migsend=""
+        rc=0
+        sev_rh=$(sever_shq "sever-vm-clone --continue ${sever_state_file}")
+        sever_engine_cmd="source $(sever_shq "$migsend"); sourcefs=$(sever_shq "$temp"); "
+        sever_engine_cmd+="destfs=$(sever_shq "$back"); snapname=$(sever_shq "$cut_snap"); "
+        sever_engine_cmd+="restart_hint=${sev_rh}; zfs_migrate_send"
+        bash -c "$sever_engine_cmd" || rc=$?
+        if [[ $rc -ne 0 ]]; then
+                        log_msg "FATAL: Copy-back transfer failed (rc=${rc}); the original was" \
+                                "already destroyed — the copy must complete."
+                        log_msg "FATAL:   Re-run: sever-vm-clone --continue ${sever_state_file}" \
+                                "(resumes from the receive resume token)."
+            return 1
+        fi
+    fi
+    # Project zvols are sparse; a plain receive re-reserves the full volsize.
+    zfs set refreservation=none "$back" \
+                || log_msg "WARN: Could not set refreservation=none on ${back}; it keeps its" \
+                           "volsize reserved."
+    return 0
+}
+
+# Destroy this tool's @sever-* scaffolding snapshots from one dataset — the
+# @sever-<ts> transfer snapshot and the @sever-<ts>-cutover snapshot (a run
+# resumed from an interrupt keeps an earlier run's @sever-<ts> name, so the
+# prefix, not this run's exact names, identifies the artifacts; only
+# sever-vm-clone creates bucket-less @sever-* snapshots). Called on the
+# swapped-in zvol after the cutover and on the originals during rollback.
+# WARN-only: a held or busy scaffolding snapshot is left in place and
+# reported — the severance itself is complete either way.
+sever_destroy_scaffolding() {
+    local dataset="$1" snap base
+    while IFS= read -r snap; do
+        [[ -n "$snap" ]] || continue
+        base="${snap#*@}"
+        [[ "$base" == sever-* ]] || continue
+        log_msg "INFO: Destroying scaffolding snapshot ${snap}..."
+        zfs destroy "$snap" || log_msg "WARN: Could not destroy ${snap}."
+    done < <(zfs list -H -t snapshot -o name -d 1 "$dataset" 2>/dev/null)
+}
+
+# Destroy a dataset this run replaces — snapshots first: real ZFS refuses
+# `zfs destroy <dataset>` while child snapshots exist ("dataset has
+# children"), so every first-level snapshot goes individually before the
+# dataset itself. That includes the pre-existing history the -R copy
+# already replicated (nothing is lost — the swapped-in zvol carries it)
+# and this tool's @sever-* scaffolding. A snapshot that cannot be
+# destroyed (held, busy, cloned) WARNs and stops the sweep with a
+# failure; the caller decides whether that failure is fatal (cutover,
+# rollback) or best-effort (holding-pool cleanup).
+sever_destroy_dataset() {
+    local dataset="$1" snap
+    while IFS= read -r snap; do
+        [[ -n "$snap" ]] || continue
+        log_msg "INFO: Destroying ${snap}..."
+        if ! zfs destroy "$snap"; then
+            log_msg "WARN: Could not destroy ${snap}."
+            return 1
+        fi
+    done < <(zfs list -H -t snapshot -o name -d 1 "$dataset" 2>/dev/null)
+    zfs destroy "$dataset"
+}
+
+# --- iSCSI rewire (two-node only) -----------------------------------------------
+#
+# The swap preserves the zvol name, so the backstore name (the family
+# convention names backstores after the zvol basename) and the LUN id carry
+# over unchanged, and the Proxmox by-path reference
+# (ip-<storage_ip>:3260-iscsi-<iqn>-lun-<N>) keeps working as-is. The
+# /dev/zvol device the backserve opens dies with the destroy+rename, so the
+# LUN and backstore come down before the destroy and go back up — at the
+# SAME LUN id — after the swap (rename-vm-disk's storage-side pattern).
+# Env-overridable (the ensure-restored-vm-iscsi/repair-iscsi-luns convention)
+# so tests and non-standard installs can point it elsewhere.
+ISCSI_MANIFEST="${ISCSI_MANIFEST:-/etc/rtslib-fb-target/expected-backstores.txt}"
+ISCSI_ENCRYPTED_CONF=\
+"${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$ISCSI_ENCRYPTED_CONF" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    ISCSI_ENCRYPTED_CONF="/etc/iscsi-encrypted-luns.conf"
+fi
+
+manifest_remove() {
+    [[ -f "$ISCSI_MANIFEST" ]] || return 0
+    grep -qxF -- "$1" "$ISCSI_MANIFEST" || return 0
+    grep -vxF -- "$1" "$ISCSI_MANIFEST" > "${ISCSI_MANIFEST}.new" || true
+    mv "${ISCSI_MANIFEST}.new" "$ISCSI_MANIFEST"
+}
+manifest_add() {
+    [[ -f "$ISCSI_MANIFEST" ]] || return 0
+    grep -qxF -- "$1" "$ISCSI_MANIFEST" || echo "$1" >> "$ISCSI_MANIFEST"
+}
+# Returns 0 when a line of $2 starts with the literal prefix $1.
+prefix_in_file() {
+    local prefix="$1" file="$2" _line
+    [[ -f "$file" ]] || return 1
+    while IFS= read -r _line; do
+        [[ "$_line" == "$prefix"* ]] && return 0
+    done < "$file"
+    return 1
+}
+encrypted_remove() {
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] || return 0
+    prefix_in_file "$1:" "$ISCSI_ENCRYPTED_CONF" || return 0
+    awk -v prefix="$1:" 'index($0, prefix) != 1' "$ISCSI_ENCRYPTED_CONF" \
+        > "${ISCSI_ENCRYPTED_CONF}.new"
+    mv "${ISCSI_ENCRYPTED_CONF}.new" "$ISCSI_ENCRYPTED_CONF"
+}
+encrypted_add() {
+    [[ -f "$ISCSI_ENCRYPTED_CONF" ]] || return 0
+    prefix_in_file "$1:" "$ISCSI_ENCRYPTED_CONF" \
+        || echo "${1}:${2}:${3}" >> "$ISCSI_ENCRYPTED_CONF"
+}
+
+# Discover the zvol's iSCSI state (target/lun/backstore) by anchored
+# targetcli ls parsing — the rename-vm-disk discover_iscsi_state pattern,
+# run locally on the storage host: enumerate the iqn.* targets, walk each
+# target's LUN lines, and match the backstore whose device is EXACTLY
+# /dev/zvol/<zvol> (an exact-token compare, so vm-<id>-disk-1 never matches
+# vm-<id>-disk-10). Sets isc_target/isc_lun/isc_backstore (empty when the
+# zvol is not exported) and isc_encrypted.
+isc_target=""
+isc_lun=""
+isc_backstore=""
+isc_encrypted="N"
+sev_iscsi_discover() {
+    local zvol="$1" target line lun bsname rest devinfo dev encrypted
+    isc_target=""; isc_lun=""; isc_backstore=""; isc_encrypted="N"
+    while IFS= read -r target; do
+        [[ -n "$target" ]] || continue
+        while IFS= read -r line; do
+            # Strip everything through the first "lun" token and keep the
+            # leading digits ("... lun3 [block/..." -> "3").
+            _lun_rest="${line#*lun}"
+            lun="${_lun_rest%%[!0-9]*}"
+            bsname=""
+            rest="${line#*block/}"
+            [[ "$rest" != "$line" ]] && bsname="${rest%%[[:space:]]*}"
+            if [[ -n "$bsname" && -n "$lun" ]]; then
+                devinfo=$(targetcli "/backstores/block/${bsname}" info 2>/dev/null || true)
+                rest="${devinfo#*/dev/zvol/}"
+                dev=""
+                [[ "$rest" != "$devinfo" ]] && dev="/dev/zvol/${rest%%[[:space:]]*}"
+                if [[ "$dev" == "/dev/zvol/${zvol}" ]]; then
+                    encrypted=$(zfs get -H -o value encryption "$zvol" 2>/dev/null || echo off)
+                    isc_target="$target"; isc_lun="$lun"; isc_backstore="$bsname"
+                    if [[ "$encrypted" != "off" && "$encrypted" != "-" ]]; then
+                        isc_encrypted="Y"
+                    fi
+                    return 0
+                fi
+            fi
+        done < <(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null || true)
+    done < <(targetcli /iscsi ls 2>/dev/null | while IFS= read -r _t_line; do
+        # targetcli separates each target name from its dotted leader with a
+        # space, so the IQN is a whole whitespace-delimited token.
+        read -ra _t_words <<< "$_t_line"
+        for _t in "${_t_words[@]}"; do
+            case "$_t" in iqn.*) printf '%s\n' "$_t" ;; esac
+        done
+    done)
+    return 0
+}
+
+# The LUN id currently exported for $isc_backstore in $isc_target: select the
+# LUN line anchored on "block/<name> " (a longer name that starts with this
+# one cannot match), strip everything through the first "lun" token, keep
+# the leading digits.
+sev_iscsi_lun_of() {
+    targetcli "/iscsi/${isc_target}/tpg1/luns" ls 2>/dev/null \
+        | grep -F "block/${isc_backstore} " \
+        | while IFS= read -r _lun_line; do
+            _lun_rest="${_lun_line#*lun}"
+            printf '%s\n' "${_lun_rest%%[!0-9]*}"
+        done \
+        | head -1
+}
+
+# Tear down the zvol's LUN and backstore — idempotent: each delete runs only
+# while its object is still listed, and the manifest/encrypted bookkeeping
+# follows the objects. Anchored greps, per the family convention.
+sev_iscsi_teardown() {
+    local zvol="$1"
+    local bs="${sev_isc_bs[$zvol]:-}"
+    local tgt="${sev_isc_target[$zvol]:-}"
+    local lun="${sev_isc_lun[$zvol]:-}"
+    [[ -n "$bs" ]] || return 0
+    isc_target="$tgt"; isc_backstore="$bs"
+        log_msg "INFO: Detaching iSCSI LUN ${lun} / backstore ${bs} (target ${tgt##*:}) before" \
+                "the swap..."
+    # The lun line slash-prefixes the backstore name, so anchor the guard
+    # on "block/<name> " — a space-anchored name never matches it.
+    if targetcli "/iscsi/${tgt}/tpg1/luns" ls 2>/dev/null | grep -qF "block/${bs} "; then
+        targetcli "/iscsi/${tgt}/tpg1/luns" delete "lun${lun}"
+    fi
+    if targetcli /backstores/block ls 2>/dev/null | grep -qF " ${bs} "; then
+        targetcli /backstores/block delete "${bs}"
+    fi
+    manifest_remove "${bs}"
+    encrypted_remove "${bs}"
+    echo "ISCSI_DETACHED ${zvol} ${bs}" >> "$results"
+    return 0
+}
+
+# Re-create the backstore named for the zvol and re-export it AT THE SAME
+# LUN ID so the Proxmox by-path reference keeps working. When the slot was
+# taken meanwhile, targetcli auto-assigns, the number is parsed back, and a
+# WARN flags the PVE config's by-path entry. Idempotent: existing backstore
+# and LUN (a replay after a crash between the create and the phase marker)
+# are detected and kept.
+sev_iscsi_reattach() {
+    local zvol="$1" dev new_lun
+    local bs="${sev_isc_bs[$zvol]:-}"
+    local tgt="${sev_isc_target[$zvol]:-}"
+    local lun="${sev_isc_lun[$zvol]:-}"
+    [[ -n "$bs" ]] || return 0
+    isc_target="$tgt"; isc_backstore="$bs"
+    dev="/dev/zvol/${zvol}"
+
+    if ! targetcli /backstores/block ls 2>/dev/null | grep -qF " ${bs} "; then
+        log_msg "INFO: Re-creating backstore ${bs} on ${dev}..."
+        targetcli /backstores/block create "${bs}" "${dev}"
+    fi
+    targetcli "/backstores/block/${bs}" set attribute emulate_tpu=1
+
+    if targetcli "/iscsi/${tgt}/tpg1/luns" ls 2>/dev/null | grep -qF "block/${bs} "; then
+        # Already exported (crash between the create and the marker, or an
+        # earlier --continue): keep the LUN as it exists now.
+        new_lun="$(sev_iscsi_lun_of)"
+        log_msg "INFO: LUN for ${bs} already exists (LUN ${new_lun}); keeping it."
+    else
+        new_lun="$lun"
+        if ! targetcli "/iscsi/${tgt}/tpg1/luns" create \
+                "/backstores/block/${bs}" "${new_lun}" 2>/dev/null; then
+            log_msg "WARN: LUN ${lun} was taken — letting targetcli assign a new one."
+            targetcli "/iscsi/${tgt}/tpg1/luns" create "/backstores/block/${bs}"
+            new_lun="$(sev_iscsi_lun_of)"
+            if [[ -n "$new_lun" && "$new_lun" != "$lun" ]]; then
+                                log_msg "WARN: ${zvol} moved from LUN ${lun} to LUN ${new_lun} —" \
+                                        "the PVE config's by-path reference (…-lun-${lun}) may" \
+                                        "need" \
+                                        "attention."
+                echo "LUNMOVED ${zvol} ${lun} ${new_lun}" >> "$results"
+            fi
+        fi
+    fi
+    if [[ -z "$new_lun" ]]; then
+        log_msg "FATAL: Could not determine the LUN id of the re-created backstore ${bs}."
+        return 1
+    fi
+
+    manifest_add "${bs}"
+    if [[ "${sev_isc_enc[$zvol]:-N}" == "Y" ]]; then
+        encrypted_add "${bs}" "${dev}" "${tgt##*:}"
+    fi
+    # safe-iscsi-save's own contract: 1 means the save was SKIPPED because a
+    # degraded state (some expected LUN inactive) — a warning here, not a
+    # failed severance; the LUN of this disk is up.
+    if ! "$mydir/safe-iscsi-save"; then
+                log_msg "WARN: safe-iscsi-save skipped or failed — run it on $(hostname -s) once" \
+                        "every expected LUN is active."
+    fi
+    echo "ISCSI_ATTACHED ${zvol} ${tgt} ${new_lun} ${bs}" >> "$results"
+    log_msg "INFO: ✓ ${zvol} re-exported: target ${tgt##*:}, LUN ${new_lun}, backstore ${bs}."
+    return 0
+}
+
+# --- The per-disk cutover -------------------------------------------------------
+#
+# Catch-up incremental, GUID verify, [H] copy-back space pre-check, hold
+# capture/release, [2N] LUN/backstore teardown, destroy, [H] confirmed
+# origin-snapshot destruction and engine copy-back, rename + device wait +
+# [2N] backstore re-export at the same LUN id + post-swap GUID check under
+# 'x' locks, [H] holding-copy destruction, scaffolding cleanup. Every step
+# is idempotent so --continue can replay from any recorded phase.
+sev_w_cutover_disk() {
+    local zvol="$1"
+    local temp back fromsnap holdsfile cut_snap rename_src
+    local lock_src lock_tmp lock_back="" src_guid tmp_guid back_guid migsend rc
+    temp="${sev_temp_name[$zvol]}"
+    fromsnap="${sev_recv_snap[$zvol]}"
+    holdsfile="${sev_holds_file[$zvol]}"
+    cut_snap="$sever_cutover_snapname"
+    back="${sev_back_name[$zvol]:-}"
+
+        log_msg "INFO: --- Cutover:" \
+                "${zvol}$(sever_is_holding "$zvol" && printf ' (holding pool %s)'" \
+                ""$sev_holding_pool") ---"
+
+    # 0. [2N] Discover the zvol's iSCSI state once and persist it in the
+    #    state file: a replay after the destroy would find nothing left to
+    #    rediscover, but the re-creation must still use the recorded
+    #    target/lun/backstore.
+    if [[ "$node_mode" == "two" ]] && [[ -z "${sev_isc_bs[$zvol]:-}" ]] \
+        && ! sever_phase_ge "${sev_phase[$zvol]}" "iscsi_detached"; then
+        sev_iscsi_discover "$zvol"
+        sev_isc_target["$zvol"]="$isc_target"
+        sev_isc_lun["$zvol"]="$isc_lun"
+        sev_isc_bs["$zvol"]="$isc_backstore"
+        sev_isc_enc["$zvol"]="$isc_encrypted"
+        sever_state_write
+        if [[ -n "$isc_backstore" ]]; then
+                        log_msg "INFO: iSCSI: target ${isc_target##*:}, LUN ${isc_lun}, backstore" \
+                                "${isc_backstore}."
+            echo "ISCSI ${zvol} ${isc_target} ${isc_lun} ${isc_backstore}" >> "$results"
+        else
+            log_msg "INFO: iSCSI: ${zvol} is not exported (no backstore); no LUN rewire needed."
+            echo "NOISCSI ${zvol}" >> "$results"
+        fi
+    fi
+
+    # Destroy-class locks on the names this sequence can destroy — the
+    # original, the staged copy (the holding pool's copy in holding mode),
+    # and, in holding mode, the copy-back temp that becomes the new zvol.
+    # The catch-up receive and the GUID verify run under the same 'x' locks
+    # that guard the destroys, so no unlock gap opens between verification
+    # and the swap (and a w→x upgrade inside one process fights the
+    # reentry rules).
+    if ! zfslock_wait_or_resolve "$zvol" "x" "sever-vm-clone cutover source"; then
+        log_msg "FATAL: Could not acquire destroy lock on ${zvol}."
+        return 1
+    fi
+    lock_src="$zfslock_id"
+    if ! zfslock_wait_or_resolve "$temp" "x" "sever-vm-clone cutover copy"; then
+        zfslock_release "$lock_src"
+        log_msg "FATAL: Could not acquire destroy lock on ${temp}."
+        return 1
+    fi
+    lock_tmp="$zfslock_id"
+    if sever_is_holding "$zvol"; then
+        if ! zfslock_wait_or_resolve "$back" "x" "sever-vm-clone cutover copy-back"; then
+            sever_release_locks "" "$lock_tmp" "$lock_src"
+            log_msg "FATAL: Could not acquire destroy lock on ${back}."
+            return 1
+        fi
+        lock_back="$zfslock_id"
+    fi
+
+    # 1. Cutover snapshot + catch-up incremental through the engine's fromsnap
+    #    path (zfs send -RIw <src>@<from> <src>@<cutover>), so every change
+    #    made during the transfer phase — intermediary snapshots included —
+    #    lands in the staged copy ([H]: the holding pool's copy) before
+    #    anything is destroyed.
+    if ! sever_phase_ge "${sev_phase[$zvol]}" "catchup_done"; then
+        if zfs list "${zvol}@${cut_snap}" >/dev/null 2>&1; then
+            log_msg "INFO: Reusing existing cutover snapshot ${zvol}@${cut_snap}."
+        else
+                        log_msg "INFO: Creating cutover snapshot ${zvol}@${cut_snap}" \
+                                "(bucket-less: retention never prunes it)."
+            if ! zfs snapshot "${zvol}@${cut_snap}"; then
+                sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                log_msg "FATAL: Could not create ${zvol}@${cut_snap}; nothing was destroyed."
+                return 1
+            fi
+        fi
+        if ! zfs list "${zvol}@${fromsnap}" >/dev/null 2>&1; then
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                        log_msg "FATAL: Transfer snapshot ${zvol}@${fromsnap} is missing on the" \
+                                "source; the staged copy cannot be caught up."
+                        log_msg "FATAL:   Re-run sever-vm-clone with the original arguments to" \
+                                "make a fresh full copy."
+            return 1
+        fi
+        src_guid=$(sever_snap_guid "${zvol}@${cut_snap}") || src_guid=""
+        tmp_guid=$(sever_snap_guid "${temp}@${cut_snap}") || tmp_guid=""
+        if [[ -n "$tmp_guid" ]]; then
+            # The receive finished before the phase marker was written
+            # (crash, or an earlier --continue): reuse instead of erroring
+            # into the receive ("destination already exists").
+            if [[ "$tmp_guid" != "$src_guid" ]]; then
+                sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                                log_msg "FATAL: ${temp}@${cut_snap} exists with GUID ${tmp_guid}" \
+                                        "but the source has ${src_guid:-none} — aborting with" \
+                                        "nothing destroyed."
+                return 1
+            fi
+                        log_msg "INFO: Cutover snapshot already received on ${temp}; skipping the" \
+                                "catch-up send."
+        else
+                        log_msg "INFO: Catch-up incremental ${zvol}@${fromsnap} →" \
+                                "${zvol}@${cut_snap} into ${temp}..."
+            migsend=$(find_zfsutility_script zfs-migrate-send) || migsend=""
+            rc=0
+            sev_rh=$(sever_shq sever-vm-clone)
+            sever_engine_cmd="source $(sever_shq "$migsend"); sourcefs=$(sever_shq "$zvol"); "
+            sever_engine_cmd+="destfs=$(sever_shq "$temp"); snapname=$(sever_shq "$cut_snap"); "
+            sever_engine_cmd+="fromsnap=$(sever_shq "$fromsnap"); restart_hint=${sev_rh}; "
+            sever_engine_cmd+="zfs_migrate_send"
+            bash -c "$sever_engine_cmd" || rc=$?
+            if [[ $rc -ne 0 ]]; then
+                sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                log_msg "FATAL: Catch-up transfer failed (rc=${rc}); nothing was destroyed."
+                                log_msg "FATAL:   Re-run: sever-vm-clone --continue" \
+                                        "${sever_state_file} (resumes from the receive resume" \
+                                        "token)."
+                return 1
+            fi
+        fi
+        sever_phase_set "$zvol" "catchup_done"
+    fi
+
+    # 2. Pre-destroy verify: replication preserves snapshot GUIDs, so the
+    #    cutover snapshot must carry the same GUID on source and staged copy.
+    #    A mismatch aborts with nothing destroyed.
+    if ! sever_phase_ge "${sev_phase[$zvol]}" "verified"; then
+        src_guid=$(sever_snap_guid "${zvol}@${cut_snap}") || {
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                        log_msg "FATAL: Cannot read the cutover snapshot GUID on ${zvol};" \
+                                "aborting with nothing destroyed."
+            return 1
+        }
+        tmp_guid=$(sever_snap_guid "${temp}@${cut_snap}") || {
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                        log_msg "FATAL: No cutover snapshot on the staged copy ${temp}; aborting" \
+                                "with nothing destroyed."
+            return 1
+        }
+        if [[ "$src_guid" != "$tmp_guid" ]]; then
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                        log_msg "FATAL: Cutover snapshot GUID mismatch for ${zvol}: source" \
+                                "${src_guid} vs copy ${tmp_guid} — aborting with nothing destroyed."
+            return 1
+        fi
+        sev_cut_guid[$zvol]="$src_guid"
+        sever_phase_set "$zvol" "verified"
+        log_msg "INFO: Verified ${zvol}@${cut_snap}: GUID ${src_guid} on source and copy."
+    fi
+
+    # 2.5 [H] Space-feasibility pre-check: the hard gate BEFORE any
+    #     destruction of this disk — an infeasible copy-back aborts with a
+    #     plain explanation instead of running out of space mid-cutover.
+    if sever_is_holding "$zvol" \
+        && ! sever_phase_ge "${sev_phase[$zvol]}" "space_checked"; then
+        if ! sever_holding_space_precheck "$zvol"; then
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+            return 1
+        fi
+        sever_phase_set "$zvol" "space_checked"
+    fi
+
+    # 3. Hold lifecycle on the original: capture (the holds must survive the
+    #    swap), then release — held snapshots cannot be destroyed. Both with
+    #    the no-lock flag: this sequence already holds the dataset locks.
+    if ! sever_phase_ge "${sev_phase[$zvol]}" "holds_captured"; then
+        if ! reapplyholds_capture "$zvol" "$holdsfile" "Y"; then
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                        log_msg "FATAL: Could not capture the snapshot holds of ${zvol}; aborting" \
+                                "with nothing destroyed."
+            return 1
+        fi
+        sever_phase_set "$zvol" "holds_captured"
+    fi
+    if ! sever_phase_ge "${sev_phase[$zvol]}" "holds_released"; then
+        if ! reapplyholds_release "$zvol" "N" "Y"; then
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                        log_msg "FATAL: Could not release the snapshot holds of ${zvol}; aborting" \
+                                "with nothing destroyed."
+            return 1
+        fi
+        sever_phase_set "$zvol" "holds_released"
+    fi
+
+    # 3.5 [2N] Detach the iSCSI LUN and backstore — a live backstore pins the
+    #     zvol's device node open, so the destroy below would fail while it
+    #     is exported. Marked done either way: a not-exported zvol (and every
+    #     single-node disk) has nothing to detach.
+    if [[ "$node_mode" == "two" ]] \
+        && ! sever_phase_ge "${sev_phase[$zvol]}" "iscsi_detached"; then
+        if ! sev_iscsi_teardown "$zvol"; then
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+            return 1
+        fi
+        sever_phase_set "$zvol" "iscsi_detached"
+    fi
+
+    # 4. The swap. The state file marks each side of the destroy→rename
+    #    window, so a crash between them recovers with --continue.
+    if ! sever_phase_ge "${sev_phase[$zvol]}" "source_destroyed"; then
+        if zfs list -H -o name "$zvol" >/dev/null 2>&1; then
+            log_msg "INFO: Destroying the original clone zvol ${zvol}..."
+            if ! sever_destroy_dataset "$zvol"; then
+                sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                log_msg "FATAL: zfs destroy ${zvol} failed — nothing else was touched."
+                                log_msg "FATAL:   Stop whatever holds it open, then re-run:" \
+                                        "sever-vm-clone --continue ${sever_state_file}"
+                return 1
+            fi
+        else
+                        log_msg "WARN: ${zvol} is already gone (crash between the destroy and the" \
+                                "state write); continuing at the rename."
+        fi
+        sever_phase_set "$zvol" "source_destroyed"
+    fi
+
+    # 4.5 [H] Confirmed origin-snapshot destruction — the room the pre-check
+    #     counted on. Skipped (logged) when unconfirmed, already gone, still
+    #     cloned, or held; aborts when a counted snapshot fails to destroy.
+    if sever_is_holding "$zvol" \
+        && ! sever_phase_ge "${sev_phase[$zvol]}" "origin_snap_destroyed"; then
+        if ! sever_destroy_confirmed_origin "$zvol"; then
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+            return 1
+        fi
+        sever_phase_set "$zvol" "origin_snap_destroyed"
+    fi
+
+    # 4.6 [H] Copy-back into the source-pool temp namespace, then verify its
+    #     cutover-snapshot GUID. Only after the destructions above — they
+    #     made the room; the state file carries both names through a crash.
+    if sever_is_holding "$zvol" \
+        && ! sever_phase_ge "${sev_phase[$zvol]}" "copied_back"; then
+        if ! sever_copyback_disk "$zvol"; then
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+            return 1
+        fi
+        sever_phase_set "$zvol" "copied_back"
+    fi
+    if sever_is_holding "$zvol" \
+        && ! sever_phase_ge "${sev_phase[$zvol]}" "copyback_verified"; then
+        back_guid=$(sever_snap_guid "${back}@${cut_snap}") || {
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+            log_msg "FATAL: No cutover snapshot on the copy-back ${back}."
+            log_msg "FATAL:   Re-run: sever-vm-clone --continue ${sever_state_file}"
+            return 1
+        }
+        if [[ "$back_guid" != "${sev_cut_guid[$zvol]}" ]]; then
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                        log_msg "FATAL: Copy-back GUID mismatch for ${zvol}: ${back}@${cut_snap}" \
+                                "has ${back_guid}, expected ${sev_cut_guid[$zvol]} — not the" \
+                                "verified copy."
+                        log_msg "FATAL:   Investigate, then re-run: sever-vm-clone --continue" \
+                                "${sever_state_file}"
+            return 1
+        fi
+        sever_phase_set "$zvol" "copyback_verified"
+    fi
+
+    # 5. Rename into the original name ([H]: the copy-back, not the holding
+    #    copy) — the name-preserving swap itself.
+    if ! sever_phase_ge "${sev_phase[$zvol]}" "temp_renamed"; then
+        if sever_is_holding "$zvol"; then
+            rename_src="$back"
+        else
+            rename_src="$temp"
+        fi
+        if zfs list -H -o name "$rename_src" >/dev/null 2>&1; then
+            log_msg "INFO: Swapping ${rename_src} into ${zvol}..."
+            if ! zfs rename "$rename_src" "$zvol"; then
+                sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                log_msg "FATAL: zfs rename ${rename_src} → ${zvol} failed."
+                log_msg "FATAL:   Re-run: sever-vm-clone --continue ${sever_state_file}"
+                return 1
+            fi
+        elif zfs list -H -o name "$zvol" >/dev/null 2>&1; then
+            log_msg "WARN: The swap already happened (crash after the rename); continuing."
+        else
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+            log_msg "FATAL: Neither ${zvol} nor ${rename_src} exists — there is nothing to swap in."
+            return 1
+        fi
+        sever_phase_set "$zvol" "temp_renamed"
+    fi
+
+    if ! sever_phase_ge "${sev_phase[$zvol]}" "device_ready"; then
+        if ! sever_wait_zvol_node "$zvol"; then
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+            log_msg "FATAL: /dev/zvol/${zvol} did not come back via udev after the swap."
+                        log_msg "FATAL:   Check udev, then re-run: sever-vm-clone --continue" \
+                                "${sever_state_file}"
+            return 1
+        fi
+        sever_phase_set "$zvol" "device_ready"
+    fi
+
+    # 5.2 [2N] Re-export the backstore named for the zvol at the SAME LUN id,
+    #     manifest and encrypted-luns bookkeeping included, then save the
+    #     iSCSI config. Skipped (marked done) when the zvol was not exported.
+    if [[ "$node_mode" == "two" ]] \
+        && ! sever_phase_ge "${sev_phase[$zvol]}" "iscsi_reattached"; then
+        if ! sev_iscsi_reattach "$zvol"; then
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                        log_msg "FATAL: Could not re-export ${zvol} over iSCSI — the zvol swap" \
+                                "itself is done; finish the re-export manually (targetcli), then" \
+                                "re-run: sever-vm-clone --continue ${sever_state_file}"
+            return 1
+        fi
+        sever_phase_set "$zvol" "iscsi_reattached"
+    fi
+
+    if ! sever_phase_ge "${sev_phase[$zvol]}" "swapped"; then
+        src_guid=$(sever_snap_guid "${zvol}@${cut_snap}") || {
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+            log_msg "FATAL: Cannot read the GUID of ${zvol}@${cut_snap} after the swap."
+                        log_msg "FATAL:   Investigate, then re-run: sever-vm-clone --continue" \
+                                "${sever_state_file}"
+            return 1
+        }
+        if [[ "$src_guid" != "${sev_cut_guid[$zvol]}" ]]; then
+            sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+                        log_msg "FATAL: Post-swap GUID mismatch on ${zvol}@${cut_snap}:" \
+                                "${src_guid}, expected ${sev_cut_guid[$zvol]} — the swapped-in" \
+                                "zvol" \
+                                "is not the verified copy."
+            return 1
+        fi
+        # Reapply the captured holds to the swapped-in zvol: replication
+        # preserves snapshot identity, so the same names exist with the same
+        # GUIDs. Failures WARN — the swap itself is complete and correct.
+        if ! reapplyholds_apply "$zvol" "$holdsfile" "N" "Y"; then
+                        log_msg "WARN: Reapplying the captured holds on ${zvol} reported" \
+                                "failures; the swap itself is complete."
+        fi
+        sever_phase_set "$zvol" "swapped"
+    fi
+
+    # 5.5 [H] Destroy the holding-namespace copy — its job is done once the
+    #     copy-back is swapped in. WARN-only: the severance is complete; a
+    #     leftover copy is a manual cleanup item, and the holding namespace
+    #     cleanup below still tries to remove it.
+    if sever_is_holding "$zvol" \
+        && ! sever_phase_ge "${sev_phase[$zvol]}" "holding_freed"; then
+        if zfs list -H -o name "$temp" >/dev/null 2>&1; then
+            log_msg "INFO: Destroying the holding-pool copy ${temp}..."
+            if ! sever_destroy_dataset "$temp"; then
+                log_msg "WARN: Could not destroy ${temp}; remove it manually once nothing needs it."
+            fi
+        else
+            log_msg "INFO: The holding-pool copy ${temp} is already gone."
+        fi
+        sever_phase_set "$zvol" "holding_freed"
+    fi
+
+    # 6. Post-swap finishing: replication carried this tool's @sever-*
+    #    scaffolding snapshots (the transfer base and the cutover snapshot)
+    #    into the new zvol. They served the copy and the verify; destroying
+    #    them releases the pre-cutover state they pin inside the new zvol.
+    #    WARN-only — the swap itself is complete and correct without it.
+    if ! sever_phase_ge "${sev_phase[$zvol]}" "scaffolding_cleared"; then
+        sever_destroy_scaffolding "$zvol"
+        sever_phase_set "$zvol" "scaffolding_cleared"
+    fi
+
+    sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
+    rm -f "$holdsfile"
+    sever_phase_set "$zvol" "done"
+        log_msg "INFO: ✓ ${zvol}: severed — origin-free under its own name (@${cut_snap}, GUID" \
+                "${sev_cut_guid[$zvol]})."
+    return 0
+}
+
+# Rollback of one disk: destroy its staged copy, remove the @sever-*
+# scaffolding snapshots from the original, reapply the released holds. The
+# caller already refused disks whose original was destroyed.
+sev_w_rollback_disk() {
+    local zvol="$1"
+    local temp holdsfile lock_src lock_tmp
+    temp="${sev_temp_name[$zvol]}"
+    holdsfile="${sev_holds_file[$zvol]}"
+    log_msg "INFO: --- Rollback: ${zvol} ---"
+    if ! zfslock_wait_or_resolve "$zvol" "x" "sever-vm-clone rollback source"; then
+        log_msg "FATAL: Could not acquire destroy lock on ${zvol}."
+        exit 1
+    fi
+    lock_src="$zfslock_id"
+    lock_tmp=""
+    if zfs list -H -o name "$temp" >/dev/null 2>&1; then
+        if ! zfslock_wait_or_resolve "$temp" "x" "sever-vm-clone rollback copy"; then
+            zfslock_release "$lock_src"
+            log_msg "FATAL: Could not acquire destroy lock on ${temp}."
+            exit 1
+        fi
+        lock_tmp="$zfslock_id"
+        log_msg "INFO: Destroying the staged copy ${temp}..."
+        if ! sever_destroy_dataset "$temp"; then
+            zfslock_release "$lock_tmp"; zfslock_release "$lock_src"
+            log_msg "FATAL: zfs destroy ${temp} failed."
+            exit 1
+        fi
+    else
+        log_msg "INFO: No staged copy at ${temp}; nothing to destroy."
+    fi
+
+    # Scaffolding snapshots this run (or an interrupted earlier one) left
+    # on the original — sever_destroy_scaffolding matches the prefix.
+    sever_destroy_scaffolding "$zvol"
+
+    # Holds that were released for a destroy that never happened come back.
+    if sever_phase_ge "${sev_phase[$zvol]}" "holds_captured" && [[ -f "$holdsfile" ]]; then
+        reapplyholds_apply "$zvol" "$holdsfile" "N" "Y" \
+            || log_msg "WARN: Reapplying the holds on ${zvol} reported failures."
+    fi
+
+    if [[ -n "$lock_tmp" ]]; then
+        zfslock_release "$lock_tmp"
+    fi
+    zfslock_release "$lock_src"
+    rm -f "$holdsfile"
+}
+
+# Remove the temp namespaces once every disk is swapped (or rolled back) —
+# the same-pool temp namespace, [H] the source-pool copy-back namespace, and
+# [H] the holding pool's sever namespace. A plain destroy only succeeds on an
+# empty dataset, so anything else that landed there is left alone.
+sev_w_cleanup_namespaces() {
+    local -a parents=()
+    local -A seen=()
+    local zvol parent
+    for zvol in "${sev_zvols[@]}"; do
+        parent="$(dirname "${sev_temp_name[$zvol]}")"
+        if [[ -z "${seen[$parent]:-}" ]]; then
+            seen[$parent]=1
+            parents+=("$parent")
+        fi
+        if [[ -n "${sev_back_name[$zvol]:-}" ]]; then
+            parent="$(dirname "${sev_back_name[$zvol]}")"
+            if [[ -z "${seen[$parent]:-}" ]]; then
+                seen[$parent]=1
+                parents+=("$parent")
+            fi
+        fi
+    done
+    for parent in "${parents[@]}"; do
+        zfs list -H -o name "$parent" >/dev/null 2>&1 || continue
+        if ! zfslock_wait_or_resolve "$parent" "w" "sever-vm-clone namespace cleanup"; then
+            log_msg "WARN: Could not lock ${parent} for cleanup; left in place."
+            continue
+        fi
+        if zfs destroy "$parent" 2>/dev/null; then
+            log_msg "INFO: Removed the now-empty temp namespace ${parent}."
+        else
+            log_msg "INFO: Temp namespace ${parent} is not empty; left in place."
+        fi
+        zfslock_release "$zfslock_id"
+    done
+    return 0
+}
+
+sever_state_read_worker
+
+case "$worker_cmd" in
+    cutover)
+        if [[ -z "${sev_phase[$zvol_arg]:-}" ]]; then
+            log_msg "FATAL: ${zvol_arg} is not in the cutover state file ${statefile}."
+            exit 1
+        fi
+        sev_w_cutover_disk "$zvol_arg"
+        ;;
+    rollback)
+        if [[ -z "${sev_phase[$zvol_arg]:-}" ]]; then
+            log_msg "FATAL: ${zvol_arg} is not in the cutover state file ${statefile}."
+            exit 1
+        fi
+        sev_w_rollback_disk "$zvol_arg"
+        ;;
+    cleanup)
+        sev_w_cleanup_namespaces
+        ;;
+    *)
+        log_msg "FATAL: Unknown worker command: ${worker_cmd}"
+        exit 1
+        ;;
+esac
+SSHEOF
+}
+
+# Machine-readable markers the worker appends to its results file, parsed by
+# the runner after each call:
+#   ISCSI <zvol> <target> <lun> <backstore>   the disk is iSCSI-exported (two-node)
+#   NOISCSI <zvol>                            not exported; no rewire ran
+#   ISCSI_DETACHED/ISCSI_ATTACHED <zvol> ...  progress around the swap
+#   LUNMOVED <zvol> <old> <new>               the same-LUN fallback fired
+sever_cutover_results=""
+
+sever_parse_worker_results() {
+    local tag zvol f1 f2 rest
+    [[ -n "${sever_cutover_results:-}" && -f "$sever_cutover_results" ]] || return 0
+    while read -r tag zvol f1 f2 rest; do
+        [[ -n "${tag:-}" ]] || continue
+        case "$tag" in
+            LUNMOVED)
+                                log_msg "WARN: ${zvol} moved from LUN ${f1} to LUN ${f2} during" \
+                                        "the swap — the PVE config's by-path reference" \
+                                        "(…-lun-${f1}) may need attention."
+                ;;
+        esac
+    done < "$sever_cutover_results"
+    return 0
+}
+
+# Run one storage-side worker command. Single-node: a local child shell
+# (the Phase-1 transfer pattern). Two-node: push the state file to the
+# storage host, stream the worker over SSH (locks and set -e live inside),
+# then fetch state and results back — on failure too, best effort, because
+# the worker persists every phase transition as it happens and an aborted
+# --continue must resume from the last completed one.
+sever_run_storage_worker() {
+    local cmd="$1" zvol="${2:-}" rc=0 remote_bin results
+    results=$(mktemp /tmp/sever-vm-clone-cutover.XXXXXX)
+    sever_cutover_results="$results"
+
+    if is_single_node; then
+        bash <(sever_storage_cutover_script) "$mydir" single "$cmd" \
+            "$sever_state_file" "$results" "$zvol" || rc=$?
+    else
+        remote_bin=$(remote_zfsutilities_bin "$storage_host") \
+            || remote_bin="/usr/local/lib/zfsutilities/current/bin"
+        if ssh -o ConnectTimeout=10 root@"$storage_host" \
+            "cat > '$sever_state_file'" < "$sever_state_file"; then
+            ssh -o ConnectTimeout=10 root@"$storage_host" \
+                env ZFSUTILITIES_LOG_INHERIT="${ZFSUTILITIES_LOG_INHERIT:-}" \
+                bash -s "$remote_bin" two "$cmd" "$sever_state_file" "$results" "$zvol" \
+                <<< "$(sever_storage_cutover_script)" || rc=$?
+        else
+            rc=$?
+        fi
+        if ssh -o ConnectTimeout=10 root@"$storage_host" "cat '$sever_state_file' 2>/dev/null" \
+                > "${sever_state_file}.fetch" && [[ -s "${sever_state_file}.fetch" ]]; then
+            mv "${sever_state_file}.fetch" "$sever_state_file"
+        else
+            rm -f "${sever_state_file}.fetch"
+        fi
+        ssh -o ConnectTimeout=10 root@"$storage_host" "cat '$results' 2>/dev/null" \
+            > "${results}.fetch" || true
+        if [[ -s "${results}.fetch" ]]; then
+            cat "${results}.fetch" >> "$results"
+        fi
+        rm -f "${results}.fetch"
+    fi
+
+    # The worker owns the phase markers; refresh the parent's view before an
+    # abort message quotes a phase, and before the report reads origins.
+    sever_state_read "$sever_state_file"
+    sever_parse_worker_results
+    rm -f "$results"
+    sever_cutover_results=""
+    return "$rc"
+}
+
+# --- Argument parsing ---
+# --continue/--rollback drive cutover recovery from a state file (mutually
+# exclusive with severance arguments). Otherwise a numeric first argument
+# selects VM mode (exactly one argument); anything else is dataset mode (one
+# or more dataset names).
+arg_mode=""
+vmid=""
+declare -a datasets=()
+
+if [[ $# -lt 1 ]]; then
+    usage
+fi
+
+if [[ "$1" == "--continue" || "$1" == "--rollback" ]]; then
+    if [[ $# -ne 2 || "$2" == -* ]]; then
+        log_msg "FATAL: ${1} requires exactly one <state-file> argument."
+        usage
+    fi
+    sever_mode="${1#--}"
+    sever_state_file="$2"
+elif [[ "$1" == -* ]]; then
+    log_msg "FATAL: Unknown option: $1"
+    usage
+elif [[ "$1" =~ ^[0-9]+$ ]]; then
+    if [[ $# -gt 1 ]]; then
+                log_msg "FATAL: A VM ID accepts no further arguments (VM IDs and named datasets" \
+                        "are mutually exclusive)."
+        usage
+    fi
+    arg_mode="vmid"
+    vmid="$1"
+    sever_state_key="$vmid"
+else
+    arg_mode="datasets"
+    for _arg in "$@"; do
+        if ! is_zfs_dataset_name "$_arg"; then
+            log_msg "FATAL: Not a valid dataset name: ${_arg}"
+            usage
+        fi
+        datasets+=("$_arg")
+    done
+    sever_state_key="${datasets[0]##*/}"
+fi
+unset _arg
+
+zfslock_init
+
+# --- Cutover recovery modes (skip discovery and transfer) ---
+# Both node modes: the cutover state file lives on this host (the canonical
+# compute-host entry), and the storage-side work runs through the same
+# worker the cutover used.
+if [[ "$sever_mode" != "run" ]]; then
+    if [[ "$sever_mode" == "rollback" ]]; then
+        sever_rollback
+    else
+        sever_state_read "$sever_state_file"
+        sever_cutover
+    fi
+    exit $?
+fi
+
+# --- Discovery ---
+# One gather pass, run where the zvols live: locally in single-node mode, on
+# the storage host over SSH in two-node mode. Output is tagged records, one
+# per line, tab-separated:
+#   VOL\t<zvol>\t<origin snapshot>\t<used bytes>\t<referenced bytes>\t<encryption>
+#   NOTVOL\t<dataset>     exists but is not a zvol
+#   MISSING\t<dataset>    no such dataset
+# then a "--POOLS--" separator and one line per pool:
+#   <pool>\t<free bytes>
+#
+# `used` is the space unique to the clone; `referenced` is everything the
+# clone's data occupies including blocks shared with the origin — the amount a
+# full copy actually writes — so the space check below uses referenced.
+# `encryption` (off/- = plain) matters only for the holding-pool key check.
+emit_storage_records() {
+    local mode="$1"
+    shift
+    local d line
+    case "$mode" in
+        vmid)
+            zfs list -H -p -o name,origin,used,referenced,encryption -t volume 2>/dev/null \
+                | awk -v p="/proxmox/vm-${1}-disk-" \
+                    'index($1, p) && $2 != "-" \
+                     {print "VOL\t" $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5}'
+            ;;
+        datasets)
+            for d in "$@"; do
+                line=$(zfs list -H -p -o name,origin,used,referenced,encryption \
+                    -t volume "$d" 2>/dev/null)
+                if [[ -n "$line" ]]; then
+                    printf 'VOL\t%s\n' "$line"
+                elif zfs list -H -o name "$d" >/dev/null 2>&1; then
+                    printf 'NOTVOL\t%s\n' "$d"
+                else
+                    printf 'MISSING\t%s\n' "$d"
+                fi
+            done
+            ;;
+    esac
+    echo '--POOLS--'
+    zpool list -H -p -o name,free 2>/dev/null
+}
+
+gather_storage_records() {
+    if is_single_node; then
+        if [[ "$arg_mode" == "vmid" ]]; then
+            emit_storage_records vmid "$vmid"
+        else
+            emit_storage_records datasets "${datasets[@]}"
+        fi
+    else
+        if [[ "$arg_mode" == "vmid" ]]; then
+            ssh -o ConnectTimeout=10 root@"$storage_host" bash -s vmid "$vmid" << 'SSHEOF'
+mode="$1"
+shift
+zfs list -H -p -o name,origin,used,referenced,encryption -t volume 2>/dev/null \
+    | awk -v p="/proxmox/vm-${1}-disk-" \
+        'index($1, p) && $2 != "-" {print "VOL\t" $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5}'
+echo '--POOLS--'
+zpool list -H -p -o name,free 2>/dev/null
+SSHEOF
+        else
+            ssh -o ConnectTimeout=10 root@"$storage_host" \
+                bash -s datasets "${datasets[@]}" << 'SSHEOF'
+mode="$1"
+shift
+for d in "$@"; do
+    line=$(zfs list -H -p -o name,origin,used,referenced,encryption -t volume "$d" 2>/dev/null)
+    if [[ -n "$line" ]]; then
+        printf 'VOL\t%s\n' "$line"
+    elif zfs list -H -o name "$d" >/dev/null 2>&1; then
+        printf 'NOTVOL\t%s\n' "$d"
+    else
+        printf 'MISSING\t%s\n' "$d"
+    fi
+done
+echo '--POOLS--'
+zpool list -H -p -o name,free 2>/dev/null
+SSHEOF
+        fi
+    fi
+}
+
+# sev_zvols/sev_origin are declared with the Phase 2 state block (above);
+# discovery populates them here.
+declare -A sev_used=()         # zvol -> used bytes (unique to the clone)
+declare -A sev_referenced=()   # zvol -> referenced bytes (full-copy size)
+declare -A sev_encrypted=()    # zvol -> "Y" when its encryption property is on
+declare -A sev_pool_free=()    # pool -> free bytes
+declare -A sev_pool_largest=() # pool -> largest referenced bytes among its disks
+declare -a sev_all_pools=()    # every imported pool named by the gather
+
+records=$(gather_storage_records) \
+    || { log_msg "FATAL: Failed to gather zvol information from ${storage_host}"; exit 1; }
+
+in_pools=false
+while IFS=$'\t' read -r tag f1 f2 f3 f4 f5; do
+    [[ -n "${tag:-}" ]] || continue
+    if [[ "$tag" == "--POOLS--" ]]; then
+        in_pools=true
+        continue
+    fi
+    if [[ "$in_pools" == true ]]; then
+        sev_all_pools+=("$tag")
+        [[ -n "${f1:-}" ]] && sev_pool_free["$tag"]="$f1"
+        continue
+    fi
+    case "$tag" in
+        VOL)
+            if [[ "$f2" == "-" ]]; then
+                log_msg "INFO: Skipping ${f1}: not a clone (no origin snapshot)."
+            elif [[ -n "${sev_origin[$f1]:-}" ]]; then
+                log_msg "INFO: Skipping ${f1}: already selected for severance."
+            else
+                sev_zvols+=("$f1")
+                sev_origin["$f1"]="$f2"
+                sev_used["$f1"]="$f3"
+                sev_referenced["$f1"]="$f4"
+                if [[ -n "${f5:-}" && "$f5" != "off" && "$f5" != "-" ]]; then
+                    sev_encrypted["$f1"]="Y"
+                fi
+            fi
+            ;;
+        NOTVOL)
+            log_msg "INFO: Skipping ${f1}: exists but is not a zvol."
+            ;;
+        MISSING)
+            log_msg "FATAL: Dataset not found: ${f1}"
+            exit 1
+            ;;
+    esac
+done <<< "$records"
+
+if [[ ${#sev_zvols[@]} -eq 0 ]]; then
+    if [[ "$arg_mode" == "vmid" ]]; then
+        log_msg "FATAL: No clone zvols found for VM ${vmid} — already severed or not a ZFS clone."
+    else
+        log_msg "FATAL: None of the given datasets is a clone zvol — nothing to sever."
+    fi
+    usage
+fi
+
+# --- Tight-space holding-pool mode (plan time) ---------------------------------
+#
+# When a source pool cannot hold a same-pool copy, the confirmation step
+# asks for a holding pool at runtime: the imported pools that could hold
+# every staged copy are listed (nothing is ever hard-coded), the typed name
+# is validated, encrypted sources trigger a key check on the holding pool,
+# and the origin-snapshot destruction the copy-back counts on is confirmed
+# against a plan-time estimate of the freed space. The hard gate stays the
+# cutover's fresh-number pre-check (sever_holding_space_precheck); the
+# estimate only refuses to stage copies for a run that cannot finish.
+
+declare -A sev_holding_disk=()   # zvol -> 1 when it stages in the holding pool
+declare -A sev_origin_used=()    # origin snapshot -> used bytes (plan gather)
+declare -A sev_origin_clones=()  # origin snapshot -> clones value (plan gather)
+declare -A sev_deficient_set=()  # deficient source pool -> 1
+sev_holding_need=0               # bytes the holding pool must hold
+
+# The same-pool temp-namespace parent (also the [H] copy-back destination
+# parent): <pool>/proxmox/sever_<key>. The key is the owning VM id when the
+# zvol name carries one (all of a VM's disks then share one namespace) and
+# the zvol basename otherwise; both are deterministic.
+sever_local_parent() {
+    local zvol="$1" key
+    key=$(vm_of_zvol "$zvol") || key="${zvol##*/}"
+    printf '%s/proxmox/sever_%s\n' "${zvol%%/*}" "$key"
+}
+
+# The staging parent for a zvol: the holding pool's sever namespace when the
+# disk is holding-staged, its own pool's temp namespace otherwise.
+sever_temp_parent() {
+    local zvol="$1" key
+    if [[ -n "${sev_back_name[$zvol]:-}" ]]; then
+        key=$(vm_of_zvol "$zvol") || key="${zvol##*/}"
+        printf '%s/sever_%s\n' "$sev_holding_pool" "$key"
+    else
+        sever_local_parent "$zvol"
+    fi
+}
+
+# used/clones of the selected origin snapshots, gathered where the zvols
+# live into sev_origin_used/sev_origin_clones (the two-node gather mirrors
+# the discovery heredoc).
+sever_emit_origin_stats() {
+    local s u c
+    for s in "$@"; do
+        u=$(zfs get -Hp -o value used "$s" 2>/dev/null) || u=""
+        c=$(zfs list -H -o clones "$s" 2>/dev/null) || c=""
+        printf '%s\t%s\t%s\n' "$s" "${u:-0}" "${c:--}"
+    done
+}
+
+sever_gather_origin_stats() {
+    local -a origins=()
+    local -A seen=()
+    local zvol o records
+    for zvol in "${sev_zvols[@]}"; do
+        o="${sev_origin[$zvol]}"
+        if [[ -z "${seen[$o]:-}" ]]; then
+            seen[$o]=1
+            origins+=("$o")
+        fi
+    done
+    (( ${#origins[@]} > 0 )) || return 0
+    if is_single_node; then
+        records=$(sever_emit_origin_stats "${origins[@]}") || return 1
+    else
+        records=$(ssh -o ConnectTimeout=10 root@"$storage_host" \
+            bash -s "${origins[@]}" << 'SSHEOF'
+for s in "$@"; do
+    u=$(zfs get -Hp -o value used "$s" 2>/dev/null) || u=""
+    c=$(zfs list -H -o clones "$s" 2>/dev/null) || c=""
+    printf '%s\t%s\t%s\n' "$s" "${u:-0}" "${c:--}"
+done
+SSHEOF
+        ) || return 1
+    fi
+    while IFS=$'\t' read -r o u c; do
+        [[ -n "${o:-}" ]] || continue
+        [[ "$u" =~ ^[0-9]+$ ]] || u=0
+        sev_origin_used["$o"]="$u"
+        sev_origin_clones["$o"]="$c"
+    done <<< "$records"
+}
+
+# The holding-pool ask: list the imported pools that could hold every
+# staged copy (free >= total copy need x 1.1, excluding the tight source
+# pools), validate the typed name — any imported pool is accepted, a
+# below-need choice WARNs and proceeds (the receive resume token covers an
+# overflow) — and check key availability on the holding pool when the
+# sources are encrypted. Sets sev_holding_pool; returns 1 on abort.
+sever_ask_holding_pool() {
+    local -a candidates=()
+    local pool need sev_hold_in keystatus found any_encrypted="" zvol
+    need=$(( sev_holding_need * 11 / 10 ))
+    for pool in "${sev_all_pools[@]}"; do
+        [[ -n "${sev_deficient_set[$pool]:-}" ]] && continue
+        if (( ${sev_pool_free[$pool]:-0} >= need )); then
+            candidates+=("$pool")
+        fi
+    done
+
+    echo ""
+    log_msg "INFO: Tight-space mode: pool(s) ${deficient_pools[*]} cannot hold a same-pool"
+    log_msg "INFO: copy. An intermediate holding pool is needed: the copies stage in"
+    log_msg "INFO: <holding>/sever_<vmid>/ and are copied back into ${deficient_pools[*]}"
+    log_msg "INFO: after the originals (and the confirmed origin snapshots) are destroyed."
+    if [[ ${#candidates[@]} -eq 0 ]]; then
+        log_msg "FATAL: No imported pool has the $(human_bytes "$need") free this run needs to"
+        log_msg "FATAL: stage the copies (all copied disks x 1.1 headroom)."
+        log_msg "FATAL:   Free space on another pool — or in ${deficient_pools[*]} so the"
+        log_msg "FATAL:   same-pool mode fits — and re-run sever-vm-clone."
+        return 1
+    fi
+    log_msg "INFO: Candidate holding pools (imported, free >= $(human_bytes "$need")):"
+    for pool in "${candidates[@]}"; do
+        log_msg "INFO:   ${pool} — free $(human_bytes "${sev_pool_free[$pool]}")"
+    done
+
+    while true; do
+        if ! ask_line "Holding pool name (Enter to abort): " sev_hold_in; then
+            log_msg "INFO: Aborted."
+            exit 0
+        fi
+        if [[ -z "$sev_hold_in" ]]; then
+            log_msg "INFO: No holding pool given — aborted (nothing was changed)."
+            exit 0
+        fi
+        if [[ -n "${sev_deficient_set[$sev_hold_in]:-}" ]]; then
+                        log_msg "WARN: ${sev_hold_in} is one of the tight source pools — it has" \
+                                "no room for the copies. Pick another pool."
+            continue
+        fi
+        found=""
+        for pool in "${sev_all_pools[@]}"; do
+            [[ "$pool" == "$sev_hold_in" ]] && found=1
+        done
+        if [[ -z "$found" ]]; then
+            log_msg "WARN: '${sev_hold_in}' is not an imported pool on ${storage_host}."
+            continue
+        fi
+        break
+    done
+    sev_holding_pool="$sev_hold_in"
+
+    if (( ${sev_pool_free[$sev_holding_pool]:-0} < need )); then
+                log_msg "WARN: ${sev_holding_pool} has" \
+                        "$(human_bytes "${sev_pool_free[$sev_holding_pool]:-0}") free — below the" \
+                        "$(human_bytes "$need")"
+        log_msg "WARN:   this run stages there. If the pool fills, the receive suspends with a"
+        log_msg "WARN:   resume token; re-running sever-vm-clone resumes it."
+    fi
+
+    for zvol in "${sev_zvols[@]}"; do
+        [[ -n "${sev_encrypted[$zvol]:-}" ]] && any_encrypted=1
+    done
+    if [[ -n "$any_encrypted" ]]; then
+        if is_single_node; then
+            keystatus=$(zfs get -Hp -o value keystatus "$sev_holding_pool" 2>/dev/null) \
+                || keystatus=""
+        else
+            keystatus=$(ssh -o ConnectTimeout=10 root@"$storage_host" \
+                zfs get -Hp -o value keystatus "$sev_holding_pool" 2>/dev/null) || keystatus=""
+        fi
+        if [[ "$keystatus" == "unavailable" ]]; then
+            log_msg "WARN: The zvols being severed are encrypted and the holding pool's key is"
+            log_msg "WARN: NOT loaded (keystatus=unavailable on ${sev_holding_pool}). Load it"
+                        log_msg "WARN: first (zfs key -l) — receives into ${sev_holding_pool} may" \
+                                "fail otherwise."
+        fi
+        log_msg "INFO: The copies stay encrypted: replication is raw (-w), so the copy-back"
+        log_msg "INFO: and the swapped-in zvol keep the original encryption setup."
+    fi
+    return 0
+}
+
+# The origin-snapshot confirmation and the plan-time copy-back estimate for
+# the holding disks. Advisory (discovery numbers; the cutover re-checks with
+# fresh numbers before destroying anything) — but an infeasible estimate
+# aborts here rather than staging copies for a run that cannot finish.
+sever_holding_plan() {
+    local zvol pool o siblings snaps_free origs_free avail need
+    local -A counted=()
+
+    sever_gather_origin_stats \
+        || {
+            log_msg "FATAL: Failed to gather origin-snapshot information from ${storage_host}"
+            return 1
+        }
+
+    echo ""
+    log_msg "INFO: Copy-back room: destroying each original frees only its diverged data;"
+    log_msg "INFO: the origin snapshots' pinned space frees with them. Origins of the"
+    log_msg "INFO: holding-staged disks:"
+    for zvol in "${sev_zvols[@]}"; do
+        [[ -n "${sev_holding_disk[$zvol]:-}" ]] || continue
+        o="${sev_origin[$zvol]}"
+        [[ -z "${counted[$o]:-}" ]] || continue
+        counted[$o]=1
+        siblings=$(sever_plan_siblings "${sev_origin_clones[$o]:-}")
+        if [[ -n "$siblings" ]]; then
+                        log_msg "INFO:   ${o} — $(human_bytes "${sev_origin_used[$o]}") pinned," \
+                                "but still cloned by ${siblings}:"
+            log_msg "INFO:     NOT destroyable here; its space is not counted."
+        else
+                        log_msg "INFO:   ${o} — $(human_bytes "${sev_origin_used[$o]}") pinned," \
+                                "destroyable once its clones are."
+        fi
+    done
+    if ! ask_yn \
+        "Destroy these origin snapshots after the severance to make room for the copy-back?" \
+        "Y"; then
+        sever_origin_destroy="N"
+        log_msg "INFO: Origin snapshots stay — their pinned space is not counted for the copy-back."
+    else
+        sever_origin_destroy="Y"
+    fi
+
+    echo ""
+    log_msg "INFO: Copy-back space estimate per tight pool (re-checked with fresh numbers"
+    log_msg "INFO: at the cutover, before anything is destroyed):"
+    for pool in "${deficient_pools[@]}"; do
+        origs_free=0
+        snaps_free=0
+        counted=()
+        for zvol in "${sev_zvols[@]}"; do
+            [[ -n "${sev_holding_disk[$zvol]:-}" ]] || continue
+            [[ "${zvol%%/*}" == "$pool" ]] || continue
+            origs_free=$(( origs_free + ${sev_used[$zvol]:-0} ))
+            o="${sev_origin[$zvol]}"
+            if [[ "$sever_origin_destroy" == "Y" && -z "${counted[$o]:-}" ]] \
+                && [[ -z "$(sever_plan_siblings "${sev_origin_clones[$o]:-}")" ]]; then
+                counted[$o]=1
+                snaps_free=$(( snaps_free + ${sev_origin_used[$o]:-0} ))
+            fi
+        done
+        avail=$(( ${sev_pool_free[$pool]:-0} + origs_free + snaps_free ))
+        need=$(( sev_pool_largest[$pool] * 11 / 10 ))
+        if (( avail >= need )); then
+                        log_msg "INFO:   ${pool}: free" \
+                                "$(human_bytes "${sev_pool_free[$pool]:-0}") + originals'" \
+                                "diverged" \
+                                "data $(human_bytes "$origs_free") + origin snapshots" \
+                                "$(human_bytes "$snaps_free") = $(human_bytes "$avail") >=" \
+                                "$(human_bytes "$need") — feasible on estimate"
+        else
+                        log_msg "FATAL: ${pool}: free $(human_bytes "${sev_pool_free[$pool]:-0}")" \
+                                "+ originals' diverged data $(human_bytes "$origs_free") + origin" \
+                                "snapshots $(human_bytes "$snaps_free") = $(human_bytes "$avail")" \
+                                "<" \
+                                "$(human_bytes "$need") the copy-back needs."
+            log_msg "FATAL: A lightly-diverged clone frees little: nearly all its blocks are shared"
+                        log_msg "FATAL: with the origin snapshot and only free when that snapshot" \
+                                "is destroyed too."
+            log_msg "FATAL:   Free space in ${pool}, or confirm the destroyable origin snapshots,"
+            log_msg "FATAL:   and re-run sever-vm-clone. Nothing was changed yet."
+            return 1
+        fi
+    done
+    return 0
+}
+
+# --- Plan display ---
+# Pool space verdicts: the same-pool temporary namespace needs each source
+# pool to hold at least largest-disk x 1.1 free (copies are swapped in and the
+# old zvol destroyed one disk at a time, so peak extra use is one disk plus
+# margin). A pool without room forces the intermediate holding-pool mode.
+for _zvol in "${sev_zvols[@]}"; do
+    _pool="${_zvol%%/*}"
+    _ref=${sev_referenced["$_zvol"]:-0}
+    _largest=${sev_pool_largest["$_pool"]:-0}
+    if (( _ref > _largest )); then
+        sev_pool_largest["$_pool"]=$_ref
+    fi
+done
+unset _zvol _pool _ref _largest
+
+declare -a deficient_pools=()
+mapfile -t sev_pools < <(printf '%s\n' "${!sev_pool_largest[@]}" | sort)
+for _pool in "${sev_pools[@]}"; do
+    _free=${sev_pool_free["$_pool"]:-}
+    if [[ -z "$_free" ]]; then
+        log_msg "WARN: Could not read free space for pool ${_pool}; assuming no room."
+        deficient_pools+=("$_pool")
+        continue
+    fi
+    _need=$(( sev_pool_largest["$_pool"] * 11 / 10 ))
+    if (( _free < _need )); then
+        deficient_pools+=("$_pool")
+    fi
+done
+unset _pool _free _need
+
+echo ""
+log_msg "INFO: === sever-vm-clone ==="
+if [[ "$arg_mode" == "vmid" ]]; then
+    log_msg "INFO:   VM: ${vmid} (all clone zvols)"
+fi
+log_msg "INFO:   Mode: $(is_single_node && echo single-node || echo two-node)"
+log_msg "INFO:   Zvols to sever:"
+for _zvol in "${sev_zvols[@]}"; do
+    log_msg "INFO:     ${_zvol}"
+    if _vm=$(vm_of_zvol "$_zvol"); then
+        log_msg "INFO:       owning VM:   ${_vm}"
+    else
+        log_msg "INFO:       owning VM:   unknown (name does not match vm-<id>-disk-<n>)"
+    fi
+    log_msg "INFO:       origin:      ${sev_origin["$_zvol"]}"
+        log_msg "INFO:       used:        $(human_bytes "${sev_used["$_zvol"]:-0}") (full copy" \
+                "size: $(human_bytes "${sev_referenced["$_zvol"]:-0}"))"
+done
+unset _zvol _vm
+
+echo ""
+log_msg "INFO:   Source pool space (same-pool mode needs largest-disk x 1.1 free):"
+for _pool in "${sev_pools[@]}"; do
+    _free=${sev_pool_free["$_pool"]:-0}
+    _largest=${sev_pool_largest["$_pool"]:-0}
+    _need=$(( _largest * 11 / 10 ))
+    if (( _free >= _need )); then
+                log_msg "INFO:     ${_pool}: free $(human_bytes "$_free"), need" \
+                        "$(human_bytes "$_need") — enough"
+    else
+                log_msg "INFO:     ${_pool}: free $(human_bytes "$_free"), need" \
+                        "$(human_bytes "$_need") — NOT enough"
+    fi
+done
+unset _pool _free _largest _need
+
+echo ""
+if [[ ${#deficient_pools[@]} -eq 0 ]]; then
+    log_msg "INFO:   Recommended transfer mode: same-pool temporary namespace"
+    log_msg "INFO:     (every source pool can hold its largest disk plus margin;"
+    log_msg "INFO:      each copy is swapped in and its old zvol destroyed before"
+    log_msg "INFO:      the next disk starts)"
+else
+    log_msg "INFO:   Recommended transfer mode: intermediate holding pool"
+    log_msg "INFO:     (no room in: ${deficient_pools[*]}; the copy lands in a holding"
+    log_msg "INFO:      pool first and is pulled back after the old zvol is destroyed)"
+
+    # --- Holding-pool selection (the confirmation step's tight-space ask) ---
+    for _pool in "${deficient_pools[@]}"; do
+        sev_deficient_set["$_pool"]=1
+    done
+    unset _pool
+    for _zvol in "${sev_zvols[@]}"; do
+        if [[ -n "${sev_deficient_set[${_zvol%%/*}]:-}" ]]; then
+            sev_holding_disk["$_zvol"]=1
+            sev_holding_need=$(( sev_holding_need + ${sev_referenced["$_zvol"]:-0} ))
+        fi
+    done
+    unset _zvol
+
+    sever_ask_holding_pool || exit 1
+    sever_space_mode="holding"
+
+    # The copy-back temp names (the source-pool temp namespace) double as the
+    # per-disk holding marker from here through the state file.
+    for _zvol in "${sev_zvols[@]}"; do
+        if [[ -n "${sev_holding_disk[$_zvol]:-}" ]]; then
+            sev_back_name["$_zvol"]="$(sever_local_parent "$_zvol")/${_zvol##*/}"
+        fi
+    done
+    unset _zvol
+
+    sever_holding_plan || exit 1
+
+    echo ""
+    log_msg "INFO:   Chosen transfer mode: holding pool ${sev_holding_pool}"
+    for _zvol in "${sev_zvols[@]}"; do
+        if [[ -n "${sev_holding_disk[$_zvol]:-}" ]]; then
+                        log_msg "INFO:     ${_zvol} → $(sever_temp_parent "$_zvol")/ → copied" \
+                                "back into ${sev_back_name[$_zvol]}"
+        else
+            log_msg "INFO:     ${_zvol} → $(sever_temp_parent "$_zvol") (same-pool)"
+        fi
+    done
+    unset _zvol
+    if [[ "$sever_origin_destroy" == "Y" ]]; then
+        log_msg "INFO:   Confirmed: the destroyable origin snapshots of the holding-staged"
+        log_msg "INFO:   disks are destroyed at their cutover, before the copy-back."
+    fi
+fi
+echo ""
+log_msg "WARN: The owning VMs must be stopped during transfer and cutover."
+
+# --- Confirmation (must precede any mutation) ---
+echo ""
+if ! ask_yn "Proceed with severance?"; then
+    log_msg "INFO: Aborted."
+    exit 0
+fi
+echo ""
+
+# --- Phase 1: transfer (full copy through the migration engine) ---------------
+# Per disk, sequentially: write locks on the source zvol and the temp-namespace
+# parent, a bucket-less @sever-<UTC timestamp> snapshot (no retention bucket
+# suffix, so retention never prunes it), a full copy through the migration
+# engine into <pool>/proxmox/sever_<vmid>/<basename> (tight pools:
+# <holding>/sever_<vmid>/<basename>), refreservation=none on the received
+# zvol, and the received snapshot's GUID. The temp namespaces are
+# deterministic so an interrupted run — and the receive resume token it leaves
+# behind — is found again by a re-run.
+
+# Per-zvol handoff records for the cutover phase: where each fresh copy landed
+# and the GUID of the snapshot it carries. sev_temp_name/sev_recv_snap are
+# declared with the Phase 2 state block (above); the transfer populates all
+# three here.
+declare -A sev_snap_guid=()   # source zvol -> GUID of that snapshot
+
+# Space pre-check at the start of the transfer (values gathered at
+# discovery). In holding mode the deficient pools' copies stage in the
+# holding pool and the only overflow risk there is a below-need holding
+# pool choice (WARNed at the ask); in same-pool mode every pool it flags
+# still receives its copy directly — a pool that fills suspends the receive
+# with a resume token, which a re-run resumes.
+sever_space_precheck() {
+    local pool free largest need
+    for pool in "${sev_pools[@]}"; do
+        free="${sev_pool_free[$pool]:-}"
+        [[ -n "$free" ]] || continue    # unreadable free space: warned at plan time
+        if [[ -n "${sev_deficient_set[$pool]:-}" ]]; then
+                        log_msg "INFO: Pool ${pool} is tight — its disks' copies stage in the" \
+                                "holding pool ${sev_holding_pool}."
+            continue
+        fi
+        largest="${sev_pool_largest[$pool]:-0}"
+        need=$(( largest * 11 / 10 ))
+        if (( free < need )); then
+                        log_msg "WARN: Pool ${pool}: free $(human_bytes "$free"), need" \
+                                "$(human_bytes "$need") for the same-pool copy (largest disk" \
+                                "$(human_bytes "$largest") x 1.1 headroom)."
+                        log_msg "WARN:   The copy still proceeds in ${pool}. If the pool fills," \
+                                "the receive suspends with a resume token; re-running" \
+                                "sever-vm-clone resumes it."
+        fi
+    done
+}
+
+# Storage-side transfer sequence, run as a child shell on the host where the
+# zvols live — directly in single-node mode, streamed over SSH in two-node
+# mode (the family pattern of move-vm-disk's storage_move_script). A child
+# shell, never sourced into this interactive script: the engine it runs sets
+# `set -euo pipefail` at file scope, which would kill interactive prompts.
+#
+# Arguments:
+#   $1 bin_dir      directory holding bashinit/zfslockmanager/zfs-migrate-send
+#   $2 results_file per-disk records ("<zvol> <temp zvol> <snap> <guid>") are
+#                   appended here for the parent to collect
+#   then triples: <zvol> <temp parent> <snapname>
+sever_storage_transfer_script() {
+    cat << 'SSHEOF'
+mydir="$1"; shift
+results="$1"; shift
+source "$mydir/bashinit"
+bashinit
+
+source_helper zfslockmanager
+
+set -e
+
+# shell-quote one value for the engine child-shell command (dataset names
+# cannot contain quoting characters; quoting anyway keeps the builder honest).
+sever_shq() { printf '%q' "$1"; }
+
+zfslock_init
+
+declare -A made_ns=()
+while [[ $# -gt 0 ]]; do
+    zvol="$1"; parent="$2"; snapname="$3"; shift 3
+    tempzvol="${parent}/${zvol##*/}"
+    ns_root="${parent%/*}"
+
+    # Create the temp-namespace parent once, under a write lock on the
+    # <pool>/proxmox namespace root.
+    if [[ -z "${made_ns[$parent]:-}" ]]; then
+        if ! zfslock_wait_or_resolve "$ns_root" "w" "sever-vm-clone temp namespace"; then
+            log_msg "FATAL: Could not acquire write lock on ${ns_root}."
+            exit 1
+        fi
+        ns_root_lock="$zfslock_id"
+        if ! zfs list -H -o name "$parent" >/dev/null 2>&1; then
+            log_msg "INFO: Creating temp namespace ${parent}."
+            zfs create -p "$parent"
+        fi
+        zfslock_release "$ns_root_lock"
+        made_ns[$parent]=1
+    fi
+
+    if ! zfslock_wait_or_resolve "$zvol" "w" "sever-vm-clone source"; then
+        log_msg "FATAL: Could not acquire write lock on ${zvol}."
+        exit 1
+    fi
+    lock_src="$zfslock_id"
+    if ! zfslock_wait_or_resolve "$parent" "w" "sever-vm-clone temp namespace"; then
+        zfslock_release "$lock_src"
+        log_msg "FATAL: Could not acquire write lock on ${parent}."
+        exit 1
+    fi
+    lock_ns="$zfslock_id"
+
+    if zfs list "${zvol}@${snapname}" >/dev/null 2>&1; then
+        log_msg "INFO: Reusing existing snapshot ${zvol}@${snapname}."
+    else
+                log_msg "INFO: Creating snapshot ${zvol}@${snapname} (bucket-less: retention" \
+                        "never prunes it)."
+        zfs snapshot "${zvol}@${snapname}"
+    fi
+
+    # Full copy through the migration engine, in the engine's own child shell
+    # (the pattern of zfs_repository.py's build_migration_send_receive_command):
+    # the engine resumes from a receive resume token when one is present and
+    # keeps a fresh one when interrupted.
+    log_msg "INFO: Copying ${zvol} in full to ${tempzvol}..."
+    migsend=$(find_zfsutility_script zfs-migrate-send)
+    sev_rh=$(sever_shq sever-vm-clone)
+    sever_engine_cmd="source $(sever_shq "$migsend"); sourcefs=$(sever_shq "$zvol"); "
+    sever_engine_cmd+="destfs=$(sever_shq "$tempzvol"); snapname=$(sever_shq "$snapname"); "
+    sever_engine_cmd+="restart_hint=${sev_rh}; zfs_migrate_send"
+    bash -c "$sever_engine_cmd"
+
+    # Project zvols are sparse; a plain receive re-reserves the full volsize.
+    zfs set refreservation=none "$tempzvol"
+    if zfs list "$tempzvol@$snapname" >/dev/null 2>&1; then
+        recv_snap="$snapname"
+    else
+        # A resumed interrupted transfer completes under its original snapshot
+        # name: the resume token encodes the stream it came from.
+        recv_snap=$(zfs list -H -t snapshot -o name -S creation -d 1 "$tempzvol" 2>/dev/null \
+            | awk -F '@' -v p='sever-' 'index($2, p) == 1 {print $2; exit}')
+        if [[ -z "$recv_snap" ]]; then
+            log_msg "FATAL: No sever snapshot found on ${tempzvol} after the transfer."
+            exit 1
+        fi
+                log_msg "WARN: ${tempzvol} completed under resumed snapshot @${recv_snap} (taken" \
+                        "before this run)."
+    fi
+    guid=$(zfs get -Hp -o value guid "$tempzvol@$recv_snap")
+
+    echo "${zvol} ${tempzvol} ${recv_snap} ${guid}" >> "$results"
+
+    log_msg "INFO: ✓ ${zvol}: fresh copy at ${tempzvol} (snapshot @${recv_snap}, GUID ${guid})."
+
+    zfslock_release "$lock_ns"
+    zfslock_release "$lock_src"
+done
+SSHEOF
+}
+
+# Two-node: stream the worker to the storage host and run it there. Locks
+# acquired on the storage node are non-interactive (SSH provides no TTY), so
+# a conflict aborts with its holder details — the same behavior as
+# move-vm-disk's storage-side script. After a successful run the remote
+# results file is copied over the local one, so sever_transfer reads both
+# modes identically.
+sever_transfer_remote() {
+    local results="$1"
+    shift
+    local remote_bin rc
+    remote_bin=$(remote_zfsutilities_bin "$storage_host") \
+        || remote_bin="/usr/local/lib/zfsutilities/current/bin"
+    ssh -o ConnectTimeout=10 root@"$storage_host" \
+        env ZFSUTILITIES_LOG_INHERIT="${ZFSUTILITIES_LOG_INHERIT:-}" \
+        bash -s "$remote_bin" "$results" "$@" \
+        <<< "$(sever_storage_transfer_script)"
+    rc=$?
+    [[ $rc -eq 0 ]] || return "$rc"
+    # Fetch the remote results into a side file first (the cutover runner's
+    # pattern): redirecting straight onto $results would truncate the only
+    # local copy before the remote cat lands in it.
+    if ssh -o ConnectTimeout=10 root@"$storage_host" "cat '$results' && rm -f '$results'" \
+            > "${results}.fetch" 2>/dev/null; then
+        mv "${results}.fetch" "$results"
+    else
+        rm -f "${results}.fetch"
+        return 1
+    fi
+    return 0
+}
+
+sever_transfer() {
+    local zvol parent rc r_zvol r_temp r_snap r_guid
+    local -a sever_args=()
+    sever_run_snapname="sever-$(snapname_timestamp)"
+
+    echo ""
+    log_msg "INFO: === Phase 1: transfer (full copy; the VMs may keep running) ==="
+    sever_space_precheck
+
+    for zvol in "${sev_zvols[@]}"; do
+        parent=$(sever_temp_parent "$zvol")
+        sever_args+=("$zvol" "$parent" "$sever_run_snapname")
+    done
+
+    local results
+    results=$(mktemp /tmp/sever-vm-clone-results.XXXXXX)
+
+    if is_single_node; then
+        bash <(sever_storage_transfer_script) "$mydir" "$results" "${sever_args[@]}"
+        rc=$?
+    else
+        sever_transfer_remote "$results" "${sever_args[@]}"
+        rc=$?
+    fi
+
+    if [[ $rc -ne 0 ]]; then
+        rm -f "$results"
+        log_msg "FATAL: Transfer phase failed (rc=${rc})."
+        log_msg "FATAL:   Beyond the @${sever_run_snapname} snapshots no source data was touched;"
+        log_msg "FATAL:   re-run sever-vm-clone to resume from the receive resume token."
+        exit 1
+    fi
+
+    while read -r r_zvol r_temp r_snap r_guid; do
+        [[ -n "$r_zvol" ]] || continue
+        sev_temp_name["$r_zvol"]="$r_temp"
+        sev_recv_snap["$r_zvol"]="$r_snap"
+        sev_snap_guid["$r_zvol"]="$r_guid"
+    done < "$results"
+    rm -f "$results"
+
+    for zvol in "${sev_zvols[@]}"; do
+        if [[ -z "${sev_snap_guid[$zvol]:-}" ]]; then
+            log_msg "FATAL: No transfer record for ${zvol}."
+            exit 1
+        fi
+    done
+
+    echo ""
+    log_msg "INFO: === Phase 1 complete: fresh copies staged in the temp namespace ==="
+    for zvol in "${sev_zvols[@]}"; do
+        log_msg "INFO:   ${zvol} → ${sev_temp_name[$zvol]}"
+        log_msg "INFO:     snapshot @${sev_recv_snap[$zvol]}  GUID ${sev_snap_guid[$zvol]}"
+    done
+}
+
+# --- Phase 2 driver wiring -----------------------------------------------------
+# sever_cutover() (defined in the Phase 2 block above) swaps each staged copy
+# in under its original name with --continue/--rollback recovery from the
+# cutover state file; the two-node iSCSI rewire is its later extension.
+
+sever_transfer
+sever_cutover

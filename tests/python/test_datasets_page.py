@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from contextlib import contextmanager
 from unittest.mock import MagicMock, call, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -1348,3 +1349,494 @@ class TestProfileActions(unittest.TestCase):
         with patch.object(dp, "show_manage_profiles_dialog") as manager:
             dp.on_datasets_manage_profiles(app)
         manager.assert_called_once_with(app)
+
+
+# ---------------------------------------------------------------------------
+# Sever Clone
+# ---------------------------------------------------------------------------
+
+
+def _clone_volume(name="tank/proxmox/vm-310-disk-0", origin="tank/proxmox/vm-310-disk-0@base"):
+    """Return a selection item for a clone zvol row."""
+    return {
+        "type": "dataset",
+        "name": name,
+        "zfs_type": "volume",
+        "origin": origin,
+        "mounted": False,
+    }
+
+
+class TestSeverCloneHelpers(unittest.TestCase):
+    """VM-id parsing and clone-dataset detection for Sever Clone."""
+
+    def test_vmid_parsed_from_vm_disk_name(self):
+        self.assertEqual(dp.vmid_of_dataset("tank/proxmox/vm-310-disk-0"), "310")
+        self.assertEqual(dp.vmid_of_dataset("tank/vm-7-disk-12"), "7")
+
+    def test_vmid_none_for_non_vm_disk_names(self):
+        self.assertIsNone(dp.vmid_of_dataset("tank/proxmox"))
+        self.assertIsNone(dp.vmid_of_dataset("tank/proxmox/vm-310-disk-0@snap"))
+        self.assertIsNone(dp.vmid_of_dataset("tank/proxmox/scratch"))
+
+    def test_clone_volume_is_clone_dataset(self):
+        self.assertTrue(dp.is_clone_dataset(_clone_volume()))
+
+    def test_volume_without_origin_is_not_clone_dataset(self):
+        self.assertFalse(
+            dp.is_clone_dataset(
+                {
+                    "type": "dataset",
+                    "name": "tank/vm-310-disk-0",
+                    "zfs_type": "volume",
+                    "origin": "",
+                    "mounted": False,
+                }
+            )
+        )
+        self.assertFalse(
+            dp.is_clone_dataset(
+                {
+                    "type": "dataset",
+                    "name": "tank/vm-310-disk-0",
+                    "zfs_type": "volume",
+                    "origin": "-",
+                    "mounted": False,
+                }
+            )
+        )
+
+    def test_cloned_filesystem_is_not_severable(self):
+        self.assertFalse(
+            dp.is_clone_dataset(
+                {
+                    "type": "dataset",
+                    "name": "tank/clone-fs",
+                    "zfs_type": "filesystem",
+                    "origin": "tank/data@base",
+                    "mounted": True,
+                }
+            )
+        )
+
+    def test_snapshots_and_holds_are_not_clone_datasets(self):
+        self.assertFalse(
+            dp.is_clone_dataset(
+                {
+                    "type": "snapshot",
+                    "name": "base",
+                    "dataset": "tank/vm-310-disk-0",
+                    "origin": "tank/vm-310-disk-0@base",
+                    "mounted": False,
+                }
+            )
+        )
+        self.assertFalse(dp.is_clone_dataset({"type": "hold", "tag": "keep", "mounted": False}))
+
+    def test_row_without_zfs_type_uses_vm_disk_name(self):
+        item = {
+            "type": "dataset",
+            "name": "tank/proxmox/vm-310-disk-0",
+            "origin": "tank/proxmox/vm-310-disk-0@base",
+        }
+        self.assertTrue(dp.is_clone_dataset(item))
+        other = {"type": "dataset", "name": "tank/proxmox/other", "origin": "tank/a@base"}
+        self.assertFalse(dp.is_clone_dataset(other))
+
+    def test_sever_clone_datasets_returns_unique_clone_names_in_order(self):
+        items = [
+            _clone_volume("tank/proxmox/vm-310-disk-0", "tank/proxmox/vm-310-disk-0@base"),
+            {
+                "type": "snapshot",
+                "name": "base",
+                "dataset": "tank/proxmox/vm-310-disk-0",
+                "mounted": False,
+            },
+            _clone_volume("tank/proxmox/vm-310-disk-1", "tank/proxmox/vm-310-disk-1@base"),
+            _clone_volume("tank/proxmox/vm-310-disk-0", "tank/proxmox/vm-310-disk-0@base"),
+            {
+                "type": "dataset",
+                "name": "tank/proxmox/vm-310-disk-2",
+                "zfs_type": "volume",
+                "origin": "",
+                "mounted": False,
+            },
+        ]
+        self.assertEqual(
+            dp.sever_clone_datasets(items),
+            ["tank/proxmox/vm-310-disk-0", "tank/proxmox/vm-310-disk-1"],
+        )
+
+
+class TestSeverCloneSensitivity(unittest.TestCase):
+    """The Sever Clone button follows the clone datasets in the selection."""
+
+    def _make_app(self, items):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        with patch.object(dp, "get_tree_selection_items", return_value=items):
+            dp.update_ds_button_sensitivity(app)
+        return app
+
+    def test_clone_volume_enables_sever(self):
+        app = self._make_app([_clone_volume()])
+        app._ds_sever_clone_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_plain_volume_disables_sever(self):
+        app = self._make_app(
+            [
+                {
+                    "type": "dataset",
+                    "name": "tank/vm-310-disk-0",
+                    "zfs_type": "volume",
+                    "origin": "",
+                    "mounted": False,
+                }
+            ]
+        )
+        app._ds_sever_clone_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_clone_among_other_rows_enables_sever(self):
+        items = [
+            _clone_volume(),
+            {
+                "type": "dataset",
+                "name": "tank/data",
+                "zfs_type": "filesystem",
+                "origin": "",
+                "mounted": True,
+            },
+            {"type": "snapshot", "name": "base", "dataset": "tank/data", "mounted": True},
+        ]
+        app = self._make_app(items)
+        app._ds_sever_clone_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_empty_and_non_clone_selections_disable_sever(self):
+        for items in (
+            [],
+            [
+                {
+                    "type": "pool",
+                    "name": "tank",
+                    "zfs_type": "filesystem",
+                    "origin": "",
+                    "mounted": True,
+                }
+            ],
+            [
+                {
+                    "type": "snapshot",
+                    "name": "base",
+                    "dataset": "tank/vm-310-disk-0",
+                    "parent_type": "volume",
+                    "mounted": False,
+                }
+            ],
+        ):
+            with self.subTest(items=items):
+                app = self._make_app(items)
+                app._ds_sever_clone_btn.set_sensitive.assert_called_once_with(False)
+
+
+@contextmanager
+def _sever_dialog(response, typed_text):
+    """Patch the Sever dialog scaffolding; yield (dialog, sever_btn, entry)."""
+    dialog = MagicMock()
+    sever_btn = MagicMock()
+    entry = MagicMock()
+    entry.get_text.return_value = typed_text
+    dialog.run.return_value = response
+    dialog.add_button.return_value = sever_btn
+    with patch.object(dp, "create_scrolled_dialog", return_value=(dialog, MagicMock())):
+        with patch.object(dp.Gtk, "Entry", return_value=entry):
+            yield dialog, sever_btn, entry
+
+
+class TestShowSeverCloneDialog(unittest.TestCase):
+    """The typed confirmation gates the Sever button."""
+
+    def _items(self):
+        return [
+            _clone_volume("tank/proxmox/vm-310-disk-0", "tank/proxmox/vm-310-disk-0@base"),
+            _clone_volume("tank/proxmox/vm-310-disk-1", "tank/proxmox/vm-310-disk-1@base"),
+        ]
+
+    def test_sever_response_with_typed_word_confirms(self):
+        with _sever_dialog(dp._RESPONSE_SEVER, "sever") as (_dialog, _btn, _entry):
+            self.assertTrue(dp.show_sever_clone_dialog(MagicMock(), self._items()))
+
+    def test_wrong_text_returns_false_even_on_sever_response(self):
+        with _sever_dialog(dp._RESPONSE_SEVER, "severance") as (_dialog, _btn, _entry):
+            self.assertFalse(dp.show_sever_clone_dialog(MagicMock(), self._items()))
+
+    def test_cancel_returns_false(self):
+        with _sever_dialog(dp.Gtk.ResponseType.CANCEL, "sever") as (_dialog, _btn, _entry):
+            self.assertFalse(dp.show_sever_clone_dialog(MagicMock(), self._items()))
+
+    def test_button_starts_insensitive_and_tracks_typing(self):
+        with _sever_dialog(dp.Gtk.ResponseType.CANCEL, "") as (_dialog, sever_btn, entry):
+            dp.show_sever_clone_dialog(MagicMock(), self._items())
+            sever_btn.set_sensitive.assert_called_once_with(False)
+            entry.get_text.return_value = "sever"
+            entry.connect.call_args[0][1](entry)
+            sever_btn.set_sensitive.assert_called_with(True)
+            entry.get_text.return_value = "sever "
+            entry.connect.call_args[0][1](entry)
+            sever_btn.set_sensitive.assert_called_with(True)
+            entry.get_text.return_value = "SEVER"
+            entry.connect.call_args[0][1](entry)
+            sever_btn.set_sensitive.assert_called_with(True)
+            entry.get_text.return_value = "no"
+            entry.connect.call_args[0][1](entry)
+            sever_btn.set_sensitive.assert_called_with(False)
+
+    def test_dialog_names_datasets_and_owning_vm(self):
+        items = self._items()
+        with (
+            _sever_dialog(dp.Gtk.ResponseType.CANCEL, "sever"),
+            patch.object(dp, "add_scrolled_text_view") as listing,
+            patch.object(dp, "resolve_local_bin", return_value="/repo/bin/sever-vm-clone"),
+        ):
+            dp.show_sever_clone_dialog(MagicMock(), items)
+        listing_text = listing.call_args_list[0][0][1]
+        self.assertIn("tank/proxmox/vm-310-disk-0", listing_text)
+        self.assertIn("tank/proxmox/vm-310-disk-1", listing_text)
+        self.assertIn("tank/proxmox/vm-310-disk-0@base", listing_text)
+        self.assertIn("owning VM 310", listing_text)
+        # Only the selected clone datasets appear — not other disks of the VM.
+        self.assertNotIn("vm-310-disk-2", listing_text)
+
+    def test_dialog_states_stopped_vm_cutover_requirement(self):
+        # The header and detail markup must name the owning VM(s) and state
+        # the full-copy and stopped-VM cutover requirements, so the operator
+        # cannot confirm without seeing what stopping the VM is for.
+        cases = {
+            "one VM": (
+                [
+                    _clone_volume("tank/proxmox/vm-310-disk-0"),
+                    _clone_volume("tank/proxmox/vm-310-disk-1"),
+                ],
+                "About to sever 2 clone dataset(s) (VM 310)",
+                "VM 310 must be stopped for the cutover phase",
+            ),
+            "two VMs": (
+                [
+                    _clone_volume("tank/proxmox/vm-310-disk-0"),
+                    _clone_volume("tank/proxmox/vm-320-disk-0"),
+                ],
+                "About to sever 2 clone dataset(s) (VM 310, VM 320)",
+                "VM 310 and VM 320 must be stopped for the cutover phase",
+            ),
+        }
+        for label, (items, header_snippet, stopped_snippet) in cases.items():
+            with self.subTest(selection=label):
+                # A fresh Label mock isolates this dialog's set_markup calls
+                # from the shared mock_gtk Label history.
+                with (
+                    _sever_dialog(dp.Gtk.ResponseType.CANCEL, "sever"),
+                    patch.object(dp.Gtk, "Label", return_value=MagicMock()) as label_cls,
+                ):
+                    dp.show_sever_clone_dialog(MagicMock(), items)
+                markups = [
+                    args[0] for args, _kwargs in label_cls.return_value.set_markup.call_args_list
+                ]
+                joined = "\n".join(markups)
+                self.assertIn(header_snippet, joined)
+                self.assertIn(stopped_snippet, joined)
+                self.assertIn("full copy", joined)
+
+
+class TestBuildSeverCloneCommand(unittest.TestCase):
+    """The argv points the script at the selected datasets only."""
+
+    def test_command_lists_script_then_datasets(self):
+        with patch.object(dp, "resolve_local_bin", return_value="/repo/bin/sever-vm-clone"):
+            cmd = dp.build_sever_clone_command(["tank/a/vm-1-disk-0", "tank/a/vm-1-disk-1"])
+        self.assertEqual(
+            cmd, ["/repo/bin/sever-vm-clone", "tank/a/vm-1-disk-0", "tank/a/vm-1-disk-1"]
+        )
+
+    def test_command_falls_back_to_bare_name(self):
+        with patch.object(dp, "resolve_local_bin", return_value=None):
+            cmd = dp.build_sever_clone_command(["tank/a/vm-1-disk-0"])
+        self.assertEqual(cmd, ["sever-vm-clone", "tank/a/vm-1-disk-0"])
+
+
+class TestOnDatasetsSeverClone(unittest.TestCase):
+    """Handler gating and runner wiring for Sever Clone."""
+
+    def _app(self, items):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        app.dataset_runner = MagicMock()
+        app.dataset_runner.running = False
+        self._items = items
+        return app
+
+    def test_warns_when_no_clone_selected(self):
+        items = [
+            {
+                "type": "dataset",
+                "name": "tank/vm-310-disk-0",
+                "zfs_type": "volume",
+                "origin": "",
+                "mounted": False,
+            }
+        ]
+        app = self._app(items)
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "show_sever_clone_dialog") as dialog,
+            patch.object(dp, "log_msg") as log,
+        ):
+            dp.on_datasets_sever_clone(app)
+        dialog.assert_not_called()
+        app.dataset_runner.set_steps.assert_not_called()
+        log.assert_called_once_with("WARN: Select one or more clone datasets to sever")
+
+    def test_cancelled_dialog_starts_nothing(self):
+        items = [_clone_volume()]
+        app = self._app(items)
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "show_sever_clone_dialog", return_value=False),
+            patch.object(dp, "log_msg") as log,
+        ):
+            dp.on_datasets_sever_clone(app)
+        app.dataset_runner.set_steps.assert_not_called()
+        log.assert_called_once_with("INFO: Sever clone cancelled")
+
+    def test_missing_runner_refuses(self):
+        items = [_clone_volume()]
+        app = self._app(items)
+        app.dataset_runner = None
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "show_sever_clone_dialog", return_value=True),
+            patch.object(dp, "log_msg") as log,
+        ):
+            dp.on_datasets_sever_clone(app)
+        log.assert_called_once_with("WARN: Dataset runner not available")
+
+    def test_busy_runner_refuses(self):
+        items = [_clone_volume()]
+        app = self._app(items)
+        app.dataset_runner.running = True
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "show_sever_clone_dialog", return_value=True),
+            patch.object(dp, "log_msg") as log,
+        ):
+            dp.on_datasets_sever_clone(app)
+        log.assert_called_once_with("WARN: A dataset action is already running")
+        app.dataset_runner.set_steps.assert_not_called()
+
+    def test_confirmed_dialog_starts_step_with_selected_datasets_only(self):
+        items = [
+            _clone_volume("tank/proxmox/vm-310-disk-0", "tank/proxmox/vm-310-disk-0@base"),
+            {
+                "type": "snapshot",
+                "name": "base",
+                "dataset": "tank/proxmox/vm-310-disk-0",
+                "parent_type": "volume",
+                "mounted": False,
+            },
+            _clone_volume("tank/proxmox/vm-310-disk-1", "tank/proxmox/vm-310-disk-1@base"),
+            {
+                "type": "dataset",
+                "name": "tank/proxmox/vm-310-disk-2",
+                "zfs_type": "volume",
+                "origin": "",
+                "mounted": False,
+            },
+        ]
+        app = self._app(items)
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "show_sever_clone_dialog", return_value=True) as dialog,
+            patch.object(dp, "resolve_local_bin", return_value="/repo/bin/sever-vm-clone"),
+            patch.object(dp, "refresh_datasets_page") as refresh,
+            patch.object(dp, "update_ds_button_sensitivity") as sens,
+            patch.object(dp, "log_msg"),
+        ):
+            dp.on_datasets_sever_clone(app)
+
+        dialog.assert_called_once()
+        self.assertIs(dialog.call_args.args[1], items)
+
+        app.dataset_runner.set_steps.assert_called_once()
+        step = app.dataset_runner.set_steps.call_args[0][0][0]
+        self.assertEqual(
+            step.command,
+            [
+                "/repo/bin/sever-vm-clone",
+                "tank/proxmox/vm-310-disk-0",
+                "tank/proxmox/vm-310-disk-1",
+            ],
+        )
+        self.assertFalse(step.is_rsync)
+        self.assertTrue(step.fatal)
+        self.assertEqual(step.description, "Sever 2 clones")
+        app.dataset_runner.start.assert_called_once()
+        self.assertEqual(app.dataset_runner.operation_detail, "Sever clone: 2 datasets")
+
+        on_complete = app.dataset_runner.start.call_args.kwargs["on_complete"]
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "refresh_datasets_page") as complete_refresh,
+        ):
+            on_complete(cancelled=False, rc=0)
+        sens.assert_called_with(app)
+        complete_refresh.assert_called_once_with(app)
+        refresh.assert_not_called()
+
+    def test_single_dataset_detail_and_description(self):
+        items = [_clone_volume("tank/proxmox/vm-310-disk-0", "tank/proxmox/vm-310-disk-0@base")]
+        app = self._app(items)
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "show_sever_clone_dialog", return_value=True),
+            patch.object(dp, "resolve_local_bin", return_value="/repo/bin/sever-vm-clone"),
+            patch.object(dp, "log_msg"),
+        ):
+            dp.on_datasets_sever_clone(app)
+        step = app.dataset_runner.set_steps.call_args[0][0][0]
+        self.assertEqual(step.description, "Sever clone tank/proxmox/vm-310-disk-0")
+        self.assertEqual(
+            app.dataset_runner.operation_detail, "Sever clone: tank/proxmox/vm-310-disk-0"
+        )
+
+    def test_completion_logs_outcome(self):
+        items = [_clone_volume()]
+        app = self._app(items)
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "show_sever_clone_dialog", return_value=True),
+            patch.object(dp, "resolve_local_bin", return_value="/repo/bin/sever-vm-clone"),
+            patch.object(dp, "refresh_datasets_page"),
+            patch.object(dp, "update_ds_button_sensitivity"),
+            patch.object(dp, "log_msg"),
+        ):
+            dp.on_datasets_sever_clone(app)
+            on_complete = app.dataset_runner.start.call_args.kwargs["on_complete"]
+
+        from test_support import capture_logs
+
+        def _complete(cancelled, rc):
+            with (
+                patch.object(dp, "refresh_datasets_page"),
+                patch.object(dp, "update_ds_button_sensitivity"),
+                capture_logs() as logs,
+            ):
+                on_complete(cancelled=cancelled, rc=rc)
+            return logs
+
+        logs = _complete(cancelled=False, rc=0)
+        self.assertTrue(any("INFO: Sever clone complete" in line for line in logs))
+
+        logs = _complete(cancelled=True, rc=None)
+        self.assertTrue(any("INFO: Sever clone cancelled" in line for line in logs))
+
+        logs = _complete(cancelled=False, rc=2)
+        self.assertTrue(any("WARN: Sever clone failed (rc=2)" in line for line in logs))
+        self.assertTrue(any("state file" in line for line in logs))

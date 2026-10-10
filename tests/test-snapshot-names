@@ -41,6 +41,7 @@ test_bash_producers_use_helper() {
 zfssnapbuild|currdate=$(snapname_timestamp)|1
 zfsclone-vm|@clone-$(snapname_timestamp)-c|2
 archive-vm|@retire-$(snapname_timestamp)-d|2
+sever-vm-clone|sever-$(snapname_timestamp)|2
 EOF
     if [[ -z "$failures" ]]; then
         test_pass

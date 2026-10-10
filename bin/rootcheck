@@ -1,9 +1,10 @@
 #!/usr/bin/bash
 rootcheck() {
-    if [ "$(id -u)" -ne 0 ]; then
+    if [[ "$(id -u)" -ne 0 ]]; then
         echo "Please run as root."
-        return 1
-    else
-        return 0
+        # exit, not return: every caller invokes this guard bare (no
+        # `|| exit`), so a return would leave a non-root run to continue
+        # until the first real command fails.
+        exit 1
     fi
 }

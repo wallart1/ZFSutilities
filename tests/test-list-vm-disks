@@ -156,6 +156,17 @@ ssh() {
 export NODE_CONF="$node_conf_two"
 export NODE_LIB="$old_mydir/lib/node-lib.sh"
 _test_hostname="tweety"
+
+# The script enforces root at source time; the suite runs as the developer
+# uid. find_zfsutility_script tries $mydir/<name> first and bashinit
+# preserves an already-set mydir, so pointing mydir at a stub dir whose
+# rootcheck is a no-op diverts exactly that resolution (node-lib.sh is
+# pinned above via NODE_LIB; every other name still falls through to the
+# real bin).
+_rootcheck_stub=$(mktemp -d)
+printf 'rootcheck() { true; }\n' > "$_rootcheck_stub/rootcheck"
+mydir="$_rootcheck_stub"
+
 source "$old_mydir/bin/list-vm-disks"
 
 # ------------------------------------------------------------------------------
@@ -450,7 +461,7 @@ EOF
     _qm_guest_output="0\n/dev/sda\n/dev/disk/by-path/pci-0000:00:10.0-scsi-0:0:0:0"
 
     # Re-source node-lib.sh so is_single_node reflects the new config.
-    source "$mydir/lib/node-lib.sh"
+    source "$old_mydir/lib/node-lib.sh"
 
     local output
     output=$(run_single_node 2>&1)
@@ -465,7 +476,7 @@ EOF
 
     # Restore two-node config for remaining tests.
     export NODE_CONF="$node_conf_two"
-    source "$mydir/lib/node-lib.sh"
+    source "$old_mydir/lib/node-lib.sh"
 
     if [[ $ok -eq 1 ]]; then
         test_pass
@@ -557,7 +568,7 @@ EOF
         "threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c"
 
     # Re-source node-lib.sh so is_single_node reflects the new config.
-    source "$mydir/lib/node-lib.sh"
+    source "$old_mydir/lib/node-lib.sh"
 
     # Pin a wide terminal so the long origin name is not hard-broken.
     local output
@@ -565,7 +576,7 @@ EOF
 
     # Restore two-node config for remaining tests.
     export NODE_CONF="$node_conf_two"
-    source "$mydir/lib/node-lib.sh"
+    source "$old_mydir/lib/node-lib.sh"
 
     local _wrap_rhs="[clone of threeamigos/proxmox/vm-904-disk-0@clone-2026-07-30T12:00-0400-c]"
     if [[ "$output" == *"$_wrap_rhs"* ]]; then

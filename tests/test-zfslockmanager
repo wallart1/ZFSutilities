@@ -1,5 +1,7 @@
 #!/usr/bin/bash
-# shellcheck disable=SC1090,SC2034,SC2153,SC2154
+# shellcheck disable=SC1090,SC2016,SC2034,SC2153,SC2154
+# (SC2016: the set -e child bodies are single-quoted on purpose — the child
+# evaluates $zfslock_id/$lock1/$lock2 itself, not the suite.)
 # test-zfslockmanager — Deterministic protocol suite for the lock manager.
 # Timing-dependent conflict scenarios live in tests/test-zfslockmanager-soak
 # (skipped by default).
@@ -730,6 +732,96 @@ test_conflict_message() {
 }
 
 # ---------------------------------------------------------------------------
+# set -e safety (two-node remote heredocs run the lock manager under set -e)
+# ---------------------------------------------------------------------------
+
+# Child-script template mirroring the two-node remote heredocs: source
+# bashinit and the real lock manager, THEN enable set -e. The marker file is
+# written only if every lock call returned 0 — a set -e death anywhere leaves
+# it absent, so each test asserts on the marker, not just the exit code.
+_sete_child() {
+    local body="$1" marker="$_mock_zfs_state_dir/sete_child_marker"
+    local script="$_mock_zfs_state_dir/sete_child.sh"
+    cat > "$script" <<EOF
+#!/usr/bin/bash
+source "$mydir/bin/bashinit"
+export ZFSUTILITIES_SESSION_LOG_DIR="$_mock_zfs_state_dir/logs"
+export ZFSUTILITIES_HEADLESS=Y
+bashinit
+source "$mydir/bin/zfslockmanager"
+export ZFSLOCK_DIR="$ZFSLOCK_DIR"
+export zfslock_locks_dir="$zfslock_locks_dir"
+export zfslock_pids_dir="$zfslock_pids_dir"
+mkdir -p "\$zfslock_locks_dir" "\$zfslock_pids_dir"
+set -e
+$body
+echo SURVIVED > "$marker"
+EOF
+    rm -f "$marker"
+    bash "$script" > /dev/null 2>&1
+    local rc=$?
+    if [[ -f "$marker" ]]; then
+        echo "$rc"
+        return 0
+    fi
+    echo "$rc"
+    return 1
+}
+
+test_set_e_safety() {
+    echo ""
+    echo "=== set -e Safety Tests ==="
+    cleanup_test_locks
+
+    test_start "Releasing the last held lock survives under set -e"
+    local rc
+    rc=$(_sete_child 'zfslock_init
+zfslock_wait_or_resolve "test/sete/last" "w" "set -e release test"
+zfslock_release "$zfslock_id"')
+    local lockfile
+    lockfile=$(_zfslock_file "test/sete/last")
+    if [[ "$rc" == "0" && ! -f "$lockfile" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc lockfile_present=$([[ -f "$lockfile" ]] && echo Y || echo N)"
+    fi
+
+    test_start "Releasing the second of two locks survives under set -e"
+    rc=$(_sete_child 'zfslock_init
+zfslock_wait_or_resolve "test/sete/first" "w" "set -e release test"
+lock1="$zfslock_id"
+zfslock_wait_or_resolve "test/sete/second" "w" "set -e release test"
+lock2="$zfslock_id"
+zfslock_release "$lock2"
+zfslock_release "$lock1"')
+    local lock1 lock2
+    lock1=$(_zfslock_file "test/sete/first")
+    lock2=$(_zfslock_file "test/sete/second")
+    if [[ "$rc" == "0" && ! -f "$lock1" && ! -f "$lock2" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc lock1=$([[ -f "$lock1" ]] && echo present || echo gone) lock2=$([[ -f "$lock2" ]] && echo present || echo gone)"
+    fi
+
+    test_start "First stale-lock removal survives under set -e"
+    local stale_lock="$zfslock_locks_dir/test%2Fsete%2Fstale.lock"
+    printf '\
+{"dataset":"test/sete/stale","type":"w","pid":99999999,\
+"script":"fake_script","acquired":"2026-01-01T00:00:00-05:00",\
+"description":"stale lock"}\n' > "$stale_lock"
+    rc=$(_sete_child 'zfslock_init
+zfslock_cleanup_stale')
+    if [[ "$rc" == "0" && ! -f "$stale_lock" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc stale_lock_present=$([[ -f "$stale_lock" ]] && echo Y || echo N)"
+    fi
+
+    rm -f "$_mock_zfs_state_dir/sete_child.sh" "$_mock_zfs_state_dir/sete_child_marker"
+    cleanup_test_locks
+}
+
+# ---------------------------------------------------------------------------
 # Timing-knob sanitization (ZFSLOCK_WAIT_INTERVAL, ZFSLOCK_RETRY_THROTTLE,
 # ZFSLOCK_REMOTE_POLL_INTERVAL)
 # ---------------------------------------------------------------------------
@@ -1224,6 +1316,7 @@ test_headless_multiple_holders_logged
 test_stale_conflict_retry
 test_conflict_message
 test_multi_lock_acquisition
+test_set_e_safety
 test_sanitize_interval
 test_wait_interval_fallback_reaches_sleep
 test_retry_throttle_fallback_reaches_sleep

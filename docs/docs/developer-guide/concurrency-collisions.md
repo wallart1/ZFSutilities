@@ -43,7 +43,7 @@ The following scripts and modules currently use the lock manager:
   before pruning its snapshots.
 * **VM-disk lifecycle scripts** (`clone-vm`, `zfsclone-vm`, `move-vm-disk`,
   `rename-vm-disk`, `remove-vm-disk`, `resize-vm-disk`, `new-vm-disk`,
-  `promote-vm-clone`, `archive-vm`, `unarchive-vm`, `PVE-send-to-archive`)
+  `sever-vm-clone`, `archive-vm`, `unarchive-vm`, `PVE-send-to-archive`)
   acquire `w` or `x` locks on the affected zvols.
 * **Hold helpers** (`zfshold`, `zfsholds`, `zfsdelallholds`, etc.) acquire
   `w`/`r` locks on the affected datasets.

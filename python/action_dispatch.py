@@ -48,6 +48,7 @@ from datasets_page import (
     on_datasets_apply_profile,
     on_datasets_manage_profiles,
     on_datasets_rewrite_data,
+    on_datasets_sever_clone,
     refresh_datasets_page,
     update_ds_button_sensitivity,
 )
@@ -244,6 +245,7 @@ PAGE_SPECS = {
             ("Unmount", "media-eject", "_ds_unmount_btn"),
             ("Apply Profile…", "dialog-apply", "_ds_apply_profile_btn"),
             ("Rewrite Data", "document-edit", "_ds_rewrite_data_btn"),
+            ("Sever Clone", "edit-cut", "_ds_sever_clone_btn"),
             ("Advanced: Manage Profiles…", "preferences-system", "_ds_manage_profiles_btn"),
             ("Refresh", "view-refresh", None),
             ("Expand Selected", "zoom-in", "_ds_expand_selected_btn"),
@@ -492,6 +494,7 @@ ACTION_HANDLERS = {
         "Unmount": on_datasets_unmount,
         "Apply Profile…": on_datasets_apply_profile,
         "Rewrite Data": on_datasets_rewrite_data,
+        "Sever Clone": on_datasets_sever_clone,
         "Advanced: Manage Profiles…": on_datasets_manage_profiles,
         "Refresh": _handler_datasets_refresh,
         "Expand Selected": expand_selected_datasets,

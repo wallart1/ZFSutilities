@@ -70,6 +70,35 @@ test_ask_yn_reask_keeps_request_uuid() {
     rm -rf "$tmpdir"
 }
 
+test_input_hold_env_prefix_for_ssh_delegation() {
+    # ssh -t does not forward ZFSUTILITIES_INPUT_HOLD, so delegating scripts
+    # prepend $(input_hold_env_prefix) to the remote command string. Under
+    # the protocol it must expand to the env assignment plus ONE trailing
+    # space (the remote command follows verbatim); without the protocol it
+    # must expand to nothing (no leading space gluing into the command).
+    local tmpdir wrapper hold_output plain_output
+    tmpdir=$(mktemp -d)
+    wrapper="$tmpdir/wrapper.sh"
+    {
+        echo '#!/usr/bin/bash'
+        echo "_bashinit=\"$mydir/bin/bashinit\""
+        echo 'source "$_bashinit"'
+        echo '[[ -n "${HOLD:-}" ]] && export ZFSUTILITIES_INPUT_HOLD=Y'
+        echo 'echo "PRE[$(input_hold_env_prefix)]remote-cmd"'
+    } > "$wrapper"
+    chmod +x "$wrapper"
+    hold_output=$(HOLD=Y "$wrapper" 2>&1)
+    plain_output=$("$wrapper" 2>&1)
+    test_start "input_hold_env_prefix expands only under ZFSUTILITIES_INPUT_HOLD=Y"
+    if [[ "$hold_output" == "PRE[ZFSUTILITIES_INPUT_HOLD=Y ]remote-cmd" \
+        && "$plain_output" == "PRE[]remote-cmd" ]]; then
+        test_pass
+    else
+        test_fail "hold='$hold_output' plain='$plain_output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
 test_ask_line_returns_read_status() {
     # ask_line must return the underlying read's exit status so converted
     # EOF-sensitive call sites keep their behavior, and must store the
@@ -236,6 +265,7 @@ test_log_msg_silent_when_session_log_dir_removed() {
 
 test_input_hold_markers_emitted_under_protocol
 test_ask_yn_reask_keeps_request_uuid
+test_input_hold_env_prefix_for_ssh_delegation
 test_ask_line_returns_read_status
 test_log_msg_survives_cd_with_relative_script_path
 test_no_session_log_export_when_log_file_unwritable

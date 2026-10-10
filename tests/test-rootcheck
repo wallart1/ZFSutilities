@@ -1,0 +1,52 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-rootcheck — Unit tests for the rootcheck guard (bin/rootcheck). The
+# guard terminates the calling process rather than returning: every bin/
+# script invokes it bare (no `|| exit`), so a plain return would let a
+# non-root run continue until the first real command fails.
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+
+test_rootcheck_exits_when_not_root() {
+    local out rc
+    out=$(bash -c 'source "${1:?}"; rootcheck; echo AFTER-ROOTCHECK' \
+        bash "$mydir/bin/rootcheck" 2>&1)
+    rc=$?
+    test_start "rootcheck terminates the process when not root"
+    if [[ "$(id -u)" -eq 0 ]]; then
+        test_skip "suite runs as root here; non-root branch not reachable"
+        return
+    fi
+    if [[ $rc -ne 1 ]] || [[ "$out" != *"Please run as root."* ]] \
+        || [[ "$out" == *"AFTER-ROOTCHECK"* ]]; then
+        test_fail "rc=$rc out=$out"
+        return
+    fi
+    test_pass
+}
+
+test_rootcheck_passes_when_root() {
+    local out rc
+    out=$(bash -c 'source "${1:?}"; rootcheck; echo AFTER-ROOTCHECK' \
+        bash "$mydir/bin/rootcheck" 2>&1)
+    rc=$?
+    test_start "rootcheck returns cleanly when root"
+    if [[ "$(id -u)" -ne 0 ]]; then
+        test_skip "suite runs as non-root here; root branch not reachable"
+        return
+    fi
+    if [[ $rc -ne 0 ]] || [[ "$out" != *"AFTER-ROOTCHECK"* ]]; then
+        test_fail "rc=$rc out=$out"
+        return
+    fi
+    test_pass
+}
+
+# =============================================================================
+# Run
+# =============================================================================
+
+test_rootcheck_exits_when_not_root
+test_rootcheck_passes_when_root
+
+test_summary

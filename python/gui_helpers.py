@@ -1152,9 +1152,7 @@ def collect_dataset_busy_reasons(target, repo=None):
                         category="clone",
                         dataset=target,
                         detail=f"Snapshot has clone dependents: {clones}",
-                        action=(
-                            "Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
-                        ),
+                        action=("Use 'sever-vm-clone' to sever the dependencies first."),
                     )
                 )
         except (subprocess.CalledProcessError, FileNotFoundError):
@@ -1168,9 +1166,7 @@ def collect_dataset_busy_reasons(target, repo=None):
                         category="clone",
                         dataset=target,
                         detail=f"One or more snapshots of {target} have clone dependents.",
-                        action=(
-                            "Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
-                        ),
+                        action=("Use 'sever-vm-clone' to sever the dependencies first."),
                     )
                 )
         except (subprocess.CalledProcessError, FileNotFoundError):
@@ -1839,12 +1835,29 @@ class TreeSearch:
         self._update_ui()
 
 
+def _row_origin(model, tree_iter):
+    """Return a dataset row's Origin column value, or "" when it has none.
+
+    Column 6 holds the origin snapshot on dataset/pool rows ("" when the
+    dataset is not a clone) and the clone list on snapshot rows; only the
+    dataset/pool value is meaningful here. Missing columns (a short row in a
+    test fixture) read as no origin.
+    """
+    try:
+        origin = model.get_value(tree_iter, 6)
+    except (IndexError, ValueError, TypeError):
+        return ""
+    return origin or ""
+
+
 def get_tree_selection_items(view):
     """Get structured list of selected items from the datasets tree.
 
     Returns list of dicts:
-      {"type": "pool",     "name": pool_name, "mounted": bool}
-      {"type": "dataset",  "name": full_dataset_name, "mounted": bool}
+      {"type": "pool",     "name": pool_name, "zfs_type": ds type,
+                            "origin": origin snapshot or "", "mounted": bool}
+      {"type": "dataset",  "name": full_dataset_name, "zfs_type": ds type,
+                            "origin": origin snapshot or "", "mounted": bool}
       {"type": "snapshot", "name": snap_short (without @),
                             "dataset": full_dataset, "parent_type": parent
                             dataset type, "mounted": bool}
@@ -1918,13 +1931,22 @@ def get_tree_selection_items(view):
                 }
             )
         elif model.iter_parent(tree_iter) is None:
-            items.append({"type": "pool", "name": name, "zfs_type": ds_type, "mounted": mounted})
+            items.append(
+                {
+                    "type": "pool",
+                    "name": name,
+                    "zfs_type": ds_type,
+                    "origin": _row_origin(model, tree_iter),
+                    "mounted": mounted,
+                }
+            )
         else:
             items.append(
                 {
                     "type": "dataset",
                     "name": build_full_dataset_name(model, tree_iter),
                     "zfs_type": ds_type,
+                    "origin": _row_origin(model, tree_iter),
                     "mounted": mounted,
                 }
             )

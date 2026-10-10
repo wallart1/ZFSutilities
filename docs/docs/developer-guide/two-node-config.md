@@ -314,7 +314,7 @@ is unlocked; see [ZFS Key Handling](../installation/zfs-keys.md).
 | [list-vm-disks](../commands-and-modules/two-node.md#list-vm-disks-both)             | Lists zvols from all pools         | Lists iSCSI LUN mappings                       |
 | [clone-vm](../commands-and-modules/two-node.md#clone-vm-both)                       | Local `zfs send/receive`           | SSH delegation + iSCSI LUN setup               |
 | [zfsclone-vm](../commands-and-modules/two-node.md#zfsclone-vm-both)                 | Local ZFS snapshot + clone         | SSH delegation + iSCSI LUN setup               |
-| [promote-vm-clone](../commands-and-modules/two-node.md#promote-vm-clone-both)       | Local `zfs promote`                | SSH delegation to storage host                 |
+| [sever-vm-clone](../commands-and-modules/two-node.md#sever-vm-clone-both)           | Local full-copy severance         | Storage-host calls delegate to compute host; cutover runs on storage host over SSH, re-exporting the iSCSI LUN at the same LUN id + rescan |
 | [rescan-storage](../commands-and-modules/two-node.md#rescan-storage-both)           | N/A (exits)                        | Rescans iSCSI sessions                         |
 | [enroll-iscsi-pool](../commands-and-modules/two-node.md#enroll-iscsi-pool-storage-node) | N/A (exits)                   | POOL_TARGET on both nodes + target + rescan    |
 | [enroll-proxmox-pool](../commands-and-modules/commands.md#enroll-proxmox-pool) | Adds local `zfspool` storage     | Adds `iscsi` storage on compute host via SSH    |

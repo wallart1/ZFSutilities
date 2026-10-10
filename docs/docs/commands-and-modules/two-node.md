@@ -108,7 +108,7 @@ detached unless you later re-attach them with `attach-vm-disk` or `new-vm-disk`.
 - [`new-vm-disk` (both)](#new-vm-disk-both)
 - [`switch-version` (any host)](#switch-version-any-host)
 - [`uninstall-version` (any host)](#uninstall-version-any-host)
-- [`promote-vm-clone` (both)](#promote-vm-clone-both)
+- [`sever-vm-clone` (both)](#sever-vm-clone-both)
 - [`archive-vm` (both)](../commands-and-modules/commands.md#archive-vm)
 - [`remove-vm` (both)](../commands-and-modules/commands.md#remove-vm)
 - [`remove-vm-disk` (both)](#remove-vm-disk-both)
@@ -1083,47 +1083,141 @@ With `--encrypted`, the following additional ZFS properties are set:
 
 ---
 
-### `promote-vm-clone` (both)
+### `sever-vm-clone` (both)
 
-Promotes a ZFS-cloned VM's disk zvols, cutting the dependency on the source VM.
+Severs a ZFS-cloned VM's disk zvols from their origin snapshots by copying each
+clone zvol in full into a fresh, origin-free zvol that is swapped in under the
+same name, so Proxmox configs and iSCSI references keep working unchanged.
+Unlike `zfs promote` — which inverts the clone relationship, keeps the origin
+snapshot alive, and re-parents every sibling clone onto the promoted dataset —
+severance leaves both sides with independent blocks and releases the origin
+snapshot for destruction.
 
 ```bash
-sudo promote-vm-clone <vmid>
+sudo sever-vm-clone <vmid>
+sudo sever-vm-clone <dataset> [dataset...]
 ```
 
 **Arguments:**
 
-| Argument | Description                          |
-| -------- | ------------------------------------ |
-| `vmid`   | VM ID whose zvols should be promoted |
+| Argument  | Description                                                                                                                                                         |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vmid`    | Sever every clone zvol of this VM                                                                                                                                   |
+| `dataset` | Sever only the named clone zvols; datasets that are not clone zvols are skipped with an INFO line. A VM ID and named datasets are mutually exclusive.                |
+
+**Recovery options:**
+
+| Option                    | Description                                                                                                          |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `--continue <state-file>` | Resume an interrupted cutover from the recorded phase — no re-copy; an interrupted catch-up resumes from its receive resume token |
+| `--rollback <state-file>` | Revert an interrupted run before the destroy: destroy the staged copies, remove the `@sever-*` snapshots, reapply the released holds. Impossible once an original zvol was destroyed — complete the swap with `--continue` instead |
 
 **Globals:** node-config globals only.
 
-**Called modules / commands:** none.
+**Called modules / commands:**
 
-**Data structures consumed / produced:** none.
+| Script | Purpose |
+| ------ | ------- |
+| `zfs-migrate-send` | Full copy, catch-up incremental, and holding-pool copy-back through the migration engine (receive-resume support) |
+| `zfsreapplyholds` (sourced) | Capture/release the original's snapshot holds; reapply them on the swapped-in zvol |
+| `zfs-diagnose-busy` (sourced) | Diagnose a failed origin-snapshot destroy in the release offer |
+| `zfslockmanager` | `w` locks for the transfer; `x` locks spanning the destroy→rename window |
+| `safe-iscsi-save` (storage host) | Persist the backstore re-export (two-node) |
+| `rescan-storage` | Compute-host rescan after the cutover (two-node) |
+
+**Data structures consumed / produced:**
+
+| Structure | Role | Reference |
+| --------- | ---- | --------- |
+| `/tmp/sever-vm-clone-<key>-<ts>.state` (+ `.holds<N>` files) | Cutover recovery state file and per-disk captured-holds files | — |
+| `<pool>/proxmox/sever_<vmid>/`, `<holding>/sever_<vmid>/` | Temp namespaces holding the staged copies (removed once empty) | — |
+| `/etc/rtslib-fb-target/expected-backstores.txt` | Backstore removed before the swap, re-added after | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Entry removed/re-added when the zvol is encrypted (legacy `/etc/iscsi-encrypted-luns.conf` fallback) | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 
 **Internal flow / algorithm:**
 
-1. Validate arguments and delegate to the compute host in two-node mode.
-2. Discover zvols of the VM that have an origin (are clones).
-3. Display the clone dependencies and prompt for confirmation.
-4. Run `zfs promote` on each clone zvol locally or via SSH to the storage host.
+1. Validate arguments and require Proxmox (`qm`). In two-node mode the compute
+   host is the canonical entry — an invocation on the storage host delegates
+   over SSH before the `qm` guard runs; recovery modes delegate too.
+2. Discovery, run where the zvols live (over SSH in two-node mode): the clone
+   zvols (VM mode: every `vm-<vmid>-disk-<N>` zvol under a `proxmox` dataset
+   that has an origin; dataset mode: the named datasets), each with its origin
+   snapshot, used/referenced bytes, and encryption, plus every pool's free
+   space. Non-clone and non-zvol datasets are skipped with an INFO line; a
+   missing dataset is fatal.
+3. Display the severance plan: per zvol the origin and sizes, per pool a
+   same-pool space verdict — each source pool needs largest-disk × 1.1 free,
+   because copies are swapped in and their originals destroyed one disk at a
+   time. When a source pool is that tight, the confirmation step asks for an
+   intermediate holding pool (candidate imported pools are listed; encrypted
+   sources trigger a key check on the holding pool; the copies then stage in
+   `<holding>/sever_<vmid>/`) and confirms destruction of the destroyable
+   origin snapshots against a plan-time copy-back space estimate.
+4. Prompt for confirmation.
+5. **Phase 1 — transfer (online; the owning VMs may keep running):** per disk,
+   sequentially, under `w` locks on the source zvol and the temp-namespace
+   parent: a bucket-less `@sever-<UTC timestamp>` snapshot (retention never
+   prunes it), a full copy through the `zfs-migrate-send` engine into the temp
+   namespace, `refreservation=none` on the received zvol, and the received
+   snapshot's GUID. An interrupted receive resumes from its receive resume
+   token on re-run.
+6. **Phase 2 — cutover (the owning VMs must be stopped; enforced with
+   `qm status`):** write the cutover state file, then per disk, inside one
+   storage-side worker under `set -e` (a child shell; an
+   `ssh root@<storage_host> bash -s` heredoc in two-node mode — locks
+   included, so the destroy-class locks span the destroy→rename window):
+    - Take a `@sever-<UTC timestamp>-cutover` snapshot and receive a catch-up
+      incremental through the engine, so every write made during Phase 1 lands
+      in the staged copy before anything is destroyed.
+    - Verify the cutover-snapshot GUID on source and copy (a mismatch aborts
+      with nothing destroyed); in holding mode, re-check copy-back space
+      feasibility with fresh numbers before any destruction.
+    - Capture then release the original's snapshot holds.
+    - Two-node: tear the zvol's iSCSI LUN and backstore down — a live
+      backstore pins the device node the destroy frees.
+    - Destroy the original clone zvol — snapshot by snapshot first (children
+      first: `zfs destroy <dataset>` refuses while any child snapshot lives,
+      and the `-R` replication gave the original snapshots beyond this tool's
+      `@sever-*` ones); in holding mode, destroy the confirmed
+      origin snapshot and copy the staged copy back into the source-pool temp
+      namespace through the engine (GUID verified again).
+    - `zfs rename` the copy into the original name — the name-preserving swap
+      — and wait for `/dev/zvol/<name>` to return via udev.
+    - Two-node: re-create the backstore named for the zvol and re-export it at
+      the SAME LUN id (a slot taken meanwhile falls back to auto-assign with a
+      WARN for the PVE `by-path` reference), keep the manifest and
+      encrypted-LUNs bookkeeping in step, and run `safe-iscsi-save`.
+    - Verify the post-swap GUID, reapply the captured holds, destroy the
+      holding-pool copy (holding mode), destroy this tool's `@sever-*`
+      scaffolding snapshots, and release the locks. Every step is idempotent
+      and recorded per disk in the state file.
+7. Remove the now-empty temp namespaces; in two-node mode run `rescan-storage`
+   on the compute host when any disk was exported; then print the
+   origin-snapshot report: for every origin, snapshots still cloned or held
+   are only reported (with the clones/holds named); unpinned, hold-free
+   origins are offered for destruction with typed confirmation — that offer is
+   where the pinned space actually comes back.
+8. Remove the state file.
 
 **Return codes / side effects:**
 
 | Code | Meaning |
 | ---- | ------- |
-| `0`  | Promotion completed (or user aborted) |
-| `1`  | Validation, SSH, or `zfs promote` failure |
+| `0`  | Severance completed (or user aborted before any mutation) |
+| `1`  | Validation, SSH, ZFS, iSCSI, or transfer failure |
 
-Side effects: reverses the clone/origin relationship — the VM's zvols become
-independent, shared clone-origin snapshots move to this VM, and other clones
-re-parent automatically. No iSCSI reconfiguration is required. Safe to run while
-the VM is running.
+Side effects: true severance — no clone relationship remains after the cutover
+and the origin snapshots become deletable (offered with typed confirmation).
+The fresh origin-free zvols replace the clones under the same names, and the
+iSCSI LUN is preserved (re-exported at the same LUN id), so no Proxmox or
+iSCSI reconfiguration is needed. The transfer phase runs online; the VM must
+be stopped for the cutover.
 
-See [Archiving a VM](../user-guide/proxmox-integration.md#archiving-a-vm)
-for the full workflow.
+See [Severing a Clone](../user-guide/concepts.md#severing-a-clone) for what
+severance does and why `zfs promote` is not it. In the GTK GUI, the Datasets
+tab's **Sever Clone** button runs this script on the selected clone
+dataset(s) — see the GUI reference under
+[Snapshot and hold actions](../user-guide/gtk-gui.md#snapshot-and-hold-actions).
 
 ---
 
@@ -1741,8 +1835,8 @@ new iSCSI LUNs (two-node); writes a new VM config. The clone-origin snapshot is
 **retained** on the source zvols. ZFS prevents its deletion while any clone
 created from it exists.
 
-Use [`promote-vm-clone`](#promote-vm-clone-both)
-to cut dependencies before retiring the source VM.
+Use [`sever-vm-clone`](#sever-vm-clone-both)
+to sever the clone dependency before retiring the source VM.
 
 See [VM Clone Provisioning](../user-guide/proxmox-integration.md#cloning-a-vm) for the full workflow.
 

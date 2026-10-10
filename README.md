@@ -28,7 +28,7 @@ guided GUI:
 - **Pool health and scrubbing** — Monitor pool status, start/pause/resume
   scrubs, and manage a scrub queue from the GUI.
 - **VM disk lifecycle** *(Proxmox VE / two-node)* — Create, resize, move,
-  attach, detach, clone, promote, archive, unarchive, and remove VM disks
+  attach, detach, clone, sever, archive, unarchive, and remove VM disks
   backed by iSCSI zvols, plus repair missing iSCSI LUN exports.
 - **Schedule** — Jobs can be scheduled to run in the background even when you
   are not logged in or when the GUI is not running.

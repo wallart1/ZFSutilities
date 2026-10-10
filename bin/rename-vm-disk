@@ -512,7 +512,7 @@ main() {
     if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
         remote_script=$(remote_zfsutility_script "$compute_host" "rename-vm-disk")
         exec ssh -t root@"$compute_host" \
-            "$remote_script '$old_zvol' '$new_zvol'"
+            "$(input_hold_env_prefix)$remote_script '$old_zvol' '$new_zvol'"
     fi
 
     # === Running on the compute host ===

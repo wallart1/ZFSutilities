@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.121.0
+
+*Released 2026-10-10*
+
+### Added
+
+- **`sever-vm-clone` — sever ZFS clone dependencies by full copy** —
+  replaces `zfs promote` as the way to cut a clone loose: promotion
+  inverts the relationship, keeps the origin snapshot alive, and
+  re-parents every sibling clone, while severance leaves both sides
+  with independent blocks and releases the origin snapshot for
+  destruction. Takes a VM ID or named datasets (non-clone arguments are
+  skipped with an INFO line). Two phases: online full copies through
+  the `zfs-migrate-send` engine into a temp namespace (an interrupted
+  receive resumes from its resume token), then a stopped-VM cutover —
+  catch-up incremental, GUID verification on both sides before anything
+  is destroyed, hold capture/release/reapply, a children-first destroy
+  (every snapshot before the dataset; `zfs destroy <dataset>` refuses
+  while child snapshots live), the name-preserving destroy+rename swap,
+  a udev device wait, a post-swap GUID verify, and (two-node) same-LUN
+  backstore re-export with manifest/encrypted-LUNs bookkeeping,
+  `safe-iscsi-save`, and a compute-host rescan. A holding-pool mode
+  handles source pools too tight for same-pool copies (space-feasibility
+  gates on the plan estimate and again on fresh numbers before any
+  destruction), and `--continue`/`--rollback` recover an interrupted
+  cutover from a per-disk state file. The Datasets page gains a
+  selection-scoped **Sever Clone** action (typed confirmation names the
+  datasets, origins, and owning VMs; it acts only on the selected rows,
+  never the rest of the VM).
+
+- **`archive-vm` gates clone VMs and severs them** — Step 1 checks
+  that clone-dependent VMs are stopped and severs each one via
+  `sever-vm-clone` (asking first) before the archive proceeds.
+
+- **`zfs-migrate-send` caller-aware restart hints** — transfer failures
+  name the operation to re-run (`$restart_hint`: Migrate Pool,
+  `sever-vm-clone`, `sever-vm-clone --continue <state-file>`), so the
+  resume guidance is correct for whichever caller drives the engine.
+
+- **Input-hold protocol across `ssh -t` delegations** — new `bashinit`
+  helper `input_hold_env_prefix` expands to
+  `ZFSUTILITIES_INPUT_HOLD=Y ` under the GUI and to nothing otherwise;
+  every two-node delegation site (archive-vm, attach-/detach-/move-/
+  rename-/new-/remove-vm-disk, clone-vm, remove-vm, sever-vm-clone)
+  prepends it, so held, numbered prompts survive the handoff to the
+  storage host.
+
+- **New suites** — `test-sever-vm-clone` (a file-backed mock-ZFS state
+  tree with engine and oplog ordering assertions covering the full
+  two-phase cycle, holding-pool mode, crash recovery, and the two-node
+  iSCSI rewire) and `test-rootcheck` (the guard's exit-1 non-root and
+  clean-root branches, each skipped when the suite runs as the other
+  uid).
+
+### Changed
+
+- **`rootcheck` now terminates the process** — it exits with status 1
+  (message unchanged) when not root instead of returning: every caller
+  invokes the guard bare, so the exit is what enforces it. Suites that
+  exercise scripts as the developer uid mock the guard or set the
+  `*_TEST_NO_ROOT` knobs.
+
+- **Guidance re-pointed from promotion to severance** — `zfsclone-vm`,
+  `zfsdelfs`, `zfs-diagnose-busy`, and the GUI's clone-dependent
+  messages now direct at `sever-vm-clone`.
+
+### Removed
+
+- **`promote-vm-clone`** — superseded by `sever-vm-clone`; promotion
+  never severed (it inverted the clone and pinned the origin snapshot's
+  space). No references remain anywhere in the tree.
+
 ## 0.120.0
 
 *Released 2026-10-09*

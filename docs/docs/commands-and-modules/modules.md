@@ -72,6 +72,8 @@ rootcheck
 | `calledbybash`           | Returns true when the current file was executed directly (not sourced)                                                                                                                     |
 | `snapname_timestamp`     | Renders the canonical snapshot-name timestamp — UTC with a literal `Z` suffix (`2026-10-07T01:46Z`); optional epoch argument selects a specific instant (deterministic across zones)       |
 | `ask_yn`                 | Prompts for yes/no with an optional default answer (`Y`/`N`)                                                                                                                               |
+| `ask_line`               | Prompts for a single-line answer, stores it in the named variable (default `REPLY`), and returns `read`'s exit status                                                                      |
+| `input_hold_env_prefix`  | Expands to `ZFSUTILITIES_INPUT_HOLD=Y ` under the input-hold protocol and to nothing otherwise — prepended to `ssh -t` delegated commands ([conventions](../developer-guide/conventions.md#interactive-prompts)) |
 | `die`                    | Logs a `FATAL` message and terminates the process                                                                                                                                          |
 | `warn`                   | Logs a `WARN` message                                                                                                                                                                      |
 | `find_zfsutility_script` | Locates a sibling script/library across repo or deployed layouts; respects `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR`; prints absolute path |
@@ -289,7 +291,7 @@ rootcheck
 
 **Arguments:** none.
 
-**Globals:** none (reads `$EUID`).
+**Globals:** none (checks `id -u`).
 
 **Called modules:** none.
 
@@ -297,12 +299,14 @@ rootcheck
 
 **Return codes:**
 
-| Code | Meaning             |
-| ---- | ------------------- |
-| 0    | Running as root     |
-| 1    | Not running as root |
+| Code | Meaning                                    |
+| ---- | ------------------------------------------ |
+| 0    | Running as root (returns normally)         |
+| 1    | Not running as root (exits the process)    |
 
-Exits with a clear message if not running as root.
+When not running as root, prints "Please run as root." and exits the process
+(callers invoke the guard bare, so the exit — not a return — is what enforces
+it).
 
 ---
 

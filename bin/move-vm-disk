@@ -681,7 +681,7 @@ if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
     remote_args=()
     [[ "$no_rename" == "Y" ]] && remote_args+=("--no-rename")
     remote_args+=("${pos_args[0]}" "${pos_args[1]}" "${pos_args[2]}" "${pos_args[3]:-}")
-    exec ssh -t root@"$compute_host" "$remote_script" "${remote_args[@]}"
+    exec ssh -t root@"$compute_host" "$(input_hold_env_prefix)$remote_script" "${remote_args[@]}"
 fi
 
 # === Running on the compute host ===

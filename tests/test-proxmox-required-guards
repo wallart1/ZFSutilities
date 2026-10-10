@@ -85,7 +85,7 @@ GUARDED_SCRIPTS=(
     resize-vm-disk
     repair-vm-disk-sizes
     enroll-efi-keys-vm
-    promote-vm-clone
+    sever-vm-clone
     list-vm-disks
     enroll-proxmox-pool
 )

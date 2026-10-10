@@ -55,7 +55,7 @@ function diagnose_dataset_busy {
         clones=$(zfs list -H -o clones "$target" 2>/dev/null)
         if [[ -n "$clones" && "$clones" != "-" ]]; then
             log_msg "WARN:   → Snapshot has clone dependents: ${clones}"
-            log_msg "WARN:     Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
+            log_msg "WARN:     Use 'sever-vm-clone' to sever the dependencies first."
             found_cause=true
         fi
     else
@@ -65,7 +65,7 @@ function diagnose_dataset_busy {
             | grep -v '^-$' || true)
         if [[ -n "$clone_snaps" ]]; then
             log_msg "WARN:   → One or more snapshots of ${target} have clone dependents."
-            log_msg "WARN:     Use 'promote-vm-clone' or 'zfs promote' to cut dependencies first."
+            log_msg "WARN:     Use 'sever-vm-clone' to sever the dependencies first."
             found_cause=true
         fi
     fi

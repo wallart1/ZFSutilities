@@ -94,10 +94,10 @@ if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
     remote_script=$(remote_zfsutility_script "$compute_host" "remove-vm")
     if [[ "$cleanup_orphans" == true ]]; then
         exec ssh -t root@"$compute_host" \
-            "$remote_script --cleanup-orphans '$vmid'"
+            "$(input_hold_env_prefix)$remote_script --cleanup-orphans '$vmid'"
     else
         exec ssh -t root@"$compute_host" \
-            "$remote_script '$vmid'"
+            "$(input_hold_env_prefix)$remote_script '$vmid'"
     fi
 fi
 

@@ -509,7 +509,10 @@ zfslock_cleanup_stale() {
         [[ -f "$lockfile" ]] || continue
         if zfslock_is_stale "$lockfile"; then
             rm -f "$lockfile"
-            ((removed++))
+            # Not ((removed++)): the post-increment expression evaluates to 0
+            # on the first removal and returns status 1, which would kill a
+            # set -e caller mid-cleanup.
+            removed=$((removed + 1))
         fi
     done
     local pidfile
@@ -1040,7 +1043,10 @@ zfslock_release() {
     pidfile=$(_zfslock_pidfile)
     if [[ -f "$pidfile" ]]; then
         local temp
-        temp=$(grep -v "^${lock_id}$" "$pidfile" 2>/dev/null)
+        # grep exits 1 when the released lock is the pidfile's last remaining
+        # entry; the || true keeps set -e callers (two-node remote heredocs)
+        # alive, and the empty-result check below handles that case.
+        temp=$(grep -v "^${lock_id}$" "$pidfile" 2>/dev/null || true)
         if [[ -n "$temp" ]]; then
             echo "$temp" > "$pidfile"
         else

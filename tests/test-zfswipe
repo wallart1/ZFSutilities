@@ -8,7 +8,17 @@ setup_test_env
 # Source the script under test (functions only — calledbybash is false when
 # sourced, so zfswipe_main does not auto-run). Sourcing re-imports the real
 # log_msg, so run output is captured from stderr and asserted as text.
-source "${mydir}/bin/zfswipe"
+#
+# zfswipe_main resolves and calls rootcheck at run time; the suite runs as
+# the developer uid. find_zfsutility_script tries $mydir/<name> first and
+# bashinit preserves an already-set mydir, so pointing mydir at a stub dir
+# whose rootcheck is a no-op diverts exactly that resolution (zfswipe
+# source_helpers nothing else at run time).
+old_mydir="$mydir"
+_zfs_wipe_stub=$(mktemp -d)
+printf 'rootcheck() { true; }\n' > "$_zfs_wipe_stub/rootcheck"
+mydir="$_zfs_wipe_stub"
+source "$old_mydir/bin/zfswipe"
 
 # ---------------------------------------------------------------------------
 # Mocks

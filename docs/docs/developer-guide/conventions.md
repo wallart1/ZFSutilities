@@ -157,6 +157,13 @@ before parsing markers. `BackupRunner` intercepts the markers before display
 and session-log writes and forwards them to the GUI registry; the markers
 themselves never appear in logs or in the GUI.
 
+Two-node scripts that hand off with `exec ssh -t` lose the variable (ssh
+does not forward it), so the delegated run would fall back to plain prompts.
+Every delegation site therefore prepends `$(input_hold_env_prefix)` (a
+`bashinit` helper) to the remote command — it expands to
+`ZFSUTILITIES_INPUT_HOLD=Y ` under the GUI and to nothing otherwise, leaving
+terminal invocations byte-identical.
+
 ## Message Priorities
 
 Messages may begin with one of the following priority tokens (lowest to

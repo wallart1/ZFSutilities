@@ -338,6 +338,18 @@ function _input_hold_ack {
     return 0
 }
 
+# Command prefix that carries the input-hold protocol across an `ssh -t`
+# delegation: ssh does not forward ZFSUTILITIES_INPUT_HOLD, so a delegated
+# script would lose its numbered prompts and fall back to plain read -rp.
+# Prints nothing when the protocol is inactive locally, so non-GUI
+# invocations delegate exactly as before. Prepend to the remote command:
+#   exec ssh -t root@"$host" "$(input_hold_env_prefix)$remote_cmd"
+function input_hold_env_prefix {
+    if _input_hold_active; then
+        printf 'ZFSUTILITIES_INPUT_HOLD=Y '
+    fi
+}
+
 # Prompt user for yes/no response with input validation.
 # Usage: if ask_yn "Do you want to continue?" ["Y"|"N"]; then ...
 # Returns 0 for yes, 1 for no. The optional second argument is the default

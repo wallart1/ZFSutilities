@@ -8,11 +8,23 @@ setup_test_env
 SHOWBIG_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/zfsshowbigstuff"
 [[ -f "$SHOWBIG_SCRIPT" ]] || die "Missing: $SHOWBIG_SCRIPT"
 
+# The script enforces root at source time; the suite runs as the developer
+# uid. find_zfsutility_script tries $mydir/<name> first and bashinit
+# preserves an already-set mydir, so pointing mydir at a stub dir whose
+# rootcheck is a no-op diverts exactly that resolution. Re-assert it after
+# every fresh test-lib.sh source (which resets mydir to the repo root).
+_rootcheck_stub_dir=$(mktemp -d)
+printf 'rootcheck() { true; }\n' > "$_rootcheck_stub_dir/rootcheck"
+_use_rootcheck_stub() {
+    mydir="$_rootcheck_stub_dir"
+}
+
 # Common subsell runner. Sets up mocks, runs the script, and prints both
 # stderr (log messages) and a trailing sequence marker.
 _run_showbig() {
     source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
     setup_test_env
+    _use_rootcheck_stub
 
     # The script prefixes zfs list with stdbuf -oL for line buffering.  In a
     # shell function context stdbuf would bypass our zfs mock, so shadow it
@@ -47,6 +59,7 @@ test_missing_dataset_shows_usage_and_fails() {
     output=$(
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
         setup_test_env
+        _use_rootcheck_stub
         source "$SHOWBIG_SCRIPT" 2>&1
     ) && rc=0 || rc=$?
     assert_rc 1 "$rc"
@@ -133,6 +146,7 @@ test_zfs_list_uses_line_buffering() {
     output=$(
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
         setup_test_env
+        _use_rootcheck_stub
 
         rm -f /tmp/zfsutilities_showbig_linebuffer_marker_$$_*
         stdbuf() {
@@ -179,6 +193,7 @@ test_largest_shows_requested_number_of_datasets() {
     output=$(
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
         setup_test_env
+        _use_rootcheck_stub
 
         stdbuf() {
             while [[ $# -gt 0 ]]; do
@@ -216,6 +231,7 @@ test_smallest_shows_requested_number_of_datasets() {
     output=$(
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
         setup_test_env
+        _use_rootcheck_stub
 
         stdbuf() {
             while [[ $# -gt 0 ]]; do

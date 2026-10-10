@@ -25,6 +25,11 @@
 #   $fromsnap      optional bare from-snapshot name for the incremental
 #                  catch-up send (no leading @); empty = full -Rw send
 #   $pv_rate_limit optional pv -L rate (e.g. 100m); empty = unlimited
+#   $restart_hint optional name of the operation that should be re-run to
+#                resume an interrupted transfer, used in the failure
+#                remediation text (default: Migrate Pool). Callers that drive
+#                this engine for another operation (e.g. sever-vm-clone) set
+#                it so the re-run hint names them instead of Migrate Pool.
 #
 # Returns: 0 on success; 8 on transfer failure (the destination resume token
 #          is kept so the transfer can be resumed by a re-run).
@@ -48,6 +53,7 @@ source_helper transfer-lib.sh
 zfs_migrate_send() {
     local sourcefs="${sourcefs:-}" destfs="${destfs:-}" snapname="${snapname:-}"
     local fromsnap="${fromsnap:-}"
+    local restart_hint="${restart_hint:-Migrate Pool}"
     if [[ -z "$sourcefs" || -z "$destfs" || -z "$snapname" ]]; then
         log_msg "FATAL: zfs-migrate-send requires sourcefs, destfs, and" \
             "snapname to be set."
@@ -87,8 +93,8 @@ zfs_migrate_send() {
                         "Y" "$datatosend" "" "$destfs"; then
                     return 0
                 fi
-                log_msg "FATAL: Migrate Pool transfer interrupted; re-run" \
-                    "Migrate Pool to resume from the receive resume token" \
+                log_msg "FATAL: ${restart_hint} transfer interrupted; re-run" \
+                    "${restart_hint} to resume from the receive resume token" \
                     "on $destfs."
                 return 8
             fi
@@ -145,8 +151,8 @@ zfs_migrate_send() {
             return 0
         fi
     fi
-    log_msg "FATAL: Migrate Pool transfer interrupted; re-run Migrate Pool" \
-        "to resume from the receive resume token on $destfs."
+    log_msg "FATAL: ${restart_hint} transfer interrupted; re-run" \
+        "${restart_hint} to resume from the receive resume token on $destfs."
     return 8
 }
 

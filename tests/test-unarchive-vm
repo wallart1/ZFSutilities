@@ -289,3 +289,4 @@ test_original_vmid_preserved_without_conflict
 
 test_summary
 rm -rf "${_unarchive_vm_lock_dir:-}"
+teardown_test_env

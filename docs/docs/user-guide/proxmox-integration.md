@@ -80,7 +80,7 @@ pools added earlier.
 | **Rename VM disk zvol**                         | Use [`rename-vm-disk`](../commands-and-modules/commands.md#rename-vm-disk)                                       | Script only: [`rename-vm-disk`](../commands-and-modules/commands.md#rename-vm-disk)      |
 | **Clone VM (full copy)**                        | Proxmox GUI: right-click VM → Clone (Mode: Full Clone)                                                           | Script only: [`clone-vm`](../commands-and-modules/two-node.md#clone-vm-both)             |
 | **Clone VM (linked/ZFS clone)**                 | Proxmox GUI: right-click VM → Clone (Mode: Linked Clone)                                                         | Script only: [`zfsclone-vm`](../commands-and-modules/two-node.md#zfsclone-vm-both)       |
-| **Promote clone (detach from origin snapshot)** | Not exposed in Proxmox GUI — use [`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both) | [`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both)          |
+| **Sever clone (detach from origin snapshot)** | Not exposed in Proxmox GUI — [`sever-vm-clone`](../commands-and-modules/two-node.md#sever-vm-clone-both) or the GTK GUI Datasets tab's **Sever Clone** button | [`sever-vm-clone`](../commands-and-modules/two-node.md#sever-vm-clone-both) or the GTK GUI Datasets tab's **Sever Clone** button |
 | **Snapshots (Proxmox-managed)**                 | Proxmox GUI: Snapshots tab → Take Snapshot                                                                       | Not available (no ZFS awareness)                                                         |
 | **Snapshots (ZFSutilities)**                    | ZFSutilities GTK GUI or scripts                                                                                  | ZFSutilities GTK GUI or scripts                                                          |
 | **View pool status**                            | Proxmox GUI: node → Disks → ZFS, or ZFSutilities GUI                                                             | ZFSutilities GUI or `zpool` on storage host                                              |
@@ -391,7 +391,7 @@ Proxmox offers both clone types through its GUI:
     ZFSutilities clone scripts. The Proxmox GUI handles everything
     automatically — disk creation, VM config, MAC regeneration. The scripts
     provide the same result but with more control over snapshot naming and
-    clone lifecycle management via [`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both) and [`list-vm-disks`](../commands-and-modules/two-node.md#list-vm-disks-both).
+    clone lifecycle management via [`sever-vm-clone`](../commands-and-modules/two-node.md#sever-vm-clone-both) and [`list-vm-disks`](../commands-and-modules/two-node.md#list-vm-disks-both).
 
     If you use Proxmox GUI clones, Proxmox manages the clone dependency
     chain. If you use [`zfsclone-vm`](../commands-and-modules/two-node.md#zfsclone-vm-both),
@@ -523,7 +523,7 @@ A VM with the specified `dst_vmid` already exists in Proxmox. Choose a different
 #### "ZFS clone dependents — cannot delete"
 
 [`zfsdelfs`](../commands-and-modules/commands.md#zfsdelfs) is blocking deletion because a zvol has clone dependents. Run
-[`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both)
+[`sever-vm-clone`](../commands-and-modules/two-node.md#sever-vm-clone-both)
 on one of the dependent VMs first, then retry.
 
 ### Backup Considerations
@@ -557,8 +557,11 @@ The script verifies that the VM is stopped — if the VM is running, it
 reports that, tells you the VM must be stopped first, and terminates without
 making any changes. It then discovers any clone VMs that still depend on its
 zvol snapshots and, if any exist, reports the identity of the disks with
-dependent clones and asks whether you want the script to promote them
-(severing the clone dependencies). It then
+dependent clones and asks whether you want the script to sever them
+(copying each dependent clone VM's zvols into fresh origin-free zvols by
+invoking [`sever-vm-clone`](../commands-and-modules/two-node.md#sever-vm-clone-both)
+per dependent clone VM — those clone VMs must be stopped too, or the script
+terminates). It then
 reads the Proxmox VM config to determine which disks are currently attached
 and archives only those referenced zvols. Any zvols that match the VM ID but
 are no longer referenced in the config are left behind with a warning, so you
@@ -709,6 +712,6 @@ hardware settings). For everything storage-related, use ZFSutilities:
   [`rename-vm-disk`](../commands-and-modules/commands.md#rename-vm-disk))
 - **All clone operations**: [`zfsclone-vm`](../commands-and-modules/two-node.md#zfsclone-vm-both),
   [`clone-vm`](../commands-and-modules/two-node.md#clone-vm-both),
-  [`promote-vm-clone`](../commands-and-modules/two-node.md#promote-vm-clone-both)
+  [`sever-vm-clone`](../commands-and-modules/two-node.md#sever-vm-clone-both)
 - **Pool and dataset monitoring**: ZFSutilities GTK GUI
 - **Backup, snapshot retention, offsite**: ZFSutilities scripts and GUI

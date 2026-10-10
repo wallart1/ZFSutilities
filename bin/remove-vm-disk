@@ -95,7 +95,8 @@ fi
 if is_two_node && [[ "$my_host" != "$storage_host" ]]; then
     log_msg "INFO: Connecting to $storage_host for storage operations..."
     remote_script=$(remote_zfsutility_script "$storage_host" "remove-vm-disk")
-    ssh -t root@"$storage_host" "$remote_script '$pool' '$vmid' '$disknum' --skip-rescan" \
+    ssh -t root@"$storage_host" \
+        "$(input_hold_env_prefix)$remote_script '$pool' '$vmid' '$disknum' --skip-rescan" \
         || {
             log_msg "FATAL: Storage operations failed on $storage_host"
             exit 1

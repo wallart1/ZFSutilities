@@ -5,21 +5,26 @@ Snapshot management (delete, hold, rollback) is handled inline rather than
 in a separate window, so holds are always visible in the tree.
 """
 
+import re
+import shlex
 import subprocess
 
 import gi
 import node_config
 
 gi.require_version("Gtk", "3.0")
+from command_builders import BashStep
 from feature_config import get_workload_profiles
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     UNMOUNTED_FG,
     TreeSearch,
     _row_fg_color,
+    add_scrolled_text_view,
     append_treeview_copy_items,
     build_full_dataset_name,
     configure_treeview_column,
+    create_scrolled_dialog,
     dataset_name_cell_func,
     expand_tree_recursively,
     get_expanded_rows,
@@ -31,6 +36,7 @@ from gui_helpers import (
     setup_row_scroll,
 )
 from logging_config import log_msg
+from path_utils import resolve_local_bin
 from profile_dialogs import (
     _topology_has_special_vdev,
     on_apply_profile,
@@ -409,6 +415,51 @@ def _is_unmountable(item, volume_loop_attached):
     return item.get("mounted", False)
 
 
+# VM disk zvols are named vm-<vmid>-disk-<n>; sever-vm-clone derives the owning
+# VM from this shape, and the Datasets page uses it to name the VM(s) a
+# severance will touch.
+_VM_DISK_BASENAME_RE = re.compile(r"^vm-(\d+)-disk-\d+$")
+
+
+def vmid_of_dataset(dataset_name):
+    """Return the VM id owning a vm-<vmid>-disk-<n> dataset name, or None."""
+    match = _VM_DISK_BASENAME_RE.match(dataset_name.rsplit("/", 1)[-1])
+    return match.group(1) if match else None
+
+
+def is_clone_dataset(item):
+    """Return True when *item* is a clone dataset Sever Clone can act on.
+
+    A clone dataset is a pool/dataset row whose Origin column names a
+    snapshot. Severance is defined for VM disk zvols, so a row that carries a
+    zfs type must be a volume; rows built without one (test fixtures, older
+    callers) are judged by the vm-<id>-disk-<n> basename instead.
+    """
+    if item.get("type") not in ("pool", "dataset"):
+        return False
+    if (item.get("origin") or "") in ("", "-"):
+        return False
+    zfs_type = item.get("zfs_type")
+    if zfs_type is None:
+        return vmid_of_dataset(item["name"]) is not None
+    return zfs_type == "volume"
+
+
+def sever_clone_datasets(items):
+    """Return the unique clone dataset names in *items*, in selection order.
+
+    Only the selected clone datasets are returned — never the other disks of
+    a VM — so the action cannot reach beyond what the operator selected.
+    """
+    names = []
+    for item in items:
+        if not is_clone_dataset(item):
+            continue
+        if item["name"] not in names:
+            names.append(item["name"])
+    return names
+
+
 def update_ds_button_sensitivity(app):
     """Enable/disable action buttons based on the current selection."""
     repo = app.ctx.zfs_repository
@@ -463,6 +514,8 @@ def update_ds_button_sensitivity(app):
 
     can_show_big_stuff = len(items) == 1 and types == {"pool"}
 
+    can_sever_clone = bool(items) and any(is_clone_dataset(i) for i in items)
+
     can_apply_profile = len(items) == 1 and _is_tunable(items[0])
     can_rewrite = (
         bool(items)
@@ -486,6 +539,7 @@ def update_ds_button_sensitivity(app):
         ("_ds_manage_profiles_btn", True),
         ("_ds_expand_selected_btn", can_expand_selected),
         ("_ds_showbigstuff_btn", can_show_big_stuff),
+        ("_ds_sever_clone_btn", can_sever_clone),
     ]:
         btn = getattr(app, attr, None)
         if btn:
@@ -582,6 +636,210 @@ def on_datasets_rewrite_data(app):
 def on_datasets_manage_profiles(app):
     """Open the workload profile manager."""
     show_manage_profiles_dialog(app)
+
+
+# ---------------------------------------------------------------------------
+# Sever Clone (sever-vm-clone)
+# ---------------------------------------------------------------------------
+# A clone's origin snapshot pins its space for as long as any dataset
+# references it; `zfs promote` inverts the clone relationship rather than
+# severing it. sever-vm-clone instead copies each selected clone zvol in full
+# into a fresh, origin-free zvol and swaps it in under the same name, so
+# Proxmox configs and iSCSI references keep working. The GUI acts on the
+# selected dataset(s) only — never on the unselected disks of a VM — and the
+# script re-verifies everything (locks, stopped VMs, space) before it copies.
+
+# Custom dialog response id for the Sever button; distinct from the negative
+# Gtk.ResponseType values (same convention as disk_wipe's wipe response).
+_RESPONSE_SEVER = 14
+# The word that must be typed to arm the Sever button.
+_SEVER_CONFIRM_WORD = "sever"
+
+
+def build_sever_clone_command(datasets):
+    """Build the sever-vm-clone argv for *datasets*.
+
+    The GUI-side dialog is the typed confirmation; the script's own remaining
+    questions (transfer mode, tight-space holding pool, origin-snapshot
+    destruction) are asked through the numbered input-hold prompts.
+    """
+    script = resolve_local_bin("sever-vm-clone") or "sever-vm-clone"
+    return [script, *datasets]
+
+
+def _sever_dialog_rows(items):
+    """Return one description line per selected clone dataset, plus the VMs."""
+    lines = []
+    vmids = []
+    for item in items:
+        if not is_clone_dataset(item):
+            continue
+        vmid = vmid_of_dataset(item["name"])
+        if vmid is None:
+            owner = "owning VM unknown (name is not vm-<id>-disk-<n>)"
+        else:
+            owner = f"owning VM {vmid}"
+            if vmid not in vmids:
+                vmids.append(vmid)
+        lines.append(f"{item['name']}\n    origin: {item.get('origin') or '-'}\n    {owner}")
+    return lines, vmids
+
+
+def _sever_vm_phrases(vmids):
+    """Return (short VM list, stopped-phrase subject) for the owning VM ids."""
+    if not vmids:
+        return "no recognizable VM", "the VM(s) that use these disks"
+    names = [f"VM {v}" for v in vmids]
+    if len(names) == 1:
+        return names[0], names[0]
+    return ", ".join(names), ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def show_sever_clone_dialog(app, items):
+    """Run the typed-confirmation dialog for severing the selected clones.
+
+    Names exactly the selected dataset(s) and their owning VM(s), states that
+    severance is a full copy and that the VM(s) must be stopped for the
+    cutover phase, and shows the exact command that will run. The Sever button
+    stays insensitive until the word "sever" is typed. Returns True when the
+    user confirms, False when the dialog is cancelled.
+    """
+    lines, vmids = _sever_dialog_rows(items)
+    vm_list, stopped_subject = _sever_vm_phrases(vmids)
+    command = build_sever_clone_command(sever_clone_datasets(items))
+
+    dialog, content = create_scrolled_dialog(
+        "Sever Clone",
+        app,
+        [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)],
+        size=(640, 520),
+    )
+    sever_btn = dialog.add_button("Sever", _RESPONSE_SEVER)
+    sever_btn.set_sensitive(False)
+
+    header = Gtk.Label()
+    header.set_markup(
+        f"<b>About to sever {len(lines)} clone dataset(s) "
+        f"({vm_list}) from their origin snapshots.</b>"
+    )
+    header.set_halign(Gtk.Align.START)
+    content.pack_start(header, False, False, 0)
+    content.pack_start(Gtk.Separator(), False, False, 0)
+
+    add_scrolled_text_view(content, "\n\n".join(lines), min_height=120)
+
+    detail = Gtk.Label()
+    detail.set_markup(
+        "Severance is a <b>full copy</b>: every used byte of each selected disk is "
+        "read and written again, so it needs free space for the copy (in the same "
+        "pool, or in an intermediate holding pool you name when space is tight).\n\n"
+        f"<b>{stopped_subject} must be stopped for the cutover phase</b>, when the "
+        "original zvol is destroyed and the fresh copy is swapped in under the same "
+        "name — Proxmox configs and iSCSI references keep working because the name "
+        "does not change.\n\n"
+        "Unlike <tt>zfs promote</tt>, severance does not invert the clone "
+        "relationship: the origin snapshot is released for destruction once no "
+        "clone references it, and that is where its pinned space comes back.\n\n"
+        "sever-vm-clone's remaining questions (transfer mode, holding pool, "
+        "origin-snapshot destruction) appear as prompts in the log panel."
+    )
+    detail.set_halign(Gtk.Align.START)
+    detail.set_line_wrap(True)
+    content.pack_start(detail, False, False, 0)
+    content.pack_start(Gtk.Separator(), False, False, 0)
+
+    command_label = Gtk.Label(label="Exact command that will run:")
+    command_label.set_halign(Gtk.Align.START)
+    content.pack_start(command_label, False, False, 0)
+    command_buf = Gtk.TextBuffer()
+    command_buf.set_text(shlex.join(command))
+    command_tv = Gtk.TextView(buffer=command_buf)
+    command_tv.set_editable(False)
+    command_tv.set_cursor_visible(False)
+    command_tv.set_monospace(True)
+    content.pack_start(command_tv, False, False, 0)
+
+    typed_hint = Gtk.Label(
+        label=f"Type '{_SEVER_CONFIRM_WORD}' exactly to enable Sever. "
+        "This copies and swaps live VM disk zvols."
+    )
+    typed_hint.set_halign(Gtk.Align.START)
+    content.pack_start(typed_hint, False, False, 0)
+    typed_entry = Gtk.Entry()
+    typed_entry.set_hexpand(True)
+    content.pack_start(typed_entry, False, False, 0)
+
+    def _on_typed_changed(entry):
+        sever_btn.set_sensitive(entry.get_text().strip().lower() == _SEVER_CONFIRM_WORD)
+
+    typed_entry.connect("changed", _on_typed_changed)
+
+    dialog.show_all()
+    try:
+        response = dialog.run()
+        return (
+            response == _RESPONSE_SEVER
+            and typed_entry.get_text().strip().lower() == _SEVER_CONFIRM_WORD
+        )
+    finally:
+        dialog.destroy()
+
+
+def on_datasets_sever_clone(app):
+    """Sever the selected clone zvols from their origin snapshots.
+
+    Acts only on the selected clone dataset(s); the other disks of a VM are
+    never touched. sever-vm-clone runs as a runner step so its prompts reach
+    the operator through the numbered input-hold panel and its progress lands
+    in the log panel.
+    """
+    items = get_tree_selection_items(app.datasets_view)
+    datasets = sever_clone_datasets(items)
+    if not datasets:
+        log_msg("WARN: Select one or more clone datasets to sever")
+        return
+
+    runner = getattr(app, "dataset_runner", None)
+    if runner is None:
+        log_msg("WARN: Dataset runner not available")
+        return
+    if runner.running:
+        log_msg("WARN: A dataset action is already running")
+        return
+
+    if not show_sever_clone_dialog(app, items):
+        log_msg("INFO: Sever clone cancelled")
+        return
+
+    step = BashStep(
+        build_sever_clone_command(datasets),
+        f"Sever clone {datasets[0]}" if len(datasets) == 1 else f"Sever {len(datasets)} clones",
+        is_rsync=False,
+        fatal=True,
+    )
+
+    def _on_sever_complete(cancelled=False, rc=None):
+        update_ds_button_sensitivity(app)
+        refresh_datasets_page(app)
+        if cancelled:
+            log_msg(f"INFO: Sever clone cancelled ({len(datasets)} dataset(s))")
+            return
+        if rc:
+            log_msg(
+                f"WARN: Sever clone failed (rc={rc}); if a cutover was interrupted, "
+                "run sever-vm-clone with the state file it printed to resume or roll back"
+            )
+            return
+        log_msg(f"INFO: Sever clone complete for {len(datasets)} dataset(s)")
+
+    runner.operation_detail = (
+        f"Sever clone: {datasets[0]}"
+        if len(datasets) == 1
+        else f"Sever clone: {len(datasets)} datasets"
+    )
+    runner.set_steps([step])
+    update_ds_button_sensitivity(app)
+    runner.start(on_complete=_on_sever_complete)
 
 
 # ---------------------------------------------------------------------------

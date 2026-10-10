@@ -328,7 +328,8 @@ if is_two_node && [[ "$my_host" != "$storage_host" ]]; then
     [[ "$encrypted_flag" == true ]] && enc_flag=" --encrypted"
     remote_script=$(remote_zfsutility_script "$storage_host" "new-vm-disk")
     ssh -t root@"$storage_host" \
-        "$remote_script '$pool' '$vmid' '$disknum' '$size' --skip-rescan${enc_flag}" \
+        "$(input_hold_env_prefix)$remote_script '$pool' '$vmid' '$disknum' '$size'" \
+        "--skip-rescan${enc_flag}" \
         || {
             log_msg "FATAL: Storage operations failed on $storage_host"
             exit 1

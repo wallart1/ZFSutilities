@@ -28,7 +28,7 @@ here. Pruned history remains recoverable from git.
 - `tests/test-archive-vm`: `ask_yn` cannot be mocked — sourcing `archive-vm`
   re-runs bashinit via `~/bashinit`, which unconditionally redefines it — so
   dialog answers are fed via stdin in prompt order. With dependent clones
-  present, the promote question is the first stdin consumer, before the
+  present, the severance question is the first stdin consumer, before the
   archive-base prompt.
 - `docs/docs/commands-and-modules/modules.md`: nested (lettered) sub-lists
   need 4-space indentation; at 3 spaces Python-Markdown flattens the nested
@@ -2118,3 +2118,765 @@ pre-existing issues surfaced.
 Step 6: codebase frozen at this point. PREEXISTING.md holds 2 entries,
 both non-actionable by design (Zensical 1.x wait; infra-vdev planning
 UI in abeyance per user decision).
+
+## 2026-10-09 — promote-vm-clone 211 two-node failure forensics
+
+`sudo promote-vm-clone 211` on tweety (both nodes freshly switched to
+0.120.0 at 14:25/14:26) promoted vm-211-disk-0 and then died silently
+before disk-1: "FATAL: Promotion failed on stewie" with no remote
+output at all. Root cause proven by repro (production zfslockmanager
+sourced with stubs): `zfslock_release` ends with
+`temp=$(grep -v "^${lock_id}$" "$pidfile")` — releasing the LAST lock
+held by a process empties the grep output, rc=1, and the remote
+heredoc's `set -e` kills bash mid-loop with zero output. Forensic
+chain: tweety local log 14:35:38→14:35:48; stewie .locks mtime
+47.997 (disk-0 lockfile rm inside release), .pids mtime 47.999 (EXIT
+trap), no session log on stewie (bash -s heredocs fail bashinit's
+BASH_SOURCE[1]==$0 log-file condition), no zfs error text ever
+(release dies before the ✓ log lines, which are ordered AFTER release
+in the remote heredoc — unlike the single-node branch). VM 211 being
+running is unrelated: promote is metadata-only and disk-0 promoted
+under the running VM.
+
+Recovery for 211: re-run promote-vm-clone 211 (lists only disk-1 now;
+will promote it then FATAL again at release — work complete despite
+the message), or `sudo zfs promote threeamigos/proxmox/vm-211-disk-1`
+on stewie directly.
+
+Bug family — bare `zfslock_release` under `set -e` in two-node remote
+heredocs: promote-vm-clone:142 (live failure), zfsclone-vm:459-460
+(dies before udev/backstore phase), move-vm-disk:346-347, rename-vm-disk
+376-377/564-573, unarchive-vm:500. clone-vm immune (success-path
+releases are local, outside set -e). Same-family latent:
+`((removed++))` in zfslock_cleanup_stale (first stale removal also
+kills under set -e). Fix not yet planned/approved.
+
+## 2026-10-09 — set -e lock-release fix implemented (uncommitted)
+
+User approved the proposed fix after the forensics above (and re-promoted
+vm-211 disk-1 successfully, matching the prediction — FATAL after the work
+completed). Changes:
+
+- bin/zfslockmanager: zfslock_release's pidfile rewrite grep gains `|| true`
+  (grep exits 1 when the released lock is the pidfile's last line — killed
+  set -e callers silently); zfslock_cleanup_stale's `((removed++))` →
+  `removed=$((removed + 1))` (post-increment returns status 1 on the first
+  removal). Fixes the whole two-node heredoc family at the library level
+  (promote-vm-clone, zfsclone-vm, move-vm-disk, rename-vm-disk,
+  unarchive-vm remote branches).
+- bin/promote-vm-clone: both branches now log the ✓ lines BEFORE
+  zfslock_release, so a release-time failure can never suppress the success
+  record (this ordering is what made the 211 failure totally silent).
+- tests/test-zfslockmanager: new test_set_e_safety (3 tests) — child scripts
+  mirror the remote heredocs (source manager, then set -e) and assert a
+  SURVIVED marker; red/green proven against a scratch copy with both fixes
+  reverted (all three fail) vs the fixed tree (suite green).
+- docs: lock-manager.md notes the set -e safety contract.
+
+Test-authoring gotcha (cost a long debug loop): heredoc escape processing
+applies to the heredoc's own text, NOT to values arriving via parameter
+expansion — a body string passed as `"\$zfslock_id"` lands in the generated
+child script verbatim with the backslash, so the child released the literal
+string `$zfslock_id` (nonexistent file → early return 0) and the tests
+false-passed. Single-quoted body args must use plain `$var`. Also:
+`_bg_lock_start`-style `\$` escapes are correct only in heredoc source text.
+Coverage gap noted: no test suite exists for zfsclone-vm at all (suite name
+in run-tests fails as "No such file or directory" — known runner quirk).
+
+## 2026-10-09 — backup property-fidelity design: user decisions (no code)
+
+Continues the backup-fidelity assessment/design thread (backups are data-only
+`-cw` everywhere; property-manifest + restore-replay design under discussion).
+Decisions from the user this turn:
+
+- archive-vm as evidence for 2.4.4 `zfs receive -o volblocksize` is
+  DOWNGRADED to unverified — it hardly runs and has separate bugs in flight;
+  stewie's 2.4.4 zfs-recv(8) man page never mentions volblocksize. It is an
+  itf-matrix question, not a fact.
+- ZFS-behavior validation belongs in itf guests (any OS installable), not the
+  dev host. Matrix: -o volblocksize receive per version (unencrypted zvol),
+  volblocksize-on-filesystem, no-reblock/recompress on receive, keylocation
+  reset + set/load-key, receive-as-encrypted, encrypted-raw volblocksize
+  refusal, encryptionroot-self on raw receive.
+- Dev host (Linux Mint 22.3 = noble base) KEEPS OpenZFS 2.2.2 deliberately as
+  the legacy/compat leg of the matrix — noble ships 2.2.x for its lifetime; a
+  real upgrade means OS base change or self-owned DKMS, rejected for the
+  shared dev host. Stay SRU-patched (backdated ≠ unpatched).
+- Code must track OS/ZFS capabilities and degrade: version-gated caps table
+  keyed on min(userland, kmod) — tweety is a real 2.3.9-userland/2.4.4-kmod
+  split; bash-side helper for the engine, app.ctx.zfs_caps for the GUI.
+- The encryptionroot-receive behavior (received copy = its own encryptionroot,
+  keylocation→prompt) is undocumented upstream — document it in OUR docs; not
+  code-fixable.
+- "Restore with encryption" (receive unencrypted source as encrypted via -o
+  on initial receive) APPROVED as a feature.
+
+## 2026-10-09 — sever-vm-clone task 1.1: skeleton, guards, discovery (no code beyond)
+
+Drop-promote workflow, leaf task 1.1 (workflow dwfrun-26207719):
+- bin/sever-vm-clone created (400 lines): vm-disk family bootstrap (bashinit,
+  node-lib, rootcheck, zfslockmanager init, qm guard), vmid and dataset
+  argument modes with validation, two-node delegation to the compute host
+  modeled on promote-vm-clone, discovery gather (single-node local; two-node
+  ssh heredoc on the storage host) emitting tagged VOL/NOTVOL/MISSING records
+  plus a --POOLS-- free-space section, plan display (per disk: zvol, owning
+  VM, origin, used vs referenced full-copy size; per pool: largest-disk x 1.1
+  free verdict), same-pool-temp-namespace vs holding-pool recommendation,
+  ask_yn confirmation gate, and empty sever_transfer()/sever_cutover()
+  extension-point stubs for the later transfer/cutover tasks.
+- Design note: the space math uses `referenced`, not `used` — a full copy of
+  a clone writes every block the clone references (shared + unique); `used`
+  alone would badly understate a fresh clone's copy size. Both are shown.
+- sever-vm-clone added to tests/test-proxmox-required-guards GUARDED_SCRIPTS
+  and tests/test-lock-coverage (bootstrap entries only; acquire-pattern
+  entries land with the transfer task). shellcheck clean (0.9.0).
+- Smoke-tested all interface paths against fake zfs/zpool/qm/ssh under /tmp
+  (usage/no-args, vmid found + not-found, dataset skip INFO lines for
+  non-clone/non-zvol, MISSING abort, dedupe, holding-pool recommendation,
+  confirm y/n, two-node delegation quoting, two-node ssh gather both modes).
+- Pre-existing discovered: bare `rootcheck` call is advisory-only family-wide
+  (returns 1, callers ignore) — recorded in PREEXISTING.md.
+- Docs intentionally untouched: the promote-vm-clone removal/reference sweep
+  is a separate workflow task that owns those files.
+
+## 2026-10-09 — sever-vm-clone task 3.1: promote-vm-clone deleted, archive-vm re-pointed
+
+Drop-promote workflow, leaf task 3.1 (workflow dwfrun-26207719):
+- bin/promote-vm-clone deleted outright (working-tree rm; its uncommitted
+  lock-release-order tweak from the earlier session is subsumed — zfs promote
+  severs nothing, it inverts the clone and pins origin-snapshot space).
+- bin/archive-vm re-pointed end to end: header and usage step 3 now describe
+  severance; the Step-1 dependent-clone offer now (1) verifies every dependent
+  clone VM is stopped via `qm status` first, aborting FATAL with stop-and-
+  rerun guidance if any runs (severance swaps zvols under live names), then
+  (2) invokes `sever-vm-clone <clone_vmid>` per clone VM via
+  find_zfsutility_script, aborting on its failure. Declining keeps the warning,
+  reworded to name the tool: removal may fail while snapshots are held by
+  clones; sever them first with sever-vm-clone.
+- tests/test-archive-vm: promote stub → sever-vm-clone stub (records
+  SEVER:<vmid> in capture/severances); the two promote tests became sever
+  equivalents — the confirm test now uses two clone VMs and asserts exactly
+  one invocation each before the archive proceeds — plus a new test for the
+  running-clone abort (qm mock honors _mock_clone_vm_status for every VM
+  except the archived one via _mock_archive_vmid).
+- Promote rows removed from tests/test-lock-coverage (the sever-vm-clone
+  bootstrap rows from task 1.1 stay) and the promote entry removed from
+  tests/test-proxmox-required-guards GUARDED_SCRIPTS (sever-vm-clone stays).
+- Remaining promote-vm-clone references (bin/zfsclone-vm, zfs-diagnose-busy,
+  zfsdelfs, python/gui_helpers.py, docs/, PREEXISTING.md's rootcheck example)
+  are owned by other tasks in this workflow; not touched here.
+
+## 2026-10-09 — sever-vm-clone task 3.2: guidance strings re-pointed to severance
+
+Drop-promote workflow, leaf task 3.2 (workflow dwfrun-26207719):
+- bin/zfsclone-vm: header note (line 12) and both "Done" blocks (single-node
+  ~314, two-node ~578) now read "To sever the clone dependency before
+  retiring VM <srcvmid>: sever-vm-clone <dstvmid>"; "cut dependency"/
+  promote-vm-clone wording gone.
+- bin/zfsdelfs: both FATAL clone-dependent gates (~154, ~165) now say
+  "Use sever-vm-clone to sever the dependencies first."
+- bin/zfs-diagnose-busy: both WARN clone-dependent actions (58, 68) now say
+  "Use 'sever-vm-clone' to sever the dependencies first." — the 'zfs promote'
+  alternative is dropped entirely, per the task.
+- python/gui_helpers.py: both BusyReason clone actions (1156, 1172) match the
+  zfs-diagnose-busy wording; quoted-tool style preserved.
+- Grepped tests/ (bash + python + golden) for "promote-vm-clone", "zfs
+  promote", "cut dependenc*", "To cut", "retiring": no test asserts the old
+  strings, so no assertion updates were needed. tests/integrated/cache hits
+  are an unrelated PVE rootfs cache.
+- Docs (docs/docs/messages/index.md rows 505/506/801 etc.) still name
+  promote-vm-clone — owned by the separate docs sweep task, not touched here.
+
+## 2026-10-09 — sever-vm-clone task 1.2: Phase 1 transfer via the migration engine
+
+Drop-promote workflow, leaf task 1.2 (workflow dwfrun-26207719):
+- bin/sever-vm-clone: sever_transfer() implemented on top of the task-1.1
+  skeleton. One bucket-less snapshot name per run, sever-$(snapname_timestamp)
+  (pinned in tests/test-snapshot-names' producer table); per selected disk,
+  sequentially under 'w' zfslocks on the source zvol and the temp parent: the
+  snapshot (reused if it already exists), a full copy through the migration
+  engine, refreservation=none on the received zvol (project zvols are sparse;
+  plain receives re-reserve), and the received snapshot's GUID
+  (zfs get -Hp -o value guid). The temp parent <pool>/proxmox/sever_<vmid>
+  (zvol basename when the name carries no VM id) is created once under a 'w'
+  lock on <pool>/proxmox; the namespace is deterministic so interrupted runs
+  find their receive resume tokens and re-run (a resumed stream that completes
+  under an older @sever-* name is detected, WARNed, and recorded under that
+  name). The whole storage-side sequence lives in one worker script
+  (sever_storage_transfer_script) run as a child shell — directly via
+  process substitution in single-node mode (interactive lock resolution and
+  terminal pv progress preserved), streamed over ssh bash -s in two-node mode
+  (move-vm-disk's storage_move_script pattern; remote conflicts abort
+  headless with holder details). Results cross back via a records file
+  (<zvol> <temp zvol> <snap> <guid> per line) into sev_temp_name /
+  sev_recv_snap / sev_snap_guid for the cutover phase, which remains the
+  sever_cutover() extension point.
+- bin/zfs-migrate-send: failure remediation text is caller-aware via
+  $restart_hint (default 'Migrate Pool', so wizard output, tests, and golden
+  text are unchanged); sever-vm-clone's worker assigns restart_hint=
+  sever-vm-clone so the re-run hint names the severance. Header documents
+  the variable. Docs rows updated surgically (messages/index.md zfs-migrate-send
+  FATAL row; commands-and-modules/commands.md exit-code 8 row).
+- Space pre-check (1.1 headroom) emits a WARN per deficient pool at the start
+  of the transfer phase and proceeds same-pool (holding-pool mode is a later
+  task); the WARN says a full pool suspends the receive with a resume token.
+- Smoke-tested the worker end to end with mocked zfs + stubbed engine under
+  /tmp/severtest: fresh two-disk run, idempotent re-run (snapshot reuse,
+  namespace kept), resume edge (old-snapshot completion), and lock-conflict
+  abort from a concurrent holder (holder details logged, no snapshot taken,
+  locks left clean).
+- Checks: shellcheck bin/sever-vm-clone bin/zfs-migrate-send clean;
+  tests/run-tests test-zfs-migrate-send test-transfer-lib test-lock-coverage
+  test-proxmox-required-guards test-snapshot-names — all pass (re-run after
+  the sibling promote-deletion task landed in the shared tree).
+
+## 2026-10-09 — sever-vm-clone task 1.3: Phase 2 cutover, name-preserving swap (single-node)
+
+Drop-promote workflow, leaf task 1.3 (workflow dwfrun-26207719):
+- bin/sever-vm-clone: sever_cutover() implemented (single-node; two-node
+  keeps the WARN-and-stop stub for the later iSCSI task). Gates first that
+  every owning VM (vm-<id>-disk-<n> names) is stopped via qm status — FATAL
+  with guidance naming the exact --continue command; zvols whose names carry
+  no VM id WARN and proceed (nothing to gate; a busy zvol fails the destroy
+  safely). Then per disk, sequentially: bucket-less @sever-<ts>-cutover
+  snapshot, catch-up incremental through the migration engine's fromsnap
+  path (zfs send -RIw @transfer→@cutover; zfs-migrate-send already supported
+  $fromsnap), pre-destroy GUID verify of the cutover snapshot source-vs-copy
+  (mismatch aborts with nothing destroyed; also guards the crash-between-
+  receive-and-marker case by reusing an already-received identical snapshot
+  instead of erroring into the receive), holds capture+release on the
+  original via zfsreapplyholds with the no-lock flag, destroy of the
+  original, zfs rename of the temp into the original name, udev settle +
+  /dev/zvol block-node wait (SEVER_ZVOL_DEV_PREFIX test knob, the
+  ZFSLOCK_DIR pattern), post-swap GUID check against the recorded value, and
+  reapply of the captured holds onto the swapped-in zvol (replication
+  preserves snapshot identity, so the same names/GUIDs exist). Locks: 'x'
+  (destroy-class) on both the original and temp names for the whole per-disk
+  sequence — no w→x upgrade gap between verify and swap. Empty temp
+  namespaces removed afterwards (plain destroy only succeeds when empty).
+- Cutover state file (/tmp/sever-vm-clone-<key>-<epoch>.state, the
+  move-vm-disk pattern) written BEFORE the VM gate so an abort leaves a
+  --continue handle that skips the long re-copy; per-disk phase markers
+  staged→catchup_done→verified→holds_captured→holds_released→
+  source_destroyed→temp_renamed→device_ready→swapped→done, each transition
+  persisted. --continue replays any disk from its marker (every step
+  idempotent: existence checks before each mutation, GUID-equality reuse of
+  a received cutover snapshot, unknown markers replay from staged);
+  --rollback reverts everything before the destroy window (temp copies
+  destroyed, all @sever-* snapshots removed from the originals, released
+  holds reapplied, namespaces/state cleaned) and refuses past it with
+  run---continue guidance. Recovery modes are single-node only, skip
+  discovery/transfer entirely, and never delegate. State file removed on
+  full success (every recovery path is then impossible or a no-op).
+- Session-tooling gotcha worth remembering: Edit/Write payloads dropped
+  characters twice this session (a quote in a mock; 'er' from
+  sever_state_file → sev_state_file in nine spots) — shellcheck passed both
+  times; caught only by smoke-running the real flow and an identifier
+  audit. Re-verify authored files with grep against intended identifiers
+  after writing.
+- Smoke matrix (mock zfs/zpool/qm + real engine + real reapplyholds under
+  /tmp/sevtest2, fresh world per scenario): two-disk happy path incl. hold
+  reapply and GUID-preserved snapshot history; VM-running gate abort +
+  --continue completing; injected rename failure landing exactly in the
+  destroy→rename crash window + --continue recovering; injected GUID offset
+  aborting pre-destroy with originals intact; injected destroy failure at
+  holds_released + --rollback restoring the pre-run world; --rollback
+  refused past the destroy; dataset-mode orphan zvol WARN-and-proceed;
+  already-received cutover snapshot skip branch; recovery-argument and
+  malformed-state FATALs; rollback with a running VM WARNs and proceeds.
+- Tests pinned to the new code: tests/test-snapshot-names producer row
+  bumped (sever-vm-clone now has two sever-$(snapname_timestamp) call
+  sites: transfer + cutover); tests/test-lock-coverage gained the cutover
+  source/copy 'x' rows and the rollback source 'x' row.
+- Checks: shellcheck bin/sever-vm-clone clean; tests/run-tests
+  test-snapshot-names test-lock-coverage test-proxmox-required-guards and
+  test-zfsreapplyholds test-zfs-migrate-send — all pass. Docs intentionally
+  untouched (the workflow's docs sweep task owns sever-vm-clone rows).
+- Pre-existing discovered/this task: none new; PREEXISTING.md unchanged
+  (the rootcheck advisory-guard entry from task 1.1 covers what resurfaced).
+
+## 2026-10-09 — sever-vm-clone task 1.4: after-swap finishing + origin report
+
+Drop-promote workflow, leaf task 1.4:
+- bin/sever-vm-clone: post-swap finishing and the origin-snapshot report
+  added on top of the 1.3 cutover. New phase marker scaffolding_cleared
+  between swapped and done (rank table updated): under the same 'x' locks,
+  sever_destroy_scaffolding <zvol> destroys every @sever-* snapshot the
+  replication carried into the swapped-in zvol (@sever-<ts> transfer base —
+  or an earlier run's name after a resume — and @sever-<ts>-cutover); the
+  prefix, not this run's exact names, identifies the artifacts (only this
+  tool creates bucket-less @sever-* snapshots). WARN-only per snapshot: a
+  held/busy one is left and reported — the swap is complete regardless.
+  Rollback's inline copy of that loop was replaced by the shared helper
+  (same behavior, one implementation; originals after rollback keep being
+  cleaned). Holds reapply on the new zvol (reapplyholds_apply, the swapped
+  phase) and temp-namespace removal once empty (sever_cleanup_namespaces)
+  were already in from 1.3 and are unchanged.
+- Origin report (sever_report_origins, after namespace cleanup, before the
+  completion banner): for each deduped origin snapshot of the severed disks,
+  re-reads the live 'zfs list -o clones'. Still-cloned origins are reported
+  only (with the clone list); unpinned-but-held origins are reported with
+  every hold tag from 'zfs holds'; unpinned hold-free origins are reported
+  with their reclaimable size and offered for destruction — ask_yn, then a
+  typed confirmation of the FULL snapshot name (zfswipe pattern; a
+  non-matching answer leaves it untouched). The destroy re-checks clones and
+  holds under a 'w' lock on the origin snapshot's dataset (zfsdelsnap's
+  locking shape) so a reference that appeared since the report blocks
+  instead of failing; failure runs diagnose_dataset_busy
+  (zfs-diagnose-busy, newly sourced). Held and still-cloned snapshots are
+  only ever reported, never destroyed — and ZFS itself refuses a held
+  snapshot destroy as the backstop. This offer is where the pinned space
+  actually comes back. Runs after --continue too (origins come from the
+  state file).
+- Usage text gained the origin-report paragraph; header comment extended.
+- Docs (surgical, additive): lock-manager.md sever-vm-clone row now lists
+  the origin snapshot's dataset (release offer) lock; concepts.md's
+  Severing a Clone paragraph gained the post-cutover re-check/offer
+  sentence. The docs sweep task still owns the fuller sever rows.
+- Smoke matrix (stub zfs/qm + real script, /tmp/sever-smoke, fresh state
+  files per scenario): --continue from device_ready exercising swapped→
+  scaffolding_cleared→done (hold lzo-4k reapplied to the user snapshot, both
+  scaffolding snaps destroyed, user @daily snapshot kept, temp namespace
+  removed); origin report — unpinned+hold-free offered and destroyed after
+  the exact typed name, held origin reported with its tag only, still-cloned
+  origin reported only; mismatched typed answer leaves the origin in place;
+  --rollback path via the shared helper (staged copy destroyed, both
+  scaffolding snaps off the original, holds reapplied, namespace removed).
+- Checks: shellcheck bin/sever-vm-clone clean; tests/run-tests
+  test-zfsreapplyholds — all pass (zfsreapplyholds itself untouched).
+- Pre-existing discovered/this task: none new; PREEXISTING.md unchanged.
+
+## 2026-10-09 — sever-vm-clone task 1.5: holding-pool (intermediate storage) mode
+
+Drop-promote workflow, leaf task 1.5:
+- bin/sever-vm-clone: tight-space mode end to end. Discovery now also
+  collects pool tags and per-zvol encryption (6th VOL field, `zfs list -o
+  ... encryption`); after the per-pool space table, any source pool short of
+  largest-disk x 1.1 switches the plan to holding mode: sever_ask_holding_pool
+  lists imported candidate pools with free >= the run's staging need
+  (deficient source pools excluded — the copies must not land where they
+  will be copied back into), FATAL when none exists. The chosen name is
+  entered at runtime (ask_line loop: deficient-source or non-imported name
+  re-asks; empty answer exits 0; below-need accepted with a WARN).
+  Encrypted sources trigger a keystatus check on the holding pool (local or
+  ssh in two-node): key not loaded -> WARN "load it first (zfs key -l)",
+  plus the reassurance that raw (-w) replication keeps the copies
+  encrypted. sever_holding_plan then shows each origin snapshot with its
+  destroyability (still-cloned names the sibling clones, held names the
+  tag), asks ask_yn whether to destroy them after the severance (default Y,
+  sever_origin_destroy), and prints a per-deficient-pool copy-back estimate
+  with a FATAL when even destroying the originals + confirmed origins
+  cannot free enough (the lightly-diverged-clone explanation).
+- Phase ladder renumbered around the new rungs: space_checked before any
+  destruction, origin_snap_destroyed, copied_back, copyback_verified,
+  holding_freed (state gains space_mode/holding_pool/origin_destroy and
+  per-disk back names; sanity WARN if a temp and back name share a pool).
+  In holding mode Phase 1 stages into <holding>/sever_<key>/<basename>
+  (sever_temp_parent is holding-aware), the cutover catch-up lands there,
+  and sever_holding_space_precheck runs BEFORE anything is destroyed: fresh
+  zpool free + the original's used + each destroyable confirmed origin
+  snapshot's used >= fresh referenced x 1.1, else a plain-language FATAL
+  ("a lightly-diverged clone frees little") that explains the copies are
+  safe in the holding pool and points at --rollback/--continue. Nothing has
+  been destroyed at that point by construction.
+- Cutover then destroys the original and, when confirmed, the origin
+  snapshots (sever_destroy_confirmed_origin: skips unconfirmed/gone, x-lock
+  on the origin dataset, re-checks destroyability under the lock and aborts
+  if a sibling clone or hold appeared since it was counted), copies back
+  from the holding pool into the source pool's temp namespace via the
+  migration engine (full send of the cutover snapshot, refreservation=none
+  on the copy-back, GUID-equality reuse of an already-landed copy-back on
+  --continue), verifies the GUID, renames the copy-back into place under
+  the original name, and finally destroys the holding copy (WARN-only; the
+  swap is complete regardless). The copy-back carries its own 'x' lock on
+  the holding zvol and a 'w' lock on the copy-back namespace; every failure
+  path releases all three locks in order (sever_release_locks). Engine
+  failure at the copy-back is the one unrecoverable-by-rollback point (the
+  original is already gone) — the FATAL says exactly that and points at
+  --continue (engine resume token honored). --rollback before
+  source_destroyed still tears the staging down.
+- tests/test-lock-coverage: three new sever-vm-clone rows (copy-back 'x',
+  origin-snapshot destroy 'x', copy-back namespace 'w').
+- Smoke matrix (stateful mock zfs/zpool/qm world under /tmp/sevtest3,
+  seven scenarios, 72 assertions): A mixed-pool happy path holding mode
+  (tank deficient, staging + copy-back via spare, encryption carried into
+  the copies, keystatus WARN, origin snapshots destroyed, holding namespace
+  removed); B pre-check FATAL via --continue when a sibling clone keeps the
+  origin pinned (nothing destroyed, staging intact); C injected copy-back
+  receive failure then --continue to completion (original destroyed past
+  the rollback window, holding copy intact until the resumed run swaps and
+  cleans); D --rollback from the VM gate; E no candidate pool -> plan
+  FATAL; F invalid/deficient holding names re-ask + empty answer exits 0;
+  G plan-time estimate infeasible -> FATAL before Phase 1.
+- Checks: shellcheck bin/sever-vm-clone clean; tests/run-tests
+  test-lock-coverage test-snapshot-names test-proxmox-required-guards —
+  all pass.
+- Pre-existing discovered/this task: none new; PREEXISTING.md unchanged
+  (the engine's bare-rootcheck abort under `set -e` in smoke runs is the
+  already-recorded rootcheck-family entry; the test stub works around it).
+
+## 2026-10-09 — sever-vm-clone task 1.6: two-node path
+
+- Delegation moved BEFORE the qm guard: on a two-node box an invocation on
+  the storage host (this_host != compute_host) re-execs on the compute host
+  with every argument printf-%q-quoted, before `command -v qm` can fire —
+  the latent promote-vm-clone flaw (its guard died on the storage host,
+  where qm does not exist). All modes delegate, including --continue and
+  --rollback (the cutover state file lives on the compute host).
+- All zfs/lock/targetcli cutover work moved into one storage-side worker
+  (sever_storage_cutover_script, ~1080 lines): single-node runs it as a
+  local child shell, two-node streams it as 'ssh root@<storage_host> bash -s'
+  under set -e with locks INSIDE (the zfsclone-vm / move-vm-disk pattern;
+  the repo zfslockmanager's set -e release fixes are what make releases
+  survive inside such a heredoc — the installed 0.120.0 lock manager dies
+  at `temp=$(grep -v ...)` on a single-entry pidfile under set -e, seen in
+  smoke; the repo's `|| true` at bin/zfslockmanager:1049 is the fix).
+- The worker owns the phase markers and rewrites the cutover state file at
+  every transition; two-node pushes the state file to the storage host
+  before each worker run and fetches it back after (on failure too, best
+  effort) so --continue/--rollback resume from the last persisted phase.
+  New per-disk fields itgt/ilun/ibs/ienc persist the discovered iSCSI
+  state: a replay after the original zvol is destroyed still re-exports at
+  the recorded target/LUN/backstore. Phase table gains iscsi_detached (6)
+  and iscsi_reattached (13).
+- iSCSI rewire per disk (rename-vm-disk discover_iscsi_state pattern,
+  anchored parses): discover once and persist; teardown LUN + backstore
+  before the destroy (a live backstore pins the device node); after the
+  rename + udev wait, re-create the backstore named for the zvol and
+  re-export AT THE SAME LUN ID — when the slot was taken meanwhile,
+  targetcli auto-assigns, the new number is parsed back (anchored
+  grep -F "block/<name> "), and a LUNMOVED marker makes the parent WARN
+  about the PVE by-path reference. expected-backstores manifest and
+  iscsi-encrypted-luns.conf kept in step; safe-iscsi-save per re-export
+  (WARN-only on its degraded rc=1 per its own contract).
+- Parent cutover: rescan-storage runs on the compute host at the end when
+  any state-file iSCSI record exists (derived from the state file, not
+  in-run markers, so a resumed run rescans too); origin report/destroy use
+  a read-only ssh zfs wrapper (sev_zfs) and a locked destroy heredoc
+  (sever_remote_offer_destroy).
+- Smoke evidence (stateful fakes under /tmp/sever-smoke: targetcli with
+  case-matched info/set-attribute/create/delete branches, stateful zfs
+  dataset/snapshot tree, repo lock manager + reapplyholds in sbin/):
+  iSCSI helper suite 41/41 (discovery exact-token vs -1/-10 decoys,
+  teardown idempotence, same-LUN reattach, keep-existing replay,
+  encrypted bookkeeping, squatter-slot fallback + LUNMOVED); end-to-end
+  two-node cutover 28/28 (marker set, phase done + iscs fields persisted,
+  teardown-before-destroy / destroy-before-rename / reattach-after-rename
+  via a shared order log, scaffolding cleared, locks released, namespace
+  cleanup, replay idempotent); two-node rollback 8/8. Repo suite
+  tests/test-sever-vm-clone (parallel task) 18/18 against the rewired file.
+- Docs: two-node-config.md script-mode row rewritten (canonical compute
+  entry, storage-side cutover, same-LUN re-export + rescan);
+  messages/index.md gained a sever-vm-clone section for the two-node
+  messages (discovery markers, detach/reattach INFOs, LUNMOVED WARN,
+  safe-iscsi-save WARN, re-export FATAL + --continue, rescan INFO/WARN).
+- Pre-existing discovered/this task: none new; PREEXISTING.md unchanged.
+
+## 2026-10-09 — sever-vm-clone task 4.1: Datasets-page Sever Clone button
+
+- Sensitivity: `update_ds_button_sensitivity` (python/datasets_page.py) arms
+  `_ds_sever_clone_btn` when the selection holds at least one clone dataset —
+  a pool/dataset row whose Origin column is non-empty and whose zfs type is
+  volume (a row built without a zfs type falls back to the vm-<id>-disk-<n>
+  basename). New pure helpers next to it: `vmid_of_dataset`,
+  `is_clone_dataset`, `sever_clone_datasets` (unique selected clone names —
+  never the unselected disks of a VM).
+- `get_tree_selection_items` (python/gui_helpers.py) now carries `origin` on
+  pool/dataset items (column 6, "" when not a clone) so the page can gate on
+  it; snapshot/hold/partition items are unchanged.
+- Action: `on_datasets_sever_clone` — typed-confirmation dialog
+  (`show_sever_clone_dialog`, "sever" to arm the button, the disk_wipe
+  pattern) naming exactly the selected dataset(s), their origin snapshot(s),
+  and the owning VM(s) from the disk name, stating the full-copy cost and the
+  must-be-stopped-for-cutover requirement; on confirm one BashStep runs the
+  sibling `sever-vm-clone` (resolve_local_bin) with the selected dataset
+  paths, so its remaining questions arrive through the runner's numbered
+  input-hold prompts; completion refreshes the tree and re-runs sensitivity.
+- Wiring: PAGE_SPECS["datasets"] gains ("Sever Clone", "edit-cut",
+  "_ds_sever_clone_btn") and ACTION_HANDLERS maps it to the handler
+  (python/action_dispatch.py).
+- Tests: tests/python/test_datasets_page.py gained Sever Clone suites
+  (helpers, sensitivity, typed-confirmation gating + dialog content, argv
+  build, handler gating/runner wiring/completion logging).
+- Docs: Datasets action-button table row in user-guide/gtk-gui.md (links to
+  concepts.md#severing-a-clone); datasets_page.py section of
+  commands-and-modules/python-modules.md mentions the action, the new key
+  function, and the command_builders/path_utils helpers.
+- Pre-existing discovered this task: 2 (dangling sever-vm-clone-both doc
+  anchors failing test_docs_integrity; input-hold env lost over the
+  script's two-node SSH delegation) — both recorded in PREEXISTING.md.
+
+## 2026-10-09 — sever-vm-clone task 5.3: two-node.md command reference
+
+Drop-promote workflow, leaf task 5.3 (workflow dwfrun-26207719):
+- docs/docs/commands-and-modules/two-node.md: the promote-vm-clone section
+  (~1086–1119) replaced in place by a sever-vm-clone section matching the
+  neighboring format (clone-vm/move-vm-disk/new-vm-disk style): both usage
+  forms (vmid; dataset paths), Arguments + Recovery options (--continue /
+  --rollback) tables, node-config globals line, Called modules table
+  (zfs-migrate-send, zfsreapplyholds, zfs-diagnose-busy, zfslockmanager,
+  safe-iscsi-save, rescan-storage), Data structures table (cutover state
+  file + holds files, temp namespaces, expected-backstores manifest,
+  encrypted-luns conf), 8-step internal flow (delegation before the qm
+  guard; discovery; plan + tight-space holding-pool ask with key check and
+  copy-back estimate; Phase 1 online full copies through the engine under w
+  locks; Phase 2 stopped-VM cutover inside one storage-side worker heredoc
+  under set -e — catch-up incremental, GUID verifies, hold capture/release,
+  [2N] LUN/backstore teardown, destroy, [H] origin destroy + engine
+  copy-back, name-preserving swap, udev wait, [2N] same-LUN re-export with
+  manifest bookkeeping + safe-iscsi-save, holds reapplied, scaffolding
+  cleanup; namespace cleanup, rescan-storage, origin-snapshot report),
+  return codes, side effects (true severance, origin snapshots deletable,
+  LUN preserved), closing cross-references to concepts.md#severing-a-clone
+  and the gtk-gui.md Sever Clone button.
+- Jump-to TOC entry and the zfsclone-vm cross-reference re-pointed from
+  promote-vm-clone to sever-vm-clone (#sever-vm-clone-both); no
+  promote-vm-clone references remain in two-node.md (grep-verified).
+- Check: python3 -m pytest tests/python/test_docs_integrity.py — 22 passed,
+  1 failed; the failure is test_all_internal_anchors_exist on six
+  #promote-vm-clone-both anchors in user-guide/proxmox-integration.md (5)
+  and messages/index.md (1) — files owned by this workflow's remaining
+  docs-sweep tasks (their re-pointed #sever-vm-clone-both links, e.g.
+  messages/index.md:986 and two-node-config.md:317, resolve against the new
+  section). Not touched here per task scope.
+
+## 2026-10-09 — sever-vm-clone task 2.2: holding-pool ordering + two-node coverage in test-sever-vm-clone
+
+- tests/test-sever-vm-clone grew from 18 to 21 tests. New coverage:
+  - test_holding_feasibility_gate_aborts — the cutover's fresh-number
+    copy-back pre-check: plan estimate passes, the mock engine's new
+    engine_drain knob ("<destfs-prefix>\t<pool>\t<free>") drains tank's free
+    space after the phase-1 copy-out into the holding pool, and the gate
+    aborts between copy-out and destroy: rc 1, the plain-explanation FATALs,
+    2 receives into the holding pool (full + catch-up) but 0 into the source
+    pool, 0 DESTROY/RELEASE ops, original still a clone with its hold,
+    origin snapshot alive, staged copy safe, --continue state file left.
+  - test_two_node_full_cycle — the tests/test-archive-vm ssh-stub pattern
+    extended to EXECUTE the storage-side 'ssh bash -s' heredoc workers
+    locally against the same mock state (a test's two hosts share one
+    filesystem): every call recorded in the env's sshlog with bodies
+    between SSH-BODY markers; the remote-bin probe answers a fake path that
+    the stub rewrites to the mock bin dir for worker runs; a file-backed
+    targetcli() models backstores/LUNs (output shapes the anchored parsers
+    read); mock safe-iscsi-save/rescan-storage executables record
+    invocations in the oplog; manifest + encrypted-luns conf live under the
+    env's etcz via ISCSI_MANIFEST/ZFSUTILITIES_SYSTEM_CONFIG_DIR. Asserts
+    per disk: discover → teardown (lun delete, backstore delete) BEFORE the
+    destroy; backstore re-create + explicit same-LUN create + attribute set
+    AFTER the rename; safe-iscsi-save per re-export (2); rescan-storage
+    once, last; final LUN table identical (non-monotonic seed LUN 1/LUN 0 so
+    auto-assign could not reproduce it); manifest lines removed-then-readded
+    exactly once; only the encrypted disk's line in iscsi-encrypted-luns;
+    state-file push before every worker run; heredoc bodies carry
+    zfslock_init/set -e and the sev_iscsi_* rewire; remote origin destroy
+    heredoc ("sever-vm-clone origin release") runs for the confirmed origin.
+  - test_two_node_storage_entry_delegates_before_qm_guard — storage-host
+    entry with qm hidden delegates via `exec ssh -t` before the qm guard
+    (exec bypasses the ssh FUNCTION, so a mock ssh EXECUTABLE captures
+    SSH-EXEC in the oplog); asserts the probe, the -t destination, and the
+    forwarded command, and that "requires Proxmox VE" never fires.
+- Two mock upgrades: `zfs get encryption` now reads the datasets table's
+  encryption column (+ __mock_set_enc seeding), and sever_env_new does a
+  full hermetic reset (the env counter does not survive `env=$(...)`, so
+  every test shares env1 — knob files and the new capture files are now
+  rm -f'd/truncated per test).
+- Mock fix in passing: next_seq's `read ... < seq 2>/dev/null` printed an
+  ENOENT line on every fresh state tree (redirection order); 2>/dev/null
+  moved ahead of the input redirect.
+- bin/sever-vm-clone (two small changes, disclosed): ISCSI_MANIFEST is now
+  env-overridable (the ensure-restored-vm-iscsi/repair-iscsi-luns
+  convention) — required to assert manifest bookkeeping without touching
+  /etc; sever_transfer_remote fetches the remote results into
+  <results>.fetch then moves it (the cutover runner's existing pattern) —
+  the old direct `> "$results"` redirect truncates the only local copy
+  before the remote cat lands in it.
+- Mutation-checked (scratch copies, not committed): auto-assigning LUNs in
+  the targetcli mock fails the full-cycle test on the LUN-table assert;
+  hoisting the qm guard above the delegation fails the delegation test with
+  its exact message; defusing sever_holding_space_precheck fails the
+  feasibility-abort test. Check: tests/run-tests test-sever-vm-clone — 21
+  passed, 0 failed (suite runtime ~41s).
+
+## 2026-10-10 — severance (drop-promote) workflow wrap-up
+
+Wrap-up entry for the whole sever-vm-clone workflow (leaf tasks 1.1–1.6,
+2.1–2.3, 3.1–3.2, 4.1–4.2, 5.1–5.6; the per-task entries above cover 1.1,
+1.2, 1.3, 1.4, 1.5, 1.6, 2.2, 3.1, 3.2, 4.1, 5.3 in detail — the rest are
+summarized here). Everything below is uncommitted working-tree state.
+
+Built:
+- bin/sever-vm-clone (new, ~2732 lines): two-phase severance — Phase 1
+  online full copies through the zfs-migrate-send engine into a temp
+  namespace under w locks; Phase 2 stopped-VM cutover (VM-stopped gate,
+  catch-up incremental, hold capture/release, pre-destroy GUID verify,
+  destroy+rename name-preserving swap, udev wait, holds reapplied,
+  @sever-* scaffolding cleanup); holding-pool intermediate mode (tight-space
+  ask with encryption keystatus check, fresh-read feasibility gate before
+  anything is destroyed, post-free copy-back); two-node mode delegates
+  compute→storage BEFORE the qm guard and runs the whole zfs/lock/targetcli
+  cutover in one 'ssh root@<storage> bash -s' worker (anchored targetcli
+  discovery, same-LUN backstore re-export with auto-assign fallback +
+  LUNMOVED WARN, expected-backstores manifest + encrypted-luns
+  bookkeeping, safe-iscsi-save, rescan-storage); --continue/--rollback via
+  a per-disk phase state file that travels to the storage host and back;
+  post-swap origin-snapshot report with typed-confirmation destroy offer
+  (held/still-cloned origins only ever reported).
+- tests/test-sever-vm-clone (new, self-registering): suite-local mock bin
+  (file-backed zfs/zpool shared with the child-shell workers, executing
+  ssh stub that runs the storage-side heredocs locally, engine_drain
+  feasibility knob, file-backed targetcli). Tasks 2.1/2.3 built it and
+  registered every distinct lock reason + the qm guard.
+- GUI Sever Clone (task 4.1/4.2): Datasets-page button armed on clone-volume
+  selection, typed-confirmation dialog naming datasets/origin snapshots/
+  owning VMs and the stopped-VM cutover requirement, one BashStep invoking
+  the script with only the selected datasets (python/datasets_page.py,
+  python/action_dispatch.py, python/gui_helpers.py origin column).
+- bin/archive-vm Step-1 offer now gates each clone VM on qm status and
+  invokes sever-vm-clone, aborting on failure; guidance strings in
+  zfsclone-vm, zfsdelfs, zfs-diagnose-busy, and gui_helpers BusyReason
+  actions re-pointed; zfs-migrate-send gained caller-aware $restart_hint
+  (default output unchanged).
+- Docs sweep (5.1–5.6 + 4.1's page rows): concepts.md 'Severing a Clone',
+  commands.md, two-node.md command reference (owner of
+  #sever-vm-clone-both), messages/index.md single sever-vm-clone section
+  plus reworded dependent rows, proxmox-integration.md, lock-manager.md,
+  two-node-config.md, concurrency-collisions.md, README.md, gtk-gui.md,
+  python-modules.md. Every promote-vm-clone reference is gone; the only
+  remaining 'promote' words are the intentional "why zfs promote is not
+  severance" narrative and the historical changelog/site pages.
+
+Removed:
+- bin/promote-vm-clone deleted entirely; its test-lock-coverage and
+  test-proxmox-required-guards rows replaced by sever-vm-clone coverage.
+
+Gotchas a future session needs:
+- The test mock's zfs destroy is deliberately permissive about datasets
+  that still have snapshots; the script destroys the original (and the
+  staged temp on rollback) while their @sever-* snapshots exist — real
+  ZFS may refuse. Recorded in PREEXISTING.md; the suite pins intended
+  ordering, not real-ZFS destroy semantics.
+- The two-node worker heredoc REQUIRES the repo zfslockmanager's
+  uncommitted set -e release fixes (bin/zfslockmanager:1049); the
+  installed 0.120.0 lock manager dies on a single-entry pidfile under
+  set -e. Deploy before real two-node use.
+- ISCSI_MANIFEST is env-overridable in sever-vm-clone (family convention,
+  needed by the tests); sever_transfer_remote fetches remote results via a
+  .fetch side file (direct > redirect truncates the only local copy).
+- messages/index.md carries exactly ONE sever-vm-clone section (single-home
+  rule) and two-node.md owns the #sever-vm-clone-both anchor — run
+  tests/python/test_docs_integrity.py after touching docs links.
+- GUI two-node launches go through the script's 'exec ssh -t' delegation,
+  which drops ZFSUTILITIES_INPUT_HOLD (numbered prompts degrade to plain
+  read -rp) — PREEXISTING entry, fix belongs in the script.
+- The whole changeset is uncommitted; bin/zfslockmanager, tests/
+  test-zfslockmanager, and docs/docs/developer-guide/lock-manager.md
+  changes predate this workflow — preserve them in any commit.
+
+Open threads:
+- PREEXISTING.md (5 entries remain): rootcheck advisory-only guard
+  (family-wide), mkdocs/Zensical toolchain decision (waiting on a 1.x),
+  infra-vdev planning (in abeyance as a future objective), the
+  sever-vm-clone destroy-vs-snapshots ordering hazard above, and the
+  input-hold-over-SSH degradation. The proxmox-integration dangling-anchor
+  entry was REMOVED today: task 5.2's re-pointing fixed it and the
+  docs-integrity suite was re-verified green.
+- sever-vm-clone has only ever run against mocks/stubs — first live use
+  should be a low-stakes disk, single-node first.
+- docs/ remains concurrently hand-edited by the user; surgical edits only.
+
+## 2026-10-10 — development-cycle wrap-up, step 1 (PREEXISTING resolutions)
+
+Three PREEXISTING entries resolved (2 remain: mkdocs/Zensical toolchain
+decision, infra-vdev planning abeyance — both user-decision items):
+
+- rootcheck advisory-only guard: bin/rootcheck now terminates (exit 1,
+  message unchanged) instead of returning 1 — every caller invokes it
+  bare, so the exit is what enforces it; no caller uses the return value.
+  test-archive-vm ran archive-vm as non-root relying on the advisory
+  behavior: ARCHIVE_VM_TEST_NO_ROOT now gates the rootcheck call in
+  archive-vm (same knob as its two-node root gate). messages/index.md and
+  modules.md rootcheck contract lines updated.
+- sever-vm-clone destroy ordering: new sever_destroy_dataset helper in the
+  storage worker destroys each first-level snapshot before the dataset
+  (real ZFS refuses a dataset destroy while children exist; the -R copy
+  already replicated the history, so nothing is lost). Wired into the
+  cutover source destroy (FATAL path), holding-pool copy free (WARN path),
+  and rollback staged-copy destroy (FATAL path). The suite's old ordering
+  assertion now passes vacuously — re-pin it in the test-review step.
+- input-hold over ssh delegations: new bashinit helper input_hold_env_prefix
+  (prints "ZFSUTILITIES_INPUT_HOLD=Y " only when the protocol is active);
+  prepended at sever-vm-clone + the nine family delegation sites
+  (detach-vm-disk, zfsclone-vm, attach-vm-disk, remove-vm-disk, remove-vm
+  x2, archive-vm, move-vm-disk, new-vm-disk, rename-vm-disk). This was a
+  family-wide latent instance of the recorded sever-vm-clone issue —
+  resolved family-wide rather than left as a new PREEXISTING entry.
+  conventions.md documents the delegation rule.
+
+## 2026-10-10 — development-cycle wrap-up, steps 2–4
+
+Step 2 (policy review): an earlier automated rewrap pass had left
+boundary-space and glue artifacts in the two-arg continuation forms
+(log_msg joins args with ONE space, so a trailing space inside arg1 renders
+a double space; a reconstruction pass also glued `log_msg"FATAL:`).
+Rebuilt bin/sever-vm-clone from the /tmp/recovery green checkpoint and
+re-wrapped all 87 over-100 lines with a verified algorithm: log_msg split
+into consecutive string args at shell-nesting-depth-0 spaces, alignment at
+the opening-quote column; three zfs-migrate-send engine invocations rebuilt
+via a `sever_engine_cmd`/`sev_rh` var += form (splitting INSIDE a
+`$(sever_shq ...)` would re-quote at the wrong boundary); assert_contains /
+test_start / test_fail take exactly $1/$2, so their long strings use the
+`var+=` pattern, never a two-arg split. Verification: a parser that walks
+every logical line proved all 292 log_msg calls render byte-identically to
+the checkpoint; bash -n, shellcheck -S warning, and ruff clean; every
+touched file ≤100 chars/line. Affected suites 10 × green.
+
+Step 3 (test review): the vacuous cutover-ordering assertion re-pinned —
+release → children-first snapshot sweep → dataset destroy → rename → udev →
+post-swap GUID → hold reapply → post-swap scaffolding cleanup → origin
+destroy, plus destroy-count assertions (each @sever-* snap exactly twice:
+sweep + cleanup; the held daily exactly once). New tests: tests/test-rootcheck
+(exit-1 non-root / clean root, branch-skipped per uid) and
+test-bashinit::input_hold_env_prefix (exact expansion under/without the
+protocol). Holding-mode ordering chain verified still sound (exact-field
+oplog matching, distinct dataset names).
+
+Step 4 (docs): messages/index.md gained the children-first sweep row;
+two-node.md cutover bullet explains snapshot-by-snapshot destroy; modules.md
+bashinit table gained ask_line + input_hold_env_prefix rows and rootcheck's
+globals line now says `id -u`; testing.md rows for test-rootcheck and the
+refreshed test-bashinit coverage. test_docs_integrity 23/23; mkdocs build
+clean (only the known Zensical banner); site/ rebuilt.
+
+## 2026-10-10 — development-cycle wrap-up, steps 5–6 (freeze)
+
+Full-suite gate (background, no soaks): first run exposed 37 failures — all
+fallout of the step-1 rootcheck enforcement in suites that ran scripts
+non-root without mocking the guard. Repaired harness-side (the enforcement
+is the intended behavior):
+
+- test-list-vm-disks / test-zfswipe / test-zfsshowbigstuff: zfscleanup-style
+  stub-mydir (find_zfsutility_script tries $mydir/<name> first; bashinit
+  preserves an already-set mydir) diverts exactly the rootcheck resolution;
+  list-vm-disks' four later node-lib re-sources pinned to $old_mydir.
+- test-safe-iscsi-save: the script copies' `source_helper rootcheck` line is
+  sed-neutralized (the runners already define a no-op rootcheck).
+- test-unarchive-vm: the suite already exported UNARCHIVE_VM_TEST_NO_ROOT=1
+  but bin/unarchive-vm never implemented the knob — added the archive-vm
+  gate form. Its tail also masked the suite verdict (a bare `rm -rf` after
+  test_summary reset the exit status; run-tests judges suites by exit code,
+  so 4 failures printed under "SUITE PASSED") — converted to the house
+  test_summary + cleanup + teardown_test_env tail that propagates
+  _TEST_SUMMARY_RC. All other suites already end with the propagating
+  teardown; unarchive-vm was the lone deviator.
+
+Final full run: 91 suites, 4,651 passed / 0 failed / 1 skipped (root-gated).
+Codebase frozen: no further changes without a new instruction.
+
+## 2026-10-10 — Release 0.121.0 preparation (wrap-up steps 7–8)
+
+VERSION bumped to 0.121.0; changelog entry added (severance feature set,
+rootcheck enforcement, input-hold delegation forwarding, promote-vm-clone
+removal, new suites). __pycache__ dirs removed repo-wide. Final full run
+WITH soaks (--with-soak, background, log /tmp/release-0121-withsoak.log):
+91 suites, 4,658 passed / 0 failed / 0 skipped — soak suite confirmed in
+the log. No code changes after this point in the session.

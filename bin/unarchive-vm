@@ -22,7 +22,9 @@ source "$NODE_LIB"
 source_helper rootcheck
 source_helper zfslockmanager
 
-rootcheck
+# Tests run this script as a non-root user with the zfs/qm binaries mocked,
+# so the same knob style as archive-vm skips this gate in the test harness.
+[[ ${UNARCHIVE_VM_TEST_NO_ROOT:-0} == "1" ]] || rootcheck
 
 if ! command -v qm >/dev/null 2>&1; then
     log_msg "FATAL: This script requires Proxmox VE (qm command not found)."

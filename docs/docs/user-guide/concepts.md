@@ -304,9 +304,9 @@ with the label `clone` and bucket `c`:
 
 This snapshot is the **clone origin** — it is the point in time when the clone
 was created. ZFS prevents deletion while any clone created from it still
-exists. ZFSutilities ignores `@clone-...-c` snapshots during retention; ZFS
-only allows their removal after all dependent clones have been destroyed or
-promoted.
+exists. ZFSutilities ignores `@clone-...-c` snapshots during retention; an
+origin snapshot becomes deletable only after every dependent clone has been
+destroyed or severed from it (see [Severing a Clone](#severing-a-clone)).
 
 ### Clone Dependencies
 
@@ -322,7 +322,8 @@ zfs list -t snapshot -o name,clones -r pool/dataset/source-dataset
 ```
 
 A snapshot that has clone dependents **cannot be destroyed** until those
-dependents are removed or promoted. `zfsdelfs` detects this condition and
+dependents are removed or severed from it (see
+[Severing a Clone](#severing-a-clone)). `zfsdelfs` detects this condition and
 aborts before touching anything, with a clear error message.
 
 If a destroy fails for any reason — clone dependents, holds, open files,
@@ -355,29 +356,42 @@ clones you genuinely don't need to back up.
 For the module-level details, see
 [`zfs-send-receive`](../commands-and-modules/modules.md#zfs-send-receive).
 
-### Promoting a Clone
+### Severing a Clone
 
-Over time, you may want to destroy the original dataset. You cannot destroy it
-while clones still depend on its snapshots. The solution is `zfs promote`:
+Over time, you may want to destroy the original dataset, or simply reclaim the
+space its snapshots hold. You cannot do either while clones still depend on
+its snapshots. The ZFS command that looks like the answer, `zfs promote`, does
+not sever anything:
 
-**`zfs promote`** reverses the parent-child relationship between a clone and
-its origin. After promotion:
+**`zfs promote`** inverts the parent-child relationship between a clone and
+its origin rather than severing it. After promotion the pair stays entangled:
 
-- The promoted clone's dataset becomes independent.
-- The shared clone-origin snapshot moves from the original dataset to the
-  promoted clone.
+- The clone-origin snapshot survives — it merely moves from the original
+  dataset to the promoted clone.
 - Any other clones that happen to share the same origin snapshot re-parent
-  automatically to the promoted clone.
-- The original dataset, now a clone of the promoted dataset, can be destroyed
-  once it has no remaining dependents of its own.
+  automatically onto the promoted clone.
+- The space the origin snapshot pins stays allocated for as long as any
+  dataset still references it.
 
-`promote-vm-clone` automates this process for all datasets at once.
+ZFSutilities severs a clone by **full copy** instead. `sever-vm-clone`
+replicates each of a VM's clone zvols into a fresh zvol with no origin, then
+swaps the fresh copy in under the original name — so Proxmox VM configurations
+and iSCSI references keep working unchanged. After the swap the old clone zvol
+is destroyed and the origin snapshot becomes deletable; its space is released
+only at that point, never before. `sever-vm-clone` re-checks every origin
+snapshot after the cutover and offers to destroy the ones that are no longer
+cloned and no longer held (typed confirmation); snapshots that are still
+cloned or held are only reported.
 
-!!! note "One promotion per snapshot"
-    If the source has multiple clone-origin snapshots (because cloning was run
-    at different times), each snapshot with dependents requires one
-    `promote-vm-clone` run against one of its dependents. Each promotion cuts
-    one snapshot's dependency chain.
+The full copy briefly needs room for one disk at a time alongside the
+original. When the source pool cannot spare even that, `sever-vm-clone` can
+route the copy through an intermediate holding pool and pull it back after
+the old zvol is destroyed.
+
+!!! note "Every dependent must be severed or destroyed"
+    An origin snapshot becomes deletable only when no dataset depends on it
+    any more. If several clones share one origin snapshot, each of them must
+    be severed (or destroyed) before the snapshot's space is released.
 
 ---
 
@@ -400,4 +414,4 @@ its origin. After promotion:
 | **clone**                  | A writable ZFS dataset created from a snapshot. Initially shares all blocks with its source (COW); diverges as writes occur                                          |
 | **clone origin**           | The snapshot from which a clone was created. Cannot be deleted while any clone still depends on it                                                                   |
 | **copy-on-write (COW)**    | ZFS storage strategy: shared blocks are only duplicated when one copy is modified, so clones start at zero extra storage. (This is a simplification of the concept.) |
-| **zfs promote**            | ZFS operation that reverses the parent-child relationship between a clone and its origin, making the clone independent                                               |
+| **severing a clone**       | Cutting a clone off its origin by full copy: `sever-vm-clone` replicates the clone zvol into a fresh, origin-free zvol swapped in under the same name                |

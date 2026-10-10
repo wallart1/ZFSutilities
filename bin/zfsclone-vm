@@ -9,7 +9,7 @@
 #
 # The clone origin snapshot (@clone-...-c) is retained on the source zvols.
 # It must not be deleted while any clones from this operation exist.
-# Use promote-vm-clone <dst_vmid> to cut the dependency before retiring the source VM.
+# Use sever-vm-clone <dst_vmid> to sever the clone dependency before retiring the source VM.
 #
 # The source VM must be stopped before cloning.
 #
@@ -74,7 +74,8 @@ fi
 # --- If not on the compute host, delegate (two-node only) ---
 if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
     remote_script=$(remote_zfsutility_script "$compute_host" "zfsclone-vm")
-    exec ssh -t root@"$compute_host" "$remote_script '$srcvmid' '$dstvmid' '$new_name'"
+    exec ssh -t root@"$compute_host" \
+        "$(input_hold_env_prefix)$remote_script '$srcvmid' '$dstvmid' '$new_name'"
 fi
 
 # === Running on the compute host ===
@@ -311,7 +312,8 @@ if is_single_node; then
     log_msg "INFO: === Done ==="
     log_msg "INFO:   VM ${dstvmid} (${new_name}) is ready in Proxmox."
     log_msg "INFO:   Clone origin: ${snap_suffix} (retained on source VM ${srcvmid} zvols)"
-    log_msg "INFO:   To cut dependency before retiring VM ${srcvmid}: promote-vm-clone ${dstvmid}"
+    log_msg "INFO:   To sever the clone dependency before retiring VM" \
+        "sever-vm-clone ${dstvmid}"
     log_msg "INFO:   Review hardware in the GUI before starting."
     exit 0
 fi
@@ -575,5 +577,6 @@ echo ""
 log_msg "INFO: === Done ==="
 log_msg "INFO:   VM ${dstvmid} (${new_name}) is ready in Proxmox."
 log_msg "INFO:   Clone origin: ${snap_suffix} (retained on source VM ${srcvmid} zvols)"
-log_msg "INFO:   To cut dependency before retiring VM ${srcvmid}: promote-vm-clone ${dstvmid}"
+log_msg "INFO:   To sever the clone dependency before retiring VM" \
+    "sever-vm-clone ${dstvmid}"
 log_msg "INFO:   Review hardware in the GUI before starting."

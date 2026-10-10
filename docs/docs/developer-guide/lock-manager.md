@@ -79,6 +79,12 @@ When acquiring a lock on `/pool/parent/child`:
 
 - Release all locks held by current PID
 
+All lock functions are safe to call from `set -e` shells — notably the
+two-node remote heredocs, which run the lock manager under `set -e` on the
+storage node. Releasing the last lock held by a process and removing the
+first stale lock are internally guarded so a failing intermediate command
+cannot silently abort the caller mid-operation.
+
 ##### Conflict checking
 
 `zfslock_check <dataset> <type>`
@@ -387,7 +393,7 @@ Scripts and modules that have lock integration:
 | remove-vm-disk        | `x`       | affected zvol                                   |
 | resize-vm-disk        | `w`       | affected zvol / pool                            |
 | new-vm-disk           | `w`       | affected zvol / pool                            |
-| promote-vm-clone      | `w`       | zvol being promoted                             |
+| sever-vm-clone        | `w`/`x`   | severed zvol, fresh copy, temp-namespace parent, origin snapshot's dataset (release offer) |
 | archive-vm            | `w`       | archived zvols                                  |
 | unarchive-vm          | `w`       | restored zvols                                  |
 | PVE-send-to-archive   | `w`       | archived zvols                                  |

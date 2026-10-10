@@ -173,7 +173,7 @@ documentation-integrity suite. A scheduled nightly job runs
 |-------|----------------|
 | `test-archive-vm` | `archive-vm` retire-snapshot selection, two-node target/LUN resolution encoding (separate ssh argv entries, since IQNs contain colons), and invocation (single-node and two-node) |
 | `test-attach-vm-disk` | `attach-vm-disk` zvol-path parsing and validation |
-| `test-bashinit` | `bashinit` helpers: `log_msg` survives a `cd` after relative-path invocation; session-log selection when the log file is writable vs unwritable |
+| `test-bashinit` | `bashinit` helpers: `log_msg` survives a `cd` after relative-path invocation; session-log selection when the log file is writable vs unwritable; input-hold marker emission and uuid reuse for `ask_yn`/`ask_line`; `input_hold_env_prefix` expansion for `ssh -t` delegation |
 | `test-check-prerequisites` | `check-prerequisites` tool version checks (mkdocs major-version gating) |
 | `test-cleanup-zfsutilities-legacy` | `cleanup-zfsutilities-legacy` prompt, `--yes`, `--dry-run`, and non-symlink guards |
 | `test-clone-vm` | `clone-vm` storage heredoc bootstrap and lock sourcing |
@@ -201,6 +201,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-rename-vm-disk` | `rename-vm-disk` VM-config reference discovery (single- and two-node) |
 | `test-repair-iscsi-luns` | `repair-iscsi-luns` backstore/target parsing and zvol discovery |
 | `test-repair-vm-disk-sizes` | `repair-vm-disk-sizes` size byte-to-human conversion, by-path/storage-ref size resolution, config line repair, dry-run |
+| `test-rootcheck` | `rootcheck` guard terminates the process (exit 1) when not root and returns cleanly when root — each branch skipped when the suite runs as the other uid |
 | `test-rescan-storage` | `rescan-storage` low-device-count warning against the optional `EXPECTED_ISCSI_DEVICES` minimum (set/empty/non-numeric/zero) |
 | `test-restart-iscsi-services` | VM running-state detection before iSCSI target restart and main() helper invocation |
 | `test-run-tests-preflight` | Harness self-test: run-tests environment preflight, manifest requirement skips, soak-suite gating, and the pytest exit-5 rule |

@@ -201,7 +201,7 @@ Executed by the GUI Migrate Pool wizard, not for direct CLI use. On failure it k
 | `WARN: Size estimate dry-run of ... failed.` / `WARN: Unable to get stream size estimate of .....` | The `zfs send -n` size estimate failed; the transfer proceeds without a space check | Informational; verify destination space manually |
 | `INFO: Approximately ... bytes to transfer.` | Size plan for the fresh (full or catch-up) send | Informational |
 | `WARN: Proceeding despite insufficient space.` | The shared space check failed; the wizard pre-validated capacity, so this is warn-only | Informational; the transfer is attempted |
-| `FATAL: Migrate Pool transfer interrupted; re-run Migrate Pool to resume from the receive resume token on ....` | The transfer failed; the resume token is intentionally kept | Re-run Migrate Pool to resume |
+| `FATAL: <operation> transfer interrupted; re-run <operation> to resume from the receive resume token on ....` | The transfer failed; the resume token is intentionally kept. `<operation>` is the caller's re-run hint (`$restart_hint`): `Migrate Pool` from the wizard, `sever-vm-clone` when the severance transfer or catch-up drives the engine, `sever-vm-clone --continue <state-file>` for the cutover copy-back | Re-run the named operation to resume |
 
 ### [PVE-send-to-archive](../commands-and-modules/commands.md#pve-send-to-archive)
 
@@ -487,7 +487,7 @@ Single-snapshot delete with age, hold, clone, and counterpart protections. Calle
 | `WARN: Deletion blocked - counterpart pool(s) offline.` | `zfscheckagainst` could not verify the counterpart chain | Snapshot kept; import the counterpart pool and rerun |
 | `WARN: Deletion blocked - this is the last remaining common snapshot.` | `zfscheckagainst` found this is the only common snapshot | Snapshot kept |
 | `WARN: Snapshot ... still has holds (...); skipping deletion.` | After releasing the matching tags, other user holds remain | Snapshot kept; release the listed holds |
-| `WARN: Snapshot ... has clone dependents. Skipping deletion.` | The snapshot is a clone origin | Snapshot kept; promote or destroy the clones |
+| `WARN: Snapshot ... has clone dependents. Skipping deletion.` | The snapshot is a clone origin | Snapshot kept; sever ([sever-vm-clone](#sever-vm-clone)) or destroy the clones |
 | `WARN: Unable to remove snapshot ... (rc=...). Skipping.` | `zfs destroy` failed with busy-skip enabled (diagnostics were printed first) | Snapshot kept; address the busy cause |
 | `FATAL: Unable to remove snapshot .... rc=....` | `zfs destroy` failed without busy-skip (direct invocations) | Script aborts (exit 8); address the busy cause |
 
@@ -502,8 +502,8 @@ Destroys a dataset subtree, ignoring holds. Refuses datasets with clone dependen
 | `FATAL: Cannot acquire destroy lock on ...; aborting.` | The exclusive subtree lock is unavailable | Script aborts (exit 8); resolve the lock |
 | `WARN: There are no qualifying datasets to delete.` | The subtree enumeration produced nothing | Nothing to do (exit 4) |
 | `INFO: About to delete the following datasets and all their snapshots, ignoring holds.` | Interactive plan (entries may be annotated `[ZFS clone dependents — cannot delete]` or `[iSCSI LUN — will be removed from targetcli]`); press-enter prompt follows | Press Enter to proceed |
-| `FATAL: One or more datasets have ZFS clone dependents and cannot be deleted. Use promote-vm-clone to cut dependencies first.` | Interactive pre-check found clone dependents | Script aborts (exit 8); promote the clones first |
-| `FATAL: ... has ZFS clone dependents — cannot delete. Use promote-vm-clone to cut dependencies first.` | Per-dataset clone gate during deletion | Script aborts (exit 8); promote the clones first |
+| `FATAL: One or more datasets have ZFS clone dependents and cannot be deleted. Use sever-vm-clone to sever the dependencies first.` | Interactive pre-check found clone dependents | Script aborts (exit 8); sever the clones first |
+| `FATAL: ... has ZFS clone dependents — cannot delete. Use sever-vm-clone to sever the dependencies first.` | Per-dataset clone gate during deletion | Script aborts (exit 8); sever the clones first |
 | `FATAL: ... NOT deleted (running VM).` | iSCSI teardown failed (running VM or LUN teardown failure) | Script aborts (exit 8); stop the VM and rerun |
 | `FATAL: ... was NOT deleted.` | `zfs destroy` failed (diagnostics were printed first) | Script aborts (exit 8); address the busy cause |
 | `FATAL: ... was NOT deleted because delallsnaps could not delete all of its snapshots.` | Snapshot cleanup incomplete, so the dataset destroy was skipped deliberately | Script aborts (exit 8); see the delallsnaps messages above |
@@ -667,11 +667,13 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `WARN: Orphaned zvol not referenced in config: ...` | A zvol named for this VM exists but the config does not reference it | Warning only; the orphan is not archived |
 | `FATAL: SSH to ... failed` | Two-node discovery could not reach the storage host | Script aborts; check SSH |
 | `INFO: --- Step 1: Discovering dependent clones ---` | Phase milestone | Informational |
-| `INFO: Found disks with dependent clones:` | Dependent ZFS clones exist on this VM's zvols | The promote prompt follows |
+| `INFO: Found disks with dependent clones:` | Dependent ZFS clones exist on this VM's zvols | The severance prompt follows |
 | `INFO: No dependent clones found.` | Nothing depends on this VM | Informational |
-| `INFO: Skipping clone promotion.` | The operator declined promotion | Run continues; see the warning below |
-| `WARN: VM removal may fail while snapshots are held by clones.` | Consequence of declining promotion | Promote the clones first with [promote-vm-clone](#promote-vm-clone) |
-| `FATAL: Promotion failed for VM ...` | `promote-vm-clone` exited non-zero after the operator approved | Script aborts; see its messages |
+| `FATAL: Clone VM ... is not stopped (status: ...).` | Severance gate: severance copies the clone zvols in full and swaps them in under the same names, so the clone VM must be stopped first | Stop the clone VM (`qm stop` or the Proxmox GUI), then re-run archive-vm |
+| `INFO: Severing VM ......` | Per-clone-VM milestone: [sever-vm-clone](#sever-vm-clone) runs for the clone VM | Informational; see its messages |
+| `INFO: Skipping clone severance.` | The operator declined severance | Run continues; see the warning below |
+| `WARN: VM removal may fail while snapshots are held by clones; sever them first with sever-vm-clone.` | Consequence of declining severance | Sever the clones first with [sever-vm-clone](#sever-vm-clone) |
+| `FATAL: Severance failed for VM ...` | `sever-vm-clone` exited non-zero after the operator approved | Script aborts; see its messages |
 | `INFO: --- Step 2: Archiving VM ... ---` | Phase milestone | Informational |
 | `FATAL: Archive base path is required` | No path given and no saved default exists | Supply the archive base path |
 | `FATAL: Not a ZFS dataset: ...` / `FATAL: Not a ZFS dataset on ...: ...` | The archive base is not a ZFS dataset (local or storage host) | Use a ZFS dataset as the archive base |
@@ -798,21 +800,151 @@ Instant ZFS clone (shares the origin snapshot `@clone-...-c`, retained on the so
 | `INFO: Writing VM ... config...` / `INFO: ✓ Config written: ...` | New config generated (fresh vmgenid/UUID/MAC/name; protection/meta lines dropped) | Informational |
 | `WARN: iSCSI rescan failed; run 'sudo rescan-storage' on ... manually` | The compute-host rescan failed | Rescan manually |
 | `INFO: Clone origin: ... (retained on source VM ... zvols)` | The origin snapshot stays on the source | Do not delete it while the clone exists |
-| `INFO: To cut dependency before retiring VM ...: promote-vm-clone ...` | Remediation for the retained origin | Run [promote-vm-clone](#promote-vm-clone) before retiring the source |
+| `INFO: To sever the clone dependency before retiring VM ...: sever-vm-clone ...` | Remediation for the retained origin | Run [sever-vm-clone](#sever-vm-clone) before retiring the source |
 | `INFO: VM ... (...) is ready in Proxmox.` | Final outcome | Informational |
 
-### [promote-vm-clone](../commands-and-modules/two-node.md#promote-vm-clone-both)
+### [sever-vm-clone](../commands-and-modules/two-node.md#sever-vm-clone-both)
+
+Severs a ZFS-cloned VM's disk zvols from their origin snapshots: each clone
+zvol is copied in full into a fresh, origin-free zvol that is swapped in under
+the same name, so Proxmox configs and iSCSI references keep working. Phase 1
+stages the copies (the VMs may keep running); Phase 2 is the cutover swap (the
+owning VMs must be stopped) with `--continue`/`--rollback` recovery from a
+state file; the origin-snapshot report at the end offers to destroy unpinned
+origins — where the pinned space actually comes back. Tight-space runs stage
+the copies in a user-named intermediate holding pool and copy them back after
+the originals are destroyed. Invoked on the storage host, the script silently
+re-execs itself on the compute host (the canonical entry) before any
+environment guard runs. Every cutover step is idempotent, so recovery resumes
+from the last phase the state file records.
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
-| `FATAL: SSH to ... failed` | Two-node clone discovery failed | Script aborts; check SSH |
-| `FATAL: No clone zvols found for VM ... — already promoted or not a ZFS clone` | The VM's zvols have no clone origin | Nothing to promote; no action needed |
-| `INFO: Zvols to promote:` | Pre-confirmation summary (with origins) | Review, then answer the promotion prompt |
-| `FATAL: Could not acquire write lock on ...` | A zvol's write lock is unavailable | Script aborts; resolve the lock |
-| `FATAL: Promotion failed: ...` / `FATAL: Promotion failed on ...` | `zfs promote` failed (local or remote) | Script aborts; see the messages above |
-| `INFO: VM ... zvols are now independent.` | Promotion complete | Informational |
-| `INFO: Other clones of the same snapshots have been re-parented to VM ....` | Side effect of `zfs promote` | Informational |
-| `INFO: The former source VM can be destroyed when ready: ...` | Final guidance (stop source, remove disks from config, zfsdelfs each zvol) | Follow the numbered steps |
+| `FATAL: ... requires exactly one <state-file> argument.` | `--continue`/`--rollback` without exactly one non-option argument | Usage follows; script exits |
+| `FATAL: Unknown option: ...` | Any other option was given | Usage follows; script exits |
+| `FATAL: A VM ID accepts no further arguments (VM IDs and named datasets are mutually exclusive).` | A vmid argument was followed by more arguments | Usage follows; script exits |
+| `FATAL: Not a valid dataset name: ...` | An argument is not a plausible dataset name (validated before the two-node delegation embeds it in the SSH command) | Usage follows; script exits |
+| `FATAL: Failed to gather zvol information from ...` | The discovery gather over the storage host (SSH in two-node mode) failed | Script aborts; check SSH/zfs on the storage host |
+| `INFO: Skipping ...: not a clone (no origin snapshot).` / `INFO: Skipping ...: exists but is not a zvol.` / `INFO: Skipping ...: already selected for severance.` | Dataset mode: a named dataset is not a clonable zvol or repeats an earlier one | Dataset skipped; run continues |
+| `FATAL: Dataset not found: ...` | A named dataset does not exist | Script aborts |
+| `FATAL: No clone zvols found for VM ... — already severed or not a ZFS clone.` / `FATAL: None of the given datasets is a clone zvol — nothing to sever.` | Discovery found nothing to sever | Usage follows; nothing to do |
+| `INFO: === sever-vm-clone ===` | Plan header; the node mode and each zvol with its origin, owning VM, and copy size follow | Review the plan and the space verdicts below |
+| `INFO: Source pool space (same-pool mode needs largest-disk x 1.1 free):` | Space-verdict header; one `INFO: ...: free ..., need ... — enough` / `... — NOT enough` line per source pool | A NOT-enough pool forces the holding-pool ask below |
+| `WARN: Could not read free space for pool ...; assuming no room.` | The pool's free space could not be read at plan time | The pool is treated as tight; the holding-pool ask follows |
+| `INFO: Recommended transfer mode: same-pool temporary namespace` | Every source pool can hold its largest disk plus margin; each copy is swapped in and its old zvol destroyed before the next disk starts | Answer the `Proceed with severance?` prompt |
+| `INFO: Recommended transfer mode: intermediate holding pool` | No room in the listed pools; the copy lands in a holding pool first and is pulled back after the old zvol is destroyed | The holding-pool ask follows |
+| `WARN: The owning VMs must be stopped during transfer and cutover.` | Pre-confirmation reminder: the transfer tolerates running VMs, the cutover does not | Stop the VMs before the cutover begins |
+| `INFO: Tight-space mode: pool(s) ... cannot hold a same-pool copy. An intermediate holding pool is needed...` | Explanation block for the holding-pool ask (copies stage in `<holding>/sever_<vmid>/` and are copied back after the destructions) | Read; the candidate list and the name prompt follow |
+| `FATAL: No imported pool has the ... free this run needs to stage the copies (all copied disks x 1.1 headroom).` | No imported pool outside the tight sources can hold every staged copy | Script aborts; free space on another pool — or in the tight pools so the same-pool mode fits — and re-run |
+| `INFO: Candidate holding pools (imported, free >= ...):` | The imported pools that could hold the copies, each with its free space | Answer `Holding pool name (Enter to abort): ` with one of them |
+| `INFO: Aborted.` / `INFO: No holding pool given — aborted (nothing was changed).` | The Enter-to-abort path of the holding-pool ask | Script exits 0 without changes |
+| `WARN: ... is one of the tight source pools — it has no room for the copies. Pick another pool.` / `WARN: '...' is not an imported pool on ....` | The typed holding-pool name is invalid | The ask repeats |
+| `WARN: ... has ... free — below the ... this run stages there. If the pool fills, the receive suspends with a resume token; re-running sever-vm-clone resumes it.` | A below-need holding pool was chosen anyway | Proceed; a full pool suspends the receive resumably |
+| `WARN: The zvols being severed are encrypted and the holding pool's key is NOT loaded (keystatus=unavailable on ...). Load it first (zfs key -l) — receives into ... may fail otherwise.` | Key check on the holding pool (encrypted sources only) | Load the key before proceeding |
+| `INFO: The copies stay encrypted: replication is raw (-w), so the copy-back and the swapped-in zvol keep the original encryption setup.` | Encryption note for holding mode | Informational |
+| `FATAL: Failed to gather origin-snapshot information from ...` | The origin-stats gather (SSH in two-node mode) failed | Script aborts; check SSH/zfs on the storage host |
+| `INFO: Copy-back room: destroying each original frees only its diverged data; the origin snapshots' pinned space frees with them...` | Holding-plan header; one verdict line per origin of the holding-staged disks | Read the verdicts, then answer the destroy confirmation |
+| `INFO: ... — ... pinned, but still cloned by ...: NOT destroyable here; its space is not counted.` / `INFO: ... — ... pinned, destroyable once its clones are.` | Per-origin plan verdict; sibling clones keep a snapshot pinned | Still-cloned origins stay uncounted; the rest feeds the estimate |
+| `Destroy these origin snapshots after the severance to make room for the copy-back?` | Holding-plan confirmation (default y) | y marks the destroyable origins for destruction at each disk's cutover; n keeps them (next row) |
+| `INFO: Origin snapshots stay — their pinned space is not counted for the copy-back.` | The confirmation was declined | The estimate below ignores the pinned space |
+| `INFO: Copy-back space estimate per tight pool (re-checked with fresh numbers at the cutover, before anything is destroyed):` | Estimate header | Read the per-pool estimate lines |
+| `INFO: ...: free ... + originals' diverged data ... + origin snapshots ... = ... >= ... — feasible on estimate` | The plan-time estimate says the copy-back fits | Proceed to the mode summary and the severance prompt |
+| `FATAL: ...: free ... + originals' diverged data ... + origin snapshots ... = ... < ... the copy-back needs.` | The plan-time estimate says the copy-back cannot fit; the continuation lines explain that a lightly-diverged clone frees little | Script aborts; free space in the pool, or confirm the destroyable origin snapshots, and re-run — nothing was changed yet |
+| `INFO: Chosen transfer mode: holding pool ...` / `INFO: Confirmed: the destroyable origin snapshots of the holding-staged disks are destroyed at their cutover, before the copy-back.` | Holding-mode summary: each disk's staging path and copy-back destination, and the confirmed origin destructions | Review, then answer the `Proceed with severance?` prompt |
+| `Proceed with severance?` | The main confirmation gate; a decline logs `INFO: Aborted.` and exits 0 without changes | y starts Phase 1 |
+| `INFO: === Phase 1: transfer (full copy; the VMs may keep running) ===` | Phase milestone; the transfer-time space lines follow | Informational |
+| `INFO: Pool ... is tight — its disks' copies stage in the holding pool ....` | Transfer-time note for a tight pool in holding mode | Informational |
+| `WARN: Pool ...: free ..., need ... for the same-pool copy (largest disk ... x 1.1 headroom).` | Transfer-time same-pool space warning; the copy still proceeds | A full pool suspends the receive with a resume token a re-run resumes |
+| `FATAL: Could not acquire write lock on ...` | Transfer/copy-back lock gates: the namespace root, the source zvol, or the temp-namespace parent | Script aborts; resolve the lock and re-run (a resume token covers the partial copy) |
+| `INFO: Creating temp namespace ....` / `FATAL: Could not create ....` | The deterministic staging namespace (`<pool>/proxmox/sever_<key>/`, or `<holding>/sever_<key>/`) is created — or its `zfs create` failed (copy-back path) | Informational / the disk's cutover aborts |
+| `INFO: Reusing existing snapshot ...` / `INFO: Creating snapshot ... (bucket-less: retention never prunes it).` | The `@sever-<ts>` transfer snapshot on the source zvol; a re-run finds the earlier one | Informational |
+| `INFO: Copying ... in full to ......` | The full copy through the migration engine begins (a receive resume token is resumed when present) | Informational; engine failures appear as [zfs-migrate-send](#zfs-migrate-send) messages |
+| `WARN: ... completed under resumed snapshot @... (taken before this run).` | A resumed interrupted receive completed under its original snapshot name | Informational; that snapshot name is carried through the cutover |
+| `FATAL: No sever snapshot found on ... after the transfer.` | The received copy carries no `@sever-*` snapshot | Script aborts; inspect the staged copy |
+| `INFO: ✓ ...: fresh copy at ... (snapshot @..., GUID ...).` | Per-disk transfer outcome | Informational |
+| `FATAL: Transfer phase failed (rc=...).` | The storage-side transfer worker failed | Script aborts; beyond the `@sever-*` snapshots no source data was touched — re-run sever-vm-clone to resume from the receive resume token |
+| `FATAL: No transfer record for ....` | The worker's results file has no line for a selected zvol | Script aborts; re-run |
+| `INFO: === Phase 1 complete: fresh copies staged in the temp namespace ===` | Phase milestone; each zvol's staging path, snapshot, and GUID follow | Informational |
+| `INFO: === Phase 2: cutover (name-preserving swap; the owning VMs must be stopped) ===` | Phase milestone; the cutover state file is written before any gate that can abort | Informational |
+| `WARN: ...: no owning VM in its name — cannot gate on qm status; the swap aborts safely (zfs destroy fails) if the zvol is busy.` | The zvol's basename carries no `vm-<id>-disk-<n>` id, so the stopped-VM gate cannot run for it | Informational; the destroy itself still refuses a busy zvol |
+| `FATAL: The owning VMs must be stopped for the cutover: ...` | The stopped-VM gate found running owners (with statuses) | Stop the VM(s), then swap without re-copying: `sever-vm-clone --continue <state-file>`; the fresh copies stay staged and nothing was destroyed |
+| `INFO: Skipping ...: already severed (phase done).` | A resumed cutover found this disk finished | Informational |
+| `FATAL: Cutover aborted at ... (phase ...); the remaining disks are untouched.` | A disk's cutover worker failed at the recorded phase — the umbrella abort every per-disk FATAL below funnels into | Resolve the cause, then re-run: `sever-vm-clone --continue <state-file>` |
+| `INFO: --- Cutover: ... ---` | Per-disk cutover milestone (holding-pool disks name their holding pool) | Informational |
+| `INFO: iSCSI: target ..., LUN ..., backstore ....` / `INFO: iSCSI: ... is not exported (no backstore); no LUN rewire needed.` | Two-node cutover-time discovery decision markers; the discovered target/LUN/backstore are recorded in the state file so a resumed run re-exports them even after the original zvol is destroyed | Informational |
+| `FATAL: Could not acquire destroy lock on ....` | The cutover's destroy-class locks: the original zvol, the staged copy, the copy-back temp, or the origin snapshot's parent | The disk's cutover aborts (see below); resolve the lock and `--continue` |
+| `INFO: Reusing existing cutover snapshot ...` / `INFO: Creating cutover snapshot ... (bucket-less: retention never prunes it).` | The `@sever-<ts>-cutover` snapshot on the source; a replay finds the earlier one | Informational |
+| `FATAL: Could not create ...@...; nothing was destroyed.` | `zfs snapshot` of the cutover snapshot failed | The disk's cutover aborts with nothing destroyed |
+| `FATAL: Transfer snapshot ... is missing on the source; the staged copy cannot be caught up.` | The `@sever-*` send base vanished between the phases | Re-run sever-vm-clone with the original arguments to make a fresh full copy |
+| `INFO: Cutover snapshot already received on ...; skipping the catch-up send.` / `INFO: Catch-up incremental ...@... → ...@... into ......` | The catch-up step: a receive that finished before its phase marker is reused; otherwise the incremental lands every change made during the transfer | Informational |
+| `FATAL: ...@... exists with GUID ... but the source has ... — aborting with nothing destroyed.` | The staged copy's cutover snapshot is not the source's (a foreign receive) | The disk's cutover aborts; investigate the staged copy |
+| `FATAL: Catch-up transfer failed (rc=...); nothing was destroyed.` | The catch-up send/receive failed | Re-run `sever-vm-clone --continue <state-file>` — it resumes from the receive resume token |
+| `FATAL: Cannot read the cutover snapshot GUID on ...; aborting with nothing destroyed.` / `FATAL: No cutover snapshot on the staged copy ...; aborting with nothing destroyed.` | The pre-destroy verify could not read one side | The disk's cutover aborts; check both datasets |
+| `FATAL: Cutover snapshot GUID mismatch for ...: source ... vs copy ... — aborting with nothing destroyed.` | The pre-destroy verify failed: the staged copy is not the source | The disk's cutover aborts; investigate before retrying |
+| `INFO: Verified ...@...: GUID ... on source and copy.` | Pre-destroy verify passed | Informational |
+| `INFO: Copy-back space pre-check for ...: ... — feasible.` | Holding mode: the fresh-number gate that runs before any destruction of the disk | Informational |
+| `FATAL: Cannot read the free space of pool ... — aborting BEFORE destroying anything.` | The pre-check could not read the pool's free space | Check the pool, then re-run `sever-vm-clone --continue <state-file>` |
+| `WARN: Origin snapshot ... is ... — its space will not be freed and is not counted.` | The pre-check found the origin not destroyable (cloned or held), so its bytes stay out of the arithmetic | Informational |
+| `FATAL: The copy-back of ... would not fit in pool ... — aborting BEFORE destroying anything.` | The pre-check arithmetic (free now + the original's diverged data + the destroyable origin snapshot) falls short of the copy-back need; the continuation lines give the numbers and the lightly-diverged-clone explanation | Nothing was destroyed and the fresh copies are safe in the holding pool; make room (or make the origin destroyable) and `--continue`, or `--rollback` everything |
+| `FATAL: Could not capture the snapshot holds of ...; aborting with nothing destroyed.` / `FATAL: Could not release the snapshot holds of ...; aborting with nothing destroyed.` | The hold lifecycle around the destroy failed (held snapshots cannot be destroyed) | The disk's cutover aborts; resolve the holds and `--continue` |
+| `INFO: Detaching iSCSI LUN ... / backstore ... (target ...) before the swap...` | Two-node: a live backstore pins the zvol's device node open, so the LUN and backstore come down before the destroy | Informational; both are re-created after the swap |
+| `INFO: Destroying the original clone zvol ......` | The destroy side of the name-preserving swap | Informational |
+| `INFO: Destroying .......` / `WARN: Could not destroy ....` (per snapshot, ahead of the original's dataset destroy) | Children-first sweep: every snapshot on the original — including replicated non-`@sever-*` ones — must be destroyed before the dataset itself, because `zfs destroy <dataset>` refuses while any child snapshot lives; the swapped-in copy re-creates them all | A `WARN` aborts the disk's cutover before the dataset destroy; resolve the snapshot (held? busy?) and `--continue` |
+| `FATAL: zfs destroy ... failed — nothing else was touched.` | The original's destroy failed (busy) | Stop whatever holds it open, then re-run `sever-vm-clone --continue <state-file>` |
+| `WARN: ... is already gone (crash between the destroy and the state write); continuing at the rename.` | Idempotent replay found the destroy already done | Informational |
+| `INFO: Origin snapshot ... was not confirmed for destruction — kept; its space stays allocated.` / `INFO: Origin snapshot ... is already gone.` / `WARN: Origin snapshot ... is ... — kept; its space stays allocated and was not counted.` | Holding mode, per-disk origin handling: unconfirmed, already destroyed, or not destroyable | Informational |
+| `INFO: Destroying the confirmed origin snapshot ... (its space makes room for the copy-back)...` / `INFO: ✓ ... destroyed — its pinned space is released for the copy-back.` | The destruction the pre-check counted on, run under a destroy lock with the destroyability re-checked | Informational |
+| `FATAL: Origin snapshot ... became ... since the pre-check counted its space.` | A reference re-appeared under the lock | Make it destroyable again (or free other space), then re-run `--continue` |
+| `FATAL: zfs destroy ... failed — aborting before the copy-back (its freed space was counted on).` | The counted-on origin destroy failed | Resolve (busy? held?), then re-run `--continue` |
+| `INFO: Copy-back already landed on ...; skipping the send.` | A copy-back that finished before its phase marker is reused | Informational |
+| `INFO: Copying ...@... back into ... (full engine copy)...` | Holding mode: the staged copy is pulled back into the source pool, only after the destructions that made the room | Informational |
+| `FATAL: Copy-back transfer failed (rc=...); the original was already destroyed — the copy must complete.` | The copy-back send/receive failed | Re-run `sever-vm-clone --continue <state-file>` — it resumes from the receive resume token |
+| `WARN: Could not set refreservation=none on ...; it keeps its volsize reserved.` | The post-receive sparse-zvol fix-up failed | Remove the reservation manually |
+| `FATAL: No cutover snapshot on the copy-back ....` / `FATAL: ...@... exists with GUID ..., expected ... — not the verified copy.` / `FATAL: Copy-back GUID mismatch for ...: ...@... has ..., expected ... — not the verified copy.` | The copy-back verification failed | Investigate, then re-run `sever-vm-clone --continue <state-file>` |
+| `INFO: Swapping ... into ......` | The rename into the original name — the swap itself | Informational |
+| `FATAL: zfs rename ... → ... failed.` | The swap rename failed | Re-run `sever-vm-clone --continue <state-file>` |
+| `WARN: The swap already happened (crash after the rename); continuing.` | Idempotent replay found the rename already done | Informational |
+| `FATAL: Neither ... nor ... exists — there is nothing to swap in.` | Both the original name and the rename source are absent | Investigate the datasets; a fresh run re-copies |
+| `FATAL: /dev/zvol/... did not come back via udev after the swap.` | The device node did not reappear within the udev wait | Check udev, then re-run `sever-vm-clone --continue <state-file>` |
+| `INFO: Re-creating backstore ... on /dev/zvol/......` | Two-node: the backstore named for the zvol is rebuilt on the swapped-in device | Informational |
+| `INFO: LUN for ... already exists (LUN ...); keeping it.` | Idempotent replay found the LUN already exported | Informational |
+| `WARN: LUN ... was taken — letting targetcli assign a new one.` / `WARN: ... moved from LUN ... to LUN ... — the PVE config's by-path reference (…-lun-...) may need attention.` | The original LUN slot was occupied between the teardown and the re-export, so targetcli auto-assigned a new id | The swap itself is complete; update the PVE config's `by-path` disk reference to the new LUN id |
+| `FATAL: Could not determine the LUN id of the re-created backstore ....` | The re-created LUN could not be parsed back from targetcli | Finish the re-export manually (targetcli) |
+| `WARN: safe-iscsi-save skipped or failed — run it on ... once every expected LUN is active.` | safe-iscsi-save returned degraded (an expected LUN inactive), so the targetcli config was not saved | The severance stands; run safe-iscsi-save on the storage host once every expected LUN is active |
+| `INFO: ✓ ... re-exported: target ..., LUN ..., backstore ....` | Milestone: the zvol is back on iSCSI at (normally) its original LUN id, so the compute host's by-path names are unchanged | Informational |
+| `FATAL: Could not re-export ... over iSCSI — the zvol swap itself is done; finish the re-export manually (targetcli), then re-run: sever-vm-clone --continue <state-file>` | The re-export step of the two-node cutover failed | The name-preserving swap completed; recreate the backstore/LUN manually (or fix the cause) and re-run `--continue` to finish from the recorded phase |
+| `FATAL: Cannot read the GUID of ...@... after the swap.` / `FATAL: Post-swap GUID mismatch on ...@...: ..., expected ... — the swapped-in zvol is not the verified copy.` | The post-swap GUID check failed | Investigate, then re-run `sever-vm-clone --continue <state-file>` |
+| `WARN: Reapplying the captured holds on ... reported failures; the swap itself is complete.` | Re-applying the captured holds on the swapped-in zvol failed for at least one hold | Check the zvol's holds manually |
+| `INFO: Destroying the holding-pool copy ......` / `INFO: The holding-pool copy ... is already gone.` | Holding mode: the staged copy's job is done once the copy-back is swapped in | Informational |
+| `WARN: Could not destroy ...; remove it manually once nothing needs it.` | The holding-pool copy's destroy failed | Manual cleanup item; the severance itself is complete |
+| `INFO: Destroying scaffolding snapshot ......` / `WARN: Could not destroy ....` | This tool's `@sever-*` snapshots are removed from the swapped-in zvol; a held or busy one is left in place and reported | Informational; the severance is complete either way |
+| `INFO: ✓ ...: severed — origin-free under its own name (@..., GUID ...).` | Per-disk cutover outcome; the locks are released and the holds file removed | Informational |
+| `INFO: Rescanning iSCSI on ... so the re-exported LUN(s) appear...` / `WARN: rescan-storage failed; run it on ... manually.` | End of a two-node cutover: the compute host's iSCSI sessions are rescanned so the re-exported LUN(s) reappear | On failure run `rescan-storage` on the compute host manually |
+| `INFO: Removed the now-empty temp namespace ....` / `INFO: Temp namespace ... is not empty; left in place.` / `WARN: Could not lock ... for cleanup; left in place.` | Post-cutover namespace cleanup (same-pool, copy-back, and holding namespaces; a plain destroy only succeeds on an empty dataset) | Informational; anything else that landed there is left alone |
+| `WARN: Temp namespace cleanup reported failures; remove leftovers manually.` | The cleanup worker returned non-zero | Remove the leftovers manually |
+| `INFO: === Severance complete ===` | Final outcome; one `✓ ... — origin-free` line per zvol names its former origin | Informational |
+| `INFO: State file removed — nothing left to continue or roll back.` | The run finished; the recovery handle is gone | Informational |
+| `INFO: === Origin snapshot report ===` | Post-severance report header: the live clone list of every origin snapshot is re-read | Read the per-origin verdicts below |
+| `INFO: ... (origin of ...) — already destroyed; nothing pinned.` | The origin snapshot is gone | Informational |
+| `INFO: ... — still pinned (...): cloned by ...; left in place.` | Another clone keeps the snapshot alive | Informational; sever or destroy those clones to release the space |
+| `INFO: ... — unpinned but held (... stays pinned); release the hold(s) to make it destroyable:` | No clone references it, but hold tags block destruction (each tag is listed on its own `hold:` line) | Release the listed holds to make it destroyable |
+| `INFO: ... — unpinned: no clones, no holds; destroying it releases ....` | The origin is destroyable and its reclaimable size is named | Answer the destroy offer |
+| `Destroy ...?` / `Type '...' to destroy it: ` | Typed destruction offer: a declined offer, an unreadable confirmation, or a non-matching answer leaves the snapshot untouched (`INFO: Left in place.` — with the reason) | y plus the exact snapshot name destroys it under a write lock, with the clone/hold checks repeated under the lock |
+| `INFO: ✓ destroyed — its space is released.` | The offered origin snapshot was destroyed | Informational — the pinned space came back |
+| `WARN: Could not lock ...; ... left in place.` / `WARN: ... is cloned again (...); left in place.` / `WARN: ... is held again; left in place.` / `WARN: The storage-side destroy of ... could not run; left in place.` | The under-lock re-checks (or the two-node arm) refused the destroy | The snapshot is untouched; retry later |
+| `WARN: Could not destroy .....` | The locked destroy itself failed; a busy diagnosis follows | Address the busy cause |
+| `INFO: === Rolling back sever-vm-clone ===` | `--rollback` header; the state file path is printed | Informational |
+| `FATAL: Rollback impossible for ...: the original zvol was already destroyed (phase ...).` | Past the destroy there is no way back | Complete the swap instead: `sever-vm-clone --continue <state-file>` |
+| `WARN: VM ... is ...; rolling back the storage anyway.` | A running owner does not block rollback (removing snapshots from a live zvol is safe in ZFS) | Informational |
+| `INFO: --- Rollback: ... ---` / `INFO: Destroying the staged copy ......` / `INFO: No staged copy at ...; nothing to destroy.` | Per-disk rollback: the staged copy is destroyed, the `@sever-*` scaffolding removed, the released holds reapplied | Informational |
+| `FATAL: zfs destroy ... failed.` | The staged copy's destroy failed during rollback | Resolve the cause, then re-run `sever-vm-clone --rollback <state-file>` |
+| `WARN: Reapplying the holds on ... reported failures.` | Restoring the released holds failed for at least one hold | Check the zvol's holds manually |
+| `FATAL: Rollback of ... failed.` | A disk's rollback worker failed | Resolve the cause, then re-run `sever-vm-clone --rollback <state-file>` |
+| `INFO: === Rollback complete ===` | Rollback finished; the state file is removed | Informational |
+| `FATAL: State file not found: ...` | `--continue`/`--rollback` named a missing file | Check the state file path the interrupted run printed |
+| `FATAL: State file ... is malformed (...)` | The state file fails validation (missing diskcount/cutover_snap, a missing disk record, missing temp/fromsnap, or a verified phase without a GUID) | Re-run the severance with the original arguments |
+| `WARN: State file ...: holding copy and copy-back of ... are in the same pool — treating as same-pool.` | A damaged state file lost the holding distinction | Informational; the cutover replays as same-pool |
+| `FATAL: ... is not in the cutover state file ....` / `FATAL: Unknown worker command: ...` | The storage-side worker was invoked with a disk or command outside the state file | Internal-error class; re-run from the canonical entry |
 
 ### [zfscheckrunningvms](../commands-and-modules/modules.md#zfscheckrunningvms)
 
@@ -1291,8 +1423,8 @@ each check silently skips when its tool is absent.
 | Message prefix | Meaning | Response |
 | ------------- | ------- | -------- |
 | `WARN: ZFS reported: ...` | Raw stderr captured from the failed `zfs destroy` | Read alongside the diagnosis below |
-| `→ Snapshot has clone dependents: ...` | One or more clones were created from this snapshot | Promote or destroy the dependent clones first |
-| `→ One or more snapshots of ... have clone dependents.` | Dataset target: some snapshot under it is a clone origin | Promote or destroy the dependent clones first |
+| `→ Snapshot has clone dependents: ...` | One or more clones were created from this snapshot (the fix hint names `sever-vm-clone`) | Sever or destroy the dependent clones first |
+| `→ One or more snapshots of ... have clone dependents.` | Dataset target: some snapshot under it is a clone origin (the fix hint names `sever-vm-clone`) | Sever or destroy the dependent clones first |
 | `→ Snapshot has holds: ...` | ZFS hold tags are present | Use the `releaseholds` option or `zfs release <tag> <snap>` |
 | `→ Dataset is mounted at ...` | The dataset is mounted; a process scan follows | See the `Open processes:` line that follows |
 | `Open processes: ...` | `fuser` (or `lsof`) found processes with the mountpoint open | Stop the listed processes or unmount first |
@@ -2002,7 +2134,7 @@ Emits no log messages; it enables `set -x` tracing.
 
 ### [rootcheck](../commands-and-modules/modules.md#rootcheck)
 
-Emits no log messages. `rootcheck()` prints a bare "Please run as root." and returns 1 when not root.
+Emits no log messages. `rootcheck()` prints a bare "Please run as root." and terminates the process (exit 1) when not root.
 
 ### [unroot](../commands-and-modules/commands.md#unroot)
 

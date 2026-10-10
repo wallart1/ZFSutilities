@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 # archive-vm <vmid>
-# Archives a VM: verifies it is stopped (never stops it), offers to promote
+# Archives a VM: verifies it is stopped (never stops it), offers to sever
 # dependent clones, archives zvols + config, verifies the archive, and
 # optionally removes the VM.
 #
@@ -22,7 +22,10 @@ source "$NODE_LIB"
 
 source_helper rootcheck
 
-rootcheck
+# rootcheck terminates when not root (callers invoke it bare); tests run
+# this script as a non-root user with the zfs/qm/ssh binaries mocked, so
+# the same knob that skips the two-node root gate below skips this one.
+[[ ${ARCHIVE_VM_TEST_NO_ROOT:-0} == "1" ]] || rootcheck
 
 if ! command -v qm >/dev/null 2>&1; then
     log_msg "FATAL: This script requires Proxmox VE (qm command not found)."
@@ -45,7 +48,7 @@ usage() {
     log_msg "INFO: Steps:"
     log_msg "INFO:   1. Verify the VM is stopped (the script never stops it)"
     log_msg "INFO:   2. Discover ZFS clones that depend on this VM"
-    log_msg "INFO:   3. Optionally promote clones (sever dependency)"
+    log_msg "INFO:   3. Optionally sever clones (sever-vm-clone)"
     log_msg "INFO:   4. Archive zvols and Proxmox config"
     log_msg "INFO:   5. Verify archive integrity"
     log_msg "INFO:   6. Optionally remove the VM"
@@ -261,7 +264,7 @@ collect_referenced_zvols() {
 
     if [[ ${#target_lun_refs[@]} -gt 0 ]]; then
         ssh root@"$storage_host" bash -s "$vmid" \
-            "${target_lun_refs[@]}" << 'SSHEOF'
+            "${target_lun_refs[@]}" << 'SSHEOF' 
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
@@ -339,7 +342,7 @@ vmid="$1"
 if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
     remote_script=$(remote_zfsutility_script "$compute_host" "archive-vm")
     exec ssh -t root@"$compute_host" \
-        "$remote_script '$vmid'"
+        "$(input_hold_env_prefix)$remote_script '$vmid'"
 fi
 
 # --- The VM must already be stopped; archive-vm never stops it ---
@@ -417,18 +420,36 @@ if [[ -n "$clone_info" ]]; then
         done <<< "$clone_records"
         echo ""
 
-        if ask_yn "Do you want this script to promote these clones" \
-            "(sever the clone dependencies)?"; then
+        if ask_yn "Do you want this script to sever these clones" \
+            "(copy them into origin-free zvols)?"; then
+            # Severance copies each clone zvol in full and swaps the fresh
+            # copy in under the original name, so every owning clone VM must
+            # already be stopped before any severance work starts.
+            for clone_vmid in "${!clone_vmids[@]}"; do
+                clone_status=$(qm status "$clone_vmid" 2>/dev/null | awk '{print $2}')
+                [[ "$clone_status" == "stopped" ]] || {
+                    log_msg "FATAL: Clone VM ${clone_vmid} is not stopped" \
+                        "(status: ${clone_status:-unknown})."
+                    log_msg "FATAL: Severance copies the clone zvols in full and swaps"
+                    log_msg "FATAL: them in under the same names, so the clone VM must be"
+                    log_msg "FATAL: stopped. Stop clone VM ${clone_vmid}" \
+                        "(e.g. 'qm stop ${clone_vmid}' or the Proxmox GUI)," \
+                        "then re-run archive-vm."
+                    log_msg "FATAL: or the Proxmox GUI), then re-run archive-vm."
+                    exit 1
+                }
+            done
             for clone_vmid in "${!clone_vmids[@]}"; do
                 echo ""
-                log_msg "INFO: Promoting VM ${clone_vmid}..."
-                promote_vm_clone=$(find_zfsutility_script promote-vm-clone)
-                "$promote_vm_clone" "$clone_vmid" \
-                    || { log_msg "FATAL: Promotion failed for VM ${clone_vmid}"; exit 1; }
+                log_msg "INFO: Severing VM ${clone_vmid}..."
+                sever_vm_clone=$(find_zfsutility_script sever-vm-clone)
+                "$sever_vm_clone" "$clone_vmid" \
+                    || { log_msg "FATAL: Severance failed for VM ${clone_vmid}"; exit 1; }
             done
         else
-            log_msg "INFO:   Skipping clone promotion."
-            log_msg "WARN: VM removal may fail while snapshots are held by clones."
+            log_msg "INFO:   Skipping clone severance."
+            log_msg "WARN: VM removal may fail while snapshots are held by" \
+                "clones; sever them first with sever-vm-clone."
         fi
     else
         log_msg "INFO:   No dependent clones found."
