@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.121.1
+
+*Released 2026-10-10*
+
+### Changed
+
+- **`test-sever-vm-clone` mock fidelity and state-file isolation** — the
+  suite's mock `zfs destroy <dataset>` now refuses while child snapshots
+  exist, matching real ZFS ("dataset has children"; child-dataset
+  refusals were already modeled), so the children-first destroy sweep in
+  `sever-vm-clone`'s cutover is proven necessary by the tests rather
+  than merely ordered. Each test environment also sweeps stale
+  `/tmp/sever-vm-clone-*.state` files at build time: crash and abort
+  tests could leave state files behind, and the recovery tests locate
+  their state file by globbing `/tmp` oldest-first, so a leftover file
+  from an earlier run made the next run's `--continue` test resume from
+  the wrong phase.
+
 ## 0.121.0
 
 *Released 2026-10-10*

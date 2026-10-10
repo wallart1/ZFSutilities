@@ -9,7 +9,8 @@
   already analyzed in SESSION_NOTES.md's Zensical thread; recorded here so
   it can be prompted for a decision. Not resolved (code freeze).
   Zensical is under development. We are waiting for a 1.x.x release.
-  (Rechecked 2026-10-08: PyPI shows 0.0.69; still no 1.x.)
+  (Rechecked 2026-10-08: PyPI shows 0.0.69; still no 1.x.
+  Rechecked 2026-10-10: unchanged, 0.0.69.)
 
 - (future objective, migration/create fidelity — narrowed 2026-10-03):
   No creation path (Create Pool wizard or Migrate Pool) can *plan*

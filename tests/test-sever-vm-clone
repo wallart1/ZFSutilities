@@ -60,11 +60,11 @@
 # the oplog; the manifest and encrypted-luns conf live under the env's
 # etcz dir via ISCSI_MANIFEST/ZFSUTILITIES_SYSTEM_CONFIG_DIR.
 #
-# Mock destroy simplification: destroying a dataset succeeds even while it
-# still carries snapshots (real zfs refuses). See the cross-referenced entry
-# in PREEXISTING.md — the mock stays permissive so the swap ordering this
-# suite asserts is observable; destroying a HELD snapshot does fail, as real
-# zfs does.
+# Mock destroy semantics: destroying a dataset refuses while child datasets
+# OR child snapshots exist (real zfs rejects `zfs destroy <dataset>` with
+# "dataset has children"), so the children-first sweep in
+# sever_destroy_dataset is proven necessary, not merely ordered; destroying
+# a HELD snapshot also fails, as real zfs does.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
@@ -677,6 +677,14 @@ destroy)
             "$STATE/datasets"; then
         exit 1
     fi
+    # A dataset with child snapshots refuses too — real zfs rejects
+    # `zfs destroy <dataset>` with "dataset has children", which is what
+    # makes sever-vm-clone's children-first sever_destroy_dataset
+    # load-bearing rather than incidental.
+    if awk -F'\t' -v d="$target" 'index($1, d "@") == 1{f=1} END{exit f?0:1}' \
+            "$STATE/snaps"; then
+        exit 1
+    fi
     awk -F'\t' -v d="$target" '$1!=d' "$STATE/datasets" > "$STATE/datasets.next"
     mv "$STATE/datasets.next" "$STATE/datasets"
     awk -F'\t' -v d="$target" 'index($1, d "@")!=1' "$STATE/snaps" \
@@ -1042,6 +1050,14 @@ sever_env_new() {
     ((SEVER_ENV_SEQ++))
     local env="$_mock_zfs_state_dir/env$SEVER_ENV_SEQ"
     mkdir -p "$env/state" "$env/lock" "$env/devtree" "$env/etcz"
+    # State-file isolation: cutover aborts (deliberate in the crash tests,
+    # unavoidable in a failing run) can leave /tmp/sever-vm-clone-*.state
+    # files behind, and the recovery tests locate their state file by
+    # globbing /tmp — a stale file from an earlier test or run would be
+    # picked up (sorted oldest-first) and --continue would resume from the
+    # wrong phase. Every test builds its env before running the script, so
+    # sweeping here makes each test start with no sever state files at all.
+    rm -f /tmp/sever-vm-clone-*.state*
     if [[ "${1:-single}" == "two" ]]; then
         cat > "$env/node.conf" << EOF
 NODE_MODE="two-node"

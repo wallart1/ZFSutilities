@@ -2880,3 +2880,42 @@ removal, new suites). __pycache__ dirs removed repo-wide. Final full run
 WITH soaks (--with-soak, background, log /tmp/release-0121-withsoak.log):
 91 suites, 4,658 passed / 0 failed / 0 skipped — soak suite confirmed in
 the log. No code changes after this point in the session.
+
+## 2026-10-10 — post-0.121.0: mock destroy hardening + state-file isolation
+
+Approved follow-up (new instruction after the freeze): close the
+mock-divergence hazard the destroy-ordering PREEXISTING entry described.
+Both severance PREEXISTING entries were already stale by then — the
+0.121.0 run itself shipped the fixes (`sever_destroy_dataset`
+children-first at all three call sites; `input_hold_env_prefix` in
+bashinit used by the delegation). Gotcha: PREEXISTING entries written
+mid-run can be fixed by later tasks of the SAME run before it ends —
+re-verify an entry against the tree before acting on it.
+
+- tests/test-sever-vm-clone mock `zfs destroy <dataset>` now refuses while
+  child SNAPSHOTS exist (mirroring the existing child-dataset refusal) —
+  real-ZFS "dataset has children" semantics, so the children-first sweep
+  in sever_destroy_dataset is proven necessary, not merely ordered.
+  Red/green proven: bare-destroy variant fails the suite; the sweep is
+  load-bearing.
+- Suite-isolation bug found via that red-proof (now fixed): the
+  crash/abort tests left `/tmp/sever-vm-clone-*.state` files behind
+  (leakers even on green runs), and the recovery tests locate their state
+  file by `find /tmp | sort | head -1` — a stale file from a failed run
+  made the NEXT run's `--continue` test resume from the wrong phase
+  (deterministic 8-fail → 20/1 → 21/0 pattern). Fix: `sever_env_new`
+  sweeps `/tmp/sever-vm-clone-*.state*` at env build, so every test
+  starts with no sever state files; the red→restore→rerun sequence is now
+  hermetic (immediate 21/0 after a failed run).
+- Operational note for the vm-904 severance runbook: same-pool mode
+  verified live (threeamigos 11.7 T free vs ~31 G largest copy; vm-904
+  zvols 0 B diverged — catch-up will be near-zero).
+
+Wrap-up of this changeset (same day): standards pass (shellcheck, ruff —
+both clean; new awk block mirrors the adjacent child-dataset refusal),
+affected suite 21/21, docs integrity 23 passed, mkdocs build clean (only
+the known MkDocs-2.0/Material banner), PREEXISTING rechecks (Zensical
+still 0.0.69). Final full run without soaks (log
+/tmp/zfs-run-wrapup-1010.log): 91 suites, 4,651 passed / 0 failed /
+1 skipped (test-rootcheck root-privilege test — expected on this non-root
+host). No code changes after this point; codebase frozen at this state.
