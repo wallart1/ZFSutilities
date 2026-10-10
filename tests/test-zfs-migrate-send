@@ -42,6 +42,15 @@ zfs() {
     case "$1" in
         list)
             local ds="${*: -1}"
+            # Snapshot listing (creation order) for the clone path's
+            # oldest-snapshot discovery; the last argument is the dataset.
+            if [[ "$*" == *"-t snapshot"* && -n "${_mock_zfs_snapshots[$ds]+x}" ]]; then
+                local _snapname
+                for _snapname in ${_mock_zfs_snapshots[$ds]}; do
+                    echo "$ds@$_snapname"
+                done
+                return 0
+            fi
             [[ -n "${_mock_zfs_datasets[$ds]+x}" ]]
             return
             ;;
@@ -50,6 +59,10 @@ zfs() {
                 echo "${_mock_resume_token:--}"
             elif [[ "$*" == *"available"* ]]; then
                 echo "${_mock_available:-100000000000}"
+            elif [[ "$*" == *" origin "* ]]; then
+                echo "${_mock_zfs_origin:--}"
+            elif [[ "$*" == *" compression "* ]]; then
+                echo "${_mock_zfs_compression:--}"
             else
                 echo "-"
             fi
@@ -124,6 +137,9 @@ reset_state() {
     : > "$_zfs_capture_file"
     : > "$_pv_capture_file"
     _mock_zfs_datasets=()
+    _mock_zfs_snapshots=()
+    _mock_zfs_origin=""
+    _mock_zfs_compression=""
     _mock_resume_token=""
     _mock_token_error=""
     _mock_token_remaining="0"
@@ -183,6 +199,25 @@ test_fresh_send_missing_estimate_warns() {
     local log
     log=$(get_log)
     assert_contains "$log" "Unable to get stream size estimate"
+    local calls
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" "zfs send -Rw pool/src/ds@migrate-1"
+}
+
+test_zero_byte_estimate_not_missing() {
+    test_start "a genuine zero-byte estimate logs INFO, not the missing-estimate WARN"
+    reset_state
+    _mock_send_size="0"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "Approximately"
+    assert_contains "$log" " 0 bytes to transfer"
+    if [[ "$log" == *"Unable to get stream size estimate"* ]]; then
+        test_fail "zero-byte estimate must not be treated as a missing estimate"
+        return
+    fi
     local calls
     calls=$(get_zfs_calls)
     assert_contains "$calls" "zfs send -Rw pool/src/ds@migrate-1"
@@ -277,6 +312,103 @@ test_incremental_failure_returns_8() {
     log=$(get_log)
     assert_contains "$log" "FATAL: Send/receive failed"
     assert_contains "$log" "re-run Migrate Pool to resume"
+}
+
+# ---------------------------------------------------------------------------
+# Clone-source path (origin-free two-step; a replication stream of a clone
+# received onto a pool holding its origin links straight back to it)
+# ---------------------------------------------------------------------------
+
+test_clone_source_two_step_copy() {
+    test_start "clone source copies origin-free: plain full of @oldest then -w -I to snap, never -R"
+    reset_state
+    _mock_zfs_origin="pool/orig@base"
+    _mock_zfs_snapshots[pool/src/ds]="migrate-0 migrate-1"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local calls log
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" "zfs send -nP -w pool/src/ds@migrate-0"
+    assert_contains "$calls" \
+        "zfs send -nP -w -I pool/src/ds@migrate-0 pool/src/ds@migrate-1"
+    assert_contains "$calls" "zfs send -w pool/src/ds@migrate-0"
+    assert_contains "$calls" "zfs receive -u -F -s -v pool/dest/ds"
+    assert_contains "$calls" \
+        "zfs send -w -I pool/src/ds@migrate-0 pool/src/ds@migrate-1"
+    if [[ "$calls" == *"-R"* ]]; then
+        test_fail "clone copy must not use a replication stream: $calls"
+        return
+    fi
+    log=$(get_log)
+    assert_contains "$log" "copying origin-free"
+}
+
+test_clone_source_single_snapshot() {
+    test_start "clone source with one snapshot sends a single plain full, no -I"
+    reset_state
+    _mock_zfs_origin="pool/orig@base"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local calls
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" "zfs send -nP -w pool/src/ds@migrate-1"
+    assert_contains "$calls" "zfs send -w pool/src/ds@migrate-1"
+    if [[ "$calls" == *"-I"* || "$calls" == *"-R"* ]]; then
+        test_fail "single-snapshot clone must be one plain full send: $calls"
+        return
+    fi
+}
+
+test_clone_catch_up_plain_send() {
+    test_start "clone-source catch-up sends -w -I without -R"
+    reset_state
+    _mock_zfs_origin="pool/orig@base"
+    fromsnap="migrate-0"
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local calls
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" \
+        "zfs send -nP -w -I pool/src/ds@migrate-0 pool/src/ds@migrate-1"
+    assert_contains "$calls" \
+        "zfs send -w -I pool/src/ds@migrate-0 pool/src/ds@migrate-1"
+    if [[ "$calls" == *"-R"* ]]; then
+        test_fail "clone catch-up must not use a replication stream: $calls"
+        return
+    fi
+}
+
+test_clone_full_step_skipped_when_dest_has_oldest() {
+    test_start "clone re-run skips the full step when the destination holds @oldest"
+    reset_state
+    _mock_zfs_origin="pool/orig@base"
+    _mock_zfs_snapshots[pool/src/ds]="migrate-0 migrate-1"
+    _mock_zfs_datasets["pool/dest/ds@migrate-0"]=1
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local calls log
+    calls=$(get_zfs_calls)
+    if [[ "$calls" == *"zfs send -w pool/src/ds@migrate-0"* ]]; then
+        test_fail "full step re-ran although @oldest is staged: $calls"
+        return
+    fi
+    assert_contains "$calls" \
+        "zfs send -w -I pool/src/ds@migrate-0 pool/src/ds@migrate-1"
+    log=$(get_log)
+    assert_contains "$log" "skipping the full-copy step"
+}
+
+test_clone_local_compression_carried() {
+    test_start "clone copy passes the source's local compression to the receive"
+    reset_state
+    _mock_zfs_origin="pool/orig@base"
+    _mock_zfs_compression=$'local\tlz4'
+    zfs_migrate_send 2>/dev/null
+    assert_rc 0 "$?"
+    local calls
+    calls=$(get_zfs_calls)
+    assert_contains "$calls" \
+        "zfs receive -u -F -s -v -o compression=lz4 pool/dest/ds"
 }
 
 # ---------------------------------------------------------------------------
@@ -407,12 +539,18 @@ test_pv_quiet_rate_limit_headless() {
 test_fresh_send_pipeline
 test_fresh_send_estimates_size
 test_fresh_send_missing_estimate_warns
+test_zero_byte_estimate_not_missing
 test_fresh_send_space_short_warns_only
 test_missing_vars_fails
 test_incremental_send_pipeline
 test_incremental_send_uses_incremental_estimate
 test_incremental_missing_estimate_warns
 test_incremental_failure_returns_8
+test_clone_source_two_step_copy
+test_clone_source_single_snapshot
+test_clone_catch_up_plain_send
+test_clone_full_step_skipped_when_dest_has_oldest
+test_clone_local_compression_carried
 test_resume_transfer
 test_resume_transfer_failure_hint
 test_stale_token_aborts_then_fresh_send

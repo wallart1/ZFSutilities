@@ -12,11 +12,17 @@
 # rate-limited via $pv_rate_limit.
 #
 # With an optional $fromsnap set, the send becomes the cutover catch-up
-# incremental: `zfs send -Rw -I <src>@$fromsnap <src>@$snapname` carries every
+# incremental: `zfs send -w -I <src>@$fromsnap <src>@$snapname` carries every
 # change made since the migration snapshot, intermediary snapshots included
 # (`-I`, always a standalone argv word — inside a flag cluster getopt would
 # swallow the next character as its argument), into the same destination
-# before any destructive cutover step.
+# before any destructive cutover step. When the SOURCE IS A CLONE no -R is
+# ever used, for the full copy or the catch-up: a replication stream of a
+# clone is based on its origin snapshot, and a receive onto a pool where
+# that snapshot already exists links the destination as a clone of it
+# instead of copying data. Clone copies use zfs-send-receive's two-step
+# instead: a plain full send of the source's oldest snapshot, then a
+# -w -I incremental to $snapname.
 #
 # Usage: not intended for direct CLI use; the Migrate Pool wizard executes
 #        this script with the variables below assigned.
@@ -103,29 +109,102 @@ zfs_migrate_send() {
         fi
     fi
 
-    # Fresh send of the migration snapshot.
-    # awk '/^size/ {print $2}' — Extract byte size from the transfer dry-run.
-    local datatosend=""
-    if [[ -n "$fromsnap" ]]; then
-        # Cutover catch-up: a short incremental from the migration snapshot
-        # to the cutover snapshot. -nPRw -I mirrors the -Rw -I pipeline
-        # below; -I includes intermediary snapshots taken between the two
-        # and must be its own argv word (never clustered).
-        if ! datatosend=$(zfs send -nPRw -I "$sourcefs@$fromsnap" \
-                "$sourcefs@$snapname" 2>/dev/null | awk '/^size/ {print $2}'); then
-            log_msg "WARN: Size estimate dry-run of $sourcefs@$fromsnap" \
-                "to $sourcefs@$snapname failed."
-        fi
-    else
-        if ! datatosend=$(zfs send -nPRw "$sourcefs@$snapname" 2>/dev/null \
-                | awk '/^size/ {print $2}'); then
-            log_msg "WARN: Size estimate dry-run of $sourcefs@$snapname failed."
+    # --- Fresh send of the migration snapshot --------------------------------
+    # Clone-safe copy: a replication stream (-R) of a CLONE is based on the
+    # clone's origin snapshot, and a receive onto a pool where that snapshot
+    # already exists (severance copies within the source pool) links the
+    # destination as a CLONE of it — receive prints "found clone origin",
+    # almost no bytes move, and nothing is severed. A clone source is
+    # therefore copied with zfs-send-receive's proven two-step, no -R
+    # anywhere: a plain full send of the source's OLDEST snapshot
+    # (self-contained), then a -w -I incremental to $snapname carrying the
+    # rest of the lineage. Non-clone sources keep the -R replication form.
+    local clone_origin=""
+    clone_origin=$(zfs get -H -o value origin "$sourcefs" 2>/dev/null) || clone_origin=""
+    local is_clone=0
+    if [[ -n "$clone_origin" && "$clone_origin" != "-" ]]; then
+        is_clone=1
+        if [[ -z "$fromsnap" ]]; then
+            log_msg "INFO: $sourcefs is a clone of $clone_origin — copying" \
+                "origin-free (plain full of the oldest snapshot, then -w -I" \
+                "incrementals)."
         fi
     fi
-    if [[ -z "$datatosend" ]]; then
+
+    # awk '/^size/ {print $2}' — Extract byte size from the transfer dry-run.
+    local datatosend=0 est="" est_a="" est_b="" have_est=0
+    local have_oldest=0 oldest_bare=""
+    if [[ -n "$fromsnap" ]]; then
+        # Cutover catch-up: a short incremental from the migration snapshot
+        # to the cutover snapshot. -I includes intermediary snapshots taken
+        # between the two and must be its own argv word (never clustered);
+        # -R only for non-clone sources — a clone's stream must not
+        # reference its origin.
+        if (( is_clone )); then
+            if ! est=$(zfs send -nP -w -I "$sourcefs@$fromsnap" \
+                    "$sourcefs@$snapname" 2>/dev/null | awk '/^size/ {print $2}'); then
+                est=""
+                log_msg "WARN: Size estimate dry-run of $sourcefs@$fromsnap" \
+                    "to $sourcefs@$snapname failed."
+            fi
+        else
+            if ! est=$(zfs send -nPRw -I "$sourcefs@$fromsnap" \
+                    "$sourcefs@$snapname" 2>/dev/null | awk '/^size/ {print $2}'); then
+                est=""
+                log_msg "WARN: Size estimate dry-run of $sourcefs@$fromsnap" \
+                    "to $sourcefs@$snapname failed."
+            fi
+        fi
+        if [[ -n "$est" ]]; then datatosend=$((datatosend + est)); have_est=1; fi
+    elif (( is_clone )); then
+        # Two-step copy of a clone: full of the oldest snapshot, then
+        # incremental to $snapname. A re-run that already delivered @oldest
+        # skips the full step; an interrupted receive resumes via the
+        # resume-token path above.
+        local oldest_full
+        oldest_full=$(zfs list -H -t snapshot -o name -s creation -d 1 \
+                "$sourcefs" 2>/dev/null | head -1) || oldest_full=""
+        if [[ "$oldest_full" == *"@"* ]]; then
+            oldest_bare="${oldest_full#*@}"
+        else
+            oldest_bare="$snapname"
+        fi
+        if zfs list -H -t snapshot -o name "$destfs@$oldest_bare" >/dev/null 2>&1; then
+            have_oldest=1
+            log_msg "INFO: Destination already holds @${oldest_bare} —" \
+                "skipping the full-copy step."
+        fi
+        if (( have_oldest == 0 )); then
+            if ! est_a=$(zfs send -nP -w "$sourcefs@$oldest_bare" 2>/dev/null \
+                    | awk '/^size/ {print $2}'); then
+                est_a=""
+                log_msg "WARN: Size estimate dry-run of $sourcefs@$oldest_bare" \
+                    "failed."
+            fi
+            if [[ -n "$est_a" ]]; then datatosend=$((datatosend + est_a)); have_est=1; fi
+        fi
+        if [[ "$snapname" != "$oldest_bare" ]]; then
+            if ! est_b=$(zfs send -nP -w -I "$sourcefs@$oldest_bare" \
+                    "$sourcefs@$snapname" 2>/dev/null | awk '/^size/ {print $2}'); then
+                est_b=""
+                log_msg "WARN: Size estimate dry-run of $sourcefs@$oldest_bare" \
+                    "to $sourcefs@$snapname failed."
+            fi
+            if [[ -n "$est_b" ]]; then datatosend=$((datatosend + est_b)); have_est=1; fi
+        fi
+    else
+        if ! est=$(zfs send -nPRw "$sourcefs@$snapname" 2>/dev/null \
+                | awk '/^size/ {print $2}'); then
+            est=""
+            log_msg "WARN: Size estimate dry-run of $sourcefs@$snapname failed."
+        fi
+        if [[ -n "$est" ]]; then datatosend=$((datatosend + est)); have_est=1; fi
+    fi
+    # have_est, not the byte total, separates "no estimate obtained" from a
+    # genuine zero-byte estimate (an empty incremental dry-run reports 0).
+    if (( have_est == 0 )); then
         log_msg "WARN: Unable to get stream size estimate of" \
             "$sourcefs@$snapname."
-        datatosend=0
     else
         log_msg "INFO: Approximately" \
             "$(echo "$datatosend" | numfmt --to=iec-i)" "bytes to transfer."
@@ -135,20 +214,54 @@ zfs_migrate_send() {
     transfer_check_space "$datatosend" "${destfs%%/*}" \
         || log_msg "WARN: Proceeding despite insufficient space."
 
-    # -R preserves properties/mountpoints for the cutover re-import; -w sends
-    # raw so encrypted datasets survive; -u keeps received datasets unmounted;
-    # -F lets a re-run roll the destination back; -s always, since migration
-    # transfers are full-copy-sized; -v logs each dataset as it is received
-    # so progress through the tree is visible in the session log. With
-    # $fromsnap the send becomes `zfs send -Rw -I @from @to`: the catch-up
-    # incremental whose -I carries intermediary snapshots (e.g. dailybackup)
-    # so they are not lost when the source is destroyed — transfer_do
-    # assembles the -I form itself, keeping -I a standalone argv word.
+    # Transfers. -R preserves properties/mountpoints for the cutover
+    # re-import (non-clone sources); -w sends raw so encrypted datasets
+    # survive; -u keeps received datasets unmounted; -F lets a re-run roll
+    # the destination back; -s always, since migration transfers are
+    # full-copy-sized; -v logs each dataset as it is received so progress
+    # through the tree is visible in the session log. The -I forms are
+    # assembled by transfer_do with -I as a standalone argv word.
     if [[ -n "$fromsnap" ]]; then
-        if transfer_do "Send/receive" "-Rw" "-u -F -s -v" "Y" "$datatosend" \
-                "$sourcefs@$fromsnap" "$destfs" "$sourcefs@$snapname"; then
+        local catch_sendopts="-Rw"
+        if (( is_clone )); then catch_sendopts="-w"; fi
+        if transfer_do "Send/receive" "$catch_sendopts" "-u -F -s -v" "Y" \
+                "$datatosend" "$sourcefs@$fromsnap" "$destfs" "$sourcefs@$snapname"; then
             return 0
         fi
+    elif (( is_clone )); then
+        # Plain sends do not carry dataset properties: give the copy the
+        # source's LOCAL compression (inherited sources need nothing — the
+        # destination namespace inherits from the same parent). volblocksize,
+        # volsize, and encryption are intrinsic to the raw (-w) stream.
+        local comp_pair comp_val comp_src comp_recvopts=""
+        comp_pair=$(zfs get -H -o source,value compression "$sourcefs" 2>/dev/null) \
+            || comp_pair=""
+        comp_src="${comp_pair%%$'\t'*}"
+        comp_val="${comp_pair##*$'\t'}"
+        if [[ "$comp_src" == "local" && -n "$comp_val" && "$comp_val" != "-" ]]; then
+            comp_recvopts=" -o compression=${comp_val}"
+        fi
+        if (( have_oldest == 0 )); then
+            if ! transfer_do "Full copy of $sourcefs@$oldest_bare" "-w" \
+                    "-u -F -s -v${comp_recvopts}" "Y" "${est_a:-0}" \
+                    "$sourcefs@$oldest_bare" "$destfs"; then
+                log_msg "FATAL: ${restart_hint} transfer interrupted; re-run" \
+                    "${restart_hint} to resume from the receive resume token" \
+                    "on $destfs."
+                return 8
+            fi
+        fi
+        if [[ "$snapname" != "$oldest_bare" ]]; then
+            if ! transfer_do "Incremental to $snapname" "-w" \
+                    "-u -F -s -v" "Y" "${est_b:-0}" \
+                    "$sourcefs@$oldest_bare" "$destfs" "$sourcefs@$snapname"; then
+                log_msg "FATAL: ${restart_hint} transfer interrupted; re-run" \
+                    "${restart_hint} to resume from the receive resume token" \
+                    "on $destfs."
+                return 8
+            fi
+        fi
+        return 0
     else
         if transfer_do "Send/receive" "-Rw" "-u -F -s -v" "Y" "$datatosend" \
                 "$sourcefs@$snapname" "$destfs"; then

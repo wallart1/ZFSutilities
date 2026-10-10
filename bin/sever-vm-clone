@@ -497,7 +497,8 @@ sever_report_origins() {
         seen[$origin]=1
 
         if ! sev_zfs list -t snapshot "$origin" >/dev/null 2>&1; then
-            log_msg "INFO:   ${origin} (origin of ${zvol##*/}) — already destroyed; nothing pinned."
+            log_msg "INFO:   ${origin} (origin of ${zvol##*/}) — already destroyed;" \
+                "nothing pinned."
             continue
         fi
 
@@ -506,8 +507,8 @@ sever_report_origins() {
         size=$(human_bytes "${used:-0}")
 
         if [[ -n "$clones" && "$clones" != "-" ]]; then
-                        log_msg "INFO:   ${origin} — still pinned (${size}): cloned by ${clones};" \
-                                "left in place."
+            log_msg "INFO:   ${origin} — still pinned (${size}): cloned by ${clones};" \
+                "left in place."
             continue
         fi
 
@@ -521,7 +522,8 @@ sever_report_origins() {
             continue
         fi
 
-        log_msg "INFO:   ${origin} — unpinned: no clones, no holds; destroying it releases ${size}."
+        log_msg "INFO:   ${origin} — unpinned: no clones, no holds; destroying it" \
+            "releases ${size}."
         sever_offer_origin_destroy "$origin"
     done
 }
@@ -749,8 +751,8 @@ sever_cutover() {
     echo ""
     log_msg "INFO: === Severance complete ==="
     for zvol in "${sev_zvols[@]}"; do
-                log_msg "INFO:   ✓ ${zvol} — origin-free (origin was ${sev_origin[$zvol]}; see" \
-                        "the origin snapshot report above)"
+        log_msg "INFO:   ✓ ${zvol} — origin-free (origin was ${sev_origin[$zvol]};" \
+            "see the origin snapshot report above)"
     done
     rm -f "$sever_state_file"
     log_msg "INFO: State file removed — nothing left to continue or roll back."
@@ -1060,35 +1062,35 @@ sever_holding_space_precheck() {
             [[ "$snap_used" =~ ^[0-9]+$ ]] || snap_used=0
             freed_snap=$snap_used
         elif [[ "$reason" != "already destroyed" ]]; then
-                        log_msg "WARN: Origin snapshot ${osnap} is ${reason} — its space will not" \
-                                "be freed and is not counted."
+            log_msg "WARN: Origin snapshot ${osnap} is ${reason} — its space will not" \
+                "be freed and is not counted."
         fi
     fi
     if (( free + freed_orig + freed_snap < need )); then
-                log_msg "FATAL: The copy-back of ${zvol} would not fit in pool ${pool} — aborting" \
-                        "BEFORE destroying anything."
-                log_msg "FATAL:   free now $(human_bytes "$free") + destroying the original" \
-                        "$(human_bytes "$freed_orig") (its diverged data only)"
-                log_msg "FATAL:   + destroying origin snapshot ${osnap}" \
-                        "$(human_bytes "$freed_snap") =" \
-                        "$(human_bytes $((free + freed_orig + freed_snap))) available,"
-                log_msg "FATAL:   but the copy-back needs $(human_bytes "$need") (full copy" \
-                        "$(human_bytes "$ref_now") x 1.1 headroom)."
-                log_msg "FATAL: A lightly-diverged clone frees little: nearly all its blocks are" \
-                        "shared with the"
+        log_msg "FATAL: The copy-back of ${zvol} would not fit in pool ${pool} — aborting" \
+            "BEFORE destroying anything."
+        log_msg "FATAL:   free now $(human_bytes "$free") + destroying the original" \
+            "$(human_bytes "$freed_orig") (its diverged data only)"
+        log_msg "FATAL:   + destroying origin snapshot ${osnap}" \
+            "$(human_bytes "$freed_snap") =" \
+            "$(human_bytes $((free + freed_orig + freed_snap))) available,"
+        log_msg "FATAL:   but the copy-back needs $(human_bytes "$need") (full copy" \
+            "$(human_bytes "$ref_now") x 1.1 headroom)."
+        log_msg "FATAL: A lightly-diverged clone frees little: nearly all its blocks are" \
+            "shared with the"
         log_msg "FATAL: origin snapshot and only free when that snapshot is destroyed too."
-                log_msg "FATAL:   Make room in ${pool} (or make ${osnap} destroyable), then" \
-                        "re-run: sever-vm-clone --continue ${sever_state_file}"
+        log_msg "FATAL:   Make room in ${pool} (or make ${osnap} destroyable), then" \
+            "re-run: sever-vm-clone --continue ${sever_state_file}"
         log_msg "FATAL:   Or revert everything: sever-vm-clone --rollback ${sever_state_file}"
-                log_msg "FATAL: Nothing was destroyed; the fresh copies are safe in the holding" \
-                        "pool ${sev_holding_pool}."
+        log_msg "FATAL: Nothing was destroyed; the fresh copies are safe in the holding" \
+            "pool ${sev_holding_pool}."
         return 1
     fi
-        log_msg "INFO: Copy-back space pre-check for ${zvol}: free $(human_bytes "$free") +" \
-                "original's diverged data $(human_bytes "$freed_orig") + origin snapshot" \
-                "$(human_bytes "$freed_snap") =" \
-                "$(human_bytes $((free + freed_orig + freed_snap)))" \
-                ">= copy-back need $(human_bytes "$need") — feasible."
+    log_msg "INFO: Copy-back space pre-check for ${zvol}: free $(human_bytes "$free") +" \
+        "original's diverged data $(human_bytes "$freed_orig") + origin snapshot" \
+        "$(human_bytes "$freed_snap") =" \
+        "$(human_bytes $((free + freed_orig + freed_snap)))" \
+        ">= copy-back need $(human_bytes "$need") — feasible."
     return 0
 }
 
@@ -1105,8 +1107,8 @@ sever_destroy_confirmed_origin() {
     local reason origin_ds lock
 
     if [[ "$sever_origin_destroy" != "Y" ]]; then
-                log_msg "INFO: Origin snapshot ${osnap} was not confirmed for destruction — kept;" \
-                        "its space stays allocated."
+        log_msg "INFO: Origin snapshot ${osnap} was not confirmed for destruction — kept;" \
+            "its space stays allocated."
         return 0
     fi
     reason=$(sever_origin_reason "$osnap" "$zvol") || true
@@ -1142,10 +1144,10 @@ sever_destroy_confirmed_origin() {
     fi
     if ! zfs destroy "$osnap"; then
         zfslock_release "$lock"
-                log_msg "FATAL: zfs destroy ${osnap} failed — aborting before the copy-back (its" \
-                        "freed space was counted on)."
-                log_msg "FATAL:   Resolve (busy? held?), then re-run: sever-vm-clone --continue" \
-                        "${sever_state_file}"
+        log_msg "FATAL: zfs destroy ${osnap} failed — aborting before the copy-back (its" \
+            "freed space was counted on)."
+        log_msg "FATAL:   Resolve (busy? held?), then re-run: sever-vm-clone --continue" \
+            "${sever_state_file}"
         return 1
     fi
     zfslock_release "$lock"
@@ -1436,10 +1438,10 @@ sev_iscsi_reattach() {
             targetcli "/iscsi/${tgt}/tpg1/luns" create "/backstores/block/${bs}"
             new_lun="$(sev_iscsi_lun_of)"
             if [[ -n "$new_lun" && "$new_lun" != "$lun" ]]; then
-                                log_msg "WARN: ${zvol} moved from LUN ${lun} to LUN ${new_lun} —" \
-                                        "the PVE config's by-path reference (…-lun-${lun}) may" \
-                                        "need" \
-                                        "attention."
+                log_msg "WARN: ${zvol} moved from LUN ${lun} to LUN ${new_lun} —" \
+                    "the PVE config's by-path reference (…-lun-${lun}) may" \
+                    "need" \
+                    "attention."
                 echo "LUNMOVED ${zvol} ${lun} ${new_lun}" >> "$results"
             fi
         fi
@@ -1457,8 +1459,8 @@ sev_iscsi_reattach() {
     # degraded state (some expected LUN inactive) — a warning here, not a
     # failed severance; the LUN of this disk is up.
     if ! "$mydir/safe-iscsi-save"; then
-                log_msg "WARN: safe-iscsi-save skipped or failed — run it on $(hostname -s) once" \
-                        "every expected LUN is active."
+        log_msg "WARN: safe-iscsi-save skipped or failed — run it on $(hostname -s) once" \
+            "every expected LUN is active."
     fi
     echo "ISCSI_ATTACHED ${zvol} ${tgt} ${new_lun} ${bs}" >> "$results"
     log_msg "INFO: ✓ ${zvol} re-exported: target ${tgt##*:}, LUN ${new_lun}, backstore ${bs}."
@@ -1617,8 +1619,8 @@ sev_w_cutover_disk() {
         }
         if [[ "$src_guid" != "$tmp_guid" ]]; then
             sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
-                        log_msg "FATAL: Cutover snapshot GUID mismatch for ${zvol}: source" \
-                                "${src_guid} vs copy ${tmp_guid} — aborting with nothing destroyed."
+            log_msg "FATAL: Cutover snapshot GUID mismatch for ${zvol}: source" \
+                "${src_guid} vs copy ${tmp_guid} — aborting with nothing destroyed."
             return 1
         fi
         sev_cut_guid[$zvol]="$src_guid"
@@ -1755,7 +1757,8 @@ sev_w_cutover_disk() {
             log_msg "WARN: The swap already happened (crash after the rename); continuing."
         else
             sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
-            log_msg "FATAL: Neither ${zvol} nor ${rename_src} exists — there is nothing to swap in."
+            log_msg "FATAL: Neither ${zvol} nor ${rename_src} exists — there is nothing" \
+                "to swap in."
             return 1
         fi
         sever_phase_set "$zvol" "temp_renamed"
@@ -1843,8 +1846,20 @@ sev_w_cutover_disk() {
     sever_release_locks "$lock_back" "$lock_tmp" "$lock_src"
     rm -f "$holdsfile"
     sever_phase_set "$zvol" "done"
-        log_msg "INFO: ✓ ${zvol}: severed — origin-free under its own name (@${cut_snap}, GUID" \
-                "${sev_cut_guid[$zvol]})."
+    # Backstop verification: the phase-1 gate already refuses copies that
+    # are not origin-free, but never claim "severed" without checking — if
+    # this fires, the zvol is usable but still a clone and nothing was
+    # severed.
+    local new_origin
+    new_origin=$(zfs get -H -o value origin "$zvol" 2>/dev/null) || new_origin="-"
+    if [[ -n "$new_origin" && "$new_origin" != "-" ]]; then
+        log_msg "FATAL: Severance verification failed: ${zvol} is still a" \
+            "clone of ${new_origin} after the swap — the staged copy was" \
+            "not origin-free. The VM is usable, but nothing was severed."
+        return 1
+    fi
+    log_msg "INFO: ✓ ${zvol}: severed — origin-free under its own name (@${cut_snap}, GUID" \
+        "${sev_cut_guid[$zvol]})."
     return 0
 }
 
@@ -2384,9 +2399,9 @@ sever_ask_holding_pool() {
     sev_holding_pool="$sev_hold_in"
 
     if (( ${sev_pool_free[$sev_holding_pool]:-0} < need )); then
-                log_msg "WARN: ${sev_holding_pool} has" \
-                        "$(human_bytes "${sev_pool_free[$sev_holding_pool]:-0}") free — below the" \
-                        "$(human_bytes "$need")"
+        log_msg "WARN: ${sev_holding_pool} has" \
+            "$(human_bytes "${sev_pool_free[$sev_holding_pool]:-0}") free — below the" \
+            "$(human_bytes "$need")"
         log_msg "WARN:   this run stages there. If the pool fills, the receive suspends with a"
         log_msg "WARN:   resume token; re-running sever-vm-clone resumes it."
     fi
@@ -2405,10 +2420,10 @@ sever_ask_holding_pool() {
         if [[ "$keystatus" == "unavailable" ]]; then
             log_msg "WARN: The zvols being severed are encrypted and the holding pool's key is"
             log_msg "WARN: NOT loaded (keystatus=unavailable on ${sev_holding_pool}). Load it"
-                        log_msg "WARN: first (zfs key -l) — receives into ${sev_holding_pool} may" \
-                                "fail otherwise."
+            log_msg "WARN: first (zfs key -l) — receives into ${sev_holding_pool} may" \
+                "fail otherwise."
         fi
-        log_msg "INFO: The copies stay encrypted: replication is raw (-w), so the copy-back"
+        log_msg "INFO: The copies stay encrypted: the transfer is raw (-w), so the copy-back"
         log_msg "INFO: and the swapped-in zvol keep the original encryption setup."
     fi
     return 0
@@ -2451,7 +2466,8 @@ sever_holding_plan() {
         "Destroy these origin snapshots after the severance to make room for the copy-back?" \
         "Y"; then
         sever_origin_destroy="N"
-        log_msg "INFO: Origin snapshots stay — their pinned space is not counted for the copy-back."
+        log_msg "INFO: Origin snapshots stay — their pinned space is not counted" \
+            "for the copy-back."
     else
         sever_origin_destroy="Y"
     fi
@@ -2776,6 +2792,21 @@ while [[ $# -gt 0 ]]; do
                         "before this run)."
     fi
     guid=$(zfs get -Hp -o value guid "$tempzvol@$recv_snap")
+
+    # The staged copy must be origin-free: a replication stream of a clone
+    # received onto the same pool links the destination back to the
+    # still-present origin snapshot (receive prints "found clone origin")
+    # instead of copying data — the swap would replace a clone with a clone
+    # and sever nothing. Gate here, before anything is destroyed.
+    copy_origin=$(zfs get -H -o value origin "$tempzvol" 2>/dev/null) || copy_origin="-"
+    if [[ -n "$copy_origin" && "$copy_origin" != "-" ]]; then
+        log_msg "FATAL: The staged copy ${tempzvol} is still a clone of" \
+            "${copy_origin} — the receive linked to the existing origin" \
+            "instead of copying data."
+        log_msg "FATAL: Nothing was destroyed. Clone sources must be copied" \
+            "with plain (non-replication) sends — engine defect."
+        exit 1
+    fi
 
     echo "${zvol} ${tempzvol} ${recv_snap} ${guid}" >> "$results"
 

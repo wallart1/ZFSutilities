@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.121.3
+
+*Released 2026-10-10*
+
+### Fixed
+
+- **Same-pool clone copies re-linked the origin (second field defect)** —
+  `zfs send -Rw` of a CLONE produces a stream based on the clone's ORIGIN
+  snapshot, and a receive onto a pool where that snapshot still exists
+  (severance copies within the source pool) links the destination as a
+  CLONE of it instead of copying data: receive prints "found clone
+  origin", a few hundred bytes move instead of the estimated full copy,
+  and the name-preserving swap replaces old clones with new clones — the
+  0.121.2 severance run "succeeded" without severing anything (lineage
+  and holds stayed intact, so the zvols were safe to re-sever).
+  `zfs-migrate-send` now detects clone sources and copies them
+  origin-free with `zfs-send-receive`'s two-step — a plain full `-w` send
+  of the source's oldest snapshot, then a `-w -I` incremental to the
+  target — with the cutover catch-up likewise dropping `-R` for clones,
+  the source's LOCAL compression passed as a receive `-o` (plain sends
+  carry no properties), and a re-run skipping the full step once the
+  destination holds `@oldest`. Non-clone sources keep the `-Rw`
+  replication form, and Migrate Pool's clone-dataset copies inherit the
+  safety through the same engine. Recovery after deploying: re-run
+  `sever-vm-clone <vmid>` fresh — a false-success run leaves nothing to
+  continue.
+- **`sever-vm-clone` severance verification** — the phase-1 staging gate
+  now refuses any copy whose origin is not `-` (FATAL before anything is
+  destroyed), and the post-swap "✓ severed" line actually checks the
+  swapped-in zvol's origin instead of asserting it (a still-clone swap
+  fails verification: the VM stays usable under its own name, but
+  nothing was severed).
+- **Transfer size-estimate messaging** — a failed `zfs send -n` dry-run
+  and a genuine zero-byte estimate are no longer conflated: an empty
+  incremental no longer triggers the "Unable to get stream size
+  estimate" WARN.
+
+### Changed
+
+- **Clone-path and origin-gate test coverage** — five engine tests cover
+  the clone two-step (plain full + `-w -I`, never `-R`; single-snapshot
+  sources; plain catch-up; re-run skip when `@oldest` is staged; local
+  compression on the receive) via an `origin_override` mock knob on the
+  sever side for the two gates, plus a zero-byte-estimate regression
+  test.
+- **Standards normalization in `sever-vm-clone`** — over-long and
+  mis-indented `log_msg` groups re-wrapped to the 100-column policy and
+  block depth (rendered output proven byte-identical), and the holding-
+  mode encryption note reworded from "replication is raw" to "the
+  transfer is raw" now that clone copies are plain `-w` sends.
+
+### Documentation
+
+- **Clone-safe severance narrative** — the two-node reference documents
+  the origin-free copy path, the phase-1 origin gate, and the post-swap
+  backstop, and corrects the stale attribution of the original's extra
+  snapshots to `-R` replication (they are retention snapshots); the
+  message catalogue, the send-builder row in the module reference, and
+  the testing guide's suite rows gained their clone-path entries.
+
 ## 0.121.2
 
 *Released 2026-10-10*

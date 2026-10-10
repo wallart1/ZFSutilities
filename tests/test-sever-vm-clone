@@ -612,6 +612,23 @@ get)
                 echo available
             fi
             ;;
+        origin)
+            ds_exists "$target" || exit 1
+            # Test knob: force an origin answer for one dataset (a staged
+            # copy that "linked" to the still-present origin, or a swapped-
+            # in zvol that is still a clone) — the guid_override pattern.
+            if [[ -f "$STATE/origin_override" ]]; then
+                while IFS='=' read -r otgt oval; do
+                    if [[ "$otgt" == "$target" && -n "$oval" ]]; then
+                        op GET origin "$target"
+                        echo "$oval"
+                        exit 0
+                    fi
+                done < "$STATE/origin_override"
+            fi
+            op GET origin "$target"
+            fld "$(ds_row "$target")" 3
+            ;;
         receive_resume_token) echo "-" ;;
         *) echo "-" ;;
     esac
@@ -1728,6 +1745,68 @@ $(cat "$env/state/oplog")"
     rm -f /tmp/sever-vm-clone-${vmid}-*.state*
 }
 
+test_phase1_copy_still_clone_aborts() {
+    test_start "phase-1 gate: a staged copy that is still a clone aborts with nothing destroyed"
+    local vmid=530 env out rc temp
+    env=$(sever_env_with_clone "$vmid")
+    temp="tank/proxmox/sever_${vmid}/vm-${vmid}-disk-0"
+    # Simulate the engine defect this gate exists for: the receive linked
+    # the destination to the still-present origin instead of copying data.
+    printf '%s=%s\n' "$temp" "tank/proxmox/vm-100-disk-0@clone-origin" \
+        > "$env/state/origin_override"
+
+    SEVER_STDIN="y
+"
+    out=$(sever_run "$env" "$vmid")
+    rc=$?
+    SEVER_STDIN=""
+
+    assert_rc 1 "$rc"
+    assert_contains "$out" "The staged copy ${temp} is still a clone of"
+    assert_contains "$out" "tank/proxmox/vm-100-disk-0@clone-origin"
+    assert_contains "$out" "Nothing was destroyed"
+    if [[ "$(sever_op_count "$env" DESTROY)" != "0" ]] \
+        || [[ "$(sever_op_count "$env" RENAME)" != "0" ]]; then
+        test_fail "destructive ops ran despite the clone-copy gate; oplog:
+$(cat "$env/state/oplog")"
+        return
+    fi
+    test_pass
+    # The original survives as a clone; the staged copy stays for --continue.
+    assert_equals "tank/proxmox/vm-100-disk-0@clone-origin" \
+        "$(sever_field "$env" "tank/proxmox/vm-${vmid}-disk-0" 3)"
+    sever_ds_exists "$env" "$temp" \
+        && test_pass || test_fail "staged copy missing after clone-gate abort"
+    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+}
+
+test_postswap_origin_backstop_fails() {
+    test_start "post-swap backstop: a swapped-in zvol that is still a clone fails verification"
+    sever_have_blkdev \
+        || { test_skip "no block device on host for the fake /dev/zvol tree"; return; }
+    local vmid=540 env out rc
+    env=$(sever_env_with_clone "$vmid")
+    # The phase-1 gate checks the temp namespace only; this override makes
+    # the ORIGINAL name report an origin after the swap, simulating a copy
+    # that was not origin-free and slipped past phase 1.
+    printf '%s=%s\n' "tank/proxmox/vm-${vmid}-disk-0" \
+        "tank/proxmox/vm-100-disk-0@clone-origin" > "$env/state/origin_override"
+
+    SEVER_STDIN="y
+"
+    out=$(sever_run "$env" "$vmid")
+    rc=$?
+    SEVER_STDIN=""
+
+    assert_rc 1 "$rc"
+    assert_contains "$out" \
+        "Severance verification failed: tank/proxmox/vm-${vmid}-disk-0"
+    assert_contains "$out" "is still a clone of"
+    assert_contains "$out" "tank/proxmox/vm-100-disk-0@clone-origin"
+    assert_contains "$out" "nothing was severed"
+    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+}
+
 # ---------------------------------------------------------------------------
 # Tests: crash-window recovery
 # ---------------------------------------------------------------------------
@@ -2397,6 +2476,8 @@ test_vmid_mode_severs_all_disks
 test_dataset_mode_and_nonclone_skips
 test_origin_report_sibling_and_held
 test_guid_mismatch_aborts_before_destroy
+test_phase1_copy_still_clone_aborts
+test_postswap_origin_backstop_fails
 test_crash_before_rename_continue
 test_crash_after_rename_continue
 test_rollback_staged_run

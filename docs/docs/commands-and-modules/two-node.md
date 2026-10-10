@@ -1158,9 +1158,13 @@ sudo sever-vm-clone <dataset> [dataset...]
    sequentially, under `w` locks on the source zvol and the temp-namespace
    parent: a bucket-less `@sever-<UTC timestamp>` snapshot (retention never
    prunes it), a full copy through the `zfs-migrate-send` engine into the temp
-   namespace, `refreservation=none` on the received zvol, and the received
-   snapshot's GUID. An interrupted receive resumes from its receive resume
-   token on re-run.
+   namespace (clone sources are copied origin-free — a plain full send of the
+   oldest snapshot plus `-w -I` incrementals; a replication stream of a clone
+   would let a same-pool receive link the destination straight back to the
+   still-present origin), `refreservation=none` on the received zvol, the
+   received snapshot's GUID, and an origin check that refuses any staged copy
+   that is still a clone. An interrupted receive resumes from its receive
+   resume token on re-run.
 6. **Phase 2 — cutover (the owning VMs must be stopped; enforced with
    `qm status`):** write the cutover state file, then per disk, inside one
    storage-side worker under `set -e` (a child shell; an
@@ -1177,7 +1181,7 @@ sudo sever-vm-clone <dataset> [dataset...]
       backstore pins the device node the destroy frees.
     - Destroy the original clone zvol — snapshot by snapshot first (children
       first: `zfs destroy <dataset>` refuses while any child snapshot lives,
-      and the `-R` replication gave the original snapshots beyond this tool's
+      and the original carries retention snapshots beyond this tool's
       `@sever-*` ones); in holding mode, destroy the confirmed
       origin snapshot and copy the staged copy back into the source-pool temp
       namespace through the engine (GUID verified again).
@@ -1187,10 +1191,12 @@ sudo sever-vm-clone <dataset> [dataset...]
       the SAME LUN id (a slot taken meanwhile falls back to auto-assign with a
       WARN for the PVE `by-path` reference), keep the manifest and
       encrypted-LUNs bookkeeping in step, and run `safe-iscsi-save`.
-    - Verify the post-swap GUID, reapply the captured holds, destroy the
-      holding-pool copy (holding mode), destroy this tool's `@sever-*`
-      scaffolding snapshots, and release the locks. Every step is idempotent
-      and recorded per disk in the state file.
+    - Verify the post-swap GUID and that the swapped-in zvol is origin-free
+      (a swap that is still a clone fails verification — the VM stays usable
+      under its own name, but nothing was severed), reapply the captured
+      holds, destroy the holding-pool copy (holding mode), destroy this
+      tool's `@sever-*` scaffolding snapshots, and release the locks. Every
+      step is idempotent and recorded per disk in the state file.
 7. Remove the now-empty temp namespaces; in two-node mode run `rescan-storage`
    on the compute host when any disk was exported; then print the
    origin-snapshot report: for every origin, snapshots still cloned or held

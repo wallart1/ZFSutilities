@@ -2997,3 +2997,71 @@ are gitignored). Final full run WITH soaks (background, log
 0 skipped — soak suite confirmed in the log; matches the 0.121.1
 with-soak baseline profile. No code changes after the freeze.
 
+## 2026-10-10 — second field defect: same-pool receive of a clone's -R stream re-links the origin
+
+The first real severance run (0.121.2) "succeeded" without severing:
+`zfs send -Rw` of a CLONE produces a stream based on the clone's ORIGIN
+snapshot, and a receive onto a pool where that snapshot still exists
+(severance copies within the source pool) links the destination as a
+CLONE of it — receive prints "found clone origin", ~312 B per snapshot
+moves instead of the estimated 23 Gi, and the swap replaced old clones
+with new clones (verified live: origins still on vm-211's @clone snaps,
+0 B/14 K used; lineage and offsite hold intact, so no harm done).
+
+- Durable gotcha: only a PLAIN full send copies a clone origin-free on
+  the same pool. Replication streams of clones must never be received
+  onto the pool holding their origin. `-R` has now caused both 0.121.x
+  field defects (getopt cluster first, stream semantics now).
+- Fix: zfs-migrate-send detects clone sources and copies with
+  zfs-send-receive's two-step (plain full of the OLDEST snapshot, then
+  `-w -I` to the target; catch-up also drops -R; local compression
+  passed as receive `-o`; step A skipped on re-run when the destination
+  already holds @oldest). Non-clone sources keep `-Rw`. Migrate Pool's
+  clone-dataset copies inherit the safety.
+- sever-vm-clone gained the missing verification: the phase-1 gate
+  refuses any staged copy whose origin is not `-` (before anything is
+  destroyed), and the post-swap "✓ severed" line now actually checks
+  the origin instead of asserting it.
+- Tests: five engine clone-path tests + two sever origin-gate tests
+  (guid_override-style origin_override knob); red/green proven by
+  disabling the clone path. Recovery: re-run sever-vm-clone 904 after
+  deploying — the current zvols are safe to re-sever.
+- "SEVER 904" (repo root, untracked) is the console capture of the
+  defective 0.121.2 field run: "found clone origin", 312 B per snapshot,
+  and the origin-snapshot report still showing vm-904 cloning vm-211's
+  snaps after "success". Evidence for this changeset; the fix is NOT
+  deployed yet.
+
+## 2026-10-10 — wrap-up pass over the clone-origin changeset (pre-freeze)
+
+- Standards: sever-vm-clone's "✓ severed" log line re-indented to 4 spaces
+  (was 8, and 101 chars); zfs-migrate-send now separates a FAILED size
+  estimate from a genuine zero-byte estimate (have_est flag) — a "size 0"
+  dry-run no longer triggers the missing-estimate WARN; a 110-char test
+  assert split into an equivalent pair. ShellCheck clean, no lines over
+  100 in new code. 15 pre-existing 101-102-char lines in sever-vm-clone
+  recorded in PREEXISTING.md.
+- Tests: added test_zero_byte_estimate_not_missing; affected + adjacent
+  suites green (migrate-send, sever-vm-clone, lock-coverage,
+  proxmox-required-guards, snapshot-names, archive-vm).
+- Docs: two-node.md cutover bullet now documents the post-swap origin-free
+  backstop; the stale "the -R replication gave the original snapshots"
+  attribution corrected (they are retention snapshots); python-modules.md
+  send-builder row and testing.md suite rows updated for the clone path.
+  Docs integrity 23/23; site rebuilt.
+- Post-freeze follow-up (user prompt): the 15 pre-existing 101-102-char
+  sever-vm-clone lines were wrapped after all (several were also
+  misindented 8/16-vs-4/12 log_msg groups — normalized to block depth).
+  A logical-line parser proved all 287 log_msg calls render byte-identical
+  to the pre-edit snapshot; ShellCheck clean; PREEXISTING entry removed.
+  The two remaining PREEXISTING entries (Zensical 1.x wait, infra-vdev
+  planning abeyance) await user decisions.
+- Second-pass redo of wrap-up steps 2-6: one more straggler normalized
+  (the success-path copy-back pre-check INFO block, 8/16 -> 4/8) and the
+  stale "replication is raw (-w)" holding-mode message reworded to "the
+  transfer is raw (-w)" (clone copies are plain -w sends, not
+  replication; messages/index.md row updated; no test coupling). Parser
+  verdict: 287 calls, exactly the one intended text diff. Full-tree
+  ShellCheck (documented command) + ruff clean; both affected suites
+  green; docs integrity 23/23; site rebuilt.
+
