@@ -783,13 +783,35 @@ set)
     ;;
 
 send)
+    # Getopt fidelity, mirroring real zfs (same guard as the
+    # test-transfer-lib and test-zfs-migrate-send mocks): an
+    # argument-taking option (-i/-I/-t) embedded in a short-option
+    # cluster makes the next cluster character its argument, so any
+    # snapshot names after it land as extra positionals — real zfs
+    # fails with "too many arguments". Such options must be standalone
+    # argv words; two operands without one are rejected too.
     shift
     dry=0
     operands=()
+    _incr=0
     for a in "$@"; do
+        # A short-option cluster (dash + two or more letters) holding
+        # i/I/t is exactly the broken form; globs suffice.
+        if [[ "$a" == -* && "${#a}" -gt 2 && "$a" == *[iIt]* ]]; then
+            echo "too many arguments" >&2
+            exit 1
+        fi
         [[ "$a" == -n* && "$a" == -* ]] && dry=1
-        if [[ "$a" != -* ]]; then operands+=("$a"); fi
+        case "$a" in
+            -I|-i|-t) _incr=1 ;;
+            -*) ;;
+            *) operands+=("$a") ;;
+        esac
     done
+    if (( ${#operands[@]} > 1 && _incr == 0 )); then
+        echo "too many arguments" >&2
+        exit 1
+    fi
     to="${operands[0]:-}"
     from=""
     if [[ ${#operands[@]} -ge 2 ]]; then from="$to"; to="${operands[1]}"; fi
@@ -924,7 +946,7 @@ exit 0
 MOCKZPOOL
 
     # --- mock migration engine: the shapes sever-vm-clone drives (full -Rw
-    # --- copy, catch-up -RIw incremental), performed through the mock CLI's
+    # --- copy, catch-up -Rw -I incremental), performed through the mock CLI's
     # --- send|receive so snapshot GUIDs travel like real replication.
     cat > "$SEVER_MOCKBIN/zfs-migrate-send" << 'MOCKENGINE'
 #!/usr/bin/bash
@@ -953,9 +975,9 @@ zfs_migrate_send() {
     fi
     local size rc
     if [[ "$mode" == "catchup" ]]; then
-        size=$(zfs send -nPRIw "${src}@${from}" "${src}@${snap}" \
+        size=$(zfs send -nPRw -I "${src}@${from}" "${src}@${snap}" \
             | awk '/^size/{print $2}')
-        zfs send -RIw "${src}@${from}" "${src}@${snap}" \
+        zfs send -Rw -I "${src}@${from}" "${src}@${snap}" \
             | zfs receive -u -F -s -v "$dst"
         rc=$?
     else

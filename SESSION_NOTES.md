@@ -2919,3 +2919,81 @@ still 0.0.69). Final full run without soaks (log
 /tmp/zfs-run-wrapup-1010.log): 91 suites, 4,651 passed / 0 failed /
 1 skipped (test-rootcheck root-privilege test — expected on this non-root
 host). No code changes after this point; codebase frozen at this state.
+
+## 2026-10-10 — catch-up send argv fix (field defect in the 0.121.1 run)
+
+The first real `sever-vm-clone 904` run aborted at the cutover catch-up:
+`zfs send -nPRIw @from @to` / `transfer_do ... "-RIw"` fail on real ZFS
+with "too many arguments" — inside a short-option cluster, getopt takes
+the next CLUSTER CHARACTER as an argument-taking option's argument, so
+`-RIw` parses as `-I"w"` and both snapshot names land as positionals.
+Verified live on stewie: the cluster form fails; `zfs send -nPRw -I @from
+@to` succeeds. The full-copy path was immune (`-Rw` has no argument-taking
+option). zfs-send-receive was already safe (standalone `-I`/`-i` words in
+arrays); the defect was confined to zfs-migrate-send (inherited by
+sever-vm-clone's catch-up AND Migrate Pool's cutover catch-up).
+
+- Fix: transfer_do now assembles the incremental form itself
+  (`zfs send <opts> -I <from> <to>`, -I a standalone argv word); the
+  zfs-migrate-send estimate and catch-up call use `-nPRw -I` / `-Rw`.
+- Gotcha (durable): argument-taking CLI options (-i/-I/-t here) must NEVER
+  ride inside a flag cluster; the zfs send mocks in test-zfs-migrate-send
+  and test-transfer-lib now enforce exactly that (clusters containing
+  i/I/t, or two positionals without a standalone -I/-i, fail with "too
+  many arguments") — argv-fidelity mocks, not just exit-code mocks, are
+  what catches this class. Red/green proven both ways.
+- Recovery for the interrupted run: after deploying the fix,
+  `sudo sever-vm-clone --continue /tmp/sever-vm-clone-904-1791650817.state`
+  — the cutover worker's steps are idempotent (staged copies and the
+  already-created cutover snapshot are reused).
+
+## 2026-10-10 — wrap-up of the catch-up argv changeset
+
+Steps 1–3 of the cycle wrap-up:
+
+- Step 1: PREEXISTING both entries non-actionable (Zensical still 0.0.69
+  on a fresh PyPI check; infra-vdev planning UI in abeyance by user
+  decision). File left as-is.
+- Step 2 (standards): shellcheck/ruff/bash -n clean; one added
+  test_start line was 102 chars → reworded; the new mock regex
+  `^-[A-Za-z]{2,}$` (14 chars, thin docs) replaced with an equivalent
+  glob form (policy prefers no regex). Verified no transfer_do caller
+  ever combines -t with send_target2 (resume path passes "" target,
+  zfs-send-receive never passes target2) — the if/elif restructure is
+  safe. Golden diff reviewed: exactly the intended one-line change.
+- Step 3 (tests): the sever suite's mock engine still modeled the
+  broken clustered `-nPRIw`/`-RIw` sends. Added the same
+  getopt-fidelity guard to its mock `zfs send` (red: 9 failures with
+  the clustered engine), then moved the engine to `-nPRw -I`/`-Rw -I`
+  (green 21/21) — the severance path now has the argv-fidelity net
+  too. Stale `-RIw` docstring in test_zfs_repository.py updated.
+  Affected suites: test-transfer-lib, test-zfs-migrate-send,
+  test-sever-vm-clone, test_zfs_repository.py all green.
+
+Step 4 (docs): stale current-behavior `-RIw`/`-nPRIw` references
+corrected to the standalone `-I` forms in commands.md (5 sites incl. the
+globals table), gtk-gui.md, and python-modules.md (3 sites); changelog
+hits left alone (historical release records). testing.md: migrate-send /
+transfer-lib rows updated for the argv-fidelity mocks, and two missing
+suite-table rows added — test-sever-vm-clone (never had one) and
+test-zfswipe. docs integrity 23 passed; mkdocs build exit 0 (only the
+known MkDocs-2.0/Material banner); site rebuilt.
+
+Steps 5–6: full suite without soaks (background, log
+/tmp/zfs-run-wrapup-argvfix.log): 91 suites, 4,651 passed / 0 failed /
+1 skipped (test-rootcheck root-privilege branch — expected on this
+non-root host), exit 0, first run clean. Codebase frozen at this state;
+no further changes without a new instruction.
+
+## 2026-10-10 — Release 0.121.2 preparation (wrap-up steps 7–8)
+
+VERSION bumped to 0.121.2; changelog entry added (Fixed: catch-up send
+argv defect + --continue recovery note; Changed: argv-fidelity send
+mocks in three suites; Documentation: flag-reference corrections +
+missing testing.md suite rows). __pycache__ dirs removed repo-wide
+(3 found; re-swept after the run since pytest regenerates them — they
+are gitignored). Final full run WITH soaks (background, log
+/tmp/release-0121-2-withsoak.log): 91 suites, 4,658 passed / 0 failed /
+0 skipped — soak suite confirmed in the log; matches the 0.121.1
+with-soak baseline profile. No code changes after the freeze.
+

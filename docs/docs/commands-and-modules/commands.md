@@ -1816,10 +1816,10 @@ sourcefs=temp/proxmox destfs=temp_mig/proxmox snapname=migrate-… \
 ```
 
 With `$fromsnap` set (the cutover catch-up path), the send is incremental
-instead: `zfs send -RIw <source>@<fromsnap> <source>@<snapname>` replicates
-everything between the two snapshots, so the destination only receives the
-writes made while the initial copy ran. The size estimate uses the
-incremental pair (`zfs send -nPRIw`) as well.
+instead: `zfs send -Rw -I <source>@<fromsnap> <source>@<snapname>`
+replicates everything between the two snapshots, so the destination only
+receives the writes made while the initial copy ran. The size estimate uses
+the incremental pair (`zfs send -nPRw -I`) as well.
 
 **Arguments:** none (variables are assigned by the caller).
 
@@ -1831,7 +1831,7 @@ incremental pair (`zfs send -nPRIw`) as well.
 | `$destfs`        | Destination dataset (required)                          |
 | `$snapname`      | Bare migration snapshot name, no leading `@` (required) |
 | `$fromsnap`      | Optional bare earlier snapshot to send incrementally    |
-|                  | from (`-RIw`); empty = full `-Rw` replication           |
+|                  | from (`-Rw -I`); empty = full `-Rw` replication         |
 | `$pv_rate_limit` | Optional `pv -L` rate (e.g. `100m`); empty = unlimited  |
 
 **Behavior:**
@@ -1843,11 +1843,11 @@ incremental pair (`zfs send -nPRIw`) as well.
   destination state). Stale (`transfer_resume_token_stale`) or unexpectedly
   invalid → the token is aborted with `zfs receive -A` and a fresh send runs.
 - Fresh send: stream-size estimate (`zfs send -nPRw` without `$fromsnap`,
-  `zfs send -nPRIw <source>@<fromsnap> <source>@<snapname>` with it; WARN and
-  continue when unavailable), destination free-space WARN check (never
+  `zfs send -nPRw -I <source>@<fromsnap> <source>@<snapname>` with it; WARN
+  and continue when unavailable), destination free-space WARN check (never
   aborts), then `zfs send -Rw <source>@<snap> | pv … | zfs receive -u -F -s
-  -v <dest>` — or `zfs send -RIw <source>@<fromsnap> <source>@<snap> | pv … |
-  zfs receive -u -F -s -v <dest>` on the catch-up path.
+  -v <dest>` — or `zfs send -Rw -I <source>@<fromsnap> <source>@<snap> |
+  pv … | zfs receive -u -F -s -v <dest>` on the catch-up path.
 - `pv` appears in the pipeline when stderr is a terminal or the GUI runner
   captures output (`ZFSUTILITIES_LOG_INHERIT=Y`); a rate limit is honored
   quietly in headless mode.

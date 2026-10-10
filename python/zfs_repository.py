@@ -558,7 +558,7 @@ def build_migration_send_receive_command(
     keeps the receive resumable; ``-v`` logs each dataset as it is received
     so progress through the tree is visible in the session log. With
     *from_snap* (a bare snapshot name, validated like *snap_name*) the
-    wrapper sends ``zfs send -RIw <source>@<from> <source>@<snap>`` instead:
+    wrapper sends ``zfs send -Rw -I <source>@<from> <source>@<snap>`` instead:
     the short cutover catch-up incremental that carries every write made
     since the migration snapshot, intermediary snapshots included (``-I``).
     Raises ValueError on empty/invalid names or an invalid *rate_limit*;

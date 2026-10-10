@@ -1537,7 +1537,7 @@ sev_w_cutover_disk() {
     fi
 
     # 1. Cutover snapshot + catch-up incremental through the engine's fromsnap
-    #    path (zfs send -RIw <src>@<from> <src>@<cutover>), so every change
+    #    path (zfs send -Rw -I <src>@<from> <src>@<cutover>), so every change
     #    made during the transfer phase — intermediary snapshots included —
     #    lands in the staged copy ([H]: the holding pool's copy) before
     #    anything is destroyed.

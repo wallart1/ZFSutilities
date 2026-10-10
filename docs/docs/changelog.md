@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.121.2
+
+*Released 2026-10-10*
+
+### Fixed
+
+- **Catch-up incremental send argv** — `zfs send -RIw @from @to` (and its
+  `-nPRIw` estimate form) fails on real ZFS with "too many arguments":
+  inside a short-option cluster, getopt takes the next cluster character
+  as an argument-taking option's argument, so `-RIw` parses as `-I"w"`
+  and both snapshot names land as extra positionals. The defect sat in
+  the shared transfer engine's incremental path, so it broke both
+  `sever-vm-clone`'s cutover catch-up (the first live severance run
+  aborted there) and Migrate Pool's cutover catch-up. `transfer_do` now
+  assembles the incremental form itself — `zfs send -Rw -I <from> <to>`,
+  with `-I` always a standalone argv word — and `zfs-migrate-send`'s
+  estimate and catch-up call use the same `-nPRw -I` / `-Rw` shapes.
+  The full-copy path (`-Rw`, no argument-taking option) was never
+  affected, and `zfs-send-receive` already used standalone `-I`/`-i`
+  words. An interrupted cutover recovers with
+  `sever-vm-clone --continue <state-file>`: the cutover steps are
+  idempotent and reuse the staged copies and the already-created cutover
+  snapshot.
+
+### Changed
+
+- **argv-fidelity send mocks** — the `zfs send` mocks in
+  `test-transfer-lib`, `test-zfs-migrate-send`, and `test-sever-vm-clone`
+  now reject the broken shapes exactly as real zfs does (an option
+  cluster containing `-i`/`-I`/`-t`, or two operands without a
+  standalone one, fail with "too many arguments"), so the clustered form
+  cannot silently return; the sever suite's mock engine also performs
+  its catch-up with the standalone `-I` form now.
+
+### Documentation
+
+- **Flag-reference corrections and suite-catalogue gaps** —
+  current-behavior references to the old clustered forms updated to
+  `zfs send -Rw -I` / `zfs send -nPRw -I` across the command/module
+  references, the GUI guide, and the testing guide, whose suite table
+  also gained its missing `test-sever-vm-clone` and `test-zfswipe`
+  rows.
+
 ## 0.121.1
 
 *Released 2026-10-10*

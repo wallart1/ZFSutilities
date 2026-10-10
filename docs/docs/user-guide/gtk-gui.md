@@ -1731,7 +1731,7 @@ the plan again.
 
 When the copy finishes, the cutover starts with a catch-up: a recursive
 cutover snapshot (the migration snapshot's name with a `-cutover` suffix)
-followed by one incremental `zfs send -RIw` per top-level dataset from the
+followed by one incremental `zfs send -Rw -I` per top-level dataset from the
 migration snapshot to the cutover snapshot, bringing the destination up to
 date with writes made while the copy ran. From the cutover snapshot onward
 the pool must be quiesced — stop VMs and unmount shares and make no other

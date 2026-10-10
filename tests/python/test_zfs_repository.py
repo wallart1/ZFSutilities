@@ -1069,7 +1069,7 @@ class TestBuildHoldsCommands(unittest.TestCase):
 
 class TestBuildMigrationSendReceiveFromSnap(unittest.TestCase):
     """from_snap turns the migration copy step into the cutover catch-up
-    incremental (zfs send -RIw @from @to)."""
+    incremental (zfs send -Rw -I @from @to)."""
 
     def _normalized(self, argv):
         # The sourced script path is resolved from this checkout's absolute

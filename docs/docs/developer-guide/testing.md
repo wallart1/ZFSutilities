@@ -205,6 +205,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-rescan-storage` | `rescan-storage` low-device-count warning against the optional `EXPECTED_ISCSI_DEVICES` minimum (set/empty/non-numeric/zero) |
 | `test-restart-iscsi-services` | VM running-state detection before iSCSI target restart and main() helper invocation |
 | `test-run-tests-preflight` | Harness self-test: run-tests environment preflight, manifest requirement skips, soak-suite gating, and the pytest exit-5 rule |
+| `test-sever-vm-clone` | `sever-vm-clone` severance cycle on a file-backed mock ZFS: argument/qm guards, two-phase cutover with pre/post GUID verifies, children-first snapshot sweep (the mock `zfs destroy` refuses datasets with child snapshots), holds lifecycle, name-preserving swap, `--continue` recovery from each crash phase, `--rollback` (impossible after origin destroy), holding-pool mode with space-feasibility gates, two-node storage-entry delegation; the mock `zfs send` enforces argv fidelity (no `-i`/`-I`/`-t` inside option clusters) |
 | `test-safe-iscsi-save` | Degraded-config guard for iSCSI saveconfig and encrypted-backstore boot-config stripping |
 | `test-startdocserver` | Server health checks, PID discovery, CWD mismatch, restart logic, static-site refresh on start |
 | `test-switch-version` | Version switching, production wiring, prior-version uninstall, rollback, `--uninstall`, `--list`, and obsolete systemd artifact cleanup |
@@ -239,14 +240,15 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-zfsrestore` | `zfsrestore` full-copy wrapper: overrides, legacy second overrides, required parameters, single `send-receive` invocation, parameter forwarding |
 | `test-zfsrestoresendstream` | Lock acquisition before each zfs receive destination |
 | `test-zfsresume` | Lock acquisition before reading resume token |
-| `test-zfs-migrate-send` | `zfs-migrate-send` fresh-send pipeline (`-Rw`/`-u -F -s -v`), `-nPRw` size estimate, incremental catch-up send (`-RIw` with `$fromsnap`, incl. incremental estimate and rc 8), resume via `zfs send -t <token>` (received `-v`), stale/unexpected token abort + fresh retry, failure re-run hint (rc 8), pv/rate-limit plumbing |
-| `test-transfer-lib` | `transfer-lib.sh` pv-arg construction (tty/LOG_INHERIT/headless/rate limit), resume-token validation and stale-string classification, token abort (live + dry-run), space-check math and WARN text, `transfer_do` pipeline argv (incl. the optional second send target) and FATAL rc |
+| `test-zfs-migrate-send` | `zfs-migrate-send` fresh-send pipeline (`-Rw`/`-u -F -s -v`), `-nPRw` size estimate, incremental catch-up send (`-Rw -I` with `$fromsnap`, incl. incremental estimate and rc 8), resume via `zfs send -t <token>` (received `-v`), stale/unexpected token abort + fresh retry, failure re-run hint (rc 8), pv/rate-limit plumbing; the zfs send mock rejects option clusters containing `-i`/`-I`/`-t` |
+| `test-transfer-lib` | `transfer-lib.sh` pv-arg construction (tty/LOG_INHERIT/headless/rate limit), resume-token validation and stale-string classification, token abort (live + dry-run), space-check math and WARN text, `transfer_do` pipeline argv (incl. the `-I` second-target incremental form) and FATAL rc |
 | `test-zfsretain` | Retention policy phases (offsite dedup, same-day dedup, oldest-first bucket pruning, empty logging, retain=0) |
 | `test-zfsretain-debug` | `zfsretain` sources cleanly and defines the retain function |
 | `test-zfsscruball` | `zfsscruball` state file, `zpool scrub -w` invocation, completed-pool skip |
 | `test-zfssend` | `zfssend` defines a send function after sourcing |
 | `test-zfsshowbigstuff` | `zfsshowbigstuff` usage errors and sort-option handling |
 | `test-zfssnapbuild` | Snapshot name generation, bucket logic, snapfile handling |
+| `test-zfswipe` | `zfswipe` inactive-disk label wipe: argument/inactive-disk guards, typed confirmation, already-clean short circuit, `zpool labelclear` before `wipefs`, dd fallback math and residue failure, partition-table targets |
 | `test-zfsunmount` | Lock acquisition before unmount per dataset |
 
 Bash tests run without a real ZFS pool — commands are intercepted with bash

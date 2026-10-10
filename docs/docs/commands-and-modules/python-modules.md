@@ -338,7 +338,7 @@ and tests easy to mock.
 | `build_replace_command()`                | Pure `zpool replace` argv builder                                                                                                                      |
 | `build_detach_command()`                 | Pure `zpool detach` argv builder                                                                                                                       |
 | `build_recursive_snapshot_command()`     | Pure `zfs snapshot -r` argv builder for migration snapshots                                                                                            |
-| `build_migration_send_receive_command()` | Pure `bash -c` argv sourcing `zfs-migrate-send` for a resumable, pv-instrumented migration copy (optional `rate_limit` for `pv -L`; optional `from_snap` switches the send to an incremental `-RIw` catch-up) |
+| `build_migration_send_receive_command()` | Pure `bash -c` argv sourcing `zfs-migrate-send` for a resumable, pv-instrumented migration copy (optional `rate_limit` for `pv -L`; optional `from_snap` switches the send to an incremental `-Rw -I` catch-up) |
 | `build_pool_export_command()`            | Pure `zpool export` argv builder                                                                                                                       |
 | `build_pool_import_rename_command()`     | Pure `zpool import <temp> <name>` argv builder; the rename is permanent (written to the pool label), so later imports use the plain one-name form     |
 | `build_pool_set_command()`               | Pure `zpool set` argv builder for one pool property (non-default property replay after a migration import-rename)                                      |
@@ -556,7 +556,7 @@ plain one-name form — so every `pool/dataset` path is preserved. A holding
 pool is a temporary waystation, never consumed or renamed: only the reserved
 `migrate_<source>` namespace inside it is destroyed at cutover. Before the
 export, the plan takes a second, cutover snapshot (the migration snapshot's
-name with a `-cutover` suffix) and sends one incremental `-RIw` stream per
+name with a `-cutover` suffix) and sends one incremental `-Rw -I` stream per
 top-level dataset from the migration snapshot to it, so writes made while
 the copy ran are not lost. Snapshot holds
 never travel in send streams, so the plan also captures the source pool's
@@ -611,7 +611,7 @@ two-node mode) — any running VM triggers a warning dialog listing the VM
 IDs and their disks that must be declined until they are stopped. The
 cutover itself first catches the destination up: a recursive cutover
 snapshot (migration snapshot name + `-cutover`) and one incremental
-`zfs send -RIw` per top-level dataset from the migration snapshot to it,
+`zfs send -Rw -I` per top-level dataset from the migration snapshot to it,
 so only writes made after the cutover snapshot — the seconds between it
 and the export — can be lost. Then the source pool is exported and the
 migrated pool is re-imported under the source pool's name

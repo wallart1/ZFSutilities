@@ -12,9 +12,11 @@
 # rate-limited via $pv_rate_limit.
 #
 # With an optional $fromsnap set, the send becomes the cutover catch-up
-# incremental: `zfs send -RIw <src>@$fromsnap <src>@$snapname` carries every
+# incremental: `zfs send -Rw -I <src>@$fromsnap <src>@$snapname` carries every
 # change made since the migration snapshot, intermediary snapshots included
-# (`-I`), into the same destination before any destructive cutover step.
+# (`-I`, always a standalone argv word — inside a flag cluster getopt would
+# swallow the next character as its argument), into the same destination
+# before any destructive cutover step.
 #
 # Usage: not intended for direct CLI use; the Migrate Pool wizard executes
 #        this script with the variables below assigned.
@@ -106,9 +108,10 @@ zfs_migrate_send() {
     local datatosend=""
     if [[ -n "$fromsnap" ]]; then
         # Cutover catch-up: a short incremental from the migration snapshot
-        # to the cutover snapshot. -nPRIw mirrors the -RIw pipeline below;
-        # -I includes intermediary snapshots taken between the two.
-        if ! datatosend=$(zfs send -nPRIw "$sourcefs@$fromsnap" \
+        # to the cutover snapshot. -nPRw -I mirrors the -Rw -I pipeline
+        # below; -I includes intermediary snapshots taken between the two
+        # and must be its own argv word (never clustered).
+        if ! datatosend=$(zfs send -nPRw -I "$sourcefs@$fromsnap" \
                 "$sourcefs@$snapname" 2>/dev/null | awk '/^size/ {print $2}'); then
             log_msg "WARN: Size estimate dry-run of $sourcefs@$fromsnap" \
                 "to $sourcefs@$snapname failed."
@@ -137,11 +140,12 @@ zfs_migrate_send() {
     # -F lets a re-run roll the destination back; -s always, since migration
     # transfers are full-copy-sized; -v logs each dataset as it is received
     # so progress through the tree is visible in the session log. With
-    # $fromsnap the send becomes `zfs send -RIw @from @to`: the catch-up
+    # $fromsnap the send becomes `zfs send -Rw -I @from @to`: the catch-up
     # incremental whose -I carries intermediary snapshots (e.g. dailybackup)
-    # so they are not lost when the source is destroyed.
+    # so they are not lost when the source is destroyed — transfer_do
+    # assembles the -I form itself, keeping -I a standalone argv word.
     if [[ -n "$fromsnap" ]]; then
-        if transfer_do "Send/receive" "-RIw" "-u -F -s -v" "Y" "$datatosend" \
+        if transfer_do "Send/receive" "-Rw" "-u -F -s -v" "Y" "$datatosend" \
                 "$sourcefs@$fromsnap" "$destfs" "$sourcefs@$snapname"; then
             return 0
         fi

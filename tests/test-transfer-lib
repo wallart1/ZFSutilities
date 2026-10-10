@@ -77,6 +77,34 @@ zfs() {
             return 0
             ;;
         send)
+            # Getopt fidelity, mirroring real zfs: an argument-taking
+            # option (-i/-I/-t) embedded in a short-option cluster makes
+            # the next cluster character its argument, so any snapshot
+            # names after it land as extra positionals — real zfs fails
+            # with "too many arguments". Such options must be standalone
+            # argv words; two positionals without one are rejected too.
+            local _gopt _prev='' _pos=0 _incr=0
+            for _gopt in "${@:2}"; do
+                # A short-option cluster (dash + two or more letters)
+                # holding i/I/t is exactly the broken form; globs suffice.
+                if [[ "$_gopt" == -* && "${#_gopt}" -gt 2 && "$_gopt" == *[iIt]* ]]; then
+                    echo "too many arguments" >&2
+                    return 1
+                fi
+                if [[ "$_prev" == -I || "$_prev" == -i || "$_prev" == -t ]]; then
+                    _prev=
+                    continue
+                fi
+                case "$_gopt" in
+                    -I|-i|-t) _incr=1; _prev=$_gopt ;;
+                    -*) ;;
+                    *) _pos=$((_pos + 1)) ;;
+                esac
+            done
+            if (( _pos > 1 && _incr == 0 )); then
+                echo "too many arguments" >&2
+                return 1
+            fi
             if [[ "$*" == *"-nP"* ]]; then
                 if [[ "${_mock_zfs_send_rc:-0}" != "0" ]]; then
                     echo "${_mock_zfs_send_err:-send failed}" >&2
@@ -313,9 +341,9 @@ test_transfer_do_with_pv_when_inherit() {
 }
 
 test_transfer_do_incremental_appends_second_target() {
-    test_start "transfer_do appends send_target2 after the primary send target"
+    test_start "transfer_do with send_target2 assembles zfs send -Rw -I @from @to"
     reset_state
-    transfer_do "Send/receive" "-RIw" "-u -F -s -v" "N" "0" "src@from" "pool/dest" \
+    transfer_do "Send/receive" "-Rw" "-u -F -s -v" "N" "0" "src@from" "pool/dest" \
         "src@to" 2>/dev/null
     assert_rc 0 "$?"
     assert_golden test_transfer_do_incremental_appends_second_target \

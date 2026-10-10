@@ -96,9 +96,12 @@ function transfer_pv_args {
 #                    <send_target> <recv_target> [send_target2]
 #   sendopts/recvopts are space-separated option strings; send_target is
 #   omitted from the send command when sendopts contains -t <token> (the
-#   token already encodes the snapshot). The optional send_target2 is
-#   appended to the send command when non-empty, giving incremental sends
-#   their two snapshot operands (zfs send -RIw <ds>@from <ds>@to).
+#   token already encodes the snapshot). When the optional send_target2 is
+#   non-empty, transfer_do assembles the incremental form
+#   `zfs send <sendopts> -I <send_target> <send_target2>` — with -I as its
+#   own argv word, never inside a short-option cluster (getopt would take
+#   the next cluster character as -I's option-argument, and real zfs then
+#   rejects the leftover snapshot names with "too many arguments").
 # Logs "FATAL: <desc> failed. RC=N" on failure; caller-specific failure
 # handling (lock release, exit codes, re-run hints) stays in the callers.
 # Returns: the pipeline's exit status (nonzero on any pipeline failure).
@@ -121,8 +124,12 @@ function transfer_do {
     # Intentional word splitting: $sendopts is a space-separated option string.
     local -a _sendopts=($sendopts)
     local -a send_cmd=(zfs send "${_sendopts[@]}")
-    [[ "$sendopts" != *"-t"* ]] && send_cmd+=("$send_target")
-    [[ -n "$send_target2" ]] && send_cmd+=("$send_target2")
+    if [[ -n "$send_target2" ]]; then
+        # -I as a standalone argv word — see the usage comment above.
+        send_cmd+=("-I" "$send_target" "$send_target2")
+    elif [[ "$sendopts" != *"-t"* ]]; then
+        send_cmd+=("$send_target")
+    fi
 
     # shellcheck disable=SC2206
     # Intentional word splitting: $recvopts is a space-separated option string.

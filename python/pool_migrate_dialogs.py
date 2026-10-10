@@ -10,7 +10,7 @@ resumable ``zfs-migrate-send`` step — ``zfs send -Rw`` received with
 ``zfs receive -u -F -s``, with ``pv`` in the pipeline and an optional
 bandwidth limit — per top-level dataset, then a dataset-tree verification
 step), and the cutover phase (a catch-up snapshot of the still-imported
-source pool plus one short ``zfs send -RIw`` incremental per dataset so
+source pool plus one short ``zfs send -Rw -I`` incremental per dataset so
 writes made during the copy are not lost, then export the source
 pool, then — for new disks — re-import the migrated pool under the source
 pool's name, or — for holding pool — destroy the source, rebuild it from
@@ -815,7 +815,7 @@ def _catchup_steps(
 
     The source pool is still imported at this point, so the recursive cutover
     snapshot captures every write made since the migration snapshot, and one
-    short ``zfs send -RIw`` incremental per dataset (from the migration
+    short ``zfs send -Rw -I`` incremental per dataset (from the migration
     snapshot to the cutover snapshot) carries them — intermediary snapshots
     included — into the same destination the copy phase used, all before any
     destructive cutover step.
