@@ -568,7 +568,25 @@ are no longer referenced in the config are left behind with a warning, so you
 can decide whether to archive or destroy them separately. After archiving the
 zvols under an archive base path of your choice and copying the Proxmox VM
 config alongside the archive, it — after confirmation — removes the original
-VM config and destroys the original referenced zvols.
+referenced zvols and, once every disk is verifiably gone, the original VM
+config. In two-node mode each disk's removal runs through
+[`remove-vm-disk`](../commands-and-modules/two-node.md#remove-vm-disk-both)
+with its confirmation prompts visible on your terminal; in single-node mode
+the zvols are destroyed via `zfsdelfs`, which also removes their snapshot
+children and releases their holds. If any disk survives removal — a declined
+confirmation, a remote failure, or a destroy failure — the run stops before
+touching the VM config, lists the surviving zvols with the exact commands to
+finish the removal, and exits non-zero.
+
+Both `archive-vm` and `unarchive-vm` can be run on either node — storage-side
+work executes on the storage host and compute-side work on the compute host,
+with no round-trip bounce. Each run prompts for a transfer rate limit (a
+`pv` value such as `100M`; empty means unlimited, and the answer becomes the
+saved default), so archiving or restoring a large disk cannot starve the
+storage host's other workloads. Re-running either script is safe: archive
+disks that already passed verification are skipped, an interrupted run's
+unverified leftovers are removed and re-made, and a restore that already
+completed reports so and exits without touching anything.
 
 For the exact archive layout and single-node vs two-node behavior, see the
 [`archive-vm` command reference](../commands-and-modules/commands.md#archive-vm).

@@ -17,6 +17,22 @@ setup_node_config() {
         cat > "$NODE_CONF_FILE" << 'EOF'
 NODE_MODE=single-node
 EOF
+    elif [[ "$mode" == "two-node-local" ]]; then
+        # The invoking host IS the storage host: on_storage payloads must
+        # run locally (no ssh round trip to itself).
+        local compute
+        compute=$(hostname -s)
+        cat > "$NODE_CONF_FILE" << EOF
+NODE_MODE="two-node"
+STORAGE_HOST="$compute"
+COMPUTE_HOST="$compute"
+STORAGE_IP="192.168.100.1"
+IQN_PREFIX="iqn.2026-02.local.stewie"
+declare -A POOL_TARGET=(
+    [threeamigos]="threeamigos"
+    [NVME1]="nvme1"
+)
+EOF
     else
         local compute
         compute=$(hostname -s)
@@ -74,7 +90,10 @@ run_archive() {
     local capture_dir="$_mock_zfs_state_dir/capture"
     mkdir -p "$capture_dir"
     rm -f "$capture_dir/snapshots" "$capture_dir/ssh" "$capture_dir/ssh-argv" \
-        "$capture_dir/severances" "$capture_dir/zfs-argv"
+        "$capture_dir/severances" "$capture_dir/zfs-argv" \
+        "$capture_dir/zfsdelfs" "$capture_dir/rescan" \
+        "$capture_dir/remove-vm-disk-argv" \
+        "$capture_dir/pv" "$capture_dir/dd"
 
     local sever_stub="$capture_dir/sever-vm-clone-stub"
     cat > "$sever_stub" << 'EOF'
@@ -82,6 +101,22 @@ run_archive() {
 echo "SEVER:$1" >> "$_capture_dir/severances"
 EOF
     chmod +x "$sever_stub"
+
+    local zfsdelfs_stub="$capture_dir/zfsdelfs-stub"
+    cat > "$zfsdelfs_stub" << 'EOF'
+#!/usr/bin/bash
+echo "ZFSDE LFS:$*" >> "$_capture_dir/zfsdelfs"
+exit "${_mock_zfsdelfs_rc:-0}"
+EOF
+    chmod +x "$zfsdelfs_stub"
+
+    local rescan_stub="$capture_dir/rescan-storage-stub"
+    cat > "$rescan_stub" << 'EOF'
+#!/usr/bin/bash
+echo "RESCAN" >> "$_capture_dir/rescan"
+exit 0
+EOF
+    chmod +x "$rescan_stub"
 
     (
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
@@ -100,6 +135,10 @@ EOF
 
         export PVE_CONF_DIR="$pve_dir"
         export JSON_CONFIG="$_mock_zfs_state_dir/zfsutilities.json"
+        # Start every run from an empty JSON config: the state dir is shared
+        # across tests, and a rate/path saved by an earlier test must not
+        # become the default a later test's empty answer falls back to.
+        printf '{}\n' > "$JSON_CONFIG"
         export _mock_zvol="threeamigos/proxmox/vm-${vmid}-disk-0"
         export _mock_zvols_list="${_mock_zvols_list:-$_mock_zvol}"
         export _mock_archive_base="$archive_base"
@@ -118,6 +157,14 @@ EOF
         export _mock_volsize="${_mock_volsize:-}"
         export _mock_snapdev="${_mock_snapdev:-}"
         export _mock_preexisting_archive="${_mock_preexisting_archive:-}"
+        export _mock_complete_archive="${_mock_complete_archive:-}"
+        export _mock_zfsdelfs_rc="${_mock_zfsdelfs_rc:-}"
+        export _mock_remove_vm_disk_rc="${_mock_remove_vm_disk_rc:-}"
+        export _mock_step4_zvols_remaining="${_mock_step4_zvols_remaining:-}"
+        export _mock_input_hold="${_mock_input_hold:-}"
+        export _mock_zfsdelfs_stub="$zfsdelfs_stub"
+        export _mock_rescan_stub="$rescan_stub"
+        export ZFSUTILITIES_INPUT_HOLD="${_mock_input_hold:-}"
 
         # Note: ask_yn cannot be mocked here — sourcing archive-vm re-runs
         # bashinit (via ~/bashinit), which unconditionally redefines it.
@@ -176,6 +223,14 @@ EOF
                 echo "$_mock_sever_stub"
                 return 0
             fi
+            if [[ "${1:-}" == "zfsdelfs" ]]; then
+                echo "$_mock_zfsdelfs_stub"
+                return 0
+            fi
+            if [[ "${1:-}" == "rescan-storage" ]]; then
+                echo "$_mock_rescan_stub"
+                return 0
+            fi
             _test_lib_find_script "$@"
         }
 
@@ -183,8 +238,10 @@ EOF
         ssh() {
             local has_bash=0 has_s=0 arg stdin=""
             for arg in "$@"; do
-                [[ "$arg" == "bash" ]] && has_bash=1
-                [[ "$arg" == "-s" ]] && has_s=1
+                # Two-node payloads may arrive with an env prefix (e.g.
+                # "pv_rate_limit='100M' bash -s") as one argv entry.
+                [[ "$arg" == "bash" || "$arg" == *"bash -s" ]] && has_bash=1
+                [[ "$arg" == "-s" || "$arg" == *"bash -s" ]] && has_s=1
             done
 
             # Only here-doc SSH fragments provide stdin.  Non-here-doc calls
@@ -198,6 +255,26 @@ EOF
                 echo "SSH:${*}"
                 echo "$stdin"
             } >> "$_capture_dir/ssh"
+
+            if [[ "$*" == *"remove-vm-disk"* ]]; then
+                # Step-4 delegation to the storage host. The knob simulates
+                # a failed remote run; rc 0 covers both success and an
+                # operator decline (remove-vm-disk exits 0 on decline).
+                printf '%s\n' "$*" >> "$_capture_dir/remove-vm-disk-argv"
+                return "${_mock_remove_vm_disk_rc:-0}"
+            fi
+            if [[ "$*" == *"zfs list -H -o name '"* ]]; then
+                # Step-4 post-condition probe: echo the zvol when the
+                # scenario says it was not removed.
+                local _rz
+                for _rz in ${_mock_step4_zvols_remaining:-}; do
+                    if [[ "$*" == *"$_rz"* ]]; then
+                        echo "$_rz"
+                        return 0
+                    fi
+                done
+                return 0
+            fi
 
             if [[ "$*" == *"zfs get -H -o value mountpoint"* ]]; then
                 echo "$_mock_archive_mount"
@@ -274,11 +351,57 @@ EOF
             echo "SYNC:$*" >> "$_capture_dir/zfs-argv"
         }
         sha256sum() {
+            if [[ $# -eq 0 ]]; then
+                # Rate-limited form: hashes stdin.
+                cat > /dev/null
+                printf '%s  -\n' "deadbeef12345678"
+                return 0
+            fi
             # One digest line per device, like real sha256sum; the
             # _mock_hash_dst knob makes the second digest differ.
             printf '%s  %s\n' "deadbeef12345678" "$1"
             printf '%s  %s\n' \
                 "${_mock_hash_dst:-deadbeef12345678}" "$2"
+        }
+        pv() {
+            # Rate-limited transfer segment: passthrough, argv recorded.
+            echo "PV:$*" >> "$_capture_dir/pv"
+            cat
+        }
+        dd() {
+            # Rate-limited sparse writer: consume stdin, argv recorded.
+            echo "DD:$*" >> "$_capture_dir/dd"
+            cat > /dev/null
+            return 0
+        }
+        targetcli() {
+            # Canned iSCSI layout for locally-executed storage payloads
+            # (invoked-on-storage mode): every mock zvol is exported as
+            # lun0 of the threeamigos target.
+            case "$1" in
+                /iscsi)
+                    [[ "${2:-}" == "ls" ]] \
+                        && echo "  iqn.2026-02.local.stewie:threeamigos"
+                    return 0
+                    ;;
+                */tpg1/luns)
+                    [[ "${2:-}" == "ls" ]] || return 0
+                    local _tz
+                    for _tz in $_mock_zvols_list; do
+                        echo "  lun0 [block/${_tz##*/} (/dev/zvol/${_tz})]"
+                    done
+                    return 0
+                    ;;
+                /backstores/block)
+                    [[ "${2:-}" == "ls" ]] || return 0
+                    local _tz
+                    for _tz in $_mock_zvols_list; do
+                        echo "  ${_tz##*/}  /dev/zvol/${_tz}  (default_tg_pt)"
+                    done
+                    return 0
+                    ;;
+            esac
+            return 0
         }
 
         # Mock ZFS state for all configured zvols. The archive base is part
@@ -312,6 +435,20 @@ EOF
                 _mock_zfs_fs_list="${_mock_zfs_fs_list}"$'\n'"${archive_base}/${zvol}"
             done
         fi
+        # A "complete" pre-existing archive carries the post-verification
+        # @archive snapshot, a METHOD= sidecar, and the volblocksize its
+        # method implies (1M for copy archives).
+        if [[ "${_mock_complete_archive:-}" == "1" ]]; then
+            for zvol in $_mock_zvols_list; do
+                local arc_ds="${archive_base}/${zvol}"
+                _mock_zfs_fs_list="${_mock_zfs_fs_list}"$'\n'"$arc_ds"
+                _mock_zfs_datasets["$arc_ds"]=1
+                _mock_zfs_props["${arc_ds}:volblocksize"]="1M"
+                _mock_zfs_snap_lists["$arc_ds"]="${arc_ds}@archive"
+                echo "METHOD=copy" > "${archive_mount}/${zvol}.disk_info"
+                echo "8K" > "${archive_mount}/${zvol}.original_volblocksize"
+            done
+        fi
 
         # Load the script from a temp file (instead of eval) so archive-vm's
         # own SSH here-doc bodies are read from the file, leaving the
@@ -333,6 +470,11 @@ EOF
     cat "$capture_dir/ssh" 2>/dev/null || true
     cat "$capture_dir/severances" 2>/dev/null || true
     cat "$capture_dir/zfs-argv" 2>/dev/null || true
+    cat "$capture_dir/zfsdelfs" 2>/dev/null || true
+    cat "$capture_dir/rescan" 2>/dev/null || true
+    cat "$capture_dir/remove-vm-disk-argv" 2>/dev/null || true
+    cat "$capture_dir/pv" 2>/dev/null || true
+    cat "$capture_dir/dd" 2>/dev/null || true
     return $rc
 }
 
@@ -344,7 +486,9 @@ reset_mocks() {
     unset _mock_read_response _mock_ssh_snapshot_exists _mock_ssh_snapshot_error
     unset _mock_vm_status _mock_clone_info _mock_zvols_list _mock_clone_vm_status
     unset _mock_cp_fail _mock_hash_dst _mock_encryption _mock_volsize
-    unset _mock_snapdev _mock_preexisting_archive
+    unset _mock_snapdev _mock_preexisting_archive _mock_complete_archive
+    unset _mock_zfsdelfs_rc _mock_remove_vm_disk_rc _mock_step4_zvols_remaining
+    unset _mock_input_hold
 }
 
 test_single_node_uses_existing_snapshot() {
@@ -359,6 +503,7 @@ test_single_node_uses_existing_snapshot() {
         "$(dirname "$mount/etc/pve/qemu-server")"
     setup_pve_config "$pve_dir" "$vmid"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -392,6 +537,7 @@ test_single_node_creates_retire_snapshot() {
     setup_pve_config "$pve_dir" "$vmid"
     mock_date "2026-07-14T11:23-04:00" "Mon" "14"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -435,6 +581,7 @@ test_two_node_queries_storage_for_snapshot() {
     mkdir -p "$pve_dir"
     setup_pve_config "$pve_dir" "$vmid" "two-node"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -468,6 +615,7 @@ test_two_node_creates_snapshot_on_storage() {
     mock_date "2026-07-14T11:23-04:00" "Mon" "14"
     _mock_ssh_snapshot_exists=0
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -506,6 +654,7 @@ test_two_node_storage_snapshot_error_aborts() {
     setup_pve_config "$pve_dir" "$vmid" "two-node"
     _mock_ssh_snapshot_error=1
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -537,6 +686,7 @@ test_two_node_fetches_volblocksize_on_storage() {
     mkdir -p "$pve_dir"
     setup_pve_config "$pve_dir" "$vmid" "two-node"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -577,6 +727,7 @@ test_two_node_target_and_lun_travel_as_separate_args() {
     mkdir -p "$pve_dir"
     setup_pve_config "$pve_dir" "$vmid" "two-node"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -658,6 +809,7 @@ scsi1: threeamigos:vm-${vmid}-disk-1,size=10G
 EOF
     _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0 threeamigos/proxmox/vm-${vmid}-disk-1"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -697,6 +849,7 @@ test_single_node_warns_on_orphaned_zvol() {
     setup_pve_config "$pve_dir" "$vmid" "single-node"
     _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0 threeamigos/proxmox/vm-${vmid}-disk-9"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -762,6 +915,7 @@ test_no_error_message_level() {
         "$(dirname "$mount/etc/pve/qemu-server")"
     setup_pve_config "$pve_dir" "$vmid" "single-node"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -789,6 +943,7 @@ test_running_vm_aborts_before_archive() {
     setup_pve_config "$pve_dir" "$vmid"
     _mock_vm_status="running"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -841,6 +996,7 @@ test_reports_disks_with_dependent_clones() {
     # proceed with archive=y, remove VM=n.
     _mock_read_response="n
 ${archive}
+
 y
 n"
 
@@ -906,6 +1062,7 @@ test_severs_clones_when_confirmed() {
     # proceed with archive=y, remove VM=n.
     _mock_read_response="y
 ${archive}
+
 y
 n"
 
@@ -960,6 +1117,7 @@ test_running_clone_vm_aborts_severance() {
     # the running clone VM before any further prompt).
     _mock_read_response="y
 ${archive}
+
 y
 n"
 
@@ -1003,6 +1161,7 @@ test_single_node_copy_path_reblocks_to_1m() {
         "$(dirname "$mount/etc/pve/qemu-server")"
     setup_pve_config "$pve_dir" "$vmid"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -1066,6 +1225,7 @@ test_single_node_encrypted_zvol_archives_raw() {
     setup_pve_config "$pve_dir" "$vmid"
     _mock_encryption="aes-256-gcm"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -1111,6 +1271,7 @@ test_copy_hash_mismatch_aborts_and_cleans_up() {
     setup_pve_config "$pve_dir" "$vmid"
     _mock_hash_dst="fedcba9876543210"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -1142,9 +1303,9 @@ n"
     test_pass
 }
 
-test_preexisting_archive_dataset_aborts() {
+test_partial_archive_dataset_is_redone() {
     reset_mocks
-    test_start "Copy path: pre-existing archive dataset aborts with guidance"
+    test_start "Re-run: dataset without @archive snapshot is removed and re-archived"
 
     local vmid="243"
     local pve_dir="$_mock_zfs_state_dir/pve23"
@@ -1155,6 +1316,7 @@ test_preexisting_archive_dataset_aborts() {
     setup_pve_config "$pve_dir" "$vmid"
     _mock_preexisting_archive="1"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -1162,16 +1324,143 @@ n"
     out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
     rc=$?
 
-    if [[ $rc -eq 0 ]]; then
-        test_fail "Expected non-zero exit code; output:\n$out"
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
         return
     fi
-    if [[ "$out" != *"FATAL: Archive dataset already exists"* ]]; then
-        test_fail "Already-exists FATAL missing; output:\n$out"
+    if [[ "$out" != *"Incomplete archive dataset from an interrupted run"* ]]; then
+        test_fail "Missing interrupted-run WARN; output:\n$out"
+        return
+    fi
+    local needle="DESTROY:destroy -r ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Leftover dataset not destroyed; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"CP:--sparse=always"* ]]; then
+        test_fail "Re-archive copy missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Archive dataset already exists"* ]]; then
+        test_fail "Race backstop fired on a removable leftover; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_complete_archive_dataset_is_skipped() {
+    reset_mocks
+    test_start "Re-run: verified @archive dataset is skipped without copying"
+
+    local vmid="245"
+    local pve_dir="$_mock_zfs_state_dir/pve25"
+    local archive="$_mock_zfs_state_dir/archive25"
+    local mount="$_mock_zfs_state_dir/mount25"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_complete_archive="1"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    local needle="Already archived (verified) — skipping:" \
+        "${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Skip message missing; output:\n$out"
         return
     fi
     if [[ "$out" == *"CP:--sparse=always"* ]]; then
-        test_fail "Copy attempted despite existing dataset; output:\n$out"
+        test_fail "Skipped disk was copied anyway; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"✓ Archived:"* ]]; then
+        test_fail "Per-disk archived line missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_archive_from_storage_runs_locally() {
+    reset_mocks
+    test_start "Invoked on the storage host: no compute bounce, transfer runs locally"
+
+    local vmid="270"
+    local pve_dir="$_mock_zfs_state_dir/pve50"
+    local archive="$_mock_zfs_state_dir/archive50"
+    local mount="$_mock_zfs_state_dir/mount50"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(run_archive two-node-local existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    # The transfer ran in this shell (on_storage local branch), not over ssh.
+    if [[ "$out" != *"CP:--sparse=always"* ]]; then
+        test_fail "Local device copy missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"SSH:"*"archive_one_zvol"* ]]; then
+        test_fail "Archive payload was shipped over ssh despite local storage; output:\n$out"
+        return
+    fi
+    local needle="✓ Archived: ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Archive completion line missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_payload_probes_completion() {
+    reset_mocks
+    test_start "Two-node: storage-side payload contains the completion probe"
+
+    local vmid="246"
+    local pve_dir="$_mock_zfs_state_dir/pve26"
+    local archive="$_mock_zfs_state_dir/archive26"
+    local mount="$_mock_zfs_state_dir/mount26"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(run_archive two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    # The ssh mock records the payload text; the probe must run storage-side.
+    if [[ "$out" != *"archive_completion_state"* ]]; then
+        test_fail "Payload lacks the completion probe; output:\n$out"
         return
     fi
 
@@ -1204,6 +1493,7 @@ test_two_node_heredoc_gets_config_content() {
     mkdir -p "$pve_dir"
     setup_pve_config "$pve_dir" "$vmid" "two-node"
     _mock_read_response="${archive}
+
 y
 n"
 
@@ -1234,6 +1524,405 @@ n"
 }
 
 # ------------------------------------------------------------------
+# Step 4: VM removal
+# ------------------------------------------------------------------
+
+test_two_node_removal_delegates_with_tty_and_skip_rescan() {
+    reset_mocks
+    test_start "Two-node: removal delegates via ssh -t with input-hold and --skip-rescan"
+
+    local vmid="250"
+    local pve_dir="$_mock_zfs_state_dir/pve30"
+    local archive="$_mock_zfs_state_dir/archive30"
+    local mount="$_mock_zfs_state_dir/mount30"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+y"
+    _mock_input_hold="Y"
+
+    local out rc
+    out=$(run_archive two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    # The delegation must allocate a TTY and carry the input-hold protocol
+    # across the hop, so the remote confirm prompts are visible.
+    local needle="-t root@stewie ZFSUTILITIES_INPUT_HOLD=Y"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "ssh -t delegation missing input-hold prefix; output:\n$out"
+        return
+    fi
+    # Per-disk rescans are suppressed; archive-vm rescans once itself.
+    needle="remove-vm-disk 'threeamigos' '$vmid' '0' --skip-rescan"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "remove-vm-disk not invoked with --skip-rescan; output:\n$out"
+        return
+    fi
+    local rescan_count
+    rescan_count=$(printf '%s\n' "$out" | grep -c '^RESCAN$')
+    if [[ "$rescan_count" != "1" ]]; then
+        test_fail "Expected exactly one rescan, saw ${rescan_count}; output:\n$out"
+        return
+    fi
+    if [[ -f "${pve_dir}/${vmid}.conf" ]]; then
+        test_fail "Proxmox config was not removed"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_declined_disk_removal_keeps_config() {
+    reset_mocks
+    test_start "Two-node: declined remove-vm-disk confirm (exit 0) keeps config and fails"
+
+    local vmid="251"
+    local pve_dir="$_mock_zfs_state_dir/pve31"
+    local archive="$_mock_zfs_state_dir/archive31"
+    local mount="$_mock_zfs_state_dir/mount31"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    local zvol="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_zvols_list="$zvol"
+    _mock_read_response="${archive}
+
+y
+y"
+    # remove-vm-disk exits 0 when an operator declines its confirm; only the
+    # surviving zvol tells the truth.
+    _mock_step4_zvols_remaining="$zvol"
+
+    local out rc
+    out=$(run_archive two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Declined removal reported success; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"removal incomplete"* ]]; then
+        test_fail "Missing incomplete-removal FATAL; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"WARN: ${zvol} was not removed"* ]]; then
+        test_fail "Missing per-disk WARN; output:\n$out"
+        return
+    fi
+    if [[ ! -f "${pve_dir}/${vmid}.conf" ]]; then
+        test_fail "Proxmox config was removed despite failed disk removal"
+        return
+    fi
+    if [[ "$out" == *"=== Done ==="* ]]; then
+        test_fail "Success summary printed for partial removal; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_failed_disk_removal_keeps_config() {
+    reset_mocks
+    test_start "Two-node: failed remove-vm-disk run keeps config and fails"
+
+    local vmid="252"
+    local pve_dir="$_mock_zfs_state_dir/pve32"
+    local archive="$_mock_zfs_state_dir/archive32"
+    local mount="$_mock_zfs_state_dir/mount32"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    local zvol="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_zvols_list="$zvol"
+    _mock_read_response="${archive}
+
+y
+y"
+    _mock_remove_vm_disk_rc=1
+    _mock_step4_zvols_remaining="$zvol"
+
+    local out rc
+    out=$(run_archive two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Failed removal reported success; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"removal incomplete"* ]]; then
+        test_fail "Missing incomplete-removal FATAL; output:\n$out"
+        return
+    fi
+    if [[ ! -f "${pve_dir}/${vmid}.conf" ]]; then
+        test_fail "Proxmox config was removed despite failed disk removal"
+        return
+    fi
+    # The rescan still runs: a LUN may already be gone by the time the
+    # remote failed.
+    if [[ "$out" != *"RESCAN"* ]]; then
+        test_fail "No rescan after failed removal; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_removal_uses_zfsdelfs() {
+    reset_mocks
+    test_start "Single-node: removal destroys zvols via zfsdelfs autoproceed"
+
+    local vmid="253"
+    local pve_dir="$_mock_zfs_state_dir/pve33"
+    local archive="$_mock_zfs_state_dir/archive33"
+    local mount="$_mock_zfs_state_dir/mount33"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid" "single-node"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+y"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    local needle="ZFSDE LFS:threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "zfsdelfs not invoked for the zvol; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"autoproceed='Y'"* ]]; then
+        test_fail "zfsdelfs not invoked with autoproceed='Y'; output:\n$out"
+        return
+    fi
+    if [[ -f "${pve_dir}/${vmid}.conf" ]]; then
+        test_fail "Proxmox config was not removed"
+        return
+    fi
+    if [[ "$out" != *"=== Done ==="* ]]; then
+        test_fail "Missing success summary; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_destroy_failure_keeps_config() {
+    reset_mocks
+    test_start "Single-node: zfsdelfs failure keeps config and fails"
+
+    local vmid="254"
+    local pve_dir="$_mock_zfs_state_dir/pve34"
+    local archive="$_mock_zfs_state_dir/archive34"
+    local mount="$_mock_zfs_state_dir/mount34"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid" "single-node"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+y"
+    _mock_zfsdelfs_rc=1
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Failed destroy reported success; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"removal incomplete"* ]]; then
+        test_fail "Missing incomplete-removal FATAL; output:\n$out"
+        return
+    fi
+    if [[ ! -f "${pve_dir}/${vmid}.conf" ]]; then
+        test_fail "Proxmox config was removed despite failed destroy"
+        return
+    fi
+
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# Transfer rate limiting
+# ------------------------------------------------------------------
+
+test_rate_limit_paces_copy_path() {
+    reset_mocks
+    test_start "Rate limit: copy and hash pass through pv, saved to JSON config"
+
+    local vmid="260"
+    local pve_dir="$_mock_zfs_state_dir/pve40"
+    local archive="$_mock_zfs_state_dir/archive40"
+    local mount="$_mock_zfs_state_dir/mount40"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+100M
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    local needle="PV:-q -L 100M -- /dev/zvol/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Copy not paced by pv; output:\n$out"
+        return
+    fi
+    needle="DD:of=/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Sparse dd writer not used; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"conv=sparse,notrunc"* ]]; then
+        test_fail "dd missing conv=sparse,notrunc; output:\n$out"
+        return
+    fi
+    # Hash verification is paced per device (stdin digests): copy + 2 hashes.
+    local pv_count
+    pv_count=$(printf '%s\n' "$out" | grep -c '^PV:')
+    if [[ "$pv_count" -lt 3 ]]; then
+        test_fail "Expected copy + two hash passes through pv, saw ${pv_count}; output:\n$out"
+        return
+    fi
+    if ! grep -q '"archive_rate_limit": "100M"' \
+        "$_mock_zfs_state_dir/zfsutilities.json"; then
+        test_fail "Rate limit not saved to JSON config"
+        return
+    fi
+    if [[ "$out" != *"✓ Saved transfer rate limit to JSON config"* ]]; then
+        test_fail "Missing rate-saved message; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_invalid_rate_fatals() {
+    reset_mocks
+    test_start "Invalid rate limit fails with guidance"
+
+    local vmid="261"
+    local pve_dir="$_mock_zfs_state_dir/pve41"
+    local archive="$_mock_zfs_state_dir/archive41"
+    local mount="$_mock_zfs_state_dir/mount41"
+    mkdir -p "$archive" "$mount"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_read_response="${archive}
+wat
+"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Invalid rate reported success; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Invalid rate limit 'wat'"* ]]; then
+        test_fail "Missing invalid-rate FATAL; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_rate_forwarded_to_payload() {
+    reset_mocks
+    test_start "Two-node: rate limit is forwarded to the storage-side payload"
+
+    local vmid="262"
+    local pve_dir="$_mock_zfs_state_dir/pve42"
+    local archive="$_mock_zfs_state_dir/archive42"
+    local mount="$_mock_zfs_state_dir/mount42"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+50M
+y
+n"
+
+    local out rc
+    out=$(run_archive two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    local needle="pv_rate_limit='50M' bash -s"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Rate not forwarded in payload argv; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_unlimited_run_has_no_pv() {
+    reset_mocks
+    test_start "Unlimited run keeps the unpaced cp/sha256sum commands"
+
+    local vmid="263"
+    local pve_dir="$_mock_zfs_state_dir/pve43"
+    local archive="$_mock_zfs_state_dir/archive43"
+    local mount="$_mock_zfs_state_dir/mount43"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"PV:"* ]]; then
+        test_fail "pv appeared in an unlimited run; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"CP:--sparse=always"* ]]; then
+        test_fail "cp --sparse=always not used when unlimited; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+# ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
 test_single_node_uses_existing_snapshot
@@ -1249,7 +1938,10 @@ test_single_node_warns_on_orphaned_zvol
 test_single_node_copy_path_reblocks_to_1m
 test_single_node_encrypted_zvol_archives_raw
 test_copy_hash_mismatch_aborts_and_cleans_up
-test_preexisting_archive_dataset_aborts
+test_partial_archive_dataset_is_redone
+test_complete_archive_dataset_is_skipped
+test_two_node_payload_probes_completion
+test_archive_from_storage_runs_locally
 test_no_receive_volblocksize_override_remains
 test_two_node_heredoc_gets_config_content
 test_two_node_prompt_mentions_storage_host
@@ -1258,5 +1950,14 @@ test_running_vm_aborts_before_archive
 test_reports_disks_with_dependent_clones
 test_severs_clones_when_confirmed
 test_running_clone_vm_aborts_severance
+test_two_node_removal_delegates_with_tty_and_skip_rescan
+test_two_node_declined_disk_removal_keeps_config
+test_two_node_failed_disk_removal_keeps_config
+test_single_node_removal_uses_zfsdelfs
+test_single_node_destroy_failure_keeps_config
+test_rate_limit_paces_copy_path
+test_invalid_rate_fatals
+test_two_node_rate_forwarded_to_payload
+test_unlimited_run_has_no_pv
 
 test_summary

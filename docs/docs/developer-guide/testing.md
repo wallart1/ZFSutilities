@@ -171,7 +171,7 @@ documentation-integrity suite. A scheduled nightly job runs
 
 | Suite | What it covers |
 |-------|----------------|
-| `test-archive-vm` | `archive-vm` retire-snapshot selection, two-node target/LUN resolution encoding (separate ssh argv entries, since IQNs contain colons), and invocation (single-node and two-node); the hybrid transfer engine's copy path (thin `create -V` at 1M, snapshot-device `cp --sparse=always`, sha256 verify, `@archive` snapshot, snapdev expose/revert), the encrypted raw path, hash-mismatch and pre-existing-dataset aborts with parent-chain rollback, the base64 config-content handoff to the two-node heredoc, and a static no-`receive -o volblocksize` guard |
+| `test-archive-vm` | `archive-vm` retire-snapshot selection, two-node target/LUN resolution encoding (separate ssh argv entries, since IQNs contain colons), and invocation (single-node, two-node, and invoked-on-storage with the transfer running locally — no compute bounce); the shared transfer library's copy path (thin `create -V` at 1M, snapshot-device copy, sha256 verify, `@archive` snapshot, snapdev expose/revert), the encrypted raw path, hash-mismatch aborts with parent-chain rollback, the base64 config-content handoff to the storage-side payload, rate limiting (paced copy via `pv | dd conv=sparse`, per-device paced hashing, raw-pipeline pv segment, unlimited runs keeping the unpaced commands, prompt save/forward via `pv_rate_limit`), re-run idempotency (`@archive`-snapshot skip, interrupted-leftover destroy-and-redo, payload completion probe), a static no-`receive -o volblocksize` guard, and Step-4 removal (the `ssh -t` + input-hold + `--skip-rescan` delegation argv, single-rescan behavior, and the outcome-verified failure gates: a declined remote confirm exits 0 yet keeps the Proxmox config, fails the run, and prints no success summary — as does a failed remote or `zfsdelfs` destroy) |
 | `test-attach-vm-disk` | `attach-vm-disk` zvol-path parsing and validation |
 | `test-bashinit` | `bashinit` helpers: `log_msg` survives a `cd` after relative-path invocation; session-log selection when the log file is writable vs unwritable; input-hold marker emission and uuid reuse for `ask_yn`/`ask_line`; `input_hold_env_prefix` expansion for `ssh -t` delegation |
 | `test-check-prerequisites` | `check-prerequisites` tool version checks (mkdocs major-version gating) |
@@ -194,10 +194,11 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-module-dependencies` | Static analysis: root-level bash modules source the modules whose functions they call |
 | `test-move-vm-disk` | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove, validation helpers, state round-trip, heredoc bootstrap |
 | `test-new-vm-disk` | `new-vm-disk` EFI disk-line building with `ms-cert` gating |
-| `test-node-lib` | `find_zfsutility_script` resolution across `bin/`, `lib/`, and `python/` layouts; node.conf loading (single/two-node, `EXPECTED_ISCSI_DEVICES` copy); pool helpers |
+| `test-node-lib` | node-lib helpers: config loading, `find_zfsutility_script` search paths, remote script resolution, `on_storage`/`on_compute` transports (local subshell with inherited functions and args vs ssh with the `pv_rate_limit` prefix), JSON-config readers/writers, MAC generation |
 | `test-paths` | `paths.sh` defaults, composed paths, legacy paths, and environment overrides |
 | `test-proxmox-required-guards` | Proxmox scripts fail fast when `qm`/`pct` are absent |
 | `test-remove-vm` | `remove-vm` VMID validation, config-referenced/orphan/reassigned zvol classification, `--cleanup-orphans`, and user confirmation |
+| `test-remove-vm-disk` | `remove-vm-disk` storage-side teardown (LUN, backstore, expected-backstores manifest, encrypted-LUNs config) against a state-mutating targetcli mock; destroy routed through `zfsdelfs autoproceed='Y'` with the mock `zfs destroy` refusing child-snapshot datasets (real-ZFS semantics); decline-exits-0 with no teardown; rerun after the LUN is already gone; and the compute-host wrapper's `ssh -t` + input-hold + `--skip-rescan` delegation and rescan-even-on-failure |
 | `test-rename-vm-disk` | `rename-vm-disk` VM-config reference discovery (single- and two-node) |
 | `test-repair-iscsi-luns` | `repair-iscsi-luns` backstore/target parsing and zvol discovery |
 | `test-repair-vm-disk-sizes` | `repair-vm-disk-sizes` size byte-to-human conversion, by-path/storage-ref size resolution, config line repair, dry-run |
@@ -210,7 +211,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-startdocserver` | Server health checks, PID discovery, CWD mismatch, restart logic, static-site refresh on start |
 | `test-switch-version` | Version switching, production wiring, prior-version uninstall, rollback, `--uninstall`, `--list`, and obsolete systemd artifact cleanup |
 | `test-test-lib` | Harness assertion helpers: pass/fail/skip counter semantics and golden assertions |
-| `test-unarchive-vm` | `--new-vmid` rewriting, UUID regeneration, conflict handling; METHOD-branching restores (copy reblock via sidecar volblocksize vs raw/legacy plain receive), sidecar policy (missing `.disk_info` fatal, missing volblocksize sidecar warn for raw / fatal for copy), unknown-method rejection |
+| `test-unarchive-vm` | `unarchive-vm` `--new-vmid` rewriting, UUID regeneration, conflict handling; METHOD-branching restores (copy reblock via sidecar volblocksize vs raw/legacy plain receive), sidecar policy (missing `.disk_info` fatal, missing volblocksize sidecar warn for raw / fatal for copy), unknown-method rejection; rate-limited restore copy (pv pacing, dd conv=sparse); re-run idempotency (`RESTORED_AS` marker skip, unmarked-destination confirm/decline gates, completed-run clean exit); and static payload-routing checks (on_storage/on_compute, no compute bounce) |
 | `test-uninstall-some-versions` | Bulk version uninstall from an explicit list file |
 | `test-uninstall-version` | Single-version uninstall prompting with `-y`/`--yes` |
 | `test-uninstall-zfsutilities` | Full uninstall: preserve-by-default, `--purge`, `--dry-run` |

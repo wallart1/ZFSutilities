@@ -232,3 +232,109 @@ except Exception:
     pass
 "
 }
+
+# Read the archive_rate_limit value from the JSON config file (a pv -L
+# value such as 100M, or empty for unlimited).
+get_json_archive_rate_limit() {
+    local config_file=\
+"${JSON_CONFIG:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
+    local legacy_config="${ZFSUTILITIES_LEGACY_CONFIG_PATH:-/root/.config/zfsutilities.json}"
+    if [[ ! -e "$config_file" && -f "$legacy_config" ]]; then
+        config_file="$legacy_config"
+    fi
+    python3 -c "
+import json
+try:
+    with open('${config_file}') as f:
+        c = json.load(f)
+    print(c.get('archive_rate_limit', ''), end='')
+except Exception:
+    pass
+"
+}
+
+# Write one key into the JSON config file, creating the file when missing.
+# An empty value removes the key. Usage: save_json_config_key <key> <value>
+save_json_config_key() {
+    local key="$1" value="$2"
+    local config_file=\
+"${JSON_CONFIG:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
+    python3 - "$config_file" "$key" "$value" << 'PYEOF'
+import json, os, sys
+conf_file, key, value = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(conf_file) as f:
+        c = json.load(f)
+except Exception:
+    c = {}
+if value == "":
+    c.pop(key, None)
+else:
+    c[key] = value
+os.makedirs(os.path.dirname(conf_file), exist_ok=True)
+with open(conf_file, 'w') as f:
+    json.dump(c, f, indent=2)
+PYEOF
+}
+
+# Run a payload (read from stdin, like an ssh here-doc) on the storage
+# host. When this shell already IS the storage host the payload runs
+# locally in a subshell — so its `set -e` dies with it and the caller's
+# shell functions (including test mocks) stay visible — with
+# ZFSUTILITIES_BIN_DIR pointing at the orchestrator's helper directory;
+# otherwise the payload ships over `ssh bash -s` with pv_rate_limit
+# forwarded. Positional arguments after the function name become the
+# payload's "$@". Usage:
+#   on_storage <args...> << 'EOF' ... payload ... EOF
+on_storage() {
+    local payload_tmp rc
+    payload_tmp=$(mktemp "${TMPDIR:-/tmp}/zfsu-payload.XXXXXX")
+    # The path is baked into the handler (payload_tmp is local and gone by
+    # exit time); the guard covers contexts without bashinit's trap helper.
+    if declare -f append_exit_trap >/dev/null 2>&1; then
+        append_exit_trap "rm -f '$payload_tmp'"
+    fi
+    cat > "$payload_tmp"
+    if [[ "$(hostname -s)" == "$storage_host" ]]; then
+        (
+            export ZFSUTILITIES_BIN_DIR="${ZFSUTILITIES_BIN_DIR:-$mydir}"
+            set -- "$@"
+            # shellcheck disable=SC1090
+            source "$payload_tmp"
+        )
+        rc=$?
+    else
+        ssh root@"$storage_host" \
+            "pv_rate_limit='${pv_rate_limit:-}' bash -s" "$@" \
+            < "$payload_tmp"
+        rc=$?
+    fi
+    rm -f "$payload_tmp"
+    return $rc
+}
+
+# Mirror of on_storage for the compute host.
+on_compute() {
+    local payload_tmp rc
+    payload_tmp=$(mktemp "${TMPDIR:-/tmp}/zfsu-payload.XXXXXX")
+    if declare -f append_exit_trap >/dev/null 2>&1; then
+        append_exit_trap "rm -f '$payload_tmp'"
+    fi
+    cat > "$payload_tmp"
+    if [[ "$(hostname -s)" == "$compute_host" ]]; then
+        (
+            export ZFSUTILITIES_BIN_DIR="${ZFSUTILITIES_BIN_DIR:-$mydir}"
+            set -- "$@"
+            # shellcheck disable=SC1090
+            source "$payload_tmp"
+        )
+        rc=$?
+    else
+        ssh root@"$compute_host" \
+            "pv_rate_limit='${pv_rate_limit:-}' bash -s" "$@" \
+            < "$payload_tmp"
+        rc=$?
+    fi
+    rm -f "$payload_tmp"
+    return $rc
+}

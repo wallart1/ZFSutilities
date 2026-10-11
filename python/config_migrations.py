@@ -2,7 +2,7 @@
 
 import copy
 
-CONFIG_VERSION = 27
+CONFIG_VERSION = 28
 
 
 def _migrate_1_to_2(config):
@@ -319,6 +319,20 @@ def _migrate_26_to_27(config):
     return config
 
 
+def _migrate_27_to_28(config):
+    """Seed the archive transfer rate limit key (archive-vm/unarchive-vm).
+
+    Empty string means unlimited — the pre-key behavior — so an upgraded
+    config changes nothing functionally; the seed only makes the key visible
+    (and documented) instead of appearing after the first prompt save. A
+    user-set value is preserved.
+    """
+    if "archive_rate_limit" not in config:
+        config["archive_rate_limit"] = ""
+    config["config_version"] = 28
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -346,6 +360,7 @@ MIGRATIONS = [
     _migrate_24_to_25,
     _migrate_25_to_26,
     _migrate_26_to_27,
+    _migrate_27_to_28,
 ]
 
 

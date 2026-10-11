@@ -19,7 +19,6 @@ unset _local_bashinit
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 source_helper rootcheck
-source_helper zfslockmanager
 
 rootcheck
 
@@ -95,22 +94,34 @@ fi
 if is_two_node && [[ "$my_host" != "$storage_host" ]]; then
     log_msg "INFO: Connecting to $storage_host for storage operations..."
     remote_script=$(remote_zfsutility_script "$storage_host" "remove-vm-disk")
+    storage_rc=0
     ssh -t root@"$storage_host" \
         "$(input_hold_env_prefix)$remote_script '$pool' '$vmid' '$disknum' --skip-rescan" \
-        || {
-            log_msg "FATAL: Storage operations failed on $storage_host"
-            exit 1
-        }
+        || storage_rc=$?
+    # Rescan even when the storage half failed: the remote may already have
+    # removed this disk's LUN before failing on a later step, and the local
+    # iSCSI sessions must drop it either way.
     echo ""
     log_msg "INFO: Rescanning iSCSI on $(hostname)..."
     if [[ "$my_host" == "$compute_host" ]]; then
-        "$mydir/rescan-storage"
+        rescan_path=$(find_zfsutility_script rescan-storage)
+        if [[ -n "$rescan_path" ]]; then
+            "$rescan_path" || log_msg "WARN: Could not rescan $(hostname) —" \
+                "run 'sudo rescan-storage' manually"
+        else
+            log_msg "WARN: Could not locate rescan-storage — run 'sudo rescan-storage'" \
+                "manually"
+        fi
     else
         remote_rescan=$(remote_zfsutility_script "$compute_host" "rescan-storage")
         ssh root@"$compute_host" "$remote_rescan" 2>&1 \
             || log_msg "WARN: Could not rescan $compute_host — run 'sudo rescan-storage'" \
                 "on $compute_host manually"
     fi
+    [[ $storage_rc -eq 0 ]] || {
+        log_msg "FATAL: Storage operations failed on $storage_host"
+        exit 1
+    }
     exit 0
 fi
 
@@ -188,7 +199,7 @@ if is_two_node; then
     fi
 
     # --- Remove from expected-backstores manifest ---
-    manifest="/etc/rtslib-fb-target/expected-backstores.txt"
+    manifest="${EXPECTED_BACKSTORES_MANIFEST:-/etc/rtslib-fb-target/expected-backstores.txt}"
     if [[ -f "$manifest" ]] && grep -q "^${backstore_name}$" "$manifest"; then
         sed -i "/^${backstore_name}$/d" "$manifest"
         log_msg "INFO: ✓ Removed from expected-backstores manifest"
@@ -206,7 +217,12 @@ if is_two_node; then
 
     # --- Save targetcli config ---
     log_msg "INFO: Saving iSCSI configuration..."
-    if ! "$mydir/safe-iscsi-save"; then
+    safe_save_path=$(find_zfsutility_script safe-iscsi-save)
+    if [[ -z "$safe_save_path" ]]; then
+        log_msg "FATAL: Could not locate safe-iscsi-save"
+        exit 1
+    fi
+    if ! "$safe_save_path"; then
         log_msg "FATAL: safe-iscsi-save failed — iSCSI configuration NOT saved"
         exit 1
     fi
@@ -225,23 +241,23 @@ if is_two_node; then
     fi
 fi
 
-# --- Destroy zvol ---
+# --- Destroy zvol (snapshot children and holds first) ---
+# A VM that has run through dailybackup carries child snapshots, and a bare
+# `zfs destroy` refuses any dataset that has children. zfsdelfs deletes the
+# subtree bottom-up, releasing snapshot holds, and takes its own destroy
+# lock on the dataset — no lock is held here around the call.
 log_msg "INFO: Destroying zvol $zvol_name..."
 
-zfslock_init
-if ! zfslock_wait_or_resolve "$zvol_name" "x" "remove-vm-disk destroy"; then
-    log_msg "FATAL: Could not acquire destroy lock on ${zvol_name}"
+zfsdelfs_path=$(find_zfsutility_script zfsdelfs)
+[[ -n "$zfsdelfs_path" ]] || {
+    log_msg "FATAL: Could not locate zfsdelfs"
     exit 1
-fi
+}
 
-if ! zfs destroy "$zvol_name"; then
-    source_helper zfs-diagnose-busy
-    diagnose_dataset_busy "$zvol_name"
-    zfslock_release "$zfslock_id"
+if ! "$zfsdelfs_path" "$zvol_name" '' '' '' "autoproceed='Y'"; then
     log_msg "FATAL: Could not destroy zvol $zvol_name"
     exit 1
 fi
-zfslock_release "$zfslock_id"
 log_msg "INFO: ✓ Zvol destroyed"
 
 echo ""

@@ -1248,15 +1248,16 @@ sudo remove-vm-disk <pool> <vmid> <disk-num>
 | `vmid`     | Proxmox VM ID         |
 | `disk-num` | Disk number to remove |
 
-**Globals:** node-config globals only.
+**Globals:** node-config globals; `EXPECTED_BACKSTORES_MANIFEST` optionally
+overrides the expected-backstores manifest path.
 
 **Called modules / commands:**
 
 | Script | Purpose |
 | ------ | ------- |
+| [`zfsdelfs`](commands.md#zfsdelfs) | Destroy the zvol with its snapshot children and their holds (`autoproceed='Y'`) |
 | `safe-iscsi-save` | Persist LUN/backstore removal |
-| `rescan-storage` | Refresh compute-host device view |
-| `zfs-diagnose-busy` | Diagnose `zfs destroy` failure |
+| `rescan-storage` | Refresh the compute-host device view — also after a failed remote run, since the LUN may already be gone |
 
 **Data structures consumed / produced:**
 
@@ -1267,19 +1268,25 @@ sudo remove-vm-disk <pool> <vmid> <disk-num>
 
 **Internal flow / algorithm:**
 
-1. Validate arguments and delegate storage work to the storage host via SSH in
-   two-node mode.
+1. Validate arguments and delegate storage work to the storage host via
+   `ssh -t` (TTY-allocating, so the remote confirm prompts are visible; the
+   input-hold env prefix keeps numbered GUI prompts working across the hop)
+   with `--skip-rescan` — the wrapper performs one compute-host rescan itself,
+   even when the remote run failed.
 2. Resolve the zvol path, target, and backstore name.
-3. Prompt twice for confirmation.
+3. Prompt twice for confirmation; declining either exits 0 having destroyed
+   nothing.
 4. In two-node mode:
-    - Find and remove the LUN mapping.
-    - Remove the block backstore.
+    - Find and remove the LUN mapping (skipping gracefully if already gone).
+    - Remove the block backstore (likewise).
     - Remove entries from `expected-backstores.txt` and
       `/etc/zfsutilities/iscsi-encrypted-luns.conf`.
     - Save iSCSI config via `safe-iscsi-save`.
-    - Trigger a compute-host rescan.
-5. Destroy the zvol. If `zfs destroy` fails, source `zfs-diagnose-busy` and
-   print the cause before exiting fatally.
+5. Destroy the zvol via `zfsdelfs ... autoproceed='Y'` — any VM that has run
+   through dailybackup carries child snapshots (usually held), which a bare
+   `zfs destroy` refuses; `zfsdelfs` deletes the subtree bottom-up, releasing
+   holds, and takes its own destroy lock. Clone dependents abort the destroy
+   (`zfsdelfs` reports them; sever with `sever-vm-clone` first).
 
 **Return codes / side effects:**
 
@@ -1310,14 +1317,15 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | `archive_base` | Optional ZFS dataset that contains the archive. If not specified, the last-used `archive-base` is used.  |
 | `--new-vmid`   | Optional new VM ID for restored zvols, iSCSI resources, and Proxmox config                               |
 
-**Globals:** node-config globals only.
+**Globals:** node-config globals; `pv_rate_limit` (transfer rate limit,
+empty = unlimited; prompted with the JSON-config default `archive_rate_limit`).
 
 **Called modules / commands:**
 
 | Script | Purpose |
 | ------ | ------- |
-| `safe-iscsi-save` (inside SSH on storage host) | Persist rebuilt iSCSI config |
-| `rescan-storage` | Refresh compute-host device view |
+| `safe-iscsi-save` (storage side, via `on_storage`) | Persist rebuilt iSCSI config |
+| `rescan-storage` (compute side, via `on_compute`) | Refresh compute-host device view |
 
 **Data structures consumed / produced:**
 
@@ -1327,16 +1335,24 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Encrypted restored LUNs added (legacy `/etc/iscsi-encrypted-luns.conf` fallback) | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 | JSON config `archive_path` | Default archive base | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson) |
 | `.original_volblocksize` sidecars | Original `volblocksize` (required for copy-method restores, informational for raw) | — |
-| `.disk_info` sidecars | Map disk keys to restored zvols/LUNs; carry the `METHOD=copy\|raw` archive marker | — |
+| `.disk_info` sidecars | Map disk keys to restored zvols/LUNs; carry the `METHOD=copy\|raw` archive marker and the `RESTORED_AS=` completion marker appended after each verified restore | — |
 
 **Internal flow / algorithm:**
 
-1. Validate arguments and delegate to the compute host in two-node mode.
-2. Resolve the archive base (argument, JSON config, or prompt).
+1. Validate arguments. The script runs wherever it was invoked:
+   storage-side payloads go through `on_storage` (local on the storage host)
+   and compute-side operations through `on_compute` (local on the compute
+   host) — no delegate-to-compute bounce.
+2. Resolve the archive base (argument, JSON config, or prompt), then prompt
+   for the transfer rate limit (saved as the shared JSON default).
 3. Discover archived zvol datasets and the archived Proxmox config.
-4. Verify the `.disk_info` sidecars exist and destination zvols/config do not
-   already exist (missing `.original_volblocksize` sidecars warn; the shared
-   engine enforces them per restore method).
+4. Verify the `.disk_info` sidecars exist, then classify existing
+   destinations for re-run idempotency: a `RESTORED_AS` marker means the
+   disk is already restored (skipped); an existing zvol without the marker
+   is only destroyed after an explicit confirm; a destination config with
+   every disk marked means the restore already completed (clean exit).
+   Missing `.original_volblocksize` sidecars warn; the shared engine
+   enforces them per restore method.
 5. If the original VMID is in use and `--new-vmid` is not supplied, prompt for a
    new VMID.
 6. Restore each archived zvol with the shared transfer engine
@@ -1347,7 +1363,8 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 7. In two-node mode, create backstores and LUNs for each restored zvol and
    update `expected-backstores.txt` and `/etc/zfsutilities/iscsi-encrypted-luns.conf`.
 8. Save iSCSI config via `safe-iscsi-save`.
-9. Restore/rewrite the Proxmox config:
+9. Restore/rewrite the Proxmox config (written on the compute host —
+   base64-shipped through `on_compute` when orchestrating elsewhere):
     - Single-node: rewrite VMID in disk lines if `--new-vmid` was used.
     - Two-node: rewrite disk lines with new target/LUN paths using `.disk_info`.
     - Regenerate `vmgenid` and `smbios1` UUIDs when `--new-vmid` is used.

@@ -704,6 +704,10 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `WARN: Removed partial archive dataset ...` / `WARN: Removed created parent ...` | A failed transfer undid exactly the datasets this run created | Informational; re-run after fixing the cause |
 | `INFO: ✓ Archived: ...` | The zvol's archive completed | Informational |
 | `FATAL: Failed to archive ...` | The per-zvol transfer failed (details above) | Script aborts |
+| `INFO: ✓ Saved transfer rate limit to JSON config` | The entered pv rate limit differs from the saved default and was persisted | Informational |
+| `FATAL: Invalid rate limit '...' — use a pv -L value ...` | The entered rate limit is not a digits-plus-suffix pv value (and not empty) | Script aborts; re-run with e.g. 100M or leave empty |
+| `WARN: Incomplete archive dataset from an interrupted run:` / `WARN: ... removing and re-archiving ...` | The dataset exists without its post-verification @archive snapshot — unverified leftover | Informational; it is destroyed and re-made automatically |
+| `INFO: ✓ Already archived (verified) — skipping: ...` | Re-run skip: the dataset carries @archive, a METHOD= sidecar, and the volblocksize its method implies | Informational |
 | `INFO: --- Step 3: Verifying archive ---` | Phase milestone; the verification gate begins | Informational |
 | `FATAL: MISSING dataset: ...` | Verification found an archive dataset absent (counted; the run aborts at the end of verification) | Check the transfer messages above |
 | `FATAL: Volblocksize mismatch on ...: expected ..., got ...` | The archived zvol's volblocksize does not match its method (1M for copy archives, the sidecar original for raw) | Treat the archive as suspect; re-archive |
@@ -713,9 +717,13 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `INFO: Archive verified.` | Verification passed | Informational |
 | `INFO: --- Step 4: VM removal ---` | Phase milestone | Informational |
 | `INFO: VM ... preserved. Archive is under: ...` | The operator declined VM removal | VM kept; the archive remains |
-| `WARN: Could not destroy ...` | `zfs destroy` failed after busy diagnostics (single-node removal) | Continue to the next zvol; address the busy cause |
-| `WARN: Could not remove disk ...` | Remote `remove-vm-disk` failed (two-node removal) | Continue; see its messages |
-| `INFO: VM ... has been archived.` / `INFO: Archive: ...` | Final outcome: zvols destroyed, config removed, archive location listed | Informational |
+| `INFO: Removing disk ... from pool ...` / `INFO: Destroying ...` | Per-disk removal begins — two-node delegates to `remove-vm-disk` over a TTY-allocating ssh (its confirm prompts appear on this terminal), single-node destroys via `zfsdelfs` | Informational; answer the delegated prompts |
+| `WARN: ... was not removed` / `WARN: Could not destroy ...` | A disk survived removal — a declined confirm, a remote failure, or a destroy failure; judged by outcome (the zvol must be gone), never by exit code | Continue to the next disk; the run stops before config removal |
+| `WARN: iSCSI rescan failed; run 'rescan-storage' manually` / `WARN: Could not locate rescan-storage; run it manually` | The post-removal compute-host rescan could not run | Run `sudo rescan-storage` manually |
+| `FATAL: VM removal incomplete — the following zvols remain:` | At least one disk survived; each survivor is listed below this line | Follow the recovery guidance in the FATAL block |
+| `FATAL: The Proxmox config was NOT removed: ...` / `FATAL: The verified archive is safe under: ...` | Partial-removal safety gates: the config is kept so the VM remains defined until every disk is gone | Informational |
+| `FATAL: Run 'remove-vm-disk <pool> ... <disk-num>' on this host for each disk above, then delete ...` | Exact recovery commands for the surviving disks | Run them on the compute host, then delete the config |
+| `INFO: VM ... has been archived.` / `INFO: Archive: ...` | Final outcome: all zvols destroyed, config removed, archive location listed | Informational |
 
 ### [unarchive-vm](../commands-and-modules/commands.md#unarchive-vm)
 
@@ -733,9 +741,13 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `FATAL: Missing .disk_info sidecar file(s):` | The `.disk_info` sidecar is absent (list printed); it is load-bearing for config/iSCSI rebuild | Script aborts; the archive is incomplete |
 | `FATAL: Every disk in an archive must carry a .disk_info sidecar. An archive without them predates the sidecar format — ...` | Continuation of the missing-sidecar FATAL: an archive with no sidecars anywhere predates the sidecar format, so there is no recorded disk key, config text, or iSCSI layout to rebuild from | Script aborts; pre-sidecar archives need the manual restore procedure (see the unarchive-vm documentation) |
 | `WARN: Missing volblocksize sidecar (informational): ...` | No `.original_volblocksize` sidecar; harmless for raw-method restores (the stream carries volblocksize) | Informational unless the archive's method is copy |
-| `FATAL: Destination zvols already exist:` | Target zvol collision (list printed) | Script aborts; remove the zvols or use a new vmid |
+| `INFO: ✓ Saved transfer rate limit to JSON config` / `FATAL: Invalid rate limit '...'` | Restore-side rate prompt (shared JSON default with archive-vm) | Informational / re-run with a pv value or empty |
+| `INFO: Restore of VM ... is already complete — nothing to do.` | Re-run after a finished restore: every destination zvol carries the RESTORED_AS marker and the config exists | Informational; the run exits cleanly |
+| `INFO: ✓ Already restored (verified) — skipping: ...` | Re-run skip: this disk's restore carries the completion marker | Informational |
+| `INFO: Removing unmarked leftover ...` | A confirmed destroy-and-redo: the destination zvol existed without the completion marker and the operator approved re-restoring it | Informational |
+| `FATAL: Refusing to destroy ... — aborting.` | The operator declined destroying an unmarked destination zvol (interrupted run's leftover or a foreign orphan) | Script aborts; resolve the zvol manually and re-run |
 | `FATAL: Archived config not found: ...` / `FATAL: Archived config not found on ...: ...` | The archived Proxmox config is missing | Script aborts; check the archive |
-| `FATAL: Destination Proxmox config already exists: ...` | Destination config collision | Script aborts; use a new vmid |
+| `FATAL: Destination Proxmox config already exists: ...` | Destination config collision while some disks are not completed restores | Script aborts; remove the config or the leftover zvols manually, then re-run |
 | `INFO: Zvols to restore:` | Pre-confirmation summary (with volblocksize and rename mapping) | Review, then answer the restore prompt |
 | `INFO: --- Step 1: Restoring zvols ---` | Phase milestone | Informational |
 | `INFO: Restore method: copy (reblock to ...)` | The destination zvol is created thin at the sidecar's original volblocksize and the archive snapshot is device-copied onto it | Informational |
@@ -755,6 +767,7 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `SAVE_FAILED` | The remote `safe-iscsi-save` failed; `CONFIG_SAVED` is only emitted after a successful save | Reconstruction aborts; resolve the save failure and re-run |
 | `INFO: --- Step 3: Restoring Proxmox config ---` | Phase milestone | Informational |
 | `FATAL: Failed to read archived config` | The archived config read returned nothing | Script aborts |
+| `FATAL: Could not write ... on ...` | The rewritten config could not be placed on the compute host | Script aborts; the zvols and iSCSI state stand — re-run to finish |
 | `INFO: ✓ Config restored: ...` | The config was written (copied or path-rewritten) | Informational |
 | `WARN: Could not map ..., keeping original line` | A disk line's LUN/target could not be remapped during the rewrite | The original line is kept; verify the disk in the Proxmox GUI |
 | `INFO: --- Step 4: Rescanning iSCSI ---` | Phase milestone (two-node only) | Informational |
@@ -1061,10 +1074,11 @@ See also [ensure-restored-vm-iscsi](#ensure-restored-vm-iscsi) under Restore and
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `FATAL: Zvol does not exist: ...` | Nothing to destroy | Script aborts |
-| `FATAL: Could not acquire destroy lock on ...` | The destroy-class lock is unavailable | Script aborts; resolve the lock |
-| `FATAL: Could not destroy zvol ...` | `zfs destroy` failed after the busy diagnosis was printed | Script aborts; address the busy cause |
-| `WARN: This will PERMANENTLY DESTROY the following:` | Safety preamble before two confirmation prompts (VM stopped/disk removed, then sure-to-destroy) | y to both proceeds; anything else exits 0 with nothing destroyed |
+| `FATAL: Could not locate zfsdelfs` / `FATAL: Could not locate safe-iscsi-save` | A required helper script was not found | Script aborts; check the installation |
+| `FATAL: Could not destroy zvol ...` | `zfsdelfs` failed — its own diagnostics precede this line; the destroy covers the zvol plus its snapshot children and their holds | Script aborts; address the reported cause |
+| `WARN: This will PERMANENTLY DESTROY the following:` | Safety preamble before two confirmation prompts (VM stopped/disk removed, then sure-to-destroy); a delegated run over `ssh -t` shows both prompts on the calling terminal | y to both proceeds; anything else exits 0 with nothing destroyed |
 | `WARN: LUN not found in target — skipping LUN removal` / `WARN: Backstore ... not found — skipping` | The iSCSI pieces are already absent | Informational; the zvol destroy continues |
+| `WARN: Could not rescan ... — run 'sudo rescan-storage' manually` / `WARN: Could not locate rescan-storage ...` | The compute-host rescan after removal (or after a failed remote run — the LUN may already be gone) could not run | Run `sudo rescan-storage` manually |
 | `INFO: ✓ Zvol destroyed` | Main outcome | Informational |
 | `INFO: === Done ===` | Final outcome summary | Informational |
 

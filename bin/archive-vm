@@ -5,7 +5,8 @@
 # optionally removes the VM.
 #
 # Install to: /usr/local/lib/zfsutilities/bin/archive-vm on BOTH hosts
-# Run from:   the compute host (or the storage host directly — delegates via SSH)
+# Run from:   either host — storage-side and compute-side work run through
+#             node-lib's on_storage/on_compute transports
 
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
@@ -36,14 +37,19 @@ source_helper rootcheck
 # the same knob that skips the two-node root gate below skips this one.
 [[ ${ARCHIVE_VM_TEST_NO_ROOT:-0} == "1" ]] || rootcheck
 
-if ! command -v qm >/dev/null 2>&1; then
+my_host=$(hostname -s)
+
+# qm lives only on the compute host. When this shell IS the storage host
+# (two-node), every compute-side operation runs through on_compute instead,
+# so the script orchestrates from whichever node it was invoked on.
+if ! command -v qm >/dev/null 2>&1 \
+    && ! { is_two_node && [[ "$my_host" == "$storage_host" ]]; }; then
     log_msg "FATAL: This script requires Proxmox VE (qm command not found)."
     log_msg "FATAL:   On a single node without Proxmox there are no VMs to manage."
     log_msg "FATAL:   Non-Proxmox hypervisors are not supported."
     exit 1
 fi
 
-my_host=$(hostname -s)
 pve_conf_dir="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 JSON_CONFIG="${JSON_CONFIG:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
 
@@ -141,10 +147,10 @@ ensure_retire_snapshot() {
             log_msg "INFO:   Created retire snapshot: ${snap}"
         fi
     else
-        snap=$(ssh root@"$storage_host" bash -s "$zvol" << 'SSHEOF'
+        snap=$(on_storage "$zvol" << 'SSHEOF'
 zvol="$1"
 
-mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 source "$mydir/bashinit"
 bashinit
 
@@ -184,26 +190,7 @@ SSHEOF
 }
 
 # get_json_archive_path is provided by node-lib.sh (sourced above).
-
-# --- Save archive_path to JSON config ---
-save_json_archive_path() {
-    local path="$1"
-    python3 -c "
-import json, os
-path = '$path'
-conf_file = '$JSON_CONFIG'
-try:
-    with open(conf_file) as f:
-        c = json.load(f)
-except:
-    c = {}
-c['archive_path'] = path
-c['config_version'] = c.get('config_version', 2)
-os.makedirs(os.path.dirname(conf_file), exist_ok=True)
-with open(conf_file, 'w') as f:
-    json.dump(c, f, indent=2)
-"
-}
+# get_json_archive_rate_limit and save_json_config_key too.
 
 # Collect the zvol paths referenced by the VM's Proxmox config.
 # Prints one zvol path per line on stdout. Warnings for unresolved
@@ -289,9 +276,9 @@ collect_referenced_zvols() {
     done < "$proxmoxconfig"
 
     if [[ ${#target_lun_refs[@]} -gt 0 ]]; then
-        ssh root@"$storage_host" bash -s "$vmid" \
-            "${target_lun_refs[@]}" << 'SSHEOF' 
-mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+        on_storage "$vmid" \
+            "${target_lun_refs[@]}" << 'SSHEOF'
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 source "$mydir/bashinit"
 bashinit
 
@@ -364,15 +351,18 @@ vmid="$1"
     exit 1
 }
 
-# --- If not on the compute host, delegate (two-node only) ---
-if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
-    remote_script=$(remote_zfsutility_script "$compute_host" "archive-vm")
-    exec ssh -t root@"$compute_host" \
-        "$(input_hold_env_prefix)$remote_script '$vmid'"
-fi
+# --- Node-agnostic orchestration ---------------------------------------
+# This script runs wherever it was invoked: storage-side work goes through
+# on_storage (local when this IS the storage host) and compute-side work
+# through on_compute (local when this IS the compute host). The old
+# delegate-to-compute bounce is gone — an invocation on the storage host
+# no longer round-trips to the compute host and back per disk.
 
 # --- The VM must already be stopped; archive-vm never stops it ---
-vm_status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
+vm_status=$(on_compute "$vmid" << 'CPEOF'
+qm status "$1" 2>/dev/null | awk '{print $2}'
+CPEOF
+)
 [[ "$vm_status" == "stopped" ]] || {
     log_msg "FATAL: VM ${vmid} is not stopped (status: ${vm_status:-unknown})."
     log_msg "FATAL: The VM must be stopped before it can be archived."
@@ -396,8 +386,8 @@ if is_single_node; then
     clone_info=$(zfs list -H -o name,origin \
         | awk -v v="$vmid" 'index($2, "/proxmox/vm-" v "-disk-") {print $1 "\t" $2}')
 else
-    clone_info=$(ssh root@"$storage_host" bash -s "$vmid" << 'SSHEOF'
-mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+    clone_info=$(on_storage "$vmid" << 'SSHEOF'
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 source "$mydir/bashinit"
 bashinit
 
@@ -406,7 +396,7 @@ vmid="$1"
 zfs list -H -o name,origin \
     | awk -v v="$vmid" 'index($2, "/proxmox/vm-" v "-disk-") {print $1 "\t" $2}'
 SSHEOF
-    ) || { log_msg "FATAL: SSH to $storage_host failed"; exit 1; }
+    ) || { log_msg "FATAL: Clone discovery failed on ${storage_host}"; exit 1; }
 fi
 
 declare -A clone_vmids
@@ -446,8 +436,12 @@ if [[ -n "$clone_info" ]]; then
         done <<< "$clone_records"
         echo ""
 
-        if ask_yn "Do you want this script to sever these clones" \
-            "(copy them into origin-free zvols)?"; then
+        # One prompt string via a needle variable: backslash-continued
+        # quoted strings would arrive as separate ask_yn arguments (the
+        # second is ask_yn's default-answer parameter).
+        sever_prompt="Do you want this script to sever these clones"
+        sever_prompt+=" (copy them into origin-free zvols)?"
+        if ask_yn "$sever_prompt"; then
             # Severance copies each clone zvol in full and swaps the fresh
             # copy in under the original name, so every owning clone VM must
             # already be stopped before any severance work starts.
@@ -461,7 +455,6 @@ if [[ -n "$clone_info" ]]; then
                     log_msg "FATAL: stopped. Stop clone VM ${clone_vmid}" \
                         "(e.g. 'qm stop ${clone_vmid}' or the Proxmox GUI)," \
                         "then re-run archive-vm."
-                    log_msg "FATAL: or the Proxmox GUI), then re-run archive-vm."
                     exit 1
                 }
             done
@@ -518,8 +511,29 @@ fi
 
 # Save the path back to JSON (in case it changed or was empty)
 if [[ "$archive_base" != "$configured_path" ]]; then
-    save_json_archive_path "$archive_base"
+    save_json_config_key archive_path "$archive_base"
     log_msg "INFO:   ✓ Saved archive path to JSON config"
+fi
+
+# Always prompt for the transfer rate limit (shared JSON key with
+# unarchive-vm; empty = unlimited). The saved value is the default, so an
+# archive run never saturates a small storage host by accident twice.
+configured_rate=$(get_json_archive_rate_limit)
+rate_default=""
+[[ -n "$configured_rate" ]] && rate_default=" [${configured_rate}]"
+ask_line "Transfer rate limit (pv value, e.g. 100M; empty = unlimited)${rate_default}: " \
+    user_rate
+archive_rate="${user_rate:-$configured_rate}"
+if ! archive_valid_rate "$archive_rate"; then
+    log_msg "FATAL: Invalid rate limit '${archive_rate}' — use a pv -L value"
+    log_msg "FATAL: such as 100M or 500KiB, or leave it empty for unlimited"
+    exit 1
+fi
+# shellcheck disable=SC2034  # used by on_storage/on_compute and lib functions
+pv_rate_limit="$archive_rate"
+if [[ "$archive_rate" != "$configured_rate" ]]; then
+    save_json_config_key archive_rate_limit "$archive_rate"
+    log_msg "INFO:   ✓ Saved transfer rate limit to JSON config"
 fi
 
 # Get mountpoint of the base dataset
@@ -550,7 +564,9 @@ if ! ask_yn "Proceed with archive?"; then
     exit 0
 fi
 
-# Archive each zvol
+# Archive each zvol. Re-runs are idempotent: a per-disk archive that
+# already carries its post-verification @archive snapshot is skipped, and
+# an unverified leftover from an interrupted run is removed and re-made.
 for zvol in $zvols; do
     snap=$(ensure_retire_snapshot "$zvol")
     # ensure_retire_snapshot logs the specific failure before exiting its
@@ -564,6 +580,23 @@ for zvol in $zvols; do
     log_msg "INFO:   Snapshot to archive: ${snap}"
 
     if is_single_node; then
+        state=$(archive_completion_state "$archive_dataset" "$archive_mount" "$zvol")
+        if [[ "$state" == "partial" ]]; then
+            log_msg "WARN: Incomplete archive dataset from an interrupted run:"
+            log_msg "WARN:   removing and re-archiving ${archive_dataset}"
+            zfs destroy -r "$archive_dataset"
+        elif [[ "$state" == "complete" ]]; then
+            log_msg "INFO:   ✓ Already archived (verified) — skipping: ${archive_dataset}"
+            # Back-fill the sidecar key lines a prior run may not have
+            # appended (it can die between the transfer and this step).
+            disk_key=$(disk_key_for_zvol "$zvol")
+            if [[ -n "$disk_key" ]] && ! grep -q '^DISK_KEY=' \
+                    "${archive_mount}/${zvol}.disk_info" 2>/dev/null; then
+                echo "DISK_KEY=${disk_key}" >> "${archive_mount}/${zvol}.disk_info"
+            fi
+            log_msg "INFO:   ✓ Archived: ${archive_dataset}"
+            continue
+        fi
         log_msg "INFO:   Archiving ${zvol}${snap_name} → ${archive_dataset}"
         if ! archive_one_zvol "$zvol" "$snap_name" "$archive_dataset" \
                 "$archive_mount"; then
@@ -585,9 +618,9 @@ for zvol in $zvols; do
         # joining).
         config_b64=$(base64 -w0 "$proxmoxconfig")
         log_msg "INFO:   Archiving ${zvol}${snap_name} → ${archive_dataset}"
-        if ! ssh root@"$storage_host" bash -s "$zvol" "$snap_name" \
+        if ! on_storage "$zvol" "$snap_name" \
                 "$archive_dataset" "$archive_mount" "$vmid" "$config_b64" << 'SSHEOF'
-mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 source "$mydir/bashinit"
 bashinit
 
@@ -605,9 +638,21 @@ archive_mount="$4"
 vmid="$5"
 config_b64="$6"
 
-if ! archive_one_zvol "$zvol" "$snap_name" "$archive_dataset" \
-        "$archive_mount"; then
-    exit 1
+# Re-run idempotency: a verified archive is skipped; an unverified leftover
+# from an interrupted run is removed and re-made below.
+state=$(archive_completion_state "$archive_dataset" "$archive_mount" "$zvol")
+if [[ "$state" == "partial" ]]; then
+    log_msg "WARN: Incomplete archive dataset from an interrupted run:"
+    log_msg "WARN:   removing and re-archiving ${archive_dataset}"
+    zfs destroy -r "$archive_dataset"
+fi
+if [[ "$state" == "complete" ]]; then
+    log_msg "INFO:   ✓ Already archived (verified) — skipping: ${archive_dataset}"
+else
+    if ! archive_one_zvol "$zvol" "$snap_name" "$archive_dataset" \
+            "$archive_mount"; then
+        exit 1
+    fi
 fi
 
 # Decode the compute host's Proxmox config for disk-key resolution.
@@ -667,9 +712,14 @@ if [[ -n "$target" && -n "$lun" ]]; then
     done <<< "$config_text"
     if [[ -n "$disk_key" ]]; then
         info_file="${archive_mount}/${zvol}.disk_info"
-        echo "DISK_KEY=${disk_key}" >> "$info_file"
-        echo "LUN=${lun}" >> "$info_file"
-        echo "TARGET=${target}" >> "$info_file"
+        # Append each key line only when absent, so a skipped (already
+        # archived) disk does not grow duplicate sidecar entries.
+        grep -q '^DISK_KEY=' "$info_file" 2>/dev/null \
+            || echo "DISK_KEY=${disk_key}" >> "$info_file"
+        grep -q '^LUN=' "$info_file" 2>/dev/null \
+            || echo "LUN=${lun}" >> "$info_file"
+        grep -q '^TARGET=' "$info_file" 2>/dev/null \
+            || echo "TARGET=${target}" >> "$info_file"
     fi
 fi
 SSHEOF
@@ -686,8 +736,16 @@ config_dest_mount="${archive_mount}/${proxmoxconfig}"
 if is_single_node; then
     mkdir -p "$(dirname "$config_dest_mount")"
     cp "$proxmoxconfig" "$config_dest_mount"
+elif [[ "$my_host" == "$storage_host" ]]; then
+    # Orchestrating on the storage host: fetch the config from the compute
+    # host and write it into the (local) archive mount.
+    mkdir -p "$(dirname "$config_dest_mount")"
+    on_compute "$proxmoxconfig" << 'CPEOF' > "$config_dest_mount"
+cat "$1"
+CPEOF
 else
-    # Two-node: copy config to storage host's archive mount
+    # Orchestrating on the compute host: push the config to the storage
+    # host's archive mount.
     ssh root@"$storage_host" "mkdir -p '$(dirname "$config_dest_mount")'"
     scp -q "$proxmoxconfig" "root@${storage_host}:${config_dest_mount}"
 fi
@@ -800,15 +858,26 @@ if ! ask_yn "Remove VM ${vmid}?"; then
     exit 0
 fi
 
-# Remove disks
+# Every disk that survives removal is recorded: the Proxmox config is only
+# deleted when all disks are gone, and a partial removal must never report
+# success.
+declare -a leftover_zvols=()
+
 if is_single_node; then
     log_msg "INFO:   Removing disks..."
+    zfsdelfs_path=$(find_zfsutility_script zfsdelfs)
+    [[ -n "$zfsdelfs_path" ]] || {
+        log_msg "FATAL: Could not locate zfsdelfs"
+        exit 1
+    }
     for zvol in $zvols; do
         log_msg "INFO:     Destroying ${zvol}..."
-        if ! zfs destroy "$zvol"; then
-            source_helper zfs-diagnose-busy
-            diagnose_dataset_busy "$zvol"
+        # zfsdelfs deletes snapshot children (releasing their holds) before
+        # the zvol itself — a bare `zfs destroy` refuses any VM disk that
+        # dailybackup has snapshotted.
+        if ! "$zfsdelfs_path" "$zvol" '' '' '' "autoproceed='Y'"; then
             log_msg "WARN: Could not destroy ${zvol}"
+            leftover_zvols+=("$zvol")
         fi
     done
 else
@@ -818,11 +887,55 @@ else
         disknum=$(disk_number_from_zvol "$zvol")
         pool="${zvol%%/*}"
         log_msg "INFO:     Removing disk ${disknum} from pool ${pool}..."
-        remote_remove_vm_disk=$(remote_zfsutility_script "$storage_host" "remove-vm-disk")
-        ssh root@"$storage_host" \
-            "$remote_remove_vm_disk '$pool' '$vmid' '$disknum'" \
-            || log_msg "WARN: Could not remove disk ${disknum}"
+        if [[ "$my_host" == "$storage_host" ]]; then
+            # Orchestrating on the storage host: remove-vm-disk runs
+            # directly — its confirm prompts appear on this terminal and
+            # its own wrapper rescans the compute host.
+            rmd_path=$(find_zfsutility_script remove-vm-disk)
+            "$rmd_path" "$pool" "$vmid" "$disknum" --skip-rescan \
+                || true
+        else
+            # Over ssh, -t gives the remote confirms a terminal — bash
+            # suppresses read -p prompts when stdin is not a tty — and the
+            # env prefix carries the numbered input-hold protocol across
+            # the hop.
+            remote_remove_vm_disk=$(remote_zfsutility_script "$storage_host" "remove-vm-disk")
+            remote_cmd="$(input_hold_env_prefix)$remote_remove_vm_disk"
+            remote_cmd+=" '$pool' '$vmid' '$disknum' --skip-rescan"
+            ssh -t root@"$storage_host" "$remote_cmd" || true
+        fi
+        # remove-vm-disk exits 0 even when an operator declines its confirm,
+        # so judge by outcome: the zvol must actually be gone.
+        still_present=$(ssh root@"$storage_host" \
+            "zfs list -H -o name '$zvol'" 2>/dev/null || true)
+        if [[ -n "$still_present" ]]; then
+            log_msg "WARN: ${zvol} was not removed"
+            leftover_zvols+=("$zvol")
+        fi
     done
+
+    log_msg "INFO:   Rescanning iSCSI on ${compute_host}..."
+    if ! on_compute << 'CPEOF'
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
+rescan_path=$(find_zfsutility_script rescan-storage)
+[[ -n "$rescan_path" ]] || exit 1
+"$rescan_path"
+CPEOF
+    then
+        log_msg "WARN: iSCSI rescan failed; run 'rescan-storage' manually"
+    fi
+fi
+
+if [[ ${#leftover_zvols[@]} -gt 0 ]]; then
+    log_msg "FATAL: VM removal incomplete — the following zvols remain:"
+    for zvol in "${leftover_zvols[@]}"; do
+        log_msg "FATAL:   ${zvol}"
+    done
+    log_msg "FATAL: The Proxmox config was NOT removed: ${proxmoxconfig}"
+    log_msg "FATAL: The verified archive is safe under: ${archive_base}"
+    log_msg "FATAL: Run 'remove-vm-disk <pool> ${vmid} <disk-num>' on this host"
+    log_msg "FATAL: for each disk above, then delete ${proxmoxconfig}."
+    exit 1
 fi
 
 # Remove Proxmox config

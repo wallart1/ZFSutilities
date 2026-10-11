@@ -35,14 +35,19 @@ source_helper zfslockmanager
 # so the same knob style as archive-vm skips this gate in the test harness.
 [[ ${UNARCHIVE_VM_TEST_NO_ROOT:-0} == "1" ]] || rootcheck
 
-if ! command -v qm >/dev/null 2>&1; then
+my_host=$(hostname -s)
+
+# qm lives only on the compute host. When this shell IS the storage host
+# (two-node), every compute-side operation runs through on_compute instead,
+# so the script orchestrates from whichever node it was invoked on.
+if ! command -v qm >/dev/null 2>&1 \
+    && ! { is_two_node && [[ "$my_host" == "$storage_host" ]]; }; then
     log_msg "FATAL: This script requires Proxmox VE (qm command not found)."
     log_msg "FATAL:   On a single node without Proxmox there are no VMs to manage."
     log_msg "FATAL:   Non-Proxmox hypervisors are not supported."
     exit 1
 fi
 
-my_host=$(hostname -s)
 pve_conf_dir="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 JSON_CONFIG="${JSON_CONFIG:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}}"
 
@@ -104,7 +109,56 @@ is_disk_key() {
 vmid_in_use() {
     local check_vmid="$1"
     local dest_conf="${pve_conf_dir}/${check_vmid}.conf"
-    [[ -f "$dest_conf" ]] && return 0
+    # The config lives on the compute host; probe it there (locally when
+    # this IS the compute host).
+    if on_compute "$dest_conf" << 'CPEOF'
+[[ -f "$1" ]]
+CPEOF
+    then
+        # A config whose every archive restore target exists AND carries the
+        # completion marker is this archive's own finished output, not a
+        # foreign VM in use — re-running must reach the nothing-to-do exit.
+        local all_marked=true mi pool dnum target marked_here
+        for mi in "${!original_zvols[@]}"; do
+            pool="${original_zvols[$mi]%%/*}"
+            dnum="${disk_nums[$mi]}"
+            [[ "$dnum" =~ ^[0-9]+$ ]] || continue
+            target="${pool}/proxmox/vm-${check_vmid}-disk-${dnum}"
+            marked_here=false
+            if is_single_node; then
+                if zfs list -H -o name "$target" 2>/dev/null \
+                        | grep -qxF -- "$target" \
+                        && zvol_marked_restored "$target" "$check_vmid"; then
+                    marked_here=true
+                fi
+            else
+                if ssh root@"$storage_host" \
+                        "zfs list -H -o name '$target' 2>/dev/null \
+                        | grep -qxF -- '$target'" \
+                        && zvol_marked_restored "$target" "$check_vmid"; then
+                    marked_here=true
+                fi
+            fi
+            [[ "$marked_here" == "true" ]] || all_marked=false
+        done
+        if [[ "$all_marked" == "true" ]]; then
+            return 1
+        fi
+        return 0
+    fi
+
+    # Potential restore-target paths of this archive for check_vmid: a zvol
+    # sitting at one of these paths is either a completed restore (carrying
+    # the sidecar marker) or an interrupted restore's leftover — the
+    # destination classification step decides per disk with an explicit
+    # confirmation, so the vmid gate must not count them as "in use".
+    local restore_paths="" i pool dnum
+    for i in "${!original_zvols[@]}"; do
+        pool="${original_zvols[$i]%%/*}"
+        dnum="${disk_nums[$i]}"
+        [[ "$dnum" =~ ^[0-9]+$ ]] || continue
+        restore_paths+="${pool}/proxmox/vm-${check_vmid}-disk-${dnum} "
+    done
 
     local found vol vol_tail
     if is_single_node; then
@@ -113,22 +167,26 @@ vmid_in_use() {
         found=""
         while IFS= read -r vol; do
             [[ "$vol" == "${archive_base}/"* ]] && continue
+            [[ " $restore_paths" == *" $vol "* ]] && continue
             vol_tail="${vol##*"/proxmox/vm-${check_vmid}-disk-"}"
             [[ "$vol_tail" =~ ^[0-9]+$ ]] || continue
             found="$vol"
             break
         done < <(zfs list -H -t volume -o name 2>/dev/null)
     else
-        found=$(ssh root@"$storage_host" bash -s "$check_vmid" "$archive_base" << 'SSHEOF'
-mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+        found=$(ssh root@"$storage_host" bash -s "$check_vmid" "$archive_base" \
+            "$restore_paths" << 'SSHEOF'
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 source "$mydir/bashinit"
 bashinit
 
 vmid="$1"
 archive_base="$2"
+restore_paths="$3"
 found=""
 while IFS= read -r vol; do
     [[ "$vol" == "${archive_base}/"* ]] && continue
+    [[ " $restore_paths" == *" $vol "* ]] && continue
     vol_tail="${vol##*"/proxmox/vm-${vmid}-disk-"}"
     [[ "$vol_tail" =~ ^[0-9]+$ ]] || continue
     found="$vol"
@@ -139,6 +197,22 @@ SSHEOF
         )
     fi
     [[ -n "$found" ]]
+}
+
+# True when the archive's sidecar for this zvol records a completed restore
+# as the given vmid — such zvols are this archive's own verified output.
+zvol_marked_restored() {
+    local zvol="$1" for_vmid="$2"
+    local disknum="${zvol##*-disk-}"
+    [[ "$disknum" =~ ^[0-9]+$ ]] || return 1
+    local info_file="${archive_mount}/${zvol}.disk_info"
+    local marker="RESTORED_AS=vm-${for_vmid}-disk-${disknum}"
+    if is_single_node; then
+        grep -qxF -- "$marker" "$info_file" 2>/dev/null
+    else
+        ssh root@"$storage_host" \
+            "grep -qxF -- '$marker' '$info_file' 2>/dev/null"
+    fi
 }
 
 # get_json_archive_path is provided by node-lib.sh (sourced above).
@@ -179,14 +253,11 @@ if [[ $EUID -ne 0 && ${UNARCHIVE_VM_TEST_NO_ROOT:-0} != "1" ]]; then
     exit 1
 fi
 
-# --- If not on the compute host, delegate (two-node only) ---
-if is_two_node && [[ "$my_host" != "$compute_host" ]]; then
-    new_vmid_arg=""
-    [[ -n "$newvmid" ]] && new_vmid_arg=" --new-vmid '$newvmid'"
-    remote_script=$(remote_zfsutility_script "$compute_host" "unarchive-vm")
-    exec ssh -t root@"$compute_host" \
-        "$remote_script '$vmid' '$archive_base'${new_vmid_arg}"
-fi
+# --- Node-agnostic orchestration ---------------------------------------
+# This script runs wherever it was invoked: storage-side work goes through
+# on_storage (local when this IS the storage host) and compute-side work
+# through on_compute (local when this IS the compute host). The old
+# delegate-to-compute bounce is gone.
 
 log_msg "INFO: === unarchive-vm ===="
 log_msg "INFO:   VM: ${vmid}"
@@ -234,6 +305,27 @@ else
         "zfs get -H -o value mountpoint '$archive_base'")
 fi
 
+# Always prompt for the transfer rate limit (shared JSON key with
+# archive-vm; empty = unlimited). The saved value is the default, so a
+# restore run never saturates a small storage host by accident twice.
+configured_rate=$(get_json_archive_rate_limit)
+rate_default=""
+[[ -n "$configured_rate" ]] && rate_default=" [${configured_rate}]"
+ask_line "Transfer rate limit (pv value, e.g. 100M; empty = unlimited)${rate_default}: " \
+    user_rate
+archive_rate="${user_rate:-$configured_rate}"
+if ! archive_valid_rate "$archive_rate"; then
+    log_msg "FATAL: Invalid rate limit '${archive_rate}' — use a pv -L value"
+    log_msg "FATAL: such as 100M or 500KiB, or leave it empty for unlimited"
+    exit 1
+fi
+# shellcheck disable=SC2034  # used by on_storage/on_compute and lib functions
+pv_rate_limit="$archive_rate"
+if [[ "$archive_rate" != "$configured_rate" ]]; then
+    save_json_config_key archive_rate_limit "$archive_rate"
+    log_msg "INFO:   ✓ Saved transfer rate limit to JSON config"
+fi
+
 # =======================================================================
 # Discover archived zvols
 # =======================================================================
@@ -251,8 +343,8 @@ if is_single_node; then
         | grep -E '[0-9]+$' \
         | sort)
 else
-    archived_zvols=$(ssh root@"$storage_host" bash -s "$archive_base" "$vmid" << 'SSHEOF'
-mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+    archived_zvols=$(on_storage "$archive_base" "$vmid" << 'SSHEOF'
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 source "$mydir/bashinit"
 bashinit
 
@@ -266,7 +358,7 @@ zfs list -H -t volume -o name -r "$archive_base" 2>/dev/null \
     | grep -E '[0-9]+$' \
     | sort
 SSHEOF
-    ) || { log_msg "FATAL: SSH to $storage_host failed"; exit 1; }
+    ) || { log_msg "FATAL: Archive discovery failed on ${storage_host}"; exit 1; }
 fi
 
 if [[ -z "$archived_zvols" ]]; then
@@ -357,28 +449,49 @@ for i in "${!original_zvols[@]}"; do
 vm-${newvmid}-disk-${disk_nums[$i]}}")
 done
 
-# Verify destination zvols do not already exist
-existing_dest=()
+# Classify existing destinations for re-run idempotency: a zvol whose
+# archive sidecar carries this run's RESTORED_AS marker was completed by an
+# earlier run and is skipped; an existing zvol WITHOUT the marker is an
+# interrupted run's leftover or a foreign orphan, and is only destroyed
+# after an explicit confirmation. restore_action[i] is one of:
+#   restore — no destination zvol exists; archive the normal flow
+#   skip    — verified completed restore; leave in place
+#   redo    — confirmed leftover; destroy, then restore again
+declare -a restore_action=()
 for i in "${!new_zvols[@]}"; do
+    restore_action[$i]="restore"
+    dest_exists=false
     if is_single_node; then
         if zfs list -H -o name "${new_zvols[$i]}" 2>/dev/null \
                 | grep -qxF -- "${new_zvols[$i]}"; then
-            existing_dest+=("${new_zvols[$i]}")
+            dest_exists=true
         fi
     else
         if ssh root@"$storage_host" "zfs list -H -o name '${new_zvols[$i]}' 2>/dev/null \
                 | grep -qxF -- '${new_zvols[$i]}'"; then
-            existing_dest+=("${new_zvols[$i]}")
+            dest_exists=true
+        fi
+    fi
+    if [[ "$dest_exists" == "true" ]]; then
+        if zvol_marked_restored "${new_zvols[$i]}" "$newvmid"; then
+            restore_action[$i]="skip"
+        else
+            echo ""
+            # One prompt string built via a needle variable: backslash-
+            # continued quoted strings would arrive as separate ask_yn
+            # arguments (the second is ask_yn's default-answer parameter).
+            redo_prompt="Destination zvol ${new_zvols[$i]} exists without a"
+            redo_prompt+=" completion marker (interrupted run or orphan)."
+            redo_prompt+=" Destroy and re-restore?"
+            if ask_yn "$redo_prompt"; then
+                restore_action[$i]="redo"
+            else
+                log_msg "FATAL: Refusing to destroy ${new_zvols[$i]} — aborting."
+                exit 1
+            fi
         fi
     fi
 done
-
-[[ ${#existing_dest[@]} -eq 0 ]] \
-    || {
-        log_msg "FATAL: Destination zvols already exist:"
-        printf '  %s\n' "${existing_dest[@]}" >&2
-        exit 1
-    }
 
 # Verify archived config exists
 archived_config="${archive_mount}/${pve_conf_dir}/${vmid}.conf"
@@ -396,10 +509,24 @@ else
     fi
 fi
 
-# Verify destination config does not already exist
+# Verify destination config does not already exist (it lives on the
+# compute host; probe it there)
 dest_config="${pve_conf_dir}/${newvmid}.conf"
-if [[ -f "$dest_config" ]]; then
+if on_compute "$dest_config" << 'CPEOF'
+[[ -f "$1" ]]
+CPEOF
+then
+    all_skipped=true
+    for i in "${!new_zvols[@]}"; do
+        [[ "${restore_action[$i]}" == "skip" ]] || all_skipped=false
+    done
+    if [[ "$all_skipped" == "true" ]]; then
+        log_msg "INFO: Restore of VM ${newvmid} is already complete — nothing to do."
+        exit 0
+    fi
     log_msg "FATAL: Destination Proxmox config already exists: $dest_config"
+    log_msg "FATAL: while some disks are not completed restores. Remove the config"
+    log_msg "FATAL: or the leftover zvols manually, then re-run."
     exit 1
 fi
 
@@ -424,10 +551,13 @@ for i in "${!archive_datasets[@]}"; do
             orig_vbs="unknown"
         fi
     fi
+    state_note=""
+    [[ "${restore_action[$i]}" == "skip" ]] && state_note=" [already restored]"
     if [[ "${original_zvols[$i]}" != "${new_zvols[$i]}" ]]; then
-        log_msg "INFO:     ${original_zvols[$i]} → ${new_zvols[$i]} (volblocksize: ${orig_vbs})"
+        log_msg "INFO:     ${original_zvols[$i]} → ${new_zvols[$i]}" \
+            "(volblocksize: ${orig_vbs})${state_note}"
     else
-        log_msg "INFO:     ${new_zvols[$i]} (volblocksize: ${orig_vbs})"
+        log_msg "INFO:     ${new_zvols[$i]} (volblocksize: ${orig_vbs})${state_note}"
     fi
 done
 echo ""
@@ -451,6 +581,15 @@ if is_single_node; then
         new_zvol="${new_zvols[$i]}"
         vbs_file="${archive_mount}/${orig_zvol}.original_volblocksize"
 
+        if [[ "${restore_action[$i]}" == "skip" ]]; then
+            log_msg "INFO:   ✓ Already restored (verified) — skipping: ${new_zvol}"
+            continue
+        fi
+        if [[ "${restore_action[$i]}" == "redo" ]]; then
+            log_msg "INFO:   Removing unmarked leftover ${new_zvol}..."
+            zfs destroy -r "$new_zvol"
+        fi
+
         orig_vbs="unknown"
         if [[ -f "$vbs_file" ]]; then
             orig_vbs=$(cat "$vbs_file")
@@ -470,13 +609,28 @@ if is_single_node; then
             { log_msg "FATAL: Failed to restore ${new_zvol}"; exit 1; }
         fi
         zfslock_release "$zfslock_id"
+        # Completion marker: written only after a verified restore, so a
+        # later re-run can tell this zvol apart from a leftover.
+        echo "RESTORED_AS=vm-${newvmid}-disk-${disk_nums[$i]}" \
+            >> "${archive_mount}/${orig_zvol}.disk_info"
         log_msg "INFO:   ✓ Restored: ${new_zvol}"
     done
 else
     # Two-node: run restoration on the storage host via the shared engine.
-    if ! ssh root@"$storage_host" bash -s "$archive_mount" "$dataset_count" \
+    # One action character per disk (r=restore, s=skip, x=destroy+restore)
+    # rides along as a single argv token.
+    restore_actions=""
+    for i in "${!new_zvols[@]}"; do
+        case "${restore_action[$i]}" in
+            restore) restore_actions+="r" ;;
+            skip)    restore_actions+="s" ;;
+            redo)    restore_actions+="x" ;;
+        esac
+    done
+    if ! on_storage "$archive_mount" "$dataset_count" \
+            "$newvmid" "$restore_actions" \
             "${archive_datasets[@]}" "${original_zvols[@]}" "${new_zvols[@]}" << 'SSHEOF'
-mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 source "$mydir/bashinit"
 bashinit
 
@@ -492,7 +646,9 @@ source "$engine"
 set -e
 archive_mount="$1"
 dataset_count="$2"
-shift 2
+newvmid="$3"
+restore_actions="$4"
+shift 4
 
 archive_datasets=("${@:1:$dataset_count}")
 original_zvols=("${@:$((dataset_count + 1)):$dataset_count}")
@@ -503,6 +659,16 @@ for i in "${!archive_datasets[@]}"; do
     orig_zvol="${original_zvols[$i]}"
     new_zvol="${new_zvols[$i]}"
     vbs_file="${archive_mount}/${orig_zvol}.original_volblocksize"
+    action="${restore_actions:$i:1}"
+
+    if [[ "$action" == "s" ]]; then
+        log_msg "INFO:   ✓ Already restored (verified) — skipping: ${new_zvol}"
+        continue
+    fi
+    if [[ "$action" == "x" ]]; then
+        log_msg "INFO:   Removing unmarked leftover ${new_zvol}..."
+        zfs destroy -r "$new_zvol"
+    fi
 
     orig_vbs="unknown"
     if [[ -f "$vbs_file" ]]; then
@@ -525,6 +691,15 @@ for i in "${!archive_datasets[@]}"; do
     fi
 
     zfslock_release "$zfslock_id"
+    # Completion marker: written only after a verified restore, so a later
+    # re-run can tell this zvol apart from a leftover.
+    disknum=""
+    if [[ "$orig_zvol" == *-disk-* ]]; then
+        disknum="${orig_zvol##*-disk-}"
+        [[ "$disknum" =~ ^[0-9]+$ ]] || disknum=""
+    fi
+    echo "RESTORED_AS=vm-${newvmid}-disk-${disknum}" \
+        >> "${archive_mount}/${orig_zvol}.disk_info"
     log_msg "INFO:   ✓ Restored: ${new_zvol}"
 done
 SSHEOF
@@ -546,9 +721,9 @@ declare -A disk_to_target=()
 if is_two_node; then
     log_msg "INFO: --- Step 2: Rebuilding iSCSI infrastructure ---"
 
-    lun_result=$(ssh root@"$storage_host" bash -s "$newvmid" "$dataset_count" \
+    lun_result=$(on_storage "$newvmid" "$dataset_count" \
         "${new_zvols[@]}" << 'SSHEOF'
-mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 source "$mydir/bashinit"
 bashinit
 
@@ -569,10 +744,12 @@ for i in "${!new_zvols[@]}"; do
     backstore="vm-${vmid}-disk-${disknum}"
     zvol_dev="/dev/zvol/${new_zvol}"
 
-    # Map pool to target using node-lib's pool_to_target logic
+    # Map pool to target using node-lib's pool_to_target logic. NODE_CONF
+    # is honored so a locally-run payload (storage-host orchestration, and
+    # the test harness) resolves the same node config as the orchestrator.
     target=$(python3 -c "
-import json, sys
-conf = '/etc/zfsutilities-node.conf'
+import os, sys
+conf = os.environ.get('NODE_CONF', '/etc/zfsutilities-node.conf')
 try:
     with open(conf) as f:
         exec(f.read())
@@ -640,7 +817,7 @@ except Exception as e:
 done
 
 # Save iSCSI config
-mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 if ! "$mydir/safe-iscsi-save"; then
     echo "SAVE_FAILED"
     exit 1
@@ -689,8 +866,6 @@ fi
 
 log_msg "INFO: --- Step 3: Restoring Proxmox config ---"
 
-mkdir -p "$(dirname "$dest_config")"
-
 # Build disk_key -> disk_num mapping from .disk_info sidecars.
 declare -A key_to_disknum=()
 for i in "${!original_zvols[@]}"; do
@@ -720,10 +895,15 @@ rewrite_needed=false
 
 if [[ "$rewrite_needed" == "false" ]] && is_single_node; then
     # No vmid change in single-node mode: simple copy is sufficient.
+    mkdir -p "$(dirname "$dest_config")"
     cp "$archived_config" "$dest_config"
     log_msg "INFO:   ✓ Config restored: $dest_config"
 else
-    # Rewrite disk lines (and UUIDs when the vmid changed).
+    # Rewrite disk lines (and UUIDs when the vmid changed), building the
+    # final content in a temp file first so it can be written locally
+    # (single-node) or shipped to the compute host (two-node).
+    tmp_config=$(mktemp "${TMPDIR:-/tmp}/zfsu-unarchive-conf.XXXXXX")
+    append_exit_trap '[[ -n "${tmp_config:-}" ]] && rm -f "$tmp_config"'
     new_vmgenid=""
     new_smbios_uuid=""
     vmgenid_written=false
@@ -785,12 +965,33 @@ else
         else
             echo "$line"
         fi
-    done <<< "$archived_content" > "$dest_config"
+    done <<< "$archived_content" > "$tmp_config"
 
     if [[ "$rewrite_needed" == "true" ]]; then
-        [[ "$vmgenid_written" == "true" ]] || echo "vmgenid: $new_vmgenid" >> "$dest_config"
+        [[ "$vmgenid_written" == "true" ]] \
+            || echo "vmgenid: $new_vmgenid" >> "$tmp_config"
         if [[ "$smbios1_written" != "true" ]]; then
-            echo "smbios1: uuid=${new_smbios_uuid}" >> "$dest_config"
+            echo "smbios1: uuid=${new_smbios_uuid}" >> "$tmp_config"
+        fi
+    fi
+
+    if is_single_node; then
+        mkdir -p "$(dirname "$dest_config")"
+        mv "$tmp_config" "$dest_config"
+    else
+        # Ship the config to the compute host — base64-encoded as one ssh
+        # argv token, like the archive direction (raw multi-line text
+        # cannot survive ssh argv joining).
+        config_b64=$(base64 -w0 "$tmp_config")
+        rm -f "$tmp_config"
+        if ! on_compute "$dest_config" "$config_b64" << 'CPEOF'
+dest="$1"
+mkdir -p "$(dirname "$dest")"
+printf '%s' "$2" | base64 -d > "$dest"
+CPEOF
+        then
+            log_msg "FATAL: Could not write ${dest_config} on ${compute_host}"
+            exit 1
         fi
     fi
 
@@ -805,9 +1006,13 @@ echo ""
 
 if is_two_node; then
     log_msg "INFO: --- Step 4: Rescanning iSCSI ---"
-    rescan_path=$(find_zfsutility_script rescan-storage) \
-        || { log_msg "FATAL: Could not locate rescan-storage"; exit 1; }
-    if ! "$rescan_path"; then
+    if ! on_compute << 'CPEOF'
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
+rescan_path=$(find_zfsutility_script rescan-storage)
+[[ -n "$rescan_path" ]] || exit 1
+"$rescan_path"
+CPEOF
+    then
         log_msg "WARN: iSCSI rescan failed; run 'sudo rescan-storage' on $compute_host manually"
     fi
     echo ""

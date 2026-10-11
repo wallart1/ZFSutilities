@@ -442,6 +442,56 @@ test_get_json_archive_path_missing_file() {
     assert_equals "" "$result"
 }
 
+test_get_json_archive_rate_limit_reads_config() {
+    test_start "get_json_archive_rate_limit reads archive_rate_limit"
+    local config_path result
+    config_path="$tmp_dir/rate-config.json"
+    printf '{"archive_rate_limit": "100M"}\n' > "$config_path"
+    result=$(JSON_CONFIG="$config_path" get_json_archive_rate_limit)
+    assert_equals "100M" "$result"
+}
+
+test_get_json_archive_rate_limit_defaults_empty() {
+    test_start "get_json_archive_rate_limit empty for missing key or file"
+    local config_path result
+    config_path="$tmp_dir/no-rate.json"
+    echo '{}' > "$config_path"
+    result=$(JSON_CONFIG="$config_path" get_json_archive_rate_limit)
+    assert_equals "" "$result"
+    result=$(JSON_CONFIG="$tmp_dir/does-not-exist.json" get_json_archive_rate_limit)
+    assert_equals "" "$result"
+}
+
+test_save_json_config_key_round_trip_and_delete() {
+    test_start "save_json_config_key writes, preserves siblings, deletes on empty"
+    local config_path result
+    config_path="$tmp_dir/save-key.json"
+    printf '{"archive_path": "/srv/archive", "config_version": 28}\n' \
+        > "$config_path"
+    JSON_CONFIG="$config_path" save_json_config_key archive_rate_limit "250M"
+    result=$(JSON_CONFIG="$config_path" get_json_archive_rate_limit)
+    assert_equals "250M" "$result"
+    result=$(JSON_CONFIG="$config_path" get_json_archive_path)
+    assert_equals "/srv/archive" "$result"
+    # An empty value removes the key (unlimited = pre-key behavior).
+    JSON_CONFIG="$config_path" save_json_config_key archive_rate_limit ""
+    result=$(python3 -c "
+import json
+with open('$config_path') as f:
+    print(json.load(f).get('archive_rate_limit', 'ABSENT'))
+")
+    assert_equals "ABSENT" "$result"
+}
+
+test_save_json_config_key_creates_missing_file() {
+    test_start "save_json_config_key creates the config file when missing"
+    local config_path result
+    config_path="$tmp_dir/subdir/created-config.json"
+    JSON_CONFIG="$config_path" save_json_config_key archive_rate_limit "500M"
+    result=$(JSON_CONFIG="$config_path" get_json_archive_rate_limit)
+    assert_equals "500M" "$result"
+}
+
 # ------------------------------------------------------------------------------
 # two-node-lib.sh compatibility wrapper
 # ------------------------------------------------------------------------------
@@ -544,6 +594,98 @@ test_bashinit_safe_under_set_u() {
 }
 
 # ------------------------------------------------------------------------------
+# on_storage / on_compute transports
+# ------------------------------------------------------------------------------
+
+test_on_storage_local_runs_payload_with_args_and_functions() {
+    test_start "on_storage: local branch sources payload with args + inherited functions"
+
+    storage_host=$(hostname -s)
+    compute_host="elsewhere"
+    ssh() { echo "SSH-SHOULD-NOT-RUN"; }
+    payload_probe() { echo "probe-fn-visible"; }
+
+    local out rc
+    out=$(on_storage "hello" << 'EOF'
+echo "arg=$1"
+payload_probe
+EOF
+    )
+    rc=$?
+
+    assert_rc 0 "$rc"
+    assert_contains "$out" "arg=hello"
+    assert_contains "$out" "probe-fn-visible"
+    if [[ "$out" == *"SSH-SHOULD-NOT-RUN"* ]]; then
+        test_fail "local branch shipped the payload over ssh"
+    fi
+}
+
+test_on_storage_local_propagates_exit_status() {
+    test_start "on_storage: local branch propagates the payload's exit status"
+
+    storage_host=$(hostname -s)
+    compute_host="elsewhere"
+    ssh() { return 0; }
+
+    on_storage << 'EOF'
+exit 3
+EOF
+    assert_rc 3 $?
+}
+
+test_on_storage_remote_ships_payload_with_rate_prefix() {
+    test_start "on_storage: remote branch ships payload via ssh with pv_rate_limit"
+
+    storage_host="stewie-remote"
+    compute_host=$(hostname -s)
+    pv_rate_limit="75M"
+    local ssh_argv_file="$tmp_dir/ssh-argv"
+    local payload_file="$tmp_dir/payload"
+    rm -f "$ssh_argv_file" "$payload_file"
+    ssh() {
+        echo "$*" > "$ssh_argv_file"
+        cat > "$payload_file"
+        return 0
+    }
+
+    on_storage "a1" "a2" << 'EOF'
+echo payload-body
+EOF
+
+    local argv
+    argv=$(cat "$ssh_argv_file")
+    assert_contains "$argv" "root@stewie-remote"
+    assert_contains "$argv" "pv_rate_limit='75M' bash -s"
+    assert_contains "$argv" "a1 a2"
+    assert_contains "$(cat "$payload_file")" "echo payload-body"
+}
+
+test_on_compute_remote_ships_payload_with_rate_prefix() {
+    test_start "on_compute: remote branch ships payload via ssh"
+
+    compute_host="tweety-remote"
+    storage_host=$(hostname -s)
+    # shellcheck disable=SC2034  # expanded inside on_compute (node-lib.sh)
+    pv_rate_limit=""
+    local ssh_argv_file="$tmp_dir/ssh-argv-compute"
+    rm -f "$ssh_argv_file"
+    ssh() {
+        echo "$*" > "$ssh_argv_file"
+        return 0
+    }
+
+    on_compute << 'EOF'
+true
+EOF
+
+    local argv
+    argv=$(cat "$ssh_argv_file")
+    assert_contains "$argv" "root@tweety-remote"
+    assert_contains "$argv" "pv_rate_limit='' bash -s"
+}
+
+# ------------------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------------------
 
@@ -586,11 +728,20 @@ test_remote_zfsutility_script_fallback
 
 test_log_msg_fallback_used_before_bashinit
 
+test_on_storage_local_runs_payload_with_args_and_functions
+test_on_storage_local_propagates_exit_status
+test_on_storage_remote_ships_payload_with_rate_prefix
+test_on_compute_remote_ships_payload_with_rate_prefix
+
 test_gen_mac_format
 test_gen_mac_is_random
 test_get_json_archive_path_reads_config
 test_get_json_archive_path_missing_key
 test_get_json_archive_path_missing_file
+test_get_json_archive_rate_limit_reads_config
+test_get_json_archive_rate_limit_defaults_empty
+test_save_json_config_key_round_trip_and_delete
+test_save_json_config_key_creates_missing_file
 test_two_node_lib_wrapper_sources_node_lib
 
 rm -rf "$tmp_dir"

@@ -2865,7 +2865,12 @@ Reads `/proc/spl/kstat/zfs/arcstats` at the configured interval and prints ARC s
 
 Archives a VM before destruction. Discovers clone dependencies, optionally
 severs them, archives zvols and Proxmox config, verifies archive integrity,
-and optionally removes the VM.
+and optionally removes the VM. Runs wherever it was invoked — storage-side
+work executes locally on the storage host and compute-side work on the
+compute host (via the `on_storage`/`on_compute` transports), with no
+delegate-to-compute bounce. Re-runs are idempotent: disks whose archives
+already carry the post-verification `@archive` snapshot are skipped, and
+unverified leftovers from an interrupted run are removed and re-made.
 
 ```bash
 sudo archive-vm <vmid>
@@ -2890,24 +2895,40 @@ sudo archive-vm <vmid>
    two-node mode it resolves iSCSI target/LUN pairs on the storage host. Any orphaned zvols
    that match the VM ID but are not referenced in the config are reported as warnings and
    are not archived.
-5. **Archive zvols** — For each referenced disk, archives into a new dataset under the
+5. **Archive zvols** — Prompts for a transfer rate limit (a `pv -L` value
+   such as `100M`, empty = unlimited; the answer is saved as the default in
+   the JSON config key `archive_rate_limit`, shared with `unarchive-vm`).
+   When set, every data movement — device copy, hash verification, raw
+   send/receive — passes through `pv -q -L`, so an archive run cannot
+   saturate a small storage host; the paced device copy writes through
+   `dd conv=sparse` to keep zero blocks unallocated. For each referenced
+   disk, archives into a new dataset under the
    archive base using the shared transfer engine (`lib/archive-engine.sh`), which both node
    modes run identically. Unencrypted zvols are archived by device copy: the archive zvol is
    created thin at `volblocksize=1M` and the snapshot device is copied onto it
-   (`cp --sparse=always`, sha256-verified) — the reblock-for-space-efficiency mechanism,
+   (`cp --sparse=always` when unlimited, sha256-verified) — the
+   reblock-for-space-efficiency mechanism,
    since volblocksize always travels in a stream and can never be overridden at receive
    time. Encrypted zvols are archived by raw `zfs send -cw` into a plain receive (a device
    copy would read plaintext); they keep their original `volblocksize`. Saves the original
    `volblocksize` to a `.original_volblocksize` sidecar, and the archive method
    (`METHOD=copy|raw`) plus the disk's Proxmox config info (disk key, LUN, target) to a
-   `.disk_info` sidecar. A failed run destroys exactly the intermediate datasets it created.
+   `.disk_info` sidecar. A failed run destroys exactly the intermediate datasets it created;
+   an interrupted run's unverified leftovers are destroyed and re-made on re-run, while
+   verified archives (dataset + `@archive` snapshot + matching volblocksize) are skipped.
 6. **Archive config** — Copies `/etc/pve/qemu-server/<vmid>.conf` into the archive mount
 7. **Verify** — Confirms all archived datasets and the config file exist and have expected
    sizes, and that each archived zvol's `volblocksize` matches what its method implies
    (1M for copy archives, the sidecar original for raw archives)
-8. **Remove VM** — Asks whether to remove the VM; if yes, removes the Proxmox config
-   and destroys each referenced zvol (including iSCSI teardown via `remove-vm-disk` in
-   two-node mode)
+8. **Remove VM** — Asks whether to remove the VM; if yes, removes each referenced zvol
+   and — only when every disk is gone — the Proxmox config. Two-node mode delegates each
+   disk to `remove-vm-disk` over a TTY-allocating ssh (its confirm prompts appear on the
+   calling terminal; per-disk rescans are suppressed in favor of one compute-host rescan
+   after the loop) and verifies each removal by outcome — the zvol must actually be gone —
+   since a declined remote confirm exits 0. Single-node mode destroys via `zfsdelfs`
+   (snapshot children and holds included). If any disk survives, the Proxmox config is
+   kept, the survivors are listed with the exact `remove-vm-disk` commands to finish, and
+   the script exits non-zero without a success summary.
 
 **Globals:**
 
@@ -2916,15 +2937,17 @@ sudo archive-vm <vmid>
 | Node-config globals                        | See [Two-Node Infrastructure Commands](two-node.md)                      |
 | `PVE_CONF_DIR`                             | Directory containing Proxmox VM configs (default `/etc/pve/qemu-server`) |
 | `JSON_CONFIG` / `ZFSUTILITIES_CONFIG_PATH` | Path to the JSON config file                                             |
+| `pv_rate_limit`                            | Transfer rate limit (`pv -L` value); empty = unlimited                   |
 | `ARCHIVE_VM_TEST_NO_ROOT`                  | Test hook: skip root check when set                                      |
 
 **Called modules:**
 
 | Script| Purpose in this command                       |
-| -------------------------------------------------| --------------------------------------------- |
+| ------------------------------------------------- | --------------------------------------------- |
 | sever-vm-clone| Sever clone dependencies before removal       |
 | [remove-vm-disk](two-node.md#remove-vm-disk-both)| Remove VM disks in two-node mode              |
-| [zfs-diagnose-busy](modules.md#zfs-diagnose-busy)| Diagnose destroy failures in single-node mode |
+| [zfsdelfs](#zfsdelfs)| Destroy zvols (with snapshot children and holds) in single-node mode |
+| rescan-storage| Refresh the compute-host iSCSI view after removal (two-node) |
 
 **Data structures consumed / produced:**
 
@@ -2932,6 +2955,8 @@ sudo archive-vm <vmid>
 | ---------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | Node config                        | Determines single-node vs two-node paths          | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 | JSON config `archive_path`         | Default archive base                              | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson)        |
+| JSON config `archive_rate_limit`   | Default transfer rate limit                       | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson)        |
+| `@archive` snapshot + `.disk_info` / `.original_volblocksize` sidecars | Re-run completion evidence: skip verified, redo unverified | — |
 | `/etc/pve/qemu-server/<vmid>.conf` | Proxmox VM config archived and optionally removed | —                                                                                                    |
 
 **Internal flow:**
@@ -2949,8 +2974,10 @@ sudo archive-vm <vmid>
    `volblocksize`. Sidecars record the original `volblocksize` and the archive method.
 5. Copy the Proxmox config into the archive.
 6. Verify archive integrity.
-7. Optionally remove the VM (iSCSI teardown in two-node mode, direct destroy in single-node
-   mode).
+7. Optionally remove the VM: per-disk `remove-vm-disk` delegation with visible
+   confirmations and outcome verification (two-node), `zfsdelfs` destroy
+   (single-node); the Proxmox config is removed only when every disk is gone,
+   then one compute-host rescan runs (two-node).
 
 **Return codes:**
 
@@ -2965,7 +2992,14 @@ sudo archive-vm <vmid>
 
 Restores an archived VM from archive: recreates zvols with their original
 `volblocksize`, rebuilds iSCSI infrastructure (two-node), and restores the Proxmox
-config with updated disk lines.
+config with updated disk lines. Runs wherever it was invoked (storage-side and
+compute-side work route through the `on_storage`/`on_compute` transports; no
+delegate-to-compute bounce). Prompts for a transfer rate limit (`pv -L` value,
+shared JSON default `archive_rate_limit`) so a restore cannot saturate a small
+storage host. Re-runs are idempotent: restored disks carry a `RESTORED_AS`
+completion marker in their `.disk_info` sidecar, so a re-run skips verified
+disks, offers a confirmed destroy-and-redo for unmarked leftovers, and exits
+cleanly when the whole restore is already complete.
 
 ```bash
 sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
@@ -2982,12 +3016,17 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 **Flow:**
 
 1. **Discover archive** — Finds archived zvol datasets and the Proxmox config under the archive base
-2. **Validate** — Checks that destination zvols and Proxmox config do not already exist;
-   requires the `.disk_info` sidecar (load-bearing for config/iSCSI rebuild) and warns about
-   a missing `.original_volblocksize` sidecar, which is informational for raw-method
-   restores and only required for copy-method ones. If the original `vmid` is already in
-   use and `--new-vmid` was not supplied, the script prompts for a new VM ID or lets you
-   cancel.
+2. **Validate** — Requires the `.disk_info` sidecar (load-bearing for
+   config/iSCSI rebuild) and warns about a missing `.original_volblocksize`
+   sidecar, which is informational for raw-method restores and only required
+   for copy-method ones. If the original `vmid` is already in use and
+   `--new-vmid` was not supplied, the script prompts for a new VM ID or lets
+   you cancel. Existing destination zvols are classified: a `RESTORED_AS`
+   marker for this VM ID means already restored (skipped); an existing zvol
+   without the marker is an interrupted run's leftover or a foreign orphan
+   and is only destroyed after an explicit confirmation. A destination
+   config with every disk marked means the restore already completed — the
+   script says so and exits.
 3. **Restore zvols** — Branches on the archive's recorded method. `METHOD=copy` archives
    are restored by creating the destination zvol thin at the sidecar's original
    `volblocksize` and device-copying the archive snapshot onto it (sha256-verified);

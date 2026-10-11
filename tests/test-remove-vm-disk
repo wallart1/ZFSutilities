@@ -1,0 +1,480 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-remove-vm-disk — Unit tests for remove-vm-disk: iSCSI LUN/backstore/
+# manifest teardown, snapshot-children destruction via zfsdelfs, decline
+# handling, rerun after the LUN is already gone, and the two-node compute
+# -host delegation.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+_iqn="iqn.2026-02.local.stewie:threeamigos"
+
+# Two-node node.conf. Storage-side tests point STORAGE_HOST at this host so
+# the script runs the storage logic locally; wrapper tests leave it at
+# "stewie" so the ssh -t delegation path runs.
+setup_node_config() {
+    local storage="${1:-stewie}"
+    local compute
+    compute=$(hostname -s)
+    NODE_CONF_FILE="$_mock_zfs_state_dir/node.conf"
+    cat > "$NODE_CONF_FILE" << EOF
+NODE_MODE="two-node"
+STORAGE_HOST="$storage"
+COMPUTE_HOST="$compute"
+STORAGE_IP="192.168.100.1"
+IQN_PREFIX="iqn.2026-02.local.stewie"
+declare -A POOL_TARGET=(
+    [threeamigos]="threeamigos"
+    [NVME1]="nvme1"
+)
+EOF
+    export NODE_CONF="$NODE_CONF_FILE"
+}
+
+# Run remove-vm-disk in a subshell so an exit does not kill the harness.
+#
+# Arguments:
+#   $1 storage_host  node.conf STORAGE_HOST value ("stewie" = wrapper path)
+#   $2 pool
+#   $3 vmid
+#   $4 disknum
+#   $5 stdin_input   confirm answers, one per prompt ("y", "y", "n", "")
+#   $6 luns_mapped   "mapped" = LUN+backstore present (default), "empty" =
+#                    neither (rerun after LUN removal)
+#   $7 extra_args    extra args (e.g. "--skip-rescan")
+#   $8 zvol_present  "yes" (default) or "no" — whether the mock ZFS knows
+#                    the target zvol
+run_remove_vm_disk() {
+    local storage_host="$1"
+    local pool="$2"
+    local vmid="$3"
+    local disknum="$4"
+    local stdin_input="${5:-}"
+    local luns_mapped="${6:-mapped}"
+    local extra_args="${7:-}"
+    local zvol_present="${8:-yes}"
+
+    local capture_dir="$_mock_zfs_state_dir/capture"
+    mkdir -p "$capture_dir"
+    rm -f "$capture_dir/zfsdelfs_calls" "$capture_dir/ssh" "$capture_dir/rescan" \
+        "$capture_dir/iscsi_save" "$capture_dir/zfs-destroy" \
+        "$capture_dir/remove-vm-disk-argv"
+
+    local zvol="${pool}/proxmox/vm-${vmid}-disk-${disknum}"
+    local backstore="vm-${vmid}-disk-${disknum}"
+
+    (
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+        log_msg() { echo "$*" >&2; }
+        setup_test_env
+        setup_node_config "$storage_host"
+
+        export NODE_LIB="$mydir/lib/node-lib.sh"
+        export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$_mock_zfs_state_dir/etc-zfsutilities"
+        export EXPECTED_BACKSTORES_MANIFEST="$_mock_zfs_state_dir/expected-backstores.txt"
+        export ZFSUTILITIES_INPUT_HOLD="${_test_input_hold:-}"
+        export _capture_dir="$capture_dir"
+        export _mock_remove_vm_disk_rc="${_mock_remove_vm_disk_rc:-0}"
+
+        mkdir -p "$ZFSUTILITIES_SYSTEM_CONFIG_DIR"
+
+        # Executable stubs recorded by the capture dir.
+        cat > "$_mock_zfs_state_dir/zfsdelfs" << 'EOF'
+#!/usr/bin/bash
+echo "$*" >> "$_capture_dir/zfsdelfs_calls"
+exit 0
+EOF
+        chmod +x "$_mock_zfs_state_dir/zfsdelfs"
+
+        cat > "$_mock_zfs_state_dir/rescan-storage" << 'EOF'
+#!/usr/bin/bash
+echo "RESCAN" >> "$_capture_dir/rescan"
+exit 0
+EOF
+        chmod +x "$_mock_zfs_state_dir/rescan-storage"
+
+        cat > "$_mock_zfs_state_dir/safe-iscsi-save" << 'EOF'
+#!/usr/bin/bash
+echo "SAVE" >> "$_capture_dir/iscsi_save"
+exit 0
+EOF
+        chmod +x "$_mock_zfs_state_dir/safe-iscsi-save"
+
+        find_zfsutility_script() {
+            case "$1" in
+                zfsdelfs) echo "$_mock_zfs_state_dir/zfsdelfs" ;;
+                rescan-storage) echo "$_mock_zfs_state_dir/rescan-storage" ;;
+                safe-iscsi-save) echo "$_mock_zfs_state_dir/safe-iscsi-save" ;;
+                node-lib.sh) echo "$mydir/lib/node-lib.sh" ;;
+                rootcheck) echo "/dev/null" ;;
+                *) return 1 ;;
+            esac
+        }
+
+        # A VM the compute host can see (the qm presence gate).
+        qm() { echo "status: stopped"; }
+
+        # Wrap test-lib's zfs: the script's specific-dataset existence probe
+        # (`zfs list -H -o name <ds>`) gets real semantics (test-lib's
+        # general listing would echo the whole fs list), a dataset with child
+        # snapshots cannot be destroyed by a bare `zfs destroy` (real ZFS
+        # semantics), and any direct destroy attempt is recorded.
+        eval "_test_lib_zfs() $(declare -f zfs | tail -n +2)"
+        zfs() {
+            if [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" \
+                && "$4" == "name" && -n "${5:-}" && "$5" != -* ]]; then
+                if [[ -n "${_mock_zfs_datasets[$5]+x}" ]]; then
+                    echo "$5"
+                    return 0
+                fi
+                return 1
+            fi
+            if [[ "$1" == "destroy" ]]; then
+                local -a _argv=("$@")
+                local _ds="${_argv[-1]}"
+                if [[ -n "${_mock_zfs_snap_lists[$_ds]:-}" ]]; then
+                    echo "cannot destroy '${_ds}': volume has children" >&2
+                    return 1
+                fi
+                echo "ZFS_DESTROY:${*}" >> "$_capture_dir/zfs-destroy"
+            fi
+            _test_lib_zfs "$@"
+        }
+
+        # Mutable iSCSI state: luns lines are "target lun backstore zvol",
+        # backstores lines are "backstore zvol".
+        export _test_luns_file="$_mock_zfs_state_dir/luns"
+        export _test_backstores_file="$_mock_zfs_state_dir/backstores"
+        : > "$_test_luns_file"
+        : > "$_test_backstores_file"
+        if [[ "$luns_mapped" == "mapped" ]]; then
+            printf '%s %s %s %s\n' "$_iqn" "0" "$backstore" "$zvol" \
+                > "$_test_luns_file"
+            printf '%s %s\n' "$backstore" "$zvol" > "$_test_backstores_file"
+        fi
+
+        targetcli() {
+            local path="$1" verb="${2:-}"
+            if [[ "$path" == "/iscsi" && "$verb" == "ls" ]]; then
+                awk '{print "  " $1}' "$_test_luns_file" | sort -u
+                return 0
+            fi
+            if [[ "$path" == "/iscsi/"*"/tpg1/luns" ]]; then
+                local _t="${path#/iscsi/}"; _t="${_t%%/*}"
+                if [[ "$verb" == "ls" ]]; then
+                    awk -v t="$_t" \
+                        '$1 == t {print "  lun" $2 " [block/" $3 " (/dev/zvol/" $4 ")]"}' \
+                        "$_test_luns_file"
+                    return 0
+                fi
+                if [[ "$verb" == "delete" ]]; then
+                    local _lun="${3#lun}"
+                    awk -v t="$_t" -v l="$_lun" '!($1 == t && $2 == l)' \
+                        "$_test_luns_file" > "${_test_luns_file}.new"
+                    mv "${_test_luns_file}.new" "$_test_luns_file"
+                    echo "Deleted LUN ${_lun}."
+                    return 0
+                fi
+            fi
+            if [[ "$path" == "/backstores/block" ]]; then
+                if [[ "$verb" == "ls" ]]; then
+                    awk '{print "  " $1 "  /dev/zvol/" $2 "  (default_tg_pt)"}' \
+                        "$_test_backstores_file"
+                    return 0
+                fi
+                if [[ "$verb" == "delete" ]]; then
+                    grep -v -F "$3 " "$_test_backstores_file" \
+                        > "${_test_backstores_file}.new" || true
+                    mv "${_test_backstores_file}.new" "$_test_backstores_file"
+                    echo "Deleted storage object $3."
+                    return 0
+                fi
+            fi
+            return 0
+        }
+
+        ssh() {
+            echo "SSH:${*}" >> "$_capture_dir/ssh"
+            if [[ "$*" == *"realpath"* || "$*" == *"readlink"* ]]; then
+                echo "/usr/local/lib/zfsutilities/current/bin"
+                return 0
+            fi
+            if [[ "$*" == *"remove-vm-disk"* ]]; then
+                printf '%s\n' "$*" >> "$_capture_dir/remove-vm-disk-argv"
+                return "${_mock_remove_vm_disk_rc}"
+            fi
+            return 0
+        }
+
+        # Mock ZFS state: the zvol exists with a dailybackup child snapshot.
+        if [[ "$zvol_present" == "yes" ]]; then
+            _mock_zfs_datasets["$zvol"]=1
+            _mock_zfs_fs_list="$zvol"
+            _mock_zfs_props["${zvol}:volsize"]="50G"
+            _mock_zfs_snap_lists["$zvol"]="${zvol}@dailybackup-2026-10-11T10:00Z-w"
+        fi
+
+        # Manifest and encrypted-LUN config entries for this backstore.
+        printf '%s\n%s\n' "vm-999-disk-0" "$backstore" \
+            > "$EXPECTED_BACKSTORES_MANIFEST"
+        printf '%s:pool-key\n' "$backstore" \
+            > "$ZFSUTILITIES_SYSTEM_CONFIG_DIR/iscsi-encrypted-luns.conf"
+
+        # shellcheck disable=SC2086
+        source "$mydir/bin/remove-vm-disk" "$pool" "$vmid" "$disknum" $extra_args
+    ) 2>&1 <<EOF
+$stdin_input
+EOF
+}
+
+zfsdelfs_calls() {
+    cat "$_mock_zfs_state_dir/capture/zfsdelfs_calls" 2>/dev/null || true
+}
+
+rescans() {
+    cat "$_mock_zfs_state_dir/capture/rescan" 2>/dev/null || true
+}
+
+iscsi_saves() {
+    cat "$_mock_zfs_state_dir/capture/iscsi_save" 2>/dev/null || true
+}
+
+direct_destroys() {
+    cat "$_mock_zfs_state_dir/capture/zfs-destroy" 2>/dev/null || true
+}
+
+delegation_argv() {
+    cat "$_mock_zfs_state_dir/capture/remove-vm-disk-argv" 2>/dev/null || true
+}
+
+luns_state() {
+    cat "$_mock_zfs_state_dir/luns" 2>/dev/null || true
+}
+
+backstores_state() {
+    cat "$_mock_zfs_state_dir/backstores" 2>/dev/null || true
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_decline_aborts_without_teardown() {
+    test_start "Declined confirm aborts with no teardown, exit 0"
+
+    local out rc
+    out=$(run_remove_vm_disk "$(hostname -s)" threeamigos 205 0 "n")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Decline must exit 0, got $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Aborted."* ]]; then
+        test_fail "Missing Aborted message; output:\n$out"
+        return
+    fi
+    if [[ -z "$(luns_state)" ]]; then
+        test_fail "LUN was torn down despite decline"
+        return
+    fi
+    if [[ -n "$(zfsdelfs_calls)" ]]; then
+        test_fail "zfsdelfs ran despite decline; calls:\n$(zfsdelfs_calls)"
+        return
+    fi
+
+    test_pass
+}
+
+test_happy_path_teardown_and_zfsdelfs_destroy() {
+    test_start "Confirmed run removes LUN/backstore/manifest entries and destroys via zfsdelfs"
+
+    local out rc
+    out=$(run_remove_vm_disk "$(hostname -s)" threeamigos 205 0 $'y\ny' "" "--skip-rescan")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ -n "$(luns_state)" ]]; then
+        test_fail "LUN not removed from target; state:\n$(luns_state)"
+        return
+    fi
+    if [[ -n "$(backstores_state)" ]]; then
+        test_fail "Backstore not removed; state:\n$(backstores_state)"
+        return
+    fi
+    if grep -qF "vm-205-disk-0" "$_mock_zfs_state_dir/expected-backstores.txt"; then
+        test_fail "Backstore not pruned from expected-backstores manifest"
+        return
+    fi
+    if ! grep -qF "vm-999-disk-0" "$_mock_zfs_state_dir/expected-backstores.txt"; then
+        test_fail "Manifest pruning removed an unrelated backstore"
+        return
+    fi
+    if grep -qF "vm-205-disk-0:" \
+        "$_mock_zfs_state_dir/etc-zfsutilities/iscsi-encrypted-luns.conf"; then
+        test_fail "Backstore not pruned from encrypted-LUNs config"
+        return
+    fi
+    if [[ -z "$(iscsi_saves)" ]]; then
+        test_fail "safe-iscsi-save was not run"
+        return
+    fi
+
+    local calls
+    calls=$(zfsdelfs_calls)
+    if [[ "$calls" != *"threeamigos/proxmox/vm-205-disk-0"* ]]; then
+        test_fail "zfsdelfs not called for the zvol; calls:\n$calls"
+        return
+    fi
+    if [[ "$calls" != *"autoproceed='Y'"* ]]; then
+        test_fail "zfsdelfs not called with autoproceed='Y'; calls:\n$calls"
+        return
+    fi
+    # The zvol has child snapshots: a bare destroy would have been refused
+    # by real ZFS, so none may be attempted directly.
+    if [[ -n "$(direct_destroys)" ]]; then
+        test_fail "Direct zfs destroy attempted; calls:\n$(direct_destroys)"
+        return
+    fi
+    if [[ "$out" != *"✓ Zvol destroyed"* ]]; then
+        test_fail "Missing zvol-destroyed message; output:\n$out"
+        return
+    fi
+    # --skip-rescan: no compute-host rescan from the storage side.
+    if [[ -n "$(rescans)" ]]; then
+        test_fail "Rescan ran despite --skip-rescan"
+        return
+    fi
+
+    test_pass
+}
+
+test_rerun_after_lun_removal_still_destroys() {
+    test_start "Rerun after the LUN is already gone warns and still destroys"
+
+    local out rc
+    out=$(run_remove_vm_disk "$(hostname -s)" threeamigos 205 0 $'y\ny' "empty" \
+        "--skip-rescan")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"LUN not found in target — skipping LUN removal"* ]]; then
+        test_fail "Missing LUN-not-found WARN; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"not found — skipping"* ]]; then
+        test_fail "Missing backstore-not-found WARN; output:\n$out"
+        return
+    fi
+    local calls
+    calls=$(zfsdelfs_calls)
+    if [[ "$calls" != *"threeamigos/proxmox/vm-205-disk-0"* ]]; then
+        test_fail "zfsdelfs not called on rerun; calls:\n$calls"
+        return
+    fi
+
+    test_pass
+}
+
+test_missing_zvol_fatals() {
+    test_start "Missing zvol fails with guidance"
+
+    # Run against a disk number the mock ZFS does not know.
+    local out rc
+    out=$(run_remove_vm_disk "$(hostname -s)" threeamigos 205 7 "y" "" "" "no")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Missing zvol reported success; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Zvol does not exist"* ]]; then
+        test_fail "Missing does-not-exist FATAL; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_wrapper_delegates_with_tty_input_hold_and_skip_rescan() {
+    test_start "Compute-host wrapper delegates via ssh -t with input-hold and --skip-rescan"
+
+    _test_input_hold="Y"
+    local out rc
+    out=$(run_remove_vm_disk stewie threeamigos 205 0 "")
+    rc=$?
+    unset _test_input_hold
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    local argv
+    argv=$(delegation_argv)
+    local needle="-t root@stewie ZFSUTILITIES_INPUT_HOLD=Y"
+    if [[ "$argv" != *"$needle"* ]]; then
+        test_fail "Delegation missing -t/input-hold prefix; argv:\n$argv"
+        return
+    fi
+    needle="'threeamigos' '205' '0' --skip-rescan"
+    if [[ "$argv" != *"$needle"* ]]; then
+        test_fail "Delegation missing quoted args/--skip-rescan; argv:\n$argv"
+        return
+    fi
+    if [[ -z "$(rescans)" ]]; then
+        test_fail "Wrapper did not rescan after successful removal"
+        return
+    fi
+
+    test_pass
+}
+
+test_wrapper_rescans_and_fails_when_storage_fails() {
+    test_start "Compute-host wrapper rescans even when the storage half fails"
+
+    _mock_remove_vm_disk_rc=1
+    local out rc
+    out=$(run_remove_vm_disk stewie threeamigos 205 0 "")
+    rc=$?
+    unset _mock_remove_vm_disk_rc
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Storage failure reported success; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"FATAL: Storage operations failed on stewie"* ]]; then
+        test_fail "Missing storage-failure FATAL; output:\n$out"
+        return
+    fi
+    # The remote may have removed the LUN before failing; rescan regardless.
+    if [[ -z "$(rescans)" ]]; then
+        test_fail "Wrapper did not rescan after storage failure"
+        return
+    fi
+
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_decline_aborts_without_teardown
+test_happy_path_teardown_and_zfsdelfs_destroy
+test_rerun_after_lun_removal_still_destroys
+test_missing_zvol_fatals
+test_wrapper_delegates_with_tty_input_hold_and_skip_rescan
+test_wrapper_rescans_and_fails_when_storage_fails
+
+test_summary

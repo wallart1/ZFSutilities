@@ -75,7 +75,7 @@ run_unarchive() {
     local stdin_input="${_mock_read_response:-}"
     local capture_dir="$_mock_zfs_state_dir/capture"
     mkdir -p "$capture_dir"
-    rm -f "$capture_dir/zfs-argv"
+    rm -f "$capture_dir/zfs-argv" "$capture_dir/pv" "$capture_dir/dd"
     (
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
         setup_test_env
@@ -88,6 +88,10 @@ run_unarchive() {
         export UNARCHIVE_VM_TEST_NO_ROOT=1
         export NODE_LIB="$mydir/lib/node-lib.sh"
         export ARCHIVE_ENGINE_LIB="$mydir/lib/archive-engine.sh"
+        export JSON_CONFIG="$_mock_zfs_state_dir/zfsutilities.json"
+        # Empty JSON config per run: the state dir is shared across tests,
+        # and a rate limit saved by an earlier test must not leak in.
+        printf '{}\n' > "$JSON_CONFIG"
         export _capture_dir="$capture_dir"
         export _mock_hash_dst="${_mock_hash_dst:-}"
 
@@ -142,9 +146,26 @@ ${arc_dataset}"
             echo "SYNC:$*" >> "$_capture_dir/zfs-argv"
         }
         sha256sum() {
+            if [[ $# -eq 0 ]]; then
+                # Rate-limited form: hashes stdin.
+                cat > /dev/null
+                printf '%s  -\n' "deadbeef12345678"
+                return 0
+            fi
             printf '%s  %s\n' "deadbeef12345678" "$1"
             printf '%s  %s\n' \
                 "${_mock_hash_dst:-deadbeef12345678}" "$2"
+        }
+        pv() {
+            # Rate-limited transfer segment: passthrough, argv recorded.
+            echo "PV:$*" >> "$_capture_dir/pv"
+            cat
+        }
+        dd() {
+            # Rate-limited sparse writer: consume stdin, argv recorded.
+            echo "DD:$*" >> "$_capture_dir/dd"
+            cat > /dev/null
+            return 0
         }
 
         # Conflict state.
@@ -153,6 +174,18 @@ ${arc_dataset}"
         fi
         if [[ "${_mock_old_zvol_present:-}" == "1" ]]; then
             _mock_zfs_fs_list+="\nthreeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0"
+        fi
+
+        # Resume state: a destination zvol that already exists, optionally
+        # carrying the RESTORED_AS completion marker in the sidecar.
+        if [[ "${_mock_dest_zvol_present:-}" == "1" ]]; then
+            local dest_zvol="threeamigos/proxmox/vm-${vmid}-disk-0"
+            _mock_zfs_datasets["$dest_zvol"]=1
+            _mock_zfs_fs_list="${_mock_zfs_fs_list}"$'\n'"$dest_zvol"
+            if [[ "${_mock_dest_zvol_marked:-}" == "1" ]]; then
+                echo "RESTORED_AS=vm-${vmid}-disk-0" \
+                    >> "${archive_base}/threeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0.disk_info"
+            fi
         fi
 
         # Optional explicit destination conflict for the new VMID.
@@ -165,6 +198,8 @@ ${arc_dataset}"
     ) <<< "$stdin_input" 2>&1
     local rc=$?
     cat "$capture_dir/zfs-argv" 2>/dev/null || true
+    cat "$capture_dir/pv" 2>/dev/null || true
+    cat "$capture_dir/dd" 2>/dev/null || true
     return $rc
 }
 
@@ -174,7 +209,8 @@ ${arc_dataset}"
 
 reset_unretire_mocks() {
     unset _mock_old_config_present _mock_old_zvol_present \
-        _mock_new_config_present _mock_read_response _mock_hash_dst
+        _mock_new_config_present _mock_read_response _mock_hash_dst \
+        _mock_dest_zvol_present _mock_dest_zvol_marked
 }
 
 test_usage_rejects_invalid_new_vmid() {
@@ -200,7 +236,8 @@ test_new_vmid_flag_rewrites_config() {
 
     _mock_orig_vmid="904"
     _mock_new_vmid="910"
-    _mock_read_response="y"
+    _mock_read_response="
+y"
     local pve_dir="$_mock_zfs_state_dir/pve2"
     local archive="$_mock_zfs_state_dir/archive2"
     mkdir -p "$pve_dir"
@@ -234,7 +271,8 @@ test_new_vmid_regenerates_uuids() {
 
     _mock_orig_vmid="904"
     _mock_new_vmid="910"
-    _mock_read_response="y"
+    _mock_read_response="
+y"
     local pve_dir="$_mock_zfs_state_dir/pve3"
     local archive="$_mock_zfs_state_dir/archive3"
     mkdir -p "$pve_dir"
@@ -273,9 +311,11 @@ test_prompts_for_new_vmid_when_original_in_use() {
 
     _mock_orig_vmid="904"
     _mock_new_vmid="910"
-    _mock_read_response="910"
+    _mock_read_response="
+910"
     _mock_old_config_present="1"
-    _mock_read_response=$'910\ny'
+    _mock_read_response=$'
+910\ny'
     local pve_dir="$_mock_zfs_state_dir/pve4"
     local archive="$_mock_zfs_state_dir/archive4"
     mkdir -p "$pve_dir"
@@ -321,7 +361,8 @@ test_original_vmid_preserved_without_conflict() {
     test_start "Original VMID preserved when no conflict and no --new-vmid"
 
     _mock_orig_vmid="904"
-    _mock_read_response="y"
+    _mock_read_response="
+y"
     local pve_dir="$_mock_zfs_state_dir/pve6"
     local archive="$_mock_zfs_state_dir/archive6"
     mkdir -p "$pve_dir"
@@ -348,7 +389,8 @@ test_copy_method_restores_reblocked() {
     test_start "METHOD=copy: restore reblocks back to the original volblocksize"
 
     _mock_orig_vmid="904"
-    _mock_read_response="y"
+    _mock_read_response="
+y"
     local pve_dir="$_mock_zfs_state_dir/pve7"
     local archive="$_mock_zfs_state_dir/archive7"
     mkdir -p "$pve_dir"
@@ -396,7 +438,8 @@ test_raw_method_uses_plain_receive() {
     test_start "METHOD=raw: restore uses plain send/receive (no volblocksize override)"
 
     _mock_orig_vmid="904"
-    _mock_read_response="y"
+    _mock_read_response="
+y"
     local pve_dir="$_mock_zfs_state_dir/pve8"
     local archive="$_mock_zfs_state_dir/archive8"
     mkdir -p "$pve_dir"
@@ -431,7 +474,8 @@ test_copy_method_missing_vbs_sidecar_fatals() {
     test_start "METHOD=copy: missing volblocksize sidecar is fatal"
 
     _mock_orig_vmid="904"
-    _mock_read_response="y"
+    _mock_read_response="
+y"
     local pve_dir="$_mock_zfs_state_dir/pve9"
     local archive="$_mock_zfs_state_dir/archive9"
     mkdir -p "$pve_dir"
@@ -459,7 +503,8 @@ test_legacy_missing_vbs_sidecar_warns_and_proceeds() {
     test_start "Legacy archive: missing volblocksize sidecar warns and proceeds"
 
     _mock_orig_vmid="904"
-    _mock_read_response="y"
+    _mock_read_response="
+y"
     local pve_dir="$_mock_zfs_state_dir/pve10"
     local archive="$_mock_zfs_state_dir/archive10"
     mkdir -p "$pve_dir"
@@ -491,7 +536,8 @@ test_missing_disk_info_fatals() {
     test_start "Missing .disk_info sidecar is fatal"
 
     _mock_orig_vmid="904"
-    _mock_read_response="y"
+    _mock_read_response="
+y"
     local pve_dir="$_mock_zfs_state_dir/pve11"
     local archive="$_mock_zfs_state_dir/archive11"
     mkdir -p "$pve_dir"
@@ -523,7 +569,8 @@ test_unknown_method_fatals() {
     test_start "Unknown METHOD value is fatal"
 
     _mock_orig_vmid="904"
-    _mock_read_response="y"
+    _mock_read_response="
+y"
     local pve_dir="$_mock_zfs_state_dir/pve12"
     local archive="$_mock_zfs_state_dir/archive12"
     mkdir -p "$pve_dir"
@@ -545,6 +592,237 @@ test_unknown_method_fatals() {
     test_pass
 }
 
+test_rate_limit_paces_restore_copy() {
+    reset_unretire_mocks
+    test_start "Rate limit: restore copy and hash pass through pv"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="100M
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_rate"
+    local archive="$_mock_zfs_state_dir/archive_rate"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    local arc="${archive}/threeamigos/proxmox/vm-904-disk-0"
+    local needle="PV:-q -L 100M -- /dev/zvol/${arc}@snap1"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Restore copy not paced by pv; output:\n$out"
+        return
+    fi
+    needle="DD:of=/dev/zvol/threeamigos/proxmox/vm-904-disk-0"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Sparse dd writer not used for the restore; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"conv=sparse,notrunc"* ]]; then
+        test_fail "dd missing conv=sparse,notrunc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"✓ Copy verified (sha256 match)"* ]]; then
+        test_fail "Paced verification missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# Idempotent re-runs
+# ------------------------------------------------------------------
+
+test_completed_restore_run_exits_cleanly() {
+    reset_unretire_mocks
+    test_start "Re-run: all disks marked + config present = nothing to do"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_done"
+    local archive="$_mock_zfs_state_dir/archive_done"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+    # A finished prior run left the destination zvol (marked) and the config.
+    _mock_dest_zvol_present="1"
+    _mock_dest_zvol_marked="1"
+    touch "${pve_dir}/904.conf"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"already complete — nothing to do"* ]]; then
+        test_fail "Missing nothing-to-do message; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"CREATE:"* ]]; then
+        test_fail "Completed run restored again; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_resume_skips_marked_disk_and_finishes() {
+    reset_unretire_mocks
+    test_start "Re-run: marked disk is skipped, config still restored"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_resume"
+    local archive="$_mock_zfs_state_dir/archive_resume"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+    # Prior run died after disk 0 but before the config restore: zvol
+    # present + marked, no destination config.
+    _mock_dest_zvol_present="1"
+    _mock_dest_zvol_marked="1"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    local skip_line="Already restored (verified) — skipping:" \
+        "threeamigos/proxmox/vm-904-disk-0"
+    if [[ "$out" != *"$skip_line"* ]]; then
+        test_fail "Skip message missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"CP:--sparse=always"* ]]; then
+        test_fail "Skipped disk was copied anyway; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"✓ Config restored:"* ]]; then
+        test_fail "Config not restored on resume; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"already restored]"* ]]; then
+        test_fail "Summary lacks the already-restored note; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_unmarked_dest_confirmed_redone() {
+    reset_unretire_mocks
+    test_start "Re-run: unmarked destination confirmed destroyed and re-restored"
+
+    _mock_orig_vmid="904"
+    # Answers: rate, destroy-and-re-restore=y, proceed=y
+    _mock_read_response="
+y
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_redo"
+    local archive="$_mock_zfs_state_dir/archive_redo"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+    _mock_dest_zvol_present="1"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Removing unmarked leftover threeamigos/proxmox/vm-904-disk-0"* ]]; then
+        test_fail "Redo teardown missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"DESTROY:destroy -r threeamigos/proxmox/vm-904-disk-0"* ]]; then
+        test_fail "Leftover not destroyed; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"✓ Restored: threeamigos/proxmox/vm-904-disk-0"* ]]; then
+        test_fail "Re-restore missing; output:\n$out"
+        return
+    fi
+    # The verified restore must append the idempotency marker — without it
+    # a later re-run would treat this zvol as an unmarked leftover again.
+    if ! grep -q '^RESTORED_AS=vm-904-disk-0$' \
+            "$archive/threeamigos/proxmox/vm-904-disk-0.disk_info"; then
+        test_fail "RESTORED_AS marker not written after verified restore"
+        return
+    fi
+
+    test_pass
+}
+
+test_unmarked_dest_declined_aborts() {
+    reset_unretire_mocks
+    test_start "Re-run: declining the unmarked-destination destroy aborts"
+
+    _mock_orig_vmid="904"
+    # Answers: rate, destroy-and-re-restore=n
+    _mock_read_response="
+n"
+    local pve_dir="$_mock_zfs_state_dir/pve_decline"
+    local archive="$_mock_zfs_state_dir/archive_decline"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+    _mock_dest_zvol_present="1"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Declined destroy reported success; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Refusing to destroy threeamigos/proxmox/vm-904-disk-0"* ]]; then
+        test_fail "Missing refusal FATAL; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"DESTROY:"* ]]; then
+        test_fail "Destroy ran despite declining; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_payloads_route_through_node_transports() {
+    test_start "Payloads route through on_storage/on_compute; no compute bounce"
+
+    local routing_hits
+    routing_hits=$(grep -c 'on_storage \|on_storage "$\|on_compute ' \
+        "$mydir/bin/unarchive-vm")
+    if [[ $routing_hits -lt 4 ]]; then
+        test_fail "Expected storage/compute payload routing, found ${routing_hits}"
+        return
+    fi
+    if grep -q 'exec ssh -t root@"$compute_host"' "$mydir/bin/unarchive-vm"; then
+        test_fail "Delegate-to-compute bounce still present"
+        return
+    fi
+    if grep -q 'exec ssh -t root@"$compute_host"' "$mydir/bin/archive-vm"; then
+        test_fail "archive-vm still bounces to the compute host"
+        return
+    fi
+
+    test_pass
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -555,11 +833,17 @@ test_prompts_for_new_vmid_when_original_in_use
 test_explicit_new_vmid_rejected_if_in_use
 test_original_vmid_preserved_without_conflict
 test_copy_method_restores_reblocked
+test_rate_limit_paces_restore_copy
 test_raw_method_uses_plain_receive
 test_copy_method_missing_vbs_sidecar_fatals
 test_legacy_missing_vbs_sidecar_warns_and_proceeds
 test_missing_disk_info_fatals
 test_unknown_method_fatals
+test_completed_restore_run_exits_cleanly
+test_resume_skips_marked_disk_and_finishes
+test_unmarked_dest_confirmed_redone
+test_unmarked_dest_declined_aborts
+test_payloads_route_through_node_transports
 
 test_summary
 rm -rf "${_unarchive_vm_lock_dir:-}"

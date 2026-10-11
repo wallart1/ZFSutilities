@@ -247,6 +247,7 @@ Top-level keys:
 | `msg_level`                                                           | string                    | Deprecated. Kept for backward compatibility; no longer used for filtering.                                           |
 | `history_retention_days`                                              | integer                   | How many days of backup log history entries to keep (default `90`)                                                   |
 | `ui_state`                                                            | object                    | Saved GUI window geometry, pop-out state, TreeView column widths, and paned divider positions (see below)            |
+| `archive_rate_limit`                                                  | string                    | Default transfer rate limit for archive-vm/unarchive-vm (`pv -L` value, e.g. `100M`; empty = unlimited; prompt-saved, seeded by migration v28) |
 | `paths`                                                               | object                    | Installation-specific file paths (see below); seeded from the centralized path layer on first access                  |
 | `config_version`                                                      | integer                   | Config schema version (see migrations below)                                                                         |
 
@@ -387,7 +388,7 @@ the software release version. When the config structure changes, bump
 **Migration chain** (`config_migrations.py`):
 
 ```python
-CONFIG_VERSION = 27
+CONFIG_VERSION = 28
 
 MIGRATIONS = [
     _migrate_1_to_2,
@@ -416,6 +417,7 @@ MIGRATIONS = [
     _migrate_24_to_25,
     _migrate_25_to_26,
     _migrate_26_to_27,
+    _migrate_27_to_28,
 ]
 ```
 

@@ -520,8 +520,12 @@ source "$NODE_LIB"
 | `is_known_pool(<pool>)`           | Return 0 if pool is in `POOL_TARGET` (two-node only).                |
 | `remote_zfsutilities_bin(<host>)` | Resolve the active version's `bin/` directory on a remote host.      |
 | `remote_zfsutility_script(<host>, <name>)` | Combine the above with `find_zfsutility_script` semantics. |
-| `gen_mac()`                       | Generate a Proxmox-compatible random MAC address.                    |
+| `on_storage(<args...>)`           | Run a stdin payload on the storage host — locally in a subshell when invoked there, else over `ssh bash -s` (forwards `pv_rate_limit`). |
+| `on_compute(<args...>)`           | Mirror of `on_storage` for the compute host.                         |
+| `gen_mac()`                       | Generate a Proxmox-compatible MAC address.                           |
 | `get_json_archive_path()`         | Read `archive_path` from the JSON config file.                       |
+| `get_json_archive_rate_limit()`   | Read `archive_rate_limit` (a `pv -L` value, empty = unlimited).      |
+| `save_json_config_key(<key>,<val>)` | Write one JSON-config key (empty value removes it).                |
 
 See [Two-Node Configuration](../developer-guide/two-node-config.md#helper-library-node-libsh)
 for the full configuration reference.

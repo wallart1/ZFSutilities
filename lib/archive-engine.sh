@@ -12,6 +12,59 @@
 #   - unencrypted zvols   → device copy, archived at volblocksize=1M
 #   - encrypted zvols     → raw send/receive as-is (a device copy would read
 #                           plaintext and break encryption end-to-end)
+#
+# Pacing: when pv_rate_limit holds a pv -L value (e.g. 100M) every data
+# movement — device copy, hash verification, raw send/receive — is passed
+# through `pv -q -L` so an archive run cannot saturate a small storage
+# host. Empty or unset means unlimited (the exact unpaced commands).
+
+# True when $1 is a valid pv -L rate value (digits plus an optional
+# K/M/G/T/P/E suffix with optional i and B, case-insensitive) or is empty
+# (= unlimited). Implemented with parameter expansion and a case list so
+# no regex exceeds the 10-character policy limit.
+archive_valid_rate() {
+    local rate="$1" num suffix lower
+    [[ -z "$rate" ]] && return 0
+    num="${rate%%[!0-9]*}"
+    [[ -n "$num" ]] || return 1
+    suffix="${rate#"$num"}"
+    lower="${suffix,,}"
+    case "$lower" in
+        ""|k|m|g|t|p|e|ki|mi|gi|ti|pi|ei|kb|mb|gb|tb|pb|eb|kib|mib|gib|tib|pib|eib)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Copy one block device onto another, honoring $pv_rate_limit. The sparse
+# semantics of cp --sparse=always are preserved under the rate limit by
+# dd conv=sparse — all-zero input is seeked rather than written, at the dd
+# block-size granularity — so a thin archive zvol stays thin either way.
+archive_copy_devices() {
+    local src="$1" dst="$2"
+    if [[ -n "${pv_rate_limit:-}" ]]; then
+        (
+            set -o pipefail
+            pv -q -L "$pv_rate_limit" -- "$src" \
+                | dd of="$dst" bs=16M conv=sparse,notrunc iflag=fullblock
+        )
+    else
+        cp --sparse=always "$src" "$dst"
+    fi
+}
+
+# Build the optional pv pacing segment for a raw send/receive pipeline into
+# the pace_pipe array (empty when unlimited). Usage:
+#   archive_pace_pipe; zfs send ... | "${pace_pipe[@]}" zfs receive ...
+archive_pace_pipe() {
+    pace_pipe=()
+    if [[ -n "${pv_rate_limit:-}" ]]; then
+        pace_pipe=(pv -q -L "$pv_rate_limit")
+    fi
+}
 
 # Wait for a /dev/zvol device node to appear (udev settle after
 # snapdev=visible or zfs create). Bounded; prints nothing.
@@ -35,15 +88,31 @@ archive_hash_verify() {
     local src="$1" dst="$2"
     local out line1 line2 rest h1 h2
     log_msg "INFO:   Verifying copy integrity (sha256)..."
-    out=$(sha256sum "$src" "$dst" 2>/dev/null) || {
-        log_msg "FATAL: Failed to hash devices"
-        return 1
-    }
-    line1="${out%%$'\n'*}"
-    rest="${out#*$'\n'}"
-    line2="${rest%%$'\n'*}"
-    h1="${line1%%[[:space:]]*}"
-    h2="${line2%%[[:space:]]*}"
+    if [[ -n "${pv_rate_limit:-}" ]]; then
+        # Rate-capped hashing: read each device through pv so the verify
+        # pass cannot saturate the pool; sha256sum of stdin yields the
+        # same digest as of the file.
+        h1=$(pv -q -L "$pv_rate_limit" -- "$src" | sha256sum 2>/dev/null) || {
+            log_msg "FATAL: Failed to hash devices"
+            return 1
+        }
+        h2=$(pv -q -L "$pv_rate_limit" -- "$dst" | sha256sum 2>/dev/null) || {
+            log_msg "FATAL: Failed to hash devices"
+            return 1
+        }
+        h1="${h1%%[[:space:]]*}"
+        h2="${h2%%[[:space:]]*}"
+    else
+        out=$(sha256sum "$src" "$dst" 2>/dev/null) || {
+            log_msg "FATAL: Failed to hash devices"
+            return 1
+        }
+        line1="${out%%$'\n'*}"
+        rest="${out#*$'\n'}"
+        line2="${rest%%$'\n'*}"
+        h1="${line1%%[[:space:]]*}"
+        h2="${line2%%[[:space:]]*}"
+    fi
     if [[ -z "$h1" || -z "$h2" || "$h1" != "$h2" ]]; then
         log_msg "FATAL: Hash mismatch between ${src} and ${dst}"
         log_msg "FATAL: The archive copy is corrupt; re-run the archive."
@@ -171,7 +240,7 @@ archive_one_zvol() {
             archive_rollback_created "$archive_dataset" "$dataset_created" "$created_root"
             return 1
         fi
-        if ! cp --sparse=always "$src_dev" "$dst_dev"; then
+        if ! archive_copy_devices "$src_dev" "$dst_dev"; then
             log_msg "FATAL: Device copy failed (${src_dev} → ${dst_dev})"
             if [[ "$snapdev_changed" == "1" ]]; then
                 zfs set snapdev="$snapdev_arg" "$zvol" 2>/dev/null || true
@@ -205,7 +274,10 @@ archive_one_zvol() {
     else
         method=raw
         log_msg "INFO:   Archive method: raw send/receive (encrypted)"
-        if ! zfs send -cw "${zvol}${snap_name}" | zfs receive "$archive_dataset"; then
+        archive_pace_pipe
+        if ! ( set -o pipefail
+               zfs send -cw "${zvol}${snap_name}" \
+                 | "${pace_pipe[@]}" zfs receive "$archive_dataset" ); then
             log_msg "FATAL: Failed to archive ${zvol} (raw send/receive)"
             archive_rollback_created "$archive_dataset" "$dataset_created" "$created_root"
             return 1
@@ -225,6 +297,49 @@ archive_method_of() {
     local method
     method=$(grep '^METHOD=' "$info_file" 2>/dev/null | cut -d= -f2)
     echo "${method:-raw}"
+}
+
+# Classify an archive dataset for re-run idempotency. Prints one word:
+#   absent   — the dataset does not exist
+#   partial  — it exists without post-verification evidence (no @archive
+#              snapshot, unknown method, or a volblocksize its method does
+#              not imply) — unverified leftovers from an interrupted run
+#   complete — @archive snapshot present (written only after the hash
+#              verification passed, so it is a completion marker by
+#              construction) and the volblocksize matches the method
+# Usage: archive_completion_state <archive_dataset> <archive_mount> <zvol>
+archive_completion_state() {
+    local archive_dataset="$1" archive_mount="$2" zvol="$3"
+    if ! zfs list -H -o name "$archive_dataset" 2>/dev/null \
+            | grep -qxF -- "$archive_dataset"; then
+        echo absent
+        return 0
+    fi
+    if ! zfs list -H -t snapshot -o name "$archive_dataset" 2>/dev/null \
+            | grep -qxF -- "${archive_dataset}@archive"; then
+        echo partial
+        return 0
+    fi
+    local info_file method vbs expected
+    info_file="${archive_mount}/${zvol}.disk_info"
+    method=$(archive_method_of "$info_file")
+    if [[ "$method" != "copy" && "$method" != "raw" ]]; then
+        echo partial
+        return 0
+    fi
+    vbs=$(zfs get -H -o value volblocksize "$archive_dataset" 2>/dev/null)
+    expected=""
+    if [[ "$method" == "copy" ]]; then
+        expected="1M"
+    elif [[ -f "${archive_mount}/${zvol}.original_volblocksize" ]]; then
+        expected=$(cat "${archive_mount}/${zvol}.original_volblocksize")
+    fi
+    if [[ -n "$expected" && "$vbs" != "$expected" ]]; then
+        echo partial
+        return 0
+    fi
+    echo complete
+    return 0
 }
 
 # Restore one archived zvol <arc_dataset> (original relative path
@@ -302,7 +417,7 @@ unarchive_one_zvol() {
             unarchive_rollback_created "$new_zvol" "$dataset_created" "$created_root"
             return 1
         fi
-        if ! cp --sparse=always "$src_dev" "$dst_dev"; then
+        if ! archive_copy_devices "$src_dev" "$dst_dev"; then
             log_msg "FATAL: Device copy failed (${src_dev} → ${dst_dev})"
             [[ "$snapdev_changed" == "1" ]] \
                 && zfs set snapdev="$snapdev_prev" "$arc_dataset" 2>/dev/null || true
@@ -322,7 +437,10 @@ unarchive_one_zvol() {
         fi
     else
         log_msg "INFO:   Restore method: raw send/receive"
-        if ! zfs send -cw "${arc_dataset}${snap_name}" | zfs receive "$new_zvol"; then
+        archive_pace_pipe
+        if ! ( set -o pipefail
+               zfs send -cw "${arc_dataset}${snap_name}" \
+                 | "${pace_pipe[@]}" zfs receive "$new_zvol" ); then
             log_msg "FATAL: Failed to restore ${new_zvol} (raw send/receive)"
             unarchive_rollback_created "$new_zvol" "$dataset_created" "$created_root"
             return 1

@@ -3105,3 +3105,171 @@ with new clones (verified live: origins still on vm-211's @clone snaps,
   two-node 0B accounting note; unarchive-vm pre-sidecar warning box;
   zfsretain dry-run gates note. Integrity 23/23; site rebuilt.
 - Steps 5-6: full suite without soaks in background; freeze on green.
+
+## 2026-10-11 — archive-vm Step 4 / remove-vm-disk: delegated prompts + children destroy (live vm-205 incident)
+
+- Live incident (tweety/stewie, deployed 0.122.0): `sudo archive-vm 205`
+  archived + verified fine, then Step 4 hung invisibly per disk. Root causes
+  in code: (1) archive-vm invoked remove-vm-disk over plain `ssh root@...`
+  with no `-t` and no input-hold env prefix — bash suppresses `read -p`
+  prompts when stdin is not a tty, so the two per-disk confirms never
+  rendered; (2) remove-vm-disk declines/EOF reads exit 0, so disk 3's
+  buffered-empty-line "Aborted." scored as success; (3) Step 4 rm -f'd the
+  PVE config and printed "=== Done ===" regardless, leaving a half-removed
+  VM. Manual recovery: standalone `sudo remove-vm-disk <pool> 205 <n>` (its
+  own `ssh -t` delegation shows prompts) tore down LUNs/backstores, then
+  bare `zfs destroy` refused the zvols — child dailybackup snapshots (with
+  holds). Finished via `sudo zfsdelfs <zvol> '' '' '' "autoproceed='Y'"` on
+  stewie + rescan on tweety. Stale `fivebays/*` vm-205 copies flagged
+  pre-existing (user decision; not this bug).
+- Fixes: archive-vm Step 4 two-node now delegates via
+  `ssh -t` + `$(input_hold_env_prefix)` + `--skip-rescan`, verifies each disk
+  by post-condition (`zfs list` probe — exit codes lie), gates config removal
+  on zero survivors (FATAL block lists survivors + exact finish commands,
+  exits non-zero, no Done summary), one rescan-storage after the loop;
+  single-node destroys via `zfsdelfs autoproceed='Y'` with the same gating.
+  remove-vm-disk: destroy routed through zfsdelfs (children + holds; outer
+  x-lock dropped — zfsdelfs takes its own and a held outer lock would
+  self-deadlock the child); wrapper rescans even when the remote failed (the
+  LUN may already be gone); safe-iscsi-save/rescan-storage resolved via
+  find_zfsutility_script (were $mydir-direct, wrong under the repo-root test
+  mydir); EXPECTED_BACKSTORES_MANIFEST env override (mirrors the
+  encrypted-luns pattern) so the manifest prune is testable.
+- Tests: test-archive-vm +5 (delegation argv incl. env prefix, decline-exit-0
+  regression, remote-failure gating, single-node zfsdelfs routing + failure
+  gating; harness gains zfsdelfs/rescan stubs, ssh-mock remove-vm-disk and
+  zvol-probe knobs); new tests/test-remove-vm-disk (state-mutating targetcli
+  mock; zfs destroy refuses child-snapshot datasets; wrapper -t/env/
+  --skip-rescan argv + rescan-on-failure). Gotchas: test-lib's
+  `zfs list -H -o name <ds>` falls through to the general fs listing, so a
+  nonexistent ds "exists" — suites needing existence semantics wrap zfs; a
+  literal newline inside a `#` doc comment ("y\ny") unbalanced quoting for
+  the whole rest of the file — bash -n reported far-away lines as culprits.
+- Docs: message catalogue Step-4 + remove-vm-disk rows rewritten; commands.md
+  archive-vm step 8/called-modules/internal-flow; two-node.md remove-vm-disk
+  internals; proxmox-integration archive narrative; testing.md rows.
+- Not done (deliberate): no VERSION/changelog/commit (Hard Rules); the stale
+  fivebays zvols left for a user decision.
+- Full-suite fallout (first run 2 failures, both static-coverage suites
+  guarding the refactors — updated to the new architecture):
+  test-iscsi-fresh-install-guards now accepts the find-routed
+  `if ! "$safe_save_path"` save-invocation form alongside the $mydir-direct
+  one; test-lock-coverage's remove-vm-disk rows (source/init/acquire)
+  replaced with the zfsdelfs-delegation row plus zfsdelfs's own
+  source+acquire rows (its lock is now load-bearing for remove-vm-disk);
+  remove-vm-disk's dead `source_helper zfslockmanager` removed;
+  lock-manager.md lock-matrix row updated (destroy lock via zfsdelfs, no
+  outer lock — a held outer lock would deadlock the child).
+
+## 2026-10-11 — archive-vm/unarchive-vm: transfer pacing, idempotent re-runs, node-agnostic orchestration
+
+- Pacing (the "whale in a 5-gallon aquarium" fix): the shared transfer
+  library honors `pv_rate_limit` (the suite-wide lever from transfer-lib /
+  the GUI) in all three hot operations — device copy becomes
+  `pv -q -L | dd conv=sparse,notrunc` (dd's conv=sparse preserves the thin
+  archive zvol at 16M granularity), hash verification reads each device
+  through pv into `sha256sum` stdin, and the raw path gains a pv pipeline
+  segment (pipefail subshells — the old pipelines only surfaced the last
+  rc). Both scripts prompt for the limit with the saved JSON default (new
+  shared key `archive_rate_limit`; empty = unlimited = the exact unpaced
+  commands); node-lib gains get_json_archive_rate_limit + a generic
+  save_json_config_key (empty value deletes the key), replacing
+  archive-vm's inline python writer.
+- Idempotent re-runs: archive side — new archive_completion_state() probe
+  (@archive snapshot + METHOD sidecar + method-implied volblocksize =
+  complete; dataset without @archive = partial → destroy and re-make;
+  complete → skip with sidecar DISK_KEY/LUN/TARGET backfill, append-if-
+  missing so skips don't grow duplicate lines); the old pre-existing-
+  dataset FATAL is now a race backstop only. unarchive side — RESTORED_AS
+  marker appended to .disk_info after each verified restore; destination
+  classification (marked → skip; unmarked → explicit destroy-and-redo
+  confirm, default abort); destination config + all-marked → clean exit;
+  vmid_in_use ignores this archive's own restore-target paths so a
+  same-vmid resume isn't blocked, and its config branch exempts a config
+  whose every target is marker-complete (a finished restore re-runs to
+  "nothing to do", not a new-vmid prompt).
+- Node-agnostic: node-lib on_storage/on_compute — one payload, two
+  transports (local subshell with ZFSUTILITIES_BIN_DIR pointing at the
+  orchestrator's helpers when invoked on that host; `ssh bash -s` with a
+  `pv_rate_limit=` env prefix otherwise). Both scripts dropped the
+  exec-ssh-to-compute bounce; qm gates relaxed (storage-host invocation
+  allowed); compute bits (qm status, /etc/pve read/write, rescan) and heavy
+  storage payloads (clone/referenced-zvol discovery, retire snapshot,
+  archive transfer, restore, iSCSI rebuild) route through the transports;
+  tiny one-liner probes stay plain ssh (self-ssh is correct from either
+  node). archive-vm Step 4 runs remove-vm-disk locally on the storage host
+  (prompts on the operator's terminal). Payload bootstraps now honor
+  ZFSUTILITIES_BIN_DIR; unarchive's iSCSI pool-to-target python honors
+  NODE_CONF.
+- Tests: archive 34 (rate pacing/forwarding/unlimited-pinned, skip/redo,
+  payload probe, invoked-on-storage runs locally with a canned targetcli
+  mock), unarchive 18 (paced restore, marker skip/redo/decline,
+  completed-run exit, static routing), node-lib 43 (transport selection,
+  rc propagation, ssh argv shape). Gotchas: the suites share one JSON
+  config file — rate/path saves leak across tests unless each run resets
+  it to {}; `read -p` prompt text never prints on non-tty stdin, so
+  assert on logged lines, not prompt text; the ssh mock must treat
+  "pv_rate_limit='...' bash -s" as one argv entry when detecting heredoc
+  payloads.
+- Docs: command references, two-node unarchive internals, proxmox-
+  integration narrative, modules.md node-lib table, message-catalogue
+  rows for every new INFO/WARN/FATAL, testing.md coverage.
+- Follow-up (user audit, same class as the v27 catch): the new
+  `archive_rate_limit` JSON key shipped lazy-only — no CONFIG_VERSION bump,
+  no migration, so upgraded configs never showed the key. Added
+  _migrate_27_to_28 (seeds "" = unlimited, preserves user values),
+  CONFIG_VERSION 27→28, registered; migration suite pins/chain updated
+  (seed/preserve/idempotent unit tests; from_version_14 and from_version_19
+  chain results now 28 with an archive_rate_limit assertion);
+  data-structures.md key table + migration chain listing updated.
+
+## 2026-10-11 — wrap-up cycle (post-0.122.0 changeset): standards, tests, docs, freeze
+
+- PREEXISTING: resolved the uninstall-zfsutilities over-length lines
+  (column-0 `=\` continuation idiom, matching node-lib/installer-lib
+  precedents; runtime-verified defaults + overrides). Recorded one new
+  entry: archive-vm's 0.121.0 sever confirm passes ask_yn two args (the
+  second is the default-answer param), so the "(copy them into
+  origin-free zvols)?" tail never displays — same class as the unarchive
+  redo prompt. 4 entries remain (sever prompt, pre-sidecar archives,
+  mkdocs-material/Zensical, infra-vdev planning) — all user-decision or
+  recorded-out-of-scope; none actionable.
+- Standards pass (coding-policies.md): full documented shellcheck sweep +
+  ruff check + ruff format clean. Fixed in new code: unarchive-vm redo
+  prompt three-arg ask_yn truncation (needle variable `redo_prompt` —
+  backslash-continued quoted strings arrive as SEPARATE arguments; tests
+  can't catch prompt text on non-tty stdin); missing append_exit_trap
+  cleanup for unarchive-vm's tmp_config and node-lib's on_storage/
+  on_compute payload_tmp mktemps; test-lock-coverage row >100 chars;
+  archive-vm header "Run from" line was stale (delegation bounce gone).
+  Suppressed as trivial: two 102/104-char rows in untouched
+  test-lock-coverage hunks.
+- Tests: added node-lib unit coverage for get_json_archive_rate_limit
+  (read/defaults) and save_json_config_key (round-trip, sibling-key
+  preservation, empty-deletes, creates missing file); added a
+  RESTORED_AS-marker-write assertion to test-unarchive-vm's redo test
+  (fixtures pre-marked but no test proved the write). SC2034 disable with
+  reason added in test-node-lib (pv_rate_limit expanded across the lib
+  boundary). Affected suites green individually.
+- Docs: reviewed all changeset docs — accurate, no edits needed;
+  docs-integrity 23/23; mkdocs site rebuilt (exit 0; mkdocs-material
+  WARNING = known PREEXISTING toolchain entry).
+- Full suite without soaks (background): 92 suites, all passed, 1 skip
+  (root-gated, non-root host), exit 0. Codebase frozen at this point.
+
+## 2026-10-11 — PREEXISTING clear-out (user: no out-of-scope)
+
+- Fixed archive-vm's 0.121.0 sever-confirm ask_yn truncation (needle
+  variable sever_prompt — the "(copy them into origin-free zvols)?" tail
+  now displays); in the same block removed a stuttered duplicate FATAL
+  line ("or the Proxmox GUI), then re-run archive-vm." echoed twice).
+  Codebase-wide ask_yn/ask_line argument-shape audit: all remaining call
+  sites correct (prompt-only, prompt+"Y"/"N", or prompt+varname);
+  sever-vm-clone's prompt+"Y" continuation is intentional correct usage.
+  test-archive-vm green after the fix; message-catalogue row unaffected
+  (describes the message semantically).
+- User decisions on the remaining entries: legacy-import mode NOT built
+  (manual procedure stands — entry removed, question closed); keep
+  waiting for Zensical 1.x (entry reconfirmed, stays as tracker); keep
+  infra-vdev planning UI deferred (entry reconfirmed). PREEXISTING now
+  holds only those two reconfirmed trackers.

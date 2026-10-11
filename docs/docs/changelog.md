@@ -1,5 +1,93 @@
 # Changelog
 
+## 0.123.0
+
+*Released 2026-10-11*
+
+### Added
+
+- **Archive transfer pacing** — archive-vm and unarchive-vm prompt for a
+  transfer rate limit (a `pv -L` value, e.g. `100M`; empty = unlimited)
+  with the saved value as the default, so an archive or restore run cannot
+  saturate a small storage host by accident twice. When set, every data
+  movement passes through `pv -q -L`: the device copy writes through
+  `dd conv=sparse` (preserving thin provisioning), hash verification reads
+  each device through `pv`, and the raw send/receive pipeline gains a pv
+  segment. The limit is stored as the shared `archive_rate_limit` JSON key
+  (config schema v28; migration seeds empty = the pre-key behavior) and is
+  forwarded to remote payloads. node-lib gains
+  `get_json_archive_rate_limit` and a generic `save_json_config_key`
+  (empty value removes the key).
+- **Idempotent archive re-runs** — archive side: a dataset that already
+  carries its post-verification `@archive` snapshot is skipped (with
+  sidecar key backfill, append-only so skips do not grow duplicate lines),
+  while an interrupted run's unverified leftover is destroyed and re-made
+  (the old pre-existing-dataset FATAL remains as a race backstop only).
+  unarchive side: each verified restore appends a `RESTORED_AS` marker to
+  the archive's `.disk_info` sidecar; marked destinations are skipped,
+  unmarked ones get an explicit destroy-and-redo confirmation (default
+  abort), and a fully completed restore re-runs to a clean nothing-to-do
+  exit. `vmid_in_use` exempts the archive's own restore targets so a
+  same-vmid resume is not blocked.
+- **Node-agnostic archive orchestration** — `on_storage`/`on_compute`
+  transports in node-lib run a payload locally in a subshell when invoked
+  on that host (with `ZFSUTILITIES_BIN_DIR` pointing at the orchestrator's
+  helpers) or ship it via `ssh bash -s` with `pv_rate_limit` forwarded.
+  archive-vm and unarchive-vm orchestrate from whichever node they were
+  invoked on — the delegate-to-compute exec bounce is gone — and payload
+  bootstraps honor `ZFSUTILITIES_BIN_DIR`.
+- **`remove-vm-disk` test suite** — storage-side teardown (LUN, backstore,
+  expected-backstores manifest, encrypted-LUNs config) against a
+  state-mutating targetcli mock whose `zfs destroy` refuses child-snapshot
+  datasets like real ZFS; decline handling, rerun after the LUN is already
+  gone, and the compute-host wrapper's `ssh -t` + input-hold +
+  `--skip-rescan` delegation with rescan-even-on-failure.
+
+### Fixed
+
+- **archive-vm Step 4 could half-remove a VM and report success (live
+  vm-205 incident)** — the removal delegation ran over plain ssh with no
+  TTY and no input-hold prefix, so bash suppressed the per-disk confirm
+  prompts; a declined or failed removal exited 0 and scored as success,
+  and the Proxmox config was deleted regardless. Removal now delegates via
+  `ssh -t` with the input-hold env prefix and `--skip-rescan`, verifies
+  each disk by outcome (the zvol must actually be gone — exit codes lie),
+  and removes the config only when every disk is gone; survivors are
+  listed in a FATAL block with the exact finish commands and the run exits
+  non-zero.
+- **`remove-vm-disk` destroy refused any dailybackup-snapshotted VM disk**
+  — a bare `zfs destroy` rejects datasets with child snapshots (and held
+  snapshots); the destroy now routes through `zfsdelfs autoproceed='Y'`,
+  which deletes the subtree bottom-up and releases snapshot holds. No
+  outer lock is held around it (zfsdelfs takes its own; a held outer lock
+  would self-deadlock the child). The wrapper rescans iSCSI even when the
+  remote leg failed — the LUN may already be gone.
+- **Truncated confirmation prompts** — backslash-continued quoted strings
+  arrived as separate `ask_yn` arguments (the second is its default-answer
+  parameter), so archive-vm's clone-sever confirm never displayed its
+  "(copy them into origin-free zvols)?" tail and unarchive-vm's
+  redo question was cut off mid-sentence; both prompts are single strings
+  now. A stuttered duplicate FATAL line in the clone-not-stopped gate was
+  removed. A codebase-wide `ask_yn`/`ask_line` argument-shape audit found
+  no further instances.
+- **Interrupted runs left payload litter in `/tmp`** — the
+  `on_storage`/`on_compute` payload files and unarchive-vm's rewritten
+  config temp file are now exit-trap cleaned (`append_exit_trap`).
+
+### Changed
+
+- **unarchive-vm config placement is transport-aware** — the rewritten VM
+  config is built in a temp file and placed locally (single-node `mv`) or
+  shipped base64-encoded over the compute transport (two-node), replacing
+  the direct write that assumed a shared filesystem; `mkdir` of the
+  destination directory happens where the file is written.
+- **remove-vm-disk locates siblings via `find_zfsutility_script`**
+  (safe-iscsi-save, rescan-storage, zfsdelfs) instead of `$mydir`-direct
+  paths, and honors `EXPECTED_BACKSTORES_MANIFEST` as an env override for
+  the manifest path (mirroring the encrypted-luns pattern).
+- Config schema version 28 (`archive_rate_limit` seeded, user values
+  preserved); migration chain and data-structures documentation updated.
+
 ## 0.122.0
 
 *Released 2026-10-11*

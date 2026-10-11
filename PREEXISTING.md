@@ -2,23 +2,6 @@
 
 ---
 
-- (style, line length): two pre-existing over-100-character lines in
-  `bin/uninstall-zfsutilities` (the `legacy_config_dir` and
-  `legacy_offsite_nextsnap_file` env-default assignments). Wrapping them
-  would mean reshaping public `ZFSUTILITIES_*` env-var default expressions,
-  so they were left alone during the 2026-10-11 standards pass; fold into
-  the next edit of that block.
-
-
-- (legacy data, archives — narrowed 2026-10-11): pre-sidecar archives (e.g.
-  VM 204's 2026-08-28 archive on stewie) still cannot be *automatically*
-  restored — they predate the sidecar format and carry no disk keys, config
-  text, or iSCSI layout. Resolved 2026-10-11 as far as actionable: the
-  missing-sidecar FATAL now names the pre-sidecar cause, and the manual
-  restore procedure is documented in the unarchive-vm command docs. Remaining
-  decision (user): whether to build a legacy-import mode that restores the
-  zvols alone and leaves config/iSCSI to the operator.
-
 - (toolchain deprecation, docs build): `mkdocs build -f docs/mkdocs.yml`
   prints a mkdocs-material WARNING — "MkDocs 2.0 is incompatible with
   Material for MkDocs" — on every build (exit 0, site still builds cleanly).
@@ -28,7 +11,8 @@
   Zensical is under development. We are waiting for a 1.x.x release.
   (Rechecked 2026-10-08: PyPI shows 0.0.69; still no 1.x.
   Rechecked 2026-10-10: unchanged, 0.0.69.
-  Rechecked 2026-10-11: unchanged, 0.0.69.)
+  Rechecked 2026-10-11: unchanged, 0.0.69.
+  Reconfirmed 2026-10-11 (user): keep waiting for 1.x.)
 
 - (future objective, migration/create fidelity — narrowed 2026-10-03):
   No creation path (Create Pool wizard or Migrate Pool) can *plan*
@@ -44,3 +28,4 @@
   `zpool create` vdev spec). Originally discovered 2026-10-03 during the
   pool-level migration audit.
   This item is in abayance as a future objective.
+  (Reconfirmed 2026-10-11 (user): keep deferred.)

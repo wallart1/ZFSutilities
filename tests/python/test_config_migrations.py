@@ -181,8 +181,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_27(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 27)
+    def test_config_version_is_28(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 28)
 
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
@@ -389,6 +389,24 @@ class TestIndividualMigrations(unittest.TestCase):
         config = {"config_version": 26}
         result1 = config_migrations._migrate_26_to_27(dict(config))
         result2 = config_migrations._migrate_26_to_27(result1)
+        self.assertEqual(result1, result2)
+
+    def test_migrate_27_to_28_seeds_archive_rate_limit(self):
+        config = {"config_version": 27}
+        result = config_migrations._migrate_27_to_28(config)
+        self.assertEqual(result["archive_rate_limit"], "")
+        self.assertEqual(result["config_version"], 28)
+
+    def test_migrate_27_to_28_preserves_user_value(self):
+        config = {"config_version": 27, "archive_rate_limit": "100M"}
+        result = config_migrations._migrate_27_to_28(config)
+        self.assertEqual(result["archive_rate_limit"], "100M")
+        self.assertEqual(result["config_version"], 28)
+
+    def test_migrate_27_to_28_is_idempotent(self):
+        config = {"config_version": 27}
+        result1 = config_migrations._migrate_27_to_28(dict(config))
+        result2 = config_migrations._migrate_27_to_28(result1)
         self.assertEqual(result1, result2)
 
     def test_migrate_15_to_16_adds_prune_pools_order(self):
@@ -638,7 +656,7 @@ class TestRunMigrations(unittest.TestCase):
             "offsite": {"offsite_pools": ["z40tb"]},
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 27)
+        self.assertEqual(result["config_version"], 28)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))
         self.assertEqual(result["dashboard"]["refresh_seconds"], 30)
         # The v27 migration seeds the file-paths section through the whole
@@ -648,6 +666,9 @@ class TestRunMigrations(unittest.TestCase):
         )
         self.assertIn("scrub_manager_log", result["paths"])
         self.assertIn("logrotate_file", result["paths"])
+        # The v28 migration seeds the archive rate limit through the whole
+        # chain too (empty = unlimited, the pre-key behavior).
+        self.assertEqual(result["archive_rate_limit"], "")
         row = result["checkagainst"]["user_entries"][0]
         self.assertEqual(row["source_root"], "tank/a")
         self.assertEqual(row["dest_root"], "backup/a/tank/a")
@@ -673,7 +694,7 @@ class TestRunMigrations(unittest.TestCase):
             },
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 27)
+        self.assertEqual(result["config_version"], 28)
         self.assertIn("retention_verb_messages", result)
         self.assertIs(result["retention_verb_messages"], False)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))

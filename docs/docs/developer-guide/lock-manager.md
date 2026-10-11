@@ -390,7 +390,7 @@ Scripts and modules that have lock integration:
 | clone-vm / zfsclone-vm| `w`       | source and destination zvols                    |
 | move-vm-disk          | `x`/`w`   | source and destination zvols                    |
 | rename-vm-disk        | `w`       | affected zvol                                   |
-| remove-vm-disk        | `x`       | affected zvol                                   |
+| remove-vm-disk        | via `zfsdelfs` | affected zvol (`x`, taken by `zfsdelfs` itself — remove-vm-disk holds no outer lock, which would deadlock the child) |
 | resize-vm-disk        | `w`       | affected zvol / pool                            |
 | new-vm-disk           | `w`       | affected zvol / pool                            |
 | sever-vm-clone        | `w`/`x`   | severed zvol, fresh copy, temp-namespace parent, origin snapshot's dataset (release offer) |

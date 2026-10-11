@@ -37,7 +37,11 @@ test_save_callers_check_exit_status() {
     test_start "safe-iscsi-save callers check its exit status"
     local script
     for script in "${GUARDED_SAVE_CALLERS[@]}"; do
+        # Callers invoke the save either $mydir-direct or resolved through
+        # find_zfsutility_script into a variable; both must gate on its rc.
         if ! grep -qF 'if ! "$mydir/safe-iscsi-save"' \
+            "$repo_root/bin/$script" \
+            && ! grep -qF 'if ! "$safe_save_path"' \
             "$repo_root/bin/$script"; then
             test_fail "bin/$script does not check safe-iscsi-save's exit status"
             return
