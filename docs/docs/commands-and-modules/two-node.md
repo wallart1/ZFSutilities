@@ -1202,7 +1202,12 @@ sudo sever-vm-clone <dataset> [dataset...]
    origin-snapshot report: for every origin, snapshots still cloned or held
    are only reported (with the clones/holds named); unpinned, hold-free
    origins are offered for destruction with typed confirmation — that offer is
-   where the pinned space actually comes back.
+   where the pinned space actually comes back. An unpinned origin can report
+   `releases 0B` with an explanation line: a snapshot's `used` counts only its
+   unique data, and a fully-shared origin (every block still referenced by the
+   live dataset or its other snapshots) releases nothing immediately — the
+   space returns as the remaining references are destroyed. This is normal ZFS
+   accounting, not a defect of the severance.
 8. Remove the state file.
 
 **Return codes / side effects:**
@@ -1321,18 +1326,24 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | `/etc/rtslib-fb-target/expected-backstores.txt` | Restored backstores added | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
 | `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Encrypted restored LUNs added (legacy `/etc/iscsi-encrypted-luns.conf` fallback) | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
 | JSON config `archive_path` | Default archive base | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson) |
-| `.original_volblocksize` sidecars | Restore original `volblocksize` | — |
-| `.disk_info` sidecars | Map disk keys to restored zvols/LUNs | — |
+| `.original_volblocksize` sidecars | Original `volblocksize` (required for copy-method restores, informational for raw) | — |
+| `.disk_info` sidecars | Map disk keys to restored zvols/LUNs; carry the `METHOD=copy\|raw` archive marker | — |
 
 **Internal flow / algorithm:**
 
 1. Validate arguments and delegate to the compute host in two-node mode.
 2. Resolve the archive base (argument, JSON config, or prompt).
 3. Discover archived zvol datasets and the archived Proxmox config.
-4. Verify sidecar files exist and destination zvols/config do not already exist.
+4. Verify the `.disk_info` sidecars exist and destination zvols/config do not
+   already exist (missing `.original_volblocksize` sidecars warn; the shared
+   engine enforces them per restore method).
 5. If the original VMID is in use and `--new-vmid` is not supplied, prompt for a
    new VMID.
-6. Restore each archived zvol with `zfs send -cw | zfs receive -o volblocksize=<original>`.
+6. Restore each archived zvol with the shared transfer engine
+   (`lib/archive-engine.sh`, sourced on the storage host): `METHOD=copy`
+   archives create the destination zvol at the sidecar's original
+   `volblocksize` and device-copy the archive snapshot onto it;
+   `METHOD=raw` and unmarked legacy archives use `zfs send -cw | zfs receive`.
 7. In two-node mode, create backstores and LUNs for each restored zvol and
    update `expected-backstores.txt` and `/etc/zfsutilities/iscsi-encrypted-luns.conf`.
 8. Save iSCSI config via `safe-iscsi-save`.

@@ -2890,12 +2890,21 @@ sudo archive-vm <vmid>
    two-node mode it resolves iSCSI target/LUN pairs on the storage host. Any orphaned zvols
    that match the VM ID but are not referenced in the config are reported as warnings and
    are not archived.
-5. **Archive zvols** — For each referenced disk, runs `zfs send -cw <snapshot>` into a new ZFS
-   dataset under the archive base, setting `volblocksize=1M` for space efficiency. Saves the
-   original `volblocksize` to a `.original_volblocksize` sidecar and the disk's Proxmox config
-   info (disk key, LUN, target) to a `.disk_info` sidecar.
+5. **Archive zvols** — For each referenced disk, archives into a new dataset under the
+   archive base using the shared transfer engine (`lib/archive-engine.sh`), which both node
+   modes run identically. Unencrypted zvols are archived by device copy: the archive zvol is
+   created thin at `volblocksize=1M` and the snapshot device is copied onto it
+   (`cp --sparse=always`, sha256-verified) — the reblock-for-space-efficiency mechanism,
+   since volblocksize always travels in a stream and can never be overridden at receive
+   time. Encrypted zvols are archived by raw `zfs send -cw` into a plain receive (a device
+   copy would read plaintext); they keep their original `volblocksize`. Saves the original
+   `volblocksize` to a `.original_volblocksize` sidecar, and the archive method
+   (`METHOD=copy|raw`) plus the disk's Proxmox config info (disk key, LUN, target) to a
+   `.disk_info` sidecar. A failed run destroys exactly the intermediate datasets it created.
 6. **Archive config** — Copies `/etc/pve/qemu-server/<vmid>.conf` into the archive mount
-7. **Verify** — Confirms all archived datasets and the config file exist and have expected sizes
+7. **Verify** — Confirms all archived datasets and the config file exist and have expected
+   sizes, and that each archived zvol's `volblocksize` matches what its method implies
+   (1M for copy archives, the sidecar original for raw archives)
 8. **Remove VM** — Asks whether to remove the VM; if yes, removes the Proxmox config
    and destroys each referenced zvol (including iSCSI teardown via `remove-vm-disk` in
    two-node mode)
@@ -2934,8 +2943,10 @@ sudo archive-vm <vmid>
    should sever the dependent clones.
 3. Read `/etc/pve/qemu-server/<vmid>.conf` and resolve only the referenced disks to zvols,
    warning about any orphaned zvols that are skipped.
-4. Archive each referenced zvol with `zfs send -cw` into a dataset under the archive base,
-   preserving original `volblocksize` in sidecars.
+4. Archive each referenced zvol via the shared transfer engine: unencrypted zvols are
+   device-copied onto a thin archive zvol created at `volblocksize=1M` (sha256-verified);
+   encrypted zvols use raw `zfs send -cw` received as-is, keeping their original
+   `volblocksize`. Sidecars record the original `volblocksize` and the archive method.
 5. Copy the Proxmox config into the archive.
 6. Verify archive integrity.
 7. Optionally remove the VM (iSCSI teardown in two-node mode, direct destroy in single-node
@@ -2971,13 +2982,18 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 **Flow:**
 
 1. **Discover archive** — Finds archived zvol datasets and the Proxmox config under the archive base
-2. **Validate** — Checks that destination zvols and Proxmox config do not already exist; verifies
-   `.original_volblocksize` and `.disk_info` sidecar files are present. If the original `vmid` is
-   already in use and `--new-vmid` was not supplied, the script prompts for a new VM ID or lets
-   you cancel.
-3. **Restore zvols** — Sends each archived zvol back to its path, restoring the original
-   `volblocksize` from the sidecar. When `--new-vmid` is used, the destination zvol path uses the
-   new VM ID.
+2. **Validate** — Checks that destination zvols and Proxmox config do not already exist;
+   requires the `.disk_info` sidecar (load-bearing for config/iSCSI rebuild) and warns about
+   a missing `.original_volblocksize` sidecar, which is informational for raw-method
+   restores and only required for copy-method ones. If the original `vmid` is already in
+   use and `--new-vmid` was not supplied, the script prompts for a new VM ID or lets you
+   cancel.
+3. **Restore zvols** — Branches on the archive's recorded method. `METHOD=copy` archives
+   are restored by creating the destination zvol thin at the sidecar's original
+   `volblocksize` and device-copying the archive snapshot onto it (sha256-verified);
+   `METHOD=raw` and unmarked legacy archives are restored by raw `zfs send -cw` into a
+   plain receive (the stream carries volblocksize). When `--new-vmid` is used, the
+   destination zvol path uses the new VM ID.
 4. **Rebuild iSCSI** (two-node) — Creates backstores and LUNs for each restored zvol using the
    chosen VM ID, updates the expected-backstores manifest and encrypted-luns config
 5. **Restore config** — Copies the archived Proxmox config to `/etc/pve/qemu-server/<vmid>.conf`
@@ -2986,6 +3002,17 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
    disk lines are rewritten to reference the new VM ID and `vmgenid`/`smbios1` UUIDs are regenerated
    to avoid duplicate identifiers.
 6. **Rescan** (two-node) — Triggers iSCSI rescan on the compute host
+
+!!! warning "Pre-sidecar archives cannot be restored by unarchive-vm"
+    Archives made before the sidecar format carry no `.disk_info` files and no
+    archived Proxmox config, so the validation step FATALs and there is nothing
+    to rebuild config or iSCSI from. Restoring such an archive is a manual
+    procedure: `zfs send`/`receive` (or `zfs clone`) the archived dataset to a
+    destination zvol of the right `volblocksize` under the target pool's VM
+    dataset naming, hand-build the `/etc/pve/qemu-server/<vmid>.conf` disk
+    lines (device, storage, size), re-create the iSCSI backstore/LUN by hand
+    (two-node), and rescan. Re-archiving the VM with the current archive-vm
+    replaces the legacy archive with a sidecar-complete one.
 
 **Globals:**
 
@@ -3016,7 +3043,8 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 
 1. Discover archived zvol datasets and Proxmox config under the archive base.
 2. Validate that destination zvols/config do not already exist; read sidecars.
-3. Send archived zvols back to their original (or new VM ID) paths, restoring original `volblocksize`.
+3. Restore each archived zvol per its method: copy archives reblock back to the sidecar's
+   original `volblocksize` via device copy; raw/legacy archives use plain send/receive.
 4. In two-node mode, recreate backstores/LUNs and update iSCSI manifests.
 5. Restore/rewrite Proxmox config with updated disk lines.
 6. Trigger iSCSI rescan on the compute host.

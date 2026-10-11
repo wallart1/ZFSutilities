@@ -514,16 +514,26 @@ sever_report_origins() {
 
         tags=$(sev_zfs holds -H "$origin" 2>/dev/null | awk '{print $2}')
         if [[ -n "$tags" ]]; then
-                        log_msg "INFO:   ${origin} — unpinned but held (${size} stays pinned);" \
-                                "release the hold(s) to make it destroyable:"
+            log_msg "INFO:   ${origin} — unpinned but held (${size} stays pinned);" \
+                "release the hold(s) to make it destroyable:"
             while IFS= read -r tag; do
                 log_msg "INFO:     hold: ${tag}"
             done <<< "$tags"
             continue
         fi
 
-        log_msg "INFO:   ${origin} — unpinned: no clones, no holds; destroying it" \
-            "releases ${size}."
+        if [[ "$used" == "0" ]]; then
+            log_msg "INFO:   ${origin} — unpinned: no clones, no holds; destroying it" \
+                "releases 0B."
+            log_msg "INFO:     0B is expected, not a defect: a snapshot's 'used' counts" \
+                "only its unique data, and every block here is still shared with the" \
+                "live dataset or its other snapshots. Destroying removes this" \
+                "snapshot's reference; the shared space returns as those references" \
+                "are destroyed."
+        else
+            log_msg "INFO:   ${origin} — unpinned: no clones, no holds; destroying it" \
+                "releases ${size}."
+        fi
         sever_offer_origin_destroy "$origin"
     done
 }

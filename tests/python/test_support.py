@@ -235,6 +235,7 @@ def temp_config_dir():
             "ZFSUTILITIES_LOG_DIR": log_dir,
             "ZFSUTILITIES_LOCK_DIR": lock_dir,
             "ZFSUTILITIES_CRON_FILE": os.path.join(tmpdir, "zfsutilities.cron"),
+            "ZFSUTILITIES_LOGROTATE_FILE": os.path.join(tmpdir, "logrotate.d", "zfsutilities"),
             "ZFSUTILITIES_PROFILE_LOCK_DIR": profile_lock_dir,
             # Redirect per-user state (e.g. docs_viewer_state.json via
             # XDG_CONFIG_HOME) so tests never read or write the developer's

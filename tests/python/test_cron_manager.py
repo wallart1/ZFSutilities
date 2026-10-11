@@ -6,6 +6,13 @@ import unittest
 import cron_manager
 from test_support import temp_config_dir
 
+CRON_LOG = "/var/log/zfsutilities/cron.log"
+# Exact argv fidelity for the sink: the runner's merged output is piped
+# through a line-buffered awk timestamp stamper into the configured log.
+STAMPED_TAIL = (
+    "2>&1 | stdbuf -oL awk '{ print strftime(\"%Y-%m-%d %H:%M:%S\"), $0 }' >> " + CRON_LOG
+)
+
 
 class TestGenerateCronLine(unittest.TestCase):
     def test_basic(self):
@@ -13,7 +20,7 @@ class TestGenerateCronLine(unittest.TestCase):
             "profile_name": "root-backup-daily",
             "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
         }
-        line = cron_manager.generate_cron_line(profile, "/opt/runner.py")
+        line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
         self.assertIn("root-backup-daily", line)
         self.assertIn("0 2 * * *", line)
         self.assertIn("python3 /opt/runner.py", line)
@@ -22,29 +29,41 @@ class TestGenerateCronLine(unittest.TestCase):
         # The generated line mkdirs the configured profile-lock dir; its
         # location follows conftest.py's ZFSUTILITIES_LOCK_DIR redirect.
         self.assertIn(cron_manager.PROFILE_LOCK_DIR, line)
-        self.assertTrue(line.rstrip().endswith(">> /var/log/zfsutilities/cron.log 2>&1"))
+        self.assertTrue(line.rstrip().endswith(STAMPED_TAIL))
 
     def test_specific_weekday(self):
         profile = {
             "profile_name": "test",
             "cron": {"minute": "30", "hour": "4", "day": "*", "month": "*", "weekday": "0"},
         }
-        line = cron_manager.generate_cron_line(profile, "/run.py")
+        line = cron_manager.generate_cron_line(profile, "/run.py", CRON_LOG)
         self.assertIn("30 4 * * 0", line)
         self.assertIn("mkdir -p", line)
         self.assertNotIn("flock", line)
-        self.assertTrue(line.rstrip().endswith(">> /var/log/zfsutilities/cron.log 2>&1"))
+        self.assertTrue(line.rstrip().endswith(STAMPED_TAIL))
 
     def test_profile_name_with_spaces_sanitized(self):
         profile = {
             "profile_name": "Daily Backup #1",
             "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
         }
-        line = cron_manager.generate_cron_line(profile, "/run.py")
+        line = cron_manager.generate_cron_line(profile, "/run.py", CRON_LOG)
         self.assertIn("run 'Daily Backup #1'", line)
         self.assertIn("mkdir -p", line)
         self.assertNotIn("flock", line)
-        self.assertTrue(line.rstrip().endswith(">> /var/log/zfsutilities/cron.log 2>&1"))
+        self.assertTrue(line.rstrip().endswith(STAMPED_TAIL))
+
+    def test_cron_log_path_is_configurable(self):
+        profile = {
+            "profile_name": "p1",
+            "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
+        }
+        custom = "/srv/site-logs/cron-output.log"
+        line = cron_manager.generate_cron_line(profile, "/run.py", custom)
+        self.assertIn("mkdir -p /srv/site-logs", line)
+        self.assertIn(custom, line)
+        self.assertNotIn(CRON_LOG, line)
+        self.assertTrue(line.rstrip().endswith(">> " + custom))
 
     def test_condition_is_prepended(self):
         profile = {
@@ -58,21 +77,21 @@ class TestGenerateCronLine(unittest.TestCase):
                 "condition": "[ $(date +%d) -ge 28 ]",
             },
         }
-        line = cron_manager.generate_cron_line(profile, "/opt/runner.py")
+        line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
         self.assertIn("0 2 * * *", line)
         self.assertIn("root [ $(date +%d) -ge 28 ] && mkdir -p", line)
         self.assertIn("python3 /opt/runner.py", line)
-        self.assertTrue(line.rstrip().endswith(">> /var/log/zfsutilities/cron.log 2>&1"))
+        self.assertTrue(line.rstrip().endswith(STAMPED_TAIL))
 
     def test_missing_condition_keeps_original_format(self):
         profile = {
             "profile_name": "root-backup-daily",
             "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
         }
-        line = cron_manager.generate_cron_line(profile, "/opt/runner.py")
+        line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
         self.assertIn("root mkdir -p", line)
         self.assertNotIn("&& mkdir -p &&", line)
-        self.assertTrue(line.rstrip().endswith(">> /var/log/zfsutilities/cron.log 2>&1"))
+        self.assertTrue(line.rstrip().endswith(STAMPED_TAIL))
 
     def test_empty_condition_keeps_original_format(self):
         profile = {
@@ -86,7 +105,7 @@ class TestGenerateCronLine(unittest.TestCase):
                 "condition": "   ",
             },
         }
-        line = cron_manager.generate_cron_line(profile, "/opt/runner.py")
+        line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
         self.assertIn("root mkdir -p", line)
         self.assertNotIn("&& mkdir -p &&", line)
 
@@ -102,7 +121,7 @@ class TestGenerateCronLine(unittest.TestCase):
                 "condition": "[ $(date +%d) -ge 28 ]\n[ $(date +%u) -ne 6 ]",
             },
         }
-        line = cron_manager.generate_cron_line(profile, "/opt/runner.py")
+        line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
         self.assertNotIn("\n", line)
         self.assertIn("[ $(date +%d) -ge 28 ] [ $(date +%u) -ne 6 ]", line)
 
@@ -161,7 +180,7 @@ class TestWriteCronFile(unittest.TestCase):
                     "cron": {"minute": "0", "hour": "3", "day": "*", "month": "*", "weekday": "*"},
                 },
             ]
-            cron_manager.write_cron_file(profiles, "/runner.py")
+            cron_manager.write_cron_file(profiles, "/runner.py", CRON_LOG)
             self.assertTrue(os.path.exists(cron_manager.CRON_FILE))
             with open(cron_manager.CRON_FILE) as f:
                 content = f.read()
@@ -181,7 +200,7 @@ class TestWriteCronFile(unittest.TestCase):
                     "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
                 },
             ]
-            cron_manager.write_cron_file(profiles, "/runner.py")
+            cron_manager.write_cron_file(profiles, "/runner.py", CRON_LOG)
             with open(cron_manager.CRON_FILE) as f:
                 content = f.read()
             mailto_pos = content.find('MAILTO=""')
@@ -190,7 +209,7 @@ class TestWriteCronFile(unittest.TestCase):
             self.assertGreater(job_pos, mailto_pos)
             self.assertEqual(content.count('MAILTO=""'), 1)
             self.assertIn("mkdir -p", content)
-            self.assertIn(">> /var/log/zfsutilities/cron.log 2>&1", content)
+            self.assertIn(STAMPED_TAIL, content)
             self.assertNotIn("flock", content)
 
     def test_write_cron_file_creates_lock_directory(self):
@@ -204,7 +223,7 @@ class TestWriteCronFile(unittest.TestCase):
             ]
             lock_dir = cron_manager.PROFILE_LOCK_DIR
             self.assertFalse(os.path.exists(lock_dir))
-            cron_manager.write_cron_file(profiles, "/runner.py")
+            cron_manager.write_cron_file(profiles, "/runner.py", CRON_LOG)
             self.assertTrue(os.path.isdir(lock_dir))
 
     def test_write_cron_file_includes_condition(self):
@@ -223,7 +242,7 @@ class TestWriteCronFile(unittest.TestCase):
                     },
                 },
             ]
-            cron_manager.write_cron_file(profiles, "/runner.py")
+            cron_manager.write_cron_file(profiles, "/runner.py", CRON_LOG)
             with open(cron_manager.CRON_FILE) as f:
                 content = f.read()
             self.assertIn("0 2 * * *", content)
@@ -313,11 +332,11 @@ class TestWeekdayOrdinals(unittest.TestCase):
             "profile_name": "monthly",
             "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "6#1"},
         }
-        line = cron_manager.generate_cron_line(profile, "/run.py")
+        line = cron_manager.generate_cron_line(profile, "/run.py", CRON_LOG)
         self.assertIn("0 2 * * 6", line)
         self.assertNotIn("#1", line)
         self.assertIn("mkdir -p", line)
-        self.assertTrue(line.rstrip().endswith(">> /var/log/zfsutilities/cron.log 2>&1"))
+        self.assertTrue(line.rstrip().endswith(STAMPED_TAIL))
 
     def test_next_run_first_saturday(self):
         times = cron_manager.next_run_times("0", "2", "*", "*", "6#1", count=3)

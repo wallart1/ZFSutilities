@@ -247,6 +247,7 @@ Top-level keys:
 | `msg_level`                                                           | string                    | Deprecated. Kept for backward compatibility; no longer used for filtering.                                           |
 | `history_retention_days`                                              | integer                   | How many days of backup log history entries to keep (default `90`)                                                   |
 | `ui_state`                                                            | object                    | Saved GUI window geometry, pop-out state, TreeView column widths, and paned divider positions (see below)            |
+| `paths`                                                               | object                    | Installation-specific file paths (see below); seeded from the centralized path layer on first access                  |
 | `config_version`                                                      | integer                   | Config schema version (see migrations below)                                                                         |
 
 All sections default to empty on first run — the user populates them through
@@ -266,12 +267,28 @@ Persisted by `UIStateManager` in `python/gui_helpers.py`.
 | `paned_positions`    | object  | Map of paned state key to divider position (integer pixels)                                         |
 | `font_sizes`         | object  | Map of log-widget state key (`info_log`, `logs_viewer`) to the saved relative font step count       |
 
+### `paths` object
+
+Installation-specific file paths live here rather than hard-coded in the
+modules that use them. The section is seeded by the v27 migration; at
+runtime, missing keys are seeded on first access from the centralized path
+layer (`paths.py`, which honours `ZFSUTILITIES_*` environment overrides) and
+persisted by the GUI; user-set values always win. Headless readers derive
+without writing.
+
+| Key                  | Type   | Contents                                                                                          |
+| -------------------- | ------ | ------------------------------------------------------------------------------------------------- |
+| `cron_log`           | string | Persistent cron output log (default `/var/log/zfsutilities/cron.log`); embedded in the generated cron lines |
+| `scrub_manager_log`  | string | Scrub-manager event log (default `/var/log/zfsutilities/scrub-manager.log`)                       |
+| `logrotate_file`     | string | Logrotate drop-in managed for the two logs above (default `/etc/logrotate.d/zfsutilities`)         |
+
 ### Python access
 
 The Python config API is split across two modules:
 
 - `config_core.load_config()` / `save_config()` — read/write the whole JSON file
 - `config_core.get_ui_state()` / `save_ui_state()` — main/docs/log window geometry
+- `config_core.get_paths_config()` — installation-specific file paths (`paths` object above)
 - `config_core.get_dashboard_config()` / `save_dashboard_config()` — dashboard thresholds
 - `config_core.get_log_retention_days()` / `save_log_retention_days()` — session log pruning
 - `config_core.get_history_retention_days()` / `save_history_retention_days()` — history pruning
@@ -370,7 +387,7 @@ the software release version. When the config structure changes, bump
 **Migration chain** (`config_migrations.py`):
 
 ```python
-CONFIG_VERSION = 26
+CONFIG_VERSION = 27
 
 MIGRATIONS = [
     _migrate_1_to_2,
@@ -398,6 +415,7 @@ MIGRATIONS = [
     _migrate_23_to_24,
     _migrate_24_to_25,
     _migrate_25_to_26,
+    _migrate_26_to_27,
 ]
 ```
 
@@ -534,7 +552,18 @@ transient `zpool list` failure in that process) is dropped from the
 `active`/`paused`/`finished` buckets only after `MAX_POOL_MISSING_TICKS` (3)
 consecutive ticks, so a single missed observation cannot evict a scrubbing
 pool from the persisted state. `tick()` also heals stale `paused_by_user` entries (pools in
-`paused_by_user` must still be in `paused`). A queued pool whose scrub fails to
+`paused_by_user` must still be in `paused`). The `paused` bucket holds only
+user-intentional pauses (Pause button, external `zpool scrub -p`, backup step
+holds): when active scrubs exceed the target, `tick()` pauses the live scrub
+of the lowest-priority pool and requeues it as `pending`, so a scrub that is
+merely waiting for a slot is displayed and persisted as pending and resumes
+from its existing progress once a slot frees. `tick()` migrates any legacy
+non-user `paused` entry back to `pending` for the same reason. Every message
+`scrub_manager` issues — queue transitions, control commands,
+backup-coordinated holds — is also appended to the persistent event log
+(default `/var/log/zfsutilities/scrub-manager.log`, path from the
+[`paths` object](#paths-object)) regardless of which process
+(GUI, scrub profile, backup) produced it. A queued pool whose scrub fails to
 start or resume is retried a few times and then dropped to the in-memory
 `given_up` set after `MAX_SCRUB_START_FAILURES` (3) consecutive failures, so a
 profile cannot spin forever on a pool that refuses to start. Long-lived

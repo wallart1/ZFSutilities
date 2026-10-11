@@ -96,6 +96,11 @@ def get_scrub_state_path() -> str:
     return os.path.join(get_state_dir(), "scrub_state.json")
 
 
+def get_scrub_manager_log_path() -> str:
+    """Return the path to the persistent scrub-manager event log."""
+    return os.path.join(get_log_dir(), "scrub-manager.log")
+
+
 def get_surface_test_state_path() -> str:
     """Return the path to the disk surface-test state file."""
     return os.path.join(get_state_dir(), "surface_test_state.json")
@@ -140,6 +145,11 @@ def get_log_index_path() -> str:
 def get_cron_file_path() -> str:
     """Return the path to the cron drop-in file."""
     return _env_or_default("ZFSUTILITIES_CRON_FILE", "/etc/cron.d/zfsutilities")
+
+
+def get_logrotate_file_path() -> str:
+    """Return the path to the logrotate drop-in file."""
+    return _env_or_default("ZFSUTILITIES_LOGROTATE_FILE", "/etc/logrotate.d/zfsutilities")
 
 
 def get_profile_lock_dir() -> str:

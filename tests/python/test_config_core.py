@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
@@ -88,6 +89,53 @@ class TestProfilesDir(unittest.TestCase):
                 profiles_dir, os.path.join(os.path.dirname(config_core.CONFIG_PATH), "profiles")
             )
             self.assertTrue(os.path.isdir(profiles_dir))
+
+
+class TestGetPathsConfig(unittest.TestCase):
+    """get_paths_config seeds the paths section from the centralized path layer."""
+
+    def test_seeds_all_keys_and_persists(self):
+        with temp_config_dir():
+            path = config_core.CONFIG_PATH
+            with open(path, "w") as f:
+                json.dump({"config_version": config_core.CONFIG_VERSION}, f)
+            cfg = {"config_version": config_core.CONFIG_VERSION}
+            paths = config_core.get_paths_config(cfg)
+            self.assertEqual(paths["cron_log"], os.path.join(config_core.get_log_dir(), "cron.log"))
+            self.assertEqual(paths["scrub_manager_log"], config_core.get_scrub_manager_log_path())
+            self.assertEqual(paths["logrotate_file"], config_core.get_logrotate_file_path())
+            # The seeded section is written back so the configuration file
+            # visibly holds every path.
+            with open(path) as f:
+                on_disk = json.load(f)
+            self.assertEqual(on_disk["paths"], paths)
+
+    def test_user_values_win_over_seeds(self):
+        with temp_config_dir():
+            cfg = {"paths": {"cron_log": "/srv/custom/cron.log"}}
+            paths = config_core.get_paths_config(cfg, persist=False)
+            self.assertEqual(paths["cron_log"], "/srv/custom/cron.log")
+            # Keys the user did not set still seed.
+            self.assertIn("scrub_manager_log", paths)
+            self.assertIn("logrotate_file", paths)
+
+    def test_persist_false_leaves_disk_untouched(self):
+        with temp_config_dir():
+            path = config_core.CONFIG_PATH
+            with open(path, "w") as f:
+                json.dump({"config_version": config_core.CONFIG_VERSION}, f)
+            cfg = {"config_version": config_core.CONFIG_VERSION}
+            config_core.get_paths_config(cfg, persist=False)
+            with open(path) as f:
+                self.assertNotIn("paths", f.read())
+
+    def test_seeds_follow_log_dir_env_override(self):
+        with temp_config_dir():
+            with patch.dict(os.environ, {"ZFSUTILITIES_LOG_DIR": "/tmp/custom-logs"}):
+                cfg = {}
+                paths = config_core.get_paths_config(cfg, persist=False)
+            self.assertEqual(paths["cron_log"], "/tmp/custom-logs/cron.log")
+            self.assertEqual(paths["scrub_manager_log"], "/tmp/custom-logs/scrub-manager.log")
 
 
 class TestDeepCopy(unittest.TestCase):

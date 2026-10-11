@@ -1,5 +1,6 @@
 """Tests for logs_page.py — log list and viewer helpers."""
 
+import gzip
 import os
 import sys
 import tempfile
@@ -18,7 +19,17 @@ def _patch_log_dir(tmpdir):
 
 def _make_scan_app():
     """Return a minimal mocked app for _scan_logs()."""
-    return type("App", (), {})()
+    app = type("App", (), {})()
+    # Complete paths section pointing nowhere: cron-row scanning finds no
+    # files and never touches the real log directory.
+    app.config = {
+        "paths": {
+            "cron_log": "/nonexistent-test-logs/cron.log",
+            "scrub_manager_log": "/nonexistent-test-logs/scrub-manager.log",
+            "logrotate_file": "/nonexistent-test-logs/logrotate.d/zfsutilities",
+        }
+    }
+    return app
 
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -369,6 +380,133 @@ class TestLoadLogIntoViewer(unittest.TestCase):
             header = buf.set_text.call_args[0][0]
             self.assertIn("showing last", header)
             self.assertIn("Load Full Log", header)
+
+
+class TestScanCronLogRows(unittest.TestCase):
+    """The cron log and its logrotate copies are listed as type "cron"."""
+
+    def _make_app(self, cron_log):
+        app = _make_scan_app()
+        app.config = {
+            "paths": {
+                "cron_log": cron_log,
+                "scrub_manager_log": os.path.join(os.path.dirname(cron_log), "scrub-manager.log"),
+                "logrotate_file": "/nonexistent/logrotate.d/zfsutilities",
+            }
+        }
+        return app
+
+    def test_lists_live_log_and_rotations(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cron_log = os.path.join(tmpdir, "cron.log")
+            for name in ("cron.log", "cron.log.1", "cron.log.1.gz", "cron.log.2.gz"):
+                with open(os.path.join(tmpdir, name), "w") as fh:
+                    fh.write("line\n")
+            with open(os.path.join(tmpdir, "scrub-manager.log"), "w") as fh:
+                fh.write("unrelated\n")
+            with open(os.path.join(tmpdir, "cron.loki"), "w") as fh:
+                fh.write("near-miss\n")
+
+            rows = lp._scan_cron_log_rows(self._make_app(cron_log))
+            names = [row[lp.COL_NAME] for row in rows]
+            self.assertEqual(
+                sorted(names), ["cron.log", "cron.log.1", "cron.log.1.gz", "cron.log.2.gz"]
+            )
+            for row in rows:
+                self.assertEqual(row[lp.COL_TYPE], "cron")
+                self.assertEqual(row[lp.COL_STATUS], "—")
+                self.assertEqual(row[lp.COL_DURATION], "")
+                self.assertEqual(row[lp.COL_BYTES], "")
+                self.assertRegex(row[lp.COL_DATETIME], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+                self.assertTrue(os.path.isfile(row[lp.COL_PATH]))
+
+    def test_missing_directory_returns_no_rows(self):
+        rows = lp._scan_cron_log_rows(self._make_app("/nonexistent-dir/cron.log"))
+        self.assertEqual(rows, [])
+
+    def test_scan_logs_includes_cron_rows_without_touching_index(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sessions = os.path.join(tmpdir, "sessions")
+            os.makedirs(sessions)
+            session_path = os.path.join(sessions, "2026-06-21_10-00-00_backup_gui.log")
+            with open(session_path, "w") as fh:
+                fh.write("# END: rc=0, duration=1.0s\n")
+            cron_log = os.path.join(tmpdir, "cron.log")
+            with open(cron_log, "w") as fh:
+                fh.write("2026-06-21 10:00:00 x:1: INFO: hello\n")
+
+            app = self._make_app(cron_log)
+            with _patch_log_dir(sessions):
+                rows = lp._scan_logs(app)
+            types = {row[lp.COL_TYPE]: row for row in rows}
+            self.assertIn("backup", types)
+            self.assertIn("cron", types)
+            self.assertEqual(types["cron"][lp.COL_NAME], "cron.log")
+            # The session-log index is not polluted with cron paths.
+            self.assertIsNone(app._log_index.get(cron_log))
+
+
+class TestLoadGzipIntoViewer(unittest.TestCase):
+    """Compressed log rotations load into the viewer via gzip."""
+
+    def _make_app(self, path):
+        app = MagicMock()
+        app._logs_current_path = path
+        app._logs_file_size = os.path.getsize(path)
+        app._logs_read_offset = 0
+        app._logs_full_mode = False
+        app.logs_viewer_level = "DEBUG"
+        app.logs_show_more_btn.get_visible.return_value = False
+        buf = MagicMock()
+        app.logs_text.get_buffer.return_value = buf
+        return app, buf
+
+    def test_small_rotation_loads_fully(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "cron.log.1.gz")
+            with gzip.open(path, "wb") as fh:
+                fh.write(b"2026-06-21 10:00:00 x:1: INFO: first\n")
+                fh.write(b"2026-06-21 10:00:01 x:1: INFO: second\n")
+            app, buf = self._make_app(path)
+            lp._load_log_into_viewer(app)
+            inserted = "".join(call[0][1] for call in buf.insert.call_args_list)
+            self.assertIn("first", inserted)
+            self.assertIn("second", inserted)
+            # gzip streams are not seekable: chunked loading stays hidden.
+            app.logs_show_more_btn.hide.assert_called()
+            app.logs_load_full_btn.hide.assert_called()
+
+    def test_large_rotation_loads_tail_with_header(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "cron.log.1.gz")
+            with gzip.open(path, "wb") as fh:
+                fh.write(b"START\n")
+                for i in range(50000):
+                    fh.write(f"line {i} padding to exceed the viewer threshold\n".encode())
+                fh.write(b"END\n")
+            app, buf = self._make_app(path)
+            lp._load_log_into_viewer(app)
+            header = buf.set_text.call_args[0][0]
+            self.assertIn("decompresses to", header)
+            self.assertIn("showing last", header)
+            inserted = "".join(call[0][1] for call in buf.insert.call_args_list)
+            self.assertIn("END", inserted)
+            self.assertNotIn("START", inserted)
+
+    def test_corrupt_rotation_warns_without_crashing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "cron.log.1.gz")
+            with open(path, "wb") as fh:
+                fh.write(b"definitely not gzip")
+            app, _buf = self._make_app(path)
+            with patch("logs_page.log_msg") as mock_log_msg:
+                lp._load_log_into_viewer(app)
+            self.assertTrue(
+                any(
+                    "WARN: Could not read compressed log file" in c[0][0]
+                    for c in mock_log_msg.call_args_list
+                )
+            )
 
 
 class TestTailLogFileBufferCap(unittest.TestCase):
@@ -929,7 +1067,7 @@ class TestCreateLogsPage(unittest.TestCase):
 
         expected = {
             "Date/Time": "Session log timestamp",
-            "Type": "Log type: backup, offsite, restore, prune, dataset, or gui",
+            "Type": "Log type: backup, offsite, restore, prune, dataset, gui, or cron",
             "Name": "Name of the operation or profile",
             "Status": "Completion status",
             "Log Size": "Size of the log file on disk",

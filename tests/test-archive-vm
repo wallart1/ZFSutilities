@@ -74,7 +74,7 @@ run_archive() {
     local capture_dir="$_mock_zfs_state_dir/capture"
     mkdir -p "$capture_dir"
     rm -f "$capture_dir/snapshots" "$capture_dir/ssh" "$capture_dir/ssh-argv" \
-        "$capture_dir/severances"
+        "$capture_dir/severances" "$capture_dir/zfs-argv"
 
     local sever_stub="$capture_dir/sever-vm-clone-stub"
     cat > "$sever_stub" << 'EOF'
@@ -93,6 +93,7 @@ EOF
 
         export ARCHIVE_VM_TEST_NO_ROOT=1
         export NODE_LIB="$mydir/lib/node-lib.sh"
+        export ARCHIVE_ENGINE_LIB="$mydir/lib/archive-engine.sh"
         export ZFSLOCK_MANAGER="$mydir/bin/zfslockmanager"
         export ZFSLOCK_DIR="$_mock_zfs_state_dir/lock"
         mkdir -p "$ZFSLOCK_DIR"
@@ -111,6 +112,12 @@ EOF
         export _mock_clone_vm_status="${_mock_clone_vm_status:-}"
         export _mock_archive_vmid="$vmid"
         export _mock_sever_stub="$sever_stub"
+        export _mock_cp_fail="${_mock_cp_fail:-}"
+        export _mock_hash_dst="${_mock_hash_dst:-}"
+        export _mock_encryption="${_mock_encryption:-}"
+        export _mock_volsize="${_mock_volsize:-}"
+        export _mock_snapdev="${_mock_snapdev:-}"
+        export _mock_preexisting_archive="${_mock_preexisting_archive:-}"
 
         # Note: ask_yn cannot be mocked here — sourcing archive-vm re-runs
         # bashinit (via ~/bashinit), which unconditionally redefines it.
@@ -122,6 +129,37 @@ EOF
         zfs() {
             if [[ "$1" == "snapshot" ]]; then
                 echo "SNAP:$2" >> "$_capture_dir/snapshots"
+            fi
+            if [[ "$1" == "create" ]]; then
+                # Real zfs semantics: the dataset exists afterwards, with
+                # the creation properties the argv asked for.
+                echo "CREATE:$*" >> "$_capture_dir/zfs-argv"
+                local -a _cargv=("$@")
+                local _ds="${_cargv[-1]}" _i _vbs="" _vs=""
+                _mock_zfs_datasets["$_ds"]=1
+                _mock_zfs_fs_list="${_mock_zfs_fs_list}"$'\n'"$_ds"
+                for _i in "$@"; do
+                    [[ "$_i" == volblocksize=* ]] && _vbs="${_i#volblocksize=}"
+                done
+                for ((_i = 0; _i < $((${#_cargv[@]} - 1)); _i++)); do
+                    [[ "${_cargv[$_i]}" == "-V" ]] && _vs="${_cargv[$((_i + 1))]}"
+                done
+                [[ -z "$_vbs" ]] || _mock_zfs_props["${_ds}:volblocksize"]="$_vbs"
+                [[ -z "$_vs" ]] || _mock_zfs_props["${_ds}:volsize"]="$_vs"
+                return 0
+            fi
+            if [[ "$1" == "destroy" ]]; then
+                echo "DESTROY:$*" >> "$_capture_dir/zfs-argv"
+                local -a _dargv=("$@")
+                local _ds="${_dargv[-1]}"
+                unset '_mock_zfs_datasets[$_ds]' 2>/dev/null || true
+                _mock_zfs_fs_list=$(printf '%s\n' "$_mock_zfs_fs_list" \
+                    | grep -vxF -- "$_ds") || true
+                return 0
+            fi
+            if [[ "$1" == "set" ]]; then
+                echo "SET:$*" >> "$_capture_dir/zfs-argv"
+                return 0
             fi
             # Dependent-clone discovery: feed canned name<TAB>origin rows.
             if [[ "$*" == *"list -H -o name,origin"* ]]; then
@@ -219,21 +257,61 @@ EOF
             fi
         }
 
-        # Mock ZFS state for all configured zvols.
-        _mock_zfs_fs_list=$(echo "$_mock_zvols_list" | tr ' ' '\n')
+        # Device-copy engine mocks. cp records the copy and really copies
+        # when the source exists (the config archive step depends on it);
+        # /dev/zvol device paths do not exist in the harness.
+        cp() {
+            echo "CP:$*" >> "$_capture_dir/zfs-argv"
+            if [[ -n "${_mock_cp_fail:-}" ]]; then
+                return 1
+            fi
+            if [[ -e "$1" ]]; then
+                command cp "$@"
+            fi
+            return 0
+        }
+        sync() {
+            echo "SYNC:$*" >> "$_capture_dir/zfs-argv"
+        }
+        sha256sum() {
+            # One digest line per device, like real sha256sum; the
+            # _mock_hash_dst knob makes the second digest differ.
+            printf '%s  %s\n' "deadbeef12345678" "$1"
+            printf '%s  %s\n' \
+                "${_mock_hash_dst:-deadbeef12345678}" "$2"
+        }
+
+        # Mock ZFS state for all configured zvols. The archive base is part
+        # of the listing so parent-chain probes stop walking there.
+        _mock_zfs_fs_list=$(echo "$_mock_zvols_list" | tr ' ' '\n')$'\n'"$archive_base"
         _mock_zfs_datasets["$archive_base"]=1
         _mock_zfs_props["${archive_base}:mountpoint"]="$archive_mount"
         local zvol
         for zvol in $_mock_zvols_list; do
             _mock_zfs_datasets["$zvol"]=1
-            _mock_zfs_datasets["${archive_base}/${zvol}"]=1
             _mock_zfs_props["${zvol}:volblocksize"]="8K"
+            _mock_zfs_props["${zvol}:volsize"]="${_mock_volsize:-10G}"
+            _mock_zfs_props["${zvol}:encryption"]="${_mock_encryption:-off}"
+            _mock_zfs_props["${zvol}:snapdev"]="${_mock_snapdev:-hidden}"
+            if [[ "${_mock_encryption:-off}" != "off" ]]; then
+                # Raw receive: the archive dataset arrives with the
+                # stream's volblocksize. (zfs receive runs as a pipeline
+                # component, so the mock cannot register the dataset
+                # itself — its mutations die with the pipeline subshell.)
+                _mock_zfs_props["${archive_base}/${zvol}:volblocksize"]="8K"
+                _mock_zfs_datasets["${archive_base}/${zvol}"]=1
+            fi
             if [[ "$snapshots" == "existing" ]]; then
                 _mock_zfs_snap_lists["$zvol"]="${zvol}@dailybackup-2026-07-14T07:00-04:00-d"
             else
                 _mock_zfs_snap_lists["$zvol"]=""
             fi
         done
+        if [[ "${_mock_preexisting_archive:-}" == "1" ]]; then
+            for zvol in $_mock_zvols_list; do
+                _mock_zfs_fs_list="${_mock_zfs_fs_list}"$'\n'"${archive_base}/${zvol}"
+            done
+        fi
 
         # Load the script from a temp file (instead of eval) so archive-vm's
         # own SSH here-doc bodies are read from the file, leaving the
@@ -254,6 +332,7 @@ EOF
     cat "$capture_dir/snapshots" 2>/dev/null || true
     cat "$capture_dir/ssh" 2>/dev/null || true
     cat "$capture_dir/severances" 2>/dev/null || true
+    cat "$capture_dir/zfs-argv" 2>/dev/null || true
     return $rc
 }
 
@@ -264,6 +343,8 @@ EOF
 reset_mocks() {
     unset _mock_read_response _mock_ssh_snapshot_exists _mock_ssh_snapshot_error
     unset _mock_vm_status _mock_clone_info _mock_zvols_list _mock_clone_vm_status
+    unset _mock_cp_fail _mock_hash_dst _mock_encryption _mock_volsize
+    unset _mock_snapdev _mock_preexisting_archive
 }
 
 test_single_node_uses_existing_snapshot() {
@@ -447,7 +528,7 @@ n"
 
 test_two_node_fetches_volblocksize_on_storage() {
     reset_mocks
-    test_start "Two-node: volblocksize fetched on storage host"
+    test_start "Two-node: volblocksize fetched on storage host (shared engine)"
 
     local vmid="213"
     local pve_dir="$_mock_zfs_state_dir/pve5"
@@ -468,11 +549,21 @@ n"
         return
     fi
 
-    if [[ "$out" == *"zfs get -H -o value volblocksize"* ]]; then
-        test_pass
-    else
-        test_fail "Storage volblocksize lookup not seen; output:\n$out"
+    # The storage-host heredoc must run the shared engine, and the engine
+    # (executed on the storage host in this mode) is what reads the
+    # volblocksize there.
+    if [[ "$out" != *"archive_one_zvol"* ]]; then
+        test_fail "Two-node heredoc does not invoke the shared engine; output:\n$out"
+        return
     fi
+    # shellcheck disable=SC2016  # literal grep -F-style source-text pattern
+    if ! grep -q 'zfs get -H -o value volblocksize "$zvol"' \
+            "$mydir/lib/archive-engine.sh"; then
+        test_fail "Engine does not read volblocksize on the storage host"
+        return
+    fi
+
+    test_pass
 }
 
 test_two_node_target_and_lun_travel_as_separate_args() {
@@ -781,7 +872,9 @@ n"
         test_fail "Clone origin missing; output:\n$out"
         return
     fi
-    if [[ "$out" != *"VM removal may fail while snapshots are held by clones; sever them first with sever-vm-clone"* ]]; then
+    local _sever_note="VM removal may fail while snapshots are held by clones;"
+    _sever_note="${_sever_note} sever them first with sever-vm-clone"
+    if [[ "$out" != *"${_sever_note}"* ]]; then
         test_fail "Skip-severance warning missing; output:\n$out"
         return
     fi
@@ -835,7 +928,7 @@ n"
     local sever_count
     sever_count=$(printf '%s\n' "$out" | grep -c '^SEVER:')
     if [[ "$sever_count" -ne 2 ]]; then
-        test_fail "Expected exactly one severance per clone VM (2), got ${sever_count}; output:\n$out"
+        test_fail "Expected one severance per clone VM (2 total), got ${sever_count}; output:\n$out"
         return
     fi
     local _wrap_rhs="Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup"
@@ -898,6 +991,248 @@ n"
     test_pass
 }
 
+test_single_node_copy_path_reblocks_to_1m() {
+    reset_mocks
+    test_start "Single-node: unencrypted zvol archived by device copy at 1M"
+
+    local vmid="240"
+    local pve_dir="$_mock_zfs_state_dir/pve20"
+    local archive="$_mock_zfs_state_dir/archive20"
+    local mount="$_mock_zfs_state_dir/mount20"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Archive method: device copy (reblock to 1M)"* ]]; then
+        test_fail "Copy method not reported; output:\n$out"
+        return
+    fi
+    local _create_line="CREATE:create -s -V 10G -o volblocksize=1M"
+    _create_line="${_create_line} ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"${_create_line}"* ]]; then
+        test_fail "Archive zvol not created thin at volblocksize 1M; output:\n$out"
+        return
+    fi
+    local cp_src
+    cp_src="/dev/zvol/threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup-2026-07-14T07:00-04:00-d"
+    local cp_dst="/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"CP:--sparse=always ${cp_src} ${cp_dst}"* ]]; then
+        test_fail "Snapshot-device copy not recorded; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"✓ Copy verified (sha256 match)"* ]]; then
+        test_fail "Copy verification missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"SNAP:${archive}/threeamigos/proxmox/vm-${vmid}-disk-0@archive"* ]]; then
+        test_fail "@archive snapshot not created; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"SET:set snapdev=visible threeamigos/proxmox/vm-${vmid}-disk-0"* ]] \
+        || [[ "$out" != *"SET:set snapdev=hidden threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
+        test_fail "snapdev not exposed and reverted; output:\n$out"
+        return
+    fi
+    local info="${mount}/threeamigos/proxmox/vm-${vmid}-disk-0.disk_info"
+    if ! grep -q '^METHOD=copy$' "$info" || ! grep -q '^DISK_KEY=scsi0$' "$info"; then
+        test_fail "disk_info sidecar wrong; content:\n$(cat "$info" 2>/dev/null)"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_encrypted_zvol_archives_raw() {
+    reset_mocks
+    test_start "Single-node: encrypted zvol archived by raw send/receive"
+
+    local vmid="241"
+    local pve_dir="$_mock_zfs_state_dir/pve21"
+    local archive="$_mock_zfs_state_dir/archive21"
+    local mount="$_mock_zfs_state_dir/mount21"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_encryption="aes-256-gcm"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Archive method: raw send/receive (encrypted)"* ]]; then
+        test_fail "Raw method not reported; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"CREATE:create -s -V"* ]]; then
+        test_fail "Copy path used for an encrypted zvol; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"volblocksize 8K)"* ]]; then
+        test_fail "Verification volblocksize backstop missing; output:\n$out"
+        return
+    fi
+    local info="${mount}/threeamigos/proxmox/vm-${vmid}-disk-0.disk_info"
+    if ! grep -q '^METHOD=raw$' "$info"; then
+        test_fail "METHOD=raw not recorded; content:\n$(cat "$info" 2>/dev/null)"
+        return
+    fi
+
+    test_pass
+}
+
+test_copy_hash_mismatch_aborts_and_cleans_up() {
+    reset_mocks
+    test_start "Copy path: hash mismatch aborts and removes this run's datasets"
+
+    local vmid="242"
+    local pve_dir="$_mock_zfs_state_dir/pve22"
+    local archive="$_mock_zfs_state_dir/archive22"
+    local mount="$_mock_zfs_state_dir/mount22"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_hash_dst="fedcba9876543210"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected non-zero exit code; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"FATAL: Hash mismatch"* ]]; then
+        test_fail "Hash-mismatch FATAL missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Removed partial archive dataset"* ]]; then
+        test_fail "Partial dataset not rolled back; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"DESTROY:destroy -r ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
+        test_fail "Archive dataset destroy not recorded; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"DESTROY:destroy -r ${archive}/threeamigos/proxmox"* ]]; then
+        test_fail "Created parent chain not destroyed; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_preexisting_archive_dataset_aborts() {
+    reset_mocks
+    test_start "Copy path: pre-existing archive dataset aborts with guidance"
+
+    local vmid="243"
+    local pve_dir="$_mock_zfs_state_dir/pve23"
+    local archive="$_mock_zfs_state_dir/archive23"
+    local mount="$_mock_zfs_state_dir/mount23"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_preexisting_archive="1"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected non-zero exit code; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"FATAL: Archive dataset already exists"* ]]; then
+        test_fail "Already-exists FATAL missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"CP:--sparse=always"* ]]; then
+        test_fail "Copy attempted despite existing dataset; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_no_receive_volblocksize_override_remains() {
+    test_start "No zfs receive volblocksize override remains in the tree"
+
+    local hits
+    hits=$(grep -n 'receive -o volblocksize' \
+        "$mydir/bin/archive-vm" "$mydir/bin/unarchive-vm" \
+        "$mydir/lib/archive-engine.sh" 2>/dev/null)
+    if [[ -n "$hits" ]]; then
+        test_fail "volblocksize receive override still present:\n$hits"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_heredoc_gets_config_content() {
+    reset_mocks
+    test_start "Two-node: heredoc receives base64 config content and runs the engine"
+
+    local vmid="244"
+    local pve_dir="$_mock_zfs_state_dir/pve24"
+    local archive="$_mock_zfs_state_dir/archive24"
+    local mount="$_mock_zfs_state_dir/mount24"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    _mock_read_response="${archive}
+y
+n"
+
+    local out rc
+    out=$(run_archive two-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    # The compute host's config must travel as content (base64), not as a
+    # compute-host path the storage host cannot read.
+    if [[ "$out" != *"config_b64"* ]] || [[ "$out" != *"base64 -d"* ]]; then
+        test_fail "Config content not passed/decoded in heredoc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"archive_one_zvol"* ]]; then
+        test_fail "Engine not invoked in heredoc; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"receive -o volblocksize"* ]]; then
+        test_fail "volblocksize receive override present in heredoc; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -911,6 +1246,12 @@ test_two_node_target_and_lun_travel_as_separate_args
 test_sidecar_lun_lookup_grep_survives_slash_prefix
 test_single_node_archives_only_referenced_disks
 test_single_node_warns_on_orphaned_zvol
+test_single_node_copy_path_reblocks_to_1m
+test_single_node_encrypted_zvol_archives_raw
+test_copy_hash_mismatch_aborts_and_cleans_up
+test_preexisting_archive_dataset_aborts
+test_no_receive_volblocksize_override_remains
+test_two_node_heredoc_gets_config_content
 test_two_node_prompt_mentions_storage_host
 test_no_error_message_level
 test_running_vm_aborts_before_archive

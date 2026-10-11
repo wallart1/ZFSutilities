@@ -665,6 +665,11 @@ Runs at ordinary daytime hours show no UTC text at all, and profile types
 that do not create snapshots (restore, retention, scrub) show a plain
 timestamp.
 
+The **Next Run** cell is always a single line, so every row in the list has
+the same height. When the bucket and UTC decoration is too long to fit the
+column, the text is ellipsized (`…`) and hovering the **Next Run** cell
+shows the complete string in a tooltip.
+
 ### Run Now
 
 Select one or more profiles and click **Run Now** in the Actions panel to execute
@@ -904,7 +909,10 @@ Before any snapshot is destroyed, `zfscheckagainst` verifies it is not the
 last common snapshot shared with a counterpart dataset (e.g. an offsite pool).
 
 If **Dry Run** is active, deletions are simulated and the log panel shows what
-would be deleted without actually destroying anything.
+would be deleted without actually destroying anything. The preview applies the
+same minimum-age gate as a real run: a bucket-overflow snapshot younger than
+the policy's minimum age is reported as **Would: Keep** (with its age), not as
+a pending deletion.
 
 For the full algorithm, see the
 [`zfsretain` module reference](../commands-and-modules/modules.md#zfsretain).
@@ -1106,7 +1114,7 @@ A sortable table with columns:
 | Column        | Description                                                              |
 | ------------- | ------------------------------------------------------------------------ |
 | **Date/Time** | When the session started. Default sort is **descending** (newest first). |
-| **Type**      | `backup`, `offsite`, `restore`, `prune` — the operation type             |
+| **Type**      | `backup`, `offsite`, `restore`, `prune` — the operation type; `cron` rows list the persistent cron log and its rotations (see below) |
 | **Name**      | `gui` for GUI runs, or `profile-<name>` for scheduled/cron runs          |
 | **Status**    | `Done`, `Failed`, `Cancelled`, `Running`, `Warn`, or `Fatal`.            |
 | **Log Size**  | Size of the log file on disk                                             |
@@ -1123,6 +1131,24 @@ Right-click any row to open a context menu:
 
 - **Copy path** — copy the full log file path to the clipboard
 - **Delete selected log(s)** — remove every selected log file after confirmation
+
+### Cron log rows
+
+The persistent cron output log (`cron.log` in the log directory) and every
+rotated copy of it (`cron.log.1`, `cron.log.1.gz`, …) are listed alongside
+session logs with type **cron**. Their **Date/Time** is the file's last-write
+time, **Status** is `—` (these logs have no run lifecycle), and **Log Size**
+is the size on disk (compressed size for `.gz` copies). The log's path is
+configured in the `paths` section of the main configuration file (see the
+[developer guide](../developer-guide/data-structures.md)); the defaults
+live in `/var/log/zfsutilities/`.
+
+Every line written to the cron log carries a `YYYY-MM-DD HH:MM:SS` timestamp,
+so the viewer's level filter and short-prefix display work on these rows the
+same way as on session logs. The log is managed by logrotate — rotated
+weekly, compressed, and bounded by an early-rotation size guard — so it never
+grows without bound, and every generation is created readable by non-root
+users (handy for tailing over ssh).
 
 ### Log viewer (bottom pane)
 
@@ -1145,6 +1171,11 @@ Right-click any row to open a context menu:
   **Load Full Log** button. Clicking it prompts for confirmation, then reads the
   entire file from the start. This prevents the GUI from hanging if a session
   log grows very large.
+
+- **Compressed logs** — gzip-compressed logrotate copies (`.gz` rows) are
+  decompressed transparently when opened. Beyond the 1 MB threshold the viewer
+  shows the decompressed tail with a note; gzip streams cannot be seeked, so
+  the **Show More** / **Load Full Log** buttons are not offered for them.
 
 - **Pop Out** — a button in the search bar detaches the entire viewer into an independent window. While popped out,
   the Log Viewer pane is removed from the Logs tab; it is restored when the
@@ -1199,11 +1230,11 @@ automatically while visible on a user-configurable interval, and every
 refresh redraws rolling time-series charts, so the display updates
 dynamically without any external charting dependency.
 
-The tab hosts two views behind a **Live Charts / Alignment** radio switcher
-below the refresh controls. **Live Charts** is the real-time monitor
-described in this section; **Alignment** analyses blocksize alignment
-across the device, zpool, ZFS, and VM layers and offers tuning advice (see
-[Alignment View](#alignment-view)). The selected view is remembered across
+The tab hosts two views behind a **Live Charts / Blocksize Alignment** radio
+switcher below the refresh controls. **Live Charts** is the real-time monitor
+described in this section; **Blocksize Alignment** analyses blocksize
+alignment across the device, zpool, ZFS, and VM layers and offers tuning
+advice (see [Alignment View](#alignment-view)). The selected view is remembered across
 GUI restarts, and the tab's Refresh button and auto-refresh timer refresh
 whichever view is visible.
 
@@ -2040,6 +2071,21 @@ Below the pool registry is the Scrub Manager, separated by a draggable
 divider. It maintains a queue of pending, active, paused, and finished
 scrubs. The queue is saved to disk automatically and survives GUI restarts.
 
+A scrub shows **paused** only when a person (or a backup step holding pools
+during a transfer) paused it. When the number of running scrubs exceeds the
+**Simultaneous scrubs** target — for example when a finished backup resumes
+the scrubs it had paused — the manager pauses the live scrub of the
+lowest-priority pool and requeues it as **pending**; it resumes from its
+existing progress as soon as a scrub slot frees, and never shows as paused
+while it waits.
+
+Every Scrub Manager event — button actions, queue transitions, scrubs
+started/paused/resumed/finished, backup-coordinated holds — is appended to
+`/var/log/zfsutilities/scrub-manager.log` (timestamped plain text) no matter
+which process produced it: the GUI, a scheduled scrub profile, or a backup.
+The file is not listed in the Logs tab (which shows session logs); view it
+with a text editor or `tail -f`.
+
 #### Controls
 
 | Control                  | Purpose                                                                    |
@@ -2403,7 +2449,7 @@ active state is obvious at a glance.
 | **Backup**    | Skips rsync pulls, pre-backup commands, ZFS send/receive (logs what it would do), snapfile cleanup, and retention pruning |
 | **Offsite**   | Skips ZFS send/receive (logs what it would do) and hold application                                                       |
 | **Restore**   | Skips ZFS send/receive (logs what it would do) for both Part 1 and Part 2                                                 |
-| **Retention** | Logs what snapshots would be pruned without deleting them                                                                 |
+| **Retention** | Logs what snapshots would be pruned without deleting them; the preview applies each bucket's minimum-age policy, reporting too-young snapshots as kept |
 
 The toggle state persists while the GUI is running and is reset by clicking it again or on GUI restart.
 

@@ -148,6 +148,42 @@ class TestScrubPageWidgets(unittest.TestCase):
         self.assertEqual(appended[1], "paused")
         self.assertEqual(appended[3], "Sun May 10 00:24:03 2026")
 
+    def test_refresh_shows_pending_for_live_paused_queued_pool(self):
+        """A live-paused scrub parked in the pending bucket displays as pending.
+
+        Displaced scrubs (queue paused them to honor the simultaneous target)
+        are waiting for a slot; the State column must not say paused.
+        """
+        with mock_gtk():
+            import pools_page as pp
+
+            app = MagicMock()
+            app.scrub_store = MagicMock()
+            app.scrub_store.get_iter_first.return_value = None
+            app.scrub_store.append = MagicMock(return_value=MagicMock())
+            app.scrub_queue = MagicMock()
+            app.scrub_queue.state_for_pool.return_value = sm.ScrubState.PENDING
+            app.scrub_queue.ordered_names.return_value = ["tank"]
+            app.scrub_queue.summary.return_value = {
+                "active": 1,
+                "pending": 1,
+                "paused": 0,
+                "finished": 0,
+                "target": 1,
+            }
+            app.scrub_summary_label = MagicMock()
+
+            live_paused = sm.ScrubInfo(
+                state=sm.ScrubState.PAUSED,
+                as_of="Sun May 10 00:24:03 2026",
+            )
+            with patch("pools_page.get_all_pool_scrub_states", return_value={"tank": live_paused}):
+                pp.refresh_scrub_table(app)
+
+        appended = app.scrub_store.append.call_args[0][0]
+        self.assertEqual(appended[0], "tank")
+        self.assertEqual(appended[1], "pending")
+
 
 class TestScrubReorder(unittest.TestCase):
     """Scrub Manager table supports drag-and-drop priority ordering."""

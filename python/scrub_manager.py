@@ -19,9 +19,72 @@ from datetime import datetime, timedelta
 from enum import Enum
 
 import feature_config
-from backup_config import log_msg
+import session_log
+from backup_config import log_msg as _base_log_msg
+from config_core import get_paths_config, load_config
 from file_locking import scrub_state_lock_write
 from zfs_repository import get_default_repository
+
+# ---------------------------------------------------------------------------
+# Persistent scrub-manager event log
+# ---------------------------------------------------------------------------
+
+# Whether the one-time WARN for an unwritable event-log directory has been
+# issued in this process (repeating it on every message would spam the sink).
+_scrub_event_log_warned = False
+
+# Event-log path resolved once per process from the main configuration file
+# (get_paths_config), so the writer here and the logrotate stanza that
+# rotates the file can never diverge. Tests reset the cache to pick up
+# environment overrides.
+_event_log_path: str | None = None
+
+
+def _get_event_log_path() -> str:
+    """Return the configured scrub-manager event-log path.
+
+    Headless derivation (``persist=False``): readers never write the
+    configuration file; the GUI persists the seeded section when the cron
+    schedule is saved.
+    """
+    global _event_log_path
+    if _event_log_path is None:
+        _event_log_path = get_paths_config(load_config(), persist=False)["scrub_manager_log"]
+    return _event_log_path
+
+
+def _append_scrub_event_log(message: str) -> None:
+    """Append a scrub-engine message to the persistent event log.
+
+    Best effort: when the log directory cannot be created, a WARN is issued
+    once per process and the message is dropped from the event log (the
+    active sink still received it). Write errors inside ``write_raw_line``
+    are swallowed there.
+    """
+    global _scrub_event_log_warned
+    path = _get_event_log_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except OSError as exc:
+        if not _scrub_event_log_warned:
+            _scrub_event_log_warned = True
+            _base_log_msg(f"WARN: Could not create scrub manager log directory: {exc}")
+        return
+    session_log.write_raw_line(path, message)
+
+
+def log_msg(*parts, **kwargs) -> None:
+    """Emit a scrub-engine message to the active sink and the event log.
+
+    Module-level wrapper around the shared ``log_msg``: every message issued
+    by scrub_manager is also appended to the persistent scrub-manager event
+    log, so scrub-queue events can be reconstructed after the fact
+    regardless of which process (GUI, headless profile, backup
+    coordination) produced them.
+    """
+    _base_log_msg(*parts, **kwargs)
+    _append_scrub_event_log(" ".join(str(p) for p in parts))
+
 
 # ---------------------------------------------------------------------------
 # Scrub state enum + info dataclass
@@ -393,8 +456,12 @@ def _emit(log_func, msg):
     """Pass *msg* to *log_func* while preserving the scrub_manager caller location.
 
     If the caller location cannot be determined, *msg* is passed through
-    without caller metadata.
+    without caller metadata. The message is also appended to the persistent
+    event log unless *log_func* is the module ``log_msg`` wrapper, which
+    already appended it.
     """
+    if log_func is not log_msg:
+        _append_scrub_event_log(msg)
     frame = inspect.currentframe().f_back
     try:
         caller_file = inspect.getfile(frame)
@@ -657,6 +724,11 @@ class ScrubQueue:
     from their ``simultaneous`` setting), so a stale persisted target can
     never silently ignore the caller's setting. When *target* is omitted,
     the persisted target is kept.
+
+    The ``paused`` bucket holds only user-intentional pauses (Pause button,
+    external ``zpool scrub -p``, backup step holds); a scrub displaced to
+    honor the target is parked in ``pending`` with its live scrub paused,
+    so anything waiting for a slot is displayed as pending.
     """
 
     # -- Persistence --
@@ -862,6 +934,7 @@ class ScrubQueue:
                 # External pause detected (e.g., user ran zpool scrub -p).
                 # Treat it like a user-initiated pause so the queue does not
                 # auto-resume it.
+                log_msg(f"VERB: External pause detected on '{pool_name}'")
                 self.active.discard(pool_name)
                 self.paused.add(pool_name)
                 self.paused_by_user.add(pool_name)
@@ -900,6 +973,7 @@ class ScrubQueue:
                 self.finished.add(pool_name)
             elif info.state == ScrubState.SCANNING:
                 # Externally resumed
+                log_msg(f"VERB: External resume detected on '{pool_name}'")
                 self.paused.discard(pool_name)
                 self.paused_by_user.discard(pool_name)
                 self.active.add(pool_name)
@@ -926,6 +1000,7 @@ class ScrubQueue:
             elif info.state == ScrubState.PAUSED:
                 # Externally paused pool that the queue was not tracking.
                 # Treat it as user-paused so it stays paused.
+                log_msg(f"VERB: External pause detected on '{pool_name}'")
                 self.paused.add(pool_name)
                 self.paused_by_user.add(pool_name)
             elif info.state in (ScrubState.FINISHED, ScrubState.CANCELED):
@@ -939,11 +1014,21 @@ class ScrubQueue:
             if info is None or info.state not in (ScrubState.SCANNING, ScrubState.PAUSED):
                 self._external_reported.discard(pool_name)
 
+        # Migrate legacy non-user paused entries to pending before adjusting
+        # the active count: a scrub the queue itself parked (target management
+        # in older releases) is waiting for a slot, not user-paused, and must
+        # be eligible for resume in this same tick.
+        queue_parked = self.paused - self.paused_by_user
+        if queue_parked:
+            self.paused -= queue_parked
+            self.pending |= queue_parked
+
         # 2. Adjust active count toward target
         active_count = len(self.active)
 
         if active_count < self.target:
-            # Start pending first, then resume paused
+            # Start pending first; this includes live-paused pools requeued by
+            # displacement or Resume, which are resumed (not restarted).
             for candidate in self.ordered_names(self.pending):
                 if len(self.active) >= self.target:
                     break
@@ -989,48 +1074,28 @@ class ScrubQueue:
                     # Unexpected state — leave in pending
                     continue
 
-            while len(self.active) < self.target and self.paused:
-                # Only auto-resume pools paused by target management; user-paused
-                # pools stay paused until the user explicitly resumes them.
-                candidate = None
-                for name in self.ordered_names(self.paused):
-                    if name not in self.paused_by_user:
-                        candidate = name
-                        break
-                if candidate is None:
-                    break
-                self.paused.discard(candidate)
-                self.paused_by_user.discard(candidate)
-                info = states.get(candidate)
-                if info and info.state == ScrubState.PAUSED:
-                    if resume_scrub(candidate):
-                        self.active.add(candidate)
-                        self._start_failures.pop(candidate, None)
-                    elif self._record_start_failure(candidate):
-                        pass  # Given up — the while loop tries the next paused pool
-                    else:
-                        self.paused.add(candidate)
-                        break
-                elif info and info.state == ScrubState.SCANNING:
-                    self.active.add(candidate)
-                else:
-                    self.active.add(candidate)
-
         elif active_count > self.target:
-            # Pause newest active scrubs
+            # Displace the lowest-priority active scrubs: pause the live scrub
+            # and requeue the pool as pending so it resumes (from its existing
+            # progress) when a slot frees. The paused bucket is reserved for
+            # user-intentional pauses and must not be used here.
             to_pause = self.ordered_names(self.active)[self.target :]
             for candidate in to_pause:
                 info = states.get(candidate)
                 if info and info.state == ScrubState.SCANNING:
                     if pause_scrub(candidate):
                         self.active.discard(candidate)
-                        self.paused.add(candidate)
+                        self.pending.add(candidate)
+                        log_msg(
+                            f"INFO: Scrub on '{candidate}' paused and requeued as pending "
+                            "(active scrubs at target)"
+                        )
                     else:
                         # Leave in active if pause failed
                         pass
                 else:
                     self.active.discard(candidate)
-                    self.paused.add(candidate)
+                    self.pending.add(candidate)
 
         # 3. Prune finished entries that are no longer in any interesting state
         for pool_name in list(self.finished):

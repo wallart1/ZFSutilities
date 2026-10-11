@@ -1705,6 +1705,41 @@ test_origin_report_sibling_and_held() {
     assert_equals "keepme" "$(sever_holds_of "$env" tank/proxmox/vm-100-disk-1@clone-origin2)"
 }
 
+test_origin_report_zero_byte_explains_sharing() {
+    test_start "origin report: 0B release is explained, not presented as a defect"
+    sever_have_blkdev \
+        || { test_skip "no block device on host for the fake /dev/zvol tree"; return; }
+    local vmid=332 env out rc
+    env=$(sever_env_new)
+    sever_seed_pool "$env" tank 50000000000
+    sever_seed_fs "$env" tank/proxmox
+    sever_seed_vol "$env" tank/proxmox/vm-100-disk-0 3000000000 10000000000
+    # Origin snapshot whose unique delta is zero: every block is shared with
+    # the live dataset and its other snapshots.
+    sever_seed_snap "$env" tank/proxmox/vm-100-disk-0@clone-origin 0
+    sever_seed_clone "$env" tank/proxmox/vm-100-disk-0@clone-origin \
+        "tank/proxmox/vm-${vmid}-disk-0" 1000000000 10000000000
+    sever_devtree_link "$env" "tank/proxmox/vm-${vmid}-disk-0"
+
+    # Prompts: proceed with the severance, then decline the origin destroy.
+    SEVER_STDIN="y
+n
+"
+    out=$(sever_run "$env" "$vmid")
+    rc=$?
+    SEVER_STDIN=""
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "unexpected exit $rc; output:\n$out"
+        return
+    fi
+    assert_contains "$out" "unpinned: no clones, no holds; destroying it releases 0B."
+    assert_contains "$out" "0B is expected, not a defect: a snapshot's 'used' counts"
+    assert_contains "$out" "Left in place."
+    sever_snap_exists "$env" tank/proxmox/vm-100-disk-0@clone-origin \
+        && test_pass || test_fail "declined origin destroy still destroyed it"
+}
+
 test_guid_mismatch_aborts_before_destroy() {
     test_start "cutover GUID mismatch aborts before any destruction"
     sever_have_blkdev \
@@ -2475,6 +2510,7 @@ test_qm_guard
 test_vmid_mode_severs_all_disks
 test_dataset_mode_and_nonclone_skips
 test_origin_report_sibling_and_held
+test_origin_report_zero_byte_explains_sharing
 test_guid_mismatch_aborts_before_destroy
 test_phase1_copy_still_clone_aborts
 test_postswap_origin_backstop_fails

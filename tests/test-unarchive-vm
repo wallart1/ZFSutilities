@@ -1,5 +1,9 @@
 #!/usr/bin/bash
 # shellcheck disable=SC1090,SC2034,SC2154
+# SC2128/SC2178: inside run_unarchive's zfs() mock, shellcheck cannot see
+# test-lib.sh's `declare -gA _mock_zfs_datasets` (unfollowable source) and
+# misinfers the scalar subscript variable _ds as an array.
+# shellcheck disable=SC2128,SC2178
 # test-unarchive-vm — Unit tests for unarchive-vm new-VMID support.
 
 # shellcheck source=tests/test-lib.sh
@@ -35,6 +39,7 @@ setup_archive() {
     local archive_base="$1"
     local vmid="$2"
     local pve_dir="${3:-/etc/pve/qemu-server}"
+    local method="${4:-}"
 
     mkdir -p "${archive_base}${pve_dir}"
     mkdir -p "$archive_base/threeamigos/proxmox"
@@ -42,9 +47,14 @@ setup_archive() {
     # Archived zvol dataset path (under archive base)
     local arc_dataset="${archive_base}/threeamigos/proxmox/vm-${vmid}-disk-0"
 
-    # Sidecar files keyed by the original zvol path
+    # Sidecar files keyed by the original zvol path. A METHOD= line marks
+    # archives made by the hybrid engine; unmarked archives are legacy
+    # raw send/receive archives.
     echo "8K" > "${archive_base}/threeamigos/proxmox/vm-${vmid}-disk-0.original_volblocksize"
     echo "DISK_KEY=scsi0" > "${archive_base}/threeamigos/proxmox/vm-${vmid}-disk-0.disk_info"
+    if [[ -n "$method" ]]; then
+        echo "METHOD=${method}" >> "${archive_base}/threeamigos/proxmox/vm-${vmid}-disk-0.disk_info"
+    fi
 
     # Archived Proxmox config (mirrors the PVE_CONF_DIR layout)
     cat > "${archive_base}${pve_dir}/${vmid}.conf" << EOF
@@ -63,6 +73,9 @@ run_unarchive() {
     local vmid="$1"
     shift
     local stdin_input="${_mock_read_response:-}"
+    local capture_dir="$_mock_zfs_state_dir/capture"
+    mkdir -p "$capture_dir"
+    rm -f "$capture_dir/zfs-argv"
     (
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
         setup_test_env
@@ -74,6 +87,9 @@ run_unarchive() {
         # work without deployment.
         export UNARCHIVE_VM_TEST_NO_ROOT=1
         export NODE_LIB="$mydir/lib/node-lib.sh"
+        export ARCHIVE_ENGINE_LIB="$mydir/lib/archive-engine.sh"
+        export _capture_dir="$capture_dir"
+        export _mock_hash_dst="${_mock_hash_dst:-}"
 
         # Mock zfs state.
         local arc_dataset="${archive_base}/threeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0"
@@ -82,7 +98,54 @@ ${arc_dataset}"
         _mock_zfs_datasets["${archive_base}"]=1
         _mock_zfs_props["${archive_base}:mountpoint"]="${archive_base}"
         _mock_zfs_props["threeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0:volblocksize"]="8K"
+        _mock_zfs_props["${arc_dataset}:volsize"]="10G"
+        _mock_zfs_props["${arc_dataset}:snapdev"]="hidden"
         _mock_zfs_snap_lists["${arc_dataset}"]="${arc_dataset}@snap1"
+
+        # Record engine zfs/cp/hash activity; creations register datasets
+        # and their creation properties, like real zfs.
+        eval "_test_lib_zfs() $(declare -f zfs | tail -n +2)"
+        zfs() {
+            case "$1" in
+                create|destroy|set|send|receive)
+                    echo "${1^^}:$*" >> "$_capture_dir/zfs-argv"
+                    ;;
+            esac
+            if [[ "$1" == "create" ]]; then
+                local -a _cargv=("$@")
+                local _ds="${_cargv[-1]}"
+                _mock_zfs_datasets["$_ds"]=1
+                _mock_zfs_fs_list="${_mock_zfs_fs_list}"$'\n'"$_ds"
+                return 0
+            fi
+            if [[ "$1" == "destroy" ]]; then
+                local -a _dargv=("$@")
+                local _ds="${_dargv[-1]}"
+                unset '_mock_zfs_datasets[$_ds]' 2>/dev/null || true
+                _mock_zfs_fs_list=$(printf '%s\n' "$_mock_zfs_fs_list" \
+                    | grep -vxF -- "$_ds") || true
+                return 0
+            fi
+            if [[ "$1" == "set" || "$1" == "send" || "$1" == "receive" ]]; then
+                return 0
+            fi
+            _test_lib_zfs "$@"
+        }
+        cp() {
+            echo "CP:$*" >> "$_capture_dir/zfs-argv"
+            if [[ -e "$1" ]]; then
+                command cp "$@"
+            fi
+            return 0
+        }
+        sync() {
+            echo "SYNC:$*" >> "$_capture_dir/zfs-argv"
+        }
+        sha256sum() {
+            printf '%s  %s\n' "deadbeef12345678" "$1"
+            printf '%s  %s\n' \
+                "${_mock_hash_dst:-deadbeef12345678}" "$2"
+        }
 
         # Conflict state.
         if [[ "${_mock_old_config_present:-}" == "1" ]]; then
@@ -100,6 +163,9 @@ ${arc_dataset}"
         set -- "$vmid" "$archive_base" "$@"
         source "$mydir/bin/unarchive-vm"
     ) <<< "$stdin_input" 2>&1
+    local rc=$?
+    cat "$capture_dir/zfs-argv" 2>/dev/null || true
+    return $rc
 }
 
 # ------------------------------------------------------------------
@@ -108,7 +174,7 @@ ${arc_dataset}"
 
 reset_unretire_mocks() {
     unset _mock_old_config_present _mock_old_zvol_present \
-        _mock_new_config_present _mock_read_response
+        _mock_new_config_present _mock_read_response _mock_hash_dst
 }
 
 test_usage_rejects_invalid_new_vmid() {
@@ -277,6 +343,208 @@ test_original_vmid_preserved_without_conflict() {
     fi
 }
 
+test_copy_method_restores_reblocked() {
+    reset_unretire_mocks
+    test_start "METHOD=copy: restore reblocks back to the original volblocksize"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="y"
+    local pve_dir="$_mock_zfs_state_dir/pve7"
+    local archive="$_mock_zfs_state_dir/archive7"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Restore method: copy (reblock to 8K)"* ]]; then
+        test_fail "Copy restore method not reported; output:\n$out"
+        return
+    fi
+    local _create_line="CREATE:create -s -V 10G -o volblocksize=8K"
+    _create_line="${_create_line} threeamigos/proxmox/vm-904-disk-0"
+    if [[ "$out" != *"${_create_line}"* ]]; then
+        test_fail "Restored zvol not created thin at the sidecar volblocksize; output:\n$out"
+        return
+    fi
+    local arc="${archive}/threeamigos/proxmox/vm-904-disk-0"
+    local _cp_line="CP:--sparse=always /dev/zvol/${arc}@snap1"
+    _cp_line="${_cp_line} /dev/zvol/threeamigos/proxmox/vm-904-disk-0"
+    if [[ "$out" != *"${_cp_line}"* ]]; then
+        test_fail "Device copy from the archive snapshot not recorded; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"RECEIVE:"* ]]; then
+        test_fail "Raw receive used for a copy-method archive; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"✓ Copy verified (sha256 match)"* ]]; then
+        test_fail "Restore copy verification missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_raw_method_uses_plain_receive() {
+    reset_unretire_mocks
+    test_start "METHOD=raw: restore uses plain send/receive (no volblocksize override)"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="y"
+    local pve_dir="$_mock_zfs_state_dir/pve8"
+    local archive="$_mock_zfs_state_dir/archive8"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" raw
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Restore method: raw send/receive"* ]]; then
+        test_fail "Raw restore method not reported; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"RECEIVE:receive threeamigos/proxmox/vm-904-disk-0"* ]]; then
+        test_fail "Plain receive not used; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"CREATE:create -s -V"* ]]; then
+        test_fail "Copy path used for a raw-method archive; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_copy_method_missing_vbs_sidecar_fatals() {
+    reset_unretire_mocks
+    test_start "METHOD=copy: missing volblocksize sidecar is fatal"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="y"
+    local pve_dir="$_mock_zfs_state_dir/pve9"
+    local archive="$_mock_zfs_state_dir/archive9"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+    rm -f "$archive/threeamigos/proxmox/vm-904-disk-0.original_volblocksize"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected non-zero exit code; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"FATAL: Missing volblocksize sidecar for copy-method restore"* ]]; then
+        test_fail "Copy-sidecar FATAL missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_legacy_missing_vbs_sidecar_warns_and_proceeds() {
+    reset_unretire_mocks
+    test_start "Legacy archive: missing volblocksize sidecar warns and proceeds"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="y"
+    local pve_dir="$_mock_zfs_state_dir/pve10"
+    local archive="$_mock_zfs_state_dir/archive10"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+    rm -f "$archive/threeamigos/proxmox/vm-904-disk-0.original_volblocksize"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"WARN: Missing volblocksize sidecar (informational)"* ]]; then
+        test_fail "Informational-sidecar WARN missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"(volblocksize: unknown)"* ]]; then
+        test_fail "Unknown volblocksize not displayed; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_missing_disk_info_fatals() {
+    reset_unretire_mocks
+    test_start "Missing .disk_info sidecar is fatal"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="y"
+    local pve_dir="$_mock_zfs_state_dir/pve11"
+    local archive="$_mock_zfs_state_dir/archive11"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+    rm -f "$archive/threeamigos/proxmox/vm-904-disk-0.disk_info"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected non-zero exit code; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"FATAL: Missing .disk_info sidecar file(s):"* ]]; then
+        test_fail "Missing-sidecar FATAL missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"predates the sidecar format"* ]]; then
+        test_fail "Pre-sidecar guidance missing from the FATAL; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_unknown_method_fatals() {
+    reset_unretire_mocks
+    test_start "Unknown METHOD value is fatal"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="y"
+    local pve_dir="$_mock_zfs_state_dir/pve12"
+    local archive="$_mock_zfs_state_dir/archive12"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" teleport
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected non-zero exit code; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"FATAL: Unknown archive method 'teleport'"* ]]; then
+        test_fail "Unknown-method FATAL missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -286,6 +554,12 @@ test_new_vmid_regenerates_uuids
 test_prompts_for_new_vmid_when_original_in_use
 test_explicit_new_vmid_rejected_if_in_use
 test_original_vmid_preserved_without_conflict
+test_copy_method_restores_reblocked
+test_raw_method_uses_plain_receive
+test_copy_method_missing_vbs_sidecar_fatals
+test_legacy_missing_vbs_sidecar_warns_and_proceeds
+test_missing_disk_info_fatals
+test_unknown_method_fatals
 
 test_summary
 rm -rf "${_unarchive_vm_lock_dir:-}"

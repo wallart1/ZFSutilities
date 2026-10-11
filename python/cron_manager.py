@@ -9,14 +9,15 @@ import shlex
 from datetime import datetime, timedelta
 
 from backup_config import log_msg
-from config_core import SESSION_LOG_DIR
 from paths import get_cron_file_path, get_profile_lock_dir
 
 CRON_FILE = get_cron_file_path()
 
-# Dedicated cron output log. Cron stderr/stdout are redirected here so that
-# failures before the runner creates its own session log are still visible.
-CRON_LOG_FILE = os.path.join(os.path.dirname(SESSION_LOG_DIR), "cron.log")
+# Cron stdout/stderr are piped through this stamper into the configured cron
+# log (config_core.get_paths_config), so failures before the runner creates
+# its own session log are still visible, each line carrying the time it was
+# written. stdbuf keeps awk line-buffered so lines appear in the log promptly.
+_TIMESTAMP_STAMPER = "stdbuf -oL awk '{ print strftime(\"%Y-%m-%d %H:%M:%S\"), $0 }'"
 
 # Directory for per-profile advisory locks. Override for testing.
 PROFILE_LOCK_DIR = os.environ.get("ZFSUTILITIES_PROFILE_LOCK_DIR", get_profile_lock_dir())
@@ -32,18 +33,19 @@ _HEADER = (
 )
 
 
-def write_cron_file(profiles, runner_path):
+def write_cron_file(profiles, runner_path, cron_log):
     """Regenerate the cron drop-in file from scratch.
 
     Args:
         profiles: list of profile dicts
         runner_path: absolute path to profile_runner.py
+        cron_log: absolute path to the cron output log
     """
     lines = [_HEADER]
     for profile in profiles:
         if not profile.get("active", False):
             continue
-        line = generate_cron_line(profile, runner_path)
+        line = generate_cron_line(profile, runner_path, cron_log)
         if line:
             lines.append(line + "\n")
 
@@ -59,7 +61,7 @@ def write_cron_file(profiles, runner_path):
         raise
 
 
-def generate_cron_line(profile, runner_path):
+def generate_cron_line(profile, runner_path, cron_log):
     """Build a single crontab line for an active profile."""
     cron = profile.get("cron", {})
     minute = cron.get("minute", "*")
@@ -74,23 +76,24 @@ def generate_cron_line(profile, runner_path):
     name = profile["profile_name"]
     quoted_runner = shlex_quote(runner_path)
     inner = f"python3 {quoted_runner} run {shlex_quote(name)}"
-    log_dir = shlex_quote(os.path.dirname(CRON_LOG_FILE))
+    log_dir = shlex_quote(os.path.dirname(cron_log))
     lock_dir = shlex_quote(PROFILE_LOCK_DIR)
-    cron_log = shlex_quote(CRON_LOG_FILE)
+    quoted_log = shlex_quote(cron_log)
     condition = cron.get("condition", "").strip().replace("\n", " ")
     # The runner acquires its own advisory lock and exits 0 when the profile is
-    # already running, so a cron-level flock wrapper is not needed. Redirect
-    # stdout/stderr to a persistent cron log so pre-log errors are visible.
+    # already running, so a cron-level flock wrapper is not needed. Pipe
+    # stdout/stderr through the timestamp stamper into the persistent cron log
+    # so pre-log errors are visible with the time they were written.
     if condition:
         return (
             f"{minute} {hour} {day} {month} {weekday} "
             f"root {condition} && mkdir -p {log_dir} {lock_dir} && "
-            f"{inner} >> {cron_log} 2>&1"
+            f"{inner} 2>&1 | {_TIMESTAMP_STAMPER} >> {quoted_log}"
         )
     return (
         f"{minute} {hour} {day} {month} {weekday} "
         f"root mkdir -p {log_dir} {lock_dir} && "
-        f"{inner} >> {cron_log} 2>&1"
+        f"{inner} 2>&1 | {_TIMESTAMP_STAMPER} >> {quoted_log}"
     )
 
 

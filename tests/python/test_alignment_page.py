@@ -1,6 +1,6 @@
 """Tests for alignment_page.py — the Alignment view of the Performance page.
 
-Covers the Live Charts / Alignment view switcher built into memory_page,
+Covers the Live Charts / Blocksize Alignment view switcher built into memory_page,
 the sample-application helpers (chain, findings, workload, memory-tier
 readouts), per-source degrade notes, and the survey dialog from
 alignment_dialogs.
@@ -154,7 +154,7 @@ class _PageTestCase(unittest.TestCase):
 
 
 class TestPerformanceViewSwitcher(_PageTestCase):
-    """The Live Charts / Alignment radio switcher on the Performance page."""
+    """The Live Charts / Blocksize Alignment radio switcher on the Performance page."""
 
     def test_switcher_radios_present(self):
         _mp, _ap, app = self._prepared()

@@ -19,6 +19,15 @@ unset _local_bashinit
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 
+# Shared transfer engine — also sourced by the two-node SSH helper on the
+# storage host, so both node modes run literally the same restore code.
+ARCHIVE_ENGINE_LIB="${ARCHIVE_ENGINE_LIB:-$(find_zfsutility_script archive-engine.sh)}"
+[[ -n "$ARCHIVE_ENGINE_LIB" ]] || {
+    log_msg "FATAL: Could not locate archive-engine.sh"
+    exit 1
+}
+source "$ARCHIVE_ENGINE_LIB"
+
 source_helper rootcheck
 source_helper zfslockmanager
 
@@ -287,28 +296,38 @@ while IFS= read -r arc_zvol; do
     ((++dataset_count))
 done <<< "$archived_zvols"
 
-# Verify sidecar files exist
-missing_sidecars=()
+# Verify sidecar files. .disk_info is load-bearing (config and iSCSI
+# rebuild) and must exist. .original_volblocksize is informational for
+# raw-method restores — the stream carries volblocksize — and only becomes
+# required for copy-method restores, which the engine enforces per zvol.
+missing_info=()
 for i in "${!archive_datasets[@]}"; do
     vbs_file="${archive_mount}/${original_zvols[$i]}.original_volblocksize"
     info_file="${archive_mount}/${original_zvols[$i]}.disk_info"
     if is_single_node; then
-        [[ -f "$vbs_file" ]] || missing_sidecars+=("$vbs_file")
-        [[ -f "$info_file" ]] || missing_sidecars+=("$info_file")
+        if [[ ! -f "$vbs_file" ]]; then
+            log_msg "WARN: Missing volblocksize sidecar (informational): ${vbs_file}"
+        fi
+        [[ -f "$info_file" ]] || missing_info+=("$info_file")
     else
         if ! ssh root@"$storage_host" "[[ -f '$vbs_file' ]]"; then
-            missing_sidecars+=("$vbs_file")
+            log_msg "WARN: Missing volblocksize sidecar (informational): ${vbs_file}"
         fi
         if ! ssh root@"$storage_host" "[[ -f '$info_file' ]]"; then
-            missing_sidecars+=("$info_file")
+            missing_info+=("$info_file")
         fi
     fi
 done
 
-[[ ${#missing_sidecars[@]} -eq 0 ]] \
+[[ ${#missing_info[@]} -eq 0 ]] \
     || {
-        log_msg "FATAL: Missing sidecar files:"
-        printf '  %s\n' "${missing_sidecars[@]}" >&2
+        log_msg "FATAL: Missing .disk_info sidecar file(s):"
+        printf '  %s\n' "${missing_info[@]}" >&2
+        log_msg "FATAL: Every disk in an archive must carry a .disk_info sidecar." \
+            "An archive without them predates the sidecar format — it has no" \
+            "recorded disk keys, config text, or iSCSI layout, so unarchive-vm" \
+            "cannot rebuild the VM from it. See the unarchive-vm documentation" \
+            "for the manual restore procedure for pre-sidecar archives."
         exit 1
     }
 
@@ -394,10 +413,16 @@ log_msg "INFO:   Archived config: ${archived_config}"
 log_msg "INFO:   Zvols to restore:"
 for i in "${!archive_datasets[@]}"; do
     vbs_file="${archive_mount}/${original_zvols[$i]}.original_volblocksize"
+    orig_vbs="unknown"
     if is_single_node; then
-        orig_vbs=$(cat "$vbs_file")
+        if [[ -f "$vbs_file" ]]; then
+            orig_vbs=$(cat "$vbs_file")
+        fi
     else
-        orig_vbs=$(ssh root@"$storage_host" "cat '$vbs_file'")
+        orig_vbs=$(ssh root@"$storage_host" "cat '$vbs_file' 2>/dev/null")
+        if [[ -z "$orig_vbs" ]]; then
+            orig_vbs="unknown"
+        fi
     fi
     if [[ "${original_zvols[$i]}" != "${new_zvols[$i]}" ]]; then
         log_msg "INFO:     ${original_zvols[$i]} → ${new_zvols[$i]} (volblocksize: ${orig_vbs})"
@@ -426,17 +451,10 @@ if is_single_node; then
         new_zvol="${new_zvols[$i]}"
         vbs_file="${archive_mount}/${orig_zvol}.original_volblocksize"
 
-        snap=$(zfs list -H -t snapshot -o name -S creation "$arc_dataset" 2>/dev/null | head -1)
-        if [[ -z "$snap" ]]; then
-            log_msg "FATAL: No snapshots found on archive dataset: $arc_dataset"
-            exit 1
+        orig_vbs="unknown"
+        if [[ -f "$vbs_file" ]]; then
+            orig_vbs=$(cat "$vbs_file")
         fi
-
-        snap_name="@${snap##*@}"
-        orig_vbs=$(cat "$vbs_file")
-
-        parent=$(dirname "$new_zvol")
-        zfs create -p "$parent" 2>/dev/null || true
 
         log_msg "INFO:   Restoring ${new_zvol} (volblocksize: ${orig_vbs})..."
 
@@ -446,8 +464,8 @@ if is_single_node; then
             exit 1
         fi
 
-        if ! zfs send -cw "${arc_dataset}${snap_name}" \
-                | zfs receive -o volblocksize="$orig_vbs" "$new_zvol"; then
+        if ! unarchive_one_zvol "$arc_dataset" "$orig_zvol" "$new_zvol" \
+                "$archive_mount"; then
             zfslock_release "$zfslock_id"
             { log_msg "FATAL: Failed to restore ${new_zvol}"; exit 1; }
         fi
@@ -455,7 +473,7 @@ if is_single_node; then
         log_msg "INFO:   ✓ Restored: ${new_zvol}"
     done
 else
-    # Two-node: run restoration on storage host via SSH
+    # Two-node: run restoration on the storage host via the shared engine.
     if ! ssh root@"$storage_host" bash -s "$archive_mount" "$dataset_count" \
             "${archive_datasets[@]}" "${original_zvols[@]}" "${new_zvols[@]}" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
@@ -463,6 +481,13 @@ source "$mydir/bashinit"
 bashinit
 
 source_helper zfslockmanager
+
+engine=$(find_zfsutility_script archive-engine.sh)
+[[ -n "$engine" ]] || {
+    log_msg "FATAL: Could not locate archive-engine.sh on storage host"
+    exit 1
+}
+source "$engine"
 
 set -e
 archive_mount="$1"
@@ -479,14 +504,10 @@ for i in "${!archive_datasets[@]}"; do
     new_zvol="${new_zvols[$i]}"
     vbs_file="${archive_mount}/${orig_zvol}.original_volblocksize"
 
-    snap=$(zfs list -H -t snapshot -o name -S creation "$arc_dataset" 2>/dev/null | head -1)
-    [[ -n "$snap" ]] || { log_msg "FATAL: No snapshots found on ${arc_dataset}"; exit 1; }
-
-    snap_name="@${snap##*@}"
-    orig_vbs=$(cat "$vbs_file")
-
-    parent=$(dirname "$new_zvol")
-    zfs create -p "$parent" 2>/dev/null || true
+    orig_vbs="unknown"
+    if [[ -f "$vbs_file" ]]; then
+        orig_vbs=$(cat "$vbs_file")
+    fi
 
     log_msg "INFO:   Restoring ${new_zvol} (volblocksize: ${orig_vbs})..."
 
@@ -496,8 +517,12 @@ for i in "${!archive_datasets[@]}"; do
         exit 1
     fi
 
-    zfs send -cw "${arc_dataset}${snap_name}" \
-        | zfs receive -o volblocksize="$orig_vbs" "$new_zvol"
+    if ! unarchive_one_zvol "$arc_dataset" "$orig_zvol" "$new_zvol" \
+            "$archive_mount"; then
+        zfslock_release "$zfslock_id"
+        log_msg "FATAL: Failed to restore ${new_zvol}"
+        exit 1
+    fi
 
     zfslock_release "$zfslock_id"
     log_msg "INFO:   ✓ Restored: ${new_zvol}"
@@ -718,7 +743,7 @@ else
         storage="${rest_of_line%%:*}"
         storage="${storage#"${storage%%[! ]*}"}"  # drop leading spaces
         disk_part="${rest_of_line#*:}"
-        disk_tail="${disk_part#vm-${vmid}-disk-}"
+        disk_tail="${disk_part#vm-"${vmid}"-disk-}"
         disknum="${disk_tail%%[!0-9]*}"
         if is_disk_key "$key" \
             && [[ "$line" == "$key:"* && "$rest_of_line" == *:* ]] \

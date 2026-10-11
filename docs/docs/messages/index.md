@@ -443,7 +443,9 @@ Builds the two-part restore script. The messages below are emitted inside the ge
 | `WARN: Unable to evaluate retention policy fragment for '...'. Skipping.` | Evaluating the retention policy fragment failed | Pruning aborted for this dataset (return 8); check the policy syntax |
 | `INFO: Removing ... --- Offsite same-month.` / `INFO: Would remove ... --- Offsite same-month.` | Phase 0 (offsite label only): an older same-month offsite snapshot is superseded by a newer one | Real runs delete it after a press-enter prompt (when autoproceed != 'Y'); the "Would remove" form is the dry-run report |
 | `INFO: Removing ... --- Same-day.` / `INFO: Would remove ... ---Same-day.` | Phase 1: the older of two same-day snapshots is removed | Real runs delete it after a press-enter prompt; "Would remove" is the dry-run report |
-| `INFO: Removing ... --- Bucket[ (empty)].` / `INFO: Would: Remove ... --- Bucket[ (empty)].` | Phase 2: a bucket exceeds its retention count and the oldest snapshots are removed (" (empty)" marks snapshots with no written data) | Real runs delete it after a press-enter prompt; "Would: Remove" is the dry-run report |
+| `INFO: Removing ... --- Bucket[ (empty)].` / `INFO: Would: Remove ... --- Bucket[ (empty)].` | Phase 2: a bucket exceeds its retention count and the oldest snapshots are removed (" (empty)" marks snapshots with no written data) | Real runs delete it after a press-enter prompt; "Would: Remove" is the dry-run report, which applies the bucket's minimum-age gate first |
+| `INFO: Would: Keep ... --- Bucket; only ... days old (minimum age is ... days).` | Phase 2 dry run: the bucket overflow candidate is younger than the policy's minimum age, so a real run would refuse to delete it | Informational; the preview matches the refusal `zfsdelsnap` would raise (see the `zfsdelsnap` age-gate warning) |
+| `INFO: Dry-run preview: models the retention and minimum-age policy only. The checkagainst gates (last remaining common snapshot, counterpart pool(s) offline) run at deletion time and may keep snapshots this preview marks for removal.` | Emitted once per dataset at the start of a dry-run preview: the `zfscheckagainst` safety gates live inside the deletion step, which a dry run never executes | Informational; expect a real run to keep some "Would: Remove"/"Would remove" candidates those gates protect |
 | `WARN: No bucket was found for .... Skipping.` | The snapshot's bucket letter is not defined in the retention policy | Snapshot kept; add the bucket to the policy or rename the snapshot |
 | `VERB: Keeping ... — clone label or bucket 'c' is excluded from retention.` | Safety gate: clone-labeled snapshots and bucket `c` snapshots are never pruned | Informational; snapshot kept |
 | `VERB: Keeping ... — most recent snapshot in bucket '...' is protected as incremental base.` | Safety gate: the newest snapshot in each bucket is kept as the incremental send base | Informational; snapshot kept |
@@ -683,8 +685,28 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `FATAL: Proxmox config not found: ...` | `/etc/pve/qemu-server/<vmid>.conf` is missing | Check the VM ID |
 | `FATAL: Failed to discover referenced zvols` / `FATAL: No referenced zvols found for VM ...` | Disk discovery failed or found nothing | Script aborts; check the VM config |
 | `INFO: Zvols to archive:` | Pre-confirmation summary | Review, then answer the archive prompt |
+| `INFO: Snapshot to archive: ...` | The zvol's newest (or newly created retire) snapshot chosen for archiving | Informational |
+| `INFO: Archiving ... → ...` | Per-zvol transfer begins (shared engine, `lib/archive-engine.sh`) | Informational |
+| `INFO: Original volblocksize: ...` | The source zvol's volblocksize, recorded to the sidecar | Informational |
+| `INFO: Archive method: device copy (reblock to 1M)` | Unencrypted zvol: the archive zvol is created thin at `volblocksize=1M` and the snapshot device is copied onto it — the only reblocking mechanism that works, since volblocksize travels in every stream and cannot be overridden at receive | Informational |
+| `INFO: Archive method: raw send/receive (encrypted)` | Encrypted zvol: raw stream received as-is (a device copy would read plaintext); original volblocksize kept | Informational |
+| `FATAL: Failed to create parent dataset ...` | The archive parent chain could not be created | Script aborts; check the archive pool |
+| `FATAL: Failed to expose snapshot device on ...` | `snapdev=visible` could not be set on the source zvol | Script aborts; check the pool state |
+| `FATAL: Archive dataset already exists: ...` | A previous archive of this zvol already exists under the base | Destroy it first (`zfs destroy -r ...`) to re-archive |
+| `FATAL: Snapshot device did not appear: ...` / `FATAL: Archive device did not appear: ...` | The `/dev/zvol` node did not settle within the wait window | Script aborts; check udev and the pool state |
+| `FATAL: Failed to create archive zvol ...` | The thin 1M archive zvol could not be created | Script aborts; this run's datasets are rolled back |
+| `FATAL: Device copy failed (... → ...)` | The `cp --sparse=always` transfer failed | Script aborts; this run's datasets are rolled back |
+| `INFO: Verifying copy integrity (sha256)...` | Both devices are being hashed for end-to-end verification (device copies carry no stream checksums) | Informational |
+| `INFO: ✓ Copy verified (sha256 match)` | The copy matches the source snapshot | Informational |
+| `FATAL: Failed to hash devices` | A hash read failed | Script aborts; this run's datasets are rolled back |
+| `FATAL: Hash mismatch between ... and ...` | The copied archive differs from the source snapshot | The copy is corrupt; this run's datasets are rolled back — re-run after investigating |
+| `FATAL: Failed to snapshot archived zvol ...@archive` | The point-in-time marker on the archive zvol failed | Script aborts; this run's datasets are rolled back |
+| `WARN: Removed partial archive dataset ...` / `WARN: Removed created parent ...` | A failed transfer undid exactly the datasets this run created | Informational; re-run after fixing the cause |
+| `INFO: ✓ Archived: ...` | The zvol's archive completed | Informational |
+| `FATAL: Failed to archive ...` | The per-zvol transfer failed (details above) | Script aborts |
 | `INFO: --- Step 3: Verifying archive ---` | Phase milestone; the verification gate begins | Informational |
-| `FATAL: MISSING dataset: ...` | Verification found an archive dataset absent (counted; the run aborts at the end of verification) | Check the send/receive messages above |
+| `FATAL: MISSING dataset: ...` | Verification found an archive dataset absent (counted; the run aborts at the end of verification) | Check the transfer messages above |
+| `FATAL: Volblocksize mismatch on ...: expected ..., got ...` | The archived zvol's volblocksize does not match its method (1M for copy archives, the sidecar original for raw) | Treat the archive as suspect; re-archive |
 | `FATAL: Config archive missing or empty` | The archived Proxmox config is absent or zero-length | Check the config copy step |
 | `INFO: ✓ Config archive OK` | Config verification passed | Informational |
 | `FATAL: Archive verification failed (... errors). VM NOT removed.` | One or more verification errors — the removal gate blocked Step 4 | Fix the archive before rerunning; the VM is intact |
@@ -708,15 +730,24 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `FATAL: Not a ZFS dataset: ...` / `FATAL: Not a ZFS dataset on ...: ...` | The archive base is not a ZFS dataset | Use a ZFS dataset as the archive base |
 | `FATAL: SSH to ... failed` | Two-node archive discovery failed | Script aborts; check SSH |
 | `FATAL: No archived zvols found for VM ... under ...` | The archive holds nothing for this vmid | Check the vmid and archive base |
-| `FATAL: Missing sidecar files:` | The `.original_volblocksize` or `.disk_info` sidecars are absent (list printed) | Script aborts; the archive is incomplete |
+| `FATAL: Missing .disk_info sidecar file(s):` | The `.disk_info` sidecar is absent (list printed); it is load-bearing for config/iSCSI rebuild | Script aborts; the archive is incomplete |
+| `FATAL: Every disk in an archive must carry a .disk_info sidecar. An archive without them predates the sidecar format — ...` | Continuation of the missing-sidecar FATAL: an archive with no sidecars anywhere predates the sidecar format, so there is no recorded disk key, config text, or iSCSI layout to rebuild from | Script aborts; pre-sidecar archives need the manual restore procedure (see the unarchive-vm documentation) |
+| `WARN: Missing volblocksize sidecar (informational): ...` | No `.original_volblocksize` sidecar; harmless for raw-method restores (the stream carries volblocksize) | Informational unless the archive's method is copy |
 | `FATAL: Destination zvols already exist:` | Target zvol collision (list printed) | Script aborts; remove the zvols or use a new vmid |
 | `FATAL: Archived config not found: ...` / `FATAL: Archived config not found on ...: ...` | The archived Proxmox config is missing | Script aborts; check the archive |
 | `FATAL: Destination Proxmox config already exists: ...` | Destination config collision | Script aborts; use a new vmid |
 | `INFO: Zvols to restore:` | Pre-confirmation summary (with volblocksize and rename mapping) | Review, then answer the restore prompt |
 | `INFO: --- Step 1: Restoring zvols ---` | Phase milestone | Informational |
-| `FATAL: No snapshots found on archive dataset: ...` | The archive dataset has no snapshot to send | Script aborts; the archive is damaged |
+| `INFO: Restore method: copy (reblock to ...)` | The destination zvol is created thin at the sidecar's original volblocksize and the archive snapshot is device-copied onto it | Informational |
+| `INFO: Restore method: raw send/receive` | The archive is streamed back as-is (encrypted or legacy); the stream carries volblocksize | Informational |
+| `FATAL: Unknown archive method '...' in ...` | The `.disk_info` `METHOD=` marker is neither `copy` nor `raw` | Script aborts; the archive is damaged |
+| `FATAL: Missing volblocksize sidecar for copy-method restore:` | A copy-method restore needs the original volblocksize to create the destination zvol | Script aborts; restore the sidecar from backup or re-archive |
+| `FATAL: Snapshot device did not appear: ...` / `FATAL: Restore device did not appear: ...` | The `/dev/zvol` node did not settle within the wait window | Script aborts; check udev and the pool state |
+| `FATAL: Failed to create zvol ...` | The destination zvol could not be created | Script aborts; rolled back |
+| Copy-integrity messages | `INFO: Verifying copy integrity (sha256)...`, `INFO: ✓ Copy verified (sha256 match)`, and the hash FATAL/WARN rollback messages are shared with [archive-vm](#archive-vm) via the transfer engine | See archive-vm |
+| `FATAL: No snapshots found on archive dataset: ...` | The archive dataset has no snapshot to restore from | Script aborts; the archive is damaged |
 | `FATAL: Could not acquire write lock on ...` | The destination zvol's write lock is unavailable | Script aborts; resolve the lock |
-| `FATAL: Failed to restore ...` / `FATAL: Zvol restoration failed on ...` | The send/receive into the destination zvol failed (local or remote) | Script aborts; check space and the messages above |
+| `FATAL: Failed to restore ...` / `FATAL: Zvol restoration failed on ...` | The per-zvol restore failed under either method (local or remote) | Script aborts; check space and the messages above |
 | `INFO: --- Step 2: Rebuilding iSCSI infrastructure ---` | Phase milestone (two-node only) | Informational |
 | `FATAL: Cannot map pool ... to target` | No iSCSI target mapping for a restored zvol's pool | Script aborts; fix the node config mapping |
 | `FATAL: iSCSI reconstruction failed on ...` | The remote iSCSI rebuild failed | Script aborts; see the remote messages |
@@ -933,6 +964,7 @@ from the last phase the state file records.
 | `INFO: ... — still pinned (...): cloned by ...; left in place.` | Another clone keeps the snapshot alive | Informational; sever or destroy those clones to release the space |
 | `INFO: ... — unpinned but held (... stays pinned); release the hold(s) to make it destroyable:` | No clone references it, but hold tags block destruction (each tag is listed on its own `hold:` line) | Release the listed holds to make it destroyable |
 | `INFO: ... — unpinned: no clones, no holds; destroying it releases ....` | The origin is destroyable and its reclaimable size is named | Answer the destroy offer |
+| `INFO: 0B is expected, not a defect: a snapshot's 'used' counts only its unique data, and every block here is still shared with the live dataset or its other snapshots. Destroying removes this snapshot's reference; the shared space returns as those references are destroyed.` | Continuation of the `releases 0B.` verdict: ZFS snapshot accounting counts a snapshot's unique delta only, so a fully-shared origin releases nothing immediately — normal after a severance whose blocks the live dataset still references | Informational; destroy anyway to remove the snapshot's reference, or keep it |
 | `Destroy ...?` / `Type '...' to destroy it: ` | Typed destruction offer: a declined offer, an unreadable confirmation, or a non-matching answer leaves the snapshot untouched (`INFO: Left in place.` — with the reason) | y plus the exact snapshot name destroys it under a write lock, with the clone/hold checks repeated under the lock |
 | `INFO: ✓ destroyed — its space is released.` | The offered origin snapshot was destroyed | Informational — the pinned space came back |
 | `WARN: Could not lock ...; ... left in place.` / `WARN: ... is cloned again (...); left in place.` / `WARN: ... is held again; left in place.` / `WARN: The storage-side destroy of ... could not run; left in place.` | The under-lock re-checks (or the two-node arm) refused the destroy | The snapshot is untouched; retry later |
@@ -1865,7 +1897,7 @@ GUI Disks tab SMART surface tests, with state persisted to disk.
 
 ### [scrub_manager](../commands-and-modules/python-modules.md#scrub_managerpy)
 
-GUI scrub engine: queue/state machine for start/pause/resume/stop, backup-coordinated pause/resume, external-scrub adoption, and systemd timer toggles.
+GUI scrub engine: queue/state machine for start/pause/resume/stop, backup-coordinated pause/resume, external-scrub adoption, and systemd timer toggles. All messages from this module are also appended to the persistent event log `/var/log/zfsutilities/scrub-manager.log` regardless of which process issued them.
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
@@ -1887,10 +1919,13 @@ GUI scrub engine: queue/state machine for start/pause/resume/stop, backup-coordi
 | `WARN: Scrub on '...' is in unexpected state ...; leaving it alone` | State not in the expected set | Left as-is on the system |
 | `INFO: No paused scrubs required resuming (handled: ...)` | Resume finished with nothing to do | Informational |
 | `INFO: Scrub target changed from ... to ...` | The simultaneous-scrub target was reconfigured and persisted | The queue reconciles |
+| `INFO: Scrub on '...' paused and requeued as pending (active scrubs at target)` | Displacement — active scrubs exceeded the target, so the lowest-priority live scrub was paused and its pool requeued | Resumes from existing progress when a slot frees |
 | `INFO: Scrub queue order updated` | The user's scrub priority order was persisted | Informational |
 | `INFO: Pools added to scrub queue: ...` / `INFO: Pools removed from scrub queue: ...` | Start/stop enqueued/cleared pools (paused re-queued, finished cleared) | The tick loop starts/stops them |
 | `WARN: Giving up on scrub for '...' after ... failed start attempts` | Three consecutive failed start/resume attempts | Pool dropped to given-up for this run; investigate |
 | `VERB: External scrub detected on '...'` | The queue observed a scrub it did not start (once per episode) | Pool adopted into the active bucket |
+| `VERB: External pause detected on '...'` | A pool's scrub was paused outside the queue (tracked active pool, or an untracked paused pool adopted) — treated as user-paused | Pool moved to the paused bucket; no auto-resume |
+| `VERB: External resume detected on '...'` | A paused pool's scrub was resumed outside the queue | Pool moved back to the active bucket |
 | `INFO: Scrub finished on '...'` / `Scrub canceled on '...'` / `Scrub completed on '...'` | Active pool reached FINISHED/CANCELED, or state NONE after the grace period | Moved to finished bucket |
 | `INFO: Paused scrub finished on '...'` / `Paused scrub canceled on '...'` | A paused pool shows FINISHED/CANCELED | Cleared from paused; added to finished |
 | `INFO: New scrub detected on '...'` | A finished-bucket pool is SCANNING again | Moved back to active |
@@ -2456,6 +2491,15 @@ Writes the `/etc/cron.d` file from the active profiles.
 | -------------- | ------- | -------- |
 | `VERB: Cron file updated: ...` | The cron file was successfully rewritten | Informational |
 | `FATAL: Could not write cron file ...: ...` | OSError writing the cron file | Exception re-raised; the caller shows an error dialog |
+
+### [logrotate_manager](../commands-and-modules/python-modules.md#logrotate_managerpy)
+
+Writes the logrotate drop-in that rotates the persistent cron and scrub-manager logs.
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `VERB: Logrotate file updated: ...` | The logrotate drop-in was successfully (re)written | Informational |
+| `FATAL: Could not write logrotate file ...: ...` | OSError writing the drop-in | Exception re-raised; the caller shows an error dialog |
 
 ### [alignment_dialogs](../commands-and-modules/python-modules.md#alignment_dialogspy)
 

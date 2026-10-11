@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.122.0
+
+*Released 2026-10-11*
+
+### Added
+
+- **Shared archive transfer engine (`lib/archive-engine.sh`)** — archive-vm
+  and unarchive-vm now source one engine on both node modes, so single-node
+  and two-node archives run literally the same transfer logic. The two-node
+  SSH helper receives the Proxmox config base64-encoded (raw multi-line
+  text cannot survive the ssh argv) and appends it to the sidecar the
+  engine starts. Archive sidecars gain a `METHOD=` marker (`copy|raw`);
+  legacy sidecars default to raw.
+- **cron.log lifecycle** — a managed logrotate drop-in
+  (`/etc/logrotate.d/zfsutilities`, weekly / 8 rotations / 100M / compress)
+  bounds cron.log and the scrub-manager log; cron activity lines are
+  timestamped as they are written; the Logs viewer reads gzip-rotated
+  generations and interleaves them in order. `uninstall-zfsutilities`
+  detects and removes the drop-in.
+- **Scrub-manager event log** — every scrub-engine message (including
+  messages routed through alternate log functions) appends to
+  `/var/log/zfsutilities/scrub-manager.log`, so queue events can be
+  reconstructed after the fact regardless of which process produced them.
+  The path is configuration-driven through the new `paths` section.
+- **`paths` config section (schema v27)** — installation-specific file
+  paths (`cron_log`, `scrub_manager_log`, `logrotate_file`) live in
+  config.json instead of code, seeded by migration 26→27 and by runtime
+  lazy-seeding as a backstop; user-set values always win and
+  `ZFSUTILITIES_*` environment overrides are honored.
+
+### Fixed
+
+- **Scrub queue "paused" reporting** — the paused bucket now holds only
+  user-intentional pauses (Pause button, external `zpool scrub -p`,
+  backup-step holds); a scrub displaced to honor the queue target is
+  parked as pending with its live scrub paused, and legacy non-user
+  paused entries are migrated on load. Live stewie diagnosis showed
+  displacement events displayed as "paused", misrepresenting queue state.
+- **archive-vm receive failures on current OpenZFS** — the old
+  `zfs send -cw | zfs receive -o volblocksize=1M` path is refused by
+  modern userland (volblocksize is creation-only and cannot be overridden
+  at receive). Unencrypted zvols are now archived by creating the
+  destination at `volblocksize=1M` and device-copying (sha256-verified,
+  since a device copy has no stream checksums); encrypted zvols raw-send
+  as-is (a device copy would read plaintext and break encryption
+  end-to-end). unarchive-vm reblocks copy-method archives back to the
+  sidecar's original volblocksize the same way.
+- **`zfsretain` dry-run fidelity** — the preview now applies the bucket's
+  minimum-age gate (`Would: Keep` for under-age candidates, matching the
+  real refusal) and discloses up front that the `zfscheckagainst` gates
+  (last remaining common snapshot, counterpart pools offline) run at
+  deletion time and may keep candidates the preview marks for removal.
+- **Pre-sidecar archive diagnosis** — archives that predate the sidecar
+  format FATAL with a named cause and a pointer to the documented manual
+  restore procedure instead of a bare missing-file list.
+- **`sever-vm-clone` origin-report "releases 0B"** — a fully-shared origin
+  (every block still referenced by the live dataset or its other
+  snapshots) now prints an explanation of ZFS snapshot accounting instead
+  of a bare 0B that read like a defect after a multi-GiB severance.
+
+### Changed
+
+- **Snapshot-age handling shared across retention scripts** —
+  `snapshot_age_days` (from `zfsdelsnap`) is used by zfsdelsnap,
+  zfsmassdelsnaps, and zfsretain; an unreadable creation property yields
+  "age unknown" (−1) that no longer aborts the minimum-age gate arithmetic
+  and displays as 0 days in listings.
+- **Performance-tab view radio renamed** — "Alignment" → "Blocksize
+  Alignment" (the Disks-page switcher was removed in 0.114.0; this
+  completes the disambiguation).
+- **Schedule-page rows render uniformly.**
+
 ## 0.121.3
 
 *Released 2026-10-10*

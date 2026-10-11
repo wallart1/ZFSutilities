@@ -20,6 +20,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`installer-lib.sh`](#installer-libsh)
 - [`iscsi-lib.sh`](#iscsi-libsh)
 - [`node-lib.sh`](#node-libsh)
+- [`archive-engine.sh`](#archive-enginesh)
 - [`transfer-lib.sh`](#transfer-libsh)
 - [`zfsconfig`](#zfsconfig)
 - [`zfsbuildfsarray`](#zfsbuildfsarray)
@@ -540,6 +541,58 @@ for the full configuration reference.
 | Node config   | Single-node vs two-node detection and host resolution.    | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 
 **Return codes:** none (sourced module); fatal if the node configuration is missing.
+
+---
+
+### `archive-engine.sh`
+
+Shared archive/restore transfer engine for
+[`archive-vm`](commands.md#archive-vm) and
+[`unarchive-vm`](commands.md#unarchive-vm). Sourced by both scripts on the
+compute host AND by their two-node SSH helpers on the storage host, so both
+node modes run literally the same transfer logic.
+
+```bash
+ARCHIVE_ENGINE_LIB="${ARCHIVE_ENGINE_LIB:-$(find_zfsutility_script archive-engine.sh)}"
+source "$ARCHIVE_ENGINE_LIB"
+```
+
+**Volblocksize policy:** volblocksize is creation-only and always travels
+inside a zfs send stream; overriding it at receive time is refused by current
+OpenZFS userland (verified empirically on 2.2.2 and 2.4.4-pve1) and is
+meaningless for raw streams. Reblocking therefore only happens by creating the
+destination zvol with the target volblocksize and device-copying onto it:
+unencrypted zvols are archived at `volblocksize=1M` by device copy
+(`cp --sparse=always`, sha256-verified, `snapdev=visible` for the snapshot
+device, rolled back on failure); encrypted zvols use raw `send -cw` received
+as-is (a device copy would read plaintext). Restores branch on the archive's
+recorded `METHOD=copy|raw` marker; unmarked legacy archives restore via raw
+send/receive.
+
+**Functions:**
+
+| Function                          | Purpose                                                              |
+| --------------------------------- | -------------------------------------------------------------------- |
+| `archive_dev_wait(<dev>)`         | Bounded wait for a `/dev/zvol` node to settle (udev).                |
+| `archive_hash_verify(<a>, <b>)`   | sha256 both devices and compare; FATAL on mismatch.                  |
+| `archive_create_parents(<parent>, <var>)` | Create the parent chain only if absent; sets `<var>` to the shallowest created level for exact rollback. |
+| `archive_rollback_created(...)`   | Destroy exactly the datasets this run created.                       |
+| `archive_one_zvol(...)`           | Archive one zvol (copy or raw per encryption); writes the `.original_volblocksize` and `METHOD=` sidecar lines. |
+| `archive_method_of(<file>)`       | Read the `METHOD=` marker (defaults to `raw` for legacy archives).   |
+| `unarchive_one_zvol(...)`         | Restore one archived zvol per its method.                            |
+| `unarchive_rollback_created(...)` | Restore-side mirror of the rollback helper.                          |
+
+**Test hooks:** `ARCHIVE_VM_TEST_NO_ROOT` / `UNARCHIVE_VM_TEST_NO_ROOT` also
+skip the device-node wait (the harnesses have no `/dev/zvol` tree).
+
+**Called modules:**
+
+| Module       | Purpose                       |
+| ------------ | ----------------------------- |
+| `bashinit`   | `log_msg` and `append_exit_trap` (snapdev kill-safety revert) |
+
+**Return codes:** `archive_one_zvol` / `unarchive_one_zvol` return 0 on
+success and 1 after logging the failure reason; callers decide the exit.
 
 ---
 
@@ -1092,6 +1145,12 @@ delsnap <snapshot> [minage] [releaseholds]
 The holds released are controlled by `$releaseholds_tags` (default
 `offsite-*`). Any remaining holds cause the snapshot to be skipped.
 
+The module also exports `snapshot_age_days <snapshot>`, the shared whole-day
+age helper behind the `$2` minimum-age gate. [`zfsretain`](#zfsretain)'s
+dry-run preview and [`zfsmassdelsnaps`](commands.md#zfsmassdelsnaps)'s age
+column call it so all three report the same ages; it prints `-1` when the
+creation property cannot be read.
+
 **Globals:**
 
 | Variable        | Role                                               | Reference                                                                     |
@@ -1498,7 +1557,18 @@ Applies retention policies to a pool or dataset in three phases:
    snapshots (`written=0`) are logged as `(empty)` but are not preferred over
    older snapshots with unique data. When `retain > 0`, the most recent snapshot
    in each bucket is protected (incremental base). When `retain = 0`, the most
-   recent is eligible for deletion like the rest.
+   recent is eligible for deletion like the rest. In dry-run mode this phase
+   applies the bucket's `minage` gate via `snapshot_age_days` (from
+   `zfsdelsnap`): candidates younger than the minimum age are reported as
+   `Would: Keep` instead of `Would: Remove`, matching the refusal `zfsdelsnap`
+   would raise in a real run.
+
+!!! note "Dry-run previews do not model the checkagainst gates"
+    A dry-run preview reports what the retention and minimum-age policy alone
+    would do, and says so up front. The `zfscheckagainst` gates (last
+    remaining common snapshot with a counterpart dataset, counterpart pools
+    unreachable) run inside the deletion step in a real run, so a candidate
+    the preview marks `Would: Remove` can still be kept by those gates.
 
 !!! note "Clone snapshots are protected"
     Snapshots with label `clone` or bucket `c` are **never touched** by retention. They are skipped in all phases because clone-origin snapshots cannot be deleted while dependent clones exist.

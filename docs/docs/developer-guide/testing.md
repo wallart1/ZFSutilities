@@ -171,7 +171,7 @@ documentation-integrity suite. A scheduled nightly job runs
 
 | Suite | What it covers |
 |-------|----------------|
-| `test-archive-vm` | `archive-vm` retire-snapshot selection, two-node target/LUN resolution encoding (separate ssh argv entries, since IQNs contain colons), and invocation (single-node and two-node) |
+| `test-archive-vm` | `archive-vm` retire-snapshot selection, two-node target/LUN resolution encoding (separate ssh argv entries, since IQNs contain colons), and invocation (single-node and two-node); the hybrid transfer engine's copy path (thin `create -V` at 1M, snapshot-device `cp --sparse=always`, sha256 verify, `@archive` snapshot, snapdev expose/revert), the encrypted raw path, hash-mismatch and pre-existing-dataset aborts with parent-chain rollback, the base64 config-content handoff to the two-node heredoc, and a static no-`receive -o volblocksize` guard |
 | `test-attach-vm-disk` | `attach-vm-disk` zvol-path parsing and validation |
 | `test-bashinit` | `bashinit` helpers: `log_msg` survives a `cd` after relative-path invocation; session-log selection when the log file is writable vs unwritable; input-hold marker emission and uuid reuse for `ask_yn`/`ask_line`; `input_hold_env_prefix` expansion for `ssh -t` delegation |
 | `test-check-prerequisites` | `check-prerequisites` tool version checks (mkdocs major-version gating) |
@@ -210,7 +210,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-startdocserver` | Server health checks, PID discovery, CWD mismatch, restart logic, static-site refresh on start |
 | `test-switch-version` | Version switching, production wiring, prior-version uninstall, rollback, `--uninstall`, `--list`, and obsolete systemd artifact cleanup |
 | `test-test-lib` | Harness assertion helpers: pass/fail/skip counter semantics and golden assertions |
-| `test-unarchive-vm` | `--new-vmid` rewriting, UUID regeneration, conflict handling |
+| `test-unarchive-vm` | `--new-vmid` rewriting, UUID regeneration, conflict handling; METHOD-branching restores (copy reblock via sidecar volblocksize vs raw/legacy plain receive), sidecar policy (missing `.disk_info` fatal, missing volblocksize sidecar warn for raw / fatal for copy), unknown-method rejection |
 | `test-uninstall-some-versions` | Bulk version uninstall from an explicit list file |
 | `test-uninstall-version` | Single-version uninstall prompting with `-y`/`--yes` |
 | `test-uninstall-zfsutilities` | Full uninstall: preserve-by-default, `--purge`, `--dry-run` |
@@ -369,7 +369,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_command_builders` | Rsync/ZFS command builders, retention step descriptions, endpoint parsing, dry-run assignments, host detection |
 | `test_config_core` | JSON config load/save and generic state helpers |
 | `test_config_migrations` | Schema migrations 1→26, idempotency, missing migration errors |
-| `test_cron_manager` | Cron line generation, condition support, human-readable interpretation, next-run computation |
+| `test_cron_manager` | Cron line generation, condition support, configured cron-log path, timestamp-stamped sink, human-readable interpretation, next-run computation |
 | `test_dashboard_page` | Dashboard layout, task handling, pool/VM/scrub/history queries, warning indicators (incl. SSD/NVMe wear), surface-test running-task cancel, async refresh loading state |
 | `test_dataset_actions` | Datasets tab actions (mount/unmount/destroy/holds) driven through BackupRunner |
 | `test_datasets_page` | Datasets tab UI, dataset tree, and mounted-state refresh |
@@ -394,9 +394,10 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_legacy_retention` | Legacy `zfsretainpol-*` file parsing and pool scanning |
 | `test_log_index` | Persistent session-log metadata index |
 | `test_logging_config` | Message levels, GUI sink, session log env helpers, and session log truncation |
-| `test_logs_page` | Log list scanning, filtering, deletion, status parsing, tail-only viewer for large files, column-header label tooltips, saved font-scale restore, and pop-out reparenting |
+| `test_logrotate_manager` | Logrotate drop-in content (per-log stanzas, rotation policy, configured paths) and write behaviour incl. FATAL-on-failure |
+| `test_logs_page` | Log list scanning, filtering, deletion, status parsing, cron-log rows incl. rotated copies, gzip decompression in the viewer, tail-only viewer for large files, column-header label tooltips, saved font-scale restore, and pop-out reparenting |
 | `test_main` | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, initial dashboard refresh |
-| `test_memory_page` | Performance tab: Live Charts / Alignment view switcher, charts value grids/notes/charts, device-table column-width persistence binding, refresh-interval persistence |
+| `test_memory_page` | Performance tab: Live Charts / Blocksize Alignment view switcher, charts value grids/notes/charts, device-table column-width persistence binding, refresh-interval persistence |
 | `test_migration` | One-time state-file migration helper |
 | `test_node_config` | Two-node configuration loading and resolution |
 | `test_offsite_page` | Offsite tab UI, offsite pool detection, and config helpers |
@@ -427,7 +428,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_runner_factory` | Runner factory wiring for page runners |
 | `test_runner_shim` | `runner.py` deprecation shim — legacy argument translation to pytest and deprecation notice |
 | `test_schedule_page` | Schedule page path resolution, dirty tracking, condition field, run-now child-watch handling, fatal-fallback logging, async refresh, and next-run caching |
-| `test_scrub_manager` | Scrub state parsing, queue/target management, priority ordering, tick logic, systemd timers, ZFS-native in-progress operation parsing |
+| `test_scrub_manager` | Scrub state parsing, queue/target management, priority ordering, tick logic, systemd timers, ZFS-native in-progress operation parsing, persistent event log (config-driven path) |
 | `test_scrub_page` | Scrub page store schema, flicker-free refresh logic, and drag-and-drop priority ordering |
 | `test_session_log` | Per-run session log helpers (create, append, trailer, size cap) |
 | `test_workload_profiles` | Workload profile property filtering, profile matching, apply plan, `zfs set` command building, warnings |

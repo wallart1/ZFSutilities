@@ -360,10 +360,12 @@ def create_memory_page(app):
     controls.pack_start(app._memory_ref_spin, False, False, 0)
     box.pack_start(controls, False, False, 0)
 
-    # --- View switcher: Live Charts / Alignment ---
+    # --- View switcher: Live Charts / Blocksize Alignment ---
     view_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
     charts_radio = Gtk.RadioButton.new_with_label_from_widget(None, "Live Charts")
-    alignment_radio = Gtk.RadioButton.new_with_label_from_widget(charts_radio, "Alignment")
+    alignment_radio = Gtk.RadioButton.new_with_label_from_widget(
+        charts_radio, "Blocksize Alignment"
+    )
     app._memory_view_radios = {"charts": charts_radio, "alignment": alignment_radio}
     for radio in (charts_radio, alignment_radio):
         radio.connect("toggled", _on_memory_view_radio_toggled, app)

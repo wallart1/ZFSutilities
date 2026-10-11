@@ -3,10 +3,15 @@ Logs tab UI — browse, view, and prune session log files.
 
 Log files live in /var/log/zfsutilities/sessions/ and are named:
     YYYY-MM-DD_HH-MM-SS_<type>_<name>.log
+
+The persistent cron log and its logrotate copies (plain or compressed) in
+the log directory are listed alongside session logs as type "cron".
 """
 
+import gzip
 import os
 import re
+from datetime import datetime
 
 import gi
 
@@ -18,6 +23,7 @@ from config_core import (
     SESSION_LOG_DIR,
     get_history_retention_days,
     get_log_retention_days,
+    get_paths_config,
     get_ui_state,
     prune_old_logs,
     save_log_retention_days,
@@ -60,6 +66,11 @@ MAX_VIEWER_FULL_READ_BYTES = 1024 * 1024  # 1 MB
 # tailing a running log.  Older text is dropped to prevent unbounded memory
 # growth when a subprocess logs continuously.
 MAX_VIEWER_BUFFER_CHARS = 2 * 1024 * 1024  # 2 MB
+
+# Hard cap on decompressed size when loading a gzip-compressed log rotation.
+# Generous for a rotated weekly log, but a corrupt or hostile archive cannot
+# exhaust GUI memory.
+MAX_GZIP_DECOMPRESSED_BYTES = 256 * 1024 * 1024  # 256 MB
 
 
 def _last_pv_line(text):
@@ -201,6 +212,37 @@ def _scan_logs(app):
     index.remove_missing(current_paths)
     index.save()
 
+    rows.extend(_scan_cron_log_rows(app))
+
+    return rows
+
+
+def _scan_cron_log_rows(app):
+    """Return rows for the cron log and its logrotate copies.
+
+    Unlike session logs these have no filename-encoded start time and no
+    structured trailer, so Date/Time is the file's last-write time and
+    Status is blank.  Each rotation (cron.log.1, cron.log.1.gz, ...) is a
+    row of its own.  They bypass the session-log index on purpose.
+    """
+    rows = []
+    cron_log = get_paths_config(app.config, persist=False)["cron_log"]
+    directory, base = os.path.split(cron_log)
+    if not os.path.isdir(directory):
+        return rows
+    prefix = base + "."
+    for name in os.listdir(directory):
+        path = os.path.join(directory, name)
+        if name != base and not name.startswith(prefix):
+            continue
+        if not os.path.isfile(path):
+            continue
+        try:
+            dt = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M:%S")
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        rows.append((dt, "cron", name, "—", _format_size(size), "", "", path))
     return rows
 
 
@@ -276,7 +318,7 @@ def create_logs_page(app):
 
     cols = [
         (COL_DATETIME, "Date/Time", 160, "Session log timestamp"),
-        (COL_TYPE, "Type", 70, "Log type: backup, offsite, restore, prune, dataset, or gui"),
+        (COL_TYPE, "Type", 70, "Log type: backup, offsite, restore, prune, dataset, gui, or cron"),
         (COL_NAME, "Name", 140, "Name of the operation or profile"),
         (COL_STATUS, "Status", 70, "Completion status"),
         (COL_SIZE, "Log Size", 65, "Size of the log file on disk"),
@@ -718,10 +760,55 @@ def _on_logs_selection_changed(selection, app):
     button.set_sensitive(bool(pathlist))
 
 
+def _load_gzip_into_viewer(app, path):
+    """Load a gzip-compressed log rotation into the viewer.
+
+    gzip streams cannot be seeked, so the chunked Show More / Load Full
+    machinery does not apply: the file is decompressed up front (bounded by
+    a hard cap) and, past the viewer threshold, only the tail is kept with
+    the same note style used for plain files.
+    """
+    app.logs_show_more_btn.hide()
+    app.logs_load_full_btn.hide()
+    try:
+        with gzip.open(path, "rb") as fh:
+            data = fh.read(MAX_GZIP_DECOMPRESSED_BYTES + 1)
+    except (OSError, EOFError) as e:
+        log_msg(f"WARN: Could not read compressed log file: {e}")
+        return
+
+    buf = app.logs_text.get_buffer()
+    if len(data) <= MAX_VIEWER_FULL_READ_BYTES:
+        text = data.decode("utf-8", errors="replace")
+        buf.set_text("")
+    else:
+        tail = data[-MAX_VIEWER_FULL_READ_BYTES:]
+        newline = tail.find(b"\n")
+        if newline != -1:
+            tail = tail[newline + 1 :]  # discard the likely-partial first line
+        text = tail.decode("utf-8", errors="replace")
+        header = (
+            f"[Log decompresses to {_format_size(len(data))}; showing last "
+            f"{_format_size(MAX_VIEWER_FULL_READ_BYTES)}.]\n"
+        )
+        buf.set_text(header)
+
+    filtered = _filter_log_text(text, app.logs_viewer_level)
+    if filtered:
+        if getattr(app, "logs_short_prefix", True):
+            filtered = format_log_text_short(filtered)
+        end_iter = buf.get_end_iter()
+        buf.insert(end_iter, filtered)
+
+
 def _load_log_into_viewer(app):
     """Load the current log file into the viewer, tail-first if it is huge."""
     path = app._logs_current_path
     if not path or not os.path.isfile(path):
+        return
+
+    if path.endswith(".gz"):
+        _load_gzip_into_viewer(app, path)
         return
 
     size = app._logs_file_size

@@ -9,6 +9,7 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
+import config_core
 import config_migrations
 
 
@@ -180,8 +181,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_26(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 26)
+    def test_config_version_is_27(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 27)
 
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
@@ -358,6 +359,36 @@ class TestIndividualMigrations(unittest.TestCase):
         config = {"config_version": 25}
         result1 = config_migrations._migrate_25_to_26(dict(config))
         result2 = config_migrations._migrate_25_to_26(result1)
+        self.assertEqual(result1, result2)
+
+    def test_migrate_26_to_27_seeds_paths_section(self):
+        config = {"config_version": 26}
+        result = config_migrations._migrate_26_to_27(config)
+        self.assertEqual(result["config_version"], 27)
+        self.assertEqual(
+            result["paths"]["cron_log"], os.path.join(config_core.get_log_dir(), "cron.log")
+        )
+        self.assertEqual(
+            result["paths"]["scrub_manager_log"], config_core.get_scrub_manager_log_path()
+        )
+        self.assertEqual(result["paths"]["logrotate_file"], config_core.get_logrotate_file_path())
+
+    def test_migrate_26_to_27_preserves_user_values(self):
+        config = {
+            "config_version": 26,
+            "paths": {"cron_log": "/srv/custom/cron.log"},
+        }
+        result = config_migrations._migrate_26_to_27(config)
+        self.assertEqual(result["config_version"], 27)
+        self.assertEqual(result["paths"]["cron_log"], "/srv/custom/cron.log")
+        # Keys the user did not set still seed.
+        self.assertIn("scrub_manager_log", result["paths"])
+        self.assertIn("logrotate_file", result["paths"])
+
+    def test_migrate_26_to_27_is_idempotent(self):
+        config = {"config_version": 26}
+        result1 = config_migrations._migrate_26_to_27(dict(config))
+        result2 = config_migrations._migrate_26_to_27(result1)
         self.assertEqual(result1, result2)
 
     def test_migrate_15_to_16_adds_prune_pools_order(self):
@@ -607,9 +638,16 @@ class TestRunMigrations(unittest.TestCase):
             "offsite": {"offsite_pools": ["z40tb"]},
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 26)
+        self.assertEqual(result["config_version"], 27)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))
         self.assertEqual(result["dashboard"]["refresh_seconds"], 30)
+        # The v27 migration seeds the file-paths section through the whole
+        # chain, not just when starting from version 26.
+        self.assertEqual(
+            result["paths"]["cron_log"], os.path.join(config_core.get_log_dir(), "cron.log")
+        )
+        self.assertIn("scrub_manager_log", result["paths"])
+        self.assertIn("logrotate_file", result["paths"])
         row = result["checkagainst"]["user_entries"][0]
         self.assertEqual(row["source_root"], "tank/a")
         self.assertEqual(row["dest_root"], "backup/a/tank/a")
@@ -635,7 +673,7 @@ class TestRunMigrations(unittest.TestCase):
             },
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 26)
+        self.assertEqual(result["config_version"], 27)
         self.assertIn("retention_verb_messages", result)
         self.assertIs(result["retention_verb_messages"], False)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))

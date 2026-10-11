@@ -83,6 +83,16 @@ function retain {
     unset _retention_fragment
     bktlen=${#bktname[@]}
 
+    # The preview below reports what the retention and minimum-age policy
+    # alone would do; the checkagainst safety gates run inside the deletion
+    # step in a real run and can keep candidates the preview marks removable.
+    if [[ $dryrun != "N" ]]; then
+        log_msg "INFO: Dry-run preview: models the retention and minimum-age policy" \
+            "only. The checkagainst gates (last remaining common snapshot," \
+            "counterpart pool(s) offline) run at deletion time and may keep" \
+            "snapshots this preview marks for removal."
+    fi
+
     local set_save=$-
     local -i i_save=$i j_save=$j k_save=$k l_save=$l
     local -i i j k l
@@ -393,7 +403,19 @@ function retain {
                     log_msg "INFO: Removing ${_snap} --- Bucket${_tag}."
                     delsnap "${_snap}" "${minage[$j]:-0}" $relholds
                 else
-                    log_msg "INFO: Would: Remove ${_snap} --- Bucket${_tag}."
+                    # Mirror delsnap's minimum-age gate so the dry-run preview
+                    # reports the same deletions a real run would make.
+                    _minage="${minage[$j]:-0}"
+                    _age=-1
+                    if [[ $_minage -gt 0 ]]; then
+                        _age=$(snapshot_age_days "${_snap}")
+                    fi
+                    if [[ $_age -ge 0 && $_age -lt $_minage ]]; then
+                        log_msg "INFO: Would: Keep ${_snap} --- Bucket; only ${_age}" \
+                            "days old (minimum age is ${_minage} days)."
+                    else
+                        log_msg "INFO: Would: Remove ${_snap} --- Bucket${_tag}."
+                    fi
                 fi
             done
 

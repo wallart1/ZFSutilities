@@ -1692,6 +1692,7 @@ day (see `snapshot_naming.py`).
 | ----------------- | ----------------------------------------------- |
 | `profile_manager` | Profile CRUD                                    |
 | `cron_manager`    | Cron line generation/interpretation             |
+| `logrotate_manager` | Logrotate drop-in refresh on schedule save   |
 | `snapshot_naming` | Bucket letter for the next run's UTC instant    |
 | `profile_dialogs` | Add/recall profile dialogs                      |
 | `gui_helpers`     | Widget helpers                                  |
@@ -1702,7 +1703,10 @@ day (see `snapshot_naming.py`).
 ### `logs_page.py`
 
 Logs tab: scan session log files, show metadata, tail running logs, filter by
-message level, and display the success-rate summary.
+message level, and display the success-rate summary. The persistent cron log
+and its logrotate copies (plain or gzip-compressed) are listed alongside
+session logs as type `cron`; compressed rotations are decompressed directly
+in the viewer.
 
 **Key functions:**
 
@@ -1710,8 +1714,10 @@ message level, and display the success-rate summary.
 | ------------------------------ | -------------------------------------------- |
 | `create_logs_page()`           | Build the Logs tab widget                    |
 | `_sync_log_list()`             | Rescan `SESSION_LOG_DIR` and update the list |
+| `_scan_cron_log_rows()`        | List the cron log and its rotations as `cron` rows |
 | `_tail_log_file()`             | Append new lines from a running log          |
 | `_load_log_into_viewer()`      | Load selected log, tail-first if large       |
+| `_load_gzip_into_viewer()`     | Decompress a `.gz` rotation into the viewer (bounded, tail-first past the threshold) |
 | `_on_load_full_log_clicked()`  | Switch from tail to full-file mode           |
 | `_on_prune_old()`              | Delete logs older than retention             |
 | `_update_success_rate_label()` | Show recent success rate from history        |
@@ -1722,7 +1728,7 @@ message level, and display the success-rate summary.
 | ---------------- | ----------------------------------- |
 | `log_index`      | Persistent log metadata             |
 | `backup_history` | Success-rate calculation            |
-| `config_core`    | Session log dir, retention settings |
+| `config_core`    | Session log dir, retention settings, configured file paths |
 | `logging_config` | Message levels and filtering        |
 | `gui_helpers`    | Text-view search, popout window     |
 
@@ -1737,7 +1743,7 @@ message level, and display the success-rate summary.
 
 ### `memory_page.py`
 
-Performance tab: two views behind a **Live Charts / Alignment** radio
+Performance tab: two views behind a **Live Charts / Blocksize Alignment** radio
 switcher whose selection persists in the UI-state config
 (`performance_view`). The charts view holds the ARC / L2ARC / SLOG
 monitors — value grids, per-device tables, and Cairo-drawn rolling
@@ -1985,20 +1991,46 @@ Simple GTK dialogs for adding a new profile and recalling an existing one.
 ### `cron_manager.py`
 
 Generates, interprets, and previews the cron drop-in file that schedules
-profiles.
+profiles. Generated job lines pipe the runner's merged stdout/stderr through
+a line-buffered awk timestamp stamper into the configured cron log, so every
+line (including pre-session-log tracebacks) carries its write time.
 
 **Key functions:**
 
 | Function                                       | Purpose                                                    |
 | ---------------------------------------------- | ---------------------------------------------------------- |
-| `write_cron_file(profiles)`                    | Regenerate the cron drop-in from scratch                   |
-| `generate_cron_line(profile)`                  | Build one crontab line                                     |
+| `write_cron_file(profiles, runner_path, cron_log)` | Regenerate the cron drop-in from scratch               |
+| `generate_cron_line(profile, runner_path, cron_log)` | Build one crontab line                                |
 | `interpret_cron(expression)`                   | Human-readable description of a cron expression            |
 | `next_run_times(expression, count)`            | Next `count` datetimes matching the expression             |
 | `format_next_runs(expression)`                 | Formatted next-run preview                                 |
 | `_parse_weekday(value)`                        | Parse weekday field with optional `#n`/`#L` ordinal suffix |
 | `_match_weekday_ordinal(date, weekday, specs)` | Check whether `date` satisfies ordinal specs               |
 | `_format_ordinal_specs(specs)`                 | Human-readable phrase for ordinal specs                    |
+
+**Called modules / imported helpers:**
+
+| Module          | Purpose in this module |
+| --------------- | ---------------------- |
+| `backup_config` | `log_msg`              |
+
+---
+
+### `logrotate_manager.py`
+
+Writes the logrotate drop-in that keeps the persistent logs bounded: the
+cron log and the scrub-manager event log are rotated weekly (eight
+generations, early rotation past a size guard), compressed, and recreated
+readable by non-root users. All paths come from the `paths` section of the
+main configuration file; the drop-in is rewritten whenever the cron schedule
+is saved and removed by `uninstall-zfsutilities`.
+
+**Key functions:**
+
+| Function                            | Purpose                                            |
+| ----------------------------------- | -------------------------------------------------- |
+| `build_logrotate_content(paths_cfg)` | Render the drop-in content from the paths section |
+| `write_logrotate_file(paths_cfg)`   | Write (or refresh) the drop-in at the configured path |
 
 **Called modules / imported helpers:**
 
@@ -2018,7 +2050,7 @@ Scrub state parsing, queue management, and start/pause/resume/stop actions.
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ScrubState` | Enum: `NONE`, `PENDING`, `SCANNING`, `PAUSED`, `FINISHED`, `CANCELED`, `UNKNOWN`                                                                                                                                |
 | `ScrubInfo`  | Dataclass with state, progress, remaining time, ETA, errors                                                                                                                                                     |
-| `ScrubQueue` | Persistent pending/active/paused/finished pool sets with concurrency target; an explicit constructor `target` overrides and re-persists the persisted value, buckets are disjoint, stale entries are pruned by `tick()` only after several consecutive misses, and `reload()` re-reads persisted state before each tick in long-lived instances (GUI Pools tab/Dashboard, headless scrub-profile loop) |
+| `ScrubQueue` | Persistent pending/active/paused/finished pool sets with concurrency target; an explicit constructor `target` overrides and re-persists the persisted value, buckets are disjoint, stale entries are pruned by `tick()` only after several consecutive misses, and `reload()` re-reads persisted state before each tick in long-lived instances (GUI Pools tab/Dashboard, headless scrub-profile loop). `paused` holds only user-intentional pauses — scrubs displaced by the target are paused live and requeued as `pending` |
 
 **Key functions:**
 

@@ -184,11 +184,12 @@ function _list_and_approve {
 }
 
 function _print_snapshots_with_age {
-    local now snap creation age
-    now=$(date +%s)
+    local snap age
     for snap in "$@"; do
-        creation=$(zfs get -Hp -o value creation "$snap" 2>/dev/null || echo "$now")
-        age=$(( (now - creation) / 86400 ))
+        age=$(snapshot_age_days "$snap")
+        if [[ "$age" -lt 0 ]]; then
+            age=0
+        fi
         printf "%-60s  (%d days old)\n" "$snap" "$age"
     done
 }

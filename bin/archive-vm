@@ -20,6 +20,15 @@ unset _local_bashinit
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 
+# Shared transfer engine — also sourced by the two-node SSH helper on the
+# storage host, so both node modes run literally the same archive code.
+ARCHIVE_ENGINE_LIB="${ARCHIVE_ENGINE_LIB:-$(find_zfsutility_script archive-engine.sh)}"
+[[ -n "$ARCHIVE_ENGINE_LIB" ]] || {
+    log_msg "FATAL: Could not locate archive-engine.sh"
+    exit 1
+}
+source "$ARCHIVE_ENGINE_LIB"
+
 source_helper rootcheck
 
 # rootcheck terminates when not root (callers invoke it bare); tests run
@@ -86,6 +95,23 @@ disk_number_from_zvol() {
         disknum="${zvol##*-disk-}"
         [[ "$disknum" =~ ^[0-9]+$ ]] && echo "$disknum"
     fi
+}
+
+# Resolve the Proxmox config disk key (e.g. "scsi0") referencing this zvol
+# on a single-node config line; first matching line wins. Prints nothing
+# when unresolved.
+disk_key_for_zvol() {
+    local zvol="$1" disknum config_line key
+    disknum=$(disk_number_from_zvol "$zvol")
+    [[ -n "$disknum" ]] || return 0
+    while IFS= read -r config_line; do
+        key="${config_line%%:*}"
+        is_disk_key "$key" || continue
+        [[ "$config_line" == "$key:"*":vm-${vmid}-disk-${disknum},"* ]] \
+            || continue
+        echo "$key"
+        return 0
+    done < "$proxmoxconfig"
 }
 
 # --- Ensure a snapshot exists for archiving -----------------------------
@@ -538,72 +564,56 @@ for zvol in $zvols; do
     log_msg "INFO:   Snapshot to archive: ${snap}"
 
     if is_single_node; then
-        # Get original volblocksize and save it immediately
-        orig_vbs=$(zfs get -H -o value volblocksize "$zvol")
-        log_msg "INFO:   Original volblocksize: ${orig_vbs}"
-        parent=$(dirname "$archive_dataset")
-        zfs create -p "$parent" 2>/dev/null || true
-
         log_msg "INFO:   Archiving ${zvol}${snap_name} → ${archive_dataset}"
-        if ! zfs send -cw "$zvol$snap_name" \
-                | zfs receive -o volblocksize=1M "$archive_dataset"; then
+        if ! archive_one_zvol "$zvol" "$snap_name" "$archive_dataset" \
+                "$archive_mount"; then
             { log_msg "FATAL: Failed to archive ${zvol}"; exit 1; }
         fi
 
-        # Save original volblocksize
-        echo "$orig_vbs" > "${archive_mount}/${zvol}.original_volblocksize"
-
-        # Save disk info sidecar for unarchive
-        # Extract the disk number from the zvol path (e.g. "...disk-0" -> "0").
-        disknum=$(disk_number_from_zvol "$zvol")
-        # Find the Proxmox config disk key (e.g. "scsi0") for this disk
-        # number; first matching line wins (as with the old head -1).
-        disk_key=""
-        while IFS= read -r config_line; do
-            key="${config_line%%:*}"
-            is_disk_key "$key" || continue
-            [[ "$config_line" == "$key:"*":vm-${vmid}-disk-${disknum},"* ]] \
-                || continue
-            disk_key="$key"
-            break
-        done < "$proxmoxconfig"
+        # Append the disk's config key to the sidecar the engine started.
+        disk_key=$(disk_key_for_zvol "$zvol")
         if [[ -n "$disk_key" ]]; then
-            info_file="${archive_mount}/${zvol}.disk_info"
-            echo "DISK_KEY=${disk_key}" > "$info_file"
+            echo "DISK_KEY=${disk_key}" >> "${archive_mount}/${zvol}.disk_info"
         fi
     else
-        # Two-node: delegate to storage host
+        # Two-node: archive work runs on the storage host via the shared
+        # engine. The Proxmox config lives on this compute host and its
+        # iscsi disk lines only name target/LUN, so key resolution needs
+        # the config text on the storage host too — pass it base64-encoded
+        # as one ssh argv token (a compute-host path is unreadable on the
+        # storage host, and raw multi-line text cannot survive ssh argv
+        # joining).
+        config_b64=$(base64 -w0 "$proxmoxconfig")
         log_msg "INFO:   Archiving ${zvol}${snap_name} → ${archive_dataset}"
         if ! ssh root@"$storage_host" bash -s "$zvol" "$snap_name" \
-                "$archive_dataset" "$archive_mount" "$vmid" \
-                "$proxmoxconfig" << 'SSHEOF'
+                "$archive_dataset" "$archive_mount" "$vmid" "$config_b64" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
+
+engine=$(find_zfsutility_script archive-engine.sh)
+[[ -n "$engine" ]] || {
+    log_msg "FATAL: Could not locate archive-engine.sh on storage host"
+    exit 1
+}
+source "$engine"
 
 zvol="$1"
 snap_name="$2"
 archive_dataset="$3"
 archive_mount="$4"
 vmid="$5"
-proxmoxconfig="$6"
+config_b64="$6"
 
-# Get original volblocksize on the storage host
-orig_vbs=$(zfs get -H -o value volblocksize "$zvol")
-log_msg "INFO:   Original volblocksize: ${orig_vbs}"
-
-parent=$(dirname "$archive_dataset")
-zfs create -p "$parent" 2>/dev/null || true
-
-if ! zfs send -cw "${zvol}${snap_name}" | zfs receive -o volblocksize=1M "$archive_dataset"; then
-    log_msg "FATAL: Failed to archive ${zvol}"
+if ! archive_one_zvol "$zvol" "$snap_name" "$archive_dataset" \
+        "$archive_mount"; then
     exit 1
 fi
 
-echo "$orig_vbs" > "${archive_mount}/${zvol}.original_volblocksize"
+# Decode the compute host's Proxmox config for disk-key resolution.
+config_text=$(printf '%s' "$config_b64" | base64 -d)
 
-# Save disk info sidecar for unarchive
-# Extract disk number from zvol path (e.g. "...disk-0" -> "0").
+# Extract the disk number from the zvol path (e.g. "...disk-0" -> "0").
 disknum=""
 if [[ "$zvol" == *-disk-* ]]; then
     disknum="${zvol##*-disk-}"
@@ -654,18 +664,17 @@ if [[ -n "$target" && -n "$lun" ]]; then
             || continue
         disk_key="$key"
         break
-    done < "$proxmoxconfig"
+    done <<< "$config_text"
     if [[ -n "$disk_key" ]]; then
         info_file="${archive_mount}/${zvol}.disk_info"
-        echo "DISK_KEY=${disk_key}" > "$info_file"
+        echo "DISK_KEY=${disk_key}" >> "$info_file"
         echo "LUN=${lun}" >> "$info_file"
         echo "TARGET=${target}" >> "$info_file"
     fi
 fi
 SSHEOF
         then
-            log_msg "FATAL: Failed to archive ${zvol}"
-            exit 1
+            { log_msg "FATAL: Failed to archive ${zvol}"; exit 1; }
         fi
     fi
 
@@ -700,7 +709,21 @@ for zvol in $zvols; do
             ((++errors))
         else
             size=$(zfs get -H -o value volsize "$archive_dataset")
-            log_msg "INFO:   ✓ ${archive_dataset} (${size})"
+            vbs=$(zfs get -H -o value volblocksize "$archive_dataset")
+            method=$(archive_method_of "${archive_mount}/${zvol}.disk_info")
+            expected_vbs=""
+            if [[ "$method" == "copy" ]]; then
+                expected_vbs="1M"
+            elif [[ -f "${archive_mount}/${zvol}.original_volblocksize" ]]; then
+                expected_vbs=$(cat "${archive_mount}/${zvol}.original_volblocksize")
+            fi
+            if [[ -n "$expected_vbs" && "$vbs" != "$expected_vbs" ]]; then
+                log_msg "FATAL: Volblocksize mismatch on ${archive_dataset}: expected" \
+                    "${expected_vbs}, got ${vbs}"
+                ((++errors))
+            else
+                log_msg "INFO:   ✓ ${archive_dataset} (${size}, volblocksize ${vbs})"
+            fi
         fi
     else
         if ! ssh root@"$storage_host" "zfs list -H '$archive_dataset'" \
@@ -708,9 +731,34 @@ for zvol in $zvols; do
             log_msg "FATAL: MISSING dataset: ${archive_dataset}"
             ((++errors))
         else
-            size=$(ssh root@"$storage_host" \
-                "zfs get -H -o value volsize '$archive_dataset'")
-            log_msg "INFO:   ✓ ${archive_dataset} (${size})"
+            verify_out=$(ssh root@"$storage_host" bash -s \
+                    "$archive_dataset" "$archive_mount" "$zvol" << 'SSHEOF'
+archive_dataset="$1"
+archive_mount="$2"
+zvol="$3"
+zfs get -H -o value volsize "$archive_dataset"
+zfs get -H -o value volblocksize "$archive_dataset"
+grep '^METHOD=' "${archive_mount}/${zvol}.disk_info" 2>/dev/null | cut -d= -f2
+cat "${archive_mount}/${zvol}.original_volblocksize" 2>/dev/null
+SSHEOF
+            )
+            mapfile -t vfields <<< "$verify_out"
+            size="${vfields[0]:-}"
+            vbs="${vfields[1]:-}"
+            method="${vfields[2]:-raw}"
+            expected_vbs=""
+            if [[ "$method" == "copy" ]]; then
+                expected_vbs="1M"
+            elif [[ -n "${vfields[3]:-}" ]]; then
+                expected_vbs="${vfields[3]}"
+            fi
+            if [[ -n "$expected_vbs" && "$vbs" != "$expected_vbs" ]]; then
+                log_msg "FATAL: Volblocksize mismatch on ${archive_dataset}: expected" \
+                    "${expected_vbs}, got ${vbs}"
+                ((++errors))
+            else
+                log_msg "INFO:   ✓ ${archive_dataset} (${size}, volblocksize ${vbs})"
+            fi
         fi
     fi
 done

@@ -28,6 +28,16 @@ unset _local_bashinit
 append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$"'
 
 
+# Print a snapshot's age in whole days (floor division), or -1 when its
+# creation property cannot be read. Callers that only need a display value
+# can map -1 to 0; gate logic must treat -1 as "age unknown".
+snapshot_age_days() {
+    local creation
+    creation=$(zfs get -Hp -o value creation "$1" 2>/dev/null) || { echo -1; return; }
+    [[ "$creation" =~ ^[0-9]+$ ]] || { echo -1; return; }
+    echo $(( ($(date +%s) - creation) / 86400 ))
+}
+
 function delsnap {
     local _local_bashinit
     _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
@@ -95,13 +105,9 @@ function delsnap {
 
     # Check minimum age if minage > 0
     if [[ $minage -gt 0 ]]; then
-        # Get the snapshot's creation date in seconds since epoch
-        snap_creation=$(zfs get -Hp -o value creation "$snaptoremove")
-        now=$(date +%s)
-        age_seconds=$((now - snap_creation))
-        age_days=$((age_seconds / 86400))
+        age_days=$(snapshot_age_days "$snaptoremove")
 
-        if [[ $age_days -lt $minage ]]; then
+        if [[ $age_days -ge 0 && $age_days -lt $minage ]]; then
             log_msg "WARN: Snapshot $snaptoremove is only $age_days days old." \
                 "Minimum age is $minage days."
             zfslock_release "$delsnap_lock"

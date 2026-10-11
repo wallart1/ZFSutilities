@@ -713,8 +713,13 @@ class TestScrubQueue(unittest.TestCase):
         self.assertIn("tank", q.paused_by_user)
         mock_resume.assert_not_called()
 
-    def test_target_paused_pool_auto_resumed_when_target_raised(self):
-        """Pools paused by lowering the target resume when target is raised."""
+    def test_target_displaced_pool_requeued_as_pending(self):
+        """Exceeding the target pauses the live scrub and requeues as pending.
+
+        A displaced scrub is waiting for a slot, not user-paused: it must land
+        in the pending bucket (displayed as pending) and later be resumed from
+        its existing progress, never restarted.
+        """
         q = sm.ScrubQueue(target=2)
         q.active.add("tank")
         q.active.add("data")
@@ -726,15 +731,31 @@ class TestScrubQueue(unittest.TestCase):
         with patch.object(sm, "pause_scrub", return_value=True) as mock_pause:
             q.tick(states)
         self.assertEqual(mock_pause.call_count, 1)
-        paused_pool = next(iter(q.paused))
-        self.assertNotIn(paused_pool, q.paused_by_user)
+        displaced = next(iter(q.pending))
+        self.assertNotIn(displaced, q.paused)
+        self.assertNotIn(displaced, q.paused_by_user)
+        self.assertNotIn(displaced, q.active)
 
         q.set_target(2)
-        states[paused_pool] = sm.ScrubInfo(state=sm.ScrubState.PAUSED)
+        states[displaced] = sm.ScrubInfo(state=sm.ScrubState.PAUSED)
+        with patch.object(sm, "resume_scrub", return_value=True) as mock_resume:
+            with patch.object(sm, "start_scrub") as mock_start:
+                q.tick(states)
+        self.assertIn(displaced, q.active)
+        mock_resume.assert_called_once_with(displaced)
+        mock_start.assert_not_called()
+
+    def test_tick_migrates_non_user_paused_to_pending(self):
+        """Legacy non-user paused entries are requeued as pending and resumed."""
+        q = sm.ScrubQueue(target=1)
+        q.paused.add("tank")  # queue-parked by an older release; no user flag
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.PAUSED)}
         with patch.object(sm, "resume_scrub", return_value=True) as mock_resume:
             q.tick(states)
-        self.assertIn(paused_pool, q.active)
-        mock_resume.assert_called_once_with(paused_pool)
+        self.assertNotIn("tank", q.paused)
+        self.assertNotIn("tank", q.paused_by_user)
+        self.assertIn("tank", q.active)
+        mock_resume.assert_called_once_with("tank")
 
     def test_tick_detects_external_scrub(self):
         q = sm.ScrubQueue(target=1)
@@ -790,6 +811,132 @@ class TestScrubQueue(unittest.TestCase):
         mock_resume.assert_not_called()
         self.assertIn("tank", q.pending)
         self.assertNotIn("tank", q.active)
+
+
+class TestScrubEventLog(unittest.TestCase):
+    """Scrub Manager messages persist to the scrub-manager event log file."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.log_dir = os.path.join(self.tmpdir.name, "logs")
+        os.makedirs(self.log_dir)
+        self._orig_env = os.environ.get("ZFSUTILITIES_LOG_DIR")
+        os.environ["ZFSUTILITIES_LOG_DIR"] = self.log_dir
+        self._orig_path = feature_config.SCRUB_STATE_PATH
+        self._orig_lock = file_locking.SCRUB_STATE_LOCK_PATH
+        feature_config.SCRUB_STATE_PATH = os.path.join(self.tmpdir.name, "scrub_state.json")
+        file_locking.SCRUB_STATE_LOCK_PATH = os.path.join(self.tmpdir.name, ".scrub_state.lock")
+        import config_core
+
+        self._orig_config_path = config_core.CONFIG_PATH
+        config_core.CONFIG_PATH = os.path.join(self.tmpdir.name, "config.json")
+        self._orig_event_path = sm._event_log_path
+        sm._event_log_path = None
+        sm._scrub_event_log_warned = False
+
+    def tearDown(self):
+        if self._orig_env is None:
+            del os.environ["ZFSUTILITIES_LOG_DIR"]
+        else:
+            os.environ["ZFSUTILITIES_LOG_DIR"] = self._orig_env
+        feature_config.SCRUB_STATE_PATH = self._orig_path
+        file_locking.SCRUB_STATE_LOCK_PATH = self._orig_lock
+        import config_core
+
+        config_core.CONFIG_PATH = self._orig_config_path
+        sm._event_log_path = self._orig_event_path
+        self.tmpdir.cleanup()
+
+    def _log_text(self):
+        with open(sm._get_event_log_path()) as fh:
+            return fh.read()
+
+    def test_control_wrapper_line_persists(self):
+        repo = MagicMock()
+        repo.start_scrub.return_value = True
+        info = sm.ScrubInfo(state=sm.ScrubState.NONE)
+        with patch.object(sm, "get_pool_scrub_info", return_value=info):
+            self.assertTrue(sm.start_scrub("tank", repo=repo))
+        text = self._log_text()
+        self.assertIn("INFO: Starting scrub on pool 'tank'", text)
+        self.assertIn("INFO: Scrub started on 'tank'", text)
+
+    def test_queue_mutator_lines_persist(self):
+        q = sm.ScrubQueue(target=1)
+        q.add_pending(["tank"])
+        q.pause_pools(["tank"])
+        q.resume_pools(["tank"])
+        text = self._log_text()
+        self.assertIn("INFO: Pools added to scrub queue: tank", text)
+        self.assertIn("INFO: Scrubs paused: tank", text)
+        self.assertIn("INFO: Scrubs resumed: tank", text)
+
+    def test_tick_transition_lines_persist(self):
+        q = sm.ScrubQueue(target=1)
+        q.active.add("tank")
+        q.tick({"tank": sm.ScrubInfo(state=sm.ScrubState.FINISHED)})
+        self.assertIn("INFO: Scrub finished on 'tank'", self._log_text())
+
+    def test_displacement_line_persists(self):
+        q = sm.ScrubQueue(target=2)
+        q.active.add("tank")
+        q.active.add("data")
+        states = {
+            "tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING),
+            "data": sm.ScrubInfo(state=sm.ScrubState.SCANNING),
+        }
+        q.set_target(1)
+        with patch.object(sm, "pause_scrub", return_value=True):
+            q.tick(states)
+        self.assertIn("paused and requeued as pending", self._log_text())
+
+    def test_external_pause_adoption_line_persists(self):
+        q = sm.ScrubQueue(target=1)
+        q.active.add("tank")
+        q.tick({"tank": sm.ScrubInfo(state=sm.ScrubState.PAUSED)})
+        self.assertIn("VERB: External pause detected on 'tank'", self._log_text())
+
+    def test_external_resume_line_persists(self):
+        q = sm.ScrubQueue(target=1)
+        q.paused.add("tank")
+        q.paused_by_user.add("tank")
+        q.tick({"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)})
+        self.assertIn("VERB: External resume detected on 'tank'", self._log_text())
+
+    def test_backup_coordinated_lines_persist(self):
+        repo = MagicMock()
+        repo.pause_scrub.return_value = True
+        states = {"tank": sm.ScrubInfo(state=sm.ScrubState.SCANNING)}
+        sink = []
+        with patch.object(sm, "get_all_pool_scrub_states", return_value=states):
+            with patch.object(sm, "get_default_repository", return_value=repo):
+                with patch.object(
+                    sm,
+                    "_wait_for_scrub_state",
+                    return_value=sm.ScrubInfo(state=sm.ScrubState.PAUSED),
+                ):
+                    paused = sm.pause_scrubs_for_pools(
+                        ["tank"], log_func=lambda m, **k: sink.append(m)
+                    )
+        self.assertEqual(paused, ["tank"])
+        text = self._log_text()
+        self.assertIn("VERB: Pausing scrub on 'tank'", text)
+        self.assertIn("INFO: Scrubs paused: tank", text)
+
+    def test_unwritable_log_dir_warns_once_and_does_not_raise(self):
+        # A file where the log directory should be: directory creation fails.
+        blocker = os.path.join(self.tmpdir.name, "blocker")
+        open(blocker, "w").close()
+        with patch.dict(os.environ, {"ZFSUTILITIES_LOG_DIR": blocker}):
+            sm._event_log_path = None  # re-resolve against the blocking env
+            with capture_logs() as logs:
+                sm.log_msg("INFO: still emits")
+                sm.log_msg("INFO: second line")
+            sm._event_log_path = None
+        warns = [m for m in logs if "WARN: Could not create scrub manager log" in m]
+        self.assertEqual(len(warns), 1)
+        self.assertTrue(any("INFO: still emits" in m for m in logs))
+        self.assertTrue(any("INFO: second line" in m for m in logs))
 
 
 class TestParseScrubStatusMixed(unittest.TestCase):

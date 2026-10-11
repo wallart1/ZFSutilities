@@ -40,8 +40,12 @@ If the first run finishes in time, the second run proceeds normally.
 If the first profile is still running after 10 minutes, the second invocation exits
 cleanly with code `0` and logs an informative message.  This prevents cron
 from sending duplicate-run email spam.  Cron stdout/stderr for every
-scheduled profile is appended to `/var/log/zfsutilities/cron.log` so that
-errors occurring before the profile creates its own log remain visible.
+scheduled profile is piped through a timestamp stamper into
+`/var/log/zfsutilities/cron.log` (each line is prefixed with its write time)
+so that errors occurring before the profile creates its own log remain
+visible.  The log is rotated weekly by logrotate with compressed, non-root-
+readable generations, and it — plus every rotated copy — is listed on the
+GUI's **Logs** tab.
 
 The Dashboard **Running Tasks** list shows a waiting profile with the status
 "Waiting for profile lock".

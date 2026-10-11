@@ -2,7 +2,7 @@
 
 import copy
 
-CONFIG_VERSION = 26
+CONFIG_VERSION = 27
 
 
 def _migrate_1_to_2(config):
@@ -305,6 +305,20 @@ def _migrate_25_to_26(config):
     return config
 
 
+def _migrate_26_to_27(config):
+    """Seed the file-paths section (cron log, scrub-manager log, logrotate).
+
+    Reuses get_paths_config so the migration seeds exactly what the runtime
+    lazy-seeding would; existing user-set keys are preserved and missing
+    keys filled. Lazy import: config_core imports this module at load time.
+    """
+    from config_core import get_paths_config
+
+    get_paths_config(config, persist=False)
+    config["config_version"] = 27
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -331,6 +345,7 @@ MIGRATIONS = [
     _migrate_23_to_24,
     _migrate_24_to_25,
     _migrate_25_to_26,
+    _migrate_26_to_27,
 ]
 
 

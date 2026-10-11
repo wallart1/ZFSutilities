@@ -20,6 +20,14 @@ if GUI_SRC not in sys.path:
 
 import cron_manager
 
+# Complete paths section handed to mocked apps; consumers treat it as
+# read-only, and its completeness prevents config seeding side effects.
+_FAKE_PATHS = {
+    "cron_log": "/tmp/zfsutilities-schedule-tests/cron.log",
+    "scrub_manager_log": "/tmp/zfsutilities-schedule-tests/scrub-manager.log",
+    "logrotate_file": "/tmp/zfsutilities-schedule-tests/logrotate.d/zfsutilities",
+}
+
 
 class TestRegenerateCronPath(unittest.TestCase):
     """Verify _regenerate_cron picks the correct runner_path."""
@@ -47,9 +55,11 @@ class TestRegenerateCronPath(unittest.TestCase):
             }
         ]
         with temp_config_dir():
+            app = MagicMock()
+            app.config = {}
             with patch("path_utils.is_deployed_layout", return_value=True):
                 with patch.object(schedule_page, "list_profiles", return_value=mock_profile):
-                    schedule_page._regenerate_cron(MagicMock())
+                    schedule_page._regenerate_cron(app)
 
             with open(cron_manager.CRON_FILE) as f:
                 content = f.read()
@@ -57,6 +67,13 @@ class TestRegenerateCronPath(unittest.TestCase):
                 "/usr/local/lib/zfsutilities/current/python/profile_runner.py",
                 content,
             )
+            # The logrotate drop-in is (re)written alongside the cron file.
+            import paths
+
+            logrotate_file = paths.get_logrotate_file_path()
+            self.assertTrue(os.path.isfile(logrotate_file))
+            with open(logrotate_file) as f:
+                self.assertIn("compress", f.read())
 
     def test_uses_realpath_when_in_repo(self):
         schedule_page = self._import_schedule_page()
@@ -74,9 +91,11 @@ class TestRegenerateCronPath(unittest.TestCase):
             }
         ]
         with temp_config_dir():
+            app = MagicMock()
+            app.config = {}
             with patch("path_utils.is_deployed_layout", return_value=False):
                 with patch.object(schedule_page, "list_profiles", return_value=mock_profile):
-                    schedule_page._regenerate_cron(MagicMock())
+                    schedule_page._regenerate_cron(app)
 
             with open(cron_manager.CRON_FILE) as f:
                 content = f.read()
@@ -154,6 +173,9 @@ class TestScheduleDirtyTracking(unittest.TestCase):
 
     def _make_app(self, rows):
         app = MagicMock()
+        # Real dict config: the paths section must be complete so no test
+        # triggers seed persistence against the real configuration file.
+        app.config = {"paths": dict(_FAKE_PATHS)}
         app.schedule_store = FakeScheduleStore(rows)
         app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
             app.schedule_store,
@@ -290,6 +312,7 @@ class TestScheduleDirtyTracking(unittest.TestCase):
             patch("schedule_page.save_profile", side_effect=fake_save),
             patch("schedule_page.list_profiles", return_value=list(profiles.values())),
             patch("schedule_page.write_cron_file") as mock_write_cron,
+            patch("schedule_page.write_logrotate_file") as mock_write_logrotate,
             patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN]),
         ):
             schedule_page.on_schedule_save(app)
@@ -299,6 +322,8 @@ class TestScheduleDirtyTracking(unittest.TestCase):
         self.assertEqual(saved[1]["cron"]["minute"], "30")
         self.assertTrue(saved[1]["active"])
         mock_write_cron.assert_called_once()
+        mock_write_logrotate.assert_called_once()
+        self.assertEqual(mock_write_logrotate.call_args[0][0]["cron_log"], _FAKE_PATHS["cron_log"])
         self.assertFalse(app._schedule_pending)
         mock_red.assert_called_with(app._schedule_save_button, False)
 
@@ -342,6 +367,9 @@ class TestConfigSummary(unittest.TestCase):
 
     def _make_app(self, rows):
         app = MagicMock()
+        # Real dict config: the paths section must be complete so no test
+        # triggers seed persistence against the real configuration file.
+        app.config = {"paths": dict(_FAKE_PATHS)}
         app.schedule_store = FakeScheduleStore(rows)
         app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
             app.schedule_store,
@@ -446,7 +474,7 @@ class TestConfigSummary(unittest.TestCase):
 
         actual = app.schedule_summary_textview.get_buffer().set_text.call_args[0][0]
         expected_cron_line = schedule_page.generate_cron_line(
-            saved_profile, "/fake/profile_runner.py"
+            saved_profile, "/fake/profile_runner.py", _FAKE_PATHS["cron_log"]
         )
         self.assertTrue(actual.startswith("Crontab entry:\n"))
         self.assertIn(expected_cron_line, actual)
@@ -668,6 +696,119 @@ class TestSchedulePageWidgets(unittest.TestCase):
             any(call[0] == (True,) for call in clickable_calls),
             "Expected at least one sortable column to be marked clickable",
         )
+
+    @patch("schedule_page.Gtk")
+    @patch("schedule_page.list_profiles", return_value=[])
+    def test_next_run_renderer_is_ellipsized_not_wrapped(self, _lst, mock_gtk):
+        """Next Run stays single-line so every row keeps a uniform height."""
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        app._ui_state = MagicMock()
+
+        schedule_page.create_schedule_page(app)
+
+        props = mock_gtk.CellRendererText.return_value.set_property.call_args_list
+        prop_names = [call[0][0] for call in props]
+        self.assertIn(
+            "ellipsize",
+            prop_names,
+            "Expected the Next Run renderer to set an ellipsize mode",
+        )
+        self.assertNotIn("wrap-mode", prop_names, "wrap-mode would break uniform row heights")
+        self.assertNotIn("wrap-width", prop_names, "wrap-width would break uniform row heights")
+
+    @patch("schedule_page.Gtk")
+    @patch("schedule_page.list_profiles", return_value=[])
+    def test_schedule_view_wires_next_run_tooltip(self, _lst, mock_gtk):
+        """The treeview must offer the full Next Run text via a row tooltip."""
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        app._ui_state = MagicMock()
+
+        schedule_page.create_schedule_page(app)
+
+        app.schedule_view.set_has_tooltip.assert_called_once_with(True)
+        connects = app.schedule_view.connect.call_args_list
+        self.assertTrue(
+            any(
+                call[0][:2] == ("query-tooltip", schedule_page._on_next_run_query_tooltip)
+                for call in connects
+            ),
+            "Expected query-tooltip to be connected to _on_next_run_query_tooltip",
+        )
+
+
+class TestNextRunQueryTooltip(unittest.TestCase):
+    """_on_next_run_query_tooltip resolves the hovered Next Run cell."""
+
+    def _import_schedule_page(self):
+        """Import schedule_page inside a GTK mock context."""
+        with mock_gtk():
+            import schedule_page
+
+            return schedule_page
+
+    def _make_view(self, hit):
+        view = MagicMock()
+        view.convert_widget_to_bin_window_coords.return_value = (120, 18)
+        view.get_path_at_pos.return_value = hit
+        return view
+
+    def test_hover_on_next_run_cell_sets_tooltip_text(self):
+        schedule_page = self._import_schedule_page()
+        path = MagicMock(name="path")
+        next_run_col = MagicMock(name="next_run_col")
+        view = self._make_view((path, next_run_col, 3, 7))
+        tooltip = MagicMock()
+        app = MagicMock()
+        app.schedule_store = MagicMock()
+        app.schedule_store.__getitem__.return_value = [
+            True,
+            "p1",
+            "backup",
+            "* * * * *",
+            "",
+            "Mon Oct 12 2026 09:00 (daily)",
+            "2026-10-12 09:00",
+        ]
+
+        result = schedule_page._on_next_run_query_tooltip(
+            view, 120, 18, False, tooltip, app, next_run_col
+        )
+
+        self.assertTrue(result)
+        view.convert_widget_to_bin_window_coords.assert_called_once_with(120, 18)
+        app.schedule_store.__getitem__.assert_called_once_with(path)
+        tooltip.set_text.assert_called_once_with("Mon Oct 12 2026 09:00 (daily)")
+
+    def test_hover_on_other_column_returns_false(self):
+        schedule_page = self._import_schedule_page()
+        next_run_col = MagicMock(name="next_run_col")
+        other_col = MagicMock(name="other_col")
+        view = self._make_view((MagicMock(name="path"), other_col, 3, 7))
+        tooltip = MagicMock()
+        app = MagicMock()
+
+        result = schedule_page._on_next_run_query_tooltip(
+            view, 120, 18, False, tooltip, app, next_run_col
+        )
+
+        self.assertFalse(result)
+        tooltip.set_text.assert_not_called()
+
+    def test_hover_on_empty_space_returns_false(self):
+        schedule_page = self._import_schedule_page()
+        next_run_col = MagicMock(name="next_run_col")
+        view = self._make_view(None)
+        tooltip = MagicMock()
+        app = MagicMock()
+
+        result = schedule_page._on_next_run_query_tooltip(
+            view, 120, 18, False, tooltip, app, next_run_col
+        )
+
+        self.assertFalse(result)
+        tooltip.set_text.assert_not_called()
 
 
 class TestNextRunStrings(unittest.TestCase):
@@ -950,7 +1091,12 @@ class TestCronConsistency(unittest.TestCase):
         schedule_page = self._import_schedule_page()
         profiles = [self._profile("root-backup-dailybackup2")]
         with temp_config_dir():
-            line = schedule_page.generate_cron_line(profiles[0], "/fake/profile_runner.py")
+            import paths
+
+            cron_log = os.path.join(paths.get_log_dir(), "cron.log")
+            line = schedule_page.generate_cron_line(
+                profiles[0], "/fake/profile_runner.py", cron_log
+            )
             with open(cron_manager.CRON_FILE, "w") as f:
                 f.write(line + "\n")
             with patch("schedule_page.list_profiles", return_value=profiles):
@@ -1662,6 +1808,9 @@ class TestConditionField(unittest.TestCase):
 
     def _make_app(self, rows):
         app = MagicMock()
+        # Real dict config: the paths section must be complete so no test
+        # triggers seed persistence against the real configuration file.
+        app.config = {"paths": dict(_FAKE_PATHS)}
         app.schedule_store = FakeScheduleStore(rows)
         app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
             app.schedule_store,
@@ -1892,7 +2041,7 @@ class TestConditionField(unittest.TestCase):
 
         actual = app.schedule_summary_textview.get_buffer().set_text.call_args[0][0]
         expected_cron_line = schedule_page.generate_cron_line(
-            saved_profile, "/fake/profile_runner.py"
+            saved_profile, "/fake/profile_runner.py", _FAKE_PATHS["cron_log"]
         )
         self.assertIn(expected_cron_line, actual)
         self.assertIn("[ $(date +%d) -ge 28 ]", actual)
@@ -1953,6 +2102,9 @@ class TestCommentColumn(unittest.TestCase):
 
     def _make_app(self, rows):
         app = MagicMock()
+        # Real dict config: the paths section must be complete so no test
+        # triggers seed persistence against the real configuration file.
+        app.config = {"paths": dict(_FAKE_PATHS)}
         app.schedule_store = FakeScheduleStore(rows)
         app.schedule_view.get_selection.return_value.get_selected_rows.return_value = (
             app.schedule_store,

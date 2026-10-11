@@ -41,6 +41,22 @@ delsnap() {
 }
 EOF
 
+cat > "$mock_mydir/zfsdelsnap" <<'EOF'
+delsnap() {
+    _mock_delsnap_calls+=("$1|$2|$3|$4")
+    _mock_delsnap_autoproceed+=("${autoproceed:-unset}")
+    return 0
+}
+# Mirrors snapshot_age_days from bin/zfsdelsnap; the mock zfs() serves
+# creation epochs via mock_zfs_prop <snap> creation <epoch>.
+snapshot_age_days() {
+    local creation
+    creation=$(zfs get -Hp -o value creation "$1" 2>/dev/null) || { echo -1; return; }
+    [[ "$creation" =~ ^[0-9]+$ ]] || { echo -1; return; }
+    echo $(( ($(date +%s) - creation) / 86400 ))
+}
+EOF
+
 cat > "$mock_mydir/zfscleanup" <<'EOF'
 cleanup() {
     echo "$* releaseholds=${releaseholds:-N}" >> "${_mock_cleanup_log}"
@@ -48,6 +64,11 @@ cleanup() {
     # Echo would-be removal lines for the respect-retention path to parse.
     if [[ "${dryrun:-N}" == "Y" && "${_mock_cleanup_empty:-N}" != "Y" ]]; then
         printf 'INFO: Would: Remove %s@dailybackup-2025-03-28T10:00-04:00-d --- Bucket.\n' "$pool"
+        if [[ "${_mock_cleanup_keep_line:-N}" == "Y" ]]; then
+            local _keep='INFO: Would: Keep %s@dailybackup-2025-03-27T10:00-04:00-d --- Bucket'
+            _keep="${_keep}; only 12 days old (minimum age is 45 days).\n"
+            printf "$_keep" "$pool"
+        fi
         printf 'INFO: Would: Remove %s@dailybackup-2025-03-29T10:00-04:00-d --- Bucket.\n' "$pool"
     fi
     return 0
@@ -73,6 +94,7 @@ reset_state() {
     _mock_zfs_snap_lists=()
     _mock_zfs_props=()
     _mock_cleanup_empty="N"
+    _mock_cleanup_keep_line="N"
     snapshot_label=""
     snapshot_has=""
     includes=()
@@ -134,6 +156,30 @@ test_ignore_dryrun_lists_only() {
         test_pass
     else
         test_fail "Expected estimate message, got: $output"
+    fi
+}
+
+test_ignore_dryrun_unknown_age_displays_zero() {
+    echo "=== Ignore mode: unreadable creation age displays as 0 days ==="
+    reset_state
+    snapshot_label="dailybackup"
+    snapshot_has="dailybackup"
+    ignore_retention_policies="Y"
+    dryrun="Y"
+    _mock_fsarray_pool1=("pool1/fs")
+    mock_zfs_snap_list_for "pool1/fs" "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d"
+    # No creation prop: snapshot_age_days reports -1 (age unknown) and the
+    # listing clamps the display to 0 days old.
+    mock_zfs_prop "pool1/fs@dailybackup-2025-03-28T10:00-04:00-d" "used" "1073741824"
+    local output
+    mass_delete_snapshots pool1 > "${mock_mydir}/test_output.txt" 2>&1
+    output=$(cat "${mock_mydir}/test_output.txt")
+    test_start "Unreadable creation lists the snapshot as 0 days old"
+    if [[ "$output" == *"pool1/fs@dailybackup-2025-03-28T10:00-04:00-d"* ]] \
+        && [[ "$output" == *"(0 days old)"* ]]; then
+        test_pass
+    else
+        test_fail "Expected a '(0 days old)' listing, got: $output"
     fi
 }
 
@@ -316,6 +362,39 @@ test_respect_parses_candidates() {
     fi
 }
 
+test_respect_dryrun_ignores_keep_lines() {
+    echo "=== Respect mode: Would: Keep lines are not candidates ==="
+    reset_state
+    snapshot_label="dailybackup"
+    ignore_retention_policies="N"
+    dryrun="Y"
+    _mock_cleanup_keep_line="Y"
+    mock_zfs_prop "pool1@dailybackup-2025-03-27T10:00-04:00-d" "creation" "1711544400"
+    mock_zfs_prop "pool1@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
+    mock_zfs_prop "pool1@dailybackup-2025-03-29T10:00-04:00-d" "creation" "1711717200"
+    # The too-young snapshot carries the largest used value: if the parser
+    # wrongly collected it, both the count and the space estimate would grow.
+    mock_zfs_prop "pool1@dailybackup-2025-03-27T10:00-04:00-d" "used" "1073741824"
+    mock_zfs_prop "pool1@dailybackup-2025-03-28T10:00-04:00-d" "used" "268435456"
+    mock_zfs_prop "pool1@dailybackup-2025-03-29T10:00-04:00-d" "used" "268435456"
+    local output
+    mass_delete_snapshots pool1 > "${mock_mydir}/test_output.txt" 2>&1
+    output=$(cat "${mock_mydir}/test_output.txt")
+    test_start "Candidate count excludes Would: Keep snapshots"
+    if [[ "$output" == *"The following 2 snapshots would be removed:"* ]]; then
+        test_pass
+    else
+        test_fail "Expected 2 candidates, got: $output"
+    fi
+    test_start "Space estimate excludes Would: Keep snapshots"
+    if [[ "$output" == *"Estimated disk space that would be freed: ~512Mi"* \
+        && "$output" != *"~1.5Gi"* ]]; then
+        test_pass
+    else
+        test_fail "Expected ~512Mi estimate (Keep line excluded), got: $output"
+    fi
+}
+
 test_respect_releaseholds_passed() {
     echo "=== Respect mode: releaseholds is forwarded ==="
     reset_state
@@ -391,6 +470,7 @@ test_estimate_space_freed_nonnumeric() {
 
 test_no_matching_snapshots
 test_ignore_dryrun_lists_only
+test_ignore_dryrun_unknown_age_displays_zero
 test_ignore_approval_no_cancels
 test_ignore_approval_y_prefix_cancels
 test_ignore_approval_yes_deletes
@@ -398,6 +478,7 @@ test_ignore_releaseholds_passed
 test_respect_no_matching_snapshots
 test_respect_dryrun_lists_only
 test_respect_parses_candidates
+test_respect_dryrun_ignores_keep_lines
 test_respect_releaseholds_passed
 test_estimate_space_freed_zero
 test_estimate_space_freed_nonnumeric

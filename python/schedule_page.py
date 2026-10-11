@@ -15,6 +15,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 import cron_manager
 from command_builders import _PV_RATE_RE
+from config_core import get_paths_config
 from cron_manager import (
     format_next_runs,
     generate_cron_line,
@@ -33,6 +34,7 @@ from gui_helpers import (
     show_error_dialog,
 )
 from logging_config import log_msg
+from logrotate_manager import write_logrotate_file
 from path_utils import get_profile_runner_path
 from profile_manager import (
     delete_profile,
@@ -120,6 +122,7 @@ def create_schedule_page(app):
     configure_treeview_column(col_active, width=ACTIVE_COLUMN_WIDTH, min_width=ACTIVE_COLUMN_WIDTH)
     app.schedule_view.append_column(col_active)
 
+    next_run_col = None
     for col_idx, title_text, width in [
         (COL_NAME, "Profile Name", 140),
         (COL_TYPE, "Type", 70),
@@ -135,11 +138,13 @@ def create_schedule_page(app):
             r.set_property("editable", False)
         if col_idx == COL_NEXT_RUN:
             set_monospace_font(r)
-            # The bucket/UTC-edge decoration can exceed one line; wrap it
-            # within the column instead of stretching or truncating.
-            r.set_property("wrap-mode", Pango.WrapMode.WORD)
-            r.set_property("wrap-width", 215)
+            # The bucket/UTC-edge decoration can exceed one line; ellipsize
+            # it so every row keeps a uniform height, with the full text
+            # available via the row tooltip connected below.
+            r.set_property("ellipsize", Pango.EllipsizeMode.END)
         col = Gtk.TreeViewColumn(title_text, r, text=col_idx)
+        if col_idx == COL_NEXT_RUN:
+            next_run_col = col
         configure_treeview_column(col, width=width)
         if col_idx in (COL_NAME, COL_TYPE, COL_COMMENT):
             col.set_sort_column_id(col_idx)
@@ -149,6 +154,9 @@ def create_schedule_page(app):
             col.set_clickable(True)
         app.schedule_view.append_column(col)
     app._ui_state.bind_treeview(app.schedule_view, "schedule_view")
+
+    app.schedule_view.set_has_tooltip(True)
+    app.schedule_view.connect("query-tooltip", _on_next_run_query_tooltip, app, next_run_col)
 
     scroll = Gtk.ScrolledWindow()
     scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -654,6 +662,22 @@ def _update_next_run_for_iter(app, tree_iter):
     app.schedule_store.set_value(tree_iter, COL_NEXT_RUN_SORT, next_run_sort)
 
 
+def _on_next_run_query_tooltip(view, x, y, keyboard_mode, tooltip, app, next_run_col):
+    """Show the full Next Run string when the Next Run cell is hovered.
+
+    The cell renderer ellipsizes decorated values (bucket word plus the
+    UTC-edge translation) so every row keeps a uniform height; the tooltip
+    restores the complete text.  Hovers over other columns or empty space
+    return False so GTK falls through to the default behavior.
+    """
+    bin_x, bin_y = view.convert_widget_to_bin_window_coords(x, y)
+    hit = view.get_path_at_pos(bin_x, bin_y)
+    if not hit or hit[1] is not next_run_col:
+        return False
+    tooltip.set_text(app.schedule_store[hit[0]][COL_NEXT_RUN])
+    return True
+
+
 def _on_selection_changed(selection, app):
     model, paths = selection.get_selected_rows()
     if not paths:
@@ -716,7 +740,7 @@ def _on_selection_changed(selection, app):
     summary = f"Dry run: {'Yes' if dry_run else 'No'}\n\n{json.dumps(cfg, indent=2)}"
     if profile.get("active", False):
         runner_path = _resolve_profile_runner_path()
-        cron_line = generate_cron_line(profile, runner_path)
+        cron_line = generate_cron_line(profile, runner_path, _cron_log_path(app))
         if cron_line:
             summary = f"Crontab entry:\n{cron_line}\n\n{summary}"
 
@@ -839,13 +863,20 @@ def _update_interpretation(app):
     app.schedule_examples_label.set_markup(f"<b>Examples:</b>\n{examples}")
 
 
+def _cron_log_path(app):
+    """Return the cron output log path from the configuration file."""
+    return get_paths_config(app.config)["cron_log"]
+
+
 def _regenerate_cron(app):
     profiles = list_profiles()
     runner_path = get_profile_runner_path()
+    paths_cfg = get_paths_config(app.config)
     try:
-        write_cron_file(profiles, runner_path)
+        write_cron_file(profiles, runner_path, paths_cfg["cron_log"])
+        write_logrotate_file(paths_cfg)
     except OSError as e:
-        show_error_dialog(app, f"Failed to update cron file:\n{e}")
+        show_error_dialog(app, f"Failed to update scheduler configuration:\n{e}")
 
 
 def _resolve_profile_runner_path():

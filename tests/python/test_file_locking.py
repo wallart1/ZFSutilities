@@ -18,8 +18,11 @@ import file_locking as fl
 
 # Generous ceiling for the child-process "lock held" handshake: under a full
 # tests/run-tests pass, pytest-xdist workers can starve the freshly spawned
-# child long past 5s before it reaches its queue.put().
-HANDSHAKE_TIMEOUT = 60
+# child long past 5s before it reaches its queue.put(). 60s proved too tight
+# once under peak parallel load (observed 2026-10-10), so the ceiling sits
+# well above any observed scheduling delay; a genuinely hung child still
+# fails the test, just later.
+HANDSHAKE_TIMEOUT = 300
 
 
 class TestLockPathDefaults(unittest.TestCase):

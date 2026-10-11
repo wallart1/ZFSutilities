@@ -99,6 +99,7 @@ load_uninstall_config() {
     cache_dir="${ZFSUTILITIES_CACHE_DIR:-/root/.cache/zfsutilities}"
     log_dir="${ZFSUTILITIES_LOG_DIR:-/var/log/zfsutilities}"
     cron_file="${ZFSUTILITIES_CRON_FILE:-/etc/cron.d/zfsutilities}"
+    logrotate_file="${ZFSUTILITIES_LOGROTATE_FILE:-/etc/logrotate.d/zfsutilities}"
     profile_lock_dir="${ZFSUTILITIES_PROFILE_LOCK_DIR:-/run/lock/zfsutilities/profiles}"
     zfslock_dir="${ZFSUTILITIES_ZFSLOCK_DIR:-/run/lock/zfsutilities}"
     systemd_dir="${ZFSUTILITIES_SYSTEMD_DIR:-/etc/systemd/system}"
@@ -302,6 +303,7 @@ detect_installed_state() {
     has_config="false"
     has_logs="false"
     has_cron="false"
+    has_logrotate="false"
     has_systemd="false"
     has_cachewarm="false"
 
@@ -322,6 +324,10 @@ detect_installed_state() {
 
     if [[ -f "$cron_file" ]]; then
         has_cron="true"
+    fi
+
+    if [[ -f "$logrotate_file" ]]; then
+        has_logrotate="true"
     fi
 
     if [[ -d "$systemd_dir/rtslib-fb-targetctl.service.d" || \
@@ -351,6 +357,7 @@ present_interactive_dialog() {
     log_msg "INFO:   Configuration files:   $has_config"
     log_msg "INFO:   Log files:             $has_logs"
     log_msg "INFO:   Cron schedules:        $has_cron"
+    log_msg "INFO:   Logrotate drop-in:     $has_logrotate"
     log_msg "INFO:   Systemd integration:   $has_systemd"
     log_msg "INFO:   Cache-warm utility:    $has_cachewarm"
     log_msg "INFO:   Node mode:             $NODE_MODE"
@@ -439,6 +446,7 @@ confirm_uninstall() {
         log_msg "INFO:   - $profile_file"
         log_msg "INFO:   - $sudoers_file"
         log_msg "INFO:   - $cron_file"
+        log_msg "INFO:   - $logrotate_file"
         log_msg "INFO:   - $systemd_dir/rtslib-fb-targetctl.service.d/"
         log_msg "INFO:   - $systemd_dir/zfs-cache-warm.service"
         log_msg "INFO:   - $system_config_dir/"
@@ -465,6 +473,7 @@ confirm_uninstall() {
         log_msg "INFO:   - $profile_file"
         log_msg "INFO:   - $sudoers_file"
         log_msg "INFO:   - $cron_file"
+        log_msg "INFO:   - $logrotate_file"
         log_msg "INFO:   - $systemd_dir/rtslib-fb-targetctl.service.d/"
         log_msg "INFO:   - $systemd_dir/zfs-cache-warm.service"
         log_msg "INFO:   - Desktop shortcuts for the GUI and documentation viewer"
@@ -540,6 +549,9 @@ uninstall_software() {
 
     # Remove cron drop-in.
     remove_file "$cron_file"
+
+    # Remove logrotate drop-in.
+    remove_file "$logrotate_file"
 
     # Remove systemd integration.
     remove_dir "$systemd_dir/rtslib-fb-targetctl.service.d"

@@ -3065,3 +3065,43 @@ with new clones (verified live: origins still on vm-211's @clone snaps,
   ShellCheck (documented command) + ruff clean; both affected suites
   green; docs integrity 23/23; site rebuilt.
 
+
+## 2026-10-11 — config migration v27 (paths section)
+
+- User audit caught a gap in the cron.log-lifecycle work: the new `paths`
+  config section was only lazy-seeded by get_paths_config (persisted solely
+  when the GUI regenerates cron), with no CONFIG_VERSION bump — violating
+  config_migrations.py's own "bump when JSON structure changes" rule and
+  leaving headless-upgraded config.json files without a visible section.
+- Fix: _migrate_26_to_27 seeds the section via get_paths_config
+  (persist=False; lazy import avoids the config_core circular import);
+  CONFIG_VERSION 27; migration registered. Lazy seeding remains as the
+  runtime backstop for hand-pruned files.
+- Tests: seed/preserve/idempotent migration tests, version-pin and chain
+  tests updated (26 -> 27 pins, from_version_14 chain now asserts paths
+  seeds through the whole chain). data-structures.md migration chain and
+  paths-section prose updated.
+
+## 2026-10-11 — development-cycle wrap-up (steps 1-6)
+
+- Step 1 (PREEXISTING): resolved 3 — sever 0B origin-report explanation
+  (message + catalogue + two-node note + test), test_file_locking handshake
+  ceiling 60→300s, zfsretain dry-run checkagainst caveat (message + note +
+  test); narrowed pre-sidecar entry (FATAL names the cause; manual restore
+  documented in commands.md; legacy-import mode left as user decision);
+  Zensical recheck 2026-10-11 still 0.0.69. 3 entries remain (2 user
+  decisions + 1 style pair).
+- Step 2 (standards): documented shellcheck pass clean — new SC2128/SC2178
+  cluster in test-unarchive-vm suppressed with explained file-level
+  directive (mock scalar misinferred as array; test-lib source unfollowable);
+  pre-existing SC2295 in unarchive-vm fixed; 13 changeset-added bash lines
+  >100 chars wrapped (log_msg join-safe; grep/[[ ]] assertions rebuilt via
+  needle variables — backslash-continuation string concat does NOT join
+  across indented lines, it makes two arguments); ruff check + format clean
+  tree-wide; 2 unwrappable pre-existing uninstall lines recorded.
+- Step 3 (tests): added zfsdelsnap unknown-age gate test + zfsmassdelsnaps
+  unknown-age 0-day display test; no obsolete/incorrect tests found.
+- Step 4 (docs): message catalogue rows for the three new/changed messages;
+  two-node 0B accounting note; unarchive-vm pre-sidecar warning box;
+  zfsretain dry-run gates note. Integrity 23/23; site rebuilt.
+- Steps 5-6: full suite without soaks in background; freeze on green.

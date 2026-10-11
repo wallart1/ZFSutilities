@@ -658,7 +658,25 @@ zfs() {
             return 0
             ;;
 
-        snapshot|create|destroy|receive|rollback|set)
+        receive)
+            # Real OpenZFS userland refuses volblocksize as a receive -o
+            # override (verified empirically: 2.2.2 in containers,
+            # 2.4.4-pve1 in production), and raw streams cannot be
+            # reblocked at all. Accepting it here once masked a production
+            # archive FATAL for the entire life of the old code.
+            local _recv_arg
+            for _recv_arg in "$@"; do
+                if [[ "$_recv_arg" == volblocksize=* ]]; then
+                    echo "cannot receive: invalid property 'volblocksize'" >&2
+                    return 1
+                fi
+            done
+            # A successful receive creates the target dataset.
+            _mock_zfs_datasets["${args[-1]}"]=1
+            return 0
+            ;;
+
+        snapshot|create|destroy|rollback|set)
             return 0
             ;;
 

@@ -8,7 +8,13 @@ from config_migrations import CONFIG_VERSION, run_migrations
 from file_locking import config_lock_read, config_lock_write
 from logging_config import MSG_LEVELS, log_msg
 from migration import run_migration
-from paths import get_config_path, get_session_log_dir
+from paths import (
+    get_config_path,
+    get_log_dir,
+    get_logrotate_file_path,
+    get_scrub_manager_log_path,
+    get_session_log_dir,
+)
 from paths import get_profiles_dir as _paths_get_profiles_dir
 
 CONFIG_PATH = os.environ.get("ZFSUTILITIES_CONFIG_PATH", get_config_path())
@@ -302,3 +308,38 @@ def save_memory_config(config, memory_data):
     """Store Performance tab config and persist to disk."""
     config["memory"] = dict(memory_data)
     save_config(config)
+
+
+def get_paths_config(config, persist=True):
+    """Return the file-paths section, seeding any missing defaults.
+
+    File paths are installation-specific data: they are configured in the
+    main configuration file rather than hard-coded at usage sites.  Seed
+    values are derived from the centralized path layer (and follow its
+    environment overrides); user-set values always win.
+
+    With *persist* (the default) a config that lacked the section — or a
+    key — has the seeds written back so the configuration file visibly
+    holds every path the runtime uses.  Headless readers pass
+    ``persist=False`` to derive without writing.
+    """
+    paths = config.get("paths")
+    if not isinstance(paths, dict):
+        paths = {}
+        config["paths"] = paths
+    seeded = False
+    defaults = {
+        "cron_log": os.path.join(get_log_dir(), "cron.log"),
+        "scrub_manager_log": get_scrub_manager_log_path(),
+        "logrotate_file": get_logrotate_file_path(),
+    }
+    for key, value in defaults.items():
+        if key not in paths:
+            paths[key] = value
+            seeded = True
+    if seeded and persist:
+        try:
+            save_config(config)
+        except OSError:
+            pass
+    return paths

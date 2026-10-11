@@ -588,10 +588,12 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | `archive_base` | Optional ZFS dataset that contains the archive (defaults to the path saved in JSON config) |
 | `--new-vmid`   | Optional new VM ID to use for restored resources                                           |
 
-The script discovers archived zvols, restores each one with its original
-`volblocksize`, rebuilds iSCSI backstores and LUNs in two-node mode, restores
-the Proxmox config, and triggers an iSCSI rescan. Cloned datasets are archived
-as full datasets and are therefore restored as full datasets.
+The script discovers archived zvols and restores each one with its original
+`volblocksize` — copy-method archives are device-copied onto a freshly created
+zvol at the recorded volblocksize, while raw (encrypted or legacy) archives are
+streamed back as-is. It rebuilds iSCSI backstores and LUNs in two-node mode,
+restores the Proxmox config, and triggers an iSCSI rescan. Cloned datasets are
+archived as full datasets and are therefore restored as full datasets.
 
 If the original `vmid` is already in use and you do not pass `--new-vmid`, the
 script prompts you to enter a new VM ID or cancel. When a new VM ID is used,

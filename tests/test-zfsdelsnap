@@ -387,6 +387,252 @@ EOF
     rm -rf "$tmpdir"
 }
 
+# ------------------------------------------------------------------
+# Tests: snapshot_age_days helper (shared with zfsretain dry-run gate)
+# ------------------------------------------------------------------
+
+test_snapshot_age_days_helper() {
+    test_start "snapshot_age_days floors fractional ages"
+    local age
+    age=$(
+        env _MOCK_CREATION=$(( $(date +%s) - 41*86400 - 3600 )) bash -c '
+            zfs() {
+                if [[ "$1" == "get" ]]; then
+                    echo "$_MOCK_CREATION"
+                    return 0
+                fi
+                command zfs "$@"
+            }
+            source "'"$old_mydir"'/bin/zfsdelsnap"
+            snapshot_age_days "pool@snap"
+        ' 2>/dev/null
+    )
+    if [[ "$age" == "41" ]]; then
+        test_pass
+    else
+        test_fail "Expected 41, got: $age"
+    fi
+
+    test_start "snapshot_age_days reports -1 for non-numeric creation"
+    age=$(
+        env _MOCK_CREATION="-" bash -c '
+            zfs() {
+                if [[ "$1" == "get" ]]; then
+                    echo "$_MOCK_CREATION"
+                    return 0
+                fi
+                command zfs "$@"
+            }
+            source "'"$old_mydir"'/bin/zfsdelsnap"
+            snapshot_age_days "pool@snap"
+        ' 2>/dev/null
+    )
+    if [[ "$age" == "-1" ]]; then
+        test_pass
+    else
+        test_fail "Expected -1, got: $age"
+    fi
+
+    test_start "snapshot_age_days reports -1 when zfs get fails"
+    age=$(
+        bash -c '
+            zfs() {
+                if [[ "$1" == "get" ]]; then
+                    return 1
+                fi
+                command zfs "$@"
+            }
+            source "'"$old_mydir"'/bin/zfsdelsnap"
+            snapshot_age_days "pool@snap"
+        ' 2>/dev/null
+    )
+    if [[ "$age" == "-1" ]]; then
+        test_pass
+    else
+        test_fail "Expected -1, got: $age"
+    fi
+}
+
+test_minage_gate_blocks_young_snapshot() {
+    test_start "Minimum-age gate refuses a young snapshot"
+    local tmpdir output rc=0
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/zfscheckagainst" << 'EOF'
+checkagainst() { true; }
+remove_leading_qualifiers() { echo "$2"; }
+EOF
+    cat > "$tmpdir/zfsdelallholds" << 'EOF'
+delallholds() { true; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    cat > "$tmpdir/zfs-diagnose-busy" << 'EOF'
+function diagnose_dataset_busy {
+    true
+}
+EOF
+    cat > "$tmpdir/bashfatal" << 'EOF'
+#!/usr/bin/bash
+exit ${1:-8}
+EOF
+
+    output=$(
+        env mydir="$tmpdir" msg_level="INFO" \
+            _MOCK_CREATION=$(( $(date +%s) - 41*86400 )) bash -c '
+            zfs() {
+                case "$1" in
+                    list) return 0 ;;
+                    get)
+                        if [[ "$*" == *"creation"* ]]; then
+                            echo "$_MOCK_CREATION"
+                            return 0
+                        fi
+                        ;;
+                    destroy) echo "DESTROYED $*"; return 0 ;;
+                esac
+                command zfs "$@"
+            }
+            source "'"$old_mydir"'/bin/zfsdelsnap"
+            msg_level="INFO"
+            delsnap "pool@snap" "45" "N" "nocheckagainst"
+        ' 2>&1
+    ) || rc=$?
+
+    if [[ $rc -eq 1 && "$output" == *"only 41 days old. Minimum age is 45 days."* \
+        && "$output" != *"DESTROYED"* ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=1 age refusal without destroy, got rc=$rc output: $output"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+test_minage_gate_passes_old_snapshot() {
+    test_start "Minimum-age gate lets an old-enough snapshot through"
+    local tmpdir output rc=0
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/zfscheckagainst" << 'EOF'
+checkagainst() { true; }
+remove_leading_qualifiers() { echo "$2"; }
+EOF
+    cat > "$tmpdir/zfsdelallholds" << 'EOF'
+delallholds() { true; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    cat > "$tmpdir/zfs-diagnose-busy" << 'EOF'
+function diagnose_dataset_busy {
+    true
+}
+EOF
+    cat > "$tmpdir/bashfatal" << 'EOF'
+#!/usr/bin/bash
+exit ${1:-8}
+EOF
+
+    output=$(
+        env mydir="$tmpdir" \
+            _MOCK_CREATION=$(( $(date +%s) - 50*86400 )) bash -c '
+            zfs() {
+                case "$1" in
+                    list) return 0 ;;
+                    get)
+                        if [[ "$*" == *"creation"* ]]; then
+                            echo "$_MOCK_CREATION"
+                            return 0
+                        fi
+                        echo "-"
+                        return 0
+                        ;;
+                    destroy) echo "DESTROYED $*"; return 0 ;;
+                esac
+                command zfs "$@"
+            }
+            source "'"$old_mydir"'/bin/zfsdelsnap"
+            msg_level="INFO"
+            delsnap "pool@snap" "45" "N" "nocheckagainst"
+        ' 2>&1
+    ) || rc=$?
+
+    if [[ $rc -eq 0 && "$output" == *"DESTROYED"* && "$output" != *"Minimum age"* ]]; then
+        test_pass
+    else
+        test_fail "Expected destroy after gate pass, got rc=$rc output: $output"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+test_minage_gate_passes_unknown_age_snapshot() {
+    test_start "Minimum-age gate lets an unreadable-creation snapshot through"
+    local tmpdir output rc=0
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/zfscheckagainst" << 'EOF'
+checkagainst() { true; }
+remove_leading_qualifiers() { echo "$2"; }
+EOF
+    cat > "$tmpdir/zfsdelallholds" << 'EOF'
+delallholds() { true; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    cat > "$tmpdir/zfs-diagnose-busy" << 'EOF'
+function diagnose_dataset_busy {
+    true
+}
+EOF
+    cat > "$tmpdir/bashfatal" << 'EOF'
+#!/usr/bin/bash
+exit ${1:-8}
+EOF
+
+    # snapshot_age_days reports -1 (age unknown) when creation is not a
+    # number; the gate treats unknown as not-young and proceeds.
+    output=$(
+        env mydir="$tmpdir" bash -c '
+            zfs() {
+                case "$1" in
+                    list) return 0 ;;
+                    get)
+                        echo "-"
+                        return 0
+                        ;;
+                    destroy) echo "DESTROYED $*"; return 0 ;;
+                esac
+                command zfs "$@"
+            }
+            source "'"$old_mydir"'/bin/zfsdelsnap"
+            msg_level="INFO"
+            delsnap "pool@snap" "45" "N" "nocheckagainst"
+        ' 2>&1
+    ) || rc=$?
+
+    if [[ $rc -eq 0 && "$output" == *"DESTROYED"* && "$output" != *"Minimum age"* ]]; then
+        test_pass
+    else
+        test_fail "Expected destroy on unknown age, got rc=$rc output: $output"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+test_snapshot_age_days_helper
+test_minage_gate_blocks_young_snapshot
+test_minage_gate_passes_old_snapshot
+test_minage_gate_passes_unknown_age_snapshot
 test_user_hold_blocks_deletion
 
 test_summary
