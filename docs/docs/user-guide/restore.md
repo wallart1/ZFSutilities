@@ -71,6 +71,79 @@ per-dataset locks still prevent collisions on the same datasets.
 For details of the two-step restore, see the
 [Architecture - Restore Flow](../developer-guide/architecture.md#restore-flow).
 
+## What a Restore Preserves
+
+Backups in ZFSutilities are **data-only streams**. Every backup path — the
+bash scripts (`zfsdailybackup`, `zfssendoffsite`, `zfssend`) as well as the
+GUI's Backup, Offsite, and Restore tabs and scheduled profiles — transfers
+snapshots with `zfs send -cw` (compressed, raw) through the shared
+[`zfs-send-receive`](../commands-and-modules/modules.md#zfs-send-receive)
+engine; the restore paths (`zfsrestore`, `zfsfullcopy`) use the same engine.
+
+Those streams carry the snapshot data and the encryption state, but **no
+dataset properties**: the destination dataset is created with the settings it
+inherits from its parent in the destination pool, and later incremental
+transfers never propagate source-side property changes. A restored dataset
+comes back with its data intact (transfer verification compares snapshot
+GUIDs — see [Advanced Options](#advanced-options)) but wearing the
+destination hierarchy's `compression`, `recordsize`, `quota`, and similar
+settings rather than the source's.
+
+Two deliberate exceptions:
+
+- **Migrate Pool** (Disks page) uses replication streams (`zfs send -Rw`,
+  with `-RIw` incrementals at cutover), which do carry dataset properties —
+  a pool migration is intended to reproduce the source configuration.
+- **archive-vm** records each archived zvol's original `volblocksize` in a
+  `.original_volblocksize` sidecar and `unarchive-vm` re-applies it on
+  restore; see
+  [archive-vm](../commands-and-modules/commands.md#archive-vm).
+
+Snapshot holds are handled separately; see
+[Preserving Target Holds During a Restore](#preserving-target-holds-during-a-restore).
+
+### Encrypted datasets
+
+Encrypted datasets always travel as raw (`-w`) streams — that is what keeps
+them encrypted end to end. A received copy of an encrypted dataset becomes
+**its own encryption root**: it is not linked into the destination pool's
+key hierarchy, even when it is received under an encrypted parent. The
+encryption algorithm, key format, PBKDF2 iterations, and key material all
+travel inside the stream, so the data comes back encrypted exactly as it was
+sent.
+
+One property is deliberately not carried: `keylocation`. A received encrypted
+dataset always starts with `keylocation=prompt`, because the source's key-file
+path would not exist on the destination. After restoring, point it at your
+key store and unlock:
+
+```bash
+sudo zfs set keylocation=file:///mnt/ZFSkeys/pool.key pool/dataset
+sudo zfs load-key pool/dataset
+sudo zfs mount pool/dataset
+```
+
+See [ZFS Key Handling](../installation/zfs-keys.md) for the key-store layout
+and boot-time behavior.
+
+### Block size and compression at rest
+
+`zfs receive` never rewrites received data to match the destination's
+settings: blocks keep the record size they were written with, and
+already-compressed blocks are not recompressed. Destination `recordsize` and
+`compression` affect only **future writes** after the restore. The practical
+consequences:
+
+- Backup storage footprint is governed by the source's settings, not the
+  destination's.
+- A zvol's `volblocksize` cannot change once the zvol is written. The only
+  receive-time lever is `zfs receive -o volblocksize=`, whose support varies
+  by OpenZFS version (some releases refuse the override outright), and raw
+  streams can only be received as-is. Reblocking a zvol therefore means
+  copying its data into a freshly created zvol — the approach the
+  [archive-vm](../commands-and-modules/commands.md#archive-vm) copy method
+  takes.
+
 ## Pause Scrubs During Restore
 
 The Restore tab in the GUI has an option to **pause scrubs on the source and destination
@@ -136,5 +209,3 @@ sudo zfsreapplyholds --capture pool/dest /tmp/dest-holds.tsv
 # ... perform the restore ...
 sudo zfsreapplyholds --apply pool/dest /tmp/dest-holds.tsv
 ```
-
-# 

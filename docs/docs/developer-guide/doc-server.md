@@ -21,6 +21,17 @@ The documentation can be viewed in three ways:
    MkDocs live reload: edits saved in `docs/docs/` are rebuilt and the browser
    page refreshes automatically.
 
+!!! note "Viewers follow the launch layout"
+    Both viewers serve the built site belonging to the code that is running:
+    a GUI or viewer launched from a repository checkout reads the
+    repository's `docs/site/`, and one launched from a deployment reads
+    `/usr/local/lib/zfsutilities/current/docs/site/`. A repository launch
+    never falls back to the deployed site — when the repository's
+    `docs/site/` has not been built, the viewer shows the `mkdocs build`
+    instructions instead of deployment content. The site location is chosen
+    once when the viewer window opens, so a viewer that is already open
+    keeps serving the tree it started with until it is reopened.
+
 !!! tip "Live updates while editing"
     If you are actively editing documentation, use `startdocserver` and a web
     browser. The embedded and standalone viewers show the static build in
@@ -208,3 +219,13 @@ hook sets `page.edit_url` directly to bypass this.
     internally. Clicking the pencil icon launches the configured editor directly
     without relying on a desktop URI handler. See
     [GTK GUI Reference → Help Menu](../user-guide/gtk-gui.md#help-menu).
+
+    Because the baked path is absolute, the viewer re-anchors it before
+    launching the editor: the source tail after `/docs/docs/` is remapped
+    onto the documentation tree whose `docs/site/` the viewer is serving.
+    The pencil therefore always edits the markdown belonging to the tree on
+    screen — a repository-served viewer edits the repository document even
+    when the site was originally built elsewhere, and a deployment-served
+    viewer edits through the `current` symlink even when the site was built
+    inside a specific `versions/` directory. A browser using the desktop URI
+    handler receives the baked absolute path unchanged.

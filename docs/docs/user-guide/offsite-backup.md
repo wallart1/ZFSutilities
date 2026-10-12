@@ -58,6 +58,11 @@ destination is just `<offsite>`, the source dataset tree is appended under that 
 
 - `fivebays`→`<offsite>` becomes `fivebays`→`z22tb/fivebays`
 
+The offsite copies are data-only streams (`zfs send -cw`), just like the
+daily backup: snapshot data and encryption travel, dataset settings do not.
+See [What a Restore Preserves](restore.md#what-a-restore-preserves) for
+details.
+
 ### Scope alignment with daily backup
 
 An offsite step must snapshot the same source tree that the daily backup sends

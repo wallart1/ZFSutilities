@@ -179,12 +179,14 @@ class TestGetVersion(unittest.TestCase):
 
 
 class TestGetDocsPath(unittest.TestCase):
-    """Tests for get_docs_path()."""
+    """Tests for get_docs_path() — resolution is layout-faithful."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
-        self.repo_dir = os.path.join(self.tmpdir, "python")
+        self.repo_dir = os.path.join(self.tmpdir, "repo", "python")
         os.makedirs(self.repo_dir)
+        self.deployed_dir = os.path.join(self.tmpdir, "versions", "v1.0.0", "python")
+        os.makedirs(self.deployed_dir)
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
@@ -192,30 +194,46 @@ class TestGetDocsPath(unittest.TestCase):
 
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def test_get_docs_path_repo(self):
-        """Docs path is found in repo layout."""
-        docs_path = os.path.join(self.tmpdir, "docs", "site", "index.html")
-        os.makedirs(os.path.dirname(docs_path))
+    def _write_site_index(self, *parts):
+        docs_path = os.path.join(self.tmpdir, *parts)
+        os.makedirs(os.path.dirname(docs_path), exist_ok=True)
         with open(docs_path, "w") as f:
             f.write("<html></html>\n")
+        return docs_path
+
+    def test_get_docs_path_repo(self):
+        """Docs path is found in repo layout."""
+        docs_path = self._write_site_index("repo", "docs", "site", "index.html")
         result = path_utils.get_docs_path(self.repo_dir)
         self.assertEqual(result, docs_path)
 
-    def test_get_docs_path_deployed(self):
-        """Docs path is found in deployed layout."""
-        docs_path = os.path.join(self.tmpdir, "current", "docs", "site", "index.html")
-        os.makedirs(os.path.dirname(docs_path))
-        with open(docs_path, "w") as f:
-            f.write("<html></html>\n")
+    def test_get_docs_path_repo_never_falls_back_to_deployed(self):
+        """A repo checkout must not silently resolve to the deployed site."""
+        deployed_docs = self._write_site_index("current", "docs", "site", "index.html")
         with patch.object(path_utils, "_DEPLOYMENT_BASE", self.tmpdir):
             result = path_utils.get_docs_path(self.repo_dir)
-            self.assertEqual(result, docs_path)
+        self.assertIsNone(result)
+        self.assertTrue(os.path.isfile(deployed_docs))
 
-    def test_get_docs_path_missing_returns_none(self):
-        """get_docs_path returns None when docs are not built."""
+    def test_get_docs_path_repo_missing_returns_none(self):
+        """get_docs_path returns None when the repo site is not built."""
         with patch.object(path_utils, "_DEPLOYMENT_BASE", os.path.join(self.tmpdir, "nowhere")):
             result = path_utils.get_docs_path(self.repo_dir)
-            self.assertIsNone(result)
+        self.assertIsNone(result)
+
+    def test_get_docs_path_deployed_uses_current(self):
+        """A deployed layout resolves through the current symlink."""
+        current_docs = self._write_site_index("current", "docs", "site", "index.html")
+        with patch.object(path_utils, "_DEPLOYMENT_BASE", self.tmpdir):
+            result = path_utils.get_docs_path(self.deployed_dir)
+        self.assertEqual(result, current_docs)
+
+    def test_get_docs_path_deployed_ignores_repo_site(self):
+        """A deployed layout must not resolve to a sibling repo-style tree."""
+        self._write_site_index("repo", "docs", "site", "index.html")
+        with patch.object(path_utils, "_DEPLOYMENT_BASE", self.tmpdir):
+            result = path_utils.get_docs_path(self.deployed_dir)
+        self.assertIsNone(result)
 
 
 class TestRemoteResolution(unittest.TestCase):

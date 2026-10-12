@@ -121,16 +121,15 @@ def get_version(script_dir=None):
 def get_docs_path(script_dir=None):
     """Return the path to the built documentation ``index.html``.
 
-    Checks the repo layout first, then the deployed layout.  Returns ``None``
-    if no built docs are found.
+    Resolution is layout-faithful: a repo checkout resolves within the repo
+    and a deployed layout resolves to the active deployment.  There is no
+    cross-layout fallback, so a GUI launched from the repo can never
+    silently view (or edit) a deployment's documents.  Returns ``None`` if
+    the layout's site is not built.
     """
-    candidates = [
-        os.path.join(_version_base(script_dir), _DOCS_INDEX),
-        os.path.join(_DEPLOYMENT_BASE, "current", _DOCS_INDEX),
-    ]
-    for path in candidates:
-        if os.path.isfile(path):
-            return path
+    path = os.path.join(_version_base(script_dir), _DOCS_INDEX)
+    if os.path.isfile(path):
+        return path
     return None
 
 

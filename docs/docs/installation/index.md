@@ -12,6 +12,46 @@ ZFSutilities supports two deployment modes:
 For an overview of all documentation sections, return to the
 [ZFS Utilities home page](../index.md).
 
+## Capabilities by Deployment Mode
+
+The table below summarizes what works where, before you choose between the
+modes described above. The columns mirror the deployment situations this
+guide uses throughout: the two single-node variants (Proxmox VE installed
+or not) and the two two-node host roles. An em-dash (—) means the
+capability does not apply in that situation. Two rules of thumb underlie
+every row:
+
+- **Core backup features follow the pools** — they run wherever the ZFS
+  pools live: a single-node host or the two-node storage host.
+- **VM disk and iSCSI features follow the VMs** — VM disk lifecycle
+  requires Proxmox VE on the host running the VMs, and iSCSI tooling
+  exists only in two-node mode.
+
+| Capability                                                                              | Single-node (no Proxmox VE) | Single-node (with Proxmox VE) | Two-node storage host | Two-node compute host |
+| --------------------------------------------------------------------------------------- | --------------------------- | ----------------------------- | --------------------- | --------------------- |
+| [Snapshots and retention policies](../user-guide/retention.md)                          | Yes                         | Yes                           | Yes                   | —                     |
+| [Daily backup](../user-guide/daily-backup.md)                                           | Yes                         | Yes                           | Yes                   | —                     |
+| [Offsite backup and rotation](../user-guide/offsite-backup.md)                          | Yes                         | Yes                           | Yes                   | —                     |
+| [Restore](../user-guide/restore.md)                                                     | Yes                         | Yes                           | Yes                   | —                     |
+| Pool creation, health, and scrubbing                                                    | Yes                         | Yes                           | Yes                   | —                     |
+| [GTK GUI](../user-guide/gtk-gui.md), documentation viewer, profiles, and scheduling     | Yes                         | Yes                           | Yes                   | Yes                   |
+| [VM disk lifecycle](../user-guide/proxmox-integration.md)                               | —                           | Yes                           | Yes                   | Yes                   |
+| VM archive and unarchive ([archive-vm](../commands-and-modules/commands.md#archive-vm)) | —                           | Yes                           | Yes                   | Yes                   |
+| iSCSI target setup and LUN export/repair                                                | —                           | —                             | Yes                   | —                     |
+| [Encrypted LUN workflow](zfs-keys.md)                                                   | —                           | —                             | Yes                   | —                     |
+| iSCSI LUN mapping and initiator-side repair                                             | —                           | —                             | —                     | Yes                   |
+
+On the two-node compute host the GUI is installed and runs, but the
+ZFSutilities-managed pools are on the storage host, so its day-to-day role
+there is the Dashboard — which in two-node mode adds the
+[iSCSI issues panel](../commands-and-modules/two-node.md#dashboard-iscsi-issues-two-node-gui)
+— and log browsing. The VM lifecycle scripts marked *both* in the
+[two-node reference](../commands-and-modules/two-node.md) run on either
+host and delegate over SSH as appropriate.
+
+The Proxmox VE requirements behind these columns are detailed under
+[Prerequisites](#prerequisites) below.
+
 ## Prerequisites
 
 ### Required
@@ -25,24 +65,74 @@ For an overview of all documentation sections, return to the
 
 - **Python 3** (for the GTK GUI)
 
-- **WebKit2** — `apt install gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0` (required for the embedded documentation viewer)
+- **WebKit2** — `apt install gir1.2-webkit2-4.1 libwebkit2gtk-4.1-0` (required
+     for the embedded documentation viewer)
 
 !!! warning "ZFS root filesystem not tested"
-    ZFS Utilities has **not been tested** on systems where the root filesystem
-    (`/`) is stored on a ZFS dataset (ZFS-on-root). Pool operations, snapshot
+    ZFS Utilities has **not been tested** on systems where the Linux root filesystem
+    (`/`) is stored on a ZFS dataset (root-on-ZFS). Pool operations, snapshot
     retention, and iSCSI lifecycle scripts may interact with the root pool in
     unexpected ways. Proceed at your own risk.
 
 !!! note "ZFS bookmarks"
     ZFSutilities never creates, destroys, sends, or makes decisions from ZFS
-    bookmarks — they are tolerated but never acted upon. No script
-    enumerates them (the one scan that used `-t all` now asks for
-    filesystems and volumes only, and the common-snapshot search considers
-    snapshots exclusively), so a bookmark can never be chosen as an
-    incremental base, reported as a VM disk, or otherwise affect backups,
-    snapshot retention, or pool migration. Bookmarks present in backup or
-    destination pools are **untested** — ZFSutilities never replicates
+    bookmarks — they are tolerated but never acted upon. Bookmarks present in
+    backup or destination pools are **untested** — ZFSutilities never replicates
     bookmarks, so any found there were created by other tooling.
+
+### OpenZFS Version Requirements
+
+An OpenZFS
+2.1 baseline is assumed: core backups, snapshots, retention, restores, and
+the read-only views work on any 2.1-or-newer installation. Operations that
+need newer OpenZFS features are individually gated — before the GUI offers
+or starts one, it checks the running version and refuses with a WARN when
+the feature is not available. Nothing runs half-supported: an action either
+passes its gate or is aborted up front.
+
+The gates read `zfs version`, which prints two versions — the userland
+tools (`zfs-2.2.2`) and the loaded kernel module (`zfs-kmod-2.2.2`). Every
+feature decision uses the **kernel-module** version, because that is the
+code that actually implements the feature. The two can differ after a
+partial upgrade (new tools with an old module, or the reverse);
+ZFSutilities warns when they don't match. Patch levels matter — the
+minimums below are exact `major.minor.patch` versions:
+
+| Capability             | Minimum OpenZFS | What it gates                                                                                                                                                                                                                               |
+| ---------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `draid`                | 2.1             | dRAID vdev topologies — reserved (no gated action yet)                                                                                                                                                                                      |
+| `json_output`          | 2.3             | JSON output from `zfs`/`zpool` commands — reserved                                                                                                                                                                                          |
+| `zfs_rewrite`          | 2.3.4           | Datasets page **Rewrite Data** action — `zfs rewrite -P` rewrites a filesystem's existing blocks in place so changed properties (compression, `recordsize`) apply to already-written data, without a full copy. Shipped in 2.3.4, not 2.3.0 |
+| `raidz_expansion`      | 2.3             | RAID-Z expansion in the pool-growth dialogs — attaching disks to an existing raidz group; unsupported raidz rows grey out with the required version                                                                                         |
+| `fast_dedup`           | 2.3             | the fast dedup implementation — reserved                                                                                                                                                                                                    |
+| `direct_io`            | 2.3             | direct I/O on zvols — reserved                                                                                                                                                                                                              |
+| `ssb_on_zvols`         | 2.4             | `special_small_blocks` on volumes — reserved                                                                                                                                                                                                |
+| `ssb_non_power_of_two` | 2.4             | `special_small_blocks` with non-power-of-two recordsize values — reserved                                                                                                                                                                   |
+
+Keys marked *reserved* are recognized by the capability layer so there is
+one authoritative minimum per feature, but no ZFSutilities action is gated
+on them yet — today only **Rewrite Data** (`zfs_rewrite`) and RAID-Z
+expansion (`raidz_expansion`) enforce their gates.
+
+A version gate is necessary but not always sufficient. Features that change
+on-disk state also need the pool itself to carry the matching feature flag.
+**Rewrite Data** additionally checks the pool's `physical_rewrite` flag and
+tells you how to enable it
+(`zpool set feature@physical_rewrite=enabled <pool>`). This covers the case
+where the kernel module is new enough but a particular pool — created
+earlier, or constrained by a pool compatibility setting — does not have the
+feature enabled (`zpool get feature@physical_rewrite <pool>` shows its
+state).
+
+To see what you are running:
+
+```bash
+zfs version
+```
+
+The GUI's Performance tab also shows the detected kernel-module version
+next to the ARC header. The module-level reference is
+[`zfs_capabilities.py`](../commands-and-modules/python-modules.md#zfs_capabilitiespy).
 
 ### Proxmox VE (optional on single node and storage node)
 
@@ -59,7 +149,7 @@ backup, snapshot, and retention features and on a two-node storage host.
 !!! warning "Non-Proxmox hypervisors are unsupported"
     ZFSutilities VM disk lifecycle scripts are tightly coupled to Proxmox VE
     (`qm`, `/etc/pve/qemu-server/`, PVE config formats). Running these scripts
-    against other hypervisors is unsupported and may damage VM configurations.
+    against other hypervisors is unsupported and may damage VM configurations and data.
 
 ### GUI Desktop Environment
 
@@ -74,12 +164,6 @@ directions** between the storage host and compute host **before** running
 the installer. The installer will verify this and fail early if either
 direction is not working.
 
-The storage and compute hosts also need a **high-speed network connection**
-between them. iSCSI VM disk traffic and ZFS send/receive streams both run over
-this link, so its bandwidth and latency directly affect VM performance and
-backup times. How to provide that connection (dedicated NICs, VLAN, bonded
-links, etc.) is outside the scope of ZFSutilities.
-
 On the **storage host**:
 
 ```bash
@@ -91,6 +175,12 @@ On the **compute host**:
 ```bash
 ssh-copy-id root@<storage-host>
 ```
+
+The storage and compute hosts also need a **high-speed IP network connection**
+between them. VM disk traffic and runs over
+this link, so its bandwidth and latency directly affect VM performance.
+How to provide that connection (dedicated NICs, VLAN, bonded
+links, etc.) is outside the scope of ZFSutilities.
 
 The installer will also check for and offer to install the following iSCSI
 packages if they are missing:
@@ -105,7 +195,7 @@ packages if they are missing:
 ### Single-node (recommended for new installs)
 
 ```bash
-sudo /path/to/zfsutilities-dev/bin/install-single-node
+sudo /path/to/zfsutilities-repo/bin/install-single-node
 ```
 
 The installer will:
@@ -114,13 +204,15 @@ The installer will:
 2. Explain any missing prerequisites and offer to install them automatically
 3. Install the documentation server (MkDocs) and explain what it provides
 4. Prompt for your hostname (default: current hostname)
-5. Generate the installation configuration file `/etc/zfsutilities/node.conf` (legacy `/etc/zfsutilities-node.conf` also works)
+5. Generate the installation configuration file `/etc/zfsutilities/node.conf`
+   (legacy `/etc/zfsutilities-node.conf` also works)
 6. Deploy scripts as a **versioned installation** to `/usr/local/lib/zfsutilities/versions/<version>/`
 7. Activate the version and wire it into active production:
     - Configure `PATH` in `/etc/profile.d` and `/etc/sudoers.d`
     - Create the `/root/bashinit` symlink
     - Create the `/usr/local/lib/zfsutilities/bin` symlink and library symlinks
-    - Create desktop shortcuts in the installing user's home directory:
+    - Create links for the GUI and standalone documentation viewer in the installing user's
+      home directory:
       **ZFSutilities GUI** and **ZFSutilities Documentation**
 
 ### Two-node
@@ -128,7 +220,7 @@ The installer will:
 Run on the **storage host** (the machine with the ZFS pools):
 
 ```bash
-sudo /path/to/zfsutilities-dev/bin/install-two-node
+sudo /path/to/zfsutilities-repo/bin/install-two-node
 ```
 
 The installer will:
@@ -140,15 +232,15 @@ The installer will:
    storage host and the iSCSI initiator (`open-iscsi`) on the compute host
 5. Prompt for storage host, compute host, storage network IP, iSCSI IQN
    prefix, and pool-to-target mappings
-6. Generate the installation configuration file `/etc/zfsutilities/node.conf` (legacy `/etc/zfsutilities-node.conf` also works)
-7. **Create iSCSI targets** on the storage host automatically (idempotent —
-   skips targets that already exist)
+6. Generate the installation configuration file `/etc/zfsutilities/node.conf`
+   (legacy `/etc/zfsutilities-node.conf` also works)
+7. **Add iSCSI targets** on the storage host
 8. Deploy scripts as a **versioned installation** on both hosts via SSH
 9. Activate the version on both hosts and wire it into active production:
     - Configure `PATH` in `/etc/profile.d` and `/etc/sudoers.d`
     - Create the `/root/bashinit` symlink
     - Create the `/usr/local/lib/zfsutilities/bin` symlink and library symlinks
-    - Create desktop shortcuts in the installing user's home directory:
+    - Create links in the installing user's home directory:
       **ZFSutilities GUI** and **ZFSutilities Documentation**
 10. Verify SSH key authorization between hosts
 11. **Patch PVE's iSCSI rescan rate limit** on the compute host when PVE is
@@ -167,33 +259,38 @@ for details.
 
 See [Next Steps](#next-steps) for what to do after installation.
 
-## Versioned Upgrades
+## How to Upgrade
 
 1. **Acquire the new version.** Download or clone the release you want to
-   install into a fresh directory (do not reuse an old checkout that may have
+   install into a fresh directory (do not reuse an old directory that may have
    local changes):
 
    ```bash
-   git clone https://github.com/wallart1/ZFSutilities.git zfsutilities-new
-   cd zfsutilities-new
+   git clone https://github.com/wallart1/ZFSutilities.git \<target-directory\>
+   cd \<target-directory\>
    ```
 
-2. **Deploy it** with [deploy-version](../commands-and-modules/two-node.md#deploy-version-repo-root) from that directory.
-   This copies the repository into a new version directory without touching the
+2. **Deploy it** with [deploy-version](../commands-and-modules/two-node.md#deploy-version-repo-root)
+   from that directory. This copies the repository into a new version directory without touching the
    running system:
 
    ```bash
    sudo ./bin/deploy-version
-   sudo switch-version 0.34.0
+   sudo switch-version --list
+   sudo switch-version \<version\>
    ```
 
-- [deploy-version](../commands-and-modules/two-node.md#deploy-version-repo-root) copies the current repo state into a new version directory without touching active production
-- [switch-version](../commands-and-modules/two-node.md#switch-version-any-host) wires a deployed version into active production by updating the `current` symlink, refreshing `PATH` configuration, library symlinks, and desktop shortcuts
-- Roll back instantly: `sudo switch-version previous`
-- List deployed versions: `sudo switch-version --list`
-- Remove a version's wiring manually: `sudo switch-version --uninstall`
+- [deploy-version](../commands-and-modules/two-node.md#deploy-version-repo-root) copies the current
+  repo state into a new version directory without touching active production
+- [switch-version](../commands-and-modules/two-node.md#switch-version-any-host) wires a deployed
+  version into active production by updating the `current` symlink, refreshing `PATH` configuration,
+  library symlinks, and desktop shortcuts
+  + Roll back instantly: `sudo switch-version previous`
+  + List deployed versions: `sudo switch-version --list`
+  + Remove a version's wiring: `sudo switch-version --uninstall`
 
-The versioned deployment model is described in the [Architecture](../developer-guide/architecture.md) page.
+The versioned deployment model is described in the
+[Architecture](../developer-guide/architecture.md) page.
 
 ## Switching Modes
 
@@ -205,7 +302,11 @@ To switch from two-node to single-node, run `install-single-node`. It
 rewrites the config for single-node mode. iSCSI scripts remain installed
 but their operations are skipped.
 
-The install scripts assume that storage devices and ZFS pools are already active on the new system configuration. The install scripts themselves do not assist with this; after installation, the GUI's Disks page wizard can create pools from unused disks on the storage host.
+The install scripts assume that storage devices and ZFS pools are *already active* on the new system
+configuration. The install scripts themselves do not assist with this. After installation, the GUI's
+Disks page wizard can create pools from unused disks on the storage host.
+
+Run the install scripts at the node which has the storage pools.
 
 ## Uninstalling ZFSutilities
 
@@ -230,7 +331,7 @@ Removes the deployed software and production wiring:
 - `/etc/cron.d/zfsutilities`
 - systemd service/drop-in files installed by ZFSutilities
 
-Your configuration, logs, and history are preserved.
+Your downloaded repository directories, configuration, logs, and history are preserved.
 
 ### Purge mode
 
@@ -244,7 +345,9 @@ This also removes:
 
 - `/etc/zfsutilities/node.conf`, `/etc/zfsutilities/two-node.conf`, and `/etc/zfsutilities/deploy.conf`
 - `/etc/zfsutilities/iscsi-encrypted-luns.conf`
-- `/var/lib/zfsutilities/config.json`, `/var/lib/zfsutilities/history.json`, `/var/lib/zfsutilities/profiles/`, `/var/lib/zfsutilities/scrub_state.json`, `/var/lib/zfsutilities/nextsnap`, and `/var/lib/zfsutilities/nextsnap_offsite`
+- `/var/lib/zfsutilities/config.json`, `/var/lib/zfsutilities/history.json`,
+  `/var/lib/zfsutilities/profiles/`, `/var/lib/zfsutilities/scrub_state.json`,
+  `/var/lib/zfsutilities/nextsnap`, and `/var/lib/zfsutilities/nextsnap_offsite`
 - `/root/.cache/zfsutilities/`
 - `/var/log/zfsutilities/` (session logs, cron log, rsync-backup log)
 - Scripts, service, and logs from `share/cache-warm/`
@@ -278,7 +381,8 @@ sudo uninstall-zfsutilities --purge --dry-run
 The uninstaller intentionally does **not** touch:
 
 - ZFS pools, datasets, snapshots, or iSCSI targets/LUNs
-- The Proxmox iSCSI rescan-rate patch on the compute host (`/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm`)
+- The Proxmox iSCSI rescan-rate patch on the compute host
+  (`/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm`)
 - Packages that may be used by other software (e.g., MkDocs, mkdocs-material)
 - A pre-existing `/root/bashinit.bak`
 
@@ -386,25 +490,29 @@ sudo zfsutilities-gui
 zfsutilities-docs
 ```
 
-The installer creates desktop shortcuts in the installing user's home directory:
+The installer creates links in the installing user's home directory:
 
 - **ZFSutilities GUI** → `/usr/local/lib/zfsutilities/current/bin/zfsutilities-gui`
 - **ZFSutilities Documentation** → `/usr/local/lib/zfsutilities/current/bin/zfsutilities-docs`
 
-You can run these launchers directly, add them to a panel or start menu, or
+You can run these links directly, add them to a panel or start menu, or
 invoke the underlying Python scripts from a checkout during development:
 
 ```bash
-sudo python3 '/path/to/zfsutilities-dev/python/zfsutilities_gui.py'
-sudo python3 '/path/to/zfsutilities-dev/python/docs_viewer.py'
-``` 
+sudo python3 '/path/to/zfsutilities-repo/python/zfsutilities_gui.py'
+sudo python3 '/path/to/zfsutilities-repo/python/docs_viewer.py'
+```
 
 ## Next Steps
 
 After installation:
 
-- **Single-node**: See [Proxmox Integration](../user-guide/proxmox-integration.md)
-  for how to manage VM disks
+- **Single-node**:
+  - Read [Concepts and Terminology](../user-guide/concepts.md) for the snapshot,
+    retention, and backup-chain vocabulary used throughout this documentation.
+  - Configure the [GTK GUI](../user-guide/gtk-gui.md) for backup and retention management.
+  - Browse the [Commands & Modules Reference](../commands-and-modules/index.md) for the
+    command-line side of every script.
 - **Two-node**:
   - If you have encrypted zvols, read [ZFS Key Handling](zfs-keys.md) for the manual workflow.
   - Run [safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node) to generate the boot config.

@@ -93,7 +93,8 @@ run_archive() {
         "$capture_dir/severances" "$capture_dir/zfs-argv" \
         "$capture_dir/zfsdelfs" "$capture_dir/rescan" \
         "$capture_dir/remove-vm-disk-argv" \
-        "$capture_dir/pv" "$capture_dir/dd"
+        "$capture_dir/pv" "$capture_dir/dd" \
+        "$capture_dir/tee" "$capture_dir/sha256"
 
     local sever_stub="$capture_dir/sever-vm-clone-stub"
     cat > "$sever_stub" << 'EOF'
@@ -153,6 +154,7 @@ EOF
         export _mock_sever_stub="$sever_stub"
         export _mock_cp_fail="${_mock_cp_fail:-}"
         export _mock_hash_dst="${_mock_hash_dst:-}"
+        export _mock_sha_fail="${_mock_sha_fail:-}"
         export _mock_encryption="${_mock_encryption:-}"
         export _mock_volsize="${_mock_volsize:-}"
         export _mock_snapdev="${_mock_snapdev:-}"
@@ -339,9 +341,6 @@ EOF
         # /dev/zvol device paths do not exist in the harness.
         cp() {
             echo "CP:$*" >> "$_capture_dir/zfs-argv"
-            if [[ -n "${_mock_cp_fail:-}" ]]; then
-                return 1
-            fi
             if [[ -e "$1" ]]; then
                 command cp "$@"
             fi
@@ -351,26 +350,66 @@ EOF
             echo "SYNC:$*" >> "$_capture_dir/zfs-argv"
         }
         sha256sum() {
+            echo "SHA256:$*" >> "$_capture_dir/sha256"
             if [[ $# -eq 0 ]]; then
-                # Rate-limited form: hashes stdin.
+                # Stdin form: the in-flight source hash (from the fifo) or
+                # the paced destination read-back. Draining stdin first
+                # keeps the pipeline alive so _mock_sha_fail exercises
+                # the post-copy hash-failure branch, not a SIGPIPE abort.
                 cat > /dev/null
+                [[ -z "${_mock_sha_fail:-}" ]] || return 1
                 printf '%s  -\n' "deadbeef12345678"
                 return 0
             fi
-            # One digest line per device, like real sha256sum; the
-            # _mock_hash_dst knob makes the second digest differ.
-            printf '%s  %s\n' "deadbeef12345678" "$1"
+            # File-arg form: the unpaced destination read-back; the
+            # _mock_hash_dst knob makes the digest differ.
             printf '%s  %s\n' \
-                "${_mock_hash_dst:-deadbeef12345678}" "$2"
+                "${_mock_hash_dst:-deadbeef12345678}" "$1"
+            return 0
+        }
+        tee() {
+            # In-flight hash fan-out: passthrough, argv recorded.
+            echo "TEE:$*" >> "$_capture_dir/tee"
+            command tee "$@"
         }
         pv() {
-            # Rate-limited transfer segment: passthrough, argv recorded.
+            # Rate-limited transfer segment, argv recorded. A read-head pv
+            # (-- <src>) takes its input from the named device — which
+            # never exists in the harness, so nothing is produced (the
+            # same no-copy semantics the cp mock has always had). A bare
+            # pv is a mid-pipeline pacing segment and passes stdin
+            # through. Neither form may touch the script's stdin: the
+            # read head is the first pipeline stage, and its stdin is the
+            # interactive answer feed.
             echo "PV:$*" >> "$_capture_dir/pv"
+            local -a _pargv=("$@") _pi
+            for _pi in "${!_pargv[@]}"; do
+                if [[ "${_pargv[$_pi]}" == "--" ]]; then
+                    [[ -e "${_pargv[$((_pi + 1))]}" ]] \
+                        && cat -- "${_pargv[$((_pi + 1))]}"
+                    return 0
+                fi
+            done
             cat
         }
         dd() {
-            # Rate-limited sparse writer: consume stdin, argv recorded.
+            # Device-copy reader/writer, argv recorded. A reader with a
+            # named input (if=<src>) reads that device — which never
+            # exists in the harness, so nothing is produced and, like the
+            # read-head pv, the script's stdin is never consumed. A writer
+            # (of=) consumes the stream arriving on the pipe. The
+            # _mock_cp_fail knob fails the copy pipeline itself.
             echo "DD:$*" >> "$_capture_dir/dd"
+            if [[ -n "${_mock_cp_fail:-}" ]]; then
+                return 1
+            fi
+            local _darg
+            for _darg in "$@"; do
+                if [[ "$_darg" == if=* ]]; then
+                    [[ -e "${_darg#if=}" ]] && cat -- "${_darg#if=}"
+                    return 0
+                fi
+            done
             cat > /dev/null
             return 0
         }
@@ -475,6 +514,8 @@ EOF
     cat "$capture_dir/remove-vm-disk-argv" 2>/dev/null || true
     cat "$capture_dir/pv" 2>/dev/null || true
     cat "$capture_dir/dd" 2>/dev/null || true
+    cat "$capture_dir/tee" 2>/dev/null || true
+    cat "$capture_dir/sha256" 2>/dev/null || true
     return $rc
 }
 
@@ -485,7 +526,8 @@ EOF
 reset_mocks() {
     unset _mock_read_response _mock_ssh_snapshot_exists _mock_ssh_snapshot_error
     unset _mock_vm_status _mock_clone_info _mock_zvols_list _mock_clone_vm_status
-    unset _mock_cp_fail _mock_hash_dst _mock_encryption _mock_volsize
+    unset _mock_cp_fail _mock_hash_dst _mock_sha_fail _mock_encryption \
+        _mock_volsize
     unset _mock_snapdev _mock_preexisting_archive _mock_complete_archive
     unset _mock_zfsdelfs_rc _mock_remove_vm_disk_rc _mock_step4_zvols_remaining
     unset _mock_input_hold
@@ -1186,8 +1228,13 @@ n"
     local cp_src
     cp_src="/dev/zvol/threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup-2026-07-14T07:00-04:00-d"
     local cp_dst="/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
-    if [[ "$out" != *"CP:--sparse=always ${cp_src} ${cp_dst}"* ]]; then
-        test_fail "Snapshot-device copy not recorded; output:\n$out"
+    if [[ "$out" != *"DD:if=${cp_src}"* ]]; then
+        test_fail "Snapshot-device read not recorded; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"DD:of=${cp_dst}"* ]] \
+        || [[ "$out" != *"conv=sparse,notrunc"* ]]; then
+        test_fail "Sparse archive-device write not recorded; output:\n$out"
         return
     fi
     if [[ "$out" != *"✓ Copy verified (sha256 match)"* ]]; then
@@ -1337,7 +1384,8 @@ n"
         test_fail "Leftover dataset not destroyed; output:\n$out"
         return
     fi
-    if [[ "$out" != *"CP:--sparse=always"* ]]; then
+    needle="DD:of=/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"$needle"* ]]; then
         test_fail "Re-archive copy missing; output:\n$out"
         return
     fi
@@ -1374,13 +1422,13 @@ n"
         test_fail "Unexpected exit code $rc; output:\n$out"
         return
     fi
-    local needle="Already archived (verified) — skipping:" \
-        "${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
-    if [[ "$out" != *"$needle"* ]]; then
+    local skip_line="Already archived (verified) — skipping:"
+    skip_line+=" ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"$skip_line"* ]]; then
         test_fail "Skip message missing; output:\n$out"
         return
     fi
-    if [[ "$out" == *"CP:--sparse=always"* ]]; then
+    if [[ "$out" == *"DD:of="* ]]; then
         test_fail "Skipped disk was copied anyway; output:\n$out"
         return
     fi
@@ -1417,7 +1465,7 @@ n"
         return
     fi
     # The transfer ran in this shell (on_storage local branch), not over ssh.
-    if [[ "$out" != *"CP:--sparse=always"* ]]; then
+    if [[ "$out" != *"DD:of=/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
         test_fail "Local device copy missing; output:\n$out"
         return
     fi
@@ -1802,11 +1850,19 @@ n"
         test_fail "dd missing conv=sparse,notrunc; output:\n$out"
         return
     fi
-    # Hash verification is paced per device (stdin digests): copy + 2 hashes.
-    local pv_count
+    # The source is read once: the copy and its in-flight hash share the
+    # single paced pass; the destination read-back is the only other one.
+    local pv_count src_pv_count
     pv_count=$(printf '%s\n' "$out" | grep -c '^PV:')
-    if [[ "$pv_count" -lt 3 ]]; then
-        test_fail "Expected copy + two hash passes through pv, saw ${pv_count}; output:\n$out"
+    if [[ "$pv_count" -ne 2 ]]; then
+        test_fail "pv count wrong (want copy + read-back): ${pv_count}; output:\n$out"
+        return
+    fi
+    local src_pv_needle="PV:-q -L 100M -- /dev/zvol/threeamigos/proxmox/vm-${vmid}-disk-0"
+    src_pv_needle+="@dailybackup-2026-07-14T07:00-04:00-d"
+    src_pv_count=$(printf '%s\n' "$out" | grep -cFx -- "$src_pv_needle")
+    if [[ "$src_pv_count" -ne 1 ]]; then
+        test_fail "Source device paced more than once (${src_pv_count}); output:\n$out"
         return
     fi
     if ! grep -q '"archive_rate_limit": "100M"' \
@@ -1887,7 +1943,7 @@ n"
 
 test_unlimited_run_has_no_pv() {
     reset_mocks
-    test_start "Unlimited run keeps the unpaced cp/sha256sum commands"
+    test_start "Unlimited run keeps the unpaced dd pipeline and in-flight hash"
 
     local vmid="263"
     local pve_dir="$_mock_zfs_state_dir/pve43"
@@ -1914,8 +1970,113 @@ n"
         test_fail "pv appeared in an unlimited run; output:\n$out"
         return
     fi
-    if [[ "$out" != *"CP:--sparse=always"* ]]; then
-        test_fail "cp --sparse=always not used when unlimited; output:\n$out"
+    local needle="DD:of=/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Sparse dd writer not used when unlimited; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"TEE:"* ]]; then
+        test_fail "In-flight hash fan-out missing when unlimited; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_copy_hashes_source_in_flight() {
+    reset_mocks
+    test_start "Copy path: source hashed in flight, destination read back once"
+
+    local vmid="264"
+    local pve_dir="$_mock_zfs_state_dir/pve44"
+    local archive="$_mock_zfs_state_dir/archive44"
+    local mount="$_mock_zfs_state_dir/mount44"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    local cp_src cp_dst tee_count stdin_sha src_sha dst_sha
+    cp_src="/dev/zvol/threeamigos/proxmox/vm-${vmid}-disk-0@dailybackup-2026-07-14T07:00-04:00-d"
+    cp_dst="/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    # Exactly one tee fan-out: the copy pipeline's hash side-channel.
+    tee_count=$(printf '%s\n' "$out" | grep -c '^TEE:')
+    if [[ "$tee_count" -ne 1 ]]; then
+        test_fail "Expected one in-flight hash fan-out, saw ${tee_count}; output:\n$out"
+        return
+    fi
+    # The source is hashed from the stream (stdin form), never re-read as
+    # a file; the only file-argument hash read names the destination.
+    stdin_sha=$(printf '%s\n' "$out" | grep -cxF -- 'SHA256:')
+    src_sha=$(printf '%s\n' "$out" | grep -cF -- "SHA256:${cp_src}")
+    dst_sha=$(printf '%s\n' "$out" | grep -cF -- "SHA256:${cp_dst}")
+    if [[ "$stdin_sha" -ne 1 || "$src_sha" -ne 0 || "$dst_sha" -ne 1 ]]; then
+        local hash_fail_msg="Hash reads wrong: stdin=${stdin_sha} src=${src_sha}"
+        hash_fail_msg+=" dst=${dst_sha}; output:\n$out"
+        test_fail "$hash_fail_msg"
+        return
+    fi
+    if [[ "$out" != *"✓ Copy verified (sha256 match)"* ]]; then
+        test_fail "Copy verification missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_copy_source_hash_failure_fatals() {
+    reset_mocks
+    test_start "Copy path: in-flight source-hash failure aborts and cleans up"
+
+    local vmid="265"
+    local pve_dir="$_mock_zfs_state_dir/pve45"
+    local archive="$_mock_zfs_state_dir/archive45"
+    local mount="$_mock_zfs_state_dir/mount45"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_sha_fail="1"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected non-zero exit code; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"FATAL: Failed to hash source during copy"* ]]; then
+        test_fail "Source-hash-failure FATAL missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"FATAL: Device copy failed"* ]]; then
+        test_fail "Call-site copy-failure FATAL missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Removed partial archive dataset"* ]]; then
+        test_fail "Partial dataset not rolled back; output:\n$out"
+        return
+    fi
+    local needle="DESTROY:destroy -r ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Archive dataset destroy not recorded; output:\n$out"
         return
     fi
 
@@ -1959,5 +2120,7 @@ test_rate_limit_paces_copy_path
 test_invalid_rate_fatals
 test_two_node_rate_forwarded_to_payload
 test_unlimited_run_has_no_pv
+test_copy_hashes_source_in_flight
+test_copy_source_hash_failure_fatals
 
 test_summary

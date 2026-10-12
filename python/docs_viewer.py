@@ -45,11 +45,34 @@ from backup_config import (
     save_ui_state,
 )
 from config_core import CONFIG_PATH
-from path_utils import _DEPLOYMENT_BASE, get_docs_path
+from path_utils import _DEPLOYMENT_BASE, get_docs_path, is_deployed_layout
 from paths import get_docs_viewer_state_path
 
 # URI schemes the viewer is allowed to navigate to.
 _ALLOWED_SCHEMES = ("file:", "http:", "https:", "about:")
+
+# Marker locating the markdown source directory inside any tree (repository
+# checkout or deployment) that owns a built docs/site.
+_EDIT_SOURCE_MARKER = "/docs/docs/"
+
+
+def _resolve_edit_path(baked_path, docs_path):
+    """Re-anchor a build-time edit URL to the tree whose site is served.
+
+    MkDocs bakes the pencil icon's target as an absolute path at build time
+    (docs/hooks/edit_links.py), so a site built in one tree but served from
+    another would edit the wrong tree's markdown.  The viewer instead maps
+    the source tail after the ``/docs/docs/`` marker onto the mkdocs
+    directory of the site it is serving (``docs_path`` is
+    ``<tree>/docs/site/index.html``).  Paths without the marker are
+    returned unchanged.
+    """
+    index = baked_path.find(_EDIT_SOURCE_MARKER)
+    if index == -1:
+        return baked_path
+    src_tail = baked_path[index + len(_EDIT_SOURCE_MARKER) :]
+    mkdocs_dir = os.path.dirname(os.path.dirname(docs_path))
+    return os.path.join(mkdocs_dir, "docs", src_tail)
 
 
 class _DocsServer:
@@ -230,15 +253,22 @@ class DocsViewerWindow(Gtk.Window):
             return
 
         if not self._docs_path:
-            repo_path = os.path.join(os.path.dirname(script_dir), "docs", "site", "index.html")
-            deployed_path = os.path.join(_DEPLOYMENT_BASE, "current", "docs", "site", "index.html")
-            self._show_fallback(
-                "Documentation site not found.\n\n"
-                "path_utils.get_docs_path() checked:\n"
-                f"  {repo_path}\n"
-                f"  {deployed_path}\n\n"
-                "Run 'mkdocs build' in the docs directory."
-            )
+            if is_deployed_layout(script_dir):
+                expected = os.path.join(_DEPLOYMENT_BASE, "current", "docs", "site", "index.html")
+                self._show_fallback(
+                    "The active deployment has no built documentation site.\n\n"
+                    f"  {expected}\n\n"
+                    "Redeploy the current version to rebuild it."
+                )
+            else:
+                expected = os.path.join(os.path.dirname(script_dir), "docs", "site", "index.html")
+                self._show_fallback(
+                    "Documentation site not built in this repository checkout.\n\n"
+                    f"  {expected}\n\n"
+                    "Run 'mkdocs build' in the docs/ directory (or run\n"
+                    "bin/startdocserver), then reopen the viewer. A repository\n"
+                    "launch does not fall back to the deployed documentation."
+                )
             return
 
         self._build_ui()
@@ -751,7 +781,7 @@ class DocsViewerWindow(Gtk.Window):
         # Handle openmd:// edit links
         if uri.startswith("openmd://"):
             path = unquote(uri[9:])  # strip "openmd://"
-            self._launch_editor(path)
+            self._open_edit_path(path)
             decision.ignore()
             return True
 
@@ -852,6 +882,26 @@ class DocsViewerWindow(Gtk.Window):
         js = f"var e=document.getElementById('{anchor}');if(e)e.scrollIntoView();"
         self._webview.evaluate_javascript(js, -1, None, None, None, None, None)
 
+    def _open_edit_path(self, baked_path):
+        """Resolve an ``openmd://`` target against the served tree, then edit it.
+
+        The re-anchored path (the markdown beside the site this window is
+        actually serving) is preferred; the baked absolute path is used only
+        when the re-anchored file does not exist but the original does.
+        """
+        resolved = _resolve_edit_path(baked_path, self._docs_path)
+        if resolved != baked_path and os.path.isfile(resolved):
+            log_msg(f"INFO: Edit link re-anchored to {resolved}")
+            self._launch_editor(resolved)
+            return
+        if not os.path.isfile(resolved) and os.path.isfile(baked_path):
+            self._launch_editor(baked_path)
+            return
+        if not os.path.isfile(resolved):
+            log_msg(f"WARN: Documentation edit target not found: {resolved}")
+            self._set_status(f"Edit target not found: {os.path.basename(resolved)}")
+        self._launch_editor(resolved)
+
     def _launch_editor(self, path):
         """Open the given markdown file in the user's configured editor."""
         command = self._docs_editor
@@ -911,7 +961,7 @@ def main():
     gi.require_version("Gtk", "3.0")
     from gi.repository import Gtk
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_dir = os.path.dirname(os.path.realpath(__file__))
     window = DocsViewerWindow(script_dir)
     window.connect("destroy", Gtk.main_quit)
     window.show_all()

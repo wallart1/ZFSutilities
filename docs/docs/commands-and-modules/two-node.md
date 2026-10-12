@@ -1358,7 +1358,8 @@ empty = unlimited; prompted with the JSON-config default `archive_rate_limit`).
 6. Restore each archived zvol with the shared transfer engine
    (`lib/archive-engine.sh`, sourced on the storage host): `METHOD=copy`
    archives create the destination zvol at the sidecar's original
-   `volblocksize` and device-copy the archive snapshot onto it;
+   `volblocksize` and device-copy the archive snapshot onto it (in-flight
+   source hash plus a destination read-back verify);
    `METHOD=raw` and unmarked legacy archives use `zfs send -cw | zfs receive`.
 7. In two-node mode, create backstores and LUNs for each restored zvol and
    update `expected-backstores.txt` and `/etc/zfsutilities/iscsi-encrypted-luns.conf`.

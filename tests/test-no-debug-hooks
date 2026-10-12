@@ -1,0 +1,66 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-no-debug-hooks — Static guard: shipped bash never auto-enables the
+# interactive debugger or xtrace.
+#
+# bashdebug (per-command DEBUG/ERR trap prompts) and bashsetx (set -x) stay
+# available as modules a user may source and enable by hand in an
+# interactive session, but no shipped code path may turn them on for the
+# user. 2026-10-12 found three such leftovers: bashdebugon behind a
+# site-name glob in zfscheckagainst, unconditional bashdebugon in
+# zfslistkeys, and unconditional setx in watchit — each made an ordinary
+# run interactive or noisy.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+# Print every non-comment line that calls $1 as a standalone word (word
+# characters around it do not match, so "bashsetx" never satisfies a setx
+# search) in bin/ or lib/, skipping the module that defines the hook
+# ($2). The grep -E pattern pieces are single-character classes and
+# anchors around the literal hook name — no general regex parsing.
+debug_hook_offenders() {
+    local hook="$1" definer="$2" f
+    while IFS= read -r f; do
+        [[ "$(basename "$f")" == "$definer" ]] && continue
+        grep -vE '^[[:space:]]*#' "$f" \
+            | grep -nE "(^|[^a-zA-Z0-9_-])${hook}([^a-zA-Z0-9_-]|$)" \
+            | sed "s|^|${f}: |"
+    done < <(find "$old_mydir/bin" "$old_mydir/lib" -maxdepth 1 -type f \
+        ! -name watchall)
+}
+
+test_no_auto_bashdebugon() {
+    test_start "No shipped script turns on the bashdebug traps"
+
+    local offenders
+    offenders=$(debug_hook_offenders bashdebugon bashdebug)
+    if [[ -n "$offenders" ]]; then
+        test_fail "bashdebugon enabled in shipped code:\n$offenders"
+        return
+    fi
+    test_pass
+}
+
+test_no_auto_setx() {
+    test_start "No shipped script turns on xtrace via setx"
+
+    local offenders
+    offenders=$(debug_hook_offenders setx bashsetx)
+    if [[ -n "$offenders" ]]; then
+        test_fail "setx enabled in shipped code:\n$offenders"
+        return
+    fi
+    test_pass
+}
+
+# =============================================================================
+# Run
+# =============================================================================
+
+test_no_auto_bashdebugon
+test_no_auto_setx
+
+test_summary

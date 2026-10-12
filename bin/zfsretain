@@ -83,14 +83,18 @@ function retain {
     unset _retention_fragment
     bktlen=${#bktname[@]}
 
-    # The preview below reports what the retention and minimum-age policy
-    # alone would do; the checkagainst safety gates run inside the deletion
-    # step in a real run and can keep candidates the preview marks removable.
+    # Every candidate below passes the same read-only gates the deletion
+    # step would run (checkagainst counterparts, holds, clone dependents,
+    # minimum age), so "Would: Remove" matches what a real run deletes.
+    # checkagainst's rc-5 print-once marker is cleaned up at exit, like
+    # zfsdelsnap's own trap.
     if [[ $dryrun != "N" ]]; then
-        log_msg "INFO: Dry-run preview: models the retention and minimum-age policy" \
-            "only. The checkagainst gates (last remaining common snapshot," \
-            "counterpart pool(s) offline) run at deletion time and may keep" \
-            "snapshots this preview marks for removal."
+        log_msg "INFO: Dry-run preview: candidates pass the same read-only gates" \
+            "as deletion time (checkagainst counterparts, holds, clone" \
+            "dependents, minimum age). Not modeled: lock contention, destroy" \
+            "failures, and the interactive confirm for snapshots with no" \
+            "checkagainst entries."
+        append_exit_trap 'rm -f "/tmp/fssalreadyprinted.$PPID" "/tmp/fssalreadyprinted.$$"'
     fi
 
     local set_save=$-
@@ -187,7 +191,10 @@ function retain {
                     "(replaces $_prev_snap)."
                 phase0_removed["$_prev_snap"]=1
                 if [[ $dryrun != "N" ]]; then
-                    log_msg "INFO: Would remove $_prev_snap --- Offsite same-month."
+                    if _delsnap_preview_gate "$_prev_snap" "0" "$releaseholds" \
+                        "Offsite same-month"; then
+                        log_msg "INFO: Would remove $_prev_snap --- Offsite same-month."
+                    fi
                 else
                     log_msg "INFO: Removing $_prev_snap --- Offsite same-month."
                     if [[ $autoproceed != 'Y' ]]; then
@@ -258,7 +265,10 @@ function retain {
                 "bucket '$snapbucket2' (replaces $_prev_snap)."
             phase1_removed["$_prev_snap"]=1    # Track for Phase 2 exclusion
             if [[ $dryrun != "N" ]]; then
-                log_msg "INFO: Would remove $_prev_snap ---Same-day."
+                if _delsnap_preview_gate "$_prev_snap" "0" "$releaseholds" \
+                    "Same-day"; then
+                    log_msg "INFO: Would remove $_prev_snap --- Same-day."
+                fi
             else
                 log_msg "INFO: Removing $_prev_snap --- Same-day."
                 if [[ $autoproceed != 'Y' ]]; then
@@ -403,17 +413,10 @@ function retain {
                     log_msg "INFO: Removing ${_snap} --- Bucket${_tag}."
                     delsnap "${_snap}" "${minage[$j]:-0}" $relholds
                 else
-                    # Mirror delsnap's minimum-age gate so the dry-run preview
-                    # reports the same deletions a real run would make.
-                    _minage="${minage[$j]:-0}"
-                    _age=-1
-                    if [[ $_minage -gt 0 ]]; then
-                        _age=$(snapshot_age_days "${_snap}")
-                    fi
-                    if [[ $_age -ge 0 && $_age -lt $_minage ]]; then
-                        log_msg "INFO: Would: Keep ${_snap} --- Bucket; only ${_age}" \
-                            "days old (minimum age is ${_minage} days)."
-                    else
+                    # Run delsnap's read-only gates so the preview reports
+                    # the same deletions a real run would make.
+                    if _delsnap_preview_gate "${_snap}" "${minage[$j]:-0}" \
+                        "$releaseholds" "Bucket"; then
                         log_msg "INFO: Would: Remove ${_snap} --- Bucket${_tag}."
                     fi
                 fi

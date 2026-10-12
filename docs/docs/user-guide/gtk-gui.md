@@ -2522,6 +2522,14 @@ documentation website using an embedded browser.
     For live updates while editing, use `startdocserver` and a web browser as
     described in [Documentation Server](../developer-guide/doc-server.md).
 
+The viewer serves the documentation belonging to the layout the GUI was
+launched from: a GUI launched from a repository checkout reads the
+repository's `docs/site/`, and a GUI launched from a deployment reads the
+active version's site. A repository checkout without a built site shows the
+`mkdocs build` instructions rather than the deployment's content, and the
+pencil (edit) icon always opens the markdown file of the tree being
+displayed.
+
 The installer creates a symbolic link named **ZFSutilities Documentation**
 in the installing user's home directory. This can be used to open the documentation viewer independently of the GUI. Open the link directly, or run `zfsutilities-docs`; the documentation viewer does not require root.
 

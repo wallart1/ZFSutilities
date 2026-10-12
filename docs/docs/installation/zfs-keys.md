@@ -28,7 +28,8 @@ problems:
 - **`keylocation=prompt` console block** — If any encrypted dataset used
   `keylocation=prompt`, `zfs load-key -a` blocked on the physical console. In
   headless or remote environments this could hang the boot indefinitely.
-- **Root-on-ZFS mismatch** — On systems where `/` is on ZFS, the encrypted root
+- **Root-on-ZFS mismatch** — On systems where the Linux root directory`/` is on ZFS,
+  the encrypted root
   dataset needed its key before userspace could run, but the helper scripts ran
   from `/root/bashinit` after root was already supposed to be mounted.
 - **`/root/.luks-key` undermined the theft model** — A root-readable keyfile that
@@ -43,14 +44,14 @@ support intact without any of the boot-time races.
 ## Requirements
 
 - A secure location for ZFS key files. A LUKS-encrypted USB drive is a common
-  choice, but any path the operator can make available at runtime will work.
+  choice, but any path the operator can make available at boot time will work.
 - Root access to the storage node.
 - The `cryptsetup` package installed if you use LUKS.
 
 ## Preparing a LUKS-encrypted USB key store (optional)
 
 These commands run on the storage node as root. Replace `/dev/sdX1` with the
-actual partition you want to use.
+actual partition you want to use for storing the keys.
 
 !!! warning "This will destroy all data on /dev/sdX1"
     Double-check the device name. `lsblk` can help identify the correct USB
@@ -72,7 +73,7 @@ cryptsetup luksClose zfskeys-setup
 
 ## Generating and storing ZFS keys
 
-Each encrypted dataset needs its own key file. Generate random key files on the
+Each encrypted dataset should have its own key file. Generate random key files on the
 unlocked key store:
 
 ```bash
@@ -94,7 +95,7 @@ Keep offline backups of:
 - the LUKS passphrase.
 
 Without both the LUKS passphrase and a copy of the key files, the encrypted
-zvols cannot be recovered.
+zvols cannot be used.
 
 ## Creating an encrypted zvol
 
@@ -139,8 +140,8 @@ To bring encrypted zvols online:
    ```bash
    sudo zfs load-key -a
    ```
-   Note: `-a` loads keys for all pools and blocks on any `keylocation=prompt`
-   dataset. Use `zfs load-key <pool/dataset>` for a single dataset if needed.
+   Note: `-a` loads keys for all pools.
+   Use `zfs load-key <pool/dataset>` for a single dataset if needed.
 3. Add the encrypted LUNs to the running iSCSI target:
    ```bash
    sudo iscsi-add-encrypted-luns
@@ -156,21 +157,6 @@ To bring encrypted zvols online:
 If you restart the iSCSI target service (`restart-iscsi-services`), it restores
 `saveconfig-boot.json` and then explicitly calls `iscsi-add-encrypted-luns` to
 re-add encrypted LUNs whose zvols are already available.
-
-## Recovery after a boot without the USB
-
-If the storage node booted without the key store:
-
-1. Verify the non-encrypted LUNs are online:
-   ```bash
-   targetcli /backstores/block ls
-   ```
-2. Make the key store accessible.
-3. Run `sudo zfs load-key -a` and `sudo iscsi-add-encrypted-luns`.
-4. Verify the encrypted LUNs are online:
-   ```bash
-   targetcli /backstores/block ls | grep -E 'vm-101-disk-1|vm-202-disk-5'
-   ```
 
 ## Interaction with the desktop
 
@@ -193,4 +179,3 @@ available and use its path when loading keys or creating zvols.
 - Keep key files readable only by root (`chmod 400`). `new-vm-disk` rejects
   group- or world-readable keys.
 - Remove the USB after keys are loaded.
-- ZFS Utilities no longer creates or manages `/root/.luks-key`.

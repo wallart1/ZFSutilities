@@ -26,6 +26,19 @@ delsnap() {
     _mock_delsnap_tags+=("${releaseholds_tags[*]}")
     return 0
 }
+# Mocked preview gate: records the exact argv retain forwards, keeps only
+# the snapshots listed in _mock_preview_gate_keep_snaps (declared at suite
+# scope below — a declare -A here would be local to retain's source_helper
+# call). The real gate's decision logic is covered by test-zfsdelsnap
+# against _delsnap_preview_gate.
+_delsnap_preview_gate() {
+    _mock_preview_gate_calls+=("$1|${2:-0}|${3:-N}|${4:-}")
+    if [[ -n "${_mock_preview_gate_keep_snaps[$1]:-}" ]]; then
+        log_msg "INFO: Would: Keep $1 --- ${4:-}; ${_mock_preview_gate_reason:-gate kept}."
+        return 1
+    fi
+    return 0
+}
 # Mirrors snapshot_age_days from bin/zfsdelsnap; the mock zfs() serves
 # creation epochs via mock_zfs_prop <snap> creation <epoch>.
 snapshot_age_days() {
@@ -74,10 +87,14 @@ source "$old_mydir/bin/zfsretain"
 # =============================================================================
 
 # Reset mocks between tests
+declare -A _mock_preview_gate_keep_snaps=()
 reset_mocks() {
     _mock_delsnap_calls=()
     _mock_delsnap_minages=()
     _mock_delsnap_tags=()
+    _mock_preview_gate_calls=()
+    _mock_preview_gate_keep_snaps=()
+    _mock_preview_gate_reason=""
     _mock_zfs_snap_list_creation=""
     _mock_zfs_snap_list=""
     _mock_zfs_props=()
@@ -468,17 +485,14 @@ test_phase2_retain_zero_deletes_most_recent() {
     }
 }
 
-test_phase2_dryrun_minage_keeps_young() {
-    echo "=== Phase 2: Dry run applies the minimum-age gate ==="
+test_phase2_dryrun_gate_downgrades_to_keep() {
+    echo "=== Phase 2: Dry run downgrades gate-kept snapshots to Would: Keep ==="
     reset_mocks
     mock_retention_policy() {
         echo "bktname[0]='d'; bktretain[0]=1; minage[0]=45"
     }
-    local _logfile _now _young _old
+    local _logfile
     _logfile=$(mktemp)
-    _now=$(date +%s)
-    _young=$((_now - 41*86400))
-    _old=$((_now - 50*86400))
     local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
     _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025\n'
     _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025'
@@ -490,30 +504,28 @@ test_phase2_dryrun_minage_keeps_young() {
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "written" "1024"
-    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "creation" "$_young"
-    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "creation" "$_old"
-    mock_zfs_prop "pool/fs@dailybackup-2025-03-30T10:00-04:00-d" "creation" "$_old"
     dryrun="Y"
     msg_level="INFO"
+    local _young_snap="pool/fs@dailybackup-2025-03-28T10:00-04:00-d"
+    local _old_snap="pool/fs@dailybackup-2025-03-29T10:00-04:00-d"
+    _mock_preview_gate_keep_snaps["$_young_snap"]=1
+    _mock_preview_gate_reason="counterpart pool(s) offline"
     retain "pool/fs" "dailybackup" 2>"$_logfile"
     msg_level="FATAL"
     dryrun="N"
-    local _young_snap="pool/fs@dailybackup-2025-03-28T10:00-04:00-d"
-    local _old_snap="pool/fs@dailybackup-2025-03-29T10:00-04:00-d"
-    local _keep_line="Would: Keep ${_young_snap} --- Bucket"
-    _keep_line="${_keep_line}; only 41 days old (minimum age is 45 days)."
-    test_start "Dry run reports Would: Keep for a snapshot younger than minage"
+    test_start "Gate-kept snapshot reports Would: Keep with its Bucket context"
+    local _keep_line="Would: Keep ${_young_snap} --- Bucket; counterpart pool(s) offline."
     if grep -q -- "$_keep_line" "$_logfile" \
-        && ! grep -q -- "Would: Remove pool/fs@dailybackup-2025-03-28" "$_logfile"; then
+        && ! grep -q -- "Would: Remove ${_young_snap}" "$_logfile"; then
         test_pass
     else
-        test_fail "Expected Would: Keep, no Would: Remove; got: $(cat "$_logfile")"
+        test_fail "Expected gate downgrade to Would: Keep, got: $(cat "$_logfile")"
     fi
-    test_start "Dry run still reports Would: Remove for an old-enough snapshot"
+    test_start "Gate-proceeding snapshot still reports Would: Remove"
     if grep -q -- "Would: Remove ${_old_snap} --- Bucket." "$_logfile"; then
         test_pass
     else
-        test_fail "Expected 'Would: Remove' for the 50-day-old snapshot, got: $(cat "$_logfile")"
+        test_fail "Expected 'Would: Remove' for the proceeding snapshot, got: $(cat "$_logfile")"
     fi
     test_start "Dry run never calls delsnap"
     if [[ ${#_mock_delsnap_calls[@]} -eq 0 ]]; then
@@ -529,49 +541,8 @@ test_phase2_dryrun_minage_keeps_young() {
     }
 }
 
-test_phase2_dryrun_minage_zero_unchanged() {
-    echo "=== Phase 2: Dry run with minage 0 keeps Would: Remove ==="
-    reset_mocks
-    mock_retention_policy() {
-        echo "bktname[0]='d'; bktretain[0]=1; minage[0]=0"
-    }
-    local _logfile _now _young
-    _logfile=$(mktemp)
-    _now=$(date +%s)
-    _young=$((_now - 1*86400))
-    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\tFri Mar 28 10:00 2025\n'
-    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d\tSat Mar 29 10:00 2025'
-    mock_zfs_snap_list_creation "$_wrap_snaplist"
-    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-28T10:00-04:00-d\n'
-    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-29T10:00-04:00-d'
-    mock_zfs_snap_list "$_wrap_snaplist"
-    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
-    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
-    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "creation" "$_young"
-    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "creation" "$_young"
-    dryrun="Y"
-    msg_level="INFO"
-    retain "pool/fs" "dailybackup" 2>"$_logfile"
-    msg_level="FATAL"
-    dryrun="N"
-    test_start "minage 0 bucket reports Would: Remove even for young snapshots"
-    local _first_snap="pool/fs@dailybackup-2025-03-28T10:00-04:00-d"
-    if grep -q -- "Would: Remove ${_first_snap} --- Bucket." "$_logfile" \
-        && ! grep -q -- "Would: Keep" "$_logfile"; then
-        test_pass
-    else
-        test_fail "Expected 'Would: Remove' with no 'Would: Keep', got: $(cat "$_logfile")"
-    fi
-    rm -f "$_logfile"
-    mock_retention_policy() {
-        echo "bktname[0]='d'; bktretain[0]=3; minage[0]=0"
-        echo "bktname[1]='w'; bktretain[1]=2; minage[1]=7"
-        echo "bktname[2]='m'; bktretain[2]=2; minage[2]=30"
-    }
-}
-
-test_phase2_dryrun_age_unknown_falls_through() {
-    echo "=== Phase 2: Dry run with unreadable creation still reports Would: Remove ==="
+test_phase2_dryrun_forwards_gate_argv() {
+    echo "=== Phase 2: Dry run forwards bucket minage and releaseholds ==="
     reset_mocks
     mock_retention_policy() {
         echo "bktname[0]='d'; bktretain[0]=1; minage[0]=45"
@@ -586,20 +557,21 @@ test_phase2_dryrun_age_unknown_falls_through() {
     mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
-    # No creation props: the mock zfs() serves "-" and snapshot_age_days
-    # reports -1 (age unknown) — the preview must not turn that into a Keep.
     dryrun="Y"
+    releaseholds="Y"
+    releaseholds_tags=('offsite-*')
     msg_level="INFO"
     retain "pool/fs" "dailybackup" 2>"$_logfile"
     msg_level="FATAL"
     dryrun="N"
-    test_start "Unknown age falls through to Would: Remove"
+    test_start "Gate receives snapshot, bucket minage, releaseholds, context"
     local _first_snap="pool/fs@dailybackup-2025-03-28T10:00-04:00-d"
-    if grep -q -- "Would: Remove ${_first_snap} --- Bucket." "$_logfile" \
-        && ! grep -q -- "Would: Keep" "$_logfile"; then
+    local _gate_call="${_first_snap}|45|Y|Bucket"
+    if [[ "${_mock_preview_gate_calls[*]}" == *"$_gate_call"* ]] \
+        && grep -q -- "Would: Remove ${_first_snap} --- Bucket." "$_logfile"; then
         test_pass
     else
-        test_fail "Expected 'Would: Remove' with no 'Would: Keep', got: $(cat "$_logfile")"
+        test_fail "Expected gate argv ${_gate_call}, got: ${_mock_preview_gate_calls[*]}"
     fi
     rm -f "$_logfile"
     mock_retention_policy() {
@@ -609,8 +581,66 @@ test_phase2_dryrun_age_unknown_falls_through() {
     }
 }
 
-test_dryrun_caveat_names_checkagainst_gates() {
-    echo "=== Dry-run caveat discloses the checkagainst gates ==="
+test_phase0_dryrun_gate_downgrades_to_keep() {
+    echo "=== Phase 0: Dry run gates offsite same-month candidates ==="
+    reset_mocks
+    local _logfile
+    _logfile=$(mktemp)
+    local _wrap_snaplist=$'pool/fs@offsite-2025-03-15T10:00-04:00-s\tSun Mar 15 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@offsite-2025-03-20T10:00-04:00-s\tThu Mar 20 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@offsite-2025-04-01T10:00-04:00-s\tTue Apr  1 10:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@offsite-2025-03-15T10:00-04:00-s\n'
+    _wrap_snaplist+=$'pool/fs@offsite-2025-03-20T10:00-04:00-s\n'
+    _wrap_snaplist+=$'pool/fs@offsite-2025-04-01T10:00-04:00-s'
+    mock_zfs_snap_list "$_wrap_snaplist"
+    dryrun="Y"
+    msg_level="INFO"
+    local _older="pool/fs@offsite-2025-03-15T10:00-04:00-s"
+    _mock_preview_gate_keep_snaps["$_older"]=1
+    retain "pool/fs" "offsite" 2>"$_logfile"
+    msg_level="FATAL"
+    dryrun="N"
+    test_start "Gate-kept offsite candidate reports Would: Keep, not remove"
+    if grep -q -- "Would: Keep ${_older} --- Offsite same-month;" "$_logfile" \
+        && ! grep -q -- "Would remove ${_older}" "$_logfile"; then
+        test_pass
+    else
+        test_fail "Expected gated offsite preview, got: $(cat "$_logfile")"
+    fi
+    rm -f "$_logfile"
+}
+
+test_phase1_dryrun_gate_downgrades_to_keep() {
+    echo "=== Phase 1: Dry run gates same-day candidates ==="
+    reset_mocks
+    local _logfile
+    _logfile=$(mktemp)
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\tSun Mar 30 10:00 2025\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T12:00-04:00-d\tSun Mar 30 12:00 2025'
+    mock_zfs_snap_list_creation "$_wrap_snaplist"
+    local _wrap_snaplist=$'pool/fs@dailybackup-2025-03-30T10:00-04:00-d\n'
+    _wrap_snaplist+=$'pool/fs@dailybackup-2025-03-30T12:00-04:00-d'
+    mock_zfs_snap_list "$_wrap_snaplist"
+    dryrun="Y"
+    msg_level="INFO"
+    local _older="pool/fs@dailybackup-2025-03-30T10:00-04:00-d"
+    _mock_preview_gate_keep_snaps["$_older"]=1
+    retain "pool/fs" "dailybackup" 2>"$_logfile"
+    msg_level="FATAL"
+    dryrun="N"
+    test_start "Gate-kept same-day candidate reports Would: Keep, not remove"
+    if grep -q -- "Would: Keep ${_older} --- Same-day;" "$_logfile" \
+        && ! grep -q -- "Would remove ${_older}" "$_logfile"; then
+        test_pass
+    else
+        test_fail "Expected gated same-day preview, got: $(cat "$_logfile")"
+    fi
+    rm -f "$_logfile"
+}
+
+test_dryrun_caveat_names_unmodeled_residuals() {
+    echo "=== Dry-run caveat names only the unmodelable gates ==="
     reset_mocks
     mock_retention_policy() {
         echo "bktname[0]='d'; bktretain[0]=1; minage[0]=0"
@@ -627,19 +657,17 @@ test_dryrun_caveat_names_checkagainst_gates() {
     mock_zfs_snap_list "$_wrap_snaplist"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "written" "1024"
     mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "written" "1024"
-    mock_zfs_prop "pool/fs@dailybackup-2025-03-28T10:00-04:00-d" "creation" "$_old"
-    mock_zfs_prop "pool/fs@dailybackup-2025-03-29T10:00-04:00-d" "creation" "$_old"
     dryrun="Y"
     msg_level="INFO"
     retain "pool/fs" "dailybackup" 2>"$_logfile"
     msg_level="FATAL"
     dryrun="N"
-    test_start "Dry-run preview prints the checkagainst-gates caveat"
-    if grep -q -- "Dry-run preview: models the retention and minimum-age policy" "$_logfile" \
-        && grep -q -- "counterpart pool(s) offline" "$_logfile"; then
+    test_start "Dry-run preview says candidates pass the read-only gates"
+    if grep -q -- "candidates pass the same read-only gates" "$_logfile" \
+        && grep -q -- "Not modeled: lock contention" "$_logfile"; then
         test_pass
     else
-        test_fail "Expected the caveat naming the checkagainst gates, got: $(cat "$_logfile")"
+        test_fail "Expected the read-only-gates caveat, got: $(cat "$_logfile")"
     fi
     # A real run must not carry the preview caveat.
     : > "$_logfile"
@@ -925,10 +953,11 @@ main() {
     test_phase2_old_nonempty_weekly
     test_phase2_empty_tag_logged
     test_phase2_retain_zero_deletes_most_recent
-    test_phase2_dryrun_minage_keeps_young
-    test_phase2_dryrun_minage_zero_unchanged
-    test_phase2_dryrun_age_unknown_falls_through
-    test_dryrun_caveat_names_checkagainst_gates
+    test_phase2_dryrun_gate_downgrades_to_keep
+    test_phase2_dryrun_forwards_gate_argv
+    test_phase0_dryrun_gate_downgrades_to_keep
+    test_phase1_dryrun_gate_downgrades_to_keep
+    test_dryrun_caveat_names_unmodeled_residuals
     test_phase2_real_run_forwards_minage
     test_skip_clone_and_c_bucket
     test_phase0_offsite_monthly

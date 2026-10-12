@@ -304,7 +304,7 @@ def _make_app(datasets=None, properties=None):
 
     zfs_caps = MagicMock()
     zfs_caps.supports.return_value = False
-    zfs_caps.requires.return_value = "requires OpenZFS 2.3+"
+    zfs_caps.requires.return_value = "requires OpenZFS 2.3.4+"
 
     repo = MagicMock()
     repo.list_datasets.return_value = datasets or []
@@ -1172,7 +1172,7 @@ class TestRewriteData(unittest.TestCase):
 
         self.assertFalse(app.dataset_runner.running)
         self.assertTrue(
-            any("Rewrite Data requires OpenZFS 2.3+" in line for line in logs),
+            any("Rewrite Data requires OpenZFS 2.3.4+" in line for line in logs),
             logs,
         )
 

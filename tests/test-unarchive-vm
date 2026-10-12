@@ -75,7 +75,8 @@ run_unarchive() {
     local stdin_input="${_mock_read_response:-}"
     local capture_dir="$_mock_zfs_state_dir/capture"
     mkdir -p "$capture_dir"
-    rm -f "$capture_dir/zfs-argv" "$capture_dir/pv" "$capture_dir/dd"
+    rm -f "$capture_dir/zfs-argv" "$capture_dir/pv" "$capture_dir/dd" \
+        "$capture_dir/tee" "$capture_dir/sha256"
     (
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
         setup_test_env
@@ -94,6 +95,7 @@ run_unarchive() {
         printf '{}\n' > "$JSON_CONFIG"
         export _capture_dir="$capture_dir"
         export _mock_hash_dst="${_mock_hash_dst:-}"
+        export _mock_sha_fail="${_mock_sha_fail:-}"
 
         # Mock zfs state.
         local arc_dataset="${archive_base}/threeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0"
@@ -146,24 +148,62 @@ ${arc_dataset}"
             echo "SYNC:$*" >> "$_capture_dir/zfs-argv"
         }
         sha256sum() {
+            echo "SHA256:$*" >> "$_capture_dir/sha256"
             if [[ $# -eq 0 ]]; then
-                # Rate-limited form: hashes stdin.
+                # Stdin form: the in-flight source hash (from the fifo) or
+                # the paced destination read-back. Draining stdin first
+                # keeps the pipeline alive so _mock_sha_fail exercises
+                # the post-copy hash-failure branch, not a SIGPIPE abort.
                 cat > /dev/null
+                [[ -z "${_mock_sha_fail:-}" ]] || return 1
                 printf '%s  -\n' "deadbeef12345678"
                 return 0
             fi
-            printf '%s  %s\n' "deadbeef12345678" "$1"
+            # File-arg form: the unpaced destination read-back; the
+            # _mock_hash_dst knob makes the digest differ.
             printf '%s  %s\n' \
-                "${_mock_hash_dst:-deadbeef12345678}" "$2"
+                "${_mock_hash_dst:-deadbeef12345678}" "$1"
+            return 0
+        }
+        tee() {
+            # In-flight hash fan-out: passthrough, argv recorded.
+            echo "TEE:$*" >> "$_capture_dir/tee"
+            command tee "$@"
         }
         pv() {
-            # Rate-limited transfer segment: passthrough, argv recorded.
+            # Rate-limited transfer segment, argv recorded. A read-head pv
+            # (-- <src>) takes its input from the named device — which
+            # never exists in the harness, so nothing is produced (the
+            # same no-copy semantics the cp mock has always had). A bare
+            # pv is a mid-pipeline pacing segment and passes stdin
+            # through. Neither form may touch the script's stdin: the
+            # read head is the first pipeline stage, and its stdin is the
+            # interactive answer feed.
             echo "PV:$*" >> "$_capture_dir/pv"
+            local -a _pargv=("$@") _pi
+            for _pi in "${!_pargv[@]}"; do
+                if [[ "${_pargv[$_pi]}" == "--" ]]; then
+                    [[ -e "${_pargv[$((_pi + 1))]}" ]] \
+                        && cat -- "${_pargv[$((_pi + 1))]}"
+                    return 0
+                fi
+            done
             cat
         }
         dd() {
-            # Rate-limited sparse writer: consume stdin, argv recorded.
+            # Device-copy reader/writer, argv recorded. A reader with a
+            # named input (if=<src>) reads that device — which never
+            # exists in the harness, so nothing is produced and, like the
+            # read-head pv, the script's stdin is never consumed. A writer
+            # (of=) consumes the stream arriving on the pipe.
             echo "DD:$*" >> "$_capture_dir/dd"
+            local _darg
+            for _darg in "$@"; do
+                if [[ "$_darg" == if=* ]]; then
+                    [[ -e "${_darg#if=}" ]] && cat -- "${_darg#if=}"
+                    return 0
+                fi
+            done
             cat > /dev/null
             return 0
         }
@@ -172,8 +212,16 @@ ${arc_dataset}"
         if [[ "${_mock_old_config_present:-}" == "1" ]]; then
             touch "${pve_dir}/${_mock_orig_vmid}.conf"
         fi
-        if [[ "${_mock_old_zvol_present:-}" == "1" ]]; then
-            _mock_zfs_fs_list+="\nthreeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0"
+        # Orphaned zvols elsewhere on the host (backup-chain copies keep the
+        # VM-disk naming under another pool): visible in the pool listing,
+        # never at this archive's destinations.
+        if [[ -n "${_mock_orphan_zvols:-}" ]]; then
+            local _orphan
+            while IFS= read -r _orphan; do
+                [[ -n "$_orphan" ]] || continue
+                _mock_zfs_datasets["$_orphan"]=1
+                _mock_zfs_fs_list="${_mock_zfs_fs_list}"$'\n'"$_orphan"
+            done <<< "$_mock_orphan_zvols"
         fi
 
         # Resume state: a destination zvol that already exists, optionally
@@ -200,6 +248,8 @@ ${arc_dataset}"
     cat "$capture_dir/zfs-argv" 2>/dev/null || true
     cat "$capture_dir/pv" 2>/dev/null || true
     cat "$capture_dir/dd" 2>/dev/null || true
+    cat "$capture_dir/tee" 2>/dev/null || true
+    cat "$capture_dir/sha256" 2>/dev/null || true
     return $rc
 }
 
@@ -208,8 +258,9 @@ ${arc_dataset}"
 # ------------------------------------------------------------------
 
 reset_unretire_mocks() {
-    unset _mock_old_config_present _mock_old_zvol_present \
+    unset _mock_old_config_present _mock_orphan_zvols \
         _mock_new_config_present _mock_read_response _mock_hash_dst \
+        _mock_sha_fail \
         _mock_dest_zvol_present _mock_dest_zvol_marked
 }
 
@@ -384,6 +435,70 @@ y"
     fi
 }
 
+test_backup_chain_orphan_does_not_block_restore() {
+    reset_unretire_mocks
+    test_start "Backup-chain orphan zvol under another pool does not make the vmid in use"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="
+y"
+    _mock_orphan_zvols="backups/proxmox/vm-904-disk-0"
+    local pve_dir="$_mock_zfs_state_dir/pve13"
+    local archive="$_mock_zfs_state_dir/archive13"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"already in use"* ]]; then
+        test_fail "Gate counted an off-destination orphan as in use; output:\n$out"
+        return
+    fi
+    if [[ ! -f "${pve_dir}/904.conf" ]]; then
+        test_fail "Original config not created; output:\n$out"
+        return
+    fi
+    test_pass
+}
+
+test_extra_disk_orphan_does_not_block_restore() {
+    reset_unretire_mocks
+    test_start "Same-pool orphan with a disk number absent from the archive does not block"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="
+y"
+    _mock_orphan_zvols="threeamigos/proxmox/vm-904-disk-7"
+    local pve_dir="$_mock_zfs_state_dir/pve14"
+    local archive="$_mock_zfs_state_dir/archive14"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"already in use"* ]]; then
+        test_fail "Gate counted an off-destination orphan as in use; output:\n$out"
+        return
+    fi
+    if [[ ! -f "${pve_dir}/904.conf" ]]; then
+        test_fail "Original config not created; output:\n$out"
+        return
+    fi
+    test_pass
+}
+
 test_copy_method_restores_reblocked() {
     reset_unretire_mocks
     test_start "METHOD=copy: restore reblocks back to the original volblocksize"
@@ -415,10 +530,14 @@ y"
         return
     fi
     local arc="${archive}/threeamigos/proxmox/vm-904-disk-0"
-    local _cp_line="CP:--sparse=always /dev/zvol/${arc}@snap1"
-    _cp_line="${_cp_line} /dev/zvol/threeamigos/proxmox/vm-904-disk-0"
-    if [[ "$out" != *"${_cp_line}"* ]]; then
-        test_fail "Device copy from the archive snapshot not recorded; output:\n$out"
+    if [[ "$out" != *"DD:if=/dev/zvol/${arc}@snap1"* ]]; then
+        test_fail "Archive-snapshot read not recorded; output:\n$out"
+        return
+    fi
+    local _dd_line="DD:of=/dev/zvol/threeamigos/proxmox/vm-904-disk-0"
+    if [[ "$out" != *"${_dd_line}"* ]] \
+        || [[ "$out" != *"conv=sparse,notrunc"* ]]; then
+        test_fail "Sparse restore write not recorded; output:\n$out"
         return
     fi
     if [[ "$out" == *"RECEIVE:"* ]]; then
@@ -627,6 +746,20 @@ y"
         test_fail "dd missing conv=sparse,notrunc; output:\n$out"
         return
     fi
+    # The source is read once: the copy and its in-flight hash share the
+    # single paced pass; the destination read-back is the only other one.
+    local pv_count src_pv_count
+    pv_count=$(printf '%s\n' "$out" | grep -c '^PV:')
+    if [[ "$pv_count" -ne 2 ]]; then
+        test_fail "pv count wrong (want copy + read-back): ${pv_count}; output:\n$out"
+        return
+    fi
+    src_pv_count=$(printf '%s\n' "$out" | grep -cFx -- \
+        "PV:-q -L 100M -- /dev/zvol/${arc}@snap1")
+    if [[ "$src_pv_count" -ne 1 ]]; then
+        test_fail "Source device paced more than once (${src_pv_count}); output:\n$out"
+        return
+    fi
     if [[ "$out" != *"✓ Copy verified (sha256 match)"* ]]; then
         test_fail "Paced verification missing; output:\n$out"
         return
@@ -699,13 +832,13 @@ y"
         test_fail "Unexpected exit code $rc; output:\n$out"
         return
     fi
-    local skip_line="Already restored (verified) — skipping:" \
-        "threeamigos/proxmox/vm-904-disk-0"
+    local skip_line="Already restored (verified) — skipping:"
+    skip_line+=" threeamigos/proxmox/vm-904-disk-0"
     if [[ "$out" != *"$skip_line"* ]]; then
         test_fail "Skip message missing; output:\n$out"
         return
     fi
-    if [[ "$out" == *"CP:--sparse=always"* ]]; then
+    if [[ "$out" == *"DD:of="* ]]; then
         test_fail "Skipped disk was copied anyway; output:\n$out"
         return
     fi
@@ -801,6 +934,92 @@ n"
     test_pass
 }
 
+test_restore_hashes_source_in_flight() {
+    reset_unretire_mocks
+    test_start "Restore copy: source hashed in flight, destination read back once"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_inflight"
+    local archive="$_mock_zfs_state_dir/archive_inflight"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    local arc="${archive}/threeamigos/proxmox/vm-904-disk-0"
+    local tee_count stdin_sha src_sha dst_sha
+    # Exactly one tee fan-out: the copy pipeline's hash side-channel.
+    tee_count=$(printf '%s\n' "$out" | grep -c '^TEE:')
+    if [[ "$tee_count" -ne 1 ]]; then
+        test_fail "Expected one in-flight hash fan-out, saw ${tee_count}; output:\n$out"
+        return
+    fi
+    # The source is hashed from the stream (stdin form), never re-read as
+    # a file; the only file-argument hash read names the destination.
+    local arc_sha_line="SHA256:/dev/zvol/${arc}@snap1"
+    local dst_sha_line="SHA256:/dev/zvol/threeamigos/proxmox/vm-904-disk-0"
+    stdin_sha=$(printf '%s\n' "$out" | grep -cxF -- 'SHA256:')
+    src_sha=$(printf '%s\n' "$out" | grep -cF -- "$arc_sha_line")
+    dst_sha=$(printf '%s\n' "$out" | grep -cF -- "$dst_sha_line")
+    if [[ "$stdin_sha" -ne 1 || "$src_sha" -ne 0 || "$dst_sha" -ne 1 ]]; then
+        local hash_fail_msg="Hash reads wrong: stdin=${stdin_sha} src=${src_sha}"
+        hash_fail_msg+=" dst=${dst_sha}; output:\n$out"
+        test_fail "$hash_fail_msg"
+        return
+    fi
+    if [[ "$out" != *"✓ Copy verified (sha256 match)"* ]]; then
+        test_fail "Copy verification missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_restore_source_hash_failure_fatals() {
+    reset_unretire_mocks
+    test_start "Restore copy: in-flight source-hash failure aborts and cleans up"
+
+    _mock_orig_vmid="904"
+    _mock_sha_fail="1"
+    _mock_read_response="
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_shafail"
+    local archive="$_mock_zfs_state_dir/archive_shafail"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected non-zero exit code; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"FATAL: Failed to hash source during copy"* ]]; then
+        test_fail "Source-hash-failure FATAL missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"FATAL: Device copy failed"* ]]; then
+        test_fail "Call-site copy-failure FATAL missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Removed partial restored zvol threeamigos/proxmox/vm-904-disk-0"* ]]; then
+        test_fail "Partial restored zvol not rolled back; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 test_payloads_route_through_node_transports() {
     test_start "Payloads route through on_storage/on_compute; no compute bounce"
 
@@ -811,10 +1030,12 @@ test_payloads_route_through_node_transports() {
         test_fail "Expected storage/compute payload routing, found ${routing_hits}"
         return
     fi
+    # shellcheck disable=SC2016  # needle: the literal $compute_host token in source
     if grep -q 'exec ssh -t root@"$compute_host"' "$mydir/bin/unarchive-vm"; then
         test_fail "Delegate-to-compute bounce still present"
         return
     fi
+    # shellcheck disable=SC2016  # needle: the literal $compute_host token in source
     if grep -q 'exec ssh -t root@"$compute_host"' "$mydir/bin/archive-vm"; then
         test_fail "archive-vm still bounces to the compute host"
         return
@@ -832,8 +1053,12 @@ test_new_vmid_regenerates_uuids
 test_prompts_for_new_vmid_when_original_in_use
 test_explicit_new_vmid_rejected_if_in_use
 test_original_vmid_preserved_without_conflict
+test_backup_chain_orphan_does_not_block_restore
+test_extra_disk_orphan_does_not_block_restore
 test_copy_method_restores_reblocked
 test_rate_limit_paces_restore_copy
+test_restore_hashes_source_in_flight
+test_restore_source_hash_failure_fatals
 test_raw_method_uses_plain_receive
 test_copy_method_missing_vbs_sidecar_fatals
 test_legacy_missing_vbs_sidecar_warns_and_proceeds

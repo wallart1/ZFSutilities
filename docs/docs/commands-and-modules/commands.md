@@ -1775,7 +1775,12 @@ sudo zfsmassdelsnaps <pool> [pool ...]
 - **Respect retention policies** (`ignore_retention_policies='N'`, the default) —
   Runs `zfscleanup` in dry-run mode for each pool, parses the candidate list,
   prints a space estimate, asks for approval, then runs `zfscleanup` for real.
-  This is equivalent to a normal prune, just batched across the selected pools.
+  Because the preview runs the deletion-time safety gates read-only (via
+  `zfsretain`'s `_delsnap_preview_gate`), a snapshot those gates would keep —
+  last remaining common snapshot, offline counterpart pool, holds, clone
+  dependents — is already excluded from the parsed candidate list, so the
+  approval list matches what the real run deletes. This is equivalent to a
+  normal prune, just batched across the selected pools.
 
 In both modes, **Dry Run** lists the affected snapshots and the estimated space
 without deleting them.
@@ -2900,13 +2905,16 @@ sudo archive-vm <vmid>
    the JSON config key `archive_rate_limit`, shared with `unarchive-vm`).
    When set, every data movement — device copy, hash verification, raw
    send/receive — passes through `pv -q -L`, so an archive run cannot
-   saturate a small storage host; the paced device copy writes through
+   saturate a small storage host; the device copy always writes through
    `dd conv=sparse` to keep zero blocks unallocated. For each referenced
    disk, archives into a new dataset under the
    archive base using the shared transfer engine (`lib/archive-engine.sh`), which both node
    modes run identically. Unencrypted zvols are archived by device copy: the archive zvol is
    created thin at `volblocksize=1M` and the snapshot device is copied onto it
-   (`cp --sparse=always` when unlimited, sha256-verified) — the
+   (the source is hashed in flight — the copy stream is teed to a background
+   `sha256sum`, so the source device is read exactly once — and the destination
+   is read back after the copy and compared; a plain `dd` reader replaces `pv`
+   when unlimited) — the
    reblock-for-space-efficiency mechanism,
    since volblocksize always travels in a stream and can never be overridden at receive
    time. Encrypted zvols are archived by raw `zfs send -cw` into a plain receive (a device
@@ -3021,7 +3029,11 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
    sidecar, which is informational for raw-method restores and only required
    for copy-method ones. If the original `vmid` is already in use and
    `--new-vmid` was not supplied, the script prompts for a new VM ID or lets
-   you cancel. Existing destination zvols are classified: a `RESTORED_AS`
+   you cancel. A vmid counts as in use only when a Proxmox config for it
+   exists on the compute host — zvols elsewhere on the storage host that
+   merely carry the VM-disk naming (backup-chain copies, for example) never
+   block a restore, because the restore would not touch them. Existing
+   destination zvols are classified: a `RESTORED_AS`
    marker for this VM ID means already restored (skipped); an existing zvol
    without the marker is an interrupted run's leftover or a foreign orphan
    and is only destroyed after an explicit confirmation. A destination

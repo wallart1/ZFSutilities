@@ -79,7 +79,7 @@ usage() {
 prompt_new_vmid() {
     local response
     echo ""
-    log_msg "INFO: vmid ${vmid} is already in use (config or zvols exist)."
+    log_msg "INFO: vmid ${vmid} is already in use (a Proxmox config exists)."
     read -rp "Enter a new vmid to restore as, or leave blank to abort: " response
     if [[ -z "$response" ]]; then
         log_msg "INFO: Aborted."
@@ -106,97 +106,52 @@ is_disk_key() {
     [[ -n "$letters" && "$letters" =~ ^[a-z]+$ && "$digits" =~ ^[0-9]+$ ]]
 }
 
+# A vmid is "in use" only when a Proxmox config for it exists on the compute
+# host. Restore-target zvols are the destination classification step's to
+# judge (per disk, with an explicit confirmation), and zvols elsewhere that
+# merely carry the VM-disk naming — backup-chain copies — are intentionally
+# orphaned and must never block a restore that would not touch them.
 vmid_in_use() {
     local check_vmid="$1"
     local dest_conf="${pve_conf_dir}/${check_vmid}.conf"
     # The config lives on the compute host; probe it there (locally when
     # this IS the compute host).
-    if on_compute "$dest_conf" << 'CPEOF'
+    if ! on_compute "$dest_conf" << 'CPEOF'
 [[ -f "$1" ]]
 CPEOF
     then
-        # A config whose every archive restore target exists AND carries the
-        # completion marker is this archive's own finished output, not a
-        # foreign VM in use — re-running must reach the nothing-to-do exit.
-        local all_marked=true mi pool dnum target marked_here
-        for mi in "${!original_zvols[@]}"; do
-            pool="${original_zvols[$mi]%%/*}"
-            dnum="${disk_nums[$mi]}"
-            [[ "$dnum" =~ ^[0-9]+$ ]] || continue
-            target="${pool}/proxmox/vm-${check_vmid}-disk-${dnum}"
-            marked_here=false
-            if is_single_node; then
-                if zfs list -H -o name "$target" 2>/dev/null \
-                        | grep -qxF -- "$target" \
-                        && zvol_marked_restored "$target" "$check_vmid"; then
-                    marked_here=true
-                fi
-            else
-                if ssh root@"$storage_host" \
-                        "zfs list -H -o name '$target' 2>/dev/null \
-                        | grep -qxF -- '$target'" \
-                        && zvol_marked_restored "$target" "$check_vmid"; then
-                    marked_here=true
-                fi
-            fi
-            [[ "$marked_here" == "true" ]] || all_marked=false
-        done
-        if [[ "$all_marked" == "true" ]]; then
-            return 1
-        fi
-        return 0
+        return 1
     fi
-
-    # Potential restore-target paths of this archive for check_vmid: a zvol
-    # sitting at one of these paths is either a completed restore (carrying
-    # the sidecar marker) or an interrupted restore's leftover — the
-    # destination classification step decides per disk with an explicit
-    # confirmation, so the vmid gate must not count them as "in use".
-    local restore_paths="" i pool dnum
-    for i in "${!original_zvols[@]}"; do
-        pool="${original_zvols[$i]%%/*}"
-        dnum="${disk_nums[$i]}"
+    # A config whose every archive restore target exists AND carries the
+    # completion marker is this archive's own finished output, not a
+    # foreign VM in use — re-running must reach the nothing-to-do exit.
+    local all_marked=true mi pool dnum target marked_here
+    for mi in "${!original_zvols[@]}"; do
+        pool="${original_zvols[$mi]%%/*}"
+        dnum="${disk_nums[$mi]}"
         [[ "$dnum" =~ ^[0-9]+$ ]] || continue
-        restore_paths+="${pool}/proxmox/vm-${check_vmid}-disk-${dnum} "
+        target="${pool}/proxmox/vm-${check_vmid}-disk-${dnum}"
+        marked_here=false
+        if is_single_node; then
+            if zfs list -H -o name "$target" 2>/dev/null \
+                    | grep -qxF -- "$target" \
+                    && zvol_marked_restored "$target" "$check_vmid"; then
+                marked_here=true
+            fi
+        else
+            if ssh root@"$storage_host" \
+                    "zfs list -H -o name '$target' 2>/dev/null \
+                    | grep -qxF -- '$target'" \
+                    && zvol_marked_restored "$target" "$check_vmid"; then
+                marked_here=true
+            fi
+        fi
+        [[ "$marked_here" == "true" ]] || all_marked=false
     done
-
-    local found vol vol_tail
-    if is_single_node; then
-        # Find a non-archive zvol for this VM: ends in "/proxmox/vm-N-disk-"
-        # followed only by digits, and not under the archive base.
-        found=""
-        while IFS= read -r vol; do
-            [[ "$vol" == "${archive_base}/"* ]] && continue
-            [[ " $restore_paths" == *" $vol "* ]] && continue
-            vol_tail="${vol##*"/proxmox/vm-${check_vmid}-disk-"}"
-            [[ "$vol_tail" =~ ^[0-9]+$ ]] || continue
-            found="$vol"
-            break
-        done < <(zfs list -H -t volume -o name 2>/dev/null)
-    else
-        found=$(ssh root@"$storage_host" bash -s "$check_vmid" "$archive_base" \
-            "$restore_paths" << 'SSHEOF'
-mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
-source "$mydir/bashinit"
-bashinit
-
-vmid="$1"
-archive_base="$2"
-restore_paths="$3"
-found=""
-while IFS= read -r vol; do
-    [[ "$vol" == "${archive_base}/"* ]] && continue
-    [[ " $restore_paths" == *" $vol "* ]] && continue
-    vol_tail="${vol##*"/proxmox/vm-${vmid}-disk-"}"
-    [[ "$vol_tail" =~ ^[0-9]+$ ]] || continue
-    found="$vol"
-    break
-done < <(zfs list -H -t volume -o name 2>/dev/null)
-echo "$found"
-SSHEOF
-        )
+    if [[ "$all_marked" == "true" ]]; then
+        return 1
     fi
-    [[ -n "$found" ]]
+    return 0
 }
 
 # True when the archive's sidecar for this zvol records a completed restore
@@ -459,7 +414,7 @@ done
 #   redo    — confirmed leftover; destroy, then restore again
 declare -a restore_action=()
 for i in "${!new_zvols[@]}"; do
-    restore_action[$i]="restore"
+    restore_action[i]="restore"
     dest_exists=false
     if is_single_node; then
         if zfs list -H -o name "${new_zvols[$i]}" 2>/dev/null \
@@ -474,7 +429,7 @@ for i in "${!new_zvols[@]}"; do
     fi
     if [[ "$dest_exists" == "true" ]]; then
         if zvol_marked_restored "${new_zvols[$i]}" "$newvmid"; then
-            restore_action[$i]="skip"
+            restore_action[i]="skip"
         else
             echo ""
             # One prompt string built via a needle variable: backslash-
@@ -484,7 +439,7 @@ for i in "${!new_zvols[@]}"; do
             redo_prompt+=" completion marker (interrupted run or orphan)."
             redo_prompt+=" Destroy and re-restore?"
             if ask_yn "$redo_prompt"; then
-                restore_action[$i]="redo"
+                restore_action[i]="redo"
             else
                 log_msg "FATAL: Refusing to destroy ${new_zvols[$i]} — aborting."
                 exit 1
@@ -903,6 +858,7 @@ else
     # final content in a temp file first so it can be written locally
     # (single-node) or shipped to the compute host (two-node).
     tmp_config=$(mktemp "${TMPDIR:-/tmp}/zfsu-unarchive-conf.XXXXXX")
+    # shellcheck disable=SC2016  # payload must expand at trap time, not here
     append_exit_trap '[[ -n "${tmp_config:-}" ]] && rm -f "$tmp_config"'
     new_vmgenid=""
     new_smbios_uuid=""

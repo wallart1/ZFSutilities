@@ -157,7 +157,8 @@ def _build_rewrite_command(ds_name: str, mountpoint: str) -> str:
 def on_rewrite_data(app, datasets, refresh=None):
     """Rewrite data on *datasets* (all filesystems) using ``zfs rewrite -P``.
 
-    Requires at least one filesystem dataset, OpenZFS 2.3+, the pool's
+    Requires at least one filesystem dataset, OpenZFS 2.3.4+ (per
+    ``zfs_capabilities.FEATURE_MIN_VERSION``), the pool's
     physical_rewrite feature, and a running dataset_runner. Unmounted
     datasets are mounted temporarily and returned to their prior state
     afterwards. Acquires one write lock per dataset, runs one BashStep per
@@ -180,7 +181,7 @@ def on_rewrite_data(app, datasets, refresh=None):
         return
 
     if not app.ctx.zfs_caps.supports("zfs_rewrite"):
-        log_msg("WARN: Rewrite Data requires OpenZFS 2.3+")
+        log_msg(f"WARN: Rewrite Data {app.ctx.zfs_caps.requires('zfs_rewrite')}")
         return
 
     runner = getattr(app, "dataset_runner", None)

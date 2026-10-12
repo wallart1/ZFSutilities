@@ -1,5 +1,97 @@
 # Changelog
 
+## 0.124.0
+
+*Released 2026-10-12*
+
+### Added
+
+- **Faithful dry-run retention previews** — every would-remove candidate in
+  all three `zfsretain` phases now passes `_delsnap_preview_gate`, a
+  read-only mirror of `zfsdelsnap`'s deletion-time gates defined next to
+  the real gate sequence: minimum age, the `zfscheckagainst` counterpart
+  gates (run in a subshell so their exit-8 fatals cannot kill the preview,
+  with delsnap's exact rc mapping — rc 5 takes the conservative
+  non-interactive answer), hold classification (nothing is released), and
+  clone dependents. "Would remove" now matches what a real run deletes.
+  `zfsmassdelsnaps` respect-mode approval lists and space estimates are
+  built from the preview, so gate-kept snapshots are no longer
+  over-promised.
+- **In-flight source hashing for archive device copies** — the copy stream
+  in `lib/archive-engine.sh` is teed through a fifo to a background
+  `sha256sum`, so the source device is read exactly once per archive; the
+  post-copy verification reads only the destination and compares it
+  against the captured digest. A dead hash consumer or dead writer breaks
+  the pipeline via SIGPIPE and pipefail, so a partial copy or truncated
+  hash can never return success. Unlimited runs use the same
+  `dd conv=sparse` pipeline as paced ones (`cp --sparse=always` is retired
+  from the engine; thin-zvol behavior is unchanged). The design was
+  validated against real ZFS in a container before implementation.
+- **Install-guide capability and version documentation** — a
+  "Capabilities by Deployment Mode" matrix (single-node/two-node × PVE
+  roles), an "OpenZFS Version Requirements" table derived from
+  `zfs_capabilities.FEATURE_MIN_VERSION` (including the
+  zfs_rewrite-shipped-in-2.3.4 note and the `physical_rewrite` pool-flag
+  cross-check), and a corrected single-node "Next Steps" branch
+  (Concepts/GTK GUI/Commands rather than Proxmox Integration).
+- **Restore-fidelity documentation** — restore.md gains "What a Restore
+  Preserves": data-only `-cw` streams carry no dataset properties,
+  encrypted restores arrive as their own encryptionroot with
+  `keylocation=prompt` (plus a recovery recipe), and receive never
+  reblocks or recompresses; pointer notes in the daily-backup and
+  offsite-backup pages.
+- **`test-no-debug-hooks` guard suite** — static check that no shipped
+  `bin/` or `lib/` script enables the `bashdebug` traps or xtrace
+  (`setx`); both modules stay available for manual interactive use.
+
+### Fixed
+
+- **Repo-launched GUI silently viewed and edited the deployed docs** —
+  `get_docs_path()` had a repo→`current` fallback and the pencil icon's
+  target is baked at `mkdocs build` time as an absolute path, so a viewer
+  serving the deployed site edited deployed markdown. Resolution is now
+  layout-faithful (no cross-layout fallback; a repo launch without a built
+  site shows build instructions), `openmd://` edit targets are re-anchored
+  onto the tree whose site the viewer serves (with INFO/WARN forensics),
+  and the standalone launcher resolves its own realpath like the GUI.
+- **`unarchive-vm` vmid gate swept every zvol on the storage host (live
+  vm-205 incident)** — backup-chain zvols that intentionally keep the
+  `vm-<vmid>-disk-*` naming under another pool falsely blocked a restore
+  at entirely empty destinations. The gate is config-only now (a Proxmox
+  config at the restore destination, with the existing all-RESTORED_AS
+  exemption for idempotent re-runs); destination zvols remain the
+  per-disk classification step's to judge.
+- **Interactive debug leftovers in shipped scripts** — `zfscheckagainst`
+  turned on the `bashdebug` step-debugger behind a hard-coded site-name
+  glob (a quoted pattern that could never match, i.e. dead code),
+  `zfslistkeys` enabled it unconditionally, and `watchit` enabled xtrace
+  unconditionally; all three are removed (the new guard suite prevents
+  recurrence).
+- **Rewrite Data version gate understated the requirement** — the refusal
+  WARN said "OpenZFS 2.3+" while the enforced minimum (first `zfs rewrite`
+  release) is 2.3.4; the WARN now renders `zfs_capabilities.requires()`.
+- **Two test-suite search strings silently lost their second half** —
+  backslash-continued `local` assignments passed the continuation as a
+  NAME argument (bash printed "not a valid identifier" on every run) and
+  the skip-message assertions only checked their prefix; both are built
+  with `+=` now.
+
+### Changed
+
+- **Dry-run preview output** — the preview caveat names the read-only
+  gates and the unmodelable residuals (lock contention, destroy failures,
+  the interactive rc-5 confirm); `---Same-day.` normalized to
+  `--- Same-day.`; new "Would: Keep" message rows for every gate outcome
+  (catalogue updated; the `Would:`/`Would remove` prefixes the
+  `zfsmassdelsnaps` parser keys on are byte-preserved).
+- **Archive engine messages** — verification reports against the in-flight
+  digest; new `FATAL: Failed to hash source during copy`;
+  `archive_copy_devices` takes a caller-declared hash-output variable
+  (internal engine interface; callers updated).
+- Shellcheck style findings resolved (arithmetic `$` prefixes; explaining
+  directives on the intentional single-quote deferrals), and a stray empty
+  heading at the end of restore.md removed.
+
 ## 0.123.0
 
 *Released 2026-10-11*

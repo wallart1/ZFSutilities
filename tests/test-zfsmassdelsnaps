@@ -69,6 +69,11 @@ cleanup() {
             _keep="${_keep}; only 12 days old (minimum age is 45 days).\n"
             printf "$_keep" "$pool"
         fi
+        if [[ "${_mock_cleanup_gate_keep_line:-N}" == "Y" ]]; then
+            local _gate_keep='INFO: Would: Keep %s@dailybackup-2025-03-27T10:00-04:00-d --- Bucket'
+            _gate_keep="${_gate_keep}; counterpart pool(s) offline.\n"
+            printf "$_gate_keep" "$pool"
+        fi
         printf 'INFO: Would: Remove %s@dailybackup-2025-03-29T10:00-04:00-d --- Bucket.\n' "$pool"
     fi
     return 0
@@ -95,6 +100,7 @@ reset_state() {
     _mock_zfs_props=()
     _mock_cleanup_empty="N"
     _mock_cleanup_keep_line="N"
+    _mock_cleanup_gate_keep_line="N"
     snapshot_label=""
     snapshot_has=""
     includes=()
@@ -395,6 +401,41 @@ test_respect_dryrun_ignores_keep_lines() {
     fi
 }
 
+test_respect_dryrun_ignores_gate_keep_lines() {
+    echo "=== Respect mode: gate-reason Would: Keep lines are not candidates ==="
+    reset_state
+    snapshot_label="dailybackup"
+    ignore_retention_policies="N"
+    dryrun="Y"
+    # The preview-gate keep variant: a snapshot the deletion-time gates
+    # (here: counterpart pool offline) would hold back. The parsed approval
+    # list must exclude it, so massdelsnaps stops over-promising removals
+    # the real run's gates keep.
+    _mock_cleanup_gate_keep_line="Y"
+    mock_zfs_prop "pool1@dailybackup-2025-03-27T10:00-04:00-d" "creation" "1711544400"
+    mock_zfs_prop "pool1@dailybackup-2025-03-28T10:00-04:00-d" "creation" "1711630800"
+    mock_zfs_prop "pool1@dailybackup-2025-03-29T10:00-04:00-d" "creation" "1711717200"
+    mock_zfs_prop "pool1@dailybackup-2025-03-27T10:00-04:00-d" "used" "1073741824"
+    mock_zfs_prop "pool1@dailybackup-2025-03-28T10:00-04:00-d" "used" "268435456"
+    mock_zfs_prop "pool1@dailybackup-2025-03-29T10:00-04:00-d" "used" "268435456"
+    local output
+    mass_delete_snapshots pool1 > "${mock_mydir}/test_output.txt" 2>&1
+    output=$(cat "${mock_mydir}/test_output.txt")
+    test_start "Candidate count excludes gate-kept snapshots"
+    if [[ "$output" == *"The following 2 snapshots would be removed:"* ]]; then
+        test_pass
+    else
+        test_fail "Expected 2 candidates, got: $output"
+    fi
+    test_start "Space estimate excludes gate-kept snapshots"
+    if [[ "$output" == *"Estimated disk space that would be freed: ~512Mi"* \
+        && "$output" != *"~1.5Gi"* ]]; then
+        test_pass
+    else
+        test_fail "Expected ~512Mi estimate (gate-keep excluded), got: $output"
+    fi
+}
+
 test_respect_releaseholds_passed() {
     echo "=== Respect mode: releaseholds is forwarded ==="
     reset_state
@@ -479,6 +520,7 @@ test_respect_no_matching_snapshots
 test_respect_dryrun_lists_only
 test_respect_parses_candidates
 test_respect_dryrun_ignores_keep_lines
+test_respect_dryrun_ignores_gate_keep_lines
 test_respect_releaseholds_passed
 test_estimate_space_freed_zero
 test_estimate_space_freed_nonnumeric

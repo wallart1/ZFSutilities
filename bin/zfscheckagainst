@@ -43,8 +43,6 @@ function checkagainst {
     unset _local_bashinit
 
     source_helper zfscommsnap
-    source_helper bashdebug
-    if [[ "$1" == '*NVME1*' ]]; then bashdebugon; else bashdebugoff; fi
 
     local \
         _ca_from_offsite_ds=() \

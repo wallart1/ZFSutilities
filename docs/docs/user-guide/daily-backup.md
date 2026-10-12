@@ -24,6 +24,17 @@ The daily backup is not globally serialized with offsite or restore jobs.
 Multiple operations can run at the same time when they operate on disjoint
 datasets; per-dataset locks still prevent collisions on the same datasets.
 
+## What the Backup Preserves
+
+The send/receive steps copy snapshot **data**, not dataset settings: streams
+are sent with `zfs send -cw`, so properties such as `compression`,
+`recordsize`, and quotas do not travel, and destinations keep the settings
+they inherit from their parent in the destination pool. Encrypted data stays
+encrypted end to end (raw streams), and transfer verification compares
+snapshot GUIDs. For the full picture — including how encrypted datasets come
+back and how block sizes behave — see
+[What a Restore Preserves](restore.md#what-a-restore-preserves).
+
 ## Step Failure Handling
 
 Different steps have different consequences when they fail:

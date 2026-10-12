@@ -9,9 +9,6 @@ fi
 bashinit
 unset _local_bashinit
 
-source_helper bashdebug
-bashdebugon
-
 if [[ $1 != '' ]]; then
     zfs list -r -o name,keystatus,keylocation "$1" | grep available | grep -v prompt
 else

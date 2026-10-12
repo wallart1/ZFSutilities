@@ -254,7 +254,6 @@ test_checkagainst_sources_cleanly() {
     # Copy the real helper modules that zfscheckagainst sources.
     cp "$old_mydir/bin/zfscheckagainst" "$tmpdir/zfscheckagainst"
     cp "$old_mydir/bin/zfscommsnap" "$tmpdir/zfscommsnap"
-    cp "$old_mydir/bin/bashdebug" "$tmpdir/bashdebug"
     cp "$old_mydir/bin/zfsconfig" "$tmpdir/zfsconfig"
 
     local output rc=0
@@ -634,6 +633,279 @@ test_minage_gate_blocks_young_snapshot
 test_minage_gate_passes_old_snapshot
 test_minage_gate_passes_unknown_age_snapshot
 test_user_hold_blocks_deletion
+
+# ------------------------------------------------------------------
+# _delsnap_preview_gate — the read-only dry-run mirror of delsnap's gates
+# ------------------------------------------------------------------
+
+# Write the standard stub set into $1. The stub checkagainst EXITS with
+# $MOCK_PG_RC (exercising the subshell containment of fatal exits) and
+# records each consulted snapshot in $1/called.
+_pg_mkstubs() {
+    local d="$1"
+    cat > "$d/zfscheckagainst" << 'EOF'
+checkagainst() {
+    echo "$1" >> "${MOCK_PG_CALLED:-/dev/null}"
+    exit "${MOCK_PG_RC:-0}"
+}
+EOF
+    cat > "$d/zfsdelallholds" << 'EOF'
+delallholds() { true; }
+EOF
+    cat > "$d/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    cat > "$d/zfs-diagnose-busy" << 'EOF'
+function diagnose_dataset_busy { true; }
+EOF
+}
+
+# Run the real _delsnap_preview_gate against the stubs in $1 with a mock
+# zfs shaped by MOCK_* knobs (RC, HOLDS, CLONES, CREATION, MINAGE, RH,
+# TAGS, CTX). Sets _pg_output; the runner rc is irrelevant — the verdict
+# is asserted via the GATE: marker the script prints.
+_pg_run() {
+    local d="$1"
+    _pg_output=$(
+        env mydir="$d" \
+            MOCK_PG_RC="${MOCK_PG_RC:-0}" \
+            MOCK_PG_CALLED="$d/called" \
+            MOCK_HOLDS="${MOCK_HOLDS:-}" \
+            MOCK_CLONES="${MOCK_CLONES:--}" \
+            MOCK_CREATION="${MOCK_CREATION:-0}" \
+            MOCK_MINAGE="${MOCK_MINAGE:-0}" \
+            MOCK_RH="${MOCK_RH:-N}" \
+            MOCK_TAGS="${MOCK_TAGS:-offsite-*}" \
+            MOCK_CTX="${MOCK_CTX:-Bucket}" \
+            bash -c '
+                zfs() {
+                    if [[ "$1" == "holds" && "$2" == "-H" ]]; then
+                        printf "%s\n" "${MOCK_HOLDS:-}"
+                        return 0
+                    elif [[ "$1" == "list" && "$2 $3 $4" == "-H -o clones" ]]; then
+                        echo "${MOCK_CLONES:--}"
+                        return 0
+                    elif [[ "$1" == "get" && "$2" == "-Hp" ]]; then
+                        echo "${MOCK_CREATION:-0}"
+                        return 0
+                    fi
+                    command zfs "$@"
+                }
+                read -r -a releaseholds_tags <<< "${MOCK_TAGS:-offsite-*}"
+                source "'"$old_mydir"'/bin/zfsdelsnap"
+                if _delsnap_preview_gate "pool/fs@snap" "${MOCK_MINAGE:-0}" \
+                    "${MOCK_RH:-N}" "${MOCK_CTX:-Bucket}"; then
+                    echo "GATE:PROCEED"
+                else
+                    echo "GATE:KEEP"
+                fi
+            ' 2>&1
+    )
+}
+
+test_preview_gate_rc0_and_rc4_proceed() {
+    test_start "preview gate proceeds on checkagainst rc 0 and 4"
+    local tmpdir rc _proceeds
+    for rc in 0 4; do
+        tmpdir=$(mktemp -d)
+        _pg_mkstubs "$tmpdir"
+        MOCK_PG_RC=$rc _pg_run "$tmpdir"
+        _proceeds=true
+        [[ "$_pg_output" == *"GATE:PROCEED"* ]] || _proceeds=false
+        [[ "$_pg_output" != *"Would: Keep"* ]] || _proceeds=false
+        grep -q "pool/fs@snap" "$tmpdir/called" || _proceeds=false
+        if [[ "$_proceeds" != true ]]; then
+            test_fail "rc=$rc: expected proceed with gate consulted, got: $_pg_output"
+            rm -rf "$tmpdir"
+            return
+        fi
+        rm -rf "$tmpdir"
+    done
+    test_pass
+}
+
+test_preview_gate_rc7_keeps_last_common() {
+    test_start "preview gate keeps on rc 7 (last remaining common snapshot)"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    _pg_mkstubs "$tmpdir"
+    MOCK_PG_RC=7 _pg_run "$tmpdir"
+    if [[ "$_pg_output" == *"GATE:KEEP"* \
+        && "$_pg_output" == *"last remaining common snapshot"* ]]; then
+        test_pass
+    else
+        test_fail "Expected last-common keep, got: $_pg_output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_preview_gate_rc6_keeps_offline_counterpart() {
+    test_start "preview gate keeps on rc 6 (counterpart pool offline)"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    _pg_mkstubs "$tmpdir"
+    MOCK_PG_RC=6 _pg_run "$tmpdir"
+    if [[ "$_pg_output" == *"GATE:KEEP"* \
+        && "$_pg_output" == *"counterpart pool(s) offline"* ]]; then
+        test_pass
+    else
+        test_fail "Expected offline-counterpart keep, got: $_pg_output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_preview_gate_rc5_keeps_without_entries() {
+    test_start "preview gate keeps on rc 5 (no eligible entries, no prompt)"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    _pg_mkstubs "$tmpdir"
+    MOCK_PG_RC=5 _pg_run "$tmpdir"
+    if [[ "$_pg_output" == *"GATE:KEEP"* \
+        && "$_pg_output" == *"no eligible checkagainst entries"* ]]; then
+        test_pass
+    else
+        test_fail "Expected no-entries keep without prompting, got: $_pg_output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_preview_gate_rc8_fatal_contained() {
+    test_start "preview gate contains checkagainst exit 8 and keeps"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    _pg_mkstubs "$tmpdir"
+    MOCK_PG_RC=8 _pg_run "$tmpdir"
+    if [[ "$_pg_output" == *"GATE:KEEP"* \
+        && "$_pg_output" == *"rc=8"* \
+        && "$_pg_output" == *"keeping it in the preview"* ]]; then
+        test_pass
+    else
+        test_fail "Expected contained fatal (WARN + keep), got: $_pg_output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_preview_gate_minage_blocks_young() {
+    test_start "preview gate keeps snapshots younger than minage"
+    local tmpdir _epoch
+    tmpdir=$(mktemp -d)
+    _pg_mkstubs "$tmpdir"
+    _epoch=$(( $(date +%s) - 3 * 86400 ))
+    MOCK_CREATION=$_epoch MOCK_MINAGE=7 _pg_run "$tmpdir"
+    if [[ "$_pg_output" == *"GATE:KEEP"* \
+        && "$_pg_output" == *"only 3 days old (minimum age is 7 days)"* ]]; then
+        test_pass
+    else
+        test_fail "Expected minage keep, got: $_pg_output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_preview_gate_minage_unknown_age_falls_through() {
+    test_start "preview gate proceeds when creation age is unknown"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    _pg_mkstubs "$tmpdir"
+    MOCK_CREATION=- MOCK_MINAGE=7 _pg_run "$tmpdir"
+    if [[ "$_pg_output" == *"GATE:PROCEED"* ]]; then
+        test_pass
+    else
+        test_fail "Expected proceed on unknown age, got: $_pg_output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_preview_gate_holds_block_when_not_releasing() {
+    test_start "preview gate keeps held snapshots when releaseholds=N"
+    local tmpdir _holds
+    tmpdir=$(mktemp -d)
+    _pg_mkstubs "$tmpdir"
+    _holds=$'pool/fs@snap\toffsite-z22tb\tThu Oct 1 12:00 2026'
+    MOCK_HOLDS="$_holds" MOCK_RH=N _pg_run "$tmpdir"
+    if [[ "$_pg_output" == *"GATE:KEEP"* \
+        && "$_pg_output" == *"held (offsite-z22tb)"* ]]; then
+        test_pass
+    else
+        test_fail "Expected held keep, got: $_pg_output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_preview_gate_holds_remaining_tags_block_when_releasing() {
+    test_start "preview gate keeps snapshots whose holds outlive release"
+    local tmpdir _holds
+    tmpdir=$(mktemp -d)
+    _pg_mkstubs "$tmpdir"
+    _holds=$'pool/fs@snap\toffsite-z22tb\tThu Oct 1 12:00 2026\n'
+    _holds+=$'pool/fs@snap\tmanualkeep\tFri Oct 2 08:00 2026'
+    MOCK_HOLDS="$_holds" MOCK_RH=Y MOCK_TAGS='offsite-*' _pg_run "$tmpdir"
+    if [[ "$_pg_output" == *"GATE:KEEP"* \
+        && "$_pg_output" == *"holds remain (manualkeep)"* ]]; then
+        test_pass
+    else
+        test_fail "Expected holds-remain keep, got: $_pg_output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_preview_gate_releasable_holds_proceed() {
+    test_start "preview gate proceeds when every hold matches the tags"
+    local tmpdir _holds
+    tmpdir=$(mktemp -d)
+    _pg_mkstubs "$tmpdir"
+    _holds=$'pool/fs@snap\toffsite-z22tb\tThu Oct 1 12:00 2026'
+    MOCK_HOLDS="$_holds" MOCK_RH=Y MOCK_TAGS='offsite-*' _pg_run "$tmpdir"
+    if [[ "$_pg_output" == *"GATE:PROCEED"* ]]; then
+        test_pass
+    else
+        test_fail "Expected proceed on fully-releasable holds, got: $_pg_output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_preview_gate_clone_dependents_block() {
+    test_start "preview gate keeps snapshots with clone dependents"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    _pg_mkstubs "$tmpdir"
+    MOCK_CLONES="pool/clone1,pool/clone2" _pg_run "$tmpdir"
+    if [[ "$_pg_output" == *"GATE:KEEP"* \
+        && "$_pg_output" == *"clone dependents"* ]]; then
+        test_pass
+    else
+        test_fail "Expected clone-deps keep, got: $_pg_output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_preview_gate_context_folds_into_keep_reason() {
+    test_start "preview gate folds the phase context into keep reasons"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    _pg_mkstubs "$tmpdir"
+    MOCK_PG_RC=7 MOCK_CTX="Same-day" _pg_run "$tmpdir"
+    if [[ "$_pg_output" == *"Same-day; last remaining common snapshot"* ]]; then
+        test_pass
+    else
+        test_fail "Expected context-folded keep line, got: $_pg_output"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_preview_gate_rc0_and_rc4_proceed
+test_preview_gate_rc7_keeps_last_common
+test_preview_gate_rc6_keeps_offline_counterpart
+test_preview_gate_rc5_keeps_without_entries
+test_preview_gate_rc8_fatal_contained
+test_preview_gate_minage_blocks_young
+test_preview_gate_minage_unknown_age_falls_through
+test_preview_gate_holds_block_when_not_releasing
+test_preview_gate_holds_remaining_tags_block_when_releasing
+test_preview_gate_releasable_holds_proceed
+test_preview_gate_clone_dependents_block
+test_preview_gate_context_folds_into_keep_reason
 
 test_summary
 teardown_test_env

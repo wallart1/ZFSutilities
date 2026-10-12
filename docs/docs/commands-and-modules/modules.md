@@ -566,9 +566,12 @@ inside a zfs send stream; overriding it at receive time is refused by current
 OpenZFS userland (verified empirically on 2.2.2 and 2.4.4-pve1) and is
 meaningless for raw streams. Reblocking therefore only happens by creating the
 destination zvol with the target volblocksize and device-copying onto it:
-unencrypted zvols are archived at `volblocksize=1M` by device copy
-(`cp --sparse=always`, sha256-verified, `snapdev=visible` for the snapshot
-device, rolled back on failure); encrypted zvols use raw `send -cw` received
+unencrypted zvols are archived at `volblocksize=1M` by device copy (the
+source is hashed in flight — the copy stream is teed to a background
+`sha256sum` through a fifo, so the source device is read exactly once — and
+the destination is read back after the copy and compared against that
+digest; `snapdev=visible` for the snapshot device, rolled back on failure);
+encrypted zvols use raw `send -cw` received
 as-is (a device copy would read plaintext). Restores branch on the archive's
 recorded `METHOD=copy|raw` marker; unmarked legacy archives restore via raw
 send/receive.
@@ -578,7 +581,8 @@ send/receive.
 | Function                          | Purpose                                                              |
 | --------------------------------- | -------------------------------------------------------------------- |
 | `archive_dev_wait(<dev>)`         | Bounded wait for a `/dev/zvol` node to settle (udev).                |
-| `archive_hash_verify(<a>, <b>)`   | sha256 both devices and compare; FATAL on mismatch.                  |
+| `archive_copy_devices(<src>, <dst>, <var>)` | Device copy that hashes the source in flight (`tee`→fifo→background `sha256sum`); stores the digest in `<var>`; pv-paced or plain-dd reader; failures are SIGPIPE-contained by pipefail. |
+| `archive_hash_verify(<src>, <dst>, <expected>)` | Read back the destination and compare its sha256 against the in-flight source hash; FATAL on mismatch. |
 | `archive_create_parents(<parent>, <var>)` | Create the parent chain only if absent; sets `<var>` to the shallowest created level for exact rollback. |
 | `archive_rollback_created(...)`   | Destroy exactly the datasets this run created.                       |
 | `archive_one_zvol(...)`           | Archive one zvol (copy or raw per encryption); writes the `.original_volblocksize` and `METHOD=` sidecar lines. |
@@ -785,7 +789,6 @@ checkagainst <snapshot>
 | Module        | Purpose in this entry                           |
 | ------------- | ----------------------------------------------- |
 | `bashinit`    | Logging and `$mydir` initialization             |
-| `bashdebug`   | Optional debug traps (conditionally enabled)    |
 | `zfscommsnap` | Find common snapshots with counterpart datasets |
 | `zfsconfig`   | Load the fss table from JSON config             |
 
@@ -1154,6 +1157,19 @@ age helper behind the `$2` minimum-age gate. [`zfsretain`](#zfsretain)'s
 dry-run preview and [`zfsmassdelsnaps`](commands.md#zfsmassdelsnaps)'s age
 column call it so all three report the same ages; it prints `-1` when the
 creation property cannot be read.
+
+It also exports `_delsnap_preview_gate <snapshot> <minage> <releaseholds>
+<context>`, the read-only mirror of `delsnap`'s gates that `zfsretain`'s
+dry-run preview runs for every would-remove candidate. It evaluates every
+gate that can be decided without mutating anything — minimum age, the
+`zfscheckagainst` counterpart gates (in a subshell, so their fatal exits
+cannot kill the preview), snapshot holds classified exactly like
+`zfsdelallholds` without releasing anything, and clone dependents — and
+logs a `Would: Keep` line naming the gate that would hold the snapshot
+(returning 1); a snapshot `delsnap` would destroy returns 0. It never
+prompts: the interactive confirm `delsnap` raises for snapshots with no
+eligible checkagainst entries maps to the conservative keep a
+non-interactive real run gets.
 
 **Globals:**
 
@@ -1561,18 +1577,24 @@ Applies retention policies to a pool or dataset in three phases:
    snapshots (`written=0`) are logged as `(empty)` but are not preferred over
    older snapshots with unique data. When `retain > 0`, the most recent snapshot
    in each bucket is protected (incremental base). When `retain = 0`, the most
-   recent is eligible for deletion like the rest. In dry-run mode this phase
-   applies the bucket's `minage` gate via `snapshot_age_days` (from
-   `zfsdelsnap`): candidates younger than the minimum age are reported as
-   `Would: Keep` instead of `Would: Remove`, matching the refusal `zfsdelsnap`
-   would raise in a real run.
+   recent is eligible for deletion like the rest. In dry-run mode every
+   would-remove candidate in all three phases passes
+   `_delsnap_preview_gate` (from `zfsdelsnap`), so the preview reports the
+   same deletions a real run would make.
 
-!!! note "Dry-run previews do not model the checkagainst gates"
-    A dry-run preview reports what the retention and minimum-age policy alone
-    would do, and says so up front. The `zfscheckagainst` gates (last
-    remaining common snapshot with a counterpart dataset, counterpart pools
-    unreachable) run inside the deletion step in a real run, so a candidate
-    the preview marks `Would: Remove` can still be kept by those gates.
+!!! note "Dry-run previews run the deletion-time gates read-only"
+    A dry-run preview runs the same read-only gates the deletion step would:
+    every would-remove candidate passes `_delsnap_preview_gate`, which
+    evaluates the `zfscheckagainst` counterpart gates (last remaining common
+    snapshot, counterpart pools offline, no eligible entries), snapshot
+    holds, clone dependents, and the bucket's minimum age — releasing
+    nothing, prompting never. A candidate the gates hold back is reported
+    as `Would: Keep` with the gate's reason instead of `Would: Remove`.
+    Only what cannot be probed ahead of time stays unmodeled: lock
+    contention at deletion time, `zfs destroy` failures, and the interactive
+    confirm `zfsdelsnap` raises for snapshots with no eligible checkagainst
+    entries (the preview takes the conservative keep a non-interactive real
+    run would get).
 
 !!! note "Clone snapshots are protected"
     Snapshots with label `clone` or bucket `c` are **never touched** by retention. They are skipped in all phases because clone-origin snapshots cannot be deleted while dependent clones exist.

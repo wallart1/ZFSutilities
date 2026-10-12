@@ -38,6 +38,123 @@ snapshot_age_days() {
     echo $(( ($(date +%s) - creation) / 86400 ))
 }
 
+# Read-only preview of delsnap's deletion gates, for dry-run previews
+# (zfsretain). $1 is the full dataset@snapshot a real run would pass to
+# delsnap, $2 the minimum age in days (0 skips the age gate), $3 the
+# releaseholds mode ('Y'/'N', delsnap $3 semantics), and $4 a short phase
+# context (e.g. "Bucket", "Same-day") folded into the keep messages.
+#
+# Every gate delsnap can decide without mutating anything is evaluated for
+# real: minimum age, the zfscheckagainst counterpart gates (in a subshell,
+# so their exit-8 fatals cannot kill the preview), snapshot holds
+# (classified exactly like delallholds, but nothing is released), and clone
+# dependents. Returns 0 when delsnap would destroy the snapshot; returns 1
+# after logging a "Would: Keep" line naming the gate that would hold it.
+# Never prompts: the interactive rc-5 confirm maps to the conservative
+# answer a non-interactive real run gets (ask_yn on EOF defaults to N).
+_delsnap_preview_gate() {
+    local _snap="$1" _minage="${2:-0}" _rh="${3:-N}" _ctx="${4:-}"
+    local _age _rc _clones _holdline _holdtag _pattern _release_this
+    local _held=() _remaining=()
+    if [[ -n "$_ctx" ]]; then
+        _ctx="$_ctx; "
+    fi
+
+    if [[ "$_minage" -gt 0 ]]; then
+        _age=$(snapshot_age_days "$_snap")
+        if [[ "$_age" -ge 0 && "$_age" -lt "$_minage" ]]; then
+            log_msg "INFO: Would: Keep ${_snap} --- ${_ctx}only ${_age}" \
+                "days old (minimum age is ${_minage} days)."
+            return 1
+        fi
+    fi
+
+    # The subshell contains checkagainst's exit-8 fatals; its WARN detail
+    # (counterpart dataset, offline pool names) still reaches the log. The
+    # || capture keeps a set -e caller alive through non-zero verdicts.
+    # rc mapping mirrors delsnap exactly: 0 and 4 proceed, 6/7 block, 5
+    # would confirm interactively (the preview takes the conservative
+    # non-interactive answer), 8 is fatal, and anything else is outside
+    # checkagainst's contract — kept with a WARN rather than guessed at.
+    source_helper zfscheckagainst
+    _rc=0
+    ( checkagainst "$_snap" ) || _rc=$?
+    case "$_rc" in
+        0|4) ;;
+        7)
+            log_msg "INFO: Would: Keep ${_snap} --- ${_ctx}last remaining" \
+                "common snapshot with a counterpart."
+            return 1
+            ;;
+        6)
+            log_msg "INFO: Would: Keep ${_snap} --- ${_ctx}counterpart" \
+                "pool(s) offline."
+            return 1
+            ;;
+        5)
+            log_msg "INFO: Would: Keep ${_snap} --- ${_ctx}no eligible" \
+                "checkagainst entries (an interactive run would confirm)."
+            return 1
+            ;;
+        *)
+            log_msg "WARN: checkagainst returned rc=${_rc} for ${_snap};" \
+                "keeping it in the preview to stay conservative."
+            log_msg "INFO: Would: Keep ${_snap} --- ${_ctx}unexpected" \
+                "checkagainst rc=${_rc}."
+            return 1
+            ;;
+    esac
+
+    if [[ "$_rh" = "Y" ]]; then
+        # delallholds would release tags matching releaseholds_tags; the
+        # rest survive and delsnap skips the deletion. Nothing is released
+        # here — the preview only reads.
+        while IFS= read -r _holdline; do
+            [[ -z "$_holdline" ]] && continue
+            _holdtag=$(echo "$_holdline" | awk '{print $2}')
+            _release_this='N'
+            if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
+                _release_this='Y'
+            else
+                for _pattern in "${releaseholds_tags[@]}"; do
+                    # shellcheck disable=SC2053
+                    if [[ "$_holdtag" == $_pattern ]]; then
+                        _release_this='Y'
+                        break
+                    fi
+                done
+            fi
+            if [[ "$_release_this" = "N" ]]; then
+                _remaining+=("$_holdtag")
+            fi
+        done < <(zfs holds -H "$_snap" 2>/dev/null)
+        if [[ ${#_remaining[@]} -gt 0 ]]; then
+            log_msg "INFO: Would: Keep ${_snap} --- ${_ctx}holds remain" \
+                "(${_remaining[*]}); a real run releases only matching tags."
+            return 1
+        fi
+    else
+        # Holds stay in place; zfs destroy would fail with "dataset is
+        # busy" and skipbusy turns that into a skip.
+        while IFS= read -r _holdline; do
+            [[ -z "$_holdline" ]] && continue
+            _holdtag=$(echo "$_holdline" | awk '{print $2}')
+            _held+=("$_holdtag")
+        done < <(zfs holds -H "$_snap" 2>/dev/null)
+        if [[ ${#_held[@]} -gt 0 ]]; then
+            log_msg "INFO: Would: Keep ${_snap} --- ${_ctx}held (${_held[*]})."
+            return 1
+        fi
+    fi
+
+    _clones=$(zfs list -H -o clones "$_snap" 2>/dev/null)
+    if [[ "$_clones" != "-" && -n "$_clones" ]]; then
+        log_msg "INFO: Would: Keep ${_snap} --- ${_ctx}clone dependents."
+        return 1
+    fi
+    return 0
+}
+
 function delsnap {
     local _local_bashinit
     _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit

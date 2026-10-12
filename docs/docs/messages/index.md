@@ -441,11 +441,19 @@ Builds the two-part restore script. The messages below are emitted inside the ge
 | `WARN: Cannot prune ... — locked by another operation; skipping.` | Lock wait/resolution returned an unexpected code | Dataset skipped; retain returns 1 |
 | `WARN: No retention policy found for pool '...' (JSON config or legacy zfsretainpol-* file). Skipping.` | No JSON retention entry for the pool, `<offsite>`, or `default`, and no legacy policy file matched | Pruning aborted for this dataset (return 8); configure a policy for the pool |
 | `WARN: Unable to evaluate retention policy fragment for '...'. Skipping.` | Evaluating the retention policy fragment failed | Pruning aborted for this dataset (return 8); check the policy syntax |
-| `INFO: Removing ... --- Offsite same-month.` / `INFO: Would remove ... --- Offsite same-month.` | Phase 0 (offsite label only): an older same-month offsite snapshot is superseded by a newer one | Real runs delete it after a press-enter prompt (when autoproceed != 'Y'); the "Would remove" form is the dry-run report |
-| `INFO: Removing ... --- Same-day.` / `INFO: Would remove ... ---Same-day.` | Phase 1: the older of two same-day snapshots is removed | Real runs delete it after a press-enter prompt; "Would remove" is the dry-run report |
-| `INFO: Removing ... --- Bucket[ (empty)].` / `INFO: Would: Remove ... --- Bucket[ (empty)].` | Phase 2: a bucket exceeds its retention count and the oldest snapshots are removed (" (empty)" marks snapshots with no written data) | Real runs delete it after a press-enter prompt; "Would: Remove" is the dry-run report, which applies the bucket's minimum-age gate first |
-| `INFO: Would: Keep ... --- Bucket; only ... days old (minimum age is ... days).` | Phase 2 dry run: the bucket overflow candidate is younger than the policy's minimum age, so a real run would refuse to delete it | Informational; the preview matches the refusal `zfsdelsnap` would raise (see the `zfsdelsnap` age-gate warning) |
-| `INFO: Dry-run preview: models the retention and minimum-age policy only. The checkagainst gates (last remaining common snapshot, counterpart pool(s) offline) run at deletion time and may keep snapshots this preview marks for removal.` | Emitted once per dataset at the start of a dry-run preview: the `zfscheckagainst` safety gates live inside the deletion step, which a dry run never executes | Informational; expect a real run to keep some "Would: Remove"/"Would remove" candidates those gates protect |
+| `INFO: Removing ... --- Offsite same-month.` / `INFO: Would remove ... --- Offsite same-month.` | Phase 0 (offsite label only): an older same-month offsite snapshot is superseded by a newer one | Real runs delete it after a press-enter prompt (when autoproceed != 'Y'); the "Would remove" form is the dry-run report, gated by `_delsnap_preview_gate` |
+| `INFO: Removing ... --- Same-day.` / `INFO: Would remove ... --- Same-day.` | Phase 1: the older of two same-day snapshots is removed | Real runs delete it after a press-enter prompt; "Would remove" is the dry-run report, gated by `_delsnap_preview_gate` |
+| `INFO: Removing ... --- Bucket[ (empty)].` / `INFO: Would: Remove ... --- Bucket[ (empty)].` | Phase 2: a bucket exceeds its retention count and the oldest snapshots are removed (" (empty)" marks snapshots with no written data) | Real runs delete it after a press-enter prompt; "Would: Remove" is the dry-run report, gated by `_delsnap_preview_gate` |
+| `INFO: Would: Keep ... --- <phase>; only ... days old (minimum age is ... days).` | Dry run: the candidate is younger than the minimum age `zfsdelsnap` would enforce (Phase 0/1 pass 0; Phase 2 the bucket's policy value) | Informational; the preview matches the refusal `zfsdelsnap` would raise (see the `zfsdelsnap` age-gate warning) |
+| `INFO: Would: Keep ... --- <phase>; last remaining common snapshot with a counterpart.` | Dry run: `zfscheckagainst` reports this candidate is the last snapshot common with a counterpart dataset, so deletion would be blocked (rc 7) | Informational; the preview matches the block the real run's deletion step raises |
+| `INFO: Would: Keep ... --- <phase>; counterpart pool(s) offline.` | Dry run: `zfscheckagainst` could not verify a counterpart because its pool is offline, so deletion would be blocked (rc 6) | Informational; bring the counterpart pool online to verify, then re-run the preview |
+| `INFO: Would: Keep ... --- <phase>; no eligible checkagainst entries (an interactive run would confirm).` | Dry run: no fss-table row matched this snapshot (rc 5); a real `zfsdelsnap` asks for confirmation there, and non-interactive runs get the default "no" | Informational; add a checkagainst entry or confirm interactively in a real run |
+| `INFO: Would: Keep ... --- <phase>; held (...).` | Dry run with `releaseholds='N'`: the snapshot carries holds, so the real run's `zfs destroy` would fail busy and skip | Informational; release the holds or run with `releaseholds='Y'` |
+| `INFO: Would: Keep ... --- <phase>; holds remain (...); a real run releases only matching tags.` | Dry run with `releaseholds='Y'`: holds outside `releaseholds_tags` survive the release, so `zfsdelsnap` would skip the deletion | Informational; extend `releaseholds_tags` or release the remaining holds manually |
+| `INFO: Would: Keep ... --- <phase>; clone dependents.` | Dry run: the snapshot has clone dependents, so `zfsdelsnap` would skip the deletion | Informational; destroy or promote the clones first |
+| `INFO: Would: Keep ... --- <phase>; unexpected checkagainst rc=....` | Dry run: the paired keep report after `WARN: checkagainst returned rc=...` — the preview keeps the snapshot rather than guess at an out-of-contract code | Informational; investigate the checkagainst output named in the WARN |
+| `WARN: checkagainst returned rc=... for ...; keeping it in the preview to stay conservative.` | Dry run: `zfscheckagainst` returned a code outside its documented contract (its WARN detail names the snapshot and counterpart) | Investigate the checkagainst output; the preview keeps the snapshot rather than guessing |
+| `INFO: Dry-run preview: candidates pass the same read-only gates as deletion time (checkagainst counterparts, holds, clone dependents, minimum age). Not modeled: lock contention, destroy failures, and the interactive confirm for snapshots with no checkagainst entries.` | Emitted once per dataset at the start of a dry-run preview: the deletion-time gates run read-only via `_delsnap_preview_gate`; only what cannot be probed ahead of time is unmodeled | Informational; "Would: Remove"/"Would remove" candidates now match what a real run deletes, modulo the named residuals |
 | `WARN: No bucket was found for .... Skipping.` | The snapshot's bucket letter is not defined in the retention policy | Snapshot kept; add the bucket to the policy or rename the snapshot |
 | `VERB: Keeping ... — clone label or bucket 'c' is excluded from retention.` | Safety gate: clone-labeled snapshots and bucket `c` snapshots are never pruned | Informational; snapshot kept |
 | `VERB: Keeping ... — most recent snapshot in bucket '...' is protected as incremental base.` | Safety gate: the newest snapshot in each bucket is kept as the incremental send base | Informational; snapshot kept |
@@ -695,8 +703,9 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `FATAL: Archive dataset already exists: ...` | A previous archive of this zvol already exists under the base | Destroy it first (`zfs destroy -r ...`) to re-archive |
 | `FATAL: Snapshot device did not appear: ...` / `FATAL: Archive device did not appear: ...` | The `/dev/zvol` node did not settle within the wait window | Script aborts; check udev and the pool state |
 | `FATAL: Failed to create archive zvol ...` | The thin 1M archive zvol could not be created | Script aborts; this run's datasets are rolled back |
-| `FATAL: Device copy failed (... → ...)` | The `cp --sparse=always` transfer failed | Script aborts; this run's datasets are rolled back |
-| `INFO: Verifying copy integrity (sha256)...` | Both devices are being hashed for end-to-end verification (device copies carry no stream checksums) | Informational |
+| `FATAL: Device copy failed (... → ...)` | The device-copy pipeline (or its in-flight hash stage) failed | Script aborts; this run's datasets are rolled back |
+| `FATAL: Failed to hash source during copy` | The in-flight source-hash stage of the copy pipeline failed | Script aborts; this run's datasets are rolled back |
+| `INFO: Verifying copy integrity (sha256)...` | The destination is being read back to compare against the source hash captured during the copy (device copies carry no stream checksums) | Informational |
 | `INFO: ✓ Copy verified (sha256 match)` | The copy matches the source snapshot | Informational |
 | `FATAL: Failed to hash devices` | A hash read failed | Script aborts; this run's datasets are rolled back |
 | `FATAL: Hash mismatch between ... and ...` | The copied archive differs from the source snapshot | The copy is corrupt; this run's datasets are rolled back — re-run after investigating |
@@ -730,7 +739,7 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `FATAL: new-vmid must be a number, got: ...` / `FATAL: new-vmid must differ from vmid` | `--new-vmid` validation | Script aborts |
-| `INFO: vmid ... is already in use (config or zvols exist).` | Destination collision; the interactive new-vmid prompt follows | Enter a different numeric vmid (blank aborts) |
+| `INFO: vmid ... is already in use (a Proxmox config exists).` | A Proxmox config for the vmid exists on the compute host — zvols elsewhere never trigger this; the interactive new-vmid prompt follows | Enter a different numeric vmid (blank aborts) |
 | `INFO: vmid ... is also in use.` | The interactively proposed vmid also collides | Enter another vmid |
 | `FATAL: Requested new vmid ... is already in use` | The `--new-vmid` value collides (non-interactive) | Script aborts; choose a free vmid |
 | `FATAL: new vmid must be a number, got: ...` / `FATAL: new vmid must differ from the original vmid` | Interactive prompt input validation | Script aborts |
@@ -2310,7 +2319,9 @@ Embedded documentation viewer (WebKit with a plain-text fallback).
 | `WARN: Failed to load docs viewer toolbar CSS: ...` | The toolbar stylesheet failed to parse | Toolbar styling skipped |
 | `WARN: Documentation viewer blocked ... link: ...` | Security gate — the link's scheme is outside the allow-list | Navigation denied |
 | `WARN: Documentation viewer failed to load ...: ...` | WebKit load-failed event for a docs URI | Click Home to reset |
+| `INFO: Edit link re-anchored to ...` | The edit link's baked path was remapped onto the tree whose `docs/site/` the viewer is serving | Editor opens the served tree's markdown |
 | `INFO: Launched editor for ...: ...` | An `openmd://` edit link spawned the configured editor (privileges dropped when root) | Editor opens |
+| `WARN: Documentation edit target not found: ...` | Neither the re-anchored nor the baked edit-link target exists on disk | Editor opens the re-anchored path; status shows the miss |
 | `WARN: Failed to launch editor: ...` | Spawning the editor failed | Status shows the failure |
 | `WARN: Documentation viewer fallback: ...` | WebKit or docs unavailable | Plain-text fallback window shown |
 
@@ -2459,7 +2470,7 @@ Workload-profile dialogs: Rewrite Data (zfs rewrite restripe) and Apply Profile,
 | `WARN: Rewrite Data is available only on the storage host` / `WARN: Applying profiles is available only on the storage host` | Two-node gates — invoked on the compute node | Action aborted |
 | `WARN: Select at least one dataset to rewrite data` | Empty dataset list | Action aborted |
 | `WARN: Rewrite Data supports filesystem datasets only; zfs rewrite cannot act on a volume's block device (...)` | The selection contains volumes | Action aborted |
-| `WARN: Rewrite Data requires OpenZFS 2.3+` | Capability gate — zfs rewrite unsupported | Action aborted |
+| `WARN: Rewrite Data requires OpenZFS 2.3.4+` | Capability gate — zfs rewrite unsupported | Action aborted |
 | `WARN: Dataset runner not available` / `A dataset action is already running` | Runner missing / busy guard | Action aborted |
 | `WARN: Could not read properties for ...: ...` | The mountpoint/apply property query failed (plain-language explanation appended) | Rewrite preflight aborted / that dataset skipped in Apply |
 | `WARN: Cannot rewrite data for ...: mountpoint is '...'` | Mountpoint none/legacy/- cannot be rewritten via path | Aborted |

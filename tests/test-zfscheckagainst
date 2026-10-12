@@ -11,9 +11,6 @@ mock_mydir="$mock_base/bin"
 mkdir -p "$mock_mydir"
 mydir="$mock_mydir"
 
-# Copy real helpers that zfscheckagainst sources.
-cp "$old_mydir/bin/bashdebug" "$mock_mydir/bashdebug"
-
 # Stub zfsconfig so we control offsite candidates and checkagainst entries.
 cat > "$mock_mydir/zfsconfig" << 'EOF'
 # Test-controlled state variables (set by the test before checkagainst runs):

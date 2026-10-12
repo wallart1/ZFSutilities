@@ -16,7 +16,13 @@
 # Pacing: when pv_rate_limit holds a pv -L value (e.g. 100M) every data
 # movement — device copy, hash verification, raw send/receive — is passed
 # through `pv -q -L` so an archive run cannot saturate a small storage
-# host. Empty or unset means unlimited (the exact unpaced commands).
+# host. Empty or unset means unlimited (a plain dd reader instead of pv).
+#
+# Integrity: the device-copy path carries no stream checksums, so its
+# source is hashed in flight — the copy stream is teed to a background
+# sha256sum through a fifo — and the destination is read back after the
+# copy and compared against that digest. The source device is read
+# exactly once per copy; only the destination gets a second pass.
 
 # True when $1 is a valid pv -L rate value (digits plus an optional
 # K/M/G/T/P/E suffix with optional i and B, case-insensitive) or is empty
@@ -39,21 +45,69 @@ archive_valid_rate() {
     esac
 }
 
-# Copy one block device onto another, honoring $pv_rate_limit. The sparse
-# semantics of cp --sparse=always are preserved under the rate limit by
-# dd conv=sparse — all-zero input is seeked rather than written, at the dd
-# block-size granularity — so a thin archive zvol stays thin either way.
+# Copy one block device onto another while hashing the source stream in
+# flight: the bytes are teed to a background sha256sum through a fifo, so
+# the source device is read exactly once per archive (the copy and its
+# hash share one pass). The destination is NOT hashed here — it is read
+# back separately, after sync, by archive_hash_verify, which compares
+# that digest against the one stored into the caller-visible variable
+# named by $3 (declare it local at the call site; printf -v assigns
+# through bash's dynamic scoping, like archive_create_parents).
+#
+# Pacing: a paced run throttles the read head with pv -q -L; an unlimited
+# run reads with dd. Both write through the same tee→fifo hash
+# side-channel into the same sparse writer — dd conv=sparse seeks
+# all-zero input rather than writing it, at the dd block-size granularity,
+# so a thin archive zvol stays thin either way.
+#
+# Failure containment: a dead hash consumer or a dead writer breaks the
+# pipeline via SIGPIPE and pipefail, so a partial copy or a truncated
+# hash can never return success.
 archive_copy_devices() {
-    local src="$1" dst="$2"
-    if [[ -n "${pv_rate_limit:-}" ]]; then
-        (
-            set -o pipefail
-            pv -q -L "$pv_rate_limit" -- "$src" \
-                | dd of="$dst" bs=16M conv=sparse,notrunc iflag=fullblock
-        )
-    else
-        cp --sparse=always "$src" "$dst"
+    local src="$1" dst="$2" hash_var="$3"
+    local tmp_dir fifo hash_file sha_pid pipe_rc=0 sha_rc=0 hash=""
+    tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/zfsutilities-copy.XXXXXX") || return 1
+    fifo="${tmp_dir}/hash.fifo"
+    hash_file="${tmp_dir}/src.sha256"
+    if ! mkfifo "$fifo"; then
+        rm -rf "$tmp_dir"
+        return 1
     fi
+    # Kill-mid-copy backstop; the normal return paths remove the directory
+    # themselves (accumulated trap strings for already-removed directories
+    # are harmless no-ops, like the snapdev revert traps).
+    if declare -f append_exit_trap >/dev/null 2>&1; then
+        append_exit_trap "rm -rf '${tmp_dir}'"
+    fi
+    sha256sum < "$fifo" > "$hash_file" 2>/dev/null &
+    sha_pid=$!
+    if [[ -n "${pv_rate_limit:-}" ]]; then
+        ( set -o pipefail
+          pv -q -L "$pv_rate_limit" -- "$src" \
+              | tee "$fifo" \
+              | dd of="$dst" bs=16M conv=sparse,notrunc iflag=fullblock
+        ) || pipe_rc=1
+    else
+        ( set -o pipefail
+          dd if="$src" bs=16M iflag=fullblock \
+              | tee "$fifo" \
+              | dd of="$dst" bs=16M conv=sparse,notrunc iflag=fullblock
+        ) || pipe_rc=1
+    fi
+    # The wait closes the truncated-stream race: only after sha256sum
+    # exits is the hash file complete.
+    wait "$sha_pid" || sha_rc=1
+    hash=$(awk '{ print $1 }' "$hash_file" 2>/dev/null)
+    rm -rf "$tmp_dir"
+    printf -v "$hash_var" '%s' "$hash"
+    if [[ "$pipe_rc" -ne 0 ]]; then
+        return 1
+    fi
+    if [[ "$sha_rc" -ne 0 || -z "$hash" ]]; then
+        log_msg "FATAL: Failed to hash source during copy"
+        return 1
+    fi
+    return 0
 }
 
 # Build the optional pv pacing segment for a raw send/receive pipeline into
@@ -81,39 +135,31 @@ archive_dev_wait() {
     return 1
 }
 
-# Hash two block devices and compare their logical content — end-to-end
-# integrity for the device-copy path, which has no stream checksums.
+# Read back the destination device ($2) and compare its digest against the
+# in-flight source hash captured by archive_copy_devices — end-to-end
+# integrity for the device-copy path, which has no stream checksums. Only
+# the destination is read; $1 names the source for the mismatch messages.
 # Prints the verification result; returns 1 on mismatch or hash failure.
 archive_hash_verify() {
-    local src="$1" dst="$2"
-    local out line1 line2 rest h1 h2
+    local src="$1" dst="$2" expected="$3"
+    local h2
     log_msg "INFO:   Verifying copy integrity (sha256)..."
     if [[ -n "${pv_rate_limit:-}" ]]; then
-        # Rate-capped hashing: read each device through pv so the verify
+        # Rate-capped hashing: read the device through pv so the verify
         # pass cannot saturate the pool; sha256sum of stdin yields the
         # same digest as of the file.
-        h1=$(pv -q -L "$pv_rate_limit" -- "$src" | sha256sum 2>/dev/null) || {
-            log_msg "FATAL: Failed to hash devices"
-            return 1
-        }
         h2=$(pv -q -L "$pv_rate_limit" -- "$dst" | sha256sum 2>/dev/null) || {
             log_msg "FATAL: Failed to hash devices"
             return 1
         }
-        h1="${h1%%[[:space:]]*}"
-        h2="${h2%%[[:space:]]*}"
     else
-        out=$(sha256sum "$src" "$dst" 2>/dev/null) || {
+        h2=$(sha256sum "$dst" 2>/dev/null) || {
             log_msg "FATAL: Failed to hash devices"
             return 1
         }
-        line1="${out%%$'\n'*}"
-        rest="${out#*$'\n'}"
-        line2="${rest%%$'\n'*}"
-        h1="${line1%%[[:space:]]*}"
-        h2="${line2%%[[:space:]]*}"
     fi
-    if [[ -z "$h1" || -z "$h2" || "$h1" != "$h2" ]]; then
+    h2="${h2%%[[:space:]]*}"
+    if [[ -z "$expected" || -z "$h2" || "$expected" != "$h2" ]]; then
         log_msg "FATAL: Hash mismatch between ${src} and ${dst}"
         log_msg "FATAL: The archive copy is corrupt; re-run the archive."
         return 1
@@ -170,7 +216,7 @@ archive_one_zvol() {
     local zvol="$1" snap_name="$2" archive_dataset="$3" archive_mount="$4"
     local orig_vbs encryption volsize snapdev_prev method
     local created_root="" dataset_created=0 snapdev_changed=0
-    local src_dev dst_dev snapdev_arg
+    local src_dev dst_dev snapdev_arg copy_src_hash=""
 
     orig_vbs=$(zfs get -H -o value volblocksize "$zvol")
     log_msg "INFO:   Original volblocksize: ${orig_vbs}"
@@ -240,7 +286,7 @@ archive_one_zvol() {
             archive_rollback_created "$archive_dataset" "$dataset_created" "$created_root"
             return 1
         fi
-        if ! archive_copy_devices "$src_dev" "$dst_dev"; then
+        if ! archive_copy_devices "$src_dev" "$dst_dev" copy_src_hash; then
             log_msg "FATAL: Device copy failed (${src_dev} → ${dst_dev})"
             if [[ "$snapdev_changed" == "1" ]]; then
                 zfs set snapdev="$snapdev_arg" "$zvol" 2>/dev/null || true
@@ -250,7 +296,7 @@ archive_one_zvol() {
             return 1
         fi
         sync "$dst_dev" 2>/dev/null || sync
-        if ! archive_hash_verify "$src_dev" "$dst_dev"; then
+        if ! archive_hash_verify "$src_dev" "$dst_dev" "$copy_src_hash"; then
             if [[ "$snapdev_changed" == "1" ]]; then
                 zfs set snapdev="$snapdev_arg" "$zvol" 2>/dev/null || true
                 snapdev_changed=0
@@ -351,7 +397,7 @@ unarchive_one_zvol() {
     local arc_dataset="$1" orig_zvol="$2" new_zvol="$3" archive_mount="$4"
     local info_file vbs_file method orig_vbs
     local snap snap_name volsize snapdev_prev snapdev_changed=0
-    local created_root="" dataset_created=0 src_dev dst_dev
+    local created_root="" dataset_created=0 src_dev dst_dev copy_src_hash=""
 
     info_file="${archive_mount}/${orig_zvol}.disk_info"
     vbs_file="${archive_mount}/${orig_zvol}.original_volblocksize"
@@ -417,7 +463,7 @@ unarchive_one_zvol() {
             unarchive_rollback_created "$new_zvol" "$dataset_created" "$created_root"
             return 1
         fi
-        if ! archive_copy_devices "$src_dev" "$dst_dev"; then
+        if ! archive_copy_devices "$src_dev" "$dst_dev" copy_src_hash; then
             log_msg "FATAL: Device copy failed (${src_dev} → ${dst_dev})"
             [[ "$snapdev_changed" == "1" ]] \
                 && zfs set snapdev="$snapdev_prev" "$arc_dataset" 2>/dev/null || true
@@ -425,7 +471,7 @@ unarchive_one_zvol() {
             return 1
         fi
         sync "$dst_dev" 2>/dev/null || sync
-        if ! archive_hash_verify "$src_dev" "$dst_dev"; then
+        if ! archive_hash_verify "$src_dev" "$dst_dev" "$copy_src_hash"; then
             [[ "$snapdev_changed" == "1" ]] \
                 && zfs set snapdev="$snapdev_prev" "$arc_dataset" 2>/dev/null || true
             unarchive_rollback_created "$new_zvol" "$dataset_created" "$created_root"
