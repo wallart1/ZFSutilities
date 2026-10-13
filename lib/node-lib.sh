@@ -277,6 +277,15 @@ with open(conf_file, 'w') as f:
 PYEOF
 }
 
+# Join a path under a mountpoint without doubling the slash: an absolute
+# suffix (e.g. /etc/pve/qemu-server/205.conf mirrored under an archive
+# mount) or a trailing slash on the mount must not produce "//".
+# Usage: path_under_mount <mount> <path>  (prints the joined path)
+path_under_mount() {
+    local mount="$1" suffix="$2"
+    printf '%s/%s' "${mount%/}" "${suffix#/}"
+}
+
 # Run a payload (read from stdin, like an ssh here-doc) on the storage
 # host. When this shell already IS the storage host the payload runs
 # locally in a subshell — so its `set -e` dies with it and the caller's

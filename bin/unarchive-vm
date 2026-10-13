@@ -449,7 +449,8 @@ for i in "${!new_zvols[@]}"; do
 done
 
 # Verify archived config exists
-archived_config="${archive_mount}/${pve_conf_dir}/${vmid}.conf"
+archived_config="$(path_under_mount "$archive_mount" \
+    "${pve_conf_dir}/${vmid}.conf")"
 if is_single_node; then
     if [[ ! -f "$archived_config" ]]; then
         log_msg "FATAL: Archived config not found: $archived_config"

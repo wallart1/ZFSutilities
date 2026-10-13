@@ -522,6 +522,7 @@ source "$NODE_LIB"
 | `remote_zfsutility_script(<host>, <name>)` | Combine the above with `find_zfsutility_script` semantics. |
 | `on_storage(<args...>)`           | Run a stdin payload on the storage host — locally in a subshell when invoked there, else over `ssh bash -s` (forwards `pv_rate_limit`). |
 | `on_compute(<args...>)`           | Mirror of `on_storage` for the compute host.                         |
+| `path_under_mount(<mount>,<path>)` | Join a path under a mountpoint without doubling the slash (absolute suffix, trailing-slash mount). |
 | `gen_mac()`                       | Generate a Proxmox-compatible MAC address.                           |
 | `get_json_archive_path()`         | Read `archive_path` from the JSON config file.                       |
 | `get_json_archive_rate_limit()`   | Read `archive_rate_limit` (a `pv -L` value, empty = unlimited).      |

@@ -187,17 +187,36 @@ PYEOF
 test_module_dependencies
 
 test_no_legacy_directory_literals() {
-    test_start "No stale legacy directory names in source or tests"
-    local bad=() term
-    for term in '08 Two-node' '09 ZFS clone support' '07 GTK + Python' '06 Docs'; do
-        # Search source and test trees only; documentation updates are Phase 5.
-        while IFS= read -r match; do
-            bad+=("$match")
-        done < <(grep -R --include='*.sh' --include='*.py' \
-            -n "$term" \
-            "$old_mydir/bin" "$old_mydir/lib" "$old_mydir/python" \
-            "$old_mydir/tests" "$old_mydir/share" 2>/dev/null || true)
-    done
+    test_start "No stale legacy directory names in source and tests"
+    local bad=()
+    # One file-list walk feeding one grep: a per-term grep -R re-stats the
+    # whole tree each time, and tests/integrated/cache holds tens of
+    # thousands of generated files on NFS. cache/ and results/ are
+    # gitignored itf output (their only tracked files are .md/.txt, outside
+    # the scan set) — legacy literals in generated output are not source
+    # regressions. Scanned: *.sh and *.py anywhere, every script directly
+    # in bin/ (all extensionless), and the extensionless tests/ scripts —
+    # the test-* suites plus the two harness runners. Fixture data
+    # (tests/golden, integrated journeys and site configs, share/ configs
+    # and templates) stays out of scope: a literal there is not a source
+    # regression. This suite file itself is excluded: it carries the search
+    # terms, so scanning it only finds its own guard. Documentation is
+    # Phase 5.
+    # The find list is NUL-delimited; grep's output is newline-delimited,
+    # so the consumer below reads lines, not records.
+    while IFS= read -r match; do
+        bad+=("$match")
+    done < <(find "$old_mydir/bin" "$old_mydir/lib" "$old_mydir/python" \
+            "$old_mydir/tests" "$old_mydir/share" \
+            \( -name cache -o -name results \) -prune -o -type f \
+            \( -name '*.sh' -o -name '*.py' -o -path "$old_mydir/bin/*" \
+               -o -path "$old_mydir/tests/test-*" \
+               -o -path "$old_mydir/tests/run-tests" \
+               -o -path "$old_mydir/tests/run-python-tests" \) \
+            ! -path "$(realpath "${BASH_SOURCE[0]}")" -print0 2>/dev/null \
+        | xargs -0 -r grep -n \
+            -e '08 Two-node' -e '09 ZFS clone support' \
+            -e '07 GTK + Python' -e '06 Docs' 2>/dev/null || true)
     if [[ ${#bad[@]} -eq 0 ]]; then
         test_pass
     else

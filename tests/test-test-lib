@@ -104,6 +104,71 @@ test_suite_exit_status_preserved_through_cleanup() {
     assert_rc 42 "$rc"
 }
 
+test_source_reaps_orphaned_state_dirs() {
+    test_start "sourcing test-lib reaps orphaned (dead-pid) state dirs"
+    # A suite killed through an untrapped signal cannot run its EXIT-trap
+    # cleanup; the next suite to source test-lib must reap that leftover.
+    local dead_pid orphan out
+    dead_pid=$(bash -c 'echo $$')
+    orphan="/tmp/mock_zfs_state_${dead_pid}"
+    mkdir -p "$orphan"
+    : > "$orphan/marker"
+    out=$(_child_suite 'test_summary')
+    if [[ -e "$orphan" ]]; then
+        rm -rf "$orphan"
+        test_fail "Orphaned state dir for dead pid ${dead_pid} survived a" \
+            "re-source. Child output: $out"
+        return
+    fi
+    test_pass
+}
+
+test_source_keeps_live_suite_state_dirs() {
+    test_start "the orphan sweep never removes a live suite's state dir"
+    local libdir holder_log holder_pid inner_pid
+    libdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    holder_log="$(mktemp)"
+    bash -c "
+        source '${libdir}/test-lib.sh'
+        echo \"\$\$\" > '${holder_log}'
+        sleep 3
+        exit 0
+    " >/dev/null 2>&1 &
+    holder_pid=$!
+    for _ in $(seq 1 50); do
+        [[ -s "$holder_log" ]] && break
+        sleep 0.05
+    done
+    inner_pid="$(cat "$holder_log" 2>/dev/null || true)"
+    if [[ -z "$inner_pid" ]]; then
+        wait "$holder_pid" 2>/dev/null
+        rm -f "$holder_log"
+        test_fail "Holder suite never reported its pid"
+        return
+    fi
+    # A second suite sourcing test-lib runs the sweep while the holder is
+    # alive; the holder's dir must survive it and vanish only at its exit.
+    _child_suite 'test_summary' >/dev/null
+    if [[ ! -d "/tmp/mock_zfs_state_${inner_pid}" ]]; then
+        kill "$holder_pid" 2>/dev/null
+        wait "$holder_pid" 2>/dev/null
+        rm -f "$holder_log"
+        test_fail "Sweep removed the state dir of live suite pid ${inner_pid}"
+        return
+    fi
+    wait "$holder_pid" 2>/dev/null
+    # The holder exits without test_summary, so by design it retains its
+    # (empty) log — reap it here like the exit-status test does.
+    rm -f "/tmp/zfsutilities-test-${inner_pid}.log"
+    if [[ -e "/tmp/mock_zfs_state_${inner_pid}" ]]; then
+        rm -rf "/tmp/mock_zfs_state_${inner_pid}"
+        rm -f "$holder_log"
+        test_fail "Holder suite pid ${inner_pid} did not clean up its own dir"
+        return
+    fi
+    rm -f "$holder_log"
+    test_pass
+}
 
 test_pass_counter_is_idempotent
 test_fail_counter_is_idempotent
@@ -112,5 +177,7 @@ test_late_failure_counts_as_failure
 test_green_suite_removes_its_tmp_artifacts
 test_failed_suite_retains_log_but_removes_state_dir
 test_suite_exit_status_preserved_through_cleanup
+test_source_reaps_orphaned_state_dirs
+test_source_keeps_live_suite_state_dirs
 
 test_summary

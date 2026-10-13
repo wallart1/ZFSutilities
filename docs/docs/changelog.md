@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.124.1
+
+*Released 2026-10-12*
+
+### Fixed
+
+- **Single-node `attach-vm-disk` crashed at the disk-line build** — the
+  single-node branch assembled its config line as a backslash-joined
+  string assignment, which bash parses as an assignment prefix followed
+  by a command: every single-node attach since 0.96.0 executed
+  `format=raw,discard=on,...` as a command ("command not found"), left
+  `disk_line` empty, and appended an empty line to the VM config instead
+  of the disk. The line is now built with `+=` (one variable, two
+  statements), and `attach-vm-disk` gains the `PVE_CONF_DIR` override
+  seam already used by the other VM-config scripts (also added to
+  `detach-vm-disk` and `enroll-efi-keys-vm`, which still hard-coded the
+  directory). A new script-execution test drives the real script through
+  the single-node path to the config write and asserts both the
+  displayed and appended disk lines.
+- **Archive config paths doubled the slash** — `archive-vm` and
+  `unarchive-vm` joined the mirrored absolute `/etc/pve/...` config path
+  onto the archive mount with a stray separator (`mount//etc/pve/...`);
+  harmless to the kernel but wrong construction and visible in logs. A
+  new `node-lib` helper, `path_under_mount()`, strips the mount's
+  trailing slash and the suffix's leading slash, and now builds both the
+  archive destination and the verified archived-config path; regression
+  tests assert the join never produces `//`.
+
+### Changed
+
+- **Test-suite `/tmp` litter cannot accumulate** — a suite killed through
+  an untrapped signal (harness interrupt, session death) cannot run its
+  EXIT-trap cleanup, so its per-PID artifacts survived: the
+  `mock_zfs_state_<pid>` directory (empty when the kill landed before any
+  mock use) and, for children that source `test-lib.sh` and exit before
+  `test_summary`, an empty log. Sourcing `test-lib.sh` now sweeps both:
+  state directories and empty logs whose owning PID is gone are reaped
+  (a live suite's directory is never touched; a non-empty post-mortem
+  log always stays). Guard tests prove a dead suite's leftovers are
+  reaped and a live suite's state survives the sweep.
+- **Legacy-directory guard scans every script** — the module-dependencies
+  "no stale legacy directory names" check previously matched only
+  `*.sh`/`*.py` files, leaving the extensionless `bin/` scripts, `test-*`
+  suites, and harness runners invisible to it. The single-walk find net
+  now covers them (the guard's own search terms self-excluded); the
+  widened net catches nothing in the current tree.
+- **Test repairs from the suite audit** — the two `move-vm-disk`
+  validation-helper tests discarded their statements' return codes and
+  passed unconditionally; they now assert, which exposed that `disk0` is
+  a VALID key (the helper checks bus+number shape, not the bus set,
+  matching `attach-vm-disk`'s equivalent validator). The dead
+  `ZFSLOCK_MANAGER` export was removed from `test-archive-vm` (mainline
+  loads the lock manager via `source_helper`) and four inert
+  post-`assert_equals` guards were removed from `test-attach-vm-disk`.
+- **Testing guide** — suite-table rows updated for `test-attach-vm-disk`,
+  `test-test-lib`, and `test-module-dependencies`; the automatic `/tmp`
+  cleanup tip documents the source-time sweep.
+
 ## 0.124.0
 
 *Released 2026-10-12*

@@ -685,6 +685,17 @@ EOF
     assert_contains "$argv" "pv_rate_limit='' bash -s"
 }
 
+test_path_under_mount_never_doubles_slash() {
+    test_start "path_under_mount: absolute suffix and trailing-slash mount join cleanly"
+
+    assert_equals "/mnt/arc/etc/pve/qemu-server/205.conf" \
+        "$(path_under_mount "/mnt/arc" "/etc/pve/qemu-server/205.conf")"
+    assert_equals "/mnt/arc/pool/disk" \
+        "$(path_under_mount "/mnt/arc/" "pool/disk")"
+    assert_equals "/mnt/arc/etc" \
+        "$(path_under_mount "/mnt/arc/" "/etc")"
+}
+
 # ------------------------------------------------------------------------------
 # Run tests
 # ------------------------------------------------------------------------------
@@ -732,6 +743,7 @@ test_on_storage_local_runs_payload_with_args_and_functions
 test_on_storage_local_propagates_exit_status
 test_on_storage_remote_ships_payload_with_rate_prefix
 test_on_compute_remote_ships_payload_with_rate_prefix
+test_path_under_mount_never_doubles_slash
 
 test_gen_mac_format
 test_gen_mac_is_random

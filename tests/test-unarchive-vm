@@ -1044,6 +1044,40 @@ test_payloads_route_through_node_transports() {
     test_pass
 }
 
+test_archived_config_path_has_no_double_slash() {
+    reset_unretire_mocks
+    test_start "Archived-config path joins the mount without doubling the slash"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="
+n"
+    local pve_dir="$_mock_zfs_state_dir/pve_dslash"
+    local archive="$_mock_zfs_state_dir/archive_dslash"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    local cfg_line
+    cfg_line=$(printf '%s\n' "$out" | grep 'Archived config:' | head -1)
+    if [[ -z "$cfg_line" ]]; then
+        test_fail "Archived-config line missing; output:\n$out"
+        return
+    fi
+    if [[ "$cfg_line" == *"//"* ]]; then
+        test_fail "Double slash in archived-config path: $cfg_line"
+        return
+    fi
+
+    test_pass
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -1069,6 +1103,7 @@ test_resume_skips_marked_disk_and_finishes
 test_unmarked_dest_confirmed_redone
 test_unmarked_dest_declined_aborts
 test_payloads_route_through_node_transports
+test_archived_config_path_has_no_double_slash
 
 test_summary
 rm -rf "${_unarchive_vm_lock_dir:-}"

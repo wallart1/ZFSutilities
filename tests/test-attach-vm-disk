@@ -46,9 +46,7 @@ test_parse_valid_zvol_path() {
     disknum=$(sed -n '3p' <<< "$output")
 
     assert_equals "threeamigos" "$pool"
-    [[ $? -ne 0 ]] && return
     assert_equals "105" "$src_vmid"
-    [[ $? -ne 0 ]] && return
     assert_equals "0" "$disknum"
 }
 
@@ -66,9 +64,7 @@ test_parse_valid_zvol_path_deep_pool() {
     disknum=$(sed -n '3p' <<< "$output")
 
     assert_equals "tank" "$pool"
-    [[ $? -ne 0 ]] && return
     assert_equals "1234" "$src_vmid"
-    [[ $? -ne 0 ]] && return
     assert_equals "15" "$disknum"
 }
 
@@ -166,21 +162,36 @@ ATTACH_STUB_DIR=""
 ATTACH_RC=0
 ATTACH_OUTPUT=""
 
-# run_attach_stubbed <fake-host> <node-mode> <local-zfs-mode> <ssh-zfs-row> [script args...]
+# run_attach_stubbed <fake-host> <node-mode> <local-zfs-mode> <ssh-zfs-row>
+#                    <pve-conf> [script args...]
 #   fake-host      short hostname the hostname stub reports (this host)
 #   node-mode      "two-node" or "single-node" written into the temp node.conf
 #   local-zfs-mode "present" (local zfs resolves the zvol) or "absent" (never)
 #   ssh-zfs-row    row the ssh stub returns for the remote
 #                  "zfs list -H -o name,volsize" query ("" makes it fail)
+#   pve-conf       VM config file name to pre-create under the stub
+#                  PVE_CONF_DIR ("" = none; a run then stops at the
+#                  VM-config check). The seeded file holds one scsi0 line
+#                  so key auto-detect picks the next free slot.
 # On return: ATTACH_RC, ATTACH_OUTPUT, and the call logs at
 # $ATTACH_STUB_DIR/zfs.calls and $ATTACH_STUB_DIR/ssh.calls.
+# "y" is fed on stdin so a run that reaches the Proceed? confirmation
+# accepts it (validation-failure runs never prompt; the feed is unread).
 run_attach_stubbed() {
     local fake_host="$1" node_mode="$2" zfs_mode="$3" ssh_zfs_row="$4"
-    shift 4
+    local pve_conf="$5"
+    shift 5
 
     rm -rf "$ATTACH_STUB_DIR"
     ATTACH_STUB_DIR=$(mktemp -d)
     ATTACH_RC=0
+
+    local pve_dir=""
+    if [[ -n "$pve_conf" ]]; then
+        pve_dir="$ATTACH_STUB_DIR/pve/qemu-server"
+        mkdir -p "$pve_dir"
+        printf 'scsi0: local-lvm:vm-disk-0,format=raw\n' > "$pve_dir/$pve_conf"
+    fi
 
     cat > "$ATTACH_STUB_DIR/hostname" << EOF
 #!/usr/bin/bash
@@ -251,9 +262,10 @@ EOF
         ATTACH_ZFS_MODE="$zfs_mode"
         ATTACH_SSH_ZFS_ROW="$ssh_zfs_row"
         NODE_CONF="$ATTACH_STUB_DIR/node.conf"
+        PVE_CONF_DIR="$pve_dir"
         PATH="$ATTACH_STUB_DIR:$PATH"
     )
-    ATTACH_OUTPUT=$(env "${run_env[@]}" \
+    ATTACH_OUTPUT=$(printf 'y\n' | env "${run_env[@]}" \
         bash "$REPO_ROOT/bin/attach-vm-disk" "$@" 2>&1) || ATTACH_RC=$?
 }
 
@@ -261,7 +273,7 @@ test_two_node_compute_host_validates_via_ssh() {
     test_start "two-node compute host: zvol validation and volsize read go over SSH"
 
     run_attach_stubbed comp two-node absent \
-        $'tank/proxmox/vm-105-disk-0\t32G' \
+        $'tank/proxmox/vm-105-disk-0\t32G' "" \
         tank/proxmox/vm-105-disk-0 9001
 
     if [[ "$ATTACH_OUTPUT" == *"Zvol does not exist"* ]]; then
@@ -293,7 +305,7 @@ test_two_node_compute_host_validates_via_ssh() {
 test_two_node_compute_host_remote_zvol_missing() {
     test_start "two-node compute host: missing remote zvol fails naming the storage host"
 
-    run_attach_stubbed comp two-node absent "" \
+    run_attach_stubbed comp two-node absent "" "" \
         tank/proxmox/vm-105-disk-0 9001
 
     if [[ "$ATTACH_RC" -ne 1 ]]; then
@@ -315,7 +327,7 @@ test_single_node_validates_locally() {
     test_start "single-node: zvol validation stays local (no SSH)"
 
     run_attach_stubbed devhost single-node present \
-        $'tank/proxmox/vm-105-disk-0\t32G' \
+        $'tank/proxmox/vm-105-disk-0\t32G' "" \
         tank/proxmox/vm-105-disk-0 9001
 
     if ! grep -q "list -H -o name tank/proxmox/vm-105-disk-0" \
@@ -340,7 +352,7 @@ test_two_node_storage_host_delegates() {
     test_start "two-node storage host: validates locally, then delegates to the compute host"
 
     run_attach_stubbed stor two-node present \
-        $'tank/proxmox/vm-105-disk-0\t32G' \
+        $'tank/proxmox/vm-105-disk-0\t32G' "" \
         tank/proxmox/vm-105-disk-0 9001
 
     if [[ "$ATTACH_RC" -ne 0 ]]; then
@@ -362,6 +374,39 @@ test_two_node_storage_host_delegates() {
     test_pass
 }
 
+test_single_node_attach_writes_disk_line() {
+    test_start "single-node: attach reaches the config write with a well-formed disk line"
+
+    run_attach_stubbed devhost single-node present \
+        $'tank/proxmox/vm-105-disk-0\t32G' "205.conf" \
+        tank/proxmox/vm-105-disk-0 205
+
+    if [[ "$ATTACH_RC" -ne 0 ]]; then
+        test_fail "Expected exit 0, got $ATTACH_RC. Output: $ATTACH_OUTPUT"
+        return
+    fi
+    if [[ "$ATTACH_OUTPUT" == *"command not found"* ]]; then
+        test_fail "Disk-line build executed text as a command. Output: $ATTACH_OUTPUT"
+        return
+    fi
+    if [[ "$ATTACH_OUTPUT" != *"Added scsi1 to VM 205 config"* ]]; then
+        test_fail "Expected the config-write confirmation. Output: $ATTACH_OUTPUT"
+        return
+    fi
+    local expected="scsi1: tank:vm-105-disk-0,format=raw,discard=on,iothread=1,size=32G"
+    if [[ "$ATTACH_OUTPUT" != *"$expected"* ]]; then
+        test_fail "Displayed disk line wrong; expected '$expected'. Output: $ATTACH_OUTPUT"
+        return
+    fi
+    local written
+    written=$(tail -1 "$ATTACH_STUB_DIR/pve/qemu-server/205.conf")
+    if [[ "$written" != "$expected" ]]; then
+        test_fail "Config write wrong; expected '$expected', got '$written'"
+        return
+    fi
+    test_pass
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -377,6 +422,7 @@ test_invalid_vmids
 test_two_node_compute_host_validates_via_ssh
 test_two_node_compute_host_remote_zvol_missing
 test_single_node_validates_locally
+test_single_node_attach_writes_disk_line
 test_two_node_storage_host_delegates
 
 rm -rf "$ATTACH_STUB_DIR"

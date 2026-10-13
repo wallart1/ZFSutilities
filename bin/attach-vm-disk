@@ -29,7 +29,7 @@ if ! command -v qm >/dev/null 2>&1; then
 fi
 
 my_host=$(hostname -s)
-pve_conf_dir="/etc/pve/qemu-server"
+pve_conf_dir="${PVE_CONF_DIR:-/etc/pve/qemu-server}"
 
 usage() {
     log_msg "INFO: Usage: attach-vm-disk <zvol> <vmid> [dst-disk-key]"
@@ -253,9 +253,11 @@ if is_two_node; then
     by_path="/dev/disk/by-path/ip-${storage_ip}:3260-iscsi-${target}-lun-${lun_num}"
     disk_line="${dstkey}: ${by_path},format=raw,discard=on,iothread=1,size=${zvol_size}"
 else
-    # Single-node: use Proxmox storage reference
-    disk_line="${dstkey}: ${pool}:vm-${srcvmid}-disk-${disknum},"\
-        "format=raw,discard=on,iothread=1,size=${zvol_size}"
+    # Single-node: use Proxmox storage reference. Built with += — a
+    # backslash-joined assignment parses as assignment-prefix + command and
+    # leaves disk_line empty.
+    disk_line="${dstkey}: ${pool}:vm-${srcvmid}-disk-${disknum},"
+    disk_line+="format=raw,discard=on,iothread=1,size=${zvol_size}"
 fi
 
 # --- Confirmation ---

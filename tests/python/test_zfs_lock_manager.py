@@ -257,8 +257,11 @@ class TestLocalConflictDetails(unittest.TestCase):
         # A live holder whose script appears in its cmdline, so stale
         # cleanup keeps the fabricated lock in place.
         holder = subprocess.Popen(["sleep", "60"])
-        self.addCleanup(holder.terminate)
+        # Cleanups run LIFO: wait must be registered first so terminate
+        # fires before it — the reverse order waits out the holder's full
+        # natural lifetime (60s per test).
         self.addCleanup(holder.wait)
+        self.addCleanup(holder.terminate)
         lockfile = zlm._lock_file("localpool/fs")
         data = {
             "dataset": "localpool/fs",
@@ -285,8 +288,9 @@ class TestLocalConflictDetails(unittest.TestCase):
     def test_local_conflict_message_names_every_holder(self):
         holders = [subprocess.Popen(["sleep", "60"]) for _ in range(2)]
         for proc in holders:
-            self.addCleanup(proc.terminate)
+            # LIFO cleanups: wait registered before terminate (see above).
             self.addCleanup(proc.wait)
+            self.addCleanup(proc.terminate)
         # One ancestor and one descendant lock both block a write on the
         # requested dataset in between.
         blocking = (

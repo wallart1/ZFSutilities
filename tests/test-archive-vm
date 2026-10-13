@@ -130,7 +130,6 @@ EOF
         export ARCHIVE_VM_TEST_NO_ROOT=1
         export NODE_LIB="$mydir/lib/node-lib.sh"
         export ARCHIVE_ENGINE_LIB="$mydir/lib/archive-engine.sh"
-        export ZFSLOCK_MANAGER="$mydir/bin/zfslockmanager"
         export ZFSLOCK_DIR="$_mock_zfs_state_dir/lock"
         mkdir -p "$ZFSLOCK_DIR"
 

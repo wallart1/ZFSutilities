@@ -732,7 +732,7 @@ SSHEOF
 done
 
 # Archive Proxmox config — mirror the full path under the base mountpoint
-config_dest_mount="${archive_mount}/${proxmoxconfig}"
+config_dest_mount="$(path_under_mount "$archive_mount" "$proxmoxconfig")"
 if is_single_node; then
     mkdir -p "$(dirname "$config_dest_mount")"
     cp "$proxmoxconfig" "$config_dest_mount"
@@ -821,7 +821,7 @@ SSHEOF
     fi
 done
 
-config_dest_mount="${archive_mount}/${proxmoxconfig}"
+config_dest_mount="$(path_under_mount "$archive_mount" "$proxmoxconfig")"
 
 if is_single_node; then
     if [[ ! -f "$config_dest_mount" ]] || [[ ! -s "$config_dest_mount" ]]; then

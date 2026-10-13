@@ -172,7 +172,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | Suite | What it covers |
 |-------|----------------|
 | `test-archive-vm` | `archive-vm` retire-snapshot selection, two-node target/LUN resolution encoding (separate ssh argv entries, since IQNs contain colons), and invocation (single-node, two-node, and invoked-on-storage with the transfer running locally — no compute bounce); the shared transfer library's copy path (thin `create -V` at 1M, snapshot-device copy with in-flight source hashing and a separate destination read-back verify, `@archive` snapshot, snapdev expose/revert), the encrypted raw path, hash-mismatch and in-flight source-hash-failure aborts with parent-chain rollback, the in-flight hash read pattern (source hashed from the stream, never re-read as a file; the only file-argument hash names the destination), the base64 config-content handoff to the storage-side payload, rate limiting (paced copy via `pv | dd conv=sparse`, a single paced destination read-back with the source device read exactly once, raw-pipeline pv segment, unlimited runs keeping the unpaced dd pipeline, prompt save/forward via `pv_rate_limit`), re-run idempotency (`@archive`-snapshot skip, interrupted-leftover destroy-and-redo, payload completion probe), a static no-`receive -o volblocksize` guard, and Step-4 removal (the `ssh -t` + input-hold + `--skip-rescan` delegation argv, single-rescan behavior, and the outcome-verified failure gates: a declined remote confirm exits 0 yet keeps the Proxmox config, fails the run, and prints no success summary — as does a failed remote or `zfsdelfs` destroy) |
-| `test-attach-vm-disk` | `attach-vm-disk` zvol-path parsing and validation |
+| `test-attach-vm-disk` | `attach-vm-disk` zvol-path parsing and validation; node-aware zvol validation (two-node compute-host SSH round trip, storage-host delegation, single-node local check); single-node attach reaching the config write — the disk line is built and appended to the stub VM config, key auto-detect picking the next free slot |
 | `test-bashinit` | `bashinit` helpers: `log_msg` survives a `cd` after relative-path invocation; session-log selection when the log file is writable vs unwritable; input-hold marker emission and uuid reuse for `ask_yn`/`ask_line`; `input_hold_env_prefix` expansion for `ssh -t` delegation |
 | `test-check-prerequisites` | `check-prerequisites` tool version checks (mkdocs major-version gating) |
 | `test-cleanup-zfsutilities-legacy` | `cleanup-zfsutilities-legacy` prompt, `--yes`, `--dry-run`, and non-symlink guards |
@@ -191,7 +191,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-lock-coverage` | Static checks that locked scripts source zfslockmanager, initialize it, and acquire locks |
 | `test-logging` | `log_msg` writes all messages to the session log file and ignores `msg_level`; unset `ZFSUTILITIES_LOG_FILE` handling; `ask_yn`, `warn`, and `die` helpers |
 | `test-migration` | One-time migration of config/history/profiles/system files with legacy symlinks |
-| `test-module-dependencies` | Static analysis: root-level bash modules source the modules whose functions they call |
+| `test-module-dependencies` | Static analysis: root-level bash modules source the modules whose functions they call; no stale legacy directory literals anywhere in the script set — `*.sh`/`*.py` plus the extensionless `bin/` scripts, `tests/test-*` suites, and harness runners (fixture data excluded) |
 | `test-move-vm-disk` | `move-vm-disk` helper functions: disk-key parsing, manifest add/remove, validation helpers, state round-trip, heredoc bootstrap |
 | `test-new-vm-disk` | `new-vm-disk` EFI disk-line building with `ms-cert` gating |
 | `test-node-lib` | node-lib helpers: config loading, `find_zfsutility_script` search paths, remote script resolution, `on_storage`/`on_compute` transports (local subshell with inherited functions and args vs ssh with the `pv_rate_limit` prefix), JSON-config readers/writers, MAC generation |
@@ -211,7 +211,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-safe-iscsi-save` | Degraded-config guard for iSCSI saveconfig and encrypted-backstore boot-config stripping |
 | `test-startdocserver` | Server health checks, PID discovery, CWD mismatch, restart logic, static-site refresh on start |
 | `test-switch-version` | Version switching, production wiring, prior-version uninstall, rollback, `--uninstall`, `--list`, and obsolete systemd artifact cleanup |
-| `test-test-lib` | Harness assertion helpers: pass/fail/skip counter semantics and golden assertions |
+| `test-test-lib` | Harness assertion helpers: pass/fail/skip counter semantics and golden assertions; per-PID `/tmp` artifact lifecycle (green suites remove log and mock-state dir, failed suites retain only the log, exit status survives the cleanup trap); the source-time orphan sweep (a dead suite's leftover mock-state dir is reaped by the next suite to source `test-lib.sh`, a live suite's dir is never touched) |
 | `test-unarchive-vm` | `unarchive-vm` `--new-vmid` rewriting, UUID regeneration, conflict handling; METHOD-branching restores (copy reblock via sidecar volblocksize vs raw/legacy plain receive), sidecar policy (missing `.disk_info` fatal, missing volblocksize sidecar warn for raw / fatal for copy), unknown-method rejection; rate-limited restore copy (pv pacing, dd conv=sparse, a single paced destination read-back with the source device read exactly once), in-flight source-hash coverage (hash read pattern, source-hash-failure abort with rollback); re-run idempotency (`RESTORED_AS` marker skip, unmarked-destination confirm/decline gates, completed-run clean exit); and static payload-routing checks (on_storage/on_compute, no compute bounce) |
 | `test-uninstall-some-versions` | Bulk version uninstall from an explicit list file |
 | `test-uninstall-version` | Single-version uninstall prompting with `-y`/`--yes` |
@@ -739,7 +739,10 @@ use `get_stderr_log()` from `test-zfs-send-receive-dryrun`).
 (`/tmp/zfsutilities-test-<pid>.log` and `/tmp/mock_zfs_state_<pid>`) are
 removed by an exit trap when the suite process ends.  A suite that failed or
 crashed keeps its log for post-mortem (the path is printed on stderr when it
-is retained); green runs leave nothing behind.
+is retained); green runs leave nothing behind.  A suite killed through an
+untrapped signal cannot run its exit trap, so sourcing `test-lib.sh` also
+sweeps away any `mock_zfs_state_<pid>` directory whose owning process is
+gone — signal-killed runs cannot accumulate litter.
 * **Exit cleanup composes** — suites or scripts that need their own exit-time
 cleanup must register it with `append_exit_trap '<command>'` (from
 `bashinit`), never a bare `trap '<command>' EXIT`, which would silently

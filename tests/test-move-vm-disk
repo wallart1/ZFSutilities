@@ -199,21 +199,40 @@ test_encrypted_add() {
 
 test_is_valid_vm_id() {
     test_start "_is_valid_vm_id accepts numeric VM IDs"
-    _is_valid_vm_id "100"
-    _is_valid_vm_id "0"
-    ! _is_valid_vm_id "abc"
-    ! _is_valid_vm_id "100a"
+    local id
+    for id in 100 0 9999; do
+        if ! _is_valid_vm_id "$id"; then
+            test_fail "Expected '$id' to be accepted"
+            return
+        fi
+    done
+    for id in abc 100a "10 0" -1; do
+        if _is_valid_vm_id "$id"; then
+            test_fail "Expected '$id' to be rejected"
+            return
+        fi
+    done
     test_pass
 }
 
 test_is_valid_disk_key() {
     test_start "_is_valid_disk_key accepts bus+number keys"
-    _is_valid_disk_key "scsi0"
-    _is_valid_disk_key "ide1"
-    _is_valid_disk_key "virtio7"
-    ! _is_valid_disk_key "disk0"
-    ! _is_valid_disk_key "scsi"
-    ! _is_valid_disk_key "scsi0a"
+    # The helper validates key SHAPE (lowercase bus + digits), not the bus
+    # set — any lowercase prefix like disk0 is accepted, matching
+    # attach-vm-disk's equivalent dst-disk-key validator.
+    local key
+    for key in scsi0 ide1 virtio7 disk0; do
+        if ! _is_valid_disk_key "$key"; then
+            test_fail "Expected '$key' to be accepted"
+            return
+        fi
+    done
+    for key in scsi scsi0a SCSI0 0scsi; do
+        if _is_valid_disk_key "$key"; then
+            test_fail "Expected '$key' to be rejected"
+            return
+        fi
+    done
     test_pass
 }
 

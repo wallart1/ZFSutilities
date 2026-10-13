@@ -325,6 +325,32 @@ _mock_zpool_list=""
 _mock_zfs_last_sequence=""  # tracks -s / -S passed to zfs list
 _mock_zfs_guid_list=""
 _mock_zfs_state_dir="/tmp/mock_zfs_state_$$"
+# Reap orphaned state dirs left by suites that died through an untrapped
+# signal (harness interrupt, session kill): a signal-killed bash never runs
+# its EXIT trap, so its dir survives (empty when the kill landed before any
+# mock use). A dir whose owning pid is gone holds mock data only — no
+# post-mortem value — while a live pid's dir belongs to a running suite and
+# is left alone. Sweeping at source time keeps /tmp at zero litter without
+# waiting for pid reuse (pid_max is in the millions).
+for _stale_state_dir in /tmp/mock_zfs_state_*; do
+    [[ -e "$_stale_state_dir" ]] || continue
+    _stale_state_pid="${_stale_state_dir##*/mock_zfs_state_}"
+    [[ "$_stale_state_pid" =~ ^[0-9]+$ ]] || continue
+    kill -0 "$_stale_state_pid" 2>/dev/null || rm -rf "$_stale_state_dir"
+done
+# Same treatment for per-PID test logs: a suite that died through an
+# untrapped signal — or a test-spawned child that sources test-lib and
+# exits before test_summary — leaves an EMPTY log behind. Empty carries no
+# post-mortem, so reap empty logs whose owning pid is gone; a non-empty
+# log of a dead suite is a real post-mortem and always stays.
+for _stale_log in /tmp/zfsutilities-test-*.log; do
+    [[ -f "$_stale_log" && ! -s "$_stale_log" ]] || continue
+    _stale_state_pid="${_stale_log##*/zfsutilities-test-}"
+    _stale_state_pid="${_stale_state_pid%.log}"
+    [[ "$_stale_state_pid" =~ ^[0-9]+$ ]] || continue
+    kill -0 "$_stale_state_pid" 2>/dev/null || rm -f "$_stale_log"
+done
+unset _stale_state_dir _stale_state_pid _stale_log
 mkdir -p "$_mock_zfs_state_dir"
 
 # Date mocking: the canonical snapshot-name timestamp is UTC rendered with a
