@@ -90,7 +90,7 @@ class TestRestoreConfig(unittest.TestCase):
         self.assertTrue(restore["do_part2"])
         self.assertFalse(restore["auto_dest"])
         self.assertEqual(restore["variables"]["verify_after_transfer"], "Y")
-        self.assertEqual(restore["variables"]["pv_rate_limit"], "")
+        self.assertEqual(restore["variables"]["transfer_rate_limit"], "")
 
 
 class TestPoolsAndCheckagainst(unittest.TestCase):

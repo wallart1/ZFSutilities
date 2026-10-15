@@ -22,6 +22,8 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`node-lib.sh`](#node-libsh)
 - [`archive-engine.sh`](#archive-enginesh)
 - [`transfer-lib.sh`](#transfer-libsh)
+- [`pace_stream.py`](#pace_streampy)
+- [`upgrade-lib.sh`](#upgrade-libsh)
 - [`zfsconfig`](#zfsconfig)
 - [`zfsbuildfsarray`](#zfsbuildfsarray)
 - [`zfscheckagainst`](#zfscheckagainst)
@@ -88,6 +90,7 @@ rootcheck
 | `$ZFSUTILITIES_LOG_DIR`         | Directory for session log files (default `/var/log/zfsutilities/sessions`)                                              | [Infrastructure](../developer-guide/global-variables.md#infrastructure)                                              |
 | `$ZFSUTILITIES_LOG_FILE`        | Path of the active session log (set by `bashinit`)                                                                      | [Session log index](../developer-guide/data-structures.md#session-log-index-varlogzfsutilitiessessionslog_indexjson) |
 | `$ZFSUTILITIES_LOG_INHERIT`     | `'Y'` to reuse a parent runner's log instead of creating a new one                                                      | [Session log index](../developer-guide/data-structures.md#session-log-index-varlogzfsutilitiessessionslog_indexjson) |
+| `$ZFSUTILITIES_FROM_CRON`       | `'Y'` on cron job lines; `profile_runner.py` silences its own output once its session log exists                         | [Single-writer session log](../developer-guide/architecture.md#single-writer-session-log)                             |
 | `$ZFSUTILITIES_HEADLESS`        | When `'Y'`, suppresses interactive prompts in lock-manager code                                                         | [Execution Control](../developer-guide/global-variables.md#execution-control)                                        |
 | `$ZFSUTILITIES_BIN_DIR`         | Override active PATH bin directory for `find_zfsutility_script` (default `/usr/local/lib/zfsutilities/bin`)             | —                                                                                                                    |
 | `$ZFSUTILITIES_CURRENT_BIN_DIR` | Override current version bin directory for `find_zfsutility_script` (default `/usr/local/lib/zfsutilities/current/bin`) | —                                                                                                                    |
@@ -520,12 +523,12 @@ source "$NODE_LIB"
 | `is_known_pool(<pool>)`           | Return 0 if pool is in `POOL_TARGET` (two-node only).                |
 | `remote_zfsutilities_bin(<host>)` | Resolve the active version's `bin/` directory on a remote host.      |
 | `remote_zfsutility_script(<host>, <name>)` | Combine the above with `find_zfsutility_script` semantics. |
-| `on_storage(<args...>)`           | Run a stdin payload on the storage host — locally in a subshell when invoked there, else over `ssh bash -s` (forwards `pv_rate_limit`). |
+| `on_storage(<args...>)`           | Run a stdin payload on the storage host — locally in a subshell when invoked there, else over `ssh bash -s` (forwards `transfer_rate_limit`). |
 | `on_compute(<args...>)`           | Mirror of `on_storage` for the compute host.                         |
 | `path_under_mount(<mount>,<path>)` | Join a path under a mountpoint without doubling the slash (absolute suffix, trailing-slash mount). |
 | `gen_mac()`                       | Generate a Proxmox-compatible MAC address.                           |
 | `get_json_archive_path()`         | Read `archive_path` from the JSON config file.                       |
-| `get_json_archive_rate_limit()`   | Read `archive_rate_limit` (a `pv -L` value, empty = unlimited).      |
+| `get_json_archive_rate_limit()`   | Read `archive_rate_limit` (a rate value, empty = unlimited).      |
 | `save_json_config_key(<key>,<val>)` | Write one JSON-config key (empty value removes it).                |
 
 See [Two-Node Configuration](../developer-guide/two-node-config.md#helper-library-node-libsh)
@@ -582,7 +585,7 @@ send/receive.
 | Function                          | Purpose                                                              |
 | --------------------------------- | -------------------------------------------------------------------- |
 | `archive_dev_wait(<dev>)`         | Bounded wait for a `/dev/zvol` node to settle (udev).                |
-| `archive_copy_devices(<src>, <dst>, <var>)` | Device copy that hashes the source in flight (`tee`→fifo→background `sha256sum`); stores the digest in `<var>`; pv-paced or plain-dd reader; failures are SIGPIPE-contained by pipefail. |
+| `archive_copy_devices(<src>, <dst>, <var>)` | Device copy that hashes the source in flight (`tee`→fifo→background `sha256sum`); stores the digest in `<var>`; pacer-read or plain-dd reader; failures are SIGPIPE-contained by pipefail. |
 | `archive_hash_verify(<src>, <dst>, <expected>)` | Read back the destination and compare its sha256 against the in-flight source hash; FATAL on mismatch. |
 | `archive_create_parents(<parent>, <var>)` | Create the parent chain only if absent; sets `<var>` to the shallowest created level for exact rollback. |
 | `archive_rollback_created(...)`   | Destroy exactly the datasets this run created.                       |
@@ -611,7 +614,8 @@ Shared ZFS send/receive transfer helpers used by
 [`zfs-send-receive`](modules.md#zfs-send-receive) and
 [`zfs-migrate-send`](commands.md#zfs-migrate-send), so both the production
 backup path and the Migrate Pool copy steps share one implementation of
-resumable, rate-limited, `pv`-instrumented transfers.
+resumable, rate-limited, `pv`-instrumented transfers (rate limiting is
+a separate `lib/pace_stream.py` pipeline stage; `pv` only displays progress).
 
 ```bash
 source_helper transfer-lib.sh
@@ -624,17 +628,59 @@ source_helper transfer-lib.sh
 | `transfer_abort_resume_token <dest>`                                                         | `zfs receive -A <dest>` (dry-run aware)                                                                  |
 | `transfer_resume_token_stale <errtext>`                                                      | Classify known stale resume-token errors                                                                 |
 | `transfer_validate_resume_token <token>`                                                     | `zfs send -nP -t <token>`; prints remaining bytes, or the error text with rc 1                           |
-| `transfer_pv_args <datatosend> <use_pv>`                                                     | Build the pv argument array into `transfer_pv_args` (tty / `ZFSUTILITIES_LOG_INHERIT` / `-L` rate limit) |
-| `transfer_do <desc> <sendopts> <recvopts> <use_pv> <datatosend> <send_target> [<recv_target> [<send_target2>]]` | Run `zfs send … \| pv … \| zfs receive …` under pipefail (optional second send target for incremental sends); logs `FATAL: <desc> failed` on failure |
+| `transfer_pv_args <datatosend> <use_pv>`                                                     | Build the pv progress-argument array into `transfer_pv_args` (tty / `ZFSUTILITIES_LOG_INHERIT`)          |
+| `transfer_pace_args`                                                                          | Build the pacer stage into `transfer_pace_args` when `$transfer_rate_limit` is set                         |
+| `transfer_do <desc> <sendopts> <recvopts> <use_pv> <datatosend> <send_target> [<recv_target> [<send_target2>]]` | Run `zfs send … \| [pacer] \| [pv] \| zfs receive …` under pipefail (pacer before pv so the displayed rate is the paced rate; optional second send target for incremental sends); logs `FATAL: <desc> failed` on failure |
 | `transfer_check_space <datatosend> <dest_pool>`                                              | Destination free-space check (10% margin, 1 GiB minimum buffer)                                          |
 
-**Globals:** reads `$pv_rate_limit` (optional `pv -L` rate) and
+**Globals:** reads `$transfer_rate_limit` (optional rate, enforced by
+`lib/pace_stream.py`) and
 `$space_check_min_buffer` (optional minimum headroom); honors the caller's
 `$dryrun` for token aborts.
 
 **Called modules:** `bashinit`.
 
 ---
+
+### `pace_stream.py`
+
+Transfer-rate pacer used by `archive-engine.sh` and `transfer-lib.sh`
+wherever a rate limit is configured (`$transfer_rate_limit`). Copies stdin
+(or a file argument) to stdout in chunks of rate/25 (clamped to 64 KiB –
+16 MiB) on deadline arithmetic: each chunk owns a budget of chunk/rate
+seconds, small overheads are absorbed by the next chunk's sleep, and a
+deficit larger than two chunk budgets is **forfeited** — a stalled pipeline
+(ZFS txg flush, dirty-data throttle, a slow consumer) extends the transfer
+instead of buying a later burst, which is all `pv -L`'s long-run average
+ever guaranteed. A dead downstream consumer kills the pacer via SIGPIPE
+(exit 141) so `pipefail` pipelines fail loudly. Rate grammar: digits plus
+an optional K/M/G/T/P/E suffix (optional `i`/`b`), 1024-based.
+
+### `upgrade-lib.sh`
+
+Shared library for [deploy-version](commands.md#deploy-version) and
+[upgrade-zfsutilities](commands.md#upgrade-zfsutilities). Deliberately
+bashinit-free (pure bash + coreutils + curl) so the same file can be
+sourced locally or piped to a remote deployment target and executed there:
+
+```bash
+ssh root@host bash -s -- __scan /usr/local/lib/zfsutilities < lib/upgrade-lib.sh
+```
+
+Sourced by deploy-version (`source_helper upgrade-lib.sh`) for
+`MANIFEST.sha256` recording, deploy-target enumeration, and ssh
+control-socket resolution; sourced by upgrade-zfsutilities for the same
+plus change classification, pristine-release fetching, and salvaging.
+Remote driver modes (`__scan`, `__salvage`) are selected by a
+`__`-prefixed first argument, which local callers never pass. Key
+functions: `upgrade_lib_hash_tree` (sorted `<sha256>  <path>` listing with
+the exclusion set: `docs/site/`, `__pycache__/`, `*.pyc`, `.nfs*`,
+manifests), `upgrade_lib_write_manifest` / `upgrade_lib_classify`
+(MOD/ADD/DEL), `upgrade_lib_resolve_deploy_conf` /
+`upgrade_lib_group_lines` / `upgrade_lib_legacy_hosts` (the single
+enumeration used by both deploy-version and upgrade-zfsutilities), and
+`upgrade_lib_salvage_files` (archive to
+`salvaged-changes/<version>/<timestamp>/` with a provenance README).
 
 ### `zfsconfig`
 
@@ -1736,7 +1782,7 @@ arguments. Callers set the variables below, then invoke `send-receive`.
 | `$verify_after_transfer`                                         | `'Y'`           | `'Y'` = verify destination snapshot GUID matches source after receive                                                                                                                                   | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$resumablethreshold`                                            | 50 GB           | Size above which resumable receive is used                                                                                                                                                              | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$maxcommsnapperiod`                                             | `130`           | Max age (days) of an acceptable common snapshot                                                                                                                                                         | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
-| `$pv_rate_limit`                                                 | `''`            | Max transfer rate for `pv -L` (e.g. `200M`, `1G`). Empty = no limit                                                                                                                                     | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
+| `$transfer_rate_limit`                                           | `''`            | Max transfer rate enforced by `lib/pace_stream.py` (e.g. `200M`, `1G`). Empty = no limit                                                                                                                | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$pvthreshold`                                                   | 300 MB          | Size above which `pv` progress display is used                                                                                                                                                          | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$space_check_min_buffer`                                        | 1 GiB           | Minimum destination buffer required by the space check. Set to `0` for small test pools.                                                                                                                | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$releaseholds`                                                  | `'N'`           | `'Y'` = release matching holds before deleting destination snapshots during full copy/rollback                                                                                                          | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
@@ -1839,6 +1885,7 @@ before returning.
 | `zfsholds`                   | List holds for diagnostic output                 |
 | `iscsi-lib.sh`               | Tear down and rebuild iSCSI LUNs around VM zvols |
 | `transfer-lib.sh`            | Shared resumable/pv transfer pipeline helpers    |
+| `pace_stream.py`             | Transfer-rate pacer (stdin/file → stdout, flat cap) |
 | `zfsoverrides`               | Apply runtime parameter overrides                |
 | `zfslockmanager`             | Acquire/release per-dataset write locks          |
 | `zfscheckrunningvms`         | Block restores over live VMs                     |

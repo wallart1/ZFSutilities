@@ -247,7 +247,8 @@ Top-level keys:
 | `msg_level`                                                           | string                    | Deprecated. Kept for backward compatibility; no longer used for filtering.                                           |
 | `history_retention_days`                                              | integer                   | How many days of backup log history entries to keep (default `90`)                                                   |
 | `ui_state`                                                            | object                    | Saved GUI window geometry, pop-out state, TreeView column widths, and paned divider positions (see below)            |
-| `archive_rate_limit`                                                  | string                    | Default transfer rate limit for archive-vm/unarchive-vm (`pv -L` value, e.g. `100M`; empty = unlimited; prompt-saved, seeded by migration v28) |
+| `archive_rate_limit`                                                  | string                    | Default transfer rate limit for archive-vm/unarchive-vm (rate value, e.g. `100M`; empty = unlimited; prompt-saved, seeded by migration v28) |
+| `transfer_rate_limit` (variables)                                     | string                    | GUI profile/backup-offsite-restore rate-limit variable (renamed from `pv_rate_limit` by migration v29; enforced by `lib/pace_stream.py`) |
 | `paths`                                                               | object                    | Installation-specific file paths (see below); seeded from the centralized path layer on first access                  |
 | `config_version`                                                      | integer                   | Config schema version (see migrations below)                                                                         |
 
@@ -361,7 +362,7 @@ Persisted by the GUI Backup tab and read by [zfsdailybackup](../commands-and-mod
 
 | Key                         | Type                              | Purpose                                                                                                                                                                                                                                |
 | --------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `variables`                 | object                            | Bash variable overrides: `label`, `autoresume`, `doincrementals`, `dointermediates`, `allow_destructive`, `receive_F_option`, `releaseholds`, `verify_after_transfer`, `pv_rate_limit`, `includes`, `excludes`, `startwith`, `endwith` |
+| `variables`                 | object                            | Bash variable overrides: `label`, `autoresume`, `doincrementals`, `dointermediates`, `allow_destructive`, `receive_F_option`, `releaseholds`, `verify_after_transfer`, `transfer_rate_limit`, `includes`, `excludes`, `startwith`, `endwith` |
 | `pull_steps`                | array of `{active, source, dest}` | Rsync pull operations                                                                                                                                                                                                                  |
 | `send_receive_steps`        | array of `{active, source, dest}` | ZFS send/receive operations                                                                                                                                                                                                            |
 | `post_steps`                | object                            | `remove_snapfile` (bool), `run_retention` (bool)                                                                                                                                                                                       |
@@ -388,7 +389,7 @@ the software release version. When the config structure changes, bump
 **Migration chain** (`config_migrations.py`):
 
 ```python
-CONFIG_VERSION = 28
+CONFIG_VERSION = 29
 
 MIGRATIONS = [
     _migrate_1_to_2,
@@ -418,6 +419,7 @@ MIGRATIONS = [
     _migrate_25_to_26,
     _migrate_26_to_27,
     _migrate_27_to_28,
+    _migrate_28_to_29,
 ]
 ```
 

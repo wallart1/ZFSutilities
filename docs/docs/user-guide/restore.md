@@ -167,7 +167,7 @@ also available on the Backup and Offsite tabs:
   ZFS property of the destination snapshot against the source snapshot; a
   mismatch is treated as fatal. This applies to both Part 1 (full copy) and
   Part 2 (incremental copy).
-- `pv_rate_limit` — Optional rate limit used during the transfer,
+- `transfer_rate_limit` — Optional rate limit used during the transfer,
   for example `100M` to cap throughput at 100 MB/s. Leave blank for no limit.
 
 ## Preserving Target Holds During a Restore

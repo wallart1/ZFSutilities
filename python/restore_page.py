@@ -39,7 +39,7 @@ RESTORE_ADVANCED_VARIABLES = [
     "startwith",
     "endwith",
     "verify_after_transfer",
-    "pv_rate_limit",
+    "transfer_rate_limit",
 ]
 
 
@@ -171,9 +171,9 @@ def create_restore_page(app, ctx):
                 widget.set_tooltip_text(
                     "Space-separated list of substrings; prefix with = for exact match"
                 )
-            elif key == "pv_rate_limit":
+            elif key == "transfer_rate_limit":
                 widget.set_tooltip_text(
-                    "Optional rate limit passed to pv, e.g. 100M (leave blank for no limit)"
+                    "Optional transfer rate limit, e.g. 100M (leave blank for no limit)"
                 )
         adv_grid.attach(widget, 1, row, 1, 1)
         app.restore_var_widgets[key] = widget

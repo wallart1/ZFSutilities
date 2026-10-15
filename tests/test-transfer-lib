@@ -28,7 +28,7 @@ source "$mydir/lib/transfer-lib.sh"
 reset_state() {
     clear_test_log_file
     transfer_pv_args=()
-    pv_rate_limit=""
+    transfer_rate_limit=""
     ZFSUTILITIES_LOG_INHERIT=""
     dryrun="N"
     _mock_zfs_props=()
@@ -153,28 +153,79 @@ test_pv_args_log_inherit() {
     assert_golden test_pv_args_log_inherit "$(printf '%s\n' "${transfer_pv_args[@]}")"
 }
 
-test_pv_args_headless_rate_limit() {
-    test_start "transfer_pv_args quiet rate limit in headless mode"
+test_pace_args_without_rate() {
+    test_start "transfer_pace_args empty when no rate limit is set"
     reset_state
-    pv_rate_limit="50M"
-    transfer_pv_args "5000000" "Y" 2>/dev/null
-    assert_golden test_pv_args_headless_rate_limit "$(printf '%s\n' "${transfer_pv_args[@]}")"
+    transfer_pace_args 2>/dev/null
+    assert_array_len 0 "${transfer_pace_args[@]}"
 }
 
-test_pv_args_log_inherit_rate_limit() {
-    test_start "transfer_pv_args appends -L rate when progress is wanted"
+test_pace_args_with_rate() {
+    test_start "transfer_pace_args builds the pacer stage from transfer_rate_limit"
     reset_state
-    pv_rate_limit="50M"
+    transfer_rate_limit="50M"
+    transfer_pace_args
+    assert_rc 0 "$?"
+    if [[ ${#transfer_pace_args[@]} -ne 3 ]]; then
+        test_fail "Expected python3/pacer/rate argv, got: ${transfer_pace_args[*]}"
+        return
+    fi
+    if [[ "${transfer_pace_args[0]}" != "python3" \
+            || "${transfer_pace_args[1]}" != */pace_stream.py \
+            || "${transfer_pace_args[2]}" != "50M" ]]; then
+        test_fail "Unexpected pacer argv: ${transfer_pace_args[*]}"
+        return
+    fi
+}
+
+test_pace_args_unresolvable_pacer() {
+    test_start "transfer_pace_args fails when the pacer cannot be resolved"
+    reset_state
+    # transfer_pacer is a sourced library function: save its body and
+    # restore it after the override (unset -f would delete it outright).
+    local _orig_pacer
+    _orig_pacer=$(declare -f transfer_pacer)
+    transfer_pacer() { return 1; }
+    transfer_rate_limit="100M"
+    transfer_pace_args 2>/dev/null
+    local rc=$?
+    eval "$_orig_pacer"
+    assert_rc 1 "$rc"
+    assert_array_len 0 "${transfer_pace_args[@]}"
+}
+
+test_transfer_do_fatals_when_pacer_missing() {
+    test_start "transfer_do refuses to run unlimited when the pacer is missing"
+    reset_state
+    local _orig_pacer
+    _orig_pacer=$(declare -f transfer_pacer)
+    transfer_pacer() { return 1; }
+    transfer_rate_limit="100M"
+    transfer_do "Send/receive" "-cw" "-uv" "N" "5000000" "src@snap" "pool/dest" \
+        2>/dev/null
+    local rc=$?
+    eval "$_orig_pacer"
+    assert_rc 1 "$rc"
+    local log
+    log=$(get_log)
+    assert_contains "$log" "FATAL: Rate limit set but pace_stream.py not found"
+    if [[ -s "$_zfs_capture_file" ]]; then
+        test_fail "pipeline must not run without pacing"
+        return
+    fi
+    test_pass
+}
+
+test_pv_args_never_rate_limits() {
+    test_start "transfer_pv_args carries progress flags only, never -L"
+    reset_state
+    transfer_rate_limit="50M"
     ZFSUTILITIES_LOG_INHERIT="Y" transfer_pv_args "5000000" "Y" 2>/dev/null
-    assert_golden test_pv_args_log_inherit_rate_limit "$(printf '%s\n' "${transfer_pv_args[@]}")"
-}
-
-test_pv_args_no_pv_rate_limit() {
-    test_start "transfer_pv_args rate limit applies even when use_pv is not Y"
-    reset_state
-    pv_rate_limit="10m"
-    transfer_pv_args "0" "N" 2>/dev/null
-    assert_golden test_pv_args_no_pv_rate_limit "$(printf '%s\n' "${transfer_pv_args[@]}")"
+    if printf '%s\n' "${transfer_pv_args[@]}" | grep -q -- '-L'; then
+        test_fail "transfer_pv_args still rate limits: ${transfer_pv_args[*]}"
+        return
+    fi
+    assert_golden test_pv_args_log_inherit "$(printf '%s\n' "${transfer_pv_args[@]}")"
 }
 
 # ---------------------------------------------------------------------------
@@ -340,6 +391,79 @@ test_transfer_do_with_pv_when_inherit() {
     assert_golden test_transfer_do_with_pv_when_inherit "$(cat "$pv_capture" 2>/dev/null)"
 }
 
+test_transfer_do_with_pacer_and_pv_when_inherit() {
+    test_start "transfer_do paces before pv when a rate limit is set"
+    reset_state
+    local stage_capture="$_mock_zfs_state_dir/transfer_stage_order"
+    : > "$stage_capture"
+    # Pipeline child STARTUP order is not guaranteed (the scheduler can run
+    # either subshell first), so pv records only after draining its stdin:
+    # its marker then lands strictly after the pacer's, proving the data
+    # flows send -> pacer -> pv (pv displays the paced rate).
+    pv() {
+        local received
+        received=$(cat)
+        echo "pv $* :: ${received}" >> "$stage_capture"
+        printf '%s' "$received"
+        return 0
+    }
+    python3() {
+        if [[ "${1:-}" != *pace_stream.py ]]; then
+            command python3 "$@"
+            return $?
+        fi
+        echo "pacer ${*:2}" >> "$stage_capture"
+        cat
+        return 0
+    }
+    transfer_rate_limit="100M"
+    ZFSUTILITIES_LOG_INHERIT="Y" \
+        transfer_do "Send/receive" "-cw" "-uv" "Y" "5000000" "src@snap" "pool/dest" \
+        2>/dev/null
+    local rc=$?
+    unset -f pv python3
+    assert_rc 0 "$rc"
+    local order
+    order=$(cat "$stage_capture" 2>/dev/null)
+    if [[ "$order" != "pacer 100M
+pv -fpterb -s 5000000 :: " ]]; then
+        test_fail "Unexpected stage order:\n$order"
+        return
+    fi
+}
+
+test_transfer_do_with_pacer_headless() {
+    test_start "transfer_do paces without pv in headless mode"
+    reset_state
+    local stage_capture="$_mock_zfs_state_dir/transfer_stage_order_headless"
+    : > "$stage_capture"
+    pv() {
+        echo "pv $*" >> "$stage_capture"
+        return 0
+    }
+    python3() {
+        if [[ "${1:-}" != *pace_stream.py ]]; then
+            command python3 "$@"
+            return $?
+        fi
+        echo "pacer ${*:2}" >> "$stage_capture"
+        cat
+        return 0
+    }
+    transfer_rate_limit="100M"
+    transfer_do "Send/receive" "-cw" "-uv" "N" "0" "src@snap" "pool/dest" \
+        2>/dev/null
+    local rc=$?
+    unset -f pv python3
+    assert_rc 0 "$rc"
+    local order
+    order=$(cat "$stage_capture" 2>/dev/null)
+    if [[ "$order" != "pacer 100M" ]]; then
+        test_fail "Expected only the pacer stage, got:\n$order"
+        return
+    fi
+}
+
 test_transfer_do_incremental_appends_second_target() {
     test_start "transfer_do with send_target2 assembles zfs send -Rw -I @from @to"
     reset_state
@@ -368,9 +492,11 @@ test_transfer_do_failure_logs_fatal() {
 test_pv_args_headless_no_rate
 test_pv_args_use_pv_no
 test_pv_args_log_inherit
-test_pv_args_headless_rate_limit
-test_pv_args_log_inherit_rate_limit
-test_pv_args_no_pv_rate_limit
+test_pace_args_without_rate
+test_pace_args_with_rate
+test_pace_args_unresolvable_pacer
+test_transfer_do_fatals_when_pacer_missing
+test_pv_args_never_rate_limits
 test_token_stale_strings
 test_validate_token_success
 test_validate_token_failure
@@ -383,6 +509,8 @@ test_space_check_min_buffer_override
 test_transfer_do_pipeline_no_pv
 test_transfer_do_resume_omits_target
 test_transfer_do_with_pv_when_inherit
+test_transfer_do_with_pacer_and_pv_when_inherit
+test_transfer_do_with_pacer_headless
 test_transfer_do_incremental_appends_second_target
 test_transfer_do_failure_logs_fatal
 

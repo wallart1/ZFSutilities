@@ -902,7 +902,7 @@ class TestBackupAdvancedLabel(unittest.TestCase):
         self._install_default_widgets(backup_page, app)
         backup_page.Gtk.ComboBoxText = _FakeComboBoxText
         backup_page.load_backup_config(
-            app, {"variables": {"pv_rate_limit": "50M"}, "pause_scrubs": False}
+            app, {"variables": {"transfer_rate_limit": "50M"}, "pause_scrubs": False}
         )
         self.assertIn('foreground="orange"', label.set_markup.call_args[0][0])
 

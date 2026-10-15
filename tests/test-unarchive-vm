@@ -16,9 +16,30 @@ setup_test_env
 
 setup_node_config() {
     NODE_CONF_FILE="$_mock_zfs_state_dir/node.conf"
-    cat > "$NODE_CONF_FILE" << 'EOF'
+    if [[ "${_mock_two_node:-}" == "1" ]]; then
+        # Bash-format two-node conf, deliberately matching production shape
+        # (declare -A POOL_TARGET), with both hosts resolving to the local
+        # stub hostname so on_storage/on_compute take their local branches.
+        cat > "$NODE_CONF_FILE" << 'EOF'
+NODE_MODE="two-node"
+
+STORAGE_HOST="zteststor"
+COMPUTE_HOST="zteststor"
+
+STORAGE_IP="192.168.100.1"
+
+IQN_PREFIX="iqn.2026-02.local.stewie"
+
+declare -A POOL_TARGET=(
+    [threeamigos]="threeamigos"
+    [NVME1]="nvme1"
+)
+EOF
+    else
+        cat > "$NODE_CONF_FILE" << 'EOF'
 NODE_MODE=single-node
 EOF
+    fi
     export NODE_CONF="$NODE_CONF_FILE"
 }
 
@@ -56,13 +77,34 @@ setup_archive() {
         echo "METHOD=${method}" >> "${archive_base}/threeamigos/proxmox/vm-${vmid}-disk-0.disk_info"
     fi
 
+    # Two-node staging: a second disk on another mapped pool (NVME1), with
+    # iSCSI-form disk lines in the archived config — the form Step 3 rewrites
+    # LUN-by-LUN on the compute host.
+    local scsi0_line="scsi0: threeamigos:vm-${vmid}-disk-0,size=10G"
+    local scsi3_line=""
+    if [[ "${_mock_two_node:-}" == "1" ]]; then
+        mkdir -p "${archive_base}/NVME1/proxmox"
+        echo "16K" > "${archive_base}/NVME1/proxmox/vm-${vmid}-disk-3.original_volblocksize"
+        {
+            echo "DISK_KEY=scsi3"
+            [[ -n "$method" ]] && echo "METHOD=${method}"
+        } > "${archive_base}/NVME1/proxmox/vm-${vmid}-disk-3.disk_info"
+        scsi0_line="scsi0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-\
+iqn.2026-02.local.stewie:threeamigos-lun-4,format=raw,discard=on,\
+iothread=1,size=10G"
+        scsi3_line="scsi3: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-\
+iqn.2026-02.local.stewie:nvme1-lun-2,format=raw,discard=on,\
+iothread=1,size=350G"
+    fi
+
     # Archived Proxmox config (mirrors the PVE_CONF_DIR layout)
-    cat > "${archive_base}${pve_dir}/${vmid}.conf" << EOF
-name: test-vm
-scsi0: threeamigos:vm-${vmid}-disk-0,size=10G
-vmgenid: 11111111-1111-1111-1111-111111111111
-smbios1: uuid=22222222-2222-2222-2222-222222222222
-EOF
+    {
+        echo "name: test-vm"
+        echo "$scsi0_line"
+        [[ -n "$scsi3_line" ]] && echo "$scsi3_line"
+        echo "vmgenid: 11111111-1111-1111-1111-111111111111"
+        echo "smbios1: uuid=22222222-2222-2222-2222-222222222222"
+    } > "${archive_base}${pve_dir}/${vmid}.conf"
 }
 
 # Run unarchive-vm in a subshell so an exit/die does not kill the test harness.
@@ -75,8 +117,9 @@ run_unarchive() {
     local stdin_input="${_mock_read_response:-}"
     local capture_dir="$_mock_zfs_state_dir/capture"
     mkdir -p "$capture_dir"
-    rm -f "$capture_dir/zfs-argv" "$capture_dir/pv" "$capture_dir/dd" \
-        "$capture_dir/tee" "$capture_dir/sha256"
+    rm -f "$capture_dir/zfs-argv" "$capture_dir/pace" "$capture_dir/dd" \
+        "$capture_dir/tee" "$capture_dir/sha256" \
+        "$capture_dir/targetcli" "$capture_dir/ssh"
     (
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
         setup_test_env
@@ -170,21 +213,28 @@ ${arc_dataset}"
             echo "TEE:$*" >> "$_capture_dir/tee"
             command tee "$@"
         }
-        pv() {
-            # Rate-limited transfer segment, argv recorded. A read-head pv
-            # (-- <src>) takes its input from the named device — which
-            # never exists in the harness, so nothing is produced (the
-            # same no-copy semantics the cp mock has always had). A bare
-            # pv is a mid-pipeline pacing segment and passes stdin
-            # through. Neither form may touch the script's stdin: the
-            # read head is the first pipeline stage, and its stdin is the
-            # interactive answer feed.
-            echo "PV:$*" >> "$_capture_dir/pv"
-            local -a _pargv=("$@") _pi
-            for _pi in "${!_pargv[@]}"; do
-                if [[ "${_pargv[$_pi]}" == "--" ]]; then
-                    [[ -e "${_pargv[$((_pi + 1))]}" ]] \
-                        && cat -- "${_pargv[$((_pi + 1))]}"
+        python3() {
+            # Pacer stage (lib/pace_stream.py), argv recorded after the
+            # interpreter script path. Only pacer invocations are
+            # intercepted; every other python3 caller in the harness
+            # (JSON config readers, sidecar helpers) runs for real. A
+            # read-head call (-- <src>) takes its input from the named
+            # device — which never exists in the harness, so nothing is
+            # produced (the same no-copy semantics the cp mock has always
+            # had). A call without -- is a mid-pipeline pacing segment and
+            # passes stdin through. Neither form may touch the script's
+            # stdin: the read head is the first pipeline stage, and its
+            # stdin is the interactive answer feed.
+            if [[ "${1:-}" != *pace_stream.py ]]; then
+                command python3 "$@"
+                return $?
+            fi
+            echo "PACE:${*:2}" >> "$_capture_dir/pace"
+            local -a _pyargv=("$@") _pi
+            for _pi in "${!_pyargv[@]}"; do
+                if [[ "${_pyargv[$_pi]}" == "--" ]]; then
+                    [[ -e "${_pyargv[$((_pi + 1))]}" ]] \
+                        && cat -- "${_pyargv[$((_pi + 1))]}"
                     return 0
                 fi
             done
@@ -207,6 +257,141 @@ ${arc_dataset}"
             cat > /dev/null
             return 0
         }
+
+        # Two-node staging. Storage and compute both resolve to the stub
+        # hostname so on_storage/on_compute take their local branches with
+        # these mocks visible; the raw ssh probes the orchestrator makes
+        # directly against the storage host are answered below. The stub
+        # bin dir keeps the payload's own resolutions (bashinit, engine,
+        # lock manager, safe-iscsi-save, rescan-storage) inside the harness.
+        if [[ "${_mock_two_node:-}" == "1" ]]; then
+            _two_node_stub_dir="$_mock_zfs_state_dir/twonode-bin"
+            mkdir -p "$_two_node_stub_dir"
+            cp "${ZFSUTILITIES_BIN_DIR}/zfslockmanager" "$_two_node_stub_dir/"
+            ln -sf "$mydir/bin/bashinit" "$_two_node_stub_dir/bashinit"
+            ln -sf "$mydir/lib/archive-engine.sh" \
+                "$_two_node_stub_dir/archive-engine.sh"
+            printf '#!/usr/bin/bash\nexit 0\n' > "$_two_node_stub_dir/safe-iscsi-save"
+            printf '#!/usr/bin/bash\nexit 0\n' > "$_two_node_stub_dir/rescan-storage"
+            chmod +x "$_two_node_stub_dir/safe-iscsi-save" \
+                "$_two_node_stub_dir/rescan-storage"
+            export ZFSUTILITIES_BIN_DIR="$_two_node_stub_dir"
+
+            hostname() {
+                if [[ "$1" == "-s" ]]; then
+                    echo "zteststor"
+                else
+                    command hostname "$@"
+                fi
+            }
+
+            # Answers the orchestrator's direct storage-host probes by running
+            # the same operation locally against the mock state. Unhandled
+            # commands fail loudly so a new probe shape cannot pass silently.
+            ssh() {
+                local cmd="${2:-}"
+                echo "SSH:$cmd" >> "$_capture_dir/ssh"
+                local plain="${cmd//\'/}"
+                local ds f marker
+                case "$plain" in
+                    "zfs list -H -o name "*)
+                        ds="${plain#zfs list -H -o name }"
+                        ds="${ds%% *}"
+                        zfs list -H -o name "$ds" 2>/dev/null | grep -qxF -- "$ds"
+                        return $?
+                        ;;
+                    "zfs get -H -o value mountpoint "*)
+                        ds="${plain#zfs get -H -o value mountpoint }"
+                        ds="${ds%% *}"
+                        zfs get -H -o value mountpoint "$ds"
+                        return $?
+                        ;;
+                    "grep -qxF -- "*)
+                        # zvol_marked_restored: "<marker> <info-file> 2>/dev/null"
+                        marker="${plain#grep -qxF -- }"
+                        f="${marker#* }"
+                        marker="${marker%% *}"
+                        f="${f%% *}"
+                        grep -qxF -- "$marker" "$f" 2>/dev/null
+                        return $?
+                        ;;
+                    "[[ -f "*"]]")
+                        f="${plain#'[[' -f }"
+                        f="${f% ]]*}"
+                        f="${f% ]}"
+                        [[ -f "$f" ]]
+                        return $?
+                        ;;
+                    "cat "*)
+                        f="${plain#cat }"
+                        f="${f%% *}"
+                        [[ -f "$f" ]] && cat "$f"
+                        return 0
+                        ;;
+                    "grep ^DISK_KEY="*)
+                        f="${plain#grep ^DISK_KEY= }"
+                        f="${f%% *}"
+                        grep '^DISK_KEY=' "$f" 2>/dev/null | cut -d= -f2
+                        return $?
+                        ;;
+                    *)
+                        echo "SSH-UNHANDLED:$plain" >> "$_capture_dir/ssh"
+                        return 1
+                        ;;
+                esac
+            }
+
+            # Stateful targetcli: backstore markers plus a per-target LUN
+            # table; ls output uses the row shape the payload greps
+            # ("block/<name> " then lun<N>).
+            targetcli() {
+                echo "TARGETCLI:$*" >> "$_capture_dir/targetcli"
+                local lun_table="$_capture_dir/iscsi-luns"
+                local b t n l row
+                case "$1 $2" in
+                    "/backstores/block ls")
+                        for b in "$_capture_dir"/bs.*; do
+                            [[ -e "$b" ]] || continue
+                            printf '  %s /dev/zvol/x\n' "${b##*/bs.}"
+                        done
+                        return 0
+                        ;;
+                    "/backstores/block create")
+                        : > "$_capture_dir/bs.$3"
+                        return 0
+                        ;;
+                    "/iscsi/"*"/tpg1/luns ls")
+                        [[ -f "$lun_table" ]] || return 0
+                        while IFS='|' read -r t n l; do
+                            [[ "$t" == "$1" ]] || continue
+                            printf '  %s block/%s x\n' "$l" "$n"
+                        done < "$lun_table"
+                        return 0
+                        ;;
+                    "/iscsi/"*"/tpg1/luns create")
+                        : >> "$lun_table"
+                        n="${3##*/}"
+                        row=$(grep -cF -- "$1|" "$lun_table" 2>/dev/null) || row=0
+                        echo "$1|$n|lun${row}" >> "$lun_table"
+                        return 0
+                        ;;
+                    *)
+                        return 0
+                        ;;
+                esac
+            }
+
+            # Archive-side mock state for the NVME1 disk-3 dataset, mirroring
+            # the threeamigos disk-0 registration above.
+            local _arc_ds3="${archive_base}/NVME1/proxmox/vm-${_mock_orig_vmid}-disk-3"
+            _mock_zfs_fs_list="${_mock_zfs_fs_list}
+${_arc_ds3}"
+            _mock_zfs_datasets["$_arc_ds3"]=1
+            _mock_zfs_props["NVME1/proxmox/vm-${_mock_orig_vmid}-disk-3:volblocksize"]="16K"
+            _mock_zfs_props["${_arc_ds3}:volsize"]="350G"
+            _mock_zfs_props["${_arc_ds3}:snapdev"]="hidden"
+            _mock_zfs_snap_lists["$_arc_ds3"]="${_arc_ds3}@snap1"
+        fi
 
         # Conflict state.
         if [[ "${_mock_old_config_present:-}" == "1" ]]; then
@@ -246,10 +431,12 @@ ${arc_dataset}"
     ) <<< "$stdin_input" 2>&1
     local rc=$?
     cat "$capture_dir/zfs-argv" 2>/dev/null || true
-    cat "$capture_dir/pv" 2>/dev/null || true
+    cat "$capture_dir/pace" 2>/dev/null || true
     cat "$capture_dir/dd" 2>/dev/null || true
     cat "$capture_dir/tee" 2>/dev/null || true
     cat "$capture_dir/sha256" 2>/dev/null || true
+    cat "$capture_dir/targetcli" 2>/dev/null || true
+    cat "$capture_dir/ssh" 2>/dev/null || true
     return $rc
 }
 
@@ -261,7 +448,7 @@ reset_unretire_mocks() {
     unset _mock_old_config_present _mock_orphan_zvols \
         _mock_new_config_present _mock_read_response _mock_hash_dst \
         _mock_sha_fail \
-        _mock_dest_zvol_present _mock_dest_zvol_marked
+        _mock_dest_zvol_present _mock_dest_zvol_marked _mock_two_node
 }
 
 test_usage_rejects_invalid_new_vmid() {
@@ -713,7 +900,7 @@ y"
 
 test_rate_limit_paces_restore_copy() {
     reset_unretire_mocks
-    test_start "Rate limit: restore copy and hash pass through pv"
+    test_start "Rate limit: restore copy and hash pass through the pacer"
 
     _mock_orig_vmid="904"
     _mock_read_response="100M
@@ -732,9 +919,9 @@ y"
         return
     fi
     local arc="${archive}/threeamigos/proxmox/vm-904-disk-0"
-    local needle="PV:-q -L 100M -- /dev/zvol/${arc}@snap1"
+    local needle="PACE:100M -- /dev/zvol/${arc}@snap1"
     if [[ "$out" != *"$needle"* ]]; then
-        test_fail "Restore copy not paced by pv; output:\n$out"
+        test_fail "Restore copy not paced; output:\n$out"
         return
     fi
     needle="DD:of=/dev/zvol/threeamigos/proxmox/vm-904-disk-0"
@@ -748,16 +935,16 @@ y"
     fi
     # The source is read once: the copy and its in-flight hash share the
     # single paced pass; the destination read-back is the only other one.
-    local pv_count src_pv_count
-    pv_count=$(printf '%s\n' "$out" | grep -c '^PV:')
-    if [[ "$pv_count" -ne 2 ]]; then
-        test_fail "pv count wrong (want copy + read-back): ${pv_count}; output:\n$out"
+    local pace_count src_pace_count
+    pace_count=$(printf '%s\n' "$out" | grep -c '^PACE:')
+    if [[ "$pace_count" -ne 2 ]]; then
+        test_fail "Pacer count wrong (want copy + read-back): ${pace_count}; output:\n$out"
         return
     fi
-    src_pv_count=$(printf '%s\n' "$out" | grep -cFx -- \
-        "PV:-q -L 100M -- /dev/zvol/${arc}@snap1")
-    if [[ "$src_pv_count" -ne 1 ]]; then
-        test_fail "Source device paced more than once (${src_pv_count}); output:\n$out"
+    src_pace_count=$(printf '%s\n' "$out" | grep -cFx -- \
+        "PACE:100M -- /dev/zvol/${arc}@snap1")
+    if [[ "$src_pace_count" -ne 1 ]]; then
+        test_fail "Source device paced more than once (${src_pace_count}); output:\n$out"
         return
     fi
     if [[ "$out" != *"✓ Copy verified (sha256 match)"* ]]; then
@@ -1078,6 +1265,70 @@ n"
     test_pass
 }
 
+test_two_node_step2_maps_pools_and_rewrites_luns() {
+    reset_unretire_mocks
+    test_start "Two-node Step 2 maps pools to targets; LUNs land in the config"
+
+    _mock_orig_vmid="904"
+    _mock_two_node=1
+    _mock_read_response="
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_twonode"
+    local archive="$_mock_zfs_state_dir/archive_twonode"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if printf '%s\n' "$out" | grep -q "FATAL"; then
+        test_fail "FATAL in output:\n$out"
+        return
+    fi
+
+    local cfg="${pve_dir}/904.conf"
+    if [[ ! -f "$cfg" ]]; then
+        test_fail "Config not written: $cfg; output:\n$out"
+        return
+    fi
+    local lun0_line lun3_line
+    lun0_line=$(grep '^scsi0:' "$cfg")
+    lun3_line=$(grep '^scsi3:' "$cfg")
+    if [[ "$lun0_line" != "scsi0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-\
+iqn.2026-02.local.stewie:threeamigos-lun-0,format=raw,discard=on,\
+iothread=1,size=10G" ]]; then
+        test_fail "scsi0 not rewritten to the threeamigos target LUN 0: ${lun0_line}; output:\n$out"
+        return
+    fi
+    if [[ "$lun3_line" != "scsi3: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-\
+iqn.2026-02.local.stewie:nvme1-lun-0,format=raw,discard=on,\
+iothread=1,size=350G" ]]; then
+        test_fail "scsi3 not rewritten to the nvme1 target LUN 0: ${lun3_line}; output:\n$out"
+        return
+    fi
+
+    # Step 2 must have created both backstores on their pool's target.
+    local tc
+    tc=$(printf '%s\n' "$out" | grep '^TARGETCLI:')
+    if [[ "$tc" != *"/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns create \
+/backstores/block/vm-904-disk-0"* ]]; then
+        test_fail "No LUN create on threeamigos target; targetcli log:\n$tc"
+        return
+    fi
+    if [[ "$tc" != *"/iscsi/iqn.2026-02.local.stewie:nvme1/tpg1/luns create \
+/backstores/block/vm-904-disk-3"* ]]; then
+        test_fail "No LUN create on nvme1 target; targetcli log:\n$tc"
+        return
+    fi
+
+    test_pass
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -1102,6 +1353,7 @@ test_completed_restore_run_exits_cleanly
 test_resume_skips_marked_disk_and_finishes
 test_unmarked_dest_confirmed_redone
 test_unmarked_dest_declined_aborts
+test_two_node_step2_maps_pools_and_rewrites_luns
 test_payloads_route_through_node_transports
 test_archived_config_path_has_no_double_slash
 

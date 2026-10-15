@@ -155,7 +155,7 @@ class TestBuildOffsiteStepCommand(unittest.TestCase):
                 "allow_destructive": "Y",
                 "receive_F_option": "",
                 "verify_after_transfer": "N",
-                "pv_rate_limit": "100M",
+                "transfer_rate_limit": "100M",
                 "applyholds": "N",
             }
         )
@@ -165,7 +165,7 @@ class TestBuildOffsiteStepCommand(unittest.TestCase):
         self.assertIn('allow_destructive="Y"', script)
         self.assertIn('receive_F_option=""', script)
         self.assertIn('verify_after_transfer="N"', script)
-        self.assertIn('pv_rate_limit="100M"', script)
+        self.assertIn('transfer_rate_limit="100M"', script)
         self.assertIn('applyholds="N"', script)
 
     def test_includes_startwith_and_endwith(self):

@@ -1317,7 +1317,7 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | `archive_base` | Optional ZFS dataset that contains the archive. If not specified, the last-used `archive-base` is used.  |
 | `--new-vmid`   | Optional new VM ID for restored zvols, iSCSI resources, and Proxmox config                               |
 
-**Globals:** node-config globals; `pv_rate_limit` (transfer rate limit,
+**Globals:** node-config globals; `transfer_rate_limit` (transfer rate limit,
 empty = unlimited; prompted with the JSON-config default `archive_rate_limit`).
 
 **Called modules / commands:**
@@ -1363,6 +1363,9 @@ empty = unlimited; prompted with the JSON-config default `archive_rate_limit`).
    `METHOD=raw` and unmarked legacy archives use `zfs send -cw | zfs receive`.
 7. In two-node mode, create backstores and LUNs for each restored zvol and
    update `expected-backstores.txt` and `/etc/zfsutilities/iscsi-encrypted-luns.conf`.
+   Each zvol's pool is mapped to its iSCSI target with node-lib's
+   `pool_to_target` (the `POOL_TARGET` map in the node config, resolved on the
+   storage host); an unmapped pool aborts the restore.
 8. Save iSCSI config via `safe-iscsi-save`.
 9. Restore/rewrite the Proxmox config (written on the compute host —
    base64-shipped through `on_compute` when orchestrating elsewhere):

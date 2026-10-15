@@ -50,7 +50,7 @@ OFFSITE_VARIABLES = [
     "allow_destructive",
     "receive_F_option",
     "verify_after_transfer",
-    "pv_rate_limit",
+    "transfer_rate_limit",
 ]
 OFFSITE_YN_VARIABLES = {
     "applyholds",
@@ -70,7 +70,7 @@ _OFFSITE_TOPIC_MAP = {
     "allow_destructive": "backup_allow_destructive",
     "receive_F_option": "backup_receive_F_option",
     "verify_after_transfer": "offsite_verify_after_transfer",
-    "pv_rate_limit": "backup_pv_rate_limit",
+    "transfer_rate_limit": "backup_transfer_rate_limit",
 }
 _EDITABLE_COLS = [1, 2, 3, 4]
 

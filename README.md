@@ -84,6 +84,9 @@ cron syntax:
 
 - `pv` (progress visualization)
 
+- Python 3 (runs the GTK GUI and the transfer-rate pacer
+  `lib/pace_stream.py`)
+
 - `rsync`
 
 - `smartmontools` (SMART disk health, SSD/NVMe wear, and surface self-tests)
@@ -171,19 +174,29 @@ directions between the storage host and the compute host.
 
 ## Versioned Upgrades
 
-Acquire a new version before deploying it. Clone the repository into a fresh
-directory rather than re-using an old checkout that may contain local changes:
+The supported way to move an installed system to a new release is the
+self-upgrade command. It checks GitHub for the latest release, scans every
+host the release will be deployed to for files you changed after they were
+installed, shows the changes (modified files with diffs), and asks before
+touching anything. Approved changes are archived on their host before being
+superseded, so an upgrade never silently discards local edits:
 
 ```bash
-git clone https://github.com/wallart1/ZFSutilities.git zfsutilities-new
-cd zfsutilities-new
+sudo upgrade-zfsutilities
 ```
 
-Deploy the new version without affecting the running system:
-```bash
-sudo ./bin/deploy-version
-sudo switch-version <version>
-```
+The command ends by running `deploy-version` from the downloaded release, so
+the new version is copied to every deployment-group host, and stops there.
+Nothing is activated — the running system keeps its current version until
+you run `sudo switch-version <version>` yourself; the exact activation
+command is printed for every host, including the local one.
+
+Do not install over deployed code by hand (copying files into the active
+version tree, or re-running `deploy-version` over the version that is
+currently active). Unrecorded edits are destroyed with no archive and no
+prompt; `upgrade-zfsutilities` exists precisely to catch and preserve them.
+Every deployment records a `MANIFEST.sha256` of the files it installs, which
+is what the upgrade compares against.
 
 Roll back instantly:
 ```bash
@@ -194,6 +207,10 @@ List deployed versions:
 ```bash
 sudo switch-version --list
 ```
+
+For development checkouts (deploying uncommitted work from a repository),
+keep using the manual flow: clone or update a fresh tree, then
+`sudo ./bin/deploy-version` and `sudo switch-version <version>` from it.
 
 ## Uninstalling
 

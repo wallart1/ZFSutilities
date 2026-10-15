@@ -17,6 +17,11 @@ CRON_FILE = get_cron_file_path()
 # log (config_core.get_paths_config), so failures before the runner creates
 # its own session log are still visible, each line carrying the time it was
 # written. stdbuf keeps awk line-buffered so lines appear in the log promptly.
+# The job line also exports ZFSUTILITIES_FROM_CRON=Y so the runner can
+# silence its own output once its session log exists (cron_manager's job
+# lines are the only launchers that set it); without that, the stamper would
+# capture the whole run — every message and one pv progress line per second —
+# duplicating the session log and flooding the weekly-rotated cron log.
 _TIMESTAMP_STAMPER = "stdbuf -oL awk '{ print strftime(\"%Y-%m-%d %H:%M:%S\"), $0 }'"
 
 # Directory for per-profile advisory locks. Override for testing.
@@ -75,7 +80,11 @@ def generate_cron_line(profile, runner_path, cron_log):
         weekday = weekday.split("#", 1)[0].strip()
     name = profile["profile_name"]
     quoted_runner = shlex_quote(runner_path)
-    inner = f"python3 {quoted_runner} run {shlex_quote(name)}"
+    # The FROM_CRON env assignment marks this as a cron launch: the runner
+    # silences its own stdout/stderr once it has created its session log, so
+    # only pre-log failures reach the stamper below. GUI "Run Now" and manual
+    # terminal launches never set the marker and keep streaming normally.
+    inner = f"ZFSUTILITIES_FROM_CRON=Y python3 {quoted_runner} run {shlex_quote(name)}"
     log_dir = shlex_quote(os.path.dirname(cron_log))
     lock_dir = shlex_quote(PROFILE_LOCK_DIR)
     quoted_log = shlex_quote(cron_log)

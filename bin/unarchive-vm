@@ -266,16 +266,16 @@ fi
 configured_rate=$(get_json_archive_rate_limit)
 rate_default=""
 [[ -n "$configured_rate" ]] && rate_default=" [${configured_rate}]"
-ask_line "Transfer rate limit (pv value, e.g. 100M; empty = unlimited)${rate_default}: " \
+ask_line "Transfer rate limit (e.g. 100M; empty = unlimited)${rate_default}: " \
     user_rate
 archive_rate="${user_rate:-$configured_rate}"
 if ! archive_valid_rate "$archive_rate"; then
-    log_msg "FATAL: Invalid rate limit '${archive_rate}' — use a pv -L value"
+    log_msg "FATAL: Invalid rate limit '${archive_rate}' — use a rate value"
     log_msg "FATAL: such as 100M or 500KiB, or leave it empty for unlimited"
     exit 1
 fi
 # shellcheck disable=SC2034  # used by on_storage/on_compute and lib functions
-pv_rate_limit="$archive_rate"
+transfer_rate_limit="$archive_rate"
 if [[ "$archive_rate" != "$configured_rate" ]]; then
     save_json_config_key archive_rate_limit "$archive_rate"
     log_msg "INFO:   ✓ Saved transfer rate limit to JSON config"
@@ -683,6 +683,13 @@ mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bi
 source "$mydir/bashinit"
 bashinit
 
+# pool_to_target comes from node-lib: it resolves the node conf exactly as
+# the orchestrator does (NODE_CONF env, then the FHS and legacy /etc paths)
+# and reads the bash POOL_TARGET array the conf is written in. A locally-run
+# payload inherits the function from the orchestrator's shell; a payload
+# shipped over ssh sources node-lib from the storage host's deployed tree.
+declare -f pool_to_target >/dev/null 2>&1 || source_helper node-lib.sh
+
 set -e
 vmid="$1"
 dataset_count="$2"
@@ -703,16 +710,8 @@ for i in "${!new_zvols[@]}"; do
     # Map pool to target using node-lib's pool_to_target logic. NODE_CONF
     # is honored so a locally-run payload (storage-host orchestration, and
     # the test harness) resolves the same node config as the orchestrator.
-    target=$(python3 -c "
-import os, sys
-conf = os.environ.get('NODE_CONF', '/etc/zfsutilities-node.conf')
-try:
-    with open(conf) as f:
-        exec(f.read())
-    print(f'{IQN_PREFIX}:{POOL_TARGET[\"'$pool'\"]}')
-except Exception as e:
-    sys.exit(1)
-") || { log_msg "FATAL: Cannot map pool ${pool} to target"; exit 1; }
+    target=$(pool_to_target "$pool") \
+        || { log_msg "FATAL: Cannot map pool ${pool} to target"; exit 1; }
 
     echo "TARGET:${target}"
     echo "DISK:${disknum}"
@@ -890,7 +889,7 @@ else
             rest="${disk_tail#"$disknum"}"
             echo "${key}: ${storage}:vm-${newvmid}-disk-${disknum}${rest}"
             [[ "$newvmid" != "$vmid" ]] && log_msg "INFO:   ✓ Rewrote ${key} for vmid ${newvmid}"
-        elif [[ "$line" == *"ip-"[0-9.]":3260-iscsi-iqn."*"-lun-"[0-9]* ]] \
+        elif [[ "$line" == *"ip-"*":3260-iscsi-iqn."*"-lun-"[0-9]* ]] \
             && is_disk_key "$key" && [[ "$line" == "$key:"* ]]; then
             # Two-node iSCSI disk line: rewrite LUN (and target if needed).
             after="${line##*-iscsi-}"

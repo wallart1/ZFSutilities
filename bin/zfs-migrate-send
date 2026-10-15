@@ -8,8 +8,8 @@
 # resumes from that token instead of starting over. `-v` makes the receive
 # log each dataset as it is processed so progress through the tree is
 # visible in the session log. `pv` is placed in the
-# pipeline when useful (terminal or GUI-captured output) and can be
-# rate-limited via $pv_rate_limit.
+# pipeline when useful (terminal or GUI-captured output); the optional
+# $transfer_rate_limit adds the pace_stream.py rate-limit stage.
 #
 # With an optional $fromsnap set, the send becomes the cutover catch-up
 # incremental: `zfs send -w -I <src>@$fromsnap <src>@$snapname` carries every
@@ -32,7 +32,7 @@
 #   $snapname      bare migration snapshot name (no leading @)
 #   $fromsnap      optional bare from-snapshot name for the incremental
 #                  catch-up send (no leading @); empty = full -Rw send
-#   $pv_rate_limit optional pv -L rate (e.g. 100m); empty = unlimited
+#   $transfer_rate_limit optional rate limit (e.g. 100m); empty = unlimited
 #   $restart_hint optional name of the operation that should be re-run to
 #                resume an interrupted transfer, used in the failure
 #                remediation text (default: Migrate Pool). Callers that drive

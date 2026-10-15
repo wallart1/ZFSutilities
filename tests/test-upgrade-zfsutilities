@@ -1,0 +1,766 @@
+#!/usr/bin/bash
+# shellcheck disable=SC2016
+# test-upgrade-zfsutilities — Verify the self-upgrade orchestrator.
+#
+# GitHub is faked with file:// URLs pointing at fabricated release
+# tarballs; remote deployment targets are faked with PATH shims for ssh
+# and rsync that re-execute the real piped upgrade-lib.sh against
+# per-host fake version bases, so the remote scan/salvage code paths are
+# the production ones and only the transport is mocked.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+setup_test_env
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+UPGRADE_SCRIPT="$REPO/bin/upgrade-zfsutilities"
+[[ -f "$UPGRADE_SCRIPT" ]] || die "Missing: $UPGRADE_SCRIPT"
+
+# The library is bashinit-free; source the real one for direct unit tests.
+# shellcheck source=../lib/upgrade-lib.sh
+source "$REPO/lib/upgrade-lib.sh"
+
+ORIGINAL_PATH="$PATH"
+
+# [[ -f ]] does not glob (SC2144); use compgen for wildcard existence.
+_glob_exists() {
+    compgen -G "$1" > /dev/null 2>&1
+}
+
+# ------------------------------------------------------------------
+# Environment scaffolding
+# ------------------------------------------------------------------
+_setup_upgrade_env() {
+    local _varname="$1" _tmpdir
+    _tmpdir=$(mktemp -d)
+    mkdir -p "$_tmpdir/gh" "$_tmpdir/bin" "$_tmpdir/home" \
+        "$_tmpdir/local-base/versions" "$_tmpdir/etc"
+
+    export ZFSUTILITIES_VERSION_BASE="$_tmpdir/local-base"
+    export ZFSUTILITIES_REMOTE_VERSION_BASE="$_tmpdir/remote-default"
+    export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$_tmpdir/etc"
+    export ZFSUTILITIES_RELEASE_API="file://$_tmpdir/gh/latest.json"
+    export ZFSUTILITIES_TAG_TARBALL_URL="file://$_tmpdir/gh/tag-v%s.tar.gz"
+    export ZFSUTILITIES_RELEASE_HOME="file://$_tmpdir/gh"
+    # Suppress this host's real legacy configs so tests never touch real
+    # deployment targets.
+    export ZFSUTILITIES_LEGACY_DEPLOY_CONF="$_tmpdir/etc/no-deploy.conf"
+    export ZFSUTILITIES_LEGACY_NODE_CONF="$_tmpdir/etc/no-node.conf"
+    export UPGRADE_ZFSUTILITIES_TEST_NO_ROOT=1
+    export HOME="$_tmpdir/home"
+    export FAKE_DEPLOY_MARKER="$_tmpdir/deploy.marker"
+    export FAKE_SWITCH_MARKER="$_tmpdir/switch.marker"
+    : > "$FAKE_DEPLOY_MARKER"
+    : > "$FAKE_SWITCH_MARKER"
+
+    # Copy the script under test so it sources our fake rootcheck and the
+    # real upgrade-lib.sh as siblings.
+    cp "$UPGRADE_SCRIPT" "$_tmpdir/upgrade-zfsutilities"
+    chmod +x "$_tmpdir/upgrade-zfsutilities"
+    cp "$REPO/lib/upgrade-lib.sh" "$_tmpdir/upgrade-lib.sh"
+
+    # Minimal bashinit providing the functions the orchestrator uses.
+    # Quoted heredoc: no expansion, byte-identical to the printf chain it
+    # replaced.
+    cat > "$HOME/bashinit" << 'BINIT'
+#!/usr/bin/bash
+function bashinit {
+    mydir=$(dirname "$(realpath "${BASH_SOURCE[1]}")")
+}
+function log_msg { echo -e "$*" >&2; }
+function find_zfsutility_script {
+    local name="$1"
+    if [[ -f "$mydir/$name" ]]; then realpath "$mydir/$name"; return 0; fi
+    return 1
+}
+function source_helper {
+    local name="$1" path
+    path=$(find_zfsutility_script "$name")
+    [[ -n "$path" ]] && source "$path"
+}
+function die { echo "FATAL: $*" >&2; exit 8; }
+function ask_yn {
+    local prompt="$1" default="${2:-N}" response
+    read -rp "$prompt [y/N]: " response
+    response="${response:-$default}"
+    case "${response,,}" in
+        y|yes) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+function append_exit_trap { trap "$1" EXIT; }
+BINIT
+
+    export PATH="$_tmpdir/bin:$ORIGINAL_PATH"
+    printf -v "$_varname" '%s' "$_tmpdir"
+}
+
+_teardown_upgrade_env() {
+    local tmpdir="$1"
+    export PATH="$ORIGINAL_PATH"
+    unset ZFSUTILITIES_VERSION_BASE ZFSUTILITIES_REMOTE_VERSION_BASE \
+        ZFSUTILITIES_SYSTEM_CONFIG_DIR ZFSUTILITIES_RELEASE_API \
+        ZFSUTILITIES_TAG_TARBALL_URL ZFSUTILITIES_RELEASE_HOME \
+        ZFSUTILITIES_LEGACY_DEPLOY_CONF ZFSUTILITIES_LEGACY_NODE_CONF \
+        UPGRADE_ZFSUTILITIES_TEST_NO_ROOT FAKE_DEPLOY_MARKER \
+        FAKE_SWITCH_MARKER
+    unset HOME
+    rm -rf "$tmpdir"
+}
+
+# ------------------------------------------------------------------
+# Fake GitHub: release tarballs and latest.json
+# ------------------------------------------------------------------
+_make_fake_release() {
+    local tmpdir="$1" version="$2"
+    local src="$tmpdir/relsrc-$version/ZFSutilities-v$version"
+    rm -rf "$tmpdir/relsrc-$version"
+    mkdir -p "$src/bin" "$src/lib" "$src/python" "$src/docs" "$src/share"
+    printf 'script-one release %s\n' "$version" > "$src/bin/onescript"
+    printf 'helper release %s\n' "$version" > "$src/lib/helper.sh"
+    printf 'py release %s\n' "$version" > "$src/python/mod.py"
+    printf 'docs %s\n' "$version" > "$src/docs/index.md"
+    printf 'share %s\n' "$version" > "$src/share/thing"
+    printf '%s\n' "$version" > "$src/VERSION"
+    # Repository-only files: never part of the deployed set.
+    printf 'repo only\n' > "$src/README.md"
+    mkdir -p "$src/tests"
+    printf 'test\n' > "$src/tests/dummy"
+    # Fake deploy-version: records the invocation and provisions the fake
+    # switch-version the orchestrator activates through.
+    cat > "$src/bin/deploy-version" << 'DEPLOYEOF'
+#!/usr/bin/bash
+echo "deploy-version $*" >> "${FAKE_DEPLOY_MARKER:?}"
+ver="$1"
+vb="${ZFSUTILITIES_VERSION_BASE:?}"
+mkdir -p "$vb/versions/$ver/bin"
+printf '#!/usr/bin/bash\necho "switch-version $*" >> "${FAKE_SWITCH_MARKER:?}"\n' \
+    > "$vb/versions/$ver/bin/switch-version"
+chmod +x "$vb/versions/$ver/bin/switch-version"
+echo "INFO: fake deploy-version complete for $ver" >&2
+DEPLOYEOF
+    chmod +x "$src/bin/deploy-version"
+    tar -czf "$tmpdir/gh/tag-v$version.tar.gz" -C "$tmpdir/relsrc-$version" \
+        "ZFSutilities-v$version"
+}
+
+_make_latest_json() {
+    local tmpdir="$1" tag="$2"
+    printf '{"tag_name": "%s", "html_url": "file://%s/gh/releases/%s"}\n' \
+        "$tag" "$tmpdir" "$tag" > "$tmpdir/gh/latest.json"
+}
+
+# Install the deployed subset of a fake release into a version directory
+# (the shape deploy-version produces: bin lib python docs share VERSION).
+_install_release() {
+    local dest="$1" version="$2" tmpdir="$3"
+    local x="$tmpdir/unpack-$RANDOM"
+    rm -rf "$x"
+    mkdir -p "$x" "$dest"
+    tar -xzf "$tmpdir/gh/tag-v$version.tar.gz" -C "$x"
+    local src="$x/ZFSutilities-v$version"
+    cp -a "$src/bin" "$src/lib" "$src/python" "$src/docs" "$src/share" "$dest/"
+    cp -a "$src/VERSION" "$dest/VERSION"
+    rm -rf "$x"
+}
+
+# Build a host's deployed state: version tree + current symlink + manifest.
+_make_host_state() {
+    local base="$1" version="$2" tmpdir="$3" with_manifest="${4:-1}"
+    mkdir -p "$base/versions/$version"
+    _install_release "$base/versions/$version" "$version" "$tmpdir"
+    ln -sfn "versions/$version" "$base/current"
+    if [[ "$with_manifest" == "1" ]]; then
+        upgrade_lib_write_manifest "$base/versions/$version" \
+            || die "test manifest write failed"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Fake remote transport: ssh and rsync shims on PATH
+# ------------------------------------------------------------------
+# _write_transport_shims <tmpdir> <mapfile>
+# The map file holds one "host base" line per fake remote host, or
+# "host FAIL" for an unreachable host.
+_write_transport_shims() {
+    local tmpdir="$1" mapfile="$2"
+
+    cat > "$tmpdir/bin/ssh" << 'SSHEOF'
+#!/usr/bin/bash
+MAP="__MAPFILE__"
+base_for() {
+    local h="$1" hh bb
+    while read -r hh bb; do
+        [[ "$hh" == "$h" ]] && { printf '%s' "$bb"; return 0; }
+    done < "$MAP"
+    return 1
+}
+args=()
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "-o" ]]; then
+        shift 2
+    else
+        args+=("$1")
+        shift
+    fi
+done
+[[ ${#args[@]} -gt 0 ]] || exit 0
+host="${args[0]#root@}"
+case "${args[1]:-}" in
+    true|exit)
+        base=$(base_for "$host") || exit 255
+        [[ "$base" == "FAIL" ]] && exit 255
+        exit 0
+        ;;
+    bash)
+        base=$(base_for "$host") || exit 255
+        [[ "$base" == "FAIL" ]] && exit 255
+        # Rewrite the standard remote base argument to this host's fake
+        # base — the remote driver receives the base as an argument.
+        fixed=()
+        for a in "${args[@]:4}"; do
+            if [[ "$a" == "$ZFSUTILITIES_REMOTE_VERSION_BASE" ]]; then
+                a="$base"
+            fi
+            fixed+=("$a")
+        done
+        exec bash -s -- "${fixed[@]}"
+        ;;
+esac
+exit 0
+SSHEOF
+    sed -i "s|__MAPFILE__|$mapfile|g" "$tmpdir/bin/ssh"
+    chmod +x "$tmpdir/bin/ssh"
+
+    cat > "$tmpdir/bin/rsync" << 'RSYNCEOF'
+#!/usr/bin/bash
+MAP="__MAPFILE__"
+base_for() {
+    local h="$1" hh bb
+    while read -r hh bb; do
+        [[ "$hh" == "$h" ]] && { printf '%s' "$bb"; return 0; }
+    done < "$MAP"
+    return 1
+}
+list="" hostpart=""
+for a in "$@"; do
+    case "$a" in
+        --files-from=*) list="${a#--files-from=}" ;;
+        root@*) hostpart="$a" ;;
+    esac
+done
+dest="${@: -1}"
+host="${hostpart%%:*}"
+host="${host#root@}"
+src="${hostpart#*:}"
+src="${src%/}"
+base=$(base_for "$host") || exit 1
+src="${src/#${ZFSUTILITIES_REMOTE_VERSION_BASE}/$base}"
+[[ -d "$src" ]] || exit 23
+mkdir -p "$dest"
+while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    [[ -f "$src/$p" ]] || exit 23
+    mkdir -p "$dest/$(dirname "$p")"
+    cp -a -- "$src/$p" "$dest/$p"
+done < "$list"
+exit 0
+RSYNCEOF
+    sed -i "s|__MAPFILE__|$mapfile|g" "$tmpdir/bin/rsync"
+    chmod +x "$tmpdir/bin/rsync"
+}
+
+# ------------------------------------------------------------------
+# Unit tests against the real library
+# ------------------------------------------------------------------
+test_json_string_parses_fields() {
+    test_start "upgrade_lib_json_string extracts quoted fields and tolerates absence"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    printf '{"tag_name": "v1.2.3", "tarball_url": "https://h/x.tar.gz", "n": 4}' > "$tmpdir/r.json"
+    local failed=0
+    [[ "$(upgrade_lib_json_string "$tmpdir/r.json" tag_name)" == "v1.2.3" ]] \
+        || { failed=1; echo "    tag_name parse failed"; }
+    [[ "$(upgrade_lib_json_string "$tmpdir/r.json" tarball_url)" == "https://h/x.tar.gz" ]] \
+        || { failed=1; echo "    tarball_url parse failed"; }
+    [[ -z "$(upgrade_lib_json_string "$tmpdir/r.json" missing)" ]] \
+        || { failed=1; echo "    missing field should be empty"; }
+    rm -rf "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "json parsing broken"; fi
+}
+
+test_version_lt_ordering() {
+    test_start "upgrade_lib_version_lt compares release versions strictly"
+    local failed=0
+    upgrade_lib_version_lt 0.9.0 0.10.0 \
+        || { failed=1; echo "    0.9.0 should be older than 0.10.0"; }
+    upgrade_lib_version_lt 0.10.0 0.10.0 \
+        && { failed=1; echo "    equal versions must not compare older"; }
+    upgrade_lib_version_lt 0.11.0 0.10.0 \
+        && { failed=1; echo "    0.11.0 must not compare older than 0.10.0"; }
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "version comparison broken"; fi
+}
+
+test_hash_tree_exclusions() {
+    test_start "upgrade_lib_hash_tree excludes built docs, bytecode, and manifests"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/tree/bin" "$tmpdir/tree/docs/site" "$tmpdir/tree/py/__pycache__"
+    printf 'a\n' > "$tmpdir/tree/bin/s"
+    printf 'b\n' > "$tmpdir/tree/docs/site/index.html"
+    printf 'c\n' > "$tmpdir/tree/py/__pycache__/m.pyc"
+    printf 'd\n' > "$tmpdir/tree/MANIFEST.sha256"
+    local out
+    out=$(upgrade_lib_hash_tree "$tmpdir/tree")
+    rm -rf "$tmpdir"
+    if [[ "$out" == *"bin/s" && "$out" != *"docs/site"* && "$out" != *"pycache"* \
+        && "$out" != *"MANIFEST.sha256"* ]]; then
+        test_pass
+    else
+        test_fail "exclusion filter leaked: $out"
+    fi
+}
+
+test_classify_tags() {
+    test_start "upgrade_lib_classify tags modified, added, and removed files"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    printf 'aaa  keep\nbbb  changed\nccc  gone\n' > "$tmpdir/base"
+    printf 'aaa  keep\nzzz  changed\nnew  added\n' > "$tmpdir/tree"
+    local out
+    out=$(upgrade_lib_classify "$tmpdir/tree" "$tmpdir/base" | sort | tr '\n' ' ')
+    rm -rf "$tmpdir"
+    if [[ "$out" == "ADD added DEL gone MOD changed " ]]; then
+        test_pass
+    else
+        test_fail "classification wrong: [$out]"
+    fi
+}
+
+test_json_string_parses_fields
+test_version_lt_ordering
+test_hash_tree_exclusions
+test_classify_tags
+
+# ------------------------------------------------------------------
+# Orchestrator behavior
+# ------------------------------------------------------------------
+test_no_active_version_dies() {
+    test_start "no active deployment dies with installer guidance"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    output=$("$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -ne 0 ]] || { failed=1; echo "    expected non-zero rc"; }
+    [[ "$output" == *"No active version is deployed"* ]] \
+        || { failed=1; echo "    missing guidance message"; }
+    [[ "$output" == *"install-single-node"* ]] || { failed=1; echo "    missing installer hint"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "no-active guard failed"; fi
+}
+
+test_up_to_date_exits_clean() {
+    test_start "matching latest release reports up to date and changes nothing"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.2.0 "$tmpdir"
+    output=$(printf 'n\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc"; }
+    [[ "$output" == *"Nothing to upgrade"* ]] \
+        || { failed=1; echo "    missing up-to-date message"; }
+    [[ -z "$(cat "$FAKE_DEPLOY_MARKER")" ]] || { failed=1; echo "    deploy-version must not run"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "up-to-date path changed something"; fi
+}
+
+test_newer_active_than_latest_blocks() {
+    test_start "active version newer than latest release is left alone"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_fake_release "$tmpdir" 0.3.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.3.0 "$tmpdir"
+    output=$(printf 'y\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc"; }
+    [[ "$output" == *"Nothing to upgrade"* ]] \
+        || { failed=1; echo "    missing up-to-date message"; }
+    [[ -z "$(cat "$FAKE_DEPLOY_MARKER")" ]] || { failed=1; echo "    deploy-version must not run"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "newer-active guard failed"; fi
+}
+
+test_curl_missing_is_fatal() {
+    test_start "missing curl dies with an install hint"
+    local tmpdir output rc b
+    _setup_upgrade_env tmpdir
+    mkdir -p "$tmpdir/nocurl"
+    for b in bash realpath dirname hostname; do
+        ln -s "$(command -v "$b")" "$tmpdir/nocurl/$b"
+    done
+    output=$(PATH="$tmpdir/nocurl" "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -ne 0 ]] || { failed=1; echo "    expected non-zero rc"; }
+    [[ "$output" == *"curl is required"* ]] || { failed=1; echo "    missing curl message"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "curl guard failed"; fi
+}
+
+test_unreachable_github_is_fatal() {
+    test_start "unreachable GitHub API dies cleanly"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    export ZFSUTILITIES_RELEASE_API="file://$tmpdir/gh/absent.json"
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir"
+    output=$("$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -ne 0 ]] || { failed=1; echo "    expected non-zero rc"; }
+    [[ "$output" == *"Cannot reach GitHub"* ]] || { failed=1; echo "    missing network message"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "github-unreachable guard failed"; fi
+}
+
+test_decline_at_deploy_prompt() {
+    test_start "declining the deploy prompt leaves every host untouched"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir"
+    printf 'DEPLOY_GROUP_prod="fakehost1"\n' > "$ZFSUTILITIES_SYSTEM_CONFIG_DIR/deploy.conf"
+    printf 'fakehost1 %s/remote-base\n' "$tmpdir" > "$tmpdir/hostmap"
+    _write_transport_shims "$tmpdir" "$tmpdir/hostmap"
+    _make_host_state "$tmpdir/remote-base" 0.1.0 "$tmpdir"
+
+    output=$(printf 'n\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc"; }
+    [[ "$output" == *"Aborted. Nothing was changed."* ]] \
+        || { failed=1; echo "    missing abort message"; }
+    [[ -z "$(cat "$FAKE_DEPLOY_MARKER")" ]] || { failed=1; echo "    deploy-version must not run"; }
+    [[ ! -d "$ZFSUTILITIES_VERSION_BASE/versions/0.2.0" ]] \
+        || { failed=1; echo "    new version dir must not exist"; }
+    [[ -z "$(cat "$FAKE_SWITCH_MARKER")" ]] || { failed=1; echo "    switch-version must not run"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "decline path touched something"; fi
+}
+
+test_happy_path_clean_tree() {
+    test_start "clean local tree upgrades, deploys, and activates"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir"
+
+    output=$(printf 'y\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc"; }
+    [[ "$output" == *"No local modifications"* ]] \
+        || { failed=1; echo "    missing clean-tree message"; }
+    [[ "$(cat "$FAKE_DEPLOY_MARKER")" == "deploy-version 0.2.0" ]] \
+        || { failed=1; echo "    deploy-version call wrong: $(cat "$FAKE_DEPLOY_MARKER")"; }
+    [[ -z "$(cat "$FAKE_SWITCH_MARKER")" ]] || { failed=1; echo "    nothing may be activated"; }
+    [[ ! -d "$ZFSUTILITIES_VERSION_BASE/salvaged-changes" ]] \
+        || { failed=1; echo "    no salvage expected on a clean tree"; }
+    [[ "$output" == *"upgrade-zfsutilities complete"* ]] \
+        || { failed=1; echo "    missing completion report"; }
+    [[ "$output" == *"NOT activated"* ]] \
+        || { failed=1; echo "    missing not-activated statement"; }
+    [[ "$output" == *"sudo switch-version 0.2.0"* ]] \
+        || { failed=1; echo "    missing local activation hint"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "clean-tree happy path failed"; fi
+}
+
+test_happy_path_with_local_changes() {
+    test_start "modified/added/removed files are diffed, salvaged, then superseded"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir"
+    local active_dir="$ZFSUTILITIES_VERSION_BASE/versions/0.1.0"
+    printf 'script-one release 0.1.0\n# local hotfix\n' > "$active_dir/bin/onescript"
+    printf 'brand new local script\n' > "$active_dir/bin/localfix"
+    rm "$active_dir/lib/helper.sh"
+
+    output=$(printf 'y\ny\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc"; }
+    [[ "$output" == *"modified:   bin/onescript"* ]] \
+        || { failed=1; echo "    modified file not listed"; }
+    [[ "$output" == *"added:      bin/localfix"* ]] \
+        || { failed=1; echo "    added file not listed"; }
+    [[ "$output" == *"removed:    lib/helper.sh"* ]] \
+        || { failed=1; echo "    removed file not listed"; }
+    [[ "$output" == *"+# local hotfix"* ]] || { failed=1; echo "    diff body not rendered"; }
+    [[ "$output" == *"+++ b/bin/onescript"* ]] || { failed=1; echo "    diff label missing"; }
+    _glob_exists "$ZFSUTILITIES_VERSION_BASE"/salvaged-changes/0.1.0/*/bin/onescript \
+        || { failed=1; echo "    modified file not salvaged"; }
+    _glob_exists "$ZFSUTILITIES_VERSION_BASE"/salvaged-changes/0.1.0/*/bin/localfix \
+        || { failed=1; echo "    added file not salvaged"; }
+    _glob_exists "$ZFSUTILITIES_VERSION_BASE"/salvaged-changes/0.1.0/*/README.txt \
+        || { failed=1; echo "    salvage README missing"; }
+    [[ -n "$(ls "$ZFSUTILITIES_VERSION_BASE"/salvaged-changes/changes-*.diff 2>/dev/null)" ]] \
+        || { failed=1; echo "    combined diff not saved"; }
+    [[ "$(cat "$FAKE_DEPLOY_MARKER")" == "deploy-version 0.2.0" ]] \
+        || { failed=1; echo "    deploy-version not called"; }
+    [[ -z "$(cat "$FAKE_SWITCH_MARKER")" ]] || { failed=1; echo "    nothing may be activated"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "local-changes happy path failed"; fi
+}
+
+test_decline_at_salvage_prompt() {
+    test_start "declining the salvage prompt aborts before any change"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir"
+    printf 'script-one release 0.1.0\n# local hotfix\n' \
+        > "$ZFSUTILITIES_VERSION_BASE/versions/0.1.0/bin/onescript"
+
+    output=$(printf 'y\nn\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc"; }
+    [[ "$output" == *"Aborted. Nothing was changed."* ]] \
+        || { failed=1; echo "    missing abort message"; }
+    [[ -z "$(cat "$FAKE_DEPLOY_MARKER")" ]] || { failed=1; echo "    deploy-version must not run"; }
+    [[ ! -d "$ZFSUTILITIES_VERSION_BASE/salvaged-changes" ]] \
+        || { failed=1; echo "    nothing may be salvaged after decline"; }
+    [[ "$(cat "$ZFSUTILITIES_VERSION_BASE/versions/0.1.0/bin/onescript" 2>/dev/null)" \
+        == *"local hotfix"* ]] \
+        || { failed=1; echo "    local edit must remain in place"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "salvage decline touched something"; fi
+}
+
+test_manifestless_tree_falls_back_to_tarball() {
+    test_start "legacy tree without manifest is verified against its release tarball"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir" 0
+    printf 'script-one release 0.1.0\n# local hotfix\n' \
+        > "$ZFSUTILITIES_VERSION_BASE/versions/0.1.0/bin/onescript"
+
+    output=$(printf 'y\ny\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc"; }
+    [[ "$output" == *"modified:   bin/onescript"* ]] \
+        || { failed=1; echo "    tarball baseline missed the modification"; }
+    [[ "$output" == *"+# local hotfix"* ]] \
+        || { failed=1; echo "    diff not rendered from tarball baseline"; }
+    _glob_exists "$ZFSUTILITIES_VERSION_BASE"/salvaged-changes/0.1.0/*/bin/onescript \
+        || { failed=1; echo "    salvage missing"; }
+    [[ "$(cat "$FAKE_DEPLOY_MARKER")" == "deploy-version 0.2.0" ]] \
+        || { failed=1; echo "    deploy-version not called"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "tarball-baseline fallback failed"; fi
+}
+
+test_untagged_version_detects_without_diff() {
+    test_start "untagged active version detects changes by manifest, diffs unavailable"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir"
+    # No 0.1.0 tarball staged: the template URL will miss it.
+    rm -f "$tmpdir/gh/tag-v0.1.0.tar.gz"
+    printf 'script-one release 0.1.0\n# local hotfix\n' \
+        > "$ZFSUTILITIES_VERSION_BASE/versions/0.1.0/bin/onescript"
+
+    output=$(printf 'y\ny\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc"; }
+    [[ "$output" == *"modified:   bin/onescript"* ]] \
+        || { failed=1; echo "    manifest detection failed"; }
+    [[ "$output" == *"Diff unavailable"* ]] \
+        || { failed=1; echo "    missing diff-unavailable statement"; }
+    _glob_exists "$ZFSUTILITIES_VERSION_BASE"/salvaged-changes/0.1.0/*/bin/onescript \
+        || { failed=1; echo "    salvage missing"; }
+    [[ "$(cat "$FAKE_DEPLOY_MARKER")" == "deploy-version 0.2.0" ]] \
+        || { failed=1; echo "    deploy-version not called"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "untagged detection failed"; fi
+}
+
+test_unverifiable_host_requires_consent_flow() {
+    test_start "no manifest and no tarball marks the host unverifiable but proceeds"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir" 0
+    rm -f "$tmpdir/gh/tag-v0.1.0.tar.gz"
+    printf 'script-one release 0.1.0\n# local hotfix\n' \
+        > "$ZFSUTILITIES_VERSION_BASE/versions/0.1.0/bin/onescript"
+
+    output=$(printf 'y\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc"; }
+    [[ "$output" == *"CANNOT be detected"* ]] \
+        || { failed=1; echo "    missing cannot-verify warning"; }
+    [[ ! -d "$ZFSUTILITIES_VERSION_BASE/salvaged-changes" ]] \
+        || { failed=1; echo "    nothing to salvage on an unverifiable host"; }
+    [[ "$(cat "$FAKE_DEPLOY_MARKER")" == "deploy-version 0.2.0" ]] \
+        || { failed=1; echo "    deploy-version not called"; }
+    [[ -z "$(cat "$FAKE_SWITCH_MARKER")" ]] || { failed=1; echo "    nothing may be activated"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "unverifiable-host flow failed"; fi
+}
+
+test_ssh_failure_aborts_before_changes() {
+    test_start "unreachable remote target aborts before anything changes"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir"
+    printf 'DEPLOY_GROUP_prod="fakehost1"\n' > "$ZFSUTILITIES_SYSTEM_CONFIG_DIR/deploy.conf"
+    printf 'fakehost1 FAIL\n' > "$tmpdir/hostmap"
+    _write_transport_shims "$tmpdir" "$tmpdir/hostmap"
+
+    output=$(printf 'y\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -ne 0 ]] || { failed=1; echo "    expected non-zero rc"; }
+    [[ "$output" == *"Cannot reach root@fakehost1"* ]] \
+        || { failed=1; echo "    missing ssh failure message"; }
+    [[ "$output" == *"Aborting before any changes"* ]] \
+        || { failed=1; echo "    missing abort statement"; }
+    [[ -z "$(cat "$FAKE_DEPLOY_MARKER")" ]] || { failed=1; echo "    deploy-version must not run"; }
+    [[ ! -d "$ZFSUTILITIES_VERSION_BASE/versions/0.2.0" ]] \
+        || { failed=1; echo "    no new version dir may exist"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "ssh-failure guard failed"; fi
+}
+
+test_multi_host_scan_salvage_and_hints() {
+    test_start "remote targets are scanned, salvaged on-host, and given activation hints"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.0.9
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir"
+
+    local rb1="$tmpdir/remote-h1" rb2="$tmpdir/remote-h2"
+    _make_host_state "$rb1" 0.1.0 "$tmpdir"
+    printf 'script-one release 0.1.0\n# remote hotfix\n' > "$rb1/versions/0.1.0/bin/onescript"
+    _make_host_state "$rb2" 0.0.9 "$tmpdir" 0   # legacy tree, tarball exists
+
+    printf 'DEPLOY_GROUP_prod="fakehost1 fakehost2"\n' \
+        > "$ZFSUTILITIES_SYSTEM_CONFIG_DIR/deploy.conf"
+    printf 'fakehost1 %s\nfakehost2 %s\n' "$rb1" "$rb2" > "$tmpdir/hostmap"
+    _write_transport_shims "$tmpdir" "$tmpdir/hostmap"
+
+    output=$(printf 'y\ny\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc"; }
+    [[ "$output" == *"fakehost1"*"modified:   bin/onescript"* ]] \
+        || { failed=1; echo "    remote modification not attributed to fakehost1"; }
+    [[ "$output" == *"+# remote hotfix"* ]] || { failed=1; echo "    remote diff not rendered"; }
+    [[ "$output" == *"fakehost2"*"No local modifications"* ]] \
+        || { failed=1; echo "    fakehost2 clean status missing"; }
+    _glob_exists "$rb1"/salvaged-changes/0.1.0/*/bin/onescript \
+        || { failed=1; echo "    remote salvage not on fakehost1's tree"; }
+    [[ "$(cat "$FAKE_DEPLOY_MARKER")" == "deploy-version 0.2.0" ]] \
+        || { failed=1; echo "    deploy-version not called"; }
+    [[ -z "$(cat "$FAKE_SWITCH_MARKER")" ]] || { failed=1; echo "    nothing may be activated"; }
+    [[ "$output" == *"ssh root@fakehost1 switch-version 0.2.0"* ]] \
+        || { failed=1; echo "    activation hint for fakehost1 missing"; }
+    [[ "$output" == *"ssh root@fakehost2 switch-version 0.2.0"* ]] \
+        || { failed=1; echo "    activation hint for fakehost2 missing"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "multi-host flow failed"; fi
+}
+
+test_no_active_version_dies
+test_up_to_date_exits_clean
+test_newer_active_than_latest_blocks
+test_curl_missing_is_fatal
+test_unreachable_github_is_fatal
+test_decline_at_deploy_prompt
+test_happy_path_clean_tree
+test_happy_path_with_local_changes
+test_decline_at_salvage_prompt
+test_manifestless_tree_falls_back_to_tarball
+test_untagged_version_detects_without_diff
+test_unverifiable_host_requires_consent_flow
+test_ssh_failure_aborts_before_changes
+test_two_node_node_conf_enumeration() {
+    test_start "modern node.conf drives enumeration when no deploy.conf exists"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir"
+
+    local rb1="$tmpdir/remote-h1"
+    _make_host_state "$rb1" 0.1.0 "$tmpdir"
+
+    # No deploy.conf: enumeration falls back to the node configuration,
+    # which install-two-node writes to the modern system config dir (the
+    # resolution fixed 2026-10-13 — it used to read only the legacy flat
+    # files and silently deploy single-node).
+    printf 'NODE_MODE="two-node"\nSTORAGE_HOST="fakehost1"\nCOMPUTE_HOST="fakehost2"\n' \
+        > "$ZFSUTILITIES_SYSTEM_CONFIG_DIR/node.conf"
+    printf 'fakehost1 %s\nfakehost2 %s\n' "$rb1" "$ZFSUTILITIES_VERSION_BASE" \
+        > "$tmpdir/hostmap"
+    _write_transport_shims "$tmpdir" "$tmpdir/hostmap"
+
+    output=$(printf 'y\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc; output tail: ${output: -300}"; }
+    [[ "$output" == *"fakehost1"*"No local modifications"* ]] \
+        || { failed=1; echo "    fakehost1 (storage) never scanned"; }
+    [[ "$output" == *"fakehost2"*"No local modifications"* ]] \
+        || { failed=1; echo "    fakehost2 (compute) never scanned"; }
+    [[ "$(cat "$FAKE_DEPLOY_MARKER")" == "deploy-version 0.2.0" ]] \
+        || { failed=1; echo "    deploy-version not called"; }
+    [[ "$output" == *"ssh root@fakehost1 switch-version 0.2.0"* ]] \
+        || { failed=1; echo "    storage-host activation hint missing"; }
+    [[ "$output" == *"ssh root@fakehost2 switch-version 0.2.0"* ]] \
+        || { failed=1; echo "    compute-host activation hint missing"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "node.conf enumeration failed"; fi
+}
+
+test_multi_host_scan_salvage_and_hints
+test_two_node_node_conf_enumeration
+
+test_summary
+teardown_test_env

@@ -63,14 +63,36 @@ def list_profiles():
     return profiles
 
 
+def _rename_legacy_rate_limit(variables):
+    """Rename the legacy pv_rate_limit key in a variables dict, in place.
+
+    Config migration v29 renames it in stored files; this is the in-memory
+    net for files it could not rewrite. A transfer_rate_limit already
+    present wins.
+    """
+    if isinstance(variables, dict) and "pv_rate_limit" in variables:
+        variables.setdefault("transfer_rate_limit", variables.pop("pv_rate_limit"))
+
+
 def load_profile(name):
-    """Load a single profile by name. Returns dict or None."""
+    """Load a single profile by name. Returns dict or None.
+
+    Normalizes the legacy rate-limit key (pv_rate_limit, renamed to
+    transfer_rate_limit by config migration v29) in memory, so a profile
+    file the migration could not rewrite still runs at its saved rate.
+    """
     path = os.path.join(get_profiles_dir(), f"{name}.json")
     try:
         with open(path) as f:
-            return json.load(f)
+            profile = json.load(f)
     except (json.JSONDecodeError, OSError):
         return None
+    cfg = profile.get("config", {})
+    if isinstance(cfg, dict):
+        _rename_legacy_rate_limit(cfg.get("variables", {}))
+        for section in ("backup", "offsite", "restore"):
+            _rename_legacy_rate_limit(cfg.get(section, {}).get("variables", {}))
+    return profile
 
 
 def save_profile(profile):

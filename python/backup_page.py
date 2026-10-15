@@ -57,7 +57,7 @@ ADVANCED_VARIABLES = [
     "dointermediates",
     "allow_destructive",
     "verify_after_transfer",
-    "pv_rate_limit",
+    "transfer_rate_limit",
 ]
 
 YN_VARIABLES = {
@@ -83,7 +83,7 @@ _BACKUP_TOPIC_MAP = {
     "dointermediates": "backup_dointermediates",
     "allow_destructive": "backup_allow_destructive",
     "verify_after_transfer": "backup_verify_after_transfer",
-    "pv_rate_limit": "backup_pv_rate_limit",
+    "transfer_rate_limit": "backup_transfer_rate_limit",
 }
 
 

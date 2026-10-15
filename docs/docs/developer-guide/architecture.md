@@ -63,7 +63,12 @@ lists, `zfs receive` progress, separator lines, etc.) is preserved alongside
 - In `profile_runner.py`, `_run_command()` prints subprocess output to stderr
   for display and appends it raw to the session log via `_write_raw_line()`.
   Python `log_msg` calls made by the runner itself (e.g. "Running profile:")
-  write to the file because `ZFSUTILITIES_LOG_FILE` is set.
+  write to the file because `ZFSUTILITIES_LOG_FILE` is set. That stderr
+  mirror carries `pv` progress lines to the GUI status bar for Run Now
+  launches; for cron launches the job line sets `ZFSUTILITIES_FROM_CRON=Y`,
+  and `_silence_cron_output()` fences the runner's own fds 1/2 onto
+  `/dev/null` once the session log exists, so the cron log receives only
+  pre-log failures (see the sequence diagram below for the full picture).
 
 After a run finishes, is cancelled, or aborts with rc=9, `BackupRunner` clears
 `_session_log_file` and `_session_start_time`. This lets the same runner
@@ -310,9 +315,10 @@ via symlinks. This allows instant rollback and co-existence of multiple versions
 /root/bashinit -> current/bin/bashinit              # tracks active version
 ```
 
-- **`deploy-version`** — copies the current repo into a new version directory without touching active production
+- **`deploy-version`** — copies the current repo into a new version directory without touching active production; records a `MANIFEST.sha256` of the installed files (the baseline `upgrade-zfsutilities` compares deployed trees against to detect local modifications)
 - **`switch-version <version>`** — wires a deployed version into active production and atomically repoints the `current` symlink
 - **`switch-version --uninstall`** — removes the production wiring installed by a version
+- **`upgrade-zfsutilities`** — self-upgrade: fetches the latest GitHub release, scans every deployment target for files modified since installation (diffs shown, approval required, changes archived under `salvaged-changes/`), then deploys via deploy-version and stops — activation is left to the operator
 - **`uninstall-version [-y|--yes] <version>`** — removes an old version directory; use `-y`/`--yes` to skip the confirmation prompt
 
 `bin/` and `lib/` live inside each `versions/<version>/` directory because every
@@ -426,6 +432,18 @@ sequenceDiagram
 1. **No duplicate lines** — Both bash and Python log output appear exactly once.
 2. **Raw output preserved** — `zfs receive` progress lines and separator lines are written to the session log even though they are not `log_msg` calls. `pv` rate output is captured for the GUI status bar but is not written to the session log.
 3. **Atomic finish** — The runner writes a `# END: rc=..., duration=...s` trailer after the subprocess terminates.
+
+For cron launches the job line additionally sets `ZFSUTILITIES_FROM_CRON=Y`.
+Right after `profile_runner.py` creates its session log,
+`_silence_cron_output()` rewrites the runner's own fds 1 and 2 onto
+`/dev/null`. Without the fence, the cron line's `2>&1 | stamper >> cron.log`
+redirection would capture the whole run — the stderr mirror above plus one
+forced `pv` line per second — duplicating the session log into the
+weekly-rotated cron log. With it, the cron log holds only failures from
+before the session log existed, and an unhandled runner crash is caught at
+the top of the run so its traceback and a failed trailer land in the session
+log rather than vanishing into the fenced streams. Run Now and manual
+terminal launches never set the marker and stream exactly as before.
 
 ### Progress parsing
 

@@ -817,7 +817,7 @@ class TestOffsiteAdvancedLabel(unittest.TestCase):
         op, app, expander = self._create_page()
         self._install_default_widgets(op, app)
         op.Gtk.ComboBoxText = _StatefulComboBoxText
-        op.load_offsite_config(app, {"variables": {"pv_rate_limit": "50M"}})
+        op.load_offsite_config(app, {"variables": {"transfer_rate_limit": "50M"}})
         self.assertIn('foreground="orange"', self._label_markup(expander))
 
 

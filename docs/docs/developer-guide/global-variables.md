@@ -64,7 +64,7 @@ and its wrappers ([`zfsdailybackup`](../commands-and-modules/commands.md#zfsdail
 | `$receive_s_option`             | Set to `'s'` to enable resumable receives (`zfs receive -s`)                                                                                                                                                                                                                                                           |
 | `$resumablethreshold`           | Size in bytes above which resumable receives are used. Default 50 GB                                                                                                                                                                                                                                                   |
 | `$maxcommsnapperiod`            | Maximum age (days) of an acceptable common snapshot. Default `130`                                                                                                                                                                                                                                                     |
-| `$pv_rate_limit`                | Maximum transfer rate passed to `pv -L` (e.g. `200M`, `1G`). Leave empty to disable rate limiting. In headless mode `pv` is used only for rate limiting (no progress display)                                                                                                                                          |
+| `$transfer_rate_limit`          | Maximum transfer rate enforced by the pacer `lib/pace_stream.py` (e.g. `200M`, `1G`). Leave empty to disable rate limiting. Headless runs pace with no `pv` in the pipeline at all                                                                                                                                          |
 | `$pvthreshold`                  | Size in bytes above which `pv` progress display is used. Default 300 MB                                                                                                                                                                                                                                                |
 | `$space_check_min_buffer`       | Minimum destination free-space buffer (bytes) required before a send. Default 1 GiB; set to `0` for small test pools                                                                                                                                                                                             |
 
@@ -81,9 +81,10 @@ reading a policy via `zfsconfig_get_retention`:
 
 ## Node Configuration
 
-Sourced from `/etc/zfsutilities/node.conf` (falling back to
-`/etc/zfsutilities/two-node.conf`, then legacy `/etc/zfsutilities-node.conf` /
-`/etc/two-node.conf`) by `node-lib.sh` and the repo-root scripts. The uppercase
+Sourced from `/etc/zfsutilities/node.conf` (falling back to legacy
+`/etc/zfsutilities-node.conf`, then `/etc/two-node.conf`) by `node-lib.sh`
+and the repo-root scripts — the same modern-first order
+`upgrade_lib_legacy_hosts` uses for deployment-target enumeration. The uppercase
 names below are the ones that appear in the config file. After sourcing,
 `node-lib.sh` exposes lowercase working copies — `node_mode`, `this_host`,
 `storage_host`, `compute_host`, `storage_ip`, `iqn_prefix`,

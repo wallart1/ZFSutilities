@@ -3688,3 +3688,258 @@ own changes. All steps executed in sequence; full suite green at the end.
   to the same exempt class. Behavioral-suite expectations stay on shared
   modules and safety-critical infrastructure. PREEXISTING.md now 2 entries
   (Zensical wait, infra-vdev deferral).
+
+## 2026-10-13 — cron.log firehose under scheduled runs (diagnosis, no code changed)
+
+- User report: cron.log on the Logs page fills with every message plus every
+  1-second pv status update while a scheduled daily-backup profile runs on
+  stewie.
+- Mechanism confirmed: cron line pipes the WHOLE run's stderr through the awk
+  stamper into cron.log (cron_manager.generate_cron_line); profile_runner
+  mirrors every captured engine line to its own stderr unconditionally
+  (_run_command print(line, file=sys.stderr)); LOG_INHERIT=Y forces pv on
+  (-fpterb, transfer-lib transfer_pv_args) at ~1 line/sec. The session log and
+  the GUI log panel both filter pv lines via _PV_RATE_RE — cron.log is the
+  only unfiltered consumer in the system.
+- Documented purpose of cron.log (profiles.md, cron_manager header): pre-
+  session-log failures only; the Logs-page cron.log row itself is intended
+  (0.122.0 lifecycle work).
+- Fix not yet requested; candidate directions noted in conversation.
+
+## 2026-10-13 — transfer pacing rebuilt on a forfeit-window pacer (pace_stream.py)
+
+- Trigger: user reported unarchive-vm's `pv -L 100M` "completely ineffective"
+  (htop consistently >200 MB/s) during the live vm-205 disk-3 restore.
+- Live diagnosis on stewie (read-only): the stream's long-run average held
+  ~92 MiB/s (≤ cap) but 15s windows swung 85→148 MiB/s. pv -L enforces only
+  a long-run average with unbounded deficit catch-up: after every downstream
+  stall (ZFS txg flush / dirty-data throttle, HDD variance) it bursts to
+  1.5–3.5× cap (measured: pv's own display 115–149 MiB/s sustained under
+  100M; a controlled 4s stall produced 352 MiB/s). htop's aggregate disk
+  columns amplify perception (mirror-pair double counting, other pools,
+  txg-burst write cadence on the destination).
+- Tool evaluation before building: cstream -t has the same cumulative
+  semantics (stall test caught up on both pv and cstream); the `throttle`
+  package (user suggestion) verified EXCELLENT with `-w 2` (flat, forfeits
+  stalls, rc 141) but is not in Ubuntu/Mint repos — deployment cost
+  (build-from-source per host) rejected. User chose the in-repo python
+  helper; also approved full rename pv_rate_limit → transfer_rate_limit
+  (config migration v28→v29 rewrites the GUI variables key in config.json
+  AND saved profile files; load_profile has an in-memory rename net).
+- lib/pace_stream.py: deadline pacing per chunk (chunk = rate/25 clamped
+  64KiB–16MiB), deficit >2 chunk budgets forfeited (a stall extends the
+  transfer, never buys a burst), SIGPIPE rc 141, grammar = archive_valid_rate.
+  Verified: flat 99–101 MiB/s at 100M; 4s stall → total +4s, post-stall
+  refresh 103 MiB/s max; byte-identical passthrough.
+- Engine/transfer split: archive-engine.sh (copy reader, pace_pipe, hash
+  read-back) resolves the pacer beside itself via BASH_SOURCE (repo,
+  deployed, and two-node ssh payload layouts); a paced run with an
+  unresolvable pacer FATALs. transfer-lib.sh keeps pv for progress only;
+  rate → `send | pacer | pv | receive` (pv shows the paced rate), headless
+  rate → `send | pacer | receive`.
+- check-prerequisites: python3 moved into core (engine dependency on
+  headless storage hosts). Canonical shellcheck command now `lib/*.sh`
+  (pace_stream.py is python; installed shellcheck 0.9.0 ignored
+  exclude-path for it).
+- Docs: pacing narrative across commands/modules/two-node/user guides/
+  messages-manual/README states the flat-cap semantics and that per-refresh
+  disk rates still oscillate from ZFS txg batching (expected, not a leak).
+- Incident during verification (disclosed): one ad hoc check ran the pacer
+  on /dev/zero with stdout into a task log (~3.8GB before kill); log
+  deleted, no repo impact. All subsequent verification commands are
+  timeout-wrapped (user instruction), and the new test suite uses
+  subprocess timeouts.
+- Suites: six bash suites updated (pv mocks → guarded python3 pacer mocks
+  that pass non-pacer python3 through to the real interpreter — the JSON
+  config readers must not be captured); new tests/python/test_pace_stream.py
+  (grammar matrix, injectable-clock forfeit arithmetic, CLI forms, SIGPIPE);
+  guard test: no pv -L / pv_rate_limit remains in bin|lib; migration tests
+  28→29; goldens regenerated. Full bash suite + full pytest green.
+- Uncommitted by design (Hard Rules): no VERSION bump, no changelog, no
+  commit.
+
+## 2026-10-13 — cron.log firehose fix (implemented, uncommitted)
+
+- Approved plan executed: cron job lines now launch the runner with
+  ZFSUTILITIES_FROM_CRON=Y (cron_manager.generate_cron_line); the runner
+  fences its own fds 1/2 onto /dev/null right after creating the session
+  log (profile_runner._silence_cron_output), so cron.log keeps only
+  pre-session-log failures — no message duplication, no 1/sec pv lines.
+  GUI Run Now / manual runs (no marker) stream unchanged; failed session-
+  log creation keeps full cron.log output as the fallback record.
+- Crash backstop added: main()'s with-ctx body restructured into one
+  try/except/finally; unhandled exceptions now write the traceback plus a
+  rc=1 trailer into the session log before exit 1 (previously an unhandled
+  crash left no trailer anywhere; under the fence it would have vanished).
+- Tests: 3 new cron-line marker assertions (plain, condition, written
+  file), TestCronOutputSilencing (subprocess from-cron run silent +
+  manual-run over-silencing guard), TestCrashRecording (in-process main()
+  crash → session log FATAL + trailer, exit 1). All red-proofed first.
+- Affected suites green (cron_manager, profile_runner, profile_runner_
+  concurrency, schedule_page — 220 passed). ruff format/check clean.
+- Docs: profiles.md lifecycle paragraph, python-modules.md (cron_manager
+  job-line + profile_runner internal flow/key functions), architecture.md
+  (mirror bullet + single-writer section), modules.md env-var row, messages
+  index row for the crash FATAL, gtk-gui.md cron-row content note; mkdocs
+  site rebuilt (known mkdocs-2.0 WARNING, tracked in PREEXISTING).
+- Full run: test-unarchive-vm Test 22 failed once ("scsi3 not rewritten to
+  the nvme1 target LUN 0") — passes standalone 24/24 immediately after;
+  bash subsystem untouched by this change; recorded in PREEXISTING.md as
+  a full-run-only flake. Everything else green. /tmp mock-state litter
+  from the run cleaned itself; zfsu-tn-green*.log / zfsu-fullsuite.log /
+  zfsu-node-conf-test.conf in /tmp are hand-named artifacts not created
+  by suite code — left alone.
+
+## 2026-10-13 — unarchive-vm two-node Step-2/Step-3 repair (vm-205 live incident)
+
+- Incident: `unarchive-vm 205` on tweety restored all three zvols (verified)
+  then FATALed "Cannot map pool NVME1 to target" / "iSCSI reconstruction
+  failed on stewie". Root cause: the Step-2 payload mapped pool→IQN with an
+  inline python `exec()` of the node conf AS PYTHON; node confs are bash
+  (`declare -A POOL_TARGET=(...)`) → SyntaxError swallowed into a generic
+  FATAL (reproduced offline, SyntaxError at the declare line). Present since
+  the 0.122.0 engine rework; first restore to reach Step 2 since (suite ran
+  single-node only, Step 2 is two-node-only). Secondary defects in the same
+  snippet: ignored node-lib's conf resolution order (only tried legacy
+  /etc/zfsutilities-node.conf) and NODE_CONF is not forwarded by on_storage.
+- Fix: Step-2 payload now uses node-lib's `pool_to_target` — inherited from
+  the orchestrator on local runs, sourced from the storage host's deployed
+  tree over ssh (`declare -f pool_to_target || source_helper node-lib.sh`).
+  Stewie (0.124.1) already provides it; only the orchestrator copy needs
+  redeploy. A second latent bug found by the new test: the Step-3 iSCSI
+  disk-line matcher `*"ip-"[0-9.]":3260-...` — the char class matches ONE
+  character, so a dotted-quad IP (`ip-192.168.100.1`) never matched; every
+  by-path line was kept unrewritten (wrong LUNs). Fixed to `*"ip-"*":3260-...`
+  (list-vm-disks convention). The writer format (attach-vm-disk:
+  `/dev/disk/by-path/ip-<ip>:3260-iscsi-<iqn>:<target>-lun-<n>,format=raw,...`)
+  is the authority.
+- Tests: new `test_two_node_step2_maps_pools_and_rewrites_luns` — bash-format
+  two-node node conf, both hosts on the stub hostname so payloads take local
+  branches, ssh mock answering the raw storage-host probes (zfs list/get
+  mountpoint/cat/grep, unknown → loud failure), stateful targetcli mock,
+  stub bin dir (bashinit/archive-engine symlinks, zfslockmanager,
+  safe-iscsi-save, rescan-storage), two disks across two pools mirroring
+  vm-205. Red-proofed both bugs (Step-2 FATAL reproduced exactly; Step-3
+  kept original LUN lines). Suite 24/24; test-node-lib and test-attach-vm-disk
+  green; shellcheck clean.
+- The "flaky Test 22" PREEXISTING entry from the concurrent cron.log session
+  was this test observed mid-edit (red between the two fixes, green before
+  and after); removed from PREEXISTING.md as explained, not reproducible as
+  a flake.
+- Docs: messages index (WARN "Unknown pool" row; "Cannot map pool" row now
+  names pool_to_target + preceding WARN), two-node.md unarchive-vm flow step
+  7 (mapping source = node config POOL_TARGET via pool_to_target, storage-host
+  resolution), testing.md suite row extended.
+- Recovery for vm-205 (user): deploy fixed unarchive-vm to tweety (stewie
+  unchanged), re-run `sudo unarchive-vm 205` — all three zvols skip via
+  RESTORED_AS markers (no recopy; Step 2 died before any targetcli call, so
+  no partial iSCSI state to clean), then Steps 2–5 complete.
+
+## 2026-10-13 — upgrade-zfsutilities (self-upgrade with change preservation)
+
+- New `bin/upgrade-zfsutilities`: GitHub latest-release check (curl, env
+  overridable), version compare, staged tarball download, per-target change
+  scan (modified/added/removed with unified diffs against the pristine
+  release), two consent gates, salvage to `salvaged-changes/<old>/<ts>/` on
+  each host, then runs `deploy-version` from the staged tree (copies to all
+  deploy-group hosts through shared ssh masters) and `switch-version`
+  locally. Remote activation printed, not executed. ssh password prompts
+  handled by one ControlMaster per host (`ZFSUTILITIES_SSH_CONTROL_PATH`
+  template honored by deploy-version's `_sync_to_host`, which no longer
+  closes a socket it does not own).
+- New `lib/upgrade-lib.sh` (bashinit-free, sourceable or pipable over ssh):
+  hash-walk with exclusion set (docs/site, __pycache__, *.pyc, .nfs*,
+  MANIFEST*), manifest write/parse, MOD/ADD/DEL classify, pristine tarball
+  fetch/extract, deploy-target enumeration (deploy.conf modern → legacy
+  flat; node.conf legacy fallback — mirrors deploy-version exactly),
+  `__scan`/`__salvage` remote drivers.
+- deploy-version: sources the shared lib; manifest written at end of
+  deploy_to_host (WARN on failure); enumeration via shared helpers with
+  byte-identical log output; rootcheck behind `DEPLOY_VERSION_TEST_NO_ROOT`
+  hatch (uninstall-version pattern) so the suite can execute it for real.
+  New env knob `ZFSUTILITIES_LEGACY_DEPLOY_CONF` (paths.sh's LEGACY_NODE_CONF
+  precedent) to suppress the real legacy conf in tests.
+- Tests: `tests/test-upgrade-zfsutilities` (18 tests) — file:// fake GitHub,
+  ssh/rsync PATH shims that re-execute the real piped lib against per-host
+  fake version bases (transport-only mocking), prompt feeding via stdin;
+  covers up-to-date, both declines, happy paths clean + changed, tarball
+  fallback, untagged no-diff, unverifiable consent, ssh-failure abort,
+  multi-host with different active versions. `tests/test-deploy-version`
+  extended to 30: the two F-012 source-pin tests replaced by execution
+  tests (real deploy-version run non-root through the hatch; remote sync
+  through an ssh shim that records the shared ControlPath and execs
+  `rsync --server` locally), plus shared-helper units and a real manifest
+  write/verify. Found + fixed during red: MANIFEST.sha256.tmp leaking into
+  its own manifest (now excluded).
+- PREEXISTING.md +2: deploy-version's broken `$mydir/bashfatal` FATAL path
+  (bashfatal lives in bin/); install-two-node writes node.conf to the modern
+  system-config dir while deploy-version reads only the legacy flat file
+  (F-012-class drift, masked when deploy.conf exists).
+- Docs: README "Versioned Upgrades" and installation "How to Upgrade"
+  rewritten around the upgrade command (manual flow kept for dev checkouts;
+  explicit warning against installing over deployed code); commands.md
+  `upgrade-zfsutilities` section + Jump to; modules.md `upgrade-lib.sh`
+  entry; messages index catalogue block; architecture.md Versioned
+  Deployment bullets. test_docs_integrity 23/23.
+- User revision (same day): upgrade-zfsutilities must NOT activate anything.
+  The switch-version invocation was removed; the script stops after
+  deploy-version and prints the activation command for every host ("this
+  host: sudo switch-version <v>", "<host>: ssh root@<host> switch-version
+  <v>"). Final report now states "Deployed version: X — NOT activated" and
+  the unchanged active version; the rollback hint is gone (nothing to roll
+  back). Tests flipped to assert switch-version is never executed; docs
+  (commands, messages, README, installation, architecture) reworded.
+
+## Wrap-up cycle 2026-10-13 (steps 1-7, pre-version)
+- Step 1 (PREEXISTING resolved, 3): date-dependent
+  test_refresh_updates_next_run_in_place — root cause was the
+  _NEXT_RUN_CACHE keyed on the live minute bypassing the
+  next_run_times mock (an earlier unpatched call in the same process
+  minute poisons it); fixed by cache-clears at the two exact-string
+  sites + a TZ pin in TestRefreshSchedulePage.setUp. deploy-version's
+  "$mydir/bashfatal" → "$mydir/bin/bashfatal" (regression test runs the
+  real script through the hatch with a failing mkdocs stub; red-proofed).
+  node.conf drift: upgrade_lib_legacy_hosts now resolves modern
+  system-config node.conf first (node-lib order, NODE_MODE:-two-node
+  back-compat, single-node only when no conf exists); two unit tests +
+  an end-to-end upgrade test enumerating from node.conf with no
+  deploy.conf; deploy-version header comment updated.
+- Step 2 (standards): ruff + documented shellcheck clean tree-wide.
+  upgrade-zfsutilities rootcheck moved behind its hatch (deploy-version
+  pattern; duplicate EUID gate dropped, fake-rootcheck scaffolding
+  removed from the suite); SC2206 disable explained; upgrade_lib_classify
+  emits path-sorted (deterministic reports/salvage order) with an
+  empty-key-set guard; upgrade_lib_json_string regex profusely
+  documented; 100-column policy enforced across ALL changed bash files
+  (the fake-bashinit printf chain became a quoted heredoc; fixture
+  literals wrapped with in-quote backslash continuation, byte-identical).
+  REAL fix found by review: pool_migrate_dialogs/_zfs_repository rate
+  validators still used the narrow pv-era regex grammar AND described it
+  as "pv -L" — replaced by shared valid_rate_limit() in zfs_repository
+  (string-ops grammar identical to pace_stream/archive_valid_rate; GUI
+  can no longer refuse a value the pacer accepts). PREEXISTING +1: the
+  set -euo pipefail vs set -e convention split (13 scripts, ~9.7k lines;
+  migration recorded as a dedicated-session campaign — mock suites
+  cannot fence the -u/pipefail failure classes).
+- Step 3 (tests): +missing-pacer FATAL coverage in test-transfer-lib
+  (pace-args empty + transfer_do refuses to run unlimited) and
+  test-archive-vm (archive_pace_pipe unit). FIXED A RACE in
+  test_transfer_do_with_pacer_and_pv_when_inherit: it asserted pipeline
+  child STARTUP order, which bash does not guarantee (pv's marker
+  landed before the pacer's ~1-in-6 runs under load); pv's mock now
+  drains stdin before recording, making the marker order reflect data
+  flow (12/12 stable). +load_profile legacy-key normalization test;
+  +TestValidRateLimit; dialog accept/reject pins widened to the pacer
+  grammar. Bash function-override gotcha: `unset -f` on a SOURCED
+  library function deletes it (no PATH fallback) — save/restore with
+  `declare -f`.
+- Step 4: remaining entries are decisions/campaigns (Zensical 1.x wait,
+  infra-vdev deferral, strict-mode campaign); Zensical rechecked 0.0.70.
+- Step 5 (docs): messages index rows for the pacer-missing FATAL
+  (send-receive + archive sections); testing.md rows (new
+  test-upgrade-zfsutilities row; deploy-version row refreshed to the
+  execution era; archive/transfer rows extended); python-modules
+  valid_rate_limit row; gtk-gui Migrate bandwidth paragraph states the
+  pacer grammar; deploy-version commands.md rows say modern node.conf
+  first; global-variables node-conf fallback order corrected to match
+  node-lib (doc had two-node.conf before zfsutilities-node.conf).

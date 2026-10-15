@@ -171,9 +171,9 @@ def build_restore_command(
         adv += "excludes=(); "
 
     verify_after_transfer = v.get("verify_after_transfer", "Y").strip() or "Y"
-    pv_rate_limit = v.get("pv_rate_limit", "").strip()
+    transfer_rate_limit = v.get("transfer_rate_limit", "").strip()
     adv += f'verify_after_transfer="{verify_after_transfer}"; '
-    adv += f'pv_rate_limit="{pv_rate_limit}"; '
+    adv += f'transfer_rate_limit="{transfer_rate_limit}"; '
 
     # Post-restore helper: ensure VM disk zvols are exported as iSCSI LUNs.
     ensure_func = (

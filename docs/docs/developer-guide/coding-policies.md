@@ -447,12 +447,13 @@ intentional patterns:
   (e.g. by name from a sourced helper or heredoc).
 
 Run ShellCheck from the repository root on the bash modules and tests
-(`bin/watchall` is a Python script and is excluded by `.shellcheckrc`):
+(`bin/watchall` and `lib/pace_stream.py` are Python scripts; the `find`
+excludes watchall, and `lib/*.sh` keeps the pacer out of the glob):
 
 ```bash
 shellcheck -S warning \
     $(find bin -maxdepth 1 -type f ! -name watchall) \
-    lib/* tests/test-* tests/integration/* \
+    lib/*.sh tests/test-* tests/integration/* \
     tests/integrated/itf tests/integrated/lib/*.sh \
     tests/integrated/journeys/*.journey
 ```

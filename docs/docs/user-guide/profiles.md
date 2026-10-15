@@ -43,7 +43,13 @@ from sending duplicate-run email spam.  Cron stdout/stderr for every
 scheduled profile is piped through a timestamp stamper into
 `/var/log/zfsutilities/cron.log` (each line is prefixed with its write time)
 so that errors occurring before the profile creates its own log remain
-visible.  The log is rotated weekly by logrotate with compressed, non-root-
+visible.  Once the session log exists it is the run's record: cron job lines
+launch the runner with `ZFSUTILITIES_FROM_CRON=Y`, and the runner silences
+its own output streams from that point on, so the cron log holds only the
+pre-log failures (a failed session-log creation keeps full output there as
+the fallback record).  An unhandled runner crash is recorded in the session
+log — traceback plus a failed trailer — instead of the silenced streams.
+The cron log is rotated weekly by logrotate with compressed, non-root-
 readable generations, and it — plus every rotated copy — is listed on the
 GUI's **Logs** tab.
 

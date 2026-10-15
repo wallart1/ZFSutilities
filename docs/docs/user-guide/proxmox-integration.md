@@ -581,7 +581,7 @@ finish the removal, and exits non-zero.
 Both `archive-vm` and `unarchive-vm` can be run on either node — storage-side
 work executes on the storage host and compute-side work on the compute host,
 with no round-trip bounce. Each run prompts for a transfer rate limit (a
-`pv` value such as `100M`; empty means unlimited, and the answer becomes the
+rate value such as `100M`; empty means unlimited, and the answer becomes the
 saved default), so archiving or restoring a large disk cannot starve the
 storage host's other workloads. Re-running either script is safe: archive
 disks that already passed verification are skipped, an interrupted run's

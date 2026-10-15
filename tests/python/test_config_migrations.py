@@ -181,8 +181,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_28(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 28)
+    def test_config_version_is_29(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 29)
 
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
@@ -408,6 +408,85 @@ class TestIndividualMigrations(unittest.TestCase):
         result1 = config_migrations._migrate_27_to_28(dict(config))
         result2 = config_migrations._migrate_27_to_28(result1)
         self.assertEqual(result1, result2)
+
+    def test_migrate_28_to_29_renames_rate_limit_in_config_sections(self):
+        config = {
+            "config_version": 28,
+            "backup": {"variables": {"pv_rate_limit": "100M", "label": "x"}},
+            "offsite": {"variables": {}},
+            "restore": {"variables": {"pv_rate_limit": ""}},
+        }
+        result = config_migrations._migrate_28_to_29(config)
+        self.assertEqual(result["backup"]["variables"]["transfer_rate_limit"], "100M")
+        self.assertNotIn("pv_rate_limit", result["backup"]["variables"])
+        self.assertEqual(result["backup"]["variables"]["label"], "x")
+        self.assertNotIn("pv_rate_limit", result["restore"]["variables"])
+        self.assertEqual(result["config_version"], 29)
+
+    def test_migrate_28_to_29_new_value_wins_over_legacy(self):
+        config = {
+            "config_version": 28,
+            "backup": {
+                "variables": {
+                    "pv_rate_limit": "100M",
+                    "transfer_rate_limit": "200M",
+                }
+            },
+        }
+        result = config_migrations._migrate_28_to_29(config)
+        self.assertEqual(result["backup"]["variables"]["transfer_rate_limit"], "200M")
+
+    def test_migrate_28_to_29_rewrites_profile_files(self):
+        import json
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as state_dir:
+            os.environ["ZFSUTILITIES_STATE_DIR"] = state_dir
+            try:
+                profiles = os.path.join(state_dir, "profiles")
+                os.makedirs(profiles)
+                # One profile with the legacy key (single-tab shape), one
+                # already migrated, one with no rate key at all.
+                legacy = {
+                    "profile_name": "root-backup-old",
+                    "config": {"variables": {"pv_rate_limit": "75m"}},
+                }
+                modern = {
+                    "profile_name": "root-backup-new",
+                    "config": {"variables": {"transfer_rate_limit": "75m"}},
+                }
+                untouched = {
+                    "profile_name": "root-retention-none",
+                    "config": {"variables": {"label": "daily"}},
+                }
+                for profile in (legacy, modern, untouched):
+                    with open(
+                        os.path.join(profiles, profile["profile_name"] + ".json"),
+                        "w",
+                    ) as handle:
+                        json.dump(profile, handle)
+
+                result = config_migrations._migrate_28_to_29({"config_version": 28})
+
+                with open(os.path.join(profiles, "root-backup-old.json")) as handle:
+                    rewritten = json.load(handle)
+                self.assertEqual(
+                    rewritten["config"]["variables"]["transfer_rate_limit"],
+                    "75m",
+                )
+                self.assertNotIn("pv_rate_limit", rewritten["config"]["variables"])
+                with open(os.path.join(profiles, "root-backup-new.json")) as handle:
+                    kept = json.load(handle)
+                self.assertEqual(kept["config"]["variables"]["transfer_rate_limit"], "75m")
+            finally:
+                os.environ.pop("ZFSUTILITIES_STATE_DIR", None)
+        self.assertEqual(result["config_version"], 29)
+
+    def test_migrate_28_to_29_survives_unwritable_state_dir(self):
+        # An unresolvable profiles directory must not break the migration.
+        result = config_migrations._migrate_28_to_29({"config_version": 28})
+        self.assertEqual(result["config_version"], 29)
 
     def test_migrate_15_to_16_adds_prune_pools_order(self):
         config = {"config_version": 15}
@@ -656,7 +735,7 @@ class TestRunMigrations(unittest.TestCase):
             "offsite": {"offsite_pools": ["z40tb"]},
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 28)
+        self.assertEqual(result["config_version"], config_migrations.CONFIG_VERSION)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))
         self.assertEqual(result["dashboard"]["refresh_seconds"], 30)
         # The v27 migration seeds the file-paths section through the whole
@@ -694,7 +773,7 @@ class TestRunMigrations(unittest.TestCase):
             },
         }
         result = config_migrations.run_migrations(config)
-        self.assertEqual(result["config_version"], 28)
+        self.assertEqual(result["config_version"], config_migrations.CONFIG_VERSION)
         self.assertIn("retention_verb_messages", result)
         self.assertIs(result["retention_verb_messages"], False)
         self.assertNotIn("offsite_pools", result.get("offsite", {}))

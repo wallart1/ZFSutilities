@@ -35,6 +35,7 @@ from zfs_repository import (
     build_release_holds_command,
     build_replace_command,
     is_dataset_encrypted,
+    valid_rate_limit,
     zvol_device_path,
 )
 
@@ -1105,6 +1106,25 @@ class TestBuildMigrationSendReceiveFromSnap(unittest.TestCase):
                 build_migration_send_receive_command(
                     "temp/proxmox", "temp_mig/proxmox", "migrate-x-cutover", from_snap=bad
                 )
+
+    def test_invalid_rate_limit_rejected_by_pacer_grammar(self):
+        for bad in ("fast", "10x", "1.5m", "-5m", "100 mb", "100KiBx"):
+            with self.assertRaises(ValueError):
+                build_migration_send_receive_command(
+                    "temp/proxmox", "temp_mig/proxmox", "migrate-x-cutover", rate_limit=bad
+                )
+
+
+class TestValidRateLimit(unittest.TestCase):
+    """valid_rate_limit mirrors the grammar lib/pace_stream.py parses."""
+
+    def test_accepts_pacer_grammar(self):
+        for text in ("", "100", "100k", "25M", "2g", "1T", "1P", "64KiB", "100mib", "3Tb"):
+            self.assertTrue(valid_rate_limit(text), text)
+
+    def test_rejects_non_grammar(self):
+        for text in ("abc", "10x", "1.5m", "-5m", "100 mb", "100KiBx", "k", "i"):
+            self.assertFalse(valid_rate_limit(text), text)
 
 
 class TestRunPoolCommand(unittest.TestCase):

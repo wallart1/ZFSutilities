@@ -38,7 +38,8 @@
 #     $receive_s_option       Set to 's' to enable resumable receives (-s).
 #     $resumablethreshold     Bytes above which receives are made resumable. Default 50 GB.
 #     $pvthreshold            Bytes above which pv progress display is used. Default 300 MB.
-#     $pv_rate_limit          Rate limit passed to pv -L (e.g. '200M'); empty = unlimited.
+#     $transfer_rate_limit    Rate limit enforced by lib/pace_stream.py
+#                             (e.g. '200M'); empty = unlimited.
 #
 # Global variables set for callers/children:
 #     $fsarray                Selected source datasets (from buildfsarray).
@@ -435,7 +436,7 @@ function send-receive {
     [[ $receive_s_option != 's' ]] && receive_s_option=''
     [[ $resumablethreshold = '' ]] && resumablethreshold=$(( 50 * 1000 * 1000 * 1000))
     [[ $pvthreshold = '' ]] && pvthreshold=$(( 300 * 1000 * 1000 ))
-    [[ $pv_rate_limit = '' ]] && pv_rate_limit=''
+    [[ $transfer_rate_limit = '' ]] && transfer_rate_limit=''
     [[ $dryrun = '' ]] && dryrun='N'
 
     [[ $overrides != '' ]] && overrides "$overrides"

@@ -824,6 +824,9 @@ class TestNextRunStrings(unittest.TestCase):
     @patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN])
     def test_next_run_strings_formats_datetime(self, _mock_next):
         schedule_page = self._import_schedule_page()
+        # An earlier unpatched call in the same minute may have cached the
+        # real-clock result under the same key; clear so the mock is used.
+        schedule_page._NEXT_RUN_CACHE.clear()
         display, sort_str = schedule_page._next_run_strings({})
         self.assertEqual(display, "Sun Jun 15 2025 10:00")
         self.assertEqual(sort_str, "2025-06-15 10:00")
@@ -1519,6 +1522,21 @@ class TestRefreshSchedulePage(unittest.TestCase):
     COL_NEXT_RUN = 5
     COL_NEXT_RUN_SORT = 6
 
+    def setUp(self):
+        # Pin the local zone: the Next Run decoration compares the UTC date
+        # with the local date, so exact-string assertions must not depend on
+        # the host zone.
+        self._orig_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "America/New_York"
+        time.tzset()
+
+    def tearDown(self):
+        if self._orig_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self._orig_tz
+        time.tzset()
+
     def _import_schedule_page(self):
         with mock_gtk():
             import schedule_page
@@ -1548,6 +1566,11 @@ class TestRefreshSchedulePage(unittest.TestCase):
     @patch("schedule_page.set_button_markup_red")
     def test_refresh_updates_next_run_in_place(self, _mock_red, mock_load, _mock_next, _mock_log):
         schedule_page = self._import_schedule_page()
+        # An earlier unpatched refresh in the same process/minute may have
+        # cached the real-clock strings under the same key, which would
+        # bypass the next_run_times mock (the 2026-10-13 full-suite
+        # date-dependent failure); clear so the mock is used.
+        schedule_page._NEXT_RUN_CACHE.clear()
         rows = [[True, "p1", "backup", "* * * * *", "", "old run", ""]]
         app = self._make_app(rows)
         profile = {

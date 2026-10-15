@@ -1,0 +1,574 @@
+#!/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# upgrade-zfsutilities
+# Upgrades the deployed ZFSutilities installation to the latest GitHub
+# release, or reports that it is up to date.
+#
+# Before anything is replaced, every host the release will be deployed to
+# (this host plus every host in the deployment groups deploy-version syncs
+# to) is scanned for files that were modified, added, or removed since
+# their version was installed. The changes are listed — modified files
+# with unified diffs against the original release — and the upgrade
+# proceeds only with explicit approval. Approved changes are archived on
+# their host under salvaged-changes/ before being superseded, so nothing
+# is ever destroyed by an upgrade.
+#
+# The upgrade ends by running deploy-version from the downloaded release
+# tree, so the new version is automatically copied to every deployment
+# target, and stops there. Nothing is activated: the running system is
+# untouched until the operator runs switch-version. The exact activation
+# command is printed for every host, including this one.
+#
+# Remote targets require root SSH access. Password authentication is
+# fine: ssh prompts for passwords itself, and every connection in the
+# upgrade (scan, file fetch, salvage, deploy-version's sync) multiplexes
+# through one control master per host — one password prompt per host.
+
+set -e
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+if [[ ${UPGRADE_ZFSUTILITIES_TEST_NO_ROOT:-0} != "1" ]]; then
+    source_helper rootcheck
+    rootcheck
+fi
+source_helper upgrade-lib.sh || die "upgrade-lib.sh not found next to this script"
+
+# die is provided by bashinit (sourced above).
+
+mydir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
+my_host=$(hostname -s)
+
+usage() {
+    log_msg "INFO: Usage: upgrade-zfsutilities [-h|--help]"
+    log_msg "INFO:"
+    log_msg "INFO: Checks GitHub for the latest ZFSutilities release. When it is newer"
+    log_msg "INFO: than the active deployed version, downloads it, scans every deployment"
+    log_msg "INFO: target for locally modified files (listing the changes and asking for"
+    log_msg "INFO: approval before touching anything), then deploys the new version via"
+    log_msg "INFO: deploy-version and stops. Nothing is activated automatically."
+    log_msg "INFO:"
+    log_msg "INFO: Environment overrides: ZFSUTILITIES_VERSION_BASE,"
+    log_msg "INFO: ZFSUTILITIES_REMOTE_VERSION_BASE, ZFSUTILITIES_RELEASE_API,"
+    log_msg "INFO: ZFSUTILITIES_TAG_TARBALL_URL, ZFSUTILITIES_SYSTEM_CONFIG_DIR."
+    exit 0
+}
+
+for arg in "$@"; do
+    if [[ "$arg" == "--help" || "$arg" == "-h" ]]; then
+        usage
+    fi
+done
+[[ $# -eq 0 ]] || die "upgrade-zfsutilities takes no arguments (run: sudo upgrade-zfsutilities)"
+
+load_upgrade_config() {
+    local github_api="https://api.github.com/repos/wallart1/ZFSutilities/releases/latest"
+    local github_home="https://github.com/wallart1/ZFSutilities"
+    version_base="${ZFSUTILITIES_VERSION_BASE:-/usr/local/lib/zfsutilities}"
+    remote_version_base="${ZFSUTILITIES_REMOTE_VERSION_BASE:-/usr/local/lib/zfsutilities}"
+    release_api="${ZFSUTILITIES_RELEASE_API:-$github_api}"
+    release_home="${ZFSUTILITIES_RELEASE_HOME:-$github_home}"
+}
+
+require_command() {
+    command -v "$1" &>/dev/null || die "$1 is required but not installed."
+}
+
+# Per-host scan state. The local host is stored under the sentinel key
+# "LOCAL"; remote hosts under their hostname.
+declare -A host_active=()
+declare -A host_verifiable=()   # ok | no-active | no-baseline
+declare -A host_mod=()          # newline-joined relative paths
+declare -A host_add=()
+declare -A host_del=()
+declare -A pristine_root_of=()  # version -> extracted release root, or MISSING
+declare -A upgrade_ssh_ctrl=()  # host -> control socket path
+targets=()                      # remote deployment targets (hostnames)
+staging=""
+latest_version=""
+upgrade_lib_file=""
+
+host_label() {
+    if [[ "$1" == "LOCAL" ]]; then
+        printf '%s (this host)' "$my_host"
+    else
+        printf '%s' "$1"
+    fi
+}
+
+upgrade_cleanup() {
+    local host
+    for host in "${!upgrade_ssh_ctrl[@]}"; do
+        [[ -n "$host" ]] || continue
+        ssh -o ControlPath="${upgrade_ssh_ctrl[$host]}" -O exit "root@$host" 2>/dev/null || true
+    done
+    [[ -n "$staging" ]] && rm -rf "$staging"
+    return 0
+}
+if declare -F append_exit_trap >/dev/null 2>&1; then
+    append_exit_trap upgrade_cleanup
+else
+    trap upgrade_cleanup EXIT
+fi
+
+# ------------------------------------------------------------------
+# Remote transport (all through one control master per host)
+# ------------------------------------------------------------------
+open_ssh_master() {
+    local host="$1"
+    upgrade_ssh_ctrl["$host"]=$(printf '%s/ssh-%s.sock' "$staging" "$host")
+    ssh -o ControlMaster=auto -o ControlPath="${upgrade_ssh_ctrl[$host]}" \
+        -o ControlPersist=1800 -o ConnectTimeout=15 "root@$host" true
+}
+
+remote_ssh() {
+    local host="$1"
+    shift
+    ssh -o ControlMaster=auto -o ControlPath="${upgrade_ssh_ctrl[$host]}" \
+        -o ControlPersist=1800 "root@$host" "$@"
+}
+
+remote_pull_files() {
+    # Pull specific files from a host's active tree for diff rendering.
+    local host="$1" version="$2" list_file="$3" dest="$4"
+    local rsh_cmd="ssh -o ControlMaster=auto -o ControlPersist=1800"
+    rsh_cmd+=" -o ControlPath=${upgrade_ssh_ctrl[$host]}"
+    mkdir -p "$dest"
+    rsync -a --files-from="$list_file" \
+        -e "$rsh_cmd" \
+        "root@$host:$remote_version_base/versions/$version/" "$dest/"
+}
+
+# ------------------------------------------------------------------
+# Deployment-target enumeration (same resolution deploy-version uses)
+# ------------------------------------------------------------------
+enumerate_remote_targets() {
+    local -a hosts=()
+    local conf gname ghost host
+    conf=$(upgrade_lib_resolve_deploy_conf)
+    if [[ -n "$conf" ]]; then
+        # shellcheck source=/dev/null
+        source "$conf"
+        while IFS=$'\t' read -r gname ghost; do
+            # deploy.conf group values are space-separated host lists —
+            # intentional word splitting.
+            # shellcheck disable=SC2206
+            for host in ${ghost}; do
+                hosts+=("$host")
+            done
+        done < <(upgrade_lib_group_lines)
+    else
+        local -a legacy=()
+        mapfile -t legacy < <(upgrade_lib_legacy_hosts)
+        if [[ "${legacy[0]:-}" == "two-node" ]]; then
+            [[ -n "${legacy[1]:-}" ]] && hosts+=("${legacy[1]}")
+            [[ -n "${legacy[2]:-}" ]] && hosts+=("${legacy[2]}")
+        fi
+    fi
+    local -A seen=()
+    for host in "${hosts[@]}"; do
+        [[ -n "$host" ]] || continue
+        [[ "$host" == "$my_host" ]] && continue
+        [[ -n "${seen[$host]:-}" ]] && continue
+        seen["$host"]=1
+        printf '%s\n' "$host"
+    done
+}
+
+# ------------------------------------------------------------------
+# Pristine release cache (for baselines and diffs)
+# ------------------------------------------------------------------
+ensure_pristine_root() {
+    local version="$1"
+    if [[ -z "${pristine_root_of[$version]:-}" ]]; then
+        local url tb root
+        url=$(upgrade_lib_default_tarball_url "$version")
+        tb="$staging/pristine-$version.tar.gz"
+        if upgrade_lib_http_get "$url" "$tb" 2>/dev/null \
+            && root=$(upgrade_lib_extract_tarball "$tb" "$staging/pristine-$version"); then
+            pristine_root_of["$version"]="$root"
+        else
+            pristine_root_of["$version"]="MISSING"
+        fi
+    fi
+    [[ "${pristine_root_of[$version]}" != "MISSING" ]]
+}
+
+# ------------------------------------------------------------------
+# Per-host scan and classification
+# ------------------------------------------------------------------
+scan_active=""
+scan_manifest_lines=""
+scan_tree_lines=""
+
+parse_scan_output() {
+    scan_active=""
+    scan_manifest_lines=""
+    scan_tree_lines=""
+    local line tag rest
+    while IFS= read -r line; do
+        tag=${line%% *}
+        rest=${line#* }
+        case "$tag" in
+            ACTIVE)
+                if [[ "$rest" != "NONE" ]]; then
+                    scan_active="$rest"
+                fi
+                ;;
+            MLINE) scan_manifest_lines+="$rest"$'\n' ;;
+            FILE) scan_tree_lines+="$rest"$'\n' ;;
+        esac
+    done < "$1"
+}
+
+process_host() {
+    local host="$1"
+    local scan_file="$staging/scan-${host//\//_}.txt"
+    if [[ "$host" == "LOCAL" ]]; then
+        upgrade_lib_scan_output "$version_base" > "$scan_file"
+    else
+        remote_ssh "$host" bash -s -- __scan "$remote_version_base" \
+            < "$upgrade_lib_file" > "$scan_file" \
+            || die "Scan failed on $(host_label "$host") — aborting before any changes."
+    fi
+    parse_scan_output "$scan_file"
+    host_active["$host"]="$scan_active"
+
+    if [[ -z "$scan_active" ]]; then
+        host_verifiable["$host"]="no-active"
+        host_mod["$host"]=""
+        host_add["$host"]=""
+        host_del["$host"]=""
+        return 0
+    fi
+
+    local tree_file="$staging/tree-$host.lines"
+    printf '%s' "$scan_tree_lines" > "$tree_file"
+    local baseline_file="$staging/base-$host.lines"
+    local -a class_out=()
+
+    if [[ -n "$scan_manifest_lines" ]]; then
+        printf '%s' "$scan_manifest_lines" > "$baseline_file"
+        mapfile -t class_out < <(upgrade_lib_classify "$tree_file" "$baseline_file")
+    elif ensure_pristine_root "$scan_active"; then
+        upgrade_lib_repo_hashes "${pristine_root_of[$scan_active]}" > "$baseline_file"
+        mapfile -t class_out < <(upgrade_lib_classify "$tree_file" "$baseline_file")
+    else
+        host_verifiable["$host"]="no-baseline"
+        host_mod["$host"]=""
+        host_add["$host"]=""
+        host_del["$host"]=""
+        return 0
+    fi
+    host_verifiable["$host"]="ok"
+
+    local tag p mods="" adds="" dels=""
+    for p in "${class_out[@]}"; do
+        tag=${p%% *}
+        p=${p#* }
+        case "$tag" in
+            MOD) mods+="$p"$'\n' ;;
+            ADD) adds+="$p"$'\n' ;;
+            DEL) dels+="$p"$'\n' ;;
+        esac
+    done
+    host_mod["$host"]="$mods"
+    host_add["$host"]="$adds"
+    host_del["$host"]="$dels"
+}
+
+# ------------------------------------------------------------------
+# Reporting with diffs (before anything is modified)
+# ------------------------------------------------------------------
+render_host_report() {
+    local host="$1"
+    local label active mods adds dels p
+    label=$(host_label "$host")
+    active="${host_active[$host]:-}"
+    mods="${host_mod[$host]:-}"
+    adds="${host_add[$host]:-}"
+    dels="${host_del[$host]:-}"
+
+    log_msg "INFO: --- $label ---"
+    case "${host_verifiable[$host]:-}" in
+        no-active)
+            log_msg "INFO:   No active version deployed — nothing to check."
+            return 0
+            ;;
+        no-baseline)
+            log_msg "WARN:   Active version $active has no MANIFEST.sha256 and no release"
+            log_msg "WARN:   tarball is available for it — local modifications on $label"
+            log_msg "WARN:   CANNOT be detected."
+            return 0
+            ;;
+    esac
+
+    if [[ -z "$mods$adds$dels" ]]; then
+        log_msg "INFO:   No local modifications (active version $active)."
+        return 0
+    fi
+
+    log_msg "INFO:   Local modifications found (active version $active):"
+    while IFS= read -r p; do
+        [[ -n "$p" ]] && log_msg "INFO:     modified:   $p"
+    done <<< "$mods"
+    while IFS= read -r p; do
+        [[ -n "$p" ]] && log_msg "INFO:     added:      $p"
+    done <<< "$adds"
+    while IFS= read -r p; do
+        [[ -n "$p" ]] && log_msg "INFO:     removed:    $p"
+    done <<< "$dels"
+
+    # Unified diffs of modified files against the original release
+    local pristine=""
+    if ensure_pristine_root "$active"; then
+        pristine="${pristine_root_of[$active]}"
+    fi
+    if [[ -n "$mods" && -z "$pristine" ]]; then
+        log_msg "WARN:   Diff unavailable: no pristine source for version $active"
+        log_msg "WARN:   (untagged release?) — modification hashes only."
+    fi
+    [[ -z "$pristine" ]] && return 0
+
+    local live_dir
+    if [[ "$host" == "LOCAL" ]]; then
+        live_dir="$version_base/versions/$active"
+    else
+        local pull_list="$staging/pull-$host.list"
+        printf '%s%s' "$mods" "$adds" > "$pull_list"
+        live_dir="$staging/live-$host"
+        if ! remote_pull_files "$host" "$active" "$pull_list" "$live_dir"; then
+            log_msg "WARN:   Could not fetch the changed files from $label for diffing —"
+            log_msg "WARN:   listing only."
+            return 0
+        fi
+    fi
+
+    printf '\n===== %s — modified files (vs release %s) =====\n' "$label" "$active" \
+        | tee -a "$staging/changes.diff"
+    while IFS= read -r p; do
+        [[ -n "$p" ]] || continue
+        { diff -u --label "a/$p (release $active)" --label "b/$p ($label)" \
+            "$pristine/$p" "$live_dir/$p" || true; } | tee -a "$staging/changes.diff"
+    done <<< "$mods"
+    if [[ -n "$adds" ]]; then
+        printf '\n===== %s — added files =====\n' "$label" | tee -a "$staging/changes.diff"
+        while IFS= read -r p; do
+            [[ -n "$p" ]] || continue
+            { diff -u --label /dev/null --label "b/$p (added on $label)" \
+                /dev/null "$live_dir/$p" || true; } | tee -a "$staging/changes.diff"
+        done <<< "$adds"
+    fi
+    if [[ -n "$dels" ]]; then
+        printf '\n===== %s — removed files =====\n' "$label" | tee -a "$staging/changes.diff"
+        while IFS= read -r p; do
+            [[ -n "$p" ]] || continue
+            printf -- '--- %s (present in release %s, missing on %s)\n' "$p" "$active" "$label" \
+                | tee -a "$staging/changes.diff"
+        done <<< "$dels"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Salvage
+# ------------------------------------------------------------------
+salvage_all() {
+    local ts="$1"
+    local host out
+    for host in LOCAL "${targets[@]}"; do
+        local -a files=()
+        local p
+        while IFS= read -r p; do
+            [[ -n "$p" ]] && files+=("$p")
+        done <<< "${host_mod[$host]:-}"
+        while IFS= read -r p; do
+            [[ -n "$p" ]] && files+=("$p")
+        done <<< "${host_add[$host]:-}"
+        (( ${#files[@]} > 0 )) || continue
+        local label ver
+        label=$(host_label "$host")
+        ver="${host_active[$host]}"
+        if [[ "$host" == "LOCAL" ]]; then
+            out=$(upgrade_lib_salvage_files "$version_base" "$ver" "$ts" \
+                "$latest_version" "${files[@]}") \
+                || die "Salvage failed on $label — aborting before deployment."
+        else
+            out=$(remote_ssh "$host" bash -s -- __salvage "$remote_version_base" \
+                "$ver" "$ts" "$latest_version" "${files[@]}" < "$upgrade_lib_file") \
+                || die "Salvage failed on $label — aborting before deployment."
+        fi
+        log_msg "INFO:   Salvaged on $label: ${out#SALVAGED } file(s) -> salvaged-changes/$ver/$ts/"
+    done
+    # Keep the combined diff with the local archive for later re-application
+    mkdir -p "$version_base/salvaged-changes"
+    install -m 0644 "$staging/changes.diff" "$version_base/salvaged-changes/changes-$ts.diff"
+    log_msg "INFO:   Combined diff saved: $version_base/salvaged-changes/changes-$ts.diff"
+}
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+upgrade_main() {
+    load_upgrade_config
+    require_command curl
+
+    local active_version
+    active_version=$(upgrade_lib_active_version "$version_base")
+    if [[ -z "$active_version" ]]; then
+        die "No active version is deployed under $version_base." \
+            "Install first with install-single-node or install-two-node."
+    fi
+
+    staging=$(mktemp -d)
+    upgrade_lib_file=$(find_zfsutility_script upgrade-lib.sh)
+    if [[ -z "$upgrade_lib_file" || ! -f "$upgrade_lib_file" ]]; then
+        die "upgrade-lib.sh not found next to this script."
+    fi
+
+    # --- Latest release from GitHub ---
+    local latest_json="$staging/latest.json" curl_rc=0
+    upgrade_lib_http_get "$release_api" "$latest_json" || curl_rc=$?
+    if (( curl_rc == 22 )); then
+        die "GitHub returned an HTTP error for $release_api." \
+            "No releases published yet?"
+    elif (( curl_rc != 0 )); then
+        die "Cannot reach GitHub ($release_api). Check network connectivity."
+    fi
+
+    local latest_tag release_url new_tarball_url
+    latest_tag=$(upgrade_lib_json_string "$latest_json" tag_name)
+    if [[ -z "$latest_tag" ]]; then
+        die "GitHub response is missing tag_name — cannot identify the latest release."
+    fi
+    latest_version=${latest_tag#v}
+    release_url=$(upgrade_lib_json_string "$latest_json" html_url)
+    if [[ -z "$release_url" ]]; then
+        release_url="$release_home/releases/tag/$latest_tag"
+    fi
+    new_tarball_url=$(upgrade_lib_json_string "$latest_json" tarball_url)
+    if [[ -z "$new_tarball_url" ]]; then
+        new_tarball_url=$(upgrade_lib_default_tarball_url "$latest_version")
+    fi
+
+    log_msg "INFO: === upgrade-zfsutilities ==="
+    log_msg "INFO:   Active version:  $active_version"
+    log_msg "INFO:   Latest release:  $latest_version"
+
+    if ! upgrade_lib_version_lt "$active_version" "$latest_version"; then
+        log_msg "INFO: Nothing to upgrade — the active version is not older than the"
+        log_msg "INFO: latest release."
+        return 0
+    fi
+
+    log_msg "INFO:   Release notes:   $release_url"
+    if ! ask_yn "Download $latest_version and deploy it to every deployment target?"; then
+        log_msg "INFO: Aborted. Nothing was changed."
+        return 0
+    fi
+
+    # --- Download and stage the release ---
+    local release_tb="$staging/release.tar.gz"
+    log_msg "INFO: Downloading $latest_tag ..."
+    upgrade_lib_http_get "$new_tarball_url" "$release_tb" \
+        || die "Download failed: $new_tarball_url"
+    local staging_root
+    staging_root=$(upgrade_lib_extract_tarball "$release_tb" "$staging/src") \
+        || die "Could not extract the downloaded release tarball."
+    if [[ ! -d "$staging_root/bin" || ! -d "$staging_root/lib" \
+        || ! -d "$staging_root/python" ]]; then
+        die "The downloaded release is not a ZFSutilities tree (missing bin/, lib/, python/)."
+    fi
+    local staged_version
+    staged_version=$(cat "$staging_root/VERSION" 2>/dev/null || true)
+    if [[ "$staged_version" != "$latest_version" ]]; then
+        log_msg "WARN:   Downloaded tree VERSION (${staged_version:-none}) does not match"
+        log_msg "WARN:   release tag $latest_tag"
+    fi
+
+    # --- Enumerate deployment targets and open one SSH master per host ---
+    mapfile -t targets < <(enumerate_remote_targets)
+    if (( ${#targets[@]} > 0 )); then
+        require_command ssh
+        require_command rsync
+    fi
+    local host
+    for host in "${targets[@]}"; do
+        if ! open_ssh_master "$host"; then
+            die "Cannot reach root@$host over SSH. Aborting before any changes." \
+                "Fix access to $host and re-run."
+        fi
+    done
+
+    # --- Scan every target for local modifications ---
+    log_msg "INFO: Scanning deployment targets for files modified since installation..."
+    process_host LOCAL
+    for host in "${targets[@]}"; do
+        process_host "$host"
+    done
+
+    # --- Report everything before touching anything ---
+    : > "$staging/changes.diff"
+    render_host_report LOCAL
+    for host in "${targets[@]}"; do
+        render_host_report "$host"
+    done
+
+    local any_changes=0 any_unverifiable=0
+    for host in LOCAL "${targets[@]}"; do
+        if [[ -n "${host_mod[$host]}${host_add[$host]}${host_del[$host]}" ]]; then
+            any_changes=1
+        fi
+        if [[ "${host_verifiable[$host]}" == "no-baseline" ]]; then
+            any_unverifiable=1
+        fi
+    done
+    if (( any_unverifiable )); then
+        for host in LOCAL "${targets[@]}"; do
+            if [[ "${host_verifiable[$host]}" == "no-baseline" ]]; then
+                log_msg "WARN:   $(host_label "$host"): local modifications cannot be verified."
+            fi
+        done
+    fi
+
+    if (( any_changes )); then
+        local archive_prompt
+        archive_prompt="Archive the changes listed above on their hosts and continue the upgrade?"
+        if ! ask_yn "$archive_prompt"; then
+            log_msg "INFO: Aborted. Nothing was changed."
+            return 0
+        fi
+        salvage_all "$(date -u +%Y%m%d-%H%M%S)"
+    fi
+
+    # --- Deploy: copy the new version to every deployment target ---
+    # Share the SSH control masters with deploy-version so its syncs do
+    # not prompt for passwords again.
+    export ZFSUTILITIES_SSH_CONTROL_PATH="$staging/ssh-%s.sock"
+    log_msg "INFO: Deploying $latest_version via deploy-version (this host + deploy groups)..."
+    "$staging_root/bin/deploy-version" "$latest_version" \
+        || die "deploy-version failed. The deployment is incomplete —" \
+            "investigate before activating anything."
+
+    # Nothing is activated. Print the exact command for every host.
+    log_msg "INFO: === upgrade-zfsutilities complete ==="
+    log_msg "INFO:   Deployed version:  $latest_version — NOT activated"
+    log_msg "INFO:   Active version:    $active_version (unchanged on this host)"
+    if (( any_changes )); then
+        log_msg "INFO:   Local modifications were archived under salvaged-changes/ on each"
+        log_msg "INFO:   affected host. Re-apply any change you still want, then re-deploy."
+    fi
+    log_msg "INFO:   Activate when ready:"
+    log_msg "INFO:     this host:  sudo switch-version $latest_version"
+    for host in "${targets[@]}"; do
+        log_msg "INFO:     $host:  ssh root@$host switch-version $latest_version"
+    done
+}
+
+upgrade_main "$@"

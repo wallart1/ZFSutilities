@@ -312,11 +312,11 @@ test_do_transfer_normal_includes_snapshot() {
 }
 
 # ---------------------------------------------------------------------------
-# Test do_transfer runs pv -q in headless mode with a rate limit
+# Test do_transfer runs the pacer (not pv) in headless mode with a rate limit
 # ---------------------------------------------------------------------------
 
-test_do_transfer_pv_quiet_in_headless_rate_limit() {
-    test_start "do_transfer runs pv -q in headless mode with a rate limit"
+test_do_transfer_pacer_in_headless_rate_limit() {
+    test_start "do_transfer runs the pacer instead of pv in headless mode with a rate"
 
     reset_mocks
     set_msg_level FATAL
@@ -325,14 +325,17 @@ test_do_transfer_pv_quiet_in_headless_rate_limit() {
     nextsnap="@snap-d"
     destfs="pool/dest"
     restorefs="/data"
-    pv_rate_limit="50M"
+    transfer_rate_limit="50M"
 
     local pv_capture="$_mock_zfs_state_dir/pv_args"
+    local pace_capture="$_mock_zfs_state_dir/pace_args"
     : > "$pv_capture"
+    : > "$pace_capture"
 
-    local saved_zfs saved_pv
+    local saved_zfs saved_pv saved_python3
     saved_zfs=$(declare -f zfs)
     saved_pv=$(declare -f pv 2>/dev/null || true)
+    saved_python3=$(declare -f python3 2>/dev/null || true)
     zfs() {
         if [[ "$1" == "send" ]]; then
             return 0
@@ -341,6 +344,14 @@ test_do_transfer_pv_quiet_in_headless_rate_limit() {
     }
     pv() {
         echo "$*" >> "$pv_capture"
+        cat
+    }
+    python3() {
+        if [[ "${1:-}" != *pace_stream.py ]]; then
+            command python3 "$@"
+            return $?
+        fi
+        echo "${*:2}" >> "$pace_capture"
         cat
     }
 
@@ -355,13 +366,19 @@ test_do_transfer_pv_quiet_in_headless_rate_limit() {
     else
         unset -f pv 2>/dev/null || true
     fi
+    if [[ -n "$saved_python3" ]]; then
+        eval "$saved_python3"
+    else
+        unset -f python3 2>/dev/null || true
+    fi
 
-    local pv_args
+    local pv_args pace_args
     pv_args=$(cat "$pv_capture" 2>/dev/null)
-    if [[ "$pv_args" == *"-q"* && "$pv_args" == *"-L 50M"* ]]; then
+    pace_args=$(cat "$pace_capture" 2>/dev/null)
+    if [[ -z "$pv_args" && "$pace_args" == *"50M" ]]; then
         test_pass
     else
-        test_fail "Expected pv args to contain '-q' and '-L 50M', got '$pv_args'"
+        test_fail "Expected pacer at 50M and no pv, got pv='$pv_args' pace='$pace_args'"
     fi
 }
 
@@ -379,7 +396,7 @@ test_do_transfer_pv_suppressed_headless_no_rate_limit() {
     nextsnap="@snap-d"
     destfs="pool/dest"
     restorefs="/data"
-    pv_rate_limit=""
+    transfer_rate_limit=""
 
     local pv_capture="$_mock_zfs_state_dir/pv_args2"
     : > "$pv_capture"
@@ -433,7 +450,7 @@ test_do_transfer_forces_pv_when_log_inherit() {
     nextsnap="@snap-d"
     destfs="pool/dest"
     restorefs="/data"
-    pv_rate_limit=""
+    transfer_rate_limit=""
 
     local pv_capture="$_mock_zfs_state_dir/pv_args3"
     : > "$pv_capture"
@@ -1701,7 +1718,7 @@ test_autoproceed_n_prompts_once
 test_do_transfer_dryrun
 test_do_transfer_resume_omits_snapshot
 test_do_transfer_normal_includes_snapshot
-test_do_transfer_pv_quiet_in_headless_rate_limit
+test_do_transfer_pacer_in_headless_rate_limit
 test_do_transfer_pv_suppressed_headless_no_rate_limit
 test_do_transfer_forces_pv_when_log_inherit
 test_check_space_passes

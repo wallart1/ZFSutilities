@@ -12,8 +12,9 @@
 # (see DEPLOY_GROUP_* variables below) — the location install-two-node
 # writes. The legacy flat /etc/zfsutilities-deploy.conf is honored as a
 # fallback so pre-existing deployments keep working. If neither file
-# exists, the script falls back to the legacy two-node node-config
-# behaviour.
+# exists, the script falls back to the node configuration (the modern
+# node.conf, then the legacy flat files — resolved by upgrade-lib.sh the
+# way node-lib.sh resolves it).
 
 set -e
 
@@ -26,8 +27,11 @@ fi
 bashinit
 unset _local_bashinit
 
-source_helper rootcheck
-rootcheck
+if [[ ${DEPLOY_VERSION_TEST_NO_ROOT:-0} != "1" ]]; then
+    source_helper rootcheck
+    rootcheck
+fi
+source_helper upgrade-lib.sh
 
 mydir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.." && pwd)
 
@@ -74,7 +78,8 @@ usage() {
 
 # die is provided by bashinit (sourced above).
 
-[[ $EUID -eq 0 ]] || die "Must run as root (use sudo)"
+[[ $EUID -eq 0 || ${DEPLOY_VERSION_TEST_NO_ROOT:-0} == "1" ]] || \
+    die "Must run as root (use sudo)"
 
 # Guard: must be run from the repo root, not a deployed path
 if [[ ! -d "$mydir/bin" || ! -d "$mydir/lib" ]]; then
@@ -112,10 +117,14 @@ version_dir="$version_base/versions/$version"
 # left remote_hosts empty on fresh two-node installs — deploy-version
 # synced nothing and the installer's compute-side activation ran
 # switch-version on a tree that was never copied.
-deploy_conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/deploy.conf"
-if [[ ! -f "$deploy_conf" && -f /etc/zfsutilities-deploy.conf ]]; then
-    log_msg "INFO: No $deploy_conf; using legacy /etc/zfsutilities-deploy.conf"
-    deploy_conf="/etc/zfsutilities-deploy.conf"
+deploy_conf=$(upgrade_lib_resolve_deploy_conf)
+if [[ -z "$deploy_conf" ]]; then
+    # Neither location exists; keep the modern path so later checks and
+    # messages refer to the canonical location.
+    deploy_conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/deploy.conf"
+elif [[ "$deploy_conf" == "/etc/zfsutilities-deploy.conf" ]]; then
+    log_msg "INFO: No ${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/deploy.conf;" \
+        "using legacy /etc/zfsutilities-deploy.conf"
 fi
 deploy_group_names=()
 deploy_group_hosts=()
@@ -125,25 +134,20 @@ if [[ -f "$deploy_conf" ]]; then
     source "$deploy_conf"
     # Collect all defined DEPLOY_GROUP_* variables (internal tracking arrays
     # are lowercase and never match the uppercase prefix).
-    for var in ${!DEPLOY_GROUP_*}; do
-        deploy_group_names+=("${var#DEPLOY_GROUP_}")
-        deploy_group_hosts+=("${!var}")
-    done
+    while IFS=$'\t' read -r _dv_group _dv_hosts; do
+        deploy_group_names+=("$_dv_group")
+        deploy_group_hosts+=("$_dv_hosts")
+    done < <(upgrade_lib_group_lines)
 fi
 
 # ------------------------------------------------------------------
 # Load node configuration (legacy fallback)
 # ------------------------------------------------------------------
-NODE_MODE="single-node"
-STORAGE_HOST=""
-COMPUTE_HOST=""
-
-if [[ -f /etc/zfsutilities-node.conf ]]; then
-    source /etc/zfsutilities-node.conf
-elif [[ -f /etc/two-node.conf ]]; then
-    source /etc/two-node.conf
-    NODE_MODE="two-node"
-fi
+mapfile -t _dv_legacy < <(upgrade_lib_legacy_hosts)
+NODE_MODE="${_dv_legacy[0]:-single-node}"
+STORAGE_HOST="${_dv_legacy[1]:-}"
+COMPUTE_HOST="${_dv_legacy[2]:-}"
+unset _dv_legacy
 
 my_host=$(hostname -s)
 
@@ -227,12 +231,12 @@ deploy_to_host() {
     # Rebuild static documentation site so it is version-correct
     if ! command -v mkdocs &>/dev/null; then
         log_msg "FATAL: mkdocs is not installed. Cannot build documentation."
-        source "$mydir/bashfatal" 1
+        source "$mydir/bin/bashfatal" 1
     fi
     if [[ -f "$version_dir/docs/mkdocs.yml" ]]; then
         if ! (cd "$version_dir/docs" && mkdocs build >/dev/null 2>&1); then
             log_msg "FATAL: Documentation build failed."
-            source "$mydir/bashfatal" 1
+            source "$mydir/bin/bashfatal" 1
         fi
     fi
 
@@ -244,6 +248,13 @@ deploy_to_host() {
 
     # Verify critical scripts were copied
     validate_critical_scripts
+
+    # Record the pristine state of this deployment so upgrade-zfsutilities
+    # can detect later local modifications against it.
+    if ! upgrade_lib_write_manifest "$version_dir"; then
+        log_msg "WARN:   MANIFEST.sha256 could not be written; upgrade change detection" \
+            "will fall back to release-tarball comparison"
+    fi
 
     log_msg "INFO:   ✓ $host_label complete"
 }
@@ -258,13 +269,19 @@ _sync_to_host() {
     [[ "$my_host" == "$host" ]] && return
 
     log_msg "INFO: Syncing to $host..."
-    local ssh_ctrl="/tmp/.deploy-version-ssh-${host}-$$"
+    local ssh_ctrl
+    ssh_ctrl=$(upgrade_lib_ssh_control_path "$host" "$$")
     local ssh_opts=(-o ControlMaster=auto -o ControlPath="${ssh_ctrl}" -o ControlPersist=60)
 
     ssh "${ssh_opts[@]}" root@"$host" "mkdir -p '$version_dir'"
     rsync -az --delete -e "ssh ${ssh_opts[*]}" "$version_dir/" "root@$host:$version_dir/"
-    ssh -O exit -o ControlPath="$ssh_ctrl" root@"$host" 2>/dev/null || true
-    rm -f "$ssh_ctrl"
+    if [[ -z "${ZFSUTILITIES_SSH_CONTROL_PATH:-}" ]]; then
+        # This invocation owns the control socket; close it. When a caller
+        # (upgrade-zfsutilities) supplied the shared socket via
+        # ZFSUTILITIES_SSH_CONTROL_PATH, the owner closes it instead.
+        ssh -O exit -o ControlPath="${ssh_ctrl}" root@"$host" 2>/dev/null || true
+        rm -f "$ssh_ctrl"
+    fi
     log_msg "INFO:   ✓ $host files synced (run switch-version on $host to activate)"
 }
 

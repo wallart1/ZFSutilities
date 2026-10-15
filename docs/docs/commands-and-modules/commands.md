@@ -34,6 +34,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`uninstall-zfsutilities`](#uninstall-zfsutilities)
 - [`unarchive-vm`](#unarchive-vm)
 - [`unroot`](#unroot)
+- [`upgrade-zfsutilities`](#upgrade-zfsutilities)
 - [`watchall`](#watchall)
 - [`watchit`](#watchit)
 - [`zfsaddisk`](#zfsaddisk)
@@ -94,7 +95,8 @@ sudo check-prerequisites [--single-node|--two-node] [--list-failures]
 **Globals:** none.
 
 Checks the following categories: core ZFS utilities (`bash`, `zfs`, `zpool`,
-`pv`, `rsync`, `smartctl`), optional Proxmox VE, GTK GUI packages, two-node
+`pv`, `python3` for transfer pacing via `lib/pace_stream.py`, `rsync`,
+`smartctl`), optional Proxmox VE, GTK GUI packages, two-node
 tools (`ssh`, `scp`, `iscsiadm`), and documentation tools. `pip3` is required;
 `mkdocs` and `mkdocs-material` are pip-installed by the installer's doc-server
 step, so their absence is reported as a warning, not a failure. MkDocs 2.x is
@@ -191,7 +193,7 @@ sudo ./bin/deploy-version [version] [group ...]
 
 | Variable                                    | Role                                                   | Reference                                                                       |
 | ------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| `NODE_MODE`, `STORAGE_HOST`, `COMPUTE_HOST` | Legacy remote-host fallback when no deploy.conf exists | [Node Configuration](../developer-guide/global-variables.md#node-configuration) |
+| `NODE_MODE`, `STORAGE_HOST`, `COMPUTE_HOST` | Remote-host fallback when no deploy.conf exists (modern `node.conf` first, then the legacy flat files — resolved like `node-lib.sh`) | [Node Configuration](../developer-guide/global-variables.md#node-configuration) |
 
 **Called modules:**
 
@@ -204,7 +206,7 @@ sudo ./bin/deploy-version [version] [group ...]
 | Structure                                         | Role                         | Reference                                                                                            |
 | ------------------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `/etc/zfsutilities/deploy.conf` (legacy `/etc/zfsutilities-deploy.conf`) | Deployment group definitions | [Deploy config](../developer-guide/two-node-config.md#config-file-etczfsutilitiesdeployconf) |
-| Node config                                       | Legacy remote host list      | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+| Node config                                       | Remote host list (modern `node.conf`, then legacy flat files) | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 | `/usr/local/lib/zfsutilities/versions/<version>/` | Deployed version directory   | —                                                                                                    |
 
 **Internal flow:**
@@ -914,6 +916,74 @@ Has no effect if not currently running as root.
 | Code | Meaning                 |
 | ---- | ----------------------- |
 | `0`  | Completed successfully. |
+
+---
+
+### `upgrade-zfsutilities`
+
+Upgrades the deployed installation to the latest GitHub release. Before
+anything is replaced, every host the release will be deployed to (this host
+plus every host in the deployment groups) is scanned for files that were
+modified, added, or removed since their version was installed; the changes
+are listed — modified files with unified diffs against the original release —
+and explicit approval is required. Approved changes are archived on their
+host under `salvaged-changes/` before being superseded, so an upgrade never
+destroys local edits. The upgrade ends by running
+[deploy-version](#deploy-version) from the downloaded release tree, so the
+new version is copied to every deployment target, and stops there.
+**Nothing is activated** — the running system is untouched until the
+operator runs [switch-version](#switch-version); the exact command is
+printed for every host, including this one.
+
+```bash
+sudo upgrade-zfsutilities
+```
+
+**Arguments:** none.
+
+**Globals:**
+
+| Variable | Role |
+| -------- | ---- |
+| `ZFSUTILITIES_VERSION_BASE` | Local deployment root (default `/usr/local/lib/zfsutilities`) |
+| `ZFSUTILITIES_REMOTE_VERSION_BASE` | Deployment root assumed on remote targets (default `/usr/local/lib/zfsutilities`) |
+| `ZFSUTILITIES_RELEASE_API` | GitHub latest-release API URL |
+| `ZFSUTILITIES_TAG_TARBALL_URL` | Release-tarball URL template (`%s` = version) |
+| `ZFSUTILITIES_SYSTEM_CONFIG_DIR` | Deploy-group configuration directory |
+| `ZFSUTILITIES_SSH_CONTROL_PATH` | Shared ssh ControlPath template (`%s` = host); also honored by deploy-version |
+
+**Called modules:**
+
+| Module | Role |
+| ------ | ---- |
+| `upgrade-lib.sh` | Manifests, change scanning, salvaging, tarball fetching, target enumeration |
+| `rootcheck` | Root gate |
+| `deploy-version` (downloaded release) | Copies the new version to every deployment target |
+
+**Data structures consumed / produced:**
+
+| Structure | Role |
+| --------- | ---- |
+| `versions/<version>/MANIFEST.sha256` | Per-file hashes recorded at deploy time; the change-scan baseline |
+| `versions/<v>/salvaged-changes/` | Archive of approved local modifications, with a provenance README |
+| `/tmp` staging directory | Downloaded release tree, pristine baselines, rendered diffs (removed on exit) |
+
+**Internal flow:**
+
+1. Read the active version from the `current` symlink; die with installer guidance if none.
+2. Query GitHub for the latest release; exit cleanly when the active version is not older.
+3. After consent, download and stage the release tarball.
+4. Enumerate deployment targets (deploy groups, legacy node-config fallback) and open one ssh control master per remote host (ssh prompts for passwords itself; all later connections reuse the master).
+5. Scan each target — locally in-process, remotely by piping `upgrade-lib.sh` to `ssh … bash -s` — classifying modified/added/removed files against the manifest or the release tarball of that host's active version.
+6. Report every change with unified diffs before touching anything; on approval, archive modified and added files on their host.
+7. Run `deploy-version <version>` from the staged tree (copies to all targets through the same ssh masters) and stop. Print the activation command for every host; activate nothing.
+
+**Return codes:**
+
+| Code | Meaning |
+| ---- | --------- |
+| `0`  | Deployed, up to date, or aborted by the user (nothing changed) |
+| `8`+ | Fatal: no active version, GitHub unreachable, download failed, scan/salvage/deploy failure |
 
 ---
 
@@ -1817,7 +1887,7 @@ first receive; this script never creates pools or datasets itself.
 
 ```bash
 sourcefs=temp/proxmox destfs=temp_mig/proxmox snapname=migrate-… \
-    pv_rate_limit=100m zfs-migrate-send
+    transfer_rate_limit=100m zfs-migrate-send
 ```
 
 With `$fromsnap` set (the cutover catch-up path), the send is incremental
@@ -1837,7 +1907,7 @@ the incremental pair (`zfs send -nPRw -I`) as well.
 | `$snapname`      | Bare migration snapshot name, no leading `@` (required) |
 | `$fromsnap`      | Optional bare earlier snapshot to send incrementally    |
 |                  | from (`-Rw -I`); empty = full `-Rw` replication         |
-| `$pv_rate_limit` | Optional `pv -L` rate (e.g. `100m`); empty = unlimited  |
+| `$transfer_rate_limit` | Optional rate limit (e.g. `100m`); empty = unlimited  |
 
 **Behavior:**
 
@@ -1854,8 +1924,9 @@ the incremental pair (`zfs send -nPRw -I`) as well.
   -v <dest>` — or `zfs send -Rw -I <source>@<fromsnap> <source>@<snap> |
   pv … | zfs receive -u -F -s -v <dest>` on the catch-up path.
 - `pv` appears in the pipeline when stderr is a terminal or the GUI runner
-  captures output (`ZFSUTILITIES_LOG_INHERIT=Y`); a rate limit is honored
-  quietly in headless mode.
+  captures output (`ZFSUTILITIES_LOG_INHERIT=Y`); a rate limit adds the
+  `lib/pace_stream.py` pacer stage between send and pv (headless runs pace
+  with no pv at all).
 - No locking: the migration executor already holds a pool write lock for the
   whole run.
 
@@ -2900,11 +2971,13 @@ sudo archive-vm <vmid>
    two-node mode it resolves iSCSI target/LUN pairs on the storage host. Any orphaned zvols
    that match the VM ID but are not referenced in the config are reported as warnings and
    are not archived.
-5. **Archive zvols** — Prompts for a transfer rate limit (a `pv -L` value
+5. **Archive zvols** — Prompts for a transfer rate limit (a rate value
    such as `100M`, empty = unlimited; the answer is saved as the default in
    the JSON config key `archive_rate_limit`, shared with `unarchive-vm`).
    When set, every data movement — device copy, hash verification, raw
-   send/receive — passes through `pv -q -L`, so an archive run cannot
+   send/receive — passes through the deadline pacer `lib/pace_stream.py`,
+   which caps the stream flat (a stalled pipeline forfeits the missed
+   budget instead of buying a later burst), so an archive run cannot
    saturate a small storage host; the device copy always writes through
    `dd conv=sparse` to keep zero blocks unallocated. For each referenced
    disk, archives into a new dataset under the
@@ -2945,7 +3018,7 @@ sudo archive-vm <vmid>
 | Node-config globals                        | See [Two-Node Infrastructure Commands](two-node.md)                      |
 | `PVE_CONF_DIR`                             | Directory containing Proxmox VM configs (default `/etc/pve/qemu-server`) |
 | `JSON_CONFIG` / `ZFSUTILITIES_CONFIG_PATH` | Path to the JSON config file                                             |
-| `pv_rate_limit`                            | Transfer rate limit (`pv -L` value); empty = unlimited                   |
+| `transfer_rate_limit`                      | Transfer rate limit (enforced by `lib/pace_stream.py`); empty = unlimited |
 | `ARCHIVE_VM_TEST_NO_ROOT`                  | Test hook: skip root check when set                                      |
 
 **Called modules:**
@@ -3002,9 +3075,9 @@ Restores an archived VM from archive: recreates zvols with their original
 `volblocksize`, rebuilds iSCSI infrastructure (two-node), and restores the Proxmox
 config with updated disk lines. Runs wherever it was invoked (storage-side and
 compute-side work route through the `on_storage`/`on_compute` transports; no
-delegate-to-compute bounce). Prompts for a transfer rate limit (`pv -L` value,
-shared JSON default `archive_rate_limit`) so a restore cannot saturate a small
-storage host. Re-runs are idempotent: restored disks carry a `RESTORED_AS`
+delegate-to-compute bounce). Prompts for a transfer rate limit (rate value,
+shared JSON default `archive_rate_limit`, enforced by the pacer
+`lib/pace_stream.py`) so a restore cannot saturate a small storage host. Re-runs are idempotent: restored disks carry a `RESTORED_AS`
 completion marker in their `.disk_info` sidecar, so a re-run skips verified
 disks, offers a confirmed destroy-and-redo for unmarked leftovers, and exits
 cleanly when the whole restore is already complete.

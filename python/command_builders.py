@@ -266,7 +266,7 @@ def build_send_receive_command(source, dest, variables, parent_dir, nextsnap, dr
         f'releaseholds_tags=("{v.get("releaseholds_tags", "offsite-*")}"); '
         f'autoresume="{v.get("autoresume", "Y")}"; '
         f'verify_after_transfer="{v.get("verify_after_transfer", "Y")}"; '
-        f'pv_rate_limit="{v.get("pv_rate_limit", "")}"; '
+        f'transfer_rate_limit="{v.get("transfer_rate_limit", "")}"; '
     )
     includes = v.get("includes", "").strip()
     excludes = v.get("excludes", "").strip()

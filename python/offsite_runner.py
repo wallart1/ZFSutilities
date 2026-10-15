@@ -83,7 +83,7 @@ def build_offsite_step_command(
         f'allow_destructive="{v.get("allow_destructive", "N")}"; '
         f'receive_F_option="{v.get("receive_F_option", "F")}"; '
         f'verify_after_transfer="{v.get("verify_after_transfer", "Y")}"; '
-        f'pv_rate_limit="{v.get("pv_rate_limit", "")}"; '
+        f'transfer_rate_limit="{v.get("transfer_rate_limit", "")}"; '
         f'applyholds="{v.get("applyholds", "Y")}"; '
     )
 

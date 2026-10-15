@@ -150,7 +150,7 @@ reset_state() {
     destfs="pool/dest/ds"
     snapname="migrate-1"
     fromsnap=""
-    pv_rate_limit=""
+    transfer_rate_limit=""
     ZFSUTILITIES_LOG_INHERIT=""
 }
 
@@ -520,16 +520,34 @@ test_pv_args_passed_with_log_inherit() {
     assert_contains "$pv_args" "-fpterb"
 }
 
-test_pv_quiet_rate_limit_headless() {
-    test_start "pv runs quiet with -L rate limit in headless mode"
+test_pacer_rate_limit_headless() {
+    test_start "the pacer (not pv) enforces the rate limit in headless mode"
     reset_state
-    pv_rate_limit="100m"
+    transfer_rate_limit="100m"
+    : > "$_pv_capture_file"
+    local pace_capture="$_mock_zfs_state_dir/pace_args"
+    : > "$pace_capture"
+    python3() {
+        if [[ "${1:-}" != *pace_stream.py ]]; then
+            command python3 "$@"
+            return $?
+        fi
+        echo "${*:2}" >> "$pace_capture"
+        cat
+        return 0
+    }
     zfs_migrate_send 2>/dev/null
-    assert_rc 0 "$?"
-    local pv_args
+    local rc=$?
+    unset -f python3
+    assert_rc 0 "$rc"
+    local pv_args pace_args
     pv_args=$(cat "$_pv_capture_file" 2>/dev/null)
-    assert_contains "$pv_args" "-q"
-    assert_contains "$pv_args" "-L 100m"
+    pace_args=$(cat "$pace_capture" 2>/dev/null)
+    if [[ -n "$pv_args" ]]; then
+        test_fail "Expected no pv in headless mode, got '$pv_args'"
+        return
+    fi
+    assert_contains "$pace_args" "100m"
 }
 
 # ---------------------------------------------------------------------------
@@ -557,7 +575,7 @@ test_stale_token_aborts_then_fresh_send
 test_unexpected_token_error_aborts_then_fresh_send
 test_fresh_transfer_failure_returns_8
 test_pv_args_passed_with_log_inherit
-test_pv_quiet_rate_limit_headless
+test_pacer_rate_limit_headless
 
 test_summary
 teardown_test_env

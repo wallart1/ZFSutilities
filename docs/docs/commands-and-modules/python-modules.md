@@ -338,7 +338,8 @@ and tests easy to mock.
 | `build_replace_command()`                | Pure `zpool replace` argv builder                                                                                                                      |
 | `build_detach_command()`                 | Pure `zpool detach` argv builder                                                                                                                       |
 | `build_recursive_snapshot_command()`     | Pure `zfs snapshot -r` argv builder for migration snapshots                                                                                            |
-| `build_migration_send_receive_command()` | Pure `bash -c` argv sourcing `zfs-migrate-send` for a resumable, pv-instrumented migration copy (optional `rate_limit` for `pv -L`; optional `from_snap` switches the send to an incremental catch-up — `-Rw -I`, or plain `-w -I` when the source is a clone, whose streams must not reference the origin) |
+| `valid_rate_limit()`                     | Pure rate-grammar validator mirroring `lib/pace_stream.py` (digits plus an optional `k`/`m`/`g`/`t`/`p`/`e` multiplier with optional `i`/`b`); shared by the migration command builder and the Migrate Pool dialog so the GUI never refuses a value the pacer accepts                                                                                                            |
+| `build_migration_send_receive_command()` | Pure `bash -c` argv sourcing `zfs-migrate-send` for a resumable, pv-instrumented migration copy (optional `rate_limit` enforced by the pacer `lib/pace_stream.py`; optional `from_snap` switches the send to an incremental catch-up — `-Rw -I`, or plain `-w -I` when the source is a clone, whose streams must not reference the origin) |
 | `build_pool_export_command()`            | Pure `zpool export` argv builder                                                                                                                       |
 | `build_pool_import_rename_command()`     | Pure `zpool import <temp> <name>` argv builder; the rename is permanent (written to the pool label), so later imports use the plain one-name form     |
 | `build_pool_set_command()`               | Pure `zpool set` argv builder for one pool property (non-default property replay after a migration import-rename)                                      |
@@ -991,13 +992,18 @@ as the GUI runners but writes its own session logs and history entries.
 | `_check_weekday_ordinal(weekday_field)`                          | Runtime guard for weekday ordinal expressions                                         |
 | `acquire_profile_lock(profile_name, timeout=1.0, log_file=None)` | Acquire the profile lock; wait for an existing run and suppress duplicates on timeout |
 | `release_profile_lock(fd, lock_path)`                            | Release the profile lock                                                              |
+| `_silence_cron_output(session_log_file)`                         | From-cron stream fence: dup2 `/dev/null` onto fds 1 and 2 once the session log exists |
 | `main()`                                                         | CLI entry point: `run <name> [--ignore-schedule]`                                     |
 
 **Internal flow:**
 
 1. Load the requested profile from disk to determine its tab type.
 2. Create a session log with `session_log.create_session_log_file()` so that
-   lock-skip messages and early errors are recorded.
+   lock-skip messages and early errors are recorded. When launched by a
+   generated cron job line (`ZFSUTILITIES_FROM_CRON=Y`) and the log was
+   created, `_silence_cron_output()` fences stdout/stderr onto `/dev/null`
+   from here on — the cron log keeps only pre-log failures, and the session
+   log is the record for the rest of the run.
 3. Acquire a per-profile advisory lock so a duplicate cron invocation waits
    for the running instance (by default up to 10 minutes) and then exits
    cleanly instead of running the profile twice.
@@ -1007,7 +1013,10 @@ as the GUI runners but writes its own session logs and history entries.
    bypass this check.
 5. Generate snapshot names and build `BashStep` lists using the same helpers
    as the GUI pages.
-6. Run each step, write the trailer, and append a history entry.
+6. Run each step, write the trailer, and append a history entry. An
+   unhandled exception is caught at the top of the run: the traceback and a
+   failed (`rc=1`) trailer are written to the session log before exiting 1,
+   so a crash is never lost to the fenced streams.
 
 Failed rsync steps log the raw exit code and a human-readable diagnosis
 (for example, `rc=24` is reported as "Source files vanished during transfer")
@@ -1991,9 +2000,12 @@ Simple GTK dialogs for adding a new profile and recalling an existing one.
 ### `cron_manager.py`
 
 Generates, interprets, and previews the cron drop-in file that schedules
-profiles. Generated job lines pipe the runner's merged stdout/stderr through
-a line-buffered awk timestamp stamper into the configured cron log, so every
-line (including pre-session-log tracebacks) carries its write time.
+profiles. Generated job lines launch the runner with `ZFSUTILITIES_FROM_CRON=Y`
+and pipe its merged stdout/stderr through a line-buffered awk timestamp
+stamper into the configured cron log, so every line that reaches it
+(including pre-session-log tracebacks) carries its write time. The marker
+lets `profile_runner.py` silence its own streams once its session log
+exists, keeping the cron log limited to pre-log failures.
 
 **Key functions:**
 

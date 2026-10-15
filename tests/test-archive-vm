@@ -93,7 +93,7 @@ run_archive() {
         "$capture_dir/severances" "$capture_dir/zfs-argv" \
         "$capture_dir/zfsdelfs" "$capture_dir/rescan" \
         "$capture_dir/remove-vm-disk-argv" \
-        "$capture_dir/pv" "$capture_dir/dd" \
+        "$capture_dir/pace" "$capture_dir/dd" \
         "$capture_dir/tee" "$capture_dir/sha256"
 
     local sever_stub="$capture_dir/sever-vm-clone-stub"
@@ -371,21 +371,28 @@ EOF
             echo "TEE:$*" >> "$_capture_dir/tee"
             command tee "$@"
         }
-        pv() {
-            # Rate-limited transfer segment, argv recorded. A read-head pv
-            # (-- <src>) takes its input from the named device — which
-            # never exists in the harness, so nothing is produced (the
-            # same no-copy semantics the cp mock has always had). A bare
-            # pv is a mid-pipeline pacing segment and passes stdin
-            # through. Neither form may touch the script's stdin: the
-            # read head is the first pipeline stage, and its stdin is the
-            # interactive answer feed.
-            echo "PV:$*" >> "$_capture_dir/pv"
-            local -a _pargv=("$@") _pi
-            for _pi in "${!_pargv[@]}"; do
-                if [[ "${_pargv[$_pi]}" == "--" ]]; then
-                    [[ -e "${_pargv[$((_pi + 1))]}" ]] \
-                        && cat -- "${_pargv[$((_pi + 1))]}"
+        python3() {
+            # Pacer stage (lib/pace_stream.py), argv recorded after the
+            # interpreter script path. Only pacer invocations are
+            # intercepted; every other python3 caller in the harness
+            # (JSON config readers, sidecar helpers) runs for real. A
+            # read-head call (-- <src>) takes its input from the named
+            # device — which never exists in the harness, so nothing is
+            # produced (the same no-copy semantics the cp mock has always
+            # had). A call without -- is a mid-pipeline pacing segment and
+            # passes stdin through. Neither form may touch the script's
+            # stdin: the read head is the first pipeline stage, and its
+            # stdin is the interactive answer feed.
+            if [[ "${1:-}" != *pace_stream.py ]]; then
+                command python3 "$@"
+                return $?
+            fi
+            echo "PACE:${*:2}" >> "$_capture_dir/pace"
+            local -a _pyargv=("$@") _pi
+            for _pi in "${!_pyargv[@]}"; do
+                if [[ "${_pyargv[$_pi]}" == "--" ]]; then
+                    [[ -e "${_pyargv[$((_pi + 1))]}" ]] \
+                        && cat -- "${_pyargv[$((_pi + 1))]}"
                     return 0
                 fi
             done
@@ -511,7 +518,7 @@ EOF
     cat "$capture_dir/zfsdelfs" 2>/dev/null || true
     cat "$capture_dir/rescan" 2>/dev/null || true
     cat "$capture_dir/remove-vm-disk-argv" 2>/dev/null || true
-    cat "$capture_dir/pv" 2>/dev/null || true
+    cat "$capture_dir/pace" 2>/dev/null || true
     cat "$capture_dir/dd" 2>/dev/null || true
     cat "$capture_dir/tee" 2>/dev/null || true
     cat "$capture_dir/sha256" 2>/dev/null || true
@@ -1529,6 +1536,22 @@ test_no_receive_volblocksize_override_remains() {
     test_pass
 }
 
+test_no_pv_rate_limit_remains() {
+    test_start "No pv rate limiting or pv_rate_limit naming remains in the tree"
+
+    local hits
+    hits=$(grep -rn -e 'pv -L' -e 'pv_rate_limit' \
+        "$mydir/bin" "$mydir/lib" 2>/dev/null \
+        | grep -v 'lib/pace_stream.py' \
+        | grep -v '^[^:]*:[0-9]*:[[:space:]]*#')
+    if [[ -n "$hits" ]]; then
+        test_fail "pv pacing remnants still present:\n$hits"
+        return
+    fi
+
+    test_pass
+}
+
 test_two_node_heredoc_gets_config_content() {
     reset_mocks
     test_start "Two-node: heredoc receives base64 config content and runs the engine"
@@ -1811,7 +1834,7 @@ y"
 
 test_rate_limit_paces_copy_path() {
     reset_mocks
-    test_start "Rate limit: copy and hash pass through pv, saved to JSON config"
+    test_start "Rate limit: copy and hash pass through the pacer, saved to JSON config"
 
     local vmid="260"
     local pve_dir="$_mock_zfs_state_dir/pve40"
@@ -1835,9 +1858,9 @@ n"
         return
     fi
 
-    local needle="PV:-q -L 100M -- /dev/zvol/threeamigos/proxmox/vm-${vmid}-disk-0"
+    local needle="PACE:100M -- /dev/zvol/threeamigos/proxmox/vm-${vmid}-disk-0"
     if [[ "$out" != *"$needle"* ]]; then
-        test_fail "Copy not paced by pv; output:\n$out"
+        test_fail "Copy not paced; output:\n$out"
         return
     fi
     needle="DD:of=/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
@@ -1851,17 +1874,17 @@ n"
     fi
     # The source is read once: the copy and its in-flight hash share the
     # single paced pass; the destination read-back is the only other one.
-    local pv_count src_pv_count
-    pv_count=$(printf '%s\n' "$out" | grep -c '^PV:')
-    if [[ "$pv_count" -ne 2 ]]; then
-        test_fail "pv count wrong (want copy + read-back): ${pv_count}; output:\n$out"
+    local pace_count src_pace_count
+    pace_count=$(printf '%s\n' "$out" | grep -c '^PACE:')
+    if [[ "$pace_count" -ne 2 ]]; then
+        test_fail "Pacer count wrong (want copy + read-back): ${pace_count}; output:\n$out"
         return
     fi
-    local src_pv_needle="PV:-q -L 100M -- /dev/zvol/threeamigos/proxmox/vm-${vmid}-disk-0"
-    src_pv_needle+="@dailybackup-2026-07-14T07:00-04:00-d"
-    src_pv_count=$(printf '%s\n' "$out" | grep -cFx -- "$src_pv_needle")
-    if [[ "$src_pv_count" -ne 1 ]]; then
-        test_fail "Source device paced more than once (${src_pv_count}); output:\n$out"
+    local src_pace_needle="PACE:100M -- /dev/zvol/threeamigos/proxmox/vm-${vmid}-disk-0"
+    src_pace_needle+="@dailybackup-2026-07-14T07:00-04:00-d"
+    src_pace_count=$(printf '%s\n' "$out" | grep -cFx -- "$src_pace_needle")
+    if [[ "$src_pace_count" -ne 1 ]]; then
+        test_fail "Source device paced more than once (${src_pace_count}); output:\n$out"
         return
     fi
     if ! grep -q '"archive_rate_limit": "100M"' \
@@ -1907,6 +1930,31 @@ wat
     test_pass
 }
 
+test_missing_pacer_fatals_instead_of_running_unlimited() {
+    reset_mocks
+    test_start "Unresolvable pacer with a rate set refuses to pace, not to run"
+
+    # Unit level (run_archive always resolves the real pacer beside the
+    # engine): archive_pace_pipe must FATAL and leave the pipeline segment
+    # empty when archive_pacer cannot resolve the helper — a paced run may
+    # never silently fall back to unlimited.
+    # shellcheck source=/dev/null
+    source "$mydir/lib/archive-engine.sh"
+    local _orig_pacer
+    _orig_pacer=$(declare -f archive_pacer)
+    archive_pacer() { return 1; }
+    transfer_rate_limit="100M"
+    local rc=0
+    archive_pace_pipe 2>/dev/null || rc=$?
+    eval "$_orig_pacer"
+    transfer_rate_limit=""
+    assert_rc 1 "$rc"
+    assert_array_len 0 "${pace_pipe[@]}"
+    assert_contains "$(cat "${_TEST_LOG_FILE:-/dev/null}")" \
+        "FATAL: Rate limit set but pace_stream.py not found"
+    test_pass
+}
+
 test_two_node_rate_forwarded_to_payload() {
     reset_mocks
     test_start "Two-node: rate limit is forwarded to the storage-side payload"
@@ -1931,7 +1979,7 @@ n"
         test_fail "Unexpected exit code $rc; output:\n$out"
         return
     fi
-    local needle="pv_rate_limit='50M' bash -s"
+    local needle="transfer_rate_limit='50M' bash -s"
     if [[ "$out" != *"$needle"* ]]; then
         test_fail "Rate not forwarded in payload argv; output:\n$out"
         return
@@ -1940,7 +1988,7 @@ n"
     test_pass
 }
 
-test_unlimited_run_has_no_pv() {
+test_unlimited_run_has_no_pacer() {
     reset_mocks
     test_start "Unlimited run keeps the unpaced dd pipeline and in-flight hash"
 
@@ -1965,8 +2013,8 @@ n"
         test_fail "Unexpected exit code $rc; output:\n$out"
         return
     fi
-    if [[ "$out" == *"PV:"* ]]; then
-        test_fail "pv appeared in an unlimited run; output:\n$out"
+    if [[ "$out" == *"PACE:"* ]]; then
+        test_fail "Pacer appeared in an unlimited run; output:\n$out"
         return
     fi
     local needle="DD:of=/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
@@ -2117,8 +2165,10 @@ test_single_node_removal_uses_zfsdelfs
 test_single_node_destroy_failure_keeps_config
 test_rate_limit_paces_copy_path
 test_invalid_rate_fatals
+test_missing_pacer_fatals_instead_of_running_unlimited
 test_two_node_rate_forwarded_to_payload
-test_unlimited_run_has_no_pv
+test_no_pv_rate_limit_remains
+test_unlimited_run_has_no_pacer
 test_copy_hashes_source_in_flight
 test_copy_source_hash_failure_fatals
 

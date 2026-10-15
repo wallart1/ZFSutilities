@@ -234,12 +234,14 @@ class TestPureHelpers(unittest.TestCase):
 
     def test_rate_limit_problem_accepts_empty_and_valid_rates(self):
         pmd = _import_dialogs()
-        for text in ("", "100", "100k", "25M", "2g", "1T"):
+        # The accepted grammar mirrors lib/pace_stream.py: k/m/g/t/p/e
+        # multipliers with optional i and b, case-insensitive.
+        for text in ("", "100", "100k", "25M", "2g", "1T", "64KiB", "100mib", "1P"):
             self.assertIsNone(pmd._rate_limit_problem(text), text)
 
     def test_rate_limit_problem_rejects_garbage(self):
         pmd = _import_dialogs()
-        for text in ("abc", "10x", "1.5m", "-5m", "100 mb"):
+        for text in ("abc", "10x", "1.5m", "-5m", "100 mb", "100KiBx"):
             problem = pmd._rate_limit_problem(text)
             self.assertIsNotNone(problem, text)
             self.assertIn("bandwidth limit", problem)
@@ -760,7 +762,7 @@ class TestBuildMigrationSteps(unittest.TestCase):
         ]
         self.assertEqual(len(sends), 2)
         for step in sends:
-            self.assertIn("pv_rate_limit=100m", step.command[2])
+            self.assertIn("transfer_rate_limit=100m", step.command[2])
         # Holding mode: copy-out and copy-back both honor the limit.
         holding = _request(
             pmd,
@@ -774,7 +776,7 @@ class TestBuildMigrationSteps(unittest.TestCase):
         )
         copy, cutover = pmd.build_migration_steps(holding)
         for step in copy[1:3]:
-            self.assertIn("pv_rate_limit=50m", step.command[2])
+            self.assertIn("transfer_rate_limit=50m", step.command[2])
         copyback = [
             s
             for s in cutover
@@ -782,7 +784,7 @@ class TestBuildMigrationSteps(unittest.TestCase):
         ]
         self.assertTrue(copyback)
         for step in copyback:
-            self.assertIn("pv_rate_limit=50m", step.command[2])
+            self.assertIn("transfer_rate_limit=50m", step.command[2])
 
     def test_new_disks_cutover_steps(self):
         pmd = _import_dialogs()

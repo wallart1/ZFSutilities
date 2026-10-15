@@ -2,7 +2,7 @@
 
 import copy
 
-CONFIG_VERSION = 28
+CONFIG_VERSION = 29
 
 
 def _migrate_1_to_2(config):
@@ -333,6 +333,69 @@ def _migrate_27_to_28(config):
     return config
 
 
+def _rename_rate_limit_key(variables):
+    """Rename pv_rate_limit to transfer_rate_limit in a variables dict.
+
+    In place; a transfer_rate_limit already present wins, so a half-migrated
+    state can never clobber a newer value.
+    """
+    if isinstance(variables, dict) and "pv_rate_limit" in variables:
+        variables.setdefault("transfer_rate_limit", variables.pop("pv_rate_limit"))
+
+
+def _migrate_28_to_29(config):
+    """Rename the rate-limit variable pv_rate_limit to transfer_rate_limit.
+
+    Transfer pacing moved off pv onto the deadline pacer lib/pace_stream.py
+    (pv -L only enforced a long-run average and burst above the cap after
+    every ZFS txg/throttle stall), so the variable stops promising pv. The
+    key lives in the backup/offsite/restore variables of this config and in
+    every saved profile file (profiles store one tab's config under
+    "config", so both variables shapes are renamed). Values are preserved;
+    profile files are rewritten in place, best-effort — load_profile also
+    normalizes the legacy key, so an unwritable profile file still runs at
+    its saved rate.
+    """
+    import json
+    import os
+
+    from paths import get_profiles_dir
+
+    for section in ("backup", "offsite", "restore"):
+        _rename_rate_limit_key(config.get(section, {}).get("variables", {}))
+
+    try:
+        profiles_dir = get_profiles_dir()
+        names = os.listdir(profiles_dir)
+    except OSError:
+        names = []
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(profiles_dir, name)
+        try:
+            with open(path) as fh:
+                profile = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            continue
+        cfg = profile.get("config", {})
+        before = json.dumps(cfg, sort_keys=True)
+        _rename_rate_limit_key(cfg.get("variables", {}))
+        for section in ("backup", "offsite", "restore"):
+            _rename_rate_limit_key(cfg.get(section, {}).get("variables", {}))
+        if json.dumps(cfg, sort_keys=True) == before:
+            continue
+        tmp_path = path + ".tmp"
+        try:
+            with open(tmp_path, "w") as fh:
+                json.dump(profile, fh, indent=2)
+            os.replace(tmp_path, path)
+        except OSError:
+            pass
+    config["config_version"] = 29
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -361,6 +424,7 @@ MIGRATIONS = [
     _migrate_25_to_26,
     _migrate_26_to_27,
     _migrate_27_to_28,
+    _migrate_28_to_29,
 ]
 
 

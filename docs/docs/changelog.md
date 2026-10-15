@@ -1,5 +1,88 @@
 # Changelog
 
+## 0.125.0
+
+*Released 2026-10-15*
+
+### Added
+
+- **`upgrade-zfsutilities` — self-upgrade with change preservation.**
+  Checks GitHub for the latest release, stages its tarball, scans every
+  deployment target (this host plus the deploy groups `deploy-version`
+  syncs to) for files modified, added, or removed since installation —
+  modified files shown as unified diffs against the pristine release —
+  and proceeds only through two explicit consent gates. Approved changes
+  are archived on their host under
+  `salvaged-changes/<old-version>/<timestamp>/` before the new version is
+  deployed; nothing is destroyed. The upgrade then runs `deploy-version`
+  from the staged tree through one shared ssh control master per host
+  (a single password prompt per host) and stops: nothing is activated —
+  the exact `switch-version` command is printed for every host.
+  `deploy-version` now records a `MANIFEST.sha256` baseline of each
+  deployed tree (the upgrade's change-detection basis) and shares the
+  new `lib/upgrade-lib.sh` helpers for target enumeration and
+  control-socket resolution.
+- **Crash backstop in the profile runner** — an unhandled exception now
+  writes its traceback plus a failed trailer into the session log before
+  exiting 1, so a crashed scheduled run is visible as failed in the Logs
+  tab instead of leaving no record.
+
+### Changed
+
+- **Transfer pacing rebuilt on a forfeit-window pacer.** `pv -L` only
+  enforced a long-run average and burst to 1.5–3.5× the configured cap
+  after every ZFS txg/throttle stall (measured on a live restore: 115–149
+  MiB/s sustained under a 100M cap, 352 MiB/s after a 4s stall). The new
+  `lib/pace_stream.py` paces flat — a stalled pipeline forfeits the
+  missed budget instead of buying a later burst — and `pv` is now a
+  progress-display stage only (`send | pacer | pv | receive`). The
+  rate-limit variable is renamed `pv_rate_limit` → `transfer_rate_limit`
+  (config migration v29 rewrites the GUI variables and every saved
+  profile file; `load_profile` normalizes the legacy key in memory so an
+  unwritable profile still runs at its saved rate); a configured rate
+  with an unresolvable pacer fails loudly instead of running unlimited;
+  `python3` moves into `check-prerequisites`' core category. The Migrate
+  Pool dialog's bandwidth validator accepts the same grammar as the
+  pacer (digits plus `k`/`m`/`g`/`t`/`p`/`e` with optional `i`/`b`), so
+  the GUI never refuses a rate the engine would pace.
+- **`cron.log` carries only pre-session-log failures.** Scheduled job
+  lines launch the runner with `ZFSUTILITIES_FROM_CRON=Y`; once the
+  session log exists the runner silences its own stdout/stderr at the
+  file-descriptor level, so the timestamped `cron.log` no longer mirrors
+  every message plus one `pv` progress line per second for the whole
+  run. GUI "Run Now" and manual runs stream unchanged, and a failed
+  session-log creation keeps full output as the fallback record.
+
+### Fixed
+
+- **Two-node `unarchive-vm` failed at iSCSI reconstruction** (live
+  vm-205 incident): Step 2 mapped pools to IQN targets by executing the
+  bash node configuration as Python — a syntax error swallowed into a
+  generic FATAL, broken since the 0.122.0 engine rework and first hit by
+  a real restore. The payload now uses `node-lib.sh`'s `pool_to_target`
+  (inherited locally, or sourced from the storage host's deployed tree
+  over ssh). A second latent defect in the same path: the Step-3 disk
+  line matcher's single-character class never matched dotted-quad IPs,
+  so every iSCSI line was left unrewritten (wrong LUNs); it now follows
+  the `list-vm-disks` convention.
+- **`deploy-version`'s documentation-build FATAL exits noisily** — both
+  mkdocs failure sites sourced `$mydir/bashfatal`, which resolves to the
+  repository root rather than `bin/`; the intended clean exit degraded
+  into "No such file or directory" noise. Both sites now source
+  `bin/bashfatal`.
+- **Deployment enumeration reads the modern node configuration** —
+  `install-two-node` writes `node.conf` to the system config directory,
+  but the deploy/upgrade fallback read only the legacy flat files, so a
+  fresh two-node install without a `deploy.conf` silently enumerated as
+  single-node and never synced to the peer. Resolution now mirrors
+  `node-lib.sh`: modern `node.conf` first, then the legacy files.
+- **Two latent test defects** — the schedule page's next-run assertion
+  was date-dependent (the next-run cache, keyed on the live minute,
+  bypassed the mocked clock and served a real-time result), and the
+  transfer library's stage-order test asserted pipeline child startup
+  order, which bash does not guarantee (it failed roughly one run in six
+  under load); both are now hermetic/deterministic.
+
 ## 0.124.1
 
 *Released 2026-10-12*

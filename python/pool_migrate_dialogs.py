@@ -33,7 +33,6 @@ ZFS I/O is delegated to ``ZfsRepository`` via the app context.
 from __future__ import annotations
 
 import os
-import re
 import shlex
 import subprocess
 import tempfile
@@ -119,6 +118,7 @@ from zfs_repository import (
     build_pool_set_command,
     build_recursive_snapshot_command,
     build_release_holds_command,
+    valid_rate_limit,
 )
 
 # Custom dialog response id for the Migrate/Cut Over buttons. Distinct from
@@ -158,7 +158,7 @@ class _MigrateState:
         default_factory=list
     )  # checked rows of the holding-mode rebuild picker (source members + unused disks)
     typed: str = ""  # review typed confirmation (source pool name)
-    rate_limit: str = ""  # optional pv -L rate; empty = unlimited
+    rate_limit: str = ""  # optional pacer rate; empty = unlimited
     # --- New-pool settings (pool-profile driven, Match-origin default) ---
     pool_profiles: dict = field(default_factory=dict)  # saved pool profiles
     profile_name: str = MATCH_ORIGIN_PROFILE
@@ -519,13 +519,20 @@ def _capacity_problem(
 
 
 def _rate_limit_problem(text: str) -> str | None:
-    """Refusal line when the bandwidth limit is not a valid pv -L rate."""
+    """Refusal line when the bandwidth limit is not a valid pacer rate.
+
+    Accepts exactly the grammar lib/pace_stream.py enforces (digits plus
+    an optional k/m/g/t/p/e multiplier with optional i and b,
+    case-insensitive, 1024-based) so the dialog never refuses a value the
+    transfer would happily pace.
+    """
     if not text:
         return None
-    if not re.fullmatch(r"[0-9]+[kKmMgGtT]?", text):
+    if not valid_rate_limit(text):
         return (
             f"invalid bandwidth limit '{text}' — use digits with an "
-            "optional k/m/g/t suffix (for example 100m), or leave it blank"
+            "optional k/m/g/t/p/e suffix (i and b also accepted, for "
+            "example 100m or 64KiB), or leave it blank"
         )
     return None
 
@@ -1366,9 +1373,7 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
         holding_picker_box.show_all()
 
     rate_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-    rate_label = Gtk.Label(
-        label="Bandwidth limit (optional, pv rate e.g. 100m; blank = unlimited):"
-    )
+    rate_label = Gtk.Label(label="Bandwidth limit (optional rate e.g. 100m; blank = unlimited):")
     rate_label.set_halign(Gtk.Align.END)
     rate_row.pack_start(rate_label, False, False, 0)
     rate_entry = Gtk.Entry()

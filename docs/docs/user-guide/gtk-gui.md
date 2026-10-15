@@ -1145,7 +1145,10 @@ live in `/var/log/zfsutilities/`.
 
 Every line written to the cron log carries a `YYYY-MM-DD HH:MM:SS` timestamp,
 so the viewer's level filter and short-prefix display work on these rows the
-same way as on session logs. The log is managed by logrotate — rotated
+same way as on session logs. The cron log holds only messages from before a
+scheduled run created its session log (launch-time and early failures); once
+the session log exists, it — not the cron log — is the run's record. The log
+is managed by logrotate — rotated
 weekly, compressed, and bounded by an early-rotation size guard — so it never
 grows without bound, and every generation is created readable by non-root
 users (handy for tailing over ssh).
@@ -1750,8 +1753,9 @@ reserved migration namespace in holding mode), a pool root cannot be received
 over another pool's root, and a root holds no user data — only properties,
 which do not travel in send streams. Per-dataset sends also keep resume
 tokens and the dataset-tree verification scoped to one dataset at a time.
-An optional **Bandwidth limit** (a `pv` rate such as `100m`) throttles the
-copy. Every copy is resumable: an interrupted transfer leaves a receive
+An optional **Bandwidth limit** (a rate such as `100m` or `64KiB` — digits
+plus an optional `k`/`m`/`g`/`t`/`p`/`e` multiplier, enforced by the
+pacer `lib/pace_stream.py`) throttles the copy. Every copy is resumable: an interrupted transfer leaves a receive
 resume token on the destination, and re-running Migrate Pool resumes from
 that token instead of starting over, with live `pv` progress shown in the
 status area. Typed confirmation of the source pool name starts the copy
@@ -2428,7 +2432,7 @@ which fields have been changed from their defaults.
 | **dointermediates**       | Backup, Offsite          | Y/N  | `'Y'` = include all intermediate snapshots (`-I`); `'N'` = skip them (`-i`).                        |
 | **allow_destructive**     | Backup, Offsite          | Y/N  | `'Y'` = full copy may destroy an existing destination dataset and its children.                     |
 | **verify_after_transfer** | Backup, Offsite          | Y/N  | `'Y'` = after each receive, compare destination snapshot GUID with source; treat mismatch as fatal. |
-| **pv_rate_limit**         | Backup, Offsite          | text | Max transfer rate for `pv -L` (e.g. `200M`, `1G`). Empty = no limit.                                |
+| **transfer_rate_limit**   | Backup, Offsite          | text | Max transfer rate enforced by the pacer `lib/pace_stream.py` (e.g. `200M`, `1G`). Empty = no limit. |
 | **applyholds**            | Offsite                  | Y/N  | `'Y'` = apply `offsite-<pool>` holds after each offsite step.                                       |
 
 For more detail on how these map to the bash engine, see

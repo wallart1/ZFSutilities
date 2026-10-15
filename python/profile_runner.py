@@ -13,6 +13,7 @@ import shlex
 import subprocess
 import sys
 import time
+import traceback
 from contextlib import nullcontext
 from datetime import datetime, timezone
 
@@ -743,6 +744,34 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
     return 0
 
 
+def _silence_cron_output(session_log_file):
+    """Silence this process's stdout/stderr for the rest of a from-cron run.
+
+    Cron job lines (cron_manager.generate_cron_line) launch the runner with
+    ZFSUTILITIES_FROM_CRON=Y and pipe its merged output into the persistent
+    cron log, whose documented purpose is failures from before the session
+    log exists. Once the session log is created it is the run's record, so
+    the runner stops emitting to its output streams entirely — at the file
+    descriptor level, so no writer (the step-output mirror, log_msg echoes,
+    future print calls) can re-open the firehose. Without the marker (GUI
+    "Run Now", manual terminal runs) or without a session log (creation
+    failed — keep the cron log as the fallback record), nothing is silenced.
+
+    Returns True when the streams were silenced.
+    """
+    if not session_log_file or os.environ.get("ZFSUTILITIES_FROM_CRON") != "Y":
+        return False
+    sys.stdout.flush()
+    sys.stderr.flush()
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+    finally:
+        os.close(devnull)
+    return True
+
+
 def main():
     args = sys.argv[1:]
     if (
@@ -771,33 +800,38 @@ def main():
     _session_start_time = time.time()
     _last_log_size_check = time.time()
     _session_log_file = session_log.create_session_log_file(tab_type, profile_name)
+    # From-cron runs go quiet on their output streams from here on: the cron
+    # log keeps only pre-session-log failures, and the session log (created
+    # just above) is the record for the rest of the run.
+    _silence_cron_output(_session_log_file)
 
     ctx = session_log_context(_session_log_file) if _session_log_file else nullcontext()
     with ctx:
-        if profile is None:
-            log_msg(f"FATAL: Profile not found: {profile_name}")
-            session_log.write_session_trailer(_session_log_file, _session_start_time, rc=1)
-            sys.exit(1)
-
-        lock_fd, lock_path = acquire_profile_lock(
-            profile_name, timeout=PROFILE_LOCK_TIMEOUT, log_file=_session_log_file
-        )
-        if lock_fd is None:
-            if PROFILE_LOCK_TIMEOUT > 0:
-                log_msg(
-                    f"WARN: Profile '{profile_name}' is already running and did not "
-                    f"finish within {int(PROFILE_LOCK_TIMEOUT)} seconds; "
-                    "skipping duplicate invocation"
-                )
-            else:
-                log_msg(
-                    f"INFO: Profile '{profile_name}' is already running; "
-                    "skipping duplicate invocation"
-                )
-            session_log.write_session_trailer(_session_log_file, _session_start_time, rc=0)
-            sys.exit(0)
-
+        lock_fd, lock_path = None, None
         try:
+            if profile is None:
+                log_msg(f"FATAL: Profile not found: {profile_name}")
+                session_log.write_session_trailer(_session_log_file, _session_start_time, rc=1)
+                sys.exit(1)
+
+            lock_fd, lock_path = acquire_profile_lock(
+                profile_name, timeout=PROFILE_LOCK_TIMEOUT, log_file=_session_log_file
+            )
+            if lock_fd is None:
+                if PROFILE_LOCK_TIMEOUT > 0:
+                    log_msg(
+                        f"WARN: Profile '{profile_name}' is already running and did not "
+                        f"finish within {int(PROFILE_LOCK_TIMEOUT)} seconds; "
+                        "skipping duplicate invocation"
+                    )
+                else:
+                    log_msg(
+                        f"INFO: Profile '{profile_name}' is already running; "
+                        "skipping duplicate invocation"
+                    )
+                session_log.write_session_trailer(_session_log_file, _session_start_time, rc=0)
+                sys.exit(0)
+
             config = load_config()
             prune_old_logs(config.get("log_retention_days", 30))
 
@@ -865,6 +899,14 @@ def main():
                 bytes_transferred=bytes_transferred,
             )
             sys.exit(rc)
+        except Exception:
+            # With the from-cron streams fenced, the session log is the only
+            # record left; an unhandled crash must land there (traceback plus
+            # a failed trailer so the Logs tab shows the run as failed) rather
+            # than vanishing into /dev/null.
+            log_msg(f"FATAL: Unhandled exception in profile runner:\n{traceback.format_exc()}")
+            session_log.write_session_trailer(_session_log_file, _session_start_time, rc=1)
+            sys.exit(1)
         finally:
             release_profile_lock(lock_fd, lock_path)
 

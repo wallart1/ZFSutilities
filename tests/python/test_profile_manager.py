@@ -141,6 +141,28 @@ class TestProfileCrud(unittest.TestCase):
         with temp_config_dir(), self.assertRaises(ValueError):
             profile_manager.update_profile("backup", "missing", {})
 
+    def test_load_profile_normalizes_legacy_rate_limit(self):
+        # Config migration v29 rewrites stored files best-effort;
+        # load_profile is the in-memory net for files it could not rewrite
+        # (e.g. unwritable), so the saved rate still applies.
+        import json
+        import os
+
+        with temp_config_dir():
+            profile = profile_manager.create_profile("backup", "legacyrate", {})
+            name = profile["profile_name"]
+            path = os.path.join(profile_manager.get_profiles_dir(), f"{name}.json")
+            with open(path) as handle:
+                stored = json.load(handle)
+            stored["config"]["variables"] = {"pv_rate_limit": "75m"}
+            with open(path, "w") as handle:
+                json.dump(stored, handle)
+
+            loaded = profile_manager.load_profile(name)
+
+            self.assertEqual(loaded["config"]["variables"].get("transfer_rate_limit"), "75m")
+            self.assertNotIn("pv_rate_limit", loaded["config"]["variables"])
+
     def test_delete_profile_logs(self):
         with temp_config_dir():
             profile = profile_manager.create_profile("backup", "deleteme", {})

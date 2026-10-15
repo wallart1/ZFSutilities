@@ -1859,5 +1859,110 @@ class TestLogScopeWarnings(unittest.TestCase):
         self.assertFalse(any("scope mismatch" in msg for msg in logs))
 
 
+class TestCronOutputSilencing(unittest.TestCase):
+    """ZFSUTILITIES_FROM_CRON=Y silences the runner once its session log exists.
+
+    The cron job line pipes the runner's whole stdout/stderr into the
+    persistent cron log. That log's purpose is failures from before the
+    session log exists, so a from-cron run must stop writing to its output
+    streams after creating the session log. These tests run the real
+    main() in a subprocess because the fence rewrites fds 1 and 2.
+    """
+
+    _RUNNER = os.path.join(
+        os.path.dirname(os.path.abspath(profile_runner.__file__)), "profile_runner.py"
+    )
+
+    def _run_main_subprocess(self, tmp, from_cron):
+        env = os.environ.copy()
+        env.update(
+            {
+                "ZFSUTILITIES_LOG_DIR": os.path.join(tmp, "logs"),
+                "ZFSUTILITIES_STATE_DIR": os.path.join(tmp, "state"),
+                "ZFSUTILITIES_LOCK_DIR": os.path.join(tmp, "locks"),
+                "ZFSUTILITIES_PROFILE_LOCK_DIR": os.path.join(tmp, "plocks"),
+                "XDG_CONFIG_HOME": os.path.join(tmp, "xdg-config"),
+            }
+        )
+        if from_cron:
+            env["ZFSUTILITIES_FROM_CRON"] = "Y"
+        else:
+            env.pop("ZFSUTILITIES_FROM_CRON", None)
+        return subprocess.run(
+            [sys.executable, self._RUNNER, "run", "NoSuchProfile"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+    def _session_log_content(self, tmp):
+        log_dir = os.path.join(tmp, "logs", "sessions")
+        files = [n for n in os.listdir(log_dir) if n.endswith(".log")]
+        self.assertEqual(len(files), 1, files)
+        with open(os.path.join(log_dir, files[0])) as f:
+            return f.read()
+
+    def test_from_cron_run_is_silent_after_session_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run_main_subprocess(tmp, from_cron=True)
+            self.assertEqual(proc.returncode, 1)
+            combined = proc.stdout + proc.stderr
+            # Post-session-log output (the not-found failure lands after the
+            # log is created) must not reach the cron-log stream.
+            self.assertNotIn("Profile not found", combined)
+            self.assertEqual(combined.strip(), "")
+            # The session log is the record from that point on.
+            content = self._session_log_content(tmp)
+            self.assertIn("FATAL: Profile not found", content)
+            self.assertIn("# END: rc=1", content)
+
+    def test_manual_run_output_still_flows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run_main_subprocess(tmp, from_cron=False)
+            self.assertEqual(proc.returncode, 1)
+            combined = proc.stdout + proc.stderr
+            self.assertIn("FATAL: Profile not found", combined)
+            # The session log still records the run either way.
+            content = self._session_log_content(tmp)
+            self.assertIn("FATAL: Profile not found", content)
+
+
+class TestCrashRecording(unittest.TestCase):
+    def test_unhandled_exception_recorded_in_session_log(self):
+        profile = {
+            "tab_type": "backup",
+            "config": {"variables": {"label": "dailybackup"}},
+        }
+        with temp_config_dir():
+            with patch.object(profile_runner.sys, "argv", ["profile_runner.py", "run", "Daily"]):
+                with patch("profile_runner.load_profile", return_value=profile):
+                    with patch("profile_runner.load_config", return_value={}):
+                        with patch("profile_runner.prune_old_logs"):
+                            with patch(
+                                "profile_runner.run_backup_profile",
+                                side_effect=RuntimeError("synthetic crash"),
+                            ):
+                                with patch("profile_runner.add_history_entry"):
+                                    with capture_logs() as logs:
+                                        with self.assertRaises(SystemExit) as cm:
+                                            profile_runner.main()
+            self.assertEqual(cm.exception.code, 1)
+            self.assertTrue(
+                any("FATAL:" in msg and "synthetic crash" in msg for msg in logs),
+                logs,
+            )
+            # The crash traceback and the rc=1 trailer land in the session
+            # log created by this main() call (temp_config_dir redirects
+            # the log dir, so read it before the context exits).
+            files = [n for n in os.listdir(session_log.SESSION_LOG_DIR) if n.endswith(".log")]
+            self.assertEqual(len(files), 1, files)
+            with open(os.path.join(session_log.SESSION_LOG_DIR, files[0])) as f:
+                content = f.read()
+            self.assertIn("synthetic crash", content)
+            self.assertIn("# END: rc=1", content)
+
+
 if __name__ == "__main__":
     unittest.main()

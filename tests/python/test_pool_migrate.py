@@ -467,7 +467,7 @@ class TestBuildMigrationSendReceiveCommand(unittest.TestCase):
         golden.check(
             self, self._normalized(argv), name="TestBuildMigrationSendReceiveCommand.no_rate_limit"
         )
-        self.assertNotIn("pv_rate_limit", argv[2])
+        self.assertNotIn("transfer_rate_limit", argv[2])
 
     def test_invalid_rate_limit_rejected(self):
         for bad in ("abc", "10x", "1.5m", "-5m"):

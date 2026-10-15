@@ -65,6 +65,31 @@ class TestGenerateCronLine(unittest.TestCase):
         self.assertNotIn(CRON_LOG, line)
         self.assertTrue(line.rstrip().endswith(">> " + custom))
 
+    def test_from_cron_marker_prefixes_runner(self):
+        profile = {
+            "profile_name": "root-backup-daily",
+            "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
+        }
+        line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
+        # The marker lets profile_runner silence its own output once its
+        # session log exists, so cron.log keeps only pre-log failures.
+        self.assertIn("&& ZFSUTILITIES_FROM_CRON=Y python3 /opt/runner.py", line)
+
+    def test_from_cron_marker_in_condition_form(self):
+        profile = {
+            "profile_name": "root-backup-daily",
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+                "condition": "[ $(date +%d) -ge 28 ]",
+            },
+        }
+        line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
+        self.assertIn("&& ZFSUTILITIES_FROM_CRON=Y python3 /opt/runner.py", line)
+
     def test_condition_is_prepended(self):
         profile = {
             "profile_name": "root-backup-daily",
@@ -190,6 +215,20 @@ class TestWriteCronFile(unittest.TestCase):
             self.assertIn('MAILTO=""', content)
             mode = os.stat(cron_manager.CRON_FILE).st_mode
             self.assertTrue(mode & 0o400)
+
+    def test_written_file_marks_runner_from_cron(self):
+        with temp_config_dir():
+            profiles = [
+                {
+                    "profile_name": "p1",
+                    "active": True,
+                    "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
+                },
+            ]
+            cron_manager.write_cron_file(profiles, "/runner.py", CRON_LOG)
+            with open(cron_manager.CRON_FILE) as f:
+                content = f.read()
+            self.assertIn("ZFSUTILITIES_FROM_CRON=Y python3 /runner.py", content)
 
     def test_mailto_appears_before_cron_lines(self):
         with temp_config_dir():

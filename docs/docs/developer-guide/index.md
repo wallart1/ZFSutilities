@@ -36,6 +36,8 @@ relevant to developers working on ZFS Utilities.
   from the repo: `ln -sfn /path/to/repo/bin/bashinit ~`. `/root/bashinit`
   is auto-managed as a symlink by `deploy-version` and `switch-version`.
 - `pv` — progress visualization for large transfers (`sudo apt install pv`)
+- `python3` — runs the GUI and the transfer-rate pacer `lib/pace_stream.py`
+  (a core prerequisite; `sudo apt install python3`)
 - `zfsutils-linux` — ZFS userspace utilities (`sudo apt install zfsutils-linux`);
   on Debian this package is in the `contrib` archive — enable `contrib` in
   `/etc/apt/sources.list` (or the equivalent `.sources` file) if `apt` reports

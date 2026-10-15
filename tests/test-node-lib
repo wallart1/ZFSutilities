@@ -635,11 +635,11 @@ EOF
 }
 
 test_on_storage_remote_ships_payload_with_rate_prefix() {
-    test_start "on_storage: remote branch ships payload via ssh with pv_rate_limit"
+    test_start "on_storage: remote branch ships payload via ssh with transfer_rate_limit"
 
     storage_host="stewie-remote"
     compute_host=$(hostname -s)
-    pv_rate_limit="75M"
+    transfer_rate_limit="75M"
     local ssh_argv_file="$tmp_dir/ssh-argv"
     local payload_file="$tmp_dir/payload"
     rm -f "$ssh_argv_file" "$payload_file"
@@ -656,7 +656,7 @@ EOF
     local argv
     argv=$(cat "$ssh_argv_file")
     assert_contains "$argv" "root@stewie-remote"
-    assert_contains "$argv" "pv_rate_limit='75M' bash -s"
+    assert_contains "$argv" "transfer_rate_limit='75M' bash -s"
     assert_contains "$argv" "a1 a2"
     assert_contains "$(cat "$payload_file")" "echo payload-body"
 }
@@ -667,7 +667,7 @@ test_on_compute_remote_ships_payload_with_rate_prefix() {
     compute_host="tweety-remote"
     storage_host=$(hostname -s)
     # shellcheck disable=SC2034  # expanded inside on_compute (node-lib.sh)
-    pv_rate_limit=""
+    transfer_rate_limit=""
     local ssh_argv_file="$tmp_dir/ssh-argv-compute"
     rm -f "$ssh_argv_file"
     ssh() {
@@ -682,7 +682,7 @@ EOF
     local argv
     argv=$(cat "$ssh_argv_file")
     assert_contains "$argv" "root@tweety-remote"
-    assert_contains "$argv" "pv_rate_limit='' bash -s"
+    assert_contains "$argv" "transfer_rate_limit='' bash -s"
 }
 
 test_path_under_mount_never_doubles_slash() {

@@ -532,6 +532,36 @@ def build_recursive_snapshot_command(target: str, snap_name: str) -> list[str]:
     return ["zfs", "snapshot", "-r", f"{target}@{snap_name}"]
 
 
+_RATE_MULTIPLIERS = ("", "k", "m", "g", "t", "p", "e")
+
+
+def valid_rate_limit(text: str) -> bool:
+    """Return True when *text* is a valid transfer-rate value.
+
+    Grammar identical to lib/pace_stream.py (and archive_valid_rate in
+    lib/archive-engine.sh): digits plus an optional case-insensitive
+    multiplier suffix — k/m/g/t/p/e with an optional ``i`` and an optional
+    ``b`` (1024-based, e.g. ``100M`` = 100 MiB/s, ``500KiB`` = 500 KiB/s,
+    ``4096`` = 4096 bytes/s). Implemented with string operations rather
+    than a regular expression, mirroring archive_valid_rate, so the
+    accepted set cannot drift from the grammar the pacer documents.
+    """
+    if not text:
+        return True
+    lowered = text.lower()
+    i = 0
+    while i < len(lowered) and lowered[i].isdigit():
+        i += 1
+    digits, suffix = lowered[:i], lowered[i:]
+    if not digits:
+        return False
+    if suffix.endswith("ib"):
+        suffix = suffix[:-2]
+    elif suffix.endswith(("i", "b")):
+        suffix = suffix[:-1]
+    return suffix in _RATE_MULTIPLIERS
+
+
 def build_migration_send_receive_command(
     source_fs: str,
     dest_fs: str,
@@ -547,8 +577,8 @@ def build_migration_send_receive_command(
     ``fromsnap`` when given) assigned, so the transfer is resumable (an
     interrupted copy leaves a receive resume token on the destination;
     re-running resumes from it) and carries ``pv`` in the pipeline for live
-    progress, optionally rate-limited via *rate_limit* (a ``pv -L`` value
-    such as ``100m``; empty = unlimited). Without *from_snap* the wrapper
+    progress, optionally rate-limited via *rate_limit* (a rate value such
+    as ``100m``; empty = unlimited, enforced by lib/pace_stream.py). Without *from_snap* the wrapper
     sends ``zfs send -Rw <source>@<snap>`` and receives with
     ``zfs receive -u -F -s -v <dest>``: ``-R`` makes a replication stream
     (descendants, snapshots, properties); ``-w`` sends raw so encrypted
@@ -572,7 +602,7 @@ def build_migration_send_receive_command(
         raise ValueError(f"invalid snapshot name: {snap_name!r}")
     if from_snap and ("@" in from_snap or "/" in from_snap):
         raise ValueError(f"invalid from snapshot name: {from_snap!r}")
-    if rate_limit and not re.fullmatch(r"[0-9]+[kKmMgGtT]?", rate_limit):
+    if rate_limit and not valid_rate_limit(rate_limit):
         raise ValueError(f"invalid rate limit: {rate_limit!r}")
     script = path_utils.resolve_local_bin(
         "zfs-migrate-send", script_dir=os.path.dirname(os.path.realpath(__file__))
@@ -590,7 +620,7 @@ def build_migration_send_receive_command(
     if from_snap:
         parts.append(f"fromsnap={shlex.quote(from_snap)}")
     if rate_limit:
-        parts.append(f"pv_rate_limit={shlex.quote(rate_limit)}")
+        parts.append(f"transfer_rate_limit={shlex.quote(rate_limit)}")
     parts.append("zfs_migrate_send")
     return ["bash", "-c", "; ".join(parts)]
 

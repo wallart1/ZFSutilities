@@ -261,24 +261,78 @@ See [Next Steps](#next-steps) for what to do after installation.
 
 ## How to Upgrade
 
-1. **Acquire the new version.** Download or clone the release you want to
-   install into a fresh directory (do not reuse an old directory that may have
-   local changes):
+### Upgrading with upgrade-zfsutilities (recommended)
 
-   ```bash
-   git clone https://github.com/wallart1/ZFSutilities.git \<target-directory\>
-   cd \<target-directory\>
-   ```
+Run the self-upgrade command on the host you want to upgrade:
 
-2. **Deploy it** with [deploy-version](../commands-and-modules/two-node.md#deploy-version-repo-root)
-   from that directory. This copies the repository into a new version directory without touching the
-   running system:
+```bash
+sudo upgrade-zfsutilities
+```
 
-   ```bash
-   sudo ./bin/deploy-version
-   sudo switch-version --list
-   sudo switch-version \<version\>
-   ```
+It performs a guarded, full-site upgrade:
+
+1. **Checks GitHub** for the latest release and compares it with the active
+   deployed version. When there is nothing newer, it says so and exits.
+2. **Downloads the release** after asking you to confirm the upgrade.
+3. **Scans every host the release will be deployed to** — this host plus
+   every host in the deployment groups — for files that were modified,
+   added, or removed since their version was installed. Hosts may run
+   different active versions; each is compared against its own baseline
+   (the `MANIFEST.sha256` recorded at deploy time, or the matching release
+   tarball for trees deployed before manifests existed).
+4. **Shows the changes before touching anything**: per-host listings plus
+   unified diffs of every modified file against the original release, then
+   asks for approval.
+5. **Archives approved changes on their host** under
+   `salvaged-changes/<old-version>/<timestamp>/` (with a provenance README
+   and a combined diff), so nothing is ever destroyed by an upgrade.
+   Re-apply any change you still want, then re-deploy.
+6. **Deploys via deploy-version** from the downloaded release tree, which
+   copies the new version to every deployment-group host, and **stops
+   there — nothing is activated**. The running system keeps its current
+   version until you run switch-version yourself; the exact activation
+   command is printed for every host, including the local one
+   (`sudo switch-version <version>`, and
+   `ssh root@<host> switch-version <version>` for each remote). On
+   two-node sites, run `sudo upgrade-zfsutilities` on each node.
+
+Remote targets require root SSH access. Password authentication is fine:
+ssh prompts for the password itself, and every connection in the upgrade
+(including deploy-version's sync) multiplexes through one control master
+per host — one password prompt per host. The host running the upgrade
+needs `curl` and `mkdocs` (the same prerequisites deploy-version has).
+
+### Why not install over the deployed code
+
+Never hand-copy files into the active version tree or re-run
+`deploy-version` over the version that is currently active. Unrecorded
+local edits are destroyed with no archive and no prompt — and a plain
+`rsync --delete` cannot warn you, because it does not know what the files
+should contain. `upgrade-zfsutilities` exists precisely to catch and
+preserve those edits: every deployment records a `MANIFEST.sha256` of the
+files it installs, and the upgrade compares every deployment target
+against that baseline before replacing anything.
+
+### Manual upgrade (development checkouts)
+
+For deploying uncommitted work from a repository checkout, use the manual
+flow. Clone the release you want into a fresh directory (do not reuse an
+old directory that may have local changes):
+
+```bash
+git clone https://github.com/wallart1/ZFSutilities.git \<target-directory\>
+cd \<target-directory\>
+```
+
+Deploy it with [deploy-version](../commands-and-modules/two-node.md#deploy-version-repo-root)
+from that directory. This copies the repository into a new version directory without touching the
+running system:
+
+```bash
+sudo ./bin/deploy-version
+sudo switch-version --list
+sudo switch-version \<version\>
+```
 
 - [deploy-version](../commands-and-modules/two-node.md#deploy-version-repo-root) copies the current
   repo state into a new version directory without touching active production

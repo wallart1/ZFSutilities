@@ -286,15 +286,15 @@ class TestCollectRestoreConfig(unittest.TestCase):
         cfg = rp.collect_restore_config(app)
         self.assertFalse(cfg["recursive"])
 
-    def test_collects_verify_after_transfer_and_pv_rate_limit(self):
+    def test_collects_verify_after_transfer_and_transfer_rate_limit(self):
         app = _restore_app()
         app.restore_var_widgets = {
             "verify_after_transfer": _FakeComboBoxText("N"),
-            "pv_rate_limit": _FakeEntry("50M"),
+            "transfer_rate_limit": _FakeEntry("50M"),
         }
         cfg = rp.collect_restore_config(app)
         self.assertEqual(cfg["variables"]["verify_after_transfer"], "N")
-        self.assertEqual(cfg["variables"]["pv_rate_limit"], "50M")
+        self.assertEqual(cfg["variables"]["transfer_rate_limit"], "50M")
 
 
 class TestLoadRestoreConfig(unittest.TestCase):
@@ -317,11 +317,11 @@ class TestLoadRestoreConfig(unittest.TestCase):
         )
         self.assertTrue(app.restore_recursive_check.get_active())
 
-    def test_loads_verify_after_transfer_and_pv_rate_limit(self):
+    def test_loads_verify_after_transfer_and_transfer_rate_limit(self):
         app = _restore_app()
         app.restore_var_widgets = {
             "verify_after_transfer": _FakeComboBoxText("Y"),
-            "pv_rate_limit": _FakeEntry(),
+            "transfer_rate_limit": _FakeEntry(),
         }
         rp.load_restore_config(
             app,
@@ -332,7 +332,7 @@ class TestLoadRestoreConfig(unittest.TestCase):
                 "recursive": False,
                 "variables": {
                     "verify_after_transfer": "N",
-                    "pv_rate_limit": "75M",
+                    "transfer_rate_limit": "75M",
                 },
                 "do_part1": True,
                 "do_part2": True,
@@ -340,7 +340,7 @@ class TestLoadRestoreConfig(unittest.TestCase):
             },
         )
         self.assertEqual(app.restore_var_widgets["verify_after_transfer"].get_active_text(), "N")
-        self.assertEqual(app.restore_var_widgets["pv_rate_limit"].get_text(), "75M")
+        self.assertEqual(app.restore_var_widgets["transfer_rate_limit"].get_text(), "75M")
 
 
 class TestRestoreRunDialog(unittest.TestCase):
@@ -469,7 +469,7 @@ class TestRestoreAdvancedLabel(unittest.TestCase):
     def test_non_default_var_turns_label_orange(self):
         app, expander = self._create_page()
         self._install_default_widgets(app)
-        app.restore_var_widgets["pv_rate_limit"].set_text("50M")
+        app.restore_var_widgets["transfer_rate_limit"].set_text("50M")
         app._restore_update_advanced_label()
         self.assertIn('foreground="orange"', self._label_markup(expander))
 
@@ -493,9 +493,9 @@ class TestRestoreAdvancedLabel(unittest.TestCase):
     def test_non_default_var_value_turns_orange(self):
         app, _expander = self._create_page()
         self._install_default_widgets(app)
-        app.restore_var_widgets["pv_rate_limit"].set_text("50M")
+        app.restore_var_widgets["transfer_rate_limit"].set_text("50M")
         app._restore_update_advanced_label()
-        context = app.restore_var_widgets["pv_rate_limit"].get_style_context()
+        context = app.restore_var_widgets["transfer_rate_limit"].get_style_context()
         self.assertIn("zfsu-nondefault", context.classes)
         other = app.restore_var_widgets["depth"].get_style_context()
         self.assertNotIn("zfsu-nondefault", other.classes)
@@ -503,7 +503,7 @@ class TestRestoreAdvancedLabel(unittest.TestCase):
     def test_reverting_var_value_removes_orange(self):
         app, _expander = self._create_page()
         self._install_default_widgets(app)
-        widget = app.restore_var_widgets["pv_rate_limit"]
+        widget = app.restore_var_widgets["transfer_rate_limit"]
         widget.set_text("50M")
         app._restore_update_advanced_label()
         widget.set_text("")
@@ -521,7 +521,7 @@ class TestRestoreAdvancedLabel(unittest.TestCase):
         app, expander = self._create_page()
         self._install_default_widgets(app)
         with patch.object(rp, "_on_auto_dest_toggled"):
-            rp.load_restore_config(app, {"variables": {"pv_rate_limit": "50M"}})
+            rp.load_restore_config(app, {"variables": {"transfer_rate_limit": "50M"}})
         self.assertIn('foreground="orange"', self._label_markup(expander))
 
 

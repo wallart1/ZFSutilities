@@ -79,6 +79,7 @@ DEBUG:  VERB:  INFO:  WARN:  FATAL:  [none]
 | `WARN: Insufficient space on destination pool '...'.` | The estimated transfer (plus a 10% margin) does not fit the destination pool (issued by the shared transfer library) | Prompt: y attempts the transfer anyway, n skips; autoproceed='Y' skips the dataset |
 | `INFO: Skipping ... (insufficient space).` | The space check failed and the run is non-interactive or the operator declined | Dataset skipped, run continues |
 | `WARN: Proceeding despite insufficient space.` | The operator answered y at the space prompt | Transfer attempted anyway |
+| `FATAL: Rate limit set but pace_stream.py not found` | A transfer rate limit is configured but the pacer helper cannot be resolved beside the library (broken or partial deployment) | Script aborts before any bytes move — restore `lib/pace_stream.py` or clear the rate limit |
 | `DEBUG: Proxmox tools not available - cannot check for running VMs.` | The running-VM safety gate cannot run on this system and is bypassed | Run continues without the check |
 | `WARN: Running VMs detected on destination dataset ...!` | Destructive preparation is imminent and VMs are running on the destination (list follows) | Prompt: y proceeds (DANGEROUS), n skips the dataset; autoproceed='Y' skips |
 | `INFO: Skipping ... (running VMs).` | Running VMs found and the run is non-interactive or the operator declined | Dataset skipped, run continues |
@@ -708,13 +709,14 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `INFO: Verifying copy integrity (sha256)...` | The destination is being read back to compare against the source hash captured during the copy (device copies carry no stream checksums) | Informational |
 | `INFO: ✓ Copy verified (sha256 match)` | The copy matches the source snapshot | Informational |
 | `FATAL: Failed to hash devices` | A hash read failed | Script aborts; this run's datasets are rolled back |
+| `FATAL: Rate limit set but pace_stream.py not found` | A transfer rate limit is configured but the pacer helper cannot be resolved beside the library (broken or partial deployment) | Script aborts before any bytes move — restore `lib/pace_stream.py` or clear the rate limit |
 | `FATAL: Hash mismatch between ... and ...` | The copied archive differs from the source snapshot | The copy is corrupt; this run's datasets are rolled back — re-run after investigating |
 | `FATAL: Failed to snapshot archived zvol ...@archive` | The point-in-time marker on the archive zvol failed | Script aborts; this run's datasets are rolled back |
 | `WARN: Removed partial archive dataset ...` / `WARN: Removed created parent ...` | A failed transfer undid exactly the datasets this run created | Informational; re-run after fixing the cause |
 | `INFO: ✓ Archived: ...` | The zvol's archive completed | Informational |
 | `FATAL: Failed to archive ...` | The per-zvol transfer failed (details above) | Script aborts |
-| `INFO: ✓ Saved transfer rate limit to JSON config` | The entered pv rate limit differs from the saved default and was persisted | Informational |
-| `FATAL: Invalid rate limit '...' — use a pv -L value ...` | The entered rate limit is not a digits-plus-suffix pv value (and not empty) | Script aborts; re-run with e.g. 100M or leave empty |
+| `INFO: ✓ Saved transfer rate limit to JSON config` | The entered rate limit differs from the saved default and was persisted | Informational |
+| `FATAL: Invalid rate limit '...' — use a rate value ...` | The entered rate limit is not a digits-plus-suffix rate value (and not empty) | Script aborts; re-run with e.g. 100M or leave empty |
 | `WARN: Incomplete archive dataset from an interrupted run:` / `WARN: ... removing and re-archiving ...` | The dataset exists without its post-verification @archive snapshot — unverified leftover | Informational; it is destroyed and re-made automatically |
 | `INFO: ✓ Already archived (verified) — skipping: ...` | Re-run skip: the dataset carries @archive, a METHOD= sidecar, and the volblocksize its method implies | Informational |
 | `INFO: --- Step 3: Verifying archive ---` | Phase milestone; the verification gate begins | Informational |
@@ -750,7 +752,7 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `FATAL: Missing .disk_info sidecar file(s):` | The `.disk_info` sidecar is absent (list printed); it is load-bearing for config/iSCSI rebuild | Script aborts; the archive is incomplete |
 | `FATAL: Every disk in an archive must carry a .disk_info sidecar. An archive without them predates the sidecar format — ...` | Continuation of the missing-sidecar FATAL: an archive with no sidecars anywhere predates the sidecar format, so there is no recorded disk key, config text, or iSCSI layout to rebuild from | Script aborts; pre-sidecar archives need the manual restore procedure (see the unarchive-vm documentation) |
 | `WARN: Missing volblocksize sidecar (informational): ...` | No `.original_volblocksize` sidecar; harmless for raw-method restores (the stream carries volblocksize) | Informational unless the archive's method is copy |
-| `INFO: ✓ Saved transfer rate limit to JSON config` / `FATAL: Invalid rate limit '...'` | Restore-side rate prompt (shared JSON default with archive-vm) | Informational / re-run with a pv value or empty |
+| `INFO: ✓ Saved transfer rate limit to JSON config` / `FATAL: Invalid rate limit '...'` | Restore-side rate prompt (shared JSON default with archive-vm) | Informational / re-run with a rate value or empty |
 | `INFO: Restore of VM ... is already complete — nothing to do.` | Re-run after a finished restore: every destination zvol carries the RESTORED_AS marker and the config exists | Informational; the run exits cleanly |
 | `INFO: ✓ Already restored (verified) — skipping: ...` | Re-run skip: this disk's restore carries the completion marker | Informational |
 | `INFO: Removing unmarked leftover ...` | A confirmed destroy-and-redo: the destination zvol existed without the completion marker and the operator approved re-restoring it | Informational |
@@ -770,7 +772,8 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `FATAL: Could not acquire write lock on ...` | The destination zvol's write lock is unavailable | Script aborts; resolve the lock |
 | `FATAL: Failed to restore ...` / `FATAL: Zvol restoration failed on ...` | The per-zvol restore failed under either method (local or remote) | Script aborts; check space and the messages above |
 | `INFO: --- Step 2: Rebuilding iSCSI infrastructure ---` | Phase milestone (two-node only) | Informational |
-| `FATAL: Cannot map pool ... to target` | No iSCSI target mapping for a restored zvol's pool | Script aborts; fix the node config mapping |
+| `WARN: Unknown pool: ... (not in POOL_TARGET in ...)` | node-lib's pool lookup cannot find the restored zvol's pool in the node config's `POOL_TARGET` map; it precedes the FATAL below | Add the pool to `POOL_TARGET` in the node config on both nodes |
+| `FATAL: Cannot map pool ... to target` | No iSCSI target mapping for a restored zvol's pool (`pool_to_target` failed; the WARN above names the node config) | Script aborts; fix the node config mapping |
 | `FATAL: iSCSI reconstruction failed on ...` | The remote iSCSI rebuild failed | Script aborts; see the remote messages |
 | `INFO: ✓ iSCSI configuration saved` | The storage host's targetcli config was persisted | Informational |
 | `SAVE_FAILED` | The remote `safe-iscsi-save` failed; `CONFIG_SAVED` is only emitted after a successful save | Reconstruction aborts; resolve the save failure and re-run |
@@ -2137,6 +2140,29 @@ Each listed version is removed via `uninstall-version -y`; per-version messages 
 | `WARN:   switch-version --uninstall returned non-zero; continuing` | Unwiring the active version failed | Removal continues; some wiring may remain |
 | `INFO:   Peer has no deployed uninstall script; running local copy via ssh...` | The peer lacks the script; the local copy is piped over SSH | Informational |
 | `INFO: === DRY RUN — no changes will be made ===` / `INFO: This was a dry run; no changes were made.` | `--dry-run` mode | Actions are printed only |
+
+### [upgrade-zfsutilities](../commands-and-modules/commands.md#upgrade-zfsutilities)
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `FATAL: No active version is deployed under ...` | No `current` symlink in the version base | Install first with install-single-node or install-two-node |
+| `FATAL: curl is required but not installed.` | The upgrade needs curl to reach GitHub | Install curl and re-run |
+| `FATAL: Cannot reach GitHub (...)` | Network failure against the release API | Check connectivity and re-run |
+| `FATAL: GitHub returned an HTTP error for ...` / `FATAL: GitHub response is missing tag_name` | No releases or an unexpected API response | Verify the repository has published releases |
+| `INFO: Nothing to upgrade — the active version is not older than the latest release.` | The deployed version matches or exceeds the latest release (also blocks re-deploying over the active version) | Informational; exit 0 |
+| `Download <version> and deploy it to every deployment target? [y/N]` | Deploy consent before anything is fetched or changed | y proceeds to the change scan; N aborts with nothing touched |
+| `FATAL: Download failed: ...` / `FATAL: Could not extract the downloaded release tarball.` / `FATAL: The downloaded release is not a ZFSutilities tree (...)` | The release tarball could not be staged | Check the release assets and re-run |
+| `WARN:   Downloaded tree VERSION (...) does not match release tag ...` | Tag and VERSION disagree in the release | Verify the release was tagged correctly before continuing |
+| `FATAL: Cannot reach root@<host> over SSH. Aborting before any changes.` | A deployment target is unreachable | Fix access to the host and re-run; nothing was modified |
+| `FATAL: Scan failed on <host> — aborting before any changes.` | The remote change scan failed mid-flight | Investigate the host; nothing was modified |
+| `INFO: --- <host> ---` ... `INFO:   modified:/added:/removed:` listings | The pre-approval change report for one deployment target | Review, including the printed unified diffs |
+| `WARN:   Active version <v> has no MANIFEST.sha256 and no release tarball is available for it — local modifications ... CANNOT be detected.` | That host's tree cannot be verified | Confirm you are willing to proceed without verification |
+| `WARN:   Diff unavailable: no pristine source for version <v> (untagged release?) — modification hashes only.` | Detection worked from hashes, but no original exists to diff against | Compare the salvaged copies manually if needed |
+| `Archive the changes listed above on their hosts and continue the upgrade? [y/N]` | Salvage consent — approving archives then supersedes the changes | y archives under `salvaged-changes/` and continues; N aborts with nothing touched |
+| `FATAL: Salvage failed on <host> — aborting before deployment.` | Archiving failed mid-consent | Nothing was deployed; re-run after investigating |
+| `INFO:   Salvaged on <host>: N file(s) -> salvaged-changes/<v>/<ts>/` / `INFO:   Combined diff saved: ...` | Where the archived edits and their diff live | Re-apply any change you still want, then re-deploy |
+| `FATAL: deploy-version failed. The deployment is incomplete — investigate before activating anything.` | The deployment step failed after salvage | Run deploy-version manually and investigate |
+| `INFO: === upgrade-zfsutilities complete ===` ... `INFO:   Deployed version: <v> — NOT activated` ... `INFO:     this host:  sudo switch-version <v>` / `INFO:     <host>:  ssh root@<host> switch-version <v>` | Final report: deployed version, unchanged active version, salvage locations, and the per-host activation commands | Run the printed commands when you are ready to activate |
 | `INFO: Configuration, logs, and history were preserved. / Run with --purge to remove them as well.` | Software-only mode outcome | Rerun with `--purge` to remove them |
 
 ### [startdocserver](../commands-and-modules/commands.md#startdocserver)
@@ -2446,6 +2472,7 @@ Headless runner for scheduled profiles (cron): loads a profile JSON, builds its 
 | `INFO: Skipping profile ...: today does not match weekday ordinal '...'` | The cron weekday #n/#L guard failed at runtime | Skipped; exit 0 |
 | `VERB: Ignoring weekday ordinal '...' for profile ... (--ignore-schedule)` | Immediate run requested (GUI Run Now or CLI `--ignore-schedule`); ordinal guard bypassed | Profile runs regardless of the day |
 | `FATAL: Unknown tab type: ...` | No runner is registered for the profile's tab type | rc=1 |
+| `FATAL: Unhandled exception in profile runner:` (followed by the traceback) | Top-of-run catch-all: an unexpected exception escaped the tab-type runner | Traceback and rc=1 session trailer written to the session log; exit 1 |
 | `INFO: Profile ... finished (rc=...)` | Final summary before the history entry and session trailer | Exits with rc |
 
 ### [profile_manager](../commands-and-modules/python-modules.md#profile_managerpy)

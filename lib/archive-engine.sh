@@ -13,10 +13,13 @@
 #   - encrypted zvols     → raw send/receive as-is (a device copy would read
 #                           plaintext and break encryption end-to-end)
 #
-# Pacing: when pv_rate_limit holds a pv -L value (e.g. 100M) every data
+# Pacing: when transfer_rate_limit holds a rate value (e.g. 100M) every data
 # movement — device copy, hash verification, raw send/receive — is passed
-# through `pv -q -L` so an archive run cannot saturate a small storage
-# host. Empty or unset means unlimited (a plain dd reader instead of pv).
+# through the python pacer lib/pace_stream.py so an archive run cannot
+# saturate a small storage host. The pacer caps the stream flat: a stalled
+# pipeline forfeits the missed budget instead of buying a later burst (pv -L
+# enforced only a long-run average and burst to 1.5-3.5x the cap after every
+# ZFS txg/throttle stall). Empty or unset means unlimited (a plain dd reader).
 #
 # Integrity: the device-copy path carries no stream checksums, so its
 # source is hashed in flight — the copy stream is teed to a background
@@ -24,10 +27,11 @@
 # copy and compared against that digest. The source device is read
 # exactly once per copy; only the destination gets a second pass.
 
-# True when $1 is a valid pv -L rate value (digits plus an optional
-# K/M/G/T/P/E suffix with optional i and B, case-insensitive) or is empty
-# (= unlimited). Implemented with parameter expansion and a case list so
-# no regex exceeds the 10-character policy limit.
+# True when $1 is a valid rate value (digits plus an optional K/M/G/T/P/E
+# suffix with optional i and B, case-insensitive; the grammar
+# lib/pace_stream.py parses) or is empty (= unlimited). Implemented with
+# parameter expansion and a case list so no regex exceeds the 10-character
+# policy limit.
 archive_valid_rate() {
     local rate="$1" num suffix lower
     [[ -z "$rate" ]] && return 0
@@ -45,6 +49,25 @@ archive_valid_rate() {
     esac
 }
 
+# Resolve the python pacing helper (lib/pace_stream.py) once per run into
+# _archive_pacer. The helper lives beside this library in every layout
+# (repo, deployed, absolute-path sourcing), so BASH_SOURCE's own directory
+# is authoritative; find_zfsutility_script is a fallback for unusual
+# deployments. Returns 1 when not found so a paced run fails loudly
+# instead of silently running unlimited.
+archive_pacer() {
+    local candidate
+    if [[ -z "${_archive_pacer:-}" ]]; then
+        candidate="$(dirname "${BASH_SOURCE[0]}")/pace_stream.py"
+        if [[ -f "$candidate" ]]; then
+            _archive_pacer="$candidate"
+        elif declare -f find_zfsutility_script >/dev/null 2>&1; then
+            _archive_pacer=$(find_zfsutility_script pace_stream.py 2>/dev/null || true)
+        fi
+    fi
+    [[ -n "${_archive_pacer:-}" ]]
+}
+
 # Copy one block device onto another while hashing the source stream in
 # flight: the bytes are teed to a background sha256sum through a fifo, so
 # the source device is read exactly once per archive (the copy and its
@@ -54,11 +77,11 @@ archive_valid_rate() {
 # named by $3 (declare it local at the call site; printf -v assigns
 # through bash's dynamic scoping, like archive_create_parents).
 #
-# Pacing: a paced run throttles the read head with pv -q -L; an unlimited
-# run reads with dd. Both write through the same tee→fifo hash
-# side-channel into the same sparse writer — dd conv=sparse seeks
-# all-zero input rather than writing it, at the dd block-size granularity,
-# so a thin archive zvol stays thin either way.
+# Pacing: a paced run throttles the read head through lib/pace_stream.py
+# (python3); an unlimited run reads with dd. Both write through the same
+# tee→fifo hash side-channel into the same sparse writer — dd conv=sparse
+# seeks all-zero input rather than writing it, at the dd block-size
+# granularity, so a thin archive zvol stays thin either way.
 #
 # Failure containment: a dead hash consumer or a dead writer breaks the
 # pipeline via SIGPIPE and pipefail, so a partial copy or a truncated
@@ -66,6 +89,10 @@ archive_valid_rate() {
 archive_copy_devices() {
     local src="$1" dst="$2" hash_var="$3"
     local tmp_dir fifo hash_file sha_pid pipe_rc=0 sha_rc=0 hash=""
+    if [[ -n "${transfer_rate_limit:-}" ]] && ! archive_pacer; then
+        log_msg "FATAL: Rate limit set but pace_stream.py not found"
+        return 1
+    fi
     tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/zfsutilities-copy.XXXXXX") || return 1
     fifo="${tmp_dir}/hash.fifo"
     hash_file="${tmp_dir}/src.sha256"
@@ -81,9 +108,9 @@ archive_copy_devices() {
     fi
     sha256sum < "$fifo" > "$hash_file" 2>/dev/null &
     sha_pid=$!
-    if [[ -n "${pv_rate_limit:-}" ]]; then
+    if [[ -n "${transfer_rate_limit:-}" ]]; then
         ( set -o pipefail
-          pv -q -L "$pv_rate_limit" -- "$src" \
+          python3 "$_archive_pacer" "$transfer_rate_limit" -- "$src" \
               | tee "$fifo" \
               | dd of="$dst" bs=16M conv=sparse,notrunc iflag=fullblock
         ) || pipe_rc=1
@@ -110,13 +137,19 @@ archive_copy_devices() {
     return 0
 }
 
-# Build the optional pv pacing segment for a raw send/receive pipeline into
+# Build the optional pacing segment for a raw send/receive pipeline into
 # the pace_pipe array (empty when unlimited). Usage:
 #   archive_pace_pipe; zfs send ... | "${pace_pipe[@]}" zfs receive ...
+# Returns 1 (with a FATAL log) when a rate is set but the pacer cannot be
+# resolved.
 archive_pace_pipe() {
     pace_pipe=()
-    if [[ -n "${pv_rate_limit:-}" ]]; then
-        pace_pipe=(pv -q -L "$pv_rate_limit")
+    if [[ -n "${transfer_rate_limit:-}" ]]; then
+        if ! archive_pacer; then
+            log_msg "FATAL: Rate limit set but pace_stream.py not found"
+            return 1
+        fi
+        pace_pipe=(python3 "$_archive_pacer" "$transfer_rate_limit")
     fi
 }
 
@@ -144,11 +177,16 @@ archive_hash_verify() {
     local src="$1" dst="$2" expected="$3"
     local h2
     log_msg "INFO:   Verifying copy integrity (sha256)..."
-    if [[ -n "${pv_rate_limit:-}" ]]; then
-        # Rate-capped hashing: read the device through pv so the verify
-        # pass cannot saturate the pool; sha256sum of stdin yields the
-        # same digest as of the file.
-        h2=$(pv -q -L "$pv_rate_limit" -- "$dst" | sha256sum 2>/dev/null) || {
+    if [[ -n "${transfer_rate_limit:-}" ]]; then
+        # Rate-capped hashing: read the device through the pacer so the
+        # verify pass cannot saturate the pool; sha256sum of stdin yields
+        # the same digest as of the file.
+        if ! archive_pacer; then
+            log_msg "FATAL: Rate limit set but pace_stream.py not found"
+            return 1
+        fi
+        h2=$(python3 "$_archive_pacer" "$transfer_rate_limit" -- "$dst" \
+            | sha256sum 2>/dev/null) || {
             log_msg "FATAL: Failed to hash devices"
             return 1
         }
@@ -320,7 +358,10 @@ archive_one_zvol() {
     else
         method=raw
         log_msg "INFO:   Archive method: raw send/receive (encrypted)"
-        archive_pace_pipe
+        if ! archive_pace_pipe; then
+            archive_rollback_created "$archive_dataset" "$dataset_created" "$created_root"
+            return 1
+        fi
         if ! ( set -o pipefail
                zfs send -cw "${zvol}${snap_name}" \
                  | "${pace_pipe[@]}" zfs receive "$archive_dataset" ); then
@@ -483,7 +524,10 @@ unarchive_one_zvol() {
         fi
     else
         log_msg "INFO:   Restore method: raw send/receive"
-        archive_pace_pipe
+        if ! archive_pace_pipe; then
+            unarchive_rollback_created "$new_zvol" "$dataset_created" "$created_root"
+            return 1
+        fi
         if ! ( set -o pipefail
                zfs send -cw "${arc_dataset}${snap_name}" \
                  | "${pace_pipe[@]}" zfs receive "$new_zvol" ); then

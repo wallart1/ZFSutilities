@@ -8,6 +8,12 @@
 #     replication for backup/restore.
 #   - zfs-migrate-send can do the same for one-shot Migrate Pool copy steps.
 #
+# Rate limiting and progress display are separate pipeline stages: pv only
+# instruments progress (-pterb/-fpterb); the python pacer lib/pace_stream.py
+# (flat deadline pacing — a stall forfeits its budget rather than buying a
+# later burst, which is all pv -L ever guaranteed) enforces the optional
+# $transfer_rate_limit.
+#
 # The library loads its own dependency (bashinit).
 
 source ~/bashinit
@@ -57,41 +63,54 @@ function transfer_validate_resume_token {
 }
 
 # Build the pv argument array for a transfer into the global
-# transfer_pv_args array.
+# transfer_pv_args array — progress display ONLY; rate limiting is a
+# separate lib/pace_stream.py stage (transfer_pace_args below).
 # Usage: transfer_pv_args <datatosend> <use_pv>
 #   use_pv='Y' + tty on stderr          -> -pterb -s <size>
 #   use_pv='Y' + ZFSUTILITIES_LOG_INHERIT=Y -> -fpterb -s <size>
-#   $pv_rate_limit set + progress wanted -> append -L <rate>
-#   $pv_rate_limit set + no progress     -> -q -L <rate>
 #   otherwise                            -> empty array (no pv in the pipeline)
 function transfer_pv_args {
     local datatosend="$1" use_pv="$2"
     transfer_pv_args=()
-    local progress_desired="N"
     # Progress display: natural in terminal, forced in GUI, suppressed otherwise
     if [[ "$use_pv" = 'Y' ]]; then
         if [[ -t 2 ]]; then
             # Terminal available — natural progress display
             transfer_pv_args=(-pterb -s "$datatosend")
-            progress_desired="Y"
         elif [[ "${ZFSUTILITIES_LOG_INHERIT:-}" = "Y" ]]; then
             # Parent runner is capturing output — force output for parser
             transfer_pv_args=(-fpterb -s "$datatosend")
-            progress_desired="Y"
-        fi
-    fi
-    # Rate limit: visible in terminal/GUI, quiet in headless/non-interactive
-    local rate_limit="${pv_rate_limit:-}"
-    if [[ -n "$rate_limit" ]]; then
-        if [[ "$progress_desired" = "Y" ]]; then
-            transfer_pv_args+=("-L" "$rate_limit")
-        else
-            transfer_pv_args=(-q -L "$rate_limit")
         fi
     fi
 }
 
-# Run one zfs send | pv | zfs receive pipeline under pipefail.
+# Resolve the python pacing helper (lib/pace_stream.py) once into
+# _transfer_pacer. The helper lives beside this library in every layout, so
+# BASH_SOURCE's own directory is authoritative. Returns 1 when not found so
+# a paced transfer fails loudly instead of silently running unlimited.
+function transfer_pacer {
+    local candidate
+    if [[ -z "${_transfer_pacer:-}" ]]; then
+        candidate="$(dirname "${BASH_SOURCE[0]}")/pace_stream.py"
+        [[ -f "$candidate" ]] && _transfer_pacer="$candidate"
+    fi
+    [[ -n "${_transfer_pacer:-}" ]]
+}
+
+# Build the pacing segment for a transfer into the global transfer_pace_args
+# array: `python3 <pacer> <rate>` when $transfer_rate_limit is set, empty
+# otherwise. Returns 1 when a rate is set but the pacer cannot be resolved.
+# Usage: transfer_pace_args
+function transfer_pace_args {
+    transfer_pace_args=()
+    local rate_limit="${transfer_rate_limit:-}"
+    if [[ -n "$rate_limit" ]]; then
+        transfer_pacer || return 1
+        transfer_pace_args=(python3 "$_transfer_pacer" "$rate_limit")
+    fi
+}
+
+# Run one zfs send | [pacer] | [pv] | zfs receive pipeline under pipefail.
 # Usage: transfer_do <desc> <sendopts> <recvopts> <use_pv> <datatosend> \
 #                    <send_target> <recv_target> [send_target2]
 #   sendopts/recvopts are space-separated option strings; send_target is
@@ -110,6 +129,10 @@ function transfer_do {
     local send_target="$6" recv_target="$7" send_target2="${8:-}"
 
     transfer_pv_args "$datatosend" "$use_pv"
+    if ! transfer_pace_args; then
+        log_msg "FATAL: Rate limit set but pace_stream.py not found"
+        return 1
+    fi
 
     # Build option arrays without using read, so callers that override read
     # (for example, test mocks that auto-answer prompts) cannot corrupt the
@@ -140,16 +163,24 @@ function transfer_do {
     fi
     eval "$_save_glob"
 
-    # Enable pipefail just for the pipeline so a failing zfs send or pv is
-    # detected even when zfs receive exits 0; restore the prior state after.
+    # Enable pipefail just for the pipeline so a failing zfs send, pacer,
+    # or pv is detected even when zfs receive exits 0; restore the prior
+    # state after.
     local _save_pipefail
     _save_pipefail=$(set -o | awk '$1 == "pipefail" {print $2}')
     set -o pipefail
     # Capture the status with `|| _rc=$?` (not a bare pipeline followed by
     # `$?`) so a failing pipeline is also handled safely if a future caller
     # invokes transfer_do outside a condition context under `set -e`.
+    # Pipeline order: the pacer sits between send and pv so pv's displayed
+    # rate is the paced rate the destination actually receives.
     local _rc=0
-    if [[ ${#transfer_pv_args[@]} -gt 0 ]]; then
+    if [[ ${#transfer_pv_args[@]} -gt 0 && ${#transfer_pace_args[@]} -gt 0 ]]; then
+        "${send_cmd[@]}" | "${transfer_pace_args[@]}" | pv "${transfer_pv_args[@]}" \
+            | "${recv_cmd[@]}" || _rc=$?
+    elif [[ ${#transfer_pace_args[@]} -gt 0 ]]; then
+        "${send_cmd[@]}" | "${transfer_pace_args[@]}" | "${recv_cmd[@]}" || _rc=$?
+    elif [[ ${#transfer_pv_args[@]} -gt 0 ]]; then
         "${send_cmd[@]}" | pv "${transfer_pv_args[@]}" | "${recv_cmd[@]}" || _rc=$?
     else
         "${send_cmd[@]}" | "${recv_cmd[@]}" || _rc=$?

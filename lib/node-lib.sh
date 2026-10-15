@@ -233,7 +233,7 @@ except Exception:
 "
 }
 
-# Read the archive_rate_limit value from the JSON config file (a pv -L
+# Read the archive_rate_limit value from the JSON config file (a rate
 # value such as 100M, or empty for unlimited).
 get_json_archive_rate_limit() {
     local config_file=\
@@ -291,7 +291,7 @@ path_under_mount() {
 # locally in a subshell — so its `set -e` dies with it and the caller's
 # shell functions (including test mocks) stay visible — with
 # ZFSUTILITIES_BIN_DIR pointing at the orchestrator's helper directory;
-# otherwise the payload ships over `ssh bash -s` with pv_rate_limit
+# otherwise the payload ships over `ssh bash -s` with transfer_rate_limit
 # forwarded. Positional arguments after the function name become the
 # payload's "$@". Usage:
 #   on_storage <args...> << 'EOF' ... payload ... EOF
@@ -314,7 +314,7 @@ on_storage() {
         rc=$?
     else
         ssh root@"$storage_host" \
-            "pv_rate_limit='${pv_rate_limit:-}' bash -s" "$@" \
+            "transfer_rate_limit='${transfer_rate_limit:-}' bash -s" "$@" \
             < "$payload_tmp"
         rc=$?
     fi
@@ -340,7 +340,7 @@ on_compute() {
         rc=$?
     else
         ssh root@"$compute_host" \
-            "pv_rate_limit='${pv_rate_limit:-}' bash -s" "$@" \
+            "transfer_rate_limit='${transfer_rate_limit:-}' bash -s" "$@" \
             < "$payload_tmp"
         rc=$?
     fi

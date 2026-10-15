@@ -7,5 +7,7 @@
 shell=bash
 disable=SC1090,SC1091,SC2015,SC2029,SC2030,SC2031,SC2154,SC2317
 
-# bin/watchall is a Python utility; do not run ShellCheck on it.
+# bin/watchall and lib/pace_stream.py are Python utilities; do not run
+# ShellCheck on them (watchall via this exclude-path, pace_stream.py by
+# the lib/*.sh glob in the documented invocation).
 exclude-path=bin/watchall
