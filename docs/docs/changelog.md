@@ -1,5 +1,103 @@
 # Changelog
 
+## 0.126.0
+
+*Released 2026-10-16*
+
+### Added
+
+- **GUI charting through matplotlib, with the Cairo charts as the
+  disclosed fallback.** The new `python/charting.py` renders the four
+  Performance live charts and the Alignment view's visuals through
+  matplotlib embedded via `FigureCanvasGTK3Agg` when the optional
+  package is installed (one apt install of `python3-matplotlib` on the
+  storage node), falling back to the existing Cairo drawing otherwise;
+  the renderer is picked once per process and the decision is recorded
+  in the developer guide (`charting.md`). Series semantics, sampling
+  window, and cadence are identical either way.
+- **Blocksize Ladder** in the Alignment view — a log2-scale ladder per
+  pool (device physical sector → pool ashift block → dataset
+  recordsize/volblocksize → VM guest sector, grouped by size), a dashed
+  reference line at each pool's ashift block, and verdict colouring, so
+  misalignment reads at a glance. Rendered through the shared charting
+  decision with a Cairo fallback.
+- **Pool Topology section** in the Alignment view — one row per vdev
+  group (class, name, type, member disks, ashift block), reconciled in
+  place across refreshes; `PoolAlignment` now carries the pool's typed
+  `zpool status -P` vdev tree with the effective ashift annotated on its
+  root, and mixed member geometry is judged per redundancy group.
+- **Per-dataset observed-request-size advisories** — objset kstats
+  (`/proc/spl/kstat/zfs/<pool>/objset-*`, OpenZFS 2.2+) are parsed and
+  delta-sampled into average read/write request sizes per dataset, and
+  `analyse()` folds them into shrink/grow/zvol-partial-block advisory
+  findings; the pool-level histogram advice stands down while objset
+  data exists (it still names pools, not datasets, as the fallback).
+- **Pool-profile editor tooltips** — every editor row explains its
+  property's purpose, what each value does, and the unset convention,
+  kept in lockstep with the property schema by a drift test.
+- **`zfswipe` kernel/udev notification** — after every wiping step that
+  succeeds (labelclear-clean, wipefs-clean, dd) the partition table is
+  re-read (partprobe, else `blockdev --rereadpt` on absence or failure)
+  and a uevent is triggered with a udev settle, so the GUI's immediate
+  refresh sees the clean device; a WARN remains only when no re-read
+  tool could run.
+
+### Changed
+
+- **Performance-page stability fixes** — the memory-view switcher no
+  longer desyncs (GTK drops a pre-show `set_visible_child_name`; the
+  view is re-asserted on the stack's map signal); live charts keep
+  their designed 110 px height instead of stretching on tall windows;
+  the first Alignment treeview heading is renamed "Blocksize scan";
+  pool rows render self-describing cells ("512 B (effective ashift 9)")
+  with configured-vs-auto detail; Alignment refreshes are scroll-stable
+  (vadjustment saved and clamped-restored, rows reconciled in place on
+  hidden keys — findings keyed by emitting rule and subject); and a
+  single pool's dataset-property failure degrades per pool (failed pools
+  are named) instead of dropping the whole source.
+- **Strict-mode migration of the VM orchestrators** — the thirteen
+  orchestrators flagged by the convention audit (clone-vm,
+  attach-vm-disk, ensure-restored-vm-iscsi, deploy-version, the two
+  installers, remove-vm, move-vm-disk, rename-vm-disk, sever-vm-clone,
+  unarchive-vm, upgrade-zfsutilities, zfsclone-vm) now run
+  `set -euo pipefail` at file scope and in their child-engine heredocs,
+  each audited for unset-variable and pipefail hazards; pipelines whose
+  empty result is legitimate ("LUN not mapped", "no candidates") are
+  fenced so an empty answer stays an answer. A `test-strict-mode` guard
+  holds the line. `memory_page.RollingChart` is re-scoped to the
+  disclosed Cairo fallback renderer, with the chart vocabulary moved
+  into the shared charting module.
+- **Hot spares parse in topology trees** — `zpool status -P` rows that
+  carry a bare state with no READ/WRITE/CKSUM counters (spares:
+  `AVAIL`/`INUSE`) now parse with zeroed counters instead of being
+  silently dropped, so spare-class rows appear in the Disks-tab Pool
+  Topology tree, the Alignment topology table, and member lists.
+
+### Fixed
+
+- **`install-two-node` keep-existing-config path** — answering "no" to
+  the reconfigure prompt left the lowercase host variables unset
+  (node.conf defines the UPPERCASE names only), so the installer always
+  died at the storage-host check on an empty hostname; the config source
+  and lowercase refresh now run in both paths.
+- **`move-vm-disk` two-node storage verification** — the remote
+  verification child read `${pool}` without the orchestrator ever
+  passing it (a casualty of the 0.96.0 casing standardization), so the
+  zvol lookup always failed; the pool is now passed and bound, with a
+  source-scan regression guard.
+- **`rename-vm-disk`** — a failed post-rename iSCSI rescan aborted the
+  script instead of warning with the manual command, and an unencrypted
+  zvol made `discover_iscsi_state` return failure under strict mode;
+  both are corrected.
+- The Alignment view's chain Device rows were keyed on the full device
+  path but rendered the short name, so every device row re-appended on
+  every refresh.
+
+### Removed
+
+- The `tests/integrated/results/phase0/` inventory artifacts committed
+  with 0.115.0 — test-run output does not belong in the tree.
+
 ## 0.125.0
 
 *Released 2026-10-15*

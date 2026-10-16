@@ -20,6 +20,12 @@
 #      (partition tables, foreign labels, the first/last 1 MiB of data).
 #      Not a secure erase — data between the wiped ranges survives.
 #
+# After any step that wiped something, the kernel and udev are told the
+# device changed: the partition table is re-read (partprobe, else
+# blockdev --rereadpt) so stale partition nodes drop, then a uevent is
+# triggered and udev settles so /dev/disk/by-id and lsblk's udev-backed
+# columns reflect the clean device before this script exits.
+#
 # Positional arguments:
 #   A device path (/dev/sdb, /dev/nvme0n1p2, /dev/disk/by-id/...).
 #
@@ -247,29 +253,32 @@ function _zfswipe_dd {
         dd if=/dev/zero of="$node" bs="$_ZFSWIPE_SECTOR" seek="$tail_seek" \
             count="$tail_count" conv=fsync >/dev/null 2>&1 || return $?
     done
-    _zfswipe_reread_pt "$target"
+    _zfswipe_notify_kernel "$target"
     return 0
 }
 
-# Ask the kernel to drop stale partition nodes after a blind dd wipe. All
-# attempts are best-effort; the WARN tells the operator what to do when the
-# kernel could not be convinced.
-function _zfswipe_reread_pt {
+# Tell Linux the device changed after a wipe: re-read the partition table
+# (partprobe, else blockdev --rereadpt) so stale partition nodes drop, then
+# trigger a uevent and settle udev so /dev/disk/by-id and lsblk's udev-backed
+# columns are consistent before the script exits. The re-read is required; the
+# udev refresh is best-effort. Returns 1 with a WARN when no re-read tool
+# could run — the wipe stands, the operator is told what to do.
+function _zfswipe_notify_kernel {
     local target="$1"
-    local disk
+    local disk reread_ok=0
     disk=$(_zfswipe_disk_of "$target")
     [[ -z "$disk" ]] && disk="$target"
     if command -v partprobe >/dev/null 2>&1; then
-        partprobe "$disk" 2>/dev/null
-        return 0
+        partprobe "$disk" 2>/dev/null && reread_ok=1
     fi
-    if command -v blockdev >/dev/null 2>&1; then
-        blockdev --rereadpt "$disk" 2>/dev/null
-        return 0
+    if [[ $reread_ok -eq 0 ]] && command -v blockdev >/dev/null 2>&1; then
+        blockdev --rereadpt "$disk" 2>/dev/null && reread_ok=1
     fi
     if command -v udevadm >/dev/null 2>&1; then
         udevadm trigger "$disk" 2>/dev/null
-        udevadm settle 2>/dev/null
+        udevadm settle --timeout=10 2>/dev/null
+    fi
+    if [[ $reread_ok -eq 1 ]]; then
         return 0
     fi
     log_msg "WARN: Could not re-read the partition table of ${disk}. Run" \
@@ -331,6 +340,7 @@ function zfswipe_main {
     _zfswipe_probe_all wipe_nodes
     if [[ "$_zfswipe_probe" == "clean" ]]; then
         log_msg "INFO: ${_zfswipe_device} verified clean after zpool labelclear."
+        _zfswipe_notify_kernel "$_zfswipe_device"
         return 0
     fi
     methods+=("zpool labelclear")
@@ -340,6 +350,7 @@ function zfswipe_main {
         _zfswipe_probe_all wipe_nodes
         if [[ "$_zfswipe_probe" == "clean" ]]; then
             log_msg "INFO: ${_zfswipe_device} verified clean after wipefs."
+            _zfswipe_notify_kernel "$_zfswipe_device"
             return 0
         fi
         log_msg "WARN: Signatures remain on ${_zfswipe_device}; falling back to dd."

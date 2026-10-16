@@ -2,20 +2,29 @@
 
 Pure logic, no GTK and no subprocess: consumes an AlignmentSample plus the
 user's workload survey and emits Finding rows for the Alignment view. The
-recommendation basis is deliberately two-sided — observed request-size
-histograms and ARC/prefetcher counters on one side, the user-declared
-workload survey on the other — and every finding is advisory only: ashift
-and volblocksize are creation-only, and recordsize changes happen through
-Workload profiles on the Datasets page.
+recommendation basis is deliberately three-sided — observed request sizes
+at pool granularity (`zpool iostat -r` histograms) and at dataset
+granularity (objset kstats, delta-sampled against the previous sample
+when one exists), the pool's vdev topology for device-side structure,
+and the user-declared workload survey — and every finding is advisory
+only: ashift and volblocksize are creation-only, and recordsize changes
+happen through Workload profiles on the Datasets page. No rule acts or
+emits a command.
 
 Thresholds are named module constants, a pattern borrowed from Richard
 Elling's kstat-analyzer (zfs-linux-tools); the values and rules here are
 this project's own.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from alignment_stats import parse_zfs_size
+from alignment_stats import (
+    average_request_sizes,
+    compute_objset_rates,
+    parse_zfs_size,
+    topology_leaf_paths,
+)
+from disk_repository import format_blocksize
 
 # Severity ladder for findings: OK confirms alignment, info suggests a
 # look, WARN marks real misalignment (read-modify-write somewhere).
@@ -25,6 +34,12 @@ SEV_WARN = "WARN"
 
 # Minimum since-boot operations before histogram-based advice is trusted.
 OBSERVATION_MIN_OPS = 1000
+
+# Minimum operations (reads plus writes, over the interval or since boot)
+# before one dataset's average request sizes are trusted for advice. Far
+# below the pool-histogram floor because the objset counters are already
+# per dataset.
+OBSERVATION_MIN_DATASET_OPS = 100
 
 # Prefetcher hit rate at/above which the prefetcher counts as effective.
 PREFETCH_EFFECTIVE = 0.5
@@ -54,6 +69,14 @@ SYNC_COLUMNS = ("sync_read", "sync_write")
 # zvol short-name shape used by new-vm-disk/attach-vm-disk.
 _VM_DISK_SHAPE = "vm-"
 
+# Vdev-class vocabulary shared by the analysis rules and the view's
+# topology table.  Root-level children of a `zpool status` tree are the
+# data-class vdev groups; the named classes appear as heading nodes
+# (classified by name in zfs_repository).  The order matches `zpool
+# status` print order.
+_TOPOLOGY_CLASS_ORDER = ("data", "special", "log", "cache", "spare")
+_TOPOLOGY_HEADING_TYPES = frozenset(_TOPOLOGY_CLASS_ORDER) - {"data"}
+
 
 @dataclass
 class Finding:
@@ -62,6 +85,10 @@ class Finding:
     ``layer`` names the stack level (Device / Pool / Dataset / VM /
     Memory); ``subject`` is the pool, dataset, or host the finding is
     about; ``recommendation`` is advisory text, never an action.
+    ``key`` is the emitting rule's stable identity: the view reconciles
+    findings rows on (key, subject) so a refresh updates a surviving
+    finding in place even while its message numbers drift, instead of
+    rebuilding the table.
     """
 
     layer: str
@@ -69,6 +96,7 @@ class Finding:
     severity: str
     message: str
     recommendation: str = ""
+    key: str = ""
 
 
 @dataclass
@@ -79,6 +107,39 @@ class WorkloadVerdict:
     prefetch_rate: float | None = None
     sync_share: float | None = None
     confidence: str = "low"  # "high" when the prefetcher vote is available
+
+
+@dataclass
+class LadderBar:
+    """One rung of a pool's blocksize ladder (the Alignment view visual).
+
+    ``label`` is the full display label including the layer prefix
+    (``"dataset · recordsize 128K ×3"``); ``size`` is the rung's byte
+    position on the log2 axis; ``state`` is a Finding severity and maps to
+    the ladder's colour vocabulary — OK aligned, WARN mismatched against
+    the pool block, info advisory or unresolved.
+    """
+
+    layer: str  # "Device" | "Pool" | "Dataset" | "VM"
+    label: str
+    size: int
+    state: str
+
+
+@dataclass
+class LadderPool:
+    """One pool's ladder: its rungs plus the ashift reference line.
+
+    ``block`` is the pool's effective-ashift block in bytes — the dashed
+    reference line every other rung is judged against — and is None when
+    the ashift probe failed (the pool keeps its other rungs, all rendered
+    as info, exactly like the chain table keeps the pool row).
+    """
+
+    pool: str
+    ashift: int | None = None
+    block: int | None = None
+    bars: list[LadderBar] = field(default_factory=list)
 
 
 def _rate(hits, misses):
@@ -125,14 +186,6 @@ def classify_workload(hist, prefetch_stats=None):
     return WorkloadVerdict(label, prefetch_rate, sync_share, confidence)
 
 
-def _fmt_bytes(size):
-    """Render a byte count with binary suffixes, zfs-get style."""
-    for suffix, scale in (("M", 1024**2), ("K", 1024)):
-        if size >= scale and size % scale == 0:
-            return f"{size // scale}{suffix}"
-    return str(size)
-
-
 def _pool_block(sample, pool_name):
     """Return the pool's ashift block size in bytes, or None."""
     for pool in sample.pools:
@@ -172,6 +225,66 @@ def _below(datasets, attr, ceiling):
     return result
 
 
+def vdev_groups(root):
+    """Yield ``(class_label, group_node)`` for a topology tree, in order.
+
+    Root-level children of the `zpool status` tree are the data-class
+    groups (mirror/raidz/stripe/disk); the named classes hang off class
+    heading nodes, whose children are the groups.  Emission order is
+    fixed — class order above, then tree order within each class — so
+    both the rules here and the view's topology table (which renders
+    through the same helper) see a deterministic sequence.
+    """
+    groups = {label: [] for label in _TOPOLOGY_CLASS_ORDER}
+    for child in root.children:
+        if child.vdev_type in _TOPOLOGY_HEADING_TYPES:
+            groups[child.vdev_type].extend(child.children)
+        else:
+            groups["data"].append(child)
+    for label in _TOPOLOGY_CLASS_ORDER:
+        for group in groups[label]:
+            yield label, group
+
+
+def _group_geometry_findings(pool):
+    """Per-vdev-group mixed-geometry findings (rule 1, topology half).
+
+    With the pool's vdev tree available, "members disagree on physical
+    sector size" is judged per redundancy group — the unit that matters
+    operationally, because a replacement disk is picked for one group.
+    Mixing across groups (4K data mirror beside a 512-native cache SSD)
+    is benign and stays silent as long as the ashift covers the maximum,
+    which the pool-wide rule above already judges.
+    """
+    findings = []
+    sectors_by_path = {member.path: member.physical_sector for member in pool.members}
+    for class_label, group in vdev_groups(pool.topology):
+        members = {
+            path.rsplit("/", 1)[-1]: sector
+            for path in topology_leaf_paths(group)
+            if (sector := sectors_by_path.get(path)) is not None
+        }
+        distinct = sorted(set(members.values()))
+        if len(distinct) < 2:
+            continue
+        listing = ", ".join(
+            f"{name} {format_blocksize(sector)}" for name, sector in members.items()
+        )
+        findings.append(
+            Finding(
+                "Pool",
+                f"{pool.name} {group.name}",
+                SEV_INFO,
+                f"{class_label} vdev {group.name} mixes member geometry: physical sectors span "
+                f"{format_blocksize(distinct[0])}–{format_blocksize(distinct[-1])} ({listing})",
+                "replacement disks for this group should match at least its largest member "
+                "sector, so every write stays a single device block",
+                key="pool-group-mixed-geometry",
+            )
+        )
+    return findings
+
+
 def _pool_device_findings(sample):
     """Device-to-pool alignment findings (rule 1)."""
     findings = []
@@ -191,6 +304,7 @@ def _pool_device_findings(sample):
                     SEV_INFO,
                     f"effective ashift unavailable (configured: {configured}){unknown_note}",
                     "the pool's ashift could not be resolved; alignment not assessed",
+                    key="pool-ashift-unresolved",
                 )
             )
             continue
@@ -201,8 +315,9 @@ def _pool_device_findings(sample):
                     pool.name,
                     SEV_INFO,
                     f"member sector geometry unavailable (ashift {pool.ashift_effective}, "
-                    f"{_fmt_bytes(block)} blocks){unknown_note}",
+                    f"{format_blocksize(block)} blocks){unknown_note}",
                     "device-side alignment not assessed",
+                    key="pool-sectors-unavailable",
                 )
             )
             continue
@@ -215,11 +330,12 @@ def _pool_device_findings(sample):
                     "Pool",
                     pool.name,
                     SEV_WARN,
-                    f"ashift {pool.ashift_effective} ({_fmt_bytes(block)}) is below the "
-                    f"{_fmt_bytes(max_sector)} physical sector of: {hot_list}{unknown_note}",
+                    f"ashift {pool.ashift_effective} ({format_blocksize(block)}) is below the "
+                    f"{format_blocksize(max_sector)} physical sector of: {hot_list}{unknown_note}",
                     "every device block write becomes read-modify-write; ashift is "
                     "creation-only — plan a Migrate Pool window with a blocksize of at "
                     "least the physical sector",
+                    key="pool-ashift-below-sector",
                 )
             )
         else:
@@ -228,19 +344,26 @@ def _pool_device_findings(sample):
                     "Pool",
                     pool.name,
                     SEV_OK,
-                    f"ashift {pool.ashift_effective} ({_fmt_bytes(block)}) covers the largest "
-                    f"member physical sector ({_fmt_bytes(max_sector)}){unknown_note}",
+                    f"ashift {pool.ashift_effective} ({format_blocksize(block)}) covers the largest "
+                    f"member physical sector ({format_blocksize(max_sector)}){unknown_note}",
+                    key="pool-ashift-covers",
                 )
             )
-        if max(sectors) != min(sectors):
+        if pool.topology is not None:
+            # Topology-aware: judge mixing per vdev group (see
+            # _group_geometry_findings); cross-group mixing is benign.
+            findings.extend(_group_geometry_findings(pool))
+        elif max(sectors) != min(sectors):
             findings.append(
                 Finding(
                     "Pool",
                     pool.name,
                     SEV_INFO,
                     f"mixed member geometry: physical sectors range "
-                    f"{_fmt_bytes(min(sectors))}–{_fmt_bytes(max_sector)}",
-                    "future zvols and migrations should assume the largest sector",
+                    f"{format_blocksize(min(sectors))}–{format_blocksize(max(sectors))}",
+                    "future zvols and migrations should assume the largest sector "
+                    "(vdev tree unavailable, so the groups are not judged individually)",
+                    key="pool-mixed-geometry",
                 )
             )
     return findings
@@ -260,9 +383,10 @@ def _dataset_findings(sample, survey, profiles):
                         ds.name,
                         SEV_WARN,
                         f"recordsize {ds.recordsize} is below the pool's ashift block "
-                        f"({_fmt_bytes(block)})",
+                        f"({format_blocksize(block)})",
                         "every record is padded to the ashift block, wasting space; raise "
                         "recordsize to at least the ashift block",
+                        key="dataset-recordsize-below-ashift",
                     )
                 )
             profile_name = (survey or {}).get(ds.name)
@@ -280,6 +404,7 @@ def _dataset_findings(sample, survey, profiles):
                         f"(recordsize {expected}) but effective recordsize is "
                         f"{ds.recordsize} ({ds.recordsize_source or 'unknown source'})",
                         "apply the profile from the Datasets page, or update the survey",
+                        key="dataset-survey-mismatch",
                     )
                 )
         if ds.kind == "volume" and ds.volblocksize:
@@ -291,16 +416,24 @@ def _dataset_findings(sample, survey, profiles):
                         ds.name,
                         SEV_WARN,
                         f"volblocksize {ds.volblocksize} is below the pool's ashift block "
-                        f"({_fmt_bytes(block)})",
+                        f"({format_blocksize(block)})",
                         "ZFS pads every volblock to the ashift block; volblocksize is fixed "
                         "at zvol creation",
+                        key="dataset-volblocksize-below-ashift",
                     )
                 )
     return findings
 
 
 def _observation_findings(sample):
-    """Histogram-driven tuning advice (rules 2-3, observation half)."""
+    """Histogram-driven tuning advice (rules 2-3, pool-level observation half).
+
+    The histogram is per pool, so the dataset-naming findings here name
+    whole pools.  When the per-dataset objset counters are available they
+    take over dataset granularity (see ``_dataset_observation_findings``)
+    and these pool-subject findings stand down — the two would otherwise
+    say the same thing twice, once precisely and once bluntly.
+    """
     findings = []
     if not sample.iostat_r_available:
         findings.append(
@@ -311,9 +444,11 @@ def _observation_findings(sample):
                 "request-size histograms unavailable (`zpool iostat -r` failed or "
                 "unsupported on this host)",
                 "observation-based advice is suspended; survey answers still apply",
+                key="histograms-unavailable",
             )
         )
         return findings
+    per_dataset = sample.objset_available
     for pool_name, hist in sample.histograms.items():
         verdict = classify_workload(hist, sample.prefetch if sample.prefetch_available else None)
         confidence = "" if verdict.confidence == "high" else " (histogram-only, low confidence)"
@@ -329,10 +464,11 @@ def _observation_findings(sample):
                     f"({hist.ops(TRAFFIC_COLUMNS):,} ops below the "
                     f"{OBSERVATION_MIN_OPS:,}-op floor)",
                     "observation-based advice is suspended until traffic accumulates",
+                    key="obs-insufficient-traffic",
                 )
             )
             continue
-        if verdict.label == "random-sync":
+        if verdict.label == "random-sync" and not per_dataset:
             dominant = hist.dominant_bucket(SYNC_COLUMNS)
             if dominant is not None:
                 bucket, share = dominant
@@ -345,11 +481,12 @@ def _observation_findings(sample):
                             "Dataset",
                             pool_name,
                             SEV_INFO,
-                            f"sync traffic is dominated by {_fmt_bytes(bucket)} requests "
+                            f"sync traffic is dominated by {format_blocksize(bucket)} requests "
                             f"({share:.0%} of sync ops){confidence}; recordsize on {names}{more} "
                             f"is ≥{RMW_AMPLIFICATION_FACTOR}× that size",
                             "smaller recordsize (or a matching workload profile) reduces "
                             "read-modify-write amplification on random-sync workloads",
+                            key="obs-rmw-recordsize",
                         )
                     )
                 hot_vols = _at_least(volumes, "volblocksize", RMW_AMPLIFICATION_FACTOR * bucket)
@@ -359,16 +496,17 @@ def _observation_findings(sample):
                             "VM",
                             pool_name,
                             SEV_INFO,
-                            f"sync traffic is dominated by {_fmt_bytes(bucket)} requests "
+                            f"sync traffic is dominated by {format_blocksize(bucket)} requests "
                             f"({share:.0%} of sync ops){confidence}; "
                             f"{len(hot_vols)} zvol(s) use volblocksize "
                             f"{hot_vols[0].volblocksize}",
                             "guest writes smaller than the volblock cause partial-block "
                             "sync writes; volblocksize is fixed at creation — consider the "
                             "observed size for future zvols",
+                            key="obs-rmw-volblocksize",
                         )
                     )
-        elif verdict.label == "sequential":
+        elif verdict.label == "sequential" and not per_dataset:
             dominant = hist.dominant_bucket(TRAFFIC_COLUMNS)
             if dominant is not None:
                 bucket, share = dominant
@@ -379,13 +517,156 @@ def _observation_findings(sample):
                             "Dataset",
                             pool_name,
                             SEV_INFO,
-                            f"sequential traffic aggregates into {_fmt_bytes(bucket)} requests "
+                            f"sequential traffic aggregates into {format_blocksize(bucket)} requests "
                             f"({share:.0%} of ops){confidence}; recordsize on "
                             f"{len(grow)} dataset(s) is smaller",
                             "a larger recordsize improves sequential throughput and "
                             "compression ratio",
+                            key="obs-sequential-recordsize",
                         )
                     )
+    return findings
+
+
+def _fmt_observed(size):
+    """Render an observed average request size; None for no traffic."""
+    return None if size is None else format_blocksize(round(size))
+
+
+def _observed_request_sizes(sample, prev_sample):
+    """Per-dataset observed average request sizes: ``{name: observation}``.
+
+    Each observation is ``(basis, avg_read_size, avg_write_size)`` where
+    basis is the human-facing provenance sentence ("since boot" or "over
+    the last refresh interval"). The interval basis — Δbytes/Δops from
+    ``compute_objset_rates`` against the previous sample — is preferred
+    when the window carried enough operations, because it reflects the
+    workload as it runs now; otherwise the since-boot cumulative average
+    (``average_request_sizes``) stands in, matching the rest of the
+    view's since-boot vocabulary. Either size is None when that
+    direction saw no traffic on the chosen basis.
+    """
+    if not sample.objset_available:
+        return {}
+    rates = compute_objset_rates(prev_sample, sample) if prev_sample is not None else {}
+    observed = {}
+    for name, counters in sample.objset.items():
+        reads, writes = counters.get("reads"), counters.get("writes")
+        if reads is None or writes is None:
+            continue
+        interval = rates.get(name)
+        prev_counters = prev_sample.objset.get(name) if prev_sample is not None else None
+        if interval is not None and prev_counters is not None:
+            prev_ops = (prev_counters.get("reads") or 0) + (prev_counters.get("writes") or 0)
+            if reads + writes - prev_ops >= OBSERVATION_MIN_DATASET_OPS and (
+                interval.avg_read_size is not None or interval.avg_write_size is not None
+            ):
+                observed[name] = (
+                    "over the last refresh interval",
+                    interval.avg_read_size,
+                    interval.avg_write_size,
+                )
+                continue
+        if reads + writes < OBSERVATION_MIN_DATASET_OPS:
+            continue
+        avg_read, avg_write = average_request_sizes(counters)
+        if avg_read is not None or avg_write is not None:
+            observed[name] = ("since boot", avg_read, avg_write)
+    return observed
+
+
+def _dataset_observation_findings(sample, prev_sample, survey):
+    """Per-dataset observed-size advice (rules 2-3, dataset observation half).
+
+    The objset kstats attribute every read and write to one dataset, so
+    these findings name datasets — the refinement the per-pool histogram
+    cannot deliver. When the counters are missing entirely (OpenZFS
+    older than 2.2, or a non-Linux port) one info finding states the
+    limit instead: observed-size advice then stays per-pool, and the
+    survey answers remain the only per-dataset basis. Advisory only, as
+    everywhere here: recommendations point at Workload profiles and
+    future creations, never at an action to run.
+    """
+    findings = []
+    observed = _observed_request_sizes(sample, prev_sample)
+    if not sample.objset_available:
+        if sample.iostat_r_available:
+            findings.append(
+                Finding(
+                    "Dataset",
+                    "(all)",
+                    SEV_INFO,
+                    "per-dataset request sizes unavailable (objset kstats need OpenZFS 2.2+ "
+                    "on Linux); observed-size advice falls back to the per-pool histogram",
+                    "histogram advice then names pools, not datasets; survey answers remain "
+                    "the per-dataset basis",
+                    key="objset-unavailable",
+                )
+            )
+        return findings
+    for ds in sample.datasets:
+        observation = observed.get(ds.name)
+        if observation is None:
+            continue
+        basis, avg_read, avg_write = observation
+        declared = (survey or {}).get(ds.name)
+        if ds.kind == "filesystem" and ds.recordsize:
+            size = parse_zfs_size(ds.recordsize)
+            if (
+                size is not None
+                and avg_write is not None
+                and size >= (RMW_AMPLIFICATION_FACTOR * avg_write)
+            ):
+                survey_note = f" (survey declares {declared!r})" if declared else ""
+                stale = " the survey answer for this dataset may be stale" if declared else ""
+                findings.append(
+                    Finding(
+                        "Dataset",
+                        ds.name,
+                        SEV_INFO,
+                        f"observed writes to {ds.name} average "
+                        f"{_fmt_observed(avg_write)} ({basis}) while recordsize is "
+                        f"{ds.recordsize} — at least {RMW_AMPLIFICATION_FACTOR}× the observed "
+                        f"size{survey_note}",
+                        "a smaller recordsize — or a workload profile matching the observed "
+                        "size — reduces read-modify-write amplification" + stale,
+                        key="obs-dataset-recordsize-rmw",
+                    )
+                )
+            if size is not None and avg_read is not None and avg_read > size:
+                findings.append(
+                    Finding(
+                        "Dataset",
+                        ds.name,
+                        SEV_INFO,
+                        f"observed reads from {ds.name} average {_fmt_observed(avg_read)} "
+                        f"({basis}), above its recordsize {ds.recordsize} — every read spans "
+                        "several records",
+                        "a larger recordsize (or a sequential workload profile) raises read "
+                        "throughput and compression on datasets read in big chunks",
+                        key="obs-dataset-recordsize-grow",
+                    )
+                )
+        if ds.kind == "volume" and ds.volblocksize:
+            size = parse_zfs_size(ds.volblocksize)
+            if (
+                size is not None
+                and avg_write is not None
+                and size >= (RMW_AMPLIFICATION_FACTOR * avg_write)
+            ):
+                findings.append(
+                    Finding(
+                        "VM",
+                        ds.name,
+                        SEV_INFO,
+                        f"guest writes to {ds.name.rsplit('/', 1)[-1]} average "
+                        f"{_fmt_observed(avg_write)} ({basis}) while volblocksize is "
+                        f"{ds.volblocksize}",
+                        "sub-volblock writes cost partial-block work; volblocksize is fixed "
+                        "at creation — size future zvols from the observed request size",
+                        key="obs-dataset-volblocksize-rmw",
+                    )
+                )
     return findings
 
 
@@ -405,6 +686,7 @@ def _vm_findings(sample):
                     "PVE VM configs are not readable on this host (two-node installs keep "
                     "them on the compute node)",
                     "guest-visible sector and disk-option checks are suspended",
+                    key="pve-configs-unreadable",
                 )
             )
         return findings
@@ -425,6 +707,7 @@ def _vm_findings(sample):
                     SEV_INFO,
                     f"VM disk line {option.bus} carries no discard= option",
                     "guest TRIM cannot reach the zvol; space is never reclaimed",
+                    key="vm-discard-missing",
                 )
             )
         secs = option.options.get("secs")
@@ -436,10 +719,11 @@ def _vm_findings(sample):
                     ds.name,
                     SEV_INFO,
                     f"guest sees 512-byte sectors (no secs= on {option.bus}) while the zvol "
-                    f"uses {_fmt_bytes(volblock)} volblocks",
+                    f"uses {format_blocksize(volblock)} volblocks",
                     "a 4K-aligned guest filesystem divides evenly, but sub-volblock random "
                     "writes still pay partial-block cost; secs=4096 makes the guest "
                     "geometry explicit",
+                    key="vm-guest-sectors-implicit",
                 )
             )
     return findings
@@ -462,6 +746,7 @@ def _memory_findings(sample):
                     f"ARC demand-data hit rate is low ({demand_rate:.1%})",
                     "the working set may exceed the ARC; compare size and target on the "
                     "Live Charts view",
+                    key="arc-demand-low",
                 )
             )
         elif demand_rate >= CACHE_RATIO_GOOD:
@@ -471,6 +756,7 @@ def _memory_findings(sample):
                     "(host)",
                     SEV_OK,
                     f"ARC demand-data hit rate {demand_rate:.1%}",
+                    key="arc-demand-good",
                 )
             )
     real_hits = None
@@ -487,6 +773,7 @@ def _memory_findings(sample):
                     f"(above the {GHOST_RATIO_OK:.0%} floor)",
                     "recently-evicted blocks are being re-requested — working-set churn; "
                     "more RAM or a larger ARC target would help",
+                    key="arc-ghost-churn",
                 )
             )
     evict_total = sum(
@@ -507,6 +794,7 @@ def _memory_findings(sample):
                 SEV_INFO,
                 f"{eligible / evict_total:.0%} of ARC evictions were eligible for L2ARC",
                 context,
+                key="arc-evict-l2-eligible",
             )
         )
     return findings
@@ -529,6 +817,7 @@ def _prefetch_finding(sample, verdicts):
                 SEV_INFO,
                 message + " despite sequential traffic",
                 "read-ahead is being discarded; prefetch strategy may merit review",
+                key="prefetch-ineffective-sequential",
             )
         ]
     return [
@@ -538,12 +827,18 @@ def _prefetch_finding(sample, verdicts):
             SEV_INFO,
             message,
             "expected for random workloads; no action required",
+            key="prefetch-ineffective-random",
         )
     ]
 
 
-def analyse(sample, survey=None, profiles=None):
-    """Return every Finding for the Alignment view, grouped by layer."""
+def analyse(sample, survey=None, profiles=None, prev_sample=None):
+    """Return every Finding for the Alignment view, grouped by layer.
+
+    *prev_sample* is the previous refresh's sample; the per-dataset
+    observed sizes prefer the interval between it and *sample* over the
+    since-boot cumulative averages. It may be None (first refresh).
+    """
     verdicts = [
         classify_workload(hist, sample.prefetch if sample.prefetch_available else None)
         for hist in sample.histograms.values()
@@ -557,15 +852,127 @@ def analyse(sample, survey=None, profiles=None):
                 SEV_INFO,
                 "pool and device data unavailable (zfs/zpool commands failed)",
                 "alignment-chain findings are suspended",
+                key="pools-unavailable",
+            )
+        )
+    for pool_name in sample.dataset_read_failures:
+        # Per-pool degrade (alignment_stats): the pool keeps its chain rows,
+        # but its dataset/VM layers could not be read this refresh.
+        findings.append(
+            Finding(
+                "Dataset",
+                pool_name,
+                SEV_INFO,
+                "dataset block properties unreadable for this pool "
+                "(the zfs read failed; other pools are unaffected)",
+                "dataset and VM findings are suspended for this pool until the read succeeds again",
+                key="datasets-unreadable",
             )
         )
     findings.extend(_pool_device_findings(sample))
     findings.extend(_dataset_findings(sample, survey, profiles))
     findings.extend(_observation_findings(sample))
+    findings.extend(_dataset_observation_findings(sample, prev_sample, survey))
     findings.extend(_vm_findings(sample))
     findings.extend(_memory_findings(sample))
     findings.extend(_prefetch_finding(sample, verdicts))
     return findings
+
+
+def _rung_label(layer, prop, size, count):
+    """Ladder rung label: layer prefix, property, size, and group count."""
+    label = f"{layer.lower()} · {prop} {format_blocksize(size)}"
+    return f"{label} ×{count}" if count > 1 else label
+
+
+def _guest_sector(option):
+    """Guest-visible sector size of one PVE disk line (secs= or 512)."""
+    secs = option.options.get("secs")
+    return int(secs) if secs and secs.isdigit() else 512
+
+
+def blocksize_ladder(sample):
+    """Build the per-pool blocksize ladder for the Alignment view visual.
+
+    One LadderPool per pool carrying the rungs the chart draws, in stack
+    order: device physical sectors (grouped by size), the pool's ashift
+    block, dataset recordsize/volblocksize groups, and VM guest sectors.
+    Sources degrade exactly like the tables beside the chart: members
+    without sector data lose their device rungs, a pool whose ashift is
+    unresolved loses the reference rung (and its other rungs render as
+    info), a pool's dataset rungs drop with its per-pool dataset read,
+    and VM rungs appear only for zvols referenced in local PVE configs.
+    Rung states follow the analysis rules: WARN below the ashift block
+    (padded) or — for device rungs — above it (read-modify-write), info
+    when the verdict rests on a smaller neighbour (guest sector below
+    its zvol's volblocksize) or cannot be judged.
+    """
+    ladders = []
+    for pool in sample.pools:
+        block = None if pool.ashift_effective is None else 1 << pool.ashift_effective
+        bars = []
+        sectors: dict[int, int] = {}
+        for member in pool.members:
+            if member.physical_sector:
+                sectors[member.physical_sector] = sectors.get(member.physical_sector, 0) + 1
+        for sector, count in sorted(sectors.items()):
+            state = SEV_INFO if block is None else (SEV_WARN if block < sector else SEV_OK)
+            bars.append(
+                LadderBar(
+                    "Device", _rung_label("Device", "physical sector", sector, count), sector, state
+                )
+            )
+        if block is not None:
+            if sectors:
+                state = SEV_WARN if max(sectors) > block else SEV_OK
+            else:
+                state = SEV_INFO  # no sector data to judge the block against
+            bars.append(
+                LadderBar(
+                    "Pool",
+                    f"pool · ashift {pool.ashift_effective} · {format_blocksize(block)} block",
+                    block,
+                    state,
+                )
+            )
+        blocks: dict[tuple[str, int], int] = {}
+        for ds in sample.datasets:
+            if ds.name.split("/", 1)[0] != pool.name:
+                continue
+            prop, raw = (
+                ("recordsize", ds.recordsize)
+                if ds.kind == "filesystem"
+                else ("volblocksize", ds.volblocksize)
+            )
+            size = parse_zfs_size(raw or "")
+            if size:
+                blocks[(prop, size)] = blocks.get((prop, size), 0) + 1
+        for (prop, size), count in sorted(blocks.items(), key=lambda item: item[0][1]):
+            state = SEV_INFO if block is None else (SEV_WARN if size < block else SEV_OK)
+            bars.append(
+                LadderBar("Dataset", _rung_label("Dataset", prop, size, count), size, state)
+            )
+        guests: dict[int, list] = {}
+        for ds in sample.datasets:
+            if ds.name.split("/", 1)[0] != pool.name or ds.kind != "volume":
+                continue
+            option = sample.vm_disks.get(ds.name.rsplit("/", 1)[-1])
+            if option is None:
+                continue
+            sector = _guest_sector(option)
+            volblock = parse_zfs_size(ds.volblocksize or "")
+            entry = guests.setdefault(sector, [0, False])
+            entry[0] += 1
+            entry[1] = entry[1] or (volblock is not None and sector < volblock)
+        for sector, (count, below_volblock) in sorted(guests.items()):
+            state = SEV_INFO if below_volblock else SEV_OK
+            bars.append(
+                LadderBar("VM", _rung_label("VM", "guest sector", sector, count), sector, state)
+            )
+        ladders.append(
+            LadderPool(pool=pool.name, ashift=pool.ashift_effective, block=block, bars=bars)
+        )
+    return ladders
 
 
 def arc_readouts(arc, has_l2arc):

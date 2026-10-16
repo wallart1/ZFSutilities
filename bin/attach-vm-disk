@@ -6,6 +6,8 @@
 # Install to: /usr/local/lib/zfsutilities/bin/attach-vm-disk on BOTH hosts
 # Run from:   the compute host (or storage host — delegates via SSH)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -179,7 +181,7 @@ mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
-set -e
+set -euo pipefail
 zvol="$1"
 zvol_dev="$2"
 backstore_name="$3"
@@ -199,9 +201,11 @@ fi
 # Check if LUN is mapped. The lun line slash-prefixes the backstore name
 # ("o- lun3 [block/<name> (/dev/...)]"), so anchor on "block/<name> " — a
 # space-anchored name never matches, and a bare name also matches longer
-# names that start with this one.
+# names that start with this one. The || true keeps an unmapped LUN (grep
+# finds nothing under pipefail) an empty answer — the [[ -n ]] guard
+# below is the "not mapped" branch.
 lun_line=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-    | grep -F "block/${backstore_name} " | head -1)
+    | grep -F "block/${backstore_name} " | head -1 || true)
 existing_lun=""
 if [[ -n "$lun_line" ]]; then
     existing_lun="${lun_line#*lun}"
@@ -212,8 +216,9 @@ if [[ -n "$existing_lun" ]]; then
     echo "LUN_EXISTS:$existing_lun"
 else
     targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${backstore_name}"
+    # Same || true: creation's listing read may still miss the line shape.
     lun_line=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-        | grep -F "block/${backstore_name} " | head -1)
+        | grep -F "block/${backstore_name} " | head -1 || true)
     new_lun=""
     if [[ -n "$lun_line" ]]; then
         new_lun="${lun_line#*lun}"

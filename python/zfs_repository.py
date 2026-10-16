@@ -188,13 +188,16 @@ class TopologyNode:
     children: list["TopologyNode"]
 
 
-# Regex: ^(\s*)(\S+)(?:\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+))?\s*$
+# Regex: ^(\s*)(\S+)(?:\s+(\S+)(?:\s+(\d+)\s+(\d+)\s+(\d+))?)?\s*$
 # Purpose: Parse a vdev/device row from `zpool status -P` config output.
 # Group 1: leading whitespace (indentation).
 # Group 2: name (vdev label or full device path).
-# Groups 3-6: optional state, read/write/checksum error counters.
+# Groups 3-6: optional state plus read/write/checksum error counters; the
+#   counters are themselves optional because spare rows print a bare state
+#   with no counters at all (`/dev/sdX  AVAIL`), and such rows must parse
+#   (zero counters) rather than be silently dropped from the tree.
 _TOPOLOGY_LINE_RE = re.compile(
-    r"^(\s*)(\S+)(?:\s+(\S+)\s+(\d+)\s+(\d+)\s+(\d+))?\s*$",
+    r"^(\s*)(\S+)(?:\s+(\S+)(?:\s+(\d+)\s+(\d+)\s+(\d+))?)?\s*$",
     re.MULTILINE,
 )
 

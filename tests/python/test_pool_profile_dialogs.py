@@ -81,6 +81,7 @@ class _FakeEntry:
         self._keys = keys
         self._idx = idx
         self.sensitive = None
+        self.tooltips = []
 
     def get_text(self):
         return str(self._values.get(self._keys[self._idx], ""))
@@ -94,6 +95,9 @@ class _FakeEntry:
     def set_placeholder_text(self, text):
         pass
 
+    def set_tooltip_text(self, text):
+        self.tooltips.append(text)
+
 
 class _FakeComboBoxText:
     """ComboBoxText stand-in that returns a value fixed at creation time."""
@@ -102,6 +106,7 @@ class _FakeComboBoxText:
         self._values = values
         self._keys = keys
         self._idx = idx
+        self.tooltips = []
 
     def append_text(self, text):
         pass
@@ -111,6 +116,9 @@ class _FakeComboBoxText:
 
     def get_active_text(self):
         return str(self._values.get(self._keys[self._idx], ""))
+
+    def set_tooltip_text(self, text):
+        self.tooltips.append(text)
 
 
 class _FakePoolProfileEditor:
@@ -131,6 +139,7 @@ class _FakePoolProfileEditor:
         self._entry_counter = [0]
         self._combo_counter = [0]
         self.entries = []
+        self.combos = []
         self._patches = []
 
     def _make_entry(self, *_args, **_kwargs):
@@ -143,7 +152,9 @@ class _FakePoolProfileEditor:
     def _make_combo(self, *_args, **_kwargs):
         idx = self._combo_counter[0]
         self._combo_counter[0] += 1
-        return _FakeComboBoxText(self.values, self.COMBO_KEYS, idx)
+        combo = _FakeComboBoxText(self.values, self.COMBO_KEYS, idx)
+        self.combos.append(combo)
+        return combo
 
     def _make_text_buffer(self, *_args, **_kwargs):
         values = self.values
@@ -174,14 +185,16 @@ class _FakePoolProfileEditor:
 
         dialog = MagicMock()
         dialog.run.side_effect = _run
-        return dialog
+        # create_scrolled_dialog returns (dialog, content_box); the editor
+        # packs into the box, so a MagicMock content area is enough.
+        return dialog, MagicMock()
 
     def __enter__(self):
         self._patches = [
             patch.object(self.ppd.Gtk, "Entry", side_effect=self._make_entry),
             patch.object(self.ppd.Gtk, "ComboBoxText", side_effect=self._make_combo),
             patch.object(self.ppd.Gtk, "TextBuffer", side_effect=self._make_text_buffer),
-            patch.object(self.ppd, "create_dialog", side_effect=self._make_dialog),
+            patch.object(self.ppd, "create_scrolled_dialog", side_effect=self._make_dialog),
             patch.object(
                 self.ppd.Gtk,
                 "MessageDialog",
@@ -736,6 +749,39 @@ class TestPoolProfileEditorDialog(unittest.TestCase):
         self.assertEqual(profiles["small-block"]["blocksize"], "512 bytes")
         self.assertEqual(profiles["small-block"]["pool_properties"], {})
         self.assertEqual(profiles["small-block"]["filesystem_properties"], {})
+
+    def test_editor_fields_carry_tooltips(self):
+        """Every property row gets an explanatory tooltip on its widget."""
+        ppd = _import_pool_profile_dialogs()
+        app = self._app()
+
+        editor = _FakePoolProfileEditor(
+            ppd, {"name": "tipped", "autotrim": "on"}, [ppd.Gtk.ResponseType.OK]
+        )
+        with (
+            editor,
+            patch("feature_config.save_config"),
+        ):
+            ppd.show_pool_profile_editor_dialog(app)
+
+        # Entries: name, description, then one per filesystem property.
+        self.assertEqual(len(editor.entries), 2 + len(LIVE_PROPERTIES))
+        for entry in editor.entries:
+            self.assertEqual(len(entry.tooltips), 1, "entry row without a tooltip")
+            self.assertTrue(entry.tooltips[0].strip())
+        # Combos: blocksize, then one per curated pool property.
+        self.assertEqual(len(editor.combos), 1 + len(POOL_PROPERTIES))
+        for combo in editor.combos:
+            self.assertEqual(len(combo.tooltips), 1, "combo row without a tooltip")
+            self.assertTrue(combo.tooltips[0].strip())
+
+    def test_tooltip_tables_cover_property_schema(self):
+        """Tooltip tables track the property vocabulary exactly (no drift)."""
+        ppd = _import_pool_profile_dialogs()
+        self.assertEqual(set(ppd._POOL_PROP_TOOLTIPS), set(POOL_PROPERTIES))
+        self.assertEqual(set(ppd._FS_PROP_TOOLTIPS), set(LIVE_PROPERTIES))
+        self.assertIn("blocksize", ppd._FIELD_TOOLTIPS)
+        self.assertIn("name", ppd._FIELD_TOOLTIPS)
 
 
 class TestActionDispatchWiring(unittest.TestCase):

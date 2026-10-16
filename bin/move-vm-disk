@@ -12,6 +12,8 @@
 # Install to: /usr/local/lib/zfsutilities/bin/move-vm-disk on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -226,7 +228,7 @@ bashinit
 
 source_helper zfslockmanager
 
-set -e
+set -euo pipefail
 srczvol="$1"; dstzvol="$2"
 srcbackstore="$3"; dstbackstore="$4"
 target="$5"; srclun="$6"; encrypted="$7"
@@ -321,14 +323,16 @@ if ! targetcli "/iscsi/${target}/tpg1/luns" \
     # Strip everything through the first "lun" token and keep the leading
     # digits of the matching line ("... lun3 [block/..." -> "3"). Anchor
     # the line selection on "block/<name> " so a longer name that starts
-    # with this one cannot match.
+    # with this one cannot match. The || true keeps an empty answer an
+    # empty answer under pipefail — the caller handles an empty dstlun.
     dstlun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
         | grep -F "block/${dstbackstore} " \
         | while IFS= read -r _lun_line; do
             _lun_rest="${_lun_line#*lun}"
             printf '%s\n' "${_lun_rest%%[!0-9]*}"
         done \
-        | head -1)
+        | head -1 \
+        || true)
 fi
 echo "dstlun=${dstlun}"
 
@@ -472,7 +476,7 @@ bashinit
 
 source_helper zfslockmanager
 
-set -e
+set -euo pipefail
 srczvol="$1"; dstzvol="$2"
 srcbackstore="$3"; dstbackstore="$4"
 target="$5"; srclun="$6"; encrypted="$7"
@@ -724,6 +728,7 @@ targetshort=""
 srczvol=""
 srcbackstore=""
 srclun=""
+dstlun=""
 encrypted="N"
 
 if is_two_node; then
@@ -801,14 +806,15 @@ if is_two_node; then
     }
 
     storage_info=$(ssh -o ConnectTimeout=10 root@"$storage_host" \
-        bash -s "$target" "$srclun" << 'SSHEOF'
+        bash -s "$target" "$srclun" "$pool" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
-set -e
+set -euo pipefail
 target="$1"
 lun="$2"
+pool="$3"
 
 backstore=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
     | while IFS= read -r _line; do

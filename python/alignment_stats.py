@@ -8,9 +8,16 @@ Sources and their availability flags:
 
 - ``zfs_repo`` (pool list, effective ashift, vdev topology, dataset block
   properties) and ``disk_repo`` (lsblk logical/physical sectors) ->
-  ``pools_available`` / ``datasets_available``
+  ``pools_available`` / ``datasets_available``; dataset properties are
+  collected per pool, so one pool's failed read lands in
+  ``dataset_read_failures`` while the other pools keep their rows
 - ``zpool iostat -r`` — per-pool request-size histograms since boot ->
   ``iostat_r_available``
+- ``/proc/spl/kstat/zfs/<pool>/objset-*`` — per-dataset objset kstats
+  since boot (``nread``/``nwritten``/``reads``/``writes`` plus per-dataset
+  ZIL counters; each file names its dataset in ``dataset_name``) ->
+  ``objset_available``; ``compute_objset_rates`` deltas two samples into
+  per-dataset average request sizes
 - ``/proc/spl/kstat/zfs/arcstats`` and ``.../zfetchstats`` — ARC and
   prefetcher counters (same kstat grammar memory_stats parses) ->
   ``arcstats_available`` / ``prefetch_available``
@@ -30,12 +37,19 @@ from dataclasses import dataclass, field
 
 from memory_stats import (
     ARCSTATS_PATH,
+    _delta_rate,
     _parse_iostat_cell,
     parse_arcstats,
     parse_kstats,
 )
+from zfs_repository import TopologyNode
 
 ZFETCHSTATS_PATH = "/proc/spl/kstat/zfs/zfetchstats"
+
+# Per-dataset objset kstats root. Each pool exposes its datasets as
+# <root>/<pool>/objset-0x<objsetid> (OpenZFS 2.2+); the file names its
+# dataset in the dataset_name field, so no objsetid mapping is needed.
+OBJSET_KSTAT_DIR = "/proc/spl/kstat/zfs"
 
 # PVE VM configuration directory; present only when this host runs PVE.
 PVE_QEMU_CONF_DIR = "/etc/pve/qemu-server"
@@ -164,6 +178,25 @@ class ReqHistogram:
 
 
 @dataclass
+class ObjsetRates:
+    """Per-interval traffic rates for one dataset's objset kstats.
+
+    ``avg_read_size`` / ``avg_write_size`` are bytes per operation over
+    the interval — the workload's observed request sizes at dataset
+    granularity (the pool-level counterpart of the ``-r`` histogram).
+    They are None when the interval carried no operations of that kind;
+    every field is None when a counter reset between the samples.
+    """
+
+    reads_ps: float | None = None
+    writes_ps: float | None = None
+    read_bps: float | None = None
+    write_bps: float | None = None
+    avg_read_size: float | None = None
+    avg_write_size: float | None = None
+
+
+@dataclass
 class MemberDisk:
     """One pool member leaf and its reported sector geometry."""
 
@@ -174,11 +207,20 @@ class MemberDisk:
 
 @dataclass
 class PoolAlignment:
-    """One pool's device-side alignment inputs."""
+    """One pool's device-side alignment inputs.
+
+    ``topology`` is the pool's typed vdev tree (``TopologyNode`` from
+    `zpool status -P`) with the effective ashift annotated on its root —
+    the same shape the Disks-page inventory carries. It is None when the
+    status output is unreadable for that pool. ``members`` and
+    ``has_cache`` flatten that same tree and stay meaningful for leaf /
+    sector matching; they are empty/False when the tree is absent.
+    """
 
     name: str
     ashift_configured: str | None = None
     ashift_effective: int | None = None
+    topology: TopologyNode | None = None
     members: list[MemberDisk] = field(default_factory=list)
     has_cache: bool = False
 
@@ -225,11 +267,17 @@ class AlignmentSample:
     vm_disks: dict[str, VMOption] = field(default_factory=dict)
     arc: dict[str, int] = field(default_factory=dict)
     prefetch: dict[str, int] = field(default_factory=dict)
+    objset: dict[str, dict[str, int]] = field(default_factory=dict)
+    # Pool names whose per-pool dataset-property read failed while other
+    # pools were collected (per-pool degrade; wholesale zfs/zpool failure
+    # instead clears pools_available/datasets_available outright).
+    dataset_read_failures: list[str] = field(default_factory=list)
     pools_available: bool = False
     datasets_available: bool = False
     iostat_r_available: bool = False
     arcstats_available: bool = False
     prefetch_available: bool = False
+    objset_available: bool = False
     pve_available: bool = False
 
 
@@ -276,6 +324,130 @@ def parse_zpool_iostat_r(text):
                     if count is not None:
                         histograms[pool].add(bucket, kind, column, count)
     return histograms
+
+
+# ---------------------------------------------------------------------------
+# Per-dataset objset kstats
+# ---------------------------------------------------------------------------
+
+
+def parse_objset_kstat(text):
+    """Parse one objset kstat body into ``(dataset_name, counters)``.
+
+    The numeric rows share the standard kstat grammar
+    (``memory_stats.parse_kstats``), so counters contain every field the
+    running kernel exposes — the four workload counters plus the
+    per-dataset ZIL rows. ``dataset_name`` is string-typed (kstat type 7)
+    and therefore absent from that numeric parse; it is picked out here
+    and returned as the dataset key. Returns None when the file carries
+    no dataset_name row (not an objset kstat, or an unparsable read).
+    """
+    stats = parse_kstats(text)
+    for line in text.splitlines()[2:]:
+        parts = line.split()
+        if len(parts) == 3 and parts[0] == "dataset_name" and parts[1] == "7":
+            # ZFS dataset names cannot contain whitespace, so the third
+            # column is the whole name.
+            return parts[2], stats
+    return None
+
+
+def read_objset_kstats(kstat_dir=OBJSET_KSTAT_DIR):
+    """Read every per-dataset objset kstat into ``{dataset_name: counters}``.
+
+    Objset files live one level down, under each pool's directory; hosts
+    without them (OpenZFS older than 2.2, or a non-Linux port) yield an
+    empty dict and the Alignment view falls back to the survey.
+    """
+    result: dict[str, dict[str, int]] = {}
+    try:
+        paths = sorted(glob.glob(os.path.join(kstat_dir, "*", "objset-*")))
+    except OSError:
+        return result
+    for path in paths:
+        try:
+            with open(path) as f:
+                parsed = parse_objset_kstat(f.read())
+        except OSError:
+            continue
+        if parsed is not None:
+            name, counters = parsed
+            result[name] = counters
+    return result
+
+
+def average_request_sizes(counters):
+    """Since-boot ``(avg_read_size, avg_write_size)`` for one dataset.
+
+    Bytes per operation directly from the cumulative counters — the
+    single-sample case; interval observations come from
+    ``compute_objset_rates`` instead. Either size is None when that
+    direction has seen no operations.
+    """
+    if not counters:
+        return None, None
+    reads = counters.get("reads")
+    writes = counters.get("writes")
+    nread = counters.get("nread")
+    nwritten = counters.get("nwritten")
+    avg_read = nread / reads if reads and nread is not None else None
+    avg_write = nwritten / writes if writes and nwritten is not None else None
+    return avg_read, avg_write
+
+
+def _delta_avg(bytes_prev, bytes_cur, ops_prev, ops_cur):
+    """Return (Δbytes / Δops), or None on reset, missing counters, no ops."""
+    if None in (bytes_prev, bytes_cur, ops_prev, ops_cur):
+        return None
+    if bytes_cur < bytes_prev or ops_cur < ops_prev:
+        # Counter reset between the samples (re-import, module reload).
+        return None
+    ops = ops_cur - ops_prev
+    if ops == 0:
+        return None
+    return (bytes_cur - bytes_prev) / ops
+
+
+def compute_objset_rates(prev, cur):
+    """Derive per-dataset ObjsetRates from two consecutive samples.
+
+    Same contract as ``memory_stats.compute_rates``: the kstat counters
+    are cumulative, so per-dataset rates and average request sizes need
+    the previous sample's baseline. Datasets present in only one of the
+    two samples (created or destroyed in between) have no valid delta
+    and are skipped; no previous sample yields no rates.
+    """
+    rates: dict[str, ObjsetRates] = {}
+    if prev is None or cur is None:
+        return rates
+    elapsed = cur.monotonic - prev.monotonic
+    if elapsed <= 0:
+        return rates
+    for name, cur_counters in cur.objset.items():
+        prev_counters = prev.objset.get(name)
+        if prev_counters is None:
+            continue
+        rates[name] = ObjsetRates(
+            reads_ps=_delta_rate(prev_counters.get("reads"), cur_counters.get("reads"), elapsed),
+            writes_ps=_delta_rate(prev_counters.get("writes"), cur_counters.get("writes"), elapsed),
+            read_bps=_delta_rate(prev_counters.get("nread"), cur_counters.get("nread"), elapsed),
+            write_bps=_delta_rate(
+                prev_counters.get("nwritten"), cur_counters.get("nwritten"), elapsed
+            ),
+            avg_read_size=_delta_avg(
+                prev_counters.get("nread"),
+                cur_counters.get("nread"),
+                prev_counters.get("reads"),
+                cur_counters.get("reads"),
+            ),
+            avg_write_size=_delta_avg(
+                prev_counters.get("nwritten"),
+                cur_counters.get("nwritten"),
+                prev_counters.get("writes"),
+                cur_counters.get("writes"),
+            ),
+        )
+    return rates
 
 
 # ---------------------------------------------------------------------------
@@ -354,12 +526,17 @@ def read_pve_vm_options(conf_dir=PVE_QEMU_CONF_DIR):
 # ---------------------------------------------------------------------------
 
 
-def _topology_leaf_paths(node):
-    """Yield the device paths of all disk leaves under a TopologyNode."""
+def topology_leaf_paths(node):
+    """Yield the device paths of all disk leaves under a TopologyNode.
+
+    Public because the analysis rules walk the same trees the sample
+    flattened into ``PoolAlignment.members`` — per-vdev-group findings
+    match group leaves against member sector geometry by path.
+    """
     if node.vdev_type == "disk":
         yield node.name
     for child in node.children:
-        yield from _topology_leaf_paths(child)
+        yield from topology_leaf_paths(child)
 
 
 def _topology_has_cache(node):
@@ -370,22 +547,37 @@ def _topology_has_cache(node):
 
 
 def _collect_pools(zfs_repo):
-    """Build PoolAlignment rows: ashift plus member sector geometry."""
+    """Build PoolAlignment rows: typed topology plus flattened leaf data.
+
+    Disks-page inventory pattern (python/disks_page.py): each pool's
+    topology and ashift are probed independently and degrade to None on
+    failure, so one unreadable pool keeps its row while the rest of the
+    source stays up. When both succeed, the effective ashift is annotated
+    onto the tree root so topology consumers see one typed tree.
+    """
     pools = []
     for row in zfs_repo.list_pools_full():
         name = row["name"]
-        ashift = zfs_repo.get_ashift(name)
+        try:
+            topology = zfs_repo.pool_topology(name)
+        except Exception:
+            topology = None
+        try:
+            ashift = zfs_repo.get_ashift(name)
+        except Exception:
+            ashift = None
         members = []
         has_cache = False
-        topology = zfs_repo.pool_topology(name)
         if topology is not None:
-            members = [MemberDisk(path=path) for path in _topology_leaf_paths(topology)]
+            topology.ashift = ashift.effective if ashift is not None else None
+            members = [MemberDisk(path=path) for path in topology_leaf_paths(topology)]
             has_cache = _topology_has_cache(topology)
         pools.append(
             PoolAlignment(
                 name=name,
-                ashift_configured=ashift.configured,
-                ashift_effective=ashift.effective,
+                ashift_configured=ashift.configured if ashift is not None else None,
+                ashift_effective=ashift.effective if ashift is not None else None,
+                topology=topology,
                 members=members,
                 has_cache=has_cache,
             )
@@ -450,6 +642,7 @@ def collect_alignment_sample(
     arcstats_path=ARCSTATS_PATH,
     zfetchstats_path=ZFETCHSTATS_PATH,
     pve_conf_dir=PVE_QEMU_CONF_DIR,
+    kstat_dir=OBJSET_KSTAT_DIR,
 ):
     """Collect one AlignmentSample, degrading per-source on failure."""
     sample = AlignmentSample(monotonic=time.monotonic())
@@ -459,15 +652,18 @@ def collect_alignment_sample(
         sample.pools_available = True
     except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
         pass
-    try:
-        for pool in sample.pools:
+    # Dataset properties are read per pool so a transient zfs failure on
+    # one pool costs only that pool's rows: surviving pools keep their
+    # datasets, the failed pool is named in dataset_read_failures, and the
+    # chain/dataset tables never blank wholesale.
+    for pool in sample.pools:
+        try:
             sample.datasets.extend(
                 _dataset_blocks_from_rows(zfs_repo.dataset_block_properties(pool.name))
             )
-        if sample.pools:
             sample.datasets_available = True
-    except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
-        pass
+        except (OSError, subprocess.SubprocessError, ValueError, AttributeError):
+            sample.dataset_read_failures.append(pool.name)
     try:
         result = subprocess.run(
             IOSTAT_R_ARGS, capture_output=True, text=True, timeout=timeout, check=False
@@ -489,6 +685,10 @@ def collect_alignment_sample(
         sample.prefetch_available = True
     except OSError:
         pass
+    objset = read_objset_kstats(kstat_dir)
+    if objset:
+        sample.objset = objset
+        sample.objset_available = True
     vm_disks = read_pve_vm_options(pve_conf_dir)
     if vm_disks:
         sample.vm_disks = vm_disks

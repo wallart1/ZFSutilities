@@ -11,6 +11,8 @@
 # Install to: /usr/local/lib/zfsutilities/bin/remove-vm on BOTH hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -112,6 +114,8 @@ proxmoxconfig="${pve_conf_dir}/${vmid}.conf"
 # storage host, where the zvols actually live.
 collect_candidate_zvols() {
     if is_single_node; then
+        # || true: "no candidate zvols" is an empty answer (the caller
+        # checks for it), not a failure — grep finds nothing under pipefail.
         zfs list -H -t volume -o name 2>/dev/null \
             | grep -F "/proxmox/vm-${vmid}-disk-" \
             | while IFS= read -r zvol; do
@@ -119,14 +123,17 @@ collect_candidate_zvols() {
                 [[ "$disk_suffix" =~ ^[0-9]+$ ]] || continue
                 [[ "$zvol" == *"/proxmox/vm-${vmid}-disk-${disk_suffix}" ]] || continue
                 echo "$zvol"
-            done | sort
+            done | sort \
+            || true
     else
         ssh root@"$storage_host" bash -s "$vmid" << 'SSHEOF'
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
+set -euo pipefail
 vmid="$1"
+# || true as above: no candidates is an empty answer, not a failure.
 zfs list -H -t volume -o name 2>/dev/null \
     | grep -F "/proxmox/vm-${vmid}-disk-" \
     | while IFS= read -r zvol; do
@@ -134,7 +141,8 @@ zfs list -H -t volume -o name 2>/dev/null \
         [[ "$disk_suffix" =~ ^[0-9]+$ ]] || continue
         [[ "$zvol" == *"/proxmox/vm-${vmid}-disk-${disk_suffix}" ]] || continue
         echo "$zvol"
-    done | sort
+    done | sort \
+    || true
 SSHEOF
     fi
 }
@@ -214,7 +222,7 @@ mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
-set -e
+set -euo pipefail
 
 while [[ $# -ge 3 ]]; do
     target="$1"; lun="$2"; owner_vmid="$3"
@@ -300,7 +308,10 @@ lookup_storage_info_for_zvols() {
     local -a args=()
     local z
     while IFS= read -r z; do
-        [[ -n "$z" ]] && args+=("$z")
+        # || continue (not "&& append"): continue keeps the loop's exit
+        # status 0 under set -e when a blank line slips in.
+        [[ -n "$z" ]] || continue
+        args+=("$z")
     done <<< "$zvol_list"
     [[ ${#args[@]} -gt 0 ]] || return 0
 
@@ -308,6 +319,8 @@ lookup_storage_info_for_zvols() {
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
+
+set -euo pipefail
 
 for zvol in "$@"; do
     size=$(zfs get -H -o value volsize "$zvol" 2>/dev/null || echo "unknown")

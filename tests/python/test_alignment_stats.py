@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -53,6 +54,56 @@ req_size      ind    agg    ind    agg    ind    agg    ind    agg    ind    agg
 ----------------------------------------------------------------------------------------------------------------
 """
 
+# Captured verbatim (whitespace-trimmed) from stewie's zfs 2.4.4
+# /proc/spl/kstat/zfs/NVME1/objset-0x705 — since-boot per-dataset counters
+# for a busy VM zvol (the average write size works out to exactly 4096).
+OBJSET_KSTAT_STEWIE = """
+321 1 0x01 28 7872 11537763416 1502890516504441
+name                            type data
+dataset_name                    7    NVME1/proxmox/vm-201-disk-3
+writes                          4    13744000
+nwritten                        4    59685613568
+reads                           4    84005793
+nread                           4    344117798912
+nunlinks                        4    0
+nunlinked                       4    0
+zil_commit_count                4    2400273
+zil_commit_writer_count         4    2400117
+zil_commit_error_count          4    0
+zil_commit_stall_count          4    0
+zil_commit_suspend_count        4    0
+zil_commit_crash_count          4    0
+zil_itx_count                   4    13797073
+zil_itx_indirect_count          4    129059
+zil_itx_indirect_bytes          4    2010800128
+zil_itx_copied_count            4    190459
+zil_itx_copied_bytes            4    780120064
+zil_itx_needcopy_count          4    13477555
+zil_itx_needcopy_bytes          4    56549777408
+zil_itx_metaslab_normal_count   4    2549669
+zil_itx_metaslab_normal_bytes   4    60447935000
+zil_itx_metaslab_normal_write   4    68559785984
+zil_itx_metaslab_normal_alloc   4    117329211392
+zil_itx_metaslab_slog_count     4    0
+zil_itx_metaslab_slog_bytes     4    0
+zil_itx_metaslab_slog_write     4    0
+zil_itx_metaslab_slog_alloc     4    0
+"""
+
+# Same grammar on the 2.2.2 dev host (all-zero counters on an idle pool):
+# /proc/spl/kstat/zfs/zfstest2/objset-0xc5 — dataset_name self-identifies.
+OBJSET_KSTAT_222 = """
+45 1 0x01 24 6784 18833492147 364265329033290
+name                            type data
+dataset_name                    7    zfstest2/zfstest1
+writes                          4    0
+nwritten                        4    0
+reads                           4    0
+nread                           4    0
+nunlinks                        4    0
+nunlinked                       4    0
+"""
+
 PVE_CONF = """# comment line
 boot: order=scsi0
 ide2: local:iso/debian-13-netinst.iso,media=cdrom
@@ -94,29 +145,48 @@ def _topology():
 
 
 class _FakeZfsRepo:
-    def __init__(self, fail=False):
+    def __init__(
+        self,
+        fail=False,
+        topology_fail=False,
+        topology_none=False,
+        ashift_fail=False,
+        dataset_fail_pools=(),
+        pools=("fivebays",),
+    ):
         self._fail = fail
+        self._topology_fail = topology_fail
+        self._topology_none = topology_none
+        self._ashift_fail = ashift_fail
+        self._dataset_fail_pools = tuple(dataset_fail_pools)
+        self._pools = tuple(pools)
 
     def list_pools_full(self):
         if self._fail:
             raise subprocess.CalledProcessError(1, ["zpool", "list"])
-        return [{"name": "fivebays"}]
+        return [{"name": name} for name in self._pools]
 
     def get_ashift(self, pool):
+        if self._ashift_fail:
+            raise subprocess.CalledProcessError(1, ["zpool", "get"])
         return AshiftInfo(configured="12", effective=12)
 
     def pool_topology(self, pool):
+        if self._topology_fail:
+            raise subprocess.CalledProcessError(1, ["zpool", "status"])
+        if self._topology_none:
+            return None
         return _topology()
 
     def dataset_block_properties(self, pool):
-        if self._fail:
+        if self._fail or pool in self._dataset_fail_pools:
             raise subprocess.CalledProcessError(1, ["zfs", "get"])
         return [
-            DatasetBlockRow("fivebays", "recordsize", "1M", "local"),
-            DatasetBlockRow("fivebays", "volblocksize", "-", "-"),
-            DatasetBlockRow("fivebays/proxmox", "recordsize", "128K", "inherited from fivebays"),
-            DatasetBlockRow("fivebays/proxmox/vm-201-disk-0", "recordsize", "-", "-"),
-            DatasetBlockRow("fivebays/proxmox/vm-201-disk-0", "volblocksize", "16K", "-"),
+            DatasetBlockRow(pool, "recordsize", "1M", "local"),
+            DatasetBlockRow(pool, "volblocksize", "-", "-"),
+            DatasetBlockRow(f"{pool}/proxmox", "recordsize", "128K", f"inherited from {pool}"),
+            DatasetBlockRow(f"{pool}/proxmox/vm-201-disk-0", "recordsize", "-", "-"),
+            DatasetBlockRow(f"{pool}/proxmox/vm-201-disk-0", "volblocksize", "16K", "-"),
         ]
 
 
@@ -203,6 +273,143 @@ class TestHistogramHelpers(unittest.TestCase):
         self.assertEqual(hist.top_buckets(("sync_read",)), [])
 
 
+class TestObjsetKstatParser(unittest.TestCase):
+    def test_stewie_fixture(self):
+        parsed = als.parse_objset_kstat(OBJSET_KSTAT_STEWIE)
+        self.assertIsNotNone(parsed)
+        name, counters = parsed
+        self.assertEqual(name, "NVME1/proxmox/vm-201-disk-3")
+        self.assertEqual(counters["reads"], 84005793)
+        self.assertEqual(counters["nread"], 344117798912)
+        self.assertEqual(counters["writes"], 13744000)
+        self.assertEqual(counters["nwritten"], 59685613568)
+        # Per-dataset ZIL counters ride along in the same numeric parse.
+        self.assertEqual(counters["zil_commit_count"], 2400273)
+        # dataset_name is string-typed and stays out of the numeric counters.
+        self.assertNotIn("dataset_name", counters)
+
+    def test_222_fixture_zero_counters(self):
+        name, counters = als.parse_objset_kstat(OBJSET_KSTAT_222)
+        self.assertEqual(name, "zfstest2/zfstest1")
+        self.assertEqual(counters["reads"], 0)
+        self.assertEqual(counters["nwritten"], 0)
+
+    def test_not_an_objset_kstat(self):
+        # Numeric-only kstat body (e.g. arcstats): no dataset_name row.
+        self.assertIsNone(als.parse_objset_kstat(_kstat_text({"hits": 5})))
+        self.assertIsNone(als.parse_objset_kstat(""))
+
+
+class TestReadObjsetKstats(unittest.TestCase):
+    def test_reads_pool_subdirectories(self):
+        with tempfile.TemporaryDirectory() as root:
+            pool = os.path.join(root, "NVME1")
+            os.makedirs(pool)
+            with open(os.path.join(pool, "objset-0x705"), "w") as f:
+                f.write(OBJSET_KSTAT_STEWIE)
+            other = os.path.join(root, "zfstest2")
+            os.makedirs(other)
+            with open(os.path.join(other, "objset-0xc5"), "w") as f:
+                f.write(OBJSET_KSTAT_222)
+            with open(os.path.join(other, "objset-0xZZ"), "w") as f:
+                f.write("not a kstat at all\n")
+            stats = als.read_objset_kstats(root)
+        self.assertEqual(sorted(stats), ["NVME1/proxmox/vm-201-disk-3", "zfstest2/zfstest1"])
+        self.assertEqual(stats["NVME1/proxmox/vm-201-disk-3"]["writes"], 13744000)
+        self.assertEqual(stats["zfstest2/zfstest1"]["reads"], 0)
+
+    def test_missing_dir_degrades(self):
+        self.assertEqual(als.read_objset_kstats("/nonexistent-kstat-dir"), {})
+
+
+class TestObjsetRates(unittest.TestCase):
+    BASE: ClassVar[dict] = {
+        "reads": 84005793,
+        "nread": 344117798912,
+        "writes": 13744000,
+        "nwritten": 59685613568,
+    }
+
+    def _sample(self, monotonic, objset):
+        return als.AlignmentSample(monotonic=monotonic, objset=objset)
+
+    def test_interval_rates_and_average_sizes(self):
+        # 120 reads / 400000 bytes and 30 writes / 216000 bytes in 60 s.
+        cur_counters = {
+            "reads": self.BASE["reads"] + 120,
+            "nread": self.BASE["nread"] + 400000,
+            "writes": self.BASE["writes"] + 30,
+            "nwritten": self.BASE["nwritten"] + 216000,
+        }
+        rates = als.compute_objset_rates(
+            self._sample(100.0, {"NVME1/proxmox/vm-201-disk-3": self.BASE}),
+            self._sample(160.0, {"NVME1/proxmox/vm-201-disk-3": cur_counters}),
+        )
+        self.assertEqual(list(rates), ["NVME1/proxmox/vm-201-disk-3"])
+        rate = rates["NVME1/proxmox/vm-201-disk-3"]
+        self.assertAlmostEqual(rate.reads_ps, 2.0)
+        self.assertAlmostEqual(rate.writes_ps, 0.5)
+        self.assertAlmostEqual(rate.read_bps, 400000 / 60)
+        self.assertAlmostEqual(rate.write_bps, 216000 / 60)
+        # Average request sizes come from the deltas, distinct from the
+        # per-second rates: 400000/120 read, 216000/30 written.
+        self.assertAlmostEqual(rate.avg_read_size, 400000 / 120)
+        self.assertAlmostEqual(rate.avg_write_size, 7200.0)
+
+    def test_zero_traffic_window(self):
+        rates = als.compute_objset_rates(
+            self._sample(100.0, {"ds": dict(self.BASE)}),
+            self._sample(160.0, {"ds": dict(self.BASE)}),
+        )
+        rate = rates["ds"]
+        self.assertEqual(rate.reads_ps, 0.0)
+        self.assertEqual(rate.writes_ps, 0.0)
+        # No operations means no observable request size.
+        self.assertIsNone(rate.avg_read_size)
+        self.assertIsNone(rate.avg_write_size)
+
+    def test_counter_reset_drops_interval(self):
+        # A re-import resets counters backwards; the interval is unreadable.
+        reset = {key: value // 2 for key, value in self.BASE.items()}
+        rates = als.compute_objset_rates(
+            self._sample(100.0, {"ds": self.BASE}),
+            self._sample(160.0, {"ds": reset}),
+        )
+        rate = rates["ds"]
+        self.assertIsNone(rate.reads_ps)
+        self.assertIsNone(rate.avg_read_size)
+        self.assertIsNone(rate.avg_write_size)
+
+    def test_dataset_churn_and_missing_baseline(self):
+        prev = self._sample(100.0, {"ds": dict(self.BASE)})
+        cur = self._sample(160.0, {"ds": dict(self.BASE), "newds": dict(self.BASE)})
+        # A dataset with no previous baseline has no valid delta.
+        self.assertEqual(sorted(als.compute_objset_rates(prev, cur)), ["ds"])
+        self.assertEqual(als.compute_objset_rates(None, cur), {})
+        self.assertEqual(als.compute_objset_rates(prev, None), {})
+        # Non-advancing clocks cannot rate anything.
+        self.assertEqual(als.compute_objset_rates(prev, self._sample(100.0, {"ds": self.BASE})), {})
+
+    def test_since_boot_average_sizes(self):
+        # stewie's vm-205-disk-3 counters: 4096-byte writes, ~1.6M reads.
+        avg_read, avg_write = als.average_request_sizes(
+            {
+                "reads": 227289,
+                "nread": 382872641536,
+                "writes": 63774720,
+                "nwritten": 261221253120,
+            }
+        )
+        self.assertAlmostEqual(avg_write, 4096.0)
+        self.assertGreater(avg_read, 1024 * 1024)
+        # No traffic or missing counters mean no average.
+        self.assertEqual(als.average_request_sizes({}), (None, None))
+        self.assertEqual(
+            als.average_request_sizes({"reads": 0, "nread": 0, "writes": 5, "nwritten": 20480}),
+            (None, 4096.0),
+        )
+
+
 class TestPveParsing(unittest.TestCase):
     def test_parse_vm_conf(self):
         options = als.parse_pve_vm_conf(PVE_CONF, vmid="201")
@@ -241,10 +448,14 @@ class TestCollectAlignmentSample(unittest.TestCase):
             f.write(_kstat_text({"hits": 1000, "misses": 100, "demand_data_hits": 800}))
         with open(prefetch_path, "w") as f:
             f.write(_kstat_text({"hits": 90, "misses": 10}))
-        return arc_path, prefetch_path
+        return arc_path, prefetch_path, tmp.name
 
     def _collect(self, zfs_repo=None, disk_repo=None, iostat_stdout=IOSTAT_R_NVME1):
-        arc_path, prefetch_path = self._kstats_dir()
+        arc_path, prefetch_path, kstat_root = self._kstats_dir()
+        pool_dir = os.path.join(kstat_root, "fivebays")
+        os.makedirs(pool_dir)
+        with open(os.path.join(pool_dir, "objset-0x705"), "w") as f:
+            f.write(OBJSET_KSTAT_STEWIE)
         result = MagicMock(returncode=0, stdout=iostat_stdout)
         with patch("alignment_stats.subprocess.run", return_value=result) as run:
             sample = als.collect_alignment_sample(
@@ -253,6 +464,7 @@ class TestCollectAlignmentSample(unittest.TestCase):
                 arcstats_path=arc_path,
                 zfetchstats_path=prefetch_path,
                 pve_conf_dir="/nonexistent-pve-dir",
+                kstat_dir=kstat_root,
             )
         return sample, run
 
@@ -263,6 +475,7 @@ class TestCollectAlignmentSample(unittest.TestCase):
         self.assertTrue(sample.iostat_r_available)
         self.assertTrue(sample.arcstats_available)
         self.assertTrue(sample.prefetch_available)
+        self.assertTrue(sample.objset_available)
         self.assertFalse(sample.pve_available)
         pool = sample.pools[0]
         self.assertEqual(pool.name, "fivebays")
@@ -282,6 +495,62 @@ class TestCollectAlignmentSample(unittest.TestCase):
         self.assertIn("NVME1", sample.histograms)
         self.assertEqual(sample.arc["hits"], 1000)
         self.assertEqual(sample.prefetch["misses"], 10)
+        objset = sample.objset["NVME1/proxmox/vm-201-disk-3"]
+        self.assertEqual(objset["writes"], 13744000)
+        self.assertEqual(objset["zil_commit_count"], 2400273)
+
+    def test_topology_retained_with_root_ashift(self):
+        sample, _run = self._collect()
+        pool = sample.pools[0]
+        topology = pool.topology
+        self.assertIsNotNone(topology)
+        self.assertEqual(topology.name, "fivebays")
+        self.assertEqual(topology.vdev_type, "pool")
+        # Disks-page pattern: the effective ashift is annotated on the root.
+        self.assertEqual(topology.ashift, 12)
+        by_type = {child.vdev_type: child for child in topology.children}
+        self.assertEqual(sorted(by_type), ["cache", "log", "raidz2"])
+        raidz = by_type["raidz2"]
+        self.assertEqual(raidz.name, "raidz2-0")
+        self.assertEqual([leaf.name for leaf in raidz.children], ["/dev/sdb", "/dev/sdc"])
+        self.assertEqual([leaf.name for leaf in by_type["log"].children], ["/dev/sdd"])
+        self.assertEqual([leaf.name for leaf in by_type["cache"].children], ["/dev/sde"])
+        # The flattened members come from the same tree.
+        self.assertEqual(
+            sorted(member.path for member in pool.members),
+            sorted(["/dev/sdb", "/dev/sdc", "/dev/sdd", "/dev/sde"]),
+        )
+
+    def test_topology_unreadable_degrades_per_pool(self):
+        sample, _run = self._collect(zfs_repo=_FakeZfsRepo(topology_none=True))
+        self.assertTrue(sample.pools_available)
+        pool = sample.pools[0]
+        self.assertIsNone(pool.topology)
+        self.assertEqual(pool.members, [])
+        self.assertFalse(pool.has_cache)
+        # The pool row itself survives with its ashift and datasets.
+        self.assertEqual(pool.ashift_effective, 12)
+        self.assertTrue(sample.datasets_available)
+
+    def test_topology_failure_degrades_per_pool(self):
+        sample, _run = self._collect(zfs_repo=_FakeZfsRepo(topology_fail=True))
+        self.assertTrue(sample.pools_available)
+        pool = sample.pools[0]
+        self.assertIsNone(pool.topology)
+        self.assertEqual(pool.members, [])
+        self.assertFalse(pool.has_cache)
+        self.assertEqual(pool.ashift_effective, 12)
+
+    def test_ashift_failure_degrades_per_pool(self):
+        sample, _run = self._collect(zfs_repo=_FakeZfsRepo(ashift_fail=True))
+        self.assertTrue(sample.pools_available)
+        pool = sample.pools[0]
+        self.assertIsNone(pool.ashift_configured)
+        self.assertIsNone(pool.ashift_effective)
+        # The tree is still retained, with no ashift annotated on its root.
+        self.assertIsNotNone(pool.topology)
+        self.assertIsNone(pool.topology.ashift)
+        self.assertEqual(len(pool.members), 4)
 
     def test_iostat_r_command(self):
         _sample, run = self._collect()
@@ -305,11 +574,16 @@ class TestCollectAlignmentSample(unittest.TestCase):
                 arcstats_path=os.path.join(tmp, "missing-arc"),
                 zfetchstats_path=os.path.join(tmp, "missing-fetch"),
                 pve_conf_dir="/nonexistent-pve-dir",
+                kstat_dir=os.path.join(tmp, "missing-kstat-dir"),
             )
         self.assertFalse(sample.iostat_r_available)
         self.assertEqual(sample.histograms, {})
         self.assertFalse(sample.arcstats_available)
         self.assertFalse(sample.prefetch_available)
+        # No pool subdirectories with objset files: per-dataset counters
+        # are unavailable and the survey stays the per-dataset basis.
+        self.assertFalse(sample.objset_available)
+        self.assertEqual(sample.objset, {})
 
     def test_repo_failure_degrades(self):
         sample, _run = self._collect(zfs_repo=_FakeZfsRepo(fail=True))
@@ -317,6 +591,30 @@ class TestCollectAlignmentSample(unittest.TestCase):
         self.assertFalse(sample.datasets_available)
         self.assertEqual(sample.pools, [])
         self.assertEqual(sample.datasets, [])
+        # Wholesale failure names no individual pool (the source is down,
+        # not one pool's read).
+        self.assertEqual(sample.dataset_read_failures, [])
+
+    def test_dataset_read_failure_degrades_per_pool(self):
+        """One pool's failed zfs read costs only that pool's datasets."""
+        repo = _FakeZfsRepo(pools=("fivebays", "scratch"), dataset_fail_pools=("scratch",))
+        sample, _run = self._collect(zfs_repo=repo)
+        self.assertTrue(sample.pools_available)
+        self.assertEqual([pool.name for pool in sample.pools], ["fivebays", "scratch"])
+        self.assertTrue(sample.datasets_available)
+        names = {ds.name for ds in sample.datasets}
+        self.assertIn("fivebays/proxmox/vm-201-disk-0", names)
+        self.assertFalse(any(name.startswith("scratch") for name in names))
+        self.assertEqual(sample.dataset_read_failures, ["scratch"])
+
+    def test_all_dataset_reads_failed_names_every_pool(self):
+        """A zfs get failure on every pool keeps the pool rows alive."""
+        repo = _FakeZfsRepo(dataset_fail_pools=("fivebays",))
+        sample, _run = self._collect(zfs_repo=repo)
+        self.assertTrue(sample.pools_available)
+        self.assertFalse(sample.datasets_available)
+        self.assertEqual(sample.datasets, [])
+        self.assertEqual(sample.dataset_read_failures, ["fivebays"])
 
 
 if __name__ == "__main__":

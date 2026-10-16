@@ -207,6 +207,22 @@ def format_bytes(size: int) -> str:
     return f"{value:.2f} {unit}"
 
 
+def format_blocksize(size: int) -> str:
+    """Return zfs-style blocksize text: ``"512"``, ``"4K"``, ``"128K"``, ``"1M"``.
+
+    Unlike :func:`format_bytes` (human-readable, two decimals) this renders
+    exact powers of two the way ``zfs get`` prints blocksize properties, so
+    ladder bar labels and axis ticks agree with the property strings the
+    tables beside them show.
+    """
+    if size <= 0:
+        return "0"
+    for suffix, scale in (("G", 1024**3), ("M", 1024**2), ("K", 1024)):
+        if size >= scale and size % scale == 0:
+            return f"{size // scale}{suffix}"
+    return str(size)
+
+
 class DiskRepository:
     """Wrap lsblk/by-id/smartctl subprocess calls for testability."""
 

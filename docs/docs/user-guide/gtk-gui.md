@@ -1230,8 +1230,11 @@ The **Performance** tab monitors ZFS's memory tiers in real time: the **ARC**
 (the adaptive replacement cache in RAM), the **L2ARC** (read-cache
 devices), and the **SLOG** (intent-log devices). It refreshes
 automatically while visible on a user-configurable interval, and every
-refresh redraws rolling time-series charts, so the display updates
-dynamically without any external charting dependency.
+refresh redraws rolling time-series charts. Charts render through
+matplotlib when that optional package is installed and through the
+built-in Cairo renderer otherwise, so the display updates dynamically
+either way (see the developer note on
+[GUI charting](../developer-guide/charting.md)).
 
 The tab hosts two views behind a **Live Charts / Blocksize Alignment** radio
 switcher below the refresh controls. **Live Charts** is the real-time monitor
@@ -1299,7 +1302,14 @@ Both device tables have user-resizable columns whose widths are
 retained across GUI restarts, like the tables on the other tabs.
 
 Charts keep roughly 300 samples (about 25 minutes at the default 5 s
-interval) and auto-scale their Y axes.
+interval) and auto-scale their Y axes. With matplotlib installed the
+charts gain antialiased lines with translucent fills, styled axes, and
+per-series legends that show each series' latest value; the dashed
+`c_max` reference line and the fixed-height behaviour are the same in
+both renderings. Each chart fills the available page
+width but keeps a fixed height: making the window taller never stretches
+the charts (the extra height goes to the page below them), and the page
+itself scrolls once its content exceeds the window.
 
 ### Refresh control
 
@@ -1317,7 +1327,10 @@ options — and reports where neighbouring layers disagree, plus tuning
 recommendations drawn from **two bases**:
 
 - **Observed workload**: since-boot request-size histograms
-  (`zpool iostat -r`, per pool and IO class), ARC demand/prefetch
+  (`zpool iostat -r`, per pool and IO class), per-dataset I/O counters
+  from the OpenZFS objset kstats (`/proc/spl/kstat/zfs/<pool>/objset-*`,
+  OpenZFS 2.2 and later — average read and write request sizes per
+  dataset, delta-sampled between refreshes), ARC demand/prefetch
   hit-rate readouts, and the prefetcher's own vote on how sequential the
   workload is (the classification approach is inspired by Richard
   Elling's `kstat-analyzer` from zfs-linux-tools; the rules and thresholds
@@ -1332,37 +1345,90 @@ dataset properties. `ashift` and `volblocksize` are fixed at creation
 time; `recordsize` changes go through Workload profiles on the Datasets
 tab or Migrate Pool, which this view points at rather than replacing.
 
-The view is built from four sections, refreshed independently of the
+The view is built from six sections, refreshed independently of the
 charts view:
 
 - **Memory-tier Observations (since boot)**: ARC demand-data /
   demand-metadata / prefetch-data hit rates, the prefetcher hit rate,
   ghost hits as a share of real hits, the share of evictions eligible for
   L2ARC, and the average L2 hit size (a blocksize-adjacent readout).
-- **Alignment Chain**: one table row per layer — each pool's configured
-  and effective `ashift`, each member disk's logical/physical sector
+- **Blocksize scan**: one table row per layer — each pool's configured
+  and effective `ashift` (the block-size cell leads with the byte size,
+  e.g. `512 B (effective ashift 9)`; the detail cell states the
+  configured-vs-auto status as data — `auto (ashift not configured)` or
+  `configured ashift 12`, or `ashift property unavailable` when the
+  property read failed), each member disk's logical/physical sector
   geometry (512e advanced-format disks are called out), each dataset's
   `recordsize` or `volblocksize` with its property source, and each
   `vm-<id>-disk-<n>` zvol's PVE disk-line options (`bus`, `discard`,
   `iothread`, `secs=…`).
+- **Blocksize ladder**: the same chain drawn visually — a log₂-scale
+  ladder, one row per rung per pool (each distinct device physical
+  sector, the pool's ashift block, each distinct
+  `recordsize`/`volblocksize` with a ×count when several datasets share
+  it, and the VM guest sector), with a dashed reference line at each
+  pool's ashift block. Misalignment reads at a glance: a rung that ends
+  left of its pool's dashed line sits below the ashift block (padding /
+  partial-block cost), a device rung that passes right of it means the
+  ashift block is below the physical sector (read-modify-write), and
+  colour carries the verdict — blue aligned, orange mismatched, grey
+  advisory or below its zvol's `volblocksize`. The ladder renders through
+  matplotlib when that optional package is installed and through the
+  built-in Cairo renderer otherwise (the same renderer choice as the
+  live charts), and its inputs degrade per source exactly like the scan
+  table above — a failed source simply drops its rungs, a pool with an
+  unresolved ashift keeps its other rungs in grey without a reference
+  line, and a wholesale pool failure shows the chart's own note instead.
+- **Pool topology**: each pool's vdev layout, one row per vdev group —
+  its class (`data`, `special`, `log`, `cache`, `spare`), the group
+  (`mirror-0`, `raidz2-0`, or a bare disk), the group type (`mirror`,
+  `raidz1/2/3`, `disk`), its member disks, and the pool's effective
+  `ashift` block size on every row. A pool whose `zpool status` read
+  failed keeps a single row carrying whatever `ashift` is known (the
+  ashift probe runs independently of the status read) and is named in
+  the availability note.
 - **Findings & Recommendations**: severity-marked rows (✓ OK / • info /
   ⚠ WARN) from the analysis rules — for example an `ashift` block smaller
   than a member's physical sector (every device write becomes a
   read-modify-write), a `recordsize`/`volblocksize` below the `ashift`
   block (records padded up), a declared-survey profile whose recordsize
-  disagrees with the effective one, or a dominant observed sync request
-  size far below the dataset's blocksize.
+  disagrees with the effective one, a vdev group whose members mix
+  physical sector geometries (named per group from the pool's topology —
+  the unit a replacement disk is picked for; mixing across separate
+  groups, say a 4K data mirror beside a 512-native cache SSD, is benign
+  and stays silent), or a dataset whose observed request sizes disagree
+  with its block sizes — writes far below the `recordsize`/`volblocksize`
+  (read-modify-write amplification) or reads above the `recordsize`
+  (every read spans several records). Observed sizes come from the
+  per-dataset objset counters, preferring the interval between the last
+  two refreshes and falling back to since-boot averages; where those
+  counters are unavailable (OpenZFS older than 2.2, or a non-Linux
+  port), observed-size advice falls back to the per-pool histogram —
+  findings then name whole pools, not datasets — and both the
+  availability note and a findings row say so. A dataset's survey
+  declaration, when one exists, is cited in the message so a stale
+  answer is visible at a glance.
 - **Workload (since boot)**: per pool, the classifier verdict
   (sequential / random-sync / mixed / insufficient traffic) with its
   confidence, the dominant sync and overall request sizes, total
   operations, and the prefetcher hit rate.
 
 Like the charts view, each data source degrades on its own with a note
-naming what is missing: request-size histograms, ARC/prefetcher kstats,
-zfs/zpool reads, and PVE VM configs. The last one matters on two-node
+naming what is missing: request-size histograms, per-dataset I/O
+counters, ARC/prefetcher kstats, zfs/zpool reads, and PVE VM configs.
+The last one matters on two-node
 installs: the GUI runs on the storage node, but `/etc/pve/qemu-server`
 lives on the compute node, so VM-layer options are only read on
 single-node installs and otherwise noted as unavailable.
+
+Refreshes keep the page steady: the tables update their rows in place
+(a finding keeps its position even while the numbers inside it drift),
+and the scroll position is held across every refresh — including the one
+triggered by saving the survey dialog. A transient `zfs` failure on one
+pool costs only that pool's dataset rows, and a failed `zpool status`
+read for one pool costs only its topology rows: the pool and device rows
+stay, and the note names the affected pools rather than declaring the
+whole source down.
 
 ### Survey dialog
 
@@ -1873,6 +1939,12 @@ existing custom profile, and Reset to Defaults restores the seeds. Pool
 property values are picked from their allowed values, so an invalid value
 cannot be entered.
 
+The Add/Edit dialog scrolls — its window is capped to the screen and every
+field beyond the visible area is reachable with the scrollbar (OK/Cancel
+stay fixed at the bottom). Hovering any field or its label shows a tooltip
+describing the property and what each value does, including each property's
+ZFS default and what "(not set)" / an empty field means.
+
 ### Actions
 
 The pool- and disk-scoped actions (Create Pool, Add Data Vdev, Expand Vdev,
@@ -1949,7 +2021,13 @@ clean:
 2. `wipefs -a` — removes every visible signature, including the partition
    table, and informs the kernel.
 3. `dd` — the always-works fallback: zeroes the first and last 1 MiB of the
-   device and of each partition, then forces a partition-table re-read.
+   device and of each partition.
+
+After whichever step did the wiping, the script tells Linux the disk changed:
+the partition table is re-read (`partprobe`, else `blockdev --rereadpt`) so
+stale partition nodes drop, and udev settles so `/dev/disk/by-id` and the
+GUI's refreshed inventory reflect the clean disk — no rescan or reboot
+needed.
 
 Things to know before wiping:
 

@@ -176,7 +176,9 @@ upgrade_lib_extract_tarball() {
     mkdir -p "$dest_dir" || return 1
     tar -xzf "$tarball" -C "$dest_dir" || return 1
     local root
-    root=$(find "$dest_dir" -mindepth 1 -maxdepth 1 -type d | head -1)
+    # || true: head's early exit can SIGPIPE find under pipefail callers;
+    # an empty result is rejected by the -n check below.
+    root=$(find "$dest_dir" -mindepth 1 -maxdepth 1 -type d | head -1 || true)
     [[ -n "$root" ]] || return 1
     printf '%s\n' "$root"
 }
@@ -190,9 +192,12 @@ upgrade_lib_extract_tarball() {
 # character; cut's 4th '"'-delimited field is the value itself
 # (""field"": ""value"" -> field 2 is the key, field 4 the value).
 # Field names arrive from this file's own call sites, never user input.
+# The trailing || true keeps a missing field (and head's early close under
+# pipefail callers) an empty answer rather than a failure — callers treat
+# empty as "fall back to the default".
 upgrade_lib_json_string() {
     local file="$1" field="$2"
-    grep -o "\"$field\":[^,}]*" "$file" | head -1 | cut -d'"' -f4
+    grep -o "\"$field\":[^,}]*" "$file" | head -1 | cut -d'"' -f4 || true
 }
 
 # ------------------------------------------------------------------

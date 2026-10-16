@@ -19,7 +19,7 @@
 #
 # Run as root on the STORAGE host.
 
-set -e
+set -euo pipefail
 
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
@@ -251,27 +251,29 @@ CONFEOF
         "${EDITOR:-nano}" "$NODE_CONF"
     fi
 
-    # Re-source to pick up any edits
-    source "$NODE_CONF"
-
-    # Refresh the lowercase working copies from the (possibly edited) config.
-    node_mode="${NODE_MODE:-two-node}"
-    storage_host="${STORAGE_HOST:-}"
-    compute_host="${COMPUTE_HOST:-}"
-    storage_ip="${STORAGE_IP:-}"
-    iqn_prefix="${IQN_PREFIX:-}"
-    expected_iscsi_devices="${EXPECTED_ISCSI_DEVICES:-}"
-    declare -A pool_target=()
-    # POOL_TARGET is sourced from the (possibly edited) node.conf above.
-    # shellcheck disable=SC2153
-    for _pool in "${!POOL_TARGET[@]}"; do
-        pool_target["$_pool"]="${POOL_TARGET[$_pool]}"
-    done
-    unset _pool
-
     echo ""
     echo "✓ Configuration saved to $NODE_CONF"
 fi
+
+# Source the configuration — freshly generated above or kept from an
+# earlier run — and refresh the lowercase working copies. The install
+# steps below use these in both paths; the kept-config path previously
+# never set them (node.conf defines the UPPERCASE names only), so the
+# storage-host check died on an empty hostname.
+source "$NODE_CONF"
+node_mode="${NODE_MODE:-two-node}"
+storage_host="${STORAGE_HOST:-}"
+compute_host="${COMPUTE_HOST:-}"
+storage_ip="${STORAGE_IP:-}"
+iqn_prefix="${IQN_PREFIX:-}"
+expected_iscsi_devices="${EXPECTED_ISCSI_DEVICES:-}"
+declare -A pool_target=()
+# POOL_TARGET is sourced from node.conf above.
+# shellcheck disable=SC2153
+for _pool in "${!POOL_TARGET[@]}"; do
+    pool_target["$_pool"]="${POOL_TARGET[$_pool]}"
+done
+unset _pool
 
 # ------------------------------------------------------------------
 # Step 2b: Generate deployment config

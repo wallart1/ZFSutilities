@@ -24,7 +24,7 @@
 # upgrade (scan, file fetch, salvage, deploy-version's sync) multiplexes
 # through one control master per host — one password prompt per host.
 
-set -e
+set -euo pipefail
 
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then

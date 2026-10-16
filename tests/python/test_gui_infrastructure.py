@@ -3023,6 +3023,12 @@ class TestInfoPanelFont(unittest.TestCase):
     """Main-window log panel uses a monospace font, including when popped out."""
 
     def test_info_text_uses_monospace_font(self):
+        # create_info_panel installs app.log_message as the shared
+        # logging_config sink; clear it so it cannot leak into whichever
+        # suite runs next in this xdist worker.
+        import logging_config
+
+        self.addCleanup(logging_config.set_log_sink, None)
         with mock_gtk(fresh=True):
             import gui_helpers as gh
 
@@ -3039,6 +3045,10 @@ class TestClearButton(unittest.TestCase):
     """Clear button in the log panel also clears the bottom status bar."""
 
     def test_clear_button_clears_status_bar(self):
+        # Same sink hygiene as TestInfoPanelFont above.
+        import logging_config
+
+        self.addCleanup(logging_config.set_log_sink, None)
         with mock_gtk(fresh=True) as gtk_mock:
             import gui_helpers as gh
 

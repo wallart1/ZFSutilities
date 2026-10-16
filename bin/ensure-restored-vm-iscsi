@@ -309,7 +309,7 @@ ensure_lun_on_storage() {
         << 'STORAGEEOF'
 source ~/bashinit
 bashinit
-set -e
+set -euo pipefail
 zvol="$1"
 zvol_dev="$2"
 bsname="$3"
@@ -378,7 +378,7 @@ STORAGEEOF
         << 'MANIFESTEOF'
 source ~/bashinit
 bashinit
-set -e
+set -euo pipefail
 bsname="$1"
 zvol_dev="$2"
 target_short="$3"

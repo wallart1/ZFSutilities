@@ -18,7 +18,7 @@
 #
 # Run as root on the host that will run ZFSutilities.
 
-set -e
+set -euo pipefail
 
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then

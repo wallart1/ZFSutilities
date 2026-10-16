@@ -87,6 +87,14 @@ class TestSessionLogHelpers(unittest.TestCase):
 class TestLogMsg(unittest.TestCase):
     """log_msg routes to sink, stderr, and file without priority filtering."""
 
+    def setUp(self):
+        # A GUI-suite test in the same xdist worker may have called
+        # create_info_panel, whose set_log_sink lands on this same shared
+        # logging_config module and silently diverts every stderr assertion
+        # below (found live as a with-soak interleave flake); the class
+        # asserts sink routing, so it controls the sink on entry too.
+        set_log_sink(None)
+
     def tearDown(self):
         set_log_sink(None)
         os.environ.pop("ZFSUTILITIES_LOG_FILE", None)

@@ -5,9 +5,11 @@ original monitor: sizes, rates, and hit ratios from
 /proc/spl/kstat/zfs counters plus per-device data from interval-mode
 ``zpool iostat -v`` (rates over a 1-second window measured at each
 refresh), refreshed on a user-configurable interval while the tab is
-visible.  Rolling time-series charts are Cairo-drawn on a
-Gtk.DrawingArea that redraws every refresh tick, so the display updates
-dynamically without any extra charting dependency.  "Alignment" (built
+visible.  Rolling time-series charts render through the shared charting
+module: matplotlib (``FigureCanvasGTK3Agg``) when the optional package is
+installed, with the Cairo ``RollingChart`` below as the fallback renderer
+so the page also works without it (see python/Prerequisites.md and the
+GUI-charting developer note).  "Alignment" (built
 in alignment_page) shows blocksize alignment across device, pool,
 dataset, and VM layers with tuning advice from observed workloads and
 the user survey.  The shared refresh timer refreshes whichever view is
@@ -26,6 +28,14 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 from alignment_page import create_alignment_view, refresh_alignment_view
+from charting import (  # chart vocabulary shared with the matplotlib renderer
+    CHART_MAX_SAMPLES,
+    REFERENCE_COLOR,
+    SERIES_COLORS,
+    create_rolling_chart,
+    format_age,
+    nice_ceiling,
+)
 from config_core import (
     get_memory_config,
     get_ui_state,
@@ -52,52 +62,13 @@ from memory_stats import (
     format_rate,
 )
 
-# Number of samples kept per chart.  At the 5 s default interval this is
-# about 25 minutes of history; the window slides as samples age out.
-CHART_MAX_SAMPLES = 300
-
-# Chart series colours (RGB 0.0-1.0).
-_SERIES_COLORS = [
-    (0.20, 0.40, 0.70),  # blue
-    (0.96, 0.47, 0.00),  # orange
-]
-_REFERENCE_COLOR = (0.60, 0.60, 0.60)
-
-# Nice-round-ceiling ladder used for chart Y-axis scaling.
-_NICE_LADDER = (1, 2, 5)
-
-
-def _nice_ceiling(value):
-    """Return the smallest ladder value (1/2/5 x 10^k) >= *value*."""
-    if value <= 0:
-        return 1.0
-    exponent = 0
-    scaled = float(value)
-    while scaled > 5:
-        scaled /= 10.0
-        exponent += 1
-    for step in _NICE_LADDER:
-        if scaled <= step:
-            return step * 10**exponent
-    return 10 ** (exponent + 1)
-
-
-def _format_age(seconds):
-    """Format a duration for chart X-axis labels (e.g. '4m 59s')."""
-    seconds = int(seconds)
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes, secs = divmod(seconds, 60)
-    if minutes < 60:
-        return f"{minutes}m {secs:02d}s"
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours}h {minutes:02d}m"
-
 
 class RollingChart:
     """Rolling time-series chart drawn with Cairo on a Gtk.DrawingArea.
 
-    Holds up to *max_samples* points of one or two series and redraws via
+    Fallback renderer (see charting.create_rolling_chart): used on hosts
+    without the optional matplotlib package.  Holds up to *max_samples*
+    points of one or two series and redraws via
     ``queue_draw()`` after every append.  Composition (rather than
     subclassing Gtk.DrawingArea) keeps the class usable under the test
     GTK mocks.  The Y axis auto-scales to a nice round ceiling; a static
@@ -174,7 +145,7 @@ class RollingChart:
         if self.percent:
             y_max = 100.0
         else:
-            y_max = _nice_ceiling(peak * 1.05) if peak > 0 else 1.0
+            y_max = nice_ceiling(peak * 1.05) if peak > 0 else 1.0
         y_max = max(y_max, 1e-9)
 
         t_first = self._points[0][0]
@@ -207,14 +178,14 @@ class RollingChart:
         # so the newest point is effectively "now").
         cr.set_source_rgb(0.35, 0.35, 0.35)
         cr.move_to(left, height - 4)
-        cr.show_text(f"-{_format_age(t_span)}")
+        cr.show_text(f"-{format_age(t_span)}")
         cr.move_to(left + plot_w - 24, height - 4)
         cr.show_text("now")
 
         # Reference line (dashed).
         if self._reference is not None:
             y = _y(self._reference)
-            cr.set_source_rgb(*_REFERENCE_COLOR)
+            cr.set_source_rgb(*REFERENCE_COLOR)
             cr.set_dash([4, 4])
             cr.move_to(left, y)
             cr.line_to(left + plot_w, y)
@@ -227,7 +198,7 @@ class RollingChart:
 
         # Series polylines with translucent fills.
         for index in range(len(self.series_names)):
-            color = _SERIES_COLORS[index % len(_SERIES_COLORS)]
+            color = SERIES_COLORS[index % len(SERIES_COLORS)]
             points = [(_x(t), _y(values[index])) for t, values in self._points]
             points = [(x, y) for x, y in points if y is not None]
             if len(points) < 2:
@@ -249,7 +220,7 @@ class RollingChart:
         # Legend with the newest value of each series.
         x = left + 4
         for index, name in enumerate(self.series_names):
-            color = _SERIES_COLORS[index % len(_SERIES_COLORS)]
+            color = SERIES_COLORS[index % len(SERIES_COLORS)]
             latest = self._points[-1][1][index]
             if self.percent:
                 text = f"{name} {format_percent(latest)}"
@@ -325,6 +296,22 @@ def _on_memory_view_radio_toggled(radio, app):
     save_ui_state(app.config, {"performance_view": {"view": view}})
 
 
+def _on_memory_view_stack_mapped(stack, app):
+    """Re-point the stack at the active view radio once the stack is mapped.
+
+    ``set_visible_child_name()`` on a stack that is not shown yet is
+    dropped by GTK — the stack has no visible child at that point, and its
+    own show handler falls back to the first child — so the view restored
+    from the saved configuration at build time never takes effect.  The
+    radios sit outside the stack and keep the authoritative selection, so
+    every map re-asserts the visible child from the active radio (a no-op
+    when the two already agree).
+    """
+    view = _current_memory_view(app)
+    if stack.get_visible_child_name() != view:
+        stack.set_visible_child_name(view)
+
+
 def create_memory_page(app):
     """Build and return the Performance tab widget."""
     app._memory_timer = None
@@ -334,6 +321,9 @@ def create_memory_page(app):
 
     scrolled = Gtk.ScrolledWindow()
     scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+    # Exposed so the Alignment refresh path can save/restore the vertical
+    # offset around each apply (datasets-page idiom; see alignment_page).
+    app.performance_scrolled = scrolled
 
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
     box.set_margin_start(15)
@@ -383,6 +373,11 @@ def create_memory_page(app):
         saved_view = "charts"
     app._memory_view_radios[saved_view].set_active(True)
     app._memory_view_stack.set_visible_child_name(saved_view)
+    # The build-time restore above is dropped by GTK while the stack is
+    # not shown (see _on_memory_view_stack_mapped), and this page is built
+    # at window construction but only mapped when the sidebar selects it —
+    # so the view is re-asserted at map time.
+    app._memory_view_stack.connect("map", _on_memory_view_stack_mapped, app)
 
     # --- ARC section ---
     version_note = ""
@@ -417,14 +412,20 @@ def create_memory_page(app):
     app._memory_arc_labels = arc_labels
     charts_box.pack_start(arc_grid, False, False, 0)
 
-    app._memory_arc_size_chart = RollingChart("ARC size", ["size"])
-    app._memory_arc_rate_chart = RollingChart(
+    app._memory_arc_size_chart = create_rolling_chart("ARC size", ["size"])
+    app._memory_arc_rate_chart = create_rolling_chart(
         "ARC hit rate", ["hit rate"], percent=True, formatter=lambda v: f"{v:.0f}"
     )
+    # Chart sizing lives here in the pack layer, not in the drawing code:
+    # every chart fills the page width but is packed without vertical
+    # expand, so it keeps its designed height (the rolling-chart height
+    # request, set by either renderer) no matter how tall the window is —
+    # extra vertical space goes to the view stack instead of stretching
+    # the charts.
     charts_arc = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     charts_arc.pack_start(app._memory_arc_size_chart.widget, True, True, 0)
     charts_arc.pack_start(app._memory_arc_rate_chart.widget, True, True, 0)
-    charts_box.pack_start(charts_arc, True, True, 0)
+    charts_box.pack_start(charts_arc, False, False, 0)
 
     # --- L2ARC section ---
     charts_box.pack_start(section_header("L2ARC — Cache Devices"), False, False, 0)
@@ -451,8 +452,8 @@ def create_memory_page(app):
     app._memory_l2_labels = l2_labels
     charts_box.pack_start(l2_grid, False, False, 0)
 
-    app._memory_l2_chart = RollingChart("L2ARC traffic", ["read", "write"])
-    charts_box.pack_start(app._memory_l2_chart.widget, True, True, 0)
+    app._memory_l2_chart = create_rolling_chart("L2ARC traffic", ["read", "write"])
+    charts_box.pack_start(app._memory_l2_chart.widget, False, False, 0)
 
     l2_view, _l2_store = _device_table(
         app,
@@ -483,8 +484,8 @@ def create_memory_page(app):
     app._memory_slog_labels = slog_labels
     charts_box.pack_start(slog_grid, False, False, 0)
 
-    app._memory_slog_chart = RollingChart("SLOG writes", ["write"])
-    charts_box.pack_start(app._memory_slog_chart.widget, True, True, 0)
+    app._memory_slog_chart = create_rolling_chart("SLOG writes", ["write"])
+    charts_box.pack_start(app._memory_slog_chart.widget, False, False, 0)
 
     slog_view, _slog_store = _device_table(
         app,

@@ -1,0 +1,65 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-strict-mode — Static guard: the migrated orchestrators keep
+# `set -euo pipefail`.
+#
+# coding-policies.md requires strict mode at the start of scripts. The
+# 2026-10-16 wrap-up migrated the thirteen orchestrators the
+# convention-drift audit named (PREEXISTING.md entry, since resolved):
+# each was audited for -u/pipefail/-e hazards, fenced where an empty
+# answer is legitimate, and flipped together with its child-engine
+# heredocs. This guard fails the moment one of them loses the strict
+# line again — a quiet `set -e` (or no set at all) is how the drift
+# originally crept in, and the mock-based suites cannot notice it.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+# The migrated orchestrators (sever-vm-clone's interactive parent and its
+# transfer engine child both carry the line; one occurrence per file is
+# the guard's contract).
+strict_scripts=(
+    clone-vm
+    attach-vm-disk
+    ensure-restored-vm-iscsi
+    deploy-version
+    install-single-node
+    remove-vm
+    move-vm-disk
+    install-two-node
+    rename-vm-disk
+    sever-vm-clone
+    unarchive-vm
+    upgrade-zfsutilities
+    zfsclone-vm
+)
+
+test_migrated_scripts_keep_strict_mode() {
+    test_start "Migrated orchestrators keep set -euo pipefail"
+    local missing="" s head
+    for s in "${strict_scripts[@]}"; do
+        # Only the header region counts: the strict line must precede the
+        # bashinit bootstrap, or a child-heredoc occurrence would mask a
+        # parent that quietly lost strict mode (found by red-proofing —
+        # zfsclone-vm's engine child alone satisfied the whole-file grep).
+        head=$(sed -n '/^_local_bashinit=/q;p' "$old_mydir/bin/$s")
+        if ! grep -q '^set -euo pipefail' <<< "$head"; then
+            missing+="${s} "
+        fi
+    done
+    if [[ -n "$missing" ]]; then
+        test_fail "lost set -euo pipefail: ${missing}"
+        return
+    fi
+    test_pass
+}
+
+# =============================================================================
+# Run
+# =============================================================================
+
+test_migrated_scripts_keep_strict_mode
+
+test_summary

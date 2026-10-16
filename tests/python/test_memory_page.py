@@ -84,6 +84,13 @@ def _make_app():
     return app
 
 
+def _tracked_widget(seen):
+    """Return a fresh MagicMock and record it in *seen* (per-call factory)."""
+    widget = MagicMock()
+    seen.append(widget)
+    return widget
+
+
 class TestCreateMemoryPage(unittest.TestCase):
     def test_page_construction(self):
         with mock_gtk(fresh=True) as gtk:
@@ -101,6 +108,10 @@ class TestCreateMemoryPage(unittest.TestCase):
             # The page hosts both Performance views behind the switcher.
             self.assertEqual(set(app._memory_view_radios), {"charts", "alignment"})
             self.assertIsNotNone(app._memory_view_stack)
+            # The page ScrolledWindow is exposed so the Alignment refresh
+            # path can save/restore the vertical offset around each apply.
+            self.assertIsNotNone(app.performance_scrolled)
+            self.assertIs(page, app.performance_scrolled)
             # Stores must not walk mock iters (reconcile would loop forever).
             self.assertIsNone(app._memory_sample)
             # The page is titled Performance (the sidebar tab name). Label is
@@ -129,16 +140,17 @@ class TestCreateMemoryPage(unittest.TestCase):
             app = _make_app()
             mp.create_memory_page(app)
             calls = app._ui_state.bind_treeview.call_args_list
-            # The Alignment view (second Performance view) binds its three
+            # The Alignment view (second Performance view) binds its four
             # tables first, then the charts view's L2ARC and SLOG tables.
             self.assertEqual(
                 [(c.args[0], c.args[1]) for c in calls],
                 [
                     (views[0], "alignment_chain_view"),
-                    (views[1], "alignment_findings_view"),
-                    (views[2], "alignment_workload_view"),
-                    (views[3], "memory_l2_view"),
-                    (views[4], "memory_slog_view"),
+                    (views[1], "alignment_topology_view"),
+                    (views[2], "alignment_findings_view"),
+                    (views[3], "alignment_workload_view"),
+                    (views[4], "memory_l2_view"),
+                    (views[5], "memory_slog_view"),
                 ],
             )
 
@@ -150,6 +162,90 @@ class TestCreateMemoryPage(unittest.TestCase):
             app.config = {"memory": {"refresh_seconds": 17}}
             mp.create_memory_page(app)
             app._memory_ref_spin.set_value.assert_called_once_with(17)
+
+    def test_charts_do_not_expand_vertically_at_pack_sites(self):
+        """Charts fill the page width but keep their designed height.
+
+        Regression guard for the tall-chart defect: the three vertical pack
+        sites (the ARC chart row, the L2ARC chart, the SLOG chart) must pack
+        without expand so window height never stretches a chart, while the
+        ARC pair still expands to share the row's width.  Box and
+        DrawingArea get per-call side effects so pack calls are traced by
+        widget identity instead of the shared default mocks.
+        """
+        with mock_gtk(fresh=True) as gtk:
+            boxes = []
+            gtk.Box = MagicMock(side_effect=lambda *a, **k: _tracked_widget(boxes))
+            gtk.DrawingArea = MagicMock(side_effect=lambda *a, **k: MagicMock())
+            import memory_page as mp
+
+            app = _make_app()
+            mp.create_memory_page(app)
+
+            def _packs(box, child):
+                return any(c.args[0] is child for c in box.pack_start.call_args_list)
+
+            def _flags(box, child):
+                matching = [c for c in box.pack_start.call_args_list if c.args[0] is child]
+                self.assertEqual(len(matching), 1, "each chart is packed exactly once")
+                return (matching[0].args[1], matching[0].args[2])
+
+            l2_widget = app._memory_l2_chart.widget
+            slog_widget = app._memory_slog_chart.widget
+            size_widget = app._memory_arc_size_chart.widget
+            rate_widget = app._memory_arc_rate_chart.widget
+
+            # The charts-view box is the one that packs the L2ARC chart; the
+            # ARC row is the horizontal box that packs the ARC chart widgets.
+            charts_box = next(b for b in boxes if _packs(b, l2_widget))
+            arc_row = next(b for b in boxes if _packs(b, size_widget))
+
+            # No vertical expansion at any of the three sites.
+            self.assertEqual(_flags(charts_box, l2_widget), (False, False))
+            self.assertEqual(_flags(charts_box, slog_widget), (False, False))
+            self.assertEqual(_flags(charts_box, arc_row), (False, False))
+            # Inside the ARC row the two charts still expand to share width.
+            self.assertEqual(_flags(arc_row, size_widget), (True, True))
+            self.assertEqual(_flags(arc_row, rate_widget), (True, True))
+
+            # The designed height itself stays a size request on the chart
+            # widget (set by whichever renderer the factory picked),
+            # independent of the pack sites and of the drawing code.
+            for chart in (
+                app._memory_arc_size_chart,
+                app._memory_arc_rate_chart,
+                app._memory_l2_chart,
+                app._memory_slog_chart,
+            ):
+                chart.widget.set_size_request.assert_called_once_with(-1, 110)
+
+    def test_charts_built_through_renderer_factory(self):
+        """All four live charts are created via the shared renderer factory.
+
+        The factory picks matplotlib when its GTK3 backend is available and
+        the Cairo RollingChart otherwise — under mock_gtk the backend
+        cannot load, so this also pins the fallback selection the suites
+        rely on.
+        """
+        with mock_gtk(fresh=True):
+            import memory_page as mp
+            from memory_page import RollingChart
+
+            app = _make_app()
+            with patch.object(mp, "create_rolling_chart", wraps=mp.create_rolling_chart) as factory:
+                mp.create_memory_page(app)
+            self.assertEqual(
+                [c.args[0] for c in factory.call_args_list],
+                ["ARC size", "ARC hit rate", "L2ARC traffic", "SLOG writes"],
+            )
+            self.assertTrue(factory.call_args_list[1].kwargs["percent"])
+            for chart in (
+                app._memory_arc_size_chart,
+                app._memory_arc_rate_chart,
+                app._memory_l2_chart,
+                app._memory_slog_chart,
+            ):
+                self.assertIsInstance(chart, RollingChart)
 
     def test_spin_change_persists_and_restarts_timer(self):
         with mock_gtk(fresh=True):
@@ -284,24 +380,8 @@ class TestApplyMemorySample(unittest.TestCase):
 
 
 class TestRollingChart(unittest.TestCase):
-    def test_nice_ceiling_ladder(self):
-        with mock_gtk():
-            import memory_page as mp
-
-            self.assertEqual(mp._nice_ceiling(0), 1.0)
-            self.assertEqual(mp._nice_ceiling(1), 1.0)
-            self.assertEqual(mp._nice_ceiling(3), 5.0)
-            self.assertEqual(mp._nice_ceiling(7), 10.0)
-            self.assertEqual(mp._nice_ceiling(80), 100.0)
-            self.assertEqual(mp._nice_ceiling(900), 1000.0)
-
-    def test_format_age(self):
-        with mock_gtk():
-            import memory_page as mp
-
-            self.assertEqual(mp._format_age(45), "45s")
-            self.assertEqual(mp._format_age(299), "4m 59s")
-            self.assertEqual(mp._format_age(3661), "1h 01m")
+    """The Cairo fallback renderer (matplotlib charts are tested in
+    test_charting.py; the shared vocabulary moved there with it)."""
 
     def test_window_trims_to_max_samples(self):
         with mock_gtk():

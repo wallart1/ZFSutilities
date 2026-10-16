@@ -6,6 +6,8 @@
 # Install to: /usr/local/lib/zfsutilities/bin/unarchive-vm on BOTH hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -292,26 +294,33 @@ if is_single_node; then
     # -r lists only descendants of the base, so filtering by the fixed
     # strings "${archive_base}/" and "/proxmox/vm-${vmid}-disk-" plus a
     # digits-at-end check preserves the original anchored-regex semantics.
+    # The || true keeps an empty archive an empty answer — the caller's
+    # own empty check reports it precisely (grep finds nothing under
+    # pipefail).
     archived_zvols=$(zfs list -H -t volume -o name -r "$archive_base" 2>/dev/null \
         | grep -F "${archive_base}/" \
         | grep -F "/proxmox/vm-${vmid}-disk-" \
         | grep -E '[0-9]+$' \
-        | sort)
+        | sort \
+        || true)
 else
     archived_zvols=$(on_storage "$archive_base" "$vmid" << 'SSHEOF'
 mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 source "$mydir/bashinit"
 bashinit
 
+set -euo pipefail
 archive_base="$1"
 vmid="$2"
 # -r lists only descendants of the base, so fixed-string filters preserve
-# the original anchored-regex semantics.
+# the original anchored-regex semantics. The || true keeps an empty
+# archive an empty answer, as in the single-node branch above.
 zfs list -H -t volume -o name -r "$archive_base" 2>/dev/null \
     | grep -F "${archive_base}/" \
     | grep -F "/proxmox/vm-${vmid}-disk-" \
     | grep -E '[0-9]+$' \
-    | sort
+    | sort \
+    || true
 SSHEOF
     ) || { log_msg "FATAL: Archive discovery failed on ${storage_host}"; exit 1; }
 fi
@@ -502,7 +511,10 @@ for i in "${!archive_datasets[@]}"; do
             orig_vbs=$(cat "$vbs_file")
         fi
     else
-        orig_vbs=$(ssh root@"$storage_host" "cat '$vbs_file' 2>/dev/null")
+        # || true: a missing informational sidecat is "unknown", not a
+        # failure (the remote cat exits 1 on a missing file).
+        orig_vbs=$(ssh root@"$storage_host" "cat '$vbs_file' 2>/dev/null" \
+            || true)
         if [[ -z "$orig_vbs" ]]; then
             orig_vbs="unknown"
         fi
@@ -599,7 +611,7 @@ engine=$(find_zfsutility_script archive-engine.sh)
 }
 source "$engine"
 
-set -e
+set -euo pipefail
 archive_mount="$1"
 dataset_count="$2"
 newvmid="$3"
@@ -690,7 +702,7 @@ bashinit
 # shipped over ssh sources node-lib from the storage host's deployed tree.
 declare -f pool_to_target >/dev/null 2>&1 || source_helper node-lib.sh
 
-set -e
+set -euo pipefail
 vmid="$1"
 dataset_count="$2"
 shift 2
@@ -725,11 +737,13 @@ for i in "${!new_zvols[@]}"; do
         echo "BACKSTORE_CREATED:${backstore}"
     fi
 
-    # Create LUN if missing
+    # Create LUN if missing. The || true keeps "no existing LUN" an empty
+    # answer under pipefail — the -n check below is the create branch.
     existing_lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
         | grep -F "block/${backstore} " \
         | grep -oE 'lun[0-9]+' \
-        | head -1)
+        | head -1 \
+        || true)
     existing_lun="${existing_lun#lun}"
 
     if [[ -n "$existing_lun" ]]; then
@@ -739,7 +753,8 @@ for i in "${!new_zvols[@]}"; do
         new_lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
             | grep -F "block/${backstore} " \
             | grep -oE 'lun[0-9]+' \
-            | head -1)
+            | head -1 \
+            || true)
         new_lun="${new_lun#lun}"
         echo "LUN_CREATED:${disknum}:${new_lun}"
     fi
@@ -826,7 +841,10 @@ declare -A key_to_disknum=()
 for i in "${!original_zvols[@]}"; do
     info_file="${archive_mount}/${original_zvols[$i]}.disk_info"
     if is_single_node; then
-        disk_key=$(grep '^DISK_KEY=' "$info_file" 2>/dev/null | cut -d= -f2)
+        # || true: a sidecar without DISK_KEY is an empty answer handled
+        # by the -n check below, not a failure.
+        disk_key=$(grep '^DISK_KEY=' "$info_file" 2>/dev/null | cut -d= -f2 \
+            || true)
     else
         disk_key=$(ssh root@"$storage_host" \
             "grep '^DISK_KEY=' '$info_file' 2>/dev/null | cut -d= -f2")
@@ -897,9 +915,9 @@ else
             lun_and_rest="${after##*-lun-}"
             lun_digits="${lun_and_rest%%[!0-9]*}"
             rest="${lun_and_rest#"$lun_digits"}"
-            disknum="${key_to_disknum[$key]}"
+            disknum="${key_to_disknum[$key]:-}"
 
-            if [[ -n "$disknum" && -n "${disk_to_lun[$disknum]}" \
+            if [[ -n "$disknum" && -n "${disk_to_lun[$disknum]:-}" \
                 && -n "$lun_digits" && "$target" != *,* ]]; then
                 new_lun="${disk_to_lun[$disknum]}"
                 new_target="${disk_to_target[$disknum]}"

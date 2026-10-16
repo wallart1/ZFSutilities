@@ -10,6 +10,8 @@
 # Install to: /usr/local/lib/zfsutilities/bin/clone-vm on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -204,9 +206,11 @@ if is_single_node; then
     while IFS= read -r line; do
         [[ "$line" =~ ^\[.+\] ]] && break
         if parse_disk_line "$line"; then
-            # Find the actual zvol by searching all pools
+            # Find the actual zvol by searching all pools; || true because
+            # "not on any pool" is handled by the -n check below, not a
+            # failure (grep finds nothing under pipefail).
             zvol=$(zfs list -H -t volume -o name 2>/dev/null \
-                | grep -F "/proxmox/vm-${srcvmid}-disk-${_pd_disknum}" | head -1)
+                | grep -F "/proxmox/vm-${srcvmid}-disk-${_pd_disknum}" | head -1 || true)
             if [[ -n "$zvol" ]]; then
                 sn_disk_keys+=("${_pd_key}")
                 sn_disk_zvols["${_pd_key}"]="$zvol"
@@ -367,6 +371,7 @@ mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
+set -euo pipefail
 target="$1"
 old_lun="$2"
 
@@ -420,7 +425,7 @@ mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
-set -e
+set -euo pipefail
 target="$1"
 src_vmid="$2"
 dst_vmid="$3"
@@ -475,18 +480,21 @@ if [[ -f "$manifest" ]]; then
     fi
 fi
 
-# Print only the new LUN number to stdout (captured by caller).
+# Print only the new LUN number to stdout (captured by the caller).
 # Select the line for this backstore (anchored on "block/<name> " so a
 # longer name that starts with this one cannot match), strip everything
 # through the first "lun" token, and keep the leading digits
-# ("... lun3 [block/..." -> "3").
+# ("... lun3 [block/..." -> "3"). The || true keeps an empty answer an
+# empty answer under pipefail — the caller's own -n check reports the
+# precise failure after the clone itself succeeded.
 targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
     | grep -F "block/${dst_backstore} " \
     | while IFS= read -r _lun_line; do
         _lun_rest="${_lun_line#*lun}"
         printf '%s\n' "${_lun_rest%%[!0-9]*}"
     done \
-    | head -1
+    | head -1 \
+    || true
 SSHEOF
     ) || {
         log_msg "FATAL: Failed to clone ${key}"

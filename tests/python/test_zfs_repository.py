@@ -1479,6 +1479,9 @@ config:
         logs
           mirror-1                                    ONLINE       0     0     0
             /dev/disk/by-id/wwn-0x5002538e41234567    ONLINE       0     0     0
+        spares
+          /dev/disk/by-id/wwn-0x5000cca768cace58      AVAIL
+          /dev/disk/by-id/wwn-0x5000cca768cace59      INUSE
 
 errors: No known data errors
 """
@@ -1502,7 +1505,7 @@ errors: No known data errors
         )
         topo = repo.pool_topology("fivebays")
         self.assertIsNotNone(topo)
-        self.assertEqual(len(topo.children), 2)
+        self.assertEqual(len(topo.children), 3)
 
         mirror = topo.children[0]
         self.assertEqual(mirror.vdev_type, "mirror")
@@ -1514,6 +1517,31 @@ errors: No known data errors
         self.assertEqual(log_group.vdev_type, "log")
         self.assertEqual(len(log_group.children), 1)
         self.assertEqual(log_group.children[0].vdev_type, "mirror")
+
+    def test_parse_topology_hot_spares(self):
+        """Spare rows print a bare state with no counters; they must parse.
+
+        `zpool status -P` renders hot spares as `NAME  AVAIL` (or INUSE for
+        a shared spare in use) with no READ/WRITE/CKSUM columns, so the row
+        grammar has to accept a state without counters — dropping such rows
+        silently removed every spare from the topology trees.
+        """
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=self._SAMPLE_STATUS, stderr=""
+        )
+        topo = repo.pool_topology("fivebays")
+        self.assertIsNotNone(topo)
+        spares_heading = topo.children[2]
+        self.assertEqual(spares_heading.vdev_type, "spare")
+        self.assertEqual(len(spares_heading.children), 2)
+        avail, inuse = spares_heading.children
+        self.assertEqual(avail.name, "/dev/disk/by-id/wwn-0x5000cca768cace58")
+        self.assertEqual(avail.vdev_type, "disk")
+        self.assertEqual(avail.state, "AVAIL")
+        self.assertEqual((avail.read, avail.write, avail.cksum), (0, 0, 0))
+        self.assertEqual(inuse.state, "INUSE")
+        self.assertEqual((inuse.read, inuse.write, inuse.cksum), (0, 0, 0))
 
     def test_parse_topology_empty_on_missing_config(self):
         repo = ZfsRepository(sudo=False)

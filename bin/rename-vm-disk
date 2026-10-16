@@ -7,6 +7,8 @@
 # Install to: /usr/local/lib/zfsutilities/bin/rename-vm-disk on BOTH hosts
 # Run from:   the compute host (or the storage host -- delegates via SSH)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -133,7 +135,7 @@ mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
-set -e
+set -euo pipefail
 old_zvol="$1"
 
 # Enumerate every iSCSI lun and find the one whose backstore points at this zvol.
@@ -183,8 +185,13 @@ SSHEOF
         iscsi_target="$exported_target"
         iscsi_lun="$exported_lun"
         iscsi_backstore="$exported_bs"
-        [[ "$exported_enc" != "off" && "$exported_enc" != "-" ]] && iscsi_encrypted="Y"
+        # An if (not "cond && assignment") so an unencrypted zvol does not
+        # become the function's failing return status under set -e.
+        if [[ "$exported_enc" != "off" && "$exported_enc" != "-" ]]; then
+            iscsi_encrypted="Y"
+        fi
     fi
+    return 0
 }
 
 # --- Scan Proxmox VM configs for references to the old zvol -------------------
@@ -257,7 +264,7 @@ bashinit
 
 source_helper zfslockmanager
 
-set -e
+set -euo pipefail
 old_zvol="$1"
 new_zvol="$2"
 target="$3"
@@ -353,14 +360,17 @@ if [[ -n "$old_bs" ]]; then
             "/backstores/block/${new_bs}" "${new_lun}" 2>/dev/null; then
         targetcli "/iscsi/${target}/tpg1/luns" create "/backstores/block/${new_bs}"
         # Strip everything through the first "lun" token and keep the
-        # leading digits ("... lun3 [block/..." -> "3").
+        # leading digits ("... lun3 [block/..." -> "3"). The || true keeps
+        # an empty answer an empty answer under pipefail — the -n check
+        # below fires the precise FATAL.
         new_lun=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
             | grep -F "block/${new_bs} " \
             | while IFS= read -r _lun_line; do
                 _lun_rest="${_lun_line#*lun}"
                 printf '%s\n' "${_lun_rest%%[!0-9]*}"
             done \
-            | head -1)
+            | head -1 \
+            || true)
     fi
     [[ -n "$new_lun" ]] || { log_msg "FATAL: could not determine new lun"; exit 1; }
 
@@ -501,7 +511,9 @@ run_rescan() {
     is_two_node || return 0
     [[ -n "$iscsi_backstore" ]] || return 0
     log_msg "INFO: Rescanning iSCSI..."
-    "$mydir/rescan-storage"
+    if ! "$mydir/rescan-storage"; then
+        log_msg "WARN: iSCSI rescan failed; run 'sudo rescan-storage' manually"
+    fi
 }
 
 # === Main =====================================================================

@@ -1750,16 +1750,63 @@ in the viewer.
 
 ---
 
+### `charting.py`
+
+Chart renderers for the GTK3 GUI, implementing the charting decision
+recorded in the developer note
+([GUI Charting](../developer-guide/charting.md)):
+high-quality charts render through matplotlib embedded via
+`FigureCanvasGTK3Agg`, with the Cairo `RollingChart` (in `memory_page`)
+as the fallback renderer when matplotlib is not installed. The rolling
+chart vocabulary shared by both renderers — the sample window
+(`CHART_MAX_SAMPLES`), series colours, the nice-ceiling ladder
+(`nice_ceiling`), and age labels (`format_age`) — lives here.
+`matplotlib_backend()` imports the backend lazily at chart-construction
+time (never at module level, so the mock-GTK test suites stay mock-pure),
+caches the outcome per module binding, and returns `None` on any
+failure, which is what selects the fallback. The same selection rule and
+vocabulary-sharing serve the Alignment view's blocksize ladder: row
+geometry (`ladder_pixel_height`), the log2 axis grammar
+(`ladder_axis_range`), state colours, and the empty-height constant are
+shared by the matplotlib ladder and the Cairo `BlocksizeLadder` fallback
+in `alignment_page`, so both draw the same picture.
+
+**Key functions / classes:**
+
+| Function / class             | Purpose                                                            |
+| ---------------------------- | ------------------------------------------------------------------ |
+| `create_rolling_chart(...)`  | Factory: `MatplotlibRollingChart` when the backend probe succeeds, else the Cairo `RollingChart`; both take the same arguments and expose the same interface |
+| `create_blocksize_ladder(title)` | Factory for the Alignment view's blocksize ladder: `MatplotlibBlocksizeLadder` when the probe succeeds, else the Cairo `BlocksizeLadder` from `alignment_page`; both expose `widget`, `update(pools, unavailable=False)`, and `pools` |
+| `MatplotlibRollingChart`     | Rolling time-series chart on a matplotlib GTK3-Agg canvas; appends update the line/fill/legend artists in place and schedule an idle canvas redraw |
+| `MatplotlibBlocksizeLadder`  | Blocksize ladder (one rung per layer size, log2 X axis, dashed per-pool ashift reference lines, state colours, bold pool headers); `update()` rebuilds the axes and re-requests the widget height from the shared row geometry only when the row set changes |
+| `matplotlib_backend()`       | Lazy, cached probe for the matplotlib GTK3-Agg backend (`None` = unavailable) |
+| `nice_ceiling(value)`        | Smallest 1/2/5×10^k ceiling ≥ *value* (Y-axis scaling)             |
+| `format_age(seconds)`        | Duration text for chart X-axis labels (e.g. `4m 59s`)              |
+| `ladder_pixel_height(pools)` / `ladder_axis_range(pools)` | Shared ladder geometry: widget height from the row set; log2 `(x_min, x_max)` bounds and power-of-two ticks (floor one power below the smallest size, thinned on wide spans) |
+
 ### `memory_page.py`
 
 Performance tab: two views behind a **Live Charts / Blocksize Alignment** radio
 switcher whose selection persists in the UI-state config
-(`performance_view`). The charts view holds the ARC / L2ARC / SLOG
-monitors — value grids, per-device tables, and Cairo-drawn rolling
-time-series charts that redraw on every refresh tick — and the alignment
-view is built by `alignment_page`. Samples are collected in a background
+(`performance_view`). The saved view is re-asserted when the view stack is
+mapped: `set_visible_child_name` on a stack that is not shown yet is
+dropped by GTK (which then falls back to the first child while the restored
+radio stays active), and this page is built at window construction but only
+mapped when the sidebar selects it. The charts view holds the ARC / L2ARC / SLOG
+monitors — value grids, per-device tables, and rolling
+time-series charts built through `charting.create_rolling_chart`
+(matplotlib renderer, with the Cairo `RollingChart` as the fallback) —
+and the alignment
+view is built by `alignment_page`. Chart sizing lives in the pack layer,
+not the drawing code: each chart's designed height is a size request on
+the chart widget, and the three vertical pack sites pack without
+expand, so the charts fill the page width but never stretch when the
+window grows tall. Samples are collected in a background
 thread and applied on the main loop via `GLib.idle_add`;
-`refresh_memory_page` dispatches to whichever view is visible.
+`refresh_memory_page` dispatches to whichever view is visible. The page's
+`Gtk.ScrolledWindow` is exposed as `app.performance_scrolled` so the
+Alignment refresh path can save and restore the vertical offset around
+each apply.
 
 **Key functions:**
 
@@ -1769,18 +1816,20 @@ thread and applied on the main loop via `GLib.idle_add`;
 | `refresh_memory_page(app)`            | Dispatch to the visible view's refresh (both run off-thread)       |
 | `_apply_memory_sample(app, sample)`   | Synchronously apply a sample to labels, charts, and device tables  |
 | `_on_memory_view_radio_toggled(radio, app)` | Switch the visible view and persist the selection            |
+| `_on_memory_view_stack_mapped(stack, app)` | Re-assert the active radio's view when the stack is mapped (a no-op when they already agree) |
 | `_on_memory_refresh_changed(spin, app)` | Persist the refresh interval and restart the timer               |
 
 **Key class:**
 
 | Class           | Purpose                                                                     |
 | --------------- | --------------------------------------------------------------------------- |
-| `RollingChart`  | Rolling time-series chart on a `Gtk.DrawingArea` (composition, not subclassing, so it stays usable under the test GTK mocks); 1–2 series, auto-scaled Y axis, optional reference line |
+| `RollingChart`  | Rolling time-series chart on a `Gtk.DrawingArea` — the Cairo fallback renderer (see `charting.create_rolling_chart`); 1–2 series, auto-scaled Y axis, optional reference line |
 
 **Called modules / imported helpers:**
 
 | Module           | Purpose in this module                       |
 | ---------------- | -------------------------------------------- |
+| `charting`       | Rolling-chart factory and shared chart vocabulary (renderer selection) |
 | `memory_stats`   | Sample collection, rate computation, formats |
 | `alignment_page` | The Alignment view child of the page's `Gtk.Stack` |
 | `config_core`    | Memory refresh-interval config, view persistence |
@@ -1824,11 +1873,14 @@ window.
 ### `alignment_stats.py`
 
 Pure data layer (no GTK) for the Alignment view: parses `zpool iostat -r`
-since-boot request-size histograms, reads the ARC/prefetcher kstats, and
-collects one `AlignmentSample` covering every layer of the blocksize
-chain — member-disk sector geometry, pool `ashift` (configured and
-effective), dataset `recordsize`/`volblocksize` properties, and PVE VM
-disk options from `/etc/pve/qemu-server`. Each source degrades on its own.
+since-boot request-size histograms, reads the ARC/prefetcher kstats and the
+per-dataset objset kstats, and collects one `AlignmentSample` covering
+every layer of the blocksize chain — member-disk sector geometry, pool
+`ashift` (configured and effective), dataset `recordsize`/`volblocksize`
+properties, and PVE VM disk options from `/etc/pve/qemu-server`. Each
+source degrades on its own, and dataset properties degrade per pool: a
+failed read lands in `AlignmentSample.dataset_read_failures` while the
+other pools keep their rows.
 
 **Key functions:**
 
@@ -1836,14 +1888,17 @@ disk options from `/etc/pve/qemu-server`. Each source degrades on its own.
 | ------------------------------------------- | ------------------------------------------------------------------ |
 | `parse_zpool_iostat_r(text)`                | `-r` histogram output → `{pool: ReqHistogram}` (structure-matched: pool header carries the fixed column set) |
 | `parse_zfs_size(text)` / `parse_bucket_label(label)` | zfs-get size strings / bucket labels → bytes                |
+| `parse_objset_kstat(text)` / `read_objset_kstats(kstat_dir)` | per-dataset objset kstat bodies (`/proc/spl/kstat/zfs/<pool>/objset-*`, OpenZFS 2.2+) → `{dataset_name: counters}` |
+| `compute_objset_rates(prev, cur)` / `average_request_sizes(counters)` | objset counter deltas between two samples (or since-boot counters) → per-dataset `ObjsetRates`: rates plus average read/write request sizes |
 | `parse_pve_vm_conf(text, vmid)` / `read_pve_vm_options(conf_dir)` | PVE VM config lines → `{zvol short name: VMOption}`   |
+| `topology_leaf_paths(node)`                | Device paths of every disk leaf under a `TopologyNode` (used to flatten pools into members and by the analysis rules to judge vdev groups) |
 | `collect_alignment_sample(zfs_repo, disk_repo, ...)` | Probe all sources (zfs/zpool, lsblk sectors, kstats, PVE conf) with per-source degrade flags |
 
 **Data structures consumed / produced:**
 
 | Structure                    | Reference                        |
 | ---------------------------- | -------------------------------- |
-| `AlignmentSample` / `PoolAlignment` / `DatasetBlocks` / `ReqHistogram` / `VMOption` | [Alignment samples][ds-alignment] |
+| `AlignmentSample` / `PoolAlignment` / `DatasetBlocks` / `ReqHistogram` / `ObjsetRates` / `VMOption` | [Alignment samples][ds-alignment] |
 
 ---
 
@@ -1852,51 +1907,78 @@ disk options from `/etc/pve/qemu-server`. Each source degrades on its own.
 Pure rules engine (no GTK, no subprocess) behind the Alignment view:
 consumes an `AlignmentSample` plus the user's workload survey and emits
 `Finding` rows. Thresholds are named module constants (a pattern borrowed
-from `kstat-analyzer`); the recommendation basis is two-sided — observed
-request-size histograms and ARC/prefetcher counters on one side, the
-declared survey on the other — and every finding is advisory only.
+from `kstat-analyzer`); the recommendation basis pairs observation with
+declaration — pool-level request-size histograms, per-dataset observed
+request sizes from the objset kstats (averaged over the interval between
+the last two samples when that window carried traffic, else since boot),
+ARC/prefetcher counters, and the vdev topology on one side, the declared
+survey on the other — and every finding is advisory only: no rule acts
+or emits a command. Each `Finding` carries the emitting rule's stable
+`key`, which the view pairs with the subject to identify a row across
+refreshes (messages may drift as counters move; identity must not).
 
 **Key functions:**
 
 | Function                                    | Purpose                                                            |
 | ------------------------------------------- | ------------------------------------------------------------------ |
-| `analyse(sample, survey, profiles)`         | Compose the per-layer rule set → `list[Finding]`                   |
+| `analyse(sample, survey, profiles, prev_sample)` | Compose the per-layer rule set → `list[Finding]`; *prev_sample* (the previous refresh's sample, may be `None`) is the interval baseline for the per-dataset observed request sizes |
 | `classify_workload(hist, prefetch_stats)`   | Histogram + prefetcher vote → `WorkloadVerdict` (sequential / random-sync / mixed / insufficient, with confidence) |
+| `vdev_groups(root)`                         | Yield `(class label, group node)` for every vdev group of a topology tree in `zpool status` order — shared by the mixed-geometry rules here and the view's topology table |
 | `arc_readouts(arc, has_l2arc)`              | Memory-tier observation values as `{label: value-or-None}`         |
+| `blocksize_ladder(sample)`                  | Per-pool ladder data for the Alignment view's visual: `LadderPool` rows carrying `LadderBar` rungs (device physical sectors, the ashift block, dataset blocksize groups, VM guest sectors), grouped by size with ×counts, in stack order, with Finding-severity states; sources degrade per pool exactly like the tables |
 
 **Data structures consumed / produced:**
 
 | Structure                    | Reference                        |
 | ---------------------------- | -------------------------------- |
 | `Finding` / `WorkloadVerdict` | [Alignment findings][ds-alignment] |
+| `LadderPool` / `LadderBar`   | [Alignment findings][ds-alignment] |
 
 ---
 
 ### `alignment_page.py`
 
 The Alignment view child of the Performance page's view stack: memory-tier
-observations grid, Alignment Chain table (device → pool → dataset → VM),
-Findings & Recommendations table with severity markers, and the per-pool
+observations grid, Blocksize scan table (device → pool → dataset → VM),
+Blocksize ladder (the same chain drawn as a log₂-scale visual per pool,
+built through `charting.create_blocksize_ladder` — matplotlib when
+installed, the Cairo `BlocksizeLadder` here as the fallback renderer),
+Pool topology table (each pool's vdev classes and their member disks with
+the pool's effective `ashift`; a failed `zpool status` read for one pool
+keeps its row with whatever `ashift` is known), Findings & Recommendations
+table with severity markers, and the per-pool
 Workload readout. Refreshes independently of the charts view with the
 same off-thread collect / `GLib.idle_add` apply pattern and its own
-pending-guard flag.
+pending-guard flag. Refreshes are scroll-stable: every apply saves the
+page's vertical offset (via the `app.performance_scrolled` window
+exposed by `memory_page`) and restores it clamped once GTK has allocated
+the new rows — the datasets-page idiom — while all four tables
+reconcile in place on stable keys (`_reconcile_rows`: the chain,
+topology, and findings tables on hidden identity-key columns), so
+surviving rows keep their positions even when their message numbers
+drift, and a changed row shifts only the rows below it. The survey
+dialog's save runs the same refresh path, so the page behind the dialog
+holds its position too.
 
-**Key functions:**
+**Key functions / classes:**
 
 | Function                              | Purpose                                                            |
-| ------------------------------------- | ------------------------------------------------------------------ |
-| `create_alignment_view(app)`          | Build the view box, tables (width-persisted), and value grid       |
+| ----------------------                | ------------------------------------------------------------------ |
+| `create_alignment_view(app)`          | Build the view box, ladder, tables (width-persisted; the chain, topology, and findings tables carry a hidden identity-key column), and value grid |
 | `refresh_alignment_view(app)`         | Collect an alignment sample off-thread and update on idle          |
-| `_apply_alignment_sample(app, sample)`| Synchronously apply a sample: readouts, chain, findings, workload  |
+| `_apply_alignment_sample(app, sample)`| Synchronously apply a sample: readouts, chain, ladder, topology, findings, workload, then schedule the clamped scroll restore |
+| `_reconcile_rows(store, rows, key_column)` | Ordered in-place reconcile: update survivors, remove vanished rows, insert new rows at their ordered position |
+| `BlocksizeLadder`                     | Cairo-drawn blocksize ladder on a `Gtk.DrawingArea` — the fallback renderer (see `charting.create_blocksize_ladder`); same shared vocabulary, so the visual degrades in quality only, never in meaning |
 
 **Called modules / imported helpers:**
 
 | Module              | Purpose in this module                          |
 | ------------------- | ----------------------------------------------- |
 | `alignment_stats`   | Sample collection                               |
-| `alignment_analysis`| Findings, workload verdicts, memory readouts    |
+| `alignment_analysis`| Findings, workload verdicts, memory readouts, ladder data (`blocksize_ladder`), and the shared `vdev_groups` topology walk |
+| `charting`          | Blocksize-ladder factory and shared ladder vocabulary (renderer selection) |
 | `feature_config`    | Survey and workload-profile reads               |
-| `gui_helpers`       | Section headers, notes, row reconcile           |
+| `gui_helpers`       | Section headers, notes, treeview column setup   |
 
 ---
 

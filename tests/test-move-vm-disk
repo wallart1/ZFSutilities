@@ -104,6 +104,26 @@ test_rollback_heredoc_bootstrap() {
     test_pass
 }
 
+# Static guard for the 0.96.0-casing regression found (and fixed) on
+# 2026-10-16: the storage-verification child reads ${pool}, so the ssh
+# invocation must pass it as a third argument and the child must bind it.
+# The suite has no two-node ssh mock, so the argument hand-off cannot be
+# exercised behaviorally — the source scan is the fence that notices a
+# dropped argument.
+test_verification_child_receives_pool() {
+    test_start "storage verification child receives the pool"
+    local script="$old_mydir/bin/move-vm-disk"
+    if ! grep -q 'bash -s "\$target" "\$srclun" "\$pool"' "$script"; then
+        test_fail "verification ssh call no longer passes \$pool"
+        return
+    fi
+    if ! grep -q '^pool="\$3"$' "$script"; then
+        test_fail "verification child no longer binds pool from \$3"
+        return
+    fi
+    test_pass
+}
+
 # ------------------------------------------------------------------
 # Tests
 # ------------------------------------------------------------------
@@ -275,6 +295,7 @@ test_usage_includes_no_rename() {
 # ------------------------------------------------------------------
 test_storage_move_heredoc_bootstrap
 test_rollback_heredoc_bootstrap
+test_verification_child_receives_pool
 test_disk_num_from_key
 test_disk_num_from_key_ide
 test_auto_select_dst_key

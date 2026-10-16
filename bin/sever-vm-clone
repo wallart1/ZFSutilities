@@ -72,6 +72,8 @@
 # Install to: /usr/local/lib/zfsutilities/bin/sever-vm-clone on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -1376,8 +1378,9 @@ sev_iscsi_discover() {
 
 # The LUN id currently exported for $isc_backstore in $isc_target: select the
 # LUN line anchored on "block/<name> " (a longer name that starts with this
-# one cannot match), strip everything through the first "lun" token, keep
-# the leading digits.
+# one cannot match), strip everything through the first "lun" token, keep the
+# leading digits. The || true keeps "not exported" an empty answer under
+# pipefail — callers handle empty with their own precise FATAL.
 sev_iscsi_lun_of() {
     targetcli "/iscsi/${isc_target}/tpg1/luns" ls 2>/dev/null \
         | grep -F "block/${isc_backstore} " \
@@ -1385,7 +1388,8 @@ sev_iscsi_lun_of() {
             _lun_rest="${_lun_line#*lun}"
             printf '%s\n' "${_lun_rest%%[!0-9]*}"
         done \
-        | head -1
+        | head -1 \
+        || true
 }
 
 # Tear down the zvol's LUN and backstore — idempotent: each delete runs only
@@ -2723,7 +2727,7 @@ bashinit
 
 source_helper zfslockmanager
 
-set -e
+set -euo pipefail
 
 # shell-quote one value for the engine child-shell command (dataset names
 # cannot contain quoting characters; quoting anyway keeps the builder honest).

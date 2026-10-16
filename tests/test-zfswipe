@@ -45,6 +45,9 @@ _mock_labelclear_clears_zfs=1
 _mock_wipefs_fail=0
 _mock_dd_clears_sigs=1
 _mock_ask_line_answer=""
+_mock_partprobe_rc=0
+_mock_blockdev_rc=0
+_mock_udevadm_rc=0
 
 function _mock_reset_fixture {
     mkdir -p "$_mock_zfs_state_dir"
@@ -78,6 +81,9 @@ function _mock_reset_fixture {
     _mock_wipefs_fail=0
     _mock_dd_clears_sigs=1
     _mock_ask_line_answer=""
+    _mock_partprobe_rc=0
+    _mock_blockdev_rc=0
+    _mock_udevadm_rc=0
 }
 
 # Override the block-device predicate from the sourced script: a node is a
@@ -156,7 +162,17 @@ dd() {
 
 partprobe() {
     echo "partprobe $1" >> "$_MOCK_CALLS"
-    return 0
+    return "$_mock_partprobe_rc"
+}
+
+blockdev() {
+    echo "blockdev $*" >> "$_MOCK_CALLS"
+    return "$_mock_blockdev_rc"
+}
+
+udevadm() {
+    echo "udevadm $*" >> "$_MOCK_CALLS"
+    return "$_mock_udevadm_rc"
 }
 
 ask_line() {
@@ -164,7 +180,7 @@ ask_line() {
     return 0
 }
 
-export -f lsblk zpool wipefs dd partprobe ask_line _zfswipe_is_block
+export -f lsblk zpool wipefs dd partprobe blockdev udevadm ask_line _zfswipe_is_block
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -261,7 +277,11 @@ function test_already_clean {
     assert_rc 0 "$_zfswipe_rc"
     assert_contains "$_zfswipe_output" \
         "INFO: /dev/sdzz has no detectable signatures; nothing to do."
-    _not_called "labelclear" && test_pass || test_fail "labelclear ran on a clean device"
+    if _not_called "labelclear" && _not_called "partprobe"; then
+        test_pass
+    else
+        test_fail "labelclear/partprobe ran on a clean device"
+    fi
 }
 
 function test_labelclear_short_circuit {
@@ -285,6 +305,13 @@ function test_labelclear_short_circuit {
     else
         test_fail "expected labelclear on /dev/sdzz and /dev/sdzz1, got $(cat "$_MOCK_CALLS")"
     fi
+    test_start "labelclear-only wipe still notifies kernel and udev"
+    if _called "partprobe /dev/sdzz" && _called "udevadm trigger /dev/sdzz" && \
+        _called "udevadm settle --timeout=10"; then
+        test_pass
+    else
+        test_fail "notification calls: $(cat "$_MOCK_CALLS")"
+    fi
 }
 
 function test_wipefs_path {
@@ -300,6 +327,12 @@ function test_wipefs_path {
     test_start "wipefs -a ran on the whole disk"
     _called "wipefs -a /dev/sdzz" && test_pass || \
         test_fail "wipefs -a did not run: $(cat "$_MOCK_CALLS")"
+    test_start "wipefs wipe still notifies kernel and udev"
+    if _called "partprobe /dev/sdzz" && _called "udevadm settle --timeout=10"; then
+        test_pass
+    else
+        test_fail "notification calls: $(cat "$_MOCK_CALLS")"
+    fi
 }
 
 function test_dd_fallback_math {
@@ -339,8 +372,11 @@ function test_dd_fallback_math {
     fi
 
     test_start "kernel partition re-read is requested"
-    _called "partprobe /dev/sdzz" && test_pass || \
-        test_fail "calls: $(cat "$_MOCK_CALLS")"
+    if _called "partprobe /dev/sdzz" && _called "udevadm settle --timeout=10"; then
+        test_pass
+    else
+        test_fail "notification calls: $(cat "$_MOCK_CALLS")"
+    fi
 }
 
 function test_dd_residue_fails {
@@ -354,6 +390,34 @@ function test_dd_residue_fails {
     assert_rc 8 "$_zfswipe_rc"
     assert_contains "$_zfswipe_output" \
         "WARN: /dev/sdzz still shows signatures after dd"
+}
+
+function test_notify_kernel {
+    echo "=== notification failure handling ==="
+    _mock_reset_fixture
+    _mock_wipefs_sigs["/dev/sdzz"]="zfs_member"
+    _mock_partprobe_rc=1
+    _mock_blockdev_rc=1
+    _run_zfswipe /dev/sdzz --confirmed
+    test_start "failed re-read warns without failing the wipe"
+    assert_rc 0 "$_zfswipe_rc"
+    assert_contains "$_zfswipe_output" \
+        "WARN: Could not re-read the partition table of /dev/sdzz"
+    _called "udevadm trigger /dev/sdzz" && test_pass || \
+        test_fail "udev refresh skipped: $(cat "$_MOCK_CALLS")"
+
+    _mock_reset_fixture
+    _mock_wipefs_sigs["/dev/sdzz"]="zfs_member"
+    _mock_partprobe_rc=1
+    _run_zfswipe /dev/sdzz --confirmed
+    test_start "blockdev re-reads when partprobe fails, without a WARN"
+    assert_rc 0 "$_zfswipe_rc"
+    if _called "blockdev --rereadpt /dev/sdzz" && \
+        ! printf '%s\n' "$_zfswipe_output" | grep -qF "Could not re-read"; then
+        test_pass
+    else
+        test_fail "calls: $(cat "$_MOCK_CALLS") output: $_zfswipe_output"
+    fi
 }
 
 function test_partition_target {
@@ -385,6 +449,7 @@ test_labelclear_short_circuit
 test_wipefs_path
 test_dd_fallback_math
 test_dd_residue_fails
+test_notify_kernel
 test_partition_target
 
 mydir="$old_mydir"

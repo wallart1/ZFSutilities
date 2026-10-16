@@ -24,7 +24,7 @@ from feature_config import (
     save_pool_profiles,
 )
 from gi.repository import Gtk
-from gui_helpers import configure_treeview_column, create_dialog
+from gui_helpers import configure_treeview_column, create_dialog, create_scrolled_dialog
 from logging_config import log_msg
 from pool_profiles import (
     BLOCKSIZE_CHOICES,
@@ -37,6 +37,136 @@ from workload_profiles import LIVE_PROPERTIES
 # Combo entry meaning "leave this property out of the profile" (the property
 # is then not written at pool creation and ZFS's default applies).
 _POOL_PROP_UNSET = "(not set)"
+
+# Tooltips shown on the editor's rows (label and widget alike): one line of
+# purpose, then what each value does, then the unset convention. Pool-property
+# tooltips must cover POOL_PROPERTIES and fs-property tooltips
+# LIVE_PROPERTIES, or the schema-drift test fails.
+_POOL_PROP_TOOLTIPS = {
+    "autotrim": (
+        "Automatic TRIM of freed space.\n"
+        "on: the pool tells the disks to release freed blocks — good for SSDs "
+        "and thin-provisioned storage.\n"
+        "off: freed space is not trimmed (the ZFS default).\n"
+        "(not set): leave the property to ZFS's default."
+    ),
+    "autoexpand": (
+        "Grow the pool when a backing device grows.\n"
+        "on: a larger disk or a resized LUN expands the pool automatically.\n"
+        "off: capacity changes only after a manual 'zpool online -e' "
+        "(the ZFS default).\n"
+        "(not set): leave the property to ZFS's default."
+    ),
+    "autoreplace": (
+        "Automatic replacement of a FAULTED disk.\n"
+        "on: a disk inserted in the same physical slot (same path) replaces "
+        "the failed member by itself.\n"
+        "off: replacement is always manual 'zpool replace' (the ZFS default).\n"
+        "(not set): leave the property to ZFS's default."
+    ),
+    "failmode": (
+        "Behavior when a pool fault is detected.\n"
+        "wait: block all I/O until the fault clears — the ZFS default and "
+        "safest for data.\n"
+        "continue: keep serving I/O on a faulted pool — data may be "
+        "corrupted.\n"
+        "panic: force a system crash.\n"
+        "(not set): leave the property to ZFS's default."
+    ),
+    "multihost": (
+        "Guard against importing one pool on two hosts at once.\n"
+        "on: the pool writes periodic activity markers, and a second host's "
+        "import is refused while the first is active (for shared storage).\n"
+        "off: no cross-host protection (the ZFS default).\n"
+        "(not set): leave the property to ZFS's default."
+    ),
+    "listsnapshots": (
+        "Snapshot visibility in 'zfs list'.\n"
+        "on: snapshots appear in 'zfs list' output.\n"
+        "off: snapshots are hidden from 'zfs list' (the ZFS default).\n"
+        "(not set): leave the property to ZFS's default."
+    ),
+    "delegation": (
+        "Non-root administration of datasets.\n"
+        "on: users may change datasets they hold delegated permissions on.\n"
+        "off: only root may change ZFS properties (the ZFS default).\n"
+        "(not set): leave the property to ZFS's default."
+    ),
+}
+
+_FS_PROP_TOOLTIPS = {
+    "recordsize": (
+        "Largest block a file's data is written in.\n"
+        "Large values (e.g. 1M) suit big sequential files; small values "
+        "(16K-128K) suit many small files.\n"
+        "The ZFS default is 128K. Empty leaves the property unset — ZFS's "
+        "default applies."
+    ),
+    "compression": (
+        "Transparent compression of data blocks.\n"
+        "lz4: fast, near-free — the usual choice. zstd: better ratio, more "
+        "CPU (zstd-1 … zstd-19; zstd-3 is balanced). on means lz4; off "
+        "disables.\n"
+        "Empty leaves the property unset — ZFS's default (off) applies."
+    ),
+    "atime": (
+        "Access-time updates.\n"
+        "on: file access times update on reads (POSIX behavior, extra "
+        "writes).\n"
+        "off: skip access-time updates — less write churn, safe for most "
+        "uses.\n"
+        "Empty leaves the property unset — ZFS's default (on) applies."
+    ),
+    "logbias": (
+        "How synchronous writes use the intent log (ZIL).\n"
+        "latency: each sync write is logged individually — the ZFS default "
+        "and safest.\n"
+        "throughput: fewer, larger log writes — can speed large sync writes "
+        "(databases), sometimes at the cost of latency.\n"
+        "Empty leaves the property unset — ZFS's default applies."
+    ),
+    "sync": (
+        "Handling of synchronous write requests.\n"
+        "standard: honor sync requests (the ZFS default).\n"
+        "always: treat every write as synchronous — very safe, very slow.\n"
+        "disabled: ignore sync requests — fastest, but recent writes can be "
+        "lost on power failure; unsafe for databases and VM disks.\n"
+        "Empty leaves the property unset — ZFS's default applies."
+    ),
+    "primarycache": (
+        "What the ARC may cache for this dataset.\n"
+        "all: file data and metadata (the ZFS default).\n"
+        "metadata: only metadata — good for datasets that would evict "
+        "everything else.\n"
+        "none: bypass the ARC for this dataset.\n"
+        "Empty leaves the property unset — ZFS's default applies."
+    ),
+    "special_small_blocks": (
+        "Files this size or smaller live on the special vdev.\n"
+        "e.g. 32K: small files (and file metadata) are stored on the special "
+        "vdev — needs an SSD special vdev in the pool.\n"
+        "Empty leaves the property unset."
+    ),
+}
+
+_FIELD_TOOLTIPS = {
+    "name": (
+        "Profile name, shown by Create Pool and Migrate Pool.\n"
+        "Editing keeps the name read-only; saving a built-in under a new "
+        "name creates a custom copy."
+    ),
+    "description": "One-line summary shown in the profile list.",
+    "blocksize": (
+        "The pool's minimum on-disk sector size (ashift), fixed at creation — "
+        "changing it later needs Migrate Pool.\n"
+        "recommended: adopt the wizard's per-disk probe (4096 bytes or "
+        "larger on modern drives).\n"
+        "auto: let ZFS decide.\n"
+        "512/4096/8192 bytes: force a sector size — below the drive's real "
+        "sector it permanently hurts performance."
+    ),
+    "notes": "Free-form notes kept with the profile (not applied anywhere).",
+}
 
 
 def _show_validation_error(parent, message: str) -> None:
@@ -253,7 +383,7 @@ def show_pool_profile_editor_dialog(app, name=None):
     else:
         existing = {}
 
-    dialog = create_dialog(
+    dialog, content = create_scrolled_dialog(
         "Edit Pool Profile" if is_edit else "Add Pool Profile",
         app,
         [
@@ -263,20 +393,18 @@ def show_pool_profile_editor_dialog(app, name=None):
         default_response=Gtk.ResponseType.OK,
         size=(520, 640),
     )
-    content = dialog.get_content_area()
 
     grid = Gtk.Grid()
     grid.set_column_spacing(10)
     grid.set_row_spacing(10)
-    grid.set_margin_top(10)
-    grid.set_margin_bottom(10)
-    grid.set_margin_start(10)
-    grid.set_margin_end(10)
     content.pack_start(grid, False, False, 0)
 
-    def _add_row(row, label_text, widget):
+    def _add_row(row, label_text, widget, tooltip=None):
         label = Gtk.Label(label=label_text)
         label.set_halign(Gtk.Align.START)
+        if tooltip:
+            label.set_tooltip_text(tooltip)
+            widget.set_tooltip_text(tooltip)
         grid.attach(label, 0, row, 1, 1)
         grid.attach(widget, 1, row, 1, 1)
         return widget
@@ -297,18 +425,18 @@ def show_pool_profile_editor_dialog(app, name=None):
     name_entry = Gtk.Entry()
     name_entry.set_text(name or "")
     name_entry.set_sensitive(not is_edit or editing_builtin)
-    _add_row(row, "Name:", name_entry)
+    _add_row(row, "Name:", name_entry, _FIELD_TOOLTIPS["name"])
     row += 1
 
     desc_entry = Gtk.Entry()
     desc_entry.set_text(existing.get("description", ""))
-    _add_row(row, "Description:", desc_entry)
+    _add_row(row, "Description:", desc_entry, _FIELD_TOOLTIPS["description"])
     row += 1
 
     blocksize_combo = _choice_combo(
         BLOCKSIZE_CHOICES, existing.get("blocksize", BLOCKSIZE_CHOICES[0])
     )
-    _add_row(row, "Blocksize:", blocksize_combo)
+    _add_row(row, "Blocksize:", blocksize_combo, _FIELD_TOOLTIPS["blocksize"])
     row += 1
 
     # Pool properties are picked from their allowed values (plus "(not set)",
@@ -319,7 +447,7 @@ def show_pool_profile_editor_dialog(app, name=None):
     for prop in POOL_PROPERTIES:
         choices = (_POOL_PROP_UNSET,) + POOL_PROPERTY_VALUES[prop]
         combo = _choice_combo(choices, pool_props.get(prop, _POOL_PROP_UNSET))
-        _add_row(row, f"{prop}:", combo)
+        _add_row(row, f"{prop}:", combo, _POOL_PROP_TOOLTIPS[prop])
         pool_prop_combos[prop] = combo
         row += 1
 
@@ -340,7 +468,7 @@ def show_pool_profile_editor_dialog(app, name=None):
         entry = Gtk.Entry()
         entry.set_text(fs_props.get(prop, ""))
         entry.set_placeholder_text(placeholders.get(prop, ""))
-        _add_row(row, f"{prop}:", entry)
+        _add_row(row, f"{prop}:", entry, _FS_PROP_TOOLTIPS[prop])
         fs_entries[prop] = entry
         row += 1
 
@@ -353,7 +481,7 @@ def show_pool_profile_editor_dialog(app, name=None):
     notes_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
     notes_sw.set_min_content_height(80)
     notes_sw.add(notes_tv)
-    _add_row(row, "Notes:", notes_sw)
+    _add_row(row, "Notes:", notes_sw, _FIELD_TOOLTIPS["notes"])
     row += 1
 
     dialog.show_all()

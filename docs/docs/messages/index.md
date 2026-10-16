@@ -1599,7 +1599,7 @@ as soon as the device probes clean.
 | `WARN: wipefs is not available; falling back to dd.` | `wipefs` is missing from the system | The ladder jumps to `dd` |
 | `WARN: Signatures remain on ...; falling back to dd.` | The probe still lists signatures after `labelclear`/`wipefs` | The ladder continues with `dd` |
 | `WARN: Could not determine a usable size for ...; skipping dd on it.` | The node's size could not be read (or is under 2 MiB) | That node is skipped; others continue |
-| `WARN: Could not re-read the partition table of ... Run partprobe ... (or rescan-storage, or reboot) before reusing the disk.` | No partition-table re-read tool could run after the `dd` wipe | Run `partprobe` manually; stale partition nodes may linger |
+| `WARN: Could not re-read the partition table of ... Run partprobe ... (or rescan-storage, or reboot) before reusing the disk.` | Every partition-table re-read attempt failed after a wiping step (`partprobe`/`blockdev --rereadpt` missing or failed; the wipe itself stands) | Run `partprobe` manually; stale partition nodes may linger |
 | `WARN: ... still shows signatures after dd; it may be in use or faulty.` | The post-`dd` probe still lists signatures | Script aborts (exit 8); inspect the device |
 | `INFO: ... wiped by dd; verification is unavailable (no wipefs) — re-check the device before reuse.` | `dd` completed but no probe tool exists to confirm cleanliness | Informational |
 | `INFO: Wipe complete on ... (methods: ...).` | Final outcome naming every method that ran | Informational |

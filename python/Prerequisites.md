@@ -29,6 +29,7 @@ The GUI requires any GTK3-capable desktop environment or window manager. Cinnamo
 | python3-pip | `apt install python3-pip` | Required before pip packages can be used | 2026-01-29 |
 | mkdocs | `pip3 install mkdocs mkdocs-material` | Documentation site generator | 2026-02-21 |
 | mkdocs-material | *(installed with mkdocs above)* | Material theme for MkDocs | 2026-02-21 |
+| matplotlib | test VM: `pip3 install --user --break-system-packages matplotlib`; production (Debian 13): `sudo apt install python3-matplotlib` | High-quality charts in the Performance page — the live ARC/L2ARC/SLOG rolling charts render through it when present. Optional: when absent the page falls back to the built-in Cairo charts. See the GUI Charting developer note. | 2026-10-15 |
 
 ## Development-Only Tools
 

@@ -8,6 +8,7 @@ relevant to developers working on ZFS Utilities.
 | Page                                                 | Description                                                         |
 | ---------------------------------------------------- | ------------------------------------------------------------------- |
 | [Architecture](architecture.md)                      | Overall design, script patterns, data flow                          |
+| [GUI Charting](charting.md)                          | Chart rendering in the GTK3 GUI (matplotlib embed, fallback, deployment) |
 | [Conventions](conventions.md)                        | Coding standards and patterns used throughout                       |
 | [Coding Policies](coding-policies.md)                | Project coding policies for Bash and Python                         |
 | [Bash Logging Exceptions](bash-logging-exceptions.md)| Scripts and output patterns exempt from the `log_msg` requirement   |

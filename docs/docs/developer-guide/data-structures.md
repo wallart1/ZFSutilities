@@ -499,7 +499,7 @@ Read methods return typed rows instead of raw tab-separated strings.
 | `SnapshotRow` | `name`, `creation`, `ds_type`, `used`, `avail`, `refer`, `origin`, `clones` | `zfs list -t snapshot -H -o name,creation,type,used,avail,refer,origin,clones` |
 | `HoldRow` | `snapshot`, `tag`, `date` | `zfs holds -H <snapshot>` |
 | `AshiftInfo` | `configured`, `effective` | Configured and effective pool ashift values |
-| `TopologyNode` | `name`, `vdev_type`, `state`, `read`, `write`, `cksum`, `ashift`, `children` | One node in a `zpool status -P` vdev topology tree |
+| `TopologyNode` | `name`, `vdev_type`, `state`, `read`, `write`, `cksum`, `ashift`, `children` | One node in a `zpool status -P` vdev topology tree; rows that print a bare state with no READ/WRITE/CKSUM counters (hot spares: `AVAIL`/`INUSE`) parse with zeroed counters instead of being dropped |
 
 Additional `ZfsRepository` methods:
 
@@ -612,27 +612,64 @@ Dataclasses behind the Alignment view of the Performance tab.
 `collect_alignment_sample()` probes independent sources — `zpool list` /
 `get_ashift` / pool topology, `lsblk` sector geometry, dataset block
 properties, `zpool iostat -r` histograms, the arcstats/zfetchstats kstat
-files, and `/etc/pve/qemu-server/*.conf` — and each one degrades on its
-own exactly like the memory samples above.
+files, per-dataset objset kstats, and `/etc/pve/qemu-server/*.conf` — and
+each one degrades on its own exactly like the memory samples above.
 
 | Field | Type | Purpose |
 | ----- | ---- | ------- |
 | `AlignmentSample.monotonic` | `float` | `time.monotonic()` of the collection |
-| `AlignmentSample.pools` | `list[PoolAlignment]` | One entry per pool: name, `ashift_configured` (zfs-get string), `ashift_effective` (resolved power-of-two or `None`), `members`, `has_cache` |
+| `AlignmentSample.pools` | `list[PoolAlignment]` | One entry per pool: name, `ashift_configured` (zfs-get string), `ashift_effective` (resolved power-of-two or `None`), `members`, `has_cache`, and `topology` (the typed `TopologyNode` vdev tree from `zpool status -P` with the effective ashift annotated on its root, or `None` when that pool's status read failed — the Alignment view renders the tree's classes and members and names failed pools in its availability note) |
 | `PoolAlignment.members` | `list[MemberDisk]` | Member leaf paths with `logical_sector` / `physical_sector` bytes from `lsblk` (`None` when unreported) |
 | `AlignmentSample.datasets` | `list[DatasetBlocks]` | One entry per filesystem/volume: `name`, `kind`, `recordsize`/`volblocksize` (zfs-get strings) with per-property `source` |
+| `AlignmentSample.dataset_read_failures` | `list[str]` | Pools whose per-pool dataset-property read failed this collection (dataset properties are read per pool, so a transient zfs failure costs only that pool's dataset rows; the others keep theirs) |
 | `AlignmentSample.histograms` | `dict[str, ReqHistogram]` | Since-boot request-size histogram per pool from `zpool iostat -r` |
 | `ReqHistogram.buckets` | `dict[int, dict[str, dict[str, int]]]` | `{bucket bytes: {"ind"/"agg": {column: op count}}}`; helpers `ops()`, `dominant_bucket()`, `top_buckets()` take column/kind filters |
+| `AlignmentSample.objset` | `dict[str, dict[str, int]]` | Since-boot per-dataset counters from `/proc/spl/kstat/zfs/<pool>/objset-*` (OpenZFS 2.2+; each file self-identifies via its `dataset_name` row): `nread`/`nwritten`/`reads`/`writes` plus the per-dataset ZIL counters |
 | `AlignmentSample.vm_disks` | `dict[str, VMOption]` | `{zvol short name: VMOption(vmid, disknum, bus, options)}` from local PVE VM configs |
 | `AlignmentSample.arc` / `prefetch` | `dict[str, int]` | arcstats / zfetchstats counters exposed by this host |
-| `AlignmentSample.*_available` | `bool` | Per-source probe results (`pools`, `datasets`, `iostat_r`, `arcstats`, `prefetch`, `pve`) |
+| `AlignmentSample.*_available` | `bool` | Per-source probe results (`pools`, `datasets`, `iostat_r`, `arcstats`, `prefetch`, `objset`, `pve`) |
 
-`alignment_analysis.analyse()` consumes a sample (plus the survey and
-workload profiles) and produces `Finding(layer, subject, severity,
-message, recommendation)` rows — severity is one of `OK` / `info` / `WARN`
-— and `classify_workload()` produces `WorkloadVerdict(label,
+`compute_objset_rates(prev, cur)` deltas two samples' objset counters into
+`ObjsetRates` per dataset — reads/writes per second, read/write bytes per
+second, and the average read/write request size over the interval
+(Δbytes / Δops, the dataset-granularity counterpart of the pool-level `-r`
+histogram). The same reset/churn rules as `compute_rates` apply: a counter
+that moved backwards (re-import) yields `None` for that interval, and a
+dataset missing from either sample has no delta. `average_request_sizes()`
+gives the same averages directly from one sample's since-boot counters.
+
+`alignment_analysis.analyse()` consumes a sample (plus the survey,
+workload profiles, and optionally the previous refresh's sample) and
+produces `Finding(layer, subject, severity,
+message, recommendation, key)` rows — severity is one of `OK` / `info` /
+`WARN`, and `key` is the emitting rule's stable identity, which the
+Alignment view pairs with the subject to reconcile findings rows in
+place across refreshes (message numbers drift; identity must not) —
+and `classify_workload()` produces `WorkloadVerdict(label,
 prefetch_rate, sync_share, confidence)`. Analysis thresholds are named
-module constants in `alignment_analysis.py`.
+module constants in `alignment_analysis.py`. The per-dataset observed
+request sizes prefer the interval between *prev_sample* and *sample*
+(Δbytes/Δops via `compute_objset_rates`, gated by
+`OBSERVATION_MIN_DATASET_OPS` operations in the window) and fall back
+to the since-boot averages (`average_request_sizes`, same floor); when
+the objset kstats are unavailable the histogram rules stay per-pool
+(subjects name pools, not datasets) and an `objset-unavailable`
+finding states that limit. Mixed member geometry is judged per vdev
+group when `PoolAlignment.topology` is present — via
+`alignment_analysis.vdev_groups` and `alignment_stats.topology_leaf_paths`
+— and falls back to a pool-wide range finding when the tree is missing.
+
+`alignment_analysis.blocksize_ladder()` derives the Alignment view's
+visual from the same sample: one `LadderPool(pool, ashift, block, bars)`
+per pool — `block` is the effective-ashift block in bytes, the dashed
+reference line, `None` when unresolved — carrying `LadderBar(layer,
+label, size, state)` rungs: device physical sectors, the ashift block,
+dataset `recordsize`/`volblocksize` groups, and VM guest sectors,
+grouped by size (labels carry ×counts), in stack order. Rung `state`
+reuses the Finding severity ladder and the ladder renderers map it to
+their shared colour vocabulary; per-source degrade mirrors the tables
+(a failed source drops its rungs, an unresolved ashift drops the
+reference rung and downgrades the pool's rungs to `info`).
 
 The survey itself lives in the JSON config as
 `alignment_survey: {dataset: workload-profile name}` (see the

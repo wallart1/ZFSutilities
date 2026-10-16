@@ -2858,6 +2858,12 @@ clean (`wipefs` signature listing):
    whatever sits in those ranges. Not a secure erase — data between the
    wiped ranges survives.
 
+After whichever step did the wiping, Linux is told the device changed: the
+partition table is re-read (`partprobe`, else `blockdev --rereadpt`) so
+stale partition nodes drop, then a uevent is triggered and udev settles so
+`/dev/disk/by-id` and `lsblk`'s udev-backed columns reflect the clean device
+before the script exits.
+
 ```bash
 sudo zfswipe <device> [--confirmed]
 ```
@@ -2872,9 +2878,10 @@ sudo zfswipe <device> [--confirmed]
 **Globals:** none.
 
 **Prerequisites:** `zpool` must be available (the inactivity check depends
-on it). `wipefs` and the kernel re-read tools (`partprobe`, `blockdev`,
-`udevadm`) are probed at runtime; missing ones degrade the ladder, never
-abort it — `dd` always works.
+on it). `wipefs` and the notification tools (`partprobe`, `blockdev`,
+`udevadm`) are probed at runtime; missing ones degrade the wipe, never
+abort it — `dd` always works, and a failed partition-table re-read is a
+WARN, not a failure.
 
 Prompts for the device name to be typed exactly before wiping, unless
 `--confirmed` is given.
@@ -2890,8 +2897,9 @@ Prompts for the device name to be typed exactly before wiping, unless
    `zpool status`, mount/swap scan over `lsblk`).
 3. Log the wipe plan, collect the typed confirmation, and short-circuit
    when no signatures are detectable.
-4. Run the ladder with a re-probe after each step, ending with the `dd`
-   fallback and a forced partition-table re-read.
+4. Run the ladder with a re-probe after each step; after whichever step
+   wipes, re-read the partition table and settle udev so the system sees
+   the clean device.
 
 **Return codes:**
 

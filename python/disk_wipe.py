@@ -3,7 +3,9 @@
 Wraps the ``zfswipe`` script, which clears leftover signatures (ZFS labels,
 partition tables, filesystem signatures) from an inactive disk via the
 fallback ladder ``zpool labelclear`` → ``wipefs`` → ``dd`` so the disk can be
-reused as a pool device. This module computes whether the selected disk is
+reused as a pool device, then re-reads the partition table and settles udev
+so the system sees the clean device without a reboot. This module computes
+whether the selected disk is
 wipe-eligible, builds the warnings shown before the typed confirmation, and
 runs the dialog. Decision logic stays in pure helpers (testable without
 GTK); the script itself re-verifies inactivity before touching anything.
@@ -177,7 +179,9 @@ def show_wipe_dialog(app, disk: DiskInfo, warnings: list[str]) -> bool:
         label="The script wipes in order, stopping when the device probes clean:\n"
         "1. zpool labelclear -f — ZFS labels and L2ARC headers only\n"
         "2. wipefs -a — all signatures, incl. the partition table\n"
-        "3. dd — zero the first and last 1 MiB of the device (and each partition)"
+        "3. dd — zero the first and last 1 MiB of the device (and each partition)\n"
+        "After any wipe, the partition table is re-read and udev settles, so\n"
+        "the system sees the clean disk without a rescan or reboot."
     )
     methods_label.set_halign(Gtk.Align.START)
     methods_label.set_line_wrap(True)

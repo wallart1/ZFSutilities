@@ -16,7 +16,7 @@
 # node.conf, then the legacy flat files — resolved by upgrade-lib.sh the
 # way node-lib.sh resolves it).
 
-set -e
+set -euo pipefail
 
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
