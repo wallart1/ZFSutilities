@@ -11,6 +11,7 @@ if PYTHON_SRC not in sys.path:
 
 import alignment_analysis as ana
 import alignment_stats as als
+from alignment_guestfs import GuestFsEntry
 from zfs_repository import TopologyNode
 
 
@@ -89,6 +90,7 @@ def _sample(
     pve=False,
     objset=None,
     monotonic=0.0,
+    guest_fs=None,
 ):
     return als.AlignmentSample(
         monotonic=monotonic,
@@ -99,6 +101,7 @@ def _sample(
         arc=arc if arc is not None else {},
         prefetch=prefetch if prefetch is not None else {},
         objset=objset if objset is not None else {},
+        guest_fs=guest_fs if guest_fs is not None else {},
         objset_available=objset is not None,
         pools_available=pools is not None,
         datasets_available=pools is not None,
@@ -547,7 +550,64 @@ class TestVMFindings(unittest.TestCase):
         )
         rows = _findings_for(sample, layer="VM", subject="(all)")
         self.assertEqual(len(rows), 1)
-        self.assertIn("not readable on this host", rows[0].message)
+        # Fires only when the local directory AND the compute-node ssh
+        # fetch both failed (the two-node fetch landed later).
+        self.assertIn("could not be read", rows[0].message)
+        self.assertIn("compute-node fetch", rows[0].message)
+
+    def test_guest_fs_below_volblock_warns(self):
+        sample = _sample(
+            pools=[_pool(ashift=12)],
+            datasets=[_vol("fivebays/vm-201-disk-0", volblocksize="16K")],
+            vm_disks={
+                "vm-201-disk-0": als.VMOption(
+                    vmid="201", disknum="0", bus="scsi0", options={"discard": "1"}
+                )
+            },
+            pve=True,
+            guest_fs={
+                "vm-201-disk-0": [
+                    GuestFsEntry("/", "ext4", 4096),
+                    GuestFsEntry("/var", "xfs", 4096),
+                ]
+            },
+        )
+        rows = _findings_for(sample, layer="VM", subject="fivebays/vm-201-disk-0")
+        warn = [row for row in rows if row.key == "vm-guest-fs-below-volblock"]
+        self.assertEqual(len(warn), 1)
+        self.assertEqual(warn[0].severity, ana.SEV_WARN)
+        self.assertIn("ext4 4K on /", warn[0].message)
+        self.assertIn("volblocksize", warn[0].recommendation)
+
+    def test_guest_fs_at_volblock_stays_silent(self):
+        sample = _sample(
+            pools=[_pool(ashift=12)],
+            datasets=[_vol("fivebays/vm-201-disk-0", volblocksize="4K")],
+            vm_disks={
+                "vm-201-disk-0": als.VMOption(
+                    vmid="201", disknum="0", bus="scsi0", options={"discard": "1"}
+                )
+            },
+            pve=True,
+            guest_fs={"vm-201-disk-0": [GuestFsEntry("/", "ext4", 4096)]},
+        )
+        rows = _findings_for(sample, layer="VM", subject="fivebays/vm-201-disk-0")
+        self.assertFalse(any(row.key == "vm-guest-fs-below-volblock" for row in rows))
+
+    def test_guest_fs_without_volblock_no_finding(self):
+        sample = _sample(
+            pools=[_pool(ashift=12)],
+            datasets=[_vol("fivebays/vm-201-disk-0", volblocksize=None)],
+            vm_disks={
+                "vm-201-disk-0": als.VMOption(
+                    vmid="201", disknum="0", bus="scsi0", options={"discard": "1"}
+                )
+            },
+            pve=True,
+            guest_fs={"vm-201-disk-0": [GuestFsEntry("/", "ext4", 4096)]},
+        )
+        rows = _findings_for(sample, layer="VM", subject="fivebays/vm-201-disk-0")
+        self.assertFalse(any(row.key == "vm-guest-fs-below-volblock" for row in rows))
 
     def test_missing_discard_info(self):
         sample = _sample(
@@ -808,6 +868,83 @@ class TestBlocksizeLadder(unittest.TestCase):
                 ("VM", "vm · guest sector 512", 512, ana.SEV_INFO),
             ],
         )
+
+    def test_guest_fs_rungs_judged_against_volblock(self):
+        """Probed guest filesystem rungs group by (fstype, size) and warn
+        below their zvol's volblocksize — the partial-block hazard."""
+        pool = _pool(ashift=12, members=[("/dev/sdb", 512, 4096)])
+        sample = _sample(
+            pools=[pool],
+            datasets=[
+                _vol("fivebays/vm-201-disk-0", volblocksize="16K"),
+                _vol("fivebays/vm-201-disk-1", volblocksize="16K"),
+            ],
+            vm_disks={
+                "vm-201-disk-0": als.VMOption(vmid="201", disknum="0", bus="scsi0", options={}),
+                "vm-201-disk-1": als.VMOption(vmid="201", disknum="1", bus="scsi1", options={}),
+            },
+            pve=True,
+            guest_fs={
+                "vm-201-disk-0": [GuestFsEntry("/", "ext4", 4096)],
+                "vm-201-disk-1": [GuestFsEntry("/", "ext4", 4096)],
+            },
+        )
+        ladder = ana.blocksize_ladder(sample)
+        rungs = [(bar.layer, bar.label, bar.size, bar.state) for bar in ladder[0].bars]
+        self.assertIn(("VM fs", "vm fs · ext4 4K ×2", 4096, ana.SEV_WARN), rungs)
+
+    def test_guest_fs_rung_ok_at_or_above_volblock(self):
+        pool = _pool(ashift=12, members=[("/dev/sdb", 512, 4096)])
+        sample = _sample(
+            pools=[pool],
+            datasets=[_vol("fivebays/vm-201-disk-0", volblocksize="4K")],
+            vm_disks={
+                "vm-201-disk-0": als.VMOption(vmid="201", disknum="0", bus="scsi0", options={})
+            },
+            pve=True,
+            guest_fs={"vm-201-disk-0": [GuestFsEntry("/", "xfs", 4096)]},
+        )
+        ladder = ana.blocksize_ladder(sample)
+        rung = next(bar for bar in ladder[0].bars if bar.layer == "VM fs")
+        self.assertEqual((rung.label, rung.state), ("vm fs · xfs 4K", ana.SEV_OK))
+
+    def test_guest_fs_rung_info_without_volblock(self):
+        pool = _pool(ashift=12, members=[("/dev/sdb", 512, 4096)])
+        sample = _sample(
+            pools=[pool],
+            datasets=[_vol("fivebays/vm-201-disk-0", volblocksize=None)],
+            vm_disks={
+                "vm-201-disk-0": als.VMOption(vmid="201", disknum="0", bus="scsi0", options={})
+            },
+            pve=True,
+            guest_fs={"vm-201-disk-0": [GuestFsEntry("/", "ext4", 4096)]},
+        )
+        ladder = ana.blocksize_ladder(sample)
+        rung = next(bar for bar in ladder[0].bars if bar.layer == "VM fs")
+        self.assertEqual(rung.state, ana.SEV_INFO)
+
+    def test_guest_fs_rung_worst_state_across_volumes(self):
+        """Two volumes under one rung: the worse verdict wins."""
+        pool = _pool(ashift=12, members=[("/dev/sdb", 512, 4096)])
+        sample = _sample(
+            pools=[pool],
+            datasets=[
+                _vol("fivebays/vm-201-disk-0", volblocksize="4K"),
+                _vol("fivebays/vm-201-disk-1", volblocksize="16K"),
+            ],
+            vm_disks={
+                "vm-201-disk-0": als.VMOption(vmid="201", disknum="0", bus="scsi0", options={}),
+                "vm-201-disk-1": als.VMOption(vmid="201", disknum="1", bus="scsi1", options={}),
+            },
+            pve=True,
+            guest_fs={
+                "vm-201-disk-0": [GuestFsEntry("/", "ext4", 4096)],
+                "vm-201-disk-1": [GuestFsEntry("/", "ext4", 4096)],
+            },
+        )
+        ladder = ana.blocksize_ladder(sample)
+        rung = next(bar for bar in ladder[0].bars if bar.layer == "VM fs")
+        self.assertEqual(rung.state, ana.SEV_WARN)
 
     def test_pool_below_device_sector_warns_both_rungs(self):
         pool = _pool(ashift=9, members=[("/dev/sdb", 512, 4096)])

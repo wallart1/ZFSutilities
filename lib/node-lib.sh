@@ -104,7 +104,11 @@ if is_single_node; then
     compute_host="${COMPUTE_HOST:-$this_host}"
     storage_ip="${STORAGE_IP:-}"
     iqn_prefix="${IQN_PREFIX:-}"
-    declare -A pool_target=() 2>/dev/null || true
+    # -g is required: libraries are loaded through bashinit's source_helper
+    # function (e.g. unarchive-vm's ssh payloads), and a bare declare here
+    # would create a function-local that vanishes when source_helper returns,
+    # emptying the map under pool_to_target/pool_list/is_known_pool.
+    declare -gA pool_target=() 2>/dev/null || true
 else
     # Two-node mode: copy the externally set config vars to lowercase and
     # validate the copies.
@@ -126,7 +130,11 @@ else
         log_msg "FATAL: $NODE_CONF: POOL_TARGET associative array is not declared"
         exit 1
     fi
-    declare -A pool_target=()
+    # -g is required: libraries are loaded through bashinit's source_helper
+    # function, and a bare declare here would create a function-local that
+    # vanishes when source_helper returns, emptying the map under
+    # pool_to_target/pool_list/is_known_pool.
+    declare -gA pool_target=()
     for _pool in "${!POOL_TARGET[@]}"; do
         pool_target["$_pool"]="${POOL_TARGET[$_pool]}"
     done

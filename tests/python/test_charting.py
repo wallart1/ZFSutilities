@@ -64,6 +64,76 @@ def _fake_backend():
     return backend, fig, ax, canvas, lines, fills, formatters
 
 
+class _FakeStyleContext:
+    """Style context answering lookup_color with fixed theme colours."""
+
+    def __init__(self, bg, fg):
+        self._colors = {"theme_bg_color": bg, "theme_fg_color": fg}
+
+    def lookup_color(self, name):
+        if name not in self._colors:
+            return False, None
+        return True, SimpleNamespace(**dict(zip(("red", "green", "blue"), self._colors[name])))
+
+
+class _FakeThemeWidget:
+    def __init__(self, bg, fg):
+        self._context = _FakeStyleContext(bg, fg)
+
+    def get_style_context(self):
+        return self._context
+
+
+class TestThemePalette(unittest.TestCase):
+    """The theme-following palette every renderer resolves."""
+
+    DARK_BG = (0.16, 0.16, 0.18)
+    DARK_FG = (0.88, 0.88, 0.88)
+
+    def test_light_palette_matches_the_classic_vocabulary(self):
+        charting = _charting()
+        light = charting.LIGHT_PALETTE
+        self.assertEqual(light.background, (1.0, 1.0, 1.0))
+        self.assertEqual(light.series, tuple(charting.SERIES_COLORS))
+        self.assertEqual(light.states["OK"], charting.LADDER_STATE_COLORS["OK"])
+
+    def test_dark_theme_resolves_dark_palette(self):
+        charting = _charting()
+        widget = _FakeThemeWidget(self.DARK_BG, self.DARK_FG)
+        palette = charting.chart_palette(widget)
+        self.assertEqual(palette.background, self.DARK_BG)
+        self.assertEqual(palette.foreground, self.DARK_FG)
+        # Series colours are the bright variants, and every structural
+        # colour is a blend between fg and bg (visible on the background).
+        self.assertNotEqual(palette.series, charting.LIGHT_PALETTE.series)
+        for color in (palette.grid, palette.spine, palette.reference, palette.muted):
+            for channel, fg, bg in zip(color, self.DARK_FG, self.DARK_BG):
+                self.assertGreaterEqual(channel, min(fg, bg))
+                self.assertLessEqual(channel, max(fg, bg))
+        # Ladder states keep OK/WARN on the two series colours.
+        self.assertEqual(palette.states["OK"], palette.series[0])
+        self.assertEqual(palette.states["WARN"], palette.series[1])
+
+    def test_light_theme_keeps_light_series(self):
+        charting = _charting()
+        widget = _FakeThemeWidget((0.98, 0.98, 0.98), (0.1, 0.1, 0.1))
+        palette = charting.chart_palette(widget)
+        self.assertEqual(palette.background, (1.0, 1.0, 1.0))
+        self.assertEqual(palette.series, charting.LIGHT_PALETTE.series)
+        self.assertEqual(palette.foreground, (0.1, 0.1, 0.1))
+
+    def test_unresolvable_theme_falls_back_to_light(self):
+        charting = _charting()
+        # A MagicMock context: lookup_color answers a non-unpackable mock.
+        widget = MagicMock()
+        self.assertIs(charting.chart_palette(widget), charting.LIGHT_PALETTE)
+        # Missing colour names answer found=False.
+        widget = SimpleNamespace(
+            get_style_context=lambda: SimpleNamespace(lookup_color=lambda name: (False, None))
+        )
+        self.assertIs(charting.chart_palette(widget), charting.LIGHT_PALETTE)
+
+
 class TestSharedVocabulary(unittest.TestCase):
     """The rolling-chart vocabulary both renderers share."""
 
@@ -145,6 +215,21 @@ class TestMatplotlibRollingChart(unittest.TestCase):
         self.assertEqual(ax.set_title.call_args.kwargs.get("loc"), "left")
         self.assertEqual(ax.legend.call_args.args[1], ["read", "write"])
         fig.tight_layout.assert_called_once()
+
+    def test_build_applies_light_palette_under_mocks(self):
+        """Under the fake backend the theme cannot resolve, so the chart
+        paints with the light palette — the matplotlib analogue of the
+        Cairo fallback's own palette resolution."""
+        _chart, _ax, _canvas, _lines, _fills, _formatters, fig = self._built()
+        fig.patch.set_facecolor.assert_called_with((1.0, 1.0, 1.0))
+
+    def test_style_updated_reapplies_palette(self):
+        chart, _ax, canvas, _lines, _fills, _formatters, fig = self._built()
+        fig.patch.set_facecolor.reset_mock()
+        canvas.draw_idle.reset_mock()
+        chart._on_style_updated()
+        self.assertEqual(fig.patch.set_facecolor.call_count, 1)
+        canvas.draw_idle.assert_called_once()
 
     def test_collecting_state_until_two_points(self):
         chart, _ax, _canvas, _lines, _fills, _formatters, _fig = self._built()
@@ -299,6 +384,26 @@ class TestLadderVocabulary(unittest.TestCase):
         self.assertEqual(x_max, 32768)  # one power past the largest size
         self.assertEqual(ticks, (256, 512, 1024, 2048, 4096, 8192, 16384, 32768))
 
+    def test_minimum_width_covers_labels_plot_and_legend(self):
+        """The horizontal-scrollbar floor: zero when empty, wider for
+        longer labels, always at least the plot floor plus legend."""
+        charting = _charting()
+        self.assertEqual(charting.ladder_minimum_width([]), 0)
+        pools = _two_pool_ladder()
+        base = charting.ladder_minimum_width(pools)
+        legend_chars = sum(len(text) for _state, text in charting.LADDER_LEGEND)
+        self.assertGreaterEqual(
+            base, charting.LADDER_PLOT_MIN_WIDTH + legend_chars * charting.LADDER_CHAR_WIDTH_PX
+        )
+        longer = [
+            _ladder_pool(
+                "tank",
+                4096,
+                [_rung("Dataset", "dataset · recordsize 128K (very long label)", 131072)],
+            )
+        ]
+        self.assertGreater(charting.ladder_minimum_width(longer), base)
+
     def test_axis_range_defaults_without_data(self):
         charting = _charting()
         x_min, x_max, ticks = charting.ladder_axis_range([])
@@ -323,6 +428,15 @@ class TestLadderVocabulary(unittest.TestCase):
         self.assertGreater(len(ticks), 4)
         steps = {ticks[i + 1] // ticks[i] for i in range(len(ticks) - 1)}
         self.assertEqual(steps, {2**2})
+
+    def test_ladder_build_applies_light_palette_under_mocks(self):
+        """Theme resolution fails under the fake backend, so the ladder
+        paints with the light palette (the white-background look)."""
+        charting = _charting()
+        backend, fig, _ax, _canvas = _fake_backend()[:4]
+        with patch.object(charting, "matplotlib_backend", return_value=backend):
+            charting.MatplotlibBlocksizeLadder("Blocksize ladder")
+        fig.patch.set_facecolor.assert_called_with((1.0, 1.0, 1.0))
 
     def test_state_colour_key_covers_severity_ladder(self):
         charting = _charting()
@@ -431,11 +545,13 @@ class TestMatplotlibBlocksizeLadder(unittest.TestCase):
         pools = _two_pool_ladder()
         ladder.update(pools)
         charting = _charting()
-        canvas.set_size_request.assert_called_with(-1, charting.ladder_pixel_height(pools))
+        canvas.set_size_request.assert_called_with(
+            charting.ladder_minimum_width(pools), charting.ladder_pixel_height(pools)
+        )
         fig.tight_layout.reset_mock()
         canvas.set_size_request.reset_mock()
 
-        # Same row set: no re-layout, no height churn.
+        # Same row set: no re-layout, no size churn.
         ladder.update(_two_pool_ladder())
         fig.tight_layout.assert_not_called()
         canvas.set_size_request.assert_not_called()
@@ -446,7 +562,44 @@ class TestMatplotlibBlocksizeLadder(unittest.TestCase):
         ]
         ladder.update(grown)
         fig.tight_layout.assert_called_once()
-        canvas.set_size_request.assert_called_with(-1, charting.ladder_pixel_height(grown))
+        canvas.set_size_request.assert_called_with(
+            charting.ladder_minimum_width(grown), charting.ladder_pixel_height(grown)
+        )
+
+    def test_set_draw_width_preserves_height(self):
+        """Following the page width must not reset the height request.
+
+        The height is whatever the current row set last rendered; resetting
+        it alongside the width collapsed the canvas to a sliver between
+        refreshes.
+        """
+        ladder, _ax, canvas, _fig, _backend = self._built()
+        pools = _two_pool_ladder()
+        ladder.update(pools)
+        charting = _charting()
+        height = charting.ladder_pixel_height(pools)
+        canvas.set_size_request.reset_mock()
+        ladder.set_draw_width(1400)
+        canvas.set_size_request.assert_called_once_with(1400, height)
+
+    def test_draw_width_floors_at_content_minimum(self):
+        """A followed width below the content minimum cannot squeeze the
+        chart; the request stays at the minimum so the viewport scrolls."""
+        ladder, _ax, canvas, _fig, _backend = self._built()
+        pools = _two_pool_ladder()
+        ladder.update(pools)
+        charting = _charting()
+        minimum = charting.ladder_minimum_width(pools)
+        height = charting.ladder_pixel_height(pools)
+        canvas.set_size_request.reset_mock()
+        ladder.set_draw_width(200)
+        self.assertGreater(minimum, 200)
+        # The effective width stays at the content minimum: no request
+        # churn, and never the old bug of resetting the height to -1.
+        canvas.set_size_request.assert_not_called()
+        # Widening past the minimum does re-request — with the height.
+        ladder.set_draw_width(1500)
+        canvas.set_size_request.assert_called_once_with(1500, height)
 
     def test_empty_update_keeps_placeholder_height(self):
         ladder, _ax, canvas, _fig, _backend = self._built()

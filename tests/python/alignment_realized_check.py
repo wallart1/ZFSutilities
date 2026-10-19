@@ -12,9 +12,11 @@ It runs as a child process on purpose: binding the GUI layer to real
 GTK (and warming matplotlib's GTK backend) inside the pytest process
 would poison the mock-bound module caches the other suites rely on.
 
-Needs a display: uses the ambient one when Gtk can open it, otherwise
-starts a private Xvfb.  Exit codes: 0 pass, 3 skip (no display
-available), anything else failure with a traceback on stderr.
+Needs a display: starts a private Xvfb first (so the realized window
+never flashes on the operator's desktop during a full-suite run) and
+falls back to the ambient display when Xvfb cannot start.  Exit codes:
+0 pass, 3 skip (no display available), anything else failure with a
+traceback on stderr.
 """
 
 import os
@@ -37,17 +39,6 @@ _SKIP_RC = 3
 def _skip(reason):
     print(f"REALIZED-SKIP: {reason}")
     raise SystemExit(_SKIP_RC)
-
-
-def _gtk_init_ok():
-    """Open GTK against the current DISPLAY; True when it initialised."""
-    import gi
-
-    gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk
-
-    ok = Gtk.init_check()
-    return bool(ok[0]) if isinstance(ok, tuple) else bool(ok)
 
 
 def _start_xvfb():
@@ -121,14 +112,28 @@ def _rebind_gtk():
 
 def _ensure_display():
     """Return the Xvfb process to terminate at exit (or None)."""
-    if _gtk_init_ok():
-        return None
+    # Private Xvfb first: a realized window on the ambient display flashes
+    # on the operator's desktop during full-suite runs.  The ambient display
+    # is the fallback for hosts where Xvfb cannot start or GTK cannot bind.
+    saved_display = os.environ.get("DISPLAY")
     xvfb = _start_xvfb()
-    if xvfb is None or not _rebind_gtk():
-        if xvfb is not None:
-            xvfb.terminate()
-        _skip("no display available (Gtk.init_check failed and Xvfb could not be started)")
-    return xvfb
+    if xvfb is not None:
+        if _rebind_gtk():
+            print(f"REALIZED-DISPLAY: private Xvfb on {os.environ.get('DISPLAY')}")
+            return xvfb
+        xvfb.terminate()
+        if saved_display is None:
+            os.environ.pop("DISPLAY", None)
+        else:
+            os.environ["DISPLAY"] = saved_display
+    # The ambient check is a _rebind_gtk, not a bare init call: a failed
+    # Xvfb bind leaves the override-import cache marked uninitialized, and
+    # only a fresh import re-runs the init check against the restored
+    # ambient DISPLAY.
+    if _rebind_gtk():
+        print(f"REALIZED-DISPLAY: ambient {os.environ.get('DISPLAY', '(default)')}")
+        return None
+    _skip("no display available (Xvfb could not be started and the ambient display failed)")
 
 
 def _member(path):

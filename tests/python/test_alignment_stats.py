@@ -14,8 +14,20 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 import alignment_stats as als
+from alignment_guestfs import GuestFsEntry, GuestFsProbe
 from disk_repository import DiskInfo
 from zfs_repository import AshiftInfo, DatasetBlockRow, TopologyNode
+
+# Hermetic node-config shape (node_config.load_node_config output) for
+# collect tests: single-node, so no ambient /etc read and no ssh fetch.
+SINGLE_NODE_CONFIG = {
+    "mode": "single-node",
+    "this_host": "testhost",
+    "storage_host": "testhost",
+    "compute_host": "testhost",
+    "storage_ip": "",
+    "pools": set(),
+}
 
 # Captured verbatim (whitespace-trimmed) from stewie's zfs 2.4.4
 # `zpool iostat -r NVME1`: since-boot request-size histogram.
@@ -184,9 +196,11 @@ class _FakeZfsRepo:
         return [
             DatasetBlockRow(pool, "recordsize", "1M", "local"),
             DatasetBlockRow(pool, "volblocksize", "-", "-"),
+            DatasetBlockRow(pool, "volsize", "-", "-"),
             DatasetBlockRow(f"{pool}/proxmox", "recordsize", "128K", f"inherited from {pool}"),
             DatasetBlockRow(f"{pool}/proxmox/vm-201-disk-0", "recordsize", "-", "-"),
             DatasetBlockRow(f"{pool}/proxmox/vm-201-disk-0", "volblocksize", "16K", "-"),
+            DatasetBlockRow(f"{pool}/proxmox/vm-201-disk-0", "volsize", "32G", "-"),
         ]
 
 
@@ -437,6 +451,98 @@ class TestPveParsing(unittest.TestCase):
     def test_read_pve_missing_dir(self):
         self.assertEqual(als.read_pve_vm_options("/nonexistent-pve-dir"), {})
 
+    def test_agent_line_recorded(self):
+        options = als.parse_pve_vm_conf(f"agent: enabled=1,fstrim_cloned\n{PVE_CONF}", "201")
+        self.assertTrue(all(option.agent for option in options.values()))
+        off = als.parse_pve_vm_conf("agent: 0\nscsi0: local-lvm:vm-9-disk-0\n", "9")
+        self.assertFalse(off["vm-9-disk-0"].agent)
+        # No agent line at all: absent means not enabled.
+        none = als.parse_pve_vm_conf(PVE_CONF, "201")
+        self.assertFalse(none["vm-201-disk-0"].agent)
+
+    def test_parse_conf_dump_markers(self):
+        dump = f"garbage before any marker\n== /etc/pve/qemu-server/201.conf\n{PVE_CONF}"
+        options = als.parse_pve_conf_dump(dump)
+        self.assertEqual(sorted(options), ["vm-201-disk-0", "vm-205-disk-1"])
+        # A non-numeric marker skips its body without failing the rest.
+        dump2 = (
+            "== /etc/pve/qemu-server/999x.conf\nscsi0: local-lvm:vm-1-disk-0\n"
+            "== /etc/pve/qemu-server/205.conf\nscsi0: NVME1:vm-205-disk-0\n"
+        )
+        options2 = als.parse_pve_conf_dump(dump2)
+        self.assertEqual(sorted(options2), ["vm-205-disk-0"])
+
+    def test_fetch_pve_vm_options_over_ssh(self):
+        calls = []
+
+        def runner(argv, timeout):
+            calls.append((list(argv), timeout))
+            dump = "== /etc/pve/qemu-server/201.conf\n" + PVE_CONF
+            return MagicMock(returncode=0, stdout=dump, stderr="")
+
+        options = als.fetch_pve_vm_options("tweety", runner=runner)
+        self.assertEqual(sorted(options), ["vm-201-disk-0", "vm-205-disk-1"])
+        argv, timeout = calls[0]
+        self.assertEqual(argv[:3], ["ssh", "-o", "ConnectTimeout=5"])
+        self.assertIn("root@tweety", argv)
+        self.assertIn("/etc/pve/qemu-server/*.conf", argv[-1])
+        self.assertEqual(timeout, als.PVE_FETCH_TIMEOUT)
+
+    def test_fetch_pve_vm_options_degrades(self):
+        def runner(argv, timeout=None):
+            self.assertEqual(argv[:1], ["ssh"])
+            return MagicMock(returncode=255, stdout="", stderr="Permission denied")
+
+        self.assertEqual(als.fetch_pve_vm_options("tweety", runner=runner), {})
+
+        def boom(argv, timeout=None):
+            raise subprocess.TimeoutExpired(cmd="ssh", timeout=15)
+
+        self.assertEqual(als.fetch_pve_vm_options("tweety", runner=boom), {})
+
+    def test_read_pve_vm_configs_local_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "201.conf"), "w") as f:
+                f.write(PVE_CONF)
+            # Two-node config would allow a fetch, but the local read
+            # answers first: no runner call happens.
+            calls = []
+
+            def runner(argv, timeout):  # pragma: no cover - must not run
+                calls.append(argv)
+                return MagicMock(returncode=0, stdout="", stderr="")
+
+            config = dict(SINGLE_NODE_CONFIG, mode="two-node", compute_host="tweety")
+            options = als.read_pve_vm_configs(conf_dir=tmp, config=config)
+            self.assertEqual(sorted(options), ["vm-201-disk-0", "vm-205-disk-1"])
+            self.assertEqual(calls, [])
+
+    def test_read_pve_vm_configs_remote_fallback(self):
+        def fetch(host, conf_dir=als.PVE_QEMU_CONF_DIR, runner=None):
+            self.assertEqual(host, "tweety")
+            dump = "== /etc/pve/qemu-server/201.conf\n" + PVE_CONF
+            return als.parse_pve_conf_dump(dump)
+
+        with patch("alignment_stats.fetch_pve_vm_options", side_effect=fetch) as fetch:
+            config = {
+                "mode": "two-node",
+                "this_host": "stewie",
+                "storage_host": "stewie",
+                "compute_host": "tweety",
+                "pools": set(),
+            }
+            options = als.read_pve_vm_configs(conf_dir="/nonexistent-pve-dir", config=config)
+        self.assertEqual(sorted(options), ["vm-201-disk-0", "vm-205-disk-1"])
+        fetch.assert_called_once()
+
+    def test_read_pve_vm_configs_single_node_never_fetches(self):
+        with patch("alignment_stats.fetch_pve_vm_options") as fetch:
+            options = als.read_pve_vm_configs(
+                conf_dir="/nonexistent-pve-dir", config=SINGLE_NODE_CONFIG
+            )
+        self.assertEqual(options, {})
+        fetch.assert_not_called()
+
 
 class TestCollectAlignmentSample(unittest.TestCase):
     def _kstats_dir(self):
@@ -465,6 +571,10 @@ class TestCollectAlignmentSample(unittest.TestCase):
                 zfetchstats_path=prefetch_path,
                 pve_conf_dir="/nonexistent-pve-dir",
                 kstat_dir=kstat_root,
+                # Hermetic node config: never touch the host's real
+                # /etc/zfsutilities/node.conf (present on the dev host —
+                # it would add a bash parse and an ssh fetch attempt).
+                node_config_data=SINGLE_NODE_CONFIG,
             )
         return sample, run
 
@@ -492,6 +602,7 @@ class TestCollectAlignmentSample(unittest.TestCase):
         self.assertEqual(vol.kind, "volume")
         self.assertEqual(vol.volblocksize, "16K")
         self.assertIsNone(vol.recordsize)
+        self.assertEqual(vol.volsize, "32G")
         self.assertIn("NVME1", sample.histograms)
         self.assertEqual(sample.arc["hits"], 1000)
         self.assertEqual(sample.prefetch["misses"], 10)
@@ -552,6 +663,95 @@ class TestCollectAlignmentSample(unittest.TestCase):
         self.assertIsNone(pool.topology.ashift)
         self.assertEqual(len(pool.members), 4)
 
+    def test_guest_probe_results_flow_into_sample(self):
+        """Entries and per-volume degrades from the prober reach the sample."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "201.conf"), "w") as f:
+                f.write(PVE_CONF)
+            probe_calls = []
+
+            class prober:
+                @staticmethod
+                def probe_volumes(targets):
+                    probe_calls.append(list(targets))
+                    return {
+                        "vm-201-disk-0": GuestFsProbe(
+                            entries=[GuestFsEntry(mount="/", fstype="ext4", blocksize=4096)]
+                        ),
+                        "vm-205-disk-1": GuestFsProbe(reason="VM not running"),
+                    }
+
+            arc_path, prefetch_path, kstat_root = self._kstats_dir()
+            with patch(
+                "alignment_stats.collect_zvol_signatures",
+                return_value={"/dev/zvol/fivebays/proxmox/vm-201-disk-0": {"uuid-1"}},
+            ):
+                sample = als.collect_alignment_sample(
+                    zfs_repo=_FakeZfsRepo(),
+                    disk_repo=_FakeDiskRepo(),
+                    arcstats_path=arc_path,
+                    zfetchstats_path=prefetch_path,
+                    pve_conf_dir=tmp,
+                    kstat_dir=kstat_root,
+                    node_config_data=SINGLE_NODE_CONFIG,
+                    guest_prober=prober,
+                )
+        self.assertTrue(sample.pve_available)
+        self.assertTrue(sample.guest_fs_probed)
+        self.assertEqual(sample.guest_fs["vm-201-disk-0"][0].blocksize, 4096)
+        self.assertEqual(sample.guest_fs_failures, {"vm-205-disk-1": "VM not running"})
+        # The probe targets carry vmid, bus, short name, parsed volsize,
+        # the disk line's serial= (none here), and the storage-side
+        # signature set collected from /dev/zvol.
+        self.assertEqual(
+            probe_calls,
+            [[("201", "scsi0", "vm-201-disk-0", 32 * 1024**3, None, {"uuid-1"})]],
+        )
+
+    def test_guest_probe_targets_carry_serial_and_signatures(self):
+        """Targets include tier evidence: serial= from the disk line and
+        the storage-side signature set; filesystems are never targets."""
+        datasets = als._dataset_blocks_from_rows(
+            _FakeZfsRepo().dataset_block_properties("fivebays")
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "201.conf"), "w") as f:
+                f.write(PVE_CONF)
+            vm_disks = als.read_pve_vm_options(tmp)
+        with patch(
+            "alignment_stats.collect_zvol_signatures",
+            return_value={"/dev/zvol/fivebays/proxmox/vm-201-disk-0": {"partuuid-9"}},
+        ) as sigs:
+            targets = als._guest_probe_targets(datasets, vm_disks)
+        sigs.assert_called_once()
+        self.assertEqual(sigs.call_args.args[0], ["/dev/zvol/fivebays/proxmox/vm-201-disk-0"])
+        self.assertEqual(len(targets), 1)
+        vmid, bus, short, volsize, serial, signatures = targets[0]
+        self.assertEqual((vmid, bus, short), ("201", "scsi0", "vm-201-disk-0"))
+        self.assertEqual(volsize, 32 * 1024**3)
+        self.assertIsNone(serial)
+        self.assertEqual(signatures, {"partuuid-9"})
+
+    def test_guest_prober_not_called_without_pve_configs(self):
+        class prober:
+            @staticmethod
+            def probe_volumes(_targets):  # pragma: no cover - must not run
+                raise AssertionError("prober must not run without PVE configs")
+
+        arc_path, prefetch_path, kstat_root = self._kstats_dir()
+        sample = als.collect_alignment_sample(
+            zfs_repo=_FakeZfsRepo(),
+            disk_repo=_FakeDiskRepo(),
+            arcstats_path=arc_path,
+            zfetchstats_path=prefetch_path,
+            pve_conf_dir="/nonexistent-pve-dir",
+            kstat_dir=kstat_root,
+            node_config_data=SINGLE_NODE_CONFIG,
+            guest_prober=prober,
+        )
+        self.assertFalse(sample.pve_available)
+        self.assertEqual(sample.guest_fs, {})
+
     def test_iostat_r_command(self):
         _sample, run = self._collect()
         run.assert_called_once_with(
@@ -575,6 +775,7 @@ class TestCollectAlignmentSample(unittest.TestCase):
                 zfetchstats_path=os.path.join(tmp, "missing-fetch"),
                 pve_conf_dir="/nonexistent-pve-dir",
                 kstat_dir=os.path.join(tmp, "missing-kstat-dir"),
+                node_config_data=SINGLE_NODE_CONFIG,
             )
         self.assertFalse(sample.iostat_r_available)
         self.assertEqual(sample.histograms, {})

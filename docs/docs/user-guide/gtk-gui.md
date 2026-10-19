@@ -269,7 +269,11 @@ The sidebar exposes these pages, with the storage-infrastructure tabs
 
 The Dashboard provides an at-a-glance overview of ZFS health and active locks.
 It refreshes automatically every 30 seconds while visible, or manually via the
-**Refresh** action button.
+**Refresh** action button. The Recent Operations, Running Tasks, and Active
+Locks tables each scroll on their own: a table sizes to its content up to 20
+rows and grows its own vertical scrollbar beyond that (a horizontal one
+appears whenever the columns overflow the window), so a short list no longer
+leaves a tall empty window.
 
 !!! tip "Dashboard data during heavy load"
     Pool and iSCSI information comes from live `zpool`/`targetcli` commands with
@@ -1234,7 +1238,13 @@ refresh redraws rolling time-series charts. Charts render through
 matplotlib when that optional package is installed and through the
 built-in Cairo renderer otherwise, so the display updates dynamically
 either way (see the developer note on
-[GUI charting](../developer-guide/charting.md)).
+[GUI charting](../developer-guide/charting.md)). The Live Charts header
+names the active renderer, so a Cairo fallback is visible at a glance;
+its usual cause is the GUI running as root while matplotlib sits in a
+user's pip `--user` site — install the system package
+(`python3-matplotlib`) instead. Chart colours follow
+the GTK theme — background, text, grid, and series colours resolve from
+the active theme, with brighter series on dark themes.
 
 The tab hosts two views behind a **Live Charts / Blocksize Alignment** radio
 switcher below the refresh controls. **Live Charts** is the real-time monitor
@@ -1299,7 +1309,13 @@ context.
   same shape as the L2ARC table.
 
 Both device tables have user-resizable columns whose widths are
-retained across GUI restarts, like the tables on the other tabs.
+retained across GUI restarts, like the tables on the other tabs. Each
+sits in its own scrolled window: the vertical scrollbar stays at the
+table's right edge, a horizontal scrollbar appears whenever the columns
+overflow the window, and a table longer than twenty rows scrolls inside
+that fixed height instead of stretching the page. Spare width beyond
+the columns' widths goes to the Vdev column, so the right-most column
+always shows its true width and shrinks honestly when resized.
 
 Charts keep roughly 300 samples (about 25 minutes at the default 5 s
 interval) and auto-scale their Y axes. With matplotlib installed the
@@ -1361,24 +1377,41 @@ charts view:
   geometry (512e advanced-format disks are called out), each dataset's
   `recordsize` or `volblocksize` with its property source, and each
   `vm-<id>-disk-<n>` zvol's PVE disk-line options (`bus`, `discard`,
-  `iothread`, `secs=…`).
+  `iothread`, `secs=…`) plus the guest filesystems probed on that volume
+  (e.g. `ext4 4K on / · xfs 4K on /var`). Every column sorts (click a
+  header; text order), long cells ellipsize with the full text on hover,
+  and the table scrolls past 20 rows at its own fixed height. Like every
+  table on this tab it scrolls on its own — vertical scrollbar at the
+  table's right edge, horizontal scrollbar whenever the columns overflow
+  the window — and spare width beyond the columns' widths goes to one
+  wide text column per table (Object, Members, Finding, or Verdict), so
+  the right-most column keeps its true width and shrinks honestly when
+  resized.
 - **Blocksize ladder**: the same chain drawn visually — a log₂-scale
   ladder, one row per rung per pool (each distinct device physical
   sector, the pool's ashift block, each distinct
   `recordsize`/`volblocksize` with a ×count when several datasets share
-  it, and the VM guest sector), with a dashed reference line at each
+  it, the VM guest sector, and — when the guest agent answered — each
+  distinct guest filesystem blocksize), with a dashed reference line at each
   pool's ashift block. Misalignment reads at a glance: a rung that ends
   left of its pool's dashed line sits below the ashift block (padding /
   partial-block cost), a device rung that passes right of it means the
   ashift block is below the physical sector (read-modify-write), and
   colour carries the verdict — blue aligned, orange mismatched, grey
-  advisory or below its zvol's `volblocksize`. The ladder renders through
+  advisory or unresolved. Probed guest filesystem rungs judge against
+  their zvol's `volblocksize`: a guest filesystem block below the
+  volblock (the common 4K-under-16K shape) renders orange — every guest
+  block write becomes a partial volblock write. The ladder renders through
   matplotlib when that optional package is installed and through the
   built-in Cairo renderer otherwise (the same renderer choice as the
   live charts), and its inputs degrade per source exactly like the scan
   table above — a failed source simply drops its rungs, a pool with an
   unresolved ashift keeps its other rungs in grey without a reference
   line, and a wholesale pool failure shows the chart's own note instead.
+  The chart draws at the full page width — or wider when its labels and
+  legend need the room — and carries its own horizontal scrollbar
+  whenever the window is narrower than the chart, so the ladder always
+  renders at a readable size instead of being squeezed to fit.
 - **Pool topology**: each pool's vdev layout, one row per vdev group —
   its class (`data`, `special`, `log`, `cache`, `spare`), the group
   (`mirror-0`, `raidz2-0`, or a bare disk), the group type (`mirror`,
@@ -1405,7 +1438,11 @@ charts view:
   counters are unavailable (OpenZFS older than 2.2, or a non-Linux
   port), observed-size advice falls back to the per-pool histogram —
   findings then name whole pools, not datasets — and both the
-  availability note and a findings row say so. A dataset's survey
+  availability note and a findings row say so. Probed guest filesystems
+  add their own rule: a guest filesystem block below the zvol's
+  `volblocksize` warns per volume, because every guest block write
+  lands inside one volblock (read-modify-write on the zvol) and
+  `volblocksize` is fixed at creation. A dataset's survey
   declaration, when one exists, is cited in the message so a stale
   answer is visible at a glance.
 - **Workload (since boot)**: per pool, the classifier verdict
@@ -1416,10 +1453,25 @@ charts view:
 Like the charts view, each data source degrades on its own with a note
 naming what is missing: request-size histograms, per-dataset I/O
 counters, ARC/prefetcher kstats, zfs/zpool reads, and PVE VM configs.
-The last one matters on two-node
-installs: the GUI runs on the storage node, but `/etc/pve/qemu-server`
-lives on the compute node, so VM-layer options are only read on
-single-node installs and otherwise noted as unavailable.
+The PVE configs are read from `/etc/pve/qemu-server` when the GUI host
+runs PVE, and otherwise fetched from the compute node over ssh (the
+same read-only channel the dashboard's version probes use), so
+VM-layer options work on two-node installs too; the note appears only
+when both reads fail. Guest filesystem probing needs the QEMU guest
+agent inside each VM (installed, enabled with `agent: 1`, and the VM
+running). Each volume's guest disk is identified by a deterministic
+chain: a pinned `serial=` on the PVE disk line first; otherwise the
+UUID/PARTUUID signatures of the zvol's own partitions (read on the
+storage host — filesystem UUIDs, GPT partition GUIDs, and LVM physical
+volume UUIDs all cross the VM boundary unchanged) intersected with the
+guest device tree; size-plus-bus-position only as the last resort for
+blank, signature-less zvols. Cloned volumes share signatures — when the
+intersection is not unique the volume is reported as ambiguous rather
+than guessed. LVM/RAID stacks inside the guest attribute through the
+device tree. Volumes that cannot be probed — agent absent, VM stopped,
+disk not matched, clone ambiguity, non-Linux guests — are named with
+their reason in the note while the other volumes keep their probed
+rows and rungs.
 
 Refreshes keep the page steady: the tables update their rows in place
 (a finding keeps its position even while the numbers inside it drift),

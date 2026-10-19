@@ -406,6 +406,35 @@ class TestDatasetBlockProperties(unittest.TestCase):
             ],
         )
 
+    def test_command_queries_recordsize_volblocksize_and_volsize(self):
+        # The property list is the contract the guest-probe chain depends
+        # on (volsize feeds tier-3 matching); lock the argv shape.
+        argv_seen = []
+
+        def fake_run(argv, **_kwargs):
+            argv_seen.append(argv)
+            return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+        repo = ZfsRepository(sudo=False)
+        repo._run = fake_run
+        repo.dataset_block_properties("fivebays")
+        self.assertEqual(len(argv_seen), 1)
+        self.assertEqual(
+            argv_seen[0],
+            [
+                "zfs",
+                "get",
+                "-H",
+                "-r",
+                "-o",
+                "name,property,value,source",
+                "-t",
+                "filesystem,volume",
+                "recordsize,volblocksize,volsize",
+                "fivebays",
+            ],
+        )
+
     def test_ignores_blank_and_short_lines(self):
         stdout = "\nfivebays\trecordsize\t128K\nnot-enough-columns\n"
         rows = self._repo(stdout).dataset_block_properties("fivebays")

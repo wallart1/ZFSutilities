@@ -711,5 +711,47 @@ class TestSectionHeaderAndNoteMarkup(unittest.TestCase):
         label.show.assert_called_once_with()
 
 
+class TestTreeviewRowHeight(unittest.TestCase):
+    """treeview_row_height: theme metrics when resolvable, fallback when not.
+
+    The capped table windows size their row budget from this answer, so
+    both halves matter: the computed height (ascent + descent scaled by
+    Pango, plus the GTK3 vertical separator) and the conventional
+    fallback for unresolvable metrics.
+    """
+
+    def test_computes_from_pango_metrics(self):
+        gui_helpers = _import_gui_helpers()
+        view = MagicMock()
+        metrics = view.get_pango_context.return_value.get_metrics.return_value
+        metrics.get_ascent.return_value = 11000
+        metrics.get_descent.return_value = 2200
+        view.style_get_property.return_value = 6
+        with patch.object(gui_helpers.Pango, "SCALE", 1024):
+            height = gui_helpers.treeview_row_height(view)
+        self.assertEqual(height, (11000 + 2200) // 1024 + 6)
+
+    def test_falls_back_when_metrics_are_not_numeric(self):
+        gui_helpers = _import_gui_helpers()
+        view = MagicMock()
+        # Unconfigured mocks: ascent/descent are MagicMocks, so the
+        # arithmetic raises and the answer is the conventional fallback.
+        view.style_get_property.return_value = 6
+        self.assertEqual(
+            gui_helpers.treeview_row_height(view), gui_helpers.TREEVIEW_ROW_HEIGHT_FALLBACK
+        )
+
+    def test_falls_back_when_height_is_not_positive(self):
+        gui_helpers = _import_gui_helpers()
+        view = MagicMock()
+        metrics = view.get_pango_context.return_value.get_metrics.return_value
+        metrics.get_ascent.return_value = 0
+        metrics.get_descent.return_value = 0
+        view.style_get_property.return_value = 0
+        with patch.object(gui_helpers.Pango, "SCALE", 1024):
+            height = gui_helpers.treeview_row_height(view)
+        self.assertEqual(height, gui_helpers.TREEVIEW_ROW_HEIGHT_FALLBACK)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -17,7 +17,7 @@ gi.require_version("Gtk", "3.0")
 from backup_history import load_history
 from config_core import get_dashboard_config, save_dashboard_config
 from gi.repository import GLib, Gtk
-from gui_helpers import configure_treeview_column, set_monospace_font
+from gui_helpers import capped_treeview_scroll, configure_treeview_column, set_monospace_font
 from log_index import LogIndex
 from logging_config import log_msg
 from logs_page import select_log_by_path
@@ -981,6 +981,14 @@ def create_dashboard_page(app):
     box.set_margin_top(15)
     box.set_margin_bottom(15)
     scrolled.add(box)
+    # The page viewport must size its content by NATURAL height: the
+    # section tables sit in their own capped scrolled windows whose
+    # minimum heights are tiny, and the default MINIMUM policy would
+    # clamp the page box to the window height and crush every table
+    # window toward that minimum (memory-page idiom).
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
 
     # Title
     title = Gtk.Label()
@@ -1082,10 +1090,7 @@ def create_dashboard_page(app):
         app.dashboard_ops_view.append_column(col)
     app._ui_state.bind_treeview(app.dashboard_ops_view, "dashboard_ops_view")
 
-    ops_scrolled = Gtk.ScrolledWindow()
-    ops_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    ops_scrolled.set_min_content_height(180)
-    ops_scrolled.add(app.dashboard_ops_view)
+    ops_scrolled = capped_treeview_scroll(app.dashboard_ops_view)
 
     ops_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     ops_box.set_margin_start(10)
@@ -1118,10 +1123,7 @@ def create_dashboard_page(app):
 
     app.enable_treeview_copy(app.dashboard_tasks_view)
 
-    tasks_scrolled = Gtk.ScrolledWindow()
-    tasks_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    tasks_scrolled.set_min_content_height(120)
-    tasks_scrolled.add(app.dashboard_tasks_view)
+    tasks_scrolled = capped_treeview_scroll(app.dashboard_tasks_view)
 
     tasks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     tasks_box.set_margin_start(10)
@@ -1159,10 +1161,7 @@ def create_dashboard_page(app):
 
     app.enable_treeview_copy(app.dashboard_locks_view)
 
-    locks_scrolled = Gtk.ScrolledWindow()
-    locks_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    locks_scrolled.set_min_content_height(120)
-    locks_scrolled.add(app.dashboard_locks_view)
+    locks_scrolled = capped_treeview_scroll(app.dashboard_locks_view)
 
     locks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     locks_box.set_margin_start(10)

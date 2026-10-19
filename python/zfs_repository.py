@@ -136,11 +136,11 @@ class HoldRow:
 class DatasetBlockRow:
     """One line from
     `zfs get -H -r -o name,property,value,source -t filesystem,volume
-    recordsize,volblocksize <pool>`.
+    recordsize,volblocksize,volsize <pool>`.
     """
 
     name: str
-    prop: str  # "recordsize" | "volblocksize"
+    prop: str  # "recordsize" | "volblocksize" | "volsize"
     value: str
     source: str
 
@@ -1287,13 +1287,13 @@ class ZfsRepository:
     def dataset_block_properties(
         self, pool: str, timeout: int | None = None
     ) -> list[DatasetBlockRow]:
-        """Return per-dataset recordsize/volblocksize rows for *pool*.
+        """Return per-dataset recordsize/volblocksize/volsize rows for *pool*.
 
         Runs ``zfs get -H -r -o name,property,value,source -t
-        filesystem,volume recordsize,volblocksize <pool>`` — one row per
-        dataset per property, including the pool root dataset. Properties
+        filesystem,volume recordsize,volblocksize,volsize <pool>`` — one row
+        per dataset per property, including the pool root dataset. Properties
         that do not apply to a dataset report value ``"-"`` (recordsize on
-        volumes, volblocksize on filesystems). Raises
+        volumes, volblocksize/volsize on filesystems). Raises
         ``subprocess.CalledProcessError`` on command failure, matching
         ``get_properties``.
         """
@@ -1306,7 +1306,7 @@ class ZfsRepository:
                 "name,property,value,source",
                 "-t",
                 "filesystem,volume",
-                "recordsize,volblocksize",
+                "recordsize,volblocksize,volsize",
                 pool,
             ),
             timeout=timeout,

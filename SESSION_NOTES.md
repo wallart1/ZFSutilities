@@ -17,6 +17,18 @@ via `git log`.)
 
 ## Persistent gotchas (not documented in docs/)
 
+- `source_helper` scoping law (vm-205 incident, 2026-10-16): bashinit's
+  `source_helper` is a function, so a library sourced through it runs inside
+  the helper's frame — every top-level `declare` (incl. `declare -A` maps
+  declared by a sourced node.conf) becomes function-local and **vanishes when
+  source_helper returns**, while functions and plain assignments survive
+  globally. Any library state that must outlive the source needs `declare -g`
+  / `-gA` (now done in node-lib, iscsi-lib, zfslockmanager — keep it that
+  way for future libs). Symptom signature: a lookup helper works when its
+  orchestrator sourced the lib at top level (storage-host runs inherit the
+  populated globals; the `declare -f` guards skip source_helper) but returns
+  empty-map failures only in ssh-shipped payloads running in fresh shells.
+
 - Strict-mode (`set -euo pipefail`) flip idioms (2026-10-16 wrap-up, 13
   orchestrators migrated): (1) a function whose last statement is
   `[[ cond ]] && assign` returns 1 when the condition is false — close
@@ -107,6 +119,94 @@ via `git log`.)
 
 ## Active / parked threads
 
+- **Performance → Blocksize Alignment polish + guest-FS probing
+  (2026-10-16) — implemented, uncommitted.** User-requested six-item
+  pass over the Alignment view: (1) all four tables ellipsize with
+  full-text cell tooltips (schedule-page query-tooltip idiom — wrapping
+  was rejected because row-height churn breaks the scroll-stability
+  design); (2) every table sits in its own scrolled window capped at
+  20 rows (height from theme font metrics, `_ROW_HEIGHT_FALLBACK` when
+  unresolvable); (3) scan-table columns sortable (hidden identity key
+  never; `_reconcile_rows` gained a sorted-store branch — PyGObject's
+  `get_sort_column_id()` answers a (column, order) TUPLE, the
+  isinstance(tuple) check keeps MagicMock/fake stores on the ordered
+  path); (4) PVE configs read from the compute node over
+  `ssh root@<compute>` when local /etc/pve is empty (marker-delimited
+  dump; `read_pve_vm_configs`, `fetch_pve_vm_options`); (5) NEW
+  `python/alignment_guestfs.py`: guest FS blocksizes probed via
+  `qm guest ping` + `qm guest exec` (lsblk/mounts/stat -f %S), disk↔zvol
+  matched by volsize equality with the bus-letter tiebreak, TTL cache
+  (600 s) keyed (vmid, short, volsize) held on the app — ladder gains
+  `vm fs` rungs judged against volblocksize (worst-state per rung),
+  new WARN finding `vm-guest-fs-below-volblock`, VM chain rows list
+  probed filesystems, `DatasetBlocks.volsize` added (zfs get now
+  includes volsize); (6) ladder draws full-page-width but its scrolled
+  viewport caps at 50% (`set_draw_width` on both renderers +
+  `max_content_width` tracked from the box's size-allocate). Chart
+  theming: `charting.chart_palette(widget)` resolves theme_bg/fg from
+  the style context (luminance switch → bright series on dark;
+  `LIGHT_PALETTE` fallback when unresolvable — matplotlib renderers
+  build canvas-first so artists are coloured once at build and
+  re-applied on style-updated; Cairo renderers resolve per draw).
+  `VMOption.agent` records the config's `agent:` line. Docs updated:
+  gtk-gui.md (Alignment View + Performance intro), charting.md
+  (palette + draw-width section), data-structures.md, python-modules.md
+  (+`alignment_guestfs.py` section). Guest-probe limits (documented):
+  needs qga in guest, VM running; LVM/RAID and Windows guests degrade
+  with reasons. Not done from the earlier DENIED polish draft (not in
+  this request): chart font size to GUI base size; ladder bare "×N"
+  label rewrite.
+
+  FOLLOW-UP (2026-10-17, approved): the volsize+bus match was replaced
+  by a deterministic 3-tier chain in `match_volumes` — (1) pinned
+  `serial=` from the PVE disk line; (2) UUID/PARTUUID signature
+  intersection: storage side `lsblk /dev/zvol/<pool>/<ds>` (verified on
+  stewie — zvol partitions + UUID/PARTUUIDs visible as non-root via
+  sysfs/udev; blank zvols have no signature; GPT GUIDs exist even
+  unformatted; LVM PV UUIDs count) vs guest `lsblk -bJ` tree (one
+  round-trip replaced lsblk+cat-/proc/mounts; dm/LVM mounts attribute
+  through children); (3) size+bus last resort. Clone-shared signatures
+  are REFUSED (device evidenced by 2 volumes → neither; same for tier-3
+  device sharing) — red-proofed. Live tweety kvm /proc cmdlines show NO
+  serial= on data drives (PVE 9 blockdev device_id only) so guest
+  serials are per-process counters — tier 1 fires only on operator-
+  pinned serial=. matplotlib: you were getting Cairo because the GUI
+  runs as root while 3.11.2 sits in dan's pip --user site; now
+  check-prerequisites warns (optional, python3-matplotlib hint, warn
+  never fail) and the Live Charts header names the active renderer
+  (`charting.renderer_label()`). Prerequisites.md updated (system
+  package supersedes the pip --user note).
+- **Alignment realized-check display flip (2026-10-16) — implemented,
+  uncommitted.** The realized-window check
+  (tests/python/alignment_realized_check.py) now starts its private Xvfb
+  FIRST, falling back to the ambient display only when Xvfb cannot start
+  or GTK cannot bind to it (was ambient-first, which flashed a real GTK
+  window on the operator's desktop during full-suite runs). A
+  `REALIZED-DISPLAY:` stdout line names the display used;
+  test_alignment_realized.py asserts it stays. `_gtk_init_ok` removed
+  (dead after the flip — the ambient path must go through `_rebind_gtk`
+  anyway, since a failed Xvfb bind leaves PyGObject's initialized cache
+  stale). testing.md's suite row updated. All three branches verified
+  (Xvfb-first live run on :92, no-Xvfb ambient fallback, rebind-failure
+  restore-and-fallback via stubs).
+
+- **unarchive-vm 205 Step-2 fix (2026-10-16) — implemented, uncommitted.**
+  `sudo unarchive-vm 205` on tweety died at "Cannot map pool NVME1 to
+  target" although stewie's node.conf has had `[NVME1]=nvme1` since
+  2026-04-28. Root cause: the Step-2 ssh payload loads node-lib via
+  `source_helper` in a fresh remote shell; the bare `declare -A
+  pool_target` was function-local to source_helper's frame and vanished on
+  return, emptying the map under `pool_to_target` (gotcha above). Fix:
+  `declare -gA` in both node-lib branches + regression test in
+  tests/test-node-lib (child-bash source_helper load; red-proofed against
+  the reverted lib). Verified on stewie: the
+  `iqn.2026-02.local.stewie:nvme1` target exists and no `vm-205-*`
+  backstores/LUNs remain, so the post-deploy rerun takes the create path
+  on both targets (nvme1 + threeamigos) and needs no enroll-iscsi-pool.
+  Remaining: release, deploy to both nodes, rerun `sudo unarchive-vm 205`
+  on tweety (Step 1 will skip all three zvols — RESTORED_AS markers
+  present; Steps 2-4 rebuild iSCSI, write 205.conf, rescan).
+
 - **Zvol-snapshot-mount plan v3 (2026-10-01) — parked, NOT approved.** Plan
   written next to v1/v2 in
   `/NFS1/dan(NFS1)/zfsutilities-plan/Plans in abeyance/Zvol-snapshot-mount/`.
@@ -147,3 +247,86 @@ via `git log`.)
   {test-startdocserver, test-deploy-version, test-installer-checks,
   test-check-prerequisites, python/test_support.py}. Holding back: still
   0.0.x with releases every few days — expect breaking changes before 1.0.
+
+- **Installer execution harness (2026-10-17, cycle wrap-up step 1).**
+  Resolved the installer coverage-gap PREEXISTING entry: new
+  tests/test-installer-flows executes install-single-node and
+  install-two-node end to end as a non-root user — mirror tree redirects
+  script_dir at stub check-prerequisites/deploy-version/switch-version/
+  setup-iscsi-targets (repo lib/ and share/ stay real), ssh/scp/systemctl/
+  sudo/targetcli/findmnt/hostname/mkdocs are recorded shell functions,
+  answers are piped stdin, the retention helper runs for real against a
+  fixture config. Three small mainline enablers, all following existing
+  architecture: INSTALL_SINGLE_NODE_TEST_NO_ROOT /
+  INSTALL_TWO_NODE_TEST_NO_ROOT no-root hatches (DEPLOY_VERSION_TEST_NO_ROOT
+  precedent) and ZFSUTILITIES_ETC_PREFIX now also prefixing the two-node
+  systemd drop-in + obsolete-artifact paths (the knob
+  check_partial_uninstall already reads). Kept-config regression fence is
+  red-proofed (bug reintroduced → suite fails; restored byte-identical).
+  Harness gotchas learned: the installer re-sources bashinit, which
+  redefines ask_yn as the real prompt — its answer must come through the
+  piped stdin, not the test-lib mock; and test-lib's zpool/ssh mock state
+  resets when re-sourced inside the runner subshell.
+
+- **Cycle wrap-up executed 2026-10-17 (7 steps, codebase FROZEN).**
+  Step 1 resolved the installer coverage-gap entry (see the harness note
+  above); Zensical recheck recorded (0.0.71, still no 1.x — user holds
+  stand); infra-vdev planning stays in abeyance per the user decision.
+  Steps 2-3: ruff check/format, shellcheck (full set), and policy review
+  all green; one test gap fenced (dataset_block_properties argv now
+  asserted incl. volsize). Step 5: testing.md gained the
+  test-installer-flows row plus the previously undocumented
+  test-installer-structure and test-iscsi-fresh-install-guards rows;
+  commands.md documents the installer no-root hatches and the
+  ZFSUTILITIES_ETC_PREFIX fixture knob; docs-integrity green; mkdocs
+  build clean (only the standing Material/MkDocs-2.0 banner). Step 6:
+  full suite without soaks green. PREEXISTING.md: 2 entries remain.
+
+- **Second wrap-up pass 2026-10-17 (after the scroll/resize/ladder
+  changeset; codebase FROZEN at this point).** Step 1 resolved the
+  dashboard inner-table PREEXISTING entry: the three TreeView windows
+  (Recent Operations / Running Tasks / Active Locks) now use the shared
+  gui_helpers.capped_treeview_scroll plus the NATURAL-vscroll viewport
+  guard on the dashboard page window (memory-page idiom); regression
+  test red-proofed; the entry's "Config Preview" was the Configuration
+  grid, which already had propagate set. Zensical rechecked again
+  (0.0.71, unchanged). Steps 2-3: ruff/shellcheck green; two
+  alignment_guestfs regexes given the house Regex/Purpose/Group comment
+  format; treeview_row_height gained direct tests (computed + both
+  fallback paths). Step 5: testing.md gained the missing
+  test_alignment_guestfs row and refreshed six stale suite rows;
+  gtk-gui.md Dashboard intro documents the capped windows; docs
+  integrity + anchor audit green against a fresh mkdocs build. Step 6:
+  full suite without soaks green (one deliberate non-root skip).
+  PREEXISTING.md: 2 entries remain (Zensical wait, infra-vdev planning —
+  both user-held).
+
+- **Performance page scroll/resize/ladder fixes (2026-10-17).** All four
+  user reports root-caused empirically (GTK 3.24.41 under Xvfb, real
+  page build): (1) tables showed 2-2.5 rows because the inner
+  ScrolledWindows never set propagate_natural_height (natural height =
+  min_content_height 60) AND the page viewport's default MINIMUM
+  vscroll-policy clamped the page box to the window height, making the
+  box crush every table equally; fix = shared
+  gui_helpers.capped_treeview_scroll (propagate + 20-row cap with a
+  one-row allowance for the hscrollbar) + vscroll_policy NATURAL on
+  performance_scrolled's viewport. (2) far-right column shrinks looked
+  ineffective because GTK re-expands the LAST column to fill leftover
+  width; each table now sets expand on one non-last column (Object /
+  Members / Finding / Verdict / Vdev) plus sane default widths and
+  min_width 60 (alignment columns previously defaulted to FIXED 20px).
+  (3) the ladder had no horizontal scrollbar because the canvas's width
+  request pinned the scroll's minimum to the draw width; the scroll now
+  keeps min_content_width 100 + max_content_width tracking the page
+  width, and the draw width is floored at ladder_minimum_width (new
+  charting vocabulary: gutter + plot floor + legend) so narrow windows
+  scroll over a readable chart; the retired design capped the viewport
+  at half the page width. MatplotlibBlocksizeLadder.set_draw_width no
+  longer resets the height request to -1 (that collapsed the canvas to
+  1px between refreshes). (4) ladder text bumped ~1-1.5pt on matplotlib
+  (title 10, ticks 9, row labels 9.5, legend 9) and 9→11px on Cairo,
+  LADDER_ROW_HEIGHT 19→22. Charts-view L2ARC/SLOG tables wrapped in the
+  same capped windows. Probe scratch files deleted after verification
+  (verified: chain table 20.0 visible rows, ladder hscroll 870→1110,
+  page vertical-only). New PREEXISTING entry: dashboard inner table
+  windows have the same propagate collapse.

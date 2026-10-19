@@ -7,8 +7,9 @@ jump-on-refresh defect was measured — while the child-process boundary
 keeps the pytest interpreter's mock-bound GUI module caches and the
 matplotlib backend selection untouched for the other suites.
 
-The child needs a display: it uses the ambient one when Gtk can open it
-and otherwise starts a private Xvfb, skipping when neither is possible.
+The child needs a display: it starts a private Xvfb first (so no window
+flashes on the operator's desktop) and falls back to the ambient display
+when Xvfb cannot start, skipping when neither is possible.
 The suite is listed in tests/requirements.manifest (capability ``gi``).
 """
 
@@ -45,6 +46,8 @@ class TestAlignmentScrollRealized(unittest.TestCase):
             self.skipTest(output.strip() or "realized check skipped (no display)")
         self.assertEqual(proc.returncode, 0, f"realized check failed:\n{output}")
         self.assertIn("ALIGNMENT-REALIZED-OK", proc.stdout)
+        # Names which display was used (private Xvfb vs ambient fallback).
+        self.assertIn("REALIZED-DISPLAY:", proc.stdout)
         self.assertIn("PASS findings change", proc.stdout)
         self.assertIn("PASS per-pool failure", proc.stdout)
 

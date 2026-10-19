@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.126.1
+
+*Released 2026-10-19*
+
+### Added
+
+- **Guest filesystem blocksize probing** in the Alignment view — the new
+  `alignment_guestfs.py` asks each VM through the QEMU guest agent
+  (`qm guest ping`/`qm guest exec`) for its filesystem block sizes and
+  the zvol↔guest-disk mapping, resolved by a deterministic chain: a
+  pinned `serial=` on the PVE disk line, else the UUID/PARTUUID
+  signature intersection between the zvol's own partitions and the guest
+  device tree (clone-shared signatures are refused, not guessed), else
+  size+bus position for blank zvols. Results cache per volume with a
+  TTL; every failure degrades per volume with a short reason. A guest
+  filesystem block below its zvol's `volblocksize` is a new WARN
+  finding, probed filesystems join the ladder as `vm fs` rungs and the
+  scan table's VM rows, and `volsize` joins the dataset block-property
+  read.
+- **PVE VM configs from the compute node** — on two-node installs the
+  Alignment view reads `/etc/pve/qemu-server` locally when present and
+  otherwise fetches it from the compute node over the same read-only
+  ssh channel the dashboard uses, so VM-layer options work on
+  two-node installs too; the unavailability note appears only when both
+  reads fail.
+- **Installer execution harness** — `tests/test-installer-flows` runs
+  `install-single-node` and `install-two-node` end to end as a non-root
+  user against a stubbed mirror tree with answers piped on stdin,
+  fencing the interactive flows (including the keep-existing-config
+  path); the installers gain `INSTALL_*_TEST_NO_ROOT` hatches and the
+  `ZFSUTILITIES_ETC_PREFIX` fixture knob.
+
+### Changed
+
+- **Theme-aware charts** — every chart (live rolling charts and both
+  blocksize-ladder renderers) resolves its colours from the GTK theme
+  through `charting.chart_palette`, so charts sit on the page's own
+  background with brighter series colours on dark themes; the Live
+  Charts header names the active renderer (matplotlib or the Cairo
+  fallback), and `check-prerequisites` warns with the system-package
+  hint when matplotlib is not importable by the user the GUI runs as.
+- **Self-scrolling GUI tables** — every Performance-page table (scan,
+  ladder, topology, findings, workload, L2ARC, SLOG) and the Dashboard's
+  Recent Operations / Running Tasks / Active Locks tables sit in their
+  own capped scrolled windows: a table shows its content up to 20 rows
+  and scrolls beyond, with its own vertical and horizontal scrollbars,
+  so short lists no longer leave tall empty windows and long lists no
+  longer stretch the page. Alignment scan columns sort on click, cells
+  ellipsize with the full text on hover, and one non-last column per
+  table absorbs spare width so the far-right column keeps its true
+  width.
+- **Blocksize ladder draw width** — the ladder draws at the full page
+  width, never below a content-derived readable minimum, behind its own
+  horizontal scrollbar; text sizes were bumped for readability on both
+  renderers.
+- **`unarchive-vm` Step-2 fix** — `node-lib.sh` declares its
+  `pool_target` map with `declare -gA`, so the Step-2 ssh payload's
+  `source_helper` load keeps the pool→target mapping (the vm-205
+  "Cannot map pool NVME1 to target" failure).
+- **Realized-check display flip** — `alignment_realized_check.py`
+  starts a private Xvfb first so no GTK window flashes on the operator's
+  desktop during full-suite runs, falling back to the ambient display
+  only when Xvfb cannot start; a `REALIZED-DISPLAY:` line names the
+  display used.
+
 ## 0.126.0
 
 *Released 2026-10-16*

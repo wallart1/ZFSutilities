@@ -1,0 +1,981 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-installer-flows — Execution harness for the installers' interactive
+# flows (install-single-node / install-two-node).
+#
+# The guard-level suites (test-installer-checks / -structure / -retention,
+# test-iscsi-fresh-install-guards) never execute the installers, so
+# shell-variable flow bugs were invisible to them: install-two-node's
+# keep-existing-config path shipped broken for years because nothing ran it.
+# This suite executes both installers end to end as a non-root user:
+#   - a mirror tree redirects script_dir at stub check-prerequisites /
+#     deploy-version / switch-version / setup-iscsi-targets while the
+#     libraries and templates stay the repo copies;
+#   - ssh/scp/systemctl/sudo/targetcli/findmnt/hostname/mkdocs are shell
+#     functions, recorded into a capture directory;
+#   - answers are piped in on stdin (read -rp prompts consume them in order);
+#   - the retention helper runs for real against a fixture config path.
+# Unhandled remote commands fail loudly (SSH-UNHANDLED) so a new probe shape
+# cannot pass silently.
+
+# shellcheck source=tests/test-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Mirror tree: script_dir points here, so the installers find the stub
+# external commands; lib/ and share/ stay the repository copies.
+# ------------------------------------------------------------------
+
+build_mirror() {
+    local mirror="$1"
+    mkdir -p "$mirror/bin"
+    ln -s "$mydir/bin/install-single-node" "$mirror/bin/install-single-node"
+    ln -s "$mydir/bin/install-two-node" "$mirror/bin/install-two-node"
+    ln -s "$mydir/lib" "$mirror/lib"
+    ln -s "$mydir/share" "$mirror/share"
+    printf '9.9.9\n' > "$mirror/VERSION"
+    printf '#!/usr/bin/bash\nexit 0\n' > "$mirror/bin/check-prerequisites"
+    cat > "$mirror/bin/deploy-version" <<'STUB'
+#!/usr/bin/bash
+printf 'DEPLOY:%s\n' "$*" >> "${_capture_dir:?}/deploy"
+exit 0
+STUB
+    cat > "$mirror/bin/switch-version" <<'STUB'
+#!/usr/bin/bash
+printf 'SWITCH:%s\n' "$*" >> "${_capture_dir:?}/switch"
+exit 0
+STUB
+    cat > "$mirror/bin/setup-iscsi-targets" <<'STUB'
+#!/usr/bin/bash
+printf 'SETUP-TARGETS:%s\n' "$*" >> "${_capture_dir:?}/setup-targets"
+exit 0
+STUB
+    chmod +x "$mirror/bin/check-prerequisites" "$mirror/bin/deploy-version" \
+        "$mirror/bin/switch-version" "$mirror/bin/setup-iscsi-targets"
+}
+
+# ------------------------------------------------------------------
+# Runner: execute one installer in a mock subshell with piped answers.
+#   $1  "single" | "two"
+#   $2  per-test fixture directory (fresh for every test)
+# Capture files are appended to the returned output so assertions can grep
+# one stream.
+# ------------------------------------------------------------------
+
+run_installer() {
+    local which="$1"
+    local fixture="$2"
+    local stdin_input="${_mock_stdin:-}"
+    local capture_dir="$fixture/capture"
+    mkdir -p "$capture_dir" "$fixture/etc-zfs" "$fixture/state" \
+        "$fixture/run" "$fixture/etc-prefix"
+    (
+        source "$mydir/tests/test-lib.sh"
+        setup_test_env
+        build_mirror "$fixture/mirror"
+
+        export _capture_dir="$capture_dir"
+        export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$fixture/etc-zfs"
+        export ZFSUTILITIES_STATE_DIR="$fixture/state"
+        export ZFSUTILITIES_RUN_DIR="$fixture/run"
+        export ZFSUTILITIES_ETC_PREFIX="$fixture/etc-prefix"
+        export ZFSUTILITIES_VERSION_BASE="$fixture/versions-base"
+        export ZFSCONFIG_PATH="$fixture/state/config.json"
+        export ZFSUTILITIES_PYTHON_SRC="$mydir/python"
+        export ZFSUTILITIES_LEGACY_NODE_CONF="$fixture/legacy-node.conf"
+        export ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$fixture/legacy-two.conf"
+        if [[ "$which" == "single" ]]; then
+            export INSTALL_SINGLE_NODE_TEST_NO_ROOT=1
+        else
+            export INSTALL_TWO_NODE_TEST_NO_ROOT=1
+            _mock_zpool_list=$'threeamigos\nNVME1'
+        fi
+
+        # Root filesystem type and hostname, stable per test.
+        findmnt() {
+            if [[ "$1" == "-n" ]]; then
+                printf '%s\n' "${_mock_root_fstype:-ext4}"
+                return 0
+            fi
+            command findmnt "$@"
+        }
+        hostname() {
+            if [[ "$1" == "-s" ]]; then
+                printf '%s\n' "${_mock_hostname:-zteststor}"
+                return 0
+            fi
+            command hostname "$@"
+        }
+
+        # ensure_doc_server short-circuit: mkdocs "installed" and the
+        # material import answered by the python3 wrapper below.
+        mkdocs() { return 0; }
+        python3() {
+            if [[ "${1:-}" == "-c" && "${2:-}" == "import material" ]]; then
+                return 0
+            fi
+            command python3 "$@"
+        }
+
+        # Summary "Installed versions" listing.
+        sudo() {
+            printf 'SUDO:%s\n' "$*" >> "$_capture_dir/sudo"
+            return 0
+        }
+
+        # LIO stack presence probes (command -v sees the function).
+        targetcli() {
+            printf 'TARGETCLI:%s\n' "$*" >> "$_capture_dir/targetcli"
+            return 0
+        }
+        systemctl() {
+            printf 'SYSTEMCTL:%s\n' "$*" >> "$_capture_dir/systemctl"
+            return 0
+        }
+
+        # Remote compute-host channel, matched on the full argument string
+        # (some calls carry the version as a trailing argument after the
+        # remote command). Existence probes are answered from mock state;
+        # anything unrecognized fails loudly so a new probe shape cannot
+        # pass silently.
+        ssh() {
+            local all="$*"
+            printf 'SSH:%s\n' "$all" >> "$_capture_dir/ssh"
+            if [[ "${_mock_ssh_fail:-}" == "1" ]] \
+                && [[ "$all" == *" root@ztestcomp true" ]]; then
+                return 1
+            fi
+            case "$all" in
+                *"ssh -o"*"root@zteststor true") return 0 ;;
+                *" root@ztestcomp true") return 0 ;;
+                *"command -v iscsiadm"*) return 0 ;;
+                *"iscsid.socket"*) return 0 ;;
+                *"systemctl restart pvestatd"*) return 0 ;;
+                *"sed -i "*) return "${_mock_patch_rc:-0}" ;;
+                *"[[ ! -f "*]])
+                    if [[ "$all" == *ISCSIPlugin.pm* ]]; then
+                        if [[ "${_mock_pve_present:-}" == "1" ]]; then
+                            return 0
+                        fi
+                        return 1
+                    fi
+                    if [[ "$all" == *node.conf* ]]; then
+                        # "[[ ! -f <node.conf> ]]": report present when asked.
+                        if [[ "${_mock_remote_node_conf_present:-}" == "1" ]]; then
+                            return 1
+                        fi
+                        return 0
+                    fi
+                    return 0
+                    ;;
+                *"[[ -f "*]])
+                    # PVE plugin existence probe (no negation)
+                    if [[ "${_mock_pve_present:-}" == "1" ]]; then
+                        return 0
+                    fi
+                    return 1
+                    ;;
+                *"installer_retention.py"*) return 0 ;;
+                *"switch-version"*) return 0 ;;
+                *"install -d "*) return 0 ;;
+                *"chmod 0644 "*) return 0 ;;
+                *"apt-get"*) return 0 ;;
+                *)
+                    printf 'SSH-UNHANDLED:%s\n' "$all" >> "$_capture_dir/ssh"
+                    return 1
+                    ;;
+            esac
+        }
+        scp() {
+            printf 'SCP:%s\n' "$*" >> "$_capture_dir/scp"
+            return 0
+        }
+
+        source "$fixture/mirror/bin/install-${which}-node"
+    ) <<< "$stdin_input" 2>&1
+    local rc=$?
+    cat "$capture_dir/deploy" 2>/dev/null || true
+    cat "$capture_dir/switch" 2>/dev/null || true
+    cat "$capture_dir/setup-targets" 2>/dev/null || true
+    cat "$capture_dir/ssh" 2>/dev/null || true
+    cat "$capture_dir/scp" 2>/dev/null || true
+    cat "$capture_dir/systemctl" 2>/dev/null || true
+    cat "$capture_dir/sudo" 2>/dev/null || true
+    return $rc
+}
+
+reset_installer_mocks() {
+    unset _mock_stdin _mock_root_fstype _mock_hostname _mock_ssh_fail \
+        _mock_patch_rc _mock_pve_present _mock_remote_node_conf_present
+}
+
+node_conf_path() {
+    printf '%s/etc-zfs/node.conf\n' "$1"
+}
+
+write_two_node_conf() {
+    local fixture="$1"
+    {
+        echo 'NODE_MODE="two-node"'
+        echo 'STORAGE_HOST="zteststor"'
+        echo 'COMPUTE_HOST="ztestcomp"'
+        echo 'STORAGE_IP="192.168.100.1"'
+        echo 'IQN_PREFIX="iqn.2026-01.local.zteststor"'
+        echo 'EXPECTED_ISCSI_DEVICES="6"'
+        echo 'declare -A POOL_TARGET=('
+        echo '    [threeamigos]="threeamigos"'
+        echo '    [NVME1]="nvme1"'
+        echo ')'
+    } > "$(node_conf_path "$fixture")"
+}
+
+# ------------------------------------------------------------------
+# install-single-node flows
+# ------------------------------------------------------------------
+
+test_single_node_fresh_install() {
+    reset_installer_mocks
+    test_start "single-node: fresh install generates config, deploys, activates"
+
+    local fixture="$_mock_zfs_state_dir/single-fresh"
+    _mock_stdin=$'\nn'
+    local out rc
+    out=$(run_installer single "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    local conf
+    conf="$(node_conf_path "$fixture")"
+    if [[ ! -f "$conf" ]]; then
+        test_fail "node.conf not written: $conf; output:\n$out"
+        return
+    fi
+    if ! grep -q '^NODE_MODE="single-node"$' "$conf" \
+        || ! grep -q '^THIS_HOST="zteststor"$' "$conf" \
+        || grep -q '@@THIS_HOST@@' "$conf"; then
+        test_fail "Template substitution wrong; content:\n$(cat "$conf")"
+        return
+    fi
+    if [[ "$out" != *"DEPLOY:"* ]] || [[ "$out" != *"SWITCH:9.9.9"* ]]; then
+        test_fail "Deploy/activate not recorded; output:\n$out"
+        return
+    fi
+    if ! grep -q '"default"' "$fixture/state/config.json"; then
+        test_fail "Retention profile not initialized; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Installation Complete"* ]] \
+        || [[ "$out" == *"SSH-UNHANDLED:"* ]]; then
+        test_fail "Run did not complete cleanly; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_keep_existing_config() {
+    reset_installer_mocks
+    test_start "single-node: declining reconfigure keeps the existing config"
+
+    local fixture="$_mock_zfs_state_dir/single-keep"
+    mkdir -p "$fixture/etc-zfs"
+    printf 'NODE_MODE="single-node"\nTHIS_HOST="keepme"\n' \
+        > "$(node_conf_path "$fixture")"
+    _mock_stdin="n"
+    local out rc
+    out=$(run_installer single "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Keeping existing configuration"* ]]; then
+        test_fail "Keep message missing; output:\n$out"
+        return
+    fi
+    if ! grep -q '^THIS_HOST="keepme"$' "$(node_conf_path "$fixture")"; then
+        test_fail "Existing config was rewritten; content:\n$(cat "$(node_conf_path "$fixture")")"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_reconfigure_existing() {
+    reset_installer_mocks
+    test_start "single-node: accepting reconfigure regenerates the config"
+
+    local fixture="$_mock_zfs_state_dir/single-reconf"
+    mkdir -p "$fixture/etc-zfs"
+    printf 'NODE_MODE="single-node"\nTHIS_HOST="oldname"\n' \
+        > "$(node_conf_path "$fixture")"
+    _mock_stdin=$'y\n\nn'
+    local out rc
+    out=$(run_installer single "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if ! grep -q '^THIS_HOST="zteststor"$' "$(node_conf_path "$fixture")"; then
+        test_fail "Config not regenerated; content:\n$(cat "$(node_conf_path "$fixture")")"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_declines_switch_from_two_node() {
+    reset_installer_mocks
+    test_start "single-node: declining the two-node switch aborts before deploy"
+
+    local fixture="$_mock_zfs_state_dir/single-decline"
+    mkdir -p "$fixture/etc-zfs"
+    write_two_node_conf "$fixture"
+    _mock_stdin="n"
+    local out rc
+    out=$(run_installer single "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Declined switch must exit 0; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Aborted."* ]]; then
+        test_fail "Abort message missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"DEPLOY:"* ]]; then
+        test_fail "Deploy ran despite abort; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_switches_from_two_node() {
+    reset_installer_mocks
+    test_start "single-node: accepting the two-node switch rewrites the config"
+
+    local fixture="$_mock_zfs_state_dir/single-switch"
+    mkdir -p "$fixture/etc-zfs"
+    write_two_node_conf "$fixture"
+    _mock_stdin=$'y\n\nn'
+    local out rc
+    out=$(run_installer single "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if ! grep -q '^NODE_MODE="single-node"$' "$(node_conf_path "$fixture")"; then
+        test_fail "Mode not switched; content:\n$(cat "$(node_conf_path "$fixture")")"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_zfs_root_warning() {
+    reset_installer_mocks
+    test_start "single-node: ZFS root filesystem warning gates on Enter"
+
+    local fixture="$_mock_zfs_state_dir/single-zfsroot"
+    _mock_root_fstype="zfs"
+    # First line answers the "Press Enter to continue" gate.
+    _mock_stdin=$'\n\nn'
+    local out rc
+    out=$(run_installer single "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"ZFS root filesystem detected"* ]]; then
+        test_fail "ZFS-root warning missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_legacy_conf_notice() {
+    reset_installer_mocks
+    test_start "single-node: legacy node.conf notice proceeds with fresh config"
+
+    local fixture="$_mock_zfs_state_dir/single-legacy"
+    mkdir -p "$fixture"
+    printf 'THIS_HOST="legacyhost"\n' > "$fixture/legacy-node.conf"
+    _mock_stdin=$'\nn'
+    local out rc
+    out=$(run_installer single "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Legacy"*"legacy-node.conf"*"found"* ]]; then
+        test_fail "Legacy notice missing; output:\n$out"
+        return
+    fi
+    if ! grep -q '^THIS_HOST="zteststor"$' "$(node_conf_path "$fixture")"; then
+        test_fail "Fresh config not written; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_partial_uninstall_declined() {
+    reset_installer_mocks
+    test_start "single-node: declined remnant cleanup warns and continues"
+
+    local fixture="$_mock_zfs_state_dir/single-remnants"
+    mkdir -p "$fixture/versions-base"
+    # A version base without a current symlink looks like an interrupted
+    # uninstall. The first stdin line answers the cleanup question with
+    # "no" (the installer re-sources bashinit, so ask_yn is the real
+    # prompt and reads the piped answers like every other read).
+    _mock_stdin=$'n\n\nn'
+    local out rc
+    out=$(run_installer single "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Remnants of a previous ZFSutilities installation"* ]]; then
+        test_fail "Remnant warning missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Continuing without cleanup"* ]]; then
+        test_fail "Decline path missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# install-two-node flows
+# ------------------------------------------------------------------
+
+test_two_node_fresh_install() {
+    reset_installer_mocks
+    test_start "two-node: fresh install prompts, writes config, deploys both hosts"
+
+    local fixture="$_mock_zfs_state_dir/two-fresh"
+    _mock_stdin=$'\nztestcomp\n\n\nthreeamigos\n\nNVME1\ntank\n\n8\nn'
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"FATAL"* || "$out" == *"SSH-UNHANDLED:"* ]]; then
+        test_fail "Run not clean; output:\n$out"
+        return
+    fi
+
+    local conf
+    conf="$(node_conf_path "$fixture")"
+    # Pool entries are indented inside the POOL_TARGET declaration, so they
+    # are matched as substrings, not anchored lines.
+    local -a want=(
+        '^NODE_MODE="two-node"$'
+        '^STORAGE_HOST="zteststor"$'
+        '^COMPUTE_HOST="ztestcomp"$'
+        '^STORAGE_IP="192.168.100.1"$'
+        '^EXPECTED_ISCSI_DEVICES="8"$'
+        '\[threeamigos\]="threeamigos"'
+        '\[NVME1\]="tank"'
+    )
+    local pattern
+    for pattern in "${want[@]}"; do
+        if ! grep -qE "$pattern" "$conf"; then
+            test_fail "node.conf lacks $pattern; content:\n$(cat "$conf")"
+            return
+        fi
+    done
+
+    # Deployment config gets the host substitution; both version activations
+    # and the remote retention init happen; node.conf is copied to compute.
+    if ! grep -q '^DEPLOY_GROUP_production="zteststor ztestcomp"$' \
+        "$fixture/etc-zfs/deploy.conf"; then
+        test_fail "deploy.conf substitution wrong; content:\n$(cat "$fixture/etc-zfs/deploy.conf")"
+        return
+    fi
+    if [[ "$out" != *"SETUP-TARGETS:"* ]] || [[ "$out" != *"DEPLOY:"* ]] \
+        || [[ "$out" != *"SWITCH:9.9.9"* ]]; then
+        test_fail "Storage-host steps not recorded; output:\n$out"
+        return
+    fi
+    local remote_switch
+    remote_switch="SSH:root@ztestcomp"
+    remote_switch+=" /usr/local/lib/zfsutilities/versions/9.9.9/bin/switch-version 9.9.9"
+    if [[ "$out" != *"$remote_switch"* ]]; then
+        test_fail "Compute-host activation missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *installer_retention.py*"--new-install"* ]]; then
+        test_fail "Remote retention init missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"SCP:-q $conf root@ztestcomp:$conf"* ]]; then
+        test_fail "node.conf not copied to compute; output:\n$out"
+        return
+    fi
+
+    # systemd drop-ins land in the fixture etc tree; encrypted-luns conf is
+    # installed; the retention profile is initialized locally for real.
+    local dropin_root
+    dropin_root="$fixture/etc-prefix/etc/systemd/system/rtslib-fb-targetctl.service.d"
+    if [[ ! -f "$dropin_root/pre-start-backup.conf" \
+        || ! -f "$dropin_root/boot-config.conf" ]]; then
+        test_fail "Drop-ins not installed; output:\n$out"
+        return
+    fi
+    if [[ ! -f "$fixture/etc-zfs/iscsi-encrypted-luns.conf" ]]; then
+        test_fail "Encrypted-luns conf not installed; output:\n$out"
+        return
+    fi
+    if ! grep -q '"default"' "$fixture/state/config.json"; then
+        test_fail "Local retention profile missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"SYSTEMCTL:daemon-reload"* ]]; then
+        test_fail "daemon-reload not recorded; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Installation Complete"* ]]; then
+        test_fail "Completion banner missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_kept_config_completes() {
+    reset_installer_mocks
+    test_start "two-node: keep-existing-config path passes the storage-host check"
+
+    # Regression fence: the kept-config path used to never set the lowercase
+    # host variables (node.conf defines the UPPERCASE names only) and always
+    # died at the storage-host check on an empty hostname.
+    local fixture="$_mock_zfs_state_dir/two-keep"
+    mkdir -p "$fixture/etc-zfs"
+    write_two_node_conf "$fixture"
+    _mock_stdin="n"
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Run this script on the storage host"* ]]; then
+        test_fail "Kept-config path died at the storage-host check; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Keeping existing configuration"* ]] \
+        || [[ "$out" != *"Installation Complete"* ]]; then
+        test_fail "Kept-config install did not complete; output:\n$out"
+        return
+    fi
+    if ! grep -q '^DEPLOY_GROUP_production="zteststor ztestcomp"$' \
+        "$fixture/etc-zfs/deploy.conf"; then
+        local deploy_content
+        deploy_content=$(cat "$fixture/etc-zfs/deploy.conf")
+        test_fail "deploy.conf not generated from kept config;"
+        test_fail "content:\n$deploy_content"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_storage_host_mismatch_fatals() {
+    reset_installer_mocks
+    test_start "two-node: running on the wrong host is fatal"
+
+    local fixture="$_mock_zfs_state_dir/two-mismatch"
+    mkdir -p "$fixture/etc-zfs"
+    write_two_node_conf "$fixture"
+    sed -i 's/^STORAGE_HOST=.*/STORAGE_HOST="elsewhere"/' \
+        "$(node_conf_path "$fixture")"
+    _mock_stdin="n"
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Wrong-host run reported success; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Run this script on the storage host (elsewhere)"* ]]; then
+        test_fail "Wrong-host FATAL missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_ssh_probe_failure_fatals() {
+    reset_installer_mocks
+    test_start "two-node: unreachable compute host is fatal with fix hint"
+
+    local fixture="$_mock_zfs_state_dir/two-sshfail"
+    mkdir -p "$fixture/etc-zfs"
+    write_two_node_conf "$fixture"
+    _mock_ssh_fail=1
+    _mock_stdin="n"
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "SSH failure reported success; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Cannot SSH from zteststor to root@ztestcomp"* ]] \
+        || [[ "$out" != *"ssh-copy-id root@ztestcomp"* ]]; then
+        test_fail "SSH failure hint missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_pve_patch_applied() {
+    reset_installer_mocks
+    test_start "two-node: PVE rescan rate-limit patch applied on compute"
+
+    local fixture="$_mock_zfs_state_dir/two-pve"
+    mkdir -p "$fixture/etc-zfs"
+    write_two_node_conf "$fixture"
+    _mock_pve_present=1
+    _mock_stdin="n"
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"PVE detected on ztestcomp"*"Patching iSCSI rescan rate limit"* ]]; then
+        test_fail "Patch banner missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"sed -i 's/diff > 10)/diff > 86400)/'"* ]]; then
+        test_fail "Patch command wrong; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"86400 s rate limit"* ]] \
+        || [[ "$out" != *"Restarted pvestatd"* ]]; then
+        test_fail "Patch/pvestatd confirmation missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_pve_absent_skips_patch() {
+    reset_installer_mocks
+    test_start "two-node: no PVE on compute skips the patch with guidance"
+
+    local fixture="$_mock_zfs_state_dir/two-nopve"
+    mkdir -p "$fixture/etc-zfs"
+    write_two_node_conf "$fixture"
+    _mock_stdin="n"
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Proxmox VE not detected on ztestcomp (skipping patch)."* ]]; then
+        test_fail "PVE-absent message missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"sed -i "* ]]; then
+        test_fail "Patch attempted without PVE; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_existing_deploy_conf_left_alone() {
+    reset_installer_mocks
+    test_start "two-node: existing deploy.conf is not overwritten"
+
+    local fixture="$_mock_zfs_state_dir/two-deployconf"
+    mkdir -p "$fixture/etc-zfs"
+    write_two_node_conf "$fixture"
+    printf 'DEPLOY_GROUP_production="custom hosts"\n' \
+        > "$fixture/etc-zfs/deploy.conf"
+    _mock_stdin="n"
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"already present (left unchanged)"* ]]; then
+        test_fail "Left-unchanged message missing; output:\n$out"
+        return
+    fi
+    if ! grep -q '^DEPLOY_GROUP_production="custom hosts"$' \
+        "$fixture/etc-zfs/deploy.conf"; then
+        test_fail "deploy.conf was overwritten; content:\n$(cat "$fixture/etc-zfs/deploy.conf")"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_remote_node_conf_present_skips_copy() {
+    reset_installer_mocks
+    test_start "two-node: node.conf already on compute is not re-copied"
+
+    local fixture="$_mock_zfs_state_dir/two-remoteconf"
+    mkdir -p "$fixture/etc-zfs"
+    write_two_node_conf "$fixture"
+    _mock_remote_node_conf_present=1
+    _mock_stdin="n"
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"SCP:"* ]]; then
+        test_fail "node.conf copied despite being present; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"ztestcomp:"*"already present (left unchanged)"* ]]; then
+        test_fail "Remote left-unchanged message missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_non_numeric_expected_devices() {
+    reset_installer_mocks
+    test_start "two-node: non-numeric LUN count warns and stays unset"
+
+    local fixture="$_mock_zfs_state_dir/two-badcount"
+    _mock_stdin=$'\nztestcomp\n\n\n\n8abc\nn'
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"not a number"*"EXPECTED_ISCSI_DEVICES unset"* ]]; then
+        test_fail "Non-numeric warning missing; output:\n$out"
+        return
+    fi
+    if ! grep -q '^EXPECTED_ISCSI_DEVICES=""$' "$(node_conf_path "$fixture")"; then
+        local conf_content
+        conf_content=$(cat "$(node_conf_path "$fixture")")
+        test_fail "EXPECTED_ISCSI_DEVICES not empty; content:\n$conf_content"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_no_pools_warns() {
+    reset_installer_mocks
+    test_start "two-node: zero pools configured warns and continues"
+
+    local fixture="$_mock_zfs_state_dir/two-nopools"
+    _mock_stdin=$'\nztestcomp\n\n\n\n\n\nn'
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"No pools configured"* ]]; then
+        test_fail "No-pools warning missing; output:\n$out"
+        return
+    fi
+    if grep -qE '^[[:space:]]*\[' "$(node_conf_path "$fixture")"; then
+        test_fail "Pool entries written anyway; content:\n$(cat "$(node_conf_path "$fixture")")"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_old_encrypted_luns_format_warns() {
+    reset_installer_mocks
+    test_start "two-node: old bash-array encrypted-luns conf warns"
+
+    local fixture="$_mock_zfs_state_dir/two-oldluns"
+    mkdir -p "$fixture/etc-zfs"
+    write_two_node_conf "$fixture"
+    printf 'ENCRYPTED_LUNS=(\n  "pool/disk"\n)\n' \
+        > "$fixture/etc-zfs/iscsi-encrypted-luns.conf"
+    _mock_stdin="n"
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"uses old bash array format"* ]]; then
+        test_fail "Old-format warning missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_obsolete_systemd_artifacts_removed() {
+    reset_installer_mocks
+    test_start "two-node: obsolete LUKS-key systemd artifacts are removed"
+
+    local fixture="$_mock_zfs_state_dir/two-obsolete"
+    local obsolete_root
+    obsolete_root="$fixture/etc-prefix/etc/systemd/system"
+    local dropin_root
+    dropin_root="$obsolete_root/rtslib-fb-targetctl.service.d"
+    # A current symlink plus a versions tree keeps check_partial_uninstall
+    # from reading the pre-created drop-in directory as uninstall remnants.
+    mkdir -p "$fixture/etc-zfs" "$fixture/versions-base/versions" \
+        "$dropin_root"
+    ln -s /nonexistent "$fixture/versions-base/current"
+    write_two_node_conf "$fixture"
+    touch "$obsolete_root/zfs-keys-unlock.service" \
+        "$dropin_root/wait-for-zfs-keys.conf"
+    _mock_stdin="n"
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Removing obsolete automatic LUKS-key systemd artifacts"* ]]; then
+        test_fail "Removal banner missing; output:\n$out"
+        return
+    fi
+    if [[ -e "$obsolete_root/zfs-keys-unlock.service" ]] \
+        || [[ -e "$dropin_root/wait-for-zfs-keys.conf" ]]; then
+        test_fail "Obsolete artifacts still present; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_compute_host_required() {
+    reset_installer_mocks
+    test_start "two-node: empty compute host name is fatal"
+
+    local fixture="$_mock_zfs_state_dir/two-nocompute"
+    _mock_stdin=$'\n\n\n\n\n\n\nn'
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Empty compute host reported success; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Compute host name is required"* ]]; then
+        test_fail "Required-host FATAL missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_legacy_conf_sources_defaults() {
+    reset_installer_mocks
+    test_start "two-node: legacy two-node.conf is noticed and reconfigured"
+
+    local fixture="$_mock_zfs_state_dir/two-legacy"
+    mkdir -p "$fixture"
+    printf 'STORAGE_HOST="legacyhost"\n' > "$fixture/legacy-two.conf"
+    _mock_stdin=$'\nztestcomp\n\n\n\n\n\nn'
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Legacy"*"legacy-two.conf"*"found."* ]]; then
+        test_fail "Legacy notice missing; output:\n$out"
+        return
+    fi
+    if ! grep -q '^STORAGE_HOST="zteststor"$' "$(node_conf_path "$fixture")"; then
+        test_fail "New config not written; content:\n$(cat "$(node_conf_path "$fixture")")"
+        return
+    fi
+
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+
+test_single_node_fresh_install
+test_single_node_keep_existing_config
+test_single_node_reconfigure_existing
+test_single_node_declines_switch_from_two_node
+test_single_node_switches_from_two_node
+test_single_node_zfs_root_warning
+test_single_node_legacy_conf_notice
+test_single_node_partial_uninstall_declined
+test_two_node_fresh_install
+test_two_node_kept_config_completes
+test_two_node_storage_host_mismatch_fatals
+test_two_node_ssh_probe_failure_fatals
+test_two_node_pve_patch_applied
+test_two_node_pve_absent_skips_patch
+test_two_node_existing_deploy_conf_left_alone
+test_two_node_remote_node_conf_present_skips_copy
+test_two_node_non_numeric_expected_devices
+test_two_node_no_pools_warns
+test_two_node_old_encrypted_luns_format_warns
+test_two_node_obsolete_systemd_artifacts_removed
+test_two_node_compute_host_required
+test_two_node_legacy_conf_sources_defaults
+
+test_summary
+teardown_test_env

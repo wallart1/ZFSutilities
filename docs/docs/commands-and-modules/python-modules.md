@@ -1876,8 +1876,11 @@ Pure data layer (no GTK) for the Alignment view: parses `zpool iostat -r`
 since-boot request-size histograms, reads the ARC/prefetcher kstats and the
 per-dataset objset kstats, and collects one `AlignmentSample` covering
 every layer of the blocksize chain — member-disk sector geometry, pool
-`ashift` (configured and effective), dataset `recordsize`/`volblocksize`
-properties, and PVE VM disk options from `/etc/pve/qemu-server`. Each
+`ashift` (configured and effective), dataset
+`recordsize`/`volblocksize`/`volsize` properties, and PVE VM disk options
+(read from `/etc/pve/qemu-server` locally, or fetched from the compute
+node over ssh on two-node installs — the same read-only channel the
+dashboard uses). Each
 source degrades on its own, and dataset properties degrade per pool: a
 failed read lands in `AlignmentSample.dataset_read_failures` while the
 other pools keep their rows.
@@ -1890,15 +1893,51 @@ other pools keep their rows.
 | `parse_zfs_size(text)` / `parse_bucket_label(label)` | zfs-get size strings / bucket labels → bytes                |
 | `parse_objset_kstat(text)` / `read_objset_kstats(kstat_dir)` | per-dataset objset kstat bodies (`/proc/spl/kstat/zfs/<pool>/objset-*`, OpenZFS 2.2+) → `{dataset_name: counters}` |
 | `compute_objset_rates(prev, cur)` / `average_request_sizes(counters)` | objset counter deltas between two samples (or since-boot counters) → per-dataset `ObjsetRates`: rates plus average read/write request sizes |
-| `parse_pve_vm_conf(text, vmid)` / `read_pve_vm_options(conf_dir)` | PVE VM config lines → `{zvol short name: VMOption}`   |
+| `parse_pve_vm_conf(text, vmid)` / `read_pve_vm_options(conf_dir)` | PVE VM config lines → `{zvol short name: VMOption}` (records the VM-level `agent:` switch too, so guest probing can say "agent disabled" rather than "unreachable") |
+| `parse_pve_conf_dump(text)` / `fetch_pve_vm_options(host, ...)` | Marker-delimited config dump → `{short name: VMOption}` / one `ssh root@<compute>` round-trip producing that dump (BatchMode, bounded timeout, empty dict on any failure) |
+| `read_pve_vm_configs(conf_dir, config)`     | PVE configs wherever they live: the local directory first, then the compute-node fetch on two-node installs |
 | `topology_leaf_paths(node)`                | Device paths of every disk leaf under a `TopologyNode` (used to flatten pools into members and by the analysis rules to judge vdev groups) |
-| `collect_alignment_sample(zfs_repo, disk_repo, ...)` | Probe all sources (zfs/zpool, lsblk sectors, kstats, PVE conf) with per-source degrade flags |
+| `collect_alignment_sample(zfs_repo, disk_repo, ...)` | Probe all sources (zfs/zpool, lsblk sectors, kstats, PVE conf, guest filesystems via `alignment_guestfs`) with per-source degrade flags |
 
 **Data structures consumed / produced:**
 
 | Structure                    | Reference                        |
 | ---------------------------- | -------------------------------- |
 | `AlignmentSample` / `PoolAlignment` / `DatasetBlocks` / `ReqHistogram` / `ObjsetRates` / `VMOption` | [Alignment samples][ds-alignment] |
+
+---
+
+### `alignment_guestfs.py`
+
+Guest filesystem blocksize probing for VM volumes (no GTK): a zvol's
+`volblocksize` only pays off when the filesystem the guest keeps on that
+volume writes blocks the volblock can carry whole, and that geometry is
+invisible from the storage host — so the prober asks the VM through the
+QEMU guest agent. Every command runs as `qm guest ping` / `qm guest exec`
+locally when this host is the compute node, or over `ssh root@<compute>`
+on two-node installs. The zvol↔guest-disk mapping is a deterministic
+chain (`match_volumes`): a pinned `serial=` on the PVE disk line first;
+otherwise the UUID/PARTUUID signature intersection between the zvol's
+own partitions (read on the storage host via `lsblk /dev/zvol/…` —
+filesystem UUIDs, GPT GUIDs, and LVM PV UUIDs cross the VM boundary
+unchanged, no LUNs, no root) and the guest device tree from one
+`lsblk -bJ` round-trip (children included, so dm/LVM mounts attribute
+to their disk); size+bus position remains the last resort for blank
+zvols. Clone-shared signatures are refused rather than guessed.
+Filesystem block sizes come from one batched `stat -f -c %S`. Results
+cache per (vmid, volume, volsize) with a TTL, because guest geometry is
+quasi-static and the page refreshes every 1-300 s. Every failure
+degrades per volume with a short reason (agent absent, VM stopped, disk
+not matched, clone-identical signatures, non-Linux guest).
+
+**Key functions:**
+
+| Function                                    | Purpose                                                            |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| `GuestFsProber(config, runner, now, ttl)`   | Probe a batch of `(vmid, short name, bus, volsize, serial, signatures)` volumes → `{short name: GuestFsProbe}` (entries, a reason, and the `match_method` tier that identified the disk), with the TTL cache |
+| `parse_qm_exec_output(text)` / `parse_lsblk_json(text)` | The guest-side wire formats: qm's JSON result and the `lsblk -bJ` device tree (`GuestDisk` nodes with signatures and local mounts) |
+| `collect_zvol_signatures(paths, runner)`    | Storage-host side of the chain: `lsblk /dev/zvol/<pool>/<ds>` → the zvol's UUID/PARTUUID signature set per path (empty for blank/missing zvols) |
+| `match_volumes(disks, volumes)`             | The three-tier chain — pinned serial, signature intersection with cross-volume uniqueness (clones refused), size+bus fallback |
 
 ---
 
@@ -1925,7 +1964,7 @@ refreshes (messages may drift as counters move; identity must not).
 | `classify_workload(hist, prefetch_stats)`   | Histogram + prefetcher vote → `WorkloadVerdict` (sequential / random-sync / mixed / insufficient, with confidence) |
 | `vdev_groups(root)`                         | Yield `(class label, group node)` for every vdev group of a topology tree in `zpool status` order — shared by the mixed-geometry rules here and the view's topology table |
 | `arc_readouts(arc, has_l2arc)`              | Memory-tier observation values as `{label: value-or-None}`         |
-| `blocksize_ladder(sample)`                  | Per-pool ladder data for the Alignment view's visual: `LadderPool` rows carrying `LadderBar` rungs (device physical sectors, the ashift block, dataset blocksize groups, VM guest sectors), grouped by size with ×counts, in stack order, with Finding-severity states; sources degrade per pool exactly like the tables |
+| `blocksize_ladder(sample)`                  | Per-pool ladder data for the Alignment view's visual: `LadderPool` rows carrying `LadderBar` rungs (device physical sectors, the ashift block, dataset blocksize groups, VM guest sectors, and probed guest filesystem blocksizes judged against their zvol's volblocksize), grouped by size with ×counts, in stack order, with Finding-severity states; sources degrade per pool exactly like the tables |
 
 **Data structures consumed / produced:**
 

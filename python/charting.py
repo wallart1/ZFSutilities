@@ -33,6 +33,7 @@ here too, so the Cairo fallback in alignment_page draws the same picture.
 """
 
 from collections import deque
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import gi
@@ -66,12 +67,21 @@ NICE_LADDER = (1, 2, 5)
 
 # Pixel height of one ladder row (header and rung rows share the grid; the
 # header is emphasised by weight and separators, not extra height).
-LADDER_ROW_HEIGHT = 19
+LADDER_ROW_HEIGHT = 22
 # Margins: title + legend above the rows, X tick labels below them.
 LADDER_MARGIN_TOP = 40
 LADDER_MARGIN_BOTTOM = 26
 # Height of the empty/unavailable placeholder (no rows to size against).
 LADDER_EMPTY_HEIGHT = 70
+
+# Width vocabulary for the ladder's horizontal scrolling.  Both renderers
+# draw row labels at about 7 px per character at the current font sizes, so
+# one shared per-character estimate serves both; the plot keeps a readable
+# floor width on the log2 grid whatever the label gutter costs.
+LADDER_CHAR_WIDTH_PX = 7
+LADDER_PLOT_MIN_WIDTH = 460
+# Per legend entry: colour swatch plus its padding, beyond the text width.
+LADDER_LEGEND_SWATCH_PX = 40
 
 # Rung states (alignment_analysis severity strings) to series colours: the
 # blue/orange pair the rolling charts use, plus grey for advisory/unresolved.
@@ -86,6 +96,106 @@ LADDER_LEGEND = (
     ("WARN", "misaligned (padded or RMW)"),
     ("info", "advisory / unresolved"),
 )
+
+
+# --- Theme palette (shared by every chart renderer) ------------------------
+#
+# Charts sit directly on the page background, so their canvas follows the
+# GTK theme instead of painting white: backgrounds from theme_bg_color,
+# text and structure from theme_fg_color, and series/state colours chosen
+# for contrast against whichever background the theme resolved to (dark
+# themes get the brighter series variants). Everything degrades to the
+# light vocabulary below when no theme colour can be resolved — the
+# mocked-GTK test environment, or an exotic backend.
+
+
+@dataclass(frozen=True)
+class ChartPalette:
+    """One chart's colour vocabulary, resolved from the GTK theme."""
+
+    background: tuple  # figure/axes background (theme_bg_color)
+    foreground: tuple  # titles, tick labels, legend text (theme_fg_color)
+    muted: tuple  # placeholder and secondary text
+    grid: tuple  # grid lines
+    spine: tuple  # axis spines
+    reference: tuple  # dashed reference lines
+    series: tuple  # contrasting series colours (rolling charts)
+    states: dict  # ladder state ("OK"/"WARN"/"info") -> colour
+    legend_face: tuple
+    legend_edge: tuple
+
+
+def _blend(a, b, t):
+    """Linear blend ``a -> b`` at fraction *t* (both RGB tuples)."""
+    return tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
+
+
+def _luminance(rgb):
+    """Perceived brightness of an RGB tuple (0-1); < 0.5 reads as dark."""
+    return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+
+
+LIGHT_PALETTE = ChartPalette(
+    background=(1.0, 1.0, 1.0),
+    foreground=(0.20, 0.20, 0.20),
+    muted=(0.45, 0.45, 0.45),
+    grid=(0.86, 0.86, 0.86),
+    spine=(0.72, 0.72, 0.72),
+    reference=REFERENCE_COLOR,
+    series=tuple(SERIES_COLORS),
+    states=dict(LADDER_STATE_COLORS),
+    legend_face=(1.0, 1.0, 1.0),
+    legend_edge=(0.86, 0.86, 0.86),
+)
+
+
+def dark_palette(background, foreground):
+    """Palette for a dark theme: soft structure, brighter series colours."""
+    series = ((0.47, 0.67, 0.96), (1.0, 0.62, 0.31))
+    return ChartPalette(
+        background=background,
+        foreground=foreground,
+        muted=_blend(foreground, background, 0.35),
+        grid=_blend(foreground, background, 0.78),
+        spine=_blend(foreground, background, 0.60),
+        reference=_blend(foreground, background, 0.50),
+        series=series,
+        states={
+            "OK": series[0],
+            "WARN": series[1],
+            "info": _blend(foreground, background, 0.45),
+        },
+        legend_face=background,
+        legend_edge=_blend(foreground, background, 0.70),
+    )
+
+
+def chart_palette(widget):
+    """Resolve the theme palette for *widget*; LIGHT_PALETTE when it can't.
+
+    ``lookup_color`` answers through the widget's style context, so the
+    answer follows the active GTK theme (and changes with it — the
+    renderers re-resolve on ``style-updated``). Any lookup or arithmetic
+    failure (mocked GTK, missing theme colours) degrades to the light
+    vocabulary rather than guessing.
+    """
+    try:
+        context = widget.get_style_context()
+        found_bg, bg_rgba = context.lookup_color("theme_bg_color")
+        found_fg, fg_rgba = context.lookup_color("theme_fg_color")
+        if not (found_bg and found_fg):
+            return LIGHT_PALETTE
+        bg = (float(bg_rgba.red), float(bg_rgba.green), float(bg_rgba.blue))
+        fg = (float(fg_rgba.red), float(fg_rgba.green), float(fg_rgba.blue))
+    except (AttributeError, TypeError, ValueError):
+        return LIGHT_PALETTE
+    if _luminance(bg) < 0.5:
+        return dark_palette(bg, fg)
+    return replace(
+        LIGHT_PALETTE,
+        foreground=fg,
+        muted=_blend(fg, (1.0, 1.0, 1.0), 0.35),
+    )
 
 
 def nice_ceiling(value):
@@ -127,6 +237,28 @@ def ladder_pixel_height(pools):
     """
     rows = sum(1 + len(pool.bars) for pool in pools)
     return LADDER_MARGIN_TOP + rows * LADDER_ROW_HEIGHT + LADDER_MARGIN_BOTTOM
+
+
+def ladder_minimum_width(pools):
+    """Return the ladder canvas's minimum readable pixel width; 0 when empty.
+
+    The label gutter must fit the longest pool/rung label without
+    truncation, the log2 plot keeps its floor width, and the legend needs
+    its text plus swatches. Both renderers request at least this width;
+    when the page is narrower, the ladder's scrolled window shows its
+    horizontal scrollbar over a readable chart instead of squeezing it.
+    Zero with no pools — the placeholder draws at whatever width the page
+    gives it and needs no scrollbar.
+    """
+    if not pools:
+        return 0
+    longest = max(
+        len(label) for pool in pools for label in (pool.pool, *(bar.label for bar in pool.bars))
+    )
+    gutter = longest * LADDER_CHAR_WIDTH_PX + 24
+    legend_chars = sum(len(text) for _state, text in LADDER_LEGEND)
+    legend = legend_chars * LADDER_CHAR_WIDTH_PX + len(LADDER_LEGEND) * LADDER_LEGEND_SWATCH_PX
+    return int(gutter + LADDER_PLOT_MIN_WIDTH + legend + 30)
 
 
 def _pow2_at_least(value):
@@ -232,23 +364,17 @@ class MatplotlibRollingChart:
         self._laid_out = False
 
         fig = backend.Figure(figsize=(4.5, height / 100.0), dpi=100)
-        fig.patch.set_facecolor("white")
-        ax = fig.add_subplot(1, 1, 1)
         self._fig = fig
+        # Canvas before artists: the theme palette resolves against the
+        # real widget's style context, so artists are coloured once,
+        # correctly, at build time.
+        self.widget = backend.FigureCanvas(fig)
+        self._palette = chart_palette(self.widget)
+        ax = fig.add_subplot(1, 1, 1)
         self._ax = ax
 
-        ax.set_facecolor("white")
-        ax.set_title(title, fontsize=9, loc="left", color="#333333", pad=4)
-        for side in ("top", "right"):
-            ax.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
-            ax.spines[side].set_color("#b8b8b8")
-        ax.grid(axis="y", color="#dcdcdc", linewidth=0.6)
-        ax.set_axisbelow(True)
         ax.set_autoscale_on(False)
-        ax.tick_params(labelsize=7.5, colors="#444444", length=3)
-        ax.set_xticks([])
-        ax.set_yticks([])
+        self._apply_axes_style()
         ax.yaxis.set_major_formatter(backend.FuncFormatter(self._format_y))
         ax.xaxis.set_major_formatter(backend.FuncFormatter(self._format_x))
 
@@ -260,12 +386,12 @@ class MatplotlibRollingChart:
             ha="center",
             va="center",
             fontsize=8.5,
-            color="#737373",
+            color=self._palette.muted,
         )
         self._lines = []
         self._fills = []
         for index in range(len(self.series_names)):
-            color = SERIES_COLORS[index % len(SERIES_COLORS)]
+            color = self._palette.series[index % len(self._palette.series)]
             (fill,) = ax.fill([], [], color=color, alpha=0.15, linewidth=0, zorder=1)
             (line,) = ax.plot([], [], linewidth=1.6, color=color, zorder=2)
             self._fills.append(fill)
@@ -275,8 +401,45 @@ class MatplotlibRollingChart:
         # re-solves on every draw and tripled the redraw cost in the spike.
         fig.tight_layout(pad=0.4)
 
-        self.widget = backend.FigureCanvas(fig)
         self.widget.set_size_request(-1, height)
+        self.widget.connect("style-updated", self._on_style_updated)
+
+    # -- theming -------------------------------------------------------------
+
+    def _resolve_palette(self):
+        """(Re-)resolve the theme palette and repaint the static styling."""
+        self._palette = chart_palette(self.widget)
+        self._apply_axes_style()
+        if getattr(self, "_collecting", None) is not None:
+            self._collecting.set_color(self._palette.muted)
+        for index, line in enumerate(getattr(self, "_lines", None) or []):
+            color = self._palette.series[index % len(self._palette.series)]
+            line.set_color(color)
+            self._fills[index].set_facecolor(color)
+
+    def _apply_axes_style(self):
+        """Apply the palette to the figure and axis chrome."""
+        palette = self._palette
+        self._fig.patch.set_facecolor(palette.background)
+        ax = self._ax
+        ax.set_facecolor(palette.background)
+        ax.set_title(self.title, fontsize=9, loc="left", color=palette.foreground, pad=4)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color(palette.spine)
+        ax.grid(axis="y", color=palette.grid, linewidth=0.6)
+        ax.set_axisbelow(True)
+        ax.tick_params(labelsize=7.5, colors=palette.foreground, length=3)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    def _on_style_updated(self, *_args):
+        """Theme change: re-resolve the palette and schedule a repaint."""
+        self._resolve_palette()
+        widget = getattr(self, "widget", None)
+        if widget is not None:
+            widget.draw_idle()
 
     # -- data management (same contract as the Cairo fallback) -------------
 
@@ -308,6 +471,7 @@ class MatplotlibRollingChart:
             frameon=False,
             handlelength=1.4,
             borderaxespad=0.2,
+            labelcolor=self._palette.foreground,
         )
 
     def _format_y(self, value, _position):
@@ -410,7 +574,7 @@ class MatplotlibRollingChart:
             return
         self._ref_line = self._ax.axhline(
             self._reference,
-            color=REFERENCE_COLOR,
+            color=self._palette.reference,
             linestyle=(0, (4, 4)),
             linewidth=1.0,
             zorder=1.5,
@@ -423,7 +587,7 @@ class MatplotlibRollingChart:
                 xytext=(4, 3),
                 textcoords="offset points",
                 fontsize=7.5,
-                color="#595959",
+                color=self._palette.muted,
             )
 
 
@@ -451,10 +615,16 @@ class MatplotlibBlocksizeLadder:
         self.title = title
         self._pools = []
         self._rows_rendered = None
+        self._draw_width = None
+        self._height = LADDER_EMPTY_HEIGHT
+        self._requested = None
 
         fig = backend.Figure(figsize=(4.5, 2.0), dpi=100)
-        fig.patch.set_facecolor("white")
         self._fig = fig
+        # Canvas before artists (same reason as MatplotlibRollingChart): the
+        # palette resolves against the real widget's style context.
+        self.widget = backend.FigureCanvas(fig)
+        self._palette = chart_palette(self.widget)
         self._ax = fig.add_subplot(1, 1, 1)
         self._style_axes()
         self._placeholder = self._ax.text(
@@ -464,13 +634,13 @@ class MatplotlibBlocksizeLadder:
             transform=self._ax.transAxes,
             ha="center",
             va="center",
-            fontsize=8.5,
-            color="#737373",
+            fontsize=10,
+            color=self._palette.muted,
         )
         fig.tight_layout(pad=0.4)
 
-        self.widget = backend.FigureCanvas(fig)
-        self.widget.set_size_request(-1, LADDER_EMPTY_HEIGHT)
+        self._request_size()
+        self.widget.connect("style-updated", self._on_style_updated)
 
     # -- data management -----------------------------------------------------
 
@@ -479,25 +649,70 @@ class MatplotlibBlocksizeLadder:
         self._pools = list(pools)
         self._render(unavailable)
 
+    def set_draw_width(self, width):
+        """Follow the page width (the scrolled viewport may show less).
+
+        See ``alignment_page._on_ladder_box_size_allocate``: the ladder
+        keeps drawing at the full page width — never below its
+        content-derived minimum (``ladder_minimum_width``), so a narrow
+        page scrolls horizontally over a readable chart. The height
+        request rides along unchanged; resetting it here would collapse
+        the canvas to a sliver between refreshes.
+        """
+        if width and width != self._draw_width:
+            self._draw_width = width
+            self._request_size()
+            self.widget.draw_idle()
+
+    @property
+    def draw_width(self):
+        """The followed page width, or None when following the allocation."""
+        return self._draw_width
+
     @property
     def pools(self):
         """Snapshot of the rendered pool set."""
         return list(self._pools)
 
+    def _request_size(self):
+        """Apply the current width/height request to the canvas.
+
+        The requested width is the followed page width floored at the
+        content minimum once pools exist; with no pools the placeholder
+        takes whatever the page gives it (width request unset). Calling
+        ``set_size_request`` only on changes keeps same-content refreshes
+        from churning the page layout.
+        """
+        width = self._draw_width
+        if self._pools:
+            width = max(width or 0, ladder_minimum_width(self._pools))
+        if width is None:
+            width = -1
+        if (width, self._height) != self._requested:
+            self._requested = (width, self._height)
+            self.widget.set_size_request(width, self._height)
+
     # -- rendering -----------------------------------------------------------
+
+    def _on_style_updated(self, *_args):
+        """Theme change: re-resolve the palette and redraw the ladder."""
+        self._palette = chart_palette(self.widget)
+        self._render(unavailable=not self._pools)
 
     def _style_axes(self):
         """Apply the base axis styling (re-applied after every ax.clear)."""
+        palette = self._palette
         ax = self._ax
-        ax.set_facecolor("white")
-        ax.set_title(self.title, fontsize=9, loc="left", color="#333333", pad=4)
+        self._fig.patch.set_facecolor(palette.background)
+        ax.set_facecolor(palette.background)
+        ax.set_title(self.title, fontsize=10, loc="left", color=palette.foreground, pad=4)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
         for side in ("left", "bottom"):
-            ax.spines[side].set_color("#b8b8b8")
-        ax.grid(axis="x", color="#dcdcdc", linewidth=0.6)
+            ax.spines[side].set_color(palette.spine)
+        ax.grid(axis="x", color=palette.grid, linewidth=0.6)
         ax.set_axisbelow(True)
-        ax.tick_params(labelsize=7.5, colors="#444444", length=3)
+        ax.tick_params(labelsize=9, colors=palette.foreground, length=3)
 
     def _render(self, unavailable):
         """Redraw the whole ladder; schedule an idle canvas redraw."""
@@ -518,10 +733,11 @@ class MatplotlibBlocksizeLadder:
                 transform=ax.transAxes,
                 ha="center",
                 va="center",
-                fontsize=8.5,
-                color="#737373",
+                fontsize=10,
+                color=self._palette.muted,
             )
-            self.widget.set_size_request(-1, LADDER_EMPTY_HEIGHT)
+            self._height = LADDER_EMPTY_HEIGHT
+            self._request_size()
             self.widget.draw_idle()
             return
 
@@ -543,12 +759,12 @@ class MatplotlibBlocksizeLadder:
                 positions.append(len(labels) - 1)
                 bar_positions.append(len(labels) - 1)
                 bar_widths.append(bar.size - x_min)
-                bar_colors.append(LADDER_STATE_COLORS.get(bar.state, LADDER_STATE_COLORS["info"]))
+                bar_colors.append(self._palette.states.get(bar.state, self._palette.states["info"]))
             # Separator directly under the header row; the dashed ashift
             # reference spans the header and every rung of its pool.
             ax.axhline(
                 first_bar - 0.5,
-                color="#dcdcdc",
+                color=self._palette.grid,
                 linewidth=0.8,
                 zorder=1,
             )
@@ -557,7 +773,7 @@ class MatplotlibBlocksizeLadder:
                     pool.block,
                     header_index - 0.5,
                     len(labels) - 0.5,
-                    color=REFERENCE_COLOR,
+                    color=self._palette.reference,
                     linestyle=(0, (4, 4)),
                     linewidth=1.1,
                     zorder=1.5,
@@ -573,7 +789,7 @@ class MatplotlibBlocksizeLadder:
             zorder=2,
         )
         ax.set_yticks(positions)
-        ax.set_yticklabels(labels, fontsize=8)
+        ax.set_yticklabels(labels, fontsize=9.5)
         for tick_label, label in zip(ax.get_yticklabels(), labels):
             if label in header_labels:
                 tick_label.set_fontweight("bold")
@@ -584,16 +800,17 @@ class MatplotlibBlocksizeLadder:
         ax.set_xticklabels([format_blocksize(tick) for tick in ticks])
         ax.legend(
             handles=[
-                backend.Patch(facecolor=LADDER_STATE_COLORS[state], label=text)
+                backend.Patch(facecolor=self._palette.states[state], label=text)
                 for state, text in LADDER_LEGEND
             ],
             loc="lower right",
-            fontsize=7.5,
+            fontsize=9,
             frameon=True,
-            facecolor="white",
+            facecolor=self._palette.legend_face,
             framealpha=0.85,
-            edgecolor="#dcdcdc",
+            edgecolor=self._palette.legend_edge,
             handlelength=1.2,
+            labelcolor=self._palette.foreground,
         )
 
         rows = len(labels)
@@ -603,8 +820,21 @@ class MatplotlibBlocksizeLadder:
             # refresh (constrained_layout stays banned; see the spike).
             self._fig.tight_layout(pad=0.4)
             self._rows_rendered = rows
-            self.widget.set_size_request(-1, ladder_pixel_height(self._pools))
+            self._height = ladder_pixel_height(self._pools)
+        self._request_size()
         self.widget.draw_idle()
+
+
+def renderer_label():
+    """One-line name of the active chart renderer, for UI notes.
+
+    ``"matplotlib"`` when the optional package can load for this process,
+    else a Cairo-fallback note naming the fix. A pip ``--user`` install
+    is invisible to the GUI when it runs as root — hence the wording.
+    """
+    if matplotlib_backend() is not None:
+        return "matplotlib"
+    return "Cairo fallback (python3-matplotlib not installed for this user)"
 
 
 def create_rolling_chart(

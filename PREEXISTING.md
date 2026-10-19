@@ -17,19 +17,7 @@
   Rechecked 2026-10-12: 0.0.70; still no 1.x.)
   (Rechecked 2026-10-13: unchanged, 0.0.70.)
   (Rechecked 2026-10-16: 0.0.71; still no 1.x.)
-
-- (coverage gap, installer flows): install-single-node and install-two-node
-  have only guard-level suites (test-installer-checks / -structure /
-  -retention, test-iscsi-fresh-install-guards) — nothing executes the
-  installers' interactive flows, so shell-variable flow bugs are invisible
-  to the suites. Found live during the 2026-10-16 strict-mode audit:
-  install-two-node's keep-existing-config path never set the lowercase
-  host variables (node.conf defines the UPPERCASE names only) and always
-  died at the storage-host check on an empty hostname. The bug is fixed
-  (the config source + lowercase refresh now runs in both paths), but the
-  class stays unfenced until an execution harness exists — mock
-  check-prerequisites/deploy-version/switch-version/ssh and piped stdin
-  answers, in the test-unarchive-vm two-node style.
+  (Rechecked 2026-10-17: unchanged, 0.0.71.)
 
 - (future objective, migration/create fidelity — narrowed 2026-10-03):
   No creation path (Create Pool wizard or Migrate Pool) can *plan*

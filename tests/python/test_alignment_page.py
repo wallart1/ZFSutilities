@@ -20,6 +20,7 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 import alignment_stats as astats
+from alignment_guestfs import GuestFsEntry
 from disk_repository import format_bytes
 from memory_stats import format_percent
 from test_support import mock_gtk
@@ -231,6 +232,14 @@ class _FakeStore:
     def layer_object_keys(self):
         """(Layer, Object) pairs — the visible identity of chain-table rows."""
         return [(row.values[1], row.values[2]) for row in self.rows]
+
+    def set_sorted(self, column=1):
+        """Pretend the user clicked a column sort (PyGObject answers a
+        (column, order) tuple; see _reconcile_rows)."""
+        self._sort_state = (column, 0)
+
+    def get_sort_column_id(self):
+        return getattr(self, "_sort_state", None)
 
 
 class _PageTestCase(unittest.TestCase):
@@ -465,7 +474,9 @@ class TestApplyAlignmentSample(_PageTestCase):
         ap._apply_alignment_sample(app, sample)
         rows = [c.args[1] for c in app._alignment_chain_store.insert.call_args_list]
         vm_rows = [row for row in rows if row[1] == "VM"]
-        self.assertEqual(vm_rows[0][4], "not referenced in local PVE configs")
+        # "PVE configs" without "local": on two-node installs the configs
+        # arrive from the compute node, so the wording names the source set.
+        self.assertEqual(vm_rows[0][4], "not referenced in PVE configs")
 
         sample = _sample(vm_disks={}, pve_available=False)
         ap._apply_alignment_sample(app, sample)
@@ -474,7 +485,10 @@ class TestApplyAlignmentSample(_PageTestCase):
             for row in app._alignment_chain_store.insert.call_args_list
             if row.args[1][1] == "VM"
         ]
-        self.assertEqual(vm_rows[-1][4], "PVE configs unreadable on this host")
+        self.assertEqual(
+            vm_rows[-1][4],
+            "PVE configs unreadable (local directory and compute-node fetch both failed)",
+        )
 
     def test_chain_reconcile_removes_vanished_rows(self):
         _mp, ap, app = self._prepared()
@@ -862,10 +876,12 @@ class TestLadderSection(_PageTestCase):
         self.assertIn("Pool", layers)
         self.assertIn("Dataset", layers)
         self.assertIn("VM", layers)
-        # Sizing follows the shared row geometry (set_size_request on the
-        # DrawingArea at update time).
+        # Sizing follows the shared row geometry and the content-derived
+        # minimum width (set_size_request on the DrawingArea at update
+        # time); no page width is followed yet, so the width request is
+        # exactly that minimum.
         app._alignment_ladder.widget.set_size_request.assert_called_with(
-            -1, ap.ladder_pixel_height(pools)
+            ap.ladder_minimum_width(pools), ap.ladder_pixel_height(pools)
         )
         app._alignment_ladder.widget.queue_draw.assert_called()
 
@@ -954,6 +970,20 @@ class TestReconcileRows(_PageTestCase):
         store = _FakeStore()
         ap._reconcile_rows(store, {"b": ["b", "2"], "a": ["a", "1"]})
         self.assertEqual(store.keys(), ["b", "a"])
+
+    def test_sorted_store_updates_and_appends_without_reordering(self):
+        """With a column sort active the store owns the order: survivors
+        update in place, new rows append, and no positional inserts run."""
+        _mp, ap, _app = self._prepared()
+        store = _FakeStore([["a", "1"], ["b", "2"]])
+        store.set_sorted(column=1)
+        ap._reconcile_rows(store, {"b": ["b", "20"], "c": ["c", "3"]})
+        self.assertEqual(store.keys(), ["b", "c"])
+        self.assertEqual(len(store.appended), 1)  # c
+        self.assertEqual([row.values[1] for row in store.rows], ["20", "3"])
+        # The vanished row was removed; nothing was positionally inserted.
+        self.assertEqual([row.values[0] for row in store.removed], ["a"])
+        self.assertEqual(store.inserted, [])
 
 
 class TestAlignmentScrollPreservation(_PageTestCase):
@@ -1222,6 +1252,324 @@ class TestAlignmentSurveyDialog(_PageTestCase):
                 ad.open_alignment_survey(app)
         save.assert_not_called()
         self.assertNotIn("alignment_survey", app.config)
+
+
+class TestTableViewPolish(_PageTestCase):
+    """Scrolled 20-row tables, sortable scan columns, and cell tooltips.
+
+    The mock GTK classes return shared instances, so each test constructs
+    its widgets under fresh-instance factories and captures them.
+    """
+
+    def _fresh_gtk(self, ap):
+        """Patch fresh Gtk widget instances; return the captured lists."""
+        views, scrolls, columns = [], [], []
+
+        def _tree(*_a, **_k):
+            view = MagicMock()
+            views.append(view)
+            return view
+
+        def _scroll(*_a, **_k):
+            scroll = MagicMock()
+            scrolls.append(scroll)
+            return scroll
+
+        def _column(*_a, **_k):
+            col = MagicMock()
+            columns.append(col)
+            return col
+
+        patchers = [
+            patch.object(ap.Gtk, "TreeView", side_effect=_tree),
+            patch.object(ap.Gtk, "ScrolledWindow", side_effect=_scroll),
+            patch.object(ap.Gtk, "TreeViewColumn", side_effect=_column),
+        ]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return views, scrolls, columns
+
+    def test_chain_columns_sortable_with_offset(self):
+        _mp, ap, _app2 = self._prepared()
+        views, _scrolls, columns = self._fresh_gtk(ap)
+        app = MagicMock()
+        app._ui_state = MagicMock()
+        _scroll, _store, view = ap._table(
+            app,
+            "_test_store",
+            [("Layer", 70), ("Object", 280), ("Block size", 200), ("Detail", 380)],
+            "test_view",
+            hidden_key=True,
+            sortable=True,
+        )
+        self.assertIs(view, views[0])
+        self.assertEqual(len(columns), 4)
+        for index, col in enumerate(columns):
+            col.set_sort_column_id.assert_called_once_with(index + 1)
+            col.set_clickable.assert_called_once_with(True)
+        # The scrolled wrapper carries the view; identity key never sorts.
+        _scroll.add.assert_called_once_with(view)
+
+    def test_table_columns_carry_widths_and_expand(self):
+        """Columns start at sane widths; one non-last column absorbs slack.
+
+        GTK re-expands the last TreeView column to fill leftover width,
+        which makes shrinking the far-right column look ineffective; the
+        expand flag redirects that slack to a chosen column so the last
+        column keeps its honest fixed width.
+        """
+        _mp, ap, _app2 = self._prepared()
+        _views, _scrolls, columns = self._fresh_gtk(ap)
+        app = MagicMock()
+        app._ui_state = MagicMock()
+        ap._table(app, "_t", [("A", 120), ("B", 200), ("C", 160)], "v", expand_index=1)
+        for col, width in zip(columns, (120, 200, 160)):
+            col.set_fixed_width.assert_called_once_with(width)
+            col.set_min_width.assert_called_once_with(60)
+        columns[1].set_expand.assert_called_once_with(True)
+        columns[0].set_expand.assert_not_called()
+        columns[2].set_expand.assert_not_called()
+
+    def test_page_tables_wire_non_last_expand_columns(self):
+        """Each of the four page tables expands a non-last column only."""
+        _mp, ap, _app = self._prepared()
+        _views, _scrolls, columns = self._fresh_gtk(ap)
+        app = MagicMock()
+        app._ui_state = MagicMock()
+        ap.create_alignment_view(app)
+        # 21 columns: chain 4, topology 6, findings 5, workload 6.  The
+        # expand column sits inside each table, never on its last column.
+        self.assertEqual(len(columns), 21)
+        expanded = {index for index, col in enumerate(columns) if col.set_expand.called}
+        self.assertEqual(expanded, {1, 8, 13, 16})
+        widths = [c.set_fixed_width.call_args.args[0] for c in columns]
+        self.assertEqual(
+            widths,
+            [
+                70,
+                280,
+                200,
+                380,
+                90,
+                80,
+                170,
+                70,
+                260,
+                220,
+                90,
+                70,
+                180,
+                360,
+                380,
+                110,
+                170,
+                140,
+                140,
+                120,
+                130,
+            ],
+        )
+        self.assertTrue(all(width >= 60 for width in widths))
+
+    def test_other_tables_not_sortable(self):
+        _mp, ap, _app2 = self._prepared()
+        views, _scrolls, columns = self._fresh_gtk(ap)
+        app = MagicMock()
+        app._ui_state = MagicMock()
+        _scroll, _store, view = ap._table(app, "_t", [("A", 80), ("B", 80)], "v")
+        self.assertIs(view, views[0])
+        self.assertEqual(len(columns), 2)
+        for col in columns:
+            col.set_sort_column_id.assert_not_called()
+            col.set_clickable.assert_not_called()
+
+    def test_query_tooltip_connected_with_store_and_offset(self):
+        _mp, ap, _app2 = self._prepared()
+        _views, _scrolls, _columns = self._fresh_gtk(ap)
+        app = MagicMock()
+        app._ui_state = MagicMock()
+        _scroll, store, view = ap._table(app, "_t", [("A", 80)], "v", hidden_key=True)
+        handler = [
+            call
+            for call in view.connect.call_args_list
+            if call.args and call.args[0] == "query-tooltip"
+        ]
+        self.assertEqual(len(handler), 1)
+        self.assertIs(handler[0].args[1], ap._on_cell_query_tooltip)
+        self.assertIs(handler[0].args[2], store)
+        self.assertEqual(handler[0].args[3], 1)  # hidden-key offset
+
+    def test_cell_query_tooltip_shows_full_text(self):
+        _mp, ap, _app = self._prepared()
+        view = MagicMock()
+        view.convert_widget_to_bin_window_coords.return_value = (11, 12)
+        path = MagicMock()
+        column_b = MagicMock()
+        view.get_path_at_pos.return_value = (path, column_b, 1, 2)
+        view.get_columns.return_value = [MagicMock(), column_b]
+        store = MagicMock()
+        store.__getitem__ = MagicMock(return_value=["key", "row1", "long text"])
+        tooltip = MagicMock()
+        self.assertTrue(ap._on_cell_query_tooltip(view, 11, 12, False, tooltip, store, 1))
+        tooltip.set_text.assert_called_once_with("long text")
+
+    def test_cell_query_tooltip_empty_space_falls_through(self):
+        _mp, ap, _app = self._prepared()
+        view = MagicMock()
+        view.convert_widget_to_bin_window_coords.return_value = (11, 12)
+        view.get_path_at_pos.return_value = ()
+        self.assertFalse(
+            ap._on_cell_query_tooltip(view, 11, 12, False, MagicMock(), MagicMock(), 1)
+        )
+        view.get_path_at_pos.return_value = (MagicMock(), None, 1, 2)
+        self.assertFalse(
+            ap._on_cell_query_tooltip(view, 11, 12, False, MagicMock(), MagicMock(), 1)
+        )
+
+    def test_capped_scroll_shows_twenty_rows(self):
+        """The shared capped scroll: propagate natural height, 20-row cap.
+
+        Without ``propagate_natural_height`` the scrolled window's natural
+        height is its ``min_content_height`` and the table collapses to a
+        couple of rows.
+        """
+        with mock_gtk(fresh=True):
+            import gui_helpers as gh
+
+            scrolls = []
+
+            def _make_scroll(*_a, **_k):
+                scroll = MagicMock()
+                scrolls.append(scroll)
+                return scroll
+
+            with patch.object(gh.Gtk, "ScrolledWindow", side_effect=_make_scroll):
+                view = MagicMock()
+                view.style_get_property.return_value = 6
+                scroll = gh.capped_treeview_scroll(view)
+            self.assertIs(scroll, scrolls[0])
+            scroll.set_min_content_height.assert_called_once_with(60)
+            fallback = gh.TREEVIEW_ROW_HEIGHT_FALLBACK
+            scroll.set_max_content_height.assert_called_once_with(fallback + 2 + 21 * fallback)
+            scroll.set_propagate_natural_height.assert_called_once_with(True)
+            scroll.add.assert_called_once_with(view)
+            # Both scroll policies automatic so either axis can scroll.
+            scroll.set_policy.assert_called_once_with(
+                gh.Gtk.PolicyType.AUTOMATIC, gh.Gtk.PolicyType.AUTOMATIC
+            )
+
+
+class TestLadderViewport(_PageTestCase):
+    """The ladder scrolls its own viewport; the page width caps it."""
+
+    def test_ladder_packed_in_horizontal_scroll(self):
+        _mp, ap, app = self._prepared()
+        scroll = app._alignment_ladder_scroll
+        self.assertIn(
+            (ap.Gtk.PolicyType.AUTOMATIC, ap.Gtk.PolicyType.NEVER),
+            [c.args for c in scroll.set_policy.call_args_list],
+        )
+        # The canvas's width request must not pin the page wide: the scroll
+        # keeps a small minimum so the viewport can be narrower than the
+        # chart and the horizontal scrollbar appears.
+        scroll.set_min_content_width.assert_called_once_with(ap.TREEVIEW_MIN_WIDTH)
+        # The ladder widget (not a table view) is the scroll's child.
+        added = [c.args[0] for c in scroll.add.call_args_list]
+        self.assertIn(app._alignment_ladder.widget, added)
+
+    def test_size_allocate_caps_viewport_at_page_width(self):
+        _mp, ap, app = self._prepared()
+        allocation = SimpleNamespace(width=900)
+        ap._on_ladder_box_size_allocate(MagicMock(), allocation, app)
+        self.assertEqual(app._alignment_ladder.draw_width, 900)
+        scroll = app._alignment_ladder_scroll
+        scroll.set_max_content_width.assert_called_once_with(900)
+        # Width changes only: a repeat allocation is a no-op.
+        scroll.set_max_content_width.reset_mock()
+        ap._on_ladder_box_size_allocate(MagicMock(), allocation, app)
+        scroll.set_max_content_width.assert_not_called()
+        # The width reaches the renderer's size request together with the
+        # current height (the empty placeholder height before any update).
+        app._alignment_ladder.widget.set_size_request.assert_called_with(
+            900, ap.LADDER_EMPTY_HEIGHT
+        )
+
+    def test_ladder_update_keeps_draw_width(self):
+        """update() re-applies the followed width — floored at the
+        content-derived minimum — along with the new height."""
+        _mp, ap, _app = self._prepared()
+        ladder = ap.BlocksizeLadder("Blocksize ladder")
+        ladder.set_draw_width(700)
+        ladder.widget.set_size_request.reset_mock()
+        ladder.update(ap.blocksize_ladder(_sample()))
+        width = max(700, ap.ladder_minimum_width(ladder.pools))
+        ladder.widget.set_size_request.assert_called_with(
+            width, ap.ladder_pixel_height(ladder.pools)
+        )
+
+    def test_ladder_width_floors_at_content_minimum(self):
+        """A narrow page cannot squeeze the chart: the width request never
+        drops below the content-derived minimum, so the horizontal
+        scrollbar covers a readable ladder instead."""
+        _mp, ap, _app = self._prepared()
+        ladder = ap.BlocksizeLadder("Blocksize ladder")
+        ladder.update(ap.blocksize_ladder(_sample()))
+        minimum = ap.ladder_minimum_width(ladder.pools)
+        ladder.widget.set_size_request.reset_mock()
+        ladder.set_draw_width(400)
+        self.assertGreater(minimum, 400)
+        ladder.widget.set_size_request.assert_called_once_with(
+            minimum, ap.ladder_pixel_height(ladder.pools)
+        )
+
+
+class TestGuestFsPresentation(_PageTestCase):
+    """Probed guest filesystems in the chain table and the degrade note."""
+
+    def test_vm_detail_lists_probed_filesystems(self):
+        _mp, ap, app = self._prepared()
+        sample = _sample(
+            guest_fs={
+                "vm-201-disk-0": [
+                    GuestFsEntry(mount="/", fstype="ext4", blocksize=4096),
+                    GuestFsEntry(mount="/var", fstype="xfs", blocksize=4096),
+                ]
+            }
+        )
+        ap._apply_alignment_sample(app, sample)
+        rows = [c.args[1] for c in app._alignment_chain_store.insert.call_args_list]
+        vm_row = next(row for row in rows if row[1] == "VM")
+        self.assertIn("ext4 4K on /", vm_row[4])
+        self.assertIn("xfs 4K on /var", vm_row[4])
+
+    def test_vm_detail_lists_probe_failure(self):
+        _mp, ap, app = self._prepared()
+        sample = _sample(guest_fs_failures={"vm-201-disk-0": "VM not running"})
+        ap._apply_alignment_sample(app, sample)
+        rows = [c.args[1] for c in app._alignment_chain_store.insert.call_args_list]
+        vm_row = next(row for row in rows if row[1] == "VM")
+        self.assertIn("guest fs unprobed: VM not running", vm_row[4])
+
+    def test_degrade_note_names_guest_probe_failures(self):
+        _mp, ap, app = self._prepared()
+        sample = _sample(guest_fs_failures={"vm-201-disk-0": "VM not running"})
+        ap._apply_alignment_sample(app, sample)
+        markup = app._alignment_note.set_markup.call_args[0][0]
+        self.assertIn("Guest filesystems unprobed for: vm-201-disk-0 (VM not running)", markup)
+
+    def test_no_guest_note_when_probed(self):
+        _mp, ap, app = self._prepared()
+        sample = _sample(
+            guest_fs={"vm-201-disk-0": [GuestFsEntry(mount="/", fstype="ext4", blocksize=4096)]}
+        )
+        ap._apply_alignment_sample(app, sample)
+        self.assertTrue(
+            all(
+                "unprobed" not in str(c.args[0])
+                for c in app._alignment_note.set_markup.call_args_list
+            )
+        )
 
 
 if __name__ == "__main__":
