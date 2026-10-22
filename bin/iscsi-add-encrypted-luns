@@ -42,17 +42,23 @@ if [[ ! -f "$conf" ]]; then
     exit 0
 fi
 
-# Look up the original LUN index for a backstore name from saveconfig.json.
-# Returns the index on stdout, or empty string if not found.
+# Look up the original LUN index for a backstore name from saveconfig.json,
+# scoped to one full target IQN. Returns the index on stdout, or empty
+# string if not found. Scoping matters when orphan targets under a
+# different IQN prefix carry the same backstore at another index — a
+# global first-match lookup would return that wrong index.
 lookup_lun_number() {
-    local bsname="$1"
+    local bsname="$1" target_iqn="$2"
     [[ -f "$savefile" ]] || return
-    bsname="$bsname" python3 - "$savefile" << 'PYEOF' 2>/dev/null
+    bsname="$bsname" target_iqn="$target_iqn" python3 - "$savefile" << 'PYEOF' 2>/dev/null
 import json, os, sys
 name = os.environ["bsname"]
+target_iqn = os.environ["target_iqn"]
 with open(sys.argv[1]) as f:
     config = json.load(f)
 for target in config.get("targets", []):
+    if target.get("wwn") != target_iqn:
+        continue
     for tpg in target.get("tpgs", []):
         for lun in tpg.get("luns", []):
             if lun.get("storage_object", "").endswith("/" + name):
@@ -73,23 +79,32 @@ while IFS=: read -r name device target; do
         continue
     fi
 
+    full_iqn="${iqn_prefix}:${target}"
+
     # Look up original LUN number to preserve stable device paths on the compute host
-    lun_num=$(lookup_lun_number "$name")
+    lun_num=$(lookup_lun_number "$name" "$full_iqn")
 
     targetcli /backstores/block create "$name" "$device" >/dev/null 2>&1
     if [[ -n "$lun_num" ]]; then
-        targetcli /iscsi/"${iqn_prefix}":"${target}"/tpg1/luns \
+        targetcli /iscsi/"${full_iqn}"/tpg1/luns \
             create /backstores/block/"$name" "$lun_num" >/dev/null 2>&1
         log_msg "INFO:   ✓ Added $name (LUN $lun_num)"
     else
-        targetcli /iscsi/"${iqn_prefix}":"${target}"/tpg1/luns \
+        targetcli /iscsi/"${full_iqn}"/tpg1/luns \
             create /backstores/block/"$name" >/dev/null 2>&1
         log_msg "INFO:   ✓ Added $name (auto LUN)"
     fi
     added=$((added + 1))
 done < "$conf"
 
-# Save only if all expected LUNs are active
-"$mydir/safe-iscsi-save"
+# Persist only when something was added: nothing changed otherwise, and a
+# keyless boot-time run (the ExecStartPost invocation) must not re-save —
+# safe-iscsi-save would FATAL-log the degraded state on every boot.
+# safe-iscsi-save itself still refuses to save unless every expected LUN
+# is active, so a partial add leaves saveconfig.json untouched.
+if [[ "$added" -gt 0 ]]; then
+    # Save only if all expected LUNs are active
+    "$mydir/safe-iscsi-save"
+fi
 
 exit 0

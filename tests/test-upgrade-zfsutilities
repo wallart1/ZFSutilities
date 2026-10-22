@@ -50,14 +50,18 @@ _setup_upgrade_env() {
     export HOME="$_tmpdir/home"
     export FAKE_DEPLOY_MARKER="$_tmpdir/deploy.marker"
     export FAKE_SWITCH_MARKER="$_tmpdir/switch.marker"
+    export FAKE_PREREQ_MARKER="$_tmpdir/prereq.marker"
+    export FAKE_PREREQ_RC="${FAKE_PREREQ_RC:-0}"
     : > "$FAKE_DEPLOY_MARKER"
     : > "$FAKE_SWITCH_MARKER"
+    : > "$FAKE_PREREQ_MARKER"
 
     # Copy the script under test so it sources our fake rootcheck and the
     # real upgrade-lib.sh as siblings.
     cp "$UPGRADE_SCRIPT" "$_tmpdir/upgrade-zfsutilities"
     chmod +x "$_tmpdir/upgrade-zfsutilities"
     cp "$REPO/lib/upgrade-lib.sh" "$_tmpdir/upgrade-lib.sh"
+    cp "$REPO/lib/installer-lib.sh" "$_tmpdir/installer-lib.sh"
 
     # Minimal bashinit providing the functions the orchestrator uses.
     # Quoted heredoc: no expansion, byte-identical to the printf chain it
@@ -103,7 +107,7 @@ _teardown_upgrade_env() {
         ZFSUTILITIES_TAG_TARBALL_URL ZFSUTILITIES_RELEASE_HOME \
         ZFSUTILITIES_LEGACY_DEPLOY_CONF ZFSUTILITIES_LEGACY_NODE_CONF \
         UPGRADE_ZFSUTILITIES_TEST_NO_ROOT FAKE_DEPLOY_MARKER \
-        FAKE_SWITCH_MARKER
+        FAKE_SWITCH_MARKER FAKE_PREREQ_MARKER FAKE_PREREQ_RC
     unset HOME
     rm -rf "$tmpdir"
 }
@@ -140,6 +144,19 @@ chmod +x "$vb/versions/$ver/bin/switch-version"
 echo "INFO: fake deploy-version complete for $ver" >&2
 DEPLOYEOF
     chmod +x "$src/bin/deploy-version"
+    # Stub check-prerequisites: records its arguments for mode assertions
+    # and exits FAKE_PREREQ_RC (default 0). The --list-failures re-run the
+    # remediation flow makes emits one fixed failure line.
+    cat > "$src/bin/check-prerequisites" << 'PREREQEOF'
+#!/usr/bin/bash
+echo "check-prerequisites $*" >> "${FAKE_PREREQ_MARKER:?}"
+if [[ "$*" == *--list-failures* ]]; then
+    echo "core|pv|pv|command not found"
+    exit 1
+fi
+exit "${FAKE_PREREQ_RC:-0}"
+PREREQEOF
+    chmod +x "$src/bin/check-prerequisites"
     tar -czf "$tmpdir/gh/tag-v$version.tar.gz" -C "$tmpdir/relsrc-$version" \
         "ZFSutilities-v$version"
 }
@@ -457,6 +474,66 @@ test_decline_at_deploy_prompt() {
     if [[ $failed -eq 0 ]]; then test_pass; else test_fail "decline path touched something"; fi
 }
 
+test_prereq_failure_aborts_before_changes() {
+    test_start "declined prerequisite remediation aborts before any changes"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    export FAKE_PREREQ_RC=1
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir"
+
+    # y: approve the download; n: decline prerequisite remediation.
+    output=$(printf 'y\nn\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 1 ]] || { failed=1; echo "    rc=$rc (want 1)"; }
+    [[ "$output" == *"Checking this host against the 0.2.0 prerequisites"* ]] \
+        || { failed=1; echo "    missing gate banner"; }
+    [[ "$output" == *"Aborted. Nothing was changed."* ]] \
+        || { failed=1; echo "    missing abort message"; }
+    [[ -n "$(cat "$FAKE_PREREQ_MARKER")" ]] \
+        || { failed=1; echo "    staged checker never ran"; }
+    [[ -z "$(cat "$FAKE_DEPLOY_MARKER")" ]] || { failed=1; echo "    deploy-version must not run"; }
+    [[ ! -d "$ZFSUTILITIES_VERSION_BASE/versions/0.2.0" ]] \
+        || { failed=1; echo "    new version dir must not exist"; }
+    [[ -z "$(cat "$FAKE_SWITCH_MARKER")" ]] || { failed=1; echo "    switch-version must not run"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "prereq gate touched something"; fi
+}
+
+test_prereq_gate_mode_follows_node_conf() {
+    test_start "prerequisite gate mode follows the node configuration"
+    local tmpdir marker_line failed=0
+    _setup_upgrade_env tmpdir
+    export FAKE_PREREQ_RC=1
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir"
+
+    # No node.conf anywhere: the gate defaults to single-node.
+    printf 'y\nn\n' | "$tmpdir/upgrade-zfsutilities" &>/dev/null || true
+    marker_line=$(head -1 "$FAKE_PREREQ_MARKER")
+    [[ "$marker_line" == "check-prerequisites --single-node" ]] \
+        || { failed=1; echo "    default mode was: $marker_line"; }
+
+    # A two-node node.conf switches the gate to two-node. The gate aborts
+    # (rc=1 path) before target enumeration, so the named hosts are never
+    # contacted.
+    : > "$FAKE_PREREQ_MARKER"
+    printf 'NODE_MODE="two-node"\nSTORAGE_HOST="unusedstorage"\nCOMPUTE_HOST="unusedcompute"\n' \
+        > "$ZFSUTILITIES_SYSTEM_CONFIG_DIR/node.conf"
+    printf 'y\nn\n' | "$tmpdir/upgrade-zfsutilities" &>/dev/null || true
+    marker_line=$(head -1 "$FAKE_PREREQ_MARKER")
+    [[ "$marker_line" == "check-prerequisites --two-node" ]] \
+        || { failed=1; echo "    two-node mode was: $marker_line"; }
+
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "gate mode did not follow node.conf"; fi
+}
+
 test_happy_path_clean_tree() {
     test_start "clean local tree upgrades, deploys, and activates"
     local tmpdir output rc
@@ -712,6 +789,8 @@ test_newer_active_than_latest_blocks
 test_curl_missing_is_fatal
 test_unreachable_github_is_fatal
 test_decline_at_deploy_prompt
+test_prereq_failure_aborts_before_changes
+test_prereq_gate_mode_follows_node_conf
 test_happy_path_clean_tree
 test_happy_path_with_local_changes
 test_decline_at_salvage_prompt

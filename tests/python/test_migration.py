@@ -20,6 +20,7 @@ class TestMigration(unittest.TestCase):
             with patch_environ(
                 ZFSUTILITIES_STATE_DIR=state_dir,
                 ZFSUTILITIES_DISABLE_MIGRATION=None,
+                ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION="1",
                 HOME=home_dir,
             ):
                 legacy = paths.get_legacy_config_path()
@@ -42,6 +43,7 @@ class TestMigration(unittest.TestCase):
             with patch_environ(
                 ZFSUTILITIES_STATE_DIR=state_dir,
                 ZFSUTILITIES_DISABLE_MIGRATION=None,
+                ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION="1",
                 HOME=home_dir,
             ):
                 legacy = paths.get_legacy_history_path()
@@ -62,6 +64,7 @@ class TestMigration(unittest.TestCase):
             with patch_environ(
                 ZFSUTILITIES_STATE_DIR=state_dir,
                 ZFSUTILITIES_DISABLE_MIGRATION=None,
+                ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION="1",
                 HOME=home_dir,
             ):
                 legacy = paths.get_legacy_profiles_dir()
@@ -83,6 +86,7 @@ class TestMigration(unittest.TestCase):
             with patch_environ(
                 ZFSUTILITIES_STATE_DIR=state_dir,
                 ZFSUTILITIES_DISABLE_MIGRATION=None,
+                ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION="1",
                 HOME=home_dir,
             ):
                 legacy = paths.get_legacy_scrub_state_path()
@@ -103,6 +107,7 @@ class TestMigration(unittest.TestCase):
             with patch_environ(
                 ZFSUTILITIES_STATE_DIR=state_dir,
                 ZFSUTILITIES_DISABLE_MIGRATION=None,
+                ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION="1",
                 HOME=home_dir,
             ):
                 legacy = paths.get_legacy_snapfile_path()
@@ -129,6 +134,7 @@ class TestMigration(unittest.TestCase):
             with patch_environ(
                 ZFSUTILITIES_STATE_DIR=state_dir,
                 ZFSUTILITIES_DISABLE_MIGRATION=None,
+                ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION="1",
                 HOME=home_dir,
             ):
                 legacy = paths.get_legacy_config_path()
@@ -174,6 +180,61 @@ class TestMigration(unittest.TestCase):
                 self.assertTrue(os.path.isfile(legacy))
                 self.assertFalse(os.path.exists(new))
 
+    def test_redirected_state_dir_blocks_sweep(self):
+        """A redirected state dir must never sweep real-HOME legacy files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_dir = os.path.join(tmpdir, "state")
+            home_dir = os.path.join(tmpdir, "root")
+            with patch_environ(
+                ZFSUTILITIES_STATE_DIR=state_dir,
+                ZFSUTILITIES_DISABLE_MIGRATION=None,
+                ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION=None,
+                HOME=home_dir,
+            ):
+                legacy = paths.get_legacy_config_path()
+                new = paths.get_config_path()
+                os.makedirs(os.path.dirname(legacy), exist_ok=True)
+                with open(legacy, "w") as f:
+                    f.write('{"pools": []}')
+
+                migration.run_migration()
+
+                # The legacy file is untouched, nothing moved into the
+                # scratch state dir, and no sentinel claims a run happened.
+                self.assertTrue(os.path.isfile(legacy))
+                self.assertFalse(os.path.islink(legacy))
+                self.assertFalse(os.path.exists(new))
+                self.assertFalse(os.path.exists(migration.get_migration_sentinel_path()))
+
+    def test_redirected_state_dir_opt_in_runs_sweep(self):
+        """The explicit opt-in re-enables migration for redirected runs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_dir = os.path.join(tmpdir, "state")
+            home_dir = os.path.join(tmpdir, "root")
+            with patch_environ(
+                ZFSUTILITIES_STATE_DIR=state_dir,
+                ZFSUTILITIES_DISABLE_MIGRATION=None,
+                ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION="1",
+                HOME=home_dir,
+            ):
+                legacy = paths.get_legacy_config_path()
+                new = paths.get_config_path()
+                os.makedirs(os.path.dirname(legacy), exist_ok=True)
+                with open(legacy, "w") as f:
+                    f.write('{"pools": []}')
+
+                migration.run_migration()
+
+                self.assertTrue(os.path.islink(legacy))
+                self.assertTrue(os.path.isfile(new))
+
+    def test_default_state_dir_is_not_redirected(self):
+        self.assertFalse(migration._redirected_state_dir())
+        with patch_environ(ZFSUTILITIES_STATE_DIR="/var/lib/zfsutilities"):
+            self.assertFalse(migration._redirected_state_dir())
+        with patch_environ(ZFSUTILITIES_STATE_DIR="/tmp/scratch-zfsu"):
+            self.assertTrue(migration._redirected_state_dir())
+
     def test_conflict_backs_up_legacy(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             state_dir = os.path.join(tmpdir, "state")
@@ -181,6 +242,7 @@ class TestMigration(unittest.TestCase):
             with patch_environ(
                 ZFSUTILITIES_STATE_DIR=state_dir,
                 ZFSUTILITIES_DISABLE_MIGRATION=None,
+                ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION="1",
                 HOME=home_dir,
             ):
                 legacy = paths.get_legacy_config_path()

@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.127.0
+
+*Released 2026-10-22*
+
+### Added
+
+- **Encrypted-LUN recovery.** `iscsi-recover-encrypted-luns`
+  reconstructs encrypted iSCSI LUNs on the storage host after keys are
+  loaded post-boot (e.g. a LUKS USB drive unlocked at the console):
+  idempotent re-add at the LUN index recorded in `saveconfig.json` for
+  the exact target IQN (auto-assignment deliberately refused),
+  persistence via `safe-iscsi-save` only when something changed, and a
+  compute-host rescan. Recovery output ends at the summary — starting
+  the VMs is the operator's follow-up. The `boot-config.conf` drop-in
+  gained an `ExecStartPost` hook that runs `iscsi-add-encrypted-luns`
+  when keys are available at boot (guarded so a missing deployed
+  script cannot fail the unit).
+- **IQN-prefix drift guards with script-verified usage.** A reinstall
+  in a different month derives a different default IQN prefix, leaving
+  orphan targets Proxmox may still log in to. `setup-iscsi-targets`
+  detects orphans (same short name, different prefix) and
+  `install-two-node` warns before creating new-prefix targets; both
+  now probe each orphan's usage themselves via the new read-only
+  `probe_target_usage` in `node-lib.sh` (ACL/demo context locally; one
+  ssh round trip to the compute host for guest configs referencing the
+  IQN and live `iscsiadm` sessions; an unreachable host is treated as
+  in use). A verified-unused orphan may be deleted after confirmation;
+  one in use — or unverifiable — is refused outright. `pool_to_target`
+  additionally warns when its constructed target is absent from the
+  live LIO tree.
+- **Upgrade prerequisite gate.** `upgrade-zfsutilities` checks this
+  host against the STAGED release's own `check-prerequisites` (mode
+  from the node configuration; deployed checker as the fallback for
+  releases that predate it) through the installers' shared interactive
+  remediation flow, aborting with nothing changed when the check
+  cannot pass.
+
+### Changed
+
+- **Drop-ins are activation wiring.** `switch-version` now installs
+  and refreshes the `rtslib-fb-targetctl` systemd drop-ins from the
+  ACTIVATED version's `share/two-node/` on every activation (storage
+  hosts only — gated on `targetctl`'s presence; identical files are
+  left untouched), so a release carrying drop-in changes takes effect
+  on activation with no manual step. `install-two-node` no longer
+  copies drop-ins from the repository checkout and now sources
+  `node-lib.sh` instead of hand-parsing `node.conf` for its working
+  variables.
+- **Rsync failure tails.** Log-wrapped rsync steps tee output to a
+  local temp file and, on failure, print a header plus the trailing
+  output lines so the session log and the rsync diagnosis see the
+  actual error text; the failure warning names where the full rsync
+  log lives.
+- **Boot-config ACL consistency.** `safe-iscsi-save` strips ACL
+  MappedLUNs referencing removed LUN indexes from
+  `saveconfig-boot.json`, keeping the boot config internally
+  consistent for `targetctl restore`. `iscsi-add-encrypted-luns`
+  scopes its LUN-index lookup to the exact target IQN (a global
+  first-match could return an orphan target's index) and only saves
+  when a backstore was added, so keyless boots stay quiet.
+- **Narrow-window pages.** Section-header titles/subtitles and
+  value-grid captions on the Performance and Memory pages ellipsize,
+  so long labels no longer pin the page minimum width or grow a
+  page-level horizontal scrollbar.
+
+### Fixed
+
+- **Redirected-state migration fence.** The legacy home-directory
+  sweep in `paths.sh` and `migration.py` is skipped when
+  `ZFSUTILITIES_STATE_DIR` is env-redirected away from the default
+  (scratch runs would otherwise move real home files into the scratch
+  directory); `ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION=1` opts in
+  deliberately.
+- **Chart backend cache is mock-aware.** `matplotlib_backend()`
+  returns the fallback without probing or consuming the cache while
+  the module's `Gtk` binding is a test double, fixing the CI failure
+  where a real probe's cache was handed out under `mock_gtk` and
+  canvas construction died with a cryptic PyGObject `SystemError`.
+  `requirements-dev.txt` gains matplotlib so CI exercises the real
+  renderer.
+- **Test-suite hygiene.** The python batch (controller and every xdist
+  worker) is fenced onto a private Xvfb so no test process connects
+  to the operator's display, and `test-module-dependencies` scans
+  `bin/` and `lib/` — it previously scanned only the repository root
+  and passed vacuously.
+
 ## 0.126.3
 
 *Released 2026-10-22*

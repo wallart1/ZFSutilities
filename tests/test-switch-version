@@ -577,5 +577,200 @@ test_cleanup_obsolete_systemd_artifacts() {
 
 test_cleanup_obsolete_systemd_artifacts
 
+# Helper: build a fake version carrying share/two-node drop-in files with
+# the given content tag, so tests can tell versions apart by content.
+_make_dropin_version() {
+    local version_base="$1" version="$2" tag="$3"
+    _make_fake_version "$version_base" "$version" ""
+    mkdir -p "$version_base/versions/$version/share/two-node"
+    printf 'boot-config-%s\n' "$tag" \
+        > "$version_base/versions/$version/share/two-node/rtslib-fb-targetctl-boot-config.conf"
+    printf 'pre-start-%s\n' "$tag" \
+        > "$version_base/versions/$version/share/two-node/rtslib-fb-targetctl-pre-start-backup.conf"
+}
+
+# Helper: put a fake targetctl on PATH so install_rtslib_dropins'
+# storage-host gate opens (the dev host has no real one). Prints the stub
+# directory — remove it and restore PATH when done.
+_make_targetctl_stub() {
+    local stub_dir
+    stub_dir=$(mktemp -d)
+    printf '#!/bin/bash\nexit 0\n' > "$stub_dir/targetctl"
+    chmod +x "$stub_dir/targetctl"
+    printf '%s' "$stub_dir"
+}
+
+test_install_rtslib_dropins_installs_and_refreshes() {
+    test_start "install_rtslib_dropins installs and refreshes drop-ins on switch"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_dropin_version "$tmpdir" "A" "v1"
+    _make_dropin_version "$tmpdir" "B" "v2"
+    ln -sfn "versions/A" "$tmpdir/current"
+
+    local systemd_dir="$tmpdir/etc/systemd/system"
+    local dropin_dir="$systemd_dir/rtslib-fb-targetctl.service.d"
+    export ZFSUTILITIES_SYSTEMD_DIR="$systemd_dir"
+    local _systemctl_calls=()
+    systemctl() {
+        _systemctl_calls+=("$*")
+        return 0
+    }
+
+    local stub_dir
+    stub_dir=$(_make_targetctl_stub)
+    local _orig_path="$PATH"
+    export PATH="$stub_dir:$PATH"
+
+    load_switch_config
+    install_rtslib_dropins
+    local failed=0
+    if [[ ! -f "$dropin_dir/boot-config.conf" ]]; then
+        failed=1
+        echo "    boot-config.conf missing after activation of A"
+    elif [[ "$(cat "$dropin_dir/boot-config.conf")" != "boot-config-v1" ]]; then
+        failed=1
+        echo "    boot-config.conf not from activated version A"
+    fi
+    if [[ ! -f "$dropin_dir/pre-start-backup.conf" ]]; then
+        failed=1
+        echo "    pre-start-backup.conf missing after activation of A"
+    elif [[ "$(cat "$dropin_dir/pre-start-backup.conf")" != "pre-start-v1" ]]; then
+        failed=1
+        echo "    pre-start-backup.conf not from activated version A"
+    fi
+
+    # Switching versions must refresh the drop-ins to the newly activated
+    # version's content — the version-skew trap this function exists to fix.
+    ln -sfn "versions/B" "$tmpdir/current"
+    install_rtslib_dropins
+    if [[ "$(cat "$dropin_dir/boot-config.conf" 2>/dev/null)" != "boot-config-v2" ]]; then
+        failed=1
+        echo "    boot-config.conf not refreshed after switching to B"
+    fi
+    if [[ "$(cat "$dropin_dir/pre-start-backup.conf" 2>/dev/null)" != "pre-start-v2" ]]; then
+        failed=1
+        echo "    pre-start-backup.conf not refreshed after switching to B"
+    fi
+
+    local _reload_count=0 _call
+    for _call in "${_systemctl_calls[@]}"; do
+        [[ "$_call" == "daemon-reload" ]] && _reload_count=$((_reload_count + 1))
+    done
+    if [[ "$_reload_count" -lt 1 ]]; then
+        failed=1
+        echo "    systemctl daemon-reload never fired"
+    fi
+
+    # Identical content is left alone: a re-run must not reload again.
+    install_rtslib_dropins
+    local _reload_count_after=0
+    for _call in "${_systemctl_calls[@]}"; do
+        [[ "$_call" == "daemon-reload" ]] && _reload_count_after=$((_reload_count_after + 1))
+    done
+    if [[ "$_reload_count_after" -ne "$_reload_count" ]]; then
+        failed=1
+        echo "    daemon-reload fired for identical content"
+    fi
+
+    export PATH="$_orig_path"
+    rm -rf "$stub_dir"
+    unset -f systemctl 2>/dev/null || true
+    unset ZFSUTILITIES_SYSTEMD_DIR
+    _teardown_switch_env "$tmpdir"
+
+    if [[ "$failed" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "rtslib drop-ins were not installed/refreshed correctly"
+    fi
+}
+
+test_install_rtslib_dropins_skips_without_targetctl() {
+    test_start "install_rtslib_dropins skips where targetctl is absent"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_dropin_version "$tmpdir" "A" "v1"
+    ln -sfn "versions/A" "$tmpdir/current"
+
+    local systemd_dir="$tmpdir/etc/systemd/system"
+    export ZFSUTILITIES_SYSTEMD_DIR="$systemd_dir"
+
+    # The targetctl gate is the first thing the function does, so an empty
+    # PATH deterministically simulates a host without rtslib-fb-targetctl.
+    (
+        # shellcheck disable=SC2123 # empty PATH is the test mechanism
+        PATH=""
+        load_switch_config
+        install_rtslib_dropins
+    )
+    local failed=0
+    if [[ -e "$systemd_dir/rtslib-fb-targetctl.service.d" ]]; then
+        failed=1
+        echo "    drop-in directory created without targetctl"
+    fi
+
+    unset ZFSUTILITIES_SYSTEMD_DIR
+    _teardown_switch_env "$tmpdir"
+
+    if [[ "$failed" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "drop-ins installed on a host without targetctl"
+    fi
+}
+
+test_install_rtslib_dropins_skips_without_share_files() {
+    test_start "install_rtslib_dropins skips when the activated version predates the drop-in files"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_fake_version "$tmpdir" "A" ""
+    ln -sfn "versions/A" "$tmpdir/current"
+
+    local systemd_dir="$tmpdir/etc/systemd/system"
+    export ZFSUTILITIES_SYSTEMD_DIR="$systemd_dir"
+    local _systemctl_calls=()
+    systemctl() {
+        _systemctl_calls+=("$*")
+        return 0
+    }
+
+    local stub_dir
+    stub_dir=$(_make_targetctl_stub)
+    local _orig_path="$PATH"
+    export PATH="$stub_dir:$PATH"
+
+    load_switch_config
+    install_rtslib_dropins
+    local failed=0
+    if [[ -e "$systemd_dir/rtslib-fb-targetctl.service.d" ]]; then
+        failed=1
+        echo "    drop-in directory created for a version without share files"
+    fi
+    if [[ "${#_systemctl_calls[@]}" -gt 0 ]]; then
+        failed=1
+        echo "    systemctl called for a version without share files"
+    fi
+
+    export PATH="$_orig_path"
+    rm -rf "$stub_dir"
+    unset -f systemctl 2>/dev/null || true
+    unset ZFSUTILITIES_SYSTEMD_DIR
+    _teardown_switch_env "$tmpdir"
+
+    if [[ "$failed" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "drop-ins installed from a version that ships none"
+    fi
+}
+
+test_install_rtslib_dropins_installs_and_refreshes
+test_install_rtslib_dropins_skips_without_targetctl
+test_install_rtslib_dropins_skips_without_share_files
+
 test_summary
 teardown_test_env

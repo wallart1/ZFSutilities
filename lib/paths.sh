@@ -10,7 +10,20 @@
 
 # Base directories (override via environment)
 ZFSUTILITIES_CONFIG_DIR="${ZFSUTILITIES_CONFIG_DIR:-/etc/zfsutilities}"
-ZFSUTILITIES_STATE_DIR="${ZFSUTILITIES_STATE_DIR:-/var/lib/zfsutilities}"
+ZFSUTILITIES_STATE_DIR_DEFAULT="/var/lib/zfsutilities"
+# Redirected-state fence (consumed by migrate_zfsutilities_state): scratch
+# runs point ZFSUTILITIES_STATE_DIR at a temporary directory while HOME
+# still names the real user, so the legacy sweep would move REAL home
+# files into the scratch dir. Record whether the environment redirected
+# the state dir away from the default before the assignment below gives
+# unset runs the default.
+if [[ -n "${ZFSUTILITIES_STATE_DIR:-}" \
+        && "${ZFSUTILITIES_STATE_DIR}" != "$ZFSUTILITIES_STATE_DIR_DEFAULT" ]]; then
+    ZFSUTILITIES_STATE_DIR_REDIRECTED=1
+else
+    ZFSUTILITIES_STATE_DIR_REDIRECTED=0
+fi
+ZFSUTILITIES_STATE_DIR="${ZFSUTILITIES_STATE_DIR:-$ZFSUTILITIES_STATE_DIR_DEFAULT}"
 ZFSUTILITIES_LOG_DIR="${ZFSUTILITIES_LOG_DIR:-/var/log/zfsutilities}"
 ZFSUTILITIES_RUN_DIR="${ZFSUTILITIES_RUN_DIR:-/run/zfsutilities}"
 ZFSUTILITIES_LOCK_DIR="${ZFSUTILITIES_LOCK_DIR:-/run/lock/zfsutilities}"
@@ -67,6 +80,16 @@ _zfsutilities_migration_disabled() {
         ""|"0") return 1 ;;
         *)       return 0 ;;
     esac
+}
+
+# _zfsutilities_migration_redirect_blocked
+# Return 0 when the state dir was env-redirected away from the default and
+# the operator has not explicitly opted into redirected migration. The
+# legacy sweep must not run in that state: it would move real HOME files
+# into the redirected (usually scratch) directory.
+_zfsutilities_migration_redirect_blocked() {
+    [[ "${ZFSUTILITIES_STATE_DIR_REDIRECTED:-0}" == "1" ]] || return 1
+    [[ "${ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION:-}" != "1" ]]
 }
 
 # _zfsutilities_migration_sentinel
@@ -144,6 +167,14 @@ migrate_zfsutilities_state() {
         return 0
     fi
     if [[ $EUID -ne 0 && "${ZFSUTILITIES_MIGRATION_ALLOW_NONROOT:-}" != "1" ]]; then
+        return 0
+    fi
+    # Redirected state dir without an explicit opt-in: skip the sweep so a
+    # scratch run never moves real HOME files into the scratch dir.
+    if _zfsutilities_migration_redirect_blocked; then
+        log_msg "INFO: ZFSUTILITIES_STATE_DIR is redirected; state migration" \
+            "skipped (set ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION=1 to run it" \
+            "deliberately)"
         return 0
     fi
 

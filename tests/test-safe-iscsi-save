@@ -265,6 +265,113 @@ json.load(open('$bootfile')).get('storage_objects', [])]))" 2>/dev/null || true)
     fi
 }
 
+test_mapped_luns_strippped_from_boot_config() {
+    test_start "ACL MappedLUNs for stripped LUNs are excluded from saveconfig-boot.json"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local savefile="$tmpdir/saveconfig.json"
+    local bootfile="$tmpdir/saveconfig-boot.json"
+    local manifest="$tmpdir/expected-backstores.txt"
+    local confdir="$tmpdir/etc/zfsutilities"
+    mkdir -p "$confdir"
+
+    # TPG holds a plain LUN 0 and an encrypted LUN 1; the initiator ACL maps
+    # both. The boot config must keep MappedLUN 0 and drop MappedLUN 1 with
+    # its LUN, or targetctl restore warns "Could not find matching TPG LUN".
+    cat > "$savefile" <<'EOF'
+{
+  "storage_objects": [
+    {"name": "vm-100-disk-0", "dev": "/dev/zvol/threeamigos/proxmox/vm-100-disk-0"},
+    {"name": "vm-101-disk-0", "dev": "/dev/zvol/threeamigos/proxmox/vm-101-disk-0"}
+  ],
+  "targets": [
+    {
+      "wwn": "iqn.2026-02.local.stewie:threeamigos",
+      "tpgs": [
+        {
+          "luns": [
+            {"storage_object": "/backstores/block/vm-100-disk-0", "index": 0},
+            {"storage_object": "/backstores/block/vm-101-disk-0", "index": 1}
+          ],
+          "acls": [
+            {
+              "node_wwn": "iqn.2026-02.local.tweety",
+              "mapped_luns": [
+                {"index": 0, "tpg_lun": 0},
+                {"index": 1, "tpg_lun": 1}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+EOF
+    printf 'vm-100-disk-0\nvm-101-disk-0\n' > "$manifest"
+    printf 'vm-101-disk-0:/dev/zvol/threeamigos/proxmox/vm-101-disk-0:threeamigos\n' \
+        > "$confdir/iscsi-encrypted-luns.conf"
+
+    local script_copy="$tmpdir/safe-iscsi-save"
+    sed \
+        -e "s|/etc/rtslib-fb-target/saveconfig\.json|$savefile|g" \
+        -e "s|/etc/rtslib-fb-target/saveconfig-boot\.json|$bootfile|g" \
+        -e "s|/etc/rtslib-fb-target/expected-backstores\.txt|$manifest|g" \
+        -e "s|source ~/bashinit|source \"$mydir/bin/bashinit\"|g" \
+        -e 's|^source_helper rootcheck$|: # rootcheck stays mocked; the suite runs non-root|' \
+        "$mydir/bin/safe-iscsi-save" > "$script_copy"
+
+    local node_conf="$tmpdir/node.conf"
+    cat > "$node_conf" <<'EOF'
+NODE_MODE="single-node"
+EOF
+
+    cat > "$tmpdir/runner" << RUNNEREOF
+#!/bin/bash
+export NODE_CONF="$node_conf"
+export mydir="$mydir"
+export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$confdir"
+targetcli() {
+    case "\$*" in
+        "/backstores/block ls")
+            echo "  vm-100-disk-0     /dev/zvol/threeamigos/proxmox/vm-100-disk-0   50G"
+            echo "  vm-101-disk-0     /dev/zvol/threeamigos/proxmox/vm-101-disk-0   50G"
+            ;;
+        "saveconfig")
+            true
+            ;;
+        *)
+            true
+            ;;
+    esac
+}
+rootcheck() { true; }
+source "$script_copy"
+RUNNEREOF
+
+    bash "$tmpdir/runner" >/dev/null 2>&1
+    local rc=$?
+
+    local tpg_luns
+    tpg_luns=$(python3 -c "import json; t = json.load(open('$bootfile'))['targets'][0]['tpgs'][0]; \
+print(' '.join(str(l['index']) for l in t['luns']))" 2>/dev/null || true)
+    local mapped
+    mapped=$(python3 -c "import json; t = json.load(open('$bootfile'))['targets'][0]['tpgs'][0]; \
+print(' '.join(str(m['tpg_lun']) for m in t['acls'][0]['mapped_luns']))" 2>/dev/null || true)
+
+    rm -rf "$tmpdir"
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "safe-iscsi-save failed, rc=$rc"
+    elif [[ "$tpg_luns" != "0" ]]; then
+        test_fail "Expected only LUN 0 in boot config, got: $tpg_luns"
+    elif [[ "$mapped" != "0" ]]; then
+        test_fail "Expected only MappedLUN tpg_lun 0 in boot config, got: $mapped"
+    else
+        test_pass
+    fi
+}
+
 test_helper_removes_workdir() {
     test_start "Helper removes its temporary work directory"
     local scratch output rc=0 leftover
@@ -334,6 +441,7 @@ test_active_less_than_expected_refuses_save
 test_empty_manifest_refuses_save
 test_manifest_regenerated_after_save
 test_encrypted_backstores_excluded_from_boot_config
+test_mapped_luns_strippped_from_boot_config
 test_helper_removes_workdir
 test_manifest_install_failure_cleans_tmpfile
 

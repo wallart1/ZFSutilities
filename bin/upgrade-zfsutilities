@@ -40,6 +40,7 @@ if [[ ${UPGRADE_ZFSUTILITIES_TEST_NO_ROOT:-0} != "1" ]]; then
     rootcheck
 fi
 source_helper upgrade-lib.sh || die "upgrade-lib.sh not found next to this script"
+source_helper installer-lib.sh || die "installer-lib.sh not found next to this script"
 
 # die is provided by bashinit (sourced above).
 
@@ -50,10 +51,12 @@ usage() {
     log_msg "INFO: Usage: upgrade-zfsutilities [-h|--help]"
     log_msg "INFO:"
     log_msg "INFO: Checks GitHub for the latest ZFSutilities release. When it is newer"
-    log_msg "INFO: than the active deployed version, downloads it, scans every deployment"
-    log_msg "INFO: target for locally modified files (listing the changes and asking for"
-    log_msg "INFO: approval before touching anything), then deploys the new version via"
-    log_msg "INFO: deploy-version and stops. Nothing is activated automatically."
+    log_msg "INFO: than the active deployed version, downloads it, checks the host against"
+    log_msg "INFO: the incoming release's prerequisites (offering to install anything"
+    log_msg "INFO: missing), scans every deployment target for locally modified files"
+    log_msg "INFO: (listing the changes and asking for approval before touching"
+    log_msg "INFO: anything), then deploys the new version via deploy-version and stops."
+    log_msg "INFO: Nothing is activated automatically."
     log_msg "INFO:"
     log_msg "INFO: Environment overrides: ZFSUTILITIES_VERSION_BASE,"
     log_msg "INFO: ZFSUTILITIES_REMOTE_VERSION_BASE, ZFSUTILITIES_RELEASE_API,"
@@ -489,7 +492,33 @@ upgrade_main() {
     staged_version=$(cat "$staging_root/VERSION" 2>/dev/null || true)
     if [[ "$staged_version" != "$latest_version" ]]; then
         log_msg "WARN:   Downloaded tree VERSION (${staged_version:-none}) does not match"
-        log_msg "WARN:   release tag $latest_tag"
+        log_msg "WARN: release tag $latest_tag"
+    fi
+
+    # --- Prerequisite gate: the incoming release's requirements ---
+    # The staged tree's checker knows what the NEW version needs (a new
+    # release may add prerequisites the deployed checker has never heard
+    # of). Remediation is the installers' shared interactive flow; this
+    # host must pass before anything is scanned or modified. The check
+    # mode follows the node configuration (upgrade_lib_legacy_hosts'
+    # first line: single-node/two-node with node-lib semantics).
+    local prereq_checker="$staging_root/bin/check-prerequisites"
+    if [[ ! -f "$prereq_checker" ]]; then
+        # Release predates the checker: fall back to the deployed one.
+        prereq_checker=$(find_zfsutility_script check-prerequisites || true)
+    fi
+    if [[ -n "$prereq_checker" && -f "$prereq_checker" ]]; then
+        local node_mode
+        node_mode=$(upgrade_lib_legacy_hosts | sed -n 1p)
+        log_msg "INFO: Checking this host against the $latest_version prerequisites"
+        log_msg "INFO: (mode: $node_mode) ..."
+        if ! run_interactive_prerequisites "--$node_mode" "$prereq_checker"; then
+            log_msg "INFO: Aborted. Nothing was changed."
+            return 1
+        fi
+    else
+        log_msg "WARN: No check-prerequisites available (staged release nor deployed"
+        log_msg "WARN: tree) — skipping the prerequisite gate."
     fi
 
     # --- Enumerate deployment targets and open one SSH master per host ---

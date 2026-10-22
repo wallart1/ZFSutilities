@@ -14,6 +14,10 @@ entry were removed; recoverable via `git log`.)
 ladder, the scroll-stability work, and the zfswipe notification rework are
 committed with Release 0.126.0 — their entries were removed; recoverable
 via `git log`.)
+(2026-10-22 prune: the 0.126.1 revert-and-redo campaign through Release
+0.126.3 is committed, pushed, and released — the restore/rework/wrap-up
+entries were removed; recoverable via `git log`. Live items condensed into
+the threads below.)
 
 ## Persistent gotchas (not documented in docs/)
 
@@ -117,181 +121,108 @@ via `git log`.)
   Deployed launches resolve through `current`, so a versions/<v>-baked URL
   re-anchors to `current` and survives version switches.
 
+- `tests/test-module-dependencies` now scans `bin/` and `lib/` too (was
+  repo-root-only, i.e. vacuous — the repo root has no loose scripts). New
+  scripts must resolve every called function through a direct `source`,
+  `source_helper`, a `find_zfsutility_script` reference, or a variable
+  assignment feeding `source "$var"`; `declare -f <fn>` guards mark a
+  function as an optional caller-provided dependency (the
+  zfslockmanager→node-lib pattern). The scanner masks multi-line quoted
+  strings and comment tails, so python `-c` payloads and `# ... (send base)`
+  comments are not mistaken for bash calls.
+
 ## Active / parked threads
 
-- **unarchive-vm 205 Step-2 fix re-applied (2026-10-20).** `sudo
-  unarchive-vm 205` on tweety died at "Cannot map pool NVME1 to target"
-  although stewie's node.conf has had `[NVME1]=nvme1` since 2026-04-28.
-  Root cause: the Step-2 ssh payload loads node-lib via `source_helper` in
-  a fresh remote shell; the bare `declare -A pool_target` was function-local
-  to source_helper's frame and vanished on return, emptying the map under
-  `pool_to_target` (gotcha above). Fix restored verbatim from 588bad1:
-  `declare -gA` in both node-lib branches + the child-bash regression test
-  in tests/test-node-lib; re-red-proofed this time against the buggy lib
-  (empty-map failure) before the fix, green after. Per stewie inspection at
-  0.126.1 time: the `iqn.2026-02.local.stewie:nvme1` target exists and no
-  `vm-205-*` backstores/LUNs remain, so the post-deploy rerun takes the
-  create path on both targets (nvme1 + threeamigos) and needs no
-  enroll-iscsi-pool. The production rerun stays moot until 0.126.1's
-  problems are resolved and a replacement ships (deployed 0.126.1 already
-  carries this fix).
+- **End-user usability fixes from the 0.126.3 wrap-up feedback (2026-10-22,
+  uncommitted).** Three items off the wrap-up report's end-user notes:
+  (1) Drop-in automation: `switch-version`'s `install_wiring` now refreshes
+  the `rtslib-fb-targetctl` drop-ins from the ACTIVATED version's
+  `share/two-node/` (gated on `command -v targetctl` — storage hosts only;
+  cmp-identical files untouched, daemon-reload only on change).
+  install-two-node's own drop-in step was removed — it copied from the repo
+  checkout, masking version skew (the exact trap the feedback came from).
+  (2) `iscsi-recover-encrypted-luns` no longer prints `qm start` commands;
+  recovery output ends at the summary. (3) The IQN-drift orphan flows do
+  their own usage checking: new read-only `probe_target_usage` in node-lib
+  (ACL/demo context locally; one ssh to the compute host for
+  qemu-server/lxc configs referencing the IQN + live iscsiadm sessions;
+  unreachable ⇒ treated as in-use). setup-iscsi-targets refuses to even
+  offer deletion of an in-use/unverifiable orphan; install-two-node's
+  drift gate dies before its proceed prompt unless every drifted target is
+  verified unused (user chose hard-refuse over an evidence-enriched
+  prompt). install-two-node now sources node-lib instead of hand-copying
+  the node.conf lowercase vars (removes the duplicated parse, gains the
+  probe). Tests: probe matrix in test-node-lib (subshell mocks), two new
+  drift-refusal flow tests (ssh mock gained a qemu-server payload case with
+  _mock_probe_refs/_mock_probe_sessions/_mock_probe_unreachable knobs),
+  three drop-in tests in test-switch-version (fake targetctl on PATH;
+  empty-PATH trick for the no-targetctl skip), structural probe-gate
+  assertions in test-iscsi-fresh-install-guards.
 
-- **0.126.1 threads re-applied onto 0.126.0 (2026-10-20, user-directed
-  redo), uncommitted.** Two named items restored byte-identically from
-  588bad1 (its parent is cd21a70 = current main, so file-level restore is
-  exact): (a) the 2026-10-16 Alignment polish six-item pass + guest-FS
-  probing — tooltip/ellipsize tables, 20-row capped scrolled windows
-  (Dashboard + Performance), sortable scan columns, compute-node PVE config
-  fetch, alignment_guestfs.py, vm-guest-fs-below-volblock WARN, vm-fs ladder
-  rungs, DatasetBlocks.volsize, full-width ladder viewport — including the
-  2026-10-17 follow-up already in that commit (deterministic 3-tier
-  match_volumes: pinned serial / UUID-PARTUUID signature intersection with
-  clone-shared refusal / size+bus; single-round-trip guest lsblk -bJ);
-  (b) chart-renderer visibility (check-prerequisites matplotlib warn, Live
-  Charts renderer label, Prerequisites.md system-package note). 25 files
-  (10 mainline + 10 tests + 5 docs); local docs site rebuilt for the
-  restored gtk-gui/python-modules content. The node-lib `declare -gA`
-  unarchive-vm 205 fix + test were re-applied separately the same day
-  (thread above). Standing rule from the user after those restores: every
-  further issue is reworked from scratch — prior commits are ignored for
-  presented issues, no restores. (RESCINDED by the user 2026-10-21, after
-  the Fifth rework below: referring to prior work — git history, the
-  archive branch, earlier commits — is allowed again; the already-restored
-  files stand either way.) First such rework: the realized-check
-  display leak (see thread below). Second (2026-10-21, the
-  Performance/Alignment prompt): six of the prompt's items verified
-  present in the tree (ellipsize+tooltip cells, 20-row capped scrolls,
-  sortable scan columns, compute-node PVE config fetch, guest-FS
-  probing, themed chart palettes); three gaps reworked new — ladder
-  draw width capped at half the page allocation
-  (LADDER_MAX_WIDTH_SHARE, still floored at the content minimum), cell
-  tooltips fire only where text actually truncates (Pango measure vs
-  column width, mock-safe), and MatplotlibRollingChart rebuilds its
-  legend on style-updated so theme flips recolour legend text
-  immediately. Third (same day, the Wipe-Labels kernel-notification
-  prompt): zfswipe already notified the kernel on every wipe-success
-  exit and the GUI refreshes its inventories after udev settles; one
-  gap reworked new, red-proofed — a failed dd now triggers the
-  best-effort partprobe/udevadm notification before rc=8, because
-  labelclear/wipefs may already have erased signatures on that path.
-  Fourth (2026-10-21, the Performance-page four-item redo prompt —
-  widgets' own h-scrollbars, far-right column resize, 20-line treeviews,
-  ladder text size + scrollbar): items 1–2 were verified done in the
-  current tree with Xvfb probes (every overflowing table already carries
-  its own live h-scrollbar, the page itself never scrolls sideways, and
-  the far-right columns render honest fixed widths with the expand
-  column absorbing slack and the h-range covering the full column sum);
-  the real gaps reworked new: (a) capped_treeview_scroll gained
-  fixed_rows=True — min_content_height pinned at the 20-row cap so
-  every Performance table (empty included) keeps its 20-line window;
-  the Dashboard's three call sites pass fixed_rows=False explicitly to
-  keep their natural-height convention; (b) ladder text bumped one notch
-  (Cairo 13px, matplotlib title 11.5 / rows 11 / ticks+legend 10.5,
-  LADDER_CHAR_WIDTH_PX 8, plot floor 500); (c) the half-share draw-width
-  contract was replaced — it fed max_content_width below the canvas's
-  content-minimum request, and GTK answers that contradiction by
-  clamping the canvas and dropping the h-scrollbar (reproduced under
-  Xvfb with the Cairo ladder at a 700px window); the canvas now requests
-  exactly ladder_minimum_width, the viewport stretches it to the page
-  width, and _floor_ladder_scroll_width (size-allocate handler + refresh
-  path) floors max_content_width at max(page, minimum). Regression
-  locks: the realized check gained a geometry pass asserting all of the
-  above in realized windows at 1000/700px, run under BOTH renderers via
-  REALIZED_CHART_RENDERER=cairo (check names its ladder class on
-  stdout); all key new assertions red-proofed by sabotage. Probe
-  by-product recorded in PREEXISTING: below ~600px windows the page
-  itself h-scrolls because section subtitles don't ellipsize.
-  Fifth rework (2026-10-21, the "Rewrite Data complete even though none
-  was done" prompt, logged 2026-10-19 on deployed 0.126.0): no forensic
-  log survives (stewie + dev-host session/GUI logs from Oct 18-20 are
-  gone; the code is identical to 0.126.0 — both files unmodified since),
-  so root cause came from code + stewie's man page (zfs 2.4.4): the
-  completion summary was unconditional (rc==0 → "complete") while rc=0
-  covers a no-op rewrite (`zfs rewrite -v` prints one line per
-  successfully rewritten file — zero lines on an empty/already-conformant
-  dataset), AND the runner silently skipped a step whose process failed
-  to spawn, finishing rc=0. Fixed both: the rewrite script tees its -v
-  output to a per-dataset capture, counts rewritten files, appends
-  count<TAB>ds to a per-run results file, and logs a per-dataset
-  summary; the dialog's rc=0 line reports the totals ("complete (N files
-  rewritten)" / "rewrote nothing — zfs rewrite reported 0 files" /
-  "finished (...)" variants for unavailable/incomplete/missing-dataset
-  summaries); a spawn failure is now a failed step (FATAL, rc=1,
-  post-callback unrun, finally step still runs first) for every GUI
-  runner operation. Red-proofed by sabotage both ways; stub-zfs
-  script-execution tests lock the runtime behavior; messages manual rows
-  updated.
-  Follow-up (2026-10-21, approved plan): the last un-redone 0.126.1 item
-  is back — the installer execution harness restored byte-identically
-  from 588bad1 (test-installer-flows, both TEST_NO_ROOT hatches,
-  ZFSUTILITIES_ETC_PREFIX, commands.md Environment tables; restores were
-  re-sanctioned at the Fifth-rework rescind), and 0.126.1's testing.md
-  rows restored/merged (verbatim: test-installer-flows/-structure,
-  test-iscsi-fresh-install-guards, test_alignment_guestfs; clause merges
-  into the alignment_page/stats/dashboard/charting rows, which the redo
-  tree had left at their 0.126.0 wording). Parked polish done: chart
-  text scales with the GUI base font (charting.chart_font_scale, all
-  four renderers + ladder width floor; mock-degrades to 1.0 — mock
-  comparisons raise TypeError into the except, so no isinstance guard),
-  and grouped rung labels read "(3 datasets)" instead of a bare ×N
-  (unit per layer: datasets/devices/volumes/guest filesystems).
-  share/dev/validate-guestfs-probe.sh validates guest-FS probing end to
-  end: self-check green locally AND on stewie against the deployed
-  byte-identical 0.126.2 module (versions/0.126.2 is staged there but
-  `current` still points at 0.126.1); the live root run is the user's
-  paste — `sudo "/NFS1/dan(NFS1)/zfsutilities-pub/share/dev/validate-guestfs-probe.sh"`.
-  Guest-probe production validation therefore still ends with that
-  paste. Test-authoring trap found and recorded in PREEXISTING.md: an
-  mpl-ladder test calling update() outside the backend patch runs the
-  REAL probe (no mock active) on a GTK host, caching the real backend
-  and crashing later suites with a PyGObject SystemError.
+- **upgrade-zfsutilities prerequisite gate (added 2026-10-22, uncommitted).**
+  After download/staging, the upgrade now runs the STAGED release's
+  bin/check-prerequisites (mode from upgrade_lib_legacy_hosts' first line;
+  deployed checker as fallback; WARN-skip when neither exists) through the
+  installers' shared run_interactive_prerequisites, aborting rc=1 before
+  any scan/change when it cannot pass. installer-lib.sh's
+  installer_failures became declare -gA — required for sourcing through
+  source_helper (the frame-local declare would have silently corrupted
+  remediation parsing). Tests: stub checker in the fake tarball records
+  args to FAKE_PREREQ_MARKER, exits FAKE_PREREQ_RC; abort + mode tests.
 
-- **Wrap-up pass (2026-10-22) — review, fences, freeze.** Numbered
-  wrap-up executed on the uncommitted tree: coding-policies review of
-  all new code (ruff lint+format clean, shellcheck clean incl. the
-  share/dev validator linted outside the canonical set, manual review
-  clean); test-suite review found one gap — the guestfs validator's
-  --self-check (which consumes the private _guest_probe_targets
-  assembly) was fenced by nothing, so tests/test-validate-guestfs-probe
-  now runs it against the repo tree (plus -h and the non-root refusal);
-  affected suites green during iteration; docs gained the suite row and
-  a validator pointer in python-modules' alignment_guestfs section;
-  docs-integrity green; docs/site rebuilt; full suite (soaks off) green
-  on the dev host; codebase frozen at that point. PREEXISTING resolution
-  was deferred by the user mid-pass (intended for a later session) —
-  the file's actionable items stand unchanged. Commit, VERSION, and
-  changelog remain the user's call.
+- **Rsync-pull failure tails (fixed 2026-10-22, uncommitted).** The 2026-10-21
+  stewie runs (both profiles, 0.108.0 and 0.126.1) failed every rsync pull
+  rc=11 with only "Error in file I/O" in the session log — the pull wrapper
+  shipped all output to the source host's rsync-pull.log, starving
+  _run_command's capture that _diagnose_rsync_failure feeds on. Wrappers now
+  tee to a local temp file and print a header + tail -15 to the runner on
+  failure; the WARN carries "(full rsync output: host:path)". The Oct 21
+  root cause is unrecoverable (local log truncated at today's 06:00 reset;
+  rocky/tweety logs off-limits) and self-resolved — 2026-10-22 runs green,
+  threeamigos clean. behavioral test: TestRsyncLogWrapperBehavior.
 
-- **Realized-check display leak — reworked from scratch (2026-10-20).**
-  During full-suite runs on a host with a desktop DISPLAY,
-  tests/python/alignment_realized_check.py initialized GTK against the
-  ambient display first (Xvfb was only the fallback), flashing its
-  verification window on the operator's screen. Rework: the check now
-  starts its private Xvfb first and the ambient display is never an
-  option — DISPLAY is only ever pointed at an Xvfb the script started,
-  and when that is impossible (Xvfb missing, no free number, GTK refusing
-  to bind) the check skips instead of falling back; `_rebind_gtk` is the
-  binder (covers the stale-initialized-flag path), the old ambient probe
-  is gone. A `REALIZED-DISPLAY: :N` stdout line names the display used,
-  and test_alignment_realized gained a fence test asserting that line
-  exists and names something other than the inherited DISPLAY —
-  red-proofed against the ambient-first code before the fix. testing.md's
-  suite row updated to the private-display-only truth.
+- **CI red on the 0.126.3 push (fixed 2026-10-22, uncommitted).** GitHub's
+  first run of the 0.126.2+0.126.3 batch failed 3 python tests (test +
+  nightly soak jobs alike): the realized geometry check asserted the
+  matplotlib ladder a matplotlib-less runner never selects (matplotlib is
+  now in requirements-dev.txt, flowing to CI and the dev container via
+  install-test-deps.sh), and the two spawn-failure tests hit
+  /var/log/zfsutilities through start()'s _truncate_rsync_log as the
+  unprivileged runner user (test_backup_runner's _patch_log_dirs now
+  redirects RSYNC_LOG_DIR/RSYNC_LOG_FILE into its tmpdir). Full suite green
+  locally; the definitive check is the CI run after push. A matplotlib
+  requirements-manifest capability was considered and rejected — the
+  canonical-env contract makes a hard failure in a non-canonical
+  environment the honest outcome.
 
-- **Reverted main to 0.126.0 (2026-10-20) — 0.126.1 has critical problems
-  (user-reported, not yet diagnosed).** Main worktree reset to cd21a70
-  (local only; origin/main still carries 588bad1, so local main sits behind
-  by 1 until the 0.126.1 problems are worked and a new release replaces it).
-  Everything from the aborted campaign — the pool-activity queue (manager,
-  poolactivityctl, scrub absorption, send/receive choke point, rewrite
-  integration, docs/tests) plus the Rewrite Data scope/step-failure fixes
-  and the 2026-10-19 migration-sweep incident notes — is preserved verbatim
-  on branch `archive/pre-revert-20261020` (commit 07010d6, 70 files,
-  +10,751/−3,106). The PromptQueue worktree and its branch were removed.
-  Live-state residue from the brief repo-GUI run: /var/lib/zfsutilities now
-  holds pool_activity.json and scrub_state.json.20261020T163711.bak —
-  0.126.0's scrub queue comes up empty until that .bak is restored (user's
-  call); two dangling ~/.config symlinks from the incident remain.
+- **PREEXISTING.md resolution pass (2026-10-22, uncommitted).** All nine
+  actionable entries were fixed this session (safe-iscsi-save mapped_luns
+  strip, encrypted-LUN recovery script + target-scoped lookups,
+  boot-config.conf ExecStartPost, IQN-prefix drift guards in three places,
+  redirected-state migration fence in both python and bash sweeps, the
+  module-dependency scan extension, the charting mock fence, Performance
+  page ellipsize, the conftest private-Xvfb fence). Remaining entries are
+  the Zensical 1.x wait (rechecked 0.0.71) and the user-deferred
+  infra-vdev planning objective.
+
+- **unarchive-vm 205 live rerun (pending 0.126.3 deployment).** The Step-2
+  `declare -gA` fix shipped in 0.126.1+; tweety's live rerun died only
+  because stewie ran 0.125.0 (pre-fix). Zvols are restored+verified; only
+  iSCSI reconstruction is blocked, and the post-deploy rerun takes the
+  create path on both targets (nvme1 + threeamigos) — no enroll-iscsi-pool
+  needed.
+
+- **Guest-probe live validation (pending the user's paste).** After 0.126.3
+  deploys: `sudo "/NFS1/dan(NFS1)/zfsutilities-pub/share/dev/validate-guestfs-probe.sh"`
+  on stewie, then analysis of its output (self-check already green there
+  against the byte-identical 0.126.2 module).
+
+- **0.126.1-revert residue (user decisions pending).** /var/lib/zfsutilities
+  holds pool_activity.json + scrub_state.json.20261020T163711.bak from the
+  brief repo-GUI run — the scrub queue comes up empty until the .bak is
+  restored; two dangling ~/.config symlinks from the migration-sweep
+  incident remain. The aborted pool-activity campaign lives only on branch
+  `archive/pre-revert-20261020` (07010d6).
 
 - **Zvol-snapshot-mount plan v3 (2026-10-01) — parked, NOT approved.** Plan
   written next to v1/v2 in

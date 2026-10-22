@@ -146,6 +146,131 @@ fi
 # low-device warning.  Empty means "no expectation declared" and disables it.
 expected_iscsi_devices="${EXPECTED_ISCSI_DEVICES:-}"
 
+# One-shot per-process cache of the local LIO target list, probed lazily by
+# _warn_when_target_missing. Empty string means "not probed yet"; after a
+# probe the variable is always set (possibly to an empty list).
+_lio_target_list=""
+declare -gA _lio_warned_targets=() 2>/dev/null || true
+
+# Warn once per IQN when the constructed target does not exist in the local
+# LIO tree. This catches IQN-prefix drift: node.conf's iqn_prefix differs
+# from the prefix of the live targets (e.g. after a reinstall in a different
+# month), so LUN mapping would target a fresh/empty target while Proxmox
+# still logs in to the old one. Best-effort and read-only: it never changes
+# pool_to_target's result, runs only on the storage host (the only host
+# with a LIO target tree), and stays silent when targetcli is absent or no
+# targets exist yet (fresh install before setup-iscsi-targets).
+_warn_when_target_missing() {
+    local iqn="$1"
+    [[ "$(hostname -s)" == "$storage_host" ]] || return 0
+    command -v targetcli >/dev/null 2>&1 || return 0
+    if [[ -z "$_lio_target_list" ]]; then
+        _lio_target_list=$(targetcli /iscsi ls 2>/dev/null || true)
+    fi
+    printf '%s\n' "$_lio_target_list" | grep -q "iqn\." || return 0
+    if [[ -n "${_lio_warned_targets[$iqn]:-}" ]]; then
+        return 0
+    fi
+    if ! printf '%s\n' "$_lio_target_list" | grep -q "$iqn"; then
+        _lio_warned_targets["$iqn"]=1
+        log_msg "WARN: pool_to_target: target $iqn does not exist in the local LIO target tree"
+        log_msg "WARN:   If targets exist under a different IQN prefix, node.conf's IQN_PREFIX"
+        log_msg "WARN:   has drifted from the live targets — LUNs would map to the wrong target."
+        log_msg "WARN:   Check 'targetcli /iscsi ls' and the IQN_PREFIX in $NODE_CONF."
+    fi
+    return 0
+}
+
+# probe_target_usage <full-iqn>
+# Read-only usage probe for one iSCSI target, for the IQN-prefix-drift
+# guards (setup-iscsi-targets orphan deletion, install-two-node drift
+# confirmation): determines whether anything still consumes the target so
+# those decisions never depend on the operator knowing what an ACL is or
+# where Proxmox keeps guest configs.
+#
+# Prints plain-language evidence lines via log_msg and returns:
+#   0 — VERIFIED UNUSED: no guest config on the compute host references
+#       the target and no live iSCSI session is attached to it
+#   1 — IN USE or UNVERIFIABLE: a guest config references it, a live
+#       session is attached, or the compute host could not be reached
+#       (unreachable is treated as in use, so the unsafe action is the
+#       one that gets refused)
+#
+# Storage-side ACL state is printed as context only: two-node targets may
+# run demo-mode ACLs (generate_node_acls=1), where an empty ACL list
+# means "any initiator may log in", not "nobody uses it" — the
+# authoritative usage signal is the compute host. Strictly read-only.
+probe_target_usage() {
+    local iqn="$1"
+
+    # An IQN's alphabet is [A-Za-z0-9.:_-]; anything else is not ours to
+    # interpolate into the ssh command string below — refuse rather than
+    # risk it.
+    [[ "$iqn" =~ ^iqn\.[A-Za-z0-9.:_-]+$ ]] || return 1
+    [[ "$(hostname -s)" == "$storage_host" ]] || return 1
+    command -v targetcli >/dev/null 2>&1 || return 1
+
+    # The two regexes in this function are character-class filters over the
+    # iSCSI-name grammar (RFC 3720: "iqn." followed by date- and
+    # domain-qualified names, colon-separated; the only characters legal in
+    # any of its segments are letters, digits, dots, colons, underscores,
+    # and hyphens):
+    #   ^iqn\.[A-Za-z0-9.:_-]+$   — full-string validation of the caller's
+    #                               IQN argument (safety fence above)
+    #   iqn\.[A-Za-z0-9.:_-]*     — extraction of initiator IQN tokens from
+    #                               targetcli's acls-ls listing
+    # Both are anchored on the literal "iqn." prefix; neither needs
+    # alternation or look-around.
+
+    local acl_initiators
+    acl_initiators=$(targetcli "/iscsi/${iqn}/tpg1/acls" ls 2>/dev/null \
+        | grep -o 'iqn\.[A-Za-z0-9.:_-]*' | sort -u | tr '\n' ' ')
+    if [[ -n "$acl_initiators" ]]; then
+        log_msg "INFO: probe: ${iqn} — ACL initiators: ${acl_initiators}"
+    elif targetcli "/iscsi/${iqn}/tpg1" get attribute generate_node_acls 2>/dev/null \
+            | grep -q "generate_node_acls=1"; then
+        log_msg "INFO: probe: ${iqn} — demo-mode ACLs (any initiator may log" \
+            "in; an empty ACL list is normal)"
+    fi
+
+    # One round trip: guest configs referencing the IQN (VM and container),
+    # plus the count of live initiator sessions. The trailing echo makes
+    # the remote command's exit status 0 even when grep finds nothing.
+    local remote_out
+    if ! remote_out=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${compute_host}" \
+            "grep -l -- '${iqn}' /etc/pve/qemu-server/*.conf /etc/pve/lxc/*.conf 2>/dev/null; \
+             echo SESSIONS:\$(iscsiadm -m session 2>/dev/null | grep -c -- '${iqn}')" \
+            2>/dev/null); then
+        log_msg "WARN: probe: could not verify ${iqn} — ${compute_host}" \
+            "unreachable via SSH; treating as in use"
+        return 1
+    fi
+
+    local session_count vm_configs conf
+    session_count="${remote_out##*SESSIONS:}"
+    vm_configs="${remote_out%%SESSIONS:*}"
+    session_count="${session_count//[[:space:]]/}"
+    vm_configs="${vm_configs//$'\n'/ }"
+
+    if [[ -n "${vm_configs// /}" ]]; then
+        log_msg "WARN: probe: ${iqn} — guest configs on ${compute_host} still" \
+            "reference this target:"
+        # shellcheck disable=SC2086 # word-splitting the grep -l list is intended
+        for conf in $vm_configs; do
+            log_msg "WARN: probe:   $(basename "$conf")"
+        done
+        return 1
+    fi
+    if [[ "$session_count" =~ ^[0-9]+$ && "$session_count" -gt 0 ]]; then
+        log_msg "WARN: probe: ${iqn} — ${session_count} live iSCSI session(s) attached"
+        return 1
+    fi
+
+    log_msg "INFO: probe: ${iqn} — no guest config on ${compute_host}" \
+        "references this target and no live session exists (verified unused)"
+    return 0
+}
+
 # pool_to_target <pool> -> echoes the full IQN, returns 1 if pool unknown or single-node
 pool_to_target() {
     local pool="$1"
@@ -158,7 +283,9 @@ pool_to_target() {
         log_msg "WARN: Unknown pool: $pool (not in POOL_TARGET in $NODE_CONF)"
         return 1
     fi
-    echo "${iqn_prefix}:${short}"
+    local iqn="${iqn_prefix}:${short}"
+    _warn_when_target_missing "$iqn"
+    echo "$iqn"
 }
 
 # pool_list -> echoes valid pool names, one per line (two-node only; empty in single-node)

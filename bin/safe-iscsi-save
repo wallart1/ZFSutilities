@@ -120,13 +120,22 @@ config["storage_objects"] = [
     if so.get("name") not in skip
 ]
 
-# Remove LUN references to encrypted backstores from all targets
+# Remove LUN references to encrypted backstores from all targets, and the
+# ACL MappedLUNs referencing the stripped LUN indexes: targetctl restore
+# warns about MappedLUNs whose TPG LUN no longer exists ("Could not find
+# matching TPG LUN"), so the boot config must stay internally consistent.
 for target in config.get("targets", []):
     for tpg in target.get("tpgs", []):
         tpg["luns"] = [
             lun for lun in tpg.get("luns", [])
             if not any(n in lun.get("storage_object", "") for n in skip)
         ]
+        kept_indexes = {lun.get("index") for lun in tpg["luns"]}
+        for acl in tpg.get("acls", []):
+            acl["mapped_luns"] = [
+                ml for ml in acl.get("mapped_luns", [])
+                if ml.get("tpg_lun") in kept_indexes
+            ]
 
 with open(dst, "w") as f:
     json.dump(config, f, indent=2)

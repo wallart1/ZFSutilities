@@ -27,6 +27,7 @@ import cairo
 import gi
 
 gi.require_version("Gtk", "3.0")
+gi.require_version("Pango", "1.0")
 from alignment_page import create_alignment_view, refresh_alignment_view
 from charting import (  # chart vocabulary shared with the matplotlib renderer
     CHART_MAX_SAMPLES,
@@ -44,7 +45,7 @@ from config_core import (
     save_ui_state,
 )
 from disk_repository import format_bytes
-from gi.repository import GLib, Gtk
+from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
     capped_treeview_scroll,
     configure_treeview_column,
@@ -247,9 +248,14 @@ class RollingChart:
 
 
 def _value_row(grid, row, caption):
-    """Add a caption/value row to a Gtk.Grid; return the value label."""
+    """Add a caption/value row to a Gtk.Grid; return the value label.
+
+    The caption ellipsizes so a long caption never pins the grid's (and
+    with it the page's) minimum width in narrow windows.
+    """
     caption_label = Gtk.Label(label=caption)
     caption_label.set_halign(Gtk.Align.START)
+    caption_label.set_ellipsize(Pango.EllipsizeMode.END)
     grid.attach(caption_label, 0, row, 1, 1)
     value = Gtk.Label(label="—")
     value.set_halign(Gtk.Align.START)

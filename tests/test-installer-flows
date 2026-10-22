@@ -177,6 +177,21 @@ run_installer() {
                     return 1
                     ;;
                 *"installer_retention.py"*) return 0 ;;
+                *"qemu-server"*)
+                    # probe_target_usage remote payload: referencing guest
+                    # configs plus the live-session count. Defaults verify
+                    # the target unused; _mock_probe_refs (newline-free
+                    # conf path list) and _mock_probe_sessions simulate
+                    # use; _mock_probe_unreachable fails the probe's ssh.
+                    if [[ "${_mock_probe_unreachable:-}" == "1" ]]; then
+                        return 1
+                    fi
+                    if [[ -n "${_mock_probe_refs:-}" ]]; then
+                        printf '%s\n' "${_mock_probe_refs}"
+                    fi
+                    printf 'SESSIONS:%s\n' "${_mock_probe_sessions:-0}"
+                    return 0
+                    ;;
                 *"switch-version"*) return 0 ;;
                 *"install -d "*) return 0 ;;
                 *"chmod 0644 "*) return 0 ;;
@@ -207,7 +222,8 @@ run_installer() {
 
 reset_installer_mocks() {
     unset _mock_stdin _mock_root_fstype _mock_hostname _mock_ssh_fail \
-        _mock_patch_rc _mock_pve_present _mock_remote_node_conf_present
+        _mock_patch_rc _mock_pve_present _mock_remote_node_conf_present \
+        _mock_probe_refs _mock_probe_sessions _mock_probe_unreachable
 }
 
 node_conf_path() {
@@ -538,13 +554,13 @@ test_two_node_fresh_install() {
         return
     fi
 
-    # systemd drop-ins land in the fixture etc tree; encrypted-luns conf is
+    # Activation is invoked on the storage host (the stub records it); the
+    # rtslib-fb-targetctl drop-ins are installed by the REAL switch-version
+    # during activation — covered functionally in test-switch-version — so
+    # this flow only checks the invocation. Encrypted-luns conf is
     # installed; the retention profile is initialized locally for real.
-    local dropin_root
-    dropin_root="$fixture/etc-prefix/etc/systemd/system/rtslib-fb-targetctl.service.d"
-    if [[ ! -f "$dropin_root/pre-start-backup.conf" \
-        || ! -f "$dropin_root/boot-config.conf" ]]; then
-        test_fail "Drop-ins not installed; output:\n$out"
+    if [[ "$out" != *"SWITCH:9.9.9"* ]]; then
+        test_fail "Local activation (switch-version 9.9.9) missing; output:\n$out"
         return
     fi
     if [[ ! -f "$fixture/etc-zfs/iscsi-encrypted-luns.conf" ]]; then
@@ -555,12 +571,159 @@ test_two_node_fresh_install() {
         test_fail "Local retention profile missing; output:\n$out"
         return
     fi
-    if [[ "$out" != *"SYSTEMCTL:daemon-reload"* ]]; then
-        test_fail "daemon-reload not recorded; output:\n$out"
-        return
-    fi
     if [[ "$out" != *"Installation Complete"* ]]; then
         test_fail "Completion banner missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+# IQN-prefix drift guard: a fixture saveconfig.json carrying the configured
+# target short name under a different prefix must trip the confirmation
+# gate. Refusal aborts before setup; explicit consent continues.
+test_two_node_iqn_drift_refused() {
+    reset_installer_mocks
+    test_start "two-node: IQN prefix drift aborts when not confirmed"
+
+    local fixture="$_mock_zfs_state_dir/two-iqn-drift-no"
+    mkdir -p "$fixture/etc-prefix/etc/rtslib-fb-target"
+    cat > "$fixture/etc-prefix/etc/rtslib-fb-target/saveconfig.json" <<'EOF'
+{"targets": [{"wwn": "iqn.2099-01.local.zteststor:threeamigos"}]}
+EOF
+    _mock_stdin=$'\nztestcomp\n\niqn.2026-02.local.zteststor\nthreeamigos\n\n\n8\nn\nn'
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Installer completed despite refused drift confirmation; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"IQN prefix mismatch"* ]]; then
+        test_fail "Drift warning missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Aborting: resolve the IQN prefix mismatch"* ]]; then
+        test_fail "Refusal abort message missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"SETUP-TARGETS:"* ]]; then
+        test_fail "Target setup ran despite refusal; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_iqn_drift_confirmed() {
+    reset_installer_mocks
+    test_start "two-node: IQN prefix drift continues on explicit confirmation"
+
+    local fixture="$_mock_zfs_state_dir/two-iqn-drift-yes"
+    mkdir -p "$fixture/etc-prefix/etc/rtslib-fb-target"
+    cat > "$fixture/etc-prefix/etc/rtslib-fb-target/saveconfig.json" <<'EOF'
+{"targets": [{"wwn": "iqn.2099-01.local.zteststor:threeamigos"}]}
+EOF
+    _mock_stdin=$'\nztestcomp\n\niqn.2026-02.local.zteststor\nthreeamigos\n\n\n8\nn\ny'
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"IQN prefix mismatch"* ]]; then
+        test_fail "Drift warning missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"SETUP-TARGETS:"* ]]; then
+        test_fail "Target setup did not run after consent; output:\n$out"
+        return
+    fi
+    if ! grep -q '^IQN_PREFIX="iqn.2026-02.local.zteststor"$' \
+        "$(node_conf_path "$fixture")"; then
+        local _conf_content
+        _conf_content=$(cat "$(node_conf_path "$fixture")")
+        test_fail "node.conf lacks the confirmed IQN prefix; content:\\n$_conf_content"
+        return
+    fi
+
+    test_pass
+}
+
+# Script-side usage probe: when a drifted target is still referenced by a
+# guest config on the compute host, no confirmation may be offered at all —
+# proceeding (or deleting it) would break that guest's disks. The stdin
+# ends in "y" so a regression that DOES offer the prompt also proceeds and
+# fails the completion assertion.
+test_two_node_iqn_drift_in_use_refused() {
+    reset_installer_mocks
+    test_start "two-node: IQN prefix drift aborts outright when a drifted target is in use"
+
+    local fixture="$_mock_zfs_state_dir/two-iqn-drift-inuse"
+    mkdir -p "$fixture/etc-prefix/etc/rtslib-fb-target"
+    cat > "$fixture/etc-prefix/etc/rtslib-fb-target/saveconfig.json" <<'EOF'
+{"targets": [{"wwn": "iqn.2099-01.local.zteststor:threeamigos"}]}
+EOF
+    _mock_probe_refs="/etc/pve/qemu-server/vm-101.conf"
+    _mock_stdin=$'\nztestcomp\n\niqn.2026-02.local.zteststor\nthreeamigos\n\n\n8\nn\ny'
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Installer completed despite an in-use drifted target; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"vm-101.conf"* ]]; then
+        test_fail "Probe evidence (referencing guest config) missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"still in use or could not be verified"* ]]; then
+        test_fail "In-use refusal message missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Proceed with the new IQN prefix anyway?"* ]]; then
+        test_fail "Confirmation offered for an in-use drifted target; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"SETUP-TARGETS:"* ]]; then
+        test_fail "Target setup ran despite in-use refusal; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+# Unverifiable is refused like in-use: an unreachable compute host must
+# never gate a destructive decision on an assumption.
+test_two_node_iqn_drift_unreachable_refused() {
+    reset_installer_mocks
+    test_start "two-node: IQN prefix drift aborts when usage cannot be verified"
+
+    local fixture="$_mock_zfs_state_dir/two-iqn-drift-unreach"
+    mkdir -p "$fixture/etc-prefix/etc/rtslib-fb-target"
+    cat > "$fixture/etc-prefix/etc/rtslib-fb-target/saveconfig.json" <<'EOF'
+{"targets": [{"wwn": "iqn.2099-01.local.zteststor:threeamigos"}]}
+EOF
+    _mock_probe_unreachable=1
+    _mock_stdin=$'\nztestcomp\n\niqn.2026-02.local.zteststor\nthreeamigos\n\n\n8\nn\ny'
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Installer completed despite unverifiable drifted target; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"unreachable via SSH; treating as in use"* ]]; then
+        test_fail "Unreachable-verification warning missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Proceed with the new IQN prefix anyway?"* ]]; then
+        test_fail "Confirmation offered for an unverifiable drifted target; output:\n$out"
         return
     fi
 
@@ -963,6 +1126,10 @@ test_single_node_zfs_root_warning
 test_single_node_legacy_conf_notice
 test_single_node_partial_uninstall_declined
 test_two_node_fresh_install
+test_two_node_iqn_drift_refused
+test_two_node_iqn_drift_confirmed
+test_two_node_iqn_drift_in_use_refused
+test_two_node_iqn_drift_unreachable_refused
 test_two_node_kept_config_completes
 test_two_node_storage_host_mismatch_fatals
 test_two_node_ssh_probe_failure_fatals

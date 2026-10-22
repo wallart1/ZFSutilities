@@ -5,7 +5,9 @@ branching, gating, metadata, ordering, and negative assertions stay here.
 """
 
 import os
+import subprocess
 import sys
+import tempfile
 import unittest
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -130,9 +132,45 @@ class TestBuildRsyncCommand(unittest.TestCase):
         )
         script = step.command[2]
         golden.check(self, step.command)
-        # rsync is the last command, so the script exits with rsync's rc.
-        self.assertNotIn("exit ${PIPESTATUS[0]}", script)
+        # The wrapper captures rsync's rc from the tee pipeline and re-exits
+        # with it after the failure tail, so the script exits with rsync's rc.
+        self.assertIn("_rc=${PIPESTATUS[0]}", script)
+        self.assertIn('exit "$_rc"', script)
         self.assertNotIn("exit 0", script)
+
+    def test_pull_rsync_with_remote_log_preserves_exit_code(self):
+        step = command_builders.build_rsync_command(
+            "remote:/src",
+            "/dst",
+            remote_log_path="/var/log/zfsutilities/rsync-pull.log",
+        )
+        script = step.command[2]
+        golden.check(self, step.command)
+        self.assertIn("_rc=${PIPESTATUS[0]}", script)
+        self.assertIn('exit "$_rc"', script)
+
+    def test_log_wrapped_steps_carry_the_output_location(self):
+        pull = command_builders.build_rsync_command(
+            "remote:/src",
+            "/dst",
+            remote_log_path="/var/log/zfsutilities/rsync-pull.log",
+        )
+        self.assertEqual(
+            pull.metadata,
+            {"rsync_output_location": "remote:/var/log/zfsutilities/rsync-pull.log"},
+        )
+        local = command_builders.build_rsync_command(
+            "/src",
+            "/dst",
+            remote_log_path="/var/log/zfsutilities/rsync-pull.log",
+        )
+        self.assertEqual(
+            local.metadata, {"rsync_output_location": "/var/log/zfsutilities/rsync-pull.log"}
+        )
+        # Unwrapped variants have no log to point at.
+        self.assertIsNone(command_builders.build_rsync_command("/src", "/dst").metadata)
+        self.assertIsNone(command_builders.build_rsync_command("remote:/src", "/dst").metadata)
+        self.assertIsNone(command_builders.build_rsync_command("/src", "remote:/dst").metadata)
 
     def test_rsync_log_setup_script_used_in_ssh_command(self):
         host = "remote"
@@ -144,14 +182,6 @@ class TestBuildRsyncCommand(unittest.TestCase):
             command_builders._rsync_log_setup_script(log_path),
         ]
         golden.check(self, cmd)
-
-    def test_pull_rsync_with_remote_log_preserves_exit_code(self):
-        step = command_builders.build_rsync_command(
-            "remote:/src",
-            "/dst",
-            remote_log_path="/var/log/zfsutilities/rsync-pull.log",
-        )
-        golden.check(self, step.command)
 
     def test_local_rsync_with_excludes(self):
         step = command_builders.build_rsync_command("/src", "/dst", excludes=["*.tmp", "cache/"])
@@ -199,6 +229,83 @@ class TestBuildRsyncCommand(unittest.TestCase):
         user_idx = step.command.index("--exclude=*.tmp")
         self.assertLess(gvfs_idx, user_idx)
         self.assertLess(cache_idx, user_idx)
+
+
+class TestRsyncLogWrapperBehavior(unittest.TestCase):
+    """Executing the built log wrappers end to end with fake rsync/ssh.
+
+    The wrapper's contract: the full rsync stream still reaches the rsync
+    log (on the "remote" host for pulls — the fake ssh executes the shipped
+    command string locally), the process exits with rsync's rc, and the
+    session-visible tail (header + last lines on stdout) appears only when
+    rsync fails. Before the tee fix the runner captured nothing at all from
+    log-wrapped steps, so a failure left only the bare exit-code label.
+    """
+
+    _LINE_COUNT = 20
+
+    def _run_wrapper(self, rc, source):
+        """Build the wrapper against fakes; return (proc, log_text)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bindir = os.path.join(tmpdir, "bin")
+            os.mkdir(bindir)
+            lines = "\n".join(f"echo line-{i}" for i in range(self._LINE_COUNT))
+            self._write_executable(
+                os.path.join(bindir, "rsync"),
+                f"#!/bin/bash\n{lines}\nexit {rc}\n",
+            )
+            # The fake ssh executes its last argument (the remote command
+            # string) in a local shell, so the log-ship "cat >> $_rl" appends
+            # stdin to the tmpdir log and the setup script runs for real.
+            self._write_executable(
+                os.path.join(bindir, "ssh"),
+                '#!/bin/bash\nexec bash -c "${*: -1}"\n',
+            )
+            log_path = os.path.join(tmpdir, "rsync-pull.log")
+            step = command_builders.build_rsync_command(
+                source, os.path.join(tmpdir, "dst"), remote_log_path=log_path
+            )
+            env = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"])
+            proc = subprocess.run(
+                step.command,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=60,
+                check=False,
+            )
+            with open(log_path) as f:
+                log_text = f.read()
+            return proc, log_text
+
+    @staticmethod
+    def _write_executable(path, content):
+        with open(path, "w") as f:
+            f.write(content)
+        os.chmod(path, 0o755)
+
+    def test_pull_failure_exits_with_rc_and_prints_the_tail(self):
+        proc, log_text = self._run_wrapper(11, "remote:/src")
+        self.assertEqual(proc.returncode, 11)
+        self.assertIn("rsync exited rc=11; last output lines:", proc.stdout)
+        tail_lines = command_builders._RSYNC_FAILURE_TAIL_LINES
+        self.assertIn(f"line-{self._LINE_COUNT - 1}", proc.stdout)
+        self.assertIn(f"line-{self._LINE_COUNT - tail_lines}", proc.stdout)
+        self.assertNotIn(f"line-{self._LINE_COUNT - tail_lines - 1}\n", proc.stdout)
+        # The full stream still reached the rsync log.
+        self.assertEqual(log_text.count("line-"), self._LINE_COUNT)
+
+    def test_pull_success_prints_nothing_and_logs_everything(self):
+        proc, log_text = self._run_wrapper(0, "remote:/src")
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout, "")
+        self.assertEqual(log_text.count("line-"), self._LINE_COUNT)
+
+    def test_local_failure_exits_with_rc_and_prints_the_tail(self):
+        proc, log_text = self._run_wrapper(23, "/src")
+        self.assertEqual(proc.returncode, 23)
+        self.assertIn("rsync exited rc=23; last output lines:", proc.stdout)
+        self.assertEqual(log_text.count("line-"), self._LINE_COUNT)
 
 
 class TestSendReceiveMetadata(unittest.TestCase):

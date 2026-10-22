@@ -7,6 +7,14 @@ left at the legacy path so older deployed versions can still find their data.
 Migration is skipped when the ``ZFSUTILITIES_DISABLE_MIGRATION`` environment
 variable is set (used by the test suites) and is gated by a sentinel file so it
 only runs once per state directory.
+
+The state-file sweep is additionally fenced against redirected state
+directories: when ``ZFSUTILITIES_STATE_DIR`` points anywhere other than the
+default ``/var/lib/zfsutilities``, the sweep would move the operator's REAL
+home-directory legacy files into what is usually a scratch directory (deleted
+when it is a TemporaryDirectory). Such runs skip the sweep unless
+``ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION=1`` is exported to opt in
+deliberately.
 """
 
 import os
@@ -29,11 +37,29 @@ from paths import (
 )
 
 MIGRATION_SENTINEL = ".migration_complete"
+DEFAULT_STATE_DIR = "/var/lib/zfsutilities"
 
 
 def _is_disabled():
     """Return True if migration has been disabled via environment variable."""
     return os.environ.get("ZFSUTILITIES_DISABLE_MIGRATION", "") not in ("", "0")
+
+
+def _redirected_state_dir():
+    """Return True when the state dir is env-redirected away from the default.
+
+    Scratch runs (tests, harnesses, experiments) redirect the state dir to a
+    temporary location while HOME still points at the real user. Running the
+    legacy-file sweep in that state moves real files into the scratch dir —
+    data loss when it is removed. Only an explicit opt-in allows it.
+    """
+    state_dir = os.environ.get("ZFSUTILITIES_STATE_DIR", "")
+    return bool(state_dir) and state_dir != DEFAULT_STATE_DIR
+
+
+def _redirected_migration_allowed():
+    """Return True when redirected migration was explicitly opted into."""
+    return os.environ.get("ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION", "") == "1"
 
 
 def get_migration_sentinel_path():
@@ -134,10 +160,20 @@ def migrate_system_config_files():
 def run_migration():
     """Run the one-time state-file migration if it has not already run.
 
-    Returns immediately when migration is disabled via environment variable or
-    when the sentinel file already exists.
+    Returns immediately when migration is disabled via environment variable,
+    when the sentinel file already exists, or when the state directory is
+    env-redirected and redirected migration was not explicitly opted into
+    (see ``_redirected_state_dir``).
     """
     if _is_disabled():
+        return
+
+    if _redirected_state_dir() and not _redirected_migration_allowed():
+        log_msg(
+            "INFO: ZFSUTILITIES_STATE_DIR is redirected; legacy state migration "
+            "skipped (export ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION=1 to run "
+            "it deliberately)"
+        )
         return
 
     sentinel = get_migration_sentinel_path()

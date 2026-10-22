@@ -7,10 +7,14 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
 
 # Run migration with temporary directories and the disable flag cleared.
+# The state dir is a scratch directory (env-redirected), so these deliberate
+# migration runs opt into redirected migration — that opt-in is exactly what
+# the redirected-state fence requires.
 run_migration() {
     (
         export ZFSUTILITIES_DISABLE_MIGRATION=""
         export ZFSUTILITIES_MIGRATION_ALLOW_NONROOT=1
+        export ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION=1
         export ZFSUTILITIES_STATE_DIR="$1"
         export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$2"
         export ZFSUTILITIES_LEGACY_CONFIG_HOME="$3"
@@ -246,12 +250,72 @@ test_disabled_by_environment() {
     rm -rf "$tmpdir"
 }
 
+test_redirected_state_dir_blocks_sweep() {
+    test_start "Redirected state dir without opt-in leaves legacy files untouched"
+    local tmpdir state_dir etc_dir old_home
+    tmpdir=$(mktemp -d)
+    state_dir="$tmpdir/state"
+    etc_dir="$tmpdir/etc"
+    old_home="$tmpdir/root"
+    mkdir -p "$old_home/.config"
+    echo '{}' > "$old_home/.config/zfsutilities.json"
+
+    # No ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION: the sweep must not move the
+    # real-HOME legacy file into the scratch state dir, and must not leave a
+    # sentinel claiming migration ran.
+    (
+        export ZFSUTILITIES_DISABLE_MIGRATION=""
+        export ZFSUTILITIES_MIGRATION_ALLOW_NONROOT=1
+        export ZFSUTILITIES_STATE_DIR="$state_dir"
+        export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$etc_dir"
+        export ZFSUTILITIES_LEGACY_CONFIG_HOME="$old_home/.config"
+        export ZFSUTILITIES_LEGACY_NODE_CONF="$tmpdir/etc-node.conf"
+        export ZFSUTILITIES_LEGACY_DEPLOY_CONF="$tmpdir/etc-deploy.conf"
+        export ZFSUTILITIES_LEGACY_ISCSI_ENCRYPTED_CONF="$tmpdir/etc-iscsi.conf"
+        export ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$tmpdir/etc-two-node.conf"
+        unset ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION
+        unset ZFSUTILITIES_CONFIG_PATH ZFSUTILITIES_HISTORY_PATH \
+            ZFSUTILITIES_PROFILES_DIR ZFSUTILITIES_SCRUB_STATE_PATH \
+            ZFSUTILITIES_NEXTSNAP_FILE ZFSUTILITIES_OFFSITE_NEXTSNAP_FILE \
+            ZFSUTILITIES_LEGACY_CONFIG_PATH ZFSUTILITIES_LEGACY_HISTORY_PATH \
+            ZFSUTILITIES_LEGACY_PROFILES_DIR ZFSUTILITIES_LEGACY_SCRUB_STATE_PATH \
+            ZFSUTILITIES_LEGACY_NEXTSNAP_FILE ZFSUTILITIES_LEGACY_OFFSITE_NEXTSNAP_FILE
+        source "$mydir/lib/paths.sh"
+        migrate_zfsutilities_state
+    )
+
+    assert_equals "true" \
+        "$([[ -f $old_home/.config/zfsutilities.json ]] && echo true || echo false)"
+    assert_equals "false" \
+        "$([[ -L $old_home/.config/zfsutilities.json ]] && echo true || echo false)"
+    assert_equals "false" "$([[ -e $state_dir/config.json ]] && echo true || echo false)"
+    assert_equals "false" "$([[ -e $state_dir/.migration_complete ]] && echo true || echo false)"
+    rm -rf "$tmpdir"
+}
+
+test_redirect_flag_derivation() {
+    test_start "Redirected flag is set only for non-default env state dirs"
+    local flag
+    flag=$(ZFSUTILITIES_STATE_DIR=/tmp/scratch-zfsu source "$mydir/lib/paths.sh" \
+        >/dev/null 2>&1; echo "${ZFSUTILITIES_STATE_DIR_REDIRECTED:-unset}")
+    assert_equals "1" "$flag"
+    flag=$(env -u ZFSUTILITIES_STATE_DIR bash -c \
+        "source '$mydir/lib/paths.sh' >/dev/null 2>&1;
+         echo \${ZFSUTILITIES_STATE_DIR_REDIRECTED:-unset}")
+    assert_equals "0" "$flag"
+    flag=$(ZFSUTILITIES_STATE_DIR=/var/lib/zfsutilities source "$mydir/lib/paths.sh" \
+        >/dev/null 2>&1; echo "${ZFSUTILITIES_STATE_DIR_REDIRECTED:-unset}")
+    assert_equals "0" "$flag"
+}
+
 test_migrate_config_file
 test_migrate_history_file
 test_migrate_profiles_directory
 test_migrate_system_config_files
 test_sentinel_prevents_rerun
 test_disabled_by_environment
+test_redirected_state_dir_blocks_sweep
+test_redirect_flag_derivation
 
 test_summary
 teardown_test_env

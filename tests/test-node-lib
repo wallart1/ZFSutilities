@@ -353,6 +353,66 @@ test_pool_to_target_unknown() {
     fi
 }
 
+# IQN-prefix drift fence (storage host + local LIO only): pool_to_target
+# warns once when the constructed IQN is absent from the live target tree,
+# and stays silent when the tree already carries it. hostname/targetcli are
+# overridden so the storage-host gate opens without touching the host.
+test_pool_to_target_warns_when_target_missing_in_lio() {
+    test_start "pool_to_target warns when the constructed IQN is missing from LIO"
+    clear_test_log_file
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        hostname() { echo stewie; }
+        targetcli() { printf 'Target 1: iqn.2026-02.local.stewie:threeamigos\n'; }
+        pool_to_target "threeamigos" 2>/dev/null)
+    assert_equals "iqn.2025-01.com.zfsutilities:threeamigos" "$result"
+    local log
+    log=$(get_test_log_file)
+    if grep -q "does not exist in the local LIO target tree" "$log"; then
+        test_pass
+    else
+        test_fail "Expected LIO drift WARN not logged"
+    fi
+}
+
+test_pool_to_target_silent_when_target_in_lio() {
+    test_start "pool_to_target stays silent when the constructed IQN exists in LIO"
+    clear_test_log_file
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        hostname() { echo stewie; }
+        targetcli() { printf 'Target 1: iqn.2025-01.com.zfsutilities:threeamigos\n'; }
+        pool_to_target "threeamigos" 2>/dev/null)
+    assert_equals "iqn.2025-01.com.zfsutilities:threeamigos" "$result"
+    local log
+    log=$(get_test_log_file)
+    if grep -q "does not exist in the local LIO target tree" "$log"; then
+        test_fail "LIO drift WARN logged although the target exists"
+    else
+        test_pass
+    fi
+}
+
+# The warn path must never fire off the storage host (the compute host has
+# no LIO tree to verify against), even with targetcli present.
+test_pool_to_target_no_lio_probe_off_storage_host() {
+    test_start "pool_to_target skips the LIO probe when not on the storage host"
+    clear_test_log_file
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        hostname() { echo brian; }
+        targetcli() { echo "SHOULD-NOT-RUN"; return 0; }
+        pool_to_target "threeamigos" 2>/dev/null)
+    assert_equals "iqn.2025-01.com.zfsutilities:threeamigos" "$result"
+    local log
+    log=$(get_test_log_file)
+    if grep -q "SHOULD-NOT-RUN" "$log"; then
+        test_fail "targetcli probe ran off the storage host"
+    else
+        test_pass
+    fi
+}
+
 # Regression for the unarchive-vm Step-2 ssh payload (vm-205 incident): a
 # fresh remote shell inherits no pool_to_target, so the payload loads
 # node-lib through bashinit's source_helper. The pool map must survive
@@ -736,6 +796,9 @@ test_expected_iscsi_devices_defaults_empty
 
 test_pool_to_target_known
 test_pool_to_target_unknown
+test_pool_to_target_warns_when_target_missing_in_lio
+test_pool_to_target_silent_when_target_in_lio
+test_pool_to_target_no_lio_probe_off_storage_host
 test_pool_map_survives_source_helper_load
 test_pool_list_two_node
 test_pool_list_single_node
@@ -785,6 +848,145 @@ test_get_json_archive_rate_limit_defaults_empty
 test_save_json_config_key_round_trip_and_delete
 test_save_json_config_key_creates_missing_file
 test_two_node_lib_wrapper_sources_node_lib
+
+# ------------------------------------------------------------------------------
+# probe_target_usage
+# ------------------------------------------------------------------------------
+
+# Run probe_target_usage in a mocked subshell and report its output plus
+# exit status. Parameters: remote-ssh stdout (printf %b format), remote-ssh
+# exit status, local hostname (short), IQN. Everything the probe touches is
+# mocked: hostname (storage-host gate), targetcli (ACL/demo context; no
+# initiator ACLs, demo mode on), ssh (the compute-host payload), and
+# log_msg (echo, so evidence lines are assertable).
+run_probe() {
+    local _ssh_out="$1" _ssh_rc="$2" _host="$3" _iqn="$4"
+    (
+        storage_host="zteststor"
+        compute_host="ztestcomp"
+        hostname() {
+            if [[ "$1" == "-s" ]]; then
+                printf '%s\n' "$_host"
+                return 0
+            fi
+            command hostname "$@"
+        }
+        targetcli() {
+            case "$*" in
+                *generate_node_acls*) printf 'generate_node_acls=1\n' ;;
+            esac
+            return 0
+        }
+        ssh() { printf '%b' "$_ssh_out"; return "$_ssh_rc"; }
+        log_msg() { echo "$*"; }
+        probe_target_usage "$_iqn"
+    )
+}
+
+_PROBE_IQN="iqn.2099-01.local.zteststor:threeamigos"
+
+test_probe_target_usage_verified_unused() {
+    test_start "probe_target_usage returns 0 when nothing references the target"
+    local out rc
+    out=$(run_probe "SESSIONS:0" 0 "zteststor" "$_PROBE_IQN")
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected rc=0, got $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"verified unused"* ]]; then
+        test_fail "Verified-unused verdict missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"demo-mode ACLs"* ]]; then
+        test_fail "Demo-mode ACL context missing; output:\n$out"
+        return
+    fi
+    test_pass
+}
+
+test_probe_target_usage_guest_config_reference() {
+    test_start "probe_target_usage returns 1 when a guest config references the target"
+    local out rc
+    out=$(run_probe "/etc/pve/qemu-server/vm-101.conf\nSESSIONS:0" 0 "zteststor" "$_PROBE_IQN")
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected rc=1, got 0; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"vm-101.conf"* ]]; then
+        test_fail "Referencing guest config not named in evidence; output:\n$out"
+        return
+    fi
+    test_pass
+}
+
+test_probe_target_usage_live_session() {
+    test_start "probe_target_usage returns 1 when a live session is attached"
+    local out rc
+    out=$(run_probe "SESSIONS:2" 0 "zteststor" "$_PROBE_IQN")
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected rc=1, got 0; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"live iSCSI session(s)"* ]]; then
+        test_fail "Live-session evidence missing; output:\n$out"
+        return
+    fi
+    test_pass
+}
+
+test_probe_target_usage_unreachable_compute_host() {
+    test_start "probe_target_usage treats an unreachable compute host as in use"
+    local out rc
+    out=$(run_probe "" 255 "zteststor" "$_PROBE_IQN")
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected rc=1, got 0; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"unreachable via SSH; treating as in use"* ]]; then
+        test_fail "Unreachable-host warning missing; output:\n$out"
+        return
+    fi
+    test_pass
+}
+
+test_probe_target_usage_not_storage_host() {
+    test_start "probe_target_usage refuses to judge from a non-storage host"
+    local out rc
+    out=$(run_probe "SESSIONS:0" 0 "ztestother" "$_PROBE_IQN")
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected rc=1 (unverifiable off the storage host), got 0; output:\n$out"
+        return
+    fi
+    test_pass
+}
+
+test_probe_target_usage_rejects_malformed_iqn() {
+    test_start "probe_target_usage refuses to interpolate a malformed IQN"
+    local out rc
+    out=$(run_probe "SESSIONS:0" 0 "zteststor" "iqn.evil'; rm -rf /")
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Expected rc=1 for malformed IQN, got 0; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"rm -rf"* ]]; then
+        test_fail "Malformed IQN leaked into output; output:\n$out"
+        return
+    fi
+    test_pass
+}
+
+test_probe_target_usage_verified_unused
+test_probe_target_usage_guest_config_reference
+test_probe_target_usage_live_session
+test_probe_target_usage_unreachable_compute_host
+test_probe_target_usage_not_storage_host
+test_probe_target_usage_rejects_malformed_iqn
 
 rm -rf "$tmp_dir"
 teardown_test_env

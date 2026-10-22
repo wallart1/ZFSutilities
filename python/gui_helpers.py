@@ -360,16 +360,23 @@ def section_header(text, subtitle=""):
     *text* and *subtitle* are plain strings: both are Pango-escaped
     before being embedded in markup, so titles may carry &, <, or >
     (e.g. "Findings & Recommendations") without breaking the parser.
+    Both labels ellipsize: a Gtk.Label's minimum width is its full
+    natural text width, so an unellipsized header pins the page's
+    minimum at its longest title and grows a page-level horizontal
+    scrollbar in narrow windows even though every table on the page
+    already scrolls on its own.
     """
     box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     title = Gtk.Label()
     title.set_markup(f"<b>{GLib.markup_escape_text(text)}</b>")
     title.set_halign(Gtk.Align.START)
+    title.set_ellipsize(Pango.EllipsizeMode.END)
     box.pack_start(title, False, False, 0)
     if subtitle:
         sub = Gtk.Label()
         sub.set_markup(f"<small><i>{GLib.markup_escape_text(subtitle)}</i></small>")
         sub.set_halign(Gtk.Align.START)
+        sub.set_ellipsize(Pango.EllipsizeMode.END)
         box.pack_start(sub, False, False, 0)
     return box
 

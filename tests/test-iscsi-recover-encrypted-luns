@@ -1,0 +1,295 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-iscsi-recover-encrypted-luns — Verify the post-key-load encrypted-LUN
+# recovery flow: explicit recorded LUN indexes scoped to the configured
+# target, refusal to auto-assign, idempotency, and persistence triggers.
+#
+# Assertions are state-based (the targetcli mock appends to files, the
+# persistence helpers append to a calls file): log_msg output goes to the
+# bashinit log, not stdout, so behavioral state is the observable contract.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Run a temp copy of iscsi-recover-encrypted-luns with paths/env mocked
+# and a stateful targetcli. Prints the calls file and the resulting LUN
+# state files; the runner's exit status is the script's exit status.
+# ------------------------------------------------------------------
+_run_recover() {
+    local confdir="$1"
+    local savefile="$2"
+    local prestate="$3"   # optional dir pre-seeded with backstores/luns state
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local script_copy="$tmpdir/iscsi-recover-encrypted-luns"
+
+    sed \
+        -e "s|/etc/rtslib-fb-target/saveconfig\.json|$savefile|g" \
+        -e "s|source ~/bashinit|source \"$mydir/bin/bashinit\"|g" \
+        "$mydir/bin/iscsi-recover-encrypted-luns" > "$script_copy"
+
+    local node_lib="$tmpdir/node-lib.sh"
+    cat > "$node_lib" <<'EOF'
+is_single_node() { return 1; }
+is_two_node() { return 0; }
+iqn_prefix="iqn.2026-02.local.stewie"
+storage_host="stewie"
+compute_host="tweety"
+EOF
+
+    # Stateful targetcli mock: backstores and per-target LUN lists live in
+    # files the create commands append to, so idempotency and index choices
+    # are observable from the resulting state.
+    local state="$tmpdir/state"
+    mkdir -p "$state/luns"
+    if [[ -n "$prestate" ]]; then
+        cp -r "$prestate"/. "$state/"
+    fi
+
+    cat > "$tmpdir/safe-iscsi-save" <<'EOF'
+#!/bin/bash
+echo "safe-iscsi-save" >> "$CALLS"
+exit 0
+EOF
+    chmod +x "$tmpdir/safe-iscsi-save"
+
+    cat > "$tmpdir/rescan-storage" <<'EOF'
+#!/bin/bash
+echo "rescan-storage" >> "$CALLS"
+exit 0
+EOF
+    chmod +x "$tmpdir/rescan-storage"
+
+    cat > "$tmpdir/node.conf" <<'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="stewie"
+COMPUTE_HOST="tweety"
+EOF
+
+    cat > "$tmpdir/runner" << RUNNEREOF
+#!/bin/bash
+export NODE_CONF="$tmpdir/node.conf"
+export NODE_LIB="$node_lib"
+export mydir="$tmpdir"
+export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$confdir"
+export CALLS="$tmpdir/calls"
+touch "\$CALLS"
+find_zfsutility_script() {
+    case "\$1" in
+        rescan-storage) echo "$tmpdir/rescan-storage" ;;
+        *) echo "/dev/null" ;;
+    esac
+}
+hostname() { echo stewie; }
+targetcli() {
+    case "\$*" in
+        "/backstores/block ls")
+            [[ -f "$state/backstores" ]] && cat "$state/backstores"
+            ;;
+        "/backstores/block create "*)
+            local nm="\$3" dv="\$4"
+            echo "  \$nm  \$dv  50G" >> "$state/backstores"
+            ;;
+        "/iscsi/"*"/tpg1/luns ls")
+            local tpgdir="\$1"
+            local iqn="\${tpgdir#/iscsi/}"
+            iqn="\${iqn%/tpg1/luns}"
+            [[ -f "$state/luns/\$iqn" ]] && cat "$state/luns/\$iqn"
+            ;;
+        "/iscsi/"*"/tpg1/luns create "*)
+            local tpgdir="\$1" ref="\$3" idx="\$4"
+            local iqn="\${tpgdir#/iscsi/}"
+            iqn="\${iqn%/tpg1/luns}"
+            local nm="\${ref#/backstores/block/}"
+            echo "  lun\$idx block/\$nm (rw) oops" >> "$state/luns/\$iqn"
+            ;;
+        *)
+            true
+            ;;
+    esac
+}
+rootcheck() { true; }
+source "$script_copy"
+RUNNEREOF
+    chmod +x "$tmpdir/runner"
+
+    local calls luns_main luns_orphan luns_nvme backstores
+    bash "$tmpdir/runner" >/dev/null 2>&1
+    local rc=$?
+    calls=$(cat "$tmpdir/calls" 2>/dev/null || true)
+    luns_main=$(cat "$state/luns/iqn.2026-02.local.stewie:threeamigos" 2>/dev/null || true)
+    luns_orphan=$(cat "$state/luns/iqn.2026-10.local.stewie:threeamigos" 2>/dev/null || true)
+    luns_nvme=$(cat "$state/luns/iqn.2026-02.local.stewie:nvme1" 2>/dev/null || true)
+    backstores=$(cat "$state/backstores" 2>/dev/null || true)
+    rm -rf "$tmpdir"
+    printf 'CALLS:[%s]\nBACKSTORES:[%s]\nLUNS-MAIN:[%s]\nLUNS-ORPHAN:[%s]\nLUNS-NVME:[%s]\n' \
+        "$calls" "$backstores" "$luns_main" "$luns_orphan" "$luns_nvme"
+    return "$rc"
+}
+
+# Fixture saveconfig: the configured target holds vm-100-disk-0 at LUN 0 and
+# vm-101-disk-0 at LUN 5; an orphan target under a different IQN prefix holds
+# vm-101-disk-0 at LUN 9 (the wrong-index trap).
+_std_saveconfig() {
+    local savefile="$1"
+    cat > "$savefile" <<'EOF'
+{
+  "targets": [
+    {"wwn": "iqn.2026-02.local.stewie:threeamigos", "tpgs": [{"luns": [
+      {"storage_object": "/backstores/block/vm-100-disk-0", "index": 0},
+      {"storage_object": "/backstores/block/vm-101-disk-0", "index": 5}
+    ]}]},
+    {"wwn": "iqn.2026-10.local.stewie:threeamigos", "tpgs": [{"luns": [
+      {"storage_object": "/backstores/block/vm-101-disk-0", "index": 9}
+    ]}]}
+  ]
+}
+EOF
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_recovers_with_recorded_lun_indexes() {
+    test_start "Recovers LUNs at recorded indexes, ignoring orphan-target indexes"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    mkdir -p "$confdir"
+    touch "$tmpdir/dev100" "$tmpdir/dev101"
+    printf 'vm-100-disk-0:%s/dev100:threeamigos\nvm-101-disk-0:%s/dev101:threeamigos\n' \
+        "$tmpdir" "$tmpdir" > "$confdir/iscsi-encrypted-luns.conf"
+    _std_saveconfig "$tmpdir/save.json"
+
+    local result rc=0
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "") || rc=$?
+
+    if [[ "$rc" -eq 0 ]] \
+        && [[ "$result" == *"lun0 block/vm-100-disk-0"* ]] \
+        && [[ "$result" == *"lun5 block/vm-101-disk-0"* ]] \
+        && [[ "$result" != *"lun9"* ]] \
+        && [[ "$result" == *"LUNS-ORPHAN:[]"* ]] \
+        && [[ "$result" == *"safe-iscsi-save"* ]] \
+        && [[ "$result" == *"rescan-storage"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_refuses_when_no_recorded_index() {
+    test_start "Refuses to auto-assign when the target has no recorded LUN index"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    mkdir -p "$confdir"
+    touch "$tmpdir/dev"
+    # Target short name nvme1 has no entry in saveconfig.json.
+    printf 'vm-202-disk-5:%s/dev:nvme1\n' "$tmpdir" \
+        > "$confdir/iscsi-encrypted-luns.conf"
+    _std_saveconfig "$tmpdir/save.json"
+
+    local result rc=0
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "") || rc=$?
+
+    if [[ "$rc" -ne 0 ]] \
+        && [[ "$result" == *"LUNS-NVME:[]"* ]] \
+        && [[ "$result" != *"lun"*"block/vm-202-disk-5"* ]] \
+        && [[ "$result" != *"safe-iscsi-save"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_idempotent_when_already_present() {
+    test_start "Skips everything when backstores and mappings already exist"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    mkdir -p "$confdir"
+    touch "$tmpdir/dev100" "$tmpdir/dev101"
+    printf 'vm-100-disk-0:%s/dev100:threeamigos\nvm-101-disk-0:%s/dev101:threeamigos\n' \
+        "$tmpdir" "$tmpdir" > "$confdir/iscsi-encrypted-luns.conf"
+    _std_saveconfig "$tmpdir/save.json"
+
+    local prestate="$tmpdir/prestate"
+    mkdir -p "$prestate/luns"
+    cat > "$prestate/backstores" <<'EOF'
+  vm-100-disk-0  /dev/zvol/threeamigos/proxmox/vm-100-disk-0  50G
+  vm-101-disk-0  /dev/zvol/threeamigos/proxmox/vm-101-disk-0  50G
+EOF
+    cat > "$prestate/luns/iqn.2026-02.local.stewie:threeamigos" <<'EOF'
+  lun0 block/vm-100-disk-0 (rw) oops
+  lun5 block/vm-101-disk-0 (rw) oops
+EOF
+
+    local result rc=0
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "$prestate") || rc=$?
+
+    if [[ "$rc" -eq 0 ]] \
+        && [[ "$result" == *"CALLS:[]"* ]] \
+        && [[ "$result" != *"dev100"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_unavailable_device_warns_and_fails() {
+    test_start "Warns and exits 1 when the device node is missing (keys not loaded)"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    mkdir -p "$confdir"
+    # No dev file is created.
+    printf 'vm-100-disk-0:%s/dev100:threeamigos\n' "$tmpdir" \
+        > "$confdir/iscsi-encrypted-luns.conf"
+    _std_saveconfig "$tmpdir/save.json"
+
+    local result rc=0
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "") || rc=$?
+
+    if [[ "$rc" -ne 0 ]] \
+        && [[ "$result" == *"CALLS:[]"* ]] \
+        && [[ "$result" == *"BACKSTORES:[]"* ]] \
+        && [[ "$result" == *"LUNS-MAIN:[]"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_recovers_with_recorded_lun_indexes
+test_refuses_when_no_recorded_index
+test_idempotent_when_already_present
+test_unavailable_device_warns_and_fails
+
+# Structural fence (user decision 2026-10-22): recovery must not print
+# `qm start` commands or collect affected VM ids — starting the VMs is the
+# operator's follow-up from the Proxmox GUI, not script output.
+test_never_prints_qm_start_commands() {
+    test_start "script contains no qm start printing or VM-id collection"
+    local script="$mydir/bin/iscsi-recover-encrypted-luns"
+    if grep -qF 'qm start' "$script"; then
+        test_fail "script prints qm start commands again"
+        return
+    fi
+    if grep -qF 'affected_vms' "$script"; then
+        test_fail "script still collects affected VM ids"
+        return
+    fi
+    test_pass
+}
+test_never_prints_qm_start_commands
+
+test_summary

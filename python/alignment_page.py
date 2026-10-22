@@ -520,9 +520,14 @@ def _reconcile_rows(store, rows, key_column=0):
 
 
 def _value_row(grid, row, caption):
-    """Add a caption/value row to a Gtk.Grid; return the value label."""
+    """Add a caption/value row to a Gtk.Grid; return the value label.
+
+    The caption ellipsizes so a long caption never pins the grid's (and
+    with it the page's) minimum width in narrow windows.
+    """
     caption_label = Gtk.Label(label=caption)
     caption_label.set_halign(Gtk.Align.START)
+    caption_label.set_ellipsize(Pango.EllipsizeMode.END)
     grid.attach(caption_label, 0, row, 1, 1)
     value = Gtk.Label(label="—")
     value.set_halign(Gtk.Align.START)

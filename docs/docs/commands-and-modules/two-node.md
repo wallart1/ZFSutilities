@@ -310,7 +310,9 @@ See [Installation](../installation/index.md) for the full workflow.
 ### `iscsi-add-encrypted-luns` (storage node)
 
 Adds iSCSI backstores and LUNs for encrypted zvols whose keys are currently loaded. ZFS encryption keys are not available at boot time (when iSCSI is initiated), so the encrypted backstores are added separately after the operator has loaded the keys with `zfs load-key`.
-Called explicitly by the operator after loading keys and by
+Called by the `boot-config.conf` drop-in's `ExecStartPost` hook after the
+iSCSI target service starts (covering keys available at boot, e.g. via
+`keylocation=file://`), explicitly by the operator after loading keys, and by
 [`restart-iscsi-services`](#restart-iscsi-services-storage-node) after it restarts
 the iSCSI target service.
 
@@ -322,7 +324,7 @@ the iSCSI target service.
 
 | Script | Purpose |
 | ------ | ------- |
-| `safe-iscsi-save` | Persist config after adding encrypted LUNs |
+| `safe-iscsi-save` | Persist config after adding encrypted LUNs (only when something was added) |
 
 **Data structures consumed / produced:**
 
@@ -337,11 +339,14 @@ the iSCSI target service.
 2. For each entry in `/etc/zfsutilities/iscsi-encrypted-luns.conf`:
     - Skip if the device node is not present (keys not loaded).
     - Skip if the backstore already exists.
-    - Look up the original LUN index from `saveconfig.json` to preserve stable
-      compute-node `by-path` symlinks.
+    - Look up the original LUN index from `saveconfig.json`, scoped to the
+      exact target IQN, to preserve stable compute-node `by-path` symlinks
+      (a global first-match lookup could return an orphan target's index).
     - Create the block backstore and map it to the target at the original LUN
       index (or auto-allocate if no index is found).
-3. Save the iSCSI config via `safe-iscsi-save`.
+3. Save the iSCSI config via `safe-iscsi-save`, but only when a backstore was
+   added — a keyless boot-time run must not re-save (and FATAL-log) a
+   degraded state on every boot.
 
 **Return codes / side effects:**
 
@@ -351,6 +356,67 @@ the iSCSI target service.
 
 Side effects: creates missing encrypted backstores/LUNs; regenerates
 `saveconfig-boot.json` via `safe-iscsi-save`.
+
+---
+
+### `iscsi-recover-encrypted-luns` (storage node)
+
+Reconstructs encrypted iSCSI LUNs after keys are loaded post-boot, then
+rescans the compute host. Boot restores `saveconfig-boot.json` (encrypted
+backstores stripped), so encrypted LUNs are gone until re-added: at boot by
+the drop-in's `ExecStartPost` hook when keys are available, or post-boot by
+this script after the operator loads keys manually (e.g. from a LUKS USB
+drive unlocked at the console after login).
+
+```bash
+sudo iscsi-recover-encrypted-luns
+```
+
+**Arguments:** none.
+
+**Globals:** node-config globals only.
+
+**Called modules / commands:**
+
+| Script | Purpose |
+| ------ | ------- |
+| `safe-iscsi-save` | Persist config after changes (only when something was added) |
+| `rescan-storage` | Surface restored LUNs on the compute host (self-delegates via SSH) |
+
+**Data structures consumed / produced:**
+
+| Structure | Role | Reference |
+| --------- | ---- | --------- |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Authoritative list of encrypted backstores to recover | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| `/etc/rtslib-fb-target/saveconfig.json` | Source of the recorded LUN index per backstore and target | [iSCSI boot-safe config](../developer-guide/data-structures.md#iscsi-boot-safe-config) |
+
+**Internal flow / algorithm:**
+
+1. In single-node mode, print an informational message and exit.
+2. For each entry in `/etc/zfsutilities/iscsi-encrypted-luns.conf`:
+    - WARN and mark unavailable if the device node is not present (keys not
+      loaded).
+    - Skip when the backstore and its LUN mapping already exist (idempotent).
+    - Look up the recorded LUN index from `saveconfig.json`, scoped to the
+      exact target IQN. Never auto-assign: a missing index is a FATAL for
+      that entry, because auto-assignment can collide or pick the wrong
+      slot when orphan targets under a different IQN prefix exist.
+    - (Re)create the backstore and mapping, then verify the mapping took.
+3. When anything was added: persist via `safe-iscsi-save`, then run
+   `rescan-storage`.
+4. Print the per-run summary counters and finish. Start the recovered VMs
+   afterwards from the Proxmox GUI (or `qm start <vmid>` on the compute
+   host) — the script does not print start commands.
+
+**Return codes / side effects:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Every configured encrypted LUN is mapped (re-added or already present) |
+| `1`  | Any entry failed or its device was unavailable |
+
+Side effects: recreates encrypted backstores/LUNs; updates `saveconfig.json`
+and `saveconfig-boot.json`; rescans the compute host.
 
 ---
 
@@ -1614,8 +1680,9 @@ sudo setup-iscsi-targets
 
 | Script | Purpose |
 | ------ | ------- |
-| `node-lib.sh` | Two-node host/target resolution |
+| `node-lib.sh` | Two-node host/target resolution and the orphan usage probe (`probe_target_usage`) |
 | `targetcli` | Create targets, TPGs, and portals |
+| `ssh` → compute host | Usage probe only: guest configs referencing a target and live sessions (read-only) |
 
 **Data structures consumed / produced:**
 
@@ -1630,6 +1697,13 @@ sudo setup-iscsi-targets
 2. Verify the script is running on the storage host.
 3. Ensure `targetcli` is installed.
 4. For each entry in `pool_target`:
+    - Before creating a missing target, detect orphan targets: live targets
+      carrying the same short name under a different IQN prefix (drift from
+      an earlier install — the default prefix is date-derived). Each orphan
+      is probed for usage first (`probe_target_usage`: guest configs on the
+      compute host and live sessions); one verified unused may be deleted
+      after confirmation, while one in use — or unverifiable — is refused
+      outright and blocks creation for this pool (the run exits 1).
     - Create the target IQN if it does not already exist.
     - Ensure TPG1 exists.
     - Disable authentication and demo-mode write protect.
@@ -1645,7 +1719,7 @@ sudo setup-iscsi-targets
 | Code | Meaning |
 | ---- | ------- |
 | `0`  | Targets configured |
-| `1`  | Not running on the storage host, or `targetcli` not found |
+| `1`  | Not running on the storage host, `targetcli` not found, or target creation skipped because an orphan target remains |
 
 Side effects: creates or verifies iSCSI targets, TPGs, and portals.
 
@@ -1736,6 +1810,7 @@ sudo switch-version <version>|previous|--list|--uninstall
 | `/etc/sudoers.d/zfsutilities` | `secure_path` for sudo |
 | `/root/bashinit` | Symlink to active version's `bashinit` |
 | `/usr/local/lib/node-lib.sh`, `/usr/local/lib/two-node-lib.sh`, `/usr/local/lib/rootcheck` | Library symlinks |
+| `/etc/systemd/system/rtslib-fb-targetctl.service.d/` | Refreshed from the activated version's `share/two-node/` drop-ins (storage hosts only — gated on `targetctl`'s presence) |
 
 **Internal flow / algorithm:**
 
@@ -1754,6 +1829,10 @@ sudo switch-version <version>|previous|--list|--uninstall
           wiring.
     - Install wiring: `bin` symlink, `/etc/profile.d`, `/etc/sudoers.d`,
       `/root/bashinit`, library symlinks, desktop shortcuts.
+    - Refresh the `rtslib-fb-targetctl` systemd drop-ins from the activated
+      version's `share/two-node/` (storage hosts only), so a release carrying
+      drop-in changes takes effect on activation without any manual step;
+      reload the systemd daemon when a drop-in actually changed.
     - Stop any running documentation server on port 8000.
 
 **Return codes / side effects:**
@@ -1764,8 +1843,10 @@ sudo switch-version <version>|previous|--list|--uninstall
 | `1`  | Validation or filesystem error |
 
 Side effects: repoints symlinks; writes/updates `profile.d`, `sudoers.d`, and
-desktop shortcuts. New script invocations immediately use the new version;
-already-running scripts are unaffected.
+desktop shortcuts; on storage hosts, re-installs the `rtslib-fb-targetctl`
+drop-ins when the activated version ships different ones. New script
+invocations immediately use the new version; already-running scripts are
+unaffected.
 
 ---
 

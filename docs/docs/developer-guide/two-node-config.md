@@ -257,8 +257,11 @@ Interactive installer for two-node mode:
    expected iSCSI device count for `rescan-storage`'s low-count warning
 3. Generates `/etc/zfsutilities/node.conf`
 4. Installs scripts on both hosts via SSH
-5. Installs systemd drop-ins (`boot-config.conf` and `pre-start-backup.conf`)
-   and the encrypted-LUNs registry
+5. Activates the deployed version on both hosts; activation (see
+   [`switch-version`](../commands-and-modules/two-node.md#switch-version-any-host))
+   also installs the systemd drop-ins (`boot-config.conf` and
+   `pre-start-backup.conf`) from the deployed version's `share/two-node/`
+   on the storage host, and installs the encrypted-LUNs registry
 6. Verifies SSH key authorization between hosts
 7. If PVE is present on the compute host, patches
    `/usr/share/perl5/PVE/Storage/ISCSIPlugin.pm` to limit automatic iSCSI
@@ -283,7 +286,11 @@ Both installers assume that ZFS pools are already installed and active on the si
 
 Two-node mode installs two systemd drop-ins for
 `rtslib-fb-targetctl.service` under
-`/etc/systemd/system/rtslib-fb-targetctl.service.d/`:
+`/etc/systemd/system/rtslib-fb-targetctl.service.d/`. They are (re-)installed
+from the activated version's `share/two-node/` by `switch-version` on every
+activation — installing a new release and activating it also refreshes the
+drop-ins, so a release carrying drop-in changes takes effect without any
+manual step:
 
 ### `boot-config.conf`
 
@@ -294,6 +301,14 @@ at boot when encrypted zvol device nodes don't exist yet.
 If `saveconfig-boot.json` doesn't exist yet, falls back to the default
 `saveconfig.json`.
 
+An `ExecStartPost` hook then runs `iscsi-add-encrypted-luns`, which adds the
+encrypted LUNs back when their keys are available at boot (e.g.
+`keylocation=file://` on a non-encrypted filesystem, or a separate
+key-loading unit). When keys are not loaded the helper skips silently — its
+conf entries name device nodes that do not exist yet — so the boot is not
+noisy and nothing is re-saved. Keys loaded later, after login, are handled by
+[`iscsi-recover-encrypted-luns`](../commands-and-modules/two-node.md#iscsi-recover-encrypted-luns-storage-node).
+
 ### `pre-start-backup.conf`
 
 Backs up `saveconfig.json` to `saveconfig.json.pre-start` before each
@@ -301,8 +316,10 @@ restore. If something later saves a degraded config, the last-known-good
 copy is always available.
 
 The older `wait-for-zfs-keys.conf` drop-in and the `zfs-keys-unlock.service`
-unit have been removed. Encrypted LUNs are added manually after the key store
-is unlocked; see [ZFS Key Handling](../installation/zfs-keys.md).
+unit have been removed. Encrypted LUNs are re-added after the key store is
+unlocked — automatically at boot when keys are available, otherwise with
+`iscsi-recover-encrypted-luns`; see
+[ZFS Key Handling](../installation/zfs-keys.md).
 
 ## Script-by-Script Mode Behavior
 

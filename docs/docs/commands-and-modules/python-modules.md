@@ -266,6 +266,14 @@ migration is automatic, idempotent, and rollback-compatible: after moving a file
 or directory from its legacy location, a symlink is left at the old path so
 older deployed versions can still find their data.
 
+The state-file sweep is fenced against redirected state directories: when
+`ZFSUTILITIES_STATE_DIR` points anywhere other than the default
+`/var/lib/zfsutilities`, `run_migration()` skips the sweep (moving the
+operator's real home-directory legacy files into a scratch directory would be
+data loss). Export `ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION=1` to run it
+deliberately in such a setup. `lib/paths.sh`'s
+`migrate_zfsutilities_state()` carries the same fence.
+
 **Key functions:**
 
 | Function                                            | Purpose                                              |

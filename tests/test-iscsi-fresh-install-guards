@@ -132,6 +132,53 @@ test_setup_targets_enables_demo_mode_acls() {
     test_pass
 }
 
+test_setup_targets_blocks_on_kept_orphans() {
+    test_start "setup-iscsi-targets refuses duplicate targets while orphans are kept"
+    local script
+    script="$repo_root/bin/setup-iscsi-targets"
+    # IQN-prefix drift guard: same short name under a different prefix must
+    # be detected before creating the configured target...
+    if ! grep -qF 'IQN prefix drift' "$script"; then
+        test_fail "setup-iscsi-targets never detects orphan targets"
+        return
+    fi
+    # ...offer deletion with explicit confirmation...
+    if ! grep -qF 'Delete orphan target' "$script"; then
+        test_fail "orphan handling lacks the confirm-to-delete prompt"
+        return
+    fi
+    # ...but only after the script itself verified the orphan unused: the
+    # usage-probe gate must precede the prompt, and an in-use or
+    # unverifiable orphan is refused outright, never offered for deletion.
+    local probe_line prompt_line
+    probe_line=$(grep -nF 'if ! probe_target_usage "$_orphan"; then' "$script" \
+        | head -1 | cut -d: -f1)
+    prompt_line=$(grep -nF 'read -rp "Delete orphan target' "$script" \
+        | head -1 | cut -d: -f1)
+    if [[ -z "$probe_line" || -z "$prompt_line" || "$probe_line" -ge "$prompt_line" ]]; then
+        test_fail "orphan deletion is not gated on the usage probe"
+        return
+    fi
+    if ! grep -qF 'Refusing to delete' "$script"; then
+        test_fail "in-use orphans are not refused outright"
+        return
+    fi
+    if ! grep -qF '(verified unused)' "$script"; then
+        test_fail "delete prompt does not state the verified-unused precondition"
+        return
+    fi
+    # ...and skip creation while a live orphan remains, failing the run.
+    if ! grep -qF 'Skipping target creation' "$script"; then
+        test_fail "kept orphans do not block duplicate target creation"
+        return
+    fi
+    if ! grep -qF 'skipped_for_orphans -gt 0' "$script"; then
+        test_fail "kept orphans do not fail the run"
+        return
+    fi
+    test_pass
+}
+
 test_lun_lookups_anchor_on_block_prefix() {
     test_start "every luns-ls lookup anchors its grep (F-018 + prefix hazard)"
     # targetcli emits "o- lun3 [block/<name> (/dev/...)]" — the backstore
@@ -192,6 +239,7 @@ test_unarchive_marker_only_after_save_success
 test_unguarded_save_calls_are_structurally_safe
 test_manifest_add_bootstraps_missing_file
 test_setup_targets_enables_demo_mode_acls
+test_setup_targets_blocks_on_kept_orphans
 test_lun_lookups_anchor_on_block_prefix
 test_rescan_settles_before_counting
 test_efi_lun_grep_is_delimited

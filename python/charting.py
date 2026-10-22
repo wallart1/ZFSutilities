@@ -21,6 +21,12 @@ Rules the spike established, enforced by this module:
   ``mock_gtk(fresh=True)`` evicts and re-imports the module, which
   re-probes under the new binding (a repeated failed probe costs ~1 ms
   once matplotlib itself is cached).
+* The cache is mock-aware: while this module's ``Gtk`` binding is a test
+  double (``mock_gtk()``, including the stale binding a fresh mock import
+  leaves behind after its context exits), ``matplotlib_backend()`` returns
+  ``None`` without probing and without caching, so a real probe's cache is
+  never consumed under a mocked binding — mixed real/mock canvas classes
+  die with a cryptic PyGObject ``SystemError``.
 
 The rolling-chart vocabulary shared by both renderers — sample window,
 series colours, the nice-ceiling ladder, and age labels — lives here;
@@ -344,15 +350,35 @@ _UNPROBED = object()
 _backend = _UNPROBED
 
 
+def _gtk_binding_is_mock():
+    """Return True when this module's ``Gtk`` binding is a test double.
+
+    ``mock_gtk()`` substitutes a ``MagicMock`` for ``gi.repository.Gtk``;
+    while that fake is bound (including the stale binding a fresh mock
+    import leaves behind after its context exits), the real GTK3-Agg
+    backend must neither be probed — on GTK-equipped hosts the import
+    "succeeds" against the fake gi and caches a canvas class mixed from
+    mocks — nor handed out from an earlier real probe: constructing the
+    real ``FigureCanvasGTK3Agg`` under a mocked binding dies with a
+    cryptic PyGObject ``SystemError``.
+    """
+    gtk = globals().get("Gtk")
+    return gtk is not None and type(gtk).__module__.startswith("unittest")
+
+
 def matplotlib_backend():
     """Return the matplotlib GTK3-Agg backend namespace, or None.
 
     The import is lazy (never at module level — see the module docstring)
     and its outcome cached for this module binding.  Any import-time
     failure — matplotlib not installed, the GTK3 backend unable to load —
-    selects the Cairo fallback instead of breaking the page.
+    selects the Cairo fallback instead of breaking the page.  A mocked
+    ``Gtk`` binding selects the fallback too, without probing and without
+    caching, and hides a cache that a real probe produced earlier.
     """
     global _backend
+    if _gtk_binding_is_mock():
+        return None
     if _backend is not _UNPROBED:
         return _backend
     try:

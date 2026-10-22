@@ -212,6 +212,72 @@ class TestRunBackupProfile(unittest.TestCase):
             self.assertTrue(any("Step exited with rc=255" in msg for msg in logs))
             self.assertTrue(any("zfs send/receive" in msg for msg in logs))
 
+    def test_rsync_failure_warn_names_the_full_output_location(self):
+        with temp_config_dir():
+            profile = {
+                "config": {
+                    "variables": {"label": "dailybackup"},
+                    "pull_steps": [
+                        {"source": "remote:/src", "dest": "/dst", "active": True},
+                    ],
+                    "send_receive_steps": [],
+                    "post_steps": {"run_retention": False, "remove_snapfile": False},
+                    "pre_backup_script_enabled": False,
+                    "post_backup_script_enabled": False,
+                }
+            }
+            config = {}
+            with mock_subprocess() as m:
+                m.set_command_handler(
+                    r"rsync",
+                    lambda cmd, **kwargs: m._completed(
+                        'rsync: read errors mapping "/etc/hosts": Input/output error (5)\n'
+                        "rsync error: error in file I/O (code 11) at io.c(392)",
+                        rc=11,
+                    ),
+                )
+                with capture_logs() as logs:
+                    rc = profile_runner.run_backup_profile(profile, config, "/bin")
+            self.assertEqual(rc, 11)
+            # rsync ran and produced output, so the diagnosis names where the
+            # complete transfer record lives instead of leaving a bare label.
+            self.assertTrue(
+                any(
+                    "failed: Error in file I/O "
+                    "(full rsync output: remote:/var/log/zfsutilities/rsync-pull.log)" in msg
+                    for msg in logs
+                ),
+                logs,
+            )
+
+    def test_rsync_failure_without_output_omits_the_pointer(self):
+        with temp_config_dir():
+            profile = {
+                "config": {
+                    "variables": {"label": "dailybackup"},
+                    "pull_steps": [
+                        {"source": "remote:/src", "dest": "/dst", "active": True},
+                    ],
+                    "send_receive_steps": [],
+                    "post_steps": {"run_retention": False, "remove_snapfile": False},
+                    "pre_backup_script_enabled": False,
+                    "post_backup_script_enabled": False,
+                }
+            }
+            config = {}
+            with mock_subprocess() as m:
+                # Empty capture: the setup ssh itself failed and the rsync
+                # log on the source host received nothing worth pointing at.
+                m.set_command_handler(
+                    r"rsync",
+                    lambda cmd, **kwargs: m._completed("", rc=255),
+                )
+                with capture_logs() as logs:
+                    rc = profile_runner.run_backup_profile(profile, config, "/bin")
+            self.assertEqual(rc, 255)
+            self.assertTrue(any("failed:" in msg for msg in logs))
+            self.assertFalse(any("full rsync output" in msg for msg in logs), logs)
+
     def test_fatal_send_receive_failure_aborts_profile(self):
         with temp_config_dir():
             profile = {
@@ -271,7 +337,9 @@ class TestRunBackupProfile(unittest.TestCase):
             self.assertEqual(len(pull_calls), 1)
             bash_script = pull_calls[0][0][2]
             self.assertIn("/var/log/zfsutilities/rsync-pull.log", bash_script)
-            self.assertIn("exit ${PIPESTATUS[0]}", bash_script)
+            # The wrapper exits with rsync's own rc after the failure tail.
+            self.assertIn("_rc=${PIPESTATUS[0]}", bash_script)
+            self.assertIn('exit "$_rc"', bash_script)
 
     def test_local_pull_step_uses_remote_log_path(self):
         with temp_config_dir():

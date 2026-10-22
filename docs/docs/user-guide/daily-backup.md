@@ -44,6 +44,11 @@ Different steps have different consequences when they fail:
 - **Pull steps (rsync)** — non-fatal. The failure is logged as a warning, but
   the backup continues with the remaining steps. This lets a single unreachable
   remote host prevent only its own pull rather than canceling the whole job.
+  A failed pull is self-documenting in the session log: the last rsync output
+  lines (the actual error text with file paths and errno) are recorded just
+  above the diagnosis warning, and the warning ends with a pointer to the
+  complete daily rsync log, which lives on the pull source host at
+  `/var/log/zfsutilities/rsync-pull.log` (truncated on first use each day).
 
 - **ZFS keys backup (rsync)** — non-fatal. The failure is logged as a warning
   and the backup continues.

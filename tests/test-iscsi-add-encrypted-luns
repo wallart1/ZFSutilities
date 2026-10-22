@@ -7,11 +7,14 @@ setup_test_env
 
 # ------------------------------------------------------------------
 # Run a temp copy of iscsi-add-encrypted-luns with paths/env mocked.
+# A pre-existing backstore list file ($4, optional) makes the mock's
+# "/backstores/block ls" report those backstores as already present.
 # ------------------------------------------------------------------
 _run_iscsi_add_encrypted_luns() {
     local confdir="$1"
     local legacy_file="$2"
     local savefile="$3"
+    local existing_backstores="${4:-}"
     local tmpdir
     tmpdir=$(mktemp -d)
     local script_copy="$tmpdir/iscsi-add-encrypted-luns"
@@ -35,6 +38,7 @@ EOF
 
     cat > "$tmpdir/safe-iscsi-save" <<'EOF'
 #!/bin/bash
+echo "safe-iscsi-save" >> "$CALLS_LOG"
 exit 0
 EOF
     chmod +x "$tmpdir/safe-iscsi-save"
@@ -51,8 +55,18 @@ export NODE_CONF="$tmpdir/node.conf"
 export NODE_LIB="$node_lib"
 export mydir="$tmpdir"
 export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$confdir"
+export CALLS_LOG="$tmpdir/targetcli-calls"
+touch "\$CALLS_LOG"
 find_zfsutility_script() { echo "/dev/null"; }
-targetcli() { echo "\$*" >> "$tmpdir/targetcli-calls"; return 0; }
+targetcli() {
+    echo "\$*" >> "$tmpdir/targetcli-calls"
+    case "\$*" in
+        "/backstores/block ls")
+            [[ -n "$existing_backstores" ]] && cat "$existing_backstores"
+            ;;
+    esac
+    return 0
+}
 sleep() { true; }
 rootcheck() { true; }
 source "$script_copy"
@@ -84,6 +98,85 @@ test_uses_modern_config_path() {
         test_pass
     else
         test_fail "Expected backstore creation for vm-100-disk-0, got: $output"
+    fi
+}
+
+test_lun_lookup_scoped_to_target() {
+    test_start "LUN index comes from the configured target, not an orphan target"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/etc/zfsutilities"
+    printf 'vm-101-disk-0:%s/dev:threeamigos\n' "$tmpdir" \
+        > "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf"
+    touch "$tmpdir/dev"
+    # The configured 2026-02 target holds the backstore at LUN 5; an orphan
+    # 2026-10 target holds it at LUN 9. The create call must use 5.
+    cat > "$tmpdir/save.json" <<'EOF'
+{
+  "targets": [
+    {"wwn": "iqn.2026-02.local.stewie:threeamigos", "tpgs": [{"luns": [
+      {"storage_object": "/backstores/block/vm-101-disk-0", "index": 5}
+    ]}]},
+    {"wwn": "iqn.2026-10.local.stewie:threeamigos", "tpgs": [{"luns": [
+      {"storage_object": "/backstores/block/vm-101-disk-0", "index": 9}
+    ]}]}
+  ]
+}
+EOF
+    local output
+    output=$(_run_iscsi_add_encrypted_luns "$tmpdir/etc/zfsutilities" "" "$tmpdir/save.json")
+    rm -rf "$tmpdir"
+
+    local expected_create
+    expected_create="/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns"
+    expected_create+=" create /backstores/block/vm-101-disk-0 5"
+    if [[ "$output" == *"$expected_create"* ]] \
+        && [[ "$output" != *"vm-101-disk-0 9"* ]]; then
+        test_pass
+    else
+        test_fail "Expected LUN create with index 5 on the 2026-02 target, got: $output"
+    fi
+}
+
+test_save_skipped_when_nothing_added() {
+    test_start "safe-iscsi-save runs only when a backstore was added"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/etc/zfsutilities"
+    printf 'vm-100-disk-0:%s/dev:threeamigos\n' "$tmpdir" \
+        > "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf"
+    touch "$tmpdir/dev"
+    printf '  vm-100-disk-0  %s/dev  50G\n' "$tmpdir" > "$tmpdir/backstores"
+    local output
+    output=$(_run_iscsi_add_encrypted_luns "$tmpdir/etc/zfsutilities" "" "$tmpdir/save.json" \
+        "$tmpdir/backstores")
+    rm -rf "$tmpdir"
+
+    if [[ "$output" != *"backstores/block create"* ]] \
+        && [[ "$output" != *"safe-iscsi-save"* ]]; then
+        test_pass
+    else
+        test_fail "Expected no creates and no save, got: $output"
+    fi
+}
+
+test_save_runs_after_add() {
+    test_start "safe-iscsi-save runs after a backstore was added"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/etc/zfsutilities"
+    printf 'vm-100-disk-0:%s/dev:threeamigos\n' "$tmpdir" \
+        > "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf"
+    touch "$tmpdir/dev"
+    local output
+    output=$(_run_iscsi_add_encrypted_luns "$tmpdir/etc/zfsutilities" "" "$tmpdir/save.json")
+    rm -rf "$tmpdir"
+
+    if [[ "$output" == *"backstores/block create vm-100-disk-0"* ]] \
+        && [[ "$output" == *"safe-iscsi-save"* ]]; then
+        test_pass
+    else
+        test_fail "Expected create then save, got: $output"
     fi
 }
 
@@ -124,6 +217,9 @@ test_exits_silently_when_no_config() {
 # Run
 # ------------------------------------------------------------------
 test_uses_modern_config_path
+test_lun_lookup_scoped_to_target
+test_save_skipped_when_nothing_added
+test_save_runs_after_add
 test_falls_back_to_legacy_config_path
 test_exits_silently_when_no_config
 

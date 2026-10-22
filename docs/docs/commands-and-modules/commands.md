@@ -939,7 +939,12 @@ Has no effect if not currently running as root.
 
 ### `upgrade-zfsutilities`
 
-Upgrades the deployed installation to the latest GitHub release. Before
+Upgrades the deployed installation to the latest GitHub release. After the
+release is downloaded and staged, this host is checked against the **incoming
+release's** `check-prerequisites` (mode follows the node configuration:
+`--single-node`/`--two-node`); anything missing is offered for interactive
+remediation exactly as during installation, and the upgrade aborts before
+touching anything if the check cannot pass. Before
 anything is replaced, every host the release will be deployed to (this host
 plus every host in the deployment groups) is scanned for files that were
 modified, added, or removed since their version was installed; the changes
@@ -975,6 +980,8 @@ sudo upgrade-zfsutilities
 | Module | Role |
 | ------ | ---- |
 | `upgrade-lib.sh` | Manifests, change scanning, salvaging, tarball fetching, target enumeration |
+| `installer-lib.sh` | Shared interactive prerequisite remediation flow (`run_interactive_prerequisites`) |
+| `check-prerequisites` (staged release) | The incoming release's requirement list; the deployed tree's checker is the fallback |
 | `rootcheck` | Root gate |
 | `deploy-version` (downloaded release) | Copies the new version to every deployment target |
 
@@ -991,16 +998,18 @@ sudo upgrade-zfsutilities
 1. Read the active version from the `current` symlink; die with installer guidance if none.
 2. Query GitHub for the latest release; exit cleanly when the active version is not older.
 3. After consent, download and stage the release tarball.
-4. Enumerate deployment targets (deploy groups, legacy node-config fallback) and open one ssh control master per remote host (ssh prompts for passwords itself; all later connections reuse the master).
-5. Scan each target — locally in-process, remotely by piping `upgrade-lib.sh` to `ssh … bash -s` — classifying modified/added/removed files against the manifest or the release tarball of that host's active version.
-6. Report every change with unified diffs before touching anything; on approval, archive modified and added files on their host.
-7. Run `deploy-version <version>` from the staged tree (copies to all targets through the same ssh masters) and stop. Print the activation command for every host; activate nothing.
+4. Run the staged release's `check-prerequisites` on this host (node-configured mode) through the shared interactive remediation flow; abort with nothing changed when it cannot pass (falls back to the deployed checker when the release predates it).
+5. Enumerate deployment targets (deploy groups, legacy node-config fallback) and open one ssh control master per remote host (ssh prompts for passwords itself; all later connections reuse the master).
+6. Scan each target — locally in-process, remotely by piping `upgrade-lib.sh` to `ssh … bash -s` — classifying modified/added/removed files against the manifest or the release tarball of that host's active version.
+7. Report every change with unified diffs before touching anything; on approval, archive modified and added files on their host.
+8. Run `deploy-version <version>` from the staged tree (copies to all targets through the same ssh masters) and stop. Print the activation command for every host; activate nothing.
 
 **Return codes:**
 
 | Code | Meaning |
 | ---- | --------- |
 | `0`  | Deployed, up to date, or aborted by the user (nothing changed) |
+| `1`  | Prerequisite check failed (remediation declined or unsuccessful) |
 | `8`+ | Fatal: no active version, GitHub unreachable, download failed, scan/salvage/deploy failure |
 
 ---

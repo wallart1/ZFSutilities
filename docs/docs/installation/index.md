@@ -274,20 +274,27 @@ It performs a guarded, full-site upgrade:
 1. **Checks GitHub** for the latest release and compares it with the active
    deployed version. When there is nothing newer, it says so and exits.
 2. **Downloads the release** after asking you to confirm the upgrade.
-3. **Scans every host the release will be deployed to** — this host plus
+3. **Checks this host against the incoming release's prerequisites**: the
+   staged release's own `check-prerequisites` runs with the node's
+   configured mode (`--single-node`/`--two-node`), anything missing is
+   offered for interactive installation exactly as during a fresh install,
+   and the upgrade aborts — with nothing changed — if the check cannot
+   pass. (A release that predates the checker falls back to the deployed
+   one.)
+4. **Scans every host the release will be deployed to** — this host plus
    every host in the deployment groups — for files that were modified,
    added, or removed since their version was installed. Hosts may run
    different active versions; each is compared against its own baseline
    (the `MANIFEST.sha256` recorded at deploy time, or the matching release
    tarball for trees deployed before manifests existed).
-4. **Shows the changes before touching anything**: per-host listings plus
+5. **Shows the changes before touching anything**: per-host listings plus
    unified diffs of every modified file against the original release, then
    asks for approval.
-5. **Archives approved changes on their host** under
+6. **Archives approved changes on their host** under
    `salvaged-changes/<old-version>/<timestamp>/` (with a provenance README
    and a combined diff), so nothing is ever destroyed by an upgrade.
    Re-apply any change you still want, then re-deploy.
-6. **Deploys via deploy-version** from the downloaded release tree, which
+7. **Deploys via deploy-version** from the downloaded release tree, which
    copies the new version to every deployment-group host, and **stops
    there — nothing is activated**. The running system keeps its current
    version until you run switch-version yourself; the exact activation
@@ -295,6 +302,10 @@ It performs a guarded, full-site upgrade:
    (`sudo switch-version <version>`, and
    `ssh root@<host> switch-version <version>` for each remote). On
    two-node sites, run `sudo upgrade-zfsutilities` on each node.
+   Activation also refreshes the `rtslib-fb-targetctl` systemd drop-ins on
+   the storage host from the newly deployed version, so a release carrying
+   drop-in changes (such as the encrypted-LUN boot restore hook) takes
+   effect as soon as you activate it — no manual drop-in re-install.
 
 Remote targets require root SSH access. Password authentication is fine:
 ssh prompts for the password itself, and every connection in the upgrade

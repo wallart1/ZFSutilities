@@ -13,12 +13,21 @@ from unittest.mock import MagicMock, patch
 
 @contextmanager
 def _patch_log_dirs(tmpdir):
-    """Patch session_log and log_index to use tmpdir as SESSION_LOG_DIR."""
+    """Patch session_log and log_index to use tmpdir as SESSION_LOG_DIR.
+
+    The runner's rsync log lives under /var/log/zfsutilities, which the
+    unprivileged CI runner user cannot create; redirect it into tmpdir so
+    start()'s truncate-and-append path stays hermetic (on a dev host the
+    root-owned directory already exists and masks the permission failure).
+    """
     lock_path = os.path.join(tmpdir, ".log_index.lock")
+    rsync_dir = os.path.join(tmpdir, "rsync-logs")
     with (
         patch("session_log.SESSION_LOG_DIR", tmpdir),
         patch("log_index.SESSION_LOG_DIR", tmpdir),
         patch("file_locking.LOG_INDEX_LOCK_PATH", lock_path),
+        patch.object(br, "RSYNC_LOG_DIR", rsync_dir),
+        patch.object(br, "RSYNC_LOG_FILE", os.path.join(rsync_dir, "rsync-backup.log")),
     ):
         yield
 

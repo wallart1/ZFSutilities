@@ -45,14 +45,13 @@ source "$installer_lib"
 
 ensure_zfsutilities_dirs
 
-# systemd drop-in configs. ZFSUTILITIES_ETC_PREFIX (the same knob
-# check_partial_uninstall reads) points the systemd tree at a fixture root in
-# the test harness; empty in production, so the path is unchanged.
+# systemd drop-in directory. The drop-ins themselves are installed by
+# switch-version's install_rtslib_dropins during activation (Step 5) from
+# the DEPLOYED version's share/two-node tree; the obsolete-artifact sweep
+# below still reads this directory. ZFSUTILITIES_ETC_PREFIX (the same knob
+# check_partial_uninstall reads) points the systemd tree at a fixture root
+# in the test harness; empty in production, so the path is unchanged.
 dropin_dir="${ZFSUTILITIES_ETC_PREFIX:-}/etc/systemd/system/rtslib-fb-targetctl.service.d"
-dropins=(
-    "rtslib-fb-targetctl-pre-start-backup.conf:pre-start-backup.conf"
-    "rtslib-fb-targetctl-boot-config.conf:boot-config.conf"
-)
 
 _check_zfs_root() {
     local root_fs_type
@@ -262,25 +261,14 @@ CONFEOF
     echo "✓ Configuration saved to $NODE_CONF"
 fi
 
-# Source the configuration — freshly generated above or kept from an
-# earlier run — and refresh the lowercase working copies. The install
-# steps below use these in both paths; the kept-config path previously
-# never set them (node.conf defines the UPPERCASE names only), so the
-# storage-host check died on an empty hostname.
-source "$NODE_CONF"
-node_mode="${NODE_MODE:-two-node}"
-storage_host="${STORAGE_HOST:-}"
-compute_host="${COMPUTE_HOST:-}"
-storage_ip="${STORAGE_IP:-}"
-iqn_prefix="${IQN_PREFIX:-}"
-expected_iscsi_devices="${EXPECTED_ISCSI_DEVICES:-}"
-declare -A pool_target=()
-# POOL_TARGET is sourced from node.conf above.
-# shellcheck disable=SC2153
-for _pool in "${!POOL_TARGET[@]}"; do
-    pool_target["$_pool"]="${POOL_TARGET[$_pool]}"
-done
-unset _pool
+# Source the node library — the freshly generated or kept node.conf loads
+# through it, setting the lowercase working copies (storage_host,
+# compute_host, iqn_prefix, pool_target, expected_iscsi_devices) the
+# install steps below use in both paths, with node-lib's own validation.
+# The kept-config path previously re-parsed node.conf by hand here and
+# never validated it; going through node-lib also provides
+# probe_target_usage for the Step 2c drift guard.
+source "$repo_dir/lib/node-lib.sh"
 
 # ------------------------------------------------------------------
 # Step 2b: Generate deployment config
@@ -304,6 +292,105 @@ else
 fi
 
 echo ""
+
+# ------------------------------------------------------------------
+# Step 2c: Guard against IQN-prefix drift vs the live LIO target tree
+# ------------------------------------------------------------------
+# A reinstall in a different month derives a different default IQN prefix
+# (iqn.YYYY-MM.local.<host>). When saveconfig.json carries targets for the
+# same short names under a different prefix, proceeding would leave orphan
+# targets that Proxmox may still log in to while LUN tooling maps to the
+# new-prefix target. Warn and require explicit confirmation.
+check_iqn_prefix_drift() {
+    local saveconfig="${ZFSUTILITIES_ETC_PREFIX:-}/etc/rtslib-fb-target/saveconfig.json"
+    [[ -f "$saveconfig" ]] || return 0
+    [[ ${#pool_target[@]} -gt 0 ]] || return 0
+
+    local orphans
+    orphans=$(iqn_prefix="$iqn_prefix" python3 - "$saveconfig" <<'PYEOF' 2>/dev/null || true
+import json, os, sys
+prefix = os.environ["iqn_prefix"]
+try:
+    with open(sys.argv[1]) as f:
+        config = json.load(f)
+except Exception:
+    sys.exit(0)
+live = {t.get("wwn", "") for t in config.get("targets", [])}
+shorts = set()
+for wwn in live:
+    if ":" in wwn:
+        shorts.add(wwn.rsplit(":", 1)[1])
+for short in sorted(shorts):
+    full = f"{prefix}:{short}"
+    if full not in live:
+        for wwn in sorted(wwn for wwn in live if wwn.endswith(":" + short)):
+            print(wwn)
+PYEOF
+)
+    # The drift only matters for short names this config maps pools to.
+    local drifted=() short orphan
+    while IFS= read -r orphan; do
+        [[ -n "$orphan" ]] || continue
+        short="${orphan##*:}"
+        for pool in "${!pool_target[@]}"; do
+            if [[ "${pool_target[$pool]}" == "$short" ]]; then
+                drifted+=("$orphan (target for pool $pool; expected ${iqn_prefix}:${short})")
+                break
+            fi
+        done
+    done <<< "$orphans"
+
+    if [[ ${#drifted[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  ⚠  WARNING: IQN prefix mismatch"
+    echo ""
+    echo "  The live iSCSI target tree holds targets for your configured"
+    echo "  pool-to-target short names under a DIFFERENT IQN prefix than"
+    echo "  the one this install will use:"
+    for entry in "${drifted[@]}"; do
+        echo "    $entry"
+    done
+    echo ""
+    echo "  Proceeding creates targets under the new prefix and leaves these"
+    echo "  as orphans: Proxmox may keep logging in to the old target while"
+    echo "  LUN tooling maps disks to the new one — VM disk mappings break."
+    echo ""
+    echo "  Usually you should answer N and fix IQN_PREFIX in"
+    echo "  ${NODE_CONF} to match the live targets (or delete the orphan"
+    echo "  targets with 'targetcli /iscsi delete <iqn>')."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    # Script-side usage probe: proceeding strands the drifted targets as
+    # orphans, so each one must be VERIFIED UNUSED (no guest config on the
+    # compute host references it, no live session) before continuing is
+    # even offered. probe_target_usage prints the evidence; a target in
+    # use — or one that could not be verified — aborts the install.
+    local _entry _drift_iqn _in_use=0
+    for _entry in "${drifted[@]}"; do
+        _drift_iqn="${_entry%% *}"
+        if ! probe_target_usage "$_drift_iqn"; then
+            _in_use=1
+        fi
+    done
+    if [[ "$_in_use" == 1 ]]; then
+        die "Aborting: a drifted target is still in use or could not be verified" \
+            "(probe lines above). Move the guest disks that reference it, delete the" \
+            "orphan manually, or fix IQN_PREFIX in ${NODE_CONF}, then re-run."
+    fi
+
+    read -rp "Proceed with the new IQN prefix anyway? (y/N): " drift_answer
+    if [[ ! "$drift_answer" =~ ^[Yy]$ ]]; then
+        die "Aborting: resolve the IQN prefix mismatch, then re-run the installer."
+    fi
+    echo "Continuing with the new IQN prefix at your explicit request."
+}
+
+check_iqn_prefix_drift
 
 # ------------------------------------------------------------------
 # Step 3: Set up iSCSI targets
@@ -416,16 +503,10 @@ if [[ -n "${compute_host:-}" ]]; then
     ensure_retention_profiles_remote "$compute_host"
 fi
 
-# Install systemd drop-ins (not versioned — system config)
-echo ""
-echo "Installing systemd drop-ins for rtslib-fb-targetctl..."
-mkdir -p "$dropin_dir"
-for dropin_entry in "${dropins[@]}"; do
-    IFS=':' read -r src_name dst_name <<< "$dropin_entry"
-    install -m 0644 "${two_node_dir}/${src_name}" "${dropin_dir}/${dst_name}"
-    echo "  ✓ ${dropin_dir}/${dst_name}"
-done
-systemctl daemon-reload
+# The rtslib-fb-targetctl systemd drop-ins (boot-config, pre-start-backup)
+# are installed by switch-version's install_rtslib_dropins during the
+# activation above — from the deployed version's share/two-node tree, so
+# they always match the activated release.
 
 # Remove obsolete systemd artifacts left by older versions (same
 # ZFSUTILITIES_ETC_PREFIX fixture knob as the drop-ins above)

@@ -1,0 +1,212 @@
+#!/usr/bin/bash
+# iscsi-recover-encrypted-luns
+# Reconstruct encrypted iSCSI LUNs after ZFS encryption keys are loaded
+# post-boot, and rescan the compute host so the LUNs are usable.
+#
+# Boot restores saveconfig-boot.json (encrypted backstores stripped), so
+# encrypted LUNs are gone until something re-adds them. When keys are
+# loaded at boot time the ExecStartPost hook in the boot-config.conf
+# drop-in runs iscsi-add-encrypted-luns. When keys are loaded later —
+# e.g. from a LUKS USB drive unlocked at the console after login — this
+# script is that "later": run it on the storage host after zfs load-key.
+#
+# Performs, idempotently (safe to re-run):
+#   1. For each entry in iscsi-encrypted-luns.conf
+#      (backstore_name:device_path:target_short_name):
+#        - skip with a WARN when the device node does not exist
+#          (keys still not loaded)
+#        - skip when the backstore AND its LUN mapping already exist
+#        - (re)create the block backstore and map it at the LUN index
+#          recorded in saveconfig.json for THIS target — never an
+#          auto-assigned index, which can collide or pick the wrong
+#          slot when orphan targets under a different IQN prefix exist
+#   2. safe-iscsi-save (persists config + regenerates the boot config;
+#      refuses by itself when any expected LUN is inactive)
+#   3. rescan-storage (self-delegates to the compute host) so the
+#      initiator sees the restored LUNs
+#
+# Usage: iscsi-recover-encrypted-luns   (run as root on the storage host)
+# Exits 0 when every configured encrypted LUN is mapped (or re-added),
+# 1 when any entry failed or its device was unavailable.
+#
+# Install to: /usr/local/lib/zfsutilities/bin/iscsi-recover-encrypted-luns on the storage host
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+source_helper rootcheck
+rootcheck
+
+if is_single_node; then
+    log_msg "INFO: iscsi-recover-encrypted-luns: not applicable in single-node mode (no iSCSI)"
+    exit 0
+fi
+
+if ! command -v targetcli >/dev/null 2>&1; then
+    log_msg "FATAL: targetcli not found. Install rtslib-fb-targetctl first."
+    exit 1
+fi
+
+my_host=$(hostname -s)
+if [[ "$my_host" != "$storage_host" ]]; then
+    log_msg "FATAL: Must run on the storage host ($storage_host), not $my_host"
+    exit 1
+fi
+
+conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/iscsi-encrypted-luns.conf"
+if [[ ! -e "$conf" && -f "/etc/iscsi-encrypted-luns.conf" ]]; then
+    conf="/etc/iscsi-encrypted-luns.conf"
+fi
+savefile="/etc/rtslib-fb-target/saveconfig.json"
+
+if [[ ! -f "$conf" ]]; then
+    log_msg "INFO: No encrypted-LUN config at $conf — nothing to recover"
+    exit 0
+fi
+
+if [[ ! -f "$savefile" ]]; then
+    log_msg "FATAL: $savefile not found — LUN indexes cannot be verified"
+    exit 1
+fi
+
+# Look up the recorded LUN index for a backstore from saveconfig.json,
+# scoped to one full target IQN. Prints the index, or nothing when the
+# backstore is not mapped on that exact target. Orphan targets under a
+# different IQN prefix carrying the same backstore at another index must
+# not influence the result.
+lookup_lun_number() {
+    local bsname="$1" target_iqn="$2"
+    bsname="$bsname" target_iqn="$target_iqn" python3 - "$savefile" << 'PYEOF' 2>/dev/null
+import json, os, sys
+name = os.environ["bsname"]
+target_iqn = os.environ["target_iqn"]
+with open(sys.argv[1]) as f:
+    config = json.load(f)
+for target in config.get("targets", []):
+    if target.get("wwn") != target_iqn:
+        continue
+    for tpg in target.get("tpgs", []):
+        for lun in tpg.get("luns", []):
+            if lun.get("storage_object", "").endswith("/" + name):
+                print(lun["index"])
+                exit()
+PYEOF
+}
+
+log_msg "INFO: === Recovering encrypted iSCSI LUNs ==="
+
+added=0
+already=0
+unavailable=0
+failed=0
+
+while IFS=: read -r name device target; do
+    [[ -z "$name" || "$name" == \#* ]] && continue
+
+    if [[ ! -e "$device" ]]; then
+        log_msg "WARN:   $name — device not available (keys not loaded?): $device"
+        unavailable=$((unavailable + 1))
+        continue
+    fi
+
+    full_iqn="${iqn_prefix}:${target}"
+
+    backstore_present=false
+    if targetcli /backstores/block ls 2>/dev/null | grep -q " ${name} "; then
+        backstore_present=true
+    fi
+
+    mapped_present=false
+    if targetcli "/iscsi/${full_iqn}/tpg1/luns" ls 2>/dev/null | grep -q "block/${name}"; then
+        mapped_present=true
+    fi
+
+    if [[ "$backstore_present" == true && "$mapped_present" == true ]]; then
+        already=$((already + 1))
+        log_msg "INFO:   ✓ $name already present on $full_iqn"
+        continue
+    fi
+
+    lun_num=$(lookup_lun_number "$name" "$full_iqn")
+    if [[ -z "$lun_num" ]]; then
+        log_msg "FATAL:   $name has no recorded LUN index under $full_iqn in $savefile"
+        log_msg "FATAL:     Not guessing an index (auto-assignment can collide or pick"
+        log_msg "FATAL:     the wrong slot when orphan targets exist). Check with"
+        log_msg "FATAL:     show-lun-map and saveconfig.json, then fix the conf entry."
+        failed=$((failed + 1))
+        continue
+    fi
+
+    if [[ "$backstore_present" != true ]]; then
+        if ! targetcli /backstores/block create "$name" "$device" >/dev/null 2>&1; then
+            log_msg "FATAL:   $name — could not create backstore for $device"
+            failed=$((failed + 1))
+            continue
+        fi
+    fi
+
+    if [[ "$mapped_present" != true ]]; then
+        if ! targetcli "/iscsi/${full_iqn}/tpg1/luns" \
+                create "/backstores/block/${name}" "$lun_num" >/dev/null 2>&1; then
+            log_msg "FATAL:   $name — could not map LUN $lun_num on $full_iqn"
+            log_msg "FATAL:     (another backstore may hold that index; inspect with show-lun-map)"
+            failed=$((failed + 1))
+            continue
+        fi
+    fi
+
+    # Verify the mapping took, by name, on the exact target.
+    if targetcli "/iscsi/${full_iqn}/tpg1/luns" ls 2>/dev/null | grep -q "block/${name}"; then
+        added=$((added + 1))
+        log_msg "INFO:   ✓ $name mapped at LUN $lun_num on $full_iqn"
+    else
+        failed=$((failed + 1))
+        log_msg "FATAL:   $name — LUN $lun_num create reported success but mapping is absent"
+    fi
+done < "$conf"
+
+echo ""
+log_msg "INFO:   Recovered:   $added"
+log_msg "INFO:   Already OK:  $already"
+log_msg "INFO:   Unavailable: $unavailable"
+log_msg "INFO:   Failed:      $failed"
+
+if [[ "$unavailable" -gt 0 ]]; then
+    log_msg "WARN: Load the missing ZFS keys (zfs load-key), then re-run this script."
+fi
+
+if [[ "$added" -gt 0 ]]; then
+    echo ""
+    log_msg "INFO: Saving iSCSI configuration..."
+    if "$mydir/safe-iscsi-save"; then
+        log_msg "INFO:   ✓ iSCSI configuration saved"
+    else
+        log_msg "FATAL: safe-iscsi-save failed — configuration NOT saved"
+        failed=$((failed + 1))
+    fi
+
+    echo ""
+    log_msg "INFO: Rescanning compute host ($compute_host)..."
+    rescan_script=$(find_zfsutility_script rescan-storage 2>/dev/null || true)
+    if [[ -n "$rescan_script" ]]; then
+        "$rescan_script" || log_msg "WARN: rescan-storage returned non-zero"
+    else
+        log_msg "WARN: rescan-storage not found — run it on $compute_host manually"
+    fi
+fi
+
+echo ""
+if [[ "$failed" -gt 0 || "$unavailable" -gt 0 ]]; then
+    log_msg "INFO: === Recovery finished with unresolved entries — see lines above ==="
+    exit 1
+fi
+log_msg "INFO: === Recovery complete ==="
+exit 0

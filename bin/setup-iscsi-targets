@@ -46,6 +46,8 @@ created=0
 existing=0
 portals_added=0
 acls_fixed=0
+orphans_removed=0
+skipped_for_orphans=0
 
 # Iterate over pool_target values (target short names)
 for pool in "${!pool_target[@]}"; do
@@ -59,6 +61,83 @@ for pool in "${!pool_target[@]}"; do
         existing=$((existing + 1))
         log_msg "INFO:     ✓ Target already exists"
     else
+        # IQN-prefix drift guard: an existing target with the same short
+        # name under a DIFFERENT prefix is an orphan (typically from an
+        # earlier install in a different month — the default prefix is
+        # date-derived). Creating the new-prefix target anyway splits the
+        # LUN tree: Proxmox keeps logging in to the old target while LUN
+        # tooling maps to the new one. Deletion is offered only after the
+        # script itself verified the orphan unused (probe_target_usage:
+        # guest configs and live sessions on the compute host); a target
+        # in use — or unverifiable — is refused outright. When an orphan
+        # remains (kept or refused), duplicate creation is skipped rather
+        # than building a split-brain target tree.
+        orphan_iqns=()
+        while IFS= read -r _orphan; do
+            [[ -n "$_orphan" ]] && orphan_iqns+=("$_orphan")
+        done < <(targetcli /iscsi ls 2>/dev/null | while IFS= read -r _t_line; do
+            read -ra _t_words <<< "$_t_line"
+            for _t in "${_t_words[@]}"; do
+                case "$_t" in
+                    iqn.*)
+                        # Same short name, different full IQN = orphan.
+                        [[ "$_t" != "$target_iqn" && "$_t" == *":${target_short}" ]] \
+                            && printf '%s\n' "$_t"
+                        ;;
+                esac
+            done
+        done)
+
+        if [[ ${#orphan_iqns[@]} -gt 0 ]]; then
+            log_msg "WARN:     Existing target(s) use the short name" \
+                "'${target_short}' under a different IQN prefix:"
+            for _orphan in "${orphan_iqns[@]}"; do
+                log_msg "WARN:       $_orphan"
+            done
+            log_msg "WARN:     These are orphans (IQN prefix drift — the default" \
+                "prefix is date-derived)."
+            for _orphan in "${orphan_iqns[@]}"; do
+                # Deletion is offered only for a target the script itself
+                # verified unused (no guest config on the compute host
+                # references it, no live session). One in use — or one that
+                # could not be verified — is never offered for deletion:
+                # probe_target_usage printed the evidence above.
+                if ! probe_target_usage "$_orphan"; then
+                    log_msg "FATAL:   Refusing to delete $_orphan — it is in" \
+                        "use or could not be verified."
+                    log_msg "FATAL:   Move the guest disks that reference it (or fix" \
+                        "IQN_PREFIX in the node config), then re-run."
+                    continue
+                fi
+                read -rp "Delete orphan target $_orphan? (verified unused) (y/N): " _del_answer
+                if [[ "$_del_answer" =~ ^[Yy]$ ]]; then
+                    if targetcli /iscsi delete "$_orphan" >/dev/null 2>&1; then
+                        orphans_removed=$((orphans_removed + 1))
+                        log_msg "INFO:     ✓ Deleted orphan target $_orphan"
+                    else
+                        log_msg "FATAL:   Could not delete orphan target $_orphan"
+                    fi
+                else
+                    log_msg "WARN:     Keeping orphan target $_orphan"
+                fi
+            done
+            # Re-check: only create the new target when no live orphan with
+            # this short name remains (a kept orphan keeps the tree split).
+            _still_orphan=false
+            for _orphan in "${orphan_iqns[@]}"; do
+                if targetcli /iscsi ls 2>/dev/null | grep -q "$_orphan"; then
+                    _still_orphan=true
+                fi
+            done
+            if [[ "$_still_orphan" == true ]]; then
+                skipped_for_orphans=$((skipped_for_orphans + 1))
+                log_msg "FATAL:   Skipping target creation for pool $pool —" \
+                    "remove the orphan target(s)"
+                log_msg "FATAL:   (targetcli /iscsi delete <iqn>) or fix IQN_PREFIX, then re-run."
+                continue
+            fi
+        fi
+
         # Create the target
         if targetcli /iscsi create "$target_iqn" >/dev/null 2>&1; then
             created=$((created + 1))
@@ -115,7 +194,7 @@ done
 echo ""
 
 # Save config if anything changed
-if [[ $created -gt 0 || $portals_added -gt 0 || $acls_fixed -gt 0 ]]; then
+if [[ $created -gt 0 || $portals_added -gt 0 || $acls_fixed -gt 0 || $orphans_removed -gt 0 ]]; then
     targetcli saveconfig >/dev/null 2>&1
     log_msg "INFO: ✓ iSCSI configuration saved"
 else
@@ -126,5 +205,11 @@ echo ""
 log_msg "INFO:   Targets created:   $created"
 log_msg "INFO:   Targets existing:  $existing"
 log_msg "INFO:   Portals added:     $portals_added"
+log_msg "INFO:   Orphans removed:   $orphans_removed"
+if [[ $skipped_for_orphans -gt 0 ]]; then
+    log_msg "INFO:   Skipped (orphans kept): $skipped_for_orphans"
+    log_msg "FATAL: Resolve the orphan targets above, then re-run."
+    exit 1
+fi
 echo ""
 log_msg "INFO: === Done ==="

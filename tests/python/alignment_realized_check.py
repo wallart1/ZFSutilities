@@ -589,6 +589,34 @@ def _run_geometry_checks():
     win2.destroy()
     pump()
 
+    # --- Narrow windows: the page itself never scrolls sideways ---------
+    # Unellipsized section headers and value-grid captions pin the page
+    # minimum at their full natural text width, so the whole page grew a
+    # horizontal scrollbar that only ever carried label text (measured on
+    # this host's theme: an unfixed page overflows from ~460px down; 400px
+    # is the red-proof width). Headers and captions now ellipsize, so the
+    # page minimum follows the tables' own minimums and every table keeps
+    # scrolling privately. REALIZED_NARROW_W overrides the probe width for
+    # threshold experiments.
+    narrow_w = int(os.environ.get("REALIZED_NARROW_W", "400"))
+    for view_name in ("charts", "alignment"):
+        app4, page4 = build_page()
+        win4 = show(page4, narrow_w)
+        app4._memory_view_stack.set_visible_child_name(view_name)
+        pump()
+        if view_name == "alignment":
+            ap._apply_alignment_sample(app4, _realized_sample())
+            pump(20)
+        page_hadj = app4.performance_scrolled.get_hadjustment()
+        assert page_hadj.get_upper() <= page_hadj.get_page_size() + 0.5, (
+            f"{narrow_w}px {view_name} view: the page itself scrolls horizontally "
+            f"(range {page_hadj.get_upper()} > page {page_hadj.get_page_size()}) — "
+            "a header or caption is pinning the page minimum again"
+        )
+        print(f"PASS geometry: {narrow_w}px {view_name} view keeps the page itself non-scrolling")
+        win4.destroy()
+        pump()
+
     # --- Empty tables keep their 20-line windows --------------------------
     _app3, page3 = build_page()
     win3 = show(page3, 1000)

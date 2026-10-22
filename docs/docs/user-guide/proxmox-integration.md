@@ -691,6 +691,59 @@ checkrunningvms "pool/dataset"
 
 ---
 
+## Recovering Encrypted LUNs After a Reboot (Two-node)
+
+When a VM disk zvol is ZFS-encrypted, its iSCSI backstore cannot be restored
+at boot unless the encryption key is already available. The
+`boot-config.conf` drop-in therefore restores `saveconfig-boot.json`
+(encrypted backstores excluded) and an `ExecStartPost` hook re-adds the
+encrypted LUNs only when their keys are loadable at boot time — e.g.
+`keylocation=file://` pointing at a non-encrypted filesystem mounted before
+`rtslib-fb-targetctl.service` starts.
+
+If your keys are NOT available at boot — for example, they live on a
+LUKS-encrypted USB drive you unlock after logging in — the encrypted LUNs
+are absent until you recover them manually. Symptom: `qm start <vmid>` fails
+for VMs whose disks are encrypted, or Proxmox shows those disks missing,
+while non-encrypted VMs start normally.
+
+### The short path
+
+On the storage host, after unlocking the key store and loading the keys:
+
+```bash
+zfs load-key <pool>/<path-to-encrypted-zvol>   # repeat per encrypted zvol
+sudo iscsi-recover-encrypted-luns
+```
+
+[`iscsi-recover-encrypted-luns`](../commands-and-modules/two-node.md#iscsi-recover-encrypted-luns-storage-node)
+recreates each encrypted backstore, maps it at its recorded LUN index (read
+from `saveconfig.json`, scoped to the configured target — never an
+auto-assigned index), saves the config with `safe-iscsi-save`, and rescans
+the compute host. It is idempotent and safe to re-run, and refuses (rather
+than guesses) when an entry has no recorded index. Once it reports recovery
+complete, start the affected VMs from the Proxmox GUI (or `qm start <vmid>`
+on the compute host).
+
+### The manual equivalent
+
+For reference, the steps the script performs:
+
+1. Load the ZFS keys for each encrypted iSCSI zvol (`zfs load-key`).
+2. `targetcli /backstores/block create <name> /dev/zvol/<pool>/<path>` for
+   each encrypted backstore.
+3. `targetcli /iscsi/<iqn>/tpg1/luns create /backstores/block/<name> <lun_idx>`
+   using the LUN index recorded in `saveconfig.json` for that target —
+   NOT an auto-assigned index: when orphan targets under an old IQN prefix
+   exist, auto-assignment can collide or pick the wrong slot and break
+   Proxmox disk mappings.
+4. `safe-iscsi-save` to persist.
+5. `rescan-storage` (or `repair-iscsi-luns --force-relogin`) to surface the
+   LUNs on the compute host.
+6. `qm start <vmid>` on the compute host for each affected VM.
+
+---
+
 ## What Proxmox Can Always Do (Both Modes)
 
 These Proxmox GUI operations work identically regardless of node configuration:

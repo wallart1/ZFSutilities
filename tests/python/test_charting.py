@@ -194,18 +194,58 @@ class TestSharedVocabulary(unittest.TestCase):
 
 class TestBackendProbe(unittest.TestCase):
     def test_backend_unavailable_under_mocks(self):
-        """Under mock_gtk the GTK3 backend cannot load, so the probe fails.
+        """Under mock_gtk the probe never runs, so the backend is unavailable.
 
-        This is the fallback trigger the test suites exercise: the fake gi
-        makes matplotlib's Gtk.Widget base classes non-classes, the backend
-        import raises, and the factory must fall back to Cairo.
+        The mock-aware fence is structural: with a mocked ``Gtk`` binding
+        the probe returns None without even attempting the import — on
+        GTK-equipped hosts the import used to "succeed" against the fake
+        gi and cache a canvas class mixed from mocks.
         """
         with mock_gtk(fresh=True):
             import charting
 
             self.assertIsNone(charting.matplotlib_backend())
-            # Cached per module binding — the second call does not re-probe.
+            # No cache was written either — the next call re-checks rather
+            # than trusting a probe that ran under a fake binding.
             self.assertIsNone(charting.matplotlib_backend())
+
+    def test_probe_does_not_cache_under_mock_binding(self):
+        """A mocked Gtk binding must leave the probe cache untouched."""
+        with mock_gtk(fresh=True):
+            import charting
+
+            self.assertIsNone(charting.matplotlib_backend())
+            self.assertIs(charting._backend, charting._UNPROBED)
+
+    def test_real_cache_hidden_under_mock_binding(self):
+        """A cache from a real probe is never served to a mocked binding.
+
+        The poisoning trap: a module binding whose ``Gtk`` became a stale
+        mock (a fresh mock import surviving its context) consuming a
+        backend cached by an earlier real probe — mixed real/mock canvas
+        construction dies with a PyGObject SystemError.
+        """
+        charting = _charting()
+        real_cache = SimpleNamespace(Figure=MagicMock(), FigureCanvas=MagicMock())
+        with patch.object(charting, "_backend", real_cache):
+            # Real binding: the cache is served.
+            with patch.object(charting, "Gtk", object()):
+                self.assertIs(charting.matplotlib_backend(), real_cache)
+            # Mocked binding: the cache is hidden.
+            with patch.object(charting, "Gtk", MagicMock()):
+                self.assertIsNone(charting.matplotlib_backend())
+
+    def test_real_binding_is_not_mistaken_for_mock(self):
+        """Ordinary modules (and their absence) never trip the fence."""
+        charting = _charting()
+        with patch.object(charting, "Gtk", None):
+            self.assertFalse(charting._gtk_binding_is_mock())
+        import types
+
+        with patch.object(charting, "Gtk", types.ModuleType("Gtk")):
+            self.assertFalse(charting._gtk_binding_is_mock())
+        with patch.object(charting, "Gtk", MagicMock()):
+            self.assertTrue(charting._gtk_binding_is_mock())
 
 
 class TestFactory(unittest.TestCase):

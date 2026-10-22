@@ -178,6 +178,29 @@ def _rsync_log_setup_script(log_path):
     )
 
 
+# How many trailing rsync output lines the wrapper prints on step failure so
+# the session log (and the runner's diagnosis) sees the actual error text.
+_RSYNC_FAILURE_TAIL_LINES = 15
+
+
+def _rsync_failure_tail_script():
+    """Return the rc-capture/tail snippet shared by the log wrappers.
+
+    The wrapper tees rsync's merged output to ``$_t`` while shipping the full
+    stream to the rsync log; when rsync fails, this snippet prints a header
+    plus the last few captured lines to stdout — the lines the profile runner
+    writes to the session log and feeds to the rsync diagnosis — and exits
+    with rsync's own rc either way.
+    """
+    return (
+        f"_rc=${{PIPESTATUS[0]}}; "
+        f'if [ "$_rc" -ne 0 ]; then '
+        f'echo "rsync exited rc=$_rc; last output lines:"; '
+        f'tail -n {_RSYNC_FAILURE_TAIL_LINES} "$_t"; '
+        f'fi; rm -f "$_t"; exit "$_rc"'
+    )
+
+
 # Directories that are commonly unreadable by root because they are owned by
 # a user-session FUSE/portal filesystem (e.g. GNOME GVFS, xdg-document-portal).
 # Excluding them prevents harmless but noisy "Permission denied" rsync errors.
@@ -194,8 +217,12 @@ def build_rsync_command(source, dest, remote_log_path=None, excludes=None):
         source: Source endpoint, e.g. "/src", "tweety:/src".
         dest: Destination endpoint, e.g. "/dst", "tweety:/dst".
         remote_log_path: If set and the step is a pull, rsync output is streamed
-            to this file on the source host. The file is truncated the first time
-            it is used each day and appended to afterwards.
+            to this file on the source host (locally for a local->local step).
+            The file is truncated the first time it is used each day and
+            appended to afterwards. The wrapper also tees the output locally
+            and, on failure, prints the last few lines so the session log and
+            the rsync diagnosis see the actual error text; the step's metadata
+            carries ``rsync_output_location`` naming where the full log lives.
         excludes: Optional iterable of rsync exclude patterns. Each item is
             passed to rsync as ``--exclude=PATTERN``. User-supplied excludes are
             appended after the defaults so they add additional exclusions; the
@@ -211,6 +238,7 @@ def build_rsync_command(source, dest, remote_log_path=None, excludes=None):
         for pattern in excludes:
             rsync_opts.append(f"--exclude={pattern}")
     local_host = _get_local_hostname()
+    output_location = None
     if src_host and dst_host:
         remote_cmd = shlex.join(rsync_opts + [src_path, f"root@{dst_host}:{dst_path}"])
         cmd = ["ssh", f"root@{src_host}", remote_cmd]
@@ -224,12 +252,13 @@ def build_rsync_command(source, dest, remote_log_path=None, excludes=None):
             host_quoted = shlex.quote(src_host)
             log_quoted = shlex.quote(remote_log_path)
             bash_script = (
-                f"_rh={host_quoted}; _rl={log_quoted}; "
+                f"_rh={host_quoted}; _rl={log_quoted}; _t=$(mktemp); "
                 f"{setup_cmd} && "
-                f'{rsync_cmd} 2>&1 | ssh -q root@$_rh "cat >> $_rl"; '
-                f"exit ${{PIPESTATUS[0]}}"
+                f'{rsync_cmd} 2>&1 | tee "$_t" | ssh -q root@$_rh "cat >> $_rl"; '
+                f"{_rsync_failure_tail_script()}"
             )
             cmd = ["bash", "-c", bash_script]
+            output_location = f"{src_host}:{remote_log_path}"
         else:
             cmd = rsync_opts + [f"root@{src_host}:{src_path}", dst_path]
         desc = f"[{local_host}] rsync {source} -> {dest} (pull from {src_host})"
@@ -239,16 +268,19 @@ def build_rsync_command(source, dest, remote_log_path=None, excludes=None):
     else:
         if remote_log_path:
             bash_script = (
-                f"{_rsync_log_setup_script(remote_log_path)}; "
+                f"{_rsync_log_setup_script(remote_log_path)}; _t=$(mktemp); "
                 f"{shlex.join(rsync_opts)} "
                 f"{shlex.quote(src_path)} {shlex.quote(dst_path)} "
-                f">> {shlex.quote(remote_log_path)} 2>&1"
+                f'2>&1 | tee "$_t" >> {shlex.quote(remote_log_path)}; '
+                f"{_rsync_failure_tail_script()}"
             )
             cmd = ["bash", "-c", bash_script]
+            output_location = remote_log_path
         else:
             cmd = rsync_opts + [src_path, dst_path]
         desc = f"[{local_host}] rsync {source} -> {dest}"
-    return BashStep(cmd, desc, is_rsync=True, fatal=False)
+    metadata = {"rsync_output_location": output_location} if output_location else None
+    return BashStep(cmd, desc, is_rsync=True, fatal=False, metadata=metadata)
 
 
 def build_send_receive_command(source, dest, variables, parent_dir, nextsnap, dryrun=False):
@@ -379,7 +411,8 @@ def build_backup_prune_command(
             "depth=''; "
             'buildfsarray "$sourcefs"; '
             "if [[ ${#fsarray[@]} -eq 0 ]]; then "
-            f'log_msg "WARN: No datasets found for {shlex.quote(sourcefs)}; skipping prune mapping."; '
+            f'log_msg "WARN: No datasets found for {shlex.quote(sourcefs)}; '
+            'skipping prune mapping."; '
             "else "
             'for _fs in "${fsarray[@]}"; do '
             'if [[ -z ${_prune_seen["$_fs"]+x} ]]; then '

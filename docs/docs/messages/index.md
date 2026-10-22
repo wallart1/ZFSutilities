@@ -271,7 +271,7 @@ Executes a built step list (backup, offsite, restore, prune) in the GUI. Message
 | `INFO: ... ... done (rc=...)` | Rsync step completion record including rc | Informational |
 | `INFO: Rsync log: /var/log/zfsutilities/rsync-backup.log` | Pointer to the dedicated rsync output log | Operator can inspect the file |
 | `WARN: Step exited with rc=...` | Any step finished non-zero | Failure handling follows (rc=9 user abort, fatal abort, or continue) |
-| `WARN: ... failed: ...` | Rsync-specific diagnosis for the failed step | Diagnostic |
+| `WARN: ... failed: ...` | Rsync-specific diagnosis for the failed step; for log-wrapped pull steps it ends with `(full rsync output: host:/var/log/zfsutilities/rsync-pull.log)` naming where the complete transfer record lives, and the wrapper's failure tail (header plus the last output lines) appears just above it in the log | Diagnostic |
 | `INFO: ... aborted by user` | Step rc=9 (user abort) | Run ends cancelled; trailer rc=9 |
 | `FATAL: Aborting ... because step failed` | A step marked fatal failed | Post-backup step runs first (if any), then the run finishes with the step's rc |
 | `WARN: ... failed (rc=...)` | Final summary when the run finishes non-zero | History entry recorded as failed |
@@ -774,6 +774,7 @@ Never stops a running VM itself; the stopped-VM gate aborts instead.
 | `FATAL: Failed to restore ...` / `FATAL: Zvol restoration failed on ...` | The per-zvol restore failed under either method (local or remote) | Script aborts; check space and the messages above |
 | `INFO: --- Step 2: Rebuilding iSCSI infrastructure ---` | Phase milestone (two-node only) | Informational |
 | `WARN: Unknown pool: ... (not in POOL_TARGET in ...)` | node-lib's pool lookup cannot find the restored zvol's pool in the node config's `POOL_TARGET` map; it precedes the FATAL below | Add the pool to `POOL_TARGET` in the node config on both nodes |
+| `WARN: pool_to_target: target ... does not exist in the local LIO target tree` (+ the `IQN_PREFIX has drifted` lines) | IQN-prefix drift fence in node-lib: the constructed target is absent from the live LIO tree while other targets exist (typically `IQN_PREFIX` in the node config differs from the live targets after a reinstall) — LUN mapping would target a fresh/empty target while Proxmox logs in to the old one | Compare `targetcli /iscsi ls` with `IQN_PREFIX` in the node config; fix the prefix or remove orphan targets |
 | `FATAL: Cannot map pool ... to target` | No iSCSI target mapping for a restored zvol's pool (`pool_to_target` failed; the WARN above names the node config) | Script aborts; fix the node config mapping |
 | `FATAL: iSCSI reconstruction failed on ...` | The remote iSCSI rebuild failed | Script aborts; see the remote messages |
 | `INFO: ✓ iSCSI configuration saved` | The storage host's targetcli config was persisted | Informational |
@@ -1205,6 +1206,18 @@ Resumable: a state file (`/tmp/move-vm-disk-...state`) records the last complete
 | `FATAL: Must run on the storage host (...), not ...` | Hostname check failed against the node config | Run on the storage host |
 | `FATAL: targetcli not found. Install rtslib-fb-targetctl first.` | The LIO target stack is missing | Install targetcli and rerun |
 | `INFO: ✓ Target already exists` | Idempotence gate for this pool's IQN | Skipped for this pool |
+| `WARN: Existing target(s) use the short name '...' under a different IQN prefix:` / `WARN: These are orphans (IQN prefix drift — the default prefix is date-derived).` | IQN-prefix drift guard: live targets carry this pool's target short name under another prefix (typically an earlier install in a different month) | The script probes each orphan's usage (see the `probe:` lines) before any action |
+| `INFO: probe: ... — ACL initiators: ...` | Usage-probe context: the explicit ACL initiators configured on the target | Informational |
+| `INFO: probe: ... — demo-mode ACLs (any initiator may log in; an empty ACL list is normal)` | Usage-probe context: the target runs demo-mode ACLs, so an empty ACL list is not evidence of being unused — the verdict comes from the compute-host check | Informational |
+| `WARN: probe: ... — guest configs on ... still reference this target:` (+ the listed `.conf` files) | Usage probe: VM/container configs on the compute host still reference this target | The target is in use; it is never offered for deletion |
+| `WARN: probe: ... — N live iSCSI session(s) attached` | Usage probe: an initiator is logged in to the target right now | The target is in use; it is never offered for deletion |
+| `WARN: probe: could not verify ... — ... unreachable via SSH; treating as in use` | Usage probe: the compute host could not be reached, so usage cannot be verified | Restore compute-host reachability (or verify manually), then re-run |
+| `INFO: probe: ... — no guest config on ... references this target and no live session exists (verified unused)` | Usage probe: the target is verified unused | Deletion may be offered |
+| `Delete orphan target ...? (verified unused) (y/N):` | Confirmation prompt before `targetcli /iscsi delete` of a drifted target the script itself verified unused (no guest config references it, no live session) | Confirm to delete; anything in use or unverifiable is refused instead of prompted |
+| `FATAL: Refusing to delete ... — it is in use or could not be verified.` | The usage probe found the target in use (or unverifiable), so deletion is not offered | Move the guest disks that reference it (or fix `IQN_PREFIX` in the node config), then re-run |
+| `INFO: ✓ Deleted orphan target ...` | The confirmed orphan was removed | Informational |
+| `WARN: Keeping orphan target ...` | The orphan was not deleted | The new target will be skipped for this pool |
+| `FATAL: Skipping target creation for pool ... — remove the orphan target(s)` | A kept orphan keeps the LUN tree split, so the configured target is deliberately not created (the run exits 1) | Delete the orphan or fix `IQN_PREFIX` in node.conf, then re-run |
 | `FATAL: Failed to create target` | `targetcli /iscsi create` failed for this pool | The loop continues with the next pool; fix targetcli and rerun |
 | `INFO: ✓ Portal ...:3260 already exists` | Portal presence gate passed | Informational |
 | `WARN: Could not add portal ...:3260` | Portal creation failed | Non-fatal; the target lacks a portal — rerun after fixing targetcli |
@@ -1218,8 +1231,25 @@ Resumable: a state file (`/tmp/move-vm-disk-...state`) records the last complete
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
-| `INFO: ✓ Added ... (LUN ...)` | Backstore created and mapped at its original LUN index (recovered from the saved config), preserving the compute host's by-path symlinks | Informational |
-| `INFO: ✓ Added ... (auto LUN)` | No original index was found, so targetcli auto-assigned one (device-path stability not guaranteed) | Check the VM config's by-path references |
+| `INFO: ✓ Added ... (LUN ...)` | Backstore created and mapped at its original LUN index (recovered from the saved config, scoped to the configured target), preserving the compute host's by-path symlinks | Informational |
+| `INFO: ✓ Added ... (auto LUN)` | No original index was found for this target, so targetcli auto-assigned one (device-path stability not guaranteed) | Check the VM config's by-path references |
+
+### [iscsi-recover-encrypted-luns](../commands-and-modules/two-node.md#iscsi-recover-encrypted-luns-storage-node)
+
+Post-key-load recovery of encrypted LUNs (see the Proxmox integration guide's recovery section).
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `INFO: iscsi-recover-encrypted-luns: not applicable in single-node mode (no iSCSI)` | Single-node deployments have no iSCSI | Informational; nothing to do |
+| `WARN: ... — device not available (keys not loaded?): ...` | The entry's zvol device node does not exist yet | Load ZFS keys (`zfs load-key`) and re-run |
+| `INFO: ✓ ... already present on ...` | Idempotence gate: backstore and LUN mapping exist | Informational |
+| `FATAL: ... has no recorded LUN index under ... in saveconfig.json` / `FATAL: Not guessing an index ...` | No recorded index exists for this backstore on the configured target; auto-assignment is deliberately refused (it can collide or pick the wrong slot when orphan targets exist) | Inspect `show-lun-map` and saveconfig.json, fix the conf entry, re-run |
+| `FATAL: ... — could not create backstore for ...` / `FATAL: ... — could not map LUN ... on ...` | The targetcli step failed for this entry | The loop continues; fix targetcli and re-run |
+| `FATAL: ... — LUN ... create reported success but mapping is absent` | Post-create verification failed | Inspect the target state with `show-lun-map` |
+| `WARN: Load the missing ZFS keys (zfs load-key), then re-run this script.` | One or more entries were unavailable | Load keys and re-run |
+| `INFO: Recovered: ... / Already OK: ... / Unavailable: ... / Failed: ...` | Per-run summary counters | Informational |
+| `FATAL: safe-iscsi-save failed — configuration NOT saved` | The persistence step failed after changes | Changes exist in memory only; resolve and re-run |
+| `INFO: === Recovery finished with unresolved entries — see lines above ===` | At least one entry failed or was unavailable (exit 1) | Resolve the listed entries and re-run |
 
 ### [iscsi-restore-luns](../commands-and-modules/two-node.md#iscsi-restore-luns-storage-node)
 
@@ -1988,6 +2018,7 @@ One-time state migration to the FHS layout at GUI startup (legacy paths get roll
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `WARN: Could not migrate ... to ...: ...` | Moving a legacy state file failed | That item skipped; the legacy path stays |
+| `INFO: ZFSUTILITIES_STATE_DIR is redirected; legacy state migration skipped ...` | The state dir is env-redirected away from the default, so the sweep is fenced (it would move real home-directory legacy files into the redirected directory); `ZFSUTILITIES_ALLOW_REDIRECTED_MIGRATION=1` opts in deliberately (the bash `migrate_zfsutilities_state` carries the same fence) | Informational; export the opt-in only for deliberate redirected migrations |
 | `INFO: Migrated ... -> ... (legacy symlink left for rollback compatibility)` | The state file moved with a legacy symlink | Informational |
 | `WARN: Migrated ... -> ... but could not create legacy symlink: ...` | The move succeeded but the symlink failed — older versions cannot find the data | Link manually if needed |
 | `INFO: Migrated ... -> ...` | Move succeeded with no symlink requested (system config files) | Informational |
@@ -2072,6 +2103,9 @@ Echo-based installer; must run on the storage host.
 | `INFO: Existing two-node configuration found.` | A reconfiguration prompt follows | y regenerates, N/Enter keeps and proceeds |
 | `INFO: Existing SINGLE-NODE configuration found.` / `Upgrading to two-node mode.` | Single-node → two-node upgrade (no skip offered) | Answer the additional prompts |
 | `FATAL: Compute host name is required` | Empty input at the compute-host prompt | Rerun and provide the host name |
+| `⚠  WARNING: IQN prefix mismatch` / `Proceed with the new IQN prefix anyway? (y/N):` | The live LIO target tree holds targets for the configured short names under a different IQN prefix (reinstall in a different month, or carried-over saveconfig.json); proceeding would leave orphan targets while LUN tooling maps to the new prefix. The installer probes each drifted target's usage first (see the `probe:` lines) and only offers to continue when every one is verified unused | Answer N and fix `IQN_PREFIX` in the node config (or delete the orphan targets); y continues at your explicit request |
+| `FATAL: Aborting: a drifted target is still in use or could not be verified ...` | The usage probe found a drifted target in use (guest config reference or live session) or the compute host was unreachable, so continuing is not offered | Move the guest disks that reference it, delete the orphan manually, or fix `IQN_PREFIX`, then re-run |
+| `FATAL: Aborting: resolve the IQN prefix mismatch, then re-run the installer.` | The drift confirmation was declined | Fix the prefix mismatch and re-run |
 | `⚠ No pools configured. You can add them to ... later.` | No pools were entered | Edit the node config later |
 | `⚠ setup-iscsi-targets not found — you must create iSCSI targets manually` | The helper is absent from the repository | Create the targets with targetcli manually |
 | `✓ targetcli found` / `✓ rtslib-fb-targetctl.service found` | The LIO target stack is present on the storage host | Informational |

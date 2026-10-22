@@ -17,27 +17,44 @@ import os, re, sys
 
 repo_root = sys.argv[1]
 
-# Modules that provide reusable bash functions.  We scan every bash-looking
-# script in the repo root; scripts that define no functions simply contribute
-# nothing to the function map.
+# Modules that provide reusable bash functions: every bash-looking script in
+# the repo root, bin/, and lib/. The original scan covered only the repo
+# root — everything under bin/ and lib/ was invisible, so the suite passed
+# vacuously while guarding nothing about the scripts it was meant to cover.
 modules = []
-for name in os.listdir(repo_root):
-    path = os.path.join(repo_root, name)
-    if not os.path.isfile(path):
-        continue
-    if name.endswith(('.py', '.md', '.json', '.conf', '.yml', '.yaml',
-                      '.txt', '.html', '.js', '.css', '.zip', '.png',
-                      '.jpg', '.service', '.template')):
-        continue
+
+def looks_like_bash(path):
     try:
         with open(path, 'r', encoding='utf-8', errors='ignore') as f:
             sample = f.read(256)
     except Exception:
-        continue
-    if sample.startswith('#!/usr/bin/bash') or sample.startswith('#!/bin/bash'):
-        modules.append(name)
+        return False
+    return sample.startswith('#!/usr/bin/bash') or sample.startswith('#!/bin/bash')
 
-# Functions provided by bashinit (available everywhere without an explicit source).
+candidates = []
+for name in os.listdir(repo_root):
+    path = os.path.join(repo_root, name)
+    if os.path.isfile(path):
+        candidates.append((name, name))
+for sub in ('bin', 'lib'):
+    subdir = os.path.join(repo_root, sub)
+    if not os.path.isdir(subdir):
+        continue
+    for name in sorted(os.listdir(subdir)):
+        path = os.path.join(subdir, name)
+        if not os.path.isfile(path):
+            continue
+        if sub == 'lib' and not name.endswith('.sh'):
+            continue
+        candidates.append((f'{sub}/{name}', name))
+
+for mod_id, _basename in candidates:
+    if looks_like_bash(os.path.join(repo_root, mod_id)):
+        modules.append(mod_id)
+
+# Functions provided by bashinit (available everywhere without an explicit
+# source). Derived from bin/bashinit itself so new helpers are covered
+# automatically; the historical hardcoded names stay as a floor.
 bashinit_funcs = {
     'bashinit', 'log_msg', 'msg_prefix', 'calledbybash', 'ask_yn',
     'die', 'warn',
@@ -47,12 +64,13 @@ func_def_re = re.compile(
     r'^\s*(?:function\s+([a-zA-Z0-9_-]+)|([a-zA-Z0-9_-]+)\s*\(\s*\)\s*\{)'
 )
 
-func_to_module = {}
+module_text = {}
 module_lines = {}
+func_to_module = {}
 for mod in modules:
-    path = os.path.join(repo_root, mod)
-    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+    with open(os.path.join(repo_root, mod), 'r', encoding='utf-8', errors='ignore') as f:
         text = f.read()
+    module_text[mod] = text
     module_lines[mod] = text.splitlines()
     for line in module_lines[mod]:
         m = func_def_re.match(line)
@@ -60,61 +78,160 @@ for mod in modules:
             func = m.group(1) if m.group(1) else m.group(2)
             if func not in func_to_module:
                 func_to_module[func] = mod
+            if mod == 'bin/bashinit':
+                bashinit_funcs.add(func)
 
-# Regex that matches a source line for any known module (handles $mydir,
-# $extrasourcedir, ./, absolute paths, and source_helper calls).
-module_names_alt = '|'.join(re.escape(m) for m in modules)
+# Basename -> module id (bin/bashinit and a repo-root bashinit must not
+# collide; first definition wins, same as the func map).
+basename_to_module = {}
+for mod in modules:
+    basename_to_module.setdefault(mod.rsplit('/', 1)[-1], mod)
+
+# Source lines reference scripts by basename ($mydir/<name>, source_helper
+# <name>, <path>/<name>), never by their bin//lib// repo-relative id.
+module_names_alt = '|'.join(re.escape(m) for m in sorted(basename_to_module))
 source_re = re.compile(
     r'(?:source\s+["\']?\S*?/|source_helper\s+)('
     + module_names_alt + r')["\']?(?=\s|;|\)|$)'
 )
+# find_zfsutility_script <name> — the runtime resolver used by bin scripts.
+find_call_re = re.compile(r'find_zfsutility_script\s+["\']?([A-Za-z0-9_.-]+)')
+# Variable assignments whose value names a module (directly or through the
+# find_zfsutility_script resolver), later consumed by `source "$var"`.
+var_assign_re = re.compile(r'^\s*(?:local\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$')
+source_var_re = re.compile(r'^\s*(?:source|\.)\s+["\']?\$([A-Za-z_][A-Za-z0-9_]*)')
 
 
-def strip_quoted_strings(line):
-    """Remove bash single- and double-quoted substrings from a line."""
-    result = []
-    i = 0
-    n = len(line)
-    while i < n:
-        ch = line[i]
-        if ch == "'":
-            j = line.find("'", i + 1)
-            if j == -1:
-                break
-            i = j + 1
-        elif ch == '"':
-            i += 1
-            while i < n:
-                if line[i] == '\\' and i + 1 < n:
-                    i += 2
-                elif line[i] == '"':
-                    i += 1
-                    break
-                else:
-                    i += 1
-        elif ch == '\\' and i + 1 < n and line[i + 1] in ('"', "'"):
-            result.append(ch)
-            i += 1
-        else:
-            result.append(ch)
-            i += 1
-    return ''.join(result)
+def resolve_module_token(token):
+    """Map a bare script name (with or without .sh) to a known module id."""
+    if token in basename_to_module:
+        return basename_to_module[token]
+    stripped = token[:-3] if token.endswith('.sh') else token + '.sh'
+    return basename_to_module.get(stripped)
+
+
+def direct_sourced_of(mod):
+    """Return the set of module ids whose functions *mod* may call."""
+    sourced = set()
+    var_map = {}
+    for line in module_lines[mod]:
+        m = func_def_re.match(line)
+        if m:
+            continue
+        for src in source_re.findall(line):
+            resolved = resolve_module_token(src)
+            if resolved:
+                sourced.add(resolved)
+        for name in find_call_re.findall(line):
+            resolved = resolve_module_token(name)
+            if resolved:
+                sourced.add(resolved)
+        am = var_assign_re.match(line)
+        if am and '$(' not in am.group(1):
+            var, value = am.group(1), am.group(2)
+            resolved = None
+            fm = re.search(r'find_zfsutility_script\s+["\']?([A-Za-z0-9_.-]+)', value)
+            if fm:
+                resolved = resolve_module_token(fm.group(1))
+            else:
+                # Values like "$(dirname ...)/bashinit" or
+                # "$repo_dir/lib/installer-lib.sh": match a trailing
+                # /<module basename>.
+                vm = re.search(r'/([A-Za-z0-9_.-]+)\s*"?\s*$', value)
+                if vm:
+                    resolved = resolve_module_token(vm.group(1))
+            if resolved:
+                var_map[var] = resolved
+        sm = source_var_re.match(line)
+        if sm and sm.group(1) in var_map:
+            sourced.add(var_map[sm.group(1)])
+    # bashinit is everyone's implicit dependency.
+    if 'bin/bashinit' in basename_to_module.values():
+        sourced.add('bin/bashinit')
+    return sourced
+
+
+direct_sourced = {mod: direct_sourced_of(mod) for mod in modules}
+
+# Transitive closure: a sourced module's own sourced modules contribute
+# their functions too (e.g. bin scripts source node-lib.sh, which sources
+# paths.sh).
+closure_cache = {}
+
+def closure_of(mod, seen=frozenset()):
+    if mod in closure_cache:
+        return closure_cache[mod]
+    if mod in seen:
+        return set()
+    result = set(direct_sourced.get(mod, ()))
+    result.add(mod)
+    for dep in list(direct_sourced.get(mod, ())):
+        result |= closure_of(dep, seen | {mod})
+    closure_cache[mod] = result
+    return result
 
 
 def scan_lines(lines):
-    """Yield (lineno, logical_line) skipping heredoc bodies."""
+    """Yield (lineno, logical_line) for bash-call-site analysis.
+
+    Skips heredoc bodies, strips comment tails (an unquoted # outside a
+    string), and blanks the content of double/single-quoted strings —
+    including strings that span multiple lines (python3 -c "..." payloads
+    carry foreign-language text like Python's ``pass`` that must not be
+    mistaken for bash function calls). Quote state carries across lines
+    because bash allows multi-line strings.
+    """
     in_heredoc = False
     heredoc_delim = None
+    carry_quote = None  # None, "'", or '"' when a string spans lines
     for lineno, raw in enumerate(lines, start=1):
         if in_heredoc:
             if raw.strip() == heredoc_delim:
                 in_heredoc = False
                 heredoc_delim = None
             continue
-        logical = raw
+
+        # Pass 1: truncate at an unquoted comment marker and mask string
+        # content, tracking quotes that stay open past end-of-line.
+        masked = []
+        quote = carry_quote
+        i = 0
+        n = len(raw)
+        while i < n:
+            ch = raw[i]
+            if quote:
+                if quote == '"' and ch == '\\' and i + 1 < n:
+                    masked.append(' ')
+                    i += 1
+                    masked.append(' ')
+                    i += 1
+                    continue
+                if ch == quote:
+                    quote = None
+                    masked.append(ch)
+                else:
+                    masked.append(' ')
+                i += 1
+                continue
+            if ch in ('"', "'"):
+                quote = ch
+                masked.append(ch)
+                i += 1
+                continue
+            if ch == '#' and (i == 0 or raw[i - 1] in ' \t'):
+                # Unquoted comment marker (only reachable with no string
+                # open), so nothing stays open past this line.
+                break
+            masked.append(ch)
+            i += 1
+        carry_quote = quote
+
+        logical = ''.join(masked)
         while logical.rstrip().endswith('\\'):
             logical = logical.rstrip()[:-1] + ' '
-        m = re.search(r'<<\s*(\'?)\s*([A-Za-z0-9_]+)\s*\1', logical)
+        # Heredoc detection reads the RAW line: the delimiter is quoted
+        # (`<< 'PYEOF'`) and the masker above would blank its letters.
+        m = re.search(r'<<\s*(\'?)\s*([A-Za-z0-9_]+)\s*\1', raw)
         if m:
             heredoc_delim = m.group(2)
             in_heredoc = True
@@ -122,26 +239,33 @@ def scan_lines(lines):
 
 
 violations = []
+declare_f_re = re.compile(r'declare\s+-f\s+([A-Za-z0-9_-]+)')
+# Token prefilter: the call pattern can only match a function whose name
+# appears as a word on the line, so tokenize once and regex only the
+# handful of candidates instead of every known function on every line.
+token_split_re = re.compile(r'[^A-Za-z0-9_-]+')
+all_funcs = list(func_to_module)
+all_funcs_set = set(all_funcs)
 for mod in modules:
     local_funcs = set()
-    sourced_modules = set()
     for line in module_lines[mod]:
         m = func_def_re.match(line)
         if m:
-            func = m.group(1) if m.group(1) else m.group(2)
-            local_funcs.add(func)
-        for src in source_re.findall(line):
-            sourced_modules.add(src)
+            local_funcs.add(m.group(1) if m.group(1) else m.group(2))
 
     available = set(bashinit_funcs)
     available |= local_funcs
-    for src in sourced_modules:
-        if src in module_lines:
-            for line in module_lines[src]:
-                m = func_def_re.match(line)
-                if m:
-                    func = m.group(1) if m.group(1) else m.group(2)
-                    available.add(func)
+    for src in closure_of(mod):
+        for line in module_lines.get(src, ()):
+            m = func_def_re.match(line)
+            if m:
+                available.add(m.group(1) if m.group(1) else m.group(2))
+
+    # Optional dependencies: a `declare -f <fn>` guard probes for a helper
+    # the CALLER may provide (e.g. zfslockmanager using node-lib's remote
+    # resolution only when the orchestrator already loaded node-lib). Those
+    # functions are not required sources.
+    optional = set(declare_f_re.findall(module_text[mod]))
 
     for lineno, logical in scan_lines(module_lines[mod]):
         stripped = logical.strip()
@@ -149,16 +273,18 @@ for mod in modules:
             continue
         if func_def_re.match(stripped):
             continue
-        if source_re.search(stripped):
+        if source_re.search(stripped) or source_var_re.match(stripped) \
+                or find_call_re.search(stripped):
             continue
-        unquoted = strip_quoted_strings(stripped)
-        for func, defining_mod in func_to_module.items():
-            if func in available:
+        candidates = all_funcs_set.intersection(token_split_re.split(stripped))
+        for func in candidates:
+            defining_mod = func_to_module[func]
+            if func in available or func in optional:
                 continue
             if func in bashinit_funcs:
                 continue
             pattern = r'(?:^|[;|&$()`{}])\s*' + re.escape(func) + r'(?=\s|$)'
-            if re.search(pattern, unquoted):
+            if re.search(pattern, stripped):
                 violations.append(
                     f'{mod}:{lineno}: calls {func} (defined in {defining_mod}) '
                     f'but does not source it'

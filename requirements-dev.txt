@@ -3,3 +3,7 @@
 # are installed via the OS package manager — see docs/docs/developer-guide/testing.md.
 pytest>=7.4
 pytest-xdist>=3.0
+# The realized Performance-page check must exercise the production
+# matplotlib renderer on CI, not just the Cairo fallback; the wheel ships
+# the GTK3-Agg backend against the system python3-gi.
+matplotlib>=3.6

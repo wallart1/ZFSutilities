@@ -308,7 +308,16 @@ def _run_command(step, session_log_file=None):
                 if step.is_rsync:
                     diagnosis = _diagnose_rsync_failure(returncode, step_lines)
                     if diagnosis:
-                        log_msg(f"WARN: {step.description} failed: {diagnosis}")
+                        message = f"WARN: {step.description} failed: {diagnosis}"
+                        # Log-wrapped steps ship their full output to the
+                        # rsync log; name it so the operator knows where the
+                        # complete transfer record lives (only when rsync ran
+                        # and produced output — an empty capture means the
+                        # setup ssh failed and the log got nothing).
+                        location = (step.metadata or {}).get("rsync_output_location")
+                        if location and step_lines:
+                            message += f" (full rsync output: {location})"
+                        log_msg(message)
             return returncode
         except (OSError, ValueError, subprocess.SubprocessError) as e:
             log_msg(f"WARN: Error running step: {e}")
