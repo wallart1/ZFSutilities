@@ -1776,6 +1776,10 @@ its colours from one theme palette resolved here (`chart_palette` —
 dark variant below a luminance of 0.5, `LIGHT_PALETTE` when nothing
 resolves), so charts sit on the page's own background whatever the GTK
 theme; `renderer_label()` names the active renderer for the page header.
+`chart_font_scale(widget)` resolves the GUI base font size (through the
+widget's style context, over a 10 pt reference) as the scale factor every
+renderer's text sizes and the ladder width estimate follow — degrading to
+the tuned 1.0 sizes when nothing resolves, the same contract as the palette.
 
 **Key functions / classes:**
 
@@ -1787,11 +1791,12 @@ theme; `renderer_label()` names the active renderer for the page header.
 | `MatplotlibBlocksizeLadder`  | Blocksize ladder (one rung per layer size, log2 X axis, dashed per-pool ashift reference lines, state colours, bold pool headers); `update()` rebuilds the axes and re-requests the widget size — content-minimum width, row-geometry height — only when either changes |
 | `matplotlib_backend()`       | Lazy, cached probe for the matplotlib GTK3-Agg backend (`None` = unavailable) |
 | `chart_palette(widget)` / `ChartPalette` / `LIGHT_PALETTE` / `dark_palette(bg, fg)` | The theme-following colour vocabulary shared by every renderer (background, foreground, muted, grid, spine, reference, series, ladder states, legend faces); unresolvable themes degrade to the light palette |
+| `chart_font_scale(widget)`     | The GUI base font size as a text-scale factor (style-context font over a 10 pt reference); every renderer scales its font sites — and the ladder its width estimate — with it, degrading to 1.0 when unresolvable |
 | `renderer_label()`           | One-line name of the active chart renderer (`"matplotlib"`, or a Cairo-fallback note naming the fix) for the Performance header |
 | `nice_ceiling(value)`        | Smallest 1/2/5×10^k ceiling ≥ *value* (Y-axis scaling)             |
 | `format_age(seconds)`        | Duration text for chart X-axis labels (e.g. `4m 59s`)              |
 | `ladder_pixel_height(pools)` / `ladder_axis_range(pools)` | Shared ladder geometry: widget height from the row set; log2 `(x_min, x_max)` bounds and power-of-two ticks (floor one power below the smallest size, thinned on wide spans) |
-| `ladder_minimum_width(pools)` | The ladder canvas's minimum readable pixel width (label gutter + plot floor + legend; 0 when empty) — the request both renderers make and the scrolled window floors its `max_content_width` at |
+| `ladder_minimum_width(pools, font_scale=1.0)` | The ladder canvas's minimum readable pixel width (label gutter + plot floor + legend; 0 when empty) — the request both renderers make (scaled by `chart_font_scale`) and the scrolled window floors its `max_content_width` at |
 
 ### `memory_page.py`
 
@@ -1938,6 +1943,11 @@ cache per (vmid, volume, volsize) with a TTL, because guest geometry is
 quasi-static and the page refreshes every 1-300 s. Every failure
 degrades per volume with a short reason (agent absent, VM stopped, disk
 not matched, clone-identical signatures, non-Linux guest).
+`share/dev/validate-guestfs-probe.sh` validates the deployed chain in
+production (run as root on the storage host; everything it executes is
+read-only) and carries a `--self-check` mode that proves the plumbing
+against an inline scripted `qm` runner with no host access — fenced by
+`tests/test-validate-guestfs-probe`.
 
 **Key functions:**
 

@@ -213,18 +213,22 @@
   (Rechecked 2026-10-13: unchanged, 0.0.70.)
   (Rechecked 2026-10-16: 0.0.71; still no 1.x.)
 
-- (coverage gap, installer flows): install-single-node and install-two-node
-  have only guard-level suites (test-installer-checks / -structure /
-  -retention, test-iscsi-fresh-install-guards) — nothing executes the
-  installers' interactive flows, so shell-variable flow bugs are invisible
-  to the suites. Found live during the 2026-10-16 strict-mode audit:
-  install-two-node's keep-existing-config path never set the lowercase
-  host variables (node.conf defines the UPPERCASE names only) and always
-  died at the storage-host check on an empty hostname. The bug is fixed
-  (the config source + lowercase refresh now runs in both paths), but the
-  class stays unfenced until an execution harness exists — mock
-  check-prerequisites/deploy-version/switch-version/ssh and piped stdin
-  answers, in the test-unarchive-vm two-node style.
+- (test-suite poisoning hazard, matplotlib backend probe cache — found
+  2026-10-21 while adding chart-font tests): any test that triggers
+  `charting.matplotlib_backend()`'s real probe while no `mock_gtk()` is
+  active (e.g. calling a chart renderer's `update()` outside the
+  `matplotlib_backend` patch, after a `mock_gtk(fresh=True)` context has
+  exited) lets the probe import the REAL gtk3agg backend on a
+  GTK-equipped host and caches it in the module binding. Every later
+  suite then constructs real `FigureCanvasGTK3Agg` objects under mocked
+  gi, which dies with a cryptic PyGObject
+  `SystemError: gi.FunctionInfo(set_events...) returned a result with an
+  exception set` (chained from a TypeError deep in the mixed state) —
+  one such call poisoned 73 tests in a following suite this cycle. The
+  charting tests' `_built()` pattern (patcher.start() + addCleanup) is
+  the safe shape; a structural fence would be a mock-aware guard in the
+  probe itself (e.g. refusing to cache a real backend when
+  `charting.Gtk` is a mock), not attempted this cycle.
 
 - (future objective, migration/create fidelity — narrowed 2026-10-03):
   No creation path (Create Pool wizard or Migrate Pool) can *plan*

@@ -924,6 +924,26 @@ class TestLadderSection(_PageTestCase):
         ladder._on_draw(widget, cr)
         self.assertTrue(widget.queue_draw.called)
 
+    def test_ladder_font_and_width_follow_the_gui_base_font(self):
+        """The Cairo ladder's 13px text and its content-minimum width
+        request scale with the widget-resolved GUI base font (the tuned
+        values are per a 10pt default)."""
+        _mp, ap, _app = self._prepared()
+        ladder = ap.BlocksizeLadder("Blocksize ladder")
+        pools = ap.blocksize_ladder(_sample())
+        widget = ladder.widget
+        widget.get_allocated_width.return_value = 520
+        widget.get_allocated_height.return_value = ap.ladder_pixel_height(pools)
+        cr = MagicMock()
+        cr.text_extents.return_value = SimpleNamespace(x_advance=60.0)
+        with patch.object(ap, "chart_font_scale", return_value=1.25):
+            ladder.update(pools)
+            widget.set_size_request.assert_called_with(
+                ap.ladder_minimum_width(pools, 1.25), ap.ladder_pixel_height(pools)
+            )
+            ladder._on_draw(widget, cr)
+        cr.set_font_size.assert_called_once_with(16.25)
+
 
 class TestReconcileRows(_PageTestCase):
     """_reconcile_rows: ordered, key-column reconciliation against _FakeStore."""

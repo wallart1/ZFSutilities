@@ -551,10 +551,12 @@ def _run_geometry_checks():
         and sw.get_child().get_columns()[0].get_title() == "Severity"
     ]
     assert findings and scrollbar_live(findings[0], "h"), "findings table: no own h-scrollbar"
-    # The ladder keeps its content minimum and scrolls on its own.
+    # The ladder keeps its content minimum and scrolls on its own. The
+    # minimum is computed the way the renderer requests it — with the
+    # GUI-base-font scale the live canvas resolved.
     ladder = app._alignment_ladder
     lsw = app._alignment_ladder_scroll
-    minimum = ch.ladder_minimum_width(ladder.pools)
+    minimum = ch.ladder_minimum_width(ladder.pools, ch.chart_font_scale(ladder.widget))
     assert minimum > lsw.get_allocated_width(), "fixture ladder minimum should exceed the window"
     assert ladder.widget.get_allocated_width() >= minimum, (
         f"ladder canvas {ladder.widget.get_allocated_width()} clamped below its {minimum} minimum"
@@ -573,7 +575,7 @@ def _run_geometry_checks():
     pump(20)
     ladder2 = app2._alignment_ladder
     lsw2 = app2._alignment_ladder_scroll
-    minimum2 = ch.ladder_minimum_width(ladder2.pools)
+    minimum2 = ch.ladder_minimum_width(ladder2.pools, ch.chart_font_scale(ladder2.widget))
     assert ladder2.widget.get_allocated_width() >= minimum2, (
         f"700px window: ladder canvas {ladder2.widget.get_allocated_width()} clamped "
         f"below its {minimum2} minimum (the max_content_width regression)"

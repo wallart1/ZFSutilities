@@ -62,7 +62,12 @@ _check_zfs_root() {
     fi
 }
 
-[[ $EUID -eq 0 ]] || die "Must run as root"
+# INSTALL_SINGLE_NODE_TEST_NO_ROOT lets the execution harness
+# (tests/test-installer-flows) run the interactive flow as a non-root user
+# with every external command mocked — same hatch as DEPLOY_VERSION_TEST_NO_ROOT.
+if [[ ${INSTALL_SINGLE_NODE_TEST_NO_ROOT:-0} != "1" ]]; then
+    [[ $EUID -eq 0 ]] || die "Must run as root"
+fi
 _check_zfs_root
 
 echo "=========================================="

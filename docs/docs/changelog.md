@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.126.3
+
+*Released 2026-10-22*
+
+### Added
+
+- **Installer execution harness.** `tests/test-installer-flows` runs
+  both installers' interactive flows end to end as a non-root user: a
+  mirror tree stubs `check-prerequisites`/`deploy-version`/
+  `switch-version`/`setup-iscsi-targets` while the libraries and
+  templates stay the repository copies, ssh/scp/systemctl/targetcli
+  are recorded shell functions, answers arrive on piped stdin, and an
+  unrecognized remote probe fails loudly (`SSH-UNHANDLED`) so a new
+  probe shape cannot pass silently. Covers fresh installs (config
+  generation and template substitution, deploy/activate on both
+  hosts, systemd drop-ins, encrypted-luns conf, node.conf copy,
+  PVE rescan patch), keep-existing-config paths (regression fence for
+  the lowercase-host refresh that used to die at the storage-host
+  check), mode switches, wrong-host and SSH-prerequisite fatals,
+  legacy conf notices, partial-uninstall remnants, obsolete
+  systemd-artifact removal, and input validation. The installers
+  gained the `INSTALL_SINGLE_NODE_TEST_NO_ROOT` /
+  `INSTALL_TWO_NODE_TEST_NO_ROOT` test hatches and honor
+  `ZFSUTILITIES_ETC_PREFIX` for the systemd drop-in and artifact
+  paths (documented in commands.md's Environment tables).
+- **Guest-probe production validator.**
+  `share/dev/validate-guestfs-probe.sh` validates the deployed
+  guest-filesystem probing chain on the storage host (read-only `qm`
+  channel, zfs/zpool property reads, integrated sample and ladder
+  rungs) and carries a `--self-check` mode that proves the plumbing
+  against an inline scripted `qm` runner with no host, root, or zfs
+  access; `tests/test-validate-guestfs-probe` fences the self-check
+  against drift in the probe internals it consumes.
+
+### Changed
+
+- **Chart text follows the GUI base font.**
+  `charting.chart_font_scale` resolves the active theme's base font
+  size through the widget's style context (over a 10 pt reference),
+  and every chart renderer — matplotlib and Cairo, rolling charts and
+  ladder — scales its text with it and re-resolves on
+  `style-updated` exactly like the theme palette, degrading to the
+  tuned sizes when nothing resolves. The ladder's readable-minimum
+  width grows with the font too, so a larger theme font widens the
+  label gutter and the horizontal-scrollbar floor instead of
+  truncating.
+- **Grouped ladder rung labels name their unit.** A rung shared by
+  several sources reads `recordsize 128K (3 datasets)` instead of a
+  bare `×3`, with the unit named per layer (devices, datasets,
+  volumes, guest filesystems).
+
 ## 0.126.2
 
 *Released 2026-10-21*

@@ -221,10 +221,46 @@ via `git log`.)
   runner operation. Red-proofed by sabotage both ways; stub-zfs
   script-execution tests lock the runtime behavior; messages manual rows
   updated.
-  Still not re-applied (unnamed):
-  installer execution harness (test-installer-flows, installer no-root
-  hatches, ZFSUTILITIES_ETC_PREFIX, commands.md/testing.md rows).
-  Guest-probe production validation remains pending (as at 0.126.1).
+  Follow-up (2026-10-21, approved plan): the last un-redone 0.126.1 item
+  is back — the installer execution harness restored byte-identically
+  from 588bad1 (test-installer-flows, both TEST_NO_ROOT hatches,
+  ZFSUTILITIES_ETC_PREFIX, commands.md Environment tables; restores were
+  re-sanctioned at the Fifth-rework rescind), and 0.126.1's testing.md
+  rows restored/merged (verbatim: test-installer-flows/-structure,
+  test-iscsi-fresh-install-guards, test_alignment_guestfs; clause merges
+  into the alignment_page/stats/dashboard/charting rows, which the redo
+  tree had left at their 0.126.0 wording). Parked polish done: chart
+  text scales with the GUI base font (charting.chart_font_scale, all
+  four renderers + ladder width floor; mock-degrades to 1.0 — mock
+  comparisons raise TypeError into the except, so no isinstance guard),
+  and grouped rung labels read "(3 datasets)" instead of a bare ×N
+  (unit per layer: datasets/devices/volumes/guest filesystems).
+  share/dev/validate-guestfs-probe.sh validates guest-FS probing end to
+  end: self-check green locally AND on stewie against the deployed
+  byte-identical 0.126.2 module (versions/0.126.2 is staged there but
+  `current` still points at 0.126.1); the live root run is the user's
+  paste — `sudo "/NFS1/dan(NFS1)/zfsutilities-pub/share/dev/validate-guestfs-probe.sh"`.
+  Guest-probe production validation therefore still ends with that
+  paste. Test-authoring trap found and recorded in PREEXISTING.md: an
+  mpl-ladder test calling update() outside the backend patch runs the
+  REAL probe (no mock active) on a GTK host, caching the real backend
+  and crashing later suites with a PyGObject SystemError.
+
+- **Wrap-up pass (2026-10-22) — review, fences, freeze.** Numbered
+  wrap-up executed on the uncommitted tree: coding-policies review of
+  all new code (ruff lint+format clean, shellcheck clean incl. the
+  share/dev validator linted outside the canonical set, manual review
+  clean); test-suite review found one gap — the guestfs validator's
+  --self-check (which consumes the private _guest_probe_targets
+  assembly) was fenced by nothing, so tests/test-validate-guestfs-probe
+  now runs it against the repo tree (plus -h and the non-root refusal);
+  affected suites green during iteration; docs gained the suite row and
+  a validator pointer in python-modules' alignment_guestfs section;
+  docs-integrity green; docs/site rebuilt; full suite (soaks off) green
+  on the dev host; codebase frozen at that point. PREEXISTING resolution
+  was deferred by the user mid-pass (intended for a later session) —
+  the file's actionable items stand unchanged. Commit, VERSION, and
+  changelog remain the user's call.
 
 - **Realized-check display leak — reworked from scratch (2026-10-20).**
   During full-suite runs on a host with a desktop DISPLAY,

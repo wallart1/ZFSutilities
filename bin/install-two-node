@@ -45,8 +45,10 @@ source "$installer_lib"
 
 ensure_zfsutilities_dirs
 
-# systemd drop-in configs
-dropin_dir="/etc/systemd/system/rtslib-fb-targetctl.service.d"
+# systemd drop-in configs. ZFSUTILITIES_ETC_PREFIX (the same knob
+# check_partial_uninstall reads) points the systemd tree at a fixture root in
+# the test harness; empty in production, so the path is unchanged.
+dropin_dir="${ZFSUTILITIES_ETC_PREFIX:-}/etc/systemd/system/rtslib-fb-targetctl.service.d"
 dropins=(
     "rtslib-fb-targetctl-pre-start-backup.conf:pre-start-backup.conf"
     "rtslib-fb-targetctl-boot-config.conf:boot-config.conf"
@@ -73,7 +75,12 @@ _check_zfs_root() {
     fi
 }
 
-[[ $EUID -eq 0 ]] || die "Must run as root"
+# INSTALL_TWO_NODE_TEST_NO_ROOT lets the execution harness
+# (tests/test-installer-flows) run the interactive flow as a non-root user
+# with every external command mocked — same hatch as DEPLOY_VERSION_TEST_NO_ROOT.
+if [[ ${INSTALL_TWO_NODE_TEST_NO_ROOT:-0} != "1" ]]; then
+    [[ $EUID -eq 0 ]] || die "Must run as root"
+fi
 _check_zfs_root
 
 echo "=========================================="
@@ -420,9 +427,11 @@ for dropin_entry in "${dropins[@]}"; do
 done
 systemctl daemon-reload
 
-# Remove obsolete systemd artifacts left by older versions
-obsolete_service="/etc/systemd/system/zfs-keys-unlock.service"
-obsolete_dropin="/etc/systemd/system/rtslib-fb-targetctl.service.d/wait-for-zfs-keys.conf"
+# Remove obsolete systemd artifacts left by older versions (same
+# ZFSUTILITIES_ETC_PREFIX fixture knob as the drop-ins above)
+systemd_root="${ZFSUTILITIES_ETC_PREFIX:-}/etc/systemd/system"
+obsolete_service="${systemd_root}/zfs-keys-unlock.service"
+obsolete_dropin="${dropin_dir}/wait-for-zfs-keys.conf"
 if [[ -f "$obsolete_service" || -f "$obsolete_dropin" ]]; then
     echo ""
     echo "Removing obsolete automatic LUKS-key systemd artifacts..."

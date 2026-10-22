@@ -117,7 +117,7 @@ class LadderBar:
     """One rung of a pool's blocksize ladder (the Alignment view visual).
 
     ``label`` is the full display label including the layer prefix
-    (``"dataset · recordsize 128K ×3"``); ``size`` is the rung's byte
+    (``"dataset · recordsize 128K (3 datasets)"``); ``size`` is the rung's byte
     position on the log2 axis; ``state`` is a Finding severity and maps to
     the ladder's colour vocabulary — OK aligned, WARN mismatched against
     the pool block, info advisory or unresolved.
@@ -921,10 +921,21 @@ def analyse(sample, survey=None, profiles=None, prev_sample=None):
     return findings
 
 
+# Unit named in a grouped rung's count suffix (see ``_rung_label``): the
+# count is how many of that layer's members share the rung size.
+_RUNG_UNITS = {
+    "Device": "devices",
+    "Dataset": "datasets",
+    "VM": "volumes",
+    "VM fs": "guest filesystems",
+}
+
+
 def _rung_label(layer, prop, size, count):
     """Ladder rung label: layer prefix, property, size, and group count."""
     label = f"{layer.lower()} · {prop} {format_blocksize(size)}"
-    return f"{label} ×{count}" if count > 1 else label
+    unit = _RUNG_UNITS.get(layer, "sources")
+    return f"{label} ({count} {unit})" if count > 1 else label
 
 
 def _guest_sector(option):

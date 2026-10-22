@@ -190,7 +190,13 @@ an earlier half-page cap), so the ladder renders cut off with no way to
 scroll. The ladder's text also sits one notch above the rolling charts'
 sizes (title 11.5, row labels 11, ticks and legend 10.5 in matplotlib;
 13 px in the Cairo fallback), and the width estimate's per-character
-constant follows that scale (`LADDER_CHAR_WIDTH_PX`).
+constant follows that scale (`LADDER_CHAR_WIDTH_PX`). Every chart's text
+— both renderers, rolling charts and ladder alike — scales with the GUI
+base font size (`chart_font_scale`: the widget's style-context font over
+a 10 pt reference, re-resolved on `style-updated` like the palette,
+degrading to the tuned sizes when nothing resolves), so a theme with a
+larger or smaller base font rescales the charts with the page around
+them, and the ladder's width floor widens with its labels.
 
 ## Dependencies and deployment
 

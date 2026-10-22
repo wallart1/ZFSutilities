@@ -861,10 +861,10 @@ class TestBlocksizeLadder(unittest.TestCase):
         self.assertEqual(
             [(bar.layer, bar.label, bar.size, bar.state) for bar in entry.bars],
             [
-                ("Device", "device · physical sector 4K ×3", 4096, ana.SEV_OK),
+                ("Device", "device · physical sector 4K (3 devices)", 4096, ana.SEV_OK),
                 ("Pool", "pool · ashift 12 · 4K block", 4096, ana.SEV_OK),
                 ("Dataset", "dataset · volblocksize 16K", 16384, ana.SEV_OK),
-                ("Dataset", "dataset · recordsize 128K ×2", 131072, ana.SEV_OK),
+                ("Dataset", "dataset · recordsize 128K (2 datasets)", 131072, ana.SEV_OK),
                 ("VM", "vm · guest sector 512", 512, ana.SEV_INFO),
             ],
         )
@@ -891,7 +891,7 @@ class TestBlocksizeLadder(unittest.TestCase):
         )
         ladder = ana.blocksize_ladder(sample)
         rungs = [(bar.layer, bar.label, bar.size, bar.state) for bar in ladder[0].bars]
-        self.assertIn(("VM fs", "vm fs · ext4 4K ×2", 4096, ana.SEV_WARN), rungs)
+        self.assertIn(("VM fs", "vm fs · ext4 4K (2 guest filesystems)", 4096, ana.SEV_WARN), rungs)
 
     def test_guest_fs_rung_ok_at_or_above_volblock(self):
         pool = _pool(ashift=12, members=[("/dev/sdb", 512, 4096)])

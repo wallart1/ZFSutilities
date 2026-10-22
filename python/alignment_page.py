@@ -46,6 +46,7 @@ from charting import (
     LADDER_EMPTY_HEIGHT,
     LADDER_LEGEND,
     LADDER_ROW_HEIGHT,
+    chart_font_scale,
     chart_palette,
     create_blocksize_ladder,
     format_blocksize,
@@ -137,7 +138,9 @@ class BlocksizeLadder:
         viewport grants the drawing area the full page width, so the
         request is a floor, not a target.
         """
-        width = ladder_minimum_width(self._pools) if self._pools else -1
+        width = (
+            ladder_minimum_width(self._pools, chart_font_scale(self.widget)) if self._pools else -1
+        )
         self.widget.set_size_request(width, self._height)
 
     # -- drawing -----------------------------------------------------------
@@ -151,7 +154,7 @@ class BlocksizeLadder:
         cr.set_source_rgb(*palette.background)
         cr.paint()
         cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-        cr.set_font_size(13)
+        cr.set_font_size(13 * chart_font_scale(widget))
 
         if not self._pools:
             message = (
@@ -692,7 +695,7 @@ def _floor_ladder_scroll_width(app, box_width=None):
         # Mocked or exotic backends cannot answer a width; the floor is
         # re-applied from the size-allocate handler once one exists.
         return
-    floor = max(box_width, ladder_minimum_width(ladder.pools))
+    floor = max(box_width, ladder_minimum_width(ladder.pools, chart_font_scale(ladder.widget)))
     if scroll.get_max_content_width() != floor:
         scroll.set_max_content_width(floor)
 

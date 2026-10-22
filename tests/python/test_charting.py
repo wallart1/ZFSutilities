@@ -134,6 +134,45 @@ class TestThemePalette(unittest.TestCase):
         self.assertIs(charting.chart_palette(widget), charting.LIGHT_PALETTE)
 
 
+class _FakeFontWidget:
+    """Widget whose style context reports a fixed theme font size."""
+
+    def __init__(self, pt):
+        desc = SimpleNamespace(get_size=lambda: int(pt * 1024))
+        self._context = SimpleNamespace(get_font=lambda _flags: desc)
+
+    def get_style_context(self):
+        return self._context
+
+
+class TestChartFontScale(unittest.TestCase):
+    """The GUI-base-font scale every renderer resolves for its text."""
+
+    def test_base_font_sizes_scale_chart_text(self):
+        charting = _charting()
+        self.assertAlmostEqual(charting.chart_font_scale(_FakeFontWidget(10.0)), 1.0)
+        self.assertAlmostEqual(charting.chart_font_scale(_FakeFontWidget(12.5)), 1.25)
+        self.assertAlmostEqual(charting.chart_font_scale(_FakeFontWidget(5.0)), 0.5)
+
+    def test_unresolvable_font_degrades_to_one(self):
+        charting = _charting()
+        # No style context at all.
+        self.assertEqual(charting.chart_font_scale(object()), 1.0)
+        # Mocked GTK: every call answers, but no real size comes back.
+        self.assertEqual(charting.chart_font_scale(MagicMock()), 1.0)
+        # A context that answers None.
+        self.assertEqual(
+            charting.chart_font_scale(SimpleNamespace(get_style_context=lambda: None)), 1.0
+        )
+        # A font whose size is not a number.
+        garbage = SimpleNamespace(
+            get_style_context=lambda: SimpleNamespace(
+                get_font=lambda _f: SimpleNamespace(get_size=lambda: "huge")
+            )
+        )
+        self.assertEqual(charting.chart_font_scale(garbage), 1.0)
+
+
 class TestSharedVocabulary(unittest.TestCase):
     """The rolling-chart vocabulary both renderers share."""
 
@@ -251,6 +290,33 @@ class TestMatplotlibRollingChart(unittest.TestCase):
         self.assertEqual(ax.legend.call_args.args[1], chart._legend_labels)
         self.assertEqual(ax.legend.call_args.kwargs.get("labelcolor"), (0.88, 0.88, 0.88))
 
+    def test_text_sizes_follow_the_gui_base_font(self):
+        """Chart text scales with the widget-resolved GUI base font (the
+        tuned sizes are per a 10pt default); the mocked canvas resolves no
+        font, so an unscaled build keeps them, and style-updated re-resolves."""
+        charting = _charting()
+        _chart, ax, _canvas, _lines, _fills, _formatters, _fig = self._built()
+        self.assertEqual(ax.set_title.call_args.kwargs.get("fontsize"), 9)
+        self.assertEqual(ax.tick_params.call_args.kwargs.get("labelsize"), 7.5)
+        self.assertEqual(ax.legend.call_args.kwargs.get("fontsize"), 8)
+        self.assertEqual(ax.text.call_args_list[0].kwargs.get("fontsize"), 8.5)
+
+        backend, _fig2, ax2, _canvas2, _l, _f, _fmt = _fake_backend()
+        with (
+            patch.object(charting, "matplotlib_backend", return_value=backend),
+            patch.object(charting, "chart_font_scale", return_value=1.25),
+        ):
+            scaled = charting.MatplotlibRollingChart("traffic", ["read"])
+        self.assertEqual(ax2.set_title.call_args.kwargs.get("fontsize"), 11.25)
+        self.assertEqual(ax2.tick_params.call_args.kwargs.get("labelsize"), 9.375)
+        self.assertEqual(ax2.legend.call_args.kwargs.get("fontsize"), 10.0)
+        self.assertEqual(ax2.text.call_args_list[0].kwargs.get("fontsize"), 10.625)
+
+        # The style-updated path re-resolves the scale with the palette.
+        with patch.object(charting, "chart_font_scale", return_value=1.0):
+            scaled._on_style_updated()
+        self.assertEqual(ax2.set_title.call_args.kwargs.get("fontsize"), 9)
+
     def test_collecting_state_until_two_points(self):
         chart, _ax, _canvas, _lines, _fills, _formatters, _fig = self._built()
         chart._collecting.set_visible.reset_mock()
@@ -366,7 +432,7 @@ def _two_pool_ladder():
             "tank",
             4096,
             [
-                _rung("Device", "device · physical sector 4K ×2", 4096),
+                _rung("Device", "device · physical sector 4K (2 devices)", 4096),
                 _rung("Pool", "pool · ashift 12 · 4K block", 4096),
                 _rung("Dataset", "dataset · volblocksize 16K", 16384),
                 _rung("VM", "vm · guest sector 512", 512, state="info"),
@@ -423,6 +489,16 @@ class TestLadderVocabulary(unittest.TestCase):
             )
         ]
         self.assertGreater(charting.ladder_minimum_width(longer), base)
+
+    def test_minimum_width_scales_with_the_gui_base_font(self):
+        """A larger GUI base font widens the gutter and legend estimate, so
+        the horizontal-scrollbar floor grows with the ladder's text."""
+        charting = _charting()
+        pools = _two_pool_ladder()
+        base = charting.ladder_minimum_width(pools)
+        self.assertEqual(charting.ladder_minimum_width(pools, 1.0), base)
+        self.assertGreater(charting.ladder_minimum_width(pools, 1.25), base)
+        self.assertEqual(charting.ladder_minimum_width([], 1.25), 0)
 
     def test_axis_range_defaults_without_data(self):
         charting = _charting()
@@ -615,6 +691,35 @@ class TestMatplotlibBlocksizeLadder(unittest.TestCase):
         self.assertEqual(ax.set_yticklabels.call_args.kwargs.get("fontsize"), 11)
         self.assertEqual(ax.legend.call_args.kwargs.get("fontsize"), 10.5)
         self.assertEqual(ax.tick_params.call_args.kwargs.get("labelsize"), 10.5)
+
+    def test_ladder_text_sizes_and_width_follow_the_gui_base_font(self):
+        """A 12.5pt GUI base font scales every ladder font site by 1.25 and
+        widens the canvas's content-minimum width request with it; the
+        mocked canvas resolves no font, so the unscaled build above keeps
+        the tuned sizes. The backend patch lives for the whole test — an
+        unpatched update() would run the real backend probe outside any
+        mock and cache the real GTK canvas for every later suite."""
+        charting = _charting()
+        backend, _fig, ax, canvas, _lines, _fills, _formatters = _fake_backend()
+        backend_patcher = patch.object(charting, "matplotlib_backend", return_value=backend)
+        scale_patcher = patch.object(charting, "chart_font_scale", return_value=1.25)
+        backend_patcher.start()
+        scale_patcher.start()
+        self.addCleanup(scale_patcher.stop)
+        self.addCleanup(backend_patcher.stop)
+        ladder = charting.MatplotlibBlocksizeLadder("Blocksize ladder")
+        self.assertEqual(ax.set_title.call_args.kwargs.get("fontsize"), 14.375)
+        pools = _two_pool_ladder()
+        ladder.update(pools)
+        self.assertEqual(ax.set_yticklabels.call_args.kwargs.get("fontsize"), 13.75)
+        self.assertEqual(ax.legend.call_args.kwargs.get("fontsize"), 13.125)
+        self.assertEqual(ax.tick_params.call_args.kwargs.get("labelsize"), 13.125)
+        canvas.set_size_request.assert_called_with(
+            charting.ladder_minimum_width(pools, 1.25), charting.ladder_pixel_height(pools)
+        )
+        self.assertGreater(
+            charting.ladder_minimum_width(pools, 1.25), charting.ladder_minimum_width(pools)
+        )
 
     def test_empty_update_keeps_placeholder_height(self):
         ladder, _ax, canvas, _fig, _backend = self._built()

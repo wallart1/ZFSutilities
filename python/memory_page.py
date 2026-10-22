@@ -30,6 +30,7 @@ gi.require_version("Gtk", "3.0")
 from alignment_page import create_alignment_view, refresh_alignment_view
 from charting import (  # chart vocabulary shared with the matplotlib renderer
     CHART_MAX_SAMPLES,
+    chart_font_scale,
     chart_palette,
     create_rolling_chart,
     format_age,
@@ -127,7 +128,7 @@ class RollingChart:
         cr.paint()
 
         cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-        cr.set_font_size(9)
+        cr.set_font_size(9 * chart_font_scale(widget))
 
         left, right, top, bottom = 58, 8, 18, 16
         plot_w = max(1, width - left - right)

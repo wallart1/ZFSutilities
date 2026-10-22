@@ -515,6 +515,23 @@ class TestRollingChart(unittest.TestCase):
             chart._on_draw(widget, MagicMock())
             self.assertTrue(widget.queue_draw.called)
 
+    def test_draw_font_follows_the_gui_base_font(self):
+        """The Cairo fallback's 9px text scales with the widget-resolved
+        GUI base font, like the matplotlib renderer's point sizes."""
+        with mock_gtk():
+            import memory_page as mp
+
+            chart = mp.RollingChart("traffic", ["read", "write"])
+            for i in range(4):
+                chart.append(float(i), [i * 100, i * 50])
+            widget = chart.widget
+            widget.get_allocated_width.return_value = 400
+            widget.get_allocated_height.return_value = 110
+            cr = MagicMock()
+            with patch.object(mp, "chart_font_scale", return_value=1.25):
+                chart._on_draw(widget, cr)
+            cr.set_font_size.assert_called_once_with(11.25)
+
 
 if __name__ == "__main__":
     unittest.main()

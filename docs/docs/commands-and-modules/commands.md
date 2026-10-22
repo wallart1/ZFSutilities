@@ -417,6 +417,12 @@ The installer:
 
 Can also re-run on an existing two-node host to switch it to single-node mode.
 
+**Environment:**
+
+| Variable                          | Meaning                                                        |
+| --------------------------------- | -------------------------------------------------------------- |
+| `INSTALL_SINGLE_NODE_TEST_NO_ROOT`| Test hook: skip the root check when set (execution harness)     |
+
 **Called modules:**
 
 | Module                 | Purpose                                                   |
@@ -466,6 +472,13 @@ The installer:
 9. Patches the Proxmox iSCSI rescan rate limit on the compute host.
 
 Can also re-run on an existing single-node host to switch it to two-node mode.
+
+**Environment:**
+
+| Variable                        | Meaning                                                          |
+| ------------------------------- | ---------------------------------------------------------------- |
+| `INSTALL_TWO_NODE_TEST_NO_ROOT` | Test hook: skip the root check when set (execution harness)       |
+| `ZFSUTILITIES_ETC_PREFIX`       | Fixture root for the systemd drop-in/artifact paths (tests)       |
 
 **Called modules:**
 

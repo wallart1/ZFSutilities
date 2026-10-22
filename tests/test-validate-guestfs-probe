@@ -1,0 +1,86 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-validate-guestfs-probe — Execution harness for
+# share/dev/validate-guestfs-probe.sh.
+#
+# The validator is a production tool (run as root on the storage host), but
+# its --self-check mode runs the whole probe chain against an inline
+# scripted qm runner — no host, no root, no zfs. That self-check is the
+# only fence keeping the validator in step with alignment_guestfs's probe
+# internals (it consumes the private _guest_probe_targets assembly), so it
+# runs here on every suite pass: when the probe chain changes shape, this
+# suite fails instead of the next live validation on the storage host.
+
+# shellcheck source=tests/test-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+validator="$mydir/share/dev/validate-guestfs-probe.sh"
+
+test_self_check_passes() {
+    test_start "validator --self-check passes against the repo python tree"
+
+    local out rc
+    out=$(bash "$validator" --self-check "$mydir/python" 2>&1)
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_fail "self-check exited $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"SELF-CHECK PASS"* ]]; then
+        test_fail "self-check banner missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_help_usage() {
+    test_start "validator -h prints usage and exits 0"
+
+    local out rc
+    out=$(bash "$validator" -h 2>&1)
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_fail "-h exited $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"--self-check"* ]]; then
+        test_fail "usage lacks --self-check; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_bare_run_requires_root() {
+    test_start "validator without --self-check refuses to run as non-root"
+
+    # Under a root-driven harness the refusal cannot trigger; the
+    # self-check tests above still fence the script either way.
+    if [[ $EUID -eq 0 ]]; then
+        test_skip "running as root — the non-root refusal cannot trigger"
+        return
+    fi
+
+    local out rc
+    out=$(bash "$validator" 2>&1)
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        test_fail "bare run as non-root succeeded; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"run as root"* ]]; then
+        test_fail "root refusal missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_self_check_passes
+test_help_usage
+test_bare_run_requires_root
+
+test_summary
+teardown_test_env

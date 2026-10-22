@@ -1394,9 +1394,11 @@ charts view:
 - **Blocksize ladder**: the same chain drawn visually — a log₂-scale
   ladder, one row per rung per pool (each distinct device physical
   sector, the pool's ashift block, each distinct
-  `recordsize`/`volblocksize` with a ×count when several datasets share
-  it, the VM guest sector, and — when the guest agent answered — each
-  distinct guest filesystem blocksize), with a dashed reference line at each
+  `recordsize`/`volblocksize` with the group count named when several
+  datasets share it (e.g. `(3 datasets)`; likewise devices, volumes,
+  and guest filesystems for their layers), the VM guest sector, and —
+  when the guest agent answered — each distinct guest filesystem
+  blocksize), with a dashed reference line at each
   pool's ashift block. Misalignment reads at a glance: a rung that ends
   left of its pool's dashed line sits below the ashift block (padding /
   partial-block cost), a device rung that passes right of it means the
@@ -1413,7 +1415,8 @@ charts view:
   unresolved ashift keeps its other rungs in grey without a reference
   line, and a wholesale pool failure shows the chart's own note instead.
   The chart's text is sized one notch above the rolling charts' so the
-  labels read at a glance. It fills the available page width whenever
+  labels read at a glance — and, like every chart on the page, it scales
+  with the GUI's base font size. It fills the available page width whenever
   the window is wide enough and never renders below its readable
   content-derived width — a narrower window gets the chart's own
   horizontal scrollbar over the full-size chart instead of a squeezed
