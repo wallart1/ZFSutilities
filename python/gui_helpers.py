@@ -291,6 +291,69 @@ def configure_treeview_column(col, width=None, min_width=20, resizable=True):
         col.set_resizable(True)
 
 
+# Fallback row height when theme metrics are unavailable (mocked tests,
+# exotic backends): text plus the GTK3 treeview vertical separator.
+TREEVIEW_ROW_HEIGHT_FALLBACK = 26
+
+# Rows a capped table shows at most before it starts scrolling.
+TABLE_ROW_TARGET = 20
+
+
+def treeview_row_height(view):
+    """One treeview row's pixel height from the theme, or the fallback.
+
+    Text height comes from the view's Pango metrics; the vertical
+    separator (the GTK3 row gap, a style property) is added on top. Any
+    metrics failure (mocked GTK, unusual backend) falls back to a
+    conventional row height rather than guessing with the mock objects.
+    """
+    try:
+        context = view.get_pango_context()
+        font = view.get_style_context().get_font(Gtk.StateFlags.NORMAL)
+        metrics = context.get_metrics(font)
+        text_height = (metrics.get_ascent() + metrics.get_descent()) // Pango.SCALE
+        separator = int(view.style_get_property("vertical-separator") or 0)
+        height = text_height + separator
+        if height <= 0:
+            return TREEVIEW_ROW_HEIGHT_FALLBACK
+        return height
+    except (TypeError, AttributeError, ValueError):
+        return TREEVIEW_ROW_HEIGHT_FALLBACK
+
+
+def capped_treeview_scroll(view, row_target=TABLE_ROW_TARGET, fixed_rows=True):
+    """Wrap a TreeView in its own scrolled window sized for *row_target* rows.
+
+    Every table on the Performance page scrolls on its own: the window
+    shows at most *row_target* rows (taller tables scroll inside it), the
+    vertical scrollbar sits permanently at the window's right edge, and a
+    horizontal scrollbar appears whenever the fixed-width columns overflow
+    it. With *fixed_rows* (the Performance-page convention) the window's
+    minimum height equals the cap, so every table keeps its full
+    *row_target*-line window whatever its row count — short and empty
+    tables show 20 lines instead of collapsing to their content. The
+    one-row allowance over the target absorbs a classic (non-overlay)
+    horizontal scrollbar's height, so the target row count stays visible
+    with or without one. With ``fixed_rows=False`` (the Dashboard
+    convention) a short table keeps its natural height up to the same
+    cap. ``propagate_natural_height`` is essential — without it the
+    scrolled window's natural height is its ``min_content_height`` and
+    the table collapses to a couple of rows.
+    """
+    scroll = Gtk.ScrolledWindow()
+    scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+    row_height = treeview_row_height(view)
+    header = row_height + 2
+    # The +1-row allowance absorbs the horizontal scrollbar's height so
+    # the target row count stays visible.
+    cap = header + (row_target + 1) * row_height
+    scroll.set_min_content_height(cap if fixed_rows else 60)
+    scroll.set_max_content_height(cap)
+    scroll.set_propagate_natural_height(True)
+    scroll.add(view)
+    return scroll
+
+
 def section_header(text, subtitle=""):
     """Return a bold section title label with optional dimmed subtitle.
 

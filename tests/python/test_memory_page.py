@@ -92,6 +92,30 @@ def _tracked_widget(seen):
 
 
 class TestCreateMemoryPage(unittest.TestCase):
+    def test_arc_header_names_active_renderer(self):
+        """The section header names the chart renderer, so a Cairo
+        fallback is visible at a glance instead of inferred from chart
+        smoothness (the classic cause: the GUI runs as root while
+        matplotlib sits in a user's pip --user site)."""
+        with mock_gtk(fresh=True):
+            import memory_page as mp
+
+            app = _make_app()
+            with patch.object(mp, "section_header", wraps=mp.section_header) as header:
+                mp.create_memory_page(app)
+            arc_calls = [
+                call
+                for call in header.call_args_list
+                if call.args[:1] == ("ARC — Adaptive Replacement Cache",)
+            ]
+            self.assertEqual(len(arc_calls), 1)
+            subtitle = arc_calls[0].args[1]
+            self.assertIn("charts: ", subtitle)
+            # Under mock_gtk the matplotlib probe cannot load, so the
+            # label names the Cairo fallback and its fix.
+            self.assertIn("Cairo fallback", subtitle)
+            self.assertIn("python3-matplotlib", subtitle)
+
     def test_page_construction(self):
         with mock_gtk(fresh=True) as gtk:
             import memory_page as mp
@@ -153,6 +177,89 @@ class TestCreateMemoryPage(unittest.TestCase):
                     (views[5], "memory_slog_view"),
                 ],
             )
+
+    def test_page_sizes_content_by_natural_height(self):
+        """The page viewport must follow the content's natural height.
+
+        The page mixes fixed-minimum table windows with naturally sized
+        content (labels, the ladder); the default MINIMUM policy clamps
+        the page box to the window height and the box then crushes the
+        naturally sized children toward their minimums — the historical
+        two-rows-per-table defect.
+        """
+        with mock_gtk(fresh=True):
+            import memory_page as mp
+
+            app = _make_app()
+            page = mp.create_memory_page(app)
+            viewport = page.get_child()
+            viewport.set_vscroll_policy.assert_called_once_with(mp.Gtk.ScrollablePolicy.NATURAL)
+
+    def test_device_tables_scroll_in_capped_windows(self):
+        """Every Performance-page table gets its own fixed 20-row scrolled
+        window with an honest far-right column (expand redirected to a
+        non-last column)."""
+        with mock_gtk(fresh=True) as gtk:
+            views = []
+            scrolls = []
+            columns = []
+
+            def _make_view(*args, **kwargs):
+                view = MagicMock()
+                views.append(view)
+                return view
+
+            def _make_scroll(*args, **kwargs):
+                scroll = MagicMock()
+                scrolls.append(scroll)
+                return scroll
+
+            def _make_column(*args, **kwargs):
+                col = MagicMock()
+                columns.append(col)
+                return col
+
+            gtk.ListStore = MagicMock(side_effect=lambda *a, **k: MagicMock())
+            gtk.TreeView = MagicMock(side_effect=_make_view)
+            gtk.ScrolledWindow = MagicMock(side_effect=_make_scroll)
+            gtk.TreeViewColumn = MagicMock(side_effect=_make_column)
+            import gui_helpers as gh
+            import memory_page as mp
+
+            app = _make_app()
+            mp.create_memory_page(app)
+            # ScrolledWindow creation order: the page window, the chain
+            # table, the ladder window, then topology/findings/workload,
+            # then L2ARC/SLOG.
+            self.assertEqual(len(scrolls), 8)
+            # The fixed Performance-page window: min == max == the 20-row
+            # cap, so short and empty tables keep their 20-line window
+            # (the one-row allowance absorbs the horizontal scrollbar).
+            row = gh.TREEVIEW_ROW_HEIGHT_FALLBACK
+            cap = (row + 2) + (gh.TABLE_ROW_TARGET + 1) * row
+            table_scrolls = scrolls[1:2] + scrolls[3:6] + scrolls[6:8]
+            table_views = views[0:4] + views[4:6]
+            for scroll, view in zip(table_scrolls, table_views):
+                scroll.add.assert_called_once_with(view)
+                scroll.set_propagate_natural_height.assert_called_once_with(True)
+                scroll.set_min_content_height.assert_called_once_with(cap)
+                scroll.set_max_content_height.assert_called_once_with(cap)
+            # The ladder window is not a capped table window: it carries a
+            # small minimum width so the canvas's request can never widen
+            # the page (its max_content_width is floored by alignment_page).
+            scrolls[2].set_min_content_width.assert_called_once_with(gh.TREEVIEW_MIN_WIDTH)
+            # Columns: 21 for the Alignment tables, then 5 per device
+            # table.  Each device table expands its Vdev column (second of
+            # five) so the far-right column keeps its fixed width, and
+            # every column starts at a sane width with a real minimum.
+            self.assertEqual(len(columns), 31)
+            for table in (columns[21:26], columns[26:31]):
+                for col in table:
+                    self.assertGreaterEqual(col.set_fixed_width.call_args.args[0], 60)
+                    col.set_min_width.assert_called_once_with(60)
+                table[1].set_expand.assert_called_once_with(True)
+                for col in (table[0], *table[2:]):
+                    col.set_expand.assert_not_called()
 
     def test_spin_defaults_from_config(self):
         with mock_gtk(fresh=True):

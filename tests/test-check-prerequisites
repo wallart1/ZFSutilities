@@ -110,6 +110,22 @@ EOF
         ln -s /bin/true "$tmp_bin/$cmd"
     done
 
+    # MATPLOTLIB_STUB=absent: python3 succeeds for everything except the
+    # matplotlib import probe (drives the optional-chart warn branch).
+    if [[ "${MATPLOTLIB_STUB:-present}" == "absent" ]]; then
+        # rm first: the loop above left python3 as a symlink, and cat >
+        # would follow it into /bin/true instead of replacing it.
+        rm -f "$tmp_bin/python3"
+        cat > "$tmp_bin/python3" << 'STUB'
+#!/usr/bin/bash
+for arg in "$@"; do
+    [[ "$arg" == *matplotlib* ]] && exit 1
+done
+exec /bin/true
+STUB
+        chmod +x "$tmp_bin/python3"
+    fi
+
     # ZFS tooling: ZFS_STUB=absent leaves zfs/zpool out of the stub PATH
     # (drives the contrib-note probe); present otherwise.
     if [[ "${ZFS_STUB:-present}" != "absent" ]]; then
@@ -195,6 +211,57 @@ EOF
     local rc=$?
     rm -rf "$tmp_bin"
     return $rc
+}
+
+test_matplotlib_optional_warn_when_absent() {
+    test_start "matplotlib absence warns (Cairo fallback), never fails"
+
+    local output rc
+    output=$(MATPLOTLIB_STUB=absent run_check_prerequisites_with_mock_env --single-node 2>&1)
+    rc=$?
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+
+    # Optional component: the run still succeeds.
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 when matplotlib is absent, got $rc"
+        return
+    fi
+    if [[ "$output" != *"matplotlib not installed"* ]]; then
+        test_fail "Expected the matplotlib warn line in output"
+        return
+    fi
+    if [[ "$output" != *"python3-matplotlib"* ]]; then
+        test_fail "Expected the system-package hint in the warn line"
+        return
+    fi
+    if printf '%s\n' "$output" | grep -q '^gui|matplotlib|'; then
+        test_fail "matplotlib absence must not land in the failure list"
+        return
+    fi
+    test_pass
+}
+
+test_matplotlib_pass_when_importable() {
+    test_start "matplotlib presence reports a pass line"
+
+    local output rc
+    output=$(run_check_prerequisites_with_mock_env --single-node 2>&1)
+    rc=$?
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+
+    if [[ "$output" != *"python3 module: matplotlib (Performance-page charts)"* ]]; then
+        test_fail "Expected the matplotlib pass line in output"
+        return
+    fi
+    test_pass
 }
 
 test_proxmox_absent_warning() {
@@ -571,6 +638,8 @@ test_module_row_when_not_built
 test_no_module_row_when_built
 test_module_check_skipped_without_modinfo
 test_module_row_alongside_missing_zfs_tools
+test_matplotlib_optional_warn_when_absent
+test_matplotlib_pass_when_importable
 
 test_summary
 teardown_test_env

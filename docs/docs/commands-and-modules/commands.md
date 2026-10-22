@@ -99,7 +99,12 @@ Checks the following categories: core ZFS utilities (`bash`, `zfs`, `zpool`,
 `smartctl`), optional Proxmox VE, GTK GUI packages, two-node
 tools (`ssh`, `scp`, `iscsiadm`), and documentation tools. `pip3` is required;
 `mkdocs` and `mkdocs-material` are pip-installed by the installer's doc-server
-step, so their absence is reported as a warning, not a failure. MkDocs 2.x is
+step, so their absence is reported as a warning, not a failure. The GUI
+section also probes the optional chart renderer: a `python3 -c "import
+matplotlib"` check reports a pass line, and its absence is a warning naming
+the system package `python3-matplotlib` (the Performance page falls back to
+its built-in Cairo renderer; a pip `--user` install is invisible to the
+root-run GUI). MkDocs 2.x is
 incompatible with this project; the prerequisite checker fails when `mkdocs`
 >= 2 is installed. When the ZFS tools are missing and apt has no installation
 candidate for `zfsutils-linux` (probed at runtime), the core section appends a
@@ -2862,7 +2867,9 @@ After whichever step did the wiping, Linux is told the device changed: the
 partition table is re-read (`partprobe`, else `blockdev --rereadpt`) so
 stale partition nodes drop, then a uevent is triggered and udev settles so
 `/dev/disk/by-id` and `lsblk`'s udev-backed columns reflect the clean device
-before the script exits.
+before the script exits. A failed `dd` triggers the same best-effort
+notification — earlier steps may already have erased signatures, so the
+kernel should re-read the device even though the wipe failed.
 
 ```bash
 sudo zfswipe <device> [--confirmed]

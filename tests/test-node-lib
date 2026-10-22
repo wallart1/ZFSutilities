@@ -353,6 +353,35 @@ test_pool_to_target_unknown() {
     fi
 }
 
+# Regression for the unarchive-vm Step-2 ssh payload (vm-205 incident): a
+# fresh remote shell inherits no pool_to_target, so the payload loads
+# node-lib through bashinit's source_helper. The pool map must survive
+# source_helper returning — a bare declare would be function-local to
+# source_helper's frame and vanish, emptying the map under pool_to_target.
+# The child bash starts clean (no inherited functions), like the ssh payload.
+test_pool_map_survives_source_helper_load() {
+    test_start "pool map survives loading node-lib through source_helper"
+    local result rc
+    result=$(REPO_BIN="$mydir/bin" NODE_CONF="$two_node_conf" bash -c '
+        mydir="$REPO_BIN"
+        source "$mydir/bashinit"
+        declare -f pool_to_target >/dev/null 2>&1 || source_helper node-lib.sh
+        pool_to_target threeamigos
+    ' 2>/dev/null)
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_equals "iqn.2025-01.com.zfsutilities:threeamigos" "$result"
+
+    local unknown_rc=0
+    REPO_BIN="$mydir/bin" NODE_CONF="$two_node_conf" bash -c '
+        mydir="$REPO_BIN"
+        source "$mydir/bashinit"
+        declare -f pool_to_target >/dev/null 2>&1 || source_helper node-lib.sh
+        pool_to_target unknownpool
+    ' >/dev/null 2>&1 || unknown_rc=$?
+    assert_rc 1 "$unknown_rc"
+}
+
 test_pool_list_two_node() {
     test_start "pool_list emits configured pool names in two-node mode"
     local result
@@ -707,6 +736,7 @@ test_expected_iscsi_devices_defaults_empty
 
 test_pool_to_target_known
 test_pool_to_target_unknown
+test_pool_map_survives_source_helper_load
 test_pool_list_two_node
 test_pool_list_single_node
 test_is_known_pool_known

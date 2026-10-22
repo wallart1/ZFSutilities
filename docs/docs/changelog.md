@@ -1,5 +1,92 @@
 # Changelog
 
+## 0.126.2
+
+*Released 2026-10-21*
+
+### Added
+
+- **Guest filesystem blocksize probing in the Alignment view.** The new
+  `python/alignment_guestfs.py` asks each VM through the QEMU guest
+  agent (`qm guest ping` / `qm guest exec`, run locally on the compute
+  node or over the read-only `ssh root@<compute>` channel on two-node
+  installs) which filesystems live on each zvol and what block size
+  they use. The zvol↔guest-disk mapping is a deterministic three-tier
+  chain — a pinned `serial=` on the PVE disk line, then the
+  UUID/PARTUUID signature intersection between the zvol's own
+  partitions (read on the storage host) and the guest device tree,
+  then size+bus position for blank zvols — with clone-shared
+  signatures refused as ambiguous rather than guessed. Probed
+  filesystems appear in the Blocksize scan table's VM detail, as a WARN
+  finding when a guest filesystem block sits below its zvol's
+  `volblocksize` (every guest block write becomes a partial volblock
+  write), and as new "VM fs" rungs in the blocksize ladder judged
+  against the volblocksize; unprobed volumes are named with their
+  reason in the availability note. Results cache per
+  (vmid, volume, volsize) with a TTL so the 1-300 s page refresh never
+  re-probes a steady guest.
+- **PVE VM configs on two-node installs.** `alignment_stats` now reads
+  `/etc/pve/qemu-server` from the local directory when the GUI host
+  runs PVE and otherwise fetches every config from the compute node
+  over one BatchMode ssh round-trip, so VM-layer chain rows, findings,
+  and guest probing work on the storage node too; the config's
+  `agent:` switch is parsed so probing can say "agent disabled" instead
+  of "unreachable".
+- **Theme-following chart palette.** Every chart renderer (matplotlib
+  and Cairo, rolling charts and ladder) resolves its colours from the
+  GTK theme (`chart_palette` — `theme_bg_color`/`theme_fg_color`, a
+  dark variant with brighter series colours below a luminance of 0.5,
+  light fallback when nothing resolves) and re-resolves on
+  `style-updated`, so charts sit on the page's own background in dark
+  themes instead of white.
+- **Per-table scrolled windows and readable columns.** Every table on
+  the Performance page keeps a fixed twenty-line window with its own
+  vertical and horizontal scrollbars (`gui_helpers.capped_treeview_scroll`),
+  the Dashboard tables scroll on their own up to the same cap, the
+  Blocksize scan table's columns sort on click, cells ellipsize with
+  the full text on hover only where the text is actually clipped, and
+  each table's spare width goes to one designated wide column so the
+  far-right column keeps an honest width. The Performance header names
+  the active chart renderer, and `check-prerequisites` reports the
+  optional matplotlib module (pass, or a warn naming the system
+  package — a pip `--user` install is invisible to the root-run GUI).
+
+### Changed
+
+- **Blocksize ladder width contract.** The ladder canvas requests
+  exactly its content-derived minimum width (`ladder_minimum_width`:
+  label gutter + plot floor + legend) and stretches to the full page
+  width when available; a narrower page gets the ladder's own
+  horizontal scrollbar over the full-size chart instead of a squeezed
+  one. The ladder's text is one notch larger than the rolling charts'.
+- **Rewrite Data completion summary tells the truth.** `zfs rewrite -v`
+  output is captured through `tee` and counted per dataset, so an rc=0
+  finish reports the actual file count — "rewrote nothing" when zero,
+  "summary incomplete/unavailable" when the count could not be read —
+  never a bare "complete".
+- The realized Alignment check runs on a private Xvfb (never the
+  ambient display) and gained a geometry pass locking the twenty-row
+  table windows, per-table scrollbars, and the ladder width floor
+  under both chart renderers.
+
+### Fixed
+
+- A step whose process fails to launch is now a failed step: the run
+  finishes rc=1 with a `FATAL: Could not launch step:` line instead of
+  silently skipping the step and reporting success (the finally step,
+  if any, still runs first; the post-callback stays unrun).
+- `zfswipe` tells the kernel to re-read the device even when the final
+  `dd` fails — earlier steps may already have erased signatures.
+- `node-lib.sh` declares the `pool_target` map with `declare -gA`: a
+  bare `declare` inside the sourced library was function-local to
+  bashinit's `source_helper` frame and vanished on return, emptying
+  the map under `pool_to_target`/`pool_list`/`is_known_pool` (the
+  unarchive-vm vm-205 two-node incident).
+- Guest-probe target tuples carried `(vmid, bus, short name, …)`
+  where the prober's contract is `(vmid, short name, bus, …)`, keying
+  probe results by bus name so guest-filesystem findings, table
+  detail, and ladder rungs never matched a volume.
+
 ## 0.126.0
 
 *Released 2026-10-16*

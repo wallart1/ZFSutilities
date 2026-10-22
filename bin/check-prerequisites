@@ -245,6 +245,19 @@ check_apt_pkg "gui" "gir1.2-gtk-3.0"
 check_apt_pkg "gui" "gir1.2-webkit2-4.1"
 check_apt_pkg "gui" "libwebkit2gtk-4.1-0"
 
+# Optional: the high-quality chart renderer for the Performance page.
+# Absence only downgrades the charts to the built-in Cairo renderer, so
+# this is a warn, never a failure.  The import must succeed for the user
+# the GUI runs as: a pip --user install under a home directory is
+# invisible to a root-run GUI (and check-prerequisites may itself run as
+# root during install), which is why the hint names the system package.
+if python3 -c "import matplotlib" >/dev/null 2>&1; then
+    pass "python3 module: matplotlib (Performance-page charts)"
+else
+    warn "matplotlib not installed — Performance-page charts fall back to the built-in Cairo renderer." \
+         "Install the system package python3-matplotlib (a pip --user install is invisible to a root-run GUI)."
+fi
+
 if [[ -n "${DISPLAY:-}" ]]; then
     pass "DISPLAY=$DISPLAY"
 else

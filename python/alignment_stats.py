@@ -21,8 +21,13 @@ Sources and their availability flags:
 - ``/proc/spl/kstat/zfs/arcstats`` and ``.../zfetchstats`` — ARC and
   prefetcher counters (same kstat grammar memory_stats parses) ->
   ``arcstats_available`` / ``prefetch_available``
-- ``/etc/pve/qemu-server/*.conf`` — PVE VM disk options when the GUI host
-  is also the PVE node (single-node installs) -> ``pve_available``
+- ``/etc/pve/qemu-server/*.conf`` — PVE VM disk options: read from the
+  local directory when this host runs PVE, otherwise fetched from the
+  compute node over ssh on two-node installs (the same read-only channel
+  the dashboard uses) -> ``pve_available``
+- ``alignment_guestfs.GuestFsProber`` — guest filesystem blocksizes for
+  VM volumes, asked through the QEMU guest agent on the compute node ->
+  ``guest_fs`` / ``guest_fs_failures`` / ``guest_fs_probed``
 
 The alignment view refreshes independently of the Live Charts view, so it
 collects its own copy of the kstats rather than sharing the charts sample.
@@ -35,6 +40,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 
+from alignment_guestfs import GuestFsEntry, GuestFsProber, collect_zvol_signatures
 from memory_stats import (
     ARCSTATS_PATH,
     _delta_rate,
@@ -42,6 +48,7 @@ from memory_stats import (
     parse_arcstats,
     parse_kstats,
 )
+from node_config import load_node_config
 from zfs_repository import TopologyNode
 
 ZFETCHSTATS_PATH = "/proc/spl/kstat/zfs/zfetchstats"
@@ -232,6 +239,8 @@ class DatasetBlocks:
     Values are the raw zfs-get strings; use parse_zfs_size for byte values.
     ``source`` is the zfs-get source column ("local", "inherited from ...",
     "default", "-"); None when the property does not apply to the kind.
+    ``volsize`` (volume byte size, "-" on filesystems) feeds the guest
+    prober's disk matching — QEMU exposes the zvol at exactly this size.
     """
 
     name: str
@@ -240,6 +249,7 @@ class DatasetBlocks:
     recordsize_source: str | None = None
     volblocksize: str | None = None
     volblocksize_source: str | None = None
+    volsize: str | None = None
 
 
 @dataclass
@@ -250,6 +260,9 @@ class VMOption:
     disknum: str
     bus: str
     options: dict[str, str] = field(default_factory=dict)
+    # VM-level qemu-guest-agent switch (the config's ``agent:`` line) —
+    # lets guest probing say "agent disabled" instead of "unreachable".
+    agent: bool = False
 
 
 @dataclass
@@ -268,6 +281,10 @@ class AlignmentSample:
     arc: dict[str, int] = field(default_factory=dict)
     prefetch: dict[str, int] = field(default_factory=dict)
     objset: dict[str, dict[str, int]] = field(default_factory=dict)
+    # Guest filesystem blocksizes per zvol short name (alignment_guestfs).
+    guest_fs: dict[str, list[GuestFsEntry]] = field(default_factory=dict)
+    # Per-volume probe degrades: zvol short name -> short reason string.
+    guest_fs_failures: dict[str, str] = field(default_factory=dict)
     # Pool names whose per-pool dataset-property read failed while other
     # pools were collected (per-pool degrade; wholesale zfs/zpool failure
     # instead clears pools_available/datasets_available outright).
@@ -279,6 +296,7 @@ class AlignmentSample:
     prefetch_available: bool = False
     objset_available: bool = False
     pve_available: bool = False
+    guest_fs_probed: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +472,19 @@ def compute_objset_rates(prev, cur):
 # PVE VM-config reader
 # ---------------------------------------------------------------------------
 
+# Regex: ^agent:\s*(\S+)
+# Purpose: Read the VM-level qemu-guest-agent switch from a config body.
+# Group 1: the value   e.g. "1", "0", "enabled=1,fstrim_cloned"
+_AGENT_LINE_RE = re.compile(r"^agent:\s*(\S+)")
+
+# Timeout for the ssh fetch of the compute node's qemu-server configs.
+PVE_FETCH_TIMEOUT = 15
+
+
+def _agent_enabled(value):
+    """Interpret an ``agent:`` config value: enabled, or not."""
+    return value == "1" or value.startswith("enabled=1")
+
 
 def parse_pve_vm_conf(text, vmid):
     """Parse one qemu-server config body into {short_name: VMOption}.
@@ -467,8 +498,16 @@ def parse_pve_vm_conf(text, vmid):
     owner of every disk line in the file. It can differ from the id
     embedded in a short name when a disk created for one VM was later
     moved to another — the name keeps its origin, the config states the
-    current owner — so the two are never mixed.
+    current owner — so the two are never mixed. The VM-level ``agent:``
+    line (qemu-guest-agent switch) is recorded per disk as ``agent`` so
+    guest probing can tell "agent disabled" from "agent unreachable".
     """
+    agent = False
+    for line in text.splitlines():
+        match = _AGENT_LINE_RE.match(line.strip())
+        if match is not None:
+            agent = _agent_enabled(match.group(1))
+            break
     result: dict[str, VMOption] = {}
     for line in text.splitlines():
         match = _PVE_DISK_LINE_RE.match(line.strip())
@@ -493,16 +532,17 @@ def parse_pve_vm_conf(text, vmid):
             disknum=token.group(2),
             bus=f"{bus_family}{bus_index}",
             options=options,
+            agent=agent,
         )
     return result
 
 
 def read_pve_vm_options(conf_dir=PVE_QEMU_CONF_DIR):
-    """Read every qemu-server config into {short_name: VMOption}.
+    """Read the local qemu-server config dir into {short_name: VMOption}.
 
-    Returns an empty dict when the directory is absent or unreadable (the
-    storage node of a two-node install keeps VM configs on the compute
-    node, not here).
+    Returns an empty dict when the directory is absent or unreadable —
+    the storage node of a two-node install has no local configs, and the
+    remote fetch (``fetch_pve_vm_options``) takes over from there.
     """
     vm_disks: dict[str, VMOption] = {}
     try:
@@ -518,6 +558,80 @@ def read_pve_vm_options(conf_dir=PVE_QEMU_CONF_DIR):
                 vm_disks.update(parse_pve_vm_conf(f.read(), vmid))
         except OSError:
             continue
+    return vm_disks
+
+
+def parse_pve_conf_dump(text):
+    """Parse a marker-delimited config dump into {short_name: VMOption}.
+
+    The dump format is the fetch script's: one ``== <filename>`` marker
+    line before each config body (see ``fetch_pve_vm_options``). Bodies
+    before any marker are ignored.
+    """
+    vm_disks: dict[str, VMOption] = {}
+    vmid = None
+    body: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("== "):
+            if vmid is not None:
+                vm_disks.update(parse_pve_vm_conf("\n".join(body), vmid))
+            # The marker carries the full remote path; the vmid is its
+            # numeric basename.
+            name = line[3:].strip().rsplit("/", 1)[-1].removesuffix(".conf")
+            vmid = name if name.isdigit() else None
+            body = []
+        elif vmid is not None:
+            body.append(line)
+    if vmid is not None:
+        vm_disks.update(parse_pve_vm_conf("\n".join(body), vmid))
+    return vm_disks
+
+
+def fetch_pve_vm_options(host, conf_dir=PVE_QEMU_CONF_DIR, runner=None):
+    """Fetch the compute node's qemu-server configs over ssh.
+
+    One ``ssh root@<host>`` round-trip cats every config with an
+    ``== <filename>`` marker before each body (parsed by
+    ``parse_pve_conf_dump``); BatchMode and a ConnectTimeout keep a
+    missing key or an unreachable host from hanging the refresh. Returns
+    an empty dict on any failure — the caller degrades per-source.
+    """
+    if runner is None:
+
+        def runner(argv, timeout):
+            return subprocess.run(
+                argv, capture_output=True, text=True, timeout=timeout, check=False
+            )
+
+    script = f'for f in {conf_dir}/*.conf; do echo "== $f"; cat "$f"; done'
+    try:
+        result = runner(
+            ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", f"root@{host}", script],
+            timeout=PVE_FETCH_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if result.returncode != 0:
+        return {}
+    return parse_pve_conf_dump(result.stdout or "")
+
+
+def read_pve_vm_configs(conf_dir=PVE_QEMU_CONF_DIR, config=None):
+    """Read PVE VM configs wherever they live: local dir, then the compute node.
+
+    Single-node installs (and the GUI running on the compute node) find
+    the configs locally; two-node installs fall back to the ssh fetch
+    against the configured compute host. Returns ``{short_name: VMOption}``
+    — empty when neither source is readable, which the caller reports
+    through ``pve_available``.
+    """
+    vm_disks = read_pve_vm_options(conf_dir)
+    if vm_disks:
+        return vm_disks
+    config = load_node_config() if config is None else config
+    host = config.get("compute_host") or ""
+    if config.get("mode") == "two-node" and host and config.get("this_host") != host:
+        vm_disks = fetch_pve_vm_options(host, conf_dir=conf_dir)
     return vm_disks
 
 
@@ -616,6 +730,7 @@ def _dataset_blocks_from_rows(rows):
     for name in sorted(props):
         recordsize, recordsize_source = props[name].get("recordsize", ("-", "-"))
         volblocksize, volblocksize_source = props[name].get("volblocksize", ("-", "-"))
+        volsize, _volsize_source = props[name].get("volsize", ("-", "-"))
         if volblocksize != "-":
             kind = "volume"
         elif recordsize != "-":
@@ -630,9 +745,46 @@ def _dataset_blocks_from_rows(rows):
                 recordsize_source=recordsize_source if recordsize != "-" else None,
                 volblocksize=volblocksize if volblocksize != "-" else None,
                 volblocksize_source=volblocksize_source if volblocksize != "-" else None,
+                volsize=volsize if volsize != "-" else None,
             )
         )
     return datasets
+
+
+def _guest_probe_targets(datasets, vm_disks, signature_runner=None):
+    """Volumes worth probing, with their match-chain evidence attached.
+
+    Each target is ``(vmid, short, bus, volsize_bytes, serial, signatures)``
+    — only zvols referenced by a PVE disk line carry a VM to ask; the
+    volsize byte value is None when the property read failed; *serial* is
+    the disk line's ``serial=`` option when the operator pinned one (tier-1
+    match evidence); *signatures* is the storage-side UUID/PARTUUID set
+    read from ``/dev/zvol/<name>`` (tier 2 — empty for blank zvols, for a
+    missing /dev/zvol node, or when the read fails, all of which fall to
+    the prober's size+bus tier).
+    """
+    volumes = []
+    for ds in datasets:
+        if ds.kind != "volume":
+            continue
+        option = vm_disks.get(ds.name.rsplit("/", 1)[-1])
+        if option is not None:
+            volumes.append((ds, option))
+    signatures = collect_zvol_signatures(
+        sorted(f"/dev/zvol/{ds.name}" for ds, _option in volumes),
+        runner=signature_runner,
+    )
+    return [
+        (
+            option.vmid,
+            ds.name.rsplit("/", 1)[-1],
+            option.bus,
+            parse_zfs_size(ds.volsize or ""),
+            option.options.get("serial"),
+            signatures.get(f"/dev/zvol/{ds.name}", set()),
+        )
+        for ds, option in volumes
+    ]
 
 
 def collect_alignment_sample(
@@ -643,8 +795,17 @@ def collect_alignment_sample(
     zfetchstats_path=ZFETCHSTATS_PATH,
     pve_conf_dir=PVE_QEMU_CONF_DIR,
     kstat_dir=OBJSET_KSTAT_DIR,
+    node_config_data=None,
+    guest_prober=None,
 ):
-    """Collect one AlignmentSample, degrading per-source on failure."""
+    """Collect one AlignmentSample, degrading per-source on failure.
+
+    *node_config_data* overrides the node-config lookup (tests); the PVE
+    configs then come from the local directory or the compute node per
+    that config. *guest_prober* is the alignment_guestfs.GuestFsProber
+    for guest filesystem blocksizes; None (the default) builds one from
+    the ambient node config, and tests inject a stub.
+    """
     sample = AlignmentSample(monotonic=time.monotonic())
     try:
         sample.pools = _collect_pools(zfs_repo)
@@ -689,8 +850,17 @@ def collect_alignment_sample(
     if objset:
         sample.objset = objset
         sample.objset_available = True
-    vm_disks = read_pve_vm_options(pve_conf_dir)
+    vm_disks = read_pve_vm_configs(pve_conf_dir, config=node_config_data)
     if vm_disks:
         sample.vm_disks = vm_disks
         sample.pve_available = True
+    if sample.pve_available:
+        prober = GuestFsProber(config=node_config_data) if guest_prober is None else guest_prober
+        results = prober.probe_volumes(_guest_probe_targets(sample.datasets, sample.vm_disks))
+        for short, probe in results.items():
+            if probe.entries:
+                sample.guest_fs[short] = probe.entries
+                sample.guest_fs_probed = True
+            elif probe.reason:
+                sample.guest_fs_failures[short] = probe.reason
     return sample

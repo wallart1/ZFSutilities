@@ -44,6 +44,7 @@ _mock_zpool_list_rc=0
 _mock_labelclear_clears_zfs=1
 _mock_wipefs_fail=0
 _mock_dd_clears_sigs=1
+_mock_dd_rc=0
 _mock_ask_line_answer=""
 _mock_partprobe_rc=0
 _mock_blockdev_rc=0
@@ -80,6 +81,7 @@ function _mock_reset_fixture {
     _mock_labelclear_clears_zfs=1
     _mock_wipefs_fail=0
     _mock_dd_clears_sigs=1
+    _mock_dd_rc=0
     _mock_ask_line_answer=""
     _mock_partprobe_rc=0
     _mock_blockdev_rc=0
@@ -157,7 +159,7 @@ dd() {
     if [[ "$_mock_dd_clears_sigs" == "1" && -n "$of" ]]; then
         unset "_mock_wipefs_sigs[$of]"
     fi
-    return 0
+    return "$_mock_dd_rc"
 }
 
 partprobe() {
@@ -392,6 +394,26 @@ function test_dd_residue_fails {
         "WARN: /dev/sdzz still shows signatures after dd"
 }
 
+function test_dd_failure_notifies {
+    echo "=== dd failure still notifies the kernel ==="
+    _mock_reset_fixture
+    _mock_wipefs_sigs["/dev/sdzz"]="gpt"
+    _mock_wipefs_fail=1
+    _mock_dd_rc=1
+    _run_zfswipe /dev/sdzz --confirmed
+    test_start "failing dd ends the run rc=8"
+    assert_rc 8 "$_zfswipe_rc"
+    test_start "kernel/udev notification still runs after a failed dd"
+    # Earlier ladder steps may already have erased signatures (labelclear
+    # ran, wipefs may have partially erased), so the kernel must re-read
+    # the device even though the wipe failed.
+    if _called "partprobe /dev/sdzz" && _called "udevadm settle --timeout=10"; then
+        test_pass
+    else
+        test_fail "notification calls: $(cat "$_MOCK_CALLS")"
+    fi
+}
+
 function test_notify_kernel {
     echo "=== notification failure handling ==="
     _mock_reset_fixture
@@ -449,6 +471,7 @@ test_labelclear_short_circuit
 test_wipefs_path
 test_dd_fallback_math
 test_dd_residue_fails
+test_dd_failure_notifies
 test_notify_kernel
 test_partition_target
 

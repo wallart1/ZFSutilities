@@ -27,10 +27,13 @@ from alignment_stats import (
 from disk_repository import format_blocksize
 
 # Severity ladder for findings: OK confirms alignment, info suggests a
-# look, WARN marks real misalignment (read-modify-write somewhere).
+# look, WARN marks real misalignment (read-modify-write somewhere). The
+# rank orders the same ladder for worst-state accumulation (ladder rungs
+# shared by several volumes render at the worst verdict earned).
 SEV_OK = "OK"
 SEV_INFO = "info"
 SEV_WARN = "WARN"
+_SEV_RANK = {SEV_OK: 0, SEV_INFO: 1, SEV_WARN: 2}
 
 # Minimum since-boot operations before histogram-based advice is trusted.
 OBSERVATION_MIN_OPS = 1000
@@ -120,7 +123,7 @@ class LadderBar:
     the pool block, info advisory or unresolved.
     """
 
-    layer: str  # "Device" | "Pool" | "Dataset" | "VM"
+    layer: str  # "Device" | "Pool" | "Dataset" | "VM" | "VM fs"
     label: str
     size: int
     state: str
@@ -683,8 +686,9 @@ def _vm_findings(sample):
                     "VM",
                     "(all)",
                     SEV_INFO,
-                    "PVE VM configs are not readable on this host (two-node installs keep "
-                    "them on the compute node)",
+                    "PVE VM configs could not be read — neither the local "
+                    "/etc/pve/qemu-server nor the compute-node fetch over ssh "
+                    "succeeded",
                     "guest-visible sector and disk-option checks are suspended",
                     key="pve-configs-unreadable",
                 )
@@ -726,7 +730,45 @@ def _vm_findings(sample):
                     key="vm-guest-sectors-implicit",
                 )
             )
+        findings.extend(_guest_fs_findings(sample, ds, short, volblock))
     return findings
+
+
+def _guest_fs_findings(sample, ds, short, volblock):
+    """Probed guest-filesystem findings for one volume (rule 4, probe half).
+
+    The guest agent reported the filesystems this volume carries
+    (``alignment_guestfs``); a filesystem block below the volblocksize is
+    the partial-block hazard this view exists to expose — every guest
+    block write lands inside one volblock, costing read-modify-write on
+    the zvol. Advisory only: volblocksize is fixed at creation.
+    """
+    entries = sample.guest_fs.get(short)
+    if volblock is None or not entries:
+        return []
+    below = [
+        entry for entry in entries if entry.blocksize is not None and entry.blocksize < volblock
+    ]
+    if not below:
+        return []
+    listing = ", ".join(
+        f"{entry.fstype} {format_blocksize(entry.blocksize)} on {entry.mount}"
+        for entry in below[:3]
+    )
+    more = f" (+{len(below) - 3} more)" if len(below) > 3 else ""
+    return [
+        Finding(
+            "VM",
+            ds.name,
+            SEV_WARN,
+            f"probed guest filesystems on {short} use blocks below the "
+            f"{format_blocksize(volblock)} volblocksize: {listing}{more}",
+            "each guest block write becomes a partial volblock write (read-modify-write); "
+            "volblocksize is fixed at creation — size future zvols, or move-vm-disk "
+            "targets, at the guest filesystem's block size",
+            key="vm-guest-fs-below-volblock",
+        )
+    ]
 
 
 def _memory_findings(sample):
@@ -896,13 +938,18 @@ def blocksize_ladder(sample):
 
     One LadderPool per pool carrying the rungs the chart draws, in stack
     order: device physical sectors (grouped by size), the pool's ashift
-    block, dataset recordsize/volblocksize groups, and VM guest sectors.
+    block, dataset recordsize/volblocksize groups, VM guest sectors, and
+    — when the guest agent answered (``alignment_guestfs``) — the guest
+    filesystem blocksizes probed inside each VM, judged against their
+    zvol's volblocksize (a guest fs block below the volblock is the
+    partial-block hazard; several volumes under one rung render at the
+    worst verdict earned).
     Sources degrade exactly like the tables beside the chart: members
     without sector data lose their device rungs, a pool whose ashift is
     unresolved loses the reference rung (and its other rungs render as
     info), a pool's dataset rungs drop with its per-pool dataset read,
-    and VM rungs appear only for zvols referenced in local PVE configs.
-    Rung states follow the analysis rules: WARN below the ashift block
+    and VM rungs appear only for zvols referenced in PVE configs. Rung
+    states follow the analysis rules: WARN below the ashift block
     (padded) or — for device rungs — above it (read-modify-write), info
     when the verdict rests on a smaller neighbour (guest sector below
     its zvol's volblocksize) or cannot be judged.
@@ -953,10 +1000,12 @@ def blocksize_ladder(sample):
                 LadderBar("Dataset", _rung_label("Dataset", prop, size, count), size, state)
             )
         guests: dict[int, list] = {}
+        guest_fs: dict[tuple[str, int], list] = {}
         for ds in sample.datasets:
             if ds.name.split("/", 1)[0] != pool.name or ds.kind != "volume":
                 continue
-            option = sample.vm_disks.get(ds.name.rsplit("/", 1)[-1])
+            short = ds.name.rsplit("/", 1)[-1]
+            option = sample.vm_disks.get(short)
             if option is None:
                 continue
             sector = _guest_sector(option)
@@ -964,11 +1013,27 @@ def blocksize_ladder(sample):
             entry = guests.setdefault(sector, [0, False])
             entry[0] += 1
             entry[1] = entry[1] or (volblock is not None and sector < volblock)
+            for fs_entry in sample.guest_fs.get(short, []):
+                # One rung per (fstype, size) at the worst verdict any
+                # contributing volume earned (volumes under one rung may
+                # carry different volblocksizes).
+                group = guest_fs.setdefault((fs_entry.fstype, fs_entry.blocksize), [0, SEV_OK])
+                group[0] += 1
+                if volblock is None:
+                    state = SEV_INFO
+                else:
+                    state = SEV_WARN if fs_entry.blocksize < volblock else SEV_OK
+                if _SEV_RANK[state] > _SEV_RANK[group[1]]:
+                    group[1] = state
         for sector, (count, below_volblock) in sorted(guests.items()):
             state = SEV_INFO if below_volblock else SEV_OK
             bars.append(
                 LadderBar("VM", _rung_label("VM", "guest sector", sector, count), sector, state)
             )
+        for (fstype, size), (count, state) in sorted(
+            guest_fs.items(), key=lambda item: (item[0][1], item[0][0])
+        ):
+            bars.append(LadderBar("VM fs", _rung_label("VM fs", fstype, size, count), size, state))
         ladders.append(
             LadderPool(pool=pool.name, ashift=pool.ashift_effective, block=block, bars=bars)
         )

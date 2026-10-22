@@ -40,22 +40,25 @@ from alignment_analysis import (
     classify_workload,
     vdev_groups,
 )
+from alignment_guestfs import GuestFsProber
 from alignment_stats import collect_alignment_sample
 from charting import (
     LADDER_EMPTY_HEIGHT,
     LADDER_LEGEND,
     LADDER_ROW_HEIGHT,
-    LADDER_STATE_COLORS,
-    REFERENCE_COLOR,
+    chart_palette,
     create_blocksize_ladder,
     format_blocksize,
     ladder_axis_range,
+    ladder_minimum_width,
     ladder_pixel_height,
 )
 from disk_repository import format_bytes
 from feature_config import get_alignment_survey, get_workload_profiles
-from gi.repository import GLib, Gtk
+from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
+    TREEVIEW_MIN_WIDTH,
+    capped_treeview_scroll,
     configure_treeview_column,
     note_label,
     section_header,
@@ -77,6 +80,11 @@ _MEMORY_ROWS = (
 )
 
 _SEVERITY_MARKERS = {"OK": "✓ OK", "info": "• info", "WARN": "⚠ WARN"}
+
+# Slack subtracted from a column's width when deciding whether cell text
+# fits: the cell's focus padding plus a pixel or two, so exactly-fitting
+# text does not pop a tooltip.
+_CELL_FIT_SLACK_PX = 6
 
 
 def _fmt_pct(fraction):
@@ -101,6 +109,7 @@ class BlocksizeLadder:
         self.title = title
         self._pools = []
         self._unavailable = False
+        self._height = LADDER_EMPTY_HEIGHT
         self.widget = Gtk.DrawingArea()
         self.widget.set_size_request(-1, LADDER_EMPTY_HEIGHT)
         self.widget.connect("draw", self._on_draw)
@@ -111,8 +120,8 @@ class BlocksizeLadder:
         """Replace the ladder's pool set and redraw."""
         self._pools = list(pools)
         self._unavailable = unavailable
-        height = ladder_pixel_height(self._pools) if self._pools else LADDER_EMPTY_HEIGHT
-        self.widget.set_size_request(-1, height)
+        self._height = ladder_pixel_height(self._pools) if self._pools else LADDER_EMPTY_HEIGHT
+        self._apply_size_request()
         self.widget.queue_draw()
 
     @property
@@ -120,15 +129,29 @@ class BlocksizeLadder:
         """Snapshot of the rendered pool set."""
         return list(self._pools)
 
+    def _apply_size_request(self):
+        """Request the content-derived minimum width; the viewport stretches.
+
+        The width request is the content minimum (``ladder_minimum_width``)
+        once pools exist, unset when empty; whenever the page is wider the
+        viewport grants the drawing area the full page width, so the
+        request is a floor, not a target.
+        """
+        width = ladder_minimum_width(self._pools) if self._pools else -1
+        self.widget.set_size_request(width, self._height)
+
     # -- drawing -----------------------------------------------------------
 
     def _on_draw(self, widget, cr):
+        # Palette resolved per draw from the widget's style context: the
+        # ladder follows the GTK theme, like every chart on the page.
+        palette = chart_palette(widget)
         width = widget.get_allocated_width()
         height = widget.get_allocated_height()
-        cr.set_source_rgb(1, 1, 1)
+        cr.set_source_rgb(*palette.background)
         cr.paint()
         cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-        cr.set_font_size(9)
+        cr.set_font_size(13)
 
         if not self._pools:
             message = (
@@ -136,7 +159,7 @@ class BlocksizeLadder:
                 if self._unavailable
                 else f"{self.title} — no pools found"
             )
-            cr.set_source_rgb(0.42, 0.42, 0.42)
+            cr.set_source_rgb(*palette.muted)
             cr.move_to(16, height // 2)
             cr.show_text(message)
             return
@@ -161,13 +184,13 @@ class BlocksizeLadder:
         # Log2 grid with tick labels along the bottom.
         for tick in ticks:
             x = _x(tick)
-            cr.set_source_rgb(0.87, 0.87, 0.87)
+            cr.set_source_rgb(*palette.grid)
             cr.move_to(x, top)
             cr.line_to(x, height - 18)
             cr.stroke()
             label = format_blocksize(tick)
             extent = cr.text_extents(label)
-            cr.set_source_rgb(0.35, 0.35, 0.35)
+            cr.set_source_rgb(*palette.muted)
             cr.move_to(x - extent.x_advance / 2, height - 6)
             cr.show_text(label)
 
@@ -175,28 +198,28 @@ class BlocksizeLadder:
         for pool in self._pools:
             # Header row: bold pool name with a separator under it.
             cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-            cr.set_source_rgb(0.20, 0.20, 0.20)
-            cr.move_to(8, y + 13)
+            cr.set_source_rgb(*palette.foreground)
+            cr.move_to(8, y + 14)
             cr.show_text(pool.pool)
             cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-            cr.set_source_rgb(0.86, 0.86, 0.86)
+            cr.set_source_rgb(*palette.grid)
             cr.move_to(left, y + LADDER_ROW_HEIGHT - 0.5)
             cr.line_to(right, y + LADDER_ROW_HEIGHT - 0.5)
             cr.stroke()
             y += LADDER_ROW_HEIGHT
             pool_top = y - LADDER_ROW_HEIGHT
             for bar in pool.bars:
-                color = LADDER_STATE_COLORS.get(bar.state, LADDER_STATE_COLORS["info"])
+                color = palette.states.get(bar.state, palette.states["info"])
                 cr.set_source_rgb(*color)
                 cr.rectangle(left, y + 4, _x(bar.size) - left, LADDER_ROW_HEIGHT - 9)
                 cr.fill()
-                cr.set_source_rgb(0.25, 0.25, 0.25)
-                cr.move_to(8, y + 13)
+                cr.set_source_rgb(*palette.foreground)
+                cr.move_to(8, y + 14)
                 cr.show_text(bar.label)
                 y += LADDER_ROW_HEIGHT
             if pool.block is not None:
                 # Dashed ashift reference spanning the header and rungs.
-                cr.set_source_rgb(*REFERENCE_COLOR)
+                cr.set_source_rgb(*palette.reference)
                 cr.set_dash([4, 4])
                 cr.move_to(_x(pool.block), pool_top)
                 cr.line_to(_x(pool.block), y)
@@ -207,11 +230,11 @@ class BlocksizeLadder:
         x = right
         for state, text in reversed(LADDER_LEGEND):
             extent = cr.text_extents(text)
-            cr.set_source_rgb(0.30, 0.30, 0.30)
+            cr.set_source_rgb(*palette.muted)
             cr.move_to(x - extent.x_advance, 12)
             cr.show_text(text)
             x -= extent.x_advance + 14
-            cr.set_source_rgb(*LADDER_STATE_COLORS[state])
+            cr.set_source_rgb(*palette.states[state])
             cr.rectangle(x, 4, 8, 8)
             cr.fill()
             x -= 18
@@ -305,10 +328,20 @@ def _availability_note(sample):
             "advice stays per-pool)"
         )
     if not sample.pve_available:
-        missing.append("PVE VM configs (two-node installs keep them on the compute node)")
+        missing.append("PVE VM configs (the local /etc/pve and the compute-node fetch both failed)")
     notes = []
     if missing:
         notes.append("Unavailable on this host: " + ", ".join(missing) + ".")
+    if sample.guest_fs_failures:
+        # Per-volume degrade: the guest agent answered for other volumes,
+        # so each unprobed volume names its own reason.
+        notes.append(
+            "Guest filesystems unprobed for: "
+            + ", ".join(
+                f"{short} ({reason})" for short, reason in sorted(sample.guest_fs_failures.items())
+            )
+            + "."
+        )
     if sample.dataset_read_failures:
         # Per-pool degrade: the failed pools lost only their dataset rows;
         # the rest of the chain stays live, so the note names the pools
@@ -329,28 +362,99 @@ def _availability_note(sample):
     return " ".join(notes)
 
 
-def _table(app, store_attr, columns, state_key, hidden_key=False):
-    """Build a bound TreeView; return the view and store (memory_page pattern).
+def _table(
+    app, store_attr, columns, state_key, hidden_key=False, sortable=False, expand_index=None
+):
+    """Build a bound TreeView in a 20-row scrolled window; return both.
 
-    With *hidden_key* the store carries one extra leading column holding
-    each row's identity key for ``_reconcile_rows``; no TreeViewColumn is
+    *columns* are ``(title, width)`` pairs: every column starts at a sane
+    fixed width rather than a sliver. *expand_index* names one non-last
+    column that absorbs width slack — GTK otherwise re-expands the last
+    column to fill the view, which makes shrinking it look ineffective
+    (the far-right column keeps its honest width this way). With
+    *hidden_key* the store carries one extra leading column holding each
+    row's identity key for ``_reconcile_rows``; no TreeViewColumn is
     created for it, so it never renders. Keying on a hidden column (rather
     than on rendered text) keeps row identity stable while visible cells
-    drift between refreshes.
+    drift between refreshes. *sortable* makes every visible column
+    clickable and sorted (text order, the schedule-page convention).
+
+    The view sits in its own scrolled window sized for at most 20 rows so
+    one long table cannot stretch the page: fewer rows keep the natural
+    height, more rows scroll inside the window (the section ordering and
+    the page-level scroll restore stay as they are). The window carries
+    its own horizontal scrollbar for wide columns (see
+    ``gui_helpers.capped_treeview_scroll``). Cells ellipsize and expose
+    their full text through ``_on_cell_query_tooltip`` — wrapping would
+    churn row heights, which the scroll-stability design depends on.
     """
     store = Gtk.ListStore(*([str] * (len(columns) + 1 if hidden_key else len(columns))))
     view = Gtk.TreeView(model=store)
     view.set_headers_visible(True)
     offset = 1 if hidden_key else 0
-    for index, title in enumerate(columns):
+    for index, (title, width) in enumerate(columns):
         renderer = Gtk.CellRendererText()
+        renderer.set_property("ellipsize", Pango.EllipsizeMode.END)
         col = Gtk.TreeViewColumn(title, renderer, text=index + offset)
-        configure_treeview_column(col)
+        configure_treeview_column(col, width=width, min_width=60)
+        if index == expand_index:
+            col.set_expand(True)
+        if sortable:
+            col.set_sort_column_id(index + offset)
+            col.set_clickable(True)
         view.append_column(col)
     setattr(app, store_attr, store)
     app._ui_state.bind_treeview(view, state_key)
     view.set_size_request(-1, 60)
-    return view, store
+    view.set_has_tooltip(True)
+    view.connect("query-tooltip", _on_cell_query_tooltip, store, offset)
+    scroll = capped_treeview_scroll(view)
+    return scroll, store, view
+
+
+def _on_cell_query_tooltip(view, x, y, keyboard_mode, tooltip, store, offset):
+    """Show the full text of a hovered cell whose text does not fit.
+
+    Cells ellipsize, so the tooltip matters only where the rendered text
+    is actually clipped: the text is measured with the view's own Pango
+    context against the column's allocated width (``_cell_text_fits``).
+    Hovers over empty space, cells whose text fits, and empty cells
+    return False so GTK falls through to the default behaviour. The
+    store column is the visible column index plus *offset* (the hidden
+    identity key occupies column 0 when present).
+    """
+    bin_x, bin_y = view.convert_widget_to_bin_window_coords(x, y)
+    hit = view.get_path_at_pos(bin_x, bin_y)
+    if not hit or hit[1] is None:
+        return False
+    path, column = hit[0], hit[1]
+    col_index = view.get_columns().index(column)
+    text = store[path][col_index + offset]
+    if not isinstance(text, str) or not text:
+        return False
+    if _cell_text_fits(view, column, text):
+        return False
+    tooltip.set_text(text)
+    return True
+
+
+def _cell_text_fits(view, column, text):
+    """True when *text* renders within *column*'s width; None when unsure.
+
+    The comparison needs real integers out of GTK (the Pango layout's
+    pixel size, the column's allocated width); anything else — the
+    mocked-GTK test environment, an exotic backend — answers None so the
+    caller shows the tooltip rather than suppressing it on a guess.
+    """
+    try:
+        layout = view.create_pango_layout(text)
+        pixel_width, _pixel_height = layout.get_pixel_size()
+        column_width = column.get_width()
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not isinstance(pixel_width, int) or not isinstance(column_width, int):
+        return None
+    return pixel_width <= max(0, column_width - _CELL_FIT_SLACK_PX)
 
 
 def _reconcile_rows(store, rows, key_column=0):
@@ -365,6 +469,10 @@ def _reconcile_rows(store, rows, key_column=0):
     at their ordered position so a change shifts only the rows below it.
     *rows* must be in a deterministic order — a pure function of its key
     set — which the callers guarantee by construction.
+
+    When the user has clicked a column sort, the store owns the ordering:
+    rows are then updated/appended in place and left in the sort's order
+    (insert positions are ignored by sorted stores anyway).
     """
     existing = {}
     tree_iter = store.get_iter_first()
@@ -373,6 +481,24 @@ def _reconcile_rows(store, rows, key_column=0):
         tree_iter = store.iter_next(tree_iter)
     for key in [key for key in existing if key not in rows]:
         store.remove(existing.pop(key))
+    # Sorted stores own the ordering. PyGObject's get_sort_column_id
+    # returns a (column, order) tuple when a sort is active and None when
+    # not; the MagicMock/fake stores of the test suites answer something
+    # else entirely, and the tuple check keeps them on the ordered path.
+    try:
+        sort_state = store.get_sort_column_id()
+    except AttributeError:
+        sort_state = None
+    if isinstance(sort_state, tuple):
+        for key, row in rows.items():
+            tree_iter = existing.get(key)
+            if tree_iter is None:
+                store.append(list(row))
+                continue
+            for col_idx, val in enumerate(row):
+                if store.get_value(tree_iter, col_idx) != val:
+                    store.set_value(tree_iter, col_idx, val)
+        return
     tree_iter = store.get_iter_first()
     for position, (key, row) in enumerate(rows.items()):
         current = store.get_value(tree_iter, key_column) if tree_iter is not None else None
@@ -436,24 +562,36 @@ def create_alignment_view(app):
     # section_header() takes no margins, so the section break is sized here:
     # the box spacing (12) plus this top margin puts a clearly larger gap
     # above the heading than the spacing below it, whatever the theme.
+    # Every column sorts (text order); the hidden identity key never does.
     chain_header = section_header("Blocksize scan")
     chain_header.set_margin_top(12)
     box.pack_start(chain_header, False, False, 0)
-    chain_view, _chain_store = _table(
+    chain_scroll, _chain_store, _chain_view = _table(
         app,
         "_alignment_chain_store",
-        ["Layer", "Object", "Block size", "Detail"],
+        [
+            ("Layer", 70),
+            ("Object", 280),
+            ("Block size", 200),
+            ("Detail", 380),
+        ],
         "alignment_chain_view",
         hidden_key=True,
+        sortable=True,
+        expand_index=1,
     )
-    box.pack_start(chain_view, False, False, 0)
+    box.pack_start(chain_scroll, False, False, 0)
 
     # --- Blocksize ladder ---
     # The visual companion of the scan table above: the same device → pool
     # → dataset → VM chain drawn as a log2-scale ladder per pool, with the
     # pool's ashift block as a dashed reference line (renderer and shared
     # vocabulary from the charting module — matplotlib when installed, the
-    # Cairo BlocksizeLadder below otherwise).
+    # Cairo BlocksizeLadder below otherwise). The canvas requests its
+    # content-derived minimum width and stretches to the full page width
+    # whenever the page is wider (see ``_floor_ladder_scroll_width``); the
+    # scrolled window shows its own horizontal scrollbar whenever the page
+    # is narrower than that minimum.
     box.pack_start(
         section_header("Blocksize Ladder", "log₂ scale · dashed line = the pool's ashift block"),
         False,
@@ -461,48 +599,109 @@ def create_alignment_view(app):
         0,
     )
     app._alignment_ladder = create_blocksize_ladder()
-    box.pack_start(app._alignment_ladder.widget, False, False, 0)
+    app._alignment_ladder_scroll = Gtk.ScrolledWindow()
+    app._alignment_ladder_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+    # min_content_width keeps the canvas's width request from pinning the
+    # page wide; max_content_width is floored at the content minimum by
+    # _floor_ladder_scroll_width (a max below the canvas's requested
+    # minimum makes GTK clamp the canvas and drop the scrollbar).
+    app._alignment_ladder_scroll.set_min_content_width(TREEVIEW_MIN_WIDTH)
+    app._alignment_ladder_scroll.add(app._alignment_ladder.widget)
+    box.pack_start(app._alignment_ladder_scroll, False, False, 0)
+    # The box allocation feeds the max_content_width floor as the window
+    # resizes; a changed pool set re-floors it from the refresh path.
+    box.connect("size-allocate", _on_ladder_box_size_allocate, app)
 
     # --- Pool topology ---
     box.pack_start(section_header("Pool Topology"), False, False, 0)
-    topology_view, _topology_store = _table(
+    topology_scroll, _topology_store, _topology_view = _table(
         app,
         "_alignment_topology_store",
-        ["Pool", "Class", "Vdev", "Type", "Members", "Block size"],
+        [
+            ("Pool", 90),
+            ("Class", 80),
+            ("Vdev", 170),
+            ("Type", 70),
+            ("Members", 260),
+            ("Block size", 220),
+        ],
         "alignment_topology_view",
         hidden_key=True,
+        expand_index=4,
     )
-    box.pack_start(topology_view, False, False, 0)
+    box.pack_start(topology_scroll, False, False, 0)
 
     # --- Findings ---
     box.pack_start(section_header("Findings & Recommendations"), False, False, 0)
-    findings_view, _findings_store = _table(
+    findings_scroll, _findings_store, _findings_view = _table(
         app,
         "_alignment_findings_store",
-        ["Severity", "Layer", "Subject", "Finding", "Recommendation"],
+        [
+            ("Severity", 90),
+            ("Layer", 70),
+            ("Subject", 180),
+            ("Finding", 360),
+            ("Recommendation", 380),
+        ],
         "alignment_findings_view",
         hidden_key=True,
+        expand_index=3,
     )
-    box.pack_start(findings_view, False, False, 0)
+    box.pack_start(findings_scroll, False, False, 0)
 
     # --- Workload ---
     box.pack_start(section_header("Workload (since boot)"), False, False, 0)
-    workload_view, _workload_store = _table(
+    workload_scroll, _workload_store, _workload_view = _table(
         app,
         "_alignment_workload_store",
         [
-            "Pool",
-            "Verdict",
-            "Dominant sync",
-            "Dominant (all)",
-            "Ops since boot",
-            "Prefetch hit rate",
+            ("Pool", 110),
+            ("Verdict", 170),
+            ("Dominant sync", 140),
+            ("Dominant (all)", 140),
+            ("Ops since boot", 120),
+            ("Prefetch hit rate", 130),
         ],
         "alignment_workload_view",
+        expand_index=1,
     )
-    box.pack_start(workload_view, False, False, 0)
+    box.pack_start(workload_scroll, False, False, 0)
 
     return box
+
+
+def _floor_ladder_scroll_width(app, box_width=None):
+    """Keep the ladder window's max_content_width at or above its content.
+
+    The canvas requests ``ladder_minimum_width`` of its pools, and the
+    scrolled window must never cap content width below that request: GTK
+    resolves a ``max_content_width`` under the child's requested minimum
+    by clamping the canvas to the window and dropping the horizontal
+    scrollbar — the ladder would render cut off with no way to scroll.
+    The floor therefore tracks the wider of the granted page width
+    (*box_width*, or the window's current allocation between refreshes)
+    and the content minimum.
+    """
+    ladder = getattr(app, "_alignment_ladder", None)
+    scroll = getattr(app, "_alignment_ladder_scroll", None)
+    if ladder is None or scroll is None:
+        return
+    if box_width is None:
+        box_width = scroll.get_allocated_width()
+    if not isinstance(box_width, int):
+        # Mocked or exotic backends cannot answer a width; the floor is
+        # re-applied from the size-allocate handler once one exists.
+        return
+    floor = max(box_width, ladder_minimum_width(ladder.pools))
+    if scroll.get_max_content_width() != floor:
+        scroll.set_max_content_width(floor)
+
+
+def _on_ladder_box_size_allocate(box, allocation, app):
+    """Re-floor the ladder window's max_content_width on page resizes."""
+    if allocation.width <= 1:
+        return
+    _floor_ladder_scroll_width(app, box_width=allocation.width)
 
 
 # ---------------------------------------------------------------------------
@@ -521,9 +720,17 @@ def refresh_alignment_view(app):
     disk_repo = getattr(ctx, "disk_repository", None)
     survey = get_alignment_survey(app.config)
     profiles = get_workload_profiles(app.config)
+    # One prober lives for the page's lifetime: its TTL cache keeps the
+    # 1-300 s refresh cadence from re-probing guests every cycle.
+    prober = getattr(app, "_alignment_guest_prober", None)
+    if prober is None:
+        prober = GuestFsProber()
+        app._alignment_guest_prober = prober
 
     def _collect():
-        sample = collect_alignment_sample(zfs_repo=zfs_repo, disk_repo=disk_repo)
+        sample = collect_alignment_sample(
+            zfs_repo=zfs_repo, disk_repo=disk_repo, guest_prober=prober
+        )
         GLib.idle_add(_finish_refresh, app, sample, survey, profiles)
 
     def _finish_refresh(_app, sample, _survey, _profiles):
@@ -656,6 +863,9 @@ def _apply_ladder(app, sample):
     chart's own unavailable placeholder.
     """
     app._alignment_ladder.update(blocksize_ladder(sample), unavailable=not sample.pools_available)
+    # A changed pool set changes the content minimum; re-floor the window's
+    # max_content_width so it can never sit below the new request.
+    _floor_ladder_scroll_width(app)
 
 
 def _apply_topology_rows(app, sample):
@@ -692,13 +902,13 @@ def _apply_topology_rows(app, sample):
 
 
 def _vm_detail(sample, ds):
-    """Detail cell for a VM chain row: the PVE disk line when known."""
+    """Detail cell for a VM chain row: PVE disk line plus probed guest FS."""
     short = ds.name.rsplit("/", 1)[-1]
     option = sample.vm_disks.get(short)
     if option is None:
         if not sample.pve_available:
-            return "PVE configs unreadable on this host"
-        return "not referenced in local PVE configs"
+            return "PVE configs unreadable (local directory and compute-node fetch both failed)"
+        return "not referenced in PVE configs"
     opts = " ".join(
         f"{key}={value}" for key, value in sorted(option.options.items()) if value != "1"
     )
@@ -707,7 +917,27 @@ def _vm_detail(sample, ds):
     for part in (opts, flags):
         if part:
             detail += f" {part}"
+    guest_fs = _fmt_guest_fs(sample, short)
+    if guest_fs:
+        detail += f" · {guest_fs}"
     return detail
+
+
+def _fmt_guest_fs(sample, short):
+    """Probed guest-filesystem summary for one zvol; '' when unprobed."""
+    entries = sample.guest_fs.get(short)
+    if entries:
+        parts = [
+            f"{entry.fstype} {format_blocksize(entry.blocksize)} on {entry.mount}"
+            for entry in entries[:3]
+        ]
+        if len(entries) > 3:
+            parts.append(f"+{len(entries) - 3} more")
+        return " · ".join(parts)
+    reason = sample.guest_fs_failures.get(short)
+    if reason:
+        return f"guest fs unprobed: {reason}"
+    return ""
 
 
 def _finding_row(finding):

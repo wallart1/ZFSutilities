@@ -442,13 +442,20 @@ class BackupRunner:
                 except Exception as exc:
                     self._log(f"WARN: Pre-step callback failed: {exc}")
             if not self._spawn_process(step.description, step.command, step.is_rsync):
-                if step.post_callback is not None:
-                    try:
-                        step.post_callback()
-                    except Exception as exc:
-                        self._log(f"WARN: Post-step callback failed: {exc}")
-                self.current_step += 1
-                GLib.idle_add(self._run_next_step)
+                # A step that never launched must not be reported as
+                # success: _spawn_process already logged its launch error;
+                # treat the step as failed (post_callback stays unrun — it
+                # assumes the step's work happened) and finish rc=1, with
+                # the finally step (if any) still running first.
+                self._log(f"FATAL: Could not launch step: {step.description}")
+                self._cleanup_io()
+                self.set_stdin_enabled(False)
+                if self._finally_step and not self._finally_ran:
+                    self._fatal_rc = 1
+                    GLib.idle_add(self._run_finally_step)
+                else:
+                    self._finish(rc=1)
+                return
         except Exception as exc:
             self._log(f"WARN: Unexpected error while starting next step: {exc}")
             for line in traceback.format_exc().splitlines():

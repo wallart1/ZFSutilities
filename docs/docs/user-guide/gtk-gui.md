@@ -269,7 +269,11 @@ The sidebar exposes these pages, with the storage-infrastructure tabs
 
 The Dashboard provides an at-a-glance overview of ZFS health and active locks.
 It refreshes automatically every 30 seconds while visible, or manually via the
-**Refresh** action button.
+**Refresh** action button. The Recent Operations, Running Tasks, and Active
+Locks tables each scroll on their own: a table sizes to its content up to 20
+rows and grows its own vertical scrollbar beyond that (a horizontal one
+appears whenever the columns overflow the window), so a short list no longer
+leaves a tall empty window.
 
 !!! tip "Dashboard data during heavy load"
     Pool and iSCSI information comes from live `zpool`/`targetcli` commands with
@@ -1234,7 +1238,13 @@ refresh redraws rolling time-series charts. Charts render through
 matplotlib when that optional package is installed and through the
 built-in Cairo renderer otherwise, so the display updates dynamically
 either way (see the developer note on
-[GUI charting](../developer-guide/charting.md)).
+[GUI charting](../developer-guide/charting.md)). The Live Charts header
+names the active renderer, so a Cairo fallback is visible at a glance;
+its usual cause is the GUI running as root while matplotlib sits in a
+user's pip `--user` site — install the system package
+(`python3-matplotlib`) instead. Chart colours follow
+the GTK theme — background, text, grid, and series colours resolve from
+the active theme, with brighter series on dark themes.
 
 The tab hosts two views behind a **Live Charts / Blocksize Alignment** radio
 switcher below the refresh controls. **Live Charts** is the real-time monitor
@@ -1299,7 +1309,15 @@ context.
   same shape as the L2ARC table.
 
 Both device tables have user-resizable columns whose widths are
-retained across GUI restarts, like the tables on the other tabs.
+retained across GUI restarts, like the tables on the other tabs. Each
+sits in its own scrolled window with a fixed twenty-line height: the
+vertical scrollbar stays at the table's right edge, a horizontal
+scrollbar appears whenever the columns overflow the window, and a table
+with more rows scrolls inside that fixed height instead of stretching
+the page — while a short or empty table keeps its full twenty-line
+window rather than collapsing to its content. Spare width beyond the
+columns' widths goes to the Vdev column, so the right-most column
+always shows its true width and shrinks honestly when resized.
 
 Charts keep roughly 300 samples (about 25 minutes at the default 5 s
 interval) and auto-scale their Y axes. With matplotlib installed the
@@ -1361,24 +1379,45 @@ charts view:
   geometry (512e advanced-format disks are called out), each dataset's
   `recordsize` or `volblocksize` with its property source, and each
   `vm-<id>-disk-<n>` zvol's PVE disk-line options (`bus`, `discard`,
-  `iothread`, `secs=…`).
+  `iothread`, `secs=…`) plus the guest filesystems probed on that volume
+  (e.g. `ext4 4K on / · xfs 4K on /var`). Every column sorts (click a
+  header; text order), long cells ellipsize with the full text on hover,
+  and every table on this view keeps a fixed twenty-line window — longer
+  tables scroll inside it, shorter or empty ones keep the full height.
+  Like every
+  table on this tab it scrolls on its own — vertical scrollbar at the
+  table's right edge, horizontal scrollbar whenever the columns overflow
+  the window — and spare width beyond the columns' widths goes to one
+  wide text column per table (Object, Members, Finding, or Verdict), so
+  the right-most column keeps its true width and shrinks honestly when
+  resized.
 - **Blocksize ladder**: the same chain drawn visually — a log₂-scale
   ladder, one row per rung per pool (each distinct device physical
   sector, the pool's ashift block, each distinct
   `recordsize`/`volblocksize` with a ×count when several datasets share
-  it, and the VM guest sector), with a dashed reference line at each
+  it, the VM guest sector, and — when the guest agent answered — each
+  distinct guest filesystem blocksize), with a dashed reference line at each
   pool's ashift block. Misalignment reads at a glance: a rung that ends
   left of its pool's dashed line sits below the ashift block (padding /
   partial-block cost), a device rung that passes right of it means the
   ashift block is below the physical sector (read-modify-write), and
   colour carries the verdict — blue aligned, orange mismatched, grey
-  advisory or below its zvol's `volblocksize`. The ladder renders through
+  advisory or unresolved. Probed guest filesystem rungs judge against
+  their zvol's `volblocksize`: a guest filesystem block below the
+  volblock (the common 4K-under-16K shape) renders orange — every guest
+  block write becomes a partial volblock write. The ladder renders through
   matplotlib when that optional package is installed and through the
   built-in Cairo renderer otherwise (the same renderer choice as the
   live charts), and its inputs degrade per source exactly like the scan
   table above — a failed source simply drops its rungs, a pool with an
   unresolved ashift keeps its other rungs in grey without a reference
   line, and a wholesale pool failure shows the chart's own note instead.
+  The chart's text is sized one notch above the rolling charts' so the
+  labels read at a glance. It fills the available page width whenever
+  the window is wide enough and never renders below its readable
+  content-derived width — a narrower window gets the chart's own
+  horizontal scrollbar over the full-size chart instead of a squeezed
+  one.
 - **Pool topology**: each pool's vdev layout, one row per vdev group —
   its class (`data`, `special`, `log`, `cache`, `spare`), the group
   (`mirror-0`, `raidz2-0`, or a bare disk), the group type (`mirror`,
@@ -1405,7 +1444,11 @@ charts view:
   counters are unavailable (OpenZFS older than 2.2, or a non-Linux
   port), observed-size advice falls back to the per-pool histogram —
   findings then name whole pools, not datasets — and both the
-  availability note and a findings row say so. A dataset's survey
+  availability note and a findings row say so. Probed guest filesystems
+  add their own rule: a guest filesystem block below the zvol's
+  `volblocksize` warns per volume, because every guest block write
+  lands inside one volblock (read-modify-write on the zvol) and
+  `volblocksize` is fixed at creation. A dataset's survey
   declaration, when one exists, is cited in the message so a stale
   answer is visible at a glance.
 - **Workload (since boot)**: per pool, the classifier verdict
@@ -1416,10 +1459,25 @@ charts view:
 Like the charts view, each data source degrades on its own with a note
 naming what is missing: request-size histograms, per-dataset I/O
 counters, ARC/prefetcher kstats, zfs/zpool reads, and PVE VM configs.
-The last one matters on two-node
-installs: the GUI runs on the storage node, but `/etc/pve/qemu-server`
-lives on the compute node, so VM-layer options are only read on
-single-node installs and otherwise noted as unavailable.
+The PVE configs are read from `/etc/pve/qemu-server` when the GUI host
+runs PVE, and otherwise fetched from the compute node over ssh (the
+same read-only channel the dashboard's version probes use), so
+VM-layer options work on two-node installs too; the note appears only
+when both reads fail. Guest filesystem probing needs the QEMU guest
+agent inside each VM (installed, enabled with `agent: 1`, and the VM
+running). Each volume's guest disk is identified by a deterministic
+chain: a pinned `serial=` on the PVE disk line first; otherwise the
+UUID/PARTUUID signatures of the zvol's own partitions (read on the
+storage host — filesystem UUIDs, GPT partition GUIDs, and LVM physical
+volume UUIDs all cross the VM boundary unchanged) intersected with the
+guest device tree; size-plus-bus-position only as the last resort for
+blank, signature-less zvols. Cloned volumes share signatures — when the
+intersection is not unique the volume is reported as ambiguous rather
+than guessed. LVM/RAID stacks inside the guest attribute through the
+device tree. Volumes that cannot be probed — agent absent, VM stopped,
+disk not matched, clone ambiguity, non-Linux guests — are named with
+their reason in the note while the other volumes keep their probed
+rows and rungs.
 
 Refreshes keep the page steady: the tables update their rows in place
 (a finding keeps its position even while the numbers inside it drift),
@@ -2308,7 +2366,7 @@ based on what is selected.
 | **Mount**                      | One or more mountable filesystems, snapshots, or volumes selected                                                                     | Mounts each selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for each selected snapshot. Unmounted ancestor datasets are mounted first so the target's mountpoint is not hidden. Ancestors with `canmount=off` are skipped — they cannot be mounted, and ZFS creates their mountpoint directory automatically when the target mounts. If a selected snapshot's parent dataset is unmounted, a dialog first lists the unmounted parent datasets and the snapshots they block and offers to mount them all: confirming mounts the parents root-first and then the snapshots; cancelling skips the mounts, and the snapshots report the parent-not-mounted warning. A selected volume is attached to a read-only loop device and its partitions are listed under the volume's entry (see below). Partitions labeled `No filesystem` cannot be mounted. Snapshots of volumes cannot be mounted; Mount is disabled for them with an explanatory tooltip. Disabled for holds.                                         |
 | **Unmount**                    | One or more mounted filesystems, snapshots, volume partitions, or loop-attached volumes selected                                      | Unmounts each selected filesystem (`sudo zfs unmount`) or snapshot (`sudo umount` on its `.zfs/snapshot/<name>` path). Pool root datasets can be unmounted. Unmounting a filesystem also unmounts its mounted children (see the note below). Unmounting a volume detaches its loop device after unmounting its mounted partitions. If processes are still using an item, a warning dialog lists them and asks you to close them before retrying. |
 | **Apply Profile…**             | Exactly one pool/dataset row (filesystem or volume) selected; snapshots, holds, volume partitions, and multi-selections disable it | Shows the workload-profile picker for the selected dataset; the list contains only the profiles whose *applies to* includes the dataset's type (filesystem or volume). A preview lists the exact `zfs set` commands; profiles that may be unsafe (e.g. `sync=disabled`) require explicit confirmation. Applying to a pool root sets pool-wide inheritance defaults. See [Workload profiles](#workload-profiles).          |
-| **Rewrite Data**               | Every selected item is a filesystem dataset, and OpenZFS 2.3.4+/2.4+ with the pool's `physical_rewrite` feature                       | Runs `zfs rewrite -P -r -x -v <mountpoint>` on each selected dataset in turn, physically rewriting existing blocks so they match the current properties (see [Workload profiles](#workload-profiles)). Volumes cannot be rewritten. Unmounted datasets are mounted temporarily and returned to their prior state. This may take a long time and cannot be undone.                                                                                |
+| **Rewrite Data**               | Every selected item is a filesystem dataset, and OpenZFS 2.3.4+/2.4+ with the pool's `physical_rewrite` feature                       | Runs `zfs rewrite -P -r -x -v <mountpoint>` on each selected dataset in turn, physically rewriting existing blocks so they match the current properties (see [Workload profiles](#workload-profiles)). Volumes cannot be rewritten. Unmounted datasets are mounted temporarily and returned to their prior state. This may take a long time and cannot be undone. The completion summary states what was actually rewritten — the per-dataset file counts captured from `zfs rewrite -v` — and says "rewrote nothing" when the command finished rc=0 without rewriting any file, never a bare "complete".                   |
 | **Sever Clone**                | At least one selected row is a clone dataset — a volume whose Origin column names a snapshot                                            | Runs `sever-vm-clone` on the selected clone dataset(s) only — never on the unselected disks of the same VM. A typed-confirmation dialog names the selected dataset(s), their origin snapshot(s), and the owning VM(s) (derived from the `vm-<id>-disk-<n>` name), and states that severance is a full copy and that the VM(s) must be stopped for the cutover phase. The script's remaining questions (transfer mode, tight-space holding pool, origin-snapshot destruction) appear as prompts in the log panel, and the tree refreshes when the step finishes. See [Severing a Clone](../user-guide/concepts.md#severing-a-clone) for what severance does and why `zfs promote` is not it.                                  |
 | **Advanced: Manage Profiles…** | Always                                                                                                                                | Opens the workload profile manager: add, edit, delete, or reset profiles. Built-in profiles can be opened for editing as a starting point but cannot be overwritten — saving requires a new profile name or an existing custom profile (with an overwrite confirmation); they also cannot be deleted. See [Workload profiles](#workload-profiles).                                                                                                        |
 | **Refresh**                    | Always                                                                                                                                | Re-reads all datasets, snapshots, and holds while preserving the tree's vertical scroll position and current selection whenever possible.                                                                                                                                                                                                                                                                                                        |

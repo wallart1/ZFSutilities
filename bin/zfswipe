@@ -356,7 +356,12 @@ function zfswipe_main {
         log_msg "WARN: Signatures remain on ${_zfswipe_device}; falling back to dd."
     fi
 
-    _zfswipe_dd "$_zfswipe_device" || return 8
+    # A failed dd still changed the device (labelclear ran, wipefs may have
+    # partially erased) — tell the kernel before failing out.
+    _zfswipe_dd "$_zfswipe_device" || {
+        _zfswipe_notify_kernel "$_zfswipe_device"
+        return 8
+    }
     methods+=("dd")
     _zfswipe_probe_all wipe_nodes
     if [[ "$_zfswipe_probe" == "dirty" ]]; then

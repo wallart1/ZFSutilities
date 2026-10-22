@@ -129,7 +129,8 @@ recordsize/volblocksize, and VM guest sector) uses the same decision:
 `MatplotlibBlocksizeLadder` on the GTK3-Agg canvas, or the Cairo
 `BlocksizeLadder` (`python/alignment_page.py`) when matplotlib is not
 installed. Both render from one shared vocabulary — row geometry
-(`ladder_pixel_height`), the log2 axis bounds and power-of-two ticks
+(`ladder_pixel_height`), the horizontal-scrollbar floor
+(`ladder_minimum_width`), the log2 axis bounds and power-of-two ticks
 (`ladder_axis_range`, axis floor one power of two below the smallest
 size so a floor-valued rung stays visible), state colours, and the
 empty-height constant — so the fallback degrades in quality only, never
@@ -149,6 +150,47 @@ selection, non-blank renders from identical data, and a screenshot
 written next to the spike for visual review; the realized-window check
 (`test_alignment_realized`) additionally drives the ladder through the
 real page on both display paths.
+
+## Theme palette and the ladder viewport
+
+Both renderers take their colours from a shared palette resolved out of
+`charting.py` rather than hardcoded values:
+
+- `chart_palette(widget)` reads `theme_bg_color` / `theme_fg_color`
+  through the widget's style context, so charts sit on the page's own
+  background (dark-grey themes included) instead of white. Below a
+  luminance of 0.5 the palette switches to its dark variant: brighter
+  series colours, structural colours blended between foreground and
+  background, and the ladder states re-mapped onto the bright series
+  pair. Anything unresolvable (no theme colours, mocked GTK) degrades
+  to `LIGHT_PALETTE` — the classic white-background vocabulary.
+- The matplotlib renderers resolve once at build (canvas before
+  artists, so artists are coloured correctly the first time), re-apply
+  on `style-updated`, and repaint via `draw_idle`; the rolling chart
+  rebuilds its legend on that path too, so the legend text's colour
+  follows the new theme immediately rather than at the next data
+  append. The Cairo renderers resolve per draw — a theme change simply
+  repaints on the next tick.
+
+The blocksize ladder instead has a **content-minimum width contract**:
+the canvas requests exactly its content-derived minimum
+(`ladder_minimum_width` — the longest row label's gutter plus a plot
+floor plus the legend) and nothing wider; whenever the page is wider,
+the viewport stretches the canvas to the full page width, so the
+request is a floor, not a target. The scrolled window keeps a small
+`min_content_width` (the canvas's width request must not pin the page
+wide) and its `max_content_width` is floored — by
+`alignment_page._floor_ladder_scroll_width`, from both the view box's
+`size-allocate` handler and the refresh apply path — at the wider of
+the granted page width and that same content minimum. The floor is the
+load-bearing half: a `max_content_width` below the child's requested
+minimum makes GTK clamp the canvas to the window and silently drop the
+horizontal scrollbar (reproduced under Xvfb at mid window widths with
+an earlier half-page cap), so the ladder renders cut off with no way to
+scroll. The ladder's text also sits one notch above the rolling charts'
+sizes (title 11.5, row labels 11, ticks and legend 10.5 in matplotlib;
+13 px in the Cairo fallback), and the width estimate's per-character
+constant follows that scale (`LADDER_CHAR_WIDTH_PX`).
 
 ## Dependencies and deployment
 

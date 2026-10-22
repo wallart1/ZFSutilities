@@ -12,11 +12,15 @@ Two families live here:
   the backup, offsite, restore, prune, and schedule tabs.
 """
 
+import glob
+import os
 import shlex
 import subprocess
+import tempfile
 
 import gi
 import node_config
+import paths
 import zfs_lock_manager as zlm
 
 gi.require_version("Gtk", "3.0")
@@ -110,7 +114,9 @@ def _topology_has_special_vdev(topology: TopologyNode | None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _build_rewrite_command(ds_name: str, mountpoint: str) -> str:
+def _build_rewrite_command(
+    ds_name: str, mountpoint: str, capture_path: str, results_path: str
+) -> str:
     """Build the bash script that rewrites *ds_name* in place via its mountpoint.
 
     ``zfs rewrite`` operates on file/directory paths inside a mounted
@@ -123,6 +129,12 @@ def _build_rewrite_command(ds_name: str, mountpoint: str) -> str:
        rewritten blocks do not inflate later incremental send streams),
        recursive, never crossing filesystem mount points (so child datasets
        mounted beneath this one are not rewritten), verbose for log progress.
+       ``-v`` prints one line per successfully rewritten file, so the output
+       is streamed live through ``tee`` *and* captured: the captured line
+       count is this dataset's rewritten-file total, appended as
+       ``count<TAB>dataset`` to *results_path* for the completion summary —
+       an rc of 0 alone cannot tell "rewrote data" from "nothing to
+       rewrite", and the summary must not claim work that did not happen.
     4. Unmounts the dataset only if this script mounted it, restoring the
        prior state. An unmount failure is reported but does not mask the
        rewrite's exit code.
@@ -132,6 +144,8 @@ def _build_rewrite_command(ds_name: str, mountpoint: str) -> str:
     """
     q_ds = shlex.quote(ds_name)
     q_mp = shlex.quote(mountpoint)
+    q_cap = shlex.quote(capture_path)
+    q_res = shlex.quote(results_path)
     return (
         "source ~/bashinit; bashinit\n"
         f"mounted_before=$(zfs get -H -o value mounted {q_ds})\n"
@@ -143,8 +157,25 @@ def _build_rewrite_command(ds_name: str, mountpoint: str) -> str:
         "    fi\n"
         "    mounted_by_us=1\n"
         "fi\n"
-        f"zfs rewrite -P -r -x -v {q_mp}\n"
-        "rewrite_rc=$?\n"
+        f"zfs rewrite -P -r -x -v {q_mp} 2>&1 | tee -- {q_cap}\n"
+        "rewrite_rc=${PIPESTATUS[0]}\n"
+        # Count the captured -v lines: one per successfully rewritten file.
+        # A missing/unreadable capture or a non-numeric answer degrades to
+        # -1 ("count unavailable") without masking the rewrite's own rc.
+        "rewritten=-1\n"
+        f"if [[ -f {q_cap} ]]; then\n"
+        f"    rewritten=$(grep -c . < {q_cap} 2>/dev/null || true)\n"
+        '    [[ "$rewritten" =~ ^[0-9]+$ ]] || rewritten=-1\n'
+        "fi\n"
+        f"rm -f {q_cap}\n"
+        f"printf '%s\\t%s\\n' \"$rewritten\" {q_ds} >> {q_res}\n"
+        'if [[ "$rewritten" -gt 0 ]]; then\n'
+        f'    log_msg "INFO: Rewrite Data: $rewritten files rewritten on {ds_name}"\n'
+        'elif [[ "$rewritten" -eq 0 ]]; then\n'
+        f'    log_msg "INFO: Rewrite Data: nothing to rewrite on {ds_name} (zfs rewrite rewrote 0 files)"\n'
+        "else\n"
+        f'    log_msg "WARN: Rewrite Data: could not count rewritten files on {ds_name}"\n'
+        "fi\n"
         'if [[ "$mounted_by_us" == "1" ]]; then\n'
         f"    if ! zfs unmount {q_ds}; then\n"
         f'        log_msg "WARN: could not unmount {ds_name} after rewrite"\n'
@@ -152,6 +183,87 @@ def _build_rewrite_command(ds_name: str, mountpoint: str) -> str:
         "fi\n"
         "exit $rewrite_rc\n"
     )
+
+
+def _new_rewrite_results_path():
+    """Create the per-run rewrite-results file; return its path.
+
+    Each step's script appends ``count<TAB>dataset`` lines to it (see
+    ``_build_rewrite_command``); the completion callback reads the totals
+    and removes the file and any leftover per-dataset captures. The run
+    dir (root-owned tmpfs, wiped at boot) is preferred; the system temp
+    dir is the fallback for hosts where it is unusable (non-root test
+    hosts).
+    """
+    for directory in (paths.get_run_dir(), tempfile.gettempdir()):
+        try:
+            fd, path = tempfile.mkstemp(prefix="rewrite-results-", suffix=".tsv", dir=directory)
+        except OSError:
+            continue
+        os.close(fd)
+        return path
+    raise RuntimeError("no writable directory for the Rewrite Data results file")
+
+
+def _read_rewrite_totals(path):
+    """Parse the results file into ``(total, reported, unknown)``; None unreadable.
+
+    ``total`` sums the per-dataset rewritten-file counts, ``reported``
+    counts datasets that recorded a line, and ``unknown`` counts datasets
+    whose count could not be determined (recorded as -1 by the script).
+    """
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return None
+    total = 0
+    reported = 0
+    unknown = 0
+    for line in lines:
+        count = line.partition("\t")[0]
+        if count.isdigit():
+            reported += 1
+            total += int(count)
+        elif count == "-1":
+            reported += 1
+            unknown += 1
+    return total, reported, unknown
+
+
+def _cleanup_rewrite_results(path):
+    """Remove the results file and any leftover per-dataset captures."""
+    for leftover in (path, *glob.glob(f"{path}.*.out")):
+        try:
+            os.unlink(leftover)
+        except OSError:
+            pass
+
+
+def _rewrite_success_message(results_path, dataset_count, target):
+    """The rc=0 completion line, stating what the rewrite actually did.
+
+    An rc of 0 from ``zfs rewrite`` covers both "rewrote files" and
+    "nothing to rewrite" — the summary must say which, never a bare
+    "complete". Datasets whose step recorded nothing (an early mount
+    failure) or an uncountable result are named as such instead of being
+    silently folded into success.
+    """
+    totals = _read_rewrite_totals(results_path)
+    if totals is None:
+        return f"INFO: Rewrite Data finished for {target} (rc=0; rewrite summary unavailable)"
+    total, reported, unknown = totals
+    if reported < dataset_count:
+        missing = dataset_count - reported
+        detail = f"no summary for {missing} dataset" + ("s" if missing > 1 else "") + " — see log"
+        if total:
+            return f"INFO: Rewrite Data finished for {target} ({total} files rewritten; {detail})"
+        return f"INFO: Rewrite Data finished for {target} ({detail})"
+    if unknown:
+        return f"INFO: Rewrite Data finished for {target} (rewrite summary incomplete — see log)"
+    if total == 0:
+        return f"INFO: Rewrite Data rewrote nothing for {target} — zfs rewrite reported 0 files"
+    return f"INFO: Rewrite Data complete for {target} ({total} files rewritten)"
 
 
 def on_rewrite_data(app, datasets, refresh=None):
@@ -253,14 +365,24 @@ def on_rewrite_data(app, datasets, refresh=None):
     dataset_names = [ds["name"] for ds in datasets]
     lock_ids = zlm.acquire_multiple("w", dataset_names)
 
+    results_path = _new_rewrite_results_path()
     steps = [
         BashStep(
-            ["bash", "-c", _build_rewrite_command(ds_name, mountpoints[ds_name])],
+            [
+                "bash",
+                "-c",
+                _build_rewrite_command(
+                    ds_name,
+                    mountpoints[ds_name],
+                    f"{results_path}.{index}.out",
+                    results_path,
+                ),
+            ],
             f"Rewrite data on {ds_name}",
             is_rsync=False,
             fatal=False,
         )
-        for ds_name in dataset_names
+        for index, ds_name in enumerate(dataset_names)
     ]
 
     def _on_complete(cancelled=False, rc=None):
@@ -272,7 +394,8 @@ def on_rewrite_data(app, datasets, refresh=None):
         elif rc:
             log_msg(f"WARN: Rewrite Data failed for {target} (rc={rc})")
         else:
-            log_msg(f"INFO: Rewrite Data complete for {target}")
+            log_msg(_rewrite_success_message(results_path, len(dataset_names), target))
+        _cleanup_rewrite_results(results_path)
         if refresh is not None:
             refresh()
 

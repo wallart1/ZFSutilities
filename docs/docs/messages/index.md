@@ -262,7 +262,8 @@ Executes a built step list (backup, offsite, restore, prune) in the GUI. Message
 | `INFO: Interrupting lock wait` | Cancel requested while the child is waiting for a dataset lock | SIGINT sent to the child to break the wait |
 | `WARN: Post-step callback failed during cancel: ...` | A step post-callback raised during cancellation | Cancel path continues |
 | `INFO: ... cancelled` | Cancel completed; trailer written with cancelled status | Runner torn down; completion callback fires with cancelled=True |
-| `WARN: Error launching: ...` | Spawning a step failed (OSError/FileNotFoundError) | Step skipped; runner advances to the next step |
+| `WARN: Error launching: ...` | Spawning a step failed (OSError/FileNotFoundError) | Paired with the FATAL below — the run no longer reports success for a step that never launched |
+| `FATAL: Could not launch step: ...` | A main-list step could not be spawned; the step is treated as failed (its post-callback stays unrun) | Run finishes rc=1 (the post-backup/finally step, if any, still runs first) |
 | `WARN: Pre-step callback failed: ...` | Step pre-callback raised before spawn | Step still runs |
 | `WARN: Post-step callback failed: ...` | Step post-callback raised after spawn failure or exit | Continue to the next step |
 | `WARN: Unexpected error while starting next step: ...` / `Unexpected error while checking process: ...` | Unhandled exception in the step-advance or process-poll path | Run aborted with rc=1 |
@@ -2012,6 +2013,7 @@ Output uses `✓`/`⚠`/`✗` markers for pass/warn/fail.
 | `⚠: pveversion not found — ...` | Proxmox VE is optional for this host class (required only on a two-node compute host) | Informational; installation can continue |
 | `⚠: mkdocs not installed — the installer's documentation-server step installs it (pip 'mkdocs<2')` | MkDocs is absent; the installer pip-installs it after the prerequisite gate | Informational; installation can continue |
 | `⚠: mkdocs-material not installed — the installer's documentation-server step installs it (pip)` | The Material theme is absent; the installer pip-installs it after the prerequisite gate | Informational; installation can continue |
+| `⚠: matplotlib not installed — Performance-page charts fall back to the built-in Cairo renderer. Install the system package python3-matplotlib (a pip --user install is invisible to a root-run GUI).` | The optional chart renderer's import failed for this user; the GUI keeps working on its Cairo fallback | Install `python3-matplotlib` system-wide if the matplotlib charts are wanted |
 | `⚠: DISPLAY not set — GUI requires an X11 or Wayland session` | No graphical session | Informational; the GUI will not run until started from a session |
 | `✗: ... required prerequisite(s) missing. Install them before proceeding.` | Final tally with at least one failure | Install the prerequisites and rerun |
 | `⚠: ... optional item(s) missing — installation can continue but some features may be unavailable.` | Final tally with warnings only | Informational |
@@ -2488,12 +2490,15 @@ Loads/saves/deletes the profile JSON files.
 
 ### [profile_dialogs](../commands-and-modules/python-modules.md#profile_dialogspy)
 
-Workload-profile dialogs: Rewrite Data (zfs rewrite restripe) and Apply Profile, plus profile edit/delete guards. The two rewrite messages are embedded in the generated bash script.
+Workload-profile dialogs: Rewrite Data (zfs rewrite restripe) and Apply Profile, plus profile edit/delete guards. The rewrite script's messages are embedded in the generated bash script; the completion summary reports what `zfs rewrite -v` actually rewrote (one output line per successfully rewritten file, captured through `tee`), because rc=0 alone covers both "rewrote files" and "nothing to rewrite".
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `FATAL: could not mount ... to rewrite data` | The temporary mount for `zfs rewrite` failed (bash-embedded) | Script exits 1; the Rewrite Data step fails |
 | `WARN: could not unmount ... after rewrite` | The temporary mount could not be restored to unmounted (bash-embedded) | Rewrite rc still reported; dataset stays mounted |
+| `INFO: Rewrite Data: N files rewritten on ...` (bash-embedded) | This dataset's rewrite finished; the captured `-v` output counted N successfully rewritten files | Informational |
+| `INFO: Rewrite Data: nothing to rewrite on ... (zfs rewrite rewrote 0 files)` (bash-embedded) | `zfs rewrite` exited 0 having rewritten no files (empty or already-conformant dataset) | Informational |
+| `WARN: Rewrite Data: could not count rewritten files on ...` (bash-embedded) | The captured output could not be counted (count recorded as -1) | The rewrite rc still governs the step; the summary reports the count as incomplete |
 | `WARN: Rewrite Data is available only on the storage host` / `WARN: Applying profiles is available only on the storage host` | Two-node gates — invoked on the compute node | Action aborted |
 | `WARN: Select at least one dataset to rewrite data` | Empty dataset list | Action aborted |
 | `WARN: Rewrite Data supports filesystem datasets only; zfs rewrite cannot act on a volume's block device (...)` | The selection contains volumes | Action aborted |
@@ -2504,7 +2509,11 @@ Workload-profile dialogs: Rewrite Data (zfs rewrite restripe) and Apply Profile,
 | `WARN: Rewrite Data requires the physical_rewrite pool feature on ... (zpool set feature@physical_rewrite=enabled ...)` | Per-pool feature-flag gate | Aborted; enable the feature to proceed |
 | `INFO: Rewrite Data cancelled for ...` | The step was cancelled after the Yes/No confirm | Skipped; locks released; refresh |
 | `WARN: Rewrite Data failed for ... (rc=...)` | A rewrite step exited non-zero | Operation aborted; locks released |
-| `INFO: Rewrite Data complete for ...` | All rewrite steps finished rc=0 | Informational |
+| `INFO: Rewrite Data complete for ... (N files rewritten)` | All rewrite steps finished rc=0; the captured per-dataset counts sum to N | Informational |
+| `INFO: Rewrite Data rewrote nothing for ... — zfs rewrite reported 0 files` | All steps finished rc=0 and every dataset recorded zero rewritten files — the summary never claims completion of work that did not happen | Informational |
+| `INFO: Rewrite Data finished for ... (rc=0; rewrite summary unavailable)` | Steps finished rc=0 but the results file could not be read | Informational; see the session log for the per-dataset lines |
+| `INFO: Rewrite Data finished for ... (rewrite summary incomplete — see log)` | At least one dataset's count could not be determined | Informational |
+| `INFO: Rewrite Data finished for ... (no summary for N dataset(s) — see log)` | Datasets whose step recorded no line (e.g. an early mount failure); not folded into success | Informational |
 | `WARN: Select a profile to edit` / `WARN: Select a profile to delete` | No workload-profile row selected | Action aborted |
 | `WARN: Profile ... no longer exists` | The selected name vanished from the saved profiles | Edit aborted; list refreshed |
 | `WARN: Workload profile '...' is built in and cannot be deleted` | Built-in profile delete guard | Delete aborted |

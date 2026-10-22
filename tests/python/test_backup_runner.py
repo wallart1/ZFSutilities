@@ -30,7 +30,7 @@ if PYTHON_SRC not in sys.path:
 
 # Mock GTK/WebKit so gi.repository imports succeed without a display.
 import log_index as li
-from test_support import mock_gtk, temp_config_dir
+from test_support import capture_logs, mock_gtk, temp_config_dir
 
 with mock_gtk():
     import backup_runner as br
@@ -149,6 +149,67 @@ class TestGetTabType(unittest.TestCase):
 
     def test_dataset_action_label_returns_dataset(self):
         self.assertEqual(self._runner("Dataset action")._get_tab_type(), "dataset")
+
+
+class TestSpawnFailureAsStepFailure(unittest.TestCase):
+    """A step whose process never launches must fail the run.
+
+    The old behaviour silently skipped the step and finished rc=0 — an
+    operation could report success having done none of its work (the
+    Rewrite Data "complete with no rewrite" defect class).
+    """
+
+    def _runner(self, finally_step=None):
+        runner = br.BackupRunner(MagicMock(), MagicMock(), label="Dataset action")
+        post = MagicMock()
+        runner.set_steps(
+            [BashStep(["true"], "step one", is_rsync=False, fatal=False, post_callback=post)]
+        )
+        if finally_step is not None:
+            runner.set_finally_step(finally_step)
+        return runner, post
+
+    def test_spawn_failure_fails_the_run(self):
+        runner, post = self._runner()
+        completed = []
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            _patch_log_dirs(tmpdir),
+            patch.object(runner, "_spawn_process", return_value=False),
+            patch.object(br, "build_entry", MagicMock()),
+            patch.object(br, "add_history_entry", MagicMock()),
+            capture_logs() as logs,
+        ):
+            runner.start(on_complete=lambda **kwargs: completed.append(kwargs))
+        self.assertEqual(completed, [{"cancelled": False, "rc": 1}])
+        self.assertFalse(runner.running)
+        # The post-callback assumes the step's work happened; a step that
+        # never launched must not run it.
+        post.assert_not_called()
+        self.assertTrue(
+            any("FATAL: Could not launch step: step one" in line for line in logs), logs
+        )
+
+    def test_spawn_failure_runs_the_finally_step_then_fails(self):
+        finally_post = MagicMock()
+        finally_step = BashStep(["true"], "post step", is_rsync=False, post_callback=finally_post)
+        runner, _post = self._runner(finally_step=finally_step)
+        completed = []
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            _patch_log_dirs(tmpdir),
+            patch.object(runner, "_spawn_process", return_value=False),
+            patch.object(br, "build_entry", MagicMock()),
+            patch.object(br, "add_history_entry", MagicMock()),
+            patch.object(br.GLib, "idle_add", side_effect=lambda fn, *a: (fn(*a), False)[1]),
+            capture_logs() as logs,
+        ):
+            runner.start(on_complete=lambda **kwargs: completed.append(kwargs))
+        self.assertEqual(completed, [{"cancelled": False, "rc": 1}])
+        self.assertTrue(runner._finally_ran, "the finally step must still run before finishing")
+        self.assertTrue(
+            any("FATAL: Could not launch step: step one" in line for line in logs), logs
+        )
 
 
 class TestReceivedByteCounting(unittest.TestCase):
@@ -726,16 +787,23 @@ class TestStepCallbacks(unittest.TestCase):
     def _runner(self):
         return br.BackupRunner(MagicMock(), MagicMock())
 
-    def test_pre_and_post_callbacks_called_when_spawn_fails(self):
+    def test_pre_called_and_post_skipped_when_spawn_fails(self):
+        # A step that never launched is a failed step, not a skipped one:
+        # pre_callback ran, post_callback must not (it assumes the step's
+        # work happened), and the run finishes rc=1 instead of continuing.
         runner = self._runner()
         runner.running = True
         pre = MagicMock()
         post = MagicMock()
         runner.steps = [BashStep([], "step", pre_callback=pre, post_callback=post)]
-        with patch.object(runner, "_spawn_process", return_value=False):
+        with (
+            patch.object(runner, "_spawn_process", return_value=False),
+            patch.object(runner, "_finish") as finish,
+        ):
             runner._run_next_step()
         pre.assert_called_once_with()
-        post.assert_called_once_with()
+        post.assert_not_called()
+        finish.assert_called_once_with(rc=1)
 
     def test_post_callback_called_on_cancel(self):
         runner = self._runner()

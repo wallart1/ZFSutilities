@@ -1,8 +1,11 @@
 """Tests for profile_dialogs.py — workload profile and Rewrite Data dialogs."""
 
 import os
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
@@ -970,43 +973,193 @@ def _make_tree_view(store, paths):
 
 
 class TestBuildRewriteCommand(unittest.TestCase):
-    """_build_rewrite_command pins the zfs rewrite flags and mount handling."""
+    """_build_rewrite_command pins the zfs rewrite flags, capture, and mount handling."""
+
+    def _script(self, pd, ds="pool1/data", mp="/pool1/data"):
+        return pd._build_rewrite_command(ds, mp, "/run/cap.out", "/run/results.tsv")
 
     def test_rewrite_flags_and_mountpoint(self):
         pd = _import_profile_dialogs()
-        script = pd._build_rewrite_command("pool1/data", "/pool1/data")
+        script = self._script(pd)
         self.assertIn("zfs rewrite -P -r -x -v /pool1/data", script)
 
     def test_rewrite_flags_adjacent_and_mount_quoted(self):
         # -P -r -x -v stay adjacent so the cross-mount guard (-x) cannot be
         # dropped accidentally; paths with spaces must be quoted.
         pd = _import_profile_dialogs()
-        script = pd._build_rewrite_command("tank/a b", "/mnt/a b")
+        script = self._script(pd, "tank/a b", "/mnt/a b")
         self.assertIn("zfs rewrite -P -r -x -v '/mnt/a b'", script)
         self.assertIn("zfs get -H -o value mounted 'tank/a b'", script)
 
     def test_mounts_only_when_not_already_mounted(self):
         pd = _import_profile_dialogs()
-        script = pd._build_rewrite_command("pool1/data", "/pool1/data")
+        script = self._script(pd)
         self.assertIn('if [[ "$mounted_before" != "yes" ]]', script)
         self.assertIn("zfs mount pool1/data", script)
 
     def test_unmounts_only_when_it_mounted_and_returns_rewrite_rc(self):
         pd = _import_profile_dialogs()
-        script = pd._build_rewrite_command("pool1/data", "/pool1/data")
+        script = self._script(pd)
         self.assertIn('if [[ "$mounted_by_us" == "1" ]]', script)
         self.assertIn("zfs unmount pool1/data", script)
         self.assertIn("exit $rewrite_rc", script)
+
+    def test_output_streamed_and_captured_for_the_summary(self):
+        # -v prints one line per successfully rewritten file; the output is
+        # streamed live through tee AND captured so the completion summary
+        # can say what was actually rewritten (rc=0 alone covers a no-op).
+        pd = _import_profile_dialogs()
+        script = self._script(pd)
+        self.assertIn("zfs rewrite -P -r -x -v /pool1/data 2>&1 | tee -- /run/cap.out", script)
+        self.assertIn("rewrite_rc=${PIPESTATUS[0]}", script)
+
+    def test_count_recorded_per_dataset_with_degraded_unknown(self):
+        # The captured line count is appended as count<TAB>dataset to the
+        # results file; a missing or unreadable capture degrades to -1
+        # ("count unavailable") without masking the rewrite's own rc, and
+        # the per-dataset capture is removed after counting.
+        pd = _import_profile_dialogs()
+        script = self._script(pd)
+        self.assertIn("rewritten=$(grep -c . < /run/cap.out 2>/dev/null || true)", script)
+        self.assertIn('[[ "$rewritten" =~ ^[0-9]+$ ]] || rewritten=-1', script)
+        self.assertIn("rm -f /run/cap.out", script)
+        self.assertIn("printf '%s\\t%s\\n' \"$rewritten\" pool1/data >> /run/results.tsv", script)
+
+    def test_per_dataset_summary_names_the_truth(self):
+        pd = _import_profile_dialogs()
+        script = self._script(pd)
+        self.assertIn(
+            'log_msg "INFO: Rewrite Data: $rewritten files rewritten on pool1/data"', script
+        )
+        self.assertIn(
+            'log_msg "INFO: Rewrite Data: nothing to rewrite on pool1/data '
+            '(zfs rewrite rewrote 0 files)"',
+            script,
+        )
+        self.assertIn(
+            'log_msg "WARN: Rewrite Data: could not count rewritten files on pool1/data"', script
+        )
 
     def test_messages_route_through_log_msg(self):
         # Generated BashStep scripts must source bashinit and use log_msg so
         # their output lands in the session log like every other step.
         pd = _import_profile_dialogs()
-        script = pd._build_rewrite_command("pool1/data", "/pool1/data")
+        script = self._script(pd)
         self.assertIn("source ~/bashinit; bashinit", script)
         self.assertIn('log_msg "FATAL: could not mount pool1/data to rewrite data"', script)
         self.assertIn('log_msg "WARN: could not unmount pool1/data after rewrite"', script)
         self.assertNotIn("echo", script)
+
+
+@unittest.skipIf(shutil.which("bash") is None, "bash unavailable")
+class TestRewriteScriptExecution(unittest.TestCase):
+    """The generated rewrite script, really executed against a stub zfs.
+
+    These lock the script's runtime behaviour — rc propagation, the
+    captured rewritten-file count, and the per-dataset summary lines —
+    which string assertions alone cannot prove.
+    """
+
+    def _run_script(self, rewrite_behavior, mounted="yes", ds="pool1/data"):
+        pd = _import_profile_dialogs()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bin_dir = os.path.join(tmpdir, "bin")
+            home = os.path.join(tmpdir, "home")
+            os.makedirs(bin_dir)
+            os.makedirs(home)
+            stub = os.path.join(bin_dir, "zfs")
+            with open(stub, "w") as handle:
+                handle.write(
+                    "#!/bin/bash\n"
+                    'case "$1" in\n'
+                    f"  get) echo {shlex.quote(mounted)};;\n"
+                    f"  rewrite) {rewrite_behavior};;\n"
+                    "  *) exit 0;;\n"
+                    "esac\n"
+                )
+            os.chmod(stub, 0o755)
+            with open(os.path.join(home, "bashinit"), "w") as handle:
+                handle.write('bashinit() { :; }\nlog_msg() { echo "log_msg: $*"; }\n')
+            results = os.path.join(tmpdir, "results.tsv")
+            capture = os.path.join(tmpdir, "cap.out")
+            script = pd._build_rewrite_command(ds, f"/{ds}", capture, results)
+            env = dict(os.environ, HOME=home, PATH=bin_dir + os.pathsep + os.environ["PATH"])
+            proc = subprocess.run(
+                ["bash", "-c", script], capture_output=True, text=True, env=env, check=False
+            )
+            with open(results) as handle:
+                recorded = handle.read()
+            return proc, recorded, os.path.exists(capture)
+
+    def test_two_rewritten_files_are_counted_and_summarized(self):
+        proc, recorded, capture_left = self._run_script(
+            "echo /pool1/data/f1; echo /pool1/data/f2; exit 0"
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(recorded, "2\tpool1/data\n")
+        self.assertFalse(capture_left, "per-dataset capture must be removed after counting")
+        self.assertIn("INFO: Rewrite Data: 2 files rewritten on pool1/data", proc.stdout)
+
+    def test_noop_rewrite_records_zero_and_says_nothing_to_rewrite(self):
+        proc, recorded, _capture_left = self._run_script("exit 0")
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(recorded, "0\tpool1/data\n")
+        self.assertIn("nothing to rewrite on pool1/data", proc.stdout)
+        self.assertNotIn("files rewritten on", proc.stdout)
+
+    def test_failing_rewrite_propagates_its_rc(self):
+        proc, recorded, _capture_left = self._run_script("echo 'zfs rewrite: boom' >&2; exit 5")
+        self.assertEqual(proc.returncode, 5)
+        # The rc reaches the dialog's failure branch; the count line is
+        # still recorded (and ignored by the failure summary).
+        self.assertIn("\tpool1/data\n", recorded)
+
+    def test_unmounted_dataset_is_mounted_and_unmounted_again(self):
+        proc, recorded, _capture_left = self._run_script("exit 0", mounted="no")
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(recorded, "0\tpool1/data\n")
+
+
+class TestRewriteResultsHelpers(unittest.TestCase):
+    """The results-file plumbing behind the truthful completion summary."""
+
+    def test_read_totals_sums_counts_and_flags_unknown(self):
+        pd = _import_profile_dialogs()
+        fd, path = tempfile.mkstemp(suffix=".tsv")
+        with os.fdopen(fd, "w") as handle:
+            handle.write("2\tpool1/a\n-1\tpool1/b\n0\tpool1/c\n")
+        self.addCleanup(os.unlink, path)
+        self.assertEqual(pd._read_rewrite_totals(path), (2, 3, 1))
+
+    def test_read_totals_skips_malformed_lines(self):
+        pd = _import_profile_dialogs()
+        fd, path = tempfile.mkstemp(suffix=".tsv")
+        with os.fdopen(fd, "w") as handle:
+            handle.write("2\tpool1/a\ngarbage-line\n\n")
+        self.addCleanup(os.unlink, path)
+        self.assertEqual(pd._read_rewrite_totals(path), (2, 1, 0))
+
+    def test_read_totals_none_when_unreadable(self):
+        pd = _import_profile_dialogs()
+        self.assertIsNone(pd._read_rewrite_totals("/nonexistent/results.tsv"))
+
+    def test_new_results_path_falls_back_to_the_system_temp_dir(self):
+        pd = _import_profile_dialogs()
+        with patch.object(pd.paths, "get_run_dir", return_value="/nonexistent/run-dir"):
+            path = pd._new_rewrite_results_path()
+        self.addCleanup(os.unlink, path)
+        self.assertTrue(os.path.isfile(path))
+
+    def test_cleanup_removes_captures_matching_the_glob(self):
+        pd = _import_profile_dialogs()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = os.path.join(tmpdir, "results.tsv")
+            capture = os.path.join(tmpdir, "results.tsv.0.out")
+            for path in (results, capture):
+                open(path, "w").close()
+            pd._cleanup_rewrite_results(results)
+            self.assertFalse(os.path.exists(results))
+            self.assertFalse(os.path.exists(capture))
 
 
 class TestRewriteData(unittest.TestCase):
@@ -1063,6 +1216,7 @@ class TestRewriteData(unittest.TestCase):
             ),
             patch.object(pd, "zlm") as mock_zlm,
             patch("feature_config.save_config"),
+            patch.object(pd, "_new_rewrite_results_path", return_value="/run/rewrite/results.tsv"),
         ):
             mock_zlm.acquire_multiple.return_value = ["/lock/rewrite"]
 
@@ -1074,6 +1228,10 @@ class TestRewriteData(unittest.TestCase):
             command = app.dataset_runner.steps[0].command
             self.assertEqual(command[0:2], ["bash", "-c"])
             self.assertIn("zfs rewrite -P -r -x -v /pool1/data", command[2])
+            # The step carries its per-dataset capture file and the shared
+            # results file for the truthful completion summary.
+            self.assertIn("| tee -- /run/rewrite/results.tsv.0.out", command[2])
+            self.assertIn(">> /run/rewrite/results.tsv", command[2])
 
             app.dataset_runner.finish(cancelled=False)
             mock_zlm.release.assert_called_once_with("/lock/rewrite")
@@ -1135,10 +1293,19 @@ class TestRewriteData(unittest.TestCase):
                 logs,
             )
 
-    def test_rewrite_data_logs_complete_on_rc_zero(self):
+    def _complete_with_results(self, results_content, datasets=None):
+        """Drive on_rewrite_data to an rc=0 completion with a prepared
+        results file; return (logs, results_path). The results file and any
+        leftover captures must be gone when the run ends."""
         pd = _import_profile_dialogs()
         app = self._supported_app()
-        datasets = [{"name": "pool1/data", "type": "filesystem"}]
+        datasets = datasets or [{"name": "pool1/data", "type": "filesystem"}]
+
+        fd, results_path = tempfile.mkstemp(suffix=".tsv")
+        with os.fdopen(fd, "w") as handle:
+            handle.write(results_content)
+        leftover_capture = f"{results_path}.0.out"
+        open(leftover_capture, "w").close()
 
         with (
             patch.object(
@@ -1148,18 +1315,108 @@ class TestRewriteData(unittest.TestCase):
             ),
             patch.object(pd, "zlm") as mock_zlm,
             patch("feature_config.save_config"),
+            patch.object(pd, "_new_rewrite_results_path", return_value=results_path),
         ):
             mock_zlm.acquire_multiple.return_value = ["/lock/rewrite"]
-
             with capture_logs() as logs:
                 pd.on_rewrite_data(app, datasets)
                 app.dataset_runner.finish(cancelled=False, rc=0)
 
-            mock_zlm.release.assert_called_once_with("/lock/rewrite")
-            self.assertTrue(
-                any("Rewrite Data complete for pool1/data" in line for line in logs),
-                logs,
-            )
+        self.assertFalse(os.path.exists(results_path), "results file not cleaned up")
+        self.assertFalse(os.path.exists(leftover_capture), "capture not cleaned up")
+        return logs
+
+    def test_rewrite_data_rc_zero_counts_rewritten_files(self):
+        logs = self._complete_with_results("2\tpool1/data\n")
+        self.assertTrue(
+            any(
+                "Rewrite Data complete for pool1/data (2 files rewritten)" in line for line in logs
+            ),
+            logs,
+        )
+
+    def test_rewrite_data_rc_zero_with_nothing_rewritten_never_claims_complete(self):
+        # The reported defect: rc=0 from a no-op rewrite used to log a bare
+        # "complete". The summary must say nothing was rewritten instead.
+        logs = self._complete_with_results("0\tpool1/data\n")
+        self.assertTrue(
+            any(
+                "Rewrite Data rewrote nothing for pool1/data — zfs rewrite reported 0 files" in line
+                for line in logs
+            ),
+            logs,
+        )
+        self.assertFalse(any("Rewrite Data complete" in line for line in logs), logs)
+
+    def test_rewrite_data_rc_zero_sums_counts_across_datasets(self):
+        datasets = [
+            {"name": "pool1/a", "type": "filesystem"},
+            {"name": "pool1/b", "type": "filesystem"},
+        ]
+        logs = self._complete_with_results("2\tpool1/a\n3\tpool1/b\n", datasets=datasets)
+        self.assertTrue(
+            any(
+                "Rewrite Data complete for 2 datasets (5 files rewritten)" in line for line in logs
+            ),
+            logs,
+        )
+
+    def test_rewrite_data_rc_zero_names_datasets_without_a_summary(self):
+        # A dataset whose step exited early (mount failure) records no line;
+        # the summary must not fold that silence into success.
+        datasets = [
+            {"name": "pool1/data", "type": "filesystem"},
+            {"name": "pool1/other", "type": "filesystem"},
+        ]
+        logs = self._complete_with_results("2\tpool1/data\n", datasets=datasets)
+        self.assertTrue(
+            any(
+                "Rewrite Data finished for 2 datasets (2 files rewritten; "
+                "no summary for 1 dataset — see log)" in line
+                for line in logs
+            ),
+            logs,
+        )
+        self.assertFalse(any("Rewrite Data complete for" in line for line in logs), logs)
+
+    def test_rewrite_data_rc_zero_with_uncountable_result_says_incomplete(self):
+        logs = self._complete_with_results("-1\tpool1/data\n")
+        self.assertTrue(
+            any(
+                "Rewrite Data finished for pool1/data (rewrite summary incomplete — see log)"
+                in line
+                for line in logs
+            ),
+            logs,
+        )
+
+    def test_rewrite_data_rc_zero_with_unreadable_summary_says_unavailable(self):
+        # No results file at all (creation failed or lost): say so instead
+        # of claiming completion.
+        pd = _import_profile_dialogs()
+        app = self._supported_app()
+        datasets = [{"name": "pool1/data", "type": "filesystem"}]
+        with (
+            patch.object(
+                pd.Gtk,
+                "MessageDialog",
+                return_value=MagicMock(run=MagicMock(return_value=pd.Gtk.ResponseType.YES)),
+            ),
+            patch.object(pd, "zlm") as mock_zlm,
+            patch("feature_config.save_config"),
+            patch.object(pd, "_new_rewrite_results_path", return_value="/nonexistent/results.tsv"),
+        ):
+            mock_zlm.acquire_multiple.return_value = ["/lock/rewrite"]
+            with capture_logs() as logs:
+                pd.on_rewrite_data(app, datasets)
+                app.dataset_runner.finish(cancelled=False, rc=0)
+        self.assertTrue(
+            any(
+                "Rewrite Data finished for pool1/data (rc=0; rewrite summary unavailable)" in line
+                for line in logs
+            ),
+            logs,
+        )
 
     def test_rewrite_data_noop_when_unsupported(self):
         pd = _import_profile_dialogs()

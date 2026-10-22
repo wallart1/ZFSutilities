@@ -30,11 +30,11 @@ gi.require_version("Gtk", "3.0")
 from alignment_page import create_alignment_view, refresh_alignment_view
 from charting import (  # chart vocabulary shared with the matplotlib renderer
     CHART_MAX_SAMPLES,
-    REFERENCE_COLOR,
-    SERIES_COLORS,
+    chart_palette,
     create_rolling_chart,
     format_age,
     nice_ceiling,
+    renderer_label,
 )
 from config_core import (
     get_memory_config,
@@ -45,6 +45,7 @@ from config_core import (
 from disk_repository import format_bytes
 from gi.repository import GLib, Gtk
 from gui_helpers import (
+    capped_treeview_scroll,
     configure_treeview_column,
     note_label,
     reconcile_rows,
@@ -116,9 +117,13 @@ class RollingChart:
     # -- drawing -----------------------------------------------------------
 
     def _on_draw(self, widget, cr):
+        # Palette resolved per draw from the widget's style context: the
+        # chart follows the GTK theme (dark themes get brighter series
+        # colours), and a theme change repaints on the next draw.
+        palette = chart_palette(widget)
         width = widget.get_allocated_width()
         height = widget.get_allocated_height()
-        cr.set_source_rgb(1, 1, 1)
+        cr.set_source_rgb(*palette.background)
         cr.paint()
 
         cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
@@ -129,7 +134,7 @@ class RollingChart:
         plot_h = max(1, height - top - bottom)
 
         if len(self._points) < 2:
-            cr.set_source_rgb(0.4, 0.4, 0.4)
+            cr.set_source_rgb(*palette.muted)
             cr.move_to(left + 8, top + plot_h // 2)
             cr.show_text(f"{self.title} — collecting data…")
             return
@@ -161,7 +166,7 @@ class RollingChart:
             return top + plot_h - (v / y_max) * plot_h
 
         # Grid lines with Y labels.
-        cr.set_source_rgb(0.85, 0.85, 0.85)
+        cr.set_source_rgb(*palette.grid)
         for i in range(5):
             value = y_max * i / 4
             y = _y(value)
@@ -169,14 +174,14 @@ class RollingChart:
             cr.line_to(left + plot_w, y)
             cr.stroke()
             label = f"{value:.0f}%" if self.percent else self.formatter(value)
-            cr.set_source_rgb(0.35, 0.35, 0.35)
+            cr.set_source_rgb(*palette.muted)
             cr.move_to(2, y + 3)
             cr.show_text(label)
-            cr.set_source_rgb(0.85, 0.85, 0.85)
+            cr.set_source_rgb(*palette.grid)
 
         # X-axis age labels at both ends (draws happen right after appends,
         # so the newest point is effectively "now").
-        cr.set_source_rgb(0.35, 0.35, 0.35)
+        cr.set_source_rgb(*palette.muted)
         cr.move_to(left, height - 4)
         cr.show_text(f"-{format_age(t_span)}")
         cr.move_to(left + plot_w - 24, height - 4)
@@ -185,7 +190,7 @@ class RollingChart:
         # Reference line (dashed).
         if self._reference is not None:
             y = _y(self._reference)
-            cr.set_source_rgb(*REFERENCE_COLOR)
+            cr.set_source_rgb(*palette.reference)
             cr.set_dash([4, 4])
             cr.move_to(left, y)
             cr.line_to(left + plot_w, y)
@@ -194,11 +199,11 @@ class RollingChart:
             if self._reference_label:
                 cr.move_to(left + 4, y - 3)
                 cr.show_text(self._reference_label)
-                cr.set_source_rgb(0.35, 0.35, 0.35)
+                cr.set_source_rgb(*palette.muted)
 
         # Series polylines with translucent fills.
         for index in range(len(self.series_names)):
-            color = SERIES_COLORS[index % len(SERIES_COLORS)]
+            color = palette.series[index % len(palette.series)]
             points = [(_x(t), _y(values[index])) for t, values in self._points]
             points = [(x, y) for x, y in points if y is not None]
             if len(points) < 2:
@@ -220,7 +225,7 @@ class RollingChart:
         # Legend with the newest value of each series.
         x = left + 4
         for index, name in enumerate(self.series_names):
-            color = SERIES_COLORS[index % len(SERIES_COLORS)]
+            color = palette.series[index % len(palette.series)]
             latest = self._points[-1][1][index]
             if self.percent:
                 text = f"{name} {format_percent(latest)}"
@@ -229,7 +234,7 @@ class RollingChart:
             cr.set_source_rgb(*color)
             cr.rectangle(x, 4, 8, 8)
             cr.fill()
-            cr.set_source_rgb(0.2, 0.2, 0.2)
+            cr.set_source_rgb(*palette.foreground)
             cr.move_to(x + 11, 12)
             cr.show_text(text)
             x += 22 + 7 * len(text)
@@ -251,24 +256,32 @@ def _value_row(grid, row, caption):
     return value
 
 
-def _device_table(app, store_attr, columns, state_key):
-    """Build a TreeView for cache/log vdev rows; return the view and store.
+def _device_table(app, store_attr, columns, state_key, expand_index=None):
+    """Build a vdev TreeView in its own capped scrolled window.
 
-    The view is bound to the UI-state persistence layer so column widths
-    survive GUI restarts, like every other table.
+    *columns* are ``(title, width)`` pairs; *expand_index* names the one
+    non-last column that absorbs width slack so the far-right column
+    keeps an honest fixed width (GTK otherwise re-expands the last
+    column, which makes shrinking it look ineffective). The window shows
+    at most 20 rows and carries its own vertical and horizontal
+    scrollbars (see ``gui_helpers.capped_treeview_scroll``). The view is
+    bound to the UI-state persistence layer so column widths survive GUI
+    restarts, like every other table.
     """
     store = Gtk.ListStore(*([str] * len(columns)))
     view = Gtk.TreeView(model=store)
     view.set_headers_visible(True)
-    for index, title in enumerate(columns):
+    for index, (title, width) in enumerate(columns):
         renderer = Gtk.CellRendererText()
         col = Gtk.TreeViewColumn(title, renderer, text=index)
-        configure_treeview_column(col)
+        configure_treeview_column(col, width=width, min_width=60)
+        if index == expand_index:
+            col.set_expand(True)
         view.append_column(col)
     setattr(app, store_attr, store)
     app._ui_state.bind_treeview(view, state_key)
     view.set_size_request(-1, 60)
-    return view, store
+    return capped_treeview_scroll(view), store
 
 
 # The two named children of the Performance page's view stack.
@@ -331,6 +344,15 @@ def create_memory_page(app):
     box.set_margin_top(15)
     box.set_margin_bottom(15)
     scrolled.add(box)
+    # The page viewport must size its content by NATURAL height.  The
+    # page's tables each sit in their own capped scrolled window, whose
+    # *minimum* is tiny (their min-content height); the default MINIMUM
+    # policy would clamp the page box to the window height and the box
+    # would then crush every table window toward that minimum — the
+    # two-rows-per-table defect.
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
 
     # Title + refresh controls
     title = Gtk.Label()
@@ -385,6 +407,13 @@ def create_memory_page(app):
     if caps is not None and caps.version is not None:
         kmod = caps.version.kmod
         version_note = f"OpenZFS kernel module {kmod[0]}.{kmod[1]}.{kmod[2]}"
+    # The renderer note makes the matplotlib/Cairo choice visible at a
+    # glance instead of guessable only from chart smoothness — the common
+    # cause of "Cairo charts despite an installed matplotlib" is the GUI
+    # running as root while the package sits in a user's pip --user site.
+    version_note = " · ".join(
+        part for part in (version_note, f"charts: {renderer_label()}") if part
+    )
     charts_box.pack_start(
         section_header("ARC — Adaptive Replacement Cache", version_note), False, False, 0
     )
@@ -455,13 +484,20 @@ def create_memory_page(app):
     app._memory_l2_chart = create_rolling_chart("L2ARC traffic", ["read", "write"])
     charts_box.pack_start(app._memory_l2_chart.widget, False, False, 0)
 
-    l2_view, _l2_store = _device_table(
+    l2_scroll, _l2_store = _device_table(
         app,
         "_memory_l2_store",
-        ["Pool", "Vdev", "Capacity (alloc/free)", "Read rate", "Write rate"],
+        [
+            ("Pool", 100),
+            ("Vdev", 200),
+            ("Capacity (alloc/free)", 220),
+            ("Read rate", 110),
+            ("Write rate", 110),
+        ],
         "memory_l2_view",
+        expand_index=1,
     )
-    charts_box.pack_start(l2_view, False, False, 0)
+    charts_box.pack_start(l2_scroll, False, False, 0)
 
     # --- SLOG section ---
     charts_box.pack_start(section_header("SLOG — Log Devices (ZIL)"), False, False, 0)
@@ -487,13 +523,20 @@ def create_memory_page(app):
     app._memory_slog_chart = create_rolling_chart("SLOG writes", ["write"])
     charts_box.pack_start(app._memory_slog_chart.widget, False, False, 0)
 
-    slog_view, _slog_store = _device_table(
+    slog_scroll, _slog_store = _device_table(
         app,
         "_memory_slog_store",
-        ["Pool", "Vdev", "Capacity (alloc/free)", "Writes/s", "Write rate"],
+        [
+            ("Pool", 100),
+            ("Vdev", 200),
+            ("Capacity (alloc/free)", 220),
+            ("Writes/s", 100),
+            ("Write rate", 110),
+        ],
         "memory_slog_view",
+        expand_index=1,
     )
-    charts_box.pack_start(slog_view, False, False, 0)
+    charts_box.pack_start(slog_scroll, False, False, 0)
 
     return scrolled
 

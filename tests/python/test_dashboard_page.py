@@ -29,6 +29,7 @@ from test_support import (
 pytestmark = requires_gi
 
 dp = import_or_skip_gi("dashboard_page")
+gh = import_or_skip_gi("gui_helpers")
 
 
 def _write_lock_file(path, dataset, pid, lock_type="w"):
@@ -2477,7 +2478,11 @@ class TestCreateDashboardPage(unittest.TestCase):
             gtk_mock.ScrolledWindow = _WidgetRecorder
             gtk_mock.Label = MagicMock
             gtk_mock.SpinButton = MagicMock
-            with patch.object(dp, "Gtk", gtk_mock):
+            # gui_helpers stays real-Gtk-bound here (no fresh re-import),
+            # and the shared capped_treeview_scroll builds its windows
+            # through gui_helpers' Gtk — patch it too or real widgets get
+            # constructed headless.
+            with patch.object(dp, "Gtk", gtk_mock), patch.object(gh, "Gtk", gtk_mock):
                 with patch.object(dp, "refresh_dashboard_page"):
                     with patch.object(dp, "_is_two_node", return_value=two_node):
                         page = dp.create_dashboard_page(app)
@@ -2600,6 +2605,64 @@ class TestCreateDashboardPage(unittest.TestCase):
         config_sw.set_min_content_width.assert_called_once_with(300)
         config_sw.set_propagate_natural_height.assert_called_once_with(True)
         self.assertIn(app.dashboard_config_grid, config_sw.children)
+
+    def test_table_windows_are_capped_scrolls(self):
+        """Recent Operations / Running Tasks / Active Locks sit in the
+        shared capped scrolled windows (propagate natural height, 20-row
+        cap), not fixed-height windows that under-fill short tables; the
+        page viewport sizes its content by natural height so the box is
+        never clamped to the window height."""
+        with mock_gtk(fresh=True) as gtk:
+            scrolls = []
+            views = []
+
+            def _make_scroll(*args, **kwargs):
+                scroll = MagicMock()
+                scrolls.append(scroll)
+                return scroll
+
+            def _make_view(*args, **kwargs):
+                view = MagicMock()
+                views.append(view)
+                return view
+
+            gtk.ScrolledWindow = MagicMock(side_effect=_make_scroll)
+            gtk.TreeView = MagicMock(side_effect=_make_view)
+            import dashboard_page as dp_fresh
+
+            app = self._create_app()
+            real_capped = dp_fresh.capped_treeview_scroll
+            fixed_rows_choices = []
+
+            def _record_capped(view, *args, **kwargs):
+                fixed_rows_choices.append(kwargs.get("fixed_rows", "default"))
+                return real_capped(view, *args, **kwargs)
+
+            with patch.object(dp_fresh, "capped_treeview_scroll", side_effect=_record_capped):
+                with patch.object(dp_fresh, "refresh_dashboard_page"):
+                    with patch.object(dp_fresh, "_is_two_node", return_value=False):
+                        page = dp_fresh.create_dashboard_page(app)
+            # The Dashboard tables explicitly keep the natural-height
+            # convention even though the helper's default is the
+            # Performance page's fixed 20-row window.
+            self.assertEqual(fixed_rows_choices, [False, False, False])
+
+            # ScrolledWindow creation order: the page window, the pool
+            # grid, the three table windows, then the config grid.
+            ops_sw, tasks_sw, locks_sw = scrolls[2], scrolls[3], scrolls[4]
+            for scroll, view in (
+                (ops_sw, app.dashboard_ops_view),
+                (tasks_sw, app.dashboard_tasks_view),
+                (locks_sw, app.dashboard_locks_view),
+            ):
+                scroll.add.assert_called_once_with(view)
+                scroll.set_propagate_natural_height.assert_called_once_with(True)
+                scroll.set_min_content_height.assert_called_once_with(60)
+                scroll.set_max_content_height.assert_called_once()
+            viewport = page.get_child()
+            viewport.set_vscroll_policy.assert_called_once_with(
+                dp_fresh.Gtk.ScrollablePolicy.NATURAL
+            )
 
     def test_iscsi_frame_hidden_in_single_node_mode(self):
         app = self._create_app()

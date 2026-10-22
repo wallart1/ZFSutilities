@@ -29,7 +29,7 @@ The GUI requires any GTK3-capable desktop environment or window manager. Cinnamo
 | python3-pip | `apt install python3-pip` | Required before pip packages can be used | 2026-01-29 |
 | mkdocs | `pip3 install mkdocs mkdocs-material` | Documentation site generator | 2026-02-21 |
 | mkdocs-material | *(installed with mkdocs above)* | Material theme for MkDocs | 2026-02-21 |
-| matplotlib | test VM: `pip3 install --user --break-system-packages matplotlib`; production (Debian 13): `sudo apt install python3-matplotlib` | High-quality charts in the Performance page — the live ARC/L2ARC/SLOG rolling charts render through it when present. Optional: when absent the page falls back to the built-in Cairo charts. See the GUI Charting developer note. | 2026-10-15 |
+| matplotlib | preferred: `sudo apt install python3-matplotlib` (system-wide; on the dev/test VM this supersedes the older `pip3 install --user` note) | High-quality charts in the Performance page — the live ARC/L2ARC/SLOG rolling charts and the blocksize ladder render through it when present. Optional: when absent the page falls back to the built-in Cairo charts, and the Performance header says so. The module must be importable **by the user the GUI runs as**: a pip `--user` install under a home directory is invisible to the root-run GUI (the classic silent-Cairo cause) — that is why the system package is preferred, and `check-prerequisites` warns with this hint when the import fails. See the GUI Charting developer note. | 2026-10-17 |
 
 ## Development-Only Tools
 

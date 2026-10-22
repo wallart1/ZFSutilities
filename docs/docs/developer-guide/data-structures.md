@@ -612,22 +612,27 @@ Dataclasses behind the Alignment view of the Performance tab.
 `collect_alignment_sample()` probes independent sources — `zpool list` /
 `get_ashift` / pool topology, `lsblk` sector geometry, dataset block
 properties, `zpool iostat -r` histograms, the arcstats/zfetchstats kstat
-files, per-dataset objset kstats, and `/etc/pve/qemu-server/*.conf` — and
-each one degrades on its own exactly like the memory samples above.
+files, per-dataset objset kstats, PVE VM configs (`/etc/pve/qemu-server`
+locally, or fetched from the compute node over ssh on two-node installs),
+and guest filesystem blocksizes through the QEMU guest agent
+(`alignment_guestfs`) — and each one degrades on its own exactly like the
+memory samples above.
 
 | Field | Type | Purpose |
 | ----- | ---- | ------- |
 | `AlignmentSample.monotonic` | `float` | `time.monotonic()` of the collection |
 | `AlignmentSample.pools` | `list[PoolAlignment]` | One entry per pool: name, `ashift_configured` (zfs-get string), `ashift_effective` (resolved power-of-two or `None`), `members`, `has_cache`, and `topology` (the typed `TopologyNode` vdev tree from `zpool status -P` with the effective ashift annotated on its root, or `None` when that pool's status read failed — the Alignment view renders the tree's classes and members and names failed pools in its availability note) |
 | `PoolAlignment.members` | `list[MemberDisk]` | Member leaf paths with `logical_sector` / `physical_sector` bytes from `lsblk` (`None` when unreported) |
-| `AlignmentSample.datasets` | `list[DatasetBlocks]` | One entry per filesystem/volume: `name`, `kind`, `recordsize`/`volblocksize` (zfs-get strings) with per-property `source` |
+| `AlignmentSample.datasets` | `list[DatasetBlocks]` | One entry per filesystem/volume: `name`, `kind`, `recordsize`/`volblocksize` (zfs-get strings) with per-property `source`, and `volsize` (volume byte size; feeds the guest prober's volsize disk matching) |
 | `AlignmentSample.dataset_read_failures` | `list[str]` | Pools whose per-pool dataset-property read failed this collection (dataset properties are read per pool, so a transient zfs failure costs only that pool's dataset rows; the others keep theirs) |
 | `AlignmentSample.histograms` | `dict[str, ReqHistogram]` | Since-boot request-size histogram per pool from `zpool iostat -r` |
 | `ReqHistogram.buckets` | `dict[int, dict[str, dict[str, int]]]` | `{bucket bytes: {"ind"/"agg": {column: op count}}}`; helpers `ops()`, `dominant_bucket()`, `top_buckets()` take column/kind filters |
 | `AlignmentSample.objset` | `dict[str, dict[str, int]]` | Since-boot per-dataset counters from `/proc/spl/kstat/zfs/<pool>/objset-*` (OpenZFS 2.2+; each file self-identifies via its `dataset_name` row): `nread`/`nwritten`/`reads`/`writes` plus the per-dataset ZIL counters |
-| `AlignmentSample.vm_disks` | `dict[str, VMOption]` | `{zvol short name: VMOption(vmid, disknum, bus, options)}` from local PVE VM configs |
+| `AlignmentSample.vm_disks` | `dict[str, VMOption]` | `{zvol short name: VMOption(vmid, disknum, bus, options, agent)}` from PVE VM configs — the local directory when this host runs PVE, otherwise the compute-node fetch; `agent` records the config's `agent:` switch so guest probing can name "agent disabled" rather than "unreachable" |
+| `AlignmentSample.guest_fs` | `dict[str, list[GuestFsEntry]]` | Probed guest filesystems per zvol short name: `GuestFsEntry(mount, fstype, blocksize)` from `alignment_guestfs.GuestFsProber` (QEMU guest agent on the compute node; each volume's guest disk identified by the deterministic chain — pinned `serial=`, then UUID/PARTUUID signature intersection with the zvol's own partitions, then size+bus position for blank zvols) |
+| `AlignmentSample.guest_fs_failures` | `dict[str, str]` | Per-volume probe degrades (short name → reason: agent absent, VM stopped, disk not matched, clone-identical signatures, non-Linux guest); probing never fails the sample that carries it |
 | `AlignmentSample.arc` / `prefetch` | `dict[str, int]` | arcstats / zfetchstats counters exposed by this host |
-| `AlignmentSample.*_available` | `bool` | Per-source probe results (`pools`, `datasets`, `iostat_r`, `arcstats`, `prefetch`, `objset`, `pve`) |
+| `AlignmentSample.*_available` | `bool` | Per-source probe results (`pools`, `datasets`, `iostat_r`, `arcstats`, `prefetch`, `objset`, `pve`, `guest_fs_probed`) |
 
 `compute_objset_rates(prev, cur)` deltas two samples' objset counters into
 `ObjsetRates` per dataset — reads/writes per second, read/write bytes per
@@ -664,7 +669,11 @@ visual from the same sample: one `LadderPool(pool, ashift, block, bars)`
 per pool — `block` is the effective-ashift block in bytes, the dashed
 reference line, `None` when unresolved — carrying `LadderBar(layer,
 label, size, state)` rungs: device physical sectors, the ashift block,
-dataset `recordsize`/`volblocksize` groups, and VM guest sectors,
+dataset `recordsize`/`volblocksize` groups, VM guest sectors, and the
+probed guest filesystem blocksizes (one rung per distinct
+`(fstype, blocksize)`, judged against the volume's `volblocksize` — a
+guest fs block below the volblock is the partial-block hazard — with
+several volumes under one rung rendering at the worst verdict earned),
 grouped by size (labels carry ×counts), in stack order. Rung `state`
 reuses the Finding severity ladder and the ladder renderers map it to
 their shared colour vocabulary; per-source degrade mirrors the tables
