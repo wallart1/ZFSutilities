@@ -244,6 +244,14 @@ This initializes basic runtime variables and sources commonly-used functions.
   `export -f` does not propagate. Instead, `source ~/bashinit` inside each
   subshell so `log_msg` and its dependencies are fully initialized.
 
+- `log_msg` (and the other caller-frame helpers in `bashinit`, such as
+  `msg_prefix` and `calledbybash`) is safe to call at the top level of a
+  payload shipped to the other node over ssh (`ssh ... "bash -s"` with the
+  payload on stdin): a stdin script's top-level frames carry no
+  `BASH_SOURCE` entry, so the long prefix falls back to `zfsutilities:`
+  instead of a file:line. Payload authors must not re-introduce bare
+  `${BASH_SOURCE[1]}` reads — under `set -u` they abort the remote shell.
+
 ### Project-Specific Patterns
 
 - Any code path that creates a ZFS snapshot must hold a `w` lock on the target

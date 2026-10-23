@@ -30,6 +30,7 @@ from config_core import (
     load_config,
     save_docs_editor,
 )
+from cron_manager import converge_scheduler_files
 from dashboard_page import (
     _collect_running_tasks,
     _get_host_version,
@@ -558,6 +559,10 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
 
     def _check_startup_config(self):
         """Log warnings for missing configuration and check peer version."""
+        # Converge the scheduler drop-ins to this version's format first: a
+        # deployed upgrade can leave a pre-fence cron drop-in in place, which
+        # floods the cron log with whole-run output until it is regenerated.
+        converge_scheduler_files(self.config)
         warnings = []
         if not get_pools(self.config):
             warnings.append("No pools registered — add pools in the Pools tab")

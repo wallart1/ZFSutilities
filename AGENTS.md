@@ -42,6 +42,7 @@ be tedious."
 in documentation. VERSION and changelog remain off-limits per the Hard Rules.
 20. Whenever using a path that starts with `/NFS1/dan(NFS1)/` be sure to quote the whole path.
 21. In each final report, include a diff-size reading, aka "The Headline Numbers," and also please include information that the *end user* needs to know.
+22. Never edit a file blindly. Always read the file first then decide the edits needed.
 
 ## Hard Rules
 

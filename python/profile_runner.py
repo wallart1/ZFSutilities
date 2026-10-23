@@ -49,8 +49,8 @@ from command_builders import (
 from command_builders import (
     parse_rsync_endpoint as _parse_rsync_endpoint,
 )
-from config_core import load_config, prune_old_logs
-from cron_manager import _match_weekday_ordinal, _parse_weekday
+from config_core import get_paths_config, load_config, prune_old_logs
+from cron_manager import _match_weekday_ordinal, _parse_weekday, converge_scheduler_files
 from feature_config import (
     generate_offsite_snapshot_name,
     generate_snapshot_name,
@@ -753,7 +753,23 @@ def run_scrub_profile(profile, config, parent_dir, session_log_file=None):
     return 0
 
 
-def _silence_cron_output(session_log_file):
+def _stdout_targets_cron_log(cron_log):
+    """Return True when fd 1 points at the cron log itself.
+
+    Pre-fence cron lines redirect the runner's merged output straight into
+    the cron log (``>> cron.log 2>&1``) with no FROM_CRON marker; resolving
+    /proc/self/fd/1 identifies that layout so a stale drop-in cannot keep
+    flooding the log after an upgrade.  Pipes and terminals (GUI "Run Now",
+    manual runs) never match.
+    """
+    try:
+        target = os.readlink("/proc/self/fd/1")
+    except OSError:
+        return False
+    return os.path.realpath(target) == os.path.realpath(cron_log)
+
+
+def _silence_cron_output(session_log_file, cron_log=None):
     """Silence this process's stdout/stderr for the rest of a from-cron run.
 
     Cron job lines (cron_manager.generate_cron_line) launch the runner with
@@ -766,9 +782,17 @@ def _silence_cron_output(session_log_file):
     "Run Now", manual terminal runs) or without a session log (creation
     failed — keep the cron log as the fallback record), nothing is silenced.
 
+    A pre-fence cron line carries no marker but redirects fd 1 into the
+    cron log itself; when *cron_log* names that file, the redirect identifies
+    the launch as a cron one and the fence engages the same way.
+
     Returns True when the streams were silenced.
     """
-    if not session_log_file or os.environ.get("ZFSUTILITIES_FROM_CRON") != "Y":
+    if not session_log_file:
+        return False
+    if os.environ.get("ZFSUTILITIES_FROM_CRON") != "Y" and (
+        not cron_log or not _stdout_targets_cron_log(cron_log)
+    ):
         return False
     sys.stdout.flush()
     sys.stderr.flush()
@@ -808,11 +832,24 @@ def main():
     _session_log_file = None
     _session_start_time = time.time()
     _last_log_size_check = time.time()
+    # Converge the scheduler drop-ins before the run proper: a pre-fence
+    # cron line (no FROM_CRON marker) would otherwise keep flooding the
+    # cron log for this run and every later one.  Placed ahead of the
+    # session log and the profile lock so missing profiles, lock contention,
+    # and schedule guards heal an unattended host just the same.  Best
+    # effort — a non-root manual run must not fail here.
+    cron_log = None
+    try:
+        config = load_config()
+        converge_scheduler_files(config)
+        cron_log = get_paths_config(config, persist=False)["cron_log"]
+    except OSError as e:
+        log_msg(f"WARN: Scheduler drop-in convergence skipped: {e}")
     _session_log_file = session_log.create_session_log_file(tab_type, profile_name)
     # From-cron runs go quiet on their output streams from here on: the cron
     # log keeps only pre-session-log failures, and the session log (created
     # just above) is the record for the rest of the run.
-    _silence_cron_output(_session_log_file)
+    _silence_cron_output(_session_log_file, cron_log)
 
     ctx = session_log_context(_session_log_file) if _session_log_file else nullcontext()
     with ctx:

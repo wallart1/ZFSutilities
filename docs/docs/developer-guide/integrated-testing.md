@@ -223,7 +223,18 @@ The cycle-2 journeys model the production two-node layout (storage node
   answers, verify the deployed wiring on both guests, and close the
   loop with a first-LUN round trip — a VM created and disk provisioned
   on the compute host must arrive over iSCSI and be saved back on the
-  storage side.
+  storage side. (The lab-builder function is reusable: j06 composes the
+  entire j05 sequence before its own stages.)
+- **j06-guest-probe-validator** composes the j05 lab and then runs
+  `share/dev/validate-guestfs-probe.sh` live on the storage guest,
+  the way production runs it: a positive pass must show a populated
+  sample (pools, datasets, PVE configs fetched from the compute guest,
+  probe targets) with the stopped VM's disk probed and a recorded
+  reason, and a negative control (compute host made unresolvable on the
+  storage guest) must make the validator exit non-zero with the ssh
+  failure reason printed — the fence against the vacuous
+  `LIVE PASS`-against-nothing incident (2026-10-22). Requires
+  `ITF_SW_SOURCE=dev-tarball` because it verifies working-tree repairs.
 
 ## Findings and repair loop
 

@@ -23,7 +23,7 @@ SNAPNAME_RESERVE_SECONDS="${SNAPNAME_RESERVE_SECONDS:-60}"
 snapname_reserve_seconds="$SNAPNAME_RESERVE_SECONDS"
 
 function buildsnapfilename {
-    local caller="${BASH_SOURCE[1]}"        # Who called?
+    local caller="${BASH_SOURCE[1]:-unknown}"  # Who called? (stdin payloads carry no caller file)
     local caller_sanitized
     caller_sanitized=$(basename "$caller" | tr -c 'A-Za-z0-9_' '_')  # Sanitize for valid filename
     local prefix="${ZFSUTILITIES_RUN_NEXTSNAP_PREFIX:-/run/zfsutilities/nextsnap_}"

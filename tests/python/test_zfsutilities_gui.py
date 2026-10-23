@@ -119,6 +119,27 @@ class TestCheckPeerVersionAsync(unittest.TestCase):
         )
 
 
+class TestStartupSchedulerConvergence(unittest.TestCase):
+    """_check_startup_config converges the scheduler drop-ins first."""
+
+    def _make_window(self):
+        """Create a ZFSUtilitiesWindow with __init__ bypassed."""
+        gui = _gui_module()
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
+            window = gui.ZFSUtilitiesWindow()
+            window.config = {"backup": {"pull_steps": [], "send_receive_steps": []}}
+            return window
+
+    @patch("zfsutilities_gui._get_peer_host", return_value=None)
+    @patch("zfsutilities_gui.get_checkagainst", return_value=[])
+    @patch("zfsutilities_gui.get_pools", return_value=[])
+    @patch("zfsutilities_gui.converge_scheduler_files")
+    def test_startup_converges_scheduler_drop_ins(self, mock_converge, _pools, _check, _peer):
+        window = self._make_window()
+        window._check_startup_config()
+        mock_converge.assert_called_once_with(window.config)
+
+
 class TestLogMessageDisplayFilter(unittest.TestCase):
     """Tests for ZFSUtilitiesWindow.log_message display filtering."""
 

@@ -25,7 +25,9 @@
 # shellcheck source=common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
-journey_main() {
+# The lab-builder a composable journey (j06) reuses; the wrapper at the
+# bottom of this file keeps the standalone journey_main contract.
+j05_two_node_lab_main() {
     local s_base="${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]}}"
     local c_base="${ITF_COMPUTE_BASE:-}"
     if [[ -z "$c_base" || -z "${ITF_COMPUTE_TEMPLATE_NAME:-}" \
@@ -452,4 +454,8 @@ EOF
     itf_step info "journey stage reached" \
         "two-node install verified: link, installer, deploy, PVE patch, first LUN"
     return 0
+}
+
+journey_main() {
+    j05_two_node_lab_main "$@"
 }

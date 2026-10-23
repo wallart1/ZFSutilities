@@ -1151,7 +1151,11 @@ Every line written to the cron log carries a `YYYY-MM-DD HH:MM:SS` timestamp,
 so the viewer's level filter and short-prefix display work on these rows the
 same way as on session logs. The cron log holds only messages from before a
 scheduled run created its session log (launch-time and early failures); once
-the session log exists, it — not the cron log — is the run's record. The log
+the session log exists, it — not the cron log — is the run's record. The
+scheduler drop-ins behind this behavior are converged automatically at GUI
+startup and at each scheduled-run start, and a pre-fence cron line — one that
+redirects into this log without the marker — is silenced by its redirect
+target, so a stale drop-in cannot keep refilling the log. The log
 is managed by logrotate — rotated
 weekly, compressed, and bounded by an early-rotation size guard — so it never
 grows without bound, and every generation is created readable by non-root

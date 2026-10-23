@@ -66,6 +66,7 @@ from gui_helpers import (
     set_text_if_changed,
     show_note,
 )
+from logging_config import log_msg
 from memory_stats import format_percent
 
 # Memory-tier observation rows (arc_readouts keys plus the prefetcher
@@ -721,7 +722,6 @@ def refresh_alignment_view(app):
     """Collect an alignment sample off-thread and update the view on idle."""
     if getattr(app, "_alignment_refresh_pending", False):
         return
-    app._alignment_refresh_pending = True
 
     ctx = getattr(app, "ctx", None)
     zfs_repo = getattr(ctx, "zfs_repository", None)
@@ -736,16 +736,28 @@ def refresh_alignment_view(app):
         app._alignment_guest_prober = prober
 
     def _collect():
-        sample = collect_alignment_sample(
-            zfs_repo=zfs_repo, disk_repo=disk_repo, guest_prober=prober
-        )
+        try:
+            sample = collect_alignment_sample(
+                zfs_repo=zfs_repo, disk_repo=disk_repo, guest_prober=prober
+            )
+        except Exception as exc:
+            # The pending flag only clears in the idle callback, so an
+            # exception escaping this worker would stop every future
+            # refresh until the GUI restarts (same shape as the
+            # dashboard worker).
+            log_msg(f"WARN: Alignment sample gathering failed: {exc}")
+            sample = None
         GLib.idle_add(_finish_refresh, app, sample, survey, profiles)
 
     def _finish_refresh(_app, sample, _survey, _profiles):
         _app._alignment_refresh_pending = False
-        _apply_alignment_sample(_app, sample)
+        if sample is not None:
+            _apply_alignment_sample(_app, sample)
         return False
 
+    # Flag last: the reads above run on the main thread, and a raise
+    # there must not strand the guard.
+    app._alignment_refresh_pending = True
     threading.Thread(target=_collect, daemon=True).start()
 
 

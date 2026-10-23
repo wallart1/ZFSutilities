@@ -34,6 +34,7 @@ collects its own copy of the kstats rather than sharing the charts sample.
 """
 
 import glob
+import json
 import os
 import re
 import subprocess
@@ -104,6 +105,17 @@ _PVE_DISK_LINE_RE = re.compile(r"^(scsi|virtio|sata|ide)(\d+):\s*(.+)$")
 # Group 1: the VM id         e.g. "201"
 # Group 2: the disk number   e.g. "0"
 _VM_DISK_TOKEN_RE = re.compile(r"vm-(\d+)-disk-(\d+)")
+
+# The storage host's targetcli saveconfig: the LUN -> backstore mapping
+# that resolves by-path disk lines to zvol short names.
+LIO_SAVECONFIG = "/etc/rtslib-fb-target/saveconfig.json"
+
+# Regex: ^/dev/disk/by-path/ip-[^:]+:\d+-iscsi-(.+)-lun-(\d+)$
+# Purpose: identify the iSCSI target IQN and LUN number inside a
+# by-path disk-line payload (how two-node installs wire VM disks).
+# Group 1: the target IQN   e.g. "iqn.2026-10.local.box:poolname"
+# Group 2: the LUN number   e.g. "0"
+_PVE_BYPATH_RE = re.compile(r"^/dev/disk/by-path/ip-[^:]+:\d+-iscsi-(.+)-lun-(\d+)$")
 
 
 def parse_zfs_size(text):
@@ -254,7 +266,9 @@ class DatasetBlocks:
 
 @dataclass
 class VMOption:
-    """One PVE VM disk line that references a zvol by short name."""
+    """One PVE VM disk line: a zvol short name, or a by-path device pending
+    resolution against the storage host's LIO LUN map (see
+    ``resolve_bypath_disks``)."""
 
     vmid: str
     disknum: str
@@ -263,6 +277,10 @@ class VMOption:
     # VM-level qemu-guest-agent switch (the config's ``agent:`` line) —
     # lets guest probing say "agent disabled" instead of "unreachable".
     agent: bool = False
+    # By-path form only: the iSCSI target IQN and LUN number parsed from
+    # the device string; empty/-1 for storage-reference lines.
+    bypath_iqn: str = ""
+    bypath_lun: int = -1
 
 
 @dataclass
@@ -296,6 +314,13 @@ class AlignmentSample:
     prefetch_available: bool = False
     objset_available: bool = False
     pve_available: bool = False
+    # Why the PVE read came back empty (ssh exit/stderr, timeout, nothing
+    # parsed, or no applicable source) — empty when configs were read.
+    pve_failure: str = ""
+    # By-path disk lines the local LIO LUN map could not resolve to a
+    # zvol short name (device strings; F-019) — recorded, never dropped
+    # silently.
+    pve_bypath_dropped: list[str] = field(default_factory=list)
     guest_fs_probed: bool = False
 
 
@@ -489,10 +514,12 @@ def _agent_enabled(value):
 def parse_pve_vm_conf(text, vmid):
     """Parse one qemu-server config body into {short_name: VMOption}.
 
-    Only disk lines whose payload names a zvol by its short name
-    (``vm-<id>-disk-<n>``, the storage-reference form) are returned;
-    by-path references used by two-node iSCSI setups cannot be mapped to
-    zvols without backstore knowledge and are skipped.
+    Disk lines whose payload names a zvol by its short name
+    (``vm-<id>-disk-<n>``, the storage-reference form) are keyed by that
+    short name. By-path references (``/dev/disk/by-path/ip-...-iscsi-...``,
+    how two-node iSCSI setups wire disks) are keyed by the device string
+    with the IQN/LUN recorded on the entry — they resolve to short names
+    later through ``resolve_bypath_disks`` and the local LIO LUN map.
 
     *vmid* is the config file's VM (the filename): the authoritative
     owner of every disk line in the file. It can differ from the id
@@ -516,25 +543,43 @@ def parse_pve_vm_conf(text, vmid):
         bus_family, bus_index, payload = match.groups()
         if "media=cdrom" in payload:
             continue
+        device = payload.split(",", 1)[0]
+        bypath = _PVE_BYPATH_RE.match(device)
+        if bypath is not None:
+            result[device] = VMOption(
+                vmid=str(vmid),
+                disknum="",
+                bus=f"{bus_family}{bus_index}",
+                options=_parse_disk_options(payload),
+                agent=agent,
+                bypath_iqn=bypath.group(1),
+                bypath_lun=int(bypath.group(2)),
+            )
+            continue
         token = _VM_DISK_TOKEN_RE.search(payload)
         if token is None:
             continue
-        options: dict[str, str] = {}
-        for entry in payload.split(",")[1:]:
-            if "=" in entry:
-                key, value = entry.split("=", 1)
-                options[key] = value
-            elif entry:
-                options[entry] = "1"
         short_name = token.group(0)
         result[short_name] = VMOption(
             vmid=str(vmid),
             disknum=token.group(2),
             bus=f"{bus_family}{bus_index}",
-            options=options,
+            options=_parse_disk_options(payload),
             agent=agent,
         )
     return result
+
+
+def _parse_disk_options(payload):
+    """Split a disk-line payload's comma options into a dict."""
+    options: dict[str, str] = {}
+    for entry in payload.split(",")[1:]:
+        if "=" in entry:
+            key, value = entry.split("=", 1)
+            options[key] = value
+        elif entry:
+            options[entry] = "1"
+    return options
 
 
 def read_pve_vm_options(conf_dir=PVE_QEMU_CONF_DIR):
@@ -587,14 +632,17 @@ def parse_pve_conf_dump(text):
     return vm_disks
 
 
-def fetch_pve_vm_options(host, conf_dir=PVE_QEMU_CONF_DIR, runner=None):
+def fetch_pve_vm_options(host, conf_dir=PVE_QEMU_CONF_DIR, runner=None, errors=None):
     """Fetch the compute node's qemu-server configs over ssh.
 
     One ``ssh root@<host>`` round-trip cats every config with an
     ``== <filename>`` marker before each body (parsed by
     ``parse_pve_conf_dump``); BatchMode and a ConnectTimeout keep a
     missing key or an unreachable host from hanging the refresh. Returns
-    an empty dict on any failure — the caller degrades per-source.
+    an empty dict on any failure — the caller degrades per-source. When
+    *errors* is a dict, the failure cause is recorded under ``"pve"`` so
+    consumers can report why the PVE source is empty instead of a bare
+    unavailable flag.
     """
     if runner is None:
 
@@ -609,29 +657,120 @@ def fetch_pve_vm_options(host, conf_dir=PVE_QEMU_CONF_DIR, runner=None):
             ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", f"root@{host}", script],
             timeout=PVE_FETCH_TIMEOUT,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as e:
+        if errors is not None:
+            errors["pve"] = f"ssh root@{host}: {type(e).__name__}: {e}"
         return {}
     if result.returncode != 0:
+        if errors is not None:
+            detail = (result.stderr or result.stdout or "").strip().splitlines()
+            errors["pve"] = (
+                f"ssh root@{host} rc={result.returncode}: "
+                f"{detail[-1] if detail else 'no diagnostics'}"
+            )
         return {}
-    return parse_pve_conf_dump(result.stdout or "")
+    parsed = parse_pve_conf_dump(result.stdout or "")
+    if not parsed and errors is not None:
+        errors["pve"] = f"ssh root@{host} rc=0: no VM configs parsed from output"
+    return parsed
 
 
-def read_pve_vm_configs(conf_dir=PVE_QEMU_CONF_DIR, config=None):
+def lun_backstore_map(path=LIO_SAVECONFIG):
+    """Map (target IQN, LUN index) -> zvol short name from the local LIO config.
+
+    Two-node VM configs reference their disks as /dev/disk/by-path devices
+    naming the iSCSI target and LUN; the zvol behind each LUN is recorded
+    in the storage host's targetcli saveconfig (backstore name and dev
+    path). Returns {} when the file is missing or unreadable — hosts
+    without LIO (the compute node, single-node installs) have no mapping,
+    so by-path lines there surface as recorded drops instead of silently
+    vanishing.
+    """
+    try:
+        with open(path) as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    # Backstore name -> zvol short name; the dev path's basename is the
+    # authoritative zvol name (the product names backstores after it, but
+    # a renamed backstore must not break resolution).
+    devs = {
+        so.get("name", ""): os.path.basename(so.get("dev", "") or "")
+        for so in cfg.get("storage_objects", [])
+        if so.get("name") and so.get("dev")
+    }
+    mapping: dict[tuple[str, int], str] = {}
+    for target in cfg.get("targets", []):
+        iqn = target.get("wwn") or ""
+        for tpg in target.get("tpgs", []):
+            for lun in tpg.get("luns", []):
+                ref = (lun.get("storage_object") or "").rsplit("/", 1)[-1]
+                short = devs.get(ref) or ref
+                index = lun.get("index")
+                # A malformed entry (missing/non-integer index) is skipped,
+                # not fatal: this runs inside GUI sample collection, where
+                # an exception would wedge the Alignment page's refresh.
+                if iqn and short and isinstance(index, int):
+                    mapping[(iqn, index)] = short
+    return mapping
+
+
+def resolve_bypath_disks(vm_disks, lun_map):
+    """Re-key by-path VMOptions to their zvol short names via the LUN map.
+
+    Returns ``(resolved, dropped)``: resolved maps short name (or the
+    original storage-reference key) to VMOption, with disknum derived
+    from the resolved short name; dropped lists by-path device strings
+    the local LIO config had no LUN for.
+    """
+    resolved: dict[str, VMOption] = {}
+    dropped: list[str] = []
+    for key, opt in vm_disks.items():
+        if not key.startswith("/dev/disk/by-path/"):
+            resolved[key] = opt
+            continue
+        short = lun_map.get((opt.bypath_iqn, opt.bypath_lun))
+        if short is None:
+            dropped.append(key)
+            continue
+        token = _VM_DISK_TOKEN_RE.search(short)
+        resolved[short] = VMOption(
+            vmid=opt.vmid,
+            disknum=token.group(2) if token else "",
+            bus=opt.bus,
+            options=opt.options,
+            agent=opt.agent,
+        )
+    return resolved, dropped
+
+
+def read_pve_vm_configs(conf_dir=PVE_QEMU_CONF_DIR, config=None, errors=None):
     """Read PVE VM configs wherever they live: local dir, then the compute node.
 
     Single-node installs (and the GUI running on the compute node) find
     the configs locally; two-node installs fall back to the ssh fetch
     against the configured compute host. Returns ``{short_name: VMOption}``
     — empty when neither source is readable, which the caller reports
-    through ``pve_available``.
+    through ``pve_available``; when *errors* is a dict the reason is
+    recorded under ``"pve"`` (and by-path lines the local LIO map cannot
+    resolve under ``"pve_bypath_dropped"``).
     """
     vm_disks = read_pve_vm_options(conf_dir)
-    if vm_disks:
-        return vm_disks
-    config = load_node_config() if config is None else config
-    host = config.get("compute_host") or ""
-    if config.get("mode") == "two-node" and host and config.get("this_host") != host:
-        vm_disks = fetch_pve_vm_options(host, conf_dir=conf_dir)
+    if not vm_disks:
+        config = load_node_config() if config is None else config
+        host = config.get("compute_host") or ""
+        if config.get("mode") == "two-node" and host and config.get("this_host") != host:
+            vm_disks = fetch_pve_vm_options(host, conf_dir=conf_dir, errors=errors)
+        elif errors is not None:
+            errors["pve"] = (
+                f"no local {conf_dir} configs and no compute fetch "
+                f"(mode={config.get('mode')!r}, compute_host={host!r})"
+            )
+    # By-path disk lines (the two-node wiring) resolve to zvol short names
+    # through the local LIO LUN map.
+    vm_disks, dropped = resolve_bypath_disks(vm_disks, lun_backstore_map())
+    if dropped and errors is not None:
+        errors["pve_bypath_dropped"] = ", ".join(dropped)
     return vm_disks
 
 
@@ -850,10 +989,16 @@ def collect_alignment_sample(
     if objset:
         sample.objset = objset
         sample.objset_available = True
-    vm_disks = read_pve_vm_configs(pve_conf_dir, config=node_config_data)
+    pve_errors: dict[str, str] = {}
+    vm_disks = read_pve_vm_configs(pve_conf_dir, config=node_config_data, errors=pve_errors)
     if vm_disks:
         sample.vm_disks = vm_disks
         sample.pve_available = True
+    sample.pve_failure = pve_errors.get("pve", "")
+    if pve_errors.get("pve_bypath_dropped"):
+        sample.pve_bypath_dropped = [
+            dev.strip() for dev in pve_errors["pve_bypath_dropped"].split(",")
+        ]
     if sample.pve_available:
         prober = GuestFsProber(config=node_config_data) if guest_prober is None else guest_prober
         results = prober.probe_volumes(_guest_probe_targets(sample.datasets, sample.vm_disks))

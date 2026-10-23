@@ -8,7 +8,7 @@
 #   Use Default Values.  If parameter is unset or null, the expansion of word is substituted. 
 #   Otherwise, the value of parameter is substituted.
 # $1    Return code (Default = 0).
-if [[ "${BASH_SOURCE[1]}" != "${0}" ]]; then
+if [[ "${BASH_SOURCE[1]:-}" != "${0}" ]]; then
     return "${1:-0}"     # We were called by bash.
 else
     exit "${1:-0}"       # We were called by something other than bash.

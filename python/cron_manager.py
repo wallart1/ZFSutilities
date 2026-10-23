@@ -9,7 +9,11 @@ import shlex
 from datetime import datetime, timedelta
 
 from backup_config import log_msg
+from config_core import get_paths_config
+from logrotate_manager import build_logrotate_content, write_logrotate_file
+from path_utils import get_profile_runner_path
 from paths import get_cron_file_path, get_profile_lock_dir
+from profile_manager import list_profiles
 
 CRON_FILE = get_cron_file_path()
 
@@ -38,13 +42,10 @@ _HEADER = (
 )
 
 
-def write_cron_file(profiles, runner_path, cron_log):
-    """Regenerate the cron drop-in file from scratch.
+def build_cron_content(profiles, runner_path, cron_log):
+    """Build the full cron drop-in content for the given profiles.
 
-    Args:
-        profiles: list of profile dicts
-        runner_path: absolute path to profile_runner.py
-        cron_log: absolute path to the cron output log
+    Inactive profiles are skipped, matching write_cron_file's output.
     """
     lines = [_HEADER]
     for profile in profiles:
@@ -53,8 +54,18 @@ def write_cron_file(profiles, runner_path, cron_log):
         line = generate_cron_line(profile, runner_path, cron_log)
         if line:
             lines.append(line + "\n")
+    return "".join(lines)
 
-    content = "".join(lines)
+
+def write_cron_file(profiles, runner_path, cron_log):
+    """Regenerate the cron drop-in file from scratch.
+
+    Args:
+        profiles: list of profile dicts
+        runner_path: absolute path to profile_runner.py
+        cron_log: absolute path to the cron output log
+    """
+    content = build_cron_content(profiles, runner_path, cron_log)
     try:
         os.makedirs(PROFILE_LOCK_DIR, exist_ok=True)
         with open(CRON_FILE, "w") as f:
@@ -64,6 +75,63 @@ def write_cron_file(profiles, runner_path, cron_log):
     except OSError as e:
         log_msg(f"FATAL: Could not write cron file {CRON_FILE}: {e}")
         raise
+
+
+def _content_differs(path, expected, create_when_missing):
+    """Return True when the drop-in at *path* must be (re)written.
+
+    A missing file only counts as differing when *create_when_missing* is
+    set, so a host with no active profiles never gains a drop-in.  A file
+    that cannot be read is left alone rather than blindly overwritten.
+    """
+    try:
+        with open(path, "r") as f:
+            current = f.read()
+    except FileNotFoundError:
+        return create_when_missing
+    except OSError as e:
+        log_msg(f"WARN: Could not read drop-in {path}: {e}")
+        return False
+    return current != expected
+
+
+def converge_scheduler_files(config):
+    """Converge the cron and logrotate drop-ins to this version's format.
+
+    The drop-ins are persisted /etc state that only a Schedule-page save
+    refreshes, so a deployed upgrade can outrun them: a pre-fence cron line
+    (plain ``>> cron.log 2>&1``, no FROM_CRON marker) keeps pouring whole
+    runs into the cron log, and a missing logrotate drop-in leaves it
+    unrotated.  GUI startup and every scheduled-runner start call this to
+    re-derive the expected content and rewrite a drop-in only when it
+    differs; healthy files are left byte- and mtime-identical.  Missing
+    drop-ins are created only when active profiles exist.
+
+    Best-effort: an unwritable target is logged and skipped so a manual
+    non-root run cannot fail because of it.  Returns the list of
+    (drop-in, action) pairs actually performed.
+    """
+    profiles = list_profiles()
+    paths_cfg = get_paths_config(config, persist=False)
+    runner_path = get_profile_runner_path()
+    has_active = any(profile.get("active", False) for profile in profiles)
+    actions = []
+
+    expected_cron = build_cron_content(profiles, runner_path, paths_cfg["cron_log"])
+    if _content_differs(CRON_FILE, expected_cron, has_active):
+        try:
+            write_cron_file(profiles, runner_path, paths_cfg["cron_log"])
+            actions.append(("cron", "rewritten"))
+        except OSError as e:
+            log_msg(f"WARN: Cron drop-in not converged: {e}")
+    expected_logrotate = build_logrotate_content(paths_cfg)
+    if _content_differs(paths_cfg["logrotate_file"], expected_logrotate, has_active):
+        try:
+            write_logrotate_file(paths_cfg)
+            actions.append(("logrotate", "rewritten"))
+        except OSError as e:
+            log_msg(f"WARN: Logrotate drop-in not converged: {e}")
+    return actions
 
 
 def generate_cron_line(profile, runner_path, cron_log):

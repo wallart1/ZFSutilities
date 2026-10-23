@@ -157,6 +157,93 @@ test_log_msg_survives_cd_with_relative_script_path() {
     rm -rf "$tmpdir"
 }
 
+test_log_msg_from_stdin_payload() {
+    # Regression (vm-205 unarchive-vm Step 1): payloads that on_storage
+    # ships to the other node run as stdin scripts (ssh "... bash -s"),
+    # whose top-level frames have no BASH_SOURCE entry.  The first
+    # top-level log_msg used to abort the payload under set -u with
+    # "BASH_SOURCE[1]: unbound variable"; it must fall back to the
+    # zfsutilities: prefix instead.
+    local tmpdir payload output rc
+    tmpdir=$(mktemp -d)
+    payload="$tmpdir/payload.sh"
+    {
+        echo "mydir=\"$mydir/bin\""
+        echo 'source "$mydir/bashinit"'
+        echo 'bashinit'
+        echo 'set -euo pipefail'
+        echo 'log_msg "INFO: hello from stdin payload"'
+        echo 'echo "SCRIPT-OK"'
+    } > "$payload"
+    output=$(bash -s < "$payload" 2>&1)
+    rc=$?
+    test_start "log_msg works when the payload runs as a stdin script (ssh bash -s mode)"
+    if [[ "$rc" -eq 0 && "$output" == *"zfsutilities: INFO: hello from stdin payload"* \
+        && "$output" == *"SCRIPT-OK"* \
+        && "$output" != *"unbound variable"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_msg_prefix_from_stdin_payload() {
+    # Same stdin-payload execution mode as the log_msg regression above:
+    # msg_prefix computes its file:line prefix from BASH_SOURCE[1] and must
+    # fall back to "zfsutilities:" rather than abort under set -u.
+    local tmpdir payload output rc
+    tmpdir=$(mktemp -d)
+    payload="$tmpdir/payload.sh"
+    {
+        echo "mydir=\"$mydir/bin\""
+        echo 'source "$mydir/bashinit"'
+        echo 'bashinit'
+        echo 'set -euo pipefail'
+        echo 'msg_prefix --long-prefix'
+        echo 'echo "SCRIPT-OK"'
+    } > "$payload"
+    output=$(bash -s < "$payload" 2>&1)
+    rc=$?
+    test_start "msg_prefix works when the payload runs as a stdin script"
+    if [[ "$rc" -eq 0 && "$output" == *"zfsutilities:"* \
+        && "$output" == *"SCRIPT-OK"* \
+        && "$output" != *"unbound variable"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_calledbybash_from_stdin_payload() {
+    # A stdin payload has no source file for its caller frame, so
+    # calledbybash must answer "no" (the payload was not executed as a
+    # script file) without aborting under set -u.
+    local tmpdir payload output rc
+    tmpdir=$(mktemp -d)
+    payload="$tmpdir/payload.sh"
+    {
+        echo "mydir=\"$mydir/bin\""
+        echo 'source "$mydir/bashinit"'
+        echo 'bashinit'
+        echo 'set -euo pipefail'
+        echo 'if calledbybash; then echo "CALLED-BY-BASH"; else echo "NOT-CALLED-BY-BASH"; fi'
+        echo 'echo "SCRIPT-OK"'
+    } > "$payload"
+    output=$(bash -s < "$payload" 2>&1)
+    rc=$?
+    test_start "calledbybash answers no (without aborting) for a stdin payload"
+    if [[ "$rc" -eq 0 && "$output" == *"NOT-CALLED-BY-BASH"* \
+        && "$output" == *"SCRIPT-OK"* \
+        && "$output" != *"unbound variable"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
 test_no_session_log_export_when_log_file_unwritable() {
     # Regression: when the session log directory exists but the log file
     # cannot be created (e.g. non-root user against the root-owned session
@@ -268,6 +355,9 @@ test_ask_yn_reask_keeps_request_uuid
 test_input_hold_env_prefix_for_ssh_delegation
 test_ask_line_returns_read_status
 test_log_msg_survives_cd_with_relative_script_path
+test_log_msg_from_stdin_payload
+test_msg_prefix_from_stdin_payload
+test_calledbybash_from_stdin_payload
 test_no_session_log_export_when_log_file_unwritable
 test_session_log_exported_when_writable
 test_log_msg_silent_when_session_log_dir_removed

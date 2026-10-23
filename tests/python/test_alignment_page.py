@@ -1069,6 +1069,42 @@ class TestAlignmentScrollPreservation(_PageTestCase):
         self.assertEqual(callback.__name__, "_restore_scroll")
         self.assertFalse(app._alignment_refresh_pending)
 
+    def test_refresh_survives_collection_failure(self):
+        """A collect-thread exception still clears the pending flag.
+
+        The flag only resets in the idle finisher, so an exception
+        escaping the worker used to stop every future refresh until the
+        GUI restarted; the failure must degrade to a skipped apply with
+        the flag cleared (dashboard-worker shape).
+        """
+        _mp, ap, app = self._prepared()
+
+        class _SyncThread:
+            """Thread stand-in that runs its target synchronously."""
+
+            def __init__(self, target=None, daemon=False):
+                self._target = target
+
+            def start(self):
+                self._target()
+
+        idle_captured = []
+        with (
+            patch.object(ap.threading, "Thread", _SyncThread),
+            patch.object(
+                ap.GLib, "idle_add", side_effect=lambda fn, *a: idle_captured.append((fn, a)) or 1
+            ),
+            patch.object(ap, "collect_alignment_sample", side_effect=RuntimeError("boom")),
+        ):
+            ap.refresh_alignment_view(app)
+        finish_fn, finish_args = idle_captured[0]
+        self.assertEqual(finish_fn.__name__, "_finish_refresh")
+        self.assertIsNone(finish_args[1])
+        with patch.object(ap, "_apply_alignment_sample") as apply_mock:
+            finish_fn(*finish_args)
+        apply_mock.assert_not_called()
+        self.assertFalse(app._alignment_refresh_pending)
+
     def test_restore_scroll_clamps_to_valid_range(self):
         _mp, ap, _app = self._prepared()
         scrolled = MagicMock()

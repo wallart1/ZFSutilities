@@ -125,6 +125,7 @@ test_journey_list_includes_two_node_journey() {
     run_itf journey list
     assert_rc 0 "$run_rc"
     assert_contains "$run_out" "j05-two-node-install"
+    assert_contains "$run_out" "j06-guest-probe-validator"
 }
 
 test_iso_unknown_selector_refused() {

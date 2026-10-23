@@ -1902,7 +1902,14 @@ every layer of the blocksize chain — member-disk sector geometry, pool
 `recordsize`/`volblocksize`/`volsize` properties, and PVE VM disk options
 (read from `/etc/pve/qemu-server` locally, or fetched from the compute
 node over ssh on two-node installs — the same read-only channel the
-dashboard uses). Each
+dashboard uses). Two-node disk lines are `/dev/disk/by-path` iSCSI
+devices; they carry the target IQN and LUN on their `VMOption` and
+resolve to zvol short names through the storage host's LIO saveconfig
+(`lun_backstore_map` / `resolve_bypath_disks`), so the VM layers see
+disks in the topology the two-node installer wires. A PVE fetch that
+comes back empty records its cause (`sample.pve_failure`), and by-path
+devices the local LIO map cannot resolve are listed
+(`sample.pve_bypath_dropped`) instead of vanishing. Each
 source degrades on its own, and dataset properties degrade per pool: a
 failed read lands in `AlignmentSample.dataset_read_failures` while the
 other pools keep their rows.
@@ -1915,9 +1922,11 @@ other pools keep their rows.
 | `parse_zfs_size(text)` / `parse_bucket_label(label)` | zfs-get size strings / bucket labels → bytes                |
 | `parse_objset_kstat(text)` / `read_objset_kstats(kstat_dir)` | per-dataset objset kstat bodies (`/proc/spl/kstat/zfs/<pool>/objset-*`, OpenZFS 2.2+) → `{dataset_name: counters}` |
 | `compute_objset_rates(prev, cur)` / `average_request_sizes(counters)` | objset counter deltas between two samples (or since-boot counters) → per-dataset `ObjsetRates`: rates plus average read/write request sizes |
-| `parse_pve_vm_conf(text, vmid)` / `read_pve_vm_options(conf_dir)` | PVE VM config lines → `{zvol short name: VMOption}` (records the VM-level `agent:` switch too, so guest probing can say "agent disabled" rather than "unreachable") |
-| `parse_pve_conf_dump(text)` / `fetch_pve_vm_options(host, ...)` | Marker-delimited config dump → `{short name: VMOption}` / one `ssh root@<compute>` round-trip producing that dump (BatchMode, bounded timeout, empty dict on any failure) |
-| `read_pve_vm_configs(conf_dir, config)`     | PVE configs wherever they live: the local directory first, then the compute-node fetch on two-node installs |
+| `parse_pve_vm_conf(text, vmid)` / `read_pve_vm_options(conf_dir)` | PVE VM config lines → `{zvol short name: VMOption}` (records the VM-level `agent:` switch too, so guest probing can say "agent disabled" rather than "unreachable"; by-path disk lines are keyed by device string with the target IQN/LUN recorded, pending LIO resolution) |
+| `parse_pve_conf_dump(text)` / `fetch_pve_vm_options(host, ...)` | Marker-delimited config dump → `{short name: VMOption}` / one `ssh root@<compute>` round-trip producing that dump (BatchMode, bounded timeout, empty dict on any failure with the cause recorded through the optional `errors` out-param) |
+| `read_pve_vm_configs(conf_dir, config)`     | PVE configs wherever they live: the local directory first, then the compute-node fetch on two-node installs; resolves by-path lines to zvol short names via the local LIO LUN map, recording unresolvable devices |
+| `lun_backstore_map(path)`                   | The storage host's targetcli saveconfig → `{(target IQN, LUN index): zvol short name}`; `{}` when the file is missing or this host has no LIO (compute node, single-node installs) — malformed entries are skipped, not fatal |
+| `resolve_bypath_disks(vm_disks, lun_map)`   | Re-key by-path `VMOption`s to their zvol short names through the LUN map; returns `(resolved, dropped)` so unresolvable devices surface instead of silently vanishing |
 | `topology_leaf_paths(node)`                | Device paths of every disk leaf under a `TopologyNode` (used to flatten pools into members and by the analysis rules to judge vdev groups) |
 | `collect_alignment_sample(zfs_repo, disk_repo, ...)` | Probe all sources (zfs/zpool, lsblk sectors, kstats, PVE conf, guest filesystems via `alignment_guestfs`) with per-source degrade flags |
 
@@ -2153,13 +2162,20 @@ and pipe its merged stdout/stderr through a line-buffered awk timestamp
 stamper into the configured cron log, so every line that reaches it
 (including pre-session-log tracebacks) carries its write time. The marker
 lets `profile_runner.py` silence its own streams once its session log
-exists, keeping the cron log limited to pre-log failures.
+exists, keeping the cron log limited to pre-log failures. The drop-in and
+its logrotate companion are persisted `/etc` state that a version upgrade
+can outrun, so `converge_scheduler_files()` re-derives their expected
+content at GUI startup and at the start of every scheduled run, rewriting
+each only when it differs (missing drop-ins are created only when active
+profiles exist).
 
 **Key functions:**
 
 | Function                                       | Purpose                                                    |
 | ---------------------------------------------- | ---------------------------------------------------------- |
+| `build_cron_content(profiles, runner_path, cron_log)` | Render the full drop-in content for the given profiles |
 | `write_cron_file(profiles, runner_path, cron_log)` | Regenerate the cron drop-in from scratch               |
+| `converge_scheduler_files(config)`             | Rewrite the cron/logrotate drop-ins only when they differ from the generated content |
 | `generate_cron_line(profile, runner_path, cron_log)` | Build one crontab line                                |
 | `interpret_cron(expression)`                   | Human-readable description of a cron expression            |
 | `next_run_times(expression, count)`            | Next `count` datetimes matching the expression             |
@@ -2173,6 +2189,10 @@ exists, keeping the cron log limited to pre-log failures.
 | Module          | Purpose in this module |
 | --------------- | ---------------------- |
 | `backup_config` | `log_msg`              |
+| `config_core`   | `get_paths_config`     |
+| `logrotate_manager` | Drop-in content and writer for convergence          |
+| `path_utils`    | `get_profile_runner_path` |
+| `profile_manager` | `list_profiles` for convergence |
 
 ---
 
@@ -2183,7 +2203,9 @@ cron log and the scrub-manager event log are rotated weekly (eight
 generations, early rotation past a size guard), compressed, and recreated
 readable by non-root users. All paths come from the `paths` section of the
 main configuration file; the drop-in is rewritten whenever the cron schedule
-is saved and removed by `uninstall-zfsutilities`.
+is saved, converged to the current format at GUI startup and at the start of
+every scheduled run (`cron_manager.converge_scheduler_files`), and removed
+by `uninstall-zfsutilities`.
 
 **Key functions:**
 

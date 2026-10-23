@@ -396,7 +396,6 @@ Scripts and modules that have lock integration:
 | sever-vm-clone        | `w`/`x`   | severed zvol, fresh copy, temp-namespace parent, origin snapshot's dataset (release offer) |
 | archive-vm            | `w`       | archived zvols                                  |
 | unarchive-vm          | `w`       | restored zvols                                  |
-| PVE-send-to-archive   | `w`       | archived zvols                                  |
 | zfshold / zfsholds    | `w`/`r`   | affected datasets                               |
 | zfsdelallholds*       | `w`       | parent dataset of the snapshot                  |
 | zfsresume             | `w`       | resumable destination                           |

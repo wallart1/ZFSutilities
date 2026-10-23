@@ -49,6 +49,13 @@ its own output streams from that point on, so the cron log holds only the
 pre-log failures (a failed session-log creation keeps full output there as
 the fallback record).  An unhandled runner crash is recorded in the session
 log — traceback plus a failed trailer — instead of the silenced streams.
+The scheduler drop-ins (the cron file and its logrotate configuration) are
+converged automatically: every GUI startup and every scheduled-run start
+regenerates them whenever their content no longer matches what the
+installed version generates, so an upgrade can never leave an outdated
+cron line in place.  As a further guard, the runner recognizes a pre-fence
+cron line by its redirect into the cron log itself and silences its output
+even without the marker.
 The cron log is rotated weekly by logrotate with compressed, non-root-
 readable generations, and it — plus every rotated copy — is listed on the
 GUI's **Logs** tab.

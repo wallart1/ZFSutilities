@@ -442,6 +442,33 @@ test_pool_map_survives_source_helper_load() {
     assert_rc 1 "$unknown_rc"
 }
 
+# Regression for the unarchive-vm Step-1 ssh payload (vm-205 incident): the
+# remote branch of on_storage executes payloads as stdin scripts in a fresh
+# shell ("ssh ... bash -s", payload on stdin, positional args after -s).
+# The suite's hostname stubs normally force the local (source-a-file)
+# branch, so the stdin execution mode went untested and the payload's first
+# top-level log_msg aborted with "BASH_SOURCE[1]: unbound variable".  This
+# test reproduces the remote branch's execution shape exactly: a clean
+# bash -s child, ZFSUTILITIES_BIN_DIR pointing at the repo bin/, positional
+# args, and the unarchive-vm payload prologue.
+test_on_storage_remote_payload_mode_runs_helpers() {
+    test_start "on_storage remote payload mode (bash -s) runs bashinit helpers"
+    local output rc
+    output=$(ZFSUTILITIES_BIN_DIR="$mydir/bin" bash -s vm-205 three 2>&1 <<'PAYLOAD'
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
+source "$mydir/bashinit"
+bashinit
+set -euo pipefail
+log_msg "INFO: remote-mode payload alive (vmid=$1, disks=$2)"
+echo "PAYLOAD-OK"
+PAYLOAD
+    )
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$output" "zfsutilities: INFO: remote-mode payload alive (vmid=vm-205, disks=three)"
+    assert_contains "$output" "PAYLOAD-OK"
+}
+
 test_pool_list_two_node() {
     test_start "pool_list emits configured pool names in two-node mode"
     local result
@@ -800,6 +827,7 @@ test_pool_to_target_warns_when_target_missing_in_lio
 test_pool_to_target_silent_when_target_in_lio
 test_pool_to_target_no_lio_probe_off_storage_host
 test_pool_map_survives_source_helper_load
+test_on_storage_remote_payload_mode_runs_helpers
 test_pool_list_two_node
 test_pool_list_single_node
 test_is_known_pool_known

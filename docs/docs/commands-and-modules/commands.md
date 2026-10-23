@@ -22,7 +22,6 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`git-release`](#git-release)
 - [`install-single-node`](#install-single-node)
 - [`install-two-node`](#install-two-node)
-- [`PVE-send-to-archive`](#pve-send-to-archive)
 - [`archive-vm`](#archive-vm)
 - [`remove-vm`](#remove-vm)
 - [`rename-vm-disk`](#rename-vm-disk)
@@ -502,54 +501,6 @@ Can also re-run on an existing single-node host to switch it to two-node mode.
 | -------- | ------------------------------------------------------ |
 | `0`      | Installation completed                                 |
 | non-zero | Prerequisite failure, SSH failure, or deployment error |
-
----
-
-### `PVE-send-to-archive`
-
-Sends ZFS datasets and Proxmox VM configuration to an archive file on disk using
-`zfs send`. This creates a \*.zfssendstream file in the host's filesystem. Intended for long-term cold storage.
-
-**Arguments:** none (configured via in-script variables).
-
-**In-script variables** (set before running):
-
-| Variable          | Description                                                                                                | Reference                                                                          |
-| ----------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `$subtrees`       | List of ZFS pools/filesystems where the source dataset(s) resides                                          | —                                                                                  |
-| `$includes`       | Substring list to match dataset names                                                                      | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
-| `$destinationdir` | Directory where the archive file will be placed                                                            | —                                                                                  |
-| `$archivename`    | Short name of the output archive file                                                                      | —                                                                                  |
-| `$proxmoxconfig`  | Path to the Proxmox VM configuration file. If specified, this file is stored along with the archive files. | —                                                                                  |
-
-**Called modules:**
-
-| Module                                        | Purpose in this command                                      |
-| ---------------------------------------------| ------------------------------------------------------------ |
-| [zfsbuildfsarray](modules.md#zfsbuildfsarray)| Build filtered dataset list from `$subtrees` and `$includes` |
-| [zfscommsnap](modules.md#zfscommsnap)| Select the most recent common snapshot for each dataset      |
-
-**Data structures consumed / produced:**
-
-| Structure                  | Role                             | Reference                                                            |
-| -------------------------- | -------------------------------- | -------------------------------------------------------------------- |
-| `$fsarray` / `$fsarraylen` | Filtered datasets to archive     | [$fsarray](../developer-guide/data-structures.md#fsarray-fsarraylen) |
-| `$commsnap`                | Most recent common snapshot name | [$commsnap](../developer-guide/global-variables.md#zfs-sendreceive)  |
-
-**Internal flow:**
-
-1. For each subtree in `$subtrees`, call `buildfsarray`.
-2. For each dataset in `$fsarray`, call `getcommonsnap` to select the snapshot to send.
-3. Create the destination directory hierarchy if needed.
-4. Run `zfs send -cw <dataset>@<snap> | pv | cat - > <archive>.zfssendstream`.
-5. Copy the Proxmox VM config file into the same archive tree.
-
-**Return codes:**
-
-| Code     | Meaning                           |
-| -------- | --------------------------------- |
-| `0`      | Completed successfully.           |
-| non-zero | Invalid input or command failure. |
 
 ---
 

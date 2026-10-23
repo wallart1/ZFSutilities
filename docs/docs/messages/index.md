@@ -206,22 +206,6 @@ Executed by the GUI Migrate Pool wizard, not for direct CLI use. On failure it k
 | `WARN: Proceeding despite insufficient space.` | The shared space check failed; the wizard pre-validated capacity, so this is warn-only | Informational; the transfer is attempted |
 | `FATAL: <operation> transfer interrupted; re-run <operation> to resume from the receive resume token on ....` | The transfer failed; the resume token is intentionally kept. `<operation>` is the caller's re-run hint (`$restart_hint`): `Migrate Pool` from the wizard, `sever-vm-clone` when the severance transfer or catch-up drives the engine, `sever-vm-clone --continue <state-file>` for the cutover copy-back | Re-run the named operation to resume |
 
-### [PVE-send-to-archive](../commands-and-modules/commands.md#pve-send-to-archive)
-
-Example script that archives Proxmox VM datasets to `.zfssendstream` files.
-
-| Message prefix | Meaning | Response |
-| -------------- | ------- | -------- |
-| `FATAL: Could not acquire write lock on ...` | The dataset's write lock is unavailable | Script aborts (exit 8); resolve the lock |
-| `FATAL: Could not get name of most recent snapshot for .....` | The common-snapshot helper returned nothing | Script aborts (exit 8); check the dataset's snapshots |
-| `INFO: About to send ... to .../.../....zfssendstream` | Per-dataset send target; press-enter prompt when autoproceed != 'Y' | Press Enter to proceed |
-| `FATAL: Directory creation for .../... failed.` | `mkdir -p` of the archive directory failed | Script aborts (exit 8); check permissions/path |
-| `INFO: zfs send -cw ... \| pv \| cat - > .../.../....zfssendstream` | Preview of the pipeline about to run | Informational |
-| `FATAL: Failed to send ... to ....zfssendstream.` | The send pipeline returned non-zero | Script aborts (exit 8); check space in the archive dataset |
-| `FATAL: Could not create the VM config archive directory ....` | `mkdir -p` for the Proxmox config copy failed | Script aborts (exit 8) |
-| `FATAL: Failed to copy ... to .....` | Copying the Proxmox VM config failed | Script aborts (exit 8) |
-| `INFO: Archive of ... completed.` | Final outcome; the archived datasets and config file are listed | Informational |
-
 ### [backup_page](../commands-and-modules/python-modules.md#backup_pagepy)
 
 GUI Backup tab. Builds and launches the backup run; also owns the snapfile (previous-snapshot name) and the tab's Save/Revert of its config. The same run launched from the Schedule tab is logged by [profile_runner](#profile_runner) instead.
@@ -1047,8 +1031,6 @@ Grows the EFI zvol to 4M and writes the Microsoft-cert EFI vars; shuts a running
 | `INFO: Updating VM ... config...` / `INFO: ✓ VM ... config updated` | Applying ms-cert=2023k and size=4M to efidisk0 | Informational |
 | `INFO: VM ... is stopped. Start it manually and watch the console.` | Final outcome; the VM is deliberately left stopped | Start manually and watch the console |
 | `INFO: The UEFI boot order may have been reset; ...` | The vars rewrite may clear the boot order | Re-select the boot device in the UEFI setup if the VM drops to a shell |
-
-See also [PVE-send-to-archive](#pve-send-to-archive) under Backup and Send/Receive.
 
 ## Two-Node iSCSI and VM Disks
 
@@ -2465,6 +2447,7 @@ Headless runner for scheduled profiles (cron): loads a profile JSON, builds its 
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
+| `WARN: Scheduler drop-in convergence skipped: ...` | OSError during launch-time drop-in convergence (config/profile read failure) | Best-effort skip; the run continues without the cron-log fd fallback |
 | `INFO: Profile '...' is already running; waiting for it to finish...` | The profile advisory lock is busy; the runner waits up to the timeout | Wait; a waiting-file is written for the Dashboard |
 | `WARN: Pre-step callback failed: ...` / `WARN: Post-step callback failed: ...` | The scrub-pause/resume callback raised | The step still runs |
 | `WARN: Step exited with rc=...` | A step returned non-zero | Fatal steps abort the run; non-fatal continue |
@@ -2580,12 +2563,14 @@ Schedule tab: profile list with Active toggles, Run Now, cron consistency checks
 
 ### [cron_manager](../commands-and-modules/python-modules.md#cron_managerpy)
 
-Writes the `/etc/cron.d` file from the active profiles.
+Writes the `/etc/cron.d` file from the active profiles and converges the cron/logrotate drop-ins to the current format at GUI startup and at the start of every scheduled run.
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `VERB: Cron file updated: ...` | The cron file was successfully rewritten | Informational |
-| `FATAL: Could not write cron file ...: ...` | OSError writing the cron file | Exception re-raised; the caller shows an error dialog |
+| `FATAL: Could not write cron file ...: ...` | OSError writing the cron file | Exception re-raised; the caller shows an error dialog (convergence catches it and continues) |
+| `WARN: Could not read drop-in ...: ...` | A persisted drop-in could not be read during convergence | The drop-in is left untouched; convergence skips it |
+| `WARN: Cron drop-in not converged: ...` / `WARN: Logrotate drop-in not converged: ...` | OSError rewriting a drop-in during convergence | Best-effort skip; the run or GUI startup continues |
 
 ### [logrotate_manager](../commands-and-modules/python-modules.md#logrotate_managerpy)
 
@@ -2594,7 +2579,15 @@ Writes the logrotate drop-in that rotates the persistent cron and scrub-manager 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `VERB: Logrotate file updated: ...` | The logrotate drop-in was successfully (re)written | Informational |
-| `FATAL: Could not write logrotate file ...: ...` | OSError writing the drop-in | Exception re-raised; the caller shows an error dialog |
+| `FATAL: Could not write logrotate file ...: ...` | OSError writing the drop-in | Exception re-raised; the caller shows an error dialog (convergence catches it and continues) |
+
+### [alignment_page](../commands-and-modules/python-modules.md#alignment_pagepy)
+
+Alignment view of the Performance tab: off-thread sample collection and rendering.
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `WARN: Alignment sample gathering failed: ...` | The background collection thread hit an unexpected exception | The refresh is skipped and the pending flag cleared (the view keeps its last sample); the next scheduled refresh retries |
 
 ### [alignment_dialogs](../commands-and-modules/python-modules.md#alignment_dialogspy)
 

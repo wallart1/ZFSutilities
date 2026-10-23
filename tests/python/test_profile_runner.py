@@ -1949,6 +1949,10 @@ class TestCronOutputSilencing(unittest.TestCase):
                 "ZFSUTILITIES_STATE_DIR": os.path.join(tmp, "state"),
                 "ZFSUTILITIES_LOCK_DIR": os.path.join(tmp, "locks"),
                 "ZFSUTILITIES_PROFILE_LOCK_DIR": os.path.join(tmp, "plocks"),
+                # Pin the drop-in targets so startup convergence never probes
+                # the host's real /etc/cron.d (a dev host can carry one).
+                "ZFSUTILITIES_CRON_FILE": os.path.join(tmp, "cron.d", "zfsutilities"),
+                "ZFSUTILITIES_LOGROTATE_FILE": os.path.join(tmp, "logrotate.d", "zfsutilities"),
                 "XDG_CONFIG_HOME": os.path.join(tmp, "xdg-config"),
             }
         )
@@ -1994,6 +1998,66 @@ class TestCronOutputSilencing(unittest.TestCase):
             self.assertIn("FATAL: Profile not found", combined)
             # The session log still records the run either way.
             content = self._session_log_content(tmp)
+            self.assertIn("FATAL: Profile not found", content)
+
+    def _run_main_with_fd1_at(self, tmp, path):
+        """Run main() with stdout+stderr redirected into *path*, no marker.
+
+        This is the pre-fence cron line's launch shape: a plain file
+        redirect with no ZFSUTILITIES_FROM_CRON in the environment.  The
+        drop-in targets are pinned into the tmp tree so startup convergence
+        never looks at the real /etc.
+        """
+        env = os.environ.copy()
+        env.update(
+            {
+                "ZFSUTILITIES_LOG_DIR": os.path.join(tmp, "logs"),
+                "ZFSUTILITIES_STATE_DIR": os.path.join(tmp, "state"),
+                "ZFSUTILITIES_LOCK_DIR": os.path.join(tmp, "locks"),
+                "ZFSUTILITIES_PROFILE_LOCK_DIR": os.path.join(tmp, "plocks"),
+                "ZFSUTILITIES_CRON_FILE": os.path.join(tmp, "cron.d", "zfsutilities"),
+                "ZFSUTILITIES_LOGROTATE_FILE": os.path.join(tmp, "logrotate.d", "zfsutilities"),
+                "XDG_CONFIG_HOME": os.path.join(tmp, "xdg-config"),
+            }
+        )
+        env.pop("ZFSUTILITIES_FROM_CRON", None)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "ab") as sink:
+            return subprocess.run(
+                [sys.executable, self._RUNNER, "run", "NoSuchProfile"],
+                env=env,
+                stdout=sink,
+                stderr=subprocess.STDOUT,
+                timeout=120,
+                check=False,
+            )
+
+    def test_stale_cron_line_redirect_is_silenced(self):
+        # A pre-fence cron line redirects fd 1 straight into the cron log
+        # with no FROM_CRON marker; the redirect itself must trigger the
+        # fence so a stale drop-in cannot keep flooding the log.
+        with tempfile.TemporaryDirectory() as tmp:
+            cron_log = os.path.join(tmp, "logs", "cron.log")
+            proc = self._run_main_with_fd1_at(tmp, cron_log)
+            self.assertEqual(proc.returncode, 1)
+            with open(cron_log) as f:
+                content = f.read()
+            self.assertNotIn("Profile not found", content)
+            self.assertEqual(content.strip(), "")
+            # The session log is still the run's record.
+            session = self._session_log_content(tmp)
+            self.assertIn("FATAL: Profile not found", session)
+            self.assertIn("# END: rc=1", session)
+
+    def test_redirect_to_other_file_still_flows(self):
+        # Silencing keys on the cron log specifically: a manual run writing
+        # to some other file keeps its output.
+        with tempfile.TemporaryDirectory() as tmp:
+            other = os.path.join(tmp, "manual-capture.log")
+            proc = self._run_main_with_fd1_at(tmp, other)
+            self.assertEqual(proc.returncode, 1)
+            with open(other) as f:
+                content = f.read()
             self.assertIn("FATAL: Profile not found", content)
 
 

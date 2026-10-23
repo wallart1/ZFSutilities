@@ -8,7 +8,7 @@ function _trap_DEBUG {
     local line func filename expanded_cmd
 
     # Do not step into the trap function itself or commands run from its prompt.
-    if [[ "${BASH_SOURCE[1]}" == "${BASH_SOURCE[0]}" ]]; then
+    if [[ "${BASH_SOURCE[1]:-}" == "${BASH_SOURCE[0]}" ]]; then
         return
     fi
 

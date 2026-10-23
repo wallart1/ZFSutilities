@@ -78,9 +78,27 @@ test_bare_run_requires_root() {
     test_pass
 }
 
+test_help_documents_live_verdict() {
+    # Regression (2026-10-22 vacuous LIVE PASS on stewie): the usage must
+    # state the honest verdict semantics — non-zero exit with reasons when
+    # any source comes back empty. The live path itself needs root+zfs and
+    # is fenced end to end by the itf j06-guest-probe-validator journey.
+    test_start "validator -h documents the live verdict (non-zero on empty sources)"
+
+    local out
+    out=$(bash "$validator" -h 2>&1)
+    if [[ "$out" != *"exits non-zero"* || "$out" != *"LIVE PASS"* ]]; then
+        test_fail "verdict semantics missing from usage; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 test_self_check_passes
 test_help_usage
 test_bare_run_requires_root
+test_help_documents_live_verdict
 
 test_summary
 teardown_test_env

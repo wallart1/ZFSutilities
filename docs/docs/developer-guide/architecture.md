@@ -69,6 +69,10 @@ lists, `zfs receive` progress, separator lines, etc.) is preserved alongside
   and `_silence_cron_output()` fences the runner's own fds 1/2 onto
   `/dev/null` once the session log exists, so the cron log receives only
   pre-log failures (see the sequence diagram below for the full picture).
+  The fence also engages for a pre-fence cron line — one with no marker
+  whose fd 1 is the cron log itself — and every run converges the
+  cron/logrotate drop-ins to the current format before creating the session
+  log (`cron_manager.converge_scheduler_files`, also called at GUI startup).
 
 After a run finishes, is cancelled, or aborts with rc=9, `BackupRunner` clears
 `_session_log_file` and `_session_start_time`. This lets the same runner
@@ -444,6 +448,16 @@ before the session log existed, and an unhandled runner crash is caught at
 the top of the run so its traceback and a failed trailer land in the session
 log rather than vanishing into the fenced streams. Run Now and manual
 terminal launches never set the marker and stream exactly as before.
+
+A cron line from a pre-fence deployment carries no marker; its plain
+`>> cron.log` redirect leaves fd 1 pointing at the cron log itself, and
+`_silence_cron_output()` treats that redirect as a cron launch too, so a
+stale drop-in cannot keep flooding the log even before it is regenerated.
+Regeneration no longer depends on a Schedule-page save: the drop-ins are
+persisted `/etc` state, and `cron_manager.converge_scheduler_files()`
+re-derives their expected content at GUI startup and at the start of every
+run, rewriting each only when it differs (missing drop-ins are created only
+when active profiles exist, so a host with no schedules gains none).
 
 ### Progress parsing
 

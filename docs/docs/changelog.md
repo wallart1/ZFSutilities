@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.128.0
+
+*Released 2026-10-23*
+
+### Added
+
+- **By-path VM-disk resolution (F-019).** PVE config parsing now
+  records by-path iSCSI disk lines — the wiring every two-node install
+  uses — with their target IQN and LUN, and resolves them to zvol
+  short names through the storage host's LIO saveconfig
+  (`lun_backstore_map` / `resolve_bypath_disks`). The guest probe and
+  the Alignment view's VM/VM-fs layers can see VM disks on two-node
+  installs for the first time. Devices the local LIO map cannot
+  resolve are recorded (`sample.pve_bypath_dropped`), never dropped
+  silently, and an empty PVE fetch records its cause
+  (`sample.pve_failure`) instead of a bare unavailable flag.
+- **Honest guest-probe validator verdict.** `share/dev/validate-guestfs-probe.sh`
+  collects its sample through the same repositories the GUI uses,
+  prints per-source state, and exits non-zero with printed reasons when
+  any source comes back empty or a probe target yields neither entries
+  nor a reason — the fence against a vacuous `LIVE PASS`. The new itf
+  journey `j06-guest-probe-validator` composes the j05 two-node lab,
+  runs the validator live, and proves the negative control (compute
+  host unresolvable → non-zero exit naming the ssh cause).
+- **Scheduler drop-in convergence.** The cron and logrotate drop-ins
+  are persisted `/etc` state that only a Schedule-page save used to
+  refresh, so an upgrade could leave a pre-fence cron line flooding
+  `cron.log` and no logrotate drop-in at all. `converge_scheduler_files`
+  now re-derives both at GUI startup and at the start of every
+  scheduled run, rewriting only on difference (missing drop-ins are
+  created only when active profiles exist); `_silence_cron_output`
+  additionally engages when fd 1 resolves to the cron log itself, so a
+  stale drop-in stops flooding on the first fixed-version run even
+  before it is regenerated.
+
+### Changed
+
+- **stdin-payload-safe bash helpers.** `log_msg`, `msg_prefix`,
+  `calledbybash` (bashinit), `bashreturn`, `bashdebug`, and
+  `zfssnapbuild` no longer abort under `set -u` when the caller frame
+  has no `BASH_SOURCE` entry — the shape of every payload shipped to
+  the other node over ssh as a `bash -s` stdin script; the long prefix
+  falls back to `zfsutilities:`. Two-node payloads (e.g. the
+  unarchive-vm remote branch) run their first top-level `log_msg`
+  instead of dying on it.
+
+### Fixed
+
+- **Alignment-page refresh cannot wedge.** A collection-thread
+  exception used to strand the refresh-pending flag forever, silently
+  stopping all later refreshes until the GUI restarted; the worker now
+  follows the dashboard shape (WARN logged, last sample kept, next
+  scheduled refresh retries). `lun_backstore_map` likewise skips
+  malformed LUN entries in a corrupt saveconfig instead of raising
+  into that thread.
+
+### Removed
+
+- **`PVE-send-to-archive`.** Obsolete self-labeled example script from
+  the original deployment (superseded by `archive-vm` /
+  `unarchive-vm`, zero callers), removed together with its
+  documentation and lock-coverage patterns. Deployed copies are inert
+  and disappear at this release's deploy.
+
+### Tests
+
+- Red-proven stdin-payload regressions (bashinit ×3, node-lib remote
+  payload mode), by-path/LIO parsing and drop-recording suites,
+  scheduler-convergence and pre-fence-redirect silencing suites, the
+  validator live-verdict usage test, the alignment-page
+  collection-failure regression, and the j06 journey registration.
+
+### Documentation
+
+- By-path resolution, `lun_backstore_map` / `resolve_bypath_disks`,
+  the new sample fields, scheduler convergence, the stdin-payload
+  calling convention, the j06 journey, the `alignment_page` message
+  section, and the `PVE-send-to-archive` removal across the manual.
+
 ## 0.127.0
 
 *Released 2026-10-22*

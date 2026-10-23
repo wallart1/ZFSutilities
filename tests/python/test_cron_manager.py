@@ -2,9 +2,13 @@
 
 import os
 import unittest
+from unittest.mock import patch
 
 import cron_manager
-from test_support import temp_config_dir
+from config_core import get_paths_config
+from logrotate_manager import build_logrotate_content
+from profile_manager import list_profiles, save_profile
+from test_support import capture_logs, temp_config_dir
 
 CRON_LOG = "/var/log/zfsutilities/cron.log"
 # Exact argv fidelity for the sink: the runner's merged output is piped
@@ -288,6 +292,140 @@ class TestWriteCronFile(unittest.TestCase):
             self.assertIn("[ $(date +%d) -ge 28 ]", content)
             self.assertIn("&& mkdir -p", content)
             self.assertIn("run p1", content)
+
+
+class TestConvergeSchedulerFiles(unittest.TestCase):
+    """Startup convergence of the persisted cron/logrotate drop-ins."""
+
+    # The pre-fence format deployed before 0.125.0: plain redirect, no
+    # FROM_CRON marker, no stamper — the layout that flooded cron.log.
+    STALE_CONTENT = (
+        "# /etc/cron.d/zfsutilities\n"
+        'MAILTO=""\n'
+        "0 6 * * * root mkdir -p /var/log/zfsutilities && "
+        "python3 /usr/local/lib/zfsutilities/current/python/profile_runner.py "
+        "run root-backup-daily >> /var/log/zfsutilities/cron.log 2>&1\n"
+    )
+
+    def _write_active_profile(self):
+        save_profile(
+            {
+                "profile_name": "root-backup-daily",
+                "active": True,
+                "cron": {"minute": "0", "hour": "6", "day": "*", "month": "*", "weekday": "*"},
+            }
+        )
+
+    def _stamped_tail(self):
+        cron_log = get_paths_config({}, persist=False)["cron_log"]
+        return f"{cron_manager._TIMESTAMP_STAMPER} >> {cron_log}"
+
+    def test_stale_pre_fence_cron_file_is_rewritten(self):
+        with temp_config_dir():
+            self._write_active_profile()
+            with open(cron_manager.CRON_FILE, "w") as f:
+                f.write(self.STALE_CONTENT)
+            actions = cron_manager.converge_scheduler_files({})
+            self.assertEqual(actions, [("cron", "rewritten"), ("logrotate", "rewritten")])
+            with open(cron_manager.CRON_FILE) as f:
+                content = f.read()
+            self.assertIn("ZFSUTILITIES_FROM_CRON=Y", content)
+            self.assertIn("0 6 * * *", content)
+            self.assertIn(self._stamped_tail(), content)
+            self.assertNotIn(">> /var/log/zfsutilities/cron.log 2>&1", content)
+            mode = os.stat(cron_manager.CRON_FILE).st_mode & 0o777
+            self.assertEqual(mode, 0o644)
+
+    def test_current_files_are_left_untouched(self):
+        # A converged host must not churn: identical content means no write,
+        # so the mtimes stay pinned where the test put them.  The runner
+        # path is pinned because get_profile_runner_path() resolves its
+        # caller's directory, which differs between cron_manager and this
+        # file in the repo layout.
+        with temp_config_dir():
+            self._write_active_profile()
+            with patch.object(cron_manager, "get_profile_runner_path", return_value="/runner.py"):
+                paths_cfg = get_paths_config({}, persist=False)
+                cron_manager.write_cron_file(list_profiles(), "/runner.py", paths_cfg["cron_log"])
+                cron_manager.write_logrotate_file(paths_cfg)
+                os.utime(cron_manager.CRON_FILE, (10**6, 10**6))
+                os.utime(paths_cfg["logrotate_file"], (10**6, 10**6))
+                actions = cron_manager.converge_scheduler_files({})
+            self.assertEqual(actions, [])
+            self.assertEqual(os.stat(cron_manager.CRON_FILE).st_mtime, 10**6)
+            self.assertEqual(os.stat(paths_cfg["logrotate_file"]).st_mtime, 10**6)
+
+    def test_missing_files_created_with_active_profile(self):
+        with temp_config_dir():
+            self._write_active_profile()
+            paths_cfg = get_paths_config({}, persist=False)
+            self.assertFalse(os.path.exists(cron_manager.CRON_FILE))
+            self.assertFalse(os.path.exists(paths_cfg["logrotate_file"]))
+            actions = cron_manager.converge_scheduler_files({})
+            self.assertEqual(actions, [("cron", "rewritten"), ("logrotate", "rewritten")])
+            self.assertTrue(os.path.exists(cron_manager.CRON_FILE))
+            with open(cron_manager.CRON_FILE) as f:
+                self.assertIn("ZFSUTILITIES_FROM_CRON=Y", f.read())
+            with open(paths_cfg["logrotate_file"]) as f:
+                self.assertEqual(f.read(), build_logrotate_content(paths_cfg))
+
+    def test_missing_files_not_created_without_active_profiles(self):
+        # A host with no scheduled profiles (e.g. tweety) gains no drop-ins.
+        with temp_config_dir():
+            paths_cfg = get_paths_config({}, persist=False)
+            actions = cron_manager.converge_scheduler_files({})
+            self.assertEqual(actions, [])
+            self.assertFalse(os.path.exists(cron_manager.CRON_FILE))
+            self.assertFalse(os.path.exists(paths_cfg["logrotate_file"]))
+
+    def test_inactive_profile_does_not_create_drop_ins(self):
+        with temp_config_dir():
+            save_profile(
+                {
+                    "profile_name": "paused",
+                    "active": False,
+                    "cron": {"minute": "0", "hour": "6", "day": "*", "month": "*", "weekday": "*"},
+                }
+            )
+            paths_cfg = get_paths_config({}, persist=False)
+            actions = cron_manager.converge_scheduler_files({})
+            self.assertEqual(actions, [])
+            self.assertFalse(os.path.exists(cron_manager.CRON_FILE))
+            self.assertFalse(os.path.exists(paths_cfg["logrotate_file"]))
+
+    def test_unreadable_drop_in_is_skipped_not_clobbered(self):
+        # A cron drop-in that cannot be read (here: a directory in its
+        # place) is left alone with a WARN; the logrotate drop-in still
+        # converges.
+        with temp_config_dir():
+            self._write_active_profile()
+            paths_cfg = get_paths_config({}, persist=False)
+            os.mkdir(cron_manager.CRON_FILE)
+            with capture_logs() as logs:
+                actions = cron_manager.converge_scheduler_files({})
+            self.assertEqual(actions, [("logrotate", "rewritten")])
+            self.assertTrue(os.path.isdir(cron_manager.CRON_FILE))
+            self.assertTrue(
+                any(f"Could not read drop-in {cron_manager.CRON_FILE}" in m for m in logs)
+            )
+            self.assertTrue(os.path.exists(paths_cfg["logrotate_file"]))
+
+    def test_stale_logrotate_content_is_rewritten(self):
+        with temp_config_dir():
+            self._write_active_profile()
+            paths_cfg = get_paths_config({}, persist=False)
+            os.makedirs(os.path.dirname(paths_cfg["logrotate_file"]), exist_ok=True)
+            with open(paths_cfg["logrotate_file"], "w") as f:
+                f.write("# stale hand-written rotation\n/var/log/old.log {\n  monthly\n}\n")
+            # Prime the cron file so only the logrotate half changes.  The
+            # runner path is pinned to match converge_scheduler_files' view
+            # (get_profile_runner_path resolves its caller's directory).
+            with patch.object(cron_manager, "get_profile_runner_path", return_value="/runner.py"):
+                cron_manager.write_cron_file(list_profiles(), "/runner.py", paths_cfg["cron_log"])
+                actions = cron_manager.converge_scheduler_files({})
+            self.assertEqual(actions, [("logrotate", "rewritten")])
+            with open(paths_cfg["logrotate_file"]) as f:
+                self.assertEqual(f.read(), build_logrotate_content(paths_cfg))
 
 
 class TestNextRunTimes(unittest.TestCase):

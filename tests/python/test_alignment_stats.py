@@ -1,5 +1,6 @@
 """Tests for alignment_stats.py — parsers, PVE reader, and collection."""
 
+import json
 import os
 import subprocess
 import sys
@@ -427,7 +428,12 @@ class TestObjsetRates(unittest.TestCase):
 class TestPveParsing(unittest.TestCase):
     def test_parse_vm_conf(self):
         options = als.parse_pve_vm_conf(PVE_CONF, vmid="201")
-        self.assertEqual(sorted(options), ["vm-201-disk-0", "vm-205-disk-1"])
+        bypath = "/dev/disk/by-path/ip-10.0.0.5:3260-iscsi-iqn.example-lun-0"
+        self.assertEqual(sorted(options), [bypath, "vm-201-disk-0", "vm-205-disk-1"])
+        # The by-path line is emitted keyed by its device string with the
+        # IQN/LUN recorded, pending LIO-map resolution (F-019).
+        self.assertEqual(options[bypath].bypath_iqn, "iqn.example")
+        self.assertEqual(options[bypath].bypath_lun, 0)
         scsi0 = options["vm-201-disk-0"]
         self.assertEqual(scsi0.bus, "scsi0")
         self.assertEqual(scsi0.options, {"size": "32G"})
@@ -446,7 +452,14 @@ class TestPveParsing(unittest.TestCase):
             with open(os.path.join(tmp, "notanumber.conf"), "w") as f:
                 f.write(PVE_CONF)
             options = als.read_pve_vm_options(tmp)
-            self.assertEqual(sorted(options), ["vm-201-disk-0", "vm-205-disk-1"])
+            self.assertEqual(
+                sorted(options),
+                [
+                    "/dev/disk/by-path/ip-10.0.0.5:3260-iscsi-iqn.example-lun-0",
+                    "vm-201-disk-0",
+                    "vm-205-disk-1",
+                ],
+            )
 
     def test_read_pve_missing_dir(self):
         self.assertEqual(als.read_pve_vm_options("/nonexistent-pve-dir"), {})
@@ -463,7 +476,14 @@ class TestPveParsing(unittest.TestCase):
     def test_parse_conf_dump_markers(self):
         dump = f"garbage before any marker\n== /etc/pve/qemu-server/201.conf\n{PVE_CONF}"
         options = als.parse_pve_conf_dump(dump)
-        self.assertEqual(sorted(options), ["vm-201-disk-0", "vm-205-disk-1"])
+        self.assertEqual(
+            sorted(options),
+            [
+                "/dev/disk/by-path/ip-10.0.0.5:3260-iscsi-iqn.example-lun-0",
+                "vm-201-disk-0",
+                "vm-205-disk-1",
+            ],
+        )
         # A non-numeric marker skips its body without failing the rest.
         dump2 = (
             "== /etc/pve/qemu-server/999x.conf\nscsi0: local-lvm:vm-1-disk-0\n"
@@ -481,7 +501,14 @@ class TestPveParsing(unittest.TestCase):
             return MagicMock(returncode=0, stdout=dump, stderr="")
 
         options = als.fetch_pve_vm_options("tweety", runner=runner)
-        self.assertEqual(sorted(options), ["vm-201-disk-0", "vm-205-disk-1"])
+        self.assertEqual(
+            sorted(options),
+            [
+                "/dev/disk/by-path/ip-10.0.0.5:3260-iscsi-iqn.example-lun-0",
+                "vm-201-disk-0",
+                "vm-205-disk-1",
+            ],
+        )
         argv, timeout = calls[0]
         self.assertEqual(argv[:3], ["ssh", "-o", "ConnectTimeout=5"])
         self.assertIn("root@tweety", argv)
@@ -518,7 +545,7 @@ class TestPveParsing(unittest.TestCase):
             self.assertEqual(calls, [])
 
     def test_read_pve_vm_configs_remote_fallback(self):
-        def fetch(host, conf_dir=als.PVE_QEMU_CONF_DIR, runner=None):
+        def fetch(host, conf_dir=als.PVE_QEMU_CONF_DIR, runner=None, errors=None):
             self.assertEqual(host, "tweety")
             dump = "== /etc/pve/qemu-server/201.conf\n" + PVE_CONF
             return als.parse_pve_conf_dump(dump)
@@ -542,6 +569,235 @@ class TestPveParsing(unittest.TestCase):
             )
         self.assertEqual(options, {})
         fetch.assert_not_called()
+
+    def test_fetch_pve_vm_options_records_failure_reason(self):
+        # The live validator (and the GUI via sample.pve_failure) needs the
+        # WHY of an empty PVE read: the degrade path must say what ssh did.
+        errors: dict = {}
+
+        def runner(argv, timeout=None):
+            return MagicMock(returncode=255, stdout="", stderr=" Permission denied (publickey).\n")
+
+        options = als.fetch_pve_vm_options("tweety", runner=runner, errors=errors)
+        self.assertEqual(options, {})
+        self.assertIn("rc=255", errors["pve"])
+        self.assertIn("Permission denied", errors["pve"])
+        self.assertIn("tweety", errors["pve"])
+
+    def test_fetch_pve_vm_options_records_timeout_reason(self):
+        errors: dict = {}
+
+        def boom(argv, timeout=None):
+            raise subprocess.TimeoutExpired(cmd="ssh", timeout=15)
+
+        als.fetch_pve_vm_options("tweety", runner=boom, errors=errors)
+        self.assertIn("timeout", errors["pve"].lower())
+
+    def test_fetch_pve_vm_options_no_reason_on_success(self):
+        errors: dict = {}
+
+        def runner(argv, timeout=None):
+            dump = "== /etc/pve/qemu-server/201.conf\n" + PVE_CONF
+            return MagicMock(returncode=0, stdout=dump, stderr="")
+
+        options = als.fetch_pve_vm_options("tweety", runner=runner, errors=errors)
+        self.assertTrue(options)
+        self.assertNotIn("pve", errors)
+
+    def test_fetch_pve_vm_options_records_unparseable_output(self):
+        errors: dict = {}
+
+        def runner(argv, timeout=None):
+            return MagicMock(returncode=0, stdout="motd noise, no markers\n", stderr="")
+
+        options = als.fetch_pve_vm_options("tweety", runner=runner, errors=errors)
+        self.assertEqual(options, {})
+        self.assertIn("no vm configs", errors["pve"].lower())
+
+    def test_read_pve_vm_configs_local_wins_records_no_reason(self):
+        errors: dict = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "201.conf"), "w") as f:
+                f.write(PVE_CONF)
+            options = als.read_pve_vm_configs(
+                conf_dir=tmp, config=SINGLE_NODE_CONFIG, errors=errors
+            )
+        self.assertTrue(options)
+        self.assertNotIn("pve", errors)
+
+    def test_read_pve_vm_configs_records_fetch_failure(self):
+        # read_pve_vm_configs must forward its errors dict into the fetch so
+        # collect_alignment_sample can surface sample.pve_failure.
+        def fetch(host, conf_dir=als.PVE_QEMU_CONF_DIR, runner=None, errors=None):
+            if errors is not None:
+                errors["pve"] = "ssh root@tweety rc=255: Permission denied"
+            return {}
+
+        config = {
+            "mode": "two-node",
+            "this_host": "stewie",
+            "storage_host": "stewie",
+            "compute_host": "tweety",
+            "pools": set(),
+        }
+        errors: dict = {}
+        with patch("alignment_stats.fetch_pve_vm_options", side_effect=fetch):
+            options = als.read_pve_vm_configs(
+                conf_dir="/nonexistent-pve-dir", config=config, errors=errors
+            )
+        self.assertEqual(options, {})
+        self.assertIn("rc=255", errors["pve"])
+
+    # --- by-path disk lines (F-019): two-node VM configs reference disks
+    # as /dev/disk/by-path iSCSI devices, not storage:volname tokens; they
+    # resolve through the storage host's LIO LUN map.
+
+    BY_PATH_DEVICE = (
+        "/dev/disk/by-path/ip-192.168.101.1:3260-iscsi-"
+        "iqn.2026-10.local.itf-template:zfstest1-lun-0"
+    )
+
+    BY_PATH_CONF = (
+        "agent: enabled=1\n"
+        "scsihw: virtio-scsi-pci\n"
+        f"scsi0: {BY_PATH_DEVICE},format=raw,discard=on\n"
+    )
+
+    LIO_SAVECONFIG_TEXT = json.dumps(
+        {
+            "storage_objects": [
+                {"name": "vm-101-disk-0", "dev": "/dev/zvol/zfstest1/proxmox/vm-101-disk-0"}
+            ],
+            "targets": [
+                {
+                    "wwn": "iqn.2026-10.local.itf-template:zfstest1",
+                    "tpgs": [
+                        {
+                            "luns": [
+                                {
+                                    "index": 0,
+                                    "storage_object": "/backstores/block/vm-101-disk-0",
+                                }
+                            ]
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    def test_parse_pve_vm_conf_emits_bypath_entry(self):
+        options = als.parse_pve_vm_conf(self.BY_PATH_CONF, "101")
+        self.assertEqual(list(options), [self.BY_PATH_DEVICE])
+        entry = options[self.BY_PATH_DEVICE]
+        self.assertEqual(entry.bus, "scsi0")
+        self.assertEqual(entry.vmid, "101")
+        self.assertTrue(entry.agent)
+        self.assertEqual(entry.bypath_iqn, "iqn.2026-10.local.itf-template:zfstest1")
+        self.assertEqual(entry.bypath_lun, 0)
+
+    def test_lun_backstore_map_parses_lio_saveconfig(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "saveconfig.json")
+            with open(path, "w") as f:
+                f.write(self.LIO_SAVECONFIG_TEXT)
+            mapping = als.lun_backstore_map(path)
+        self.assertEqual(mapping, {("iqn.2026-10.local.itf-template:zfstest1", 0): "vm-101-disk-0"})
+        self.assertEqual(als.lun_backstore_map(os.path.join(tmp, "gone.json")), {})
+
+    def test_lun_backstore_map_skips_malformed_lun_entries(self):
+        # A structurally-broken saveconfig entry (missing or non-integer
+        # LUN index) must be skipped, not raised: collection runs in the
+        # GUI's unguarded refresh thread, where an exception wedges the
+        # Alignment page. The healthy LUN 0 still resolves.
+        malformed = json.dumps(
+            {
+                "storage_objects": [
+                    {"name": "vm-101-disk-0", "dev": "/dev/zvol/zfstest1/proxmox/vm-101-disk-0"}
+                ],
+                "targets": [
+                    {
+                        "wwn": "iqn.2026-10.local.itf-template:zfstest1",
+                        "tpgs": [
+                            {
+                                "luns": [
+                                    {
+                                        "index": 0,
+                                        "storage_object": "/backstores/block/vm-101-disk-0",
+                                    },
+                                    {
+                                        "storage_object": "/backstores/block/vm-101-disk-1"
+                                    },
+                                    {
+                                        "index": "bogus",
+                                        "storage_object": "/backstores/block/vm-101-disk-2",
+                                    },
+                                ]
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "saveconfig.json")
+            with open(path, "w") as f:
+                f.write(malformed)
+            mapping = als.lun_backstore_map(path)
+        self.assertEqual(mapping, {("iqn.2026-10.local.itf-template:zfstest1", 0): "vm-101-disk-0"})
+
+    def test_resolve_bypath_disks_rekeys_and_drops(self):
+        mapping = {("iqn.2026-10.local.itf-template:zfstest1", 0): "vm-101-disk-0"}
+        storage_ref = als.parse_pve_vm_conf(PVE_CONF, "201")["vm-201-disk-0"]
+        vm_disks = dict(als.parse_pve_vm_conf(self.BY_PATH_CONF, "101"))
+        vm_disks["vm-201-disk-0"] = storage_ref
+
+        resolved, dropped = als.resolve_bypath_disks(vm_disks, mapping)
+        self.assertEqual(dropped, [])
+        self.assertIn("vm-101-disk-0", resolved)
+        self.assertEqual(resolved["vm-101-disk-0"].disknum, "0")
+        self.assertEqual(resolved["vm-101-disk-0"].bus, "scsi0")
+        # Storage-reference entries pass through untouched.
+        self.assertIs(resolved["vm-201-disk-0"], storage_ref)
+
+        resolved2, dropped2 = als.resolve_bypath_disks(vm_disks, {})
+        self.assertNotIn("vm-101-disk-0", resolved2)
+        self.assertEqual(dropped2, [self.BY_PATH_DEVICE])
+
+    def test_read_pve_vm_configs_resolves_bypath_via_local_lio(self):
+        dump = "== /etc/pve/qemu-server/101.conf\n" + self.BY_PATH_CONF
+
+        def fetch(host, conf_dir=als.PVE_QEMU_CONF_DIR, runner=None, errors=None):
+            return als.parse_pve_conf_dump(dump)
+
+        mapping = {("iqn.2026-10.local.itf-template:zfstest1", 0): "vm-101-disk-0"}
+        config = {
+            "mode": "two-node",
+            "this_host": "stewie",
+            "storage_host": "stewie",
+            "compute_host": "tweety",
+            "pools": set(),
+        }
+        errors: dict = {}
+        with (
+            patch("alignment_stats.fetch_pve_vm_options", side_effect=fetch),
+            patch("alignment_stats.lun_backstore_map", return_value=mapping),
+        ):
+            options = als.read_pve_vm_configs(
+                conf_dir="/nonexistent-pve-dir", config=config, errors=errors
+            )
+        self.assertEqual(list(options), ["vm-101-disk-0"])
+        self.assertNotIn("pve_bypath_dropped", errors)
+
+        with (
+            patch("alignment_stats.fetch_pve_vm_options", side_effect=fetch),
+            patch("alignment_stats.lun_backstore_map", return_value={}),
+        ):
+            options2 = als.read_pve_vm_configs(
+                conf_dir="/nonexistent-pve-dir", config=config, errors=errors
+            )
+        self.assertEqual(options2, {})
+        self.assertIn(self.BY_PATH_DEVICE, errors["pve_bypath_dropped"])
 
 
 class TestCollectAlignmentSample(unittest.TestCase):
@@ -708,6 +964,56 @@ class TestCollectAlignmentSample(unittest.TestCase):
             probe_calls,
             [[("201", "vm-201-disk-0", "scsi0", 32 * 1024**3, None, {"uuid-1"})]],
         )
+
+    def test_pve_failure_reason_flows_into_sample(self):
+        """The compute-fetch failure reason reaches sample.pve_failure so
+        consumers can say WHY VM layers are missing, not just that they are."""
+        two_node = {
+            "mode": "two-node",
+            "this_host": "stewie",
+            "storage_host": "stewie",
+            "compute_host": "tweety",
+            "pools": set(),
+        }
+
+        def fetch(host, conf_dir=als.PVE_QEMU_CONF_DIR, runner=None, errors=None):
+            if errors is not None:
+                errors["pve"] = "ssh root@tweety rc=255: Permission denied"
+            return {}
+
+        arc_path, prefetch_path, kstat_root = self._kstats_dir()
+        with patch("alignment_stats.fetch_pve_vm_options", side_effect=fetch):
+            sample = als.collect_alignment_sample(
+                zfs_repo=_FakeZfsRepo(),
+                disk_repo=_FakeDiskRepo(),
+                arcstats_path=arc_path,
+                zfetchstats_path=prefetch_path,
+                pve_conf_dir="/nonexistent-pve-dir",
+                kstat_dir=kstat_root,
+                node_config_data=two_node,
+            )
+        self.assertFalse(sample.pve_available)
+        self.assertIn("rc=255", sample.pve_failure)
+
+    def test_bypath_drops_recorded_in_sample(self):
+        """By-path disk lines the local LIO map cannot resolve are recorded
+        per-device in the sample (F-019: never silently invisible again)."""
+        arc_path, prefetch_path, kstat_root = self._kstats_dir()
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "101.conf"), "w") as f:
+                f.write(TestPveParsing.BY_PATH_CONF)
+            with patch("alignment_stats.lun_backstore_map", return_value={}):
+                sample = als.collect_alignment_sample(
+                    zfs_repo=_FakeZfsRepo(),
+                    disk_repo=_FakeDiskRepo(),
+                    arcstats_path=arc_path,
+                    zfetchstats_path=prefetch_path,
+                    pve_conf_dir=tmp,
+                    kstat_dir=kstat_root,
+                    node_config_data=SINGLE_NODE_CONFIG,
+                )
+        self.assertFalse(sample.pve_available)
+        self.assertEqual(sample.pve_bypath_dropped, [TestPveParsing.BY_PATH_DEVICE])
 
     def test_guest_probe_targets_carry_serial_and_signatures(self):
         """Targets include tier evidence: serial= from the disk line and

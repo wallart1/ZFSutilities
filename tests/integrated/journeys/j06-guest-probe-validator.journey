@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# j06-guest-probe-validator.journey — live validation of the Alignment
+# view's guest-filesystem probe, run the way production runs it.
+#
+# Composition: the ENTIRE j05 two-node sequence runs first (template
+# clones, P2P link + root SSH both ways, three RAIDZ1 pools,
+# install-two-node, enroll-proxmox-pool, stopped VM 101 + its first
+# product disk). This journey picks up at the first LUN, on a lab shaped
+# like the two-node site, and drives the production validator:
+#
+#   Stage X  deliver the working tree's validator (share/dev is not
+#            installer-deployed) and run it live on the storage guest:
+#            populated sample, VM 101's stopped disk probed with a
+#            recorded reason, LIVE PASS, rc=0.
+#   Stage Y  negative control — the compute host is made unresolvable on
+#            the storage guest: the PVE fetch degrades and the validator
+#            must exit non-zero with the ssh reason printed. This is the
+#            regression fence for the 2026-10-22 stewie incident (a
+#            vacuous "LIVE PASS" against pools=0 / pve=UNAVAILABLE with
+#            the fetch's failure cause discarded).
+#
+# Guest state required: storage template + compute template (j05's).
+# Site config required: j05's two-node keys. Software source must be
+# dev-tarball — this journey verifies working-tree repairs.
+# Snapshots produced: as-cloned (per guest, via j05), pools-created.
+
+# shellcheck source=j05-two-node-install.journey
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/j05-two-node-install.journey"
+
+journey_main() {
+    if [[ "${ITF_SW_SOURCE:-}" != "dev-tarball" ]]; then
+        itf_step fail "site config: dev tarball source" \
+            "ITF_SW_SOURCE=${ITF_SW_SOURCE:-?} — set dev-tarball (verifies working-tree repairs)"
+        return 1
+    fi
+    itf_step info "journey start" \
+        "j06 guest-probe validator; composes the j05 two-node lab"
+
+    # ------------------------------------------------------------------
+    # Stage L: the full j05 two-node lab (clones -> install -> first LUN)
+    # ------------------------------------------------------------------
+
+    j05_two_node_lab_main || return 1
+
+    local s_vmid s_ip c_vmid c_ip
+    read -r _ s_vmid s_ip < "$ITF_RUN_DIR/guest-storage.txt"
+    read -r _ c_vmid c_ip < "$ITF_RUN_DIR/guest-compute.txt"
+    if [[ -n "$s_ip" && -n "$c_ip" ]]; then
+        itf_step pass "lab coordinates recovered" \
+            "storage=$s_ip (vmid $s_vmid) compute=$c_ip (vmid $c_vmid)"
+    else
+        itf_step fail "lab coordinates recovered" "guest record files incomplete"
+        return 1
+    fi
+
+    # The compute name exactly as the installed node.conf sshes to it.
+    local c_hostname
+    c_hostname="$(itf_guest_exec "$s_ip" \
+        'sed -n "s/^COMPUTE_HOST=\"\([^\"]*\)\"/\1/p" /etc/zfsutilities/node.conf' \
+        2>/dev/null)"
+    if [[ -n "$c_hostname" ]]; then
+        itf_step pass "compute host name read" "node.conf COMPUTE_HOST=$c_hostname"
+    else
+        itf_step fail "compute host name read" "no COMPUTE_HOST in storage node.conf"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage X: live validator run on the storage guest (positive)
+    # ------------------------------------------------------------------
+
+    # share/dev is not installer-deployed; the validator ships from the
+    # working tree. The python tree under test is the one the installer
+    # just deployed from today's dev tarball (the validator's default
+    # newest-deployed resolution).
+    local vlocal="$ITF_ROOT/../../share/dev/validate-guestfs-probe.sh"
+    if itf_guest_put "$s_ip" "$vlocal" /root/validate-guestfs-probe.sh \
+            > /dev/null 2>&1; then
+        itf_step pass "validator delivered" "working-tree script at /root/validate-guestfs-probe.sh"
+    else
+        itf_step fail "validator delivered" "itf_guest_put failed"
+        return 1
+    fi
+
+    local v_log="$ITF_RUN_DIR/validator-live.log"
+    if itf_guest_exec "$s_ip" "bash /root/validate-guestfs-probe.sh" \
+            > "$v_log" 2>&1 \
+            && grep -q "LIVE PASS" "$v_log" \
+            && grep -Eq "sample: pools=[1-9]" "$v_log" \
+            && grep -q "pve=ok" "$v_log" \
+            && grep -Eq "probe targets: [1-9]" "$v_log" \
+            && grep -q "vm-101-disk-0" "$v_log" \
+            && grep -q "reason:" "$v_log"; then
+        itf_step pass "validator live pass" \
+            "populated sample; VM 101 disk probed with a recorded reason (see validator-live.log)"
+        itf_artifact "validator-live" "$v_log"
+    else
+        itf_step fail "validator live pass" "see validator-live.log"
+        itf_artifact "validator-live" "$v_log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage Y: negative control — PVE fetch must fail loudly, not vacuously
+    # ------------------------------------------------------------------
+
+    # Remove the P2P /etc/hosts entry for the compute host on the storage
+    # guest (backed up first): ssh root@<compute> cannot resolve, the PVE
+    # fetch degrades, and the validator must say so and exit non-zero.
+    if ! itf_guest_exec "$s_ip" \
+            "cp /etc/hosts /etc/hosts.itf-backup && sed -i '/ ${c_hostname}\$/d' /etc/hosts" \
+            > /dev/null 2>&1; then
+        itf_step fail "validator negative control" "could not stage the /etc/hosts edit"
+        return 1
+    fi
+    local n_log="$ITF_RUN_DIR/validator-negative.log"
+    local neg_rc=0
+    itf_guest_exec "$s_ip" "bash /root/validate-guestfs-probe.sh" \
+        > "$n_log" 2>&1 || neg_rc=$?
+    # Restore the hosts entry whatever the verdict — the lab stays healthy.
+    itf_guest_exec "$s_ip" "mv /etc/hosts.itf-backup /etc/hosts" > /dev/null 2>&1
+
+    if (( neg_rc != 0 )) \
+            && grep -q "PVE configs unavailable" "$n_log" \
+            && grep -Eq "pve failure: ssh root@${c_hostname}" "$n_log" \
+            && ! grep -q "LIVE PASS" "$n_log"; then
+        itf_step pass "validator negative control" \
+            "unreachable compute -> rc=$neg_rc with the ssh reason printed"
+        itf_artifact "validator-negative" "$n_log"
+    else
+        itf_step fail "validator negative control" \
+            "rc=$neg_rc — expected non-zero, a printed PVE failure reason, and no LIVE PASS"
+        itf_artifact "validator-negative" "$n_log"
+        return 1
+    fi
+    if itf_guest_exec "$s_ip" "getent hosts ${c_hostname}" > /dev/null 2>&1; then
+        itf_step pass "compute host resolution restored" \
+            "/etc/hosts entry back; getent resolves ${c_hostname}"
+    else
+        itf_step fail "compute host resolution restored" \
+            "manual /etc/hosts restore needed on the storage guest"
+        return 1
+    fi
+
+    itf_step info "journey stage reached" \
+        "guest-probe validator verified live: honest pass AND loud failure"
+    return 0
+}

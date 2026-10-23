@@ -18,6 +18,12 @@
 #               newest /usr/local/lib/zfsutilities/versions/<v>/python
 #               carrying alignment_guestfs.py.
 #
+# Live verdict: the run collects a real sample through the same
+# repositories the GUI uses. It exits non-zero with printed reasons when
+# any source comes back empty (pools, datasets, PVE configs, probe
+# targets) or a target yields neither entries nor a reason — a populated
+# sample with per-target entries or recorded reasons is a LIVE PASS.
+#
 # Environment safety: the state migration is disabled and the state dir
 # points at a scratch directory removed on exit (the migration-sweep
 # hazard recorded in PREEXISTING.md — never run tooling against the live
@@ -29,7 +35,7 @@ base=/usr/local/lib/zfsutilities
 
 die() { echo "validate-guestfs-probe: $*" >&2; exit 1; }
 usage() {
-    sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 }
 
@@ -133,12 +139,32 @@ print(
     f"node: mode={config.get('mode')} this={config.get('this_host')} "
     f"compute={config.get('compute_host')}"
 )
+import disk_repository
+import zfs_repository
+
+# The same repositories the GUI's app_context builds: pools and datasets
+# come from real zfs/zpool reads. Collecting without them used to swallow
+# an AttributeError per-source and "pass" against an empty sample.
 prober = agfs.GuestFsProber(config=config)
-sample = als.collect_alignment_sample(guest_prober=prober)
+sample = als.collect_alignment_sample(
+    zfs_repo=zfs_repository.ZfsRepository(sudo=True),
+    disk_repo=disk_repository.DiskRepository(sudo=True),
+    node_config_data=config,
+    guest_prober=prober,
+)
 print(
     f"sample: pools={len(sample.pools)} datasets={len(sample.datasets)} "
     f"pve={'ok' if sample.pve_available else 'UNAVAILABLE'}"
 )
+if not sample.pools_available:
+    print("  pools source unavailable: zfs/zpool reads failed")
+if sample.dataset_read_failures:
+    print(f"  dataset read failures: {', '.join(sample.dataset_read_failures)}")
+if not sample.pve_available:
+    print(f"  pve failure: {sample.pve_failure or 'unknown'}")
+if sample.pve_bypath_dropped:
+    print("  by-path disks unresolved against local LIO: "
+          + ", ".join(sample.pve_bypath_dropped))
 
 targets = als._guest_probe_targets(sample.datasets, sample.vm_disks)
 volblocks = {
@@ -147,6 +173,7 @@ volblocks = {
     if ds.kind == "volume"
 }
 print(f"probe targets: {len(targets)}")
+probed_broken = []
 for vmid, short, bus, volsize, serial, sigs in sorted(targets, key=lambda t: (t[0], t[1])):
     probe = prober.probe_volumes([(vmid, short, bus, volsize, serial, sigs)]).get(short)
     evidence = []
@@ -156,11 +183,14 @@ for vmid, short, bus, volsize, serial, sigs in sorted(targets, key=lambda t: (t[
         evidence.append(f"sigs={len(sigs)}")
     print(f"  vm-{vmid} {short} ({bus}, volsize={volsize}, {' '.join(evidence) or 'no tier-1/2 evidence'})")
     if probe is None:
+        probed_broken.append(short)
         print("    no probe result")
         continue
     print(f"    match: {probe.match_method or 'NO MATCH'}")
     if probe.reason:
         print(f"    reason: {probe.reason}")
+    if not probe.entries and not probe.reason:
+        probed_broken.append(short)
     vb = volblocks.get(short)
     for entry in probe.entries:
         verdict = ""
@@ -179,7 +209,7 @@ for short, entries in sorted(sample.guest_fs.items()):
 for short, reason in sorted(sample.guest_fs_failures.items()):
     print(f"  {short}: {reason}")
 
-import alignment_analysis as ana  # noqa: E402
+import alignment_analysis as ana
 
 rungs = 0
 for ladder in ana.blocksize_ladder(sample):
@@ -187,6 +217,25 @@ for ladder in ana.blocksize_ladder(sample):
         if bar.layer in ("VM", "VM fs"):
             print(f"  ladder {ladder.pool}: {bar.label} [{bar.state}]")
             rungs += 1
+
 print(f"guest-driven ladder rungs: {rungs}")
-print("LIVE PASS" if rungs else "LIVE PASS (no guest rungs — check reasons above)")
+
+failures = []
+if not sample.pools_available:
+    failures.append("pools source unavailable (zfs/zpool reads failed)")
+elif not sample.pools:
+    failures.append("no pools found")
+if not sample.pve_available:
+    failures.append(f"PVE configs unavailable ({sample.pve_failure or 'unknown'})")
+if not targets:
+    failures.append("no probe targets (zvols matched to PVE VM disks)")
+if probed_broken:
+    failures.append(
+        "probe returned neither entries nor reasons for: " + ", ".join(probed_broken)
+    )
+if failures:
+    for failure in failures:
+        print(f"LIVE FAIL: {failure}")
+    sys.exit(1)
+print("LIVE PASS" if rungs else "LIVE PASS (no guest rungs — see probe output above)")
 PY
