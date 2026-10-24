@@ -38,6 +38,14 @@ apt-get install -y --no-install-recommends \
     xauth \
     zfsutils-linux
 
+# The GitHub runner (and Ubuntu-family hosts) may ship distro-installed
+# Pygments without pip metadata; when mkdocs-material resolves a newer
+# Pygments, pip cannot uninstall the distro copy ("RECORD file not
+# found — installed by debian") and aborts the whole install. Install
+# pip's own copy first, ignoring the distro one, so the main install
+# finds the requirement already satisfied.
+python3 -m pip install --break-system-packages --ignore-installed pygments
+
 # --break-system-packages is required on Ubuntu 24.04's externally-managed
 # Python; it is accepted harmlessly where not required.
 python3 -m pip install --break-system-packages \
