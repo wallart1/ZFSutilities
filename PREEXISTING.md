@@ -2,6 +2,19 @@
 
 ---
 
+- (coding-policies divergence, strict mode — family-wide, discovered
+  2026-10-24 wrap-up): coding-policies.md says scripts should start with
+  `set -euo pipefail`, but the whole bashinit-based iSCSI/two-node family
+  (safe-iscsi-save, repair-iscsi-luns, setup-iscsi-targets, rescan-storage,
+  list-vm-disks, new-vm-disk, remove-vm-disk, and ~25 more) runs without it.
+  Strict mode lands via named migration campaigns: the 2026-10-16 wrap-up
+  flipped 13 orchestrators (audit + fence per script, e.g. assignment-of-
+  failing-substitution aborts) and tests/test-strict-mode guards that list.
+  The iSCSI family was never in a campaign; the new iSCSI-resilience
+  scripts (export-iscsi-state, reconcile-iscsi-state) follow the family.
+  Migration needs the same audit-and-fence treatment plus adding the
+  family to test-strict-mode's strict_scripts list.
+
 - (toolchain deprecation, docs build): `mkdocs build -f docs/mkdocs.yml`
   prints a mkdocs-material WARNING — "MkDocs 2.0 is incompatible with
   Material for MkDocs" — on every build (exit 0, site still builds cleanly).
@@ -18,23 +31,8 @@
   (Rechecked 2026-10-16: 0.0.71; still no 1.x.)
   (Rechecked 2026-10-22: unchanged, 0.0.71.)
   (Rechecked 2026-10-22 wrap-up: unchanged, 0.0.71 — no 1.x; hold stands.
-  Rechecked 2026-10-23 wrap-up: unchanged, 0.0.71 — no 1.x; hold stands.)
-
-- (future objective, migration/create fidelity — narrowed 2026-10-03):
-  No creation path (Create Pool wizard or Migrate Pool) can *plan*
-  infrastructure vdevs (special / log / cache / spare): the review page
-  warns when the source pool has them, a post-cutover INFO reminder says to
-  re-add them with Add Infrastructure Vdev, and as of 2026-10-03 the
-  holding-mode rebuild picker preselects only true data members (former
-  infra-vdev disks are listed unchecked, labeled with their class, so they
-  can no longer be silently absorbed into data vdevs). Remaining gap is the
-  planning UI itself, deliberately deferred as a future objective (user
-  decision 2026-10-03): per-class disk pickers in the wizards plus
-  `zpool add <class>` steps after the create step (or an extended
-  `zpool create` vdev spec). Originally discovered 2026-10-03 during the
-  pool-level migration audit.
-  This item is in abayance as a future objective.
-  (Reconfirmed 2026-10-11 (user): keep deferred.)
+  Rechecked 2026-10-23 wrap-up: unchanged, 0.0.71 — no 1.x; hold stands.
+  Rechecked 2026-10-24 wrap-up: 0.0.72; still no 1.x; hold stands.)
 
 - (future objective, iSCSI resilience — survive bare-metal restores up to
   30 days old; user todo 2026-10-22): a bare-metal OS restore of the
@@ -78,3 +76,8 @@
   (A+B+C+D) is well understood; the compute-host config repair is the
   harder half (touch only by-path lines, via qm set, from B's
   last-known-good map).
+  (Progress 2026-10-23: plan milestones M1 (pool-resident state export,
+  idea B) and M2 (reconcile engine, idea A) implemented in the working
+  tree — export-iscsi-state + reconcile-iscsi-state + safe-iscsi-save
+  hook. Entry stays: M3–M6 remain, executed one milestone at a time per
+  the user's cycle.)

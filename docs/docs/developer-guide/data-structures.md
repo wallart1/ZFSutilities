@@ -721,7 +721,10 @@ re-created). [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk
 removal or destructive operations.
 
 [repair-iscsi-luns](../commands-and-modules/two-node.md#repair-iscsi-luns-storage-node) regenerates the entire
-manifest from the current targetcli backstore list, and
+manifest from the current targetcli backstore list,
+[reconcile-iscsi-state](../commands-and-modules/two-node.md#reconcile-iscsi-state-storage-node) regenerates it from
+the ensured set of the pool state map (so a post-restore reconcile cannot be
+blocked by the regressed manifest), and
 [safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node) regenerates it after every
 successful save so the manifest stays authoritative when LUNs are moved or
 added.
@@ -744,12 +747,93 @@ vm-202-disk-5:/dev/zvol/threeamigos/proxmox/vm-202-disk-5:threeamigos
 Consumed by [iscsi-add-encrypted-luns](../commands-and-modules/two-node.md#iscsi-add-encrypted-luns-storage-node) after keys are loaded, and by
 [safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node) to generate the boot-safe config. Maintained by
 `new-vm-disk --encrypted` (adds) and [remove-vm-disk](../commands-and-modules/two-node.md#remove-vm-disk-both) (removes).
+[reconcile-iscsi-state](../commands-and-modules/two-node.md#reconcile-iscsi-state-storage-node) re-flags ensured
+backstores whose zvol is encrypted after a restore — the conf lives on the OS
+disk and regresses with it.
 
 Legacy installs may still use `/etc/iscsi-encrypted-luns.conf`; current scripts
 fall back to that path when the modern path does not exist.
 
 See [ZFS Key Handling](../installation/zfs-keys.md) for the manual key-store
 workflow.
+
+## iSCSI pool-resident state map
+
+JSON file written on every online pool by
+[export-iscsi-state](../commands-and-modules/two-node.md#export-iscsi-state-storage-node):
+
+```
+<pool>/zfsutilities/iscsi-state.json
+```
+
+Records the live iSCSI LUN topology so it survives an OS-disk loss on the
+storage host — a bare-metal restore regresses both `saveconfig.json` and the
+[expected-backstores manifest](#iscsi-expected-backstores-manifest) together,
+leaving nothing on the OS disk that can reconstruct LUNs created after the
+backup point. A copy of the active
+[node.conf](#node-configuration-file-etczfsutilitiesnodeconf) is written
+beside the map so the pool-resident pair is self-contained for recovery.
+
+```json
+{
+  "version": 1,
+  "generated": "2026-10-23T14:00:00-04:00",
+  "host": "stewie",
+  "iqn_prefix": "iqn.2026-02.local.stewie",
+  "storage_ip": "192.168.100.1",
+  "targets": {
+    "iqn.2026-02.local.stewie:threeamigos": {
+      "acls": ["iqn.2026-02.local.tweety"],
+      "luns": { "0": "vm-101-disk-0", "19": "vm-207-disk-2" }
+    }
+  },
+  "backstores": {
+    "vm-101-disk-0": {
+      "dev": "/dev/zvol/threeamigos/proxmox/vm-101-disk-0",
+      "target": "iqn.2026-02.local.stewie:threeamigos",
+      "lun": 0
+    }
+  }
+}
+```
+
+| Key | Type | Description |
+| --- | ---- | ----------- |
+| `version` | number | Map schema version (currently `1`) |
+| `generated` | string | `date -Iseconds` timestamp of the export |
+| `host` | string | Short hostname of the storage host that wrote the map |
+| `iqn_prefix` / `storage_ip` | string | Node identity at export time (drift in these is reported by `--check`) |
+| `targets.<iqn>.luns` | object | LUN number (string key) → backstore name for that target |
+| `targets.<iqn>.acls` | array | Initiator IQNs bound to the target's ACLs |
+| `backstores.<name>.dev` | string | Zvol device path backing the backstore |
+| `backstores.<name>.target` / `.lun` | string / number | Owning target IQN and LUN index; omitted when a loaded backstore has no LUN mapping |
+
+Semantics:
+
+- **Authoritative for recovery.** The map is written by
+  `export-iscsi-state` to every online pool in the node config (the
+  `zfsutilities` dataset is created on first use; offline pools are skipped
+  with a warning), installed atomically (temp file + `mv` in the destination
+  directory), and refreshed by
+  [safe-iscsi-save](../commands-and-modules/two-node.md#safe-iscsi-save-storage-node)
+  after every successful save — so it is as fresh as the last LUN change.
+  Any surviving pool can serve recovery.
+- **History from pool policies.** Pool-wide snapshot/retention policies
+  without explicit includes pick up the `zfsutilities` dataset automatically,
+  giving the map point-in-time history on each pool.
+- **Never regressed by a degraded export.** `export-iscsi-state` refuses to
+  record a live state with fewer active backstores than the manifest (or the
+  newest map, when no manifest exists) expects, unless `--force` is given —
+  a half-restored LIO tree must not overwrite the recovery authority.
+- **Deterministic content.** Sections are sorted, so repeated exports of an
+  unchanged topology differ only in `generated`; `--check` compares the
+  recorded map with live state and reports `DRIFT:` lines for manual
+  `targetcli` edits.
+- **Recovery consumer.** [reconcile-iscsi-state](../commands-and-modules/two-node.md#reconcile-iscsi-state-storage-node)
+  reads the newest map across online pools (or an explicit snapshot via
+  `--from`) and recreates the recorded backstores/LUNs/ACLs create-only.
+  After a partial reconcile (refused or skipped entries) the map refresh is
+  suppressed so entries whose zvols are still missing survive in it.
 
 ## Session log index (`/var/log/zfsutilities/sessions/.log_index.json`)
 

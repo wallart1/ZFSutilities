@@ -343,3 +343,156 @@ released as 0.127.0; those entries were removed, recoverable via
   (mkdocs build) — untracked, regenerates anyway.
 - Deployed copies on both hosts keep the (inert) script until the next
   release deploy; nothing invokes it there.
+
+## 2026-10-23 — Parallel-repo infrastructure (no code changes)
+
+- Discovered pub2 had been created as a linked WORKTREE of pub by mistake
+  (pub2/.git was a gitdir file into pub's .git) — shared refs/config caused
+  cross-talk between sessions. User confirmed it was unintended; converted
+  pub2 to an INDEPENDENT clone at 3713eff: saved the uncommitted
+  SESSION_NOTES diff, `git worktree remove --force`, re-cloned pub into the
+  pub2 path, `reset --hard` to recover the checkout (first attempt failed
+  because the shell cwd was the deleted directory), restored the lane
+  checkout (PROMPTQUEUE2) and re-applied the notes patch. pub's working
+  tree untouched throughout (its ~30 uncommitted files intact).
+- Remotes now: pub2 has origin=GitHub (publication only, per user) +
+  sibling remote `pub` (local path); pub has origin + sibling `pub2`.
+  Fetch verified both ways. GitHub untouched.
+- Lane merge cycle settled: commit each repo's session leftovers
+  (SESSION_NOTES/PREEXISTING conflict at merge; interleaved by the agent)
+  → in pub, fetch pub2 and merge the lane branch into main → in pub2,
+  fetch pub and `git merge --ff-only main`. Re-clone refresh rejected
+  (destroys uncommitted/untracked work). Lane discipline: one branch
+  worked in only one repo at a time.
+- Memory dirs of both projects are now symlinks to
+  ~/.zcode/cli/memories/zfsutilities-shared/ (pub's 48 memories + merged
+  parallel-lane entries; pre-swap backups as memory-backup-2026-10-23/
+  beside each). Future third repo: normal clone + sibling remotes +
+  symlink the new project's memory dir to the same store.
+
+## 2026-10-23 — iSCSI resilience M1: pool-resident state export
+
+Milestone M1 of the iSCSI resilience plan (`/NFS1/dan(NFS1)/zfsutilities-plan/
+iSCSI resilience plan`), executed alone per the one-milestone-at-a-time cycle.
+M2–M6 remain; PREEXISTING.md entry stays until M6.
+
+- `lib/iscsi-lib.sh`: dependency loading now guarded on node-lib's
+  `pool_to_target` (zfsdelfs still gets deps loaded; repair/export skip the
+  re-load). Added the shared discovery section factored out of
+  repair-iscsi-luns: `is_vm_backstore_name`, `parse_backstores`,
+  `parse_target_luns`, `discover_zvols`, plus new `parse_target_acls`
+  (node-lib probe_target_usage's documented IQN character-class pattern).
+- `bin/repair-iscsi-luns`: sources the lib via `REPAIR_ISCSI_LUNS_ISCSI_LIB`
+  knob; the four parse functions moved out verbatim (behavior unchanged).
+- New `bin/export-iscsi-state` (storage host, silent single-node exit):
+  collects live topology, emits deterministic JSON
+  (`<pool>/zfsutilities/iscsi-state.json`: version/generated/host/
+  iqn_prefix/storage_ip/targets{iqn}{acls,luns{idx→backstore}}/
+  backstores{name}{dev,target,lun}), copies node.conf beside it, writes
+  every ONLINE pool in pool_list() (dataset created on first use, atomic
+  tmp+mv, offline pools WARN+skip, zero-writes=FATAL). `--check` compares
+  live vs newest map (by generated timestamp) and prints DRIFT lines
+  (exit 1 on drift). Degraded-state fence ADDED beyond the plan text:
+  refuses to record fewer backstores than the manifest (fallback: newest
+  map) expects unless `--force` — a half-restored LIO tree must not
+  overwrite the recovery authority (mirrors safe-iscsi-save's gate).
+- `bin/safe-iscsi-save`: invokes export-iscsi-state after manifest
+  regen, best-effort (`SAFE_ISCSI_SAVE_EXPORT_ISCSI_STATE` knob; WARN only
+  on failure/missing). Map is now as fresh as the last LUN change.
+- Tests: new `tests/test-export-iscsi-state` (16 tests incl. golden JSON,
+  dataset-create, offline skip, degraded refuse/force, drift, no-map);
+  test-safe-iscsi-save extended (hook invoked / failure non-fatal /
+  missing warns); test-repair-iscsi-luns sources the real lib via the new
+  knob (14 stay green).
+- Docs: data-structures.md (iscsi-state.json section), two-node.md
+  (export-iscsi-state section + Jump-to + safe-iscsi-save flow step 9 and
+  called-modules), messages/index.md (export-iscsi-state + safe-iscsi-save
+  hook rows). commands.md unchanged — it holds no two-node command index;
+  all two-node scripts document in two-node.md.
+- Pool-policy pickup verified at code level (zfsbuildfsarray: no includes
+  ⇒ entire pool subtree included, so `<pool>/zfsutilities` is snapshotted
+  by pool-wide policies). The in-ITF verification lands with M6's journeys
+  (M1 wrote no journey — disclosed in the M1 report).
+
+## 2026-10-23 — M2: reconcile engine (bin/reconcile-iscsi-state)
+
+Executed milestone 2 of the iSCSI-resilience plan (`/NFS1/dan(NFS1)/
+zfsutilities-plan/iSCSI resilience plan`), alone, per the milestone cycle.
+M3–M6 remain; PREEXISTING.md entry stays until M6.
+
+- New `bin/reconcile-iscsi-state` (storage host, silent single-node exit):
+  reads the newest pool map (`--from <file>` for an older snapshot), refuses
+  maps generated on another host, then plans/applies create-only recovery per
+  map backstore whose zvol exists — backstore create (emulate_tpu=1), LUN at
+  the RECORDED number, explicit-mode ACL rebind (demo-mode TPGs left alone,
+  self-generating; note printed). Identity conflicts refused per item with
+  evidence + continue (dev mismatch / mapped at different target-or-LUN /
+  slot held by another backstore / target missing live → setup-iscsi-targets
+  pointer); zvol-gone entries skipped. Finishers: encrypted re-flag into
+  iscsi-encrypted-luns.conf (conf regresses with the OS disk), manifest
+  regen FROM THE ENSURED SET (derived state — keeps safe-iscsi-save's
+  degraded gate consistent post-restore), safe-iscsi-save (hook suppressed),
+  export-iscsi-state refresh ONLY on complete reconciles (partial refresh
+  would destroy skipped entries = the recovery authority), rescan-storage.
+  VM-config cross-check via list-vm-disks --gather-vm-info over ssh:
+  still-missing refs reported with map identity + item outcome; no-entry
+  refs listed with candidate unexported zvols (never guessed); unreachable
+  compute host WARNs and continues. `--dry-run` (annotated cross-check,
+  exit 1 on conflicts), `--yes`, y/N prompt otherwise. Exit 1 on
+  refuses/apply failures/still-missing refs; skips alone exit 0.
+- `bin/safe-iscsi-save`: new `SAFE_ISCSI_SAVE_SKIP_EXPORT_ISCSI_STATE=1`
+  knob — reconcile owns the map-refresh decision; INFO line when suppressed.
+- `lib/iscsi-lib.sh`: `read_json_string_field` + `newest_iscsi_state_map`
+  (+ ISCSI_STATE_FILENAME default) moved here from export-iscsi-state so
+  export and reconcile resolve the same newest map; export's private copies
+  removed (call sites renamed; STATE_FILENAME now derives from the lib
+  default so writes and discovery cannot drift).
+- Knob resolution moved into `resolve_runtime_paths()` re-run by main() —
+  top-level `VAR="${KNOB:-default}"` assignments are evaluated at source
+  time in tests, freezing pre-mock defaults (bug caught by the suite).
+- Tests: new `tests/test-reconcile-iscsi-state` (19: loads/single-node/
+  no-map/host-mismatch/--from missing+explicit/clean restore/dry-run/
+  slot-conflict/different-lun/dev-conflict/missing-zvol skip+preserve/
+  encrypted re-flag/explicit ACL+mapped_lun/no-entry+candidates/unreachable/
+  target-missing/prompt-decline/idempotent). Mock fidelity: targetcli mock
+  APPLIES creates to its fixtures so post-apply re-collection inside main()
+  sees the new topology; log assertions capture stderr (the eval'd script
+  reinstates bashinit's log_msg). Base map JSON rendered once and copied
+  (python-startup budget); awk read_json_string_field override in this suite
+  (python original covered by test-export-iscsi-state). Suite ~7s (soft
+  budget 5s — warning only). test-safe-iscsi-save +1 (suppression honored),
+  now 13.
+- Docs: two-node.md (reconcile-iscsi-state section + Jump-to + safe-iscsi-save
+  step 9 + manifest-actions row), data-structures.md (manifest/encrypted-conf
+  maintainer lists + state-map "recovery consumer" bullet),
+  messages/index.md (reconcile section + suppression row).
+
+## 2026-10-24 — Development cycle wrap-up (code review pass)
+
+Ran the 7-step wrap-up over the uncommitted M1+M2 working tree.
+
+- Step 1: Zensical recheck — 0.0.72, still no 1.x, hold stands. iSCSI
+  resilience entry annotated (M1–M2 landed, uncommitted; M3–M6 stay in the
+  milestone cycle — not executed, no milestone named this turn).
+- Step 2 (coding policies + shellcheck + ruff): all clean; fixed two
+  undeclared loop variables in reconcile-iscsi-state (`init` in
+  plan_reconciliation, `zvol` in main). Discovered + parked: coding-policies'
+  `set -euo pipefail` vs the unmigrated iSCSI/two-node bashinit family
+  (strict mode lands via named campaigns — test-strict-mode guards the 13
+  migrated orchestrators; this family was never in one). New PREEXISTING
+  entry.
+- Step 3 (test review): added test-reconcile-iscsi-state save-failure test —
+  which exposed a real defect: a safe-iscsi-save failure did NOT contribute
+  to reconcile's exit code (FATAL logged, exit 0). Fixed: `_save_failed` now
+  sets rc=1; two-node.md return-code row updated. Added
+  test-export-iscsi-state degraded-fence map-fallback test (manifest
+  missing — the core post-restore shape). Affected suites green (4 iSCSI +
+  8 wider: zfsdelfs, send-receive x2, switch-version, uninstall,
+  module-dependencies, strict-mode, no-debug-hooks).
+- Step 5: docs diffs reviewed vs implementation (accurate); docs integrity
+  23 passed; mkdocs site rebuilt (known Material-vs-MkDocs-2.0 warning only).
+- Step 6: full run (no soaks): 100 suites, all passed, 1 env-conditional
+  skip (rootcheck as-root on non-root dev host), 0 failures.
+- Step 7: codebase frozen at this point (no commit — awaiting user
+  confirmation per Hard Rules).
+

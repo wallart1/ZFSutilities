@@ -1,0 +1,503 @@
+#!/usr/bin/bash
+# export-iscsi-state
+# Record the live iSCSI LUN topology as a pool-resident state map.
+#
+# A storage-host bare-metal restore regresses /etc/rtslib-fb-target (both
+# saveconfig.json and expected-backstores.txt live on the OS disk) while the
+# pools re-import current: LUNs created after the backup point vanish and
+# repair-iscsi-luns cannot restore them because the manifest regressed with
+# the same disk. This script writes the authoritative LUN map — per-target
+# LUN → backstore, per-backstore zvol device, ACL initiators, plus a copy of
+# node.conf — onto every online pool at <pool>/zfsutilities/, so any
+# surviving pool can serve recovery.
+#
+# safe-iscsi-save invokes this script after every successful save, keeping
+# the map as fresh as the last LUN change. Pool-wide snapshot/retention
+# policies provide the history: the zfsutilities dataset is an ordinary
+# child dataset of each pool, so policies without explicit includes pick it
+# up automatically.
+#
+# Usage: sudo export-iscsi-state [--check] [--force]
+#   --check   Compare live state against the newest map found on any pool and
+#             report drift (manual targetcli edits since the last export).
+#   --force   Record the live state even when it is degraded (fewer active
+#             backstores than the manifest or the newest map expects).
+#
+# Install to: /usr/local/lib/zfsutilities/bin/export-iscsi-state on the storage host
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+NODE_LIB="${EXPORT_ISCSI_STATE_NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+
+# Shared targetcli/zvol parsers (is_vm_backstore_name, parse_backstores,
+# parse_target_luns, parse_target_acls, discover_zvols).
+ISCSI_LIB="${EXPORT_ISCSI_STATE_ISCSI_LIB:-$(find_zfsutility_script iscsi-lib.sh)}"
+source "$ISCSI_LIB"
+
+source_helper rootcheck
+
+rootcheck
+
+# iSCSI-only script — exit silently in single-node mode
+is_single_node && exit 0
+
+usage() {
+    log_msg "INFO: Usage: export-iscsi-state [--check] [--force]"
+    echo ""
+    log_msg "INFO:   --check   Compare live state to the newest pool-resident map and report"
+    log_msg "INFO:             drift (manual targetcli edits since the last export)"
+    log_msg "INFO:   --force   Record a degraded live state over a healthy map (use with care)"
+    exit 1
+}
+
+check_only=false
+force_write=false
+for arg in "$@"; do
+    case "$arg" in
+        --check) check_only=true ;;
+        --force) force_write=true ;;
+        -h|--help) usage ;;
+        *)
+            log_msg "FATAL: Unknown option: $arg"
+            usage
+            ;;
+    esac
+done
+
+my_host=$(hostname -s)
+
+# Verify we're on the storage host
+if [[ "$my_host" != "$storage_host" ]]; then
+    log_msg "FATAL: Must run on the storage host ($storage_host), not $my_host"
+    exit 1
+fi
+
+# Storage-node dependency: LIO target stack. The compute host needs Proxmox VE,
+# but this script runs on the storage host and does not require a local qm binary.
+if ! command -v targetcli >/dev/null 2>&1; then
+    log_msg "FATAL: targetcli not found. Install the LIO target stack on this storage host."
+    log_msg "FATAL:   On Debian/Ubuntu: apt-get install targetcli-fb"
+    exit 1
+fi
+
+[[ $EUID -eq 0 ]] || [[ "${EXPORT_ISCSI_STATE_SKIP_ROOT:-}" == "Y" ]] || {
+    log_msg "FATAL: Must run as root (use sudo)"
+    exit 1
+}
+
+# Files written inside each pool's zfsutilities dataset. The map file name
+# comes from the shared lib default (ISCSI_STATE_FILENAME) so discovery
+# (newest_iscsi_state_map in lib/iscsi-lib.sh) and writes always agree.
+STATE_FILENAME="${ISCSI_STATE_FILENAME}"
+NODE_CONF_COPY_NAME="node.conf"
+
+# Number of pools the state map was written to (set by write_state_to_pools).
+pools_written=0
+
+# ------------------------------------------------------------------
+# Live state collection
+# ------------------------------------------------------------------
+
+# Collect the live LUN topology into the _state_* globals used by the JSON
+# emitter:
+#   _state_target_iqns[]     target IQNs (one per configured pool)
+#   _state_luns[iqn]         "lun:backstore" lines for the target
+#   _state_acls[iqn]         space-separated sorted initiator IQNs
+#   _state_bs_names[]        backstore names from the LIO backstore list
+#   _state_bs_devs[bs]       zvol device path of the backstore
+#   _state_bs_target[bs]     full IQN of the target that maps the backstore
+#   _state_bs_lun[bs]        LUN index on that target (unset when unmapped)
+collect_live_state() {
+    _state_target_iqns=()
+    _state_bs_names=()
+    unset -v _state_luns _state_acls _state_bs_devs _state_bs_target _state_bs_lun
+    declare -gA _state_luns=() _state_acls=() _state_bs_devs=() \
+        _state_bs_target=() _state_bs_lun=()
+
+    local pool iqn name entries
+    while IFS= read -r pool; do
+        [[ -z "$pool" ]] && continue
+        iqn=$(pool_to_target "$pool") || continue
+        _state_target_iqns+=("$iqn")
+
+        entries=""
+        parse_target_luns "$iqn"
+        for name in "${!_lun_indexes[@]}"; do
+            entries+="${_lun_indexes[$name]}:${name}"$'\n'
+            _state_bs_target["$name"]="$iqn"
+            _state_bs_lun["$name"]="${_lun_indexes[$name]}"
+        done
+        _state_luns["$iqn"]="$entries"
+
+        parse_target_acls "$iqn"
+        _state_acls["$iqn"]="${_acl_initiators[*]}"
+    done < <(pool_list)
+
+    parse_backstores
+    _state_bs_names=("${_bs_names[@]}")
+    for name in "${_bs_names[@]}"; do
+        _state_bs_devs["$name"]="${_bs_devs[$name]}"
+    done
+}
+
+# Print the state map as JSON on stdout. Every interpolated value (IQNs,
+# backstore names, zvol device paths, IPs, hostnames) is restricted to the
+# iSCSI/config alphabets ([A-Za-z0-9.:_/-]) — no JSON escaping is required.
+# Sections are emitted sorted so repeated runs against unchanged state are
+# byte-identical (apart from the generated timestamp).
+emit_state_json() {
+    printf '{\n'
+    printf '  "version": 1,\n'
+    printf '  "generated": "%s",\n' "$(date -Iseconds)"
+    printf '  "host": "%s",\n' "$my_host"
+    printf '  "iqn_prefix": "%s",\n' "$iqn_prefix"
+    printf '  "storage_ip": "%s",\n' "$storage_ip"
+
+    local iqn name line
+    local -a tblocks=() litems=() aitems=() bblocks=()
+
+    while IFS= read -r iqn; do
+        [[ -z "$iqn" ]] && continue
+        litems=()
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            litems+=("      \"${line%%:*}\": \"${line#*:}\"")
+        done < <(printf '%s' "${_state_luns[$iqn]}" | sort -n -t: -k1,1)
+        aitems=()
+        # Word splitting is intended: _state_acls holds space-separated IQNs,
+        # and the IQN alphabet contains no whitespace or glob characters.
+        # shellcheck disable=SC2206
+        for name in ${_state_acls[$iqn]}; do
+            aitems+=("      \"${name}\"")
+        done
+        tblocks+=("    \"${iqn}\": {
+      \"acls\": [
+$(json_join_args "${aitems[@]}")
+      ],
+      \"luns\": {
+$(json_join_args "${litems[@]}")
+      }
+    }")
+    done < <(printf '%s\n' "${_state_target_iqns[@]}" | sort -u)
+
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        if [[ -n "${_state_bs_lun[$name]:-}" ]]; then
+            bblocks+=("    \"${name}\": {
+      \"dev\": \"${_state_bs_devs[$name]}\",
+      \"target\": \"${_state_bs_target[$name]}\",
+      \"lun\": ${_state_bs_lun[$name]}
+    }")
+        else
+            # Backstore loaded but not mapped to any LUN: record the device
+            # only, without target/lun keys.
+            bblocks+=("    \"${name}\": {
+      \"dev\": \"${_state_bs_devs[$name]}\"
+    }")
+        fi
+    done < <(printf '%s\n' "${_state_bs_names[@]}" | sort -u)
+
+    printf '  "targets": {\n%s\n  },\n' "$(json_join_args "${tblocks[@]}")"
+    printf '  "backstores": {\n%s\n  }\n}\n' "$(json_join_args "${bblocks[@]}")"
+}
+
+# Print the arguments as JSON members/blocks, one per line, separated by
+# commas. Arguments are pre-rendered (already quoted/indented) strings.
+json_join_args() {
+    local item out="" first=true
+    for item in "$@"; do
+        if [[ "$first" == true ]]; then
+            first=false
+        else
+            out+=","$'\n'
+        fi
+        out+="$item"
+    done
+    printf '%s' "$out"
+}
+
+# ------------------------------------------------------------------
+# Pool-resident state files
+# ------------------------------------------------------------------
+
+# Atomically install src at dst (staged temp file in the destination
+# directory + mv, so a reader never sees a partial file).
+install_state_file() {
+    local src="$1" dst="$2" tmp
+    tmp=$(mktemp "${dst}.tmp.XXXXXX") || {
+        log_msg "WARN: Could not create a temp file next to ${dst} — skipped"
+        return 1
+    }
+    if ! cp -f -- "$src" "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        log_msg "WARN: Could not stage ${dst} — skipped"
+        return 1
+    fi
+    if ! mv -f -- "$tmp" "$dst"; then
+        rm -f "$tmp"
+        log_msg "WARN: Could not install ${dst} — skipped"
+        return 1
+    fi
+    return 0
+}
+
+# Echo the mountpoint of <pool>/zfsutilities, creating the dataset on first
+# use. Prints nothing and returns 1 when the dataset cannot be created or
+# resolved to a usable mountpoint.
+state_dataset_mountpoint() {
+    local pool="$1" ds mnt
+    ds="${pool}/zfsutilities"
+
+    if ! zfs list -H -o name "$ds" >/dev/null 2>&1; then
+        if ! zfs create "$ds" >/dev/null 2>&1; then
+            log_msg "WARN: Could not create dataset ${ds} — pool ${pool} skipped"
+            return 1
+        fi
+        log_msg "INFO:   ✓ Created dataset ${ds} (first use)"
+    fi
+
+    mnt=$(zfs list -H -o mountpoint "$ds" 2>/dev/null)
+    if [[ -z "$mnt" || "$mnt" == "-" || ! -d "$mnt" ]]; then
+        log_msg "WARN: Dataset ${ds} has no usable mountpoint (${mnt:-none}) —" \
+            "pool ${pool} skipped"
+        return 1
+    fi
+    printf '%s\n' "$mnt"
+}
+
+# Write the state map + node.conf copy onto every online pool. Sets
+# pools_written to the number of pools that received both files.
+write_state_to_pools() {
+    local json_tmp="$1"
+    local pool online mnt
+    pools_written=0
+    online=$(zpool list -Ho name 2>/dev/null || true)
+
+    while IFS= read -r pool; do
+        [[ -z "$pool" ]] && continue
+        if ! grep -qxF -- "$pool" <<< "$online"; then
+            log_msg "WARN: Pool ${pool} is offline — state map not written there"
+            continue
+        fi
+        mnt=$(state_dataset_mountpoint "$pool") || continue
+        if install_state_file "$json_tmp" "${mnt}/${STATE_FILENAME}" \
+            && install_state_file "$NODE_CONF" "${mnt}/${NODE_CONF_COPY_NAME}"; then
+            pools_written=$((pools_written + 1))
+            log_msg "INFO:   ✓ State map written to ${pool}/zfsutilities"
+        fi
+    done < <(pool_list)
+}
+
+# ------------------------------------------------------------------
+# Degraded-state fence
+# ------------------------------------------------------------------
+
+# Count valid backstore entries in the expected-backstores manifest
+# (same shape validation as safe-iscsi-save: glob test plus fixed-string
+# digit checks, no regex). Prints the count.
+count_manifest_entries() {
+    local entry mid end count=0
+    [[ -f "$ISCSI_MANIFEST" ]] || {
+        printf '0\n'
+        return 0
+    }
+    while IFS= read -r entry; do
+        [[ "$entry" == vm-*-disk-* ]] || continue
+        mid="${entry#vm-}"; mid="${mid%%-disk-*}"
+        end="${entry##*-disk-}"
+        if [[ -n "$mid" && "$mid" != *[!0-9]* \
+                && -n "$end" && "$end" != *[!0-9]* \
+                && "${entry#*-disk-}" != *-disk-* ]]; then
+            count=$((count + 1))
+        fi
+    done < "$ISCSI_MANIFEST"
+    printf '%s\n' "$count"
+}
+
+# Print the number of entries in a JSON file's top-level "backstores" object
+# (empty on any error).
+read_json_backstore_count() {
+    local file="$1"
+    python3 -c 'import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        print(len(json.load(f).get("backstores", {})))
+except Exception:
+    pass' "$file" 2>/dev/null
+}
+
+# Refuse to record a degraded live state over a healthy map: a bare-metal
+# restore boots with an empty or partial LIO tree, and overwriting the pool
+# map then would destroy the recovery authority. Mirrors safe-iscsi-save's
+# degraded guard; the expected count falls back from the manifest to the
+# newest pool map when the manifest is missing. Returns 0 when the live
+# state may be recorded.
+enforce_not_degraded() {
+    local live_count="$1"
+    local expected=""
+
+    if [[ -f "$ISCSI_MANIFEST" ]]; then
+        expected=$(count_manifest_entries)
+    else
+        local map_file
+        map_file=$(newest_iscsi_state_map)
+        if [[ -n "$map_file" ]]; then
+            expected=$(read_json_backstore_count "$map_file")
+        fi
+    fi
+    [[ -z "$expected" || "$expected" -eq 0 ]] && return 0
+
+    if [[ "$live_count" -lt "$expected" ]]; then
+        if [[ "$force_write" == true ]]; then
+            log_msg "WARN: Live backstores (${live_count}) below expected (${expected}) —" \
+                "recording anyway (--force)"
+        else
+            log_msg "FATAL: Live state is degraded (${live_count} of ${expected}" \
+                "expected backstores active)"
+            log_msg "FATAL:   The pool state map was NOT overwritten."
+            log_msg "FATAL:   Resolve the degradation, or rerun with --force to record it anyway."
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Drift check
+# ------------------------------------------------------------------
+
+# Compare the live state ($2) with the recorded map ($1). Prints DRIFT lines
+# and returns 1 on drift, 0 when the recorded LUN topology matches live.
+report_state_drift() {
+    python3 - "$1" "$2" << 'PYEOF'
+import json, sys
+
+with open(sys.argv[1]) as f:
+    old = json.load(f)
+with open(sys.argv[2]) as f:
+    new = json.load(f)
+
+drift = []
+
+if old.get("iqn_prefix") != new.get("iqn_prefix"):
+    drift.append("iqn_prefix: map has %r, live has %r"
+                 % (old.get("iqn_prefix"), new.get("iqn_prefix")))
+if old.get("storage_ip") != new.get("storage_ip"):
+    drift.append("storage_ip: map has %r, live has %r"
+                 % (old.get("storage_ip"), new.get("storage_ip")))
+
+old_tg = old.get("targets", {})
+new_tg = new.get("targets", {})
+for iqn in sorted(set(old_tg) | set(new_tg)):
+    o, n = old_tg.get(iqn), new_tg.get(iqn)
+    if o is None:
+        drift.append("target %s: live target is not in the map" % iqn)
+        continue
+    if n is None:
+        drift.append("target %s: map target no longer exists live" % iqn)
+        continue
+    ol, nl = o.get("luns", {}), n.get("luns", {})
+    for idx in sorted(set(ol) | set(nl), key=lambda s: int(s) if s.isdigit() else 0):
+        if idx not in nl:
+            drift.append("target %s: map LUN %s -> %s is missing live" % (iqn, idx, ol[idx]))
+        elif idx not in ol:
+            drift.append("target %s: live LUN %s -> %s is not in the map" % (iqn, idx, nl[idx]))
+        elif ol[idx] != nl[idx]:
+            drift.append("target %s: LUN %s moved: map -> %s, live -> %s"
+                         % (iqn, idx, ol[idx], nl[idx]))
+    oa, na = set(o.get("acls", [])), set(n.get("acls", []))
+    for a in sorted(oa - na):
+        drift.append("target %s: ACL initiator %s is missing live" % (iqn, a))
+    for a in sorted(na - oa):
+        drift.append("target %s: live ACL initiator %s is not in the map" % (iqn, a))
+
+old_bs = old.get("backstores", {})
+new_bs = new.get("backstores", {})
+for bs in sorted(set(old_bs) | set(new_bs)):
+    o, n = old_bs.get(bs), new_bs.get(bs)
+    if o is None:
+        drift.append("backstore %s: live backstore is not in the map" % bs)
+        continue
+    if n is None:
+        drift.append("backstore %s: map backstore no longer exists live" % bs)
+        continue
+    for k in ("dev", "target", "lun"):
+        if o.get(k) != n.get(k):
+            drift.append("backstore %s: %s changed: map %r, live %r"
+                         % (bs, k, o.get(k), n.get(k)))
+
+for line in drift:
+    print("DRIFT: %s" % line)
+sys.exit(1 if drift else 0)
+PYEOF
+}
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+
+main() {
+
+log_msg "INFO: === export-iscsi-state ==="
+echo ""
+
+collect_live_state
+log_msg "INFO: Targets: ${#_state_target_iqns[@]}, backstores: ${#_state_bs_names[@]}"
+
+local json_tmp
+json_tmp=$(mktemp "${TMPDIR:-/tmp}/iscsi-state.XXXXXX") || {
+    log_msg "FATAL: Could not create a temp file for the state map"
+    exit 1
+}
+emit_state_json > "$json_tmp"
+
+if [[ "$check_only" == true ]]; then
+    local map_file rc=0
+    map_file=$(newest_iscsi_state_map)
+    if [[ -z "$map_file" ]]; then
+        log_msg "FATAL: No ${STATE_FILENAME} found on any online pool —" \
+            "run export-iscsi-state first"
+        rm -f "$json_tmp"
+        exit 1
+    fi
+    log_msg "INFO: Comparing live state against ${map_file}"
+    report_state_drift "$map_file" "$json_tmp" || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+        log_msg "INFO:   ✓ No drift — live state matches the newest pool map"
+    else
+        log_msg "WARN: Drift detected between live state and the pool map (see DRIFT lines)"
+    fi
+    rm -f "$json_tmp"
+    exit "$rc"
+fi
+
+# Never let a degraded live state overwrite a healthy pool map.
+enforce_not_degraded "${#_state_bs_names[@]}" || {
+    rm -f "$json_tmp"
+    exit 1
+}
+
+write_state_to_pools "$json_tmp"
+rm -f "$json_tmp"
+
+if [[ "$pools_written" -eq 0 ]]; then
+    log_msg "FATAL: State map was not written to any pool"
+    exit 1
+fi
+log_msg "INFO:   ✓ State map written to ${pools_written} pool(s)"
+echo ""
+
+} # end main
+
+# Run main only when executed directly, not when sourced for tests.
+if [[ -z "${EXPORT_ISCSI_STATE_TEST_MODE:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main
+fi

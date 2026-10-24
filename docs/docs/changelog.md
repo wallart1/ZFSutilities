@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.130.0
+
+*Released 2026-10-24*
+
+### Added
+
+- **Pool-resident iSCSI state map — `export-iscsi-state` (iSCSI
+  resilience M1).** A storage-host bare-metal restore regresses
+  `saveconfig.json` and the expected-backstores manifest together
+  (both live on the OS disk) while the pools re-import current, so
+  LUNs created after the backup point were unrecoverable. The new
+  storage-host command records the live LUN topology — per-target
+  LUN → backstore, per-backstore zvol device, ACL initiators, plus a
+  copy of `node.conf` — as deterministic JSON
+  (`<pool>/zfsutilities/iscsi-state.json`) on every online pool, so
+  any surviving pool can serve recovery. The dataset is created on
+  first use, writes are atomic, offline pools are skipped with a
+  warning, and a degraded-state fence refuses to shrink the map
+  (expected count from the manifest, or the newest map when the
+  manifest regressed with the OS disk) unless `--force` is given.
+  `--check` reports drift (manual `targetcli` edits) against the
+  newest map and never writes.
+- **Map-driven post-restore recovery — `reconcile-iscsi-state`
+  (iSCSI resilience M2).** Companion storage-host command that
+  rebuilds the LUN topology from the pool map after a restore:
+  create-only — every map backstore whose zvol still exists gets its
+  backstore (`emulate_tpu=1`), its LUN at the recorded number, and
+  its explicit-mode ACL bindings; identity is the backstore/zvol name
+  at the recorded LUN, so conflicts (different device, different
+  target/LUN, slot held by another backstore, missing target) are
+  refused per item with evidence and never auto-remapped; zvol-gone
+  entries are skipped with the pool map left unchanged so they
+  survive for when the zvol returns. Finishers re-flag encrypted
+  backstores into `iscsi-encrypted-luns.conf`, regenerate the
+  manifest from the ensured set, run `safe-iscsi-save` (map hook
+  suppressed), refresh the pool map only after a complete reconcile,
+  and rescan the compute host. A VM-config cross-check over ssh
+  reports still-missing disk references with their map identity and
+  lists candidate unexported zvols (never guessed). Supports
+  `--dry-run`, `--yes`, and `--from <map snapshot>`.
+
+### Changed
+
+- **`safe-iscsi-save` refreshes the pool LUN map.** After every
+  successful save it invokes `export-iscsi-state` (best-effort — a
+  failure warns and never fails the save), keeping the map as fresh
+  as the last LUN change. Callers that own the refresh decision
+  (`reconcile-iscsi-state`) suppress the hook with
+  `SAFE_ISCSI_SAVE_SKIP_EXPORT_ISCSI_STATE=1` so a partial reconcile
+  cannot overwrite the recovery authority.
+- **Shared iSCSI discovery in `lib/iscsi-lib.sh`.** The targetcli/zvol
+  parsers (`parse_backstores`, `parse_target_luns`, `discover_zvols`)
+  moved out of `repair-iscsi-luns` into the shared library (behavior
+  unchanged), joined by a new `parse_target_acls` and the pool-map
+  locator (`newest_iscsi_state_map`), so repair, export, and
+  reconcile read live LIO state identically. Dependency loading is
+  now guarded on node-lib's `pool_to_target`, so contexts that have
+  already loaded bashinit/node-lib no longer re-run the session-log
+  setup (which also clobbered unit-test mocks).
+
+### Fixed
+
+- **`reconcile-iscsi-state` fails when the config save fails.** A
+  `safe-iscsi-save` failure logged FATAL but still exited 0; the run
+  now exits 1 so scripted callers cannot mistake an unpersisted
+  rebuild for a completed recovery.
+
 ## 0.128.0
 
 *Released 2026-10-23*

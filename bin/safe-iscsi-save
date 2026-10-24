@@ -207,3 +207,24 @@ generate_boot_config
 # Keep the authoritative manifest in sync with the just-saved config so that
 # future runs compare against the true current state.
 regenerate_expected_backstores_manifest
+
+# Record the pool-resident LUN map (bare-metal restore resilience): the map
+# on every online pool stays as fresh as the last LUN change. Best-effort —
+# an export failure must never fail the save itself.
+# Callers that manage the map refresh themselves (reconcile-iscsi-state)
+# set SAFE_ISCSI_SAVE_SKIP_EXPORT_ISCSI_STATE=1: after a partial reconcile,
+# refreshing here would overwrite the pool map and drop entries whose zvols
+# are still missing, destroying the recovery authority.
+export_iscsi_state="${SAFE_ISCSI_SAVE_EXPORT_ISCSI_STATE:-$mydir/export-iscsi-state}"
+if [[ "${SAFE_ISCSI_SAVE_SKIP_EXPORT_ISCSI_STATE:-}" == "1" ]]; then
+    log_msg "INFO: ✓ Pool LUN map refresh suppressed by caller"
+elif type -t "$export_iscsi_state" >/dev/null 2>&1; then
+    if "$export_iscsi_state"; then
+        log_msg "INFO: ✓ Pool LUN map refreshed"
+    else
+        log_msg "WARN: export-iscsi-state failed — pool LUN map not refreshed"
+    fi
+else
+    log_msg "WARN: export-iscsi-state not available at ${export_iscsi_state} —" \
+        "pool LUN map not refreshed"
+fi

@@ -140,6 +140,9 @@ export REPAIR_ISCSI_SAFE_ISCSI_SAVE="safe-iscsi-save"
 export REPAIR_ISCSI_RESCAN_STORAGE="rescan-storage"
 # Skip sourcing the real node-lib.sh; our mocks are already in place.
 export REPAIR_ISCSI_LUNS_NODE_LIB="/dev/null"
+# The shared parsers now live in lib/iscsi-lib.sh — source the real library
+# so the parse-function tests exercise the production implementations.
+export REPAIR_ISCSI_LUNS_ISCSI_LIB="$mydir/lib/iscsi-lib.sh"
 
 # The evaluated script calls find_zfsutility_script to locate rootcheck.
 # Some test environments use an older deployed bashinit that does not define
@@ -177,6 +180,7 @@ reset_mocks() {
     unmapped_zvols=()
     manifest="/etc/rtslib-fb-target/expected-backstores.txt"
     export REPAIR_ISCSI_LUNS_NODE_LIB="/dev/null"
+    export REPAIR_ISCSI_LUNS_ISCSI_LIB="$mydir/lib/iscsi-lib.sh"
 }
 
 # ------------------------------------------------------------------

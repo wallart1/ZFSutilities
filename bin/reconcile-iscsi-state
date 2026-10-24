@@ -1,0 +1,884 @@
+#!/usr/bin/bash
+# reconcile-iscsi-state
+# Rebuild the iSCSI LUN topology from the pool-resident state map (storage host).
+#
+# Companion to export-iscsi-state. After a storage-host bare-metal restore,
+# saveconfig.json AND expected-backstores.txt regress together (both live on
+# the OS disk) while the pools re-import current, so repair-iscsi-luns — whose
+# authority is the manifest — cannot restore LUNs created after the backup
+# point. This script reads the newest iscsi-state.json across online pools and
+# recreates the recorded topology: every map backstore whose zvol still exists
+# gets its backstore (emulate_tpu=1), its LUN at the recorded number, and its
+# ACL bindings. LIO config and the manifest are derived state, rebuilt here
+# from the authorities (pool map + pool zvols + compute-host VM configs).
+#
+# Safety model:
+#   - Create-only: never deletes a live object and never remaps an existing
+#     LUN to a different number.
+#   - Identity is the backstore/zvol name at the recorded LUN number, never
+#     the LUN number alone. A conflict is refused per item with evidence and
+#     the run continues with the remaining items.
+#   - Map entries whose zvol is gone (offline pool, deleted dataset) are
+#     reported and skipped, and the pool map is left unchanged so the entry
+#     survives for when the zvol returns.
+#
+# Usage: sudo reconcile-iscsi-state [--dry-run] [--yes] [--from <file>]
+#   --dry-run       Report the plan and the VM-config cross-check without
+#                   making changes
+#   --yes           Apply without the interactive confirmation
+#   --from <file>   Reconcile from a specific map snapshot (e.g. a pool
+#                   snapshot's copy) instead of the newest online map
+#
+# Install to: /usr/local/lib/zfsutilities/bin/reconcile-iscsi-state on the storage host
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+NODE_LIB="${RECONCILE_ISCSI_STATE_NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+
+# Shared targetcli/zvol parsers (is_vm_backstore_name, parse_backstores,
+# parse_target_luns, parse_target_acls, discover_zvols) and the pool-resident
+# map locator (newest_iscsi_state_map) live in lib/iscsi-lib.sh.
+ISCSI_LIB="${RECONCILE_ISCSI_STATE_ISCSI_LIB:-$(find_zfsutility_script iscsi-lib.sh)}"
+source "$ISCSI_LIB"
+
+source_helper rootcheck
+
+rootcheck
+
+# iSCSI-only script — exit silently in single-node mode
+is_single_node && exit 0
+
+my_host=$(hostname -s)
+
+usage() {
+    log_msg "INFO: Usage: reconcile-iscsi-state [--dry-run] [--yes] [--from <file>]"
+    echo ""
+    log_msg "INFO:   --dry-run       Report the plan and VM-config cross-check without changes"
+    log_msg "INFO:   --yes           Apply without the interactive confirmation"
+    log_msg "INFO:   --from <file>   Reconcile from a specific map snapshot (e.g. a pool"
+    log_msg "INFO:                   snapshot's copy) instead of the newest online map"
+    exit 1
+}
+
+dry_run=false
+assume_yes=false
+map_from=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run) dry_run=true; shift ;;
+        --yes)     assume_yes=true; shift ;;
+        --from)
+            [[ -n "${2:-}" ]] || {
+                log_msg "FATAL: --from requires a file path"
+                usage
+            }
+            map_from="$2"
+            shift 2
+            ;;
+        -h|--help) usage ;;
+        *)
+            log_msg "FATAL: Unknown option: $1"
+            usage
+            ;;
+    esac
+done
+
+# Verify we're on the storage host
+if [[ "$my_host" != "$storage_host" ]]; then
+    log_msg "FATAL: Must run on the storage host ($storage_host), not $my_host"
+    exit 1
+fi
+
+# Storage-node dependency: LIO target stack. The compute host needs Proxmox VE,
+# but this script runs on the storage host and does not require a local qm binary.
+if ! command -v targetcli >/dev/null 2>&1; then
+    log_msg "FATAL: targetcli not found. Install the LIO target stack on this storage host."
+    log_msg "FATAL:   On Debian/Ubuntu: apt-get install targetcli-fb"
+    exit 1
+fi
+
+[[ $EUID -eq 0 ]] || [[ "${RECONCILE_ISCSI_STATE_SKIP_ROOT:-}" == "Y" ]] || {
+    log_msg "FATAL: Must run as root (use sudo)"
+    exit 1
+}
+
+# Resolve overrideable runtime paths (unit tests substitute mocks between
+# runs, so main() re-resolves these rather than trusting top-level state).
+resolve_runtime_paths() {
+    manifest="${RECONCILE_ISCSI_STATE_MANIFEST:-/etc/rtslib-fb-target/expected-backstores.txt}"
+    safe_iscsi_save="${RECONCILE_ISCSI_STATE_SAFE_ISCSI_SAVE:-$mydir/safe-iscsi-save}"
+    export_iscsi_state="${RECONCILE_ISCSI_STATE_EXPORT_ISCSI_STATE:-$mydir/export-iscsi-state}"
+    rescan_storage="${RECONCILE_ISCSI_STATE_RESCAN_STORAGE:-$mydir/rescan-storage}"
+}
+
+resolve_runtime_paths
+
+# ------------------------------------------------------------------
+# State map parsing
+# ------------------------------------------------------------------
+
+# True when the argument is a non-empty all-digit string (fixed-string digit
+# check per project convention — no regex).
+is_digits() {
+    [[ -n "$1" && "$1" != *[!0-9]* ]]
+}
+
+# Parse an iscsi-state.json file into the _map_* globals:
+#   _map_generated/_map_host/_map_iqn_prefix/_map_storage_ip  header fields
+#   _map_bs_names[]        backstore names, sorted
+#   _map_bs_dev[name]      zvol device path ("/dev/zvol/<pool>/proxmox/<name>")
+#   _map_bs_target[name]   full target IQN (empty when unmapped at export)
+#   _map_bs_lun[name]      recorded LUN index (empty when unmapped at export)
+#   _map_target_iqns[]     distinct target IQNs, sorted
+#   _map_target_of_short[short]  target short name -> full IQN
+#   _map_lun_bs["iqn|lun"] LUN slot -> backstore name
+#   _map_acls_of[iqn]      space-separated sorted initiator IQNs
+#   _map_invalid[]         names whose records disagree (refused at plan time)
+# Every map field comes from the restricted iSCSI/config alphabets that
+# export-iscsi-state writes, so records split safely on "|" / ":".
+parse_state_map() {
+    local file="$1"
+    _map_bs_names=()
+    _map_target_iqns=()
+    _map_invalid=()
+    _map_generated=""
+    _map_host=""
+    _map_iqn_prefix=""
+    _map_storage_ip=""
+    unset -v _map_bs_dev _map_bs_target _map_bs_lun _map_lun_bs \
+        _map_acls_of _map_target_of_short _map_target_seen
+    declare -gA _map_bs_dev=() _map_bs_target=() _map_bs_lun=() \
+        _map_lun_bs=() _map_acls_of=() _map_target_of_short=() _map_target_seen=()
+
+    local -a rec=()
+    while IFS='|' read -r -a rec; do
+        case "${rec[0]:-}" in
+            META)
+                case "${rec[1]:-}" in
+                    generated)    _map_generated="${rec[2]:-}" ;;
+                    host)        _map_host="${rec[2]:-}" ;;
+                    iqn_prefix)  _map_iqn_prefix="${rec[2]:-}" ;;
+                    storage_ip)  _map_storage_ip="${rec[2]:-}" ;;
+                esac
+                ;;
+            BS)
+                local bname="${rec[1]:-}" bdev="${rec[2]:-}" btgt="${rec[3]:-}" blun="${rec[4]:-}"
+                is_vm_backstore_name "$bname" || continue
+                [[ "$bdev" == /dev/zvol/* ]] || continue
+                # The backstore name is the zvol dataset's base name by
+                # construction; anything else is a corrupted record.
+                [[ "${bdev##*/}" == "$bname" ]] || continue
+                is_digits "$blun" || [[ -z "$blun" ]] || continue
+                [[ -z "$btgt" || "$btgt" == iqn.* ]] || continue
+                # target and lun are written together (mapped) or not at all.
+                [[ -n "$btgt" && -n "$blun" ]] || [[ -z "$btgt" && -z "$blun" ]] || continue
+                _map_bs_names+=("$bname")
+                _map_bs_dev["$bname"]="$bdev"
+                _map_bs_target["$bname"]="$btgt"
+                _map_bs_lun["$bname"]="$blun"
+                ;;
+            LUN)
+                local liqn="${rec[1]:-}" llun="${rec[2]:-}" lbs="${rec[3]:-}"
+                [[ "$liqn" == iqn.* ]] || continue
+                is_digits "$llun" || continue
+                is_vm_backstore_name "$lbs" || continue
+                _map_lun_bs["${liqn}|${llun}"]="$lbs"
+                _map_target_seen["$liqn"]=1
+                _map_target_of_short["${liqn##*:}"]="$liqn"
+                ;;
+            ACL)
+                local aiqn="${rec[1]:-}" ainit="${rec[2]:-}"
+                [[ "$aiqn" == iqn.* && "$ainit" == iqn.* ]] || continue
+                _map_acls_of["$aiqn"]+="${ainit} "
+                _map_target_seen["$aiqn"]=1
+                _map_target_of_short["${aiqn##*:}"]="$aiqn"
+                ;;
+        esac
+    done < <(python3 - "$file" << 'PYEOF'
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        m = json.load(f)
+except Exception:
+    sys.exit(0)
+for key in ("generated", "host", "iqn_prefix", "storage_ip"):
+    v = m.get(key)
+    if isinstance(v, str):
+        print("META|%s|%s" % (key, v))
+for name, bs in sorted(m.get("backstores", {}).items()):
+    print("BS|%s|%s|%s|%s" % (name, bs.get("dev", ""), bs.get("target", ""),
+                              bs.get("lun", "")))
+for iqn, t in sorted(m.get("targets", {}).items()):
+    luns = t.get("luns", {})
+    for lun in sorted(luns, key=lambda s: int(s) if s.isdigit() else 0):
+        print("LUN|%s|%s|%s" % (iqn, lun, luns[lun]))
+    for init in sorted(t.get("acls", [])):
+        print("ACL|%s|%s" % (iqn, init))
+PYEOF
+    )
+
+    # Backstore records must agree with the target LUN records: a mapped
+    # backstore owns exactly the (target, LUN) slot the target section says.
+    local bname slot
+    for bname in "${_map_bs_names[@]}"; do
+        if [[ -n "${_map_bs_target[$bname]:-}" ]]; then
+            slot="${_map_bs_target[$bname]}|${_map_bs_lun[$bname]}"
+            if [[ "${_map_lun_bs[$slot]:-}" != "$bname" ]]; then
+                _map_invalid+=("$bname")
+            fi
+        fi
+    done
+
+    if [[ ${#_map_bs_names[@]} -gt 0 ]]; then
+        mapfile -t _map_bs_names < <(printf '%s\n' "${_map_bs_names[@]}" | sort -u)
+    fi
+    if [[ ${#_map_target_seen[@]} -gt 0 ]]; then
+        mapfile -t _map_target_iqns < <(printf '%s\n' "${!_map_target_seen[@]}" | sort -u)
+    fi
+}
+
+# ------------------------------------------------------------------
+# Live state collection
+# ------------------------------------------------------------------
+
+# Collect the live LIO topology restricted to the map's targets into the
+# _live_* globals (declare -g per the sourced-library law):
+#   _target_missing[iqn]  present when the target does not exist live
+#   _live_lun_owner["iqn|lun"]  live slot occupant (backstore name)
+#   _live_bs_lun[name]    "iqn|lun" where a map backstore is mapped live
+#   _live_acl_of[iqn]     space-separated live initiator IQNs
+#   _tpg_explicit[iqn]    present when the TPG runs explicit ACL mode
+collect_live_lun_state() {
+    unset -v _live_lun_owner _live_bs_lun _live_acl_of _target_missing _tpg_explicit
+    declare -gA _live_lun_owner=() _live_bs_lun=() _live_acl_of=() \
+        _target_missing=() _tpg_explicit=()
+
+    local iqn name
+    for iqn in "${_map_target_iqns[@]}"; do
+        if ! targetcli /iscsi ls 2>/dev/null | grep -qF -- "$iqn"; then
+            _target_missing["$iqn"]=1
+            continue
+        fi
+
+        parse_target_luns "$iqn"
+        for name in "${!_lun_indexes[@]}"; do
+            _live_lun_owner["${iqn}|${_lun_indexes[$name]}"]="$name"
+            _live_bs_lun["$name"]="${iqn}|${_lun_indexes[$name]}"
+        done
+
+        parse_target_acls "$iqn"
+        _live_acl_of["$iqn"]="${_acl_initiators[*]:-}"
+
+        # ACL recreation only matters in explicit-ACL mode; a demo-mode TPG
+        # (generate_node_acls=1) admits every initiator and rebuilds its ACL
+        # nodes on login — the same check setup-iscsi-targets makes.
+        if targetcli "/iscsi/${iqn}/tpg1" get attribute generate_node_acls 2>/dev/null \
+            | grep -qF "generate_node_acls=0"; then
+            _tpg_explicit["$iqn"]=1
+        fi
+    done
+}
+
+# ------------------------------------------------------------------
+# Planning
+# ------------------------------------------------------------------
+
+# Compare the map against live state and build the action plan plus the
+# skip/refuse reports. Outcome per map backstore is recorded in
+# _item_outcome[name] = planned | ok | refused | skipped:... | failed:...
+# for the VM-config cross-check annotations.
+plan_reconciliation() {
+    _plan_create_bs=()
+    _plan_create_lun=()
+    _plan_create_acl=()
+    _skip_lines=()
+    _refuse_lines=()
+    _live_extra_lines=()
+    _ensured_names=()
+    unset -v _item_outcome
+    declare -gA _item_outcome=()
+
+    local name dev dataset iqn lun live_ref live_iqn live_lun holder why init
+
+    for name in "${_map_invalid[@]}"; do
+        why="map records disagree between backstore and target LUN sections"
+        _refuse_lines+=("${name}: ${why} — refusing (never guess)")
+        _item_outcome["$name"]="refused"
+    done
+
+    for name in "${_map_bs_names[@]}"; do
+        [[ -n "${_item_outcome[$name]:-}" ]] && continue
+        dev="${_map_bs_dev[$name]}"
+        dataset="${dev#/dev/zvol/}"
+
+        # Missing zvol: offline pool or deleted dataset. Skipped, and the
+        # pool map must stay unchanged so this entry survives.
+        if [[ -z "${_zvol_seen[$dataset]:-}" ]]; then
+            _skip_lines+=("${name}: zvol ${dataset} does not exist (offline pool or deleted)")
+            _item_outcome["$name"]="skipped:zvol-missing"
+            continue
+        fi
+        if [[ ! -e "$dev" ]] && [[ "${RECONCILE_ISCSI_STATE_TEST_MODE:-}" != "Y" ]]; then
+            _skip_lines+=("${name}: device ${dev} not available (keys not loaded?)")
+            _item_outcome["$name"]="skipped:device-missing"
+            continue
+        fi
+
+        # Identity conflict: a live backstore of this name pointing at a
+        # different zvol would silently serve the wrong disk.
+        if [[ -n "${_bs_devs[$name]:-}" && "${_bs_devs[$name]}" != "$dev" ]]; then
+            why="backstore exists but points at ${_bs_devs[$name]} (map: ${dev})"
+            _refuse_lines+=("${name}: ${why}")
+            _item_outcome["$name"]="refused"
+            continue
+        fi
+
+        iqn="${_map_bs_target[$name]:-}"
+        lun="${_map_bs_lun[$name]:-}"
+        _item_outcome["$name"]="ok"
+
+        if [[ -n "$iqn" ]]; then
+            if [[ -n "${_target_missing[$iqn]:-}" ]]; then
+                why="target ${iqn} does not exist live — run setup-iscsi-targets"
+                _refuse_lines+=("${name}: ${why} first, then re-run")
+                _item_outcome["$name"]="refused"
+                continue
+            fi
+
+            live_ref="${_live_bs_lun[$name]:-}"
+            if [[ -n "$live_ref" && "$live_ref" != "${iqn}|${lun}" ]]; then
+                live_iqn="${live_ref%%|*}"
+                live_lun="${live_ref##*|}"
+                why="mapped live at ${live_iqn##*:} LUN ${live_lun},"
+                why+=" map records ${iqn##*:} LUN ${lun} — never remapped"
+                _refuse_lines+=("${name}: ${why}")
+                _item_outcome["$name"]="refused"
+                continue
+            fi
+
+            holder="${_live_lun_owner[${iqn}|${lun}]:-}"
+            if [[ -n "$holder" && "$holder" != "$name" ]]; then
+                why="LUN ${lun} on ${iqn##*:} is held by ${holder}"
+                _refuse_lines+=("${name}: ${why} (map records ${name})")
+                _item_outcome["$name"]="refused"
+                continue
+            fi
+
+            if [[ -z "${_bs_devs[$name]:-}" ]]; then
+                _plan_create_bs+=("$name")
+                _item_outcome["$name"]="planned"
+            fi
+            if [[ -z "$live_ref" ]]; then
+                _plan_create_lun+=("$name")
+                _item_outcome["$name"]="planned"
+            fi
+        else
+            # Unmapped at export time: ensure the backstore only.
+            if [[ -z "${_bs_devs[$name]:-}" ]]; then
+                _plan_create_bs+=("$name")
+                _item_outcome["$name"]="planned"
+            fi
+        fi
+
+        _ensured_names+=("$name")
+    done
+
+    # Live backstores the map does not know (post-map manual adds when --from
+    # is older than live state). Left untouched — create-only.
+    for name in "${_bs_names[@]}"; do
+        [[ -z "${_map_bs_dev[$name]:-}" ]] \
+            && _live_extra_lines+=("$name (live backstore not in the map; left untouched)")
+    done
+
+    for iqn in "${_map_target_iqns[@]}"; do
+        [[ -n "${_target_missing[$iqn]:-}" ]] && continue
+        # Word splitting is intended: _map_acls_of holds space-separated IQNs,
+        # and the IQN alphabet contains no whitespace or glob characters.
+        # shellcheck disable=SC2206
+        local -a want_acls=(${_map_acls_of[$iqn]:-})
+        for init in "${want_acls[@]}"; do
+            [[ " ${_live_acl_of[$iqn]:-} " == *" $init "* ]] && continue
+            if [[ -n "${_tpg_explicit[$iqn]:-}" ]]; then
+                _plan_create_acl+=("${iqn}|${init}")
+            fi
+            # Demo-mode ACLs self-generate on login; noted in the evidence.
+        done
+    done
+}
+
+# Print the plan evidence: map identity, per-item actions, skips, refuses.
+print_plan_evidence() {
+    local name iqn init line
+    log_msg "INFO: Map: ${map_file} (generated ${_map_generated:-unknown})"
+    log_msg "INFO: Map records ${#_map_bs_names[@]} backstore(s) on" \
+        "${#_map_target_iqns[@]} target(s); live backstores: ${#_bs_names[@]}"
+    echo ""
+
+    if [[ ${#_plan_create_bs[@]} -gt 0 ]]; then
+        log_msg "INFO: Backstores to create:"
+        for name in "${_plan_create_bs[@]}"; do
+            log_msg "INFO:   ${name} -> ${_map_bs_dev[$name]}"
+        done
+    fi
+    if [[ ${#_plan_create_lun[@]} -gt 0 ]]; then
+        log_msg "INFO: LUN mappings to create (at recorded numbers):"
+        for name in "${_plan_create_lun[@]}"; do
+            log_msg "INFO:   ${name} -> ${_map_bs_target[$name]##*:}/lun${_map_bs_lun[$name]}"
+        done
+    fi
+    if [[ ${#_plan_create_acl[@]} -gt 0 ]]; then
+        log_msg "INFO: ACL bindings to create:"
+        for line in "${_plan_create_acl[@]}"; do
+            iqn="${line%%|*}"
+            log_msg "INFO:   ${line##*|} on ${iqn##*:}"
+        done
+    fi
+    if [[ ${#_skip_lines[@]} -gt 0 ]]; then
+        log_msg "WARN: Skipped (zvol missing — entry kept in the pool map):"
+        for line in "${_skip_lines[@]}"; do
+            log_msg "WARN:   ${line}"
+        done
+    fi
+    if [[ ${#_refuse_lines[@]} -gt 0 ]]; then
+        log_msg "FATAL: Refused (identity conflict — resolve manually):"
+        for line in "${_refuse_lines[@]}"; do
+            log_msg "FATAL:   ${line}"
+        done
+    fi
+    if [[ ${#_live_extra_lines[@]} -gt 0 ]]; then
+        log_msg "INFO: Live backstores not in the map (left untouched):"
+        for line in "${_live_extra_lines[@]}"; do
+            log_msg "INFO:   ${line}"
+        done
+    fi
+    # Demo-mode ACL note: map ACLs missing live that will not be created
+    # because the TPG admits every initiator anyway.
+    for iqn in "${_map_target_iqns[@]}"; do
+        [[ -n "${_tpg_explicit[$iqn]:-}" ]] && continue
+        [[ -n "${_target_missing[$iqn]:-}" ]] && continue
+        local missing_demo=""
+        # shellcheck disable=SC2206
+        local -a want_acls=(${_map_acls_of[$iqn]:-})
+        for init in "${want_acls[@]}"; do
+            [[ " ${_live_acl_of[$iqn]:-} " == *" $init "* ]] || missing_demo+="${init} "
+        done
+        [[ -n "$missing_demo" ]] && log_msg "INFO: ${iqn##*:}: demo-mode ACLs (${missing_demo})" \
+            "self-generate on initiator login — not created"
+    done
+    echo ""
+}
+
+# ------------------------------------------------------------------
+# Apply
+# ------------------------------------------------------------------
+
+apply_changes() {
+    _apply_failed=0
+    local name dev iqn lun init idx
+    local -a sorted_indexes=()
+
+    for name in "${_plan_create_bs[@]}"; do
+        dev="${_map_bs_dev[$name]}"
+        if targetcli /backstores/block create "$name" "$dev" >/dev/null 2>&1; then
+            targetcli "/backstores/block/${name}" set attribute emulate_tpu=1 >/dev/null 2>&1
+            log_msg "INFO:   ✓ Created backstore $name -> $dev"
+        else
+            log_msg "FATAL: Failed to create backstore $name"
+            _item_outcome["$name"]="failed:backstore"
+            _apply_failed=1
+        fi
+    done
+
+    for name in "${_plan_create_lun[@]}"; do
+        [[ "${_item_outcome[$name]:-}" == failed:* ]] && continue
+        iqn="${_map_bs_target[$name]}"
+        lun="${_map_bs_lun[$name]}"
+        if targetcli "/iscsi/${iqn}/tpg1/luns" create \
+            "/backstores/block/${name}" "$lun" >/dev/null 2>&1; then
+            log_msg "INFO:   ✓ Mapped $name to ${iqn##*:}/lun${lun}"
+        else
+            log_msg "FATAL: Failed to map $name to ${iqn##*:}/lun${lun}"
+            _item_outcome["$name"]="failed:lun"
+            _apply_failed=1
+        fi
+    done
+
+    for line in "${_plan_create_acl[@]}"; do
+        iqn="${line%%|*}"
+        init="${line##*|}"
+        if targetcli "/iscsi/${iqn}/tpg1/acls" create "$init" >/dev/null 2>&1; then
+            log_msg "INFO:   ✓ Created ACL $init on ${iqn##*:}"
+            # An explicit-mode ACL node grants nothing until it carries
+            # mapped LUNs; grant every LUN the target now has (demo-mode
+            # equivalent).
+            parse_target_luns "$iqn"
+            sorted_indexes=()
+            if [[ ${#_used_indexes[@]} -gt 0 ]]; then
+                mapfile -t sorted_indexes < <(printf '%s\n' "${_used_indexes[@]}" | sort -n)
+            fi
+            for idx in "${sorted_indexes[@]}"; do
+                targetcli "/iscsi/${iqn}/tpg1/acls/${init}" \
+                    create mapped_lun "$idx" >/dev/null 2>&1 || true
+            done
+            log_msg "INFO:   ✓ Granted ${#sorted_indexes[@]} LUN(s) to ACL $init"
+        else
+            log_msg "FATAL: Failed to create ACL $init on ${iqn##*:}"
+            _apply_failed=1
+        fi
+    done
+}
+
+# ------------------------------------------------------------------
+# Derived-state rebuild
+# ------------------------------------------------------------------
+
+# Re-flag encrypted backstores in iscsi-encrypted-luns.conf. The conf lives
+# on the OS disk and regresses with a bare-metal restore; the map's zvol is
+# the authority for which backstores are encrypted. safe-iscsi-save then
+# regenerates a consistent boot config from it.
+reflag_encrypted_luns() {
+    _encrypted_reflagged=0
+    local name dataset enc iqn
+    for name in "${_ensured_names[@]}"; do
+        [[ "${_item_outcome[$name]:-}" == failed:* ]] && continue
+        dataset="${_map_bs_dev[$name]#/dev/zvol/}"
+        enc=$(zfs get -H -o value encryption "$dataset" 2>/dev/null)
+        [[ -z "$enc" || "$enc" == "off" || "$enc" == "-" ]] && continue
+        iqn="${_map_bs_target[$name]:-}"
+        if [[ -z "$iqn" ]]; then
+            log_msg "INFO: $name is encrypted but unmapped in the map —" \
+                "not added to the encrypted LUNs config"
+            continue
+        fi
+        if ! _encrypted_conf_has_prefix "$name"; then
+            encrypted_conf_add_backstore "$name" "${_map_bs_dev[$name]}" "${iqn##*:}"
+            _encrypted_reflagged=$((_encrypted_reflagged + 1))
+        fi
+    done
+    [[ "$_encrypted_reflagged" -gt 0 ]] \
+        && log_msg "INFO:   ✓ Re-flagged ${_encrypted_reflagged} encrypted backstore(s)"
+}
+
+# Regenerate the expected-backstores manifest from the ensured set. The
+# manifest is derived state: writing it here (before safe-iscsi-save) keeps
+# the save's degraded gate consistent with what reconcile actually ensured —
+# a stale regressed manifest expecting zvols that are gone would make
+# safe-iscsi-save refuse to persist the recovery.
+regenerate_manifest_from_map() {
+    local tmpfile name
+    tmpfile=$(mktemp)
+    {
+        echo "# Expected iSCSI backstores - authoritative manifest"
+        echo "# Format: one backstore name per line (vm-<vmid>-disk-<N>)"
+        echo "# Updated: $(date -Iseconds)"
+        echo "# Source: Generated by reconcile-iscsi-state from the pool state map"
+        echo ""
+        for name in "${_ensured_names[@]}"; do
+            [[ "${_item_outcome[$name]:-}" == failed:* ]] && continue
+            printf '%s\n' "$name"
+        done | sort -V
+    } > "$tmpfile"
+
+    # An unreadable or failed write must not be installed as the manifest:
+    # an empty authoritative list would unmap every pool on the next run.
+    if [[ ! -s "$tmpfile" ]]; then
+        rm -f "$tmpfile"
+        log_msg "WARN: Regenerated manifest is empty; keeping $manifest unchanged"
+        return 1
+    fi
+    if ! mv -f "$tmpfile" "$manifest"; then
+        rm -f "$tmpfile"
+        log_msg "FATAL: Could not install regenerated manifest at $manifest." \
+            "Check permissions on the destination directory."
+        return 1
+    fi
+    log_msg "INFO:   ✓ Regenerated $manifest from the map"
+}
+
+# Persist the rebuilt LIO tree. The post-save export hook is suppressed:
+# reconcile refreshes the pool map itself, and only when the reconcile is
+# complete (a suppressed refresh keeps entries whose zvols are still gone).
+run_safe_iscsi_save() {
+    _save_failed=0
+    if [[ ${#_ensured_names[@]} -eq 0 ]]; then
+        log_msg "WARN: Nothing was ensured — skipping safe-iscsi-save"
+        return 0
+    fi
+    if ! type -t "$safe_iscsi_save" >/dev/null 2>&1; then
+        log_msg "FATAL: safe-iscsi-save not available at $safe_iscsi_save —" \
+            "configuration may not be persistent"
+        _save_failed=1
+        return 1
+    fi
+    if SAFE_ISCSI_SAVE_SKIP_EXPORT_ISCSI_STATE=1 "$safe_iscsi_save"; then
+        log_msg "INFO:   ✓ iSCSI configuration saved"
+    else
+        log_msg "FATAL: safe-iscsi-save failed — configuration may not be persistent"
+        _save_failed=1
+    fi
+}
+
+# Refresh the pool-resident map from the now-rebuilt live topology — but only
+# when the reconcile is complete. A partial refresh would overwrite the map
+# and drop the entries that were skipped or refused, destroying the recovery
+# authority for exactly the objects that still need it.
+refresh_pool_map() {
+    local complete=true
+    [[ ${#_refuse_lines[@]} -gt 0 || ${#_skip_lines[@]} -gt 0 || "$_apply_failed" -eq 1 ]] \
+        && complete=false
+    if [[ "$complete" != true ]]; then
+        log_msg "WARN: Pool LUN map left unchanged — skipped/refused entries" \
+            "are preserved in it for recovery"
+        return 0
+    fi
+    if ! type -t "$export_iscsi_state" >/dev/null 2>&1; then
+        log_msg "WARN: export-iscsi-state not available at ${export_iscsi_state} —" \
+            "pool LUN map not refreshed"
+        return 1
+    fi
+    if "$export_iscsi_state"; then
+        log_msg "INFO:   ✓ Pool LUN map refreshed"
+    else
+        log_msg "WARN: export-iscsi-state failed — pool LUN map not refreshed"
+        return 1
+    fi
+}
+
+# Rescan the compute host so recreated LUNs appear without a manual step.
+rescan_compute_host() {
+    if ! type -t "$rescan_storage" >/dev/null 2>&1; then
+        log_msg "WARN: rescan-storage not available at $rescan_storage"
+        return 1
+    fi
+    log_msg "INFO: Rescanning compute host ($compute_host)..."
+    if "$rescan_storage"; then
+        log_msg "INFO:   ✓ Compute host rescan complete"
+    else
+        log_msg "WARN: Compute host rescan returned non-zero"
+        return 1
+    fi
+}
+
+# ------------------------------------------------------------------
+# Compute-host VM-config cross-check
+# ------------------------------------------------------------------
+
+# Gather VM disk references from the compute host (list-vm-disks
+# --gather-vm-info records: VM|targetshort:lun|vmid|name|key, including
+# efidisk refs). Unit tests override this function.
+vm_gather_cmd() {
+    local remote_script
+    remote_script=$(remote_zfsutility_script "$compute_host" "list-vm-disks") || return 1
+    ssh -o ConnectTimeout=10 "root@${compute_host}" \
+        "${remote_script} --gather-vm-info" 2>/dev/null
+}
+
+# Cross-check compute-host VM-config disk references against the map and the
+# post-reconcile live state:
+#   - refs whose (target, LUN) is in the map but still missing live are
+#     reported with their map identity and the item outcome (refused/skipped);
+#   - refs with no map entry are listed with candidate unexported zvols of
+#     the same VMID — candidates are informational, nothing is guessed.
+# Sets _vm_missing_refs / _vm_noentry_refs counters.
+vm_cross_check() {
+    _vm_missing_refs=0
+    _vm_noentry_refs=0
+    local vm_data
+    vm_data=$(vm_gather_cmd)
+    if [[ -z "$vm_data" ]]; then
+        log_msg "WARN: Could not gather VM disk references from ${compute_host} —" \
+            "VM-config cross-check skipped"
+        return 0
+    fi
+
+    local -a fields=()
+    local disk_id vmid vname vkey short lun iqn bs live outcome zvol base
+    while IFS='|' read -r -a fields; do
+        [[ "${fields[0]:-}" == "VM" ]] || continue
+        disk_id="${fields[1]:-}"
+        vmid="${fields[2]:-}"
+        vname="${fields[3]:-}"
+        vkey="${fields[4]:-}"
+        short="${disk_id%%:*}"
+        lun="${disk_id##*:}"
+        is_digits "$lun" || continue
+
+        iqn="${_map_target_of_short[$short]:-}"
+        if [[ -z "$iqn" || -z "${_map_lun_bs[${iqn}|${lun}]:-}" ]]; then
+            _vm_noentry_refs=$((_vm_noentry_refs + 1))
+            log_msg "WARN: VM ${vmid} (${vname}) ${vkey} references ${short} LUN ${lun} —" \
+                "no map entry for it"
+            for zvol in "${_zvols[@]}"; do
+                base="${zvol##*/}"
+                [[ "$base" == "vm-${vmid}-disk-"* ]] || continue
+                [[ -n "${_live_bs_lun[$base]:-}" ]] && continue
+                log_msg "INFO:   candidate unexported zvol: ${zvol}"
+            done
+            continue
+        fi
+
+        bs="${_map_lun_bs[${iqn}|${lun}]}"
+        live="${_live_lun_owner["${iqn}|${lun}"]:-}"
+        if [[ "$live" == "$bs" ]]; then
+            continue
+        fi
+        outcome="${_item_outcome[$bs]:-not-in-plan}"
+        if [[ "$dry_run" == true && "$outcome" == "planned" ]]; then
+            log_msg "INFO: [dry-run] VM ${vmid} (${vname}) ${vkey}: ${short} LUN ${lun}" \
+                "would be restored by the planned mapping (${bs})"
+            continue
+        fi
+        _vm_missing_refs=$((_vm_missing_refs + 1))
+        log_msg "WARN: VM ${vmid} (${vname}) ${vkey} references ${short} LUN ${lun} —" \
+            "still missing (map: ${bs}; ${outcome})"
+    done <<< "$vm_data"
+}
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+
+main() {
+
+log_msg "INFO: === reconcile-iscsi-state ==="
+echo ""
+
+resolve_runtime_paths
+
+# Resolve the recovery map: the newest pool-resident copy, or an explicit
+# snapshot the operator named.
+if [[ -n "$map_from" ]]; then
+    if [[ ! -f "$map_from" ]]; then
+        log_msg "FATAL: Map file not found: $map_from"
+        exit 1
+    fi
+    map_file="$map_from"
+else
+    map_file=$(newest_iscsi_state_map)
+    if [[ -z "$map_file" ]]; then
+        log_msg "FATAL: No ${ISCSI_STATE_FILENAME} found on any online pool —" \
+            "run export-iscsi-state first"
+        exit 1
+    fi
+fi
+
+parse_state_map "$map_file"
+if [[ ${#_map_bs_names[@]} -eq 0 ]]; then
+    log_msg "FATAL: ${map_file} contains no valid backstore records"
+    exit 1
+fi
+
+# The map is this host's topology history; a map from another host describes
+# a different site and is never reconciled blindly.
+if [[ -n "$_map_host" && "$_map_host" != "$my_host" ]]; then
+    log_msg "FATAL: Map was generated on ${_map_host}, not this host (${my_host}) —" \
+        "refusing to reconcile from it"
+    exit 1
+fi
+
+# Gather current state
+parse_backstores
+discover_zvols
+unset -v _zvol_seen
+declare -gA _zvol_seen=()
+local zvol
+for zvol in "${_zvols[@]}"; do
+    _zvol_seen["$zvol"]=1
+done
+collect_live_lun_state
+log_msg "INFO: Live backstores: ${#_bs_names[@]}, discovered VM zvols: ${#_zvols[@]}"
+echo ""
+
+plan_reconciliation
+print_plan_evidence
+
+if [[ "$dry_run" == true ]]; then
+    vm_cross_check
+    log_msg "INFO: [dry-run] Would regenerate the manifest, run safe-iscsi-save," \
+        "refresh the pool map, and rescan ${compute_host}"
+    if [[ ${#_refuse_lines[@]} -gt 0 ]]; then
+        log_msg "FATAL: ${#_refuse_lines[@]} identity conflict(s) must be resolved first"
+        exit 1
+    fi
+    exit 0
+fi
+
+# Confirm before mutating the live LIO tree.
+if [[ ${#_plan_create_bs[@]} -eq 0 && ${#_plan_create_lun[@]} -eq 0 \
+        && ${#_plan_create_acl[@]} -eq 0 ]]; then
+    log_msg "INFO: No target-side changes needed"
+else
+    if [[ "$assume_yes" != true ]]; then
+        local _answer=""
+        read -rp "Apply these changes? (y/N): " _answer
+        if [[ "$_answer" != [Yy] ]]; then
+            log_msg "WARN: Aborted — no changes made"
+            exit 1
+        fi
+    fi
+fi
+
+apply_changes
+echo ""
+
+# Re-collect live state so the cross-check and the map refresh see the tree
+# as it now stands.
+collect_live_lun_state
+
+reflag_encrypted_luns
+regenerate_manifest_from_map || true
+run_safe_iscsi_save
+echo ""
+
+refresh_pool_map
+vm_cross_check
+rescan_compute_host
+
+# Summary
+echo ""
+log_msg "INFO: === Summary ==="
+log_msg "INFO:   ✓ Backstores created: ${#_plan_create_bs[@]}," \
+    "ensured from map: ${#_ensured_names[@]}"
+log_msg "INFO:   ✓ LUN mappings created: ${#_plan_create_lun[@]}"
+log_msg "INFO:   ✓ ACL bindings created: ${#_plan_create_acl[@]}"
+if [[ ${#_skip_lines[@]} -gt 0 ]]; then
+    log_msg "WARN:   Skipped (zvol missing): ${#_skip_lines[@]}"
+fi
+if [[ ${#_refuse_lines[@]} -gt 0 ]]; then
+    log_msg "FATAL:   Refused (identity conflict): ${#_refuse_lines[@]}"
+fi
+if [[ "$_apply_failed" -eq 1 ]]; then
+    log_msg "FATAL:   Actions failed during apply"
+fi
+if [[ "$_save_failed" -eq 1 ]]; then
+    log_msg "FATAL:   safe-iscsi-save did not persist the rebuilt tree"
+fi
+log_msg "INFO:   VM refs unresolved: ${_vm_missing_refs} missing," \
+    "${_vm_noentry_refs} without map entry"
+
+local rc=0
+[[ ${#_refuse_lines[@]} -gt 0 || "$_apply_failed" -eq 1 || "$_save_failed" -eq 1 \
+    || "$_vm_missing_refs" -gt 0 ]] && rc=1
+if [[ "$rc" -eq 0 ]]; then
+    log_msg "INFO:   ✓ Done"
+else
+    log_msg "FATAL:   Reconcile incomplete — resolve the reported items and re-run"
+fi
+echo ""
+
+exit "$rc"
+
+} # end main
+
+# Run main only when executed directly, not when sourced for tests.
+if [[ -z "${RECONCILE_ISCSI_STATE_TEST_MODE:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main
+fi
