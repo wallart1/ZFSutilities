@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "host": "stewie",
+  "iqn_prefix": "iqn.2026-02.local.stewie",
+  "storage_ip": "192.168.100.1",
+  "targets": {
+    "iqn.2026-02.local.stewie:nvme1": {
+      "acls": [
+
+      ],
+      "luns": {
+      "5": "vm-205-disk-3"
+      }
+    },
+    "iqn.2026-02.local.stewie:threeamigos": {
+      "acls": [
+      "iqn.2026-02.local.tweety"
+      ],
+      "luns": {
+      "0": "vm-101-disk-0"
+      }
+    }
+  },
+  "backstores": {
+    "vm-101-disk-0": {
+      "dev": "/dev/zvol/threeamigos/proxmox/vm-101-disk-0",
+      "target": "iqn.2026-02.local.stewie:threeamigos",
+      "lun": 0
+    },
+    "vm-205-disk-3": {
+      "dev": "/dev/zvol/NVME1/proxmox/vm-205-disk-3",
+      "target": "iqn.2026-02.local.stewie:nvme1",
+      "lun": 5
+    }
+  }
+}

@@ -99,11 +99,13 @@ detached unless you later re-attach them with `attach-vm-disk` or `new-vm-disk`.
 - [`detach-vm-disk` (both)](#detach-vm-disk-both)
 - [`enroll-efi-keys-vm` (compute node)](#enroll-efi-keys-vm-compute-node)
 - [`enroll-iscsi-pool` (storage node)](#enroll-iscsi-pool-storage-node)
+- [`export-iscsi-state` (storage node)](#export-iscsi-state-storage-node)
 - [`iscsi-add-encrypted-luns` (storage node)](#iscsi-add-encrypted-luns-storage-node)
 - [`iscsi-restore-luns` (storage node)](#iscsi-restore-luns-storage-node)
 - [`list-vm-disks` (both)](#list-vm-disks-both)
 - [`repair-iscsi-luns` (storage node)](#repair-iscsi-luns-storage-node)
 - [`repair-vm-disk-sizes` (compute node)](#repair-vm-disk-sizes-compute-node)
+- [`reconcile-iscsi-state` (storage node)](#reconcile-iscsi-state-storage-node)
 - [`move-vm-disk` (both)](#move-vm-disk-both)
 - [`new-vm-disk` (both)](#new-vm-disk-both)
 - [`switch-version` (any host)](#switch-version-any-host)
@@ -1630,7 +1632,11 @@ sudo safe-iscsi-save
 
 **Globals:** none.
 
-**Called modules / commands:** none.
+**Called modules / commands:**
+
+| Script | Purpose |
+| ------ | ------- |
+| [`export-iscsi-state`](#export-iscsi-state-storage-node) | Refresh the pool-resident LUN map after the save (best-effort; a failure never fails the save) |
 
 **Data structures consumed / produced:**
 
@@ -1653,6 +1659,13 @@ sudo safe-iscsi-save
    `/etc/zfsutilities/iscsi-encrypted-luns.conf`.
 8. Regenerate `expected-backstores.txt` from the current list of loaded
    backstores so the manifest stays authoritative after LUN moves or repairs.
+9. Invoke [`export-iscsi-state`](#export-iscsi-state-storage-node) to refresh
+   the pool-resident LUN map on every online pool. Best-effort: a warning is
+   logged and the save still reports success if the export fails. Callers
+   that own the refresh decision —
+   [`reconcile-iscsi-state`](#reconcile-iscsi-state-storage-node) suppresses
+   this hook with `SAFE_ISCSI_SAVE_SKIP_EXPORT_ISCSI_STATE=1` so a partial
+   reconcile cannot overwrite the pool map.
 
 **Return codes / side effects:**
 
@@ -1662,7 +1675,8 @@ sudo safe-iscsi-save
 | `1`  | Missing files, degraded state, or save skipped |
 
 Side effects: overwrites `saveconfig.json`; regenerates `saveconfig-boot.json`;
-regenerates `expected-backstores.txt`.
+regenerates `expected-backstores.txt`; refreshes the pool-resident LUN map
+(see [`export-iscsi-state`](#export-iscsi-state-storage-node)).
 
 The manifest contains one backstore name per line (`vm-<vmid>-disk-<N>` format).
 Comments and blank lines are ignored. This file is the authoritative source of
@@ -1675,9 +1689,204 @@ truth for expected LUN count — it is not derived from `saveconfig.json` or ZFS
 | [`zfsdelfs`](commands.md#zfsdelfs)          | Removes entry during teardown; `zfs-send-receive` rebuild re-adds |
 | [`move-vm-disk`](#move-vm-disk-both)        | Removes source entry and adds destination entry                   |
 | [`repair-iscsi-luns`](#repair-iscsi-luns-storage-node) | Regenerates the entire manifest from current targetcli backstores |
+| [`reconcile-iscsi-state`](#reconcile-iscsi-state-storage-node) | Regenerates the manifest from the pool state map's ensured set |
 
 Use `safe-iscsi-save` instead of `targetcli saveconfig` in any script that modifies
 iSCSI config.
+
+---
+
+### `export-iscsi-state` (storage node)
+
+Records the live iSCSI LUN topology as a pool-resident state map, so it
+survives an OS-disk loss on the storage host. A bare-metal restore regresses
+both `saveconfig.json` and `expected-backstores.txt` (they live on the OS
+disk) while the pools re-import current — LUNs created after the backup point
+vanish and the manifest cannot restore them. This script writes the
+authoritative map (`iscsi-state.json`: per-target LUN → backstore,
+per-backstore zvol device, ACL initiators) plus a copy of `node.conf` onto
+every online pool at `<pool>/zfsutilities/`, so any surviving pool can serve
+recovery. `safe-iscsi-save` invokes it after every successful save, keeping
+the map as fresh as the last LUN change.
+
+```bash
+sudo export-iscsi-state [--check] [--force]
+```
+
+**Prerequisites:** `targetcli` (as for [`repair-iscsi-luns`](#repair-iscsi-luns-storage-node));
+pools listed in the node config provide the write targets. Pool-wide
+snapshot/retention policies (no explicit includes) pick up the new
+`zfsutilities` dataset automatically and provide the map's history.
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `--check` | Compare live state against the newest map found on any pool and report drift (manual `targetcli` edits since the last export); never writes |
+| `--force` | Record the live state even when it is degraded (fewer active backstores than the manifest or the newest map expects) |
+
+**Globals:** node-config globals only.
+
+**Called modules / commands:**
+
+| Script | Purpose |
+| ------ | ------- |
+| `lib/iscsi-lib.sh` | Shared targetcli parsers (`parse_backstores`, `parse_target_luns`, `parse_target_acls`) |
+
+**Data structures consumed / produced:**
+
+| Structure | Role | Reference |
+| --------- | ---- | --------- |
+| `<pool>/zfsutilities/iscsi-state.json` | Written (atomically) on every online pool | [iSCSI pool-resident state map](../developer-guide/data-structures.md#iscsi-pool-resident-state-map) |
+| `<pool>/zfsutilities/node.conf` | Copy of the active node config, written beside the map | [Node configuration file](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
+| `/etc/rtslib-fb-target/expected-backstores.txt` | Expected-backstore count for the degraded-state fence | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
+
+**Internal flow / algorithm:**
+
+1. Exit silently in single-node mode; refuse to run anywhere but the storage
+   host.
+2. Collect the live topology: per-target LUN mappings and ACL initiators for
+   every pool in the node config, plus every VM backstore and its zvol device.
+3. Render the state map as deterministic JSON (sections sorted; only the
+   `generated` timestamp varies between runs).
+4. `--check`: locate the newest map across online pools, compare it with the
+   live state, print `DRIFT:` lines for moved LUNs, missing/extra backstores,
+   ACL and node-identity changes; exit 1 on drift, 0 on match. Never writes.
+5. Refuse to record a degraded live state (fewer active backstores than the
+   manifest — or, without a manifest, than the newest pool map — expects)
+   unless `--force` is given. This keeps a half-restored LIO tree from
+   destroying the recovery authority.
+6. For every pool in the node config: skip offline pools with a warning;
+   create the `<pool>/zfsutilities` dataset on first use; atomically install
+   `iscsi-state.json` and the `node.conf` copy (temp file + `mv` in the
+   destination directory).
+7. Fail when no pool received the map.
+
+**Return codes / side effects:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Map written to at least one pool, or `--check` found no drift |
+| `1`  | Invalid option, not on the storage host, not root, degraded-state refusal, no pool writable, or (`--check`) drift detected / no map found |
+
+Side effects: may create a `<pool>/zfsutilities` dataset per pool; writes
+`iscsi-state.json` and `node.conf` on every online pool.
+
+---
+
+### `reconcile-iscsi-state` (storage node)
+
+Rebuilds the iSCSI LUN topology from the pool-resident state map after a
+storage-host bare-metal restore. A restore regresses `saveconfig.json` and
+`expected-backstores.txt` together (both live on the OS disk) while the pools
+re-import current, so [`repair-iscsi-luns`](#repair-iscsi-luns-storage-node) —
+whose authority is the regressed manifest — cannot restore LUNs created after
+the backup point. This script treats the pool map written by
+[`export-iscsi-state`](#export-iscsi-state-storage-node) as the authority and
+recreates the recorded topology: every map backstore whose zvol still exists
+gets its backstore (`emulate_tpu=1`), its LUN at the recorded number, and its
+ACL bindings; encrypted backstores are re-flagged in
+`/etc/zfsutilities/iscsi-encrypted-luns.conf` so the boot-config flow stays
+consistent. LIO config and the manifest are derived state, rebuilt from the
+authorities.
+
+```bash
+sudo reconcile-iscsi-state [--dry-run] [--yes] [--from <file>]
+```
+
+**Prerequisites:** `targetcli` (as for
+[`repair-iscsi-luns`](#repair-iscsi-luns-storage-node)); a pool-resident map
+from `export-iscsi-state` on at least one online pool; iSCSI targets created
+([`setup-iscsi-targets`](#setup-iscsi-targets-storage-node)) — a map entry on
+a target that does not exist live is refused with a pointer to that script.
+
+**Safety model:**
+
+- Create-only — never deletes a live object and never remaps an existing LUN
+  to a different number.
+- Identity is the backstore/zvol name at the recorded LUN number, never the
+  LUN number alone. Conflicts are refused per item with evidence and the run
+  continues with the remaining items.
+- Map entries whose zvol is gone (offline pool, deleted dataset) are skipped,
+  and the pool map is left unchanged so the entry survives for when the zvol
+  returns (a partial reconcile must never overwrite the recovery authority).
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `--dry-run` | Print the plan and the VM-config cross-check without making changes; exits 1 if identity conflicts exist |
+| `--yes` | Apply without the interactive `y/N` confirmation |
+| `--from <file>` | Reconcile from a specific map snapshot (e.g. a pool snapshot's copy) instead of the newest online map |
+
+**Globals:** node-config globals only.
+
+**Called modules / commands:**
+
+| Script | Purpose |
+| ------ | ------- |
+| `lib/iscsi-lib.sh` | Shared parsers and `newest_iscsi_state_map` (newest-map discovery) |
+| [`safe-iscsi-save`](#safe-iscsi-save-storage-node) | Persists the rebuilt tree; its post-save map hook is suppressed (`SAFE_ISCSI_SAVE_SKIP_EXPORT_ISCSI_STATE=1`) because reconcile owns the refresh decision |
+| [`export-iscsi-state`](#export-iscsi-state-storage-node) | Refreshes the pool map after a complete reconcile |
+| `list-vm-disks --gather-vm-info` over ssh | VM-config disk references (including efidisk) for the cross-check |
+| [`rescan-storage`](#rescan-storage-both) | Makes recreated LUNs visible on the compute host |
+
+**Data structures consumed / produced:**
+
+| Structure | Role | Reference |
+| --------- | ---- | --------- |
+| `<pool>/zfsutilities/iscsi-state.json` | Recovery authority; newest copy across online pools (or `--from`) | [iSCSI pool-resident state map](../developer-guide/data-structures.md#iscsi-pool-resident-state-map) |
+| `/etc/rtslib-fb-target/expected-backstores.txt` | Regenerated from the ensured set before the save (derived state) | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
+| `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Re-flagged for ensured backstores whose zvol is encrypted | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
+| VM configs on the compute host | Read-only cross-check of `(target, LUN)` references (`/etc/pve/qemu-server/*.conf`, gathered via `list-vm-disks --gather-vm-info`) | — |
+
+**Internal flow / algorithm:**
+
+1. Exit silently in single-node mode; refuse to run anywhere but the storage
+   host.
+2. Resolve the map: `--from <file>`, else the newest `iscsi-state.json`
+   across online pools. Refuse a map generated on a different host.
+3. Parse the map (backstores, per-target LUNs, ACLs) and collect the live
+   LIO topology for the map's targets (including each TPG's ACL mode).
+4. Plan per map backstore whose zvol exists: create the backstore if missing
+   (device must match the map), create the LUN at the recorded number when
+   the slot is free, and note live objects the map does not know (left
+   untouched). Refuse per item — never guess, never remap — when the backstore
+   points at a different device, is mapped at a different (target, LUN), or
+   the recorded slot is held by a different backstore, or the target is
+   missing live. Skip (with a warning) when the zvol does not exist.
+5. Recreate explicit-mode ACL initiators recorded in the map (with mapped
+   LUNs); demo-mode TPGs are left alone — their ACL nodes self-generate on
+   initiator login.
+6. Show the evidence (actions, skips, refuses) and ask `y/N` before applying
+   (`--yes` skips; `--dry-run` stops here after the cross-check).
+7. Apply the plan, re-collect live state, re-flag encrypted backstores, and
+   regenerate the manifest from the ensured set (so `safe-iscsi-save`'s
+   degraded gate matches what reconcile actually ensured).
+8. Run `safe-iscsi-save` (map hook suppressed), then refresh the pool map —
+   but only when the reconcile is complete; otherwise the map is deliberately
+   left unchanged and skipped/refused entries are preserved in it.
+9. Cross-check compute-host VM disk references: refs whose `(target, LUN)`
+   is in the map but still missing live are reported with the map identity
+   and the item outcome; refs with no map entry are listed with candidate
+   unexported zvols of the same VMID (informational — nothing is guessed).
+10. Rescan the compute host and print the summary.
+
+**Return codes / side effects:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Topology reconciled (or already matching); VM references resolvable or informational |
+| `1`  | Invalid option / wrong host / not root / no map found / map from another host; or identity conflicts, failed actions, a failed configuration save, or VM references that remain missing after the reconcile |
+
+Skips alone (zvol gone) exit 0 with warnings; the pool map is preserved so
+re-running after the pool returns completes the recovery.
+
+Side effects: creates backstores/LUNs/ACLs in the live LIO tree; regenerates
+`expected-backstores.txt`; appends re-flagged entries to
+`iscsi-encrypted-luns.conf`; saves `saveconfig.json` (via `safe-iscsi-save`);
+refreshes `iscsi-state.json` on every online pool after a complete reconcile;
+triggers a compute-host rescan.
 
 ---
 

@@ -2,6 +2,19 @@
 
 ---
 
+- (coding-policies divergence, strict mode — family-wide, discovered
+  2026-10-24 wrap-up): coding-policies.md says scripts should start with
+  `set -euo pipefail`, but the whole bashinit-based iSCSI/two-node family
+  (safe-iscsi-save, repair-iscsi-luns, setup-iscsi-targets, rescan-storage,
+  list-vm-disks, new-vm-disk, remove-vm-disk, and ~25 more) runs without it.
+  Strict mode lands via named migration campaigns: the 2026-10-16 wrap-up
+  flipped 13 orchestrators (audit + fence per script, e.g. assignment-of-
+  failing-substitution aborts) and tests/test-strict-mode guards that list.
+  The iSCSI family was never in a campaign; the new iSCSI-resilience
+  scripts (export-iscsi-state, reconcile-iscsi-state) follow the family.
+  Migration needs the same audit-and-fence treatment plus adding the
+  family to test-strict-mode's strict_scripts list.
+
 - (toolchain deprecation, docs build): `mkdocs build -f docs/mkdocs.yml`
   prints a mkdocs-material WARNING — "MkDocs 2.0 is incompatible with
   Material for MkDocs" — on every build (exit 0, site still builds cleanly).
@@ -82,3 +95,8 @@
   (A+B+C+D) is well understood; the compute-host config repair is the
   harder half (touch only by-path lines, via qm set, from B's
   last-known-good map).
+  (Progress 2026-10-23: plan milestones M1 (pool-resident state export,
+  idea B) and M2 (reconcile engine, idea A) implemented in the working
+  tree — export-iscsi-state + reconcile-iscsi-state + safe-iscsi-save
+  hook. Entry stays: M3–M6 remain, executed one milestone at a time per
+  the user's cycle.)

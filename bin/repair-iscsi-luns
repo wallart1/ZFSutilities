@@ -29,6 +29,12 @@ unset _local_bashinit
 NODE_LIB="${REPAIR_ISCSI_LUNS_NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 
+# Shared targetcli/zvol parsers (is_vm_backstore_name, parse_backstores,
+# parse_target_luns, discover_zvols) live in lib/iscsi-lib.sh, factored out
+# so export-iscsi-state and future recovery tooling read state identically.
+ISCSI_LIB="${REPAIR_ISCSI_LUNS_ISCSI_LIB:-$(find_zfsutility_script iscsi-lib.sh)}"
+source "$ISCSI_LIB"
+
 source_helper rootcheck
 
 rootcheck
@@ -87,101 +93,6 @@ manifest="${REPAIR_ISCSI_LUNS_MANIFEST:-/etc/rtslib-fb-target/expected-backstore
 # provided so unit tests can substitute mocks.
 safe_iscsi_save="${REPAIR_ISCSI_SAFE_ISCSI_SAVE:-$mydir/safe-iscsi-save}"
 rescan_storage="${REPAIR_ISCSI_RESCAN_STORAGE:-$mydir/rescan-storage}"
-
-# ------------------------------------------------------------------
-# Target state discovery
-# ------------------------------------------------------------------
-
-# Return 0 if the argument is a well-formed VM backstore name
-# (vm-<vmid>-disk-<n>), else 1.
-is_vm_backstore_name() {
-    local base="$1" mid suf
-    [[ "$base" == vm-*-disk-* ]] || return 1
-    mid="${base#vm-}"
-    mid="${mid%-disk-*}"
-    suf="${base##*-disk-}"
-    [[ "$mid" =~ ^[0-9]+$ ]] || return 1
-    [[ "$suf" =~ ^[0-9]+$ ]] || return 1
-}
-
-# Parse targetcli backstore list into a newline-separated list of:
-#   backstore_name device_path
-# Output variables:
-#   _bs_names[]      array of backstore names
-#   _bs_devs[name]   associative array of device paths
-parse_backstores() {
-    _bs_names=()
-    unset -v _bs_devs
-    declare -gA _bs_devs=()
-
-    local raw
-    raw=$(targetcli /backstores/block ls 2>/dev/null) || return 0
-
-    local line name dev rest
-    while IFS= read -r line; do
-        # Match lines like:
-        #   o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) ...]
-        [[ "$line" == *"o- vm-"* ]] || continue
-        rest="${line#*"o- vm-"}"
-        name="vm-${rest%%[[:space:]]*}"
-        is_vm_backstore_name "$name" || continue
-        [[ "$line" == *"[/dev/zvol/"* ]] || continue
-        dev="${line#*"[/dev/zvol/"}"
-        dev="/dev/zvol/${dev%%[[:space:]]*}"
-        _bs_names+=("$name")
-        _bs_devs["$name"]="$dev"
-    done <<< "$raw"
-}
-
-# Parse targetcli LUN list for a given target IQN.
-# Output variables:
-#   _lun_indexes[name]   associative array: backstore name -> LUN index
-#   _used_indexes[]      sorted array of indexes already in use
-parse_target_luns() {
-    local iqn="$1"
-    _used_indexes=()
-    unset -v _lun_indexes
-    declare -gA _lun_indexes=()
-
-    local raw
-    raw=$(targetcli "/iscsi/${iqn}/tpg1/luns" ls 2>/dev/null) || return 0
-
-    local line idx name rest
-    while IFS= read -r line; do
-        # Match lines like:
-        #   | o- lun19 ..... [block/vm-207-disk-2 (/dev/zvol/...) (...)]
-        [[ "$line" == *"block/vm-"* ]] || continue
-        rest="${line#*lun}"
-        idx="${rest%%[![:digit:]]*}"
-        [[ "$idx" =~ ^[0-9]+$ ]] || continue
-        rest="${line#*"block/vm-"}"
-        name="vm-${rest%%[[:space:]]*}"
-        is_vm_backstore_name "$name" || continue
-        _lun_indexes["$name"]="$idx"
-        _used_indexes+=("$idx")
-    done <<< "$raw"
-}
-
-# Discover all VM zvols in configured pools.
-# Output variable: _zvols[] array of "pool/dataset" strings.
-discover_zvols() {
-    _zvols=()
-    local pool
-    while IFS= read -r pool; do
-        [[ -z "$pool" ]] && continue
-        local ds base parent
-        while IFS= read -r ds; do
-            [[ -z "$ds" ]] && continue
-            # Keep only "<pool>/proxmox/vm-<vmid>-disk-<n>" (exactly 3 path components)
-            parent="${ds%/*}"
-            base="${ds##*/}"
-            [[ "$parent" == */proxmox ]] || continue
-            [[ "$parent" == */*/* ]] && continue
-            is_vm_backstore_name "$base" || continue
-            _zvols+=("$ds")
-        done < <(zfs list -H -o name -r "${pool}/proxmox" 2>/dev/null)
-    done < <(pool_list)
-}
 
 # ------------------------------------------------------------------
 # Manifest handling

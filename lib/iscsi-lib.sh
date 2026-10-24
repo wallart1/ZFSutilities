@@ -1,22 +1,31 @@
 #!/usr/bin/bash
 # iscsi-lib.sh
-# Shared iSCSI teardown/rebuild helpers used by zfsdelfs and zfs-send-receive.
+# Shared iSCSI helpers: target-state discovery (parse_backstores,
+# parse_target_luns, parse_target_acls, discover_zvols, is_vm_backstore_name)
+# plus the teardown/rebuild helpers used by zfsdelfs and zfs-send-receive.
 #
-# This library is sourced at the file level by both scripts so that:
-#   - zfsdelfs can tear down iSCSI LUNs before destroying VM zvols.
-#   - zfs-send-receive can rebuild iSCSI LUNs after a successful zfs receive.
+# This library is sourced at the file level by:
+#   - zfsdelfs, to tear down iSCSI LUNs before destroying VM zvols.
+#   - zfs-send-receive, to rebuild iSCSI LUNs after a successful zfs receive.
+#   - repair-iscsi-luns and export-iscsi-state, for the discovery helpers.
 #
-# The library loads its own dependencies (bashinit and node-lib.sh).
+# The library loads its own dependencies (bashinit and node-lib.sh) when the
+# sourcing context has not already loaded them. The probe is node-lib's
+# pool_to_target (not bashinit): zfsdelfs sources bashinit itself but relies
+# on this block for node-lib, while repair-iscsi-luns and export-iscsi-state
+# source both before this library — and in unit tests a re-load here would
+# re-run bashinit's session-log setup and clobber the harness's command mocks.
+if [[ $(type -t pool_to_target 2>/dev/null) != "function" ]]; then
+    source ~/bashinit
+    bashinit
 
-source ~/bashinit
-bashinit
-
-NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
-if [[ -z "$NODE_LIB" ]]; then
-    log_msg "FATAL: Could not locate node-lib.sh"
-    exit 1
+    NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+    if [[ -z "$NODE_LIB" ]]; then
+        log_msg "FATAL: Could not locate node-lib.sh"
+        exit 1
+    fi
+    source "$NODE_LIB"
 fi
-source "$NODE_LIB"
 
 # Tracks iSCSI LUNs torn down during dataset deletion.
 # Key: dataset name. Value: "target:lun_num:backstore_name:encrypted_flag"
@@ -54,6 +63,176 @@ function iscsi_check_vm_running {
     fi
     [[ "$status" == *"status: running"* ]] && return 1
     return 0
+}
+
+# ------------------------------------------------------------------
+# Target state discovery
+# ------------------------------------------------------------------
+# Shared parsers for targetcli listings and ZFS dataset listings, factored
+# out of repair-iscsi-luns so repair, export-iscsi-state, and later
+# recovery tooling all read the live LIO topology the same way. Output is
+# delivered through the _bs_*/_lun_*/_acl_*/_zvols globals below (declare -g
+# per the sourced-library law); each parse function resets its own outputs
+# before filling them.
+
+# Return 0 if the argument is a well-formed VM backstore name
+# (vm-<vmid>-disk-<n>), else 1.
+is_vm_backstore_name() {
+    local base="$1" mid suf
+    [[ "$base" == vm-*-disk-* ]] || return 1
+    mid="${base#vm-}"
+    mid="${mid%-disk-*}"
+    suf="${base##*-disk-}"
+    [[ "$mid" =~ ^[0-9]+$ ]] || return 1
+    [[ "$suf" =~ ^[0-9]+$ ]] || return 1
+}
+
+# Parse targetcli backstore list into a newline-separated list of:
+#   backstore_name device_path
+# Output variables:
+#   _bs_names[]      array of backstore names
+#   _bs_devs[name]   associative array of device paths
+parse_backstores() {
+    _bs_names=()
+    unset -v _bs_devs
+    declare -gA _bs_devs=()
+
+    local raw
+    raw=$(targetcli /backstores/block ls 2>/dev/null) || return 0
+
+    local line name dev rest
+    while IFS= read -r line; do
+        # Match lines like:
+        #   o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 (1.0MiB) ...]
+        [[ "$line" == *"o- vm-"* ]] || continue
+        rest="${line#*"o- vm-"}"
+        name="vm-${rest%%[[:space:]]*}"
+        is_vm_backstore_name "$name" || continue
+        [[ "$line" == *"[/dev/zvol/"* ]] || continue
+        dev="${line#*"[/dev/zvol/"}"
+        dev="/dev/zvol/${dev%%[[:space:]]*}"
+        _bs_names+=("$name")
+        _bs_devs["$name"]="$dev"
+    done <<< "$raw"
+}
+
+# Parse targetcli LUN list for a given target IQN.
+# Output variables:
+#   _lun_indexes[name]   associative array: backstore name -> LUN index
+#   _used_indexes[]      sorted array of indexes already in use
+parse_target_luns() {
+    local iqn="$1"
+    _used_indexes=()
+    unset -v _lun_indexes
+    declare -gA _lun_indexes=()
+
+    local raw
+    raw=$(targetcli "/iscsi/${iqn}/tpg1/luns" ls 2>/dev/null) || return 0
+
+    local line idx name rest
+    while IFS= read -r line; do
+        # Match lines like:
+        #   | o- lun19 ..... [block/vm-207-disk-2 (/dev/zvol/...) (...)]
+        [[ "$line" == *"block/vm-"* ]] || continue
+        rest="${line#*lun}"
+        idx="${rest%%[![:digit:]]*}"
+        [[ "$idx" =~ ^[0-9]+$ ]] || continue
+        rest="${line#*"block/vm-"}"
+        name="vm-${rest%%[[:space:]]*}"
+        is_vm_backstore_name "$name" || continue
+        _lun_indexes["$name"]="$idx"
+        _used_indexes+=("$idx")
+    done <<< "$raw"
+}
+
+# Parse targetcli ACL list for a given target IQN.
+# Output variable: _acl_initiators[] sorted, deduplicated array of
+# initiator IQNs.
+parse_target_acls() {
+    local iqn="$1"
+    _acl_initiators=()
+
+    local raw
+    raw=$(targetcli "/iscsi/${iqn}/tpg1/acls" ls 2>/dev/null) || return 0
+
+    # The character-class regex below extracts initiator IQN tokens from
+    # targetcli's acls-ls listing. It is anchored on the literal "iqn."
+    # prefix and restricted to the iSCSI-name grammar (RFC 3720: the only
+    # characters legal in any segment are letters, digits, dots, colons,
+    # underscores, and hyphens) — the same documented pattern as
+    # probe_target_usage in node-lib.sh.
+    mapfile -t _acl_initiators < <(printf '%s\n' "$raw" \
+        | grep -o 'iqn\.[A-Za-z0-9.:_-]*' | sort -u)
+    return 0
+}
+
+# Discover all VM zvols in configured pools.
+# Output variable: _zvols[] array of "pool/dataset" strings.
+discover_zvols() {
+    _zvols=()
+    local pool
+    while IFS= read -r pool; do
+        [[ -z "$pool" ]] && continue
+        local ds base parent
+        while IFS= read -r ds; do
+            [[ -z "$ds" ]] && continue
+            # Keep only "<pool>/proxmox/vm-<vmid>-disk-<n>" (exactly 3 path components)
+            parent="${ds%/*}"
+            base="${ds##*/}"
+            [[ "$parent" == */proxmox ]] || continue
+            [[ "$parent" == */*/* ]] && continue
+            is_vm_backstore_name "$base" || continue
+            _zvols+=("$ds")
+        done < <(zfs list -H -o name -r "${pool}/proxmox" 2>/dev/null)
+    done < <(pool_list)
+}
+
+# ------------------------------------------------------------------
+# Pool-resident state map
+# ------------------------------------------------------------------
+# The pool-resident LUN map (iscsi-state.json) is the bare-metal-restore
+# recovery authority: it is written by export-iscsi-state onto every online
+# pool and read back by reconcile-iscsi-state. These helpers locate and read
+# the map so export and reconcile always resolve the same newest copy.
+
+# File name of the state map inside each <pool>/zfsutilities dataset.
+: "${ISCSI_STATE_FILENAME:=iscsi-state.json}"
+
+# Print the string value of a top-level field in a JSON file (empty on any
+# error). python3 is already a project-wide dependency (safe-iscsi-save, GUI).
+read_json_string_field() {
+    local file="$1" field="$2"
+    python3 -c 'import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        v = json.load(f).get(sys.argv[2])
+    print(v if isinstance(v, str) else "")
+except Exception:
+    pass' "$file" "$field" 2>/dev/null
+}
+
+# Locate the newest state map across online pools. Prints the path of the
+# map with the newest "generated" timestamp, or nothing when no pool
+# holds one. All maps are written by the same host with date -Iseconds, so
+# timestamps share one UTC offset and compare correctly as strings.
+newest_iscsi_state_map() {
+    local pool online mnt f ts best="" best_ts=""
+    online=$(zpool list -Ho name 2>/dev/null || true)
+    while IFS= read -r pool; do
+        [[ -z "$pool" ]] && continue
+        grep -qxF -- "$pool" <<< "$online" || continue
+        mnt=$(zfs list -H -o mountpoint "${pool}/zfsutilities" 2>/dev/null) || continue
+        [[ -z "$mnt" || "$mnt" == "-" ]] && continue
+        f="${mnt}/${ISCSI_STATE_FILENAME}"
+        [[ -f "$f" ]] || continue
+        ts=$(read_json_string_field "$f" "generated")
+        [[ -z "$ts" ]] && continue
+        if [[ -z "$best_ts" || "$ts" > "$best_ts" ]]; then
+            best="$f"
+            best_ts="$ts"
+        fi
+    done < <(pool_list)
+    [[ -n "$best" ]] && printf '%s\n' "$best"
 }
 
 # Remove a backstore name from the expected-backstores manifest if present.

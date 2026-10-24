@@ -453,6 +453,138 @@ test_manifest_install_failure_cleans_tmpfile() {
 }
 
 # ------------------------------------------------------------------
+# Pool LUN map hook: export-iscsi-state runs after the manifest regen,
+# best-effort — a hook failure must never fail the save itself.
+# ------------------------------------------------------------------
+
+_run_safe_iscsi_save_with_hook() {
+    local hook_script="$1"
+    local tmpdir
+    local runner_rc
+    tmpdir=$(mktemp -d)
+    local savefile="$tmpdir/saveconfig.json"
+    local manifest="$tmpdir/expected-backstores.txt"
+    echo '{"storage_objects":[],"targets":[]}' > "$savefile"
+    printf 'vm-100-disk-0\nvm-101-disk-0\n' > "$manifest"
+
+    local script_copy="$tmpdir/safe-iscsi-save"
+    sed \
+        -e "s|/etc/rtslib-fb-target/saveconfig\.json|$savefile|g" \
+        -e "s|/etc/rtslib-fb-target/saveconfig-boot\.json|${savefile}.boot|g" \
+        -e "s|/etc/rtslib-fb-target/expected-backstores\.txt|$manifest|g" \
+        -e "s|/etc/iscsi-encrypted-luns\.conf||g" \
+        -e "s|source ~/bashinit|source \"$mydir/bin/bashinit\"|g" \
+        -e 's|^source_helper rootcheck$|: # rootcheck stays mocked; the suite runs non-root|' \
+        "$mydir/bin/safe-iscsi-save" > "$script_copy"
+
+    local node_conf="$tmpdir/node.conf"
+    printf 'NODE_MODE="single-node"\n' > "$node_conf"
+
+    cat > "$tmpdir/runner" << RUNNEREOF
+#!/bin/bash
+export NODE_CONF="$node_conf"
+export mydir="$mydir"
+export SAFE_ISCSI_SAVE_EXPORT_ISCSI_STATE="$hook_script"
+targetcli() {
+    case "\$*" in
+        "/backstores/block ls")
+            echo "  vm-100-disk-0     /dev/zvol/threeamigos/proxmox/vm-100-disk-0   50G"
+            echo "  vm-101-disk-0     /dev/zvol/threeamigos/proxmox/vm-101-disk-0   50G"
+            ;;
+        "saveconfig")
+            SAVECONFIG_CALLED="yes"
+            ;;
+        *)
+            true
+            ;;
+    esac
+}
+rootcheck() { true; }
+source "$script_copy"
+[[ "\$SAVECONFIG_CALLED" == "yes" ]] && echo "SAVECONFIG_CALLED"
+RUNNEREOF
+
+    bash "$tmpdir/runner" 2>&1
+    runner_rc=$?
+    rm -rf "$tmpdir"
+    return "$runner_rc"
+}
+
+test_export_hook_invoked_after_save() {
+    test_start "export-iscsi-state hook runs after a successful save"
+    local tmpdir hook output rc=0
+    tmpdir=$(mktemp -d)
+    hook="$tmpdir/export-mock"
+    printf '#!/bin/bash\necho EXPORT_HOOK_CALLED\n' > "$hook"
+    chmod +x "$hook"
+
+    output=$(_run_safe_iscsi_save_with_hook "$hook") || rc=$?
+    rm -rf "$tmpdir"
+
+    if [[ "$rc" -eq 0 ]] && [[ "$output" == *"SAVECONFIG_CALLED"* ]] \
+        && [[ "$output" == *"EXPORT_HOOK_CALLED"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+}
+
+test_export_hook_failure_is_non_fatal() {
+    test_start "export-iscsi-state hook failure does not fail the save"
+    local tmpdir hook output rc=0
+    tmpdir=$(mktemp -d)
+    hook="$tmpdir/export-mock"
+    printf '#!/bin/bash\nexit 7\n' > "$hook"
+    chmod +x "$hook"
+
+    output=$(_run_safe_iscsi_save_with_hook "$hook") || rc=$?
+    rm -rf "$tmpdir"
+
+    if [[ "$rc" -eq 0 ]] && [[ "$output" == *"SAVECONFIG_CALLED"* ]] \
+        && [[ "$output" == *"export-iscsi-state failed"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+}
+
+test_export_hook_missing_warns_only() {
+    test_start "Missing export-iscsi-state warns without failing the save"
+    local output rc=0
+    output=$(_run_safe_iscsi_save_with_hook "/nonexistent/export-iscsi-state") || rc=$?
+
+    if [[ "$rc" -eq 0 ]] && [[ "$output" == *"SAVECONFIG_CALLED"* ]] \
+        && [[ "$output" == *"export-iscsi-state not available"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+}
+
+test_export_hook_suppressed_by_caller() {
+    test_start "SAFE_ISCSI_SAVE_SKIP_EXPORT_ISCSI_STATE=1 skips the hook with an INFO line"
+    local tmpdir hook output rc=0
+    tmpdir=$(mktemp -d)
+    hook="$tmpdir/export-mock"
+    printf '#!/bin/bash\necho EXPORT_HOOK_CALLED\n' > "$hook"
+    chmod +x "$hook"
+
+    # The runner exports the suppression knob the way reconcile-iscsi-state
+    # invokes the save; the hook must not run.
+    output=$(SAFE_ISCSI_SAVE_SKIP_EXPORT_ISCSI_STATE=1 \
+        _run_safe_iscsi_save_with_hook "$hook") || rc=$?
+    rm -rf "$tmpdir"
+
+    if [[ "$rc" -eq 0 ]] && [[ "$output" == *"SAVECONFIG_CALLED"* ]] \
+        && [[ "$output" == *"Pool LUN map refresh suppressed by caller"* ]] \
+        && [[ "$output" != *"EXPORT_HOOK_CALLED"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+}
+
+# ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
 test_zero_active_backstores_refuses_save
@@ -465,5 +597,9 @@ test_encrypted_backstores_excluded_from_boot_config
 test_mapped_luns_strippped_from_boot_config
 test_helper_removes_workdir
 test_manifest_install_failure_cleans_tmpfile
+test_export_hook_invoked_after_save
+test_export_hook_failure_is_non_fatal
+test_export_hook_missing_warns_only
+test_export_hook_suppressed_by_caller
 
 test_summary

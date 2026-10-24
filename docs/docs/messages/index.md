@@ -1319,6 +1319,72 @@ Refuses to overwrite a good saved config while the target is degraded.
 | `FATAL: safe-iscsi-save: iSCSI target is degraded (... of ... LUNs active)` | Core safety gate: fewer active backstores than the manifest expects (keys not loaded, pool not imported) — the good saved config is deliberately not overwritten | Restore the missing LUNs (load keys/import pools); to force a save anyway, run `targetcli saveconfig` manually |
 | `WARN: safe-iscsi-save: More backstores (...) than manifest (...)` | More active backstores than expected (orphans or a stale manifest) | Save proceeds; reconcile the manifest |
 | `INFO: ✓ iSCSI configuration saved (.../... LUNs active)` | All gates passed and the config was persisted | Informational |
+| `INFO: ✓ Pool LUN map refreshed` | The post-save [export-iscsi-state](#export-iscsi-state) hook recorded the LUN map on every online pool | Informational |
+| `INFO: ✓ Pool LUN map refresh suppressed by caller` | The save ran with `SAFE_ISCSI_SAVE_SKIP_EXPORT_ISCSI_STATE=1` (set by [reconcile-iscsi-state](#reconcile-iscsi-state), which owns the refresh decision after a reconcile) | Informational; the caller refreshes the map itself |
+| `WARN: export-iscsi-state failed — pool LUN map not refreshed` | The post-save hook ran but returned non-zero | The save itself stands; run `sudo export-iscsi-state` on the storage host and address its messages |
+| `WARN: export-iscsi-state not available at ... — pool LUN map not refreshed` | The post-save hook script was not found at the expected path | The save itself stands; check the installation, then run `sudo export-iscsi-state` |
+
+### [export-iscsi-state](../commands-and-modules/two-node.md#export-iscsi-state-storage-node)
+
+Records the live iSCSI LUN topology as a pool-resident state map on every
+online pool (two-node only; silently no-ops in single-node mode).
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `FATAL: Unknown option: ...` | Unrecognized command-line argument | Usage shown; rerun with valid arguments |
+| `FATAL: Must run on the storage host (...), not ...` / `FATAL: Must run as root (use sudo)` | Environment gate: wrong host or not root | Run via `sudo` on the storage host |
+| `FATAL: targetcli not found. ...` | The LIO target stack is not installed on this storage host | Install `targetcli-fb` |
+| `INFO: Targets: ..., backstores: ...` | Live-topology summary before rendering the map | Informational |
+| `WARN: Pool ... is offline — state map not written there` | A configured pool is not imported; the map is still written to every online pool | Expected for deliberately offline pools; no action needed unless the pool should be online |
+| `INFO: ✓ Created dataset ... (first use)` / `WARN: Could not create dataset ... — pool ... skipped` | The `<pool>/zfsutilities` dataset was created, or creation failed | On failure, check pool health/permissions and rerun |
+| `WARN: Dataset ... has no usable mountpoint (...) — pool ... skipped` | The state dataset exists but is not mounted | Remount the dataset and rerun |
+| `WARN: Could not create a temp file next to ...` / `WARN: Could not stage ...` / `WARN: Could not install ...` | An atomic install step failed for one pool's map | That pool keeps its previous map; check free space/permissions and rerun |
+| `INFO: ✓ State map written to .../zfsutilities` / `INFO: ✓ State map written to ... pool(s)` | Per-pool and final write confirmations | Informational |
+| `FATAL: Live state is degraded (... of ... expected backstores active)` | Safety gate: fewer backstores are active than the manifest (or the newest pool map) expects — recording this state would overwrite the recovery authority with a partial topology | The pool map was NOT overwritten; restore the missing LUNs (load keys/import pools), or rerun with `--force` to record the degraded state deliberately |
+| `WARN: Live backstores (...) below expected (...) — recording anyway (--force)` | The degraded-state gate was overridden | The map now records the partial topology; re-export once the system is healthy |
+| `INFO: Comparing live state against ...` | `--check` located the newest map and started the comparison | Informational |
+| `INFO: ✓ No drift — live state matches the newest pool map` | `--check` found the live topology identical to the recorded map | Informational |
+| `DRIFT: ...` (stdout lines) / `WARN: Drift detected between live state and the pool map (see DRIFT lines)` | `--check` found differences: moved LUNs, missing/extra backstores, ACL changes, or node-identity (`iqn_prefix`/`storage_ip`) drift — typically manual `targetcli` edits since the last export | Review the lines; run `sudo export-iscsi-state` to record the now-intended state |
+| `FATAL: No iscsi-state.json found on any online pool — run export-iscsi-state first` | `--check` found no map to compare against | Run `sudo export-iscsi-state` once, then retry |
+| `FATAL: Could not create a temp file for the state map` / `FATAL: State map was not written to any pool` | No temp file could be staged, or every configured pool was skipped (offline/unwritable) | Check pool availability and permissions; at least one online pool is required |
+
+### [reconcile-iscsi-state](../commands-and-modules/two-node.md#reconcile-iscsi-state-storage-node)
+
+Rebuilds the iSCSI LUN topology from the pool-resident state map after a
+storage-host bare-metal restore (two-node only; silently no-ops in single-node
+mode). Create-only; identity conflicts are refused per item.
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `FATAL: Unknown option: ...` / `FATAL: --from requires a file path` | Unrecognized command-line argument or a valueless `--from` | Usage shown; rerun with valid arguments |
+| `FATAL: Must run on the storage host (...), not ...` / `FATAL: Must run as root (use sudo)` / `FATAL: targetcli not found. ...` | Environment gate: wrong host, not root, or the LIO target stack is missing | Run via `sudo` on the storage host; install `targetcli-fb` |
+| `FATAL: Map file not found: ...` | The `--from` snapshot does not exist | Check the path (pool snapshots expose the map under `<pool>/zfsutilities/iscsi-state.json`) |
+| `FATAL: No iscsi-state.json found on any online pool — run export-iscsi-state first` | No pool holds a recovery map | Run `sudo export-iscsi-state` once, then retry |
+| `FATAL: ... contains no valid backstore records` / `FATAL: Map was generated on ..., not this host (...) — refusing to reconcile from it` | The map is empty/corrupt, or describes a different site's topology | Re-export the map on this host, or reconcile from a snapshot this host wrote |
+| `INFO: Map: ... (generated ...)` / `INFO: Map records N backstore(s) on M target(s); live backstores: N` / `INFO: Live backstores: ..., discovered VM zvols: ...` | Run header: which map is the authority and the live-state summary | Informational |
+| `INFO: Backstores to create:` / `INFO: LUN mappings to create (at recorded numbers):` / `INFO: ACL bindings to create:` (+ per-item lines) | The planned recovery actions, shown before the `y/N` confirmation | Review, then confirm (or rerun with `--dry-run` first) |
+| `WARN: Skipped (zvol missing — entry kept in the pool map):` (+ `... zvol ... does not exist (offline pool or deleted)` / `... device ... not available (keys not loaded?)`) | A map entry's zvol is gone, so it cannot be recreated; the entry stays in the pool map for when the zvol returns | Import the pool / load keys / restore the dataset, then re-run; deliberately deleted disks need no action |
+| `FATAL: Refused (identity conflict — resolve manually):` (+ `... backstore exists but points at ... (map: ...)` / `... mapped live at ... LUN ..., map records ... — never remapped` / `... LUN ... on ... is held by ...` / `... target ... does not exist live — run setup-iscsi-targets first` / `... map records disagree ...`) | Safety gate: recreating this entry could attach the wrong disk or split the LUN tree, so the item is refused and the run continues with the rest | Resolve by hand (delete the conflicting live object or restore the recorded layout), then re-run; never auto-remapped |
+| `INFO: Live backstores not in the map (left untouched):` | Live objects the map does not know (typical with `--from` older than live state) | Informational; they merge into the map at the next export |
+| `INFO: ...: demo-mode ACLs (...) self-generate on initiator login — not created` | The TPG admits every initiator (demo mode), so recorded ACL nodes are not recreated | Informational |
+| `INFO: ✓ Created backstore ... -> ...` / `INFO: ✓ Mapped ... to .../lun...` / `INFO: ✓ Created ACL ... on ...` / `INFO: ✓ Granted N LUN(s) to ACL ...` | Per-item apply confirmations (backstores get `emulate_tpu=1`; LUNs at the recorded numbers) | Informational |
+| `FATAL: Failed to create backstore ...` / `FATAL: Failed to map ... to .../lun...` / `FATAL: Failed to create ACL ... on ...` | A targetcli create call returned non-zero; the run continues with the remaining items | Check the targetcli error (device missing, target state); the summary counts failed actions and the run exits 1 |
+| `INFO: ... is encrypted but unmapped in the map — not added to the encrypted LUNs config` | An encrypted backstore the map records as unmapped; the conf entry needs a target | Informational; the attach flow re-flags it when mapped |
+| `INFO: ✓ Re-flagged N encrypted backstore(s)` | Ensured backstores whose zvol is encrypted were re-added to `iscsi-encrypted-luns.conf` (it regresses with the OS disk) | Informational; `safe-iscsi-save` regenerates a consistent boot config from it |
+| `INFO: ✓ Regenerated ... from the map` / `WARN: Regenerated manifest is empty; keeping ... unchanged` / `FATAL: Could not install regenerated manifest at ...` | The expected-backstores manifest was rebuilt from the ensured set (or the rewrite was refused) | On the FATAL, check permissions on the manifest directory and rerun |
+| `WARN: Nothing was ensured — skipping safe-iscsi-save` | No map entry could be ensured, so there is nothing to persist | Address the skip/refuse lines first |
+| `INFO: ✓ iSCSI configuration saved` / `FATAL: safe-iscsi-save failed — configuration may not be persistent` / `FATAL: safe-iscsi-save not available at ...` | Persistence result (the save runs with its map hook suppressed — reconcile owns the refresh) | On FATAL, run `sudo safe-iscsi-save` manually after resolving its messages |
+| `INFO: ✓ Pool LUN map refreshed` | The reconcile completed and the pool map now records the rebuilt topology | Informational |
+| `WARN: Pool LUN map left unchanged — skipped/refused entries are preserved in it for recovery` | Safety gate: the reconcile was partial, so refreshing would overwrite the recovery authority and drop the skipped entries | Resolve the skipped/refused items (import pools, fix conflicts) and re-run; the map refreshes then |
+| `WARN: export-iscsi-state not available at ... — pool LUN map not refreshed` / `WARN: export-iscsi-state failed — pool LUN map not refreshed` | The refresh step could not run | Check the installation, then run `sudo export-iscsi-state` |
+| `WARN: Could not gather VM disk references from ... — VM-config cross-check skipped` | The compute host was unreachable over ssh; the target-side reconcile still stands | Informational; rerun `--dry-run` later to see the cross-check |
+| `WARN: VM ... (...) ... references ... LUN ... — still missing (map: ...; refused/skipped/...)` | A VM disk reference the map knows about could not be restored (its item was refused or skipped) | Resolve that item's reason above; the run exits 1 while any ref remains missing |
+| `WARN: VM ... (...) ... references ... LUN ... — no map entry for it` (+ `INFO: candidate unexported zvol: ...`) | A VM references a LUN the map never recorded (map older than the attach, or compute-host config drift) | Candidates are informational only — nothing is guessed; re-attach deliberately or repair the config |
+| `INFO: [dry-run] VM ...: ... LUN ... would be restored by the planned mapping (...)` | `--dry-run` cross-check note for a ref the plan would restore | Informational |
+| `INFO: [dry-run] Would regenerate the manifest, run safe-iscsi-save, refresh the pool map, and rescan ...` / `FATAL: ... identity conflict(s) must be resolved first` | `--dry-run` close-out | Apply with `--yes`/confirmation once the plan is acceptable |
+| `INFO: No target-side changes needed` | Live topology already matches the map; only the finishes (manifest regen, save, refresh, rescan) ran | Informational |
+| `WARN: Aborted — no changes made` | The `y/N` confirmation was declined (or stdin was empty) | Re-run and confirm, or use `--yes` |
+| `INFO: === Summary ===` (+ created/ensured counts, `WARN: Skipped (zvol missing): N`, `FATAL: Refused (identity conflict): N`, `FATAL: Actions failed during apply`, `FATAL: safe-iscsi-save did not persist the rebuilt tree`, `INFO: VM refs unresolved: ...`) | End-of-run tally | `INFO: ✓ Done` (exit 0) when complete; `FATAL: Reconcile incomplete — resolve the reported items and re-run` (exit 1) otherwise |
 
 ### [show-lun-map](../commands-and-modules/two-node.md#show-lun-map-compute-node)
 

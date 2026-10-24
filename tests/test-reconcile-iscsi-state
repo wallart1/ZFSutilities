@@ -1,0 +1,905 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154,SC2016,SC2028
+# test-reconcile-iscsi-state — Unit tests for the map-driven LUN reconcile.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Mocks
+# ------------------------------------------------------------------
+
+IQN1="iqn.2026-02.local.stewie:threeamigos"
+IQN2="iqn.2026-02.local.stewie:nvme1"
+INIT1="iqn.2026-02.local.tweety"
+
+# Mock node-lib.sh behavior
+NODE_MODE="two-node"
+storage_host="stewie"
+compute_host="tweety"
+storage_ip="192.168.100.1"
+iqn_prefix="iqn.2026-02.local.stewie"
+declare -A POOL_TARGET=(
+    ["threeamigos"]="threeamigos"
+    ["NVME1"]="nvme1"
+)
+is_single_node() { [[ "$NODE_MODE" == "single-node" ]]; }
+is_two_node()    { [[ "$NODE_MODE" == "two-node" ]]; }
+pool_to_target() {
+    local pool="$1"
+    local short="${POOL_TARGET[$pool]:-}"
+    [[ -n "$short" ]] && echo "${iqn_prefix}:${short}"
+}
+pool_list() { printf '%s\n' "${!POOL_TARGET[@]}"; }
+is_known_pool() { [[ -n "${POOL_TARGET[$1]:-}" ]]; }
+
+# The evaluated script calls find_zfsutility_script to locate rootcheck;
+# point node-lib at /dev/null (mocks above) and source the real lib parsers.
+find_zfsutility_script() { echo "/dev/null"; }
+
+# targetcli mock: query answers from the _mock_* fixtures, create calls
+# captured to a log file (main() runs in a command-substitution subshell, so
+# array updates would be lost) and applied to the fixtures so post-apply
+# re-collection inside main() sees the new topology.
+_targetcli_log=""
+_targetcli_calls=()
+_mock_backstores=""
+_mock_iscsi_ls=""
+_mock_luns_1=""
+_mock_luns_2=""
+_mock_acls_1=""
+_mock_acls_2=""
+_mock_gen_acls_1="1"
+_mock_gen_acls_2="1"
+
+targetcli() {
+    [[ -n "$_targetcli_log" ]] && printf '%s\n' "$*" >> "$_targetcli_log"
+    _targetcli_calls+=("$*")
+    local args="$*"
+    case "$args" in
+        "/backstores/block ls")
+            [[ -n "$_mock_backstores" ]] && printf '%s\n' "$_mock_backstores"
+            ;;
+        "/iscsi ls")
+            [[ -n "$_mock_iscsi_ls" ]] && printf '%s\n' "$_mock_iscsi_ls"
+            ;;
+        "/iscsi/${IQN1}/tpg1/luns ls")
+            [[ -n "$_mock_luns_1" ]] && printf '%s\n' "$_mock_luns_1"
+            ;;
+        "/iscsi/${IQN2}/tpg1/luns ls")
+            [[ -n "$_mock_luns_2" ]] && printf '%s\n' "$_mock_luns_2"
+            ;;
+        "/iscsi/${IQN1}/tpg1/acls ls")
+            [[ -n "$_mock_acls_1" ]] && printf '%s\n' "$_mock_acls_1"
+            ;;
+        "/iscsi/${IQN2}/tpg1/acls ls")
+            [[ -n "$_mock_acls_2" ]] && printf '%s\n' "$_mock_acls_2"
+            ;;
+        "/iscsi/${IQN1}/tpg1 get attribute generate_node_acls")
+            printf 'generate_node_acls=%s\n' "${_mock_gen_acls_1:-1}"
+            ;;
+        "/iscsi/${IQN2}/tpg1 get attribute generate_node_acls")
+            printf 'generate_node_acls=%s\n' "${_mock_gen_acls_2:-1}"
+            ;;
+    esac
+
+    # Create effects (mock fidelity: state must evolve like real targetcli).
+    if [[ "$1" == "/backstores/block" && "$2" == "create" ]]; then
+        _mock_backstores+="  o- ${3} ........ [${4} (1.0GiB) write-thru activated]"$'\n'
+        return 0
+    fi
+    if [[ "$2" == "create" && "$1" == "/iscsi/${IQN1}/tpg1/luns" ]]; then
+        _mock_luns_1+="  | o- lun${4}  [block/${3##*/} (/dev/zvol/x) (default_tg_pt_gp)]"$'\n'
+        return 0
+    fi
+    if [[ "$2" == "create" && "$1" == "/iscsi/${IQN2}/tpg1/luns" ]]; then
+        _mock_luns_2+="  | o- lun${4}  [block/${3##*/} (/dev/zvol/x) (default_tg_pt_gp)]"$'\n'
+        return 0
+    fi
+    if [[ "$2" == "create" && "$1" == "/iscsi/${IQN1}/tpg1/acls" ]]; then
+        _mock_acls_1+="  o- ${3} .......... [Mapped LUNs: 0]"$'\n'
+        return 0
+    fi
+    if [[ "$2" == "create" && "$1" == "/iscsi/${IQN2}/tpg1/acls" ]]; then
+        _mock_acls_2+="  o- ${3} .......... [Mapped LUNs: 0]"$'\n'
+        return 0
+    fi
+    return 0
+}
+
+# ZFS mock: zvol discovery, state-dataset mountpoints, encryption property.
+declare -A _mock_zfs_mountpoint=()
+declare -A _mock_encryption=()
+_mock_zvols_threeamigos=()
+_mock_zvols_nvme1=()
+_mock_zpool_list=""
+
+zfs() {
+    if [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" ]]; then
+        if [[ "$5" == "-r" ]]; then
+            case "$6" in
+                threeamigos/proxmox) printf '%s\n' "${_mock_zvols_threeamigos[@]:-}" ;;
+                NVME1/proxmox)       printf '%s\n' "${_mock_zvols_nvme1[@]:-}" ;;
+            esac
+            return 0
+        fi
+        if [[ "$4" == "mountpoint" ]]; then
+            if [[ -n "${_mock_zfs_mountpoint[$5]:-}" ]]; then
+                printf '%s\n' "${_mock_zfs_mountpoint[$5]}"
+                return 0
+            fi
+            return 1
+        fi
+        return 0
+    fi
+    if [[ "$1" == "get" && "$2 $3 $4" == "-H -o value" && "$5" == "encryption" ]]; then
+        printf '%s\n' "${_mock_encryption[$6]:-off}"
+        return 0
+    fi
+    return 0
+}
+
+zpool() {
+    [[ "$1 $2" == "list -Ho" ]] && printf '%s\n' "${_mock_zpool_list:-}"
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Load the script under test with node-lib mocked.
+# ------------------------------------------------------------------
+old_mydir="$mydir"
+RECONCILE_ISCSI_STATE_SKIP_ROOT="Y"
+RECONCILE_ISCSI_STATE_TEST_MODE="Y"
+export RECONCILE_ISCSI_STATE_NODE_LIB="/dev/null"
+export RECONCILE_ISCSI_STATE_ISCSI_LIB="$old_mydir/lib/iscsi-lib.sh"
+script_text=$(cat "$old_mydir/bin/reconcile-iscsi-state")
+script_text="${script_text/my_host=\$(hostname -s)/my_host=stewie}"
+eval "$script_text"
+
+# VM-reference gather override (records in _mock_vm_records).
+vm_gather_cmd() { printf '%s\n' "${_mock_vm_records:-}"; }
+
+# read_json_string_field spawns python3 per call; the reconcile suite calls
+# it several times per run (newest-map discovery). The python original is
+# covered by test-export-iscsi-state — use an equivalent awk reader here to
+# keep this suite inside the time budget.
+read_json_string_field() {
+    local file="$1" field="$2"
+    [[ -f "$file" ]] || return 0
+    awk -v f="\"${field}\":" '
+        {
+            line = $0
+            sub(/^[[:space:]]*/, "", line)
+            if (index(line, f) == 1) {
+                val = substr(line, length(f) + 1)
+                sub(/^[[:space:]]*/, "", val)
+                gsub(/^"|"$/, "", val)
+                print val
+                exit
+            }
+        }' "$file"
+}
+
+# ------------------------------------------------------------------
+# Fixtures
+# ------------------------------------------------------------------
+_scratch_root=""
+_helper_log=""
+_manifest_file=""
+_encrypted_file=""
+_mock_vm_records=""
+_helper_scripts=()
+
+bs_line() { printf '  o- %s ........ [%s (1.0GiB) write-thru activated]' "$1" "$2"; }
+lun_line() { printf '  | o- lun%s  [block/%s (/dev/zvol/x) (default_tg_pt_gp)]' "$1" "$2"; }
+
+# Live topology after a bare-metal restore: targets exist, nothing exported.
+live_restored_empty() {
+    _mock_backstores=""
+    _mock_luns_1=""
+    _mock_luns_2=""
+    _mock_acls_1=""
+    _mock_acls_2=""
+    _mock_iscsi_ls=$'o- iscsi ............ [Targets: 2]\n  o- '"${IQN1}"$' [TPGs: 1]\n  o- '
+    _mock_iscsi_ls+="${IQN2}"
+    _mock_iscsi_ls+=$' [TPGs: 1]'
+}
+
+# Live topology matching the map exactly.
+live_healthy() {
+    live_restored_empty
+    local b1 b2
+    b1=$(bs_line vm-101-disk-0 /dev/zvol/threeamigos/proxmox/vm-101-disk-0)
+    b2=$(bs_line vm-205-disk-3 /dev/zvol/NVME1/proxmox/vm-205-disk-3)
+    _mock_backstores="${b1}"$'\n'"${b2}"$'\n'
+    _mock_luns_1=$(lun_line 0 vm-101-disk-0)
+    _mock_luns_2=$(lun_line 5 vm-205-disk-3)
+    _mock_acls_1="  o- ${INIT1} .......... [Mapped LUNs: 1]"
+}
+
+# The canonical two-target map (matching export-iscsi-state's format),
+# rendered once and copied per use (host overrides swap one line).
+render_base_map_json() {
+    python3 - <<'PYEOF'
+import json
+m = {
+    "version": 1,
+    "generated": "2026-10-23T10:00:00+00:00",
+    "host": "stewie",
+    "iqn_prefix": "iqn.2026-02.local.stewie",
+    "storage_ip": "192.168.100.1",
+    "targets": {
+        "iqn.2026-02.local.stewie:threeamigos": {
+            "acls": ["iqn.2026-02.local.tweety"],
+            "luns": {"0": "vm-101-disk-0"}},
+        "iqn.2026-02.local.stewie:nvme1": {
+            "acls": [],
+            "luns": {"5": "vm-205-disk-3"}}},
+    "backstores": {
+        "vm-101-disk-0": {
+            "dev": "/dev/zvol/threeamigos/proxmox/vm-101-disk-0",
+            "target": "iqn.2026-02.local.stewie:threeamigos",
+            "lun": 0},
+        "vm-205-disk-3": {
+            "dev": "/dev/zvol/NVME1/proxmox/vm-205-disk-3",
+            "target": "iqn.2026-02.local.stewie:nvme1",
+            "lun": 5}}}
+print(json.dumps(m, indent=2))
+PYEOF
+}
+_BASE_MAP_JSON=$(render_base_map_json)
+
+write_base_map() {
+    local dst="$1"
+    if [[ "${MAP_HOST:-stewie}" == "stewie" ]]; then
+        printf '%s\n' "$_BASE_MAP_JSON" > "$dst"
+    else
+        printf '%s\n' "$_BASE_MAP_JSON" | sed "s/\"host\": \"stewie\"/\"host\": \"${MAP_HOST}\"/" \
+            > "$dst"
+    fi
+}
+
+# Register both pools as online with a zfsutilities dataset + the base map.
+register_pools_with_map() {
+    _scratch_root=$(mktemp -d)
+    local pool mnt
+    for pool in threeamigos NVME1; do
+        mnt="${_scratch_root}/${pool}"
+        mkdir -p "$mnt"
+        _mock_zfs_mountpoint["${pool}/zfsutilities"]="$mnt"
+        write_base_map "${mnt}/iscsi-state.json"
+    done
+    _mock_zpool_list=$'threeamigos\nNVME1'
+    _mock_zvols_threeamigos=("threeamigos/proxmox/vm-101-disk-0")
+    _mock_zvols_nvme1=("NVME1/proxmox/vm-205-disk-3")
+    _mock_vm_records=$(printf 'VM|threeamigos:0|101|testvm|scsi0\nVM|nvme1:5|205|archvm|scsi0')
+}
+
+# Create mock helper scripts (safe-iscsi-save / export-iscsi-state /
+# rescan-storage) that log their invocation and the suppression env.
+make_mock_helper() {
+    local tag="$1"
+    local p
+    p=$(mktemp)
+    {
+        echo '#!/usr/bin/bash'
+        echo "printf '%s\\n' '${tag}' >> '$_helper_log'"
+        echo 'if [[ -n "${SAFE_ISCSI_SAVE_SKIP_EXPORT_ISCSI_STATE:-}" ]]; then' \
+            "printf 'SUPPRESSED\\n' >> '$_helper_log'; fi"
+    } > "$p"
+    chmod +x "$p"
+    printf '%s' "$p"
+}
+
+reset_mocks() {
+    [[ -n "$_targetcli_log" && -f "$_targetcli_log" ]] && rm -f "$_targetcli_log"
+    _targetcli_log=$(mktemp)
+    local _old_helper_log="$_helper_log"
+    _helper_log=$(mktemp)
+    [[ -n "$_old_helper_log" && -f "$_old_helper_log" ]] && rm -f "$_old_helper_log"
+    local _old
+    for _old in "${_helper_scripts[@]:-}"; do
+        rm -f "$_old"
+    done
+    _helper_scripts=()
+
+    _targetcli_calls=()
+    _mock_backstores=""
+    _mock_iscsi_ls=""
+    _mock_luns_1=""
+    _mock_luns_2=""
+    _mock_acls_1=""
+    _mock_acls_2=""
+    _mock_gen_acls_1="1"
+    _mock_gen_acls_2="1"
+    _mock_zfs_mountpoint=()
+    _mock_encryption=()
+    _mock_zvols_threeamigos=()
+    _mock_zvols_nvme1=()
+    _mock_zpool_list=""
+    _mock_vm_records=""
+    [[ -n "$_scratch_root" && -d "$_scratch_root" ]] && rm -rf "$_scratch_root"
+    _scratch_root=""
+    [[ -n "$_manifest_file" && -f "$_manifest_file" ]] && rm -f "$_manifest_file"
+    [[ -n "$_encrypted_file" && -f "$_encrypted_file" ]] && rm -f "$_encrypted_file"
+    _manifest_file=$(mktemp)
+    _encrypted_file=$(mktemp)
+    printf '# encrypted LUNs\n' > "$_encrypted_file"
+    RECONCILE_ISCSI_STATE_MANIFEST="$_manifest_file"
+    export ISCSI_ENCRYPTED_CONF="$_encrypted_file"
+    local p
+    p=$(make_mock_helper save); _helper_scripts+=("$p")
+    RECONCILE_ISCSI_STATE_SAFE_ISCSI_SAVE="$p"
+    p=$(make_mock_helper export); _helper_scripts+=("$p")
+    RECONCILE_ISCSI_STATE_EXPORT_ISCSI_STATE="$p"
+    p=$(make_mock_helper rescan); _helper_scripts+=("$p")
+    RECONCILE_ISCSI_STATE_RESCAN_STORAGE="$p"
+    dry_run=false
+    assume_yes=false
+    map_from=""
+}
+
+targetcli_log_content() {
+    [[ -f "$_targetcli_log" ]] && cat "$_targetcli_log" || true
+}
+
+helper_log_content() {
+    [[ -f "$_helper_log" ]] && cat "$_helper_log" || true
+}
+
+# Run main() capturing combined output. The script under test re-sources
+# bin/bashinit when eval'd, which reinstates the real log_msg (stderr + long
+# prefix), so assertions grep the captured output rather than the test log.
+run_main() {
+    _main_rc=0
+    _main_out=$(main 2>&1) || _main_rc=$?
+}
+
+log_has() {
+    [[ "$_main_out" == *"$1"* ]]
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_script_loads() {
+    test_start "reconcile-iscsi-state sources with mocked dependencies"
+    if declare -f main >/dev/null 2>&1 \
+        && declare -f plan_reconciliation >/dev/null 2>&1 \
+        && declare -f vm_cross_check >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "main/plan/cross-check functions should be defined after sourcing"
+    fi
+}
+
+test_single_node_silent_exit() {
+    test_start "Single-node mode exits silently at source time"
+    local rc=0 out
+    out=$( NODE_MODE="single-node" eval "$script_text" 2>/dev/null ) || rc=$?
+    if [[ "$rc" -eq 0 && -z "$out" ]]; then
+        test_pass
+    else
+        test_fail "Expected silent exit 0, got rc=$rc out='$out'"
+    fi
+}
+
+test_no_map_found_fails() {
+    reset_mocks
+    live_restored_empty
+    # Pools online but no map anywhere.
+    _scratch_root=$(mktemp -d)
+    local pool
+    for pool in threeamigos NVME1; do
+        _mock_zfs_mountpoint["${pool}/zfsutilities"]="${_scratch_root}/${pool}"
+    done
+    _mock_zpool_list=$'threeamigos\nNVME1'
+    _mock_zvols_threeamigos=("threeamigos/proxmox/vm-101-disk-0")
+    test_start "No map on any pool exits 1"
+
+    run_main
+    if [[ "$_main_rc" -eq 1 ]] && log_has "No iscsi-state.json found on any online pool"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_host_mismatch_refuses() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    MAP_HOST="otherhost" write_base_map "${_scratch_root}/threeamigos/iscsi-state.json"
+    MAP_HOST="otherhost" write_base_map "${_scratch_root}/NVME1/iscsi-state.json"
+    test_start "A map generated on another host is refused"
+
+    run_main
+    if [[ "$_main_rc" -eq 1 ]] && log_has "Map was generated on otherhost"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_from_missing_file_fails() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    map_from="/nonexistent/map.json"
+    test_start "--from with a missing file exits 1"
+
+    run_main
+    if [[ "$_main_rc" -eq 1 ]] && log_has "Map file not found"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_from_explicit_map_wins() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    # An older snapshot holding only the threeamigos entry.
+    local from_map="$_scratch_root/old-snapshot.json"
+    python3 - "$from_map" <<'PYEOF'
+import json, sys
+m = {
+    "version": 1, "generated": "2026-10-20T08:00:00+00:00", "host": "stewie",
+    "iqn_prefix": "iqn.2026-02.local.stewie", "storage_ip": "192.168.100.1",
+    "targets": {"iqn.2026-02.local.stewie:threeamigos":
+                {"acls": [], "luns": {"0": "vm-101-disk-0"}}},
+    "backstores": {"vm-101-disk-0": {
+        "dev": "/dev/zvol/threeamigos/proxmox/vm-101-disk-0",
+        "target": "iqn.2026-02.local.stewie:threeamigos", "lun": 0}}}
+with open(sys.argv[1], "w") as f:
+    json.dump(m, f, indent=2)
+PYEOF
+    map_from="$from_map"
+    assume_yes=true
+    test_start "--from reconciles from the named snapshot only"
+
+    run_main
+    local tlog
+    tlog=$(targetcli_log_content)
+    if [[ "$_main_rc" -eq 0 ]] && log_has "Map: ${from_map}" \
+        && [[ "$tlog" == *"create vm-101-disk-0"* ]] \
+        && [[ "$tlog" != *"vm-205-disk-3"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — expected only the snapshot's entry reconciled"
+    fi
+}
+
+test_clean_restore() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    assume_yes=true
+    test_start "Clean restore recreates backstores and LUNs at recorded numbers"
+
+    run_main
+    local tlog hlog
+    tlog=$(targetcli_log_content)
+    hlog=$(helper_log_content)
+
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    local c1="/backstores/block create vm-101-disk-0" \
+        c1d=" /dev/zvol/threeamigos/proxmox/vm-101-disk-0" \
+        c2="/backstores/block create vm-205-disk-3" \
+        c2d=" /dev/zvol/NVME1/proxmox/vm-205-disk-3" \
+        m1="/iscsi/${IQN1}/tpg1/luns create /backstores/block/vm-101-disk-0 0" \
+        m2="/iscsi/${IQN2}/tpg1/luns create /backstores/block/vm-205-disk-3 5"
+    [[ "$tlog" == *"${c1}${c1d}"* ]] || ok=false
+    [[ "$tlog" == *"${c2}${c2d}"* ]] || ok=false
+    [[ "$tlog" == *"$m1"* ]] || ok=false
+    [[ "$tlog" == *"$m2"* ]] || ok=false
+    [[ "$tlog" == *"emulate_tpu=1"* ]] || ok=false
+    # Manifest regenerated from the ensured set.
+    grep -qxF "vm-101-disk-0" "$_manifest_file" || ok=false
+    grep -qxF "vm-205-disk-3" "$_manifest_file" || ok=false
+    # Finishes: save (hook suppressed), map refresh, rescan.
+    [[ "$hlog" == *"save"* ]] || ok=false
+    [[ "$hlog" == *"SUPPRESSED"* ]] || ok=false
+    [[ "$hlog" == *"export"* ]] || ok=false
+    [[ "$hlog" == *"rescan"* ]] || ok=false
+    # Demo-mode ACL note (the threeamigos ACL missing live self-generates).
+    log_has "demo-mode ACLs" || ok=false
+    # Both VM refs resolve after the reconcile.
+    log_has "still missing" && ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — clean restore did not fully reconcile"
+    fi
+}
+
+test_clean_restore_dry_run() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    dry_run=true
+    test_start "--dry-run plans the recovery without touching anything"
+
+    run_main
+    local tlog
+    tlog=$(targetcli_log_content)
+
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    [[ -z "$tlog" || "$tlog" != *"create"* ]] || ok=false
+    log_has "would be restored by the planned mapping" || ok=false
+    log_has "Would regenerate the manifest" || ok=false
+    [[ ! -s "$_helper_log" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — dry-run made changes or missed annotations"
+    fi
+}
+
+test_lun_slot_conflict_refused() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    # A different backstore already holds threeamigos LUN 0 live.
+    _mock_backstores=$(bs_line vm-999-disk-0 /dev/zvol/threeamigos/proxmox/vm-999-disk-0)$'\n'
+    _mock_luns_1=$(lun_line 0 vm-999-disk-0)
+    _mock_zvols_threeamigos+=("threeamigos/proxmox/vm-999-disk-0")
+    assume_yes=true
+    test_start "LUN slot held by another backstore is refused, never remapped"
+
+    run_main
+    local tlog hlog
+    tlog=$(targetcli_log_content)
+    hlog=$(helper_log_content)
+
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "LUN 0 on threeamigos is held by vm-999-disk-0" || ok=false
+    [[ "$tlog" != *"/backstores/block create vm-101-disk-0"* ]] || ok=false
+    # The healthy nvme1 item still reconciles.
+    [[ "$tlog" == *"/backstores/block create vm-205-disk-3"* ]] || ok=false
+    # Partial reconcile: pool map preserved, no refresh.
+    log_has "Pool LUN map left unchanged" || ok=false
+    [[ "$hlog" != *"export"* ]] || ok=false
+    # The VM ref for the refused item is reported with map identity.
+    log_has "VM 101 (testvm) scsi0 references threeamigos LUN 0" || ok=false
+    log_has "still missing (map: vm-101-disk-0; refused)" || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — conflict not refused per item"
+    fi
+}
+
+test_mapped_at_different_lun_refused() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    # vm-205-disk-3 survived but is mapped at LUN 9 instead of the map's 5.
+    _mock_backstores=$(bs_line vm-205-disk-3 /dev/zvol/NVME1/proxmox/vm-205-disk-3)$'\n'
+    _mock_luns_2=$(lun_line 9 vm-205-disk-3)
+    assume_yes=true
+    test_start "Backstore mapped at a different LUN is refused, never remapped"
+
+    run_main
+    local tlog
+    tlog=$(targetcli_log_content)
+
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "mapped live at nvme1 LUN 9, map records nvme1 LUN 5" || ok=false
+    [[ "$tlog" != *"/iscsi/${IQN2}/tpg1/luns create"* ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — remap drift not refused"
+    fi
+}
+
+test_backstore_dev_conflict_refused() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    # Live backstore of the same name points at a different zvol.
+    _mock_backstores=$(bs_line vm-205-disk-3 /dev/zvol/threeamigos/proxmox/vm-205-disk-3)$'\n'
+    _mock_zvols_threeamigos+=("threeamigos/proxmox/vm-205-disk-3")
+    assume_yes=true
+    test_start "Backstore pointing at a different device is refused"
+
+    run_main
+    local tlog
+    tlog=$(targetcli_log_content)
+
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "vm-205-disk-3: backstore exists but points at" || ok=false
+    [[ "$tlog" != *"/iscsi/${IQN2}/tpg1/luns create"* ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — dev conflict not refused"
+    fi
+}
+
+test_missing_zvol_skipped() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    # The NVME1 zvol is gone (pool offline / dataset deleted).
+    _mock_zvols_nvme1=()
+    _mock_zpool_list="threeamigos"
+    assume_yes=true
+    test_start "Map entries without a zvol are skipped and preserved in the map"
+
+    run_main
+    local hlog
+    hlog=$(helper_log_content)
+
+    local ok=true
+    log_has "vm-205-disk-3: zvol NVME1/proxmox/vm-205-disk-3 does not exist" || ok=false
+    # The other item still reconciles; the manifest drops the dead entry.
+    grep -qxF "vm-101-disk-0" "$_manifest_file" || ok=false
+    grep -qxF "vm-205-disk-3" "$_manifest_file" && ok=false
+    # Skips block the map refresh so the entry survives.
+    log_has "Pool LUN map left unchanged" || ok=false
+    [[ "$hlog" != *"export"* ]] || ok=false
+    # The VM ref for the skipped disk is reported still missing.
+    log_has "still missing (map: vm-205-disk-3; skipped:zvol-missing)" || ok=false
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — missing-zvol skip path incomplete"
+    fi
+}
+
+test_encrypted_reflag() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    _mock_encryption["NVME1/proxmox/vm-205-disk-3"]="aes-256-gcm"
+    assume_yes=true
+    test_start "Encrypted backstores are re-flagged in the encrypted LUNs config"
+
+    run_main
+
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "Re-flagged 1 encrypted backstore" || ok=false
+    grep -qxF "vm-205-disk-3:/dev/zvol/NVME1/proxmox/vm-205-disk-3:nvme1" "$_encrypted_file" \
+        || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — encrypted re-flag missing"
+    fi
+}
+
+test_explicit_acl_recreated() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    # threeamigos TPG runs explicit ACL mode and lost its initiator ACL.
+    _mock_gen_acls_1="0"
+    _mock_backstores=$(bs_line vm-101-disk-0 /dev/zvol/threeamigos/proxmox/vm-101-disk-0)$'\n'
+    _mock_luns_1=$(lun_line 0 vm-101-disk-0)
+    assume_yes=true
+    test_start "Explicit-mode ACLs are recreated with mapped LUNs"
+
+    run_main
+    local tlog
+    tlog=$(targetcli_log_content)
+
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    [[ "$tlog" == *"/iscsi/${IQN1}/tpg1/acls create ${INIT1}"* ]] || ok=false
+    [[ "$tlog" == *"/iscsi/${IQN1}/tpg1/acls/${INIT1} create mapped_lun 0"* ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — explicit ACL not recreated (log: $tlog)"
+    fi
+}
+
+test_vm_ref_no_map_entry_lists_candidates() {
+    reset_mocks
+    live_healthy
+    register_pools_with_map
+    # A VM ref to a LUN the map never recorded, with an unexported candidate
+    # zvol of the same VMID present.
+    _mock_vm_records="VM|threeamigos:7|101|testvm|scsi3"
+    _mock_zvols_threeamigos+=("threeamigos/proxmox/vm-101-disk-9")
+    assume_yes=true
+    test_start "VM refs without a map entry list candidate zvols, never guess"
+
+    run_main
+
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "references threeamigos LUN 7" || ok=false
+    log_has "no map entry for it" || ok=false
+    log_has "candidate unexported zvol: threeamigos/proxmox/vm-101-disk-9" || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_vm_cross_check_unreachable_skipped() {
+    reset_mocks
+    live_healthy
+    register_pools_with_map
+    _mock_vm_records=""
+    assume_yes=true
+    test_start "Unreachable compute host skips the cross-check with a warning"
+
+    run_main
+
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "Could not gather VM disk references from tweety" || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_target_missing_refused() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    # The nvme1 target does not exist live (regressed further than expected).
+    _mock_iscsi_ls=$'o- iscsi ............ [Targets: 1]\n  o- '"$IQN1"' [TPGs: 1]'
+    assume_yes=true
+    test_start "Map entries on a missing target are refused with a pointer"
+
+    run_main
+    local tlog
+    tlog=$(targetcli_log_content)
+
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "vm-205-disk-3: target ${IQN2} does not exist live" || ok=false
+    [[ "$tlog" != *"vm-205-disk-3"* ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_prompt_decline_aborts() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    test_start "Declining the confirmation makes no changes"
+
+    local rc=0 errfile
+    errfile=$(mktemp)
+    printf 'n\n' | main >/dev/null 2>"$errfile" || rc=$?
+    _main_out=$(cat "$errfile")
+    rm -f "$errfile"
+    local tlog
+    tlog=$(targetcli_log_content)
+
+    local ok=true
+    [[ "$rc" -eq 1 ]] || ok=false
+    log_has "Aborted — no changes made" || ok=false
+    [[ "$tlog" != *"create"* ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc — decline did not abort cleanly"
+    fi
+}
+
+test_no_changes_idempotent() {
+    reset_mocks
+    live_healthy
+    register_pools_with_map
+    assume_yes=true
+    test_start "Live state matching the map needs no changes but still finishes"
+
+    run_main
+    local tlog hlog
+    tlog=$(targetcli_log_content)
+    hlog=$(helper_log_content)
+
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "No target-side changes needed" || ok=false
+    [[ "$tlog" != *"create"* ]] || ok=false
+    [[ "$hlog" == *"save"* && "$hlog" == *"export"* && "$hlog" == *"rescan"* ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — idempotent run strayed from finishes-only"
+    fi
+}
+
+test_save_failure_fails() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    assume_yes=true
+    # The save helper fails: the rebuilt LIO tree would not survive a reboot.
+    local fail_save
+    fail_save=$(mktemp)
+    printf '#!/usr/bin/bash\nexit 1\n' > "$fail_save"
+    chmod +x "$fail_save"
+    _helper_scripts+=("$fail_save")
+    RECONCILE_ISCSI_STATE_SAFE_ISCSI_SAVE="$fail_save"
+    test_start "A safe-iscsi-save failure fails the reconcile (exit 1)"
+
+    run_main
+
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "safe-iscsi-save failed — configuration may not be persistent" || ok=false
+    log_has "safe-iscsi-save did not persist the rebuilt tree" || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — save failure not reflected in the exit code"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_script_loads
+test_single_node_silent_exit
+test_no_map_found_fails
+test_host_mismatch_refuses
+test_from_missing_file_fails
+test_from_explicit_map_wins
+test_clean_restore
+test_clean_restore_dry_run
+test_lun_slot_conflict_refused
+test_mapped_at_different_lun_refused
+test_backstore_dev_conflict_refused
+test_missing_zvol_skipped
+test_encrypted_reflag
+test_explicit_acl_recreated
+test_vm_ref_no_map_entry_lists_candidates
+test_vm_cross_check_unreachable_skipped
+test_target_missing_refused
+test_prompt_decline_aborts
+test_no_changes_idempotent
+test_save_failure_fails
+
+# Cleanup
+[[ -n "$_scratch_root" && -d "$_scratch_root" ]] && rm -rf "$_scratch_root"
+rm -f "$_manifest_file" "$_encrypted_file" "$_helper_log" "$_targetcli_log"
+local_cleanup() {
+    local _p
+    for _p in "${_helper_scripts[@]:-}" \
+        "$RECONCILE_ISCSI_STATE_SAFE_ISCSI_SAVE" \
+        "$RECONCILE_ISCSI_STATE_EXPORT_ISCSI_STATE" \
+        "$RECONCILE_ISCSI_STATE_RESCAN_STORAGE"; do
+        rm -f "$_p"
+    done
+}
+local_cleanup
+
+test_summary

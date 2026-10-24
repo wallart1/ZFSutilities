@@ -1,0 +1,643 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-export-iscsi-state — Unit tests for the pool-resident iSCSI state map.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Mocks
+# ------------------------------------------------------------------
+
+# Mock node-lib.sh behavior
+NODE_MODE="two-node"
+storage_host="stewie"
+compute_host="tweety"
+storage_ip="192.168.100.1"
+iqn_prefix="iqn.2026-02.local.stewie"
+declare -A POOL_TARGET=(
+    ["threeamigos"]="threeamigos"
+    ["NVME1"]="nvme1"
+)
+is_single_node() { [[ "$NODE_MODE" == "single-node" ]]; }
+is_two_node()    { [[ "$NODE_MODE" == "two-node" ]]; }
+pool_to_target() {
+    local pool="$1"
+    local short="${POOL_TARGET[$pool]:-}"
+    [[ -n "$short" ]] && echo "${iqn_prefix}:${short}"
+}
+pool_list() { printf '%s\n' "${!POOL_TARGET[@]}"; }
+is_known_pool() { [[ -n "${POOL_TARGET[$1]:-}" ]]; }
+
+# Capture targetcli invocations
+_mock_targetcli_calls=()
+_mock_backstores=""
+_mock_luns_threeamigos=""
+_mock_luns_nvme1=""
+_mock_acls_threeamigos=""
+_mock_acls_nvme1=""
+
+targetcli() {
+    _mock_targetcli_calls+=("$*")
+    case "$*" in
+        "/backstores/block ls")
+            [[ -n "$_mock_backstores" ]] && echo -e "$_mock_backstores"
+            ;;
+        "/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns ls")
+            [[ -n "$_mock_luns_threeamigos" ]] && echo -e "$_mock_luns_threeamigos"
+            ;;
+        "/iscsi/iqn.2026-02.local.stewie:nvme1/tpg1/luns ls")
+            [[ -n "$_mock_luns_nvme1" ]] && echo -e "$_mock_luns_nvme1"
+            ;;
+        "/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/acls ls")
+            [[ -n "$_mock_acls_threeamigos" ]] && echo -e "$_mock_acls_threeamigos"
+            ;;
+        "/iscsi/iqn.2026-02.local.stewie:nvme1/tpg1/acls ls")
+            [[ -n "$_mock_acls_nvme1" ]] && echo -e "$_mock_acls_nvme1"
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+# ZFS mock: dataset existence, mountpoint resolution, and create capture.
+declare -A _mock_zfs_dataset=()
+declare -A _mock_zfs_mountpoint=()
+_mock_zfs_create_calls=()
+_mock_zfs_create_log=""
+
+zfs() {
+    if [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" ]]; then
+        local field="$4" ds="$5"
+        if [[ -n "${_mock_zfs_dataset[$ds]+x}" ]]; then
+            if [[ "$field" == "name" ]]; then
+                echo "$ds"
+            elif [[ "$field" == "mountpoint" ]]; then
+                echo "${_mock_zfs_mountpoint[$ds]:--}"
+            fi
+            return 0
+        fi
+        return 1
+    fi
+    if [[ "$1" == "create" ]]; then
+        _mock_zfs_create_calls+=("$2")
+        # Also append to a log file when enabled: main() runs inside a
+        # command-substitution subshell in the tests below, and the array
+        # update would be lost at the subshell boundary.
+        [[ -n "${_mock_zfs_create_log:-}" ]] && printf '%s\n' "$2" >> "$_mock_zfs_create_log"
+        _mock_zfs_dataset["$2"]=1
+        # A freshly created <pool>/zfsutilities dataset mounts under the
+        # pool's fake root, mirroring real default-mountpoint behavior.
+        if [[ "$2" == */zfsutilities && -n "$_mock_pools_root" ]]; then
+            local p="${2%/zfsutilities}"
+            mkdir -p "${_mock_pools_root}/${p}"
+            _mock_zfs_mountpoint["$2"]="${_mock_pools_root}/${p}"
+        fi
+        return 0
+    fi
+    return 0
+}
+
+# The evaluated script calls find_zfsutility_script to locate rootcheck.
+# Some test environments use an older deployed bashinit that does not define
+# it, so provide a fallback here that keeps the real library path knob in
+# charge of iscsi-lib.sh resolution.
+find_zfsutility_script() { echo "/dev/null"; }
+
+# Skip the real node-lib.sh (mocks above) and source the real shared
+# parsers from lib/iscsi-lib.sh so the tests exercise production code.
+export EXPORT_ISCSI_STATE_NODE_LIB="/dev/null"
+export EXPORT_ISCSI_STATE_ISCSI_LIB="$mydir/lib/iscsi-lib.sh"
+
+# ------------------------------------------------------------------
+# Load the script under test into this shell with node-lib mocked.
+# The script's own BASH_SOURCE guard prevents main() from running.
+# ------------------------------------------------------------------
+old_mydir="$mydir"
+EXPORT_ISCSI_STATE_SKIP_ROOT="Y"
+EXPORT_ISCSI_STATE_TEST_MODE="Y"
+script_text=$(cat "$old_mydir/bin/export-iscsi-state")
+# Ensure MY_HOST is set to the storage host so main() can be tested.
+script_text="${script_text/my_host=\$(hostname -s)/my_host=stewie}"
+eval "$script_text"
+
+# ------------------------------------------------------------------
+# Test helpers
+# ------------------------------------------------------------------
+
+# Scratch root holding per-pool fake mountpoints; recreated per test.
+_mock_pools_root=""
+
+# Register an online pool with a pre-existing zfsutilities dataset whose
+# mountpoint is a fresh scratch directory.
+register_online_pool() {
+    local pool="$1"
+    [[ -d "$_mock_pools_root" ]] || _mock_pools_root=$(mktemp -d)
+    local mnt="${_mock_pools_root}/${pool}"
+    mkdir -p "$mnt"
+    _mock_zfs_dataset["${pool}/zfsutilities"]=1
+    _mock_zfs_mountpoint["${pool}/zfsutilities"]="$mnt"
+    local online="${_mock_zpool_list:+${_mock_zpool_list}$'\n'}${pool}"
+    _mock_zpool_list="$online"
+}
+
+# A healthy two-target mock topology:
+#   threeamigos: vm-101-disk-0 @ lun0, ACL iqn.2026-02.local.tweety
+#   nvme1:       vm-205-disk-3 @ lun5, no ACLs
+load_healthy_topology() {
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]\n  o- vm-205-disk-3 ............ '
+    _mock_backstores+='[/dev/zvol/NVME1/proxmox/vm-205-disk-3 (401.0GiB) write-thru activated]'
+    _mock_luns_threeamigos='  | o- lun0  [block/vm-101-disk-0 '
+    _mock_luns_threeamigos+='(/dev/zvol/threeamigos/proxmox/vm-101-disk-0) (default_tg_pt_gp)]'
+    _mock_luns_nvme1='  | o- lun5  [block/vm-205-disk-3 '
+    _mock_luns_nvme1+='(/dev/zvol/NVME1/proxmox/vm-205-disk-3) (default_tg_pt_gp)]'
+    _mock_acls_threeamigos='o- acls ....... [ACLs: 1]\n  o- iqn.2026-02.local.tweety '
+    _mock_acls_threeamigos+='.............. [Mapped LUNs: 0]'
+    _mock_acls_nvme1=""
+}
+
+reset_mocks() {
+    _mock_targetcli_calls=()
+    _mock_backstores=""
+    _mock_luns_threeamigos=""
+    _mock_luns_nvme1=""
+    _mock_acls_threeamigos=""
+    _mock_acls_nvme1=""
+    _mock_zfs_dataset=()
+    _mock_zfs_mountpoint=()
+    _mock_zfs_create_calls=()
+    _mock_zfs_create_log=""
+    _mock_zpool_list=""
+    check_only=false
+    force_write=false
+    pools_written=0
+    ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
+    NODE_CONF="/etc/zfsutilities/node.conf"
+    [[ -n "$_mock_pools_root" ]] && rm -rf "$_mock_pools_root"
+    _mock_pools_root=""
+}
+
+# Prepare a temp node.conf source file and point NODE_CONF at it.
+# Prints nothing; sets NODE_CONF for the current test.
+use_temp_node_conf() {
+    local conf
+    conf=$(mktemp)
+    printf 'NODE_MODE="two-node"\nSTORAGE_HOST="stewie"\n' > "$conf"
+    NODE_CONF="$conf"
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_script_loads() {
+    test_start "export-iscsi-state sources with mocked dependencies"
+    if declare -f main >/dev/null 2>&1 \
+        && declare -f parse_backstores >/dev/null 2>&1 \
+        && declare -f parse_target_acls >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "main/parse functions should be defined after sourcing"
+    fi
+}
+
+test_single_node_silent_exit() {
+    test_start "Single-node mode exits silently at source time"
+    local rc=0 out
+    out=$( NODE_MODE="single-node" eval "$script_text" 2>/dev/null ) || rc=$?
+    if [[ "$rc" -eq 0 && -z "$out" ]]; then
+        test_pass
+    else
+        test_fail "Expected silent exit 0, got rc=$rc out='$out'"
+    fi
+}
+
+test_parse_target_acls() {
+    reset_mocks
+    load_healthy_topology
+    test_start "parse_target_acls extracts sorted initiator IQNs"
+
+    parse_target_acls "iqn.2026-02.local.stewie:threeamigos"
+
+    if [[ "${#_acl_initiators[@]}" -eq 1 ]] \
+        && [[ "${_acl_initiators[0]}" == "iqn.2026-02.local.tweety" ]]; then
+        test_pass
+    else
+        test_fail "Expected one ACL initiator, got: ${_acl_initiators[*]:-none}"
+    fi
+}
+
+test_state_json_structure() {
+    reset_mocks
+    load_healthy_topology
+    test_start "State map JSON records topology with correct structure"
+
+    collect_live_state
+    local json
+    json=$(emit_state_json)
+    printf '%s\n' "$json" > /tmp/export-iscsi-state-struct.$$.json
+
+    local ok
+    ok=$(python3 - "$$" <<'PYEOF'
+import json, sys, os
+p = "/tmp/export-iscsi-state-struct.%s.json" % sys.argv[1]
+with open(p) as f:
+    m = json.load(f)
+checks = [
+    m.get("version") == 1,
+    m.get("iqn_prefix") == "iqn.2026-02.local.stewie",
+    m.get("storage_ip") == "192.168.100.1",
+    m.get("host") == "stewie",
+    "generated" in m,
+    m["targets"]["iqn.2026-02.local.stewie:threeamigos"]["luns"] == {"0": "vm-101-disk-0"},
+    m["targets"]["iqn.2026-02.local.stewie:threeamigos"]["acls"] == ["iqn.2026-02.local.tweety"],
+    m["targets"]["iqn.2026-02.local.stewie:nvme1"]["luns"] == {"5": "vm-205-disk-3"},
+    m["backstores"]["vm-101-disk-0"] == {
+        "dev": "/dev/zvol/threeamigos/proxmox/vm-101-disk-0",
+        "target": "iqn.2026-02.local.stewie:threeamigos",
+        "lun": 0},
+    m["backstores"]["vm-205-disk-3"]["dev"] == "/dev/zvol/NVME1/proxmox/vm-205-disk-3",
+]
+os.unlink(p)
+print("OK" if all(checks) else "FAIL:%d" % checks.index(False))
+PYEOF
+    )
+
+    if [[ "$ok" == "OK" ]]; then
+        test_pass
+    else
+        test_fail "Structure check failed ($ok)"
+    fi
+}
+
+test_golden_state_json() {
+    reset_mocks
+    load_healthy_topology
+    test_start "State map JSON is deterministic (golden)"
+
+    collect_live_state
+    assert_golden "state-map" "$(emit_state_json | grep -v '"generated"')"
+}
+
+test_unmapped_backstore_dev_only() {
+    reset_mocks
+    test_start "Backstore without a LUN mapping is recorded without target/lun"
+
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]'
+    _mock_luns_threeamigos=""
+    _mock_acls_threeamigos=""
+
+    collect_live_state
+    printf '%s\n' "$(emit_state_json)" > /tmp/export-iscsi-state-unmapped.$$.json
+    local ok
+    ok=$(python3 - "$$" <<'PYEOF'
+import json, sys, os
+p = "/tmp/export-iscsi-state-unmapped.%s.json" % sys.argv[1]
+with open(p) as f:
+    m = json.load(f)
+bs = m["backstores"]["vm-101-disk-0"]
+ok = bs.get("dev") == "/dev/zvol/threeamigos/proxmox/vm-101-disk-0" \
+    and "target" not in bs and "lun" not in bs
+os.unlink(p)
+print("OK" if ok else "FAIL")
+PYEOF
+    )
+
+    if [[ "$ok" == "OK" ]]; then
+        test_pass
+    else
+        test_fail "Unmapped backstore should carry dev only ($ok)"
+    fi
+}
+
+test_state_written_to_all_online_pools() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    register_online_pool "NVME1"
+    use_temp_node_conf
+    local node_conf="$NODE_CONF"
+    test_start "State map and node.conf copy land on every online pool"
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+
+    local mnt1="${_mock_pools_root}/threeamigos"
+    local mnt2="${_mock_pools_root}/NVME1"
+    if [[ "$rc" -eq 0 ]] \
+        && [[ -f "$mnt1/iscsi-state.json" && -f "$mnt1/node.conf" ]] \
+        && [[ -f "$mnt2/iscsi-state.json" && -f "$mnt2/node.conf" ]] \
+        && diff -q "$node_conf" "$mnt1/node.conf" >/dev/null; then
+        test_pass
+    else
+        test_fail "rc=$rc pools_written=$pools_written — files missing or node.conf differs"
+    fi
+    rm -f "$node_conf"
+}
+
+test_no_temp_files_left_behind() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+    test_start "Pool writes leave no temp files behind"
+
+    local _out
+    _out=$( main 2>/dev/null ) || true
+
+    local leftovers
+    leftovers=$(find "$_mock_pools_root" -name '*.tmp.*' -print -quit)
+    if [[ -z "$leftovers" ]]; then
+        test_pass
+    else
+        test_fail "Temp file left behind: $leftovers"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_dataset_created_on_first_use() {
+    reset_mocks
+    load_healthy_topology
+    # Pool online but without the zfsutilities dataset yet.
+    _mock_pools_root=$(mktemp -d)
+    _mock_zpool_list="threeamigos"
+    use_temp_node_conf
+    test_start "zfsutilities dataset is created on first use"
+
+    _mock_zfs_create_log=$(mktemp)
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+
+    # main() ran in a subshell, so assert the create call via the log file.
+    local created=false called
+    while IFS= read -r called; do
+        [[ "$called" == "threeamigos/zfsutilities" ]] && created=true
+    done < "$_mock_zfs_create_log"
+    rm -f "$_mock_zfs_create_log"
+    _mock_zfs_create_log=""
+
+    if [[ "$rc" -eq 0 && "$created" == true ]] \
+        && [[ -f "${_mock_pools_root}/threeamigos/iscsi-state.json" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc created=$created — dataset not created or map not written"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_offline_pool_skipped_with_warning() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    # NVME1 configured in node.conf but not imported.
+    _mock_zpool_list="threeamigos"
+    use_temp_node_conf
+    test_start "Offline pools are skipped; online pools still written"
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+
+    if [[ "$rc" -eq 0 ]] \
+        && [[ ! -e "${_mock_pools_root}/NVME1" ]] \
+        && [[ -f "${_mock_pools_root}/threeamigos/iscsi-state.json" ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc pools_written=$pools_written"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_no_pool_written_fails() {
+    reset_mocks
+    load_healthy_topology
+    # No pools imported at all.
+    _mock_zpool_list=""
+    use_temp_node_conf
+    test_start "Writing to zero pools exits 1"
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+
+    assert_rc 1 "$rc"
+    rm -f "$NODE_CONF"
+}
+
+test_degraded_refuses_overwrite() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    # Record the healthy state first.
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    # Degrade: manifest still expects both backstores, live shows one.
+    ISCSI_MANIFEST=$(mktemp)
+    printf 'vm-101-disk-0\nvm-205-disk-3\n' > "$ISCSI_MANIFEST"
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]'
+    _mock_luns_nvme1=""
+
+    test_start "Degraded live state refuses to overwrite the pool map"
+
+    rc=0
+    out=$( main 2>/dev/null ) || rc=$?
+    local map_file="${_mock_pools_root}/threeamigos/iscsi-state.json"
+
+    if [[ "$rc" -eq 1 ]] && grep -q 'vm-205-disk-3' "$map_file"; then
+        test_pass
+    else
+        test_fail "rc=$rc — degraded export should refuse and keep the healthy map"
+    fi
+    rm -f "$ISCSI_MANIFEST" "$NODE_CONF"
+}
+
+test_degraded_force_records() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    ISCSI_MANIFEST=$(mktemp)
+    printf 'vm-101-disk-0\nvm-205-disk-3\n' > "$ISCSI_MANIFEST"
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]'
+    _mock_luns_nvme1=""
+    force_write=true
+
+    test_start "--force records a degraded state over the healthy map"
+
+    rc=0
+    out=$( main 2>/dev/null ) || rc=$?
+    local map_file="${_mock_pools_root}/threeamigos/iscsi-state.json"
+
+    if [[ "$rc" -eq 0 ]] && ! grep -q 'vm-205-disk-3' "$map_file"; then
+        test_pass
+    else
+        test_fail "rc=$rc — forced export should record the degraded state"
+    fi
+    rm -f "$ISCSI_MANIFEST" "$NODE_CONF"
+}
+
+test_degraded_refuses_via_map_fallback() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    # Record the healthy two-backstore state first.
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    # Post-restore shape: the manifest regressed with the OS disk (missing),
+    # and only one of the two backstores is live. The fence must fall back
+    # to the newest pool map for the expected count.
+    ISCSI_MANIFEST="/nonexistent/expected-backstores.txt"
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]'
+    _mock_luns_nvme1=""
+
+    test_start "Degraded state refuses via map fallback when the manifest is missing"
+
+    rc=0
+    out=$( main 2>/dev/null ) || rc=$?
+    local map_file="${_mock_pools_root}/threeamigos/iscsi-state.json"
+
+    if [[ "$rc" -eq 1 ]] && grep -q 'vm-205-disk-3' "$map_file"; then
+        test_pass
+    else
+        test_fail "rc=$rc — map-fallback fence should refuse and keep the healthy map"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_check_no_drift() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    test_start "--check reports no drift against a fresh map"
+
+    check_only=true
+    rc=0
+    out=$( main 2>/dev/null ) || rc=$?
+    check_only=false
+
+    assert_rc 0 "$rc"
+    rm -f "$NODE_CONF"
+}
+
+test_check_reports_drift() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    # Manual targetcli edits: nvme1's LUN 5 now points at a different
+    # backstore, and the threeamigos ACL was removed.
+    _mock_luns_nvme1='  | o- lun5  [block/vm-205-disk-4 '
+    _mock_luns_nvme1+='(/dev/zvol/NVME1/proxmox/vm-205-disk-4) (default_tg_pt_gp)]'
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]\n  o- vm-205-disk-4 ............ '
+    _mock_backstores+='[/dev/zvol/NVME1/proxmox/vm-205-disk-4 (401.0GiB) write-thru activated]'
+    _mock_acls_threeamigos=""
+
+    test_start "--check reports LUN and ACL drift, exit 1"
+
+    check_only=true
+    local out
+    rc=0
+    out=$( main 2>/dev/null ) || rc=$?
+    check_only=false
+
+    if [[ "$rc" -eq 1 ]] \
+        && [[ "$out" == *"LUN 5 moved: map -> vm-205-disk-3, live -> vm-205-disk-4"* ]] \
+        && [[ "$out" == *"ACL initiator iqn.2026-02.local.tweety is missing live"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_check_without_map_fails() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+    # No export run: no map on any pool.
+
+    test_start "--check with no map on any pool exits 1"
+
+    check_only=true
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    check_only=false
+
+    assert_rc 1 "$rc"
+    rm -f "$NODE_CONF"
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_script_loads
+test_single_node_silent_exit
+test_parse_target_acls
+test_state_json_structure
+test_golden_state_json
+test_unmapped_backstore_dev_only
+test_state_written_to_all_online_pools
+test_no_temp_files_left_behind
+test_dataset_created_on_first_use
+test_offline_pool_skipped_with_warning
+test_no_pool_written_fails
+test_degraded_refuses_overwrite
+test_degraded_force_records
+test_degraded_refuses_via_map_fallback
+test_check_no_drift
+test_check_reports_drift
+test_check_without_map_fails
+
+[[ -n "$_mock_pools_root" && -d "$_mock_pools_root" ]] && rm -rf "$_mock_pools_root"
+
+test_summary
