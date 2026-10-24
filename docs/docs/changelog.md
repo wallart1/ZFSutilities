@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.130.0
+
+*Released 2026-10-24*
+
+### Added
+
+- **Fast re-verification for install-start journeys.** `itf journey
+  run NAME --rerun` now replays on the previous run's guests for
+  install-start journeys too: each recorded guest is rolled back to
+  its `os-installed` checkpoint (via `qm rollback`, a guarded verb),
+  restarted, and re-discovered instead of a full Debian preseed
+  reinstall — the fix-verify loop for j01/j08/j09 staging drops from
+  minutes to seconds. A rolled-back guest is a clean Debian with the
+  prerequisites genuinely missing, so failure-path coverage is
+  unchanged; deeper checkpoints (`pools-created`) are deliberately
+  never rerun sources (a pre-installed lab would route the installer
+  into its upgrade branch). The rollback restores the checkpoint's
+  VM config, so the installer-time CPU freeze is cleared between the
+  rollback and the start.
+- **Installer failure-path journeys.** `j08-prereq-decline`: a
+  first-time user declines prerequisite remediation — the installer
+  aborts gracefully with re-run instructions and the guest stays a
+  clean Debian (no deployment, no node.conf, no PATH wiring).
+  `j09-prereq-apt-failure`: apt breaks behind the user (a dead
+  HTTP-proxy drop-in, the misconfigured-site shape) before both
+  remediation prompts are accepted — the installer surfaces the apt
+  failure cleanly, nothing half-deploys, and removing the drop-in
+  surgically restores apt. Both assert the installer's exit code and
+  its user-facing message separately.
+- **Journey staging helpers.** `itf_journey_stage_prepare_install` is
+  the shared prefix of every installer journey (download tooling, the
+  user's download, the expected-to-fail prerequisite check) for
+  failure-path journeys that drive the installer with their own
+  feeds; `itf_journey_run_installer` takes an optional expected exit
+  code so a graceful installer abort can be asserted as a pass.
+
+### Fixed
+
+- **`--rerun` source resolution never saw a usable prior run.** The
+  just-created run directory matched the source glob and read as
+  still active (its own pid alive, no `finished:` yet), so every
+  rerun could refuse on its own run; the driver now excludes the new
+  run from candidates.
+- **Rerun checkpoint detection missed real `qm listsnapshot`
+  output.** The `as-cloned` presence check parsed the snapshot name
+  from the first field, but real output puts the tree arrow there;
+  both checkpoint checks now pin the real shape.
+- **Stale snapshots collided with the replay.** Snapshots newer than
+  the staging checkpoint survive a rollback on this stack but go
+  stale, and the replay re-snapshots the same names; both rerun
+  branches now remove them first (recorded as explicit steps).
+
+### Tests
+
+- itf driver suites pin the rerun contracts end to end: dispatch and
+  every refusal shape against planted run directories, the
+  rollback-instead-of-clone and rollback-instead-of-install branches
+  in-process with stubbed transports, the rollback → freeze-clear →
+  start ordering law, and the fresh-run paths still cloning and
+  installing. The installer-runner's expected-exit-code contract and
+  the shared staging prefix's tolerance of the expected prerequisite
+  failure are pinned in-process; the journey list can no longer
+  silently drift as journeys are added.
+
+### Documentation
+
+- New "Fast re-verification" section in the developer guide's
+  integrated-testing page; the itf usage blocks, journey tables, and
+  roadmap phases refreshed (two-node complete, fast re-verification +
+  failure paths complete); the testing overview's orchestrator
+  paragraph now describes the real coverage; `tests/AGENTS.md` gained
+  the integrated-validation guidance section.
+
 ## 0.129.0
 
 *Released 2026-10-23*

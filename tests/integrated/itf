@@ -34,8 +34,9 @@
 #   itf journey list                  list available journeys
 #   itf journey run NAME              execute a journey under a run report
 #   itf journey run NAME --rerun      replay on the previous run's guests:
-#                                     rollback to the as-cloned checkpoint
-#                                     instead of re-cloning templates
+#                                     rollback to the staging checkpoint
+#                                     (as-cloned / os-installed) instead
+#                                     of re-cloning or reinstalling
 #   itf watch [TAG]                   tail a run's live report + serial
 #                                     transcript (Ctrl-C stops) — the safe
 #                                     alternative to opening a PVE console
@@ -399,7 +400,16 @@ cmd_template() {
 _journey_rerun_prepare() {
     local name="$1" run state src="" rec base vmid summary=""
     local -a runs=()
-    mapfile -t runs < <(ls -1d "$ITF_RUNS_DIR"/run-*-"$name" 2>/dev/null | sort -r)
+    # The just-created run dir also matches the glob and reads as running
+    # (its own pid is alive, no finished: yet) — it must never be picked
+    # as its own rerun source.
+    local cand
+    while IFS= read -r cand; do
+        if [[ "$cand" == "$ITF_RUN_DIR" ]]; then
+            continue
+        fi
+        runs+=("$cand")
+    done < <(ls -1d "$ITF_RUNS_DIR"/run-*-"$name" 2>/dev/null | sort -r)
     if (( ${#runs[@]} == 0 )); then
         itf_step fail "rerun source" \
             "no prior run of $name under $ITF_RUNS_DIR — run fresh first"
@@ -438,7 +448,7 @@ _journey_rerun_prepare() {
         fi
     done
     itf_step info "rerun source" \
-        "$(basename "$src") — guests rolled back to as-cloned instead of re-cloned:$summary"
+        "$(basename "$src") — rollback to as-cloned/os-installed (no re-clone/reinstall):$summary"
     echo "itf: rerun of $(basename "$src"):$summary"
     return 0
 }

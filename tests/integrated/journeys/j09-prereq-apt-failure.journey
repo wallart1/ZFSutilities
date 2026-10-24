@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# j09-prereq-apt-failure.journey — installer failure path: apt breaks mid-remediation.
+#
+# A first-time user on a fresh Debian system accepts BOTH remediation
+# prompts, but apt is broken behind the user — here a dead HTTP proxy
+# drop-in, the classic misconfigured-site shape.  The installer must
+# surface the apt failure cleanly (rc 1, diagnostics intact), not
+# swallow it and not half-deploy.  The break is surgical: removing the
+# drop-in restores apt.
+#
+# Guest state required: none — installs its own guest (as with j08, the
+# prerequisites must be genuinely missing for the remediation prompts).
+# Snapshots produced: os-installed (clean Debian).
+#
+# Pairs with j08 (the decline path); both replay the same fresh-OS
+# staging as j01.
+
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+journey_main() {
+    local gname="j09"
+    local guest_hostname="itfj09"
+
+    itf_step info "journey start" \
+        "j09 prereq apt failure; sw-source=$ITF_SW_SOURCE repo=$ITF_GITHUB_REPO"
+
+    if itf_iso_fetch > /dev/null 2>&1; then
+        itf_step pass "installer ISO cached" "$ITF_CACHE_DIR/$ITF_ISO_NAME"
+    else
+        itf_step fail "installer ISO cached" "itf iso fetch failed"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage A: fresh Debian
+    # ------------------------------------------------------------------
+    itf_journey_stage_os "$gname" "$guest_hostname" || return 1
+    local guest_ip="$J_GUEST_IP"
+
+    # ------------------------------------------------------------------
+    # Stage B: download tooling, the user's download, the prerequisite
+    # check reporting the missing items
+    # ------------------------------------------------------------------
+    itf_journey_stage_prepare_install "$guest_ip" || return 1
+
+    # ------------------------------------------------------------------
+    # Stage C: break apt BEHIND the user, then accept both remediation
+    # prompts — the installer must surface the apt failure (rc 1)
+    # ------------------------------------------------------------------
+    # The proxy drop-in lands after the tooling install (curl came
+    # through apt) and after the download (curl ignores apt's proxy
+    # config), and makes every apt fetch fail — update and install
+    # alike, deterministically (connection refused, no timeouts).
+    if itf_guest_exec "$guest_ip" \
+            "printf 'Acquire::http::Proxy \"http://127.0.0.1:1/\";\n' \
+             > /etc/apt/apt.conf.d/99itf-dead-proxy" \
+            > "$ITF_RUN_DIR/apt-break.log" 2>&1; then
+        itf_step pass "apt broken behind the user" \
+            "dead proxy drop-in (127.0.0.1:1) — the misconfigured-site shape"
+    else
+        itf_step fail "apt broken behind the user" "see apt-break.log"
+        return 1
+    fi
+
+    # Feed: y at "Install missing required prerequisites now?", y at
+    # "Proceed with installation?" — then apt fails.
+    itf_journey_run_installer "$guest_ip" 'y\ny\n' \
+        "installer surfaces the apt failure" 1 || return 1
+
+    if grep -q "Automatic installation failed" "$ITF_RUN_DIR/guest-install.log"; then
+        itf_step pass "apt failure surfaced" \
+            "installer reports the failed remediation with re-run instructions"
+    else
+        itf_step fail "apt failure surfaced" "see guest-install.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage D: nothing was deployed, and the break was surgical —
+    # removing the drop-in restores apt for the user's re-run
+    # ------------------------------------------------------------------
+    if itf_guest_exec "$guest_ip" \
+            "test ! -e /usr/local/lib/zfsutilities \
+             && test ! -e /etc/zfsutilities/node.conf \
+             && ! bash -lc \"command -v zfsdailybackup\"" \
+            > "$ITF_RUN_DIR/guest-untouched.log" 2>&1; then
+        itf_step pass "guest left unmodified" \
+            "no deployment, no node.conf, no PATH wiring"
+    else
+        itf_step fail "guest left unmodified" "see guest-untouched.log"
+        return 1
+    fi
+
+    if itf_guest_exec "$guest_ip" \
+            "rm -f /etc/apt/apt.conf.d/99itf-dead-proxy && apt-get update -qq" \
+            > "$ITF_RUN_DIR/apt-restore.log" 2>&1; then
+        itf_step pass "apt restored" \
+            "drop-in removed, apt-get update clean — the site heals on re-run"
+    else
+        itf_step fail "apt restored" "see apt-restore.log"
+    fi
+    return 0
+}

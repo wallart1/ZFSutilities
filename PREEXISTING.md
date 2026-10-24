@@ -18,7 +18,11 @@
   (Rechecked 2026-10-16: 0.0.71; still no 1.x.)
   (Rechecked 2026-10-22: unchanged, 0.0.71.)
   (Rechecked 2026-10-22 wrap-up: unchanged, 0.0.71 — no 1.x; hold stands.
-  Rechecked 2026-10-23 wrap-up: unchanged, 0.0.71 — no 1.x; hold stands.)
+  Rechecked 2026-10-23 wrap-up: unchanged, 0.0.71 — no 1.x; hold stands.
+  Rechecked 2026-10-23 (itf cycle): 0.0.72 — first movement since 10-16,
+  still no 1.x; hold stands. The mkdocs<2 pin remains the documented
+  product stance — doc-server.md and messages/index.md carry it.
+  Rechecked 2026-10-24 wrap-up: unchanged, 0.0.72 — no 1.x; hold stands.)
 
 - (future objective, migration/create fidelity — narrowed 2026-10-03):
   No creation path (Create Pool wizard or Migrate Pool) can *plan*

@@ -75,6 +75,9 @@ tests/integrated/itf iso upload       # push it to the base ISO storage
 tests/integrated/itf template build   # rebuild the post-install baseline
 tests/integrated/itf journey list
 tests/integrated/itf journey run j01-fresh-install
+tests/integrated/itf journey run <name> --rerun
+                                    # replay on the previous run's guests
+                                    # (rollback to as-cloned — no clone)
 tests/integrated/itf watch            # tail the active run — NOT a console
 tests/integrated/itf status           # guests + template + runs overview
 ```
@@ -182,6 +185,49 @@ the post-install point in a minute or two instead of repeating the
   reading the template is its purpose); `itf template build`/`destroy`
   are the sanctioned management paths and are audit-logged like every
   other mutation.
+
+## Fast re-verification: `journey run --rerun`
+
+Fix-verify loops are the daily reality of the repair workflow, and the
+staging step — the template clone on a clone-start journey, the OS
+install on an install-start one — is also the most redundant one on a
+re-verify: the previous run's guests are still there, each carrying its
+staging checkpoint (`as-cloned`, or `os-installed` on install-start
+journeys like j01/j08/j09). `itf journey run
+<name> --rerun` uses exactly that:
+
+- The driver resolves the source run (the newest run of the same journey
+  that is not still active and recorded at least one guest), writes the
+  new run's `rerun-guests.tsv` from its guest records, and names the
+  choice in a `rerun source` INFO step.
+- Each staging stage (`itf_journey_stage_from_template`,
+  `itf_journey_stage_os`) finds its guest in the spec, verifies it still
+  exists and carries its checkpoint, rolls it back (`qm rollback`, a
+  guarded verb), starts it, and re-discovers its IP — the report reads
+  "guest rolled back to as-cloned … no re-clone" (or "… to
+  os-installed … no reinstall"). Everything after replays in full; a
+  rolled-back install-start guest is a clean Debian with the
+  prerequisites genuinely missing, so failure-path journeys keep their
+  coverage.
+- Only the staging step is skipped. The product download and install
+  stages re-run deliberately: they install the tree under test, which is
+  the point of the re-verify. (Deeper checkpoints such as `pools-created`
+  are intentionally NOT rerun sources — replaying from one would leave
+  the lab pre-installed and route the installer into its upgrade branch,
+  silently weakening coverage.)
+- Refusals are explicit, never a silent fallback: no prior run, an
+  active source run, destroyed guests, or a missing checkpoint each fail
+  fast with the remedy (run fresh, no `--rerun`).
+- Snapshots newer than the checkpoint survive a `qm rollback` on this
+  stack but go stale, and the replay re-snapshots the same names — so
+  the rerun branch removes them explicitly before rolling back.  The
+  rollback reverts VM config (hot-plugged NICs, the pool disk), which
+  the journey re-attaches — a rerun is indistinguishable from a fresh
+  staging in coverage.  An install-start guest's checkpoint config
+  still carries the installer-time CPU freeze, so the `stage_os` rerun
+  clears it between the rollback and the start (clones get the same
+  clearing in `itf_guest_clone`). Destroy the guests (`itf guest
+  destroy`) when the loop is done.
 
 ## Two-node topology
 

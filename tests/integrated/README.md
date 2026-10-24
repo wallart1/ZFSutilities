@@ -31,6 +31,12 @@ tests/integrated/itf template build # post-install baseline template (once
                                     # per release; one unattended install)
 tests/integrated/itf journey list
 tests/integrated/itf journey run <name>
+tests/integrated/itf journey run <name> --rerun
+                                    # replay on the previous run's guests:
+                                    # rollback to the staging checkpoint
+                                    # (as-cloned / os-installed) instead
+                                    # of re-cloning or reinstalling (fast
+                                    # re-verify)
 tests/integrated/itf watch          # tail the active run — NOT the console
 ```
 
@@ -108,7 +114,8 @@ by rerunning the journey on a dev-built tarball.  See
 | 1 | orchestrator MVP: driver, guard libs, site schema, own tests, docs | complete |
 | 2 | cycle-1 journeys (fresh install, uninstall/reinstall, install-over-leftovers) | complete |
 | 2.5 | post-install baseline template (`qm template` + full clone): j02/j03 convert to clone-start, j04 validates; journeys begin at the installed state without reinstalling | complete |
-| 3 | two-node cycle: compute-role base host + PVE-ISO compute template, P2P cross-node link, j05 two-node install + first-LUN verify | in progress |
-| 3+ | release upgrades, GUI automation, failure injection, OS matrix (more template profiles) | planned |
+| 3 | two-node cycle: compute-role base host + PVE-ISO compute template, P2P cross-node link, j05 two-node install + first-LUN verify | complete |
+| 3.5 | fast re-verification (`journey run --rerun`: rollback to `as-cloned` instead of re-cloning) + installer failure paths (j08 prereq decline, j09 apt failure) | complete |
+| 3+ | release upgrades, GUI automation, further failure injection, OS matrix (more template profiles) | planned |
 
 Developer-facing detail: `docs/docs/developer-guide/integrated-testing.md`.

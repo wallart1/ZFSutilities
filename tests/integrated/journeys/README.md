@@ -68,12 +68,47 @@ j05-style scenarios span two guests on two base hosts:
    section), so the installer's deploy push to the compute host is part
    of what the journey exercises.
 
+## Rerunning a journey (--rerun)
+
+`itf journey run <name> --rerun` replays a journey on the PREVIOUS run's
+guests instead of re-staging them: each recorded guest is rolled back to
+its staging checkpoint (`as-cloned` for clone-start journeys,
+`os-installed` for install-start ones like j01/j08/j09), restarted, and
+re-discovered; the journey then replays in full.  A rolled-back
+install-start guest is a clean Debian with the prerequisites genuinely
+missing — the same starting state a fresh install produces.
+
+- The source run is the newest run of the SAME journey that is not still
+  active and recorded at least one guest (the `rerun source` INFO step
+  names it); the new run's `rerun-guests.tsv` maps guest-record names to
+  base/VMID pairs.
+- Only the staging step is skipped — the template clone or the OS
+  install (minutes to tens of minutes per guest); the product download
+  and install stages re-run deliberately — they carry the tree under
+  test, which is the point of a re-verify.
+- Refusals are explicit: no prior run, a still-active source, destroyed
+  guests, or a missing checkpoint snapshot each fail fast with the fix
+  (run fresh, no --rerun) — never a surprise full clone or reinstall.
+- The workflow is run → fix → `--rerun` → …; destroy the guests
+  (`itf guest destroy`) when the loop is done.  Snapshots newer than
+  the staging checkpoint survive a `qm rollback` but go stale — the
+  rerun removes them first so the replay can re-create them under the
+  same names.  The rollback also reverts hot-plugged NICs/disks, which
+  the journey re-attaches, and restores the checkpoint's VM config —
+  an install-start guest's config still carries the installer-time CPU
+  freeze, so the rerun clears it between the rollback and the start
+  (the clone path clears the same inherited flag on every clone).
+
 ## Current set
 
 | Journey | Scenario |
 |---------|----------|
-| j01-fresh-install | flagship: install from release, test pools, backup/retention/scrub/restore, schedule, GUI smoke |
+| j01-fresh-install | flagship: fresh-OS install from release/dev tarball, prereq remediation, test pools; daily-workflow stages land in later cycles |
 | j02-uninstall-reinstall | clone start, purge, assert clean state, reinstall, assert working |
 | j03-install-over-leftovers | clone start, staged partial uninstall, installer detects/cleans/completes |
 | j04-post-install-baseline | validates the template path end to end: clone, wiring, pools, product surface |
 | j05-two-node-install | two guests on two base hosts: P2P link, storage-side install, compute-side deploy, first LUN round trip |
+| j06-guest-probe-validator | composes the j05 lab, then the guest-probe validator over real datasets — honest degradation when guest agents are absent |
+| j07-unarchive-iscsi-rebuild | composes the j05 lab, archives a VM, destroys the target and injects IQN drift, verifies unarchive-vm rebuilds targets and logs in |
+| j08-prereq-decline | fresh Debian; installer aborts gracefully when the user declines prerequisite remediation — nothing deployed |
+| j09-prereq-apt-failure | fresh Debian with a dead-apt proxy; installer surfaces the remediation failure cleanly — nothing deployed, apt heals when the drop-in is removed |

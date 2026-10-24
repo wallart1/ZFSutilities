@@ -5,6 +5,8 @@
 #   itf_journey_stage_os <gname> <hostname> [--base B] [--role R]
 #       Fresh Debian guest: custom serial-console ISO + preseed install,
 #       IP discovery, root SSH, os-installed snapshot.
+#       Under --rerun: roll the previous run's guest back to its
+#       os-installed checkpoint instead of reinstalling.
 #       Sets globals J_VMID and J_GUEST_IP on success.
 #   itf_journey_stage_pve_os <gname> <hostname> [--base B] [--role R]
 #       Fresh Proxmox VE guest: auto-installer boot ISO (answers embedded,
@@ -15,6 +17,10 @@
 #       First-time-user product install: download (per ITF_SW_SOURCE),
 #       expected-to-fail prerequisite check on the fresh system,
 #       install-single-node with piped answers, installed-state verify.
+#   itf_journey_stage_prepare_install <guest-ip>
+#       The shared prefix of stage_install without the installer run —
+#       download tooling, the user's download, the prerequisite check —
+#       for failure-path journeys that drive the installer themselves.
 #   itf_journey_stage_from_template <gname> [--base B] [--template T] [--role R]
 #       Clone start: full-clone a post-install baseline template
 #       (itf template build) instead of installing — the fast path for
@@ -50,6 +56,114 @@ itf_journey_stage_os() {
     local guest_file="$ITF_RUN_DIR/guest.txt"
     [[ -n "$role" ]] && guest_file="$ITF_RUN_DIR/guest-${role}.txt"
     local vmid guest_ip dev_ip preseed_file serve_dir
+
+    # --rerun: replay on the previous run's guest — a rollback to the
+    # os-installed checkpoint replaces the whole install machinery (the
+    # driver put the recorded guests in rerun-guests.tsv; nothing there =
+    # fresh run).  The rolled-back guest is a clean Debian with the
+    # prerequisites genuinely missing, so install-start journeys (j01,
+    # j08, j09) keep their coverage — a template clone can never stand in
+    # for that.
+    local rerun_pair r_base r_vmid
+    rerun_pair="$(itf_rerun_guest "$(basename "$guest_file")")"
+    if [[ -n "$rerun_pair" ]]; then
+        r_base="${rerun_pair%% *}"
+        r_vmid="${rerun_pair##* }"
+        # Remember the guest for post-mortem/diagnostics even if we abort.
+        echo "$r_base $r_vmid" > "$guest_file"
+        if itf_qm "$r_base" status "$r_vmid" \
+                > "$ITF_RUN_DIR/guest-status-${gname}.log" 2>&1; then
+            itf_step pass "rerun guest present" "vmid $r_vmid on $r_base"
+        else
+            itf_step fail "rerun guest present" \
+                "vmid $r_vmid no longer on $r_base — run fresh (no --rerun)"
+            return 1
+        fi
+        if itf_qm "$r_base" listsnapshot "$r_vmid" 2>/dev/null \
+                | awk '$1 == "`->" && $2 == "os-installed" { found = 1 }
+                       END { exit !found }'; then
+            itf_step pass "os-installed checkpoint present" "vmid $r_vmid"
+        else
+            itf_step fail "os-installed checkpoint present" \
+                "vmid $r_vmid has no os-installed snapshot — run fresh (no --rerun)"
+            return 1
+        fi
+        # Snapshots newer than os-installed SURVIVE a rollback on this
+        # stack but go stale (their content predates the replay) — and
+        # the replay re-snapshots the same names, which would collide.
+        # Remove them first so the guest matches a fresh install's
+        # checkpoint list.
+        itf_guest_stop "$r_base" "$r_vmid" > /dev/null 2>&1 || true
+        local stale
+        while IFS= read -r stale; do
+            [[ -n "$stale" ]] || continue
+            if itf_qm "$r_base" delsnapshot "$r_vmid" "$stale" \
+                    > "$ITF_RUN_DIR/guest-delsnap-${gname}.log" 2>&1; then
+                itf_step pass "stale snapshot removed" \
+                    "$stale (newer than os-installed, left stale by the rollback)"
+            else
+                itf_step fail "stale snapshot removed" \
+                    "$stale — see guest-delsnap-${gname}.log"
+                return 1
+            fi
+        done < <(itf_qm "$r_base" listsnapshot "$r_vmid" 2>/dev/null \
+                | awk '$1 == "`->" {
+                    if ($2 == "os-installed") { seen = 1; next }
+                    if (seen && $2 != "current") print $2
+                }')
+        if itf_guest_rollback "$r_base" "$r_vmid" os-installed \
+                > "$ITF_RUN_DIR/guest-rollback-${gname}.log" 2>&1; then
+            itf_step pass "guest rolled back to os-installed" \
+                "vmid $r_vmid — no reinstall; the journey replays from the checkpoint"
+        else
+            itf_step fail "guest rolled back to os-installed" \
+                "see guest-rollback-${gname}.log"
+            return 1
+        fi
+        # The rollback restores the os-installed snapshot's VM config,
+        # which still carries the installer-time CPU freeze (--freeze 1
+        # pairs the frozen start with an explicit resume so the serial
+        # console catches the first boot byte).  Clear it AFTER the
+        # rollback and BEFORE the start — a pre-rollback clear reverts
+        # with the config — or the guest sits frozen in prelaunch and
+        # the IP/ssh gates time out.  itf_guest_clone clears the same
+        # inherited flag on every clone.
+        if itf_qm "$r_base" set "$r_vmid" --freeze 0 \
+                > "$ITF_RUN_DIR/guest-freeze-${gname}.log" 2>&1; then
+            itf_step pass "installer freeze cleared" \
+                "vmid $r_vmid boots unfrozen after the rollback"
+        else
+            itf_step fail "installer freeze cleared" \
+                "see guest-freeze-${gname}.log"
+            return 1
+        fi
+        if itf_guest_start "$r_base" "$r_vmid" \
+                > "$ITF_RUN_DIR/guest-start-${gname}.log" 2>&1; then
+            itf_step pass "guest started" "vmid $r_vmid"
+        else
+            itf_step fail "guest started" "see guest-start-${gname}.log"
+            return 1
+        fi
+        guest_ip="$(itf_guest_ip "$r_base" "$r_vmid" 600)"
+        if [[ -n "$guest_ip" ]]; then
+            itf_step pass "guest IP discovered" "$guest_ip"
+            echo "$r_base $r_vmid $guest_ip" > "$guest_file"
+        else
+            itf_step fail "guest IP discovered" "guest agent reported nothing in 600s"
+            return 1
+        fi
+        if itf_wait_ssh "$guest_ip" 300; then
+            itf_step pass "guest ssh reachable" "root@${guest_ip}"
+        else
+            itf_step fail "guest ssh reachable"
+            return 1
+        fi
+        # shellcheck disable=SC2034  # consumed by the journey scripts
+        J_VMID="$r_vmid"
+        # shellcheck disable=SC2034  # consumed by the journey scripts
+        J_GUEST_IP="$guest_ip"
+        return 0
+    fi
 
     serve_dir="$ITF_RUN_DIR/serve"
     mkdir -p "$serve_dir"
@@ -405,14 +519,18 @@ itf_journey_stage_pve_os() {
     return 0
 }
 
-# itf_journey_run_installer <guest-ip> <answers-printf-format> <step-label>
+# itf_journey_run_installer <guest-ip> <answers-printf-format> <step-label> [expected-rc]
 #
 # Runs ./bin/install-single-node from the guest's /root/ZFSutilities
 # tree with piped answers and records the outcome under <step-label>.
+# expected-rc (default 0) asserts a chosen exit code — failure-path
+# journeys (prereq decline, apt failure) expect the installer's graceful
+# abort (rc 1), not success.
 itf_journey_run_installer() {
     local guest_ip="$1"
     local feed_format="$2"
     local label="$3"
+    local expected_rc="${4:-0}"
     local answers inst_log inst_rc
     answers="$ITF_RUN_DIR/install-answers.txt"
     printf '%b' "$feed_format" > "$answers"
@@ -421,10 +539,15 @@ itf_journey_run_installer() {
         "cd /root/ZFSutilities && ./bin/install-single-node" > "$inst_log" 2>&1
     inst_rc=$?
     itf_artifact "install-transcript" "$inst_log"
-    if [[ $inst_rc -eq 0 ]]; then
-        itf_step pass "$label" "rc=0 with piped answers"
+    if [[ $inst_rc -eq $expected_rc ]]; then
+        if [[ $expected_rc -eq 0 ]]; then
+            itf_step pass "$label" "rc=0 with piped answers"
+        else
+            itf_step pass "$label" "rc=$inst_rc as expected (graceful failure path)"
+        fi
     else
-        itf_step fail "$label" "rc=$inst_rc — first-time-user flow broke; see guest-install.log"
+        itf_step fail "$label" \
+            "rc=$inst_rc, expected $expected_rc — see guest-install.log"
         return 1
     fi
     return 0
@@ -518,14 +641,15 @@ EOF
     return 0
 }
 
-# itf_journey_stage_install <guest-ip>
+# itf_journey_stage_prepare_install <guest-ip>
 #
-# First-time-user product install: download (per ITF_SW_SOURCE),
-# expected-to-fail prerequisite check on the fresh system, installer
-# run with the fresh-system answer feed.
-itf_journey_stage_install() {
+# The shared prefix of every installer journey: the guest's download
+# tooling (what a user does first), the user's download (per
+# ITF_SW_SOURCE), and the expected-to-fail prerequisite check on the
+# fresh system.  Failure-path journeys (prereq decline, apt failure)
+# continue from here with their own installer feeds.
+itf_journey_stage_prepare_install() {
     local guest_ip="$1"
-    local feed_format='y\ny\n\n\n'
 
     local guest_tooling
     guest_tooling="apt-get update -qq && DEBIAN_FRONTEND=noninteractive"
@@ -549,6 +673,19 @@ itf_journey_stage_install() {
         itf_step pass "prereq check (fresh system)" "reports the missing items a user must handle"
         itf_artifact "prereq-check" "$pre_log"
     fi
+    return 0
+}
+
+# itf_journey_stage_install <guest-ip>
+#
+# First-time-user product install: download (per ITF_SW_SOURCE),
+# expected-to-fail prerequisite check on the fresh system, installer
+# run with the fresh-system answer feed.
+itf_journey_stage_install() {
+    local guest_ip="$1"
+    local feed_format='y\ny\n\n\n'
+
+    itf_journey_stage_prepare_install "$guest_ip" || return 1
 
     # The installer's prompts, answered as a user would: accept the
     # offered prerequisite installation (y), confirm the apt run (y),
@@ -657,13 +794,36 @@ itf_journey_stage_from_template() {
             return 1
         fi
         if itf_qm "$r_base" listsnapshot "$r_vmid" 2>/dev/null \
-                | awk '$1 == "as-cloned" { found = 1 } END { exit !found }'; then
+                | awk '$1 == "`->" && $2 == "as-cloned" { found = 1 }
+                       END { exit !found }'; then
             itf_step pass "as-cloned checkpoint present" "vmid $r_vmid"
         else
             itf_step fail "as-cloned checkpoint present" \
                 "vmid $r_vmid has no as-cloned snapshot — run fresh (no --rerun)"
             return 1
         fi
+        # Snapshots newer than as-cloned SURVIVE a rollback on this stack
+        # but go stale (their content predates the replay) — and the
+        # replay re-snapshots the same names, which would collide.  Remove
+        # them first so the guest matches a fresh clone's checkpoint list.
+        itf_guest_stop "$r_base" "$r_vmid" > /dev/null 2>&1 || true
+        local stale
+        while IFS= read -r stale; do
+            [[ -n "$stale" ]] || continue
+            if itf_qm "$r_base" delsnapshot "$r_vmid" "$stale" \
+                    > "$ITF_RUN_DIR/guest-delsnap-${gname}.log" 2>&1; then
+                itf_step pass "stale snapshot removed" \
+                    "$stale (newer than as-cloned, left stale by the rollback)"
+            else
+                itf_step fail "stale snapshot removed" \
+                    "$stale — see guest-delsnap-${gname}.log"
+                return 1
+            fi
+        done < <(itf_qm "$r_base" listsnapshot "$r_vmid" 2>/dev/null \
+                | awk '$1 == "`->" {
+                    if ($2 == "as-cloned") { seen = 1; next }
+                    if (seen && $2 != "current") print $2
+                }')
         if itf_guest_rollback "$r_base" "$r_vmid" as-cloned --start \
                 > "$ITF_RUN_DIR/guest-rollback-${gname}.log" 2>&1; then
             itf_step pass "guest rolled back to as-cloned" \

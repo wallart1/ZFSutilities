@@ -741,11 +741,14 @@ zfs list -r zfstest1 zfstest2
 Beyond the mock-based suites and the real-pool integration suite above,
 the repository includes an orchestrator (`tests/integrated/itf`) that
 exercises the product as a first-time end user on disposable nested
-guests in the base Proxmox test VMs — fresh install from a release
-tarball, daily workflows, uninstall/reinstall, and (cycle 2) the
-two-node install across a storage guest and a PVE-from-ISO compute
-guest on separate base hosts — under a strict confinement guard for the
-base hosts. See
+guests in the base Proxmox test VMs — fresh install from a release or
+dev tarball, install-over-leftovers, uninstall/reinstall, the two-node
+install across a storage guest and a PVE-from-ISO compute guest on
+separate base hosts, and installer failure paths (declined
+prerequisite remediation, apt breaking mid-remediation) — under a
+strict confinement guard for the base hosts, with `journey run
+--rerun` replaying on the previous run's guests for fast re-verify
+loops.  See
 [Integrated Testing](integrated-testing.md) and
 `tests/integrated/README.md`.
 

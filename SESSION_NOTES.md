@@ -23,6 +23,13 @@ usability fixes, upgrade prereq gate, rsync failure tails, CI red,
 PREEXISTING resolution pass — is committed as 1e5d92e, pushed, and
 released as 0.127.0; those entries were removed, recoverable via
 `git log`.)
+(2026-10-23 release prune: the 0.128.0 and 0.129.0 campaigns — the
+unarchive-vm live-tree iSCSI rebuild + F-020..F-024 lifecycle fixes,
+canmount profiles, probe-target dedupe, FHS conf precedence, both
+wrap-up review passes, and the zfstestvm lun-32/33 + cron.log threads —
+are committed as 3713eff/a964289, pushed, and released as v0.129.0;
+those entries were removed, recoverable via `git log`. Live items
+condensed into the threads below.)
 
 ## Persistent gotchas (not documented in docs/)
 
@@ -138,84 +145,28 @@ released as 0.127.0; those entries were removed, recoverable via
 
 ## Active / parked threads
 
-- **unarchive-vm 205 Step-2 iSCSI rebuild (fix implemented 2026-10-23,
-  uncommitted; blocked on next deploy).** The 2026-10-23 post-0.128.0
-  rerun from tweety proved Step 1's skip works, then FATALed at Step 2:
-  `iqn.2026-10.local.stewie:nvme1` absent from the live tree. Root cause
-  is NOT a missing target to create: stewie's live targets are under
-  `iqn.2026-02.local.stewie:*` (pre-restore prefix, running VMs attached),
-  while install-two-node's 2026-10-21 recovery run rewrote node.conf with
-  a date-derived `iqn.2026-10` prefix — pool_to_target only WARNs on
-  drift and Step 2 had no target resolution, so every pool mapped to a
-  nonexistent target. setup-iscsi-targets would also refuse (same-short
-  targets in use). Fix in the working tree: node-lib gained live-tree
-  helpers (lio_refresh_target_list/lio_target_iqns/target_in_live_tree/
-  find_live_short_targets/live_converged_prefix/converge_iqn_prefix —
-  converge writes via the new persistent `node_conf` copy, NOT
-  `$NODE_CONF`, because test-style `NODE_CONF=x source` assignments
-  revert after source returns); unarchive-vm Step 2 now converges
-  IQN_PREFIX onto the live tree when unambiguous (BOTH hosts, timestamped
-  node.conf.bak-*), substitutes per-pool onto a lone same-short live
-  target otherwise, creates absent targets with the setup-iscsi-targets
-  recipe, and refuses same-short duplicates BEFORE any mutation (two-pass
-  classify-then-mutate); Step 4 gained discovery + targeted login (and
-  its payload now sources bashinit — the ssh branch never had
-  find_zfsutility_script, so rescan silently degraded to WARN over real
-  ssh); install-two-node offers the live shared prefix as its default
-  (recurrence fence). Tests: test-node-lib +11, test-unarchive-vm +4
-  scenarios (registry-backed targetcli stub; iscsiadm capture), installer
-  flows +2 (live-prefix default; mixed refused). New itf journey
-  j07-unarchive-iscsi-rebuild (composes j05; drift convergence + target
-  rebuild with login + ambiguity refusal + boot proof). After deploy,
-  the user's `sudo unarchive-vm 205` rerun should: skip Step 1, converge
-  node.conf to iqn.2026-02.local.stewie on both hosts, map disk-3 into
-  the live nvme1 target and disks 0/1 into threeamigos, rewrite
-  205.conf's by-path lines, and leave every other pool-mapping tool
-  (attach/new-vm-disk, setup-iscsi-targets) un-stuck as well.
-  **stdin-drain fix (found by j07's first run):** feeding archive-vm a
-  piped answer feed aborted at "Proceed with archive?" — every bare
-  query `ssh root@storage` between prompts (base validation, mountpoint
-  lookup, node-lib's remote_zfsutilities_bin/probe_target_usage) eagerly
-  drains queued stdin, and even a pty wrapper doesn't help (ssh in raw
-  mode steals tty-buffered input too; probed live on the lab guests).
-  Fixed by `-n` on all stdin-free ssh calls in archive-vm, unarchive-vm,
-  and node-lib (the archive-vm `bash -s` heredoc call and the
-  remove-vm-disk `ssh -t` delegation intentionally keep stdin).
-  Interactive tty runs were never affected; itf feeds and any scripted
-  pipe consumer are. The j07 feed-through-archive path is the regression
-  fence (unit suites mock ssh, so the drain cannot reproduce there), and
-  test-unarchive-vm's ssh stub now parses the last argv entry (calls
-  carry -n).
-  **More latent lifecycle defects j07 flushed out (all fixed in-cycle,
-  unit-tested where mockable):** (1) archive-vm's two-node sidecar key
-  matcher required `ip-<ONE char>:3260` — a real portal IP never matched,
-  so DISK_KEY/LUN/TARGET were NEVER appended for product-made archives
-  and unarchive-vm Step 3 could not rewrite by-path lines (mock-fidelity
-  gap: unit tests staged DISK_KEY by hand; regression test now extracts
-  and evals the matcher, j07 Stage A fences the append); (2)
-  safe-iscsi-save hard-refused an empty expected-backstores manifest even
-  with zero active backstores — removing the LAST VM disk made
-  remove-vm-disk FATAL; now empty+empty saves the target-only config,
-  empty+active still refuses; (3) zfsdelfs resolved only the legacy conf
-  paths (/etc/zfsutilities-node.conf, /etc/two-node.conf) and FATALed on
-  FHS-only installs (masked on stewie by a leftover legacy conf); now
-  mirrors node-lib's precedence — zfsdailybackup/rsync-dailybackup share
-  the legacy-only pattern and are recorded in PREEXISTING.md (out of
-  thread); (4) unarchive-vm's target-creation recipe treated portal-add
-  failure as fatal, but targetcli's create rides with a default
-  0.0.0.0:3260 portal that blocks binding the same port on the storage
-  IP — now fatal only when the TPG has no portal at all. Journey note:
-  the lab's nested PVE guest has no /dev/kvm, so j07's boot proof runs
-  the VM with kvm=0 (TCG).
+- **unarchive-vm 205 production rerun: EXECUTED 2026-10-23 21:24 —
+  0.129.0 machinery validated LIVE.** Step-1 skip verified (3×);
+  stewie node.conf converged to iqn.2026-02.local.stewie (backup
+  node.conf.bak-20261023T212411); tweety already converged; disks
+  mapped onto live targets at existing LUNs (disk3→1/nvme1,
+  disk0→11, disk1→12/threeamigos); safe-iscsi-save 36/36 + manifest
+  regen + boot config; Step-4 discovery + login (2 sessions) + rescan
+  (118 devices). Residual WARNs (expected): Step 3 kept scsi0/scsi3
+  by-path lines verbatim — THIS archive predates the F-021 matcher
+  fix, so its sidecars carry no DISK_KEY and key_to_disknum is empty;
+  the rewrite branch (which j07 proves for new archives) never fired.
+  Pre-boot check for the user: in the PVE GUI confirm the kept lines'
+  LUNs match the mapping above. efidisk0 also kept — its zvol was not
+  in the archive (only disks 0/1/3), so the reference may point at
+  missing storage; PVE aborts VM start on a missing disk (known
+  hazard class). Possible future improvement: for legacy sidecars
+  without DISK_KEY, derive the key→disknum association from the
+  line's original (target, LUN) via the LIO lun→backstore map.
 
-- **Guest-probe live validation: COMPLETE (2026-10-23).** The stewie
-  rerun of validate-guestfs-probe (deployed 0.128.0) reached LIVE PASS
-  with a populated sample (pools=4 datasets=108 pve=ok), every volume
-  honestly degraded ("guest agent unavailable", 0 probed / 21 degraded),
-  and 3 guest-sector ladder rungs. Minor find recorded in PREEXISTING.md
-  (probe targets doubled, 42 vs 21 volumes). Remaining future work only:
-  surfacing sample.pve_failure inside the Alignment view when VM layers
-  are missing.
+- **Guest-probe future work (validation COMPLETE 2026-10-23):** surface
+  sample.pve_failure inside the Alignment view when VM layers are
+  missing.
 
 - **0.126.1-revert residue (user decisions pending).** /var/lib/zfsutilities
   holds pool_activity.json + scrub_state.json.20261020T163711.bak from the
@@ -265,203 +216,61 @@ released as 0.127.0; those entries were removed, recoverable via
   test-check-prerequisites, python/test_support.py}. Holding back: still
   0.0.x with releases every few days — expect breaking changes before 1.0.
 
-## 2026-10-22 — zfstestvm start failures: lun-32/33 config-vs-target mismatch
 
-- tweety VM 211/212 (zfstestvm1/2) starts fail stat-ing
-  iqn.2026-02.local.stewie:threeamigos-lun-32/-33; the target exports only
-  lun-0..31 and no attach event for 32/33 exists in the journal. Not a login
-  race — retries cannot succeed. VMs unstartable since Oct 21 09:00.
-- Cause frame (user-confirmed): stewie bare-metal restore (weeks-old image)
-  Oct 21 ~08:39 + recovery attempt same day. Pre-restore configs referenced
-  lun-19/-29, matching the restored target; between Oct 21 09:00 and 14:18 a
-  recovery step rewrote them to next-free LUNs 32/33, which never
-  materialized on the target. The weeks-old restored disk images sit
-  untouched at lun-19 (sdd) and lun-29 (sdb); their partitions were first
-  (re)scanned at the 20:03 qmstart attempts, when the triggered session
-  rescan read them and host LVM ingested the guest "pve" VG.
-- install-two-node ran Oct 21 09:20 → node.conf IQN_PREFIX=iqn.2026-10 vs
-  live target iqn.2026-02 (user states the IQN prefix issue is resolved;
-  as of 20:25 the live target tweety uses is still iqn.2026-02, node.conf
-  still 2026-10 — any re-pointed config refs must use 2026-02).
-- Root-only on stewie to finish: show-lun-map, /var/lib/zfsutilities/
-  history.json (names the op that wrote 32/33), targetcli luns ls.
-- Candidate hardening once the writer is identified: verify the LUN exists
-  on the target before committing by-path refs into VM configs.
-- No code changes this turn.
+## 2026-10-23 (late) — ITF cycle: journey --rerun + j08/j09 + discoverability (uncommitted)
 
-## 2026-10-22 — zfstestvm reconnection COMPLETE (root cause corrected)
+- `itf journey run NAME --rerun`: driver resolves the newest non-active
+  same-journey run with guest records → rerun-guests.tsv; the
+  stage_from_template rerun branch rolls each guest back to as-cloned
+  (verifying presence + checkpoint), re-discovers IP/ssh, and the journey
+  replays in full — only the template clone is skipped. Stale snapshots
+  newer than as-cloned are delsnapshotted first (qm rollback KEEPS them
+  on this stack; the replay's same-name re-snapshot would collide).
+  Live-verified: j04 7m24s→2m04s, j07 21m16s→8m09s; both reruns fully
+  green; lab guests destroyed after. Traps hit live: listsnapshot name
+  is $2 (arrow is $1); the driver's own new run dir must be filtered
+  from the source-run glob (it reads "running"); `[[ a == b ]] ||
+  continue` KEEPS the equal case — the inverted guard broke that filter.
+- j08-prereq-decline + j09-prereq-apt-failure journeys (installer failure
+  paths): itf_journey_run_installer gained [expected-rc];
+  stage_install factored into prepare_install + install so the failure
+  journeys share tooling/download/check. j09 breaks apt via a dead-proxy
+  drop-in (deterministic; removed + verified healing at the end). Both
+  assert graceful rc-1 abort, the exact user-facing message, and a
+  deployment-free guest. NOT yet run live (first runs pending; they need
+  a fresh stage_os install each).
+- Docs: itf README roadmap Phase 3→complete + 3.5 row; journeys/README
+  rerun contract + j06–j09 rows (j06/j07 rows were missing) + j01 row
+  trimmed to actual scope; dev-guide "Fast re-verification" section;
+  tests/AGENTS.md gained the itf discoverability section. Site rebuilt.
+- test-itf-driver: +8 rerun tests (subprocess refusals/spec-writing via
+  sandboxed ITF_RUNS_DIR + in-process rollback-branch units), 21 total.
+- Full suite green (98 suites). Everything above is uncommitted on top
+  of 0.129.0 (a964289).
 
-- VMs 211/212 started cleanly at 20:39, both running. Correction to the
-  earlier entry above: the tweety configs were never rewritten — scsi0
-  (lun-19/-29) and efidisk0 (lun-13/-27) refs were valid all along; the
-  Oct 21 09:00 failure on lun-19 was the boot-time attach race. The real
-  gap was scsi1: the 200G itf disks (vm-211-disk-2 / vm-212-disk-2,
-  created Oct 4 / Oct 8) referenced lun-32/-33, which the restored stewie
-  OS's LIO saveconfig and expected-backstores manifest (both weeks old)
-  lacked. The threeamigos pool itself was current — no data loss; the itf
-  content survived (2-partition layout visible on sdai/sdaj).
-- Repair (manual, user at console): recreate block backstores with
-  emulate_tpu=1, map LUNs explicitly at 32/33 (node ACL auto-mapped),
-  safe-iscsi-save, session rescan on tweety, qm start. The safe-iscsi-save
-  WARN (36 backstores vs 34 manifest) was exactly our +2 delta on an
-  otherwise in-sync pair; the script then regenerated the manifest to 36.
-- Tooling note: repair-iscsi-luns is purpose-built for missing exports but
-  keys off the manifest, which the restore regressed too — by design it
-  would only have REPORTED the two zvols as unmanifested, not exported
-  them. Post-restore cross-check of compute-host VM configs vs live LUN
-  map is the gap worth considering.
+## 2026-10-23 (latest) — ITF todo 1: stage_os rerun (uncommitted, on top of the above)
 
-## 2026-10-22 — cron.log flooding root cause + drop-in convergence fix
-
-- User report: stewie /var/log/zfsutilities/cron.log still flooding (290,600
-  lines / 26 MB, back to 0.59.6-era June entries). The 0.125.0 fence was
-  correctly implemented and deployed (0.127.0), but /etc/cron.d/zfsutilities
-  on stewie (mtime Sep 22, pre-fence) still used the old plain
-  `>> cron.log 2>&1` format: no ZFSUTILITIES_FROM_CRON marker, no stamper, so
-  _silence_cron_output never engaged. Same root cause for the missing
-  /etc/logrotate.d/zfsutilities: both writers are called only from
-  Schedule-page save (schedule_page._regenerate_cron) — deploying a new
-  version never converges the persisted /etc files. Log composition ~100%
-  duplicated task output (zfs-send-receive/zfscleanup/zfsretain/pv progress),
-  all of it also in session logs. tweety unaffected (no drop-in, no cron.log).
-- Fix (implemented, uncommitted): cron_manager.build_cron_content extracted;
-  cron_manager.converge_scheduler_files(config) re-derives expected cron +
-  logrotate drop-in content and rewrites only on difference (missing files
-  created only when active profiles exist, so tweety gains none). Called at
-  profile_runner main() start (pre-session-log, pre-lock, best-effort) and
-  from ZFSUtilitiesWindow._check_startup_config. _silence_cron_output
-  additionally engages when fd 1 resolves (os.readlink /proc/self/fd/1) to
-  the configured cron_log — the exact shape of a pre-fence cron line — so
-  even a stale drop-in stops flooding on the first fixed-version run.
-- Existing 26 MB backlog left to the newly-converged logrotate (weekly,
-  rotate 8, maxsize 100M, compress) to age out; no truncation.
-- Takes effect on stewie when the next release is deployed; the 06:00 run
-  self-heals even with the GUI closed.
-- Gotcha for tests: get_profile_runner_path() resolves its CALLER's
-  directory, so tests priming expected cron content must pin it (patch
-  cron_manager.get_profile_runner_path) — repo-layout test files resolve
-  tests/python/... vs the module's python/....
-
-## 2026-10-23 — Wrap-up review pass additions (uncommitted, same cycle)
-
-- Code-review fixes on the cycle's uncommitted work: j06 journey message
-  strings shortened to the 100-col policy (three lines were over);
-  `lun_backstore_map` now skips malformed LUN entries (missing/non-int
-  index) instead of raising — collection runs in the GUI's unguarded
-  refresh thread; one ruff-format nit in test_alignment_stats.
-- Pre-existing issue found and fixed in-cycle (removed from
-  PREEXISTING.md): alignment_page `refresh_alignment_view` could strand
-  `_alignment_refresh_pending` forever on a collect-thread exception
-  (page silently stops refreshing until GUI restart). Now the dashboard
-  worker shape: try/except in `_collect` (WARN + sample=None), idle
-  finisher applies only non-None samples, flag set last. Regression test
-  in test_alignment_page (test_refresh_survives_collection_failure).
-
-## 2026-10-23 — Removed obsolete bin/PVE-send-to-archive (uncommitted)
-
-- User confirmed suspicion; verified before deleting: self-labeled example
-  script from the original deployment (threeamigos/proxmox, vm-205 — deleted
-  VM), superseded by archive-vm/unarchive-vm, zero callers in bin/lib/python/
-  share, no crontab references on stewie (dan-level check; root crontab not
-  readable as dan but nothing in-repo or in config references it).
-- Removed with it: 3 pattern entries in tests/test-lock-coverage; TOC entry +
-  full section in commands.md; lock-table row in lock-manager.md; list mention
-  in concurrency-collisions.md; message section + See-also in messages/index.md.
-  Historical changelog mention (0.74-era) left as history. docs/site rebuilt
-  (mkdocs build) — untracked, regenerates anyway.
-- Deployed copies on both hosts keep the (inert) script until the next
-  release deploy; nothing invokes it there.
-
-## 2026-10-23 — canmount in workload profiles + Mount-button gating (uncommitted)
-
-- `canmount` added to `LIVE_PROPERTIES` (workload_profiles.py) — flows to
-  the workload-profile editor (Datasets page, Manage Profiles), to
-  `ZFS_GET_PROPERTIES`/apply-plan (filesystem-only; volumes skip it like
-  recordsize/atime), and through the shared vocabulary to pool profiles
-  (Disks page editor row + tooltip, `zpool create -O canmount=…`,
-  Match-origin capture). Placeholder "on, off, or noauto" (workload) /
-  "on or off" (pool root).
-- Datasets-page Mount button: unmounted filesystem/pool rows are probed
-  (`zfs get canmount`) on selection change like the existing loop_find
-  pattern; `canmount=off` rows never enable Mount (tooltip explains).
-  `noauto` still mounts (manual mount is its purpose). Mixed selections
-  keep any() semantics. on_datasets_mount skips directly selected
-  canmount=off filesystems with the existing
-  `INFO: Skipping ... (canmount=off)` message.
-- GUI caveat worth remembering: probes run per selection change; large
-  multi-row selections of unmounted filesystems do one `zfs get` each
-  (bounded by selection size, same as update_mounted_states' per-row
-  mounted lookups).
-
-## 2026-10-23 — CI scheduled-run flake (run 39936757123) diagnosed, no code change
-
-- Scheduled `tests` run on main `1e5d92e` failed once in
-  `test_alignment_realized.py` (cairo leg): child check tripped
-  "content above the viewport moved: (13, -1031) -> (15, -775)". Same
-  commit passed its push run 16h earlier; local suite 3-passed; a
-  rerun of the failed job went green.
-- Signature of this flake class: the failing run alone logged
-  `Gtk-WARNING: Could not load a pixbuf from
-  .../Adwaita/assets/bullet-symbolic.svg` (broken gdk-pixbuf loaders /
-  mime database on that runner instance — image 20261012 identical to
-  passing runs). Broken theme assets change widget geometry and trip
-  the pixel-exact realized fences. If it recurs, the candidate fix is
-  a skip-fence in `alignment_realized_check.py` when GTK reports
-  missing pixbuf loaders, not a loosened assertion.
-- The Oct-22 CI failures (0.126.3 push + scheduled) were the already
-  fixed mock-aware matplotlib backend cache and rsync-log-dir
-  PermissionError — both cured by 1e5d92e; green afterward.
-
-## 2026-10-23 — wrap-up: PREEXISTING fixes (probe-target dedupe, backup-tool conf paths)
-
-- (config-path migration gap, resolved) zfsdailybackup + rsync-dailybackup
-  now resolve the node config with node-lib's precedence (FHS conf first,
-  then both legacy paths, honoring the ZFSUTILITIES_* env overrides) — the
-  same loader shape as the zfsdelfs fix; FHS-only installs no longer
-  exit-1/skip at load. Both suites gained precedence tests (FHS-first,
-  legacy fallback, fenced missing-conf) and test-zfsdailybackup now runs
-  against stub confs instead of whatever files /etc happens to hold.
-- (guest-probe target doubling, resolved — turned out to be a production
-  defect, not validator cosmetics) `_guest_probe_targets` emitted one
-  target per (dataset, vm_disks) match, and the same zvol SHORT name can
-  exist in two pools (live disk + backup copy), so multi-pool hosts
-  doubled every (VM, disk) pair. Duplicate shorts collide in
-  match_volumes' per-short result maps: a weaker-signature copy can
-  overwrite a tier-2 match, and the tier-3 device-demand counter
-  double-appends the short, denying a legitimate size+bus match as
-  "guest disk ambiguous". Fixed at the funnel: one target per (VM, disk),
-  the copy with readable storage-side signatures wins (first wins ties —
-  short-name keying cannot tell copies apart). Regression tests in
-  test_alignment_stats (dedupe + deterministic tie). validate-guestfs-probe
-  needs no change — its probe-target count becomes the true volume count.
-
-## 2026-10-23 — wrap-up review pass (coding standards, tests, docs)
-
-- Standards: ruff check/format and the documented shellcheck set clean.
-  Fixed in passing: SC2124 in test-unarchive-vm's ssh stub (`${@: -1}` →
-  `${*: -1}`), eight >100-column lines wrapped byte-identically (the
-  col-0 continuation convention), two payload `echo "WARN:"`s in
-  unarchive-vm Step 4 moved to log_msg (the payload sources bashinit),
-  RFC 3720 grammar comments added to the two new IQN regexes (node-lib
-  converge_iqn_prefix, install-two-node prefix scan), and one committed
-  ruff-format nit in test_alignment_stats.py.
-- Tests: added zfsdelfs conf-precedence tests (the uncommitted fix had
-  none) and made test-zfsdailybackup hermetic (stub confs instead of
-  whatever /etc holds). Full suite green (no soaks).
-- Docs: two-node-config.md's repo-root conf snippet updated to the
-  FHS-first precedence all three scripts now share; messages index and
-  narrative docs were already current from the cycle; docs integrity
-  test + mkdocs build clean (known Material/MkDocs-2.0 warning only).
-- PREEXISTING after wrap-up: 3 entries remain (Zensical toolchain hold,
-  infra-vdev planning UI, iSCSI-resilience campaign) — all user-deferred
-  or externally blocked; none actionable.
-
-## 2026-10-23 — Release 0.129.0
-
-- VERSION bumped to 0.129.0; changelog entry added (F-020…F-024 +
-  canmount profiles + probe-target dedupe + FHS conf precedence).
-- __pycache__ dirs purged (4); final full suite WITH soaks green
-  (no failures, nothing skipped). Frozen and committed as the 0.129.0
-  release commit; NOT pushed, NOT deployed, NOT tagged.
-- Post-deploy reminder: the user's `sudo unarchive-vm 205` rerun from
-  tweety is the production validation for this release.
+- `itf_journey_stage_os` gained the `--rerun` branch mirroring
+  stage_from_template: resolve the guest from rerun-guests.tsv, presence
+  + os-installed checkpoint gates, stale-snapshot sweep, rollback, IP/ssh
+  re-discovery. j08/j09 iterations skip the ~15–20 min Debian install.
+- stage_os-specific trap: the rollback RESTORES the os-installed
+  snapshot's VM config, which still carries the installer-time freeze:1
+  (only the paired resume ever unfroze it) — so the `set --freeze 0`
+  clear must sit BETWEEN rollback and start (a pre-rollback clear
+  reverts with the config). Clones hit the same inherited flag via
+  itf_guest_clone; here it needed its own step.
+- Driver wording generalized (as-cloned / os-installed) in itf usage
+  header + rerun-source INFO step; docs updated (tests/AGENTS.md, itf
+  README quick-start, journeys/README rerun section, dev-guide Fast
+  re-verification).
+- test-itf-driver: +2 stage_os tests (rerun rollback ordering incl.
+  rollback→freeze-clear→start law; fresh-path dispatch). j08 first live
+  run launched (validates the journey as authored + seeds the
+  os-installed checkpoint); j08 --rerun live verification follows.
+- Live verification (zfstestvm1): j08 fresh 14m03s PASSED (also the
+  journey's first-ever live run — validates it as authored, seeds
+  os-installed); j08 --rerun 1m37s PASSED, all six rerun-branch steps
+  green (presence, checkpoint, rollback, freeze clear, start, IP/ssh —
+  same IP rediscovered, proving the guest actually booted unfrozen).
+  Lab guest 8001 destroyed after verification.

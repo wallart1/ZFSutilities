@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# j08-prereq-decline.journey — installer failure path: declining remediation.
+#
+# A first-time user on a fresh Debian system downloads the product, the
+# prerequisite check reports the missing items, and the user DECLINES the
+# offered automatic installation ("Install missing required prerequisites
+# now?" → n).  The installer must abort gracefully with instructions and
+# leave the system untouched for a later re-run.
+#
+# Guest state required: none — installs its own guest (the prerequisites
+# must be genuinely missing; a template clone has them installed and
+# never reaches the remediation prompt).
+# Snapshots produced: os-installed (clean Debian).
+#
+# Pairs with j09 (the apt-failure path); both replay the same fresh-OS
+# staging as j01.
+
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+journey_main() {
+    local gname="j08"
+    local guest_hostname="itfj08"
+
+    itf_step info "journey start" \
+        "j08 prereq decline; sw-source=$ITF_SW_SOURCE repo=$ITF_GITHUB_REPO"
+
+    if itf_iso_fetch > /dev/null 2>&1; then
+        itf_step pass "installer ISO cached" "$ITF_CACHE_DIR/$ITF_ISO_NAME"
+    else
+        itf_step fail "installer ISO cached" "itf iso fetch failed"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage A: fresh Debian (a template clone cannot stand in here — its
+    # prerequisites are installed, so the remediation prompt never runs)
+    # ------------------------------------------------------------------
+    itf_journey_stage_os "$gname" "$guest_hostname" || return 1
+    local guest_ip="$J_GUEST_IP"
+
+    # ------------------------------------------------------------------
+    # Stage B: download tooling, the user's download, the prerequisite
+    # check reporting the missing items
+    # ------------------------------------------------------------------
+    itf_journey_stage_prepare_install "$guest_ip" || return 1
+
+    # ------------------------------------------------------------------
+    # Stage C: decline the remediation offer — the installer must abort
+    # gracefully (rc 1) with re-run instructions
+    # ------------------------------------------------------------------
+    # Feed: n at "Install missing required prerequisites now? [Y]".
+    # The graceful-abort rc alone is ambiguous (a broken installer also
+    # exits 1), so the decline message is asserted separately below.
+    itf_journey_run_installer "$guest_ip" 'n\n' \
+        "installer aborts gracefully on decline" 1 || return 1
+
+    if grep -q "install the items above manually, then re-run the installer" \
+            "$ITF_RUN_DIR/guest-install.log"; then
+        itf_step pass "decline message shown" \
+            "the user is told to install manually and re-run"
+    else
+        itf_step fail "decline message shown" "see guest-install.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage D: nothing was deployed — the guest stays a clean Debian the
+    # user can re-run the installer on
+    # ------------------------------------------------------------------
+    if itf_guest_exec "$guest_ip" \
+            "test ! -e /usr/local/lib/zfsutilities \
+             && test ! -e /etc/zfsutilities/node.conf \
+             && ! bash -lc \"command -v zfsdailybackup\"" \
+            > "$ITF_RUN_DIR/guest-untouched.log" 2>&1; then
+        itf_step pass "guest left unmodified" \
+            "no deployment, no node.conf, no PATH wiring — ready for a re-run"
+    else
+        itf_step fail "guest left unmodified" "see guest-untouched.log"
+        return 1
+    fi
+    return 0
+}

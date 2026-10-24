@@ -8,7 +8,11 @@
 # transport is attempted fails on instant NXDOMAIN.  These pin the
 # usage/rc contracts of the command dispatch and the empty-tolerant
 # guards added with strict mode (an unreachable base reports
-# empty/(unreachable), never an abort).
+# empty/(unreachable), never an abort).  The --rerun tests additionally
+# plant run directories (meta.txt + guest records) in sandboxed
+# ITF_RUNS_DIR trees — the config's :- default lets the environment
+# supply it — and one block sources common.sh in-process with stubbed
+# transports to pin the rollback-instead-of-clone branch itself.
 
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
 setup_test_env
@@ -46,6 +50,45 @@ run_itf() {
     run_err="$(cat "$tmp_dir/run.err")"
 }
 
+# run_itf_runs <runs-dir> <args...> — run_itf with ITF_RUNS_DIR pointed
+# at a sandbox (config-lib's :- default keeps the environment value).
+run_itf_runs() {
+    local runs_dir="$1"
+    shift
+    run_out=""
+    run_rc=0
+    run_out=$(ITF_RUNS_DIR="$runs_dir" ITF_SITE_CONFIG="$tmp_dir/site.conf" \
+        bash "$ITF_DRIVER" "$@" 2>"$tmp_dir/run.err") || run_rc=$?
+    run_err="$(cat "$tmp_dir/run.err")"
+}
+
+# _plant_run <runs-root> <run-dirname> <finished|running> [guest-record...]
+#
+# Plants a run directory with meta.txt (a "running" state carries the
+# test process's own live pid) plus guest records of the form
+# "file:base vmid [ip]".
+_plant_run() {
+    local root="$1" dir="$2" state="$3" rec f
+    shift 3
+    mkdir -p "$root/$dir"
+    {
+        echo "tag:      test"
+        echo "started:  2026-01-01T00:00:00Z"
+        echo "caller:   journey:test"
+        echo "pid:      1"
+        echo "finished: 2026-01-01T00:01:00Z"
+    } > "$root/$dir/meta.txt"
+    # A live pid (the harness itself) makes itf_run_state say "running".
+    if [[ "$state" == "running" ]]; then
+        sed -i "s/^pid:      1$/pid:      $$/" "$root/$dir/meta.txt"
+        sed -i "/^finished:/d" "$root/$dir/meta.txt"
+    fi
+    for rec in "$@"; do
+        f="${rec%%:*}"
+        echo "${rec#*:}" > "$root/$dir/$f"
+    done
+}
+
 # ------------------------------------------------------------------------------
 # Usage / argument validation (rc 2, no transport)
 # ------------------------------------------------------------------------------
@@ -56,7 +99,10 @@ test_journey_list_lists_committed_journeys() {
     assert_rc 0 "$run_rc"
     local j
     for j in j01-fresh-install j02-uninstall-reinstall \
-        j03-install-over-leftovers j04-post-install-baseline; do
+        j03-install-over-leftovers j04-post-install-baseline \
+        j05-two-node-install j06-guest-probe-validator \
+        j07-unarchive-iscsi-rebuild j08-prereq-decline \
+        j09-prereq-apt-failure; do
         assert_contains "$run_out" "$j"
     done
 }
@@ -163,6 +209,349 @@ test_template_destroy_without_template_fails_cleanly() {
     assert_contains "$run_err" "no template 'itf-template'"
 }
 
+# ------------------------------------------------------------------------------
+# journey run --rerun: dispatch, source resolution, spec writing
+# ------------------------------------------------------------------------------
+
+test_journey_run_rerun_unknown_flag_refused() {
+    test_start "journey run with an unknown flag prints usage (rc 2)"
+    run_itf journey run j04-post-install-baseline --frobnicate
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "usage: itf journey run NAME"
+}
+
+test_journey_run_rerun_without_prior_run_refused() {
+    test_start "journey run --rerun with no prior run is refused (rc 1)"
+    local runs_dir
+    runs_dir=$(mktemp -d)
+    run_itf_runs "$runs_dir" journey run j04-post-install-baseline --rerun
+    assert_rc 1 "$run_rc"
+    assert_contains "$run_out" "rerun refused"
+    assert_contains "$run_out" "no prior run of j04-post-install-baseline"
+    rm -rf "$runs_dir"
+}
+
+test_journey_run_rerun_source_running_refused() {
+    test_start "journey run --rerun refuses while the newest source run is active"
+    local runs_dir
+    runs_dir=$(mktemp -d)
+    _plant_run "$runs_dir" run-20260101-010101-j04-post-install-baseline running \
+        "guest.txt:base.invalid 8005 10.0.0.9"
+    run_itf_runs "$runs_dir" journey run j04-post-install-baseline --rerun
+    assert_rc 1 "$run_rc"
+    assert_contains "$run_out" "rerun refused"
+    assert_contains "$run_out" "still active"
+    rm -rf "$runs_dir"
+}
+
+test_journey_run_rerun_without_guest_records_refused() {
+    test_start "journey run --rerun with no guest records is refused (rc 1)"
+    local runs_dir
+    runs_dir=$(mktemp -d)
+    _plant_run "$runs_dir" run-20260101-010101-j04-post-install-baseline finished
+    run_itf_runs "$runs_dir" journey run j04-post-install-baseline --rerun
+    assert_rc 1 "$run_rc"
+    assert_contains "$run_out" "recorded any guests"
+    rm -rf "$runs_dir"
+}
+
+test_journey_run_rerun_writes_spec_from_latest_source() {
+    test_start "journey run --rerun picks the latest source and writes the guest spec"
+    local runs_dir new_run spec
+    runs_dir=$(mktemp -d)
+    _plant_run "$runs_dir" run-20260101-010101-j04-post-install-baseline finished \
+        "guest.txt:base.invalid 8005 10.0.0.9"
+    _plant_run "$runs_dir" run-20260102-020202-j04-post-install-baseline finished \
+        "guest.txt:base.invalid 8007 10.0.0.11"
+    run_itf_runs "$runs_dir" journey run j04-post-install-baseline --rerun
+    # The spec is written before the journey runs; the journey then fails
+    # reaching the unreachable base (.invalid) at its first rerun step.
+    assert_rc 1 "$run_rc"
+    assert_contains "$run_out" "rerun of run-20260102-020202-j04-post-install-baseline"
+    new_run="$(ls -1d "$runs_dir"/run-* | sort -r | head -1)"
+    spec="$new_run/rerun-guests.tsv"
+    if [[ -f "$spec" ]]; then
+        test_pass
+    else
+        test_fail "missing rerun-guests.tsv in the new run dir"
+    fi
+    assert_contains "$(cat "$spec" 2>/dev/null)" "guest.txt base.invalid 8007"
+    assert_contains "$(cat "$new_run/report.md" 2>/dev/null)" "rerun guest present"
+    rm -rf "$runs_dir"
+}
+
+# ------------------------------------------------------------------------------
+# The rerun branch itself: common.sh in-process with stubbed transports
+# ------------------------------------------------------------------------------
+
+test_rerun_helper_resolves_by_guest_file() {
+    test_start "itf_rerun_guest resolves by guest-file name and stays empty otherwise"
+    local work="$tmp_dir/rerun-helper" pair
+    mkdir -p "$work"
+    printf 'guest.txt base.invalid 8005\nguest-storage.txt base.invalid 8006\n' \
+        > "$work/rerun-guests.tsv"
+    pair="$(ITF_RUN_DIR="$work" bash -c '
+        source "$1"
+        itf_rerun_guest guest-storage.txt' \
+        _ "$mydir/tests/integrated/journeys/common.sh")"
+    assert_equals "base.invalid 8006" "$pair"
+    pair="$(ITF_RUN_DIR="$work" bash -c '
+        source "$1"
+        itf_rerun_guest guest-compute.txt' \
+        _ "$mydir/tests/integrated/journeys/common.sh")"
+    assert_equals "" "$pair"
+    pair="$(ITF_RUN_DIR="$tmp_dir/no-such-dir" bash -c '
+        source "$1"
+        itf_rerun_guest guest.txt' \
+        _ "$mydir/tests/integrated/journeys/common.sh")"
+    assert_equals "" "$pair"
+}
+
+test_stage_from_template_rerun_rolls_back_not_clones() {
+    test_start "stage_from_template rerun branch rolls back instead of cloning"
+    local work="$tmp_dir/stage-rerun"
+    mkdir -p "$work"
+    printf 'guest.txt base.invalid 8005\n' > "$work/rerun-guests.tsv"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage functions
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1091
+        source "$mydir/tests/integrated/journeys/common.sh"
+        _calls=""
+        _cloned=0
+        itf_qm() {
+            _calls+="$2:$3 "
+            if [[ "$2" == "listsnapshot" ]]; then
+                # Real qm listsnapshot shape: tree arrow first, name
+                # second; the newer-than-checkpoint snapshot (plus the
+                # current marker) exercises the stale sweep's parsing.
+                printf '`-> as-cloned  today   1.5 GiB\n'
+                printf '`-> pools-created  today   0 B\n'
+                printf '`-> current  You are here!\n'
+            fi
+            return 0
+        }
+        itf_guest_stop() { _calls+="stop:$2 "; return 0; }
+        itf_guest_rollback() {
+            _calls+="rollback:$1:$2:$3:$4 "
+            return 0
+        }
+        itf_guest_ip() { echo "10.9.9.9"; }
+        itf_wait_ssh() { return 0; }
+        itf_guest_clone() { _cloned=1; echo 8001; }
+        itf_template_vmid() { _calls+="TEMPLATE_VMID "; echo 8000; }
+        itf_step() { _calls+="step:$1 "; return 0; }
+        itf_journey_stage_from_template j04
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+        printf '%s' "${_cloned:-0}" > "$work/cloned"
+        printf '%s' "${J_VMID:-}-${J_GUEST_IP:-}" > "$work/globals"
+        printf '%s' "$(cat "$work/guest.txt" 2>/dev/null)" > "$work/record"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "delsnapshot:8005"
+    assert_contains "$(cat "$work/calls")" "rollback:base.invalid:8005:as-cloned:--start"
+    assert_equals "0" "$(cat "$work/cloned")"
+    assert_equals "8005-10.9.9.9" "$(cat "$work/globals")"
+    assert_contains "$(cat "$work/record")" "base.invalid 8005 10.9.9.9"
+}
+
+test_stage_from_template_fresh_run_still_clones() {
+    test_start "stage_from_template without a rerun spec takes the clone path"
+    local work="$tmp_dir/stage-fresh"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage functions
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1091
+        source "$mydir/tests/integrated/journeys/common.sh"
+        _rolled=0
+        itf_qm() { return 0; }
+        itf_template_vmid() { echo 8000; }
+        itf_template_stamp_read() { echo "itf-stamp| test"; return 0; }
+        itf_guest_clone() { echo 8003; }
+        itf_guest_start() { return 0; }
+        itf_guest_ip() { echo "10.1.1.1"; }
+        itf_wait_ssh() { return 0; }
+        itf_guest_snapshot() { return 0; }
+        itf_guest_rollback() { _rolled=1; return 0; }
+        itf_step() { return 0; }
+        itf_journey_stage_from_template j04
+        echo "$?" > "$work/rc"
+        printf '%s' "${_rolled:-0}" > "$work/rolled"
+        printf '%s' "${J_VMID:-}" > "$work/vmid"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_equals "0" "$(cat "$work/rolled")"
+    assert_equals "8003" "$(cat "$work/vmid")"
+}
+
+test_stage_os_rerun_rolls_back_not_installs() {
+    test_start "stage_os rerun branch rolls back instead of installing"
+    local work="$tmp_dir/stage-os-rerun"
+    mkdir -p "$work"
+    printf 'guest.txt base.invalid 8005\n' > "$work/rerun-guests.tsv"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage functions
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1091
+        source "$mydir/tests/integrated/journeys/common.sh"
+        _calls=""
+        _installed=0
+        itf_qm() {
+            _calls+="$2:$3 "
+            if [[ "$2" == "listsnapshot" ]]; then
+                # Real qm listsnapshot shape: tree arrow first, name
+                # second; the newer-than-checkpoint snapshot (plus the
+                # current marker) exercises the stale sweep's parsing.
+                printf '`-> os-installed  today   1.5 GiB\n'
+                printf '`-> pools-created  today   0 B\n'
+                printf '`-> current  You are here!\n'
+            fi
+            return 0
+        }
+        itf_guest_stop() { _calls+="stop:$2 "; return 0; }
+        itf_guest_rollback() {
+            _calls+="rollback:$1:$2:$3 "
+            return 0
+        }
+        itf_guest_start() { _calls+="gstart:$2 "; return 0; }
+        itf_guest_ip() { echo "10.9.9.9"; }
+        itf_wait_ssh() { return 0; }
+        # Leak flags: the install machinery must never run on a rerun.
+        itf_guest_create() { _installed=1; echo 8001; }
+        itf_preseed_render() { _installed=1; return 0; }
+        itf_step() { _calls+="step:$1 "; return 0; }
+        itf_journey_stage_os j08 itfj08
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+        printf '%s' "${_installed:-0}" > "$work/installed"
+        printf '%s' "${J_VMID:-}-${J_GUEST_IP:-}" > "$work/globals"
+        printf '%s' "$(cat "$work/guest.txt" 2>/dev/null)" > "$work/record"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "delsnapshot:8005"
+    assert_contains "$(cat "$work/calls")" "rollback:base.invalid:8005:os-installed"
+    assert_contains "$(cat "$work/calls")" "set:8005"
+    assert_contains "$(cat "$work/calls")" "gstart:8005"
+    assert_equals "0" "$(cat "$work/installed")"
+    assert_equals "8005-10.9.9.9" "$(cat "$work/globals")"
+    assert_contains "$(cat "$work/record")" "base.invalid 8005 10.9.9.9"
+    # Ordering law: the rollback restores the os-installed config (still
+    # freeze:1), so the freeze clear must come after it and before the
+    # start — a pre-rollback clear reverts with the config.
+    if [[ "$(cat "$work/calls")" \
+            != *"rollback:base.invalid:8005:os-installed"*"set:8005"*"gstart:8005"* ]]; then
+        test_fail "freeze clear/start must follow the rollback, in that order"
+    fi
+}
+
+test_stage_os_fresh_run_still_installs() {
+    test_start "stage_os without a rerun spec takes the install path"
+    local work="$tmp_dir/stage-os-fresh"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage functions
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1091
+        source "$mydir/tests/integrated/journeys/common.sh"
+        _rolled=0
+        itf_qm() { return 0; }
+        itf_guest_rollback() { _rolled=1; return 0; }
+        # Fail the FIRST fresh-path step so the dispatch proof needs no
+        # stubs for curl, the serial driver, or sleeps.
+        itf_preseed_render() { return 1; }
+        itf_step() { return 0; }
+        itf_journey_stage_os j08 itfj08
+        echo "$?" > "$work/rc"
+        printf '%s' "${_rolled:-0}" > "$work/rolled"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc")"
+    assert_equals "0" "$(cat "$work/rolled")"
+}
+
+test_run_installer_expected_rc_contract() {
+    test_start "run_installer pins the chosen exit code (graceful-failure paths)"
+    local work="$tmp_dir/run-installer"
+    mkdir -p "$work"
+    # Columns: installer rc, expected-rc argument ("-" = omitted, the
+    # pre-failure-path call shape), wanted stage rc.  The (1, 1) row is
+    # the contract j08/j09 stand on: a graceful installer abort is a
+    # PASS for a failure-path journey.
+    local feed_rc exp_arg want_rc idx=0
+    while read -r feed_rc exp_arg want_rc; do
+        idx=$((idx + 1))
+        (
+            ITF_RUN_DIR="$work/case$idx"
+            mkdir -p "$ITF_RUN_DIR"
+            # shellcheck disable=SC1091
+            source "$mydir/tests/integrated/journeys/common.sh"
+            itf_guest_exec_feed() { return "$feed_rc"; }
+            itf_artifact() { return 0; }
+            _steps=""
+            itf_step() { _steps+="$1:$3 "; return 0; }
+            local -a args=(10.9.9.9 'y\n' "installer case $idx")
+            if [[ "$exp_arg" != "-" ]]; then args+=("$exp_arg"); fi
+            itf_journey_run_installer "${args[@]}"
+            echo "$?" > "$ITF_RUN_DIR/rc"
+            printf '%s' "$_steps" > "$ITF_RUN_DIR/steps"
+        ) > /dev/null 2>&1
+        assert_rc "$want_rc" "$(cat "$work/case$idx/rc")"
+    done <<'EOF'
+0 - 0
+1 1 0
+1 - 1
+0 1 1
+EOF
+    assert_contains "$(cat "$work/case2/steps")" "graceful failure path"
+}
+
+test_prepare_install_tolerates_expected_prereq_failure() {
+    test_start "prepare_install aborts on tooling/download failure, tolerates the prereq failure"
+    local work="$tmp_dir/prepare-install"
+    mkdir -p "$work"
+    # Columns: tooling rc, download rc, prereq rc, wanted stage rc.  A
+    # FAILING prereq check is the fresh-system norm — the stage must
+    # carry on so failure-path journeys can drive their own feeds.
+    local tooling_rc download_rc prereq_rc want_rc idx=0
+    while read -r tooling_rc download_rc prereq_rc want_rc; do
+        idx=$((idx + 1))
+        (
+            ITF_RUN_DIR="$work/case$idx"
+            mkdir -p "$ITF_RUN_DIR"
+            # shellcheck disable=SC1091
+            source "$mydir/tests/integrated/journeys/common.sh"
+            itf_guest_exec() {
+                case "$2" in
+                    *apt-get*) return "$tooling_rc" ;;
+                    *check-prerequisites*) return "$prereq_rc" ;;
+                esac
+                return 0
+            }
+            itf_journey_stage_download() {
+                echo called >> "$ITF_RUN_DIR/dl-called"
+                return "$download_rc"
+            }
+            itf_step() { return 0; }
+            itf_artifact() { return 0; }
+            itf_journey_stage_prepare_install 10.9.9.9
+            echo "$?" > "$ITF_RUN_DIR/rc"
+        ) > /dev/null 2>&1
+        assert_rc "$want_rc" "$(cat "$work/case$idx/rc")"
+    done <<'EOF'
+1 0 1 1
+0 1 1 1
+0 0 1 0
+0 0 0 0
+EOF
+    # A tooling failure must abort before the download stage ever runs.
+    if [[ -e "$work/case1/dl-called" ]]; then
+        test_fail "download stage ran despite the tooling failure"
+    else
+        test_pass
+    fi
+}
+
 test_journey_list_lists_committed_journeys
 test_journey_run_unknown_name_refused
 test_journey_run_missing_name_refused
@@ -176,6 +565,18 @@ test_iso_unknown_selector_refused
 test_iso_pve_selector_without_config_fails_cleanly
 test_template_build_bad_profile_refused
 test_template_destroy_without_template_fails_cleanly
+test_journey_run_rerun_unknown_flag_refused
+test_journey_run_rerun_without_prior_run_refused
+test_journey_run_rerun_source_running_refused
+test_journey_run_rerun_without_guest_records_refused
+test_journey_run_rerun_writes_spec_from_latest_source
+test_rerun_helper_resolves_by_guest_file
+test_stage_from_template_rerun_rolls_back_not_clones
+test_stage_from_template_fresh_run_still_clones
+test_stage_os_rerun_rolls_back_not_installs
+test_stage_os_fresh_run_still_installs
+test_run_installer_expected_rc_contract
+test_prepare_install_tolerates_expected_prereq_failure
 
 rm -rf "$tmp_dir"
 teardown_test_env
