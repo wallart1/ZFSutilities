@@ -44,6 +44,11 @@
 #   pool_to_target <pool>   echoes the full IQN (two-node only), returns 1 if unknown or single-node
 #   pool_list               echoes valid pool names from pool_target (two-node only)
 #   is_known_pool <pool>    two-node: returns 0 if pool is in pool_target; else 1
+#   lio_refresh_target_list populates the live LIO target-list cache (storage host)
+#   target_in_live_tree <iqn>   0 when the IQN exists in the live LIO tree
+#   find_live_short_targets <short>  live targets matching a target short name
+#   live_converged_prefix   prints the unambiguous live prefix when the conf drifted
+#   converge_iqn_prefix <p> rewrites node.conf IQN_PREFIX (backup kept) + runtime copy
 #   gen_mac                 generates a Proxmox-compatible random MAC address
 #   get_json_archive_path   reads archive_path from the JSON config file
 
@@ -91,6 +96,12 @@ fi
 
 # shellcheck source=/etc/zfsutilities-node.conf
 source "$NODE_CONF"
+
+# Persistent lowercase copy of the resolved conf path: callers (and tests)
+# often source this library via a temporary `NODE_CONF=... source ...`
+# assignment, which reverts once source returns — runtime helpers must not
+# re-read $NODE_CONF at call time.
+node_conf="$NODE_CONF"
 
 # Backward compat: configs without NODE_MODE are legacy two-node configs
 node_mode="${NODE_MODE:-two-node}"
@@ -146,11 +157,123 @@ fi
 # low-device warning.  Empty means "no expectation declared" and disables it.
 expected_iscsi_devices="${EXPECTED_ISCSI_DEVICES:-}"
 
-# One-shot per-process cache of the local LIO target list, probed lazily by
-# _warn_when_target_missing. Empty string means "not probed yet"; after a
-# probe the variable is always set (possibly to an empty list).
+# One-shot per-process cache of the local LIO target list. Empty string
+# means "not probed yet"; after a probe the variable is always set
+# (possibly to an empty list). lio_refresh_target_list populates it in the
+# CURRENT shell; command substitution of the printers below only reads it
+# (a subshell copy cannot write back), so looping callers refresh once
+# before looping.
 _lio_target_list=""
 declare -gA _lio_warned_targets=() 2>/dev/null || true
+
+# Populate the target-list cache from the live LIO tree. Storage host with
+# targetcli installed only; returns 1 (printing nothing) otherwise.
+lio_refresh_target_list() {
+    [[ "$(hostname -s)" == "$storage_host" ]] || return 1
+    command -v targetcli >/dev/null 2>&1 || return 1
+    _lio_target_list=$(targetcli /iscsi ls 2>/dev/null || true)
+    return 0
+}
+
+# Print the cached target list, probing first when the cache is empty.
+# Always succeeds (an unprobeable tree prints as an empty list).
+lio_target_list_cached() {
+    if [[ -z "$_lio_target_list" ]]; then
+        lio_refresh_target_list || true
+    fi
+    printf '%s\n' "$_lio_target_list"
+}
+
+# Print the unique iqn.* target names from the live tree, one per line.
+# The token filter is the RFC 3720 iSCSI-name grammar regex also used by
+# probe_target_usage. Always succeeds (empty output = no live targets).
+lio_target_iqns() {
+    lio_target_list_cached | grep -o 'iqn\.[A-Za-z0-9.:_-]*' | sort -u
+    return 0
+}
+
+# target_in_live_tree <full-iqn>: 0 when the target exists in the live LIO
+# tree, 1 when it does not (or the tree cannot be probed).
+target_in_live_tree() {
+    local iqns
+    iqns=$(lio_target_iqns)
+    printf '%s\n' "$iqns" | grep -qxF -- "$1" || return 1
+    return 0
+}
+
+# find_live_short_targets <short-name>: print every live target whose short
+# name matches, regardless of IQN prefix (the drift scan setup-iscsi-targets
+# uses to find orphan targets). Always succeeds.
+find_live_short_targets() {
+    local short="$1" iqn
+    while IFS= read -r iqn; do
+        [[ "$iqn" == *":${short}" ]] || continue
+        printf '%s\n' "$iqn"
+    done < <(lio_target_iqns)
+    return 0
+}
+
+# live_converged_prefix: decide whether node.conf's IQN_PREFIX can be
+# auto-corrected to the live target tree: at least one live target uses a
+# configured pool short name, ALL such targets share a single prefix, and
+# that prefix differs from the configured one. Colon-bearing prefixes are
+# refused (callers exchange this value inside colon-separated markers).
+# Prints the live prefix and returns 0; returns 1 with no output when
+# there is nothing unambiguous to correct (no live pool targets, mixed
+# prefixes, or the conf prefix already matches the tree).
+live_converged_prefix() {
+    local -A shorts=()
+    local pool iqn short prefix found=""
+    for pool in "${!pool_target[@]}"; do
+        shorts["${pool_target[$pool]}"]=1
+    done
+    while IFS= read -r iqn; do
+        short="${iqn##*:}"
+        [[ -n "${shorts[$short]:-}" ]] || continue
+        prefix="${iqn%:*}"
+        if [[ -z "$found" ]]; then
+            found="$prefix"
+        elif [[ "$found" != "$prefix" ]]; then
+            return 1
+        fi
+    done < <(lio_target_iqns)
+    [[ -n "$found" && "$found" != *:* && "$found" != "$iqn_prefix" ]] || return 1
+    printf '%s\n' "$found"
+    return 0
+}
+
+# converge_iqn_prefix <new-prefix>: rewrite IQN_PREFIX in node.conf and
+# update this shell's iqn_prefix to match. Pure file operation — no LIO
+# probing — so the compute host can converge its own node.conf when the
+# storage host reports convergence. A timestamped backup is kept beside
+# the conf. Refuses an invalid, colon-bearing, or unchanged prefix, or an
+# unwritable conf; returns 0 only after a verified rewrite.
+converge_iqn_prefix() {
+    local new_prefix="$1" ts backup
+    # RFC 3720 iSCSI-name grammar: "iqn." then date+authoritative-body
+    # and naming-authority segments limited to [A-Za-z0-9.:_-] — colons
+    # are allowed by the grammar but refused separately below because
+    # callers exchange prefixes inside colon-separated markers.
+    [[ "$new_prefix" =~ ^iqn\.[A-Za-z0-9.:_-]+$ ]] || return 1
+    [[ "$new_prefix" != *:* ]] || return 1
+    [[ "$new_prefix" != "$iqn_prefix" ]] || return 1
+    [[ -f "$node_conf" && -w "$node_conf" ]] || return 1
+    ts=$(date +%Y%m%dT%H%M%S)
+    backup="${node_conf}.bak-${ts}"
+    if ! sed -i".bak-${ts}" \
+            "s|^IQN_PREFIX=.*|IQN_PREFIX=\"${new_prefix}\"|" "$node_conf"; then
+        rm -f "$backup"
+        return 1
+    fi
+    if ! grep -qxF "IQN_PREFIX=\"${new_prefix}\"" "$node_conf"; then
+        # No IQN_PREFIX line was rewritten: restore the conf untouched.
+        mv "$backup" "$node_conf"
+        return 1
+    fi
+    iqn_prefix="$new_prefix"
+    log_msg "INFO: ${node_conf}: IQN_PREFIX=${new_prefix} (prior copy: ${backup})"
+    return 0
+}
 
 # Warn once per IQN when the constructed target does not exist in the local
 # LIO tree. This catches IQN-prefix drift: node.conf's iqn_prefix differs
@@ -165,7 +288,7 @@ _warn_when_target_missing() {
     [[ "$(hostname -s)" == "$storage_host" ]] || return 0
     command -v targetcli >/dev/null 2>&1 || return 0
     if [[ -z "$_lio_target_list" ]]; then
-        _lio_target_list=$(targetcli /iscsi ls 2>/dev/null || true)
+        lio_refresh_target_list || true
     fi
     printf '%s\n' "$_lio_target_list" | grep -q "iqn\." || return 0
     if [[ -n "${_lio_warned_targets[$iqn]:-}" ]]; then
@@ -237,7 +360,8 @@ probe_target_usage() {
     # plus the count of live initiator sessions. The trailing echo makes
     # the remote command's exit status 0 even when grep finds nothing.
     local remote_out
-    if ! remote_out=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${compute_host}" \
+    # -n: read-only probe; never drain an answer feed shared with a caller.
+    if ! remote_out=$(ssh -n -o ConnectTimeout=5 -o BatchMode=yes "root@${compute_host}" \
             "grep -l -- '${iqn}' /etc/pve/qemu-server/*.conf /etc/pve/lxc/*.conf 2>/dev/null; \
              echo SESSIONS:\$(iscsiadm -m session 2>/dev/null | grep -c -- '${iqn}')" \
             2>/dev/null); then
@@ -307,7 +431,9 @@ is_known_pool() {
 remote_zfsutilities_bin() {
     local host="$1"
     local bin_path
-    bin_path=$(ssh -o ConnectTimeout=10 "root@${host}" \
+    # -n keeps this query-only ssh from draining a piped-stdin answer feed
+    # (an interactive script between prompts loses its queued answers).
+    bin_path=$(ssh -n -o ConnectTimeout=10 "root@${host}" \
         'realpath /usr/local/lib/zfsutilities/current/bin 2>/dev/null' \
         '|| readlink -f /usr/local/lib/zfsutilities/current/bin 2>/dev/null' \
         2>/dev/null)

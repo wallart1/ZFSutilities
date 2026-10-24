@@ -644,11 +644,15 @@ def _mount_one_dataset(item, repo, app):
     Any unmounted ancestor datasets are mounted first so the target's
     mountpoint is not hidden by a later parent mount. Ancestors with
     canmount=off are skipped; they cannot be mounted and ZFS auto-creates
-    their mountpoint directory when the target mounts.
+    their mountpoint directory when the target mounts. A target with
+    canmount=off is skipped the same way — zfs mount can only fail on it.
     """
     dataset = item["name"]
 
     try:
+        if repo.get_property(dataset, "canmount") == "off":
+            log_msg(f"INFO: Skipping {dataset} (canmount=off)")
+            return False
         targets_to_mount = _unmounted_mountable_ancestors(dataset, repo)
         if repo.get_property(dataset, "mounted") != "yes":
             targets_to_mount.append(dataset)

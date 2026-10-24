@@ -13,6 +13,17 @@ printf '#!/usr/bin/bash\nfunction rsync-dailybackup { :; }\n' \
     > "$RSYNC_HELPER_DIR/rsync-dailybackup"
 chmod +x "$RSYNC_HELPER_DIR/rsync-dailybackup"
 
+# Stub node confs covering node-lib's full resolution order, so the suite
+# never depends on whatever conf files happen to exist on the test host.
+DAILY_CONF_DIR=$(mktemp -d)
+mkdir -p "$DAILY_CONF_DIR/fhs"
+printf 'NODE_MODE="single-node"\nTHIS_HOST="testhost"\n' \
+    > "$DAILY_CONF_DIR/fhs/node.conf"
+printf 'NODE_MODE="single-node"\nTHIS_HOST="legacyhost"\n' \
+    > "$DAILY_CONF_DIR/legacy-node.conf"
+printf 'NODE_MODE="single-node"\nTHIS_HOST="twohost"\n' \
+    > "$DAILY_CONF_DIR/legacy-two-node.conf"
+
 # zfsdailybackup / zfssnapbuild stores its nextsnap file under the caller script
 # name.  Ensure stale files are gone so zfssnapbuild does not prompt.
 rm -f /run/zfsutilities/nextsnap_zfsdailybackup /run/zfsutilities/nextsnap_zfssnapbuild
@@ -60,6 +71,9 @@ _run_dailybackup() {
         done
         mydir="$mydir/bin"
         ZFSUTILITIES_BIN_DIR="$RSYNC_HELPER_DIR"
+        ZFSUTILITIES_SYSTEM_CONFIG_DIR="$DAILY_CONF_DIR/fhs"
+        ZFSUTILITIES_LEGACY_NODE_CONF="$DAILY_CONF_DIR/legacy-node.conf"
+        ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$DAILY_CONF_DIR/legacy-two-node.conf"
         source "$mydir/zfsdailybackup" "$overrides"
     } 2>&1)
     echo "$output"
@@ -89,6 +103,9 @@ test_local_pull_failure_continues() {
         _mock_interactive
         mydir="$mydir/bin"
         ZFSUTILITIES_BIN_DIR="$RSYNC_HELPER_DIR"
+        ZFSUTILITIES_SYSTEM_CONFIG_DIR="$DAILY_CONF_DIR/fhs"
+        ZFSUTILITIES_LEGACY_NODE_CONF="$DAILY_CONF_DIR/legacy-node.conf"
+        ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$DAILY_CONF_DIR/legacy-two-node.conf"
         source "$mydir/zfsdailybackup" "$DISABLE_ALL_STEPS"
         rsync-dailybackup() { return 6; }
         _run_local_pull
@@ -110,12 +127,32 @@ test_dry_run_pull_does_not_execute() {
     fi
 }
 
+test_node_conf_prefers_fhs_conf() {
+    test_start "Node config resolution prefers the FHS conf over legacy paths"
+    local output
+    output=$({
+        msg_level="INFO"
+        _mock_interactive
+        mydir="$mydir/bin"
+        ZFSUTILITIES_BIN_DIR="$RSYNC_HELPER_DIR"
+        unset NODE_CONF
+        ZFSUTILITIES_SYSTEM_CONFIG_DIR="$DAILY_CONF_DIR/fhs" \
+        ZFSUTILITIES_LEGACY_NODE_CONF="$DAILY_CONF_DIR/legacy-node.conf" \
+        ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$DAILY_CONF_DIR/legacy-two-node.conf" \
+        source "$mydir/zfsdailybackup" "$DISABLE_ALL_STEPS"
+        echo "resolved=$NODE_CONF storage=$storage_host"
+    } 2>&1)
+    assert_contains "$output" "resolved=$DAILY_CONF_DIR/fhs/node.conf"
+    assert_contains "$output" "storage=testhost"
+}
+
 test_remote_pull_push_failure_continues
 test_remote_pull_ssh_failure_continues
 test_local_pull_failure_continues
 test_dry_run_pull_does_not_execute
+test_node_conf_prefers_fhs_conf
 
 rm -f /run/zfsutilities/nextsnap_zfsdailybackup /run/zfsutilities/nextsnap_zfssnapbuild
-rm -rf "$RSYNC_HELPER_DIR"
+rm -rf "$RSYNC_HELPER_DIR" "$DAILY_CONF_DIR"
 teardown_test_env
 test_summary

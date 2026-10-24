@@ -138,56 +138,84 @@ released as 0.127.0; those entries were removed, recoverable via
 
 ## Active / parked threads
 
-- **unarchive-vm 205 live rerun (blocked on this fix's deployment).** The
-  2026-10-22 post-0.127.0 rerun from tweety died at Step 1 with
-  `bashinit: line 124: BASH_SOURCE[1]: unbound variable` on stewie: the
-  on_storage ssh branch runs payloads as stdin scripts (`bash -s`), whose
-  top-level frames carry no BASH_SOURCE entry, so the payload's first
-  top-level log_msg aborted under set -u. The local (storage-host) branch
-  and the hostname-stubbed tests only ever exercised file mode, which is
-  why it slipped through. Fix (uncommitted in working tree): guarded the
-  six bare `${BASH_SOURCE[1]}` sites (bashinit log_msg/msg_prefix/
-  calledbybash, bashreturn, bashdebug _trap_DEBUG, zfssnapbuild
-  buildsnapfilename) with `:-` defaults; added red-proven stdin-payload
-  regression tests (test-bashinit ×3, test-node-lib payload-mode ×1).
-  Zvols remain restored+verified; after this fix deploys, the rerun from
-  tweety should skip Step 1 and take the create path on both targets
-  (nvme1 + threeamigos) in Step 2 — no enroll-iscsi-pool needed.
+- **unarchive-vm 205 Step-2 iSCSI rebuild (fix implemented 2026-10-23,
+  uncommitted; blocked on next deploy).** The 2026-10-23 post-0.128.0
+  rerun from tweety proved Step 1's skip works, then FATALed at Step 2:
+  `iqn.2026-10.local.stewie:nvme1` absent from the live tree. Root cause
+  is NOT a missing target to create: stewie's live targets are under
+  `iqn.2026-02.local.stewie:*` (pre-restore prefix, running VMs attached),
+  while install-two-node's 2026-10-21 recovery run rewrote node.conf with
+  a date-derived `iqn.2026-10` prefix — pool_to_target only WARNs on
+  drift and Step 2 had no target resolution, so every pool mapped to a
+  nonexistent target. setup-iscsi-targets would also refuse (same-short
+  targets in use). Fix in the working tree: node-lib gained live-tree
+  helpers (lio_refresh_target_list/lio_target_iqns/target_in_live_tree/
+  find_live_short_targets/live_converged_prefix/converge_iqn_prefix —
+  converge writes via the new persistent `node_conf` copy, NOT
+  `$NODE_CONF`, because test-style `NODE_CONF=x source` assignments
+  revert after source returns); unarchive-vm Step 2 now converges
+  IQN_PREFIX onto the live tree when unambiguous (BOTH hosts, timestamped
+  node.conf.bak-*), substitutes per-pool onto a lone same-short live
+  target otherwise, creates absent targets with the setup-iscsi-targets
+  recipe, and refuses same-short duplicates BEFORE any mutation (two-pass
+  classify-then-mutate); Step 4 gained discovery + targeted login (and
+  its payload now sources bashinit — the ssh branch never had
+  find_zfsutility_script, so rescan silently degraded to WARN over real
+  ssh); install-two-node offers the live shared prefix as its default
+  (recurrence fence). Tests: test-node-lib +11, test-unarchive-vm +4
+  scenarios (registry-backed targetcli stub; iscsiadm capture), installer
+  flows +2 (live-prefix default; mixed refused). New itf journey
+  j07-unarchive-iscsi-rebuild (composes j05; drift convergence + target
+  rebuild with login + ambiguity refusal + boot proof). After deploy,
+  the user's `sudo unarchive-vm 205` rerun should: skip Step 1, converge
+  node.conf to iqn.2026-02.local.stewie on both hosts, map disk-3 into
+  the live nvme1 target and disks 0/1 into threeamigos, rewrite
+  205.conf's by-path lines, and leave every other pool-mapping tool
+  (attach/new-vm-disk, setup-iscsi-targets) un-stuck as well.
+  **stdin-drain fix (found by j07's first run):** feeding archive-vm a
+  piped answer feed aborted at "Proceed with archive?" — every bare
+  query `ssh root@storage` between prompts (base validation, mountpoint
+  lookup, node-lib's remote_zfsutilities_bin/probe_target_usage) eagerly
+  drains queued stdin, and even a pty wrapper doesn't help (ssh in raw
+  mode steals tty-buffered input too; probed live on the lab guests).
+  Fixed by `-n` on all stdin-free ssh calls in archive-vm, unarchive-vm,
+  and node-lib (the archive-vm `bash -s` heredoc call and the
+  remove-vm-disk `ssh -t` delegation intentionally keep stdin).
+  Interactive tty runs were never affected; itf feeds and any scripted
+  pipe consumer are. The j07 feed-through-archive path is the regression
+  fence (unit suites mock ssh, so the drain cannot reproduce there), and
+  test-unarchive-vm's ssh stub now parses the last argv entry (calls
+  carry -n).
+  **More latent lifecycle defects j07 flushed out (all fixed in-cycle,
+  unit-tested where mockable):** (1) archive-vm's two-node sidecar key
+  matcher required `ip-<ONE char>:3260` — a real portal IP never matched,
+  so DISK_KEY/LUN/TARGET were NEVER appended for product-made archives
+  and unarchive-vm Step 3 could not rewrite by-path lines (mock-fidelity
+  gap: unit tests staged DISK_KEY by hand; regression test now extracts
+  and evals the matcher, j07 Stage A fences the append); (2)
+  safe-iscsi-save hard-refused an empty expected-backstores manifest even
+  with zero active backstores — removing the LAST VM disk made
+  remove-vm-disk FATAL; now empty+empty saves the target-only config,
+  empty+active still refuses; (3) zfsdelfs resolved only the legacy conf
+  paths (/etc/zfsutilities-node.conf, /etc/two-node.conf) and FATALed on
+  FHS-only installs (masked on stewie by a leftover legacy conf); now
+  mirrors node-lib's precedence — zfsdailybackup/rsync-dailybackup share
+  the legacy-only pattern and are recorded in PREEXISTING.md (out of
+  thread); (4) unarchive-vm's target-creation recipe treated portal-add
+  failure as fatal, but targetcli's create rides with a default
+  0.0.0.0:3260 portal that blocks binding the same port on the storage
+  IP — now fatal only when the TPG has no portal at all. Journey note:
+  the lab's nested PVE guest has no /dev/kvm, so j07's boot proof runs
+  the VM with kvm=0 (TCG).
 
-- **Guest-probe live validation (fix landed; facility verification in
-  flight; production re-run at the next daily production slot).** The
-  2026-10-22 paste on stewie was a vacuous pass: the validator's live
-  path called collect_alignment_sample with no repositories (pools/
-  datasets structurally 0) and pve=UNAVAILABLE with the fetch's failure
-  cause discarded. Fixed in the working tree (uncommitted):
-  alignment_stats records per-source reasons (sample.pve_failure via an
-  errors out-param through read_pve_vm_configs/fetch_pve_vm_options),
-  and the validator builds the GUI's real repositories, prints
-  per-source state, and exits 1 with reasons on any empty source (usage
-  documents the verdict). New itf journey j06-guest-probe-validator
-  composes the full j05 two-node lab, runs the validator live (positive:
-  populated sample + stopped-VM probe reason), and proves the negative
-  control (compute unresolvable → non-zero + printed ssh reason) — the
-  permanent fence for the vacuous pass. j05's main was renamed to
-  j05_two_node_lab_main with a wrapper (composition, no flow change).
-  After this deploys, re-run the validator on stewie: the pve line will
-  name the actual failure cause (leading suspect: BatchMode vs an
-  agent/passphrase key under sudo's stripped env; interactive
-  `sudo ssh root@tweety` was verified working). The GUI consumes
-  sample.pve_failure when VM layers are missing (surfacing it in the
-  view remains future work).
-  **F-019 (found by j06's first run, fixed in-cycle same day):**
-  parse_pve_vm_conf skipped by-path disk lines outright, so the guest
-  probe saw ZERO VM disks on every two-node install (production
-  included) — the feature was blind in the topology it was built for.
-  Fix: by-path lines parse with IQN/LUN recorded, resolve to zvol short
-  names via the storage host's LIO saveconfig
-  (lun_backstore_map/resolve_bypath_disks), drops recorded in
-  sample.pve_bypath_dropped. FINDINGS F-019 + repair plan 019; j06
-  VERIFIED GREEN run-20261022-215030 (44 steps, 0 fail — probe target
-  resolved by-path, qm channel reached, negative control rc=1 with the
-  ssh cause named). NOTE for production: after deploy, the Alignment
-  view's VM/VM-fs layers will populate for the FIRST time.
+- **Guest-probe live validation: COMPLETE (2026-10-23).** The stewie
+  rerun of validate-guestfs-probe (deployed 0.128.0) reached LIVE PASS
+  with a populated sample (pools=4 datasets=108 pve=ok), every volume
+  honestly degraded ("guest agent unavailable", 0 probed / 21 degraded),
+  and 3 guest-sector ladder rungs. Minor find recorded in PREEXISTING.md
+  (probe targets doubled, 42 vs 21 volumes). Remaining future work only:
+  surfacing sample.pve_failure inside the Alignment view when VM layers
+  are missing.
 
 - **0.126.1-revert residue (user decisions pending).** /var/lib/zfsutilities
   holds pool_activity.json + scrub_state.json.20261020T163711.bak from the
@@ -343,3 +371,97 @@ released as 0.127.0; those entries were removed, recoverable via
   (mkdocs build) — untracked, regenerates anyway.
 - Deployed copies on both hosts keep the (inert) script until the next
   release deploy; nothing invokes it there.
+
+## 2026-10-23 — canmount in workload profiles + Mount-button gating (uncommitted)
+
+- `canmount` added to `LIVE_PROPERTIES` (workload_profiles.py) — flows to
+  the workload-profile editor (Datasets page, Manage Profiles), to
+  `ZFS_GET_PROPERTIES`/apply-plan (filesystem-only; volumes skip it like
+  recordsize/atime), and through the shared vocabulary to pool profiles
+  (Disks page editor row + tooltip, `zpool create -O canmount=…`,
+  Match-origin capture). Placeholder "on, off, or noauto" (workload) /
+  "on or off" (pool root).
+- Datasets-page Mount button: unmounted filesystem/pool rows are probed
+  (`zfs get canmount`) on selection change like the existing loop_find
+  pattern; `canmount=off` rows never enable Mount (tooltip explains).
+  `noauto` still mounts (manual mount is its purpose). Mixed selections
+  keep any() semantics. on_datasets_mount skips directly selected
+  canmount=off filesystems with the existing
+  `INFO: Skipping ... (canmount=off)` message.
+- GUI caveat worth remembering: probes run per selection change; large
+  multi-row selections of unmounted filesystems do one `zfs get` each
+  (bounded by selection size, same as update_mounted_states' per-row
+  mounted lookups).
+
+## 2026-10-23 — CI scheduled-run flake (run 39936757123) diagnosed, no code change
+
+- Scheduled `tests` run on main `1e5d92e` failed once in
+  `test_alignment_realized.py` (cairo leg): child check tripped
+  "content above the viewport moved: (13, -1031) -> (15, -775)". Same
+  commit passed its push run 16h earlier; local suite 3-passed; a
+  rerun of the failed job went green.
+- Signature of this flake class: the failing run alone logged
+  `Gtk-WARNING: Could not load a pixbuf from
+  .../Adwaita/assets/bullet-symbolic.svg` (broken gdk-pixbuf loaders /
+  mime database on that runner instance — image 20261012 identical to
+  passing runs). Broken theme assets change widget geometry and trip
+  the pixel-exact realized fences. If it recurs, the candidate fix is
+  a skip-fence in `alignment_realized_check.py` when GTK reports
+  missing pixbuf loaders, not a loosened assertion.
+- The Oct-22 CI failures (0.126.3 push + scheduled) were the already
+  fixed mock-aware matplotlib backend cache and rsync-log-dir
+  PermissionError — both cured by 1e5d92e; green afterward.
+
+## 2026-10-23 — wrap-up: PREEXISTING fixes (probe-target dedupe, backup-tool conf paths)
+
+- (config-path migration gap, resolved) zfsdailybackup + rsync-dailybackup
+  now resolve the node config with node-lib's precedence (FHS conf first,
+  then both legacy paths, honoring the ZFSUTILITIES_* env overrides) — the
+  same loader shape as the zfsdelfs fix; FHS-only installs no longer
+  exit-1/skip at load. Both suites gained precedence tests (FHS-first,
+  legacy fallback, fenced missing-conf) and test-zfsdailybackup now runs
+  against stub confs instead of whatever files /etc happens to hold.
+- (guest-probe target doubling, resolved — turned out to be a production
+  defect, not validator cosmetics) `_guest_probe_targets` emitted one
+  target per (dataset, vm_disks) match, and the same zvol SHORT name can
+  exist in two pools (live disk + backup copy), so multi-pool hosts
+  doubled every (VM, disk) pair. Duplicate shorts collide in
+  match_volumes' per-short result maps: a weaker-signature copy can
+  overwrite a tier-2 match, and the tier-3 device-demand counter
+  double-appends the short, denying a legitimate size+bus match as
+  "guest disk ambiguous". Fixed at the funnel: one target per (VM, disk),
+  the copy with readable storage-side signatures wins (first wins ties —
+  short-name keying cannot tell copies apart). Regression tests in
+  test_alignment_stats (dedupe + deterministic tie). validate-guestfs-probe
+  needs no change — its probe-target count becomes the true volume count.
+
+## 2026-10-23 — wrap-up review pass (coding standards, tests, docs)
+
+- Standards: ruff check/format and the documented shellcheck set clean.
+  Fixed in passing: SC2124 in test-unarchive-vm's ssh stub (`${@: -1}` →
+  `${*: -1}`), eight >100-column lines wrapped byte-identically (the
+  col-0 continuation convention), two payload `echo "WARN:"`s in
+  unarchive-vm Step 4 moved to log_msg (the payload sources bashinit),
+  RFC 3720 grammar comments added to the two new IQN regexes (node-lib
+  converge_iqn_prefix, install-two-node prefix scan), and one committed
+  ruff-format nit in test_alignment_stats.py.
+- Tests: added zfsdelfs conf-precedence tests (the uncommitted fix had
+  none) and made test-zfsdailybackup hermetic (stub confs instead of
+  whatever /etc holds). Full suite green (no soaks).
+- Docs: two-node-config.md's repo-root conf snippet updated to the
+  FHS-first precedence all three scripts now share; messages index and
+  narrative docs were already current from the cycle; docs integrity
+  test + mkdocs build clean (known Material/MkDocs-2.0 warning only).
+- PREEXISTING after wrap-up: 3 entries remain (Zensical toolchain hold,
+  infra-vdev planning UI, iSCSI-resilience campaign) — all user-deferred
+  or externally blocked; none actionable.
+
+## 2026-10-23 — Release 0.129.0
+
+- VERSION bumped to 0.129.0; changelog entry added (F-020…F-024 +
+  canmount profiles + probe-target dedupe + FHS conf precedence).
+- __pycache__ dirs purged (4); final full suite WITH soaks green
+  (no failures, nothing skipped). Frozen and committed as the 0.129.0
+  release commit; NOT pushed, NOT deployed, NOT tagged.
+- Post-deploy reminder: the user's `sudo unarchive-vm 205` rerun from
+  tweety is the production validation for this release.

@@ -125,8 +125,13 @@ run_installer() {
         }
 
         # LIO stack presence probes (command -v sees the function).
+        # /iscsi ls answers from _mock_live_targets so the IQN-default
+        # fence (live-prefix-derived default) can be exercised.
         targetcli() {
             printf 'TARGETCLI:%s\n' "$*" >> "$_capture_dir/targetcli"
+            if [[ "$1 $2" == "/iscsi ls" && -n "${_mock_live_targets:-}" ]]; then
+                printf '%s\n' "$_mock_live_targets"
+            fi
             return 0
         }
         systemctl() {
@@ -223,7 +228,8 @@ run_installer() {
 reset_installer_mocks() {
     unset _mock_stdin _mock_root_fstype _mock_hostname _mock_ssh_fail \
         _mock_patch_rc _mock_pve_present _mock_remote_node_conf_present \
-        _mock_probe_refs _mock_probe_sessions _mock_probe_unreachable
+        _mock_probe_refs _mock_probe_sessions _mock_probe_unreachable \
+        _mock_live_targets
 }
 
 node_conf_path() {
@@ -1085,6 +1091,67 @@ test_two_node_compute_host_required() {
     test_pass
 }
 
+test_two_node_iqn_default_from_live_targets() {
+    reset_installer_mocks
+    test_start "two-node: IQN default comes from the live target prefix"
+
+    local fixture="$_mock_zfs_state_dir/two-liveiqn"
+    _mock_live_targets=$'iqn.2026-02.local.zteststor:threeamigos\n'\
+$'iqn.2026-02.local.zteststor:fivebays'
+    # The IQN answer is empty: the offered default must already be the
+    # live prefix, so accepting it keeps tooling and targets in one
+    # namespace (the 2026-10 production-drift recurrence fence).
+    _mock_stdin=$'\nztestcomp\n\n\n\n\n\nn'
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Existing iSCSI targets on this host all use the prefix below"* ]]; then
+        test_fail "live-prefix explanation missing from the prompt; output:\n$out"
+        return
+    fi
+    if ! grep -q '^IQN_PREFIX="iqn.2026-02.local.zteststor"$' \
+            "$(node_conf_path "$fixture")"; then
+        test_fail "IQN_PREFIX not taken from the live tree; content:" \
+            "\n$(cat "$(node_conf_path "$fixture")")"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_iqn_default_ignores_mixed_live_prefixes() {
+    reset_installer_mocks
+    test_start "two-node: IQN default stays date-derived when live prefixes are mixed"
+
+    local fixture="$_mock_zfs_state_dir/two-mixediqn"
+    _mock_live_targets=$'iqn.2026-02.local.zteststor:threeamigos\n'\
+$'iqn.2026-09.local.zteststor:fivebays'
+    _mock_stdin=$'\nztestcomp\n\n\n\n\n\nn'
+    local out rc
+    out=$(run_installer two "$fixture")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Existing iSCSI targets on this host all use the prefix below"* ]]; then
+        test_fail "mixed live prefixes offered as a single default; output:\n$out"
+        return
+    fi
+    if grep -q '^IQN_PREFIX="iqn.2026-02.local.zteststor"$' \
+            "$(node_conf_path "$fixture")"; then
+        test_fail "a mixed live prefix became the default; content:" \
+            "\n$(cat "$(node_conf_path "$fixture")")"
+        return
+    fi
+    test_pass
+}
+
 test_two_node_legacy_conf_sources_defaults() {
     reset_installer_mocks
     test_start "two-node: legacy two-node.conf is noticed and reconfigured"
@@ -1143,6 +1210,8 @@ test_two_node_old_encrypted_luns_format_warns
 test_two_node_obsolete_systemd_artifacts_removed
 test_two_node_compute_host_required
 test_two_node_legacy_conf_sources_defaults
+test_two_node_iqn_default_from_live_targets
+test_two_node_iqn_default_ignores_mixed_live_prefixes
 
 test_summary
 teardown_test_env

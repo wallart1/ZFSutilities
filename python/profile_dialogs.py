@@ -677,10 +677,11 @@ def show_profile_editor_dialog(app, name=None):
 
     prop_entries: dict[str, Gtk.Entry] = {}
     live_props = existing.get("properties", {})
+    placeholders = {"canmount": "on, off, or noauto"}
     for prop in LIVE_PROPERTIES:
         entry = Gtk.Entry()
         entry.set_text(live_props.get(prop, ""))
-        entry.set_placeholder_text("e.g. zstd")
+        entry.set_placeholder_text(placeholders.get(prop, "e.g. zstd"))
         _add_row(row, f"{prop}:", entry)
         prop_entries[prop] = entry
         row += 1

@@ -811,6 +811,42 @@ n"
     test_pass
 }
 
+test_two_node_by_path_matcher_accepts_real_portal_ips() {
+    reset_mocks
+    test_start "archive-vm: by-path config matcher matches multi-character portal IPs"
+
+    # Regression: the sidecar key matcher required "ip-<ONE char>:3260" —
+    # a real portal IP never matched, DISK_KEY was never appended in
+    # two-node mode, and unarchive-vm's Step 3 could not rewrite by-path
+    # lines for archives made by the product (j07 lab, 2026-10-23). The
+    # end-to-end append is fenced by itf journey j07's Stage A ("Rewrote
+    # scsi0" requires the sidecar key); this tests the matcher itself.
+    local script="$mydir/bin/archive-vm"
+    local matcher
+    matcher=$(sed -n '/:3260-iscsi-${target}-lun-${lun}/s/^ *//p' "$script" | head -1)
+    matcher="${matcher%\\}"
+    matcher="${matcher%% *([[:space:]])}"
+    if [[ -z "$matcher" ]]; then
+        test_fail "by-path matcher line not found in archive-vm"
+        return
+    fi
+    local config_line="scsi0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-\
+iqn.2026-02.local.stewie:threeamigos-lun-0,format=raw,discard=on"
+    local target='iqn.2026-02.local.stewie:threeamigos'
+    local lun=0
+    if ! eval "$matcher"; then
+        test_fail "by-path line with a real portal IP did not match; matcher: $matcher"
+        return
+    fi
+    lun=5
+    if eval "$matcher"; then
+        test_fail "matcher matched a different LUN; matcher: $matcher"
+        return
+    fi
+
+    test_pass
+}
+
 # shellcheck disable=SC2016  # the $-names are literal grep -F patterns
 test_sidecar_lun_lookup_grep_survives_slash_prefix() {
     test_start "archive-vm: sidecar LUN lookup matches targetcli's slash-prefixed backstore names"
@@ -2149,6 +2185,7 @@ test_copy_hash_mismatch_aborts_and_cleans_up
 test_partial_archive_dataset_is_redone
 test_complete_archive_dataset_is_skipped
 test_two_node_payload_probes_completion
+test_two_node_by_path_matcher_accepts_real_portal_ips
 test_archive_from_storage_runs_locally
 test_no_receive_volblocksize_override_remains
 test_two_node_heredoc_gets_config_content

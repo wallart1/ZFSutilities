@@ -503,7 +503,7 @@ if is_single_node; then
         { log_msg "FATAL: Not a ZFS dataset: $archive_base"; exit 1; }
     fi
 else
-    if ! ssh root@"$storage_host" "zfs list -H -o name '$archive_base'" \
+    if ! ssh -n root@"$storage_host" "zfs list -H -o name '$archive_base'" \
             >/dev/null 2>&1; then
         { log_msg "FATAL: Not a ZFS dataset on $storage_host: $archive_base"; exit 1; }
     fi
@@ -540,7 +540,7 @@ fi
 if is_single_node; then
     archive_mount=$(zfs get -H -o value mountpoint "$archive_base")
 else
-    archive_mount=$(ssh root@"$storage_host" \
+    archive_mount=$(ssh -n root@"$storage_host" \
         "zfs get -H -o value mountpoint '$archive_base'")
 fi
 
@@ -705,7 +705,7 @@ if [[ -n "$target" && -n "$lun" ]]; then
         [[ -n "$leading" && "$leading" =~ ^[a-z]+$ && "$trailing" =~ ^[0-9]+$ ]] \
             || continue
         [[ "$config_line" == "$key:"* ]] || continue
-        [[ "$config_line" == *"ip-"[0-9.]":3260-iscsi-${target}-lun-${lun}"* ]] \
+        [[ "$config_line" == *"ip-"*":3260-iscsi-${target}-lun-${lun}"* ]] \
             || continue
         disk_key="$key"
         break
@@ -746,7 +746,7 @@ CPEOF
 else
     # Orchestrating on the compute host: push the config to the storage
     # host's archive mount.
-    ssh root@"$storage_host" "mkdir -p '$(dirname "$config_dest_mount")'"
+    ssh -n root@"$storage_host" "mkdir -p '$(dirname "$config_dest_mount")'"
     scp -q "$proxmoxconfig" "root@${storage_host}:${config_dest_mount}"
 fi
 log_msg "INFO:   ✓ Config archived: ${proxmoxconfig}"
@@ -784,7 +784,7 @@ for zvol in $zvols; do
             fi
         fi
     else
-        if ! ssh root@"$storage_host" "zfs list -H '$archive_dataset'" \
+        if ! ssh -n root@"$storage_host" "zfs list -H '$archive_dataset'" \
                 >/dev/null 2>&1; then
             log_msg "FATAL: MISSING dataset: ${archive_dataset}"
             ((++errors))
@@ -831,7 +831,8 @@ if is_single_node; then
         log_msg "INFO:   ✓ Config archive OK"
     fi
 else
-    if ! ssh root@"$storage_host" "[[ -f '$config_dest_mount' && -s '$config_dest_mount' ]]"; then
+    if ! ssh -n root@"$storage_host" \
+            "[[ -f '$config_dest_mount' && -s '$config_dest_mount' ]]"; then
         log_msg "FATAL: Config archive missing or empty"
         ((++errors))
     else
@@ -906,7 +907,7 @@ else
         fi
         # remove-vm-disk exits 0 even when an operator declines its confirm,
         # so judge by outcome: the zvol must actually be gone.
-        still_present=$(ssh root@"$storage_host" \
+        still_present=$(ssh -n root@"$storage_host" \
             "zfs list -H -o name '$zvol'" 2>/dev/null || true)
         if [[ -n "$still_present" ]]; then
             log_msg "WARN: ${zvol} was not removed"

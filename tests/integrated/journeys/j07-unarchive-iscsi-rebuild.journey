@@ -1,0 +1,354 @@
+#!/usr/bin/env bash
+# j07-unarchive-iscsi-rebuild.journey — unarchive-vm's iSCSI
+# reconstruction against a target tree that disagrees with node.conf.
+#
+# Composition: the ENTIRE j05 two-node lab runs first (template clones,
+# P2P link + root SSH both ways, three RAIDZ1 pools, install-two-node,
+# enroll-proxmox-pool, stopped VM 101 + its first product disk). This
+# journey then replays the 2026-10 production incident shapes through the
+# archive/unarchive lifecycle:
+#
+#   Stage A  drift (the stewie case): archive VM 101 through the product,
+#            then regenerate node.conf's IQN_PREFIX under a wrong prefix on
+#            BOTH guests (what install-two-node did on the recovered host).
+#            unarchive-vm must converge the prefix back onto the live
+#            tree on both hosts (backups kept), map the LUN onto the LIVE
+#            target, rewrite the by-path line to the live IQN, and the VM
+#            must start.
+#   Stage B  clean absence: the pool's target is destroyed outright (the
+#            bare-metal-restore regression shape). The rerun must skip
+#            Step 1 (verified zvols), CREATE the target with portal+ACLs,
+#            discover+log in from the compute host, and boot the VM.
+#   Stage C  ambiguity refusal: a duplicate same-short-name target under a
+#            third prefix must abort the run BEFORE any tree mutation.
+#
+# Guest state required: storage template + compute template (j05's).
+# Site config required: j05's two-node keys. Software source must be
+# dev-tarball — this journey verifies working-tree repairs.
+
+# shellcheck source=j05-two-node-install.journey
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/j05-two-node-install.journey"
+
+journey_main() {
+    if [[ "${ITF_SW_SOURCE:-}" != "dev-tarball" ]]; then
+        itf_step fail "site config: dev tarball source" \
+            "ITF_SW_SOURCE=${ITF_SW_SOURCE:-?} — set dev-tarball (verifies working-tree repairs)"
+        return 1
+    fi
+    itf_step info "journey start" \
+        "j07 unarchive iSCSI rebuild; composes the j05 two-node lab"
+
+    # ------------------------------------------------------------------
+    # Stage L: the full j05 two-node lab (clones -> install -> first LUN)
+    # ------------------------------------------------------------------
+
+    j05_two_node_lab_main || return 1
+
+    local s_vmid s_ip c_vmid c_ip
+    read -r _ s_vmid s_ip < "$ITF_RUN_DIR/guest-storage.txt"
+    read -r _ c_vmid c_ip < "$ITF_RUN_DIR/guest-compute.txt"
+    if [[ -n "$s_ip" && -n "$c_ip" ]]; then
+        itf_step pass "lab coordinates recovered" \
+            "storage=$s_ip (vmid $s_vmid) compute=$c_ip (vmid $c_vmid)"
+    else
+        itf_step fail "lab coordinates recovered" "guest record files incomplete"
+        return 1
+    fi
+
+    # The compute name exactly as the installed node.conf sshes to it, the
+    # live IQN prefix the lab installed with, and the archive dataset a
+    # user would keep on a second pool.
+    local s_hostname live_prefix live_target
+    s_hostname="$(itf_guest_exec "$s_ip" 'hostname -s' 2>/dev/null)"
+    live_prefix="$(itf_guest_exec "$s_ip" \
+        'sed -n "s/^IQN_PREFIX=\"\([^\"]*\)\"/\1/p" /etc/zfsutilities/node.conf' \
+        2>/dev/null)"
+    live_target="${live_prefix}:zfstest1"
+    if [[ -n "$s_hostname" && -n "$live_prefix" ]]; then
+        itf_step pass "live target prefix read" \
+            "node.conf IQN_PREFIX=$live_prefix (target ${live_target})"
+    else
+        itf_step fail "live target prefix read" \
+            "storage node.conf unreadable or IQN_PREFIX missing"
+        return 1
+    fi
+
+    if itf_guest_exec "$s_ip" \
+            "zfs list -H -o name zfstest2/vm-archive >/dev/null 2>&1 \
+             || zfs create zfstest2/vm-archive" > /dev/null 2>&1; then
+        itf_step pass "archive dataset ready" "zfstest2/vm-archive on the storage guest"
+    else
+        itf_step fail "archive dataset ready" "zfs create zfstest2/vm-archive failed"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage A: archive through the product, then stage the production
+    # drift (node.conf regenerated under a wrong prefix on BOTH hosts)
+    # ------------------------------------------------------------------
+
+    # Feed order (bin/archive-vm, no dependent clones in this lab):
+    #   zfstest2/vm-archive   archive base dataset
+    #   (empty)               transfer rate limit (unlimited)
+    #   y                     proceed with archive?
+    #   y                     remove VM 101?
+    #   y                     remove-vm-disk: stopped/detached?
+    #   y                     remove-vm-disk: destroy for sure?
+    local afeed="$ITF_RUN_DIR/archive-answers.txt"
+    printf 'zfstest2/vm-archive\n\ny\ny\ny\ny\n' > "$afeed"
+    local arc_log="$ITF_RUN_DIR/archive-vm.log"
+    itf_guest_exec_feed "$c_ip" "$afeed" "bash -lc 'archive-vm 101'" \
+        > "$arc_log" 2>&1
+    local arc_rc=$?
+    itf_artifact "archive-vm" "$arc_log"
+    # The VM must be GONE — config on compute, zvol on storage — or the
+    # later unarchive steps prove nothing.
+    # shellcheck disable=SC2029  # expansions run on the guests
+    if [[ $arc_rc -eq 0 ]] \
+        && ! itf_guest_exec "$c_ip" \
+            "test -f /etc/pve/qemu-server/101.conf" 2>/dev/null \
+        && ! itf_guest_exec "$s_ip" \
+            "zfs list -H -o name zfstest1/proxmox/vm-101-disk-0" \
+            >/dev/null 2>&1; then
+        itf_step pass "VM 101 archived and removed" \
+            "config + zvol gone; verified archive under zfstest2 (see archive-vm.log)"
+    else
+        itf_step fail "VM 101 archived and removed" \
+            "rc=$arc_rc — see archive-vm.log"
+        return 1
+    fi
+
+    # The drift: a recovery install regenerating node.conf under a fresh
+    # date-derived prefix while the live targets keep the old one.
+    local drift_prefix="iqn.1999-01.local.${s_hostname}"
+    # shellcheck disable=SC2029  # expansions run on the guests
+    if itf_guest_exec "$s_ip" \
+            "cp /etc/zfsutilities/node.conf /etc/zfsutilities/node.conf.preitf \
+             && sed -i 's|^IQN_PREFIX=.*|IQN_PREFIX=\"${drift_prefix}\"|' \
+                 /etc/zfsutilities/node.conf \
+             && grep -q '^IQN_PREFIX=\"${drift_prefix}\"$' /etc/zfsutilities/node.conf" \
+            > /dev/null 2>&1 \
+        && itf_guest_exec "$c_ip" \
+            "cp /etc/zfsutilities/node.conf /etc/zfsutilities/node.conf.preitf \
+             && sed -i 's|^IQN_PREFIX=.*|IQN_PREFIX=\"${drift_prefix}\"|' \
+                 /etc/zfsutilities/node.conf \
+             && grep -q '^IQN_PREFIX=\"${drift_prefix}\"$' /etc/zfsutilities/node.conf" \
+            > /dev/null 2>&1; then
+        itf_step pass "IQN drift staged on both hosts" \
+            "node.conf prefix ${drift_prefix} vs live ${live_prefix}"
+    else
+        itf_step fail "IQN drift staged on both hosts" "conf rewrite failed"
+        return 1
+    fi
+
+    # Feed order (bin/unarchive-vm): (empty) rate limit, y proceed.
+    local ufeed="$ITF_RUN_DIR/unarchive-answers.txt"
+    printf '\ny\n' > "$ufeed"
+    local ua_log="$ITF_RUN_DIR/unarchive-drift.log"
+    itf_guest_exec_feed "$c_ip" "$ufeed" "bash -lc 'unarchive-vm 101'" \
+        > "$ua_log" 2>&1
+    local ua_rc=$?
+    itf_artifact "unarchive-drift" "$ua_log"
+
+    local conv_log="$ITF_RUN_DIR/drift-verify.log"
+    # shellcheck disable=SC2029  # expansions run on the guests
+    if [[ $ua_rc -eq 0 ]] \
+        && grep -q "IQN_PREFIX=${live_prefix} (prior copy:" "$ua_log" \
+        && grep -q "Disk 0: LUN" "$ua_log" \
+        && grep -q "Rewrote scsi0" "$ua_log" \
+        && itf_guest_exec "$s_ip" "
+            set -e
+            grep -q '^IQN_PREFIX=\"${live_prefix}\"$' /etc/zfsutilities/node.conf
+            ls /etc/zfsutilities/node.conf.bak-* >/dev/null
+            targetcli /iscsi/${live_target}/tpg1/luns ls \
+                | grep -q 'block/vm-101-disk-0'
+            echo storage-ok
+        " > "$conv_log" 2>&1 && grep -q storage-ok "$conv_log" \
+        && itf_guest_exec "$c_ip" "
+            set -e
+            grep -q '^IQN_PREFIX=\"${live_prefix}\"$' /etc/zfsutilities/node.conf
+            ls /etc/zfsutilities/node.conf.bak-* >/dev/null
+            grep -q '^scsi0: /dev/disk/by-path/ip-.*-iscsi-${live_target}-lun-' \
+                /etc/pve/qemu-server/101.conf
+            echo compute-ok
+        " >> "$conv_log" 2>&1 && grep -q compute-ok "$conv_log"; then
+        itf_step pass "drift rerun converged + mapped onto live target" \
+            "both node.confs converged with backups; LUN on ${live_target}; by-path live IQN"
+    else
+        itf_step fail "drift rerun converged + mapped onto live target" \
+            "rc=$ua_rc — see unarchive-drift.log and drift-verify.log"
+        itf_artifact "drift-verify" "$conv_log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage B: target destroyed outright — rerun must rebuild it and the
+    # compute host must discover + log in to the NEW target
+    # ------------------------------------------------------------------
+
+    if itf_guest_exec "$c_ip" "bash -lc 'qm destroy 101'" \
+            > "$ITF_RUN_DIR/destroy-101.log" 2>&1 \
+        && itf_guest_exec "$c_ip" \
+            "iscsiadm -m node -T ${live_target} --logout >/dev/null 2>&1; true" \
+            > /dev/null 2>&1 \
+        && itf_guest_exec "$s_ip" "bash -lc '
+                targetcli /iscsi delete ${live_target} >/dev/null 2>&1
+                safe-iscsi-save
+                targetcli /iscsi ls
+            '" > "$ITF_RUN_DIR/target-deleted.log" 2>&1 \
+        && ! grep -q "${live_target}" "$ITF_RUN_DIR/target-deleted.log"; then
+        itf_step pass "zfstest1 target destroyed" \
+            "session logged out, target deleted, config saved"
+    else
+        itf_step fail "zfstest1 target destroyed" "see target-deleted.log"
+        return 1
+    fi
+
+    local ub_log="$ITF_RUN_DIR/unarchive-rebuild.log"
+    itf_guest_exec_feed "$c_ip" "$ufeed" "bash -lc 'unarchive-vm 101'" \
+        > "$ub_log" 2>&1
+    local ub_rc=$?
+    itf_artifact "unarchive-rebuild" "$ub_log"
+
+    local rb_log="$ITF_RUN_DIR/rebuild-verify.log"
+    # shellcheck disable=SC2029  # expansions run on the guests
+    if [[ $ub_rc -eq 0 ]] \
+        && grep -q "Already restored (verified)" "$ub_log" \
+        && grep -q "zfstest1/proxmox/vm-101-disk-0" "$ub_log" \
+        && grep -q "Created iSCSI target ${live_target}" "$ub_log" \
+        && grep -q "Disk 0: LUN" "$ub_log" \
+        && itf_guest_exec "$s_ip" "
+            set -e
+            targetcli /iscsi/${live_target}/tpg1/luns ls \
+                | grep -q 'block/vm-101-disk-0'
+            targetcli /iscsi/${live_target}/tpg1/portals ls \
+                | grep -q ':3260'
+            echo storage-ok
+        " > "$rb_log" 2>&1 && grep -q storage-ok "$rb_log" \
+        && itf_guest_exec "$c_ip" "
+            set -e
+            iscsiadm -m session 2>/dev/null | grep -q '${live_target}'
+            lsblk -dn -o NAME,SERIAL | grep -q 'sd'
+            echo compute-ok
+        " >> "$rb_log" 2>&1 && grep -q compute-ok "$rb_log"; then
+        itf_step pass "target rebuilt, discovered, logged in" \
+            "Step 1 skipped; target+portal+LUN recreated; session live; disk visible"
+    else
+        itf_step fail "target rebuilt, discovered, logged in" \
+            "rc=$ub_rc — see unarchive-rebuild.log and rebuild-verify.log"
+        itf_artifact "rebuild-verify" "$rb_log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Boot proof after both rebuild shapes: the restored VM must start.
+    # ------------------------------------------------------------------
+
+    local boot_log="$ITF_RUN_DIR/boot-proof.log"
+    # The lab's nested PVE guest has no /dev/kvm passthrough, so the VM
+    # boots under TCG (kvm=0) — what a user on a virtualization-less
+    # compute host would do; the proof is disk attachability, not speed.
+    # shellcheck disable=SC2029  # expansions run on the compute guest
+    if itf_guest_exec "$c_ip" "
+            bash -lc 'qm set 101 --kvm 0' || exit 1
+            bash -lc 'qm start 101' || exit 1
+            for i in \$(seq 1 15); do
+                qm status 101 | grep -q 'status: running' && break
+                sleep 2
+            done
+            qm status 101 | grep -q 'status: running' || exit 1
+            bash -lc 'qm stop 101' || exit 1
+            for i in \$(seq 1 15); do
+                qm status 101 | grep -q 'status: stopped' && exit 0
+                sleep 2
+            done
+            exit 1
+        " > "$boot_log" 2>&1; then
+        itf_step pass "restored VM boots" \
+            "qm start 101 -> running, then stopped cleanly"
+    else
+        itf_step fail "restored VM boots" "see boot-proof.log"
+        itf_artifact "boot-proof" "$boot_log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage C: duplicate same-short target under a third prefix — refuse
+    # before touching the tree
+    # ------------------------------------------------------------------
+
+    itf_guest_exec "$c_ip" "bash -lc 'qm destroy 101'" \
+        > /dev/null 2>&1
+    # Stage B recreated the live target, so the constructed one now EXISTS;
+    # re-stage the drift so the constructed target is absent again and the
+    # decoy makes the same-short candidate set ambiguous.
+    # shellcheck disable=SC2029  # expansions run on the guests
+    itf_guest_exec "$s_ip" \
+        "sed -i 's|^IQN_PREFIX=.*|IQN_PREFIX=\"${drift_prefix}\"|' /etc/zfsutilities/node.conf" \
+        > /dev/null 2>&1
+    itf_guest_exec "$c_ip" \
+        "sed -i 's|^IQN_PREFIX=.*|IQN_PREFIX=\"${drift_prefix}\"|' /etc/zfsutilities/node.conf" \
+        > /dev/null 2>&1
+    local decoy_target="iqn.1999-06.local.${s_hostname}:zfstest1"
+    # shellcheck disable=SC2029  # expansions run on the guests
+    if itf_guest_exec "$s_ip" "
+            targetcli /iscsi create ${decoy_target} >/dev/null 2>&1
+            safe-iscsi-save >/dev/null 2>&1
+            targetcli /iscsi ls | grep -q '${decoy_target}'
+        " > "$ITF_RUN_DIR/decoy-created.log" 2>&1; then
+        itf_step pass "duplicate same-short target staged" \
+            "$decoy_target (+ conf back on ${drift_prefix})"
+    else
+        itf_step fail "duplicate same-short target staged" \
+            "see decoy-created.log"
+        return 1
+    fi
+
+    local uc_log="$ITF_RUN_DIR/unarchive-ambiguous.log"
+    itf_guest_exec_feed "$c_ip" "$ufeed" "bash -lc 'unarchive-vm 101'" \
+        > "$uc_log" 2>&1
+    local uc_rc=$?
+    itf_artifact "unarchive-ambiguous" "$uc_log"
+
+    local amb_log="$ITF_RUN_DIR/ambiguity-verify.log"
+    # shellcheck disable=SC2029  # expansions run on the guests
+    if [[ $uc_rc -ne 0 ]] \
+        && grep -q "multiple live targets share the" "$uc_log" \
+        && grep -q "${decoy_target}" "$uc_log" \
+        && ! grep -q "Created iSCSI target" "$uc_log" \
+        && itf_guest_exec "$s_ip" "
+            set -e
+            targetcli /iscsi/${live_target}/tpg1/luns ls \
+                | grep -q 'block/vm-101-disk-0'
+            if targetcli /iscsi/${decoy_target}/tpg1/luns ls 2>/dev/null \
+                    | grep -q 'block/'; then
+                exit 1
+            fi
+            echo tree-unmutated
+        " > "$amb_log" 2>&1 && grep -q tree-unmutated "$amb_log"; then
+        itf_step pass "ambiguity refused without mutation" \
+            "rc=$uc_rc names both candidates; live LUN intact; decoy empty"
+    else
+        itf_step fail "ambiguity refused without mutation" \
+            "rc=$uc_rc — see unarchive-ambiguous.log and ambiguity-verify.log"
+        itf_artifact "ambiguity-verify" "$amb_log"
+        return 1
+    fi
+
+    # Leave the lab consistent: drop the decoy target and restore the
+    # converged prefix on both hosts.
+    # shellcheck disable=SC2029  # expansions run on the guests
+    itf_guest_exec "$s_ip" "bash -lc '
+            targetcli /iscsi delete ${decoy_target} >/dev/null 2>&1
+            safe-iscsi-save >/dev/null 2>&1
+        '" > /dev/null 2>&1
+    itf_guest_exec "$s_ip" \
+        "sed -i 's|^IQN_PREFIX=.*|IQN_PREFIX=\"${live_prefix}\"|' /etc/zfsutilities/node.conf" \
+        > /dev/null 2>&1
+    itf_guest_exec "$c_ip" \
+        "sed -i 's|^IQN_PREFIX=.*|IQN_PREFIX=\"${live_prefix}\"|' /etc/zfsutilities/node.conf" \
+        > /dev/null 2>&1
+    itf_step info "journey stage reached" \
+        "rebuild verified: drift convergence, target rebuild + login, ambiguity refusal"
+    return 0
+}

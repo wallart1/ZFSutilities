@@ -33,6 +33,9 @@
 #                                     remove a baseline template
 #   itf journey list                  list available journeys
 #   itf journey run NAME              execute a journey under a run report
+#   itf journey run NAME --rerun      replay on the previous run's guests:
+#                                     rollback to the as-cloned checkpoint
+#                                     instead of re-cloning templates
 #   itf watch [TAG]                   tail a run's live report + serial
 #                                     transcript (Ctrl-C stops) — the safe
 #                                     alternative to opening a PVE console
@@ -385,6 +388,61 @@ cmd_template() {
     esac
 }
 
+# _journey_rerun_prepare <journey-name>
+#
+# --rerun support: resolve the source run (the newest run of the SAME
+# journey that is not still active and recorded at least one guest) and
+# write the new run's rerun-guests.tsv — one "<guest-file basename>
+# <base> <vmid>" line per guest record.  The staging stages (common.sh)
+# look guests up there by their own guest-file name; a FAIL step with
+# guidance is recorded when no usable source exists.
+_journey_rerun_prepare() {
+    local name="$1" run state src="" rec base vmid summary=""
+    local -a runs=()
+    mapfile -t runs < <(ls -1d "$ITF_RUNS_DIR"/run-*-"$name" 2>/dev/null | sort -r)
+    if (( ${#runs[@]} == 0 )); then
+        itf_step fail "rerun source" \
+            "no prior run of $name under $ITF_RUNS_DIR — run fresh first"
+        return 1
+    fi
+    state="$(itf_run_state "${runs[0]}")"
+    if [[ "$state" == "running" ]]; then
+        itf_step fail "rerun source" \
+            "$(basename "${runs[0]}") is still active — wait for it to finish"
+        return 1
+    fi
+    for run in "${runs[@]}"; do
+        if compgen -G "$run/guest*.txt" > /dev/null; then
+            src="$run"
+            break
+        fi
+    done
+    if [[ -z "$src" ]]; then
+        itf_step fail "rerun source" \
+            "no prior $name run recorded any guests (all aborted before staging)"
+        return 1
+    fi
+    local spec="$ITF_RUN_DIR/rerun-guests.tsv"
+    : > "$spec"
+    for rec in "$src"/guest*.txt; do
+        [[ -f "$rec" ]] || continue
+        base="" vmid=""
+        read -r base vmid _ < "$rec" || true
+        if [[ -n "$base" && "$vmid" =~ ^[0-9]+$ ]]; then
+            printf '%s %s %s\n' "$(basename "$rec")" "$base" "$vmid" >> "$spec"
+            summary+=" $(basename "$rec" .txt)=${base}/${vmid}"
+        else
+            itf_step fail "rerun source" \
+                "malformed guest record: $rec — run fresh (no --rerun)"
+            return 1
+        fi
+    done
+    itf_step info "rerun source" \
+        "$(basename "$src") — guests rolled back to as-cloned instead of re-cloned:$summary"
+    echo "itf: rerun of $(basename "$src"):$summary"
+    return 0
+}
+
 cmd_journey() {
     itf_config_load
     local sub="${1:-}"
@@ -398,7 +456,14 @@ cmd_journey() {
             ;;
         run)
             local name="${2:-}"
-            [[ -z "$name" ]] && { echo "usage: itf journey run NAME" >&2; return 2; }
+            [[ -z "$name" ]] && { echo "usage: itf journey run NAME [--rerun]" >&2; return 2; }
+            local rerun=0
+            if [[ "${3:-}" == "--rerun" ]]; then
+                rerun=1
+            elif (( $# > 2 )); then
+                echo "usage: itf journey run NAME [--rerun]" >&2
+                return 2
+            fi
             local jfile="$ITF_ROOT/journeys/$name.journey"
             [[ -f "$jfile" ]] || { echo "itf: no such journey: $name" >&2; return 2; }
             # shellcheck disable=SC1090
@@ -413,6 +478,13 @@ cmd_journey() {
             itf_report_init "$name" || return 1
             echo "itf: journey $name running (pid $$) — hands off guest/base" \
                 "consoles; watch safely: itf watch"
+            if (( rerun )); then
+                if ! _journey_rerun_prepare "$name"; then
+                    itf_report_finish > /dev/null || true
+                    echo "itf: rerun refused — see $ITF_RUN_DIR/report.md"
+                    return 1
+                fi
+            fi
             local rc=0
             journey_main || rc=$?
             if (( rc != 0 )); then

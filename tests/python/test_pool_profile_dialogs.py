@@ -530,6 +530,30 @@ class TestPoolProfileEditorDialog(unittest.TestCase):
         )
         self.assertEqual(profiles["fast-pool"]["notes"], "SSD tuning.")
 
+    def test_add_new_profile_with_canmount(self):
+        ppd = _import_pool_profile_dialogs()
+        app = self._app()
+
+        values = {
+            "name": "zvol-only",
+            "description": "Pool root is never mounted.",
+            "blocksize": "recommended",
+            "canmount": "off",
+            "notes": "",
+        }
+
+        with (
+            _FakePoolProfileEditor(ppd, values, [ppd.Gtk.ResponseType.OK]),
+            patch("feature_config.save_config"),
+        ):
+            ppd.show_pool_profile_editor_dialog(app)
+
+        profiles = app.config["pool_profiles"]
+        self.assertEqual(
+            profiles["zvol-only"]["filesystem_properties"],
+            {"canmount": "off"},
+        )
+
     def test_edit_custom_profile(self):
         ppd = _import_pool_profile_dialogs()
         app = self._app()

@@ -147,6 +147,13 @@ _FS_PROP_TOOLTIPS = {
         "vdev — needs an SSD special vdev in the pool.\n"
         "Empty leaves the property unset."
     ),
+    "canmount": (
+        "Whether ZFS may mount the pool root.\n"
+        "on: the root dataset is mounted at its mountpoint (the default).\n"
+        "off: the root is never mounted — for pools that hold only volumes "
+        "or serve data through children.\n"
+        "Empty leaves the property unset — ZFS's default (on) applies."
+    ),
 }
 
 _FIELD_TOOLTIPS = {
@@ -463,6 +470,7 @@ def show_pool_profile_editor_dialog(app, name=None):
         "sync": "standard, always, or disabled",
         "primarycache": "all, metadata, or none",
         "special_small_blocks": "e.g. 32K (needs a special vdev)",
+        "canmount": "on or off",
     }
     for prop in LIVE_PROPERTIES:
         entry = Gtk.Entry()

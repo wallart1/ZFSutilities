@@ -64,6 +64,8 @@ test_missing_node_config_is_nonfatal() {
     test_start "Missing node config exits cleanly when sourced"
     (
         NODE_CONF="$RSYNC_TEST_DIR/nonexistent.conf"
+        ZFSUTILITIES_LEGACY_NODE_CONF="$RSYNC_TEST_DIR/nonexistent-legacy.conf"
+        ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$RSYNC_TEST_DIR/nonexistent-two-node.conf"
         rsync_dailybackup_jobs=()
         # shellcheck source=bin/rsync-dailybackup
         source "$mydir/bin/rsync-dailybackup"
@@ -72,10 +74,50 @@ test_missing_node_config_is_nonfatal() {
     assert_rc 0 "$?"
 }
 
+test_node_conf_prefers_fhs_conf() {
+    test_start "Node config resolution prefers the FHS conf over legacy paths"
+    mkdir -p "$RSYNC_TEST_DIR/fhs"
+    printf 'NODE_MODE="single-node"\nTHIS_HOST="testhost"\n' \
+        > "$RSYNC_TEST_DIR/fhs/node.conf"
+    printf 'NODE_MODE="single-node"\nTHIS_HOST="legacyhost"\n' \
+        > "$RSYNC_TEST_DIR/legacy-node.conf"
+    printf 'NODE_MODE="single-node"\nTHIS_HOST="twohost"\n' \
+        > "$RSYNC_TEST_DIR/legacy-two-node.conf"
+    local out
+    out=$(
+        unset NODE_CONF
+        export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$RSYNC_TEST_DIR/fhs"
+        export ZFSUTILITIES_LEGACY_NODE_CONF="$RSYNC_TEST_DIR/legacy-node.conf"
+        export ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$RSYNC_TEST_DIR/legacy-two-node.conf"
+        rsync_dailybackup_jobs=() source "$mydir/bin/rsync-dailybackup"
+        echo "resolved=$NODE_CONF host=$THIS_HOST"
+    )
+    assert_contains "$out" "resolved=$RSYNC_TEST_DIR/fhs/node.conf"
+    assert_contains "$out" "host=testhost"
+}
+
+test_node_conf_falls_back_to_legacy_node_conf() {
+    test_start "Without an FHS conf the legacy node conf is used"
+    rm -f "$RSYNC_TEST_DIR/fhs/node.conf"
+    local out
+    out=$(
+        unset NODE_CONF
+        export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$RSYNC_TEST_DIR/fhs"
+        export ZFSUTILITIES_LEGACY_NODE_CONF="$RSYNC_TEST_DIR/legacy-node.conf"
+        export ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$RSYNC_TEST_DIR/legacy-two-node.conf"
+        rsync_dailybackup_jobs=() source "$mydir/bin/rsync-dailybackup"
+        echo "resolved=$NODE_CONF host=$THIS_HOST"
+    )
+    assert_contains "$out" "resolved=$RSYNC_TEST_DIR/legacy-node.conf"
+    assert_contains "$out" "host=legacyhost"
+}
+
 test_no_jobs_returns_zero
 test_local_rsync_copies_files
 test_exclude_pattern_honored
 test_malformed_job_is_skipped
+test_node_conf_prefers_fhs_conf
+test_node_conf_falls_back_to_legacy_node_conf
 test_missing_node_config_is_nonfatal
 
 rm -rf "$RSYNC_TEST_DIR"

@@ -404,8 +404,54 @@ test_delfs_autoproceed_override_subprocess() {
 }
 
 # ------------------------------------------------------------------
+# Node-config resolution precedence (FHS conf first, then legacy paths).
+# ------------------------------------------------------------------
+test_node_conf_prefers_fhs_conf() {
+    test_start "Node config resolution prefers the FHS conf over legacy paths"
+    local conf_dir out
+    conf_dir=$(mktemp -d)
+    mkdir -p "$conf_dir/fhs"
+    printf 'NODE_MODE=two-node\n' > "$conf_dir/fhs/node.conf"
+    printf 'NODE_MODE=two-node\n' > "$conf_dir/legacy-node.conf"
+    printf 'NODE_MODE=two-node\n' > "$conf_dir/two-node.conf"
+    out=$(
+        unset NODE_CONF
+        export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$conf_dir/fhs"
+        export ZFSUTILITIES_LEGACY_NODE_CONF="$conf_dir/legacy-node.conf"
+        export ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$conf_dir/two-node.conf"
+        # shellcheck source=bin/zfsdelfs
+        source "$mydir/bin/zfsdelfs"
+        echo "resolved=$NODE_CONF"
+    )
+    assert_contains "$out" "resolved=$conf_dir/fhs/node.conf"
+    rm -rf "$conf_dir"
+}
+
+test_node_conf_falls_back_to_legacy_node_conf() {
+    test_start "Without an FHS conf the legacy node conf is used"
+    local conf_dir out
+    conf_dir=$(mktemp -d)
+    mkdir -p "$conf_dir/fhs"
+    printf 'NODE_MODE=two-node\n' > "$conf_dir/legacy-node.conf"
+    printf 'NODE_MODE=two-node\n' > "$conf_dir/two-node.conf"
+    out=$(
+        unset NODE_CONF
+        export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$conf_dir/fhs"
+        export ZFSUTILITIES_LEGACY_NODE_CONF="$conf_dir/legacy-node.conf"
+        export ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$conf_dir/two-node.conf"
+        # shellcheck source=bin/zfsdelfs
+        source "$mydir/bin/zfsdelfs"
+        echo "resolved=$NODE_CONF"
+    )
+    assert_contains "$out" "resolved=$conf_dir/legacy-node.conf"
+    rm -rf "$conf_dir"
+}
+
+# ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
+test_node_conf_prefers_fhs_conf
+test_node_conf_falls_back_to_legacy_node_conf
 test_teardown_removes_expected_backstore
 test_teardown_removes_encrypted_conf
 test_teardown_records_encrypted_flag

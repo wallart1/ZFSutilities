@@ -205,15 +205,24 @@ This applies to: [rescan-storage](../commands-and-modules/two-node.md#rescan-sto
 If [zfsdelfs](../commands-and-modules/commands.md#zfsdelfs), [zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup), and [rsync-dailybackup](../commands-and-modules/modules.md#rsync-dailybackup) run from the
 ZFSutilities project tree (not from the versioned installation PATH), they source
 the config directly instead of using the library. Running from the repo-root is
-supported only in a development environment. They keep the config file's
-uppercase names at source time, then work with lowercase copies (`node_mode`,
-`storage_host`, `compute_host`):
+supported only in a development environment. All three resolve the config with
+node-lib's precedence — the current FHS conf first, then the two legacy paths,
+honoring the `ZFSUTILITIES_*` environment overrides — and keep the config
+file's uppercase names at source time, then work with lowercase copies
+(`node_mode`, `storage_host`, `compute_host`):
 
 ```bash
-NODE_CONF="/etc/zfsutilities/node.conf"
+: "${NODE_CONF:=${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/node.conf}"
 if [[ ! -r "$NODE_CONF" ]]; then
-    echo "✗ Missing $NODE_CONF — install via: bin/install-single-node" >&2
-    exit 1
+    if [[ -r "${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}" ]]; then
+        NODE_CONF="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
+    elif [[ -r "${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}" ]]; then
+        NODE_CONF="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
+    else
+        # Per-script failure: zfsdelfs and zfsdailybackup abort the run;
+        # rsync-dailybackup logs a WARN and skips its pulls.
+        :
+    fi
 fi
 source "$NODE_CONF"
 node_mode="${NODE_MODE:-two-node}"

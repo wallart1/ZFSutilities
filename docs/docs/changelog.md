@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.129.0
+
+*Released 2026-10-23*
+
+### Added
+
+- **unarchive-vm live-tree iSCSI rebuild (F-020).** Step 2 now
+  resolves every restored zvol's pool against the live LIO target
+  tree, not just the node config: when all live pool targets share one
+  IQN prefix the config disagrees with, `IQN_PREFIX` is converged onto
+  the live prefix on both hosts (a timestamped `node.conf.bak-*` is
+  kept beside each conf); an absent target maps onto the single live
+  target already carrying the pool's short name; a pool no live target
+  carries gets its target created with the setup-iscsi-targets recipe;
+  duplicate same-short targets abort the restore before any iSCSI
+  mutation. Step 4 discovers the portal and logs in to the mapped
+  targets before rescanning. The new itf journey
+  `j07-unarchive-iscsi-rebuild` fences the whole lifecycle, and
+  `itf journey run NAME --rerun` replays a journey on its previous
+  run's guests rolled back to the as-cloned checkpoint.
+- **node-lib live LIO helpers.** `lio_refresh_target_list`,
+  `lio_target_iqns`, `target_in_live_tree`, `find_live_short_targets`,
+  `live_converged_prefix`, and `converge_iqn_prefix` expose the live
+  target tree to LUN tooling; a persistent `node_conf` copy survives
+  test-style `NODE_CONF=... source` assignments.
+- **install-two-node live-prefix IQN default.** When the host already
+  runs LIO targets that share one prefix, that prefix — not a fresh
+  date-derived one — is offered as the default (the 2026-10
+  production-drift recurrence fence).
+- **canmount in workload and pool profiles.** `canmount` joins the
+  shared property vocabulary: workload-profile editor (filesystems
+  only), pool-profile editor with `zpool create -O canmount=…` and
+  Match-origin capture, and the apply plan (volumes skip it like
+  `recordsize`/`atime`). The Datasets page probes `canmount` on
+  selection and never enables Mount for `canmount=off` rows (tooltip
+  explains); mounting skips directly selected `canmount=off`
+  filesystems with an INFO line.
+
+### Changed
+
+- **stdin-safe ssh query calls.** Every stdin-free `ssh` call in
+  archive-vm, unarchive-vm, and node-lib passes `-n`, so a bare query
+  between prompts can no longer drain a piped answer feed (scripted
+  and itf-fed runs aborting at "Proceed with archive?"). The
+  `bash -s` payload and the remove-vm-disk `ssh -t` delegation keep
+  their stdin by design.
+- **One guest-probe target per (VM, disk).** The same zvol short name
+  can exist in more than one pool (live disk plus backup copy);
+  duplicate targets collided in `match_volumes`' per-short result maps
+  and could deny a legitimate size+bus match as a false ambiguity.
+  The copy with readable storage-side signatures wins; ties keep the
+  first.
+
+### Fixed
+
+- **archive-vm two-node sidecar matcher (F-021).** The DISK_KEY/LUN/
+  TARGET matcher required a single character between `ip-` and
+  `:3260`, so real portal IPs never matched and unarchive-vm Step 3
+  could not rewrite by-path lines for product-made archives.
+- **safe-iscsi-save empty manifest (F-022).** An empty
+  expected-backstores manifest with zero active block backstores —
+  removing the last VM disk — now saves the target-only config instead
+  of refusing; an empty manifest with backstores live still refuses.
+- **FHS-first node-config precedence in repo-root tools (F-023).**
+  zfsdelfs, zfsdailybackup, and rsync-dailybackup resolve
+  `/etc/zfsutilities/node.conf` first, then the legacy conf paths,
+  honoring the `ZFSUTILITIES_*` env overrides — FHS-only installs no
+  longer exit 1 (zfsdailybackup) or silently skip (rsync-dailybackup).
+- **Target-creation portal fatality (F-024).** Adding the
+  storage-IP portal after `/iscsi create` fails when targetcli's
+  default `0.0.0.0:3260` portal already binds the port; only a TPG
+  with no portal at all is fatal now, otherwise a WARN names the kept
+  portal.
+
 ## 0.128.0
 
 *Released 2026-10-23*

@@ -394,7 +394,7 @@ def _on_ds_selection_changed(selection, app):
     update_ds_button_sensitivity(app)
 
 
-def _is_mountable(item, volume_loop_attached):
+def _is_mountable(item, volume_loop_attached, canmount_off):
     """Return True if the Mount action applies to *item* right now."""
     if item["type"] == "volume-partition":
         return item.get("has_filesystem", False) and not item.get("mounted", False)
@@ -404,6 +404,9 @@ def _is_mountable(item, volume_loop_attached):
     if item["type"] == "snapshot" and item.get("parent_type") == "volume":
         # Snapshots of volumes have no .zfs path and no block device of their
         # own; there is nothing to mount.
+        return False
+    if item["type"] in ("pool", "dataset") and item["name"] in canmount_off:
+        # canmount=off filesystems can never be mounted by ZFS.
         return False
     return not item.get("mounted", False)
 
@@ -497,6 +500,22 @@ def update_ds_button_sensitivity(app):
                 attached = False
             volume_loop_attached[i["name"]] = attached
 
+    # Filesystem rows with canmount=off can never be mounted by ZFS, so they
+    # never enable Mount. Only unmounted rows need the check: an off dataset
+    # is never mounted, so mounted rows cannot change the verdict either way.
+    canmount_off = set()
+    for i in items:
+        if (
+            i["type"] in ("pool", "dataset")
+            and (i.get("zfs_type") or "filesystem") == "filesystem"
+            and not i.get("mounted", False)
+        ):
+            try:
+                if repo.get_property(i["name"], "canmount") == "off":
+                    canmount_off.add(i["name"])
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                pass
+
     # A loop-attached volume row reports mounted=True, but Browse has no
     # target for the volume itself; its partition rows are the browsable
     # leaves, so the volume row keeps Browse disabled.
@@ -505,7 +524,9 @@ def update_ds_button_sensitivity(app):
         and single["type"] in ("pool", "dataset")
         and single.get("zfs_type") == "volume"
     )
-    can_mount = all_browsable and any(_is_mountable(i, volume_loop_attached) for i in items)
+    can_mount = all_browsable and any(
+        _is_mountable(i, volume_loop_attached, canmount_off) for i in items
+    )
     can_unmount = all_browsable and any(_is_unmountable(i, volume_loop_attached) for i in items)
 
     can_expand_selected = bool(items) and any(
@@ -545,16 +566,19 @@ def update_ds_button_sensitivity(app):
         if btn:
             btn.set_sensitive(sensitive)
 
-    # Explain the one Mount-disabled case that otherwise looks like a bug:
-    # snapshots of volumes (no .zfs path, no block device of their own).
+    # Explain the Mount-disabled cases that otherwise look like a bug:
+    # snapshots of volumes (no .zfs path, no block device of their own), and
+    # filesystems with canmount=off (ZFS refuses to mount them).
     mount_btn = getattr(app, "_ds_mount_btn", None)
     if mount_btn is not None:
-        mount_btn.set_tooltip_text(
-            "Snapshots of ZFS volumes cannot be mounted"
-            if not can_mount
-            and any(i["type"] == "snapshot" and i.get("parent_type") == "volume" for i in items)
-            else ""
-        )
+        if not can_mount and any(
+            i["type"] == "snapshot" and i.get("parent_type") == "volume" for i in items
+        ):
+            mount_btn.set_tooltip_text("Snapshots of ZFS volumes cannot be mounted")
+        elif not can_mount and canmount_off:
+            mount_btn.set_tooltip_text("Datasets with canmount=off cannot be mounted")
+        else:
+            mount_btn.set_tooltip_text("")
 
 
 # ---------------------------------------------------------------------------

@@ -173,17 +173,28 @@ while IFS= read -r _manifest_entry; do
     fi
 done < "$manifest"
 
-if [[ "${expected:-0}" -eq 0 ]]; then
-    log_msg "FATAL: safe-iscsi-save: Manifest is empty or has no valid entries"
-    log_msg "FATAL:   File: $manifest"
-    exit 1
-fi
-
 # Count active block backstores — each /dev/zvol/ path = one accessible backstore.
 # grep -c returns 1 when there are no matches, so we must NOT append a fallback
 # "0" with || or the result becomes a two-line string that breaks arithmetic.
 if ! active=$(targetcli /backstores/block ls 2>/dev/null | grep -c '/dev/zvol/'); then
     active=0
+fi
+
+if [[ "${expected:-0}" -eq 0 ]]; then
+    # An empty manifest is legitimate only when no block backstore is
+    # active either — the last VM disk was just removed and the persisted
+    # config must move to the target-only state. Backstores active with
+    # an empty manifest means the manifest is broken: refuse so the save
+    # cannot drop live LUNs from the config.
+    if [[ "$active" -eq 0 ]]; then
+        log_msg "INFO: safe-iscsi-save: manifest empty and no block backstores" \
+            "active — saving the target-only config"
+    else
+        log_msg "FATAL: safe-iscsi-save: Manifest is empty or has no valid entries"
+        log_msg "FATAL:   File: $manifest"
+        log_msg "FATAL:   ${active} block backstore(s) are active — the manifest is broken."
+        exit 1
+    fi
 fi
 
 if [[ "$active" -lt "$expected" ]]; then

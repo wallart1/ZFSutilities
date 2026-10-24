@@ -19,6 +19,8 @@
 #       Clone start: full-clone a post-install baseline template
 #       (itf template build) instead of installing — the fast path for
 #       journeys whose scenario begins after installation.
+#       Under --rerun: roll the previous run's guest back to its
+#       as-cloned checkpoint instead of cloning.
 #       Sets globals J_VMID and J_GUEST_IP on success.
 #
 # Stages remember their guest in $ITF_RUN_DIR/guest.txt (base + vmid,
@@ -591,6 +593,22 @@ itf_journey_verify_installed() {
     itf_artifact "install-verify" "$verify_log"
 }
 
+# itf_rerun_guest <guest-file-basename>
+#
+# --rerun support: echoes "base vmid" for the guest the driver marked for
+# rerun (rerun-guests.tsv, written by "itf journey run NAME --rerun"),
+# nothing at all when this is a fresh run.  Keyed by the guest-record
+# file name the staging stage would write (guest.txt, guest-<role>.txt)
+# so a composed journey's lab stages find their own guests.
+itf_rerun_guest() {
+    local key="$1"
+    local spec="${ITF_RUN_DIR}/rerun-guests.tsv"
+    if [[ -f "$spec" ]]; then
+        awk -v k="$key" '$1 == k { print $2, $3 }' "$spec" 2>/dev/null || true
+    fi
+    return 0
+}
+
 # itf_journey_stage_from_template <gname> [--base B] [--template T] [--role R]
 #
 # Clone start: full-clone a post-install baseline template (default: the
@@ -598,6 +616,11 @@ itf_journey_verify_installed() {
 # journey's rollback checkpoint.  Fails fast with a PREP hint when the
 # template is missing or carries no stamp — per the journey contract,
 # never half-run.  Sets J_VMID and J_GUEST_IP.
+#
+# Under --rerun (the driver resolved the previous run's guests into
+# rerun-guests.tsv) this stage rolls the recorded guest back to its
+# as-cloned checkpoint instead of cloning — the whole journey then
+# replays on the same guest with no template copy.
 itf_journey_stage_from_template() {
     local gname="$1"
     shift
@@ -614,6 +637,62 @@ itf_journey_stage_from_template() {
     local guest_file="$ITF_RUN_DIR/guest.txt"
     [[ -n "$role" ]] && guest_file="$ITF_RUN_DIR/guest-${role}.txt"
     local tmpl_vmid stamp vmid guest_ip
+
+    # --rerun: replay on the previous run's guest — rolling back to the
+    # as-cloned checkpoint replaces the template clone (the driver put
+    # the recorded guests in rerun-guests.tsv; nothing there = fresh run).
+    local rerun_pair r_base r_vmid
+    rerun_pair="$(itf_rerun_guest "$(basename "$guest_file")")"
+    if [[ -n "$rerun_pair" ]]; then
+        r_base="${rerun_pair%% *}"
+        r_vmid="${rerun_pair##* }"
+        # Remember the guest for post-mortem/diagnostics even if we abort.
+        echo "$r_base $r_vmid" > "$guest_file"
+        if itf_qm "$r_base" status "$r_vmid" \
+                > "$ITF_RUN_DIR/guest-status-${gname}.log" 2>&1; then
+            itf_step pass "rerun guest present" "vmid $r_vmid on $r_base"
+        else
+            itf_step fail "rerun guest present" \
+                "vmid $r_vmid no longer on $r_base — run fresh (no --rerun)"
+            return 1
+        fi
+        if itf_qm "$r_base" listsnapshot "$r_vmid" 2>/dev/null \
+                | awk '$1 == "as-cloned" { found = 1 } END { exit !found }'; then
+            itf_step pass "as-cloned checkpoint present" "vmid $r_vmid"
+        else
+            itf_step fail "as-cloned checkpoint present" \
+                "vmid $r_vmid has no as-cloned snapshot — run fresh (no --rerun)"
+            return 1
+        fi
+        if itf_guest_rollback "$r_base" "$r_vmid" as-cloned --start \
+                > "$ITF_RUN_DIR/guest-rollback-${gname}.log" 2>&1; then
+            itf_step pass "guest rolled back to as-cloned" \
+                "vmid $r_vmid — no re-clone; the journey replays from the checkpoint"
+        else
+            itf_step fail "guest rolled back to as-cloned" \
+                "see guest-rollback-${gname}.log"
+            return 1
+        fi
+        guest_ip="$(itf_guest_ip "$r_base" "$r_vmid" 600)"
+        if [[ -n "$guest_ip" ]]; then
+            itf_step pass "guest IP discovered" "$guest_ip"
+            echo "$r_base $r_vmid $guest_ip" > "$guest_file"
+        else
+            itf_step fail "guest IP discovered" "guest agent reported nothing in 600s"
+            return 1
+        fi
+        if itf_wait_ssh "$guest_ip" 300; then
+            itf_step pass "guest ssh reachable" "root@${guest_ip}"
+        else
+            itf_step fail "guest ssh reachable"
+            return 1
+        fi
+        # shellcheck disable=SC2034  # consumed by the journey scripts
+        J_VMID="$r_vmid"
+        # shellcheck disable=SC2034  # consumed by the journey scripts
+        J_GUEST_IP="$guest_ip"
+        return 0
+    fi
 
     tmpl_vmid="$(itf_template_vmid "$base" "$template")"
     if [[ -z "$tmpl_vmid" ]]; then

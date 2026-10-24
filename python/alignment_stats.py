@@ -901,18 +901,33 @@ def _guest_probe_targets(datasets, vm_disks, signature_runner=None):
     read from ``/dev/zvol/<name>`` (tier 2 — empty for blank zvols, for a
     missing /dev/zvol node, or when the read fails, all of which fall to
     the prober's size+bus tier).
+
+    One target per (VM, disk) pair: the same zvol short name can exist in
+    more than one pool (live disk plus a backup copy), and duplicate
+    shorts in one probe batch collide in match_volumes' per-short result
+    maps — a duplicate can even deny a legitimate size+bus match by
+    double-counting its device demand as an ambiguity. Short-name keying
+    cannot tell the copies apart, so the copy with readable storage-side
+    signatures wins (blank or stale copies are the ones that fall to the
+    weaker tiers); the first copy wins a tie.
     """
-    volumes = []
+    candidates = []
     for ds in datasets:
         if ds.kind != "volume":
             continue
         option = vm_disks.get(ds.name.rsplit("/", 1)[-1])
         if option is not None:
-            volumes.append((ds, option))
+            candidates.append((ds, option))
     signatures = collect_zvol_signatures(
-        sorted(f"/dev/zvol/{ds.name}" for ds, _option in volumes),
+        sorted(f"/dev/zvol/{ds.name}" for ds, _option in candidates),
         runner=signature_runner,
     )
+    chosen = {}
+    for ds, option in candidates:
+        short = ds.name.rsplit("/", 1)[-1]
+        sigs = signatures.get(f"/dev/zvol/{ds.name}", set())
+        if short not in chosen or (not chosen[short][2] and sigs):
+            chosen[short] = (ds, option, sigs)
     return [
         (
             option.vmid,
@@ -920,9 +935,9 @@ def _guest_probe_targets(datasets, vm_disks, signature_runner=None):
             option.bus,
             parse_zfs_size(ds.volsize or ""),
             option.options.get("serial"),
-            signatures.get(f"/dev/zvol/{ds.name}", set()),
+            sigs,
         )
-        for ds, option in volumes
+        for ds, option, sigs in chosen.values()
     ]
 
 

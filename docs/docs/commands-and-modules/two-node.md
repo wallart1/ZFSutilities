@@ -1391,7 +1391,7 @@ empty = unlimited; prompted with the JSON-config default `archive_rate_limit`).
 | Script | Purpose |
 | ------ | ------- |
 | `safe-iscsi-save` (storage side, via `on_storage`) | Persist rebuilt iSCSI config |
-| `rescan-storage` (compute side, via `on_compute`) | Refresh compute-host device view |
+| `rescan-storage` (compute side, via `on_compute`) | Refresh compute-host device view (after targeted discovery + login of the mapped targets) |
 
 **Data structures consumed / produced:**
 
@@ -1427,18 +1427,38 @@ empty = unlimited; prompted with the JSON-config default `archive_rate_limit`).
    `volblocksize` and device-copy the archive snapshot onto it (in-flight
    source hash plus a destination read-back verify);
    `METHOD=raw` and unmarked legacy archives use `zfs send -cw | zfs receive`.
-7. In two-node mode, create backstores and LUNs for each restored zvol and
-   update `expected-backstores.txt` and `/etc/zfsutilities/iscsi-encrypted-luns.conf`.
-   Each zvol's pool is mapped to its iSCSI target with node-lib's
-   `pool_to_target` (the `POOL_TARGET` map in the node config, resolved on the
-   storage host); an unmapped pool aborts the restore.
+7. In two-node mode, resolve each restored zvol's pool against the live LIO
+   target tree before mapping anything (node-lib's `pool_to_target` plus the
+   live-tree helpers, resolved on the storage host):
+    - A target that exists in the live tree is used as constructed.
+    - When every live pool target shares one IQN prefix that differs from the
+      node config's, the config is the regressed side (typically a recovery
+      install that rewrote it): `IQN_PREFIX` is converged onto the live prefix
+      on BOTH hosts, with a timestamped `node.conf.bak-*` kept beside each
+      conf.
+    - A constructed target absent from the tree resolves to the single live
+      target already carrying the pool's short name (IQN-prefix drift where
+      convergence is not unambiguous); the by-path rewrite in step 9 follows
+      the resolved target.
+    - A pool whose short name no live target carries gets its target created
+      with the `setup-iscsi-targets` recipe (authentication off, write-protect
+      off, portal on the storage network, demo-mode ACLs only when the TPG
+      carries no explicit ACLs).
+    - Multiple live targets sharing a pool's short name abort the restore
+      BEFORE any iSCSI mutation, naming every candidate.
+   Backstores and LUNs are then created per restored zvol and
+   `expected-backstores.txt` and `/etc/zfsutilities/iscsi-encrypted-luns.conf`
+   updated; an unmapped pool aborts the restore.
 8. Save iSCSI config via `safe-iscsi-save`.
 9. Restore/rewrite the Proxmox config (written on the compute host —
    base64-shipped through `on_compute` when orchestrating elsewhere):
     - Single-node: rewrite VMID in disk lines if `--new-vmid` was used.
     - Two-node: rewrite disk lines with new target/LUN paths using `.disk_info`.
     - Regenerate `vmgenid` and `smbios1` UUIDs when `--new-vmid` is used.
-10. Trigger iSCSI rescan on the compute host.
+10. On the compute host, discover the storage portal's current target set,
+    log in to the targets this run mapped (freshly created targets become
+    reachable this way; already-logged-in targets answer rc 15 and pass),
+    then trigger the iSCSI rescan.
 
 **Return codes / side effects:**
 

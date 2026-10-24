@@ -164,15 +164,37 @@ if [[ "${skip_config:-}" != "true" ]]; then
     read -rp "Storage network IP (iSCSI portal) [192.168.100.1]: " input_ip
     storage_ip="${input_ip:-192.168.100.1}"
 
-    default_iqn="iqn.$(date +%Y-%m).local.${storage_host}"
+    # Recurrence fence (2026-10 production incident): when this host already
+    # runs LIO targets, the live tree — not the calendar — owns the prefix.
+    # A recovery install that defaulted to a fresh date-derived prefix
+    # silently forked the target namespace: live targets kept the old
+    # prefix while node.conf pointed LUN tooling at a nonexistent new one.
+    live_prefix=""
+    if command -v targetcli >/dev/null 2>&1; then
+        # The grep token filter is the RFC 3720 iSCSI-name grammar (the
+        # same one node-lib's lio_target_iqns uses); sed strips each
+        # target's final colon-separated short name to leave the prefix.
+        live_prefixes=$(targetcli /iscsi ls 2>/dev/null \
+            | grep -o 'iqn\.[A-Za-z0-9.:_-]*' | sed 's/:[^:]*$//' | sort -u \
+            || true)
+        if [[ $(printf '%s\n' "$live_prefixes" | grep -c . || true) -eq 1 ]]; then
+            live_prefix="$live_prefixes"
+        fi
+    fi
+    default_iqn="${live_prefix:-iqn.$(date +%Y-%m).local.${storage_host}}"
     echo ""
     echo "  The iSCSI Qualified Name (IQN) prefix becomes part of every iSCSI"
-    echo "  target's persistent on-disk name. It is baked into the target when"
+    echo "  target's persistent on-disk name. It's baked into the target when"
     echo "  the LUN is first created; changing it later requires recreating"
     echo "  Proxmox iSCSI storage entries and re-mapping LUNs, so choose once."
-    echo "  The default (iqn.YYYY-MM.local.<storage-host>) is fine unless your"
-    echo "  site uses a registered naming convention such as"
-    echo "  iqn.YYYY-MM.com.vendor.host."
+    if [[ -n "$live_prefix" ]]; then
+        echo "  Existing iSCSI targets on this host all use the prefix below —"
+        echo "  keep the default so tooling and targets stay in one namespace."
+    else
+        echo "  The default (iqn.YYYY-MM.local.<storage-host>) is fine unless your"
+        echo "  site uses a registered naming convention such as"
+        echo "  iqn.YYYY-MM.com.vendor.host."
+    fi
     read -rp "iSCSI IQN prefix [${default_iqn}]: " input_iqn
     iqn_prefix="${input_iqn:-$default_iqn}"
 

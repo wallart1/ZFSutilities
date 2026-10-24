@@ -24,12 +24,14 @@ unset _local_bashinit
 source_helper rootcheck
 rootcheck
 
-# Node configuration (single-node or two-node)
-: "${NODE_CONF:=/etc/zfsutilities-node.conf}"
+# Node configuration (single-node or two-node), resolved with node-lib's
+# precedence: the current FHS conf first, then the legacy conf paths.
+: "${NODE_CONF:=${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/node.conf}"
 if [[ ! -r "$NODE_CONF" ]]; then
-    # Backward compat: fall back to legacy two-node.conf
-    if [[ -r /etc/two-node.conf ]]; then
-        NODE_CONF="/etc/two-node.conf"
+    if [[ -r "${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}" ]]; then
+        NODE_CONF="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
+    elif [[ -r "${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}" ]]; then
+        NODE_CONF="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
     else
         echo "✗ Missing $NODE_CONF — install via: bin/install-single-node" >&2
         exit 1

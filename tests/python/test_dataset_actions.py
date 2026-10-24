@@ -1299,6 +1299,42 @@ class TestMount(unittest.TestCase):
             mock_log.assert_any_call("VERB: Mounted tank/vm-100/sub")
             mock_refresh.assert_called_once_with(app)
 
+    def test_mount_skips_selected_dataset_with_canmount_off(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        def _prop(ds, prop):
+            if prop == "mounted":
+                return "no"
+            return "off"  # canmount
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/nomount",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            da.on_datasets_mount(app)
+
+            mock_log.assert_any_call("INFO: Skipping tank/nomount (canmount=off)")
+            mock_subprocess.run.assert_not_called()
+            mock_zlm.locks.assert_not_called()
+            mock_refresh.assert_not_called()
+
     def test_warns_when_filesystem_mount_fails(self):
         da = self._import_under_mock()
         app = self._make_app()

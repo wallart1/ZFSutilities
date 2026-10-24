@@ -725,9 +725,7 @@ class TestPveParsing(unittest.TestCase):
                                         "index": 0,
                                         "storage_object": "/backstores/block/vm-101-disk-0",
                                     },
-                                    {
-                                        "storage_object": "/backstores/block/vm-101-disk-1"
-                                    },
+                                    {"storage_object": "/backstores/block/vm-101-disk-1"},
                                     {
                                         "index": "bogus",
                                         "storage_object": "/backstores/block/vm-101-disk-2",
@@ -1038,6 +1036,58 @@ class TestCollectAlignmentSample(unittest.TestCase):
         self.assertEqual(volsize, 32 * 1024**3)
         self.assertIsNone(serial)
         self.assertEqual(signatures, {"partuuid-9"})
+
+    def test_guest_probe_targets_dedupe_same_short_across_pools(self):
+        """The same zvol short name in two pools (live disk + backup copy)
+        yields ONE target per (VM, disk) pair, keeping the copy with
+        readable storage-side signatures — duplicates collide in
+        match_volumes' per-short result maps."""
+        repo = _FakeZfsRepo()
+        datasets = als._dataset_blocks_from_rows(
+            repo.dataset_block_properties("nvme1")
+        ) + als._dataset_blocks_from_rows(repo.dataset_block_properties("fivebays"))
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "201.conf"), "w") as f:
+                f.write(PVE_CONF)
+            vm_disks = als.read_pve_vm_options(tmp)
+        with patch(
+            "alignment_stats.collect_zvol_signatures",
+            return_value={"/dev/zvol/nvme1/proxmox/vm-201-disk-0": {"partuuid-9"}},
+        ) as sigs:
+            targets = als._guest_probe_targets(datasets, vm_disks)
+        sigs.assert_called_once()
+        self.assertEqual(
+            sigs.call_args.args[0],
+            [
+                "/dev/zvol/fivebays/proxmox/vm-201-disk-0",
+                "/dev/zvol/nvme1/proxmox/vm-201-disk-0",
+            ],
+        )
+        self.assertEqual(len(targets), 1)
+        vmid, short, bus, volsize, serial, signatures = targets[0]
+        self.assertEqual((vmid, short, bus), ("201", "vm-201-disk-0", "scsi0"))
+        self.assertEqual(volsize, 32 * 1024**3)
+        self.assertIsNone(serial)
+        self.assertEqual(signatures, {"partuuid-9"})
+
+    def test_guest_probe_targets_tie_keeps_first_copy(self):
+        """With no distinguishing signatures the first-seen copy wins
+        deterministically — still exactly one target per (VM, disk)."""
+        repo = _FakeZfsRepo()
+        datasets = als._dataset_blocks_from_rows(
+            repo.dataset_block_properties("nvme1")
+        ) + als._dataset_blocks_from_rows(repo.dataset_block_properties("fivebays"))
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "201.conf"), "w") as f:
+                f.write(PVE_CONF)
+            vm_disks = als.read_pve_vm_options(tmp)
+        with patch("alignment_stats.collect_zvol_signatures", return_value={}) as sigs:
+            targets = als._guest_probe_targets(datasets, vm_disks)
+        sigs.assert_called_once()
+        self.assertEqual(len(targets), 1)
+        _vmid, short, _bus, _volsize, _serial, signatures = targets[0]
+        self.assertEqual(short, "vm-201-disk-0")
+        self.assertEqual(signatures, set())
 
     def test_guest_prober_not_called_without_pve_configs(self):
         class prober:

@@ -56,6 +56,23 @@ class TestPropertiesForProfile(unittest.TestCase):
             {"compression": "zstd", "volblocksize": "16K"},
         )
 
+    def test_volume_skips_canmount(self):
+        profile = {
+            "applies_to": ["volume"],
+            "properties": {"canmount": "off", "compression": "zstd"},
+        }
+        self.assertEqual(properties_for_profile(profile, "volume"), {"compression": "zstd"})
+
+    def test_filesystem_keeps_canmount(self):
+        profile = {
+            "applies_to": ["filesystem"],
+            "properties": {"canmount": "off", "compression": "zstd"},
+        }
+        self.assertEqual(
+            properties_for_profile(profile, "filesystem"),
+            {"canmount": "off", "compression": "zstd"},
+        )
+
     def test_unknown_properties_ignored(self):
         profile = {
             "applies_to": ["filesystem"],
@@ -191,6 +208,26 @@ class TestBuildApplyPlan(unittest.TestCase):
         by_prop = {e["property"]: e for e in plan}
         self.assertFalse(by_prop["recordsize"]["will_apply"])
         self.assertIn("does not apply to volume", by_prop["recordsize"]["explanation"])
+
+    def test_canmount_applies_to_filesystem(self):
+        profile = {
+            "applies_to": ["filesystem"],
+            "properties": {"canmount": "off"},
+        }
+        plan = build_apply_plan(profile, "tank/data", "filesystem", {"canmount": "on"})
+        by_prop = {e["property"]: e for e in plan}
+        self.assertTrue(by_prop["canmount"]["will_apply"])
+        self.assertIn("will change", by_prop["canmount"]["explanation"])
+
+    def test_canmount_skipped_for_volume(self):
+        profile = {
+            "applies_to": ["volume"],
+            "properties": {"canmount": "off"},
+        }
+        plan = build_apply_plan(profile, "tank/vol", "volume", {})
+        by_prop = {e["property"]: e for e in plan}
+        self.assertFalse(by_prop["canmount"]["will_apply"])
+        self.assertIn("does not apply to volume", by_prop["canmount"]["explanation"])
 
     def test_notes_already_set(self):
         plan = build_apply_plan(self._profile(), "tank/data", "filesystem", {"compression": "zstd"})

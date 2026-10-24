@@ -413,6 +413,207 @@ test_pool_to_target_no_lio_probe_off_storage_host() {
     fi
 }
 
+# ------------------------------------------------------------------------------
+# Live-tree helpers (storage host + local LIO, hostname/targetcli stubbed)
+# ------------------------------------------------------------------------------
+
+test_lio_target_iqns_extracts_unique_targets() {
+    test_start "lio_target_iqns prints unique iqn.* targets from the live tree"
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        hostname() { echo stewie; }
+        targetcli() {
+            printf 'o- iscsi .... [Targets: 2]\n'
+            printf '  o- iqn.2026-02.local.stewie:threeamigos .... [TPGs: 1]\n'
+            printf '  o- iqn.2026-02.local.stewie:fivebays .... [TPGs: 1]\n'
+            printf '  o- iqn.2026-02.local.stewie:threeamigos .... [TPGs: 1]\n'
+        }
+        lio_target_iqns)
+    assert_equals "iqn.2026-02.local.stewie:fivebays
+iqn.2026-02.local.stewie:threeamigos" "$result"
+}
+
+test_target_in_live_tree_membership() {
+    test_start "target_in_live_tree answers exact IQN membership"
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        hostname() { echo stewie; }
+        targetcli() { printf '  o- iqn.2026-02.local.stewie:threeamigos\n'; }
+        if target_in_live_tree "iqn.2026-02.local.stewie:threeamigos"; then
+            echo "present=yes"
+        else
+            echo "present=no"
+        fi
+        if target_in_live_tree "iqn.2026-02.local.stewie:fivebays"; then
+            echo "absent=yes"
+        else
+            echo "absent=no"
+        fi)
+    assert_contains "$result" "present=yes"
+    assert_contains "$result" "absent=no"
+}
+
+test_find_live_short_targets_matches_short_across_prefixes() {
+    test_start "find_live_short_targets matches the short name under any prefix"
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        hostname() { echo stewie; }
+        targetcli() {
+            printf '  o- iqn.2026-02.local.stewie:threeamigos\n'
+            printf '  o- iqn.2025-01.com.zfsutilities:threeamigos\n'
+            printf '  o- iqn.2026-02.local.stewie:fivebays\n'
+        }
+        find_live_short_targets threeamigos
+        echo "---"
+        find_live_short_targets nvme1)
+    assert_equals "iqn.2025-01.com.zfsutilities:threeamigos
+iqn.2026-02.local.stewie:threeamigos
+---" "$result"
+}
+
+test_live_converged_prefix_prints_shared_live_prefix() {
+    test_start "live_converged_prefix prints the prefix every live pool target shares"
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        hostname() { echo stewie; }
+        targetcli() {
+            printf '  o- iqn.2026-02.local.stewie:threeamigos\n'
+            printf '  o- iqn.2026-02.local.stewie:fivebays\n'
+        }
+        live_converged_prefix || true)
+    assert_equals "iqn.2026-02.local.stewie" "$result"
+}
+
+test_live_converged_prefix_refuses_matching_conf() {
+    test_start "live_converged_prefix refuses when the tree already matches the conf"
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        hostname() { echo stewie; }
+        targetcli() {
+            printf '  o- iqn.2025-01.com.zfsutilities:threeamigos\n'
+        }
+        live_converged_prefix || true)
+    assert_equals "" "$result"
+}
+
+test_live_converged_prefix_refuses_mixed_prefixes() {
+    test_start "live_converged_prefix refuses mixed live prefixes"
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        hostname() { echo stewie; }
+        targetcli() {
+            printf '  o- iqn.2026-02.local.stewie:threeamigos\n'
+            printf '  o- iqn.2026-09.local.stewie:fivebays\n'
+        }
+        live_converged_prefix || true)
+    assert_equals "" "$result"
+}
+
+test_live_converged_prefix_ignores_unrelated_shorts() {
+    test_start "live_converged_prefix ignores live targets outside POOL_TARGET"
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        hostname() { echo stewie; }
+        targetcli() {
+            printf '  o- iqn.2026-02.local.stewie:z22tb\n'
+        }
+        live_converged_prefix || true)
+    assert_equals "" "$result"
+}
+
+# Convergence write tests operate on a private copy so the shared conf
+# files stay pristine across the suite.
+converging_conf="$tmp_dir/converging.conf"
+write_converging_conf() {
+    cat > "$converging_conf" << 'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="stewie"
+COMPUTE_HOST="brian"
+STORAGE_IP="10.0.0.1"
+IQN_PREFIX="iqn.2025-01.com.zfsutilities"
+declare -A POOL_TARGET=(
+    ["threeamigos"]="threeamigos"
+)
+EOF
+}
+
+test_converge_iqn_prefix_rewrites_conf_with_backup() {
+    test_start "converge_iqn_prefix rewrites the conf, keeps a backup, updates runtime"
+    write_converging_conf
+    local result
+    result=$(NODE_CONF="$converging_conf" source "$mydir/lib/node-lib.sh";
+        converge_iqn_prefix "iqn.2026-02.local.stewie" 2>/dev/null \
+            && echo "call=ok" || echo "call=fail"
+        echo "runtime=${iqn_prefix}"
+        echo "backups=$(find "$tmp_dir" -maxdepth 1 -name 'converging.conf.bak-*' | wc -l)")
+    if grep -q '^IQN_PREFIX="iqn.2026-02.local.stewie"$' "$converging_conf"; then
+        assert_contains "$result" "call=ok"
+    else
+        test_fail "IQN_PREFIX line not rewritten in $converging_conf"
+        return
+    fi
+    assert_contains "$result" "runtime=iqn.2026-02.local.stewie"
+    assert_contains "$result" "backups=1"
+}
+
+test_converge_iqn_prefix_refuses_unchanged_prefix() {
+    test_start "converge_iqn_prefix refuses a prefix equal to the current one"
+    write_converging_conf
+    local result
+    result=$(NODE_CONF="$converging_conf" source "$mydir/lib/node-lib.sh";
+        converge_iqn_prefix "iqn.2025-01.com.zfsutilities" 2>/dev/null \
+            && echo "call=ok" || echo "call=fail")
+    assert_contains "$result" "call=fail"
+    if grep -q '^IQN_PREFIX="iqn.2025-01.com.zfsutilities"$' "$converging_conf"; then
+        test_pass
+    else
+        test_fail "unchanged-prefix refusal nonetheless rewrote the conf"
+    fi
+}
+
+test_converge_iqn_prefix_refuses_invalid_prefix() {
+    test_start "converge_iqn_prefix refuses a non-IQN value"
+    write_converging_conf
+    local result
+    result=$(NODE_CONF="$converging_conf" source "$mydir/lib/node-lib.sh";
+        converge_iqn_prefix "not-an-iqn" 2>/dev/null \
+            && echo "call=ok" || echo "call=fail")
+    assert_contains "$result" "call=fail"
+    if grep -q '^IQN_PREFIX="iqn.2025-01.com.zfsutilities"$' "$converging_conf"; then
+        test_pass
+    else
+        test_fail "invalid-prefix refusal nonetheless rewrote the conf"
+    fi
+}
+
+test_converge_iqn_prefix_restores_conf_without_prefix_line() {
+    test_start "converge_iqn_prefix restores a conf with no IQN_PREFIX line"
+    no_prefix_conf="$tmp_dir/no-prefix.conf"
+    cat > "$no_prefix_conf" << 'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="stewie"
+COMPUTE_HOST="brian"
+STORAGE_IP="10.0.0.1"
+declare -A POOL_TARGET=(
+    ["threeamigos"]="threeamigos"
+)
+EOF
+    local before result
+    before=$(cat "$no_prefix_conf")
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        node_conf="$no_prefix_conf"
+        converge_iqn_prefix "iqn.2026-02.local.stewie" 2>/dev/null \
+            && echo "call=ok" || echo "call=fail"
+        echo "bakleft=$(find "$tmp_dir" -maxdepth 1 -name 'no-prefix.conf.bak-*' | wc -l)")
+    assert_contains "$result" "call=fail"
+    assert_contains "$result" "bakleft=0"
+    if [[ "$before" == "$(cat "$no_prefix_conf")" ]]; then
+        test_pass
+    else
+        test_fail "conf without IQN_PREFIX was not restored byte-identically"
+    fi
+}
+
 # Regression for the unarchive-vm Step-2 ssh payload (vm-205 incident): a
 # fresh remote shell inherits no pool_to_target, so the payload loads
 # node-lib through bashinit's source_helper. The pool map must survive
@@ -465,7 +666,8 @@ PAYLOAD
     )
     rc=$?
     assert_rc 0 "$rc"
-    assert_contains "$output" "zfsutilities: INFO: remote-mode payload alive (vmid=vm-205, disks=three)"
+    assert_contains "$output" "zfsutilities: INFO: remote-mode payload alive \
+(vmid=vm-205, disks=three)"
     assert_contains "$output" "PAYLOAD-OK"
 }
 
@@ -1015,6 +1217,18 @@ test_probe_target_usage_live_session
 test_probe_target_usage_unreachable_compute_host
 test_probe_target_usage_not_storage_host
 test_probe_target_usage_rejects_malformed_iqn
+
+test_lio_target_iqns_extracts_unique_targets
+test_target_in_live_tree_membership
+test_find_live_short_targets_matches_short_across_prefixes
+test_live_converged_prefix_prints_shared_live_prefix
+test_live_converged_prefix_refuses_matching_conf
+test_live_converged_prefix_refuses_mixed_prefixes
+test_live_converged_prefix_ignores_unrelated_shorts
+test_converge_iqn_prefix_rewrites_conf_with_backup
+test_converge_iqn_prefix_refuses_unchanged_prefix
+test_converge_iqn_prefix_refuses_invalid_prefix
+test_converge_iqn_prefix_restores_conf_without_prefix_line
 
 rm -rf "$tmp_dir"
 teardown_test_env

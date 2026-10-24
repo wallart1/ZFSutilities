@@ -16,6 +16,9 @@ LIVE_PROPERTIES = (
     "sync",
     "primarycache",
     "special_small_blocks",
+    # Filesystem-only: ZFS never mounts a dataset with canmount=off, and
+    # volumes have no canmount at all (zfs get reports "-").
+    "canmount",
 )
 CREATION_ONLY_PROPERTIES = ("volblocksize", "ashift")
 ALL_KNOWN_PROPERTIES = LIVE_PROPERTIES + CREATION_ONLY_PROPERTIES
@@ -36,8 +39,8 @@ def properties_for_profile(profile: dict, ds_type: str) -> dict[str, str]:
     """Return profile properties that apply to the given dataset type.
 
     Filters by ``applies_to`` and drops properties that are meaningless for the
-    dataset type (e.g. ``volblocksize`` for filesystems, ``recordsize`` and
-    ``atime`` for volumes).
+    dataset type (e.g. ``volblocksize`` for filesystems, ``recordsize``,
+    ``atime``, and ``canmount`` for volumes).
     """
     applies_to = profile.get("applies_to", [])
     if ds_type not in applies_to:
@@ -49,7 +52,7 @@ def properties_for_profile(profile: dict, ds_type: str) -> dict[str, str]:
             continue
         if ds_type == "filesystem" and prop == "volblocksize":
             continue
-        if ds_type == "volume" and prop in ("recordsize", "atime"):
+        if ds_type == "volume" and prop in ("recordsize", "atime", "canmount"):
             continue
         result[prop] = str(value)
     return result
@@ -125,7 +128,7 @@ def build_apply_plan(
             )
             continue
 
-        if ds_type == "volume" and prop in ("recordsize", "atime"):
+        if ds_type == "volume" and prop in ("recordsize", "atime", "canmount"):
             plan.append(
                 {
                     "property": prop,

@@ -2297,7 +2297,7 @@ devices.
 | `on_datasets_rollback()`                                     | Rollback a dataset to a selected snapshot |
 | `on_datasets_browse()`                                       | Open the selected filesystem or snapshot in the default file manager |
 | `on_datasets_show_big_stuff()`                               | Run `zfsshowbigstuff` on the selected pool and log the output |
-| `on_datasets_mount()`                                        | Mount selected filesystems/snapshots/volume loop devices (and volume partitions); unmounted ancestors are mounted first (root-first), skipping `canmount=off` ancestors; for snapshots whose parent is unmounted, a dialog offers to mount the parent datasets root-first before the snapshots |
+| `on_datasets_mount()`                                        | Mount selected filesystems/snapshots/volume loop devices (and volume partitions); unmounted ancestors are mounted first (root-first), skipping `canmount=off` ancestors; directly selected `canmount=off` filesystems are skipped the same way; for snapshots whose parent is unmounted, a dialog offers to mount the parent datasets root-first before the snapshots |
 | `on_datasets_unmount()`                                      | Unmount selected filesystems/snapshots/volume loop devices (and volume partitions); mounted children are unmounted first (deepest-first), with best-effort recovery of orphaned mounts (remount parents, retry) |
 
 **Called modules / imported helpers:**

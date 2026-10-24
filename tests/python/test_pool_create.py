@@ -487,6 +487,7 @@ GENERAL_POOL_PROFILE = {
         "sync": "standard",
         "primarycache": "all",
         "special_small_blocks": "0",
+        "canmount": "on",
         "volblocksize": "16K",  # creation-only + volume-only: skipped
     },
 }

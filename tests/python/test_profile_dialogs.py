@@ -882,6 +882,7 @@ class _FakeProfileEditor:
         "sync",
         "primarycache",
         "special_small_blocks",
+        "canmount",
         "volblocksize",
         "ashift",
     ]
@@ -1919,6 +1920,30 @@ class TestProfileEditorDialog(unittest.TestCase):
         self.assertEqual(profiles["media"]["applies_to"], ["filesystem"])
         self.assertEqual(profiles["media"]["properties"]["recordsize"], "1M")
         self.assertEqual(profiles["media"]["notes"], "Big files.")
+
+    def test_manage_profiles_add_profile_with_canmount(self):
+        pd = _import_profile_dialogs()
+        app = self._app()
+
+        values = {
+            "name": "never-mounted",
+            "description": "Filesystem ZFS never mounts.",
+            "filesystem": True,
+            "volume": False,
+            "canmount": "off",
+            "volblocksize": "",
+            "ashift": "",
+        }
+
+        with (
+            _FakeProfileEditor(pd, values, [pd.Gtk.ResponseType.OK]),
+            patch("feature_config.save_config"),
+        ):
+            pd.show_profile_editor_dialog(app)
+
+        profiles = app.config["workload_profiles"]
+        self.assertIn("never-mounted", profiles)
+        self.assertEqual(profiles["never-mounted"]["properties"]["canmount"], "off")
 
     def test_manage_profiles_edit_profile(self):
         pd = _import_profile_dialogs()

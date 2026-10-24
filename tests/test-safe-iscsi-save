@@ -134,7 +134,26 @@ test_active_less_than_expected_refuses_save() {
 }
 
 test_empty_manifest_refuses_save() {
-    test_start "Empty manifest refuses to save"
+    test_start "Empty manifest refuses to save while backstores are active"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    echo '{"storage_objects":[],"targets":[]}' > "$tmpdir/saveconfig.json"
+    printf '# empty manifest\n' > "$tmpdir/expected-backstores.txt"
+
+    local output rc=0
+    output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 2) \
+        || rc=$?
+
+    if [[ "$rc" -ne 0 ]] && [[ "$output" != *"SAVECONFIG_CALLED"* ]]; then
+        test_pass
+    else
+        test_fail "Expected non-zero rc and no save, got rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_empty_manifest_saves_target_only_state() {
+    test_start "Empty manifest with no active backstores saves the target-only config"
     local tmpdir
     tmpdir=$(mktemp -d)
     echo '{"storage_objects":[],"targets":[]}' > "$tmpdir/saveconfig.json"
@@ -144,10 +163,11 @@ test_empty_manifest_refuses_save() {
     output=$(_run_safe_iscsi_save "$tmpdir/expected-backstores.txt" "$tmpdir/saveconfig.json" 0) \
         || rc=$?
 
-    if [[ "$rc" -ne 0 ]] && [[ "$output" != *"SAVECONFIG_CALLED"* ]]; then
+    if [[ "$rc" -eq 0 ]] && [[ "$output" == *"SAVECONFIG_CALLED"* ]] \
+        && [[ "$output" == *"target-only config"* ]]; then
         test_pass
     else
-        test_fail "Expected non-zero rc and no save, got rc=$rc output='$output'"
+        test_fail "Expected a saved target-only config, got rc=$rc output='$output'"
     fi
     rm -rf "$tmpdir"
 }
@@ -439,6 +459,7 @@ test_zero_active_backstores_refuses_save
 test_active_count_equals_expected_saves
 test_active_less_than_expected_refuses_save
 test_empty_manifest_refuses_save
+test_empty_manifest_saves_target_only_state
 test_manifest_regenerated_after_save
 test_encrypted_backstores_excluded_from_boot_config
 test_mapped_luns_strippped_from_boot_config

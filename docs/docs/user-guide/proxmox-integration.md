@@ -613,6 +613,17 @@ streamed back as-is. It rebuilds iSCSI backstores and LUNs in two-node mode,
 restores the Proxmox config, and triggers an iSCSI rescan. Cloned datasets are
 archived as full datasets and are therefore restored as full datasets.
 
+In two-node mode the iSCSI rebuild resolves each pool's target against the
+live target tree, not just the node config: when every live pool target
+shares one IQN prefix and the node config's `IQN_PREFIX` disagrees (for
+example after a storage-host OS restore followed by a re-run of the
+two-node installer), the config is converged to the live prefix on both
+hosts automatically — a timestamped `node.conf.bak-*` copy is kept beside
+each `node.conf` — and the restore proceeds onto the existing targets. A
+pool whose target is missing entirely gets its target created; if two live
+targets share a pool's short name, the restore stops and names both before
+changing anything.
+
 If the original `vmid` is already in use and you do not pass `--new-vmid`, the
 script prompts you to enter a new VM ID or cancel. When a new VM ID is used,
 the restored zvols, iSCSI backstores, LUNs, and Proxmox config are all named

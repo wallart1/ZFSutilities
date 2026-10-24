@@ -141,7 +141,7 @@ CPEOF
                 marked_here=true
             fi
         else
-            if ssh root@"$storage_host" \
+            if ssh -n root@"$storage_host" \
                     "zfs list -H -o name '$target' 2>/dev/null \
                     | grep -qxF -- '$target'" \
                     && zvol_marked_restored "$target" "$check_vmid"; then
@@ -167,7 +167,7 @@ zvol_marked_restored() {
     if is_single_node; then
         grep -qxF -- "$marker" "$info_file" 2>/dev/null
     else
-        ssh root@"$storage_host" \
+        ssh -n root@"$storage_host" \
             "grep -qxF -- '$marker' '$info_file' 2>/dev/null"
     fi
 }
@@ -245,7 +245,7 @@ if is_single_node; then
         }
     fi
 else
-    if ! ssh root@"$storage_host" "zfs list -H -o name '$archive_base' 2>/dev/null \
+    if ! ssh -n root@"$storage_host" "zfs list -H -o name '$archive_base' 2>/dev/null \
             | grep -qxF -- '$archive_base'"; then
         {
             log_msg "FATAL: Not a ZFS dataset on $storage_host: $archive_base"
@@ -258,7 +258,7 @@ fi
 if is_single_node; then
     archive_mount=$(zfs get -H -o value mountpoint "$archive_base")
 else
-    archive_mount=$(ssh root@"$storage_host" \
+    archive_mount=$(ssh -n root@"$storage_host" \
         "zfs get -H -o value mountpoint '$archive_base'")
 fi
 
@@ -366,10 +366,10 @@ for i in "${!archive_datasets[@]}"; do
         fi
         [[ -f "$info_file" ]] || missing_info+=("$info_file")
     else
-        if ! ssh root@"$storage_host" "[[ -f '$vbs_file' ]]"; then
+        if ! ssh -n root@"$storage_host" "[[ -f '$vbs_file' ]]"; then
             log_msg "WARN: Missing volblocksize sidecar (informational): ${vbs_file}"
         fi
-        if ! ssh root@"$storage_host" "[[ -f '$info_file' ]]"; then
+        if ! ssh -n root@"$storage_host" "[[ -f '$info_file' ]]"; then
             missing_info+=("$info_file")
         fi
     fi
@@ -431,7 +431,7 @@ for i in "${!new_zvols[@]}"; do
             dest_exists=true
         fi
     else
-        if ssh root@"$storage_host" "zfs list -H -o name '${new_zvols[$i]}' 2>/dev/null \
+        if ssh -n root@"$storage_host" "zfs list -H -o name '${new_zvols[$i]}' 2>/dev/null \
                 | grep -qxF -- '${new_zvols[$i]}'"; then
             dest_exists=true
         fi
@@ -466,7 +466,7 @@ if is_single_node; then
         exit 1
     fi
 else
-    if ! ssh root@"$storage_host" "[[ -f '$archived_config' ]]"; then
+    if ! ssh -n root@"$storage_host" "[[ -f '$archived_config' ]]"; then
         {
             log_msg "FATAL: Archived config not found on $storage_host: $archived_config"
             exit 1
@@ -513,7 +513,7 @@ for i in "${!archive_datasets[@]}"; do
     else
         # || true: a missing informational sidecat is "unknown", not a
         # failure (the remote cat exits 1 on a missing file).
-        orig_vbs=$(ssh root@"$storage_host" "cat '$vbs_file' 2>/dev/null" \
+        orig_vbs=$(ssh -n root@"$storage_host" "cat '$vbs_file' 2>/dev/null" \
             || true)
         if [[ -z "$orig_vbs" ]]; then
             orig_vbs="unknown"
@@ -708,6 +708,111 @@ dataset_count="$2"
 shift 2
 new_zvols=("${@:1:$dataset_count}")
 
+# Resolve each pool's target against the live LIO tree, not just node.conf:
+# the conf's IQN_PREFIX can be newer than the targets (a recovery install
+# regenerating node.conf while the target tree predates it). When every
+# live pool target shares one prefix different from the conf's, the conf
+# is the regressed side and gets converged (a backup is kept beside it);
+# the orchestrator mirrors that write on the compute host.
+lio_refresh_target_list || true
+declare -A resolved_pool_target=()
+declare -A pools_to_create=()
+converged_prefix=$(live_converged_prefix || true)
+if [[ -n "$converged_prefix" ]]; then
+    prior_prefix="$iqn_prefix"
+    if converge_iqn_prefix "$converged_prefix"; then
+        echo "IQN_CONVERGED:${prior_prefix}:${iqn_prefix}"
+    fi
+fi
+
+# Pass 1 — classify every distinct pool before touching the tree, so a
+# refusal cannot leave a half-rebuilt one. A constructed target present in
+# the live tree is used as-is; an absent one resolves to the single live
+# target already carrying the pool's short name (IQN-prefix drift) or is
+# scheduled for creation. Duplicate candidates anywhere abort up front.
+ambiguous=0
+for zvol in "${new_zvols[@]}"; do
+    pool="${zvol%%/*}"
+    [[ -z "${resolved_pool_target[$pool]:-}" ]] || continue
+    [[ -z "${pools_to_create[$pool]:-}" ]] || continue
+    target=$(pool_to_target "$pool") \
+        || { log_msg "FATAL: Cannot map pool ${pool} to target"; exit 1; }
+    if target_in_live_tree "$target"; then
+        resolved_pool_target[$pool]="$target"
+        continue
+    fi
+    short="${pool_target[$pool]:-}"
+    mapfile -t cands < <(find_live_short_targets "$short")
+    if (( ${#cands[@]} == 1 )); then
+        log_msg "INFO: pool ${pool}: node.conf target ${target} is absent" \
+            "from the live tree; mapping into ${cands[0]} instead"
+        echo "TARGET_RESOLVED:${pool}|${cands[0]}"
+        resolved_pool_target[$pool]="${cands[0]}"
+    elif (( ${#cands[@]} > 1 )); then
+        log_msg "FATAL: pool ${pool}: multiple live targets share the" \
+            "short name '${short}':"
+        for cand in "${cands[@]}"; do
+            log_msg "FATAL:   ${cand}"
+        done
+        ambiguous=1
+    else
+        pools_to_create[$pool]="$target"
+    fi
+done
+if (( ambiguous )); then
+    log_msg "FATAL: remove the stale duplicate target(s), then re-run"
+    exit 1
+fi
+
+# Pass 2 — create the scheduled targets with the setup-iscsi-targets
+# recipe: authentication off, write-protect off, a portal on the storage
+# network, and demo-mode ACLs only when the TPG carries no explicit ACLs.
+for pool in "${!pools_to_create[@]}"; do
+    target="${pools_to_create[$pool]}"
+    if ! targetcli /iscsi create "$target" >/dev/null 2>&1; then
+        log_msg "FATAL: could not create iSCSI target ${target}"
+        exit 1
+    fi
+    targetcli "/iscsi/${target}/tpg1" set attribute authentication=0 \
+        >/dev/null 2>&1 || {
+        log_msg "FATAL: could not disable authentication on ${target}"
+        exit 1
+    }
+    targetcli "/iscsi/${target}/tpg1" set attribute \
+        demo_mode_write_protect=0 >/dev/null 2>&1 || {
+        log_msg "FATAL: could not clear write-protect on ${target}"
+        exit 1
+    }
+    targetcli "/iscsi/${target}/tpg1/portals" create \
+        "${storage_ip}:3260" >/dev/null 2>&1 || {
+        # Target creation rides along with a default 0.0.0.0:3260 portal,
+        # which blocks binding the same port on a specific address; any
+        # existing portal still serves the storage network. Only a
+        # portal-less TPG is fatal.
+        if ! targetcli "/iscsi/${target}/tpg1/portals" ls 2>/dev/null \
+                | grep -q ":3260"; then
+            log_msg "FATAL: could not add portal ${storage_ip}:3260 to ${target}"
+            exit 1
+        fi
+        log_msg "WARN: ${target}: kept its existing portal" \
+            "(could not add ${storage_ip}:3260)"
+    }
+    if ! targetcli "/iscsi/${target}/tpg1/acls" ls 2>/dev/null \
+            | grep -q "iqn\."; then
+        if targetcli "/iscsi/${target}/tpg1" get attribute \
+                generate_node_acls 2>/dev/null \
+                | grep -q "generate_node_acls=0"; then
+            targetcli "/iscsi/${target}/tpg1" set attribute \
+                generate_node_acls=1 >/dev/null 2>&1 || {
+                log_msg "FATAL: could not enable demo-mode ACLs on ${target}"
+                exit 1
+            }
+        fi
+    fi
+    echo "TARGET_CREATED:${target}"
+    resolved_pool_target[$pool]="$target"
+done
+
 for i in "${!new_zvols[@]}"; do
     new_zvol="${new_zvols[$i]}"
     pool="${new_zvol%%/*}"
@@ -719,11 +824,16 @@ for i in "${!new_zvols[@]}"; do
     backstore="vm-${vmid}-disk-${disknum}"
     zvol_dev="/dev/zvol/${new_zvol}"
 
-    # Map pool to target using node-lib's pool_to_target logic. NODE_CONF
-    # is honored so a locally-run payload (storage-host orchestration, and
-    # the test harness) resolves the same node config as the orchestrator.
-    target=$(pool_to_target "$pool") \
-        || { log_msg "FATAL: Cannot map pool ${pool} to target"; exit 1; }
+    # The pre-pass above resolved every distinct pool; the mapping here
+    # only consumes its result. NODE_CONF was honored there so a
+    # locally-run payload (storage-host orchestration, and the test
+    # harness) resolves the same node config as the orchestrator, and
+    # Step 3's by-path rewrite follows whatever target resolved.
+    target="${resolved_pool_target[$pool]:-}"
+    if [[ -z "$target" ]]; then
+        log_msg "FATAL: pool ${pool} did not resolve to a target"
+        exit 1
+    fi
 
     echo "TARGET:${target}"
     echo "DISK:${disknum}"
@@ -825,6 +935,22 @@ SSHEOF
             CONFIG_SAVED)
                 log_msg "INFO:   ✓ iSCSI configuration saved"
                 ;;
+            IQN_CONVERGED:*)
+                conv_prefix="${line##*:}"
+                if [[ "$iqn_prefix" == "$conv_prefix" ]]; then
+                    log_msg "INFO:   ✓ ${compute_host} node.conf IQN_PREFIX" \
+                        "already ${conv_prefix}"
+                elif ! converge_iqn_prefix "$conv_prefix"; then
+                    log_msg "WARN: could not converge IQN_PREFIX in ${compute_host}'s node.conf"
+                fi
+                ;;
+            TARGET_RESOLVED:*)
+                resolved="${line#TARGET_RESOLVED:}"
+                log_msg "INFO:   ✓ Pool ${resolved%%|*}: mapped onto live target ${resolved#*|}"
+                ;;
+            TARGET_CREATED:*)
+                log_msg "INFO:   ✓ Created iSCSI target ${line#TARGET_CREATED:}"
+                ;;
         esac
     done <<< "$lun_result"
     echo ""
@@ -846,7 +972,7 @@ for i in "${!original_zvols[@]}"; do
         disk_key=$(grep '^DISK_KEY=' "$info_file" 2>/dev/null | cut -d= -f2 \
             || true)
     else
-        disk_key=$(ssh root@"$storage_host" \
+        disk_key=$(ssh -n root@"$storage_host" \
             "grep '^DISK_KEY=' '$info_file' 2>/dev/null | cut -d= -f2")
     fi
     disknum="${disk_nums[$i]}"
@@ -856,7 +982,7 @@ done
 if is_single_node; then
     archived_content=$(cat "$archived_config")
 else
-    archived_content=$(ssh root@"$storage_host" "cat '$archived_config'")
+    archived_content=$(ssh -n root@"$storage_host" "cat '$archived_config'")
 fi
 if [[ -z "$archived_content" ]]; then
     log_msg "FATAL: Failed to read archived config"
@@ -980,14 +1106,38 @@ echo ""
 
 if is_two_node; then
     log_msg "INFO: --- Step 4: Rescanning iSCSI ---"
-    if ! on_compute << 'CPEOF'
+    # Unique mapped targets: a freshly created target must be discovered
+    # and logged in before rescan-storage can see its LUNs (it refreshes
+    # only already-logged-in sessions).
+    declare -A mapped_targets=()
+    for dnum in "${!disk_to_target[@]}"; do
+        mapped_target="${disk_to_target[$dnum]:-}"
+        [[ -n "$mapped_target" ]] || continue
+        mapped_targets["$mapped_target"]=1
+    done
+    if ! on_compute "$storage_ip" "${!mapped_targets[@]}" << 'CPEOF'
 mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
+source "$mydir/bashinit"
+bashinit
+storage_ip="$1"; shift
+# Discover the portal's current target set and log in to the targets this
+# run mapped (iscsiadm rc 15 = already logged in — not an error).
+# rescan-storage then refreshes the logged-in sessions' devices.
+iscsiadm -m discovery -t sendtargets -p "${storage_ip}:3260" >/dev/null 2>&1 \
+    || log_msg "WARN: iSCSI discovery against ${storage_ip}:3260 failed"
+for login_target in "$@"; do
+    login_rc=0
+    iscsiadm -m node -T "$login_target" --login >/dev/null 2>&1 || login_rc=$?
+    if [[ "$login_rc" != 0 && "$login_rc" != 15 ]]; then
+        log_msg "WARN: could not log in to ${login_target} (iscsiadm rc ${login_rc})"
+    fi
+done
 rescan_path=$(find_zfsutility_script rescan-storage)
 [[ -n "$rescan_path" ]] || exit 1
 "$rescan_path"
 CPEOF
     then
-        log_msg "WARN: iSCSI rescan failed; run 'sudo rescan-storage' on $compute_host manually"
+        log_msg "WARN: iSCSI rescan failed on ${compute_host} (see warnings above)"
     fi
     echo ""
 fi

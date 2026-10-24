@@ -1032,6 +1032,89 @@ class TestVolumeLoopButtonSensitivity(unittest.TestCase):
         app._ds_unmount_btn.set_sensitive.assert_called_once_with(True)
 
 
+class TestCanmountButtonSensitivity(unittest.TestCase):
+    """Mount stays disabled for unmounted filesystems with canmount=off."""
+
+    def _fs_item(self, **kw):
+        item = {
+            "type": "dataset",
+            "name": "tank/nomount",
+            "zfs_type": "filesystem",
+            "mounted": False,
+        }
+        item.update(kw)
+        return item
+
+    def _make_app(self, items, canmount=None):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        app.ctx.zfs_repository.loop_find.return_value = None
+        values = canmount or {}
+        app.ctx.zfs_repository.get_property.side_effect = lambda name, prop: values.get(name, "on")
+        with patch.object(dp, "get_tree_selection_items", return_value=items):
+            dp.update_ds_button_sensitivity(app)
+        return app
+
+    def test_canmount_off_disables_mount_with_tooltip(self):
+        app = self._make_app([self._fs_item()], canmount={"tank/nomount": "off"})
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with(
+            "Datasets with canmount=off cannot be mounted"
+        )
+
+    def test_canmount_on_enables_mount(self):
+        app = self._make_app([self._fs_item()], canmount={"tank/nomount": "on"})
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with("")
+
+    def test_canmount_noauto_enables_mount(self):
+        """noauto only blocks automatic mounts; manual Mount stays available."""
+        app = self._make_app([self._fs_item()], canmount={"tank/nomount": "noauto"})
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_pool_root_canmount_off_disables_mount(self):
+        app = self._make_app(
+            [{"type": "pool", "name": "tank", "zfs_type": "filesystem", "mounted": False}],
+            canmount={"tank": "off"},
+        )
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with(
+            "Datasets with canmount=off cannot be mounted"
+        )
+
+    def test_mounted_filesystem_not_queried_for_canmount(self):
+        """Mounted rows cannot change the verdict, so they skip the lookup."""
+        app = self._make_app([self._fs_item(mounted=True)], canmount={"tank/nomount": "off"})
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app.ctx.zfs_repository.get_property.assert_not_called()
+
+    def test_mixed_off_and_mountable_keeps_mount_enabled(self):
+        """any() semantics: Mount stays enabled for the mountable dataset."""
+        app = self._make_app(
+            [
+                self._fs_item(),
+                {"type": "dataset", "name": "tank/ok", "zfs_type": "filesystem", "mounted": False},
+            ],
+            canmount={"tank/nomount": "off", "tank/ok": "on"},
+        )
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with("")
+
+    def test_volume_not_queried_for_canmount(self):
+        app = self._make_app(
+            [
+                {
+                    "type": "dataset",
+                    "name": "tank/vm-100-disk-0",
+                    "zfs_type": "volume",
+                    "mounted": False,
+                }
+            ]
+        )
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app.ctx.zfs_repository.get_property.assert_not_called()
+
+
 class TestUpdateMountedStatesVolumePartitions(unittest.TestCase):
     """update_mounted_states detects mounted loop partitions under volumes."""
 

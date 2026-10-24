@@ -20,7 +20,9 @@ setup_node_config() {
         # Bash-format two-node conf, deliberately matching production shape
         # (declare -A POOL_TARGET), with both hosts resolving to the local
         # stub hostname so on_storage/on_compute take their local branches.
-        cat > "$NODE_CONF_FILE" << 'EOF'
+        # _mock_iqn_prefix stages a conf prefix that differs from the live
+        # target tree (IQN-prefix drift scenarios).
+        cat > "$NODE_CONF_FILE" << EOF
 NODE_MODE="two-node"
 
 STORAGE_HOST="zteststor"
@@ -28,7 +30,7 @@ COMPUTE_HOST="zteststor"
 
 STORAGE_IP="192.168.100.1"
 
-IQN_PREFIX="iqn.2026-02.local.stewie"
+IQN_PREFIX="${_mock_iqn_prefix:-iqn.2026-02.local.stewie}"
 
 declare -A POOL_TARGET=(
     [threeamigos]="threeamigos"
@@ -119,7 +121,23 @@ run_unarchive() {
     mkdir -p "$capture_dir"
     rm -f "$capture_dir/zfs-argv" "$capture_dir/pace" "$capture_dir/dd" \
         "$capture_dir/tee" "$capture_dir/sha256" \
-        "$capture_dir/targetcli" "$capture_dir/ssh"
+        "$capture_dir/targetcli" "$capture_dir/ssh" "$capture_dir/iscsiadm" \
+        "$capture_dir/iscsi-luns"
+    rm -f "$capture_dir"/bs.*
+    # Live-target registry for the targetcli stub: by default the
+    # conf-constructed targets exist (the legacy "targets present"
+    # semantics); _mock_live_targets overrides (empty = bare tree).
+    if [[ "${_mock_two_node:-}" == "1" ]]; then
+        local live_targets="${_mock_live_targets:-}"
+        if [[ -z "${_mock_live_targets+x}" ]]; then
+            live_targets=$'iqn.2026-02.local.stewie:threeamigos\niqn.2026-02.local.stewie:nvme1'
+        fi
+        if [[ -n "$live_targets" ]]; then
+            printf '%s\n' "$live_targets" > "$capture_dir/iscsi-targets"
+        else
+            : > "$capture_dir/iscsi-targets"
+        fi
+    fi
     (
         source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
         setup_test_env
@@ -288,8 +306,9 @@ ${arc_dataset}"
             # Answers the orchestrator's direct storage-host probes by running
             # the same operation locally against the mock state. Unhandled
             # commands fail loudly so a new probe shape cannot pass silently.
+            # (The calls carry -n; the remote command is the last argv entry.)
             ssh() {
-                local cmd="${2:-}"
+                local cmd="${*: -1}"
                 echo "SSH:$cmd" >> "$_capture_dir/ssh"
                 local plain="${cmd//\'/}"
                 local ds f marker
@@ -341,8 +360,9 @@ ${arc_dataset}"
                 esac
             }
 
-            # Stateful targetcli: backstore markers plus a per-target LUN
-            # table; ls output uses the row shape the payload greps
+            # Stateful targetcli: backstore markers, a per-target LUN
+            # table, and a live-target registry (seeded by run_unarchive);
+            # ls output uses the row shape the payload greps
             # ("block/<name> " then lun<N>).
             targetcli() {
                 echo "TARGETCLI:$*" >> "$_capture_dir/targetcli"
@@ -358,6 +378,31 @@ ${arc_dataset}"
                         ;;
                     "/backstores/block create")
                         : > "$_capture_dir/bs.$3"
+                        return 0
+                        ;;
+                    "/iscsi ls")
+                        # Live-target registry rows in the shape targetcli
+                        # prints (the payload's grep -o 'iqn.*' extracts).
+                        if [[ -s "$_capture_dir/iscsi-targets" ]]; then
+                            echo "o- iscsi ... [Targets: N]"
+                            while IFS= read -r t; do
+                                [[ -n "$t" ]] || continue
+                                printf '  o- %s ... [TPGs: 1]\n' "$t"
+                            done < "$_capture_dir/iscsi-targets"
+                        fi
+                        return 0
+                        ;;
+                    "/iscsi create")
+                        echo "$3" >> "$_capture_dir/iscsi-targets"
+                        return 0
+                        ;;
+                    "/iscsi/"*"/tpg1 get")
+                        # Fresh TPGs report explicit-ACL mode, so the
+                        # payload's create recipe flips generate_node_acls.
+                        if [[ "$3" == "attribute" \
+                            && "$4" == "generate_node_acls" ]]; then
+                            echo "generate_node_acls=0"
+                        fi
                         return 0
                         ;;
                     "/iscsi/"*"/tpg1/luns ls")
@@ -379,6 +424,12 @@ ${arc_dataset}"
                         return 0
                         ;;
                 esac
+            }
+
+            # Step 4's discovery/login calls, captured for assertions.
+            iscsiadm() {
+                echo "ISCSIADM:$*" >> "$_capture_dir/iscsiadm"
+                return 0
             }
 
             # Archive-side mock state for the NVME1 disk-3 dataset, mirroring
@@ -437,6 +488,7 @@ ${_arc_ds3}"
     cat "$capture_dir/sha256" 2>/dev/null || true
     cat "$capture_dir/targetcli" 2>/dev/null || true
     cat "$capture_dir/ssh" 2>/dev/null || true
+    cat "$capture_dir/iscsiadm" 2>/dev/null || true
     return $rc
 }
 
@@ -448,7 +500,9 @@ reset_unretire_mocks() {
     unset _mock_old_config_present _mock_orphan_zvols \
         _mock_new_config_present _mock_read_response _mock_hash_dst \
         _mock_sha_fail \
-        _mock_dest_zvol_present _mock_dest_zvol_marked _mock_two_node
+        _mock_dest_zvol_present _mock_dest_zvol_marked _mock_two_node \
+        _mock_iqn_prefix _mock_live_targets
+    rm -f "${_mock_zfs_state_dir}"/node.conf.bak-* 2>/dev/null || true
 }
 
 test_usage_rejects_invalid_new_vmid() {
@@ -1329,6 +1383,233 @@ iothread=1,size=350G" ]]; then
     test_pass
 }
 
+test_two_node_step2_converges_drifted_iqn_prefix() {
+    reset_unretire_mocks
+    test_start "Step 2 converges a drifted node.conf IQN_PREFIX onto the live tree"
+
+    _mock_orig_vmid="904"
+    _mock_two_node=1
+    _mock_iqn_prefix="iqn.2026-10.local.stewie"
+    _mock_read_response="
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_drift"
+    local archive="$_mock_zfs_state_dir/archive_drift"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if printf '%s\n' "$out" | grep -q "FATAL"; then
+        test_fail "FATAL in output:\n$out"
+        return
+    fi
+
+    # The conf was the regressed side: converged to the live prefix with a
+    # backup kept beside it.
+    if ! grep -q '^IQN_PREFIX="iqn.2026-02.local.stewie"$' \
+            "$_mock_zfs_state_dir/node.conf"; then
+        test_fail "node.conf IQN_PREFIX not converged; output:\n$out"
+        return
+    fi
+    if ! ls "$_mock_zfs_state_dir"/node.conf.bak-* >/dev/null 2>&1; then
+        test_fail "no node.conf backup kept by convergence; output:\n$out"
+        return
+    fi
+
+    # LUNs land on the live targets and the by-path rewrite follows them.
+    if ! printf '%s\n' "$out" | grep -q \
+            '^TARGETCLI:/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns create'; then
+        test_fail "no LUN create on the live threeamigos target; output:\n$out"
+        return
+    fi
+    local expect_scsi0="^scsi0: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-\
+iqn.2026-02.local.stewie:threeamigos-lun-"
+    if ! grep -q "$expect_scsi0" "${pve_dir}/904.conf"; then
+        test_fail "scsi0 not rewritten to the live-prefix target; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_step2_substitutes_live_targets_without_convergence() {
+    reset_unretire_mocks
+    test_start "Step 2 substitutes live targets per pool when live prefixes are mixed"
+
+    _mock_orig_vmid="904"
+    _mock_two_node=1
+    _mock_iqn_prefix="iqn.2026-10.local.stewie"
+    _mock_live_targets=$'iqn.2026-02.local.stewie:threeamigos\niqn.2026-09.local.stewie:nvme1'
+    _mock_read_response="
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_mixed"
+    local archive="$_mock_zfs_state_dir/archive_mixed"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if printf '%s\n' "$out" | grep -q "FATAL"; then
+        test_fail "FATAL in output:\n$out"
+        return
+    fi
+
+    # Mixed live prefixes forbid convergence: the conf must stay untouched.
+    if ! grep -q '^IQN_PREFIX="iqn.2026-10.local.stewie"$' \
+            "$_mock_zfs_state_dir/node.conf"; then
+        test_fail "node.conf rewritten although live prefixes are mixed; output:\n$out"
+        return
+    fi
+    if ls "$_mock_zfs_state_dir"/node.conf.bak-* >/dev/null 2>&1; then
+        test_fail "convergence backup created although prefixes are mixed; output:\n$out"
+        return
+    fi
+
+    # Each pool mapped onto its own live target, and the config follows.
+    if ! printf '%s\n' "$out" | grep -q \
+            'mapped onto live target iqn.2026-02.local.stewie:threeamigos'; then
+        test_fail "threeamigos not substituted onto its live target; output:\n$out"
+        return
+    fi
+    if ! printf '%s\n' "$out" | grep -q \
+            'mapped onto live target iqn.2026-09.local.stewie:nvme1'; then
+        test_fail "nvme1 not substituted onto its live target; output:\n$out"
+        return
+    fi
+    local expect_scsi3="^scsi3: /dev/disk/by-path/ip-192.168.100.1:3260-iscsi-\
+iqn.2026-09.local.stewie:nvme1-lun-"
+    if ! grep -q "$expect_scsi3" "${pve_dir}/904.conf"; then
+        test_fail "scsi3 not rewritten to the substituted nvme1 target; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_step2_creates_missing_targets_and_logs_in() {
+    reset_unretire_mocks
+    test_start "Step 2 creates absent targets; Step 4 discovers and logs in"
+
+    _mock_orig_vmid="904"
+    _mock_two_node=1
+    _mock_live_targets=""
+    _mock_read_response="
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_bare"
+    local archive="$_mock_zfs_state_dir/archive_bare"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if printf '%s\n' "$out" | grep -q "FATAL"; then
+        test_fail "FATAL in output:\n$out"
+        return
+    fi
+
+    # Both targets created with the full recipe.
+    local tc
+    tc=$(printf '%s\n' "$out" | grep '^TARGETCLI:')
+    for target in iqn.2026-02.local.stewie:threeamigos iqn.2026-02.local.stewie:nvme1; do
+        if [[ "$tc" != *"/iscsi create ${target}"* ]]; then
+            test_fail "target not created: ${target}; targetcli log:\n$tc"
+            return
+        fi
+        if [[ "$tc" != *"/iscsi/${target}/tpg1 set attribute authentication=0"* ]] \
+            || [[ "$tc" != *"/iscsi/${target}/tpg1 set attribute demo_mode_write_protect=0"* ]] \
+            || [[ "$tc" != *"/iscsi/${target}/tpg1/portals create 192.168.100.1:3260"* ]] \
+            || [[ "$tc" != *"/iscsi/${target}/tpg1 set attribute generate_node_acls=1"* ]]; then
+            test_fail "create recipe incomplete for ${target}; targetcli log:\n$tc"
+            return
+        fi
+        if ! printf '%s\n' "$out" | grep -q "Created iSCSI target ${target}"; then
+            test_fail "no creation INFO for ${target}; output:\n$out"
+            return
+        fi
+    done
+
+    # Step 4 discovered the portal and logged in to both mapped targets.
+    local adm
+    adm=$(printf '%s\n' "$out" | grep '^ISCSIADM:')
+    if [[ "$adm" != *"-m discovery -t sendtargets -p 192.168.100.1:3260"* ]]; then
+        test_fail "no discovery in Step 4; iscsiadm log:\n$adm"
+        return
+    fi
+    for target in iqn.2026-02.local.stewie:threeamigos iqn.2026-02.local.stewie:nvme1; do
+        if [[ "$adm" != *"-m node -T ${target} --login"* ]]; then
+            test_fail "no login for ${target}; iscsiadm log:\n$adm"
+            return
+        fi
+    done
+
+    test_pass
+}
+
+test_two_node_step2_refuses_ambiguous_duplicate_targets() {
+    reset_unretire_mocks
+    test_start "Step 2 refuses duplicate same-short targets before any mutation"
+
+    _mock_orig_vmid="904"
+    _mock_two_node=1
+    _mock_iqn_prefix="iqn.2026-10.local.stewie"
+    _mock_live_targets=$'iqn.2026-02.local.stewie:threeamigos\n'\
+$'iqn.2026-09.local.stewie:threeamigos\n'\
+$'iqn.2026-02.local.stewie:nvme1'
+    _mock_read_response="
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_dup"
+    local archive="$_mock_zfs_state_dir/archive_dup"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        test_fail "expected non-zero exit on duplicate targets; output:\n$out"
+        return
+    fi
+    if ! printf '%s\n' "$out" | grep -q "multiple live targets share the"; then
+        test_fail "ambiguity FATAL missing; output:\n$out"
+        return
+    fi
+    if ! printf '%s\n' "$out" | grep -q "iqn.2026-09.local.stewie:threeamigos"; then
+        test_fail "duplicate candidate not named; output:\n$out"
+        return
+    fi
+
+    # Refusal happens before any mutation: no target or backstore creation.
+    if printf '%s\n' "$out" | grep -q '^TARGETCLI:/iscsi create'; then
+        test_fail "target created despite ambiguity; output:\n$out"
+        return
+    fi
+    if printf '%s\n' "$out" | grep -q '^TARGETCLI:/backstores/block create'; then
+        test_fail "backstore created despite ambiguity; output:\n$out"
+        return
+    fi
+    if ls "$_mock_zfs_state_dir"/node.conf.bak-* >/dev/null 2>&1; then
+        test_fail "node.conf rewritten despite ambiguity; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -1354,6 +1635,10 @@ test_resume_skips_marked_disk_and_finishes
 test_unmarked_dest_confirmed_redone
 test_unmarked_dest_declined_aborts
 test_two_node_step2_maps_pools_and_rewrites_luns
+test_two_node_step2_converges_drifted_iqn_prefix
+test_two_node_step2_substitutes_live_targets_without_convergence
+test_two_node_step2_creates_missing_targets_and_logs_in
+test_two_node_step2_refuses_ambiguous_duplicate_targets
 test_payloads_route_through_node_transports
 test_archived_config_path_has_no_double_slash
 
