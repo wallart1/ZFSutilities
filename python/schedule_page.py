@@ -42,7 +42,6 @@ from profile_manager import (
     load_profile,
     save_profile,
 )
-from snapshot_naming import bucket_for
 
 COL_ACTIVE = 0
 COL_NAME = 1
@@ -327,11 +326,12 @@ def load_schedule_config(app, cron):
 
 
 def _snapshot_label_for(profile):
-    """Return the snapshot label whose bucket a profile's next run lands in.
+    """Return the snapshot label a profile names its snapshots with.
 
     Backup profiles name snapshots with their configured label; offsite
     profiles always use ``offsite``.  Other tab types do not create
-    snapshots, so they carry no bucket (None) and get no decoration.
+    snapshots, so they carry no label (None) and get no UTC-edge hint in
+    the Next Run display.
     """
     tab_type = profile.get("tab_type", "")
     if tab_type == "offsite":
@@ -343,18 +343,11 @@ def _snapshot_label_for(profile):
     return None
 
 
-# Retention-bucket letters (snapshot_naming.bucket_for) as Schedule-page
-# words: the Next Run column shows which bucket the next run's snapshot will
-# land in, decided by the UTC instant embedded in the name.
-_BUCKET_WORDS = {"d": "daily", "w": "weekly", "m": "monthly", "s": "offsite"}
-
-
 def _next_run_strings(cron, label=None):
     """Return (display_string, sort_string) for the next cron execution.
 
     With *label* (the snapshot label a backup/offsite profile names its
-    snapshots with), the display appends the retention bucket the next
-    run's UTC instant will produce, and — only when the UTC date differs
+    snapshots with), the display appends — only when the UTC date differs
     from the local date — a hint translating the local clock time to UTC,
     because the snapshot name's date and bucket follow the UTC calendar
     day.  The sort string stays the plain local timestamp either way.
@@ -385,7 +378,6 @@ def _next_run_strings(cron, label=None):
         dt = times[0]
         display = dt.strftime("%a %b %d %Y %H:%M")
         if label:
-            display += f" ({_BUCKET_WORDS[bucket_for(dt, label)]})"
             local = dt.astimezone()
             utc = dt.astimezone(timezone.utc)
             if utc.date() != local.date():
@@ -665,8 +657,8 @@ def _update_next_run_for_iter(app, tree_iter):
 def _on_next_run_query_tooltip(view, x, y, keyboard_mode, tooltip, app, next_run_col):
     """Show the full Next Run string when the Next Run cell is hovered.
 
-    The cell renderer ellipsizes decorated values (bucket word plus the
-    UTC-edge translation) so every row keeps a uniform height; the tooltip
+    The cell renderer ellipsizes decorated values (the UTC-edge
+    translation) so every row keeps a uniform height; the tooltip
     restores the complete text.  Hovers over other columns or empty space
     return False so GTK falls through to the default behavior.
     """

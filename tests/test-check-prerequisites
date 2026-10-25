@@ -127,9 +127,25 @@ STUB
     fi
 
     # ZFS tooling: ZFS_STUB=absent leaves zfs/zpool out of the stub PATH
-    # (drives the contrib-note probe); present otherwise.
+    # (drives the contrib-note probe); present otherwise. With
+    # ZFS_VOLUMES_FIXTURE set, zfs answers the detection scan
+    # (`list -Hp -t volume ...`) from the fixture file instead of /bin/true.
     if [[ "${ZFS_STUB:-present}" != "absent" ]]; then
-        ln -s /bin/true "$tmp_bin/zfs"
+        if [[ -n "${ZFS_VOLUMES_FIXTURE:-}" ]]; then
+            # Builtins only (printf/read): the sealed PATH has no cat, and a
+            # 127 from the stub would silently empty the detection scan.
+            cat > "$tmp_bin/zfs" << 'EOF'
+#!/usr/bin/bash
+if [[ "$1 $2" == "list -Hp" && -n "${ZFS_VOLUMES_FIXTURE:-}" ]]; then
+    while IFS= read -r _line; do printf '%s\n' "$_line"; done < "$ZFS_VOLUMES_FIXTURE"
+    exit 0
+fi
+exec /bin/true
+EOF
+            chmod +x "$tmp_bin/zfs"
+        else
+            ln -s /bin/true "$tmp_bin/zfs"
+        fi
         ln -s /bin/true "$tmp_bin/zpool"
     fi
 
@@ -175,10 +191,25 @@ EOF
     fi
 
     # Real text utilities the script shells out to (check_mkdocs_version,
-    # check_apt_pkg); everything else on the host stays invisible.
+    # check_apt_pkg); everything else on the host stays invisible. stat,
+    # date, realpath, and dirname serve the --two-node post-restore
+    # detection (file mtimes, timestamp rendering, lib/iscsi-lib.sh
+    # resolution); when any of them is missing the detection skips quietly.
     ln -s /usr/bin/awk "$tmp_bin/awk"
     ln -s /usr/bin/cut "$tmp_bin/cut"
     ln -s /usr/bin/grep "$tmp_bin/grep"
+    ln -s "$(command -v stat)" "$tmp_bin/stat"
+    ln -s "$(command -v date)" "$tmp_bin/date"
+    ln -s "$(command -v realpath)" "$tmp_bin/realpath"
+    ln -s "$(command -v dirname)" "$tmp_bin/dirname"
+
+    # Two-node section commands (TWO_NODE_STUB=1): stubbed so a --two-node
+    # run can exit 0 and the detection assertions see a clean section.
+    if [[ "${TWO_NODE_STUB:-}" == "1" ]]; then
+        for cmd in ssh scp targetcli iscsiadm systemctl; do
+            ln -s /bin/true "$tmp_bin/$cmd"
+        done
+    fi
 
     # dpkg simulates all requested packages as installed
     cat > "$tmp_bin/dpkg" << 'EOF'
@@ -640,6 +671,176 @@ test_module_check_skipped_without_modinfo
 test_module_row_alongside_missing_zfs_tools
 test_matplotlib_optional_warn_when_absent
 test_matplotlib_pass_when_importable
+
+# ---------------------------------------------------------------------------
+# --two-node post-restore iSCSI detection (informational warns only)
+# ---------------------------------------------------------------------------
+
+# Shared fixture builder: a zvol fixture, a manifest, and a saveconfig whose
+# mtimes the caller positions around the zvol creation epoch.
+make_detection_fixtures() {
+    local dir
+    dir=$(mktemp -d)
+    printf 'threeamigos/proxmox/vm-101-disk-0\t1780000000\n' > "$dir/zvols"
+    printf 'vm-101-disk-0\n' > "$dir/manifest"
+    echo '{"storage_objects":[],"targets":[]}' > "$dir/saveconfig.json"
+    printf '%s\n' "$dir"
+}
+
+test_two_node_detection_stale_saveconfig_warns() {
+    test_start "--two-node: saveconfig older than the newest zvol warns"
+
+    local fx output rc
+    fx=$(make_detection_fixtures)
+    # OS-disk files regressed to before the zvol creation (restore signature).
+    touch -d @1760000000 "$fx/saveconfig.json"
+    touch -d @1760000000 "$fx/manifest"
+    output=$(TWO_NODE_STUB=1 \
+        ZFS_VOLUMES_FIXTURE="$fx/zvols" \
+        ISCSI_SAVECONFIG="$fx/saveconfig.json" \
+        ISCSI_MANIFEST="$fx/manifest" \
+        run_check_prerequisites_with_mock_env --two-node 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    # Informational only: warns never fail the gate.
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 with detection findings, got $rc"
+        return
+    fi
+    if [[ "$output" != *"iSCSI post-restore detection: saveconfig.json was last written"* ]]; then
+        test_fail "Expected the stale-saveconfig warn line in output"
+        return
+    fi
+    if [[ "$output" != *"bare-metal restore signature"* ]]; then
+        test_fail "Expected the signature wording in the warn line"
+        return
+    fi
+    if [[ "$output" != *"sudo setup-iscsi-targets"* ]]; then
+        test_fail "Expected the pointer to setup-iscsi-targets"
+        return
+    fi
+    if [[ "$output" == *"no restore signature found"* ]]; then
+        test_fail "Must not print the clean pass line alongside findings"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_detection_dead_manifest_entry_warns() {
+    test_start "--two-node: manifest entry without a zvol warns"
+
+    local fx output rc
+    fx=$(make_detection_fixtures)
+    printf 'vm-101-disk-0\nvm-999-disk-0\n' > "$fx/manifest"
+    # saveconfig fresh: only the manifest signature fires.
+    touch -d @1790000000 "$fx/saveconfig.json"
+    touch -d @1790000000 "$fx/manifest"
+    output=$(TWO_NODE_STUB=1 \
+        ZFS_VOLUMES_FIXTURE="$fx/zvols" \
+        ISCSI_SAVECONFIG="$fx/saveconfig.json" \
+        ISCSI_MANIFEST="$fx/manifest" \
+        run_check_prerequisites_with_mock_env --two-node 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 with a detection finding, got $rc"
+        return
+    fi
+    if [[ "$output" != *"manifest expects vm-999-disk-0 but no such VM zvol exists"* ]]; then
+        test_fail "Expected the dead-manifest-entry warn line in output"
+        return
+    fi
+    # The fixture's live zvol must NOT warn — this is the proof the scan
+    # itself ran (an empty scan would flag every manifest entry).
+    if [[ "$output" == *"manifest expects vm-101-disk-0"* ]]; then
+        test_fail "Live zvol vm-101-disk-0 must not be reported missing"
+        return
+    fi
+    if [[ "$output" == *"saveconfig.json was last written"* ]]; then
+        test_fail "Fresh saveconfig must not produce a stale-file warn"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_detection_healthy_passes() {
+    test_start "--two-node: consistent state reports the clean pass line"
+
+    local fx output rc
+    fx=$(make_detection_fixtures)
+    touch -d @1790000000 "$fx/saveconfig.json"
+    touch -d @1790000000 "$fx/manifest"
+    output=$(TWO_NODE_STUB=1 \
+        ZFS_VOLUMES_FIXTURE="$fx/zvols" \
+        ISCSI_SAVECONFIG="$fx/saveconfig.json" \
+        ISCSI_MANIFEST="$fx/manifest" \
+        run_check_prerequisites_with_mock_env --two-node 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 on a healthy two-node check, got $rc"
+        return
+    fi
+    if [[ "$output" != *"✓ iSCSI post-restore detection: no restore signature found"* ]]; then
+        test_fail "Expected the clean detection pass line"
+        return
+    fi
+    if [[ "$output" == *"⚠ iSCSI post-restore detection"* ]]; then
+        test_fail "Healthy state must produce no detection warns"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_detection_not_in_list_failures() {
+    test_start "--two-node: detection findings never enter --list-failures"
+
+    local fx output rc
+    fx=$(make_detection_fixtures)
+    touch -d @1760000000 "$fx/saveconfig.json"
+    touch -d @1760000000 "$fx/manifest"
+    output=$(TWO_NODE_STUB=1 \
+        ZFS_VOLUMES_FIXTURE="$fx/zvols" \
+        ISCSI_SAVECONFIG="$fx/saveconfig.json" \
+        ISCSI_MANIFEST="$fx/manifest" \
+        run_check_prerequisites_with_mock_env --two-node --list-failures 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Warn-only findings must not fail the gate, got $rc"
+        return
+    fi
+    if [[ "$output" == *"iSCSI"* ]]; then
+        test_fail "Detection must stay out of the machine-readable failure list: $output"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_detection_stale_saveconfig_warns
+test_two_node_detection_dead_manifest_entry_warns
+test_two_node_detection_healthy_passes
+test_two_node_detection_not_in_list_failures
 
 test_summary
 teardown_test_env

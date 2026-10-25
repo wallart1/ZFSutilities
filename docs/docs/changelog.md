@@ -111,6 +111,102 @@
   `share/dev/*`; the testing and integrated-testing guides document
   the payload e2e matrix and its three contexts.
 
+## 0.131.0
+
+*Released 2026-10-24*
+
+### Added
+
+- **Restore-time iSCSI detection (iSCSI resilience M3).** Three
+  read-only detectors in `lib/iscsi-lib.sh` recognize the
+  bare-metal-restore signature from live state: (a)
+  `saveconfig.json`/expected-backstores manifest older than the newest
+  VM zvol, (b) compute-host VM disk references (including efidisk)
+  whose target/LUN is absent from the live LIO tree, and (c) manifest
+  entries with no zvol. `check-prerequisites --two-node` reports
+  findings as informational warnings — the gate stays read-only and
+  findings never fail it — and `setup-iscsi-targets` prints the
+  evidence after target setup and offers `reconcile-iscsi-state` with
+  the same verified-evidence + `y/N` pattern as orphan-target
+  deletion: declining leaves the system untouched, an accepted
+  reconcile runs interactively under its own plan+confirm gate, and a
+  failed one exits 1. Every detector skips quietly when its inputs are
+  absent, so a pre-install or fresh-install host reports nothing.
+- **Compute-host iSCSI fence — `check-vm-disk-paths` (iSCSI resilience
+  M4).** Verifies that every VM-config disk reference (including
+  efidisk) has its `/dev/disk/by-path/ip-…-iscsi-…-lun-N` link on the
+  compute host; with `--recover`, a local `rescan-storage` first, then
+  exactly one ssh running `reconcile-iscsi-state --yes` on the storage
+  host, re-checking after each stage. A refused reconcile stays
+  report-only — the fence never retries, guesses, or remaps. Runs from
+  the new `zfsutilities-iscsi-fence.timer` (every 5 minutes, boot
+  settle of 2 minutes; ticks stay journal-only via
+  `ZFSUTILITIES_LOG_INHERIT=Y` so no per-tick session logs are
+  created), installed and enabled by `switch-version` activation on
+  two-node compute hosts (gated on `qm` presence and the node config)
+  from the activated version's `share/two-node/` tree — idempotent,
+  refreshed on every activation, self-healing re-enable. A healthy
+  tick is entirely local: no ssh, one summary line. `install-two-node`
+  names the fence in its completion summary, and
+  `uninstall-zfsutilities` stops, disables, and removes both units
+  symmetrically.
+- **Merged Dashboard Tasks list.** The Dashboard's Recent Operations
+  and Running Tasks sections are replaced by one **Tasks** list — tasks
+  waiting for a lock, tasks running right now, and the ten most recent
+  completed operations, in reverse chronological order (rows whose
+  start time cannot be determined sort to the top). Each row shows the
+  task's start time and state: `Waiting since <time>`, `Running since
+  <start>` with progress where one exists (`Step N/M`, scrub
+  `% complete (ETA …)`, ZFS-native `% done`, surface-test `%`), or the
+  completed operation's highest message level. Start times come from
+  the runner sessions, `zpool status` scan lines, and `ps lstart=`;
+  the table keeps a constant ten-row window with its own scrollbar
+  when the list is longer.
+- **Remove Selected action (Dashboard).** Completed rows can be
+  removed from the Tasks list; removed rows stay hidden across
+  refreshes, and dismissal keys prune themselves once their entries
+  fall out of the ten-entry window. Removal only dismisses the row —
+  the history entry and its session log are kept, so the Logs tab's
+  success-rate metrics are unaffected.
+- **Waiting tasks are cancellable.** Cancel Selected Tasks now works
+  on waiting rows: a GUI runner's lock wait is interrupted (SIGINT),
+  and a waiting scheduled profile is stopped with SIGTERM after a
+  click-time re-check of the live PID (an entry that vanished since
+  the click warns instead of signalling).
+
+### Changed
+
+- **Performance tab last in the sidebar.** The Performance page moves
+  to the bottom of the navigation column, below Disks, Pools, and
+  Datasets; its persisted settings are unchanged.
+- **Next Run column drops the retention-bucket word.** The
+  parenthesized bucket suffix (`(weekly)` and friends) read as a run
+  frequency and is removed; the conditional UTC-edge translation hint
+  (`23:30 Sat = 03:30 Sun UTC — names dated Sun`) remains for
+  snapshot-creating profiles.
+
+### Tests
+
+- `check-vm-disk-paths` covered end to end (healthy local-only tick,
+  report-only missing, rescan-suffices, single reconcile ssh with the
+  exact remote command, refused-reconcile report-only) and
+  `setup-iscsi-targets` detection covered across all three signatures,
+  the decline/accept/failure offer paths, and the fresh-install
+  no-false-positive proof. Uninstall now asserts the fence units are
+  removed with the timer stopped and disabled first, and a lone fence
+  timer alone marks systemd integration for removal; the shipped fence
+  units carry a structural guard (stable-path `ExecStart` with
+  `--recover`, journal-only environment, 5-minute cadence).
+
+### Documentation
+
+- New `check-vm-disk-paths` section in the two-node command reference
+  (arguments, called modules, flow, return codes) plus TOC entry;
+  `setup-iscsi-targets` documents the detection step and the reconcile
+  offer; `switch-version` documents the fence activation wiring;
+  `check-prerequisites` documents the two-node detection; the message
+  reference gained the fence and detection message rows.
+
 ## 0.130.0
 
 *Released 2026-10-24*

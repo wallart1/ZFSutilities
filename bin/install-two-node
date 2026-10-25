@@ -528,7 +528,11 @@ fi
 # The rtslib-fb-targetctl systemd drop-ins (boot-config, pre-start-backup)
 # are installed by switch-version's install_rtslib_dropins during the
 # activation above — from the deployed version's share/two-node tree, so
-# they always match the activated release.
+# they always match the activated release. The same activation installs the
+# iSCSI VM-disk path fence on the compute host (install_iscsi_fence_units:
+# zfsutilities-iscsi-fence.service + .timer, gated on qm presence and
+# two-node mode). A hand-rolled health-check already on the compute host is
+# left untouched.
 
 # Remove obsolete systemd artifacts left by older versions (same
 # ZFSUTILITIES_ETC_PREFIX fixture knob as the drop-ins above)
@@ -627,6 +631,10 @@ echo "  Storage IP:   $storage_ip"
 echo "  Node config:  $NODE_CONF"
 echo "  Deploy config: $deploy_conf"
 echo "  Version:      $(cat "$repo_dir/VERSION")"
+echo ""
+echo "  iSCSI fence:  zfsutilities-iscsi-fence.timer active on $compute_host —"
+echo "                runs check-vm-disk-paths --recover every 5 minutes and"
+echo "                repairs missing VM disk paths unattended"
 echo ""
 echo "  Installed versions:"
 sudo /usr/local/lib/zfsutilities/bin/switch-version --list

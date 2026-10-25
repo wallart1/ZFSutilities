@@ -96,7 +96,13 @@ sudo check-prerequisites [--single-node|--two-node] [--list-failures]
 Checks the following categories: core ZFS utilities (`bash`, `zfs`, `zpool`,
 `pv`, `python3` for transfer pacing via `lib/pace_stream.py`, `rsync`,
 `smartctl`), optional Proxmox VE, GTK GUI packages, two-node
-tools (`ssh`, `scp`, `iscsiadm`), and documentation tools. `pip3` is required;
+tools (`ssh`, `scp`, `targetcli`, `rtslib-fb-targetctl`, `iscsiadm`), and
+documentation tools. In `--two-node` mode the check also runs the read-only
+post-restore iSCSI detection (`lib/iscsi-lib.sh`, sourced without the
+session machinery): `saveconfig.json`/manifest mtimes are compared against
+the newest VM zvol's creation and manifest entries against existing zvols,
+with findings reported as informational warnings — the gate stays read-only,
+and findings never fail it. `pip3` is required;
 `mkdocs` and `mkdocs-material` are pip-installed by the installer's doc-server
 step, so their absence is reported as a warning, not a failure. The GUI
 section also probes the optional chart renderer: a `python3 -c "import
@@ -112,9 +118,15 @@ probe (`modinfo zfs`) also verifies the ZFS kernel module is built — on Debian
 `zfs-dkms` builds it only when the matching kernel headers are installed, so a
 missing module is remediated with `linux-headers-$(uname -r)`.
 
-**Called modules:** none.
+**Called modules:** `lib/iscsi-lib.sh` — only its read-only restore-time
+detectors, and only in `--two-node` mode (sourced with
+`ISCSI_LIB_NO_BOOTSTRAP=1`; every detector skips quietly when its inputs
+are absent).
 
-**Data structures consumed / produced:** none.
+**Data structures consumed / produced:** reads
+`/etc/rtslib-fb-target/saveconfig.json` mtimes and the
+[expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest)
+(`--two-node` detection only); writes nothing.
 
 **Return codes:**
 

@@ -248,11 +248,11 @@ important, especially before running backup, restore, or iSCSI operations.
 ## Tabs
 
 The sidebar exposes these pages, with the storage-infrastructure tabs
-(Disks/Pools/Datasets) grouped at the bottom:
+(Disks/Pools/Datasets) grouped at the bottom and Performance last:
 
 | Tab                               | Purpose                                                                                         |
 | --------------------------------- | ----------------------------------------------------------------------------------------------- |
-| [Dashboard](#dashboard-tab)       | At-a-glance system health, recent operations, and warnings                                      |
+| [Dashboard](#dashboard-tab)       | At-a-glance system health, task tracking, and warnings                                          |
 | [Backup](#backup-tab)             | Configure and run [`zfsdailybackup`](../commands-and-modules/commands.md#zfsdailybackup)        |
 | [Offsite](#offsite-tab)           | Configure and run [`zfssendoffsite`](../commands-and-modules/commands.md#zfssendoffsite)        |
 | [Restore](#restore-tab)           | Configure and run [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore)                |
@@ -260,20 +260,19 @@ The sidebar exposes these pages, with the storage-infrastructure tabs
 | [Retention](#retention-tab)       | Per-pool retention policies + prune runner                                                      |
 | [Checkagainst](#checkagainst-tab) | Edit the [`zfscheckagainst`](../commands-and-modules/modules.md#zfscheckagainst) table          |
 | [Logs](#logs-tab)                 | Browse, search, and prune session log files                                                     |
-| [Performance](#performance-tab)   | Real-time ARC / L2ARC / SLOG monitors with rolling charts                                      |
 | [Disks](#disks-tab)               | Physical disk inventory, pool topology, and pool growth                                         |
 | [Pools](#pools-tab)               | Pool registry + live `zpool list` status + scrub manager                                        |
 | [Datasets](#datasets-tab)         | Collapsible dataset tree with inline snapshot/hold management (pool root datasets at top level) |
+| [Performance](#performance-tab)   | Real-time ARC / L2ARC / SLOG monitors with rolling charts                                      |
 
 ## Dashboard Tab
 
 The Dashboard provides an at-a-glance overview of ZFS health and active locks.
 It refreshes automatically every 30 seconds while visible, or manually via the
-**Refresh** action button. The Recent Operations, Running Tasks, and Active
-Locks tables each scroll on their own: a table sizes to its content up to 20
-rows and grows its own vertical scrollbar beyond that (a horizontal one
-appears whenever the columns overflow the window), so a short list no longer
-leaves a tall empty window.
+**Refresh** action button. The Tasks table keeps a constant ten-row window and
+grows its own vertical scrollbar when the list is longer; the Active Locks
+table sizes to its content up to 20 rows and scrolls beyond that (a horizontal
+scrollbar appears in either table whenever the columns overflow the window).
 
 !!! tip "Dashboard data during heavy load"
     Pool and iSCSI information comes from live `zpool`/`targetcli` commands with
@@ -312,33 +311,45 @@ A **Low-space warning threshold** spin button sits above the pool table. It
 sets the capacity percentage at which the Dashboard warns about low space.
 The default is **80 %** (range 50–95 %).
 
-### Recent Operations
+### Tasks
 
-A scrollable table showing the last **10** history entries:
+One merged table of everything zfsutilities is doing — tasks **waiting** for a
+lock, tasks **running** right now, and the most recent **completed**
+operations — in reverse chronological order (newest first). Rows whose start
+time cannot be determined sort to the top.
 
-| Column            | Meaning                                                                                                                           |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| **Date/Time**     | When the operation finished (`YYYY-MM-DDTHH:MM±TZ`)                                                                               |
-| **Type**          | `backup`, `offsite`, `restore`, or `prune`                                                                                        |
-| **Name**          | GUI label or scheduled profile name                                                                                               |
-| **Message Level** | Highest message level issued during the operation, from its session log: green `✓` INFO/VERB/DEBUG, amber `⚠` WARN, red `✗` FATAL |
+| Column        | Meaning                                                                                                                                                    |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Date/Time** | When the task started (waiting/running rows) or when the operation finished (completed rows), `YYYY-MM-DDTHH:MM±TZ`                                         |
+| **Type**      | Row source: `GUI`, `Scrub`, `ZFS`, `Profile`, `Scheduled`, `Surface Test` for live rows; `backup`, `offsite`, `restore`, or `prune` for completed rows       |
+| **Name**      | GUI label, task name, or scheduled profile name                                                                                                             |
+| **Status**    | Row state and when it began (see below)                                                                                                                     |
 
-The list refreshes automatically with the rest of the Dashboard.
+The **Status** column shows the row's state plus the time it entered it:
 
-A WARN message does **not** mean the operation failed — many scripts warn and
-continue. When a session log is unavailable or contains no levelled messages,
-the cell falls back to the exit-code result (`✓ success`, `✗ failed`).
+- Waiting rows: `Waiting since <time>` — the moment the task began waiting
+  for a lock (a GUI runner blocked on a dataset lock, or a scheduled profile
+  blocked on the profile lock).
+- Running rows: `Running since <start time>`, with the current progress in
+  parentheses where one exists (`Step N/M`, scrub `% complete (ETA …)`,
+  ZFS-native `% done`, surface-test `%`).
+- Completed rows: the highest message level issued during the operation, from
+  its session log: green `✓` INFO/VERB/DEBUG, amber `⚠` WARN, red `✗` FATAL.
+  A WARN message does **not** mean the operation failed — many scripts warn
+  and continue. When a session log is unavailable or contains no levelled
+  messages, the cell falls back to the exit-code result
+  (`✓ success`, `✗ failed`).
 
-Each row also stores the operation's session-log path in a hidden column. The
-[**View Log**](#actions) action uses this path to jump to the log in the
-[Logs tab](#logs-tab).
+The list shows the ten most recent completed operations plus every live task.
+It refreshes automatically with the rest of the Dashboard.
 
-### Running Tasks
+#### Cancelling tasks
 
-A unified view of all currently running operations. Select one or more rows
-and click **Cancel Selected Tasks** to stop them. The cancel button is enabled
-only when the selection contains at least one real task; selecting the
-*"No running tasks"* placeholder row keeps it disabled.
+Select one or more waiting or running rows and click **Cancel Selected
+Tasks** to stop them. The button is enabled only when the selection contains
+at least one real task; selecting the *"No tasks"* placeholder row keeps it
+disabled. Waiting rows cancel like running ones: a GUI runner's lock wait is
+interrupted (SIGINT), and a waiting profile process is stopped (SIGTERM).
 
 | Task type                | Source                                                                                                                                                                                                                                   | Cancel behaviour                                                                                                      |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -346,7 +357,7 @@ only when the selection contains at least one real task; selecting the
 | **Dataset action**       | Disks-page pool operations — Migrate Pool, Create Pool, vdev growth (Add Data Vdev, Attach, Replace, Detach, Add Infra Vdev), Enroll iSCSI — and Datasets-page profile actions (Apply Profile, Rewrite Data), started from their dialogs | Graceful cancel (SIGTERM the runner subprocess). Shown with its operation name and Step N/M status.                   |
 | **Scrub**                | Pool scrubs started from the Pools tab or detected as externally running                                                                                                                                                                 | `zpool scrub -s <pool>`. While running, the progress text includes an ETA when `zpool status` reports remaining time. |
 | **ZFS-native operation** | In-progress resilver, RAIDZ expansion, or vdev removal on any pool, discovered from live `zpool status` on every refresh                                                                                                                 | Cannot be cancelled from the GUI; ZFS offers no cancel for these. The status shows percent done.                      |
-| **Profile**              | `profile_runner.py` jobs launched by **Run Now** in the Schedule tab                                                                                                                                                                     | SIGTERM the profile-runner process                                                                                    |
+| **Profile**              | `profile_runner.py` jobs launched by **Run Now** in the Schedule tab (running or waiting on the profile lock)                                                                                                                             | SIGTERM the profile-runner process                                                                                    |
 | **Scheduled**            | `profile_runner.py` jobs launched by cron                                                                                                                                                                                                | SIGTERM the profile-runner process                                                                                    |
 
 The operation name shown on a **Dataset action** row (for example,
@@ -370,6 +381,19 @@ showing as running after the actual scrub state changes. Scrubs paused outside
 zfsutilities (for example, with `zpool scrub -p <pool>`) are treated as
 user-paused and remain paused until you explicitly resume them from the
 [Pools tab](#pools-tab).
+
+#### Removing completed rows
+
+Only completed rows can be removed. Selecting at least one completed row
+enables **Remove Selected**; the rows disappear from the list and stay hidden
+across refreshes. Removal only dismisses the rows from the Dashboard — the
+history entry itself is kept, so the Logs tab's success-rate metrics are
+unaffected. Dismissals are pruned automatically once their entries fall out
+of the ten-entry window.
+
+Each row also stores its session-log path in a hidden column. The
+[**View Log**](#actions) action uses this path to jump to the log in the
+[Logs tab](#logs-tab).
 
 ### Active Locks
 
@@ -409,12 +433,13 @@ remote host cannot be reached, its version is shown as *unknown*.
 
 ### Actions
 
-| Button                    | Behaviour                                                                                                                                                                                                                                                                                       |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Refresh**               | Re-gather all dashboard data immediately                                                                                                                                                                                                                                                        |
-| **Fix Locks**             | Removes stale locks and refreshes the view                                                                                                                                                                                                                                                      |
-| **Cancel Selected Tasks** | Cancels the selected rows in the **Running Tasks** list                                                                                                                                                                                                                                         |
-| **View Log**              | Switches to the Logs tab and selects the session log for the selected **Running Tasks** or **Recent Operations** row. The log path is cached when the button becomes sensitive, so the action still opens the intended log even if a background refresh changes the selection before you click. |
+| Button                    | Behaviour                                                                                                                                                                                                                                                                                        |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Refresh**               | Re-gather all dashboard data immediately                                                                                                                                                                                                                                                          |
+| **Fix Locks**             | Removes stale locks and refreshes the view                                                                                                                                                                                                                                                        |
+| **Cancel Selected Tasks** | Cancels the selected waiting or running rows in the **Tasks** list                                                                                                                                                                                                                                 |
+| **Remove Selected**       | Removes the selected completed rows from the **Tasks** list. The rows stay hidden across refreshes; the history entries themselves are kept. Enabled only when at least one completed row is selected                                                                                              |
+| **View Log**              | Switches to the Logs tab and selects the session log for the selected **Tasks** row. The log path is cached when the button becomes sensitive, so the action still opens the intended log even if a background refresh changes the selection before you click.                                    |
 
 ---
 
@@ -636,7 +661,7 @@ The top pane lists every saved profile with columns:
 | **Type**         | `backup`, `offsite`, `restore`, `retention`, or `scrub`       |
 | **Schedule**     | Current cron expression (`min hour day month weekday`)        |
 | **Comment**      | Optional free-form note for the profile                       |
-| **Next Run**     | Next scheduled execution time, plus bucket/UTC notes (below) |
+| **Next Run**     | Next scheduled execution time, plus UTC-edge notes (below)   |
 
 Click any column header to sort by **Profile Name**, **Type**, **Comment**, or **Next Run**.
 Click any row to select it; use **Ctrl**/**Shift**-click to select multiple rows.
@@ -656,21 +681,19 @@ optional **Condition**, the condition is evaluated at runtime by `/bin/sh`; a
 matching cron time does not guarantee the profile will run if the condition
 exits non-zero.
 
-For profiles that create snapshots (backup and offsite types), **Next Run**
-also shows which retention bucket the next run's snapshot will land in —
-`06:00 (daily)`, `06:00 (weekly)`, `06:00 (monthly)`, or `(offsite)` —
-decided by the run's UTC instant (cron times themselves stay local; see
-[Snapshot Naming Convention](concepts.md#snapshot-naming-convention)). When
-the run falls within the offset hours around local midnight, so that the UTC
-calendar day differs from yours, a short translation is appended, for
-example `23:30 Sat = 03:30 Sun UTC — names dated Sun`: the snapshot name
-carries the UTC date and bucket, which can differ from the local date.
+For profiles that create snapshots (backup and offsite types), when the
+run falls within the offset hours around local midnight, so that the UTC
+calendar day differs from yours, **Next Run** gets a short translation
+appended, for example `23:30 Sat = 03:30 Sun UTC — names dated Sun`: the
+snapshot name carries the UTC date and retention bucket, which can differ
+from the local date (cron times themselves stay local; see
+[Snapshot Naming Convention](concepts.md#snapshot-naming-convention)).
 Runs at ordinary daytime hours show no UTC text at all, and profile types
 that do not create snapshots (restore, retention, scrub) show a plain
 timestamp.
 
 The **Next Run** cell is always a single line, so every row in the list has
-the same height. When the bucket and UTC decoration is too long to fit the
+the same height. When the UTC decoration is too long to fit the
 column, the text is ellipsized (`…`) and hovering the **Next Run** cell
 shows the complete string in a tooltip.
 
@@ -2118,7 +2141,7 @@ A surface test is a SMART self-test run by the drive's own firmware. **Fast**
 - runs **independently** — it continues on the disk even if the GUI closes or
   the machine reboots, and multiple disks can be tested at the same time;
 - is **cancelable** — select the disk and click Surface Test… again (Cancel
-  Test), or cancel it from the Dashboard's Running Tasks;
+  Test), or cancel it from the Dashboard's Tasks list;
 - shows **live status and ETA** in the Disk Inventory's *Wear/Test* column
   (`42% (1h 23m)` while running, then `Passed`/`Failed`/`Aborted`/`Canceled`;
   SSDs and NVMe devices show their wear percentage in the same column);

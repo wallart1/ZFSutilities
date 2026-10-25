@@ -776,5 +776,323 @@ test_install_rtslib_dropins_installs_and_refreshes
 test_install_rtslib_dropins_skips_without_targetctl
 test_install_rtslib_dropins_skips_without_share_files
 
+# Helper: build a fake version carrying share/two-node fence unit files with
+# the given content tag, so tests can tell versions apart by content.
+_make_fence_version() {
+    local version_base="$1" version="$2" tag="$3"
+    _make_fake_version "$version_base" "$version" ""
+    mkdir -p "$version_base/versions/$version/share/two-node"
+    printf 'fence-service-%s\n' "$tag" \
+        > "$version_base/versions/$version/share/two-node/zfsutilities-iscsi-fence.service"
+    printf 'fence-timer-%s\n' "$tag" \
+        > "$version_base/versions/$version/share/two-node/zfsutilities-iscsi-fence.timer"
+}
+
+# Helper: put a fake qm on PATH so install_iscsi_fence_units' compute-host
+# gate opens (the dev host has no Proxmox). Prints the stub directory.
+_make_qm_stub() {
+    local stub_dir
+    stub_dir=$(mktemp -d)
+    printf '#!/bin/bash\nexit 0\n' > "$stub_dir/qm"
+    chmod +x "$stub_dir/qm"
+    printf '%s' "$stub_dir"
+}
+
+# Helper: export the fence's node-conf knobs (new + both legacy fallbacks) at
+# a fixture root so tests never read the dev host's real /etc confs.
+# $1 = "two-node", "single-node", or "none".
+_point_node_conf_at() {
+    local fixture_root="$1" mode="$2"
+    export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$fixture_root/etc/zfsutilities"
+    export ZFSUTILITIES_LEGACY_NODE_CONF="$fixture_root/etc/zfsutilities-node.conf"
+    export ZFSUTILITIES_LEGACY_TWO_NODE_CONF="$fixture_root/etc/two-node.conf"
+    if [[ "$mode" != "none" ]]; then
+        mkdir -p "$ZFSUTILITIES_SYSTEM_CONFIG_DIR"
+        printf 'NODE_MODE="%s"\n' "$mode" > "$ZFSUTILITIES_SYSTEM_CONFIG_DIR/node.conf"
+    fi
+}
+
+_unpoint_node_conf() {
+    unset ZFSUTILITIES_SYSTEM_CONFIG_DIR
+    unset ZFSUTILITIES_LEGACY_NODE_CONF
+    unset ZFSUTILITIES_LEGACY_TWO_NODE_CONF
+}
+
+test_install_iscsi_fence_units_installs_enables_and_refreshes() {
+    test_start "install_iscsi_fence_units installs, enables, and refreshes the fence units"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_fence_version "$tmpdir" "A" "v1"
+    _make_fence_version "$tmpdir" "B" "v2"
+    ln -sfn "versions/A" "$tmpdir/current"
+
+    local systemd_dir="$tmpdir/etc/systemd/system"
+    export ZFSUTILITIES_SYSTEMD_DIR="$systemd_dir"
+    _point_node_conf_at "$tmpdir" "two-node"
+    local _systemctl_calls=()
+    systemctl() {
+        _systemctl_calls+=("$*")
+        return 0
+    }
+
+    local stub_dir
+    stub_dir=$(_make_qm_stub)
+    local _orig_path="$PATH"
+    export PATH="$stub_dir:$PATH"
+
+    load_switch_config
+    install_iscsi_fence_units
+    local failed=0
+    if [[ "$(cat "$systemd_dir/zfsutilities-iscsi-fence.service" 2>/dev/null)" \
+            != "fence-service-v1" ]]; then
+        failed=1
+        echo "    fence service not installed from activated version A"
+    fi
+    if [[ "$(cat "$systemd_dir/zfsutilities-iscsi-fence.timer" 2>/dev/null)" \
+            != "fence-timer-v1" ]]; then
+        failed=1
+        echo "    fence timer not installed from activated version A"
+    fi
+
+    # Switching versions must refresh the units to the newly activated
+    # version's content (same version-skew contract as the rtslib drop-ins).
+    ln -sfn "versions/B" "$tmpdir/current"
+    install_iscsi_fence_units
+    if [[ "$(cat "$systemd_dir/zfsutilities-iscsi-fence.service" 2>/dev/null)" \
+            != "fence-service-v2" ]]; then
+        failed=1
+        echo "    fence service not refreshed after switching to B"
+    fi
+
+    local _reload_count=0 _enable_count=0 _call
+    for _call in "${_systemctl_calls[@]}"; do
+        [[ "$_call" == "daemon-reload" ]] && _reload_count=$((_reload_count + 1))
+        [[ "$_call" == "enable --now zfsutilities-iscsi-fence.timer" ]] \
+            && _enable_count=$((_enable_count + 1))
+    done
+    if [[ "$_reload_count" -lt 1 ]]; then
+        failed=1
+        echo "    systemctl daemon-reload never fired"
+    fi
+    if [[ "$_enable_count" -lt 1 ]]; then
+        failed=1
+        echo "    fence timer was never enabled"
+    fi
+
+    # Identical content is left alone: a re-run must not reload again (the
+    # enable stays idempotent-repeated, the reinstall must not be).
+    install_iscsi_fence_units
+    local _reload_count_after=0
+    for _call in "${_systemctl_calls[@]}"; do
+        [[ "$_call" == "daemon-reload" ]] && _reload_count_after=$((_reload_count_after + 1))
+    done
+    if [[ "$_reload_count_after" -ne "$_reload_count" ]]; then
+        failed=1
+        echo "    daemon-reload fired for identical content"
+    fi
+
+    export PATH="$_orig_path"
+    rm -rf "$stub_dir"
+    unset -f systemctl 2>/dev/null || true
+    unset ZFSUTILITIES_SYSTEMD_DIR
+    _unpoint_node_conf
+    _teardown_switch_env "$tmpdir"
+
+    if [[ "$failed" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "fence units were not installed/enabled/refreshed correctly"
+    fi
+}
+
+test_install_iscsi_fence_units_skips_without_qm() {
+    test_start "install_iscsi_fence_units skips where qm is absent (storage host)"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_fence_version "$tmpdir" "A" "v1"
+    ln -sfn "versions/A" "$tmpdir/current"
+
+    local systemd_dir="$tmpdir/etc/systemd/system"
+    export ZFSUTILITIES_SYSTEMD_DIR="$systemd_dir"
+    _point_node_conf_at "$tmpdir" "two-node"
+    local _systemctl_calls=()
+    systemctl() {
+        _systemctl_calls+=("$*")
+        return 0
+    }
+
+    # The qm gate is the first thing the function does. test-lib.sh mocks qm
+    # as a global function, so simulating the storage host (no Proxmox there)
+    # needs the function unset plus an empty PATH — command -v finds both.
+    (
+        unset -f qm 2>/dev/null || true
+        # shellcheck disable=SC2123 # empty PATH is the test mechanism
+        PATH=""
+        load_switch_config
+        install_iscsi_fence_units
+    )
+    local failed=0
+    if [[ -e "$systemd_dir/zfsutilities-iscsi-fence.service" ]]; then
+        failed=1
+        echo "    fence service installed without qm"
+    fi
+    if [[ "${#_systemctl_calls[@]}" -gt 0 ]]; then
+        failed=1
+        echo "    systemctl called without qm"
+    fi
+
+    unset -f systemctl 2>/dev/null || true
+    unset ZFSUTILITIES_SYSTEMD_DIR
+    _unpoint_node_conf
+    _teardown_switch_env "$tmpdir"
+
+    if [[ "$failed" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "fence units installed on a host without qm"
+    fi
+}
+
+test_install_iscsi_fence_units_skips_single_node() {
+    test_start "install_iscsi_fence_units skips in single-node mode"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_fence_version "$tmpdir" "A" "v1"
+    ln -sfn "versions/A" "$tmpdir/current"
+
+    local systemd_dir="$tmpdir/etc/systemd/system"
+    export ZFSUTILITIES_SYSTEMD_DIR="$systemd_dir"
+    _point_node_conf_at "$tmpdir" "single-node"
+    local _systemctl_calls=()
+    systemctl() {
+        _systemctl_calls+=("$*")
+        return 0
+    }
+
+    local stub_dir
+    stub_dir=$(_make_qm_stub)
+    local _orig_path="$PATH"
+    export PATH="$stub_dir:$PATH"
+
+    load_switch_config
+    install_iscsi_fence_units
+    local failed=0
+    if [[ -e "$systemd_dir/zfsutilities-iscsi-fence.service" ]]; then
+        failed=1
+        echo "    fence service installed in single-node mode"
+    fi
+    if [[ "${#_systemctl_calls[@]}" -gt 0 ]]; then
+        failed=1
+        echo "    systemctl called in single-node mode"
+    fi
+
+    export PATH="$_orig_path"
+    rm -rf "$stub_dir"
+    unset -f systemctl 2>/dev/null || true
+    unset ZFSUTILITIES_SYSTEMD_DIR
+    _unpoint_node_conf
+    _teardown_switch_env "$tmpdir"
+
+    if [[ "$failed" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "fence units installed in single-node mode"
+    fi
+}
+
+test_install_iscsi_fence_units_skips_without_node_conf() {
+    test_start "install_iscsi_fence_units skips when no node config exists anywhere"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_fence_version "$tmpdir" "A" "v1"
+    ln -sfn "versions/A" "$tmpdir/current"
+
+    local systemd_dir="$tmpdir/etc/systemd/system"
+    export ZFSUTILITIES_SYSTEMD_DIR="$systemd_dir"
+    # "none": neither the new conf nor either legacy fallback exists (the
+    # legacy knobs point inside the fixture root, not at the dev host's /etc).
+    _point_node_conf_at "$tmpdir" "none"
+    local _systemctl_calls=()
+    systemctl() {
+        _systemctl_calls+=("$*")
+        return 0
+    }
+
+    local stub_dir
+    stub_dir=$(_make_qm_stub)
+    local _orig_path="$PATH"
+    export PATH="$stub_dir:$PATH"
+
+    load_switch_config
+    install_iscsi_fence_units
+    local failed=0
+    if [[ -e "$systemd_dir/zfsutilities-iscsi-fence.service" ]]; then
+        failed=1
+        echo "    fence service installed without any node config"
+    fi
+    if [[ "${#_systemctl_calls[@]}" -gt 0 ]]; then
+        failed=1
+        echo "    systemctl called without any node config"
+    fi
+
+    export PATH="$_orig_path"
+    rm -rf "$stub_dir"
+    unset -f systemctl 2>/dev/null || true
+    unset ZFSUTILITIES_SYSTEMD_DIR
+    _unpoint_node_conf
+    _teardown_switch_env "$tmpdir"
+
+    if [[ "$failed" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "fence units installed without any node config"
+    fi
+}
+
+test_shipped_fence_units_match_fence_design() {
+    test_start "shipped fence units keep the stable-path ExecStart, journal-only env, 5-min cadence"
+    local share_dir
+    share_dir="$(dirname "$SWITCH_VERSION")/../share/two-node"
+    local failed=0
+    # The stable bin symlink (not current/) survives version switches, and
+    # --recover is the whole point of the unattended fence.
+    if ! grep -q '^ExecStart=/usr/local/lib/zfsutilities/bin/check-vm-disk-paths --recover$' \
+            "$share_dir/zfsutilities-iscsi-fence.service"; then
+        failed=1
+        echo "    service ExecStart must use the stable bin path with --recover"
+    fi
+    # Without INHERIT, bashinit writes a session log per 5-minute tick
+    # (288/day) — the journal-churn discipline this unit exists to keep.
+    if ! grep -q '^Environment=ZFSUTILITIES_LOG_INHERIT=Y$' \
+            "$share_dir/zfsutilities-iscsi-fence.service"; then
+        failed=1
+        echo "    service must set ZFSUTILITIES_LOG_INHERIT=Y"
+    fi
+    if ! grep -q '^OnUnitActiveSec=5min$' "$share_dir/zfsutilities-iscsi-fence.timer"; then
+        failed=1
+        echo "    timer cadence must stay at 5 minutes"
+    fi
+    if ! grep -q '^WantedBy=timers.target$' "$share_dir/zfsutilities-iscsi-fence.timer"; then
+        failed=1
+        echo "    timer must install into timers.target"
+    fi
+
+    if [[ "$failed" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "shipped fence units drifted from the fence design"
+    fi
+}
+
+test_install_iscsi_fence_units_installs_enables_and_refreshes
+test_install_iscsi_fence_units_skips_without_qm
+test_install_iscsi_fence_units_skips_single_node
+test_install_iscsi_fence_units_skips_without_node_conf
+test_shipped_fence_units_match_fence_design
+
 test_summary
 teardown_test_env

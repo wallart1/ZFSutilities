@@ -163,7 +163,7 @@ test_final_statement_is_exit_safe() {
             | grep -v '^[[:space:]]*$' | tail -1)
         last=$(printf '%s\n' "$last" | sed -e 's/"[^"]*"//g' -e "s/'[^']*'//g")
         case "$last" in
-            fi|esac|'}'|then|do|else|exit*) continue ;;
+            fi|'esac'|'}'|then|do|else|exit*) continue ;;
         esac
         if [[ "$last" == *'&&'* && "$last" != *'||'* ]]; then
             failed=1

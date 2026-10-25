@@ -1,0 +1,262 @@
+#!/usr/bin/bash
+# check-vm-disk-paths
+# Compute-host fence: verify every VM-config disk reference (including
+# efidisk) has its iSCSI by-path device link, and optionally recover the
+# missing ones.
+#
+# A storage-host bare-metal restore regresses the LIO config so LUNs created
+# after the backup point vanish while the pools and the VM configs on this
+# host stay current: Proxmox then aborts VM start on the missing by-path
+# link. This script is the compute-host half of the recovery: it gathers the
+# VM disk references (list-vm-disks --gather-vm-info, run locally) and checks
+# each expected
+#   /dev/disk/by-path/ip-<ip>:3260-iscsi-<iqn>:<target>-lun-<n>
+# link exists. With --recover it tries a local iSCSI rescan first and, when
+# references are still missing, ONE ssh to the storage host running
+# reconcile-iscsi-state --yes (the map-driven rebuild), then re-checks.
+# Identity conflicts inside that reconcile are refused by it and remain
+# report-only here — nothing is ever guessed or remapped.
+#
+# Runs from the zfsutilities-iscsi-fence.timer (every 5 minutes; installed by
+# switch-version activation on two-node compute hosts) or manually. A healthy
+# tick performs no ssh at all — only local checks — so the fence never adds
+# to the storage host's journal churn.
+#
+# Usage: sudo check-vm-disk-paths [--recover]
+#   --recover   Attempt recovery when references are missing: local rescan
+#               first, then reconcile-iscsi-state on the storage host
+#
+# Install to: /usr/local/lib/zfsutilities/bin/check-vm-disk-paths on the compute host
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+NODE_LIB="${CHECK_VM_DISK_PATHS_NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+
+source_helper rootcheck
+
+rootcheck
+
+# iSCSI-only script — exit silently in single-node mode
+is_single_node && exit 0
+
+usage() {
+    log_msg "INFO: Usage: check-vm-disk-paths [--recover]"
+    echo ""
+    log_msg "INFO:   --recover   Attempt recovery when references are missing: local rescan"
+    log_msg "INFO:               first, then reconcile-iscsi-state on the storage host"
+    exit 1
+}
+
+recover=false
+parse_cli_args() {
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --recover) recover=true ;;
+            -h|--help) usage ;;
+            *)
+                log_msg "FATAL: Unknown option: $arg"
+                usage
+                ;;
+        esac
+    done
+}
+
+parse_cli_args "$@"
+
+my_host=$(hostname -s)
+
+# This is the compute-host half of the recovery; the storage-host half is
+# reconcile-iscsi-state.
+if [[ "$my_host" != "$compute_host" ]]; then
+    log_msg "FATAL: Must run on the compute host ($compute_host), not $my_host"
+    exit 1
+fi
+
+# The fence reads VM configs through list-vm-disks, which requires Proxmox VE
+# (the same requirement that script itself enforces; checked here so a
+# Proxmox-less host reports it before any gather attempt).
+if ! command -v qm >/dev/null 2>&1; then
+    log_msg "FATAL: This script requires Proxmox VE (qm command not found)."
+    log_msg "FATAL:   The iSCSI fence runs on the compute host."
+    exit 1
+fi
+
+[[ $EUID -eq 0 ]] || [[ "${CHECK_VM_DISK_PATHS_SKIP_ROOT:-}" == "Y" ]] || {
+    log_msg "FATAL: Must run as root (use sudo)"
+    exit 1
+}
+
+# Resolve overrideable runtime paths (unit tests substitute mocks between
+# runs, so main() re-resolves these rather than trusting top-level state).
+resolve_runtime_paths() {
+    by_path_dir="${CHECK_VM_DISK_PATHS_BY_PATH_DIR:-/dev/disk/by-path}"
+    list_vm_disks="${CHECK_VM_DISK_PATHS_LIST_VM_DISKS:-$mydir/list-vm-disks}"
+    rescan_storage="${CHECK_VM_DISK_PATHS_RESCAN_STORAGE:-$mydir/rescan-storage}"
+}
+
+resolve_runtime_paths
+
+# ------------------------------------------------------------------
+# VM reference gathering
+# ------------------------------------------------------------------
+
+# Gather this host's VM disk references (list-vm-disks --gather-vm-info
+# records: VM|targetshort:lun|vmid|name|key, including efidisk refs). The
+# gather runs locally because this script only runs on the compute host — a
+# healthy tick performs no ssh. Unit tests point
+# CHECK_VM_DISK_PATHS_VM_REFS_FILE at a fixture of records instead.
+vm_refs_gather() {
+    if [[ -n "${CHECK_VM_DISK_PATHS_VM_REFS_FILE:-}" \
+            && -f "${CHECK_VM_DISK_PATHS_VM_REFS_FILE}" ]]; then
+        cat "${CHECK_VM_DISK_PATHS_VM_REFS_FILE}"
+        return 0
+    fi
+    "$list_vm_disks" --gather-vm-info
+}
+
+# ------------------------------------------------------------------
+# Verification
+# ------------------------------------------------------------------
+
+# The by-path link name a VM disk reference resolves to on this host.
+expected_bypath() {
+    local short="$1" lun="$2"
+    printf '%s/ip-%s:3260-iscsi-%s:%s-lun-%s\n' \
+        "$by_path_dir" "$storage_ip" "$iqn_prefix" "$short" "$lun"
+}
+
+# One verification pass over the gathered records. Prints a WARN line per
+# missing reference identifying the VM, disk key, target IQN, LUN, and the
+# expected link, and sets _refs_count / _missing_count for the caller.
+# Always returns 0 — the exit decision belongs to main.
+check_vm_paths() {
+    local vm_data="$1"
+    _refs_count=0
+    _missing_count=0
+    local -a fields=()
+    local disk_id vmid vname vkey short lun link
+    while IFS='|' read -r -a fields; do
+        [[ "${fields[0]:-}" == "VM" ]] || continue
+        disk_id="${fields[1]:-}"
+        vmid="${fields[2]:-}"
+        vname="${fields[3]:-}"
+        vkey="${fields[4]:-}"
+        [[ "$disk_id" == *:* ]] || continue
+        short="${disk_id%%:*}"
+        lun="${disk_id##*:}"
+        [[ -n "$lun" && "$lun" != *[!0-9]* ]] || continue
+        _refs_count=$((_refs_count + 1))
+        link=$(expected_bypath "$short" "$lun")
+        if [[ -e "$link" ]]; then
+            continue
+        fi
+        _missing_count=$((_missing_count + 1))
+        log_msg "WARN: VM ${vmid} (${vname}) ${vkey}: ${iqn_prefix}:${short} LUN ${lun}" \
+            "— by-path link missing: ${link}"
+    done <<< "$vm_data"
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Recovery (--recover)
+# ------------------------------------------------------------------
+
+# Local recovery step: rescan the running iSCSI sessions so devices this
+# host has already logged into reappear without touching the storage host.
+# Best effort — a session-level failure cannot be fixed here, so it warns
+# and lets the caller continue to the reconcile step.
+local_rescan() {
+    if ! type -t "$rescan_storage" >/dev/null 2>&1; then
+        log_msg "WARN: rescan-storage not available at ${rescan_storage} — skipping local rescan"
+        return 0
+    fi
+    if ! "$rescan_storage"; then
+        log_msg "WARN: Local iSCSI rescan reported problems (see above) — continuing"
+    fi
+    return 0
+}
+
+# ONE ssh to the storage host running the map-driven rebuild with its
+# non-interactive confirm flag. Its own safety model applies unchanged:
+# create-only, identity conflicts refused per item, never remapped. Output
+# streams here so the fence journal carries the reconcile evidence.
+remote_reconcile_run() {
+    local remote_script
+    remote_script=$(remote_zfsutility_script "$storage_host" "reconcile-iscsi-state")
+    ssh -o ConnectTimeout=10 "root@${storage_host}" "${remote_script} --yes"
+}
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+
+main() {
+
+    resolve_runtime_paths
+
+    log_msg "INFO: === check-vm-disk-paths ==="
+
+    local vm_data gather_rc=0
+    vm_data=$(vm_refs_gather) || gather_rc=$?
+    if [[ "$gather_rc" -ne 0 ]]; then
+        log_msg "FATAL: Could not gather VM disk references (list-vm-disks failed)"
+        exit 1
+    fi
+    if [[ -z "$vm_data" ]]; then
+        log_msg "INFO: No VM disk references found — nothing to check"
+        exit 0
+    fi
+
+    check_vm_paths "$vm_data"
+    if [[ "$_missing_count" -eq 0 ]]; then
+        log_msg "INFO: ✓ All ${_refs_count} VM disk path(s) present"
+        exit 0
+    fi
+
+    if [[ "$recover" != true ]]; then
+        log_msg "FATAL: ${_missing_count} of ${_refs_count} VM disk path(s) missing"
+        exit 1
+    fi
+
+    log_msg "INFO: ${_missing_count} of ${_refs_count} VM disk path(s) missing —" \
+        "recovering: local iSCSI rescan first..."
+    local_rescan
+    check_vm_paths "$vm_data"
+    if [[ "$_missing_count" -eq 0 ]]; then
+        log_msg "INFO: ✓ All ${_refs_count} VM disk path(s) present after local rescan"
+        exit 0
+    fi
+
+    log_msg "INFO: Still missing after local rescan —" \
+        "running reconcile-iscsi-state on ${storage_host}..."
+    if ! remote_reconcile_run; then
+        log_msg "WARN: reconcile-iscsi-state reported problems —" \
+            "remaining references are report-only"
+    fi
+    check_vm_paths "$vm_data"
+    if [[ "$_missing_count" -eq 0 ]]; then
+        log_msg "INFO: ✓ All ${_refs_count} VM disk path(s) present after reconcile"
+        exit 0
+    fi
+
+    log_msg "FATAL: ${_missing_count} of ${_refs_count} VM disk path(s) still missing" \
+        "after recovery"
+    log_msg "FATAL:   Run 'sudo reconcile-iscsi-state' on ${storage_host} and inspect its" \
+        "refusals — identity conflicts are never auto-resolved"
+    exit 1
+
+} # end main
+
+# Run main only when executed directly, not when sourced for tests.
+if [[ -z "${CHECK_VM_DISK_PATHS_TEST_MODE:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main
+fi

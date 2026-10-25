@@ -1,0 +1,19 @@
+# systemd timer for the ZFSutilities iSCSI VM-disk path fence: runs the
+# zfsutilities-iscsi-fence service 2 minutes after boot (let iSCSI logins
+# settle) and then every 5 minutes, so a storage-host bare-metal restore is
+# detected and repaired unattended within minutes.
+#
+# Installed and enabled by switch-version activation (gated on qm presence
+# and two-node mode); idempotent.
+#
+# Install to: /etc/systemd/system/zfsutilities-iscsi-fence.timer
+
+[Unit]
+Description=Run the ZFSutilities iSCSI VM-disk path fence every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

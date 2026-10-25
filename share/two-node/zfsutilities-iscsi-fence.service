@@ -1,0 +1,30 @@
+# systemd service for the ZFSutilities iSCSI VM-disk path fence (compute
+# host, two-node only). Runs check-vm-disk-paths with --recover: verifies
+# every VM-config disk reference (including efidisk) has its
+# /dev/disk/by-path/ip-...:3260-iscsi-...-lun-N link and, when one is
+# missing, tries recovery — a local iSCSI rescan, then reconcile-iscsi-state
+# on the storage host (the map-driven, create-only rebuild). A failed run
+# (exit 1) means VM disk references are missing: check this unit's journal.
+#
+# ZFSUTILITIES_LOG_INHERIT=Y keeps the 5-minute timer ticks from creating a
+# per-run session log file (bashinit auto-creates one per direct execution);
+# output goes to the journal instead. A healthy tick performs no ssh.
+#
+# Installed and enabled by switch-version activation (gated on qm presence
+# and two-node mode) from the activated version's share/two-node tree, so
+# the units always match the activated release. A hand-rolled health-check
+# unit on the compute host is not replaced by this fence — both may run
+# alongside.
+#
+# Install to: /etc/systemd/system/zfsutilities-iscsi-fence.service
+
+[Unit]
+Description=ZFSutilities iSCSI VM-disk path fence
+After=network-online.target open-iscsi.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=ZFSUTILITIES_LOG_INHERIT=Y
+ExecStart=/usr/local/lib/zfsutilities/bin/check-vm-disk-paths --recover
+TimeoutStartSec=10min

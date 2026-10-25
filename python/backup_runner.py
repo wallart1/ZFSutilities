@@ -139,6 +139,9 @@ class BackupRunner:
         self._is_finally = False
         self._total_bytes_received = 0
         self._in_lock_wait = False
+        # Epoch when the current lock wait began (None while not waiting),
+        # shown by the Dashboard as "Waiting since <time>".
+        self._lock_wait_started = None
         self._last_log_size_check = 0.0
         self._current_rsync_stderr = []
 
@@ -239,6 +242,8 @@ class BackupRunner:
         self.current_step = 0
         self._on_complete = on_complete
         self._session_start_time = time.time()
+        self._in_lock_wait = False
+        self._lock_wait_started = None
         self._finally_ran = False
         self._fatal_rc = None
         self._is_finally = False
@@ -486,8 +491,10 @@ class BackupRunner:
                             self._total_bytes_received += _parse_human_size(received_match.group(1))
                         if "Waiting for lock" in line:
                             self._in_lock_wait = True
+                            self._lock_wait_started = time.time()
                         elif "Lock is now available" in line or "Wait interrupted" in line:
                             self._in_lock_wait = False
+                            self._lock_wait_started = None
                         self.log(line)
                         self._write_raw_line(line)
                     return True
@@ -538,10 +545,12 @@ class BackupRunner:
                                 )
                             if "Waiting for lock" in segment:
                                 self._in_lock_wait = True
+                                self._lock_wait_started = time.time()
                             elif (
                                 "Lock is now available" in segment or "Wait interrupted" in segment
                             ):
                                 self._in_lock_wait = False
+                                self._lock_wait_started = None
                             self.log(segment)
                             self._write_raw_line(segment)
                     return True

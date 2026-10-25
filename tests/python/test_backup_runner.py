@@ -938,6 +938,63 @@ class TestStdoutStderrMerging(unittest.TestCase):
         self.assertEqual(runner._total_bytes_received, 1024**3)
 
 
+class TestLockWaitStartedTimestamp(unittest.TestCase):
+    """_lock_wait_started tracks when the current lock wait began.
+
+    The Dashboard's merged Tasks list renders it as "Waiting since <time>".
+    """
+
+    def _runner(self):
+        return br.BackupRunner(MagicMock(), MagicMock())
+
+    def test_initially_none(self):
+        runner = self._runner()
+        self.assertFalse(runner._in_lock_wait)
+        self.assertIsNone(runner._lock_wait_started)
+
+    def test_start_resets_wait_state(self):
+        runner = self._runner()
+        runner._session_log_file = "/tmp/test-session.log"
+        runner._session_log_prev = object()
+        runner._in_lock_wait = True
+        runner._lock_wait_started = 123.0
+        with (
+            patch.object(runner, "_log"),
+            patch.object(runner, "_update_progress"),
+            patch.object(runner, "_run_next_step"),
+            patch("backup_runner._truncate_rsync_log"),
+        ):
+            runner.start()
+        self.assertFalse(runner._in_lock_wait)
+        self.assertIsNone(runner._lock_wait_started)
+
+    def test_stderr_wait_line_sets_wait_started(self):
+        runner = self._runner()
+        before = time.time()
+        with patch("os.read", return_value=b"WAIT: Waiting for lock on tank/data\n"):
+            runner._on_stderr(0, br.GLib.IOCondition.IN)
+        self.assertTrue(runner._in_lock_wait)
+        self.assertIsNotNone(runner._lock_wait_started)
+        self.assertGreaterEqual(runner._lock_wait_started, before)
+
+    def test_stderr_lock_available_clears_wait_started(self):
+        runner = self._runner()
+        runner._in_lock_wait = True
+        runner._lock_wait_started = 123.0
+        with patch("os.read", return_value=b"INFO: Lock is now available\n"):
+            runner._on_stderr(0, br.GLib.IOCondition.IN)
+        self.assertFalse(runner._in_lock_wait)
+        self.assertIsNone(runner._lock_wait_started)
+
+    def test_stdout_wait_line_sets_wait_started(self):
+        runner = self._runner()
+        before = time.time()
+        with patch("os.read", return_value=b"WAIT: Waiting for lock\n"):
+            runner._on_stdout(0, br.GLib.IOCondition.IN)
+        self.assertTrue(runner._in_lock_wait)
+        self.assertGreaterEqual(runner._lock_wait_started, before)
+
+
 class TestRsyncLogDailyRotation(unittest.TestCase):
     """_truncate_rsync_log rotates the rsync log once per day."""
 

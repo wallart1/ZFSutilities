@@ -581,6 +581,10 @@ test_two_node_fresh_install() {
         test_fail "Completion banner missing; output:\n$out"
         return
     fi
+    if [[ "$out" != *"iSCSI fence:  zfsutilities-iscsi-fence.timer active on ztestcomp"* ]]; then
+        test_fail "Fence summary mention missing; output:\n$out"
+        return
+    fi
 
     test_pass
 }
