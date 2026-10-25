@@ -37,22 +37,6 @@
   product stance — doc-server.md and messages/index.md carry it.
   Rechecked 2026-10-24 wrap-up: unchanged, 0.0.72 — no 1.x; hold stands.)
 
-- (future objective, migration/create fidelity — narrowed 2026-10-03):
-  No creation path (Create Pool wizard or Migrate Pool) can *plan*
-  infrastructure vdevs (special / log / cache / spare): the review page
-  warns when the source pool has them, a post-cutover INFO reminder says to
-  re-add them with Add Infrastructure Vdev, and as of 2026-10-03 the
-  holding-mode rebuild picker preselects only true data members (former
-  infra-vdev disks are listed unchecked, labeled with their class, so they
-  can no longer be silently absorbed into data vdevs). Remaining gap is the
-  planning UI itself, deliberately deferred as a future objective (user
-  decision 2026-10-03): per-class disk pickers in the wizards plus
-  `zpool add <class>` steps after the create step (or an extended
-  `zpool create` vdev spec). Originally discovered 2026-10-03 during the
-  pool-level migration audit.
-  This item is in abayance as a future objective.
-  (Reconfirmed 2026-10-11 (user): keep deferred.)
-
 - (test flake, one-off, 2026-10-24 pub3 0.131.0 with-soak gate): the
   with-soak full run failed test-unarchive-vm Test 26 ("Step 2 refuses
   duplicate same-short targets") — the ssh-mock storage-host existence
