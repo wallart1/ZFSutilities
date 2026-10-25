@@ -27,6 +27,19 @@ Key foundational practices:
     - `set -e`: Exit immediately on any command failure.
     - `set -u`: Treat unset variables as errors.
     - `set -o pipefail`: Ensure pipelines fail if any component fails.
+- **Sourced libraries carry no `set` line.** Files that only define
+  functions for other scripts to source (`zfslockmanager`,
+  `zfs-diagnose-busy`, `zfssnapbuild`, `zfsbuildfsarray`, the `lib/`
+  libraries) must not set `set -euo pipefail` themselves: the line would
+  leak strict mode into every sourcing shell, including non-strict
+  callers and the test harness. Strictness belongs to the orchestrator;
+  library functions must tolerate strict callers instead — default unset
+  reads with `${var:-}`, guard unset-array length checks, and fence
+  post-decrement counters (`((i--)) || true`). Global arrays declared in
+  libraries must use `declare -gA name=()` — the initializer is not
+  optional: a declare executed in `source_helper`'s function frame
+  leaves an element-less array that `set -u` callers cannot length-check
+  (`${#name[@]}` aborts with "unbound variable").
 - **Prefer `[[ ]]` over `[ ]`** for conditionals — more reliable and supports
   pattern matching.
 - **Use `$(...)` for command substitution**, never backticks, for better nesting
@@ -463,7 +476,7 @@ shellcheck -S warning \
     $(find bin -maxdepth 1 -type f ! -name watchall) \
     lib/*.sh tests/test-* tests/integration/* \
     tests/integrated/itf tests/integrated/lib/*.sh \
-    tests/integrated/journeys/*.journey
+    tests/integrated/journeys/*.journey share/dev/*
 ```
 
 When a warning cannot be avoided without changing behavior (for example, a

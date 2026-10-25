@@ -17,6 +17,8 @@
 # Required overrides:
 # 'restoresourcefs=<source dataset>; sourcefsremovequalifiers=<n>; destfs=<destination dataset>'
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -79,9 +81,10 @@ endwith=''
 nextsnap='notneeded'            # Inhibit creation of a new snapshot name.
 # Hold preservation on the destination is handled inside zfs-send-receive
 # on every full copy ($preserve_target_holds, default 'Y').
+releaseholds_tags=()            # May arrive via overrides; defaulted below.
 
-if [[ $1 != '' ]]; then overrides "$1"; fi
-if [[ $2 != '' ]]; then overrides "$2"; fi
+if [[ ${1:-} != '' ]]; then overrides "$1"; fi
+if [[ ${2:-} != '' ]]; then overrides "$2"; fi
 
 # Part 1: do a full copy using the oldest available snapshot.
 # zfs-send-receive performs the subsequent incremental step internally.
@@ -101,8 +104,8 @@ dointermediates='N'             # Intermediate snapshots are handled internally.
 # shellcheck disable=SC2034
 commsnap_mostrecent='OLDEST'    # Start with the oldest snapshot.
 
-if [[ $1 != '' ]]; then overrides "$1"; fi
-if [[ $2 != '' ]]; then overrides "$2"; fi
+if [[ ${1:-} != '' ]]; then overrides "$1"; fi
+if [[ ${2:-} != '' ]]; then overrides "$2"; fi
 
 if [[ $restoresourcefs == '' || $restoresourcefs == 'notgiven' ]]; then
     log_msg "FATAL: \$restoresourcefs was not specified."

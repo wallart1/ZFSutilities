@@ -13,6 +13,8 @@
 # The VM must be stopped. The script will gracefully shut it down and wait if
 # it is running.
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -90,7 +92,7 @@ fi
 parse_efidisk_line() {
     local conf_file="$1"
     local line by_path size has_ms_cert
-    line=$(grep '^efidisk0:' "$conf_file" 2>/dev/null | head -1)
+    line=$(grep '^efidisk0:' "$conf_file" 2>/dev/null | head -1 || true)
     [[ -n "$line" ]] || { echo ""; return 1; }
 
     # Volume identifier is the first field after the colon.
@@ -135,7 +137,7 @@ parse_iscsi_by_path() {
     return 0
 }
 
-parsed=$(parse_efidisk_line "$conf")
+parsed=$(parse_efidisk_line "$conf" || true)
 [[ -n "$parsed" ]] || {
     log_msg "FATAL: VM $vmid has no efidisk0 entry"
     exit 1
@@ -167,7 +169,7 @@ if [[ "$by_path" == /dev/disk/by-path/* ]]; then
         # the backstore token that follows "block/" on that line.
         lun_line=$(ssh root@"$storage_host" \
             "targetcli '/iscsi/${target}/tpg1/luns' ls 2>/dev/null \
-            | grep -F \"lun${lun} \"" | head -1)
+            | grep -F \"lun${lun} \"" | head -1 || true)
         backstore=""
         if [[ "$lun_line" == *"lun${lun}"* ]]; then
             _efi_after="${lun_line#*"lun${lun}"}"
@@ -188,7 +190,7 @@ if [[ "$by_path" == /dev/disk/by-path/* ]]; then
             "targetcli /backstores/block ls 2>/dev/null \
             | grep ' ${backstore} ' \
             | grep -oE 'zvol/\\S+' \
-            | head -1")
+            | head -1" || true)
         zvol="${zvol#zvol/}"
         [[ -n "$zvol" ]] || {
             log_msg "FATAL: No zvol found for backstore $backstore"
@@ -217,7 +219,7 @@ elif [[ "$by_path" == *":vm-"* ]]; then
         | while IFS= read -r candidate; do
             [[ "$candidate" == *"/proxmox/vm-${_ref_vmid}-disk-${_ref_num}" ]] \
                 && { echo "$candidate"; break; }
-        done)
+        done || true)
     [[ -n "$zvol" ]] || {
         log_msg "FATAL: No zvol found for storage reference: $by_path"
         exit 1
@@ -240,7 +242,7 @@ get_zvol_bytes() {
     fi
 }
 
-current_bytes=$(get_zvol_bytes)
+current_bytes=$(get_zvol_bytes || true)
 [[ -n "$current_bytes" && "$current_bytes" =~ ^[0-9]+$ ]] || {
     log_msg "FATAL: Could not read zvol size"
     exit 1
@@ -277,7 +279,7 @@ fi
 log_msg "INFO: Waiting for EFI device $by_path at >= 4M..."
 device=""
 for _ in $(seq 1 20); do
-    device=$(readlink -f "$by_path" 2>/dev/null)
+    device=$(readlink -f "$by_path" 2>/dev/null || true)
     if [[ -b "$device" ]]; then
         dev_size=$(blockdev --getsize64 "$device" 2>/dev/null || echo 0)
         [[ "$dev_size" -ge 4194304 ]] && break

@@ -20,6 +20,8 @@
 #     skipped     Count of disk lines whose size could not be resolved
 # Returns: 0 on success, 1 on a fatal error (bad args, missing config, not root)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"

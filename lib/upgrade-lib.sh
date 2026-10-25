@@ -353,6 +353,11 @@ upgrade_lib_salvage_files() {
 # Entry point executed on a remote target over ssh. Modes:
 #   __scan   <version_base>
 #   __salvage <version_base> <old_version> <timestamp> <new_version> <relpath...>
+#   __baseline <version_base> <active_version>
+#     Trust-on-first-upgrade (F-025): write MANIFEST.sha256 for the
+#     active version from its current tree, fencing every future
+#     change scan on a host whose version predates manifests and whose
+#     release tarball is unavailable.
 upgrade_lib_remote_driver() {
     local mode="$1"
     shift
@@ -364,6 +369,9 @@ upgrade_lib_remote_driver() {
             ;;
         __salvage)
             upgrade_lib_salvage_files "$version_base" "$@"
+            ;;
+        __baseline)
+            upgrade_lib_write_manifest "$version_base/versions/$1"
             ;;
     esac
 }

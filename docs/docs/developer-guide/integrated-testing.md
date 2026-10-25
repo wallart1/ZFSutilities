@@ -148,6 +148,38 @@ guest ssh/scp traffic uses `StrictHostKeyChecking=no` with a throwaway
 known-hosts file: a fresh guest at a previously used address presents a
 *different* host key, which `accept-new` rejects as a mismatch.
 
+## GUI payload e2e matrix
+
+The GUI does its work by building bash payloads (python/offsite_runner.py,
+python/command_builders.py) and running them through BackupRunner. The
+payload e2e matrix exercises exactly that code — the real builders, the
+real runner, real ZFS pools — instead of hand smoke tests. The scenarios
+live once in `tests/python/e2e_support.py` and run in three contexts:
+
+- **Dev container** (unprivileged, `--device /dev/zfs`): the pools are
+  visible read-only (every dataset-mutating ioctl needs `CAP_SYS_ADMIN`),
+  so the mechanics layer (real BackupRunner headless through a GLib main
+  loop — pty stdin, the input-hold REQ/ACK protocol, rc propagation) and
+  the dry-run payload scenarios run for real; mutating scenarios skip
+  with a stated reason. Entry point: `share/dev/run-e2e-container`.
+- **Dev host under sudo** (`tests/python/test_offsite_e2e.py`,
+  `tests/python/test_backup_payload_e2e.py`): the full matrix against the
+  host's zfstest1/2/3 pools. Scenarios create and destroy only
+  `test-e2e-*` datasets inside those pools and verify they leave nothing
+  behind.
+- **ITF guest** (journey `j11-payload-e2e`): a template clone with the
+  j04 pool recipe and today's tree, running
+  `tests/integrated/e2e/payload-e2e-driver.py` — the same matrix, executed
+  as real root in a disposable guest. This is the full-matrix context the
+  journey gates on.
+
+Scenario levels are declared per scenario (`none` / `read` / `mutation`)
+together with an engine mode: GUI payloads run under the input-hold
+protocol exactly as the GUI runner launches them; the CLI orchestrator
+scenarios (zfssend, zfsfullcopy, zfsrestore, the zfshold round trip) run
+protocol-off as cron/terminal would, with known raw prompts pre-fed on
+the pty and any unexpected prompt caught by the watchdog.
+
 ## Post-install baseline template
 
 Journeys whose scenario begins *after* installation start from a
@@ -185,6 +217,33 @@ the post-install point in a minute or two instead of repeating the
   reading the template is its purpose); `itf template build`/`destroy`
   are the sanctioned management paths and are audit-logged like every
   other mutation.
+- **The template's *product* version is allowed to go stale — j10
+  depends on it.** A clone of a stale template is a genuinely installed
+  system running an older release, the exact starting state the
+  release-upgrade journey needs. **j10-release-upgrade** walks the real
+  user upgrade path on such a clone: download the new release (the
+  upgrader runs from the downloaded tree — deployments older than
+  0.125.0 predate the `upgrade-zfsutilities` PATH command), decline the
+  download offer (system must stay untouched), inject local
+  modifications into the deployed old tree, run
+  `./bin/upgrade-zfsutilities` (the change scan must
+  detect them, the upgrade lists and — after approval — salvages them
+  under `salvaged-changes/`, deploys the new version via
+  `deploy-version`, and stops *without activating*), activate with the
+  printed `switch-version` command, verify wiring/config/version
+  retention, and rerun the upgrade to see "Nothing to upgrade". Under
+  `ITF_SW_SOURCE=dev-tarball` the journey serves a fake "latest
+  release" (latest.json plus a release-shaped tarball of the dev tree)
+  and points the guest's upgrade at it via `ZFSUTILITIES_RELEASE_API`;
+  the old version's change scan falls back to the pristine GitHub tag
+  tarball when the deployed tree predates `MANIFEST.sha256`, or — when
+  the tag is missing (many historical releases were never tagged) — to
+  a baseline the journey serves via `ZFSUTILITIES_TAG_TARBALL_URL`
+  (the upgrade itself captures a baseline manifest when no baseline is
+  obtainable; F-025, repair plan 021). j10 fails
+  fast with a PREP hint when the template is no longer strictly older
+  than the tree under test — the fix is running it from a newer tree,
+  not rebuilding the template.
 
 ## Fast re-verification: `journey run --rerun`
 

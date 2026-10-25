@@ -6,6 +6,8 @@
 # Install to: /usr/local/lib/zfsutilities/bin/detach-vm-disk on BOTH hosts
 # Run from:   the compute host (or storage host — delegates via SSH)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"

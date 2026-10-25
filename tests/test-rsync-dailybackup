@@ -23,6 +23,10 @@ echo "world" > "$SRC_DIR/sub/nested.txt"
 # Tests that need a configured job set rsync_dailybackup_jobs after sourcing.
 # shellcheck source=bin/rsync-dailybackup
 NODE_CONF="$NODE_CONF" rsync_dailybackup_jobs=() source "$mydir/bin/rsync-dailybackup"
+# The script's strict line leaks into this test shell at the source point;
+# restore the test harness's own option state so a failing test reports
+# normally instead of aborting the suite.
+set +euo pipefail
 
 test_no_jobs_returns_zero() {
     test_start "No configured jobs returns 0"

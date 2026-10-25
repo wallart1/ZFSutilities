@@ -19,7 +19,13 @@ old_mydir="$mydir"
 
 # The migrated orchestrators (sever-vm-clone's interactive parent and its
 # transfer engine child both carry the line; one occurrence per file is
-# the guard's contract).
+# the guard's contract). The iSCSI/two-node family landed 2026-10-24,
+# together with the snapshot-transport wrappers that source
+# zfs-send-receive (its strict line leaks into them at the source point,
+# so they were audited and flipped as part of the same campaign).
+# Sourced libraries (zfslockmanager, zfs-diagnose-busy, zfssnapbuild,
+# zfsbuildfsarray) deliberately carry NO set line — strictness belongs
+# to the callers; the libraries are written to tolerate strict callers.
 strict_scripts=(
     clone-vm
     attach-vm-disk
@@ -34,6 +40,39 @@ strict_scripts=(
     unarchive-vm
     upgrade-zfsutilities
     zfsclone-vm
+    archive-vm
+    detach-vm-disk
+    enroll-efi-keys-vm
+    enroll-iscsi-pool
+    enroll-proxmox-pool
+    export-iscsi-state
+    iscsi-add-encrypted-luns
+    iscsi-recover-encrypted-luns
+    iscsi-restore-luns
+    list-vm-disks
+    new-vm-disk
+    reconcile-iscsi-state
+    remove-vm-disk
+    repair-iscsi-luns
+    repair-vm-disk-sizes
+    rescan-storage
+    resize-vm-disk
+    restart-iscsi-services
+    rsync-dailybackup
+    safe-iscsi-save
+    setup-iscsi-targets
+    show-lun-map
+    switch-version
+    uninstall-zfsutilities
+    zfsdailybackup
+    zfsdelfs
+    zfslockctl
+    zfslockmanager-remote
+    zfs-send-receive
+    zfssend
+    zfssendoffsite
+    zfsfullcopy
+    zfsrestore
 )
 
 test_migrated_scripts_keep_strict_mode() {
@@ -56,10 +95,87 @@ test_migrated_scripts_keep_strict_mode() {
     test_pass
 }
 
+test_sourced_lib_arrays_survive_strict_callers() {
+    test_start "function-frame-declared library arrays survive set -u callers"
+    # A declare -gA executed while source_helper's function frame is on the
+    # stack leaves an element-less array that set -u callers cannot
+    # length-check (${#arr[@]} aborts "unbound variable") unless it was
+    # initialized with =(). Found live: the GUI offsite run died in
+    # iscsi_rebuild_torn_down after every strict-mode consumer of iscsi-lib.
+    local failed=0 lib
+    for lib in iscsi-lib installer-lib; do
+        if ! grep -qE "^declare -gA [a-z_]+\=\(\)$" "$old_mydir/lib/$lib.sh"; then
+            failed=1
+            echo "    $lib.sh: bare declare -gA (no =() initializer) present"
+        fi
+    done
+    # Behavioral half: source the real lib through source_helper under
+    # set -u and length-check the array from a function, exactly the way
+    # strict zfs-send-receive reaches iscsi_rebuild_torn_down.
+    bash -c '
+        set -euo pipefail
+        mydir="'"$old_mydir"'/bin"
+        source "$mydir/bashinit"
+        bashinit
+        source_helper iscsi-lib.sh
+        iscsi_rebuild_torn_down
+        echo strict-lib-ok
+    ' >/dev/null 2>&1 || { failed=1; echo "    live source_helper + set -u check failed"; }
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "library array quirk"; fi
+}
+
+test_find_script_before_bashinit_under_set_u() {
+    test_start "find_zfsutility_script tolerates unset mydir under set -u"
+    # zfsdelfs defers its bashinit call to the entry function (library use)
+    # but sources helpers at file scope; executed standalone under strict
+    # mode, find_zfsutility_script ran with $mydir unset and set -u killed
+    # remove-vm-disk's zvol destroy (found live by the j07 archive-vm run,
+    # 2026-10-25). The class fix: ${mydir:-} in the candidate list, with
+    # resolution falling through to the deployment directories.
+    local out
+    out=$(bash -c '
+        set -euo pipefail
+        source "'"$old_mydir"'/bin/bashinit"
+        ZFSUTILITIES_BIN_DIR="'"$old_mydir"'/bin" find_zfsutility_script bashfatal
+    ' 2>/dev/null) || { test_fail "unset-mydir lookup aborted"; return 1; }
+    if [[ "$out" == *"/bin/bashfatal" ]]; then
+        test_pass
+    else
+        test_fail "resolved to unexpected path: $out"
+    fi
+}
+
 # =============================================================================
 # Run
 # =============================================================================
 
+test_final_statement_is_exit_safe() {
+    test_start "strict scripts never end on an unfenced '&&' chain"
+    # Under set -e the final statement IS the exit code: a false left side
+    # on a trailing A && B chain turns a successful run into rc 1
+    # (new-vm-disk's single-node runs failed exactly this way after the
+    # strict flip). Fence: the last statement must carry its own fallback
+    # (|| ...) or not be a chain. Quoted spans are stripped first so a
+    # "&&" inside a log message cannot trip the check.
+    local failed=0 s last
+    for s in "${strict_scripts[@]}"; do
+        last=$(grep -v '^[[:space:]]*#' "$old_mydir/bin/$s" \
+            | grep -v '^[[:space:]]*$' | tail -1)
+        last=$(printf '%s\n' "$last" | sed -e 's/"[^"]*"//g' -e "s/'[^']*'//g")
+        case "$last" in
+            fi|esac|'}'|then|do|else|exit*) continue ;;
+        esac
+        if [[ "$last" == *'&&'* && "$last" != *'||'* ]]; then
+            failed=1
+            echo "    $s: ends on an unfenced '&&' chain: $last"
+        fi
+    done
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "unfenced final statement"; fi
+}
+
 test_migrated_scripts_keep_strict_mode
+test_sourced_lib_arrays_survive_strict_callers
+test_find_script_before_bashinit_under_set_u
+test_final_statement_is_exit_safe
 
 test_summary

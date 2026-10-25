@@ -14,6 +14,10 @@
 #   - iSCSI LUN exposure (zvols)
 #   - Running VM using the zvol
 #   - NFS / SMB shares
+#
+# Sourced library (clone-vm, sever-vm-clone, zfsdelfs, zfsdelsnap) —
+# carries no set line on purpose: strictness belongs to the callers.
+# Every function is written to tolerate set -euo pipefail callers.
 
 # Return 0 if $1 is exactly vm-<vmid>-disk-<n> with numeric vmid and disk
 # number. Implemented with a glob shape test plus fixed-string digit checks
@@ -52,7 +56,7 @@ function diagnose_dataset_busy {
     # ------------------------------------------------------------------
     if [[ "$is_snapshot" == true ]]; then
         local clones
-        clones=$(zfs list -H -o clones "$target" 2>/dev/null)
+        clones=$(zfs list -H -o clones "$target" 2>/dev/null || true)
         if [[ -n "$clones" && "$clones" != "-" ]]; then
             log_msg "WARN:   → Snapshot has clone dependents: ${clones}"
             log_msg "WARN:     Use 'sever-vm-clone' to sever the dependencies first."
@@ -75,7 +79,7 @@ function diagnose_dataset_busy {
     # ------------------------------------------------------------------
     if [[ "$is_snapshot" == true ]]; then
         local holds
-        holds=$(zfs holds -H "$target" 2>/dev/null)
+        holds=$(zfs holds -H "$target" 2>/dev/null || true)
         if [[ -n "$holds" ]]; then
             local hold_tags
             hold_tags=$(echo "$holds" | awk '{print $2}' | sort -u | tr '\n' ' ')
@@ -89,10 +93,10 @@ function diagnose_dataset_busy {
     # 3. Mounted / open files
     # ------------------------------------------------------------------
     local mounted
-    mounted=$(zfs get -H -o value mounted "$target" 2>/dev/null)
+    mounted=$(zfs get -H -o value mounted "$target" 2>/dev/null || true)
     if [[ "$mounted" == "yes" ]]; then
         local mountpoint
-        mountpoint=$(zfs get -H -o value mountpoint "$target" 2>/dev/null)
+        mountpoint=$(zfs get -H -o value mountpoint "$target" 2>/dev/null || true)
         log_msg "WARN:   → Dataset is mounted at ${mountpoint}."
 
         local procs=""
@@ -103,7 +107,7 @@ function diagnose_dataset_busy {
                 | while read -r pid; do
                 [[ -n "$pid" ]] || continue
                 ps -p "$pid" -o comm= 2>/dev/null
-            done | sort -u | tr '\n' ' ' | sed 's/ *$//')
+            done | sort -u | tr '\n' ' ' | sed 's/ *$//' || true)
         fi
         if [[ -z "$procs" ]] && command -v lsof >/dev/null 2>&1; then
             procs=$(lsof +D "$mountpoint" 2>/dev/null \
@@ -111,7 +115,7 @@ function diagnose_dataset_busy {
                 | awk '{print $1}' \
                 | sort -u \
                 | tr '\n' ' ' \
-                | sed 's/ *$//')
+                | sed 's/ *$//' || true)
         fi
 
         if [[ -n "$procs" ]]; then
@@ -127,7 +131,7 @@ function diagnose_dataset_busy {
     # 4. Active send / receive
     # ------------------------------------------------------------------
     local recv_token
-    recv_token=$(zfs get -H -o value receive_resume_token "$target" 2>/dev/null)
+    recv_token=$(zfs get -H -o value receive_resume_token "$target" 2>/dev/null || true)
     if [[ -n "$recv_token" && "$recv_token" != "-" ]]; then
         log_msg "WARN:   → Dataset has an active or interrupted receive (resume token present)."
         log_msg "WARN:     Abort with 'zfs receive -A ${target}' or allow it to complete."
@@ -155,7 +159,7 @@ function diagnose_dataset_busy {
                     local lun_num
                     lun_num=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
                         | grep -F "block/${bsname} " | grep -oE 'lun[0-9]+' | head -1 \
-                        | sed 's/^lun//')
+                        | sed 's/^lun//' || true)
                     if [[ -n "$lun_num" ]]; then
                         lun_info="${t} (LUN ${lun_num})"
                         break
@@ -189,7 +193,7 @@ function diagnose_dataset_busy {
         vmid="${vmid%%-disk-*}"
         if command -v qm >/dev/null 2>&1; then
             local vm_status
-            vm_status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}')
+            vm_status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}' || true)
             if [[ "$vm_status" == "running" ]]; then
                 log_msg "WARN:   → VM ${vmid} is RUNNING and may be using ${target}."
                 log_msg "WARN:     Stop the VM before destroying this zvol."
@@ -202,8 +206,8 @@ function diagnose_dataset_busy {
     # 7. NFS / SMB shares
     # ------------------------------------------------------------------
     local sharenfs sharesmb
-    sharenfs=$(zfs get -H -o value sharenfs "$target" 2>/dev/null)
-    sharesmb=$(zfs get -H -o value sharesmb "$target" 2>/dev/null)
+    sharenfs=$(zfs get -H -o value sharenfs "$target" 2>/dev/null || true)
+    sharesmb=$(zfs get -H -o value sharesmb "$target" 2>/dev/null || true)
     if [[ -n "$sharenfs" && "$sharenfs" != "off" && "$sharenfs" != "-" ]]; then
         log_msg "WARN:   → Dataset is shared via NFS (${sharenfs})."
         log_msg "WARN:     Unshare with 'zfs set sharenfs=off ${target}' before destroying."

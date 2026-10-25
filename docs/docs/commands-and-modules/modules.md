@@ -1382,7 +1382,12 @@ zfshold <hold-tag> <dataset> <snapshot-suffix>
 
 **Globals:** none.
 
-Suppresses "tag already exists" errors — safe to call repeatedly.
+Holds every matching snapshot in the subtree individually. A tag already
+present on a snapshot is logged at INFO and treated as success — nested
+datasets are matched by both their own call and their parent subtree
+call, so duplicates are a designed outcome (the GUI offsite payload calls
+this helper from a strict shell). Any other hold failure is logged at
+WARN and fails the call; a match set with no snapshots returns 0.
 
 **Called modules:** none.
 
@@ -1390,10 +1395,10 @@ Suppresses "tag already exists" errors — safe to call repeatedly.
 
 **Return codes:**
 
-| Code | Meaning                           |
-| ---- | --------------------------------- |
-| 0    | Tag applied (or already present)  |
-| 1    | Missing required snapshot pattern |
+| Code | Meaning                                                       |
+| ---- | ------------------------------------------------------------- |
+| 0    | Tag applied, already present, or no snapshots matched         |
+| 1    | Missing required snapshot pattern, or a hold could not be applied |
 
 ---
 

@@ -12,6 +12,8 @@
 #
 # $1    (Optional) Overrides
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -81,7 +83,7 @@ nextsnap=$(zfssnapbuild)
 
 # Overrides are any quoted sequence of shell commands separated by semicolons. This provides
 # a way to adjust parameters from the command line without having to modify the script.
-if [[ "$1" != '' ]]; then overrides "$1"; fi
+if [[ "${1:-}" != '' ]]; then overrides "$1"; fi
 if [[ ${nextsnap:0:1} != '@' ]]; then nextsnap='@'$nextsnap; fi
 
 log_msg "INFO: New snapshot: $nextsnap."

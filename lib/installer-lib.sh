@@ -9,8 +9,11 @@
 # Associative array: installer_failures[name]=apt_package
 # Populated by parse_check_prerequisites_failures. Declared with -gA so the
 # map survives being sourced through source_helper (a function frame, where
-# a plain declare would be frame-local and vanish).
-declare -gA installer_failures
+# a plain declare would be frame-local and vanish). The =() initializer is
+# required for the same reason: a bare declare in a function frame leaves an
+# element-less array that set -u callers cannot length-check ("unbound
+# variable"); initializing at declaration clears that state.
+declare -gA installer_failures=()
 
 # ------------------------------------------------------------------
 # Prompts

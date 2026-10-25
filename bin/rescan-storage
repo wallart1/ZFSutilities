@@ -7,6 +7,8 @@
 # Globals (from node-lib.sh): compute_host, storage_ip, expected_iscsi_devices
 #   (optional minimum device count; unset disables the low-count warning)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -57,7 +59,7 @@ check_device_count() {
 log_msg "INFO: === rescan-storage ==="
 
 # --- Check iSCSI sessions ---
-session_count=$(iscsiadm -m session 2>/dev/null | wc -l)
+session_count=$(iscsiadm -m session 2>/dev/null | wc -l || true)
 if [[ "$session_count" -eq 0 ]]; then
     log_msg "FATAL: No active iSCSI sessions — storage network may be down"
     log_msg "FATAL:   Run: sudo diagnose-storage"
@@ -65,7 +67,7 @@ if [[ "$session_count" -eq 0 ]]; then
 fi
 
 log_msg "INFO: Active iSCSI sessions: $session_count"
-iscsiadm -m session 2>/dev/null | sed 's/^/  /'
+iscsiadm -m session 2>/dev/null | sed 's/^/  /' || true
 
 # --- Rescan all sessions ---
 log_msg "INFO: Rescanning iSCSI sessions..."
@@ -81,5 +83,5 @@ fi
 
 # --- Show device count ---
 device_count=$(find /dev/disk/by-path/ -maxdepth 1 -name "ip-${storage_ip}*" \
-    -print 2>/dev/null | wc -l)
+    -print 2>/dev/null | wc -l || true)
 check_device_count "$device_count"

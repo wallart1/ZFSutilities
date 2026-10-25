@@ -19,6 +19,8 @@
 # Install to: /usr/local/lib/zfsutilities/bin/new-vm-disk on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -219,7 +221,7 @@ init_efi_disk() {
     # Wait up to 10s for device to appear after rescan
     local device=""
     for _ in $(seq 1 20); do
-        device=$(readlink -f "$by_path" 2>/dev/null)
+        device=$(readlink -f "$by_path" 2>/dev/null || true)
         [[ -b "$device" ]] && break
         sleep 0.5
     done
@@ -354,7 +356,7 @@ if is_two_node && [[ "$my_host" != "$storage_host" ]]; then
         # wrong LUN.
         lun_num=$(ssh root@"$storage_host" \
             "targetcli \"/iscsi/${target}/tpg1/luns\" ls 2>/dev/null \
-             | grep -F 'block/${backstore_name} ' | grep -oE 'lun[0-9]+' | head -1")
+             | grep -F 'block/${backstore_name} ' | grep -oE 'lun[0-9]+' | head -1" || true)
         lun_num="${lun_num#lun}"
         echo ""
         if [[ -z "$lun_num" ]]; then
@@ -411,8 +413,8 @@ if [[ "$encrypted_flag" == true ]]; then
         while IFS=: read -r _name ref_dev _tgt; do
             [[ -z "$_name" || "$_name" == \#* ]] && continue
             ref_dataset="${ref_dev#/dev/zvol/}"
-            enc_algo=$(zfs get -H -o value encryption "$ref_dataset" 2>/dev/null)
-            enc_keyfmt=$(zfs get -H -o value keyformat "$ref_dataset" 2>/dev/null)
+            enc_algo=$(zfs get -H -o value encryption "$ref_dataset" 2>/dev/null || true)
+            enc_keyfmt=$(zfs get -H -o value keyformat "$ref_dataset" 2>/dev/null || true)
             [[ -n "$enc_algo" && "$enc_algo" != "-" ]] && break
             enc_algo=""
         done < "$encrypted_conf"
@@ -444,7 +446,7 @@ if [[ "$encrypted_flag" == true ]]; then
     }
 
     # Permission check: reject group- or world-readable keys
-    perms=$(stat -c '%a' "$key_path" 2>/dev/null || stat -f '%Lp' "$key_path" 2>/dev/null)
+    perms=$(stat -c '%a' "$key_path" 2>/dev/null || stat -f '%Lp' "$key_path" 2>/dev/null || true)
     if [[ -n "$perms" ]]; then
         group_read=${perms:1:1}
         world_read=${perms:2:1}
@@ -568,7 +570,7 @@ if is_two_node; then
     # Anchor on "block/<name> " so a longer name that starts with this one
     # (disk-1 vs disk-10) cannot supply the wrong line.
     lun_line=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-        | grep -F "block/${backstore_name} " | head -1)
+        | grep -F "block/${backstore_name} " | head -1 || true)
     lun_num=""
     if [[ -n "$lun_line" ]]; then
         lun_num="${lun_line#*lun}"
@@ -625,4 +627,6 @@ log_msg "INFO: === Done ==="
 log_msg "INFO:   Zvol:   $zvol_name"
 log_msg "INFO:   Device: $zvol_dev"
 log_msg "INFO:   Target: $target"
-[[ -n "$lun_num" ]] && log_msg "INFO:   LUN:    $lun_num"
+# Single-node runs leave lun_num empty; the final statement must not
+# turn that into a failure exit.
+[[ -n "$lun_num" ]] && log_msg "INFO:   LUN:    $lun_num" || true

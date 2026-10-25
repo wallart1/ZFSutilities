@@ -5,6 +5,8 @@
 # Install to: /usr/local/lib/zfsutilities/bin/show-lun-map on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -65,7 +67,7 @@ while IFS= read -r link; do
     done
     [[ "$_matched" == true ]] || continue
 
-    devpath=$(readlink -f "$link" 2>/dev/null)
+    devpath=$(readlink -f "$link" 2>/dev/null || true)
     [[ -b "$devpath" ]] || continue
     dev=$(basename "$devpath")
 
@@ -85,7 +87,7 @@ for key in $(printf '%s\n' "${!lun_to_dev[@]}" | sort -t: -k1,1 -k2,2n); do
     lun="${key##*:}"
     dev="${lun_to_dev[$key]}"
     size=$(lsblk -bdn -o size "/dev/${dev}" 2>/dev/null \
-          | awk '{printf "%.0fG", $1/1073741824}')
+          | awk '{printf "%.0fG", $1/1073741824}' || true)
     printf "%-14s  lun%-3s  %-8s  %s\n" "$target" "$lun" "/dev/$dev" "$size"
 done
 

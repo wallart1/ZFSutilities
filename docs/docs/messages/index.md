@@ -551,6 +551,8 @@ Releases holds matching tag patterns (used by the offsite release pipeline), or 
 | -------------- | ------- | -------- |
 | `WARN: zfshold requires a snapshot pattern ($3). Skipping.` | The snapshot-name pattern is missing | Skips (return 1); supply a pattern |
 | `WARN: Could not acquire write lock on ...; aborting.` | The subtree's write lock is unavailable | Aborts (return 1); resolve the lock |
+| `INFO: Hold <tag> already present on <snap>` | The tag is already held on that snapshot — normal when nested datasets are matched by both their own call and their parent subtree call | Informational; treated as success |
+| `WARN: Could not apply hold <tag> to <snap>` | A hold failed for a reason other than the tag already being present | Return 1; check the pool and dataset state |
 
 ### [zfsholds](../commands-and-modules/commands.md#zfsholds)
 
@@ -2254,7 +2256,8 @@ Each listed version is removed via `uninstall-version -y`; per-version messages 
 | `FATAL: Cannot reach root@<host> over SSH. Aborting before any changes.` | A deployment target is unreachable | Fix access to the host and re-run; nothing was modified |
 | `FATAL: Scan failed on <host> — aborting before any changes.` | The remote change scan failed mid-flight | Investigate the host; nothing was modified |
 | `INFO: --- <host> ---` ... `INFO:   modified:/added:/removed:` listings | The pre-approval change report for one deployment target | Review, including the printed unified diffs |
-| `WARN:   Active version <v> has no MANIFEST.sha256 and no release tarball is available for it — local modifications ... CANNOT be detected.` | That host's tree cannot be verified | Confirm you are willing to proceed without verification |
+| `WARN:   Active version <v> has no MANIFEST.sha256 and no release tarball is available for it — local modifications ... CANNOT be detected.` | That host's tree cannot be verified and no baseline could be captured | Confirm you are willing to proceed without verification |
+| `INFO:   Active version <v> has no MANIFEST.sha256 and no release tarball is available for it. A baseline manifest was captured from the current tree: ... every future upgrade scans against the captured baseline.` | Trust-on-first-upgrade: no baseline was obtainable (pre-manifest version, untagged release), so a manifest of the current tree was captured on that host | Informational; modifications predating this upgrade can no longer be distinguished from pristine content |
 | `WARN:   Diff unavailable: no pristine source for version <v> (untagged release?) — modification hashes only.` | Detection worked from hashes, but no original exists to diff against | Compare the salvaged copies manually if needed |
 | `Archive the changes listed above on their hosts and continue the upgrade? [y/N]` | Salvage consent — approving archives then supersedes the changes | y archives under `salvaged-changes/` and continues; N aborts with nothing touched |
 | `FATAL: Salvage failed on <host> — aborting before deployment.` | Archiving failed mid-consent | Nothing was deployed; re-run after investigating |

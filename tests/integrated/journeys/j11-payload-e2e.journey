@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# j11-payload-e2e.journey — GUI payload end-to-end matrix in a guest.
+#
+# Clones the post-install baseline template, creates the three test pools
+# (j04 recipe), stages TODAY's tree (dev tarball), and runs the payload
+# e2e driver: the same GUI-payload scenario matrix the offsite smoke test
+# drives by hand — offsite chain steps with holds, incrementals, rollback,
+# resume tokens, scrub pause, backup/prune/rsync payloads, and the
+# strict-mode-flipped leaf orchestrators — executed against real pools as
+# real root.  This is the full-matrix context: unprivileged containers see
+# the pools read-only and run only the dry-run layer.
+#
+# Guest state required: post-install baseline template (itf template build).
+# Snapshots produced: as-cloned (post-install checkpoint), pools-created.
+
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+journey_main() {
+    local base="${ITF_BASE_HOSTS[0]}"
+    local gname="j11"
+
+    itf_step info "journey start" \
+        "j11 payload e2e; sw-source=$ITF_SW_SOURCE repo=$ITF_GITHUB_REPO"
+
+    # ------------------------------------------------------------------
+    # Stage T: clone start from the post-install baseline template
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_from_template "$gname" || return 1
+    local vmid="$J_VMID"
+    local guest_ip="$J_GUEST_IP"
+
+    itf_journey_verify_installed "$guest_ip"
+
+    # ------------------------------------------------------------------
+    # Stage D: the documented three-RAIDZ1 test pools (j04 recipe)
+    # ------------------------------------------------------------------
+
+    # Attach the pool disk post-boot, as at install time: virtio-scsi
+    # hotplug makes it the only other disk, /dev/sdb.
+    local wait_sdb
+    # shellcheck disable=SC2016  # expansion runs in the guest
+    wait_sdb='for i in $(seq 1 30); do lsblk -dn -o NAME | grep -qx sdb'
+    wait_sdb+=' && exit 0; sleep 2; done; exit 1'
+    if itf_qm "$base" set "$vmid" --scsi1 "${ITF_GUEST_STORAGE}:${ITF_GUEST_POOL_DISK_GB}" \
+            > "$ITF_RUN_DIR/pooldisk-attach.log" 2>&1 \
+            && itf_guest_exec "$guest_ip" "$wait_sdb"; then
+        itf_step pass "pool disk attached" \
+            "scsi1 (${ITF_GUEST_POOL_DISK_GB}G) hot-plugged, guest sees /dev/sdb"
+    else
+        itf_step fail "pool disk attached" "see pooldisk-attach.log"
+        return 1
+    fi
+
+    local pool_script
+    pool_script="$ITF_RUN_DIR/guest-pools.sh"
+    cat > "$pool_script" <<'EOF'
+#!/bin/bash
+# The user recipe from docs/docs/developer-guide/testing.md on /dev/sdb,
+# plus a udev settle the documented recipe lacks.
+set -e
+# parted/partprobe are not part of a base Debian install.
+apt-get install -y parted
+parted -s /dev/sdb mklabel gpt
+for i in {1..15}; do
+    if [[ $i -eq 1 ]]; then start="1MiB"; else start="$(( (i-1)*5120 ))MiB"; fi
+    if [[ $i -eq 15 ]]; then end="100%"; else end="$(( i*5120 ))MiB"; fi
+    parted -a optimal -s /dev/sdb mkpart primary "${start}" "${end}"
+done
+partprobe /dev/sdb
+# udev creates the partition nodes asynchronously after partprobe, so an
+# immediate zpool create races them ("cannot resolve path '/dev/sdbN'";
+# run-20261007-152717-j04-post-install-baseline).  Settle, then wait
+# (bounded) for the last partition node; the final test fails cleanly if
+# it never appears.
+udevadm settle --timeout=30 || true
+for i in $(seq 1 30); do
+    [[ -e /dev/sdb15 ]] && break
+    sleep 1
+done
+[[ -e /dev/sdb15 ]]
+zpool create -f zfstest1 raidz1 /dev/sdb1 /dev/sdb2 /dev/sdb3 /dev/sdb4 /dev/sdb5
+zpool create -f zfstest2 raidz1 /dev/sdb6 /dev/sdb7 /dev/sdb8 /dev/sdb9 /dev/sdb10
+zpool create -f zfstest3 raidz1 /dev/sdb11 /dev/sdb12 /dev/sdb13 /dev/sdb14 /dev/sdb15
+zpool list
+EOF
+    itf_guest_put "$guest_ip" "$pool_script" /root/itf-pools.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-pools.sh" \
+        > "$ITF_RUN_DIR/guest-pools.log" 2>&1; then
+        itf_step pass "test pools created" "zfstest1/2/3 (three RAIDZ1, docs recipe)"
+        itf_artifact "pools" "$ITF_RUN_DIR/guest-pools.log"
+    else
+        itf_step fail "test pools created" "see guest-pools.log"
+        return 1
+    fi
+
+    if itf_guest_snapshot "$base" "$vmid" pools-created > /dev/null 2>&1; then
+        itf_step pass "snapshot pools-created" \
+            "clone-start + pools checkpoint for cycle-2 reuse"
+    else
+        itf_step fail "snapshot pools-created"
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage S: current tree in the guest
+    # ------------------------------------------------------------------
+
+    # The clone carries the template's product; the matrix must exercise
+    # TODAY's tree (release or dev tarball), exactly as the GUI would run it.
+    itf_journey_stage_download "$guest_ip" || return 1
+
+    # ------------------------------------------------------------------
+    # Stage E: the payload e2e matrix
+    # ------------------------------------------------------------------
+
+    local e2e_log
+    e2e_log="$ITF_RUN_DIR/guest-payload-e2e.log"
+    if itf_guest_exec "$guest_ip" \
+            'cd /root/ZFSutilities && python3 tests/integrated/e2e/payload-e2e-driver.py' \
+            > "$e2e_log" 2>&1; then
+        itf_step pass "payload e2e matrix" \
+            "all scenarios green (see guest-payload-e2e.log)"
+        itf_artifact "payload-e2e" "$e2e_log"
+    else
+        itf_step fail "payload e2e matrix" "see guest-payload-e2e.log"
+        itf_artifact "payload-e2e" "$e2e_log"
+        return 1
+    fi
+
+    # The matrix must leave nothing behind in the pools it borrowed.
+    local leftover_log
+    leftover_log="$ITF_RUN_DIR/guest-pool-residue.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if itf_guest_exec "$guest_ip" \
+            'zfs list -H -o name -r zfstest1 zfstest2 zfstest3 | grep -q "test-e2e-"' \
+            > "$leftover_log" 2>&1; then
+        itf_step fail "pool residue check" "test-e2e-* datasets left behind"
+        itf_artifact "pool-residue" "$leftover_log"
+        return 1
+    else
+        itf_step pass "pool residue check" "no test-e2e-* datasets remain"
+    fi
+
+    itf_step info "journey stage reached" \
+        "payload e2e matrix green: offsite/backup/prune/rsync/orchestrators"
+    return 0
+}

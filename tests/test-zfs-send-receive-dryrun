@@ -54,6 +54,10 @@ capture_stderr() {
 
 restore_stderr() {
     exec 2>&1
+    # send-receive re-sources strict scripts (e.g. zfsdelfs) at runtime,
+    # which re-enables their set line in this shell mid-test. Restore the
+    # harness's option state after every captured call.
+    set +euo pipefail
 }
 
 get_stderr_log() {
@@ -88,6 +92,10 @@ test_bootstrap_inner_functions() {
     test_start "Bootstrap: send-receive completes in dry-run mode"
 
     source "$mydir/zfs-send-receive"
+    # The script's strict line leaks into this test shell at the source
+    # point; restore the harness's option state (the script's functions
+    # are strict-tolerant either way).
+    set +euo pipefail
 
     reset_mocks
     set_msg_level INFO

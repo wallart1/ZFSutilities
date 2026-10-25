@@ -13,6 +13,8 @@
 #
 # Install to: /usr/local/lib/zfsutilities/bin/restart-iscsi-services on the storage host
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -55,7 +57,7 @@ check_running_vms() {
     is_single_node && return 0
 
     local backstores
-    backstores=$(targetcli /backstores/block ls 2>/dev/null)
+    backstores=$(targetcli /backstores/block ls 2>/dev/null || true)
     [[ -z "$backstores" ]] && return 0
 
     local vmids=""
@@ -76,7 +78,7 @@ check_running_vms() {
             # first space or ')'.
             local zvol=""
             local _bs_line
-            _bs_line=$(echo "$backstores" | grep " ${bsname} " | head -1)
+            _bs_line=$(echo "$backstores" | grep " ${bsname} " | head -1 || true)
             if [[ -n "$_bs_line" ]]; then
                 _rest="${_bs_line#*/dev/zvol/}"
                 if [[ "$_rest" != "$_bs_line" ]]; then
@@ -191,7 +193,7 @@ main() {
     # Show current status
     echo ""
     log_msg "INFO: === iSCSI Target Status ==="
-    targetcli ls /iscsi 2>/dev/null | grep -E "iqn\.|LUNs"
+    targetcli ls /iscsi 2>/dev/null | grep -E "iqn\.|LUNs" || true
 
     echo ""
     log_msg "INFO: === Complete ==="

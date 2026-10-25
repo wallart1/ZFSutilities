@@ -18,7 +18,7 @@ source_helper zfslockmanager
 rootcheck
 
 function zfshold {
-    if [[ -z $3 ]]; then
+    if [[ -z "${3:-}" ]]; then
         log_msg "WARN: zfshold requires a snapshot pattern (\$3). Skipping."
         return 1
     fi
@@ -29,8 +29,26 @@ function zfshold {
         return 1
     fi
 
-    # -r: don't run if empty, suppress "tag already exists" errors (hold already present)
-    zfs list -Hrt snapshot -o name "$2" | grep "$3" | xargs -r -n1 zfs hold "$1" 2>/dev/null
+    # Hold every matching snapshot in the subtree, one at a time: a failed
+    # hold must not abort the caller when the tag is already present —
+    # nested datasets are matched by both their own call and their parent
+    # subtree call, so duplicates are normal on multi-dataset runs. Any
+    # other failure is real and fails the call. The snapshot enumeration
+    # runs in a process substitution so an empty match just runs zero
+    # iterations (the historical rc-0 behavior).
+    local _snap _failed=0
+    while IFS= read -r _snap; do
+        [[ -z "$_snap" ]] && continue
+        if ! zfs hold "$1" "$_snap" 2>/dev/null; then
+            if zfs holds -H "$_snap" 2>/dev/null | awk '{print $2}' | grep -qF -- "$1"; then
+                log_msg "INFO: Hold $1 already present on $_snap"
+            else
+                log_msg "WARN: Could not apply hold $1 to $_snap"
+                _failed=1
+            fi
+        fi
+    done < <(zfs list -Hrt snapshot -o name "$2" | grep "$3")
 
     zfslock_release "$zfslock_id"
+    return "$_failed"
 }

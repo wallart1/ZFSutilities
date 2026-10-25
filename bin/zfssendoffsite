@@ -8,6 +8,8 @@
 # - The snapshot name's label field is set to "offsite", and the bucket field is set to "s".
 # - Only the offsite snapshot is copied. Other intermediate snapshots are ignored.
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -45,8 +47,8 @@ function applyholds {
         for fs in "${fsarray[@]}"; do
             # Construct the corresponding destination path
             local destpath="$destfs/$fs"
-            zfshold "${label:1}-$destfspool" "$fs" "$nextsnap"
-            zfshold "${label:1}-$sourcefspool" "$destpath" "$nextsnap"
+            zfshold "${label:1}-$destfspool" "$fs" "$nextsnap" || true
+            zfshold "${label:1}-$sourcefspool" "$destpath" "$nextsnap" || true
         done
     fi
 }
@@ -54,6 +56,9 @@ function applyholds {
 # ========================== Global setup =====================
 autoproceed='Y'
 label='@offsite'
+# shellcheck disable=SC2034
+# Intentionally set for sourced zfssnapbuild helper.
+bucket=''    # zfssnapbuild dereferences $bucket bare; empty = derive (label forces 's').
 nextsnap=$(zfssnapbuild $label)
 applyholds='Y'          # Put holds on the source and destination snapshots to prevent
                         # accidental deletion.
@@ -72,8 +77,8 @@ onlineoffsitepool=$(findoffsitepool)
 
 if [[ $onlineoffsitepool = '' ]]; then
     log_msg "FATAL: No offsite pools are currently online." \
-        "\n\tLooked for: ${offsitepools[*]}." \
-        "\n\tFound: ${onlinepools[*]}."
+        "\n\tLooked for: ${offsitepools[*]:-}." \
+        "\n\tFound: ${onlinepools[*]:-}."
     exit 8
 else
     log_msg "INFO: Will be sending to pool $onlineoffsitepool." \
@@ -89,7 +94,7 @@ step3='Y'   # Send the NVME1 pool to fivebays.
 step4='Y'   # Send the fivebays/threeamigos/proxmox and fivebays/NVME1/proxmox subpools to offsite
             # pool.
 
-if [[ $1 != '' ]]; then overrides "$1"; fi
+if [[ ${1:-} != '' ]]; then overrides "$1"; fi
 
 nextsnap_save=$nextsnap # Save in case it gets clobbered.
 

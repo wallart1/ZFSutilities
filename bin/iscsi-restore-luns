@@ -9,6 +9,8 @@
 # Usage: sudo iscsi-restore-luns
 # Install to: /usr/local/lib/zfsutilities/bin/iscsi-restore-luns on the storage host
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -50,7 +52,7 @@ while IFS=: read -r name dev; do
     fi
     if targetcli /backstores/block create "$name" "$dev" >/dev/null 2>&1; then
         log_msg "INFO:   ✓ Added backstore $name"
-        ((added_bs++))
+        ((added_bs++)) || true
     fi
 done < <(python3 - "$savefile" << 'PYEOF'
 import json, sys
@@ -72,7 +74,7 @@ while IFS=: read -r iqn tag idx bs_name; do
     if targetcli "/iscsi/${iqn}/tpg${tag}/luns" \
             create "/backstores/block/${bs_name}" "$idx" >/dev/null 2>&1; then
         log_msg "INFO:   ✓ Added LUN $idx ($bs_name) to ${iqn}"
-        ((added_luns++))
+        ((added_luns++)) || true
     fi
 done < <(python3 - "$savefile" << 'PYEOF'
 import json, sys

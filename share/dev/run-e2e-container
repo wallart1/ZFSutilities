@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# run-e2e-container — run the payload e2e suites in the dev container.
+#
+# The container is UNPRIVILEGED by policy: it sees the three test pools
+# read-only through /dev/zfs (every dataset-mutating ioctl needs
+# CAP_SYS_ADMIN), so the mutating scenarios self-skip with a stated reason
+# while the mechanics and dry-run layers run for real.  The full matrix
+# runs in the ITF guest instead (journey j11-payload-e2e).
+#
+# Usage:
+#   share/dev/run-e2e-container              # both e2e suites, verbose
+#   share/dev/run-e2e-container -k dryrun    # extra pytest args pass through
+#
+# Safety: the container never mutates the pools (it cannot), and this
+# script verifies the host pool set is unchanged when it finishes.
+
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
+image="zfsutilities-dev:latest"
+
+host_pools_before="$(zpool list -H -o name 2>/dev/null | sort || true)"
+
+check_host_pools() {
+    local after
+    after="$(zpool list -H -o name 2>/dev/null | sort || true)"
+    if [[ "$after" != "$host_pools_before" ]]; then
+        echo "ERROR: host pool set changed during the container run:" >&2
+        diff <(echo "$host_pools_before") <(echo "$after") >&2 || true
+        exit 1
+    fi
+}
+trap check_host_pools EXIT
+
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "Building $image (first run only)..."
+    docker build -f "$repo_root/.devcontainer/Dockerfile" -t "$image" "$repo_root"
+fi
+
+# Extra pytest args pass through and are word-split by the container's
+# own bash -lc parser, exactly as typed on this command line.
+pytest_cmd="python3 -m pytest tests/python/test_offsite_e2e.py"
+pytest_cmd+=" tests/python/test_backup_payload_e2e.py -v $*"
+
+docker run --rm --device /dev/zfs \
+    -v "$repo_root":/workspace \
+    -w /workspace \
+    "$image" \
+    bash -lc "$pytest_cmd"

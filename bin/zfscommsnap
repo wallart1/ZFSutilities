@@ -53,13 +53,13 @@ readarray -t snaparray_s < \
 snaparraylen_s=${#snaparray_s[@]}
 if [[ "$snaparraylen_s" = "0" ]]; then echo ""; return 8; fi
 # If just the most recent snap was requested, send it back and return to caller
-if [[ $commsnap_mostrecent = "Y" ]]; then
+if [[ "${commsnap_mostrecent:-}" = "Y" ]]; then
     # awk -F'@' '{print $2}'  —  Extract snapshot name from the most recent source snap.
     echo '@'"$(echo "${snaparray_s[0]}" | awk -F'@' '{print $2}')"
     return 0
 fi
 # Likewise if the oldest snap is requested.
-if [[ $commsnap_mostrecent = "OLDEST" ]]; then
+if [[ "${commsnap_mostrecent:-}" = "OLDEST" ]]; then
     echo '@'"$(echo "${snaparray_s[(($snaparraylen_s-1))]}" | awk -F'@' '{print $2}')"
     return 0
 fi
@@ -78,18 +78,18 @@ found_a_match=false
 match_i=''; match_j=''
 
 for (( i=0; i<snaparraylen_s; i++ )); do     # For each source snap ...
-    if [[ $commsnap_find_another = 'Y' ]] \
+    if [[ "${commsnap_find_another:-}" = 'Y' ]] \
       && [[ ${snaparray_s[$i]} = "$fs_s" ]]; then
         # Ignore the snap that was given. Find another one.
         continue
     fi
-    if [[ $commsnap_find_another = 'Y' ]]; then     # Check the age of the snap.
+    if [[ "${commsnap_find_another:-}" = 'Y' ]]; then     # Check the age of the snap.
         nowseconds=$(date +%s)
         # awk '{print $3}'  —  zfs get -Hp outputs "name\tproperty\tvalue\tsource".
         #   Extract the raw Unix timestamp (third field) from the creation property.
         snapseconds=$(zfs get -Hp creation "${snaparray_s[$i]}" | awk '{print $3}')
         snapdaysold=$(( (nowseconds - snapseconds) / 86400 ))   # 86400 = 24 hours
-        if [[ $snapdaysold -gt $maxcommsnapperiod ]]; then  # Ignore any snap that is too old.
+        if [[ $snapdaysold -gt ${maxcommsnapperiod:-0} ]]; then  # Ignore any snap that is too old.
             log_msg "INFO: ${snaparray_s[$i]} is $snapdaysold days old. The maximum is " \
               "$maxcommsnapperiod. Ignoring."
             continue
@@ -103,7 +103,7 @@ for (( i=0; i<snaparraylen_s; i++ )); do     # For each source snap ...
     done
 done
 
-if [[ $commsnap_find_another = 'Y' ]]; then
+if [[ "${commsnap_find_another:-}" = 'Y' ]]; then
     if [[ $found_a_match = false ]]; then    # Another match was not found
         echo ''
         return 64   # "Find another match" was requested, but no other match was found.

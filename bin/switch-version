@@ -10,6 +10,8 @@
 #
 # Run as root on each host where you want to switch versions.
 
+set -euo pipefail
+
 mydir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
 
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
@@ -422,16 +424,16 @@ switch_version_main() {
     # Stop documentation server so it restarts from the current version
     local _docserver_pid=""
     if command -v lsof &>/dev/null; then
-        _docserver_pid=$(lsof -t -i :8000 2>/dev/null | head -1)
+        _docserver_pid=$(lsof -t -i :8000 2>/dev/null | head -1 || true)
     fi
     if [[ -z "$_docserver_pid" ]] && command -v fuser &>/dev/null; then
-        _docserver_pid=$(fuser 8000/tcp 2>/dev/null | tr -d ' ' | head -1)
+        _docserver_pid=$(fuser 8000/tcp 2>/dev/null | tr -d ' ' | head -1 || true)
     fi
     if [[ -z "$_docserver_pid" ]]; then
-        _docserver_pid=$(pgrep -f 'mkdocs serve' | head -1)
+        _docserver_pid=$(pgrep -f 'mkdocs serve' | head -1 || true)
     fi
     if [[ -z "$_docserver_pid" ]]; then
-        _docserver_pid=$(pgrep -f 'http.server 8000' | head -1)
+        _docserver_pid=$(pgrep -f 'http.server 8000' | head -1 || true)
     fi
     if [[ -n "$_docserver_pid" ]]; then
         kill "$_docserver_pid" 2>/dev/null || true

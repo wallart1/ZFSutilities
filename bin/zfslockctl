@@ -9,6 +9,8 @@
 #   zfslockctl wait <dataset> <type> # Wait for lock availability
 #   zfslockctl help                  # Show this help
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -88,7 +90,7 @@ _zfslockctl_print_remote_lock_line() {
 
 # List active locks
 cmd_list() {
-    local filter="$1"
+    local filter="${1:-}"
     local lockfile
     local found=0
 
@@ -109,7 +111,7 @@ cmd_list() {
         local line
         while IFS= read -r line; do
             if _zfslockctl_print_remote_lock_line "$line" "$filter" "$storage_host"; then
-                ((found++))
+                ((found++)) || true
             fi
         done <<< "$output"
     fi
@@ -121,11 +123,11 @@ cmd_list() {
 
             local dataset type pid script acquired
 
-            dataset=$(_zfslock_read_field "$lockfile" "dataset")
-            type=$(_zfslock_read_field "$lockfile" "type")
-            pid=$(_zfslock_read_field "$lockfile" "pid")
-            script=$(_zfslock_read_field "$lockfile" "script")
-            acquired=$(_zfslock_read_field "$lockfile" "acquired")
+            dataset=$(_zfslock_read_field "$lockfile" "dataset") || dataset=""
+            type=$(_zfslock_read_field "$lockfile" "type") || type=""
+            pid=$(_zfslock_read_field "$lockfile" "pid") || pid=""
+            script=$(_zfslock_read_field "$lockfile" "script") || script=""
+            acquired=$(_zfslock_read_field "$lockfile" "acquired") || acquired=""
 
             # Skip remote-conflict markers.
             [[ "$(basename "$lockfile")" == .remote-conflict.* ]] && continue
@@ -150,7 +152,7 @@ cmd_list() {
 
             printf "%-40s %-6s %-8s %-20s %-20s %s\n" \
                 "$dataset" "$type_name" "$pid" "$script" "$_zfslock_this_host" "$display_time"
-            ((found++))
+            ((found++)) || true
         done
     fi
 
@@ -165,7 +167,7 @@ cmd_list() {
 
 # Check lock status for a dataset
 cmd_status() {
-    local dataset="$1"
+    local dataset="${1:-}"
 
     if [[ -z "$dataset" ]]; then
         log_msg "WARN: Dataset required."
@@ -212,11 +214,11 @@ cmd_status() {
         local type pid script acquired description
         local relative_time
 
-        type=$(_zfslock_read_field "$lockfile" "type")
-        pid=$(_zfslock_read_field "$lockfile" "pid")
-        script=$(_zfslock_read_field "$lockfile" "script")
-        acquired=$(_zfslock_read_field "$lockfile" "acquired")
-        description=$(_zfslock_read_field "$lockfile" "description")
+        type=$(_zfslock_read_field "$lockfile" "type") || type=""
+        pid=$(_zfslock_read_field "$lockfile" "pid") || pid=""
+        script=$(_zfslock_read_field "$lockfile" "script") || script=""
+        acquired=$(_zfslock_read_field "$lockfile" "acquired") || acquired=""
+        description=$(_zfslock_read_field "$lockfile" "description") || description=""
         relative_time=$(_zfslock_relative_time "$acquired")
 
         local type_name
@@ -250,11 +252,11 @@ cmd_status() {
             parent_lock=$(_zfslock_file "$parent")
             if [[ -f "$parent_lock" ]]; then
                 local p_type
-                p_type=$(_zfslock_read_field "$parent_lock" "type")
+                p_type=$(_zfslock_read_field "$parent_lock" "type") || p_type=""
                 local p_script
-                p_script=$(_zfslock_read_field "$parent_lock" "script")
+                p_script=$(_zfslock_read_field "$parent_lock" "script") || p_script=""
                 log_msg "INFO:   Ancestor lock: $parent (type=$p_type, script=$p_script)"
-                ((ancestor_locks++))
+                ((ancestor_locks++)) || true
             fi
         done
 
@@ -265,13 +267,13 @@ cmd_status() {
         for desc_lock in "$zfslock_locks_dir"/"${dataset_encoded}%2F"*.lock ; do
             [[ -f "$desc_lock" ]] || continue
             local d_dataset
-            d_dataset=$(_zfslock_read_field "$desc_lock" "dataset")
+            d_dataset=$(_zfslock_read_field "$desc_lock" "dataset") || d_dataset=""
             local d_type
-            d_type=$(_zfslock_read_field "$desc_lock" "type")
+            d_type=$(_zfslock_read_field "$desc_lock" "type") || d_type=""
             local d_script
-            d_script=$(_zfslock_read_field "$desc_lock" "script")
+            d_script=$(_zfslock_read_field "$desc_lock" "script") || d_script=""
             log_msg "INFO:   Descendant lock: $d_dataset (type=$d_type, script=$d_script)"
-            ((descendant_locks++))
+            ((descendant_locks++)) || true
         done
 
         if [[ $ancestor_locks -eq 0 && $descendant_locks -eq 0 ]]; then
@@ -290,9 +292,11 @@ cmd_status() {
                 log_msg "INFO:   Type '$check_type': available"
             else
                 local conflict_dataset
-                conflict_dataset=$(_zfslock_read_field "$zfslock_conflict_info" "dataset")
+                conflict_dataset=$(_zfslock_read_field "$zfslock_conflict_info" \
+                    "dataset") || conflict_dataset=""
                 local conflict_type
-                conflict_type=$(_zfslock_read_field "$zfslock_conflict_info" "type")
+                conflict_type=$(_zfslock_read_field "$zfslock_conflict_info" \
+                    "type") || conflict_type=""
                 log_msg "INFO:   Type '$check_type': BLOCKED by $conflict_dataset ($conflict_type)"
             fi
         done
@@ -303,7 +307,7 @@ cmd_status() {
 
 # Force release a lock
 cmd_release() {
-    local target="$1"
+    local target="${1:-}"
 
     if [[ -z "$target" ]]; then
         log_msg "WARN: Lock ID or dataset required."
@@ -322,7 +326,7 @@ cmd_release() {
             encoded_lock="$zfslock_locks_dir/$(_zfslock_encode "$target").lock"
             _zfslock_remote_exec "$remote_host" \
                 "$remote_agent release $(printf '%q' "$encoded_lock")" \
-                >/dev/null 2>&1
+                >/dev/null 2>&1 || true
             log_msg "INFO: Requested remote release of lock for '$target' on $remote_host"
             return 0
         fi
@@ -345,10 +349,10 @@ cmd_release() {
 
     # Show lock info before releasing
     local dataset pid script acquired
-    dataset=$(_zfslock_read_field "$lockfile" "dataset")
-    pid=$(_zfslock_read_field "$lockfile" "pid")
-    script=$(_zfslock_read_field "$lockfile" "script")
-    acquired=$(_zfslock_read_field "$lockfile" "acquired")
+    dataset=$(_zfslock_read_field "$lockfile" "dataset") || dataset=""
+    pid=$(_zfslock_read_field "$lockfile" "pid") || pid=""
+    script=$(_zfslock_read_field "$lockfile" "script") || script=""
+    acquired=$(_zfslock_read_field "$lockfile" "acquired") || acquired=""
 
     log_msg "INFO: About to force-release lock:"
     log_msg "INFO:   Dataset: $dataset"
@@ -373,7 +377,7 @@ cmd_release() {
         local pidfile="$zfslock_pids_dir/$pid"
         if [[ -f "$pidfile" ]]; then
             local temp
-            temp=$(grep -v "^${lockfile}$" "$pidfile" 2>/dev/null)
+            temp=$(grep -v "^${lockfile}$" "$pidfile" 2>/dev/null || true)
             if [[ -n "$temp" ]]; then
                 echo "$temp" > "$pidfile"
             else
@@ -416,16 +420,16 @@ cmd_cleanup() {
         [[ -f "$lockfile" ]] || continue
 
         local dataset pid script
-        dataset=$(_zfslock_read_field "$lockfile" "dataset")
-        pid=$(_zfslock_read_field "$lockfile" "pid")
-        script=$(_zfslock_read_field "$lockfile" "script")
+        dataset=$(_zfslock_read_field "$lockfile" "dataset") || dataset=""
+        pid=$(_zfslock_read_field "$lockfile" "pid") || pid=""
+        script=$(_zfslock_read_field "$lockfile" "script") || script=""
 
         if zfslock_is_stale "$lockfile"; then
             log_msg "INFO:   Removing stale lock: $dataset (was $script PID $pid)"
             rm -f "$lockfile"
-            ((removed++))
+            ((removed++)) || true
         else
-            ((active++))
+            ((active++)) || true
         fi
     done
 
@@ -439,7 +443,7 @@ cmd_cleanup() {
         pid=$(basename "$pidfile")
         if ! kill -0 "$pid" 2>/dev/null; then
             rm -f "$pidfile"
-            ((pid_removed++))
+            ((pid_removed++)) || true
         fi
     done
 
@@ -455,8 +459,8 @@ cmd_cleanup() {
 
 # Wait for lock availability
 cmd_wait() {
-    local dataset="$1"
-    local type="$2"
+    local dataset="${1:-}"
+    local type="${2:-}"
 
     if [[ -z "$dataset" || -z "$type" ]]; then
         log_msg "WARN: Dataset and type required."
@@ -481,7 +485,7 @@ cmd_wait() {
     _wait_interval=$(_zfslock_sanitize_interval "${ZFSLOCK_WAIT_INTERVAL:-30}" 1)
 
     while true; do
-        ((attempts++))
+        ((attempts++)) || true
 
         if zfslock_check "$dataset" "$type"; then
             log_msg "INFO: Lock is now available! (after $attempts attempt(s))"
@@ -489,13 +493,16 @@ cmd_wait() {
         fi
 
         local conflict_dataset
-        conflict_dataset=$(_zfslock_read_field "$zfslock_conflict_info" "dataset")
+        conflict_dataset=$(_zfslock_read_field "$zfslock_conflict_info" \
+            "dataset") || conflict_dataset=""
         local conflict_type
-        conflict_type=$(_zfslock_read_field "$zfslock_conflict_info" "type")
+        conflict_type=$(_zfslock_read_field "$zfslock_conflict_info" \
+            "type") || conflict_type=""
         local conflict_script
-        conflict_script=$(_zfslock_read_field "$zfslock_conflict_info" "script")
+        conflict_script=$(_zfslock_read_field "$zfslock_conflict_info" \
+            "script") || conflict_script=""
         local conflict_pid
-        conflict_pid=$(_zfslock_read_field "$zfslock_conflict_info" "pid")
+        conflict_pid=$(_zfslock_read_field "$zfslock_conflict_info" "pid") || conflict_pid=""
 
         log_msg "INFO: [$attempts] Blocked by: $conflict_dataset ($conflict_type) -" \
             "$conflict_script (PID $conflict_pid)"
@@ -556,8 +563,8 @@ cmd_help() {
 # ==============================================================================
 
 main() {
-    local command="$1"
-    shift
+    local command="${1:-}"
+    shift || true
 
     case "$command" in
         list)

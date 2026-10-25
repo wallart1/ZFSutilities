@@ -1,6 +1,8 @@
 #!/usr/bin/bash
 # Copy a dataset
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -20,7 +22,10 @@ function send {
 
     autoproceed='N'         # "Y" = Don't ask user to approve key steps before executing them.
 
-    nextsnap=$(zfssnapbuild)
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced zfssnapbuild helper.
+    bucket=''    # zfssnapbuild dereferences $bucket bare; empty = derive d/w/m.
+    nextsnap=$(zfssnapbuild 'dailybackup')
     #nextsnap='@initial'
     log_msg "INFO: Next snap: $nextsnap"
     if [[ $autoproceed != 'Y' ]]; then read -rp 'Press enter to continue.'; fi
@@ -50,11 +55,11 @@ function send {
     # shellcheck disable=SC2034
     receive_F_option=''     # "F" = Roll back modifications on destination.
 
-    if [[ $1 != '' ]]; then overrides "$1"; fi
+    if [[ ${1:-} != '' ]]; then overrides "$1"; fi
 
     send-receive
 
     log_msg "INFO: ***  Copy completed.  ***"
 }
-if calledbybash; then send "$1"; fi
+if calledbybash; then send "${1:-}"; fi
 

@@ -25,6 +25,8 @@
 #
 # Install to: /usr/local/lib/zfsutilities/bin/export-iscsi-state on the storage host
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -264,7 +266,7 @@ state_dataset_mountpoint() {
         log_msg "INFO:   ✓ Created dataset ${ds} (first use)"
     fi
 
-    mnt=$(zfs list -H -o mountpoint "$ds" 2>/dev/null)
+    mnt=$(zfs list -H -o mountpoint "$ds" 2>/dev/null || true)
     if [[ -z "$mnt" || "$mnt" == "-" || ! -d "$mnt" ]]; then
         log_msg "WARN: Dataset ${ds} has no usable mountpoint (${mnt:-none}) —" \
             "pool ${pool} skipped"
@@ -348,7 +350,7 @@ enforce_not_degraded() {
         expected=$(count_manifest_entries)
     else
         local map_file
-        map_file=$(newest_iscsi_state_map)
+        map_file=$(newest_iscsi_state_map || true)
         if [[ -n "$map_file" ]]; then
             expected=$(read_json_backstore_count "$map_file")
         fi
@@ -461,7 +463,7 @@ emit_state_json > "$json_tmp"
 
 if [[ "$check_only" == true ]]; then
     local map_file rc=0
-    map_file=$(newest_iscsi_state_map)
+    map_file=$(newest_iscsi_state_map || true)
     if [[ -z "$map_file" ]]; then
         log_msg "FATAL: No ${STATE_FILENAME} found on any online pool —" \
             "run export-iscsi-state first"

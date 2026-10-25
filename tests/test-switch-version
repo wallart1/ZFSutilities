@@ -12,6 +12,10 @@ SWITCH_VERSION="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/switch-vers
 # Source the real switch-version for direct function tests.  rootcheck is
 # already mocked by test-lib.sh, so the root check is bypassed.
 source "$SWITCH_VERSION"
+# The script's strict line leaks into this test shell at the source point;
+# restore the test harness's own option state so a failing test reports
+# normally instead of aborting the suite.
+set +euo pipefail
 
 # Mock visudo so setup_path_config does not require the real tool.
 visudo() { return 0; }

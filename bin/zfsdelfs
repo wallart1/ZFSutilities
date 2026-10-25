@@ -7,6 +7,8 @@
 # $4 = Optional $startwith
 # $5 = Optional $overrides
 
+set -euo pipefail
+
 source ~/bashinit
 
 # Record this script's directory early so fatal configuration errors can
@@ -15,6 +17,15 @@ source ~/bashinit
 # intentionally delayed until the entry function runs because this file is
 # also sourced as a library.
 _zfsdelfs_dir=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+
+# Sibling resolution for the file-scope source_helper calls below: the
+# bashinit function (which normally sets $mydir) is deferred, so a strict
+# standalone execution would otherwise hit find_zfsutility_script with
+# $mydir unset (the 2026-10-25 j07 archive-vm failure). Only set it when
+# unset — a sourcing caller's $mydir always wins.
+if [[ -z "${mydir:-}" ]]; then
+    mydir="$_zfsdelfs_dir"
+fi
 
 # Node configuration (single-node or two-node), resolved with node-lib's
 # precedence: the current FHS conf first, then the legacy conf paths.
@@ -65,10 +76,10 @@ function delfs {
     source_helper zfs-diagnose-busy
     source_helper zfslockmanager
 
-    if [[ $autoproceed = '' ]]; then autoproceed='N'; fi
+    if [[ ${autoproceed:-} = '' ]]; then autoproceed='N'; fi
     depth=''
-    if [[ $1 != '' ]]; then sourcefs=$1; fi
-    if [[ $sourcefs = '' ]]; then
+    if [[ ${1:-} != '' ]]; then sourcefs=$1; fi
+    if [[ ${sourcefs:-} = '' ]]; then
         log_msg "FATAL: A subtree must be specified."
         exit 8
     fi
@@ -77,8 +88,8 @@ function delfs {
     # so that delfs does not clobber the caller's filter state.
     local saved_includes=("${includes[@]}")
     local saved_excludes=("${excludes[@]}")
-    local saved_startwith="$startwith"
-    local saved_endwith="$endwith"
+    local saved_startwith="${startwith:-}"
+    local saved_endwith="${endwith:-}"
 
     function restore-caller-filter-state {
         includes=("${saved_includes[@]}")
@@ -87,27 +98,27 @@ function delfs {
         endwith="$saved_endwith"
     }
 
-    if [[ $2 != '' ]]; then
+    if [[ ${2:-} != '' ]]; then
         includes=("$2")
     else
         unset includes
     fi
-    if [[ $3 != '' ]]; then
+    if [[ ${3:-} != '' ]]; then
         excludes=("$3")
     else
         unset excludes
     fi
-    if [[ $4 != '' ]]; then
+    if [[ ${4:-} != '' ]]; then
         startwith="$4"
     else
         unset startwith
     fi
 
-    if [[ $5 != '' ]]; then overrides "$5"; fi
+    if [[ ${5:-} != '' ]]; then overrides "$5"; fi
 
     zfslock_init
-    zfslock_wait_or_resolve "$sourcefs" "x" "destroy dataset $sourcefs"
-    local lock_rc=$?
+    local lock_rc=0
+    zfslock_wait_or_resolve "$sourcefs" "x" "destroy dataset $sourcefs" || lock_rc=$?
     if [[ $lock_rc -ne 0 ]]; then
         log_msg "FATAL: Cannot acquire destroy lock on $sourcefs; aborting."
         restore-caller-filter-state
@@ -145,7 +156,7 @@ function delfs {
                     _bs_dev=$(targetcli "/backstores/block/${_bsname}" info 2>/dev/null \
                         | awk '{ for (i = 1; i <= NF; i++) { \
                             p = index($i, "/dev/zvol/"); \
-                            if (p > 0) { print substr($i, p); exit } } }')
+                            if (p > 0) { print substr($i, p); exit } } }' || true)
                     if [[ -z "$_bs_dev" || "$_bs_dev" == "/dev/zvol/${fs}" ]]; then
                         _annotation+="  [iSCSI LUN — will be removed from targetcli]"
                     fi

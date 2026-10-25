@@ -15,7 +15,7 @@ STORAGE_HOST=stewie
 COMPUTE_HOST=tweety
 STORAGE_IP=10.0.0.1
 IQN_PREFIX=iqn.2026-02.local.stewie
-POOL_TARGET=(
+declare -A POOL_TARGET=(
     [threeamigos]="threeamigos"
     [NVME1]="nvme1"
 )
@@ -26,6 +26,10 @@ NODE_CONF="$NODE_CONF_FILE"
 # Source zfsdelfs (it will not run delfs because it is being sourced).
 # ------------------------------------------------------------------
 source "$mydir/bin/zfsdelfs"
+# The script's strict line leaks into this test shell at the source point;
+# restore the test harness's own option state so a failing test reports
+# normally instead of aborting the suite.
+set +euo pipefail
 
 # ------------------------------------------------------------------
 # Mock targetcli
@@ -265,8 +269,11 @@ EOF
         autoproceed='Y'
         _mock_delfs_fsarray=(pool/data)
         mock_zfs_dataset_exists "pool/data"
-        (delfs "pool/data" >"$_state_dir/out" 2>"$_state_dir/err")
-        echo $? > "$_state_dir/rc"
+        # delfs exits 8 on a designed lock conflict; the sourced script's
+        # strict mode must not abort this shell before rc is captured.
+        delfs_rc=0
+        (delfs "pool/data" >"$_state_dir/out" 2>"$_state_dir/err") || delfs_rc=$?
+        echo "$delfs_rc" > "$_state_dir/rc"
     )
 }
 

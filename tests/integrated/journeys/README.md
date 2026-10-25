@@ -51,6 +51,25 @@ Scenarios that begin *after* installation skip all of the above:
    boot-health-gated at build time), so clones need no per-journey
    `apt upgrade`.
 
+## The stale template is j10's old-version carrier
+
+The storage template's PRODUCT version is deliberately allowed to lag
+the tree under test: a clone of a stale template is a genuinely
+installed system running an older release, which is exactly the
+starting state the release-upgrade journey (j10) needs — "clone →
+upgrade to today's tree" with zero extra infrastructure.  Do not
+rebuild the template just because it is stale; j10 fails fast with a
+PREP hint when the premise breaks (template version no longer strictly
+older than the tree under test).  Under `ITF_SW_SOURCE=dev-tarball`,
+j10 serves a fake "latest release" (latest.json + a release-shaped
+tarball of the dev tree) and points the guest's upgrade at it via
+`ZFSUTILITIES_RELEASE_API`; under `release` the guest upgrades from
+real GitHub.  When the old version's GitHub tag tarball is missing
+(many historical releases were never tagged), the journey also serves
+the captured as-deployed tree via `ZFSUTILITIES_TAG_TARBALL_URL` so
+the change scan has a pristine baseline (the upgrade itself now
+captures a baseline manifest when none is obtainable — F-025, plan 021).
+
 ## Steps common to two-node journeys
 
 j05-style scenarios span two guests on two base hosts:
@@ -112,3 +131,5 @@ missing — the same starting state a fresh install produces.
 | j07-unarchive-iscsi-rebuild | composes the j05 lab, archives a VM, destroys the target and injects IQN drift, verifies unarchive-vm rebuilds targets and logs in |
 | j08-prereq-decline | fresh Debian; installer aborts gracefully when the user declines prerequisite remediation — nothing deployed |
 | j09-prereq-apt-failure | fresh Debian with a dead-apt proxy; installer surfaces the remediation failure cleanly — nothing deployed, apt heals when the drop-in is removed |
+| j10-release-upgrade | clone start from the stale template (old-version carrier): download the new release, decline the upgrade offer (system untouched), inject local modifications, upgrade via the new tree's `./bin/upgrade-zfsutilities` — scan detects and salvages them, deploys the new version NOT activated — then `switch-version`, retention/wiring verify, up-to-date rerun |
+| j11-payload-e2e | clone start + test pools (j04 recipe) + today's tree, then the GUI-payload e2e matrix via `tests/integrated/e2e/payload-e2e-driver.py`: offsite chain steps with holds, incrementals, rollback, resume tokens, scrub pause, backup/prune/rsync payloads, and the strict-mode-flipped leaf orchestrators — the full-matrix context for the payload exercises (unprivileged containers run only the dry-run layer; see the developer guide's payload e2e section) |

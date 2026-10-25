@@ -169,6 +169,11 @@ mydir="$_rootcheck_stub"
 
 source "$old_mydir/bin/list-vm-disks"
 
+# The script's strict line leaks into this test shell at the source point;
+# restore the test harness's own option state so a failing test reports
+# normally instead of aborting the suite.
+set +euo pipefail
+
 # ------------------------------------------------------------------------------
 # Reset helpers
 # ------------------------------------------------------------------------------

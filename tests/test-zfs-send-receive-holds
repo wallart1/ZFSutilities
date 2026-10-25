@@ -114,6 +114,10 @@ _setup_full_copy_world() {
 }
 
 source "$mydir/zfs-send-receive"
+# The script's strict line leaks into this test shell at the source point;
+# restore the test harness's own option state so a failing test reports
+# normally instead of aborting the suite.
+set +euo pipefail
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -252,6 +256,23 @@ test_preserve_target_holds_N_skips_bookkeeping() {
     fi
 }
 
+# Static contract guard (test-strict-mode style): zfsdelallholds sets
+# zfs_delallholds_remaining_tags (lowercase) — a past regression had the
+# rollback hold check read the uppercase name, so the "snapshot(s) still
+# have user holds" rollback guard could never fire.
+test_rollback_reads_remaining_tags_contract() {
+    test_start "rollback hold check reads delallholds' remaining-tags variable"
+    local script="$repo_root/bin/zfs-send-receive"
+    local failed=0
+    grep -q 'zfs_delallholds_remaining_tags' "$script" \
+        || { failed=1; echo "    lowercase contract variable not read"; }
+    if grep -q 'ZFS_DELALLHOLDS_REMAINING_TAGS' "$script"; then
+        failed=1
+        echo "    uppercase (wrong-case) read reintroduced"
+    fi
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "contract violated"; fi
+}
+
 # ---------------------------------------------------------------------------
 # Run tests
 # ---------------------------------------------------------------------------
@@ -261,6 +282,7 @@ test_incremental_run_skips_hold_preservation
 test_dry_run_skips_hold_preservation
 test_capture_failure_aborts_before_any_transfer
 test_preserve_target_holds_N_skips_bookkeeping
+test_rollback_reads_remaining_tags_contract
 
 teardown_test_env
 test_summary

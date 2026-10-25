@@ -7,6 +7,8 @@
 #
 # WARNING: Stop the VM and detach the disk in Proxmox BEFORE running this script.
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -104,7 +106,7 @@ if is_two_node && [[ "$my_host" != "$storage_host" ]]; then
     echo ""
     log_msg "INFO: Rescanning iSCSI on $(hostname)..."
     if [[ "$my_host" == "$compute_host" ]]; then
-        rescan_path=$(find_zfsutility_script rescan-storage)
+        rescan_path=$(find_zfsutility_script rescan-storage || true)
         if [[ -n "$rescan_path" ]]; then
             "$rescan_path" || log_msg "WARN: Could not rescan $(hostname) —" \
                 "run 'sudo rescan-storage' manually"
@@ -174,7 +176,7 @@ if is_two_node; then
     # Anchor on "block/<name> " so a longer name that starts with this one
     # (disk-1 vs disk-10) cannot supply the wrong line.
     lun_line=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null \
-        | grep -F "block/${backstore_name} " | head -1)
+        | grep -F "block/${backstore_name} " | head -1 || true)
     lun_num=""
     if [[ -n "$lun_line" ]]; then
         lun_num="${lun_line#*lun}"
@@ -217,7 +219,7 @@ if is_two_node; then
 
     # --- Save targetcli config ---
     log_msg "INFO: Saving iSCSI configuration..."
-    safe_save_path=$(find_zfsutility_script safe-iscsi-save)
+    safe_save_path=$(find_zfsutility_script safe-iscsi-save || true)
     if [[ -z "$safe_save_path" ]]; then
         log_msg "FATAL: Could not locate safe-iscsi-save"
         exit 1
@@ -248,7 +250,7 @@ fi
 # lock on the dataset — no lock is held here around the call.
 log_msg "INFO: Destroying zvol $zvol_name..."
 
-zfsdelfs_path=$(find_zfsutility_script zfsdelfs)
+zfsdelfs_path=$(find_zfsutility_script zfsdelfs || true)
 [[ -n "$zfsdelfs_path" ]] || {
     log_msg "FATAL: Could not locate zfsdelfs"
     exit 1

@@ -19,4 +19,6 @@ gi tests/python/test_pool_profile_dialogs.py
 gi tests/python/test_schedule_page.py
 gi tests/python/test_zfs_diagnostics.py
 gi tests/python/test_zfsutilities_gui.py
+gi tests/python/test_offsite_e2e.py
+gi tests/python/test_backup_payload_e2e.py
 root zfs test-pools tests/integration/test-zfs-send-receive-pools

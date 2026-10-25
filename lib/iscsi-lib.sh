@@ -34,7 +34,11 @@ fi
 # -g is required: libraries are loaded through bashinit's source_helper function,
 # and a bare declare here would create a function-local that vanishes when
 # source_helper returns, silently breaking every later iscsi_teardown[...] write.
-declare -gA iscsi_teardown
+# The =() initializer is equally required: a declare executed in a function
+# frame leaves an element-less array that set -u callers cannot length-check
+# (iscsi_rebuild_torn_down's ${#iscsi_teardown[@]} aborts with "unbound
+# variable"); initializing at declaration clears that state.
+declare -gA iscsi_teardown=()
 
 # iSCSI manifest paths used by teardown/rebuild helpers.
 : "${ISCSI_MANIFEST:=/etc/rtslib-fb-target/expected-backstores.txt}"

@@ -102,7 +102,7 @@ test_journey_list_lists_committed_journeys() {
         j03-install-over-leftovers j04-post-install-baseline \
         j05-two-node-install j06-guest-probe-validator \
         j07-unarchive-iscsi-rebuild j08-prereq-decline \
-        j09-prereq-apt-failure; do
+        j09-prereq-apt-failure j10-release-upgrade; do
         assert_contains "$run_out" "$j"
     done
 }

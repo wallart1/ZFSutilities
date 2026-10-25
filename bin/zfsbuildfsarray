@@ -55,29 +55,29 @@ function buildfsarray {
 
 
     declare -i i=0
-    if [[ $1 != '' ]]; then sourcefs=$1; fi
-    if [[ $sourcefs = '' ]]; then
+    if [[ "${1:-}" != '' ]]; then sourcefs=$1; fi
+    if [[ "${sourcefs:-}" = '' ]]; then
         log_msg "FATAL: A dataset must be specified."
         exit 8
     fi
 
-    if [[ $2 = 'bottomup' ]]; then local bottomup='Y'; fi
-    if [[ $bottomup != 'Y' ]]; then local bottomup='N'; fi
-    if [[ $bottomup != 'Y' ]]; then
+    if [[ "${2:-}" = 'bottomup' ]]; then local bottomup='Y'; fi
+    if [[ "${bottomup:-}" != 'Y' ]]; then local bottomup='N'; fi
+    if [[ "${bottomup:-}" != 'Y' ]]; then
         local sequence='-s' 
     else local sequence='-S'  # Whether to reverse sort sequence
     fi
 
-    if [[ $3 = 'pool' ]]; then local buildfsarraytype='pool'; fi
-    if [[ $buildfsarraytype = '' ]]; then
+    if [[ "${3:-}" = 'pool' ]]; then local buildfsarraytype='pool'; fi
+    if [[ "${buildfsarraytype:-}" = '' ]]; then
         local buildfsarraytype='filesystem,volume'
     fi
 
-    if [[ $sortby = '' ]]; then
+    if [[ "${sortby:-}" = '' ]]; then
         local sortby='name'
     fi
 
-    if [[ $depth != "" ]]; then
+    if [[ "${depth:-}" != "" ]]; then
         # Regex: ^[0-9]+$
         # Purpose: Validate that the depth parameter is a non-negative integer.
         # Example: "2" -> match; "-1" -> no match; "all" -> no match
@@ -99,13 +99,13 @@ function buildfsarray {
             "$sequence" "$sortby" "$sourcefs")
 
         # Optionally filter out ZFS clones
-        if [[ $skipclones = 'Y' ]]; then
+        if [[ "${skipclones:-}" = 'Y' ]]; then
             for (( i=0; i<${#fsarray[@]}; i++ )); do
                 local _origin
                 _origin=$(zfs list -H -o origin "${fsarray[$i]}" 2>/dev/null)
                 if [[ "$_origin" != "-" && -n "$_origin" ]]; then
                     fsarray=("${fsarray[@]:0:$i}" "${fsarray[@]:$((i+1))}")
-                    ((i--))
+                    ((i--)) || true
                 fi
             done
         fi
@@ -120,8 +120,9 @@ function buildfsarray {
     # remove the fs from the fsarray.
     for (( i=0; i<${#fsarray[@]}; i++ )); do     # Process includes
         local fs=${fsarray[i]}
-        if [[ ${#includes[@]} -lt 1 ]]; then      # If no includes were specified, all datasets are
-                                                # included.
+        if [[ -z "${includes[*]+x}" || ${#includes[@]} -lt 1 ]]; then      # If no includes were
+                                                                # specified, all datasets are
+                                                                # included.
             break
         fi
         # If includes were specified, and any are in the fs name, then include the fs.
@@ -142,13 +143,13 @@ function buildfsarray {
                 fi
             done
             fsarray=("${fsarray[@]:0:$i}" "${fsarray[@]:$((i+1))}") # Remove the item at i.
-            ((i--))                        # Adjust i to point to the entry before the removed one.
+            ((i--)) || true              # Adjust i to the entry before the removed one.
             continue
         fi
     done
 
     # If an fs is excluded, remove it from the fsarray.
-    if [[ ${#excludes[@]} -lt 1 ]]; then
+    if [[ -z "${excludes[*]+x}" || ${#excludes[@]} -lt 1 ]]; then
         true
     else
         for (( i=0; i<${#fsarray[@]}; i++)); do     # Process excludes
@@ -166,14 +167,14 @@ function buildfsarray {
                 if [[ $fs == $anywhereinfs"$exclude"$anywhereinfs ]]; then  # Note pattern-matching
                                                                             # syntax
                     fsarray=("${fsarray[@]:0:$i}" "${fsarray[@]:$((i+1))}") # Remove the item at i.
-                    ((i--))                # Adjust i to point to the entry before the removed one.
+                    ((i--)) || true      # Adjust i to the entry before the removed one.
                     break
                 fi
             done
         done
     fi
 
-    if [[ $startwith != '' ]]; then
+    if [[ "${startwith:-}" != '' ]]; then
         if [[ ${startwith:0:1} = '=' ]]; then # "=": String must exactly match the fs name.
             local anywhereinfs=''
             local startwith=${startwith:1}          # Get rid of the leading '='.
@@ -187,7 +188,7 @@ function buildfsarray {
             if ! [[ $fs == $anywhereinfs"$startwith"$anywhereinfs ]]; then # Note pattern-matching
                                                                            # syntax
                 fsarray=("${fsarray[@]:0:$i}" "${fsarray[@]:$((i+1))}") # Remove the item at i.
-                ((i--))                         # Adjust i to point to the entry before the removed
+                ((i--)) || true          # Adjust i to the entry before the removed
                 continue
             else
                 break                           # Found a match. Stop deleting array items.
@@ -200,7 +201,7 @@ function buildfsarray {
         fi
     fi
 
-    if [[ $endwith != '' ]]; then
+    if [[ "${endwith:-}" != '' ]]; then
         if [[ ${endwith:0:1} = '=' ]]; then   # "=": String must exactly match the fs name.
             local anywhereinfs=''
             local endwith=${endwith:1}              # Get rid of the leading '='.

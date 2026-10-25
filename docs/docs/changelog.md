@@ -1,5 +1,116 @@
 # Changelog
 
+## 0.132.0
+
+*Released 2026-10-25*
+
+### Added
+
+- **GUI payload e2e matrix.** One scenario matrix
+  (`tests/python/e2e_support.py`) exercising the real payload builders
+  and the real `BackupRunner` against the zfstest pools, driven from
+  three contexts: the unprivileged dev container
+  (`share/dev/run-e2e-container`, read-only `/dev/zfs` pass-through —
+  every dataset-mutating scenario self-skips with a stated reason and
+  the runner verifies the host pool set is unchanged), the dev host
+  under sudo (`test_offsite_e2e.py` / `test_backup_payload_e2e.py` —
+  headless runs through a GLib main loop with pty stdin and the
+  input-hold REQ/ACK protocol), and the ITF guest (journey
+  `j11-payload-e2e`, full mutating matrix). Scenarios carry a level
+  (`none`/`read`/`mutation`) and an engine (`gui` protocol-on /
+  `cli` protocol-off, as cron/terminal would run them); the matrix
+  covers the offsite chain steps with holds, incremental and
+  same-nextsnap reruns, dry-run, rollback, includes/excludes, live
+  scrub pause/resume, resume-token recovery, backup
+  full/incremental/destructive with hold preservation, prune, the
+  rsync wrapper, the strict-mode leaf orchestrators, and a zfshold
+  round trip.
+- **`j10-release-upgrade` journey.** Exercises the release-upgrade
+  path from a deliberately stale storage template (the old-version
+  carrier), failing fast if the premise breaks; validated the
+  pre-0.125.0 upgrader shape (no `upgrade-zfsutilities` on PATH — the
+  upgrader runs from the downloaded tree) end to end.
+- **`itf_guest_get`** (itf ssh helper): guest→dev file pull,
+  mirroring `guest_put`.
+
+### Changed
+
+- **Strict-mode campaign — 33 orchestrators now run under `set -euo
+  pipefail`**: the 29-script iSCSI/two-node family plus
+  `zfssend`/`zfssendoffsite`/`zfsfullcopy`/`zfsrestore` (they source
+  `zfs-send-receive`, whose strict line reaches them at the source
+  point). Shared helper libraries deliberately carry no `set` line —
+  strictness belongs to the orchestrator — and were made
+  strict-caller-tolerant instead; the rules are codified in the
+  developer guide's coding policies, including the `declare -gA
+  name=()` initializer requirement for library global arrays.
+- **`zfshold` holds each matching snapshot individually.** A tag
+  already present on a snapshot is logged at INFO and treated as
+  success (nested datasets are matched by both their own call and
+  their parent subtree call, so duplicates are a designed outcome);
+  any other hold failure is logged at WARN and fails the call — real
+  failures are now loud instead of silently discarded. An empty match
+  still returns 0.
+- **`upgrade-zfsutilities` captures a trust-on-first-upgrade
+  baseline.** When a host's active version has no deployment
+  manifest and no release tarball is obtainable (pre-manifest
+  versions, untagged releases), the change scan captures a manifest
+  of the current tree on that host — local and remote — instead of
+  leaving the host unverifiable; every future upgrade scans against
+  the captured baseline.
+
+### Fixed
+
+- **GUI offsite runs aborted after verified transfers (strict-mode
+  hotfixes, found live 2026-10-24).** Two latent defects surfaced by
+  the strict flip: a bare `declare -gA` executed in
+  `source_helper`'s function frame left library arrays that `set -u`
+  shells cannot length-check — `iscsi_teardown` died mid-rebuild
+  (`iscsi-lib.sh`, plus the same landmine fenced in
+  `installer-lib.sh`); and the old `zfshold` pipeline aborted the
+  payload shell on the first duplicate hold (`xargs` rc 123 under
+  `set -e`) after both transfers had already succeeded.
+- **Standalone `zfsdelfs` died under strict mode (`mydir: unbound
+  variable`).** `zfsdelfs` defers its `bashinit` call for library
+  use but resolved sibling helpers at file scope;
+  `find_zfsutility_script` now tolerates an unset `mydir` (falling
+  through to the deployed directories — the historical working
+  behavior) and `zfsdelfs` seeds `mydir` from its own location when
+  unset. Found live by the j07 archive run.
+- **`new-vm-disk` single-node success runs exited 1** — the final
+  summary statement was an unfenced `&&` chain whose false left side
+  became the exit code under `set -e`.
+- **The `zfs-send-receive` rollback holds-remaining guard never
+  fired** — it read the upper-case variable name while
+  `zfsdelallholds` sets the lower-case one; the guard is now live
+  and pinned by a contract test.
+
+### Tests
+
+- New `test-zfshold` suite pins the hold contract: duplicate tag →
+  INFO + rc 0 (including the exact parent-subtree + nested call
+  shape from the live failure), real failure → WARN + rc 1, empty
+  match → rc 0, missing pattern → rc 1.
+- `test-strict-mode` guards the strict family (46 scripts), the
+  library-array `declare -gA` law (static + live under `set -u`),
+  the unset-`mydir` lookup, and a new exit-safety fence: a strict
+  script's final statement may not be an unfenced `&&` chain (the
+  `new-vm-disk` bug class; red-proven against the bug shape).
+- Ten suites that source or eval now-strict scripts restore the
+  harness's own shell options after the source point; the upgrade
+  suite pins local and remote baseline capture; the payload e2e
+  suites are registered in the requirements manifest.
+
+### Documentation
+
+- zfshold's messages-manual rows (duplicate-hold INFO, failure WARN)
+  and its module section's behavior line and return-code table now
+  match the per-snapshot implementation; the upgrade messages
+  section documents the baseline-capture notice; coding policies
+  codify the strict-mode laws and the shellcheck command now covers
+  `share/dev/*`; the testing and integrated-testing guides document
+  the payload e2e matrix and its three contexts.
+
 ## 0.130.0
 
 *Released 2026-10-24*

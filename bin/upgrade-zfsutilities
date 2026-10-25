@@ -13,6 +13,13 @@
 # their host under salvaged-changes/ before being superseded, so nothing
 # is ever destroyed by an upgrade.
 #
+# When a host's active version has neither a deployment manifest (trees
+# older than 0.125.0) nor an obtainable release tarball (many historical
+# releases were never tagged), a baseline manifest is captured from its
+# current tree (trust-on-first-upgrade): modifications predating that
+# capture cannot be distinguished from pristine content, and every
+# future upgrade scans against the captured baseline.
+#
 # The upgrade ends by running deploy-version from the downloaded release
 # tree, so the new version is automatically copied to every deployment
 # target, and stops there. Nothing is activated: the running system is
@@ -264,7 +271,22 @@ process_host() {
         upgrade_lib_repo_hashes "${pristine_root_of[$scan_active]}" > "$baseline_file"
         mapfile -t class_out < <(upgrade_lib_classify "$tree_file" "$baseline_file")
     else
-        host_verifiable["$host"]="no-baseline"
+        # Trust-on-first-upgrade (F-025): no manifest and no obtainable
+        # pristine source — capture a manifest of the CURRENT active
+        # tree so every future upgrade scans against it.  Additive only
+        # (change scans exclude MANIFEST.sha256), happens before
+        # anything is replaced, and survives even a later decline;
+        # modifications older than this moment are indistinguishable
+        # from pristine content and the report says so.  A failed
+        # capture degrades to the historical no-baseline warning — a
+        # fence may not abort the upgrade.
+        if [[ "$host" == "LOCAL" ]]; then
+            upgrade_lib_write_manifest "$version_base/versions/$scan_active" \
+                && host_verifiable["$host"]="baseline-captured"
+        elif remote_ssh "$host" bash -s -- __baseline "$remote_version_base" \
+                "$scan_active" < "$upgrade_lib_file" > /dev/null; then
+            host_verifiable["$host"]="baseline-captured"
+        fi
         host_mod["$host"]=""
         host_add["$host"]=""
         host_del["$host"]=""
@@ -309,6 +331,14 @@ render_host_report() {
             log_msg "WARN:   Active version $active has no MANIFEST.sha256 and no release"
             log_msg "WARN:   tarball is available for it — local modifications on $label"
             log_msg "WARN:   CANNOT be detected."
+            return 0
+            ;;
+        baseline-captured)
+            log_msg "INFO:   Active version $active has no MANIFEST.sha256 and no release"
+            log_msg "INFO:   tarball is available for it. A baseline manifest was captured"
+            log_msg "INFO:   from the current tree: modifications made before this upgrade"
+            log_msg "INFO:   cannot be distinguished from pristine content; every future"
+            log_msg "INFO:   upgrade scans against the captured baseline."
             return 0
             ;;
     esac

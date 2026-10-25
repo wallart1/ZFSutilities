@@ -30,6 +30,15 @@ wrap-up review passes, and the zfstestvm lun-32/33 + cron.log threads —
 are committed as 3713eff/a964289, pushed, and released as v0.129.0;
 those entries were removed, recoverable via `git log`. Live items
 condensed into the threads below.)
+(2026-10-24 release prune: the 0.130.0 combined-release campaigns — the
+itf fast-re-verification + j08/j09 journeys (pub lane, 94558b8), the
+iSCSI-resilience M1/M2 state map + reconcile engine with the
+safe-iscsi-save hook and shared iscsi-lib parsers (pub2 lane, 5395aff),
+both lane wrap-ups, the lane merge ad27709, and the parallel-repo
+infrastructure notes — are committed, pushed, and released as v0.130.0;
+those entries were removed, recoverable via `git log`. The lane workflow
+and the same-version merge rule live in the shared agent memory and the
+owner's guide.)
 
 ## Persistent gotchas (not documented in docs/)
 
@@ -145,6 +154,157 @@ condensed into the threads below.)
 
 ## Active / parked threads
 
+- **j07 found and FIXED a real strict-mode side-effect 2026-10-25
+  (zfsdelfs standalone execution); j07 GREEN third run.** The two-node
+  lab passed clean (install-two-node, enroll-proxmox-pool, new-vm-disk,
+  rescan-storage, safe-iscsi-save — the flipped iSCSI install family is
+  healthy), then archive-vm died destroying the zvol: `/root/bashinit:
+  mydir: unbound variable` under remove-vm-disk's strict shell. Root
+  cause: zfsdelfs is strict AND doubles as a sourced library, so it
+  defers its `bashinit` call to the entry function — but its FILE SCOPE
+  runs `source_helper iscsi-lib.sh`, and source_helper →
+  find_zfsutility_script dereferences $mydir, which only the deferred
+  bashinit call would set. Standalone child execution (remove-vm-disk →
+  zfsdelfs) = mydir unset = set -u death. Pre-strict, the empty mydir
+  silently fell through to the deployed-dir candidates — that fallback
+  WAS the working behavior. Fixes: (1) bashinit find_zfsutility_script
+  now uses a ${mydir:-} search_dir (class fix — sourced libraries
+  tolerate strict callers; a repo scan confirmed zfsdelfs is the only
+  script with file-scope source_helper before its bashinit call);
+  (2) zfsdelfs sets mydir from its own dirname when unset (guarded if —
+  not `[[ ]] &&`, which would abort file-scope -e on the false branch).
+  Red-proven against the deployed 0.100.0 copy (dies exactly like the
+  guest); regression test added to test-strict-mode. Also fixed en
+  route: j07's Stage B assertion grepped the whole log for the deleted
+  target's IQN, but 0.130.0's export-iscsi-state state-map hook
+  legitimately WARNs naming the missing target — the grep now matches
+  the targetcli listing shape ("o- <iqn> "). Third run GREEN end to
+  end: lab, archive+remove, IQN drift convergence, destroy+rebuild,
+  restored VM boots, decoy-target refusal. The j11/j07 lab guests
+  remain on the base hosts for inspection (`itf guest destroy` when
+  done). Gotcha for the pattern: any strict script that defers bashinit
+  for library use must not resolve siblings at file scope first.
+
+- **GUI payload e2e matrix DELIVERED 2026-10-25 (j11 GREEN, 20/20 +
+  residue check; j07 iSCSI-family rerun in flight).** After the two
+  offsite GUI smoke-test hotfixes, the exercise infrastructure the user
+  asked for landed: one scenario matrix in tests/python/e2e_support.py
+  driven by three front ends — the unprivileged dev container (read-only
+  layer via share/dev/run-e2e-container, `--device /dev/zfs`; every
+  dataset-mutating ioctl needs CAP_SYS_ADMIN, so the mutating scenarios
+  self-skip there BY DESIGN), the dev host under sudo
+  (tests/python/test_offsite_e2e.py + test_backup_payload_e2e.py, real
+  BackupRunner headless through a GLib MainLoop — pty stdin, input-hold
+  REQ/ACK, rc semantics), and the ITF guest (journey j11-payload-e2e,
+  stdlib driver tests/integrated/e2e/payload-e2e-driver.py, full mutating
+  matrix, 9 iterations to green — every failure along the way was
+  harness-side; NO product defects found; the checkagainst removal gate
+  prompting for unmapped pools is intended behavior, now locked in by the
+  prune scenario). Matrix covers: offsite chain steps with holds (both
+  smoke shapes), incremental/same-nextsnap reruns, dry-run, rollback,
+  includes/excludes, live scrub pause, resume-token recovery, backup
+  full/incremental/destructive (user-hold refusal + offsite-* tag
+  preservation), prune, rsync wrapper, zfssend/zfsfullcopy/zfsrestore
+  live, zfshold round trip. Harness gotchas baked into e2e_support:
+  generate_offsite_snapshot_name is minute-resolution (GUI generates once
+  per run; the matrix needs a uniqueness suffix); a raw `read -rp` prompt
+  glues onto the next input-hold marker line, so CLI orchestrator
+  scenarios run protocol-off (engine="cli") exactly as cron/terminal
+  would, with known prompts pre-fed; partial receives need a prefix that
+  clears the stream header (64 KiB into a 4 MiB-written zvol; 200 bytes
+  dies mid-header without creating the dataset); cleanup releases holds
+  before destroy and judges success by dataset non-existence (a parent's
+  -r may take a registered child first). Payload-scenario additions go in
+  e2e_support with level (none/read/mutation) + engine (gui/cli) tags;
+  both pytest suites are gi-gated in tests/requirements.manifest
+  (test_gui_infrastructure audits that).
+
+- **Offsite GUI smoke test 2026-10-24 23:40 — second strict-mode hotfix
+  (FIXED same night).** Step zfstest1→zfstest2 passed after the declare
+  fix; step zfstest2→zfstest3 died rc=123 after both transfers verified,
+  during holds. Root cause: the GUI offsite step is a Python-built
+  payload (python/offsite_runner.py) that sources zfs-send-receive —
+  inheriting its strict line — and calls zfshold BARE. zfshold held per
+  SUBTREE (zfs list -rt), so nested datasets get the tag from their
+  parent's call AND their own; the duplicate `zfs hold` failed "already
+  exists" → xargs 123 → -e killed the payload shell before exit $rc.
+  Pre-strict the duplicate was silently ignored (2>/dev/null + no -e),
+  which the old pipeline comment shows was the intent. Fix: zfshold now
+  holds per snapshot — already-present tag → INFO + rc 0; any other
+  hold failure → WARN + rc 1 (real failures are now LOUDER than before);
+  empty match → rc 0 (historical); lock release always reached. New
+  suite tests/test-zfshold (5 tests, includes the exact
+  parent-subtree+nested duplicate shape); live-verified against the
+  zfstest pools (duplicate call → INFO → rc 0, strict shell survives).
+  Gotcha for future GUI payloads: sourcing a strict script turns the
+  WHOLE bash -c payload strict — every helper the payload calls bare
+  must be strict-tolerant (zfshold now is; zfssendoffsite's own hook was
+  already fenced by the campaign).
+
+- **Offsite GUI smoke test 2026-10-24 23:28 found a strict-mode hotfix
+  (FIXED same night).** Post-transfer iSCSI rebuild died:
+  iscsi-lib.sh:398 "iscsi_teardown: unbound variable" → rc=1 → offsite
+  aborted AFTER a successful verified transfer. Root cause is a bash
+  quirk, not just a missing guard: `declare -gA name` executed while
+  source_helper's function frame is on the stack leaves an element-less
+  array that set -u callers cannot `${#name[@]}`-check from any other
+  function (top-level reads are fine — which is why declare -p looked
+  healthy). Pre-migration callers had no -u, so the quirk was invisible.
+  Fix: `declare -gA iscsi_teardown=()` (initializer clears the state);
+  same one-line fix applied to installer-lib's installer_failures
+  (incidentially safe today — its consumer re-assigns `=()` first — but
+  the same landmine). Regression test added to test-strict-mode (static
+  grep + live source_helper-under-set-u behavioral check, red-proven
+  against the deployed 0.130.0 copy which still carries the bare
+  declare). Law codified in coding-policies.md: library global arrays
+  MUST use `declare -gA name=()`. NOTE: the DEPLOYED 0.130.0 iscsi-lib
+  still has the bare declare — harmless there (its 0.130.0 callers are
+  not strict), and the fix ships with the strict scripts in the next
+  release; deploy both together as usual.
+
+- **Strict-mode campaign COMPLETED 2026-10-24 wrap-up (PREEXISTING entry
+  resolved).** 33 orchestrators flipped to `set -euo pipefail` with
+  per-script audit+fence: the 29-script iSCSI/two-node family, plus
+  zfssend/zfssendoffsite/zfsfullcopy/zfsrestore (they source
+  zfs-send-receive, whose strict line leaks into them at the source
+  point). Shared helper libraries stay set-line-free by design and were
+  made strict-caller-tolerant instead (zfssnapbuild, zfsbuildfsarray,
+  zfsdelallsnaps, zfscommsnap; zfs-diagnose-busy got fences but its set
+  line was REVERTED — it is a sourced library, strictness leaked into
+  zfsdelsnap). New rule codified in coding-policies.md. Ten suites that
+  source/eval now-strict scripts got the `set +euo pipefail` restore
+  idiom (test-startdocserver precedent); test-strict-mode's guard list
+  grew 13→46. Two latent bugs fixed in-cycle: zfs-send-receive read
+  ZFS_DELALLHOLDS_REMAINING_TAGS (uppercase) while zfsdelallholds sets
+  the lowercase name — the rollback holds-remaining guard never fired
+  (contract-guard test added); new-vm-disk's final statement made
+  single-node success runs exit 1. Gotchas for future campaigns: -u is
+  NOT suppressed by `|| true`; an unbound-var death inside `$(...)`
+  silently yields empty output; runtime `source_helper` of a strict
+  file re-executes its set line mid-run (the dryrun suite's
+  restore_stderr now fences this). Remaining non-strict zfs* leaf
+  utilities are the NEXT named campaign if the user wants one (never
+  recorded as an entry — deliberate).
+
+- **j10 release-upgrade journey DELIVERED 2026-10-24 (GREEN, run
+  results/run-20261024-142745-j10-release-upgrade, 20 pass/0 fail).**
+  Stale storage template (0.118.0) is the old-version carrier — do NOT
+  rebuild it for j10; the journey fails fast if the premise breaks.
+  Two live discoveries baked into the journey: (1) pre-0.125.0
+  deployments have no upgrade-zfsutilities on PATH — the upgrader runs
+  from the downloaded new tree; (2) F-025: untagged GitHub releases
+  broke the change-scan pristine fallback. **F-025 FIXED same day
+  (plan 021 part 1, user-approved): trust-on-first-upgrade manifest
+  captured on LOCAL and remote hosts when no baseline is obtainable;
+  red/green vs HEAD; j10 regreened with the fix in the tarball
+  (run-20261024-150441, 20 pass/0 fail). Part 2 (tag hygiene) not
+  selected.** itf_guest_get added to ssh-lib (guest→dev file pull,
+  mirrors guest_put). One unreproduced dev-host transient: the itf
+  HTTP server vanished without a traceback between two guest fetches
+  2 s apart (run-20261024-144838, instant ECONNREFUSED; ping fine);
+  immediate --rerun green — if it recurs, suspect the dev host, not
+  the journey.
+
 - **unarchive-vm 205 production rerun: EXECUTED 2026-10-23 21:24 —
   0.129.0 machinery validated LIVE.** Step-1 skip verified (3×);
   stewie node.conf converged to iqn.2026-02.local.stewie (backup
@@ -217,213 +377,45 @@ condensed into the threads below.)
   0.0.x with releases every few days — expect breaking changes before 1.0.
 
 
-## 2026-10-23 (late) — ITF cycle: journey --rerun + j08/j09 + discoverability (committed in 0.130.0)
 
-- `itf journey run NAME --rerun`: driver resolves the newest non-active
-  same-journey run with guest records → rerun-guests.tsv; the
-  stage_from_template rerun branch rolls each guest back to as-cloned
-  (verifying presence + checkpoint), re-discovers IP/ssh, and the journey
-  replays in full — only the template clone is skipped. Stale snapshots
-  newer than as-cloned are delsnapshotted first (qm rollback KEEPS them
-  on this stack; the replay's same-name re-snapshot would collide).
-  Live-verified: j04 7m24s→2m04s, j07 21m16s→8m09s; both reruns fully
-  green; lab guests destroyed after. Traps hit live: listsnapshot name
-  is $2 (arrow is $1); the driver's own new run dir must be filtered
-  from the source-run glob (it reads "running"); `[[ a == b ]] ||
-  continue` KEEPS the equal case — the inverted guard broke that filter.
-- j08-prereq-decline + j09-prereq-apt-failure journeys (installer failure
-  paths): itf_journey_run_installer gained [expected-rc];
-  stage_install factored into prepare_install + install so the failure
-  journeys share tooling/download/check. j09 breaks apt via a dead-proxy
-  drop-in (deterministic; removed + verified healing at the end). Both
-  assert graceful rc-1 abort, the exact user-facing message, and a
-  deployment-free guest. NOT yet run live (first runs pending; they need
-  a fresh stage_os install each).
-- Docs: itf README roadmap Phase 3→complete + 3.5 row; journeys/README
-  rerun contract + j06–j09 rows (j06/j07 rows were missing) + j01 row
-  trimmed to actual scope; dev-guide "Fast re-verification" section;
-  tests/AGENTS.md gained the itf discoverability section. Site rebuilt.
-- test-itf-driver: +8 rerun tests (subprocess refusals/spec-writing via
-  sandboxed ITF_RUNS_DIR + in-process rollback-branch units), 21 total.
-- Full suite green (98 suites). Everything above is uncommitted on top
-  of 0.129.0 (a964289).
+## 2026-10-25 — Development cycle wrap-up (code review pass)
 
-## 2026-10-23 (latest) — ITF todo 1: stage_os rerun (committed in 0.130.0)
+Ran the 7-step wrap-up over the uncommitted cycle tree (strict-mode
+campaign + hotfixes, j10/F-025, payload e2e matrix).
 
-- `itf_journey_stage_os` gained the `--rerun` branch mirroring
-  stage_from_template: resolve the guest from rerun-guests.tsv, presence
-  + os-installed checkpoint gates, stale-snapshot sweep, rollback, IP/ssh
-  re-discovery. j08/j09 iterations skip the ~15–20 min Debian install.
-- stage_os-specific trap: the rollback RESTORES the os-installed
-  snapshot's VM config, which still carries the installer-time freeze:1
-  (only the paired resume ever unfroze it) — so the `set --freeze 0`
-  clear must sit BETWEEN rollback and start (a pre-rollback clear
-  reverts with the config). Clones hit the same inherited flag via
-  itf_guest_clone; here it needed its own step.
-- Driver wording generalized (as-cloned / os-installed) in itf usage
-  header + rerun-source INFO step; docs updated (tests/AGENTS.md, itf
-  README quick-start, journeys/README rerun section, dev-guide Fast
-  re-verification).
-- test-itf-driver: +2 stage_os tests (rerun rollback ordering incl.
-  rollback→freeze-clear→start law; fresh-path dispatch). j08 first live
-  run launched (validates the journey as authored + seeds the
-  os-installed checkpoint); j08 --rerun live verification follows.
-- Live verification (zfstestvm1): j08 fresh 14m03s PASSED (also the
-  journey's first-ever live run — validates it as authored, seeds
-  os-installed); j08 --rerun 1m37s PASSED, all six rerun-branch steps
-  green (presence, checkpoint, rollback, freeze clear, start, IP/ssh —
-  same IP rediscovered, proving the guest actually booted unfrozen).
-  Lab guest 8001 destroyed after verification.
-
-## 2026-10-23 — Parallel-repo infrastructure (no code changes)
-
-- Discovered pub2 had been created as a linked WORKTREE of pub by mistake
-  (pub2/.git was a gitdir file into pub's .git) — shared refs/config caused
-  cross-talk between sessions. User confirmed it was unintended; converted
-  pub2 to an INDEPENDENT clone at 3713eff: saved the uncommitted
-  SESSION_NOTES diff, `git worktree remove --force`, re-cloned pub into the
-  pub2 path, `reset --hard` to recover the checkout (first attempt failed
-  because the shell cwd was the deleted directory), restored the lane
-  checkout (PROMPTQUEUE2) and re-applied the notes patch. pub's working
-  tree untouched throughout (its ~30 uncommitted files intact).
-- Remotes now: pub2 has origin=GitHub (publication only, per user) +
-  sibling remote `pub` (local path); pub has origin + sibling `pub2`.
-  Fetch verified both ways. GitHub untouched.
-- Lane merge cycle settled: commit each repo's session leftovers
-  (SESSION_NOTES/PREEXISTING conflict at merge; interleaved by the agent)
-  → in pub, fetch pub2 and merge the lane branch into main → in pub2,
-  fetch pub and `git merge --ff-only main`. Re-clone refresh rejected
-  (destroys uncommitted/untracked work). Lane discipline: one branch
-  worked in only one repo at a time.
-- Memory dirs of both projects are now symlinks to
-  ~/.zcode/cli/memories/zfsutilities-shared/ (pub's 48 memories + merged
-  parallel-lane entries; pre-swap backups as memory-backup-2026-10-23/
-  beside each). Future third repo: normal clone + sibling remotes +
-  symlink the new project's memory dir to the same store.
-
-## 2026-10-23 — iSCSI resilience M1: pool-resident state export
-
-Milestone M1 of the iSCSI resilience plan (`/NFS1/dan(NFS1)/zfsutilities-plan/
-iSCSI resilience plan`), executed alone per the one-milestone-at-a-time cycle.
-M2–M6 remain; PREEXISTING.md entry stays until M6.
-
-- `lib/iscsi-lib.sh`: dependency loading now guarded on node-lib's
-  `pool_to_target` (zfsdelfs still gets deps loaded; repair/export skip the
-  re-load). Added the shared discovery section factored out of
-  repair-iscsi-luns: `is_vm_backstore_name`, `parse_backstores`,
-  `parse_target_luns`, `discover_zvols`, plus new `parse_target_acls`
-  (node-lib probe_target_usage's documented IQN character-class pattern).
-- `bin/repair-iscsi-luns`: sources the lib via `REPAIR_ISCSI_LUNS_ISCSI_LIB`
-  knob; the four parse functions moved out verbatim (behavior unchanged).
-- New `bin/export-iscsi-state` (storage host, silent single-node exit):
-  collects live topology, emits deterministic JSON
-  (`<pool>/zfsutilities/iscsi-state.json`: version/generated/host/
-  iqn_prefix/storage_ip/targets{iqn}{acls,luns{idx→backstore}}/
-  backstores{name}{dev,target,lun}), copies node.conf beside it, writes
-  every ONLINE pool in pool_list() (dataset created on first use, atomic
-  tmp+mv, offline pools WARN+skip, zero-writes=FATAL). `--check` compares
-  live vs newest map (by generated timestamp) and prints DRIFT lines
-  (exit 1 on drift). Degraded-state fence ADDED beyond the plan text:
-  refuses to record fewer backstores than the manifest (fallback: newest
-  map) expects unless `--force` — a half-restored LIO tree must not
-  overwrite the recovery authority (mirrors safe-iscsi-save's gate).
-- `bin/safe-iscsi-save`: invokes export-iscsi-state after manifest
-  regen, best-effort (`SAFE_ISCSI_SAVE_EXPORT_ISCSI_STATE` knob; WARN only
-  on failure/missing). Map is now as fresh as the last LUN change.
-- Tests: new `tests/test-export-iscsi-state` (16 tests incl. golden JSON,
-  dataset-create, offline skip, degraded refuse/force, drift, no-map);
-  test-safe-iscsi-save extended (hook invoked / failure non-fatal /
-  missing warns); test-repair-iscsi-luns sources the real lib via the new
-  knob (14 stay green).
-- Docs: data-structures.md (iscsi-state.json section), two-node.md
-  (export-iscsi-state section + Jump-to + safe-iscsi-save flow step 9 and
-  called-modules), messages/index.md (export-iscsi-state + safe-iscsi-save
-  hook rows). commands.md unchanged — it holds no two-node command index;
-  all two-node scripts document in two-node.md.
-- Pool-policy pickup verified at code level (zfsbuildfsarray: no includes
-  ⇒ entire pool subtree included, so `<pool>/zfsutilities` is snapshotted
-  by pool-wide policies). The in-ITF verification lands with M6's journeys
-  (M1 wrote no journey — disclosed in the M1 report).
-
-## 2026-10-23 — M2: reconcile engine (bin/reconcile-iscsi-state)
-
-Executed milestone 2 of the iSCSI-resilience plan (`/NFS1/dan(NFS1)/
-zfsutilities-plan/iSCSI resilience plan`), alone, per the milestone cycle.
-M3–M6 remain; PREEXISTING.md entry stays until M6.
-
-- New `bin/reconcile-iscsi-state` (storage host, silent single-node exit):
-  reads the newest pool map (`--from <file>` for an older snapshot), refuses
-  maps generated on another host, then plans/applies create-only recovery per
-  map backstore whose zvol exists — backstore create (emulate_tpu=1), LUN at
-  the RECORDED number, explicit-mode ACL rebind (demo-mode TPGs left alone,
-  self-generating; note printed). Identity conflicts refused per item with
-  evidence + continue (dev mismatch / mapped at different target-or-LUN /
-  slot held by another backstore / target missing live → setup-iscsi-targets
-  pointer); zvol-gone entries skipped. Finishers: encrypted re-flag into
-  iscsi-encrypted-luns.conf (conf regresses with the OS disk), manifest
-  regen FROM THE ENSURED SET (derived state — keeps safe-iscsi-save's
-  degraded gate consistent post-restore), safe-iscsi-save (hook suppressed),
-  export-iscsi-state refresh ONLY on complete reconciles (partial refresh
-  would destroy skipped entries = the recovery authority), rescan-storage.
-  VM-config cross-check via list-vm-disks --gather-vm-info over ssh:
-  still-missing refs reported with map identity + item outcome; no-entry
-  refs listed with candidate unexported zvols (never guessed); unreachable
-  compute host WARNs and continues. `--dry-run` (annotated cross-check,
-  exit 1 on conflicts), `--yes`, y/N prompt otherwise. Exit 1 on
-  refuses/apply failures/still-missing refs; skips alone exit 0.
-- `bin/safe-iscsi-save`: new `SAFE_ISCSI_SAVE_SKIP_EXPORT_ISCSI_STATE=1`
-  knob — reconcile owns the map-refresh decision; INFO line when suppressed.
-- `lib/iscsi-lib.sh`: `read_json_string_field` + `newest_iscsi_state_map`
-  (+ ISCSI_STATE_FILENAME default) moved here from export-iscsi-state so
-  export and reconcile resolve the same newest map; export's private copies
-  removed (call sites renamed; STATE_FILENAME now derives from the lib
-  default so writes and discovery cannot drift).
-- Knob resolution moved into `resolve_runtime_paths()` re-run by main() —
-  top-level `VAR="${KNOB:-default}"` assignments are evaluated at source
-  time in tests, freezing pre-mock defaults (bug caught by the suite).
-- Tests: new `tests/test-reconcile-iscsi-state` (19: loads/single-node/
-  no-map/host-mismatch/--from missing+explicit/clean restore/dry-run/
-  slot-conflict/different-lun/dev-conflict/missing-zvol skip+preserve/
-  encrypted re-flag/explicit ACL+mapped_lun/no-entry+candidates/unreachable/
-  target-missing/prompt-decline/idempotent). Mock fidelity: targetcli mock
-  APPLIES creates to its fixtures so post-apply re-collection inside main()
-  sees the new topology; log assertions capture stderr (the eval'd script
-  reinstates bashinit's log_msg). Base map JSON rendered once and copied
-  (python-startup budget); awk read_json_string_field override in this suite
-  (python original covered by test-export-iscsi-state). Suite ~7s (soft
-  budget 5s — warning only). test-safe-iscsi-save +1 (suppression honored),
-  now 13.
-- Docs: two-node.md (reconcile-iscsi-state section + Jump-to + safe-iscsi-save
-  step 9 + manifest-actions row), data-structures.md (manifest/encrypted-conf
-  maintainer lists + state-map "recovery consumer" bullet),
-  messages/index.md (reconcile section + suppression row).
-
-## 2026-10-24 — Development cycle wrap-up (code review pass)
-
-Ran the 7-step wrap-up over the uncommitted M1+M2 working tree.
-
-- Step 1: Zensical recheck — 0.0.72, still no 1.x, hold stands. iSCSI
-  resilience entry annotated (M1–M2 landed, uncommitted; M3–M6 stay in the
-  milestone cycle — not executed, no milestone named this turn).
-- Step 2 (coding policies + shellcheck + ruff): all clean; fixed two
-  undeclared loop variables in reconcile-iscsi-state (`init` in
-  plan_reconciliation, `zvol` in main). Discovered + parked: coding-policies'
-  `set -euo pipefail` vs the unmigrated iSCSI/two-node bashinit family
-  (strict mode lands via named campaigns — test-strict-mode guards the 13
-  migrated orchestrators; this family was never in one). New PREEXISTING
-  entry.
-- Step 3 (test review): added test-reconcile-iscsi-state save-failure test —
-  which exposed a real defect: a safe-iscsi-save failure did NOT contribute
-  to reconcile's exit code (FATAL logged, exit 0). Fixed: `_save_failed` now
-  sets rc=1; two-node.md return-code row updated. Added
-  test-export-iscsi-state degraded-fence map-fallback test (manifest
-  missing — the core post-restore shape). Affected suites green (4 iSCSI +
-  8 wider: zfsdelfs, send-receive x2, switch-version, uninstall,
-  module-dependencies, strict-mode, no-debug-hooks).
-- Step 5: docs diffs reviewed vs implementation (accurate); docs integrity
-  23 passed; mkdocs site rebuilt (known Material-vs-MkDocs-2.0 warning only).
-- Step 6: full run (no soaks): 100 suites, all passed, 1 env-conditional
-  skip (rootcheck as-root on non-root dev host), 0 failures.
+- Step 1/4: PREEXISTING triage — no actionable entries (Zensical hold
+  rechecked at 0.0.72, still no 1.x; infra-vdev abeyance; iSCSI M5–M6
+  user-cycle). Zensical recheck line added; iSCSI entry's progress note
+  refreshed (M3+M4 shipped in the pub2 lane, 0.131.0 unpushed).
+- Step 2 (standards): ruff had 23 violations, all in the new e2e Python
+  files — fixed (unused noqa/import bindings, percent/format → f-strings,
+  import sort, subprocess check=False on the wrapper that implements its
+  own check, four unused local bindings dropped keeping the side-effect
+  calls); 3 new files reformatted (repo now 254/254 format-clean);
+  run-e2e-container's 111-char docker line restructured (pytest command
+  built in a variable — the SC2086 directive became unnecessary) and the
+  documented shellcheck glob extended with share/dev/* in
+  coding-policies.md; the ZFSU-INPUT marker regex in e2e_support got its
+  policy-required profuse documentation. shellcheck -S warning clean over
+  the full documented glob.
+- Step 3 (tests): suites reviewed — none obsolete; the ten
+  strict-leak restore idioms and the new suites are consistent. Added the
+  missing structural guard test_final_statement_is_exit_safe to
+  test-strict-mode (a strict script's last statement may not be an
+  unfenced A && B chain — the new-vm-disk single-node rc-1 bug class);
+  red-proven by reintroducing the bug shape (fails with the diagnostic),
+  green when restored. e2e pytest gating verified as non-root (mutation
+  scenarios self-skip by design); zfshold-referencing python suites green.
+- Step 5 (docs): added zfshold's two new message rows (duplicate INFO /
+  failure WARN) and corrected the module section's behavior line and
+  return-code table; added the upgrade trust-on-first-upgrade
+  baseline-capture INFO row (the no-baseline WARN row stays — that branch
+  remains); coding-policies shellcheck glob update (step 2). Docs
+  integrity suite passed; mkdocs site rebuilt (known Material-vs-MkDocs-2.0
+  warning only).
+- Step 6 (full run, no soaks): all suites passed; single bash
+  env-conditional skip (rootcheck as-root on the non-root dev host) plus
+  the e2e suites' pool-gated scenario skips; five suites slightly over
+  the soft 5s timing budget (warning only, no failures).
 - Step 7: codebase frozen at this point (no commit — awaiting user
   confirmation per Hard Rules).
-

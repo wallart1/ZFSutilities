@@ -13,6 +13,8 @@
 #
 # Install to: /usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns on the storage host
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -82,7 +84,7 @@ while IFS=: read -r name device target; do
     full_iqn="${iqn_prefix}:${target}"
 
     # Look up original LUN number to preserve stable device paths on the compute host
-    lun_num=$(lookup_lun_number "$name" "$full_iqn")
+    lun_num=$(lookup_lun_number "$name" "$full_iqn" || true)
 
     targetcli /backstores/block create "$name" "$device" >/dev/null 2>&1
     if [[ -n "$lun_num" ]]; then

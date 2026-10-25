@@ -12,6 +12,10 @@ UNINSTALL_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/uninstall
 # Source the real uninstall script for direct function tests. rootcheck is
 # already mocked by test-lib.sh, so the root check is bypassed.
 source "$UNINSTALL_SCRIPT"
+# The script's strict line leaks into this test shell at the source point;
+# restore the test harness's own option state so a failing test reports
+# normally instead of aborting the suite.
+set +euo pipefail
 
 # Override the script's built-in ask_yn so tests can drive it with mock_ask_yn.
 ask_yn() {
@@ -789,7 +793,11 @@ test_config_load_survives_unset_legacy_vars() {
     local strip_defaults
     strip_defaults='s/\$\{(ZFSUTILITIES_LEGACY_(CONFIG_PATH|CONFIG_DIR|HISTORY_PATH|'
     strip_defaults+='PROFILES_DIR|NEXTSNAP_FILE|OFFSITE_NEXTSNAP_FILE)):-[^}]*\}/\${\1}/g'
-    sed -E "$strip_defaults" "$UNINSTALL_SCRIPT" > "$tmpdir/stripped"
+    # Also drop the script's strict line: the red control isolates the F-010
+    # defect (unset legacy vars under set -u); full strict mode would abort
+    # the stripped copy during sourcing for unrelated reasons.
+    sed -E -e "$strip_defaults" -e '/^set -euo pipefail$/d' \
+        "$UNINSTALL_SCRIPT" > "$tmpdir/stripped"
     printf '#!/usr/bin/bash\nbashinit() { return 0; }\n' > "$tmpdir/bashinit"
     printf '#!/usr/bin/bash\nrootcheck() { true; }\n' > "$tmpdir/rootcheck"
     chmod +x "$tmpdir/rootcheck"

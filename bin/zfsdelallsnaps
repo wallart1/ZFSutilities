@@ -30,9 +30,9 @@ function delallsnaps {
     source_helper zfslockmanager
 
     local snap
-    local save_autoproceed=$autoproceed
+    local save_autoproceed="${autoproceed:-}"
 
-    if [[ $1 = '' ]]; then
+    if [[ "${1:-}" = '' ]]; then
         die "A dataset must be specified."
     else
         zfsdelallsnaps_fs=$1
@@ -48,11 +48,11 @@ function delallsnaps {
     unset zfsdelsnapsfind
     if [[ $2 != '' ]]; then zfsdelsnapsfind="$2"; fi
 
-    if [[ $releaseholds = '' ]]; then releaseholds='N'; fi
-    if [[ $3 = 'releaseholds' ]]; then
+    if [[ "${releaseholds:-}" = '' ]]; then releaseholds='N'; fi
+    if [[ "${3:-}" = 'releaseholds' ]]; then
         releaseholds='Y'
         release='releaseholds'
-        if [[ ${#releaseholds_tags[@]} -eq 0 ]]; then
+        if [[ -z "${releaseholds_tags[*]+x}" || ${#releaseholds_tags[@]} -eq 0 ]]; then
             releaseholds_tags=('offsite-*')
         fi
     else
@@ -60,12 +60,12 @@ function delallsnaps {
         release=''
     fi
     local -a recurse_args=()
-    if [[ $4 = 'recursive' ]]; then
+    if [[ "${4:-}" = 'recursive' ]]; then
         recurse_args=(-r)
         autoproceed='N'
     fi
 
-    if [[ "$5" != '' ]]; then overrides "$5"; fi
+    if [[ "${5:-}" != '' ]]; then overrides "$5"; fi
 
     readarray -t snaparray < <(zfs list "${recurse_args[@]}" -Ho name -t snapshot \
         "$zfsdelallsnaps_fs" 2> /dev/null)
@@ -78,12 +78,12 @@ function delallsnaps {
         autoproceed=$save_autoproceed
         return 0
     else
-        if [[ $zfsdelsnapsfind != "" ]]; then
+        if [[ "${zfsdelsnapsfind:-}" != "" ]]; then
             for ((i=0; i<${#snaparray[@]}; i++)); do
                 # If search string is not found
                 if [[ ${snaparray[i]} != *"$zfsdelsnapsfind"* ]]; then
                     snaparray=("${snaparray[@]:0:$i}" "${snaparray[@]:$((i+1))}")  # delete the item
-                    ((i--))     # Adjust i so that it points to the item before the deleted item
+                    ((i--)) || true   # Adjust i to the entry before the deleted item
                 fi
             done
         fi
@@ -108,7 +108,7 @@ function delallsnaps {
                 local age_days=$(( (now - snap_creation) / 86400 ))
                 printf "%-60s  (%d days old)\n" "$snap" "$age_days"
             done
-            if [[ $autoproceed != "Y" ]]; then
+            if [[ "${autoproceed:-}" != "Y" ]]; then
                 ask_line "Press enter to continue."
             fi
             local _delallsnaps_failed=0
@@ -127,4 +127,4 @@ function delallsnaps {
     autoproceed=$save_autoproceed
     return 0
 }
-if calledbybash; then delallsnaps "$1" "$2" "$3" "$4" "$5"; fi
+if calledbybash; then delallsnaps "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}"; fi

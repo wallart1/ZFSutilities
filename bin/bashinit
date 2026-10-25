@@ -74,15 +74,21 @@ function find_zfsutility_script {
     local bin_dir="${ZFSUTILITIES_BIN_DIR:-/usr/local/lib/zfsutilities/bin}"
     local current_bin_dir="${ZFSUTILITIES_CURRENT_BIN_DIR:-/usr/local/lib/zfsutilities/current/bin}"
     local system_lib_dir="${ZFSUTILITIES_SYSTEM_LIB_DIR:-/usr/local/lib}"
+    # ${mydir:-}: strict callers (set -u) may source bashinit and resolve a
+    # helper before the bashinit function has set $mydir (zfsdelfs does,
+    # deferring bashinit to its entry function for library use). An empty
+    # mydir makes the sibling candidates miss and resolution fall through
+    # to the deployment directories — the pre-strict behaviour.
+    local search_dir="${mydir:-}"
     local candidate
     for candidate in \
-        "$mydir/$name" \
-        "$mydir/lib/$name" \
-        "$mydir/python/$name" \
-        "$mydir/share/$name" \
-        "$mydir/../lib/$name" \
-        "$mydir/../python/$name" \
-        "$mydir/../share/$name" \
+        "$search_dir/$name" \
+        "$search_dir/lib/$name" \
+        "$search_dir/python/$name" \
+        "$search_dir/share/$name" \
+        "$search_dir/../lib/$name" \
+        "$search_dir/../python/$name" \
+        "$search_dir/../share/$name" \
         "$bin_dir/$name" \
         "$current_bin_dir/$name" \
         "$system_lib_dir/$name"; do

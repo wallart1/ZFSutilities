@@ -116,6 +116,7 @@ by rerunning the journey on a dev-built tarball.  See
 | 2.5 | post-install baseline template (`qm template` + full clone): j02/j03 convert to clone-start, j04 validates; journeys begin at the installed state without reinstalling | complete |
 | 3 | two-node cycle: compute-role base host + PVE-ISO compute template, P2P cross-node link, j05 two-node install + first-LUN verify | complete |
 | 3.5 | fast re-verification (`journey run --rerun`: rollback to `as-cloned` instead of re-cloning) + installer failure paths (j08 prereq decline, j09 apt failure) | complete |
-| 3+ | release upgrades, GUI automation, further failure injection, OS matrix (more template profiles) | planned |
+| 3.6 | release upgrades (j10): stale-template clone → `upgrade-zfsutilities` decline/scan/salvage/deploy-not-activated → `switch-version` → retention verify → up-to-date rerun | complete |
+| 3+ | GUI automation, further failure injection, OS matrix (more template profiles) | planned |
 
 Developer-facing detail: `docs/docs/developer-guide/integrated-testing.md`.

@@ -7,6 +7,8 @@
 # Install to: /usr/local/lib/zfsutilities/bin/list-vm-disks on BOTH the storage and compute hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -85,7 +87,8 @@ build_vm_disk_map() {
         vmid=$(basename "$conf" .conf)
         [[ "$vmid" =~ ^[0-9]+$ ]] || continue
 
-        name=$(grep '^name:' "$conf" 2>/dev/null | head -1 | cut -d: -f2-)
+        # || true: a config without a name line is normal (defaults to "-").
+        name=$(grep '^name:' "$conf" 2>/dev/null | head -1 | cut -d: -f2- || true)
         name="${name#"${name%%[![:space:]]*}"}"
         [[ -n "$name" ]] && name="${name%$'\r'}"
         [[ -z "$name" ]] && name="-"
@@ -198,7 +201,9 @@ build_host_device_map() {
             fi
         done
         [[ -n "$_known" ]] || continue
-        devpath=$(readlink -f "$link" 2>/dev/null)
+        # || true: a by-path link can vanish between ls and readlink on a
+        # live system; the -b test below skips it.
+        devpath=$(readlink -f "$link" 2>/dev/null || true)
         [[ -b "$devpath" ]] || continue
         dev=$(basename "$devpath")
         host_dev["${targetshort}:${lun}"]="/dev/${dev}"
@@ -476,7 +481,7 @@ emit_lun_data() {
     local backstores target line lun bsname zvol size origin clone_info targetshort
     local rest
     local -a rec_target=() rec_lun=() rec_bsname=() rec_zvol=()
-    backstores=$(targetcli /backstores/block ls 2>/dev/null)
+    backstores=$(targetcli /backstores/block ls 2>/dev/null || true)
 
     # First pass: collect the LUN records from targetcli in listing order.
     while IFS= read -r target; do
@@ -491,7 +496,9 @@ emit_lun_data() {
             [[ -z "$lun" || -z "$bsname" ]] && continue
 
             zvol=""
-            rest=$(echo "$backstores" | grep -F " ${bsname} ")
+            # || true: a LUN on a backstore missing from the listing (or not
+            # backed by a zvol) is skipped below.
+            rest=$(echo "$backstores" | grep -F " ${bsname} " || true)
             rest="${rest#*/dev/zvol/}"
             [[ "$rest" == */dev/zvol/* ]] || zvol="${rest%%[ )]*}"
             [[ -z "$zvol" ]] && continue
@@ -754,8 +761,8 @@ parse_vm_data() {
     local record_type disk_id
 
     while IFS='|' read -r -a fields; do
-        record_type="${fields[0]}"
-        disk_id="${fields[1]}"
+        record_type="${fields[0]:-}"
+        disk_id="${fields[1]:-}"
         case "$record_type" in
             VM)
                 vm_map_vmid["$disk_id"]="${fields[2]}"
@@ -815,7 +822,7 @@ print_two_node_output() {
     echo ""
 
     while IFS='|' read -r -a fields; do
-        [[ "${fields[0]}" == "LUN" ]] || continue
+        [[ "${fields[0]:-}" == "LUN" ]] || continue
 
         local targetshort="${fields[1]}" lun="${fields[2]}" bsname="${fields[3]}"
         local size="${fields[5]}" clone_info="${fields[6]}"
@@ -840,7 +847,9 @@ print_two_node_output() {
             "$size" "$host_cell" "$guest_cell" "$clone_info")")
     done <<< "$lun_data"
 
-    [[ -n "$current_target" ]] && _flush_disk_table
+    # || true: an empty inventory (no LUN records) is a valid result, and a
+    # trailing [[ ]] && list would otherwise return 1 under set -e.
+    [[ -n "$current_target" ]] && _flush_disk_table || true
 }
 
 # --- Single-node mode ---------------------------------------------------------

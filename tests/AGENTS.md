@@ -34,7 +34,8 @@ scratch VMs or reason from unit mocks alone.
 
 - `tests/integrated/itf journey list` — available journeys (fresh install,
   uninstall/reinstall, leftovers, baseline, two-node, guest-probe,
-  unarchive iSCSI rebuild, prereq decline, apt failure).
+  unarchive iSCSI rebuild, prereq decline, apt failure, release upgrade,
+  GUI payload e2e matrix).
 - `tests/integrated/itf journey run <name>` — full run; clone-start
   journeys reach the post-install point in minutes (no OS reinstall).
 - `tests/integrated/itf journey run <name> --rerun` — re-verify a fix on
@@ -47,3 +48,19 @@ scratch VMs or reason from unit mocks alone.
   with a repair-plan proposal — never fixed inside a guest.
 - Overview and safety model: `tests/integrated/README.md` and
   `docs/docs/developer-guide/integrated-testing.md`.
+
+## GUI payload e2e matrix
+
+Payload-level changes (anything the GUI drives through
+`offsite_runner`/`command_builders`/BackupRunner, or the strict-mode
+orchestrators) get exercised by the payload e2e matrix instead of hand
+smoke tests — real builders, real runner, real pools:
+
+- Dev container (read-only layer): `share/dev/run-e2e-container`
+- Dev host under sudo: `tests/python/test_offsite_e2e.py` +
+  `tests/python/test_backup_payload_e2e.py` (full matrix on the host's
+  zfstest pools)
+- ITF guest (full matrix, disposable): journey `j11-payload-e2e`
+- Scenarios live once in `tests/python/e2e_support.py`; add new payload
+  behaviors there with the right level (`none`/`read`/`mutation`) and
+  engine (`gui` input-hold protocol / `cli` protocol-off).

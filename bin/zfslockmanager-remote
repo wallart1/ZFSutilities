@@ -21,6 +21,8 @@
 #   cleanup
 #       Remove stale locks and print the count removed.
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -60,8 +62,8 @@ _remote_agent_lock_json() {
 }
 
 cmd_hold() {
-    local dataset="$1"
-    local type="$2"
+    local dataset="${1:-}"
+    local type="${2:-}"
     local description="${3:-}"
 
     if [[ -z "$dataset" || -z "$type" ]]; then
@@ -95,8 +97,8 @@ cmd_hold() {
 }
 
 cmd_check() {
-    local dataset="$1"
-    local type="$2"
+    local dataset="${1:-}"
+    local type="${2:-}"
 
     if [[ -z "$dataset" || -z "$type" ]]; then
         echo "ERROR: check requires dataset and type" >&2
@@ -138,7 +140,7 @@ cmd_list() {
 }
 
 cmd_release() {
-    local lockfile="$1"
+    local lockfile="${1:-}"
     if [[ -z "$lockfile" ]]; then
         echo "ERROR: release requires a lock file path" >&2
         exit 2

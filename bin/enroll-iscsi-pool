@@ -30,6 +30,8 @@
 #     ENROLL_ISCSI_TEST_MODE        Skip the sourced-main guard (tests only)
 # Returns: 0 on success (or nothing to do), 1 on failure
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -230,7 +232,7 @@ main() {
         case "$arg" in
             --dry-run)             dry_run=true ;;
             --update-config-only)  update_config_only=true ;;
-            -h|--help)             usage; return 0 ;;
+            -h|--help)             usage || true; return 0 ;;
             --*)
                 log_msg "FATAL: Unknown option: $arg"
                 usage

@@ -86,12 +86,12 @@ zfssnapbuild() {
         exec {lock_fd}>&-
         return 1
     fi
-    if [[ $1 != "" ]];              then local label=$1; fi
-    if [[ $label = "" ]];           then local label="@dailybackup"; fi
+    if [[ "${1:-}" != "" ]];         then local label=$1; fi
+    if [[ "${label:-}" = "" ]];      then local label="@dailybackup"; fi
     if [[ ${label:0:1} != '@' ]];   then local label='@'$label; fi
     local currdate
     currdate=$(snapname_timestamp)
-    if [[ $bucket = "" ]]; then
+    if [[ "${bucket:-}" = "" ]]; then
         # Determine backup bucket: d=daily, w=weekly, m=monthly
         # Monthly takes precedence if the 1st falls on a Sunday.
         # The bucket follows the UTC instant encoded in the name (one clock).

@@ -51,6 +51,10 @@ source "$mydir/bin/zfslockctl" 2>>"$_TEST_LOG_FILE"
 eval "$_test_log_msg_copy"
 eval "$_test_source_helper_copy"
 unset _test_log_msg_copy _test_source_helper_copy
+# The script's strict line leaks into this test shell at the source point;
+# restore the test harness's own option state so a failing test reports
+# normally instead of aborting the suite.
+set +euo pipefail
 
 # ---------------------------------------------------------------------------
 # Background-process helpers

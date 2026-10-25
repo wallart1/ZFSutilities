@@ -89,6 +89,10 @@ export ENROLL_ISCSI_SETUP_TARGETS="setup-iscsi-targets"
 export ENROLL_ISCSI_RESCAN_STORAGE="rescan-storage"
 script_text=$(cat "$mydir/bin/enroll-iscsi-pool")
 eval "$script_text"
+# The script's strict line leaks into this test shell at the eval point;
+# restore the test harness's own option state so a failing test reports
+# normally instead of aborting the suite.
+set +euo pipefail
 
 # The evaluated script re-sources bashinit, which replaces test-lib.sh's
 # log_msg mock with the real implementation. Restore a capturing mock so log

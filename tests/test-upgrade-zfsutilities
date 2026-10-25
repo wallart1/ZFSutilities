@@ -687,8 +687,8 @@ test_untagged_version_detects_without_diff() {
     if [[ $failed -eq 0 ]]; then test_pass; else test_fail "untagged detection failed"; fi
 }
 
-test_unverifiable_host_requires_consent_flow() {
-    test_start "no manifest and no tarball marks the host unverifiable but proceeds"
+test_no_baseline_captures_manifest() {
+    test_start "no manifest and no tarball captures a baseline manifest and proceeds"
     local tmpdir output rc
     _setup_upgrade_env tmpdir
     _make_fake_release "$tmpdir" 0.1.0
@@ -703,15 +703,67 @@ test_unverifiable_host_requires_consent_flow() {
     rc=$?
     local failed=0
     [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc"; }
-    [[ "$output" == *"CANNOT be detected"* ]] \
-        || { failed=1; echo "    missing cannot-verify warning"; }
+    [[ "$output" == *"A baseline manifest was captured"* ]] \
+        || { failed=1; echo "    missing baseline-capture notice"; }
+    [[ "$output" != *"CANNOT be detected"* ]] \
+        || { failed=1; echo "    capture must replace the cannot-verify warning"; }
+    [[ -s "$ZFSUTILITIES_VERSION_BASE/versions/0.1.0/MANIFEST.sha256" ]] \
+        || { failed=1; echo "    no manifest captured"; }
+    # The captured manifest is canonical: identical to hashing the tree
+    # now — the pre-existing hotfix is part of the captured state, which
+    # is exactly the trust-on-first-upgrade limitation the notice states.
+    [[ "$(upgrade_lib_hash_tree "$ZFSUTILITIES_VERSION_BASE/versions/0.1.0")" \
+        == "$(cat "$ZFSUTILITIES_VERSION_BASE/versions/0.1.0/MANIFEST.sha256")" ]] \
+        || { failed=1; echo "    captured manifest diverges from the tree"; }
     [[ ! -d "$ZFSUTILITIES_VERSION_BASE/salvaged-changes" ]] \
-        || { failed=1; echo "    nothing to salvage on an unverifiable host"; }
+        || { failed=1; echo "    nothing is salvageable against a just-captured baseline"; }
     [[ "$(cat "$FAKE_DEPLOY_MARKER")" == "deploy-version 0.2.0" ]] \
         || { failed=1; echo "    deploy-version not called"; }
     [[ -z "$(cat "$FAKE_SWITCH_MARKER")" ]] || { failed=1; echo "    nothing may be activated"; }
+    [[ "$(cat "$ZFSUTILITIES_VERSION_BASE/versions/0.1.0/bin/onescript" 2>/dev/null)" \
+        == *"local hotfix"* ]] \
+        || { failed=1; echo "    capture must not touch the deployed tree"; }
     _teardown_upgrade_env "$tmpdir"
-    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "unverifiable-host flow failed"; fi
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "baseline-capture flow failed"; fi
+}
+
+test_no_baseline_remote_target_captures_manifest() {
+    test_start "remote target without baseline gets its manifest captured on-host"
+    local tmpdir output rc
+    _setup_upgrade_env tmpdir
+    _make_fake_release "$tmpdir" 0.1.0
+    _make_fake_release "$tmpdir" 0.2.0
+    _make_latest_json "$tmpdir" v0.2.0
+    _make_host_state "$ZFSUTILITIES_VERSION_BASE" 0.1.0 "$tmpdir"
+
+    local rb1="$tmpdir/remote-h1"
+    _make_host_state "$rb1" 0.1.0 "$tmpdir" 0
+    # Both host trees are in place; only now withdraw the active
+    # version's tarball so the remote (manifest-less) host has no
+    # baseline source.  The local host keeps its manifest.
+    rm -f "$tmpdir/gh/tag-v0.1.0.tar.gz"
+    printf 'DEPLOY_GROUP_prod="fakehost1"\n' > "$ZFSUTILITIES_SYSTEM_CONFIG_DIR/deploy.conf"
+    printf 'fakehost1 %s\n' "$rb1" > "$tmpdir/hostmap"
+    _write_transport_shims "$tmpdir" "$tmpdir/hostmap"
+
+    output=$(printf 'y\n' | "$tmpdir/upgrade-zfsutilities" 2>&1)
+    rc=$?
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc"; }
+    [[ "$output" == *"fakehost1"*"A baseline manifest was captured"* ]] \
+        || { failed=1; echo "    remote capture notice missing"; }
+    [[ -s "$rb1/versions/0.1.0/MANIFEST.sha256" ]] \
+        || { failed=1; echo "    remote manifest not captured"; }
+    [[ "$(upgrade_lib_hash_tree "$rb1/versions/0.1.0")" \
+        == "$(cat "$rb1/versions/0.1.0/MANIFEST.sha256")" ]] \
+        || { failed=1; echo "    remote manifest diverges from the remote tree"; }
+    # The local host keeps its own manifest: clean, no capture needed.
+    [[ "$output" == *"(this host)"*"No local modifications"* ]] \
+        || { failed=1; echo "    local host wrongly left the clean path"; }
+    [[ "$(cat "$FAKE_DEPLOY_MARKER")" == "deploy-version 0.2.0" ]] \
+        || { failed=1; echo "    deploy-version not called"; }
+    _teardown_upgrade_env "$tmpdir"
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "remote baseline capture failed"; fi
 }
 
 test_ssh_failure_aborts_before_changes() {
@@ -796,7 +848,8 @@ test_happy_path_with_local_changes
 test_decline_at_salvage_prompt
 test_manifestless_tree_falls_back_to_tarball
 test_untagged_version_detects_without_diff
-test_unverifiable_host_requires_consent_flow
+test_no_baseline_captures_manifest
+test_no_baseline_remote_target_captures_manifest
 test_ssh_failure_aborts_before_changes
 test_two_node_node_conf_enumeration() {
     test_start "modern node.conf drives enumeration when no deploy.conf exists"

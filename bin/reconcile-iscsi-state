@@ -31,6 +31,8 @@
 #
 # Install to: /usr/local/lib/zfsutilities/bin/reconcile-iscsi-state on the storage host
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -488,7 +490,8 @@ apply_changes() {
     for name in "${_plan_create_bs[@]}"; do
         dev="${_map_bs_dev[$name]}"
         if targetcli /backstores/block create "$name" "$dev" >/dev/null 2>&1; then
-            targetcli "/backstores/block/${name}" set attribute emulate_tpu=1 >/dev/null 2>&1
+            targetcli "/backstores/block/${name}" set attribute emulate_tpu=1 \
+                >/dev/null 2>&1 || true
             log_msg "INFO:   ✓ Created backstore $name -> $dev"
         else
             log_msg "FATAL: Failed to create backstore $name"
@@ -550,7 +553,7 @@ reflag_encrypted_luns() {
     for name in "${_ensured_names[@]}"; do
         [[ "${_item_outcome[$name]:-}" == failed:* ]] && continue
         dataset="${_map_bs_dev[$name]#/dev/zvol/}"
-        enc=$(zfs get -H -o value encryption "$dataset" 2>/dev/null)
+        enc=$(zfs get -H -o value encryption "$dataset" 2>/dev/null || true)
         [[ -z "$enc" || "$enc" == "off" || "$enc" == "-" ]] && continue
         iqn="${_map_bs_target[$name]:-}"
         if [[ -z "$iqn" ]]; then
@@ -692,7 +695,7 @@ vm_cross_check() {
     _vm_missing_refs=0
     _vm_noentry_refs=0
     local vm_data
-    vm_data=$(vm_gather_cmd)
+    vm_data=$(vm_gather_cmd || true)
     if [[ -z "$vm_data" ]]; then
         log_msg "WARN: Could not gather VM disk references from ${compute_host} —" \
             "VM-config cross-check skipped"
@@ -762,7 +765,7 @@ if [[ -n "$map_from" ]]; then
     fi
     map_file="$map_from"
 else
-    map_file=$(newest_iscsi_state_map)
+    map_file=$(newest_iscsi_state_map || true)
     if [[ -z "$map_file" ]]; then
         log_msg "FATAL: No ${ISCSI_STATE_FILENAME} found on any online pool —" \
             "run export-iscsi-state first"
@@ -833,14 +836,14 @@ echo ""
 # as it now stands.
 collect_live_lun_state
 
-reflag_encrypted_luns
+reflag_encrypted_luns || true
 regenerate_manifest_from_map || true
-run_safe_iscsi_save
+run_safe_iscsi_save || true
 echo ""
 
-refresh_pool_map
+refresh_pool_map || true
 vm_cross_check
-rescan_compute_host
+rescan_compute_host || true
 
 # Summary
 echo ""

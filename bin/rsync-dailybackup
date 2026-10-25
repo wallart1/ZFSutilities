@@ -9,6 +9,8 @@
 # It is both sourced by bin/zfsdailybackup (which calls the rsync-dailybackup
 # function) and executed directly on remote hosts after being scp'd there.
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"

@@ -8,6 +8,8 @@
 # Run from:   either host — storage-side and compute-side work run through
 #             node-lib's on_storage/on_compute transports
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -156,7 +158,8 @@ bashinit
 
 source_helper zfslockmanager
 
-snap=$(zfs list -H -t snapshot -o name -S creation "$zvol" 2>/dev/null | head -1)
+set -euo pipefail
+snap=$(zfs list -H -t snapshot -o name -S creation "$zvol" 2>/dev/null | head -1 || true)
 if [[ -z "$snap" ]]; then
     zfslock_init
     if ! zfslock_acquire "$zvol" "w" "archive-vm auto-snapshot"; then
@@ -282,6 +285,7 @@ mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bi
 source "$mydir/bashinit"
 bashinit
 
+set -euo pipefail
 vmid="$1"
 shift
 
@@ -312,7 +316,7 @@ while [[ $# -ge 2 ]]; do
     # Map the backstore to its /dev/zvol path (pool/dataset).
     zvol_line=$(targetcli /backstores/block ls 2>/dev/null \
         | grep -F " ${backstore} " \
-        | head -1)
+        | head -1 || true)
     zvol=""
     if [[ "$zvol_line" == *"/dev/zvol/"* ]]; then
         zvol="${zvol_line#*"/dev/zvol/"}"
@@ -362,7 +366,7 @@ vmid="$1"
 vm_status=$(on_compute "$vmid" << 'CPEOF'
 qm status "$1" 2>/dev/null | awk '{print $2}'
 CPEOF
-)
+) || true
 [[ "$vm_status" == "stopped" ]] || {
     log_msg "FATAL: VM ${vmid} is not stopped (status: ${vm_status:-unknown})."
     log_msg "FATAL: The VM must be stopped before it can be archived."
@@ -391,6 +395,7 @@ mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bi
 source "$mydir/bashinit"
 bashinit
 
+set -euo pipefail
 vmid="$1"
 # index() does a fixed-string substring test (no regex literals).
 zfs list -H -o name,origin \
@@ -446,7 +451,8 @@ if [[ -n "$clone_info" ]]; then
             # copy in under the original name, so every owning clone VM must
             # already be stopped before any severance work starts.
             for clone_vmid in "${!clone_vmids[@]}"; do
-                clone_status=$(qm status "$clone_vmid" 2>/dev/null | awk '{print $2}')
+                clone_status=$(qm status "$clone_vmid" 2>/dev/null | awk '{print $2}' \
+                    || true)
                 [[ "$clone_status" == "stopped" ]] || {
                     log_msg "FATAL: Clone VM ${clone_vmid} is not stopped" \
                         "(status: ${clone_status:-unknown})."
@@ -631,6 +637,7 @@ engine=$(find_zfsutility_script archive-engine.sh)
 }
 source "$engine"
 
+set -euo pipefail
 zvol="$1"
 snap_name="$2"
 archive_dataset="$3"
@@ -686,7 +693,7 @@ done | sort -u); do
     found_lun=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
         | grep -F "block/${backstore} " \
         | grep -oE 'lun[0-9]+' \
-        | head -1)
+        | head -1 || true)
     found_lun="${found_lun#lun}"
     if [[ -n "$found_lun" ]]; then
         target="$t"
@@ -799,7 +806,7 @@ zfs get -H -o value volblocksize "$archive_dataset"
 grep '^METHOD=' "${archive_mount}/${zvol}.disk_info" 2>/dev/null | cut -d= -f2
 cat "${archive_mount}/${zvol}.original_volblocksize" 2>/dev/null
 SSHEOF
-            )
+            ) || true
             mapfile -t vfields <<< "$verify_out"
             size="${vfields[0]:-}"
             vbs="${vfields[1]:-}"
@@ -866,7 +873,7 @@ declare -a leftover_zvols=()
 
 if is_single_node; then
     log_msg "INFO:   Removing disks..."
-    zfsdelfs_path=$(find_zfsutility_script zfsdelfs)
+    zfsdelfs_path=$(find_zfsutility_script zfsdelfs || true)
     [[ -n "$zfsdelfs_path" ]] || {
         log_msg "FATAL: Could not locate zfsdelfs"
         exit 1
@@ -885,7 +892,7 @@ else
     log_msg "INFO:   Removing disks and iSCSI resources..."
     for zvol in $zvols; do
         # Extract disk number from zvol path (e.g. "...disk-0" -> "0").
-        disknum=$(disk_number_from_zvol "$zvol")
+        disknum=$(disk_number_from_zvol "$zvol" || true)
         pool="${zvol%%/*}"
         log_msg "INFO:     Removing disk ${disknum} from pool ${pool}..."
         if [[ "$my_host" == "$storage_host" ]]; then

@@ -167,10 +167,23 @@ init process (`xvfb-run` waits on a signal from `Xvfb` and misbehaves as PID
 volume/filesystem. `PYTHONDONTWRITEBYTECODE=1` keeps the run from leaving
 root-owned `__pycache__` directories throughout the user-owned checkout.
 Inside the container the run is
-green; the only skips are the soak suite (excluded from default runs) and the
-integration suite (no test pools in a container). A few individual tests that
+green; the only skips are the soak suite (excluded from default runs), the
+integration suite (no test pools in a container), and the payload e2e
+suites' pool-touching scenarios (see below). A few individual tests that
 inject failures through filesystem permissions also skip themselves when the
 suite runs as root (the container does), since root ignores mode bits.
+
+The GUI payload e2e suites (`tests/python/test_offsite_e2e.py`,
+`tests/python/test_backup_payload_e2e.py`) exercise the real payload
+builders and the real BackupRunner against real pools; their scenario
+levels and contexts are documented in the integrated-testing guide's
+"GUI payload e2e matrix" section. For the read-only layer (dry-run
+payloads plus the runner mechanics), run them in the dev container with
+the ZFS control device passed through — `share/dev/run-e2e-container`
+wraps exactly that (unprivileged `--device /dev/zfs` run; every
+dataset-mutating ioctl needs `CAP_SYS_ADMIN`, so mutating scenarios
+self-skip and the script verifies the host pool set is unchanged). The
+full matrix runs in the ITF guest via the `j11-payload-e2e` journey.
 
 `.github/workflows/tests.yml` runs on every push and pull request: install
 dependencies, run the suite under `xvfb-run -a`, then run the
@@ -425,7 +438,9 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_migration` | One-time state-file migration helper |
 | `test_node_config` | Two-node configuration loading and resolution |
 | `test_offsite_page` | Offsite tab UI, offsite pool detection, and config helpers |
+| `test_offsite_e2e` | GUI payload e2e (offsite family): real BackupRunner driven headless through a GLib main loop — pty stdin, input-hold REQ/ACK round trip, rc propagation — plus the offsite scenario matrix from `e2e_support` (chain steps with holds, incrementals, rollback, resume tokens, scrub pause, dry-run) against the zfstest pools; mutating scenarios self-skip where dataset mutations are unavailable |
 | `test_offsite_runner` | Offsite run command builders and pool detection |
+| `test_backup_payload_e2e` | GUI payload e2e (backup family): the backup send/receive payloads (full, incremental, destructive with hold preservation), the prune payload, the rsync wrapper, and the strict-mode-flipped leaf orchestrators (zfssend, zfsfullcopy, zfsrestore) plus the zfshold round trip — CLI orchestrators run protocol-off through the pty executor, as cron/terminal would |
 | `test_page_runners` | Backup/offsite/restore run handlers, session log preparation, auto-destination, pull-step activation |
 | `test_path_utils` | Shared path helpers mirroring bash `$mydir` / `find_zfsutility_script` behavior |
 | `test_paths` | Centralized path-resolution module (local and remote deployed layouts) |

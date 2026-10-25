@@ -7,6 +7,8 @@
 #
 # NOTE: ZFS supports online growth only. Shrinking is not supported.
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"

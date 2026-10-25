@@ -51,6 +51,8 @@
 #     $nextsnap / $doincrementals / $receive_s_option     Restored to their entry values on
 #                             return (callers' settings are preserved).
 
+set -euo pipefail
+
 function send-receive {
     local _sr_start_seconds=$SECONDS
 
@@ -92,9 +94,9 @@ function send-receive {
 
     abort_resume_token() {
         local dest="$1"
-        transfer_abort_resume_token "$dest"
+        transfer_abort_resume_token "$dest" || true
         zfslock_release "$lock_source"
-        zfslock_release "$lock_dest"; ((i--))
+        zfslock_release "$lock_dest"; ((i--)) || true
     }
 
     do_transfer() {
@@ -113,8 +115,8 @@ function send-receive {
                 "$fs$nextsnap" "$destfs$restorefs"; then
             if [[ "$desc" == "Send/receive"* ]]; then
                 log_msg "Are there holds on $destfs$restorefs snapshots?"
-                holds "$destfs" 1
-                holds "$destfs$restorefs" 1
+                holds "$destfs" 1 || true
+                holds "$destfs$restorefs" 1 || true
             fi
             zfslock_release "$lock_source"; zfslock_release "$lock_dest"; exit 8
         fi
@@ -130,8 +132,8 @@ function send-receive {
         fi
 
         local source_guid dest_guid
-        source_guid=$(zfs get -Hpo value guid "$source_snap" 2>/dev/null)
-        dest_guid=$(zfs get -Hpo value guid "$dest_snap" 2>/dev/null)
+        source_guid=$(zfs get -Hpo value guid "$source_snap" 2>/dev/null || true)
+        dest_guid=$(zfs get -Hpo value guid "$dest_snap" 2>/dev/null || true)
 
         if [[ "$source_guid" != "$dest_guid" ]]; then
             log_msg "FATAL: Verification failed — GUID mismatch for $dest_snap."
@@ -196,8 +198,8 @@ function send-receive {
     }
 
     check_running_vms_or_skip() {
-        local dest="$1" vm_check_rc
-        checkrunningvms "$dest"; vm_check_rc=$?
+        local dest="$1" vm_check_rc=0
+        checkrunningvms "$dest" || vm_check_rc=$?
         if [[ $vm_check_rc -eq 2 ]]; then
             log_msg "DEBUG: Proxmox tools not available - cannot check for running VMs."
             return 0
@@ -235,7 +237,7 @@ function send-receive {
                 log_msg "WARN: About to destroy destination dataset $dest AND all of its child" \
                     "datasets and snapshots, ignoring holds, in preparation for a full transfer" \
                     "from $fs."
-                ask_line "Press enter to continue."
+                ask_line "Press enter to continue." || true
             fi
             local saved_fsarray=("${fsarray[@]}")
             if ! autoproceed="$autoproceed" delfs "$dest"; then
@@ -249,9 +251,9 @@ function send-receive {
                 log_msg "WARN: About to delete all snapshots of destination dataset $dest," \
                     "ignoring holds, in preparation for a full transfer from $fs.\n\t(Child" \
                     "datasets will NOT be touched.)"
-                ask_line "Press enter to continue."
+                ask_line "Press enter to continue." || true
             fi
-            local _save_releaseholds_tags=("${releaseholds_tags[@]}")
+            local _save_releaseholds_tags=(${releaseholds_tags[@]+"${releaseholds_tags[@]}"})
             releaseholds_tags=('offsite-*')
             if ! delallsnaps "$dest" '' 'releaseholds'; then
                 releaseholds_tags=("${_save_releaseholds_tags[@]}")
@@ -274,7 +276,7 @@ function send-receive {
                 return 1
             fi
         elif [[ $rc = 0 ]]; then
-            [[ $commsnap_mostrecent = 'OLDEST' ]] && nextsnap=$commsnap
+            [[ ${commsnap_mostrecent:-} = 'OLDEST' ]] && nextsnap=$commsnap
         elif [[ $rc = 4 ]]; then
             # No common snapshot. If the destination dataset does not exist yet,
             # this is a new dataset (not a warning condition).
@@ -307,7 +309,7 @@ function send-receive {
             # awk '/^size/ {print $2}'  —  Extract byte size from incremental rollback dry-run.
             local rollback_datatosend
             rollback_datatosend=$(zfs send -nPc "${rollback_incremental_args[@]}" \
-                "$fs$nextsnap" 2>/dev/null | awk '/^size/ {print $2}')
+                "$fs$nextsnap" 2>/dev/null | awk '/^size/ {print $2}' || true)
             local _sz="(unknown)"
             if [[ -n "$rollback_datatosend" && "$rollback_datatosend" -gt 0 ]]; then
                 _sz=$(echo "$rollback_datatosend" | numfmt --to=iec-i)
@@ -352,9 +354,9 @@ function send-receive {
                 local response
                 local eof_count=0
                 while true; do
-                    ask_line $'\t'"$readprompt" response
-                    if [[ -z "$response" ]]; then
-                        ((eof_count++))
+                    ask_line $'\t'"$readprompt" response || true
+                    if [[ -z "${response:-}" ]]; then
+                        ((eof_count++)) || true
                         if [[ $eof_count -ge 3 ]];
                         then
                             log_msg "WARN: No interactive input — skipping $fs" \
@@ -380,9 +382,9 @@ function send-receive {
                     local _remaining_holds=""
                     autoproceed='Y'
                     for snap in "${snaparray_d[@]}"; do
-                        delallholds "$snap" 'offsite-*'
-                        if [[ -n "$ZFS_DELALLHOLDS_REMAINING_TAGS" ]]; then
-                            _remaining_holds+=" $snap:$ZFS_DELALLHOLDS_REMAINING_TAGS"
+                        delallholds "$snap" 'offsite-*' || true
+                        if [[ -n "${zfs_delallholds_remaining_tags:-}" ]]; then
+                            _remaining_holds+=" $snap:${zfs_delallholds_remaining_tags}"
                         fi
                     done
                     autoproceed="$_save_autoproceed"
@@ -406,38 +408,38 @@ function send-receive {
         return 0
     }
 
-    local entry_sourcefs="$sourcefs" entry_destfs="$destfs"
-    [[ $1 != '' ]] && sourcefs=$1
-    [[ $sourcefs = '' ]] && { log_msg "FATAL: sourcefs (\$1) must be specified."; exit 8; }
-    [[ $sourcefsremovequalifiers = '' ]] && sourcefsremovequalifiers=0
-    [[ $2 != '' ]] && destfs=$2
-    [[ $destfs = '' ]] && { log_msg "FATAL: destfs (\$2) must be specified."; exit 8; }
+    local entry_sourcefs="${sourcefs:-}" entry_destfs="${destfs:-}"
+    [[ ${1:-} != '' ]] && sourcefs=$1
+    [[ ${sourcefs:-} = '' ]] && { log_msg "FATAL: sourcefs (\$1) must be specified."; exit 8; }
+    [[ ${sourcefsremovequalifiers:-} = '' ]] && sourcefsremovequalifiers=0
+    [[ ${2:-} != '' ]] && destfs=$2
+    [[ ${destfs:-} = '' ]] && { log_msg "FATAL: destfs (\$2) must be specified."; exit 8; }
     local overrides=''
-    [[ $3 != '' ]] && overrides=$3
-    [[ $nextsnap = "" ]] && nextsnap=$(zfssnapbuild)
-    [[ $doincrementals = "" ]] && doincrementals="Y"
-    [[ $dointermediates = "" ]] && dointermediates="Y"
-    [[ $releaseholds = "" ]] && releaseholds="N"
-    [[ $preserve_target_holds = "" ]] && preserve_target_holds='Y'
-    [[ $autoproceed = "" ]] && autoproceed='Y'
+    [[ ${3:-} != '' ]] && overrides=$3
+    [[ ${nextsnap:-} = "" ]] && nextsnap=$(zfssnapbuild)
+    [[ ${doincrementals:-} = "" ]] && doincrementals="Y"
+    [[ ${dointermediates:-} = "" ]] && dointermediates="Y"
+    [[ ${releaseholds:-} = "" ]] && releaseholds="N"
+    [[ ${preserve_target_holds:-} = "" ]] && preserve_target_holds='Y'
+    [[ ${autoproceed:-} = "" ]] && autoproceed='Y'
     # Glob prefix check on declare -p output: test whether a variable is an
     # indexed or associative array.
     #   "declare -a arr"  -> array
     #   "declare -A hash" -> array
     #   "declare -x var"  -> not an array
     local _decl
-    _decl=$(declare -p includes 2>/dev/null)
+    _decl=$(declare -p includes 2>/dev/null || true)
     [[ "$_decl" == 'declare -a'* || "$_decl" == 'declare -A'* ]] || includes=()
-    _decl=$(declare -p excludes 2>/dev/null)
+    _decl=$(declare -p excludes 2>/dev/null || true)
     [[ "$_decl" == 'declare -a'* || "$_decl" == 'declare -A'* ]] || excludes=()
-    [[ $force = "" ]] && force="N"
-    [[ $allow_destructive = "" ]] && allow_destructive="N"
-    [[ $receive_F_option != 'F' ]] && receive_F_option=''
-    [[ $receive_s_option != 's' ]] && receive_s_option=''
-    [[ $resumablethreshold = '' ]] && resumablethreshold=$(( 50 * 1000 * 1000 * 1000))
-    [[ $pvthreshold = '' ]] && pvthreshold=$(( 300 * 1000 * 1000 ))
-    [[ $transfer_rate_limit = '' ]] && transfer_rate_limit=''
-    [[ $dryrun = '' ]] && dryrun='N'
+    [[ ${force:-} = "" ]] && force="N"
+    [[ ${allow_destructive:-} = "" ]] && allow_destructive="N"
+    [[ ${receive_F_option:-} != 'F' ]] && receive_F_option=''
+    [[ ${receive_s_option:-} != 's' ]] && receive_s_option=''
+    [[ ${resumablethreshold:-} = '' ]] && resumablethreshold=$(( 50 * 1000 * 1000 * 1000))
+    [[ ${pvthreshold:-} = '' ]] && pvthreshold=$(( 300 * 1000 * 1000 ))
+    [[ ${transfer_rate_limit:-} = '' ]] && transfer_rate_limit=''
+    [[ ${dryrun:-} = '' ]] && dryrun='N'
 
     [[ $overrides != '' ]] && overrides "$overrides"
 
@@ -473,7 +475,7 @@ function send-receive {
 
     for (( i=0; i<${#fsarray[@]}; i++)); do
         local _origin
-        _origin=$(zfs list -H -o origin "${fsarray[$i]}" 2>/dev/null)
+        _origin=$(zfs list -H -o origin "${fsarray[$i]}" 2>/dev/null || true)
         if [[ "$_origin" != "-" && -n "$_origin" ]]; then
             log_msg "VERB: Dataset ${fsarray[$i]} is a ZFS clone." \
                 "It will be backed up as a regular dataset."
@@ -482,7 +484,7 @@ function send-receive {
 
     log_msg "INFO: About to copy the following datasets to $destfs:"
     for (( i=0; i<${#fsarray[@]}; i++)); do echo "${fsarray[i]}"; done
-    [[ $autoproceed != "Y" ]] && ask_line "Press enter to continue."
+    [[ $autoproceed != "Y" ]] && ask_line "Press enter to continue." || true
     autoproceed='Y'
 
     save_doincrementals=$doincrementals
@@ -500,8 +502,9 @@ function send-receive {
 
         local lock_rc lock_source="" lock_dest=""
 
-        zfslock_wait_or_resolve "$fs" "w" "send-receive source: $fs -> $destfs$restorefs"
-        lock_rc=$?
+        lock_rc=0
+        zfslock_wait_or_resolve "$fs" "w" "send-receive source: $fs -> $destfs$restorefs" \
+            || lock_rc=$?
         if [[ $lock_rc -eq 1 ]]; then
             log_msg "WARN: Backup operation aborted by user due to lock conflict on source '$fs'."
             exit "$zfslock_rc_abort_operation"
@@ -510,9 +513,9 @@ function send-receive {
         fi
         lock_source="$zfslock_id"
 
+        lock_rc=0
         zfslock_wait_or_resolve "$destfs$restorefs" "w" \
-            "send-receive dest: $fs -> $destfs$restorefs"
-        lock_rc=$?
+            "send-receive dest: $fs -> $destfs$restorefs" || lock_rc=$?
         if [[ $lock_rc -eq 1 ]]; then
             log_msg "WARN: Backup operation aborted by user due to lock conflict on destination" \
                 "'$destfs$restorefs'."
@@ -527,7 +530,8 @@ function send-receive {
 
         if [[ "$nextsnap" == 'notneeded' ]]; then
             local _newest_snap
-            _newest_snap=$(zfs list -t snap -o name -S createtxg -H -d1 "$fs" 2>/dev/null | head -1)
+            _newest_snap=$(zfs list -t snap -o name -S createtxg -H -d1 "$fs" \
+                2>/dev/null | head -1 || true)
             if [[ -z "$_newest_snap" ]]; then
                 log_msg "WARN: No snapshots found on $fs (nextsnap=notneeded). Skipping."
                 zfslock_release "$lock_source"
@@ -547,7 +551,7 @@ function send-receive {
 
         if zfs list "$destfs""$restorefs" > /dev/null 2>&1; then
             resumetoken=$(zfs get -H receive_resume_token -o value \
-                "$destfs""$restorefs" 2>/dev/null)
+                "$destfs""$restorefs" 2>/dev/null || true)
             if [[ -n "$resumetoken" && "$resumetoken" != '-' ]]; then
                 log_msg "INFO: Found resume token for $destfs$restorefs." \
                     "Preparing to resume transfer."
@@ -576,9 +580,9 @@ function send-receive {
                             local choice
                             local eof_count=0
                             while true; do
-                                ask_line "Choice [A/S/Q]: " choice
-                                if [[ -z "$choice" ]]; then
-                                    ((eof_count++))
+                                ask_line "Choice [A/S/Q]: " choice || true
+                                if [[ -z "${choice:-}" ]]; then
+                                    ((eof_count++)) || true
                                     if [[ $eof_count -ge 3 ]]; then
                                         log_msg "WARN: No interactive input — skipping $fs" \
                                             "(resume token error)"
@@ -628,7 +632,10 @@ function send-receive {
                     log_msg "INFO: zfs receive $receiveoptions $destfs$restorefs"
                     do_transfer "$sendoptions" "$receiveoptions" "$pvcommand" "$datatosend" \
                         "resume transfer for $destfs$restorefs"
-                    zfslock_release "$lock_source"; zfslock_release "$lock_dest"; ((i--)); continue
+                    zfslock_release "$lock_source"
+                    zfslock_release "$lock_dest"
+                    ((i--)) || true
+                    continue
                 fi
             fi
         else
@@ -648,11 +655,11 @@ function send-receive {
         # $nextsnap when $commsnap_mostrecent='OLDEST'.
         local target_snap="$nextsnap"
 
-        commsnap=$(getcommonsnap "$fs" "$destfs""$restorefs")
-        rc=$?
+        rc=0
+        commsnap=$(getcommonsnap "$fs" "$destfs""$restorefs") || rc=$?
 
-        handle_commsnap_rc "$rc" "$fs" "$destfs$restorefs"
-        _hcrc=$?
+        _hcrc=0
+        handle_commsnap_rc "$rc" "$fs" "$destfs$restorefs" || _hcrc=$?
         if [[ $_hcrc -ne 0 ]]; then
             zfslock_release "$lock_source"; zfslock_release "$lock_dest"
             if [[ $_hcrc -eq 1 ]]; then
@@ -689,7 +696,7 @@ function send-receive {
 
         local base_snap=""
         if [[ $doincrementals != "Y" ]]; then
-            if [[ $commsnap_mostrecent = 'OLDEST' && -n "$commsnap" ]]; then
+            if [[ ${commsnap_mostrecent:-} = 'OLDEST' && -n "$commsnap" ]]; then
                 base_snap="$commsnap"
             else
                 local -a _base_snaparray=()
@@ -712,13 +719,14 @@ function send-receive {
         local _size_unavailable=0
         if [[ $doincrementals = "Y" ]]; then
             datatosend=$(zfs send -nPc "${incremental_args[@]}" "$fs$nextsnap" 2>/dev/null \
-                | awk '/^size/ {print $2}')
+                | awk '/^size/ {print $2}' || true)
             [[ -z "$datatosend" ]] && _size_unavailable=1
         else
             local full_size incr_size
-            full_size=$(zfs send -nPcw "$fs$base_snap" 2>/dev/null | awk '/^size/ {print $2}')
+            full_size=$(zfs send -nPcw "$fs$base_snap" 2>/dev/null \
+                | awk '/^size/ {print $2}' || true)
             incr_size=$(zfs send -nPcw -I "$fs$base_snap" "$fs$target_snap" 2>/dev/null \
-                | awk '/^size/ {print $2}')
+                | awk '/^size/ {print $2}' || true)
             datatosend=$(( ${full_size:-0} + ${incr_size:-0} ))
             [[ -z "$full_size" && -z "$incr_size" ]] && _size_unavailable=1
         fi
@@ -741,7 +749,7 @@ function send-receive {
         if [[ $doincrementals != "Y" ]]; then
             log_msg "INFO: Doing a full copy of $fs to $destfs$restorefs."
             receive_F_option='F'
-            [[ $autoproceed != 'Y' ]] && ask_line "Press enter to continue."
+            [[ $autoproceed != 'Y' ]] && ask_line "Press enter to continue." || true
         fi
 
         if [[ $do_prepare -eq 1 ]]; then
@@ -765,9 +773,9 @@ function send-receive {
                     exit 8
                 fi
                 if [[ $dryrun = 'N' ]]; then
+                    lock_rc=0
                     zfslock_wait_or_resolve "$destfs$restorefs" "w" \
-                        "send-receive dest: $fs -> $destfs$restorefs"
-                    lock_rc=$?
+                        "send-receive dest: $fs -> $destfs$restorefs" || lock_rc=$?
                     if [[ $lock_rc -eq 1 ]]; then
                         log_msg "WARN: Backup operation aborted by user due to" \
                             "lock conflict on destination '$destfs$restorefs'."
@@ -786,7 +794,7 @@ function send-receive {
 
         if [[ $doincrementals = "Y" ]]; then
             transfer_step "$datatosend"
-            if [[ $dryrun = 'N' && "$verify_after_transfer" = 'Y' ]]; then
+            if [[ $dryrun = 'N' && "${verify_after_transfer:-}" = 'Y' ]]; then
                 verify_transfer "$fs" "$destfs$restorefs" "$nextsnap"
             fi
         else
@@ -804,11 +812,11 @@ function send-receive {
                 receive_F_option=''
                 transfer_step "${incr_size:-0}"
                 receive_F_option="$saved_receive_F_option"
-                if [[ $dryrun = 'N' && "$verify_after_transfer" = 'Y' ]]; then
+                if [[ $dryrun = 'N' && "${verify_after_transfer:-}" = 'Y' ]]; then
                     verify_transfer "$fs" "$destfs$restorefs" "$nextsnap"
                 fi
             else
-                if [[ $dryrun = 'N' && "$verify_after_transfer" = 'Y' ]]; then
+                if [[ $dryrun = 'N' && "${verify_after_transfer:-}" = 'Y' ]]; then
                     verify_transfer "$fs" "$destfs$restorefs" "$nextsnap"
                 fi
             fi
@@ -841,7 +849,7 @@ function send-receive {
     destfs="$entry_destfs"
     if [[ -n "${ZFSUTILITIES_LOG_FILE:-}" && "${ZFSUTILITIES_LOG_INHERIT:-}" != "Y" ]]; then
         local _sr_duration=$((SECONDS - _sr_start_seconds))
-        echo "# END: rc=0, duration=${_sr_duration}s" >> "$ZFSUTILITIES_LOG_FILE"
+        echo "# END: rc=0, duration=${_sr_duration}s" >> "$ZFSUTILITIES_LOG_FILE" || true
     fi
     return 0
 }  # End of send-receive function

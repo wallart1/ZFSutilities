@@ -196,7 +196,11 @@ journey_main() {
                 safe-iscsi-save
                 targetcli /iscsi ls
             '" > "$ITF_RUN_DIR/target-deleted.log" 2>&1 \
-        && ! grep -q "${live_target}" "$ITF_RUN_DIR/target-deleted.log"; then
+        && ! grep -qE "o- ${live_target} " "$ITF_RUN_DIR/target-deleted.log"; then
+        # The listing lines carry the "o- <iqn>" tree prefix; the deleted
+        # target may legitimately be NAMED in export-iscsi-state's
+        # missing-target WARN (0.130.0 state-map hook), so a whole-log grep
+        # would false-fail here.
         itf_step pass "zfstest1 target destroyed" \
             "session logged out, target deleted, config saved"
     else

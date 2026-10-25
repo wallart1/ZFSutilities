@@ -149,6 +149,15 @@ itf_guest_put() {
         "$local_file" "root@${ip}:${remote_path}"
 }
 
+# itf_guest_get <guest-ip> <remote-path> <local-file>
+# Pull a file from the guest (same disposable-host ssh semantics as
+# itf_guest_put — e.g. a pristine-tree tarball captured guest-side).
+itf_guest_get() {
+    local ip="$1" remote_path="$2" local_file="$3"
+    scp -q "${_ITF_GUEST_SSH_OPTS[@]}" -o ConnectTimeout=10 \
+        "root@${ip}:${remote_path}" "$local_file"
+}
+
 # itf_wait_ssh <ip> [timeout-seconds]
 #
 # Polls until root@<ip> accepts passwordless SSH.  Default timeout 900s

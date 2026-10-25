@@ -1,0 +1,178 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-zfshold — Unit tests for the zfshold helper.
+#
+# The helper is called bare from the GUI's offsite payload (built by
+# python/offsite_runner.py), which sources zfs-send-receive and therefore
+# runs under set -euo pipefail. A "tag already exists" hold failure is a
+# designed outcome there — nested datasets are matched by both their own
+# call and their parent subtree call — so the helper must tolerate it
+# (INFO + rc 0) while still failing loudly (WARN + rc 1) on real hold
+# failures.
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+# Keep test-lib's quiet log_msg and lock stubs in place while zfshold's
+# bootstrap re-sources bashinit and zfslockmanager.
+_test_log_msg_copy=$(declare -f log_msg)
+source_helper() {
+    case "$1" in
+        rootcheck|zfslockmanager) return 0 ;;
+    esac
+    builtin source "$(find_zfsutility_script "$1")" "$@"
+}
+rootcheck() { true; }
+
+source "$old_mydir/bin/zfshold"
+# The sourced bootstrap re-enabled strict mode in this shell.
+set +euo pipefail
+eval "$_test_log_msg_copy"
+unset _test_log_msg_copy
+
+# ------------------------------------------------------------------------------
+# Mock zfs: snapshots come from an array; holds are tracked in an
+# associative array and mirror real zfs semantics (hold fails when the
+# tag is already present, holds lists name/tag columns).
+# ------------------------------------------------------------------------------
+declare -a _mock_snaps=()
+declare -gA _mock_holds=()
+
+install_default_zfs_mock() {
+    zfs() {
+        case "$1" in
+            list)
+                local s
+                for s in "${_mock_snaps[@]}"; do echo "$s"; done
+                return 0
+                ;;
+            hold)
+                local tag="$2" snap="$3"
+                if [[ "${_mock_holds[$snap]:-}" == *"$tag"* ]]; then
+                    echo "cannot create hold '$tag' on '$snap': hold already exists" >&2
+                    return 1
+                fi
+                _mock_holds[$snap]="${_mock_holds[$snap]:-}$tag "
+                return 0
+                ;;
+            holds)
+                # The -H flag may precede the snapshot; the snapshot is the
+                # last argument.
+                local snap="${*: -1}" t
+                for t in ${_mock_holds[$snap]:-}; do
+                    echo "$snap  $t  timestamp"
+                done
+                return 0
+                ;;
+            *)
+                return 0
+                ;;
+        esac
+    }
+}
+
+reset_mocks() {
+    _mock_snaps=()
+    _mock_holds=()
+    # Tests may install sabotage mocks (e.g. the real-failure test); every
+    # reset restores the faithful default.
+    install_default_zfs_mock
+    : > "$(get_test_log_file)"
+}
+
+# ------------------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------------------
+
+test_already_present_tag_is_info_not_failure() {
+    test_start "already-present hold tag logs INFO and returns 0"
+    reset_mocks
+    _mock_snaps=("pool/fs@snap-1")
+    _mock_holds["pool/fs@snap-1"]="offsite-dest "
+    zfshold offsite-dest "pool/fs" "@snap-1"
+    local rc=$?
+    local log
+    log=$(cat "$(get_test_log_file)")
+    local failed=0
+    [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc (duplicate must not fail)"; }
+    [[ "$log" == *"Hold offsite-dest already present on pool/fs@snap-1"* ]] \
+        || { failed=1; echo "    missing already-present INFO"; }
+    [[ "$log" != *"WARN"* ]] || { failed=1; echo "    no WARN expected"; }
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "duplicate hold mishandled"; fi
+}
+
+test_nested_dataset_duplicate_from_parent_subtree_hold() {
+    test_start "parent subtree hold followed by nested call stays rc 0"
+    reset_mocks
+    _mock_snaps=("pool/fs@snap-1" "pool/fs/nested@snap-1")
+    # First call holds the whole subtree (both snapshots).
+    zfshold offsite-dest "pool/fs" "@snap-1"
+    local rc1=$?
+    # Second call targets the nested dataset — its snapshot already holds
+    # the tag from the parent's subtree pass. This is the exact shape of
+    # the GUI offsite failure (xargs 123 under set -e).
+    zfshold offsite-dest "pool/fs/nested" "@snap-1"
+    local rc2=$?
+    local failed=0
+    [[ $rc1 -eq 0 ]] || { failed=1; echo "    subtree rc=$rc1"; }
+    [[ $rc2 -eq 0 ]] || { failed=1; echo "    nested rc=$rc2"; }
+    [[ "${_mock_holds[pool/fs/nested@snap-1]}" == *"offsite-dest"* ]] \
+        || { failed=1; echo "    nested snapshot lost its hold"; }
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "nested duplicate mishandled"; fi
+}
+
+test_real_hold_failure_is_loud() {
+    test_start "real hold failure logs WARN and returns 1"
+    reset_mocks
+    _mock_snaps=("pool/fs@snap-1")
+    # Sabotage: make every hold fail without the tag being present (the
+    # real-zfs shape of a genuine failure, e.g. a read-only pool).
+    zfs() {
+        case "$1" in
+            list) echo "pool/fs@snap-1"; return 0 ;;
+            hold) echo "cannot hold: pool is read-only" >&2; return 1 ;;
+            holds) return 0 ;;
+            *) return 0 ;;
+        esac
+    }
+    zfshold offsite-dest "pool/fs" "@snap-1"
+    local rc=$?
+    local log
+    log=$(cat "$(get_test_log_file)")
+    local failed=0
+    [[ $rc -eq 1 ]] || { failed=1; echo "    rc=$rc (real failure must fail)"; }
+    [[ "$log" == *"WARN: Could not apply hold offsite-dest to pool/fs@snap-1"* ]] \
+        || { failed=1; echo "    missing WARN"; }
+    if [[ $failed -eq 0 ]]; then test_pass; else test_fail "real failure silenced"; fi
+}
+
+test_no_matching_snapshots_returns_zero() {
+    test_start "no matching snapshots is rc 0 (historical behavior)"
+    reset_mocks
+    _mock_snaps=("pool/fs@other-snap")
+    zfshold offsite-dest "pool/fs" "@snap-1"
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then test_pass; else test_fail "rc=$rc on empty match"; fi
+}
+
+test_missing_pattern_argument_is_rejected() {
+    test_start "missing snapshot pattern is WARN + rc 1"
+    reset_mocks
+    zfshold offsite-dest "pool/fs" ""
+    local rc=$?
+    if [[ $rc -eq 1 ]]; then test_pass; else test_fail "rc=$rc on missing pattern"; fi
+}
+
+# =============================================================================
+# Run
+# =============================================================================
+
+test_already_present_tag_is_info_not_failure
+test_nested_dataset_duplicate_from_parent_subtree_hold
+test_real_hold_failure_is_loud
+test_no_matching_snapshots_returns_zero
+test_missing_pattern_argument_is_rejected
+
+test_summary

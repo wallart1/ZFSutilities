@@ -14,6 +14,8 @@
 #   --dry-run     Print actions without executing them.
 #   --help, -h    Show this help and exit.
 
+set -euo pipefail
+
 mydir=$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)
 
 # Source bashinit, tolerating a missing /root/bashinit symlink so the script

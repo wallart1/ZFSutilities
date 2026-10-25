@@ -16,6 +16,8 @@
 # Usage: sudo repair-iscsi-luns [--dry-run] [--force-relogin]
 # Install to: /usr/local/lib/zfsutilities/bin/repair-iscsi-luns on the storage host
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -314,8 +316,9 @@ mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 source "$mydir/bashinit"
 bashinit
 
+set -euo pipefail
         storage_ip="$1"
-        iscsiadm -m node -p "${storage_ip}:3260" -u
+        iscsiadm -m node -p "${storage_ip}:3260" -u || true
         sleep 1
         iscsiadm -m node -p "${storage_ip}:3260" -l
 SSHEOF
@@ -478,19 +481,19 @@ fi
 
 # Compute-side repair: always rescan, optionally re-login if requested/needed
 echo ""
-visible_before=$(count_visible_devices)
+visible_before=$(count_visible_devices || true)
 log_msg "INFO: Visible iSCSI devices on $compute_host before rescan: ${visible_before:-?}"
 
-rescan_compute_host
+rescan_compute_host || true
 
-visible_after=$(count_visible_devices)
+visible_after=$(count_visible_devices || true)
 log_msg "INFO: Visible iSCSI devices on $compute_host after rescan: ${visible_after:-?}"
 
 if [[ "$force_relogin" == true ]] && [[ "${visible_after:-0}" -le "${visible_before:-0}" ]]; then
     echo ""
     log_msg "WARN: Device count did not increase after rescan; attempting re-login"
     relogin_compute_host
-    visible_after=$(count_visible_devices)
+    visible_after=$(count_visible_devices || true)
     log_msg "INFO: Visible iSCSI devices after re-login: ${visible_after:-?}"
 fi
 
