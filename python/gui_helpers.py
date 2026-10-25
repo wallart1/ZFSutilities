@@ -334,9 +334,11 @@ def capped_treeview_scroll(view, row_target=TABLE_ROW_TARGET, fixed_rows=True):
     tables show 20 lines instead of collapsing to their content. The
     one-row allowance over the target absorbs a classic (non-overlay)
     horizontal scrollbar's height, so the target row count stays visible
-    with or without one. With ``fixed_rows=False`` (the Dashboard
-    convention) a short table keeps its natural height up to the same
-    cap. ``propagate_natural_height`` is essential — without it the
+    with or without one. With ``fixed_rows=False`` a short table keeps
+    its natural height up to the same cap (the Dashboard's Active Locks
+    table; the Dashboard Tasks list instead uses *fixed_rows* so its
+    window stays a constant ten rows whatever the list length).
+    ``propagate_natural_height`` is essential — without it the
     scrolled window's natural height is its ``min_content_height`` and
     the table collapses to a couple of rows.
     """

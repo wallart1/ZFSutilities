@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.131.0
+
+*Released 2026-10-24*
+
+### Added
+
+- **Merged Dashboard Tasks list.** The Dashboard's Recent Operations
+  and Running Tasks sections are replaced by one **Tasks** list — tasks
+  waiting for a lock, tasks running right now, and the ten most recent
+  completed operations, in reverse chronological order (rows whose
+  start time cannot be determined sort to the top). Each row shows the
+  task's start time and state: `Waiting since <time>`, `Running since
+  <start>` with progress where one exists (`Step N/M`, scrub
+  `% complete (ETA …)`, ZFS-native `% done`, surface-test `%`), or the
+  completed operation's highest message level. Start times come from
+  the runner sessions, `zpool status` scan lines, and `ps lstart=`;
+  the table keeps a constant ten-row window with its own scrollbar
+  when the list is longer.
+- **Remove Selected action (Dashboard).** Completed rows can be
+  removed from the Tasks list; removed rows stay hidden across
+  refreshes, and dismissal keys prune themselves once their entries
+  fall out of the ten-entry window. Removal only dismisses the row —
+  the history entry and its session log are kept, so the Logs tab's
+  success-rate metrics are unaffected.
+- **Waiting tasks are cancellable.** Cancel Selected Tasks now works
+  on waiting rows: a GUI runner's lock wait is interrupted (SIGINT),
+  and a waiting scheduled profile is stopped with SIGTERM after a
+  click-time re-check of the live PID (an entry that vanished since
+  the click warns instead of signalling).
+
+### Changed
+
+- **Performance tab last in the sidebar.** The Performance page moves
+  to the bottom of the navigation column, below Disks, Pools, and
+  Datasets; its persisted settings are unchanged.
+- **Next Run column drops the retention-bucket word.** The
+  parenthesized bucket suffix (`(weekly)` and friends) read as a run
+  frequency and is removed; the conditional UTC-edge translation hint
+  (`23:30 Sat = 03:30 Sun UTC — names dated Sun`) remains for
+  snapshot-creating profiles.
+
 ## 0.130.0
 
 *Released 2026-10-24*

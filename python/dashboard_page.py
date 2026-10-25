@@ -87,6 +87,22 @@ _SCRUB_CANCELED_RE = re.compile(
 )
 
 # ---------------------------------------------------------------------------
+# Regex: in progress since (.+)$
+# Purpose: Extract the start date of an in-progress ZFS-native operation
+#          (resilver / RAIDZ expand / vdev removal) from `zpool status`.
+# Group 1: The date string  e.g. "Sun May 10 00:24:03 2026"
+# Examples:
+#   "  scan: resilver (draid) in progress since Sun May 10 00:24:03 2026" -> match
+#   "  scan: resilvered 10G in 01:23:45 with 0 errors on Mon Jan 1 ..."  -> no match
+# Rationale: The Dashboard shows the start instant of every live task row.
+# Reached only for pools where parse_pool_operations found an operation, so
+# the similar scrub-in-progress line cannot collide here.
+_IN_PROGRESS_SINCE_RE = re.compile(r"in progress since (.+)$", re.MULTILINE)
+
+# Timestamp format `zpool status` scan lines and `ps -o lstart=` share.
+_ZFS_TIME_FORMAT = "%a %b %d %H:%M:%S %Y"
+
+# ---------------------------------------------------------------------------
 # Regex: ^\s*(\d+)\s*%
 # Purpose: Parse a capacity percentage string from `zpool list` output.
 # Group 1: The numeric percentage  e.g. "75"
@@ -234,6 +250,27 @@ def _log_file_from_pid_environ(pid):
     for item in data.split(b"\0"):
         if item.startswith(b"ZFSUTILITIES_LOG_FILE="):
             return item.split(b"=", 1)[1].decode("utf-8", errors="replace")
+    return None
+
+
+def _scheduled_start_iso(pid):
+    """Return a scheduled PID's start time as ISO, or None if unavailable.
+
+    ``ps -o lstart=`` renders the same local-time format as ``zpool status``
+    scan lines, so the shared parser applies.
+    """
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0:
+            return _zfs_time_to_iso(result.stdout.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
     return None
 
 
@@ -671,6 +708,45 @@ def _format_history_timestamp(ts):
         return str(ts)
 
 
+def _zfs_time_to_iso(text):
+    """Convert a `zpool status` / `ps lstart` timestamp to an ISO string.
+
+    Both render local-clock times like ``Sun May 10 00:24:03 2026``; the
+    parsed naive datetime is therefore interpreted as local time.  Returns
+    None for empty or unparseable input.
+    """
+    if not text or not isinstance(text, str):
+        return None
+    try:
+        dt = datetime.strptime(text.strip(), _ZFS_TIME_FORMAT)
+    except ValueError:
+        return None
+    return dt.astimezone().isoformat(timespec="seconds")
+
+
+def _epoch_to_local_iso(epoch):
+    """Convert an epoch timestamp to a local-timezone ISO string, or None."""
+    if not isinstance(epoch, (int, float)) or not epoch:
+        return None
+    try:
+        return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _iso_to_epoch(iso):
+    """Convert an ISO timestamp (naive = local) to epoch seconds, or None."""
+    if not iso or not isinstance(iso, str) or iso == "?":
+        return None
+    try:
+        dt = datetime.fromisoformat(iso)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.astimezone()
+    return dt.timestamp()
+
+
 _ISCSI_CONF = os.path.join(paths.get_system_config_dir(), "iscsi-encrypted-luns.conf")
 _LEGACY_ISCSI_CONF = "/etc/iscsi-encrypted-luns.conf"
 
@@ -1064,66 +1140,40 @@ def create_dashboard_page(app):
     app.dashboard_pool_frame.add(pool_box)
     box.pack_start(app.dashboard_pool_frame, False, False, 0)
 
-    # --- Section 3: Recent Operations ---
-    app.dashboard_ops_frame = _make_section_frame("Recent Operations")
-    # Columns: datetime, type, name, outcome (markup), log_file (hidden)
-    app.dashboard_ops_store = Gtk.ListStore(str, str, str, str, str)
-    app.dashboard_ops_view = Gtk.TreeView(model=app.dashboard_ops_store)
-    app.dashboard_ops_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
-    app.dashboard_ops_view.set_headers_visible(True)
-    app.dashboard_ops_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+    # --- Section 3: Tasks (waiting / running / completed) ---
+    app.dashboard_tasks_frame = _make_section_frame("Tasks")
+    # Columns: datetime, type, name, status (markup), then hidden:
+    # state, task_key, log_file, completed-key (dismissal identity)
+    app.dashboard_tasks_store = Gtk.ListStore(str, str, str, str, str, str, str, str)
+    app.dashboard_tasks_view = Gtk.TreeView(model=app.dashboard_tasks_store)
+    app.dashboard_tasks_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+    app.dashboard_tasks_view.set_headers_visible(True)
+    app.dashboard_tasks_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
 
     for col_idx, title_text, width in [
         (0, "Date / Time", 150),
-        (1, "Type", 70),
+        (1, "Type", 100),
         (2, "Name", 140),
-        (3, "Message Level", 90),
+        (3, "Status", 220),
     ]:
         r = Gtk.CellRendererText()
         r.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
         if col_idx == 0:
             set_monospace_font(r)
-        # Message Level column contains Pango markup (colored icons)
+        # Status column contains Pango markup (colored icons)
         attr = "markup" if col_idx == 3 else "text"
         col = Gtk.TreeViewColumn(title_text, r, **{attr: col_idx})
-        configure_treeview_column(col, width=width)
-        app.dashboard_ops_view.append_column(col)
-    app._ui_state.bind_treeview(app.dashboard_ops_view, "dashboard_ops_view")
-
-    ops_scrolled = capped_treeview_scroll(app.dashboard_ops_view, fixed_rows=False)
-
-    ops_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-    ops_box.set_margin_start(10)
-    ops_box.set_margin_end(10)
-    ops_box.set_margin_top(10)
-    ops_box.set_margin_bottom(10)
-    ops_box.pack_start(ops_scrolled, True, True, 0)
-    app.dashboard_ops_frame.add(ops_box)
-    box.pack_start(app.dashboard_ops_frame, False, False, 0)
-
-    # --- Section 4: Running Tasks ---
-    app.dashboard_proc_frame = _make_section_frame("Running Tasks")
-    # Columns: task, type, status, task_key (hidden), log_file (hidden)
-    app.dashboard_tasks_store = Gtk.ListStore(str, str, str, str, str)
-    app.dashboard_tasks_view = Gtk.TreeView(model=app.dashboard_tasks_store)
-    app.dashboard_tasks_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
-    app.dashboard_tasks_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
-
-    for col_idx, title_text, width in [
-        (0, "Task", 180),
-        (1, "Type", 100),
-        (2, "Status", 200),
-    ]:
-        r = Gtk.CellRendererText()
-        r.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
-        col = Gtk.TreeViewColumn(title_text, r, text=col_idx)
         configure_treeview_column(col, width=width)
         app.dashboard_tasks_view.append_column(col)
     app._ui_state.bind_treeview(app.dashboard_tasks_view, "dashboard_tasks_view")
 
     app.enable_treeview_copy(app.dashboard_tasks_view)
 
-    tasks_scrolled = capped_treeview_scroll(app.dashboard_tasks_view, fixed_rows=False)
+    # Keep the old sections' ten-row footprint: the window shows ten rows
+    # whatever the list length, and taller lists scroll inside it.
+    tasks_scrolled = capped_treeview_scroll(
+        app.dashboard_tasks_view, row_target=10, fixed_rows=True
+    )
 
     tasks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     tasks_box.set_margin_start(10)
@@ -1131,8 +1181,8 @@ def create_dashboard_page(app):
     tasks_box.set_margin_top(10)
     tasks_box.set_margin_bottom(10)
     tasks_box.pack_start(tasks_scrolled, True, True, 0)
-    app.dashboard_proc_frame.add(tasks_box)
-    box.pack_start(app.dashboard_proc_frame, False, False, 0)
+    app.dashboard_tasks_frame.add(tasks_box)
+    box.pack_start(app.dashboard_tasks_frame, False, False, 0)
 
     # --- Section 4a: Active Locks ---
     app.dashboard_locks_frame = _make_section_frame("Active Locks")
@@ -1329,10 +1379,9 @@ def _update_dashboard_ui(app, data):
     """
     _refresh_config_section_from_data(app, data["config_data"])
     _refresh_pool_section(app, data["pools"], data["scrub_states"], stale=data["pools_stale"])
-    _refresh_ops_section(app, data["recent"])
+    _refresh_tasks_section(app, tasks=data["tasks"], recent=data["recent"])
     _refresh_iscsi_section(app, data["missing_luns"], stale=data["iscsi_stale"])
     _refresh_warnings_section(app, data["warnings"])
-    _refresh_processes_section(app, tasks=data["tasks"])
     _refresh_active_locks_section(app, data["active_locks"])
 
     # Update the contextual "Fix Locks" button visibility
@@ -1340,9 +1389,8 @@ def _update_dashboard_ui(app, data):
 
     app.dashboard_config_frame.show_all()
     app.dashboard_pool_frame.show_all()
-    app.dashboard_ops_frame.show_all()
+    app.dashboard_tasks_frame.show_all()
     app.dashboard_warn_frame.show_all()
-    app.dashboard_proc_frame.show_all()
     app.dashboard_locks_frame.show_all()
 
     # iSCSI frame visibility depends on mode
@@ -1618,36 +1666,166 @@ def _refresh_pool_section(app, pools, scrub_states=None, stale=False):
             app.dashboard_pool_grid.attach(slbl, 3, row_idx, 1, 1)
 
 
-def _refresh_ops_section(app, recent):
-    """Clear and repopulate the Recent Operations list.
+# Statuses that carry no information beyond the row's start time.
+_GENERIC_RUNNING_STATUSES = ("Running", "In progress")
 
-    Preserves the current selection when the selected log file is still
-    present after refresh so that a background update does not drop the
-    row the user is about to act on.
+
+def _running_progress_text(task):
+    """Return the parenthetical progress for a running task row ('' if none).
+
+    Derived from the collector's display status: the generic "Running" /
+    "In progress" strings and PID identifiers add nothing the row does not
+    already show (the running format deliberately omits PIDs), while step
+    counters, scrub/ZFS percentages, and surface-test cells do.
     """
-    selection = app.dashboard_ops_view.get_selection()
-    model, selected_iter = selection.get_selected()
-    selected_log_file = model.get_value(selected_iter, 4) if selected_iter is not None else None
+    status = task.get("status", "")
+    if not status or status in _GENERIC_RUNNING_STATUSES:
+        return ""
+    if status.startswith(("PID ", "Waiting")):
+        return ""
+    return status
 
-    app.dashboard_ops_store.clear()
 
-    if not recent:
-        app.dashboard_ops_store.append(["No operations yet.", "", "", "", ""])
+def _live_task_row(task):
+    """Convert a collector task dict into a merged Tasks row dict."""
+    started = task.get("started")
+    if task.get("waiting_for_lock"):
+        state = "waiting"
+        since = task.get("wait_started") or started
+        if since:
+            status = f"Waiting since {_format_history_timestamp(since)}"
+        else:
+            status = "Waiting"
+    else:
+        state = "running"
+        if started:
+            status = f"Running since {_format_history_timestamp(started)}"
+        else:
+            status = "Running"
+        progress = _running_progress_text(task)
+        if progress:
+            status = f"{status} ({progress})"
+    return {
+        "dt_display": _format_history_timestamp(started) if started else "?",
+        "type": task.get("type", "?"),
+        "name": task.get("name", "?"),
+        "status": status,
+        "state": state,
+        "task_key": task.get("task_key", ""),
+        "log_file": task.get("log_file") or "",
+        "completed_key": "",
+        "sort_ts": _iso_to_epoch(started),
+    }
+
+
+def _completed_task_row(entry):
+    """Convert a history entry into a merged Tasks row dict."""
+    ts = entry.get("timestamp", "?")
+    return {
+        "dt_display": _format_history_timestamp(ts),
+        "type": entry.get("type", "?"),
+        "name": entry.get("name", "?"),
+        "status": _outcome_markup(entry),
+        "state": "completed",
+        "task_key": "",
+        "log_file": entry.get("log_file", ""),
+        "completed_key": _completed_task_key(entry),
+        "sort_ts": _iso_to_epoch(ts),
+    }
+
+
+def _completed_task_key(entry):
+    """Return the stable key that identifies a completed history entry.
+
+    The session-log path is unique per run; entries without one (older
+    runs) fall back to their timestamp and name.
+    """
+    return entry.get("log_file") or f"{entry.get('timestamp', '')}|{entry.get('name', '')}"
+
+
+def _dismissed_task_keys(app):
+    """Return the dismissed completed-task keys from the dashboard config."""
+    keys = get_dashboard_config(app.config).get("dismissed_tasks", [])
+    if isinstance(keys, list):
+        return {k for k in keys if isinstance(k, str)}
+    return set()
+
+
+def _save_dismissed_task_keys(app, keys):
+    """Persist the dismissal key set to the dashboard config."""
+    dashboard_cfg = get_dashboard_config(app.config)
+    dashboard_cfg["dismissed_tasks"] = sorted(keys)
+    save_dashboard_config(app.config, dashboard_cfg)
+
+
+def _refresh_tasks_section(app, tasks=None, recent=None):
+    """Clear and repopulate the merged Tasks list.
+
+    Rows come from the waiting/running collectors plus the newest
+    completed history entries, sorted reverse-chronologically by each
+    row's time (live rows use the task start, completed rows the
+    completion time); rows without a usable time sort to the top.
+    Completed entries the user removed stay hidden via their dismissal
+    keys, and keys that can no longer match the loaded history window
+    are pruned.  The current selection is preserved across the rebuild
+    for rows that survive (matched by task key or log file).
+    """
+    selection = app.dashboard_tasks_view.get_selection()
+    model, pathlist = selection.get_selected_rows()
+    keep_task_keys = set()
+    keep_log_files = set()
+    for path in pathlist:
+        tree_iter = model.get_iter(path)
+        task_key = model.get_value(tree_iter, 5)
+        log_file = model.get_value(tree_iter, 6)
+        if task_key:
+            keep_task_keys.add(task_key)
+        if log_file:
+            keep_log_files.add(log_file)
+
+    if tasks is None:
+        tasks = _collect_running_tasks(app)
+    if recent is None:
+        recent = _get_recent_entries(10)
+
+    dismissed = _dismissed_task_keys(app)
+    window_keys = {_completed_task_key(e) for e in recent}
+    effective_dismissed = dismissed & window_keys
+    if dismissed != effective_dismissed:
+        _save_dismissed_task_keys(app, effective_dismissed)
+    visible_recent = [e for e in recent if _completed_task_key(e) not in effective_dismissed]
+
+    rows = [_live_task_row(t) for t in tasks]
+    rows.extend(_completed_task_row(e) for e in visible_recent)
+    # Reverse chronological: timed rows newest-first, timeless rows on top.
+    rows.sort(key=lambda r: (r["sort_ts"] is not None, -(r["sort_ts"] or 0.0)))
+
+    app.dashboard_tasks_store.clear()
+    if not rows:
+        app.dashboard_tasks_store.append(["No tasks", "", "", "", "", "", "", ""])
         return
 
-    new_iter_to_select = None
-    for entry in recent:
-        ts = _format_history_timestamp(entry.get("timestamp", "?"))
-        etype = entry.get("type", "?")
-        name = entry.get("name", "?")
-        outcome = _outcome_markup(entry)
-        log_file = entry.get("log_file", "")
-        tree_iter = app.dashboard_ops_store.append([ts, etype, name, outcome, log_file])
-        if selected_log_file and log_file == selected_log_file:
-            new_iter_to_select = tree_iter
+    paths_to_select = []
+    for row in rows:
+        tree_iter = app.dashboard_tasks_store.append(
+            [
+                row["dt_display"],
+                row["type"],
+                row["name"],
+                row["status"],
+                row["state"],
+                row["task_key"],
+                row["log_file"],
+                row["completed_key"],
+            ]
+        )
+        if (row["task_key"] and row["task_key"] in keep_task_keys) or (
+            row["log_file"] and row["log_file"] in keep_log_files
+        ):
+            paths_to_select.append(app.dashboard_tasks_store.get_path(tree_iter))
 
-    if new_iter_to_select is not None:
-        selection.select_iter(new_iter_to_select)
+    for path in paths_to_select:
+        selection.select_path(path)
 
 
 def _format_iscsi_missing_message(lun):
@@ -1807,6 +1985,10 @@ def _collect_running_tasks(app):
                     "task_key": f"runner:{runner_name}",
                     "log_file": getattr(runner, "_session_log_file", None),
                     "waiting_for_lock": waiting_for_lock,
+                    "started": _epoch_to_local_iso(getattr(runner, "_session_start_time", None)),
+                    "wait_started": _epoch_to_local_iso(
+                        getattr(runner, "_lock_wait_started", None)
+                    ),
                 }
             )
 
@@ -1836,6 +2018,7 @@ def _collect_running_tasks(app):
                     "type": "Scrub",
                     "status": status,
                     "task_key": f"scrub:{pool_name}",
+                    "started": _zfs_time_to_iso(info.as_of) if info else None,
                 }
             )
 
@@ -1857,18 +2040,24 @@ def _collect_running_tasks(app):
         op_status = (
             f"{op.progress_percent:.1f}% done" if op.progress_percent is not None else "In progress"
         )
+        since_match = _IN_PROGRESS_SINCE_RE.search(section)
         tasks.append(
             {
                 "name": op_name,
                 "type": "ZFS",
                 "status": op_status,
                 "task_key": f"zfsop:{op.pool}",
+                "started": _zfs_time_to_iso(since_match.group(1)) if since_match else None,
             }
         )
 
     # 4. Running scheduled profiles (advisory lock files)
     for profile in list_running_profiles():
         pid = profile.get("pid")
+        # The waiting invocation's start is when it began waiting on the
+        # lock, so it doubles as both row start and wait start.
+        profile_started = profile.get("started")
+        profile_started = profile_started if profile_started != "?" else None
         if profile.get("waiting"):
             status = "Waiting for profile lock"
             waiting_for_lock = True
@@ -1885,6 +2074,8 @@ def _collect_running_tasks(app):
                 "task_key": task_key,
                 "log_file": profile.get("log_file"),
                 "waiting_for_lock": waiting_for_lock,
+                "started": profile_started,
+                "wait_started": profile_started if waiting_for_lock else None,
             }
         )
 
@@ -1900,6 +2091,7 @@ def _collect_running_tasks(app):
                     "type": "Surface Test",
                     "status": surface_cell_text(entry),
                     "task_key": f"surfacetest:{disk_path}",
+                    "started": entry.get("started_at"),
                 }
             )
 
@@ -1943,34 +2135,13 @@ def _collect_running_tasks(app):
                         "status": f"PID {pid}",
                         "task_key": f"scheduled:{pid}",
                         "log_file": _log_file_from_pid_environ(int(pid)),
+                        "started": _scheduled_start_iso(pid),
                     }
                 )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         pass
 
     return tasks
-
-
-def _refresh_processes_section(app, tasks=None):
-    """Clear and repopulate the Running Tasks list."""
-    app.dashboard_tasks_store.clear()
-
-    if tasks is None:
-        tasks = _collect_running_tasks(app)
-    if not tasks:
-        app.dashboard_tasks_store.append(["No running tasks", "", "", "", ""])
-        return
-
-    for t in tasks:
-        app.dashboard_tasks_store.append(
-            [
-                t["name"],
-                t["type"],
-                t["status"],
-                t["task_key"],
-                t.get("log_file", ""),
-            ]
-        )
 
 
 def _refresh_active_locks_section(app, locks):
@@ -2051,6 +2222,21 @@ def _cancel_task(app, task_key):
         log_msg(f"INFO: Stopped scrub on '{pool_name}'")
     elif task_key.startswith("zfsop:"):
         log_msg("INFO: ZFS-native operations cannot be cancelled from the GUI")
+    elif task_key.startswith("profile-wait:"):
+        profile_name = task_key.split(":", 1)[1]
+        pid = None
+        for profile in list_running_profiles():
+            if profile.get("waiting") and profile.get("name") == profile_name:
+                pid = profile.get("pid")
+                break
+        if isinstance(pid, int) and pid > 0:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                log_msg(f"INFO: Sent SIGTERM to waiting profile '{profile_name}' (PID {pid})")
+            except OSError as e:
+                log_msg(f"WARN: Failed to cancel waiting profile '{profile_name}': {e}")
+        else:
+            log_msg(f"WARN: Waiting profile '{profile_name}' is no longer running")
     elif task_key.startswith("profile:"):
         profile_name = task_key.split(":", 1)[1]
         log_msg(
@@ -2075,7 +2261,12 @@ def _cancel_task(app, task_key):
 
 
 def on_dashboard_cancel_selected(app):
-    """Cancel all selected tasks in the Running Tasks list."""
+    """Cancel all selected tasks in the Tasks list.
+
+    Works for waiting and running rows alike: waiting GUI runners get
+    their lock wait interrupted, waiting profiles are signalled, and
+    running tasks take their usual cancel path.
+    """
     selection = app.dashboard_tasks_view.get_selection()
     model, pathlist = selection.get_selected_rows()
     if not pathlist:
@@ -2085,7 +2276,7 @@ def on_dashboard_cancel_selected(app):
     cancelled = 0
     for path in pathlist:
         tree_iter = model.get_iter(path)
-        task_key = model.get_value(tree_iter, 3)
+        task_key = model.get_value(tree_iter, 5)
         if task_key:
             _cancel_task(app, task_key)
             cancelled += 1
@@ -2095,19 +2286,66 @@ def on_dashboard_cancel_selected(app):
         GLib.timeout_add_seconds(1, lambda: refresh_dashboard_page(app) or False)
 
 
+def on_dashboard_remove_selected(app):
+    """Remove the selected completed rows from the Tasks list.
+
+    Removal dismisses the rows for future refreshes; the history entry
+    itself is kept.  Waiting and running rows cannot be removed.
+    """
+    selection = app.dashboard_tasks_view.get_selection()
+    model, pathlist = selection.get_selected_rows()
+    paths = []
+    keys = []
+    for path in pathlist:
+        tree_iter = model.get_iter(path)
+        if model.get_value(tree_iter, 4) != "completed":
+            continue
+        key = model.get_value(tree_iter, 7)
+        if key:
+            keys.append(key)
+        paths.append(path)
+    if not keys:
+        log_msg("WARN: No completed tasks selected for removal")
+        return
+
+    # Remove bottom-up so earlier removals do not shift the remaining paths.
+    for path in reversed(paths):
+        model.remove(model.get_iter(path))
+    _save_dismissed_task_keys(app, set(keys) | _dismissed_task_keys(app))
+    log_msg(f"INFO: Removed {len(keys)} completed task(s) from the Tasks list")
+
+
 def _on_dashboard_tasks_selection_changed(selection, app):
-    """Enable or disable Cancel Selected Tasks based on selection."""
-    button = getattr(app, "_cancel_selected_button", None)
-    if button is not None:
-        model, pathlist = selection.get_selected_rows()
-        enable = False
-        for path in pathlist:
-            tree_iter = model.get_iter(path)
-            if model.get_value(tree_iter, 3):
-                enable = True
-                break
-        button.set_sensitive(enable)
-    _update_view_log_button_state(app)
+    """Enable or disable the task action buttons based on the selection.
+
+    Cancel needs a waiting or running row (any row with a task key),
+    Remove a completed row, and View Log any row carrying a log file.
+    The log path is cached so View Log still opens the intended log even
+    if a background refresh changes the selection before the click.
+    """
+    model, pathlist = selection.get_selected_rows()
+    can_cancel = False
+    can_remove = False
+    log_path = None
+    for path in pathlist:
+        tree_iter = model.get_iter(path)
+        if model.get_value(tree_iter, 5):
+            can_cancel = True
+        if model.get_value(tree_iter, 4) == "completed":
+            can_remove = True
+        if log_path is None:
+            candidate = model.get_value(tree_iter, 6)
+            if candidate:
+                log_path = candidate
+
+    cancel_button = getattr(app, "_cancel_selected_button", None)
+    if cancel_button is not None:
+        cancel_button.set_sensitive(can_cancel)
+    remove_button = getattr(app, "_remove_button", None)
+    if remove_button is not None:
+        remove_button.set_sensitive(can_remove)
+    app._dashboard_view_log_path = log_path
+    _update_view_log_button(app, bool(log_path))
 
 
 def _update_view_log_button(app, enabled):
@@ -2117,72 +2355,29 @@ def _update_view_log_button(app, enabled):
         button.set_sensitive(enabled)
 
 
-def _update_view_log_button_state(app):
-    """Enable View Log if a task or recent operation with a log is selected.
-
-    Caches the log path that View Log would open so the handler can use it
-    even if the dashboard store is cleared between the button-enable and the
-    click (e.g., by a background refresh).
-    """
-    log_path = None
-
-    # Prefer a Running Tasks row that has a log_file (column 4).
-    tasks_selection = app.dashboard_tasks_view.get_selection()
-    model, pathlist = tasks_selection.get_selected_rows()
-    for path in pathlist:
-        tree_iter = model.get_iter(path)
-        candidate = model.get_value(tree_iter, 4)
-        if candidate:
-            log_path = candidate
-            break
-
-    if log_path is None:
-        ops_selection = app.dashboard_ops_view.get_selection()
-        model, tree_iter = ops_selection.get_selected()
-        if tree_iter is not None:
-            log_path = model.get_value(tree_iter, 4)
-
-    enabled = bool(log_path)
-    app._dashboard_view_log_path = log_path if enabled else None
-    _update_view_log_button(app, enabled)
-
-
-def _on_dashboard_ops_selection_changed(selection, app):
-    """Enable or disable View Log based on selection changes."""
-    _update_view_log_button_state(app)
-
-
 def on_dashboard_view_log(app):
-    """Switch to the Logs tab and select the log for the selected task/op.
+    """Switch to the Logs tab and select the log for the selected task row.
 
-    Uses the path cached by _update_view_log_button_state so the action
-    succeeds even if the dashboard selection was cleared after the button
-    became sensitive. Falls back to reading the current selection if no
-    cache is available.
+    Uses the path cached by the selection handler so the action succeeds
+    even if the dashboard selection was cleared after the button became
+    sensitive.  Falls back to reading the current selection if no cache
+    is available.
     """
     log_path = getattr(app, "_dashboard_view_log_path", None)
 
     if not log_path:
-        # No cached path; fall back to current selection.
-        tasks_selection = app.dashboard_tasks_view.get_selection()
-        model, pathlist = tasks_selection.get_selected_rows()
+        selection = app.dashboard_tasks_view.get_selection()
+        model, pathlist = selection.get_selected_rows()
         for path in pathlist:
             tree_iter = model.get_iter(path)
-            candidate = model.get_value(tree_iter, 4)
+            candidate = model.get_value(tree_iter, 6)
             if candidate:
                 log_path = candidate
                 break
 
     if not log_path:
-        selection = app.dashboard_ops_view.get_selection()
-        model, tree_iter = selection.get_selected()
-        if tree_iter is None:
-            log_msg("WARN: No task or recent operation selected")
-            return
-        log_path = model.get_value(tree_iter, 4)
-        if not log_path:
-            log_msg("WARN: No log file recorded for the selected operation")
-            return
+        log_msg("WARN: No task row with a log file selected")
+        return
 
     app.stack.set_visible_child_name("logs")
     if not select_log_by_path(app, log_path):
@@ -2194,7 +2389,3 @@ def setup_dashboard_actions(app):
     tasks_selection = app.dashboard_tasks_view.get_selection()
     tasks_selection.connect("changed", _on_dashboard_tasks_selection_changed, app)
     _on_dashboard_tasks_selection_changed(tasks_selection, app)
-
-    ops_selection = app.dashboard_ops_view.get_selection()
-    ops_selection.connect("changed", _on_dashboard_ops_selection_changed, app)
-    _on_dashboard_ops_selection_changed(ops_selection, app)

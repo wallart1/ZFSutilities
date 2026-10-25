@@ -1036,14 +1036,14 @@ class TestSidebarPageOrder(unittest.TestCase):
     """The sidebar exposes the pages in the agreed order."""
 
     def test_infrastructure_tabs_are_last(self):
-        """Disks/Pools/Datasets are the final three tabs, Performance just before.
+        """Disks/Pools/Datasets close the list, Performance is the final tab.
 
         The Performance page keeps the internal stack name "memory" (it is
         also the persisted config key), so only the sidebar title changed.
         """
         gui = _gui_module()
         names = [name for name, _title, _builder in gui.PAGE_BUILDERS]
-        self.assertEqual(names[-4:], ["memory", "disks", "pools", "datasets"])
+        self.assertEqual(names[-4:], ["disks", "pools", "datasets", "memory"])
         titles = {name: title for name, title, _builder in gui.PAGE_BUILDERS}
         self.assertEqual(titles["memory"], "Performance")
 

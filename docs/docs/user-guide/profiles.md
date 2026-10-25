@@ -60,8 +60,8 @@ The cron log is rotated weekly by logrotate with compressed, non-root-
 readable generations, and it — plus every rotated copy — is listed on the
 GUI's **Logs** tab.
 
-The Dashboard **Running Tasks** list shows a waiting profile with the status
-"Waiting for profile lock".
+The Dashboard **Tasks** list shows a waiting profile with the status
+`Waiting since <time>`; cancel it there like any other task.
 
 ## Running profiles from the command line
 

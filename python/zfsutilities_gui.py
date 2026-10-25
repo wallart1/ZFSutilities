@@ -73,8 +73,8 @@ from schedule_page import create_schedule_page, refresh_schedule_page
 POOLS_REFRESH_SECONDS = 30
 
 # Sidebar pages in display order: (stack name, sidebar title, page factory).
-# The infrastructure tabs (Performance, Disks, Pools, Datasets) sit at the
-# bottom, below the task-oriented pages.
+# The task-oriented pages come first, then the infrastructure tabs (Disks,
+# Pools, Datasets), with Performance last at the bottom.
 PAGE_BUILDERS = [
     ("dashboard", "Dashboard", create_dashboard_page),
     ("backup", "Backup", lambda app: create_backup_page(app, app.ctx)),
@@ -84,10 +84,10 @@ PAGE_BUILDERS = [
     ("retention", "Retention", lambda app: create_retention_page(app, app.ctx)),
     ("checkagainst", "Checkagainst", create_checkagainst_page),
     ("logs", "Logs", create_logs_page),
-    ("memory", "Performance", create_memory_page),
     ("disks", "Disks", create_disks_page),
     ("pools", "Pools", create_pools_page),
     ("datasets", "Datasets", create_datasets_page),
+    ("memory", "Performance", create_memory_page),
 ]
 
 

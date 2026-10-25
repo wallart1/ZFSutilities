@@ -768,8 +768,8 @@ class TestNextRunQueryTooltip(unittest.TestCase):
             "backup",
             "* * * * *",
             "",
-            "Mon Oct 12 2026 09:00 (daily)",
-            "2026-10-12 09:00",
+            "Sat Oct 10 2026 23:30 · 23:30 Sat = 03:30 Sun UTC — names dated Sun",
+            "2026-10-10 23:30",
         ]
 
         result = schedule_page._on_next_run_query_tooltip(
@@ -779,7 +779,9 @@ class TestNextRunQueryTooltip(unittest.TestCase):
         self.assertTrue(result)
         view.convert_widget_to_bin_window_coords.assert_called_once_with(120, 18)
         app.schedule_store.__getitem__.assert_called_once_with(path)
-        tooltip.set_text.assert_called_once_with("Mon Oct 12 2026 09:00 (daily)")
+        tooltip.set_text.assert_called_once_with(
+            "Sat Oct 10 2026 23:30 · 23:30 Sat = 03:30 Sun UTC — names dated Sun"
+        )
 
     def test_hover_on_other_column_returns_false(self):
         schedule_page = self._import_schedule_page()
@@ -843,8 +845,14 @@ class TestNextRunStrings(unittest.TestCase):
         self.assertEqual(sort_str, "")
 
 
-class TestNextRunBucketDecoration(unittest.TestCase):
-    """Bucket word + conditional UTC edge hint on the Next Run display."""
+class TestNextRunDecoration(unittest.TestCase):
+    """Next Run display: no bucket word; UTC edge hint for snapshot profiles.
+
+    The parenthesized retention-bucket word was removed because it read as
+    a run frequency ("(weekly)" on a daily backup's Sunday run); these
+    tests pin that it stays gone and that the conditional UTC-edge
+    translation hint remains.
+    """
 
     def setUp(self):
         # Pin the local zone: the decoration compares the UTC date with the
@@ -868,24 +876,29 @@ class TestNextRunBucketDecoration(unittest.TestCase):
         with patch("schedule_page.next_run_times", return_value=[when]):
             return schedule_page._next_run_strings({}, label)
 
-    def test_bucket_word_weekly_on_utc_sunday(self):
-        # 05:00 New York is 09:00 UTC, still Sunday Oct 11 2026.
+    def test_no_bucket_word_on_utc_sunday(self):
+        # 05:00 New York is 09:00 UTC, still Sunday Oct 11 2026: the run
+        # lands in the weekly bucket, but the display must not say so.
         display, sort_str = self._strings(datetime(2026, 10, 11, 5, 0), "dailybackup")
-        self.assertEqual(display, "Sun Oct 11 2026 05:00 (weekly)")
+        self.assertEqual(display, "Sun Oct 11 2026 05:00")
         self.assertEqual(sort_str, "2026-10-11 05:00")
+        self.assertNotIn("(", display)
         self.assertNotIn("UTC", display)
 
-    def test_bucket_word_monthly_on_utc_first(self):
+    def test_no_bucket_word_on_utc_month_first(self):
         display, _ = self._strings(datetime(2026, 11, 1, 3, 0), "dailybackup")
-        self.assertEqual(display, "Sun Nov 01 2026 03:00 (monthly)")
+        self.assertEqual(display, "Sun Nov 01 2026 03:00")
+        self.assertNotIn("(", display)
 
-    def test_bucket_word_offsite(self):
+    def test_no_bucket_word_for_offsite_label(self):
         display, _ = self._strings(datetime(2026, 10, 7, 6, 0), "offsite")
-        self.assertEqual(display, "Wed Oct 07 2026 06:00 (offsite)")
+        self.assertEqual(display, "Wed Oct 07 2026 06:00")
+        self.assertNotIn("(", display)
 
-    def test_daytime_run_gets_bucket_word_but_no_hint(self):
+    def test_daytime_run_shows_no_decoration(self):
         display, _ = self._strings(datetime(2026, 10, 7, 6, 0), "dailybackup")
-        self.assertEqual(display, "Wed Oct 07 2026 06:00 (daily)")
+        self.assertEqual(display, "Wed Oct 07 2026 06:00")
+        self.assertNotIn("(", display)
         self.assertNotIn("·", display)
         self.assertNotIn("UTC", display)
 
@@ -895,8 +908,9 @@ class TestNextRunBucketDecoration(unittest.TestCase):
         display, sort_str = self._strings(datetime(2026, 10, 10, 23, 30), "dailybackup")
         self.assertEqual(
             display,
-            "Sat Oct 10 2026 23:30 (weekly) · 23:30 Sat = 03:30 Sun UTC — names dated Sun",
+            "Sat Oct 10 2026 23:30 · 23:30 Sat = 03:30 Sun UTC — names dated Sun",
         )
+        self.assertNotIn("(", display)
         # The sort string stays the plain local timestamp.
         self.assertEqual(sort_str, "2026-10-10 23:30")
 
@@ -909,6 +923,10 @@ class TestNextRunBucketDecoration(unittest.TestCase):
         with mock_gtk():
             import schedule_page
 
+        # An earlier test in the same minute may have cached the fallback
+        # string under the retention row's key (empty cron, no label);
+        # clear so the patched next_run_times is used.
+        schedule_page._NEXT_RUN_CACHE.clear()
         backup = {
             "active": True,
             "profile_name": "p-backup",
@@ -924,13 +942,18 @@ class TestNextRunBucketDecoration(unittest.TestCase):
             "cron": {},
             "comment": "",
         }
+        # A UTC-edge time: only the snapshot-creating backup row carries
+        # the translation hint; the retention row stays bare.
         with patch(
             "schedule_page.next_run_times",
-            return_value=[datetime(2026, 10, 7, 6, 0)],
+            return_value=[datetime(2026, 10, 10, 23, 30)],
         ):
             rows = schedule_page._build_schedule_rows([backup, retention])
-        self.assertEqual(rows[0][schedule_page.COL_NEXT_RUN], "Wed Oct 07 2026 06:00 (daily)")
-        self.assertEqual(rows[1][schedule_page.COL_NEXT_RUN], "Wed Oct 07 2026 06:00")
+        self.assertEqual(
+            rows[0][schedule_page.COL_NEXT_RUN],
+            "Sat Oct 10 2026 23:30 · 23:30 Sat = 03:30 Sun UTC — names dated Sun",
+        )
+        self.assertEqual(rows[1][schedule_page.COL_NEXT_RUN], "Sat Oct 10 2026 23:30")
 
 
 class TestUpdateNextRunForIter(unittest.TestCase):
@@ -1586,9 +1609,10 @@ class TestRefreshSchedulePage(unittest.TestCase):
 
         self.assertEqual(
             app.schedule_store.get_value(0, self.COL_NEXT_RUN),
-            # SAMPLE_NEXT_RUN's UTC instant (14:00Z) is Sunday: the backup
-            # profile's next run lands in the weekly bucket.
-            "Sun Jun 15 2025 10:00 (weekly)",
+            # SAMPLE_NEXT_RUN is 10:00 EDT = 14:00 UTC, same calendar day,
+            # so the backup profile's display stays bare (no bucket word,
+            # no UTC-edge hint).
+            "Sun Jun 15 2025 10:00",
         )
         self.assertEqual(
             app.schedule_store.get_value(0, self.COL_NEXT_RUN_SORT),

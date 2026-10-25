@@ -1602,8 +1602,9 @@ Rewrite Data, and the workload profile manager — plus Sever Clone, which runs
 
 ### `dashboard_page.py`
 
-Dashboard tab: pool health, recent operations, iSCSI issues, running tasks,
-version comparison with a two-node peer, and warnings.
+Dashboard tab: pool health, the merged Tasks list (waiting / running /
+completed), active locks, iSCSI issues, version comparison with a two-node
+peer, and warnings.
 
 Expensive data gathering (pool queries, SSH version checks) runs in a
 background thread by default so the GTK main loop stays responsive.
@@ -1619,7 +1620,7 @@ background thread by default so the GTK main loop stays responsive.
 | `_format_disk_wear_warnings()`             | Warning strings for SSD/NVMe disks at/above `DISK_WEAR_WARNING_THRESHOLD` (80%)                                            |
 | `_get_disk_wear_warnings()`                | Wear warnings from `disk_repository.disk_inventory()`, TTL-cached 300 s so the 30 s refresh never re-runs a smartctl sweep |
 | `_get_peer_host()` / `_get_host_version()` | Two-node peer version check                                                                                                |
-| Dashboard action handlers                  | Refresh, fix locks, cancel tasks, view log                                                                                 |
+| Dashboard action handlers                  | Refresh, fix locks, cancel tasks, remove completed tasks, view log                                                       |
 
 **Called modules / imported helpers:**
 
@@ -1627,7 +1628,7 @@ background thread by default so the GTK main loop stays responsive.
 | ---------------- | ----------------------------------- |
 | `zfs_repository` | Default repository for pool queries |
 | `config_core`    | Dashboard config                    |
-| `backup_history` | Recent operations                   |
+| `backup_history` | Completed task rows                  |
 | `logs_page`      | Select log by path                  |
 | `gui_helpers`    | TreeView helpers                    |
 | `logging_config` | `log_msg`                           |
@@ -1684,11 +1685,9 @@ and enable/disable scheduled entries.
 
 Next-run computation is performed in a background thread and cached per
 cron expression per minute so the UI remains responsive. For profiles that
-create snapshots, the Next Run display appends the retention bucket the
-run's UTC instant will produce (`(daily)`/`(weekly)`/`(monthly)`/
-`(offsite)`) and, only when the UTC date differs from the local date, a
-short local↔UTC translation hint — snapshot names follow the UTC calendar
-day (see `snapshot_naming.py`).
+create snapshots, the Next Run display appends — only when the UTC date
+differs from the local date — a short local↔UTC translation hint, because
+snapshot names follow the UTC calendar day (see `snapshot_naming.py`).
 
 **Key functions:**
 
@@ -1697,7 +1696,7 @@ day (see `snapshot_naming.py`).
 | `create_schedule_page()`                                               | Build the Schedule tab widget                                   |
 | `refresh_schedule_page(sync=False)`                                    | Refresh the schedule list asynchronously (`sync=True` to block) |
 | `collect_schedule_config()` / `load_schedule_config()`                 | UI ↔ cron dict                                                  |
-| `_next_run_strings(cron, label)`                                       | Next-run display + sort strings, with bucket word/UTC edge hint |
+| `_next_run_strings(cron, label)`                                       | Next-run display + sort strings, with UTC edge hint             |
 | `_regenerate_cron()`                                                   | Rewrite the cron drop-in file                                   |
 | `_refresh_profile_list()`                                              | Show all profiles of the current tab type                       |
 | `_on_selection_changed()`                                              | Update the detail pane (cron entry + config summary)            |

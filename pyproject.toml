@@ -8,6 +8,7 @@ ignore = [
     "DTZ001",
     "DTZ005",
     "DTZ006",
+    "DTZ007",
     # Broad exception handling is intentional for callbacks, cleanup, and worker threads.
     "BLE001",
 ]
