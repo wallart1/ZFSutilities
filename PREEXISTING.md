@@ -53,6 +53,17 @@
   This item is in abayance as a future objective.
   (Reconfirmed 2026-10-11 (user): keep deferred.)
 
+- (test hygiene, /tmp litter — discovered 2026-10-24, M3 turn): the suites
+  that divert rootcheck resolution through a stub dir (`_rootcheck_stub=$(mktemp -d)`
+  + `printf 'rootcheck() { true; }\n' > stub/rootcheck`; list-vm-disks,
+  zfswipe, zfsshowbigstuff, zfsdelfs, zfsdelallsnaps, zfscleanup,
+  findoffsitepool, zfsmount, iscsi-add-encrypted-luns,
+  iscsi-recover-encrypted-luns — same pattern) never remove the directory:
+  every full-suite run leaks ~one rootcheck-only tmp dir per such suite
+  (6 observed after the 2026-10-24 M3 run; swept by hand). Fix: register
+  the stub dir with the suite's exit-trap cleanup (test-lib's
+  append_exit_trap pattern) or rm -rf it at teardown.
+
 - (future objective, iSCSI resilience — survive bare-metal restores up to
   30 days old; user todo 2026-10-22): a bare-metal OS restore of the
   storage host regresses the LIO saveconfig.json AND the
@@ -100,3 +111,12 @@
   tree — export-iscsi-state + reconcile-iscsi-state + safe-iscsi-save
   hook. Entry stays: M3–M6 remain, executed one milestone at a time per
   the user's cycle.)
+  (Progress 2026-10-24: M3 (restore-time detection, idea D) implemented in
+  the pub2 working tree — read-only detectors in lib/iscsi-lib.sh
+  (signatures a/b/c), check-prerequisites --two-node informational warns,
+  setup-iscsi-targets evidence + reconcile offer. M4–M6 remain.)
+  (Progress 2026-10-24: M4 (compute-host fence, idea C auto-recover)
+  implemented in the pub2 working tree — check-vm-disk-paths +
+  zfsutilities-iscsi-fence.{service,timer} + switch-version activation
+  gating (install_iscsi_fence_units) + install-two-node summary +
+  uninstall-zfsutilities symmetric unit removal. M5–M6 remain.)

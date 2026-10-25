@@ -1219,6 +1219,17 @@ Resumable: a state file (`/tmp/move-vm-disk-...state`) records the last complete
 | `INFO: ✓ iSCSI configuration saved` | Changes were made and persisted | Informational |
 | `INFO: ✓ No changes needed (all targets already configured)` | Nothing was created or added | Informational |
 | `INFO: Targets created: ... / Targets existing: ... / Portals added: ...` | Final summary counters | Informational |
+| `INFO: ✓ No post-restore signature found (LIO state is consistent)` | The post-restore detection (run after target setup) found no bare-metal-restore signature: OS-disk files are not older than the newest VM zvol, every manifest entry has a zvol, and every VM disk reference resolves live | Informational |
+| `WARN: Post-restore signature detected — the OS-disk iSCSI state looks regressed:` | The post-restore detection found at least one signature; the evidence lines follow (each is one `WARN:` line) | Review the evidence; the reconcile offer follows |
+| `WARN:   saveconfig.json was last written ... but VM zvol ... was created ... — OS-disk LIO state predates the pools (bare-metal restore signature)` (same shape for `manifest`) | Detector (a): an OS-disk LIO file is older than the newest still-current VM zvol, so the persisted LIO state is missing everything created since the backup point | Accept the offered reconcile (or run [reconcile-iscsi-state](#reconcile-iscsi-state) manually) |
+| `WARN:   manifest expects ... but no such VM zvol exists (deleted, offline pool, or a regressed manifest)` | Detector (c): an expected-backstores entry has no matching zvol | Bring the pool back online, or accept the offered reconcile so the manifest is regenerated from the map |
+| `WARN:   VM ... (...) ... references ... LUN ... — that LUN is not exported live (bare-metal restore signature)` / `WARN:   VM ... (...) ... references target ... LUN ... — no live iSCSI target carries that name` | Detector (b): a compute-host VM disk reference (including efidisk) points at a target/LUN that no longer exists live — PVE aborts that VM's start on the missing by-path link | Accept the offered reconcile; refs whose target is missing entirely need the target (re)created first |
+| `INFO: reconcile-iscsi-state can rebuild the missing LUNs and ACLs from the ...` / `INFO: pool-resident state map, at each LUN's recorded number.` | Companion lines to the reconcile offer, naming the recovery authority | Informational |
+| `Run reconcile-iscsi-state now? (y/N):` | Post-restore reconcile offer (evidence is printed first) | `y` runs [reconcile-iscsi-state](#reconcile-iscsi-state) — which prints its own plan and asks again before applying; anything else declines |
+| `WARN: reconcile-iscsi-state not found at ... — run it manually once it is installed` | The offer degraded: the reconcile script is absent at the expected path | Install/repair the deployment, then run `sudo reconcile-iscsi-state` |
+| `WARN: Reconcile not run — run 'sudo reconcile-iscsi-state' when ready` | The offer was declined | Nothing changed; run the reconcile manually when ready |
+| `INFO: ✓ Reconcile complete` | The offered reconcile ran and exited 0 | Informational |
+| `FATAL: reconcile-iscsi-state reported problems — resolve them and re-run it` | The offered reconcile exited non-zero (identity conflicts, missing map, failed save — its own messages name them); the run exits 1 | Address the reconcile's messages and re-run it directly |
 
 ### [iscsi-add-encrypted-luns](../commands-and-modules/two-node.md#iscsi-add-encrypted-luns-storage-node)
 
@@ -1385,6 +1396,31 @@ mode). Create-only; identity conflicts are refused per item.
 | `INFO: No target-side changes needed` | Live topology already matches the map; only the finishes (manifest regen, save, refresh, rescan) ran | Informational |
 | `WARN: Aborted — no changes made` | The `y/N` confirmation was declined (or stdin was empty) | Re-run and confirm, or use `--yes` |
 | `INFO: === Summary ===` (+ created/ensured counts, `WARN: Skipped (zvol missing): N`, `FATAL: Refused (identity conflict): N`, `FATAL: Actions failed during apply`, `FATAL: safe-iscsi-save did not persist the rebuilt tree`, `INFO: VM refs unresolved: ...`) | End-of-run tally | `INFO: ✓ Done` (exit 0) when complete; `FATAL: Reconcile incomplete — resolve the reported items and re-run` (exit 1) otherwise |
+
+### [check-vm-disk-paths](../commands-and-modules/two-node.md#check-vm-disk-paths-compute-node)
+
+The iSCSI VM-disk path fence on the compute host (two-node only; silently
+no-ops in single-node mode). Checks every VM-config disk reference (including
+efidisk) for its by-path link; with `--recover`, rescan first, then one
+`reconcile-iscsi-state --yes` over ssh. Identity conflicts are never
+auto-resolved.
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `FATAL: Unknown option: ...` | Unrecognized command-line argument | Usage shown; rerun with `[--recover]` |
+| `FATAL: Must run on the compute host (...), not ...` / `FATAL: This script requires Proxmox VE (qm command not found).` (+ `FATAL: The iSCSI fence runs on the compute host.`) / `FATAL: Must run as root (use sudo)` | Environment gate: wrong host, no Proxmox, or not root | Run via `sudo` on the compute host |
+| `FATAL: Could not gather VM disk references (list-vm-disks failed)` | The VM-config gather itself failed | Run `sudo list-vm-disks` directly to see its error; the fence refuses to pass silently |
+| `INFO: No VM disk references found — nothing to check` | No VM configs carry iSCSI disk references (fresh install) | Informational |
+| `WARN: VM ... (...) ...: <iqn> LUN ... — by-path link missing: ...` | One missing reference, reported with the VM, disk key, target IQN, LUN, and expected link | Each line names exactly which disk is unreachable |
+| `INFO: ✓ All N VM disk path(s) present` | Healthy tick: every reference resolves; no ssh was made | Informational |
+| `FATAL: N of M VM disk path(s) missing` | References missing and `--recover` not given (e.g. a manual run) | Rerun with `--recover`, or run the recovery by hand |
+| `INFO: N of M VM disk path(s) missing — recovering: local iSCSI rescan first...` | Recovery stage 1 (`--recover`) | Informational |
+| `WARN: rescan-storage not available at ... — skipping local rescan` / `WARN: Local iSCSI rescan reported problems (see above) — continuing` | The local rescan could not run or found no sessions | Recovery continues with the storage-side reconcile |
+| `INFO: ✓ All N VM disk path(s) present after local rescan` | The rescan alone restored every link | Informational |
+| `INFO: Still missing after local rescan — running reconcile-iscsi-state on ...` | Recovery stage 2: exactly one ssh starts the map-driven rebuild | Informational; the reconcile's own messages stream into this run's output |
+| `WARN: reconcile-iscsi-state reported problems — remaining references are report-only` | The reconcile exited non-zero (identity conflict, unreachable host, failed save) | Inspect the reconcile messages above; the fence never retries or guesses |
+| `INFO: ✓ All N VM disk path(s) present after reconcile` | The storage-side rebuild restored every link | Informational |
+| `FATAL: N of M VM disk path(s) still missing after recovery` (+ `FATAL: Run 'sudo reconcile-iscsi-state' on ... and inspect its refusals — identity conflicts are never auto-resolved`) | References remain unreachable after both recovery stages | Resolve the reconcile's refusals on the storage host (or repair the VM configs), then re-run; the run exits 1 |
 
 ### [show-lun-map](../commands-and-modules/two-node.md#show-lun-map-compute-node)
 
@@ -2109,6 +2145,9 @@ Output uses `✓`/`⚠`/`✗` markers for pass/warn/fail.
 | `⚠: DISPLAY not set — GUI requires an X11 or Wayland session` | No graphical session | Informational; the GUI will not run until started from a session |
 | `✗: ... required prerequisite(s) missing. Install them before proceeding.` | Final tally with at least one failure | Install the prerequisites and rerun |
 | `⚠: ... optional item(s) missing — installation can continue but some features may be unavailable.` | Final tally with warnings only | Informational |
+| `✓: iSCSI post-restore detection: no restore signature found` | `--two-node` only: the read-only post-restore detection found no bare-metal-restore signature (OS-disk LIO files not older than the newest VM zvol; every manifest entry has a zvol) | Informational |
+| `⚠: iSCSI post-restore detection: <finding>` | `--two-node` only: a detection finding (stale `saveconfig.json`/manifest mtime, or a manifest entry with no zvol) — informational warns; this gate stays read-only and findings never fail it | Run [setup-iscsi-targets](#setup-iscsi-targets) on the storage host to review the evidence and take the reconcile offer |
+| `⚠: iSCSI post-restore detection: bare-metal-restore evidence — run 'sudo setup-iscsi-targets' on the storage host to review the evidence and offer the reconcile` | Pointer line printed after any detection finding | Follow the pointer |
 | `✓: All required prerequisites are present.` | All required checks passed | Informational |
 
 ### [cleanup-zfsutilities-legacy](../commands-and-modules/commands.md#cleanup-zfsutilities-legacy)
@@ -2189,7 +2228,7 @@ Echo-based installer; must run on the storage host.
 | `INFO: ✓ Patched ... (86400 s rate limit)` | The Proxmox iSCSI rescan-rate patch was applied to ISCSIPlugin.pm | Informational |
 | `⚠ Patch may already be applied or file differs from expected` | The patch verification failed | Check ISCSIPlugin.pm manually |
 | `⚠ Could not restart pvestatd on ...` | The remote service restart failed | Restart pvestatd manually |
-| `Installation Complete` summary | All steps succeeded on both hosts | Follow the post-install steps (e.g. `safe-iscsi-save`) |
+| `Installation Complete` summary | All steps succeeded on both hosts; the summary reports the active `zfsutilities-iscsi-fence.timer` on the compute host (installed during activation) | Follow the post-install steps (e.g. `safe-iscsi-save`) |
 
 ### [switch-version](../commands-and-modules/commands.md#switch-version)
 
@@ -2201,6 +2240,8 @@ Echo-based installer; must run on the storage host.
 | `INFO:   Unwiring previous version ...` | The prior version's wiring is removed before the switch | Informational |
 | `WARN:   previous version uninstall returned non-zero; continuing` / `WARN:   previous version switch-version not found at ...` | The prior version's uninstall failed or is missing | The switch proceeds; old wiring may remain |
 | `INFO:   Stopped documentation server (will restart on next access)` | A doc server on port 8000 was killed for the switch | Informational |
+| `INFO:   Installed /etc/systemd/system/zfsutilities-iscsi-fence.service/.timer` (+ `INFO:   Reloaded systemd daemon` / `INFO:   Enabled zfsutilities-iscsi-fence.timer (5-min iSCSI fence)`) | On a two-node compute host (qm present, node config not single-node), activation installed/enabled the iSCSI fence units from the activated version's `share/two-node/` | Informational; the units are refreshed on every activation |
+| `WARN:   Could not enable zfsutilities-iscsi-fence.timer` | The units were installed but the timer could not be enabled (systemd error) | Run `systemctl enable --now zfsutilities-iscsi-fence.timer` by hand and check its output |
 | `INFO:   Active: ... / Previous: ... / New invocations will use ... immediately. / Already-running scripts are unaffected.` | Final outcome of the switch | Informational |
 | `FATAL: No previous version recorded` | `previous` requested but no previous link exists | Switch to an explicit version |
 | `FATAL: Version not found: ...` | No such deployed version | Check `switch-version --list` |

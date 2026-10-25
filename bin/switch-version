@@ -255,6 +255,73 @@ install_rtslib_dropins() {
     fi
 }
 
+# Install/enable the iSCSI VM-disk path fence units (compute host, two-node
+# only). The timer runs check-vm-disk-paths --recover every 5 minutes so a
+# storage-host bare-metal restore is detected and repaired unattended. Gated
+# like install_rtslib_dropins but for the compute half: qm exists exactly
+# where Proxmox runs VMs, and the node config must not declare single-node
+# mode (an absent NODE_MODE is a legacy two-node conf — the same resolution
+# node-lib.sh applies, including the legacy conf fallbacks). Idempotent:
+# identical unit files are left untouched and enable --now is a no-op when
+# the timer is already active. Hand-rolled health-check units on the compute
+# host are never touched.
+install_iscsi_fence_units() {
+    local systemd_dir="${ZFSUTILITIES_SYSTEMD_DIR:-/etc/systemd/system}"
+    local share_dir="$version_base/current/share/two-node"
+
+    command -v qm >/dev/null 2>&1 || return 0
+
+    local node_conf="${ZFSUTILITIES_SYSTEM_CONFIG_DIR:-/etc/zfsutilities}/node.conf"
+    if [[ ! -r "$node_conf" ]]; then
+        if [[ -r "${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}" ]]; then
+            node_conf="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
+        elif [[ -r "${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}" ]]; then
+            node_conf="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
+        else
+            # No node config at all: single-node install (install-single-node
+            # writes one) — nothing to fence.
+            return 0
+        fi
+    fi
+    if ! (
+            # shellcheck source=/dev/null
+            source "$node_conf" >/dev/null 2>&1 || exit 1
+            [[ "${NODE_MODE:-two-node}" != "single-node" ]]
+         ); then
+        return 0
+    fi
+
+    if [[ ! -f "${share_dir}/zfsutilities-iscsi-fence.service" ]]; then
+        # Activated version predates the fence: nothing to install.
+        return 0
+    fi
+
+    mkdir -p "$systemd_dir"
+    local installed=0 unit
+    for unit in zfsutilities-iscsi-fence.service zfsutilities-iscsi-fence.timer; do
+        [[ -f "${share_dir}/${unit}" ]] || continue
+        if [[ -f "${systemd_dir}/${unit}" ]] \
+                && cmp -s "${share_dir}/${unit}" "${systemd_dir}/${unit}"; then
+            continue
+        fi
+        install -m 0644 "${share_dir}/${unit}" "${systemd_dir}/${unit}"
+        log_msg "INFO:   Installed ${systemd_dir}/${unit}"
+        installed=$((installed + 1))
+    done
+    if [[ "$installed" -gt 0 ]]; then
+        systemctl daemon-reload 2>/dev/null || true
+        log_msg "INFO:   Reloaded systemd daemon"
+    fi
+    if systemctl enable --now zfsutilities-iscsi-fence.timer >/dev/null 2>&1; then
+        if [[ "$installed" -gt 0 ]]; then
+            log_msg "INFO:   Enabled zfsutilities-iscsi-fence.timer (5-min iSCSI fence)"
+        fi
+    else
+        log_msg "WARN:   Could not enable zfsutilities-iscsi-fence.timer"
+    fi
+    return 0
+}
+
 install_wiring() {
     load_switch_config
     log_msg "INFO: === Wiring version into active production ==="
@@ -266,6 +333,7 @@ install_wiring() {
     cleanup_old_symlinks
     cleanup_obsolete_systemd_artifacts
     install_rtslib_dropins
+    install_iscsi_fence_units
 
     local desktop_user
     desktop_user=$(get_desktop_user)

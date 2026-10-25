@@ -94,6 +94,7 @@ detached unless you later re-attach them with `attach-vm-disk` or `new-vm-disk`.
 
 - [Dashboard iSCSI Issues](#dashboard-iscsi-issues-two-node-gui)
 - [`attach-vm-disk` (both)](#attach-vm-disk-both)
+- [`check-vm-disk-paths` (compute node)](#check-vm-disk-paths-compute-node)
 - [`clone-vm` (both)](#clone-vm-both)
 - [`deploy-version` (repo root)](#deploy-version-repo-root)
 - [`detach-vm-disk` (both)](#detach-vm-disk-both)
@@ -1798,7 +1799,9 @@ sudo reconcile-iscsi-state [--dry-run] [--yes] [--from <file>]
 [`repair-iscsi-luns`](#repair-iscsi-luns-storage-node)); a pool-resident map
 from `export-iscsi-state` on at least one online pool; iSCSI targets created
 ([`setup-iscsi-targets`](#setup-iscsi-targets-storage-node)) — a map entry on
-a target that does not exist live is refused with a pointer to that script.
+a target that does not exist live is refused with a pointer to that script,
+which itself detects the post-restore signature after target setup and
+offers to run this script directly.
 
 **Safety model:**
 
@@ -1890,12 +1893,95 @@ triggers a compute-host rescan.
 
 ---
 
+### `check-vm-disk-paths` (compute node)
+
+The iSCSI VM-disk path fence: verifies that every VM-config disk reference
+(including `efidisk`) has its iSCSI by-path device link on this host, and —
+with `--recover` — repairs the missing ones unattended. After a storage-host
+bare-metal restore, LUNs created after the backup point vanish from the
+regressed LIO config while the pools and the VM configs here stay current;
+Proxmox then aborts VM start on the missing
+`/dev/disk/by-path/ip-<ip>:3260-iscsi-<iqn>:<target>-lun-<n>` link. This
+script detects that state from the compute host and drives
+[`reconcile-iscsi-state`](#reconcile-iscsi-state-storage-node) on the storage
+host to rebuild it.
+
+Normally invoked every 5 minutes by the `zfsutilities-iscsi-fence.timer`
+systemd unit, which [switch-version](#switch-version-any-host) activation
+installs and enables on two-node compute hosts (gated on `qm`'s presence and
+the node config not declaring single-node mode; a hand-rolled health check
+already on the host is left untouched). A healthy tick is entirely local —
+no ssh — so the fence adds nothing to the storage host's journal. A failed
+run (exit 1) means VM disk references are missing; check the unit's journal.
+
+```bash
+sudo check-vm-disk-paths [--recover]
+```
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `--recover` | Attempt recovery when references are missing: a local iSCSI rescan first, then `reconcile-iscsi-state --yes` on the storage host (exactly one ssh), then a re-check |
+
+**Globals:** node-config globals only.
+
+**Called modules / commands:**
+
+| Script | Purpose |
+| ------ | ------- |
+| `list-vm-disks --gather-vm-info` (local) | VM-config disk references, including efidisk |
+| [`rescan-storage`](#rescan-storage-both) | Local recovery step: rescan running iSCSI sessions |
+| `reconcile-iscsi-state --yes` over ssh | Storage-side rebuild; its own safety model applies unchanged (create-only, identity conflicts refused, never remapped) — conflicts remain report-only here |
+
+**Data structures consumed / produced:**
+
+| Structure | Role | Reference |
+| --------- | ---- | --------- |
+| VM configs on this host | Read via `list-vm-disks --gather-vm-info` (`/etc/pve/qemu-server/*.conf`) | — |
+| `/dev/disk/by-path/` | The expected `ip-<ip>:3260-iscsi-<iqn>:<target>-lun-<n>` links are checked for existence | — |
+
+**Internal flow / algorithm:**
+
+1. Exit silently in single-node mode; refuse to run anywhere but the compute
+   host or without Proxmox VE (`qm`).
+2. Gather the VM disk references locally and verify each expected by-path
+   link. Missing references are reported one per line with the VM, disk key,
+   target IQN, LUN, and expected link.
+3. All present: print the one-line summary and exit 0 (no ssh was made).
+4. Without `--recover`: report the count and exit 1.
+5. With `--recover`: rescan locally first (`rescan-storage`); re-check and
+   exit 0 when everything reappeared.
+6. Still missing: run `reconcile-iscsi-state --yes` on the storage host over
+   a single ssh (its output streams into this run's journal), re-check, and
+   report. A non-zero reconcile (identity conflict, unreachable host) is a
+   warning — the fence never retries, guesses, or remaps.
+
+**Return codes / side effects:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | All references present (initially, or after recovery); or no VM disk references exist |
+| `1`  | Invalid option / wrong host / not root / gather failure; or references missing (without `--recover`), or still missing after recovery |
+
+Side effects with `--recover`: an iSCSI session rescan; when references are
+still missing afterwards, the storage-side reconcile (which itself saves the
+rebuilt LIO tree, refreshes the pool state map, and rescans this host).
+
+---
+
 ### `setup-iscsi-targets` (storage node)
 
 Creates iSCSI targets, TPGs, and portals from the pool-to-target mappings
 defined in `/etc/zfsutilities/node.conf`. Idempotent — safe to run multiple
 times. Skips targets that already exist and adds missing portals to existing
 targets.
+
+After target setup, runs the post-restore detection (`lib/iscsi-lib.sh`
+detectors): on a bare-metal-restore signature it prints the evidence and
+offers to run [`reconcile-iscsi-state`](#reconcile-iscsi-state-storage-node)
+— the map-driven LUN rebuild — with the same verified-evidence + `y/N`
+pattern as orphan-target deletion.
 
 ```bash
 sudo setup-iscsi-targets
@@ -1910,8 +1996,10 @@ sudo setup-iscsi-targets
 | Script | Purpose |
 | ------ | ------- |
 | `node-lib.sh` | Two-node host/target resolution and the orphan usage probe (`probe_target_usage`) |
+| `lib/iscsi-lib.sh` | Shared parsers plus the post-restore detectors (`detect_stale_lio_files`, `detect_manifest_without_zvols`, `detect_vm_refs_missing_live`) |
 | `targetcli` | Create targets, TPGs, and portals |
-| `ssh` → compute host | Usage probe only: guest configs referencing a target and live sessions (read-only) |
+| `ssh` → compute host | Usage probe and VM-reference gather (`list-vm-disks --gather-vm-info`, read-only) |
+| [`reconcile-iscsi-state`](#reconcile-iscsi-state-storage-node) | Offered when a post-restore signature is detected (never invoked without confirmation) |
 
 **Data structures consumed / produced:**
 
@@ -1919,6 +2007,7 @@ sudo setup-iscsi-targets
 | --------- | ---- | --------- |
 | `/etc/zfsutilities/node.conf` | `POOL_TARGET` and `IQN_PREFIX` source | [Node config](../developer-guide/data-structures.md#node-configuration-file-etczfsutilitiesnodeconf) |
 | `targetcli` iSCSI config | Targets, TPGs, and portals created or verified | — |
+| `/etc/rtslib-fb-target/saveconfig.json`, `expected-backstores.txt` | Read by the post-restore detectors (mtime vs newest VM zvol; entries vs zvols) | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
 
 **Internal flow / algorithm:**
 
@@ -1942,15 +2031,22 @@ sudo setup-iscsi-targets
       modified.
     - Create the portal `${storage_ip}:3260` if it does not already exist.
 5. Save the targetcli configuration if anything changed.
+6. Run the post-restore detection: (a) `saveconfig.json`/manifest older
+   than the newest VM zvol, (b) compute-host VM disk references whose
+   (target, LUN) is absent from the live tree, (c) manifest entries with no
+   zvol. With findings, print the evidence and offer
+   `reconcile-iscsi-state` (`y` runs it — it prints its own plan and asks
+   again before applying; declining leaves the system untouched).
 
 **Return codes / side effects:**
 
 | Code | Meaning |
 | ---- | ------- |
-| `0`  | Targets configured |
-| `1`  | Not running on the storage host, `targetcli` not found, or target creation skipped because an orphan target remains |
+| `0`  | Targets configured (and, when offered, the reconcile ran cleanly or was declined) |
+| `1`  | Not running on the storage host, `targetcli` not found, or target creation skipped because an orphan target remains; or an accepted `reconcile-iscsi-state` run reported problems |
 
-Side effects: creates or verifies iSCSI targets, TPGs, and portals.
+Side effects: creates or verifies iSCSI targets, TPGs, and portals; may run
+`reconcile-iscsi-state` after explicit confirmation.
 
 ---
 
@@ -2040,6 +2136,7 @@ sudo switch-version <version>|previous|--list|--uninstall
 | `/root/bashinit` | Symlink to active version's `bashinit` |
 | `/usr/local/lib/node-lib.sh`, `/usr/local/lib/two-node-lib.sh`, `/usr/local/lib/rootcheck` | Library symlinks |
 | `/etc/systemd/system/rtslib-fb-targetctl.service.d/` | Refreshed from the activated version's `share/two-node/` drop-ins (storage hosts only — gated on `targetctl`'s presence) |
+| `/etc/systemd/system/zfsutilities-iscsi-fence.{service,timer}` | Installed/refreshed from the activated version's `share/two-node/` and the timer enabled (two-node compute hosts only — gated on `qm`'s presence and the node config; see [`check-vm-disk-paths`](#check-vm-disk-paths-compute-node)) |
 
 **Internal flow / algorithm:**
 
@@ -2062,6 +2159,10 @@ sudo switch-version <version>|previous|--list|--uninstall
       version's `share/two-node/` (storage hosts only), so a release carrying
       drop-in changes takes effect on activation without any manual step;
       reload the systemd daemon when a drop-in actually changed.
+    - Install/enable the iSCSI VM-disk path fence units
+      (`zfsutilities-iscsi-fence.service` + `.timer`) from the activated
+      version's `share/two-node/` on two-node compute hosts, so the fence
+      always matches the activated release; idempotent.
     - Stop any running documentation server on port 8000.
 
 **Return codes / side effects:**
@@ -2073,7 +2174,8 @@ sudo switch-version <version>|previous|--list|--uninstall
 
 Side effects: repoints symlinks; writes/updates `profile.d`, `sudoers.d`, and
 desktop shortcuts; on storage hosts, re-installs the `rtslib-fb-targetctl`
-drop-ins when the activated version ships different ones. New script
+drop-ins when the activated version ships different ones; on two-node compute
+hosts, installs and enables the `zfsutilities-iscsi-fence` units. New script
 invocations immediately use the new version; already-running scripts are
 unaffected.
 

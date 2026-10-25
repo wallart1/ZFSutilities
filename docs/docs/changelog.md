@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.131.0
+
+*Released 2026-10-24*
+
+### Added
+
+- **Restore-time iSCSI detection (iSCSI resilience M3).** Three
+  read-only detectors in `lib/iscsi-lib.sh` recognize the
+  bare-metal-restore signature from live state: (a)
+  `saveconfig.json`/expected-backstores manifest older than the newest
+  VM zvol, (b) compute-host VM disk references (including efidisk)
+  whose target/LUN is absent from the live LIO tree, and (c) manifest
+  entries with no zvol. `check-prerequisites --two-node` reports
+  findings as informational warnings — the gate stays read-only and
+  findings never fail it — and `setup-iscsi-targets` prints the
+  evidence after target setup and offers `reconcile-iscsi-state` with
+  the same verified-evidence + `y/N` pattern as orphan-target
+  deletion: declining leaves the system untouched, an accepted
+  reconcile runs interactively under its own plan+confirm gate, and a
+  failed one exits 1. Every detector skips quietly when its inputs are
+  absent, so a pre-install or fresh-install host reports nothing.
+- **Compute-host iSCSI fence — `check-vm-disk-paths` (iSCSI resilience
+  M4).** Verifies that every VM-config disk reference (including
+  efidisk) has its `/dev/disk/by-path/ip-…-iscsi-…-lun-N` link on the
+  compute host; with `--recover`, a local `rescan-storage` first, then
+  exactly one ssh running `reconcile-iscsi-state --yes` on the storage
+  host, re-checking after each stage. A refused reconcile stays
+  report-only — the fence never retries, guesses, or remaps. Runs from
+  the new `zfsutilities-iscsi-fence.timer` (every 5 minutes, boot
+  settle of 2 minutes; ticks stay journal-only via
+  `ZFSUTILITIES_LOG_INHERIT=Y` so no per-tick session logs are
+  created), installed and enabled by `switch-version` activation on
+  two-node compute hosts (gated on `qm` presence and the node config)
+  from the activated version's `share/two-node/` tree — idempotent,
+  refreshed on every activation, self-healing re-enable. A healthy
+  tick is entirely local: no ssh, one summary line. `install-two-node`
+  names the fence in its completion summary, and
+  `uninstall-zfsutilities` stops, disables, and removes both units
+  symmetrically.
+
+### Tests
+
+- `check-vm-disk-paths` covered end to end (healthy local-only tick,
+  report-only missing, rescan-suffices, single reconcile ssh with the
+  exact remote command, refused-reconcile report-only) and
+  `setup-iscsi-targets` detection covered across all three signatures,
+  the decline/accept/failure offer paths, and the fresh-install
+  no-false-positive proof. Uninstall now asserts the fence units are
+  removed with the timer stopped and disabled first, and a lone fence
+  timer alone marks systemd integration for removal; the shipped fence
+  units carry a structural guard (stable-path `ExecStart` with
+  `--recover`, journal-only environment, 5-minute cadence).
+
+### Documentation
+
+- New `check-vm-disk-paths` section in the two-node command reference
+  (arguments, called modules, flow, return codes) plus TOC entry;
+  `setup-iscsi-targets` documents the detection step and the reconcile
+  offer; `switch-version` documents the fence activation wiring;
+  `check-prerequisites` documents the two-node detection; the message
+  reference gained the fence and detection message rows.
+
 ## 0.130.0
 
 *Released 2026-10-24*

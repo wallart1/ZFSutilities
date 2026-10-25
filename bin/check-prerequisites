@@ -15,7 +15,9 @@
 #              lib/pace_stream.py), rsync, smartctl
 #   proxmox  — pveversion (warn if absent; required only on two-node compute host)
 #   gui      — python3-gi, gir1.2-gtk-3.0, DISPLAY
-#   two-node — ssh, scp, open-iscsi (only in --two-node mode)
+#   two-node — ssh, scp, open-iscsi (only in --two-node mode), plus the
+#              read-only post-restore iSCSI state detection (informational
+#              warns; lib/iscsi-lib.sh)
 #   docs     — pip3 (required); mkdocs and mkdocs-material are
 #              pip-installed by the installer's doc-server step, so their
 #              absence is informational — only mkdocs >= 2 fails the check
@@ -280,6 +282,38 @@ if [[ "$check_mode" == "two-node" ]]; then
     check_cmd "two-node" "targetcli" "targetcli-fb"
     check_systemd_service "two-node" "rtslib-fb-targetctl" "python3-rtslib-fb"
     check_cmd "two-node" "iscsiadm" "open-iscsi"
+
+    # Post-restore iSCSI state detection: informational WARN lines only.
+    # This script stays a read-only gate — findings never enter the failure
+    # list and never change the exit code. The detectors live in
+    # lib/iscsi-lib.sh (shared with setup-iscsi-targets, which can act on
+    # them); they read only file mtimes, the manifest, and zfs listings,
+    # and skip quietly when the tools are absent.
+    _iscsi_lib=""
+    if command -v realpath >/dev/null 2>&1 && command -v dirname >/dev/null 2>&1; then
+        _iscsi_lib="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/../lib/iscsi-lib.sh"
+    fi
+    if [[ -f "$_iscsi_lib" ]]; then
+        # shellcheck disable=SC2034 # consumed by the sourced iscsi-lib.sh
+        ISCSI_LIB_NO_BOOTSTRAP=1
+        # shellcheck source=/dev/null
+        source "$_iscsi_lib"
+        unset ISCSI_LIB_NO_BOOTSTRAP
+        detect_reset
+        detect_stale_lio_files
+        detect_manifest_without_zvols
+        if [[ ${#_detect_lines[@]} -gt 0 ]]; then
+            for _finding in "${_detect_lines[@]}"; do
+                warn "iSCSI post-restore detection: ${_finding}"
+            done
+            warn "iSCSI post-restore detection: bare-metal-restore evidence — run" \
+                 "'sudo setup-iscsi-targets' on the storage host to review the evidence" \
+                 "and offer the reconcile"
+        else
+            pass "iSCSI post-restore detection: no restore signature found"
+        fi
+        unset _iscsi_lib _finding
+    fi
     if [[ -z "$list_failures" ]]; then
         echo ""
     fi

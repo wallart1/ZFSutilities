@@ -1,0 +1,389 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154,SC2016,SC2028
+# test-check-vm-disk-paths — Unit tests for the compute-host iSCSI fence.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Mocks
+# ------------------------------------------------------------------
+
+IQN1="iqn.2026-02.local.stewie:threeamigos"
+
+# Mock node-lib.sh behavior
+NODE_MODE="two-node"
+storage_host="stewie"
+compute_host="tweety"
+storage_ip="192.168.100.1"
+iqn_prefix="iqn.2026-02.local.stewie"
+is_single_node() { [[ "$NODE_MODE" == "single-node" ]]; }
+is_two_node()    { [[ "$NODE_MODE" == "two-node" ]]; }
+
+# qm presence gate (the dev host has no Proxmox).
+qm() { return 0; }
+
+# The evaluated script calls find_zfsutility_script to locate node-lib and
+# rootcheck; /dev/null keeps the node-lib mocks above in charge.
+find_zfsutility_script() { echo "/dev/null"; }
+
+# Remote reconcile over ssh: the resolver prints the deployed path (the real
+# node-lib resolves it with its own ssh, which these tests do not need), and
+# the ssh mock records the command. _ssh_repairs_link=true makes the "storage
+# host" repair the missing link (the reconcile run plus its trailing rescan);
+# _mock_reconcile_rc simulates the reconcile's exit status. main() runs in a
+# command-substitution subshell, so records go to a file, not an array.
+remote_zfsutility_script() {
+    printf '/usr/local/lib/zfsutilities/current/bin/%s\n' "$2"
+}
+_ssh_repairs_link=false
+ssh() {
+    [[ -n "${_ssh_log:-}" ]] && printf '%s\n' "$*" >> "$_ssh_log"
+    [[ "$_ssh_repairs_link" == "true" ]] && add_link nvme1 5
+    return "${_mock_reconcile_rc:-0}"
+}
+
+# ------------------------------------------------------------------
+# Load the script under test with node-lib mocked.
+# ------------------------------------------------------------------
+old_mydir="$mydir"
+CHECK_VM_DISK_PATHS_SKIP_ROOT="Y"
+CHECK_VM_DISK_PATHS_TEST_MODE="Y"
+export CHECK_VM_DISK_PATHS_NODE_LIB="/dev/null"
+script_orig=$(cat "$old_mydir/bin/check-vm-disk-paths")
+script_text="${script_orig/my_host=\$(hostname -s)/my_host=tweety}"
+# The script parses "$@" at the top level; neutralize the test runner's args.
+set --
+eval "$script_text"
+
+# ------------------------------------------------------------------
+# Fixtures
+# ------------------------------------------------------------------
+_scratch=""
+_bypath_dir=""
+_vm_refs_file=""
+_rescan_log=""
+_ssh_log=""
+_rescan_scripts=()
+_mock_reconcile_rc=0
+
+link_name() {
+    printf 'ip-%s:3260-iscsi-%s:%s-lun-%s' "$storage_ip" "$iqn_prefix" "$1" "$2"
+}
+
+add_link() {
+    ln -s /dev/null "${_bypath_dir}/$(link_name "$1" "$2")"
+}
+
+# Mock rescan-storage: logs its invocation, then runs the caller-supplied
+# snippet (e.g. re-creating the by-path link, simulating a rescan that
+# recovers the disk). No snippet = a rescan that changes nothing.
+make_rescan_mock() {
+    local p line
+    p=$(mktemp)
+    {
+        echo '#!/usr/bin/bash'
+        echo "printf 'rescan\\n' >> '${_rescan_log}'"
+        for line in "$@"; do
+            echo "$line"
+        done
+    } > "$p"
+    chmod +x "$p"
+    _rescan_scripts+=("$p")
+    printf '%s' "$p"
+}
+
+reset_mocks() {
+    [[ -n "$_scratch" && -d "$_scratch" ]] && rm -rf "$_scratch"
+    local _old
+    for _old in "${_rescan_scripts[@]:-}"; do
+        rm -f "$_old"
+    done
+    _rescan_scripts=()
+
+    _scratch=$(mktemp -d)
+    _bypath_dir="$_scratch/by-path"
+    mkdir -p "$_bypath_dir"
+    _vm_refs_file="$_scratch/vm-refs.txt"
+    : > "$_vm_refs_file"
+    _rescan_log="$_scratch/rescan.log"
+    _ssh_log="$_scratch/ssh.log"
+    : > "$_ssh_log"
+    _mock_reconcile_rc=0
+    _ssh_repairs_link=false
+
+    unset CHECK_VM_DISK_PATHS_VM_REFS_FILE CHECK_VM_DISK_PATHS_LIST_VM_DISKS
+    CHECK_VM_DISK_PATHS_VM_REFS_FILE="$_vm_refs_file"
+    CHECK_VM_DISK_PATHS_BY_PATH_DIR="$_bypath_dir"
+    export CHECK_VM_DISK_PATHS_VM_REFS_FILE CHECK_VM_DISK_PATHS_BY_PATH_DIR
+    local p
+    p=$(make_rescan_mock)
+    CHECK_VM_DISK_PATHS_RESCAN_STORAGE="$p"
+    export CHECK_VM_DISK_PATHS_RESCAN_STORAGE
+
+    recover=false
+}
+
+# Run main() capturing combined output. The script under test re-sources
+# bin/bashinit when eval'd, which reinstates the real log_msg (stderr + long
+# prefix), so assertions grep the captured output rather than the test log.
+run_main() {
+    _main_rc=0
+    _main_out=$(main 2>&1) || _main_rc=$?
+}
+
+log_has() {
+    [[ "$_main_out" == *"$1"* ]]
+}
+
+ssh_calls() {
+    [[ -f "$_ssh_log" ]] && cat "$_ssh_log" || true
+}
+
+ssh_call_count() {
+    printf '%s\n' "$(ssh_calls)" | grep -c .
+}
+
+rescan_called() {
+    [[ -f "$_rescan_log" ]] && grep -q . "$_rescan_log"
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_script_loads() {
+    test_start "check-vm-disk-paths sources with mocked dependencies"
+    if declare -f main >/dev/null 2>&1 \
+        && declare -f check_vm_paths >/dev/null 2>&1 \
+        && declare -f vm_refs_gather >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "main/check/gather functions should be defined after sourcing"
+    fi
+}
+
+test_single_node_silent_exit() {
+    test_start "Single-node mode exits silently at source time"
+    local rc=0 out
+    out=$( NODE_MODE="single-node" eval "$script_text" 2>/dev/null ) || rc=$?
+    if [[ "$rc" -eq 0 && -z "$out" ]]; then
+        test_pass
+    else
+        test_fail "Expected silent exit 0, got rc=$rc out='$out'"
+    fi
+}
+
+test_wrong_host_refused() {
+    test_start "Running anywhere but the compute host is refused"
+    local wrong="${script_orig/my_host=\$(hostname -s)/my_host=stewie}"
+    local rc=0 out
+    out=$( eval "$wrong" 2>&1 ) || rc=$?
+    if [[ "$rc" -eq 1 && "$out" == *"Must run on the compute host (tweety), not stewie"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+}
+
+test_no_qm_refused() {
+    test_start "A host without Proxmox VE (qm) is refused"
+    local rc=0 out
+    out=$( unset -f qm; eval "$script_text" 2>&1 ) || rc=$?
+    if [[ "$rc" -eq 1 && "$out" == *"requires Proxmox VE (qm command not found)"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+}
+
+test_unknown_option_usage() {
+    test_start "Unknown options print usage and exit 1"
+    local rc=0 out
+    out=$( parse_cli_args --frob 2>&1 ) || rc=$?
+    if [[ "$rc" -eq 1 && "$out" == *"Unknown option: --frob"* \
+            && "$out" == *"Usage: check-vm-disk-paths"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+}
+
+test_gather_failure_fatals() {
+    reset_mocks
+    unset CHECK_VM_DISK_PATHS_VM_REFS_FILE
+    CHECK_VM_DISK_PATHS_LIST_VM_DISKS="/bin/false"
+    export CHECK_VM_DISK_PATHS_LIST_VM_DISKS
+    test_start "A failed VM-reference gather exits 1 instead of passing"
+
+    run_main
+    if [[ "$_main_rc" -eq 1 ]] && log_has "Could not gather VM disk references"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_no_refs_ok() {
+    reset_mocks
+    test_start "No VM disk references means nothing to check"
+
+    run_main
+    if [[ "$_main_rc" -eq 0 ]] && log_has "No VM disk references found"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_healthy_tick_all_present() {
+    reset_mocks
+    printf 'VM|threeamigos:0|101|testvm|scsi0\nVM|nvme1:5|205|archvm|efidisk0\n' \
+        > "$_vm_refs_file"
+    add_link threeamigos 0
+    add_link nvme1 5
+    test_start "A healthy tick reports all paths present with no ssh and no rescan"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "All 2 VM disk path(s) present" || ok=false
+    [[ "$_main_out" != *"WARN:"* ]] || ok=false
+    [[ "$(ssh_call_count)" -eq 0 ]] || ok=false
+    ! rescan_called || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — healthy tick should be local-only and quiet"
+    fi
+}
+
+test_missing_link_exits_1_report_only() {
+    reset_mocks
+    printf 'VM|threeamigos:0|101|testvm|scsi0\nVM|nvme1:5|205|archvm|efidisk0\n' \
+        > "$_vm_refs_file"
+    add_link threeamigos 0
+    # nvme1 LUN 5 (the efidisk ref) has no by-path link.
+    test_start "A missing path without --recover is reported and exits 1"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "VM 205 (archvm) efidisk0: ${IQN1%:*}:nvme1 LUN 5" || ok=false
+    log_has "by-path link missing: ${_bypath_dir}/$(link_name nvme1 5)" || ok=false
+    log_has "1 of 2 VM disk path(s) missing" || ok=false
+    [[ "$(ssh_call_count)" -eq 0 ]] || ok=false
+    ! rescan_called || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — missing path not reported report-only"
+    fi
+}
+
+test_recover_local_rescan_fixes() {
+    reset_mocks
+    printf 'VM|threeamigos:0|101|testvm|scsi0\n' > "$_vm_refs_file"
+    CHECK_VM_DISK_PATHS_RESCAN_STORAGE=$(make_rescan_mock \
+        "ln -s /dev/null '${_bypath_dir}/$(link_name threeamigos 0)'")
+    export CHECK_VM_DISK_PATHS_RESCAN_STORAGE
+    test_start "--recover tries the local rescan first and needs no ssh when it suffices"
+
+    recover=true
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "recovering: local iSCSI rescan first" || ok=false
+    log_has "All 1 VM disk path(s) present after local rescan" || ok=false
+    rescan_called || ok=false
+    [[ "$(ssh_call_count)" -eq 0 ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — local rescan recovery incomplete"
+    fi
+}
+
+test_recover_reconcile_fixes() {
+    reset_mocks
+    printf 'VM|nvme1:5|205|archvm|efidisk0\n' > "$_vm_refs_file"
+    # The ssh mock plays the storage host: the reconcile run repairs the
+    # missing export (its trailing rescan makes the link reappear).
+    _ssh_repairs_link=true
+    test_start "--recover escalates to exactly one reconcile ssh and re-checks"
+
+    recover=true
+    run_main
+    local calls
+    calls=$(ssh_calls)
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "Still missing after local rescan" || ok=false
+    log_has "running reconcile-iscsi-state on stewie" || ok=false
+    log_has "All 1 VM disk path(s) present after reconcile" || ok=false
+    [[ "$(ssh_call_count)" -eq 1 ]] || ok=false
+    [[ "$calls" == *"root@stewie"* ]] || ok=false
+    [[ "$calls" == *"/usr/local/lib/zfsutilities/current/bin/reconcile-iscsi-state --yes"* ]] \
+        || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — reconcile escalation incomplete (calls: $calls)"
+    fi
+}
+
+test_recover_reconcile_conflict_report_only() {
+    reset_mocks
+    printf 'VM|nvme1:5|205|archvm|efidisk0\n' > "$_vm_refs_file"
+    # The reconcile refuses (identity conflict on the storage host) and the
+    # link never comes back.
+    _mock_reconcile_rc=1
+    test_start "A refused reconcile stays report-only: one ssh, exit 1, no retries"
+
+    recover=true
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "reconcile-iscsi-state reported problems" || ok=false
+    log_has "1 of 1 VM disk path(s) still missing after recovery" || ok=false
+    log_has "identity conflicts are never auto-resolved" || ok=false
+    [[ "$(ssh_call_count)" -eq 1 ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — conflict path should be report-only"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_script_loads
+test_single_node_silent_exit
+test_wrong_host_refused
+test_no_qm_refused
+test_unknown_option_usage
+test_gather_failure_fatals
+test_no_refs_ok
+test_healthy_tick_all_present
+test_missing_link_exits_1_report_only
+test_recover_local_rescan_fixes
+test_recover_reconcile_fixes
+test_recover_reconcile_conflict_report_only
+
+# Cleanup
+local_cleanup() {
+    local _p
+    for _p in "${_rescan_scripts[@]:-}"; do
+        rm -f "$_p"
+    done
+    [[ -n "$_scratch" && -d "$_scratch" ]] && rm -rf "$_scratch"
+}
+local_cleanup
+
+test_summary

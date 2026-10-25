@@ -6,6 +6,10 @@
 # Idempotent — safe to run multiple times. Skips targets that already exist.
 # Adds missing portals to existing targets.
 #
+# After target setup, runs the post-restore detection (lib/iscsi-lib.sh):
+# on a bare-metal-restore signature it prints the evidence and offers to
+# run reconcile-iscsi-state (the map-driven LUN rebuild).
+#
 # Usage: setup-iscsi-targets
 # Run on the storage host.
 
@@ -20,6 +24,13 @@ unset _local_bashinit
 
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
+
+# Shared targetcli/zvol parsers and the restore-time detection helpers live
+# in lib/iscsi-lib.sh (node-lib is already loaded, so the library's own
+# dependency bootstrap stays dormant).
+ISCSI_LIB="${SETUP_ISCSI_TARGETS_ISCSI_LIB:-$(find_zfsutility_script iscsi-lib.sh)}"
+source "$ISCSI_LIB"
+
 source_helper rootcheck
 rootcheck
 
@@ -211,5 +222,49 @@ if [[ $skipped_for_orphans -gt 0 ]]; then
     log_msg "FATAL: Resolve the orphan targets above, then re-run."
     exit 1
 fi
+
+# ------------------------------------------------------------------
+# Post-restore detection: with the targets in place, read the live state
+# for the bare-metal-restore signatures (lib/iscsi-lib.sh) and offer the
+# map-driven reconcile. Same verified-evidence + y/N pattern as orphan
+# target deletion: the evidence is printed first, the action is offered
+# only afterwards, and declining leaves the system untouched.
+# ------------------------------------------------------------------
+detect_reset
+detect_stale_lio_files
+detect_manifest_without_zvols
+detect_vm_refs_missing_live
+
+if [[ ${#_detect_lines[@]} -eq 0 ]]; then
+    log_msg "INFO: ✓ No post-restore signature found (LIO state is consistent)"
+else
+    log_msg "WARN: Post-restore signature detected — the OS-disk iSCSI state looks regressed:"
+    for _finding in "${_detect_lines[@]}"; do
+        log_msg "WARN:   $_finding"
+    done
+    echo ""
+    log_msg "INFO: reconcile-iscsi-state can rebuild the missing LUNs and ACLs from the"
+    log_msg "INFO: pool-resident state map, at each LUN's recorded number."
+    _reconcile_script="${SETUP_ISCSI_TARGETS_RECONCILE:-$mydir/reconcile-iscsi-state}"
+    if [[ ! -f "$_reconcile_script" ]]; then
+        log_msg "WARN: reconcile-iscsi-state not found at $_reconcile_script —"
+        log_msg "WARN: run it manually once it is installed"
+    else
+        read -rp "Run reconcile-iscsi-state now? (y/N): " _reconcile_answer
+        if [[ "$_reconcile_answer" =~ ^[Yy]$ ]]; then
+            echo ""
+            if "$_reconcile_script"; then
+                log_msg "INFO: ✓ Reconcile complete"
+            else
+                log_msg "FATAL: reconcile-iscsi-state reported problems — resolve them"
+                log_msg "FATAL: and re-run it"
+                exit 1
+            fi
+        else
+            log_msg "WARN: Reconcile not run — run 'sudo reconcile-iscsi-state' when ready"
+        fi
+    fi
+fi
+
 echo ""
 log_msg "INFO: === Done ==="

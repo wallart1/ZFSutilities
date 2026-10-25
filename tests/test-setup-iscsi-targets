@@ -1,0 +1,337 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-setup-iscsi-targets — Unit tests for target setup plus the M3
+# post-restore detection and the reconcile offer.
+#
+# The script runs top-level (no main()), so each test executes a rewritten
+# copy from a runner that mocks targetcli/zfs/hostname before sourcing it
+# (the pattern of test-safe-iscsi-save). The targetcli mock mutates its own
+# fixtures so create calls evolve the tree like the real tool.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# test-lib's mydir is the repository root (bin/ and lib/ live under it).
+repo_root="$mydir"
+IQN1="iqn.2026-02.local.stewie:threeamigos"
+INIT1="iqn.2026-02.local.tweety"
+
+# ------------------------------------------------------------------
+# Runner harness
+# ------------------------------------------------------------------
+
+# Build the fixtures and the runner for one scenario and execute it.
+#   $1 scenario  healthy | postrestore | fresh
+#   $2 stdin answer for the reconcile prompt ("" = EOF/empty)
+#   $3 reconcile stub exit code (default 0)
+# Sets _run_output / _run_rc / _action_log / _reconcile_log for assertions.
+run_setup_targets() {
+    local scenario="$1" answer="${2:-}" reconcile_rc="${3:-0}"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    _action_log="$tmpdir/actions.log"
+    _reconcile_log="$tmpdir/reconcile.log"
+    : > "$_action_log"
+    : > "$_reconcile_log"
+
+    cat > "$tmpdir/node.conf" << 'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="stewie"
+COMPUTE_HOST="tweety"
+STORAGE_IP="192.168.100.1"
+IQN_PREFIX="iqn.2026-02.local.stewie"
+declare -A POOL_TARGET=( [threeamigos]="threeamigos" )
+EOF
+
+    cat > "$tmpdir/reconcile" << EOF
+#!/usr/bin/bash
+echo "RECONCILE_INVOKED" >> '$_reconcile_log'
+exit $reconcile_rc
+EOF
+    chmod +x "$tmpdir/reconcile"
+
+    # Detection fixtures: the zvol predates 2026-06; the postrestore
+    # scenario regresses the OS-disk files to 2025-10 (before the zvol).
+    printf 'threeamigos/proxmox/vm-101-disk-0\t1780000000\n' > "$tmpdir/zvols"
+    echo '{"storage_objects":[],"targets":[]}' > "$tmpdir/saveconfig.json"
+    printf 'VM|threeamigos:0|101|testvm|scsi0\n' > "$tmpdir/vmrefs"
+
+    local mock_ls="$IQN1" mock_luns="" mock_portals="" mock_acls="" mock_gen=1
+    case "$scenario" in
+        healthy)
+            printf 'vm-101-disk-0\n' > "$tmpdir/manifest"
+            touch "$tmpdir/saveconfig.json" "$tmpdir/manifest"
+            mock_luns="  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/x) (default_tg_pt_gp)]"
+            mock_portals="192.168.100.1:3260"
+            mock_acls="  o- ${INIT1} .......... [Mapped LUNs: 1]"
+            ;;
+        postrestore)
+            printf 'vm-101-disk-0\nvm-999-disk-0\n' > "$tmpdir/manifest"
+            touch -d @1760000000 "$tmpdir/saveconfig.json" "$tmpdir/manifest"
+            mock_portals="192.168.100.1:3260"
+            ;;
+        fresh)
+            printf 'vm-101-disk-0\n' > "$tmpdir/manifest"
+            touch "$tmpdir/saveconfig.json" "$tmpdir/manifest"
+            : > "$tmpdir/vmrefs"
+            mock_ls=""
+            mock_gen=0
+            ;;
+    esac
+
+    sed \
+        -e "s|source ~/bashinit|source \"$mydir/bin/bashinit\"|g" \
+        -e 's|^source_helper rootcheck$|# rootcheck stays mocked (suite runs non-root)|' \
+        "$repo_root/bin/setup-iscsi-targets" > "$tmpdir/setup-copy"
+
+    cat > "$tmpdir/runner" << 'RUNNEREOF'
+#!/usr/bin/bash
+# Mocks first: the setup copy runs its whole top level at source time.
+hostname() { echo stewie; }
+rootcheck() { true; }
+targetcli() {
+    local args="$*"
+    case "$args" in
+        "/iscsi ls")
+            [[ -n "$MOCK_ISCSI_LS" ]] && printf '%s\n' "$MOCK_ISCSI_LS"
+            ;;
+        "/iscsi create "*)
+            MOCK_ISCSI_LS+=$'\n  o- '"${args##*create }"' [TPGs: 1]'
+            printf 'target-create\n' >> "$MOCK_ACTION_LOG"
+            ;;
+        *"/tpg1/luns ls")
+            [[ -n "$MOCK_LUNS" ]] && printf '%s\n' "$MOCK_LUNS"
+            ;;
+        *"/tpg1/portals ls")
+            [[ -n "$MOCK_PORTALS" ]] && printf '%s\n' "$MOCK_PORTALS"
+            ;;
+        *"/tpg1/portals create "*)
+            MOCK_PORTALS+=$'\n'"${args##*create }"
+            printf 'portal-create\n' >> "$MOCK_ACTION_LOG"
+            ;;
+        *"/tpg1/acls ls")
+            [[ -n "$MOCK_ACLS" ]] && printf '%s\n' "$MOCK_ACLS"
+            ;;
+        *"get attribute generate_node_acls")
+            printf 'generate_node_acls=%s\n' "$MOCK_GEN_ACLS"
+            ;;
+        *"set attribute generate_node_acls=1")
+            MOCK_GEN_ACLS=1
+            printf 'gen-acls-flip\n' >> "$MOCK_ACTION_LOG"
+            ;;
+        "saveconfig")
+            printf 'saveconfig\n' >> "$MOCK_ACTION_LOG"
+            ;;
+    esac
+    return 0
+}
+zfs() {
+    if [[ "$1 $2" == "list -Hp" ]]; then
+        cat "$ZVOLS_FIXTURE"
+        return 0
+    fi
+    return 0
+}
+source "$SETUP_COPY"
+RUNNEREOF
+
+    _run_rc=0
+    _run_output=$(printf '%s\n' "$answer" | env \
+        SETUP_COPY="$tmpdir/setup-copy" \
+        MOCK_ISCSI_LS="$mock_ls" \
+        MOCK_LUNS="$mock_luns" \
+        MOCK_PORTALS="$mock_portals" \
+        MOCK_ACLS="$mock_acls" \
+        MOCK_GEN_ACLS="$mock_gen" \
+        MOCK_ACTION_LOG="$_action_log" \
+        ZVOLS_FIXTURE="$tmpdir/zvols" \
+        NODE_CONF="$tmpdir/node.conf" \
+        NODE_LIB="$repo_root/lib/node-lib.sh" \
+        SETUP_ISCSI_TARGETS_ISCSI_LIB="$repo_root/lib/iscsi-lib.sh" \
+        SETUP_ISCSI_TARGETS_RECONCILE="$tmpdir/reconcile" \
+        ISCSI_SAVECONFIG="$tmpdir/saveconfig.json" \
+        ISCSI_MANIFEST="$tmpdir/manifest" \
+        ISCSI_DETECT_VM_REFS_FILE="$tmpdir/vmrefs" \
+        bash "$tmpdir/runner" 2>&1) || _run_rc=$?
+
+    _run_tmpdir="$tmpdir"
+}
+
+setup_teardown() {
+    [[ -n "${_run_tmpdir:-}" && -d "$_run_tmpdir" ]] && rm -rf "$_run_tmpdir"
+    _run_tmpdir=""
+}
+
+out_has() {
+    [[ "$_run_output" == *"$1"* ]]
+}
+
+actions_has() {
+    grep -qxF -- "$1" "$_action_log"
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_healthy_run_reports_no_signature() {
+    test_start "healthy topology: setup is a no-op and detection stays quiet"
+    run_setup_targets healthy ""
+    local ok=true
+    [[ "$_run_rc" -eq 0 ]] || ok=false
+    out_has "Target already exists" || ok=false
+    out_has "No post-restore signature found" || ok=false
+    out_has "Post-restore signature detected" && ok=false
+    out_has "Run reconcile-iscsi-state now?" && ok=false
+    ! actions_has "target-create" || ok=false
+    ! actions_has "saveconfig" || ok=false
+    [[ ! -s "$_reconcile_log" ]] || ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_run_rc — healthy run strayed"
+    fi
+    setup_teardown
+}
+
+test_postrestore_signature_prints_evidence() {
+    test_start "post-restore signature: all three detector lines reach the output"
+    run_setup_targets postrestore n
+    local ok=true
+    [[ "$_run_rc" -eq 0 ]] || ok=false
+    out_has "Post-restore signature detected" || ok=false
+    # (a) stale OS-disk files
+    out_has "saveconfig.json was last written" || ok=false
+    out_has "OS-disk LIO state predates the pools" || ok=false
+    # (b) VM ref with no live LUN
+    out_has "VM 101 (testvm) scsi0 references threeamigos LUN 0" || ok=false
+    out_has "that LUN is not exported live" || ok=false
+    # (c) manifest entry without a zvol
+    out_has "manifest expects vm-999-disk-0 but no such VM zvol exists" || ok=false
+    # Offer wording and the reconcile pointer. (The y/N prompt itself is
+    # terminal-only output — bash read -p suppresses it on piped stdin —
+    # so the offer is asserted through its surrounding evidence lines.)
+    out_has "pool-resident state map" || ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_run_rc — evidence incomplete"
+    fi
+    setup_teardown
+}
+
+test_offer_declined_leaves_system_untouched() {
+    test_start "declining the reconcile offer changes nothing"
+    run_setup_targets postrestore n
+    local ok=true
+    [[ "$_run_rc" -eq 0 ]] || ok=false
+    out_has "Reconcile not run — run 'sudo reconcile-iscsi-state' when ready" || ok=false
+    [[ ! -s "$_reconcile_log" ]] || ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_run_rc — decline path strayed"
+    fi
+    setup_teardown
+}
+
+test_offer_accepted_runs_reconcile() {
+    test_start "accepting the offer runs reconcile-iscsi-state"
+    run_setup_targets postrestore y 0
+    local ok=true
+    [[ "$_run_rc" -eq 0 ]] || ok=false
+    grep -qxF "RECONCILE_INVOKED" "$_reconcile_log" || ok=false
+    out_has "Reconcile complete" || ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_run_rc — reconcile not run or not reported"
+    fi
+    setup_teardown
+}
+
+test_reconcile_failure_fails_setup() {
+    test_start "a failing reconcile fails the run (exit 1) with a FATAL"
+    run_setup_targets postrestore y 1
+    local ok=true
+    [[ "$_run_rc" -eq 1 ]] || ok=false
+    grep -qxF "RECONCILE_INVOKED" "$_reconcile_log" || ok=false
+    out_has "reconcile-iscsi-state reported problems" || ok=false
+    out_has "=== Done ===" && ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_run_rc — failure not propagated"
+    fi
+    setup_teardown
+}
+
+test_missing_reconcile_script_warns() {
+    test_start "a missing reconcile-iscsi-state warns instead of prompting"
+    run_setup_targets postrestore n
+    # Drop the stub so the offer degrades to the not-found warning.
+    rm -f "$_run_tmpdir/reconcile"
+    local rc=0 out
+    out=$(printf 'n\n' | env \
+        SETUP_COPY="$_run_tmpdir/setup-copy" \
+        MOCK_ISCSI_LS="$IQN1" \
+        MOCK_LUNS="" \
+        MOCK_PORTALS="192.168.100.1:3260" \
+        MOCK_ACLS="" \
+        MOCK_GEN_ACLS=1 \
+        MOCK_ACTION_LOG="$_action_log" \
+        ZVOLS_FIXTURE="$_run_tmpdir/zvols" \
+        NODE_CONF="$_run_tmpdir/node.conf" \
+        NODE_LIB="$repo_root/lib/node-lib.sh" \
+        SETUP_ISCSI_TARGETS_ISCSI_LIB="$repo_root/lib/iscsi-lib.sh" \
+        SETUP_ISCSI_TARGETS_RECONCILE="$_run_tmpdir/reconcile" \
+        ISCSI_SAVECONFIG="$_run_tmpdir/saveconfig.json" \
+        ISCSI_MANIFEST="$_run_tmpdir/manifest" \
+        ISCSI_DETECT_VM_REFS_FILE="$_run_tmpdir/vmrefs" \
+        bash "$_run_tmpdir/runner" 2>&1) || rc=$?
+    local ok=true
+    [[ "$rc" -eq 0 ]] || ok=false
+    [[ "$out" == *"reconcile-iscsi-state not found"* ]] || ok=false
+    [[ "$out" != *"Run reconcile-iscsi-state now?"* ]] || ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc — missing-stub degradation wrong"
+    fi
+    setup_teardown
+}
+
+test_fresh_install_creates_and_still_detects_clean() {
+    test_start "fresh install path: targets/portals created, ACL flip, clean detection"
+    run_setup_targets fresh ""
+    local ok=true
+    [[ "$_run_rc" -eq 0 ]] || ok=false
+    out_has "Targets created:   1" || ok=false
+    out_has "Portals added:     1" || ok=false
+    out_has "Demo-mode ACLs enabled" || ok=false
+    actions_has "target-create" || ok=false
+    actions_has "portal-create" || ok=false
+    actions_has "gen-acls-flip" || ok=false
+    actions_has "saveconfig" || ok=false
+    # No VM refs gathered (empty fixture): detection reports clean.
+    out_has "No post-restore signature found" || ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_run_rc — fresh-install flow incomplete"
+    fi
+    setup_teardown
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_healthy_run_reports_no_signature
+test_postrestore_signature_prints_evidence
+test_offer_declined_leaves_system_untouched
+test_offer_accepted_runs_reconcile
+test_reconcile_failure_fails_setup
+test_missing_reconcile_script_warns
+test_fresh_install_creates_and_still_detects_clean
+
+test_summary

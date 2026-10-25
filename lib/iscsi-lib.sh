@@ -1,13 +1,19 @@
 #!/usr/bin/bash
 # iscsi-lib.sh
 # Shared iSCSI helpers: target-state discovery (parse_backstores,
-# parse_target_luns, parse_target_acls, discover_zvols, is_vm_backstore_name)
-# plus the teardown/rebuild helpers used by zfsdelfs and zfs-send-receive.
+# parse_target_luns, parse_target_acls, discover_zvols, is_vm_backstore_name),
+# the restore-time detection helpers (detect_stale_lio_files,
+# detect_manifest_without_zvols, detect_vm_refs_missing_live), and the
+# teardown/rebuild helpers used by zfsdelfs and zfs-send-receive.
 #
 # This library is sourced at the file level by:
 #   - zfsdelfs, to tear down iSCSI LUNs before destroying VM zvols.
 #   - zfs-send-receive, to rebuild iSCSI LUNs after a successful zfs receive.
 #   - repair-iscsi-luns and export-iscsi-state, for the discovery helpers.
+#   - setup-iscsi-targets and reconcile-iscsi-state, for the discovery and
+#     detection helpers.
+#   - check-prerequisites (--two-node, with ISCSI_LIB_NO_BOOTSTRAP=1), for
+#     the detection helpers only.
 #
 # The library loads its own dependencies (bashinit and node-lib.sh) when the
 # sourcing context has not already loaded them. The probe is node-lib's
@@ -15,7 +21,12 @@
 # on this block for node-lib, while repair-iscsi-luns and export-iscsi-state
 # source both before this library — and in unit tests a re-load here would
 # re-run bashinit's session-log setup and clobber the harness's command mocks.
-if [[ $(type -t pool_to_target 2>/dev/null) != "function" ]]; then
+# ISCSI_LIB_NO_BOOTSTRAP=1 exempts a strictly standalone consumer
+# (check-prerequisites, a read-only gate that must also run pre-install with
+# no installed bashinit): it sources this library for the restore-time
+# detection helpers only, none of which needs the session machinery.
+if [[ "${ISCSI_LIB_NO_BOOTSTRAP:-}" != "1" ]] \
+        && [[ $(type -t pool_to_target 2>/dev/null) != "function" ]]; then
     source ~/bashinit
     bashinit
 
@@ -233,6 +244,215 @@ newest_iscsi_state_map() {
         fi
     done < <(pool_list)
     [[ -n "$best" ]] && printf '%s\n' "$best"
+}
+
+# ------------------------------------------------------------------
+# Restore-time detection (bare-metal-restore signatures)
+# ------------------------------------------------------------------
+# A storage-host bare-metal restore regresses saveconfig.json and the
+# expected-backstores manifest together (both live on the OS disk) while the
+# pools re-import current. These read-only detectors surface the three
+# post-restore signatures so check-prerequisites can warn informationally
+# and setup-iscsi-targets can offer the reconcile. Findings accumulate in
+# the _detect_lines array (declare -g per the sourced-library law); the
+# callers print them in their own voice and decide what to do.
+#
+# Every helper here must also survive `set -euo pipefail` (check-prerequisites
+# sources this library under it) and a missing tool set: each detector
+# returns quietly when its inputs are absent, so a pre-install gate on a
+# fresh host reports nothing rather than failing.
+
+# LIO's persisted config — the OS-disk file whose content (and, with
+# rsync-preserved mtimes, timestamp) regresses in a bare-metal restore.
+: "${ISCSI_SAVECONFIG:=/etc/rtslib-fb-target/saveconfig.json}"
+
+# Tests substitute the compute-host VM-reference gather with a file of
+# list-vm-disks --gather-vm-info records (VM|targetshort:lun|vmid|name|key).
+# Unset = gather over ssh via iscsi_detect_vm_gather below.
+: "${ISCSI_DETECT_VM_REFS_FILE:=}"
+
+# Reset the detection evidence accumulator (findings from a previous run
+# and the one-shot zvol scan cache).
+detect_reset() {
+    _detect_lines=()
+    _detect_zvol_recs=""
+    _detect_zvols_scanned=false
+    return 0
+}
+declare -ga _detect_lines=()
+_detect_zvol_recs=""
+_detect_zvols_scanned=false
+
+# One-shot scan of the VM zvols (same universe as discover_zvols: datasets
+# exactly at <pool>/proxmox/vm-<vmid>-disk-<n>). With node-lib loaded the
+# scan is scoped to the configured pools; standalone consumers
+# (check-prerequisites) get the all-pools equivalent — backup copies that
+# nest deeper than <pool>/proxmox never match either shape. Populates
+# _detect_zvol_recs as "backstore|creation_epoch" lines.
+_detect_ensure_zvols() {
+    [[ "$_detect_zvols_scanned" == true ]] && return 0
+    _detect_zvols_scanned=true
+    _detect_zvol_recs=""
+
+    local pool ds base parent ct
+    if [[ $(type -t pool_list 2>/dev/null) == "function" ]]; then
+        while IFS= read -r pool; do
+            [[ -z "$pool" ]] && continue
+            while IFS=$'\t' read -r ds ct; do
+                [[ -n "$ds" ]] || continue
+                parent="${ds%/*}"
+                base="${ds##*/}"
+                [[ "$parent" == "$pool/proxmox" ]] || continue
+                is_vm_backstore_name "$base" || continue
+                _detect_zvol_recs+="${base}|${ct}"$'\n'
+            done < <(zfs list -Hp -t volume -o name,creation -r "$pool/proxmox" 2>/dev/null)
+        done < <(pool_list)
+    else
+        while IFS=$'\t' read -r ds ct; do
+            [[ -n "$ds" ]] || continue
+            parent="${ds%/*}"
+            base="${ds##*/}"
+            [[ "$parent" == */proxmox ]] || continue
+            [[ "$parent" == */*/* ]] && continue
+            is_vm_backstore_name "$base" || continue
+            _detect_zvol_recs+="${base}|${ct}"$'\n'
+        done < <(zfs list -Hp -t volume -o name,creation 2>/dev/null)
+    fi
+    return 0
+}
+
+# Print an epoch value as a human-readable timestamp (or @<epoch> when date
+# cannot parse it).
+_detect_fmt_time() {
+    date -d "@$1" '+%Y-%m-%d %H:%M' 2>/dev/null || printf '@%s' "$1"
+    return 0
+}
+
+# Signature (a): saveconfig.json or the manifest predates the newest VM zvol.
+# A bare-metal restore rewrites the OS disk from an older backup (rsync
+# preserves mtimes), so an OS-disk file older than a still-current zvol means
+# the recorded LIO state is missing everything created since the backup point.
+detect_stale_lio_files() {
+    _detect_ensure_zvols
+
+    local newest_name="" newest_ct=0 name ct
+    while IFS='|' read -r name ct; do
+        [[ -n "$name" ]] || continue
+        [[ -n "$ct" && "$ct" != *[!0-9]* ]] || continue
+        if (( ct > newest_ct )); then
+            newest_ct=$ct
+            newest_name="$name"
+        fi
+    done <<< "${_detect_zvol_recs}"
+    [[ -n "$newest_name" ]] || return 0
+
+    local f mt msg
+    for f in "$ISCSI_SAVECONFIG" "$ISCSI_MANIFEST"; do
+        [[ -f "$f" ]] || continue
+        mt=$(stat -c %Y -- "$f" 2>/dev/null) || continue
+        [[ -n "$mt" && "$mt" != *[!0-9]* ]] || continue
+        if (( newest_ct > mt )); then
+            msg="${f##*/} was last written $(_detect_fmt_time "$mt")"
+            msg+=" but VM zvol ${newest_name} was created"
+            msg+=" $(_detect_fmt_time "$newest_ct") — OS-disk LIO state predates"
+            msg+=" the pools (bare-metal restore signature)"
+            _detect_lines+=("$msg")
+        fi
+    done
+    return 0
+}
+
+# Signature (c): manifest entries with no matching zvol. The manifest is
+# maintained by the LUN tooling, so on a healthy system every entry has a
+# zvol; an entry without one means the manifest regressed to a backup point
+# that predates a disk removal (or the zvol is gone while the manifest says
+# otherwise).
+detect_manifest_without_zvols() {
+    [[ -f "$ISCSI_MANIFEST" ]] || return 0
+    _detect_ensure_zvols
+
+    local -A seen=()
+    local name ct entry msg
+    while IFS='|' read -r name ct; do
+        [[ -n "$name" ]] && seen["$name"]=1
+    done <<< "${_detect_zvol_recs}"
+
+    while IFS= read -r entry; do
+        is_vm_backstore_name "$entry" || continue
+        if [[ -z "${seen[$entry]:-}" ]]; then
+            msg="manifest expects ${entry} but no such VM zvol exists"
+            msg+=" (deleted, offline pool, or a regressed manifest)"
+            _detect_lines+=("$msg")
+        fi
+    done < "$ISCSI_MANIFEST"
+    return 0
+}
+
+# VM-reference gather for detection: list-vm-disks --gather-vm-info on the
+# compute host (records: VM|targetshort:lun|vmid|name|key, including
+# efidisk refs). Unit tests override this function or point
+# ISCSI_DETECT_VM_REFS_FILE at a fixture.
+iscsi_detect_vm_gather() {
+    local remote_script
+    remote_script=$(remote_zfsutility_script "$compute_host" "list-vm-disks") || return 1
+    ssh -o ConnectTimeout=10 "root@${compute_host}" \
+        "${remote_script} --gather-vm-info" 2>/dev/null
+}
+
+# Signature (b): compute-host VM disk references whose (target, LUN) is
+# absent from the live LIO tree — the PVE side of a regressed LIO config
+# (VM start aborts on the missing by-path link). Requires the live-tree
+# helper from node-lib (lio_target_iqns); returns quietly without it or
+# when the compute host cannot be gathered (unreachable is not itself a
+# restore signature).
+detect_vm_refs_missing_live() {
+    [[ $(type -t lio_target_iqns 2>/dev/null) == "function" ]] || return 0
+
+    local vm_data=""
+    if [[ -n "$ISCSI_DETECT_VM_REFS_FILE" && -f "$ISCSI_DETECT_VM_REFS_FILE" ]]; then
+        vm_data=$(cat "$ISCSI_DETECT_VM_REFS_FILE" 2>/dev/null) || vm_data=""
+    elif [[ $(type -t iscsi_detect_vm_gather 2>/dev/null) == "function" ]]; then
+        vm_data=$(iscsi_detect_vm_gather) || vm_data=""
+    else
+        return 0
+    fi
+    [[ -n "$vm_data" ]] || return 0
+
+    local -A live_shorts=() live_slots=()
+    local iqn short bs
+    while IFS= read -r iqn; do
+        [[ -n "$iqn" ]] || continue
+        short="${iqn##*:}"
+        live_shorts["$short"]=1
+        parse_target_luns "$iqn"
+        for bs in "${!_lun_indexes[@]}"; do
+            live_slots["${short}|${_lun_indexes[$bs]}"]=1
+        done
+    done < <(lio_target_iqns)
+
+    local -a fields=()
+    local disk_id vmid vname vkey lun msg
+    while IFS='|' read -r -a fields; do
+        [[ "${fields[0]:-}" == "VM" ]] || continue
+        disk_id="${fields[1]:-}"
+        vmid="${fields[2]:-}"
+        vname="${fields[3]:-}"
+        vkey="${fields[4]:-}"
+        [[ "$disk_id" == *:* ]] || continue
+        short="${disk_id%%:*}"
+        lun="${disk_id##*:}"
+        [[ -n "$lun" && "$lun" != *[!0-9]* ]] || continue
+        msg="VM ${vmid} (${vname}) ${vkey} references"
+        if [[ -z "${live_shorts[$short]:-}" ]]; then
+            msg+=" target ${short} LUN ${lun} — no live iSCSI target carries that name"
+            _detect_lines+=("$msg")
+        elif [[ -z "${live_slots[${short}|${lun}]:-}" ]]; then
+            msg+=" ${short} LUN ${lun} — that LUN is not exported live"
+            msg+=" (bare-metal restore signature)"
+            _detect_lines+=("$msg")
+        fi
+    done <<< "$vm_data"
+    return 0
 }
 
 # Remove a backstore name from the expected-backstores manifest if present.

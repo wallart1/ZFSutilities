@@ -332,8 +332,9 @@ detect_installed_state() {
         has_logrotate="true"
     fi
 
-    if [[ -d "$systemd_dir/rtslib-fb-targetctl.service.d" || \
-          -f "$systemd_dir/zfs-cache-warm.service" ]]; then
+    if [[ -d "$systemd_dir/rtslib-fb-targetctl.service.d" \
+            || -f "$systemd_dir/zfs-cache-warm.service" \
+            || -f "$systemd_dir/zfsutilities-iscsi-fence.timer" ]]; then
         has_systemd="true"
     fi
 
@@ -451,6 +452,7 @@ confirm_uninstall() {
         log_msg "INFO:   - $logrotate_file"
         log_msg "INFO:   - $systemd_dir/rtslib-fb-targetctl.service.d/"
         log_msg "INFO:   - $systemd_dir/zfs-cache-warm.service"
+        log_msg "INFO:   - $systemd_dir/zfsutilities-iscsi-fence.service/.timer"
         log_msg "INFO:   - $system_config_dir/"
         log_msg "INFO:   - $state_dir/"
         log_msg "INFO:   - $NODE_CONF"
@@ -478,6 +480,7 @@ confirm_uninstall() {
         log_msg "INFO:   - $logrotate_file"
         log_msg "INFO:   - $systemd_dir/rtslib-fb-targetctl.service.d/"
         log_msg "INFO:   - $systemd_dir/zfs-cache-warm.service"
+        log_msg "INFO:   - $systemd_dir/zfsutilities-iscsi-fence.service/.timer"
         log_msg "INFO:   - Desktop shortcuts for the GUI and documentation viewer"
         log_msg "INFO:"
         log_msg "INFO: The following will be preserved:"
@@ -515,6 +518,8 @@ uninstall_software() {
     # Stop/disable services before removing their units.
     systemctl_cmd stop zfs-cache-warm.service
     systemctl_cmd disable zfs-cache-warm.service
+    systemctl_cmd stop zfsutilities-iscsi-fence.timer
+    systemctl_cmd disable zfsutilities-iscsi-fence.timer
 
     # Remove active-version wiring via switch-version if it is still present.
     local switch_version="$version_base/current/bin/switch-version"
@@ -558,6 +563,8 @@ uninstall_software() {
     # Remove systemd integration.
     remove_dir "$systemd_dir/rtslib-fb-targetctl.service.d"
     remove_file "$systemd_dir/zfs-cache-warm.service"
+    remove_file "$systemd_dir/zfsutilities-iscsi-fence.service"
+    remove_file "$systemd_dir/zfsutilities-iscsi-fence.timer"
 
     reload_systemd
 

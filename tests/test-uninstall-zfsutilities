@@ -121,10 +121,13 @@ _make_fake_version() {
     chmod +x "$version_base/versions/$version/bin/switch-version"
 }
 
-# Record systemctl invocations.
+# Record systemctl invocations. When _systemctl_log names a file, also
+# append each call there — main() runs in a subshell, so appends to the
+# in-memory array made inside it do not survive.
 _systemctl_calls=()
 systemctl() {
     _systemctl_calls+=("$*")
+    [[ -n "${_systemctl_log:-}" ]] && printf '%s\n' "$*" >> "$_systemctl_log"
     return 0
 }
 
@@ -139,6 +142,7 @@ ssh() {
 _clear_mocks() {
     _systemctl_calls=()
     _ssh_calls=()
+    unset _systemctl_log
 }
 
 # ------------------------------------------------------------------
@@ -162,6 +166,8 @@ test_default_uninstall_removes_software_preserves_config() {
     touch "$tmpdir/etc/cron.d/zfsutilities"
     touch "$tmpdir/etc/logrotate.d/zfsutilities"
     mkdir -p "$tmpdir/etc/systemd/system/rtslib-fb-targetctl.service.d"
+    touch "$tmpdir/etc/systemd/system/zfsutilities-iscsi-fence.service"
+    touch "$tmpdir/etc/systemd/system/zfsutilities-iscsi-fence.timer"
     touch "$tmpdir/var/lib/zfsutilities/config.json"
     touch "$tmpdir/var/log/zfsutilities/session.log"
 
@@ -174,6 +180,9 @@ test_default_uninstall_removes_software_preserves_config() {
         fi
     }
     chown() { true; }
+
+    _systemctl_log="$tmpdir/systemctl.log"
+    : > "$_systemctl_log"
 
     ( main --yes ) >/dev/null 2>&1
     local rc=$?
@@ -213,6 +222,21 @@ test_default_uninstall_removes_software_preserves_config() {
         failed=1
         echo "    iscsi-lib.sh symlink still present"
     fi
+    if [[ -d "$tmpdir/etc/systemd/system/rtslib-fb-targetctl.service.d" ]]; then
+        failed=1
+        echo "    rtslib drop-in directory still present"
+    fi
+    if [[ -f "$tmpdir/etc/systemd/system/zfsutilities-iscsi-fence.service" ]] \
+            || [[ -f "$tmpdir/etc/systemd/system/zfsutilities-iscsi-fence.timer" ]]; then
+        failed=1
+        echo "    iSCSI fence unit files still present"
+    fi
+    if ! grep -q '^stop zfsutilities-iscsi-fence.timer$' "$_systemctl_log" \
+            || ! grep -q '^disable zfsutilities-iscsi-fence.timer$' "$_systemctl_log"; then
+        failed=1
+        echo "    fence timer was not stopped and disabled before unit removal"
+    fi
+    unset _systemctl_log
 
     _teardown_uninstall_env "$tmpdir"
 
@@ -264,6 +288,34 @@ test_rootcheck_symlink_removed() {
         test_pass
     else
         test_fail "rootcheck symlink was not removed"
+    fi
+}
+
+test_fence_timer_alone_marks_systemd() {
+    test_start "a lone iSCSI fence timer counts as systemd integration"
+    local tmpdir
+    _setup_uninstall_env tmpdir
+    _clear_mocks
+
+    # No rtslib drop-ins and no cache-warm unit — only the fence timer,
+    # so has_systemd must come from the fence marker alone.
+    touch "$tmpdir/etc/systemd/system/zfsutilities-iscsi-fence.timer"
+
+    load_uninstall_config
+    detect_installed_state
+
+    local failed=0
+    if [[ "$has_systemd" != "true" ]]; then
+        failed=1
+        echo "    fence timer alone did not set has_systemd"
+    fi
+
+    _teardown_uninstall_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "fence timer is not recognized as systemd integration"
     fi
 }
 
@@ -832,6 +884,7 @@ test_config_load_survives_unset_legacy_vars() {
 
 test_default_uninstall_removes_software_preserves_config
 test_rootcheck_symlink_removed
+test_fence_timer_alone_marks_systemd
 test_purge_removes_config_logs_cachewarm
 test_dry_run_makes_no_changes
 test_yes_skips_interactive_dialog

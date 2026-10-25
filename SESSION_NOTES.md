@@ -427,3 +427,164 @@ Ran the 7-step wrap-up over the uncommitted M1+M2 working tree.
 - Step 7: codebase frozen at this point (no commit — awaiting user
   confirmation per Hard Rules).
 
+## 2026-10-24 — pub3 lane created (no code changes; work done from pub)
+
+- User created the third lane from the pub session: `/NFS1/dan(NFS1)/
+  zfsutilities-pub3`, fully independent repo (init + fetch from pub — own
+  object store, no alternates/hardlinks), single branch `pub3` at pub main
+  d0dfa43 (0.130.0), tracking `pub/main`. Remotes mirror pub2's: `origin`
+  (GitHub, unused) + sibling `pub`. Tags through v0.130.0 fetched.
+- pub does NOT yet carry a `pub3` remote (pub untouched this turn, per Hard
+  Rules) — add it at the first pub3 lane merge, with user confirmation.
+- Memory continuity wired same day: pub3's project memory dir
+  (`zfsutilities-pub3-68973cdaeb8a3188`; slug = first 16 hex of sha256 of
+  the absolute path, verified against pub/pub2 slugs) symlinks to the shared
+  store. Owner's guide + parallel-repo-lanes memory updated (three-way
+  documentation agreement).
+
+## 2026-10-24 — M3: restore-time detection (design D)
+
+Executed milestone 3 of the iSCSI-resilience plan (`/NFS1/dan(NFS1)/
+zfsutilities-plan/iSCSI resilience plan`), alone, per the milestone cycle.
+M4–M6 remain; PREEXISTING.md entry stays until M6.
+
+- `lib/iscsi-lib.sh`: new read-only detector section — findings accumulate
+  in `_detect_lines` (indexed, `declare -ga`; one finding = one line), each
+  detector skips quietly when its inputs are absent, and everything is
+  `set -euo pipefail`-safe because check-prerequisites sources the lib under
+  strict mode. Signatures: (a) `detect_stale_lio_files` — saveconfig.json/
+  manifest mtime older than the newest VM zvol creation (ISCSI_SAVECONFIG
+  knob added; rsync-preserved mtimes make the restore regression visible);
+  (b) `detect_vm_refs_missing_live` — compute-host VM (target,LUN) refs
+  absent live (uses node-lib's lio_target_iqns + parse_target_luns; gather
+  via `iscsi_detect_vm_gather`, overridable with ISCSI_DETECT_VM_REFS_FILE);
+  (c) `detect_manifest_without_zvols` — manifest entries with no zvol. Zvol
+  universe = discover_zvols' exact `<pool>/proxmox/vm-N-disk-N` shape
+  (nested backup copies like fivebays/threeamigos/proxmox never match);
+  with pool_list present the scan is scoped to configured pools, else
+  all pools (check-prerequisites context). New `ISCSI_LIB_NO_BOOTSTRAP=1`
+  escape in the lib bootstrap so standalone consumers (check-prerequisites,
+  pre-install, no bashinit) can source it.
+- `bin/check-prerequisites --two-node`: runs detectors (a)+(c) after the
+  two-node command checks — informational `warn` lines + a pointer to
+  setup-iscsi-targets; clean state prints one pass line; findings never
+  enter --list-failures and never change the exit code (read-only gate).
+- `bin/setup-iscsi-targets`: sources iscsi-lib
+  (SETUP_ISCSI_TARGETS_ISCSI_LIB knob); after the summary runs all three
+  detectors — on findings prints evidence and offers reconcile-iscsi-state
+  (SETUP_ISCSI_TARGETS_RECONCILE knob; y/N; y runs it INTERACTIVELY so its
+  own plan+confirm gate still applies; declined or missing stub = WARN;
+  accepted-but-failed = FATAL + exit 1). Fresh installs can't false-positive
+  (no VM refs yet, OS-disk files absent → detectors skip).
+- Tests: test-check-prerequisites +4 (stale-saveconfig warn / dead manifest
+  entry with live-zvol non-warn proof / healthy pass line / findings absent
+  from --list-failures) — sealed-PATH stubs gained stat/date/realpath/
+  dirname + TWO_NODE_STUB + ZFS_VOLUMES_FIXTURE; the zfs fixture stub must
+  use builtins only (no `cat` in the sealed PATH — a 127 there silently
+  empties the scan; caught by the live-zvol non-warn assert). New
+  `tests/test-setup-iscsi-targets` (7, runner pattern per test-safe-iscsi-
+  save): healthy no-op+clean detection / postrestore evidence for all three
+  signatures / decline / accept / reconcile-failure exit 1 / missing-stub
+  degradation / fresh-install create+ACL-flip+saveconfig smoke. Gotcha:
+  bash `read -p` prints the prompt only on a TTY — assert the offer through
+  surrounding lines, never the prompt text (piped-stdin trap, again).
+- Docs: two-node.md (setup-iscsi-targets description/modules/flow step 6/
+  return codes + reconcile prerequisites cross-note), commands.md
+  (check-prerequisites categories + called modules + structures),
+  messages/index.md (13 setup-iscsi-targets rows + 3 check-prerequisites
+  rows); docs integrity 23 passed.
+
+## 2026-10-24 — M4: compute-host fence (design C, auto-recover) + activation wiring
+
+- New `bin/check-vm-disk-paths` (compute host, silent single-node exit,
+  FATAL off-host/no-qm/non-root): gathers VM-config disk refs incl. efidisk
+  via LOCAL `list-vm-disks --gather-vm-info` (no ssh on healthy ticks) and
+  checks each expected
+  `/dev/disk/by-path/ip-<ip>:3260-iscsi-<iqn>:<target>-lun-<n>` link
+  (`-e`, so dangling links count as missing). Per-missing-item WARN lines
+  carry the full identity (VM, name, key, IQN, LUN, expected link); healthy
+  tick = ONE summary INFO line (journal-churn discipline). `--recover`:
+  rescan-storage locally first (advisory — WARN on failure, never blocks),
+  re-check, then exactly ONE ssh `reconcile-iscsi-state --yes` on the
+  storage host (output streams into the fence journal), re-check; a refused
+  reconcile stays report-only (WARN, no retry, never guesses). Exit 1 while
+  anything is missing. Knobs: CHECK_VM_DISK_PATHS_{NODE_LIB,LIST_VM_DISKS,
+  VM_REFS_FILE,RESCAN_STORAGE,BY_PATH_DIR,SKIP_ROOT,TEST_MODE}.
+- `share/two-node/zfsutilities-iscsi-fence.{service,timer}`: oneshot +
+  OnBootSec=2min/OnUnitActiveSec=5min timer, WantedBy=timers.target.
+  Service sets `ZFSUTILITIES_LOG_INHERIT=Y` — bashinit would otherwise
+  create a session log per 5-minute tick (288/day); INHERIT keeps ticks
+  journal-only. ExecStart uses the stable `/usr/local/lib/zfsutilities/bin/`
+  symlink (same pattern as the rtslib drop-in's ExecStartPost).
+- `bin/switch-version` `install_iscsi_fence_units` (called from
+  install_wiring after install_rtslib_dropins): gated on `qm` presence +
+  node.conf not single-node (subshell source, absent NODE_MODE = legacy
+  two-node, with node-lib's two legacy-conf fallbacks; ZFSUTILITIES_-
+  SYSTEM_CONFIG_DIR/-LEGACY_* knobs); installs/refreshes both units from
+  current/share/two-node (cmp -s idempotence, daemon-reload only on
+  change) and `systemctl enable --now` the timer every activation
+  (self-healing re-enable). GOTCHA (set-e function-rc trap, again): the
+  idempotent run's last `[[ 0 -gt 0 ]] && log` returned 1 from the
+  function and killed the errexit test shell — explicit `return 0`.
+- `bin/install-two-node`: summary block names the fence + timer (asserted
+  in test-installer-flows) and the activation comment block documents both
+  systemd integrations.
+- `bin/uninstall-zfsutilities` (symmetric removal, follows the
+  zfs-cache-warm pattern): stop+disable the fence timer before unit
+  removal, remove both units in uninstall_software, fence timer in the
+  has_systemd detection and both summary lists — an enabled timer pointing
+  at deleted scripts every 5 minutes is exactly the litter the uninstall
+  exists to remove.
+- Tests: NEW `tests/test-check-vm-disk-paths` (12; eval/TEST_MODE pattern
+  per test-reconcile-iscsi-state): loads / single-node silent / wrong-host
+  FATAL / no-qm FATAL / bad-option usage / gather-failure FATAL / no-refs
+  exit 0 / healthy tick (asserts NO ssh + NO rescan + no WARN) / missing
+  report-only / rescan-fixes (no ssh) / reconcile-fixes (asserts the exact
+  ssh command incl. --yes, one call) / refused-reconcile report-only (one
+  ssh, exit 1). test-switch-version +4 (fence install+enable+refresh with
+  version skew + idempotent no-reload / no-qm skip / single-node skip /
+  no-conf skip). GOTCHAS: (1) patching my_host twice needs the PRISTINE
+  script text — the first patch consumes the `$(hostname -s)` pattern;
+  (2) test-lib.sh defines a GLOBAL `qm(){ true; }` mock, so simulating
+  qm-absence needs `unset -f qm` inside the subshell — empty PATH alone
+  cannot hide a function; (3) ssh-mock side effects must be flag-driven
+  (`_ssh_repairs_link`) — redefining ssh() inside one test leaks into the
+  next.
+- Docs: two-node.md new check-vm-disk-paths section + TOC entry +
+  switch-version (fence row in structures, flow step, side effects),
+  messages/index.md check-vm-disk-paths section + switch-version fence
+  rows + install-two-node summary row.
+
+
+
+## 2026-10-24 — 7-step wrap-up over the uncommitted M3+M4 working tree
+
+- Step 1/4: skipped by their own precondition — pub2 (PROMPTQUEUE2), not
+  the pub main repo. PREEXISTING.md at 5 entries before and after.
+- Step 2 (code review vs coding-policies.md): shellcheck -S warning clean
+  on all 11 changed/new bash files; init blocks, knob patterns, guard
+  style (TEST_MODE + BASH_SOURCE, family-consistent), log_msg priorities,
+  global-output-variable law, switch-version fence wiring mirrors
+  install_rtslib_dropins (cmp -s idempotence, reload-on-change). Two
+  pre-existing >100-col lines in check-prerequisites (matplotlib warn,
+  untouched region) — trivial, suppressed.
+- Step 3 (test review): missing coverage found and added —
+  test-uninstall-zfsutilities gained fence-unit removal + timer
+  stop/disable asserts (systemctl mock now also logs to a file: main runs
+  in a subshell, in-memory arrays don't survive) + a lone-fence-timer
+  has_systemd test (suite 11→12); test-switch-version gained a structural
+  guard on the shipped fence units (stable-path ExecStart + --recover,
+  ZFSUTILITIES_LOG_INHERIT=Y, 5-min cadence, timers.target; suite 15→16).
+  Cross-referenced suites (fresh-install-guards, upgrade, installer-*
+  checks/structure, j04/j05 journeys) verified unaffected — structural or
+  stub-based; journey rc=0 holds (fresh installs can't false-positive the
+  detectors). Nothing obsolete or incorrect found.
+- Step 5 (docs): cycle doc changes verified accurate against the code;
+  docs integrity 23 passed; site rebuilt (mkdocs 1.6.1, exit 0, only the
+  known mkdocs-material/Zensical-hold warning).
+- Step 6 (full suite, no soaks): 102 suites, 5311 passed / 0 failed /
+  1 skipped (test-zfslockmanager-soak, excluded by design). 13 rootcheck
+  stub dirs leaked in /tmp (known PREEXISTING entry; not swept — outside
+  the working directory per Hard Rules).
+- Step 7: codebase frozen at this point (no commit — awaiting user
+  confirmation per Hard Rules).
