@@ -216,11 +216,15 @@ class TestCheckagainstHandlers(unittest.TestCase):
 
 
 class TestDashboardPageSpec(unittest.TestCase):
-    """Dashboard page spec exposes the View Log action."""
+    """Dashboard page spec exposes the task row actions."""
 
     def test_includes_view_log_button(self):
         buttons = action_dispatch.PAGE_SPECS["dashboard"]["buttons"]
         self.assertIn(("View Log", "text-x-generic", "_view_log_button"), buttons)
+
+    def test_includes_remove_selected_button(self):
+        buttons = action_dispatch.PAGE_SPECS["dashboard"]["buttons"]
+        self.assertIn(("Remove Selected", "edit-delete", "_remove_button"), buttons)
 
 
 class TestDashboardHandlers(unittest.TestCase):
@@ -229,6 +233,10 @@ class TestDashboardHandlers(unittest.TestCase):
     def test_view_log_handler(self):
         handler = action_dispatch.ACTION_HANDLERS["dashboard"]["View Log"]
         self.assertIs(handler, action_dispatch.on_dashboard_view_log)
+
+    def test_remove_selected_handler(self):
+        handler = action_dispatch.ACTION_HANDLERS["dashboard"]["Remove Selected"]
+        self.assertIs(handler, action_dispatch.on_dashboard_remove_selected)
 
 
 class TestLogsPageSpec(unittest.TestCase):

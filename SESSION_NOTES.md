@@ -588,3 +588,144 @@ M4–M6 remain; PREEXISTING.md entry stays until M6.
   the working directory per Hard Rules).
 - Step 7: codebase frozen at this point (no commit — awaiting user
   confirmation per Hard Rules).
+
+## 2026-10-24 — Schedule page: drop "(weekly)" bucket word from Next Run
+
+User request: the parenthesized retention-bucket word at the end of the
+Next Run column ("(weekly)" on root-backup-dailybackup's Sunday run) reads
+as a run frequency; remove it.
+
+- `python/schedule_page.py`: `_next_run_strings` no longer appends the
+  bucket word; `_BUCKET_WORDS` and the `snapshot_naming.bucket_for` import
+  removed (no other users). The conditional UTC-edge translation hint
+  ("· 23:30 Sat = 03:30 Sun UTC — names dated Sun") STAYS — user objection
+  was only the frequency misreading; hint phrasing doesn't carry it.
+  Label still gates the hint for snapshot-creating profile types.
+- Tests: TestNextRunBucketDecoration → TestNextRunDecoration (pins no
+  bucket word; edge-hint behavior unchanged). Build-rows test now uses an
+  edge time so backup (hint) vs retention (bare) rows stay distinguishable
+  — and needed a `_NEXT_RUN_CACHE.clear()` it previously lucked past: the
+  retention row's key (empty cron, no label) collided with the fallback
+  string cached by TestNextRunStrings in the same UTC minute.
+- Docs: gtk-gui.md Next Run column row + decoration paragraph;
+  python-modules.md schedule_page.py overview + `_next_run_strings` row.
+  Changelog untouched (Hard Rule).
+
+## 2026-10-24 — GUI: Performance tab moved to bottom of the sidebar
+
+User request: move the Performance tab to the bottom of the navigation
+column.
+
+- `python/zfsutilities_gui.py`: `("memory", "Performance", …)` moved from
+  position 9 (first of the four infrastructure tabs) to the end of
+  `PAGE_BUILDERS`; comment updated. Internal stack name "memory" unchanged
+  (persisted config key for pop-out state/interval — nothing stored moves).
+- Test: `TestSidebarPageOrder.test_infrastructure_tabs_are_last` now pins
+  `names[-4:] == ["disks", "pools", "datasets", "memory"]`.
+- Docs: gtk-gui.md Tabs table row moved last + intro sentence says
+  "Performance last"; mkdocs site rebuilt after the edit.
+
+## 2026-10-24 — Dashboard: merged Tasks list (waiting/running/completed)
+
+User request: combine Recent Operations + Running Tasks into one "Tasks"
+tree view with a new Waiting capability; rows reverse-chronological;
+status = "Waiting since <time>" / "Running since <start> (+progress)" /
+highest message level; keep the 10-task widget size; only completed rows
+removable; Cancel must work for waiting rows too.
+
+- `python/dashboard_page.py`: one Tasks frame replaces both sections
+  (`_refresh_tasks_section` merges collector output + newest history
+  entries; hidden cols state/task_key/log_file/completed-key; sort by
+  row time, timeless rows on top). Collector gains additive `started`
+  and `wait_started` keys (schema otherwise unchanged — the close-time
+  `_collect_abortable_tasks` still parses `status` PIDs). New time
+  helpers `_zfs_time_to_iso` (zpool/`ps lstart=` format), 
+  `_epoch_to_local_iso`, `_iso_to_epoch`; ZFS-op start parsed from the
+  pool section's "in progress since" line; scheduled start from
+  `ps -o lstart=`. Widget = `capped_treeview_scroll(row_target=10,
+  fixed_rows=True)` — constant ten-row window, scrolls beyond.
+- Dismissal: Remove Selected button (action_dispatch) removes completed
+  rows only; keys (log_file, else timestamp|name) persisted under
+  dashboard config `dismissed_tasks` (DASHBOARD_DEFAULTS entry added;
+  get_dashboard_config back-fills existing configs), filtered on refresh,
+  pruned to the ten-entry window. History file untouched — Logs-tab
+  success-rate metrics unaffected.
+- Waiting cancel: GUI runners already SIGINT the lock wait
+  (`BackupRunner.cancel`); `_cancel_task` gained the `profile-wait:`
+  branch — re-queries `list_running_profiles()` at click time and
+  SIGTERMs the live waiting PID (vanished entry → WARN). Lingering
+  .waiting files self-heal (loader ignores dead PIDs).
+- `python/backup_runner.py`: `_lock_wait_started` set at both
+  `_in_lock_wait` transitions (stdout + stderr), cleared on release,
+  reset in start().
+- Tests: test_dashboard_page merged-section suite (rows, ordering,
+  statuses, dismissal, gating, cancel incl. profile-wait), collector
+  time-key tests, time/progress helpers; test_backup_runner
+  `_lock_wait_started` transitions. pyproject: DTZ007 joined the
+  project's naive-datetime ignore family.
+- Docs: gtk-gui.md Tasks section (intro, cancel table incl. waiting,
+  Remove subsection, Actions table + Remove row, surface-test pointer),
+  profiles.md waiting-profile pointer, python-modules.md dashboard_page
+  rows. Changelog untouched (Hard Rule).
+
+## 2026-10-24 — Development cycle wrap-up (7-step, pub3)
+
+Ran the 7-step wrap-up over the uncommitted working tree (Dashboard
+Tasks merge + Performance-tab move + Next Run bucket-word removal).
+
+- Step 1/4: skipped — the step's own note restricts it to the PUB
+  (main branch) repository; this lane is pub3. Disclosed in the report.
+- Step 2 (coding standards): ruff check + format clean repo-wide. New
+  code verified against coding-policies.md (documented >10-char regex,
+  log_msg priorities, naming, no site-specific data, no deprecated
+  APIs, DTZ007 consistent with the naive-datetime ignore family). One
+  fix: gui_helpers.capped_treeview_scroll docstring still called
+  fixed_rows=False "the Dashboard convention" — reworded (Tasks now
+  pins fixed_rows=True/ten rows; Active Locks keeps natural height).
+- Step 3 (tests): suites reviewed; three coverage gaps closed —
+  TestOnDashboardCancelSelected (direct handler tests: col-5 reads,
+  waiting+running dispatch, no-selection WARN, no-cancellable no-timeout),
+  TestDashboardPageSpec/Handlers Remove Selected button+handler wiring,
+  TestDashboardConfig dismissed_tasks default + legacy-config back-fill.
+  Affected suites green before moving on.
+- Step 5 (docs): all three modified docs verified against final code
+  (Type column values match collector literals exactly; Tasks/Remove/
+  cancel sections accurate; stale "Recent Operations"/"Running Tasks"
+  wording exists only in changelog history — left). test_docs_integrity
+  green; mkdocs site rebuilt (known mkdocs-material warning, exit 0).
+- Step 6 (full suite, no soaks): 100 suites — all passed, one
+  environment skip (rootcheck root-branch, suite runs as non-root).
+  No failures to resolve; no new PREEXISTING entries.
+- Step 7: codebase frozen at this point (no commit — awaiting user
+  confirmation per Hard Rules).
+
+## 2026-10-24 — Release 0.131.0 (pre-deployment continuation, steps 8–10)
+
+- Step 8: VERSION → 0.131.0; changelog section added (merged Tasks
+  list, Remove Selected, waiting-task cancel, Performance tab last,
+  Next Run bucket word removed); test_docs_integrity green after the
+  edit. __pycache__ swept (4 dirs). With-soak gate run 1: one failure
+  — test-unarchive-vm Test 26, the ssh-mock existence probe missed
+  the in-memory fs_list under ~2x parallel load; product code FATALed
+  correctly for the answer it got. Not a product defect: 4 standalone
+  reruns green + the suite green in the same-day non-soak run; flake
+  filed in PREEXISTING.md (post-mortem log was swept before
+  inspection — if it recurs, capture it immediately). Gate rerun 2:
+  100 suites, all passed, 0 failed. __pycache__ swept again post-run.
+- Step 9: no code changes after the gate.
+- Step 10: git add -A + release commit per the numbered-step
+  confirmation.
+
+## 2026-10-25 — pub3 lane merged into pub2 (PROMPTQUEUE2)
+
+- User-requested cross-lane merge: pub3 tip 0743b5d merged into this
+  lane. Brings Release 0.131.0 Dashboard work (merged Tasks list,
+  Remove Selected, waiting-task cancel, Performance tab last, Next Run
+  bucket word removed), pub3's PREEXISTING infra-vdev entry retirement,
+  and pub main's d0dfa43 install-test-deps Pygments fix (sat between
+  the merge base ad27709 and pub3's tip).
+- Conflicts only in SESSION_NOTES.md and the changelog 0.131.0 section;
+  both resolved by union — both lanes' entries kept, changelog
+  sub-sections in Added → Changed → Tests → Documentation order. All
+  python/bash code auto-merged with no manual resolution. VERSION
+  auto-resolved to the common 0.131.0. Not pushed, not deployed.

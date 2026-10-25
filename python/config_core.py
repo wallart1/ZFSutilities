@@ -56,6 +56,9 @@ BACKUP_DEFAULTS = {
 DASHBOARD_DEFAULTS = {
     "low_space_threshold": 80,
     "refresh_seconds": 30,
+    # Completed Tasks rows the user removed; keyed by log file (or
+    # timestamp|name) so they stay hidden across dashboard refreshes.
+    "dismissed_tasks": [],
 }
 
 

@@ -30,6 +30,7 @@ from dashboard_page import (
     on_dashboard_cancel_selected,
     on_dashboard_fix_locks,
     on_dashboard_refresh,
+    on_dashboard_remove_selected,
     on_dashboard_view_log,
     setup_dashboard_actions,
 )
@@ -272,6 +273,7 @@ PAGE_SPECS = {
             ("Refresh", "view-refresh", None),
             ("Fix Locks", "edit-clear", "_fix_locks_button"),
             ("Cancel Selected Tasks", "process-stop", "_cancel_selected_button"),
+            ("Remove Selected", "edit-delete", "_remove_button"),
             ("View Log", "text-x-generic", "_view_log_button"),
         ],
         "post_setup": setup_dashboard_actions,
@@ -528,6 +530,7 @@ ACTION_HANDLERS = {
         "Refresh": on_dashboard_refresh,
         "Fix Locks": on_dashboard_fix_locks,
         "Cancel Selected Tasks": on_dashboard_cancel_selected,
+        "Remove Selected": on_dashboard_remove_selected,
         "View Log": on_dashboard_view_log,
     },
     "retention": {

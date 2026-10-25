@@ -68,6 +68,44 @@ def _frame_title(frame):
     return label.set_markup.call_args[0][0]
 
 
+def _make_tasks_selection_app(rows):
+    """Build an app whose Tasks selection exposes per-row hidden columns.
+
+    ``rows`` is a list of dicts whose task_key / state / log_file keys
+    mirror the merged Tasks store's hidden columns (5 / 4 / 6).  Row
+    dicts stay live, so tests can mutate a row and re-invoke the
+    selection callback to simulate a selection change.
+    """
+    app = MagicMock()
+    model = MagicMock()
+    iters = [MagicMock() for _ in rows]
+    paths = [MagicMock() for _ in rows]
+
+    def get_value(tree_iter, col):
+        row = rows[iters.index(tree_iter)]
+        if col == 4:
+            return row.get("state", "")
+        if col == 5:
+            return row.get("task_key", "")
+        if col == 6:
+            return row.get("log_file", "")
+        if col == 7:
+            return row.get("completed_key", row.get("log_file", ""))
+        return ""
+
+    model.get_value.side_effect = get_value
+
+    def get_iter(path):
+        return iters[paths.index(path)]
+
+    model.get_iter.side_effect = get_iter
+
+    selection = MagicMock()
+    selection.get_selected_rows.return_value = (model, paths)
+    app.dashboard_tasks_view.get_selection.return_value = selection
+    return app, selection
+
+
 class TestGetPoolHealth(unittest.TestCase):
     def test_empty_zpool_list(self):
         with mock_subprocess() as m:
@@ -1502,6 +1540,239 @@ class TestProfileNameFromRunnerArgs(unittest.TestCase):
         self.assertIsNone(dp._profile_name_from_runner_args(""))
 
 
+class TestCollectRunningTaskTimes(CollectRunningTasksIdleHostMixin):
+    """started / wait_started keys across the collector's sources."""
+
+    RESILVER_RAW = """\
+  pool: tank
+ state: DEGRADED
+  scan: resilver in progress since Thu Sep 10 22:00:00 2026
+    45.20% done, 0 days 02:10:00 to go
+"""
+
+    def _idle_app(self):
+        app = MagicMock()
+        app.backup_runner = None
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+        app.dataset_runner = None
+        app.scrub_queue = None
+        return app
+
+    def test_gui_runner_started_from_session_start_time(self):
+        app = self._idle_app()
+        runner = MagicMock()
+        runner.running = True
+        runner.label = "Backup"
+        runner.operation_detail = None
+        runner.steps = [("step1", [], False, False)]
+        runner._finally_step = None
+        runner.current_step = 0
+        runner._in_lock_wait = False
+        runner._session_start_time = 1_780_000_000.0
+        app.backup_runner = runner
+        tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertAlmostEqual(dp._iso_to_epoch(tasks[0]["started"]), 1_780_000_000.0, delta=1.0)
+        self.assertIsNone(tasks[0]["wait_started"])
+
+    def test_waiting_gui_runner_wait_started(self):
+        app = self._idle_app()
+        runner = MagicMock()
+        runner.running = True
+        runner.label = "Backup"
+        runner.operation_detail = None
+        runner.steps = [("step1", [], False, False)]
+        runner._finally_step = None
+        runner.current_step = 0
+        runner._in_lock_wait = True
+        runner._session_start_time = 1_780_000_000.0
+        runner._lock_wait_started = 1_780_003_600.0
+        app.backup_runner = runner
+        tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertTrue(tasks[0]["waiting_for_lock"])
+        self.assertAlmostEqual(
+            dp._iso_to_epoch(tasks[0]["wait_started"]), 1_780_003_600.0, delta=1.0
+        )
+
+    def test_scrub_started_from_as_of(self):
+        from scrub_manager import ScrubState
+
+        app = self._idle_app()
+        queue = MagicMock()
+        queue.active = {"fivebays"}
+        app.scrub_queue = queue
+        with patch(
+            "scrub_manager.get_all_pool_scrub_states",
+            return_value={
+                "fivebays": MagicMock(
+                    state=ScrubState.SCANNING,
+                    progress_percent=10.0,
+                    eta=None,
+                    as_of="Sun May 10 00:24:03 2026",
+                )
+            },
+        ):
+            tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertIsNotNone(dp._iso_to_epoch(tasks[0]["started"]))
+
+    def test_zfs_op_started_from_since_line(self):
+        app = self._idle_app()
+        repo = MagicMock()
+        repo.all_pool_status_text.return_value = self.RESILVER_RAW
+        app.ctx.zfs_repository = repo
+        with patch.object(dp, "get_default_repository", return_value=repo):
+            tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        started = dp._iso_to_epoch(tasks[0]["started"])
+        self.assertIsNotNone(started)
+        expected = dp._zfs_time_to_iso("Thu Sep 10 22:00:00 2026")
+        self.assertAlmostEqual(started, dp._iso_to_epoch(expected), delta=1.0)
+
+    def test_profile_started_keys(self):
+        app = self._idle_app()
+        with patch.object(
+            dp,
+            "list_running_profiles",
+            return_value=[
+                {"name": "Daily", "pid": 1234, "started": "2026-06-29T10:00:00"},
+                {
+                    "name": "Weekly",
+                    "pid": 1235,
+                    "started": "2026-06-29T10:05:00",
+                    "waiting": True,
+                },
+            ],
+        ):
+            tasks = dp._collect_running_tasks(app)
+        by_name = {t["name"]: t for t in tasks}
+        self.assertEqual(by_name["Daily"]["started"], "2026-06-29T10:00:00")
+        self.assertIsNone(by_name["Daily"]["wait_started"])
+        # A waiting invocation's start is also when its wait began.
+        self.assertEqual(by_name["Weekly"]["started"], "2026-06-29T10:05:00")
+        self.assertEqual(by_name["Weekly"]["wait_started"], "2026-06-29T10:05:00")
+
+    def test_scheduled_started_from_lstart(self):
+        app = self._idle_app()
+
+        def _run(cmd, *a, **kw):
+            result = MagicMock()
+            if cmd[0] == "pgrep":
+                result.returncode = 0
+                result.stdout = "2040788\n"
+            elif cmd[-1] == "lstart=":
+                result.returncode = 0
+                result.stdout = "Thu Oct 23 22:10:31 2026\n"
+            else:
+                result.returncode = 0
+                result.stdout = (
+                    "python3 /usr/local/lib/zfsutilities/current/python/profile_runner.py "
+                    "run root-backup-dailybackup"
+                )
+            return result
+
+        with patch("subprocess.run", side_effect=_run):
+            tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertIsNotNone(dp._iso_to_epoch(tasks[0]["started"]))
+
+    def test_scheduled_lstart_failure_leaves_started_none(self):
+        app = self._idle_app()
+
+        def _run(cmd, *a, **kw):
+            result = MagicMock()
+            if cmd[0] == "pgrep":
+                result.returncode = 0
+                result.stdout = "2040788\n"
+            elif cmd[-1] == "lstart=":
+                result.returncode = 1
+                result.stdout = ""
+            else:
+                result.returncode = 0
+                result.stdout = (
+                    "python3 /usr/local/lib/zfsutilities/current/python/profile_runner.py "
+                    "run root-backup-dailybackup"
+                )
+            return result
+
+        with patch("subprocess.run", side_effect=_run):
+            tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertIsNone(tasks[0]["started"])
+
+    def test_surface_test_started_from_state(self):
+        entry = {"status": "running", "started_at": "2026-06-29T09:30:00", "progress_percent": 5}
+        with patch(
+            "disk_surface_test.load_surface_test_state",
+            return_value={"tests": {"/dev/sda": entry}},
+        ):
+            with patch("disk_surface_test.surface_cell_text", return_value="5%"):
+                app = self._idle_app()
+                tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["started"], "2026-06-29T09:30:00")
+
+
+class TestTaskTimeHelpers(unittest.TestCase):
+    """Timestamp conversions behind the merged Tasks rows."""
+
+    def test_zfs_time_to_iso_parses(self):
+        iso = dp._zfs_time_to_iso("Sun May 10 00:24:03 2026")
+        self.assertIsNotNone(dp._iso_to_epoch(iso))
+
+    def test_zfs_time_to_iso_handles_padded_day(self):
+        iso = dp._zfs_time_to_iso("Mon Oct  5 09:05:02 2026")
+        self.assertIsNotNone(dp._iso_to_epoch(iso))
+
+    def test_zfs_time_to_iso_rejects_bad_input(self):
+        self.assertIsNone(dp._zfs_time_to_iso(""))
+        self.assertIsNone(dp._zfs_time_to_iso(None))
+        self.assertIsNone(dp._zfs_time_to_iso(MagicMock()))
+        self.assertIsNone(dp._zfs_time_to_iso("not a date"))
+
+    def test_epoch_to_local_iso_roundtrip(self):
+        iso = dp._epoch_to_local_iso(1_780_000_000.0)
+        self.assertAlmostEqual(dp._iso_to_epoch(iso), 1_780_000_000.0, delta=1.0)
+
+    def test_epoch_to_local_iso_rejects_bad_input(self):
+        self.assertIsNone(dp._epoch_to_local_iso(None))
+        self.assertIsNone(dp._epoch_to_local_iso(0))
+        self.assertIsNone(dp._epoch_to_local_iso(MagicMock()))
+
+    def test_iso_to_epoch_rejects_bad_input(self):
+        self.assertIsNone(dp._iso_to_epoch(""))
+        self.assertIsNone(dp._iso_to_epoch("?"))
+        self.assertIsNone(dp._iso_to_epoch("not-a-date"))
+        self.assertIsNone(dp._iso_to_epoch(MagicMock()))
+
+
+class TestRunningProgressText(unittest.TestCase):
+    """The parenthetical progress kept on running rows."""
+
+    def test_step_text_is_progress(self):
+        self.assertEqual(dp._running_progress_text({"status": "Step 2/3"}), "Step 2/3")
+
+    def test_scrub_percent_is_progress(self):
+        status = "42.1% complete (ETA 2026-07-13 10:00)"
+        self.assertEqual(dp._running_progress_text({"status": status}), status)
+
+    def test_generic_statuses_are_empty(self):
+        for status in ("", "Running", "In progress"):
+            self.assertEqual(dp._running_progress_text({"status": status}), "")
+
+    def test_pid_statuses_are_empty(self):
+        self.assertEqual(dp._running_progress_text({"status": "PID 1234"}), "")
+
+    def test_waiting_statuses_are_empty(self):
+        self.assertEqual(dp._running_progress_text({"status": "Waiting for profile lock"}), "")
+
+    def test_surface_percent_is_progress(self):
+        self.assertEqual(dp._running_progress_text({"status": "5% (1h 20m)"}), "5% (1h 20m)")
+
+
 class TestCollectScheduledTasks(unittest.TestCase):
     """Section 5 of _collect_running_tasks: legacy pgrep/ps profile detection."""
 
@@ -1738,6 +2009,34 @@ class TestCancelTask(unittest.TestCase):
         app.retention_runner.cancel.assert_not_called()
         app.dataset_runner.cancel.assert_not_called()
 
+    def test_cancel_waiting_profile_sends_sigterm(self):
+        """Cancelling a waiting profile signals the live waiting process."""
+        app = MagicMock()
+        with patch.object(
+            dp,
+            "list_running_profiles",
+            return_value=[
+                {
+                    "name": "Daily",
+                    "pid": 4321,
+                    "started": "2026-06-29T10:00:00",
+                    "waiting": True,
+                }
+            ],
+        ):
+            with patch("dashboard_page.os.kill") as mock_kill:
+                dp._cancel_task(app, "profile-wait:Daily")
+        mock_kill.assert_called_once_with(4321, dp.signal.SIGTERM)
+
+    def test_cancel_waiting_profile_no_longer_running(self):
+        """A waiting entry that vanished since the click warns instead."""
+        app = MagicMock()
+        with patch.object(dp, "list_running_profiles", return_value=[]):
+            with patch("dashboard_page.os.kill") as mock_kill, capture_logs() as logs:
+                dp._cancel_task(app, "profile-wait:Daily")
+        mock_kill.assert_not_called()
+        self.assertTrue(any("no longer running" in msg for msg in logs))
+
 
 class TestCachedOrFresh(unittest.TestCase):
     def test_stores_and_returns_fresh_value(self):
@@ -1862,10 +2161,9 @@ class TestRefreshDashboardCache(unittest.TestCase):
                 },
             ),
             patch.object(dp, "_refresh_pool_section"),
-            patch.object(dp, "_refresh_ops_section"),
+            patch.object(dp, "_refresh_tasks_section"),
             patch.object(dp, "_refresh_iscsi_section"),
             patch.object(dp, "_refresh_warnings_section"),
-            patch.object(dp, "_refresh_processes_section"),
             patch.object(dp, "_update_fix_locks_button"),
             patch.object(dp, "_is_two_node", return_value=False),
         ]
@@ -2112,282 +2410,430 @@ class TestUpdateFixLocksButton(unittest.TestCase):
 
 
 class TestViewLogButton(unittest.TestCase):
-    """Dashboard View Log button tracks running tasks and recent operations."""
+    """Dashboard View Log button tracks the merged Tasks selection."""
 
-    def _make_app(
-        self,
-        ops_iter=None,
-        ops_log_file=None,
-        task_paths=None,
-        task_log_files=None,
-    ):
-        app = MagicMock()
+    def _make_app(self, rows=None):
+        app, selection = _make_tasks_selection_app(rows or [])
+        app._cancel_selected_button = MagicMock()
+        app._remove_button = MagicMock()
         app._view_log_button = MagicMock()
-
-        ops_model = MagicMock()
-        ops_model.get_value.return_value = ops_log_file or ""
-        ops_selection = MagicMock()
-        ops_selection.get_selected.return_value = (ops_model, ops_iter)
-        app.dashboard_ops_view.get_selection.return_value = ops_selection
-
-        tasks_selection = MagicMock()
-        task_paths = task_paths or []
-        task_log_files = task_log_files or []
-        model = MagicMock()
-        iters = []
-        for i, _path in enumerate(task_paths):
-            tree_iter = MagicMock()
-            model.get_value.side_effect = lambda _it, col, idx=i: (
-                task_log_files[idx] if col == 4 else ""
-            )
-            iters.append(tree_iter)
-
-        def get_iter(path):
-            return iters[task_paths.index(path)]
-
-        model.get_iter.side_effect = get_iter
-        tasks_selection.get_selected_rows.return_value = (model, task_paths)
-        app.dashboard_tasks_view.get_selection.return_value = tasks_selection
-        return app, ops_selection
+        return app, selection
 
     def test_starts_disabled_when_nothing_selected(self):
         app, _selection = self._make_app()
         dp.setup_dashboard_actions(app)
         app._view_log_button.set_sensitive.assert_called_with(False)
 
-    def test_enables_when_operation_selected(self):
-        app, _selection = self._make_app(ops_iter=MagicMock(), ops_log_file="/var/log/ops.log")
+    def test_enables_when_completed_row_with_log_selected(self):
+        app, _selection = self._make_app(
+            [{"state": "completed", "log_file": "/var/log/zfsutilities/sessions/ops.log"}]
+        )
         dp.setup_dashboard_actions(app)
         app._view_log_button.set_sensitive.assert_called_with(True)
-        self.assertEqual(app._dashboard_view_log_path, "/var/log/ops.log")
+        self.assertEqual(app._dashboard_view_log_path, "/var/log/zfsutilities/sessions/ops.log")
 
     def test_enables_when_running_task_with_log_selected(self):
-        path = MagicMock()
-        app, _selection = self._make_app(task_paths=[path], task_log_files=["/var/log/gui.log"])
+        app, _selection = self._make_app(
+            [
+                {
+                    "state": "running",
+                    "task_key": "runner:backup_runner",
+                    "log_file": "/var/log/zfsutilities/sessions/gui.log",
+                }
+            ]
+        )
         dp.setup_dashboard_actions(app)
         app._view_log_button.set_sensitive.assert_called_with(True)
+        self.assertEqual(app._dashboard_view_log_path, "/var/log/zfsutilities/sessions/gui.log")
 
-    def test_disabled_when_running_task_without_log_selected(self):
-        path = MagicMock()
-        app, _selection = self._make_app(task_paths=[path], task_log_files=[""])
-        dp.setup_dashboard_actions(app)
-        app._view_log_button.set_sensitive.assert_called_with(False)
-
-    def test_toggles_with_selection_changes(self):
-        app, ops_selection = self._make_app()
-        dp.setup_dashboard_actions(app)
-        app._view_log_button.reset_mock()
-
-        ops_model = MagicMock()
-        ops_model.get_value.return_value = "/var/log/ops.log"
-        ops_selection.get_selected.return_value = (ops_model, MagicMock())
-        callback = ops_selection.connect.call_args_list[0][0][1]
-        callback(ops_selection, app)
-        app._view_log_button.set_sensitive.assert_called_once_with(True)
-        self.assertEqual(app._dashboard_view_log_path, "/var/log/ops.log")
-
-    def test_disabled_when_operation_selected_without_log(self):
-        app, _selection = self._make_app(ops_iter=MagicMock(), ops_log_file="")
+    def test_disabled_when_row_without_log_selected(self):
+        app, _selection = self._make_app(
+            [{"state": "running", "task_key": "scrub:fivebays", "log_file": ""}]
+        )
         dp.setup_dashboard_actions(app)
         app._view_log_button.set_sensitive.assert_called_with(False)
         self.assertIsNone(app._dashboard_view_log_path)
 
+    def test_toggles_with_selection_changes(self):
+        row = {"state": "completed", "log_file": ""}
+        app, selection = self._make_app([row])
+        dp.setup_dashboard_actions(app)
+        app._view_log_button.reset_mock()
+
+        row["log_file"] = "/var/log/zfsutilities/sessions/ops.log"
+        callback = selection.connect.call_args[0][1]
+        callback(selection, app)
+        app._view_log_button.set_sensitive.assert_called_once_with(True)
+        self.assertEqual(app._dashboard_view_log_path, "/var/log/zfsutilities/sessions/ops.log")
+
     def test_uses_cached_path_when_selection_lost(self):
         app, _selection = self._make_app()
-        app._dashboard_view_log_path = "/var/log/cached.log"
-        app.dashboard_ops_view.get_selection.return_value.get_selected.return_value = (
-            MagicMock(),
-            None,
-        )
+        app._dashboard_view_log_path = "/var/log/zfsutilities/sessions/cached.log"
         with patch("dashboard_page.select_log_by_path", return_value=True) as mock_select:
             dp.on_dashboard_view_log(app)
         app.stack.set_visible_child_name.assert_called_once_with("logs")
-        mock_select.assert_called_once_with(app, "/var/log/cached.log")
+        mock_select.assert_called_once_with(app, "/var/log/zfsutilities/sessions/cached.log")
 
     def test_no_button_attr_does_not_crash(self):
         app, _selection = self._make_app()
         del app._view_log_button
         dp.setup_dashboard_actions(app)
+        # Should not raise
 
 
 class TestOnDashboardViewLog(unittest.TestCase):
-    def _make_app(self, ops_log_path, task_log_path=None):
-        app = MagicMock()
+    def _make_app(self, rows):
+        app, _selection = _make_tasks_selection_app(rows)
         # Ensure the handler falls back to reading the current selection.
         app._dashboard_view_log_path = None
-
-        # Recent Operations selection
-        ops_model = MagicMock()
-        ops_iter = MagicMock()
-        ops_model.get_value.return_value = ops_log_path
-        ops_selection = MagicMock()
-        ops_selection.get_selected.return_value = (ops_model, ops_iter)
-        app.dashboard_ops_view.get_selection.return_value = ops_selection
-
-        # Running Tasks selection
-        tasks_model = MagicMock()
-        tasks_selection = MagicMock()
-        if task_log_path is not None:
-            path = MagicMock()
-            tree_iter = MagicMock()
-            tasks_model.get_iter.return_value = tree_iter
-            tasks_model.get_value.return_value = task_log_path
-            tasks_selection.get_selected_rows.return_value = (tasks_model, [path])
-        else:
-            tasks_selection.get_selected_rows.return_value = (tasks_model, [])
-        app.dashboard_tasks_view.get_selection.return_value = tasks_selection
-        return app, ops_model, tasks_model
+        return app
 
     @patch("dashboard_page.select_log_by_path", return_value=True)
-    def test_switches_to_logs_for_running_task(self, mock_select):
-        app, _ops_model, _tasks_model = self._make_app(
-            "/var/log/zfsutilities/sessions/old.log",
-            task_log_path="/var/log/zfsutilities/sessions/current.log",
+    def test_switches_to_logs_for_selected_row(self, mock_select):
+        app = self._make_app(
+            [
+                {
+                    "state": "running",
+                    "task_key": "runner:backup_runner",
+                    "log_file": "/var/log/zfsutilities/sessions/current.log",
+                }
+            ]
         )
         dp.on_dashboard_view_log(app)
         app.stack.set_visible_child_name.assert_called_once_with("logs")
         mock_select.assert_called_once_with(app, "/var/log/zfsutilities/sessions/current.log")
 
-    @patch("dashboard_page.select_log_by_path", return_value=True)
-    def test_falls_back_to_recent_operation(self, mock_select):
-        app, _ops_model, _tasks_model = self._make_app("/var/log/zfsutilities/sessions/recent.log")
-        dp.on_dashboard_view_log(app)
-        app.stack.set_visible_child_name.assert_called_once_with("logs")
-        mock_select.assert_called_once_with(app, "/var/log/zfsutilities/sessions/recent.log")
-
     @patch("dashboard_page.select_log_by_path")
-    def test_warns_when_no_selection(self, mock_select):
-        app, _ops_model, _tasks_model = self._make_app("")
-        app.dashboard_ops_view.get_selection.return_value.get_selected.return_value = (
-            MagicMock(),
-            None,
-        )
+    def test_warns_when_no_row_with_log_selected(self, mock_select):
+        app = self._make_app([{"state": "completed", "log_file": ""}])
         with capture_logs() as logs:
             dp.on_dashboard_view_log(app)
-        self.assertTrue(any("No task or recent operation selected" in msg for msg in logs))
-        mock_select.assert_not_called()
-
-    @patch("dashboard_page.select_log_by_path")
-    def test_warns_when_no_log_file(self, mock_select):
-        app, _ops_model, _tasks_model = self._make_app("")
-        with capture_logs() as logs:
-            dp.on_dashboard_view_log(app)
-        self.assertTrue(any("No log file recorded" in msg for msg in logs))
+        self.assertTrue(any("No task row with a log file selected" in msg for msg in logs))
         mock_select.assert_not_called()
 
     @patch("dashboard_page.select_log_by_path", return_value=False)
     def test_warns_when_log_not_found(self, mock_select):
-        app, _ops_model, _tasks_model = self._make_app("/missing.log")
+        app = self._make_app([{"state": "completed", "log_file": "/missing.log"}])
         with capture_logs() as logs:
             dp.on_dashboard_view_log(app)
         self.assertTrue(any("Log entry not found" in msg for msg in logs))
 
 
-class TestRefreshOpsSection(unittest.TestCase):
-    def test_log_file_stored_in_hidden_column(self):
+class TestRefreshTasksSection(unittest.TestCase):
+    """_refresh_tasks_section builds the merged waiting/running/completed list."""
+
+    def _make_app(self, selected_rows=None):
+        """Build an app with a mocked Tasks store and selection.
+
+        ``selected_rows`` lists the hidden-column dicts of the rows the
+        selection reports as selected before the refresh, mirroring what
+        a live refresh would read from the store being rebuilt.
+        """
+        app = MagicMock()
+        app.config = {}
+        store = MagicMock()
+        app.dashboard_tasks_store = store
+        selection = MagicMock()
+        model = MagicMock()
+
+        selected_rows = selected_rows or []
+        sel_iters = [MagicMock() for _ in selected_rows]
+        sel_paths = [MagicMock() for _ in selected_rows]
+
+        def sel_get_value(tree_iter, col):
+            row = selected_rows[sel_iters.index(tree_iter)]
+            if col == 5:
+                return row.get("task_key", "")
+            if col == 6:
+                return row.get("log_file", "")
+            return ""
+
+        model.get_value.side_effect = sel_get_value
+
+        def sel_get_iter(path):
+            return sel_iters[sel_paths.index(path)]
+
+        model.get_iter.side_effect = sel_get_iter
+        selection.get_selected_rows.return_value = (model, sel_paths)
+        app.dashboard_tasks_view.get_selection.return_value = selection
+        return app, store, selection
+
+    def _run_refresh(self, app, tasks=(), recent=()):
         with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
-            app = MagicMock()
-            store = MagicMock()
-            app.dashboard_ops_store = store
-            selection = MagicMock()
-            selection.get_selected.return_value = (MagicMock(), None)
-            app.dashboard_ops_view.get_selection.return_value = selection
-            recent = [
-                {
-                    "timestamp": "2026-05-28T14:32:00",
-                    "type": "backup",
-                    "name": "Daily",
-                    "result": "success",
-                    "log_file": "/var/log/zfsutilities/sessions/daily.log",
-                }
-            ]
-            dp._refresh_ops_section(app, recent)
+            dp._refresh_tasks_section(app, tasks=list(tasks), recent=list(recent))
+
+    def test_empty_placeholder_has_eight_columns(self):
+        app, store, _selection = self._make_app()
+        self._run_refresh(app)
         store.append.assert_called_once()
         appended = store.append.call_args[0][0]
-        self.assertEqual(appended[4], "/var/log/zfsutilities/sessions/daily.log")
+        self.assertEqual(len(appended), 8)
+        self.assertEqual(appended[0], "No tasks")
 
-    def test_preserves_selection_when_log_file_still_present(self):
-        with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
-            app = MagicMock()
-            store = MagicMock()
-            app.dashboard_ops_store = store
-
-            selected_iter = MagicMock()
-            selection = MagicMock()
-            selection.get_selected.return_value = (store, selected_iter)
-            app.dashboard_ops_view.get_selection.return_value = selection
-            store.get_value.return_value = "/var/log/zfsutilities/sessions/keep.log"
-
-            first_iter = MagicMock()
-            second_iter = MagicMock()
-            store.append.side_effect = [first_iter, second_iter]
-
-            recent = [
-                {
-                    "timestamp": "2026-05-28T14:30:00",
-                    "type": "backup",
-                    "name": "Other",
-                    "result": "success",
-                    "log_file": "/var/log/zfsutilities/sessions/other.log",
-                },
-                {
-                    "timestamp": "2026-05-28T14:32:00",
-                    "type": "backup",
-                    "name": "Daily",
-                    "result": "success",
-                    "log_file": "/var/log/zfsutilities/sessions/keep.log",
-                },
-            ]
-            dp._refresh_ops_section(app, recent)
-
-        store.clear.assert_called_once()
-        self.assertEqual(store.append.call_count, 2)
-        selection.select_iter.assert_called_once_with(second_iter)
-
-    def test_clears_selection_when_log_file_no_longer_present(self):
-        with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
-            app = MagicMock()
-            store = MagicMock()
-            app.dashboard_ops_store = store
-
-            selected_iter = MagicMock()
-            selection = MagicMock()
-            selection.get_selected.return_value = (store, selected_iter)
-            app.dashboard_ops_view.get_selection.return_value = selection
-            store.get_value.return_value = "/var/log/zfsutilities/sessions/gone.log"
-
-            store.append.return_value = MagicMock()
-
-            recent = [
-                {
-                    "timestamp": "2026-05-28T14:32:00",
-                    "type": "backup",
-                    "name": "Daily",
-                    "result": "success",
-                    "log_file": "/var/log/zfsutilities/sessions/daily.log",
-                }
-            ]
-            dp._refresh_ops_section(app, recent)
-
-        store.clear.assert_called_once()
-        selection.select_iter.assert_not_called()
-
-
-class TestRefreshProcessesSection(unittest.TestCase):
-    """_refresh_processes_section populates the Running Tasks store."""
-
-    def test_empty_tasks_placeholder_has_five_columns(self):
-        """The 'No running tasks' placeholder matches the ListStore schema."""
-        with mock_gtk() as gtk_mock, patch.object(dp, "Gtk", gtk_mock):
-            app = MagicMock()
-            store = MagicMock()
-            app.dashboard_tasks_store = store
-            dp._refresh_processes_section(app, tasks=[])
-
+    def test_completed_row_columns(self):
+        app, store, _selection = self._make_app()
+        recent = [
+            {
+                "timestamp": "2026-05-28T14:32:00",
+                "type": "backup",
+                "name": "Daily",
+                "result": "success",
+                "log_file": "/var/log/zfsutilities/sessions/daily.log",
+            }
+        ]
+        self._run_refresh(app, recent=recent)
         store.append.assert_called_once()
         appended = store.append.call_args[0][0]
-        self.assertEqual(len(appended), 5)
-        self.assertEqual(appended[0], "No running tasks")
+        self.assertTrue(appended[0].startswith("2026-05-28T14:32"))
+        self.assertEqual(appended[1], "backup")
+        self.assertEqual(appended[2], "Daily")
+        self.assertIn("success", appended[3])
+        self.assertEqual(appended[4], "completed")
+        self.assertEqual(appended[5], "")
+        self.assertEqual(appended[6], "/var/log/zfsutilities/sessions/daily.log")
+        self.assertEqual(appended[7], "/var/log/zfsutilities/sessions/daily.log")
+
+    def test_completed_row_without_log_uses_timestamp_key(self):
+        app, store, _selection = self._make_app()
+        recent = [
+            {
+                "timestamp": "2026-05-28T14:32:00",
+                "type": "backup",
+                "name": "Daily",
+                "result": "success",
+            }
+        ]
+        self._run_refresh(app, recent=recent)
+        appended = store.append.call_args[0][0]
+        self.assertEqual(appended[7], "2026-05-28T14:32:00|Daily")
+
+    def test_waiting_row_status_text(self):
+        app, store, _selection = self._make_app()
+        tasks = [
+            {
+                "name": "Daily",
+                "type": "Profile",
+                "status": "Waiting for profile lock",
+                "task_key": "profile-wait:Daily",
+                "waiting_for_lock": True,
+                "started": "2026-06-29T10:00:00",
+                "wait_started": "2026-06-29T10:05:00",
+            }
+        ]
+        self._run_refresh(app, tasks=tasks)
+        appended = store.append.call_args[0][0]
+        self.assertEqual(appended[4], "waiting")
+        self.assertTrue(appended[3].startswith("Waiting since 2026-06-29T10:05"))
+        # The row's date/time is the task start, not the wait start.
+        self.assertTrue(appended[0].startswith("2026-06-29T10:00"))
+
+    def test_waiting_row_without_times(self):
+        app, store, _selection = self._make_app()
+        tasks = [
+            {
+                "name": "Backup",
+                "type": "GUI",
+                "status": "Waiting for dataset lock",
+                "task_key": "runner:backup_runner",
+                "waiting_for_lock": True,
+                "started": None,
+                "wait_started": None,
+            }
+        ]
+        self._run_refresh(app, tasks=tasks)
+        appended = store.append.call_args[0][0]
+        self.assertEqual(appended[3], "Waiting")
+        self.assertEqual(appended[0], "?")
+
+    def test_running_row_status_with_progress(self):
+        app, store, _selection = self._make_app()
+        tasks = [
+            {
+                "name": "Backup",
+                "type": "GUI",
+                "status": "Step 2/3",
+                "task_key": "runner:backup_runner",
+                "waiting_for_lock": False,
+                "started": "2026-06-29T09:00:00",
+            }
+        ]
+        self._run_refresh(app, tasks=tasks)
+        appended = store.append.call_args[0][0]
+        self.assertEqual(appended[4], "running")
+        self.assertTrue(appended[3].startswith("Running since 2026-06-29T09:00"))
+        self.assertTrue(appended[3].endswith("(Step 2/3)"))
+
+    def test_running_row_omits_pid_and_generic_status(self):
+        app, store, _selection = self._make_app()
+        tasks = [
+            {
+                "name": "Daily",
+                "type": "Profile",
+                "status": "PID 1234",
+                "task_key": "profile:Daily",
+                "waiting_for_lock": False,
+                "started": "2026-06-29T09:00:00",
+            }
+        ]
+        self._run_refresh(app, tasks=tasks)
+        appended = store.append.call_args[0][0]
+        self.assertTrue(appended[3].startswith("Running since 2026-06-29T09:00"))
+        self.assertNotIn("PID", appended[3])
+        self.assertNotIn("(", appended[3])
+
+    def test_reverse_chronological_order_mixed_rows(self):
+        app, store, _selection = self._make_app()
+        tasks = [
+            {
+                "name": "Running task",
+                "type": "GUI",
+                "status": "Step 1/2",
+                "task_key": "runner:backup_runner",
+                "waiting_for_lock": False,
+                "started": "2026-06-29T12:00:00",
+            }
+        ]
+        recent = [
+            {
+                "timestamp": "2026-06-29T13:00:00",
+                "type": "backup",
+                "name": "Newest completed",
+                "result": "success",
+            },
+            {
+                "timestamp": "2026-06-28T10:00:00",
+                "type": "backup",
+                "name": "Older completed",
+                "result": "success",
+            },
+        ]
+        self._run_refresh(app, tasks=tasks, recent=recent)
+        names = [call[0][0][2] for call in store.append.call_args_list]
+        self.assertEqual(names, ["Newest completed", "Running task", "Older completed"])
+
+    def test_timeless_rows_sort_first(self):
+        app, store, _selection = self._make_app()
+        tasks = [
+            {
+                "name": "ZFS op",
+                "type": "ZFS",
+                "status": "42.0% done",
+                "task_key": "zfsop:fivebays",
+                "waiting_for_lock": False,
+                "started": None,
+            }
+        ]
+        recent = [
+            {
+                "timestamp": "2026-06-29T13:00:00",
+                "type": "backup",
+                "name": "Completed",
+                "result": "success",
+            }
+        ]
+        self._run_refresh(app, tasks=tasks, recent=recent)
+        names = [call[0][0][2] for call in store.append.call_args_list]
+        self.assertEqual(names, ["ZFS op", "Completed"])
+
+    def test_preserves_selection_by_task_key_and_log_file(self):
+        app, store, selection = self._make_app(
+            selected_rows=[
+                {"task_key": "runner:backup_runner", "log_file": ""},
+                {"task_key": "", "log_file": "/var/log/zfsutilities/sessions/keep.log"},
+            ]
+        )
+        first_iter, second_iter, third_iter = MagicMock(), MagicMock(), MagicMock()
+        store.append.side_effect = [first_iter, second_iter, third_iter]
+        expected_paths = [MagicMock(), MagicMock()]
+        store.get_path.side_effect = expected_paths
+
+        tasks = [
+            {
+                "name": "Backup",
+                "type": "GUI",
+                "status": "Step 1/2",
+                "task_key": "runner:backup_runner",
+                "waiting_for_lock": False,
+                "started": "2026-06-29T12:00:00",
+            }
+        ]
+        recent = [
+            {
+                "timestamp": "2026-06-29T13:00:00",
+                "type": "backup",
+                "name": "Other",
+                "result": "success",
+                "log_file": "/var/log/zfsutilities/sessions/other.log",
+            },
+            {
+                "timestamp": "2026-06-29T11:00:00",
+                "type": "backup",
+                "name": "Keep",
+                "result": "success",
+                "log_file": "/var/log/zfsutilities/sessions/keep.log",
+            },
+        ]
+        self._run_refresh(app, tasks=tasks, recent=recent)
+
+        self.assertEqual(store.append.call_count, 3)
+        self.assertEqual(selection.select_path.call_count, 2)
+        select_paths = [call[0][0] for call in selection.select_path.call_args_list]
+        self.assertEqual(select_paths, expected_paths)
+
+    def test_dismissed_entries_hidden(self):
+        app, store, _selection = self._make_app()
+        app.config = {"dashboard": {"dismissed_tasks": ["/var/log/zfsutilities/sessions/gone.log"]}}
+        recent = [
+            {
+                "timestamp": "2026-06-29T13:00:00",
+                "type": "backup",
+                "name": "Dismissed",
+                "result": "success",
+                "log_file": "/var/log/zfsutilities/sessions/gone.log",
+            },
+            {
+                "timestamp": "2026-06-29T12:00:00",
+                "type": "backup",
+                "name": "Kept",
+                "result": "success",
+                "log_file": "/var/log/zfsutilities/sessions/kept.log",
+            },
+        ]
+        with patch.object(dp, "save_dashboard_config") as mock_save:
+            self._run_refresh(app, recent=recent)
+            # The dismissal key still matches the window, so nothing is pruned
+            # and nothing needs saving.
+            mock_save.assert_not_called()
+        names = [call[0][0][2] for call in store.append.call_args_list]
+        self.assertEqual(names, ["Kept"])
+
+    def test_dismissal_keys_pruned_to_window(self):
+        app, store, _selection = self._make_app()
+        app.config = {
+            "dashboard": {
+                "dismissed_tasks": [
+                    "/var/log/zfsutilities/sessions/gone.log",
+                    "/var/log/zfsutilities/sessions/ancient.log",
+                ]
+            }
+        }
+        recent = [
+            {
+                "timestamp": "2026-06-29T13:00:00",
+                "type": "backup",
+                "name": "Dismissed",
+                "result": "success",
+                "log_file": "/var/log/zfsutilities/sessions/gone.log",
+            }
+        ]
+        with patch.object(dp, "save_dashboard_config") as mock_save:
+            self._run_refresh(app, recent=recent)
+            mock_save.assert_called_once()
+            saved = mock_save.call_args[0][1]
+            self.assertEqual(saved["dismissed_tasks"], ["/var/log/zfsutilities/sessions/gone.log"])
+        # The only window entry is dismissed, so the placeholder shows.
+        store.append.assert_called_once()
+        self.assertEqual(store.append.call_args[0][0][0], "No tasks")
 
 
 class TestRefreshActiveLocksSection(unittest.TestCase):
@@ -2493,8 +2939,7 @@ class TestCreateDashboardPage(unittest.TestCase):
         self._run_create(app)
         self.assertIsNotNone(app.dashboard_warn_frame)
         self.assertIsNotNone(app.dashboard_pool_frame)
-        self.assertIsNotNone(app.dashboard_proc_frame)
-        self.assertIsNotNone(app.dashboard_ops_frame)
+        self.assertIsNotNone(app.dashboard_tasks_frame)
         self.assertIsNotNone(app.dashboard_iscsi_frame)
         self.assertIsNotNone(app.dashboard_config_frame)
         self.assertIsNotNone(app.dashboard_pool_grid)
@@ -2502,18 +2947,18 @@ class TestCreateDashboardPage(unittest.TestCase):
         self.assertIsNotNone(app.dashboard_refresh_spin)
         self.assertIsNotNone(app.dashboard_refreshing_label)
         self.assertIsNotNone(app.dashboard_tasks_view)
-        self.assertIsNotNone(app.dashboard_ops_view)
-        self.assertIsNotNone(app.dashboard_ops_store)
         self.assertIsNotNone(app.dashboard_tasks_store)
         self.assertIsNotNone(app.dashboard_locks_frame)
         self.assertIsNotNone(app.dashboard_locks_view)
         self.assertIsNotNone(app.dashboard_locks_store)
 
-    def test_dashboard_ops_view_is_bound_for_width_persistence(self):
-        """Recent Operations columns should be saved and restored."""
+    def test_dashboard_tasks_view_is_bound_for_width_persistence(self):
+        """Tasks columns should be saved and restored."""
         app = self._create_app()
         self._run_create(app)
-        app._ui_state.bind_treeview.assert_any_call(app.dashboard_ops_view, "dashboard_ops_view")
+        app._ui_state.bind_treeview.assert_any_call(
+            app.dashboard_tasks_view, "dashboard_tasks_view"
+        )
 
     def test_section_order_in_top_level_box(self):
         app = self._create_app()
@@ -2522,8 +2967,7 @@ class TestCreateDashboardPage(unittest.TestCase):
         expected_titles = [
             "<b>Warnings</b>",
             "<b>Pool Health</b>",
-            "<b>Recent Operations</b>",
-            "<b>Running Tasks</b>",
+            "<b>Tasks</b>",
             "<b>Active Locks</b>",
             "<b>iSCSI Issues</b>",
             "<b>Configuration</b>",
@@ -2531,7 +2975,7 @@ class TestCreateDashboardPage(unittest.TestCase):
         # children[0] is the title label; children[1] is the refresh controls;
         # the remaining children are the section frames.
         frame_children = top_box.children[2:]
-        self.assertEqual(len(frame_children), 7)
+        self.assertEqual(len(frame_children), 6)
         self.assertEqual([_frame_title(f) for f in frame_children], expected_titles)
 
     def test_refresh_spinner_configuration(self):
@@ -2607,10 +3051,10 @@ class TestCreateDashboardPage(unittest.TestCase):
         self.assertIn(app.dashboard_config_grid, config_sw.children)
 
     def test_table_windows_are_capped_scrolls(self):
-        """Recent Operations / Running Tasks / Active Locks sit in the
-        shared capped scrolled windows (propagate natural height, 20-row
-        cap), not fixed-height windows that under-fill short tables; the
-        page viewport sizes its content by natural height so the box is
+        """Tasks / Active Locks sit in the shared capped scrolled windows;
+        the Tasks window keeps a constant ten-row footprint (fixed_rows),
+        while Active Locks keeps the Dashboard's natural-height convention.
+        The page viewport sizes its content by natural height so the box is
         never clamped to the window height."""
         with mock_gtk(fresh=True) as gtk:
             scrolls = []
@@ -2632,33 +3076,38 @@ class TestCreateDashboardPage(unittest.TestCase):
 
             app = self._create_app()
             real_capped = dp_fresh.capped_treeview_scroll
-            fixed_rows_choices = []
+            capped_choices = []
 
             def _record_capped(view, *args, **kwargs):
-                fixed_rows_choices.append(kwargs.get("fixed_rows", "default"))
+                capped_choices.append(
+                    (kwargs.get("row_target", "default"), kwargs.get("fixed_rows", "default"))
+                )
                 return real_capped(view, *args, **kwargs)
 
             with patch.object(dp_fresh, "capped_treeview_scroll", side_effect=_record_capped):
                 with patch.object(dp_fresh, "refresh_dashboard_page"):
                     with patch.object(dp_fresh, "_is_two_node", return_value=False):
                         page = dp_fresh.create_dashboard_page(app)
-            # The Dashboard tables explicitly keep the natural-height
-            # convention even though the helper's default is the
-            # Performance page's fixed 20-row window.
-            self.assertEqual(fixed_rows_choices, [False, False, False])
+            # The Tasks table pins a ten-row window; Active Locks keeps the
+            # natural-height convention.
+            self.assertEqual(capped_choices, [(10, True), ("default", False)])
 
             # ScrolledWindow creation order: the page window, the pool
-            # grid, the three table windows, then the config grid.
-            ops_sw, tasks_sw, locks_sw = scrolls[2], scrolls[3], scrolls[4]
+            # grid, the two table windows, then the config grid.
+            tasks_sw, locks_sw = scrolls[2], scrolls[3]
             for scroll, view in (
-                (ops_sw, app.dashboard_ops_view),
                 (tasks_sw, app.dashboard_tasks_view),
                 (locks_sw, app.dashboard_locks_view),
             ):
                 scroll.add.assert_called_once_with(view)
                 scroll.set_propagate_natural_height.assert_called_once_with(True)
-                scroll.set_min_content_height.assert_called_once_with(60)
+                scroll.set_min_content_height.assert_called_once()
                 scroll.set_max_content_height.assert_called_once()
+            # The fixed ten-row Tasks window sizes above the natural-height
+            # floor Active Locks falls back to.
+            tasks_min = tasks_sw.set_min_content_height.call_args[0][0]
+            self.assertGreater(tasks_min, 60)
+            locks_sw.set_min_content_height.assert_called_once_with(60)
             viewport = page.get_child()
             viewport.set_vscroll_policy.assert_called_once_with(
                 dp_fresh.Gtk.ScrollablePolicy.NATURAL
@@ -2675,80 +3124,196 @@ class TestCreateDashboardPage(unittest.TestCase):
         app.dashboard_iscsi_frame.hide.assert_not_called()
 
 
-class TestCancelSelectedButton(unittest.TestCase):
-    """Dashboard Cancel Selected Tasks button tracks task selection."""
+class TestTaskActionButtons(unittest.TestCase):
+    """Cancel / Remove button gating over the merged Tasks selection."""
 
-    def _make_app_and_selection(self, pathlist, task_keys=None):
-        app = MagicMock()
+    def _make_app(self, rows):
+        app, selection = _make_tasks_selection_app(rows)
         app._cancel_selected_button = MagicMock()
-        tasks_selection = MagicMock()
-        model = MagicMock()
-        task_keys = list(task_keys) if task_keys is not None else [""] * len(pathlist)
-
-        model.get_iter.return_value = MagicMock()
-
-        def get_value(_iter, col):
-            # Column 3 is the task_key; column 4 is the hidden log_file.
-            if col == 3:
-                return task_keys.pop(0)
-            return ""
-
-        model.get_value.side_effect = get_value
-        tasks_selection.get_selected_rows.return_value = (model, pathlist)
-        app.dashboard_tasks_view.get_selection.return_value = tasks_selection
-
-        ops_selection = MagicMock()
-        ops_selection.get_selected.return_value = (MagicMock(), None)
-        app.dashboard_ops_view.get_selection.return_value = ops_selection
-        return app, tasks_selection
+        app._remove_button = MagicMock()
+        app._view_log_button = MagicMock()
+        return app, selection
 
     def test_starts_disabled_when_no_tasks_selected(self):
-        app, selection = self._make_app_and_selection([])
+        app, selection = self._make_app([])
         dp.setup_dashboard_actions(app)
         selection.connect.assert_called()
         app._cancel_selected_button.set_sensitive.assert_called_once_with(False)
+        app._remove_button.set_sensitive.assert_called_once_with(False)
 
-    def test_enables_when_tasks_are_selected(self):
-        app, _selection = self._make_app_and_selection(
-            [MagicMock()], task_keys=["runner:backup_runner"]
+    def test_enables_when_running_task_selected(self):
+        app, _selection = self._make_app([{"state": "running", "task_key": "runner:backup_runner"}])
+        dp.setup_dashboard_actions(app)
+        app._cancel_selected_button.set_sensitive.assert_called_once_with(True)
+        app._remove_button.set_sensitive.assert_called_once_with(False)
+
+    def test_enables_when_waiting_task_selected(self):
+        """Waiting rows are cancellable too."""
+        app, _selection = self._make_app([{"state": "waiting", "task_key": "profile-wait:Daily"}])
+        dp.setup_dashboard_actions(app)
+        app._cancel_selected_button.set_sensitive.assert_called_once_with(True)
+
+    def test_remove_enabled_only_for_completed_row(self):
+        app, _selection = self._make_app(
+            [{"state": "completed", "log_file": "/var/log/zfsutilities/sessions/x.log"}]
         )
         dp.setup_dashboard_actions(app)
-        app._cancel_selected_button.set_sensitive.assert_called_once_with(True)
-
-    def test_toggles_with_selection_changes(self):
-        app, selection = self._make_app_and_selection([])
-        dp.setup_dashboard_actions(app)
-        # reset after initial call
-        app._cancel_selected_button.reset_mock()
-
-        # Simulate a selection-change callback with a task selected
-        path = MagicMock()
-        model = selection.get_selected_rows.return_value[0]
-        model.get_value.side_effect = lambda _iter, col: "runner:backup_runner" if col == 3 else ""
-        selection.get_selected_rows.return_value = (model, [path])
-        callback = selection.connect.call_args[0][1]
-        callback(selection, app)
-        app._cancel_selected_button.set_sensitive.assert_called_once_with(True)
-
-    def test_disabled_when_only_placeholder_selected(self):
-        """Selecting the 'No running tasks' placeholder keeps Cancel disabled."""
-        app, _selection = self._make_app_and_selection([MagicMock()], task_keys=[""])
-        dp.setup_dashboard_actions(app)
+        app._remove_button.set_sensitive.assert_called_once_with(True)
         app._cancel_selected_button.set_sensitive.assert_called_once_with(False)
 
-    def test_enabled_with_mixed_placeholder_and_real_task(self):
-        """A mixed selection containing a real task enables Cancel."""
-        app, _selection = self._make_app_and_selection(
-            [MagicMock(), MagicMock()], task_keys=["", "profile:Daily"]
+    def test_mixed_selection_enables_both(self):
+        app, _selection = self._make_app(
+            [
+                {"state": "running", "task_key": "scrub:fivebays"},
+                {"state": "completed", "log_file": "/var/log/zfsutilities/sessions/x.log"},
+            ]
         )
         dp.setup_dashboard_actions(app)
         app._cancel_selected_button.set_sensitive.assert_called_once_with(True)
+        app._remove_button.set_sensitive.assert_called_once_with(True)
+
+    def test_placeholder_keeps_both_disabled(self):
+        """Selecting the 'No tasks' placeholder keeps both buttons disabled."""
+        app, _selection = self._make_app([{}])
+        dp.setup_dashboard_actions(app)
+        app._cancel_selected_button.set_sensitive.assert_called_once_with(False)
+        app._remove_button.set_sensitive.assert_called_once_with(False)
+
+    def test_toggles_with_selection_changes(self):
+        row = {"state": "running", "task_key": ""}
+        app, selection = self._make_app([row])
+        dp.setup_dashboard_actions(app)
+        # reset after initial call
+        app._remove_button.reset_mock()
+        app._cancel_selected_button.reset_mock()
+
+        row["task_key"] = "runner:backup_runner"
+        callback = selection.connect.call_args[0][1]
+        callback(selection, app)
+        app._remove_button.set_sensitive.assert_called_once_with(False)
+        app._cancel_selected_button.set_sensitive.assert_called_with(True)
 
     def test_no_button_attr_does_not_crash(self):
-        app, _selection = self._make_app_and_selection([])
+        app, _selection = self._make_app([])
         del app._cancel_selected_button
+        del app._remove_button
         dp.setup_dashboard_actions(app)
         # Should not raise
+
+
+class TestOnDashboardCancelSelected(unittest.TestCase):
+    """on_dashboard_cancel_selected cancels rows with a task key (col 5)."""
+
+    def _make_app(self, rows):
+        app, _selection = _make_tasks_selection_app(rows)
+        return app
+
+    def test_cancels_waiting_and_running_rows(self):
+        rows = [
+            {"state": "waiting", "task_key": "profile-wait:Daily"},
+            {"state": "completed", "log_file": "/var/log/zfsutilities/sessions/a.log"},
+            {"state": "running", "task_key": "runner:backup_runner"},
+        ]
+        app = self._make_app(rows)
+        with (
+            patch.object(dp, "_cancel_task") as mock_cancel,
+            patch.object(dp, "GLib") as mock_glib,
+        ):
+            dp.on_dashboard_cancel_selected(app)
+        # The completed row carries no task key and is skipped.
+        self.assertEqual(
+            [call[0][1] for call in mock_cancel.call_args_list],
+            ["profile-wait:Daily", "runner:backup_runner"],
+        )
+        mock_glib.timeout_add_seconds.assert_called_once()
+
+    def test_warns_when_nothing_selected(self):
+        app = self._make_app([])
+        with (
+            patch.object(dp, "_cancel_task") as mock_cancel,
+            patch.object(dp, "GLib") as mock_glib,
+            capture_logs() as logs,
+        ):
+            dp.on_dashboard_cancel_selected(app)
+        mock_cancel.assert_not_called()
+        mock_glib.timeout_add_seconds.assert_not_called()
+        self.assertTrue(any("No tasks selected" in msg for msg in logs))
+
+    def test_no_timeout_when_nothing_cancellable(self):
+        app = self._make_app(
+            [{"state": "completed", "log_file": "/var/log/zfsutilities/sessions/a.log"}]
+        )
+        with (
+            patch.object(dp, "_cancel_task") as mock_cancel,
+            patch.object(dp, "GLib") as mock_glib,
+        ):
+            dp.on_dashboard_cancel_selected(app)
+        mock_cancel.assert_not_called()
+        mock_glib.timeout_add_seconds.assert_not_called()
+
+
+class TestRemoveSelected(unittest.TestCase):
+    """on_dashboard_remove_selected dismisses only completed rows."""
+
+    def _make_app(self, rows):
+        app, _selection = _make_tasks_selection_app(rows)
+        app.config = {}
+        return app
+
+    def test_removes_only_completed_rows(self):
+        rows = [
+            {"state": "completed", "log_file": "/var/log/zfsutilities/sessions/a.log"},
+            {"state": "running", "task_key": "runner:backup_runner"},
+            {"state": "completed", "log_file": "/var/log/zfsutilities/sessions/b.log"},
+        ]
+        app = self._make_app(rows)
+        model = app.dashboard_tasks_view.get_selection.return_value.get_selected_rows.return_value[
+            0
+        ]
+        paths = app.dashboard_tasks_view.get_selection.return_value.get_selected_rows.return_value[
+            1
+        ]
+
+        with patch.object(dp, "save_dashboard_config") as mock_save:
+            with capture_logs() as logs:
+                dp.on_dashboard_remove_selected(app)
+
+        # Only the two completed rows are removed.
+        self.assertEqual(model.remove.call_count, 2)
+        removed_iters = [call[0][0] for call in model.remove.call_args_list]
+        self.assertEqual(removed_iters, [model.get_iter(paths[2]), model.get_iter(paths[0])])
+        mock_save.assert_called_once()
+        saved = mock_save.call_args[0][1]
+        self.assertEqual(
+            saved["dismissed_tasks"],
+            ["/var/log/zfsutilities/sessions/a.log", "/var/log/zfsutilities/sessions/b.log"],
+        )
+        self.assertTrue(any("Removed 2 completed task" in msg for msg in logs))
+
+    def test_existing_dismissals_are_kept(self):
+        rows = [{"state": "completed", "log_file": "/var/log/zfsutilities/sessions/new.log"}]
+        app = self._make_app(rows)
+        app.config = {"dashboard": {"dismissed_tasks": ["/var/log/zfsutilities/sessions/old.log"]}}
+        with patch.object(dp, "save_dashboard_config") as mock_save:
+            dp.on_dashboard_remove_selected(app)
+        saved = mock_save.call_args[0][1]
+        self.assertEqual(
+            sorted(saved["dismissed_tasks"]),
+            ["/var/log/zfsutilities/sessions/new.log", "/var/log/zfsutilities/sessions/old.log"],
+        )
+
+    def test_warns_when_no_completed_row_selected(self):
+        rows = [{"state": "running", "task_key": "runner:backup_runner"}]
+        app = self._make_app(rows)
+        model = app.dashboard_tasks_view.get_selection.return_value.get_selected_rows.return_value[
+            0
+        ]
+        with patch.object(dp, "save_dashboard_config") as mock_save:
+            with capture_logs() as logs:
+                dp.on_dashboard_remove_selected(app)
+        model.remove.assert_not_called()
+        mock_save.assert_not_called()
+        self.assertTrue(any("No completed tasks selected" in msg for msg in logs))
 
 
 class TestGetHostZfsVersion(unittest.TestCase):

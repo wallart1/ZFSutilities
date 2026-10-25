@@ -37,21 +37,19 @@
   product stance — doc-server.md and messages/index.md carry it.
   Rechecked 2026-10-24 wrap-up: unchanged, 0.0.72 — no 1.x; hold stands.)
 
-- (future objective, migration/create fidelity — narrowed 2026-10-03):
-  No creation path (Create Pool wizard or Migrate Pool) can *plan*
-  infrastructure vdevs (special / log / cache / spare): the review page
-  warns when the source pool has them, a post-cutover INFO reminder says to
-  re-add them with Add Infrastructure Vdev, and as of 2026-10-03 the
-  holding-mode rebuild picker preselects only true data members (former
-  infra-vdev disks are listed unchecked, labeled with their class, so they
-  can no longer be silently absorbed into data vdevs). Remaining gap is the
-  planning UI itself, deliberately deferred as a future objective (user
-  decision 2026-10-03): per-class disk pickers in the wizards plus
-  `zpool add <class>` steps after the create step (or an extended
-  `zpool create` vdev spec). Originally discovered 2026-10-03 during the
-  pool-level migration audit.
-  This item is in abayance as a future objective.
-  (Reconfirmed 2026-10-11 (user): keep deferred.)
+- (test flake, one-off, 2026-10-24 pub3 0.131.0 with-soak gate): the
+  with-soak full run failed test-unarchive-vm Test 26 ("Step 2 refuses
+  duplicate same-short targets") — the ssh-mock storage-host existence
+  probe (`zfs list -H -o name <archive> | grep -qxF`) missed the
+  in-suite `_mock_zfs_fs_list` entry under ~2x parallel load, so
+  unarchive-vm correctly FATALed "Not a ZFS dataset" before reaching
+  the ambiguity path. Not a product defect: the probe behaved right
+  for the answer the mock gave. Four consecutive standalone reruns
+  passed (plus the same-suite pass in the same-day non-soak run).
+  Retained post-mortem log was swept before inspection, so the exact
+  mock-layer miss (empty fs_list vs swept state) is unidentified. If
+  it recurs, capture /tmp/zfsutilities-test-<pid>.log immediately and
+  instrument the mock zfs-list arm; do not touch product code for it.
 
 - (test hygiene, /tmp litter — discovered 2026-10-24, M3 turn): the suites
   that divert rootcheck resolution through a stub dir (`_rootcheck_stub=$(mktemp -d)`

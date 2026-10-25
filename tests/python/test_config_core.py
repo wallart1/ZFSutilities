@@ -270,6 +270,14 @@ class TestDashboardConfig(unittest.TestCase):
         dash = config_core.get_dashboard_config(config)
         self.assertEqual(dash["low_space_threshold"], 80)
         self.assertEqual(dash["refresh_seconds"], 30)
+        self.assertEqual(dash["dismissed_tasks"], [])
+
+    def test_get_dashboard_config_back_fills_dismissed_tasks(self):
+        """A config saved before the Tasks dismissal feature gains the key."""
+        config = {"dashboard": {"low_space_threshold": 90, "refresh_seconds": 120}}
+        dash = config_core.get_dashboard_config(config)
+        self.assertEqual(dash["low_space_threshold"], 90)
+        self.assertEqual(dash["dismissed_tasks"], [])
 
     def test_save_dashboard_config(self):
         with temp_config_dir():
