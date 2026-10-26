@@ -108,6 +108,11 @@ missing — the same starting state a fresh install produces.
 - Refusals are explicit: no prior run, a still-active source, destroyed
   guests, or a missing checkpoint snapshot each fail fast with the fix
   (run fresh, no --rerun) — never a surprise full clone or reinstall.
+- A dev-host restart kills the run but not its guests: the next
+  `journey run`/`template build` refuses to start over the leftovers
+  (the acquire-time orphan fence) until they are reused — `--rerun` of
+  that same journey, which exempts its own takeover guests — or
+  destroyed (`itf guest destroy`).
 - The workflow is run → fix → `--rerun` → …; destroy the guests
   (`itf guest destroy`) when the loop is done.  Snapshots newer than
   the staging checkpoint survive a `qm rollback` but go stale — the
@@ -133,3 +138,5 @@ missing — the same starting state a fresh install produces.
 | j09-prereq-apt-failure | fresh Debian with a dead-apt proxy; installer surfaces the remediation failure cleanly — nothing deployed, apt heals when the drop-in is removed |
 | j10-release-upgrade | clone start from the stale template (old-version carrier): download the new release, decline the upgrade offer (system untouched), inject local modifications, upgrade via the new tree's `./bin/upgrade-zfsutilities` — scan detects and salvages them, deploys the new version NOT activated — then `switch-version`, retention/wiring verify, up-to-date rerun |
 | j11-payload-e2e | clone start + test pools (j04 recipe) + today's tree, then the GUI-payload e2e matrix via `tests/integrated/e2e/payload-e2e-driver.py`: offsite chain steps with holds, incrementals, rollback, resume tokens, scrub pause, backup/prune/rsync payloads, and the strict-mode-flipped leaf orchestrators — the full-matrix context for the payload exercises (unprivileged containers run only the dry-run layer; see the developer guide's payload e2e section) |
+| j13-iscsi-storage-restore | composes the j05 lab, creates a post-backup-point LUN through the product, then regresses the storage guest's live LIO tree AND saveconfig/manifest to the backup point (mtimes preserved — the bare-metal-restore shape): the M3 detector must WARN, `reconcile-iscsi-state` must rebuild the backstore at the exact recorded LUN with LUN 0 untouched (manifest, saveconfig, pool map, compute rescan all refreshed), and PVE must start the VM again |
+| j14-iscsi-fence-recover | composes the j05 lab + j13's regression staging, then verifies the compute-host fence: the units activation installed are enabled and run `check-vm-disk-paths --recover`, a manual tick detects the missing reference (exit 1, full identity), `systemctl start` on the installed unit recovers for real (local rescan → ssh reconcile on the storage guest → link back, exit 0), and the next tick is healthy |

@@ -176,6 +176,7 @@ reset_mocks() {
     _mock_zpool_list=""
     check_only=false
     force_write=false
+    print_map=false
     pools_written=0
     ISCSI_MANIFEST="/etc/rtslib-fb-target/expected-backstores.txt"
     NODE_CONF="/etc/zfsutilities/node.conf"
@@ -621,6 +622,116 @@ test_check_without_map_fails() {
     rm -f "$NODE_CONF"
 }
 
+# Write a minimal state map with a given generated timestamp into a pool's
+# registered mountpoint; the content is tagged so the newest-wins assertion
+# can tell the copies apart.
+write_pool_map() {
+    local pool="$1" generated="$2"
+    python3 - "${_mock_pools_root}/${pool}/iscsi-state.json" "$pool" "$generated" <<'PYEOF'
+import json, sys
+m = {"version": 1, "generated": sys.argv[3], "host": "stewie",
+     "iqn_prefix": "iqn.2026-02.local.stewie", "storage_ip": "192.168.100.1",
+     "marker": "map-from-" + sys.argv[2],
+     "targets": {}, "backstores": {}}
+with open(sys.argv[1], "w") as f:
+    json.dump(m, f, indent=2)
+PYEOF
+}
+
+test_print_map_dumps_newest() {
+    reset_mocks
+    register_online_pool "threeamigos"
+    register_online_pool "NVME1"
+    write_pool_map threeamigos "2026-10-20T08:00:00+00:00"
+    write_pool_map NVME1 "2026-10-24T09:00:00+00:00"
+    use_temp_node_conf
+    test_start "--print-map prints the newest pool-resident map, read-only"
+
+    print_map=true
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    print_map=false
+
+    local ok=true
+    [[ "$rc" -eq 0 ]] || ok=false
+    [[ "$out" == *'"map-from-NVME1"'* ]] || ok=false
+    [[ "$out" != *'"map-from-threeamigos"'* ]] || ok=false
+    # Read-only: no targetcli probe, no dataset create, no pool writes.
+    [[ ${#_mock_targetcli_calls[@]} -eq 0 ]] || ok=false
+    [[ ${#_mock_zfs_create_calls[@]} -eq 0 ]] || ok=false
+    [[ ! -e "${_mock_pools_root}/threeamigos/node.conf" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc — print-map strayed from a pure dump"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_print_map_without_map_fails() {
+    reset_mocks
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+    test_start "--print-map with no map on any pool exits 1"
+
+    print_map=true
+    local rc=0 out
+    out=$( main 2>&1 ) || rc=$?
+    print_map=false
+
+    if [[ "$rc" -eq 1 && "$out" == *"No iscsi-state.json found on any online pool"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_print_map_skips_targetcli_gate() {
+    reset_mocks
+    register_online_pool "threeamigos"
+    write_pool_map threeamigos "2026-10-24T09:00:00+00:00"
+    use_temp_node_conf
+    test_start "--print-map needs no targetcli (the compute-host fetch path)"
+
+    # Remove the mock entirely: a targetcli-less host must still dump the map.
+    unset -f targetcli
+    print_map=true
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    print_map=false
+    targetcli() {
+        _mock_targetcli_calls+=("$*")
+        return 0
+    }
+
+    if [[ "$rc" -eq 0 && "$out" == *'"map-from-threeamigos"'* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out' — targetcli gate should not block --print-map"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_print_map_conflicts_with_check() {
+    reset_mocks
+    test_start "--print-map and --check together are refused"
+
+    print_map=true
+    check_only=true
+    local rc=0 out
+    out=$( main 2>&1 ) || rc=$?
+    print_map=false
+    check_only=false
+
+    if [[ "$rc" -eq 1 && "$out" == *"mutually exclusive"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -641,6 +752,10 @@ test_degraded_refuses_via_map_fallback
 test_check_no_drift
 test_check_reports_drift
 test_check_without_map_fails
+test_print_map_dumps_newest
+test_print_map_without_map_fails
+test_print_map_skips_targetcli_gate
+test_print_map_conflicts_with_check
 
 [[ -n "$_mock_pools_root" && -d "$_mock_pools_root" ]] && rm -rf "$_mock_pools_root"
 

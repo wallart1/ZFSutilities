@@ -41,11 +41,23 @@ ITF_GITHUB_REPO=owner/repo
 EOF
 
 # run_itf <args...> — driver subprocess with the fixture config; leaves
-# $run_rc / $run_out / $run_err for assertions.
+# $run_rc / $run_out / $run_err for assertions. The run lock is sandboxed
+# per suite: driver tests that reach `journey run`/`template build` take
+# it (runlock-lib.sh), and a suite-private path keeps them off the dev
+# host's real fence — a live journey would otherwise park the suite
+# behind the lock for its whole wait budget.  The same tests scan
+# ITF_RUNS_DIR with the acquire-time orphan fence, so they get an empty
+# suite-private results tree too (never the dev host's real run records
+# or bases).
+ITF_LOCK_FIXTURE="$tmp_dir/itf-driver-tests.lock"
+ITF_RUNS_FIXTURE="$tmp_dir/itf-runs-fixture"
+mkdir -p "$ITF_RUNS_FIXTURE"
+
 run_itf() {
     run_out=""
     run_rc=0
-    run_out=$(ITF_SITE_CONFIG="$tmp_dir/site.conf" bash "$ITF_DRIVER" "$@" \
+    run_out=$(ITF_RUN_LOCK="$ITF_LOCK_FIXTURE" ITF_RUNS_DIR="$ITF_RUNS_FIXTURE" \
+        ITF_SITE_CONFIG="$tmp_dir/site.conf" bash "$ITF_DRIVER" "$@" \
         2>"$tmp_dir/run.err") || run_rc=$?
     run_err="$(cat "$tmp_dir/run.err")"
 }
@@ -57,18 +69,58 @@ run_itf_runs() {
     shift
     run_out=""
     run_rc=0
-    run_out=$(ITF_RUNS_DIR="$runs_dir" ITF_SITE_CONFIG="$tmp_dir/site.conf" \
+    run_out=$(ITF_RUN_LOCK="$ITF_LOCK_FIXTURE" ITF_RUNS_DIR="$runs_dir" \
+        ITF_SITE_CONFIG="$tmp_dir/site.conf" \
         bash "$ITF_DRIVER" "$@" 2>"$tmp_dir/run.err") || run_rc=$?
     run_err="$(cat "$tmp_dir/run.err")"
 }
 
-# _plant_run <runs-root> <run-dirname> <finished|running> [guest-record...]
+# _runlock_subshell <lock> <desc> — helper for lock tests: a child that
+# sources runlock-lib.sh, acquires the fence, and exits (releasing it).
+# Prints "acquired" on success.
+_runlock_subshell() {
+    local lock="$1" desc="$2"
+    ITF_RUN_LOCK="$lock" bash -c '
+        source "$(dirname "$1")/lib/runlock-lib.sh"
+        itf_runlock_acquire "$2" || exit 1
+        echo acquired
+    ' _ "$ITF_DRIVER" "$desc" 2>&1
+}
+
+# _runlock_hold_bg <lock> <desc> <seconds> — start a background holder
+# (records itself, then sleeps); echoes its pid. Tests must kill+wait it.
+_runlock_hold_bg() {
+    local lock="$1" desc="$2" secs="$3"
+    ITF_RUN_LOCK="$lock" ITF_RUNLOCK_HOLD_SECONDS="$secs" bash -c '
+        source "$(dirname "$1")/lib/runlock-lib.sh"
+        itf_runlock_acquire "$2" || exit 1
+        echo ready
+        sleep "$3"
+    ' _ "$ITF_DRIVER" "$desc" "$secs" > "$tmp_dir/rl-holder-$$.log" 2>&1 &
+    echo $!
+}
+
+# _runlock_wait_recorded <lock> <needle> — poll the lock file until the
+# holder has recorded itself (bounded; readiness, not timing).
+_runlock_wait_recorded() {
+    local lock="$1" needle="$2"
+    local _
+    for _ in $(seq 1 30); do
+        grep -q "$needle" "$lock" 2>/dev/null && return 0
+        sleep 0.2
+    done
+    grep -q "$needle" "$lock" 2>/dev/null
+}
+
+# _plant_run <runs-root> <run-dirname> <finished|running|interrupted> [guest-record...]
 #
 # Plants a run directory with meta.txt (a "running" state carries the
-# test process's own live pid) plus guest records of the form
-# "file:base vmid [ip]".
+# test process's own live pid; an "interrupted" one carries a provably
+# dead pid — a just-reaped child — and no finished: line, exactly what
+# itf_run_state reports after a killed run) plus guest records of the
+# form "file:base vmid [ip]".
 _plant_run() {
-    local root="$1" dir="$2" state="$3" rec f
+    local root="$1" dir="$2" state="$3" rec f deadpid
     shift 3
     mkdir -p "$root/$dir"
     {
@@ -83,10 +135,44 @@ _plant_run() {
         sed -i "s/^pid:      1$/pid:      $$/" "$root/$dir/meta.txt"
         sed -i "/^finished:/d" "$root/$dir/meta.txt"
     fi
+    # Dead pid + no finished: line = "interrupted" (killed/crashed run).
+    if [[ "$state" == "interrupted" ]]; then
+        bash -c ':' & deadpid=$!
+        wait "$deadpid"
+        sed -i "s/^pid:      1$/pid:      $deadpid/" "$root/$dir/meta.txt"
+        sed -i "/^finished:/d" "$root/$dir/meta.txt"
+    fi
     for rec in "$@"; do
         f="${rec%%:*}"
         echo "${rec#*:}" > "$root/$dir/$f"
     done
+}
+
+# _fence_child <runs-dir> <spec-file-or-""> <qm-list-table-file> <qm-rc>
+#
+# Runs itf_runlock_orphan_fence in a child shell with the real
+# report-lib (itf_run_state over planted runs) and a stubbed itf_qm whose
+# "list" call emits the canned table (or fails with <qm-rc>, the
+# unreachable-base case).  Every itf_qm call is recorded in
+# $tmp_dir/fence-calls.  Prints the fence's output plus "fence-rc=N".
+_fence_child() {
+    local runs="$1" spec="$2" table="$3" qmrc="${4:-0}"
+    ITF_RUNS_DIR="$runs" FENCE_TABLE="$table" FENCE_QM_RC="$qmrc" \
+    FENCE_CALLS="$tmp_dir/fence-calls" bash -c '
+        source "$(dirname "$1")/lib/report-lib.sh"
+        source "$(dirname "$1")/lib/runlock-lib.sh"
+        : > "$FENCE_CALLS"
+        itf_qm() {
+            echo "list:$1" >> "$FENCE_CALLS"
+            [[ "$FENCE_QM_RC" == 0 ]] || return "$FENCE_QM_RC"
+            cat "$FENCE_TABLE"
+        }
+        if itf_runlock_orphan_fence "$2"; then
+            echo "fence-rc=0"
+        else
+            echo "fence-rc=1"
+        fi
+    ' _ "$ITF_DRIVER" "$spec" 2>&1
 }
 
 # ------------------------------------------------------------------------------
@@ -102,7 +188,9 @@ test_journey_list_lists_committed_journeys() {
         j03-install-over-leftovers j04-post-install-baseline \
         j05-two-node-install j06-guest-probe-validator \
         j07-unarchive-iscsi-rebuild j08-prereq-decline \
-        j09-prereq-apt-failure j10-release-upgrade; do
+        j09-prereq-apt-failure j10-release-upgrade \
+        j11-payload-e2e j13-iscsi-storage-restore \
+        j14-iscsi-fence-recover; do
         assert_contains "$run_out" "$j"
     done
 }
@@ -172,6 +260,371 @@ test_journey_list_includes_two_node_journey() {
     assert_rc 0 "$run_rc"
     assert_contains "$run_out" "j05-two-node-install"
     assert_contains "$run_out" "j06-guest-probe-validator"
+}
+
+# ------------------------------------------------------------------------------
+# Run lock: one run at a time per dev host (lib/runlock-lib.sh)
+# ------------------------------------------------------------------------------
+
+test_runlock_records_holder_and_releases_with_process() {
+    test_start "runlock records the holder and frees when the process exits"
+    local lk="$tmp_dir/rl-auto.lock" out rec
+    out="$(_runlock_subshell "$lk" "journey run test-journey")"
+    if [[ "$out" != "acquired" ]]; then
+        test_fail "first acquire failed: $out"
+        return
+    fi
+    rec="$(head -n 1 "$lk" 2>/dev/null)"
+    if [[ "$rec" != *"journey run test-journey | pid "* ]]; then
+        test_fail "holder record missing desc/pid: ${rec:-<none>}"
+        return
+    fi
+    # The child exited — the kernel must have released the lock, so a
+    # second starter acquires instantly (no stale-lock class at all).
+    out="$(_runlock_subshell "$lk" "second run")"
+    if [[ "$out" != "acquired" ]]; then
+        test_fail "lock stayed held after the holder exited: $out"
+        return
+    fi
+    test_pass
+}
+
+test_runlock_second_acquire_refuses_naming_holder() {
+    test_start "runlock second starter (WAIT=0) is refused naming the holder"
+    local lk="$tmp_dir/rl-held.lock"
+    local hpid
+    hpid=$(_runlock_hold_bg "$lk" "journey run holder-run" 30)
+    if ! _runlock_wait_recorded "$lk" "holder-run"; then
+        kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+        test_fail "holder never recorded itself"
+        return
+    fi
+    local out rc=0
+    out="$(ITF_RUN_LOCK="$lk" ITF_RUNLOCK_WAIT=0 bash -c '
+        source "$(dirname "$1")/lib/runlock-lib.sh"
+        itf_runlock_acquire "second run" && echo SHOULD-NOT-ACQUIRE
+    ' _ "$ITF_DRIVER" 2>&1)" || rc=$?
+    kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+    if [[ $rc -eq 0 ]]; then
+        test_fail "second starter acquired a held lock"
+        return
+    fi
+    if [[ "$out" != *"another itf run is active"* ]] \
+            || [[ "$out" != *"journey run holder-run"* ]] \
+            || [[ "$out" != *"ITF_RUNLOCK_WAIT=0"* ]]; then
+        test_fail "refusal does not name holder/knob: $out"
+        return
+    fi
+    test_pass
+}
+
+test_runlock_wait_budget_times_out_with_heartbeat() {
+    test_start "runlock gives up after ITF_RUNLOCK_WAIT with heartbeats"
+    local lk="$tmp_dir/rl-timeout.lock"
+    local hpid
+    hpid=$(_runlock_hold_bg "$lk" "holder-run" 10)
+    if ! _runlock_wait_recorded "$lk" "holder-run"; then
+        kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+        test_fail "holder never recorded itself"
+        return
+    fi
+    local out rc=0 start elapsed
+    start=$SECONDS
+    out="$(ITF_RUN_LOCK="$lk" ITF_RUNLOCK_WAIT=2 ITF_RUNLOCK_HEARTBEAT=1 \
+        bash -c '
+        source "$(dirname "$1")/lib/runlock-lib.sh"
+        itf_runlock_acquire "waiting run" && echo SHOULD-NOT-ACQUIRE
+    ' _ "$ITF_DRIVER" 2>&1)" || rc=$?
+    elapsed=$(( SECONDS - start ))
+    kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+    if [[ $rc -eq 0 ]] || [[ "$out" == *SHOULD-NOT-ACQUIRE* ]]; then
+        test_fail "waiting starter acquired a held lock"
+        return
+    fi
+    if [[ "$out" != *"still waiting for the active run"* ]] \
+            || [[ "$out" != *"giving up"* ]]; then
+        test_fail "no heartbeat/give-up lines: $out"
+        return
+    fi
+    if (( elapsed > 8 )); then
+        test_fail "timeout overshot its budget (${elapsed}s)"
+        return
+    fi
+    test_pass
+}
+
+test_journey_run_blocked_while_lock_held() {
+    test_start "journey run refuses (rc 2, no run dir) while the lock is held"
+    local lk="$tmp_dir/rl-driver.lock"
+    local runs_dir="$tmp_dir/rl-runs"
+    mkdir -p "$runs_dir"
+    local hpid
+    hpid=$(_runlock_hold_bg "$lk" "journey run other-lane-run" 30)
+    if ! _runlock_wait_recorded "$lk" "other-lane-run"; then
+        kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+        test_fail "holder never recorded itself"
+        return
+    fi
+    run_out=""
+    run_rc=0
+    run_out=$(ITF_RUN_LOCK="$lk" ITF_RUNLOCK_WAIT=0 ITF_RUNS_DIR="$runs_dir" \
+        ITF_SITE_CONFIG="$tmp_dir/site.conf" \
+        bash "$ITF_DRIVER" journey run j04-post-install-baseline \
+        2>"$tmp_dir/run.err") || run_rc=$?
+    run_err="$(cat "$tmp_dir/run.err")"
+    kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "another itf run is active"
+    assert_contains "$run_err" "other-lane-run"
+    # The refused run must not leave a run directory behind.
+    if compgen -G "$runs_dir/run-*" > /dev/null; then
+        test_fail "refused run created a run dir under $runs_dir"
+        return
+    fi
+}
+
+test_status_shows_run_lock_section() {
+    test_start "itf status names the lock holder across lanes"
+    # Free case first (the suite-private fixture lock has no holder).
+    run_itf status
+    assert_rc 0 "$run_rc"
+    assert_contains "$run_out" "== run lock =="
+    assert_contains "$run_out" "free"
+    # Held case: a live holder must be named in the status line.
+    local lk="$tmp_dir/rl-status.lock"
+    local hpid
+    hpid=$(_runlock_hold_bg "$lk" "journey run status-holder-run" 30)
+    if ! _runlock_wait_recorded "$lk" "status-holder-run"; then
+        kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+        test_fail "holder never recorded itself"
+        return
+    fi
+    run_out=""
+    run_rc=0
+    run_out=$(ITF_RUN_LOCK="$lk" ITF_SITE_CONFIG="$tmp_dir/site.conf" \
+        bash "$ITF_DRIVER" status 2>"$tmp_dir/run.err") || run_rc=$?
+    kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+    assert_rc 0 "$run_rc"
+    assert_contains "$run_out" "held"
+    assert_contains "$run_out" "status-holder-run"
+}
+
+# ------------------------------------------------------------------------------
+# Acquire-time orphan fence: interrupted runs' guests outlive the lock
+# ------------------------------------------------------------------------------
+
+test_orphan_fence_refuses_naming_leftover_and_both_recoveries() {
+    test_start "orphan fence refuses while an interrupted run's guest lives on, naming both recoveries"
+    local runs table out
+    runs=$(mktemp -d)
+    _plant_run "$runs" run-20260101-010101-j13-test interrupted \
+        "guest-storage.txt:base.invalid 8010 10.0.0.5"
+    sed -i 's/^caller:   journey:test$/caller:   journey:j13-test/' \
+        "$runs/run-20260101-010101-j13-test/meta.txt"
+    table="$tmp_dir/fence-table-live"
+    printf '      VMID Status    Name\n8010     running  itf-guest\n' > "$table"
+    out="$(_fence_child "$runs" "" "$table" 0)"
+    if [[ "$out" != *"fence-rc=1"* ]]; then
+        test_fail "fence passed while a recorded guest lives on its base: $out"
+        return
+    fi
+    if [[ "$out" != *"refusing to start"* ]] \
+            || [[ "$out" != *"run-20260101-010101-j13-test: base.invalid/8010 (guest-storage.txt)"* ]]; then
+        test_fail "refusal does not name the leftover: $out"
+        return
+    fi
+    if [[ "$out" != *"itf journey run j13-test --rerun"* ]]; then
+        test_fail "reuse recovery (rerun of the interrupted journey) missing: $out"
+        return
+    fi
+    if [[ "$out" != *"itf guest destroy base.invalid 8010"* ]]; then
+        test_fail "discard recovery (guest destroy) missing: $out"
+        return
+    fi
+    rm -rf "$runs"
+    test_pass
+}
+
+test_orphan_fence_passes_when_leftover_no_longer_exists() {
+    test_start "orphan fence passes when the recorded guest was already destroyed"
+    local runs table out
+    runs=$(mktemp -d)
+    _plant_run "$runs" run-20260101-010101-j13-test interrupted \
+        "guest-storage.txt:base.invalid 8010 10.0.0.5"
+    # The base answers, but the VMID is gone — nothing to collide with.
+    table="$tmp_dir/fence-table-gone"
+    printf '      VMID Status    Name\n8003     stopped  other-guest\n' > "$table"
+    out="$(_fence_child "$runs" "" "$table" 0)"
+    if [[ "$out" != *"fence-rc=0"* ]] || [[ "$out" == *"refusing to start"* ]]; then
+        test_fail "fence refused a destroyed leftover: $out"
+        return
+    fi
+    rm -rf "$runs"
+    test_pass
+}
+
+test_orphan_fence_healthy_results_dir_never_queries_bases() {
+    test_start "orphan fence with no interrupted runs queries no base at all"
+    local runs table out
+    runs=$(mktemp -d)
+    # Done runs legitimately keep guests (run → fix → --rerun loop); only
+    # interrupted runs fence.  The healthy path must pay zero ssh.
+    _plant_run "$runs" run-20260101-010101-j04-test finished \
+        "guest.txt:base.invalid 8005 10.0.0.9"
+    table="$tmp_dir/fence-table-healthy"
+    printf '      VMID Status    Name\n' > "$table"
+    out="$(_fence_child "$runs" "" "$table" 0)"
+    if [[ "$out" != *"fence-rc=0"* ]]; then
+        test_fail "fence refused on a healthy results dir: $out"
+        return
+    fi
+    if [[ -s "$tmp_dir/fence-calls" ]]; then
+        test_fail "fence queried bases with no interrupted runs: $(cat "$tmp_dir/fence-calls")"
+        return
+    fi
+    rm -rf "$runs"
+    test_pass
+}
+
+test_orphan_fence_rerun_spec_exempts_only_its_own_takeovers() {
+    test_start "orphan fence exempts the rerun's takeover pairs, still fences the others"
+    local runs table spec out ncalls
+    runs=$(mktemp -d)
+    _plant_run "$runs" run-20260101-010101-j04-test interrupted \
+        "guest.txt:base.invalid 8005 10.0.0.9"
+    _plant_run "$runs" run-20260102-020202-j13-test interrupted \
+        "guest-storage.txt:base.invalid 8010 10.0.0.5"
+    spec="$tmp_dir/rerun-guests.tsv"
+    printf 'guest.txt base.invalid 8005\n' > "$spec"
+    table="$tmp_dir/fence-table-two"
+    printf '      VMID Status    Name\n8005     running  a\n8010     running  b\n' > "$table"
+    out="$(_fence_child "$runs" "$spec" "$table" 0)"
+    if [[ "$out" != *"fence-rc=1"* ]]; then
+        test_fail "fence passed with a non-exempt leftover live: $out"
+        return
+    fi
+    if [[ "$out" != *"run-20260102-020202-j13-test: base.invalid/8010"* ]] \
+            || [[ "$out" == *"8005"* ]]; then
+        test_fail "exemption filtered the wrong pairs: $out"
+        return
+    fi
+    # Both leftovers share a base: one `qm list` is the whole cost.
+    ncalls=$(wc -l < "$tmp_dir/fence-calls")
+    if [[ "$ncalls" != 1 ]]; then
+        test_fail "expected one base query, saw $ncalls: $(cat "$tmp_dir/fence-calls")"
+        return
+    fi
+    rm -rf "$runs"
+    test_pass
+}
+
+test_orphan_fence_all_exempt_never_queries_bases() {
+    test_start "orphan fence with every candidate taken over by the rerun queries no base"
+    local runs spec table out
+    runs=$(mktemp -d)
+    _plant_run "$runs" run-20260101-010101-j04-test interrupted \
+        "guest.txt:base.invalid 8005 10.0.0.9"
+    spec="$tmp_dir/rerun-guests.tsv"
+    printf 'guest.txt base.invalid 8005\n' > "$spec"
+    table="$tmp_dir/fence-table-unused"
+    printf '      VMID Status    Name\n' > "$table"
+    out="$(_fence_child "$runs" "$spec" "$table" 0)"
+    if [[ "$out" != *"fence-rc=0"* ]]; then
+        test_fail "fence refused its own takeover pairs: $out"
+        return
+    fi
+    if [[ -s "$tmp_dir/fence-calls" ]]; then
+        test_fail "fence queried a base despite full exemption: $(cat "$tmp_dir/fence-calls")"
+        return
+    fi
+    rm -rf "$runs"
+    test_pass
+}
+
+test_orphan_fence_unreachable_base_fails_closed() {
+    test_start "orphan fence fails closed when a candidate base cannot be queried"
+    local runs out
+    runs=$(mktemp -d)
+    _plant_run "$runs" run-20260101-010101-j13-test interrupted \
+        "guest-storage.txt:base.invalid 8010 10.0.0.5"
+    out="$(_fence_child "$runs" "" "$tmp_dir/fence-table-unreachable" 255)"
+    if [[ "$out" != *"fence-rc=1"* ]]; then
+        test_fail "fence passed with an unverifiable base: $out"
+        return
+    fi
+    if [[ "$out" != *"base.invalid/8010"* ]] \
+            || [[ "$out" != *"unreachable"* ]]; then
+        test_fail "refusal does not flag the unverified leftover: $out"
+        return
+    fi
+    rm -rf "$runs"
+    test_pass
+}
+
+test_journey_run_fenced_by_interrupted_run_guests() {
+    test_start "journey run refuses (rc 2, fail-closed) while interrupted-run guests hold a base"
+    local runs_dir
+    runs_dir=$(mktemp -d)
+    _plant_run "$runs_dir" run-20260101-010101-j13-iscsi-storage-restore interrupted \
+        "guest-storage.txt:base.invalid 8010 10.0.0.5"
+    sed -i 's/^caller:   journey:test$/caller:   journey:j13-iscsi-storage-restore/' \
+        "$runs_dir/run-20260101-010101-j13-iscsi-storage-restore/meta.txt"
+    # The fixture base is unreachable (.invalid): the fence cannot verify
+    # it and must refuse closed — the run must not start.
+    run_itf_runs "$runs_dir" journey run j04-post-install-baseline
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "refusing to start"
+    assert_contains "$run_err" "base.invalid/8010"
+    assert_contains "$run_err" "itf journey run j13-iscsi-storage-restore --rerun"
+    assert_contains "$run_err" "itf guest destroy base.invalid 8010"
+    assert_contains "$run_out" "orphan fence"
+    rm -rf "$runs_dir"
+}
+
+test_template_build_fenced_by_interrupted_run_guests() {
+    test_start "template build refuses (rc 2) and never suggests --rerun for its own orphans"
+    local runs_dir
+    runs_dir=$(mktemp -d)
+    _plant_run "$runs_dir" run-20260101-010101-template-build interrupted \
+        "guest.txt:base.invalid 8010 10.0.0.5"
+    sed -i 's/^caller:   journey:test$/caller:   template:build/' \
+        "$runs_dir/run-20260101-010101-template-build/meta.txt"
+    run_itf_runs "$runs_dir" template build
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "refusing to start"
+    assert_contains "$run_err" "itf guest destroy base.invalid 8010"
+    # A template build has no --rerun recovery; the message must not
+    # offer one.
+    if [[ "$run_err" == *"--rerun"* ]]; then
+        test_fail "refusal offers --rerun for a template-build orphan: $run_err"
+        return
+    fi
+    rm -rf "$runs_dir"
+}
+
+test_journey_rerun_of_interrupted_source_not_fenced() {
+    test_start "journey --rerun of its own interrupted source passes the fence and reuses the guests"
+    local runs_dir new_run spec
+    runs_dir=$(mktemp -d)
+    _plant_run "$runs_dir" run-20260101-010101-j04-post-install-baseline interrupted \
+        "guest.txt:base.invalid 8005 10.0.0.9"
+    # The takeover pairs are exempt, so the fence passes without needing
+    # the base reachable; the rerun then fails at its first staging step
+    # on the unreachable fixture base (rc 1), not on the fence.
+    run_itf_runs "$runs_dir" journey run j04-post-install-baseline --rerun
+    assert_rc 1 "$run_rc"
+    if [[ "$run_out$run_err" == *"refusing to start"* ]]; then
+        test_fail "rerun of its own source was fenced: $run_out $run_err"
+        return
+    fi
+    assert_contains "$run_out" "rerun of run-20260101-010101-j04-post-install-baseline"
+    new_run="$(ls -1d "$runs_dir"/run-* | sort -r | head -1)"
+    spec="$new_run/rerun-guests.tsv"
+    if [[ ! -f "$spec" ]]; then
+        test_fail "missing rerun-guests.tsv in the new run dir"
+        return
+    fi
+    rm -rf "$runs_dir"
 }
 
 test_iso_unknown_selector_refused() {
@@ -561,6 +1014,20 @@ test_template_usage_refused
 test_unknown_command_refused
 test_status_unreachable_base_reported_not_fatal
 test_journey_list_includes_two_node_journey
+test_runlock_records_holder_and_releases_with_process
+test_runlock_second_acquire_refuses_naming_holder
+test_runlock_wait_budget_times_out_with_heartbeat
+test_journey_run_blocked_while_lock_held
+test_status_shows_run_lock_section
+test_orphan_fence_refuses_naming_leftover_and_both_recoveries
+test_orphan_fence_passes_when_leftover_no_longer_exists
+test_orphan_fence_healthy_results_dir_never_queries_bases
+test_orphan_fence_rerun_spec_exempts_only_its_own_takeovers
+test_orphan_fence_all_exempt_never_queries_bases
+test_orphan_fence_unreachable_base_fails_closed
+test_journey_run_fenced_by_interrupted_run_guests
+test_template_build_fenced_by_interrupted_run_guests
+test_journey_rerun_of_interrupted_source_not_fenced
 test_iso_unknown_selector_refused
 test_iso_pve_selector_without_config_fails_cleanly
 test_template_build_bad_profile_refused

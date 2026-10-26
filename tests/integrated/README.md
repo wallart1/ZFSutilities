@@ -40,6 +40,22 @@ tests/integrated/itf journey run <name> --rerun
 tests/integrated/itf watch          # tail the active run — NOT the console
 ```
 
+**One run at a time per dev host — enforced by the driver, not by
+convention.** Every run binds the fixed HTTP port, arms the shared
+installer-syslog listener, and consumes the base hosts' guest budget,
+and the parallel repo lanes share all of it. `journey run` and
+`template build` take a machine-wide flock (`/tmp/itf-active-run.lock`):
+a concurrent starter WAITS (heartbeats every 30 s, up to
+`ITF_RUNLOCK_WAIT=7200` s; `0` refuses instantly) and names the active
+holder — including which repo lane holds it. The lock dies with the
+holder's process, so it can never go stale. `itf status` shows the
+holder under `== run lock ==`. If the dev host restarts mid-run the
+lock frees correctly but the run's guests survive on the base hosts —
+so each start also runs the acquire-time **orphan fence**: recorded
+guests of interrupted runs still present on a base refuse the new run
+(reuse them with `journey run <same> --rerun`, or discard with
+`itf guest destroy`) until the bases are clean.
+
 Two-node cycle (second base host in the compute role) additionally:
 
 ```bash
@@ -64,6 +80,7 @@ Every run (journey or preflight) writes a progressive report under
 | `lib/guest-lib.sh` | guest lifecycle (create/clone/start/stop/snapshot/destroy), ISO fetch/upload (Debian + PVE), preseed/answer rendering, IP discovery |
 | `lib/template-lib.sh` | post-install baseline templates: storage profile (Debian + product) and compute profile (PVE from the ISO) — build/stamp/status/destroy |
 | `lib/report-lib.sh` | progressive PASS/FAIL/SKIP run reports |
+| `lib/runlock-lib.sh` | **the serialization fence**: `journey run` and `template build` take a machine-wide kernel lock (flock) so only one run executes per dev host at a time — concurrent starters from ANY repo worktree wait with heartbeats (or refuse with `ITF_RUNLOCK_WAIT=0`), and the holder (journey, pid, start time, repo) is recorded for `itf status`. Acquire also runs the **orphan fence**: guests recorded by INTERRUPTED runs that still exist on a base (a dev restart frees the lock but not the guests) refuse the new start, naming each leftover and its recovery (`journey run <same> --rerun` to reuse, `itf guest destroy` to discard); a rerun exempts its own takeover guests, and an unreachable base fails closed |
 | `lib/serial_console.py` | `qm terminal` driver for OS-install automation (python3 stdlib) |
 | `journeys/` | end-user journeys (see `journeys/README.md`) |
 | `site/config.example` | committed schema; real `site/config` is gitignored |
@@ -117,6 +134,7 @@ by rerunning the journey on a dev-built tarball.  See
 | 3 | two-node cycle: compute-role base host + PVE-ISO compute template, P2P cross-node link, j05 two-node install + first-LUN verify | complete |
 | 3.5 | fast re-verification (`journey run --rerun`: rollback to `as-cloned` instead of re-cloning) + installer failure paths (j08 prereq decline, j09 apt failure) | complete |
 | 3.6 | release upgrades (j10): stale-template clone → `upgrade-zfsutilities` decline/scan/salvage/deploy-not-activated → `switch-version` → retention verify → up-to-date rerun | complete |
+| 3.7 | iSCSI resilience (j13/j14): storage-restore regression → detection + map-driven reconcile at exact LUNs → VM boot; compute-host fence wiring, detection exit, unit-driven unattended recover | complete |
 | 3+ | GUI automation, further failure injection, OS matrix (more template profiles) | planned |
 
 Developer-facing detail: `docs/docs/developer-guide/integrated-testing.md`.

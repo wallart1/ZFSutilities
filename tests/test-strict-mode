@@ -54,6 +54,7 @@ strict_scripts=(
     reconcile-iscsi-state
     remove-vm-disk
     repair-iscsi-luns
+    repair-vm-disk-refs
     repair-vm-disk-sizes
     rescan-storage
     resize-vm-disk

@@ -92,6 +92,7 @@ detached unless you later re-attach them with `attach-vm-disk` or `new-vm-disk`.
 
 ## Jump to
 
+- [Bare-Metal Restore Runbook](#bare-metal-restore-runbook-two-node)
 - [Dashboard iSCSI Issues](#dashboard-iscsi-issues-two-node-gui)
 - [`attach-vm-disk` (both)](#attach-vm-disk-both)
 - [`check-vm-disk-paths` (compute node)](#check-vm-disk-paths-compute-node)
@@ -105,6 +106,7 @@ detached unless you later re-attach them with `attach-vm-disk` or `new-vm-disk`.
 - [`iscsi-restore-luns` (storage node)](#iscsi-restore-luns-storage-node)
 - [`list-vm-disks` (both)](#list-vm-disks-both)
 - [`repair-iscsi-luns` (storage node)](#repair-iscsi-luns-storage-node)
+- [`repair-vm-disk-refs` (compute node)](#repair-vm-disk-refs-compute-node)
 - [`repair-vm-disk-sizes` (compute node)](#repair-vm-disk-sizes-compute-node)
 - [`reconcile-iscsi-state` (storage node)](#reconcile-iscsi-state-storage-node)
 - [`move-vm-disk` (both)](#move-vm-disk-both)
@@ -123,6 +125,92 @@ detached unless you later re-attach them with `attach-vm-disk` or `new-vm-disk`.
 - [`setup-iscsi-targets` (storage node)](#setup-iscsi-targets-storage-node)
 - [`show-lun-map` (compute node)](#show-lun-map-compute-node)
 - [`zfsclone-vm` (both)](#zfsclone-vm-both)
+
+---
+
+## Bare-Metal Restore Runbook (two-node)
+
+Recovery from an OS-disk bare-metal restore on either node. The design keeps
+three authorities off the OS disks: the **pool-resident state map**
+(`iscsi-state.json`, written by [`export-iscsi-state`](#export-iscsi-state-storage-node)
+onto every online pool after every LUN change), the **compute-host VM
+configs**, and the **pool zvols** themselves. The LIO config and the
+expected-backstores manifest are derived state — both regress with an OS-disk
+restore and get rebuilt from the authorities. Identity during recovery is the
+backstore/zvol name, never the LUN number alone; anything ambiguous is
+refused with evidence, never guessed.
+
+### Before a restore ever happens (already done by the tooling)
+
+- Every `safe-iscsi-save` refreshes the pool state map on every online pool;
+  pool-wide snapshot/retention policies give it history. No manual step.
+- On two-node compute hosts, the `zfsutilities-iscsi-fence.timer` (installed
+  by [switch-version](#switch-version-any-host) activation) runs
+  [`check-vm-disk-paths --recover`](#check-vm-disk-paths-compute-node) every
+  5 minutes.
+
+### Scenario A — storage host restored (LUNs vanished)
+
+Symptom: the fence fails within ~5 minutes (VM disk references missing), or
+`sudo check-vm-disk-paths` exits 1. The regressed objects are the LIO config
+and the manifest on the storage host's OS disk.
+
+1. **Let the fence work, or run it once by hand** on the compute host:
+   `sudo check-vm-disk-paths --recover`. It rescans the local iSCSI sessions
+   and, when references are still missing, runs
+   [`reconcile-iscsi-state --yes`](#reconcile-iscsi-state-storage-node) on the
+   storage host (one ssh). The reconcile recreates every map backstore whose
+   zvol still exists — backstore with `emulate_tpu=1`, LUN at the recorded
+   number, ACL bindings — then regenerates the manifest, saves the LIO tree,
+   refreshes the pool map, and rescans the compute host.
+2. **Inspect refusals, if any.** Identity conflicts (a LUN slot held by a
+   different backstore, a backstore pointing at a different zvol, a missing
+   target) are refused per item with evidence and are never auto-resolved.
+   Resolve them by hand on the storage host (delete the conflicting live
+   object or restore the recorded layout) and re-run
+   `sudo reconcile-iscsi-state`. Map entries whose zvol is gone (offline
+   pool, deleted dataset) are skipped and preserved in the map.
+3. **Confirm green:** `sudo check-vm-disk-paths` exits 0; the VMs start.
+
+### Scenario B — compute host restored (VM configs regressed)
+
+Symptom: VM configs reference (target, LUN) slots that now hold different
+backstores — the dangerous case, because Proxmox would silently attach the
+wrong disk. The storage host is healthy and current.
+
+1. **On the compute host**, run
+   [`sudo repair-vm-disk-refs --dry-run`](#repair-vm-disk-refs-compute-node).
+   It fetches the storage host's newest pool state map (read-only,
+   `export-iscsi-state --print-map`) and the live LUN topology
+   (`list-vm-disks --gather-lun-info`), resolves each config reference to the
+   backstore its slot held at map time, and reports what it would rewrite.
+2. **Review the plan.** Rewrites only happen when the map identity is the
+   VM's own disk and that disk is exported live at a different (target, LUN):
+   the by-path volume is repointed and every disk option is preserved
+   byte-for-byte. Everything ambiguous is refused with evidence: a reference
+   with no map entry, a disk that now belongs to another VM, a backstore not
+   exported live (run Scenario A's reconcile first), a running VM, or two
+   references resolving to one backstore.
+3. **Apply:** `sudo repair-vm-disk-refs` and confirm (or use `--yes`). The
+   script verifies every rewritten reference resolves to a live device,
+   rescanning iSCSI sessions first when needed.
+4. **Resolve refusals deliberately.** A refused reference means identity
+   could not be established — re-attach that disk by hand (for example with
+   [`attach-vm-disk`](#attach-vm-disk-both)) instead of guessing a LUN.
+5. **Confirm green:** `sudo check-vm-disk-paths` exits 0; the VMs start.
+
+### Scenario C — both nodes restored
+
+Run Scenario A first (restore the LUN topology from the pool map), then
+Scenario B (re-point any regressed configs). The map on the pools is the
+surviving authority for both halves.
+
+### Coexistence with a hand-rolled health check
+
+The fence units installed by switch-version activation leave any existing
+hand-rolled iSCSI health check in `/usr/local/bin` untouched; the two can
+coexist indefinitely, and the hand-rolled check can be retired at the
+operator's discretion once the fence has proven itself.
 
 ---
 
@@ -1711,13 +1799,14 @@ recovery. `safe-iscsi-save` invokes it after every successful save, keeping
 the map as fresh as the last LUN change.
 
 ```bash
-sudo export-iscsi-state [--check] [--force]
+sudo export-iscsi-state [--check] [--force] [--print-map]
 ```
 
-**Prerequisites:** `targetcli` (as for [`repair-iscsi-luns`](#repair-iscsi-luns-storage-node));
-pools listed in the node config provide the write targets. Pool-wide
-snapshot/retention policies (no explicit includes) pick up the new
-`zfsutilities` dataset automatically and provide the map's history.
+**Prerequisites:** `targetcli` (as for [`repair-iscsi-luns`](#repair-iscsi-luns-storage-node))
+for every mode except `--print-map`; pools listed in the node config provide
+the write targets. Pool-wide snapshot/retention policies (no explicit
+includes) pick up the new `zfsutilities` dataset automatically and provide
+the map's history.
 
 **Arguments:**
 
@@ -1725,6 +1814,7 @@ snapshot/retention policies (no explicit includes) pick up the new
 | -------- | ----------- |
 | `--check` | Compare live state against the newest map found on any pool and report drift (manual `targetcli` edits since the last export); never writes |
 | `--force` | Record the live state even when it is degraded (fewer active backstores than the manifest or the newest map expects) |
+| `--print-map` | Print the newest pool-resident map to stdout, read-only — the fetch path [`repair-vm-disk-refs`](#repair-vm-disk-refs-compute-node) uses over ssh from the compute host; collects no live state and writes nothing |
 
 **Globals:** node-config globals only.
 
@@ -1746,29 +1836,33 @@ snapshot/retention policies (no explicit includes) pick up the new
 
 1. Exit silently in single-node mode; refuse to run anywhere but the storage
    host.
-2. Collect the live topology: per-target LUN mappings and ACL initiators for
+2. `--print-map`: locate the newest map across online pools and dump it to
+   stdout (pure JSON, no banner); exit 1 when no pool holds one. Nothing
+   else runs — no live-state collection, no writes, no `targetcli`
+   dependency.
+3. Collect the live topology: per-target LUN mappings and ACL initiators for
    every pool in the node config, plus every VM backstore and its zvol device.
-3. Render the state map as deterministic JSON (sections sorted; only the
+4. Render the state map as deterministic JSON (sections sorted; only the
    `generated` timestamp varies between runs).
-4. `--check`: locate the newest map across online pools, compare it with the
+5. `--check`: locate the newest map across online pools, compare it with the
    live state, print `DRIFT:` lines for moved LUNs, missing/extra backstores,
    ACL and node-identity changes; exit 1 on drift, 0 on match. Never writes.
-5. Refuse to record a degraded live state (fewer active backstores than the
+6. Refuse to record a degraded live state (fewer active backstores than the
    manifest — or, without a manifest, than the newest pool map — expects)
    unless `--force` is given. This keeps a half-restored LIO tree from
    destroying the recovery authority.
-6. For every pool in the node config: skip offline pools with a warning;
+7. For every pool in the node config: skip offline pools with a warning;
    create the `<pool>/zfsutilities` dataset on first use; atomically install
    `iscsi-state.json` and the `node.conf` copy (temp file + `mv` in the
    destination directory).
-7. Fail when no pool received the map.
+8. Fail when no pool received the map.
 
 **Return codes / side effects:**
 
 | Code | Meaning |
 | ---- | ------- |
-| `0`  | Map written to at least one pool, or `--check` found no drift |
-| `1`  | Invalid option, not on the storage host, not root, degraded-state refusal, no pool writable, or (`--check`) drift detected / no map found |
+| `0`  | Map written to at least one pool, `--check` found no drift, or `--print-map` dumped the newest map |
+| `1`  | Invalid option, not on the storage host, not root, degraded-state refusal, no pool writable, or (`--check`) drift detected, or (`--check`/`--print-map`) no map found |
 
 Side effects: may create a `<pool>/zfsutilities` dataset per pool; writes
 `iscsi-state.json` and `node.conf` on every online pool.
@@ -1970,6 +2064,100 @@ rebuilt LIO tree, refreshes the pool state map, and rescans this host).
 
 ---
 
+### `repair-vm-disk-refs` (compute node)
+
+The compute-host half of bare-metal-restore recovery: re-points **regressed VM
+config disk references** at the correct iSCSI LUNs by disk identity. When the
+compute host is restored from an older backup, `/etc/pve` (and its VM
+configs) regress while the storage host stays current — a restored config can
+then reference a (target, LUN) slot that now holds a *different* VM's disk,
+and Proxmox would attach the wrong disk silently. This script is the mirror
+of [`reconcile-iscsi-state`](#reconcile-iscsi-state-storage-node): it never
+maps by LUN number. Each reference is resolved through the storage host's
+pool-resident state map (fetched read-only via
+[`export-iscsi-state --print-map`](#export-iscsi-state-storage-node)) to the
+backstore that slot held when the map was written; the live topology
+(`list-vm-disks --gather-lun-info`) says where that backstore sits now. When
+the two disagree, only the by-path volume portion of the disk line is
+rewritten via `qm set <vmid> --<key> <new-by-path>,<options>` — every option
+after the volume is preserved byte-for-byte.
+
+```bash
+sudo repair-vm-disk-refs [--dry-run] [--yes]
+```
+
+**Prerequisites:** Proxmox VE (`qm`) on this compute host; the storage host
+reachable over ssh.
+
+**Arguments:**
+
+| Argument | Description |
+| -------- | ----------- |
+| `--dry-run` | Report the planned rewrites and refusals without editing any VM config (exit 1 when refusals exist) |
+| `--yes` | Apply without the interactive confirmation |
+
+**Globals:** node-config globals only.
+
+**Called modules / commands:**
+
+| Script | Purpose |
+| ------ | ------- |
+| `export-iscsi-state --print-map` over ssh | Read-only fetch of the newest pool-resident state map (the identity authority) |
+| `list-vm-disks --gather-lun-info` over ssh | Read-only fetch of the live LUN topology (where each backstore sits now) |
+| `qm set` | The only mutation: rewrites the planned disk lines (volume only, options preserved) |
+| `qm status` | Running-VM gate per planned rewrite |
+| [`rescan-storage`](#rescan-storage-both) | Post-apply verification: brings in rewritten references whose device is not present yet |
+
+**Data structures consumed / produced:**
+
+| Structure | Role | Reference |
+| --------- | ---- | --------- |
+| `/etc/pve/qemu-server/*.conf` | Read for disk references (including `efidisk`) and their option suffixes; rewritten only through `qm set` | — |
+| `<pool>/zfsutilities/iscsi-state.json` | Identity bridge: config (target, LUN) → backstore at map time | [iSCSI pool-resident state map](../developer-guide/data-structures.md#iscsi-pool-resident-state-map) |
+| Live LUN topology | Backstore → (target, LUN) right now | — |
+
+**Internal flow / algorithm:**
+
+1. Exit silently in single-node mode; refuse to run anywhere but the compute
+   host or without Proxmox VE.
+2. Gather every iSCSI disk reference from the VM configs on this host (no
+   ssh). No references: done, exit 0.
+3. Two ssh round trips to the storage host: the newest pool state map and
+   the live LUN topology. A map generated on another host — or recording a
+   different IQN prefix / storage IP than this site's node.conf — is refused
+   outright.
+4. Resolve each reference through the identity chain
+   `config (target, LUN) → map backstore → live (target, LUN)`:
+    - Refused, with evidence: no map entry for the reference (identity
+      unknown); the backstore now belongs to a different VMID; two references
+      resolving to one backstore (ambiguous); the backstore not exported live
+      (run `reconcile-iscsi-state` on the storage host first); the VM running
+      or its status unverifiable.
+    - Reference already matching live state: reported, left alone.
+    - Otherwise: planned rewrite.
+5. Print the plan (old volume → new volume, with the backstore identity),
+   the already-correct notes, and the refusals; `--dry-run` stops here.
+6. After `y/N` confirmation (or `--yes`), apply each rewrite with
+   `qm set`; only the volume portion changes.
+7. Verify every rewritten reference resolves to a live device on this host;
+   run `rescan-storage` first when one does not. A device still missing after
+   the rescan is a FATAL — exactly the VM-start-abort state this repair
+   exists to prevent.
+
+**Return codes / side effects:**
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | No iSCSI references found; or no rewrites needed and nothing refused; or every planned rewrite applied and verified with zero refusals |
+| `1`  | Invalid option / wrong host / not root / fetch failures / bad map; or any refusal, `qm set` failure, or device still missing after the rescan |
+
+Side effects: `qm set` rewrites of the planned VM config disk lines; an
+iSCSI session rescan when a rewritten reference's device is not yet present.
+VM configs are never edited directly, and nothing on the storage host is
+modified.
+
+---
+
 ### `setup-iscsi-targets` (storage node)
 
 Creates iSCSI targets, TPGs, and portals from the pool-to-target mappings
@@ -2136,7 +2324,7 @@ sudo switch-version <version>|previous|--list|--uninstall
 | `/root/bashinit` | Symlink to active version's `bashinit` |
 | `/usr/local/lib/node-lib.sh`, `/usr/local/lib/two-node-lib.sh`, `/usr/local/lib/rootcheck` | Library symlinks |
 | `/etc/systemd/system/rtslib-fb-targetctl.service.d/` | Refreshed from the activated version's `share/two-node/` drop-ins (storage hosts only — gated on `targetctl`'s presence) |
-| `/etc/systemd/system/zfsutilities-iscsi-fence.{service,timer}` | Installed/refreshed from the activated version's `share/two-node/` and the timer enabled (two-node compute hosts only — gated on `qm`'s presence and the node config; see [`check-vm-disk-paths`](#check-vm-disk-paths-compute-node)) |
+| `/etc/systemd/system/zfsutilities-iscsi-fence.{service,timer}` | Installed/refreshed from the activated version's `share/two-node/` and the timer enabled (two-node compute hosts only — gated on `qm`'s presence and only skipped when a node config explicitly says single-node; a compute host with no node config yet, as on a fresh two-node install's activation step, still gets the fence; see [`check-vm-disk-paths`](#check-vm-disk-paths-compute-node)) |
 
 **Internal flow / algorithm:**
 

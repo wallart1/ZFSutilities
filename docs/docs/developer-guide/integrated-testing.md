@@ -288,6 +288,43 @@ journeys like j01/j08/j09). `itf journey run
   clearing in `itf_guest_clone`). Destroy the guests (`itf guest
   destroy`) when the loop is done.
 
+## One run at a time: the run lock
+
+Itf serializes itself. `itf journey run` and `itf template build` take a
+machine-wide advisory kernel lock (`lib/runlock-lib.sh`, flock on
+`/tmp/itf-active-run.lock`) before doing anything else. The reason is
+physical: every run binds the site-configured HTTP port on the dev host,
+arms the shared UDP-514 installer-syslog listener on a base host, and
+consumes base-host RAM/storage that fits one two-node lab — and the
+parallel repo lanes (pub/pub2/pub3 worktrees) share all of it while each
+lane's `itf status` can only see its own tree's runs. A second starter
+therefore waits (heartbeat every 30 s, up to `ITF_RUNLOCK_WAIT` seconds,
+default 7200; `ITF_RUNLOCK_WAIT=0` refuses immediately) and both output
+streams and `itf status` (`== run lock ==`) name the active holder —
+journey, pid, start time, and which repo tree holds the fence. The lock
+is held on an open file descriptor by the run's own process, so any
+death (kill, crash, lost session) releases it instantly: there is no
+stale-lock state and no cleanup command. This fence is deliberately not
+the product's dataset lock manager — that one keys by ZFS dataset for
+root-run product operations, while this one keys by dev host and must
+work for the unprivileged orchestrator.
+
+The flock fences dev-side processes only; the run's guests live on the
+base hosts and do not die with the dev host. After a mid-run dev
+restart the lock is correctly free while the interrupted run's guests
+keep running on the bases, so every start re-verifies while holding the
+lock (`itf_runlock_orphan_fence`): guests recorded by interrupted runs
+of this tree that still exist in their base's `qm list` — the base host
+is the authority, which is what makes the check correct across dev
+restarts — refuse the new start, naming each leftover and its two
+recoveries (reuse with `itf journey run <same> --rerun`, discard with
+`itf guest destroy`). A rerun exempts exactly the guests it takes over;
+a results directory with no interrupted runs costs no base query at
+all; an unreachable base fails closed (unverified is not clean); and
+guests of finished runs are exempt by design — they are the kept lab of
+the run → fix → `--rerun` loop, and only an interrupted run means the
+operator lost track of guests that are still consuming the base.
+
 ## Two-node topology
 
 The cycle-2 journeys model the production two-node layout (storage node

@@ -1,0 +1,329 @@
+#!/usr/bin/env bash
+# j13-iscsi-storage-restore.journey — the storage-host bare-metal-restore
+# recovery half of the iSCSI resilience campaign, end to end.
+#
+# Composition: the ENTIRE j05 two-node lab runs first (template clones,
+# P2P link + root SSH both ways, three RAIDZ1 pools, install-two-node,
+# enroll-proxmox-pool, stopped VM 101 + its first product disk). This
+# journey then replays the 2026-10 production incident shape:
+#
+#   Stage R  backup point: the lab's post-install safe-iscsi-save files
+#            (saveconfig.json + expected-backstores.txt, disk-0 only) are
+#            set aside with mtimes preserved, then a SECOND product disk
+#            (vm-101-disk-1 at LUN 1) is created through new-vm-disk —
+#            which also refreshes the pool-resident iscsi-state.json map.
+#   Stage X  the regression: the live LIO tree loses the new backstore and
+#            its LUN mapping, and BOTH OS-disk files are restored from the
+#            backup point with mtimes preserved — exactly what a
+#            bare-metal restore of the storage OS disk leaves behind (the
+#            pools and the compute-host VM configs stay current, so only
+#            the LUNs created after the backup point vanish).
+#   Stage D  detection: check-prerequisites --two-node must WARN with the
+#            stale-LIO-files signature (restore detector a).
+#   Stage C  reconcile: reconcile-iscsi-state must rebuild vm-101-disk-1's
+#            backstore, map it at LUN 1 EXACTLY (LUN 0 untouched),
+#            regenerate the manifest, save the LIO config, refresh the
+#            pool map, and rescan the compute host.
+#   Stage V  verification on both guests + VM boot proof: the by-path
+#            link for lun-1 is back, and PVE starts VM 101 again (the
+#            production symptom was PVE aborting VM start).
+#
+# The staging helper iscsi_journey_stage_regressed_lun is reused by
+# j14-iscsi-fence-recover (the compute-host half), which sources this file.
+#
+# Guest state required: storage template + compute template (j05's).
+# Site config required: j05's two-node keys. Software source must be
+# dev-tarball — this journey verifies working-tree repairs.
+
+# shellcheck source=j05-two-node-install.journey
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/j05-two-node-install.journey"
+
+# Stage R + X: create the post-backup-point LUN through the product, then
+# regress the storage host's LIO state to the backup point. Sets
+# J_IQN_FULL (the live target IQN) for callers; takes the two guest IPs.
+iscsi_journey_stage_regressed_lun() {
+    local s_ip="$1" c_ip="$2"
+
+    local live_prefix
+    live_prefix="$(itf_guest_exec "$s_ip" \
+        'sed -n "s/^IQN_PREFIX=\"\([^\"]*\)\"/\1/p" /etc/zfsutilities/node.conf' \
+        2>/dev/null)"
+    # shellcheck disable=SC2034  # consumed by the sourcing journey
+    J_IQN_FULL="${live_prefix}:zfstest1"
+    if [[ -n "$live_prefix" ]]; then
+        itf_step pass "live target prefix read" \
+            "node.conf IQN_PREFIX=${live_prefix} (target ${J_IQN_FULL})"
+    else
+        itf_step fail "live target prefix read" "storage node.conf unreadable"
+        return 1
+    fi
+
+    # --- Stage R: the backup point is the lab's post-install state ---
+
+    # cp -p preserves mtimes: the restored files must predate the new
+    # zvol or the stale-files detector never fires (a real restore's
+    # rsync preserves mtimes the same way).
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            cp -p /etc/rtslib-fb-target/saveconfig.json \
+                /etc/rtslib-fb-target/saveconfig.json.preitf
+            cp -p /etc/rtslib-fb-target/expected-backstores.txt \
+                /etc/rtslib-fb-target/expected-backstores.txt.preitf
+            test -s /etc/rtslib-fb-target/saveconfig.json.preitf
+        " > "$ITF_RUN_DIR/backup-point.log" 2>&1; then
+        itf_step pass "backup-point OS files set aside" \
+            "saveconfig.json + expected-backstores.txt (disk-0 world, mtimes kept)"
+    else
+        itf_step fail "backup-point OS files set aside" "see backup-point.log"
+        return 1
+    fi
+
+    local disk_log="$ITF_RUN_DIR/new-vm-disk-1.log"
+    if itf_guest_exec "$c_ip" "bash -lc 'new-vm-disk zfstest1 101 1 1G'" \
+            > "$disk_log" 2>&1 \
+            && grep -q "✓ Configuration saved" "$disk_log" \
+            && itf_guest_exec "$c_ip" \
+                "grep -q '^scsi1: /dev/disk/by-path/' /etc/pve/qemu-server/101.conf"; then
+        itf_step pass "post-backup LUN created" \
+            "vm-101-disk-1 (LUN 1) through new-vm-disk; scsi1 line written"
+        itf_artifact "new-vm-disk-1" "$disk_log"
+    else
+        itf_step fail "post-backup LUN created" "see new-vm-disk-1.log"
+        itf_artifact "new-vm-disk-1" "$disk_log"
+        return 1
+    fi
+
+    # The pool-resident map must already record the new LUN — it is the
+    # recovery authority precisely because it does not live on the OS disk.
+    local map_log="$ITF_RUN_DIR/map-healthy.log"
+    if itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --print-map'" \
+            > "$map_log" 2>&1 \
+            && grep -q '"vm-101-disk-1"' "$map_log"; then
+        itf_step pass "pool map records the new LUN" \
+            "iscsi-state.json carries vm-101-disk-1 (see map-healthy.log)"
+        itf_artifact "map-healthy" "$map_log"
+    else
+        itf_step fail "pool map records the new LUN" "see map-healthy.log"
+        itf_artifact "map-healthy" "$map_log"
+        return 1
+    fi
+
+    # Healthy anchors before regressing: live LUN 1 + its compute link.
+    # shellcheck disable=SC2029  # expansions run on the guests
+    if itf_guest_exec "$s_ip" "
+            targetcli /iscsi/${J_IQN_FULL}/tpg1/luns ls | grep 'o- lun1 ' \
+                | grep -q 'vm-101-disk-1'
+        " > /dev/null 2>&1 \
+        && itf_guest_exec "$c_ip" \
+            "ls /dev/disk/by-path/ | grep -q 'iscsi-.*-lun-1$'"; then
+        itf_step pass "healthy anchors" "live LUN 1 mapped; lun-1 by-path link present"
+    else
+        itf_step fail "healthy anchors" "LUN 1 not exported live before staging"
+        return 1
+    fi
+
+    # --- Stage X: the bare-metal-restore regression ---
+
+    # Delete the LUN mapping then the backstore (the product's own deletion
+    # order in iscsi-lib.sh), then restore BOTH OS-disk files from the
+    # backup point with mtimes preserved.
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            targetcli /iscsi/${J_IQN_FULL}/tpg1/luns delete lun1 >/dev/null 2>&1
+            targetcli /backstores/block delete vm-101-disk-1 >/dev/null 2>&1
+            if targetcli /iscsi/${J_IQN_FULL}/tpg1/luns ls 2>/dev/null \
+                    | grep -q 'vm-101-disk-1'; then
+                exit 1
+            fi
+            cp -p /etc/rtslib-fb-target/saveconfig.json.preitf \
+                /etc/rtslib-fb-target/saveconfig.json
+            cp -p /etc/rtslib-fb-target/expected-backstores.txt.preitf \
+                /etc/rtslib-fb-target/expected-backstores.txt
+            if grep -q 'vm-101-disk-1' /etc/rtslib-fb-target/saveconfig.json; then
+                exit 1
+            fi
+            echo regressed
+        " > "$ITF_RUN_DIR/regress.log" 2>&1 \
+        && grep -q regressed "$ITF_RUN_DIR/regress.log"; then
+        itf_step pass "storage LIO state regressed to backup point" \
+            "lun-1 backstore gone live + in saveconfig/manifest; disk-0 intact"
+    else
+        itf_step fail "storage LIO state regressed to backup point" \
+            "see regress.log"
+        itf_artifact "regress" "$ITF_RUN_DIR/regress.log"
+        return 1
+    fi
+
+    # A real restore drops the iSCSI sessions (the storage host reboots),
+    # and the re-login against the regressed target is what removes the
+    # dead LUN's device and link — a plain session rescan does NOT drop it
+    # on this stack (live-verified: the device lingers with "Logical unit
+    # not supported" sense errors until the session cycles). Model the
+    # reboot's session drop: logout, login, wait for the surviving LUN.
+    # shellcheck disable=SC2029  # expansions run on the compute guest
+    if itf_guest_exec "$c_ip" "
+            iscsiadm -m node -T ${J_IQN_FULL} --logout >/dev/null 2>&1
+            iscsiadm -m node -T ${J_IQN_FULL} --login >/dev/null 2>&1
+            for i in \$(seq 1 15); do
+                ls /dev/disk/by-path/ | grep -q 'iscsi-.*-lun-0$' && break
+                sleep 2
+            done
+            if ls /dev/disk/by-path/ | grep -q 'iscsi-.*-lun-1$'; then
+                exit 1
+            fi
+            ls /dev/disk/by-path/ | grep -q 'iscsi-.*-lun-0$'
+        " > "$ITF_RUN_DIR/compute-link-gone.log" 2>&1; then
+        itf_step pass "compute sees the LUN vanish" \
+            "lun-1 link gone after rescan; lun-0 (disk-0) still present"
+    else
+        itf_step fail "compute sees the LUN vanish" "see compute-link-gone.log"
+        itf_artifact "compute-link-gone" "$ITF_RUN_DIR/compute-link-gone.log"
+        return 1
+    fi
+    return 0
+}
+
+journey_main() {
+    if [[ "${ITF_SW_SOURCE:-}" != "dev-tarball" ]]; then
+        itf_step fail "site config: dev tarball source" \
+            "ITF_SW_SOURCE=${ITF_SW_SOURCE:-?} — set dev-tarball (verifies working-tree repairs)"
+        return 1
+    fi
+    itf_step info "journey start" \
+        "j13 iSCSI storage-restore reconcile; composes the j05 two-node lab"
+
+    # ------------------------------------------------------------------
+    # Stage L: the full j05 two-node lab (clones -> install -> first LUN)
+    # ------------------------------------------------------------------
+
+    j05_two_node_lab_main || return 1
+
+    local s_vmid s_ip c_vmid c_ip
+    read -r _ s_vmid s_ip < "$ITF_RUN_DIR/guest-storage.txt"
+    read -r _ c_vmid c_ip < "$ITF_RUN_DIR/guest-compute.txt"
+    if [[ -n "$s_ip" && -n "$c_ip" ]]; then
+        itf_step pass "lab coordinates recovered" \
+            "storage=$s_ip (vmid $s_vmid) compute=$c_ip (vmid $c_vmid)"
+    else
+        itf_step fail "lab coordinates recovered" "guest record files incomplete"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage R + X: post-backup LUN, then the regressed restore state
+    # ------------------------------------------------------------------
+
+    iscsi_journey_stage_regressed_lun "$s_ip" "$c_ip" || return 1
+
+    # ------------------------------------------------------------------
+    # Stage D: the M3 detector must flag the regressed state
+    # ------------------------------------------------------------------
+
+    local det_log="$ITF_RUN_DIR/detection.log"
+    if itf_guest_exec "$s_ip" "bash -lc 'check-prerequisites --two-node'" \
+            > "$det_log" 2>&1 \
+            && grep -q "OS-disk LIO state predates the pools" "$det_log"; then
+        itf_step pass "restore signature detected" \
+            "check-prerequisites --two-node WARNs (see detection.log)"
+        itf_artifact "detection" "$det_log"
+    else
+        itf_step fail "restore signature detected" "see detection.log"
+        itf_artifact "detection" "$det_log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage C: one-command recovery through the map-driven reconcile
+    # ------------------------------------------------------------------
+
+    # Feed order (bin/reconcile-iscsi-state): y apply the planned changes?
+    local rfeed="$ITF_RUN_DIR/reconcile-answers.txt"
+    printf 'y\n' > "$rfeed"
+    local rec_log="$ITF_RUN_DIR/reconcile.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
+        > "$rec_log" 2>&1
+    local rec_rc=$?
+    itf_artifact "reconcile" "$rec_log"
+    if [[ $rec_rc -eq 0 ]] \
+            && grep -q "Created backstore vm-101-disk-1" "$rec_log" \
+            && grep -q "Mapped vm-101-disk-1 to zfstest1/lun1" "$rec_log" \
+            && grep -q "Regenerated .*expected-backstores.txt from the map" "$rec_log" \
+            && grep -q "iSCSI configuration saved" "$rec_log" \
+            && grep -q "Pool LUN map refreshed" "$rec_log" \
+            && grep -q "Compute host rescan complete" "$rec_log" \
+            && grep -q "✓ Done" "$rec_log"; then
+        itf_step pass "reconcile rebuilds from the pool map" \
+            "backstore + LUN 1 recreated; manifest, saveconfig, map, rescan done"
+    else
+        itf_step fail "reconcile rebuilds from the pool map" \
+            "rc=$rec_rc — see reconcile.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage V: exact LUNs on both guests + the boot proof
+    # ------------------------------------------------------------------
+
+    local ver_log="$ITF_RUN_DIR/verify-restore.log"
+    # shellcheck disable=SC2029  # expansions run on the guests
+    if itf_guest_exec "$s_ip" "
+            set -e
+            targetcli /iscsi/${J_IQN_FULL}/tpg1/luns ls | grep 'o- lun1 ' \
+                | grep -q 'vm-101-disk-1'
+            targetcli /iscsi/${J_IQN_FULL}/tpg1/luns ls | grep 'o- lun0 ' \
+                | grep -q 'vm-101-disk-0'
+            grep -q 'vm-101-disk-1' /etc/rtslib-fb-target/saveconfig.json
+            grep -q 'vm-101-disk-1' /etc/rtslib-fb-target/expected-backstores.txt
+            echo storage-ok
+        " > "$ver_log" 2>&1 && grep -q storage-ok "$ver_log" \
+        && itf_guest_exec "$c_ip" "
+            set -e
+            ls /dev/disk/by-path/ | grep -q 'iscsi-.*-lun-1$'
+            ls /dev/disk/by-path/ | grep -q 'iscsi-.*-lun-0$'
+            grep -q '^scsi1: /dev/disk/by-path/' /etc/pve/qemu-server/101.conf
+            echo compute-ok
+        " >> "$ver_log" 2>&1 && grep -q compute-ok "$ver_log"; then
+        itf_step pass "exports restored at the exact recorded LUNs" \
+            "lun1 -> vm-101-disk-1, lun0 -> vm-101-disk-0 untouched; links back"
+    else
+        itf_step fail "exports restored at the exact recorded LUNs" \
+            "see verify-restore.log"
+        itf_artifact "verify-restore" "$ver_log"
+        return 1
+    fi
+
+    # The production symptom was PVE aborting VM start on the missing
+    # by-path link; the boot proof is the closure of that symptom.
+    local boot_log="$ITF_RUN_DIR/boot-proof.log"
+    # The lab's nested PVE guest has no /dev/kvm passthrough, so the VM
+    # boots under TCG (kvm=0); the proof is disk attachability, not speed.
+    # shellcheck disable=SC2029  # expansions run on the compute guest
+    if itf_guest_exec "$c_ip" "
+            bash -lc 'qm set 101 --kvm 0' || exit 1
+            bash -lc 'qm start 101' || exit 1
+            for i in \$(seq 1 15); do
+                qm status 101 | grep -q 'status: running' && break
+                sleep 2
+            done
+            qm status 101 | grep -q 'status: running' || exit 1
+            bash -lc 'qm stop 101' || exit 1
+            for i in \$(seq 1 15); do
+                qm status 101 | grep -q 'status: stopped' && exit 0
+                sleep 2
+            done
+            exit 1
+        " > "$boot_log" 2>&1; then
+        itf_step pass "VM starts against the rebuilt exports" \
+            "qm start 101 -> running, then stopped cleanly"
+    else
+        itf_step fail "VM starts against the rebuilt exports" "see boot-proof.log"
+        itf_artifact "boot-proof" "$boot_log"
+        return 1
+    fi
+
+    itf_step info "journey stage reached" \
+        "storage-restore reconcile verified: detection, map-driven rebuild at exact LUNs, boot"
+    return 0
+}

@@ -35,7 +35,8 @@ scratch VMs or reason from unit mocks alone.
 - `tests/integrated/itf journey list` — available journeys (fresh install,
   uninstall/reinstall, leftovers, baseline, two-node, guest-probe,
   unarchive iSCSI rebuild, prereq decline, apt failure, release upgrade,
-  GUI payload e2e matrix).
+  GUI payload e2e matrix, iSCSI storage-restore reconcile, iSCSI fence
+  auto-recover).
 - `tests/integrated/itf journey run <name>` — full run; clone-start
   journeys reach the post-install point in minutes (no OS reinstall).
 - `tests/integrated/itf journey run <name> --rerun` — re-verify a fix on
@@ -44,6 +45,16 @@ scratch VMs or reason from unit mocks alone.
   ones; the clone/install is skipped).
 - Launch long runs detached (`setsid nohup … &`), watch with
   `itf watch`, and never open a guest console while a run is active.
+  Runs serialize themselves: the driver takes a machine-wide run lock
+  (`journey run`, `template build`), so a concurrent second run — from
+  any repo lane — waits with heartbeats instead of colliding on the
+  shared HTTP port/base hosts. Check `itf status` (`== run lock ==`)
+  before wondering why a launch is quiet; `ITF_RUNLOCK_WAIT=0` refuses
+  instantly instead of waiting. A start also refuses (rc 2) while
+  guests recorded by an INTERRUPTED run still exist on a base (a dev
+  restart frees the lock but not the guests) — recover exactly as the
+  refusal says: `journey run <same> --rerun` to reuse them, or
+  `itf guest destroy` per leftover.
 - Product defects found through journeys go to `tests/integrated/FINDINGS.md`
   with a repair-plan proposal — never fixed inside a guest.
 - Overview and safety model: `tests/integrated/README.md` and

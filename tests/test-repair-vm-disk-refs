@@ -1,0 +1,944 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154,SC2016,SC2028
+# test-repair-vm-disk-refs — Unit tests for the compute-host VM-config repair.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Mocks
+# ------------------------------------------------------------------
+
+IQN_PREFIX="iqn.2026-02.local.stewie"
+BP_BASE="/dev/disk/by-path/ip-192.168.100.1:3260-iscsi-${IQN_PREFIX}"
+
+# Mock node-lib.sh behavior
+NODE_MODE="two-node"
+storage_host="stewie"
+compute_host="tweety"
+storage_ip="192.168.100.1"
+iqn_prefix="$IQN_PREFIX"
+is_single_node() { [[ "$NODE_MODE" == "single-node" ]]; }
+is_two_node()    { [[ "$NODE_MODE" == "two-node" ]]; }
+
+# qm presence gate (the dev host has no Proxmox); set/status below do the work.
+qm() {
+    case "$1" in
+        set)
+            [[ -n "${_qm_log:-}" ]] && printf '%s\n' "$*" >> "$_qm_log"
+            return "${_mock_qm_set_rc:-0}"
+            ;;
+        status)
+            printf 'status: %s\n' "${_mock_vm_status[$2]:-stopped}"
+            return 0
+            ;;
+    esac
+    return 0
+}
+
+# The evaluated script calls find_zfsutility_script to locate node-lib and
+# rootcheck; /dev/null keeps the node-lib mocks above in charge (the real
+# lib/iscsi-lib.sh is sourced for is_vm_backstore_name).
+find_zfsutility_script() { echo "/dev/null"; }
+
+# Remote fetches over ssh: the resolver prints the deployed path, and the
+# ssh mock records the command and serves both fetches from fixtures.
+remote_zfsutility_script() {
+    printf '/usr/local/lib/zfsutilities/current/bin/%s\n' "$2"
+}
+_ssh_log=""
+_lkg_map_file=""
+_mock_live_records=""
+_mock_ssh_rc=0
+ssh() {
+    [[ -n "$_ssh_log" ]] && printf '%s\n' "$*" >> "$_ssh_log"
+    [[ "${_mock_ssh_rc}" -ne 0 ]] && return "${_mock_ssh_rc}"
+    case "$*" in
+        *--print-map) cat "$_lkg_map_file" ;;
+        *--gather-lun-info) printf '%s\n' "${_mock_live_records}" ;;
+    esac
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Load the script under test with node-lib mocked.
+# ------------------------------------------------------------------
+old_mydir="$mydir"
+REPAIR_VM_DISK_REFS_SKIP_ROOT="Y"
+REPAIR_VM_DISK_REFS_TEST_MODE="Y"
+export REPAIR_VM_DISK_REFS_NODE_LIB="/dev/null"
+export REPAIR_VM_DISK_REFS_ISCSI_LIB="$old_mydir/lib/iscsi-lib.sh"
+script_orig=$(cat "$old_mydir/bin/repair-vm-disk-refs")
+script_text="${script_orig/my_host=\$(hostname -s)/my_host=tweety}"
+# The script parses "$@" at the top level; neutralize the test runner's args.
+set --
+eval "$script_text"
+# The script's strict line leaks into this test shell at the eval point;
+# restore the test harness's own option state so a failing test reports
+# normally instead of aborting the suite.
+set +euo pipefail
+
+# ------------------------------------------------------------------
+# Fixtures
+# ------------------------------------------------------------------
+_scratch=""
+_conf_dir=""
+_by_path_dir=""
+_qm_log=""
+_rescan_log=""
+_rescan_scripts=()
+declare -A _mock_vm_status=()
+_mock_qm_set_rc=0
+
+link_name() {
+    printf 'ip-%s:3260-iscsi-%s:%s-lun-%s' "$storage_ip" "$iqn_prefix" "$1" "$2"
+}
+
+add_link() {
+    ln -s /dev/null "${_by_path_dir}/$(link_name "$1" "$2")"
+}
+
+write_vm_conf() {
+    local vmid="$1"
+    shift
+    local line
+    for line in "$@"; do
+        printf '%s\n' "$line"
+    done > "$_conf_dir/${vmid}.conf"
+}
+
+# Render the last-known-good map. Each spec is "short|lun|backstore|zvol".
+write_lkg_map() {
+    python3 - "$_lkg_map_file" "$@" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+targets, backstores = {}, {}
+for spec in sys.argv[2:]:
+    short, lun, bs, zvol = spec.split("|")
+    iqn = "iqn.2026-02.local.stewie:" + short
+    targets.setdefault(iqn, {"acls": [], "luns": {}})["luns"][lun] = bs
+    backstores[bs] = {"dev": zvol, "target": iqn, "lun": int(lun)}
+m = {"version": 1, "generated": "2026-10-24T10:00:00+00:00", "host": "stewie",
+     "iqn_prefix": "iqn.2026-02.local.stewie", "storage_ip": "192.168.100.1",
+     "targets": targets, "backstores": backstores}
+with open(path, "w") as f:
+    json.dump(m, f, indent=2)
+PYEOF
+}
+
+# Rewrite one header field of the rendered map (host / iqn_prefix / storage_ip).
+patch_lkg_map_field() {
+    python3 - "$_lkg_map_file" "$1" "$2" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    m = json.load(f)
+m[sys.argv[2]] = sys.argv[3]
+with open(sys.argv[1], "w") as f:
+    json.dump(m, f, indent=2)
+PYEOF
+}
+
+# Set the live exported topology. Each spec is "short|lun|backstore|zvol"
+# (the zvol field rides along like the real gather records carry it).
+set_live_records() {
+    _mock_live_records=""
+    local r
+    for r in "$@"; do
+        _mock_live_records+="LUN|${r%%|*}|${r#*|}"$'\n'
+    done
+}
+
+# Mock rescan-storage: logs its invocation, then runs the caller-supplied
+# snippet (e.g. re-creating a by-path link). No snippet = changes nothing.
+make_rescan_mock() {
+    local p line
+    p=$(mktemp)
+    {
+        echo '#!/usr/bin/bash'
+        echo "printf 'rescan\\n' >> '${_rescan_log}'"
+        for line in "$@"; do
+            echo "$line"
+        done
+    } > "$p"
+    chmod +x "$p"
+    _rescan_scripts+=("$p")
+    printf '%s' "$p"
+}
+
+reset_mocks() {
+    [[ -n "$_scratch" && -d "$_scratch" ]] && rm -rf "$_scratch"
+    local _old
+    for _old in "${_rescan_scripts[@]:-}"; do
+        rm -f "$_old"
+    done
+    _rescan_scripts=()
+
+    _scratch=$(mktemp -d)
+    _conf_dir="$_scratch/qemu-server"
+    _by_path_dir="$_scratch/by-path"
+    mkdir -p "$_conf_dir" "$_by_path_dir"
+    _qm_log="$_scratch/qm.log"
+    : > "$_qm_log"
+    _ssh_log="$_scratch/ssh.log"
+    : > "$_ssh_log"
+    _rescan_log="$_scratch/rescan.log"
+    : > "$_rescan_log"
+    _lkg_map_file="$_scratch/iscsi-state.json"
+    _mock_live_records=""
+    _mock_ssh_rc=0
+    _mock_qm_set_rc=0
+    _mock_vm_status=()
+
+    unset REPAIR_VM_DISK_REFS_LKG_MAP_FILE REPAIR_VM_DISK_REFS_LIVE_MAP_FILE
+    REPAIR_VM_DISK_REFS_CONF_DIR="$_conf_dir"
+    REPAIR_VM_DISK_REFS_BY_PATH_DIR="$_by_path_dir"
+    export REPAIR_VM_DISK_REFS_CONF_DIR REPAIR_VM_DISK_REFS_BY_PATH_DIR
+    local p
+    p=$(make_rescan_mock)
+    REPAIR_VM_DISK_REFS_RESCAN_STORAGE="$p"
+    export REPAIR_VM_DISK_REFS_RESCAN_STORAGE
+
+    dry_run=false
+    assume_yes=false
+}
+
+# Run main() capturing combined output (the script under test re-sources
+# bin/bashinit when eval'd, reinstating the real log_msg on stderr, so
+# assertions grep the captured output rather than the test log).
+run_main() {
+    _main_rc=0
+    _main_out=$(main 2>&1) || _main_rc=$?
+}
+
+log_has() {
+    [[ "$_main_out" == *"$1"* ]]
+}
+
+qm_calls() {
+    [[ -f "$_qm_log" ]] && cat "$_qm_log" || true
+}
+
+ssh_calls() {
+    [[ -f "$_ssh_log" ]] && cat "$_ssh_log" || true
+}
+
+ssh_call_count() {
+    printf '%s\n' "$(ssh_calls)" | grep -c .
+}
+
+rescan_called() {
+    [[ -f "$_rescan_log" ]] && grep -q . "$_rescan_log"
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_script_loads() {
+    test_start "repair-vm-disk-refs sources with mocked dependencies"
+    if declare -f main >/dev/null 2>&1 \
+        && declare -f plan_repairs >/dev/null 2>&1 \
+        && declare -f vm_conf_gather >/dev/null 2>&1; then
+        test_pass
+    else
+        test_fail "main/plan/gather functions should be defined after sourcing"
+    fi
+}
+
+test_single_node_silent_exit() {
+    test_start "Single-node mode exits silently at source time"
+    local rc=0 out
+    out=$( NODE_MODE="single-node" eval "$script_text" 2>/dev/null ) || rc=$?
+    if [[ "$rc" -eq 0 && -z "$out" ]]; then
+        test_pass
+    else
+        test_fail "Expected silent exit 0, got rc=$rc out='$out'"
+    fi
+}
+
+test_wrong_host_refused() {
+    test_start "Running anywhere but the compute host is refused"
+    local wrong="${script_orig/my_host=\$(hostname -s)/my_host=stewie}"
+    local rc=0 out
+    out=$( eval "$wrong" 2>&1 ) || rc=$?
+    if [[ "$rc" -eq 1 && "$out" == *"Must run on the compute host (tweety), not stewie"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+}
+
+test_no_qm_refused() {
+    test_start "A host without Proxmox VE (qm) is refused"
+    local rc=0 out
+    out=$( unset -f qm; eval "$script_text" 2>&1 ) || rc=$?
+    if [[ "$rc" -eq 1 && "$out" == *"requires Proxmox VE (qm command not found)"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+}
+
+test_unknown_option_usage() {
+    test_start "Unknown options print usage and exit 1"
+    local rc=0 out
+    out=$( parse_cli_args --frob 2>&1 ) || rc=$?
+    if [[ "$rc" -eq 1 && "$out" == *"Unknown option: --frob"* \
+            && "$out" == *"Usage: repair-vm-disk-refs"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+}
+
+test_no_refs_ok() {
+    reset_mocks
+    test_start "No iSCSI VM disk references means nothing to repair (and no ssh)"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "No iSCSI VM disk references found" || ok=false
+    [[ "$(ssh_call_count)" -eq 0 ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — empty-config run should be quiet and local"
+    fi
+}
+
+test_clean_rewrite_preserves_options() {
+    reset_mocks
+    # VM 211's scsi0 references the slot it held at map time (LUN 5); the
+    # disk now lives at LUN 12. The line's options must survive untouched.
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G,discard=on"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    add_link threeamigos 12
+    assume_yes=true
+    test_start "A clean rewrite changes only the volume; options stay byte-for-byte"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "VM 211 (testvm) scsi0: threeamigos LUN 5 → threeamigos LUN 12" \
+        || ok=false
+    grep -qxF "set 211 --scsi0 ${_by_path_dir}/$(link_name threeamigos 12),size=100G,discard=on" \
+        "$_qm_log" || ok=false
+    # Nothing else was touched: exactly one qm call, no old LUN in it.
+    [[ "$(qm_calls | grep -c .)" -eq 1 ]] || ok=false
+    [[ "$(qm_calls)" != *"lun-5"* ]] || ok=false
+    log_has "All 1 rewritten reference(s) resolve to live devices" || ok=false
+    ! rescan_called || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — qm calls: $(qm_calls)"
+    fi
+}
+
+test_rewrite_bare_volume() {
+    reset_mocks
+    # A line without options: the new value must carry no trailing comma.
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi1: ${BP_BASE}:threeamigos-lun-5"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    add_link threeamigos 12
+    assume_yes=true
+    test_start "A bare by-path volume rewrites without inventing options"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    grep -qxF "set 211 --scsi1 ${_by_path_dir}/$(link_name threeamigos 12)" "$_qm_log" \
+        || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — qm calls: $(qm_calls)"
+    fi
+}
+
+test_efidisk_rewrite() {
+    reset_mocks
+    write_vm_conf 205 \
+        "name: archvm" \
+        "efidisk0: ${BP_BASE}:nvme1-lun-9,efitype=4m,size=4M"
+    write_lkg_map \
+        "nvme1|9|vm-205-disk-3|/dev/zvol/NVME1/proxmox/vm-205-disk-3"
+    set_live_records \
+        "nvme1|5|vm-205-disk-3|/dev/zvol/NVME1/proxmox/vm-205-disk-3"
+    add_link nvme1 5
+    assume_yes=true
+    test_start "efidisk references are rewritten like any other disk key"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    grep -qxF \
+        "set 205 --efidisk0 ${_by_path_dir}/$(link_name nvme1 5),efitype=4m,size=4M" \
+        "$_qm_log" || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — qm calls: $(qm_calls)"
+    fi
+}
+
+test_no_map_entry_refused() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    test_start "A reference with no map entry is refused, never guessed"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "VM 211 (testvm) scsi0: no map entry for threeamigos LUN 5" || ok=false
+    log_has "identity unknown, never guessed" || ok=false
+    [[ -z "$(qm_calls)" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — no-map-entry ref should refuse without qm"
+    fi
+}
+
+test_not_live_refused() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    # vm-211-disk-0 exists in the map but nothing exports it live.
+    set_live_records \
+        "threeamigos|12|vm-999-disk-0|/dev/zvol/threeamigos/proxmox/vm-999-disk-0"
+    test_start "A backstore not exported live is refused with a reconcile pointer"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "vm-211-disk-0 is not exported live" || ok=false
+    log_has "run reconcile-iscsi-state on stewie first" || ok=false
+    [[ -z "$(qm_calls)" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — not-live ref should refuse"
+    fi
+}
+
+test_other_vm_backstore_refused() {
+    reset_mocks
+    # The restored VM 211 config points at the slot that now holds VM 904's
+    # disk — the dangerous silent-wrong-disk case.
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-904-disk-0|/dev/zvol/threeamigos/proxmox/vm-904-disk-0"
+    set_live_records \
+        "threeamigos|5|vm-904-disk-0|/dev/zvol/threeamigos/proxmox/vm-904-disk-0"
+    test_start "A slot holding another VM's disk is refused, never attached"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "threeamigos LUN 5 is vm-904-disk-0, which now belongs to VM 904" \
+        || ok=false
+    [[ -z "$(qm_calls)" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — cross-VM identity must refuse"
+    fi
+}
+
+test_vm_running_refused() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    _mock_vm_status[211]="running"
+    test_start "A running VM's config is never rewritten"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "VM 211 (testvm) scsi0: VM is running — stop it before rewriting scsi0" \
+        || ok=false
+    [[ -z "$(qm_calls)" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — running VM must refuse"
+    fi
+}
+
+test_vm_status_unknown_refused() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    _mock_vm_status[211]="bogus"
+    test_start "An unverifiable VM status refuses the rewrite"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "could not determine VM status" || ok=false
+    [[ -z "$(qm_calls)" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — unknown status must refuse"
+    fi
+}
+
+test_two_refs_one_backstore_refused() {
+    reset_mocks
+    # Copy-paste error: scsi0 and ide0 in one VM point at the same slot, so
+    # both resolve to one backstore — ambiguous, refuse both.
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G" \
+        "ide0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    test_start "Two references resolving to one backstore are both refused"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "vm-211-disk-0 is referenced by 2 config lines — ambiguous" || ok=false
+    [[ -z "$(qm_calls)" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — duplicate identity must refuse both"
+    fi
+}
+
+test_already_correct_no_change() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-12,size=100G"
+    write_lkg_map \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    test_start "A reference matching live state is reported and left alone"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "already points at vm-211-disk-0 @ threeamigos LUN 12" || ok=false
+    log_has "No rewrites needed" || ok=false
+    [[ -z "$(qm_calls)" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — correct refs must not be rewritten"
+    fi
+}
+
+test_dry_run_reports_and_changes_nothing() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G" \
+        "ide0: ${BP_BASE}:nvme1-lun-9,efitype=4m"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    dry_run=true
+    test_start "--dry-run plans rewrites, reports refusals, and changes nothing"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "[dry-run] Would rewrite 1 disk line(s) via qm set" || ok=false
+    log_has "VM 211 (testvm) scsi0: threeamigos LUN 5 → threeamigos LUN 12" \
+        || ok=false
+    log_has "no map entry for nvme1 LUN 9" || ok=false
+    [[ -z "$(qm_calls)" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — dry-run strayed (qm: $(qm_calls))"
+    fi
+}
+
+test_dry_run_clean_exits_zero() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    dry_run=true
+    test_start "--dry-run with no refusals exits 0"
+
+    run_main
+    if [[ "$_main_rc" -eq 0 && -z "$(qm_calls)" ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — clean dry-run should exit 0"
+    fi
+}
+
+test_prompt_decline_aborts() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    test_start "Declining the confirmation makes no changes"
+
+    local rc=0 errfile
+    errfile=$(mktemp)
+    printf 'n\n' | main >/dev/null 2>"$errfile" || rc=$?
+    _main_out=$(cat "$errfile")
+    rm -f "$errfile"
+
+    local ok=true
+    [[ "$rc" -eq 1 ]] || ok=false
+    log_has "Aborted — no changes made" || ok=false
+    [[ -z "$(qm_calls)" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc — decline did not abort cleanly"
+    fi
+}
+
+test_fetch_uses_two_ssh_round_trips() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    assume_yes=true
+    add_link threeamigos 12
+    test_start "The storage host is queried exactly twice: map + live topology"
+
+    run_main
+    local calls
+    calls=$(ssh_calls)
+    local ok=true
+    [[ "$(ssh_call_count)" -eq 2 ]] || ok=false
+    [[ "$calls" == *"root@stewie"* ]] || ok=false
+    [[ "$calls" == *"/usr/local/lib/zfsutilities/current/bin/export-iscsi-state --print-map"* ]] \
+        || ok=false
+    [[ "$calls" == *"/usr/local/lib/zfsutilities/current/bin/list-vm-disks --gather-lun-info"* ]] \
+        || ok=false
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — unexpected ssh calls: $calls"
+    fi
+}
+
+test_map_host_mismatch_refused() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    patch_lkg_map_field host otherhost
+    test_start "A map generated on another host is refused outright"
+
+    run_main
+    if [[ "$_main_rc" -eq 1 ]] \
+        && log_has "Map was generated on otherhost, not this site's storage host"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_map_prefix_mismatch_refused() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    patch_lkg_map_field iqn_prefix "iqn.2020-01.local.oldsite"
+    test_start "A map recording a different IQN prefix is refused"
+
+    run_main
+    if [[ "$_main_rc" -eq 1 ]] && log_has "Map records IQN prefix" \
+        && log_has "never guessed"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_map_storage_ip_mismatch_refused() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    patch_lkg_map_field storage_ip "192.168.200.1"
+    test_start "A map recording a different storage IP is refused"
+
+    run_main
+    if [[ "$_main_rc" -eq 1 ]] && log_has "Map records storage IP 192.168.200.1" \
+        && log_has "but node.conf says 192.168.100.1"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_lkg_fetch_failure_fatals() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    _mock_ssh_rc=255
+    test_start "An unreachable storage host is a FATAL, not a silent pass"
+
+    run_main
+    if [[ "$_main_rc" -eq 1 ]] \
+        && log_has "Could not fetch the last-known-good map from stewie"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_empty_map_fatals() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    printf '{}\n' > "$_lkg_map_file"
+    test_start "A map with no LUN records is a FATAL"
+
+    run_main
+    if [[ "$_main_rc" -eq 1 ]] \
+        && log_has "contains no LUN records"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc"
+    fi
+}
+
+test_verify_missing_link_rescans() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    assume_yes=true
+    # The rewritten LUN's link appears only after the rescan.
+    REPAIR_VM_DISK_REFS_RESCAN_STORAGE=$(make_rescan_mock \
+        "ln -s /dev/null '${_by_path_dir}/$(link_name threeamigos 12)'")
+    export REPAIR_VM_DISK_REFS_RESCAN_STORAGE
+    test_start "A rewritten reference without its device triggers the rescan"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "no local device yet — rescanning iSCSI sessions" || ok=false
+    rescan_called || ok=false
+    log_has "All 1 rewritten reference(s) resolve to live devices after rescan" \
+        || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — rescan recovery incomplete"
+    fi
+}
+
+test_verify_still_missing_fails() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    assume_yes=true
+    # No link, and the rescan mock changes nothing.
+    test_start "A device still missing after the rescan fails the run"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "still missing after rescan" || ok=false
+    log_has "Repair incomplete" || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — missing device should fail the run"
+    fi
+}
+
+test_qm_set_failure_fails() {
+    reset_mocks
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    assume_yes=true
+    add_link threeamigos 12
+    _mock_qm_set_rc=1
+    test_start "A qm set failure is reported and fails the run"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "qm set failed for VM 211 scsi0" || ok=false
+    log_has "qm set failures during apply" || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — qm failure not reflected in the exit code"
+    fi
+}
+
+test_local_and_unparseable_refs_skipped() {
+    reset_mocks
+    # A non-iSCSI line (local zfs ref) and a by-path token missing its LUN
+    # marker: neither is repairable material; the good ref still processes.
+    write_vm_conf 211 \
+        "name: testvm" \
+        "scsi0: threeamigos:vm-211-disk-2,size=8G" \
+        "scsi1: ${BP_BASE}:threeamigos-lun-abc" \
+        "virtio0: ${BP_BASE}:threeamigos-lun-5,size=100G"
+    write_lkg_map \
+        "threeamigos|5|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    set_live_records \
+        "threeamigos|12|vm-211-disk-0|/dev/zvol/threeamigos/proxmox/vm-211-disk-0"
+    assume_yes=true
+    add_link threeamigos 12
+    test_start "Local refs are skipped and malformed iSCSI volumes are reported"
+
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "unparseable iSCSI volume ${BP_BASE}:threeamigos-lun-abc — left untouched" \
+        || ok=false
+    grep -qxF "set 211 --virtio0 ${_by_path_dir}/$(link_name threeamigos 12),size=100G" \
+        "$_qm_log" || ok=false
+    [[ "$(qm_calls | grep -c .)" -eq 1 ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — qm calls: $(qm_calls)"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_script_loads
+test_single_node_silent_exit
+test_wrong_host_refused
+test_no_qm_refused
+test_unknown_option_usage
+test_no_refs_ok
+test_clean_rewrite_preserves_options
+test_rewrite_bare_volume
+test_efidisk_rewrite
+test_no_map_entry_refused
+test_not_live_refused
+test_other_vm_backstore_refused
+test_vm_running_refused
+test_vm_status_unknown_refused
+test_two_refs_one_backstore_refused
+test_already_correct_no_change
+test_dry_run_reports_and_changes_nothing
+test_dry_run_clean_exits_zero
+test_prompt_decline_aborts
+test_fetch_uses_two_ssh_round_trips
+test_map_host_mismatch_refused
+test_map_prefix_mismatch_refused
+test_map_storage_ip_mismatch_refused
+test_lkg_fetch_failure_fatals
+test_empty_map_fatals
+test_verify_missing_link_rescans
+test_verify_still_missing_fails
+test_qm_set_failure_fails
+test_local_and_unparseable_refs_skipped
+
+# Cleanup
+local_cleanup() {
+    local _p
+    for _p in "${_rescan_scripts[@]:-}"; do
+        rm -f "$_p"
+    done
+    [[ -n "$_scratch" && -d "$_scratch" ]] && rm -rf "$_scratch"
+}
+local_cleanup
+
+test_summary
