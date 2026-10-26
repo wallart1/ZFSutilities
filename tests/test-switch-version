@@ -1003,8 +1003,8 @@ test_install_iscsi_fence_units_skips_single_node() {
     fi
 }
 
-test_install_iscsi_fence_units_skips_without_node_conf() {
-    test_start "install_iscsi_fence_units skips when no node config exists anywhere"
+test_install_iscsi_fence_units_installs_without_node_conf() {
+    test_start "install_iscsi_fence_units installs with no node config (fresh compute deploy)"
     local tmpdir
     _setup_switch_env tmpdir
 
@@ -1015,6 +1015,9 @@ test_install_iscsi_fence_units_skips_without_node_conf() {
     export ZFSUTILITIES_SYSTEMD_DIR="$systemd_dir"
     # "none": neither the new conf nor either legacy fallback exists (the
     # legacy knobs point inside the fixture root, not at the dev host's /etc).
+    # This is the fresh two-node compute host mid-deploy: install-two-node
+    # activates it BEFORE its Step 6 copies node.conf there, so the fence
+    # must install anyway (j14 live finding, 2026-10-25).
     _point_node_conf_at "$tmpdir" "none"
     local _systemctl_calls=()
     systemctl() {
@@ -1030,13 +1033,25 @@ test_install_iscsi_fence_units_skips_without_node_conf() {
     load_switch_config
     install_iscsi_fence_units
     local failed=0
-    if [[ -e "$systemd_dir/zfsutilities-iscsi-fence.service" ]]; then
+    if [[ "$(cat "$systemd_dir/zfsutilities-iscsi-fence.service" 2>/dev/null)" \
+            != "fence-service-v1" ]]; then
         failed=1
-        echo "    fence service installed without any node config"
+        echo "    fence service not installed without any node config"
     fi
-    if [[ "${#_systemctl_calls[@]}" -gt 0 ]]; then
+    if [[ "$(cat "$systemd_dir/zfsutilities-iscsi-fence.timer" 2>/dev/null)" \
+            != "fence-timer-v1" ]]; then
         failed=1
-        echo "    systemctl called without any node config"
+        echo "    fence timer not installed without any node config"
+    fi
+    local _enabled=0
+    local _call
+    for _call in "${_systemctl_calls[@]}"; do
+        [[ "$_call" == "enable --now zfsutilities-iscsi-fence.timer" ]] \
+            && _enabled=1
+    done
+    if [[ "$_enabled" -ne 1 ]]; then
+        failed=1
+        echo "    fence timer was never enabled without any node config"
     fi
 
     export PATH="$_orig_path"
@@ -1049,7 +1064,7 @@ test_install_iscsi_fence_units_skips_without_node_conf() {
     if [[ "$failed" -eq 0 ]]; then
         test_pass
     else
-        test_fail "fence units installed without any node config"
+        test_fail "fence units not installed on a fresh compute deploy"
     fi
 }
 
@@ -1091,7 +1106,7 @@ test_shipped_fence_units_match_fence_design() {
 test_install_iscsi_fence_units_installs_enables_and_refreshes
 test_install_iscsi_fence_units_skips_without_qm
 test_install_iscsi_fence_units_skips_single_node
-test_install_iscsi_fence_units_skips_without_node_conf
+test_install_iscsi_fence_units_installs_without_node_conf
 test_shipped_fence_units_match_fence_design
 
 test_summary

@@ -17,11 +17,16 @@
 # child dataset of each pool, so policies without explicit includes pick it
 # up automatically.
 #
-# Usage: sudo export-iscsi-state [--check] [--force]
+# Usage: sudo export-iscsi-state [--check] [--force] [--print-map]
 #   --check   Compare live state against the newest map found on any pool and
 #             report drift (manual targetcli edits since the last export).
 #   --force   Record the live state even when it is degraded (fewer active
 #             backstores than the manifest or the newest map expects).
+#   --print-map
+#             Print the newest pool-resident map to stdout, read-only. The
+#             compute host fetches the recovery map over ssh this way
+#             (repair-vm-disk-refs); no live state is collected and nothing
+#             is written.
 #
 # Install to: /usr/local/lib/zfsutilities/bin/export-iscsi-state on the storage host
 
@@ -52,20 +57,24 @@ rootcheck
 is_single_node && exit 0
 
 usage() {
-    log_msg "INFO: Usage: export-iscsi-state [--check] [--force]"
+    log_msg "INFO: Usage: export-iscsi-state [--check] [--force] [--print-map]"
     echo ""
-    log_msg "INFO:   --check   Compare live state to the newest pool-resident map and report"
-    log_msg "INFO:             drift (manual targetcli edits since the last export)"
-    log_msg "INFO:   --force   Record a degraded live state over a healthy map (use with care)"
+    log_msg "INFO:   --check     Compare live state to the newest pool-resident map and report"
+    log_msg "INFO:               drift (manual targetcli edits since the last export)"
+    log_msg "INFO:   --force     Record a degraded live state over a healthy map (use with care)"
+    log_msg "INFO:   --print-map Print the newest pool-resident map to stdout (read-only;"
+    log_msg "INFO:               used by the compute host to fetch the recovery map)"
     exit 1
 }
 
 check_only=false
 force_write=false
+print_map=false
 for arg in "$@"; do
     case "$arg" in
         --check) check_only=true ;;
         --force) force_write=true ;;
+        --print-map) print_map=true ;;
         -h|--help) usage ;;
         *)
             log_msg "FATAL: Unknown option: $arg"
@@ -83,8 +92,10 @@ if [[ "$my_host" != "$storage_host" ]]; then
 fi
 
 # Storage-node dependency: LIO target stack. The compute host needs Proxmox VE,
-# but this script runs on the storage host and does not require a local qm binary.
-if ! command -v targetcli >/dev/null 2>&1; then
+# but this script runs on the storage host and does not require a local qm
+# binary. --print-map only reads pool files and skips this gate (the compute
+# host's fetch must not depend on targetcli being installed there).
+if [[ "$print_map" != true ]] && ! command -v targetcli >/dev/null 2>&1; then
     log_msg "FATAL: targetcli not found. Install the LIO target stack on this storage host."
     log_msg "FATAL:   On Debian/Ubuntu: apt-get install targetcli-fb"
     exit 1
@@ -447,6 +458,25 @@ PYEOF
 # ------------------------------------------------------------------
 
 main() {
+
+if [[ "$print_map" == true && "$check_only" == true ]]; then
+    log_msg "FATAL: --print-map and --check are mutually exclusive"
+    exit 1
+fi
+
+# Read-only map dump for remote consumers: stdout must stay pure JSON (the
+# compute host's repair fetches it over ssh), so this runs before any banner.
+if [[ "$print_map" == true ]]; then
+    local map_file
+    map_file=$(newest_iscsi_state_map || true)
+    if [[ -z "$map_file" ]]; then
+        log_msg "FATAL: No ${STATE_FILENAME} found on any online pool —" \
+            "run export-iscsi-state first"
+        exit 1
+    fi
+    cat -- "$map_file"
+    exit 0
+fi
 
 log_msg "INFO: === export-iscsi-state ==="
 echo ""

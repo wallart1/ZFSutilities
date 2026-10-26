@@ -68,6 +68,8 @@ source "$ITF_BIN_DIR/lib/guest-lib.sh"
 source "$ITF_BIN_DIR/lib/template-lib.sh"
 # shellcheck disable=SC1091
 source "$ITF_BIN_DIR/lib/report-lib.sh"
+# shellcheck disable=SC1091
+source "$ITF_BIN_DIR/lib/runlock-lib.sh"
 
 itf_usage() {
     sed -n '2,/^$/p' "$0" | sed 's/^# \?//' | sed -n '/^Usage:/,$p'
@@ -373,8 +375,19 @@ cmd_template() {
     case "$sub" in
         status) itf_template_status ;;
         build)
+            # One run at a time per dev host (see runlock-lib.sh).
+            itf_runlock_acquire "template build${*:+ $*}" || return 2
             ITF_RUN_CALLER="template:build"
             itf_report_init template-build || return 1
+            # The orphan fence guards the build's install guest too (it
+            # consumes the same reserved VMIDs and base RAM).
+            if ! itf_runlock_orphan_fence ""; then
+                itf_step fail "orphan fence" \
+                    "guests left by an interrupted run (see messages above)"
+                itf_report_finish > /dev/null || true
+                echo "itf: run refused — see $ITF_RUN_DIR/report.md"
+                return 2
+            fi
             local rc=0
             itf_template_build "$@" || rc=$?
             itf_report_finish || rc=1
@@ -485,9 +498,10 @@ cmd_journey() {
             # Consumed by itf_report_init (report-lib.sh) in this same shell.
             # shellcheck disable=SC2034
             ITF_RUN_CALLER="journey:$name"
+            # One run at a time per dev host, enforced by the driver itself
+            # (shared HTTP port, syslog listener, and base guest budget).
+            itf_runlock_acquire "journey run $name" || return 2
             itf_report_init "$name" || return 1
-            echo "itf: journey $name running (pid $$) — hands off guest/base" \
-                "consoles; watch safely: itf watch"
             if (( rerun )); then
                 if ! _journey_rerun_prepare "$name"; then
                     itf_report_finish > /dev/null || true
@@ -495,6 +509,23 @@ cmd_journey() {
                     return 1
                 fi
             fi
+            # Acquire-time orphan fence (runlock-lib.sh): guests of an
+            # interrupted run outlive the dev-side lock, so the bases'
+            # own guest lists must be clean of them before this run
+            # starts; a rerun exempts exactly the guests it takes over.
+            local fence_spec=""
+            if (( rerun )); then
+                fence_spec="$ITF_RUN_DIR/rerun-guests.tsv"
+            fi
+            if ! itf_runlock_orphan_fence "$fence_spec"; then
+                itf_step fail "orphan fence" \
+                    "guests left by an interrupted run (see messages above)"
+                itf_report_finish > /dev/null || true
+                echo "itf: run refused — see $ITF_RUN_DIR/report.md"
+                return 2
+            fi
+            echo "itf: journey $name running (pid $$) — hands off guest/base" \
+                "consoles; watch safely: itf watch"
             local rc=0
             journey_main || rc=$?
             if (( rc != 0 )); then
@@ -561,6 +592,8 @@ cmd_status() {
         shown=1
     done
     (( shown )) || echo "  none"
+    echo "== run lock =="
+    itf_runlock_status
     echo "== recent runs =="
     for run in $(ls -1t "$ITF_RUNS_DIR" 2>/dev/null | head -3); do
         local summary

@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# j14-iscsi-fence-recover.journey — the compute-host fence half of the
+# iSCSI resilience campaign: unattended detection + auto-recovery.
+#
+# Composition: the ENTIRE j05 two-node lab runs first, then j13's staging
+# helper creates the post-backup-point LUN (vm-101-disk-1 at LUN 1) and
+# regresses the storage host's LIO state to the backup point — the same
+# bare-metal-restore shape. This journey verifies the COMPUTE half:
+#
+#   Stage W  wiring: the fence service + timer are installed and enabled
+#            on the compute host by the product's own activation
+#            (switch-version gate: qm present + two-node), and the unit
+#            really runs check-vm-disk-paths --recover.
+#   Stage D  detection: a manual fence tick exits 1 and names the missing
+#            reference with full identity (VM, key, IQN, LUN).
+#   Stage R  recovery THROUGH THE INSTALLED UNIT: systemctl start runs
+#            the timer's ExecStart; the fence rescans locally, then runs
+#            reconcile-iscsi-state on the storage host over ssh (the real
+#            map-driven rebuild, non-interactive), and exits 0 with all
+#            references present again.
+#   Stage H  healthy tick: a manual fence run exits 0 with the
+#            all-present summary (no recovery involved).
+#
+# The recover path runs for real — the storage guest is genuinely
+# regressed and genuinely rebuilt over ssh; only the storage host is
+# disposable lab state, nothing is mocked.
+#
+# Guest state required: storage template + compute template (j05's).
+# Site config required: j05's two-node keys. Software source must be
+# dev-tarball — this journey verifies working-tree repairs.
+
+# shellcheck source=j13-iscsi-storage-restore.journey
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/j13-iscsi-storage-restore.journey"
+
+journey_main() {
+    if [[ "${ITF_SW_SOURCE:-}" != "dev-tarball" ]]; then
+        itf_step fail "site config: dev tarball source" \
+            "ITF_SW_SOURCE=${ITF_SW_SOURCE:-?} — set dev-tarball (verifies working-tree repairs)"
+        return 1
+    fi
+    itf_step info "journey start" \
+        "j14 iSCSI fence detection/recover; composes the j05 two-node lab"
+
+    # ------------------------------------------------------------------
+    # Stage L + R + X: the j05 lab, the post-backup LUN, the regression
+    # ------------------------------------------------------------------
+
+    j05_two_node_lab_main || return 1
+
+    local s_vmid s_ip c_vmid c_ip
+    read -r _ s_vmid s_ip < "$ITF_RUN_DIR/guest-storage.txt"
+    read -r _ c_vmid c_ip < "$ITF_RUN_DIR/guest-compute.txt"
+    if [[ -n "$s_ip" && -n "$c_ip" ]]; then
+        itf_step pass "lab coordinates recovered" \
+            "storage=$s_ip (vmid $s_vmid) compute=$c_ip (vmid $c_vmid)"
+    else
+        itf_step fail "lab coordinates recovered" "guest record files incomplete"
+        return 1
+    fi
+
+    iscsi_journey_stage_regressed_lun "$s_ip" "$c_ip" || return 1
+
+    # ------------------------------------------------------------------
+    # Stage W: the fence units the product's activation installed
+    # ------------------------------------------------------------------
+
+    local wire_log="$ITF_RUN_DIR/fence-wiring.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if itf_guest_exec "$c_ip" '
+            set -e
+            systemctl is-enabled zfsutilities-iscsi-fence.timer \
+                | grep -qx enabled
+            grep -q "^ExecStart=.*check-vm-disk-paths --recover$" \
+                /etc/systemd/system/zfsutilities-iscsi-fence.service
+            echo wiring-ok
+        ' > "$wire_log" 2>&1 && grep -q wiring-ok "$wire_log"; then
+        itf_step pass "fence units installed and enabled" \
+            "timer enabled; service ExecStart runs check-vm-disk-paths --recover"
+    else
+        itf_step fail "fence units installed and enabled" "see fence-wiring.log"
+        itf_artifact "fence-wiring" "$wire_log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage D: a fence tick detects the missing reference and exits 1
+    # ------------------------------------------------------------------
+
+    local det_log="$ITF_RUN_DIR/fence-detection.log"
+    itf_guest_exec "$c_ip" "bash -lc 'check-vm-disk-paths'" \
+        > "$det_log" 2>&1
+    local det_rc=$?
+    itf_artifact "fence-detection" "$det_log"
+    if [[ $det_rc -eq 1 ]] \
+            && grep -q "VM 101 (j05-vm) scsi1" "$det_log" \
+            && grep -q "LUN 1" "$det_log" \
+            && grep -q "1 of 2 VM disk path(s) missing" "$det_log"; then
+        itf_step pass "fence detects the missing reference" \
+            "exit 1 naming VM 101 scsi1 LUN 1 with the expected link"
+    else
+        itf_step fail "fence detects the missing reference" \
+            "rc=$det_rc — see fence-detection.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage R: recovery through the installed unit (the timer's own
+    # ExecStart, driven deterministically instead of waiting 5 minutes)
+    # ------------------------------------------------------------------
+
+    local svc_log="$ITF_RUN_DIR/fence-service-start.log"
+    if itf_guest_exec "$c_ip" "bash -lc 'systemctl start \
+            zfsutilities-iscsi-fence.service'" > "$svc_log" 2>&1 \
+        && itf_guest_exec "$c_ip" '
+            systemctl show zfsutilities-iscsi-fence.service -p Result --value \
+                | grep -qx success
+            systemctl show zfsutilities-iscsi-fence.service \
+                -p ExecMainStatus --value | grep -qx 0
+            journalctl -u zfsutilities-iscsi-fence.service --no-pager -n 200 \
+                | grep -q "running reconcile-iscsi-state"
+            journalctl -u zfsutilities-iscsi-fence.service --no-pager -n 200 \
+                | grep -q "All 2 VM disk path(s) present after reconcile"
+            ls /dev/disk/by-path/ | grep -q "iscsi-.*-lun-1$"
+        ' > "$ITF_RUN_DIR/fence-recovered.log" 2>&1; then
+        itf_step pass "fence unit recovers unattended" \
+            "local rescan -> ssh reconcile on storage -> lun-1 link back; unit exit 0"
+        itf_artifact "fence-recovered" "$ITF_RUN_DIR/fence-recovered.log"
+    else
+        itf_step fail "fence unit recovers unattended" \
+            "see fence-service-start.log + fence-recovered.log"
+        itf_artifact "fence-service-start" "$svc_log"
+        itf_artifact "fence-recovered" "$ITF_RUN_DIR/fence-recovered.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage H: the healthy tick after recovery
+    # ------------------------------------------------------------------
+
+    local healthy_log="$ITF_RUN_DIR/fence-healthy.log"
+    itf_guest_exec "$c_ip" "bash -lc 'check-vm-disk-paths'" \
+        > "$healthy_log" 2>&1
+    local healthy_rc=$?
+    itf_artifact "fence-healthy" "$healthy_log"
+    if [[ $healthy_rc -eq 0 ]] \
+            && grep -q "All 2 VM disk path(s) present" "$healthy_log"; then
+        itf_step pass "healthy tick after recovery" \
+            "exit 0, all references present"
+    else
+        itf_step fail "healthy tick after recovery" \
+            "rc=$healthy_rc — see fence-healthy.log"
+        return 1
+    fi
+
+    itf_step info "journey stage reached" \
+        "fence verified: wiring, detection exit, unit-driven recover, healthy tick"
+    return 0
+}

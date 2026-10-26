@@ -1366,7 +1366,7 @@ online pool (two-node only; silently no-ops in single-node mode).
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
-| `FATAL: Unknown option: ...` | Unrecognized command-line argument | Usage shown; rerun with valid arguments |
+| `FATAL: Unknown option: ...` / `FATAL: --print-map and --check are mutually exclusive` | Unrecognized command-line argument or an impossible mode combination | Usage shown; rerun with valid arguments |
 | `FATAL: Must run on the storage host (...), not ...` / `FATAL: Must run as root (use sudo)` | Environment gate: wrong host or not root | Run via `sudo` on the storage host |
 | `FATAL: targetcli not found. ...` | The LIO target stack is not installed on this storage host | Install `targetcli-fb` |
 | `INFO: Targets: ..., backstores: ...` | Live-topology summary before rendering the map | Informational |
@@ -1380,7 +1380,7 @@ online pool (two-node only; silently no-ops in single-node mode).
 | `INFO: Comparing live state against ...` | `--check` located the newest map and started the comparison | Informational |
 | `INFO: ✓ No drift — live state matches the newest pool map` | `--check` found the live topology identical to the recorded map | Informational |
 | `DRIFT: ...` (stdout lines) / `WARN: Drift detected between live state and the pool map (see DRIFT lines)` | `--check` found differences: moved LUNs, missing/extra backstores, ACL changes, or node-identity (`iqn_prefix`/`storage_ip`) drift — typically manual `targetcli` edits since the last export | Review the lines; run `sudo export-iscsi-state` to record the now-intended state |
-| `FATAL: No iscsi-state.json found on any online pool — run export-iscsi-state first` | `--check` found no map to compare against | Run `sudo export-iscsi-state` once, then retry |
+| `FATAL: No iscsi-state.json found on any online pool — run export-iscsi-state first` | `--check`/`--print-map` found no map on any pool | Run `sudo export-iscsi-state` once, then retry |
 | `FATAL: Could not create a temp file for the state map` / `FATAL: State map was not written to any pool` | No temp file could be staged, or every configured pool was skipped (offline/unwritable) | Check pool availability and permissions; at least one online pool is required |
 
 ### [reconcile-iscsi-state](../commands-and-modules/two-node.md#reconcile-iscsi-state-storage-node)
@@ -1445,6 +1445,37 @@ auto-resolved.
 | `WARN: reconcile-iscsi-state reported problems — remaining references are report-only` | The reconcile exited non-zero (identity conflict, unreachable host, failed save) | Inspect the reconcile messages above; the fence never retries or guesses |
 | `INFO: ✓ All N VM disk path(s) present after reconcile` | The storage-side rebuild restored every link | Informational |
 | `FATAL: N of M VM disk path(s) still missing after recovery` (+ `FATAL: Run 'sudo reconcile-iscsi-state' on ... and inspect its refusals — identity conflicts are never auto-resolved`) | References remain unreachable after both recovery stages | Resolve the reconcile's refusals on the storage host (or repair the VM configs), then re-run; the run exits 1 |
+
+### [repair-vm-disk-refs](../commands-and-modules/two-node.md#repair-vm-disk-refs-compute-node)
+
+Compute-host VM-config repair after a bare-metal restore (two-node only;
+silently no-ops in single-node mode). Re-points regressed VM-config disk
+references at the correct LUNs by disk identity (map-resolved, options
+preserved byte-for-byte); everything ambiguous is refused with evidence.
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `FATAL: Unknown option: ...` | Unrecognized command-line argument | Usage shown; rerun with `[--dry-run] [--yes]` |
+| `FATAL: Must run on the compute host (...), not ...` / `FATAL: This script requires Proxmox VE (qm command not found).` (+ `FATAL: VM config repair runs on the compute host.`) / `FATAL: Must run as root (use sudo)` | Environment gate: wrong host, no Proxmox, or not root | Run via `sudo` on the compute host |
+| `INFO: No iSCSI VM disk references found — nothing to repair` | No VM config carries an iSCSI disk reference (fresh install) | Informational |
+| `WARN: VM ... (...) ...: unparseable iSCSI volume ... — left untouched` | A by-path volume in a VM config does not carry a parseable target/LUN | Fix or remove the line by hand; the repair never touches what it cannot identify |
+| `FATAL: Could not fetch the last-known-good map from ... — is it reachable?` / `FATAL: Could not fetch the live LUN topology from ...` | The storage host was unreachable over ssh (one round trip each for the map and the live topology) | Restore ssh access, then re-run |
+| `FATAL: Could not create a temp file for the state map` | No temp file could be staged for the fetched map | Check `/tmp` (or `$TMPDIR`) and re-run |
+| `FATAL: The state map from ... contains no LUN records — run export-iscsi-state there first` | The fetched map has no target LUN entries (empty or corrupt) | Run `sudo export-iscsi-state` on the storage host, then re-run |
+| `FATAL: Map was generated on ..., not this site's storage host (...) — refusing to repair from it` / `FATAL: Map records IQN prefix ... but node.conf says ... — refusing (prefix drift, never guessed)` / `FATAL: Map records storage IP ... but node.conf says ... — refusing` | Safety gate: the map describes another site (or an older era of this site) and cannot be the identity authority | Re-export the map on this site's storage host; a prefix change means the configs need deliberate re-attachment, never a guessed rewrite |
+| `INFO: Map: ... pool state (generated ...); live exported backstores: N; VM references: M` | Run header: the fetched authority and its freshness | Informational |
+| `INFO: Planned config rewrites (only the by-path volume changes):` (+ per-item `VM ... (...) ...: <short> LUN <n> → <short> LUN <m> (identity: <backstore>)` and the old/new volumes) | The planned rewrites, shown before the `y/N` confirmation | Review, then confirm (or rerun with `--dry-run` first) |
+| `INFO: Already correct (no change):` (+ `VM ... (...) ...: already points at <backstore> @ <short> LUN <n>`) | A reference already matches the live topology | Informational; if the device itself is missing, run `check-vm-disk-paths --recover` (storage half) |
+| `FATAL: Refused (ambiguous or unknown identity — resolve manually):` (+ `... no map entry for ... LUN ... — identity unknown, never guessed` / `... is vm-N-disk-M, which now belongs to VM N — never attached across VMs` / `... is referenced by N config lines — ambiguous, refusing all of them` / `... is not exported live — run reconcile-iscsi-state on ... first` / `... VM is running — stop it before rewriting ...` / `... could not determine VM status (qm status) — refusing`) | Safety gate: this reference's identity is unknown or conflicted, so it is refused and the run continues with the rest | Resolve deliberately: run the storage-half reconcile first, stop the VM, or re-attach the disk by hand (e.g. `attach-vm-disk`); the run exits 1 while any refusal stands |
+| `INFO: [dry-run] Would rewrite N disk line(s) via qm set (options preserved byte-for-byte)` / `FATAL: N reference(s) must be resolved manually first` | `--dry-run` close-out | Apply with `--yes`/confirmation once the plan is acceptable |
+| `INFO: No rewrites needed` | Nothing to change (all references already correct or refused) | Informational; the exit code still reflects refusals |
+| `WARN: Aborted — no changes made` | The `y/N` confirmation was declined (or stdin was empty) | Re-run and confirm, or use `--yes` |
+| `INFO:   ✓ VM ... ... repointed to ... LUN ... (...)` | One rewrite applied via `qm set` (volume only, options preserved) | Informational |
+| `FATAL: qm set failed for VM ... ... — config left as-is` | The `qm set` call returned non-zero; the run continues with the remaining items | Check the qm error (locked config, VM state); re-run after fixing |
+| `INFO:   ✓ All N rewritten reference(s) resolve to live devices` / `INFO: N rewritten reference(s) have no local device yet — rescanning iSCSI sessions...` / `INFO:   ✓ All N rewritten reference(s) resolve to live devices after rescan` | Post-apply verification, including the automatic rescan when a device is not present yet | Informational |
+| `WARN: rescan-storage not available at ...` / `WARN: Local iSCSI rescan reported problems (see above) — continuing` | The verification rescan could not run or found no sessions | Run `sudo rescan-storage` by hand; a still-missing device is reported as FATAL |
+| `FATAL: VM ... ...: <by-path link> still missing after rescan — check the storage host exports this LUN` | A rewritten reference has no device on this host even after the rescan (the VM would not start) | Verify the storage host exports that LUN (`show-lun-map`), then re-run |
+| `INFO: === Summary ===` (+ `✓ Rewritten: N`, `Already correct: N`, `FATAL: Refused: N — resolve manually and re-run`, `FATAL: qm set failures during apply`, `FATAL: Rewritten reference(s) still missing their device after rescan`) | End-of-run tally | `INFO:   ✓ Done` (exit 0) when complete; `FATAL:   Repair incomplete — resolve the reported items and re-run` (exit 1) otherwise |
 
 ### [show-lun-map](../commands-and-modules/two-node.md#show-lun-map-compute-node)
 

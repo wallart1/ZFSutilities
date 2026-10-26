@@ -1,0 +1,730 @@
+#!/usr/bin/bash
+# repair-vm-disk-refs
+# Compute-host VM-config repair after a bare-metal restore: re-point regressed
+# VM-config disk references at the correct iSCSI LUNs by disk identity.
+#
+# The mirror of reconcile-iscsi-state. A COMPUTE-host bare-metal restore
+# regresses the VM configs (/etc/pve lives on the compute host's OS disk) while
+# the storage host stays current: the restored configs then reference
+# (target, LUN) slots that now hold DIFFERENT backstores, and Proxmox would
+# silently attach the wrong disk. Identity is never the LUN number: each
+# reference is resolved through the storage host's pool-resident state map
+# (iscsi-state.json, fetched read-only via export-iscsi-state --print-map) to
+# the backstore that slot held when the map was written, and the live topology
+# (list-vm-disks --gather-lun-info) says where that backstore sits now. When
+# the two disagree, ONLY the by-path volume portion of the disk line is
+# rewritten via `qm set <vmid> --<key> <new-by-path>,<options>` — every option
+# after the volume is preserved byte-for-byte.
+#
+# Safety model:
+#   - Refused per item, with evidence (the run continues with the rest):
+#     a reference with no map entry (identity unknown), a backstore that is
+#     not exported live, a backstore that now belongs to a different VMID,
+#     a running (or unverifiable) VM, and two references resolving to one
+#     backstore. Nothing ambiguous is ever guessed or auto-remapped.
+#   - Map sanity: a map generated on another host, or recording a different
+#     IQN prefix / storage IP than this site's node.conf, is refused outright.
+#
+# Usage: sudo repair-vm-disk-refs [--dry-run] [--yes]
+#   --dry-run   Report the planned rewrites and refusals without editing
+#               any VM config
+#   --yes       Apply without the interactive confirmation
+#
+# Install to: /usr/local/lib/zfsutilities/bin/repair-vm-disk-refs on the compute host
+
+set -euo pipefail
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+NODE_LIB="${REPAIR_VM_DISK_REFS_NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
+source "$NODE_LIB"
+
+# Shared backstore-name validation (is_vm_backstore_name) lives in
+# lib/iscsi-lib.sh. The library's own bootstrap self-skips here because
+# node-lib.sh is already loaded.
+ISCSI_LIB="${REPAIR_VM_DISK_REFS_ISCSI_LIB:-$(find_zfsutility_script iscsi-lib.sh)}"
+source "$ISCSI_LIB"
+
+source_helper rootcheck
+
+rootcheck
+
+# iSCSI-only script — exit silently in single-node mode
+is_single_node && exit 0
+
+usage() {
+    log_msg "INFO: Usage: repair-vm-disk-refs [--dry-run] [--yes]"
+    echo ""
+    log_msg "INFO:   --dry-run   Report planned rewrites and refusals without editing any VM config"
+    log_msg "INFO:   --yes       Apply without the interactive confirmation"
+    exit 1
+}
+
+dry_run=false
+assume_yes=false
+parse_cli_args() {
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --dry-run) dry_run=true ;;
+            --yes)     assume_yes=true ;;
+            -h|--help) usage ;;
+            *)
+                log_msg "FATAL: Unknown option: $arg"
+                usage
+                ;;
+        esac
+    done
+}
+
+parse_cli_args "$@"
+
+my_host=$(hostname -s)
+
+# This is the compute-host half; the storage-host halves are
+# reconcile-iscsi-state and export-iscsi-state.
+if [[ "$my_host" != "$compute_host" ]]; then
+    log_msg "FATAL: Must run on the compute host ($compute_host), not $my_host"
+    exit 1
+fi
+
+# The repair edits VM configs through qm set, which requires Proxmox VE.
+if ! command -v qm >/dev/null 2>&1; then
+    log_msg "FATAL: This script requires Proxmox VE (qm command not found)."
+    log_msg "FATAL:   VM config repair runs on the compute host."
+    exit 1
+fi
+
+[[ $EUID -eq 0 ]] || [[ "${REPAIR_VM_DISK_REFS_SKIP_ROOT:-}" == "Y" ]] || {
+    log_msg "FATAL: Must run as root (use sudo)"
+    exit 1
+}
+
+# Resolve overrideable runtime paths (unit tests substitute mocks between
+# runs, so main() re-resolves these rather than trusting top-level state).
+resolve_runtime_paths() {
+    conf_dir="${REPAIR_VM_DISK_REFS_CONF_DIR:-/etc/pve/qemu-server}"
+    by_path_dir="${REPAIR_VM_DISK_REFS_BY_PATH_DIR:-/dev/disk/by-path}"
+    rescan_storage="${REPAIR_VM_DISK_REFS_RESCAN_STORAGE:-$mydir/rescan-storage}"
+}
+
+resolve_runtime_paths
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+# True when the argument is a non-empty all-digit string (fixed-string digit
+# check per project convention — no regex).
+is_digits() {
+    [[ -n "$1" && "$1" != *[!0-9]* ]]
+}
+
+# The by-path volume for a (target short name, LUN) slot on this host. The
+# portal address and IQN prefix come from this host's node.conf, exactly like
+# every other by-path this project writes.
+bypath_for_slot() {
+    local short="$1" lun="$2"
+    printf '%s/ip-%s:3260-iscsi-%s:%s-lun-%s\n' \
+        "$by_path_dir" "$storage_ip" "$iqn_prefix" "$short" "$lun"
+}
+
+# Split a VM-config disk line into its volume token and option suffix.
+# Sets _dv_volume and _dv_suffix (empty when the line carries no options);
+# the suffix keeps every byte after the volume's first comma, untouched.
+split_disk_value() {
+    local value="${1#*:}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    _dv_volume="${value%%,*}"
+    if [[ "$value" == *,* ]]; then
+        _dv_suffix="${value#*,}"
+    else
+        _dv_suffix=""
+    fi
+    return 0
+}
+
+# Resolve an iSCSI by-path volume token to its (target short name, LUN).
+# Sets _pv_short/_pv_lun and returns 0 on a well-formed token, else 1. The
+# split mirrors list-vm-disks's gather parse: strip through the iSCSI marker
+# and the IQN prefix's colon, then take the first "-lun-" as the separator
+# and require an all-digit LUN.
+parse_bypath_volume() {
+    local vol="$1" rest
+    _pv_short=""
+    _pv_lun=""
+    [[ "$vol" == /dev/disk/by-path/ip-*":3260-iscsi-"* ]] || return 1
+    rest="${vol#*":3260-iscsi-"}"
+    [[ "$rest" == *:* ]] || return 1
+    rest="${rest#*:}"
+    [[ "$rest" == *-lun-* ]] || return 1
+    _pv_short="${rest%%-lun-*}"
+    _pv_lun="${rest#*"-lun-"}"
+    [[ -n "$_pv_short" && "$_pv_short" != *:* ]] || return 1
+    is_digits "$_pv_lun" || return 1
+    return 0
+}
+
+# The VMID owning a backstore name ("vm-<vmid>-disk-<n>" -> "<vmid>"); the
+# caller has already validated the name with is_vm_backstore_name.
+owning_vmid_of_backstore() {
+    local own="${1#vm-}"
+    printf '%s' "${own%%-disk-*}"
+}
+
+# ------------------------------------------------------------------
+# VM-config reference gathering (local — no ssh)
+# ------------------------------------------------------------------
+
+# Gather this host's iSCSI VM disk references into the _ref_* globals, one
+# entry per VM-config disk line (including efidisk) whose volume is an iSCSI
+# by-path token:
+#   _ref_order[]       reference ids ("vmid|key") in config order
+#   _ref_vmid[id]      owning VM's id
+#   _ref_name[id]      VM name (for evidence lines; "-" when unset)
+#   _ref_key[id]       Proxmox disk key (scsi0, efidisk0, ...)
+#   _ref_slot[id]      "short|lun" the line's volume points at
+#   _ref_volume[id]    the original volume token (evidence)
+#   _ref_suffix[id]    the original option suffix (applied byte-for-byte)
+vm_conf_gather() {
+    _ref_order=()
+    unset -v _ref_vmid _ref_name _ref_key _ref_slot _ref_volume _ref_suffix
+    declare -gA _ref_vmid=() _ref_name=() _ref_key=() _ref_slot=() \
+        _ref_volume=() _ref_suffix=()
+
+    local conf vmid name line key id
+    shopt -s nullglob
+    for conf in "$conf_dir"/*.conf; do
+        vmid=$(basename "$conf" .conf)
+        is_digits "$vmid" || continue
+
+        # || true: a config without a name line is normal (defaults to "-").
+        name=$(grep '^name:' "$conf" 2>/dev/null | head -1 | cut -d: -f2- || true)
+        name="${name#"${name%%[![:space:]]*}"}"
+        [[ -n "$name" ]] || name="-"
+
+        while IFS= read -r line; do
+            key="${line%%:*}"
+            # [[ ]] && continue is set -e safe: the test is not the final
+            # command of the AND list.
+            [[ "$key" == "$line" ]] && continue
+            # Only Proxmox disk keys (bus name followed by digits, or efidisk).
+            case "$key" in
+                scsi[0-9]*|ide[0-9]*|sata[0-9]*|virtio[0-9]*|efidisk[0-9]*) ;;
+                *) continue ;;
+            esac
+            id="${vmid}|${key}"
+            [[ -z "${_ref_vmid[$id]:-}" ]] || continue
+
+            split_disk_value "$line"
+            if ! parse_bypath_volume "$_dv_volume"; then
+                if [[ "$_dv_volume" == /dev/disk/by-path/ip-*":3260-iscsi-"* ]]; then
+                    log_msg "WARN: VM ${vmid} (${name}) ${key}: unparseable iSCSI volume" \
+                        "${_dv_volume} — left untouched"
+                fi
+                continue
+            fi
+            _ref_order+=("$id")
+            _ref_vmid["$id"]="$vmid"
+            _ref_name["$id"]="$name"
+            _ref_key["$id"]="$key"
+            _ref_slot["$id"]="${_pv_short}|${_pv_lun}"
+            _ref_volume["$id"]="$_dv_volume"
+            _ref_suffix["$id"]="$_dv_suffix"
+        done < "$conf"
+    done
+    shopt -u nullglob
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Map fetches (storage host over ssh; env-file overrides for tests)
+# ------------------------------------------------------------------
+
+# Print the last-known-good state map (export-iscsi-state --print-map is
+# read-only on the storage host: it resolves the newest pool-resident
+# iscsi-state.json and dumps it without touching live state).
+fetch_lkg_map() {
+    if [[ -n "${REPAIR_VM_DISK_REFS_LKG_MAP_FILE:-}" \
+            && -f "${REPAIR_VM_DISK_REFS_LKG_MAP_FILE}" ]]; then
+        cat "${REPAIR_VM_DISK_REFS_LKG_MAP_FILE}"
+        return 0
+    fi
+    local remote_script
+    remote_script=$(remote_zfsutility_script "$storage_host" "export-iscsi-state") || return 1
+    ssh -o ConnectTimeout=10 "root@${storage_host}" \
+        "${remote_script} --print-map" 2>/dev/null
+}
+
+# Print the live LUN topology as list-vm-disks --gather-lun-info records
+# (LUN|targetshort|lun|backstore|zvol|size|clone), one line per exported LUN.
+fetch_live_map() {
+    if [[ -n "${REPAIR_VM_DISK_REFS_LIVE_MAP_FILE:-}" \
+            && -f "${REPAIR_VM_DISK_REFS_LIVE_MAP_FILE}" ]]; then
+        cat "${REPAIR_VM_DISK_REFS_LIVE_MAP_FILE}"
+        return 0
+    fi
+    local remote_script
+    remote_script=$(remote_zfsutility_script "$storage_host" "list-vm-disks") || return 1
+    ssh -o ConnectTimeout=10 "root@${storage_host}" \
+        "${remote_script} --gather-lun-info" 2>/dev/null
+}
+
+# Parse a state-map JSON file into the identity bridge:
+#   _map_lun_bs["short|lun"]  backstore the slot held at export time
+# plus the _map_* header fields used by the sanity checks. Every map field
+# comes from the restricted iSCSI/config alphabets export-iscsi-state writes,
+# so records split safely on "|".
+parse_lkg_map() {
+    local file="$1"
+    unset -v _map_lun_bs
+    declare -gA _map_lun_bs=()
+    _map_generated=""
+    _map_host=""
+    _map_iqn_prefix=""
+    _map_storage_ip=""
+
+    local -a rec=()
+    while IFS='|' read -r -a rec; do
+        case "${rec[0]:-}" in
+            META)
+                case "${rec[1]:-}" in
+                    generated)   _map_generated="${rec[2]:-}" ;;
+                    host)       _map_host="${rec[2]:-}" ;;
+                    iqn_prefix) _map_iqn_prefix="${rec[2]:-}" ;;
+                    storage_ip) _map_storage_ip="${rec[2]:-}" ;;
+                esac
+                ;;
+            LUN)
+                local liqn="${rec[1]:-}" llun="${rec[2]:-}" lbs="${rec[3]:-}"
+                [[ "$liqn" == iqn.* ]] || continue
+                is_digits "$llun" || continue
+                is_vm_backstore_name "$lbs" || continue
+                _map_lun_bs["${liqn##*:}|${llun}"]="$lbs"
+                ;;
+        esac
+    done < <(python3 - "$file" << 'PYEOF'
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        m = json.load(f)
+except Exception:
+    sys.exit(0)
+for key in ("generated", "host", "iqn_prefix", "storage_ip"):
+    v = m.get(key)
+    if isinstance(v, str):
+        print("META|%s|%s" % (key, v))
+for iqn, t in sorted(m.get("targets", {}).items()):
+    luns = t.get("luns", {})
+    for lun in sorted(luns, key=lambda s: int(s) if s.isdigit() else 0):
+        print("LUN|%s|%s|%s" % (iqn, lun, luns[lun]))
+PYEOF
+    )
+    return 0
+}
+
+# Parse the live-map records into _live_bs_slot[backstore] = "short|lun"
+# (where each backstore is exported right now).
+parse_live_map() {
+    unset -v _live_bs_slot
+    declare -gA _live_bs_slot=()
+
+    local -a f=()
+    while IFS='|' read -r -a f; do
+        [[ "${f[0]:-}" == "LUN" ]] || continue
+        is_digits "${f[2]:-}" || continue
+        is_vm_backstore_name "${f[3]:-}" || continue
+        _live_bs_slot["${f[3]:-}"]="${f[1]:-}|${f[2]:-}"
+    done <<< "$1"
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Planning
+# ------------------------------------------------------------------
+
+# Cached qm status per VM: "running", "stopped", or "unknown" (an
+# unverifiable status refuses the rewrite rather than risking a live VM).
+vm_running_state() {
+    local vmid="$1"
+    if [[ -z "${_vm_state[$vmid]:-}" ]]; then
+        local status
+        status=$(qm status "$vmid" 2>/dev/null || true)
+        case "$status" in
+            *"status: running"*) _vm_state["$vmid"]="running" ;;
+            *"status: stopped"*) _vm_state["$vmid"]="stopped" ;;
+            *) _vm_state["$vmid"]="unknown" ;;
+        esac
+    fi
+    printf '%s' "${_vm_state[$vmid]}"
+}
+
+# Resolve every gathered reference through the identity chain
+#   config (short, lun) --last-known-good map--> backstore --live map--> slot
+# and fill the plan (_plan_ids), the already-correct notes (_ok_lines), and
+# the refusal evidence (_refuse_lines). Outcome per reference is recorded in
+# _ref_outcome[id] = planned | ok | refused.
+plan_repairs() {
+    _plan_ids=()
+    _ok_lines=()
+    _refuse_lines=()
+    unset -v _ref_outcome _res_bs _vm_state _bs_ref_count
+    declare -gA _ref_outcome=() _res_bs=() _vm_state=() _bs_ref_count=()
+
+    local id slot short lun bs own live_slot state vmid key name msg
+
+    # Pass 1: identity through the map, then the owning-VMID check. Evidence
+    # lines are accumulated with += into one string each (an array append of
+    # two arguments would store two elements and print two lines).
+    for id in "${_ref_order[@]}"; do
+        slot="${_ref_slot[$id]}"
+        short="${slot%%|*}"
+        lun="${slot##*|}"
+        vmid="${_ref_vmid[$id]}"
+        key="${_ref_key[$id]}"
+        name="${_ref_name[$id]}"
+        _ref_outcome["$id"]="refused"
+
+        bs="${_map_lun_bs[$slot]:-}"
+        if [[ -z "$bs" ]]; then
+            msg="VM ${vmid} (${name}) ${key}: no map entry for ${short} LUN ${lun}"
+            msg+=" — identity unknown, never guessed"
+            _refuse_lines+=("$msg")
+            continue
+        fi
+        own=$(owning_vmid_of_backstore "$bs")
+        if [[ "$own" != "$vmid" ]]; then
+            msg="VM ${vmid} (${name}) ${key}: ${short} LUN ${lun} is ${bs},"
+            msg+=" which now belongs to VM ${own} — never attached across VMs"
+            _refuse_lines+=("$msg")
+            continue
+        fi
+        _res_bs["$id"]="$bs"
+        _bs_ref_count["$bs"]=$((${_bs_ref_count["$bs"]:-0} + 1))
+    done
+
+    # Pass 2: two references resolving to one backstore are ambiguous.
+    for id in "${_ref_order[@]}"; do
+        [[ -n "${_res_bs[$id]:-}" ]] || continue
+        bs="${_res_bs[$id]}"
+        if (( ${_bs_ref_count["$bs"]} > 1 )); then
+            msg="VM ${_ref_vmid[$id]} (${_ref_name[$id]}) ${_ref_key[$id]}:"
+            msg+=" ${bs} is referenced by ${_bs_ref_count["$bs"]} config lines"
+            msg+=" — ambiguous, refusing all of them"
+            _refuse_lines+=("$msg")
+            unset "_res_bs[$id]"
+        fi
+    done
+
+    # Pass 3: liveness, slot comparison, and the running-VM gate.
+    for id in "${_ref_order[@]}"; do
+        [[ -n "${_res_bs[$id]:-}" ]] || continue
+        bs="${_res_bs[$id]}"
+        slot="${_ref_slot[$id]}"
+        short="${slot%%|*}"
+        lun="${slot##*|}"
+        vmid="${_ref_vmid[$id]}"
+        key="${_ref_key[$id]}"
+        name="${_ref_name[$id]}"
+
+        live_slot="${_live_bs_slot[$bs]:-}"
+        if [[ -z "$live_slot" ]]; then
+            msg="VM ${vmid} (${name}) ${key}: ${bs} is not exported live —"
+            msg+=" run reconcile-iscsi-state on ${storage_host} first"
+            _refuse_lines+=("$msg")
+            continue
+        fi
+        if [[ "$live_slot" == "$slot" ]]; then
+            _ref_outcome["$id"]="ok"
+            msg="VM ${vmid} (${name}) ${key}: already points at ${bs}"
+            msg+=" @ ${short} LUN ${lun}"
+            _ok_lines+=("$msg")
+            continue
+        fi
+
+        state=$(vm_running_state "$vmid")
+        if [[ "$state" == "running" ]]; then
+            msg="VM ${vmid} (${name}) ${key}: VM is running —"
+            msg+=" stop it before rewriting ${key}"
+            _refuse_lines+=("$msg")
+            continue
+        fi
+        if [[ "$state" == "unknown" ]]; then
+            msg="VM ${vmid} (${name}) ${key}: could not determine VM status"
+            msg+=" (qm status) — refusing"
+            _refuse_lines+=("$msg")
+            continue
+        fi
+
+        _ref_outcome["$id"]="planned"
+        _plan_ids+=("$id")
+    done
+    return 0
+}
+
+# Print the plan evidence: identity resolution, planned rewrites, notes,
+# refusals.
+print_plan_evidence() {
+    local id slot nshort nlun
+    log_msg "INFO: References: ${#_ref_order[@]}," \
+        "live exported backstores: ${#_live_bs_slot[@]}"
+    echo ""
+
+    if [[ ${#_plan_ids[@]} -gt 0 ]]; then
+        log_msg "INFO: Planned config rewrites (only the by-path volume changes):"
+        for id in "${_plan_ids[@]}"; do
+            slot="${_live_bs_slot[${_res_bs[$id]}]}"
+            nshort="${slot%%|*}"
+            nlun="${slot##*|}"
+            log_msg "INFO:   VM ${_ref_vmid[$id]} (${_ref_name[$id]})" \
+                "${_ref_key[$id]}: ${_ref_slot[$id]%%|*} LUN ${_ref_slot[$id]##*|}" \
+                "→ ${nshort} LUN ${nlun} (identity: ${_res_bs[$id]})"
+            log_msg "INFO:     ${_ref_volume[$id]}"
+            log_msg "INFO:     $(bypath_for_slot "$nshort" "$nlun")"
+        done
+    fi
+    if [[ ${#_ok_lines[@]} -gt 0 ]]; then
+        log_msg "INFO: Already correct (no change):"
+        local line
+        for line in "${_ok_lines[@]}"; do
+            log_msg "INFO:   ${line}"
+        done
+    fi
+    if [[ ${#_refuse_lines[@]} -gt 0 ]]; then
+        log_msg "FATAL: Refused (ambiguous or unknown identity — resolve manually):"
+        local line
+        for line in "${_refuse_lines[@]}"; do
+            log_msg "FATAL:   ${line}"
+        done
+    fi
+    echo ""
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Apply + verify
+# ------------------------------------------------------------------
+
+# Rewrite the planned disk lines. The value handed to qm set is the new
+# by-path volume plus the line's original option suffix, byte-for-byte.
+apply_rewrites() {
+    _apply_failed=0
+    _applied_ids=()
+    local id slot nshort nlun val
+    for id in "${_plan_ids[@]}"; do
+        slot="${_live_bs_slot[${_res_bs[$id]}]}"
+        nshort="${slot%%|*}"
+        nlun="${slot##*|}"
+        val="$(bypath_for_slot "$nshort" "$nlun")"
+        [[ -n "${_ref_suffix[$id]}" ]] && val+=",${_ref_suffix[$id]}"
+        if qm set "${_ref_vmid[$id]}" "--${_ref_key[$id]}" "$val"; then
+            _applied_ids+=("$id")
+            log_msg "INFO:   ✓ VM ${_ref_vmid[$id]} ${_ref_key[$id]} repointed to" \
+                "${nshort} LUN ${nlun} (${_res_bs[$id]})"
+        else
+            log_msg "FATAL: qm set failed for VM ${_ref_vmid[$id]}" \
+                "${_ref_key[$id]} — config left as-is"
+            _apply_failed=1
+        fi
+    done
+    return 0
+}
+
+# Verify every rewritten reference resolves to a live device on this host,
+# rescan first when one does not. Still-missing links are FATAL: a config
+# pointing at a device this host cannot see aborts VM start (the exact state
+# this repair exists to prevent).
+verify_applied_links() {
+    _verify_failed=0
+    # Pending references as parallel arrays: ref ids contain "|", so packing
+    # id and link into one string would corrupt the split.
+    local -a pending_ids=() pending_links=()
+    local id slot nshort nlun link i
+    for id in "${_applied_ids[@]}"; do
+        slot="${_live_bs_slot[${_res_bs[$id]}]}"
+        nshort="${slot%%|*}"
+        nlun="${slot##*|}"
+        link=$(bypath_for_slot "$nshort" "$nlun")
+        [[ -e "$link" ]] || { pending_ids+=("$id"); pending_links+=("$link"); }
+    done
+    if [[ ${#pending_links[@]} -eq 0 ]]; then
+        if [[ ${#_applied_ids[@]} -gt 0 ]]; then
+            log_msg "INFO:   ✓ All ${#_applied_ids[@]} rewritten reference(s) resolve" \
+                "to live devices"
+        fi
+        return 0
+    fi
+
+    log_msg "INFO: ${#pending_links[@]} rewritten reference(s) have no local device yet —" \
+        "rescanning iSCSI sessions..."
+    if ! type -t "$rescan_storage" >/dev/null 2>&1; then
+        log_msg "WARN: rescan-storage not available at ${rescan_storage}"
+    elif ! "$rescan_storage"; then
+        log_msg "WARN: Local iSCSI rescan reported problems (see above) — continuing"
+    fi
+
+    local -a still_ids=() still_links=()
+    for (( i=0; i<${#pending_links[@]}; i++ )); do
+        if [[ ! -e "${pending_links[$i]}" ]]; then
+            still_ids+=("${pending_ids[$i]}")
+            still_links+=("${pending_links[$i]}")
+        fi
+    done
+    if [[ ${#still_links[@]} -eq 0 ]]; then
+        log_msg "INFO:   ✓ All ${#_applied_ids[@]} rewritten reference(s) resolve" \
+            "to live devices after rescan"
+        return 0
+    fi
+    _verify_failed=1
+    for (( i=0; i<${#still_links[@]}; i++ )); do
+        id="${still_ids[$i]}"
+        log_msg "FATAL: VM ${_ref_vmid[$id]} ${_ref_key[$id]}:" \
+            "${still_links[$i]} still missing after rescan —" \
+            "check the storage host exports this LUN"
+    done
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
+
+main() {
+
+    resolve_runtime_paths
+
+    vm_conf_gather
+    if [[ ${#_ref_order[@]} -eq 0 ]]; then
+        log_msg "INFO: === repair-vm-disk-refs ==="
+        log_msg "INFO: No iSCSI VM disk references found — nothing to repair"
+        exit 0
+    fi
+
+    local map_tmp
+    map_tmp=$(mktemp "${TMPDIR:-/tmp}/repair-vm-disk-refs.XXXXXX") || {
+        log_msg "FATAL: Could not create a temp file for the state map"
+        exit 1
+    }
+
+    if ! fetch_lkg_map > "$map_tmp"; then
+        rm -f "$map_tmp"
+        log_msg "FATAL: Could not fetch the last-known-good map from ${storage_host}" \
+            "— is it reachable?"
+        exit 1
+    fi
+
+    log_msg "INFO: === repair-vm-disk-refs ==="
+    echo ""
+
+    parse_lkg_map "$map_tmp"
+    rm -f "$map_tmp"
+
+    if [[ ${#_map_lun_bs[@]} -eq 0 ]]; then
+        log_msg "FATAL: The state map from ${storage_host} contains no LUN records —" \
+            "run export-iscsi-state there first"
+        exit 1
+    fi
+
+    # The map is this site's topology history; a map describing somewhere
+    # else (or an older era of this site) is never used as the authority.
+    if [[ -n "$_map_host" && "$_map_host" != "$storage_host" ]]; then
+        log_msg "FATAL: Map was generated on ${_map_host}, not this site's storage host" \
+            "(${storage_host}) — refusing to repair from it"
+        exit 1
+    fi
+    if [[ -n "$_map_iqn_prefix" && "$_map_iqn_prefix" != "$iqn_prefix" ]]; then
+        log_msg "FATAL: Map records IQN prefix ${_map_iqn_prefix} but node.conf says" \
+            "${iqn_prefix} — refusing (prefix drift, never guessed)"
+        exit 1
+    fi
+    if [[ -n "$_map_storage_ip" && "$_map_storage_ip" != "$storage_ip" ]]; then
+        log_msg "FATAL: Map records storage IP ${_map_storage_ip} but node.conf says" \
+            "${storage_ip} — refusing"
+        exit 1
+    fi
+
+    local live_data
+    live_data=$(fetch_live_map) || {
+        log_msg "FATAL: Could not fetch the live LUN topology from ${storage_host}"
+        exit 1
+    }
+    parse_live_map "$live_data"
+
+    log_msg "INFO: Map: ${storage_host} pool state (generated" \
+        "${_map_generated:-unknown}); live exported backstores:" \
+        "${#_live_bs_slot[@]}; VM references: ${#_ref_order[@]}"
+    echo ""
+
+    plan_repairs
+    print_plan_evidence
+
+    if [[ "$dry_run" == true ]]; then
+        log_msg "INFO: [dry-run] Would rewrite ${#_plan_ids[@]} disk line(s) via qm set" \
+            "(options preserved byte-for-byte)"
+        if [[ ${#_refuse_lines[@]} -gt 0 ]]; then
+            log_msg "FATAL: ${#_refuse_lines[@]} reference(s) must be resolved manually first"
+            exit 1
+        fi
+        exit 0
+    fi
+
+    if [[ ${#_plan_ids[@]} -eq 0 ]]; then
+        log_msg "INFO: No rewrites needed"
+        if [[ ${#_refuse_lines[@]} -gt 0 ]]; then
+            exit 1
+        fi
+        exit 0
+    fi
+
+    if [[ "$assume_yes" != true ]]; then
+        local _answer=""
+        read -rp "Rewrite ${#_plan_ids[@]} VM config disk line(s)? (y/N): " _answer || true
+        if [[ "$_answer" != [Yy] ]]; then
+            log_msg "WARN: Aborted — no changes made"
+            exit 1
+        fi
+    fi
+
+    apply_rewrites
+    echo ""
+    verify_applied_links
+    echo ""
+
+    log_msg "INFO: === Summary ==="
+    log_msg "INFO:   ✓ Rewritten: ${#_applied_ids[@]}"
+    log_msg "INFO:   Already correct: ${#_ok_lines[@]}"
+    if [[ ${#_refuse_lines[@]} -gt 0 ]]; then
+        log_msg "FATAL:   Refused: ${#_refuse_lines[@]} — resolve manually and re-run"
+    fi
+    if [[ "$_apply_failed" -eq 1 ]]; then
+        log_msg "FATAL:   qm set failures during apply"
+    fi
+    if [[ "$_verify_failed" -eq 1 ]]; then
+        log_msg "FATAL:   Rewritten reference(s) still missing their device after rescan"
+    fi
+
+    local rc=0
+    [[ ${#_refuse_lines[@]} -gt 0 || "$_apply_failed" -eq 1 || "$_verify_failed" -eq 1 ]] \
+        && rc=1
+    if [[ "$rc" -eq 0 ]]; then
+        log_msg "INFO:   ✓ Done"
+    else
+        log_msg "FATAL:   Repair incomplete — resolve the reported items and re-run"
+    fi
+    echo ""
+
+    exit "$rc"
+
+} # end main
+
+# Run main only when executed directly, not when sourced for tests.
+if [[ -z "${REPAIR_VM_DISK_REFS_TEST_MODE:-}" ]] && [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main
+fi

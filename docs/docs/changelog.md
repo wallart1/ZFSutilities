@@ -42,12 +42,66 @@
   recovery. j10's upgrade staging is factored into the shared
   `itf_journey_stage_upgrade_env` (journeys/common.sh).
 
+- **`repair-vm-disk-refs`** — the compute-host half of bare-metal-restore
+  recovery (the mirror of `reconcile-iscsi-state`): re-points regressed
+  VM-config disk references at the correct iSCSI LUNs by disk identity,
+  never by LUN number. Each reference is resolved through the storage
+  host's pool-resident state map to the backstore its (target, LUN) slot
+  held at map time, then through the live topology to where that
+  backstore sits now; only the by-path volume of the disk line is
+  rewritten (`qm set`), with every option preserved byte-for-byte.
+  Everything ambiguous is refused with evidence while the run continues
+  with the rest: no map entry, a backstore that now belongs to another
+  VM, not exported live (reconcile pointer), a running or unverifiable
+  VM, two references resolving to one backstore. Map sanity gates refuse
+  a map generated on another host or recording a different IQN
+  prefix/storage IP; `--dry-run` reports without editing; every applied
+  rewrite is verified against a live device, with an automatic iSCSI
+  session rescan first.
+- **`export-iscsi-state --print-map`** — read-only dump of the newest
+  pool-resident state map as pure JSON on stdout: the compute host's
+  recovery fetch path. Collects no live state, writes nothing, and
+  needs no `targetcli`; mutually exclusive with `--check`.
+- **Bare-Metal Restore Runbook (two-node)** in the docs: scenario A —
+  storage host restored (fence/reconcile), scenario B — compute host
+  restored (`repair-vm-disk-refs`), scenario C — both. Identity during
+  recovery is the backstore name, never the LUN number.
+- **Journeys `j13-iscsi-storage-restore` and `j14-iscsi-fence-recover`**
+  — the iSCSI resilience campaign's end-to-end verification on the
+  two-node lab: the 2026-10 incident shape staged honestly (LIO
+  saveconfig and manifest regressed to a backup point with mtimes
+  preserved, the post-backup LUN created through the product), the
+  detector WARN, the map-driven reconcile rebuilding the backstore at
+  the exact recorded LUN with LUN 0 untouched, the compute-host by-path
+  link back, and the VM boot proof; then the compute half — fence units
+  installed and enabled by activation, the manual detection tick with
+  full identity, recovery through the installed systemd unit (real ssh
+  reconcile), and the healthy tick after.
+- **ITF run lock and acquire-time orphan fence** — `itf journey run` and
+  `itf template build` serialize on a machine-global kernel lock
+  (flock): a concurrent starter from any repo lane waits with
+  heartbeats (or refuses instantly with `ITF_RUNLOCK_WAIT=0`), the
+  holder is named across lanes to waiting starters and `itf status`,
+  and the lock dies with its process (no stale-lock state, no cleanup
+  verb). Because run guests outlive a dev-host restart, each start also
+  refuses while guests recorded by an interrupted run still exist on
+  their base — `--rerun` exempts exactly its takeover guests, and an
+  unreachable base fails closed.
+
 ### Fixed
 
 - **Messages-manual enclosure rows.** The rate-governance message
   rows were pasted twice into the shared transfer section and
   archive-vm's own section kept its outdated row; the shared section
   now carries one current set and archive-vm its own.
+
+- **Fresh two-node installs never got the iSCSI fence (F-026, found
+  live by j14).** `install-two-node` activates the compute host before
+  copying `node.conf` to it, and `switch-version`'s fence gate treated
+  "no node config anywhere" as single-node and skipped silently. The
+  gate now installs whenever `qm` is present and no config explicitly
+  says single-node — a genuine single-node host always has `node.conf`
+  at activation.
 
 ### Tests
 
@@ -60,6 +114,27 @@
   (zfsshowbigstuff, zfswipe, list-vm-disks) are exit-trap cleaned, and
   the check-vm-disk-paths rescan-mock leak (a command-substitution
   array append that never reached the cleanup loop) is fixed.
+
+- New `test-repair-vm-disk-refs` suite: the identity chain, options
+  preserved byte-for-byte, every refusal class, the map sanity gates
+  (host, IQN prefix, storage IP), dry-run, the two-round-trip fetch,
+  and post-apply verification with rescan recovery.
+- `test-export-iscsi-state` covers `--print-map` (newest-wins,
+  read-only proof, the no-targetcli path, `--check` exclusion); the
+  `test-switch-version` fence expectation flipped to require
+  install+enable on a no-config compute host; `test-itf-driver` covers
+  the run lock (holder record, wait/refuse, status section) and the
+  orphan fence (refusals naming both recoveries, rerun exemptions,
+  fail-closed bases, driver-level refusals).
+
+### Documentation
+
+- two-node.md: the `repair-vm-disk-refs` section, `--print-map`
+  synopsis/flow/return codes, the Bare-Metal Restore Runbook, and the
+  switch-version fence row's new semantics; messages-manual rows for
+  the new tool and flag; the integrated-testing guide documents the run
+  lock and orphan fence; the developer testing catalog now lists every
+  suite, the itf cluster and the iSCSI trio among them.
 
 ## 0.132.0
 

@@ -358,5 +358,238 @@ entries were removed, recoverable via `git log`.)
   test-check-prerequisites, python/test_support.py}. Holding back: still
   0.0.x with releases every few days — expect breaking changes before 1.0.
 
+## 2026-10-25 — M5: compute-host config repair (mirror half)
 
+Executed milestone 5 of the iSCSI-resilience plan (`/NFS1/dan(NFS1)/
+zfsutilities-plan/iSCSI resilience plan`), alone, per the milestone cycle.
+M6 remains; PREEXISTING.md entry stays until M6.
 
+- New `bin/repair-vm-disk-refs` (compute host, `set -euo pipefail`,
+  silent single-node exit, FATAL off-host/no-qm/non-root): gathers iSCSI
+  disk refs DIRECTLY from `/etc/pve/qemu-server/*.conf` (needs the whole
+  line for the option suffix — the --gather-vm-info records don't carry
+  it), then exactly TWO ssh round trips to the storage host: newest pool
+  map via `export-iscsi-state --print-map` (new read-only dump mode) and
+  live topology via `list-vm-disks --gather-lun-info`. Identity chain:
+  config (short,lun) → map backstore (owning-VMID check) → live (short,lun);
+  rewrite ONLY when the VM's OWN disk sits elsewhere, via
+  `qm set <vmid> --<key> <new-by-path>,<orig options>` (suffix kept
+  byte-for-byte; split at the volume's first comma — by-path tokens
+  contain no commas). Refuses with evidence: no map entry / cross-VM
+  backstore / two refs → one backstore (pass 2 after owning-VMID) /
+  not live (reconcile pointer) / VM running or status unknown
+  (qm status cached per VM). Map sanity: host ≠ storage_host or iqn_prefix/
+  storage_ip ≠ node.conf → refuse-all. Post-apply verification: each new
+  by-path link must exist; missing → one rescan-storage → recheck; still
+  missing = FATAL (the VM-start-abort state this tool prevents). rc=1 on
+  any refusal even when other rewrites succeeded (reconcile precedent).
+  Knobs: REPAIR_VM_DISK_REFS_{CONF_DIR,BY_PATH_DIR,LKG_MAP_FILE,
+  LIVE_MAP_FILE,RESCAN_STORAGE,NODE_LIB,ISCSI_LIB,SKIP_ROOT,TEST_MODE}.
+- `bin/export-iscsi-state`: new `--print-map` (mutually exclusive with
+  --check, checked in main() not top level — tests toggle the variables
+  after eval): dumps the newest pool map to stdout as PURE JSON (branch
+  runs before the banner; log_msg is stderr so stdout stays clean),
+  skips the targetcli gate and live collection entirely (compute-host
+  fetch must not depend on targetcli there). No writes, no degraded gate.
+- Tests: NEW `tests/test-repair-vm-disk-refs` (28): loads/single-node/
+  wrong-host/no-qm/usage; no-refs quiet + zero ssh; clean rewrite with
+  exact `qm set` line (options byte-for-byte, exactly one call, no old
+  LUN); bare volume (no invented comma); efidisk; all five refusal cases
+  + unknown-status; already-correct; dry-run (rc=1 with refusals, rc=0
+  clean); decline; two-ssh assertion; map host/prefix mismatch; fetch
+  failure; empty map; verify-rescan-fixes / still-missing-fails;
+  qm-set-failure; local+unparseable refs skipped. test-export-iscsi-state
+  +4 (newest-wins dump + read-only proof / no-map / no-targetcli gate /
+  mutual exclusion). test-strict-mode: repair-vm-disk-refs registered.
+  Gotchas found: (1) `_refuse_lines+=("a" "b")` stores TWO elements —
+  evidence strings must be built with `msg+=` accumulation (reconcile
+  precedent) or assertions crossing the boundary fail; (2) make the
+  verify success line print after the rescan-recovery path too, not only
+  the early all-present branch.
+- Docs: two-node.md — new repair-vm-disk-refs section (after the fence),
+  export-iscsi-state --print-map (synopsis/args/flow/rc), Jump to entries,
+  and a new `## Bare-Metal Restore Runbook (two-node)` section covering
+  both halves (scenario A storage restore via fence/reconcile, scenario B
+  compute restore via repair-vm-disk-refs, scenario C both, coexistence
+  note); messages/index.md — new repair-vm-disk-refs block + export
+  --print-map rows.
+
+## 2026-10-25 — M6: iSCSI resilience verification + closure
+
+- ITF journeys (the campaign's end-to-end verification), both GREEN live
+  on the two-node lab (dev-tarball, run logs under
+  tests/integrated/results/run-20261025-*):
+  - NEW j13-iscsi-storage-restore: composes the j05 lab; stages the
+    2026-10 incident shape (backup-point saveconfig/manifest set aside
+    with mtimes preserved, vm-101-disk-1 created through new-vm-disk,
+    then live LIO + BOTH OS-disk files regressed); verifies the M3
+    detector WARN, the interactive reconcile (y feed) rebuilding the
+    backstore at LUN 1 exactly with LUN 0 untouched (manifest,
+    saveconfig, pool map, compute rescan all refreshed), the lun-1
+    by-path link back, and the VM boot proof.
+  - NEW j14-iscsi-fence-recover: same lab + staging helper (reused from
+    j13 by sourcing it); verifies the fence units are installed and
+    enabled on the compute host, the manual detection tick (exit 1,
+    full VM/key/IQN/LUN identity), recovery through the INSTALLED unit
+    (`systemctl start` runs the timer's ExecStart: local rescan → real
+    ssh reconcile on the regressed storage guest → link back → exit 0),
+    and the healthy tick after recovery.
+  - Numbered j13/j14 (not j12): pub's working tree carries an
+    uncommitted j12-interrupted-upgrade journey; skipping the number
+    keeps the lanes collision-free at the next merge.
+- Live-verified gotchas baked into the journeys: (1) a plain iSCSI
+  session rescan does NOT drop a server-side-deleted LUN's device on
+  this stack (dmesg shows "Logical unit not supported" but the node and
+  by-path link linger) — the honest regression staging logs the session
+  out and back in, modeling the storage-host reboot's session drop;
+  (2) the re-added LUN after reconcile IS picked up by the session
+  rescan (reconcile's own compute rescan), so recovery needs no manual
+  step.
+- F-026 (fixed in-cycle, found by j14's wiring step): on a FRESH
+  two-node install the compute host never got the fence units —
+  install-two-node activates it (Step 5) before copying node.conf to it
+  (Step 6), and switch-version's fence gate treated "no node config
+  anywhere" as single-node and silently skipped. Gate now installs
+  whenever qm is present and no config explicitly says single-node (a
+  genuine single-node host always has node.conf at activation —
+  install-single-node writes it before activating); the M4 unit test
+  that pinned the old skip was flipped to require install+enable.
+  two-node.md's switch-version fence row updated for the semantics.
+- test-itf-driver journey list extended (j11 had drifted out; j13/j14
+  added); journeys README table, tests/AGENTS.md list, and the
+  integrated README roadmap (phase 3.7) updated; itf site config +
+  ISO cache seeded for pub2 (copied from pub's environment values —
+  pub2's first live journey runs in this tree).
+- Closure: PREEXISTING.md iSCSI-resilience entry REMOVED (M1–M6
+  complete; 3 entries remain). Full suite green. No production changes;
+  no VERSION/changelog edits (hard rules).
+
+## 2026-10-25 — itf run lock: one run at a time, enforced by the driver
+
+- Follow-up to the M6 cross-lane collision (pub2's j14 vs pub's j09 on
+  the shared port-8000 serve; pub recorded it as a PREEXISTING entry,
+  discovered in the j09 turn). User direction: loud documentation is not
+  enough — agents cannot be relied on to notice; make the mechanism.
+  Decision (user offered lock-vs-tolerate, agent picked serialize):
+  concurrent EXECUTION cannot be made safe (fixed HTTP port, shared
+  UDP-514 syslog listener, base RAM/itfguests budget for one two-node
+  lab, VMID races, template-build conflicts), so the driver serializes
+  execution while TOLERATING concurrent starters — they queue.
+- NEW tests/integrated/lib/runlock-lib.sh: machine-global flock
+  (/tmp/itf-active-run.lock, env ITF_RUN_LOCK) held on fd 9 by the run's
+  own process — kernel-released on any death, so no stale-lock state and
+  no cleanup verb exists. Holder record in the file (description, pid,
+  start time, repo root) is shown while held: waiting starters,
+  refusals, and `itf status`'s new `== run lock ==` section all name the
+  holder ACROSS LANES (fixes the "one lane cannot see another lane's
+  run" visibility gap). Default behavior: WAIT with a heartbeat every
+  30 s up to ITF_RUNLOCK_WAIT=7200; 0 refuses instantly; missing flock
+  refuses loudly (never an unfenced run). Deliberately NOT the product's
+  dataset lock manager (zfslockctl/zfs_lock_manager key by dataset for
+  root product ops; this keys by dev host, unprivileged, no product env).
+- Driver wiring: `journey run` (after journey validation, before
+  report_init — a refused/queued run leaves no run dir) and
+  `template build`. Tests: test-itf-driver +5 (holder record + auto
+  release; WAIT=0 refusal naming holder; wait-budget timeout with
+  heartbeat + bound; driver-level journey refusal rc 2 + no run dir;
+  status free/held). Suite fixture sandboxes ITF_RUN_LOCK — a live real
+  run can no longer park the suite behind the real fence (the bad-profile
+  and --rerun driver tests reach the lock).
+- Docs: integrated README (layout row + quick-start fence note),
+  tests/AGENTS.md (itf bullet), developer guide ("One run at a time: the
+  run lock"). Affected suites green; `itf status` verified live (free).
+- pub's PREEXISTING entry ("itf harness, cross-lane concurrency") stays
+  for now — this lane cannot edit pub; remove it at the lane merge when
+  the lock reaches pub (its base-host-lock candidate was superseded by
+  the dev-host flock: no guarded-verb extension, no ssh-held lock
+  lifetime problem, no staleness class).
+
+## 2026-10-25 — itf acquire-time orphan fence (run lock, part 2)
+
+- The gap the flock cannot close: the lock fences dev-side processes,
+  but the run's GUESTS live on zfstestvm1/2 and do not die with the dev
+  host. After a mid-run dev restart the kernel releases the lock
+  correctly (no stale-lock class) while the interrupted run's guests
+  keep consuming base RAM/VMIDs — a resumed session's next run would
+  acquire cleanly and stack a second lab on the orphans, with only
+  advisory notices (`itf status`, preflight INFO) in the way. User
+  direction: make it structural (option a — acquire-time fence; the
+  auto-sweep option b and pub's base-held-lock option c were rejected:
+  b destroys state a human may want post-mortem, c recreates the
+  stale-lock class on the wrong machine).
+- NEW `itf_runlock_orphan_fence` in runlock-lib.sh, run by `journey run`
+  and `template build` WHILE HOLDING the lock: scan this tree's runs for
+  INTERRUPTED ones with recorded guests, check each (base, VMID) against
+  that base's own `qm list` — the base is the authority, so the check is
+  correct across dev restarts — and refuse the start naming each
+  leftover with both recoveries (`itf journey run <same> --rerun` to
+  reuse — the caller line in meta.txt drives the hint — or
+  `itf guest destroy` per leftover). Semantics: done runs are invisible
+  by design (their guests are the kept lab of the run→fix→rerun loop);
+  a rerun exempts exactly its takeover pairs (rerun-guests.tsv) and
+  contacts no base when all candidates are exempt; no interrupted runs
+  → zero base contact (healthy path free); unreachable base fails
+  CLOSED (unverified is not clean); ITF_DRY_RUN skips with a notice.
+  Per-tree scope is deliberate: cross-lane leftovers are that lane's
+  kept-or-orphaned labs and cannot be distinguished from here (the lock
+  serializes lanes, preflight still INFOs foreign guests).
+- Driver wiring: journey run fences between rerun-prepare and
+  journey_main (the "running" banner moved after the fence); template
+  build fences right after report_init. Refusals are rc 2 with a FAIL
+  step + finished report (audit trail), and the fence releases fd 9
+  itself.
+- Gotchas hit: (1) parsing `caller: journey:name` with
+  `awk -F': *' {print $2}` yields just "journey" — the value embeds a
+  colon; strip the prefix instead (`sub(/^caller:[ \t]*/,"")`). (2)
+  assert_contains chains flip a failed test back to PASS-display when a
+  LATER assert in the same test passes — the runner's fail COUNT is the
+  truth, not the per-test PASS tag (watch the counts).
+- Tests: test-itf-driver +9 (unit: refuse+both recoveries, pass when
+  destroyed, healthy-dir zero queries, rerun-exemption partial +
+  one-list-per-base, all-exempt zero queries, unreachable fail-closed;
+  dispatch: journey rc 2 fail-closed over .invalid, template build rc 2
+  with NO --rerun hint, rerun-of-own-source not fenced + spec written).
+  Red-proofed (8 red pre-implementation). run_itf now also sandboxes
+  ITF_RUNS_DIR (fence reads run records; keeps driver tests off the dev
+  host's real results/bases). `_plant_run` gained an `interrupted`
+  state (reaped-child pid + no finished: line).
+- Docs: integrated README (layout row + quick-start note), developer
+  guide (run-lock section + fence paragraph), journeys/README (--rerun
+  bullet), tests/AGENTS.md (itf bullet). Live check: pub2's results dir
+  has no interrupted runs today — the next real run pays the fence's
+  zero-cost fast path.
+
+## 2026-10-25 — Development-cycle wrap-up (7-step, pub2 lane)
+
+- Step 1/4 (PREEXISTING resolution): skipped by precondition both times —
+  pub2/PROMPTQUEUE2 is a lane, not the pub main repo. File stands at 3
+  entries (Zensical hold, pub3 with-soak flake, rootcheck-stub /tmp
+  litter); none actionable from this lane.
+- Step 2 (standards): full-tree shellcheck per the policy invocation is
+  clean. One violation fixed: runlock-lib.sh carried a 115-col line; the
+  first backslash wrap was semantically broken (SC2289 — the continuation
+  preserves the next line's leading spaces OUTSIDE the quotes, which
+  would terminate the assignment and execute the remainder as a command)
+  and was replaced with `+=` accumulation (byte-identical product).
+  test-itf-driver green after the fix. All other new code matches the
+  policies (strict mode, sourced-lib laws, log_msg priorities, TEST_MODE
+  guards per the iSCSI family, shellcheck source= directives in j13/j14).
+- Step 3 (test suites): added the missing storage-IP map-mismatch test
+  to test-repair-vm-disk-refs (the script's third sanity gate had no
+  refusal test; host and IQN-prefix both had one) — red-proofed by
+  disabling the gate (exactly the new test fails) and restored.
+  Journey list verified in sync with disk (13 journeys; j12 reserved
+  for pub's uncommitted journey). No obsolete or stale tests. The
+  flipped switch-version fence test (skips→installs) is correct per
+  F-026.
+- Step 5 (docs): all three campaign docs diffs verified against the
+  code (messages rows match script strings; two-node flow/rc/fence rows
+  match implementation). testing.md's suite catalog was missing entries
+  — the new suite plus pre-existing drift; all undocumented suites
+  added (itf cluster, export/reconcile/repair iSCSI trio, check-vm-disk-
+  paths, strict-mode, snapshot-names, rsync-dailybackup, setup-iscsi-
+  targets, vm-disk-two-node-gate, zfshold); catalog now complete both
+  directions. test_docs_integrity.py green; mkdocs build clean (known
+  mkdocs-material banner only; site/ is gitignored by design).
+- Step 6: full suite without soaks (log: /tmp/zfs-run-wrapup.log).
+- Step 7: codebase frozen at this point.

@@ -279,19 +279,20 @@ install_iscsi_fence_units() {
             node_conf="${ZFSUTILITIES_LEGACY_NODE_CONF:-/etc/zfsutilities-node.conf}"
         elif [[ -r "${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}" ]]; then
             node_conf="${ZFSUTILITIES_LEGACY_TWO_NODE_CONF:-/etc/two-node.conf}"
-        else
-            # No node config at all: single-node install (install-single-node
-            # writes one) — nothing to fence.
-            return 0
         fi
     fi
-    if ! (
+    if [[ -r "$node_conf" ]] && ! (
             # shellcheck source=/dev/null
             source "$node_conf" >/dev/null 2>&1 || exit 1
             [[ "${NODE_MODE:-two-node}" != "single-node" ]]
          ); then
         return 0
     fi
+    # No node config anywhere + qm present: a fresh two-node compute host
+    # mid-deploy — install-two-node activates the compute host BEFORE its
+    # Step 6 copies node.conf there, so the fence decision cannot depend
+    # on that file existing yet. A single-node host never reaches this
+    # fallthrough: install-single-node writes node.conf before activation.
 
     if [[ ! -f "${share_dir}/zfsutilities-iscsi-fence.service" ]]; then
         # Activated version predates the fence: nothing to install.
