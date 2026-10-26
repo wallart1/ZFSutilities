@@ -97,8 +97,11 @@ zfs_migrate_send() {
                     "$(echo "$datatosend" | numfmt --to=iec-i)."
                 # Mirrors zfs-send-receive's resume receive: verbose, but no
                 # -u/-F/-s — the token already encodes the destination state.
+                # The send target names the source dataset for rate
+                # resolution only; transfer_do omits it from the send argv
+                # because -t's token already encodes the snapshot.
                 if transfer_do "resume transfer for $destfs" "-t $resumetoken" "-v" \
-                        "Y" "$datatosend" "" "$destfs"; then
+                        "Y" "$datatosend" "$sourcefs" "$destfs"; then
                     return 0
                 fi
                 log_msg "FATAL: ${restart_hint} transfer interrupted; re-run" \

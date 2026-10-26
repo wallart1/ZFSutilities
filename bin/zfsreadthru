@@ -98,6 +98,37 @@ fi
 firstsnap=${fsarray[0]}
 lastsnap=${fsarray[fsarraylen-1]}
 
+# Rate governance: pace the read-through at the enclosure cap of the
+# dataset's pool, resolved once for the whole run (both parts read the
+# same pool), so a forensic read cannot saturate an enclosure. Fail open:
+# a resolver failure WARNs and the read proceeds unpaced, exactly as
+# before caps existed; with no cap configured the pipelines are
+# byte-identical (no pacer stage).
+rate_limit=""
+resolver="${ZFSUTILITIES_ENCLOSURE_RATE:-$(
+    find_zfsutility_script enclosure_rate.py 2>/dev/null || true)}"
+if [[ -n "$resolver" && -x "$resolver" ]]; then
+    if ! rate_limit=$("$resolver" --min-with "" "${sourcefs%%/*}"); then
+        log_msg "WARN: Enclosure rate resolution failed;" \
+            "ignoring enclosure caps for this transfer"
+        rate_limit=""
+    fi
+else
+    log_msg "WARN: Enclosure rate resolution failed" \
+        "(enclosure_rate.py not found); ignoring enclosure caps for this transfer"
+fi
+pacer=""
+if [[ -n "$rate_limit" ]]; then
+    pacer=$(find_zfsutility_script pace_stream.py 2>/dev/null || true)
+    if [[ -z "$pacer" ]]; then
+        log_msg "FATAL: Rate limit set but pace_stream.py not found"
+        exit 8
+    fi
+    log_msg "INFO: Enclosure rate cap applied: ${rate_limit}"
+fi
+declare -a pace_argv=()
+[[ -n "$rate_limit" ]] && pace_argv=(python3 "$pacer" "$rate_limit")
+
 # Part 1: Full read-through to $firstsnap/oldest snapshot.
 log_msg "INFO: Part one: Full read-through to then \$firstsnap/oldest snapshot."
 
@@ -110,6 +141,7 @@ if [[ $autoproceed != 'Y' ]]; then
 fi
 
 if ! sudo zfs send -wc "$firstsnap" \
+    | "${pace_argv[@]}" \
     | pv -s "$edited_size" -pterb \
     | cat > /dev/null; then
         exit 8
@@ -128,6 +160,7 @@ if [[ $autoproceed != 'Y' ]]; then
 fi
 
 if ! sudo zfs send -wc -I "$firstsnap" "$lastsnap" \
+    | "${pace_argv[@]}" \
     | pv -s "$edited_size" -pterb \
     | cat > /dev/null; then
         exit 8

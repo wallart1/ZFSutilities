@@ -17,6 +17,9 @@ setup_test_env
 old_mydir="$mydir"
 _zfs_wipe_stub=$(mktemp -d)
 printf 'rootcheck() { true; }\n' > "$_zfs_wipe_stub/rootcheck"
+# A failed assert can end the suite anywhere, so the stub dir goes through
+# append_exit_trap, not a trailing rm.
+append_exit_trap "rm -rf '${_zfs_wipe_stub}'"
 mydir="$_zfs_wipe_stub"
 source "$old_mydir/bin/zfswipe"
 

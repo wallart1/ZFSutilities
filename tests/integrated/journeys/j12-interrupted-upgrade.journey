@@ -1,0 +1,437 @@
+#!/usr/bin/env bash
+# j12-interrupted-upgrade.journey — the interrupted-upgrade journey
+# (failure injection #3, natural continuation of j10).
+#
+# An upgrade that dies mid-flight must never break the host, and
+# re-running upgrade-zfsutilities must be the whole recovery.  The
+# product's design promises exactly that: nothing activates until
+# switch-version, staging is a mktemp dir cleaned by an EXIT trap, and
+# deploy-version re-runs rsync --delete into the same versions/<v> dir
+# with MANIFEST.sha256 written near the end.  This journey kills a real
+# upgrade twice and then verifies that self-repair.
+#
+# Injections (guest-side wrappers that background the upgrader under
+# setsid and signal its process group — the user-visible effect of a
+# lost terminal session or a power cut; no product file is touched):
+#   X1  SIGTERM during the early upgrade (download/extract phase): the
+#       graceful kill must run the EXIT trap (staging cleaned) and
+#       nothing may have been deployed, salvaged, or activated.
+#   X2  SIGKILL of the whole process group once the transcript shows
+#       the deploy marker: deploy-version's local rsyncs + mkdocs build
+#       give the kill a multi-second window (MANIFEST.sha256 is written
+#       last).  Expected remains: a PARTIAL versions/<target> dir, the
+#       salvage archive from the killed run (salvage precedes deploy),
+#       the current symlink untouched, PATH wiring intact.  The
+#       SIGKILLed staging dir cannot be trap-cleaned — recorded as
+#       information, not a failure (inherent; tmpfiles ages it out).
+#
+# Recovery: re-run the same upgrade — it must re-detect the injected
+# modifications (a full upgrade, not a degraded one), re-salvage,
+# repair the partial version dir in place (MANIFEST present), deploy
+# without activating; then switch-version activates, wiring verifies,
+# and an up-to-date rerun says "Nothing to upgrade".
+#
+# Guest state required: the stale post-install baseline template (the
+# shared upgrade staging fails fast when the premise breaks).
+# Snapshots produced: as-cloned (post-install checkpoint).
+
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+journey_main() {
+    local gname="j12"
+    local vb=/usr/local/lib/zfsutilities
+
+    itf_step info "journey start" \
+        "j12 interrupted upgrade; sw-source=$ITF_SW_SOURCE repo=$ITF_GITHUB_REPO"
+
+    # ------------------------------------------------------------------
+    # Stage T: clone start from the (deliberately stale) baseline
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_from_template "$gname" || return 1
+    local guest_ip="$J_GUEST_IP"
+
+    itf_journey_verify_installed "$guest_ip"
+
+    # ------------------------------------------------------------------
+    # Stage E: the shared upgrade staging — premise gate, user download,
+    # change-scan baseline, served release (common.sh)
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_upgrade_env "$gname" || return 1
+    local active_version="$J_ACTIVE_VERSION"
+    local target_version="$J_TARGET_VERSION"
+    local upgrade_cmd="$J_UPGRADE_CMD"
+    local env_exports="$J_UPGRADE_ENV_EXPORTS"
+
+    # The answer feed every upgrade run shares (download offer;
+    # prerequisite remediation, if the new tree's checker finds
+    # anything; the archive-changes offer).  Unconsumed lines are
+    # harmless; both upgrade prompts default to N, so the y's must be
+    # explicit.  It lives IN the guest: the kill wrappers background
+    # the upgrader and pipe from it.
+    local up_feed="$ITF_RUN_DIR/upgrade-answers.txt"
+    printf 'y\ny\ny\ny\ny\ny\n' > "$up_feed"
+    itf_guest_put "$guest_ip" "$up_feed" /root/itf-j12-answers.txt > /dev/null 2>&1
+
+    # ------------------------------------------------------------------
+    # Stage M: inject local modifications a site might carry — the
+    # recovery upgrade's change scan must find and salvage them again
+    # (same injections as j10)
+    # ------------------------------------------------------------------
+
+    local mod_script="$ITF_RUN_DIR/guest-modify.sh"
+    local tweak_bin="$vb/versions/$active_version/bin/itf-local-tweak"
+    local tweak_doc="$vb/versions/$active_version/docs/docs/index.md"
+    cat > "$mod_script" <<EOF
+set -e
+printf '\n<!-- itf local tweak (j12) -->\n' >> "$tweak_doc"
+printf '#!/bin/bash\n# itf local addition (j12)\n' > "$tweak_bin"
+chmod 755 "$tweak_bin"
+echo injected-ok
+EOF
+    itf_guest_put "$guest_ip" "$mod_script" /root/itf-j12-modify.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j12-modify.sh" \
+            > "$ITF_RUN_DIR/guest-modify.log" 2>&1 \
+            && grep -q injected-ok "$ITF_RUN_DIR/guest-modify.log"; then
+        itf_step pass "local modifications injected" \
+            "docs/docs/index.md (modified) + bin/itf-local-tweak (added)"
+    else
+        itf_step fail "local modifications injected" "see guest-modify.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage X1: SIGTERM during the early upgrade — graceful kill
+    # ------------------------------------------------------------------
+
+    local w1="$ITF_RUN_DIR/guest-kill1.sh"
+    cat > "$w1" <<EOF
+#!/bin/bash
+# itf j12 X1 (generated): SIGTERM the upgrade during its early phase,
+# then report the resulting host state.
+set -u
+${env_exports}log=/root/itf-j12-kill1-upgrade.log
+feed=/root/itf-j12-answers.txt
+tmp_before=\$(ls -d /tmp/tmp.* 2>/dev/null | wc -l)
+cd /root/ZFSutilities
+setsid ./bin/upgrade-zfsutilities < "\$feed" > "\$log" 2>&1 &
+pid=\$!
+# Poll for the download marker.  It stays in the log, so the kill may
+# land a phase later than the download itself — everything before the
+# deploy is equally "early" for this stage's assertions.
+for _ in \$(seq 1 900); do
+    grep -q 'Downloading v$target_version' "\$log" 2>/dev/null && break
+    kill -0 "\$pid" 2>/dev/null || break
+    sleep 0.2
+done
+kill -TERM -- "-\$pid" 2>/dev/null
+wait "\$pid"
+echo "upgrade-rc: \$?"
+echo "tmp-before: \$tmp_before"
+echo "tmp-after: \$(ls -d /tmp/tmp.* 2>/dev/null | wc -l)"
+echo "current: \$(basename "\$(readlink $vb/current)")"
+grep -q 'upgrade-zfsutilities complete' "\$log" || echo "no-complete-marker: yes"
+test ! -e "$vb/versions/$target_version" && echo "new-version-dir: absent"
+test ! -e "$vb/salvaged-changes" && echo "salvage: absent"
+echo kill1-done
+EOF
+    itf_guest_put "$guest_ip" "$w1" /root/itf-j12-kill1.sh > /dev/null 2>&1
+    local k1_log="$ITF_RUN_DIR/guest-kill1.log"
+    itf_guest_exec "$guest_ip" "bash /root/itf-j12-kill1.sh" > "$k1_log" 2>&1
+    itf_artifact "kill1-transcript" "$k1_log"
+    itf_guest_get "$guest_ip" /root/itf-j12-kill1-upgrade.log \
+        "$ITF_RUN_DIR/guest-kill1-upgrade.log" > /dev/null 2>&1
+    itf_artifact "kill1-upgrade-transcript" "$ITF_RUN_DIR/guest-kill1-upgrade.log"
+
+    local k1_rc
+    k1_rc="$(awk -F': ' '/^upgrade-rc:/{print $2; exit}' "$k1_log")"
+    if grep -q kill1-done "$k1_log" && [[ -n "$k1_rc" && "$k1_rc" -ne 0 ]] \
+            && grep -q "no-complete-marker: yes" "$k1_log"; then
+        itf_step pass "SIGTERM lands mid-upgrade" \
+            "killed with rc=$k1_rc before any completion marker"
+    else
+        itf_step fail "SIGTERM lands mid-upgrade" \
+            "rc=${k1_rc:-?} — see guest-kill1.log / guest-kill1-upgrade.log"
+        return 1
+    fi
+
+    local k1_cur k1_tmp_before k1_tmp_after
+    k1_cur="$(awk -F': ' '/^current:/{print $2; exit}' "$k1_log")"
+    k1_tmp_before="$(awk -F': ' '/^tmp-before:/{print $2; exit}' "$k1_log")"
+    k1_tmp_after="$(awk -F': ' '/^tmp-after:/{print $2; exit}' "$k1_log")"
+    if [[ "$k1_cur" == "$active_version" ]] \
+            && grep -q "new-version-dir: absent" "$k1_log" \
+            && grep -q "salvage: absent" "$k1_log"; then
+        itf_step pass "early kill left system untouched" \
+            "active still $active_version; no new version dir, no salvage"
+    else
+        itf_step fail "early kill left system untouched" "see guest-kill1.log"
+        return 1
+    fi
+    # The graceful kill must run the upgrader's EXIT trap: the staging
+    # dir it created before anything else has to be gone.  A leftover
+    # here is a cleanliness defect, not just noise (FINDINGS material).
+    if [[ "$k1_tmp_before" == "$k1_tmp_after" ]]; then
+        itf_step pass "early kill cleaned its staging" \
+            "EXIT trap ran — /tmp staging count unchanged ($k1_tmp_after)"
+    else
+        itf_step fail "early kill cleaned its staging" \
+            "/tmp staging dirs: $k1_tmp_before -> $k1_tmp_after — see guest-kill1.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage X2: SIGKILL of the process group mid-deploy
+    # ------------------------------------------------------------------
+
+    local w2="$ITF_RUN_DIR/guest-kill2.sh"
+    cat > "$w2" <<EOF
+#!/bin/bash
+# itf j12 X2 (generated): SIGKILL the upgrade process group mid-deploy,
+# then report the resulting host state.
+set -u
+${env_exports}log=/root/itf-j12-kill2-upgrade.log
+feed=/root/itf-j12-answers.txt
+cd /root/ZFSutilities
+setsid ./bin/upgrade-zfsutilities < "\$feed" > "\$log" 2>&1 &
+pid=\$!
+# The upgrade prints the deploy marker immediately before invoking
+# deploy-version; the local rsyncs + mkdocs build inside give the kill
+# a multi-second window (MANIFEST.sha256 is written last).
+for _ in \$(seq 1 900); do
+    grep -q 'via deploy-version' "\$log" 2>/dev/null && break
+    kill -0 "\$pid" 2>/dev/null || break
+    sleep 0.2
+done
+kill -9 -- "-\$pid" 2>/dev/null
+pkill -9 -f 'bin/deploy-version' 2>/dev/null
+wait "\$pid"
+echo "upgrade-rc: \$?"
+echo "current: \$(basename "\$(readlink $vb/current)")"
+vd="$vb/versions/$target_version"
+if [[ -d "\$vd" ]]; then
+    echo "new-version-dir: present"
+    if [[ -s "\$vd/MANIFEST.sha256" ]]; then
+        echo "manifest: present"
+    else
+        echo "manifest: absent"
+    fi
+fi
+test -d "$vb/salvaged-changes" && echo "salvage: present"
+bash -lc 'command -v zfsdailybackup' > /dev/null 2>&1 && echo "path-wiring: intact"
+grep -q 'upgrade-zfsutilities complete' "\$log" || echo "no-complete-marker: yes"
+echo "tmp-after: \$(ls -d /tmp/tmp.* 2>/dev/null | wc -l)"
+echo kill2-done
+EOF
+    itf_guest_put "$guest_ip" "$w2" /root/itf-j12-kill2.sh > /dev/null 2>&1
+    local k2_log="$ITF_RUN_DIR/guest-kill2.log"
+    itf_guest_exec "$guest_ip" "bash /root/itf-j12-kill2.sh" > "$k2_log" 2>&1
+    itf_artifact "kill2-transcript" "$k2_log"
+    itf_guest_get "$guest_ip" /root/itf-j12-kill2-upgrade.log \
+        "$ITF_RUN_DIR/guest-kill2-upgrade.log" > /dev/null 2>&1
+    itf_artifact "kill2-upgrade-transcript" "$ITF_RUN_DIR/guest-kill2-upgrade.log"
+
+    local k2_rc
+    k2_rc="$(awk -F': ' '/^upgrade-rc:/{print $2; exit}' "$k2_log")"
+    if grep -q kill2-done "$k2_log" && [[ -n "$k2_rc" && "$k2_rc" -ne 0 ]] \
+            && grep -q "no-complete-marker: yes" "$k2_log"; then
+        itf_step pass "SIGKILL lands mid-deploy" \
+            "process group killed with rc=$k2_rc before completion"
+    else
+        itf_step fail "SIGKILL lands mid-deploy" \
+            "rc=${k2_rc:-?} — see guest-kill2.log / guest-kill2-upgrade.log" \
+            "(a lost race would show rc=0: the deploy finished inside one" \
+            "0.2 s poll interval — re-run the journey)"
+        return 1
+    fi
+
+    local k2_cur k2_tmp_after
+    k2_cur="$(awk -F': ' '/^current:/{print $2; exit}' "$k2_log")"
+    k2_tmp_after="$(awk -F': ' '/^tmp-after:/{print $2; exit}' "$k2_log")"
+    if grep -q "new-version-dir: present" "$k2_log" \
+            && grep -q "manifest: absent" "$k2_log"; then
+        itf_step pass "partial deployment remains" \
+            "versions/$target_version exists without MANIFEST.sha256 —" \
+            "killed inside deploy-version's copy phase"
+    else
+        itf_step fail "partial deployment remains" \
+            "see guest-kill2.log (kill landed too early or too late)"
+        return 1
+    fi
+    if [[ "$k2_cur" == "$active_version" ]] \
+            && grep -q "path-wiring: intact" "$k2_log"; then
+        itf_step pass "killed deploy left the running system functional" \
+            "active still $active_version, login-shell PATH wiring intact"
+    else
+        itf_step fail "killed deploy left the running system functional" \
+            "see guest-kill2.log"
+        return 1
+    fi
+    if grep -q "salvage: present" "$k2_log"; then
+        itf_step pass "salvage already archived" \
+            "the killed run salvaged before deploying (salvage precedes deploy)"
+    else
+        itf_step fail "salvage already archived" "see guest-kill2.log"
+        return 1
+    fi
+    # SIGKILL cannot run the EXIT trap: the staging dir stays.  Inherent
+    # to the kill mode and inert (nothing references it afterwards;
+    # tmpfiles ages it out) — information, not a failure.
+    itf_step info "SIGKILL staging orphan expected" \
+        "/tmp staging dirs now: $k2_tmp_after (untrap-cleanable; inert)"
+
+    # ------------------------------------------------------------------
+    # Stage R: the recovery — re-run the SAME upgrade, the self-repair
+    # ------------------------------------------------------------------
+
+    local rec_log="$ITF_RUN_DIR/guest-upgrade-recovery.log"
+    itf_guest_exec_feed "$guest_ip" "$up_feed" "$upgrade_cmd" \
+        > "$rec_log" 2>&1
+    local rec_rc=$?
+    itf_artifact "upgrade-recovery-transcript" "$rec_log"
+    if [[ $rec_rc -ne 0 ]]; then
+        itf_step fail "recovery upgrade completes" \
+            "rc=$rec_rc — see guest-upgrade-recovery.log"
+        return 1
+    fi
+    # rc alone can't prove the recovery was a FULL upgrade — assert the
+    # transcript markers: both injections re-detected, re-salvaged, the
+    # partial dir repaired, deployment stopped before activation.
+    local -a markers=(
+        "modified:   docs/docs/index.md"
+        "added:      bin/itf-local-tweak"
+        "Salvaged on"
+        "Deployed version:  $target_version — NOT activated"
+        "Active version:    $active_version (unchanged on this host)"
+        "sudo switch-version $target_version"
+    )
+    local marker missing_markers=""
+    for marker in "${markers[@]}"; do
+        grep -qF "$marker" "$rec_log" || missing_markers+=" [$marker]"
+    done
+    if [[ -n "$missing_markers" ]]; then
+        itf_step fail "recovery upgrade completes" \
+            "transcript markers missing:$missing_markers — see guest-upgrade-recovery.log"
+        return 1
+    fi
+
+    local rec_script="$ITF_RUN_DIR/guest-recovery-verify.sh"
+    cat > "$rec_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$active_version"
+test -s "$vb/versions/$target_version/MANIFEST.sha256"
+test -f "$vb/versions/$target_version/bin/upgrade-zfsutilities"
+test -f "$vb/versions/$target_version/bin/deploy-version"
+n=\$(ls -1d $vb/salvaged-changes/$active_version/*/ 2>/dev/null | wc -l)
+echo "salvage-runs: \$n"
+test "\$n" -ge 2
+echo recovery-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$rec_script" /root/itf-j12-recovery.sh > /dev/null 2>&1
+    local rv_log="$ITF_RUN_DIR/guest-recovery-verify.log"
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j12-recovery.sh" \
+            > "$rv_log" 2>&1 && grep -q recovery-state-ok "$rv_log"; then
+        local salvage_runs
+        salvage_runs="$(awk -F': ' '/^salvage-runs:/{print $2; exit}' "$rv_log")"
+        itf_step pass "recovery upgrade completes" \
+            "partial dir repaired in place (MANIFEST present); both injections" \
+            "re-detected and re-salvaged ($salvage_runs archives); NOT activated"
+        itf_artifact "recovery-verify" "$rv_log"
+    else
+        itf_step fail "recovery upgrade completes" "see guest-recovery-verify.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage A: activate — the command the upgrade printed for the user
+    # ------------------------------------------------------------------
+
+    local sw_log="$ITF_RUN_DIR/guest-switch.log"
+    itf_guest_exec "$guest_ip" "bash -lc 'switch-version $target_version'" \
+        > "$sw_log" 2>&1
+    local sw_rc=$?
+    itf_artifact "switch-transcript" "$sw_log"
+    if [[ $sw_rc -eq 0 ]]; then
+        itf_step pass "switch-version activates" \
+            "rc=0 — the exact command the upgrade printed (see guest-switch.log)"
+    else
+        itf_step fail "switch-version activates" "rc=$sw_rc — see guest-switch.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage W: post-recovery wiring — new version active, old version
+    # retained, user config preserved
+    # ------------------------------------------------------------------
+
+    local post_script="$ITF_RUN_DIR/guest-post-verify.sh"
+    cat > "$post_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$target_version"
+test -d "$vb/versions/$active_version"
+grep -q 'NODE_MODE="single-node"' /etc/zfsutilities/node.conf
+test -s /var/lib/zfsutilities/config.json
+# PATH wiring loads via profile.d only for login shells — a plain
+# non-login command never sees switch-version.
+bash -lc 'switch-version --list' > /root/itf-j12-switchlist.txt
+grep -q "$active_version" /root/itf-j12-switchlist.txt
+grep -q "$target_version" /root/itf-j12-switchlist.txt
+echo post-recovery-ok
+EOF
+    itf_guest_put "$guest_ip" "$post_script" /root/itf-j12-post.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j12-post.sh" \
+            > "$ITF_RUN_DIR/guest-post-verify.log" 2>&1 \
+            && grep -q post-recovery-ok "$ITF_RUN_DIR/guest-post-verify.log"; then
+        itf_step pass "post-recovery state verified" \
+            "current -> $target_version; $active_version retained for rollback;" \
+            "node.conf and config.json preserved; both versions listed"
+    else
+        itf_step fail "post-recovery state verified" "see guest-post-verify.log"
+        return 1
+    fi
+    itf_journey_verify_installed "$guest_ip"
+
+    # ------------------------------------------------------------------
+    # Stage U: an up-to-date system must be told so — nothing re-deployed
+    # ------------------------------------------------------------------
+
+    local uptodate_feed="$ITF_RUN_DIR/upgrade-uptodate-answers.txt"
+    printf '\n' > "$uptodate_feed"
+    local upd_log="$ITF_RUN_DIR/guest-upgrade-uptodate.log"
+    itf_guest_exec_feed "$guest_ip" "$uptodate_feed" "$upgrade_cmd" \
+        > "$upd_log" 2>&1
+    local upd_rc=$?
+    itf_artifact "upgrade-uptodate-transcript" "$upd_log"
+    local upd_active
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    upd_active="$(itf_guest_exec "$guest_ip" \
+        'basename "$(readlink /usr/local/lib/zfsutilities/current)"')" || upd_active=""
+    if [[ $upd_rc -eq 0 ]] && grep -q "Nothing to upgrade" "$upd_log" \
+            && [[ "$upd_active" == "$target_version" ]]; then
+        itf_step pass "up-to-date rerun is a no-op" \
+            "\"Nothing to upgrade\"; current still $target_version"
+    else
+        itf_step fail "up-to-date rerun is a no-op" \
+            "rc=$upd_rc active=${upd_active:-?} — see guest-upgrade-uptodate.log"
+        return 1
+    fi
+
+    # The server's job is done; the EXIT-trap guard then skips.
+    if [[ -n "${J_PIDFILE2:-}" ]]; then
+        itf_http_stop "$J_PIDFILE2"
+        J_PIDFILE2=""
+    fi
+
+    itf_step info "journey stage reached" \
+        "interrupted upgrade validated: early SIGTERM (untouched, staging" \
+        "cleaned), mid-deploy SIGKILL (partial dir, salvage kept, system" \
+        "functional), recovery rerun (full re-scan, in-place repair)," \
+        "activation, retention, up-to-date rerun"
+    return 0
+}

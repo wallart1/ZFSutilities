@@ -13,13 +13,17 @@ import shlex
 import subprocess
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import path_utils
 from logging_config import log_msg
 from pool_create import TOPOLOGIES, validate_raid10_count
 from pool_profiles import POOL_PROPERTIES, POOL_PROPERTY_VALUES
+
+if TYPE_CHECKING:
+    from enclosure_inventory import EnclosureInventory
 
 
 def is_dataset_encrypted(path):
@@ -565,6 +569,34 @@ def valid_rate_limit(text: str) -> bool:
     return suffix in _RATE_MULTIPLIERS
 
 
+_ENCLOSURE_RATE_CACHE = {}
+
+
+def _enclosure_rate_module():
+    """Import lib/enclosure_rate.py — the shared per-enclosure rate resolver.
+
+    The resolver lives beside the pacer in lib/ so bash pipelines (the
+    enclosure_rate.py CLI) and the GUI resolve rates through one
+    implementation; lib/ is not a package, so it is loaded from its resolved
+    path and cached. The module bootstraps its own imports (pace_stream and
+    the python/ layer) from the tree it lives in.
+    """
+    if "module" not in _ENCLOSURE_RATE_CACHE:
+        import importlib.util
+
+        path = path_utils.find_script(
+            "enclosure_rate.py",
+            script_dir=os.path.dirname(os.path.realpath(__file__)),
+        )
+        if path is None:
+            raise RuntimeError("enclosure_rate.py could not be located beside python/")
+        spec = importlib.util.spec_from_file_location("enclosure_rate", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _ENCLOSURE_RATE_CACHE["module"] = module
+    return _ENCLOSURE_RATE_CACHE["module"]
+
+
 def build_migration_send_receive_command(
     source_fs: str,
     dest_fs: str,
@@ -775,8 +807,11 @@ def build_apply_holds_command(dataset: str, input_file: str) -> list[str]:
 class ZfsRepository:
     """Wrap zfs/zpool subprocess calls for testability and isolation."""
 
-    def __init__(self, sudo: bool = False):
+    def __init__(self, sudo: bool = False, enclosure_inventory: "EnclosureInventory | None" = None):
         self.sudo = sudo
+        # Injectable so rate resolution (and its tests) can supply a fake
+        # inventory; constructed lazily on first use otherwise.
+        self.enclosure_inventory = enclosure_inventory
 
     def _zfs(self, *args: str) -> list[str]:
         return (["sudo", "zfs"] if self.sudo else ["zfs"]) + list(args)
@@ -1534,6 +1569,25 @@ class ZfsRepository:
         if not result.stdout:
             return None
         return self._parse_topology(result.stdout)
+
+    def effective_transfer_rate(self, pools: Iterable[str], activity_rate: str = "") -> str:
+        """Return min(activity_rate, enclosure caps) for *pools* ("" = unlimited).
+
+        The Python seam of per-enclosure rate governance: delegates to
+        lib/enclosure_rate.py — the same resolver the enclosure_rate.py CLI
+        serves bash pipelines — so GUI and CLI can never disagree. *pools*
+        are pool names; callers reduce datasets to their first path
+        component. Resolver failure fails open: a loud WARN is logged and
+        *activity_rate* is returned unchanged, never blocking a transfer on
+        an enclosure-scan hiccup.
+        """
+        if self.enclosure_inventory is None:
+            from enclosure_inventory import EnclosureInventory
+
+            self.enclosure_inventory = EnclosureInventory(zfs_repository=self)
+        return _enclosure_rate_module().effective_rate(
+            pools, activity_rate, inventory=self.enclosure_inventory
+        )
 
     @staticmethod
     def _classify_vdev(name: str, state: str | None, is_root: bool = False) -> str:

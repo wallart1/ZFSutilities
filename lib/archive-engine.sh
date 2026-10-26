@@ -13,13 +13,20 @@
 #   - encrypted zvols     → raw send/receive as-is (a device copy would read
 #                           plaintext and break encryption end-to-end)
 #
-# Pacing: when transfer_rate_limit holds a rate value (e.g. 100M) every data
-# movement — device copy, hash verification, raw send/receive — is passed
-# through the python pacer lib/pace_stream.py so an archive run cannot
-# saturate a small storage host. The pacer caps the stream flat: a stalled
-# pipeline forfeits the missed budget instead of buying a later burst (pv -L
-# enforced only a long-run average and burst to 1.5-3.5x the cap after every
-# ZFS txg/throttle stall). Empty or unset means unlimited (a plain dd reader).
+# Pacing: the effective rate for a run is the minimum of
+# $transfer_rate_limit (the prompted archive rate) and every per-enclosure
+# cap of every enclosure touched by the source and destination pools,
+# resolved once per archived/restored zvol through the shared resolver
+# lib/enclosure_rate.py — an enclosure cap applies even when no archive
+# rate was prompted. Every data movement — device copy, hash verification,
+# raw send/receive — is passed through the python pacer lib/pace_stream.py
+# at that combined rate so an archive run cannot saturate a small storage
+# host. Resolver failures fail open: a loud WARN and the prompted rate as
+# before caps existed, never a blocked archive. The pacer caps the stream
+# flat: a stalled pipeline forfeits the missed budget instead of buying a
+# later burst (pv -L enforced only a long-run average and burst to
+# 1.5-3.5x the cap after every ZFS txg/throttle stall). Empty or unset
+# means unlimited (a plain dd reader).
 #
 # Integrity: the device-copy path carries no stream checksums, so its
 # source is hashed in flight — the copy stream is teed to a background
@@ -66,6 +73,63 @@ archive_pacer() {
         fi
     fi
     [[ -n "${_archive_pacer:-}" ]]
+}
+
+# Resolve the per-enclosure rate resolver (lib/enclosure_rate.py) once per
+# run into _archive_resolver — same resolution law as archive_pacer
+# (BASH_SOURCE's own directory first, find_zfsutility_script fallback);
+# $ZFSUTILITIES_ENCLOSURE_RATE overrides the location for tests and unusual
+# deployments. Returns 1 when not found; callers fail open, never fatally.
+archive_resolver() {
+    local candidate="${ZFSUTILITIES_ENCLOSURE_RATE:-}"
+    if [[ -n "$candidate" ]]; then
+        # Re-check every call: tests repoint the env at per-test fakes, and
+        # a vanished override must not leave a stale resolution behind.
+        _archive_resolver=""
+        [[ -x "$candidate" ]] && _archive_resolver="$candidate"
+    elif [[ -z "${_archive_resolver:-}" ]]; then
+        candidate="$(dirname "${BASH_SOURCE[0]}")/enclosure_rate.py"
+        if [[ -x "$candidate" ]]; then
+            _archive_resolver="$candidate"
+        elif declare -f find_zfsutility_script >/dev/null 2>&1; then
+            candidate=$(find_zfsutility_script enclosure_rate.py 2>/dev/null || true)
+            [[ -x "$candidate" ]] && _archive_resolver="$candidate"
+        fi
+    fi
+    [[ -n "${_archive_resolver:-}" ]]
+}
+
+# Resolve the run's effective rate once: the minimum of $3 (the prompted
+# activity rate, empty = unlimited) and every enclosure cap of the pools of
+# the $1 source and $2 destination datasets (pool = first path component).
+# Prints the winning rate (empty = unlimited). Fails open per campaign
+# policy: a missing resolver or any resolver failure logs a loud WARN and
+# prints the activity rate unchanged — an archive run never blocks on an
+# enclosure-scan hiccup. Logs an INFO when an enclosure cap changes the
+# pace. The resolver's stderr flows straight through to the session log;
+# only its stdout is the rate.
+archive_resolve_rate() {
+    local src="$1" dst="$2" rate_limit="$3"
+    local src_pool dst_pool combined
+    src_pool="${src%%/*}"
+    dst_pool="${dst%%/*}"
+    if ! archive_resolver; then
+        log_msg "WARN: Enclosure rate resolution failed" \
+            "(enclosure_rate.py not found); ignoring enclosure caps for this transfer"
+        printf '%s' "$rate_limit"
+        return 0
+    fi
+    if ! combined=$("$_archive_resolver" --min-with "$rate_limit" \
+            "$src_pool" "$dst_pool"); then
+        log_msg "WARN: Enclosure rate resolution failed;" \
+            "ignoring enclosure caps for this transfer"
+        printf '%s' "$rate_limit"
+        return 0
+    fi
+    if [[ -n "$combined" && "$combined" != "$rate_limit" ]]; then
+        log_msg "INFO: Enclosure rate cap applied: ${combined}"
+    fi
+    printf '%s' "$combined"
 }
 
 # Copy one block device onto another while hashing the source stream in
@@ -256,6 +320,16 @@ archive_one_zvol() {
     local created_root="" dataset_created=0 snapdev_changed=0
     local src_dev dst_dev snapdev_arg copy_src_hash=""
 
+    # One resolver call per run (rate governance): the local shadow of
+    # transfer_rate_limit carries the combined rate — min(prompted rate,
+    # enclosure caps of the source zvol's and the archive's pools) — into
+    # the existing paced paths (device copy, hash verify, raw send/receive)
+    # for exactly this zvol; the caller's prompted value is untouched.
+    local _activity_rate="${transfer_rate_limit:-}"
+    local transfer_rate_limit
+    transfer_rate_limit=$(archive_resolve_rate "$zvol" "$archive_dataset" \
+        "$_activity_rate")
+
     orig_vbs=$(zfs get -H -o value volblocksize "$zvol")
     log_msg "INFO:   Original volblocksize: ${orig_vbs}"
     encryption=$(zfs get -H -o value encryption "$zvol")
@@ -439,6 +513,16 @@ unarchive_one_zvol() {
     local info_file vbs_file method orig_vbs
     local snap snap_name volsize snapdev_prev snapdev_changed=0
     local created_root="" dataset_created=0 src_dev dst_dev copy_src_hash=""
+
+    # One resolver call per run (rate governance): the local shadow of
+    # transfer_rate_limit carries the combined rate — min(prompted rate,
+    # enclosure caps of the archive's and the new zvol's pools) — into the
+    # existing paced paths for exactly this zvol; the caller's prompted
+    # value is untouched.
+    local _activity_rate="${transfer_rate_limit:-}"
+    local transfer_rate_limit
+    transfer_rate_limit=$(archive_resolve_rate "$arc_dataset" "$new_zvol" \
+        "$_activity_rate")
 
     info_file="${archive_mount}/${orig_zvol}.disk_info"
     vbs_file="${archive_mount}/${orig_zvol}.original_volblocksize"

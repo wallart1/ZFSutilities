@@ -11,7 +11,10 @@ old_mydir="$mydir"
 # Shared test environment
 # ------------------------------------------------------------------------------
 
+# A failed assert can end the suite anywhere, so the shared dirs go through
+# append_exit_trap, not a trailing rm.
 tmp_dir=$(mktemp -d)
+append_exit_trap "rm -rf '${tmp_dir}'"
 pve_dir="$tmp_dir/pve"
 by_path_dir="$tmp_dir/by-path"
 
@@ -165,6 +168,7 @@ _test_hostname="tweety"
 # real bin).
 _rootcheck_stub=$(mktemp -d)
 printf 'rootcheck() { true; }\n' > "$_rootcheck_stub/rootcheck"
+append_exit_trap "rm -rf '${_rootcheck_stub}'"
 mydir="$_rootcheck_stub"
 
 source "$old_mydir/bin/list-vm-disks"
@@ -855,12 +859,6 @@ test_wrap_cell_separator_breaks
 test_wrap_cell_hard_breaks_long_tokens
 test_wrap_cell_respects_embedded_newlines
 test_print_table_wraps_cells
-
-# ------------------------------------------------------------------------------
-# Cleanup
-# ------------------------------------------------------------------------------
-
-rm -rf "$tmp_dir"
 
 test_summary
 teardown_test_env

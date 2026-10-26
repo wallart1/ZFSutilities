@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.133.0
+
+*Released 2026-10-26*
+
+### Added
+
+- **Per-enclosure transfer-rate governance.** Enclosure discovery
+  (`python/enclosure_inventory.py`) groups disks into multi-bay
+  enclosures — USB disks by the hub directly under a root USB hub,
+  SATA disks by PCI controller with the boot disk's controller
+  excluded — with identity as a short hash of the sorted member WWNs,
+  so it survives replug and port moves. The shared resolver
+  (`lib/enclosure_rate.py`) computes the effective rate for a
+  transfer: the minimum of the operation's own rate limit and every
+  configured cap of every enclosure touched by the transfer's source
+  and destination pools; one CLI serves the bash pipelines and one
+  in-process seam (`ZfsRepository.effective_transfer_rate`) serves the
+  GUI, so the two can never disagree. Caps live in the configuration's
+  new `enclosures` section (`{id: {name, max_rate}}`; configuration
+  version 30 migrates in place, an empty section changing nothing).
+  Enforcement is wired through the shared engines: the transfer
+  library resolves per send/receive endpoint pair, the archive engine
+  resolves per archived/restored zvol, and clone-vm (both copy paths),
+  `zfsrestoresendstream`, `zfsreadthru`, and the Migrate Pool resume
+  path all pace through the same seam — operations that historically
+  ran unlimited are capped too. Resolver failures fail open: a loud
+  `WARN` and the operation's own rate as before caps existed, never a
+  blocked transfer; with no cap configured every pipeline is
+  byte-identical to its pre-cap form. Scrubs, resilvers, and destroys
+  remain monitored only (kernel-driven I/O cannot be throttled from
+  userland).
+- **`j12-interrupted-upgrade` journey.** Kills a real
+  `upgrade-zfsutilities` run twice — SIGTERM during the early phase
+  (the EXIT trap must clean staging and nothing may be deployed,
+  salvaged, or activated) and SIGKILL of the whole process group the
+  moment the transcript shows the deploy marker (a partial
+  `versions/<v>` dir without `MANIFEST.sha256` beside the killed run's
+  salvage archive, current symlink untouched) — then proves the
+  product's promise that re-running the same upgrade is the whole
+  recovery. j10's upgrade staging is factored into the shared
+  `itf_journey_stage_upgrade_env` (journeys/common.sh).
+
+### Fixed
+
+- **Messages-manual enclosure rows.** The rate-governance message
+  rows were pasted twice into the shared transfer section and
+  archive-vm's own section kept its outdated row; the shared section
+  now carries one current set and archive-vm its own.
+
+### Tests
+
+- Suites for the resolver (pure + CLI + fail-open), the inventory
+  (grouping, identity, injectable collectors), the migration
+  (29→30 seeding/preservation/idempotence), the config helpers, the
+  repository seam, and per-script pacing for every newly wired
+  consumer, including the restoresendstream fail-open path.
+- Test-suite /tmp litter eliminated: rootcheck stub dirs
+  (zfsshowbigstuff, zfswipe, list-vm-disks) are exit-trap cleaned, and
+  the check-vm-disk-paths rescan-mock leak (a command-substitution
+  array append that never reached the cleanup loop) is fixed.
+
 ## 0.132.0
 
 *Released 2026-10-25*

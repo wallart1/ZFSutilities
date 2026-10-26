@@ -39,16 +39,27 @@
   it recurs, capture /tmp/zfsutilities-test-<pid>.log immediately and
   instrument the mock zfs-list arm; do not touch product code for it.
 
-- (test hygiene, /tmp litter — discovered 2026-10-24, M3 turn): the suites
-  that divert rootcheck resolution through a stub dir (`_rootcheck_stub=$(mktemp -d)`
-  + `printf 'rootcheck() { true; }\n' > stub/rootcheck`; list-vm-disks,
-  zfswipe, zfsshowbigstuff, zfsdelfs, zfsdelallsnaps, zfscleanup,
-  findoffsitepool, zfsmount, iscsi-add-encrypted-luns,
-  iscsi-recover-encrypted-luns — same pattern) never remove the directory:
-  every full-suite run leaks ~one rootcheck-only tmp dir per such suite
-  (6 observed after the 2026-10-24 M3 run; swept by hand). Fix: register
-  the stub dir with the suite's exit-trap cleanup (test-lib's
-  append_exit_trap pattern) or rm -rf it at teardown.
+- (itf harness, cross-lane concurrency — discovered 2026-10-25, j09 turn):
+  the itf orchestrator has no serialization across the parallel repo
+  lanes. Both lanes' site configs describe the same physical site, so a
+  pub2-launched run and a pub-launched run share the same base hosts,
+  the same VMID range, the same UDP-514 installer-syslog listener, and
+  the same fixed ITF_HTTP_PORT (8000) — a concurrent second run fails
+  at `itf_http_serve` ("port busy") or silently loses syslog datagrams,
+  and base-host memory stacks one 8 GB guest per lane. `itf status`
+  reports only the local tree's runs, so one lane cannot see another
+  lane's active run. Observed live: pub2's j05-lab guests were running
+  when pub's j09 launch was pending; j09 was held until they stopped.
+  Candidate fix: a base-host run lock acquired through the existing
+  guarded sudo channel (recording tree + run dir), or per-lane serve
+  ports in each lane's site/config (the cheaper half-measure).
+  (Progress 2026-10-25: fix implemented in the pub2 lane and released in
+  its 0.133.0 (commit 9c80db6) — tests/integrated/lib/runlock-lib.sh, a
+  machine-global run lock serializing journey runs AND template builds
+  (holder named across lanes, heartbeats, ITF_RUNLOCK_WAIT) plus an
+  acquire-time orphan fence over interrupted runs' guests, with
+  itf-driver coverage. It arrives in pub with the pending pub2 lane
+  merge; entry stays until then.)
 
 - (future objective, iSCSI resilience — survive bare-metal restores up to
   30 days old; user todo 2026-10-22): a bare-metal OS restore of the
@@ -110,3 +121,11 @@
   0.131.0 and merged into pub at 0.132.0 (this merge); unpushed/
   undeployed. M5–M6 remain, still one milestone at a time per the
   user's cycle.)
+  (Progress 2026-10-25: M5 (repair-vm-disk-refs — compute-host
+  identity-chain repair of regressed VM-config disk refs, qm set
+  touching only the by-path volume — plus export-iscsi-state
+  --print-map, the compute-host fetch path) and M6 (j13
+  storage-restore + j14 fence-recover journeys; F-026 fence-gate fix)
+  released in the pub2 lane as 0.133.0 (commit 9c80db6) — the campaign
+  is complete in the lane. Lands in pub with the pending pub2 lane
+  merge; the entry retires at that merge.)

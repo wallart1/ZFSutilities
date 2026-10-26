@@ -23,6 +23,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`archive-engine.sh`](#archive-enginesh)
 - [`transfer-lib.sh`](#transfer-libsh)
 - [`pace_stream.py`](#pace_streampy)
+- [`enclosure_rate.py`](#enclosure_ratepy)
 - [`upgrade-lib.sh`](#upgrade-libsh)
 - [`zfsconfig`](#zfsconfig)
 - [`zfsbuildfsarray`](#zfsbuildfsarray)
@@ -580,6 +581,15 @@ as-is (a device copy would read plaintext). Restores branch on the archive's
 recorded `METHOD=copy|raw` marker; unmarked legacy archives restore via raw
 send/receive.
 
+**Pacing:** every data movement — device copy, hash verification, raw
+send/receive — runs at the run's effective rate: the minimum of the
+prompted `$transfer_rate_limit` and every per-enclosure cap of the source
+and destination pools, resolved once per archived/restored zvol through
+[`enclosure_rate.py`](#enclosure_ratepy) (an enclosure cap applies even
+when no rate was prompted). Resolver failures fail open with a loud WARN
+and the prompted rate; a rate with the pacer itself missing stays a loud
+FATAL (a paced run never silently runs unlimited).
+
 **Functions:**
 
 | Function                          | Purpose                                                              |
@@ -590,6 +600,8 @@ send/receive.
 | `archive_create_parents(<parent>, <var>)` | Create the parent chain only if absent; sets `<var>` to the shallowest created level for exact rollback. |
 | `archive_rollback_created(...)`   | Destroy exactly the datasets this run created.                       |
 | `archive_one_zvol(...)`           | Archive one zvol (copy or raw per encryption); writes the `.original_volblocksize` and `METHOD=` sidecar lines. |
+| `archive_resolver()`               | Resolve `lib/enclosure_rate.py` once into `_archive_resolver` (`$ZFSUTILITIES_ENCLOSURE_RATE` overrides). |
+| `archive_resolve_rate(<src>, <dst>, <rate>)` | Effective rate = min(`<rate>`, enclosure caps of both pools); fail-open WARN prints `<rate>` unchanged on any resolver failure. |
 | `archive_method_of(<file>)`       | Read the `METHOD=` marker (defaults to `raw` for legacy archives).   |
 | `unarchive_one_zvol(...)`         | Restore one archived zvol per its method.                            |
 | `unarchive_rollback_created(...)` | Restore-side mirror of the rollback helper.                          |
@@ -611,11 +623,17 @@ success and 1 after logging the failure reason; callers decide the exit.
 ### `transfer-lib.sh`
 
 Shared ZFS send/receive transfer helpers used by
-[`zfs-send-receive`](modules.md#zfs-send-receive) and
-[`zfs-migrate-send`](commands.md#zfs-migrate-send), so both the production
-backup path and the Migrate Pool copy steps share one implementation of
-resumable, rate-limited, `pv`-instrumented transfers (rate limiting is
-a separate `lib/pace_stream.py` pipeline stage; `pv` only displays progress).
+[`zfs-send-receive`](modules.md#zfs-send-receive),
+[`zfs-migrate-send`](commands.md#zfs-migrate-send), and
+[`clone-vm`](two-node.md#clone-vm-both)'s copy steps, so the production
+backup path, the Migrate Pool copy steps, and VM clones share one
+implementation of resumable, rate-limited, `pv`-instrumented transfers.
+Every `transfer_do` resolves its effective rate first — the minimum of the
+caller's `$transfer_rate_limit` and every per-enclosure cap of the pools
+named by its send/receive targets (see [`enclosure_rate.py`](#enclosure_ratepy));
+an enclosure cap applies even with no activity limit, so transfers that
+never prompted for a rate are capped too. Rate limiting is a separate
+`lib/pace_stream.py` pipeline stage; `pv` only displays progress.
 
 ```bash
 source_helper transfer-lib.sh
@@ -629,14 +647,17 @@ source_helper transfer-lib.sh
 | `transfer_resume_token_stale <errtext>`                                                      | Classify known stale resume-token errors                                                                 |
 | `transfer_validate_resume_token <token>`                                                     | `zfs send -nP -t <token>`; prints remaining bytes, or the error text with rc 1                           |
 | `transfer_pv_args <datatosend> <use_pv>`                                                     | Build the pv progress-argument array into `transfer_pv_args` (tty / `ZFSUTILITIES_LOG_INHERIT`)          |
-| `transfer_pace_args`                                                                          | Build the pacer stage into `transfer_pace_args` when `$transfer_rate_limit` is set                         |
+| `transfer_resolver`                                                                           | Resolve `lib/enclosure_rate.py` once into `_transfer_resolver` (`$ZFSUTILITIES_ENCLOSURE_RATE` overrides)  |
+| `transfer_resolve_rate <rate> <pool-or-dataset>...`                                           | Effective rate = min(`<rate>`, every enclosure cap of the pools named); fail-open WARN, prints the activity rate unchanged on any resolver failure |
+| `transfer_pace_args <send_target> <recv_target>`                                              | Build the pacer stage into `transfer_pace_args` at the resolved effective rate (empty = no stage, byte-identical to the unpaced pipeline) |
 | `transfer_do <desc> <sendopts> <recvopts> <use_pv> <datatosend> <send_target> [<recv_target> [<send_target2>]]` | Run `zfs send … \| [pacer] \| [pv] \| zfs receive …` under pipefail (pacer before pv so the displayed rate is the paced rate; optional second send target for incremental sends); logs `FATAL: <desc> failed` on failure |
 | `transfer_check_space <datatosend> <dest_pool>`                                              | Destination free-space check (10% margin, 1 GiB minimum buffer)                                          |
 
-**Globals:** reads `$transfer_rate_limit` (optional rate, enforced by
-`lib/pace_stream.py`) and
-`$space_check_min_buffer` (optional minimum headroom); honors the caller's
-`$dryrun` for token aborts.
+**Globals:** reads `$transfer_rate_limit` (optional activity rate; the
+effective rate is the min of it and the enclosure caps, enforced by
+`lib/pace_stream.py`), `$space_check_min_buffer` (optional minimum headroom),
+and `$ZFSUTILITIES_ENCLOSURE_RATE` (resolver location override); honors the
+caller's `$dryrun` for token aborts.
 
 **Called modules:** `bashinit`.
 
@@ -645,7 +666,9 @@ source_helper transfer-lib.sh
 ### `pace_stream.py`
 
 Transfer-rate pacer used by `archive-engine.sh` and `transfer-lib.sh`
-wherever a rate limit is configured (`$transfer_rate_limit`). Copies stdin
+(and, through the pacer stage `bin/zfsrestoresendstream` and `bin/zfsreadthru`
+insert into their pipelines) wherever an effective rate is active — the
+activity limit `$transfer_rate_limit`, an enclosure cap, or their minimum. Copies stdin
 (or a file argument) to stdout in chunks of rate/25 (clamped to 64 KiB –
 16 MiB) on deadline arithmetic: each chunk owns a budget of chunk/rate
 seconds, small overheads are absorbed by the next chunk's sleep, and a
@@ -655,6 +678,41 @@ instead of buying a later burst, which is all `pv -L`'s long-run average
 ever guaranteed. A dead downstream consumer kills the pacer via SIGPIPE
 (exit 141) so `pipefail` pipelines fail loudly. Rate grammar: digits plus
 an optional K/M/G/T/P/E suffix (optional `i`/`b`), 1024-based.
+
+---
+
+### `enclosure_rate.py`
+
+Per-enclosure transfer-rate resolver — the single min() of rate governance
+(Phase 1–2 of the rate-governance campaign; enforced by the Phase 3 wiring).
+One transfer's effective rate is the minimum of the caller's per-activity
+rate limit and every configured cap of every enclosure touched by the
+source or destination pool; lower wins, because an enclosure may hold disks
+of several pools and a pool may span several enclosures.
+
+```bash
+enclosure_rate.py [--min-with <rate>] <pool-or-dataset>...
+```
+
+Each argument names a pool or dataset (pool = first path component; a
+snapshot suffix is ignored). Prints the effective rate — the winning
+value's original string; empty output means unlimited. Exit codes: 0
+success (including empty output), 2 usage error, 1 resolver failure —
+bash callers fail open on any nonzero exit (loud WARN, run at their own
+activity limit), never blocking a transfer on an enclosure-scan hiccup.
+Python callers share the implementation through
+`ZfsRepository.effective_transfer_rate` (see
+[python-modules](python-modules.md)). The rate grammar and comparison are
+the pacer's (`pace_stream.parse_rate`), so the grammar cannot drift; caps
+live in the config's `enclosures` section (see
+[data-structures](../developer-guide/data-structures.md#enclosures-object)).
+`$ZFSUTILITIES_ENCLOSURE_RATE` overrides the helper's location for tests
+and unusual deployments.
+
+**Consumers:** `lib/transfer-lib.sh` (every `transfer_do` resolves from its
+send/receive targets), `lib/archive-engine.sh` (once per archived/restored
+zvol), `bin/zfsrestoresendstream` and `bin/zfsreadthru` (pacer stages), and
+the GUI through the repository seam.
 
 ### `upgrade-lib.sh`
 

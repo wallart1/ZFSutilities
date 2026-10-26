@@ -181,8 +181,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_29(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 29)
+    def test_config_version_is_30(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 30)
 
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
@@ -487,6 +487,29 @@ class TestIndividualMigrations(unittest.TestCase):
         # An unresolvable profiles directory must not break the migration.
         result = config_migrations._migrate_28_to_29({"config_version": 28})
         self.assertEqual(result["config_version"], 29)
+
+    def test_migrate_29_to_30_seeds_empty_enclosures(self):
+        config = {"config_version": 29}
+        result = config_migrations._migrate_29_to_30(config)
+        self.assertEqual(result["enclosures"], {})
+        self.assertEqual(result["config_version"], 30)
+
+    def test_migrate_29_to_30_preserves_existing_section(self):
+        config = {
+            "config_version": 29,
+            "enclosures": {"a1b2c3d4e5": {"name": "fivebays", "max_rate": "100M"}},
+        }
+        result = config_migrations._migrate_29_to_30(config)
+        self.assertEqual(
+            result["enclosures"],
+            {"a1b2c3d4e5": {"name": "fivebays", "max_rate": "100M"}},
+        )
+
+    def test_migrate_29_to_30_is_idempotent(self):
+        config = {"config_version": 29}
+        result1 = config_migrations._migrate_29_to_30(dict(config))
+        result2 = config_migrations._migrate_29_to_30(result1)
+        self.assertEqual(result1, result2)
 
     def test_migrate_15_to_16_adds_prune_pools_order(self):
         config = {"config_version": 15}

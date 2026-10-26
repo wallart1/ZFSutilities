@@ -986,6 +986,12 @@ zfs_migrate_send() {
     [[ -n "$from" ]] && mode="catchup"
     printf 'ENGINE\t%s\t%s@%s\t%s\t%s\n' "$mode" "$src" "$snap" "$dst" "$from" \
         >> "$STATE/enginelog"
+    # Rate-governance seam: record what the engine child shell sees of the
+    # per-enclosure resolver override so tests can prove sever's bash -c
+    # engine invocation inherits it (the real engine consults it through
+    # lib/transfer-lib.sh; see test-transfer-lib).
+    printf 'ENCLOSURE_RATE\t%s\n' "${ZFSUTILITIES_ENCLOSURE_RATE:-}" \
+        >> "$STATE/engine_env"
     if [[ -f "$STATE/engine_fail" ]] && grep -qx "$mode" "$STATE/engine_fail"; then
         log_msg "FATAL: ${restart_hint:-sever-vm-clone} transfer interrupted (mock engine failure)."
         return 8
@@ -1815,6 +1821,31 @@ $(cat "$env/state/oplog")"
     rm -f /tmp/sever-vm-clone-${vmid}-*.state*
 }
 
+test_engine_child_inherits_resolver_seam() {
+    test_start "the engine child shell inherits the enclosure resolver seam"
+    local vmid=560 env out rc temp
+    env=$(sever_env_with_clone "$vmid")
+    temp="tank/proxmox/sever_${vmid}/vm-${vmid}-disk-0"
+    # Same abort fixture as the clone-gate test above: the engine child
+    # runs (that is what we assert on) before the gate aborts the run.
+    printf '%s=%s\n' "$temp" "tank/proxmox/vm-100-disk-0@clone-origin" \
+        > "$env/state/origin_override"
+
+    SEVER_STDIN="y
+"
+    out=$(sever_run "$env" "$vmid")
+    rc=$?
+    SEVER_STDIN=""
+
+    assert_rc 1 "$rc"
+    if [[ ! -s "$env/state/engine_env" ]]; then
+        test_fail "engine child never recorded the resolver seam"
+        return
+    fi
+    assert_contains "$(cat "$env/state/engine_env")" "enclosure_rate"
+    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+}
+
 test_postswap_origin_backstop_fails() {
     test_start "post-swap backstop: a swapped-in zvol that is still a clone fails verification"
     sever_have_blkdev \
@@ -2513,6 +2544,7 @@ test_origin_report_sibling_and_held
 test_origin_report_zero_byte_explains_sharing
 test_guid_mismatch_aborts_before_destroy
 test_phase1_copy_still_clone_aborts
+test_engine_child_inherits_resolver_seam
 test_postswap_origin_backstop_fails
 test_crash_before_rename_continue
 test_crash_after_rename_continue

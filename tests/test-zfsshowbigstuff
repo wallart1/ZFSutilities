@@ -15,6 +15,9 @@ SHOWBIG_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../bin/zfsshowbigs
 # every fresh test-lib.sh source (which resets mydir to the repo root).
 _rootcheck_stub_dir=$(mktemp -d)
 printf 'rootcheck() { true; }\n' > "$_rootcheck_stub_dir/rootcheck"
+# A failed assert can end the suite anywhere, so the stub dir goes through
+# append_exit_trap, not a trailing rm.
+append_exit_trap "rm -rf '${_rootcheck_stub_dir}'"
 _use_rootcheck_stub() {
     mydir="$_rootcheck_stub_dir"
 }

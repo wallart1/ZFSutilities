@@ -2003,7 +2003,10 @@ cat /usr/local/lib/zfsutilities/current/bin/zfsmountsnapshot
 
 Reads all snapshots in a dataset tree, forcing ZFS to verify every block.
 Useful for locating unrecovered data errors when `zpool status -v` is
-uninformative.
+uninformative. Both read passes are paced at the dataset's pool's
+per-enclosure cap when one is configured (resolved once per run through
+[`enclosure_rate.py`](modules.md#enclosure_ratepy); fail-open — a resolver
+failure WARNs and reads unpaced).
 
 ```bash
 sudo zfsreadthru <dataset> [overrides] [first-snapshot] [last-snapshot]
@@ -2181,8 +2184,11 @@ file). Configured by editing variables inside the script.
 **Internal flow:**
 
 1. Locate `.zfssendstream` files matching `$filepattern` in `$sourcedir`.
-2. Optionally destroy the destination if `$force='Y'`.
-3. Pipe each stream through `pv` into `zfs receive`.
+2. Resolve the destination pool's per-enclosure rate cap once for the run
+   (fail-open: a resolver failure WARNs and restores unpaced).
+3. Optionally destroy the destination if `$force='Y'`.
+4. Pipe each stream through `pv` and (when a cap resolved) the
+   [`pace_stream.py`](modules.md#pace_streampy) pacer into `zfs receive`.
 
 **Return codes:**
 
@@ -2209,8 +2215,12 @@ sudo zfsresume <destination-dataset>
 
 **Globals:** none.
 
-Retrieves the resume token, validates it, and either resumes the transfer or
-reports that the token is stale (and clears it with `zfs receive -A`).
+Retrieves the resume token, validates it, and either reports that the token
+is stale (and clears it with `zfs receive -A`) or that it seems valid. This
+command is token validation only — it runs no transfer pipeline and
+therefore has no rate pacing of its own; the actual resumed transfer is
+performed (and paced, activity limit and enclosure caps alike) by the
+send/receive engines that own the token.
 
 **Called modules:** none.
 

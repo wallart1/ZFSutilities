@@ -2,7 +2,7 @@
 
 import copy
 
-CONFIG_VERSION = 29
+CONFIG_VERSION = 30
 
 
 def _migrate_1_to_2(config):
@@ -396,6 +396,23 @@ def _migrate_28_to_29(config):
     return config
 
 
+def _migrate_29_to_30(config):
+    """Seed the enclosures section for per-enclosure rate governance.
+
+    The section maps discovery-side enclosure ids (WWN hashes) to
+    {name, max_rate}; empty means no enclosures configured, which is exactly
+    the pre-section behavior — discovery is independent of config and
+    nothing consumes the section until a cap is set. A user-set section is
+    preserved.
+    """
+    if "enclosures" not in config:
+        from feature_config import ENCLOSURES_DEFAULTS
+
+        config["enclosures"] = copy.deepcopy(ENCLOSURES_DEFAULTS)
+    config["config_version"] = 30
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -425,6 +442,7 @@ MIGRATIONS = [
     _migrate_26_to_27,
     _migrate_27_to_28,
     _migrate_28_to_29,
+    _migrate_29_to_30,
 ]
 
 

@@ -1,0 +1,191 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-zfsreadthru — Unit tests for bin/zfsreadthru: the forensic snapshot
+# read-through pipelines (part 1 full read, part 2 incremental read) and
+# their per-enclosure rate pacing (Phase 3 rate governance — the read head
+# is paced at the enclosure cap of the dataset's pool; a resolver failure
+# fails open to the unpaced pipeline).
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+old_mydir="$mydir"
+
+# Run the copied script in a stub tree. Helper stubs (rootcheck,
+# bashsetx, zfsbuildfsarray, zfsoverrides) and the pacer stub resolve via
+# $mydir; the real ~/bashinit provides log_msg/source_helper as in the
+# test-zfsrestoresendstream harness. Pipeline stages are captured by
+# function mocks: the pacer records on startup, pv records after draining
+# its stdin, so a pv marker landing after a pacer marker proves the data
+# path send -> pacer -> pv. Returns via $1-named files: rc, stages.
+run_readthru() {
+    local tmpdir="$1" stages_file="$2"
+    shift 2
+    (
+        cd "$tmpdir" || exit 1
+        sudo() { "$@"; }
+        zfs() {
+            case "$1" in
+                send)
+                    if [[ "$*" == *wnvc* ]]; then
+                        # Size estimate dry-run (-wnvc): five columns, $5 =
+                        # size with unit (editsize parses it).
+                        printf 'full\t%s\tsize\t-\t1G\n' "$3"
+                        return 0
+                    fi
+                    printf 'MOCKSTREAM\n'
+                    return 0
+                    ;;
+            esac
+            return 0
+        }
+        pv() {
+            local received
+            received=$(cat)
+            echo "pv $*" >> "$stages_file"
+            printf '%s' "$received"
+            return 0
+        }
+        python3() {
+            if [[ "${1:-}" != *pace_stream.py ]]; then
+                command python3 "$@"
+                return $?
+            fi
+            echo "pacer ${*:2}" >> "$stages_file"
+            cat
+            return 0
+        }
+        mydir="$tmpdir"
+        # shellcheck source=/dev/null
+        source "$tmpdir/zfsreadthru" "tank/forensics"
+    ) </dev/null >/dev/null 2>&1
+    return $?
+}
+
+# Build the stub tree shared by the tests.
+make_readthru_tree() {
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    cp "$old_mydir/bin/zfsreadthru" "$tmpdir/zfsreadthru"
+    cat > "$tmpdir/rootcheck" << 'EOF'
+rootcheck() { true; }
+EOF
+    cat > "$tmpdir/bashsetx" << 'EOF'
+EOF
+    cat > "$tmpdir/zfsbuildfsarray" << 'EOF'
+buildfsarray() {
+    fsarray=("$1@s1" "$1@s2")
+    fsarraylen=2
+}
+EOF
+    cat > "$tmpdir/zfsoverrides" << 'EOF'
+overrides() { :; }
+EOF
+    # The pacer stage resolves through $mydir; the python3 function mock
+    # intercepts the exec, so the file's content is irrelevant.
+    echo "# pacer stub" > "$tmpdir/pace_stream.py"
+    printf '%s' "$tmpdir"
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_readthru_unpaced_without_cap() {
+    test_start "read-through pipelines stay unpaced with no enclosure cap"
+
+    local tmpdir stages rc
+    tmpdir=$(make_readthru_tree)
+    stages="$tmpdir/stages"
+    : > "$stages"
+    run_readthru "$tmpdir" "$stages"
+    rc=$?
+    local seen
+    seen=$(cat "$stages" 2>/dev/null)
+    rm -rf "$tmpdir"
+
+    assert_rc 0 "$rc"
+    if [[ "$seen" == *"pacer"* ]]; then
+        test_fail "Pacer ran without a cap configured: $seen"
+        return
+    fi
+    local pv_count
+    pv_count=$(grep -c '^pv ' <<< "$seen")
+    if [[ "$pv_count" -ne 2 ]]; then
+        test_fail "Expected both read pipelines to run pv, saw $pv_count: $seen"
+        return
+    fi
+    test_pass
+}
+
+test_readthru_paces_both_parts_at_cap() {
+    test_start "both read-through parts pace at the enclosure cap of the pool"
+
+    local tmpdir stages rc
+    tmpdir=$(make_readthru_tree)
+    stages="$tmpdir/stages"
+    : > "$stages"
+    ZFSUTILITIES_TEST_ENCLOSURE_RATE=40M run_readthru "$tmpdir" "$stages"
+    rc=$?
+    local seen pacer_count
+    seen=$(cat "$stages" 2>/dev/null)
+    rm -rf "$tmpdir"
+
+    assert_rc 0 "$rc"
+    pacer_count=$(grep -c '^pacer 40M$' <<< "$seen")
+    if [[ "$pacer_count" -ne 2 ]]; then
+        test_fail "Expected both parts paced at 40M, saw $pacer_count: $seen"
+        return
+    fi
+    # Part 1's stage order: pacer starts before pv drains (data flows
+    # send -> pacer -> pv).
+    if [[ "$seen" != "pacer 40M
+pv -s 1G -pterb
+pacer 40M
+pv -s 1G -pterb" ]]; then
+        test_fail "Unexpected stage order:\n$seen"
+        return
+    fi
+    test_pass
+}
+
+test_readthru_resolver_failure_fails_open() {
+    test_start "a failing resolver WARNs and reads unpaced"
+
+    local tmpdir stages rc fake
+    tmpdir=$(make_readthru_tree)
+    stages="$tmpdir/stages"
+    : > "$stages"
+    fake="$tmpdir/failing_resolver"
+    printf '#!/usr/bin/bash\nexit 1\n' > "$fake"
+    chmod +x "$fake"
+    ZFSUTILITIES_ENCLOSURE_RATE="$fake" run_readthru "$tmpdir" "$stages"
+    rc=$?
+    local seen
+    seen=$(cat "$stages" 2>/dev/null)
+    rm -rf "$tmpdir"
+
+    assert_rc 0 "$rc"
+    if [[ "$seen" == *"pacer"* ]]; then
+        test_fail "Pacer ran after resolver failure: $seen"
+        return
+    fi
+    local pv_count
+    pv_count=$(grep -c '^pv ' <<< "$seen")
+    if [[ "$pv_count" -ne 2 ]]; then
+        test_fail "Expected both parts unpaced, saw $pv_count pv runs: $seen"
+        return
+    fi
+    test_pass
+}
+
+# ------------------------------------------------------------------
+# Run tests
+# ------------------------------------------------------------------
+
+test_readthru_unpaced_without_cap
+test_readthru_paces_both_parts_at_cap
+test_readthru_resolver_failure_fails_open
+
+test_summary
+teardown_test_env

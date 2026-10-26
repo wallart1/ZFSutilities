@@ -218,6 +218,54 @@ ZFSutilities restores a dataset by performing:
 both steps automatically whenever a full copy is requested. [`zfsrestore`](../commands-and-modules/commands.md#zfsrestore) and [`zfsfullcopy`](../commands-and-modules/modules.md#zfsfullcopy) make a single call to `zfs-send-receive` with the appropriate full-copy parameters. For the internal details, see the
 [Architecture - Restore Flow](../developer-guide/architecture.md#restore-flow).
 
+### Transfer Rate Limits and Enclosure Caps
+
+Two kinds of rate limits can govern one transfer, and **the lower always
+wins**:
+
+- A **per-activity rate limit** — the transfer rate limit of a backup step
+  (`transfer_rate_limit`), the prompted archive/restore rate, or a
+  Migrate Pool rate. It applies to that one operation.
+- A **per-enclosure cap** (`max_rate` in the config's `enclosures`
+  section; see
+  [data structures](../developer-guide/data-structures.md#enclosures-object))
+  — a ceiling for every streamed transfer that touches the enclosure's
+  pool on the source *or* the destination side. An enclosure may hold
+  disks of several pools and a pool may span several enclosures, so a
+  transfer runs at the minimum of its own limit and every cap of every
+  enclosure it touches.
+
+Every streaming operation consults both: send/receive backup steps and
+resume-token continuations, Migrate Pool copies (including the
+sever-vm-clone transfers that drive the same engine, which historically
+ran unlimited), archive-vm / unarchive-vm device copies, raw
+send/receives, and hash verification passes, clone-vm full-copy clones,
+`zfsrestoresendstream` restores, and `zfsreadthru` forensic read-throughs.
+An enclosure cap applies even when the operation itself has no rate
+configured. With no cap configured, every transfer behaves exactly as it
+did before caps existed.
+
+Known limitations:
+
+- **Scrubs, resilvers, and destroys are monitored only.** Their I/O is
+  kernel-driven on OpenZFS and cannot be throttled from userland; scrubs
+  keep their `ionice -c3` idle-class priority and the pause controls. The
+  Performance tab is where enclosure I/O from these operations is visible.
+- **Caps apply on the node that streams the data.** A cap discovered on the
+  storage host governs transfers executing there; a transfer streaming on
+  another node consults that node's enclosures.
+- **Fail-open.** If the enclosure scan or the config read fails at
+  transfer time, the transfer is never blocked: it runs at its own rate
+  limit (or unlimited) and a loud `WARN: Enclosure rate resolution
+  failed` names the reason.
+- **An HBA presenting disks over SATA looks like one eSATA enclosure.**
+  Grouping is by PCI controller; disks behind the same controller card
+  (not the motherboard's internal ports) form one group together.
+
+`zfsresume` validates or discards receive resume tokens only — it runs no
+transfer pipeline, so it has no pacing; the actual resumed transfer is
+performed (and paced) by the send/receive engines above.
+
 ---
 
 ## The Backup Chain

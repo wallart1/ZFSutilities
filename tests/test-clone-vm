@@ -124,6 +124,34 @@ test_clone_vm_releases_per_disk_locks() {
     fi
 }
 
+test_clone_vm_sources_transfer_lib() {
+    test_start "clone-vm sources transfer-lib on the compute host and in the storage heredoc"
+    local main_count heredoc_count
+    main_count=$(grep -c '^source_helper transfer-lib.sh' "$mydir/bin/clone-vm")
+    heredoc_count=$(grep -c 'source_helper transfer-lib.sh' <<< "$heredoc")
+    if [[ "$main_count" -ge 1 && "$heredoc_count" -ge 1 ]]; then
+        test_pass
+    else
+        test_fail "transfer-lib sourcing: main=$main_count heredoc=$heredoc_count"
+    fi
+}
+
+test_clone_vm_copies_route_through_transfer_do() {
+    test_start "both clone copy sites use transfer_do, not bare send/receive pipelines"
+    local transfer_do_count bare_pipeline
+    transfer_do_count=$(grep -c 'transfer_do "Clone copy of' "$mydir/bin/clone-vm")
+    if [[ "$transfer_do_count" -ne 2 ]]; then
+        test_fail "Expected 2 transfer_do copy sites, found $transfer_do_count"
+        return
+    fi
+    bare_pipeline=$(grep -n 'zfs send .*| *zfs receive' "$mydir/bin/clone-vm" || true)
+    if [[ -n "$bare_pipeline" ]]; then
+        test_fail "Bare send/receive pipeline remains: $bare_pipeline"
+        return
+    fi
+    test_pass
+}
+
 test_heredoc_avoids_bash_source_bootstrap
 test_heredoc_uses_deployed_path_bootstrap
 test_heredoc_bootstrap_no_realpath_error
@@ -131,6 +159,8 @@ test_clone_vm_sources_lock_manager
 test_clone_vm_initializes_lock_manager
 test_clone_vm_acquires_source_and_destination_locks
 test_clone_vm_releases_per_disk_locks
+test_clone_vm_sources_transfer_lib
+test_clone_vm_copies_route_through_transfer_do
 
 test_summary
 teardown_test_env

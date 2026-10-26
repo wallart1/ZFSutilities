@@ -1009,6 +1009,83 @@ y"
     test_pass
 }
 
+test_enclosure_cap_paces_restore_without_prompted_rate() {
+    reset_unretire_mocks
+    test_start "Enclosure cap: restore copy paces at the cap with no prompted rate"
+
+    _mock_orig_vmid="904"
+    # Empty rate answer = unlimited prompt; the stubbed enclosure cap is
+    # what paces the restore.
+    _mock_read_response="
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_cap"
+    local archive="$_mock_zfs_state_dir/archive_cap"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+    export ZFSUTILITIES_TEST_ENCLOSURE_RATE="40M"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+    unset ZFSUTILITIES_TEST_ENCLOSURE_RATE
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    local arc="${archive}/threeamigos/proxmox/vm-904-disk-0"
+    local needle="PACE:40M -- /dev/zvol/${arc}@snap1"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Restore copy not paced at the enclosure cap; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"INFO: Enclosure rate cap applied: 40M"* ]]; then
+        test_fail "Cap-applied INFO missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_restore_resolver_failure_fails_open() {
+    reset_unretire_mocks
+    test_start "Enclosure resolver failure WARNs and restores at the prompted rate"
+
+    _mock_orig_vmid="904"
+    _mock_read_response="100M
+y"
+    local pve_dir="$_mock_zfs_state_dir/pve_capfail"
+    local archive="$_mock_zfs_state_dir/archive_capfail"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir" copy
+    local fake="$_mock_zfs_state_dir/failing_resolver"
+    printf '#!/usr/bin/bash\nexit 1\n' > "$fake"
+    chmod +x "$fake"
+    export ZFSUTILITIES_ENCLOSURE_RATE="$fake"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" 904)
+    rc=$?
+    unset ZFSUTILITIES_ENCLOSURE_RATE
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"WARN: Enclosure rate resolution failed"* ]]; then
+        test_fail "Fail-open WARN missing; output:\n$out"
+        return
+    fi
+    local arc="${archive}/threeamigos/proxmox/vm-904-disk-0"
+    local needle="PACE:100M -- /dev/zvol/${arc}@snap1"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Prompted rate not applied after resolver failure; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 # ------------------------------------------------------------------
 # Idempotent re-runs
 # ------------------------------------------------------------------
@@ -1623,6 +1700,8 @@ test_backup_chain_orphan_does_not_block_restore
 test_extra_disk_orphan_does_not_block_restore
 test_copy_method_restores_reblocked
 test_rate_limit_paces_restore_copy
+test_enclosure_cap_paces_restore_without_prompted_rate
+test_restore_resolver_failure_fails_open
 test_restore_hashes_source_in_flight
 test_restore_source_hash_failure_fatals
 test_raw_method_uses_plain_receive

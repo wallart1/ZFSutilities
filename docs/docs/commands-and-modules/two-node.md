@@ -130,6 +130,12 @@ detached unless you later re-attach them with `attach-vm-disk` or `new-vm-disk`.
 
 Creates a new Proxmox VM by copying its source VM's disk zvols via `zfs send/receive`.
 Produces a fully independent copy with no ongoing ZFS dependency on the source.
+The copies run through the shared transfer engine
+([`transfer-lib.sh`](modules.md#transfer-libsh)), so per-enclosure rate caps
+apply on the node that streams (single-node: locally; two-node: the storage
+host, where the pools live) — clone-vm prompts for no rate of its own, and
+with no cap configured the copy pipeline is identical to the plain
+send/receive.
 
 ```bash
 sudo clone-vm <src_vmid> <dst_vmid> <new_name>
@@ -149,6 +155,7 @@ sudo clone-vm <src_vmid> <dst_vmid> <new_name>
 
 | Script / command | Purpose |
 | ---------------- | ------- |
+| `transfer-lib.sh` | `transfer_do` copy pipeline (rate governance incl. enclosure caps) |
 | `safe-iscsi-save` (storage host) | Persist new backstores/LUNs after clone |
 | `rescan-storage` | Make new LUNs visible on the compute host |
 | `zfs-diagnose-busy` | Diagnose snapshot-destroy failures |
@@ -171,7 +178,8 @@ sudo clone-vm <src_vmid> <dst_vmid> <new_name>
       These locks are visible in the Dashboard **Active Locks** list and are
       released when the disk finishes cloning.
     - Snapshot the source zvol as `@clone-to-<dst>`.
-    - `zfs send | zfs receive` to a new destination zvol.
+    - Copy to a new destination zvol via `transfer_do` (`zfs send | zfs
+      receive`, paced when an enclosure cap applies).
     - Destroy the source and destination clone snapshots.
     - In two-node mode, create an iSCSI backstore and LUN on the storage host.
     - Add the new backstore to `expected-backstores.txt`.

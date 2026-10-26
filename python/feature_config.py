@@ -550,6 +550,34 @@ def save_retention_mass_delete_config(config, data):
     save_config(config)
 
 
+# Enclosures section shape: {enclosure_id: {"name": str, "max_rate": str}}.
+# The id is the discovery-side WWN hash (python/enclosure_inventory.py); the
+# section is empty until the user names an enclosure or sets a cap, so an
+# upgraded config changes nothing functionally.
+ENCLOSURES_DEFAULTS = {}
+
+
+def get_enclosures_config(config):
+    """Return the enclosures section, normalizing entries to {name, max_rate}."""
+    data = config.get("enclosures")
+    if not isinstance(data, dict):
+        data = {}
+        config["enclosures"] = data
+    for enclosure_id, entry in list(data.items()):
+        if not isinstance(entry, dict):
+            data[enclosure_id] = {}
+            entry = data[enclosure_id]
+        entry.setdefault("name", "")
+        entry.setdefault("max_rate", "")
+    return data
+
+
+def save_enclosures_config(config, data):
+    """Persist the enclosures section ({id: {name, max_rate}})."""
+    config["enclosures"] = dict(data)
+    save_config(config)
+
+
 DEFAULT_WORKLOAD_PROFILES = {
     "general": {
         "description": "General-purpose mixed files. Baseline for most datasets.",

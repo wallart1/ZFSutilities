@@ -11,13 +11,24 @@
 # Rate limiting and progress display are separate pipeline stages: pv only
 # instruments progress (-pterb/-fpterb); the python pacer lib/pace_stream.py
 # (flat deadline pacing — a stall forfeits its budget rather than buying a
-# later burst, which is all pv -L ever guaranteed) enforces the optional
-# $transfer_rate_limit.
+# later burst, which is all pv -L ever guaranteed) enforces the effective
+# rate: the minimum of the optional $transfer_rate_limit and every
+# per-enclosure cap (lib/enclosure_rate.py — the shared resolver) of every
+# enclosure touched by the transfer's source and destination pools. An
+# enclosure cap applies on its own, so transfers without an activity limit
+# (sever-vm-clone's engine copies) are capped too. Resolver failures fail
+# open: a loud WARN and the activity limit as before caps existed, never a
+# blocked transfer.
 #
-# The library loads its own dependency (bashinit).
+# The library loads its own dependency (bashinit) — but only when the
+# harness functions are actually missing: every consumer sources bashinit
+# first, a re-run would clobber the session log, and strictly remote
+# contexts (clone-vm's storage-side heredoc) may have no ~/bashinit at all.
 
-source ~/bashinit
-bashinit
+if [[ $(type -t log_msg 2>/dev/null) != "function" ]]; then
+    source ~/bashinit
+    bashinit
+fi
 
 # Abort (discard) a receive resume token on a destination dataset.
 # Dry-run aware: honors the caller's $dryrun ('N' = really abort).
@@ -97,13 +108,89 @@ function transfer_pacer {
     [[ -n "${_transfer_pacer:-}" ]]
 }
 
+# Resolve the per-enclosure rate resolver (lib/enclosure_rate.py) once into
+# _transfer_resolver — same layout law as the pacer: the helper lives beside
+# this library in every layout, so BASH_SOURCE's own directory is
+# authoritative. $ZFSUTILITIES_ENCLOSURE_RATE overrides the location for
+# tests and unusual deployments. Returns 1 when not found; callers fail
+# open, never fatally.
+function transfer_resolver {
+    local candidate="${ZFSUTILITIES_ENCLOSURE_RATE:-}"
+    if [[ -n "$candidate" ]]; then
+        # Re-check every call: tests repoint the env at per-test fakes, and
+        # a vanished override must not leave a stale resolution behind.
+        _transfer_resolver=""
+        [[ -x "$candidate" ]] && _transfer_resolver="$candidate"
+    elif [[ -z "${_transfer_resolver:-}" ]]; then
+        candidate="$(dirname "${BASH_SOURCE[0]}")/enclosure_rate.py"
+        [[ -x "$candidate" ]] && _transfer_resolver="$candidate"
+    fi
+    [[ -n "${_transfer_resolver:-}" ]]
+}
+
+# Resolve the effective rate for one transfer: the minimum of $1 (the
+# per-activity rate limit, empty = unlimited) and every enclosure cap of
+# the pools named by the remaining pool-or-dataset arguments (pool = first
+# path component; empty arguments contribute nothing). Prints the winning
+# rate (empty = unlimited). Fails open per campaign policy: a missing
+# resolver or any resolver failure logs a loud WARN and prints the activity
+# limit unchanged — a transfer never blocks on an enclosure-scan hiccup.
+# Logs an INFO when an enclosure cap changes the pace.
+function transfer_resolve_rate {
+    local rate_limit="$1"
+    shift
+    local -a pools=()
+    local target pool dup p
+    for target in "$@"; do
+        pool="${target%%/*}"
+        [[ -n "$pool" ]] || continue
+        dup=0
+        for p in "${pools[@]}"; do
+            [[ "$p" == "$pool" ]] && dup=1
+        done
+        [[ $dup -eq 0 ]] && pools+=("$pool")
+    done
+    if [[ ${#pools[@]} -eq 0 ]]; then
+        # No endpoints name a pool (token-only oddity) — nothing to resolve
+        # against; the activity limit stands alone.
+        printf '%s' "$rate_limit"
+        return 0
+    fi
+    if ! transfer_resolver; then
+        log_msg "WARN: Enclosure rate resolution failed" \
+            "(enclosure_rate.py not found); ignoring enclosure caps for this transfer"
+        printf '%s' "$rate_limit"
+        return 0
+    fi
+    local combined=""
+    # The resolver's stderr flows straight through to the session log (its
+    # own failure text lands right above the WARN below); only its stdout
+    # is the rate, so discovery warnings can never corrupt the value.
+    if ! combined=$("$_transfer_resolver" --min-with "$rate_limit" "${pools[@]}"); then
+        log_msg "WARN: Enclosure rate resolution failed;" \
+            "ignoring enclosure caps for this transfer"
+        printf '%s' "$rate_limit"
+        return 0
+    fi
+    if [[ -n "$combined" && "$combined" != "$rate_limit" ]]; then
+        log_msg "INFO: Enclosure rate cap applied: ${combined}"
+    fi
+    printf '%s' "$combined"
+}
+
 # Build the pacing segment for a transfer into the global transfer_pace_args
-# array: `python3 <pacer> <rate>` when $transfer_rate_limit is set, empty
-# otherwise. Returns 1 when a rate is set but the pacer cannot be resolved.
-# Usage: transfer_pace_args
+# array: `python3 <pacer> <rate>` when the effective rate — the minimum of
+# $transfer_rate_limit and the enclosure caps of the pools named by the
+# send/recv targets — is non-empty, and empty otherwise (no pacing stage:
+# byte-identical to the pre-cap pipelines). Returns 1 when a rate is active
+# but the pacer cannot be resolved.
+# Usage: transfer_pace_args <send_target> <recv_target>
 function transfer_pace_args {
     transfer_pace_args=()
-    local rate_limit="${transfer_rate_limit:-}"
+    local send_target="${1:-}" recv_target="${2:-}"
+    local rate_limit
+    rate_limit=$(transfer_resolve_rate "${transfer_rate_limit:-}" \
+        "$send_target" "$recv_target")
     if [[ -n "$rate_limit" ]]; then
         transfer_pacer || return 1
         transfer_pace_args=(python3 "$_transfer_pacer" "$rate_limit")
@@ -129,7 +216,7 @@ function transfer_do {
     local send_target="$6" recv_target="$7" send_target2="${8:-}"
 
     transfer_pv_args "$datatosend" "$use_pv"
-    if ! transfer_pace_args; then
+    if ! transfer_pace_args "$send_target" "$recv_target"; then
         log_msg "FATAL: Rate limit set but pace_stream.py not found"
         return 1
     fi

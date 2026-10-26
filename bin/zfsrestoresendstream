@@ -59,6 +59,36 @@ function restoresendstream {
         read -rp 'Press enter to continue.'
     fi
 
+    # Rate governance: pace each receive at the enclosure cap of the
+    # destination pool (resolved once for the whole restore; the source is
+    # a file, so only the destination pool can be capped). Fail open: a
+    # resolver failure WARNs and the restore proceeds unpaced, exactly as
+    # before caps existed. With no cap configured the pipeline is
+    # byte-identical (no pacer stage).
+    local rate_limit="" resolver pacer
+    resolver="${ZFSUTILITIES_ENCLOSURE_RATE:-$(
+        find_zfsutility_script enclosure_rate.py 2>/dev/null || true)}"
+    if [[ -n "$resolver" && -x "$resolver" ]]; then
+        if ! rate_limit=$("$resolver" --min-with "" "${destfs%%/*}"); then
+            log_msg "WARN: Enclosure rate resolution failed;" \
+                "ignoring enclosure caps for this transfer"
+            rate_limit=""
+        fi
+    else
+        log_msg "WARN: Enclosure rate resolution failed" \
+            "(enclosure_rate.py not found); ignoring enclosure caps for this transfer"
+    fi
+    local -a pace_argv=()
+    if [[ -n "$rate_limit" ]]; then
+        pacer=$(find_zfsutility_script pace_stream.py 2>/dev/null || true)
+        if [[ -z "$pacer" ]]; then
+            log_msg "FATAL: Rate limit set but pace_stream.py not found"
+            source "$(find_zfsutility_script bashreturn)" 8
+        fi
+        log_msg "INFO: Enclosure rate cap applied: ${rate_limit}"
+        pace_argv=(python3 "$pacer" "$rate_limit")
+    fi
+
     for file in "${files[@]}"; do
         # Get the text after the last '/'. Then get the text before the '.'.
         local destfile
@@ -73,7 +103,7 @@ function restoresendstream {
             source "$(find_zfsutility_script bashreturn)" 8
         fi
         local receive_lock="$zfslock_id"
-        if ! pv "$file" | zfs receive -v "$fulldestfs"; then
+        if ! pv "$file" | "${pace_argv[@]}" | zfs receive -v "$fulldestfs"; then
             zfslock_release "$receive_lock" || true
             log_msg 'FATAL: Unable to restore file.'
             source "$(find_zfsutility_script bashreturn)" 8

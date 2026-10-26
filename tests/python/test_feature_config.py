@@ -231,6 +231,49 @@ class TestMassDeleteConfig(unittest.TestCase):
         self.assertEqual(md["snapshot_has"], "weekly")
 
 
+class TestEnclosuresConfig(unittest.TestCase):
+    """Enclosures section ({id: {name, max_rate}}) getters and setters."""
+
+    def test_get_enclosures_config_creates_empty_section(self):
+        config = {}
+        data = feature_config.get_enclosures_config(config)
+        self.assertEqual(data, {})
+        self.assertIn("enclosures", config)
+
+    def test_get_enclosures_config_preserves_values(self):
+        config = {"enclosures": {"a1b2c3d4e5": {"name": "fivebays", "max_rate": "100M"}}}
+        data = feature_config.get_enclosures_config(config)
+        self.assertEqual(data, {"a1b2c3d4e5": {"name": "fivebays", "max_rate": "100M"}})
+
+    def test_get_enclosures_config_normalizes_entries(self):
+        config = {
+            "enclosures": {
+                "abc123": {"name": "Three Amigos"},  # missing max_rate
+                "def456": {"max_rate": "50M"},  # missing name
+                "notadict": "garbage",
+            }
+        }
+        data = feature_config.get_enclosures_config(config)
+        self.assertEqual(data["abc123"], {"name": "Three Amigos", "max_rate": ""})
+        self.assertEqual(data["def456"], {"name": "", "max_rate": "50M"})
+        self.assertEqual(data["notadict"], {"name": "", "max_rate": ""})
+
+    def test_save_enclosures_config(self):
+        with temp_config_dir():
+            config = {}
+            feature_config.save_enclosures_config(
+                config, {"a1b2c3d4e5": {"name": "fivebays", "max_rate": ""}}
+            )
+            self.assertEqual(
+                config["enclosures"],
+                {"a1b2c3d4e5": {"name": "fivebays", "max_rate": ""}},
+            )
+            self.assertEqual(
+                feature_config.get_enclosures_config(config),
+                {"a1b2c3d4e5": {"name": "fivebays", "max_rate": ""}},
+            )
+
+
 class TestPruneLabelConfig(unittest.TestCase):
     """Global retention prune label helpers."""
 

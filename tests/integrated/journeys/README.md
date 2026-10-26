@@ -51,13 +51,15 @@ Scenarios that begin *after* installation skip all of the above:
    boot-health-gated at build time), so clones need no per-journey
    `apt upgrade`.
 
-## The stale template is j10's old-version carrier
+## The stale template is the release-upgrade journeys' old-version carrier
 
 The storage template's PRODUCT version is deliberately allowed to lag
 the tree under test: a clone of a stale template is a genuinely
 installed system running an older release, which is exactly the
-starting state the release-upgrade journey (j10) needs — "clone →
-upgrade to today's tree" with zero extra infrastructure.  Do not
+starting state the release-upgrade journeys (j10, j12) need — "clone →
+upgrade to today's tree" with zero extra infrastructure.  Both share
+the upgrade staging in `common.sh` (`itf_journey_stage_upgrade_env`:
+premise gate, user download, change-scan baseline, served release).  Do not
 rebuild the template just because it is stale; j10 fails fast with a
 PREP hint when the premise breaks (template version no longer strictly
 older than the tree under test).  Under `ITF_SW_SOURCE=dev-tarball`,
@@ -133,3 +135,4 @@ missing — the same starting state a fresh install produces.
 | j09-prereq-apt-failure | fresh Debian with a dead-apt proxy; installer surfaces the remediation failure cleanly — nothing deployed, apt heals when the drop-in is removed |
 | j10-release-upgrade | clone start from the stale template (old-version carrier): download the new release, decline the upgrade offer (system untouched), inject local modifications, upgrade via the new tree's `./bin/upgrade-zfsutilities` — scan detects and salvages them, deploys the new version NOT activated — then `switch-version`, retention/wiring verify, up-to-date rerun |
 | j11-payload-e2e | clone start + test pools (j04 recipe) + today's tree, then the GUI-payload e2e matrix via `tests/integrated/e2e/payload-e2e-driver.py`: offsite chain steps with holds, incrementals, rollback, resume tokens, scrub pause, backup/prune/rsync payloads, and the strict-mode-flipped leaf orchestrators — the full-matrix context for the payload exercises (unprivileged containers run only the dry-run layer; see the developer guide's payload e2e section) |
+| j12-interrupted-upgrade | clone start from the stale template + the shared upgrade staging (j10's premise/baseline/serve): SIGTERM the upgrade in its early phase (EXIT trap must clean staging; nothing deployed/salvaged/activated), SIGKILL the process group mid-deploy (partial `versions/<v>` without MANIFEST, salvage kept, running system untouched), then the self-repair — re-run `upgrade-zfsutilities` re-detects and re-salvages the injected modifications and repairs the partial dir in place — `switch-version`, wiring verify, up-to-date rerun |

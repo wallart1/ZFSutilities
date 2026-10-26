@@ -89,7 +89,6 @@ make_rescan_mock() {
         done
     } > "$p"
     chmod +x "$p"
-    _rescan_scripts+=("$p")
     printf '%s' "$p"
 }
 
@@ -118,6 +117,10 @@ reset_mocks() {
     export CHECK_VM_DISK_PATHS_VM_REFS_FILE CHECK_VM_DISK_PATHS_BY_PATH_DIR
     local p
     p=$(make_rescan_mock)
+    # The append must live here, parent-side: make_rescan_mock runs in a
+    # command substitution, where an array append never reaches this shell
+    # and local_cleanup's rm -f loop would go over an empty list.
+    _rescan_scripts+=("$p")
     CHECK_VM_DISK_PATHS_RESCAN_STORAGE="$p"
     export CHECK_VM_DISK_PATHS_RESCAN_STORAGE
 
@@ -288,6 +291,7 @@ test_recover_local_rescan_fixes() {
     printf 'VM|threeamigos:0|101|testvm|scsi0\n' > "$_vm_refs_file"
     CHECK_VM_DISK_PATHS_RESCAN_STORAGE=$(make_rescan_mock \
         "ln -s /dev/null '${_bypath_dir}/$(link_name threeamigos 0)'")
+    _rescan_scripts+=("$CHECK_VM_DISK_PATHS_RESCAN_STORAGE")
     export CHECK_VM_DISK_PATHS_RESCAN_STORAGE
     test_start "--recover tries the local rescan first and needs no ssh when it suffices"
 

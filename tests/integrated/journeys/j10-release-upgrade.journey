@@ -13,17 +13,18 @@
 # release destroys j10's premise (the version gate below fails fast
 # with that hint instead of half-running).
 #
-# Stage walk: download the new release the way the user does (the
-# upgrader runs FROM the downloaded tree — deployments older than
-# 0.125.0, like the template's 0.118.0, have no upgrade-zfsutilities
-# on PATH; the command ships in the release that introduces it) ->
+# Stage walk: the shared upgrade staging (itf_journey_stage_upgrade_env:
+# premise gate, user download, change-scan baseline, served release) ->
 # decline the download offer (system untouched) -> inject local
 # modifications into the deployed old tree -> run the upgrade (scan
 # detects MOD/ADD, lists them, asks, salvages, deploys the new version
 # WITHOUT activating) -> verify the deployed-not-activated state and
 # the salvage archive -> activate with switch-version -> verify
 # wiring/config/version retention -> rerun the upgrade and see
-# "Nothing to upgrade".
+# "Nothing to upgrade".  The upgrader runs FROM the downloaded tree —
+# deployments older than 0.125.0, like the template's 0.118.0, have no
+# upgrade-zfsutilities on PATH; the command ships in the release that
+# introduces it.
 #
 # dev-tarball source: ZFSUTILITIES_RELEASE_API points the upgrade at an
 # itf-served "latest release" (latest.json + a release-shaped tarball of
@@ -65,218 +66,14 @@ journey_main() {
     itf_journey_verify_installed "$guest_ip"
 
     # ------------------------------------------------------------------
-    # Stage V: the upgrade premise — active version strictly older than
-    # the tree under test
+    # Stage E: the shared upgrade staging — premise gate, user download,
+    # change-scan baseline, served release (common.sh)
     # ------------------------------------------------------------------
 
-    local active_version target_version repo_root
-    # shellcheck disable=SC2016  # the $ expansions run in the guest
-    active_version="$(itf_guest_exec "$guest_ip" \
-        'basename "$(readlink /usr/local/lib/zfsutilities/current)"')" || active_version=""
-    if [[ -n "$active_version" ]]; then
-        itf_step pass "old version deployed" \
-            "template clone runs $active_version (current symlink)"
-    else
-        itf_step fail "old version deployed" "cannot read the current symlink"
-        return 1
-    fi
-
-    repo_root="$ITF_ROOT/../.."
-    if [[ "$ITF_SW_SOURCE" == "dev-tarball" ]]; then
-        target_version="$(cat "$repo_root/VERSION" 2>/dev/null || true)"
-    else
-        target_version="$(curl -fsS --max-time 30 \
-            "https://api.github.com/repos/${ITF_GITHUB_REPO}/releases/latest" \
-            | awk -F'"' '/tag_name/{print $4; exit}' | sed 's/^v//')" || target_version=""
-    fi
-    if [[ -z "$target_version" ]]; then
-        itf_step fail "new version resolved" \
-            "cannot determine the tree-under-test version (sw-source $ITF_SW_SOURCE)"
-        return 1
-    fi
-    # sort -V decides "older": the premise holds when the active version
-    # is the strictly smaller of the two (a rebuilt template carrying
-    # the tree's own version makes them equal and fails here).
-    local oldest
-    oldest="$(printf '%s\n%s\n' "$active_version" "$target_version" \
-        | LC_ALL=C sort -V | head -1)"
-    if [[ "$active_version" != "$target_version" && "$oldest" == "$active_version" ]]; then
-        itf_step pass "upgrade premise holds" \
-            "$active_version (deployed) < $target_version (tree under test)"
-    else
-        itf_step fail "upgrade premise holds" \
-            "template carries $active_version, tree under test is $target_version —" \
-            "j10 needs the storage template STALE (older than the tree under test)." \
-            "PREP: do NOT rebuild the template; run j10 from a newer tree," \
-            "or point ITF_SW_SOURCE at the latest release"
-        return 1
-    fi
-
-    # ------------------------------------------------------------------
-    # Stage N: the user's download — the tree under test lands in
-    # /root/ZFSutilities; the upgrader below runs from it
-    # ------------------------------------------------------------------
-
-    itf_journey_stage_download "$guest_ip" || return 1
-
-    # ------------------------------------------------------------------
-    # Stage P: the change-scan baseline for the OLD version.  With no
-    # MANIFEST.sha256 (deployments older than 0.125.0), the scan needs
-    # the active version's release tarball — and many released versions
-    # were never tagged on GitHub (0.118.0 among them: the default tag
-    # URL 404s, the upgrade warns "local modifications CANNOT be
-    # detected" and proceeds unprotected — observed live, FINDINGS
-    # F-025).  When the tag is missing, the journey captures the
-    # guest's as-deployed active tree (pristine by construction at
-    # this point — nothing has touched it yet) and offers it via the
-    # documented ZFSUTILITIES_TAG_TARBALL_URL override, the way an
-    # operator with the original tree would.
-    # ------------------------------------------------------------------
-
-    local tag_url
-    tag_url="https://github.com/${ITF_GITHUB_REPO}/archive/refs/tags/v${active_version}.tar.gz"
-    local tag_http="" pristine_env=""
-    tag_http="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -L \
-        "$tag_url" 2>/dev/null)" || tag_http=""
-    local dev_ip="" serve_dir=""
-    if [[ "$tag_http" == "200" ]]; then
-        itf_step pass "change-scan baseline available" \
-            "GitHub has the v$active_version tag tarball — no override needed"
-    else
-        dev_ip="$(itf_dev_ip)"
-        if [[ -z "$dev_ip" ]]; then
-            itf_step fail "change-scan baseline available" \
-                "v$active_version untagged on GitHub and ITF_DEV_IP unset" \
-                "(cannot serve the captured pristine tree)"
-            return 1
-        fi
-        serve_dir="$ITF_RUN_DIR/serve"
-        mkdir -p "$serve_dir"
-        # docs/site is excluded from change scans anyway; leaving it out
-        # keeps the pull small.  One top-level dir = release-tarball
-        # shape, which the upgrade's extractor requires.
-        if ! itf_guest_exec "$guest_ip" \
-                "tar -czf /root/itf-pristine-$active_version.tar.gz \
-                    --exclude='$active_version/docs/site' \
-                    -C $vb/versions '$active_version'" \
-                > "$ITF_RUN_DIR/guest-pristine-pack.log" 2>&1 \
-            || ! itf_guest_get "$guest_ip" "/root/itf-pristine-$active_version.tar.gz" \
-                "$serve_dir/pristine-$active_version.tar.gz" \
-                > "$ITF_RUN_DIR/guest-pristine-pull.log" 2>&1; then
-            itf_step fail "change-scan baseline available" \
-                "pristine capture/pull failed — see guest-pristine-{pack,pull}.log"
-            return 1
-        fi
-        # %s is where the upgrade substitutes the version (upgrade-lib's
-        # ZFSUTILITIES_TAG_TARBALL_URL template).
-        local pristine_url
-        pristine_url="http://${dev_ip}:${ITF_HTTP_PORT}/pristine-%s.tar.gz"
-        pristine_env="ZFSUTILITIES_TAG_TARBALL_URL=${pristine_url}"
-        itf_step pass "change-scan baseline available" \
-            "v$active_version untagged on GitHub — serving the captured" \
-            "as-deployed tree via ZFSUTILITIES_TAG_TARBALL_URL"
-    fi
-
-    # ------------------------------------------------------------------
-    # Stage S: the itf HTTP server, up when anything must be served —
-    # dev-tarball mode always ("latest release" for the upgrade target:
-    # latest.json + a release-shaped tarball of the current dev tree);
-    # release mode only when the pristine override above is active.
-    # ------------------------------------------------------------------
-
-    local tarball
-    local upgrade_cmd="cd /root/ZFSutilities && ./bin/upgrade-zfsutilities"
-    if [[ "$ITF_SW_SOURCE" == "dev-tarball" ]]; then
-        if [[ -z "$dev_ip" ]]; then
-            dev_ip="$(itf_dev_ip)"
-            if [[ -z "$dev_ip" ]]; then
-                itf_step fail "served release ready" "set ITF_DEV_IP in the site config"
-                return 1
-            fi
-        fi
-        serve_dir="$ITF_RUN_DIR/serve"
-        mkdir -p "$serve_dir"
-        tarball="$serve_dir/zfsutilities-$target_version.tar.gz"
-        # Release shape: exactly one top-level directory (GitHub tarball
-        # layout) — upgrade_lib_extract_tarball rejects anything else.
-        # Same exclude set as itf_journey_stage_download's dev tarball.
-        if ! tar -czf "$tarball" -C "$repo_root" \
-                --exclude=.git \
-                --exclude=.zcode \
-                --exclude=docs/site \
-                --exclude=tests/integrated/cache \
-                --exclude=tests/integrated/results \
-                --exclude=tests/integrated/site/config \
-                --exclude=__pycache__ \
-                --exclude='*.pyc' \
-                --transform="s@^\.@zfsutilities-$target_version@" \
-                . 2> "$ITF_RUN_DIR/dev-tarball.log"; then
-            itf_step fail "served release ready" \
-                "dev tarball build failed (see dev-tarball.log)"
-            return 1
-        fi
-        # The fields upgrade-zfsutilities reads: tag_name (the version),
-        # html_url (release notes link), tarball_url (the download).
-        cat > "$serve_dir/latest.json" <<EOF
-{
-  "tag_name": "v$target_version",
-  "html_url": "http://${dev_ip}:${ITF_HTTP_PORT}/",
-  "tarball_url": "http://${dev_ip}:${ITF_HTTP_PORT}/zfsutilities-$target_version.tar.gz"
-}
-EOF
-    elif [[ -z "$serve_dir" ]]; then
-        itf_step info "served release ready" \
-            "release source with a tagged baseline: the guest talks to real" \
-            "GitHub — no override, no server"
-    fi
-    if [[ -n "$serve_dir" ]]; then
-        # Abort paths must not leak the server onto the port: the trap
-        # outlives the stages (J_PIDFILE2 is cleared once stopped).
-        _j10_exit_cleanup() {
-            [[ -n "${J_PIDFILE2:-}" ]] && itf_http_stop "$J_PIDFILE2"
-            return 0
-        }
-        J_PIDFILE2="$ITF_RUN_DIR/http-j10.pid"
-        if ! itf_http_serve "$serve_dir" "$J_PIDFILE2"; then
-            itf_step fail "served release ready" \
-                "port $ITF_HTTP_PORT unavailable — see $ITF_RUN_DIR/http-j10.log"
-            J_PIDFILE2=""
-            return 1
-        fi
-        trap _j10_exit_cleanup EXIT
-        # Probe what we serve before spending the run on it — same
-        # rationale as the preseed probe in stage_os.
-        local probe_ok=0 probe_url
-        for probe_url in \
-            "http://127.0.0.1:${ITF_HTTP_PORT}/latest.json" \
-            "http://127.0.0.1:${ITF_HTTP_PORT}/zfsutilities-$target_version.tar.gz" \
-            "http://127.0.0.1:${ITF_HTTP_PORT}/pristine-$active_version.tar.gz"; do
-            [[ -f "$serve_dir/$(basename "$probe_url")" ]] || continue
-            curl -fsS --max-time 10 -o /dev/null "$probe_url" || probe_ok=1
-        done
-        if (( probe_ok == 0 )); then
-            local served_what="pristine v$active_version baseline"
-            [[ "$ITF_SW_SOURCE" == "dev-tarball" ]] \
-                && served_what="latest.json + v$target_version tarball + $served_what"
-            itf_step pass "served release ready" \
-                "$served_what at http://${dev_ip}:${ITF_HTTP_PORT}/"
-        else
-            itf_step fail "served release ready" "probe fetch failed"
-            itf_http_stop "$J_PIDFILE2"
-            J_PIDFILE2=""
-            return 1
-        fi
-    fi
-    # Env assignments sit on the upgrader invocation itself: a prefix on
-    # the leading cd would apply only to the cd.
-    if [[ "$ITF_SW_SOURCE" == "dev-tarball" ]]; then
-        local api_env
-        api_env="ZFSUTILITIES_RELEASE_API=http://${dev_ip}:${ITF_HTTP_PORT}/latest.json"
-        upgrade_cmd="cd /root/ZFSutilities && $api_env${pristine_env:+ $pristine_env}"
-        upgrade_cmd+=" ./bin/upgrade-zfsutilities"
-    elif [[ -n "$pristine_env" ]]; then
-        upgrade_cmd="cd /root/ZFSutilities && $pristine_env ./bin/upgrade-zfsutilities"
-    fi
+    itf_journey_stage_upgrade_env "$gname" || return 1
+    local active_version="$J_ACTIVE_VERSION"
+    local target_version="$J_TARGET_VERSION"
+    local upgrade_cmd="$J_UPGRADE_CMD"
 
     # ------------------------------------------------------------------
     # Stage D: decline the download offer — nothing must change

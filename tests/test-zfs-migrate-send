@@ -152,6 +152,7 @@ reset_state() {
     fromsnap=""
     transfer_rate_limit=""
     ZFSUTILITIES_LOG_INHERIT=""
+    unset ZFSUTILITIES_TEST_ENCLOSURE_RATE
 }
 
 get_log() {
@@ -551,6 +552,62 @@ test_pacer_rate_limit_headless() {
 }
 
 # ---------------------------------------------------------------------------
+# Per-enclosure rate governance (endpoint-aware pacing)
+# ---------------------------------------------------------------------------
+
+test_pacer_enclosure_cap_without_activity_rate() {
+    test_start "an enclosure cap paces the migrate transfer with no activity rate"
+    reset_state
+    export ZFSUTILITIES_TEST_ENCLOSURE_RATE="40m"
+    local pace_capture="$_mock_zfs_state_dir/pace_args_cap"
+    : > "$pace_capture"
+    python3() {
+        if [[ "${1:-}" != *pace_stream.py ]]; then
+            command python3 "$@"
+            return $?
+        fi
+        echo "${*:2}" >> "$pace_capture"
+        cat
+        return 0
+    }
+    zfs_migrate_send 2>/dev/null
+    local rc=$?
+    unset -f python3
+    unset ZFSUTILITIES_TEST_ENCLOSURE_RATE
+    assert_rc 0 "$rc"
+    local pace_args
+    pace_args=$(cat "$pace_capture" 2>/dev/null)
+    assert_contains "$pace_args" "40m"
+    assert_contains "$(get_log)" "INFO: Enclosure rate cap applied: 40m"
+}
+
+test_resolver_called_with_endpoint_pools() {
+    test_start "the resolver is consulted with the source and destination pools"
+    reset_state
+    sourcefs="tank/src/ds"
+    destfs="backup/dest/ds"
+    local capture="$_mock_zfs_state_dir/resolver_argv"
+    : > "$capture"
+    local fake="$_mock_zfs_state_dir/fake_resolver"
+    {
+        echo '#!/usr/bin/bash'
+        printf '%s\n' "printf '%s\\n' \"\$*\" >> '$capture'"
+        printf '%s\n' "printf '\\n'"
+        echo 'exit 0'
+    } > "$fake"
+    chmod +x "$fake"
+    ZFSUTILITIES_ENCLOSURE_RATE="$fake" zfs_migrate_send 2>/dev/null
+    local rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$capture" 2>/dev/null)" \
+        "--min-with  tank backup"
+    # Unlimited answer from the resolver: no pacing stage, byte-identical
+    # pipeline to the pre-cap form.
+    assert_contains "$(get_zfs_calls)" "zfs send -Rw tank/src/ds@migrate-1"
+    assert_contains "$(get_zfs_calls)" "zfs receive -u -F -s -v backup/dest/ds"
+}
+
+# ---------------------------------------------------------------------------
 # Run all tests
 # ---------------------------------------------------------------------------
 
@@ -576,6 +633,8 @@ test_unexpected_token_error_aborts_then_fresh_send
 test_fresh_transfer_failure_returns_8
 test_pv_args_passed_with_log_inherit
 test_pacer_rate_limit_headless
+test_pacer_enclosure_cap_without_activity_rate
+test_resolver_called_with_endpoint_pools
 
 test_summary
 teardown_test_env

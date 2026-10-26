@@ -25,6 +25,7 @@ NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 source_helper rootcheck
 source_helper zfslockmanager
+source_helper transfer-lib.sh
 
 rootcheck
 
@@ -266,7 +267,12 @@ if is_single_node; then
         lock_dst="$zfslock_id"
 
         zfs snapshot "$snap"
-        zfs send "$snap" | zfs receive -o compression=lz4 -o refreservation=none "$dst_zvol"
+        # transfer_do routes the copy through the shared pacing seam, so
+        # per-enclosure rate caps apply even though clone-vm prompts no
+        # activity rate of its own; with no cap configured the pipeline is
+        # byte-identical to the plain send/receive it replaces.
+        transfer_do "Clone copy of ${src_zvol}" "" \
+            "-o compression=lz4 -o refreservation=none" "N" "0" "$snap" "$dst_zvol"
         if ! zfs destroy "${dst_zvol}@clone-to-${dstvmid}" 2>/dev/null; then
             source_helper zfs-diagnose-busy
             diagnose_dataset_busy "${dst_zvol}@clone-to-${dstvmid}"
@@ -433,6 +439,10 @@ old_lun="$4"
 pool="$5"
 disknum="$6"
 
+# Shared transfer engine: the copy below goes through transfer_do so
+# per-enclosure rate caps apply on the storage host where the pools live.
+source_helper transfer-lib.sh
+
 src_zvol="${pool}/proxmox/vm-${src_vmid}-disk-${disknum}"
 dst_zvol="${pool}/proxmox/vm-${dst_vmid}-disk-${disknum}"
 dst_zvol_dev="/dev/zvol/${dst_zvol}"
@@ -450,7 +460,11 @@ zfs list -H "$src_zvol" >/dev/null 2>&1 \
 
 # Snapshot, send, receive
 zfs snapshot "$snap"
-zfs send "$snap" | zfs receive -o compression=lz4 -o refreservation=none "$dst_zvol"
+# transfer_do routes the copy through the shared pacing seam (enclosure
+# caps apply; with no cap configured the pipeline is byte-identical to the
+# plain send/receive it replaces).
+transfer_do "Clone copy of ${src_zvol}" "" \
+    "-o compression=lz4 -o refreservation=none" "N" "0" "$snap" "$dst_zvol"
 if ! zfs destroy "${dst_zvol}@clone-to-${dst_vmid}" 2>/dev/null; then
     source_helper zfs-diagnose-busy
     diagnose_dataset_busy "${dst_zvol}@clone-to-${dst_vmid}"

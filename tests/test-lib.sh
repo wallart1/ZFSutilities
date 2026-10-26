@@ -353,6 +353,36 @@ done
 unset _stale_state_dir _stale_state_pid _stale_log
 mkdir -p "$_mock_zfs_state_dir"
 
+# Hermetic default for the per-enclosure rate resolver (lib/enclosure_rate.py,
+# consulted by lib/transfer-lib.sh, lib/archive-engine.sh, and the straggler
+# scripts): every suite inherits this stub through ZFSUTILITIES_ENCLOSURE_RATE
+# so no test ever spawns the real resolver (real lsblk/udevadm/zpool scans on
+# the host). It stands in for an empty enclosures config — the --min-with
+# activity limit is answered unchanged, so paced pipelines keep their
+# pre-cap argv — and a suite that wants a cap exports
+# ZFSUTILITIES_TEST_ENCLOSURE_RATE (the stub answers with that value,
+# simulating a configured enclosure governing the transfer). Suites
+# asserting the resolver's own argv or failure paths point
+# ZFSUTILITIES_ENCLOSURE_RATE at their own fake.
+_enclosure_rate_stub="$_mock_zfs_state_dir/enclosure_rate_stub"
+cat > "$_enclosure_rate_stub" << 'EOF'
+#!/usr/bin/bash
+# Test stub for lib/enclosure_rate.py — see tests/test-lib.sh.
+if [[ "${1:-}" == "--min-with" && -n "${ZFSUTILITIES_TEST_ENCLOSURE_RATE:-}" ]]; then
+    printf '%s\n' "$ZFSUTILITIES_TEST_ENCLOSURE_RATE"
+    exit 0
+fi
+if [[ "${1:-}" == "--min-with" ]]; then
+    printf '%s\n' "${2:-}"
+    exit 0
+fi
+printf '\n'
+exit 0
+EOF
+chmod +x "$_enclosure_rate_stub"
+export ZFSUTILITIES_ENCLOSURE_RATE="${ZFSUTILITIES_ENCLOSURE_RATE:-$_enclosure_rate_stub}"
+unset _enclosure_rate_stub
+
 # Date mocking: the canonical snapshot-name timestamp is UTC rendered with a
 # literal Z (snapname_timestamp in bin/bashinit), so the mock state is the Z
 # string itself.  mock_date accepts the historic local-ISO instant and

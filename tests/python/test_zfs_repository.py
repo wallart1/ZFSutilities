@@ -23,6 +23,7 @@ from zfs_repository import (
     PoolRow,
     SnapshotRow,
     ZfsRepository,
+    _enclosure_rate_module,
     _parse_lsblk_partitions,
     build_add_vdev_command,
     build_apply_holds_command,
@@ -1154,6 +1155,101 @@ class TestValidRateLimit(unittest.TestCase):
     def test_rejects_non_grammar(self):
         for text in ("abc", "10x", "1.5m", "-5m", "100 mb", "100KiBx", "k", "i"):
             self.assertFalse(valid_rate_limit(text), text)
+
+
+class TestEffectiveTransferRate(unittest.TestCase):
+    """effective_transfer_rate delegates to the shared lib resolver, injectably."""
+
+    def _enclosure(self, enclosure_id, pools):
+        from enclosure_inventory import EnclosureInfo
+
+        return EnclosureInfo(
+            id=enclosure_id,
+            kind="usb",
+            location=f"usb2/2-{enclosure_id[:1]}",
+            members=[f"sd{enclosure_id[:1]}"],
+            pools=list(pools),
+        )
+
+    def _inventory(self, enclosures):
+        class _FakeInventory:
+            def discover(self):
+                return list(enclosures)
+
+        return _FakeInventory()
+
+    def _config(self, **by_id):
+        return {"enclosures": by_id}
+
+    def test_min_of_activity_and_touching_caps(self):
+        fivebays = self._enclosure("aaa", ["fivebays"])
+        offsite_box = self._enclosure("bbb", ["offsite"])
+        repo = ZfsRepository(enclosure_inventory=self._inventory([fivebays, offsite_box]))
+        config = self._config(aaa={"max_rate": "60M"}, bbb={"max_rate": "200M"})
+        with patch("config_core.load_config", return_value=config):
+            self.assertEqual(repo.effective_transfer_rate(["fivebays", "offsite"], "100M"), "60M")
+
+    def test_untouched_and_uncapped_enclosures_leave_activity_unchanged(self):
+        fivebays = self._enclosure("aaa", ["fivebays"])
+        other = self._enclosure("bbb", ["offsite"])
+        repo = ZfsRepository(enclosure_inventory=self._inventory([fivebays, other]))
+        config = self._config(aaa={"max_rate": ""}, bbb={"max_rate": "5M"})
+        with patch("config_core.load_config", return_value=config):
+            self.assertEqual(repo.effective_transfer_rate(["fivebays"], "100M"), "100M")
+
+    def test_no_constraints_is_unlimited(self):
+        repo = ZfsRepository(enclosure_inventory=self._inventory([]))
+        with patch("config_core.load_config", return_value=self._config()):
+            self.assertEqual(repo.effective_transfer_rate(["tank"], ""), "")
+
+    def test_resolver_failure_fails_open_to_activity_rate_with_warn(self):
+        class _ExplodingInventory:
+            def discover(self):
+                raise RuntimeError("scan died")
+
+        repo = ZfsRepository(enclosure_inventory=_ExplodingInventory())
+        with patch("config_core.load_config", return_value=self._config()):
+            with capture_logs() as logs:
+                self.assertEqual(repo.effective_transfer_rate(["tank"], "100M"), "100M")
+        self.assertTrue(any("enclosure rate resolution failed" in msg for msg in logs))
+
+    def test_matches_the_shared_lib_resolver(self):
+        fivebays = self._enclosure("aaa", ["fivebays"])
+        inventory = self._inventory([fivebays])
+        config = self._config(aaa={"max_rate": "60M"})
+        repo = ZfsRepository(enclosure_inventory=inventory)
+        with patch("config_core.load_config", return_value=config):
+            via_repo = repo.effective_transfer_rate(["fivebays"], "100M")
+        via_lib = _enclosure_rate_module().effective_rate(
+            ["fivebays"], "100M", inventory=inventory, config=config
+        )
+        self.assertEqual(via_repo, via_lib, "60M")
+
+    def test_lazy_inventory_construction_reuses_the_repository(self):
+        constructed = []
+
+        class _FakeInventoryClass:
+            def __init__(self, zfs_repository=None):
+                constructed.append(zfs_repository)
+
+            def discover(self):
+                return [fivebays]
+
+        fivebays = self._enclosure("aaa", ["fivebays"])
+        repo = ZfsRepository()
+        with patch("enclosure_inventory.EnclosureInventory", _FakeInventoryClass):
+            with patch(
+                "config_core.load_config", return_value=self._config(aaa={"max_rate": "60M"})
+            ):
+                self.assertEqual(repo.effective_transfer_rate(["fivebays"], "100M"), "60M")
+        self.assertEqual(constructed, [repo])
+        # The inventory is cached, not rebuilt per call.
+        with patch("enclosure_inventory.EnclosureInventory", _FakeInventoryClass):
+            with patch(
+                "config_core.load_config", return_value=self._config(aaa={"max_rate": "60M"})
+            ):
+                repo.effective_transfer_rate(["fivebays"], "100M")
+        self.assertEqual(len(constructed), 1)
 
 
 class TestRunPoolCommand(unittest.TestCase):

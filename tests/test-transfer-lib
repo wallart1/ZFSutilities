@@ -32,6 +32,7 @@ reset_state() {
     ZFSUTILITIES_LOG_INHERIT=""
     dryrun="N"
     _mock_zfs_props=()
+    unset _transfer_resolver
     : > "$_zfs_capture_file"
     _mock_zfs_send_size="0"
     _mock_zfs_send_rc=0
@@ -486,6 +487,169 @@ test_transfer_do_failure_logs_fatal() {
 }
 
 # ---------------------------------------------------------------------------
+# Endpoint-aware pacing (per-enclosure rate governance)
+# ---------------------------------------------------------------------------
+
+# Write a resolver fake at $1 that appends its argv to $2 and prints $3
+# (empty answer = unlimited).
+make_resolver_fake() {
+    local fake="$1" capture="$2" answer="$3"
+    {
+        echo '#!/usr/bin/bash'
+        printf '%s\n' "printf '%s\\n' \"\$*\" >> '$capture'"
+        if [[ -n "$answer" ]]; then
+            printf '%s\n' "printf '%s\\n' '$answer'"
+        else
+            printf '%s\n' "printf '\\n'"
+        fi
+        echo 'exit 0'
+    } > "$fake"
+    chmod +x "$fake"
+}
+
+test_pace_args_cap_without_activity_rate() {
+    test_start "an enclosure cap paces the transfer with no activity rate set"
+    reset_state
+    ZFSUTILITIES_TEST_ENCLOSURE_RATE="40M" \
+        transfer_pace_args "tank/src/ds@snap" "backup/dest" 2>/dev/null
+    local -a argv=("${transfer_pace_args[@]}")
+    if [[ ${#argv[@]} -ne 3 || "${argv[2]}" != "40M" ]]; then
+        test_fail "Expected pacer argv at 40M, got: ${argv[*]}"
+        return
+    fi
+    assert_contains "$(get_log)" "INFO: Enclosure rate cap applied: 40M"
+}
+
+test_pace_args_resolver_min_combination_call() {
+    test_start "the resolver is called with --min-with and both endpoint pools"
+    reset_state
+    transfer_rate_limit="50M"
+    local capture="$_mock_zfs_state_dir/resolver_argv"
+    : > "$capture"
+    make_resolver_fake "$_mock_zfs_state_dir/fake_resolver" "$capture" "30M"
+    ZFSUTILITIES_ENCLOSURE_RATE="$_mock_zfs_state_dir/fake_resolver" \
+        transfer_pace_args "tank/src/ds@snap" "backup/dest" 2>/dev/null
+    local argv seen
+    argv="${transfer_pace_args[*]}"
+    seen=$(cat "$capture" 2>/dev/null)
+    assert_contains "$seen" "--min-with 50M tank backup"
+    if [[ "$argv" != "python3 "* || "$argv" != *" 30M" ]]; then
+        test_fail "Expected pacer at the combined rate 30M, got: $argv"
+        return
+    fi
+    assert_contains "$(get_log)" "INFO: Enclosure rate cap applied: 30M"
+}
+
+test_pace_args_resolver_same_pool_deduplicated() {
+    test_start "both endpoints in one pool resolve against it once"
+    reset_state
+    local capture="$_mock_zfs_state_dir/resolver_argv_dedupe"
+    : > "$capture"
+    make_resolver_fake "$_mock_zfs_state_dir/fake_resolver_dedupe" "$capture" ""
+    ZFSUTILITIES_ENCLOSURE_RATE="$_mock_zfs_state_dir/fake_resolver_dedupe" \
+        transfer_pace_args "tank/a@snap" "tank/b" 2>/dev/null
+    assert_equals "--min-with  tank" "$(cat "$capture" 2>/dev/null)"
+    assert_array_len 0 "${transfer_pace_args[@]}"
+}
+
+test_pace_args_resolver_failure_fails_open() {
+    test_start "a failing resolver WARNs and paces at the activity limit"
+    reset_state
+    transfer_rate_limit="50M"
+    local fake="$_mock_zfs_state_dir/failing_resolver"
+    printf '#!/usr/bin/bash\necho "enclosure_rate: rate resolution failed: boom" >&2\nexit 1\n' \
+        > "$fake"
+    chmod +x "$fake"
+    ZFSUTILITIES_ENCLOSURE_RATE="$fake" \
+        transfer_pace_args "tank/a" "backup/b" 2>/dev/null
+    local argv
+    argv="${transfer_pace_args[*]}"
+    if [[ "$argv" != "python3 "* || "$argv" != *" 50M" ]]; then
+        test_fail "Expected fail-open pacer at 50M, got: $argv"
+        return
+    fi
+    local log
+    log=$(get_log)
+    assert_contains "$log" \
+        "WARN: Enclosure rate resolution failed; ignoring enclosure caps for this transfer"
+}
+
+test_pace_args_resolver_failure_unlimited_without_rate() {
+    test_start "a failing resolver leaves an unrated transfer unpaced"
+    reset_state
+    local fake="$_mock_zfs_state_dir/failing_resolver2"
+    printf '#!/usr/bin/bash\nexit 1\n' > "$fake"
+    chmod +x "$fake"
+    ZFSUTILITIES_ENCLOSURE_RATE="$fake" \
+        transfer_pace_args "tank/a" "backup/b" 2>/dev/null
+    assert_array_len 0 "${transfer_pace_args[@]}"
+    assert_contains "$(get_log)" \
+        "WARN: Enclosure rate resolution failed; ignoring enclosure caps for this transfer"
+}
+
+test_pace_args_missing_resolver_fails_open() {
+    test_start "a missing resolver WARNs and keeps the activity limit"
+    reset_state
+    transfer_rate_limit="50M"
+    ZFSUTILITIES_ENCLOSURE_RATE="/nonexistent/enclosure_rate.py" \
+        transfer_pace_args "tank/a" "backup/b" 2>/dev/null
+    local argv
+    argv="${transfer_pace_args[*]}"
+    if [[ "$argv" != "python3 "* || "$argv" != *" 50M" ]]; then
+        test_fail "Expected fail-open pacer at 50M, got: $argv"
+        return
+    fi
+    assert_contains "$(get_log)" "WARN: Enclosure rate resolution failed"
+    assert_contains "$(get_log)" "(enclosure_rate.py not found)"
+}
+
+test_pace_args_empty_endpoints_skip_resolver() {
+    test_start "no endpoint pools means no resolver call; the rate stands alone"
+    reset_state
+    transfer_rate_limit="50M"
+    local capture="$_mock_zfs_state_dir/resolver_argv_empty"
+    : > "$capture"
+    make_resolver_fake "$_mock_zfs_state_dir/fake_resolver_empty" "$capture" "30M"
+    ZFSUTILITIES_ENCLOSURE_RATE="$_mock_zfs_state_dir/fake_resolver_empty" \
+        transfer_pace_args "" "" 2>/dev/null
+    if [[ -s "$capture" ]]; then
+        test_fail "Resolver ran without endpoint pools: $(cat "$capture")"
+        return
+    fi
+    local argv
+    argv="${transfer_pace_args[*]}"
+    if [[ "$argv" != "python3 "* || "$argv" != *" 50M" ]]; then
+        test_fail "Expected pacer at the uncombined 50M, got: $argv"
+        return
+    fi
+    test_pass
+}
+
+test_transfer_do_paces_at_combined_cap_rate() {
+    test_start "transfer_do paces the pipeline at a stubbed enclosure cap"
+    reset_state
+    local stage_capture="$_mock_zfs_state_dir/transfer_stage_cap"
+    : > "$stage_capture"
+    python3() {
+        if [[ "${1:-}" != *pace_stream.py ]]; then
+            command python3 "$@"
+            return $?
+        fi
+        echo "pacer ${*:2}" >> "$stage_capture"
+        cat
+        return 0
+    }
+    ZFSUTILITIES_TEST_ENCLOSURE_RATE="40M" \
+        transfer_do "Send/receive" "-cw" "-uv" "N" "0" "tank/src@snap" "backup/dest" \
+        2>/dev/null
+    local rc=$?
+    unset -f python3
+    assert_rc 0 "$rc"
+    assert_equals "pacer 40M" "$(cat "$stage_capture" 2>/dev/null)"
+    assert_contains "$(get_log)" "INFO: Enclosure rate cap applied: 40M"
+}
+
+# ---------------------------------------------------------------------------
 # Run all tests
 # ---------------------------------------------------------------------------
 
@@ -513,6 +677,14 @@ test_transfer_do_with_pacer_and_pv_when_inherit
 test_transfer_do_with_pacer_headless
 test_transfer_do_incremental_appends_second_target
 test_transfer_do_failure_logs_fatal
+test_pace_args_cap_without_activity_rate
+test_pace_args_resolver_min_combination_call
+test_pace_args_resolver_same_pool_deduplicated
+test_pace_args_resolver_failure_fails_open
+test_pace_args_resolver_failure_unlimited_without_rate
+test_pace_args_missing_resolver_fails_open
+test_pace_args_empty_endpoints_skip_resolver
+test_transfer_do_paces_at_combined_cap_rate
 
 test_summary
 teardown_test_env

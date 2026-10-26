@@ -245,6 +245,23 @@ the post-install point in a minute or two instead of repeating the
   than the tree under test — the fix is running it from a newer tree,
   not rebuilding the template.
 
+  **j12-interrupted-upgrade** shares that staging (factored into
+  `itf_journey_stage_upgrade_env` in `journeys/common.sh`) and adds the
+  failure injection an interrupted upgrade deserves: a guest-side
+  wrapper backgrounds the upgrader under `setsid` and signals its
+  process group — the user-visible effect of a lost terminal session.
+  A SIGTERM in the early phase must run the upgrader's EXIT trap
+  (staging cleaned) and leave nothing deployed, salvaged, or activated;
+  a SIGKILL the moment the transcript shows the deploy marker must
+  leave the running system untouched next to a *partial*
+  `versions/<v>` directory (no `MANIFEST.sha256` — it is written last)
+  and the salvage archive the killed run already made. The recovery is
+  simply re-running the same `upgrade-zfsutilities`: it re-detects and
+  re-salvages the injected modifications (a full upgrade, not a
+  degraded one), repairs the partial version dir in place, deploys
+  without activating, and the journey finishes with `switch-version`,
+  wiring verification, and the "Nothing to upgrade" rerun.
+
 ## Fast re-verification: `journey run --rerun`
 
 Fix-verify loops are the daily reality of the repair workflow, and the

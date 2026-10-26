@@ -2024,6 +2024,153 @@ n"
     test_pass
 }
 
+test_enclosure_cap_paces_archive_without_prompted_rate() {
+    reset_mocks
+    test_start "Enclosure cap: archive copy paces at the cap with no prompted rate"
+
+    local vmid="265"
+    local pve_dir="$_mock_zfs_state_dir/pve45"
+    local archive="$_mock_zfs_state_dir/archive45"
+    local mount="$_mock_zfs_state_dir/mount45"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    # Empty rate answer = unlimited prompt; the stubbed enclosure cap is
+    # what paces the run.
+    _mock_read_response="${archive}
+
+y
+n"
+    export ZFSUTILITIES_TEST_ENCLOSURE_RATE="40M"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+    unset ZFSUTILITIES_TEST_ENCLOSURE_RATE
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"PACE:40M --"* ]]; then
+        test_fail "Archive copy not paced at the enclosure cap; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"INFO: Enclosure rate cap applied: 40M"* ]]; then
+        test_fail "Cap-applied INFO missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_archive_resolver_consulted_with_source_pool() {
+    reset_mocks
+    test_start "Archive engine consults the resolver once per archived zvol"
+
+    local vmid="266"
+    local pve_dir="$_mock_zfs_state_dir/pve46"
+    local archive="$_mock_zfs_state_dir/archive46"
+    local mount="$_mock_zfs_state_dir/mount46"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local capture="$_mock_zfs_state_dir/resolver_argv"
+    : > "$capture"
+    local fake="$_mock_zfs_state_dir/fake_resolver"
+    {
+        echo '#!/usr/bin/bash'
+        printf '%s\n' "printf '%s\\n' \"\$*\" >> '$capture'"
+        printf '%s\n' "printf '\\n'"
+        echo 'exit 0'
+    } > "$fake"
+    chmod +x "$fake"
+    export ZFSUTILITIES_ENCLOSURE_RATE="$fake"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+    unset ZFSUTILITIES_ENCLOSURE_RATE
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    local seen
+    seen=$(cat "$capture" 2>/dev/null)
+    if [[ "$seen" != *"--min-with"* ]]; then
+        test_fail "Resolver not called with --min-with; saw: '$seen'"
+        return
+    fi
+    if [[ "$seen" != *"threeamigos"* ]]; then
+        test_fail "Resolver not told the source pool; saw: '$seen'"
+        return
+    fi
+    # Unlimited resolver answer: no pacing stage (unpaced pipelines remain
+    # byte-identical to the pre-cap form).
+    if [[ "$out" == *"PACE:"* ]]; then
+        test_fail "Pacer ran although the resolver answered unlimited; output:\n$out"
+        return
+    fi
+    local needle="DD:of=/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if [[ "$out" != *"$needle"* ]]; then
+        test_fail "Unpaced dd writer missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_archive_resolver_failure_fails_open() {
+    reset_mocks
+    test_start "Enclosure resolver failure WARNs and archives at the prompted rate"
+
+    local vmid="267"
+    local pve_dir="$_mock_zfs_state_dir/pve47"
+    local archive="$_mock_zfs_state_dir/archive47"
+    local mount="$_mock_zfs_state_dir/mount47"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+100M
+y
+n"
+    local fake="$_mock_zfs_state_dir/failing_resolver"
+    printf '#!/usr/bin/bash\nexit 1\n' > "$fake"
+    chmod +x "$fake"
+    export ZFSUTILITIES_ENCLOSURE_RATE="$fake"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+    unset ZFSUTILITIES_ENCLOSURE_RATE
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"WARN: Enclosure rate resolution failed"* ]]; then
+        test_fail "Fail-open WARN missing; output:\n$out"
+        return
+    fi
+    # Fail open = the prompted activity rate still paces the run.
+    if [[ "$out" != *"PACE:100M --"* ]]; then
+        test_fail "Prompted rate not applied after resolver failure; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 test_unlimited_run_has_no_pacer() {
     reset_mocks
     test_start "Unlimited run keeps the unpaced dd pipeline and in-flight hash"
@@ -2204,6 +2351,9 @@ test_rate_limit_paces_copy_path
 test_invalid_rate_fatals
 test_missing_pacer_fatals_instead_of_running_unlimited
 test_two_node_rate_forwarded_to_payload
+test_enclosure_cap_paces_archive_without_prompted_rate
+test_archive_resolver_consulted_with_source_pool
+test_archive_resolver_failure_fails_open
 test_no_pv_rate_limit_remains
 test_unlimited_run_has_no_pacer
 test_copy_hashes_source_in_flight

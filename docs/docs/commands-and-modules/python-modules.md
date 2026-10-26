@@ -347,6 +347,7 @@ and tests easy to mock.
 | `build_detach_command()`                 | Pure `zpool detach` argv builder                                                                                                                       |
 | `build_recursive_snapshot_command()`     | Pure `zfs snapshot -r` argv builder for migration snapshots                                                                                            |
 | `valid_rate_limit()`                     | Pure rate-grammar validator mirroring `lib/pace_stream.py` (digits plus an optional `k`/`m`/`g`/`t`/`p`/`e` multiplier with optional `i`/`b`); shared by the migration command builder and the Migrate Pool dialog so the GUI never refuses a value the pacer accepts                                                                                                            |
+| `ZfsRepository.effective_transfer_rate(pools, activity_rate)` | Python seam of per-enclosure rate governance: delegates to the shared resolver `lib/enclosure_rate.py` (min of *activity_rate* and every enclosure cap touched by *pools*; `""` = unlimited; resolver failure fails open to *activity_rate* with a loud WARN)                                                                                      |
 | `build_migration_send_receive_command()` | Pure `bash -c` argv sourcing `zfs-migrate-send` for a resumable, pv-instrumented migration copy (optional `rate_limit` enforced by the pacer `lib/pace_stream.py`; optional `from_snap` switches the send to an incremental catch-up — `-Rw -I`, or plain `-w -I` when the source is a clone, whose streams must not reference the origin) |
 | `build_pool_export_command()`            | Pure `zpool export` argv builder                                                                                                                       |
 | `build_pool_import_rename_command()`     | Pure `zpool import <temp> <name>` argv builder; the rename is permanent (written to the pool label), so later imports use the plain one-name form     |
@@ -398,6 +399,42 @@ SMART.
 | Module          | Purpose in this module |
 | --------------- | ---------------------- |
 | `backup_config` | `log_msg` for warnings |
+
+---
+
+### `enclosure_inventory.py`
+
+Discovers multi-bay disk enclosures as disk groups for per-enclosure rate
+governance: USB disks group by the hub directly under a root USB hub, SATA
+disks group by PCI controller with the boot disk's controller excluded
+(internal boot storage is not an enclosure). Enclosure identity is a short
+hash of the sorted member WWNs, so it survives replug and port moves even
+though hub/bridge serials repeat across enclosures. Consumed by
+[`lib/enclosure_rate.py`](modules.md#enclosure_ratepy), the shared resolver
+behind every paced transfer; a direct run prints one line per enclosure for
+diagnostics.
+
+**Key classes:**
+
+| Class                | Purpose                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------ |
+| `EnclosureInfo`      | One discovered enclosure (`id`, `kind` usb/esata, `location`, member disk names, member pools)   |
+| `EnclosureInventory` | Thread-safe TTL-cached scan; every subprocess collector (lsblk, udevadm, zpool, boot-disk) injectable |
+
+**Key methods:**
+
+| Method        | Purpose                                                                                                    |
+| ------------- | ---------------------------------------------------------------------------------------------------------- |
+| `discover()`  | Return enclosures, rescanning only when the TTL (default 30 s) has expired                                 |
+| `scan()`      | Discover now, bypassing the cache                                                                          |
+| `invalidate()` | Force a fresh scan on the next `discover()` call                                                          |
+
+**Called modules / imported helpers:**
+
+| Module            | Purpose in this module                              |
+| ----------------- | --------------------------------------------------- |
+| `disk_repository` | Boot-disk resolution (findmnt + lsblk PKNAME chain) |
+| `logging_config`  | `log_msg` for warnings                              |
 
 ---
 

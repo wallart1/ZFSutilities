@@ -249,6 +249,7 @@ Top-level keys:
 | `ui_state`                                                            | object                    | Saved GUI window geometry, pop-out state, TreeView column widths, and paned divider positions (see below)            |
 | `archive_rate_limit`                                                  | string                    | Default transfer rate limit for archive-vm/unarchive-vm (rate value, e.g. `100M`; empty = unlimited; prompt-saved, seeded by migration v28) |
 | `transfer_rate_limit` (variables)                                     | string                    | GUI profile/backup-offsite-restore rate-limit variable (renamed from `pv_rate_limit` by migration v29; enforced by `lib/pace_stream.py`) |
+| `enclosures`                                                          | object                    | Per-enclosure settings keyed by discovery id (see below; seeded empty by migration v30)                                                                                |
 | `paths`                                                               | object                    | Installation-specific file paths (see below); seeded from the centralized path layer on first access                  |
 | `config_version`                                                      | integer                   | Config schema version (see migrations below)                                                                         |
 
@@ -305,6 +306,7 @@ The Python config API is split across two modules:
 - `feature_config.get_checkagainst()` / `save_checkagainst()` — fss table
 - `feature_config.generate_snapshot_name()` / `generate_offsite_snapshot_name()` — snapshot naming
 - `feature_config.get_workload_profiles()` / `save_workload_profiles()` / `delete_workload_profile()` / `reset_workload_profiles()` — workload profile config
+- `feature_config.get_enclosures_config()` / `save_enclosures_config()` — per-enclosure names and rate caps
 
 `backup_config.py` still re-exports all of these for backward compatibility.
 
@@ -356,6 +358,63 @@ Pool opens). The Disks tab **Advanced: Manage Pool Profiles…** dialog edits
 this object directly; changes are persisted immediately through
 `feature_config.save_pool_profiles()`.
 
+### `enclosures` object
+
+Per-enclosure settings for I/O rate governance, seeded empty by migration
+v30 and read/written through `feature_config.get_enclosures_config()` /
+`save_enclosures_config()`. Keys are enclosure ids produced by
+`python/enclosure_inventory.py`: a 10-hex-character SHA-256 prefix of the
+sorted member-disk WWNs, stable across replug and port moves. Each value:
+
+| Key        | Type   | Purpose                                                                    |
+| ---------- | ------ | -------------------------------------------------------------------------- |
+| `name`     | string | User-set display name (empty = the id is shown)                             |
+| `max_rate` | string | Max transfer rate cap for the enclosure (rate value, e.g. `100M`; empty = unlimited) |
+
+Discovery is independent of this section — an enclosure with no entry is
+simply uncapped, and a config entry whose enclosure is unplugged is inert.
+The rate resolver below reads this section, and every transfer pipeline
+consults it at transfer time: `lib/transfer-lib.sh` resolves per
+`transfer_do` from the send/receive targets, `lib/archive-engine.sh` once
+per archived/restored zvol, and the `zfsrestoresendstream` /
+`zfsreadthru` pacer stages per run. With the section empty every transfer
+behaves exactly as before caps existed.
+
+### Enclosure rate resolution
+
+`lib/enclosure_rate.py` is the single min() of per-enclosure rate
+governance. One transfer's effective rate is the minimum of the per-activity
+rate limit and every configured cap of every enclosure touched by the source
+or destination pool — lower wins, because an enclosure may hold disks of
+several pools and a pool may span several enclosures.
+
+Two entry points share one implementation, so the GUI and CLI pipelines can
+never disagree:
+
+- **Bash:** the CLI `enclosure_rate.py [--min-with <rate>] <pool-or-dataset>...`
+  prints the effective rate (the winning value's original string; empty
+  output = unlimited). Each argument is a pool or dataset — the pool is the
+  first path component and a snapshot suffix is ignored. Exit codes: `0`
+  success (including empty output), `2` usage error (no targets, unknown
+  option, non-grammar `--min-with`), `1` resolver failure.
+- **Python:** `ZfsRepository.effective_transfer_rate(pools, activity_rate)`
+  is the routed-through-the-repository seam for GUI callers, returning the
+  same effective-rate string (`""` = unlimited).
+
+Rate grammar and comparison: values use the pacer grammar
+(`lib/pace_stream.py` — digits plus an optional `k`/`m`/`g`/`t`/`p`/`e`
+multiplier with optional `i`/`b`, 1024-based). Comparison is numeric through
+`pace_stream.parse_rate` so the grammar cannot drift from the pacer;
+`zfs_repository.valid_rate_limit` stays the GUI-side validator of values
+before they reach the config.
+
+Fail-open policy (campaign decision): a resolver failure never blocks a
+transfer. On a nonzero exit the bash caller runs at its own activity limit
+and logs loudly; the Python seam logs a `WARN` and returns the activity rate
+unchanged. A non-grammar cap in the config fails open the same way. The only
+hard failure kept is the pre-existing one — a configured rate with the
+pacer itself missing stays a loud FATAL.
+
 ### `backup` object
 
 Persisted by the GUI Backup tab and read by [zfsdailybackup](../commands-and-modules/commands.md#zfsdailybackup) (via overrides).
@@ -389,7 +448,7 @@ the software release version. When the config structure changes, bump
 **Migration chain** (`config_migrations.py`):
 
 ```python
-CONFIG_VERSION = 29
+CONFIG_VERSION = 30
 
 MIGRATIONS = [
     _migrate_1_to_2,
@@ -420,6 +479,7 @@ MIGRATIONS = [
     _migrate_26_to_27,
     _migrate_27_to_28,
     _migrate_28_to_29,
+    _migrate_29_to_30,
 ]
 ```
 
