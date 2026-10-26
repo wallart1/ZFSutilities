@@ -15,6 +15,7 @@ from command_builders import (
     build_rsync_command,
     build_send_receive_command,
     parse_rsync_endpoint,
+    prepare_rsync_destination,
 )
 from config_core import BACKUP_DEFAULTS
 from feature_config import (
@@ -605,6 +606,8 @@ def on_backup_run(app, ctx):
             except OSError:
                 log_msg(f"WARN: Skipping {source} -> {dest}: {mount_path} is not accessible")
                 continue
+        if not prepare_rsync_destination(source, dest, dryrun):
+            continue
         excludes = shlex.split(excludes_text.strip()) if excludes_text.strip() else []
         if dryrun:
             log_msg(f"INFO: Dry-run: Would rsync {source} -> {dest}")
@@ -615,6 +618,7 @@ def on_backup_run(app, ctx):
     zfs_keys_path = backup_cfg.get("zfs_keys_path", "").strip()
     zfs_keys_dest = backup_cfg.get("zfs_keys_dest", "").strip()
     if zfs_keys_path and zfs_keys_dest:
+        keys_dest_ok = prepare_rsync_destination(zfs_keys_path, zfs_keys_dest, dryrun)
         src_host, src_path = parse_rsync_endpoint(zfs_keys_path)
         if src_host not in done_hosts:
             done_hosts.add(src_host)
@@ -639,6 +643,9 @@ def on_backup_run(app, ctx):
                             "WARN: Skipping ZFS keys backup — destination is not encrypted. "
                             "Set zfs_keys_dest to an encrypted dataset."
                         )
+                    elif not keys_dest_ok:
+                        # Refusal already logged by prepare_rsync_destination.
+                        pass
                     elif dryrun:
                         log_msg(f"INFO: Dry-run: Would rsync {zfs_keys_path} -> {zfs_keys_dest}")
                     else:
@@ -649,6 +656,9 @@ def on_backup_run(app, ctx):
                     "WARN: Skipping ZFS keys backup — destination is not encrypted. "
                     "Set zfs_keys_dest to an encrypted dataset."
                 )
+            elif not keys_dest_ok:
+                # Refusal already logged by prepare_rsync_destination.
+                pass
             elif dryrun:
                 log_msg(f"INFO: Dry-run: Would rsync {zfs_keys_path} -> {zfs_keys_dest}")
             else:

@@ -326,6 +326,9 @@ and tests easy to mock.
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `get_default_repository()`               | Returns a module-level default `ZfsRepository` instance                                                                                                |
 | `is_dataset_encrypted(path)`             | Return `True` if *path* resides on an encrypted ZFS dataset                                                                                            |
+| `validate_dest_mount_chain(dest)`        | Validate that *dest* is reachable through its ZFS mount chain: every covering dataset `mounted=yes` and its path a real mountpoint; refuses unmounted, shadowed, and unverifiable destinations |
+| `find_unreachable_mounts()`              | Mounted filesystems whose mountpoint path is unreachable (shadowed or orphaned), cause-agnostic; `[]` when mount state cannot be queried                |
+| `mount_order_property_fixes(rows)`       | `canmount=on` corrections for `noauto` ancestors of erroneous mounts, so boot mounts parents before children                                            |
 | `zvol_device_path(dataset)`              | Return the `/dev/zvol/…` block-device path for a ZFS volume                                                                                            |
 | `get_property(dataset, prop)`            | Value of a single ZFS property                                                                                                                         |
 | `get_properties(dataset, props)`         | Values for a list of ZFS properties; missing properties return `"-"`                                                                                   |
@@ -820,12 +823,18 @@ offsite, restore, and retention runners.
 | Function                                                           | Purpose                                                                                                                                                                                                        |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `parse_rsync_endpoint(endpoint)`                                   | Split `user@host:path` into host and path                                                                                                                                                                      |
+| `prepare_rsync_destination(source, dest, dryrun)`                  | Fence a local rsync destination: validate its ZFS mount chain (refusing shadowed/unmounted/unverifiable chains) and create a missing destination directory below the deepest dataset mountpoint (never in dry-run) |
 | `build_rsync_command(source, dest, remote_log_path=None)`          | Build an rsync pull/push command                                                                                                                                                                               |
 | `build_send_receive_command(...)`                                  | Build the `bash` command for a ZFS send/receive step                                                                                                                                                           |
 | `build_pre_backup_command(cmd)` / `build_post_backup_command(cmd)` | Wrap user pre/post commands                                                                                                                                                                                    |
 | `build_backup_prune_command(...)`                                  | Build a non-fatal prune `BashStep` that prunes only the datasets the backup's active send/receive steps back up (destination names re-derived at prune time via `zfscleanup`'s explicit `prune_datasets` mode) |
 
-**Called modules / imported helpers:** none (stdlib only).
+**Called modules / imported helpers:**
+
+| Module           | Purpose in this module                                         |
+| ---------------- | -------------------------------------------------------------- |
+| `zfs_repository` | `validate_dest_mount_chain` behind `prepare_rsync_destination`  |
+| `logging_config` | `log_msg` for the fence's WARN/INFO messages                    |
 
 **Data structures consumed / produced:**
 
@@ -1035,7 +1044,7 @@ as the GUI runners but writes its own session logs and history entries.
 | `run_retention_profile(profile)`                                 | Run retention/cleanup for configured pools                                            |
 | `run_scrub_profile(profile)`                                     | Queue and poll scrubs for configured pools                                            |
 | `_check_weekday_ordinal(weekday_field)`                          | Runtime guard for weekday ordinal expressions                                         |
-| `acquire_profile_lock(profile_name, timeout=1.0, log_file=None)` | Acquire the profile lock; wait for an existing run and suppress duplicates on timeout |
+| `acquire_profile_lock(profile_name, timeout=1.0, log_file=None)` | Acquire the profile lock; wait for an existing run and suppress duplicates on timeout; a cancellation request breaks the wait immediately |
 | `release_profile_lock(fd, lock_path)`                            | Release the profile lock                                                              |
 | `_silence_cron_output(session_log_file)`                         | From-cron stream fence: dup2 `/dev/null` onto fds 1 and 2 once the session log exists |
 | `_write_cron_breadcrumb(cron_log, message)`                      | Append a stamped audit line (run started/finished) for a cron-launched run            |
@@ -1072,6 +1081,13 @@ Failed rsync steps log the raw exit code and a human-readable diagnosis
 (for example, `rc=24` is reported as "Source files vanished during transfer")
 so cron logs and session logs explain the failure without looking up rsync
 exit codes manually.
+
+SIGTERM/SIGINT cancel a run gracefully: the in-flight step's process group
+is terminated, no further steps start, a lock wait aborts immediately, and
+the run finishes with rc=125 (`PROFILE_CANCELLED_RC`), a `cancelled` history
+entry, and a `# END: cancelled` session trailer — distinct from a failure.
+Steps spawned by the runner run in their own session so the whole step
+pipeline (bash + rsync/tee/zfs) is cancelled together.
 
 **Called modules / imported helpers:**
 
@@ -1446,7 +1462,7 @@ snapshot-name generation.
 | `create_backup_page(ctx, ...)`                     | Build the Backup tab widget                  |
 | `load_backup_config()` / `collect_backup_config()` | Move data between UI and config dict         |
 | `check_backup_dirty()` / `mark_backup_clean()`     | Track unsaved changes                        |
-| `on_backup_run()`                                  | Build `BashStep`s and start a `BackupRunner` |
+| `on_backup_run()`                                  | Build `BashStep`s and start a `BackupRunner`; every local rsync destination (steps and keys) is fenced through `prepare_rsync_destination` |
 | `on_backup_cancel()`                               | Cancel the running backup                    |
 | `on_backup_save()` / `on_backup_revert()`          | Persist or revert config                     |
 | `backup_set_all_active()`                          | Toggle all step Active checkboxes            |
@@ -1646,7 +1662,8 @@ Rewrite Data, and the workload profile manager — plus Sever Clone, which runs
 
 Dashboard tab: pool health, the merged Tasks list (waiting / running /
 completed), active locks, iSCSI issues, version comparison with a two-node
-peer, and warnings.
+peer, and warnings — including unreachable (shadowed/orphaned) mounts, for
+which the Dashboard enables the mount-order repair.
 
 Expensive data gathering (pool queries, SSH version checks) runs in a
 background thread by default so the GTK main loop stays responsive.
@@ -1662,7 +1679,7 @@ background thread by default so the GTK main loop stays responsive.
 | `_format_disk_wear_warnings()`             | Warning strings for SSD/NVMe disks at/above `DISK_WEAR_WARNING_THRESHOLD` (80%)                                            |
 | `_get_disk_wear_warnings()`                | Wear warnings from `disk_repository.disk_inventory()`, TTL-cached 300 s so the 30 s refresh never re-runs a smartctl sweep |
 | `_get_peer_host()` / `_get_host_version()` | Two-node peer version check                                                                                                |
-| Dashboard action handlers                  | Refresh, fix locks, cancel tasks, remove completed tasks, view log                                                       |
+| Dashboard action handlers                  | Refresh, fix locks, repair mount order, cancel tasks, remove completed tasks, view log                                                       |
 
 **Called modules / imported helpers:**
 
@@ -2343,7 +2360,9 @@ devices.
 | `on_datasets_browse()`                                       | Open the selected filesystem or snapshot in the default file manager |
 | `on_datasets_show_big_stuff()`                               | Run `zfsshowbigstuff` on the selected pool and log the output |
 | `on_datasets_mount()`                                        | Mount selected filesystems/snapshots/volume loop devices (and volume partitions); unmounted ancestors are mounted first (root-first), skipping `canmount=off` ancestors; directly selected `canmount=off` filesystems are skipped the same way; for snapshots whose parent is unmounted, a dialog offers to mount the parent datasets root-first before the snapshots |
-| `on_datasets_unmount()`                                      | Unmount selected filesystems/snapshots/volume loop devices (and volume partitions); mounted children are unmounted first (deepest-first), with best-effort recovery of orphaned mounts (remount parents, retry) |
+| `on_datasets_unmount()`                                      | Unmount selected filesystems/snapshots/volume loop devices (and volume partitions); mounted children are unmounted first (deepest-first), with automatic recovery of unreachable mounts (remount unmounted parents for orphaned mounts; lift covering ancestors and remount them afterwards for shadowed mounts) |
+| `run_mount_repair(app, scope=None)`                          | Plan a mount-order repair, confirm it with the operator, and execute it with verification; tri-state return (`None` clean, `False` cancelled/failed, `True` success) |
+| `on_datasets_repair_mount_order()`                           | Repair the mount order of the selected subtree (single filesystem/pool, approval-gated) |
 
 **Called modules / imported helpers:**
 
@@ -2353,6 +2372,7 @@ devices.
 | `datasets_page`    | Refresh tree and button sensitivity     |
 | `command_builders` | `BashStep` for destructive operations   |
 | `zfs_lock_manager` | Pre-flight lock checks and direct locks |
+| `zfs_repository`   | `find_unreachable_mounts`, `mount_order_property_fixes` for mount-order detection and repair planning |
 | `backup_config`    | `log_msg`                               |
 
 **Data structures consumed / produced:**

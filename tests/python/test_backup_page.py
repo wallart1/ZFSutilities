@@ -440,6 +440,7 @@ class TestBackupRunDialog(unittest.TestCase):
             build_send_receive_command=MagicMock(),
             build_post_backup_command=MagicMock(),
             build_backup_prune_command=MagicMock(),
+            prepare_rsync_destination=MagicMock(return_value=True),
             _do_generate_snap=MagicMock(),
         )
 
@@ -527,6 +528,56 @@ class TestBackupRunDialog(unittest.TestCase):
             backup_page.build_rsync_command.assert_called_once_with(
                 "remote:/src", "/dst", excludes=["*.tmp", "cache/"]
             )
+
+    def test_fenced_destination_skips_rsync_step(self):
+        """A destination refused by the mount-chain fence builds no step."""
+        with mock_gtk():
+            import backup_page
+
+        app = _FakeBackupApp()
+        app.backup_nextsnap_entry.set_text("@daily-2026-06-11T12:00-d")
+        app.backup_pull_steps_active.set_active(True)
+        app.backup_pull_store.append(
+            [
+                True,
+                "remote:/src",
+                "/shadowed/dst",
+                "",
+            ]
+        )
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = backup_page.Gtk.ResponseType.OK
+        backup_page.Gtk.MessageDialog.return_value = dialog_mock
+
+        with (
+            self._patch_run(backup_page),
+            patch.object(backup_page, "prepare_rsync_destination", return_value=False),
+        ):
+            backup_page.on_backup_run(app, app.ctx)
+
+            backup_page.build_rsync_command.assert_not_called()
+
+    def test_fenced_keys_destination_skips_keys_step(self):
+        """A fenced keys destination builds no keys step (encrypted gate passed)."""
+        with mock_gtk():
+            import backup_page
+
+        app = _FakeBackupApp()
+        app.backup_nextsnap_entry.set_text("@daily-2026-06-11T12:00-d")
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = backup_page.Gtk.ResponseType.OK
+        backup_page.Gtk.MessageDialog.return_value = dialog_mock
+
+        with self._patch_run(backup_page):
+            backup_page.collect_backup_config.return_value["zfs_keys_path"] = "/etc/zfs-keys/"
+            backup_page.collect_backup_config.return_value["zfs_keys_dest"] = "/shadowed/keys"
+            with (
+                patch.object(backup_page, "prepare_rsync_destination", return_value=False),
+                patch.object(backup_page, "is_dataset_encrypted", return_value=True),
+            ):
+                backup_page.on_backup_run(app, app.ctx)
+
+            backup_page.build_rsync_command.assert_not_called()
 
     def test_prune_step_skipped_when_no_sr_steps_active(self):
         with mock_gtk():

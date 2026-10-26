@@ -739,3 +739,141 @@ M6 remains; PREEXISTING.md entry stays until M6.
   (developer-guide/conventions.md prose) is unaffected. mkdocs build
   green — only the known Zensical deprecation warning; the archive page
   renders in the built site.
+
+## 2026-10-26 — shadowed-mount rsync fence + real profile cancellation
+
+Production report: root-backup-dailybackup pull steps failing rc=11 while
+both nodes up; Dashboard cancel did nothing. Investigation (stewie, read-only
+ssh): the threeamigos pool has been shadow-mounted since the 2026-10-21
+13:24 boot — pool root (canmount=noauto, local) mounted AFTER its children
+(mountinfo ids 60-69 attached to `/`, root id 121 on top), so
+/threeamigos/proxmox resolves to the root dataset's own empty `proxmox` dir;
+every rsync dest under it is ENOENT while zfs legs (dataset names, not
+paths) succeed. All three 10-26 runs ended rc=11. 0.133.0 was deployed to
+stewie 09:41 that morning (user-run switch-version; cron firing again —
+dailybackup2 ran 12:00:01).
+
+Fixes (this session, pub2 PROMPTQUEUE2):
+- zfs_repository.validate_dest_mount_chain: every fs dataset whose
+  mountpoint prefixes the dest must be mounted=yes AND path-reachable +
+  ismount (the second check is what detects shadowing); zfs query failure
+  refuses (hard-refuse unverifiable dests).
+- command_builders.prepare_rsync_destination: shared fence used by both
+  profile_runner and backup_page pull/keys loops; clean chain + missing
+  tail → makedirs below the deepest dataset mountpoint (dry-run logs only);
+  refusal → WARN naming the dataset, run keeps rc=11.
+- _diagnose_rsync_failure: rc=11 + mkdir ENOENT → names unmounted/shadowed
+  destination instead of bare "Error in file I/O".
+- profile_runner graceful cancel: SIGTERM/SIGINT handler (installed in
+  main) sets flag + killpg's the in-flight step (steps now spawn
+  start_new_session); _run_step_list aborts at step boundaries; cancelled
+  runs → history "cancelled", trailer cancelled=True, exit rc=125
+  (PROFILE_CANCELLED_RC; outside rsync 0-35 and rc=9). Lock-wait also
+  breaks on cancel.
+- dashboard _cancel_task profile: branch now SIGTERMs the lock-file PID
+  (was: log-only circular advice); _outcome_markup gained an amber ⏸ cancelled case.
+- Docs: messages/index.md rows (fence WARNs, cancel INFO/FATALs, dashboard
+  SIGTERM rows replacing the stale "use Cancel Selected Tasks" row),
+  gtk-gui.md Profile cancel row now describes the graceful path,
+  profiles.md operational guidance (shadowed mounts, canmount=noauto
+  hazard, rc=125 semantics, auto-created dest dirs).
+
+Operator remediation NOT done (user's call, live pool): unmount the five
+threeamigos filesystems and remount parent-first; consider canmount=on on
+the pool root so boot mounts it before children. The fence keeps backups
+off the wrong filesystem meanwhile.
+
+Test side: new TestValidateDestMountChain, TestPrepareRsyncDestination,
+fence tests in run_backup_profile/on_backup_run, TestGracefulCancellation,
+and a real-subprocess SIGTERM journey (rc 125 + cancelled trailer + lock
+released). PREEXISTING +1: multi-file single-process pytest runs fail 16-18
+order-dependent tests that pass per-file (verified identical on clean HEAD);
+per-suite runner unaffected.
+
+## 2026-10-26 (later) — mount-order governance: shadow-aware unmount, repair engine, dashboard auto-offer
+
+Follow-up report: the user tried the stewie remediation through the GUI and
+hit dataset_actions' orphaned-mount FATAL — its recovery only remounts
+UNMOUNTED ancestors, so the shadow case (all ancestors mounted, pool root
+covering the children) fell through to advice that cannot work ("remount
+parents manually / reboot required" — remounting re-covers; lifting works;
+no reboot needed). User policy: mount ordering is a product invariant —
+maintained automatically, repaired with approval, properties auto-corrected
+with notification, surviving reboots.
+
+Implemented (pub2 PROMPTQUEUE2, same tree as the fence/cancel work):
+- zfs_repository: _list_fs_mount_state shared query (validate_dest_mount
+  chain refactored onto it); find_unreachable_mounts (mounted=yes + path
+  missing/not-a-mount ⇒ erroneous, cause-agnostic);
+  mount_order_property_fixes (noauto strict-prefix ancestor of an erroneous
+  mount ⇒ canmount=on fix — the boot-durability lever; noauto leaves
+  untouched).
+- dataset_actions: shadow-aware _unmount_one_dataset — mounted ancestors +
+  the selection itself join the lock set; ENOENT branch now tries
+  _recover_orphaned_mount first, then (only when ALL name-ancestors are
+  mounted) _lift_and_unmount: lift covers shallowest-first with busy
+  dialogs, retry after each; lifted set persists across the descendant
+  loop; targets already lifted are counted, not re-unmounted; restore in
+  finally remounts lifted-not-targeted. Truthful FATALs naming the cover.
+- Repair engine: plan_mount_repair(app, scope) (affected set = rows +
+  name-ancestors; unmount deepest-first, remount shallowest-first minus
+  canmount=off, property fixes), execute_mount_repair (busy gate over the
+  whole unmount set; property fixes FIRST so an interrupted repair still
+  converges at boot; exposure for ENOENT members mounts unmounted plan
+  members then lifts; remount treats "already mounted" as ok; verification
+  ismount sweep; failure ⇒ best-effort parents-first remount + FATAL with
+  action plan), run_mount_repair tri-state (None clean / False
+  cancelled-failed / True success).
+- Surfaces: Datasets page "Repair Mount Order" button (single fs/pool
+  selection, approval dialog with the full plan rendered); Dashboard
+  gather now runs find_unreachable_mounts → warning rows + contextual
+  "Repair Mount Order" action button (Fix Locks pattern; enabled by
+  findings), handler runs scope=None repair + refresh.
+- Docs: gtk-gui.md unreachable-mounts note rewritten (both shapes, lift,
+  dashboard flow, canmount rationale — "reboot required" removed), Repair
+  Mount Order rows in the Datasets + Dashboard action tables,
+  profiles.md fence bullet points at the Dashboard repair, messages manual
+  dataset_actions rows replaced/extended.
+
+Gotchas hit while testing: assertions on patched module attributes must be
+taken INSIDE the patch context (the earlier dashboard-cancel work had the
+same class of bug); MockSubprocess's default `zfs get` arm emits
+name/prop/value 3-col output — value-only queries need a custom handler;
+repo.list_datasets(pool=<pool>) returns descendants (not the pool row).
+
+Deploy note: after this ships + deploy, stewie's repair is one Dashboard
+click (unmount 5, remount parents-first, canmount=on on threeamigos root
+with approval), and the backup fence goes green.
+
+## 2026-10-26 (wrap-up) — cycle wrap-up pass on the fence/cancel/repair changeset
+
+Review pass over the uncommitted changes (shadowed-mount fence, graceful
+profile cancellation, mount-order repair engine), pub2 PROMPTQUEUE2:
+
+- Standards: ruff check + format clean (259 files), shellcheck silent, no
+  import cycle from the new command_builders → zfs_repository edge,
+  deferred dashboard imports follow the file's existing pattern. No
+  violations found.
+- Tests: 5 gap-filling tests added — keys-destination fence (runner +
+  GUI), cancel-breaks-lock-wait unit test, SIGTERM-cancels-WAITING-profile
+  subprocess journey (rc 125 + cancelled trailer), dashboard gather-level
+  unreachable-mount warnings test. Fixed a harness defect from the earlier
+  session: three test files had new classes appended BELOW the
+  `if __name__ == "__main__"` guard (test_dataset_actions 1194 lines,
+  test_zfs_repository 639, test_dashboard_page 28) — unreachable under
+  direct execution; guards moved to the true file ends. Sanctioned pytest
+  behavior unchanged (classes were collected either way).
+- python-modules.md: added the new public functions (validate_dest_mount
+  chain / find_unreachable_mounts / mount_order_property_fixes /
+  prepare_rsync_destination / run_mount_repair / on_datasets_repair_
+  mount_order), corrected command_builders' now-false "stdlib only" note,
+  profile_runner cancellation paragraph, dashboard/backup row updates.
+- test_docs_integrity 23 green; mkdocs build green (known Zensical warning
+  only — rechecked PyPI: 0.0.73, still no 1.x, hold stands).
+- Full non-soak run green: 105 suites / 5598 passed / 0 failed (18 Python
+  env-preflight skips as always on the dev host).
+- PREEXISTING: no new entries; 3 remain (Zensical hold refreshed, pub3-lane
+  unarchive flake not present in this lane's file, cross-file pytest
+  ordering flake). Direct `python <file>` test execution remains
+  unsupported (golden files key on pytest module names; conftest does the
+  bootstrap) — by design, not recorded as an issue.

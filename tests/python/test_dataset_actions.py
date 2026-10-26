@@ -2281,10 +2281,6 @@ class TestDeleteSnapshots(unittest.TestCase):
         self.assertIn("tank/vm-200", parents)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestVolumeLoopActions(unittest.TestCase):
     """Mount/Unmount/Browse for zvol loop devices and their partitions."""
 
@@ -2982,3 +2978,501 @@ class TestVolumeLoopHelpers(unittest.TestCase):
         self.assertFalse(result)
         mock_subprocess.run.assert_not_called()
         repo.loop_detach.assert_not_called()
+
+
+class TestUnmountShadowedMounts(unittest.TestCase):
+    """Shadowed mounts are exposed by lifting covering ancestors."""
+
+    def setUp(self):
+        zlm._lock_refcounts.clear()
+
+    def _import_under_mock(self):
+        with mock_gtk():
+            import dataset_actions as da
+
+            return da
+
+    def _make_app(self):
+        app = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        app.ctx.zfs_repository.list_datasets.return_value = []
+
+        def _prop(ds, prop):
+            if prop == "mountpoint":
+                return "/" + ds
+            if prop == "mounted":
+                return "yes"
+            return "on"
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+        return app
+
+    @staticmethod
+    def _result(returncode, stderr=""):
+        return MagicMock(returncode=returncode, stderr=stderr)
+
+    class _Ctx:
+        """Collects call/log snapshots while the patches are active."""
+
+        def __init__(self):
+            self.run_calls = []
+            self.log_calls = []
+
+        def snapshot(self, da):
+            self.run_calls = [c.args[0] for c in da.subprocess.run.call_args_list]
+            self.log_calls = [c.args[0] for c in da.log_msg.call_args_list]
+            self.lock_calls = list(da.zlm.locks.call_args_list)
+
+    def test_unmount_lifts_covering_ancestor_and_restores(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        ctx = self._Ctx()
+        orphan_error = "cannot unmount '/tank/proxmox/Rocky': no such pool or dataset"
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/proxmox/Rocky",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(1, orphan_error),  # Rocky unmount fails ENOENT
+                self._result(0),  # lift: unmount the covering pool root
+                self._result(0),  # retry Rocky unmount
+                self._result(0),  # restore: remount the lifted root
+            ]
+            da.on_datasets_unmount(app)
+            ctx.snapshot(da)
+        self.assertEqual(
+            ctx.run_calls,
+            [
+                ["sudo", "zfs", "unmount", "tank/proxmox/Rocky"],
+                ["sudo", "zfs", "unmount", "tank"],
+                ["sudo", "zfs", "unmount", "tank/proxmox/Rocky"],
+                ["sudo", "zfs", "mount", "tank"],
+            ],
+        )
+        self.assertIn(
+            call("w", ["tank/proxmox/Rocky", "tank", "tank/proxmox"]),
+            ctx.lock_calls,
+        )
+        self.assertTrue(any("to expose a shadowed mount" in t for t in ctx.log_calls))
+        self.assertTrue(any("Remounted tank after exposing" in t for t in ctx.log_calls))
+        self.assertTrue(any("Unmounted tank/proxmox/Rocky" in t for t in ctx.log_calls))
+
+    def test_unmount_selection_covers_shadowed_descendants(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        ctx = self._Ctx()
+
+        class _FakeRow:
+            def __init__(self, name):
+                self.name = name
+                self.mounted = "yes"
+                self.ds_type = "filesystem"
+
+        app.ctx.zfs_repository.list_datasets.return_value = [
+            _FakeRow("tank/proxmox/Rocky"),
+            _FakeRow("tank/proxmox/Stewie"),
+        ]
+        orphan_error = "cannot unmount '/tank/proxmox/Rocky': no such pool or dataset"
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/proxmox",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(1, orphan_error),  # Rocky unmount fails ENOENT
+                self._result(0),  # lift: unmount the covering pool root
+                self._result(0),  # retry Rocky unmount
+                self._result(0),  # Stewie unmounts (now reachable)
+                self._result(0),  # proxmox unmounts
+                self._result(0),  # restore: remount the lifted root
+            ]
+            da.on_datasets_unmount(app)
+            ctx.snapshot(da)
+        self.assertEqual(
+            ctx.run_calls,
+            [
+                ["sudo", "zfs", "unmount", "tank/proxmox/Rocky"],
+                ["sudo", "zfs", "unmount", "tank"],
+                ["sudo", "zfs", "unmount", "tank/proxmox/Rocky"],
+                ["sudo", "zfs", "unmount", "tank/proxmox/Stewie"],
+                ["sudo", "zfs", "unmount", "tank/proxmox"],
+                ["sudo", "zfs", "mount", "tank"],
+            ],
+        )
+        self.assertTrue(any("Remounted tank after exposing" in t for t in ctx.log_calls))
+
+    def test_unmount_parent_selection_lifts_itself_for_children(self):
+        """Unselecting the cover itself: it is lifted first, not re-unmounted."""
+        da = self._import_under_mock()
+        app = self._make_app()
+        ctx = self._Ctx()
+
+        class _FakeRow:
+            def __init__(self, name):
+                self.name = name
+                self.mounted = "yes"
+                self.ds_type = "filesystem"
+
+        app.ctx.zfs_repository.list_datasets.return_value = [
+            _FakeRow("tank/proxmox/Rocky"),
+            _FakeRow("tank/proxmox"),
+        ]
+        orphan_error = "cannot unmount '/tank/proxmox/Rocky': no such pool or dataset"
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "pool",
+                        "name": "tank",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(1, orphan_error),  # Rocky unmount fails ENOENT
+                self._result(0),  # lift: unmount the selected pool root itself
+                self._result(0),  # retry Rocky unmount
+                self._result(0),  # proxmox unmounts (the selected target)
+            ]
+            da.on_datasets_unmount(app)
+            ctx.snapshot(da)
+        self.assertEqual(
+            ctx.run_calls,
+            [
+                ["sudo", "zfs", "unmount", "tank/proxmox/Rocky"],
+                ["sudo", "zfs", "unmount", "tank"],
+                ["sudo", "zfs", "unmount", "tank/proxmox/Rocky"],
+                ["sudo", "zfs", "unmount", "tank/proxmox"],
+            ],
+        )
+        # The lifted root is itself an unmount target: nothing is remounted.
+        self.assertFalse(any(c[:3] == ["sudo", "zfs", "mount"] for c in ctx.run_calls))
+
+    def test_unmount_fatals_when_cover_cannot_be_lifted(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        ctx = self._Ctx()
+        orphan_error = "cannot unmount '/tank/proxmox/Rocky': no such pool or dataset"
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/proxmox/Rocky",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(1, orphan_error),  # Rocky unmount fails ENOENT
+                self._result(1, "cannot unmount 'tank': pool or dataset is busy"),
+            ]
+            da.on_datasets_unmount(app)
+            ctx.snapshot(da)
+        self.assertEqual(len(ctx.run_calls), 2)
+        fatal = [t for t in ctx.log_calls if "covered by tank" in t]
+        self.assertTrue(fatal, f"expected a covering-ancestor FATAL: {ctx.log_calls}")
+        self.assertTrue(all(t.startswith("FATAL:") for t in fatal))
+
+
+class TestMountRepair(unittest.TestCase):
+    """Plan/execute/approve the mount-order repair engine."""
+
+    def setUp(self):
+        zlm._lock_refcounts.clear()
+
+    def _import_under_mock(self):
+        with mock_gtk():
+            import dataset_actions as da
+
+            return da
+
+    def _make_app(self):
+        app = MagicMock()
+        app.ctx.zfs_repository = MagicMock()
+        app.ctx.zfs_repository.list_datasets.return_value = []
+
+        def _prop(ds, prop):
+            if prop == "mountpoint":
+                return "/" + ds
+            if prop == "mounted":
+                return "yes"
+            return "on"
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+        return app
+
+    @staticmethod
+    def _result(returncode, stderr=""):
+        return MagicMock(returncode=returncode, stderr=stderr)
+
+    def _plan(self, unmount=None, remount=None, fixes=None):
+        return {
+            "rows": [{"name": "tank/a/b", "mountpoint": "/tank/a/b"}],
+            "unmount": unmount or ["tank/a/b", "tank/a", "tank"],
+            "remount": remount or ["tank", "tank/a", "tank/a/b"],
+            "property_fixes": fixes
+            or [{"dataset": "tank", "property": "canmount", "value": "on", "was": "noauto"}],
+        }
+
+    def test_plan_computes_orders_and_fixes(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        rows = [{"name": "tank/a/b", "mountpoint": "/tank/a/b"}]
+        with (
+            patch.object(da, "find_unreachable_mounts", return_value=rows),
+            patch.object(
+                da,
+                "mount_order_property_fixes",
+                return_value=[
+                    {"dataset": "tank", "property": "canmount", "value": "on", "was": "noauto"}
+                ],
+            ),
+        ):
+            plan = da.plan_mount_repair(app)
+        self.assertEqual(plan["unmount"], ["tank/a/b", "tank/a", "tank"])
+        self.assertEqual(plan["remount"], ["tank", "tank/a", "tank/a/b"])
+        self.assertEqual(plan["property_fixes"][0]["dataset"], "tank")
+
+    def test_plan_scope_limits_rows(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        rows = [
+            {"name": "tank/a/b", "mountpoint": "/tank/a/b"},
+            {"name": "other/x", "mountpoint": "/other/x"},
+        ]
+        with (
+            patch.object(da, "find_unreachable_mounts", return_value=rows),
+            patch.object(da, "mount_order_property_fixes", return_value=[]),
+        ):
+            plan = da.plan_mount_repair(app, scope="tank")
+        self.assertEqual([r["name"] for r in plan["rows"]], ["tank/a/b"])
+        self.assertNotIn("other/x", plan["unmount"])
+
+    def test_plan_returns_none_when_clean(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        with patch.object(da, "find_unreachable_mounts", return_value=[]):
+            self.assertIsNone(da.plan_mount_repair(app))
+
+    def test_execute_happy_path(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        plan = self._plan()
+        run_calls, log_calls = [], []
+        with (
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+            patch("os.path.ismount", return_value=True),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(0),  # zfs set canmount=on tank
+                self._result(0),  # unmount deepest-first
+                self._result(0),
+                self._result(0),
+                self._result(0),  # remount shallowest-first
+                self._result(0),
+                self._result(0),
+            ]
+            ok = da.execute_mount_repair(app, plan)
+            run_calls = [c.args[0] for c in da.subprocess.run.call_args_list]
+            log_calls = [c.args[0] for c in da.log_msg.call_args_list]
+        self.assertTrue(ok)
+        self.assertEqual(
+            run_calls,
+            [
+                ["sudo", "zfs", "set", "canmount=on", "tank"],
+                ["sudo", "zfs", "unmount", "tank/a/b"],
+                ["sudo", "zfs", "unmount", "tank/a"],
+                ["sudo", "zfs", "unmount", "tank"],
+                ["sudo", "zfs", "mount", "tank"],
+                ["sudo", "zfs", "mount", "tank/a"],
+                ["sudo", "zfs", "mount", "tank/a/b"],
+            ],
+        )
+        self.assertTrue(any("Set canmount=on on tank" in t for t in log_calls))
+        self.assertTrue(any("Repaired mount order" in t for t in log_calls))
+
+    def test_execute_busy_refusal_runs_nothing(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        plan = self._plan()
+        run_calls, log_calls = [], []
+        with (
+            patch.object(da, "get_busy_processes", return_value=[(42, "bash")]),
+            patch.object(da, "_warn_busy"),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+        ):
+            ok = da.execute_mount_repair(app, plan)
+            run_calls = [c.args[0] for c in da.subprocess.run.call_args_list]
+            log_calls = [c.args[0] for c in da.log_msg.call_args_list]
+        self.assertFalse(ok)
+        self.assertEqual(run_calls, [])
+        self.assertTrue(any(t.startswith("FATAL: Mount-order repair aborted") for t in log_calls))
+
+    def test_execute_unmount_failure_remounts_and_fails(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        plan = self._plan()
+        run_calls, log_calls = [], []
+        with (
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(0),  # zfs set canmount=on tank
+                self._result(1, "cannot unmount 'tank/a/b': target is busy"),
+                self._result(0),  # best-effort remount phase
+                self._result(0),
+                self._result(0),
+            ]
+            ok = da.execute_mount_repair(app, plan)
+            run_calls = [c.args[0] for c in da.subprocess.run.call_args_list]
+            log_calls = [c.args[0] for c in da.log_msg.call_args_list]
+        self.assertFalse(ok)
+        self.assertEqual(
+            run_calls,
+            [
+                ["sudo", "zfs", "set", "canmount=on", "tank"],
+                ["sudo", "zfs", "unmount", "tank/a/b"],
+                ["sudo", "zfs", "mount", "tank"],
+                ["sudo", "zfs", "mount", "tank/a"],
+                ["sudo", "zfs", "mount", "tank/a/b"],
+            ],
+        )
+        self.assertTrue(any("Mount-order repair incomplete" in t for t in log_calls))
+
+    def test_run_mount_repair_gates_on_approval(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        plan = self._plan()
+        with (
+            patch.object(da, "plan_mount_repair", return_value=plan),
+            patch.object(da, "_confirm_mount_repair", return_value=False),
+            patch.object(da, "execute_mount_repair") as mock_execute,
+            patch.object(da, "log_msg"),
+        ):
+            result = da.run_mount_repair(app)
+        self.assertFalse(result)
+        mock_execute.assert_not_called()
+
+        with (
+            patch.object(da, "plan_mount_repair", return_value=plan),
+            patch.object(da, "_confirm_mount_repair", return_value=True),
+            patch.object(da, "execute_mount_repair") as mock_execute,
+            patch.object(da, "log_msg"),
+        ):
+            result = da.run_mount_repair(app)
+        self.assertTrue(result)
+        mock_execute.assert_called_once_with(app, plan)
+
+    def test_run_mount_repair_reports_clean_state(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        with (
+            patch.object(da, "plan_mount_repair", return_value=None),
+            patch.object(da, "log_msg") as mock_log,
+        ):
+            result = da.run_mount_repair(app)
+        self.assertIsNone(result)
+        mock_log.assert_called_once_with("INFO: Mount order is clean; nothing to repair")
+
+    def test_on_datasets_repair_mount_order_is_selection_scoped(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/proxmox",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "run_mount_repair", return_value=True) as mock_run,
+            patch.object(da, "refresh_datasets_page") as mock_refresh,
+        ):
+            da.on_datasets_repair_mount_order(app)
+        mock_run.assert_called_once_with(app, scope="tank/proxmox")
+        mock_refresh.assert_called_once_with(app)
+
+    def test_on_datasets_repair_mount_order_requires_single_filesystem(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        items = [
+            {"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True},
+            {"type": "dataset", "name": "tank/b", "zfs_type": "filesystem", "mounted": True},
+        ]
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=items),
+            patch.object(da, "run_mount_repair") as mock_run,
+            patch.object(da, "log_msg") as mock_log,
+        ):
+            da.on_datasets_repair_mount_order(app)
+        mock_run.assert_not_called()
+        self.assertTrue(any("single filesystem" in c.args[0] for c in mock_log.call_args_list))
+
+
+if __name__ == "__main__":
+    unittest.main()

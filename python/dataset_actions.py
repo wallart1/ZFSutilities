@@ -33,7 +33,7 @@ from gui_helpers import (
     get_tree_selection_items,
     reload_row_children,
 )
-from zfs_repository import zvol_device_path
+from zfs_repository import find_unreachable_mounts, mount_order_property_fixes, zvol_device_path
 
 # ---------------------------------------------------------------------------
 # Local helpers
@@ -966,11 +966,137 @@ def _recover_orphaned_mount(target, repo):
         return False
 
 
+def _is_name_ancestor(candidate, dataset):
+    """Return True when *candidate* is a strict dataset-name ancestor."""
+    return dataset.startswith(candidate + "/")
+
+
+def _name_ancestors(dataset):
+    """Return every dataset-name ancestor of *dataset*, shallowest first."""
+    parts = dataset.split("/")
+    return ["/".join(parts[:i]) for i in range(1, len(parts))]
+
+
+def _all_ancestors_mounted(dataset, repo):
+    """Return True when every name ancestor of *dataset* reports mounted.
+
+    The shadow path only helps when the target's path is covered by a
+    MOUNTED ancestor; with an unmounted ancestor the mount is orphaned and
+    remount-based recovery is the correct (already attempted) fix.
+    """
+    for ancestor in _name_ancestors(dataset):
+        try:
+            if repo.get_property(ancestor, "mounted") != "yes":
+                return False
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
+    return True
+
+
+def _mounted_ancestors_of(dataset, repo):
+    """Return *dataset*'s currently mounted ancestors, shallowest first."""
+    mounted = []
+    for ancestor in _name_ancestors(dataset):
+        try:
+            if repo.get_property(ancestor, "mounted") == "yes":
+                mounted.append(ancestor)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_msg(f"WARN: Error checking mount state for {ancestor}: {e}")
+    return mounted
+
+
+def _lift_and_unmount(target, candidates, lifted, app, repo):
+    """Unmount *target* by lifting covering ancestors from *candidates*.
+
+    A shadowed mount cannot be unmounted by path while a later mount covers
+    it, so each mounted ancestor is unmounted (shallowest first — only
+    reachable covers can be detached) and the unmount retried after every
+    lift. Lifted ancestors are appended to *lifted* so the caller can
+    remount them afterwards. Returns True when *target* was unmounted.
+    """
+    for ancestor in candidates:
+        if ancestor in lifted:
+            continue
+        try:
+            mountpoint = repo.get_property(ancestor, "mountpoint")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_msg(f"FATAL: Error resolving mountpoint for {ancestor}: {e}")
+            return False
+        procs = get_busy_processes(mountpoint)
+        if procs:
+            proc_list = "\n".join(f"  • {name} (PID {pid})" for pid, name in procs)
+            _warn_busy(
+                app,
+                "Cannot lift covering mount",
+                (
+                    f"{ancestor} covers {target}'s mountpoint and is currently "
+                    f"in use by:\n\n{proc_list}\n\n"
+                    "Close the listed application(s), then try unmounting again."
+                ),
+            )
+            log_msg(
+                f"FATAL: cannot unmount {target}: its mount is covered by "
+                f"{ancestor}, which is busy. Close what is using it and retry."
+            )
+            return False
+        result = subprocess.run(
+            ["sudo", "zfs", "unmount", ancestor],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            log_msg(
+                f"FATAL: cannot unmount {target}: its mount is covered by "
+                f"{ancestor}, which could not be unmounted: {result.stderr.strip()}"
+            )
+            return False
+        lifted.append(ancestor)
+        log_msg(f"VERB: Unmounted {ancestor} to expose a shadowed mount")
+        retry = subprocess.run(
+            ["sudo", "zfs", "unmount", target],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if retry.returncode == 0:
+            return True
+    log_msg(
+        f"FATAL: {target} looks mounted but its mountpoint stayed unreachable "
+        "after lifting every mounted ancestor. Check its mountpoint and its "
+        "parents' mount state, then retry."
+    )
+    return False
+
+
+def _restore_lifted(lifted, skip):
+    """Remount lifted ancestors that were not themselves unmount targets."""
+    for ancestor in lifted:
+        if ancestor in skip:
+            continue
+        result = subprocess.run(
+            ["sudo", "zfs", "mount", ancestor],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            log_msg(f"VERB: Remounted {ancestor} after exposing a shadowed mount")
+        else:
+            log_msg(
+                f"WARN: Could not remount {ancestor} after exposing a shadowed "
+                f"mount: {result.stderr.strip()} — it is unmounted; mount it "
+                "from the Datasets page"
+            )
+
+
 def _unmount_one_dataset(item, repo, app):
     """Unmount a single filesystem/pool dataset; return True on success.
 
     Descendant datasets are unmounted first (deepest first), because ZFS
     refuses to unmount a parent while any of its children are still mounted.
+    A shadowed mount (unreachable path under a covering ancestor) is exposed
+    by lifting the cover and remounting it afterwards.
     """
     dataset = item["name"]
     try:
@@ -1013,55 +1139,392 @@ def _unmount_one_dataset(item, repo, app):
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         log_msg(f"WARN: Could not list descendants of {dataset}: {e}")
 
+    # Ancestors (and the selection itself, for its descendants) may need
+    # lifting to expose shadowed mounts; they join the lock set so no other
+    # operation touches them mid-unmount.
+    lift_candidates = _mounted_ancestors_of(dataset, repo)
+    if item.get("mounted", False):
+        lift_candidates.append(dataset)
+    lock_names = list(dict.fromkeys(unmount_targets + lift_candidates))
+    lifted = []
     any_unmounted = False
     try:
-        with zlm.locks("w", unmount_targets):
-            for target in unmount_targets:
-                result = subprocess.run(
-                    ["sudo", "zfs", "unmount", target],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if result.returncode == 0:
-                    any_unmounted = True
-                    if target == dataset:
-                        log_msg(f"VERB: Unmounted {dataset}")
-                    else:
-                        log_msg(f"VERB: Unmounted {target}")
-                    continue
-
-                stderr = result.stderr.strip()
-                if "no such pool or dataset" in stderr:
-                    # Orphaned mount: the kernel still lists the dataset as
-                    # mounted, but its mountpoint path is unreachable.
-                    if _recover_orphaned_mount(target, repo):
+        with zlm.locks("w", lock_names):
+            try:
+                for target in unmount_targets:
+                    if target in lifted:
+                        # Already unmounted as a side effect of lifting it.
                         any_unmounted = True
                         log_msg(f"VERB: Unmounted {target}")
                         continue
-                    log_msg(
-                        f"FATAL: {target} looks mounted but its mountpoint is "
-                        "not reachable (orphaned mount) and could not be "
-                        "recovered by remounting its parents. Remount the "
-                        "parent dataset(s) manually and retry; if that fails "
-                        "the mount is detached from the namespace and a "
-                        "reboot is required."
+                    result = subprocess.run(
+                        ["sudo", "zfs", "unmount", target],
+                        capture_output=True,
+                        text=True,
+                        check=False,
                     )
-                elif "busy" in stderr.lower():
-                    log_msg(
-                        f"FATAL: Dataset {target} is busy. "
-                        "Please close any file manager windows and try again."
-                    )
-                else:
-                    log_msg(f"FATAL: Error unmounting {target}: {stderr}")
-                # Stop at the first failure; trying to unmount a parent after
-                # a child failed would just produce the same error again.
-                break
+                    if result.returncode == 0:
+                        any_unmounted = True
+                        if target == dataset:
+                            log_msg(f"VERB: Unmounted {dataset}")
+                        else:
+                            log_msg(f"VERB: Unmounted {target}")
+                        continue
+
+                    stderr = result.stderr.strip()
+                    if "no such pool or dataset" in stderr:
+                        # Orphaned mount: the kernel still lists the dataset
+                        # as mounted, but its mountpoint path is unreachable.
+                        if _recover_orphaned_mount(target, repo):
+                            any_unmounted = True
+                            log_msg(f"VERB: Unmounted {target}")
+                            continue
+                        # Shadowed mount: a mounted ancestor (or the selected
+                        # dataset itself) covers the path. Only viable when
+                        # every ancestor is mounted — otherwise the mount is
+                        # an orphan remount recovery already failed to fix.
+                        candidates = (
+                            [c for c in lift_candidates if c != target]
+                            if _all_ancestors_mounted(target, repo)
+                            else []
+                        )
+                        if candidates and _lift_and_unmount(target, candidates, lifted, app, repo):
+                            any_unmounted = True
+                            log_msg(f"VERB: Unmounted {target}")
+                            continue
+                        log_msg(
+                            f"FATAL: {target} looks mounted but its mountpoint "
+                            "is not reachable (orphaned or shadowed mount) and "
+                            "could not be recovered automatically. Check which "
+                            "ancestor covers or precedes it, close any users, "
+                            "and retry."
+                        )
+                    elif "busy" in stderr.lower():
+                        log_msg(
+                            f"FATAL: Dataset {target} is busy. "
+                            "Please close any file manager windows and try again."
+                        )
+                    else:
+                        log_msg(f"FATAL: Error unmounting {target}: {stderr}")
+                    # Stop at the first failure; trying to unmount a parent
+                    # after a child failed would just produce the same error.
+                    break
+            finally:
+                _restore_lifted(lifted, skip=set(unmount_targets))
     except RuntimeError as exc:
         log_msg(f"FATAL: cannot unmount {dataset}: {exc}")
         return False
 
     return any_unmounted
+
+
+def plan_mount_repair(app, scope=None):
+    """Compute a mount-order repair plan; return None when nothing is wrong.
+
+    *scope* limits the repair to one dataset subtree (the Datasets-page
+    action); None considers every unreachable mount (the Dashboard offer).
+    The plan dict carries: ``rows`` (the erroneous mounts), ``unmount``
+    (every currently mounted member of the affected set, deepest first),
+    ``remount`` (every mountable member — canmount != off — shallowest
+    first), and ``property_fixes`` (the canmount corrections that make the
+    correct order survive reboots). The affected set is the erroneous
+    mounts plus all their dataset-name ancestors.
+    """
+    rows = find_unreachable_mounts()
+    if scope:
+        rows = [r for r in rows if r["name"] == scope or r["name"].startswith(scope + "/")]
+    if not rows:
+        return None
+    repo = _repo(app)
+    affected = set()
+    for row in rows:
+        parts = row["name"].split("/")
+        for i in range(1, len(parts) + 1):
+            affected.add("/".join(parts[:i]))
+    unmount = []
+    remount = []
+    for name in sorted(affected):
+        try:
+            mounted = repo.get_property(name, "mounted") == "yes"
+            canmount = repo.get_property(name, "canmount")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_msg(f"WARN: Error checking mount state for {name}: {e}")
+            return None
+        if mounted:
+            unmount.append(name)
+        if canmount != "off":
+            remount.append(name)
+    unmount.sort(key=lambda name: name.count("/"), reverse=True)
+    remount.sort(key=lambda name: name.count("/"))
+    return {
+        "rows": rows,
+        "unmount": unmount,
+        "remount": remount,
+        "property_fixes": mount_order_property_fixes(rows),
+    }
+
+
+def _format_repair_plan(plan):
+    """Render the plan lines shown in the confirmation dialog."""
+    lines = ["The following mounts are unreachable and will be reordered:"]
+    for row in plan["rows"]:
+        lines.append(f"  • {row['name']} (mountpoint {row['mountpoint']})")
+    lines.append("")
+    lines.append("Unmount (shadowed covers lifted as needed):")
+    lines.extend(f"  • {name}" for name in plan["unmount"])
+    lines.append("Remount parents first:")
+    lines.extend(f"  • {name}" for name in plan["remount"])
+    if plan["property_fixes"]:
+        lines.append("Dataset property changes (kept for future reboots):")
+        lines.extend(
+            f"  • {fix['dataset']}: canmount {fix['was']} → on "
+            "(so boot mounts it before its children)"
+            for fix in plan["property_fixes"]
+        )
+    return "\n".join(lines)
+
+
+def _confirm_mount_repair(app, plan):
+    """Show the approval dialog for a repair plan; True when approved."""
+    dialog = Gtk.MessageDialog(
+        transient_for=app,
+        modal=True,
+        message_type=Gtk.MessageType.QUESTION,
+        buttons=Gtk.ButtonsType.OK_CANCEL,
+        text="Repair mount order?",
+    )
+    dialog.format_secondary_text(_format_repair_plan(plan))
+    response = dialog.run()
+    dialog.destroy()
+    return response == Gtk.ResponseType.OK
+
+
+def _remount_repair_set(app, plan):
+    """Remount the plan's set shallowest-first; return the failed names."""
+    failed = []
+    for name in plan["remount"]:
+        result = subprocess.run(
+            ["sudo", "zfs", "mount", name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        stderr = result.stderr.strip()
+        if result.returncode == 0 or "already mounted" in stderr.lower():
+            log_msg(f"VERB: Mounted {name}")
+            continue
+        log_msg(f"WARN: Error mounting {name}: {stderr}")
+        failed.append(name)
+    return failed
+
+
+def execute_mount_repair(app, plan):
+    """Execute a mount-order repair plan; return True on verified success.
+
+    Property fixes are applied first, so even an interrupted repair
+    converges to the correct order at the next boot. The unmount phase
+    lifts covering ancestors as needed (shadowed mounts cannot be unmounted
+    by path while covered); on any failure everything still unmounted is
+    remounted parents-first — strictly better ordered than before — and a
+    FATAL names what to do next.
+    """
+    repo = _repo(app)
+
+    # Busy gate over everything that will be unmounted.
+    for name in plan["unmount"]:
+        try:
+            mountpoint = repo.get_property(name, "mountpoint")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_msg(f"FATAL: Error resolving mountpoint for {name}: {e}")
+            return False
+        procs = get_busy_processes(mountpoint)
+        if procs:
+            proc_list = "\n".join(f"  • {pname} (PID {pid})" for pid, pname in procs)
+            _warn_busy(
+                app,
+                "Cannot repair mount order",
+                (
+                    f"{name} is currently in use by:\n\n{proc_list}\n\n"
+                    "Close the listed application(s), then retry the repair."
+                ),
+            )
+            log_msg(
+                f"FATAL: Mount-order repair aborted: {name} is busy. "
+                "Close what is using it and retry."
+            )
+            return False
+
+    lock_names = plan["unmount"] + [n for n in plan["remount"] if n not in plan["unmount"]]
+    lifted = []
+    try:
+        with zlm.locks("w", lock_names):
+            # Property fixes first: durability even if a later phase aborts.
+            for fix in plan["property_fixes"]:
+                result = subprocess.run(
+                    [
+                        "sudo",
+                        "zfs",
+                        "set",
+                        f"{fix['property']}={fix['value']}",
+                        fix["dataset"],
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    log_msg(
+                        f"FATAL: Mount-order repair aborted: could not set "
+                        f"{fix['property']}={fix['value']} on {fix['dataset']}: "
+                        f"{result.stderr.strip()}"
+                    )
+                    return False
+                log_msg(
+                    f"INFO: Set {fix['property']}={fix['value']} on "
+                    f"{fix['dataset']} (was {fix['was']}) so boot mounts it "
+                    "before its children"
+                )
+
+            aborted = False
+            for name in plan["unmount"]:
+                if name in lifted:
+                    log_msg(f"VERB: Unmounted {name}")
+                    continue
+                result = subprocess.run(
+                    ["sudo", "zfs", "unmount", name],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    log_msg(f"VERB: Unmounted {name}")
+                    continue
+                stderr = result.stderr.strip()
+                if "no such pool or dataset" in stderr:
+                    # Expose the target: remount unmounted plan members on
+                    # its path (they are remounted at the end regardless),
+                    # then lift mounted covers from the plan's unmount set.
+                    path_members = [a for a in plan["remount"] if _is_name_ancestor(a, name)]
+                    for ancestor in path_members:
+                        try:
+                            already = repo.get_property(ancestor, "mounted") == "yes"
+                        except (subprocess.CalledProcessError, FileNotFoundError):
+                            already = False
+                        if already:
+                            continue
+                        mount_result = subprocess.run(
+                            ["sudo", "zfs", "mount", ancestor],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        if mount_result.returncode != 0:
+                            log_msg(
+                                f"WARN: Error mounting {ancestor} while "
+                                f"exposing {name}: {mount_result.stderr.strip()}"
+                            )
+                            continue
+                        log_msg(f"VERB: Mounted {ancestor}")
+                    retry = subprocess.run(
+                        ["sudo", "zfs", "unmount", name],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if retry.returncode == 0:
+                        log_msg(f"VERB: Unmounted {name}")
+                        continue
+                    candidates = [a for a in plan["unmount"] if _is_name_ancestor(a, name)]
+                    candidates.sort(key=lambda n: n.count("/"))
+                    if candidates and _lift_and_unmount(name, candidates, lifted, app, repo):
+                        log_msg(f"VERB: Unmounted {name}")
+                        continue
+                    log_msg(f"FATAL: Mount-order repair could not unmount {name}.")
+                else:
+                    log_msg(f"FATAL: Error unmounting {name} during repair: {stderr}")
+                aborted = True
+                break
+
+            failed = _remount_repair_set(app, plan)
+            if aborted:
+                log_msg(
+                    "FATAL: Mount-order repair incomplete: everything was "
+                    "remounted parents-first, but the ordering may still be "
+                    "wrong. Resolve the failure above and run the repair again."
+                )
+                return False
+            if failed:
+                log_msg(
+                    "FATAL: Mount-order repair could not remount: "
+                    f"{', '.join(failed)}. Retry the repair or mount them from "
+                    "the Datasets page."
+                )
+                return False
+
+            # Verification: every remounted member must be a real mountpoint.
+            bad = []
+            for name in plan["remount"]:
+                try:
+                    mountpoint = repo.get_property(name, "mountpoint")
+                    mounted = repo.get_property(name, "mounted") == "yes"
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    bad.append(name)
+                    continue
+                if not mounted or not os.path.ismount(mountpoint):
+                    bad.append(name)
+            if bad:
+                log_msg(
+                    f"FATAL: Mount-order repair verification failed for: "
+                    f"{', '.join(bad)}. Retry the repair; if it persists, check "
+                    "zpool status and the datasets' mountpoint properties."
+                )
+                return False
+            log_msg(
+                f"INFO: Repaired mount order: unmounted {len(plan['unmount'])} "
+                f"filesystem(s), remounted {len(plan['remount'])} parents-first"
+                + (
+                    f", set canmount=on on {len(plan['property_fixes'])} dataset(s)"
+                    if plan["property_fixes"]
+                    else ""
+                )
+            )
+            return True
+    except RuntimeError as exc:
+        log_msg(f"FATAL: cannot repair mount order: {exc}")
+        return False
+
+
+def run_mount_repair(app, scope=None):
+    """Plan a mount-order repair, get approval, and execute it.
+
+    Returns None when there is nothing to repair, False when cancelled or
+    failed, True on verified success — so callers can refresh the page for
+    every attempted repair.
+    """
+    plan = plan_mount_repair(app, scope=scope)
+    if plan is None:
+        log_msg("INFO: Mount order is clean; nothing to repair")
+        return None
+    if not _confirm_mount_repair(app, plan):
+        log_msg("INFO: Mount-order repair cancelled")
+        return False
+    return execute_mount_repair(app, plan)
+
+
+def on_datasets_repair_mount_order(app):
+    """Repair the mount order of the selected subtree (approval-gated)."""
+    items = get_tree_selection_items(app.datasets_view)
+    repairable = [
+        i
+        for i in items
+        if i["type"] in ("pool", "dataset") and (i.get("zfs_type") or "filesystem") == "filesystem"
+    ]
+    if len(repairable) != 1 or len(items) != 1:
+        log_msg("WARN: Select a single filesystem or pool to repair mount order")
+        return
+    result = run_mount_repair(app, scope=repairable[0]["name"])
+    if result is not None:
+        refresh_datasets_page(app)
 
 
 def _unmount_one_snapshot(item, repo, app):

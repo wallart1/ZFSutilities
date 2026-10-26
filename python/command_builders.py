@@ -1,11 +1,15 @@
 """Shared command builders for backup, offsite, restore, and retention operations."""
 
+import os
 import re
 import shlex
 import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from logging_config import log_msg
+from zfs_repository import validate_dest_mount_chain
 
 # Regex: \[\s*[\d.]+\s*[kKMGTP]?i?B/s\]
 # Purpose: Match pv progress output rate fields like [28.1MiB/s] or [ 148MiB/s].
@@ -106,6 +110,12 @@ def _diagnose_rsync_failure(rc, stderr_lines):
     if rc == 35:
         return "Timeout waiting for daemon connection"
     if rc == 11:
+        if "mkdir" in text and "no such file or directory" in text:
+            return (
+                "Destination directory is missing or unreachable — the "
+                "destination pool or dataset may be unmounted or shadowed by "
+                "another mount"
+            )
         return "Error in file I/O"
 
     return f"rsync exit code {rc}: {_RSYNC_EXIT_CODES.get(rc, 'unknown error')}"
@@ -281,6 +291,44 @@ def build_rsync_command(source, dest, remote_log_path=None, excludes=None):
         desc = f"[{local_host}] rsync {source} -> {dest}"
     metadata = {"rsync_output_location": output_location} if output_location else None
     return BashStep(cmd, desc, is_rsync=True, fatal=False, metadata=metadata)
+
+
+def prepare_rsync_destination(source, dest, dryrun):
+    """Fence and create the local destination of an rsync step.
+
+    Validates the destination's ZFS mount chain (see
+    ``zfs_repository.validate_dest_mount_chain``): an unmounted or shadowed
+    dataset on the path refuses the step instead of letting rsync fail with
+    a bare mkdir error — or worse, writing into the covering filesystem.
+    When the chain is clean, a missing destination directory below the
+    deepest dataset mountpoint is created (never in dry-run mode).
+
+    Returns True when the step may run.
+    """
+    dst_host, dst_path = parse_rsync_endpoint(dest)
+    if dst_host is not None:
+        # Remote destination: verifying it would need a zfs query on the
+        # remote host; pull steps are local-dest by design, so pass through.
+        return True
+    ok, message, base = validate_dest_mount_chain(dst_path)
+    if not ok:
+        log_msg(f"WARN: Skipping {source} -> {dest}: {message}")
+        return False
+    if base is None:
+        # Destination not on a ZFS filesystem: unfenced (historic behavior).
+        return True
+    dest_dir = os.path.normpath(dst_path)
+    if not os.path.isdir(dest_dir):
+        if dryrun:
+            log_msg(f"INFO: Dry-run: Would create destination directory {dest_dir}")
+        else:
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+            except OSError as exc:
+                log_msg(f"WARN: Skipping {source} -> {dest}: could not create {dest_dir}: {exc}")
+                return False
+            log_msg(f"INFO: Created destination directory {dest_dir}")
+    return True
 
 
 def build_send_receive_command(source, dest, variables, parent_dir, nextsnap, dryrun=False):

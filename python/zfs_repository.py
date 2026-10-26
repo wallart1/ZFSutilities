@@ -69,6 +69,183 @@ def is_dataset_encrypted(path):
         return False
 
 
+def _list_fs_mount_state():
+    """Return filesystem ``(name, mountpoint, mounted)`` rows, or None on failure.
+
+    Rows whose mountpoint is legacy/none/empty are skipped: they have no
+    path to validate. On any query failure None is returned so callers can
+    refuse to act on an unverifiable mount state.
+    """
+    try:
+        result = subprocess.run(
+            ["zfs", "list", "-H", "-o", "name,mountpoint,mounted", "-t", "filesystem"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    rows = []
+    for line in result.stdout.strip().splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        name, mountpoint, mounted = (p.strip() for p in parts)
+        if not name or mountpoint in ("", "-", "none", "legacy"):
+            continue
+        mountpoint = mountpoint.rstrip("/")
+        if not mountpoint:
+            mountpoint = "/"
+        rows.append((name, mountpoint, mounted))
+    return rows
+
+
+def validate_dest_mount_chain(dest):
+    """Validate that *dest* is reachable through its ZFS mount chain.
+
+    Every filesystem dataset whose mountpoint is a path prefix of *dest*
+    must be mounted and its mountpoint must resolve to a real mountpoint.
+    The reachability check catches shadowed mounts: a dataset can report
+    ``mounted=yes`` while a later mount over an ancestor (e.g. a pool root
+    with ``canmount=noauto`` mounted after its children) makes its path
+    unreachable, which would otherwise send backups into the covering
+    filesystem or fail with a bare rsync mkdir error.
+
+    Returns a tuple ``(ok, message, base_mountpoint)``. When *ok* is False,
+    *message* names the offending dataset and the reason. *base_mountpoint*
+    is the deepest dataset mountpoint lying on the path (None when the
+    destination is not on any ZFS filesystem, in which case the chain is
+    unfenced and *ok* is True). A failing ``zfs list`` refuses the chain:
+    an unverifiable destination must not be written to.
+    """
+    if not dest or not dest.strip():
+        return False, "destination path is empty", None
+    abs_path = os.path.normpath(os.path.abspath(dest))
+    rows = _list_fs_mount_state()
+    if rows is None:
+        return False, "could not verify the destination mount chain: zfs list failed", None
+
+    # Datasets whose mountpoint lies on the destination path, deepest first.
+    chain = [
+        (name, mountpoint, mounted)
+        for name, mountpoint, mounted in rows
+        if abs_path == mountpoint or abs_path.startswith(mountpoint + "/")
+    ]
+    chain.sort(key=lambda item: len(item[1]), reverse=True)
+
+    for name, mountpoint, mounted in chain:
+        if mounted != "yes":
+            return (
+                False,
+                (
+                    f"dataset {name} covers {mountpoint} but is not mounted; "
+                    f"mount it before writing to {abs_path}"
+                ),
+                None,
+            )
+        if not os.path.isdir(mountpoint) or not os.path.ismount(mountpoint):
+            return (
+                False,
+                (
+                    f"dataset {name} reports itself mounted at {mountpoint} but the "
+                    "path is unreachable — it is shadowed by a later mount over an "
+                    "ancestor (e.g. a pool root mounted after its children); fix the "
+                    f"mount order before writing to {abs_path}"
+                ),
+                None,
+            )
+    base = chain[0][1] if chain else None
+    return True, "", base
+
+
+def find_unreachable_mounts():
+    """Return mounted filesystems whose mountpoint path is unreachable.
+
+    Each row is a dict with ``name`` and ``mountpoint``. A dataset that the
+    kernel lists as mounted while its mountpoint path is missing or not an
+    actual mountpoint is erroneous regardless of cause (a later mount over
+    an ancestor — a shadowed mount — or an unmounted parent — an orphan):
+    data written through the path lands in the wrong filesystem, and
+    ``zfs unmount`` cannot address it by path. Returns [] when the mount
+    state cannot be queried.
+    """
+    rows = _list_fs_mount_state()
+    if rows is None:
+        return []
+    unreachable = []
+    for name, mountpoint, mounted in rows:
+        if mounted != "yes":
+            continue
+        if not os.path.isdir(mountpoint) or not os.path.ismount(mountpoint):
+            unreachable.append({"name": name, "mountpoint": mountpoint})
+    return unreachable
+
+
+def mount_order_property_fixes(rows):
+    """Return canmount fixes that make correct mount order survive reboots.
+
+    For every erroneous mount in *rows* (as returned by
+    ``find_unreachable_mounts``), any ancestor dataset with
+    ``canmount=noauto`` is returned as a fix setting ``canmount=on``. The
+    boot-time ``zfs mount -a`` mounts in parent-first order only when
+    parents auto-mount, so a noauto ancestor with auto-mounting children is
+    what allows shadowing to recur at every boot. An ancestor of an
+    erroneous row by definition has a mounted (hence mountable) descendant,
+    so the noauto value is erroneous for it. Leaf datasets with noauto are
+    never returned — they cannot be ancestors and mounting them on demand
+    is a legitimate choice that does not endanger ordering.
+
+    Returns a list of dicts: ``dataset``, ``property`` ("canmount"),
+    ``value`` ("on"), ``was`` (the previous value). Duplicates across rows
+    are collapsed.
+    """
+    if not rows:
+        return []
+    all_rows = _list_fs_mount_state()
+    if all_rows is None:
+        return []
+    fixes = []
+    seen = set()
+    for row in rows:
+        mountpoint = row["mountpoint"].rstrip("/") or "/"
+        for name, mp, _mounted in all_rows:
+            if mp == mountpoint or not mountpoint.startswith(mp + "/"):
+                continue  # not a strict-prefix ancestor of the erroneous mount
+            if name in seen:
+                continue
+            value = _zfs_get_property(name, "canmount")
+            if value != "noauto":
+                continue
+            seen.add(name)
+            fixes.append(
+                {
+                    "dataset": name,
+                    "property": "canmount",
+                    "value": "on",
+                    "was": value,
+                }
+            )
+    return fixes
+
+
+def _zfs_get_property(dataset, prop):
+    """Return the raw value of a dataset property, or "" on failure."""
+    try:
+        result = subprocess.run(
+            ["zfs", "get", "-H", "-o", "value", prop, dataset],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
 # Regex: ^[\s]*errors:\s*(.+?)\s*$
 # Purpose: Extract the summary text from the "errors:" line in zpool status.
 # Group 1: Error summary text, e.g. "No known data errors".

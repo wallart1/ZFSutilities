@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import MagicMock, patch
@@ -35,8 +36,11 @@ from zfs_repository import (
     build_pool_set_command,
     build_release_holds_command,
     build_replace_command,
+    find_unreachable_mounts,
     is_dataset_encrypted,
+    mount_order_property_fixes,
     valid_rate_limit,
+    validate_dest_mount_chain,
     zvol_device_path,
 )
 
@@ -1425,10 +1429,6 @@ class TestScrubCommandsLogDebug(unittest.TestCase):
         self._assert_scrub_log(logs, "sudo zpool scrub tank")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestIsDatasetEncrypted(unittest.TestCase):
     """is_dataset_encrypted matches a path to its ZFS dataset encryption."""
 
@@ -1850,3 +1850,222 @@ class TestParseLsblkPartitions(unittest.TestCase):
 
     def test_empty_output_returns_no_partitions(self):
         self.assertEqual(_parse_lsblk_partitions('{"blockdevices": []}', "/dev/loop0"), [])
+
+
+class TestValidateDestMountChain(unittest.TestCase):
+    """validate_dest_mount_chain fences destinations behind bad mount chains."""
+
+    def _fake_mount_rows(self, m, rows, rc=0, stderr=""):
+        stdout = "\n".join(f"{name}\t{mp}\t{mounted}" for name, mp, mounted in rows)
+        m.set_command_handler(
+            r"zfs list -H -o name,mountpoint,mounted",
+            lambda cmd, **kwargs: m._completed(stdout, stderr=stderr, rc=rc),
+        )
+
+    def test_clean_chain_ok_with_deepest_base(self):
+        with tempfile.TemporaryDirectory() as base:
+            child = os.path.join(base, "proxmox")
+            os.makedirs(child)
+            with mock_subprocess() as m:
+                self._fake_mount_rows(
+                    m,
+                    [("tank", base, "yes"), ("tank/proxmox", child, "yes")],
+                )
+                with patch("os.path.ismount", side_effect=lambda p: p in (base, child)):
+                    ok, message, mount_base = validate_dest_mount_chain(
+                        os.path.join(child, "host", "etc")
+                    )
+            self.assertTrue(ok)
+            self.assertEqual(message, "")
+            self.assertEqual(mount_base, child)
+
+    def test_shadowed_mount_refuses(self):
+        with mock_subprocess() as m:
+            self._fake_mount_rows(
+                m,
+                [
+                    ("tank", "/missing-pool", "yes"),
+                    ("tank/proxmox", "/missing-pool/proxmox", "yes"),
+                ],
+            )
+            ok, message, _ = validate_dest_mount_chain("/missing-pool/proxmox/etc")
+        self.assertFalse(ok)
+        self.assertIn("shadowed", message)
+
+    def test_unmounted_dataset_refuses(self):
+        with mock_subprocess() as m:
+            self._fake_mount_rows(m, [("tank/proxmox", "/mnt/tank/proxmox", "no")])
+            ok, message, _ = validate_dest_mount_chain("/mnt/tank/proxmox/etc")
+        self.assertFalse(ok)
+        self.assertIn("is not mounted", message)
+
+    def test_zfs_list_failure_refuses(self):
+        with mock_subprocess() as m:
+            self._fake_mount_rows(m, [], rc=1, stderr="permission denied")
+            ok, message, _ = validate_dest_mount_chain("/tank/etc")
+        self.assertFalse(ok)
+        self.assertIn("could not verify", message)
+
+    def test_non_zfs_destination_ok_without_base(self):
+        with tempfile.TemporaryDirectory() as base:
+            with mock_subprocess() as m:
+                self._fake_mount_rows(m, [("tank", "/elsewhere", "yes")])
+                ok, message, mount_base = validate_dest_mount_chain(
+                    os.path.join(base, "plain", "etc")
+                )
+        self.assertTrue(ok)
+        self.assertEqual(message, "")
+        self.assertIsNone(mount_base)
+
+    def test_empty_destination_refuses(self):
+        ok, message, _ = validate_dest_mount_chain("  ")
+        self.assertFalse(ok)
+        self.assertIn("empty", message)
+
+    def test_dest_equal_to_mountpoint_is_validated(self):
+        with mock_subprocess() as m:
+            self._fake_mount_rows(m, [("tank/proxmox", "/missing-pool/proxmox", "yes")])
+            ok, message, _ = validate_dest_mount_chain("/missing-pool/proxmox")
+        self.assertFalse(ok)
+        self.assertIn("shadowed", message)
+
+
+class TestFindUnreachableMounts(unittest.TestCase):
+    """The detector reports mounted filesystems with unreachable paths."""
+
+    def _rows(self, m, rows):
+        stdout = "\n".join(f"{name}\t{mp}\t{mounted}" for name, mp, mounted in rows)
+        m.set_command_handler(
+            r"zfs list -H -o name,mountpoint,mounted",
+            lambda cmd, **kwargs: m._completed(stdout),
+        )
+
+    def test_reports_mounted_dataset_with_missing_path(self):
+        with mock_subprocess() as m:
+            self._rows(
+                m,
+                [
+                    ("tank", "/tank", "yes"),
+                    ("tank/proxmox/Stewie", "/tank/proxmox/Stewie", "yes"),
+                ],
+            )
+            with (
+                patch("os.path.isdir", side_effect=lambda p: p == "/tank"),
+                patch("os.path.ismount", side_effect=lambda p: p == "/tank"),
+            ):
+                found = find_unreachable_mounts()
+        self.assertEqual([r["name"] for r in found], ["tank/proxmox/Stewie"])
+        self.assertEqual(found[0]["mountpoint"], "/tank/proxmox/Stewie")
+
+    def test_existing_mountpoints_not_reported(self):
+        with mock_subprocess() as m:
+            self._rows(
+                m,
+                [
+                    ("tank", "/tank", "yes"),
+                    ("tank/proxmox/Stewie", "/tank/proxmox/Stewie", "yes"),
+                ],
+            )
+            with (
+                patch("os.path.ismount", return_value=True),
+                patch("os.path.isdir", return_value=True),
+            ):
+                found = find_unreachable_mounts()
+        self.assertEqual(found, [])
+
+    def test_unmounted_dataset_with_missing_path_not_reported(self):
+        with mock_subprocess() as m:
+            self._rows(m, [("tank/proxmox/Stewie", "/tank/proxmox/Stewie", "no")])
+            found = find_unreachable_mounts()
+        self.assertEqual(found, [])
+
+    def test_query_failure_returns_empty(self):
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"zfs list -H -o name,mountpoint,mounted",
+                lambda cmd, **kwargs: m._completed("", stderr="permission denied", rc=1),
+            )
+            found = find_unreachable_mounts()
+        self.assertEqual(found, [])
+
+
+class TestMountOrderPropertyFixes(unittest.TestCase):
+    """noauto ancestors of erroneous mounts are flagged for canmount=on."""
+
+    def _rows(self, m, rows):
+        stdout = "\n".join(f"{name}\t{mp}\t{mounted}" for name, mp, mounted in rows)
+        m.set_command_handler(
+            r"zfs list -H -o name,mountpoint,mounted",
+            lambda cmd, **kwargs: m._completed(stdout),
+        )
+
+    def test_noauto_ancestor_is_fixed(self):
+        erroneous = [{"name": "tank/proxmox/Stewie", "mountpoint": "/tank/proxmox/Stewie"}]
+        with mock_subprocess() as m:
+            self._rows(
+                m,
+                [
+                    ("tank", "/tank", "yes"),
+                    ("tank/proxmox", "/tank/proxmox", "yes"),
+                    ("tank/proxmox/Stewie", "/tank/proxmox/Stewie", "yes"),
+                ],
+            )
+            m.set_command_handler(
+                r"zfs get -H -o value canmount",
+                lambda cmd, **kwargs: m._completed("noauto" if cmd[-1] == "tank" else "on"),
+            )
+            fixes = mount_order_property_fixes(erroneous)
+        self.assertEqual(
+            fixes,
+            [{"dataset": "tank", "property": "canmount", "value": "on", "was": "noauto"}],
+        )
+
+    def test_auto_ancestors_not_fixed(self):
+        erroneous = [{"name": "tank/proxmox/Stewie", "mountpoint": "/tank/proxmox/Stewie"}]
+        with mock_subprocess() as m:
+            self._rows(
+                m,
+                [
+                    ("tank", "/tank", "yes"),
+                    ("tank/proxmox/Stewie", "/tank/proxmox/Stewie", "yes"),
+                ],
+            )
+            m.set_command_handler(
+                r"zfs get -H -o value canmount",
+                lambda cmd, **kwargs: m._completed("on"),
+            )
+            fixes = mount_order_property_fixes(erroneous)
+        self.assertEqual(fixes, [])
+
+    def test_no_rows_no_fixes(self):
+        with mock_subprocess() as m:
+            self._rows(m, [])
+            fixes = mount_order_property_fixes([])
+        self.assertEqual(fixes, [])
+
+    def test_duplicate_ancestors_collapsed(self):
+        erroneous = [
+            {"name": "tank/proxmox/Stewie", "mountpoint": "/tank/proxmox/Stewie"},
+            {"name": "tank/proxmox/Tweety", "mountpoint": "/tank/proxmox/Tweety"},
+        ]
+        with mock_subprocess() as m:
+            self._rows(
+                m,
+                [
+                    ("tank", "/tank", "yes"),
+                    ("tank/proxmox", "/tank/proxmox", "yes"),
+                    ("tank/proxmox/Stewie", "/tank/proxmox/Stewie", "yes"),
+                    ("tank/proxmox/Tweety", "/tank/proxmox/Tweety", "yes"),
+                ],
+            )
+            m.set_command_handler(
+                r"zfs get -H -o value canmount",
+                lambda cmd, **kwargs: m._completed("noauto" if cmd[-1] == "tank" else "on"),
+            )
+            fixes = mount_order_property_fixes(erroneous)
+        self.assertEqual(len(fixes), 1)
+        self.assertEqual(fixes[0]["dataset"], "tank")
+
+
+if __name__ == "__main__":
+    unittest.main()

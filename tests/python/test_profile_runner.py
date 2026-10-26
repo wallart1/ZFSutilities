@@ -3,6 +3,7 @@
 import io
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -162,6 +163,96 @@ class TestRunBackupProfile(unittest.TestCase):
                 self.assertEqual(rc, 0)
                 # Should have logged snapshot name and steps
                 self.assertTrue(any("Backup snapshot:" in msg for msg in logs))
+
+    def test_fenced_destination_skips_step_and_fails_run(self):
+        with temp_config_dir():
+            profile = {
+                "config": {
+                    "variables": {"label": "dailybackup"},
+                    "pull_steps": [
+                        # Local destination behind a shadowed ZFS mount chain.
+                        {
+                            "source": "/etc/",
+                            "dest": "/missing-pool/proxmox/host/etc/",
+                            "active": True,
+                        },
+                    ],
+                    "send_receive_steps": [
+                        {"source": "tank/src", "dest": "tank/dst", "active": True},
+                    ],
+                    "post_steps": {"run_retention": False, "remove_snapfile": False},
+                    "pre_backup_script_enabled": False,
+                    "post_backup_script_enabled": False,
+                }
+            }
+            config = {}
+            with mock_subprocess() as m:
+                rows = "tank\t/missing-pool\tyes\ntank/proxmox\t/missing-pool/proxmox\tyes"
+                m.set_command_handler(
+                    r"zfs list -H -o name,mountpoint,mounted",
+                    lambda cmd, **kwargs: m._completed(rows),
+                )
+                rsync_calls = []
+                m.set_command_handler(
+                    r"rsync",
+                    lambda cmd, **kwargs: rsync_calls.append(cmd) or m._completed("", rc=0),
+                )
+                m.set_command_handler(
+                    r"send-receive",
+                    lambda cmd, **kwargs: m._completed("", rc=0),
+                )
+                with capture_logs() as logs:
+                    rc = profile_runner.run_backup_profile(profile, config, "/bin")
+            self.assertEqual(rc, 11)
+            self.assertEqual(rsync_calls, [])
+            self.assertTrue(any("shadowed" in msg for msg in logs))
+
+    def test_fenced_keys_destination_refuses_keys_step(self):
+        """A fenced keys destination (encrypted-gate passed) still refuses."""
+        with temp_config_dir():
+            profile = {
+                "config": {
+                    "variables": {"label": "dailybackup"},
+                    "pull_steps": [],
+                    "send_receive_steps": [
+                        {"source": "tank/src", "dest": "tank/dst", "active": True},
+                    ],
+                    "post_steps": {"run_retention": False, "remove_snapfile": False},
+                    "pre_backup_script_enabled": False,
+                    "post_backup_script_enabled": False,
+                    "zfs_keys_path": "/etc/zfs-keys/",
+                    "zfs_keys_dest": "/missing-pool/keys",
+                }
+            }
+            config = {}
+            with mock_subprocess() as m:
+                rows = "tank\t/missing-pool\tyes"
+                m.set_command_handler(
+                    r"zfs list -H -o name,mountpoint,mounted",
+                    lambda cmd, **kwargs: m._completed(rows),
+                )
+                m.set_command_handler(
+                    r"zfs list -H -o name,mountpoint$",
+                    lambda cmd, **kwargs: m._completed("tank\t/missing-pool"),
+                )
+                m.set_command_handler(
+                    r"zfs get -H -o value encryption",
+                    lambda cmd, **kwargs: m._completed("aes-256-gcm"),
+                )
+                rsync_calls = []
+                m.set_command_handler(
+                    r"rsync",
+                    lambda cmd, **kwargs: rsync_calls.append(cmd) or m._completed("", rc=0),
+                )
+                m.set_command_handler(
+                    r"send-receive",
+                    lambda cmd, **kwargs: m._completed("", rc=0),
+                )
+                with capture_logs() as logs:
+                    rc = profile_runner.run_backup_profile(profile, config, "/bin")
+            self.assertEqual(rc, 11)
+            self.assertEqual(rsync_calls, [])
+            self.assertTrue(any("shadowed" in msg for msg in logs))
 
     def test_empty_steps_aborts_fatal(self):
         with temp_config_dir():
@@ -2181,6 +2272,278 @@ class TestCrashRecording(unittest.TestCase):
                 content = f.read()
             self.assertIn("synthetic crash", content)
             self.assertIn("# END: rc=1", content)
+
+
+class TestGracefulCancellation(unittest.TestCase):
+    """SIGTERM/SIGINT cancellation: no further steps, distinct rc."""
+
+    def setUp(self):
+        self._orig_cancel = profile_runner._cancel_requested
+        profile_runner._cancel_requested = False
+
+    def tearDown(self):
+        profile_runner._cancel_requested = self._orig_cancel
+
+    def test_cancel_breaks_lock_wait_immediately(self):
+        """A waiting acquire returns None at once when cancel is requested."""
+        import fcntl
+
+        with temp_config_dir():
+            fd, _lock_path = profile_runner.acquire_profile_lock("waitcancel", timeout=0.1)
+            self.assertIsNotNone(fd)
+            profile_runner._cancel_requested = True
+            try:
+                start = time.time()
+                with capture_logs() as logs:
+                    result = profile_runner.acquire_profile_lock("waitcancel", timeout=60)
+                elapsed = time.time() - start
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+        self.assertIsNone(result[0])
+        self.assertLess(elapsed, 10)
+        self.assertFalse(any("already running" in msg for msg in logs))
+
+    def test_cancel_flag_aborts_before_first_step(self):
+        profile_runner._cancel_requested = True
+        step = BashStep(["true"], "a step")
+        with patch.object(profile_runner, "_run_command") as mock_run:
+            with capture_logs() as logs:
+                rc = profile_runner._run_step_list([step])
+        self.assertEqual(rc, profile_runner.PROFILE_CANCELLED_RC)
+        mock_run.assert_not_called()
+        self.assertTrue(any("cancelled by operator" in msg for msg in logs))
+
+    def test_cancel_between_steps_stops_the_run(self):
+        steps = [BashStep(["true"], "first"), BashStep(["true"], "second")]
+
+        def fake_run(step, session_log_file=None):
+            profile_runner._cancel_requested = True
+            return 0
+
+        with patch.object(profile_runner, "_run_command", side_effect=fake_run):
+            rc = profile_runner._run_step_list(steps)
+        self.assertEqual(rc, profile_runner.PROFILE_CANCELLED_RC)
+
+    def test_cancelled_step_not_diagnosed_as_rsync_failure(self):
+        step = BashStep(["bash", "-c", "true"], "an rsync step", is_rsync=True)
+        with mock_subprocess() as m:
+            m.set_command_handler(r".*", lambda cmd, **kwargs: m._completed("", rc=-15))
+            profile_runner._cancel_requested = True
+            with capture_logs() as logs:
+                rc = profile_runner._run_command(step)
+        self.assertEqual(rc, -15)
+        self.assertTrue(any("terminated by cancellation" in msg for msg in logs))
+        self.assertFalse(any("failed:" in msg for msg in logs))
+
+    def test_cancelled_run_records_cancelled_history_and_trailer(self):
+        """main() marks a cancelled run as cancelled, not failed."""
+        profile = {
+            "tab_type": "backup",
+            "config": {"variables": {"label": "dailybackup"}},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lock_dir = os.path.join(tmpdir, "locks")
+            os.makedirs(lock_dir)
+            orig_lock_dir = profile_runner.PROFILE_LOCK_DIR
+            profile_runner.PROFILE_LOCK_DIR = lock_dir
+            try:
+
+                def runner_cancelled(profile, config, parent_dir, session_log_file=None):
+                    profile_runner._cancel_requested = True
+                    return 0
+
+                with ExitStack() as stack:
+                    stack.enter_context(
+                        patch.object(sys, "argv", ["profile_runner.py", "run", "Daily"])
+                    )
+                    stack.enter_context(patch("profile_runner.load_profile", return_value=profile))
+                    stack.enter_context(patch("profile_runner.load_config", return_value={}))
+                    stack.enter_context(patch("profile_runner.prune_old_logs"))
+                    mock_add = stack.enter_context(patch("profile_runner.add_history_entry"))
+                    mock_trailer = stack.enter_context(patch("session_log.write_session_trailer"))
+                    mock_exit = stack.enter_context(patch("profile_runner.sys.exit"))
+                    stack.enter_context(
+                        patch("session_log.create_session_log_file", return_value=None)
+                    )
+                    stack.enter_context(
+                        patch("profile_runner.run_backup_profile", side_effect=runner_cancelled)
+                    )
+                    profile_runner.main()
+            finally:
+                profile_runner.PROFILE_LOCK_DIR = orig_lock_dir
+        entry = mock_add.call_args[0][0]
+        self.assertEqual(entry["result"], "cancelled")
+        self.assertTrue(mock_trailer.call_args.kwargs.get("cancelled"))
+        mock_exit.assert_called_once_with(profile_runner.PROFILE_CANCELLED_RC)
+
+
+class TestCancelSubprocess(unittest.TestCase):
+    """A SIGTERM to the real runner cancels it gracefully end-to-end."""
+
+    _RUNNER = os.path.abspath(profile_runner.__file__)
+
+    @staticmethod
+    def _session_log_paths(tmpdir):
+        sessions = os.path.join(tmpdir, "logs", "sessions")
+        if not os.path.isdir(sessions):
+            return []
+        return [os.path.join(sessions, n) for n in sorted(os.listdir(sessions))]
+
+    def test_sigterm_cancels_running_profile(self):
+        import profile_manager
+
+        with temp_config_dir() as tmpdir:
+            profile_manager.save_profile(
+                {
+                    "profile_name": "cancelfixture",
+                    "tab_type": "backup",
+                    "cron": {"weekday": "*"},
+                    "config": {
+                        "variables": {"label": "dailybackup"},
+                        "pre_backup_script_enabled": True,
+                        "pre_backup_script": "sleep 30",
+                        "pull_steps": [],
+                        "send_receive_steps": [],
+                        "post_steps": {"run_retention": False, "remove_snapfile": True},
+                        "post_backup_script_enabled": False,
+                    },
+                }
+            )
+            env = os.environ.copy()
+            with subprocess.Popen(
+                [sys.executable, self._RUNNER, "run", "cancelfixture"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+            ) as proc:
+                try:
+                    # Wait until the pre-backup sleep step is actually running
+                    # (its description lands in the session log), then cancel.
+                    deadline = time.time() + 15
+                    started = False
+                    while time.time() < deadline:
+                        if proc.poll() is not None:
+                            self.fail("runner exited before it could be cancelled")
+                        for path in self._session_log_paths(tmpdir):
+                            try:
+                                with open(path, errors="replace") as fh:
+                                    if "Pre-backup command" in fh.read():
+                                        started = True
+                            except OSError:
+                                continue
+                        if started:
+                            break
+                        time.sleep(0.05)
+                    self.assertTrue(started, "pre-backup step never appeared in the log")
+                    os.kill(proc.pid, signal.SIGTERM)
+                    rc = proc.wait(timeout=15)
+                except Exception:
+                    if proc.poll() is None:
+                        proc.kill()
+                        proc.wait()
+                    raise
+            self.assertEqual(rc, profile_runner.PROFILE_CANCELLED_RC)
+            trailers = []
+            for path in self._session_log_paths(tmpdir):
+                with open(path, errors="replace") as fh:
+                    content = fh.read()
+                if "# END:" in content:
+                    trailers.append(content)
+            self.assertTrue(trailers)
+            self.assertIn("# END: cancelled", trailers[-1])
+            # The lock file must be gone: the finally block released it. The
+            # child locked under the env override, not the patched constant.
+            child_lock_dir = os.environ.get(
+                "ZFSUTILITIES_PROFILE_LOCK_DIR", os.path.join(tmpdir, "profiles", "locks")
+            )
+            self.assertEqual(os.listdir(child_lock_dir), [])
+
+    def test_sigterm_cancels_waiting_profile(self):
+        """A SIGTERM to a lock-waiting runner cancels it with rc=125."""
+        import profile_manager
+
+        with temp_config_dir() as tmpdir:
+            profile_manager.save_profile(
+                {
+                    "profile_name": "cancelfixture",
+                    "tab_type": "backup",
+                    "cron": {"weekday": "*"},
+                    "config": {
+                        "variables": {"label": "dailybackup"},
+                        "pre_backup_script_enabled": True,
+                        "pre_backup_script": "sleep 30",
+                        "pull_steps": [],
+                        "send_receive_steps": [],
+                        "post_steps": {"run_retention": False, "remove_snapfile": True},
+                        "post_backup_script_enabled": False,
+                    },
+                }
+            )
+            env = os.environ.copy()
+            # The second runner must still be waiting when the SIGTERM lands.
+            env["ZFSUTILITIES_PROFILE_LOCK_TIMEOUT"] = "60"
+            runner_cmd = [sys.executable, self._RUNNER, "run", "cancelfixture"]
+            with subprocess.Popen(
+                runner_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env
+            ) as first:
+                try:
+                    deadline = time.time() + 15
+                    started = False
+                    while time.time() < deadline:
+                        if first.poll() is not None:
+                            self.fail("first runner exited before holding the lock")
+                        for path in self._session_log_paths(tmpdir):
+                            try:
+                                with open(path, errors="replace") as fh:
+                                    if "Pre-backup command" in fh.read():
+                                        started = True
+                            except OSError:
+                                continue
+                        if started:
+                            break
+                        time.sleep(0.05)
+                    self.assertTrue(started, "first runner never started its step")
+
+                    with subprocess.Popen(
+                        runner_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env
+                    ) as second:
+                        try:
+                            deadline = time.time() + 15
+                            waiting_log = None
+                            while time.time() < deadline:
+                                if second.poll() is not None:
+                                    self.fail("waiting runner exited before the SIGTERM")
+                                for path in self._session_log_paths(tmpdir):
+                                    try:
+                                        with open(path, errors="replace") as fh:
+                                            content = fh.read()
+                                    except OSError:
+                                        continue
+                                    if "already running" in content:
+                                        waiting_log = path
+                                if waiting_log:
+                                    break
+                                time.sleep(0.05)
+                            self.assertIsNotNone(waiting_log, "runner never entered lock wait")
+                            os.kill(second.pid, signal.SIGTERM)
+                            rc = second.wait(timeout=15)
+                        except Exception:
+                            if second.poll() is None:
+                                second.kill()
+                                second.wait()
+                            raise
+                    self.assertEqual(rc, profile_runner.PROFILE_CANCELLED_RC)
+                    with open(waiting_log, errors="replace") as fh:
+                        self.assertIn("# END: cancelled", fh.read())
+                finally:
+                    if first.poll() is None:
+                        first.terminate()
+                        try:
+                            first.wait(timeout=15)
+                        except subprocess.TimeoutExpired:
+                            first.kill()
+                            first.wait()
 
 
 if __name__ == "__main__":

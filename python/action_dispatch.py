@@ -32,6 +32,7 @@ from dashboard_page import (
     on_dashboard_fix_locks,
     on_dashboard_refresh,
     on_dashboard_remove_selected,
+    on_dashboard_repair_mount_order,
     on_dashboard_view_log,
     setup_dashboard_actions,
 )
@@ -40,6 +41,7 @@ from dataset_actions import (
     on_datasets_delete,
     on_datasets_hold,
     on_datasets_mount,
+    on_datasets_repair_mount_order,
     on_datasets_rollback,
     on_datasets_show_big_stuff,
     on_datasets_snapshot,
@@ -280,6 +282,7 @@ PAGE_SPECS = {
             ("Browse", "folder-open", "_ds_browse_btn"),
             ("Mount", "media-mount", "_ds_mount_btn"),
             ("Unmount", "media-eject", "_ds_unmount_btn"),
+            ("Repair Mount Order", "system-run", "_ds_repair_mount_order_btn"),
             ("Apply Profile…", "dialog-apply", "_ds_apply_profile_btn"),
             ("Rewrite Data", "document-edit", "_ds_rewrite_data_btn"),
             ("Sever Clone", "edit-cut", "_ds_sever_clone_btn"),
@@ -309,6 +312,7 @@ PAGE_SPECS = {
         "buttons": [
             ("Refresh", "view-refresh", None),
             ("Fix Locks", "edit-clear", "_fix_locks_button"),
+            ("Repair Mount Order", "system-run", "_repair_mount_order_button"),
             ("Cancel Selected Tasks", "process-stop", "_cancel_selected_button"),
             ("Remove Selected", "edit-delete", "_remove_button"),
             ("View Log", "text-x-generic", "_view_log_button"),
@@ -532,6 +536,7 @@ ACTION_HANDLERS = {
         "Browse": on_datasets_browse,
         "Mount": on_datasets_mount,
         "Unmount": on_datasets_unmount,
+        "Repair Mount Order": on_datasets_repair_mount_order,
         "Apply Profile…": on_datasets_apply_profile,
         "Rewrite Data": on_datasets_rewrite_data,
         "Sever Clone": on_datasets_sever_clone,
@@ -567,6 +572,7 @@ ACTION_HANDLERS = {
     "dashboard": {
         "Refresh": on_dashboard_refresh,
         "Fix Locks": on_dashboard_fix_locks,
+        "Repair Mount Order": on_dashboard_repair_mount_order,
         "Cancel Selected Tasks": on_dashboard_cancel_selected,
         "Remove Selected": on_dashboard_remove_selected,
         "View Log": on_dashboard_view_log,

@@ -1,5 +1,101 @@
 # Changelog
 
+## 0.134.0
+
+*Released 2026-10-26*
+
+### Added
+
+- **Rsync destination mount-chain fence.** Every local rsync
+  destination — backup pull steps and the ZFS keys copy, in both the
+  GUI Backup tab and the headless profile runner — is validated before
+  the step runs: each filesystem dataset whose mountpoint prefixes the
+  destination must be `mounted=yes` with a path that resolves to a
+  real mountpoint, so an unmounted or shadowed destination (a later
+  mount covering an ancestor — typically a pool root with
+  `canmount=noauto` mounted after its children) refuses the step with
+  a `WARN` naming the dataset instead of failing with a bare rsync
+  mkdir error or, worse, writing into the covering filesystem. An
+  unverifiable mount state refuses too — a destination that cannot be
+  verified is never written to. A refused destination fails the run
+  with `rc=11` even when every executed step succeeded, and `rc=11`
+  with the mkdir-ENOENT signature is diagnosed as an
+  unmounted/shadowed destination rather than a bare file-I/O error. On
+  a clean chain, a missing destination directory below the deepest
+  dataset mountpoint is created automatically (dry-runs log it
+  instead), so a fresh destination needs no manual setup.
+- **Graceful profile cancellation.** SIGTERM or SIGINT to the profile
+  runner terminates the in-flight step's whole process group (steps
+  now run in their own session, so the bash wrapper and its
+  rsync/tee/zfs pipeline die together), starts no further steps, and
+  aborts a profile-lock wait immediately. A cancelled run finishes
+  with exit code 125 (`PROFILE_CANCELLED_RC`, outside rsync's 0–35
+  and the tooling's other codes), a `cancelled` history entry shown
+  with an amber marker on the Dashboard, and a `# END: cancelled`
+  session trailer — distinct from a failure. The Dashboard's Cancel
+  action now really cancels profiles: the profile branch sends
+  SIGTERM to the runner's PID (it previously only logged advice
+  pointing at other buttons), and a waiting profile cancels the same
+  way.
+- **Mount-order governance.** Unreachable mounts — datasets the kernel
+  lists as mounted whose mountpoint path is missing or not a real
+  mountpoint, whether shadowed by a covering ancestor or orphaned
+  under an unmounted one — are detected and repaired as a maintained
+  product invariant. The Dashboard lists every finding in **Warnings**
+  and enables a contextual **Repair Mount Order** action for all of
+  them; the Datasets tab offers the same repair scoped to a single
+  selected filesystem or pool. The approval dialog renders the exact
+  plan: which filesystems are unmounted (shadowed covers lifted as
+  needed), the parents-first remount order, and the `canmount=on`
+  corrections for erroneous `noauto` ancestors — applied first, so
+  even an interrupted repair converges to the correct order at the
+  next boot. A busy gate aborts before any unmount, every remount is
+  verified to be a real mountpoint, and a mid-repair failure remounts
+  everything parents-first with a message naming what to do next.
+  **Unmount** also recovers unreachable mounts in place: orphaned
+  mounts remount their unmounted parents (as before), and shadowed
+  mounts lift the covering ancestor — busy-checked, shallowest first —
+  then retry and remount what was lifted; the old "reboot required"
+  advice is gone because no reboot is needed.
+
+### Tests
+
+- New suites cover the mount-chain validator (clean, shadowed,
+  unmounted, unverifiable, non-ZFS, and empty destinations), the
+  shared destination fence (refusals, clean-chain directory creation,
+  dry-run, remote passthrough), and both fenced-run shapes: pull steps
+  and the ZFS keys copy each refuse and fail the run with `rc=11`
+  while no rsync command is ever built.
+- Cancellation is tested at three levels: flag semantics between
+  steps and before the first step, cancelled-step output never
+  diagnosed as an rsync failure, and real-subprocess SIGTERM journeys
+  for both a running profile and one waiting on the profile lock —
+  each asserting exit code 125, the `# END: cancelled` trailer, and
+  lock release.
+- Shadow-aware unmount and the repair engine are covered end to end:
+  cover-lifting with restore, selection-scoped lifting, refusal when
+  the cover is busy or unliftable, plan computation (orders, scope
+  limiting, `canmount` fixes, clean-state triage), the approval gate,
+  busy refusal running nothing, and failure-path parents-first
+  remount. Dashboard coverage includes findings-driven button
+  sensitivity, the full-scope handler, unreachable-mount warning rows,
+  and the SIGTERM cancel branch for running profiles.
+- Test files that had grown classes past their
+  `if __name__ == "__main__"` guard were reordered so the guard sits
+  at the end of the file; the sanctioned pytest runners are unchanged.
+
+### Documentation
+
+- The GUI guide documents both **Repair Mount Order** actions, the
+  rewritten unreachable-mounts note (both shapes, lift-and-restore,
+  the Dashboard flow, and the `canmount` rationale — no more "reboot
+  required"), and the Profile cancel row's graceful path. The profiles
+  guide explains the destination fence, the `rc=11` refusal, the
+  auto-created destination directories, and the `rc=125` cancelled
+  semantics. The messages manual carries the new fence, cancellation,
+  and repair rows; the Python module reference documents the new
+  public functions and the corrected import facts.
+
 ## 0.133.0
 
 *Released 2026-10-26*

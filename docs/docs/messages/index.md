@@ -1997,7 +1997,7 @@ GUI Datasets tab tree and the gated details/send-to-log actions.
 
 ### [dataset_actions](../commands-and-modules/python-modules.md#dataset_actionspy)
 
-GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, browse, mount/unmount (including zvol loop-mounts and orphaned-mount recovery).
+GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, browse, mount/unmount (including zvol loop-mounts, orphaned/shadowed-mount recovery, and the approval-gated mount-order repair).
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
@@ -2047,7 +2047,27 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 | `WARN: Could not unmount ... after remounting its parents: ...` | The retry unmount after recovery still failed | Recovery aborted |
 | `WARN: cannot recover orphaned mount of ...: ...` | Lock conflict during recovery | Recovery aborted |
 | `WARN: Could not list descendants of ...: ...` | Listing children for the child-first unmount order failed | Only the dataset itself is unmounted |
-| `FATAL: ... looks mounted but its mountpoint is not reachable (orphaned mount) and could not be recovered by remounting its parents. Remount the parent dataset(s) manually and retry; if that fails the mount is detached from the namespace and a reboot is required.` | The unmount failed with "no such pool or dataset" and recovery also failed | Stop; remount parents manually or reboot |
+| `FATAL: ... looks mounted but its mountpoint is not reachable (orphaned or shadowed mount) and could not be recovered automatically. Check which ancestor covers or precedes it, close any users, and retry.` | The unmount failed with "no such pool or dataset" and both recovery shapes (remount unmounted parents; lift covering ancestors) failed | Stop; resolve the ancestor state and retry |
+| `VERB: Unmounted ... to expose a shadowed mount` | A mounted ancestor was lifted so the target's mountpoint path resolves | Unmount retried immediately |
+| `VERB: Remounted ... after exposing a shadowed mount` | A lifted ancestor was restored after the unmount completed | Informational |
+| `WARN: Could not remount ... after exposing a shadowed mount: ... — it is unmounted; mount it from the Datasets page` | Restoring a lifted ancestor failed | The ancestor stays unmounted; mount it manually from the Datasets page |
+| `FATAL: cannot unmount ...: its mount is covered by ..., which is busy. Close what is using it and retry.` | The covering ancestor of a shadowed mount is in use (a dialog lists the holders) | Close the users and retry |
+| `FATAL: cannot unmount ...: its mount is covered by ..., which could not be unmounted: ...` | Lifting the covering ancestor failed | Resolve the ancestor error and retry |
+| `FATAL: ... looks mounted but its mountpoint stayed unreachable after lifting every mounted ancestor. Check its mountpoint and its parents' mount state, then retry.` | Every cover was lifted and the path still does not resolve | Check mountpoint properties and retry |
+| `WARN: Error checking mount state for ...: ...` | A property probe for an ancestor failed during unmount or repair planning | That ancestor is skipped / the plan is refused |
+| `INFO: Mount order is clean; nothing to repair` | The repair action found no unreachable mounts | No-op |
+| `WARN: Select a single filesystem or pool to repair mount order` | The Datasets-page repair action's selection guard | Action aborted |
+| `INFO: Mount-order repair cancelled` | The approval dialog was declined | Nothing changed |
+| `INFO: Set canmount=on on ... (was noauto) so boot mounts it before its children` | The repair applied a canmount correction that keeps the correct order across reboots | Informational; boot behavior change was approved in the dialog |
+| `FATAL: Mount-order repair aborted: ... is busy. Close what is using it and retry.` | The pre-repair busy gate found holders on a dataset to be unmounted (a dialog lists them) | Nothing was changed; close the users and retry |
+| `FATAL: Mount-order repair aborted: could not set canmount=on on ...: ...` | A property fix failed before any unmount | Nothing else changed; resolve and retry |
+| `FATAL: Error unmounting ... during repair: ...` | An unmount in the repair failed with unrecognized stderr | Best-effort remount follows |
+| `FATAL: Mount-order repair could not unmount ....` | A member of the affected set stayed unreachable through every exposure step | Best-effort remount follows |
+| `WARN: Error mounting ... while exposing ...: ...` | Remounting an unmounted plan member to expose a target failed | The lift path is tried next |
+| `FATAL: Mount-order repair incomplete: everything was remounted parents-first, but the ordering may still be wrong. Resolve the failure above and run the repair again.` | The repair aborted mid-way after restoring service | Retry the repair after resolving the named failure |
+| `FATAL: Mount-order repair could not remount: .... Retry the repair or mount them from the Datasets page.` | The remount phase failed for the listed members | Mount them manually or retry |
+| `FATAL: Mount-order repair verification failed for: .... Retry the repair; if it persists, check zpool status and the datasets' mountpoint properties.` | A remounted member is not mounted or its path is not a real mountpoint | Investigate; retry the repair |
+| `INFO: Repaired mount order: unmounted ... filesystem(s), remounted ... parents-first, set canmount=on on ... dataset(s)` | The repair completed and verified | Informational |
 | `FATAL: Dataset ... is busy. Please close any file manager windows and try again.` / `FATAL: Snapshot ... is busy. ...` / `FATAL: Partition ... is busy. ...` | The unmount stderr contained "busy" | Stop at first failure; close the users and retry |
 | `FATAL: Dataset ... is busy; unmount aborted` / `FATAL: Snapshot ... is busy; unmount aborted` / `FATAL: Partition ... is busy; unmount aborted` | The pre-unmount busy check found holder processes; a dialog lists them | That item's unmount aborted |
 | `FATAL: Error unmounting ...: ...` | Unmount failed with unrecognized stderr | Stop at first failure |
@@ -2525,7 +2545,9 @@ Dashboard tab: status overview, peer-node version check, and task cancellation.
 | `WARN: Runner ... is not running` | Cancel requested for an idle runner | No-op |
 | `INFO: Stopped scrub on '...'` | A scrub stop was issued for the pool | Scrub stop requested |
 | `INFO: ZFS-native operations cannot be cancelled from the GUI` | Cancel requested for a `zfsop:` task (resilver/expand/remove) | The operation continues in ZFS |
-| `INFO: To cancel profile '...', use Cancel Selected Tasks and then clean up its process if it does not stop` | Cancel requested for a profile task not started by this GUI | Guidance only |
+| `INFO: Sent SIGTERM to running profile '...' (PID ...)` | Cancel of a running profile delivered SIGTERM to the profile-runner process | The runner terminates the in-flight step and runs no further steps |
+| `WARN: Running profile '...' is no longer running` | The profile lock entry vanished before the signal could be sent | No-op |
+| `WARN: Failed to cancel running profile '...': ...` | Signaling the runner PID failed | The profile keeps running |
 | `INFO: Sent SIGTERM to scheduled task PID ...` | Cancel of a scheduled task delivered SIGTERM | Process signaled |
 | `WARN: Failed to cancel scheduled task ...: ...` | Signaling the PID failed | The task keeps running |
 | `WARN: Unknown task key: ...` | The task key prefix is not recognized by the canceller | No-op |
@@ -2633,6 +2655,8 @@ Headless runner for scheduled profiles (cron): loads a profile JSON, builds its 
 | `INFO: Profile '...' is already running; waiting for it to finish...` | The profile advisory lock is busy; the runner waits up to the timeout | Wait; a waiting-file is written for the Dashboard |
 | `WARN: Pre-step callback failed: ...` / `WARN: Post-step callback failed: ...` | The scrub-pause/resume callback raised | The step still runs |
 | `WARN: Step exited with rc=...` | A step returned non-zero | Fatal steps abort the run; non-fatal continue |
+| `WARN: Step terminated by cancellation (rc=...)` | The operator cancelled the run and the in-flight step's process group was terminated | No further steps start |
+| `FATAL: Profile cancelled by operator — aborting before next step` | Cancellation was observed at a step boundary | Remaining steps skipped; run recorded as cancelled with rc=125 |
 | `FATAL: Aborting run because step failed` | A fatal step failed; the remaining steps are skipped | The run aborts with the step's rc |
 | `WARN: ... failed: ...` | Rsync failure diagnosis appended to the step | Informational; run continues per fatality |
 | `WARN: Error running step: ...` | Spawning the step raised | Step counted as rc=1 |
@@ -2644,6 +2668,11 @@ Headless runner for scheduled profiles (cron): loads a profile JSON, builds its 
 | `INFO: Dry-run: Would run pre-backup command` / `Dry-run: Would run post-backup command` / `Dry-run: Would rsync ... -> ...` | Dry-run variants of the pre/post-backup scripts and rsync steps | Step skipped |
 | `INFO: Pull steps disabled by user; skipping` | The pull-steps config is off | All rsync pull steps skipped |
 | `WARN: Skipping ... -> ...: ... is not mounted` / `... is not accessible` | Safety gate — a mount source for a pull or keys step is unusable | That step skipped |
+| `WARN: Skipping ... -> ...: dataset ... covers ... but is not mounted; ...` | Safety gate — the rsync destination sits under a ZFS dataset that exists but is not mounted | That step skipped; fix the mount, otherwise the run finishes rc=11 |
+| `WARN: Skipping ... -> ...: dataset ... reports itself mounted at ... but the path is unreachable — it is shadowed ...` | Safety gate — the destination's mount chain is shadowed (a later mount over an ancestor, e.g. a pool root mounted after its children) | That step skipped; restore the mount order, otherwise the run finishes rc=11 |
+| `WARN: Skipping ... -> ...: could not verify the destination mount chain: ...` | Safety gate — the `zfs list` probe for the destination failed | That step skipped; the destination is not written unverified |
+| `INFO: Created destination directory ...` | The validated destination parent for an rsync step was missing and was created below the deepest dataset mountpoint | Informational |
+| `INFO: Dry-run: Would create destination directory ...` | Dry-run variant of the destination creation | Nothing created |
 | `WARN: Skipping ZFS keys ... -> ...: ... is not mounted` / `... is not accessible` | Keys-path mount/accessibility gate failed | Keys backup skipped |
 | `WARN: Skipping ZFS keys backup — destination is not encrypted. Set zfs_keys_dest to an encrypted dataset.` | Safety gate — keys would land on an unencrypted dataset | Keys backup skipped; set an encrypted destination |
 | `VERB: Prune step restricted to the ... send/receive step(s)' source and destination datasets (derived at prune time).` | Prune scope narrowed to the active send/receive datasets | Informational |
@@ -2669,12 +2698,14 @@ Headless runner for scheduled profiles (cron): loads a profile JSON, builds its 
 | `FATAL: Profile not found: ...` | The profile JSON could not be loaded | Session trailer rc=1; exit 1 |
 | `WARN: Profile '...' is already running and did not finish within ... seconds; skipping duplicate invocation` | The lock wait timed out (timeout > 0) | Skipped; exit 0 so cron does not retry-fail |
 | `INFO: Profile '...' is already running; skipping duplicate invocation` | Zero-timeout lock contention | Skipped; exit 0 |
+| `INFO: Profile '...' cancelled while waiting for the profile lock` | SIGTERM arrived while the run was still waiting for the lock | Cancelled trailer written; exit rc=125 |
 | `INFO: Running profile: ... (type=...)` | Lock acquired; dispatching to the tab-type runner | Informational |
 | `INFO: Skipping profile ...: today does not match weekday ordinal '...'` | The cron weekday #n/#L guard failed at runtime | Skipped; exit 0 |
 | `VERB: Ignoring weekday ordinal '...' for profile ... (--ignore-schedule)` | Immediate run requested (GUI Run Now or CLI `--ignore-schedule`); ordinal guard bypassed | Profile runs regardless of the day |
 | `FATAL: Unknown tab type: ...` | No runner is registered for the profile's tab type | rc=1 |
 | `FATAL: Unhandled exception in profile runner:` (followed by the traceback) | Top-of-run catch-all: an unexpected exception escaped the tab-type runner | Traceback and rc=1 session trailer written to the session log; exit 1 |
 | `INFO: Profile ... finished (rc=...)` | Final summary before the history entry and session trailer | Exits with rc |
+| `INFO: Profile ... cancelled by operator (rc=125)` | Final summary of a run cancelled by SIGTERM/SIGINT (Dashboard Cancel, or a manual signal to the runner) | History entry result "cancelled"; cancelled session trailer; exit rc=125 |
 
 ### [profile_manager](../commands-and-modules/python-modules.md#profile_managerpy)
 
