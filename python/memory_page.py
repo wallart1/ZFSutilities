@@ -377,6 +377,10 @@ def create_memory_page(app):
     app._memory_ref_spin.set_value(memory_cfg.get("refresh_seconds", 5))
     app._memory_ref_spin.connect("value-changed", _on_memory_refresh_changed, app)
     controls.pack_start(app._memory_ref_spin, False, False, 0)
+    app.memory_refreshing_label = Gtk.Label(label="Refreshing")
+    app.memory_refreshing_label.set_no_show_all(True)
+    app.memory_refreshing_label.hide()
+    controls.pack_start(app.memory_refreshing_label, False, False, 0)
     box.pack_start(controls, False, False, 0)
 
     # --- View switcher: Live Charts / Blocksize Alignment ---
@@ -564,6 +568,18 @@ def _on_memory_refresh_changed(spin, app):
 # ---------------------------------------------------------------------------
 
 
+def _show_memory_refreshing(app):
+    """Show the 'Refreshing' indicator next to the refresh interval spinner."""
+    if hasattr(app, "memory_refreshing_label"):
+        app.memory_refreshing_label.show()
+
+
+def _hide_memory_refreshing(app):
+    """Hide the 'Refreshing' indicator after the refresh completes."""
+    if hasattr(app, "memory_refreshing_label"):
+        app.memory_refreshing_label.hide()
+
+
 def refresh_memory_page(app):
     """Refresh whichever Performance view is visible, off-thread."""
     if _current_memory_view(app) == "alignment":
@@ -573,6 +589,7 @@ def refresh_memory_page(app):
     if getattr(app, "_memory_refresh_pending", False):
         return
     app._memory_refresh_pending = True
+    _show_memory_refreshing(app)
 
     def _collect():
         sample = collect_memory_sample()
@@ -581,6 +598,7 @@ def refresh_memory_page(app):
     def _finish_refresh(_app, sample):
         _app._memory_refresh_pending = False
         _apply_memory_sample(_app, sample)
+        _hide_memory_refreshing(_app)
         return False
 
     threading.Thread(target=_collect, daemon=True).start()

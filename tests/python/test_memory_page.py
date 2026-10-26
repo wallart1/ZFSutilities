@@ -486,6 +486,82 @@ class TestApplyMemorySample(unittest.TestCase):
         thread.assert_not_called()
 
 
+class TestRefreshingIndicator(unittest.TestCase):
+    """The 'Refreshing' label next to the refresh interval spinner.
+
+    Same feedback as the Dashboard's indicator: visible exactly while a
+    refresh of the visible view is in flight. Both the auto-refresh timer
+    and the toolbar Refresh button enter through refresh_memory_page, so
+    the charts path shows it here and the alignment path (dispatched from
+    the same entry point) covers it in test_alignment_page.py.
+    """
+
+    def _module(self):
+        with mock_gtk(fresh=True):
+            import memory_page as mp
+
+        return mp
+
+    def test_show_and_hide_refreshing_helpers(self):
+        mp = self._module()
+        app = _make_app()
+        mp._show_memory_refreshing(app)
+        app.memory_refreshing_label.show.assert_called_once_with()
+        mp._hide_memory_refreshing(app)
+        app.memory_refreshing_label.hide.assert_called_once_with()
+
+    def test_refreshing_label_built_hidden(self):
+        app = _make_app()
+        with mock_gtk(fresh=True) as gtk:
+            gtk.Label = MagicMock(side_effect=lambda *a, **k: MagicMock())
+            import memory_page as mp
+
+            mp.create_memory_page(app)
+        label = app.memory_refreshing_label
+        label.set_no_show_all.assert_called_once_with(True)
+        label.hide.assert_called_once_with()
+
+    def test_async_refresh_shows_refreshing_indicator(self):
+        mp = self._module()
+        app = _make_app()
+        app._memory_view_radios = {}  # charts view (the fallback default)
+        app._memory_refresh_pending = False
+        with patch.object(mp.threading, "Thread") as thread:
+            with patch.object(mp, "_show_memory_refreshing") as show:
+                mp.refresh_memory_page(app)
+        show.assert_called_once_with(app)
+        self.assertTrue(thread.call_args.kwargs.get("daemon"))
+
+    def test_pending_refresh_starts_nothing_new(self):
+        mp = self._module()
+        app = _make_app()
+        app._memory_view_radios = {}
+        app._memory_refresh_pending = True
+        with patch.object(mp.threading, "Thread") as thread:
+            with patch.object(mp, "_show_memory_refreshing") as show:
+                mp.refresh_memory_page(app)
+        thread.assert_not_called()
+        show.assert_not_called()
+
+    def test_finish_refresh_hides_indicator(self):
+        mp = self._module()
+        app = _make_app()
+        app._memory_view_radios = {}
+        app._memory_refresh_pending = False
+        with patch.object(mp.threading, "Thread") as thread:
+            with patch.object(mp, "collect_memory_sample", return_value=object()):
+                mp.refresh_memory_page(app)
+                thread.call_args.kwargs["target"]()
+        idle_cb, idle_app, sample_arg = mp.GLib.idle_add.call_args.args
+        with (
+            patch.object(mp, "_apply_memory_sample"),
+            patch.object(mp, "_hide_memory_refreshing") as hide,
+        ):
+            self.assertFalse(idle_cb(idle_app, sample_arg))
+        hide.assert_called_once_with(app)
+        self.assertFalse(app._memory_refresh_pending)
+
+
 class TestRollingChart(unittest.TestCase):
     """The Cairo fallback renderer (matplotlib charts are tested in
     test_charting.py; the shared vocabulary moved there with it)."""

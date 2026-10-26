@@ -384,9 +384,20 @@ def section_header(text, subtitle=""):
 
 
 def note_label():
-    """Return a hidden italic note label (availability placeholders)."""
+    """Return a hidden italic note label (availability placeholders).
+
+    The label wraps at whatever width the page grants it: an unwrapped
+    label's minimum width is its full natural text width, so a long
+    availability note would pin the page's minimum at that width and grow
+    a page-level horizontal scrollbar that shadows every table's own
+    scrollbar. Wrapping drops the label's minimum to its longest word, so
+    the page minimum stays with the tables.
+    """
     label = Gtk.Label()
     label.set_halign(Gtk.Align.START)
+    label.set_xalign(0.0)
+    label.set_line_wrap(True)
+    label.set_line_wrap_mode(Pango.WrapMode.WORD)
     label.set_no_show_all(True)
     label.hide()
     return label

@@ -1001,6 +1001,7 @@ as the GUI runners but writes its own session logs and history entries.
 | `acquire_profile_lock(profile_name, timeout=1.0, log_file=None)` | Acquire the profile lock; wait for an existing run and suppress duplicates on timeout |
 | `release_profile_lock(fd, lock_path)`                            | Release the profile lock                                                              |
 | `_silence_cron_output(session_log_file)`                         | From-cron stream fence: dup2 `/dev/null` onto fds 1 and 2 once the session log exists |
+| `_write_cron_breadcrumb(cron_log, message)`                      | Append a stamped audit line (run started/finished) for a cron-launched run            |
 | `main()`                                                         | CLI entry point: `run <name> [--ignore-schedule]`                                     |
 
 **Internal flow:**
@@ -1011,7 +1012,11 @@ as the GUI runners but writes its own session logs and history entries.
    generated cron job line (`ZFSUTILITIES_FROM_CRON=Y`) and the log was
    created, `_silence_cron_output()` fences stdout/stderr onto `/dev/null`
    from here on — the cron log keeps only pre-log failures, and the session
-   log is the record for the rest of the run.
+   log is the record for the rest of the run. The same launch first appends
+   a stamped `Scheduled run started (cron)` breadcrumb to the cron log, and
+   every exit path appends a `Scheduled run finished (cron) ... rc=N`
+   breadcrumb, so the cron log audits each firing even though the fenced
+   streams write nothing further.
 3. Acquire a per-profile advisory lock so a duplicate cron invocation waits
    for the running instance (by default up to 10 minutes) and then exits
    cleanly instead of running the profile twice.
@@ -2161,7 +2166,11 @@ and pipe its merged stdout/stderr through a line-buffered awk timestamp
 stamper into the configured cron log, so every line that reaches it
 (including pre-session-log tracebacks) carries its write time. The marker
 lets `profile_runner.py` silence its own streams once its session log
-exists, keeping the cron log limited to pre-log failures. The drop-in and
+exists, keeping the cron log limited to pre-log failures. Cron terminates a
+job's command at the first unescaped `%` (crontab(5)), so the command
+portion is emitted with every bare `%` backslash-escaped (`\%`) — stamper
+format, profile names, paths, and user conditions alike — with cron
+stripping the backslash before the shell runs the command. The drop-in and
 its logrotate companion are persisted `/etc` state that a version upgrade
 can outrun, so `converge_scheduler_files()` re-derives their expected
 content at GUI startup and at the start of every scheduled run, rewriting

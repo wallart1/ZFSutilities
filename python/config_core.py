@@ -195,16 +195,48 @@ def get_ui_state(config):
     return result
 
 
-def save_ui_state(config, state_dict):
-    if "ui_state" not in config:
-        config["ui_state"] = {}
+def _merge_ui_state_dict(target, state_dict):
+    """Merge UI-state keys into target["ui_state"] (dicts merge, others set)."""
+    target.setdefault("ui_state", {})
     for key, val in state_dict.items():
         if isinstance(val, dict):
-            config["ui_state"].setdefault(key, {})
-            config["ui_state"][key].update(val)
+            target["ui_state"].setdefault(key, {})
+            target["ui_state"][key].update(val)
         else:
-            config["ui_state"][key] = val
-    save_config(config)
+            target["ui_state"][key] = val
+
+
+def save_ui_state(config, state_dict):
+    """Persist UI-state keys without rewriting the rest of the config file.
+
+    UI state is written automatically and often (window geometry, column
+    widths, font sizes, view selections), so the write must never clobber
+    data sections that were saved to disk after this session loaded its
+    in-memory config.  The file is re-read under the config write lock and
+    only the ``ui_state`` subtree is merged into the freshly-read dict
+    before writing.  When no readable file exists (first write, or a
+    corrupt file) the in-memory config becomes the write base, matching
+    the previous whole-config behaviour.  The in-memory config's
+    ``ui_state`` is updated to match either way.
+    """
+    with config_lock_write():
+        base = None
+        if os.path.exists(CONFIG_PATH):
+            try:
+                with open(CONFIG_PATH) as f:
+                    base = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                base = None
+        if not isinstance(base, dict):
+            base = config
+        _merge_ui_state_dict(base, state_dict)
+        if base is not config:
+            _merge_ui_state_dict(config, state_dict)
+        # Same write shape as save_config(), which cannot be reused here
+        # because it takes the config write lock this function already holds.
+        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(base, f, indent=2)
 
 
 DEFAULT_LOG_RETENTION_DAYS = 30

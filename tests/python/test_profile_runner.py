@@ -2,6 +2,7 @@
 
 import io
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -2059,6 +2060,92 @@ class TestCronOutputSilencing(unittest.TestCase):
             with open(other) as f:
                 content = f.read()
             self.assertIn("FATAL: Profile not found", content)
+
+
+class TestCronBreadcrumbs(unittest.TestCase):
+    """Cron-launched runs leave a two-line audit trail in the cron log.
+
+    The from-cron output fence leaves the cron log empty for healthy runs,
+    so the runner appends a stamped "started" / "finished rc=N" pair
+    directly to the configured cron log.  A schedule that stops firing then
+    shows up as missing breadcrumb lines instead of an innocent-looking
+    empty log.  Real main() in a subprocess, matching the fence tests above.
+    """
+
+    _RUNNER = os.path.join(
+        os.path.dirname(os.path.abspath(profile_runner.__file__)), "profile_runner.py"
+    )
+
+    # A breadcrumb is a stamped INFO line: the format the log viewers'
+    # timestamp and level parsing already understand.
+    _BREADCRUMB_RE = re.compile(
+        r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} INFO: Scheduled run (started|finished) \(cron\): "
+    )
+
+    def _run_main_subprocess(self, tmp, from_cron):
+        env = os.environ.copy()
+        env.update(
+            {
+                "ZFSUTILITIES_LOG_DIR": os.path.join(tmp, "logs"),
+                "ZFSUTILITIES_STATE_DIR": os.path.join(tmp, "state"),
+                "ZFSUTILITIES_LOCK_DIR": os.path.join(tmp, "locks"),
+                "ZFSUTILITIES_PROFILE_LOCK_DIR": os.path.join(tmp, "plocks"),
+                "ZFSUTILITIES_CRON_FILE": os.path.join(tmp, "cron.d", "zfsutilities"),
+                "ZFSUTILITIES_LOGROTATE_FILE": os.path.join(tmp, "logrotate.d", "zfsutilities"),
+                "XDG_CONFIG_HOME": os.path.join(tmp, "xdg-config"),
+            }
+        )
+        if from_cron:
+            env["ZFSUTILITIES_FROM_CRON"] = "Y"
+        else:
+            env.pop("ZFSUTILITIES_FROM_CRON", None)
+        return subprocess.run(
+            [sys.executable, self._RUNNER, "run", "NoSuchProfile"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+    def _cron_log(self, tmp):
+        return os.path.join(tmp, "logs", "cron.log")
+
+    def test_from_cron_run_writes_stamped_breadcrumbs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run_main_subprocess(tmp, from_cron=True)
+            self.assertEqual(proc.returncode, 1)
+            with open(self._cron_log(tmp)) as f:
+                lines = [ln.rstrip("\n") for ln in f if ln.strip()]
+            self.assertEqual(len(lines), 2, lines)
+            self.assertRegex(lines[0], r"\(cron\): NoSuchProfile$")
+            self.assertIn("started", lines[0])
+            self.assertRegex(lines[1], r"\(cron\): NoSuchProfile rc=1$")
+            self.assertIn("finished", lines[1])
+            for line in lines:
+                self.assertTrue(self._BREADCRUMB_RE.match(line), line)
+
+    def test_manual_run_writes_no_breadcrumbs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = self._run_main_subprocess(tmp, from_cron=False)
+            self.assertEqual(proc.returncode, 1)
+            self.assertFalse(os.path.exists(self._cron_log(tmp)))
+
+    def test_unwritable_cron_log_does_not_fail_the_run(self):
+        # Best-effort breadcrumbs: with the cron log path unusable (here: a
+        # directory sits where the file would be) the run must proceed and
+        # fail for its real reason, not for the audit trail.
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(self._cron_log(tmp))
+            proc = self._run_main_subprocess(tmp, from_cron=True)
+            self.assertEqual(proc.returncode, 1)
+            log_dir = os.path.join(tmp, "logs", "sessions")
+            files = [n for n in os.listdir(log_dir) if n.endswith(".log")]
+            self.assertEqual(len(files), 1, files)
+            with open(os.path.join(log_dir, files[0])) as f:
+                content = f.read()
+            self.assertIn("FATAL: Profile not found", content)
+            self.assertNotIn("Unhandled exception", content)
 
 
 class TestCrashRecording(unittest.TestCase):

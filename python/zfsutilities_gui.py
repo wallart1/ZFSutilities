@@ -795,26 +795,44 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
 
         return abortable
 
+    def _dirty_page_titles(self):
+        """Return sidebar titles of pages that report unsaved changes."""
+        title_by_name = {name: title for name, title, _builder in PAGE_BUILDERS}
+        titles = []
+        for page_name, spec in PAGE_SPECS.items():
+            predicate = spec.get("dirty_predicate")
+            if predicate is not None and predicate(self):
+                titles.append(title_by_name.get(page_name, page_name.title()))
+        return titles
+
     def _confirm_terminate(self):
-        """Ask the user whether to close despite running tasks.
+        """Ask the user whether to close despite running tasks or unsaved changes.
 
         Returns True if the user confirms termination, False otherwise.
         """
         tasks = self._collect_abortable_tasks()
-        if not tasks:
+        dirty_pages = self._dirty_page_titles()
+        if not tasks and not dirty_pages:
             return True
 
-        names = "\n".join(f"• {task.get('name', 'Unknown')}" for task in tasks)
+        if tasks:
+            text = "Running tasks will be aborted if you close now."
+            names = "\n".join(f"• {task.get('name', 'Unknown')}" for task in tasks)
+            secondary = f"The following tasks are still running:\n\n{names}"
+            if dirty_pages:
+                secondary += "\n\nUnsaved changes on: " + ", ".join(dirty_pages)
+        else:
+            text = "Unsaved changes will be lost if you close now."
+            secondary = "Unsaved changes on: " + ", ".join(dirty_pages)
+
         dialog = Gtk.MessageDialog(
             transient_for=self,
             modal=True,
             message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.YES_NO,
-            text="Running tasks will be aborted if you close now.",
+            text=text,
         )
-        dialog.format_secondary_text(
-            f"The following tasks are still running:\n\n{names}\n\nDo you really want to quit?"
-        )
+        dialog.format_secondary_text(secondary + "\n\nDo you really want to quit?")
         response = dialog.run()
         dialog.destroy()
         return response == Gtk.ResponseType.YES

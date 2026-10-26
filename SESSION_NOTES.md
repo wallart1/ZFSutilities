@@ -154,6 +154,64 @@ owner's guide.)
 
 ## Active / parked threads
 
+- **Checkagainst "User entries" resurrection — root-caused and FIXED this
+  session (pub3, uncommitted).** User report (stewie): deleted User entries
+  rows kept reappearing. No code path re-adds rows after a successful Save —
+  the page is only repopulated from the saved JSON at GUI start/Revert. The
+  persistence layer resurrected them: `save_ui_state` wrote the ENTIRE
+  config.json from the session's in-memory snapshot, and it fires
+  automatically (500 ms debounce) on window resize/move/maximize, paned
+  drags, column-width changes, view toggles, font sizes — plus the quit/
+  replacement flush (`UIStateManager.flush` on window destroy; main.py
+  replaces the previous instance on every launch). Any session whose memory
+  still held deleted rows (deletion not Saved, or Save blocked by an
+  incomplete row elsewhere) wrote them back to disk; next start showed them
+  again. Stewie evidence 2026-10-25: switch-version 12:47 → GUI start 12:48
+  → checkagainst Save 12:51; disk now holds 0 user entries (nothing to clean
+  up). Fix: (1) `save_ui_state` is now a read-merge-write under the config
+  write lock — it re-reads disk and merges ONLY the `ui_state` subtree, so
+  UI trivia can never clobber data sections (fallback to the in-memory
+  config only when the file is missing/corrupt); (2) quit guard —
+  `_confirm_terminate` collects pages whose new `dirty_predicate` reports
+  unsaved edits (all seven Save-button pages) and warns alongside the
+  running-tasks dialog, so an unsaved deletion can't be discarded silently.
+  Plan deviation (disclosed): the planned single-instance flock was dropped —
+  `python/main.py` already implements replace-on-launch (PID file + /proc
+  scan + D-Bus REPLACE); a second guard would fight it, and the stale-write
+  hole is closed at the write path instead. Docs: gtk-gui.md "Closing the
+  GUI". Healing requires deploy; no user cleanup needed on stewie.
+- **Scheduler silently dead since 2026-10-23 12:00 — unescaped `%` in the
+  generated cron command; FIXED this session (pub3, uncommitted).** User
+  reported "scheduled tasks are not running" + "cron.log viewer has no
+  date/time stamps". One defect explained both: `generate_cron_line` wrote
+  the awk stamper's `strftime("%Y-%m-%d %H:%M:%S")` and user conditions
+  (`date +%d`) with bare `%`, and cron terminates a command at the first
+  unescaped `%` (crontab(5)) — the remainder became stdin, `/bin/sh` died
+  on the unterminated quote, and `MAILTO=""` discarded the error. Zero
+  output, zero session log, invisible. Production evidence (stewie, read
+  -only): journald CMD lines truncated at `strftime("` for every firing
+  since the first fence-format drop-in went live Oct 23 12:00 (Schedule
+  save under deployed 0.127.0, which carried 0.125.0's stamper); missed
+  Oct 23 12:00 backup2, Oct 24 00:00 scrub-monthly, Oct 24 06:00/12:00,
+  Oct 25 06:00/12:00; the 08:41/12:19/09:26/10:31 session logs were the
+  user's manual runs. Cron daemon itself healthy (anacron fired 07:38 Oct
+  25; VmRSS 2.7 MB — systemctl's "Memory: 1G" for cron.service is cgroup
+  accounting, not the daemon). mawk HAS strftime (verified) — escaping was
+  the only defect. The "no timestamps" view was correct viewer behavior:
+  `format_log_text_short` preserves stamps; the unstamped content is the
+  pre-fence flood in cron.log.1.gz, and current cron.log is empty because
+  every firing died before output. Fix: `_escape_cron_percent` on the
+  command portion (lookbehind regex — a pre-escaped `\%` is left alone),
+  plus user-approved breadcrumbs: from-cron runs append stamped
+  `Scheduled run started/finished (cron) ... rc=N` lines directly to
+  cron.log (past the fenced streams) so a dead schedule is visible as
+  missing breadcrumbs. Live drop-in heals via `converge_scheduler_files`
+  on GUI start / any runner start once this ships — 0.132.0's convergence
+  currently matches its own (broken) expected content, so the fix must
+  deploy first. Scrub-monthly missed its Oct 24 first-Saturday window
+  (next Nov 7); manual scrub is the user's call. Gotcha for the pattern:
+  anything generating cron lines must %-escape the whole command field —
+  shlex quoting does NOT cover it.
 - **j07 found and FIXED a real strict-mode side-effect 2026-10-25
   (zfsdelfs standalone execution); j07 GREEN third run.** The two-node
   lab passed clean (install-two-node, enroll-proxmox-pool, new-vm-disk,
@@ -722,3 +780,90 @@ Tasks merge + Performance-tab move + Next Run bucket-word removal).
   sub-sections in Added → Changed → Tests → Documentation order. All
   python/bash code auto-merged with no manual resolution. VERSION
   auto-resolved to the common 0.131.0. Not pushed, not deployed.
+
+## 2026-10-25 — Performance page: long-note layout fix + Refreshing indicator
+
+- User reported eight Performance-page issues. Root cause for the seven
+  Alignment-layout ones: `gui_helpers.note_label()` returned an
+  unwrapped label, and a Gtk.Label's minimum width is its full text
+  width — the degraded-host availability note (~1900px on stewie-like
+  samples) pinned the page box minimum at that width, so the page itself
+  grew the only horizontal scrollbar, every section stretched to the
+  note width (Blocksize scan clipped to Layer+Object, the workload
+  Verdict expand column ~1300px and deaf to window resizing, no section
+  scrolled on its own, and the ladder stretched past the window edge).
+  Probed under Xvfb with the real app shell (sidebar / main stack /
+  actions panel / vpaned), both chart renderers, against the deployed
+  0.132.0 (byte-identical to the repo). Fix: note_label wraps — on this
+  PyGObject the API is `set_line_wrap`/`set_line_wrap_mode`, NOT
+  `set_wrap` (which raises AttributeError) — plus `set_xalign(0.0)`.
+  The page minimum drops back to the tables' minimums and each section
+  regains its own h-scrollbar (the designed, realized-check-locked
+  behavior). All four Performance-page notes (alignment +
+  ARC/L2ARC/SLOG) are covered; note_label is not used outside the page.
+- The eighth issue: a "Refreshing" label next to the refresh spinner —
+  the Dashboard's pattern replicated as memory_page's
+  `memory_refreshing_label` with `_show/_hide_memory_refreshing`
+  helpers; shown by both refresh paths after their pending guards
+  (alignment_page imports the helpers function-level from memory_page,
+  which imports it at module level), hidden in both idle
+  `_finish_refresh` callbacks. Covers the auto-refresh timer, the
+  toolbar Refresh button, and the Survey-dialog re-collect.
+- Locked by a new long-note scenario in alignment_realized_check.py
+  (700/1000px: page never h-scrolls, note allocated within the page,
+  tables keep their own scrollbars, ladder floor holds) plus unit tests
+  in test_gui_helpers / test_memory_page / test_alignment_page. Ruff
+  clean; full suite green after.
+- Disclosed scope boundary: wide windows still let each table's expand
+  column absorb slack (app-wide convention, Dashboard identical,
+  asserted by the realized check); probed and ruled out
+  `max_content_width` (no allocation effect when the window is wider),
+  `halign` on the TreeView (ScrolledWindow ignores it), `halign` on the
+  window (collapses to its ~46px natural), and
+  `TreeViewColumn.set_max_width` (inert for FIXED-sizing columns). GTK3
+  offers no stretch cap; redesigning slack absorption would be a
+  separate app-wide table decision.
+
+## 2026-10-25 — README: wire in the new GUI screenshots
+
+- 3713eff (Release 0.128.0) replaced docs/images with the two 2026-10-22
+  captures but never touched README.md, so both image links were broken
+  since then. Swapped them: 13-55-54 (Dashboard, main window) is the
+  hero image, 13-57-47 (Schedule tab) sits under Scheduling Profiles —
+  same roles as the deleted 2026-07-13 pair.
+- The new captures show twelve sidebar tabs, so the Highlights bullet's
+  "eleven tabs" list was contradicting our own screenshots: corrected to
+  twelve and reordered to the PAGE_BUILDERS sidebar order (Performance
+  last). Repo sweep: no other references to the old filenames and no
+  other tab-count claims; both README image links verified to resolve.
+- Audit round (user asked whether the rest of the text is current):
+  every other checked claim held up — named commands all exist in bin/,
+  upgrade/switch-version/uninstall behavior matches the scripts
+  (MANIFEST.sha256, previous/--list, --purge/--all-nodes/--yes/--dry-run),
+  prereq list matches check-prerequisites, dry-run flags exist in all four
+  named operations, the Help → Documentation menu is real
+  (gui_helpers.py), scrub start/pause/resume + queue are real
+  (scrub_manager.py), and docs links, testing commands, support URLs,
+  and LICENSE all check out. Two fixes: the MkDocs install line now pins
+  "mkdocs<2" (check-prerequisites hard-fails MkDocs 2.x, so the old line
+  installed a version the project itself rejects), and the launcher
+  sentence now says "links in the installing user's home folder" per the
+  user's terminology correction (never "desktop shortcuts"; saved to
+  agent memory). The installers' own echo text still says "shortcut in
+  your home folder" — flagged to the user, not changed.
+
+## 2026-10-25 — Changelog trimmed and archived
+
+- User-directed changelog work (Hard-Rule authorized). Split
+  docs/docs/changelog.md at the version-series boundary: the main file
+  keeps the live 0.13x series (0.130.0–0.132.0) with a pointer note,
+  and everything older (0.46.1–0.129.0, 175 of 178 releases) moved
+  verbatim to the new docs/docs/changelog-archive.md, wired into the
+  mkdocs nav as "Changelog Archive". The concatenated body was verified
+  byte-identical to the HEAD blob by md5 before and after.
+- Trim rule now stated in the archive header: a release series moves to
+  the archive once a newer series begins (next trim when 0.140.0
+  ships). No inbound anchor links existed; the only inbound reference
+  (developer-guide/conventions.md prose) is unaffected. mkdocs build
+  green — only the known Zensical deprecation warning; the archive page
+  renders in the built site.

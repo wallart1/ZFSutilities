@@ -10,7 +10,7 @@ option, and also for Proxmox VE users who need safe VM disk lifecycle management
 
 ---
 
-![ZFS Utilities GUI](<docs/images/Screenshot from 2026-07-13 20-22-13.png>)
+![ZFS Utilities GUI](<docs/images/Screenshot from 2026-10-22 13-55-54.png>)
 
 ## What is ZFS Utilities?
 
@@ -38,10 +38,10 @@ so concurrent jobs do not collide on the same datasets.
 
 ## Highlights
 
-- **GTK3 GUI** — eleven tabs covering Dashboard, Backup, Offsite, Restore,
-  Schedule, Disks, Pools, Datasets, Retention, Checkagainst, and Logs. The GUI
-  includes an embedded documentation viewer, live log panel, and session log
-  browser.
+- **GTK3 GUI** — twelve tabs covering Dashboard, Backup, Offsite, Restore,
+  Schedule, Retention, Checkagainst, Logs, Disks, Pools, Datasets, and
+  Performance. The GUI includes an embedded documentation viewer, live log
+  panel, and session log browser.
 - **Profiles and scheduling** — Save many tab configurations as reusable
   profiles, schedule them with cron syntax, and/or run them on demand from the
   Schedule tab or the command line.
@@ -65,7 +65,7 @@ so concurrent jobs do not collide on the same datasets.
 Save a tab configuration as a reusable profile and schedule it with standard
 cron syntax:
 
-![Schedule tab](<docs/images/Screenshot from 2026-07-13 20-24-10.png>)
+![Schedule tab](<docs/images/Screenshot from 2026-10-22 13-57-47.png>)
 
 ## Requirements
 
@@ -114,7 +114,7 @@ cron syntax:
   documentation site from `docs/docs/`):
 
   ```bash
-  pip install mkdocs mkdocs-material
+  pip install "mkdocs<2" mkdocs-material
   ```
 
 The installers will check for prerequisites and will offer to install them for you.
@@ -146,9 +146,9 @@ directions between the storage host and the compute host.
    ```
 
    The installer deploys a versioned installation under
-   `/usr/local/lib/zfsutilities/`, configures `PATH`, and creates two desktop
-   launcher symlinks in the installing user's home directory:
-   **ZFSutilities GUI** and **ZFSutilities Documentation**.
+   `/usr/local/lib/zfsutilities/`, configures `PATH`, and creates two links
+   in the installing user's home folder: **ZFSutilities GUI** and
+   **ZFSutilities Documentation**.
 
 3. Launch the GUI from the terminal:
 

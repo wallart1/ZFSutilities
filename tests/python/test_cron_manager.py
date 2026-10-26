@@ -1,6 +1,7 @@
 """Tests for cron_manager.py — cron line generation and interpretation."""
 
 import os
+import re
 import unittest
 from unittest.mock import patch
 
@@ -13,9 +14,16 @@ from test_support import capture_logs, temp_config_dir
 CRON_LOG = "/var/log/zfsutilities/cron.log"
 # Exact argv fidelity for the sink: the runner's merged output is piped
 # through a line-buffered awk timestamp stamper into the configured log.
+# Every % is backslash-escaped because cron terminates the command at the
+# first unescaped % and feeds the remainder to the job's stdin (crontab(5)).
 STAMPED_TAIL = (
-    "2>&1 | stdbuf -oL awk '{ print strftime(\"%Y-%m-%d %H:%M:%S\"), $0 }' >> " + CRON_LOG
+    "2>&1 | stdbuf -oL awk '{ print strftime(\"\\%Y-\\%m-\\%d \\%H:\\%M:\\%S\"), $0 }' >> "
+    + CRON_LOG
 )
+
+# Same rule the cron daemon applies when parsing a job line: a % not preceded
+# by a backslash ends the command.
+_BARE_PERCENT_RE = re.compile(r"(?<!\\)%")
 
 
 class TestGenerateCronLine(unittest.TestCase):
@@ -108,7 +116,7 @@ class TestGenerateCronLine(unittest.TestCase):
         }
         line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
         self.assertIn("0 2 * * *", line)
-        self.assertIn("root [ $(date +%d) -ge 28 ] && mkdir -p", line)
+        self.assertIn(r"root [ $(date +\%d) -ge 28 ] && mkdir -p", line)
         self.assertIn("python3 /opt/runner.py", line)
         self.assertTrue(line.rstrip().endswith(STAMPED_TAIL))
 
@@ -152,7 +160,107 @@ class TestGenerateCronLine(unittest.TestCase):
         }
         line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
         self.assertNotIn("\n", line)
-        self.assertIn("[ $(date +%d) -ge 28 ] [ $(date +%u) -ne 6 ]", line)
+        self.assertIn(r"[ $(date +\%d) -ge 28 ] [ $(date +\%u) -ne 6 ]", line)
+
+
+class TestCronPercentEscaping(unittest.TestCase):
+    """Cron stops a job's command at the first unescaped % (crontab(5)).
+
+    An unescaped % — from the stamper, a condition, a profile name, or a
+    path — silently killed every scheduled run on the production host with
+    an unterminated-quote shell error that MAILTO="" discarded.
+    """
+
+    def _command_portion(self, line):
+        return line.split("root ", 1)[1]
+
+    def test_plain_line_has_no_bare_percent(self):
+        profile = {
+            "profile_name": "root-backup-daily",
+            "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
+        }
+        line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
+        self.assertIsNone(_BARE_PERCENT_RE.search(self._command_portion(line)))
+
+    def test_condition_line_has_no_bare_percent(self):
+        profile = {
+            "profile_name": "root-backup-daily",
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+                "condition": "[ $(date +%d) -ge 28 ]",
+            },
+        }
+        line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
+        self.assertIsNone(_BARE_PERCENT_RE.search(self._command_portion(line)))
+
+    def test_condition_percent_is_escaped(self):
+        profile = {
+            "profile_name": "root-backup-daily",
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+                "condition": "[ $(date +%Y-%m-%d | wc -c) -ge 8 ]",
+            },
+        }
+        line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
+        self.assertIn(r"date +\%Y-\%m-\%d", line)
+
+    def test_profile_name_percent_is_escaped(self):
+        profile = {
+            "profile_name": "100% sure",
+            "cron": {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*"},
+        }
+        line = cron_manager.generate_cron_line(profile, "/run.py", CRON_LOG)
+        # The name is single-quoted by shlex; cron strips the backslash
+        # before %, so sh still receives the literal name.
+        self.assertIn(r"run '100\% sure'", line)
+        self.assertIsNone(_BARE_PERCENT_RE.search(self._command_portion(line)))
+
+    def test_already_escaped_percent_is_not_double_escaped(self):
+        profile = {
+            "profile_name": "root-backup-daily",
+            "cron": {
+                "minute": "0",
+                "hour": "2",
+                "day": "*",
+                "month": "*",
+                "weekday": "*",
+                "condition": r"[ $(date +\%d) -ge 28 ]",
+            },
+        }
+        line = cron_manager.generate_cron_line(profile, "/opt/runner.py", CRON_LOG)
+        self.assertIn(r"date +\%d", line)
+        self.assertNotIn(r"\\%", line)
+        self.assertIsNone(_BARE_PERCENT_RE.search(self._command_portion(line)))
+
+    def test_written_file_has_no_bare_percent(self):
+        with temp_config_dir():
+            profiles = [
+                {
+                    "profile_name": "p1",
+                    "active": True,
+                    "cron": {
+                        "minute": "0",
+                        "hour": "2",
+                        "day": "*",
+                        "month": "*",
+                        "weekday": "*",
+                        "condition": "[ $(date +%d) -ge 28 ]",
+                    },
+                },
+            ]
+            cron_manager.write_cron_file(profiles, "/runner.py", CRON_LOG)
+            with open(cron_manager.CRON_FILE) as f:
+                for line in f:
+                    if "root " in line:
+                        self.assertIsNone(_BARE_PERCENT_RE.search(self._command_portion(line)))
 
 
 class TestInterpretCron(unittest.TestCase):
@@ -289,7 +397,7 @@ class TestWriteCronFile(unittest.TestCase):
             with open(cron_manager.CRON_FILE) as f:
                 content = f.read()
             self.assertIn("0 2 * * *", content)
-            self.assertIn("[ $(date +%d) -ge 28 ]", content)
+            self.assertIn(r"[ $(date +\%d) -ge 28 ]", content)
             self.assertIn("&& mkdir -p", content)
             self.assertIn("run p1", content)
 
