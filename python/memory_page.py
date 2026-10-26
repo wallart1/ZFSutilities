@@ -17,7 +17,10 @@ visible.
 
 Data-source availability follows the model in memory_stats and
 alignment_stats: each source degrades on its own with an explanatory
-note, and absent kstat fields render as "—".
+note, and absent kstat fields render as "—".  The charts view also shows
+live per-enclosure read/write rates against the configured caps (the
+Enclosures section), fed by the iostat data-section leaf rows and the
+same enclosure discovery the Disks tab uses.
 """
 
 import threading
@@ -45,6 +48,8 @@ from config_core import (
     save_ui_state,
 )
 from disk_repository import format_bytes
+from disks_page import enclosure_display_name
+from feature_config import get_enclosures_config
 from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
     capped_treeview_scroll,
@@ -63,7 +68,9 @@ from memory_stats import (
     format_per_second,
     format_percent,
     format_rate,
+    rollup_enclosure_rates,
 )
+from zfs_repository import parse_rate_limit
 
 
 class RollingChart:
@@ -549,6 +556,48 @@ def create_memory_page(app):
     )
     charts_box.pack_start(slog_scroll, False, False, 0)
 
+    # --- Enclosures section ---
+    # Live per-enclosure rates against the configured caps, and the only
+    # place kernel-driven enclosure I/O (scrubs, resilvers) is visible:
+    # the caps govern paced transfers, not kernel I/O (see the Disks tab's
+    # Enclosures pane to set them).
+    charts_box.pack_start(
+        section_header(
+            "Enclosures — USB/eSATA Traffic",
+            "read/write rates across member disks; caps govern paced transfers only",
+        ),
+        False,
+        False,
+        0,
+    )
+
+    app._memory_enclosures_note = note_label()
+    charts_box.pack_start(app._memory_enclosures_note, False, False, 0)
+
+    enclosures_scroll, _enclosures_store = _device_table(
+        app,
+        "_memory_enclosures_store",
+        [
+            ("Enclosure", 180),
+            ("Pools", 130),
+            ("Read", 100),
+            ("Write", 100),
+            ("Cap", 90),
+            ("% of cap", 80),
+        ],
+        "memory_enclosures_view",
+        expand_index=0,
+    )
+    charts_box.pack_start(enclosures_scroll, False, False, 0)
+
+    # The enclosure chart's series names are fixed at construction (one
+    # read/write pair per enclosure), so the chart lives in its own box and
+    # is rebuilt whenever the discovered enclosure set changes.
+    app._memory_enclosures_chart = None
+    app._memory_enclosures_chart_key = None
+    app._memory_enclosures_chart_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+    charts_box.pack_start(app._memory_enclosures_chart_box, False, False, 0)
+
     return scrolled
 
 
@@ -746,3 +795,146 @@ def _apply_memory_sample(app, sample):
             format_rate(vr.write_bps if vr else None),
         ]
     reconcile_rows(app._memory_slog_store, slog_rows)
+
+    # --- Enclosures ---
+    _apply_enclosure_sample(app, sample)
+
+
+# ---------------------------------------------------------------------------
+# Enclosures: live per-enclosure rates against the configured caps
+# ---------------------------------------------------------------------------
+
+
+def _enclosure_membership(data):
+    """Map iostat leaf vdev names to enclosure ids from inventory data.
+
+    Discovery members are whole-disk kernel names; the inventory rows add
+    partition names and by-id basenames, so every leaf spelling
+    ``zpool iostat -v`` prints for an enclosure disk — kernel or by-id,
+    whole disk or partition — maps to its enclosure.
+    """
+    membership = {}
+    for enclosure in data.enclosures:
+        for member in enclosure.members:
+            membership[member] = enclosure.id
+    for disk in data.disks:
+        if disk.enclosure_id:
+            membership[disk.name] = disk.enclosure_id
+            if disk.by_id:
+                membership[disk.by_id] = disk.enclosure_id
+    return membership
+
+
+def _enclosure_inventory_data(app):
+    """Return the shared Disks-page inventory snapshot, or None.
+
+    The cache never blocks: a stale hit returns immediately and refreshes
+    in its own daemon thread, which then invokes the callback so the
+    enclosure table reconciles as soon as the fresh inventory lands —
+    without waiting for the next Performance refresh tick.
+    """
+    cache = getattr(app, "_disks_inventory_cache", None)
+    if cache is None:
+        return None
+
+    def _loaded():
+        GLib.idle_add(_reconcile_enclosures_after_inventory, app)
+
+    data = cache.get(callback=_loaded)
+    if not isinstance(getattr(data, "enclosures", None), list) or not isinstance(
+        getattr(data, "disks", None), list
+    ):
+        # A cache that answers anything but a DiskInventoryData (tests
+        # embed mock caches) simply has nothing to show yet.
+        return None
+    return data
+
+
+def _reconcile_enclosures_after_inventory(app):
+    """Reconcile the enclosure table once a background inventory load lands."""
+    if _current_memory_view(app) != "charts":
+        return False
+    sample = getattr(app, "_memory_sample", None)
+    if sample is not None:
+        _apply_enclosure_sample(app, sample, charts=False)
+    return False
+
+
+def _ensure_enclosure_chart(app, series):
+    """Return the enclosure chart, rebuilt when the enclosure set changes.
+
+    *series* is the ordered ``(id, display name)`` list the chart should
+    show; it doubles as the rebuild key, so a renamed enclosure rebuilds
+    the legend too.  A rebuild discards the rolling history — the old
+    chart's series no longer describe the enclosures present.
+    """
+    box = app._memory_enclosures_chart_box
+    key = tuple(series)
+    chart = app._memory_enclosures_chart
+    if chart is not None and app._memory_enclosures_chart_key == key:
+        return chart
+    if chart is not None:
+        box.remove(chart.widget)
+    names = [f"{name} {way}" for _id, name in series for way in ("read", "write")]
+    chart = create_rolling_chart("Enclosure traffic", names) if names else None
+    if chart is not None:
+        box.pack_start(chart.widget, False, False, 0)
+    app._memory_enclosures_chart = chart
+    app._memory_enclosures_chart_key = key
+    return chart
+
+
+def _apply_enclosure_sample(app, sample, charts=True):
+    """Refresh the Enclosures table (and rolling chart) from one sample."""
+    data = _enclosure_inventory_data(app)
+    rows = {}
+    series = []
+    values = []
+    if data is not None and data.enclosures:
+        entries = get_enclosures_config(app.config)
+        totals = rollup_enclosure_rates(sample.vdevs, _enclosure_membership(data))
+        for enclosure in data.enclosures:
+            entry = entries.get(enclosure.id) or {}
+            name = enclosure_display_name(enclosure, entry.get("name", ""))
+            rates = totals.get(enclosure.id)
+            cap = parse_rate_limit(entry.get("max_rate", ""))
+            if rates is not None and cap:
+                # A paced stream loads one direction at a time, so the
+                # busier direction is the one a cap can bite on.
+                busy = max(rates.read_bps, rates.write_bps)
+                percent = format_percent(100.0 * busy / cap)
+            else:
+                percent = "—"
+            rows[(enclosure.id, name)] = [
+                name,
+                ", ".join(enclosure.pools),
+                format_rate(rates.read_bps if rates is not None else None),
+                format_rate(rates.write_bps if rates is not None else None),
+                entry.get("max_rate", "") or "unlimited",
+                percent,
+            ]
+            series.append((enclosure.id, name))
+            values.extend(
+                [
+                    rates.read_bps if rates is not None else None,
+                    rates.write_bps if rates is not None else None,
+                ]
+            )
+
+    if not sample.iostat_available:
+        show_note(
+            app._memory_enclosures_note,
+            "Enclosure rates unavailable: `zpool iostat -v` failed.",
+        )
+    elif data is None or not data.enclosures:
+        show_note(
+            app._memory_enclosures_note,
+            "No multi-bay USB/eSATA enclosures discovered "
+            "(enclosures are listed and named on the Disks tab).",
+        )
+    else:
+        app._memory_enclosures_note.hide()
+
+    reconcile_rows(app._memory_enclosures_store, rows)
+    if charts and series:
+        _ensure_enclosure_chart(app, series).append(sample.monotonic, values)

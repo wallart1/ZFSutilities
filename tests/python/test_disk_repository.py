@@ -1,5 +1,6 @@
 """Tests for disk_repository.py — lsblk, by-id, and smartctl isolation."""
 
+import json
 import os
 import subprocess
 import sys
@@ -11,7 +12,7 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from disk_repository import DiskRepository
+from disk_repository import DiskInfo, DiskRepository
 from test_support import mock_subprocess
 
 
@@ -782,6 +783,54 @@ class TestBootDiskFiltering(unittest.TestCase):
             findmnt_source="/dev/sda2", pk_probe={"blockdevices": []}, pk_rc=1
         )
         self.assertEqual(len(disks), 10)
+
+
+class TestDiskInfoEnclosureField(unittest.TestCase):
+    """DiskInfo carries the enclosure identity for GUI-side attachment."""
+
+    def test_enclosure_id_defaults_to_empty(self):
+        disk = DiskInfo(name="sda", path="/dev/sda")
+        self.assertEqual(disk.enclosure_id, "")
+
+    def test_list_disks_leaves_enclosure_id_unset(self):
+        """lsblk parsing never guesses enclosure membership — the GUI cache
+        attaches it from the Phase 1 discovery module, so freshly listed
+        disks always start unattributed."""
+        lsblk_json = json.dumps(
+            {
+                "blockdevices": [
+                    {
+                        "name": "sdb",
+                        "path": "/dev/sdb",
+                        "size": 500107862016,
+                        "type": "disk",
+                        "rota": True,
+                        "tran": "usb",
+                        "model": "Bridge",
+                        "serial": "1",
+                        "log-sec": 512,
+                        "phy-sec": 512,
+                    }
+                ]
+            }
+        )
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"^lsblk",
+                lambda _cmd, **_kw: subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=lsblk_json
+                ),
+            )
+            m.set_command_handler(
+                r"^findmnt",
+                lambda _cmd, **_kw: subprocess.CompletedProcess(
+                    args=[], returncode=1, stdout="", stderr=""
+                ),
+            )
+            repo = DiskRepository(sudo=False)
+            disks = repo.list_disks()
+        self.assertEqual([d.path for d in disks], ["/dev/sdb"])
+        self.assertEqual(disks[0].enclosure_id, "")
 
 
 if __name__ == "__main__":

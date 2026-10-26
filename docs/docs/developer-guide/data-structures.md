@@ -651,9 +651,9 @@ renders absent fields as "—".
 | `MemorySample.monotonic` | `float` | `time.monotonic()` of the collection |
 | `MemorySample.arc` | `dict[str, int]` | arcstats counters present on this host |
 | `MemorySample.zil` | `dict[str, int]` | zil kstat counters (SLOG write path) |
-| `MemorySample.vdevs` | `list[VdevSample]` | `logs`/`cache` vdev rows from interval-mode `zpool iostat -v` |
+| `MemorySample.vdevs` | `list[VdevSample]` | vdev rows from interval-mode `zpool iostat -v`: `logs`/`cache` rows plus the data section's leaf disks (group rows like `raidz*`/`mirror*` excluded by name shape) |
 | `MemorySample.arcstats_available` / `zil_available` / `iostat_available` | `bool` | Per-source probe results |
-| `VdevSample.pool` / `vdev` / `section` | `str` | Pool name, vdev name, `"logs"` or `"cache"` |
+| `VdevSample.pool` / `vdev` / `section` | `str` | Pool name, vdev name, `"data"` (leaves only), `"logs"`, or `"cache"` |
 | `VdevSample.alloc` / `free` | `int` or `None` | Capacity bytes; `None` when the cell is `-` (leaf devices under a mirror) |
 | `VdevSample.reads_ps` / `writes_ps` / `read_bps` / `write_bps` | `float` | Per-second averages over the iostat report's 1-second window (not cumulative counters) |
 
@@ -665,6 +665,14 @@ is larger in the new sample's past, so the rate for that interval is
 `None` and the UI shows "—" rather than a bogus negative. `VdevRates`
 pass through the current sample's iostat window directly — no deltas, so
 they are live on the first sample too.
+
+`rollup_enclosure_rates(rows, membership)` sums the data-section leaf rows
+into per-enclosure `EnclosureRates` (read/write B/s) using a mapping of
+leaf vdev names to enclosure ids (built by the Performance page from the
+shared enclosure discovery and disk inventory, which spell each member as
+kernel and by-id names, whole disks and partitions). A mapped enclosure
+with no leaf row in the report is absent from the result — its rates are
+unknown, not zero.
 
 ### Alignment samples (`alignment_stats.py`)
 

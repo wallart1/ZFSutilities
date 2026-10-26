@@ -507,9 +507,9 @@ class _Iter:
 
 
 class _FakeStore:
-    """Minimal 13-column ListStore stand-in for disks_page integration tests."""
+    """Minimal 14-column ListStore stand-in for disks_page integration tests."""
 
-    NCOLS = 13
+    NCOLS = 14
 
     def __init__(self, rows=None):
         self.rows = rows or []

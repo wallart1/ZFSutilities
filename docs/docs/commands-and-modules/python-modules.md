@@ -347,6 +347,7 @@ and tests easy to mock.
 | `build_detach_command()`                 | Pure `zpool detach` argv builder                                                                                                                       |
 | `build_recursive_snapshot_command()`     | Pure `zfs snapshot -r` argv builder for migration snapshots                                                                                            |
 | `valid_rate_limit()`                     | Pure rate-grammar validator mirroring `lib/pace_stream.py` (digits plus an optional `k`/`m`/`g`/`t`/`p`/`e` multiplier with optional `i`/`b`); shared by the migration command builder and the Migrate Pool dialog so the GUI never refuses a value the pacer accepts                                                                                                            |
+| `parse_rate_limit()`                     | Parse a pacer-grammar rate string into bytes/second through the shared resolver's `pace_stream` (`None` for empty or non-grammar); feeds the Performance tab's % of cap so the numeric view cannot drift from the pacer                                                                                                                        |
 | `ZfsRepository.effective_transfer_rate(pools, activity_rate)` | Python seam of per-enclosure rate governance: delegates to the shared resolver `lib/enclosure_rate.py` (min of *activity_rate* and every enclosure cap touched by *pools*; `""` = unlimited; resolver failure fails open to *activity_rate* with a loud WARN)                                                                                      |
 | `build_migration_send_receive_command()` | Pure `bash -c` argv sourcing `zfs-migrate-send` for a resumable, pv-instrumented migration copy (optional `rate_limit` enforced by the pacer `lib/pace_stream.py`; optional `from_snap` switches the send to an incremental catch-up — `-Rw -I`, or plain `-w -I` when the source is a clone, whose streams must not reference the origin) |
 | `build_pool_export_command()`            | Pure `zpool export` argv builder                                                                                                                       |
@@ -1297,34 +1298,41 @@ functions in `disk_repository.py`.
 
 ### `disks_page.py`
 
-The **Disks** tab UI: the disk inventory TreeView, pool selector, and vdev
+The **Disks** tab UI: the disk inventory TreeView, the Enclosures section
+(enclosure rows plus the Set Max I/O Rate dialog), pool selector, and vdev
 topology TreeView. Slow block-device and ZFS calls are cached in a background
-loader following the `ImportablePoolCache` pattern.
+loader following the `ImportablePoolCache` pattern; the same cache attaches
+enclosure membership (from `enclosure_inventory`) to each disk and carries the
+discovered enclosure list.
 
 **Key classes:**
 
 | Class                | Purpose                                  |
 | -------------------- | ---------------------------------------- |
 | `DiskInventoryData`  | Snapshot returned by the cache           |
-| `DiskInventoryCache` | Async TTL cache for inventory + topology |
+| `DiskInventoryCache` | Async TTL cache for inventory + topology (+ enclosures) |
 
 **Key functions:**
 
 | Function                                        | Purpose                                                              |
 | ----------------------------------------------- | -------------------------------------------------------------------- |
 | `create_disks_page(app)`                        | Build and return the Disks tab widget                                |
-| `refresh_disks_page(app)`                       | Repopulate disk inventory and topology stores                        |
+| `refresh_disks_page(app)`                       | Repopulate disk inventory, enclosures, and topology stores           |
 | `on_disks_refresh(app)`                         | Invalidate cache and refresh the page                                |
+| `on_disks_set_enclosure_rate(app)`              | Set Max I/O Rate… — name and rate cap dialog for the selected enclosure |
+| `enclosure_display_name(enclosure, name)`       | User-assigned enclosure name or `kind location` fallback             |
 | `update_disks_button_sensitivity(app)`          | Enable/disable action buttons based on host role, runner state, and selection |
 
 **Called modules / imported helpers:**
 
-| Module            | Purpose in this module                                        |
-| ----------------- | ------------------------------------------------------------- |
-| `disk_repository` | `DiskRepository`, `DiskInfo`                                  |
-| `zfs_repository`  | `ZfsRepository`, `TopologyNode`                               |
-| `gui_helpers`     | `bold_label`, `configure_treeview_column`, `setup_row_scroll` |
-| `logging_config`  | `log_msg`                                                     |
+| Module               | Purpose in this module                                        |
+| -------------------- | -------------------------------------------------------------- |
+| `disk_repository`    | `DiskRepository`, `DiskInfo`                                  |
+| `enclosure_inventory` | `EnclosureInfo`, `EnclosureInventory` (membership attach, display) |
+| `feature_config`     | `get_enclosures_config`, `save_enclosures_config`              |
+| `zfs_repository`     | `ZfsRepository`, `TopologyNode`, `valid_rate_limit`            |
+| `gui_helpers`        | `bold_label`, `configure_treeview_column`, `create_dialog`, `setup_row_scroll` |
+| `logging_config`     | `log_msg`                                                      |
 
 ---
 
@@ -1859,10 +1867,14 @@ mapped when the sidebar selects it. The charts view holds the ARC / L2ARC / SLOG
 monitors — value grids, per-device tables, and rolling
 time-series charts built through `charting.create_rolling_chart`
 (matplotlib renderer, with the Cairo `RollingChart` as the fallback) —
-and the alignment
+plus the **Enclosures** section (live per-enclosure read/write rates
+against the configured caps, fed by the shared Disks-page inventory cache
+and the iostat data-section leaf rows; its rolling chart is rebuilt when
+the discovered enclosure set changes, since series names are fixed at
+construction), and the alignment
 view is built by `alignment_page`. Chart sizing lives in the pack layer,
 not the drawing code: each chart's designed height is a size request on
-the chart widget, and the three vertical pack sites pack without
+the chart widget, and the vertical pack sites pack without
 expand, so the charts fill the page width but never stretch when the
 window grows tall. Samples are collected in a background
 thread and applied on the main loop via `GLib.idle_add`;
@@ -1878,6 +1890,7 @@ each apply.
 | `create_memory_page(app)`             | Build the Performance tab widget: switcher, view stack, charts     |
 | `refresh_memory_page(app)`            | Dispatch to the visible view's refresh (both run off-thread)       |
 | `_apply_memory_sample(app, sample)`   | Synchronously apply a sample to labels, charts, and device tables  |
+| `_apply_enclosure_sample(app, sample, charts=True)` | Reconcile the Enclosures table (and append its rolling chart) from a sample |
 | `_on_memory_view_radio_toggled(radio, app)` | Switch the visible view and persist the selection            |
 | `_on_memory_view_stack_mapped(stack, app)` | Re-assert the active radio's view when the stack is mapped (a no-op when they already agree) |
 | `_on_memory_refresh_changed(spin, app)` | Persist the refresh interval and restart the timer               |
@@ -1893,11 +1906,14 @@ each apply.
 | Module           | Purpose in this module                       |
 | ---------------- | -------------------------------------------- |
 | `charting`       | Rolling-chart factory and shared chart vocabulary (renderer selection) |
-| `memory_stats`   | Sample collection, rate computation, formats |
+| `memory_stats`   | Sample collection, rate computation, enclosure rollup, formats |
 | `alignment_page` | The Alignment view child of the page's `Gtk.Stack` |
 | `config_core`    | Memory refresh-interval config, view persistence |
+| `disks_page`     | `enclosure_display_name` (config name or kind/location fallback) |
 | `disk_repository`| `format_bytes`                               |
+| `feature_config` | `get_enclosures_config` (caps and names)     |
 | `gui_helpers`    | TreeView column setup, section headers, notes, row reconcile |
+| `zfs_repository`| `parse_rate_limit` (cap strings → bytes/s for % of cap) |
 
 **Data structures consumed / produced:**
 
@@ -1920,16 +1936,17 @@ window.
 | Function                                    | Purpose                                                            |
 | ------------------------------------------- | ------------------------------------------------------------------ |
 | `parse_arcstats(text)` / `parse_zil_kstats(text)` | kstat body → `{name: value}` (only fields the kernel exposes) |
-| `parse_zpool_iostat_v(text)`                | iostat output → `VdevSample` rows for `logs`/`cache` sections; the last report per vdev wins |
+| `parse_zpool_iostat_v(text)`                | iostat output → `VdevSample` rows for `logs`/`cache` sections plus the data section's leaf disks (group rows excluded by name shape); the last report per vdev wins |
 | `collect_memory_sample()`                   | Probe all three sources; each degrades independently (`-y` iostat with a no-`-y` fallback) |
 | `compute_rates(prev, cur)`                  | Kstat counter deltas + vdev passthrough → `MemoryRates` (counter resets yield `None`) |
+| `rollup_enclosure_rates(rows, membership)`  | Sum data-leaf read/write B/s per enclosure from a leaf-name → enclosure-id mapping |
 | `format_rate` / `format_percent` / `format_per_second` | Display formatters ("—" for unknown)                     |
 
 **Data structures consumed / produced:**
 
 | Structure                    | Reference                        |
 | ---------------------------- | -------------------------------- |
-| `MemorySample` / `VdevSample` / `MemoryRates` | [Memory samples][ds-memory] |
+| `MemorySample` / `VdevSample` / `MemoryRates` / `EnclosureRates` | [Memory samples][ds-memory] |
 
 ---
 

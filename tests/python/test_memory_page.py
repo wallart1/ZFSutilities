@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -129,6 +130,11 @@ class TestCreateMemoryPage(unittest.TestCase):
             self.assertIsNotNone(app._memory_slog_labels)
             self.assertIsNotNone(app._memory_l2_store)
             self.assertIsNotNone(app._memory_slog_store)
+            self.assertIsNotNone(app._memory_enclosures_store)
+            self.assertIsNotNone(app._memory_enclosures_note)
+            # The enclosure chart is built lazily on the first sample with
+            # enclosures (series names depend on the discovered set).
+            self.assertIsNone(app._memory_enclosures_chart)
             # The page hosts both Performance views behind the switcher.
             self.assertEqual(set(app._memory_view_radios), {"charts", "alignment"})
             self.assertIsNotNone(app._memory_view_stack)
@@ -148,7 +154,7 @@ class TestCreateMemoryPage(unittest.TestCase):
             self.assertIn("<big><b>Performance</b></big>", markups)
 
     def test_device_tables_bound_for_width_persistence(self):
-        """Both device tables register with the UI-state persistence layer."""
+        """Every device table registers with the UI-state persistence layer."""
         with mock_gtk(fresh=True) as gtk:
             views = []
 
@@ -165,7 +171,8 @@ class TestCreateMemoryPage(unittest.TestCase):
             mp.create_memory_page(app)
             calls = app._ui_state.bind_treeview.call_args_list
             # The Alignment view (second Performance view) binds its four
-            # tables first, then the charts view's L2ARC and SLOG tables.
+            # tables first, then the charts view's L2ARC, SLOG, and
+            # Enclosures tables.
             self.assertEqual(
                 [(c.args[0], c.args[1]) for c in calls],
                 [
@@ -175,6 +182,7 @@ class TestCreateMemoryPage(unittest.TestCase):
                     (views[3], "alignment_workload_view"),
                     (views[4], "memory_l2_view"),
                     (views[5], "memory_slog_view"),
+                    (views[6], "memory_enclosures_view"),
                 ],
             )
 
@@ -230,15 +238,15 @@ class TestCreateMemoryPage(unittest.TestCase):
             mp.create_memory_page(app)
             # ScrolledWindow creation order: the page window, the chain
             # table, the ladder window, then topology/findings/workload,
-            # then L2ARC/SLOG.
-            self.assertEqual(len(scrolls), 8)
+            # then L2ARC/SLOG/Enclosures.
+            self.assertEqual(len(scrolls), 9)
             # The fixed Performance-page window: min == max == the 20-row
             # cap, so short and empty tables keep their 20-line window
             # (the one-row allowance absorbs the horizontal scrollbar).
             row = gh.TREEVIEW_ROW_HEIGHT_FALLBACK
             cap = (row + 2) + (gh.TABLE_ROW_TARGET + 1) * row
-            table_scrolls = scrolls[1:2] + scrolls[3:6] + scrolls[6:8]
-            table_views = views[0:4] + views[4:6]
+            table_scrolls = scrolls[1:2] + scrolls[3:6] + scrolls[6:9]
+            table_views = views[0:4] + views[4:7]
             for scroll, view in zip(table_scrolls, table_views):
                 scroll.add.assert_called_once_with(view)
                 scroll.set_propagate_natural_height.assert_called_once_with(True)
@@ -248,17 +256,20 @@ class TestCreateMemoryPage(unittest.TestCase):
             # small minimum width so the canvas's request can never widen
             # the page (its max_content_width is floored by alignment_page).
             scrolls[2].set_min_content_width.assert_called_once_with(gh.TREEVIEW_MIN_WIDTH)
-            # Columns: 21 for the Alignment tables, then 5 per device
-            # table.  Each device table expands its Vdev column (second of
-            # five) so the far-right column keeps its fixed width, and
-            # every column starts at a sane width with a real minimum.
-            self.assertEqual(len(columns), 31)
-            for table in (columns[21:26], columns[26:31]):
+            # Columns: 21 for the Alignment tables, then 5/5/6 per device
+            # table.  The L2ARC and SLOG tables expand their Vdev column
+            # (second of five); the Enclosures table expands its first
+            # column, so the far-right % of cap keeps its fixed width.
+            # Every column starts at a sane width with a real minimum.
+            self.assertEqual(len(columns), 37)
+            tables = [columns[21:26], columns[26:31], columns[31:37]]
+            expand_index = [1, 1, 0]
+            for table, expanded in zip(tables, expand_index):
                 for col in table:
                     self.assertGreaterEqual(col.set_fixed_width.call_args.args[0], 60)
                     col.set_min_width.assert_called_once_with(60)
-                table[1].set_expand.assert_called_once_with(True)
-                for col in (table[0], *table[2:]):
+                table[expanded].set_expand.assert_called_once_with(True)
+                for col in table[:expanded] + table[expanded + 1 :]:
                     col.set_expand.assert_not_called()
 
     def test_spin_defaults_from_config(self):
@@ -386,6 +397,7 @@ class TestApplyMemorySample(unittest.TestCase):
             mp.create_memory_page(app)
         app._memory_l2_store.get_iter_first.return_value = None
         app._memory_slog_store.get_iter_first.return_value = None
+        app._memory_enclosures_store.get_iter_first.return_value = None
         return mp, app
 
     def test_arc_labels_update_with_rates(self):
@@ -484,6 +496,268 @@ class TestApplyMemorySample(unittest.TestCase):
         with patch.object(mp.threading, "Thread") as thread:
             mp.refresh_memory_page(app)
         thread.assert_not_called()
+
+
+class TestEnclosuresSection(unittest.TestCase):
+    """The Performance charts view's live per-enclosure rates section."""
+
+    def _prepared(self, data=None):
+        """Return (module, app) with the page built and a fake inventory cache.
+
+        *data* is a DiskInventoryData the cache serves; None installs no
+        cache (the pre-inventory state of a mock app).
+        """
+        app = _make_app()
+        with mock_gtk(fresh=True) as gtk:
+            gtk.Label = MagicMock(side_effect=lambda *a, **k: MagicMock())
+            gtk.ListStore = MagicMock(side_effect=lambda *a, **k: MagicMock())
+            import memory_page as mp
+
+            mp.create_memory_page(app)
+        app._memory_l2_store.get_iter_first.return_value = None
+        app._memory_slog_store.get_iter_first.return_value = None
+        app._memory_enclosures_store.get_iter_first.return_value = None
+
+        class _FakeCache:
+            def __init__(self, data):
+                self.data = data
+                self.callbacks = []
+
+            def get(self, callback=None):
+                if callback is not None:
+                    self.callbacks.append(callback)
+                return self.data
+
+        if data is not None:
+            app._disks_inventory_cache = _FakeCache(data)
+        return mp, app
+
+    @staticmethod
+    def _inventory(enclosures, disks):
+        # A stand-in for disks_page.DiskInventoryData: importing the real
+        # dataclass here would drag a GUI module outside mock_gtk (the
+        # test_gui_infrastructure import guards), and the code under test
+        # only reads the three attributes.
+        return SimpleNamespace(disks=disks, topologies={}, enclosures=enclosures)
+
+    @staticmethod
+    def _enclosure(enc_id, members, pools, kind="usb", location="usb2/2-2"):
+        from enclosure_inventory import EnclosureInfo
+
+        return EnclosureInfo(
+            id=enc_id, kind=kind, location=location, members=list(members), pools=list(pools)
+        )
+
+    @staticmethod
+    def _disk(name, enclosure_id="", by_id=""):
+        from disk_repository import DiskInfo
+
+        return DiskInfo(name=name, path=f"/dev/{name}", by_id=by_id, enclosure_id=enclosure_id)
+
+    @staticmethod
+    def _leaf_vdev(pool, vdev, read_bps, write_bps):
+        return ms.VdevSample(
+            pool=pool,
+            vdev=vdev,
+            section="data",
+            alloc=None,
+            free=None,
+            reads_ps=0,
+            writes_ps=0,
+            read_bps=read_bps,
+            write_bps=write_bps,
+        )
+
+    def _sample_with_vdevs(self, vdevs):
+        sample = _arc_sample(100.0)
+        sample.vdevs = vdevs
+        return sample
+
+    def test_membership_covers_kernel_partition_and_by_id_spelling(self):
+        """Every leaf spelling iostat prints maps to its enclosure."""
+        mp, _app = self._prepared()
+        data = SimpleNamespace(
+            enclosures=[self._enclosure("enc-a", ["sde"], ["fivebays"])],
+            disks=[
+                self._disk("sde", "enc-a", "usb-Bridge-0:0"),
+                self._disk("sde1", "enc-a", "usb-Bridge-0:0-part1"),
+            ],
+        )
+        self.assertEqual(
+            mp._enclosure_membership(data),
+            {
+                "sde": "enc-a",
+                "usb-Bridge-0:0": "enc-a",
+                "sde1": "enc-a",
+                "usb-Bridge-0:0-part1": "enc-a",
+            },
+        )
+
+    def test_rows_show_rates_cap_and_percent_of_cap(self):
+        """Table rows: display name, pools, summed rates, cap, % of cap."""
+        data = self._inventory(
+            enclosures=[
+                self._enclosure("enc-a", ["sda", "sdb"], ["fivebays"]),
+                self._enclosure(
+                    "enc-b", ["sdd"], ["threeamigos"], kind="esata", location="0000:03:00.0"
+                ),
+            ],
+            disks=[
+                self._disk("sda", "enc-a", "ata-WDC_A"),
+                self._disk("sdb", "enc-a", "ata-WDC_B"),
+                self._disk("sdd", "enc-b", "ata-WDC_D"),
+            ],
+        )
+        mp, app = self._prepared(data)
+        app.config = {
+            "enclosures": {"enc-a": {"name": "fivebays", "max_rate": "20M"}},
+        }
+        sample = self._sample_with_vdevs(
+            [
+                # 10 MiB/s read + 2 MiB/s write on enc-a across two leaves;
+                # the busier direction (10 MiB/s) against the 20M cap = 50%.
+                self._leaf_vdev("fivebays", "sda", 5 * 1024**2, 0),
+                self._leaf_vdev("fivebays", "sdb", 5 * 1024**2, 2 * 1024**2),
+            ]
+        )
+        mp._apply_memory_sample(app, sample)
+
+        appended = [c.args[0] for c in app._memory_enclosures_store.append.call_args_list]
+        self.assertEqual(len(appended), 2)
+        self.assertEqual(
+            appended[0],
+            [
+                "fivebays",
+                "fivebays",
+                ms.format_rate(10 * 1024**2),
+                ms.format_rate(2 * 1024**2),
+                "20M",
+                "50.0%",
+            ],
+        )
+        # No configured name -> kind/location fallback; no leaf rows in the
+        # report -> rates unknown (—), cap unlimited, no percentage.
+        self.assertEqual(
+            appended[1],
+            ["esata 0000:03:00.0", "threeamigos", "—", "—", "unlimited", "—"],
+        )
+        app._memory_enclosures_note.hide.assert_called()
+
+    def test_by_id_leaf_names_map_to_enclosures(self):
+        """A pool built on by-id partitions rolls up through by-id names."""
+        data = self._inventory(
+            enclosures=[self._enclosure("enc-a", ["sde"], ["tank"])],
+            disks=[
+                self._disk("sde", "enc-a", "usb-Bridge-0:0"),
+                self._disk("sde1", "enc-a", "usb-Bridge-0:0-part1"),
+            ],
+        )
+        mp, app = self._prepared(data)
+        sample = self._sample_with_vdevs([self._leaf_vdev("tank", "usb-Bridge-0:0-part1", 4096, 0)])
+        mp._apply_enclosure_sample(app, sample)
+        appended = [c.args[0] for c in app._memory_enclosures_store.append.call_args_list]
+        self.assertEqual(appended[0][2], ms.format_rate(4096))
+
+    def test_iostat_unavailable_note(self):
+        data = self._inventory(enclosures=[self._enclosure("enc-a", ["sda"], ["tank"])], disks=[])
+        mp, app = self._prepared(data)
+        sample = self._sample_with_vdevs([])
+        sample.iostat_available = False
+        mp._apply_enclosure_sample(app, sample)
+        markup = app._memory_enclosures_note.set_markup.call_args[0][0]
+        self.assertIn("zpool iostat", markup)
+
+    def test_no_enclosures_note(self):
+        mp, app = self._prepared(self._inventory(enclosures=[], disks=[]))
+        mp._apply_enclosure_sample(app, self._sample_with_vdevs([]))
+        markup = app._memory_enclosures_note.set_markup.call_args[0][0]
+        self.assertIn("No multi-bay USB/eSATA enclosures", markup)
+
+    def test_enclosure_removed_reconciles_away(self):
+        data = self._inventory(enclosures=[self._enclosure("enc-a", ["sda"], ["tank"])], disks=[])
+        mp, app = self._prepared(data)
+        mp._apply_enclosure_sample(app, self._sample_with_vdevs([]))
+
+        # The enclosure vanishes from discovery -> the row is removed.
+        app._disks_inventory_cache.data = self._inventory(enclosures=[], disks=[])
+        tree_iter = MagicMock()
+        store = app._memory_enclosures_store
+        store.get_iter_first.return_value = tree_iter
+        store.iter_next.return_value = None
+        store.get_value.side_effect = lambda _it, col: [
+            "enc-a",
+            "usb usb2/2-2",
+            "tank",
+            "—",
+            "—",
+            "unlimited",
+            "—",
+        ][col]
+        mp._apply_enclosure_sample(app, self._sample_with_vdevs([]))
+        store.remove.assert_called_once_with(tree_iter)
+
+    def test_chart_series_and_append(self):
+        """One read/write series pair per enclosure; one append per sample."""
+        data = self._inventory(
+            enclosures=[
+                self._enclosure("enc-a", ["sda"], ["fivebays"]),
+                self._enclosure("enc-b", ["sdd"], ["tank"], kind="esata", location="0000:03:00.0"),
+            ],
+            disks=[],
+        )
+        mp, app = self._prepared(data)
+        vdevs = [
+            self._leaf_vdev("fivebays", "sda", 100.0, 200.0),
+            self._leaf_vdev("tank", "sdd", 0.0, 300.0),
+        ]
+        mp._apply_memory_sample(app, self._sample_with_vdevs(vdevs))
+        chart = app._memory_enclosures_chart
+        self.assertEqual(
+            chart.series_names,
+            [
+                "usb usb2/2-2 read",
+                "usb usb2/2-2 write",
+                "esata 0000:03:00.0 read",
+                "esata 0000:03:00.0 write",
+            ],
+        )
+        mp._apply_memory_sample(app, self._sample_with_vdevs(vdevs))
+        self.assertEqual(len(chart.points), 2)
+        self.assertEqual(chart.points[-1][1], (100.0, 200.0, 0.0, 300.0))
+
+    def test_chart_rebuilt_when_enclosure_set_changes(self):
+        """A renamed (or new/disappeared) enclosure rebuilds the chart,
+        because series names are fixed at chart construction."""
+        data = self._inventory(enclosures=[self._enclosure("enc-a", ["sda"], ["tank"])], disks=[])
+        mp, app = self._prepared(data)
+        sample = self._sample_with_vdevs([self._leaf_vdev("tank", "sda", 1.0, 2.0)])
+        mp._apply_memory_sample(app, sample)
+        first = app._memory_enclosures_chart
+
+        app.config = {"enclosures": {"enc-a": {"name": "renamed", "max_rate": ""}}}
+        mp._apply_memory_sample(app, sample)
+        second = app._memory_enclosures_chart
+        self.assertIsNot(first, second)
+        self.assertEqual(second.series_names, ["renamed read", "renamed write"])
+        # History restarts with the new series — only the current sample.
+        self.assertEqual(second.points, [(sample.monotonic, (1.0, 2.0))])
+        app._memory_enclosures_chart_box.remove.assert_called_with(first.widget)
+
+    def test_table_only_reconcile_skips_chart_append(self):
+        """The post-inventory callback refreshes the table but never appends
+        a second point for an already-applied sample."""
+        data = self._inventory(enclosures=[self._enclosure("enc-a", ["sda"], ["tank"])], disks=[])
+        mp, app = self._prepared(data)
+        sample = self._sample_with_vdevs([self._leaf_vdev("tank", "sda", 1.0, 2.0)])
+        mp._apply_memory_sample(app, sample)
+        chart = app._memory_enclosures_chart
+        cache = app._disks_inventory_cache
+        self.assertEqual(len(cache.callbacks), 1)
+        cache.callbacks[0]()  # schedules the idle reconcile
+        idle_cb, idle_app = mp.GLib.idle_add.call_args.args
+        idle_cb(idle_app)
+        self.assertEqual(len(chart.points), 1)
+        self.assertIs(app._memory_enclosures_chart, chart)
 
 
 class TestRefreshingIndicator(unittest.TestCase):

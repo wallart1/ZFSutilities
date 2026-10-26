@@ -11,6 +11,7 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 from disk_repository import DiskInfo
+from enclosure_inventory import EnclosureInfo
 from test_support import capture_logs, mock_gtk
 from zfs_repository import TopologyNode
 
@@ -71,10 +72,10 @@ class FakeListStore:
 
 def _disk_row(path, pools="", highlight=False):
     """Return a disk ListStore row with *path*, *pools*, and *highlight* filled in."""
-    row = [""] * 13
+    row = [""] * 14
     row[0] = path
-    row[9] = pools
-    row[12] = highlight
+    row[10] = pools
+    row[13] = highlight
     return row
 
 
@@ -183,7 +184,7 @@ class FakeTreeView:
         self.scrolled_to.append(path)
 
 
-def _make_app(disks=None, topologies=None):
+def _make_app(disks=None, topologies=None, enclosures=None):
     """Return a mocked app object ready for disks_page tests."""
     app = MagicMock()
     app.config = {"pools": []}
@@ -191,7 +192,9 @@ def _make_app(disks=None, topologies=None):
     app.enable_treeview_copy = MagicMock()
 
     cache = MagicMock()
-    cache.get.return_value = MagicMock(disks=disks or [], topologies=topologies or {})
+    cache.get.return_value = MagicMock(
+        disks=disks or [], topologies=topologies or {}, enclosures=enclosures or []
+    )
     app._disks_inventory_cache = cache
     app._disks_syncing_selection = False
 
@@ -204,6 +207,11 @@ def _make_app(disks=None, topologies=None):
 
     # Dataset tuning store helpers.
     app.disks_dataset_store = FakeListStore()
+
+    # Enclosures section helpers.
+    app.enclosures_store = FakeListStore()
+    app.enclosures_view = FakeTreeView(app.enclosures_store)
+    app._disks_enclosure_rate_btn = MagicMock()
 
     # Selection helpers.
     app.disks_view.get_selection.return_value.get_selected_rows.return_value = (
@@ -1316,6 +1324,19 @@ class TestPathMatchesAnyDevice(unittest.TestCase):
             self.assertTrue(dp._path_matches_any_device("/dev/null", {link}))
 
 
+def _enclosure(**kwargs):
+    """Build an EnclosureInfo with sensible defaults."""
+    defaults = {
+        "id": "deadbeef01",
+        "kind": "usb",
+        "location": "usb2/2-2",
+        "members": ["sdb", "sdc"],
+        "pools": ["tank"],
+    }
+    defaults.update(kwargs)
+    return EnclosureInfo(**defaults)
+
+
 class TestUpdateButtonSensitivity(unittest.TestCase):
     """update_disks_button_sensitivity() respects the selection count."""
 
@@ -1332,6 +1353,357 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
             dp.update_disks_button_sensitivity(app)
             btn.set_sensitive.assert_called_with(expected)
             btn.reset_mock()
+
+
+class TestEnclosureCacheAttach(unittest.TestCase):
+    """DiskInventoryCache._load attaches enclosure membership to disks."""
+
+    def _cache(self, enclosures=None, discover_raises=False):
+        dp = _import_disks_page()
+        disks = [
+            _disk(path="/dev/sda", name="sda"),
+            _disk(path="/dev/sdb", name="sdb"),
+            _disk(
+                path="/dev/sdb1",
+                name="sdb1",
+                disk_type="part",
+                parent_path="/dev/sdb",
+            ),
+        ]
+        disk_repo = MagicMock()
+        disk_repo.disk_inventory.return_value = MagicMock(disks=disks, by_path={})
+        zfs_repo = MagicMock()
+        zfs_repo.list_pools_full.return_value = []
+
+        enclosure_inventory = MagicMock()
+        if discover_raises:
+            enclosure_inventory.discover.side_effect = RuntimeError("scan blew up")
+        else:
+            enclosure_inventory.discover.return_value = enclosures or []
+        cache = dp.DiskInventoryCache(disk_repo, zfs_repo, enclosure_inventory)
+        return dp, cache, enclosure_inventory
+
+    def test_attach_whole_disk_and_partition(self):
+        enclosure = _enclosure()
+        _dp, cache, _inv = self._cache(enclosures=[enclosure])
+        data = cache._load()
+
+        by_path = {disk.path: disk for disk in data.disks}
+        self.assertEqual(by_path["/dev/sda"].enclosure_id, "")
+        self.assertEqual(by_path["/dev/sdb"].enclosure_id, enclosure.id)
+        self.assertEqual(by_path["/dev/sdb1"].enclosure_id, enclosure.id)
+        self.assertEqual(data.enclosures, [enclosure])
+
+    def test_discovery_failure_fails_open(self):
+        _dp, cache, _inv = self._cache(discover_raises=True)
+        data = cache._load()
+
+        self.assertEqual(data.enclosures, [])
+        self.assertTrue(all(disk.enclosure_id == "" for disk in data.disks))
+
+    def test_without_enclosure_inventory_no_discovery(self):
+        dp = _import_disks_page()
+        disk_repo = MagicMock()
+        disk_repo.disk_inventory.return_value = MagicMock(disks=[_disk()], by_path={})
+        zfs_repo = MagicMock()
+        zfs_repo.list_pools_full.return_value = []
+
+        cache = dp.DiskInventoryCache(disk_repo, zfs_repo)
+        data = cache._load()
+
+        self.assertEqual(data.enclosures, [])
+        self.assertEqual(data.disks[0].enclosure_id, "")
+
+
+class TestEnclosuresSection(unittest.TestCase):
+    """refresh_disks_page populates the Enclosure column and section rows."""
+
+    def test_enclosure_column_shows_config_name(self):
+        dp = _import_disks_page()
+        enclosure = _enclosure()
+        disks = [
+            _disk(path="/dev/sda"),
+            _disk(path="/dev/sdb", enclosure_id=enclosure.id),
+        ]
+        app = _make_app(disks=disks, enclosures=[enclosure])
+        app.config = {"enclosures": {enclosure.id: {"name": "fivebays", "max_rate": "100m"}}}
+
+        dp.refresh_disks_page(app)
+
+        rows = {row[dp.COL_D_NAME]: row for row in app.disks_store.rows}
+        self.assertEqual(rows["/dev/sda"][dp.COL_D_ENCLOSURE], "")
+        self.assertEqual(rows["/dev/sdb"][dp.COL_D_ENCLOSURE], "fivebays")
+
+    def test_enclosure_column_falls_back_to_kind_and_location(self):
+        dp = _import_disks_page()
+        enclosure = _enclosure()
+        disks = [_disk(path="/dev/sdb", enclosure_id=enclosure.id)]
+        app = _make_app(disks=disks, enclosures=[enclosure])
+        app.config = {}
+
+        dp.refresh_disks_page(app)
+
+        self.assertEqual(app.disks_store.rows[0][dp.COL_D_ENCLOSURE], "usb usb2/2-2")
+
+    def test_section_rows_join_discovery_with_config(self):
+        dp = _import_disks_page()
+        usb = _enclosure()
+        esata = _enclosure(
+            id="cafe123456",
+            kind="esata",
+            location="0000:03:00.0",
+            members=["sdd"],
+            pools=[],
+        )
+        app = _make_app(enclosures=[usb, esata])
+        app.config = {
+            "enclosures": {usb.id: {"name": "fivebays", "max_rate": "100m"}},
+        }
+
+        dp.refresh_disks_page(app)
+
+        self.assertEqual(
+            app.enclosures_store.rows,
+            [
+                [usb.id, "fivebays", "usb usb2/2-2", "2", "tank", "100m"],
+                [esata.id, "esata 0000:03:00.0", "esata 0000:03:00.0", "1", "", "unlimited"],
+            ],
+        )
+
+    def test_section_selection_survives_refresh(self):
+        dp = _import_disks_page()
+        usb = _enclosure()
+        esata = _enclosure(id="cafe123456", kind="esata", location="0000:03:00.0", members=["sdd"])
+        app = _make_app(enclosures=[usb, esata])
+        app.config = {}
+
+        dp.refresh_disks_page(app)
+        app.enclosures_view._selection.paths = [1]
+        dp.refresh_disks_page(app)
+
+        self.assertIn(1, app.enclosures_view._selection.selected_paths)
+
+    def test_section_empty_when_no_enclosures(self):
+        dp = _import_disks_page()
+        app = _make_app(disks=[_disk()], enclosures=[])
+        app.config = {}
+
+        dp.refresh_disks_page(app)
+
+        self.assertEqual(app.enclosures_store.rows, [])
+        self.assertEqual(app.disks_store.rows[0][dp.COL_D_ENCLOSURE], "")
+
+    def test_refresh_survives_unconfigured_enclosure_selection(self):
+        """A view whose selection answers a non-(model, paths) tuple refreshes
+        without raising — the same guard the topology pane uses, so embedded
+        harnesses without an enclosures view keep working."""
+        dp = _import_disks_page()
+        app = _make_app(enclosures=[_enclosure()])
+        app.config = {}
+        app.enclosures_view = MagicMock()
+
+        dp.refresh_disks_page(app)
+
+        self.assertEqual(len(app.enclosures_store.rows), 1)
+
+
+class TestEnclosureRateProblem(unittest.TestCase):
+    """_enclosure_rate_problem() accepts the pacer grammar, refuses the rest."""
+
+    def test_blank_and_valid_rates_pass(self):
+        dp = _import_disks_page()
+        for text in ("", "100m", "64KiB", "1G", "512kib"):
+            self.assertIsNone(dp._enclosure_rate_problem(text), text)
+
+    def test_invalid_rates_refuse(self):
+        dp = _import_disks_page()
+        for text in ("abc", "10x", "m100", "-5m"):
+            problem = dp._enclosure_rate_problem(text)
+            self.assertIsNotNone(problem, text)
+            self.assertIn("invalid max I/O rate", problem)
+            self.assertIn(text, problem)
+
+
+class TestEnclosureRateDialog(unittest.TestCase):
+    """_show_enclosure_rate_dialog() save/cancel/validation loop."""
+
+    def _run_dialog(self, dp, run_responses, name_texts, rate_texts):
+        dialog = MagicMock()
+        dialog.run.side_effect = run_responses
+        entries = []
+
+        def fake_entry(*_args, **_kwargs):
+            entry = MagicMock()
+            is_name = not entries
+            entry.get_text.side_effect = name_texts if is_name else rate_texts
+            entries.append(entry)
+            return entry
+
+        labels = []
+
+        def fake_label(label=""):
+            widget = MagicMock()
+            widget.created_text = label
+            labels.append(widget)
+            return widget
+
+        app = MagicMock()
+        with (
+            patch.object(dp, "create_dialog", return_value=dialog),
+            patch.object(dp.Gtk, "Entry", side_effect=fake_entry),
+            patch.object(dp.Gtk, "Label", side_effect=fake_label),
+        ):
+            result = dp._show_enclosure_rate_dialog(app, _enclosure(), {"name": "", "max_rate": ""})
+        return result, dialog, labels
+
+    def test_save_returns_name_and_rate(self):
+        dp = _import_disks_page()
+        result, dialog, _labels = self._run_dialog(
+            dp, [dp.Gtk.ResponseType.OK], ["fivebays"], ["100m"]
+        )
+        self.assertEqual(result, ("fivebays", "100m"))
+        dialog.destroy.assert_called_once()
+
+    def test_invalid_rate_keeps_dialog_open_then_saves(self):
+        dp = _import_disks_page()
+        # Both entries are read once per Save attempt, so each needs a value
+        # per dialog run: the first Save is refused, the second succeeds.
+        result, dialog, labels = self._run_dialog(
+            dp, [dp.Gtk.ResponseType.OK, dp.Gtk.ResponseType.OK], ["", ""], ["10x", "64KiB"]
+        )
+        self.assertEqual(result, ("", "64KiB"))
+        self.assertEqual(dialog.run.call_count, 2)
+        self.assertTrue(
+            any(
+                "invalid max I/O rate '10x'" in str(call.args)
+                for label in labels
+                for call in label.set_text.call_args_list
+            )
+        )
+        dialog.destroy.assert_called_once()
+
+    def test_cancel_returns_none(self):
+        dp = _import_disks_page()
+        result, dialog, _labels = self._run_dialog(dp, [dp.Gtk.ResponseType.CANCEL], [""], [""])
+        self.assertIsNone(result)
+        dialog.destroy.assert_called_once()
+
+
+class TestSetEnclosureRateHandler(unittest.TestCase):
+    """on_disks_set_enclosure_rate() saves config and refreshes the page."""
+
+    def _app_with_selection(self):
+        enclosure = _enclosure()
+        app = _make_app(enclosures=[enclosure])
+        app.config = {}
+        app.enclosures_store = FakeListStore(
+            [[enclosure.id, "fivebays", "usb usb2/2-2", "2", "tank", "100m"]]
+        )
+        app.enclosures_view = FakeTreeView(app.enclosures_store, paths=[0])
+        return app, enclosure
+
+    def test_saves_config_and_refreshes(self):
+        dp = _import_disks_page()
+        app, enclosure = self._app_with_selection()
+        with (
+            patch.object(dp, "_show_enclosure_rate_dialog", return_value=("fivebays", "100m")),
+            patch.object(dp, "save_enclosures_config") as save,
+            patch.object(dp, "refresh_disks_page") as refresh,
+            capture_logs() as logs,
+        ):
+            dp.on_disks_set_enclosure_rate(app)
+
+        config_arg, data_arg = save.call_args[0]
+        self.assertIs(config_arg, app.config)
+        self.assertEqual(data_arg[enclosure.id], {"name": "fivebays", "max_rate": "100m"})
+        refresh.assert_called_once_with(app)
+        _assert_log_contains(logs, "VERB: enclosure fivebays max I/O rate set to 100m")
+
+    def test_dialog_cancel_keeps_config_untouched(self):
+        dp = _import_disks_page()
+        app, _enclosure = self._app_with_selection()
+        with (
+            patch.object(dp, "_show_enclosure_rate_dialog", return_value=None),
+            patch.object(dp, "save_enclosures_config") as save,
+            patch.object(dp, "refresh_disks_page") as refresh,
+        ):
+            dp.on_disks_set_enclosure_rate(app)
+
+        save.assert_not_called()
+        refresh.assert_not_called()
+
+    def test_no_selection_returns_early(self):
+        dp = _import_disks_page()
+        app = _make_app(enclosures=[_enclosure()])
+        app.config = {}
+        with patch.object(dp, "_show_enclosure_rate_dialog") as dialog:
+            dp.on_disks_set_enclosure_rate(app)
+        dialog.assert_not_called()
+
+
+class TestEnclosureRateButtonSensitivity(unittest.TestCase):
+    """update_disks_button_sensitivity() gates the Set Max I/O Rate… button."""
+
+    def _app(self, with_selection):
+        app = _make_app()
+        if with_selection:
+            app.enclosures_store = FakeListStore(
+                [["deadbeef01", "fivebays", "usb usb2/2-2", "2", "tank", "100m"]]
+            )
+            app.enclosures_view = FakeTreeView(app.enclosures_store, paths=[0])
+        return app
+
+    def test_enabled_with_selection_on_storage_host(self):
+        dp = _import_disks_page()
+        app = self._app(with_selection=True)
+        with (
+            patch.object(dp.node_config, "is_two_node", return_value=True),
+            patch.object(dp.node_config, "is_storage_host", return_value=True),
+        ):
+            dp.update_disks_button_sensitivity(app)
+        app._disks_enclosure_rate_btn.set_sensitive.assert_called_once_with(True)
+        app._disks_enclosure_rate_btn.set_tooltip_text.assert_called_once_with("")
+
+    def test_disabled_on_compute_host(self):
+        dp = _import_disks_page()
+        app = self._app(with_selection=True)
+        with (
+            patch.object(dp.node_config, "is_two_node", return_value=True),
+            patch.object(dp.node_config, "is_storage_host", return_value=False),
+        ):
+            dp.update_disks_button_sensitivity(app)
+        app._disks_enclosure_rate_btn.set_sensitive.assert_called_once_with(False)
+        app._disks_enclosure_rate_btn.set_tooltip_text.assert_called_once_with(
+            "Enclosure rates are set on the storage host"
+        )
+
+    def test_disabled_without_selection(self):
+        dp = _import_disks_page()
+        app = self._app(with_selection=False)
+        with (
+            patch.object(dp.node_config, "is_two_node", return_value=False),
+            patch.object(dp.node_config, "is_storage_host", return_value=True),
+        ):
+            dp.update_disks_button_sensitivity(app)
+        app._disks_enclosure_rate_btn.set_sensitive.assert_called_once_with(False)
+        app._disks_enclosure_rate_btn.set_tooltip_text.assert_called_once_with(
+            "Select an enclosure to set its max I/O rate"
+        )
+
+    def test_stays_enabled_while_dataset_action_runs(self):
+        """Editing an enclosure cap changes configuration only — unlike the
+        pool buttons, it must stay available while a dataset action runs."""
+        dp = _import_disks_page()
+        app = self._app(with_selection=True)
+        app.dataset_runner = MagicMock()
+        app.dataset_runner.running = True
+        with (
+            patch.object(dp.node_config, "is_two_node", return_value=False),
+            patch.object(dp.node_config, "is_storage_host", return_value=True),
+        ):
+            dp.update_disks_button_sensitivity(app)
+        app._disks_enclosure_rate_btn.set_sensitive.assert_called_once_with(True)
+        app._disks_enclosure_rate_btn.set_tooltip_text.assert_called_once_with("")
 
 
 if __name__ == "__main__":

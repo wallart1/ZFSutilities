@@ -7,9 +7,10 @@ sample and degrade individually on hosts that do not expose them
 
 - ``/proc/spl/kstat/zfs/arcstats`` — ARC + L2ARC counters
 - ``/proc/spl/kstat/zfs/zil`` — ZIL/SLOG write counters
-- ``zpool iostat -v -y 1 1`` — per-vdev cache/log capacity and traffic
-  rates over one 1-second window (no ``-L`` so device names match
-  ``zpool status``)
+- ``zpool iostat -v -y 1 1`` — per-vdev capacity and traffic rates over
+  one 1-second window for the infrastructure sections (``logs``,
+  ``cache``) and for the data section's leaf disks (no ``-L`` so device
+  names match ``zpool status``)
 
 Every kstat field is optional: parsed dicts contain only the fields the
 running kernel actually exposes, and the UI renders absent fields as "—".
@@ -59,6 +60,11 @@ _SIZE_SUFFIXES = {"": 0, "K": 1, "M": 2, "G": 3, "T": 4, "P": 5, "E": 6}
 # Vdev sections of `zpool iostat -v` output that the Performance tab tracks.
 _TRACKED_SECTIONS = ("logs", "cache")
 
+# Data-section group-vdev name prefixes: a row named after a group carries
+# the summed traffic of its leaves, so only leaf rows are kept (a real disk
+# name — sd*/hd*/nvme*/by-id prefixes — can never start with one of these).
+_VDEV_GROUP_PREFIXES = ("raidz", "mirror", "replacing", "spare", "draid")
+
 
 @dataclass
 class VdevSample:
@@ -71,7 +77,7 @@ class VdevSample:
 
     pool: str
     vdev: str
-    section: str  # "logs" | "cache"
+    section: str  # "data" (leaf rows only) | "logs" | "cache"
     alloc: int | None  # bytes; None when the cell is "-"
     free: int | None
     reads_ps: float  # operations per second over the window
@@ -122,6 +128,14 @@ class MemoryRates:
     slog_writes_ps: float | None = None
     slog_write_bps: float | None = None
     vdevs: dict[tuple[str, str], VdevRates] = field(default_factory=dict)
+
+
+@dataclass
+class EnclosureRates:
+    """Per-enclosure leaf traffic summed over one iostat window."""
+
+    read_bps: float = 0.0
+    write_bps: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -177,14 +191,17 @@ def _parse_iostat_cell(cell):
 def parse_zpool_iostat_v(text):
     """Parse interval-mode `zpool iostat -v` output into VdevSample rows.
 
-    Only vdevs under the tracked infrastructure sections ("logs", "cache")
-    are returned.  When the text contains several reports (the no-``-y``
-    fallback prefixes a since-boot report), the last report's row wins for
-    each (pool, vdev).  Rows are matched by structure, not by pool-name
-    lists: the column separator between pool blocks is a flush-left
-    all-dash name, section headers are flush-left rows whose value cells
-    are all dashes, pool rows are flush-left with values, and vdev rows
-    are indented — so output from any OpenZFS release parses the same way.
+    Rows are returned for the tracked infrastructure sections ("logs",
+    "cache") and for the data section's leaf disks — group rows
+    (raidz*/mirror*/spare*/replacing*/draid*) are excluded by name shape
+    because their traffic is the sum of their leaves.  When the text
+    contains several reports (the no-``-y`` fallback prefixes a since-boot
+    report), the last report's row wins for each (pool, vdev).  Rows are
+    matched by structure, not by pool-name lists: the column separator
+    between pool blocks is a flush-left all-dash name, section headers are
+    flush-left rows whose value cells are all dashes, pool rows are
+    flush-left with values, and vdev rows are indented — so output from
+    any OpenZFS release parses the same way.
     """
     samples = {}
     pool = None
@@ -224,7 +241,11 @@ def parse_zpool_iostat_v(text):
             pool = name
             section = "data"
             continue
-        if pool is None or section not in _TRACKED_SECTIONS:
+        if pool is None:
+            continue
+        if section == "data" and name.startswith(_VDEV_GROUP_PREFIXES):
+            # A data-section group row: keep only its leaves, never the
+            # sum-with-its-leaves group row.
             continue
         reads_ps, writes_ps, read_bps, write_bps = tail
         samples[(pool, name)] = VdevSample(
@@ -244,6 +265,32 @@ def parse_zpool_iostat_v(text):
 # ---------------------------------------------------------------------------
 # Collection + rate computation
 # ---------------------------------------------------------------------------
+
+
+def rollup_enclosure_rates(rows, membership):
+    """Sum data-section leaf traffic per enclosure from a membership mapping.
+
+    *membership* maps a leaf vdev name — exactly as ``zpool iostat -v``
+    prints it (kernel names and by-id basenames, whole disks and
+    partitions) — to the enclosure it belongs to.  Leaf rows whose vdev is
+    absent from the mapping (internal disks) are ignored, as are non-data
+    rows (L2ARC/SLOG vdevs).  Returns ``{enclosure: EnclosureRates}`` with
+    an entry for every mapped enclosure that has at least one leaf in the
+    report; an enclosure whose disks are all idle still appears (iostat
+    prints zero-rate leaf rows) while one with no leaf rows at all does
+    not (its rates are unknown, not zero).
+    """
+    totals = {}
+    for row in rows:
+        if row.section != "data":
+            continue
+        enclosure = membership.get(row.vdev)
+        if enclosure is None:
+            continue
+        rates = totals.setdefault(enclosure, EnclosureRates())
+        rates.read_bps += row.read_bps
+        rates.write_bps += row.write_bps
+    return totals
 
 
 def collect_memory_sample(

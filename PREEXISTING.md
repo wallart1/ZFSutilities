@@ -23,18 +23,6 @@
   still no 1.x; hold stands. The mkdocs<2 pin remains the documented
   product stance — doc-server.md and messages/index.md carry it.
   Rechecked 2026-10-24 wrap-up: unchanged, 0.0.72 — no 1.x; hold stands.
-  Rechecked 2026-10-25 wrap-up: unchanged, 0.0.72 — no 1.x; hold stands.)
+  Rechecked 2026-10-25 wrap-up: unchanged, 0.0.72 — no 1.x; hold stands.
+  Rechecked 2026-10-26 wrap-up: 0.0.73 — still no 1.x; hold stands.)
 
-- (test flake, one-off, 2026-10-24 pub3 0.131.0 with-soak gate): the
-  with-soak full run failed test-unarchive-vm Test 26 ("Step 2 refuses
-  duplicate same-short targets") — the ssh-mock storage-host existence
-  probe (`zfs list -H -o name <archive> | grep -qxF`) missed the
-  in-suite `_mock_zfs_fs_list` entry under ~2x parallel load, so
-  unarchive-vm correctly FATALed "Not a ZFS dataset" before reaching
-  the ambiguity path. Not a product defect: the probe behaved right
-  for the answer the mock gave. Four consecutive standalone reruns
-  passed (plus the same-suite pass in the same-day non-soak run).
-  Retained post-mortem log was swept before inspection, so the exact
-  mock-layer miss (empty fs_list vs swept state) is unidentified. If
-  it recurs, capture /tmp/zfsutilities-test-<pid>.log immediately and
-  instrument the mock zfs-list arm; do not touch product code for it.

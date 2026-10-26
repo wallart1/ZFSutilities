@@ -2065,7 +2065,9 @@ GUI Disks tab (disk inventory).
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `WARN: Error refreshing disk inventory: ...` | The background inventory cache load raised | Refresh aborted; the page keeps prior data |
+| `WARN: enclosure discovery failed: ...` | The enclosure scan attached to the inventory cache raised | Fail open — disks keep no enclosure tags and the Enclosures section empties until the next refresh |
 | `VERB: Disks refreshed` | Manual Refresh invalidated the cache and reloaded the page | Informational |
+| `VERB: enclosure ... max I/O rate set to ...` | The Set Max I/O Rate dialog saved a name/cap for an enclosure (`unlimited` when blank) | Config persisted; the Disks tab repopulates |
 
 ### [disk_repository](../commands-and-modules/python-modules.md#disk_repositorypy)
 

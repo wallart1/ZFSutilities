@@ -120,6 +120,31 @@ zfstest1     865K  24.5G      0      0     32     60
     sdb1        -      -      0      0      6     12
 """
 
+# Group-vdev name shapes across OpenZFS releases: every group row must be
+# excluded from the data-section leaves (its traffic is the sum of its
+# leaves), while leaf disks — kernel names, by-id basenames, whole disks
+# and partitions — are kept.
+IOSTAT_GROUP_SHAPES = """              capacity     operations     bandwidth
+pool        alloc   free   read  write   read  write
+----------  -----  -----  -----  -----  -----  -----
+tank        1.02T  2.50T      5      3  1.20M   600K
+  raidz2-0  1.02T  2.50T      5      3  1.20M   600K
+    sdc1        -      -      5      3  1.20M   600K
+  mirror-1     20G    40G      1      2   100K   200K
+    sdd         -      -      1      2   100K   200K
+  replacing-0    -      -      0      1       0   512
+    sdf         -      -      0      1       0   512
+    sdg         -      -      0      0       0       0
+  spare-0       -      -      0      0       0       0
+  draid1-0     1.00T  1.00T      2      2   1.2M   1.2M
+    sdh         -      -      2      2   1.2M   1.2M
+  ata-WDC_X-abc       -      -      1      1    4.0K    4.0K
+----------  -----  -----  -----  -----  -----  -----
+zedpool     865K  24.5G      0      0     32     60
+  sdi1         -      -      0      0     16     30
+  sdj          -      -      0      0     16     30
+"""
+
 
 class TestKstatParsers(unittest.TestCase):
     def test_parse_arcstats_full(self):
@@ -154,11 +179,13 @@ class TestKstatParsers(unittest.TestCase):
 class TestIostatParser(unittest.TestCase):
     def test_interval_report_layout(self):
         vdevs = ms.parse_zpool_iostat_v(IOSTAT_INTERVAL)
-        self.assertEqual(len(vdevs), 5)
+        self.assertEqual(len(vdevs), 7)
         logs = [v for v in vdevs if v.section == "logs"]
         caches = [v for v in vdevs if v.section == "cache"]
+        leaves = [v for v in vdevs if v.section == "data"]
         self.assertEqual(len(logs), 3)
         self.assertEqual(len(caches), 2)
+        self.assertEqual({v.vdev for v in leaves}, {"sda1", "sdb1"})
 
         mirror = next(v for v in logs if v.vdev == "mirror-2")
         self.assertEqual(mirror.pool, "fivebays")
@@ -176,33 +203,152 @@ class TestIostatParser(unittest.TestCase):
         self.assertEqual(cache.alloc, (766 * 1024**3))
         self.assertEqual(cache.read_bps, int(12.5 * 1024**2))
 
+    def test_data_leaf_rows_kept(self):
+        """Data-section leaf disks are tracked for the enclosure rollup."""
+        vdevs = ms.parse_zpool_iostat_v(IOSTAT_INTERVAL)
+        sda1 = next(v for v in vdevs if v.vdev == "sda1")
+        self.assertEqual(sda1.pool, "fivebays")
+        self.assertEqual(sda1.section, "data")
+        self.assertEqual(sda1.reads_ps, 102)
+        self.assertEqual(sda1.read_bps, (160 * 1024))
+        self.assertEqual(sda1.write_bps, int(9.42 * 1024**2))
+        # Leaves under a group carry no capacity cells of their own.
+        self.assertIsNone(sda1.alloc)
+        self.assertIsNone(sda1.free)
+        sdb1 = next(v for v in vdevs if v.vdev == "sdb1")
+        self.assertEqual(sdb1.pool, "threeamigos")
+
+    def test_group_rows_excluded_by_name_shape(self):
+        """Every group-vdev name shape is dropped; leaf disks are kept."""
+        vdevs = ms.parse_zpool_iostat_v(IOSTAT_GROUP_SHAPES)
+        names = {(v.pool, v.vdev) for v in vdevs if v.section == "data"}
+        self.assertEqual(
+            names,
+            {
+                ("tank", "sdc1"),
+                ("tank", "sdd"),
+                ("tank", "sdf"),
+                ("tank", "sdg"),
+                ("tank", "sdh"),
+                ("tank", "ata-WDC_X-abc"),
+                ("zedpool", "sdi1"),
+                ("zedpool", "sdj"),
+            },
+        )
+
     def test_last_report_wins(self):
         """The fallback's trailing interval report supersedes since-boot."""
         vdevs = ms.parse_zpool_iostat_v(IOSTAT_FALLBACK)
-        self.assertEqual(len(vdevs), 5)  # no duplicated vdevs
+        self.assertEqual(len(vdevs), 7)  # no duplicated vdevs
         mirror = next(v for v in vdevs if v.vdev == "mirror-2")
         self.assertEqual(mirror.writes_ps, 89)  # interval, not since-boot 48
         self.assertEqual(mirror.write_bps, int(4.66 * 1024**2))
         cache = next(v for v in vdevs if v.vdev == "CACHE1")
         self.assertEqual(cache.read_bps, int(12.5 * 1024**2))
+        sda1 = next(v for v in vdevs if v.vdev == "sda1")
+        self.assertEqual(sda1.read_bps, (160 * 1024))  # interval, not 107M
 
-    def test_data_vdevs_excluded(self):
-        """Only logs/cache sections are tracked, never data vdevs."""
+    def test_data_group_rows_excluded_but_leaves_kept(self):
+        """Data-section group rows never appear; their leaves do."""
         vdevs = ms.parse_zpool_iostat_v(IOSTAT_FALLBACK)
-        for vdev in vdevs:
-            self.assertIn(vdev.section, ("logs", "cache"))
         names = {vdev.vdev for vdev in vdevs}
         self.assertNotIn("raidz2-0", names)
-        self.assertNotIn("sda1", names)
+        self.assertNotIn("mirror-1", names)
+        self.assertIn("sda1", names)
+        self.assertIn("sdb1", names)
+        # The logs section's own mirror group row stays (capacity row).
+        self.assertIn("mirror-2", names)
 
-    def test_no_infrastructure_vdevs(self):
-        self.assertEqual(ms.parse_zpool_iostat_v(IOSTAT_NO_INFRA), [])
+    def test_pool_without_infrastructure_keeps_data_leaves(self):
+        vdevs = ms.parse_zpool_iostat_v(IOSTAT_NO_INFRA)
+        self.assertEqual(
+            [(v.pool, v.vdev, v.section) for v in vdevs], [("zfstest1", "sdb1", "data")]
+        )
 
     def test_section_resets_between_pools(self):
         """A logs section must not leak into the next pool's data vdevs."""
         vdevs = ms.parse_zpool_iostat_v(IOSTAT_FALLBACK)
         threeamigos = [v for v in vdevs if v.pool == "threeamigos"]
-        self.assertEqual(threeamigos, [])
+        self.assertEqual([v.section for v in threeamigos], ["data"])
+
+
+def _data_leaf(pool, vdev, read_bps=0.0, write_bps=0.0):
+    return ms.VdevSample(
+        pool=pool,
+        vdev=vdev,
+        section="data",
+        alloc=None,
+        free=None,
+        reads_ps=0.0,
+        writes_ps=0.0,
+        read_bps=read_bps,
+        write_bps=write_bps,
+    )
+
+
+class TestEnclosureRollup(unittest.TestCase):
+    def test_sums_leaf_rates_per_enclosure(self):
+        """Every mapped leaf contributes; partitions and by-id spellings
+        work identically because the mapping is keyed by exact leaf name."""
+        rows = [
+            _data_leaf("fivebays", "sda1", read_bps=160 * 1024, write_bps=9.42 * 1024**2),
+            _data_leaf("fivebays", "sdb1", read_bps=1 * 1024**2, write_bps=2 * 1024**2),
+            _data_leaf("tank", "usb-Bridge-0:0-part2", read_bps=4096.0, write_bps=0.0),
+        ]
+        totals = ms.rollup_enclosure_rates(
+            rows, {"sda1": "enc-a", "sdb1": "enc-a", "usb-Bridge-0:0-part2": "enc-b"}
+        )
+        self.assertEqual(sorted(totals), ["enc-a", "enc-b"])
+        self.assertAlmostEqual(totals["enc-a"].read_bps, 160 * 1024 + 1024**2)
+        self.assertAlmostEqual(totals["enc-a"].write_bps, 11.42 * 1024**2)
+        self.assertAlmostEqual(totals["enc-b"].read_bps, 4096.0)
+        self.assertAlmostEqual(totals["enc-b"].write_bps, 0.0)
+
+    def test_unmapped_and_non_data_rows_ignored(self):
+        """Internal disks (no mapping entry) and L2ARC/SLOG rows never count."""
+        rows = [
+            _data_leaf("tank", "sdc1", read_bps=1.0, write_bps=2.0),
+            _data_leaf("tank", "unmapped1", read_bps=99.0, write_bps=99.0),
+            ms.VdevSample(
+                pool="tank",
+                vdev="sdd",
+                section="cache",
+                alloc=None,
+                free=None,
+                reads_ps=0,
+                writes_ps=0,
+                read_bps=500.0,
+                write_bps=500.0,
+            ),
+            ms.VdevSample(
+                pool="tank",
+                vdev="mirror-0",
+                section="logs",
+                alloc=None,
+                free=None,
+                reads_ps=0,
+                writes_ps=0,
+                read_bps=700.0,
+                write_bps=700.0,
+            ),
+        ]
+        totals = ms.rollup_enclosure_rates(rows, {"sdc1": "enc-a", "sdd": "enc-a"})
+        self.assertEqual(list(totals), ["enc-a"])
+        self.assertAlmostEqual(totals["enc-a"].read_bps, 1.0)
+        self.assertAlmostEqual(totals["enc-a"].write_bps, 2.0)
+
+    def test_enclosure_without_leaf_rows_absent(self):
+        """A mapped enclosure with no leaf in the report is unknown, not zero."""
+        rows = [_data_leaf("tank", "sda1", read_bps=5.0, write_bps=6.0)]
+        totals = ms.rollup_enclosure_rates(rows, {"sda1": "enc-a", "sdz9": "enc-b"})
+        self.assertEqual(list(totals), ["enc-a"])
+
+    def test_idle_enclosure_counts_zero(self):
+        """iostat prints zero-rate leaf rows for idle disks; the enclosure
+        shows up with zero rates (distinct from absent)."""
+        rows = [_data_leaf("tank", "sda1", read_bps=0.0, write_bps=0.0)]
+        totals = ms.rollup_enclosure_rates(rows, {"sda1": "enc-a"})
+        self.assertEqual(totals["enc-a"], ms.EnclosureRates(read_bps=0.0, write_bps=0.0))
 
 
 class TestComputeRates(unittest.TestCase):
@@ -348,7 +494,7 @@ class TestCollectMemorySample(unittest.TestCase):
             self.assertTrue(sample.arcstats_available)
             self.assertTrue(sample.zil_available)
             self.assertTrue(sample.iostat_available)
-            self.assertEqual(len(sample.vdevs), 5)
+            self.assertEqual(len(sample.vdevs), 7)
 
     def test_missing_zil_degrades_alone(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -381,7 +527,7 @@ class TestCollectMemorySample(unittest.TestCase):
             commands = [c.args[0] for c in run.call_args_list]
             self.assertEqual(commands, [ms.IOSTAT_ARGS, ms.IOSTAT_ARGS_FALLBACK])
             self.assertTrue(sample.iostat_available)
-            self.assertEqual(len(sample.vdevs), 5)
+            self.assertEqual(len(sample.vdevs), 7)
             mirror = next(v for v in sample.vdevs if v.vdev == "mirror-2")
             self.assertEqual(mirror.writes_ps, 89)  # interval, not since-boot 48
 

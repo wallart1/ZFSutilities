@@ -36,6 +36,7 @@ from zfs_repository import (
     build_release_holds_command,
     build_replace_command,
     is_dataset_encrypted,
+    parse_rate_limit,
     valid_rate_limit,
     zvol_device_path,
 )
@@ -1155,6 +1156,29 @@ class TestValidRateLimit(unittest.TestCase):
     def test_rejects_non_grammar(self):
         for text in ("abc", "10x", "1.5m", "-5m", "100 mb", "100KiBx", "k", "i"):
             self.assertFalse(valid_rate_limit(text), text)
+
+
+class TestParseRateLimit(unittest.TestCase):
+    """parse_rate_limit turns pacer-grammar rates into bytes/second.
+
+    None means unlimited (empty) or outside the grammar — the Performance
+    tab's % of cap renders neither."""
+
+    def test_parses_pacer_grammar_to_bytes(self):
+        for text, bps in (
+            ("100", 100),
+            ("100k", 100 * 1024),
+            ("25M", 25 * 1024**2),
+            ("64KiB", 64 * 1024),
+            ("2g", 2 * 1024**3),
+            ("3Tb", 3 * 1024**4),
+        ):
+            self.assertEqual(parse_rate_limit(text), bps, text)
+
+    def test_empty_and_invalid_are_none(self):
+        self.assertIsNone(parse_rate_limit(""))
+        for text in ("abc", "10x", "1.5m", "-5m", "100 mb"):
+            self.assertIsNone(parse_rate_limit(text), text)
 
 
 class TestEffectiveTransferRate(unittest.TestCase):

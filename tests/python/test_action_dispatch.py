@@ -45,6 +45,13 @@ class TestDisksPageSpec(unittest.TestCase):
             buttons,
         )
 
+    def test_enclosure_rate_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
+        self.assertIn(
+            ("Set Max I/O Rate…", "utilities-system-monitor", "_disks_enclosure_rate_btn"),
+            buttons,
+        )
+
     def test_post_setup_is_update_sensitivity(self):
         post_setup = action_dispatch.PAGE_SPECS["disks"].get("post_setup")
         self.assertIs(post_setup, action_dispatch.update_disks_button_sensitivity)
@@ -68,6 +75,10 @@ class TestDisksHandlers(unittest.TestCase):
     def test_enroll_proxmox_handler_registered(self):
         handler = action_dispatch.ACTION_HANDLERS["disks"]["Enroll in Proxmox…"]
         self.assertIs(handler, action_dispatch.on_disks_enroll_proxmox)
+
+    def test_enclosure_rate_handler_registered(self):
+        handler = action_dispatch.ACTION_HANDLERS["disks"]["Set Max I/O Rate…"]
+        self.assertIs(handler, action_dispatch.on_disks_set_enclosure_rate)
 
 
 class TestDisksGrowthButtons(unittest.TestCase):

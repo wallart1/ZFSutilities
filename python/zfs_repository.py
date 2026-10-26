@@ -569,6 +569,23 @@ def valid_rate_limit(text: str) -> bool:
     return suffix in _RATE_MULTIPLIERS
 
 
+def parse_rate_limit(text: str) -> int | None:
+    """Parse a pacer-grammar rate string into bytes/second.
+
+    None for an empty string (unlimited) or a value outside the grammar.
+    Parsing goes through the resolver module's ``pace_stream`` — the one
+    parser the pipelines use — so a numeric view of a saved rate (the
+    Performance tab's % of cap) can never drift from what the pacer
+    enforces; ``valid_rate_limit`` stays the boolean validator.
+    """
+    if not text:
+        return None
+    try:
+        return _enclosure_rate_module().pace_stream.parse_rate(text)
+    except ValueError:
+        return None
+
+
 _ENCLOSURE_RATE_CACHE = {}
 
 

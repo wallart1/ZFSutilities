@@ -8,7 +8,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 import gi
@@ -17,14 +17,17 @@ import node_config
 gi.require_version("Gtk", "3.0")
 
 from disk_repository import DiskInfo, DiskRepository
+from enclosure_inventory import EnclosureInfo, EnclosureInventory
+from feature_config import get_enclosures_config, save_enclosures_config
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     bold_label,
     configure_treeview_column,
+    create_dialog,
     setup_row_scroll,
 )
 from logging_config import log_msg
-from zfs_repository import TopologyNode, ZfsRepository
+from zfs_repository import TopologyNode, ZfsRepository, valid_rate_limit
 
 # Foreground color used to tint the rows in one pane that correlate with the
 # current selection in the other: disks of the selected pool (or of the
@@ -37,10 +40,16 @@ POOL_MEMBER_HIGHLIGHT_FG = "#00797A"
 # letting the view be squashed by its neighbors.
 DISKS_TOPOLOGY_MIN_HEIGHT = 260
 
+# Minimum height of the Enclosures pane. The section holds a handful of rows
+# (one per multi-bay enclosure); taller lists scroll inside the pane rather
+# than stretching the page.
+ENCLOSURES_MIN_HEIGHT = 90
+
 # Disk pane ListStore columns:
 #   0 name, 1 by-id, 2 model, 3 serial, 4 size, 5 type,
-#   6 logical_sector, 7 physical_sector, 8 transport, 9 pools, 10 smart_health,
-#   11 health (SSD/NVMe wear %, HDD surface-test status), 12 highlight
+#   6 logical_sector, 7 physical_sector, 8 transport, 9 enclosure,
+#   10 pools, 11 smart_health, 12 health (SSD/NVMe wear %, HDD surface-test
+#   status), 13 highlight
 (
     COL_D_NAME,
     COL_D_BYID,
@@ -51,11 +60,24 @@ DISKS_TOPOLOGY_MIN_HEIGHT = 260
     COL_D_LSEC,
     COL_D_PSEC,
     COL_D_TRANSPORT,
+    COL_D_ENCLOSURE,
     COL_D_POOLS,
     COL_D_SMART,
     COL_D_HEALTH,
     COL_D_HIGHLIGHT,
-) = range(13)
+) = range(14)
+
+# Enclosure pane ListStore columns:
+#   0 id (not rendered — identifies the config entry), 1 name,
+#   2 kind/location, 3 disk count, 4 pools, 5 max rate
+(
+    COL_E_ID,
+    COL_E_NAME,
+    COL_E_KIND,
+    COL_E_DISKS,
+    COL_E_POOLS,
+    COL_E_RATE,
+) = range(6)
 
 # Topology pane TreeStore columns:
 #   0 name, 1 type, 2 state, 3 read, 4 write, 5 cksum, 6 ashift,
@@ -78,6 +100,17 @@ class DiskInventoryData:
 
     disks: list[DiskInfo]
     topologies: dict[str, TopologyNode]
+    enclosures: list[EnclosureInfo] = field(default_factory=list)
+
+
+def enclosure_display_name(enclosure: EnclosureInfo, name: str) -> str:
+    """Return the user-assigned enclosure name or a self-describing fallback.
+
+    Unnamed enclosures show their kind and location (e.g. ``usb usb2/2-2``)
+    so every surface that names an enclosure stays identifiable without a
+    configured name.
+    """
+    return name.strip() or f"{enclosure.kind} {enclosure.location}"
 
 
 def _set_combo_active_text(combo: Gtk.ComboBoxText, text: str) -> bool:
@@ -105,10 +138,14 @@ class DiskInventoryCache:
         self,
         disk_repository: DiskRepository,
         zfs_repository: ZfsRepository,
+        enclosure_inventory: EnclosureInventory | None = None,
         ttl_seconds: float = 30.0,
     ):
         self.disk_repository = disk_repository
         self.zfs_repository = zfs_repository
+        # None means enclosure wiring is absent (tests embed the cache without
+        # the Phase 1 module): no discovery, no enclosure fields, empty list.
+        self.enclosure_inventory = enclosure_inventory
         self.ttl = ttl_seconds
         self._data = DiskInventoryData(disks=[], topologies={})
         self._last_update = 0.0
@@ -184,7 +221,37 @@ class DiskInventoryCache:
         for disk in disks:
             disk.pools = self._pools_for_disk(disk.path, path_to_pools)
 
-        return DiskInventoryData(disks=disks, topologies=topologies)
+        enclosures = self._discover_enclosures()
+        if enclosures:
+            enclosure_by_member = {
+                member: enclosure.id for enclosure in enclosures for member in enclosure.members
+            }
+            for disk in disks:
+                # Partitions follow their parent disk's enclosure; whole disks
+                # carry their own membership directly.
+                base = (
+                    os.path.basename(disk.parent_path)
+                    if disk.parent_path is not None
+                    else disk.name
+                )
+                disk.enclosure_id = enclosure_by_member.get(base, "")
+
+        return DiskInventoryData(disks=disks, topologies=topologies, enclosures=enclosures)
+
+    def _discover_enclosures(self) -> list[EnclosureInfo]:
+        """Return discovered enclosures, failing open to an empty list.
+
+        A scan hiccup must never blank the disk list: the enclosure section
+        empties and the disks lose their enclosure tags until the next
+        refresh, matching the fail-open policy of the transfer-time resolver.
+        """
+        if self.enclosure_inventory is None:
+            return []
+        try:
+            return self.enclosure_inventory.discover()
+        except Exception as exc:  # pragma: no cover - defensive
+            log_msg(f"WARN: enclosure discovery failed: {exc}")
+            return []
 
     @staticmethod
     def _collect_disk_paths(
@@ -225,7 +292,14 @@ class DiskInventoryCache:
 
 def create_disks_page(app):
     """Build and return the full Disks tab widget."""
-    app._disks_inventory_cache = DiskInventoryCache(app.ctx.disk_repository, app.ctx.zfs_repository)
+    app._disks_inventory_cache = DiskInventoryCache(
+        app.ctx.disk_repository,
+        app.ctx.zfs_repository,
+        enclosure_inventory=EnclosureInventory(
+            disk_repository=app.ctx.disk_repository,
+            zfs_repository=app.ctx.zfs_repository,
+        ),
+    )
     app._disks_syncing_selection = False
 
     page_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -255,7 +329,7 @@ def create_disks_page(app):
     inventory_box.pack_start(Gtk.Separator(), False, False, 0)
 
     app.disks_store = Gtk.ListStore(
-        str, str, str, str, str, str, str, str, str, str, str, str, bool
+        str, str, str, str, str, str, str, str, str, str, str, str, str, bool
     )
     app.disks_view = Gtk.TreeView(model=app.disks_store)
     app.disks_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
@@ -272,6 +346,7 @@ def create_disks_page(app):
         (COL_D_LSEC, "Log-sec", 60),
         (COL_D_PSEC, "Phy-sec", 60),
         (COL_D_TRANSPORT, "Transport", 80),
+        (COL_D_ENCLOSURE, "Enclosure", 130),
         (COL_D_POOLS, "Pools", 100),
         (COL_D_SMART, "SMART", 60),
         (COL_D_HEALTH, "Wear/Test", 110),
@@ -302,6 +377,54 @@ def create_disks_page(app):
     disks_scrolled.add(app.disks_view)
     setup_row_scroll(disks_scrolled, app.disks_view)
     inventory_box.pack_start(disks_scrolled, True, True, 0)
+
+    inventory_box.pack_start(Gtk.Separator(), False, False, 0)
+
+    # --- Enclosures section: USB/eSATA enclosures and their rate caps ---
+    enclosures_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    enclosures_box.set_size_request(-1, ENCLOSURES_MIN_HEIGHT)
+    inventory_box.pack_start(enclosures_box, False, False, 0)
+
+    enc_title = bold_label("Enclosures")
+    enclosures_box.pack_start(enc_title, False, False, 0)
+
+    enc_desc = Gtk.Label(
+        label="Multi-bay USB and eSATA enclosures discovered on this system. "
+        "A max I/O rate caps every paced transfer that touches the "
+        "enclosure's disks (backups, archives, clones, restores); when an "
+        "activity limit also applies, the lower one wins. Blank means "
+        "unlimited."
+    )
+    enc_desc.set_halign(Gtk.Align.START)
+    enc_desc.set_line_wrap(True)
+    enclosures_box.pack_start(enc_desc, False, False, 0)
+
+    app.enclosures_store = Gtk.ListStore(str, str, str, str, str, str)
+    app.enclosures_view = Gtk.TreeView(model=app.enclosures_store)
+    app.enclosures_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+    app.enclosures_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+    app.enclosures_view.get_selection().connect("changed", _on_enclosure_selection_changed, app)
+
+    enclosure_cols = [
+        (COL_E_NAME, "Name", 190),
+        (COL_E_KIND, "Kind/Location", 150),
+        (COL_E_DISKS, "Disks", 60),
+        (COL_E_POOLS, "Pools", 170),
+        (COL_E_RATE, "Max I/O Rate", 110),
+    ]
+    for col_idx, title_text, width in enclosure_cols:
+        renderer = Gtk.CellRendererText()
+        col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
+        configure_treeview_column(col, width=width)
+        app.enclosures_view.append_column(col)
+
+    app.enable_treeview_copy(app.enclosures_view)
+
+    enclosures_scrolled = Gtk.ScrolledWindow()
+    enclosures_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+    enclosures_scrolled.add(app.enclosures_view)
+    setup_row_scroll(enclosures_scrolled, app.enclosures_view)
+    enclosures_box.pack_start(enclosures_scrolled, True, True, 0)
 
     inventory_box.pack_start(Gtk.Separator(), False, False, 0)
 
@@ -398,6 +521,16 @@ def refresh_disks_page(app):
 
     surface_state = load_surface_test_state()
 
+    # Enclosure column: the display name (config name or kind/location
+    # fallback); internal disks show a blank cell.
+    enclosure_entries = get_enclosures_config(app.config)
+    enclosure_names = {
+        enclosure.id: enclosure_display_name(
+            enclosure, enclosure_entries.get(enclosure.id, {}).get("name", "")
+        )
+        for enclosure in data.enclosures
+    }
+
     # Repopulate disk inventory
     app.disks_store.clear()
     for disk in data.disks:
@@ -419,6 +552,7 @@ def refresh_disks_page(app):
                 str(disk.logical_sector) if disk.logical_sector is not None else "-",
                 str(disk.physical_sector) if disk.physical_sector is not None else "-",
                 disk.transport,
+                enclosure_names.get(disk.enclosure_id, ""),
                 ", ".join(disk.pools),
                 disk.smart_health,
                 health_text,
@@ -454,7 +588,65 @@ def refresh_disks_page(app):
                 break
             it = app.disks_store.iter_next(it)
 
+    # Repopulate the enclosures section
+    _repopulate_enclosures(app)
+
     update_disks_button_sensitivity(app)
+
+
+def _repopulate_enclosures(app):
+    """Refill the Enclosures section from cached discovery plus config.
+
+    Discovery data comes from the inventory cache (same TTL refresh as the
+    disk list); names and current max rates come from the enclosures config
+    section, so a rate saved through the dialog shows up on the next
+    repopulation without waiting for a device rescan.
+    """
+    store = app.enclosures_store
+
+    # Selection capture mirrors _sync_topology_highlight_from_inventory: a
+    # view that answers anything other than a (model, paths) tuple simply
+    # has no selection to preserve.
+    selected_id = None
+    view = getattr(app, "enclosures_view", None)
+    if view is not None:
+        selection = view.get_selection()
+        rows = selection.get_selected_rows()
+        if isinstance(rows, tuple) and len(rows) == 2 and rows[1]:
+            model, pathlist = rows
+            try:
+                tree_iter = model.get_iter(pathlist[0])
+                selected_id = model.get_value(tree_iter, COL_E_ID)
+            except (IndexError, TypeError, ValueError):
+                selected_id = None
+
+    store.clear()
+    data = app._disks_inventory_cache.get()
+    entries = get_enclosures_config(app.config)
+    for enclosure in data.enclosures:
+        entry = entries.get(enclosure.id) or {}
+        store.append(
+            [
+                enclosure.id,
+                enclosure_display_name(enclosure, entry.get("name", "")),
+                f"{enclosure.kind} {enclosure.location}",
+                str(len(enclosure.members)),
+                ", ".join(enclosure.pools),
+                entry.get("max_rate", "") or "unlimited",
+            ]
+        )
+
+    # Restore the enclosure selection so a background refresh does not
+    # desensitize the Set Max I/O Rate… button mid-choice.
+    if selected_id and view is not None:
+        selection = view.get_selection()
+        it = store.get_iter_first()
+        while it:
+            if store.get_value(it, COL_E_ID) == selected_id:
+                path = store.get_path(it)
+                selection.select_path(path)
+                break
+            it = store.iter_next(it)
 
 
 def on_disks_refresh(app):
@@ -531,6 +723,139 @@ def on_disks_surface_test(app):
     elif action == "abort":
         cancel_surface_test(app, disk_path)
     refresh_surface_test_status(app)
+
+
+def _on_enclosure_selection_changed(selection, app):
+    """An Enclosures selection only drives the Set Max I/O Rate… button."""
+    update_disks_button_sensitivity(app)
+
+
+def _selected_enclosure_id(app) -> str:
+    """Return the id of the single selected Enclosures row, or an empty string."""
+    view = getattr(app, "enclosures_view", None)
+    if view is None:
+        return ""
+    selection = view.get_selection()
+    rows = selection.get_selected_rows()
+    if not isinstance(rows, tuple) or len(rows) != 2 or not rows[1]:
+        return ""
+    model, pathlist = rows
+    try:
+        tree_iter = model.get_iter(pathlist[0])
+        enclosure_id = model.get_value(tree_iter, COL_E_ID)
+    except (IndexError, TypeError, ValueError):
+        return ""
+    return enclosure_id if isinstance(enclosure_id, str) else ""
+
+
+def _enclosure_rate_problem(text: str) -> str | None:
+    """Refusal line when *text* is not a valid pacer rate; None when valid.
+
+    Accepts exactly the grammar lib/pace_stream.py enforces (digits plus an
+    optional k/m/g/t/p/e multiplier with optional i and b, case-insensitive,
+    1024-based) so the dialog never refuses a value the transfer-side
+    resolver would happily pace. An empty string is valid (unlimited).
+    """
+    if not text:
+        return None
+    if not valid_rate_limit(text):
+        return (
+            f"invalid max I/O rate '{text}' — use digits with an optional "
+            "k/m/g/t/p/e suffix (i and b also accepted, for example 100m "
+            "or 64KiB), or leave it blank for unlimited"
+        )
+    return None
+
+
+def _show_enclosure_rate_dialog(app, enclosure: EnclosureInfo, entry: dict):
+    """Run the Set Max I/O Rate dialog for *enclosure*.
+
+    *entry* is the enclosure's current config entry ({name, max_rate}).
+    Returns (name, max_rate) when saved, None when canceled. An invalid
+    rate keeps the dialog open with the refusal line shown.
+    """
+    parent = getattr(app, "window", None)
+    dialog = create_dialog(
+        f"Enclosure {enclosure_display_name(enclosure, entry.get('name', ''))}",
+        parent,
+        [("Cancel", Gtk.ResponseType.CANCEL), ("Save", Gtk.ResponseType.OK)],
+        default_response=Gtk.ResponseType.OK,
+    )
+    content = dialog.get_content_area()
+
+    pools_text = ", ".join(enclosure.pools) if enclosure.pools else "no pools"
+    caption = Gtk.Label(
+        label=(
+            f"{enclosure.kind} at {enclosure.location} — "
+            f"{len(enclosure.members)} disks, pools: {pools_text}"
+        )
+    )
+    caption.set_halign(Gtk.Align.START)
+    caption.set_line_wrap(True)
+    content.pack_start(caption, False, False, 0)
+
+    name_label = Gtk.Label(label="Enclosure name (shown in the disk list)")
+    name_label.set_halign(Gtk.Align.START)
+    content.pack_start(name_label, False, False, 0)
+    name_entry = Gtk.Entry()
+    name_entry.set_text(entry.get("name", ""))
+    name_entry.set_placeholder_text(f"e.g. {enclosure.kind}-enclosure")
+    content.pack_start(name_entry, False, False, 0)
+
+    rate_label = Gtk.Label(label="Max I/O rate (blank = unlimited)")
+    rate_label.set_halign(Gtk.Align.START)
+    content.pack_start(rate_label, False, False, 0)
+    rate_entry = Gtk.Entry()
+    rate_entry.set_text(entry.get("max_rate", ""))
+    rate_entry.set_placeholder_text("e.g. 100m")
+    content.pack_start(rate_entry, False, False, 0)
+
+    problem_label = Gtk.Label(label="")
+    problem_label.set_halign(Gtk.Align.START)
+    problem_label.set_line_wrap(True)
+    content.pack_start(problem_label, False, False, 0)
+
+    while True:
+        dialog.show_all()
+        response = dialog.run()
+        if response != Gtk.ResponseType.OK:
+            dialog.destroy()
+            return None
+        name = name_entry.get_text().strip()
+        rate = rate_entry.get_text().strip()
+        problem = _enclosure_rate_problem(rate)
+        if problem is None:
+            dialog.destroy()
+            return name, rate
+        problem_label.set_text(problem)
+
+
+def on_disks_set_enclosure_rate(app):
+    """Set Max I/O Rate… action: name and rate cap for the selected enclosure."""
+    enclosure_id = _selected_enclosure_id(app)
+    if not enclosure_id:
+        return
+    enclosure = next(
+        (e for e in app._disks_inventory_cache.get().enclosures if e.id == enclosure_id),
+        None,
+    )
+    if enclosure is None:
+        return
+
+    entries = get_enclosures_config(app.config)
+    entry = entries.setdefault(enclosure_id, {})
+    result = _show_enclosure_rate_dialog(app, enclosure, entry)
+    if result is None:
+        return
+    name, rate = result
+    entry["name"] = name
+    entry["max_rate"] = rate
+    save_enclosures_config(app.config, entries)
+    log_msg(
+        f"VERB: enclosure {enclosure_display_name(enclosure, name)} "
+        f"max I/O rate set to {rate or 'unlimited'}"
+    )
+    refresh_disks_page(app)
 
 
 def _on_disk_selection_changed(selection, app):
@@ -712,6 +1037,20 @@ def update_disks_button_sensitivity(app):
                 ""
                 if wipeable
                 else "Select a single disk that belongs to no pool to wipe its labels"
+            )
+
+    # Enclosure rate setting edits configuration only — no ZFS I/O, so it is
+    # gated by storage host and selection, not by the dataset runner.
+    rate_btn = getattr(app, "_disks_enclosure_rate_btn", None)
+    if rate_btn:
+        enclosure_id = _selected_enclosure_id(app)
+        if compute_host:
+            rate_btn.set_sensitive(False)
+            rate_btn.set_tooltip_text("Enclosure rates are set on the storage host")
+        else:
+            rate_btn.set_sensitive(bool(enclosure_id))
+            rate_btn.set_tooltip_text(
+                "" if enclosure_id else "Select an enclosure to set its max I/O rate"
             )
 
 

@@ -58,6 +58,7 @@ from disk_actions import on_disks_smart_details, on_disks_wipe_labels
 from disks_page import (
     on_disks_manage_pool_profiles,
     on_disks_refresh,
+    on_disks_set_enclosure_rate,
     on_disks_surface_test,
     update_disks_button_sensitivity,
 )
@@ -244,6 +245,7 @@ PAGE_SPECS = {
             (None, None, None),  # spacer
             ("SMART Details", "dialog-information", "_disks_smart_details_btn"),
             ("Surface Test…", "drive-harddisk", "_disks_surface_test_btn"),
+            ("Set Max I/O Rate…", "utilities-system-monitor", "_disks_enclosure_rate_btn"),
             ("Refresh", "view-refresh", "_disks_refresh_btn"),
         ],
         "post_setup": update_disks_button_sensitivity,
@@ -504,6 +506,7 @@ ACTION_HANDLERS = {
         "Wipe Labels…": on_disks_wipe_labels,
         "SMART Details": on_disks_smart_details,
         "Surface Test…": on_disks_surface_test,
+        "Set Max I/O Rate…": on_disks_set_enclosure_rate,
         "Refresh": on_disks_refresh,
     },
     "pools": {

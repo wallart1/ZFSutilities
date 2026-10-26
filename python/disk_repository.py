@@ -33,6 +33,7 @@ class DiskInfo:
     smart_health: str = "n/a"
     wear_percent: int | None = None
     parent_path: str | None = None
+    enclosure_id: str = ""
 
 
 @dataclass

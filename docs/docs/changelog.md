@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.134.0
+
+*Released 2026-10-26*
+
+### Added
+
+- **Enclosure management on the Disks tab.** A new Enclosures section
+  lists every discovered multi-bay USB/eSATA enclosure (name,
+  kind/location, disk count, pools, max I/O rate), and the disk
+  inventory gains an Enclosure column showing the configured name or a
+  self-describing fallback — blank for internal disks, with partitions
+  following their parent disk. **Set Max I/O Rate…** names an enclosure
+  and sets its transfer-rate cap in the pacer grammar (blank =
+  unlimited; invalid input re-prompts with the exact accepted grammar),
+  storage host only on two-node systems, and stays available while a
+  dataset action runs because it edits configuration only. The cap
+  reaches every transfer the enforcement core (0.133.0) already paces;
+  a change applies to transfers started after the save. Enclosure
+  discovery failure fails open: the disk list is never blanked, tags
+  and rows simply wait for the next refresh.
+- **Live enclosure rates on the Performance tab.** The Live Charts view
+  gains an "Enclosures — USB/eSATA Traffic" section: read/write rates
+  summed over each enclosure's member disks over the iostat window,
+  the configured cap, and % of cap computed on the busier direction (a
+  paced transfer loads one direction at a time). Every leaf spelling
+  `zpool iostat -v` prints — kernel and by-id names, whole disks and
+  partitions — rolls up to its enclosure; an enclosure with no member
+  in the report shows "—" rather than a possibly-wrong zero. One
+  rolling chart tracks a read/write series pair per enclosure, rebuilt
+  when the discovered set changes. This is also where I/O the caps
+  cannot govern is visible: the rates are all enclosure traffic as ZFS
+  reports it, including kernel-driven scrub, resilver, and destroy
+  I/O. The section shares the Disks tab's inventory cache without
+  blocking on it.
+
+### Changed
+
+- `parse_zpool_iostat_v` now also returns the data section's leaf disk
+  rows (group rows — `raidz*`, `mirror*`, `spare*`, `replacing*`,
+  `draid*` — are excluded by name shape so leaf traffic is never
+  double-counted); `logs`/`cache` rows are unchanged, and the L2ARC and
+  SLOG tables filter by section as before. A new
+  `parse_rate_limit` turns a cap string into bytes/second through the
+  pacer's own parser, so the % of cap readout can never drift from what
+  the pacer enforces.
+
+### Tests
+
+- Suites for the cache attach (whole-disk and partition inheritance,
+  fail-open discovery), the Enclosures section (config-name join,
+  fallback display, selection preserved across refreshes), the rate
+  dialog and save handler, button sensitivity including
+  stays-enabled-while-a-dataset-action-runs, the parser's data-leaf
+  semantics against a fixture covering every group shape, the
+  enclosure rollup (absent vs idle-zero enclosures, unmapped and
+  non-data rows), the Performance section and its chart rebuild, and
+  the action-dispatch wiring for the new button and handler.
+
+### Documentation
+
+- User guide: the Enclosures pane, the Set Max I/O Rate… button, the
+  disk inventory's Enclosure column, and the Live enclosure rates
+  section (with the monitored-not-capped story for kernel-driven I/O);
+  the Python module reference documents the new functions and the
+  shared-cache wiring; the data-structures guide covers the
+  `VdevSample` section semantics, `EnclosureRates`, and the rollup;
+  the messages manual gains the two new GUI message rows.
+
 ## 0.133.0
 
 *Released 2026-10-26*

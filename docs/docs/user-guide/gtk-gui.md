@@ -275,7 +275,7 @@ The sidebar exposes these pages, with the storage-infrastructure tabs
 | [Disks](#disks-tab)               | Physical disk inventory, pool topology, and pool growth                                         |
 | [Pools](#pools-tab)               | Pool registry + live `zpool list` status + scrub manager                                        |
 | [Datasets](#datasets-tab)         | Collapsible dataset tree with inline snapshot/hold management (pool root datasets at top level) |
-| [Performance](#performance-tab)   | Real-time ARC / L2ARC / SLOG monitors with rolling charts                                      |
+| [Performance](#performance-tab)   | Real-time ARC / L2ARC / SLOG monitors and live enclosure rates with rolling charts             |
 
 ## Dashboard Tab
 
@@ -1308,7 +1308,7 @@ whichever view is visible.
 | ------ | ----- |
 | `/proc/spl/kstat/zfs/arcstats` | ARC size, target, and breakdown; ARC hits/misses; L2ARC sizes, hit rates, read/write byte totals, and feed count |
 | `/proc/spl/kstat/zfs/zil` | SLOG write counters (writes, commits, bytes written via the log devices) |
-| `zpool iostat -v -y 1 1` | Per-device capacity and traffic rates for `cache` and `logs` vdevs across all pools, measured over one 1-second window per refresh |
+| `zpool iostat -v -y 1 1` | Per-device capacity and traffic rates for `cache` and `logs` vdevs across all pools, plus the data section's leaf disks (the [live enclosure rates](#live-enclosure-rates)), measured over one 1-second window per refresh |
 
 Summary rates (hits/s, misses/s, read/write B/s, commits/s) are computed
 from the deltas of these cumulative kstat counters between refreshes —
@@ -1355,8 +1355,11 @@ context.
 - **SLOG — Log Devices (ZIL)**: a value grid (write rate, writes/s,
   commits/s), a write-rate chart, and a per-pool/device table with the
   same shape as the L2ARC table.
+- **Enclosures — USB/eSATA Traffic**: live read/write rates per discovered
+  enclosure against its configured cap — see
+  [Live enclosure rates](#live-enclosure-rates).
 
-Both device tables have user-resizable columns whose widths are
+The device tables have user-resizable columns whose widths are
 retained across GUI restarts, like the tables on the other tabs. Each
 sits in its own scrolled window with a fixed twenty-line height: the
 vertical scrollbar stays at the table's right edge, a horizontal
@@ -1364,8 +1367,9 @@ scrollbar appears whenever the columns overflow the window, and a table
 with more rows scrolls inside that fixed height instead of stretching
 the page — while a short or empty table keeps its full twenty-line
 window rather than collapsing to its content. Spare width beyond the
-columns' widths goes to the Vdev column, so the right-most column
-always shows its true width and shrinks honestly when resized.
+columns' widths goes to the Vdev column (the Enclosure column in the
+Enclosures table), so the right-most column always shows its true width
+and shrinks honestly when resized.
 
 Charts keep roughly 300 samples (about 25 minutes at the default 5 s
 interval) and auto-scale their Y axes. With matplotlib installed the
@@ -1376,6 +1380,42 @@ both renderings. Each chart fills the available page
 width but keeps a fixed height: making the window taller never stretches
 the charts (the extra height goes to the page below them), and the page
 itself scrolls once its content exceeds the window.
+
+### Live enclosure rates
+
+The **Enclosures** section of the Live Charts view shows live read/write
+rates for every multi-bay USB/eSATA enclosure discovered on the system,
+against the cap configured for it. Enclosure identity, membership, and
+names are the same discovery the Disks tab's
+[Enclosures](#enclosures) pane uses, so a name set there appears here
+too:
+
+| Column     | Meaning                                                                                        |
+| ---------- | ---------------------------------------------------------------------------------------------- |
+| Enclosure  | The name you assigned, or the self-describing fallback (`usb usb2/2-2`)                        |
+| Pools      | Pool membership across the enclosure's disks                                                    |
+| Read       | Read rate summed over the enclosure's member disks, averaged over the iostat 1-second window    |
+| Write      | Write rate summed the same way                                                                 |
+| Cap        | The configured max I/O rate, or `unlimited` when none is set                                    |
+| % of cap   | The busier of the read/write rates against the cap — a paced transfer loads one direction at a time; `—` when no cap is set or no member disk reported |
+
+Below the table, one rolling chart tracks a read and a write series per
+enclosure. Its series are fixed when it is built, so the chart is
+recreated — and its history restarts — whenever the discovered enclosure
+set changes (an enclosure replugged, renamed, or newly named). Rates
+come from the same `zpool iostat -v` measurement window as the tables
+above, on the same refresh interval; an enclosure with no member disk in
+the report shows `—` rather than a possibly-wrong zero.
+
+This is also the monitoring story for I/O the caps cannot govern: the
+rates shown are *all* enclosure I/O as ZFS reports it, including
+kernel-driven scrub, resilver, and destroy traffic. Those operations run
+in kernel I/O threads that no rate flag exists for (and `cgroup io.max`
+cannot throttle), so they are monitored here rather than capped — see
+[Transfer Rate Limits and Enclosure Caps](concepts.md#transfer-rate-limits-and-enclosure-caps)
+for what is capped and what is not. When nothing kernel-driven is
+running, the section doubles as a live view of how paced transfers are
+behaving against their caps.
 
 ### Refresh control
 
@@ -1565,9 +1605,9 @@ least one sample, the dialog explains that instead.
 ## Disks Tab
 
 The **Disks** tab shows the physical storage layer underneath your ZFS pools:
-the Disk Inventory and Pool Topology sections. The pool drop-down inside the
-Pool Topology section marks the selected pool, which the tab's pool actions and
-disk highlights follow. The tab content scrolls
+the Disk Inventory, Enclosures, and Pool Topology sections. The pool drop-down
+inside the Pool Topology section marks the selected pool, which the tab's pool
+actions and disk highlights follow. The tab content scrolls
 vertically as a whole when the window is too short; it also keeps a minimum
 height so it stays usable instead of being squashed.
 
@@ -1591,6 +1631,7 @@ pickers:
 | Log-sec   | Logical sector size                                                                                                                                                                                                                            |
 | Phy-sec   | Physical sector size                                                                                                                                                                                                                           |
 | Transport | Transport type (e.g. `sata`, `nvme`, `sas`)                                                                                                                                                                                                    |
+| Enclosure | Display name of the multi-bay enclosure holding the disk (blank for internal disks; see [Enclosures](#enclosures))                                                                                                                              |
 | Pools     | Pool membership determined from vdev topology                                                                                                                                                                                                  |
 | SMART     | Overall SMART health (`PASSED`, `FAILED`, or `n/a`)                                                                                                                                                                                            |
 | Wear/Test | For SSD/NVMe, the wear percentage from SMART data (`85%`). For HDDs, the surface self-test status (see [Surface Test](#surface-test)): `-`, `42% (1h 23m)` while running, or `Passed`/`Failed`/`Aborted`/`Canceled`. `-` when neither applies. |
@@ -1604,6 +1645,41 @@ in the Pool Topology pane (drawn in teal), and selecting a pool, vdev, or
 device node in the topology pane tints the corresponding rows in the
 inventory. Neither pane ever changes the other's selection — the correlation
 is teal text only.
+
+### Enclosures
+
+The Enclosures pane lists every multi-bay external enclosure discovered on
+the system — USB enclosures grouped by the hub they hang off, and eSATA
+enclosures grouped by PCI controller (an HBA presenting disks over SATA shows
+up as one enclosure). An enclosure's identity is derived from the WWNs of its
+member disks, so it survives replugging and port moves even when the enclosure
+hardware reports the same bridge serial as its siblings:
+
+| Column        | Meaning                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------ |
+| Name          | The name you assigned, or a self-describing fallback (`usb usb2/2-2`) until you name it          |
+| Kind/Location | `usb` with root-hub/port group, or `esata` with the PCI controller                                |
+| Disks         | Number of member disks                                                                            |
+| Pools         | Pool membership across the members (an enclosure can hold disks of several pools)                 |
+| Max I/O Rate  | The configured cap, or `unlimited` when none is set                                               |
+
+Select an enclosure and click **Set Max I/O Rate…** to give it a name and a
+rate cap. The rate accepts the pacer grammar — digits with an optional
+`k`/`m`/`g`/`t`/`p`/`e` suffix (`i` and `b` also accepted, 1024-based, e.g.
+`100m` or `64KiB`); leave it blank for unlimited. The cap governs every paced transfer
+that touches the enclosure's disks on the source *or* destination side, and
+the lower of it and any activity-specific rate limit always wins — see
+[Transfer Rate Limits and Enclosure Caps](concepts.md#transfer-rate-limits-and-enclosure-caps)
+for the full semantics, including the fail-open behavior and what is monitored
+rather than capped.
+
+The enclosure rate is enforced by the transfer pipelines themselves, so a
+change takes effect for transfers started after the save. On two-node systems
+the setting is made on the storage host; the compute host's button is
+disabled. The same dialog edits the name shown in the disk inventory's
+*Enclosure* column. Live read/write rates for every enclosure — including
+the kernel-driven scrub I/O a cap cannot limit — are shown on the
+Performance tab (see [Live enclosure rates](#live-enclosure-rates)).
 
 ### Pool topology
 
@@ -2108,6 +2184,11 @@ to the storage host, and they are disabled while a dataset action is running.
   installed; otherwise a warning is logged.
 - **Surface Test…** — run a SMART surface self-test on the selected HDD (see
   [Surface Test](#surface-test)). Storage host only on two-node systems.
+- **Set Max I/O Rate…** — name the selected enclosure and set its transfer
+  rate cap (see [Enclosures](#enclosures)). Storage host only on two-node
+  systems; requires an enclosure row to be selected. Editing the rate only
+  changes saved configuration, so it stays available while a dataset action
+  runs.
 - **Refresh** — reloads the disk inventory and topology from cache.
 
 ### Wipe Labels
