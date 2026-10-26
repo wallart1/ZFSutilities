@@ -710,6 +710,20 @@ class TestSectionHeaderAndNoteMarkup(unittest.TestCase):
         label.set_markup.assert_called_once_with("<i>[esc:a & b]</i>")
         label.show.assert_called_once_with()
 
+    def test_note_label_wraps_at_the_page_width(self):
+        """A note label must wrap: an unwrapped label's minimum width is its
+        full natural text width, so a long availability note pinned the
+        Performance page's minimum at that width and grew a page-level
+        horizontal scrollbar that shadowed every table's own scrollbar
+        (measured 2026-10-25 with a ~1900px degraded-host note)."""
+        gui_helpers = self._fresh_gui_helpers()
+        label = gui_helpers.note_label()
+        label.set_line_wrap.assert_called_once_with(True)
+        label.set_line_wrap_mode.assert_called_once_with(gui_helpers.Pango.WrapMode.WORD)
+        label.set_xalign.assert_called_once_with(0.0)
+        label.set_no_show_all.assert_called_once_with(True)
+        label.hide.assert_called_once_with()
+
 
 class TestTreeviewRowHeight(unittest.TestCase):
     """treeview_row_height: theme metrics when resolvable, fallback when not.

@@ -2091,7 +2091,10 @@ class TestConditionField(unittest.TestCase):
             saved_profile, "/fake/profile_runner.py", _FAKE_PATHS["cron_log"]
         )
         self.assertIn(expected_cron_line, actual)
-        self.assertIn("[ $(date +%d) -ge 28 ]", actual)
+        # The condition's % is backslash-escaped in the cron entry (cron
+        # terminates the command at a bare %), so the preview shows the
+        # escaped form — the exact text that reaches /etc/cron.d.
+        self.assertIn(r"[ $(date +\%d) -ge 28 ]", actual)
 
 
 class TestNextRunCache(unittest.TestCase):

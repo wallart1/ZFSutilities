@@ -43,11 +43,19 @@ from sending duplicate-run email spam.  Cron stdout/stderr for every
 scheduled profile is piped through a timestamp stamper into
 `/var/log/zfsutilities/cron.log` (each line is prefixed with its write time)
 so that errors occurring before the profile creates its own log remain
-visible.  Once the session log exists it is the run's record: cron job lines
+visible.  Every `%` written into a job line — the stamper's format string, a
+profile name, or a schedule condition — is backslash-escaped, because cron
+terminates a job's command at the first unescaped `%` and would otherwise
+kill the run with a shell error that `MAILTO=""` discards.  Once the session
+log exists it is the run's record: cron job lines
 launch the runner with `ZFSUTILITIES_FROM_CRON=Y`, and the runner silences
 its own output streams from that point on, so the cron log holds only the
 pre-log failures (a failed session-log creation keeps full output there as
-the fallback record).  An unhandled runner crash is recorded in the session
+the fallback record).  Each cron firing also leaves two breadcrumb lines in
+the cron log — a stamped `Scheduled run started (cron)` line when the runner
+starts and a `Scheduled run finished (cron) ... rc=N` line when it exits —
+so a schedule that has stopped firing shows up as missing breadcrumbs rather
+than an empty log.  An unhandled runner crash is recorded in the session
 log — traceback plus a failed trailer — instead of the silenced streams.
 The scheduler drop-ins (the cron file and its logrotate configuration) are
 converged automatically: every GUI startup and every scheduled-run start

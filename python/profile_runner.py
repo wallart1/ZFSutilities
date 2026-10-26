@@ -805,6 +805,27 @@ def _silence_cron_output(session_log_file, cron_log=None):
     return True
 
 
+def _write_cron_breadcrumb(cron_log, message):
+    """Append one timestamped audit line for a cron-launched run to *cron_log*.
+
+    The cron job line fences this process's output streams once the session
+    log exists, so healthy runs leave the cron log empty by design.  These
+    breadcrumbs (one at start, one with the exit code at finish) give the
+    cron log a minimal scheduler audit trail: a schedule that stops firing
+    shows up as missing breadcrumb lines in the Logs tab instead of an
+    innocent-looking empty log.  Best effort — an unwritable cron log never
+    fails the run.
+    """
+    if not cron_log:
+        return
+    stamp = datetime.now(tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with open(cron_log, "a") as fh:
+            fh.write(f"{stamp} INFO: {message}\n")
+    except OSError:
+        pass
+
+
 def main():
     args = sys.argv[1:]
     if (
@@ -846,6 +867,9 @@ def main():
     except OSError as e:
         log_msg(f"WARN: Scheduler drop-in convergence skipped: {e}")
     _session_log_file = session_log.create_session_log_file(tab_type, profile_name)
+    from_cron = os.environ.get("ZFSUTILITIES_FROM_CRON") == "Y"
+    if from_cron:
+        _write_cron_breadcrumb(cron_log, f"Scheduled run started (cron): {profile_name}")
     # From-cron runs go quiet on their output streams from here on: the cron
     # log keeps only pre-session-log failures, and the session log (created
     # just above) is the record for the rest of the run.
@@ -945,12 +969,25 @@ def main():
                 bytes_transferred=bytes_transferred,
             )
             sys.exit(rc)
+        except SystemExit as exc:
+            # Every normal exit path above is a sys.exit; record the audit
+            # breadcrumb with the real exit code before it propagates.
+            exit_rc = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+            if from_cron:
+                _write_cron_breadcrumb(
+                    cron_log, f"Scheduled run finished (cron): {profile_name} rc={exit_rc}"
+                )
+            raise
         except Exception:
             # With the from-cron streams fenced, the session log is the only
             # record left; an unhandled crash must land there (traceback plus
             # a failed trailer so the Logs tab shows the run as failed) rather
             # than vanishing into /dev/null.
             log_msg(f"FATAL: Unhandled exception in profile runner:\n{traceback.format_exc()}")
+            if from_cron:
+                _write_cron_breadcrumb(
+                    cron_log, f"Scheduled run finished (cron): {profile_name} rc=1"
+                )
             session_log.write_session_trailer(_session_log_file, _session_start_time, rc=1)
             sys.exit(1)
         finally:

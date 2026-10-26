@@ -43,6 +43,12 @@ and asks whether you really want to quit. Scrubs are not listed because they
 continue independently of the GUI; scheduled or profile tasks started outside
 this GUI process are also excluded.
 
+The same dialog also warns about unsaved changes: if any tab with a **Save**
+button has edits that have not been saved yet (Backup, Offsite, Restore,
+Schedule, Pools, Checkagainst, or Retention), the dialog lists those tabs so
+the changes are not silently discarded. Deleting rows without clicking
+**Save** counts as an unsaved change.
+
 Scrub profiles started from this GUI with **Run Now** are not listed either:
 their scrubs continue in the ZFS kernel without the runner, and the persisted
 scrub queue resumes when the GUI is opened again. Disk surface tests are not
@@ -51,6 +57,12 @@ closed; their progress is recovered from the surface-test state file on the
 next start.
 
 Choosing **No** keeps the window open so the tasks can finish normally.
+
+Automatic UI-state saves (window size and position, divider positions, table
+column widths, font sizes, and view selections) update only the `ui_state`
+section of the JSON configuration. They can never overwrite data sections such
+as the Checkagainst table, so a window resize or restart can no longer bring
+back deleted rows.
 
 ## The Main Window
 
@@ -760,7 +772,9 @@ after recalling.
     with `&&`. The profile runs only when this command exits 0. This allows
     runtime checks that cron expressions cannot express, such as
     `[ $(date +%d) -ge 28 ]` to run only during the last three days of the
-    month.
+    month. Enter the condition exactly as you would in a shell; the generator
+    backslash-escapes any `%` (as `date +\%d`) in the written cron line,
+    because cron terminates a job's command at an unescaped `%`.
 - **Interpretation** — live prose explanation of the cron expression
   (e.g. *"At 02:00 every day"* or *"Every 15 minutes on weekdays"*). When a
   condition is set, the interpretation notes that the profile runs only when
@@ -769,7 +783,9 @@ after recalling.
 - **Crontab entry** — for active profiles, the exact cron line that was written
   to `/etc/cron.d/zfsutilities`. This is shown at the top of the detail pane so
   you can verify the command, arguments, and output redirect without opening the
-  cron file manually.
+  cron file manually. Percent signs appear backslash-escaped (`\%`) — that is
+  the literal file content; cron strips the backslash before running the
+  command.
 - **Config Summary** — collapsible, scrollable JSON dump of the full profile
   config. The text is selectable; right-click for **Copy** and **Select All**.
 
@@ -1173,8 +1189,13 @@ live in `/var/log/zfsutilities/`.
 Every line written to the cron log carries a `YYYY-MM-DD HH:MM:SS` timestamp,
 so the viewer's level filter and short-prefix display work on these rows the
 same way as on session logs. The cron log holds only messages from before a
-scheduled run created its session log (launch-time and early failures); once
-the session log exists, it — not the cron log — is the run's record. The
+scheduled run created its session log (launch-time and early failures), plus
+two breadcrumb lines per cron firing — `Scheduled run started (cron)` and
+`Scheduled run finished (cron) ... rc=N` — that audit the scheduler itself:
+once
+the session log exists, it — not the cron log — is the run's record. A
+schedule that has stopped firing shows up here as missing breadcrumb lines.
+The
 scheduler drop-ins behind this behavior are converged automatically at GUI
 startup and at each scheduled-run start, and a pre-fence cron line — one that
 redirects into this log without the marker — is silenced by its redirect
@@ -1359,7 +1380,10 @@ itself scrolls once its content exceeds the window.
 ### Refresh control
 
 The **Refresh every (s)** spinner sets the auto-refresh interval
-(1–300 seconds, default 5). The value is persisted to the config file
+(1–300 seconds, default 5). While a refresh of the visible view is
+running, a small **Refreshing** indicator appears next to the spinner;
+both the auto-refresh timer and the toolbar Refresh button trigger it.
+The value is persisted to the config file
 (`memory.refresh_seconds`) and takes effect immediately — the timer is
 restarted with the new interval. Like the other data tabs, the Performance
 timer only runs while the tab is visible.

@@ -723,6 +723,10 @@ def refresh_alignment_view(app):
     if getattr(app, "_alignment_refresh_pending", False):
         return
 
+    # memory_page owns the 'Refreshing' indicator; it imports this module
+    # at module level, so the reverse import must stay function-level.
+    from memory_page import _hide_memory_refreshing, _show_memory_refreshing
+
     ctx = getattr(app, "ctx", None)
     zfs_repo = getattr(ctx, "zfs_repository", None)
     disk_repo = getattr(ctx, "disk_repository", None)
@@ -753,11 +757,13 @@ def refresh_alignment_view(app):
         _app._alignment_refresh_pending = False
         if sample is not None:
             _apply_alignment_sample(_app, sample)
+        _hide_memory_refreshing(_app)
         return False
 
     # Flag last: the reads above run on the main thread, and a raise
     # there must not strand the guard.
     app._alignment_refresh_pending = True
+    _show_memory_refreshing(app)
     threading.Thread(target=_collect, daemon=True).start()
 
 

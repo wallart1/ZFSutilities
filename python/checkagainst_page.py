@@ -770,3 +770,8 @@ def check_checkagainst_dirty(app):
         set_button_markup(btn, '<span foreground="red">Save</span>')
     else:
         set_button_markup(btn, "Save")
+
+
+def is_checkagainst_dirty(app):
+    """Return True when the page has unsaved changes (quit guard predicate)."""
+    return _is_ca_dirty(app)

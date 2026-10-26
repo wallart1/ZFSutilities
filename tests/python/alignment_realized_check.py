@@ -589,6 +589,59 @@ def _run_geometry_checks():
     win2.destroy()
     pump()
 
+    # --- Long availability note: the page itself still never scrolls ------
+    # A degraded host (objset + PVE sources down, guest probes failing)
+    # renders an availability note far wider than any window. The note
+    # label wraps, so the note cannot pin the page box minimum at its full
+    # text width: the page keeps the tables' own minimums and every section
+    # keeps scrolling on its own (an unwrapped note instead stretched the
+    # whole page sideways under one page-level scrollbar).
+    for note_width in (700, 1000):
+        app5, page5 = build_page()
+        win5 = show(page5, note_width)
+        app5._memory_view_stack.set_visible_child_name("alignment")
+        pump()
+        degraded = _realized_sample()
+        degraded.objset_available = False
+        degraded.pve_available = False
+        degraded.guest_fs_failures = {
+            "vm-201-disk-0": "guest agent unreachable (VM stopped)",
+            "vm-202-disk-0": "qemu-guest-agent not installed",
+        }
+        ap._apply_alignment_sample(app5, degraded)
+        pump(20)
+        assert app5._alignment_note.get_visible(), "degraded sample should show the note"
+        note_alloc = app5._alignment_note.get_allocated_width()
+        page_width = app5.performance_scrolled.get_allocated_width()
+        assert note_alloc <= page_width, (
+            f"{note_width}px window: note allocated {note_alloc} wider than the "
+            f"page {page_width} — the note is pinning the page again"
+        )
+        page_hadj = app5.performance_scrolled.get_hadjustment()
+        assert page_hadj.get_upper() <= page_hadj.get_page_size() + 0.5, (
+            f"{note_width}px window: the long availability note makes the page "
+            "itself scroll horizontally"
+        )
+        for sw in walk(win5, Gtk.ScrolledWindow):
+            view = sw.get_child()
+            if isinstance(view, Gtk.TreeView) and sw.get_allocated_width() >= 2:
+                assert_own_scrollbars("long-note table", sw, app5.performance_scrolled)
+        # The ladder keeps its content-minimum floor under the same note.
+        ladder5 = app5._alignment_ladder
+        lsw5 = app5._alignment_ladder_scroll
+        minimum5 = ch.ladder_minimum_width(ladder5.pools, ch.chart_font_scale(ladder5.widget))
+        if minimum5 > lsw5.get_allocated_width():
+            assert ladder5.widget.get_allocated_width() >= minimum5, (
+                f"{note_width}px window: long-note ladder canvas clamped below "
+                f"its {minimum5:.0f} minimum"
+            )
+            assert scrollbar_live(lsw5, "h"), (
+                f"{note_width}px window: long-note ladder lost its h-scrollbar"
+            )
+        print(f"PASS geometry: {note_width}px long-note view keeps the page itself non-scrolling")
+        win5.destroy()
+        pump()
+
     # --- Narrow windows: the page itself never scrolls sideways ---------
     # Unellipsized section headers and value-grid captions pin the page
     # minimum at their full natural text width, so the whole page grew a

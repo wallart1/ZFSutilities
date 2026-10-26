@@ -174,6 +174,71 @@ class TestUiState(unittest.TestCase):
             state = config_core.get_ui_state(config)
             self.assertIn("maximized", state["main_window"])
 
+    def test_save_ui_state_preserves_external_disk_changes(self):
+        """A UI-state save must not clobber data saved by another process.
+
+        This is the deletion-resurrection bug: a long-lived GUI session
+        whose in-memory config still holds rows deleted elsewhere must
+        never write them back via an automatic UI-state (geometry) save.
+        """
+        with temp_config_dir():
+            disk = {
+                "config_version": config_core.CONFIG_VERSION,
+                "checkagainst": {"user_entries": []},
+            }
+            with open(config_core.CONFIG_PATH, "w") as f:
+                json.dump(disk, f)
+
+            stale = {
+                "config_version": config_core.CONFIG_VERSION,
+                "checkagainst": {"user_entries": [{"label": "offsite"}]},
+            }
+            config_core.save_ui_state(stale, {"main_window": {"width": 800}})
+
+            with open(config_core.CONFIG_PATH) as f:
+                on_disk = json.load(f)
+            self.assertEqual(on_disk["checkagainst"]["user_entries"], [])
+            self.assertEqual(on_disk["ui_state"]["main_window"]["width"], 800)
+            # The in-memory mirror tracks only the UI-state update.
+            self.assertEqual(stale["ui_state"]["main_window"]["width"], 800)
+            self.assertEqual(stale["checkagainst"]["user_entries"], [{"label": "offsite"}])
+
+    def test_save_ui_state_merges_with_disk_ui_state(self):
+        with temp_config_dir():
+            with open(config_core.CONFIG_PATH, "w") as f:
+                json.dump({"ui_state": {"performance_view": {"view": "io"}}}, f)
+            config = {}
+            config_core.save_ui_state(config, {"main_window": {"width": 800}})
+            with open(config_core.CONFIG_PATH) as f:
+                on_disk = json.load(f)
+            self.assertEqual(on_disk["ui_state"]["performance_view"]["view"], "io")
+            self.assertEqual(on_disk["ui_state"]["main_window"]["width"], 800)
+
+    def test_save_ui_state_falls_back_when_disk_config_corrupt(self):
+        with temp_config_dir():
+            with open(config_core.CONFIG_PATH, "w") as f:
+                f.write("{not json")
+            config = {"checkagainst": {"user_entries": []}}
+            config_core.save_ui_state(config, {"main_window": {"width": 640}})
+            with open(config_core.CONFIG_PATH) as f:
+                on_disk = json.load(f)
+            self.assertEqual(on_disk["ui_state"]["main_window"]["width"], 640)
+            self.assertEqual(on_disk["checkagainst"]["user_entries"], [])
+
+    def test_save_ui_state_first_write_uses_memory_config(self):
+        """No config file yet (first-launch write): the in-memory config
+        becomes the write base, matching the previous whole-config write."""
+        with temp_config_dir():
+            config = {
+                "config_version": config_core.CONFIG_VERSION,
+                "checkagainst": {"user_entries": []},
+            }
+            config_core.save_ui_state(config, {"main_window": {"width": 800}})
+            with open(config_core.CONFIG_PATH) as f:
+                on_disk = json.load(f)
+            self.assertEqual(on_disk["checkagainst"]["user_entries"], [])
+            self.assertEqual(on_disk["ui_state"]["main_window"]["width"], 800)
+
 
 class TestLogRetention(unittest.TestCase):
     """Log retention helpers read and prune session logs."""

@@ -230,6 +230,20 @@ class TestDirtyTracking(unittest.TestCase):
         app = NoOriginalApp()
         self.assertFalse(cap._is_ca_dirty(app))
 
+    def test_is_checkagainst_dirty_mirrors_internal_state(self):
+        """The public quit-guard predicate reports the same dirty state."""
+        app = self._make_app(
+            [("offsite", "tank/a", "backup/b", "")],
+            [("offsite", "tank/a", "backup/a", "")],
+        )
+        self.assertTrue(cap.is_checkagainst_dirty(app))
+
+        clean = self._make_app(
+            [("offsite", "tank/a", "backup/a", "")],
+            [("offsite", "tank/a", "backup/a", "")],
+        )
+        self.assertFalse(cap.is_checkagainst_dirty(clean))
+
 
 class TestLoadNormalization(unittest.TestCase):
     """Loading must not mark the page dirty when defaults are applied."""

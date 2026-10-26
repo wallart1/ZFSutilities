@@ -449,6 +449,18 @@ the top of the run so its traceback and a failed trailer land in the session
 log rather than vanishing into the fenced streams. Run Now and manual
 terminal launches never set the marker and stream exactly as before.
 
+Cron terminates a job's command at the first unescaped `%` and feeds the
+remainder to the job's stdin (crontab(5)), so `generate_cron_line()`
+backslash-escapes every `%` in the command portion it builds — the stamper's
+`strftime` format, the profile name, paths, and user-entered conditions
+alike; a pre-escaped `\%` is left alone. Cron strips the backslash before
+the shell sees the command, so the executed pipeline is unchanged. Cron
+launches additionally append two breadcrumb lines directly to the cron log —
+`Scheduled run started (cron)` when the runner starts and
+`Scheduled run finished (cron) ... rc=N` on exit — written as file appends
+past the fenced streams so a schedule that stops firing shows up as missing
+breadcrumbs instead of an empty log.
+
 A cron line from a pre-fence deployment carries no marker; its plain
 `>> cron.log` redirect leaves fd 1 pointing at the cron log itself, and
 `_silence_cron_output()` treats that redirect as a cron launch too, so a

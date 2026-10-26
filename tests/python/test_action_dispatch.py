@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -506,3 +507,62 @@ class TestMemoryPageSpec(unittest.TestCase):
     def test_refresh_handler_still_wired(self):
         handler = action_dispatch.ACTION_HANDLERS["memory"]["Refresh"]
         self.assertIs(handler, action_dispatch.refresh_memory_page)
+
+
+class TestDirtyPredicates(unittest.TestCase):
+    """Quit-guard dirty predicates: pure queries, defensive until built.
+
+    ``dirty_check`` styles the page's Save button against built widgets;
+    ``dirty_predicate`` is the pure query the main window's quit guard runs
+    over every page, so it must answer False — never raise — for a page
+    whose state attributes do not exist yet.
+    """
+
+    def test_every_page_with_dirty_check_has_a_predicate(self):
+        for name, spec in action_dispatch.PAGE_SPECS.items():
+            if "dirty_check" in spec:
+                self.assertTrue(
+                    callable(spec.get("dirty_predicate")),
+                    f"{name} page lacks a quit-guard dirty_predicate",
+                )
+
+    def test_predicates_are_defensive_before_the_page_is_built(self):
+        app = SimpleNamespace()
+        for name, spec in action_dispatch.PAGE_SPECS.items():
+            predicate = spec.get("dirty_predicate")
+            if predicate is not None:
+                self.assertFalse(predicate(app), f"{name} predicate raised or True on a bare app")
+
+    def test_tracker_predicates_follow_tracker_state(self):
+        for predicate, attr in (
+            (action_dispatch._backup_dirty_predicate, "_backup_tracker"),
+            (action_dispatch._offsite_dirty_predicate, "_offsite_tracker"),
+        ):
+            tracker = MagicMock()
+            tracker.check.return_value = True
+            self.assertTrue(predicate(SimpleNamespace(**{attr: tracker})))
+            tracker.check.return_value = False
+            self.assertFalse(predicate(SimpleNamespace(**{attr: tracker})))
+
+    def test_restore_predicate_compares_collected_config_to_saved(self):
+        saved = {"datasets": ["a"]}
+        dirty_app = SimpleNamespace(_restore_saved_state=saved)
+        with patch.object(
+            action_dispatch, "collect_restore_config", return_value={"datasets": ["a", "b"]}
+        ):
+            self.assertTrue(action_dispatch._restore_dirty_predicate(dirty_app))
+        clean_app = SimpleNamespace(_restore_saved_state=dict(saved))
+        with patch.object(action_dispatch, "collect_restore_config", return_value=dict(saved)):
+            self.assertFalse(action_dispatch._restore_dirty_predicate(clean_app))
+
+    def test_schedule_predicate_follows_pending_flag(self):
+        self.assertTrue(
+            action_dispatch._schedule_dirty_predicate(SimpleNamespace(_schedule_pending=["p1"]))
+        )
+        self.assertFalse(
+            action_dispatch._schedule_dirty_predicate(SimpleNamespace(_schedule_pending=None))
+        )
+
+    def test_pools_predicate_follows_pools_dirty(self):
+        self.assertTrue(action_dispatch._pools_dirty_predicate(SimpleNamespace(pools_dirty=True)))
+        self.assertFalse(action_dispatch._pools_dirty_predicate(SimpleNamespace(pools_dirty=False)))

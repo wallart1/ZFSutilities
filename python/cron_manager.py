@@ -5,6 +5,7 @@ Manages /etc/cron.d/zfsutilities as a drop-in file exclusively for zfsutilities.
 """
 
 import os
+import re
 import shlex
 from datetime import datetime, timedelta
 
@@ -26,7 +27,10 @@ CRON_FILE = get_cron_file_path()
 # lines are the only launchers that set it); without that, the stamper would
 # capture the whole run — every message and one pv progress line per second —
 # duplicating the session log and flooding the weekly-rotated cron log.
-_TIMESTAMP_STAMPER = "stdbuf -oL awk '{ print strftime(\"%Y-%m-%d %H:%M:%S\"), $0 }'"
+# Every % below must reach the file backslash-escaped: cron terminates the
+# command at the first unescaped % and feeds the remainder to its stdin
+# (crontab(5)), which kills the job with an unterminated-quote shell error.
+_TIMESTAMP_STAMPER = "stdbuf -oL awk '{ print strftime(\"\\%Y-\\%m-\\%d \\%H:\\%M:\\%S\"), $0 }'"
 
 # Directory for per-profile advisory locks. Override for testing.
 PROFILE_LOCK_DIR = os.environ.get("ZFSUTILITIES_PROFILE_LOCK_DIR", get_profile_lock_dir())
@@ -160,23 +164,41 @@ def generate_cron_line(profile, runner_path, cron_log):
     # The runner acquires its own advisory lock and exits 0 when the profile is
     # already running, so a cron-level flock wrapper is not needed. Pipe
     # stdout/stderr through the timestamp stamper into the persistent cron log
-    # so pre-log errors are visible with the time they were written.
+    # so pre-log errors are visible with the time they were written. The
+    # command portion is % escaped because cron stops the command at the first
+    # bare % (crontab(5)).
     if condition:
-        return (
-            f"{minute} {hour} {day} {month} {weekday} "
-            f"root {condition} && mkdir -p {log_dir} {lock_dir} && "
+        command = (
+            f"{condition} && mkdir -p {log_dir} {lock_dir} && "
             f"{inner} 2>&1 | {_TIMESTAMP_STAMPER} >> {quoted_log}"
         )
-    return (
-        f"{minute} {hour} {day} {month} {weekday} "
-        f"root mkdir -p {log_dir} {lock_dir} && "
-        f"{inner} 2>&1 | {_TIMESTAMP_STAMPER} >> {quoted_log}"
-    )
+    else:
+        command = (
+            f"mkdir -p {log_dir} {lock_dir} && {inner} 2>&1 | {_TIMESTAMP_STAMPER} >> {quoted_log}"
+        )
+    return f"{minute} {hour} {day} {month} {weekday} root {_escape_cron_percent(command)}"
 
 
 def shlex_quote(s):
     """Minimal shlex.quote equivalent (Python 3.3+ has shlex.quote)."""
     return shlex.quote(s)
+
+
+# Any % not already preceded by a backslash. Cron terminates the command at
+# the first unescaped % and passes everything after it to the job's stdin
+# (crontab(5)), so a bare % — from this module's stamper, a profile name, a
+# path, or a user-entered condition such as `date +%d` — silently kills the
+# job with a shell syntax error that MAILTO="" then discards.
+_BARE_PERCENT_RE = re.compile(r"(?<!\\)%")
+
+
+def _escape_cron_percent(command):
+    """Backslash-escape every bare % in *command* for the cron command field.
+
+    An already-escaped ``\\%`` is left untouched so cron-aware input is not
+    double-escaped.
+    """
+    return _BARE_PERCENT_RE.sub(r"\\%", command)
 
 
 # ---------------------------------------------------------------------------

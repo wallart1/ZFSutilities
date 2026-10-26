@@ -8,6 +8,7 @@ scroll-stable, and the save/restore of the page's vertical offset around
 every apply.
 """
 
+import json
 import os
 import sys
 import unittest
@@ -20,10 +21,11 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 import alignment_stats as astats
+import config_core
 from alignment_guestfs import GuestFsEntry
 from disk_repository import format_bytes
 from memory_stats import format_percent
-from test_support import mock_gtk
+from test_support import mock_gtk, temp_config_dir
 from zfs_repository import TopologyNode
 
 # Pool-member paths shared by _topology() and _pool(): the sample model
@@ -318,11 +320,18 @@ class TestPerformanceViewSwitcher(_PageTestCase):
         radios["alignment"].get_active.return_value = True
         # Drop the build-phase view restoration from the call history.
         app._memory_view_stack.set_visible_child_name.reset_mock()
-        with patch("config_core.save_config"):
+        with temp_config_dir():
             mp._on_memory_view_radio_toggled(radios["alignment"], app)
+            with open(config_core.CONFIG_PATH) as f:
+                on_disk = json.load(f)
         app._memory_view_stack.set_visible_child_name.assert_called_once_with("alignment")
         self.assertEqual(
             app.config.get("ui_state", {}).get("performance_view", {}).get("view"),
+            "alignment",
+        )
+        # The view choice is persisted as a UI-state-only disk write.
+        self.assertEqual(
+            on_disk.get("ui_state", {}).get("performance_view", {}).get("view"),
             "alignment",
         )
 
@@ -334,7 +343,7 @@ class TestPerformanceViewSwitcher(_PageTestCase):
         radios["alignment"].get_active.return_value = False
         # Drop the build-phase view restoration from the call history.
         app._memory_view_stack.set_visible_child_name.reset_mock()
-        with patch("config_core.save_config") as save:
+        with patch("config_core.save_ui_state") as save:
             mp._on_memory_view_radio_toggled(radios["charts"], app)
         save.assert_not_called()
         app._memory_view_stack.set_visible_child_name.assert_not_called()
@@ -409,6 +418,65 @@ class TestPerformanceViewSwitcher(_PageTestCase):
         with patch.object(ap.threading, "Thread") as thread:
             ap.refresh_alignment_view(app)
         thread.assert_not_called()
+
+
+class TestAlignmentRefreshingIndicator(_PageTestCase):
+    """The alignment refresh drives the Performance page's 'Refreshing' label.
+
+    memory_page owns the label (it sits next to the refresh interval
+    spinner on the shared controls row); the alignment path reaches it
+    through the helper imported from memory_page at call time, so the
+    assertions read the label mock on the shared app rather than patching
+    the helper.
+    """
+
+    def test_refresh_shows_indicator(self):
+        _mp, ap, app = self._prepared()
+        with patch.object(ap.threading, "Thread"):
+            ap.refresh_alignment_view(app)
+        app.memory_refreshing_label.show.assert_called_once_with()
+        self.assertTrue(app._alignment_refresh_pending)
+
+    def test_finish_hides_indicator(self):
+        _mp, ap, app = self._prepared()
+        # The page build itself hides the label once; drop that history so
+        # the assertions see only the refresh flow.
+        app.memory_refreshing_label.reset_mock()
+
+        class _SyncThread:
+            """Thread stand-in that runs its target synchronously."""
+
+            def __init__(self, target=None, daemon=False):
+                self._target = target
+
+            def start(self):
+                self._target()
+
+        idle_captured = []
+        with (
+            patch.object(ap.threading, "Thread", _SyncThread),
+            patch.object(
+                ap.GLib, "idle_add", side_effect=lambda fn, *a: idle_captured.append((fn, a)) or 1
+            ),
+            patch.object(ap, "collect_alignment_sample", return_value=object()),
+        ):
+            ap.refresh_alignment_view(app)
+        finish_fn, finish_args = idle_captured[0]
+        self.assertEqual(finish_fn.__name__, "_finish_refresh")
+        with patch.object(ap, "_apply_alignment_sample"):
+            self.assertFalse(finish_fn(*finish_args))
+        app.memory_refreshing_label.hide.assert_called_once_with()
+        self.assertFalse(app._alignment_refresh_pending)
+
+    def test_pending_guard_leaves_indicator_untouched(self):
+        _mp, ap, app = self._prepared()
+        app.memory_refreshing_label.reset_mock()
+        app._alignment_refresh_pending = True
+        with patch.object(ap.threading, "Thread") as thread:
+            ap.refresh_alignment_view(app)
+        thread.assert_not_called()
+        app.memory_refreshing_label.show.assert_not_called()
+        app.memory_refreshing_label.hide.assert_not_called()
 
 
 class TestApplyAlignmentSample(_PageTestCase):

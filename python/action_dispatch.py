@@ -19,6 +19,7 @@ from backup_page import (
 )
 from checkagainst_page import (
     check_checkagainst_dirty,
+    is_checkagainst_dirty,
     on_checkagainst_add,
     on_checkagainst_add_pair,
     on_checkagainst_get_entries,
@@ -115,6 +116,7 @@ from restore_page import (
 )
 from retention_actions import (
     check_retention_dirty,
+    is_retention_dirty,
     on_retention_add_bucket,
     on_retention_add_policy,
     on_retention_prune,
@@ -135,8 +137,37 @@ from schedule_page import (
     on_schedule_save,
 )
 
+
 # ---------------------------------------------------------------------------
 # Page action button specifications
+# ---------------------------------------------------------------------------
+# Dirty-state predicates: return True when a page has unsaved changes.
+# Unlike dirty_check (which styles the Save button), these are pure queries
+# used by the main window's quit guard.  Each is defensive about attributes
+# that only exist after the page has been built.
+def _backup_dirty_predicate(app):
+    tracker = getattr(app, "_backup_tracker", None)
+    return bool(tracker.check()) if tracker is not None else False
+
+
+def _offsite_dirty_predicate(app):
+    tracker = getattr(app, "_offsite_tracker", None)
+    return bool(tracker.check()) if tracker is not None else False
+
+
+def _restore_dirty_predicate(app):
+    saved = getattr(app, "_restore_saved_state", None)
+    return saved is not None and collect_restore_config(app) != saved
+
+
+def _schedule_dirty_predicate(app):
+    return bool(getattr(app, "_schedule_pending", None))
+
+
+def _pools_dirty_predicate(app):
+    return bool(getattr(app, "pools_dirty", False))
+
+
 # ---------------------------------------------------------------------------
 # Each entry defines buttons, runner info, dry-run toggle, and dirty-check
 # for a single page.  Used by update_action_buttons().
@@ -155,6 +186,7 @@ PAGE_SPECS = {
         ],
         "dirty_check": check_backup_dirty,
         "dirty_attr": "_backup_tracker",
+        "dirty_predicate": _backup_dirty_predicate,
     },
     "offsite": {
         "runner": "offsite_runner",
@@ -170,6 +202,7 @@ PAGE_SPECS = {
         ],
         "dirty_check": check_offsite_dirty,
         "dirty_attr": "_offsite_tracker",
+        "dirty_predicate": _offsite_dirty_predicate,
     },
     "restore": {
         "runner": "restore_runner",
@@ -183,6 +216,7 @@ PAGE_SPECS = {
         ],
         "dirty_check": check_restore_dirty,
         "dirty_attr": "_restore_saved_state",
+        "dirty_predicate": _restore_dirty_predicate,
     },
     "schedule": {
         "buttons": [
@@ -193,6 +227,7 @@ PAGE_SPECS = {
         ],
         "dirty_check": check_schedule_dirty,
         "dirty_attr": "_schedule_saved_state",
+        "dirty_predicate": _schedule_dirty_predicate,
     },
     "disks": {
         "buttons": [
@@ -233,6 +268,7 @@ PAGE_SPECS = {
         ],
         "dirty_check": check_pools_dirty,
         "dirty_attr": "_pools_saved_state",
+        "dirty_predicate": _pools_dirty_predicate,
         "post_setup": update_pools_button_sensitivity,
     },
     "datasets": {
@@ -267,6 +303,7 @@ PAGE_SPECS = {
         ],
         "dirty_check": check_checkagainst_dirty,
         "dirty_attr": "_ca_original_full",
+        "dirty_predicate": is_checkagainst_dirty,
     },
     "dashboard": {
         "buttons": [
@@ -308,6 +345,7 @@ PAGE_SPECS = {
         ],
         "dirty_check": check_retention_dirty,
         "dirty_attr": "_ret_original",
+        "dirty_predicate": is_retention_dirty,
     },
 }
 

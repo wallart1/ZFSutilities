@@ -814,6 +814,72 @@ class TestTerminateConfirmation(unittest.TestCase):
         secondary = dialog.format_secondary_text.call_args[0][0]
         self.assertEqual(secondary.count("Migrate Pool: tank"), 1)
 
+    def test_dirty_page_titles_reports_dirty_pages(self):
+        """Sidebar titles are collected for pages whose predicates are True."""
+        window, gui = self._make_window()
+        specs = {
+            "checkagainst": {"dirty_predicate": lambda app: True},
+            "backup": {"dirty_predicate": lambda app: False},
+            "disks": {},
+        }
+        with patch.object(gui, "PAGE_SPECS", specs):
+            titles = window._dirty_page_titles()
+        self.assertEqual(titles, ["Checkagainst"])
+
+    def test_confirm_terminate_warns_on_unsaved_changes(self):
+        """Unsaved page changes alone trigger the quit warning."""
+        window, gui = self._make_window()
+        dialog_class = self._set_dialog_response(gui, gui.Gtk.ResponseType.NO)
+        specs = {"checkagainst": {"dirty_predicate": lambda app: True}}
+        with (
+            patch.object(gui, "_collect_running_tasks", return_value=[]),
+            patch.object(gui, "PAGE_SPECS", specs),
+        ):
+            result = window._on_delete_event(None, None)
+
+        dialog_class.assert_called_once()
+        dialog = dialog_class.return_value
+        text = dialog_class.call_args.kwargs["text"]
+        secondary = dialog.format_secondary_text.call_args[0][0]
+        self.assertIn("Unsaved changes", text)
+        self.assertIn("Checkagainst", secondary)
+        self.assertTrue(result)
+
+    def test_confirm_terminate_allows_close_when_clean(self):
+        """No running tasks and no dirty pages: no dialog, close allowed."""
+        window, gui = self._make_window()
+        dialog_class = self._set_dialog_response(gui, gui.Gtk.ResponseType.YES)
+        with (
+            patch.object(gui, "_collect_running_tasks", return_value=[]),
+            patch.object(gui, "PAGE_SPECS", {}),
+        ):
+            result = window._on_delete_event(None, None)
+        dialog_class.assert_not_called()
+        self.assertFalse(result)
+
+    def test_confirm_terminate_lists_tasks_and_dirty_pages(self):
+        """Both running tasks and unsaved changes appear in one dialog."""
+        window, gui = self._make_window()
+        dialog_class = self._set_dialog_response(gui, gui.Gtk.ResponseType.YES)
+        specs = {"checkagainst": {"dirty_predicate": lambda app: True}}
+        with (
+            patch.object(
+                gui,
+                "_collect_running_tasks",
+                return_value=[{"name": "Backup", "type": "GUI", "status": "Running"}],
+            ),
+            patch.object(gui, "_is_descendant_of_current_process", return_value=True),
+            patch.object(gui, "_profile_tab_type", return_value=None),
+            patch.object(gui, "PAGE_SPECS", specs),
+        ):
+            confirmed = window._confirm_terminate()
+
+        dialog = dialog_class.return_value
+        secondary = dialog.format_secondary_text.call_args[0][0]
+        self.assertIn("Backup", secondary)
+        self.assertIn("Checkagainst", secondary)
+        self.assertTrue(confirmed)
+
     def test_collect_abortable_tasks_filters_scrubs_and_remote_profiles(self):
         """Scrubs and non-GUI profiles are excluded from the warning list."""
         window, gui = self._make_window()

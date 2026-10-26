@@ -2628,6 +2628,7 @@ Headless runner for scheduled profiles (cron): loads a profile JSON, builds its 
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
+| `INFO: Scheduled run started (cron): ...` / `INFO: Scheduled run finished (cron): ... rc=...` | Breadcrumb pair appended directly to the cron log for each cron firing (not via the fenced streams) | Audit trail: a schedule that stops firing shows up as missing lines |
 | `WARN: Scheduler drop-in convergence skipped: ...` | OSError during launch-time drop-in convergence (config/profile read failure) | Best-effort skip; the run continues without the cron-log fd fallback |
 | `INFO: Profile '...' is already running; waiting for it to finish...` | The profile advisory lock is busy; the runner waits up to the timeout | Wait; a waiting-file is written for the Dashboard |
 | `WARN: Pre-step callback failed: ...` / `WARN: Post-step callback failed: ...` | The scrub-pause/resume callback raised | The step still runs |
