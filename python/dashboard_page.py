@@ -1035,6 +1035,8 @@ def _outcome_markup(entry):
     result = entry.get("result", "unknown")
     if result == "success":
         return "<span foreground='#00AA00'>✓</span> success"
+    if result == "cancelled":
+        return "<span foreground='#FF8C00'>⏸</span> cancelled"
     return f"<span foreground='#CC0000'>✗</span> {result}"
 
 
@@ -1311,8 +1313,19 @@ def _gather_dashboard_data(app):
     waiting_tasks = [t for t in tasks if t.get("waiting_for_lock")]
     active_locks = list_active_locks()
 
+    # Mounts the kernel lists as mounted whose path is unreachable —
+    # shadowed or orphaned; the Dashboard offers the repair.
+    from zfs_repository import find_unreachable_mounts
+
+    unreachable_mounts = find_unreachable_mounts()
+
     # Build warnings: live checks + startup-style checks
     warnings = _get_warnings(pools, recent, threshold, waiting_tasks)
+    for row in unreachable_mounts:
+        warnings.append(
+            f"{row['name']} is mounted at {row['mountpoint']} but the path is "
+            "unreachable (bad mount order) — use Repair Mount Order"
+        )
     if not app.config.get("backup", {}).get("pull_steps") and not app.config.get("backup", {}).get(
         "send_receive_steps"
     ):
@@ -1344,6 +1357,7 @@ def _gather_dashboard_data(app):
         "warnings": warnings,
         "config_data": config_data,
         "active_locks": active_locks,
+        "unreachable_mounts": unreachable_mounts,
     }
 
 
@@ -1384,8 +1398,9 @@ def _update_dashboard_ui(app, data):
     _refresh_warnings_section(app, data["warnings"])
     _refresh_active_locks_section(app, data["active_locks"])
 
-    # Update the contextual "Fix Locks" button visibility
+    # Update the contextual "Fix Locks" and "Repair Mount Order" buttons
     _update_fix_locks_button(app, data["stale_count"])
+    _update_repair_mount_order_button(app, data["unreachable_mounts"])
 
     app.dashboard_config_frame.show_all()
     app.dashboard_pool_frame.show_all()
@@ -2191,6 +2206,21 @@ def _update_fix_locks_button(app, stale_count):
         app._fix_locks_button.set_sensitive(stale_count > 0)
 
 
+def _update_repair_mount_order_button(app, unreachable_mounts):
+    """Enable or disable the Repair Mount Order button based on detection."""
+    button = getattr(app, "_repair_mount_order_button", None)
+    if button is not None:
+        button.set_sensitive(bool(unreachable_mounts))
+
+
+def on_dashboard_repair_mount_order(app):
+    """Plan, confirm, and run the mount-order repair for all findings."""
+    from dataset_actions import run_mount_repair
+
+    run_mount_repair(app, scope=None)
+    refresh_dashboard_page(app)
+
+
 def on_dashboard_refresh(app):
     """Handler for the Refresh action button."""
     log_msg("VERB: Refreshing dashboard...")
@@ -2239,10 +2269,21 @@ def _cancel_task(app, task_key):
             log_msg(f"WARN: Waiting profile '{profile_name}' is no longer running")
     elif task_key.startswith("profile:"):
         profile_name = task_key.split(":", 1)[1]
-        log_msg(
-            f"INFO: To cancel profile '{profile_name}', use Cancel Selected "
-            "Tasks and then clean up its process if it does not stop"
-        )
+        pid = None
+        for profile in list_running_profiles():
+            if not profile.get("waiting") and profile.get("name") == profile_name:
+                pid = profile.get("pid")
+                break
+        if isinstance(pid, int) and pid > 0:
+            try:
+                # The runner handles SIGTERM gracefully: it terminates the
+                # in-flight step's process group and runs no further steps.
+                os.kill(pid, signal.SIGTERM)
+                log_msg(f"INFO: Sent SIGTERM to running profile '{profile_name}' (PID {pid})")
+            except OSError as e:
+                log_msg(f"WARN: Failed to cancel running profile '{profile_name}': {e}")
+        else:
+            log_msg(f"WARN: Running profile '{profile_name}' is no longer running")
     elif task_key.startswith("scheduled:"):
         pid_str = task_key.split(":", 1)[1]
         try:

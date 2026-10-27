@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
@@ -20,6 +21,7 @@ for _path in (PYTHON_SRC, TEST_DIR):
 import command_builders
 import golden
 from command_builders import BashStep
+from test_support import capture_logs, mock_subprocess
 
 
 class TestDryrunAssignments(unittest.TestCase):
@@ -539,6 +541,120 @@ class TestRsyncFailureDiagnosis(unittest.TestCase):
         diagnosis = command_builders._diagnose_rsync_failure(99, ["rsync: unexplained failure"])
         self.assertIn("exit code 99", diagnosis)
         self.assertIn("unknown error", diagnosis)
+
+    def test_rc11_mkdir_enoent_names_destination(self):
+        diagnosis = command_builders._diagnose_rsync_failure(
+            11,
+            [
+                (
+                    'rsync: [Receiver] mkdir "/threeamigos/proxmox/Stewie/etc" failed: '
+                    "No such file or directory (2)"
+                ),
+            ],
+        )
+        self.assertIn("unreachable", diagnosis)
+        self.assertIn("shadowed", diagnosis)
+
+    def test_rc11_without_mkdir_stays_file_io(self):
+        diagnosis = command_builders._diagnose_rsync_failure(
+            11,
+            ["rsync: write error: Broken pipe (32)"],
+        )
+        self.assertEqual(diagnosis, "Error in file I/O")
+
+
+class TestPrepareRsyncDestination(unittest.TestCase):
+    """Local rsync destinations are fenced against bad ZFS mount chains."""
+
+    def _fake_mount_rows(self, m, rows):
+        stdout = "\n".join(f"{name}\t{mp}\t{mounted}" for name, mp, mounted in rows)
+        m.set_command_handler(
+            r"zfs list -H -o name,mountpoint,mounted",
+            lambda cmd, **kwargs: m._completed(stdout),
+        )
+
+    def test_remote_destination_passes_unfenced(self):
+        zfs_calls = []
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"zfs list",
+                lambda cmd, **kwargs: zfs_calls.append(cmd) or m._completed(""),
+            )
+            ok = command_builders.prepare_rsync_destination("/src", "tweety:/dst", False)
+        self.assertTrue(ok)
+        self.assertEqual(zfs_calls, [])
+
+    def test_shadowed_dataset_refuses_step(self):
+        with mock_subprocess() as m:
+            # Both datasets report mounted=yes, but their mountpoints do not
+            # resolve to real mountpoints (the pool root covers them).
+            self._fake_mount_rows(
+                m,
+                [
+                    ("tank", "/nonexistent-pool", "yes"),
+                    ("tank/proxmox", "/nonexistent-pool/proxmox", "yes"),
+                ],
+            )
+            with capture_logs() as logs:
+                ok = command_builders.prepare_rsync_destination(
+                    "/etc/", "/nonexistent-pool/proxmox/host/etc/", False
+                )
+        self.assertFalse(ok)
+        self.assertTrue(any("shadowed" in msg for msg in logs))
+
+    def test_unmounted_dataset_refuses_step(self):
+        with mock_subprocess() as m:
+            self._fake_mount_rows(m, [("tank/proxmox", "/mnt/tank/proxmox", "no")])
+            with capture_logs() as logs:
+                ok = command_builders.prepare_rsync_destination(
+                    "/etc/", "/mnt/tank/proxmox/etc", False
+                )
+        self.assertFalse(ok)
+        self.assertTrue(any("is not mounted" in msg for msg in logs))
+
+    def test_zfs_query_failure_refuses_step(self):
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"zfs list",
+                lambda cmd, **kwargs: m._completed("", stderr="permission denied", rc=1),
+            )
+            with capture_logs() as logs:
+                ok = command_builders.prepare_rsync_destination("/etc/", "/tank/etc", False)
+        self.assertFalse(ok)
+        self.assertTrue(any("could not verify" in msg for msg in logs))
+
+    def test_clean_chain_creates_missing_tail(self):
+        with tempfile.TemporaryDirectory() as base:
+            dest = os.path.join(base, "proxmox", "host", "etc")
+            with mock_subprocess() as m:
+                self._fake_mount_rows(m, [("tank", base, "yes")])
+                with patch("os.path.ismount", side_effect=lambda p: p == base):
+                    with capture_logs() as logs:
+                        ok = command_builders.prepare_rsync_destination("/etc/", dest, False)
+                self.assertTrue(ok)
+                self.assertTrue(os.path.isdir(dest))
+            self.assertTrue(any("Created destination directory" in msg for msg in logs))
+
+    def test_dry_run_never_creates_destination(self):
+        with tempfile.TemporaryDirectory() as base:
+            dest = os.path.join(base, "proxmox", "etc")
+            with mock_subprocess() as m:
+                self._fake_mount_rows(m, [("tank", base, "yes")])
+                with patch("os.path.ismount", side_effect=lambda p: p == base):
+                    with capture_logs() as logs:
+                        ok = command_builders.prepare_rsync_destination("/etc/", dest, True)
+                self.assertTrue(ok)
+                self.assertFalse(os.path.isdir(dest))
+            self.assertTrue(any("Would create destination directory" in msg for msg in logs))
+
+    def test_non_zfs_destination_stays_unfenced(self):
+        with tempfile.TemporaryDirectory() as base:
+            dest = os.path.join(base, "plain", "etc")
+            with mock_subprocess() as m:
+                self._fake_mount_rows(m, [("tank", "/elsewhere", "yes")])
+                ok = command_builders.prepare_rsync_destination("/etc/", dest, False)
+            self.assertTrue(ok)
+            self.assertFalse(os.path.isdir(dest))
 
 
 if __name__ == "__main__":

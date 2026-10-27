@@ -547,6 +547,12 @@ def update_ds_button_sensitivity(app):
         and app.ctx.zfs_caps.supports("zfs_rewrite")
     )
 
+    can_repair_mount_order = (
+        len(items) == 1
+        and items[0]["type"] in ("pool", "dataset")
+        and (items[0].get("zfs_type") or "filesystem") == "filesystem"
+    )
+
     for attr, sensitive in [
         ("_ds_snapshot_btn", can_snapshot),
         ("_ds_delete_btn", can_delete),
@@ -555,6 +561,7 @@ def update_ds_button_sensitivity(app):
         ("_ds_browse_btn", can_browse),
         ("_ds_mount_btn", can_mount),
         ("_ds_unmount_btn", can_unmount),
+        ("_ds_repair_mount_order_btn", can_repair_mount_order),
         ("_ds_apply_profile_btn", can_apply_profile),
         ("_ds_rewrite_data_btn", can_rewrite),
         ("_ds_manage_profiles_btn", True),

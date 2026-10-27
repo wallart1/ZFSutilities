@@ -149,3 +149,22 @@ the offsite source/includes (for example, back up `NVME1/proxmox` instead of
 - A scrub profile finishes with `rc=1` when a pool's scrub could not be started
   or resumed after a few retries (the pool is reported as "gave up on" in the
   session log). The remaining pools in the profile are still scrubbed normally.
+- Every rsync pull step verifies its destination's ZFS mount chain before
+  running. A dataset on the destination path that is unmounted — or that
+  reports itself mounted while its path is unreachable because a later mount
+  covers an ancestor (a *shadowed* mount) — refuses that step with a WARN
+  naming the dataset, and the run finishes with `rc=11`. Shadowing typically
+  appears on pools whose root has `canmount=noauto`: at boot the children
+  mount onto directories in the root filesystem before the pool root is
+  mounted, and a later manual mount of the pool root covers them. Restore the
+  parent-first mount order (unmount the affected filesystems, then remount
+  top-down or via `zfs mount -a`) before re-running the profile. A missing
+  destination directory on a *clean* chain is created automatically below the
+  deepest dataset mountpoint, so a fresh destination needs no manual setup.
+  The Dashboard detects unreachable mounts on its own and enables **Repair
+  Mount Order**, so fixing the condition is one approved action rather than a
+  shell session.
+- A run cancelled from the Dashboard (or by SIGTERM/SIGINT to the runner)
+  finishes with `rc=125`, a `cancelled` history entry, and a `# END: cancelled`
+  session trailer — distinct from a failure. The in-flight step is terminated
+  and no further steps run.

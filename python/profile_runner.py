@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -49,6 +50,9 @@ from command_builders import (
 from command_builders import (
     parse_rsync_endpoint as _parse_rsync_endpoint,
 )
+from command_builders import (
+    prepare_rsync_destination as _prepare_rsync_destination,
+)
 from config_core import get_paths_config, load_config, prune_old_logs
 from cron_manager import _match_weekday_ordinal, _parse_weekday, converge_scheduler_files
 from feature_config import (
@@ -79,6 +83,42 @@ PROFILE_LOCK_TIMEOUT = float(os.environ.get("ZFSUTILITIES_PROFILE_LOCK_TIMEOUT",
 # How long bash ZFS steps invoked by this runner should wait for a dataset lock
 # in headless mode before aborting.
 HEADLESS_LOCK_WAIT_SECONDS = int(os.environ.get("ZFSUTILITIES_HEADLESS_LOCK_WAIT_SECONDS", "600"))
+
+# Exit code for a run cancelled by the operator (Dashboard Cancel, or
+# SIGTERM/SIGINT to the runner). 125 sits outside rsync's 0-35 exit-code
+# range, the bash tooling's codes, and the rc=9 headless lock-abort, so
+# callers can tell a cancellation from a failure.
+PROFILE_CANCELLED_RC = 125
+
+# Set by the SIGTERM/SIGINT handler and observed between steps, in the
+# profile-lock wait loop, and at run completion.
+_cancel_requested = False
+
+# The step subprocess currently running. Steps are spawned in their own
+# process group so the cancel handler can terminate the wrapper and its
+# pipeline children together.
+_current_step_process = None
+
+
+def _handle_cancel_signal(signum, frame):
+    """SIGTERM/SIGINT: request cancellation and stop the in-flight step."""
+    global _cancel_requested
+    _cancel_requested = True
+    process = _current_step_process
+    if process is not None:
+        try:
+            # The child is a session/group leader (start_new_session), so
+            # its pid names the whole pipeline (bash + rsync/tee/zfs).
+            os.killpg(process.pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
+def _install_cancel_handlers():
+    """Install the graceful-cancellation signal handlers."""
+    signal.signal(signal.SIGTERM, _handle_cancel_signal)
+    signal.signal(signal.SIGINT, _handle_cancel_signal)
+
 
 # Regex: received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seconds
 # Purpose: Match the final summary line emitted by `zfs receive` on stderr,
@@ -200,6 +240,8 @@ def acquire_profile_lock(profile_name, timeout=1.0, log_file=None):
             acquired = True
             break
         except (BlockingIOError, OSError):
+            if _cancel_requested:
+                break
             if timeout > 0 and not notified:
                 log_msg(
                     f"INFO: Profile '{profile_name}' is already running; "
@@ -258,7 +300,7 @@ _REMOTE_RSYNC_LOG_PATH = "/var/log/zfsutilities/rsync-pull.log"
 
 
 def _run_command(step, session_log_file=None):
-    global _last_log_size_check
+    global _last_log_size_check, _current_step_process
     if step.pre_callback is not None:
         try:
             step.pre_callback()
@@ -280,7 +322,9 @@ def _run_command(step, session_log_file=None):
                 stderr=subprocess.STDOUT,
                 text=True,
                 env=env,
+                start_new_session=True,
             )
+            _current_step_process = process
             # Collect merged stdout/stderr for rsync steps so we can diagnose
             # common failure modes (e.g., rc=24 "vanished source files").
             step_lines = [] if step.is_rsync else None
@@ -304,24 +348,29 @@ def _run_command(step, session_log_file=None):
             finally:
                 returncode = process.wait()
             if returncode != 0:
-                log_msg(f"WARN: Step exited with rc={returncode}")
-                if step.is_rsync:
-                    diagnosis = _diagnose_rsync_failure(returncode, step_lines)
-                    if diagnosis:
-                        message = f"WARN: {step.description} failed: {diagnosis}"
-                        # Log-wrapped steps ship their full output to the
-                        # rsync log; name it so the operator knows where the
-                        # complete transfer record lives (only when rsync ran
-                        # and produced output — an empty capture means the
-                        # setup ssh failed and the log got nothing).
-                        location = (step.metadata or {}).get("rsync_output_location")
-                        if location and step_lines:
-                            message += f" (full rsync output: {location})"
-                        log_msg(message)
+                if _cancel_requested:
+                    log_msg(f"WARN: Step terminated by cancellation (rc={returncode})")
+                else:
+                    log_msg(f"WARN: Step exited with rc={returncode}")
+                    if step.is_rsync:
+                        diagnosis = _diagnose_rsync_failure(returncode, step_lines)
+                        if diagnosis:
+                            message = f"WARN: {step.description} failed: {diagnosis}"
+                            # Log-wrapped steps ship their full output to the
+                            # rsync log; name it so the operator knows where the
+                            # complete transfer record lives (only when rsync ran
+                            # and produced output — an empty capture means the
+                            # setup ssh failed and the log got nothing).
+                            location = (step.metadata or {}).get("rsync_output_location")
+                            if location and step_lines:
+                                message += f" (full rsync output: {location})"
+                            log_msg(message)
             return returncode
         except (OSError, ValueError, subprocess.SubprocessError) as e:
             log_msg(f"WARN: Error running step: {e}")
             return 1
+        finally:
+            _current_step_process = None
     finally:
         if step.post_callback is not None:
             try:
@@ -333,6 +382,9 @@ def _run_command(step, session_log_file=None):
 def _run_step_list(steps, session_log_file=None):
     max_rc = 0
     for step in steps:
+        if _cancel_requested:
+            log_msg("FATAL: Profile cancelled by operator — aborting before next step")
+            return PROFILE_CANCELLED_RC
         rc = _run_command(step, session_log_file=session_log_file)
         if rc == 9:
             log_msg("FATAL: Operation aborted due to lock conflict in headless mode.")
@@ -392,6 +444,7 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
         log_msg("INFO: Pull steps disabled by user; skipping")
 
     done_hosts = set()
+    refused = False
 
     for source, dest, excludes in active_pulls:
         src_host, src_path = _parse_rsync_endpoint(source)
@@ -405,6 +458,9 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
             except OSError:
                 log_msg(f"WARN: Skipping {source} -> {dest}: {mount_path} is not accessible")
                 continue
+        if not _prepare_rsync_destination(source, dest, dryrun):
+            refused = True
+            continue
         if dryrun:
             log_msg(f"INFO: Dry-run: Would rsync {source} -> {dest}")
         else:
@@ -421,6 +477,7 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
     zfs_keys_path = cfg.get("zfs_keys_path", "").strip()
     zfs_keys_dest = cfg.get("zfs_keys_dest", "").strip()
     if zfs_keys_path and zfs_keys_dest:
+        keys_dest_ok = _prepare_rsync_destination(zfs_keys_path, zfs_keys_dest, dryrun)
         src_host, src_path = _parse_rsync_endpoint(zfs_keys_path)
         if src_host not in done_hosts:
             done_hosts.add(src_host)
@@ -445,6 +502,8 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
                             "WARN: Skipping ZFS keys backup — destination is not "
                             "encrypted. Set zfs_keys_dest to an encrypted dataset."
                         )
+                    elif not keys_dest_ok:
+                        refused = True
                     elif dryrun:
                         log_msg(f"INFO: Dry-run: Would rsync {zfs_keys_path} -> {zfs_keys_dest}")
                     else:
@@ -461,6 +520,8 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
                     "WARN: Skipping ZFS keys backup — destination is not "
                     "encrypted. Set zfs_keys_dest to an encrypted dataset."
                 )
+            elif not keys_dest_ok:
+                refused = True
             elif dryrun:
                 log_msg(f"INFO: Dry-run: Would rsync {zfs_keys_path} -> {zfs_keys_dest}")
             else:
@@ -518,6 +579,10 @@ def run_backup_profile(profile, config, parent_dir, session_log_file=None):
         return 1
 
     fatal_rc = _run_step_list(steps, session_log_file=session_log_file)
+    if refused and fatal_rc == 0:
+        # A fenced-out destination is the same failure class the rsync step
+        # itself would have reported, so the run still counts as failed.
+        fatal_rc = 11
 
     # If the only failures were non-fatal warnings, still remove snapfile.
     if post.get("remove_snapfile", True) and fatal_rc == 0:
@@ -842,6 +907,10 @@ def main():
     # (GUI Run Now, manual CLI) must execute regardless of the day.
     ignore_schedule = len(args) == 3
 
+    # From here on, SIGTERM/SIGINT cancel the run gracefully: the in-flight
+    # step's process group is terminated and no further steps start.
+    _install_cancel_handlers()
+
     # Load the profile early so the session log filename can reflect the tab
     # type. Reading the profile JSON does not require the execution lock.
     profile = load_profile(profile_name)
@@ -888,6 +957,18 @@ def main():
                 profile_name, timeout=PROFILE_LOCK_TIMEOUT, log_file=_session_log_file
             )
             if lock_fd is None:
+                if _cancel_requested:
+                    log_msg(
+                        f"INFO: Profile '{profile_name}' cancelled while waiting "
+                        "for the profile lock"
+                    )
+                    session_log.write_session_trailer(
+                        _session_log_file,
+                        _session_start_time,
+                        rc=PROFILE_CANCELLED_RC,
+                        cancelled=True,
+                    )
+                    sys.exit(PROFILE_CANCELLED_RC)
                 if PROFILE_LOCK_TIMEOUT > 0:
                     log_msg(
                         f"WARN: Profile '{profile_name}' is already running and did not "
@@ -943,7 +1024,12 @@ def main():
             else:
                 rc = runner(profile, config, parent_dir, _session_log_file)
 
-            log_msg(f"INFO: Profile {profile_name} finished (rc={rc})")
+            cancelled = _cancel_requested
+            if cancelled:
+                rc = PROFILE_CANCELLED_RC
+                log_msg(f"INFO: Profile {profile_name} cancelled by operator (rc={rc})")
+            else:
+                log_msg(f"INFO: Profile {profile_name} finished (rc={rc})")
             _, _last_log_size_check = session_log.maybe_truncate_session_log(
                 _session_log_file,
                 _last_log_size_check,
@@ -951,7 +1037,7 @@ def main():
             )
             bytes_transferred = _parse_bytes_from_log(_session_log_file)
             duration = time.time() - _session_start_time if _session_start_time else 0.0
-            result = "success" if rc == 0 else "failed"
+            result = "cancelled" if cancelled else ("success" if rc == 0 else "failed")
             entry = build_entry(
                 timestamp=datetime.now(tz=timezone.utc).astimezone().isoformat(),
                 run_type=tab_type if tab_type else "backup",
@@ -967,6 +1053,7 @@ def main():
                 _session_start_time,
                 rc=rc,
                 bytes_transferred=bytes_transferred,
+                cancelled=cancelled,
             )
             sys.exit(rc)
         except SystemExit as exc:

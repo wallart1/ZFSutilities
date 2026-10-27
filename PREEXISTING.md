@@ -26,3 +26,15 @@
   Rechecked 2026-10-25 wrap-up: unchanged, 0.0.72 — no 1.x; hold stands.
   Rechecked 2026-10-26 wrap-up: 0.0.73 — still no 1.x; hold stands.)
 
+- (test flake, cross-file pytest ordering, found 2026-10-26): running several
+  Python test files in ONE pytest process (e.g.
+  `pytest tests/python/test_command_builders.py test_profile_runner.py
+  test_dashboard_page.py test_backup_page.py test_zfs_repository.py`) fails
+  16-18 tests (TestBackupPageLabels/TestBackupAdvancedLabel GTK label
+  assertions, occasionally TestRefreshDashboardCache) that all pass per-file
+  standalone. Verified identical failure sets on clean HEAD and the changed
+  tree via git-stash diffing, so it is in-process cross-file pollution (the
+  global mock_subprocess patch and shared GTK module state are suspects), not
+  a regression. The sanctioned per-suite runner (tests/run-python-tests /
+  run-tests) is unaffected. If pursued: isolate the leaked patch/module state
+  between files; do not change product code for it.

@@ -897,6 +897,13 @@ class TestOutcomeMarkup(unittest.TestCase):
         self.assertIn("#CC0000", markup)
         self.assertIn("failed", markup)
 
+    def test_cancelled_is_amber_not_red(self):
+        markup = dp._outcome_markup({"result": "cancelled"})
+        self.assertIn("#FF8C00", markup)
+        self.assertIn("cancelled", markup)
+        self.assertNotIn("#CC0000", markup)
+        self.assertNotIn("✗", markup)
+
 
 class TestAttachHighestLevels(unittest.TestCase):
     """_attach_highest_levels annotates recent entries from the log index."""
@@ -2034,6 +2041,53 @@ class TestCancelTask(unittest.TestCase):
         with patch.object(dp, "list_running_profiles", return_value=[]):
             with patch("dashboard_page.os.kill") as mock_kill, capture_logs() as logs:
                 dp._cancel_task(app, "profile-wait:Daily")
+        mock_kill.assert_not_called()
+        self.assertTrue(any("no longer running" in msg for msg in logs))
+
+    def test_cancel_running_profile_sends_sigterm(self):
+        """Cancelling a running profile signals the runner process."""
+        app = MagicMock()
+        with patch.object(
+            dp,
+            "list_running_profiles",
+            return_value=[
+                {
+                    "name": "Daily",
+                    "pid": 4321,
+                    "started": "2026-06-29T10:00:00",
+                }
+            ],
+        ):
+            with patch("dashboard_page.os.kill") as mock_kill:
+                dp._cancel_task(app, "profile:Daily")
+        mock_kill.assert_called_once_with(4321, dp.signal.SIGTERM)
+
+    def test_cancel_running_profile_ignores_waiting_entries(self):
+        """A waiting duplicate must not be signalled as the running profile."""
+        app = MagicMock()
+        with patch.object(
+            dp,
+            "list_running_profiles",
+            return_value=[
+                {
+                    "name": "Daily",
+                    "pid": 4321,
+                    "started": "2026-06-29T10:00:00",
+                    "waiting": True,
+                }
+            ],
+        ):
+            with patch("dashboard_page.os.kill") as mock_kill, capture_logs() as logs:
+                dp._cancel_task(app, "profile:Daily")
+        mock_kill.assert_not_called()
+        self.assertTrue(any("no longer running" in msg for msg in logs))
+
+    def test_cancel_running_profile_no_longer_running(self):
+        """A running entry that vanished since the click warns instead."""
+        app = MagicMock()
+        with patch.object(dp, "list_running_profiles", return_value=[]):
+            with patch("dashboard_page.os.kill") as mock_kill, capture_logs() as logs:
+                dp._cancel_task(app, "profile:Daily")
         mock_kill.assert_not_called()
         self.assertTrue(any("no longer running" in msg for msg in logs))
 
@@ -3818,6 +3872,79 @@ class TestFixIscsiButton(unittest.TestCase):
         self.assertTrue(
             any("vm-215-disk-1" in msg for msg in warn_msgs),
             f"Expected WARN message about vm-215-disk-1 in {warn_msgs!r}",
+        )
+
+
+class TestDashboardMountOrderRepair(unittest.TestCase):
+    """The Dashboard flags unreachable mounts and offers the repair."""
+
+    def test_repair_button_sensitivity_follows_findings(self):
+        app = MagicMock()
+        dp._update_repair_mount_order_button(app, [{"name": "tank/a"}])
+        app._repair_mount_order_button.set_sensitive.assert_called_once_with(True)
+
+        app_empty = MagicMock()
+        dp._update_repair_mount_order_button(app_empty, [])
+        app_empty._repair_mount_order_button.set_sensitive.assert_called_once_with(False)
+
+    def test_repair_button_missing_is_tolerated(self):
+        import types
+
+        app = types.SimpleNamespace()
+        dp._update_repair_mount_order_button(app, [{"name": "tank/a"}])  # must not raise
+
+    def test_repair_handler_runs_full_scope_repair(self):
+        app = MagicMock()
+        with patch("dataset_actions.run_mount_repair") as mock_run:
+            with patch.object(dp, "refresh_dashboard_page") as mock_refresh:
+                dp.on_dashboard_repair_mount_order(app)
+        mock_run.assert_called_once_with(app, scope=None)
+        mock_refresh.assert_called_once()
+
+    def test_gather_reports_unreachable_mounts_as_warnings(self):
+        app = MagicMock()
+        app.config = {"backup": {"pull_steps": ["x"]}, "offsite": {"steps": ["x"]}}
+        rows = [{"name": "tank/proxmox", "mountpoint": "/tank/proxmox"}]
+        with patch.object(dp, "_get_pool_health", return_value=[]):
+            with patch.object(dp, "_get_recent_entries", return_value=[]):
+                with patch.object(dp, "_attach_highest_levels"):
+                    with patch.object(dp, "_get_iscsi_missing_luns", return_value=[]):
+                        with patch.object(dp, "_count_stale_locks", return_value=0):
+                            with patch("scrub_manager.get_all_pool_scrub_states", return_value={}):
+                                with patch.object(dp, "_collect_running_tasks", return_value=[]):
+                                    with patch.object(dp, "list_active_locks", return_value=[]):
+                                        with patch(
+                                            "zfs_repository.find_unreachable_mounts",
+                                            return_value=rows,
+                                        ):
+                                            with patch.object(dp, "_get_warnings", return_value=[]):
+                                                with patch(
+                                                    "feature_config.get_pools",
+                                                    return_value=["tank"],
+                                                ):
+                                                    with patch(
+                                                        "feature_config.get_checkagainst",
+                                                        return_value={"pool": "*"},
+                                                    ):
+                                                        with patch.object(
+                                                            dp,
+                                                            "_get_disk_wear_warnings",
+                                                            return_value=[],
+                                                        ):
+                                                            with patch.object(
+                                                                dp,
+                                                                "_gather_config_section_data",
+                                                                return_value={},
+                                                            ):
+                                                                data = dp._gather_dashboard_data(
+                                                                    app
+                                                                )
+        self.assertEqual(data["unreachable_mounts"], rows)
+        self.assertTrue(
+            any(
+                "tank/proxmox is mounted at /tank/proxmox" in warning
+                for warning in data["warnings"]
+            )
         )
 
 
