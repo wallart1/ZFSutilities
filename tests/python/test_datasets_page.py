@@ -526,6 +526,57 @@ class TestUpdateButtonSensitivity(unittest.TestCase):
         app = self._make_app([])
         app._ds_showbigstuff_btn.set_sensitive.assert_called_once_with(False)
 
+    def test_details_enabled_for_single_dataset(self):
+        app = self._make_app(
+            [{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem", "mounted": True}]
+        )
+        app._ds_details_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_details_enabled_for_single_pool(self):
+        app = self._make_app([{"type": "pool", "name": "tank", "mounted": True}])
+        app._ds_details_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_details_enabled_for_single_snapshot(self):
+        app = self._make_app(
+            [{"type": "snapshot", "name": "snap", "dataset": "tank/a", "mounted": True}]
+        )
+        app._ds_details_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_details_enabled_for_single_hold(self):
+        app = self._make_app(
+            [{"type": "hold", "tag": "keep", "snapshot": "snap1", "dataset": "tank/a"}]
+        )
+        app._ds_details_btn.set_sensitive.assert_called_once_with(True)
+
+    def test_details_disabled_for_volume_partition(self):
+        app = self._make_app(
+            [
+                {
+                    "type": "volume-partition",
+                    "name": "loop0p1",
+                    "device": "/dev/loop0p1",
+                    "volume": "tank/vm-100-disk-0",
+                    "fstype": "ext4",
+                    "has_filesystem": True,
+                    "mounted": False,
+                }
+            ]
+        )
+        app._ds_details_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_details_disabled_for_multiple_selections(self):
+        app = self._make_app(
+            [
+                {"type": "dataset", "name": "tank/a", "mounted": True},
+                {"type": "dataset", "name": "tank/b", "mounted": True},
+            ]
+        )
+        app._ds_details_btn.set_sensitive.assert_called_once_with(False)
+
+    def test_details_disabled_when_empty(self):
+        app = self._make_app([])
+        app._ds_details_btn.set_sensitive.assert_called_once_with(False)
+
 
 class TestExpandSelectedDatasets(unittest.TestCase):
     """expand_selected_datasets recursively expands selected tree rows."""

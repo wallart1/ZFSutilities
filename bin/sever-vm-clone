@@ -2841,14 +2841,15 @@ SSHEOF
 sever_transfer_remote() {
     local results="$1"
     shift
-    local remote_bin rc
+    local remote_bin rc=0
     remote_bin=$(remote_zfsutilities_bin "$storage_host") \
         || remote_bin="/usr/local/lib/zfsutilities/current/bin"
+    # || rc=$?: under set -e a failed worker ssh must reach the return below,
+    # not kill this shell mid-function (the caller owns the FATAL handling).
     ssh -o ConnectTimeout=10 root@"$storage_host" \
         env ZFSUTILITIES_LOG_INHERIT="${ZFSUTILITIES_LOG_INHERIT:-}" \
         bash -s "$remote_bin" "$results" "$@" \
-        <<< "$(sever_storage_transfer_script)"
-    rc=$?
+        <<< "$(sever_storage_transfer_script)" || rc=$?
     [[ $rc -eq 0 ]] || return "$rc"
     # Fetch the remote results into a side file first (the cutover runner's
     # pattern): redirecting straight onto $results would truncate the only
@@ -2877,15 +2878,20 @@ sever_transfer() {
         sever_args+=("$zvol" "$parent" "$sever_run_snapname")
     done
 
-    local results
+    local results rc=0
     results=$(mktemp /tmp/sever-vm-clone-results.XXXXXX)
+    # Scratch file only (the state file stays for --continue): remove it on
+    # every exit path, including the crash window before the rc handler.
+    append_exit_trap "rm -f '$results'"
 
+    # || rc=$?: under set -e a failed transfer worker (its FATALs already
+    # printed) must reach the rc handler below — a bare `rc=$?` capture would
+    # kill the shell first, silently, skipping the cleanup and the resume
+    # guidance. Same idiom as sever_run_storage_worker.
     if is_single_node; then
-        bash <(sever_storage_transfer_script) "$mydir" "$results" "${sever_args[@]}"
-        rc=$?
+        bash <(sever_storage_transfer_script) "$mydir" "$results" "${sever_args[@]}" || rc=$?
     else
-        sever_transfer_remote "$results" "${sever_args[@]}"
-        rc=$?
+        sever_transfer_remote "$results" "${sever_args[@]}" || rc=$?
     fi
 
     if [[ $rc -ne 0 ]]; then

@@ -333,6 +333,13 @@ class TestDatasetsPageSpec(unittest.TestCase):
             buttons,
         )
 
+    def test_show_details_in_log_button_present(self):
+        buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
+        self.assertIn(
+            ("Show Details in Log", "dialog-information", "_ds_details_btn"),
+            buttons,
+        )
+
     def test_apply_profile_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
         self.assertIn(
@@ -439,6 +446,10 @@ class TestDatasetsHandlers(unittest.TestCase):
     def test_show_big_stuff_handler(self):
         handler = action_dispatch.ACTION_HANDLERS["datasets"]["Show Big Stuff"]
         self.assertIs(handler, action_dispatch.on_datasets_show_big_stuff)
+
+    def test_show_details_in_log_handler(self):
+        handler = action_dispatch.ACTION_HANDLERS["datasets"]["Show Details in Log"]
+        self.assertIs(handler, action_dispatch._send_selection_details_to_log)
 
     def test_apply_profile_handler(self):
         handler = action_dispatch.ACTION_HANDLERS["datasets"]["Apply Profile…"]

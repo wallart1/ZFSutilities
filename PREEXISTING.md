@@ -2,39 +2,38 @@
 
 ---
 
-- (toolchain deprecation, docs build): `mkdocs build -f docs/mkdocs.yml`
-  prints a mkdocs-material WARNING — "MkDocs 2.0 is incompatible with
-  Material for MkDocs" — on every build (exit 0, site still builds cleanly).
-  Action is a toolchain decision (pin mkdocs <2 vs migrate to Zensical),
-  already analyzed in SESSION_NOTES.md's Zensical thread; recorded here so
-  it can be prompted for a decision. Not resolved (code freeze).
-  Zensical is under development. We are waiting for a 1.x.x release.
-  (Rechecked 2026-10-08: PyPI shows 0.0.69; still no 1.x.
-  Rechecked 2026-10-10: unchanged, 0.0.69.
-  Rechecked 2026-10-11: unchanged, 0.0.69.
-  Reconfirmed 2026-10-11 (user): keep waiting for 1.x.
-  Rechecked 2026-10-12: 0.0.70; still no 1.x.)
-  (Rechecked 2026-10-13: unchanged, 0.0.70.)
-  (Rechecked 2026-10-16: 0.0.71; still no 1.x.)
-  (Rechecked 2026-10-22: unchanged, 0.0.71.)
-  (Rechecked 2026-10-22 wrap-up: unchanged, 0.0.71 — no 1.x; hold stands.
-  Rechecked 2026-10-23 wrap-up: unchanged, 0.0.71 — no 1.x; hold stands.
-  Rechecked 2026-10-23 (itf cycle): 0.0.72 — first movement since 10-16,
-  still no 1.x; hold stands. The mkdocs<2 pin remains the documented
-  product stance — doc-server.md and messages/index.md carry it.
-  Rechecked 2026-10-24 wrap-up: unchanged, 0.0.72 — no 1.x; hold stands.
-  Rechecked 2026-10-25 wrap-up: unchanged, 0.0.72 — no 1.x; hold stands.)
+- (test collision, concurrent full runs, found 2026-10-26): two
+  `tests/run-tests --with-soak` runs executing at the same time fail
+  test-sever-vm-clone in BOTH runs (3 tests each: unexpected exit 1,
+  missing --continue state file, rollback rc=1). Root cause: the
+  product builds its state file at bin/sever-vm-clone:711 as
+  `/tmp/sever-vm-clone-${key}-$(date +%s).state` — real epoch seconds,
+  no pid — so two instances severing the same VM id within the same
+  second share one file and each instance's rollback / `rm -f` destroys
+  the other's state. A single run never self-overlaps, so the normal
+  gate is safe; this bites only when two full runs (or a gate plus
+  another session's tests) race — plausibly the same environmental
+  class as the retired 2026-10-24 0.131.0 "~2x parallel load" one-off.
+  Reproduced once (both concurrent runs failed); not fixed — fix is a
+  product-path decision (uniquify the state-file path) vs test-side
+  isolation, to be prompted. Sequential manifestation (seen 2026-10-26
+  after the results-file leak fix): a FAILED run's stale
+  /tmp/sever-vm-clone-<vmid>-*.state residue also poisons the NEXT run
+  — its find-based --continue tests pick the oldest (stale) state file
+  and fail confusingly; clear /tmp/sever-vm-clone-* between reruns of
+  a failed suite. With a clean /tmp the suite is deterministic-green
+  (6 consecutive green runs post-fix).
 
-- (test flake, one-off, 2026-10-24 pub3 0.131.0 with-soak gate): the
-  with-soak full run failed test-unarchive-vm Test 26 ("Step 2 refuses
-  duplicate same-short targets") — the ssh-mock storage-host existence
-  probe (`zfs list -H -o name <archive> | grep -qxF`) missed the
-  in-suite `_mock_zfs_fs_list` entry under ~2x parallel load, so
-  unarchive-vm correctly FATALed "Not a ZFS dataset" before reaching
-  the ambiguity path. Not a product defect: the probe behaved right
-  for the answer the mock gave. Four consecutive standalone reruns
-  passed (plus the same-suite pass in the same-day non-soak run).
-  Retained post-mortem log was swept before inspection, so the exact
-  mock-layer miss (empty fs_list vs swept state) is unidentified. If
-  it recurs, capture /tmp/zfsutilities-test-<pid>.log immediately and
-  instrument the mock zfs-list arm; do not touch product code for it.
+- (test-harness gap, found 2026-10-26): "Test log retained for
+  post-mortem" is not a guarantee. A failed suite's retained log
+  (pid 3123215, test-sever-vm-clone) vanished within minutes of the
+  run, mirroring the swept-log experience recorded with the retired
+  0.131.0 flake entry. Canary experiment: the test-lib source-time
+  sweep (tests/test-lib.sh:346) spares non-empty dead-pid logs, but an
+  empty-at-exit "retained" log (observed live: 0-byte retained log,
+  pid 3122458) is deterministically reaped by the next suite that
+  sources test-lib. Why the failed suite's log ended up empty/absent
+  is unidentified (no fork/ENOSPC/OOM evidence; /tmp had 13G free).
+  Practical rule until fixed: on any suite failure, capture
+  /tmp/zfsutilities-test-<pid>.log immediately, before other suites
+  start.

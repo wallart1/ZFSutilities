@@ -23,6 +23,8 @@ old_mydir="$mydir"
 # together with the snapshot-transport wrappers that source
 # zfs-send-receive (its strict line leaks into them at the source point,
 # so they were audited and flipped as part of the same campaign).
+# check-vm-disk-paths joined 2026-10-26: born in a parallel lane hours
+# after the family list was drawn, so the campaign tree never saw it.
 # Sourced libraries (zfslockmanager, zfs-diagnose-busy, zfssnapbuild,
 # zfsbuildfsarray) deliberately carry NO set line — strictness belongs
 # to the callers; the libraries are written to tolerate strict callers.
@@ -41,6 +43,7 @@ strict_scripts=(
     upgrade-zfsutilities
     zfsclone-vm
     archive-vm
+    check-vm-disk-paths
     detach-vm-disk
     enroll-efi-keys-vm
     enroll-iscsi-pool

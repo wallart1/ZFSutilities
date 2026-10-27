@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.134.0
+
+*Released 2026-10-26*
+
+### Added
+
+- **Datasets page: "Show Details in Log" button.** The context menu's
+  *Send details to log* action — every ZFS property of the selected
+  item streamed to the bottom log panel — is now also a toolbar button
+  next to *Show Big Stuff*, for discoverability. It enables for exactly
+  one selected pool, dataset, snapshot, or hold; volume partitions are
+  not ZFS datasets and keep it disabled. Holds log their tag,
+  snapshot, and dataset; everything else answers `zfs get all` on the
+  full name.
+
+### Fixed
+
+- **`sever-vm-clone`: a failed phase-1 transfer now says so.** The
+  transfer worker's exit was captured with a bare `rc=$?` while the
+  script runs strict, so a failed worker killed the parent shell
+  silently: the scripted recovery advice ("beyond the `@sever-*`
+  snapshots no source data was touched — re-run sever-vm-clone to
+  resume from the receive resume token") never printed, and the run's
+  scratch results file leaked into `/tmp` (two files per failed run,
+  growing without bound). The worker's rc now reaches the handler —
+  the guidance prints, nothing destructive has run, and the scratch
+  file is removed on every exit path (the `--continue` state file is
+  deliberately kept).
+
+### Changed
+
+- **`check-vm-disk-paths` runs strict** (`set -euo pipefail`), closing
+  the last non-strict leaf in the bin/ family — the script was born in
+  a parallel lane hours after the strict-mode campaign's tree was
+  drawn and simply never saw it. Unexpected command failures now abort
+  the fence run instead of continuing.
+
+### Tests
+
+- New `test-sever-vm-clone` regression test for the transfer-failure
+  path: the parent must reach its rc handler (resume guidance present,
+  no silent death), no destructive operation may have run, and no
+  scratch results file may leak. Red-proven against the reverted
+  capture fix.
+- `test-check-vm-disk-paths` restores the harness's own shell options
+  after evaluating the (now strict) script text, and the script joined
+  `test-strict-mode`'s strict family list.
+
+### Documentation
+
+- gtk-gui.md: the new button's row in the Datasets actions table, and
+  a note in the tree conventions that a top-level "pool" row on the
+  Datasets page is the pool's **root filesystem dataset** — the pool
+  object itself (live `zpool list` status, registry, scrub manager)
+  lives on the Pools page.
+- Developer testing guide: the real-pool integration table drops a
+  scenario row that was never implemented (the suite has had seven
+  scenarios since birth), and the `test-sever-vm-clone` catalog row
+  records the new transfer-failure coverage.
+
 ## 0.133.0
 
 *Released 2026-10-26*

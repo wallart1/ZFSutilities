@@ -537,6 +537,12 @@ def update_ds_button_sensitivity(app):
 
     can_sever_clone = bool(items) and any(is_clone_dataset(i) for i in items)
 
+    # Details needs one ZFS-named row: pools, datasets, and snapshots go
+    # through `zfs get all` on the full name, and holds are answered from
+    # the row itself. Volume partitions are not ZFS datasets, so the
+    # button stays disabled for them.
+    can_details = len(items) == 1 and types <= {"pool", "dataset", "snapshot", "hold"}
+
     can_apply_profile = len(items) == 1 and _is_tunable(items[0])
     can_rewrite = (
         bool(items)
@@ -561,6 +567,7 @@ def update_ds_button_sensitivity(app):
         ("_ds_expand_selected_btn", can_expand_selected),
         ("_ds_showbigstuff_btn", can_show_big_stuff),
         ("_ds_sever_clone_btn", can_sever_clone),
+        ("_ds_details_btn", can_details),
     ]:
         btn = getattr(app, attr, None)
         if btn:
