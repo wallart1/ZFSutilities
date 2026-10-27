@@ -406,3 +406,177 @@ profile cancellation, mount-order repair engine), pub2 PROMPTQUEUE2:
   ordering flake). Direct `python <file>` test execution remains
   unsupported (golden files key on pytest module names; conftest does the
   bootstrap) — by design, not recorded as an issue.
+
+## 2026-10-26 — pub3: 0.131.0 with-soak flake entry retired; Datasets Show Details in Log button
+
+- PREEXISTING resolution attempt for the 2026-10-24 0.131.0 with-soak
+  flake (test-unarchive-vm, "Step 2 refuses duplicate same-short
+  targets"): could not reproduce. 11 standalone suite runs plus 3 full
+  `run-tests --with-soak` gates — one solo and two run concurrently to
+  recreate (and exceed) the recorded "~2x parallel load" — all green;
+  the suite passed everywhere. Entry retired per the user's rule
+  (reproduce → fix, else retire).
+- The concurrent-gate stress surfaced two NEW pre-existing findings,
+  both recorded in PREEXISTING.md (not fixed, awaiting prompt):
+  two simultaneous full runs deterministically collide in
+  test-sever-vm-clone via the product's pid-less state-file path
+  `/tmp/sever-vm-clone-${key}-$(date +%s).state` (bin/sever-vm-clone:711)
+  — both runs failed that suite, 3 tests each; and a failed suite's
+  "retained for post-mortem" log vanished within minutes (canary test:
+  non-empty dead-pid logs survive the test-lib sweep, empty "retained"
+  logs are reaped by the next sourcing suite; why the failed suite's
+  log was empty is unidentified). Practical rule: capture
+  /tmp/zfsutilities-test-<pid>.log immediately on any suite failure.
+- GUI: new Datasets-page action button "Show Details in Log" — same
+  action as the context-menu "Send details to log" (shared handler
+  `_send_selection_details_to_log`), enabled for exactly one selected
+  pool/dataset/snapshot/hold (volume partitions excluded — they are not
+  ZFS datasets). Wired in action_dispatch.py (PAGE_SPECS +
+  ACTION_HANDLERS, attr `_ds_details_btn`, placed after Show Big Stuff)
+  and update_ds_button_sensitivity; tests in test_action_dispatch.py
+  and test_datasets_page.py; gtk-gui.md button-table row added.
+
+## 2026-10-26 — pub3: deferred-work items resolved (pycache, sever /tmp leak, docs drift)
+
+- Root-owned __pycache__: pub3 is now clean — its single root-owned
+  file (python/__pycache__/disk_surface_test.cpython-312.pyc) sat in a
+  dan-owned directory, so dan could unlink it without root; removed,
+  zero root-owned files remain in the lane. NOT touched, per the
+  working-dir rule: pub (its python/__pycache__ directory itself is
+  root-owned — genuinely needs root) and pub2 (one dan-sweepable
+  root-owned .pyc). The "next root session" note now covers only those
+  two lanes.
+- The "~65 empty /tmp bisect leftovers" were not static leftovers but
+  an active product leak, growing with every test run (~30 from this
+  session's gate runs alone). Root cause: sever_transfer captured the
+  transfer worker's exit with a bare `rc=$?` while sever-vm-clone runs
+  under set -euo pipefail, so a failed worker (e.g. the phase-1 clone
+  gate's exit 1 inside the generated worker) killed the parent before
+  the rc handler — the results mktemp leaked AND the scripted
+  "FATAL: Transfer phase failed / re-run to resume" guidance was dead
+  code. Fixed in bin/sever-vm-clone: `|| rc=$?` in both sever_transfer
+  branches (the idiom sever_run_storage_worker already used) and in
+  sever_transfer_remote's worker ssh, plus append_exit_trap rm of the
+  scratch results file after mktemp (state file deliberately excluded —
+  --continue needs it). Measured 2 leaked files per suite run before,
+  0 across 6 consecutive green runs after; the revived FATAL guidance
+  now prints on gate-abort paths. 61 existing empty files swept
+  (verified all empty). tmpfiles remains only the SIGKILL/power-loss
+  backstop.
+- Follow-on finding, appended to the existing PREEXISTING collision
+  entry: a FAILED suite run leaves stale /tmp/sever-vm-clone-*.state
+  residue that poisons the NEXT run — its find-based --continue tests
+  pick the oldest (stale) state file and fail confusingly (observed
+  live: two flaky runs whose --continue referenced the previous run's
+  epoch-named state). Clear /tmp/sever-vm-clone-* between reruns of a
+  failed suite; clean-slate runs are deterministic-green.
+- Docs drift resolved: testing.md's real-pool integration "Scenarios
+  Covered" table listed 8 scenarios; the suite has had 7 since birth
+  (1abd8de) — the phantom "Full copy with one source snapshot" row
+  (never implemented) is removed. If that scenario is wanted for real,
+  it needs a root session on the zfstest pools. zfstest3 in
+  ALLOWED_TEST_POOLS verified intentional, not drift: the pool is
+  online, the entry is the documented ZFSUTILITIES_TEST_DST_POOL
+  override affordance, and the python e2e layer uses zfstest3
+  (offsite chain, restore destination) — no change.
+- Verification: shellcheck clean on bin/sever-vm-clone; full suite
+  green once at the end; zero /tmp residue after.
+
+## 2026-10-26 — pub3: Zensical watch retired (user-directed)
+
+- The Zensical PREEXISTING entry (mkdocs 2.x deprecation warning; pin
+  mkdocs<2 vs migrate to Zensical decision) is RETIRED at the user's
+  direction: the user receives email notification of every upstream
+  release and will prompt the migration when Zensical 1.x ships — no
+  agent-side PyPI rechecks, ever. State at retirement per the user:
+  PyPI still 0.0.72, no 1.x; the mkdocs<2 pin remains the documented
+  product stance; the original analysis lives in the Zensical thread
+  above. No docs referenced the watch, so no doc changes were needed.
+  (pub and pub2 lanes still carry their own copies of this entry —
+  outside this lane's scope; they fold away at the next lane merge.)
+
+## 2026-10-26 — pub3: bin/ coverage question closed; fence flipped to strict mode
+
+- User decision on the untested bin/ commands: the 17 zero-coverage
+  scripts (enumerated for them this turn) are old, miscellaneous, largely
+  isolated, and permanently EXCLUDED from behavioral coverage. Never
+  re-raise as a gap, never build suites for them; the named list is
+  recorded in agent memory and is CLOSED — no command is ever added to
+  it without the user's explicit approval (mid-turn instruction,
+  2026-10-26). Not a PREEXISTING matter (a decision, not a
+  defect).
+- check-vm-disk-paths is now strict, closing the "non-strict leaf"
+  residue. Why it was missed originally: born 2026-10-24 21:54 in the
+  0.131.0 lane commit (8ef7074) while the 0.132.0 strict-mode campaign
+  (3667358, next morning) ran from a tree that never contained the file
+  (verified: ls-tree of the campaign commit is empty for it; the birth
+  commit is not an ancestor) — a parallel-lane blind spot, no deliberate
+  exclusion, so the user's "flip it if no good reason" applied.
+- The flip: `set -euo pipefail` directly before the bashinit bootstrap
+  (the guard's head-region contract); check-vm-disk-paths registered in
+  tests/test-strict-mode's strict_scripts list with a comment recording
+  the parallel-lane origin; test-check-vm-disk-paths gained the
+  options-restore line after its eval (the restore is load-bearing —
+  red-proven: without it the suite aborts under the leaked strict
+  options). A rootcheck stub I first added to the suite was REMOVED
+  after its own red-proof passed without it: tests/test-lib.sh:47
+  already stubs rootcheck() for every suite. `is_single_node && exit 0`
+  needed no fencing — a short-circuited AND-list does not trigger
+  errexit (same construct as reconcile-iscsi-state:59, already guarded).
+  No docs changes: testing.md's guard row already says new strict-mode
+  scripts register there, and coding-policies states the law without a
+  list.
+- Verification: fence suite and strict-mode guard green (guard red-proof:
+  removing the set line fails it); shellcheck clean on all three changed
+  files; full suite green once at the end (stale /tmp/sever-vm-clone-*
+  residue cleared first per the PREEXISTING prescription).
+
+## 2026-10-26 — pub3: disposable dev host REJECTED (user decision)
+
+- The parked recommendation (a disposable dev host for root/real-pool
+  testing, final shape: clone the dev VM + sanitize) is REJECTED by the
+  user — "the risk of leaking secrets is too high." Retired from the
+  deferred-work parking lot; decision recorded in agent memory
+  (disposable-dev-host-rejected) with a never-re-propose rule that also
+  bars cloning any credential-bearing host as a test venue. Nothing to
+  unwind in docs — the testing.md paragraph was never written.
+
+
+
+## 2026-10-26 — pub3: development-cycle wrap-up and 0.134.0 release
+
+- Wrap-up review (steps: pub-main-only PREEXISTING pass skipped by
+  precondition — pub3 is a lane; standards review of the uncommitted
+  changes against coding-policies.md — clean, no edits needed
+  (shellcheck/ruff/100-col all green; .shellcheckrc already covers the
+  runtime-resolved sources, so no extra directive was required); test
+  review found the sever-vm-clone transfer-failure path untested → new
+  test_transfer_failure_resume_guidance (Test 16): engine failure must
+  surface the parent's resume guidance, run nothing destructive, leak
+  no scratch results file. Red-proven by reverting the `|| rc=$?`
+  capture (exactly Test 16 failed; product restored md5-identical);
+  suite 26/26 green after. Note: the residue assertion red-proves the
+  rc-capture half; the EXIT-trap's kill-window-only value is covered
+  but not separately red-proven (no signal-kill harness in the family).
+- Docs: user FYI incorporated — the Datasets tab's tree conventions
+  now state a top-level "pool" row is the pool's root filesystem
+  dataset, cross-referencing the Pools page for the pool object
+  (first draft pointed at Dashboard Pool Health; corrected to the
+  Pools tab). testing.md: phantom real-pool scenario row removed
+  (suite had 7 scenarios since birth, docs said 8) and the sever suite
+  row records the new coverage. docs-integrity 23 passed; mkdocs
+  rebuilt clean both times (known mkdocs-material deprecation warning
+  only — standing mkdocs<2 pin).
+- Release 0.134.0: VERSION bumped, changelog section written (Added:
+  Show Details in Log button; Fixed: sever-vm-clone failed-transfer
+  guidance + /tmp scratch leak; Changed: check-vm-disk-paths strict;
+  Tests; Documentation). Changelog archive NOT moved: 0.133.0's
+  creation of the archive left 0.130.0+ in the main file and no rule
+  enforces a split — followed that precedent.
+- Gates: full no-soak run green; full --with-soak run green (soak
+  gating exercised); zero /tmp/sever-vm-clone-* residue after both.
+  Retained-log vanishing recurred once during red-proof (empty when
+  read minutes later) — already covered by the existing PREEXISTING
+  entry, no new entry. PREEXISTING.md unchanged at 2 entries
+  (lane-scoped, awaiting user prompt; the step-1 resolution pass is
+  pub-main-only by its own precondition).

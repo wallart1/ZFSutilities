@@ -248,7 +248,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-rescan-storage` | `rescan-storage` low-device-count warning against the optional `EXPECTED_ISCSI_DEVICES` minimum (set/empty/non-numeric/zero) |
 | `test-restart-iscsi-services` | VM running-state detection before iSCSI target restart and main() helper invocation |
 | `test-run-tests-preflight` | Harness self-test: run-tests environment preflight, manifest requirement skips, soak-suite gating, and the pytest exit-5 rule |
-| `test-sever-vm-clone` | `sever-vm-clone` severance cycle on a file-backed mock ZFS: argument/qm guards, two-phase cutover with pre/post GUID verifies, origin gates (phase 1 refuses a staged copy that is still a clone with nothing destroyed; post-swap backstop fails a still-clone swap), children-first snapshot sweep (the mock `zfs destroy` refuses datasets with child snapshots), holds lifecycle, name-preserving swap, `--continue` recovery from each crash phase, `--rollback` (impossible after origin destroy), holding-pool mode with space-feasibility gates, two-node storage-entry delegation; the mock `zfs send` enforces argv fidelity (no `-i`/`-I`/`-t` inside option clusters) |
+| `test-sever-vm-clone` | `sever-vm-clone` severance cycle on a file-backed mock ZFS: argument/qm guards, two-phase cutover with pre/post GUID verifies, origin gates (phase 1 refuses a staged copy that is still a clone with nothing destroyed; post-swap backstop fails a still-clone swap), phase-1 engine failure (the parent reaches its rc handler: resume guidance prints, nothing destructive ran, no scratch results file leaks), children-first snapshot sweep (the mock `zfs destroy` refuses datasets with child snapshots), holds lifecycle, name-preserving swap, `--continue` recovery from each crash phase, `--rollback` (impossible after origin destroy), holding-pool mode with space-feasibility gates, two-node storage-entry delegation; the mock `zfs send` enforces argv fidelity (no `-i`/`-I`/`-t` inside option clusters) |
 | `test-safe-iscsi-save` | Degraded-config guard for iSCSI saveconfig and encrypted-backstore boot-config stripping |
 | `test-setup-iscsi-targets` | `setup-iscsi-targets` initial target setup plus the post-restore detection signature (evidence printed) and the reconcile offer — declined leaves the system untouched, accepted runs the reconcile; a fresh install still detects clean |
 | `test-snapshot-names` | Static checks pinning every snapshot-name producer to the canonical UTC helper, plus a cross-implementation consistency matrix against the Python `snapshot_naming` module |
@@ -760,7 +760,6 @@ zfs list -r zfstest1 zfstest2
 | Scenario | What it exercises |
 |----------|-------------------|
 | Full copy to empty destination | `doincrementals='N'` two-step transfer: full copy of oldest snapshot + incremental catch-up to target |
-| Full copy with one source snapshot | `doincrementals='N'` degenerates to a single full transfer |
 | Incremental copy with common snapshot | `doincrementals='Y'` with `dointermediates='Y'` |
 | Incremental copy without intermediates | `doincrementals='Y'` with `dointermediates='N'` |
 | Destination rollback | `handle_commsnap_rc` rc=16 with `autoproceed='Y'` |

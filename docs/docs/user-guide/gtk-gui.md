@@ -2469,6 +2469,14 @@ The dataset tree uses typography to indicate row kind:
 | Normal `[clone]` | Dataset that is a ZFS clone (origin shown in last column) |
 | *Italic*         | Snapshot or hold tag                                      |
 
+A top-level row on this page is the pool's **root filesystem dataset** — the
+dataset whose name equals the pool name, which `zfs get all` reports like any
+other dataset. It is not the pool object itself: the pool — its live status in
+the `zpool list` table, its registry entry, and its scrub manager — lives on
+the [Pools](#pools-tab) page. Actions and columns here that accept a "pool"
+selection (for example **Show Big Stuff** or **Show Details in Log**) operate
+on that root dataset.
+
 Holds are shown as children of their snapshot. Expanding a snapshot
 row reveals any hold tags attached to it.
 
@@ -2511,6 +2519,7 @@ based on what is selected.
 | **Expand Selected**            | One or more pool/dataset/snapshot rows selected                                                                                       | Recursively expands each selected row and its descendants.                                                                                                                                                                                                                                                                                                                                                                                       |
 | **Collapse All**               | Always                                                                                                                                | Collapses the entire tree                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | **Show Big Stuff**             | Exactly one pool root dataset selected                                                                                                | Runs [`zfsshowbigstuff`](../commands-and-modules/commands.md#zfsshowbigstuff) on the selected pool and streams the output to the log panel. Useful for quickly finding the largest datasets in a pool.                                                                                                                                                                                                                                           |
+| **Show Details in Log**        | Exactly one pool, dataset, snapshot, or hold selected                                                                                  | Logs all ZFS properties of the selected item to the bottom log panel — the same output as the context-menu **Send details to log**. Holds log their tag, snapshot, and dataset instead of fetching properties. Useful for checking property values that are not shown in the tree columns.                                                                                                                                                      |
 
 Right-click any cell for a context menu:
 
@@ -2522,7 +2531,9 @@ Right-click any cell for a context menu:
 - **Send details to log** — logs all ZFS properties of the selected dataset
   or snapshot to the bottom panel (holds log their tag, snapshot, and dataset
   instead of fetching properties). This is useful for diagnostics and for
-  checking property values that are not shown in the tree columns.
+  checking property values that are not shown in the tree columns. The
+  **Show Details in Log** button runs the same action on the current
+  selection.
 
 !!! note "Unmounting a parent dataset cascades to its children"
     Unmounting a filesystem also unmounts any of its mounted children, deepest

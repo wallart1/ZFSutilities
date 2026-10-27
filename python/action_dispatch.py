@@ -48,6 +48,7 @@ from dataset_actions import (
     on_datasets_unmount,
 )
 from datasets_page import (
+    _send_selection_details_to_log,
     expand_selected_datasets,
     on_datasets_apply_profile,
     on_datasets_manage_profiles,
@@ -294,6 +295,7 @@ PAGE_SPECS = {
             ("Collapse All", "list-remove", None),
             (None, None, None),  # spacer
             ("Show Big Stuff", "zoom-fit-best", "_ds_showbigstuff_btn"),
+            ("Show Details in Log", "dialog-information", "_ds_details_btn"),
         ],
         "post_setup": update_ds_button_sensitivity,
     },
@@ -548,6 +550,7 @@ ACTION_HANDLERS = {
         "Expand Selected": expand_selected_datasets,
         "Collapse All": lambda app: app.datasets_view.collapse_all(),
         "Show Big Stuff": on_datasets_show_big_stuff,
+        "Show Details in Log": _send_selection_details_to_log,
     },
     "checkagainst": {
         "Add Row": on_checkagainst_add,

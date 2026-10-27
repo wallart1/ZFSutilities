@@ -1846,6 +1846,41 @@ test_engine_child_inherits_resolver_seam() {
     rm -f /tmp/sever-vm-clone-${vmid}-*.state*
 }
 
+test_transfer_failure_resume_guidance() {
+    test_start "phase-1 engine failure: the parent prints resume guidance and leaks no results file"
+    local vmid=535 env out rc before after
+    env=$(sever_env_with_clone "$vmid")
+    # Fail the engine's full copy: the strict transfer worker dies at the
+    # engine line, and sever_transfer must capture that rc (not die with it
+    # under set -e), print the FATAL resume guidance, and remove its scratch
+    # results file on the way out.
+    printf 'full\n' > "$env/state/engine_fail"
+    before=$(find /tmp -maxdepth 1 -name 'sever-vm-clone-results.*' 2>/dev/null \
+        | wc -l | tr -d ' ')
+
+    SEVER_STDIN="y
+"
+    out=$(sever_run "$env" "$vmid")
+    rc=$?
+    SEVER_STDIN=""
+
+    assert_rc 1 "$rc"
+    # The engine really reached (and failed) its copy — not an earlier abort.
+    assert_contains "$out" "transfer interrupted (mock engine failure)"
+    assert_equals "1" "$(sever_engine_count "$env" full)"
+    # The parent reached its rc handler: resume guidance, not a silent death.
+    assert_contains "$out" "FATAL: Transfer phase failed"
+    assert_contains "$out" "re-run sever-vm-clone to resume from the receive resume token"
+    # The guidance's "no source data was touched" claim holds...
+    assert_equals "0" "$(sever_op_count "$env" DESTROY)"
+    assert_equals "0" "$(sever_op_count "$env" RENAME)"
+    # ...and the failed run leaves no scratch results file behind.
+    after=$(find /tmp -maxdepth 1 -name 'sever-vm-clone-results.*' 2>/dev/null \
+        | wc -l | tr -d ' ')
+    assert_equals "$before" "$after"
+    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+}
+
 test_postswap_origin_backstop_fails() {
     test_start "post-swap backstop: a swapped-in zvol that is still a clone fails verification"
     sever_have_blkdev \
@@ -2545,6 +2580,7 @@ test_origin_report_zero_byte_explains_sharing
 test_guid_mismatch_aborts_before_destroy
 test_phase1_copy_still_clone_aborts
 test_engine_child_inherits_resolver_seam
+test_transfer_failure_resume_guidance
 test_postswap_origin_backstop_fails
 test_crash_before_rename_continue
 test_crash_after_rename_continue

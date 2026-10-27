@@ -28,6 +28,8 @@
 #
 # Install to: /usr/local/lib/zfsutilities/bin/check-vm-disk-paths on the compute host
 
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
