@@ -56,6 +56,13 @@ EOF
     echo '{"storage_objects":[],"targets":[]}' > "$tmpdir/saveconfig.json"
     printf 'VM|threeamigos:0|101|testvm|scsi0\n' > "$tmpdir/vmrefs"
 
+    # Pool-identity fixtures: by default the configured pool is imported
+    # with a matching GUID and no import candidates (identity-clean; the
+    # identity scenario stages a state map recording a different GUID).
+    printf 'threeamigos\n' > "$tmpdir/zpool-list"
+    printf 'threeamigos|4338716537971988948\n' > "$tmpdir/zpool-guids"
+    : > "$tmpdir/zpool-import"
+
     local mock_ls="$IQN1" mock_luns="" mock_portals="" mock_acls="" mock_gen=1
     case "$scenario" in
         healthy)
@@ -64,6 +71,19 @@ EOF
             mock_luns="  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/x) (default_tg_pt_gp)]"
             mock_portals="192.168.100.1:3260"
             mock_acls="  o- ${INIT1} .......... [Mapped LUNs: 1]"
+            ;;
+        identity)
+            # Restore-clean topology, but the newest state map records a
+            # DIFFERENT GUID for threeamigos: the pool under the known
+            # name was replaced.
+            printf 'vm-101-disk-0\n' > "$tmpdir/manifest"
+            touch "$tmpdir/saveconfig.json" "$tmpdir/manifest"
+            mock_luns="  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/x) (default_tg_pt_gp)]"
+            mock_portals="192.168.100.1:3260"
+            mock_acls="  o- ${INIT1} .......... [Mapped LUNs: 1]"
+            mkdir -p "$tmpdir/statemap"
+            printf '{"version":1,"generated":"2026-10-28T10:00:00+00:00","host":"stewie","pools":{"threeamigos":"999888777666555444"}}\n' \
+                > "$tmpdir/statemap/iscsi-state.json"
             ;;
         postrestore)
             printf 'vm-101-disk-0\nvm-999-disk-0\n' > "$tmpdir/manifest"
@@ -130,6 +150,33 @@ zfs() {
         cat "$ZVOLS_FIXTURE"
         return 0
     fi
+    if [[ "$1 $2 $3" == "list -H -o" && "$4" == "mountpoint" \
+            && -n "${STATE_MAP_MNT:-}" ]]; then
+        printf '%s\n' "$STATE_MAP_MNT"
+        return 0
+    fi
+    return 0
+}
+zpool() {
+    if [[ "$1 $2 $3" == "list -Ho name" || "$1 $2 $3 $4" == "list -H -o name" ]]; then
+        if [[ -n "${ZPOOL_LIST_FIXTURE:-}" ]]; then
+            while IFS= read -r _line; do printf '%s\n' "$_line"; done < "$ZPOOL_LIST_FIXTURE"
+        fi
+        return 0
+    fi
+    if [[ "$1 $2 $3 $4 $5" == "get -H -o value guid" && -n "${ZPOOL_GUID_FIXTURE:-}" ]]; then
+        while IFS='|' read -r _pool _guid; do
+            if [[ "$_pool" == "$6" ]]; then
+                printf '%s\n' "$_guid"
+                return 0
+            fi
+        done < "$ZPOOL_GUID_FIXTURE"
+        return 0
+    fi
+    if [[ "$1" == "import" && -n "${ZPOOL_IMPORT_FIXTURE:-}" ]]; then
+        while IFS= read -r _line; do printf '%s\n' "$_line"; done < "$ZPOOL_IMPORT_FIXTURE"
+        return 0
+    fi
     return 0
 }
 source "$SETUP_COPY"
@@ -145,6 +192,10 @@ RUNNEREOF
         MOCK_GEN_ACLS="$mock_gen" \
         MOCK_ACTION_LOG="$_action_log" \
         ZVOLS_FIXTURE="$tmpdir/zvols" \
+        ZPOOL_LIST_FIXTURE="$tmpdir/zpool-list" \
+        ZPOOL_GUID_FIXTURE="$tmpdir/zpool-guids" \
+        ZPOOL_IMPORT_FIXTURE="$tmpdir/zpool-import" \
+        STATE_MAP_MNT="$tmpdir/statemap" \
         NODE_CONF="$tmpdir/node.conf" \
         NODE_LIB="$repo_root/lib/node-lib.sh" \
         SETUP_ISCSI_TARGETS_ISCSI_LIB="$repo_root/lib/iscsi-lib.sh" \
@@ -323,15 +374,53 @@ test_fresh_install_creates_and_still_detects_clean() {
     setup_teardown
 }
 
+test_identity_finding_prints_own_block() {
+    test_start "pool-identity finding: own WARN block, no reconcile offer"
+    run_setup_targets identity ""
+    local ok=true
+    [[ "$_run_rc" -eq 0 ]] || ok=false
+    out_has "Pool-identity finding" || ok=false
+    out_has "pool threeamigos renamed or replaced — map recorded GUID 999888777666555444, live GUID 4338716537971988948" || ok=false
+    out_has "Identities are never repaired automatically" || ok=false
+    # An identity-only finding never triggers the reconcile machinery:
+    # reconcile rebuilds LUNs, it cannot resolve a renamed pool.
+    out_has "Post-restore signature detected" && ok=false
+    out_has "Run reconcile-iscsi-state now?" && ok=false
+    [[ ! -s "$_reconcile_log" ]] || ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_run_rc — identity block strayed"
+    fi
+    setup_teardown
+}
+
+test_healthy_run_reports_identity_clean() {
+    test_start "healthy topology: identity detection reports the clean line"
+    run_setup_targets healthy ""
+    local ok=true
+    [[ "$_run_rc" -eq 0 ]] || ok=false
+    out_has "No pool-identity finding" || ok=false
+    out_has "Pool-identity finding" && ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_run_rc — healthy identity state strayed"
+    fi
+    setup_teardown
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
 test_healthy_run_reports_no_signature
+test_healthy_run_reports_identity_clean
 test_postrestore_signature_prints_evidence
 test_offer_declined_leaves_system_untouched
 test_offer_accepted_runs_reconcile
 test_reconcile_failure_fails_setup
 test_missing_reconcile_script_warns
 test_fresh_install_creates_and_still_detects_clean
+test_identity_finding_prints_own_block
 
 test_summary

@@ -8,7 +8,9 @@
 #
 # After target setup, runs the post-restore detection (lib/iscsi-lib.sh):
 # on a bare-metal-restore signature it prints the evidence and offers to
-# run reconcile-iscsi-state (the map-driven LUN rebuild).
+# run reconcile-iscsi-state (the map-driven LUN rebuild). Pool-identity
+# detection runs too, as evidence only — a renamed or replaced pool is
+# human-resolved; no identity is ever renamed or repaired automatically.
 #
 # Usage: setup-iscsi-targets
 # Run on the storage host.
@@ -266,6 +268,27 @@ else
             log_msg "WARN: Reconcile not run — run 'sudo reconcile-iscsi-state' when ready"
         fi
     fi
+fi
+
+# ------------------------------------------------------------------
+# Pool-identity detection: its own evidence block, never part of the
+# reconcile offer above — reconcile rebuilds LUNs, it cannot resolve a
+# renamed or replaced pool. Detection only; identities are human-resolved
+# by design.
+# ------------------------------------------------------------------
+detect_reset
+detect_pool_identity
+
+if [[ ${#_detect_lines[@]} -eq 0 ]]; then
+    log_msg "INFO: ✓ No pool-identity finding (imported pools match the config and the map)"
+else
+    log_msg "WARN: Pool-identity finding — a pool name may not be backed by the"
+    log_msg "WARN: pool the config expects:"
+    for _finding in "${_detect_lines[@]}"; do
+        log_msg "WARN:   $_finding"
+    done
+    log_msg "WARN: Identities are never repaired automatically — verify the pool"
+    log_msg "WARN: name/GUID by hand before saving iSCSI state or editing VM disks."
 fi
 
 echo ""

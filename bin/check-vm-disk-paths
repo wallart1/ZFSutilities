@@ -191,10 +191,19 @@ local_rescan() {
 # non-interactive confirm flag. Its own safety model applies unchanged:
 # create-only, identity conflicts refused per item, never remapped. Output
 # streams here so the fence journal carries the reconcile evidence.
+# Returns ssh's exit status: 255 means the ssh itself failed (unreachable
+# host, auth, timeout) or the script-path resolver came back empty — no
+# reconcile ran at all; any other non-zero is the reconcile refusing.
 remote_reconcile_run() {
-    local remote_script
+    local remote_script rc=0
     remote_script=$(remote_zfsutility_script "$storage_host" "reconcile-iscsi-state")
-    ssh -o ConnectTimeout=10 "root@${storage_host}" "${remote_script} --yes"
+    if [[ -z "$remote_script" ]]; then
+        log_msg "WARN: Could not resolve the deployed reconcile-iscsi-state on" \
+            "${storage_host} (ssh to it failed?)"
+        return 255
+    fi
+    ssh -o ConnectTimeout=10 "root@${storage_host}" "${remote_script} --yes" || rc=$?
+    return "$rc"
 }
 
 # ------------------------------------------------------------------
@@ -240,7 +249,12 @@ main() {
 
     log_msg "INFO: Still missing after local rescan —" \
         "running reconcile-iscsi-state on ${storage_host}..."
-    if ! remote_reconcile_run; then
+    local reconcile_rc=0
+    remote_reconcile_run || reconcile_rc=$?
+    if [[ "$reconcile_rc" -eq 255 ]]; then
+        log_msg "WARN: ssh to storage host ${storage_host} failed —" \
+            "reconcile-iscsi-state did not run"
+    elif [[ "$reconcile_rc" -ne 0 ]]; then
         log_msg "WARN: reconcile-iscsi-state reported problems —" \
             "remaining references are report-only"
     fi

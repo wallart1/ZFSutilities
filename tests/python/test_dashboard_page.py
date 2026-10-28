@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import ExitStack
 from datetime import datetime
@@ -121,10 +122,10 @@ class TestGetPoolHealth(unittest.TestCase):
 
     def test_pools_returned_with_cap_parsed(self):
         with mock_subprocess() as m:
-            # The default mock only outputs default columns; override for 7 columns
+            # The default mock only outputs default columns; override for 8 columns
             m.set_command_handler(
-                r"zpool list -H -o name,health,size,alloc,free,cap",
-                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t75%\t-\n"),
+                r"zpool list -H -o name,health,size,alloc,free,cap,ckpoint,guid",
+                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t75%\t-\t1234567890\n"),
             )
             m.set_command_handler(r"zpool status", lambda *_a, **_k: m._completed(""))
             pools = dp._get_pool_health()
@@ -138,8 +139,8 @@ class TestGetPoolHealth(unittest.TestCase):
     def test_scrub_date_parsed(self):
         with mock_subprocess() as m:
             m.set_command_handler(
-                r"zpool list -H -o name,health,size,alloc,free,cap",
-                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\n"),
+                r"zpool list -H -o name,health,size,alloc,free,cap,ckpoint,guid",
+                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\t1234567890\n"),
             )
             status = (
                 "  scan: scrub repaired 0B in 00:00:02 with 0 errors on Sun May 10 00:24:03 2026\n"
@@ -151,8 +152,8 @@ class TestGetPoolHealth(unittest.TestCase):
     def test_scrub_in_progress(self):
         with mock_subprocess() as m:
             m.set_command_handler(
-                r"zpool list -H -o name,health,size,alloc,free,cap",
-                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\n"),
+                r"zpool list -H -o name,health,size,alloc,free,cap,ckpoint,guid",
+                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\t1234567890\n"),
             )
             status = "  scan: scrub in progress since Sun May 10 00:24:03 2026\n"
             m.set_command_handler(r"zpool status", lambda *_a, **_k: m._completed(status))
@@ -162,8 +163,8 @@ class TestGetPoolHealth(unittest.TestCase):
     def test_scrub_date_parsed_with_days_duration(self):
         with mock_subprocess() as m:
             m.set_command_handler(
-                r"zpool list -H -o name,health,size,alloc,free,cap",
-                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\n"),
+                r"zpool list -H -o name,health,size,alloc,free,cap,ckpoint,guid",
+                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\t1234567890\n"),
             )
             status = (
                 "  scan: scrub repaired 0B in 1 days 01:35:48 with 0 errors on "
@@ -176,8 +177,8 @@ class TestGetPoolHealth(unittest.TestCase):
     def test_scrub_date_canceled(self):
         with mock_subprocess() as m:
             m.set_command_handler(
-                r"zpool list -H -o name,health,size,alloc,free,cap",
-                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\n"),
+                r"zpool list -H -o name,health,size,alloc,free,cap,ckpoint,guid",
+                lambda *_a, **_k: m._completed("tank\tONLINE\t10T\t5T\t5T\t50%\t-\t1234567890\n"),
             )
             status = "  scan: scrub canceled on Fri Jun 12 12:00:13 2026\n"
             m.set_command_handler(r"zpool status", lambda *_a, **_k: m._completed(status))
@@ -436,40 +437,131 @@ class TestGetHostVersion(unittest.TestCase):
         self.assertEqual(ver, "unknown")
 
 
-class TestGetIscsiMissingLuns(unittest.TestCase):
+class TestComputeIscsiMissingLuns(unittest.TestCase):
+    """_compute_iscsi_missing_luns() detects both shortfall shapes."""
+
+    def _conf(self, names):
+        fd, path = tempfile.mkstemp(suffix=".conf")
+        with os.fdopen(fd, "w") as f:
+            for n in names:
+                f.write(f"{n}:/dev/zvol/tank/{n}:threeamigos\n")
+        self.addCleanup(os.unlink, path)
+        return path
+
+    def _run_cmd_map(self, backstores, iscsi):
+        def fake(cmd, timeout=5):
+            if cmd == "targetcli /backstores/block ls":
+                return backstores
+            if cmd == "targetcli /iscsi ls":
+                return iscsi
+            return ""
+
+        return fake
+
     @patch("dashboard_page._is_two_node", return_value=False)
     def test_single_node_returns_empty(self, _mock):
-        self.assertEqual(dp._get_iscsi_missing_luns(), [])
+        self.assertEqual(dp._compute_iscsi_missing_luns(), [])
 
     @patch("dashboard_page._is_two_node", return_value=True)
-    def test_missing_encrypted_lun(self, _mock):
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".conf", delete=False) as f:
-            f.write("vm-300-disk-1:/dev/zvol/tank/vm-300-disk-1:threeamigos\n")
-            path = f.name
-        try:
-            with patch("dashboard_page._run_cmd") as mock_run:
-                # targetcli returns empty — no backstores loaded
-                mock_run.return_value = ""
-                with patch("dashboard_page._ISCSI_CONF", path):
-                    missing = dp._get_iscsi_missing_luns()
-        finally:
-            os.unlink(path)
-        self.assertEqual(len(missing), 1)
-        self.assertEqual(missing[0]["name"], "vm-300-disk-1")
-        self.assertEqual(missing[0]["target"], "threeamigos")
+    def test_missing_backstore_flagged(self, _mock):
+        # No backstores loaded at all — the classic not-exported row.
+        with patch("dashboard_page._run_cmd", side_effect=self._run_cmd_map("", "")):
+            with patch("dashboard_page._ISCSI_CONF", self._conf(["vm-300-disk-1"])):
+                missing = dp._compute_iscsi_missing_luns()
+        self.assertEqual(
+            missing,
+            [{"name": "vm-300-disk-1", "target": "threeamigos", "kind": "missing"}],
+        )
 
     @patch("dashboard_page._is_two_node", return_value=True)
-    def test_returns_none_on_timeout(self, _mock):
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".conf", delete=False) as f:
-            f.write("vm-300-disk-1:/dev/zvol/tank/vm-300-disk-1:threeamigos\n")
-            path = f.name
-        try:
-            with patch("dashboard_page._run_cmd", return_value=None):
-                with patch("dashboard_page._ISCSI_CONF", path):
-                    missing = dp._get_iscsi_missing_luns()
-        finally:
-            os.unlink(path)
-        self.assertIsNone(missing)
+    def test_loaded_but_unmapped_flagged(self, _mock):
+        # The 2026-10-27 incident shape: backstore loaded, no TPG LUN.
+        backstores = "o- vm-300-disk-1 ........ [/dev/zvol/tank/vm-300-disk-1 (1.0MiB) write_back]"
+        iscsi = "  o- iqn.2024-01.example:tank .............. [TPGs: 1]"
+        with patch("dashboard_page._run_cmd", side_effect=self._run_cmd_map(backstores, iscsi)):
+            with patch("dashboard_page._ISCSI_CONF", self._conf(["vm-300-disk-1"])):
+                rows = dp._compute_iscsi_missing_luns()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["name"], "vm-300-disk-1")
+        self.assertEqual(rows[0]["kind"], "unmapped")
+        self.assertEqual(rows[0]["target"], "threeamigos")
+
+    @patch("dashboard_page._is_two_node", return_value=True)
+    def test_mapped_backstore_not_flagged(self, _mock):
+        backstores = "o- vm-300-disk-1 ........ [/dev/zvol/tank/vm-300-disk-1 (1.0MiB) write_back]"
+        iscsi = "  | o- lun1 ... [block/vm-300-disk-1 (/dev/zvol/tank/vm-300-disk-1) write_thru]"
+        with patch("dashboard_page._run_cmd", side_effect=self._run_cmd_map(backstores, iscsi)):
+            with patch("dashboard_page._ISCSI_CONF", self._conf(["vm-300-disk-1"])):
+                self.assertEqual(dp._compute_iscsi_missing_luns(), [])
+
+    @patch("dashboard_page._is_two_node", return_value=True)
+    def test_incident_shape_all_loaded_none_mapped(self, _mock):
+        backstores = (
+            "o- vm-101-disk-1 ........ [/dev/zvol/tank/vm-101-disk-1 (1.0MiB) write_back]\n"
+            "o- vm-202-disk-5 ........ [/dev/zvol/tank/vm-202-disk-5 (1.0MiB) write_back]"
+        )
+        with patch("dashboard_page._run_cmd", side_effect=self._run_cmd_map(backstores, "")):
+            with patch(
+                "dashboard_page._ISCSI_CONF",
+                self._conf(["vm-101-disk-1", "vm-202-disk-5"]),
+            ):
+                rows = dp._compute_iscsi_missing_luns()
+        self.assertEqual([r["kind"] for r in rows], ["unmapped", "unmapped"])
+        self.assertEqual([r["name"] for r in rows], ["vm-101-disk-1", "vm-202-disk-5"])
+
+    @patch("dashboard_page._is_two_node", return_value=True)
+    def test_returns_none_on_backstores_timeout(self, _mock):
+        with patch("dashboard_page._run_cmd", return_value=None):
+            with patch("dashboard_page._ISCSI_CONF", self._conf(["vm-300-disk-1"])):
+                self.assertIsNone(dp._compute_iscsi_missing_luns())
+
+    @patch("dashboard_page._is_two_node", return_value=True)
+    def test_returns_none_on_iscsi_ls_timeout(self, _mock):
+        def fake(cmd, timeout=5):
+            return (
+                "o- vm-300-disk-1 ........ [/dev/zvol/tank/vm-300-disk-1 (1.0MiB) write_back]"
+                if cmd == "targetcli /backstores/block ls"
+                else None
+            )
+
+        with patch("dashboard_page._run_cmd", side_effect=fake):
+            with patch("dashboard_page._ISCSI_CONF", self._conf(["vm-300-disk-1"])):
+                self.assertIsNone(dp._compute_iscsi_missing_luns())
+
+
+class TestIscsiLunsCache(unittest.TestCase):
+    """_get_iscsi_missing_luns() TTL-caches completed scans, not failures."""
+
+    def setUp(self):
+        dp._iscsi_luns_cache["time"] = 0.0
+        dp._iscsi_luns_cache["value"] = []
+        self.addCleanup(self._reset)
+
+    def _reset(self):
+        dp._iscsi_luns_cache["time"] = 0.0
+        dp._iscsi_luns_cache["value"] = []
+
+    def test_result_served_from_cache_within_ttl(self):
+        with patch.object(
+            dp, "_compute_iscsi_missing_luns", return_value=[{"name": "vm-1-disk-0"}]
+        ) as mock_compute:
+            first = dp._get_iscsi_missing_luns()
+            second = dp._get_iscsi_missing_luns()
+        self.assertEqual(second, first)
+        mock_compute.assert_called_once()
+
+    def test_failure_is_not_cached(self):
+        with patch.object(dp, "_compute_iscsi_missing_luns", return_value=None) as mock_compute:
+            self.assertIsNone(dp._get_iscsi_missing_luns())
+            self.assertIsNone(dp._get_iscsi_missing_luns())
+        self.assertEqual(mock_compute.call_count, 2)
+
+    def test_expired_cache_recomputes(self):
+        with patch.object(dp, "_compute_iscsi_missing_luns", return_value=[]) as mock_compute:
+            dp._get_iscsi_missing_luns()
+            dp._iscsi_luns_cache["time"] = 0.0  # force expiry
+            dp._get_iscsi_missing_luns()
+        self.assertEqual(mock_compute.call_count, 2)
 
 
 class TestFormatIscsiMissingMessage(unittest.TestCase):
@@ -493,6 +585,27 @@ class TestFormatIscsiMissingMessage(unittest.TestCase):
         lun = {"target": "threeamigos"}
         msg = dp._format_iscsi_missing_message(lun)
         self.assertIn("Disk ?", msg)
+
+    def test_unmapped_backstore_standard_name(self):
+        lun = {"name": "vm-101-disk-1", "target": "threeamigos", "kind": "unmapped"}
+        msg = dp._format_iscsi_missing_message(lun)
+        self.assertIn("VM 101 disk 1", msg)
+        self.assertIn("vm-101-disk-1", msg)
+        self.assertIn("no LUN mapping", msg)
+        self.assertIn("threeamigos", msg)
+
+    def test_unmapped_backstore_unexpected_name(self):
+        lun = {"name": "custom-disk-1", "target": "threeamigos", "kind": "unmapped"}
+        msg = dp._format_iscsi_missing_message(lun)
+        self.assertIn("Disk custom-disk-1", msg)
+        self.assertIn("no LUN mapping", msg)
+
+    def test_row_without_kind_reads_as_missing(self):
+        # Rows from older callers carry no "kind"; they keep the
+        # not-exported wording.
+        lun = {"name": "vm-207-disk-2", "target": "threeamigos"}
+        msg = dp._format_iscsi_missing_message(lun)
+        self.assertIn("not exported", msg)
 
 
 class TestRefreshIscsiSection(unittest.TestCase):
@@ -566,6 +679,285 @@ class TestRefreshIscsiSection(unittest.TestCase):
             any("Each VM disk is a ZFS zvol" in t for t in button_tooltips),
             "Expected tooltip text on the Fix this button",
         )
+
+    def test_unmapped_lun_row_renders_with_fix_button(self):
+        _app, labels, _label_kwargs, _buttons, button_kwargs = self._run_refresh(
+            [{"name": "vm-207-disk-2", "target": "threeamigos", "kind": "unmapped"}]
+        )
+        markup_texts = [call.args[0] for lbl in labels for call in lbl.set_markup.call_args_list]
+        self.assertTrue(
+            any("no LUN mapping" in text for text in markup_texts),
+            f"Expected unmapped wording in {markup_texts}",
+        )
+        self.assertTrue(
+            any(kwargs.get("label") == "Fix this" for kwargs in button_kwargs),
+            "Expected a Fix this button on the unmapped row",
+        )
+
+
+class TestOnFixIscsiClicked(unittest.TestCase):
+    """The Fix this handler invalidates the LUN-shortfall cache."""
+
+    def setUp(self):
+        dp._iscsi_luns_cache["time"] = 0.0
+        dp._iscsi_luns_cache["value"] = []
+        self.addCleanup(self._reset)
+
+    def _reset(self):
+        dp._iscsi_luns_cache["time"] = 0.0
+        dp._iscsi_luns_cache["value"] = []
+
+    def test_cache_reset_before_refresh(self):
+        app = MagicMock()
+        # Simulate a fresh scan having populated the TTL window.
+        dp._iscsi_luns_cache["time"] = time.monotonic()
+        result = MagicMock(returncode=0, stdout="", stderr="")
+        with patch.object(dp, "resolve_local_bin", return_value="/bin/true"):
+            with patch.object(dp.subprocess, "run", return_value=result):
+                with patch.object(dp, "refresh_dashboard_page") as mock_refresh:
+                    dp._on_fix_iscsi_clicked(MagicMock(), app)
+        self.assertEqual(dp._iscsi_luns_cache["time"], 0.0)
+        mock_refresh.assert_called_once()
+
+
+class TestComputeFenceFailureWarning(unittest.TestCase):
+    """_compute_fence_failure_warning() warns only on a definite failed state."""
+
+    def setUp(self):
+        dp._fence_cache["time"] = 0.0
+        dp._fence_cache["warning"] = None
+        self.addCleanup(self._reset)
+
+    def _reset(self):
+        dp._fence_cache["time"] = 0.0
+        dp._fence_cache["warning"] = None
+
+    def _peer_stack(self, peer="tweety", local="stewie"):
+        return [
+            patch.object(dp, "_is_two_node", return_value=True),
+            patch.object(dp, "_get_peer_host", return_value=peer),
+            patch.object(dp, "_local_hostname", return_value=local),
+        ]
+
+    def test_failed_unit_warns_with_peer_name(self):
+        with ExitStack() as stack:
+            for p in self._peer_stack():
+                stack.enter_context(p)
+            run = stack.enter_context(patch.object(dp.subprocess, "run"))
+            run.return_value = MagicMock(stdout="failed\n", returncode=0)
+            warning = dp._compute_fence_failure_warning()
+        self.assertIsNotNone(warning)
+        self.assertIn("tweety", warning)
+        self.assertIn("fence unit failed", warning)
+
+    def test_inactive_between_ticks_does_not_warn(self):
+        with ExitStack() as stack:
+            for p in self._peer_stack():
+                stack.enter_context(p)
+            run = stack.enter_context(patch.object(dp.subprocess, "run"))
+            run.return_value = MagicMock(stdout="inactive", returncode=1)
+            self.assertIsNone(dp._compute_fence_failure_warning())
+
+    def test_ssh_transport_failure_does_not_warn(self):
+        with ExitStack() as stack:
+            for p in self._peer_stack():
+                stack.enter_context(p)
+            run = stack.enter_context(patch.object(dp.subprocess, "run"))
+            run.return_value = MagicMock(stdout="", returncode=255)
+            self.assertIsNone(dp._compute_fence_failure_warning())
+
+    def test_remote_peer_queried_over_ssh(self):
+        with ExitStack() as stack:
+            for p in self._peer_stack():
+                stack.enter_context(p)
+            run = stack.enter_context(patch.object(dp.subprocess, "run"))
+            run.return_value = MagicMock(stdout="inactive", returncode=1)
+            dp._compute_fence_failure_warning()
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[0], "ssh")
+        self.assertEqual(cmd[1], "root@tweety")
+        self.assertIn("is-failed", " ".join(cmd))
+
+    def test_local_peer_queried_directly(self):
+        with ExitStack() as stack:
+            for p in self._peer_stack(peer="stewie", local="stewie"):
+                stack.enter_context(p)
+            run = stack.enter_context(patch.object(dp.subprocess, "run"))
+            run.return_value = MagicMock(stdout="inactive", returncode=1)
+            dp._compute_fence_failure_warning()
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[0], "systemctl")
+        self.assertNotIn("ssh", cmd)
+
+    def test_single_node_never_queries(self):
+        with patch.object(dp, "_is_two_node", return_value=False):
+            with patch.object(dp.subprocess, "run") as run:
+                self.assertIsNone(dp._compute_fence_failure_warning())
+        run.assert_not_called()
+
+    def test_missing_peer_never_queries(self):
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(dp, "_is_two_node", return_value=True))
+            stack.enter_context(patch.object(dp, "_get_peer_host", return_value=None))
+            run = stack.enter_context(patch.object(dp.subprocess, "run"))
+            self.assertIsNone(dp._compute_fence_failure_warning())
+        run.assert_not_called()
+
+    def test_query_exception_does_not_warn(self):
+        with ExitStack() as stack:
+            for p in self._peer_stack():
+                stack.enter_context(p)
+            stack.enter_context(patch.object(dp.subprocess, "run", side_effect=OSError("down")))
+            self.assertIsNone(dp._compute_fence_failure_warning())
+
+    def test_warning_ttl_cached(self):
+        with patch.object(dp, "_compute_fence_failure_warning", return_value=None) as mock_compute:
+            dp._get_fence_failure_warning()
+            dp._get_fence_failure_warning()
+        mock_compute.assert_called_once()
+
+
+class TestComputePoolIdentityWarnings(unittest.TestCase):
+    """_compute_pool_identity_warnings() flags renamed/replaced pools."""
+
+    def setUp(self):
+        dp._pool_identity_cache["time"] = 0.0
+        dp._pool_identity_cache["value"] = []
+        self.addCleanup(self._reset)
+
+    def _reset(self):
+        dp._pool_identity_cache["time"] = 0.0
+        dp._pool_identity_cache["value"] = []
+
+    def _rows(self, *specs):
+        from zfs_repository import PoolRow
+
+        return [
+            PoolRow(name, "ONLINE", "10T", "5T", "5T", "50%", "-", guid) for name, guid in specs
+        ]
+
+    def _stack(self, expected, rows, map_pools):
+        repo = MagicMock()
+        repo.list_pools.return_value = rows
+        return (
+            [
+                patch.object(dp, "_is_two_node", return_value=True),
+                patch.object(
+                    dp,
+                    "_get_node_config",
+                    return_value={"mode": "two-node", "pools": expected},
+                ),
+                patch.object(dp, "_read_newest_state_map_pools", return_value=map_pools),
+            ],
+            repo,
+        )
+
+    def test_guid_mismatch_warns_with_both_guids(self):
+        patches, repo = self._stack(
+            {"threeamigos"},
+            self._rows(("threeamigos", "111222333444555666")),
+            {"threeamigos": "4338716537971988948"},
+        )
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            warnings = dp._compute_pool_identity_warnings(repo=repo)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Pool threeamigos GUID changed", warnings[0])
+        self.assertIn("4338716537971988948", warnings[0])
+        self.assertIn("111222333444555666", warnings[0])
+        self.assertIn("renamed or replaced", warnings[0])
+
+    def test_expected_pool_not_imported_warns(self):
+        patches, repo = self._stack(
+            {"threeamigos", "NVME1"},
+            self._rows(("threeamigos", "111")),
+            {"threeamigos": "111", "NVME1": "222"},
+        )
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            warnings = dp._compute_pool_identity_warnings(repo=repo)
+        self.assertTrue(any("NVME1" in w and "not imported" in w for w in warnings))
+        self.assertFalse(any("GUID changed" in w for w in warnings))
+
+    def test_unexpected_imported_pool_warns(self):
+        patches, repo = self._stack(
+            {"threeamigos"},
+            self._rows(("threeamigos", "111"), ("temp", "333")),
+            {"threeamigos": "111"},
+        )
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            warnings = dp._compute_pool_identity_warnings(repo=repo)
+        self.assertTrue(any("temp" in w and "not configured" in w for w in warnings))
+        # A pool the map never recorded gets no GUID comparison.
+        self.assertFalse(any("temp" in w and "GUID" in w for w in warnings))
+
+    def test_healthy_state_is_silent(self):
+        patches, repo = self._stack(
+            {"threeamigos", "NVME1"},
+            self._rows(("threeamigos", "111"), ("NVME1", "222")),
+            {"threeamigos": "111", "NVME1": "222"},
+        )
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            self.assertEqual(dp._compute_pool_identity_warnings(repo=repo), [])
+
+    def test_unresolvable_live_guid_does_not_warn(self):
+        # A GUID column that did not resolve (e.g. "-") is not an identity
+        # signal — only a definite numeric mismatch is.
+        patches, repo = self._stack(
+            {"threeamigos"},
+            self._rows(("threeamigos", "-")),
+            {"threeamigos": "111"},
+        )
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            self.assertEqual(dp._compute_pool_identity_warnings(repo=repo), [])
+
+    def test_missing_map_disables_only_guid_compare(self):
+        # Pre-pools map (or none readable): set-difference findings still
+        # fire; the GUID comparison stays quiet.
+        patches, repo = self._stack(
+            {"threeamigos", "NVME1"},
+            self._rows(("threeamigos", "111")),
+            {},
+        )
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            warnings = dp._compute_pool_identity_warnings(repo=repo)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("NVME1", warnings[0])
+        self.assertIn("not imported", warnings[0])
+
+    def test_single_node_never_queries(self):
+        repo = MagicMock()
+        with patch.object(dp, "_is_two_node", return_value=False):
+            self.assertEqual(dp._compute_pool_identity_warnings(repo=repo), [])
+        repo.list_pools.assert_not_called()
+
+    def test_zpool_failure_returns_none(self):
+        patches, repo = self._stack(
+            {"threeamigos"},
+            self._rows(("threeamigos", "111")),
+            {"threeamigos": "111"},
+        )
+        repo.list_pools.side_effect = subprocess.CalledProcessError(1, "zpool")
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            self.assertIsNone(dp._compute_pool_identity_warnings(repo=repo))
+
+    def test_warning_ttl_cached(self):
+        with patch.object(dp, "_compute_pool_identity_warnings", return_value=[]) as mock_compute:
+            dp._get_pool_identity_warnings()
+            dp._get_pool_identity_warnings()
+        mock_compute.assert_called_once()
 
 
 class TestLockPid(unittest.TestCase):
@@ -2219,6 +2611,7 @@ class TestRefreshDashboardCache(unittest.TestCase):
             patch.object(dp, "_refresh_iscsi_section"),
             patch.object(dp, "_refresh_warnings_section"),
             patch.object(dp, "_update_fix_locks_button"),
+            patch.object(dp, "_get_fence_failure_warning", return_value=None),
             patch.object(dp, "_is_two_node", return_value=False),
         ]
 
@@ -2953,11 +3346,40 @@ class TestGatherDashboardData(unittest.TestCase):
             patch.object(dp, "_collect_running_tasks", return_value=[]),
             patch.object(dp, "list_active_locks", return_value=[]),
             patch.object(dp, "_gather_config_section_data", return_value={}),
+            patch.object(dp, "_get_fence_failure_warning", return_value=None),
             patch.object(dp, "get_dashboard_config", return_value={"low_space_threshold": 80}),
         ):
             data = dp._gather_dashboard_data(app)
         self.assertIn("active_locks", data)
         self.assertEqual(data["active_locks"], [])
+
+    def test_gather_reports_fence_failure_as_warning(self):
+        app = MagicMock()
+        app.config = {
+            "backup": {"pull_steps": ["x"]},
+            "offsite": {"steps": ["x"]},
+        }
+        fence_warning = (
+            "iSCSI fence unit failed on tweety — VM disk path recovery has "
+            "been failing; the fence service journal on tweety carries the refusals"
+        )
+        with (
+            patch.object(dp, "_get_pool_health", return_value=[]),
+            patch.object(dp, "_get_recent_entries", return_value=[]),
+            patch.object(dp, "_get_iscsi_missing_luns", return_value=[]),
+            patch.object(dp, "_count_stale_locks", return_value=0),
+            patch.object(dp, "_collect_running_tasks", return_value=[]),
+            patch.object(dp, "list_active_locks", return_value=[]),
+            patch.object(dp, "_get_warnings", return_value=[]),
+            patch.object(dp, "_get_fence_failure_warning", return_value=fence_warning),
+            patch.object(dp, "_gather_config_section_data", return_value={}),
+            patch.object(dp, "get_dashboard_config", return_value={"low_space_threshold": 80}),
+        ):
+            data = dp._gather_dashboard_data(app)
+        self.assertTrue(
+            any("iSCSI fence unit failed on tweety" in w for w in data["warnings"]),
+            f"Expected the fence warning in {data['warnings']}",
+        )
 
 
 class TestCreateDashboardPage(unittest.TestCase):
@@ -3905,46 +4327,63 @@ class TestDashboardMountOrderRepair(unittest.TestCase):
         app = MagicMock()
         app.config = {"backup": {"pull_steps": ["x"]}, "offsite": {"steps": ["x"]}}
         rows = [{"name": "tank/proxmox", "mountpoint": "/tank/proxmox"}]
-        with patch.object(dp, "_get_pool_health", return_value=[]):
-            with patch.object(dp, "_get_recent_entries", return_value=[]):
-                with patch.object(dp, "_attach_highest_levels"):
-                    with patch.object(dp, "_get_iscsi_missing_luns", return_value=[]):
-                        with patch.object(dp, "_count_stale_locks", return_value=0):
-                            with patch("scrub_manager.get_all_pool_scrub_states", return_value={}):
-                                with patch.object(dp, "_collect_running_tasks", return_value=[]):
-                                    with patch.object(dp, "list_active_locks", return_value=[]):
-                                        with patch(
-                                            "zfs_repository.find_unreachable_mounts",
-                                            return_value=rows,
-                                        ):
-                                            with patch.object(dp, "_get_warnings", return_value=[]):
-                                                with patch(
-                                                    "feature_config.get_pools",
-                                                    return_value=["tank"],
-                                                ):
-                                                    with patch(
-                                                        "feature_config.get_checkagainst",
-                                                        return_value={"pool": "*"},
-                                                    ):
-                                                        with patch.object(
-                                                            dp,
-                                                            "_get_disk_wear_warnings",
-                                                            return_value=[],
-                                                        ):
-                                                            with patch.object(
-                                                                dp,
-                                                                "_gather_config_section_data",
-                                                                return_value={},
-                                                            ):
-                                                                data = dp._gather_dashboard_data(
-                                                                    app
-                                                                )
+        with (
+            patch.object(dp, "_get_pool_health", return_value=[]),
+            patch.object(dp, "_get_recent_entries", return_value=[]),
+            patch.object(dp, "_attach_highest_levels"),
+            patch.object(dp, "_get_iscsi_missing_luns", return_value=[]),
+            patch.object(dp, "_count_stale_locks", return_value=0),
+            patch.object(dp, "_get_fence_failure_warning", return_value=None),
+            patch.object(dp, "_get_pool_identity_warnings", return_value=[]),
+            patch("scrub_manager.get_all_pool_scrub_states", return_value={}),
+            patch.object(dp, "_collect_running_tasks", return_value=[]),
+            patch.object(dp, "list_active_locks", return_value=[]),
+            patch("zfs_repository.find_unreachable_mounts", return_value=rows),
+            patch.object(dp, "_get_warnings", return_value=[]),
+            patch("feature_config.get_pools", return_value=["tank"]),
+            patch("feature_config.get_checkagainst", return_value={"pool": "*"}),
+            patch.object(dp, "_get_disk_wear_warnings", return_value=[]),
+            patch.object(dp, "_gather_config_section_data", return_value={}),
+        ):
+            data = dp._gather_dashboard_data(app)
         self.assertEqual(data["unreachable_mounts"], rows)
         self.assertTrue(
             any(
                 "tank/proxmox is mounted at /tank/proxmox" in warning
                 for warning in data["warnings"]
             )
+        )
+
+    def test_gather_reports_pool_identity_as_warnings(self):
+        app = MagicMock()
+        app.config = {"backup": {"pull_steps": ["x"]}, "offsite": {"steps": ["x"]}}
+        identity = [
+            (
+                "Pool threeamigos GUID changed — map recorded 111, live 222 "
+                "(pool renamed or replaced)"
+            )
+        ]
+        with (
+            patch.object(dp, "_get_pool_health", return_value=[]),
+            patch.object(dp, "_get_recent_entries", return_value=[]),
+            patch.object(dp, "_attach_highest_levels"),
+            patch.object(dp, "_get_iscsi_missing_luns", return_value=[]),
+            patch.object(dp, "_count_stale_locks", return_value=0),
+            patch.object(dp, "_get_fence_failure_warning", return_value=None),
+            patch.object(dp, "_get_pool_identity_warnings", return_value=identity),
+            patch("scrub_manager.get_all_pool_scrub_states", return_value={}),
+            patch.object(dp, "_collect_running_tasks", return_value=[]),
+            patch.object(dp, "list_active_locks", return_value=[]),
+            patch("zfs_repository.find_unreachable_mounts", return_value=[]),
+            patch.object(dp, "_get_warnings", return_value=[]),
+            patch("feature_config.get_pools", return_value=["tank"]),
+            patch("feature_config.get_checkagainst", return_value={"pool": "*"}),
+            patch.object(dp, "_get_disk_wear_warnings", return_value=[]),
+            patch.object(dp, "_gather_config_section_data", return_value={}),
+        ):
+            data = dp._gather_dashboard_data(app)
+        self.assertTrue(
+            any("Pool threeamigos GUID changed" in warning for warning in data["warnings"])
         )
 
 

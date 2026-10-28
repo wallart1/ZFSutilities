@@ -5,7 +5,9 @@
 #
 # Preserves original LUN numbers by reading them from saveconfig.json (the full config).
 # This is important because the compute host's by-path device symlinks depend on
-# stable LUN indexes.
+# stable LUN indexes. Entries with no recorded index are skipped with a WARN —
+# an index is never auto-assigned. After a LUN is added, every existing ACL
+# initiator on the target is granted a MappedLUN at that index.
 #
 # Reads encrypted zvol list from /etc/zfsutilities/iscsi-encrypted-luns.conf,
 # falling back to the legacy /etc/iscsi-encrypted-luns.conf.
@@ -26,6 +28,11 @@ unset _local_bashinit
 
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
+
+# ACL MappedLUN binding (iscsi_grant_lun_to_acls) lives in lib/iscsi-lib.sh.
+ISCSI_LIB="${ISCSI_ADD_ENCRYPTED_LUNS_ISCSI_LIB:-$(find_zfsutility_script iscsi-lib.sh)}"
+source "$ISCSI_LIB"
+
 source_helper rootcheck
 rootcheck
 
@@ -83,18 +90,24 @@ while IFS=: read -r name device target; do
 
     full_iqn="${iqn_prefix}:${target}"
 
-    # Look up original LUN number to preserve stable device paths on the compute host
+    # Look up the original LUN number BEFORE creating anything, to preserve
+    # stable device paths on the compute host — and to refuse entries with no
+    # recorded index before a backstore exists (auto-assignment can collide
+    # or pick the wrong slot when orphan targets under a different IQN prefix
+    # exist; the same identity rule iscsi-recover-encrypted-luns keeps).
     lun_num=$(lookup_lun_number "$name" "$full_iqn" || true)
+    if [[ -z "$lun_num" ]]; then
+        log_msg "WARN: $name — no recorded LUN index under $full_iqn in $savefile;" \
+            "not added (auto-assignment refused)"
+        continue
+    fi
 
     targetcli /backstores/block create "$name" "$device" >/dev/null 2>&1
-    if [[ -n "$lun_num" ]]; then
-        targetcli /iscsi/"${full_iqn}"/tpg1/luns \
-            create /backstores/block/"$name" "$lun_num" >/dev/null 2>&1
-        log_msg "INFO:   ✓ Added $name (LUN $lun_num)"
-    else
-        targetcli /iscsi/"${full_iqn}"/tpg1/luns \
-            create /backstores/block/"$name" >/dev/null 2>&1
-        log_msg "INFO:   ✓ Added $name (auto LUN)"
+    targetcli /iscsi/"${full_iqn}"/tpg1/luns \
+        create /backstores/block/"$name" "$lun_num" >/dev/null 2>&1
+    log_msg "INFO:   ✓ Added $name (LUN $lun_num)"
+    if ! iscsi_grant_lun_to_acls "$full_iqn" "$lun_num"; then
+        log_msg "WARN: $name — ACL grant incomplete for LUN $lun_num on $full_iqn"
     fi
     added=$((added + 1))
 done < "$conf"
@@ -102,11 +115,16 @@ done < "$conf"
 # Persist only when something was added: nothing changed otherwise, and a
 # keyless boot-time run (the ExecStartPost invocation) must not re-save —
 # safe-iscsi-save would FATAL-log the degraded state on every boot.
-# safe-iscsi-save itself still refuses to save unless every expected LUN
-# is active, so a partial add leaves saveconfig.json untouched.
+# safe-iscsi-save itself refuses to save when a still-expected LUN mapping
+# would be lost, so a partial add leaves saveconfig.json untouched. That
+# refusal must not fail the boot unit by design (the loudness comes from the
+# boot-time verification); warn and leave persistence to the reconcile.
 if [[ "$added" -gt 0 ]]; then
-    # Save only if all expected LUNs are active
-    "$mydir/safe-iscsi-save"
+    if ! "$mydir/safe-iscsi-save"; then
+        log_msg "WARN: added encrypted LUNs but degraded state refused save —" \
+            "run reconcile-iscsi-state"
+        exit 0
+    fi
 fi
 
 exit 0

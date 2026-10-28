@@ -750,16 +750,55 @@ def _iso_to_epoch(iso):
 _ISCSI_CONF = os.path.join(paths.get_system_config_dir(), "iscsi-encrypted-luns.conf")
 _LEGACY_ISCSI_CONF = "/etc/iscsi-encrypted-luns.conf"
 
+# iSCSI LUN-shortfall inventory cache. The scan shells out to targetcli
+# twice (backstore list + iscsi tree); the Dashboard refreshes faster than
+# that state changes, so results are TTL-cached the way the disk-wear
+# inventory is.
+_ISCSI_LUNS_CACHE_TTL = 300.0
+_iscsi_luns_cache = {"time": 0.0, "value": []}
+_iscsi_luns_lock = threading.Lock()
+
 
 def _get_iscsi_missing_luns():
+    """Compare expected backstores against targetcli, TTL-cached.
+
+    Wraps _compute_iscsi_missing_luns() with the disk-wear cache pattern:
+    a completed scan (list, possibly empty) is served from cache for
+    _ISCSI_LUNS_CACHE_TTL seconds; a failed scan (None) is not cached, so
+    the next refresh retries while _get_cached_or_fresh shows the stale
+    indicator. Callers that repair the state (the Fix this handler) reset
+    _iscsi_luns_cache["time"] to force a fresh scan.
+    """
+    now = time.monotonic()
+    with _iscsi_luns_lock:
+        if now - _iscsi_luns_cache["time"] < _ISCSI_LUNS_CACHE_TTL:
+            return _iscsi_luns_cache["value"]
+    value = _compute_iscsi_missing_luns()
+    if value is not None:
+        now = time.monotonic()
+        with _iscsi_luns_lock:
+            _iscsi_luns_cache["value"] = value
+            _iscsi_luns_cache["time"] = now
+    return value
+
+
+def _compute_iscsi_missing_luns():
     """Compare expected backstores against targetcli.
 
     Reads /etc/rtslib-fb-target/expected-backstores.txt (all LUNs) first,
     falling back to /etc/iscsi-encrypted-luns.conf (encrypted LUNs only)
     if the manifest is not present.
 
-    Returns a list of missing {name, target} dicts.
-    Returns an empty list if single-node, config missing, or all LUNs present.
+    Two shortfall shapes are reported:
+    - kind "missing": expected backstore is not loaded in the target;
+    - kind "unmapped": backstore is loaded but mapped to no TPG LUN —
+      the 2026-10-27 boot-incident shape, where every backstore was
+      loaded and only a handful of LUNs were exported.
+
+    Returns a list of {name, target, kind} dicts.
+    Returns an empty list if single-node, config missing, or every
+    expected backstore is loaded and mapped. Returns None when the live
+    targetcli state could not be read.
     """
     if not _is_two_node():
         return []
@@ -806,11 +845,26 @@ def _get_iscsi_missing_luns():
             if len(parts) >= 2:
                 loaded.add(parts[1])
 
+    # Backstores the live target actually exports as LUNs: the /iscsi
+    # tree renders every mapped LUN as "[block/vm-<name> ...]" — the same
+    # line shape parse_target_luns anchors on (lib/iscsi-lib.sh).
+    iscsi_raw = _run_cmd("targetcli /iscsi ls")
+    if iscsi_raw is None:
+        return None
+    mapped = set()
+    if iscsi_raw:
+        for line in iscsi_raw.splitlines():
+            if "block/vm-" not in line:
+                continue
+            name = "vm-" + line.split("block/vm-", 1)[1].split()[0]
+            mapped.add(name)
+
     missing_names = [n for n in expected_names if n not in loaded]
-    if not missing_names:
+    unmapped_names = [n for n in expected_names if n in loaded and n not in mapped]
+    if not missing_names and not unmapped_names:
         return []
 
-    # Try to map missing backstores to targets for display.
+    # Try to map affected backstores to targets for display.
     # First check encrypted-luns.conf, then saveconfig.json.
     target_map = {}
     if os.path.exists(fallback_path):
@@ -824,9 +878,8 @@ def _get_iscsi_missing_luns():
             pass
 
     savefile = "/etc/rtslib-fb-target/saveconfig.json"
-    if (not target_map or any(n not in target_map for n in missing_names)) and os.path.exists(
-        savefile
-    ):
+    affected = set(missing_names) | set(unmapped_names)
+    if (not target_map or any(n not in target_map for n in affected)) and os.path.exists(savefile):
         try:
             import json
 
@@ -842,15 +895,200 @@ def _get_iscsi_missing_luns():
                         so = lun.get("storage_object", "")
                         if so:
                             bs_name = so.split("/")[-1]
-                            if bs_name in missing_names and bs_name not in target_map:
+                            if bs_name in affected and bs_name not in target_map:
                                 target_map[bs_name] = target_short
         except (OSError, ValueError):
             pass
 
     missing = []
     for name in missing_names:
-        missing.append({"name": name, "target": target_map.get(name, "?")})
+        missing.append({"name": name, "target": target_map.get(name, "?"), "kind": "missing"})
+    for name in unmapped_names:
+        missing.append({"name": name, "target": target_map.get(name, "?"), "kind": "unmapped"})
     return missing
+
+
+_FENCE_SERVICE = "zfsutilities-iscsi-fence.service"
+_FENCE_CACHE_TTL = 300.0
+_fence_cache = {"time": 0.0, "warning": None}
+_fence_lock = threading.Lock()
+
+
+def _get_fence_failure_warning():
+    """Report the compute host's failed iSCSI fence unit, TTL-cached.
+
+    Wraps _compute_fence_failure_warning() with the disk-wear cache
+    pattern so the Dashboard refresh cadence cannot turn the peer query
+    into an ssh flood.
+    """
+    now = time.monotonic()
+    with _fence_lock:
+        if now - _fence_cache["time"] < _FENCE_CACHE_TTL:
+            return _fence_cache["warning"]
+    warning = _compute_fence_failure_warning()
+    now = time.monotonic()
+    with _fence_lock:
+        _fence_cache["warning"] = warning
+        _fence_cache["time"] = now
+    return warning
+
+
+def _compute_fence_failure_warning():
+    """Query the peer's fence unit state; return a warning string or None.
+
+    Runs ``systemctl is-failed zfsutilities-iscsi-fence.service`` on the
+    compute host — directly when this host is the compute host, otherwise
+    over the Dashboard's ssh root@<host> channel. The fence is a
+    timer-driven oneshot, so ``inactive`` between ticks is healthy; only
+    the exact ``failed`` state warns. An unreachable peer or an unreadable
+    state produces no row (no false warning while the peer reboots).
+    """
+    if not _is_two_node():
+        return None
+    peer = _get_peer_host()
+    if not peer:
+        return None
+    cmd = (
+        ["systemctl", "is-failed", _FENCE_SERVICE]
+        if peer == _local_hostname()
+        else ["ssh", f"root@{peer}", f"systemctl is-failed {_FENCE_SERVICE}"]
+    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.stdout.strip() != "failed":
+        return None
+    return (
+        f"iSCSI fence unit failed on {peer} — VM disk path recovery has been "
+        f"failing; the fence service journal on {peer} carries the refusals"
+    )
+
+
+# Pool-identity warnings. The scan reads zpool twice (pool list + map
+# location) and a state-map file; the Dashboard refreshes faster than pool
+# identity changes, so results are TTL-cached the way the fence query is.
+_POOL_IDENTITY_CACHE_TTL = 300.0
+_pool_identity_cache = {"time": 0.0, "value": []}
+_pool_identity_lock = threading.Lock()
+
+_ISCSI_STATE_FILENAME = "iscsi-state.json"
+
+
+def _get_pool_identity_warnings():
+    """Compare configured/imported/map pool identities, TTL-cached.
+
+    Wraps _compute_pool_identity_warnings() with the fence-gatherer cache
+    pattern: a completed scan (list, possibly empty) is served from cache
+    for _POOL_IDENTITY_CACHE_TTL seconds; a failed scan (None) is not
+    cached, so the next refresh retries.
+    """
+    now = time.monotonic()
+    with _pool_identity_lock:
+        if now - _pool_identity_cache["time"] < _POOL_IDENTITY_CACHE_TTL:
+            return _pool_identity_cache["value"]
+    value = _compute_pool_identity_warnings()
+    if value is not None:
+        now = time.monotonic()
+        with _pool_identity_lock:
+            _pool_identity_cache["value"] = value
+            _pool_identity_cache["time"] = now
+    return value
+
+
+def _read_newest_state_map_pools(expected_pools):
+    """Return {name: guid} from the newest iscsi-state.json among *expected_pools*.
+
+    Mirrors newest_iscsi_state_map (lib/iscsi-lib.sh): each pool's
+    zfsutilities dataset mountpoint is resolved with `zfs list`, and the
+    map with the newest "generated" timestamp wins. Returns {} when no
+    readable map exists or it predates the pools key.
+    """
+    newest_ts = None
+    pools = {}
+    for pool in sorted(expected_pools):
+        mnt = _run_cmd(f"zfs list -H -o mountpoint {pool}/zfsutilities")
+        if not mnt or mnt == "-" or not os.path.isdir(mnt):
+            continue
+        path = os.path.join(mnt, _ISCSI_STATE_FILENAME)
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        ts = data.get("generated")
+        if not isinstance(ts, str):
+            continue
+        if newest_ts is None or ts > newest_ts:
+            newest_ts = ts
+            recorded = data.get("pools")
+            if isinstance(recorded, dict):
+                pools = {n: g for n, g in recorded.items() if isinstance(g, str) and g.isdigit()}
+            else:
+                pools = {}
+    return pools
+
+
+def _compute_pool_identity_warnings(repo=None):
+    """Warn when a pool name is not backed by the pool the config expects.
+
+    Three shapes, mirroring lib/iscsi-lib.sh's detect_pool_identity:
+    - a configured (node.conf) pool that is not imported;
+    - an imported pool that is not configured;
+    - an imported pool whose live GUID differs from the GUID recorded in
+      the newest pool-resident iSCSI state map (renamed or replaced).
+
+    Returns a list of warning strings, [] in single-node mode or when
+    everything is consistent, and None when the live pool list could not
+    be read (not cached; the next refresh retries — same transient-failure
+    tolerance as the fence gatherer). An unreadable or pre-pools map
+    disables only the GUID comparison.
+    """
+    if not _is_two_node():
+        return []
+
+    expected = _get_node_config().get("pools") or set()
+
+    repo = repo or get_default_repository()
+    try:
+        rows = repo.list_pools()
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        OSError,
+        subprocess.TimeoutExpired,
+    ):
+        return None
+    live = {row.name: row.guid for row in rows}
+
+    warnings = []
+    for pool in sorted(expected - set(live)):
+        warnings.append(
+            f"Pool {pool} is configured in node.conf but not imported — "
+            "offline, renamed, or replaced"
+        )
+    for pool in sorted(set(live) - expected):
+        warnings.append(
+            f"Pool {pool} is imported but not configured in node.conf — "
+            "an unexpected pool is serving data here"
+        )
+
+    # A GUID column that did not resolve (e.g. "-") is not an identity
+    # signal — only a definite numeric mismatch is.
+    map_pools = _read_newest_state_map_pools(expected)
+    for pool in sorted(set(map_pools) & set(live)):
+        if map_pools[pool].isdigit() and live[pool].isdigit() and map_pools[pool] != live[pool]:
+            warnings.append(
+                f"Pool {pool} GUID changed — map recorded {map_pools[pool]}, "
+                f"live {live[pool]} (pool renamed or replaced)"
+            )
+    return warnings
 
 
 def _count_stale_locks():
@@ -1326,6 +1564,16 @@ def _gather_dashboard_data(app):
             f"{row['name']} is mounted at {row['mountpoint']} but the path is "
             "unreachable (bad mount order) — use Repair Mount Order"
         )
+    # Persistent fence failure on the compute host (crash-loop / reconcile
+    # refusals the fence could not recover from).
+    fence_warning = _get_fence_failure_warning()
+    if fence_warning:
+        warnings.append(fence_warning)
+    # Pool identity (renamed/replaced pool under a known name) — mirrors
+    # lib/iscsi-lib.sh's detect_pool_identity for the Dashboard.
+    pool_identity_warnings = _get_pool_identity_warnings()
+    if pool_identity_warnings:
+        warnings.extend(pool_identity_warnings)
     if not app.config.get("backup", {}).get("pull_steps") and not app.config.get("backup", {}).get(
         "send_receive_steps"
     ):
@@ -1844,15 +2092,29 @@ def _refresh_tasks_section(app, tasks=None, recent=None):
 
 
 def _format_iscsi_missing_message(lun):
-    """Convert a raw missing-LUN dict into user-friendly text.
+    """Convert a raw shortfall dict into user-friendly text.
 
     Backstore names follow the convention ``vm-<vmid>-disk-<N>``. When possible,
     the message is written in terms of the VM and disk number instead of iSCSI
-    jargon.
+    jargon. ``kind`` distinguishes the two failure shapes: "missing" (backstore
+    not loaded in the target) and "unmapped" (loaded, but no LUN mapping).
     """
     name = lun.get("name", "?")
     target = lun.get("target", "?")
     match = _ISCSI_BACKSTORE_RE.match(name)
+    if lun.get("kind") == "unmapped":
+        if match:
+            vmid = match.group(1)
+            disk = match.group(2)
+            return (
+                f"VM {vmid} disk {disk} ({name}) is loaded in the iSCSI target "
+                f"but has no LUN mapping on target {target} — the compute node "
+                "cannot see this disk."
+            )
+        return (
+            f"Disk {name} is loaded in the iSCSI target but has no LUN mapping "
+            f"on target {target} — the compute node cannot see this disk."
+        )
     if match:
         vmid = match.group(1)
         disk = match.group(2)
@@ -1886,10 +2148,12 @@ def _refresh_iscsi_section(app, missing_luns, stale=False):
     tooltip_text = (
         "Each VM disk is a ZFS zvol shared to the compute node over iSCSI. "
         '"Not exported" means the disk is in the expected list but is not '
-        "currently loaded in the iSCSI target. Causes include: detached disk, "
-        "encryption key not loaded, pool not imported, or a missing "
-        "backstore/LUN. Click Fix this to run repair-iscsi-luns, which "
-        "recreates missing exports and rescans the compute node."
+        "currently loaded in the iSCSI target; \u201cno LUN mapping\u201d means the "
+        "backstore is loaded but its LUN mapping was lost (the boot-restore "
+        "degradation shape). Causes include: detached disk, encryption key "
+        "not loaded, pool not imported, a missing backstore, or a lost LUN "
+        "mapping. Click Fix this to run repair-iscsi-luns, which recreates "
+        "missing exports and mappings and rescans the compute node."
     )
 
     for lun in missing_luns:
@@ -1937,6 +2201,11 @@ def _on_fix_iscsi_clicked(_button, app):
                 log_msg(line)
     except (OSError, subprocess.TimeoutExpired) as e:
         log_msg(f"WARN: repair-iscsi-luns failed: {e}")
+
+    # The repair may have changed the LUN state; bypass the TTL cache so
+    # the post-repair refresh shows current reality.
+    with _iscsi_luns_lock:
+        _iscsi_luns_cache["time"] = 0.0
 
     refresh_dashboard_page(app)
 

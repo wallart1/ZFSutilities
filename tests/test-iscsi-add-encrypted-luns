@@ -9,12 +9,16 @@ setup_test_env
 # Run a temp copy of iscsi-add-encrypted-luns with paths/env mocked.
 # A pre-existing backstore list file ($4, optional) makes the mock's
 # "/backstores/block ls" report those backstores as already present.
+# An ACL initiator listing file ($6, optional) makes the mock's
+# "/tpg1/acls ls" report those initiators (grants then become observable).
 # ------------------------------------------------------------------
 _run_iscsi_add_encrypted_luns() {
     local confdir="$1"
     local legacy_file="$2"
     local savefile="$3"
     local existing_backstores="${4:-}"
+    local save_mock_rc="${5:-}"
+    local acl_inits="${6:-}"
     local tmpdir
     tmpdir=$(mktemp -d)
     local script_copy="$tmpdir/iscsi-add-encrypted-luns"
@@ -34,12 +38,16 @@ _run_iscsi_add_encrypted_luns() {
 is_single_node() { return 1; }
 is_two_node() { return 0; }
 iqn_prefix="iqn.2026-02.local.stewie"
+# iscsi-lib.sh probes for node-lib's pool_to_target to decide whether to
+# bootstrap itself; the stub makes the probe pass (the library's own header
+# documents the probe) so sourcing it here re-loads nothing.
+pool_to_target() { :; }
 EOF
 
     cat > "$tmpdir/safe-iscsi-save" <<'EOF'
 #!/bin/bash
 echo "safe-iscsi-save" >> "$CALLS_LOG"
-exit 0
+exit "${SAVE_MOCK_RC:-0}"
 EOF
     chmod +x "$tmpdir/safe-iscsi-save"
 
@@ -56,13 +64,39 @@ export NODE_LIB="$node_lib"
 export mydir="$tmpdir"
 export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$confdir"
 export CALLS_LOG="$tmpdir/targetcli-calls"
+export SAVE_MOCK_RC="$save_mock_rc"
 touch "\$CALLS_LOG"
-find_zfsutility_script() { echo "/dev/null"; }
+find_zfsutility_script() {
+    case "\$1" in
+        iscsi-lib.sh) echo "$mydir/lib/iscsi-lib.sh" ;;
+        *) echo "/dev/null" ;;
+    esac
+}
 targetcli() {
     echo "\$*" >> "$tmpdir/targetcli-calls"
     case "\$*" in
         "/backstores/block ls")
             [[ -n "$existing_backstores" ]] && cat "$existing_backstores"
+            ;;
+        "/iscsi/"*"/tpg1/acls ls")
+            [[ -n "$acl_inits" && -f "$acl_inits" ]] && cat "$acl_inits"
+            ;;
+        "/iscsi/"*"/tpg1/acls/"*" ls")
+            local aclpath="\$1"
+            local iqn="\${aclpath#/iscsi/}"
+            iqn="\${iqn%/tpg1/acls/*}"
+            local init="\${aclpath##*/}"
+            [[ -f "$tmpdir/acls-grants/\$iqn/\$init" ]] \\
+                && cat "$tmpdir/acls-grants/\$iqn/\$init"
+            ;;
+        "/iscsi/"*"/tpg1/acls/"*" create "*)
+            local aclpath="\$1" ml="\$3" tp="\$4"
+            local iqn="\${aclpath#/iscsi/}"
+            iqn="\${iqn%/tpg1/acls/*}"
+            local init="\${aclpath##*/}"
+            mkdir -p "$tmpdir/acls-grants/\$iqn"
+            echo "  o- mapped_lun\$ml ....... [lun\$tp block/vm (rw)]" \\
+                >> "$tmpdir/acls-grants/\$iqn/\$init"
             ;;
     esac
     return 0
@@ -73,7 +107,8 @@ source "$script_copy"
 RUNNEREOF
     chmod +x "$tmpdir/runner"
 
-    bash "$tmpdir/runner" >/dev/null 2>&1
+    _ael_rc=0
+    _ael_out=$(bash "$tmpdir/runner" 2>&1) || _ael_rc=$?
     cat "$tmpdir/targetcli-calls" 2>/dev/null || true
     rm -rf "$tmpdir"
 }
@@ -81,6 +116,22 @@ RUNNEREOF
 # ------------------------------------------------------------------
 # Tests
 # ------------------------------------------------------------------
+
+# Saveconfig fixture holding one recorded mapping (backstore at index on the
+# configured target). The add flow only acts on entries with a recorded
+# index, so every create-path test needs one.
+_saveconfig_with_lun() {
+    local savefile="$1" bsname="$2" idx="$3"
+    cat > "$savefile" <<EOF
+{
+  "targets": [
+    {"wwn": "iqn.2026-02.local.stewie:threeamigos", "tpgs": [{"luns": [
+      {"storage_object": "/backstores/block/${bsname}", "index": ${idx}}
+    ]}]}
+  ]
+}
+EOF
+}
 
 test_uses_modern_config_path() {
     test_start "Uses /etc/zfsutilities/iscsi-encrypted-luns.conf when present"
@@ -90,6 +141,7 @@ test_uses_modern_config_path() {
     printf 'vm-100-disk-0:%s/dev:threeamigos\n' "$tmpdir" \
         > "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf"
     touch "$tmpdir/dev"
+    _saveconfig_with_lun "$tmpdir/save.json" vm-100-disk-0 0
     local output
     output=$(_run_iscsi_add_encrypted_luns "$tmpdir/etc/zfsutilities" "" "$tmpdir/save.json")
     rm -rf "$tmpdir"
@@ -168,6 +220,7 @@ test_save_runs_after_add() {
     printf 'vm-100-disk-0:%s/dev:threeamigos\n' "$tmpdir" \
         > "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf"
     touch "$tmpdir/dev"
+    _saveconfig_with_lun "$tmpdir/save.json" vm-100-disk-0 0
     local output
     output=$(_run_iscsi_add_encrypted_luns "$tmpdir/etc/zfsutilities" "" "$tmpdir/save.json")
     rm -rf "$tmpdir"
@@ -187,6 +240,7 @@ test_falls_back_to_legacy_config_path() {
     local legacy="$tmpdir/iscsi-encrypted-luns.conf"
     printf 'vm-200-disk-0:%s/dev:threeamigos\n' "$tmpdir" > "$legacy"
     touch "$tmpdir/dev"
+    _saveconfig_with_lun "$tmpdir/save.json" vm-200-disk-0 0
     local output
     output=$(_run_iscsi_add_encrypted_luns "$tmpdir/etc/zfsutilities" "$legacy" "$tmpdir/save.json")
     rm -rf "$tmpdir"
@@ -213,6 +267,98 @@ test_exits_silently_when_no_config() {
     fi
 }
 
+test_save_refusal_warns_and_exits_zero() {
+    test_start "safe-iscsi-save refusal warns and exits 0 (boot unit must not fail)"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/etc/zfsutilities"
+    printf 'vm-100-disk-0:%s/dev:threeamigos\n' "$tmpdir" \
+        > "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf"
+    touch "$tmpdir/dev"
+    _saveconfig_with_lun "$tmpdir/save.json" vm-100-disk-0 0
+    # Called without command substitution so the helper's _ael_rc/_ael_out
+    # globals survive into this shell; its calls dump lands in the log file.
+    _run_iscsi_add_encrypted_luns "$tmpdir/etc/zfsutilities" "" "$tmpdir/save.json" "" 1 \
+        > "$tmpdir/calls.log"
+
+    if [[ "${_ael_rc:-1}" -eq 0 ]] \
+        && grep -q '^safe-iscsi-save$' "$tmpdir/calls.log" \
+        && [[ "$_ael_out" == *"refused save — run reconcile-iscsi-state"* ]]; then
+        test_pass
+    else
+        test_fail "rc=${_ael_rc:-unset} out='$_ael_out'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_no_recorded_index_warns_and_skips() {
+    test_start "No recorded LUN index: WARN + skip, never auto-assigns, no backstore create"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/etc/zfsutilities"
+    printf 'vm-202-disk-5:%s/dev:nvme1\n' "$tmpdir" \
+        > "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf"
+    touch "$tmpdir/dev"
+    # The configured target has no recorded mapping for the backstore.
+    cat > "$tmpdir/save.json" <<'EOF'
+{
+  "targets": [
+    {"wwn": "iqn.2026-02.local.stewie:nvme1", "tpgs": [{"luns": []}]}
+  ]
+}
+EOF
+    _run_iscsi_add_encrypted_luns "$tmpdir/etc/zfsutilities" "" "$tmpdir/save.json" \
+        > "$tmpdir/calls.log"
+
+    if [[ "${_ael_rc:-1}" -eq 0 ]] \
+        && ! grep -q 'backstores/block create' "$tmpdir/calls.log" \
+        && ! grep -q 'tpg1/luns create' "$tmpdir/calls.log" \
+        && ! grep -q '^safe-iscsi-save$' "$tmpdir/calls.log" \
+        && [[ "$_ael_out" == *"no recorded LUN index"* ]] \
+        && [[ "$_ael_out" == *"auto-assignment refused"* ]]; then
+        test_pass
+    else
+        test_fail "rc=${_ael_rc:-unset} out='$_ael_out'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_grants_lun_to_existing_acls() {
+    test_start "Grants an added LUN to every existing ACL initiator at the same index"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    mkdir -p "$tmpdir/etc/zfsutilities"
+    printf 'vm-101-disk-0:%s/dev:threeamigos\n' "$tmpdir" \
+        > "$tmpdir/etc/zfsutilities/iscsi-encrypted-luns.conf"
+    touch "$tmpdir/dev"
+    cat > "$tmpdir/save.json" <<'EOF'
+{
+  "targets": [
+    {"wwn": "iqn.2026-02.local.stewie:threeamigos", "tpgs": [{"luns": [
+      {"storage_object": "/backstores/block/vm-101-disk-0", "index": 5}
+    ]}]}
+  ]
+}
+EOF
+    printf '  o- iqn.2026-02.local.tweety:c7d0f1a0 ....... [Mapped LUNs: 0]\n' \
+        > "$tmpdir/acls"
+
+    local output
+    output=$(_run_iscsi_add_encrypted_luns "$tmpdir/etc/zfsutilities" "" \
+        "$tmpdir/save.json" "" "" "$tmpdir/acls")
+    rm -rf "$tmpdir"
+
+    local expected_grant
+    expected_grant="/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/acls"
+    expected_grant+="/iqn.2026-02.local.tweety:c7d0f1a0 create 5 5"
+    if [[ "$output" == *"$expected_grant"* ]] \
+        && [[ "$output" == *"backstores/block create vm-101-disk-0"* ]]; then
+        test_pass
+    else
+        test_fail "Expected ACL grant create line, got: $output"
+    fi
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -220,6 +366,9 @@ test_uses_modern_config_path
 test_lun_lookup_scoped_to_target
 test_save_skipped_when_nothing_added
 test_save_runs_after_add
+test_save_refusal_warns_and_exits_zero
+test_no_recorded_index_warns_and_skips
+test_grants_lun_to_existing_acls
 test_falls_back_to_legacy_config_path
 test_exits_silently_when_no_config
 

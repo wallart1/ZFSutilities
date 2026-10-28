@@ -20,6 +20,9 @@
 #          recorded in saveconfig.json for THIS target — never an
 #          auto-assigned index, which can collide or pick the wrong
 #          slot when orphan targets under a different IQN prefix exist
+#        - grant the LUN to every existing ACL initiator on the target
+#          at the same index (idempotent; explicit-mode ACLs grant
+#          nothing until they carry a MappedLUN for the new index)
 #   2. safe-iscsi-save (persists config + regenerates the boot config;
 #      refuses by itself when any expected LUN is inactive)
 #   3. rescan-storage (self-delegates to the compute host) so the
@@ -44,6 +47,11 @@ unset _local_bashinit
 
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
+
+# ACL MappedLUN binding (iscsi_grant_lun_to_acls) lives in lib/iscsi-lib.sh.
+ISCSI_LIB="${ISCSI_RECOVER_ENCRYPTED_LUNS_ISCSI_LIB:-$(find_zfsutility_script iscsi-lib.sh)}"
+source "$ISCSI_LIB"
+
 source_helper rootcheck
 rootcheck
 
@@ -134,6 +142,15 @@ while IFS=: read -r name device target; do
     if [[ "$backstore_present" == true && "$mapped_present" == true ]]; then
         already=$((already + 1))
         log_msg "INFO:   ✓ $name already present on $full_iqn"
+        # A re-run must also heal grants for mappings that already exist:
+        # the recorded index names the slot the ACL grant belongs at. No
+        # recorded index means nothing authoritative to grant — skip.
+        lun_num=$(lookup_lun_number "$name" "$full_iqn")
+        if [[ -n "$lun_num" ]] \
+            && ! iscsi_grant_lun_to_acls "$full_iqn" "$lun_num"; then
+            failed=$((failed + 1))
+            log_msg "FATAL:   $name — ACL grant incomplete for LUN $lun_num on $full_iqn"
+        fi
         continue
     fi
 
@@ -169,6 +186,10 @@ while IFS=: read -r name device target; do
     if targetcli "/iscsi/${full_iqn}/tpg1/luns" ls 2>/dev/null | grep -q "block/${name}"; then
         added=$((added + 1))
         log_msg "INFO:   ✓ $name mapped at LUN $lun_num on $full_iqn"
+        if ! iscsi_grant_lun_to_acls "$full_iqn" "$lun_num"; then
+            failed=$((failed + 1))
+            log_msg "FATAL:   $name — ACL grant incomplete for LUN $lun_num on $full_iqn"
+        fi
     else
         failed=$((failed + 1))
         log_msg "FATAL:   $name — LUN $lun_num create reported success but mapping is absent"

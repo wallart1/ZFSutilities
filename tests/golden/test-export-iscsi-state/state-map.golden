@@ -3,6 +3,10 @@
   "host": "stewie",
   "iqn_prefix": "iqn.2026-02.local.stewie",
   "storage_ip": "192.168.100.1",
+  "pools": {
+    "NVME1": "252995746834113014",
+    "threeamigos": "4338716537971988948"
+  },
   "targets": {
     "iqn.2026-02.local.stewie:nvme1": {
       "acls": [

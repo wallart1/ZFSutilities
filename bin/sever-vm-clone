@@ -213,7 +213,10 @@ human_bytes() {
 #
 # One cutover state file per run, with a per-disk phase marker, so a crash in
 # the destroy→rename window is recoverable (--continue resumes; --rollback
-# reverts) — the state-file pattern of bin/move-vm-disk. The whole per-disk
+# reverts) — the state-file pattern of bin/move-vm-disk. The file name embeds
+# the creating process's pid, so two instances severing the same VM id within
+# the same second never share (or delete) each other's state file. The whole
+# per-disk
 # cutover runs in a storage-side worker (sever_storage_cutover_script below):
 # a child shell in single-node mode, a 'ssh root@<storage_host> bash -s'
 # heredoc under set -e in two-node mode — locks included, so the x-class
@@ -708,7 +711,7 @@ sever_cutover() {
 
     if [[ "$sever_mode" == "run" ]]; then
         sever_cutover_snapname="sever-$(snapname_timestamp)-cutover"
-        sever_state_file="/tmp/sever-vm-clone-${sever_state_key}-$(date +%s).state"
+        sever_state_file="/tmp/sever-vm-clone-${sever_state_key}-$$-$(date +%s).state"
         for zvol in "${sev_zvols[@]}"; do
             i=$((i + 1))
             sev_phase[$zvol]="staged"

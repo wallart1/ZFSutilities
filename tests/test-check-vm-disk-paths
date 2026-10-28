@@ -34,6 +34,9 @@ find_zfsutility_script() { echo "/dev/null"; }
 # _mock_reconcile_rc simulates the reconcile's exit status. main() runs in a
 # command-substitution subshell, so records go to a file, not an array.
 remote_zfsutility_script() {
+    # _resolver_empty simulates the resolver's own ssh failing (no path
+    # printed) — remote_reconcile_run must treat that as transport failure.
+    [[ "${_resolver_empty:-false}" == "true" ]] && return 0
     printf '/usr/local/lib/zfsutilities/current/bin/%s\n' "$2"
 }
 _ssh_repairs_link=false
@@ -114,6 +117,7 @@ reset_mocks() {
     : > "$_ssh_log"
     _mock_reconcile_rc=0
     _ssh_repairs_link=false
+    _resolver_empty=false
 
     unset CHECK_VM_DISK_PATHS_VM_REFS_FILE CHECK_VM_DISK_PATHS_LIST_VM_DISKS
     CHECK_VM_DISK_PATHS_VM_REFS_FILE="$_vm_refs_file"
@@ -368,6 +372,54 @@ test_recover_reconcile_conflict_report_only() {
     fi
 }
 
+test_recover_reconcile_ssh_transport_failed() {
+    reset_mocks
+    printf 'VM|nvme1:5|205|archvm|efidisk0\n' > "$_vm_refs_file"
+    # ssh exits 255 (unreachable host / auth refused): the reconcile never
+    # ran, and the WARN must say so instead of blaming the reconcile.
+    _mock_reconcile_rc=255
+    test_start "ssh transport failure (rc 255) gets its own WARN, not 'reported problems'"
+
+    recover=true
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "ssh to storage host stewie failed" || ok=false
+    log_has "reconcile-iscsi-state did not run" || ok=false
+    [[ "$_main_out" != *"reconcile-iscsi-state reported problems"* ]] || ok=false
+    log_has "1 of 1 VM disk path(s) still missing after recovery" || ok=false
+    [[ "$(ssh_call_count)" -eq 1 ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — ssh-255 must warn about the transport, not the reconcile"
+    fi
+}
+
+test_recover_reconcile_resolver_empty() {
+    reset_mocks
+    printf 'VM|nvme1:5|205|archvm|efidisk0\n' > "$_vm_refs_file"
+    # The path resolver came back empty (its ssh failed): the reconcile
+    # must not degrade into a silent no-op ssh with an empty command.
+    _resolver_empty=true
+    test_start "An empty script-path resolve reports ssh failure and never runs a no-op ssh"
+
+    recover=true
+    run_main
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "ssh to storage host stewie failed" || ok=false
+    [[ "$(ssh_call_count)" -eq 0 ]] || ok=false
+    log_has "1 of 1 VM disk path(s) still missing after recovery" || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — empty resolve must be transport failure, not a no-op"
+    fi
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -383,6 +435,8 @@ test_missing_link_exits_1_report_only
 test_recover_local_rescan_fixes
 test_recover_reconcile_fixes
 test_recover_reconcile_conflict_report_only
+test_recover_reconcile_ssh_transport_failed
+test_recover_reconcile_resolver_empty
 
 # Cleanup
 local_cleanup() {

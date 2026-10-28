@@ -20,6 +20,7 @@ _run_recover() {
     local confdir="$1"
     local savefile="$2"
     local prestate="$3"   # optional dir pre-seeded with backstores/luns state
+    local grant_fail="${4:-}"  # optional space-separated LUN indexes whose grant create fails
     local tmpdir
     tmpdir=$(mktemp -d)
     local script_copy="$tmpdir/iscsi-recover-encrypted-luns"
@@ -36,9 +37,14 @@ is_two_node() { return 0; }
 iqn_prefix="iqn.2026-02.local.stewie"
 storage_host="stewie"
 compute_host="tweety"
+# iscsi-lib.sh probes for node-lib's pool_to_target to decide whether to
+# bootstrap itself; the stub makes the probe pass (the library's own header
+# documents the probe) so sourcing it here re-loads nothing.
+pool_to_target() { :; }
 EOF
 
-    # Stateful targetcli mock: backstores and per-target LUN lists live in
+    # Stateful targetcli mock: backstores, per-target LUN lists, and
+    # per-target ACL initiator lists + per-initiator grant lists live in
     # files the create commands append to, so idempotency and index choices
     # are observable from the resulting state.
     local state="$tmpdir/state"
@@ -74,10 +80,12 @@ export NODE_LIB="$node_lib"
 export mydir="$tmpdir"
 export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$confdir"
 export CALLS="$tmpdir/calls"
+export GRANT_FAIL="$grant_fail"
 touch "\$CALLS"
 find_zfsutility_script() {
     case "\$1" in
         rescan-storage) echo "$tmpdir/rescan-storage" ;;
+        iscsi-lib.sh) echo "$mydir/lib/iscsi-lib.sh" ;;
         *) echo "/dev/null" ;;
     esac
 }
@@ -104,6 +112,28 @@ targetcli() {
             local nm="\${ref#/backstores/block/}"
             echo "  lun\$idx block/\$nm (rw) oops" >> "$state/luns/\$iqn"
             ;;
+        "/iscsi/"*"/tpg1/acls/"*" ls")
+            local aclpath="\$1"
+            local iqn="\${aclpath#/iscsi/}"
+            iqn="\${iqn%/tpg1/acls/*}"
+            local init="\${aclpath##*/}"
+            [[ -f "$state/acls-grants/\$iqn/\$init" ]] && cat "$state/acls-grants/\$iqn/\$init"
+            ;;
+        "/iscsi/"*"/tpg1/acls/"*" create "*)
+            local aclpath="\$1" ml="\$3" tp="\$4"
+            local iqn="\${aclpath#/iscsi/}"
+            iqn="\${iqn%/tpg1/acls/*}"
+            local init="\${aclpath##*/}"
+            [[ " \${GRANT_FAIL:-} " == *" \$ml "* ]] && return 1
+            mkdir -p "$state/acls-grants/\$iqn"
+            echo "  o- mapped_lun\$ml ....... [lun\$tp block/vm (rw)]" >> "$state/acls-grants/\$iqn/\$init"
+            ;;
+        "/iscsi/"*"/tpg1/acls ls")
+            local tpgdir="\$1"
+            local iqn="\${tpgdir#/iscsi/}"
+            iqn="\${iqn%/tpg1/acls}"
+            [[ -f "$state/acls/\$iqn" ]] && cat "$state/acls/\$iqn"
+            ;;
         *)
             true
             ;;
@@ -114,7 +144,7 @@ source "$script_copy"
 RUNNEREOF
     chmod +x "$tmpdir/runner"
 
-    local calls luns_main luns_orphan luns_nvme backstores
+    local calls luns_main luns_orphan luns_nvme backstores acls_main
     bash "$tmpdir/runner" >/dev/null 2>&1
     local rc=$?
     calls=$(cat "$tmpdir/calls" 2>/dev/null || true)
@@ -122,9 +152,11 @@ RUNNEREOF
     luns_orphan=$(cat "$state/luns/iqn.2026-10.local.stewie:threeamigos" 2>/dev/null || true)
     luns_nvme=$(cat "$state/luns/iqn.2026-02.local.stewie:nvme1" 2>/dev/null || true)
     backstores=$(cat "$state/backstores" 2>/dev/null || true)
+    acls_main=$(cat "$state/acls-grants/iqn.2026-02.local.stewie:threeamigos"/* \
+        2>/dev/null || true)
     rm -rf "$tmpdir"
-    printf 'CALLS:[%s]\nBACKSTORES:[%s]\nLUNS-MAIN:[%s]\nLUNS-ORPHAN:[%s]\nLUNS-NVME:[%s]\n' \
-        "$calls" "$backstores" "$luns_main" "$luns_orphan" "$luns_nvme"
+    printf 'CALLS:[%s]\nBACKSTORES:[%s]\nLUNS-MAIN:[%s]\nLUNS-ORPHAN:[%s]\nLUNS-NVME:[%s]\nACLS-MAIN:[%s]\n' \
+        "$calls" "$backstores" "$luns_main" "$luns_orphan" "$luns_nvme" "$acls_main"
     return "$rc"
 }
 
@@ -266,6 +298,107 @@ test_unavailable_device_warns_and_fails() {
     rm -rf "$tmpdir"
 }
 
+# Shared prestate: the main target carries one live ACL initiator with no
+# grants yet (the grants state dir exists but the initiator has no file).
+_std_acl_prestate() {
+    local prestate="$1"
+    mkdir -p "$prestate/acls" "$prestate/acls-grants/iqn.2026-02.local.stewie:threeamigos"
+    cat > "$prestate/acls/iqn.2026-02.local.stewie:threeamigos" <<'EOF'
+  o- iqn.2026-02.local.tweety:c7d0f1a0 ....... [Mapped LUNs: 0]
+EOF
+}
+
+_std_encrypted_conf() {
+    local confdir="$1" tmpdir="$2"
+    mkdir -p "$confdir"
+    touch "$tmpdir/dev100" "$tmpdir/dev101"
+    printf 'vm-100-disk-0:%s/dev100:threeamigos\nvm-101-disk-0:%s/dev101:threeamigos\n' \
+        "$tmpdir" "$tmpdir" > "$confdir/iscsi-encrypted-luns.conf"
+}
+
+test_grants_recovered_luns_to_existing_acls() {
+    test_start "Grants recovered LUNs to every existing ACL initiator at the same index"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    _std_encrypted_conf "$confdir" "$tmpdir"
+    _std_saveconfig "$tmpdir/save.json"
+    local prestate="$tmpdir/prestate"
+    _std_acl_prestate "$prestate"
+
+    local result rc=0
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "$prestate") || rc=$?
+
+    if [[ "$rc" -eq 0 ]] \
+        && [[ "$result" == *"[lun0 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"[lun5 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"safe-iscsi-save"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_already_present_entry_heals_grants() {
+    test_start "Heals missing ACL grants for mappings that already exist"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    _std_encrypted_conf "$confdir" "$tmpdir"
+    _std_saveconfig "$tmpdir/save.json"
+    local prestate="$tmpdir/prestate"
+    mkdir -p "$prestate/luns"
+    cat > "$prestate/backstores" <<'EOF'
+  vm-100-disk-0  /dev/zvol/threeamigos/proxmox/vm-100-disk-0  50G
+  vm-101-disk-0  /dev/zvol/threeamigos/proxmox/vm-101-disk-0  50G
+EOF
+    cat > "$prestate/luns/iqn.2026-02.local.stewie:threeamigos" <<'EOF'
+  lun0 block/vm-100-disk-0 (rw) oops
+  lun5 block/vm-101-disk-0 (rw) oops
+EOF
+    _std_acl_prestate "$prestate"
+
+    local result rc=0
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "$prestate") || rc=$?
+
+    # Both mappings count as "already", so no save/rescan runs (CALLS empty),
+    # but the missing grants are created.
+    if [[ "$rc" -eq 0 ]] \
+        && [[ "$result" == *"CALLS:[]"* ]] \
+        && [[ "$result" == *"[lun0 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"[lun5 block/vm (rw)]"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_grant_failure_fails_the_entry() {
+    test_start "A grant-create failure fails the entry (rc 1); other entries still recover"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    _std_encrypted_conf "$confdir" "$tmpdir"
+    _std_saveconfig "$tmpdir/save.json"
+    local prestate="$tmpdir/prestate"
+    _std_acl_prestate "$prestate"
+
+    local result rc=0
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "$prestate" "0") || rc=$?
+
+    if [[ "$rc" -ne 0 ]] \
+        && [[ "$result" != *"[lun0 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"[lun5 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"safe-iscsi-save"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -273,6 +406,9 @@ test_recovers_with_recorded_lun_indexes
 test_refuses_when_no_recorded_index
 test_idempotent_when_already_present
 test_unavailable_device_warns_and_fails
+test_grants_recovered_luns_to_existing_acls
+test_already_present_entry_heals_grants
+test_grant_failure_fails_the_entry
 
 # Structural fence (user decision 2026-10-22): recovery must not print
 # `qm start` commands or collect affected VM ids — starting the VMs is the

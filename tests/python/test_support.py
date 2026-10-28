@@ -416,7 +416,7 @@ class MockSubprocess:
         self._command_handlers = {}
 
     def add_zpool_list(self, pools):
-        """Set pools for 'zpool list -H -o name,health,size,alloc,free,cap,ckpoint'."""
+        """Set pools for 'zpool list -H -o name,health,size,alloc,free,cap,ckpoint,guid'."""
         self._zpool_list = pools
 
     def add_zfs_list(self, datasets):
@@ -460,6 +460,7 @@ class MockSubprocess:
                         p.get("free", "900G"),
                         p.get("cap", "10%"),
                         p.get("ckpoint", "-"),
+                        p.get("guid", "1234567890"),
                     ]
                 )
                 for p in self._zpool_list

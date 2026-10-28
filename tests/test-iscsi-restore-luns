@@ -1,0 +1,374 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-iscsi-restore-luns — Verify the idempotent full restore from
+# saveconfig.json: backstores, TPG LUN mappings at their recorded indexes,
+# ACL nodes, and ACL MappedLUN grants (including non-identity mappings),
+# plus the degraded-save refusal pass-through (WARN, rescan still runs,
+# exit 1).
+#
+# Assertions are state-based (the targetcli mock appends to files, the
+# persistence helpers append to a calls file): log_msg output goes to the
+# bashinit log, not stdout, so behavioral state is the observable contract.
+# The mock models targetcli's create semantics: a create whose object or
+# index already exists FAILS (that failure is the script's idempotency
+# signal), and a MappedLUN create fails when its TPG LUN is not mapped.
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# ------------------------------------------------------------------
+# Run a temp copy of iscsi-restore-luns with paths/env mocked and a
+# stateful targetcli. Prints the calls file and the resulting live state;
+# the runner's exit status is the script's exit status.
+# ------------------------------------------------------------------
+_run_restore() {
+    local savefile="$1"
+    local prestate="$2"           # optional dir pre-seeded with live state
+    local save_mock_rc="${3:-0}"  # rc of the safe-iscsi-save mock
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local script_copy="$tmpdir/iscsi-restore-luns"
+
+    sed \
+        -e "s|/etc/rtslib-fb-target/saveconfig\.json|$savefile|g" \
+        -e "s|source ~/bashinit|source \"$mydir/bin/bashinit\"|g" \
+        "$mydir/bin/iscsi-restore-luns" > "$script_copy"
+
+    local node_lib="$tmpdir/node-lib.sh"
+    cat > "$node_lib" <<'EOF'
+is_single_node() { return 1; }
+is_two_node() { return 0; }
+EOF
+
+    local state="$tmpdir/state"
+    mkdir -p "$state/luns"
+    if [[ -n "$prestate" ]]; then
+        cp -r "$prestate"/. "$state/"
+    fi
+
+    cat > "$tmpdir/safe-iscsi-save" <<EOF
+#!/bin/bash
+echo "safe-iscsi-save" >> "$tmpdir/calls"
+exit "$save_mock_rc"
+EOF
+    chmod +x "$tmpdir/safe-iscsi-save"
+
+    cat > "$tmpdir/rescan-storage" <<EOF
+#!/bin/bash
+echo "rescan-storage" >> "$tmpdir/calls"
+exit 0
+EOF
+    chmod +x "$tmpdir/rescan-storage"
+
+    cat > "$tmpdir/node.conf" <<'EOF'
+NODE_MODE="two-node"
+STORAGE_HOST="stewie"
+COMPUTE_HOST="tweety"
+EOF
+
+    cat > "$tmpdir/runner" << RUNNEREOF
+#!/bin/bash
+export NODE_CONF="$tmpdir/node.conf"
+export NODE_LIB="$node_lib"
+export mydir="$tmpdir"
+touch "$tmpdir/calls"
+find_zfsutility_script() { echo "/dev/null"; }
+targetcli() {
+    case "\$*" in
+        "/backstores/block ls")
+            [[ -f "$state/backstores" ]] && cat "$state/backstores"
+            ;;
+        "/backstores/block create "*)
+            local nm="\$3"
+            [[ -f "$state/backstores" ]] && grep -q " \$nm " "$state/backstores" \\
+                && return 1
+            echo "  \$nm  \$4  50G" >> "$state/backstores"
+            ;;
+        "/iscsi/"*"/tpg1/luns ls")
+            local tpgdir="\$1"
+            local iqn="\${tpgdir#/iscsi/}"
+            iqn="\${iqn%/tpg1/luns}"
+            [[ -f "$state/luns/\$iqn" ]] && cat "$state/luns/\$iqn"
+            ;;
+        "/iscsi/"*"/tpg1/luns create "*)
+            local tpgdir="\$1" ref="\$3" idx="\$4"
+            local iqn="\${tpgdir#/iscsi/}"
+            iqn="\${iqn%/tpg1/luns}"
+            local nm="\${ref#/backstores/block/}"
+            # A LUN create fails when the index is taken or the backstore
+            # does not exist (targetcli resolves both before creating).
+            [[ -f "$state/luns/\$iqn" ]] && grep -q " lun\$idx " "$state/luns/\$iqn" \\
+                && return 1
+            [[ -f "$state/backstores" ]] \\
+                && grep -q " \$nm " "$state/backstores" || return 1
+            echo "  lun\$idx block/\$nm (rw) oops" >> "$state/luns/\$iqn"
+            ;;
+        "/iscsi/"*"/tpg1/acls ls")
+            local tpgdir="\$1"
+            local iqn="\${tpgdir#/iscsi/}"
+            iqn="\${iqn%/tpg1/acls}"
+            [[ -f "$state/acls/\$iqn" ]] && cat "$state/acls/\$iqn"
+            ;;
+        "/iscsi/"*"/tpg1/acls create "*)
+            local tpgdir="\$1" init="\$3"
+            local iqn="\${tpgdir#/iscsi/}"
+            iqn="\${iqn%/tpg1/acls}"
+            [[ -f "$state/acls/\$iqn" ]] && grep -qF -- "\$init" "$state/acls/\$iqn" \\
+                && return 1
+            mkdir -p "$state/acls"
+            echo "  o- \$init ....... [Mapped LUNs: 0]" >> "$state/acls/\$iqn"
+            ;;
+        "/iscsi/"*"/tpg1/acls/"*" ls")
+            local aclpath="\$1"
+            local iqn="\${aclpath#/iscsi/}"
+            iqn="\${iqn%/tpg1/acls/*}"
+            local init="\${aclpath##*/}"
+            [[ -f "$state/acls-grants/\$iqn/\$init" ]] \\
+                && cat "$state/acls-grants/\$iqn/\$init"
+            ;;
+        "/iscsi/"*"/tpg1/acls/"*" create "*)
+            local aclpath="\$1" ml="\$3" tp="\$4"
+            local iqn="\${aclpath#/iscsi/}"
+            iqn="\${iqn%/tpg1/acls/*}"
+            local init="\${aclpath##*/}"
+            # A MappedLUN create fails when its index is taken or the TPG
+            # LUN it maps to is not mapped (rtslib verifies both).
+            [[ -f "$state/acls-grants/\$iqn/\$init" ]] \\
+                && grep -q "mapped_lun\$ml[^0-9]" "$state/acls-grants/\$iqn/\$init" \\
+                && return 1
+            [[ -f "$state/luns/\$iqn" ]] && grep -q " lun\$tp " "$state/luns/\$iqn" \\
+                || return 1
+            mkdir -p "$state/acls-grants/\$iqn"
+            echo "  o- mapped_lun\$ml ....... [lun\$tp block/vm (rw)]" \\
+                >> "$state/acls-grants/\$iqn/\$init"
+            ;;
+        *)
+            true
+            ;;
+    esac
+}
+rootcheck() { true; }
+source "$script_copy"
+RUNNEREOF
+    chmod +x "$tmpdir/runner"
+
+    local main_iqn="iqn.2026-02.local.stewie:threeamigos"
+    local init="iqn.2026-02.local.tweety:c7d0f1a0"
+    local calls backstores luns_main acls_main grants
+    bash "$tmpdir/runner" >/dev/null 2>&1
+    local rc=$?
+    calls=$(cat "$tmpdir/calls" 2>/dev/null || true)
+    backstores=$(cat "$state/backstores" 2>/dev/null || true)
+    luns_main=$(cat "$state/luns/$main_iqn" 2>/dev/null || true)
+    acls_main=$(cat "$state/acls/$main_iqn" 2>/dev/null || true)
+    grants=$(cat "$state/acls-grants/$main_iqn/$init" 2>/dev/null || true)
+    rm -rf "$tmpdir"
+    printf 'CALLS:[%s]\nBACKSTORES:[%s]\nLUNS-MAIN:[%s]\nACLS-MAIN:[%s]\nGRANTS:[%s]\n' \
+        "$calls" "$backstores" "$luns_main" "$acls_main" "$grants"
+    return "$rc"
+}
+
+# Fixture saveconfig: two block backstores (dev100/dev101 paths under
+# "$1"), one target with vm-100-disk-0 at LUN 0 and vm-101-disk-0 at LUN 3,
+# one ACL initiator carrying an identity grant (0->0) and a NON-identity
+# grant (8->3) — the argument-order proof for grant creates.
+_std_saveconfig() {
+    local savefile="$1" tmpdir="$2"
+    cat > "$savefile" <<EOF
+{
+  "storage_objects": [
+    {"plugin": "block", "name": "vm-100-disk-0", "dev": "$tmpdir/dev100"},
+    {"plugin": "block", "name": "vm-101-disk-0", "dev": "$tmpdir/dev101"}
+  ],
+  "targets": [
+    {"wwn": "iqn.2026-02.local.stewie:threeamigos", "tpgs": [
+      {"tag": 1,
+       "luns": [
+         {"storage_object": "/backstores/block/vm-100-disk-0", "index": 0},
+         {"storage_object": "/backstores/block/vm-101-disk-0", "index": 3}
+       ],
+       "acls": [
+         {"node_wwn": "iqn.2026-02.local.tweety:c7d0f1a0",
+          "mapped_luns": [
+            {"index": 0, "tpg_lun": 0, "write_protect": false},
+            {"index": 8, "tpg_lun": 3, "write_protect": false}
+          ]}
+       ]}
+    ]}
+  ]
+}
+EOF
+}
+
+# ------------------------------------------------------------------
+# Tests
+# ------------------------------------------------------------------
+
+test_full_restore_from_empty_state() {
+    test_start "Restores backstores, LUN mappings, ACL node, and MappedLUN grants (incl. non-identity)"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    touch "$tmpdir/dev100" "$tmpdir/dev101"
+    _std_saveconfig "$tmpdir/save.json" "$tmpdir"
+
+    local result rc=0
+    result=$(_run_restore "$tmpdir/save.json" "") || rc=$?
+
+    if [[ "$rc" -eq 0 ]] \
+        && [[ "$result" == *"vm-100-disk-0"* ]] \
+        && [[ "$result" == *"vm-101-disk-0"* ]] \
+        && [[ "$result" == *"lun0 block/vm-100-disk-0"* ]] \
+        && [[ "$result" == *"lun3 block/vm-101-disk-0"* ]] \
+        && [[ "$result" == *"o- iqn.2026-02.local.tweety:c7d0f1a0"* ]] \
+        && [[ "$result" == *"mapped_lun0 ....... [lun0 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"mapped_lun8 ....... [lun3 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"safe-iscsi-save"* ]] \
+        && [[ "$result" == *"rescan-storage"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_idempotent_rerun() {
+    test_start "Second run with everything present creates nothing and skips the rescan"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    touch "$tmpdir/dev100" "$tmpdir/dev101"
+    _std_saveconfig "$tmpdir/save.json" "$tmpdir"
+
+    local main_iqn="iqn.2026-02.local.stewie:threeamigos"
+    local init="iqn.2026-02.local.tweety:c7d0f1a0"
+    local prestate="$tmpdir/prestate"
+    mkdir -p "$prestate/luns" "$prestate/acls" "$prestate/acls-grants/$main_iqn"
+    cat > "$prestate/backstores" <<'EOF'
+  vm-100-disk-0  /dev/zvol/threeamigos/proxmox/vm-100-disk-0  50G
+  vm-101-disk-0  /dev/zvol/threeamigos/proxmox/vm-101-disk-0  50G
+EOF
+    cat > "$prestate/luns/$main_iqn" <<'EOF'
+  lun0 block/vm-100-disk-0 (rw) oops
+  lun3 block/vm-101-disk-0 (rw) oops
+EOF
+    cat > "$prestate/acls/$main_iqn" <<EOF
+  o- $init ....... [Mapped LUNs: 2]
+EOF
+    cat > "$prestate/acls-grants/$main_iqn/$init" <<'EOF'
+  o- mapped_lun0 ....... [lun0 block/vm (rw)]
+  o- mapped_lun8 ....... [lun3 block/vm (rw)]
+EOF
+
+    local result rc=0
+    result=$(_run_restore "$tmpdir/save.json" "$prestate") || rc=$?
+
+    # State byte-identical (no duplicate lines), no rescan; the save still
+    # runs (the script always persists after verifying completeness).
+    if [[ "$rc" -eq 0 ]] \
+        && [[ "$result" == *"safe-iscsi-save"* ]] \
+        && [[ "$result" != *"rescan-storage"* ]] \
+        && [[ "$result" == *"GRANTS:[  o- mapped_lun0 ....... [lun0 block/vm (rw)]
+  o- mapped_lun8 ....... [lun3 block/vm (rw)]]"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_save_refusal_still_rescans_and_exits_1() {
+    test_start "safe-iscsi-save refusal: WARN, rescan still runs, exit 1"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    touch "$tmpdir/dev100" "$tmpdir/dev101"
+    _std_saveconfig "$tmpdir/save.json" "$tmpdir"
+
+    local result rc=0
+    result=$(_run_restore "$tmpdir/save.json" "" 1) || rc=$?
+
+    if [[ "$rc" -ne 0 ]] \
+        && [[ "$result" == *"safe-iscsi-save"* ]] \
+        && [[ "$result" == *"rescan-storage"* ]] \
+        && [[ "$result" == *"mapped_lun8"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_unavailable_device_skips_backstore_and_grant() {
+    test_start "Unavailable device: backstore WARN-skip, its LUN and grant skipped, rc 0"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    # Only dev100 exists; dev101's zvol is not available (keys not loaded).
+    touch "$tmpdir/dev100"
+    _std_saveconfig "$tmpdir/save.json" "$tmpdir"
+
+    local result rc=0
+    result=$(_run_restore "$tmpdir/save.json" "") || rc=$?
+
+    if [[ "$rc" -eq 0 ]] \
+        && [[ "$result" == *"vm-100-disk-0"* ]] \
+        && [[ "$result" != *"vm-101-disk-0"* ]] \
+        && [[ "$result" == *"lun0 block/vm-100-disk-0"* ]] \
+        && [[ "$result" != *"lun3"* ]] \
+        && [[ "$result" == *"mapped_lun0 ....... [lun0 block/vm (rw)]"* ]] \
+        && [[ "$result" != *"mapped_lun8"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_present_but_wrong_grant_is_not_remapped() {
+    test_start "A present grant mapping a different TPG LUN is left alone (no auto-remap)"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    touch "$tmpdir/dev100" "$tmpdir/dev101"
+    _std_saveconfig "$tmpdir/save.json" "$tmpdir"
+
+    local main_iqn="iqn.2026-02.local.stewie:threeamigos"
+    local init="iqn.2026-02.local.tweety:c7d0f1a0"
+    local prestate="$tmpdir/prestate"
+    mkdir -p "$prestate/luns" "$prestate/acls" "$prestate/acls-grants/$main_iqn"
+    cat > "$prestate/backstores" <<'EOF'
+  vm-100-disk-0  /dev/zvol/threeamigos/proxmox/vm-100-disk-0  50G
+  vm-101-disk-0  /dev/zvol/threeamigos/proxmox/vm-101-disk-0  50G
+EOF
+    cat > "$prestate/luns/$main_iqn" <<'EOF'
+  lun0 block/vm-100-disk-0 (rw) oops
+  lun3 block/vm-101-disk-0 (rw) oops
+EOF
+    cat > "$prestate/acls/$main_iqn" <<EOF
+  o- $init ....... [Mapped LUNs: 1]
+EOF
+    # mapped_lun8 exists but maps TPG LUN 5, not the recorded 3.
+    cat > "$prestate/acls-grants/$main_iqn/$init" <<'EOF'
+  o- mapped_lun8 ....... [lun5 block/vm (rw)]
+EOF
+
+    local result rc=0
+    result=$(_run_restore "$tmpdir/save.json" "$prestate") || rc=$?
+
+    if [[ "$rc" -eq 0 ]] \
+        && [[ "$result" == *"mapped_lun8 ....... [lun5 block/vm (rw)]"* ]] \
+        && [[ "$result" != *"[lun3 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"mapped_lun0 ....... [lun0 block/vm (rw)]"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+# ------------------------------------------------------------------
+# Run
+# ------------------------------------------------------------------
+test_full_restore_from_empty_state
+test_idempotent_rerun
+test_save_refusal_still_rescans_and_exits_1
+test_unavailable_device_skips_backstore_and_grant
+test_present_but_wrong_grant_is_not_remapped
+
+test_summary

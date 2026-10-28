@@ -104,6 +104,11 @@ targetcli() {
         _mock_acls_2+="  o- ${3} .......... [Mapped LUNs: 0]"$'\n'
         return 0
     fi
+    # Optional failure injection for the per-initiator MappedLUN create.
+    if [[ "$2" == "create" && "$1" == "/iscsi/${IQN1}/tpg1/acls/${INIT1}" \
+            && -n "${_mock_grant_fail:-}" ]]; then
+        return 1
+    fi
     return 0
 }
 
@@ -232,6 +237,8 @@ m = {
     "host": "stewie",
     "iqn_prefix": "iqn.2026-02.local.stewie",
     "storage_ip": "192.168.100.1",
+    "pools": {"NVME1": "252995746834113014",
+              "threeamigos": "4338716537971988948"},
     "targets": {
         "iqn.2026-02.local.stewie:threeamigos": {
             "acls": ["iqn.2026-02.local.tweety"],
@@ -316,6 +323,7 @@ reset_mocks() {
     _mock_acls_2=""
     _mock_gen_acls_1="1"
     _mock_gen_acls_2="1"
+    _mock_grant_fail=""
     _mock_zfs_mountpoint=()
     _mock_encryption=()
     _mock_zvols_threeamigos=()
@@ -708,12 +716,39 @@ test_explicit_acl_recreated() {
     local ok=true
     [[ "$_main_rc" -eq 0 ]] || ok=false
     [[ "$tlog" == *"/iscsi/${IQN1}/tpg1/acls create ${INIT1}"* ]] || ok=false
-    [[ "$tlog" == *"/iscsi/${IQN1}/tpg1/acls/${INIT1} create mapped_lun 0"* ]] || ok=false
+    # Identity grant at the LUN's own index. targetcli's UIACL create takes
+    # <mapped_lun> <tpg_lun>; the old "create mapped_lun <idx>" form was
+    # rejected by targetcli (non-integer mapped_lun) and never granted
+    # anything — the regression this assertion guards against.
+    [[ "$tlog" == *"/iscsi/${IQN1}/tpg1/acls/${INIT1} create 0 0"* ]] || ok=false
+    [[ "$tlog" != *"create mapped_lun"* ]] || ok=false
 
     if [[ "$ok" == true ]]; then
         test_pass
     else
         test_fail "rc=$_main_rc — explicit ACL not recreated (log: $tlog)"
+    fi
+}
+
+test_explicit_acl_grant_failure_fails_apply() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    _mock_gen_acls_1="0"
+    _mock_backstores=$(bs_line vm-101-disk-0 /dev/zvol/threeamigos/proxmox/vm-101-disk-0)$'\n'
+    _mock_luns_1=$(lun_line 0 vm-101-disk-0)
+    _mock_grant_fail=1
+    assume_yes=true
+    test_start "A MappedLUN grant failure is FATAL and fails the run (rc 1)"
+
+    run_main
+
+    if [[ "$_main_rc" -eq 1 ]] \
+        && log_has "Failed to grant LUN 0 to ACL ${INIT1}" \
+        && log_has "Actions failed during apply"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc out='$_main_out'"
     fi
 }
 
@@ -740,6 +775,35 @@ test_vm_ref_no_map_entry_lists_candidates() {
         test_pass
     else
         test_fail "rc=$_main_rc"
+    fi
+}
+
+test_noentry_vm_refs_block_map_refresh() {
+    reset_mocks
+    live_healthy
+    register_pools_with_map
+    # threeamigos:0 resolves against the map; threeamigos:7 has no map entry.
+    _mock_vm_records=$(printf 'VM|threeamigos:0|101|testvm|scsi0\nVM|threeamigos:7|101|testvm|scsi3')
+    assume_yes=true
+    test_start "VM refs without a map entry block the pool map refresh"
+
+    run_main
+    local hlog
+    hlog=$(helper_log_content)
+
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    log_has "no map entry for it" || ok=false
+    log_has "Pool LUN map left unchanged" || ok=false
+    log_has "VM disk ref(s) without a map entry" || ok=false
+    # The refresh (export helper) must never run while refs are unresolved —
+    # the 14:01/14:06 fence ticks overwrote the recovery map this way.
+    [[ "$hlog" != *"export"* ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — noentry refs did not block the refresh"
     fi
 }
 
@@ -855,16 +919,98 @@ test_save_failure_fails() {
     test_start "A safe-iscsi-save failure fails the reconcile (exit 1)"
 
     run_main
+    local hlog
+    hlog=$(helper_log_content)
 
     local ok=true
     [[ "$_main_rc" -eq 1 ]] || ok=false
     log_has "safe-iscsi-save failed — configuration may not be persistent" || ok=false
     log_has "safe-iscsi-save did not persist the rebuilt tree" || ok=false
+    # An unpersisted rebuild must not refresh the pool map either: the map
+    # keeps recording the state the next reboot's restore will NOT have.
+    log_has "Pool LUN map left unchanged" || ok=false
+    [[ "$hlog" != *"export"* ]] || ok=false
 
     if [[ "$ok" == true ]]; then
         test_pass
     else
         test_fail "rc=$_main_rc — save failure not reflected in the exit code"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Pool-identity records (pools key of the state map)
+# ------------------------------------------------------------------
+
+test_map_pool_records_parsed() {
+    local dst
+    dst=$(mktemp)
+    write_base_map "$dst"
+    test_start "parse_state_map records pool GUID identities"
+
+    parse_state_map "$dst"
+    local ok=true
+    [[ "${_map_pool_guid[threeamigos]:-}" == "4338716537971988948" ]] || ok=false
+    [[ "${_map_pool_guid[NVME1]:-}" == "252995746834113014" ]] || ok=false
+    rm -f "$dst"
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "pool GUID records wrong: threeamigos=${_map_pool_guid[threeamigos]:-none} NVME1=${_map_pool_guid[NVME1]:-none}"
+    fi
+}
+
+test_map_without_pools_key_parses() {
+    local dst
+    dst=$(mktemp)
+    write_base_map "$dst"
+    # Maps written before the pool-identity fence carry no pools key.
+    python3 - "$dst" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    m = json.load(f)
+m.pop("pools", None)
+with open(sys.argv[1], "w") as f:
+    json.dump(m, f, indent=2)
+PYEOF
+    test_start "A map without a pools key parses clean"
+
+    parse_state_map "$dst"
+    local n=${#_map_pool_guid[@]}
+    local bs=${#_map_bs_names[@]}
+    rm -f "$dst"
+
+    if [[ "$n" -eq 0 && "$bs" -eq 2 ]]; then
+        test_pass
+    else
+        test_fail "pools=${n} backstores=${bs}"
+    fi
+}
+
+test_map_malformed_guid_ignored() {
+    local dst
+    dst=$(mktemp)
+    write_base_map "$dst"
+    python3 - "$dst" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    m = json.load(f)
+m["pools"]["threeamigos"] = "not-digits"
+with open(sys.argv[1], "w") as f:
+    json.dump(m, f, indent=2)
+PYEOF
+    test_start "A non-digit pool GUID record is ignored"
+
+    parse_state_map "$dst"
+    local bad="${_map_pool_guid[threeamigos]:-}"
+    local good="${_map_pool_guid[NVME1]:-}"
+    rm -f "$dst"
+
+    if [[ -z "$bad" && "$good" == "252995746834113014" ]]; then
+        test_pass
+    else
+        test_fail "malformed record kept (threeamigos='${bad}') or healthy one lost (NVME1='${good}')"
     fi
 }
 
@@ -877,6 +1023,9 @@ test_no_map_found_fails
 test_host_mismatch_refuses
 test_from_missing_file_fails
 test_from_explicit_map_wins
+test_map_pool_records_parsed
+test_map_without_pools_key_parses
+test_map_malformed_guid_ignored
 test_clean_restore
 test_clean_restore_dry_run
 test_lun_slot_conflict_refused
@@ -885,7 +1034,9 @@ test_backstore_dev_conflict_refused
 test_missing_zvol_skipped
 test_encrypted_reflag
 test_explicit_acl_recreated
+test_explicit_acl_grant_failure_fails_apply
 test_vm_ref_no_map_entry_lists_candidates
+test_noentry_vm_refs_block_map_refresh
 test_vm_cross_check_unreachable_skipped
 test_target_missing_refused
 test_prompt_decline_aborts

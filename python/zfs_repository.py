@@ -262,7 +262,7 @@ _VDEV_ERRORS_RE = re.compile(
 
 @dataclass
 class PoolRow:
-    """One line from `zpool list -H -o name,health,size,alloc,free,cap,ckpoint`."""
+    """One line from `zpool list -H -o name,health,size,alloc,free,cap,ckpoint,guid`."""
 
     name: str
     health: str
@@ -271,6 +271,7 @@ class PoolRow:
     free: str
     cap: str
     ckpoint: str
+    guid: str
 
 
 @dataclass
@@ -1021,18 +1022,18 @@ class ZfsRepository:
     # ------------------------------------------------------------------
 
     def list_pools(self) -> list[PoolRow]:
-        """Return all pools with health, size, alloc, free, capacity, and checkpoint."""
+        """Return all pools with health, size, alloc, free, capacity, checkpoint, and GUID."""
         result = self._run(
-            self._zpool("list", "-H", "-o", "name,health,size,alloc,free,cap,ckpoint")
+            self._zpool("list", "-H", "-o", "name,health,size,alloc,free,cap,ckpoint,guid")
         )
         rows = []
         for line in result.stdout.strip().split("\n"):
             if not line:
                 continue
             parts = line.split("\t")
-            if len(parts) < 7:
+            if len(parts) < 8:
                 continue
-            rows.append(PoolRow(*parts[:7]))
+            rows.append(PoolRow(*parts[:8]))
         return rows
 
     def list_pools_full(self) -> list[dict]:

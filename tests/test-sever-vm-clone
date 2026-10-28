@@ -1095,14 +1095,15 @@ sever_env_new() {
     ((SEVER_ENV_SEQ++))
     local env="$_mock_zfs_state_dir/env$SEVER_ENV_SEQ"
     mkdir -p "$env/state" "$env/lock" "$env/devtree" "$env/etcz"
-    # State-file isolation: cutover aborts (deliberate in the crash tests,
-    # unavoidable in a failing run) can leave /tmp/sever-vm-clone-*.state
-    # files behind, and the recovery tests locate their state file by
-    # globbing /tmp — a stale file from an earlier test or run would be
-    # picked up (sorted oldest-first) and --continue would resume from the
-    # wrong phase. Every test builds its env before running the script, so
-    # sweeping here makes each test start with no sever state files at all.
-    rm -f /tmp/sever-vm-clone-*.state*
+    # State files embed the creating process's pid, and the recovery tests
+    # take the exact state-file path from the product's own --continue
+    # guidance (sever_state_path_from_output) instead of globbing /tmp, so
+    # stale residue from a failed run — or a file belonging to a concurrent
+    # suite executing in parallel — can never be picked up. Deliberately NO
+    # /tmp sweep here: a sweep would delete a concurrent suite's in-flight
+    # state file (the 2026-10-26 concurrent-runs collision). A failed run
+    # may leave an inert state file behind; nothing globs it, and a green
+    # run's --continue/--rollback removes its own file.
     if [[ "${1:-single}" == "two" ]]; then
         cat > "$env/node.conf" << EOF
 NODE_MODE="two-node"
@@ -1334,6 +1335,24 @@ sever_run() {
         # shellcheck source=/dev/null
         source "$SEVER_MOCKBIN/sever-vm-clone" "$@"
     ) 2>&1 <<< "$stdin_data"
+}
+
+# Extract the cutover state-file path from the product's recovery guidance
+# ("sever-vm-clone --continue <path>"). The path is exact — the file name
+# embeds the creating process's pid — so a glob over /tmp could otherwise
+# pick up another concurrent suite's in-flight file or stale residue from
+# a failed run and resume from the wrong phase.
+sever_state_path_from_output() {
+    printf '%s\n' "$1" | sed -n 's/^.*--continue \([^ ]*\.state\).*$/\1/p' | head -1
+}
+
+# Remove a test's own cutover state file and holds sidecars by the exact
+# path extracted from the product's --continue guidance (no-op when the
+# run printed no handle — a green run's --continue/--rollback removes
+# its own file).
+sever_rm_state_file() {
+    [[ -n "${1:-}" ]] || return 0
+    rm -f "$1" "$1".holds*
 }
 
 # Standard single-clone fixture: pool `tank`, origin zvol vm-100-disk-0 with
@@ -1778,12 +1797,13 @@ $(cat "$env/state/oplog")"
         "$(sever_field "$env" "tank/proxmox/vm-${vmid}-disk-0" 3)"
     sever_ds_exists "$env" "$temp" \
         && test_pass || test_fail "staged copy missing after mismatch abort"
-    if ! ls /tmp/sever-vm-clone-${vmid}-*.state >/dev/null 2>&1; then
+    state=$(sever_state_path_from_output "$out")
+    if [[ -z "$state" || ! -e "$state" ]]; then
         test_fail "no --continue state file left behind after the abort"
         return
     fi
     test_pass
-    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+    sever_rm_state_file "$state"
 }
 
 test_phase1_copy_still_clone_aborts() {
@@ -1818,7 +1838,7 @@ $(cat "$env/state/oplog")"
         "$(sever_field "$env" "tank/proxmox/vm-${vmid}-disk-0" 3)"
     sever_ds_exists "$env" "$temp" \
         && test_pass || test_fail "staged copy missing after clone-gate abort"
-    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+    sever_rm_state_file "$(sever_state_path_from_output "$out")"
 }
 
 test_engine_child_inherits_resolver_seam() {
@@ -1843,7 +1863,7 @@ test_engine_child_inherits_resolver_seam() {
         return
     fi
     assert_contains "$(cat "$env/state/engine_env")" "enclosure_rate"
-    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+    sever_rm_state_file "$(sever_state_path_from_output "$out")"
 }
 
 test_transfer_failure_resume_guidance() {
@@ -1878,7 +1898,7 @@ test_transfer_failure_resume_guidance() {
     after=$(find /tmp -maxdepth 1 -name 'sever-vm-clone-results.*' 2>/dev/null \
         | wc -l | tr -d ' ')
     assert_equals "$before" "$after"
-    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+    sever_rm_state_file "$(sever_state_path_from_output "$out")"
 }
 
 test_postswap_origin_backstop_fails() {
@@ -1905,7 +1925,7 @@ test_postswap_origin_backstop_fails() {
     assert_contains "$out" "is still a clone of"
     assert_contains "$out" "tank/proxmox/vm-100-disk-0@clone-origin"
     assert_contains "$out" "nothing was severed"
-    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+    sever_rm_state_file "$(sever_state_path_from_output "$out")"
 }
 
 # ---------------------------------------------------------------------------
@@ -1928,10 +1948,18 @@ test_crash_before_rename_continue() {
     SEVER_STDIN=""
     assert_rc 1 "$rc"
     assert_contains "$out" "zfs rename ${temp} → tank/proxmox/vm-${vmid}-disk-0 failed"
-    state=$(find /tmp -maxdepth 1 -name "sever-vm-clone-${vmid}-*.state" 2>/dev/null \
-        | sort | head -1)
+    state=$(sever_state_path_from_output "$out")
     if [[ -z "$state" ]]; then
         test_fail "no state file after crash"
+        return
+    fi
+    # The name embeds the creating process's pid between the state key and
+    # the epoch — the concurrent-run fence (two instances severing the same
+    # VM id in the same second must never share a file). Pin the shape so
+    # the pid cannot silently drop out of the name again; the old
+    # key-epoch form has one field too few to match.
+    if [[ ! "${state##*/}" =~ ^sever-vm-clone-${vmid}-[0-9]+-[0-9]+\.state$ ]]; then
+        test_fail "state file name lost its pid-qualified shape: $state"
         return
     fi
     test_pass
@@ -1975,7 +2003,7 @@ tank/proxmox/vm-100-disk-0@clone-origin
         return
     fi
     test_pass
-    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+    sever_rm_state_file "$(sever_state_path_from_output "$out")"
 }
 
 test_crash_after_rename_continue() {
@@ -1993,8 +2021,7 @@ test_crash_after_rename_continue() {
     rc=$?
     SEVER_STDIN=""
     assert_rc 1 "$rc"
-    state=$(find /tmp -maxdepth 1 -name "sever-vm-clone-${vmid}-*.state" 2>/dev/null \
-        | sort | head -1)
+    state=$(sever_state_path_from_output "$out")
     if [[ -z "$state" ]]; then
         test_fail "no state file after crash"
         return
@@ -2017,7 +2044,7 @@ tank/proxmox/vm-100-disk-0@clone-origin
     assert_equals "-" "$(sever_field "$env" "tank/proxmox/vm-${vmid}-disk-0" 3)"
     assert_equals "zfsutilities-backup" \
         "$(sever_holds_of "$env" "tank/proxmox/vm-${vmid}-disk-0@dailybackup-2026-07-01T07:00Z-d")"
-    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+    sever_rm_state_file "$(sever_state_path_from_output "$out")"
     test_pass
 }
 
@@ -2039,8 +2066,7 @@ test_rollback_staged_run() {
     assert_rc 1 "$rc"
     assert_contains "$out" "Could not create tank/proxmox/vm-${vmid}-disk-0@${SEVER_CUT_SNAP}"
     assert_contains "$out" "nothing was destroyed"
-    state=$(find /tmp -maxdepth 1 -name "sever-vm-clone-${vmid}-*.state" 2>/dev/null \
-        | sort | head -1)
+    state=$(sever_state_path_from_output "$out")
     if [[ -z "$state" ]]; then
         test_fail "no state file after aborted cutover"
         return
@@ -2076,7 +2102,7 @@ test_rollback_staged_run() {
         return
     fi
     test_pass
-    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+    sever_rm_state_file "$(sever_state_path_from_output "$out")"
 }
 
 test_rollback_impossible_after_destroy() {
@@ -2216,7 +2242,6 @@ $(cat "$env/state/oplog")"
         return
     fi
     test_pass
-    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
 }
 
 test_holding_pool_below_need_and_infeasible_estimate() {
@@ -2253,7 +2278,7 @@ n
     assert_contains "$out" "the copy-back needs."
     assert_contains "$out" "Nothing was changed yet"
     assert_equals "0" "$(sever_engine_count "$env")"
-    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+    sever_rm_state_file "$(sever_state_path_from_output "$out")"
 }
 
 test_holding_feasibility_gate_aborts() {
@@ -2320,12 +2345,13 @@ y
         && test_pass || test_fail "origin snapshot destroyed by the aborted gate"
     sever_ds_exists "$env" "holdpool/sever_${vmid}/vm-${vmid}-disk-0" \
         && test_pass || test_fail "holding-pool copy missing after the abort"
-    if ! ls /tmp/sever-vm-clone-${vmid}-*.state >/dev/null 2>&1; then
+    state=$(sever_state_path_from_output "$out")
+    if [[ -z "$state" || ! -e "$state" ]]; then
         test_fail "no --continue state file left by the aborted gate"
         return
     fi
     test_pass
-    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
+    sever_rm_state_file "$state"
 }
 
 # ---------------------------------------------------------------------------
@@ -2517,7 +2543,6 @@ $(cat "$env/state/oplog")"
         && test_pass || test_fail "declined origin was destroyed anyway"
     assert_equals "-" "$(sever_field "$env" "$d0" 3)"
     assert_equals "-" "$(sever_field "$env" "$d1" 3)"
-    rm -f /tmp/sever-vm-clone-${vmid}-*.state*
 }
 
 test_two_node_storage_entry_delegates_before_qm_guard() {

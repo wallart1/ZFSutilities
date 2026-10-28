@@ -299,7 +299,14 @@ Two-node mode installs two systemd drop-ins for
 from the activated version's `share/two-node/` by `switch-version` on every
 activation — installing a new release and activating it also refreshes the
 drop-ins, so a release carrying drop-in changes takes effect without any
-manual step:
+manual step.
+
+Both drop-ins carry `bash -c` scripts inside their `Exec…=` lines. systemd
+parses those lines before bash does and expands a single `$` against its own
+(empty) environment, so every dollar sign bash must see is written `$$`; a
+structural test in `test-switch-version` rejects any shipped `Exec` line that
+still reaches systemd with an unescaped `$` (the 2026-10-27 boot incident's
+pre-start backup landed at `/.pre-start` before this rule existed).
 
 ### `boot-config.conf`
 
@@ -310,6 +317,14 @@ at boot when encrypted zvol device nodes don't exist yet.
 If `saveconfig-boot.json` doesn't exist yet, falls back to the default
 `saveconfig.json`.
 
+The drop-in's `[Unit]` section orders the service
+`After=zfs-import-cache.service zfs-import.target zfs-volume.service` with
+`Wants=zfs-import.target`: USB enclosures can finish enumerating after
+`zfs-import-cache.service` has completed (observed on the 2026-10-27 boot),
+and the restore needs the zvol device nodes to exist. Units that are absent
+on a host are ignored by systemd, so the ordering stays harmless where they
+are missing.
+
 An `ExecStartPost` hook then runs `iscsi-add-encrypted-luns`, which adds the
 encrypted LUNs back when their keys are available at boot (e.g.
 `keylocation=file://` on a non-encrypted filesystem, or a separate
@@ -318,11 +333,32 @@ conf entries name device nodes that do not exist yet — so the boot is not
 noisy and nothing is re-saved. Keys loaded later, after login, are handled by
 [`iscsi-recover-encrypted-luns`](../commands-and-modules/two-node.md#iscsi-recover-encrypted-luns-storage-node).
 
+A second `ExecStartPost` runs
+[`export-iscsi-state --check`](../commands-and-modules/two-node.md#export-iscsi-state-storage-node)
+after the encrypted-LUN helper: the live LUN topology is compared against
+the pool-resident state map and the verdict lands in the boot journal —
+`post-restore verification OK` when live matches the map, or
+`post-restore verification FAILED — live LUNs differ from the pool map; do
+NOT save config until reconciled` with the check's DRIFT detail lines
+beneath it. This is what the 2026-10-27 boot lacked: a restore that brought
+back 3 of 33 LUN mappings looked healthy because nothing compared live
+state to the map. On a normal boot with encrypted LUNs whose keys are not
+yet loaded, the FAILED line is expected until `load-keys` +
+`iscsi-recover-encrypted-luns` complete — its guidance (do not save config
+until reconciled) is correct in that window, and `safe-iscsi-save`'s gate
+would refuse such a save anyway. The wrapper captures the check's output,
+is bounded by `timeout(1)`, and always exits 0, so a wedged `targetcli` can
+neither hang nor fail the unit.
+
 ### `pre-start-backup.conf`
 
-Backs up `saveconfig.json` to `saveconfig.json.pre-start` before each
-restore. If something later saves a degraded config, the last-known-good
-copy is always available.
+Backs up `saveconfig.json` to `saveconfig.json.pre-start` (beside it, in
+`/etc/rtslib-fb-target/`) before each restore. If something later saves a
+degraded config, the last-known-good copy is always available.
+
+Installations that ran an earlier revision of this drop-in may carry a stray
+root-level `/.pre-start` file — the wrong-path backup that revision wrote —
+which can be deleted.
 
 The older `wait-for-zfs-keys.conf` drop-in and the `zfs-keys-unlock.service`
 unit have been removed. Encrypted LUNs are re-added after the key store is

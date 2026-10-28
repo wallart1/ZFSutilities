@@ -6,18 +6,73 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
 
 # ------------------------------------------------------------------
-# Run safe-iscsi-save from a temp copy with paths rewritten and
-# targetcli/generate_boot_config mocked inside the subshell.
+# Live-config writer: `targetcli saveconfig <path>` stages the live LIO
+# state. With SAFECONFIG_FIXTURE set the mock copies that file; otherwise it
+# generates a fully-mapped config for BACKSTORE_COUNT backstores (each a
+# storage_object mapped at its ordinal, one initiator ACL granting every
+# LUN), so the saved config's mappings survive by default and gate tests
+# override the live topology with explicit fixtures.
 # ------------------------------------------------------------------
-_run_safe_iscsi_save() {
+_write_live_config_writer() {
+    local dir="$1"
+    cat > "${dir}/write_live_config.py" <<'WRITEREOF'
+import json, os, sys
+
+dst, count = sys.argv[1], int(sys.argv[2])
+fixture = os.environ.get("SAVECONFIG_FIXTURE", "")
+if fixture:
+    with open(fixture) as f:
+        cfg = json.load(f)
+else:
+    names = ["vm-10%d-disk-0" % i for i in range(count)]
+    cfg = {
+        "storage_objects": [
+            {"name": n, "dev": "/dev/zvol/threeamigos/proxmox/" + n}
+            for n in names
+        ],
+        "targets": [{
+            "wwn": "iqn.2026-02.local.stewie:threeamigos",
+            "tpgs": [{
+                "luns": [
+                    {"storage_object": "/backstores/block/" + n, "index": i}
+                    for i, n in enumerate(names)
+                ],
+                "acls": [{
+                    "node_wwn": "iqn.2026-02.local.tweety",
+                    "mapped_luns": [
+                        {"index": i, "tpg_lun": i} for i in range(len(names))
+                    ],
+                }],
+            }],
+        }],
+    }
+with open(dst, "w") as f:
+    json.dump(cfg, f, indent=2)
+WRITEREOF
+}
+
+# ------------------------------------------------------------------
+# Run safe-iscsi-save from a temp copy with paths rewritten and
+# targetcli/rootcheck mocked inside the subshell.
+#   $1 manifest          $2 savefile
+#   $3 backstore_count   $4 live fixture ("" = generated)
+#   $5 export hook ("" = the script's default fallback)
+#   $6 saveconfig_fail ("1" = targetcli saveconfig itself fails)
+# Prints the runner's combined output and returns its exit status.
+# ------------------------------------------------------------------
+_run_safe_iscsi_save_core() {
     local manifest="$1"
     local savefile="$2"
     local backstore_count="$3"
+    local live_fixture="${4:-}"
+    local hook="${5:-}"
+    local saveconfig_fail="${6:-}"
     local tmpdir
     local runner_rc
     tmpdir=$(mktemp -d)
-    local script_copy="$tmpdir/safe-iscsi-save"
+    _write_live_config_writer "$tmpdir"
 
+    local script_copy="$tmpdir/safe-iscsi-save"
     sed \
         -e "s|/etc/rtslib-fb-target/saveconfig\.json|$savefile|g" \
         -e "s|/etc/rtslib-fb-target/saveconfig-boot\.json|${savefile}.boot|g" \
@@ -37,6 +92,9 @@ EOF
 #!/bin/bash
 export NODE_CONF="$node_conf"
 export mydir="$mydir"
+export SAFE_SAVE_LIVE_FIXTURE="$live_fixture"
+export SAVECONFIG_FAIL="$saveconfig_fail"
+export SAFE_ISCSI_SAVE_EXPORT_ISCSI_STATE="$hook"
 BACKSTORE_COUNT=$backstore_count
 SAVECONFIG_CALLED=""
 targetcli() {
@@ -50,15 +108,19 @@ targetcli() {
                 done
             fi
             ;;
-        "saveconfig")
+        "saveconfig "*)
+            if [[ "\$SAVECONFIG_FAIL" == "1" ]]; then
+                return 1
+            fi
             SAVECONFIG_CALLED="yes"
+            SAVECONFIG_FIXTURE="\$SAFE_SAVE_LIVE_FIXTURE" \\
+                python3 "$tmpdir/write_live_config.py" "\$2" "\$BACKSTORE_COUNT"
             ;;
         *)
             true
             ;;
     esac
 }
-generate_boot_config() { true; }
 rootcheck() { true; }
 source "$script_copy"
 [[ "\$SAVECONFIG_CALLED" == "yes" ]] && echo "SAVECONFIG_CALLED"
@@ -70,6 +132,10 @@ RUNNEREOF
     # across the workdir teardown.
     rm -rf "$tmpdir"
     return "$runner_rc"
+}
+
+_run_safe_iscsi_save() {
+    _run_safe_iscsi_save_core "$1" "$2" "$3" "" "" ""
 }
 
 # ------------------------------------------------------------------
@@ -214,6 +280,7 @@ test_encrypted_backstores_excluded_from_boot_config() {
   ],
   "targets": [
     {
+      "wwn": "iqn.2026-02.local.stewie:threeamigos",
       "tpgs": [
         {
           "luns": [
@@ -239,6 +306,8 @@ EOF
         -e 's|^source_helper rootcheck$|: # rootcheck stays mocked; the suite runs non-root|' \
         "$mydir/bin/safe-iscsi-save" > "$script_copy"
 
+    _write_live_config_writer "$tmpdir"
+
     local node_conf="$tmpdir/node.conf"
     cat > "$node_conf" <<'EOF'
 NODE_MODE="single-node"
@@ -249,14 +318,22 @@ EOF
 export NODE_CONF="$node_conf"
 export mydir="$mydir"
 export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$confdir"
+export SAFE_SAVE_LIVE_FIXTURE=""
+export SAVECONFIG_FAIL=""
+BACKSTORE_COUNT=2
 targetcli() {
     case "\$*" in
         "/backstores/block ls")
             echo "  vm-100-disk-0     /dev/zvol/threeamigos/proxmox/vm-100-disk-0   50G"
             echo "  vm-101-disk-0     /dev/zvol/threeamigos/proxmox/vm-101-disk-0   50G"
             ;;
-        "saveconfig")
-            true
+        "saveconfig "*)
+            if [[ "\$SAVECONFIG_FAIL" == "1" ]]; then
+                return 1
+            fi
+            SAVECONFIG_CALLED="yes"
+            SAVECONFIG_FIXTURE="\$SAFE_SAVE_LIVE_FIXTURE" \\
+                python3 "$tmpdir/write_live_config.py" "\$2" "\$BACKSTORE_COUNT"
             ;;
         *)
             true
@@ -341,6 +418,8 @@ EOF
         -e 's|^source_helper rootcheck$|: # rootcheck stays mocked; the suite runs non-root|' \
         "$mydir/bin/safe-iscsi-save" > "$script_copy"
 
+    _write_live_config_writer "$tmpdir"
+
     local node_conf="$tmpdir/node.conf"
     cat > "$node_conf" <<'EOF'
 NODE_MODE="single-node"
@@ -351,14 +430,22 @@ EOF
 export NODE_CONF="$node_conf"
 export mydir="$mydir"
 export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$confdir"
+export SAFE_SAVE_LIVE_FIXTURE=""
+export SAVECONFIG_FAIL=""
+BACKSTORE_COUNT=2
 targetcli() {
     case "\$*" in
         "/backstores/block ls")
             echo "  vm-100-disk-0     /dev/zvol/threeamigos/proxmox/vm-100-disk-0   50G"
             echo "  vm-101-disk-0     /dev/zvol/threeamigos/proxmox/vm-101-disk-0   50G"
             ;;
-        "saveconfig")
-            true
+        "saveconfig "*)
+            if [[ "\$SAVECONFIG_FAIL" == "1" ]]; then
+                return 1
+            fi
+            SAVECONFIG_CALLED="yes"
+            SAVECONFIG_FIXTURE="\$SAFE_SAVE_LIVE_FIXTURE" \\
+                python3 "$tmpdir/write_live_config.py" "\$2" "\$BACKSTORE_COUNT"
             ;;
         *)
             true
@@ -459,55 +546,15 @@ test_manifest_install_failure_cleans_tmpfile() {
 
 _run_safe_iscsi_save_with_hook() {
     local hook_script="$1"
-    local tmpdir
-    local runner_rc
+    local tmpdir rc=0
     tmpdir=$(mktemp -d)
     local savefile="$tmpdir/saveconfig.json"
     local manifest="$tmpdir/expected-backstores.txt"
     echo '{"storage_objects":[],"targets":[]}' > "$savefile"
     printf 'vm-100-disk-0\nvm-101-disk-0\n' > "$manifest"
-
-    local script_copy="$tmpdir/safe-iscsi-save"
-    sed \
-        -e "s|/etc/rtslib-fb-target/saveconfig\.json|$savefile|g" \
-        -e "s|/etc/rtslib-fb-target/saveconfig-boot\.json|${savefile}.boot|g" \
-        -e "s|/etc/rtslib-fb-target/expected-backstores\.txt|$manifest|g" \
-        -e "s|/etc/iscsi-encrypted-luns\.conf||g" \
-        -e "s|source ~/bashinit|source \"$mydir/bin/bashinit\"|g" \
-        -e 's|^source_helper rootcheck$|: # rootcheck stays mocked; the suite runs non-root|' \
-        "$mydir/bin/safe-iscsi-save" > "$script_copy"
-
-    local node_conf="$tmpdir/node.conf"
-    printf 'NODE_MODE="single-node"\n' > "$node_conf"
-
-    cat > "$tmpdir/runner" << RUNNEREOF
-#!/bin/bash
-export NODE_CONF="$node_conf"
-export mydir="$mydir"
-export SAFE_ISCSI_SAVE_EXPORT_ISCSI_STATE="$hook_script"
-targetcli() {
-    case "\$*" in
-        "/backstores/block ls")
-            echo "  vm-100-disk-0     /dev/zvol/threeamigos/proxmox/vm-100-disk-0   50G"
-            echo "  vm-101-disk-0     /dev/zvol/threeamigos/proxmox/vm-101-disk-0   50G"
-            ;;
-        "saveconfig")
-            SAVECONFIG_CALLED="yes"
-            ;;
-        *)
-            true
-            ;;
-    esac
-}
-rootcheck() { true; }
-source "$script_copy"
-[[ "\$SAVECONFIG_CALLED" == "yes" ]] && echo "SAVECONFIG_CALLED"
-RUNNEREOF
-
-    bash "$tmpdir/runner" 2>&1
-    runner_rc=$?
+    _run_safe_iscsi_save_core "$manifest" "$savefile" 2 "" "$hook_script" "" || rc=$?
     rm -rf "$tmpdir"
-    return "$runner_rc"
+    return "$rc"
 }
 
 test_export_hook_invoked_after_save() {
@@ -585,6 +632,245 @@ test_export_hook_suppressed_by_caller() {
 }
 
 # ------------------------------------------------------------------
+# Authoritative mapping-gate tests (2026-10-27 boot-incident shapes)
+# ------------------------------------------------------------------
+
+# Render a saveconfig-shaped fixture with `total` defined backstores of
+# which the first `mapped` are mapped at ordinals 0..mapped-1, each granted
+# to the single initiator ACL. The incident shape is total=33, mapped=3.
+_render_config_fixture() {
+    python3 - "$1" "$2" "$3" <<'PYEOF'
+import json, sys
+path, total, mapped = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+names = ["vm-10%d-disk-0" % i for i in range(total)]
+cfg = {
+    "storage_objects": [
+        {"name": n, "dev": "/dev/zvol/threeamigos/proxmox/" + n}
+        for n in names
+    ],
+    "targets": [{
+        "wwn": "iqn.2026-02.local.stewie:threeamigos",
+        "tpgs": [{
+            "luns": [
+                {"storage_object": "/backstores/block/" + n, "index": i}
+                for i, n in enumerate(names[:mapped])
+            ],
+            "acls": [{
+                "node_wwn": "iqn.2026-02.local.tweety",
+                "mapped_luns": [
+                    {"index": i, "tpg_lun": i} for i in range(mapped)
+                ],
+            }],
+        }],
+    }],
+}
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+PYEOF
+}
+
+test_incident_shape_refuses_save() {
+    test_start "Defined-but-unmapped backstores refuse the save (incident shape)"
+    local tmpdir manifest savefile bootfile hook live
+    tmpdir=$(mktemp -d)
+    manifest="$tmpdir/expected-backstores.txt"
+    savefile="$tmpdir/saveconfig.json"
+    bootfile="${savefile}.boot"
+    hook="$tmpdir/export-mock"
+    live="$tmpdir/live-config.json"
+
+    # 33 expected, 33 defined — every backstore-count gate passes; the saved
+    # config maps all 33, the live tree maps only 3.
+    local i
+    : > "$manifest"
+    for (( i=0; i<33; i++ )); do printf 'vm-10%d-disk-0\n' "$i" >> "$manifest"; done
+    _render_config_fixture "$savefile" 33 33
+    _render_config_fixture "$live" 33 3
+    printf 'BOOT-SENTINEL\n' > "$bootfile"
+    printf '#!/bin/bash\necho EXPORT_HOOK_CALLED\n' > "$hook"
+    chmod +x "$hook"
+    cp -- "$savefile" "${savefile}.orig"
+    cp -- "$manifest" "${manifest}.orig"
+
+    local output rc=0 leftover
+    output=$(_run_safe_iscsi_save_core "$manifest" "$savefile" 33 "$live" "$hook" "") || rc=$?
+    leftover=$(find "$tmpdir" -maxdepth 1 -name '*.tmp.*' -print -quit)
+
+    local ok=true
+    [[ "$rc" -ne 0 ]] || ok=false
+    [[ "$output" == *"refusing to save — 30 LUN mapping(s)"* ]] || ok=false
+    [[ "$output" == *"(and 30 ACL MappedLUN grant(s)) would be lost"* ]] || ok=false
+    cmp -s "${savefile}.orig" "$savefile" || ok=false
+    cmp -s "${manifest}.orig" "$manifest" || ok=false
+    [[ "$(cat "$bootfile")" == "BOOT-SENTINEL" ]] || ok=false
+    [[ "$output" != *"EXPORT_HOOK_CALLED"* ]] || ok=false
+    [[ -z "$leftover" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc leftover='$leftover' output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_legitimate_shrinkage_saves() {
+    test_start "Manifest-first removal (remove-vm-disk order) saves cleanly"
+    local tmpdir manifest savefile live
+    tmpdir=$(mktemp -d)
+    manifest="$tmpdir/expected-backstores.txt"
+    savefile="$tmpdir/saveconfig.json"
+    live="$tmpdir/live-config.json"
+
+    # vm-101-disk-0's manifest line left first; live no longer defines it.
+    printf 'vm-100-disk-0\n' > "$manifest"
+    _render_config_fixture "$savefile" 2 2
+    _render_config_fixture "$live" 1 1
+
+    local output rc=0
+    output=$(_run_safe_iscsi_save_core "$manifest" "$savefile" 1 "$live" "" "") || rc=$?
+
+    local ok=true
+    [[ "$rc" -eq 0 ]] || ok=false
+    [[ "$output" == *"SAVECONFIG_CALLED"* ]] || ok=false
+    # The staged live config was installed byte-identically, and the boot
+    # config was regenerated from it.
+    cmp -s "$live" "$savefile" || ok=false
+    [[ -f "${savefile}.boot" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_mappedlun_loss_refuses_save() {
+    test_start "ACL emptied while mappings expected refuses the save"
+    local tmpdir manifest savefile live
+    tmpdir=$(mktemp -d)
+    manifest="$tmpdir/expected-backstores.txt"
+    savefile="$tmpdir/saveconfig.json"
+    live="$tmpdir/live-config.json"
+
+    printf 'vm-100-disk-0\nvm-101-disk-0\n' > "$manifest"
+    _render_config_fixture "$savefile" 2 2
+    # Live: both TPG LUNs mapped, but the initiator's MappedLUNs were lost.
+    python3 - "$live" <<'PYEOF'
+import json, sys
+cfg = {
+    "storage_objects": [
+        {"name": "vm-100-disk-0", "dev": "/dev/zvol/threeamigos/proxmox/vm-100-disk-0"},
+        {"name": "vm-101-disk-0", "dev": "/dev/zvol/threeamigos/proxmox/vm-101-disk-0"}],
+    "targets": [{"wwn": "iqn.2026-02.local.stewie:threeamigos", "tpgs": [{
+        "luns": [
+            {"storage_object": "/backstores/block/vm-100-disk-0", "index": 0},
+            {"storage_object": "/backstores/block/vm-101-disk-0", "index": 1}],
+        "acls": [{"node_wwn": "iqn.2026-02.local.tweety", "mapped_luns": []}],
+    }]}],
+}
+with open(sys.argv[1], "w") as f:
+    json.dump(cfg, f, indent=2)
+PYEOF
+    cp -- "$savefile" "${savefile}.orig"
+
+    local output rc=0
+    output=$(_run_safe_iscsi_save_core "$manifest" "$savefile" 2 "$live" "" "") || rc=$?
+
+    local ok=true
+    [[ "$rc" -ne 0 ]] || ok=false
+    [[ "$output" == *"ACL iqn.2026-02.local.tweety MappedLUN 0 on iqn.2026-02.local.stewie:threeamigos (vm-100-disk-0) would be lost"* ]] || ok=false
+    [[ "$output" == *"refusing to save — 2 ACL MappedLUN grant(s) would be lost"* ]] || ok=false
+    cmp -s "${savefile}.orig" "$savefile" || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_stale_zvol_warns_on_permitted_loss() {
+    test_start "A permitted loss whose zvol still exists draws a stale-manifest WARN"
+    local tmpdir manifest savefile live zvol
+    tmpdir=$(mktemp -d)
+    manifest="$tmpdir/expected-backstores.txt"
+    savefile="$tmpdir/saveconfig.json"
+    live="$tmpdir/live-config.json"
+    zvol="$tmpdir/still-here"
+    touch "$zvol"
+
+    printf 'vm-100-disk-0\n' > "$manifest"
+    _render_config_fixture "$live" 1 1
+    # Saved config maps both backstores; vm-101's dev still exists even
+    # though the manifest no longer expects it.
+    python3 - "$savefile" "$zvol" <<'PYEOF'
+import json, sys
+cfg = {
+    "storage_objects": [
+        {"name": "vm-100-disk-0", "dev": "/dev/zvol/threeamigos/proxmox/vm-100-disk-0"},
+        {"name": "vm-101-disk-0", "dev": sys.argv[2]}],
+    "targets": [{"wwn": "iqn.2026-02.local.stewie:threeamigos", "tpgs": [{
+        "luns": [
+            {"storage_object": "/backstores/block/vm-100-disk-0", "index": 0},
+            {"storage_object": "/backstores/block/vm-101-disk-0", "index": 1}],
+        "acls": [{"node_wwn": "iqn.2026-02.local.tweety",
+                  "mapped_luns": [{"index": 0, "tpg_lun": 0},
+                                  {"index": 1, "tpg_lun": 1}]}],
+    }]}],
+}
+with open(sys.argv[1], "w") as f:
+    json.dump(cfg, f, indent=2)
+PYEOF
+
+    local output rc=0
+    output=$(_run_safe_iscsi_save_core "$manifest" "$savefile" 1 "$live" "" "") || rc=$?
+
+    local ok=true
+    [[ "$rc" -eq 0 ]] || ok=false
+    [[ "$output" == *"vm-101-disk-0: manifest no longer expects it but zvol ${zvol} still exists"* ]] || ok=false
+    [[ "$output" == *"the manifest may be stale"* ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_saveconfig_failure_refuses_save() {
+    test_start "A failing targetcli saveconfig leaves the saved config untouched"
+    local tmpdir manifest savefile
+    tmpdir=$(mktemp -d)
+    manifest="$tmpdir/expected-backstores.txt"
+    savefile="$tmpdir/saveconfig.json"
+
+    printf 'vm-100-disk-0\nvm-101-disk-0\n' > "$manifest"
+    _render_config_fixture "$savefile" 2 2
+    cp -- "$savefile" "${savefile}.orig"
+
+    local output rc=0 leftover
+    output=$(_run_safe_iscsi_save_core "$manifest" "$savefile" 2 "" "" "1") || rc=$?
+    leftover=$(find "$tmpdir" -maxdepth 1 -name '*.tmp.*' -print -quit)
+
+    local ok=true
+    [[ "$rc" -ne 0 ]] || ok=false
+    [[ "$output" == *"targetcli saveconfig failed — config untouched"* ]] || ok=false
+    cmp -s "${savefile}.orig" "$savefile" || ok=false
+    [[ -z "$leftover" ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc leftover='$leftover' output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
+# ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
 test_zero_active_backstores_refuses_save
@@ -601,5 +887,10 @@ test_export_hook_invoked_after_save
 test_export_hook_failure_is_non_fatal
 test_export_hook_missing_warns_only
 test_export_hook_suppressed_by_caller
+test_incident_shape_refuses_save
+test_legitimate_shrinkage_saves
+test_mappedlun_loss_refuses_save
+test_stale_zvol_warns_on_permitted_loss
+test_saveconfig_failure_refuses_save
 
 test_summary

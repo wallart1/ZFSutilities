@@ -312,6 +312,21 @@ if [[ "$check_mode" == "two-node" ]]; then
         else
             pass "iSCSI post-restore detection: no restore signature found"
         fi
+        # Pool identity runs as its own detection pass: a renamed or
+        # replaced pool is not restore evidence, and reconcile-iscsi-state
+        # cannot resolve it — the findings stay informational warnings.
+        detect_reset
+        detect_pool_identity
+        if [[ ${#_detect_lines[@]} -gt 0 ]]; then
+            for _finding in "${_detect_lines[@]}"; do
+                warn "iSCSI pool-identity detection: ${_finding}"
+            done
+            warn "iSCSI pool-identity detection: identities are never repaired" \
+                 "automatically — verify the pool name/GUID by hand before" \
+                 "saving iSCSI state or editing VM disks"
+        else
+            pass "iSCSI pool-identity detection: pool identities are consistent"
+        fi
         unset _iscsi_lib _finding
     fi
     if [[ -z "$list_failures" ]]; then

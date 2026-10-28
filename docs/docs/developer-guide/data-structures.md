@@ -849,6 +849,9 @@ beside the map so the pool-resident pair is self-contained for recovery.
   "host": "stewie",
   "iqn_prefix": "iqn.2026-02.local.stewie",
   "storage_ip": "192.168.100.1",
+  "pools": {
+    "threeamigos": "4338716537971988948"
+  },
   "targets": {
     "iqn.2026-02.local.stewie:threeamigos": {
       "acls": ["iqn.2026-02.local.tweety"],
@@ -871,6 +874,7 @@ beside the map so the pool-resident pair is self-contained for recovery.
 | `generated` | string | `date -Iseconds` timestamp of the export |
 | `host` | string | Short hostname of the storage host that wrote the map |
 | `iqn_prefix` / `storage_ip` | string | Node identity at export time (drift in these is reported by `--check`) |
+| `pools.<name>` | string | Pool GUID at export time — the pool-identity fence (a renamed or replaced pool reuses a name but never a GUID); additive key, maps written before it simply omit it |
 | `targets.<iqn>.luns` | object | LUN number (string key) → backstore name for that target |
 | `targets.<iqn>.acls` | array | Initiator IQNs bound to the target's ACLs |
 | `backstores.<name>.dev` | string | Zvol device path backing the backstore |
@@ -902,6 +906,13 @@ Semantics:
   `--from`) and recreates the recorded backstores/LUNs/ACLs create-only.
   After a partial reconcile (refused or skipped entries) the map refresh is
   suppressed so entries whose zvols are still missing survive in it.
+- **Pool identity, compared and never rewritten.** The `pools` GUIDs are
+  recorded at export and compared by `export-iscsi-state --check` (a GUID
+  change is a `DRIFT:` line), by the `detect_pool_identity` detector
+  ([check-prerequisites](../commands-and-modules/commands.md#check-prerequisites)
+  `--two-node` and [setup-iscsi-targets](../commands-and-modules/two-node.md#setup-iscsi-targets-storage-node)),
+  and by the Dashboard — but no tool ever renames, re-creates, or rewrites
+  a pool identity automatically; a finding is human-resolved evidence.
 
 ## Session log index (`/var/log/zfsutilities/sessions/.log_index.json`)
 

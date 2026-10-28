@@ -7,9 +7,10 @@
 # pools re-import current: LUNs created after the backup point vanish and
 # repair-iscsi-luns cannot restore them because the manifest regressed with
 # the same disk. This script writes the authoritative LUN map — per-target
-# LUN → backstore, per-backstore zvol device, ACL initiators, plus a copy of
-# node.conf — onto every online pool at <pool>/zfsutilities/, so any
-# surviving pool can serve recovery.
+# LUN → backstore, per-backstore zvol device, ACL initiators, the configured
+# pools' GUIDs (pool-identity fence: a renamed or replaced pool reuses a
+# name but never a GUID), plus a copy of node.conf — onto every online pool
+# at <pool>/zfsutilities/, so any surviving pool can serve recovery.
 #
 # safe-iscsi-save invokes this script after every successful save, keeping
 # the map as fresh as the last LUN change. Pool-wide snapshot/retention
@@ -21,7 +22,9 @@
 #   --check   Compare live state against the newest map found on any pool and
 #             report drift (manual targetcli edits since the last export).
 #   --force   Record the live state even when it is degraded (fewer active
-#             backstores than the manifest or the newest map expects).
+#             backstores than the manifest expects) or would drop LUN
+#             mappings the newest pool map still records while their
+#             backstores remain in the manifest.
 #   --print-map
 #             Print the newest pool-resident map to stdout, read-only. The
 #             compute host fetches the recovery map over ssh this way
@@ -128,18 +131,25 @@ pools_written=0
 #   _state_bs_devs[bs]       zvol device path of the backstore
 #   _state_bs_target[bs]     full IQN of the target that maps the backstore
 #   _state_bs_lun[bs]        LUN index on that target (unset when unmapped)
+#   _state_pool_guids[pool]  pool GUID (pool-identity fence; a pool whose
+#                            GUID cannot be read is simply omitted — an
+#                            offline pool must not fail or noise the export)
 collect_live_state() {
     _state_target_iqns=()
     _state_bs_names=()
-    unset -v _state_luns _state_acls _state_bs_devs _state_bs_target _state_bs_lun
+    unset -v _state_luns _state_acls _state_bs_devs _state_bs_target \
+        _state_bs_lun _state_pool_guids
     declare -gA _state_luns=() _state_acls=() _state_bs_devs=() \
-        _state_bs_target=() _state_bs_lun=()
+        _state_bs_target=() _state_bs_lun=() _state_pool_guids=()
 
-    local pool iqn name entries
+    local pool iqn name entries guid
     while IFS= read -r pool; do
         [[ -z "$pool" ]] && continue
         iqn=$(pool_to_target "$pool") || continue
         _state_target_iqns+=("$iqn")
+
+        guid=$(zpool get -H -o value guid "$pool" 2>/dev/null) || guid=""
+        [[ -n "$guid" && "$guid" != *[!0-9]* ]] && _state_pool_guids["$pool"]="$guid"
 
         entries=""
         parse_target_luns "$iqn"
@@ -175,7 +185,16 @@ emit_state_json() {
     printf '  "storage_ip": "%s",\n' "$storage_ip"
 
     local iqn name line
-    local -a tblocks=() litems=() aitems=() bblocks=()
+    local -a tblocks=() litems=() aitems=() bblocks=() pitems=()
+
+    # Pool identity at export time: name -> GUID. The recorded GUID is what
+    # the pool-identity fence compares against later (a renamed or replaced
+    # pool reuses a name but never a GUID). Pools whose GUID could not be
+    # read are absent by design.
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        pitems+=("    \"${name}\": \"${_state_pool_guids[$name]}\"")
+    done < <(printf '%s\n' "${!_state_pool_guids[@]}" | sort -u)
 
     while IFS= read -r iqn; do
         [[ -z "$iqn" ]] && continue
@@ -218,6 +237,7 @@ $(json_join_args "${litems[@]}")
         fi
     done < <(printf '%s\n' "${_state_bs_names[@]}" | sort -u)
 
+    printf '  "pools": {\n%s\n  },\n' "$(json_join_args "${pitems[@]}")"
     printf '  "targets": {\n%s\n  },\n' "$(json_join_args "${tblocks[@]}")"
     printf '  "backstores": {\n%s\n  }\n}\n' "$(json_join_args "${bblocks[@]}")"
 }
@@ -335,36 +355,115 @@ count_manifest_entries() {
     printf '%s\n' "$count"
 }
 
-# Print the number of entries in a JSON file's top-level "backstores" object
-# (empty on any error).
-read_json_backstore_count() {
-    local file="$1"
-    python3 -c 'import json, sys
+# Compare the recorded map ($1) with the staged new state ($2) under the
+# expected-backstores manifest ($3): a recorded (iqn,lun)->backstore mapping
+# may disappear only when its backstore left the manifest (the intentional-
+# change authority remove-vm-disk / move-vm-disk / archive maintain, and the
+# manifest safe-iscsi-save regenerates before its export hook omits removed
+# backstores). Any other loss is printed as a LOSS line and fails the check —
+# counting backstores alone passes the degraded shape where every backstore
+# is loaded but few are mapped. Modeled on report_state_drift.
+report_map_losses() {
+    python3 - "$1" "$2" "$3" << 'PYEOF'
+import json, os, sys
+
+def load(path):
+    with open(path) as f:
+        return json.load(f)
+
+def valid_bs_name(name):
+    # vm-<vmid>-disk-<N>: the same fixed-string shape the bash gates enforce
+    if not name.startswith("vm-") or "-disk-" not in name:
+        return False
+    mid, _, end = name[3:].partition("-disk-")
+    return mid.isdigit() and end.isdigit() and "-disk-" not in end
+
+def manifest_expected(path):
+    if not os.path.isfile(path):
+        return None
+    expected = set()
+    with open(path) as f:
+        for line in f:
+            name = line.strip()
+            if valid_bs_name(name):
+                expected.add(name)
+    return expected
+
 try:
-    with open(sys.argv[1]) as f:
-        print(len(json.load(f).get("backstores", {})))
-except Exception:
-    pass' "$file" 2>/dev/null
+    old = load(sys.argv[1])
+    new = load(sys.argv[2])
+except Exception as exc:
+    print("LOSS: could not parse the recorded map or the staged state (%s)" % exc)
+    sys.exit(1)
+expected = manifest_expected(sys.argv[3])
+live_backstores = set(new.get("backstores", {}))
+
+losses = []
+for iqn, t in sorted(old.get("targets", {}).items()):
+    old_luns = t.get("luns", {})
+    new_luns = new.get("targets", {}).get(iqn, {}).get("luns", {})
+    def lun_key(s):
+        return int(s) if s.isdigit() else 1 << 30
+    for idx in sorted(old_luns, key=lun_key):
+        bs = old_luns[idx]
+        if new_luns.get(idx) == bs:
+            continue
+        if expected is None:
+            # No manifest at all (post-restore regression): the map is the
+            # only authority, so no mapping may disappear.
+            permitted = False
+        elif not expected:
+            # An empty manifest is legitimate only for the target-only
+            # transition (mirrors safe-iscsi-save's stance); with backstores
+            # still live it is a broken manifest.
+            permitted = not live_backstores
+        else:
+            permitted = bs not in expected
+        if not permitted:
+            losses.append("target %s LUN %s -> %s" % (iqn, idx, bs))
+
+for line in losses:
+    print("LOSS: %s would be lost while still expected" % line)
+sys.exit(1 if losses else 0)
+PYEOF
 }
 
-# Refuse to record a degraded live state over a healthy map: a bare-metal
-# restore boots with an empty or partial LIO tree, and overwriting the pool
-# map then would destroy the recovery authority. Mirrors safe-iscsi-save's
-# degraded guard; the expected count falls back from the manifest to the
-# newest pool map when the manifest is missing. Returns 0 when the live
-# state may be recorded.
+# Refuse to record a live state that would drop still-expected LUN mappings
+# from the pool map: a bare-metal restore boots with an empty or partial LIO
+# tree, and overwriting the pool map then would destroy the recovery
+# authority. The primary fence is the mapping-loss comparison against the
+# newest pool-resident map; when no map exists yet (first export after
+# install), the manifest-count floor from safe-iscsi-save's degraded guard
+# applies instead. Returns 0 when the live state may be recorded.
 enforce_not_degraded() {
-    local live_count="$1"
-    local expected=""
+    local json_tmp="$1"
+    local live_count="$2"
+    local map_file loss_out rc=0
 
+    map_file=$(newest_iscsi_state_map || true)
+    if [[ -n "$map_file" ]]; then
+        loss_out=$(report_map_losses "$map_file" "$json_tmp" "$ISCSI_MANIFEST") || rc=$?
+        [[ -n "$loss_out" ]] && printf '%s\n' "$loss_out"
+        if [[ "$rc" -ne 0 ]]; then
+            if [[ "$force_write" == true ]]; then
+                log_msg "WARN: $(printf '%s\n' "$loss_out" | grep -c '^LOSS:') LUN mapping(s)" \
+                    "would be lost while still expected — recording anyway (--force)"
+            else
+                log_msg "FATAL: Live state would drop still-expected LUN mapping(s)" \
+                    "from the pool map (see LOSS lines)"
+                log_msg "FATAL:   The pool state map was NOT overwritten."
+                log_msg "FATAL:   Resolve the degradation, or rerun with --force to" \
+                    "record it anyway."
+                return 1
+            fi
+        fi
+        return 0
+    fi
+
+    # No prior map on any pool: the manifest-count floor.
+    local expected=""
     if [[ -f "$ISCSI_MANIFEST" ]]; then
         expected=$(count_manifest_entries)
-    else
-        local map_file
-        map_file=$(newest_iscsi_state_map || true)
-        if [[ -n "$map_file" ]]; then
-            expected=$(read_json_backstore_count "$map_file")
-        fi
     fi
     [[ -z "$expected" || "$expected" -eq 0 ]] && return 0
 
@@ -406,6 +505,19 @@ if old.get("iqn_prefix") != new.get("iqn_prefix"):
 if old.get("storage_ip") != new.get("storage_ip"):
     drift.append("storage_ip: map has %r, live has %r"
                  % (old.get("storage_ip"), new.get("storage_ip")))
+
+# Pool identity: a GUID change on a name present in both means the pool was
+# renamed or replaced. A name present on one side only is deliberately not
+# drift — an offline configured pool simply omits its GUID from the live
+# export (and a pool added since the last export has no recorded identity
+# yet); neither is a topology change on the LUN map's objects.
+old_pools = old.get("pools", {})
+new_pools = new.get("pools", {})
+for pool in sorted(set(old_pools) & set(new_pools)):
+    if old_pools[pool] != new_pools[pool]:
+        drift.append("pools.%s: GUID changed: map has %r, live has %r"
+                     " (pool renamed or replaced?)" % (pool, old_pools[pool],
+                                                       new_pools[pool]))
 
 old_tg = old.get("targets", {})
 new_tg = new.get("targets", {})
@@ -511,8 +623,9 @@ if [[ "$check_only" == true ]]; then
     exit "$rc"
 fi
 
-# Never let a degraded live state overwrite a healthy pool map.
-enforce_not_degraded "${#_state_bs_names[@]}" || {
+# Never let a live state that would drop still-expected LUN mappings
+# overwrite the healthy pool map.
+enforce_not_degraded "$json_tmp" "${#_state_bs_names[@]}" || {
     rm -f "$json_tmp"
     exit 1
 }

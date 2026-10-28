@@ -126,12 +126,32 @@ STUB
         chmod +x "$tmp_bin/python3"
     fi
 
+    # PYTHON3_DELEGATE=1: python3 execs the real interpreter for everything
+    # except --version, so detection helpers that parse JSON through python3
+    # (read_json_string_field, read_map_pool_guids in lib/iscsi-lib.sh)
+    # work under the sealed PATH. Only the pool-identity tests set this —
+    # the module probes above keep their stubbed behavior.
+    if [[ "${PYTHON3_DELEGATE:-}" == "1" ]]; then
+        rm -f "$tmp_bin/python3"
+        _real_python3="$(command -v python3)" || _real_python3="/usr/bin/python3"
+        cat > "$tmp_bin/python3" << STUB
+#!/usr/bin/bash
+[[ "\$1" == "--version" ]] && { echo "Python 3.11.2"; exit 0; }
+exec "${_real_python3}" "\$@"
+STUB
+        chmod +x "$tmp_bin/python3"
+        unset _real_python3
+    fi
+
     # ZFS tooling: ZFS_STUB=absent leaves zfs/zpool out of the stub PATH
     # (drives the contrib-note probe); present otherwise. With
     # ZFS_VOLUMES_FIXTURE set, zfs answers the detection scan
-    # (`list -Hp -t volume ...`) from the fixture file instead of /bin/true.
+    # (`list -Hp -t volume ...`) from the fixture file instead of /bin/true;
+    # with ZFS_MOUNTPOINTS_FIXTURE set ("ds|mountpoint" lines), zfs also
+    # answers `list -H -o mountpoint <ds>` (state-map location for the
+    # pool-identity detector).
     if [[ "${ZFS_STUB:-present}" != "absent" ]]; then
-        if [[ -n "${ZFS_VOLUMES_FIXTURE:-}" ]]; then
+        if [[ -n "${ZFS_VOLUMES_FIXTURE:-}" || -n "${ZFS_MOUNTPOINTS_FIXTURE:-}" ]]; then
             # Builtins only (printf/read): the sealed PATH has no cat, and a
             # 127 from the stub would silently empty the detection scan.
             cat > "$tmp_bin/zfs" << 'EOF'
@@ -140,13 +160,56 @@ if [[ "$1 $2" == "list -Hp" && -n "${ZFS_VOLUMES_FIXTURE:-}" ]]; then
     while IFS= read -r _line; do printf '%s\n' "$_line"; done < "$ZFS_VOLUMES_FIXTURE"
     exit 0
 fi
+if [[ "$1 $2" == "list -H" && "$3" == "-o" && "$4" == "mountpoint" \
+        && -n "${ZFS_MOUNTPOINTS_FIXTURE:-}" ]]; then
+    while IFS='|' read -r _ds _mnt; do
+        if [[ "$_ds" == "$5" ]]; then
+            printf '%s\n' "$_mnt"
+            exit 0
+        fi
+    done < "$ZFS_MOUNTPOINTS_FIXTURE"
+    exit 1
+fi
 exec /bin/true
 EOF
             chmod +x "$tmp_bin/zfs"
         else
             ln -s /bin/true "$tmp_bin/zfs"
         fi
-        ln -s /bin/true "$tmp_bin/zpool"
+        # zpool: fixture-driven when any pool-identity fixture is set —
+        # `list -Ho name` from ZPOOL_LIST_FIXTURE (one pool per line),
+        # `get -H -o value guid <pool>` from ZPOOL_GUID_FIXTURE
+        # ("pool|guid" lines), `import` from ZPOOL_IMPORT_FIXTURE (raw
+        # zpool import output). Builtins only, same sealed-PATH rule.
+        if [[ -n "${ZPOOL_LIST_FIXTURE:-}" || -n "${ZPOOL_GUID_FIXTURE:-}" \
+                || -n "${ZPOOL_IMPORT_FIXTURE:-}" ]]; then
+            cat > "$tmp_bin/zpool" << 'EOF'
+#!/usr/bin/bash
+if [[ "$1 $2 $3" == "list -Ho name" || "$1 $2 $3 $4" == "list -H -o name" ]]; then
+    if [[ -n "${ZPOOL_LIST_FIXTURE:-}" ]]; then
+        while IFS= read -r _line; do printf '%s\n' "$_line"; done < "$ZPOOL_LIST_FIXTURE"
+    fi
+    exit 0
+fi
+if [[ "$1 $2 $3 $4 $5" == "get -H -o value guid" && -n "${ZPOOL_GUID_FIXTURE:-}" ]]; then
+    while IFS='|' read -r _pool _guid; do
+        if [[ "$_pool" == "$6" ]]; then
+            printf '%s\n' "$_guid"
+            exit 0
+        fi
+    done < "$ZPOOL_GUID_FIXTURE"
+    exit 0
+fi
+if [[ "$1" == "import" && -n "${ZPOOL_IMPORT_FIXTURE:-}" ]]; then
+    while IFS= read -r _line; do printf '%s\n' "$_line"; done < "$ZPOOL_IMPORT_FIXTURE"
+    exit 0
+fi
+exit 0
+EOF
+            chmod +x "$tmp_bin/zpool"
+        else
+            ln -s /bin/true "$tmp_bin/zpool"
+        fi
     fi
 
     # apt-cache: stubbed only when APT_CANDIDATE is set ("(none)" or a
@@ -837,10 +900,280 @@ test_two_node_detection_not_in_list_failures() {
     test_pass
 }
 
+# ---------------------------------------------------------------------------
+# --two-node pool-identity detection (informational warns only)
+# ---------------------------------------------------------------------------
+
+# Scratch dir for one identity test: a state-map directory, stub fixture
+# files, and fresh OS-disk files (the restore-signature block stays clean,
+# isolating the identity block under test).
+make_identity_fixtures() {
+    local dir
+    dir=$(mktemp -d)
+    mkdir -p "${dir}/map"
+    printf '%s\n' "$dir"
+}
+
+# Stage the default healthy identity env into $1: oneamigos — threeamigos
+# imported, map records its GUID, no import candidates. Callers overwrite
+# the individual fixture files to build each finding.
+stage_identity_fixtures() {
+    local fx="$1"
+    printf '{"version":1,"generated":"2026-10-28T10:00:00+00:00","host":"stewie","pools":{"threeamigos":"4338716537971988948"}}\n' \
+        > "${fx}/map/iscsi-state.json"
+    printf 'threeamigos/zfsutilities|%s/map\n' "$fx" > "${fx}/mountpoints"
+    : > "${fx}/saveconfig.json"
+    : > "${fx}/manifest"
+    touch -d @1790000000 "${fx}/saveconfig.json" "${fx}/manifest"
+    printf 'threeamigos\n' > "${fx}/zpool-list"
+    printf 'threeamigos|4338716537971988948\n' > "${fx}/zpool-guids"
+    : > "${fx}/zpool-import"
+}
+
+# Run check-prerequisites --two-node against the identity fixtures in $1.
+run_identity_check() {
+    local fx="$1"
+    shift
+    TWO_NODE_STUB=1 \
+    PYTHON3_DELEGATE=1 \
+    ZFS_MOUNTPOINTS_FIXTURE="${fx}/mountpoints" \
+    ZPOOL_LIST_FIXTURE="${fx}/zpool-list" \
+    ZPOOL_GUID_FIXTURE="${fx}/zpool-guids" \
+    ZPOOL_IMPORT_FIXTURE="${fx}/zpool-import" \
+    ISCSI_SAVECONFIG="${fx}/saveconfig.json" \
+    ISCSI_MANIFEST="${fx}/manifest" \
+    run_check_prerequisites_with_mock_env "$@"
+}
+
+test_two_node_identity_guid_mismatch_warns() {
+    test_start "--two-node: live GUID differing from the map warns"
+
+    local fx output rc
+    fx=$(make_identity_fixtures)
+    stage_identity_fixtures "$fx"
+    # The pool under the known name was replaced.
+    printf 'threeamigos|111222333444555666\n' > "${fx}/zpool-guids"
+    output=$(run_identity_check "$fx" --two-node 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 with identity findings, got $rc"
+        return
+    fi
+    if [[ "$output" != *"iSCSI pool-identity detection: pool threeamigos renamed or replaced — map recorded GUID 4338716537971988948, live GUID 111222333444555666"* ]]; then
+        test_fail "Expected the GUID-mismatch warn line in output"
+        return
+    fi
+    if [[ "$output" == *"pool identities are consistent"* ]]; then
+        test_fail "Must not print the identity clean line alongside findings"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_identity_expected_pool_missing_warns() {
+    test_start "--two-node: map-recorded pool not imported warns"
+
+    local fx output rc
+    fx=$(make_identity_fixtures)
+    stage_identity_fixtures "$fx"
+    printf '{"version":1,"generated":"2026-10-28T10:00:00+00:00","host":"stewie","pools":{"threeamigos":"4338716537971988948","NVME1":"252995746834113014"}}\n' \
+        > "${fx}/map/iscsi-state.json"
+    # NVME1 (recorded in the map) is not imported.
+    output=$(run_identity_check "$fx" --two-node 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 with identity findings, got $rc"
+        return
+    fi
+    if [[ "$output" != *"expected pool NVME1 is not imported — offline, renamed, or replaced"* ]]; then
+        test_fail "Expected the expected-pool-missing warn line in output"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_identity_unexpected_pool_warns() {
+    test_start "--two-node: imported pool outside the expected set warns"
+
+    local fx output rc
+    fx=$(make_identity_fixtures)
+    stage_identity_fixtures "$fx"
+    printf 'threeamigos\ntemp\n' > "${fx}/zpool-list"
+    printf 'threeamigos|4338716537971988948\ntemp|4169992676649853288\n' > "${fx}/zpool-guids"
+    output=$(run_identity_check "$fx" --two-node 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 with identity findings, got $rc"
+        return
+    fi
+    if [[ "$output" != *"imported pool temp is not in the node config — an unexpected pool is serving data here"* ]]; then
+        test_fail "Expected the unexpected-pool warn line in output"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_identity_duplicate_import_candidate_warns() {
+    test_start "--two-node: import candidate duplicating an imported name warns"
+
+    local fx output rc
+    fx=$(make_identity_fixtures)
+    stage_identity_fixtures "$fx"
+    cat > "${fx}/zpool-import" << 'EOF'
+   pool: threeamigos
+     id: 999888777666555444
+  state: ONLINE
+ action: The pool can be imported using its name or numeric identifier.
+ config:
+
+	threeamigos	ONLINE
+	  sdb	ONLINE
+EOF
+    output=$(run_identity_check "$fx" --two-node 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 with identity findings, got $rc"
+        return
+    fi
+    if [[ "$output" != *"an importable pool is also named threeamigos (id 999888777666555444) on non-zvol devices"* ]]; then
+        test_fail "Expected the duplicate-name warn line in output"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_identity_zvol_candidate_stays_silent() {
+    test_start "--two-node: zvol-backed import candidate does not warn (ITF guests)"
+
+    local fx output rc
+    fx=$(make_identity_fixtures)
+    stage_identity_fixtures "$fx"
+    # A lab guest's pool reusing the production name, living on host zvols —
+    # the exact false-positive the zd* exclusion exists for.
+    cat > "${fx}/zpool-import" << 'EOF'
+   pool: threeamigos
+     id: 123456789012345678
+  state: ONLINE
+ action: The pool can be imported using its name or numeric identifier.
+ config:
+
+	threeamigos	ONLINE
+	  zd32	ONLINE
+	  zd32p1	ONLINE
+EOF
+    output=$(run_identity_check "$fx" --two-node 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 on the zvol-candidate shape, got $rc"
+        return
+    fi
+    if [[ "$output" != *"✓ iSCSI pool-identity detection: pool identities are consistent"* ]]; then
+        test_fail "Expected the identity clean pass line"
+        return
+    fi
+    if [[ "$output" == *"⚠ iSCSI pool-identity detection"* ]]; then
+        test_fail "A zvol-backed duplicate must not produce an identity warn"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_identity_healthy_passes() {
+    test_start "--two-node: matching identities report the clean pass line"
+
+    local fx output rc
+    fx=$(make_identity_fixtures)
+    stage_identity_fixtures "$fx"
+    output=$(run_identity_check "$fx" --two-node 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 on a healthy two-node check, got $rc"
+        return
+    fi
+    if [[ "$output" != *"✓ iSCSI pool-identity detection: pool identities are consistent"* ]]; then
+        test_fail "Expected the identity clean pass line"
+        return
+    fi
+    if [[ "$output" == *"⚠ iSCSI pool-identity detection"* ]]; then
+        test_fail "Healthy state must produce no identity warns"
+        return
+    fi
+    test_pass
+}
+
+test_two_node_identity_findings_not_in_list_failures() {
+    test_start "--two-node: identity findings never enter --list-failures"
+
+    local fx output rc
+    fx=$(make_identity_fixtures)
+    stage_identity_fixtures "$fx"
+    printf 'threeamigos|111222333444555666\n' > "${fx}/zpool-guids"
+    output=$(run_identity_check "$fx" --two-node --list-failures 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Warn-only findings must not fail the gate, got $rc"
+        return
+    fi
+    if [[ "$output" == *"iSCSI"* ]]; then
+        test_fail "Identity findings must stay out of the failure list: $output"
+        return
+    fi
+    test_pass
+}
+
 test_two_node_detection_stale_saveconfig_warns
 test_two_node_detection_dead_manifest_entry_warns
 test_two_node_detection_healthy_passes
 test_two_node_detection_not_in_list_failures
+test_two_node_identity_guid_mismatch_warns
+test_two_node_identity_expected_pool_missing_warns
+test_two_node_identity_unexpected_pool_warns
+test_two_node_identity_duplicate_import_candidate_warns
+test_two_node_identity_zvol_candidate_stays_silent
+test_two_node_identity_healthy_passes
+test_two_node_identity_findings_not_in_list_failures
 
 test_summary
 teardown_test_env

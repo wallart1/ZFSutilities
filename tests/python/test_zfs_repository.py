@@ -55,23 +55,28 @@ class TestZfsRepositoryReads(unittest.TestCase):
         repo._run = lambda *a, **k: result
         return repo
 
-    def test_list_pools_parses_seven_columns(self):
-        repo = self._repo("tank\tONLINE\t10T\t5T\t5T\t75%\t-\n")
+    def test_list_pools_parses_eight_columns(self):
+        repo = self._repo("tank\tONLINE\t10T\t5T\t5T\t75%\t-\t1234567890\n")
         pools = repo.list_pools()
         self.assertEqual(len(pools), 1)
         self.assertEqual(
             pools[0],
-            PoolRow("tank", "ONLINE", "10T", "5T", "5T", "75%", "-"),
+            PoolRow("tank", "ONLINE", "10T", "5T", "5T", "75%", "-", "1234567890"),
         )
 
     def test_list_pools_parses_active_checkpoint(self):
-        repo = self._repo("tank\tONLINE\t10T\t5T\t5T\t75%\t50G\n")
+        repo = self._repo("tank\tONLINE\t10T\t5T\t5T\t75%\t50G\t1234567890\n")
         pools = repo.list_pools()
         self.assertEqual(len(pools), 1)
         self.assertEqual(pools[0].ckpoint, "50G")
 
+    def test_list_pools_parses_guid(self):
+        repo = self._repo("tank\tONLINE\t10T\t5T\t5T\t75%\t-\t7701751313894531575\n")
+        pools = repo.list_pools()
+        self.assertEqual(pools[0].guid, "7701751313894531575")
+
     def test_list_pools_ignores_blank_lines(self):
-        repo = self._repo("\ntank\tONLINE\t10T\t5T\t5T\t75%\t-\n\n")
+        repo = self._repo("\ntank\tONLINE\t10T\t5T\t5T\t75%\t-\t1234567890\n\n")
         self.assertEqual(len(repo.list_pools()), 1)
 
     def test_list_pools_full_parses_nine_columns(self):

@@ -50,7 +50,14 @@ rootcheck() { true; }   # Tests do not require root.
 # reintroducing message-level filtering. Tests that need the real log_msg
 # behavior can save/restore the original function or source bashinit directly.
 _TEST_LOG_FILE="/tmp/zfsutilities-test-$$.log"
-: > "${_TEST_LOG_FILE}"
+# Only the suite's top-level shell owns the log. A re-source inside a
+# $(...) subshell shares $$ with its parent (only $BASHPID differs), and
+# truncating here would wipe the parent's in-flight log mid-run — a
+# failed suite then retains a 0-byte log, which the source-time sweep
+# below reaps. Subshell re-sources keep appending to the parent's log.
+if [[ "$BASHPID" = "$$" ]]; then
+    : > "${_TEST_LOG_FILE}"
+fi
 
 # Remove this suite's /tmp artifacts when the suite process exits. Some
 # suites re-source test-lib.sh inside $(...) subshells for fresh mocks;
@@ -62,6 +69,12 @@ _test_lib_cleanup() {
     [[ -n "${_mock_zfs_state_dir:-}" ]] && rm -rf "$_mock_zfs_state_dir"
     rm -rf "${ZFSUTILITIES_LOCK_DIR:-}"
     if [[ "${TESTS_FAILED:-0}" -gt 0 || "${_TEST_SUMMARY_RC:-1}" -ne 0 ]]; then
+        # Stamp the retained log non-empty: a run that produced no
+        # log_msg output would otherwise leave a 0-byte log that the
+        # next suite's source-time empty-log sweep reaps, taking the
+        # post-mortem with it.
+        echo "=== suite failed; log retained for post-mortem $(date '+%Y-%m-%d %H:%M:%S') ===" \
+            >> "${_TEST_LOG_FILE}"
         echo "Test log retained for post-mortem: ${_TEST_LOG_FILE}" >&2
     else
         rm -f "${_TEST_LOG_FILE}"
@@ -320,6 +333,7 @@ declare -gA _mock_zfs_snap_lists=()
 declare -gA _mock_zfs_guid_lists=()
 declare -gA _mock_zfs_holds=()
 declare -gA _mock_zfs_clones=()
+declare -gA _mock_zpool_guid=()
 _mock_zfs_send_size="0"
 _mock_zpool_list=""
 _mock_zfs_last_sequence=""  # tracks -s / -S passed to zfs list
@@ -342,7 +356,9 @@ done
 # untrapped signal — or a test-spawned child that sources test-lib and
 # exits before test_summary — leaves an EMPTY log behind. Empty carries no
 # post-mortem, so reap empty logs whose owning pid is gone; a non-empty
-# log of a dead suite is a real post-mortem and always stays.
+# log of a dead suite is a real post-mortem and always stays (a failed
+# suite's retained log is stamped non-empty by _test_lib_cleanup, so
+# retention always survives this sweep).
 for _stale_log in /tmp/zfsutilities-test-*.log; do
     [[ -f "$_stale_log" && ! -s "$_stale_log" ]] || continue
     _stale_state_pid="${_stale_log##*/zfsutilities-test-}"
@@ -792,6 +808,24 @@ zpool() {
             echo -e "$_mock_zpool_list"
             return 0
         fi
+    fi
+    # Pool GUID lookup (pool-identity fence): _mock_zpool_guid[<pool>],
+    # empty when the suite did not stage a GUID for that pool. Default
+    # expansions keep short zpool invocations safe under set -u suites.
+    if [[ "${1:-} ${2:-} ${3:-} ${4:-} ${5:-}" == "get -H -o value guid" ]]; then
+        printf '%s\n' "${_mock_zpool_guid[${6:-}]:-}"
+        return 0
+    fi
+    # Importable-candidate listing (detect_pool_identity): fixture file
+    # of raw `zpool import` output, empty by default.
+    if [[ "$1" == "import" ]]; then
+        if [[ -n "${ZPOOL_IMPORT_FIXTURE:-}" && -f "$ZPOOL_IMPORT_FIXTURE" ]]; then
+            local _line
+            while IFS= read -r _line; do
+                printf '%s\n' "$_line"
+            done < "$ZPOOL_IMPORT_FIXTURE"
+        fi
+        return 0
     fi
     return 0
 }

@@ -2,8 +2,9 @@
 # iscsi-lib.sh
 # Shared iSCSI helpers: target-state discovery (parse_backstores,
 # parse_target_luns, parse_target_acls, discover_zvols, is_vm_backstore_name),
-# the restore-time detection helpers (detect_stale_lio_files,
-# detect_manifest_without_zvols, detect_vm_refs_missing_live), and the
+# ACL MappedLUN binding after LUN (re)creation (iscsi_grant_lun_to_acls), the
+# detection helpers (detect_stale_lio_files, detect_manifest_without_zvols,
+# detect_vm_refs_missing_live, detect_pool_identity), and the
 # teardown/rebuild helpers used by zfsdelfs and zfs-send-receive.
 #
 # This library is sourced at the file level by:
@@ -12,6 +13,8 @@
 #   - repair-iscsi-luns and export-iscsi-state, for the discovery helpers.
 #   - setup-iscsi-targets and reconcile-iscsi-state, for the discovery and
 #     detection helpers.
+#   - iscsi-recover-encrypted-luns and iscsi-add-encrypted-luns, to grant a
+#     (re)created LUN to every existing ACL initiator on its target.
 #   - check-prerequisites (--two-node, with ISCSI_LIB_NO_BOOTSTRAP=1), for
 #     the detection helpers only.
 #
@@ -181,6 +184,47 @@ parse_target_acls() {
     return 0
 }
 
+# Grant a TPG LUN to every existing ACL initiator on a target, at the same
+# index the TPG LUN holds (identity mapping: create <lun> <lun>). Used after a
+# LUN is (re)created: an explicit-mode ACL node grants nothing until it carries
+# a MappedLUN for the new index, so without this the initiator cannot see the
+# LUN even though the mapping exists. Idempotent — initiators whose ACL already
+# shows a mapped_lun at that index are skipped. Demo-mode targets with no live
+# ACL nodes no-op: their ACL nodes (with grants for every LUN) self-generate on
+# initiator login.
+# Returns 0 when every existing initiator has the grant, 1 otherwise.
+# The grant-create argument order is targetcli's UIACL create:
+#   acls/<initiator> create <mapped_lun> <tpg_lun>
+# — the FIRST argument is the LUN number the initiator sees.
+iscsi_grant_lun_to_acls() {
+    local iqn="$1" lun="$2"
+    local init failed=0
+
+    parse_target_acls "$iqn"
+    for init in "${_acl_initiators[@]}"; do
+        if targetcli "/iscsi/${iqn}/tpg1/acls/${init}" ls 2>/dev/null \
+                | grep -q "mapped_lun${lun}[^0-9]"; then
+            continue
+        fi
+        if ! targetcli "/iscsi/${iqn}/tpg1/acls/${init}" \
+                create "$lun" "$lun" >/dev/null 2>&1; then
+            log_msg "WARN: ${init} — could not grant LUN ${lun} on ${iqn} (create failed)"
+            failed=1
+            continue
+        fi
+        # Post-create verification, the same contract the LUN-mapping steps
+        # keep: a create that reports success must be visible in the listing.
+        if targetcli "/iscsi/${iqn}/tpg1/acls/${init}" ls 2>/dev/null \
+                | grep -q "mapped_lun${lun}[^0-9]"; then
+            log_msg "INFO:   ✓ granted LUN ${lun} to ${init}"
+        else
+            log_msg "WARN: ${init} — could not grant LUN ${lun} on ${iqn} (verify failed)"
+            failed=1
+        fi
+    done
+    return "$failed"
+}
+
 # Discover all VM zvols in configured pools.
 # Output variable: _zvols[] array of "pool/dataset" strings.
 discover_zvols() {
@@ -226,6 +270,38 @@ except Exception:
     pass' "$file" "$field" 2>/dev/null
 }
 
+# Print the state map's recorded pool identities as "name|guid" lines (empty
+# on any error, on a missing file, or when the map predates the pools key).
+# The consumer of the pool-identity fence; modeled on read_json_string_field.
+read_map_pool_guids() {
+    local file="$1"
+    [[ -f "$file" ]] || return 0
+    python3 -c 'import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        pools = json.load(f).get("pools", {})
+    for name in sorted(pools):
+        guid = pools[name]
+        if isinstance(guid, str) and guid.isdigit():
+            print("%s|%s" % (name, guid))
+except Exception:
+    pass' "$file" 2>/dev/null
+    return 0
+}
+
+# Pools whose zfsutilities datasets are searched for the state map: the
+# configured pools when node-lib is loaded (the writer only writes there),
+# or every imported pool for standalone consumers (check-prerequisites
+# sources this library without node-lib; maps live on configured pools,
+# which are necessarily imported when a map can exist at all).
+_state_map_search_pools() {
+    if [[ $(type -t pool_list 2>/dev/null) == "function" ]]; then
+        pool_list
+    else
+        zpool list -Ho name 2>/dev/null || true
+    fi
+}
+
 # Locate the newest state map across online pools. Prints the path of the
 # map with the newest "generated" timestamp, or nothing when no pool
 # holds one. All maps are written by the same host with date -Iseconds, so
@@ -246,7 +322,7 @@ newest_iscsi_state_map() {
             best="$f"
             best_ts="$ts"
         fi
-    done < <(pool_list)
+    done < <(_state_map_search_pools)
     [[ -n "$best" ]] && printf '%s\n' "$best"
 }
 
@@ -456,6 +532,155 @@ detect_vm_refs_missing_live() {
             _detect_lines+=("$msg")
         fi
     done <<< "$vm_data"
+    return 0
+}
+
+# Return 0 if a config-table token from `zpool import` output names a zvol
+# leaf device: zd<digits> with an optional p<digits> partition suffix (with
+# or without a /dev/ prefix), or any /dev/zvol/ path. Guest pools living on
+# host zvols (the ITF lab guests reuse production pool names inside their
+# disks) are excluded from the duplicate-name signature by this test.
+# Fixed-string decomposition only — no regex, no extglob.
+_detect_is_zvol_leaf() {
+    local tok="${1##*/}"
+    if [[ "$1" == /dev/zvol/* ]]; then
+        return 0
+    fi
+    [[ "$tok" == zd* ]] || return 1
+    local d="${tok#zd}" p=""
+    if [[ "$d" == *p* ]]; then
+        p="${d##*p}"
+        d="${d%p*}"
+        if [[ -z "$p" || "$p" == *[!0-9]* ]]; then
+            return 1
+        fi
+    fi
+    [[ -n "$d" && "$d" != *[!0-9]* ]]
+}
+
+# Pool-identity detection (the renaming class): a pool renamed or replaced
+# under a known name leaves the LUN topology silently serving a different
+# pool. Read-only signatures, findings accumulate in _detect_lines and are
+# never acted on (identities are human-resolved by design — no auto-rename,
+# no auto-repair):
+#   (a) an expected pool is not imported, or an imported pool is not
+#       expected — the expected set comes from pool_list when node-lib is
+#       loaded, else from the map's recorded pools (the standalone
+#       check-prerequisites context, where the map is the recorded
+#       expected-set);
+#   (b) an imported pool's live GUID differs from the map-recorded GUID
+#       (a reused name never reuses a GUID);
+#   (c) a `zpool import` candidate whose name duplicates an imported pool
+#       and whose devices are not zvols (see _detect_is_zvol_leaf).
+# Returns quietly when zpool is absent, nothing is imported, no expected-set
+# source exists (pre-install gate), or a scan is unreadable — a detector
+# never fails the caller.
+detect_pool_identity() {
+    command -v zpool >/dev/null 2>&1 || return 0
+
+    local imported=""
+    imported=$(zpool list -Ho name 2>/dev/null) || return 0
+    [[ -n "$imported" ]] || return 0
+
+    local -A map_guid=()
+    local map_file name guid
+    map_file=$(newest_iscsi_state_map 2>/dev/null) || map_file=""
+    if [[ -n "$map_file" ]]; then
+        while IFS='|' read -r name guid; do
+            [[ -n "$name" ]] && map_guid["$name"]="$guid"
+        done < <(read_map_pool_guids "$map_file")
+    fi
+
+    # (a) expected vs imported.
+    local -A expected=() imported_set=()
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && imported_set["$name"]=1
+    done <<< "$imported"
+    if [[ $(type -t pool_list 2>/dev/null) == "function" ]]; then
+        while IFS= read -r name; do
+            [[ -n "$name" ]] && expected["$name"]=1
+        done < <(pool_list)
+    else
+        for name in "${!map_guid[@]}"; do
+            expected["$name"]=1
+        done
+    fi
+    local msg
+    if [[ ${#expected[@]} -gt 0 ]]; then
+        for name in "${!expected[@]}"; do
+            if [[ -z "${imported_set[$name]:-}" ]]; then
+                msg="expected pool ${name} is not imported"
+                msg+=" — offline, renamed, or replaced"
+                _detect_lines+=("$msg")
+            fi
+        done
+        for name in "${!imported_set[@]}"; do
+            if [[ -z "${expected[$name]:-}" ]]; then
+                msg="imported pool ${name} is not in the node config"
+                msg+=" — an unexpected pool is serving data here"
+                _detect_lines+=("$msg")
+            fi
+        done
+    fi
+
+    # (b) live GUID vs the map-recorded GUID.
+    for name in "${!map_guid[@]}"; do
+        [[ -n "${imported_set[$name]:-}" ]] || continue
+        guid=$(zpool get -H -o value guid "$name" 2>/dev/null) || guid=""
+        if [[ -n "$guid" && "$guid" != *[!0-9]* ]] \
+                && [[ "$guid" != "${map_guid[$name]}" ]]; then
+            msg="pool ${name} renamed or replaced — map recorded GUID"
+            msg+=" ${map_guid[$name]}, live GUID ${guid}"
+            _detect_lines+=("$msg")
+        fi
+    done
+
+    # (c) import candidates duplicating an imported pool name.
+    local cand_raw=""
+    cand_raw=$(zpool import 2>/dev/null) || cand_raw=""
+    [[ -n "$cand_raw" ]] || return 0
+
+    local -a cands=() words=()
+    local cpool="" cand_id="" zvol_leaf=false word
+    while IFS= read -r name; do
+        read -ra words <<< "$name"
+        [[ ${#words[@]} -gt 0 ]] || continue
+        case "${words[0]}" in
+            pool:)
+                if [[ -n "$cpool" ]]; then
+                    cands+=("${cpool}|${cand_id}|${zvol_leaf}")
+                fi
+                cpool="${words[1]:-}"
+                cand_id=""
+                zvol_leaf=false
+                ;;
+            id:)
+                [[ -n "${words[1]:-}" ]] && cand_id="${words[1]}"
+                ;;
+            *)
+                for word in "${words[@]}"; do
+                    if _detect_is_zvol_leaf "$word"; then
+                        zvol_leaf=true
+                        break
+                    fi
+                done
+                ;;
+        esac
+    done <<< "$cand_raw"
+    if [[ -n "$cpool" ]]; then
+        cands+=("${cpool}|${cand_id}|${zvol_leaf}")
+    fi
+
+    for name in "${cands[@]}"; do
+        IFS='|' read -r cpool cand_id zvol_leaf <<< "$name"
+        [[ -n "${imported_set[$cpool]:-}" ]] || continue
+        [[ "$zvol_leaf" == true ]] && continue
+        msg="an importable pool is also named ${cpool}"
+        [[ -n "$cand_id" ]] && msg+=" (id ${cand_id})"
+        msg+=" on non-zvol devices — the imported pool of that name may not"
+        msg+=" be the one the config expects (rename or replacement evidence)"
+        _detect_lines+=("$msg")
+    done
     return 0
 }
 

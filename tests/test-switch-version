@@ -1103,11 +1103,78 @@ test_shipped_fence_units_match_fence_design() {
     fi
 }
 
+test_shipped_rtslib_dropins_match_dropin_design() {
+    test_start 'shipped rtslib drop-ins keep $$-escaped Exec lines and ZFS boot ordering'
+    local share_dir
+    share_dir="$(dirname "$SWITCH_VERSION")/../share/two-node"
+    local failed=0
+    # systemd expands a single $ in Exec lines against its own (empty)
+    # environment before bash parses the script — the 2026-10-27 incident's
+    # backup landed at /.pre-start because ${f} was expanded away. Every
+    # dollar bash must see has to arrive as $$.
+    local dropin line stripped match_count
+    for dropin in rtslib-fb-targetctl-pre-start-backup.conf \
+            rtslib-fb-targetctl-boot-config.conf; do
+        if [[ ! -f "$share_dir/$dropin" ]]; then
+            failed=1
+            echo "    missing shipped drop-in: $dropin"
+            continue
+        fi
+        match_count=0
+        while IFS= read -r line; do
+            match_count=$((match_count + 1))
+            stripped="${line//\$\$/}"
+            if [[ "$stripped" == *'$'* ]]; then
+                failed=1
+                echo "    $dropin Exec line reaches systemd with an unescaped \$: $line"
+            fi
+        done < <(grep -E '^Exec(Start|StartPre|StartPost)=' "$share_dir/$dropin")
+        if [[ "$match_count" -eq 0 ]]; then
+            failed=1
+            echo "    $dropin has no Exec lines — the escaping check matched nothing"
+        fi
+    done
+    # The restore must not run before pools and zvol device nodes exist:
+    # USB enclosures can enumerate after zfs-import-cache completes
+    # (2026-10-27 11:46 boot).
+    if ! grep -q '^After=zfs-import-cache.service zfs-import.target zfs-volume.service$' \
+            "$share_dir/rtslib-fb-targetctl-boot-config.conf"; then
+        failed=1
+        echo "    boot-config.conf must order After= the ZFS import/zvol units"
+    fi
+    if ! grep -q '^Wants=zfs-import.target$' \
+            "$share_dir/rtslib-fb-targetctl-boot-config.conf"; then
+        failed=1
+        echo "    boot-config.conf must pull in zfs-import.target"
+    fi
+    # Post-restore verification: a second ExecStartPost runs
+    # export-iscsi-state --check in a guard wrapper that never fails the
+    # unit — the 2026-10-27 boot restored 3 of 33 LUN mappings and looked
+    # healthy because nothing compared live state to the pool map.
+    local verify_line
+    verify_line=$(grep -E '^ExecStartPost=.*export-iscsi-state --check' \
+        "$share_dir/rtslib-fb-targetctl-boot-config.conf") || verify_line=""
+    if [[ -z "$verify_line" ]]; then
+        failed=1
+        echo "    boot-config.conf must run export-iscsi-state --check post-restore"
+    elif [[ "${verify_line: -7}" != "exit 0'" ]]; then
+        failed=1
+        echo "    the verification ExecStartPost must end with exit 0 (never fail the unit)"
+    fi
+
+    if [[ "$failed" -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "shipped rtslib drop-ins drifted from the drop-in design"
+    fi
+}
+
 test_install_iscsi_fence_units_installs_enables_and_refreshes
 test_install_iscsi_fence_units_skips_without_qm
 test_install_iscsi_fence_units_skips_single_node
 test_install_iscsi_fence_units_installs_without_node_conf
 test_shipped_fence_units_match_fence_design
+test_shipped_rtslib_dropins_match_dropin_design
 
 test_summary
 teardown_test_env

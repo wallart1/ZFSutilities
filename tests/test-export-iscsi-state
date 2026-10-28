@@ -149,6 +149,7 @@ register_online_pool() {
 # A healthy two-target mock topology:
 #   threeamigos: vm-101-disk-0 @ lun0, ACL iqn.2026-02.local.tweety
 #   nvme1:       vm-205-disk-3 @ lun5, no ACLs
+# Pool GUIDs are staged for the pools section (the identity fence).
 load_healthy_topology() {
     _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
     _mock_backstores+='(1.0MiB) write-thru activated]\n  o- vm-205-disk-3 ............ '
@@ -160,6 +161,8 @@ load_healthy_topology() {
     _mock_acls_threeamigos='o- acls ....... [ACLs: 1]\n  o- iqn.2026-02.local.tweety '
     _mock_acls_threeamigos+='.............. [Mapped LUNs: 0]'
     _mock_acls_nvme1=""
+    _mock_zpool_guid[threeamigos]=4338716537971988948
+    _mock_zpool_guid[NVME1]=252995746834113014
 }
 
 reset_mocks() {
@@ -174,6 +177,7 @@ reset_mocks() {
     _mock_zfs_create_calls=()
     _mock_zfs_create_log=""
     _mock_zpool_list=""
+    _mock_zpool_guid=()
     check_only=false
     force_write=false
     print_map=false
@@ -256,6 +260,8 @@ checks = [
     m.get("storage_ip") == "192.168.100.1",
     m.get("host") == "stewie",
     "generated" in m,
+    m["pools"] == {"NVME1": "252995746834113014",
+                   "threeamigos": "4338716537971988948"},
     m["targets"]["iqn.2026-02.local.stewie:threeamigos"]["luns"] == {"0": "vm-101-disk-0"},
     m["targets"]["iqn.2026-02.local.stewie:threeamigos"]["acls"] == ["iqn.2026-02.local.tweety"],
     m["targets"]["iqn.2026-02.local.stewie:nvme1"]["luns"] == {"5": "vm-205-disk-3"},
@@ -538,6 +544,116 @@ test_degraded_refuses_via_map_fallback() {
     rm -f "$NODE_CONF"
 }
 
+test_map_loss_refuses_and_lists_losses() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    # Record the healthy state first.
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    # Incident shape at the map level: both backstores still loaded (the
+    # count floor would pass), but the nvme1 LUN mapping is gone while the
+    # manifest still expects it.
+    ISCSI_MANIFEST=$(mktemp)
+    printf 'vm-101-disk-0\nvm-205-disk-3\n' > "$ISCSI_MANIFEST"
+    _mock_luns_nvme1=""
+
+    test_start "Lost LUN mappings refuse the map overwrite (LOSS lines)"
+
+    rc=0
+    out=$( main 2>&1 ) || rc=$?
+    local map_file="${_mock_pools_root}/threeamigos/iscsi-state.json"
+
+    if [[ "$rc" -eq 1 ]] \
+        && [[ "$out" == *"LOSS: target iqn.2026-02.local.stewie:nvme1 LUN 5 -> vm-205-disk-3 would be lost while still expected"* ]] \
+        && [[ "$out" == *"pool state map was NOT overwritten"* ]] \
+        && grep -q 'vm-205-disk-3' "$map_file"; then
+        test_pass
+    else
+        test_fail "rc=$rc — the loss fence should refuse and keep the healthy map"
+    fi
+    rm -f "$ISCSI_MANIFEST" "$NODE_CONF"
+}
+
+test_legit_shrinkage_refreshes_map() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    # Manifest-first removal (remove-vm-disk order): vm-205-disk-3 left the
+    # manifest and the live tree, so its recorded mapping may vanish.
+    ISCSI_MANIFEST=$(mktemp)
+    printf 'vm-101-disk-0\n' > "$ISCSI_MANIFEST"
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]'
+    _mock_luns_nvme1=""
+
+    test_start "A backstore that left the manifest may drop from the map"
+
+    rc=0
+    out=$( main 2>/dev/null ) || rc=$?
+    local map_file="${_mock_pools_root}/threeamigos/iscsi-state.json"
+
+    if [[ "$rc" -eq 0 ]] && ! grep -q 'vm-205-disk-3' "$map_file"; then
+        test_pass
+    else
+        test_fail "rc=$rc — legitimate shrinkage should refresh the map"
+    fi
+    rm -f "$ISCSI_MANIFEST" "$NODE_CONF"
+}
+
+test_empty_manifest_broken_refuses() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    # A zero-valid-entry manifest is legitimate only for the target-only
+    # transition; with backstores still live it is broken, so the loss of
+    # the nvme1 mapping must be refused.
+    ISCSI_MANIFEST=$(mktemp)
+    printf '# no valid entries\n' > "$ISCSI_MANIFEST"
+    _mock_luns_nvme1=""
+
+    test_start "An empty manifest with live backstores refuses map losses"
+
+    rc=0
+    out=$( main 2>/dev/null ) || rc=$?
+    local map_file="${_mock_pools_root}/threeamigos/iscsi-state.json"
+
+    if [[ "$rc" -eq 1 ]] && grep -q 'vm-205-disk-3' "$map_file"; then
+        test_pass
+    else
+        test_fail "rc=$rc — broken-manifest shape should refuse and keep the map"
+    fi
+    rm -f "$ISCSI_MANIFEST" "$NODE_CONF"
+}
+
 test_check_no_drift() {
     reset_mocks
     load_healthy_topology
@@ -597,6 +713,70 @@ test_check_reports_drift() {
     if [[ "$rc" -eq 1 ]] \
         && [[ "$out" == *"LUN 5 moved: map -> vm-205-disk-3, live -> vm-205-disk-4"* ]] \
         && [[ "$out" == *"ACL initiator iqn.2026-02.local.tweety is missing live"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_pool_guid_unreadable_omitted() {
+    reset_mocks
+    load_healthy_topology
+    # NVME1's GUID cannot be read (exporting race / query failure): the
+    # pool is omitted from the pools section instead of failing or
+    # recording a blank identity.
+    unset '_mock_zpool_guid[NVME1]'
+    test_start "A pool whose GUID cannot be read is omitted from the pools section"
+
+    collect_live_state
+    printf '%s\n' "$(emit_state_json)" > /tmp/export-iscsi-state-guid.$$.json
+    local ok
+    ok=$(python3 - "$$" <<'PYEOF'
+import json, sys, os
+p = "/tmp/export-iscsi-state-guid.%s.json" % sys.argv[1]
+with open(p) as f:
+    m = json.load(f)
+os.unlink(p)
+ok = m.get("pools") == {"threeamigos": "4338716537971988948"}
+print("OK" if ok else "FAIL:%r" % m.get("pools"))
+PYEOF
+    )
+
+    if [[ "$ok" == "OK" ]]; then
+        test_pass
+    else
+        test_fail "pools section wrong ($ok)"
+    fi
+}
+
+test_check_reports_guid_drift() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    # The pool under the known name was replaced: same name, new GUID.
+    _mock_zpool_guid[threeamigos]=111222333444555666
+
+    test_start "--check reports pool GUID drift, exit 1"
+
+    check_only=true
+    rc=0
+    out=$( main 2>/dev/null ) || rc=$?
+    check_only=false
+
+    if [[ "$rc" -eq 1 ]] \
+        && [[ "$out" == *"pools.threeamigos: GUID changed: map has '4338716537971988948', live has '111222333444555666'"* ]] \
+        && [[ "$out" == *"pool renamed or replaced"* ]]; then
         test_pass
     else
         test_fail "rc=$rc out='$out'"
@@ -749,8 +929,13 @@ test_no_pool_written_fails
 test_degraded_refuses_overwrite
 test_degraded_force_records
 test_degraded_refuses_via_map_fallback
+test_map_loss_refuses_and_lists_losses
+test_legit_shrinkage_refreshes_map
+test_empty_manifest_broken_refuses
 test_check_no_drift
 test_check_reports_drift
+test_pool_guid_unreadable_omitted
+test_check_reports_guid_drift
 test_check_without_map_fails
 test_print_map_dumps_newest
 test_print_map_without_map_fails

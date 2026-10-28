@@ -1,4 +1,13 @@
-"""Tests for the Backup tab UI."""
+"""Tests for the Backup tab UI.
+
+Every GUI context below uses ``mock_gtk(fresh=True)``: these tests import
+``backup_page`` (and with it the whole GUI layer) inside the mock, and a
+GUI module that an earlier file in the SAME pytest process imported under
+the real gi must not stay bound to its real bindings — constructing a real
+widget while ``sys.modules["gi.repository.Gtk"]`` is a mock leaves pygi's
+C marshalling with a swallowed TypeError that then breaks every later
+real-gi call in the process (the 2026-10-26 cross-file pytest pollution).
+"""
 
 import os
 import sys
@@ -147,7 +156,7 @@ class TestBackupPageLabels(unittest.TestCase):
     """Verify user-visible labels on the Backup tab."""
 
     def test_post_step_labels_use_clear_language(self):
-        with temp_config_dir(), mock_gtk():
+        with temp_config_dir(), mock_gtk(fresh=True):
             import backup_page
             import gui_helpers
 
@@ -179,7 +188,7 @@ class TestBackupPageScriptLabels(unittest.TestCase):
     """Verify pre/post backup labels use 'command' instead of 'script'."""
 
     def test_pre_backup_label_says_command(self):
-        with temp_config_dir(), mock_gtk():
+        with temp_config_dir(), mock_gtk(fresh=True):
             import backup_page
             import gui_helpers
 
@@ -198,7 +207,7 @@ class TestBackupPageScriptLabels(unittest.TestCase):
             )
 
     def test_post_backup_label_says_command(self):
-        with temp_config_dir(), mock_gtk():
+        with temp_config_dir(), mock_gtk(fresh=True):
             import backup_page
             import gui_helpers
 
@@ -221,7 +230,7 @@ class TestBackupVariables(unittest.TestCase):
     """Backup tab exposes the releaseholds_tags setting."""
 
     def test_releaseholds_tags_in_advanced_variables(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
             self.assertIn("releaseholds_tags", backup_page.ADVANCED_VARIABLES)
@@ -236,7 +245,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
     """Tests for load_backup_config and collect_backup_config."""
 
     def test_load_backup_config_sets_pull_steps_active(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
             backup_page.Gtk.Entry = _FakeEntry
@@ -247,7 +256,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
             self.assertFalse(app.backup_pull_steps_active.get_active())
 
     def test_load_backup_config_defaults_pull_steps_active_to_true(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
             backup_page.Gtk.Entry = _FakeEntry
@@ -258,7 +267,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
             self.assertTrue(app.backup_pull_steps_active.get_active())
 
     def test_collect_backup_config_includes_pull_steps_active(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
             backup_page.Gtk.Entry = _FakeEntry
@@ -270,7 +279,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
             self.assertFalse(config["pull_steps_active"])
 
     def test_collect_backup_config_includes_pause_scrubs(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
             backup_page.Gtk.Entry = _FakeEntry
@@ -282,7 +291,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
             self.assertTrue(config["pause_scrubs"])
 
     def test_load_backup_config_sets_pause_scrubs(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
             backup_page.Gtk.Entry = _FakeEntry
@@ -293,7 +302,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
             self.assertTrue(app.backup_pause_scrubs.get_active())
 
     def test_load_backup_config_defaults_pause_scrubs_to_false(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
             backup_page.Gtk.Entry = _FakeEntry
@@ -304,7 +313,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
             self.assertFalse(app.backup_pause_scrubs.get_active())
 
     def test_load_backup_config_populates_pull_step_excludes(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
             backup_page.Gtk.Entry = _FakeEntry
@@ -330,7 +339,7 @@ class TestBackupConfigHelpers(unittest.TestCase):
             self.assertEqual(rows[0][3], "'*.tmp' cache/")
 
     def test_collect_backup_config_round_trips_pull_step_excludes(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
             backup_page.Gtk.Entry = _FakeEntry
@@ -445,7 +454,7 @@ class TestBackupRunDialog(unittest.TestCase):
         )
 
     def test_cancel_logs_cancellation_and_returns(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = _FakeBackupApp()
@@ -462,7 +471,7 @@ class TestBackupRunDialog(unittest.TestCase):
         mock_log.assert_called_once_with("INFO: Backup cancelled")
 
     def test_generate_reruns_snapshot_and_redisplays_dialog(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = _FakeBackupApp()
@@ -487,7 +496,7 @@ class TestBackupRunDialog(unittest.TestCase):
             app.backup_runner.prepare_session_log.assert_called_once()
 
     def test_ok_proceeds_without_regeneration(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = _FakeBackupApp()
@@ -504,7 +513,7 @@ class TestBackupRunDialog(unittest.TestCase):
             app.backup_runner.prepare_session_log.assert_called_once()
 
     def test_pull_step_excludes_passed_to_build_rsync_command(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = _FakeBackupApp()
@@ -531,7 +540,7 @@ class TestBackupRunDialog(unittest.TestCase):
 
     def test_fenced_destination_skips_rsync_step(self):
         """A destination refused by the mount-chain fence builds no step."""
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = _FakeBackupApp()
@@ -559,7 +568,7 @@ class TestBackupRunDialog(unittest.TestCase):
 
     def test_fenced_keys_destination_skips_keys_step(self):
         """A fenced keys destination builds no keys step (encrypted gate passed)."""
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = _FakeBackupApp()
@@ -580,7 +589,7 @@ class TestBackupRunDialog(unittest.TestCase):
             backup_page.build_rsync_command.assert_not_called()
 
     def test_prune_step_skipped_when_no_sr_steps_active(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = _FakeBackupApp()
@@ -609,7 +618,7 @@ class TestBackupRunDialog(unittest.TestCase):
         )
 
     def test_prune_step_skipped_even_with_dataset_selection_criteria(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = _FakeBackupApp()
@@ -643,7 +652,7 @@ class TestBackupRunDialog(unittest.TestCase):
         )
 
     def test_retention_step_uses_backup_dataset_list_when_sr_steps_active(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = _FakeBackupApp()
@@ -674,7 +683,7 @@ class TestBackupRunDialog(unittest.TestCase):
 
     def test_backup_runs_while_offsite_active(self):
         """Backup should no longer bail out just because offsite is running."""
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = _FakeBackupApp()
@@ -701,7 +710,7 @@ class TestBackupRunDialog(unittest.TestCase):
 
     def test_backup_runs_while_restore_active(self):
         """Backup should no longer bail out just because restore is running."""
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = _FakeBackupApp()
@@ -742,7 +751,7 @@ class TestBackupSaveValidation(unittest.TestCase):
         return app
 
     def test_save_without_warnings(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = self._make_app()
@@ -761,7 +770,7 @@ class TestBackupSaveValidation(unittest.TestCase):
         mock_refresh.assert_called_once_with(app.ctx.config)
 
     def test_save_shows_warning_on_scope_mismatch(self):
-        with mock_gtk():
+        with mock_gtk(fresh=True):
             import backup_page
 
         app = self._make_app()
@@ -822,7 +831,7 @@ class TestBackupAdvancedLabel(unittest.TestCase):
     """The Advanced expander label turns orange when a child value is non-default."""
 
     def _create_page(self):
-        with temp_config_dir(), mock_gtk():
+        with temp_config_dir(), mock_gtk(fresh=True):
             import backup_page
 
             backup_page.DirtyTracker = _NoOpDirtyTracker

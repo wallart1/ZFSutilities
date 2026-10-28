@@ -1,10 +1,13 @@
 #!/usr/bin/bash
 # iscsi-restore-luns
-# Idempotent restore of all iSCSI backstores and LUN mappings from saveconfig.json.
-# Handles both encrypted and non-encrypted LUNs.
+# Idempotent restore of all iSCSI backstores, LUN mappings, and ACL MappedLUN
+# grants from saveconfig.json. Handles both encrypted and non-encrypted LUNs.
 #
-# Only creates backstores/LUNs that are actually missing. Preserves original
-# LUN indexes so compute-host /dev/disk/by-path device symlinks remain stable.
+# Only creates what is actually missing. Preserves original LUN indexes (and
+# non-identity MappedLUN mappings) so compute-host /dev/disk/by-path device
+# symlinks remain stable. A grant whose index exists but maps a different TPG
+# LUN than recorded is never remapped — WARN only (no auto-mutation of
+# identities).
 #
 # Usage: sudo iscsi-restore-luns
 # Install to: /usr/local/lib/zfsutilities/bin/iscsi-restore-luns on the storage host
@@ -40,6 +43,8 @@ echo ""
 
 added_bs=0
 added_luns=0
+added_acls=0
+added_grants=0
 
 # ------------------------------------------------------------------
 # Restore missing backstores
@@ -68,8 +73,10 @@ PYEOF
 
 # ------------------------------------------------------------------
 # Restore missing LUN mappings
+# Records use '|' as the field separator: target and initiator IQNs contain
+# ':', so an IFS=: read would split inside them and garble every field.
 # ------------------------------------------------------------------
-while IFS=: read -r iqn tag idx bs_name; do
+while IFS='|' read -r iqn tag idx bs_name; do
     [[ -z "$iqn" ]] && continue
     if targetcli "/iscsi/${iqn}/tpg${tag}/luns" \
             create "/backstores/block/${bs_name}" "$idx" >/dev/null 2>&1; then
@@ -91,24 +98,96 @@ for target in config.get("targets", []):
             so = lun.get("storage_object", "")
             if idx is not None and so:
                 bs_name = so.split("/")[-1]
-                print(f"{iqn}:{tag}:{idx}:{bs_name}")
+                print(f"{iqn}|{tag}|{idx}|{bs_name}")
 PYEOF
 )
 
-if [[ $added_bs -eq 0 && $added_luns -eq 0 ]]; then
+# ------------------------------------------------------------------
+# Restore missing ACL nodes and MappedLUN grants
+# A MappedLUN record is (initiator, mapped_lun) -> tpg_lun exactly as
+# saveconfig.json recorded it, including non-identity mappings. The create
+# argument order is targetcli's UIACL create:
+#   acls/<initiator> create <mapped_lun> <tpg_lun>
+# — the FIRST argument is the LUN number the initiator sees.
+# ------------------------------------------------------------------
+while IFS='|' read -r iqn tag init ml tp; do
+    [[ -z "$iqn" ]] && continue
+    if ! targetcli "/iscsi/${iqn}/tpg${tag}/acls" ls 2>/dev/null \
+            | grep -qF -- "$init"; then
+        if targetcli "/iscsi/${iqn}/tpg${tag}/acls" create "$init" >/dev/null 2>&1; then
+            log_msg "INFO:   ✓ Created ACL $init on ${iqn}"
+            ((added_acls++)) || true
+        else
+            log_msg "WARN:   $init — could not create ACL on ${iqn}"
+            continue
+        fi
+    fi
+    grant_line=$(targetcli "/iscsi/${iqn}/tpg${tag}/acls/${init}" ls 2>/dev/null \
+        | grep "mapped_lun${ml}[^0-9]" || true)
+    if [[ -n "$grant_line" ]]; then
+        # The mapped_lun listing summary is "lun<tpg> block/<name> (rw)";
+        # matching it (not just "lun<tpg>") avoids the node name itself,
+        # which contains "lun<ml>" for identity mappings.
+        if [[ "$grant_line" != *"lun${tp} block/"* ]]; then
+            log_msg "WARN:   $init — mapped_lun $ml exists but does not map" \
+                "TPG LUN $tp as recorded; not remapped"
+        fi
+        continue
+    fi
+    if targetcli "/iscsi/${iqn}/tpg${tag}/acls/${init}" \
+            create "$ml" "$tp" >/dev/null 2>&1; then
+        log_msg "INFO:   ✓ Granted MappedLUN $ml (LUN $tp) to $init on ${iqn}"
+        ((added_grants++)) || true
+    else
+        log_msg "WARN:   $init — could not grant MappedLUN $ml on ${iqn} (TPG LUN $tp missing?)"
+    fi
+done < <(python3 - "$savefile" << 'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    config = json.load(f)
+for target in config.get("targets", []):
+    iqn = target.get("wwn", "")
+    if not iqn:
+        continue
+    for tpg in target.get("tpgs", []):
+        tag = tpg.get("tag", 1)
+        for acl in tpg.get("acls", []):
+            init = acl.get("node_wwn", "")
+            if not init:
+                continue
+            for ml in acl.get("mapped_luns", []):
+                index = ml.get("index")
+                tp = ml.get("tpg_lun")
+                if isinstance(index, int) and isinstance(tp, int):
+                    print(f"{iqn}|{tag}|{init}|{index}|{tp}")
+PYEOF
+)
+
+if [[ $added_bs -eq 0 && $added_luns -eq 0 && $added_acls -eq 0 && $added_grants -eq 0 ]]; then
     log_msg "INFO:   ✓ All LUNs present — nothing to restore"
 else
     echo ""
-    log_msg "INFO:   ✓ Restored $added_bs backstore(s), $added_luns LUN mapping(s)"
+    log_msg "INFO:   ✓ Restored $added_bs backstore(s), $added_luns LUN mapping(s)," \
+        "$added_acls ACL(s), $added_grants MappedLUN grant(s)"
 fi
 
 echo ""
 
-# Save only if all expected LUNs are active
-"$mydir/safe-iscsi-save"
+# Save only when safe: safe-iscsi-save refuses (exit 1) when a still-expected
+# LUN mapping or ACL grant would be lost — the live tree is then incomplete
+# relative to the recorded config, and persisting it would overwrite the
+# authority. Surface the refusal, still rescan what was restored, exit 1.
+save_refused=0
+if ! "$mydir/safe-iscsi-save"; then
+    save_refused=1
+    log_msg "WARN: save refused — restored state exists live only; resolve the" \
+        "degradation, then re-run"
+fi
 
-# Rescan compute host so it discovers any newly restored LUNs
-if [[ $added_bs -gt 0 || $added_luns -gt 0 ]]; then
+# Rescan compute host so it discovers any newly restored LUNs and grants
+if [[ $added_bs -gt 0 || $added_luns -gt 0 || $added_grants -gt 0 ]]; then
     log_msg "INFO: === Rescanning compute host ==="
     "$mydir/rescan-storage"
 fi
+
+exit "$save_refused"

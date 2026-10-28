@@ -580,3 +580,397 @@ profile cancellation, mount-order repair engine), pub2 PROMPTQUEUE2:
   entry, no new entry. PREEXISTING.md unchanged at 2 entries
   (lane-scoped, awaiting user prompt; the step-1 resolution pass is
   pub-main-only by its own precondition).
+
+## 2026-10-27 — Bare-metal-backup boot incident analysis (analysis only, 0-line diff)
+
+User shut tweety then stewie down for bare-metal backups; first stewie
+boot came up with two fivebays-named pools and no threeamigos (user
+re-imported threeamigos' disks under the right name, GUID
+4338716537971988948), and iSCSI booted with 3/33 LUNs. Recovered by
+the user via a z.ai web session (docs:
+zfsutilities-plan/iscsi-recovery-chat-log.md + verbatim twin). This
+turn: analysis + recommendations, no code changes.
+
+- Repo rename search: the ONLY project code that writes a pool name at
+  import is the GUI Migrate Pool wizard (zfs_repository
+  build_pool_import_rename_command; temp `_mig` names; destination
+  re-imported under SOURCE name). It cannot relabel threeamigos'
+  disks as "fivebays"; no bin/lib/cron path issues export/import with
+  a name. CAUSE CONFIRMED by the user 2026-10-27 (same day): they ran
+  `sudo zpool import threeamigos fivebays` intending to import two
+  pools by name — the positional second argument is a RENAME, so the
+  command relabeled threeamigos as fivebays on disk. Label-only, no
+  data touched (pool healthy since); repo exonerated; the zpool
+  history root-commands are no longer needed for this question.
+- iSCSI root enabler (product defect, in-scope): all three degraded
+  gates count BACKSTORES, not LUN mappings — safe-iscsi-save:181-216
+  (targetcli block ls /dev/zvol/ lines), export-iscsi-state
+  enforce_not_degraded:356 (backstore names), reconcile
+  refresh_pool_map. "33/33" passed while 3 LUNs were exported →
+  degraded state persisted over saveconfig.json, saveconfig-boot.json,
+  and the pool-resident iscsi-state.json map (the M1 recovery
+  authority) during the boot window.
+- Also found: pre-start-backup.conf template ships the systemd `$f`
+  escaping bug (share/two-node line 9 — `$$f` needed; evidence says cp
+  landed at /.pre-start relative dest); boot-config.conf uses bare
+  `$boot` (same hazard, happened to work); rtslib restore has NO
+  After= on ZFS units (11:46 boot shows import-cache can finish before
+  USB enclosures enumerate; service exits 0 on failure); iscsi-
+  recover-encrypted-luns rebuilds TPG LUNs but never ACL MappedLUNs
+  (the runbook caveat); fence never landed a successful reconcile on
+  production (tweety fence failed; root@stewie ssh unproven outside
+  ITF; hand-rolled iscsi-auto-recover crash-looped, NOT repo code).
+- Corrections to memory: 0.134.0 IS deployed+active on stewie
+  (readlink bin → versions/0.134.0); threeamigos shadow-mount appears
+  HEALED by the re-import (canmount=on, children mounted) — 0.134.0
+  Repair Mount Order click likely unnecessary.
+- Recommendations delivered in the turn report (8 items: LUN-count
+  gates, $$-escape templates + unit test, rtslib After= ordering,
+  recover-encrypted ACL MappedLUNs, post-restore verify + Dashboard
+  warn, fence ssh surfacing, pool name↔GUID identity fence, deploy +
+  standing exercise). PREEXISTING.md unchanged (3 entries; all finds
+  are in-scope outputs of this analysis).
+
+## 2026-10-27 — iSCSI Boot-Incident Hardening, Phase 1 complete (LUN-topology gates)
+
+Executed Phase 1 of `zfsutilities-plan/iSCSI Boot-Incident Hardening —
+Phased Plan` (approved coding plan, no deviations beyond the flagged
+§1b clarification below). Root fix: all three degraded gates now compare
+LUN mappings under the manifest's authority, not backstore counts.
+
+- 1a `bin/safe-iscsi-save`: keeps the count pre-check; new authoritative
+  gate stages the live config (`targetcli saveconfig <temp>` beside the
+  destination), compares every old TPG LUN mapping `(target,lun)→bs` and
+  ACL MappedLUN grant whose backstore is still in the manifest, refuses
+  before ANY write on loss (atomic `mv` install only on pass — replaces
+  the direct saveconfig), secondary WARN for a permitted loss whose zvol
+  still exists. Caller `bin/iscsi-add-encrypted-luns`: save refusal →
+  WARN + exit 0 (boot ExecStartPost must not fail the unit by design);
+  `iscsi-recover-encrypted-luns` unchanged (keeps rc 1 via failed++).
+- 1b `bin/export-iscsi-state`: new `report_map_losses` (modeled on
+  report_state_drift) drives `enforce_not_degraded` when a prior map
+  exists — a recorded mapping may vanish only if its backstore left the
+  manifest; manifest missing → no loss permitted; empty manifest →
+  target-only transition only. Count floor remains only when no map
+  exists. `read_json_backstore_count` removed (dead). §1b clarification
+  (flagged in the approved plan): the manifest exception applies to the
+  map fence too — without it every legitimate disk removal (remove/
+  move/archive → save → export hook) would FATAL the map refresh forever.
+- 1c `bin/reconcile-iscsi-state`: vm_cross_check moved BEFORE
+  refresh_pool_map (the 14:01/14:06 fence-tick hole); complete-condition
+  gains _vm_missing_refs, _vm_noentry_refs, _save_failed, failed:*
+  outcomes; WARN names the blocking reasons.
+- Tests: safe-iscsi-save harness consolidated (core helper + live-config
+  writer; boot-config fixtures gained the wwn they always should have
+  had) + 5 new tests (incident 33/3 shape, legit shrinkage, MappedLUN
+  loss, stale-zvol WARN, staging failure); export +3 (LOSS lines, legit
+  shrinkage refresh, broken empty manifest); reconcile +1 and
+  save-failure test extended (both refresh blockers); add-encrypted +1
+  (WARN + rc 0). All four gates red-proofed by temporarily disabling
+  each check. Full suite 105/105 green.
+- Docs: two-node.md gate semantics in all four script sections;
+  messages/index.md rows for every new FATAL/WARN line + reworded
+  degraded/map-unchanged rows.
+- Not done here (later phases): drop-in $$ + After= fixes (P2),
+  recover/add ACL MappedLUN work (P3), visibility (P4), pool identity
+  fence (P5), deploy/exercise (P6). PREEXISTING.md: 3 entries, none
+  added or addressed (all finds in-scope and fixed).
+
+## 2026-10-27 — iSCSI Boot-Incident Hardening, Phase 2 complete (systemd drop-in fixes)
+
+Executed Phase 2 of `zfsutilities-plan/iSCSI Boot-Incident Hardening —
+Phased Plan` (approved coding plan, no deviations). Both shipped
+rtslib-fb-targetctl drop-ins fixed; structural test added red-first.
+
+- pre-start-backup.conf: `$$f`/`$${f}` escaping. Mechanism verified on
+  the dev host with transient user units: systemd expands the braced
+  `${f}` against its own empty environment before bash parses the
+  script, so the backup cp received the relative dest `.pre-start` and
+  landed in the service CWD (the stewie `/.pre-start` artifact); the
+  bare `$f` had only passed through by undocumented luck. The
+  `$$`-escaped form was verified end-to-end (backup lands beside the
+  source).
+- boot-config.conf: `$$boot`; new `[Unit]`
+  After=zfs-import-cache.service zfs-import.target zfs-volume.service +
+  Wants=zfs-import.target (USB enclosures can enumerate after
+  import-cache completes — the 11:46 boot; restore needs zvol nodes;
+  missing units ignored by systemd).
+- tests/test-switch-version: new test_shipped_rtslib_dropins_match_dropin_design
+  (models test_shipped_fence_units_match_fence_design): every Exec line
+  in both shipped drop-ins, after stripping `$$`, must contain no `$`
+  (whole hazard class, vacuous-match guarded); boot-config must carry
+  the After=/Wants= lines. Red-proofed: failed on all four findings
+  against the pre-fix files; green after the fixes.
+- Docs: developer-guide/two-node-config.md drop-in section ($$ rule,
+  boot ordering, stray `/.pre-start` cleanup note);
+  messages/index.md NEW "iSCSI Boot Drop-ins (rtslib-fb-targetctl)"
+  section for the four `targetctl:` journal lines (were undocumented).
+- Gates: test-switch-version 17/17; shellcheck clean on the changed
+  test file; test_docs_integrity green; mkdocs build clean; full suite
+  green (0 failures, normal dev-host preflight skips).
+- Deployment rides the existing install_rtslib_dropins refresh
+  (cmp -s + daemon-reload at next switch-version activation on the
+  storage host; tweety correctly skips — no targetctl). Stale
+  `/.pre-start` removal stays the user's root step (Phase 6 exercise).
+  Not done here: P3 ACL MappedLUN recovery, P4 visibility, P5 pool
+  identity fence, P6 wrap-up/deploy. PREEXISTING.md: 3 entries, none
+  added or addressed.
+
+## 2026-10-27 — iSCSI Boot-Incident Hardening, Phase 3 complete (encrypted-LUN recovery completeness)
+
+Executed Phase 3 of `zfsutilities-plan/iSCSI Boot-Incident Hardening — Phased
+Plan` (approved coding plan, no deviations beyond the disclosures below).
+Theme: after a LUN is (re)created, every existing ACL initiator on the target
+is granted a MappedLUN at that index; restore-luns becomes a complete
+backstore/LUN/ACL/grant restore; the add hook stops auto-assigning LUN
+indexes.
+
+- Schema/signature facts verified against stewie's rtslib-fb + targetcli
+  package source BEFORE coding: per-initiator create is
+  `acls/<initiator> create <mapped_lun> <tpg_lun>` (FIRST arg is the
+  initiator-visible index); saveconfig ACL records are `node_wwn` +
+  `mapped_luns[].{index, tpg_lun}` (Phase 1's gate keys confirmed).
+- lib/iscsi-lib.sh: new `iscsi_grant_lun_to_acls <iqn> <lun>` — idempotent
+  identity grants to every live ACL initiator (parse_target_acls reuse,
+  post-create verification, WARN detail lines + rc). Sourced by recover/add
+  the way reconcile/export source the lib.
+- iscsi-recover-encrypted-luns: grant step on BOTH loop paths (newly-mapped
+  AND already-present — a re-run heals grants for surviving mappings);
+  grant failure = FATAL + failed++.
+- iscsi-add-encrypted-luns: lookup now precedes backstore create; no
+  recorded index → WARN + skip (auto-LUN fallback removed; entries no
+  longer leave unmapped backstores behind); grant step boot-safe (WARN,
+  still exit 0).
+- iscsi-restore-luns: NEW third loop restores ACL nodes + MappedLUN grants
+  exactly as recorded (non-identity mappings faithful; present-but-wrong
+  grant → WARN, never remapped); record delimiter switched `:`→`|` (found
+  while implementing: the old IFS=: read split inside every real IQN — the
+  LUN-restore loop could never have worked on production; fixed in-scope);
+  save-refusal pass-through (WARN, rescan still runs, exit 1); rescan also
+  triggered by grant additions; summary line counts all four dimensions.
+- reconcile-iscsi-state: found in-scope defect — ACL grant call used
+  `create mapped_lun <idx>`, which targetcli rejects (non-integer
+  mapped_lun); `|| true` hid it, so reconcile's grants NEVER landed and its
+  "Granted N LUN(s)" line was false. Fixed to `create <idx> <idx>` (identity,
+  demo-equivalent); failures now FATAL + fail the run; the ✓ line reports
+  ok/total.
+- Tests: recover +3 (grants on add path, heal on already-present path,
+  grant-failure rc 1; stateful acls mock + GRANT_FAIL injection; real
+  iscsi-lib sourced with pool_to_target stub per the lib's own probe
+  comment); add +2 (no-index WARN+skip, grant line asserted) + 4 legacy
+  tests gained recorded-index fixtures (they had been relying on the
+  removed auto-LUN fallback); NEW tests/test-iscsi-restore-luns (Style A,
+  5 tests: full restore incl. non-identity 8→3 grant, idempotent re-run,
+  save-refusal rescan+rc1, unavailable-device skip, wrong-grant no-remap;
+  mock models targetcli create-failure semantics — taken index/backstore
+  means create fails); reconcile regression test flipped to assert
+  `create 0 0` and NO `create mapped_lun`, + grant-failure test. All six
+  new gates red-proofed by temporary revert (helper neutered → 4 failures;
+  add skip removed → 1; restore ACL emit neutered → 4; restore set-e save
+  death restored → 1; reconcile syntax reverted → 1).
+- Docs: two-node.md (add/recover/restore/reconcile sections — flows, called
+  modules, rc table gains restore's save-refused 1); proxmox-integration.md
+  short path + manual equivalent gains the ACL grant step (the manual
+  mapped_lun caveat is gone); messages/index.md rows for every new
+  INFO/WARN/FATAL line (auto-LUN row removed).
+- Gates: shellcheck clean on all 9 changed bash files; affected suites
+  green (recover 8/8, add 9/9, restore 5/5 NEW, reconcile 22/22); full
+  suite green via tests/run-tests.
+- Not done here (later phases): P4 visibility, P5 pool identity fence, P6
+  wrap-up/deploy. PREEXISTING.md: 3 entries, none added; the reconcile
+  grant-syntax defect and the restore-luns IFS=: parse defect were found
+  and fixed in-scope this turn.
+
+## 2026-10-28 — iSCSI Boot-Incident Hardening, Phase 4 complete (make degradation visible)
+
+Executed Phase 4 of `zfsutilities-plan/iSCSI Boot-Incident Hardening — Phased
+Plan` (approved coding plan; deviations disclosed below). Theme: the silent
+3-of-33 boot now surfaces in three places — the boot journal, the Dashboard
+iSCSI box, and the fence's own reporting.
+
+- Boot verification (share/two-node/rtslib-fb-targetctl-boot-config.conf):
+  second ExecStartPost runs `export-iscsi-state --check` in a guard wrapper
+  (`timeout 120`, output captured, always exit 0 — a wedged targetcli can
+  neither hang nor fail the unit). Journal lines: OK on match, FAILED (plan
+  verbatim) + the check's DRIFT/FATAL detail lines on mismatch, skip line
+  when the helper is absent, silence on single-node rc-0-no-output. Header
+  documents the expected every-boot FAILED while encrypted keys pend (stewie
+  has exactly 2 encrypted LUNs: vm-101-disk-1, vm-202-disk-5).
+- Dashboard LUN shortfall (python/dashboard_page.py): _get_iscsi_missing_luns
+  split into TTL wrapper (wear-cache pattern, 300 s, failures not cached) +
+  _compute_iscsi_missing_luns, which now also reads `targetcli /iscsi ls`
+  (one call; `block/vm-` anchor mirroring parse_target_luns) and flags
+  expected∧loaded∧unmapped backstores as kind "unmapped" rows — the
+  incident's exact shape, previously rendered "All VM disks are exported".
+  Rows render through the existing ⚠/Fix-this pattern; repair-iscsi-luns
+  already re-maps loaded manifest backstores, so the handler needed only a
+  cache invalidation before refresh. Formatter + tooltip extended.
+- Fence-failure row (python/dashboard_page.py): _get_fence_failure_warning,
+  TTL-cached 300 s (bounds the added ssh to ≤12 logins/hr against the 120 s
+  dashboard refresh — the tweety journal-churn constraint), queries
+  `systemctl is-failed zfsutilities-iscsi-fence.service` on the peer
+  (direct when local, ssh root@peer otherwise, timeout 10); warns ONLY on
+  exactly "failed" — inactive-between-ticks is healthy, unreachable peer is
+  silent. Wired into _gather_dashboard_data beside the unreachable-mount
+  rows.
+- check-vm-disk-paths: remote_reconcile_run now returns ssh's rc — 255 (or
+  an empty script-path resolve, previously a silent no-op ssh returning 0)
+  gets its own WARN ("ssh to storage host ... failed — reconcile-iscsi-state
+  did not run"); other non-zero keeps the existing "reported problems" WARN.
+- Tests: test-switch-version structural test extended (verifier
+  ExecStartPost present + ends `exit 0`; the Phase 2 no-unescaped-$ loop
+  covers the new line automatically); test-check-vm-disk-paths +2 (rc 255
+  case incl. NOT-reporting "reported problems"; empty-resolver case, ssh
+  count 0); test_dashboard_page — compute-level unmapped suite (missing /
+  unmapped / mapped-clean / incident-shape / both timeout paths), TTL-cache
+  suite (cache-hit, failure-not-cached, expiry), Fix-this cache-reset,
+  formatter unmapped branch, unmapped row renders with Fix this, fence
+  gatherer suite (failed/inactive/ssh-rc-255/local-vs-remote cmd/never-
+  queries cases + TTL), gather-level fence-warning test, and the new source
+  added to every existing gather/refresh patch stack (incl. rewriting the
+  deeply-nested unreachable-mounts gather test into the parenthesized with
+  style). All four new gates red-proofed by temporary revert (bash 255
+  branch, drop-in line, python unmapped detection, fence gather wiring).
+  One self-inflicted test bug found via bash -x trace: my suffix assertion
+  lost its trailing glob star and then miscounted `exit 0'` as 8 chars.
+- Docs: two-node.md Dashboard iSCSI Issues (What "no LUN mapping" means +
+  fence-failure warning subsection + causes/fix wording), export-iscsi-state
+  --check row notes the boot drop-in, check-vm-disk-paths flow names the two
+  distinct WARNs; developer-guide two-node-config.md boot-config.conf
+  documents the verifier incl. the encrypted-pending expectation;
+  messages/index.md — drop-in section gains 3 rows (helper-missing skip,
+  OK, FAILED+DRIFT), check-vm-disk-paths gains the ssh-failed row and the
+  "reported problems" row narrowed to refusals. Disclosed deviation: the two
+  new Dashboard UI strings are documented in two-node.md only —
+  messages/index.md catalogs log lines, not UI-rendered strings (verified
+  against the unreachable-mount precedent).
+- Gates: shellcheck clean (check-vm-disk-paths); ruff check+format clean
+  (dashboard_page.py + test file); affected suites green during iteration;
+  full tests/run-tests green (106 suites, 0 failed); full run-python-tests
+  green; docs-integrity 23/23; mkdocs site rebuilt (only the standing
+  mkdocs-2.0 nag).
+- Not done here (later phases): P5 pool identity fence, P6 wrap-up/deploy/
+  production exercise. PREEXISTING.md: 3 entries standing, none added (the
+  empty-resolver no-op was found and fixed in-scope inside the function
+  Phase 4 modifies). Mid-turn user cleanup landed: zero root-owned
+  __pycache__/pyc remain anywhere in the repo (verified by find -user root).
+
+## 2026-10-28 — iSCSI Boot-Incident Hardening, Phase 5 complete (pool identity fence)
+
+Executed Phase 5 of `zfsutilities-plan/iSCSI Boot-Incident Hardening — Phased
+Plan` (approved coding plan; deviations disclosed below). Theme: a pool
+renamed or replaced under a known name — the class of silent corruption the
+incident analysis flagged after LUN topology — now surfaces everywhere, and
+nothing ever renames/repairs an identity automatically.
+
+- Map schema (bin/export-iscsi-state): collect_live_state reads each
+  configured pool's GUID (`zpool get -H -o value guid`) into
+  _state_pool_guids (unreadable/non-digit GUID omits the pool — an offline
+  pool must not fail the export); emit_state_json gains a sorted top-level
+  "pools" object between storage_ip and targets; version stays 1 (additive).
+  report_state_drift compares pools for names on BOTH sides only — a GUID
+  change is a DRIFT line, a one-sided name is deliberately not drift (the
+  offline-pool tolerance). Golden updated; diff verified to be exactly the
+  new pools block.
+- Map consumers: reconcile parse_state_map emits/validates POOL|name|guid
+  records into _map_pool_guid (evidence only — reconcile rebuilds LUNs,
+  never identities; non-digit records dropped). repair-vm-disk-refs verified
+  .get()-tolerant, untouched.
+- Detector (lib/iscsi-lib.sh): detect_pool_identity — (a) expected vs
+  imported both directions (expected from pool_list when node-lib is loaded,
+  else the map's pools keys, so the standalone check-prerequisites gate gets
+  real coverage; empty expected set = quiet skip), (b) live GUID vs
+  map-recorded GUID, (c) `zpool import` candidates duplicating an imported
+  name, scoped to non-zvol leaf devices (_detect_is_zvol_leaf: zd<digits>
+  [p<digits>] or /dev/zvol/ paths — ITF guest pools on zvols stay silent;
+  fixed-string decomposition, no regex/extglob). read_map_pool_guids helper
+  (python3, read_json_string_field model). newest_iscsi_state_map now
+  searches configured pools via pool_list when loaded, else every imported
+  pool (_state_map_search_pools) — existing callers unchanged.
+- Wiring: check-prerequisites --two-node runs identity as its own detection
+  pass after the restore block (never masquerades as restore evidence,
+  never enters --list-failures); setup-iscsi-targets prints identity
+  findings in their own WARN block WITHOUT the reconcile offer (reconcile
+  cannot resolve identities — disclosed design decision). Note: a
+  configured-but-deliberately-exported pool (z22tb's offline posture) would
+  warn on every run under (a); today all five stewie pools are imported, and
+  the plan file explicitly asks for the "expected pool missing" finding.
+- Dashboard: PoolRow gains guid (zpool list ...,ckpoint,guid; only
+  construction site is list_pools; MockSubprocess.add_zpool_list emits a
+  default guid column so consumers don't silently lose rows);
+  _get_pool_identity_warnings (fence TTL-cache pattern) +
+  _compute_pool_identity_warnings(repo=None) + _read_newest_state_map_pools
+  (newest map by "generated" across expected pools) → Warnings-section rows
+  for not-imported / not-configured / GUID-changed; unresolvable live GUID
+  ("-", non-digit) is not an identity signal. Deviation from plan wording:
+  zpool-list failure returns None and surfaces no row (fence-gatherer
+  transient-failure tolerance) rather than a stale indicator — the cache
+  retries next refresh.
+- Tests: test-lib zpool mock gains get-guid + import-fixture branches
+  (arity-safe with ${n:-} after a first full-suite run caught $5 unbound
+  under set -u in test-zfsshowbigstuff — fixed, suite green); export suite:
+  structure/golden/GUID-omission/GUID-drift; reconcile suite: base map
+  gains pools, 3 new POOL-record tests (all 22 existing tests green on the
+  pools-bearing fixture = tolerance proof); check-prerequisites suite:
+  zpool/zfs stubs fixture-driven (ZPOOL_LIST/GUID/IMPORT_FIXTURE,
+  ZFS_MOUNTPOINTS_FIXTURE) + PYTHON3_DELEGATE knob (stub python3 execs the
+  real interpreter so read_json_string_field/read_map_pool_guids work under
+  the sealed PATH; matplotlib tests unaffected) + 7 identity tests incl.
+  the zd*-silence ITF proof; setup-iscsi-targets suite: runner gains
+  zfs-mountpoint + zpool mocks, identity scenario + 2 tests; python:
+  repository 8-column updates, dashboard TestComputePoolIdentityWarnings
+  (9 cases) + gather wiring test + new source added to the existing gather
+  patch stack. All five core gates red-proofed by temporary revert.
+- Docs: data-structures.md map key table + example + "pool identity,
+  compared and never rewritten" semantics bullet; two-node.md
+  export/reconcile/setup-iscsi-targets sections (incl. step 7 identity
+  pass, zpool row, map-read row); messages/index.md — check-prerequisites
+  6 rows, setup-iscsi-targets 6 rows, export-iscsi-state pools-DRIFT row,
+  dashboard_page 3 warning rows.
+- Gates: shellcheck clean (5 product + 5 test files); ruff check+format
+  clean (2 product + 3 test files); full tests/run-tests green (0 suite
+  failures after the mock arity fix); run-python-tests green (295
+  dashboard / 224 repository / 23 docs-integrity); mkdocs --strict rebuilt
+  rc=0 (only the standing mkdocs-2.0 nag). PREEXISTING.md: 3 entries
+  standing, none added (the set -u mock crash was in this phase's own new
+  code and fixed in-scope).
+- Not done here: Phase 6 wrap-up/deploy/production exercise (on cue).
+
+## 2026-10-28 — iSCSI Boot-Incident Hardening, Phase 6 wrap-up steps 1-6 (code freeze)
+
+User-directed 7-step wrap-up (PUB repo); steps 1-6 executed in strict
+sequence, step 7 = freeze. All three PREEXISTING entries resolved and
+removed (file now empty):
+
+- Retained-log vanishing: test-lib subshell re-sources (sever_run's
+  `$(...)` pattern) shared $$ with the suite and re-truncated the
+  parent's log mid-run (the 0-byte mechanism); truncation now guarded to
+  BASHPID==$$ and _test_lib_cleanup stamps a retained log non-empty, so
+  the source-time sweep can never reap a post-mortem.
+- sever-vm-clone concurrent collision: state-file name now pid-qualified
+  (`<key>-$$-<epoch>.state`); the suite's recovery tests take the exact
+  path from the product's own `--continue` output
+  (sever_state_path_from_output) instead of globbing /tmp; the env_new
+  sweep is GONE (it deleted a concurrent suite's in-flight file);
+  aborting tests clean their own file via sever_rm_state_file; a
+  name-shape regex pin guards the pid field. Proof: two concurrent suite
+  runs both green, zero /tmp residue.
+- Cross-file pytest pollution: root cause found (not the suspected
+  global mock patch) — test_backup_page imported backup_page fresh
+  inside mock_gtk while gui_helpers stayed bound to REAL gi (imported
+  earlier by another file in the same pytest process); bold_label then
+  built a REAL widget with sys.modules["gi.repository.Gtk"] mocked,
+  pygi's C marshalling swallowed an isinstance TypeError, and every
+  later real-gi call in the process died with SystemError (persistent,
+  C-level). Fix: all 26 mock_gtk() contexts in test_backup_page now
+  fresh=True (the file already had 2 fresh sites); documented 5-file
+  command 728 passed twice (was 16-18 failed).
+
+Also in the pass: two >100-char log_msg lines wrapped in
+iscsi-restore-luns; coding-policies gates clean (ruff check+format,
+shellcheck -S warning over the documented file set); two-node.md
+sever-vm-clone state-file row gains the pid field; docs integrity 23/23;
+mkdocs --strict rc=0; full non-soak run 106 suites green (5721 passed,
+0 failed, standing preflight skips only). Remaining Phase 6 halves (on
+cue): commit/release/publish + production deploy and the reboot
+exercise.

@@ -143,6 +143,8 @@ is_digits() {
 #   _map_target_of_short[short]  target short name -> full IQN
 #   _map_lun_bs["iqn|lun"] LUN slot -> backstore name
 #   _map_acls_of[iqn]      space-separated sorted initiator IQNs
+#   _map_pool_guid[pool]   recorded pool GUID (pool-identity evidence only —
+#                          reconcile rebuilds LUNs, never pool identities)
 #   _map_invalid[]         names whose records disagree (refused at plan time)
 # Every map field comes from the restricted iSCSI/config alphabets that
 # export-iscsi-state writes, so records split safely on "|" / ":".
@@ -156,9 +158,10 @@ parse_state_map() {
     _map_iqn_prefix=""
     _map_storage_ip=""
     unset -v _map_bs_dev _map_bs_target _map_bs_lun _map_lun_bs \
-        _map_acls_of _map_target_of_short _map_target_seen
+        _map_acls_of _map_target_of_short _map_target_seen _map_pool_guid
     declare -gA _map_bs_dev=() _map_bs_target=() _map_bs_lun=() \
-        _map_lun_bs=() _map_acls_of=() _map_target_of_short=() _map_target_seen=()
+        _map_lun_bs=() _map_acls_of=() _map_target_of_short=() \
+        _map_target_seen=() _map_pool_guid=()
 
     local -a rec=()
     while IFS='|' read -r -a rec; do
@@ -203,6 +206,14 @@ parse_state_map() {
                 _map_target_seen["$aiqn"]=1
                 _map_target_of_short["${aiqn##*:}"]="$aiqn"
                 ;;
+            POOL)
+                # Recorded pool identity. Evidence only: the reconcile
+                # never renames, re-creates, or remaps pools.
+                local pname="${rec[1]:-}" pguid="${rec[2]:-}"
+                [[ -n "$pname" && "$pname" != *"|"* && "$pname" != *$'\t'* ]] || continue
+                is_digits "$pguid" || continue
+                _map_pool_guid["$pname"]="$pguid"
+                ;;
         esac
     done < <(python3 - "$file" << 'PYEOF'
 import json, sys
@@ -215,6 +226,8 @@ for key in ("generated", "host", "iqn_prefix", "storage_ip"):
     v = m.get(key)
     if isinstance(v, str):
         print("META|%s|%s" % (key, v))
+for name, guid in sorted(m.get("pools", {}).items()):
+    print("POOL|%s|%s" % (name, guid))
 for name, bs in sorted(m.get("backstores", {}).items()):
     print("BS|%s|%s|%s|%s" % (name, bs.get("dev", ""), bs.get("target", ""),
                               bs.get("lun", "")))
@@ -484,7 +497,7 @@ print_plan_evidence() {
 
 apply_changes() {
     _apply_failed=0
-    local name dev iqn lun init idx
+    local name dev iqn lun init idx grants_ok
     local -a sorted_indexes=()
 
     for name in "${_plan_create_bs[@]}"; do
@@ -521,17 +534,26 @@ apply_changes() {
             log_msg "INFO:   ✓ Created ACL $init on ${iqn##*:}"
             # An explicit-mode ACL node grants nothing until it carries
             # mapped LUNs; grant every LUN the target now has (demo-mode
-            # equivalent).
+            # equivalent), at the LUN's own TPG index (identity mapping).
+            # The argument order is targetcli's UIACL create:
+            #   acls/<initiator> create <mapped_lun> <tpg_lun>
+            # — the FIRST argument is the LUN number the initiator sees.
             parse_target_luns "$iqn"
             sorted_indexes=()
             if [[ ${#_used_indexes[@]} -gt 0 ]]; then
                 mapfile -t sorted_indexes < <(printf '%s\n' "${_used_indexes[@]}" | sort -n)
             fi
+            grants_ok=0
             for idx in "${sorted_indexes[@]}"; do
-                targetcli "/iscsi/${iqn}/tpg1/acls/${init}" \
-                    create mapped_lun "$idx" >/dev/null 2>&1 || true
+                if targetcli "/iscsi/${iqn}/tpg1/acls/${init}" \
+                        create "$idx" "$idx" >/dev/null 2>&1; then
+                    ((grants_ok++)) || true
+                else
+                    log_msg "FATAL: Failed to grant LUN $idx to ACL $init on ${iqn##*:}"
+                    _apply_failed=1
+                fi
             done
-            log_msg "INFO:   ✓ Granted ${#sorted_indexes[@]} LUN(s) to ACL $init"
+            log_msg "INFO:   ✓ Granted $grants_ok/${#sorted_indexes[@]} LUN(s) to ACL $init"
         else
             log_msg "FATAL: Failed to create ACL $init on ${iqn##*:}"
             _apply_failed=1
@@ -631,15 +653,42 @@ run_safe_iscsi_save() {
 
 # Refresh the pool-resident map from the now-rebuilt live topology — but only
 # when the reconcile is complete. A partial refresh would overwrite the map
-# and drop the entries that were skipped or refused, destroying the recovery
-# authority for exactly the objects that still need it.
+# and drop the entries that were skipped, refused, or failed, destroying the
+# recovery authority for exactly the objects that still need it. Unresolved
+# VM-config cross-check results block the refresh too: during the boot
+# incident the fence's reconcile ticks overwrote the map while VM refs were
+# still missing or without map entries.
 refresh_pool_map() {
-    local complete=true
-    [[ ${#_refuse_lines[@]} -gt 0 || ${#_skip_lines[@]} -gt 0 || "$_apply_failed" -eq 1 ]] \
-        && complete=false
+    local complete=true outcome
+    local -a blockers=()
+    if [[ ${#_refuse_lines[@]} -gt 0 ]]; then
+        blockers+=("refused identity-conflict entries")
+    fi
+    if [[ ${#_skip_lines[@]} -gt 0 ]]; then
+        blockers+=("skipped entries")
+    fi
+    if [[ "${_vm_missing_refs:-0}" -gt 0 ]]; then
+        blockers+=("${_vm_missing_refs} VM disk ref(s) still missing")
+    fi
+    if [[ "${_vm_noentry_refs:-0}" -gt 0 ]]; then
+        blockers+=("${_vm_noentry_refs} VM disk ref(s) without a map entry")
+    fi
+    if [[ "${_save_failed:-0}" -eq 1 ]]; then
+        blockers+=("safe-iscsi-save did not persist the rebuilt tree")
+    fi
+    for outcome in "${_item_outcome[@]}"; do
+        if [[ "$outcome" == failed:* ]]; then
+            blockers+=("failed apply actions")
+            break
+        fi
+    done
+    if [[ ${#blockers[@]} -gt 0 ]]; then
+        complete=false
+    fi
+
     if [[ "$complete" != true ]]; then
-        log_msg "WARN: Pool LUN map left unchanged — skipped/refused entries" \
-            "are preserved in it for recovery"
+        log_msg "WARN: Pool LUN map left unchanged — ${blockers[*]};" \
+            "the map preserves the recovery authority for them"
         return 0
     fi
     if ! type -t "$export_iscsi_state" >/dev/null 2>&1; then
@@ -841,8 +890,10 @@ regenerate_manifest_from_map || true
 run_safe_iscsi_save || true
 echo ""
 
-refresh_pool_map || true
+# Cross-check before the refresh: the cross-check's unresolved counters gate
+# refresh_pool_map, so they must exist when it decides.
 vm_cross_check
+refresh_pool_map || true
 rescan_compute_host || true
 
 # Summary

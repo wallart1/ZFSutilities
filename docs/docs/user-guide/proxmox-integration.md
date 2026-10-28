@@ -730,9 +730,11 @@ sudo iscsi-recover-encrypted-luns
 [`iscsi-recover-encrypted-luns`](../commands-and-modules/two-node.md#iscsi-recover-encrypted-luns-storage-node)
 recreates each encrypted backstore, maps it at its recorded LUN index (read
 from `saveconfig.json`, scoped to the configured target — never an
-auto-assigned index), saves the config with `safe-iscsi-save`, and rescans
-the compute host. It is idempotent and safe to re-run, and refuses (rather
-than guesses) when an entry has no recorded index. Once it reports recovery
+auto-assigned index), grants the LUN to every existing ACL initiator on the
+target at the same index (the manual `mapped_lun` step this used to require
+is gone), saves the config with `safe-iscsi-save`, and rescans the compute
+host. It is idempotent and safe to re-run, and refuses (rather than guesses)
+when an entry has no recorded index. Once it reports recovery
 complete, start the affected VMs from the Proxmox GUI (or `qm start <vmid>`
 on the compute host).
 
@@ -748,10 +750,14 @@ For reference, the steps the script performs:
    NOT an auto-assigned index: when orphan targets under an old IQN prefix
    exist, auto-assignment can collide or pick the wrong slot and break
    Proxmox disk mappings.
-4. `safe-iscsi-save` to persist.
-5. `rescan-storage` (or `repair-iscsi-luns --force-relogin`) to surface the
+4. `targetcli /iscsi/<iqn>/tpg1/acls/<initiator> create <lun_idx> <lun_idx>`
+   for every ACL initiator on the target, so the initiator is granted the
+   new LUN at the same index (an explicit-mode ACL grants nothing until it
+   carries a MappedLUN for the LUN).
+5. `safe-iscsi-save` to persist.
+6. `rescan-storage` (or `repair-iscsi-luns --force-relogin`) to surface the
    LUNs on the compute host.
-6. `qm start <vmid>` on the compute host for each affected VM.
+7. `qm start <vmid>` on the compute host for each affected VM.
 
 ---
 

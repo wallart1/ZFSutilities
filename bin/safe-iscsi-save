@@ -1,10 +1,19 @@
 #!/usr/bin/bash
 # safe-iscsi-save
-# Save iSCSI target configuration ONLY if all expected LUNs are currently active.
+# Save iSCSI target configuration ONLY if no still-expected LUN mapping would
+# be lost.
 #
-# Protects saveconfig.json from being overwritten with a degraded (partial) config,
-# which can happen when zvols are temporarily inaccessible (e.g., encryption keys not
-# yet loaded, ZFS pool not imported, device nodes not yet visible after zfs load-key).
+# Two gates protect saveconfig.json from being overwritten with a degraded
+# (partial) config, e.g. when zvols are temporarily inaccessible (encryption
+# keys not yet loaded, ZFS pool not imported, device nodes not yet visible):
+#   1. A fast manifest-count check (active backstores vs expected backstores).
+#   2. The authoritative mapping gate: the live config is staged to a temp
+#      file and every TPG LUN mapping and ACL MappedLUN in the saved config
+#      whose backstore the manifest still expects must survive. A mapping may
+#      disappear only when its backstore left the manifest (the intentional-
+#      change authority remove-vm-disk / move-vm-disk / archive maintain).
+#      Counting alone passes the degraded shape where every backstore is
+#      defined but few are mapped.
 #
 # Also generates saveconfig-boot.json — a copy of the config with encrypted backstores
 # stripped out. This is used at boot time (via the boot-config.conf systemd drop-in) so
@@ -149,6 +158,131 @@ PYEOF
     fi
 }
 
+# Authoritative mapping gate: compare the currently saved config ($1) with
+# the staged live config ($2) under the expected-backstores manifest ($3).
+# Every TPG LUN mapping and every ACL MappedLUN whose backstore the manifest
+# still expects must survive the save; any loss is refused BEFORE anything is
+# written. A mapping may disappear only when its backstore left the manifest
+# (the intentional-change authority remove-vm-disk / move-vm-disk / archive
+# maintain) — and such a permitted loss still draws a WARN when the backstore's
+# zvol survives, the stale-manifest signal. Detail FATAL/WARN lines are printed
+# by the embedded python (the report_state_drift precedent); returns 1 when
+# the save must be refused.
+verify_no_expected_lun_loss() {
+    python3 - "$1" "$2" "$3" << 'PYEOF'
+import json, os, sys
+
+def load(path):
+    with open(path) as f:
+        return json.load(f)
+
+def valid_bs_name(name):
+    # vm-<vmid>-disk-<N>: the same fixed-string shape the bash gates enforce
+    if not name.startswith("vm-") or "-disk-" not in name:
+        return False
+    mid, _, end = name[3:].partition("-disk-")
+    return mid.isdigit() and end.isdigit() and "-disk-" not in end
+
+def manifest_expected(path):
+    if not os.path.isfile(path):
+        return None
+    expected = set()
+    with open(path) as f:
+        for line in f:
+            name = line.strip()
+            if valid_bs_name(name):
+                expected.add(name)
+    return expected
+
+def lun_mappings(cfg):
+    # (target wwn, lun index) -> backstore name
+    out = {}
+    for target in cfg.get("targets", []):
+        wwn = target.get("wwn", "")
+        for tpg in target.get("tpgs", []):
+            for lun in tpg.get("luns", []):
+                idx = lun.get("index")
+                so = lun.get("storage_object", "")
+                if isinstance(idx, int) and so:
+                    out[(wwn, idx)] = so.rsplit("/", 1)[-1]
+    return out
+
+def acl_grants(cfg):
+    # (target wwn, initiator, tpg lun index) grants
+    out = set()
+    for target in cfg.get("targets", []):
+        wwn = target.get("wwn", "")
+        for tpg in target.get("tpgs", []):
+            for acl in tpg.get("acls", []):
+                init = acl.get("node_wwn", "")
+                for ml in acl.get("mapped_luns", []):
+                    tpg_lun = ml.get("tpg_lun")
+                    if init and isinstance(tpg_lun, int):
+                        out.add((wwn, init, tpg_lun))
+    return out
+
+try:
+    old = load(sys.argv[1])
+    new = load(sys.argv[2])
+except Exception as exc:
+    print("FATAL: safe-iscsi-save: could not parse the saved or staged config (%s)" % exc)
+    sys.exit(1)
+expected = manifest_expected(sys.argv[3])
+
+old_map = lun_mappings(old)
+new_map = lun_mappings(new)
+
+mapping_losses = []
+permitted = []
+for (wwn, idx), bs in sorted(old_map.items()):
+    if new_map.get((wwn, idx)) == bs:
+        continue
+    if expected is None or bs in expected:
+        mapping_losses.append((wwn, idx, bs))
+    else:
+        permitted.append((wwn, idx, bs))
+
+grant_losses = []
+for wwn, init, tpg_lun in sorted(acl_grants(old) - acl_grants(new)):
+    bs = old_map.get((wwn, tpg_lun))
+    if bs is None:
+        continue
+    if expected is None or bs in expected:
+        grant_losses.append((wwn, init, tpg_lun, bs))
+
+for wwn, idx, bs in mapping_losses:
+    print("FATAL:   target %s LUN %d -> %s would be lost while still expected"
+          % (wwn, idx, bs))
+for wwn, init, tpg_lun, bs in grant_losses:
+    print("FATAL:   ACL %s MappedLUN %d on %s (%s) would be lost while still expected"
+          % (init, tpg_lun, wwn, bs))
+
+if mapping_losses or grant_losses:
+    if mapping_losses:
+        lost = "%d LUN mapping(s)" % len(mapping_losses)
+        if grant_losses:
+            lost += " (and %d ACL MappedLUN grant(s))" % len(grant_losses)
+    else:
+        lost = "%d ACL MappedLUN grant(s)" % len(grant_losses)
+    print("FATAL: safe-iscsi-save: refusing to save — %s would be lost while"
+          " still expected; config untouched." % lost)
+    print("FATAL:   Resolve the degradation, or force with: targetcli saveconfig")
+    sys.exit(1)
+
+# Permitted losses (backstore left the manifest — intentional removal) still
+# draw a WARN when the zvol survives: the removal flows destroy the zvol
+# before saving, so an existing device means the manifest line left early.
+devs = {so.get("name"): so.get("dev")
+        for so in old.get("storage_objects", []) if so.get("name")}
+for wwn, idx, bs in permitted:
+    dev = devs.get(bs)
+    if dev and os.path.exists(dev):
+        print("WARN: %s: manifest no longer expects it but zvol %s still exists —"
+              " the manifest may be stale" % (bs, dev))
+sys.exit(0)
+PYEOF
+}
+
 [[ -f "$savefile" ]] || {
     log_msg "FATAL: safe-iscsi-save: Config not found: $savefile"
     exit 1
@@ -212,7 +346,27 @@ if [[ "$active" -gt "$expected" ]]; then
     log_msg "WARN:   This may indicate orphaned backstores or manifest out of date. Saving anyway."
 fi
 
-targetcli saveconfig >/dev/null 2>&1
+# Stage the live config to a temp file next to the destination and prove it
+# loses no still-expected LUN mapping before anything is written. Counting
+# backstores alone passes the boot-incident shape (every backstore defined,
+# few mapped), so the staged config is compared mapping-by-mapping against
+# the saved one under the manifest's authority.
+saveconfig_tmp=$(mktemp "${savefile}.tmp.XXXXXX") || {
+    log_msg "FATAL: safe-iscsi-save: Could not stage a temp config next to ${savefile}"
+    exit 1
+}
+if ! targetcli saveconfig "$saveconfig_tmp" >/dev/null 2>&1; then
+    rm -f "$saveconfig_tmp"
+    log_msg "FATAL: safe-iscsi-save: targetcli saveconfig failed — config untouched"
+    exit 1
+fi
+if ! verify_no_expected_lun_loss "$savefile" "$saveconfig_tmp" "$manifest"; then
+    rm -f "$saveconfig_tmp"
+    exit 1
+fi
+# Atomic same-directory rename: a reader never sees a partial config, and a
+# refusal above leaves the saved config byte-identical.
+mv -f -- "$saveconfig_tmp" "$savefile"
 log_msg "INFO: ✓ iSCSI configuration saved ($active/$expected LUNs active)"
 
 generate_boot_config

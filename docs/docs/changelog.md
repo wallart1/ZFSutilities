@@ -1,5 +1,132 @@
 # Changelog
 
+## 0.135.0
+
+*Released 2026-10-28*
+
+### Added
+
+- **Post-restore boot verification.** A second `ExecStartPost` in the
+  shipped `rtslib-fb-targetctl` boot drop-in runs
+  `export-iscsi-state --check` after every boot restore and lands the
+  result in the journal: `post-restore verification OK` when the live
+  LUN topology matches the pool-resident state map, or `FAILED` with
+  the check's drift detail beneath it. This is what the 2026-10-27
+  boot incident lacked — a boot that restored 3 of 33 LUN mappings
+  looked healthy. A normal boot shows `FAILED` while encrypted LUN
+  keys are not yet loaded (the map records those mappings and live
+  state does not); the line's own guidance — do not save config until
+  reconciled — is correct in that window. The wrapper is bounded by a
+  timeout and always exits 0, so a wedged `targetcli` can neither hang
+  nor fail the unit.
+- **Degradation on the Dashboard.** LUN shortfall detection now also
+  reads the live iSCSI target tree and flags expected, loaded, but
+  unmapped backstores — the incident's exact shape, previously rendered
+  as "All VM disks are exported" — as warning rows with the existing
+  Fix This action. A peer fence-failure warning reports a failed
+  `zfsutilities-iscsi-fence.service` on the other node (silent when the
+  peer is unreachable or the service is merely inactive between ticks).
+- **Pool identity fence.** The exported iSCSI state map now records
+  every configured pool's GUID next to its name, and identity changes
+  surface wherever the map is read: `check-prerequisites --two-node`
+  runs identity as its own detection pass, `setup-iscsi-targets`
+  prints identity findings in their own warning block, and the
+  Dashboard lists not-imported, not-configured, and GUID-changed pools.
+  This is the silent-corruption class behind the
+  `zpool import threeamigos fivebays` rename: identities are compared
+  and reported, never rewritten, and reconcile is deliberately not
+  offered for them.
+
+### Fixed
+
+- **Degraded-state gates counted backstores, not LUN mappings.** All
+  three gates passed "33/33" while 3 LUN mappings were gone, letting
+  the degradation persist into every saved config. `safe-iscsi-save`
+  now stages the live config and refuses **before any write** when a
+  still-expected TPG LUN mapping or ACL MappedLUN grant would be lost
+  (atomic install only on pass; a loss whose backstore left the
+  expected-backstores manifest is permitted with a WARN when the zvol
+  survives — the stale-manifest signal). `export-iscsi-state` refuses
+  to refresh a pool-resident map over a recorded mapping loss, and
+  `reconcile-iscsi-state` runs the VM cross-check before the map
+  refresh and names every blocking reason.
+- **Boot drop-ins shipped a systemd escaping bug and no ZFS ordering.**
+  A single `$` in an `Exec` line is expanded against systemd's own
+  empty environment before bash parses the script, so the pre-start
+  backup copied to a relative destination and landed at `/.pre-start`;
+  every dollar is now `$$`-escaped, the boot restore is ordered after
+  the ZFS import and zvol units (USB enclosures can enumerate after
+  import-cache completes), and a structural test keeps every shipped
+  `Exec` line free of unescaped dollars.
+- **Encrypted-LUN recovery never restored ACL grants.**
+  `iscsi-recover-encrypted-luns` rebuilt TPG LUNs but no MappedLUN
+  grants, so initiators could not see the LUNs. Every path that
+  (re)creates a LUN — recover (both loop paths), the boot-time add
+  hook, `iscsi-restore-luns`, and reconcile — now grants the LUN at its
+  index to every existing ACL initiator (idempotent). Reconcile's own
+  grant command was syntactically rejected by targetcli all along and
+  its `|| true` hid it; failures are now FATAL. `iscsi-restore-luns`
+  additionally restores ACL nodes and grants exactly as recorded
+  (non-identity mappings faithful; a present-but-wrong grant is
+  reported, never remapped), and its record delimiter changed from `:`
+  to `|` — IQNs contain colons, so the LUN-restore loop could never
+  have parsed production data.
+- **`check-vm-disk-paths` conflated ssh failure with reported
+  problems.** An ssh exit of 255 to the storage host (or an
+  unresolvable reconcile script path, previously a silent no-op
+  returning 0) now draws its own warning naming the failure instead of
+  the misleading "reported problems".
+- **`sever-vm-clone` cutover state files are pid-qualified.** Two
+  instances severing the same VM id within the same second shared one
+  `/tmp` state file and destroyed each other's recovery state; the
+  name now embeds the creating process's pid.
+- **Test harness: failed suites' retained logs could vanish.** A
+  subshell re-source of the test library truncated the owning suite's
+  log mid-run, and an empty retained log was reaped by the next
+  suite's sweep; retention now stamps the log non-empty and only the
+  top-level suite shell may truncate it.
+
+### Changed
+
+- **`iscsi-add-encrypted-luns` no longer auto-assigns LUN indexes.**
+  A manifest entry without a recorded index is skipped with a WARN
+  (previously the next free index was silently assigned), so entries
+  never leave unmapped backstores behind. A `safe-iscsi-save` refusal
+  during the boot hook warns and still exits 0 — an `ExecStartPost`
+  must not fail the unit — while `iscsi-restore-luns` propagates it as
+  exit 1 after the iSCSI rescan.
+- `safe-iscsi-save` can now refuse to write at all (see above); the
+  state map's JSON gains a top-level `pools` object mapping pool names
+  to GUIDs (additive; older maps remain valid).
+
+### Tests
+
+- New suite for `iscsi-restore-luns` (full four-dimension restore,
+  non-identity grants, idempotent re-run, save refusal with rescan,
+  unavailable-device skip, wrong-grant no-remap); the safe-iscsi-save,
+  export, reconcile, add/recover, check-prerequisites,
+  check-vm-disk-paths, setup-iscsi-targets, and switch-version suites
+  gained the incident-shape, drop-in structural, identity, and warning
+  coverage; the sever-vm-clone recovery tests take the exact state-file
+  path from the product's own guidance (no `/tmp` globbing, so
+  concurrent suite runs and stale residue cannot collide) with a
+  name-shape pin; the Backup-page GUI contexts rebind the whole GUI
+  layer per test, fixing cross-file pytest pollution where real
+  widgets were constructed under a mocked `gi.repository` and every
+  later real-gi call in the process died with `SystemError`.
+
+### Documentation
+
+- `two-node.md` covers the new gate semantics, recovery flows, the
+  boot drop-ins and their expected `FAILED`-while-keys-pend line, the
+  Dashboard warning surfaces, and the pid-qualified state-file name;
+  the developer guide documents the `pools` map key ("pool identity,
+  compared and never rewritten") and the drop-in design rules
+  (`$$` escaping, ZFS ordering, the verifier); the messages manual
+  carries every new INFO/WARN/FATAL line and the drop-in journal
+  section; the Proxmox guide's manual recovery equivalent gains the
+  ACL grant step.
+
 ## 0.134.0
 
 *Released 2026-10-26*
