@@ -75,6 +75,8 @@ middle, and the log panel at the bottom.
 The menu bar runs across the top of the window and contains three menus:
 
 - **File**
+  - **Notifications...** — opens the [Notifications dialog](#notifications-dialog),
+    where you configure desktop and email notifications for finished runs.
   - **Quit** — closes the application.
 - **View**
   - **Minimize Width...** — resets every resizable table column to its narrowest
@@ -90,6 +92,49 @@ The menu bar runs across the top of the window and contains three menus:
   - **Set Documentation Editor...** — chooses the external editor used when you
     click the pencil icon in the documentation viewer.
   - **About** — shows the version, license, and credits.
+
+### Notifications dialog
+
+**File → Notifications...** configures what you hear about when runs finish.
+A *run* is any operation that lands in the run history — backups, offsite
+copies, restores, retention prunes, scrubs started by a scheduled profile,
+and dataset actions — whether it was started by the scheduler, the
+Schedule tab's **Run Now**, or a tab's run button.
+
+Each channel is configured independently:
+
+- **Desktop notifications** — a bubble on this host's logged-in desktop
+  session (the session you are sitting at; on hosts without a logged-in
+  desktop session they are skipped).
+- **Email notifications** — sent through an SMTP server you configure; no
+  local mail agent is needed.
+
+For each channel you choose:
+
+- **Mode** — *Off* (the default until configured), *Failures only*
+  (failed runs), or *All runs* (successes, failures, and cancellations).
+- **Run-type toggles** — a checkbox per run type (Backup, Offsite backup,
+  Restore, Retention prune, Scrub, Dataset action). A notification fires
+  only when the mode matches the result **and** that run type's checkbox is
+  on, so you can, for example, email only backup and scrub results while
+  the desktop shows every failure of every type. A toggled-off type never
+  notifies on that channel — not even failures.
+
+The email section also holds the SMTP connection: server, port, security
+(STARTTLS, SSL/TLS, or none), username, password, From address, and
+comma-separated recipients. A blank username skips SMTP login. The password
+is stored in a root-only file (`/etc/zfsutilities/smtp-credentials.json`,
+mode `0600`), separate from the main config.
+
+**Show test notification** and **Send test email** exercise the delivery
+path with the values currently in the dialog (including unsaved edits), and
+report success or failure next to the button — configure, test, then press
+OK to save.
+
+Runs that are skipped as no-ops (a schedule firing while the same profile
+is already running, or a weekday that does not match the schedule's ordinal)
+never notify. Notifications fire on the host where the run executes; desktop
+bubbles appear on that host's desktop.
 
 ### Working area
 

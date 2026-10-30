@@ -1611,6 +1611,157 @@ class TestMainEarlyLogging(unittest.TestCase):
             self.assertEqual(mock_trailer.call_args.kwargs.get("rc"), 0)
 
 
+class TestMainNotifications(unittest.TestCase):
+    """main() reports run outcomes through notify_run_finished.
+
+    Completed runs (success, failure, cancellation) and early failures
+    (missing profile) notify; no-op skips (duplicate invocation, weekday
+    ordinal) never do.
+    """
+
+    def _run_main(
+        self,
+        session_log_dir,
+        patches=(),
+        argv=None,
+        profile=None,
+        cancel_requested=False,
+        patch_exit=True,
+    ):
+        """Run main() once with notify_run_finished patched; return the mock."""
+        profile = profile or {
+            "tab_type": "backup",
+            "config": {"variables": {"label": "dailybackup"}},
+        }
+        argv = argv or ["profile_runner.py", "run", "Daily"]
+        with tempfile.TemporaryDirectory() as lock_dir:
+            orig_lock_dir = profile_runner.PROFILE_LOCK_DIR
+            profile_runner.PROFILE_LOCK_DIR = lock_dir
+            try:
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(sys, "argv", argv))
+                    stack.enter_context(patch("profile_runner.load_profile", return_value=profile))
+                    stack.enter_context(patch("profile_runner.load_config", return_value={}))
+                    stack.enter_context(patch("profile_runner.prune_old_logs"))
+                    stack.enter_context(patch("profile_runner.add_history_entry"))
+                    stack.enter_context(patch("session_log.write_session_trailer"))
+                    if patch_exit:
+                        stack.enter_context(patch("profile_runner.sys.exit"))
+                    stack.enter_context(patch("session_log.SESSION_LOG_DIR", session_log_dir))
+                    stack.enter_context(patch("profile_runner.run_backup_profile", return_value=0))
+                    stack.enter_context(patch("profile_runner._cancel_requested", cancel_requested))
+                    mock_notify = stack.enter_context(patch("profile_runner.notify_run_finished"))
+                    for target, kwargs in dict(patches).items():
+                        stack.enter_context(patch(target, **kwargs))
+                    try:
+                        profile_runner.main()
+                    except SystemExit:
+                        pass
+                return mock_notify
+            finally:
+                profile_runner.PROFILE_LOCK_DIR = orig_lock_dir
+
+    def test_completed_success_notifies(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_notify = self._run_main(tmpdir)
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        self.assertEqual(kwargs.get("result"), "success")
+        self.assertEqual(kwargs.get("name"), "Daily")
+        self.assertEqual(kwargs.get("run_type"), "backup")
+        self.assertEqual(kwargs.get("rc"), 0)
+
+    def test_failed_run_notifies(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_notify = self._run_main(
+                tmpdir,
+                patches={"profile_runner.run_backup_profile": {"return_value": 1}},
+            )
+        kwargs = mock_notify.call_args.kwargs
+        self.assertEqual(kwargs.get("result"), "failed")
+        self.assertEqual(kwargs.get("rc"), 1)
+
+    def test_cancelled_run_notifies_as_cancelled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_notify = self._run_main(tmpdir, cancel_requested=True)
+        kwargs = mock_notify.call_args.kwargs
+        self.assertEqual(kwargs.get("result"), "cancelled")
+        self.assertEqual(kwargs.get("rc"), profile_runner.PROFILE_CANCELLED_RC)
+
+    def test_missing_profile_notifies_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_notify = self._run_main(
+                tmpdir,
+                patches={"profile_runner.load_profile": {"return_value": None}},
+                patch_exit=False,
+            )
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        self.assertEqual(kwargs.get("result"), "failed")
+        self.assertEqual(kwargs.get("rc"), 1)
+        self.assertEqual(kwargs.get("name"), "Daily")
+
+    def test_duplicate_invocation_skip_does_not_notify(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_notify = self._run_main(
+                tmpdir,
+                patches={
+                    "profile_runner.acquire_profile_lock": {
+                        "return_value": (None, os.path.join(tmpdir, "daily.lock"))
+                    }
+                },
+                patch_exit=False,
+            )
+        mock_notify.assert_not_called()
+
+    def test_lock_wait_cancel_notifies_cancelled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_notify = self._run_main(
+                tmpdir,
+                patches={
+                    "profile_runner.acquire_profile_lock": {
+                        "return_value": (None, os.path.join(tmpdir, "daily.lock"))
+                    }
+                },
+                cancel_requested=True,
+                patch_exit=False,
+            )
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        self.assertEqual(kwargs.get("result"), "cancelled")
+        self.assertEqual(kwargs.get("rc"), profile_runner.PROFILE_CANCELLED_RC)
+
+    def test_unhandled_exception_notifies_failure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_notify = self._run_main(
+                tmpdir,
+                patches={
+                    "profile_runner.run_backup_profile": {"side_effect": RuntimeError("boom")}
+                },
+                patch_exit=False,
+            )
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        self.assertEqual(kwargs.get("result"), "failed")
+        self.assertEqual(kwargs.get("rc"), 1)
+
+    def test_weekday_ordinal_skip_does_not_notify(self):
+        profile = {
+            "tab_type": "backup",
+            "cron": {"weekday": "2#2"},
+            "config": {"variables": {"label": "dailybackup"}},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_notify = self._run_main(
+                tmpdir,
+                patches={"profile_runner._check_weekday_ordinal": {"return_value": False}},
+                argv=["profile_runner.py", "run", "Daily"],
+                profile=profile,
+                patch_exit=False,
+            )
+        mock_notify.assert_not_called()
+
+
 class TestMainWeekdayOrdinalGate(unittest.TestCase):
     """main() applies the cron weekday-ordinal guard to scheduled runs only.
 

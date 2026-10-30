@@ -109,6 +109,7 @@ the GUI tabs and the bash scripts.
 | `get_prune_pools_order()` / `save_prune_pools_order()`                       | Retention Prune pool order                                      |
 | `get_retention_mass_delete_config()` / `save_retention_mass_delete_config()` | Retention tab Advanced Prune Options card settings              |
 | `get_scrub_manager_config()` / `save_scrub_manager_config()`                 | Scrub queue settings                                            |
+| `get_notifications_config()` / `save_notifications_config()`                 | Notification channels, modes, run-type toggles, SMTP settings   |
 | `load_scrub_state()` / `save_scrub_state()`                                  | Scrub queue persistence                                         |
 | `generate_snapshot_name()`                                                   | Generate a backup snapshot name and update the snapfile         |
 | `generate_offsite_snapshot_name()`                                           | Generate an offsite snapshot name and update the snapfile       |
@@ -235,6 +236,7 @@ code.
 | `get_lock_dir()`                   | Advisory-lock directory                                                        |
 | `get_zvol_mount_dir()`             | Base directory for mounting zvol loop partitions (default `/mnt/zfsutilities`) |
 | `get_config_path()`                | Main JSON config file path                                                     |
+| `get_smtp_credentials_path()`      | Root-only SMTP password file path (0600 `smtp-credentials.json`)               |
 | `get_profiles_dir()`               | Profile directory (created on demand)                                          |
 | `get_history_path()`               | Backup-history JSON file path                                                  |
 | `get_scrub_state_path()`           | Scrub-manager state file path                                                  |
@@ -2226,6 +2228,92 @@ Simple GTK dialogs for adding a new profile and recalling an existing one.
 | `profile_manager` | Profile CRUD           |
 | `gui_helpers`     | Dialog helpers         |
 | `logging_config`  | `log_msg`              |
+
+---
+
+### `notifications.py`
+
+Desktop and email run-completion notifications. `notify_run_finished()` is
+the single entry point, called from `profile_runner.main()` (scheduled and
+Run-Now runs) and `BackupRunner._finish()`/`cancel()` (interactive GUI
+runs); it gates each channel independently by mode (off / failures / all)
+and per-run-type toggles, then delivers. Delivery is best effort: failures
+WARN to the session log and never fail the run. On the GUI main thread the
+actual delivery runs on a daemon thread (log lines hop back via
+`GLib.idle_add`) so a slow SMTP server cannot freeze the interface;
+headless callers run synchronously.
+
+Desktop bubbles are delivered to the logged-in desktop session's
+notification daemon — target user resolved from `SUDO_USER` (or the
+`ZFSUTILITIES_NOTIFICATION_DESKTOP_USER` override), then the X11 socket
+owner — preferring `notify-send` and falling back to `gdbus` (`dbus-send`
+cannot express the `a{sv}` hints argument). Email goes through
+user-configured SMTP via `smtplib`, so it works from root cron without a
+local mail agent. GLib is loaded dynamically: importing this module never
+requires `python3-gi`, keeping it safe for GUI-less hosts and outside the
+test suite's GUI-module closure.
+
+**Key functions:**
+
+| Function                                                        | Purpose                                                                  |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `notify_run_finished(result, name, run_type, rc, ...)`           | Gate and dispatch notifications for one finished run; never raises       |
+| `send_desktop_notification(summary, body, icon, urgency, ...)`   | Deliver one desktop bubble; returns success                              |
+| `send_email(subject, body, email_cfg, ...)`                      | Send one notification email; returns success                             |
+| `send_desktop_test(...)` / `send_email_test(...)`                | Dialog test buttons; report via `on_done` callback                       |
+| `load_smtp_password()` / `save_smtp_password(password)`          | Root-only 0600 credentials file (`smtp-credentials.json`); empty removes  |
+| `normalize_run_type(run_type)` / `run_type_label(run_type)`      | Canonical type keys (`prune` → `retention`) and GUI labels               |
+
+**Environment overrides:**
+
+| Variable                                       | Purpose                                                       |
+| ---------------------------------------------- | ------------------------------------------------------------- |
+| `ZFSUTILITIES_NOTIFICATION_DESKTOP_TIMEOUT`    | Desktop delivery subprocess timeout in seconds (default `10`) |
+| `ZFSUTILITIES_NOTIFICATION_EMAIL_TIMEOUT`      | SMTP timeout in seconds (default `30`)                        |
+| `ZFSUTILITIES_NOTIFICATION_DESKTOP_USER`       | Force the desktop-notification target user                    |
+
+**Called modules / imported helpers:**
+
+| Module           | Purpose in this module                                  |
+| ---------------- | ------------------------------------------------------- |
+| `feature_config` | `get_notifications_config` for channel gating           |
+| `config_core`    | `load_config` when no config is handed in               |
+| `logging_config` | `log_msg`, `get_log_sink`                                |
+| `backup_history` | `format_duration` for message bodies                    |
+| `disk_repository`| `format_bytes` for message bodies                        |
+| `paths`          | SMTP credentials file path                              |
+
+**Data structures consumed / produced:**
+
+| Structure              | Reference                                                        |
+| ---------------------- | ---------------------------------------------------------------- |
+| `notifications` config | [JSON config](../developer-guide/data-structures.md#json-config-varlibzfsutilitiesconfigjson) |
+
+---
+
+### `notifications_dialog.py`
+
+The File → **Notifications…** dialog: per-channel mode combo (Off / Failures
+only / All runs), six run-type toggles per channel, SMTP connection fields
+with a masked password entry, and **Show test notification** / **Send test
+email** buttons that exercise the delivery code with the dialog's current
+(unsaved) values. OK persists through `save_notifications_config` plus the
+0600 credentials file; the password test uses a transient override so the
+stored password is not needed to validate unsaved edits.
+
+**Key functions / class:**
+
+| Function / class                 | Purpose                                                        |
+| -------------------------------- | -------------------------------------------------------------- |
+| `NotificationsDialog(parent, config)` | Build and `run()` the dialog; saves on OK                 |
+
+**Called modules / imported helpers:**
+
+| Module             | Purpose in this module                    |
+| ------------------ | ----------------------------------------- |
+| `notifications`    | Delivery tests, password store, labels    |
+| `feature_config`   | Config normalization and persistence      |
+| `logging_config`   | `log_msg` for the save record             |
 
 ---
 

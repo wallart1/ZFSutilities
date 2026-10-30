@@ -2811,3 +2811,27 @@ Workload-survey dialog on the Performance tab (Alignment view).
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `INFO: Workload survey saved for ... (...)` | The survey entry was persisted and the Alignment view refreshes in place | Informational |
+
+### [notifications](../commands-and-modules/python-modules.md#notificationspy)
+
+Desktop and email delivery for finished runs (scheduled profiles, Run Now, and interactive GUI runs). Called from the tail of `profile_runner.main()` and from `BackupRunner._finish()`/`cancel()`; every message is best effort and never fails the run it reports on. On GUI runs the delivery itself happens on a daemon thread, so these lines can appear in the log panel shortly after the run's own completion lines.
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `INFO: Desktop notification skipped: no logged-in desktop session` | No desktop user with a live session bus was resolvable (no `SUDO_USER`, no X11 socket owner) | Desktop channel silently skipped for this run; email (if enabled) still goes out |
+| `WARN: Desktop notification unavailable: neither notify-send nor gdbus is installed` | The host has neither delivery tool on PATH | Install `libnotify-bin` or `libglib2.0-bin`, or rely on the email channel |
+| `WARN: Desktop notification failed: ...` | The delivery command could not be run or timed out | Run continues; the bubble was not shown |
+| `WARN: Desktop notification failed (rc=...): ...` | The delivery tool exited non-zero (e.g. no notification daemon) | Check the named error; the run itself is unaffected |
+| `INFO: Desktop notification sent: ...` | The bubble was handed to the session's notification daemon | Informational |
+| `WARN: Email notification skipped: SMTP host or recipient is not configured` | The email channel is enabled but `smtp_host` or the recipient list is empty | Configure SMTP settings in File → Notifications… |
+| `WARN: Email notification failed: ...` | SMTP connection/login/send raised (timeout, auth failure, relay refused) | The error names the cause; the run itself is unaffected |
+| `INFO: Email notification sent to ...: ...` | The message was accepted by the SMTP server | Informational |
+| `WARN: Notification dispatch failed: ...` | An unexpected exception escaped inside the dispatch wrapper (a bug) | Swallowed; the run's own status is untouched. Please report if seen |
+
+### [notifications_dialog](../commands-and-modules/python-modules.md#notifications_dialogpy)
+
+The File → **Notifications…** configuration dialog.
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `INFO: Notification settings saved` | OK was pressed; modes, toggles, and SMTP settings persisted, and the password stored in the root-only credentials file | Future runs use the new gating immediately |

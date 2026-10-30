@@ -575,6 +575,57 @@ class TestFinishResultReporting(unittest.TestCase):
         runner._on_complete.assert_called_once_with(cancelled=False, rc=2)
 
 
+class TestRunNotifications(unittest.TestCase):
+    """_finish and cancel report outcomes through notify_run_finished."""
+
+    def _runner(self, label="Backup"):
+        runner = br.BackupRunner(MagicMock(), MagicMock())
+        runner.label = label
+        runner._total_bytes_received = 0
+        runner._session_start_time = time.time()
+        runner._session_log_file = None
+        return runner
+
+    @patch("backup_runner.add_history_entry")
+    def test_finish_success_notifies(self, _mock_add):
+        runner = self._runner()
+        with patch("backup_runner.notify_run_finished") as mock_notify:
+            runner._finish(rc=0)
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        self.assertEqual(kwargs.get("result"), "success")
+        self.assertEqual(kwargs.get("name"), "Backup")
+        self.assertEqual(kwargs.get("run_type"), "backup")
+        self.assertEqual(kwargs.get("rc"), 0)
+
+    @patch("backup_runner.add_history_entry")
+    def test_finish_failure_notifies_with_rc(self, _mock_add):
+        runner = self._runner("Offsite backup")
+        with patch("backup_runner.notify_run_finished") as mock_notify:
+            runner._finish(rc=9)
+        kwargs = mock_notify.call_args.kwargs
+        self.assertEqual(kwargs.get("result"), "failed")
+        self.assertEqual(kwargs.get("run_type"), "offsite")
+        self.assertEqual(kwargs.get("rc"), 9)
+
+    @patch("backup_runner.add_history_entry")
+    def test_finish_prune_run_type_passed_through(self, _mock_add):
+        runner = self._runner("Prune")
+        with patch("backup_runner.notify_run_finished") as mock_notify:
+            runner._finish(rc=0)
+        self.assertEqual(mock_notify.call_args.kwargs.get("run_type"), "prune")
+
+    @patch("backup_runner.add_history_entry")
+    def test_cancel_notifies_cancelled_without_rc(self, _mock_add):
+        runner = self._runner()
+        with patch("backup_runner.notify_run_finished") as mock_notify:
+            runner.cancel()
+        mock_notify.assert_called_once()
+        kwargs = mock_notify.call_args.kwargs
+        self.assertEqual(kwargs.get("result"), "cancelled")
+        self.assertIsNone(kwargs.get("rc"))
+
+
 class TestHistoryEntry(unittest.TestCase):
     """History entries record the session log path."""
 

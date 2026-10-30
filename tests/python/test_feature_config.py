@@ -750,5 +750,97 @@ class TestComputeDestinationRoot(unittest.TestCase):
         )
 
 
+class TestNotificationsConfig(unittest.TestCase):
+    """Notifications section defaults, normalization, and save."""
+
+    def test_absent_section_defaults_to_off_with_all_types_on(self):
+        config = {}
+        data = feature_config.get_notifications_config(config)
+        self.assertEqual(data["desktop"]["mode"], "off")
+        self.assertEqual(data["email"]["mode"], "off")
+        for channel in ("desktop", "email"):
+            for run_type in feature_config.NOTIFICATION_TYPES:
+                self.assertTrue(data[channel]["types"][run_type])
+        self.assertEqual(data["email"]["smtp_port"], 587)
+        self.assertEqual(data["email"]["smtp_security"], "starttls")
+        self.assertEqual(data["email"]["smtp_to"], [])
+        # get_ normalizes in place so callers see a stable shape.
+        self.assertEqual(config["notifications"], data)
+
+    def test_invalid_mode_falls_back_to_off(self):
+        config = {"notifications": {"desktop": {"mode": "loud"}}}
+        data = feature_config.get_notifications_config(config)
+        self.assertEqual(data["desktop"]["mode"], "off")
+
+    def test_partial_type_toggles_keep_defaults_for_the_rest(self):
+        config = {"notifications": {"email": {"mode": "all", "types": {"backup": False}}}}
+        data = feature_config.get_notifications_config(config)
+        self.assertFalse(data["email"]["types"]["backup"])
+        for run_type in feature_config.NOTIFICATION_TYPES:
+            if run_type != "backup":
+                self.assertTrue(data["email"]["types"][run_type])
+
+    def test_non_boolean_type_entries_coerced_to_truthiness(self):
+        # The dialog writes real booleans; hand-edited values coerce by
+        # truthiness (an empty string or 0 disables, anything else enables).
+        config = {
+            "notifications": {
+                "desktop": {"mode": "all", "types": {"scrub": "", "backup": 0, "restore": "yes"}}
+            }
+        }
+        data = feature_config.get_notifications_config(config)
+        self.assertIs(data["desktop"]["types"]["scrub"], False)
+        self.assertIs(data["desktop"]["types"]["backup"], False)
+        self.assertIs(data["desktop"]["types"]["restore"], True)
+
+    def test_smtp_to_string_splits_on_commas(self):
+        config = {"notifications": {"email": {"smtp_to": "a@example.com, b@example.com"}}}
+        data = feature_config.get_notifications_config(config)
+        self.assertEqual(data["email"]["smtp_to"], ["a@example.com", "b@example.com"])
+
+    def test_smtp_to_list_strips_blanks(self):
+        config = {"notifications": {"email": {"smtp_to": [" a@b.c ", "", "c@d.e"]}}}
+        data = feature_config.get_notifications_config(config)
+        self.assertEqual(data["email"]["smtp_to"], ["a@b.c", "c@d.e"])
+
+    def test_bad_port_and_security_fall_back(self):
+        config = {
+            "notifications": {
+                "email": {"smtp_port": "not-a-port", "smtp_security": "carrier-pigeon"}
+            }
+        }
+        data = feature_config.get_notifications_config(config)
+        self.assertEqual(data["email"]["smtp_port"], 587)
+        self.assertEqual(data["email"]["smtp_security"], "starttls")
+
+    def test_valid_settings_survive_round_trip(self):
+        settings = {
+            "desktop": {"mode": "failures", "types": {"backup": True, "offsite": False}},
+            "email": {
+                "mode": "all",
+                "types": {},
+                "smtp_host": "smtp.example.com",
+                "smtp_port": 465,
+                "smtp_security": "ssl",
+                "smtp_username": "user",
+                "smtp_from": "zfs@example.com",
+                "smtp_to": "a@example.com",
+            },
+        }
+        with temp_config_dir():
+            config = {}
+            feature_config.save_notifications_config(config, settings)
+        saved = config["notifications"]
+        self.assertEqual(saved["desktop"]["mode"], "failures")
+        self.assertFalse(saved["desktop"]["types"]["offsite"])
+        self.assertEqual(saved["email"]["smtp_port"], 465)
+        self.assertEqual(saved["email"]["smtp_security"], "ssl")
+        self.assertEqual(saved["email"]["smtp_to"], ["a@example.com"])
+        # Types normalize to the full set on save.
+        for run_type in feature_config.NOTIFICATION_TYPES:
+            self.assertIn(run_type, saved["email"]["types"])
+            self.assertIn(run_type, saved["desktop"]["types"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -76,6 +76,15 @@ def get_config_path() -> str:
     return os.path.join(get_state_dir(), "config.json")
 
 
+def get_smtp_credentials_path() -> str:
+    """Return the path to the root-only SMTP credentials file.
+
+    The password is kept here rather than in the main config so it sits in a
+    0600 root-only file instead of the shared config.json.
+    """
+    return os.path.join(get_config_dir(), "smtp-credentials.json")
+
+
 def get_profiles_dir() -> str:
     """Return the directory where profile JSON files are stored.
 

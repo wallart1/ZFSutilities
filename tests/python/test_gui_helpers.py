@@ -659,6 +659,22 @@ class TestCreateMenuBar(unittest.TestCase):
         ):
             self.assertIn(("activate", handler, state_key), connect_args)
 
+    def test_file_menu_contains_notifications_before_quit(self):
+        with mock_gtk() as gtk_mock:
+            import gui_helpers
+
+            with patch.object(gui_helpers, "Gtk", gtk_mock):
+                app = MagicMock()
+                gui_helpers.create_menu_bar(app)
+
+        labels = [c.kwargs["label"] for c in gtk_mock.MenuItem.call_args_list]
+        self.assertIn("Notifications…", labels)
+        self.assertLess(labels.index("Notifications…"), labels.index("Quit"))
+
+        connects = gtk_mock.MenuItem.return_value.connect.call_args_list
+        connect_args = [c.args for c in connects]
+        self.assertIn(("activate", app.on_notifications), connect_args)
+
 
 class TestSectionHeaderAndNoteMarkup(unittest.TestCase):
     """section_header and show_note must Pango-escape caller text.
