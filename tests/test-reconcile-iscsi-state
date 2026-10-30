@@ -49,6 +49,7 @@ _mock_luns_1=""
 _mock_luns_2=""
 _mock_acls_1=""
 _mock_acls_2=""
+_mock_init_grants_1=""
 _mock_gen_acls_1="1"
 _mock_gen_acls_2="1"
 
@@ -71,6 +72,9 @@ targetcli() {
             ;;
         "/iscsi/${IQN1}/tpg1/acls ls")
             [[ -n "$_mock_acls_1" ]] && printf '%s\n' "$_mock_acls_1"
+            ;;
+        "/iscsi/${IQN1}/tpg1/acls/${INIT1} ls")
+            [[ -n "${_mock_init_grants_1:-}" ]] && printf '%s\n' "$_mock_init_grants_1"
             ;;
         "/iscsi/${IQN2}/tpg1/acls ls")
             [[ -n "$_mock_acls_2" ]] && printf '%s\n' "$_mock_acls_2"
@@ -98,6 +102,19 @@ targetcli() {
     fi
     if [[ "$2" == "create" && "$1" == "/iscsi/${IQN1}/tpg1/acls" ]]; then
         _mock_acls_1+="  o- ${3} .......... [Mapped LUNs: 0]"$'\n'
+        # Real rtslib AUTO-GRANTS every TPG LUN as an identity MappedLUN
+        # at ACL-node creation (live-proven in the j16 lab): the node's
+        # listing immediately carries one mapped_lun per mapped LUN.
+        # _mock_no_autogrant models stacks/moments without it so the
+        # explicit create path stays covered.
+        if [[ -z "${_mock_no_autogrant:-}" && "$3" == "${INIT1}" ]]; then
+            local _idx _bs
+            while IFS='|' read -r _idx _bs; do
+                [[ -n "$_idx" ]] || continue
+                _mock_init_grants_1+="  o- mapped_lun${_idx} ... [lun${_idx} block/${_bs} (rw)]"$'\n'
+            done < <(printf '%s\n' "$_mock_luns_1" \
+                | sed -n 's/.*o- lun\([0-9][0-9]*\)  \[block\/\([^ ]*\) .*/\1|\2/p')
+        fi
         return 0
     fi
     if [[ "$2" == "create" && "$1" == "/iscsi/${IQN2}/tpg1/acls" ]]; then
@@ -209,6 +226,7 @@ live_restored_empty() {
     _mock_luns_2=""
     _mock_acls_1=""
     _mock_acls_2=""
+    _mock_init_grants_1=""
     _mock_iscsi_ls=$'o- iscsi ............ [Targets: 2]\n  o- '"${IQN1}"$' [TPGs: 1]\n  o- '
     _mock_iscsi_ls+="${IQN2}"
     _mock_iscsi_ls+=$' [TPGs: 1]'
@@ -321,9 +339,11 @@ reset_mocks() {
     _mock_luns_2=""
     _mock_acls_1=""
     _mock_acls_2=""
+    _mock_init_grants_1=""
     _mock_gen_acls_1="1"
     _mock_gen_acls_2="1"
     _mock_grant_fail=""
+    _mock_no_autogrant=""
     _mock_zfs_mountpoint=()
     _mock_encryption=()
     _mock_zvols_threeamigos=()
@@ -716,12 +736,14 @@ test_explicit_acl_recreated() {
     local ok=true
     [[ "$_main_rc" -eq 0 ]] || ok=false
     [[ "$tlog" == *"/iscsi/${IQN1}/tpg1/acls create ${INIT1}"* ]] || ok=false
-    # Identity grant at the LUN's own index. targetcli's UIACL create takes
-    # <mapped_lun> <tpg_lun>; the old "create mapped_lun <idx>" form was
-    # rejected by targetcli (non-integer mapped_lun) and never granted
-    # anything — the regression this assertion guards against.
-    [[ "$tlog" == *"/iscsi/${IQN1}/tpg1/acls/${INIT1} create 0 0"* ]] || ok=false
+    # rtslib auto-granted every LUN at node creation (mock fidelity:
+    # real semantics), so reconcile must NOT re-create the grant — it
+    # counts the present one and reports full coverage.  The old
+    # "create mapped_lun" syntax stays asserted-absent (the P3
+    # regression guard).
+    [[ "$tlog" != *"/iscsi/${IQN1}/tpg1/acls/${INIT1} create 0 0"* ]] || ok=false
     [[ "$tlog" != *"create mapped_lun"* ]] || ok=false
+    log_has "Granted 1/1 LUN(s) to ACL ${INIT1}" || ok=false
 
     if [[ "$ok" == true ]]; then
         test_pass
@@ -730,11 +752,43 @@ test_explicit_acl_recreated() {
     fi
 }
 
+test_explicit_acl_missing_grant_created() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    # Same shape, but the ACL node lands WITHOUT rtslib's auto-grant
+    # (_mock_no_autogrant) — reconcile must create the identity grant
+    # itself, with targetcli's UIACL argument order <mapped_lun>
+    # <tpg_lun>.
+    _mock_gen_acls_1="0"
+    _mock_no_autogrant=1
+    _mock_backstores=$(bs_line vm-101-disk-0 /dev/zvol/threeamigos/proxmox/vm-101-disk-0)$'\n'
+    _mock_luns_1=$(lun_line 0 vm-101-disk-0)
+    assume_yes=true
+    test_start "A missing identity grant is created (no auto-grant stack)"
+
+    run_main
+    local tlog
+    tlog=$(targetcli_log_content)
+
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    [[ "$tlog" == *"/iscsi/${IQN1}/tpg1/acls/${INIT1} create 0 0"* ]] || ok=false
+    log_has "Granted 1/1 LUN(s) to ACL ${INIT1}" || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — missing grant not created (log: $tlog)"
+    fi
+}
+
 test_explicit_acl_grant_failure_fails_apply() {
     reset_mocks
     live_restored_empty
     register_pools_with_map
     _mock_gen_acls_1="0"
+    _mock_no_autogrant=1
     _mock_backstores=$(bs_line vm-101-disk-0 /dev/zvol/threeamigos/proxmox/vm-101-disk-0)$'\n'
     _mock_luns_1=$(lun_line 0 vm-101-disk-0)
     _mock_grant_fail=1
@@ -1034,6 +1088,7 @@ test_backstore_dev_conflict_refused
 test_missing_zvol_skipped
 test_encrypted_reflag
 test_explicit_acl_recreated
+test_explicit_acl_missing_grant_created
 test_explicit_acl_grant_failure_fails_apply
 test_vm_ref_no_map_entry_lists_candidates
 test_noentry_vm_refs_block_map_refresh

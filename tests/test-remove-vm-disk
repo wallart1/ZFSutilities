@@ -220,10 +220,18 @@ EOF
         fi
 
         # Manifest and encrypted-LUN config entries for this backstore.
+        # The conf uses the real three-field format (name:device:target)
+        # — plus a foreign same-name line that must SURVIVE the removal
+        # (the F-027 mirror: only the line describing the removed zvol
+        # is deleted).
         printf '%s\n%s\n' "vm-999-disk-0" "$backstore" \
             > "$EXPECTED_BACKSTORES_MANIFEST"
-        printf '%s:pool-key\n' "$backstore" \
-            > "$ZFSUTILITIES_SYSTEM_CONFIG_DIR/iscsi-encrypted-luns.conf"
+        {
+            printf '%s:/dev/zvol/%s/proxmox/vm-%s-disk-%s:%s\n' \
+                "$backstore" "$pool" "$vmid" "$disknum" "$pool"
+            printf '%s:/dev/zvol/otherpool/proxmox/%s:otherpool\n' \
+                "$backstore" "$backstore"
+        } > "$ZFSUTILITIES_SYSTEM_CONFIG_DIR/iscsi-encrypted-luns.conf"
 
         # shellcheck disable=SC2086
         source "$mydir/bin/remove-vm-disk" "$pool" "$vmid" "$disknum" $extra_args
@@ -318,9 +326,14 @@ test_happy_path_teardown_and_zfsdelfs_destroy() {
         test_fail "Manifest pruning removed an unrelated backstore"
         return
     fi
-    if grep -qF "vm-205-disk-0:" \
+    if grep -qF "vm-205-disk-0:/dev/zvol/threeamigos" \
         "$_mock_zfs_state_dir/etc-zfsutilities/iscsi-encrypted-luns.conf"; then
         test_fail "Backstore not pruned from encrypted-LUNs config"
+        return
+    fi
+    if ! grep -qF "vm-205-disk-0:/dev/zvol/otherpool" \
+        "$_mock_zfs_state_dir/etc-zfsutilities/iscsi-encrypted-luns.conf"; then
+        test_fail "Foreign same-name encrypted-LUNs line was deleted (F-027 mirror)"
         return
     fi
     if [[ -z "$(iscsi_saves)" ]]; then

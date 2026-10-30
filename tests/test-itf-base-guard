@@ -210,8 +210,8 @@ test_qm_read_verb_not_audit_logged() {
     fi
 }
 
-test_pvesm_status_is_the_only_subcommand() {
-    test_start "pvesm is restricted to status"
+test_pvesm_readonly_status_and_itf_path() {
+    test_start "pvesm is restricted to status and itf-volume path lookups"
     reset_exec_calls
     itf_pvesm testbase status > /dev/null 2>&1
     assert_rc 0 $?
@@ -222,6 +222,18 @@ test_pvesm_status_is_the_only_subcommand() {
     rc=$?
     assert_rc 22 "$rc"
     assert_equals 1 "$(itf_exec_count)"
+
+    # path resolves ONLY itf-storage volumes; anything else refuses
+    # without touching the host.
+    reset_exec_calls
+    itf_pvesm testbase path "local:vm-100-disk-0" > /dev/null 2>&1
+    rc=$?
+    assert_rc 22 "$rc"
+    assert_equals 0 "$(itf_exec_count)"
+    itf_pvesm testbase path "itfguests:vm-8005-disk-0" > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_equals 1 "$(itf_exec_count)"
+    assert_contains "$_itf_exec_calls" "pvesm path itfguests:vm-8005-disk-0"
 }
 
 test_read_allowlist_exact_entries() {
@@ -425,7 +437,7 @@ test_qm_refusal_never_reaches_host
 test_qm_dry_run_marks_log_and_skips_exec
 test_qm_audit_logs_before_executing
 test_qm_read_verb_not_audit_logged
-test_pvesm_status_is_the_only_subcommand
+test_pvesm_readonly_status_and_itf_path
 test_read_allowlist_exact_entries
 test_read_prefix_rules
 test_read_quoting_preserves_metacharacters

@@ -64,6 +64,15 @@ ITF_ISO_NAME=itf-debian-netinst.iso
 # ITF_PVE_ISO_URL=https://REPLACE-ME.invalid/proxmox-ve.iso
 # ITF_PVE_ISO_NAME=itf-pve.iso
 
+# Encrypted-key lab (optional, opt-in — used only by journeys that
+# provision the LUKS key-device lab, e.g. j05 --encrypted-keys).  Both
+# or neither: the LUKS passphrase protecting the lab key device and the
+# ZFS key-file name it carries (the conventional per-pool name below).
+# The passphrase is a secret: set it ONLY in this gitignored copy, never
+# in any committed file.
+# ITF_KEYSTORE_PASSPHRASE=REPLACE-ME-luks-passphrase
+# ITF_KEYFILE_NAME=zfstest1.key
+
 # Software under test: "release" (GitHub release tarballs — the new-user
 # experience) or "dev-tarball" (verify a repair from this repository).
 ITF_SW_SOURCE=release

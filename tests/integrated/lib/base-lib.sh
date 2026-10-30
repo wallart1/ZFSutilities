@@ -17,8 +17,9 @@
 #      ISO directory.
 #   4. Every mutating operation is appended to the audit log on the base
 #      host (ITF_ACTION_LOG) before it runs.
-#   5. pvesm is read-only ("status" only) and general reads go through a
-#      small allow-list (itf_read).  The orchestrator never edits storage
+#   5. pvesm is read-only ("status", plus "path" lookups restricted to
+#      itf-storage volumes) and general reads go through a small
+#      allow-list (itf_read).  The orchestrator never edits storage
 #      definitions, network config, systemd units, or packages on a base.
 #   6. ITF_DRY_RUN=1 prints guarded commands instead of executing them.
 #
@@ -30,8 +31,10 @@ if [[ -n "${ITF_LIB_BASE_LOADED:-}" ]]; then
 fi
 ITF_LIB_BASE_LOADED=1
 
-# Read-only qm verbs the orchestrator may use.
-_ITF_QM_READ_VERBS="list status config version guest terminal monitor wait listsnapshot"
+# Read-only qm verbs the orchestrator may use.  `agent` is the guest-
+# agent RPC channel (ping/exec/file-*) — usable only against reserved-
+# range VMIDs like every other verb, and those guests are disposable.
+_ITF_QM_READ_VERBS="list status config version guest agent terminal monitor wait listsnapshot"
 # Mutating qm verbs — each one is audit-logged before execution.  `clone`
 # `template` `delsnapshot` serve the post-install baseline template
 # (template-lib).
@@ -274,15 +277,32 @@ itf_qm() {
 }
 
 # itf_pvesm <base-host> status
+# itf_pvesm <base-host> path <itf-volid>
 #
-# The only pvesm operation allowed: read-only status.
+# The only pvesm operations allowed: read-only status, and resolving the
+# backing path of a volume on an itf storage (the VM-OS image dump reads
+# its own disposable build guest's disk this way — never a foreign
+# storage's volumes).
 itf_pvesm() {
     local base="$1" sub="${2:-}"
-    if [[ "$sub" != "status" ]]; then
-        echo "itf-guard: pvesm '$sub' refused (status is the only allowed subcommand)" >&2
-        return 22
-    fi
-    itf_base_exec "$base" "pvesm status"
+    case "$sub" in
+        status)
+            itf_base_exec "$base" "pvesm status"
+            ;;
+        path)
+            local volid="${3:-}"
+            if [[ "$volid" != "$ITF_GUEST_STORAGE":* && "$volid" != "$ITF_ISO_STORAGE":* ]]; then
+                echo "itf-guard: pvesm path refused: '$volid' is not an itf-storage volume" \
+                    "(guest: $ITF_GUEST_STORAGE, iso: $ITF_ISO_STORAGE)" >&2
+                return 22
+            fi
+            itf_base_exec "$base" "pvesm path $(printf '%q' "$volid")"
+            ;;
+        *)
+            echo "itf-guard: pvesm '$sub' refused (status and itf-volume path are the only allowed subcommands)" >&2
+            return 22
+            ;;
+    esac
 }
 
 # itf_read <base-host> <command...>

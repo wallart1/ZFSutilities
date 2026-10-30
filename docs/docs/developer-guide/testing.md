@@ -221,6 +221,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-itf-base-guard` | itf `lib/base-lib.sh`: the confinement guard every base-host access passes through — allow-listed commands only, no escape hatches |
 | `test-itf-config` | itf `lib/config-lib.sh`: site-configuration loading and fail-closed validation |
 | `test-itf-driver` | itf driver dispatch under strict mode: subcommand routing, journey validation and registration, `--rerun` preparation, `itf status`, and run-lock serialization — holder record, wait/heartbeat/refuse, and the acquire-time orphan fence over interrupted runs' guests (rerun exemptions, fail-closed base checks, no base contact on the healthy path) |
+| `test-itf-lab-stages` | itf lab-layer builders in `journeys/common.sh` + `lib/vmos-lib.sh`: the shared test-pools stage, the single-node lab, the VM-OS image build/dump/self-verify orchestration, the agent-channel workload helpers and stall-gap parser, the reboot stage with DHCP address rediscovery, and the LUKS keystore helpers — including that the passphrase only ever travels via stdin and the encrypted lab tail stays off without its flag |
 | `test-itf-report` | itf `lib/report-lib.sh`: progressive PASS/FAIL/SKIP run reports and run-state derivation |
 | `test-itf-ssh` | itf `lib/ssh-lib.sh`: the dev-side HTTP preseed server lifecycle — a silently dead server would turn an unattended guest install into an interactive hang |
 | `test-itf-template` | itf `lib/template-lib.sh`: post-install baseline templates — stamp, name resolution, clone, freshness |

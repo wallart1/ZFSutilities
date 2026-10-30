@@ -37,7 +37,7 @@ else:
                     {"storage_object": "/backstores/block/" + n, "index": i}
                     for i, n in enumerate(names)
                 ],
-                "acls": [{
+                "node_acls": [{
                     "node_wwn": "iqn.2026-02.local.tweety",
                     "mapped_luns": [
                         {"index": i, "tpg_lun": i} for i in range(len(names))
@@ -390,7 +390,7 @@ test_mapped_luns_strippped_from_boot_config() {
             {"storage_object": "/backstores/block/vm-100-disk-0", "index": 0},
             {"storage_object": "/backstores/block/vm-101-disk-0", "index": 1}
           ],
-          "acls": [
+          "node_acls": [
             {
               "node_wwn": "iqn.2026-02.local.tweety",
               "mapped_luns": [
@@ -464,7 +464,7 @@ RUNNEREOF
 print(' '.join(str(l['index']) for l in t['luns']))" 2>/dev/null || true)
     local mapped
     mapped=$(python3 -c "import json; t = json.load(open('$bootfile'))['targets'][0]['tpgs'][0]; \
-print(' '.join(str(m['tpg_lun']) for m in t['acls'][0]['mapped_luns']))" 2>/dev/null || true)
+print(' '.join(str(m['tpg_lun']) for m in t['node_acls'][0]['mapped_luns']))" 2>/dev/null || true)
 
     rm -rf "$tmpdir"
 
@@ -655,7 +655,7 @@ cfg = {
                 {"storage_object": "/backstores/block/" + n, "index": i}
                 for i, n in enumerate(names[:mapped])
             ],
-            "acls": [{
+            "node_acls": [{
                 "node_wwn": "iqn.2026-02.local.tweety",
                 "mapped_luns": [
                     {"index": i, "tpg_lun": i} for i in range(mapped)
@@ -767,7 +767,7 @@ cfg = {
         "luns": [
             {"storage_object": "/backstores/block/vm-100-disk-0", "index": 0},
             {"storage_object": "/backstores/block/vm-101-disk-0", "index": 1}],
-        "acls": [{"node_wwn": "iqn.2026-02.local.tweety", "mapped_luns": []}],
+        "node_acls": [{"node_wwn": "iqn.2026-02.local.tweety", "mapped_luns": []}],
     }]}],
 }
 with open(sys.argv[1], "w") as f:
@@ -816,7 +816,7 @@ cfg = {
         "luns": [
             {"storage_object": "/backstores/block/vm-100-disk-0", "index": 0},
             {"storage_object": "/backstores/block/vm-101-disk-0", "index": 1}],
-        "acls": [{"node_wwn": "iqn.2026-02.local.tweety",
+        "node_acls": [{"node_wwn": "iqn.2026-02.local.tweety",
                   "mapped_luns": [{"index": 0, "tpg_lun": 0},
                                   {"index": 1, "tpg_lun": 1}]}],
     }]}],

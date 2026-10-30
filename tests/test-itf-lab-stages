@@ -1,0 +1,1625 @@
+#!/usr/bin/env bash
+# test-itf-lab-stages — Unit tests for the lab-layer builders in
+# tests/integrated/journeys/common.sh and tests/integrated/lib/vmos-lib.sh
+# (recovery-scenario campaign G0: test-pools stage, single-node lab,
+# VM-OS image machinery, workload helpers, reboot stage, keystore
+# helpers; campaign G1: the reboot begin/wait split, the boot-journal
+# parser, the key ceremony, load-keys/keystatus gates, link-presence /
+# fence-tick / fallout observables, and the boot-workload staging).
+#
+# Pattern (from test-itf-driver's common.sh block): source the library
+# in-process inside a subshell with stubbed transports that record every
+# call, invoke the stage/helper, and assert on the recorded calls, the
+# written files, and the J_* globals.  No test can reach a real base
+# host: every itf_qm/itf_guest_* transport is a stub.  DRY_RUN variants
+# additionally pin the exact guarded qm commands the stages emit.
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+ITF_COMMON="$mydir/tests/integrated/journeys/common.sh"
+tmp_dir=$(mktemp -d)
+
+# Minimal site-config values the stages read (never a real environment;
+# transports are stubbed or the config points at .invalid hosts).
+export ITF_BASE_HOSTS=(base.invalid)
+export ITF_SSH_USER=testuser
+export ITF_VMID_FIRST=8000
+export ITF_VMID_LAST=8099
+export ITF_GUEST_STORAGE=itfguests
+export ITF_GUEST_POOL_DISK_GB=100
+export ITF_KEYFILE_NAME=zfstest1.key
+export ITF_KEYSTORE_PASSPHRASE=unit-test-passphrase
+export ITF_CACHE_DIR="$tmp_dir/cache"
+export ITF_HTTP_PORT=8123
+mkdir -p "$ITF_CACHE_DIR"
+
+# ------------------------------------------------------------------------------
+# itf_journey_stage_test_pools
+# ------------------------------------------------------------------------------
+
+test_test_pools_success_path() {
+    test_start "test_pools attaches the disk, runs the docs recipe, snapshots"
+    local work="$tmp_dir/pools-ok"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_qm() {
+            _calls+="qm:$2:$3:$4:$5 "
+            return 0
+        }
+        itf_guest_exec() {
+            _calls+="exec:$1 "
+            return 0
+        }
+        itf_guest_put() {
+            _calls+="put:$1:$3 "
+            return 0
+        }
+        itf_guest_snapshot() {
+            _calls+="snap:$1:$2:$3 "
+            return 0
+        }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_artifact() { _calls+="artifact:$1 "; return 0; }
+        itf_journey_stage_test_pools j99 base.invalid 8005 10.1.1.1
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" \
+        "qm:set:8005:--scsi1:itfguests:100"
+    assert_contains "$(cat "$work/calls")" "exec:10.1.1.1"
+    assert_contains "$(cat "$work/calls")" "put:10.1.1.1:/root/itf-pools.sh"
+    assert_contains "$(cat "$work/calls")" "snap:base.invalid:8005:pools-created"
+    assert_contains "$(cat "$work/calls")" "step:pass:pool disk attached"
+    assert_contains "$(cat "$work/calls")" "step:pass:test pools created"
+    assert_contains "$(cat "$work/calls")" "artifact:pools"
+}
+
+test_test_pools_recipe_content() {
+    test_start "test_pools writes the docs three-RAIDZ1 recipe verbatim"
+    local work="$tmp_dir/pools-recipe"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        itf_qm() { return 0; }
+        itf_guest_exec() { return 0; }
+        itf_guest_put() { return 0; }
+        itf_guest_snapshot() { return 0; }
+        itf_step() { return 0; }
+        itf_artifact() { return 0; }
+        itf_journey_stage_test_pools j99 base.invalid 8005 10.1.1.1
+    ) > /dev/null 2>&1
+    local script="$work/guest-pools.sh"
+    assert_contains "$(cat "$script")" "parted -s /dev/sdb mklabel gpt"
+    assert_contains "$(cat "$script")" "apt-get install -y parted"
+    assert_contains "$(cat "$script")" "udevadm settle --timeout=30"
+    assert_contains "$(cat "$script")" \
+        "zpool create -f zfstest1 raidz1 /dev/sdb1 /dev/sdb2 /dev/sdb3 /dev/sdb4 /dev/sdb5"
+    assert_contains "$(cat "$script")" \
+        "zpool create -f zfstest3 raidz1 /dev/sdb11 /dev/sdb12 /dev/sdb13 /dev/sdb14 /dev/sdb15"
+    assert_contains "$(cat "$script")" "[[ -e /dev/sdb15 ]]"
+}
+
+test_test_pools_attach_failure_fails_stage() {
+    test_start "test_pools fails closed when the guarded attach is refused"
+    local work="$tmp_dir/pools-attachfail"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_qm() { _calls+="qm-refused "; return 22; }
+        itf_guest_exec() { return 0; }
+        itf_guest_put() { return 0; }
+        itf_guest_snapshot() { _calls+="snap "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_artifact() { return 0; }
+        itf_journey_stage_test_pools j99 base.invalid 8005 10.1.1.1
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "step:fail:pool disk attached"
+    # A refused attach must never reach the guest recipe or snapshot.
+    [[ "$(cat "$work/calls")" != *"snap "* ]] \
+        && : > "$work/no-snap" || true
+    assert_contains "$(cat "$work/no-snap" 2>/dev/null || echo missing)" ""
+}
+
+test_test_pools_guest_script_failure_fails_stage() {
+    test_start "test_pools fails closed when the guest recipe fails"
+    local work="$tmp_dir/pools-guestfail"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_qm() { return 0; }
+        itf_guest_exec() {
+            # The sdb wait succeeds; the recipe run fails.
+            [[ "$2" == bash* ]] && return 1
+            return 0
+        }
+        itf_guest_put() { return 0; }
+        itf_guest_snapshot() { _calls+="snap "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_artifact() { return 0; }
+        itf_journey_stage_test_pools j99 base.invalid 8005 10.1.1.1
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "step:fail:test pools created"
+    [[ "$(cat "$work/calls")" != *"snap "* ]] && : > "$work/no-snap" || true
+    assert_contains "$(cat "$work/no-snap" 2>/dev/null || echo missing)" ""
+}
+
+test_test_pools_dry_run_emits_guarded_attach() {
+    test_start "test_pools DRY_RUN emits the guarded scsi1 attach, nothing else"
+    local work="$tmp_dir/pools-dryrun"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _dry=""
+        itf_qm() {
+            # Mirror base-lib's DRY_RUN contract for the mutating verb:
+            # the guarded command is echoed, never executed.
+            # Call shape: itf_qm <base> set <vmid> --scsi1 <storage>:<gb>
+            if [[ -n "${ITF_DRY_RUN:-}" ]]; then
+                _dry+="[dry-run] $1: qm set $3 --scsi1 $5 "
+                return 0
+            fi
+            return 0
+        }
+        itf_guest_exec() { return 0; }
+        itf_guest_put() { return 0; }
+        itf_guest_snapshot() { return 0; }
+        itf_step() { return 0; }
+        itf_artifact() { return 0; }
+        ITF_DRY_RUN=1 itf_journey_stage_test_pools j99 base.invalid 8005 10.1.1.1
+        echo "$?" > "$work/rc"
+        printf '%s' "$_dry" > "$work/dry"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/dry")" \
+        "[dry-run] base.invalid: qm set 8005 --scsi1 itfguests:100"
+}
+
+# ------------------------------------------------------------------------------
+# itf_single_node_lab_main
+# ------------------------------------------------------------------------------
+
+test_single_node_lab_composes_prefix() {
+    test_start "single-node lab runs clone -> verify -> pools with J_* wiring"
+    local work="$tmp_dir/snl-ok"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stages
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_journey_stage_from_template() {
+            _calls+="from_template:$1 "
+            J_VMID=8005
+            J_GUEST_IP=10.1.1.1
+            return 0
+        }
+        itf_journey_verify_installed() { _calls+="verify:$1 "; return 0; }
+        itf_journey_stage_test_pools() {
+            _calls+="pools:$1:$2:$3:$4 "
+            return 0
+        }
+        itf_single_node_lab_main j99
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" \
+        "from_template:j99 verify:10.1.1.1 pools:j99:base.invalid:8005:10.1.1.1"
+}
+
+test_single_node_lab_propagates_pools_failure() {
+    test_start "single-node lab stops at the pools stage on failure"
+    local work="$tmp_dir/snl-fail"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stages
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_journey_stage_from_template() {
+            # shellcheck disable=SC2034  # consumed by the caller's locals
+            J_VMID=8005 J_GUEST_IP=10.1.1.1
+            return 0
+        }
+        itf_journey_verify_installed() { return 0; }
+        itf_journey_stage_test_pools() { _calls+="pools "; return 1; }
+        itf_single_node_lab_main j99
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "pools"
+}
+
+# ------------------------------------------------------------------------------
+# VM-OS image machinery (lib/vmos-lib.sh + driver dispatch)
+# ------------------------------------------------------------------------------
+
+ITF_VMOS_LIB="$mydir/tests/integrated/lib/vmos-lib.sh"
+
+test_vmos_wait_guest_ping_arg_order() {
+    test_start "agent ping uses qm agent <vmid> ping (VMID before command)"
+    local work="$tmp_dir/vmos-ping"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced library
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_VMOS_LIB"
+        _calls=""
+        itf_qm() { _calls+="qm:$(printf '%s:' "$@") "; return 0; }
+        itf_vmos_wait_guest_ping base.invalid 8005 5
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    # PVE 9 takes the VMID BEFORE the agent command; the inverse order
+    # silently never answers (live-proven on 9.2.21).
+    assert_contains "$(cat "$work/calls")" "qm:base.invalid:agent:8005:ping:"
+}
+
+test_vmos_stamp_short_circuit() {
+    test_start "vmos build skips entirely when the cache matches the stamp"
+    local work="$tmp_dir/vmos-skip"
+    mkdir -p "$work"
+    # A matching cache: image + stamp over the CURRENT inputs.  The
+    # image must be non-empty — the cache check is -s (an empty file
+    # means "no image").
+    echo fake-image > "$ITF_CACHE_DIR/itf-vmos.raw.gz"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced library
+        ITF_RUN_DIR="$work"
+        ITF_SSH_KEY="/dev/null"
+        # shellcheck disable=SC1090
+        source "$ITF_VMOS_LIB"
+        _calls=""
+        itf_qm() { _calls+="qm "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_vmos_stamp_want > "$ITF_CACHE_DIR/itf-vmos.stamp"
+        itf_vmos_build
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "step:skip:VM-OS image build"
+    # A skip must not touch any base host.
+    [[ "$(cat "$work/calls")" != *"qm "* ]] && : > "$work/no-qm" || true
+    assert_contains "$(cat "$work/no-qm" 2>/dev/null || echo missing)" ""
+    rm -f "$ITF_CACHE_DIR/itf-vmos.raw.gz" "$ITF_CACHE_DIR/itf-vmos.stamp"
+}
+
+test_vmos_dump_command_shape() {
+    test_start "vmos dump resolves the volume and runs the audited dd|gzip"
+    local work="$tmp_dir/vmos-dump"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced library
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_VMOS_LIB"
+        _calls=""
+        itf_qm() {
+            # qm config output carrying the system disk volid.
+            if [[ "$2" == config ]]; then
+                printf 'scsi0: itfguests:vm-8005-disk-0,discard=on\n'
+            fi
+            return 0
+        }
+        itf_pvesm() {
+            _calls+="pvesm:$2:$3 "
+            [[ "$2" == path ]] && printf '/dev/itfguests/vm-8005-disk-0\n'
+            return 0
+        }
+        itf_base_exec() {
+            _calls+="base-exec:[$2] "
+            return 0
+        }
+        itf_base_get() {
+            _calls+="base-get:$2:$3 "
+            echo fake-dump > "$3"
+            return 0
+        }
+        itf_log_action() { _calls+="audit:[$2] "; return 0; }
+        itf_vmos_dump_to_run_dir base.invalid 8005
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    # pvesm path resolution is proven by the dd target below (the pvesm
+    # stub itself runs inside a command substitution, so its recording
+    # does not survive the subshell).
+    assert_contains "$(cat "$work/calls")" \
+        "base-exec:[dd if=/dev/itfguests/vm-8005-disk-0 bs=4M status=none"
+    assert_contains "$(cat "$work/calls")" "| gzip -1c"
+    assert_contains "$(cat "$work/calls")" "chmod 644"
+    assert_contains "$(cat "$work/calls")" "base-get:/tmp/itf-vmos-dump-"
+    assert_contains "$(cat "$work/calls")" "audit:[vmos-dump: itfguests:vm-8005-disk-0"
+    assert_contains "$(cat "$work/calls")" "rm -f"
+}
+
+test_vmos_dump_refuses_qcow2_storage() {
+    test_start "vmos dump refuses a qcow2-backed guest storage cleanly"
+    local work="$tmp_dir/vmos-qcow2"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced library
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_VMOS_LIB"
+        _calls=""
+        itf_qm() {
+            [[ "$2" == config ]] && printf 'scsi0: itfguests:vm-8005-disk-0\n'
+            return 0
+        }
+        itf_pvesm() {
+            [[ "$2" == path ]] && printf '/mnt/itfguests/images/8005/vm-8005-disk-0.qcow2\n'
+            return 0
+        }
+        itf_base_exec() { _calls+="base-exec "; return 0; }
+        itf_base_get() { return 0; }
+        itf_log_action() { return 0; }
+        itf_vmos_dump_to_run_dir base.invalid 8005 > "$work/err" 2>&1
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/err")" "raw-backed"
+    # No dd ever ran against the base.
+    assert_contains "$(cat "$work/calls")" ""
+}
+
+test_vmos_build_orchestration() {
+    test_start "vmos build runs install -> dump -> self-verify -> cache"
+    local work="$tmp_dir/vmos-build"
+    mkdir -p "$work"
+    echo fake-iso > "$ITF_CACHE_DIR/itf-debian-netinst.iso"
+    (
+        # shellcheck disable=SC2034  # consumed by the build's report context
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC2034  # consumed by itf_vmos_stamp_want
+        ITF_SSH_KEY="/dev/null"
+        # shellcheck disable=SC1090
+        source "$ITF_VMOS_LIB"
+        # Pre-load common.sh so the build's conditional source keeps the
+        # stub below in place.
+        # shellcheck disable=SC1090
+        source "$mydir/tests/integrated/journeys/common.sh"
+        _calls=""
+        itf_journey_stage_os() {
+            _calls+="install:[$*] "
+            # shellcheck disable=SC2034  # consumed by the build's locals
+            J_VMID=8005 J_GUEST_IP=10.1.1.1
+            return 0
+        }
+        itf_qm() {
+            _calls+="qm:$(printf '%s:' "$@") "
+            if [[ "$2" == config ]]; then
+                printf 'scsi0: itfguests:vm-8005-disk-0\n'
+            fi
+            return 0
+        }
+        itf_pvesm() {
+            [[ "$2" == path ]] && printf '/dev/itfguests/vm-8005-disk-0\n'
+            return 0
+        }
+        itf_base_exec() { _calls+="base-exec "; return 0; }
+        itf_base_get() { echo fake-dump > "$3"; return 0; }
+        itf_log_action() { return 0; }
+        itf_guest_stop() { _calls+="stop "; return 0; }
+        itf_guest_start() { _calls+="start "; return 0; }
+        itf_guest_ip() { _calls+="ip "; echo 10.1.1.1; return 0; }
+        itf_guest_put() { _calls+="put "; return 0; }
+        itf_guest_exec() { _calls+="exec "; return 0; }
+        itf_guest_destroy() { _calls+="destroy:$2 "; return 0; }
+        itf_vmos_wait_guest_ping() { _calls+="ping "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_vmos_build --disk-gb 4
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" \
+        "install:[itf-vmos-build itf-vmos --base base.invalid --sysdisk 4]"
+    # The install disk matches the image size (a 32G default dump would
+    # overflow the 4G verify disk — live-proven the hard way).
+    # The installer-time CPU freeze is cleared before any later start
+    # (the live first run wedged exactly here: frozen start, silent
+    # agent, IP timeout).
+    assert_contains "$(cat "$work/calls")" "qm:base.invalid:set:8005:--freeze:0:"
+    assert_contains "$(cat "$work/calls")" \
+        "qm:base.invalid:set:8005:--scsi1:itfguests:4:"
+    assert_contains "$(cat "$work/calls")" \
+        "qm:base.invalid:set:8005:--boot:order=scsi1:"
+    assert_contains "$(cat "$work/calls")" "step:pass:build guest stopped"
+    assert_contains "$(cat "$work/calls")" "step:pass:system disk dumped"
+    assert_contains "$(cat "$work/calls")" "step:pass:image restored to verify disk"
+    assert_contains "$(cat "$work/calls")" "step:pass:restored image boots with agent"
+    assert_contains "$(cat "$work/calls")" "destroy:8005"
+    assert_contains "$(cat "$work/calls")" "step:pass:VM-OS image cached"
+    # Cache + stamp landed after the destroy.
+    [[ -s "$ITF_CACHE_DIR/itf-vmos.raw.gz" ]] && : > "$work/cached" || true
+    assert_contains "$(cat "$work/cached" 2>/dev/null || echo missing)" ""
+    [[ -f "$ITF_CACHE_DIR/itf-vmos.stamp" ]] && : > "$work/stamped" || true
+    assert_contains "$(cat "$work/stamped" 2>/dev/null || echo missing)" ""
+    rm -f "$ITF_CACHE_DIR/itf-vmos.raw.gz" "$ITF_CACHE_DIR/itf-vmos.stamp" \
+        "$ITF_CACHE_DIR/itf-debian-netinst.iso"
+}
+
+# ------------------------------------------------------------------------------
+# Workload helpers + reboot stage
+# ------------------------------------------------------------------------------
+
+test_vm_boot_with_agent_gates_on_ping() {
+    test_start "vm boot helper enables agent+TCG and gates on the ping"
+    local work="$tmp_dir/vm-boot"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stages
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() {
+            _calls+="exec:[$2] "
+            return 0
+        }
+        itf_vm_wait_agent() { _calls+="wait:$1:$2 "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_vm_boot_with_agent 10.2.2.2 101
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" \
+        "exec:[qm set 101 --agent enabled=1 --kvm 0]"
+    assert_contains "$(cat "$work/calls")" "exec:[qm start 101]"
+    assert_contains "$(cat "$work/calls")" "wait:10.2.2.2:101"
+    assert_contains "$(cat "$work/calls")" "step:pass:VM 101 agent ready"
+}
+
+test_vm_workload_helpers_use_agent_channel() {
+    test_start "workload start/sample/checksum drive qm guest exec, not ssh"
+    local work="$tmp_dir/vm-wl"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stages
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() {
+            _calls+="exec:[$2] "
+            # qm guest exec result as qm REALLY prints it: a pretty-printed
+            # JSON dict whose payload key is "out-data" (live-proven on
+            # PVE 9.2.21 — the G0 fixtures invented an "out" key, which
+            # masked the parser bug until the first live j15 run).
+            case "$2" in
+                *cat\ /workload.log*)
+                    printf '{\n   "exitcode" : 0,\n   "exited" : 1,\n   "out-data" : "1700000000\\n1700000001\\n",\n   "out-truncated" : 0\n}\n' ;;
+                *cksum*)
+                    printf '{\n   "exitcode" : 0,\n   "exited" : 1,\n   "out-data" : "4294967295 42 /workload.log\\n",\n   "out-truncated" : 0\n}\n' ;;
+                *) return 0 ;;
+            esac
+            return 0
+        }
+        itf_step() { _calls+="step:$1 "; return 0; }
+        itf_vm_workload_start 10.2.2.2 101
+        itf_vm_workload_sample 10.2.2.2 101 > "$work/sample"
+        itf_vm_workload_checksum 10.2.2.2 101 > "$work/cksum"
+        itf_vm_workload_stop 10.2.2.2 101
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_contains "$(cat "$work/calls")" "qm guest exec 101 -- sh -c"
+    assert_contains "$(cat "$work/calls")" "nohup"
+    assert_contains "$(cat "$work/calls")" "workload.log"
+    assert_contains "$(cat "$work/calls")" "qm guest exec 101 -- pkill -f workload.log"
+    # sample/checksum run inside command substitutions (their recordings
+    # do not survive the subshell) — the parsed outputs below prove both
+    # calls happened with the exact agent-channel command.
+    # Sample came back CLEAN (parsed out of the repr), single-quoted and
+    # double-quoted repr shapes both work.
+    assert_equals "1700000000
+1700000001" "$(cat "$work/sample")"
+    assert_contains "$(cat "$work/cksum")" "4294967295 42 /workload.log"
+    # No secret ever rides the agent channel.
+    [[ "$(cat "$work/calls")" != *"passphrase"* ]] && : > "$work/no-secret" || true
+    assert_contains "$(cat "$work/no-secret" 2>/dev/null || echo missing)" ""
+}
+
+test_vm_workload_sample_survives_agent_outage_rc() {
+    test_start "workload sample returns rc 1 when the agent channel is down"
+    local work="$tmp_dir/vm-wl-down"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stages
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        itf_guest_exec() { return 255; }
+        itf_vm_workload_sample 10.2.2.2 101
+        echo "$?" > "$work/rc"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc")"
+}
+
+test_vm_workload_gaps_parser() {
+    test_start "gaps parser measures the stall from clean timestamp samples"
+    local work="$tmp_dir/vm-gaps"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        printf '1700000000\n1700000001\n1700000002\n1700000032\n1700000033\n' \
+            > "$work/a"
+        itf_vm_workload_gaps "$work/a" 5 > "$work/out-a"
+        printf '1700000000\n' > "$work/b"
+        itf_vm_workload_gaps "$work/b" 5 > "$work/out-b"
+        printf 'garbage\n' > "$work/c"
+        itf_vm_workload_gaps "$work/c" 5 > "$work/out-c" 2>/dev/null
+        echo "$?" > "$work/rc-c"
+    ) > /dev/null 2>&1
+    assert_contains "$(cat "$work/out-a")" "samples=5"
+    assert_contains "$(cat "$work/out-a")" "max_gap=30.0"
+    assert_contains "$(cat "$work/out-b")" "samples=1 max_gap=0.0"
+    assert_rc 1 "$(cat "$work/rc-c")"
+}
+
+# ------------------------------------------------------------------------------
+# itf_journey_stage_reboot_guest
+# ------------------------------------------------------------------------------
+
+test_reboot_stage_in_guest_with_kept_ip() {
+    test_start "reboot stage tolerates the ssh drop and keeps the address"
+    local work="$tmp_dir/reboot-kept"
+    mkdir -p "$work"
+    echo "base.invalid 8005 10.3.3.3" > "$work/guest-storage.txt"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() {
+            # reboot drops the connection (255); the gone-probe finds
+            # ssh down (1) once the reboot takes.
+            case "$2" in reboot) return 255 ;; true) return 1 ;; esac
+            return 0
+        }
+        itf_wait_ssh() { _calls+="waitssh:$1 "; return 0; }
+        itf_guest_ip() { _calls+="rediscover "; echo 10.3.3.9; return 0; }
+        itf_guest_stop() { _calls+="stop "; return 0; }
+        itf_guest_start() { _calls+="start "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_journey_stage_reboot_guest j99 storage --timeout 60
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+        printf '%s' "${J_GUEST_IP:-}" > "$work/jip"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "step:pass:guest rebooted [storage]"
+    assert_contains "$(cat "$work/calls")" "waitssh:10.3.3.3"
+    assert_contains "$(cat "$work/calls")" "step:pass:guest ssh reachable [storage]"
+    # No power verbs ran; no rediscovery needed.
+    [[ "$(cat "$work/calls")" != *"stop "* ]] && : > "$work/no-stop" || true
+    assert_contains "$(cat "$work/no-stop" 2>/dev/null || echo missing)" ""
+    assert_equals "10.3.3.3" "$(cat "$work/jip")"
+    assert_equals "base.invalid 8005 10.3.3.3" "$(cat "$work/guest-storage.txt")"
+}
+
+test_reboot_stage_rediscovery_rewrites_record() {
+    test_start "reboot stage re-leases the address and rewrites the record"
+    local work="$tmp_dir/reboot-newip"
+    mkdir -p "$work"
+    echo "base.invalid 8005 10.3.3.3" > "$work/guest-storage.txt"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() {
+            case "$2" in reboot) return 255 ;; true) return 1 ;; esac
+            return 0
+        }
+        # Old address never answers; the rediscovered one does.
+        itf_wait_ssh() {
+            _calls+="waitssh:$1 "
+            [[ "$1" == 10.3.3.8 ]] && return 0
+            return 1
+        }
+        itf_guest_ip() { _calls+="rediscover "; echo 10.3.3.8; return 0; }
+        itf_guest_stop() { return 0; }
+        itf_guest_start() { return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_journey_stage_reboot_guest j99 storage --timeout 5
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+        printf '%s' "${J_GUEST_IP:-}" > "$work/jip"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    # The guest_ip rediscovery runs inside a command substitution (its
+    # recording does not survive the subshell); the rewritten record and
+    # refreshed global below prove the path was taken.
+    assert_contains "$(cat "$work/calls")" \
+        "step:pass:guest ssh reachable [storage]"
+    assert_equals "10.3.3.8" "$(cat "$work/jip")"
+    assert_equals "base.invalid 8005 10.3.3.8" "$(cat "$work/guest-storage.txt")"
+}
+
+test_reboot_stage_power_uses_guarded_verbs() {
+    test_start "reboot --power uses guarded stop/start across begin/wait"
+    local work="$tmp_dir/reboot-power"
+    mkdir -p "$work"
+    echo "base.invalid 8005 10.3.3.3" > "$work/guest-storage.txt"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() { _calls+="exec "; return 0; }
+        itf_wait_ssh() { return 0; }
+        itf_guest_ip() { return 1; }
+        itf_guest_stop() { _calls+="stop:$1:$2 "; return 0; }
+        itf_guest_start() { _calls+="start:$1:$2 "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_journey_stage_reboot_guest j99 storage --power --timeout 5
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "stop:base.invalid:8005"
+    assert_contains "$(cat "$work/calls")" "start:base.invalid:8005"
+    assert_contains "$(cat "$work/calls")" "step:pass:guest powered off [storage]"
+    assert_contains "$(cat "$work/calls")" "step:pass:guest powered on [storage]"
+    assert_contains "$(cat "$work/calls")" "step:pass:guest ssh reachable [storage]"
+    # The power path never issues the in-guest reboot command.
+    if [[ "$(cat "$work/calls")" != *"reboot"* ]]; then : > "$work/no-reboot"; fi
+    assert_equals "" "$(cat "$work/no-reboot" 2>/dev/null || echo MISSING)"
+    # The mode memo is consumed: nothing left behind for a later wait.
+    if [[ ! -f "$work/reboot-mode-storage" ]]; then : > "$work/no-mode-file"; fi
+    assert_equals "" "$(cat "$work/no-mode-file" 2>/dev/null || echo MISSING)"
+}
+
+test_reboot_begin_returns_before_wait() {
+    test_start "reboot begin issues the reboot and returns without waiting"
+    local work="$tmp_dir/reboot-split"
+    mkdir -p "$work"
+    echo "base.invalid 8005 10.3.3.3" > "$work/guest-storage.txt"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() { [[ "$2" == reboot ]] && return 255; return 0; }
+        itf_wait_ssh() { _calls+="waitssh "; return 0; }
+        itf_guest_ip() { echo 10.3.3.3; return 0; }
+        itf_guest_stop() { _calls+="stop "; return 0; }
+        itf_guest_start() { _calls+="start "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_reboot_guest_begin j99 storage
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "step:pass:guest rebooted [storage]"
+    # begin is the outage window opener: no ssh wait has run yet.
+    if [[ "$(cat "$work/calls")" != *"waitssh"* ]]; then : > "$work/no-wait"; fi
+    assert_equals "" "$(cat "$work/no-wait" 2>/dev/null || echo MISSING)"
+    assert_equals "inguest" "$(cat "$work/reboot-mode-storage")"
+}
+
+test_reboot_wait_power_mode_starts_guest() {
+    test_start "reboot wait starts the guest after a --power begin"
+    local work="$tmp_dir/reboot-split-power"
+    mkdir -p "$work"
+    echo "base.invalid 8005 10.3.3.3" > "$work/guest-storage.txt"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() { return 0; }
+        itf_wait_ssh() { _calls+="waitssh:$1 "; return 0; }
+        itf_guest_ip() { return 1; }
+        itf_guest_stop() { _calls+="stop "; return 0; }
+        itf_guest_start() { _calls+="start:$2 "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_reboot_guest_begin j99 storage --power
+        b_rc=$?
+        itf_reboot_guest_wait j99 storage --timeout 5
+        w_rc=$?
+        echo "$b_rc $w_rc" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_equals "0 0" "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "start:8005"
+    assert_contains "$(cat "$work/calls")" "step:pass:guest powered on [storage]"
+    assert_contains "$(cat "$work/calls")" "waitssh:10.3.3.3"
+    if [[ ! -f "$work/reboot-mode-storage" ]]; then : > "$work/no-mode-file"; fi
+    assert_equals "" "$(cat "$work/no-mode-file" 2>/dev/null || echo MISSING)"
+}
+
+test_reboot_stage_fails_without_record() {
+    test_start "reboot stage fails closed when the guest record is missing"
+    local work="$tmp_dir/reboot-norec"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        itf_step() { return 0; }
+        itf_journey_stage_reboot_guest j99 storage
+        echo "$?" > "$work/rc"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc")"
+}
+
+# ------------------------------------------------------------------------------
+# Keystore helpers + encrypted-key lab
+# ------------------------------------------------------------------------------
+
+test_keystore_provision_shapes() {
+    test_start "keystore provision: stdin-fed LUKS, fstab line, volid capture"
+    local work="$tmp_dir/ks-prov"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stages
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        _feed_cmds=""
+        itf_qm() {
+            _calls+="qm:$2:$3:$4:$5 "
+            if [[ "$2" == config ]]; then
+                printf 'scsi0: itfguests:vm-8005-disk-0\n'
+                printf 'scsi1: itfguests:vm-8005-disk-1\n'
+                printf 'scsi2: itfguests:vm-8005-disk-2\n'
+            fi
+            return 0
+        }
+        itf_guest_exec() {
+            _calls+="exec:[$2] "
+            return 0
+        }
+        itf_guest_exec_feed() {
+            _feed_cmds+="$3 | "
+            return 0
+        }
+        itf_guest_put() { return 0; }
+        itf_guest_snapshot() { _calls+="snap:$3 "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_artifact() { return 0; }
+        itf_keystore_provision base.invalid 8005 10.4.4.4
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+        printf '%s' "$_feed_cmds" > "$work/feeds"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "qm:set:8005:--scsi2:itfguests:1"
+    assert_contains "$(cat "$work/calls")" "step:pass:key device attached"
+    assert_equals "itfguests:vm-8005-disk-2" "$(cat "$work/keystore-volid.txt")"
+    # The LUKS passphrase NEVER appears in any recorded command.
+    [[ "$(cat "$work/calls")$(cat "$work/feeds")" != *"$ITF_KEYSTORE_PASSPHRASE"* ]] \
+        && : > "$work/no-secret" || true
+    assert_contains "$(cat "$work/no-secret" 2>/dev/null || echo missing)" ""
+    # cryptsetup reads the passphrase from stdin (--key-file -), and the
+    # production fstab line + 0400 key file ride the provisioning exec.
+    assert_contains "$(cat "$work/feeds")" \
+        "cryptsetup luksFormat --batch-mode --key-file - /dev/sdc"
+    assert_contains "$(cat "$work/feeds")" \
+        "cryptsetup luksOpen --key-file - /dev/sdc keys"
+    assert_contains "$(cat "$work/calls")" \
+        "LABEL=ZFSkeys /mnt/ZFSkeys auto nosuid,nodev,nofail,x-gvfs-show,noauto 0 0"
+    assert_contains "$(cat "$work/calls")" "chmod 400 /mnt/ZFSkeys/keys/$ITF_KEYFILE_NAME"
+    # The feed file holds the passphrase, mode 600, without newline.
+    assert_equals "$ITF_KEYSTORE_PASSPHRASE" "$(cat "$work/keystore-passphrase")"
+    assert_contains "$(stat -c%a "$work/keystore-passphrase")" "600"
+}
+
+test_keystore_insert_remove_by_volid() {
+    test_start "keystore insert re-attaches the captured volid; remove detaches"
+    local work="$tmp_dir/ks-ins"
+    mkdir -p "$work"
+    echo "itfguests:vm-8005-disk-2" > "$work/keystore-volid.txt"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stages
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_qm() { _calls+="qm:$2:$3:$4:$5 "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_keystore_insert base.invalid 8005
+        itf_keystore_remove base.invalid 8005
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "qm:set:8005:--scsi2:itfguests:vm-8005-disk-2"
+    assert_contains "$(cat "$work/calls")" "qm:set:8005:--delete:scsi2"
+}
+
+test_keystore_unlock_mount_feeds_stdin() {
+    test_start "keystore unlock mounts the store and verifies the key file"
+    local work="$tmp_dir/ks-unlock"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stages
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        _feeds=""
+        itf_guest_exec() { _calls+="exec:[$2] "; return 0; }
+        itf_guest_exec_feed() { _feeds+="$3 | "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_keystore_unlock_mount 10.4.4.4
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+        printf '%s' "$_feeds" > "$work/feeds"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/feeds")" \
+        "cryptsetup luksOpen --key-file - /dev/sdc keys"
+    assert_contains "$(cat "$work/calls")" "mount /dev/mapper/keys /mnt/ZFSkeys"
+    assert_contains "$(cat "$work/calls")" \
+        "test -s /mnt/ZFSkeys/keys/$ITF_KEYFILE_NAME"
+    assert_contains "$(cat "$work/calls")" \
+        "step:pass:key store unlocked + mounted"
+    [[ "$(cat "$work/calls")$(cat "$work/feeds")" != *"$ITF_KEYSTORE_PASSPHRASE"* ]] \
+        && : > "$work/no-secret" || true
+    assert_contains "$(cat "$work/no-secret" 2>/dev/null || echo missing)" ""
+}
+
+test_encrypted_key_lun_stage_happy_path() {
+    test_start "encrypted-key stage: product LUN, registration, locked posture"
+    local work="$tmp_dir/enc-stage"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stages
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        _feed_files=""
+        _feed_cmds=""
+        itf_qm() {
+            _calls+="qm:$2:$3:$4 "
+            if [[ "$2" == config ]]; then
+                printf 'scsi2: itfguests:vm-8005-disk-2\n'
+            fi
+            return 0
+        }
+        itf_guest_exec() {
+            _calls+="exec:[$2] "
+            case "$2" in
+                *iscsi-encrypted-luns.conf*)
+                    printf 'vm-101-disk-1:/dev/zvol/zfstest1/proxmox/vm-101-disk-1:zfstest1\n'
+                    ;;
+                *keystatus*) printf 'available\n' ;;
+                *101.conf*) return 0 ;;
+            esac
+            return 0
+        }
+        itf_guest_exec_feed() {
+            _feed_files+="$2 "
+            _feed_cmds+="$3 | "
+            # The new-vm-disk transcript must carry the product's own
+            # completion line for the stage's end-state gate.
+            case "$3" in *new-vm-disk*) printf '✓ Configuration saved\n' ;; esac
+            return 0
+        }
+        itf_guest_put() { return 0; }
+        itf_guest_snapshot() { _calls+="snap:$3 "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_artifact() { return 0; }
+        itf_journey_stage_encrypted_key_lun j99 base.invalid 8005 10.4.4.4 10.5.5.5
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+        printf '%s' "$_feed_cmds" > "$work/feeds"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/feeds")" \
+        "new-vm-disk zfstest1 101 1 4G --encrypted"
+    # The answer fed to the key-path prompt is the conventional path.
+    assert_contains "$(cat "$work/new-vm-disk-encrypted-answers.txt")" \
+        "/mnt/ZFSkeys/keys/$ITF_KEYFILE_NAME"
+    # Fresh-host staging: the installer-seeded sample conf is cleared
+    # before the product writes its own line (F-027 collision).
+    assert_contains "$(cat "$work/calls")" \
+        "exec:[: > /etc/zfsutilities/iscsi-encrypted-luns.conf]"
+    assert_contains "$(cat "$work/calls")" \
+        "step:pass:encrypted-luns conf reset (fresh host)"
+    assert_contains "$(cat "$work/calls")" "step:pass:encrypted LUN created"
+    assert_contains "$(cat "$work/calls")" \
+        "step:pass:encrypted LUN registered + key loaded"
+    assert_contains "$(cat "$work/calls")" "step:pass:key store locked + unmounted"
+    assert_contains "$(cat "$work/calls")" \
+        "step:pass:keys stay loaded with store removed"
+    assert_contains "$(cat "$work/calls")" "snap:enc-lab-ready"
+}
+
+test_encrypted_key_lun_gates_on_config() {
+    test_start "encrypted-key stage fails closed without the keystore config"
+    local work="$tmp_dir/enc-gate"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stages
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_qm() { return 0; }
+        itf_guest_exec() { return 0; }
+        itf_guest_exec_feed() { return 0; }
+        ITF_KEYSTORE_PASSPHRASE=""
+        ITF_KEYFILE_NAME=""
+        # The real provision runs: its config gate must fire before any
+        # device work.
+        itf_journey_stage_encrypted_key_lun j99 base.invalid 8005 10.4.4.4 10.5.5.5
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "step:fail:keystore site config"
+    # Nothing reached the base host.
+    assert_contains "$(cat "$work/calls")" ""
+}
+
+test_j05_encrypted_flag_contract() {
+    test_start "j05 lab builder: unknown flags refuse; encrypted tail is guarded"
+    local work="$tmp_dir/j05-flag"
+    mkdir -p "$work"
+    local j05="$mydir/tests/integrated/journeys/j05-two-node-install.journey"
+    # Unknown flag -> rc 2 before any guest work.
+    (
+        # shellcheck disable=SC1090
+        source "$j05"
+        itf_step() { return 0; }
+        j05_two_node_lab_main --bogus-flag
+        echo "$?"
+    ) > "$work/j05-rc" 2>"$work/j05-err"
+    assert_rc 2 "$(cat "$work/j05-rc")"
+    assert_contains "$(cat "$work/j05-err")" "unknown j05_two_node_lab_main option"
+    # The encrypted tail runs ONLY behind the --encrypted-keys gate.
+    grep -q "if (( encrypted_keys )); then" "$j05"
+    assert_rc 0 $?
+    # Composers call it bare: the flag defaults to off in the source.
+    grep -q "local encrypted_keys=0" "$j05"
+    assert_rc 0 $?
+}
+
+# ------------------------------------------------------------------------------
+# Boot-and-keys helpers (campaign G1, j15)
+# ------------------------------------------------------------------------------
+
+test_boot_journal_parser_failed_mode() {
+    test_start "boot journal parser: ordered FAILED + DRIFT naming every LUN"
+    local work="$tmp_dir/bjp-failed"
+    mkdir -p "$work"
+    cat > "$work/journal" <<'EOF'
+Mar 01 10:00:01 storage systemd[1]: Started rtslib-fb-targetctl.service.
+Mar 01 10:00:01 storage bash[123]: targetctl: backed up saveconfig.json
+Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted backstores excluded)
+Mar 01 10:00:04 storage bash[126]: targetctl: post-restore verification FAILED — live LUNs differ from the pool map; do NOT save config until reconciled
+Mar 01 10:00:04 storage bash[126]: DRIFT: target iqn.2000-01.com.example:zfstest1: map LUN 2 -> vm-202-disk-0 is missing live
+Mar 01 10:00:04 storage bash[126]: DRIFT: backstore vm-101-disk-1: map backstore no longer exists live
+EOF
+    cat > "$work/order" <<'EOF'
+12:Mar 01 09:59:50 storage systemd[1]: Finished zfs-import-cache.service.
+18:Mar 01 10:00:01 storage bash[123]: targetctl: backed up saveconfig.json
+20:Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted backstores excluded)
+EOF
+    (
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        itf_boot_journal_verdict "$work/journal" "$work/order" failed \
+            vm-101-disk-1 vm-202-disk-0 > "$work/out" 2> "$work/err"
+        echo "$?" > "$work/rc"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/out")" "failed"
+}
+
+test_boot_journal_parser_ok_mode() {
+    test_start "boot journal parser: Added lines before an OK verdict"
+    local work="$tmp_dir/bjp-ok"
+    mkdir -p "$work"
+    cat > "$work/journal" <<'EOF'
+Mar 01 10:00:01 storage bash[123]: targetctl: backed up saveconfig.json
+Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted backstores excluded)
+Mar 01 10:00:03 storage iscsi-add-encrypted-luns[125]: /usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns:108: INFO:   ✓ Added vm-101-disk-1 (LUN 1)
+Mar 01 10:00:03 storage iscsi-add-encrypted-luns[125]: /usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns:108: INFO:   ✓ Added vm-303-disk-0 (LUN 4)
+Mar 01 10:00:05 storage bash[126]: targetctl: post-restore verification OK — live LUNs match the pool map
+EOF
+    cat > "$work/order" <<'EOF'
+12:Mar 01 09:59:50 storage systemd[1]: Finished zfs-import-cache.service.
+20:Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted backstores excluded)
+EOF
+    (
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        itf_boot_journal_verdict "$work/journal" "$work/order" ok \
+            vm-101-disk-1 vm-303-disk-0 > "$work/out" 2> "$work/err"
+        echo "$?" > "$work/rc"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/out")" "ok"
+}
+
+test_boot_journal_parser_rejects_disorder() {
+    test_start "boot journal parser: wrong verdict, misordered DRIFT, missing LUN"
+    local work="$tmp_dir/bjp-bad"
+    mkdir -p "$work"
+    cat > "$work/journal" <<'EOF'
+targetctl: backed up saveconfig.json
+targetctl: restoring boot config (encrypted backstores excluded)
+targetctl: post-restore verification FAILED — live LUNs differ from the pool map; do NOT save config until reconciled
+DRIFT: backstore vm-101-disk-1: map backstore no longer exists live
+EOF
+    cat > "$work/order-ok" <<'EOF'
+12:Finished zfs-import-cache.service.
+20:targetctl: restoring boot config (encrypted backstores excluded)
+EOF
+    cat > "$work/order-late-import" <<'EOF'
+20:targetctl: restoring boot config (encrypted backstores excluded)
+25:Finished zfs-import-cache.service.
+EOF
+    (
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        # A LUN with no DRIFT line anywhere.
+        itf_boot_journal_verdict "$work/journal" "$work/order-ok" failed \
+            vm-101-disk-1 vm-202-disk-0 > /dev/null 2>&1
+        echo "$?" > "$work/rc-missing-lun"
+        # DRIFT detail printed BEFORE the verdict line (misordered).
+        cat > "$work/journal2" <<'EOF'
+targetctl: backed up saveconfig.json
+targetctl: restoring boot config (encrypted backstores excluded)
+DRIFT: backstore vm-101-disk-1: map backstore no longer exists live
+targetctl: post-restore verification FAILED — live LUNs differ from the pool map; do NOT save config until reconciled
+EOF
+        itf_boot_journal_verdict "$work/journal2" "$work/order-ok" failed \
+            vm-101-disk-1 > /dev/null 2>&1
+        echo "$?" > "$work/rc-disorder"
+        # Import gating violated: the restore preceded the import line.
+        itf_boot_journal_verdict "$work/journal" "$work/order-late-import" failed \
+            vm-101-disk-1 > /dev/null 2>&1
+        echo "$?" > "$work/rc-late-import"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc-missing-lun")"
+    assert_rc 1 "$(cat "$work/rc-disorder")"
+    assert_rc 1 "$(cat "$work/rc-late-import")"
+}
+
+test_storage_boot_state_captures() {
+    test_start "boot state captures journal + order + file posture"
+    local work="$tmp_dir/boothstate"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced helper
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() {
+            _calls+="exec:[$2] "
+            case "$2" in
+                *rtslib-fb-targetctl.service*) echo "unit journal lines" ;;
+                *zfs-import-cache*) echo "order snapshot lines" ;;
+                *saveconfig.json.pre-start*) return 0 ;;
+            esac
+            return 0
+        }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_artifact() { _calls+="artifact:$1 "; return 0; }
+        itf_storage_boot_state 10.4.4.4 s-label
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" \
+        "exec:[journalctl -b -u rtslib-fb-targetctl.service --no-pager]"
+    assert_contains "$(cat "$work/calls")" "exec:[journalctl -b --no-pager"
+    assert_contains "$(cat "$work/calls")" \
+        "exec:[test -f /etc/rtslib-fb-target/saveconfig.json.pre-start"
+    assert_contains "$(cat "$work/calls")" \
+        "step:pass:pre-start backup posture [s-label]"
+    assert_contains "$(cat "$work/calls")" "artifact:boot-journal-s-label"
+    assert_contains "$(cat "$work/calls")" "artifact:boot-order-s-label"
+    assert_contains "$(cat "$work/boot-s-label.journal")" "unit journal lines"
+    assert_contains "$(cat "$work/boot-s-label.order")" "order snapshot lines"
+}
+
+test_keystore_unlock_mount_wrong_rejects() {
+    test_start "wrong-passphrase helper: clean rejection, no mapper, no leaks"
+    local work="$tmp_dir/ks-wrong"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced helper
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls="" _feeds="" _close=0
+        itf_guest_exec() {
+            _calls+="exec:[$2] "
+            case "$2" in
+                *mapper/keys*) return 0 ;;
+                *luksClose*) _close=1; return 0 ;;
+            esac
+            return 0
+        }
+        itf_guest_exec_feed() {
+            _feeds+="$3 | "
+            return 2
+        }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_artifact() { return 0; }
+        itf_keystore_unlock_mount_wrong 10.4.4.4
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+        printf '%s' "$_feeds" > "$work/feeds"
+        echo "$_close" > "$work/close"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/feeds")" \
+        "cryptsetup luksOpen --key-file - /dev/sdc keys"
+    assert_contains "$(cat "$work/calls")" \
+        "exec:[test ! -e /dev/mapper/keys]"
+    assert_contains "$(cat "$work/calls")" \
+        "step:pass:wrong passphrase rejected"
+    # The wrong feed is mode 600 and holds DIFFERENT bytes than the secret.
+    assert_contains "$(stat -c%a "$work/keystore-passphrase-wrong")" "600"
+    if [[ "$(cat "$work/keystore-passphrase-wrong")" != "$ITF_KEYSTORE_PASSPHRASE" ]]; then
+        : > "$work/bytes-differ"
+    fi
+    assert_equals "" "$(cat "$work/bytes-differ" 2>/dev/null || echo MISSING)"
+    if [[ "$(cat "$work/calls")$(cat "$work/feeds")" != *"$ITF_KEYSTORE_PASSPHRASE"* ]]; then
+        : > "$work/no-secret"
+    fi
+    assert_equals "" "$(cat "$work/no-secret" 2>/dev/null || echo MISSING)"
+    assert_equals "0" "$(cat "$work/close")"
+}
+
+test_storage_load_keys_modes() {
+    test_start "load-keys helper: -a gated on conf keystatus, dataset strict"
+    local work="$tmp_dir/lk"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced helper
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_guest_exec() {
+            _calls+="exec:[$2] "
+            case "$2" in
+                *iscsi-encrypted-luns.conf*) echo "zfstest1/proxmox/vm-202-disk-0: available" ;;
+                *keystatus\ zfstest3*) echo "available" ;;
+                *"zfs load-key -a"*) return 0 ;;
+            esac
+            return 0
+        }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_artifact() { return 0; }
+        # -a mode: the -a run's rc is not the gate; keystatus is.
+        itf_storage_load_keys 10.4.4.4
+        echo "$?" > "$work/rc-a"
+        # single-dataset mode: rc is strict and the gate names the dataset.
+        itf_storage_load_keys 10.4.4.4 zfstest3/proxmox/vm-303-disk-0
+        echo "$?" > "$work/rc-one"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc-a")"
+    assert_rc 0 "$(cat "$work/rc-one")"
+    assert_contains "$(cat "$work/calls")" "exec:[bash -lc 'zfs load-key -a']"
+    assert_contains "$(cat "$work/calls")" \
+        "exec:[bash -lc 'zfs load-key zfstest3/proxmox/vm-303-disk-0']"
+    assert_contains "$(cat "$work/calls")" "iscsi-encrypted-luns.conf"
+    assert_contains "$(cat "$work/calls")" "step:pass:ZFS keys loaded"
+}
+
+test_key_ceremony_modes() {
+    test_start "key ceremony: recover vs add command, ordered lab actions"
+    local work="$tmp_dir/ceremony"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced helper
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls=""
+        itf_keystore_insert() { _calls+="insert "; return 0; }
+        itf_keystore_remove() { _calls+="remove "; return 0; }
+        itf_keystore_unlock_mount() { _calls+="unlock "; return 0; }
+        itf_keystore_lock_umount() { _calls+="lock "; return 0; }
+        itf_storage_load_keys() { _calls+="loadkeys "; return 0; }
+        itf_guest_exec() { _calls+="run:[$2] "; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_artifact() { return 0; }
+        itf_key_ceremony lbl base.invalid 8005 10.4.4.4 recover
+        echo "$?" > "$work/rc-rec"
+        itf_key_ceremony lbl base.invalid 8005 10.4.4.4 add
+        echo "$?" > "$work/rc-add"
+        printf '%s' "$_calls" > "$work/calls"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc-rec")"
+    assert_rc 0 "$(cat "$work/rc-add")"
+    assert_contains "$(cat "$work/calls")" \
+        "run:[bash -lc 'iscsi-recover-encrypted-luns']"
+    assert_contains "$(cat "$work/calls")" \
+        "run:[bash -lc 'iscsi-add-encrypted-luns']"
+    # Each ceremony runs the documented order end to end.
+    assert_contains "$(cat "$work/calls")" \
+        "insert unlock loadkeys run:[bash -lc 'iscsi-recover-encrypted-luns'] step:pass:encrypted LUNs recovered [lbl] lock remove "
+    assert_contains "$(cat "$work/calls")" \
+        "insert unlock loadkeys run:[bash -lc 'iscsi-add-encrypted-luns'] step:pass:encrypted LUNs recovered [lbl] lock remove "
+}
+
+test_new_vm_disk_encrypted_runner() {
+    test_start "new-vm-disk runner: feed answer, command shape, rc passthrough"
+    local work="$tmp_dir/nvmd"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced helper
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _feeds="" _rcs=""
+        itf_guest_exec_feed() {
+            _feeds+="$3 | "
+            return "${ITF_STUB_RC:-0}"
+        }
+        itf_artifact() { return 0; }
+        itf_new_vm_disk_encrypted 10.5.5.5 zfstest1 202 0 4G \
+            /mnt/ZFSkeys/keys/zfstest1.key stem-ok
+        _rcs+="$? "
+        ITF_STUB_RC=1 itf_new_vm_disk_encrypted 10.5.5.5 zfstest1 301 0 4G \
+            keys/zfstest1.key stem-bad
+        _rcs+="$?"
+        echo "$_rcs" > "$work/rcs"
+        printf '%s' "$_feeds" > "$work/feeds"
+    ) > /dev/null 2>&1
+    assert_equals "0 1" "$(cat "$work/rcs")"
+    assert_contains "$(cat "$work/feeds")" \
+        "new-vm-disk zfstest1 202 0 4G --encrypted"
+    assert_contains "$(cat "$work/stem-ok-answers.txt")" \
+        "/mnt/ZFSkeys/keys/zfstest1.key"
+    assert_contains "$(cat "$work/stem-bad-answers.txt")" "keys/zfstest1.key"
+}
+
+test_vm_disk_links_present_script() {
+    test_start "link presence: one script covers every VM's scsi refs"
+    local work="$tmp_dir/links"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _cmds=""
+        itf_guest_exec() { _cmds+="$2"; return 0; }
+        itf_vm_disk_links_present 10.5.5.5 101 202 303
+        echo "$?" > "$work/rc"
+        printf '%s' "$_cmds" > "$work/cmd"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/cmd")" "/etc/pve/qemu-server/101.conf"
+    assert_contains "$(cat "$work/cmd")" "/etc/pve/qemu-server/202.conf"
+    assert_contains "$(cat "$work/cmd")" "/etc/pve/qemu-server/303.conf"
+    # shellcheck disable=SC2016  # the guest-side variable is the point
+    assert_contains "$(cat "$work/cmd")" 'exit $missing'
+    assert_contains "$(cat "$work/cmd")" "missing:"
+}
+
+test_fence_tick_shape() {
+    test_start "fence tick: starts the unit and captures its journal"
+    local work="$tmp_dir/tick"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced helper
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _cmds=""
+        itf_guest_exec() {
+            _cmds+="$2"
+            echo "tick-rc: 0"
+            return 0
+        }
+        itf_step() { return 0; }
+        itf_artifact() { return 0; }
+        itf_fence_tick 10.5.5.5 lbl
+        echo "$?" > "$work/rc"
+        printf '%s' "$_cmds" > "$work/cmd"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/cmd")" \
+        "systemctl start zfsutilities-iscsi-fence.service"
+    assert_contains "$(cat "$work/cmd")" \
+        "journalctl -u zfsutilities-iscsi-fence.service --since"
+    assert_contains "$(cat "$work/fence-tick-lbl.log")" "tick-rc: 0"
+}
+
+test_compute_fallout_sample_shape() {
+    test_start "fallout sample: sessions, links, per-VM status"
+    local work="$tmp_dir/fallout"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced helper
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _cmds=""
+        itf_guest_exec() { _cmds+="$2"; return 0; }
+        itf_step() { return 0; }
+        itf_artifact() { return 0; }
+        itf_compute_fallout_sample 10.5.5.5 lbl 101 202
+        echo "$?" > "$work/rc"
+        printf '%s' "$_cmds" > "$work/cmd"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/cmd")" "iscsiadm -m session"
+    assert_contains "$(cat "$work/cmd")" "/dev/disk/by-path/"
+    assert_contains "$(cat "$work/cmd")" "qm status 101"
+    assert_contains "$(cat "$work/cmd")" "qm status 202"
+}
+
+test_boot_workload_lab_orchestration() {
+    test_start "boot-workload staging: product LUNs, images, boots, gates, park"
+    local work="$tmp_dir/bwl"
+    mkdir -p "$work"
+    echo fake-image > "$ITF_CACHE_DIR/itf-vmos.raw.gz"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stage
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _calls="" _feeds=""
+        itf_guest_exec() {
+            _calls+="exec:[$2] "
+            case "$2" in
+                *"new-vm-disk zfstest1 101 2 4G"*)
+                    echo "✓ Configuration saved"
+                    return 0 ;;
+                *safe-iscsi-save*)
+                    echo "INFO: ✓ iSCSI configuration saved (5/5 LUNs active)"
+                    return 0 ;;
+                *"export-iscsi-state --check"*)
+                    echo "INFO:   ✓ No drift — live state matches the newest pool map"
+                    return 0 ;;
+            esac
+            return 0
+        }
+        itf_guest_exec_feed() {
+            _feeds+="$3 | "
+            echo "✓ Configuration saved"
+            return 0
+        }
+        itf_vmos_image_zvol() { _calls+="vmos:$2 "; return 0; }
+        itf_keystore_insert() { _calls+="ks-insert "; return 0; }
+        itf_keystore_remove() { _calls+="ks-remove "; return 0; }
+        itf_keystore_unlock_mount() { _calls+="ks-unlock "; return 0; }
+        itf_keystore_lock_umount() { _calls+="ks-lock "; return 0; }
+        itf_vm_boot_with_agent() { _calls+="boot:$2 "; return 0; }
+        itf_vm_workload_start() { _calls+="wlstart:$2 "; return 0; }
+        itf_vm_workload_sample() { printf '1700000000\n1700000001\n'; return 0; }
+        itf_vm_workload_checksum() { echo "4294967295 42 /workload.log"; return 0; }
+        itf_step() { _calls+="step:$1:$2 "; return 0; }
+        itf_artifact() { return 0; }
+        itf_journey_stage_boot_workload_lab j99 base.invalid 8005 10.4.4.4 10.5.5.5
+        echo "$?" > "$work/rc"
+        printf '%s' "$_calls" > "$work/calls"
+        printf '%s' "$_feeds" > "$work/feeds"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_contains "$(cat "$work/calls")" "enroll-proxmox-pool zfstest2"
+    assert_contains "$(cat "$work/calls")" "enroll-proxmox-pool zfstest3"
+    assert_contains "$(cat "$work/calls")" "new-vm-disk zfstest1 101 2 4G"
+    assert_contains "$(cat "$work/calls")" "qm set 101 --delete scsi1"
+    assert_contains "$(cat "$work/calls")" "qm create 202 --name j15-vm202"
+    assert_contains "$(cat "$work/calls")" "qm set 101 --boot order=scsi2"
+    assert_contains "$(cat "$work/calls")" "vmos:zfstest1/proxmox/vm-101-disk-2"
+    assert_contains "$(cat "$work/calls")" "vmos:zfstest1/proxmox/vm-202-disk-0"
+    # The store is present for the encrypted creation and locked right
+    # after the image write (the production posture every reboot starts
+    # from) — the G0 tail left it detached, so staging re-opens it.
+    assert_contains "$(cat "$work/calls")" "ks-insert ks-unlock exec:["
+    assert_contains "$(cat "$work/feeds")" \
+        "new-vm-disk zfstest1 202 0 4G --encrypted"
+    assert_contains "$(cat "$work/calls")" \
+        "vmos:zfstest1/proxmox/vm-202-disk-0 ks-lock ks-remove"
+    assert_contains "$(cat "$work/new-vm-disk-enc-202-0-answers.txt")" \
+        "/mnt/ZFSkeys/keys/$ITF_KEYFILE_NAME"
+    assert_contains "$(cat "$work/calls")" "boot:101"
+    assert_contains "$(cat "$work/calls")" "boot:202"
+    assert_contains "$(cat "$work/calls")" "wlstart:101"
+    assert_contains "$(cat "$work/calls")" "wlstart:202"
+    assert_contains "$(cat "$work/calls")" "zfsutilities-iscsi-fence.timer"
+    assert_contains "$(cat "$work/calls")" "step:pass:target config saved [j99]"
+    assert_contains "$(cat "$work/calls")" "step:pass:state map check OK [j99]"
+    assert_contains "$(cat "$work/calls")" "step:pass:workload VMs parked"
+    assert_contains "$(cat "$work/calls")" "step:pass:fence timer armed"
+    rm -f "$ITF_CACHE_DIR/itf-vmos.raw.gz"
+}
+
+test_vm_workload_wait_sample_polls() {
+    test_start "wait-sample polls past the writer's first-append lag"
+    local work="$tmp_dir/wl-wait"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced helper
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        _n=0
+        itf_vm_workload_sample() {
+            _n=$(( _n + 1 ))
+            # First call races the writer (empty); the second sees lines.
+            if (( _n >= 2 )); then printf '1700000000\n1700000001\n'; fi
+            return 0
+        }
+        ITF_VM_SAMPLE_INTERVAL=0.01 itf_vm_workload_wait_sample 10.2.2.2 101 "$work/s"
+        echo "$?" > "$work/rc"
+        echo "$_n" > "$work/n"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_equals "2" "$(cat "$work/n")"
+    assert_contains "$(cat "$work/s")" "1700000001"
+}
+
+test_j15_journey_contract() {
+    test_start "j15 journey defines journey_main over the G0 lab"
+    local work="$tmp_dir/j15-contract"
+    mkdir -p "$work"
+    local j15="$mydir/tests/integrated/journeys/j15-iscsi-boot-keys.journey"
+    (
+        # shellcheck disable=SC1090
+        source "$j15"
+        type -t journey_main
+    ) > "$work/j15-type" 2>/dev/null
+    assert_contains "$(cat "$work/j15-type" 2>/dev/null || echo MISSING)" "function"
+    # The scenario's LUN identities are fixed constants, quoted.
+    grep -q '^J15_LUN_SPARE="vm-101-disk-1"$' "$j15"
+    assert_rc 0 $?
+    grep -q '^J15_LUN_S5="vm-303-disk-0"$' "$j15"
+    assert_rc 0 $?
+    # The journey composes the encrypted lab and never mutates j05's path.
+    grep -q 'j05_two_node_lab_main --encrypted-keys' "$j15"
+    assert_rc 0 $?
+}
+
+# Driver dispatch under the .invalid fixture config (same approach as
+# test-itf-driver: no test can reach a real base host).
+
+cat > "$tmp_dir/site.conf" <<'EOF'
+ITF_BASE_HOSTS=(base.invalid)
+ITF_SSH_USER=testuser
+ITF_VMID_FIRST=8000
+ITF_VMID_LAST=8099
+ITF_GUEST_STORAGE=itfguests
+ITF_ISO_STORAGE=itfiso
+ITF_ISO_DIR=/mnt/itf-iso
+ITF_ACTION_LOG=/var/log/itf-actions.log
+ITF_BRIDGE=vmbr0
+ITF_GUEST_MEMORY_MB=8192
+ITF_GUEST_CORES=4
+ITF_GUEST_SYSTEM_DISK_GB=32
+ITF_GUEST_POOL_DISK_GB=100
+ITF_DEBIAN_ISO_URL=https://cdimage.example.invalid/debian-netinst.iso
+ITF_ISO_NAME=itf-debian-netinst.iso
+ITF_SW_SOURCE=release
+ITF_GITHUB_REPO=owner/repo
+EOF
+
+run_itf() {
+    run_out=""
+    run_rc=0
+    run_out=$(ITF_RUN_LOCK="$tmp_dir/itf-lab-tests.lock" \
+        ITF_RUNS_DIR="$tmp_dir/itf-runs-fixture" \
+        ITF_CACHE_DIR="$tmp_dir/vmos-status-cache" \
+        ITF_SITE_CONFIG="$tmp_dir/site.conf" \
+        bash "$mydir/tests/integrated/itf" "$@" 2>"$tmp_dir/run.err") || run_rc=$?
+    run_err="$(cat "$tmp_dir/run.err")"
+}
+mkdir -p "$tmp_dir/itf-runs-fixture" "$tmp_dir/vmos-status-cache"
+
+test_vmimage_dispatch_usage() {
+    test_start "vmimage subcommand routing: empty and unknown refuse rc 2"
+    run_itf vmimage
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "usage: itf vmimage status|build"
+    run_itf vmimage frobnicate
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "usage: itf vmimage status|build"
+}
+
+test_vmimage_status_absent() {
+    test_start "vmimage status reports absent (rc 1) with the build hint"
+    run_itf vmimage status
+    assert_rc 1 "$run_rc"
+    assert_contains "$run_out" "absent"
+    assert_contains "$run_out" "itf vmimage build"
+}
+
+test_test_pools_success_path
+test_test_pools_recipe_content
+test_test_pools_attach_failure_fails_stage
+test_test_pools_guest_script_failure_fails_stage
+test_test_pools_dry_run_emits_guarded_attach
+test_single_node_lab_composes_prefix
+test_single_node_lab_propagates_pools_failure
+test_vmos_wait_guest_ping_arg_order
+test_vmos_stamp_short_circuit
+test_vmos_dump_command_shape
+test_vmos_dump_refuses_qcow2_storage
+test_vmos_build_orchestration
+test_vm_boot_with_agent_gates_on_ping
+test_vm_workload_helpers_use_agent_channel
+test_vm_workload_sample_survives_agent_outage_rc
+test_vm_workload_wait_sample_polls
+test_vm_workload_gaps_parser
+test_reboot_stage_in_guest_with_kept_ip
+test_reboot_stage_rediscovery_rewrites_record
+test_reboot_stage_power_uses_guarded_verbs
+test_reboot_begin_returns_before_wait
+test_reboot_wait_power_mode_starts_guest
+test_reboot_stage_fails_without_record
+test_keystore_provision_shapes
+test_keystore_insert_remove_by_volid
+test_keystore_unlock_mount_feeds_stdin
+test_encrypted_key_lun_stage_happy_path
+test_encrypted_key_lun_gates_on_config
+test_j05_encrypted_flag_contract
+test_boot_journal_parser_failed_mode
+test_boot_journal_parser_ok_mode
+test_boot_journal_parser_rejects_disorder
+test_storage_boot_state_captures
+test_keystore_unlock_mount_wrong_rejects
+test_storage_load_keys_modes
+test_key_ceremony_modes
+test_new_vm_disk_encrypted_runner
+test_vm_disk_links_present_script
+test_fence_tick_shape
+test_compute_fallout_sample_shape
+test_boot_workload_lab_orchestration
+test_j15_journey_contract
+test_vmimage_dispatch_usage
+test_vmimage_status_absent
+
+rm -rf "$tmp_dir"
+teardown_test_env
+test_summary

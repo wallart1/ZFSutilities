@@ -44,7 +44,9 @@ The base Proxmox hosts are protected by construction, not by convention:
     directory;
   - every mutating call is appended to an audit log on the base host
     *before* it executes;
-  - `pvesm` is read-only; general reads go through a small allow-list
+  - `pvesm` is read-only (`status`, plus `path` lookups that accept
+    only itf-storage volumes — used by the VM-OS image dump on its own
+    build guest's disk); general reads go through a small allow-list
     (`itf_read`).
 - `ITF_DRY_RUN=1` prints guarded commands instead of executing them.
 - Base-PVE configuration beyond guest lifecycle (storages, bridges, the
@@ -57,13 +59,16 @@ The base Proxmox hosts are protected by construction, not by convention:
 
 Everything environment-specific lives in `tests/integrated/site/config`
 (gitignored), created from the committed `site/config.example`. Loading
-is fail-closed: a missing or invalid file aborts with a pointer to the
+is fail-closed: a missing or invalid file aborts with a pointer at the
 example. Validated keys cover the base hosts, SSH user, reserved VMID
 range, itf storages, ISO sources, guest sizing, and the software source
 (`release` or `dev-tarball`). Two-node keys (role bases, P2P addresses,
 compute template name, PVE ISO source) are optional and activate the
 compute-role machinery only when present; the role bases must be members
-of `ITF_BASE_HOSTS`.
+of `ITF_BASE_HOSTS`. The optional keystore pair
+(`ITF_KEYSTORE_PASSPHRASE` + `ITF_KEYFILE_NAME`, both-or-neither) feeds
+the LUKS key-device lab below — the passphrase is a secret and lives
+only in the gitignored site config.
 
 ## Running
 
@@ -73,6 +78,8 @@ tests/integrated/itf preflight        # dev + base-host readiness report
 tests/integrated/itf iso fetch        # download the Debian installer ISO
 tests/integrated/itf iso upload       # push it to the base ISO storage
 tests/integrated/itf template build   # rebuild the post-install baseline
+tests/integrated/itf vmimage build    # one-time VM-OS disk image (below)
+tests/integrated/itf vmimage status   # cache state of that image
 tests/integrated/itf journey list
 tests/integrated/itf journey run j01-fresh-install
 tests/integrated/itf journey run <name> --rerun
@@ -395,6 +402,160 @@ The cycle-2 journeys model the production two-node layout (storage node
   `LIVE PASS`-against-nothing incident (2026-10-22). Requires
   `ITF_SW_SOURCE=dev-tarball` because it verifies working-tree repairs.
 
+## Recovery-scenario lab layer
+
+The recovery-scenario journeys (boot-and-keys, LIO loss, interrupted
+operations, compute/power events) build on shared lab machinery in
+`journeys/common.sh` rather than per-journey copies:
+
+- **`itf_journey_stage_test_pools`** is the documented three-RAIDZ1
+  recipe as one stage (pool-disk hot-plug, guest recipe,
+  `pools-created` snapshot); j01, j04, j05, and j11 all call it.
+- **`itf_single_node_lab_main`** is the shared single-node prefix
+  (template clone → installed-state verify → test pools) behind j04
+  and j11.
+- **`itf_journey_stage_reboot_guest`** reboots a staged role guest
+  (in-guest `reboot`, or `--power` for a guarded stop/start power
+  cycle), waits for ssh, re-discovers a re-leased DHCP address, and
+  rewrites the guest record — callers re-read coordinates after it.
+  Its split halves, `itf_reboot_guest_begin` / `itf_reboot_guest_wait`,
+  exist for journeys that observe peer-node fallout INSIDE the outage
+  window (j15's S1b samples the compute node between the two).
+- **`itf_journey_stage_encrypted_key_lun`** (opt-in via
+  `j05_two_node_lab_main --encrypted-keys`, default off so composing
+  journeys are unaffected) models production's removable LUKS key
+  store: a small scsi2 disk is LUKS-formatted on the storage guest,
+  carries an ext4 `ZFSkeys` filesystem with the per-pool key at the
+  conventional path plus the production `noauto` fstab line, and
+  `new-vm-disk --encrypted` then creates the encrypted vm-101-disk-1
+  through the product (its key-path prompt is answered over the piped
+  feed; the passphrase itself reaches `cryptsetup` via stdin, never in
+  argv). The stage ends in the production posture: store locked and
+  detached, keystatus still `available`. Insert/remove helpers
+  re-attach and detach the captured key-device volume; the unlock/mount
+  helper drives the operator's blind-recovery step.
+- **The VM-OS image** (`itf vmimage build`, built once and cached like
+  the ISOs) is a minimal preseed Debian whose disk dump is written
+  onto product-created zvols (`itf_vmos_image_zvol`) so a workload VM
+  boots from its iSCSI LUN. The preseed installs the qemu guest agent,
+  and the build self-verifies the exact property scenarios depend on:
+  the dumped image is restored onto a blank disk, booted, and must
+  answer `qm guest ping` before anything is cached.
+- **Workload helpers** drive that VM from the compute guest through the
+  guest agent (never ssh into it): a boot gate (`itf_vm_boot_with_agent`,
+  TCG like every lab boot proof), a 1 Hz timestamp writer with per-tick
+  sync on the LUN-backed root filesystem, sample/checksum retrieval,
+  and a stall-gap parser over saved samples.
+- **The j15 boot-and-keys machinery** layers the recovery observables on
+  top: `itf_journey_stage_boot_workload_lab` stages the scenario lab
+  (VM 101 on a plain OS LUN as the everyday workload VM, VM 202 on an
+  encrypted OS LUN, writers running, fence timer premise asserted,
+  pre-reboot `safe-iscsi-save` + `export-iscsi-state --check` gates);
+  `itf_key_ceremony` runs the operator's documented key ceremony
+  (insert → luksOpen/mount → `zfs load-key -a` → recover or add →
+  lock/detach) as one stage; `itf_storage_boot_state` captures the boot
+  journal and cross-unit import ordering while `itf_boot_journal_verdict`
+  (a pure, fixture-tested parser) asserts the verdict, the echo order,
+  and per-LUN DRIFT/Added naming; `itf_compute_fallout_sample`,
+  `itf_fence_tick`, and the by-path link-presence pollers record what
+  the compute node saw through each event.
+
+The **j15-iscsi-boot-keys** journey runs the boot-and-keys scenario
+catalog against that lab: S1 (reboot with the key device absent: FAILED
++ DRIFT journal oracle, the encrypted-root VM is unusable — either a
+start abort or a start that "succeeds" against a stale device node and
+then never boots, blind recovery via `iscsi-recover-encrypted-luns`),
+S1c (the second reboot repeats the same FAILED shape — the
+recovery-then-reboot cycle is stable — and convergence is proven WITHIN
+the boot by a manual `--check` reporting no drift), S1b (a storage
+power event with both workload VMs running: the sessions CLING to the
+dead storage — PVE patches the iSCSI replacement timeout to 24 h, so
+by-path links stay present, the fence's only outage signal, and a
+fence tick inside the outage honestly reports healthy — recorded as a
+design datum; after return the links re-login automatically but BOTH
+running VMs keep stalled writers until a stop/start, classified from
+writer samples), S2 (the zfs-keys.md `iscsi-add-encrypted-luns` path),
+S3 (`restart-iscsi-services` — the designed refusal with VMs running,
+then the one-command path with compute fallout), S4/M4/M1 (wrong
+passphrase, pool A's key against pool B, mistyped key-file paths at
+`new-vm-disk --encrypted`), and S5a/S5b: a `file://` keylocation on the
+unencrypted root filesystem still journals FAILED at boot (availability
+is not loadedness — no loader exists), while the one posture that
+legitimately journals boot-time OK is a lab-authored one-shot
+key-loading unit ordered before the restore (the drop-in's "separate
+key-loading unit" clause), which also prototypes the ordering a shipped
+optional unit would need.  The boot-verdict oracle follows the
+documented semantics (`two-node-config.md`): every keys-absent boot
+journals `post-restore verification FAILED` with DRIFT detail until the
+key ceremony completes.
+
+The **j16-iscsi-total-loss** journey runs the LIO-loss scenario catalog
+on the same lab (keys stay loaded throughout — the storage guest is
+never rebooted): S6 destroys every live mapping+backstore while the
+OS-disk files still record them (the VM-refs detector signature, `--check`
+drifting on every LUN, and a `reconcile-iscsi-state` rebuild of all
+LUNs from the pool map — the encrypted ones included — with running-VM
+fallout sampled through the outage); S9 replays the 2026-10-27
+3-of-33 incident shape at unit scale (one hand-deleted mapping:
+`safe-iscsi-save`'s mapping-loss FATAL, the verifier naming the LUN,
+PVE aborting VM start on the vanished link after the session cycle,
+and `repair-iscsi-luns` re-mapping at the recorded index); S7a/S7b
+pair a targets-intact wipe — where `iscsi-restore-luns` performs the
+full saveconfig-authority restore including ACL grants and a staged
+non-identity `mapped_lun 8 → tpg_lun 0` grant — with a targets-too
+wipe, where the restore attempt honestly refuses without targets and
+the recovery runs through `setup-iscsi-targets` plus the map-driven
+reconcile (the journey records the authority gap this exposes:
+setup's own save overwrites the saveconfig records exactly when they
+are needed, and the pool map carries ACL initiator names but never
+grant indexes); S8 corrupts `saveconfig.json` (the unit restart
+restores from `saveconfig-boot.json` unaffected, the pre-start backup
+preserves the corrupt bytes as evidence, `safe-iscsi-save` FATALs on
+the unparseable authority, and the FATAL's own force escape
+`targetcli saveconfig` heals the file from the intact live tree) with
+S8b proving the boot-config-absent fallback branch fails loudly; and
+S18 exercises the pool-identity fence live — an exported expected pool
+WARNs on `check-prerequisites --two-node` and in
+`setup-iscsi-targets`' own block (never with a reconcile offer) while
+`export-iscsi-state --check` stays silent on the one-sided name (the
+documented offline-pool tolerance), and a destroyed+recreated pool
+emits the `pools.<name>: GUID changed` DRIFT line, converging only
+through the operator-confirmed `safe-iscsi-save` whose map refresh
+records the new GUID.
+
+The **j17-iscsi-interrupted-ops** journey runs the interrupted &
+contradictory-operations catalog on the same lab (keys stay loaded; the
+workload VMs stay parked; service restarts only, never a storage
+reboot): M5 proves the luksOpen retry arc (three mistyped passphrases
+rejected cleanly with no mapper leak, the fourth accepted); S13 proves
+`new-vm-disk`'s collision guards both clean (a second run for the same
+disk FATALs before any mutation) and against the script's own half
+state (a SIGINT after the zvol create leaves a zvol without a LUN that
+the next run refuses to touch — `remove-vm-disk` WARN-skips the gone
+pieces and converges it); M2 proves reconcile's apply prompt defaults
+SAFE ("yes", "yup", and bare Enter all abort with rc 1 and the state
+frozen; only the explicit Y applies); M3 proves `remove-vm-disk`'s
+identifier validation (wrong VMID, wrong disk number, and unknown pool
+all FATAL before any mutation — and "yes" at the destroy confirmations
+is not y), recording the y/N-not-type-to-confirm guard as a UX-gap row;
+S11 interrupts `remove-vm-disk` between its teardown steps (the half
+state — zvol and manifest intact, LUN gone — drifts in `--check`,
+`safe-iscsi-save` refuses the degraded save, and the re-run converges
+end to end); S10 interrupts `reconcile-iscsi-state` mid-apply (the
+partial tree keeps the pool map as an untouched recovery authority, the
+re-run rebuilds the remainder, and a third run finds nothing to do);
+S14 attempts the hand `zfs destroy` of an exported zvol under a live
+LUN and the zvol layer refuses it while LIO holds the device
+("dataset is busy") — the campaign's stale-live-LUN premise is
+structurally fenced at the zvol layer (F-041), so the journey records
+the fence and skips the sweep; and S12 runs reconcile and
+`iscsi-restore-luns` concurrently over the same wiped tree, recording
+live that no serialization or safe refusal exists between the two
+mutators (F-040: restore-luns silently skips its collisions while
+reconcile FATALs on its own and installs a comment-only manifest that
+its trailing save then refuses — benign only when the sibling's save
+heals it) before a clean sequential re-run converges the tree.
+
 ## Findings and repair loop
 
 Failures observed through the end-user surface become entries in
@@ -414,7 +575,7 @@ The itf libraries have their own mock-based suites in the default
 
 ```bash
 tests/run-tests test-itf-config test-itf-base-guard test-itf-report \
-    test-itf-ssh test-itf-template test-itf-driver
+    test-itf-ssh test-itf-template test-itf-driver test-itf-lab-stages
 ```
 
 They cover fail-closed site-config loading, example-file validity, the
@@ -423,6 +584,15 @@ listed verbs, path confinement, baseline-template protection for both
 template names), dry-run behavior, audit ordering, the run-report
 writer, the dev-host HTTP serve/fetch/stop round-trip used to deliver
 preseeds and dev tarballs to guests, the template
-stamp/resolution/clone/freshness logic for both profiles, and the
-driver's dispatch/usage surface (journey listing, ISO selector, profile
-flags).
+stamp/resolution/clone/freshness logic for both profiles, the driver's
+dispatch/usage surface (journey listing, ISO selector, profile flags),
+and the lab-layer stages themselves (`test-itf-lab-stages`: the test
+pools stage, the single-node lab, the VM-OS build/dump/self-verify
+orchestration, the workload helpers and stall-gap parser, the reboot
+stage with address rediscovery, the keystore helpers — including that
+the LUKS passphrase never appears in any command and that the encrypted
+lab tail stays off unless the flag is passed — and the boot-and-keys
+machinery: the reboot begin/wait split, the boot-journal parser against
+fixtures, the key ceremony, the load-keys/keystatus gates, the
+link-presence/fence-tick/fallout observables, and the boot-workload
+staging orchestration).

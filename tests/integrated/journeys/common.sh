@@ -2,9 +2,12 @@
 # common.sh — shared journey stages, factored from j01-fresh-install.
 #
 # Composable stages:
-#   itf_journey_stage_os <gname> <hostname> [--base B] [--role R]
+#   itf_journey_stage_os <gname> <hostname> [--base B] [--role R] [--sysdisk GB]
 #       Fresh Debian guest: custom serial-console ISO + preseed install,
 #       IP discovery, root SSH, os-installed snapshot.
+#       --sysdisk overrides the site-config system-disk size (the VM-OS
+#       image build installs onto a small disk so the cached image fits
+#       the zvols it is restored onto).
 #       Under --rerun: roll the previous run's guest back to its
 #       os-installed checkpoint instead of reinstalling.
 #       Sets globals J_VMID and J_GUEST_IP on success.
@@ -28,6 +31,43 @@
 #       Under --rerun: roll the previous run's guest back to its
 #       as-cloned checkpoint instead of cloning.
 #       Sets globals J_VMID and J_GUEST_IP on success.
+#   itf_journey_stage_test_pools <gname> <base> <vmid> <guest_ip>
+#       The documented three-RAIDZ1 test pools (j01/j04/j05/j11 recipe)
+#       as one stage: pool-disk hot-plug, guest recipe, pools-created
+#       snapshot.  Coordinates are explicit — two-node journeys stage
+#       several guests and J_* then holds only the last one's.
+#   itf_single_node_lab_main <gname>
+#       The single-node lab prefix (j04/j11): template clone,
+#       installed-state verify, test pools.
+#   itf_journey_stage_reboot_guest <gname> <role> [--power] [--timeout N]
+#       Reboot a staged role guest (in-guest reboot; --power = guarded
+#       stop/start), wait for ssh, re-discover a re-leased DHCP address,
+#       rewrite the guest record, refresh J_GUEST_IP.
+#       itf_reboot_guest_begin/wait are its split halves — the gap
+#       between them is the outage window for peer-node fallout.
+#   itf_vmos_image_zvol <s_ip> <zvol>
+#       Write the cached VM-OS image (itf vmimage build) onto a
+#       product-created zvol from the storage guest (sparse dd).
+#   itf_vm_* — agent-channel workload helpers for the VM booted from
+#       that zvol: boot gate, 1 Hz timestamp writer, sample/checksum,
+#       stall-gap parser (see the section comments below).
+#   itf_keystore_* — the LUKS key-device lab on the storage guest
+#       (provision/insert/remove/unlock_mount/lock_umount), and
+#       itf_journey_stage_encrypted_key_lun for the opt-in
+#       j05_two_node_lab_main --encrypted-keys tail.
+#   itf_journey_stage_boot_workload_lab <gname> <s_base> <s_vmid> <s_ip> <c_ip>
+#       The j15 boot-and-keys staging tail on the encrypted two-node
+#       lab: OS LUNs through the product (plain for VM 101, encrypted
+#       for VM 202), VM-OS image, running writers, fence premise,
+#       pre-reboot save+check gates, workload VMs parked stopped.
+#   Boot-and-keys scenario helpers (j15): itf_key_ceremony (the
+#       documented key ceremony as one stage), itf_storage_boot_state +
+#       itf_boot_journal_verdict (boot-journal capture and the pure
+#       order/verdict parser), itf_storage_load_keys,
+#       itf_keystore_unlock_mount_wrong, itf_vm_disk_links_present /
+#       itf_wait_vm_disk_links, itf_compute_fallout_sample,
+#       itf_fence_tick, itf_vm_evidence, itf_new_vm_disk_encrypted,
+#       itf_safe_save_gate, itf_iscsi_check_gate, itf_keystatus.
 #
 # Stages remember their guest in $ITF_RUN_DIR/guest.txt (base + vmid,
 # + IP once discovered); a --role R labels it per-guest instead
@@ -43,11 +83,12 @@ itf_journey_stage_os() {
     local gname="$1"
     local guest_hostname="$2"
     shift 2
-    local base="${ITF_BASE_HOSTS[0]}" role=""
+    local base="${ITF_BASE_HOSTS[0]}" role="" sysdisk="${ITF_GUEST_SYSTEM_DISK_GB:-}"
     while (( $# > 0 )); do
         case "$1" in
             --base) base="$2"; shift 2 ;;
             --role) role="$2"; shift 2 ;;
+            --sysdisk) sysdisk="$2"; shift 2 ;;
             *) echo "itf: unknown itf_journey_stage_os option: $1" >&2; return 2 ;;
         esac
     done
@@ -253,7 +294,7 @@ itf_journey_stage_os() {
     fi
 
     vmid="$(itf_guest_create "$gname" --base "$base" --iso "$boot_iso" \
-        --freeze 2>"$ITF_RUN_DIR/guest-create.log")"
+        --sysdisk "$sysdisk" --freeze 2>"$ITF_RUN_DIR/guest-create.log")"
     if [[ -n "$vmid" ]]; then
         itf_step pass "guest created (CPU-frozen)" "vmid $vmid"
     else
@@ -730,6 +771,87 @@ itf_journey_verify_installed() {
     itf_artifact "install-verify" "$verify_log"
 }
 
+# itf_journey_stage_test_pools <gname> <base> <vmid> <guest_ip>
+#
+# The documented three-RAIDZ1 test pools (the recipe from
+# docs/docs/developer-guide/testing.md), factored from j01/j04/j05/j11:
+# hot-plug the pool disk, run the recipe in the guest, snapshot
+# pools-created.  Coordinates are explicit (not the J_* globals) because
+# two-node journeys stage several guests and J_* then holds only the
+# last one's.
+#
+# The pool disk attaches only AFTER the OS is up.  A second virtio disk
+# present during an install reorders guest disk enumeration (observed
+# live: the pool disk became /dev/sda and the OS installed onto it while
+# the system disk stayed blank — "Boot failed: not a bootable disk").
+# One disk at install time keeps /dev/sda unambiguous; virtio-scsi
+# hotplug makes the pool disk appear as the only other disk, /dev/sdb.
+itf_journey_stage_test_pools() {
+    local gname="$1" base="$2" vmid="$3" guest_ip="$4"
+    local wait_sdb
+    # shellcheck disable=SC2016  # expansion runs in the guest
+    wait_sdb='for i in $(seq 1 30); do lsblk -dn -o NAME | grep -qx sdb'
+    wait_sdb+=' && exit 0; sleep 2; done; exit 1'
+    if itf_qm "$base" set "$vmid" --scsi1 "${ITF_GUEST_STORAGE}:${ITF_GUEST_POOL_DISK_GB}" \
+            > "$ITF_RUN_DIR/pooldisk-attach.log" 2>&1 \
+            && itf_guest_exec "$guest_ip" "$wait_sdb"; then
+        itf_step pass "pool disk attached" \
+            "scsi1 (${ITF_GUEST_POOL_DISK_GB}G) hot-plugged, guest sees /dev/sdb"
+    else
+        itf_step fail "pool disk attached" "see pooldisk-attach.log"
+        return 1
+    fi
+
+    local pool_script
+    pool_script="$ITF_RUN_DIR/guest-pools.sh"
+    cat > "$pool_script" <<'EOF'
+#!/bin/bash
+# The user recipe from docs/docs/developer-guide/testing.md on /dev/sdb,
+# plus a udev settle the documented recipe lacks.
+set -e
+# parted/partprobe are not part of a base Debian install.
+apt-get install -y parted
+parted -s /dev/sdb mklabel gpt
+for i in {1..15}; do
+    if [[ $i -eq 1 ]]; then start="1MiB"; else start="$(( (i-1)*5120 ))MiB"; fi
+    if [[ $i -eq 15 ]]; then end="100%"; else end="$(( i*5120 ))MiB"; fi
+    parted -a optimal -s /dev/sdb mkpart primary "${start}" "${end}"
+done
+partprobe /dev/sdb
+# udev creates the partition nodes asynchronously after partprobe, so an
+# immediate zpool create races them ("cannot resolve path '/dev/sdbN'";
+# run-20261007-152717-j04-post-install-baseline).  Settle, then wait
+# (bounded) for the last partition node; the final test fails cleanly if
+# it never appears.
+udevadm settle --timeout=30 || true
+for i in $(seq 1 30); do
+    [[ -e /dev/sdb15 ]] && break
+    sleep 1
+done
+[[ -e /dev/sdb15 ]]
+zpool create -f zfstest1 raidz1 /dev/sdb1 /dev/sdb2 /dev/sdb3 /dev/sdb4 /dev/sdb5
+zpool create -f zfstest2 raidz1 /dev/sdb6 /dev/sdb7 /dev/sdb8 /dev/sdb9 /dev/sdb10
+zpool create -f zfstest3 raidz1 /dev/sdb11 /dev/sdb12 /dev/sdb13 /dev/sdb14 /dev/sdb15
+zpool list
+EOF
+    itf_guest_put "$guest_ip" "$pool_script" /root/itf-pools.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-pools.sh" \
+        > "$ITF_RUN_DIR/guest-pools.log" 2>&1; then
+        itf_step pass "test pools created" "zfstest1/2/3 (three RAIDZ1, docs recipe)"
+        itf_artifact "pools" "$ITF_RUN_DIR/guest-pools.log"
+    else
+        itf_step fail "test pools created" "see guest-pools.log"
+        return 1
+    fi
+
+    if itf_guest_snapshot "$base" "$vmid" pools-created > /dev/null 2>&1; then
+        itf_step pass "snapshot pools-created" "test-pools checkpoint for later stages"
+    else
+        itf_step fail "snapshot pools-created"
+    fi
+    return 0
+}
+
 # itf_journey_stage_upgrade_env <gname>
 #
 # The shared release-upgrade staging, factored from j10: the upgrade
@@ -966,6 +1088,1403 @@ EOF
     J_UPGRADE_CMD="$upgrade_cmd"
     # shellcheck disable=SC2034  # consumed by the journey scripts
     J_UPGRADE_ENV_EXPORTS="$env_exports"
+    return 0
+}
+
+# itf_vmos_image_zvol <s_ip> <zvol-dataset>
+#
+# Writes the cached VM-OS image (lib/vmos-lib.sh builds it once) onto a
+# product-created zvol from the STORAGE guest: the gzipped raw image is
+# pushed into the guest and decompressed straight onto /dev/zvol/<zvol>
+# with conv=sparse (zero blocks become holes — the sparse zvol stays
+# thin on the small test pools).  The OS then lives on the block device
+# the product exported, exactly as in production; VM boot + agent
+# helpers live just below.
+itf_vmos_image_zvol() {
+    local s_ip="$1" zvol="$2"
+    local gz="$ITF_CACHE_DIR/itf-vmos.raw.gz"
+    if [[ ! -s "$gz" ]]; then
+        itf_step fail "VM-OS image available" \
+            "no cached image at $gz — PREP: itf vmimage build"
+        return 1
+    fi
+    itf_step info "VM-OS image available" "$(du -h "$gz" | awk '{print $1}') cached image"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if itf_guest_put "$s_ip" "$gz" /root/itf-vmos.raw.gz > /dev/null 2>&1 \
+        && itf_guest_exec "$s_ip" "
+            set -e
+            [[ -b /dev/zvol/$zvol ]]
+            gunzip -dc /root/itf-vmos.raw.gz | dd of=/dev/zvol/$zvol bs=4M conv=sparse status=none
+            sync
+            rm -f /root/itf-vmos.raw.gz
+        " > "$ITF_RUN_DIR/vmos-image-zvol.log" 2>&1; then
+        itf_step pass "VM-OS image written to zvol" \
+            "/dev/zvol/$zvol (sparse dd; OS rides the product-created LUN)"
+    else
+        itf_step fail "VM-OS image written to zvol" "see vmos-image-zvol.log"
+        return 1
+    fi
+    return 0
+}
+
+# --- Running-VM workload helpers (recovery-scenario campaign) ---
+#
+# The workload VM boots the cached VM-OS image from its iSCSI LUN; every
+# helper below drives it ON THE COMPUTE GUEST through `qm` — the same
+# channel an operator's PVE uses — with the qemu guest agent as the only
+# in-VM channel (no ssh into the workload VM).  The writer appends a
+# timestamp to /workload.log on the LUN-backed root filesystem and syncs
+# every tick, so an iSCSI outage stalls it exactly where production
+# would: on writeback to the LUN.
+
+# itf_vm_wait_agent <c_ip> <vmid> [timeout-seconds]
+#
+# Polls the workload VM's guest agent on the compute guest until it
+# answers.  The agent-RPC form is `qm agent <vmid> ping` — PVE 9 has no
+# `qm guest ping` (qm guest only wraps exec/file-*).  TCG boots are
+# slow; keep the default generous.
+itf_vm_wait_agent() {
+    local c_ip="$1" vmid="$2" timeout="${3:-900}"
+    local deadline=$(( SECONDS + timeout ))
+    while (( SECONDS < deadline )); do
+        if itf_guest_exec "$c_ip" "qm agent $vmid ping" > /dev/null 2>&1; then
+            return 0
+        fi
+        sleep 5
+    done
+    return 1
+}
+
+# itf_vm_boot_with_agent <c_ip> <vmid> [timeout-seconds]
+#
+# Idempotent boot gate for the workload VM: enable the agent channel,
+# force TCG (the lab's nested PVE has no /dev/kvm passthrough — the
+# established boot-proof pattern), start, and require the agent to
+# answer before the caller proceeds.
+itf_vm_boot_with_agent() {
+    local c_ip="$1" vmid="$2" timeout="${3:-900}"
+    if itf_guest_exec "$c_ip" "qm set $vmid --agent enabled=1 --kvm 0" \
+            > "$ITF_RUN_DIR/vm-$vmid-agent.log" 2>&1 \
+        && itf_guest_exec "$c_ip" "qm start $vmid" \
+            >> "$ITF_RUN_DIR/vm-$vmid-agent.log" 2>&1; then
+        itf_step info "VM $vmid starting" "agent channel on, TCG, boot in progress"
+    else
+        itf_step fail "VM $vmid starting" "see vm-$vmid-agent.log"
+        return 1
+    fi
+    if itf_vm_wait_agent "$c_ip" "$vmid" "$timeout"; then
+        itf_step pass "VM $vmid agent ready" "qm guest ping answered (TCG boot)"
+    else
+        itf_step fail "VM $vmid agent ready" \
+            "no agent answer within ${timeout}s — see vm-$vmid-agent.log"
+        return 1
+    fi
+    return 0
+}
+
+# _itf_vm_exec_out <raw-qm-guest-exec-output>
+#
+# Extracts the output payload from a `qm guest exec` result.  qm prints
+# a pretty-printed JSON dict whose payload key is "out-data" (live-proven
+# on PVE 9.2.21); older/mock shapes may use "out".  python's
+# ast.literal_eval parses both the JSON and python-repr quoting shapes.
+_itf_vm_exec_out() {
+    python3 -c '
+import ast, sys
+raw = sys.stdin.read().strip()
+try:
+    data = ast.literal_eval(raw)
+except (ValueError, SyntaxError):
+    sys.exit(1)
+if isinstance(data, dict):
+    sys.stdout.write(data.get("out-data", data.get("out", "")))
+' 2>/dev/null
+}
+
+# itf_vm_workload_start <c_ip> <vmid>
+#
+# Starts the detached 1 Hz timestamp writer on the workload VM's
+# LUN-backed root filesystem.  nohup + & inside the guest-exec'd shell
+# detaches it from the agent call, which returns immediately.
+itf_vm_workload_start() {
+    local c_ip="$1" vmid="$2"
+    local inner='while :; do date +%s >> /workload.log; sync; sleep 1; done'
+    if itf_guest_exec "$c_ip" \
+        "qm guest exec $vmid -- sh -c 'nohup sh -c \"$inner\" >/dev/null 2>&1 &'" \
+        > "$ITF_RUN_DIR/vm-$vmid-workload-start.log" 2>&1; then
+        itf_step pass "workload writer started [VM $vmid]" \
+            "1 Hz timestamps to /workload.log with per-tick sync"
+    else
+        itf_step fail "workload writer started [VM $vmid]" \
+            "see vm-$vmid-workload-start.log"
+        return 1
+    fi
+}
+
+# itf_vm_workload_sample <c_ip> <vmid>
+#
+# Echoes the workload log's current content (clean timestamps, one per
+# line) on stdout for the caller to save/parse.  rc 1 when the agent
+# channel fails (VM down or agent gone — itself a scenario signal, the
+# caller decides).
+itf_vm_workload_sample() {
+    local c_ip="$1" vmid="$2"
+    local raw
+    raw="$(itf_guest_exec "$c_ip" \
+        "qm guest exec $vmid -- cat /workload.log" 2>/dev/null)" || return 1
+    printf '%s' "$raw" | _itf_vm_exec_out
+}
+
+# itf_vm_workload_checksum <c_ip> <vmid>
+#
+# Echoes `cksum /workload.log` from inside the workload VM (before/after
+# comparisons around an event prove no silent corruption).  rc 1 when
+# the agent channel fails.
+itf_vm_workload_checksum() {
+    local c_ip="$1" vmid="$2"
+    local raw
+    raw="$(itf_guest_exec "$c_ip" \
+        "qm guest exec $vmid -- cksum /workload.log" 2>/dev/null)" || return 1
+    printf '%s' "$raw" | _itf_vm_exec_out
+}
+
+# itf_vm_workload_stop <c_ip> <vmid>
+#
+# Stops the writer (idempotent; no match is fine — the VM may be down).
+itf_vm_workload_stop() {
+    local c_ip="$1" vmid="$2"
+    itf_guest_exec "$c_ip" \
+        "qm guest exec $vmid -- pkill -f workload.log" > /dev/null 2>&1 || true
+}
+
+# itf_vm_workload_gaps <sample-file> [threshold-seconds=5]
+#
+# Pure parser over a saved sample (one epoch timestamp per line, as
+# itf_vm_workload_sample emits): echoes "samples=<n> max_gap=<s>" and
+# returns 1 when no timestamps parsed.  A max_gap above the threshold is
+# the stall signal; the caller asserts.
+itf_vm_workload_gaps() {
+    local sample="$1" threshold="${2:-5}"
+    python3 - "$sample" "$threshold" <<'PYEOF'
+import sys
+
+path, threshold = sys.argv[1], float(sys.argv[2])
+try:
+    with open(path) as f:
+        ts = [float(line) for line in f if line.strip()]
+except (OSError, ValueError):
+    sys.exit(1)
+if len(ts) < 2:
+    print(f"samples={len(ts)} max_gap=0.0")
+    sys.exit(0)
+gaps = [b - a for a, b in zip(ts, ts[1:])]
+print(f"samples={len(ts)} max_gap={max(gaps):.1f}")
+PYEOF
+}
+
+# itf_reboot_guest_begin <gname> <role> [--power]
+#
+# Issues the disruptive half for the role's staged guest and returns
+# immediately; itf_reboot_guest_wait brings the guest back.  Splitting
+# the two lets a journey observe peer-node fallout INSIDE the outage
+# window (j15's S1b samples the compute node between begin and wait).
+# Default is the in-guest `reboot` over ssh (rc 255 from the dropping
+# connection is the expected success shape); --power models a power
+# event's down-stroke instead (guarded shutdown here, start in the
+# wait).  The chosen mode is remembered in reboot-mode-<role> for the
+# wait half.
+itf_reboot_guest_begin() {
+    local gname="$1" role="$2"
+    shift 2
+    local power=0
+    while (( $# > 0 )); do
+        case "$1" in
+            --power) power=1; shift ;;
+            *) echo "itf: unknown itf_reboot_guest_begin option: $1" >&2; return 2 ;;
+        esac
+    done
+
+    local guest_file="$ITF_RUN_DIR/guest-${role}.txt"
+    if [[ ! -f "$guest_file" ]]; then
+        itf_step fail "guest record present [$role]" \
+            "no $guest_file — stage the lab first"
+        return 1
+    fi
+    local base vmid old_ip
+    read -r base vmid old_ip < "$guest_file" || {
+        itf_step fail "guest record present [$role]" "malformed $guest_file"
+        return 1
+    }
+
+    if (( power )); then
+        if itf_guest_stop "$base" "$vmid" \
+                > "$ITF_RUN_DIR/reboot-${gname}.log" 2>&1; then
+            itf_step pass "guest powered off [$role]" \
+                "vmid $vmid: guarded shutdown (start comes with the wait)"
+        else
+            itf_step fail "guest powered off [$role]" "see reboot-${gname}.log"
+            return 1
+        fi
+        echo power > "$ITF_RUN_DIR/reboot-mode-${role}"
+        return 0
+    fi
+
+    # The ssh session dies with the guest: rc 255 is the drop, not a
+    # failure.  Any other rc means the command itself failed.
+    itf_guest_exec "$old_ip" "reboot" \
+        > "$ITF_RUN_DIR/reboot-${gname}.log" 2>&1
+    local reboot_rc=$?
+    if [[ $reboot_rc -eq 0 || $reboot_rc -eq 255 ]]; then
+        itf_step pass "guest rebooted [$role]" "in-guest reboot issued (vmid $vmid)"
+    else
+        itf_step fail "guest rebooted [$role]" \
+            "rc=$reboot_rc — see reboot-${gname}.log"
+        return 1
+    fi
+    echo inguest > "$ITF_RUN_DIR/reboot-mode-${role}"
+    return 0
+}
+
+# itf_reboot_guest_wait <gname> <role> [--timeout N]
+#
+# The return half of itf_reboot_guest_begin: start the guest back up on
+# a --power begin, wait for ssh on the old address, re-discover the IP
+# via the guest agent when DHCP re-leased a different one, rewrite the
+# guest-<role>.txt record, and refresh J_GUEST_IP — callers must
+# re-read coordinates (or use J_GUEST_IP) after any disruptive stage.
+itf_reboot_guest_wait() {
+    local gname="$1" role="$2"
+    shift 2
+    local timeout=900
+    while (( $# > 0 )); do
+        case "$1" in
+            --timeout) timeout="$2"; shift 2 ;;
+            *) echo "itf: unknown itf_reboot_guest_wait option: $1" >&2; return 2 ;;
+        esac
+    done
+
+    local mode="inguest"
+    local mode_file="$ITF_RUN_DIR/reboot-mode-${role}"
+    [[ -f "$mode_file" ]] && read -r mode < "$mode_file"
+    rm -f "$mode_file"
+
+    local guest_file="$ITF_RUN_DIR/guest-${role}.txt"
+    local base vmid old_ip
+    read -r base vmid old_ip < "$guest_file" || {
+        itf_step fail "guest record present [$role]" "malformed $guest_file"
+        return 1
+    }
+
+    if [[ "$mode" == power ]]; then
+        if itf_guest_start "$base" "$vmid" \
+                >> "$ITF_RUN_DIR/reboot-${gname}.log" 2>&1; then
+            itf_step pass "guest powered on [$role]" "vmid $vmid"
+        else
+            itf_step fail "guest powered on [$role]" "see reboot-${gname}.log"
+            return 1
+        fi
+    else
+        # In-guest mode: the reboot takes seconds to reach sshd.  Wait
+        # for ssh to GO AWAY first — waiting only for the return races
+        # the shutdown window (a first probe can hit still-alive sshd
+        # mid-shutdown and "succeed" against the dying boot).
+        local gone=$(( SECONDS + "${ITF_REBOOT_GONE_WAIT:-180}" ))
+        until (( SECONDS >= gone )); do
+            itf_guest_exec "$old_ip" "true" > /dev/null 2>&1 || break
+            sleep "${ITF_REBOOT_POLL:-5}"
+        done
+        if itf_guest_exec "$old_ip" "true" > /dev/null 2>&1; then
+            itf_step fail "guest went down [$role]" \
+                "ssh still up ${ITF_REBOOT_GONE_WAIT:-180}s after the reboot — did it reboot?"
+            return 1
+        fi
+        itf_step pass "guest went down [$role]" "ssh dropped after the reboot"
+    fi
+
+    if itf_wait_ssh "$old_ip" "$timeout"; then
+        itf_step pass "guest ssh reachable [$role]" "$old_ip (address kept)"
+        # shellcheck disable=SC2034  # consumed by the journey scripts
+        J_GUEST_IP="$old_ip"
+        return 0
+    fi
+
+    # DHCP may have re-leased a different address during the reboot.
+    local new_ip
+    new_ip="$(itf_guest_ip "$base" "$vmid" 600)"
+    if [[ -z "$new_ip" ]]; then
+        itf_step fail "guest ssh reachable [$role]" \
+            "ssh never returned on $old_ip and the agent reports no address"
+        return 1
+    fi
+    if ! itf_wait_ssh "$new_ip" 300; then
+        itf_step fail "guest ssh reachable [$role]" \
+            "neither $old_ip nor rediscovered $new_ip answers ssh"
+        return 1
+    fi
+    echo "$base $vmid $new_ip" > "$guest_file"
+    itf_step pass "guest ssh reachable [$role]" \
+        "address re-leased during reboot: $old_ip -> $new_ip (record updated)"
+    # shellcheck disable=SC2034  # consumed by the journey scripts
+    J_GUEST_IP="$new_ip"
+    return 0
+}
+
+# itf_journey_stage_reboot_guest <gname> <role> [--power] [--timeout N]
+#
+# Reboots the role's staged guest and brings its coordinates back in one
+# call (in-guest `reboot`; --power = guarded stop/start power cycle).
+# Composed of itf_reboot_guest_begin + itf_reboot_guest_wait; callers
+# that need the outage window open call those two directly.
+itf_journey_stage_reboot_guest() {
+    local gname="$1" role="$2"
+    shift 2
+    local power=0 timeout=900
+    while (( $# > 0 )); do
+        case "$1" in
+            --power) power=1; shift ;;
+            --timeout) timeout="$2"; shift 2 ;;
+            *) echo "itf: unknown itf_journey_stage_reboot_guest option: $1" >&2; return 2 ;;
+        esac
+    done
+    local -a begin_args=("$gname" "$role")
+    (( power )) && begin_args+=(--power)
+    itf_reboot_guest_begin "${begin_args[@]}" || return 1
+    itf_reboot_guest_wait "$gname" "$role" --timeout "$timeout" || return 1
+    return 0
+}
+
+# --- LUKS key-device lab (recovery-scenario campaign) ---
+#
+# Models production's removable LUKS key store on the STORAGE guest: a
+# small dedicated disk (scsi2, hot-plugged like the pool disk) is
+# LUKS-formatted in the guest, carries an ext4 filesystem labeled
+# ZFSkeys with the per-pool key file at the conventional path, and the
+# guest's fstab gains the production mount line (noauto — the operator
+# mounts manually; the lab never resurrects the removed unlock
+# automation).  "Insert the USB" = re-attach the captured volume +
+# luksOpen + mount; "remove it" = umount + luksClose + detach.
+#
+# The passphrase reaches cryptsetup through stdin (--key-file -) piped
+# from a mode-600 run-dir feed file: never in argv, never in a command
+# string, never in a step message or log.
+
+# _itf_keystore_feed
+#
+# Echoes the path of the passphrase feed file, (re)written from the
+# site config without a trailing newline so luksFormat and every later
+# luksOpen see identical key bytes.
+_itf_keystore_feed() {
+    local feed="$ITF_RUN_DIR/keystore-passphrase"
+    printf '%s' "$ITF_KEYSTORE_PASSPHRASE" > "$feed"
+    chmod 600 "$feed"
+    echo "$feed"
+}
+
+# _itf_keystore_config_ok
+#
+# Fails with a PREP hint when the site config lacks the keystore pair
+# (the encrypted-key lab is opt-in; sites that never run it leave the
+# keys unset, which config validation accepts).
+_itf_keystore_config_ok() {
+    if [[ -z "${ITF_KEYSTORE_PASSPHRASE:-}" || -z "${ITF_KEYFILE_NAME:-}" ]]; then
+        itf_step fail "keystore site config" \
+            "ITF_KEYSTORE_PASSPHRASE + ITF_KEYFILE_NAME required — PREP:" \
+            "set them in tests/integrated/site/config (see config.example)"
+        return 1
+    fi
+    return 0
+}
+
+# _itf_keystore_wait_sdc <s_ip>
+#
+# Bounded wait for the key device node inside the storage guest (scsi0
+# system, scsi1 pool disk — the key device is the third disk, /dev/sdc).
+_itf_keystore_wait_sdc() {
+    local s_ip="$1"
+    # shellcheck disable=SC2016  # expansion runs in the guest
+    itf_guest_exec "$s_ip" '
+        for i in $(seq 1 30); do lsblk -dn -o NAME | grep -qx sdc && exit 0; sleep 2; done
+        exit 1
+    '
+}
+
+# itf_keystore_provision <s_base> <s_vmid> <s_ip>
+#
+# Creates the key device: attach a 1G scsi2 volume, capture its volid
+# for later re-attach, LUKS-format whole-disk, mkfs.ext4 labeled
+# ZFSkeys, mount at /mnt/ZFSkeys, write the 0400 key file, add the
+# production fstab line.  Leaves the store MOUNTED (the caller creates
+# the encrypted LUN next); lock with itf_keystore_lock_umount.
+itf_keystore_provision() {
+    local s_base="$1" s_vmid="$2" s_ip="$3"
+    _itf_keystore_config_ok || return 1
+
+    local tool_log="$ITF_RUN_DIR/keystore-cryptsetup.log"
+    if itf_guest_exec "$s_ip" \
+            "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cryptsetup" \
+            > "$tool_log" 2>&1; then
+        itf_step pass "cryptsetup installed" "storage guest (LUKS tooling)"
+    else
+        itf_step fail "cryptsetup installed" "see keystore-cryptsetup.log"
+        return 1
+    fi
+
+    if itf_qm "$s_base" set "$s_vmid" --scsi2 "${ITF_GUEST_STORAGE}:1" \
+            > "$ITF_RUN_DIR/keystore-attach.log" 2>&1 \
+        && _itf_keystore_wait_sdc "$s_ip" > /dev/null 2>&1; then
+        itf_step pass "key device attached" \
+            "scsi2 (1G) hot-plugged, storage guest sees /dev/sdc"
+    else
+        itf_step fail "key device attached" "see keystore-attach.log"
+        return 1
+    fi
+
+    # Capture the volume for itf_keystore_insert re-attaches.
+    itf_qm "$s_base" config "$s_vmid" 2>/dev/null \
+        | sed -n 's/^scsi2:[[:space:]]*//p' | head -1 | cut -d, -f1 \
+        > "$ITF_RUN_DIR/keystore-volid.txt"
+    if [[ -s "$ITF_RUN_DIR/keystore-volid.txt" ]]; then
+        itf_step pass "key device volume captured" \
+            "$(cat "$ITF_RUN_DIR/keystore-volid.txt") (re-attach identity)"
+    else
+        itf_step fail "key device volume captured" "no scsi2 line in guest config"
+        return 1
+    fi
+
+    local feed
+    feed="$(_itf_keystore_feed)"
+    if itf_guest_exec_feed "$s_ip" "$feed" \
+            "cryptsetup luksFormat --batch-mode --key-file - /dev/sdc" \
+            > "$ITF_RUN_DIR/keystore-format.log" 2>&1; then
+        itf_step pass "key device LUKS-formatted" \
+            "/dev/sdc (passphrase via stdin, never in argv)"
+    else
+        itf_step fail "key device LUKS-formatted" "see keystore-format.log"
+        return 1
+    fi
+
+    local key_path="/mnt/ZFSkeys/keys/${ITF_KEYFILE_NAME}"
+    if ! itf_guest_exec_feed "$s_ip" "$feed" \
+            "cryptsetup luksOpen --key-file - /dev/sdc keys" \
+            > "$ITF_RUN_DIR/keystore-open.log" 2>&1; then
+        itf_step fail "key device opened" "see keystore-open.log"
+        return 1
+    fi
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            mkfs.ext4 -q -L ZFSkeys /dev/mapper/keys
+            mkdir -p /mnt/ZFSkeys
+            mount /dev/mapper/keys /mnt/ZFSkeys
+            mkdir -p /mnt/ZFSkeys/keys
+            dd if=/dev/urandom of=${key_path} bs=32 count=1 status=none
+            chmod 400 ${key_path}
+            grep -q 'LABEL=ZFSkeys /mnt/ZFSkeys' /etc/fstab \\
+                || echo 'LABEL=ZFSkeys /mnt/ZFSkeys auto nosuid,nodev,nofail,x-gvfs-show,noauto 0 0' >> /etc/fstab
+            test -s ${key_path}
+        " > "$ITF_RUN_DIR/keystore-mkfs.log" 2>&1; then
+        itf_step pass "ZFSkeys store provisioned" \
+            "ext4 labeled ZFSkeys; ${key_path} (0400); production fstab line"
+    else
+        itf_step fail "ZFSkeys store provisioned" "see keystore-mkfs.log"
+        return 1
+    fi
+    return 0
+}
+
+# itf_keystore_insert <s_base> <s_vmid>
+#
+# Re-attaches the captured key-device volume ("insert the USB").
+itf_keystore_insert() {
+    local s_base="$1" s_vmid="$2"
+    local volid
+    volid="$(cat "$ITF_RUN_DIR/keystore-volid.txt" 2>/dev/null)"
+    if [[ -z "$volid" ]]; then
+        itf_step fail "key device inserted" \
+            "no captured volid — provision the keystore first"
+        return 1
+    fi
+    if itf_qm "$s_base" set "$s_vmid" --scsi2 "$volid" \
+            > "$ITF_RUN_DIR/keystore-insert.log" 2>&1; then
+        itf_step pass "key device inserted" "$volid re-attached as scsi2"
+    else
+        itf_step fail "key device inserted" "see keystore-insert.log"
+        return 1
+    fi
+}
+
+# itf_keystore_remove <s_base> <s_vmid>
+#
+# Detaches the key-device volume ("remove the USB"); the volume stays on
+# the itf guest storage for the next insert and is destroyed with the
+# guest.
+itf_keystore_remove() {
+    local s_base="$1" s_vmid="$2"
+    if itf_qm "$s_base" set "$s_vmid" --delete scsi2 \
+            > "$ITF_RUN_DIR/keystore-remove.log" 2>&1; then
+        itf_step pass "key device removed" "scsi2 detached (volume kept for re-insert)"
+    else
+        itf_step fail "key device removed" "see keystore-remove.log"
+        return 1
+    fi
+}
+
+# itf_keystore_unlock_mount <s_ip>
+#
+# The operator's blind-recovery step: luksOpen (passphrase via stdin)
+# and mount the store; verifies the key file is visible at the
+# conventional path.
+itf_keystore_unlock_mount() {
+    local s_ip="$1"
+    _itf_keystore_wait_sdc "$s_ip" > /dev/null 2>&1
+    local feed
+    feed="$(_itf_keystore_feed)"
+    if ! itf_guest_exec_feed "$s_ip" "$feed" \
+            "cryptsetup luksOpen --key-file - /dev/sdc keys" \
+            > "$ITF_RUN_DIR/keystore-unlock.log" 2>&1; then
+        itf_step fail "key store unlocked" "see keystore-unlock.log"
+        return 1
+    fi
+    local key_path="/mnt/ZFSkeys/keys/${ITF_KEYFILE_NAME}"
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            mkdir -p /mnt/ZFSkeys
+            mount /dev/mapper/keys /mnt/ZFSkeys
+            test -s ${key_path}
+        " > "$ITF_RUN_DIR/keystore-mount.log" 2>&1; then
+        itf_step pass "key store unlocked + mounted" \
+            "/dev/mapper/keys on /mnt/ZFSkeys; ${key_path} visible"
+    else
+        itf_step fail "key store unlocked + mounted" "see keystore-mount.log"
+        return 1
+    fi
+}
+
+# itf_keystore_lock_umount <s_ip>
+#
+# The operator's lock step after keys are loaded: umount + luksClose.
+itf_keystore_lock_umount() {
+    local s_ip="$1"
+    # shellcheck disable=SC2016  # expansions run in the guest
+    if itf_guest_exec "$s_ip" '
+            umount /mnt/ZFSkeys
+            cryptsetup luksClose keys
+        ' > "$ITF_RUN_DIR/keystore-lock.log" 2>&1; then
+        itf_step pass "key store locked + unmounted" \
+            "production posture after key load (device can be removed)"
+    else
+        itf_step fail "key store locked + unmounted" "see keystore-lock.log"
+        return 1
+    fi
+}
+
+# itf_journey_stage_encrypted_key_lun <gname> <s_base> <s_vmid> <s_ip> <c_ip>
+#
+# The opt-in encrypted-key tail of the two-node lab: provision the LUKS
+# keystore, create the ENCRYPTED vm-101-disk-1 through the product (the
+# compute-side new-vm-disk re-executes on storage, where the key-path
+# prompt reads the piped answer), verify the encrypted-LUN registration
+# and the loaded-key posture with the store locked, and snapshot
+# enc-lab-ready on the storage guest.
+itf_journey_stage_encrypted_key_lun() {
+    local gname="$1" s_base="$2" s_vmid="$3" s_ip="$4" c_ip="$5"
+    local pool="zfstest1" key_path="/mnt/ZFSkeys/keys/${ITF_KEYFILE_NAME}"
+
+    itf_keystore_provision "$s_base" "$s_vmid" "$s_ip" || return 1
+
+    # Fresh-host staging: install-two-node seeds this conf from the
+    # site-specific sample (production entries by design); a fresh lab
+    # host has no encrypted LUNs yet, and the sample's vm-101-disk-1
+    # entry collides with the lab's own backstore name — new-vm-disk's
+    # prefix-only registration check would then skip the real entry
+    # (FINDINGS F-027).  Reset to empty; the product writes its own
+    # line right below.
+    if itf_guest_exec "$s_ip" \
+            ": > /etc/zfsutilities/iscsi-encrypted-luns.conf" \
+            > "$ITF_RUN_DIR/keystore-conf-reset.log" 2>&1; then
+        itf_step pass "encrypted-luns conf reset (fresh host)" \
+            "installer-seeded sample entries cleared; the product writes its own"
+    else
+        itf_step fail "encrypted-luns conf reset (fresh host)" \
+            "see keystore-conf-reset.log"
+        return 1
+    fi
+
+    local answers="$ITF_RUN_DIR/new-vm-disk-encrypted-answers.txt"
+    printf '%s\n' "$key_path" > "$answers"
+    local disk_log="$ITF_RUN_DIR/new-vm-disk-encrypted.log"
+    itf_guest_exec_feed "$c_ip" "$answers" \
+        "bash -lc 'new-vm-disk $pool 101 1 4G --encrypted'" \
+        > "$disk_log" 2>&1
+    local disk_rc=$?
+    itf_artifact "new-vm-disk-encrypted" "$disk_log"
+    if [[ $disk_rc -eq 0 ]] \
+            && grep -q "✓ Configuration saved" "$disk_log" \
+            && itf_guest_exec "$c_ip" \
+                "grep -q '^scsi1: /dev/disk/by-path/' /etc/pve/qemu-server/101.conf"; then
+        itf_step pass "encrypted LUN created" \
+            "vm-101-disk-1 (4G) through new-vm-disk --encrypted; scsi1 line written"
+    else
+        itf_step fail "encrypted LUN created" \
+            "rc=$disk_rc — see new-vm-disk-encrypted.log"
+        return 1
+    fi
+
+    local conf_log="$ITF_RUN_DIR/encrypted-luns-conf.log"
+    # The conf must hold EXACTLY the lab entry (plan 022's journey gate):
+    # the fresh-host reset models no pre-existing encrypted LUNs, so any
+    # second line would be a registration bug (F-027 class).
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            test \"\$(wc -l < /etc/zfsutilities/iscsi-encrypted-luns.conf)\" -eq 1 \\
+            && grep -q '^vm-101-disk-1:/dev/zvol/${pool}/proxmox/vm-101-disk-1:${pool}\$' \\
+                /etc/zfsutilities/iscsi-encrypted-luns.conf \\
+            && zfs get -H -o value keystatus ${pool}/proxmox/vm-101-disk-1 \\
+            | grep -qx available
+        " > "$conf_log" 2>&1; then
+        itf_step pass "encrypted LUN registered + key loaded" \
+            "iscsi-encrypted-luns.conf entry; keystatus available"
+    else
+        itf_step fail "encrypted LUN registered + key loaded" "see encrypted-luns-conf.log"
+        return 1
+    fi
+
+    # Lock the store FIRST, then re-verify the posture: the key stays
+    # loaded with the device gone (the production posture the boot
+    # scenarios start from).
+    itf_keystore_lock_umount "$s_ip" || return 1
+    itf_keystore_remove "$s_base" "$s_vmid" || return 1
+    local post_log="$ITF_RUN_DIR/encrypted-posture.log"
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" \
+            "zfs get -H -o value keystatus ${pool}/proxmox/vm-101-disk-1" \
+            > "$post_log" 2>&1 \
+            && grep -qx available "$post_log"; then
+        itf_step pass "keys stay loaded with store removed" \
+            "keystatus available, key device detached (production posture)"
+    else
+        itf_step fail "keys stay loaded with store removed" "see encrypted-posture.log"
+        return 1
+    fi
+
+    if itf_guest_snapshot "$s_base" "$s_vmid" enc-lab-ready > /dev/null 2>&1; then
+        itf_step pass "snapshot enc-lab-ready" "encrypted-lab checkpoint on storage"
+    else
+        itf_step fail "snapshot enc-lab-ready"
+    fi
+    return 0
+}
+
+# --- Boot-and-keys scenario helpers (recovery-scenario campaign G1) ---
+#
+# The j15 machinery on top of the encrypted two-node lab: product-command
+# runners with end-state gates, the operator's key ceremony as one stage,
+# boot-journal capture plus a pure order/verdict parser, and the
+# compute-side fallout observables (sessions, by-path links, fence ticks,
+# workload samples).  Recovery paths consume only user-visible signals
+# and documented commands — never injection state.
+
+# itf_new_vm_disk_encrypted <c_ip> <pool> <vmid> <disknum> <size> <key-path> <log-stem>
+#
+# Runs new-vm-disk --encrypted on the compute guest with the key-path
+# prompt answered from a feed file (the G0 stage's pattern), captures the
+# transcript under <log-stem>.log, and returns the product's rc.  The
+# CALLER owns the step and the end-state gates — success paths assert
+# the "✓ Configuration saved" line + the scsiN config line; M1-style
+# failure paths assert the FATAL line and that no zvol appeared.
+itf_new_vm_disk_encrypted() {
+    local c_ip="$1" pool="$2" vmid="$3" disknum="$4" size="$5" key_path="$6" stem="$7"
+    local answers="$ITF_RUN_DIR/${stem}-answers.txt"
+    printf '%s\n' "$key_path" > "$answers"
+    itf_guest_exec_feed "$c_ip" "$answers" \
+        "bash -lc 'new-vm-disk $pool $vmid $disknum $size --encrypted'" \
+        > "$ITF_RUN_DIR/${stem}.log" 2>&1
+    local rc=$?
+    itf_artifact "$stem" "$ITF_RUN_DIR/${stem}.log"
+    return "$rc"
+}
+
+# itf_safe_save_gate <s_ip> <label>
+#
+# The documented "persist the healthy target config" step with its
+# end-state gate: safe-iscsi-save must complete with the clean-pass line.
+itf_safe_save_gate() {
+    local s_ip="$1" label="$2"
+    local log="$ITF_RUN_DIR/safe-iscsi-save-${label}.log"
+    itf_guest_exec "$s_ip" "bash -lc 'safe-iscsi-save'" > "$log" 2>&1
+    local rc=$?
+    itf_artifact "safe-iscsi-save-$label" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "✓ iSCSI configuration saved" "$log"; then
+        itf_step pass "target config saved [$label]" "clean pass — see $(basename "$log")"
+        return 0
+    fi
+    itf_step fail "target config saved [$label]" \
+        "rc=$rc — see $(basename "$log")"
+    return 1
+}
+
+# itf_iscsi_check_gate <s_ip> <label>
+#
+# export-iscsi-state --check with its end-state gate: rc 0 plus the
+# no-drift line — the stand-in for a healthy Dashboard view.
+itf_iscsi_check_gate() {
+    local s_ip="$1" label="$2"
+    local log="$ITF_RUN_DIR/iscsi-check-${label}.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" > "$log" 2>&1
+    local rc=$?
+    itf_artifact "iscsi-check-$label" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "✓ No drift" "$log"; then
+        itf_step pass "state map check OK [$label]" "live LUNs match the pool map"
+        return 0
+    fi
+    itf_step fail "state map check OK [$label]" "rc=$rc — see $(basename "$log")"
+    return 1
+}
+
+# itf_storage_load_keys <s_ip> [dataset]
+#
+# The documented key-loading step: `zfs load-key -a` (the operator's
+# form, per zfs-keys.md) or `zfs load-key <dataset>` for one.  With -a
+# the exit code is noisy about keys that were already loaded, so success
+# is judged the way the operator sees it: every encrypted LUN registered
+# in iscsi-encrypted-luns.conf (or the one named dataset) reports
+# keystatus available afterwards.
+itf_storage_load_keys() {
+    local s_ip="$1" dataset="${2:-}"
+    local stem="load-keys"
+    [[ -n "$dataset" ]] && stem="load-key-$(basename "$dataset")"
+    local log="$ITF_RUN_DIR/${stem}.log"
+    itf_guest_exec "$s_ip" "bash -lc 'zfs load-key ${dataset:--a}'" > "$log" 2>&1
+    local rc=$?
+    itf_artifact "$stem" "$log"
+    local gate_log="$ITF_RUN_DIR/${stem}-keystatus.log"
+    local gate_cmd
+    if [[ -n "$dataset" ]]; then
+        gate_cmd="test \"\$(zfs get -H -o value keystatus $dataset)\" = available"
+    else
+        # shellcheck disable=SC2016  # expansions run in the guest
+        gate_cmd='missing=0
+while read -r ds; do
+    st=$(zfs get -H -o value keystatus "$ds")
+    echo "$ds: $st"
+    [[ $st = available ]] || missing=1
+done < <(awk -F: "NF==3 && \$1 !~ /^#/ {sub(/^\/dev\/zvol\//, \"\", \$2); print \$2}" \
+    /etc/zfsutilities/iscsi-encrypted-luns.conf)
+exit $missing'
+    fi
+    if { [[ $rc -eq 0 ]] || [[ -z "$dataset" ]]; } \
+            && itf_guest_exec "$s_ip" "$gate_cmd" > "$gate_log" 2>&1; then
+        itf_step pass "ZFS keys loaded" \
+            "zfs load-key ${dataset:--a}; keystatus gates green (see $(basename "$gate_log"))"
+        return 0
+    fi
+    itf_step fail "ZFS keys loaded" \
+        "rc=$rc — see $(basename "$log") / $(basename "$gate_log")"
+    return 1
+}
+
+# itf_keystatus <s_ip> <dataset> <available|unavailable> [label]
+#
+# Asserts a dataset's keystatus — the user-visible posture signal the
+# boot scenarios pivot on.
+itf_keystatus() {
+    local s_ip="$1" ds="$2" expect="$3"
+    local label="${4:-$ds}"
+    local log="$ITF_RUN_DIR/keystatus-${label}.log"
+    itf_guest_exec "$s_ip" "zfs get -H -o value keystatus $ds" > "$log" 2>&1
+    local got
+    got="$(tail -n 1 "$log")"
+    if [[ "$got" == "$expect" ]]; then
+        itf_step pass "keystatus $expect [$label]" "$ds"
+        return 0
+    fi
+    itf_step fail "keystatus $expect [$label]" \
+        "$ds reports '$got' — see $(basename "$log")"
+    return 1
+}
+
+# _itf_keystore_feed_wrong
+#
+# The wrong-passphrase feed (S4): distinct bytes, same handling rules as
+# the real one — mode 600, no trailing newline, never in a command
+# string, step message, or log.
+_itf_keystore_feed_wrong() {
+    local feed="$ITF_RUN_DIR/keystore-passphrase-wrong"
+    printf '%s-wrong' "$ITF_KEYSTORE_PASSPHRASE" > "$feed"
+    chmod 600 "$feed"
+    echo "$feed"
+}
+
+# itf_keystore_unlock_mount_wrong <s_ip>
+#
+# The mistyped-passphrase attempt: luksOpen fed the WRONG bytes must
+# fail cleanly and leave no mapper behind.  A zero rc here would mean
+# the wrong passphrase opened the store — a hard failure (and the
+# mapper gets closed again).
+itf_keystore_unlock_mount_wrong() {
+    local s_ip="$1"
+    _itf_keystore_wait_sdc "$s_ip" > /dev/null 2>&1
+    local feed log rc
+    feed="$(_itf_keystore_feed_wrong)"
+    log="$ITF_RUN_DIR/keystore-unlock-wrong.log"
+    itf_guest_exec_feed "$s_ip" "$feed" \
+        "cryptsetup luksOpen --key-file - /dev/sdc keys" > "$log" 2>&1
+    rc=$?
+    itf_artifact "keystore-unlock-wrong" "$log"
+    if [[ $rc -eq 0 ]]; then
+        itf_step fail "wrong passphrase rejected" \
+            "luksOpen SUCCEEDED with wrong bytes — mapper closed, file a finding"
+        itf_guest_exec "$s_ip" "cryptsetup luksClose keys" > /dev/null 2>&1 || true
+        return 1
+    fi
+    if itf_guest_exec "$s_ip" "test ! -e /dev/mapper/keys"; then
+        itf_step pass "wrong passphrase rejected" \
+            "luksOpen failed cleanly, no mapper left behind (see $(basename "$log"))"
+        return 0
+    fi
+    itf_step fail "wrong passphrase rejected" \
+        "luksOpen failed but /dev/mapper/keys exists — see $(basename "$log")"
+    return 1
+}
+
+# itf_key_ceremony <label> <s_base> <s_vmid> <s_ip> [recover|add]
+#
+# The operator's full key ceremony after a keys-absent boot — the
+# documented sequence, blind-recovery shaped: insert the key device,
+# luksOpen + mount the store, load the ZFS keys, run
+# iscsi-recover-encrypted-luns (default) or iscsi-add-encrypted-luns
+# (the zfs-keys.md path), then umount + luksClose + detach.  Every step
+# is a product-documented command; the caller adds its own output-line
+# gates on the recover/add transcript.
+itf_key_ceremony() {
+    local label="$1" s_base="$2" s_vmid="$3" s_ip="$4" mode="${5:-recover}"
+    itf_keystore_insert "$s_base" "$s_vmid" || return 1
+    itf_keystore_unlock_mount "$s_ip" || return 1
+    itf_storage_load_keys "$s_ip" || return 1
+    local cmd="iscsi-recover-encrypted-luns"
+    [[ "$mode" == add ]] && cmd="iscsi-add-encrypted-luns"
+    local log="$ITF_RUN_DIR/${mode}-encrypted-${label}.log"
+    itf_guest_exec "$s_ip" "bash -lc '$cmd'" > "$log" 2>&1
+    local rc=$?
+    itf_artifact "$mode-encrypted-$label" "$log"
+    if [[ $rc -ne 0 ]]; then
+        itf_step fail "encrypted LUNs recovered [$label]" \
+            "$cmd rc=$rc — see $(basename "$log")"
+        return 1
+    fi
+    itf_step pass "encrypted LUNs recovered [$label]" \
+        "$cmd rc=0 — see $(basename "$log")"
+    itf_keystore_lock_umount "$s_ip" || return 1
+    itf_keystore_remove "$s_base" "$s_vmid" || return 1
+    return 0
+}
+
+# itf_storage_boot_state <s_ip> <label>
+#
+# Captures the CURRENT boot's evidence from the storage guest: the
+# rtslib-fb-targetctl unit journal (the drop-in echoes + verifier
+# verdict + DRIFT detail), a cross-unit ordering snapshot (ZFS import vs
+# the restore), and the pre-start backup file posture — the backup lands
+# at /etc/rtslib-fb-target/saveconfig.json.pre-start and no stray
+# root-level /.pre-start remains (the wrong-path artifact an earlier
+# drop-in revision wrote).  Run before any other reboot.
+itf_storage_boot_state() {
+    local s_ip="$1" label="$2"
+    local journal="$ITF_RUN_DIR/boot-${label}.journal"
+    local order="$ITF_RUN_DIR/boot-${label}.order"
+    # The verifier ExecStartPost can still be running when sshd answers
+    # (the encrypted-LUN adds shift it later); wait (bounded) for its
+    # verdict line before capturing so the parser sees a finished boot.
+    local verdict_start=$SECONDS
+    until (( SECONDS - verdict_start >= "${ITF_BOOT_VERDICT_WAIT:-120}" )); do
+        if itf_guest_exec "$s_ip" \
+                'journalctl -b -u rtslib-fb-targetctl.service --no-pager \
+                    | grep -q "post-restore verification"'; then
+            break
+        fi
+        sleep "${ITF_BOOT_VERDICT_POLL:-5}"
+    done
+    # shellcheck disable=SC2016  # expansions run in the guest
+    if ! itf_guest_exec "$s_ip" \
+            'journalctl -b -u rtslib-fb-targetctl.service --no-pager' \
+            > "$journal" 2>/dev/null; then
+        itf_step fail "boot journal captured [$label]" \
+            "journalctl failed on the storage guest"
+        return 1
+    fi
+    itf_artifact "boot-journal-$label" "$journal"
+    # shellcheck disable=SC2016  # expansions run in the guest
+    if ! itf_guest_exec "$s_ip" \
+            'journalctl -b --no-pager | grep -nE "zfs-import-cache\.service|zfs-import\.target|targetctl:" || true' \
+            > "$order" 2>/dev/null; then
+        itf_step fail "boot order snapshot [$label]" "journalctl grep failed"
+        return 1
+    fi
+    itf_artifact "boot-order-$label" "$order"
+    # shellcheck disable=SC2016  # expansions run in the guest
+    if itf_guest_exec "$s_ip" \
+            'test -f /etc/rtslib-fb-target/saveconfig.json.pre-start && test ! -e /.pre-start'; then
+        itf_step pass "pre-start backup posture [$label]" \
+            "saveconfig.json.pre-start present; no stray /.pre-start"
+    else
+        itf_step fail "pre-start backup posture [$label]" \
+            "backup file missing or stray /.pre-start exists"
+        return 1
+    fi
+    return 0
+}
+
+# itf_boot_journal_verdict <journal-log> <order-log> <ok|failed> <lun>...
+#
+# Pure parser over itf_storage_boot_state's captures (unit-testable with
+# fixtures).  Asserts, in order:
+#   - the first ZFS-import mention precedes the restore line (the
+#     drop-in's import gating, from the cross-unit snapshot);
+#   - the unit journal shows the pre-start backup echo, then the
+#     boot-config restore echo, then the verdict line;
+#   - mode failed: every named encrypted LUN appears on a DRIFT line
+#     AFTER the verdict (the check's re-emitted detail);
+#   - mode ok: every named encrypted LUN appears on an "✓ Added" line
+#     from the ExecStartPost add hook BEFORE the verdict.
+# Echoes the verdict word on stdout; rc 1 (with reasons on stderr) when
+# any assertion fails.  Tolerant of the stderr script:line: prefixes the
+# product's journald lines carry.
+itf_boot_journal_verdict() {
+    local journal="$1" order="$2" mode="$3"
+    shift 3
+    local -a luns=("$@")
+    local bad=0
+
+    local import_n restore_n
+    import_n="$(grep -nE 'zfs-import-cache\.service|zfs-import\.target' "$order" 2>/dev/null \
+        | head -n 1 | cut -d: -f1)"
+    restore_n="$(grep -n 'targetctl: restoring boot config' "$order" 2>/dev/null \
+        | head -n 1 | cut -d: -f1)"
+    if [[ -z "$import_n" || -z "$restore_n" ]] \
+            || (( import_n >= restore_n )); then
+        echo "import-order: import@${import_n:-none} restore@${restore_n:-none}" >&2
+        bad=1
+    fi
+
+    local backup_n unit_restore_n verdict_n=""
+    backup_n="$(grep -n 'targetctl: backed up saveconfig.json' "$journal" 2>/dev/null \
+        | head -n 1 | cut -d: -f1)"
+    unit_restore_n="$(grep -n 'targetctl: restoring boot config' "$journal" 2>/dev/null \
+        | head -n 1 | cut -d: -f1)"
+    if [[ "$mode" == ok ]]; then
+        verdict_n="$(grep -n 'post-restore verification OK' "$journal" 2>/dev/null \
+            | head -n 1 | cut -d: -f1)"
+    else
+        verdict_n="$(grep -n 'post-restore verification FAILED' "$journal" 2>/dev/null \
+            | head -n 1 | cut -d: -f1)"
+    fi
+    if [[ -z "$backup_n" || -z "$unit_restore_n" || -z "$verdict_n" ]] \
+            || (( backup_n >= unit_restore_n || unit_restore_n >= verdict_n )); then
+        echo "order: backup@${backup_n:-none} restore@${unit_restore_n:-none}" \
+            " verdict@${verdict_n:-none}" >&2
+        bad=1
+    fi
+
+    local lun line_n
+    if [[ "$mode" == ok ]]; then
+        for lun in "${luns[@]}"; do
+            line_n="$(grep -n "✓ Added ${lun} (LUN" "$journal" 2>/dev/null \
+                | head -n 1 | cut -d: -f1)"
+            if [[ -z "$line_n" ]] || (( line_n >= verdict_n )); then
+                echo "added: ${lun}@${line_n:-none}" >&2
+                bad=1
+            fi
+        done
+        echo ok
+    else
+        for lun in "${luns[@]}"; do
+            line_n="$(grep -n "DRIFT: .*${lun}" "$journal" 2>/dev/null \
+                | head -n 1 | cut -d: -f1)"
+            if [[ -z "$line_n" ]] || (( line_n <= verdict_n )); then
+                echo "drift: ${lun}@${line_n:-none}" >&2
+                bad=1
+            fi
+        done
+        echo failed
+    fi
+    (( bad )) && return 1
+    return 0
+}
+
+# itf_storage_reboot_assert <label> <s_ip> <ok|failed> <lun>...
+#
+# Post-reboot boot evidence as one gated step: capture the boot state,
+# then run the journal parser in the requested mode with the scenario's
+# encrypted LUNs.  This is the P6-oracle assertion — verdict, ordering,
+# and per-LUN DRIFT/Added naming.
+itf_storage_reboot_assert() {
+    local label="$1" s_ip="$2" mode="$3"
+    shift 3
+    itf_storage_boot_state "$s_ip" "$label" || return 1
+    local verdict
+    if verdict="$(itf_boot_journal_verdict \
+            "$ITF_RUN_DIR/boot-${label}.journal" \
+            "$ITF_RUN_DIR/boot-${label}.order" \
+            "$mode" "$@" 2> "$ITF_RUN_DIR/boot-${label}.verdict.err")"; then
+        itf_step pass "boot journal oracle [$label]" \
+            "verdict=$verdict; order + per-LUN naming asserted"
+        return 0
+    fi
+    itf_step fail "boot journal oracle [$label]" \
+        "see boot-${label}.verdict.err / boot-${label}.journal"
+    return 1
+}
+
+# itf_vm_disk_links_present <c_ip> <vmid>...
+#
+# True when every /dev/disk/by-path link referenced by the given VMs'
+# configs exists on the compute guest — the fence's own health rule,
+# used to classify what returned unaided vs. what needed a rescan.
+itf_vm_disk_links_present() {
+    local c_ip="$1"
+    shift
+    local vm confs="" script
+    for vm in "$@"; do
+        confs+=" /etc/pve/qemu-server/${vm}.conf"
+    done
+    # shellcheck disable=SC2016  # expansions run in the guest
+    script='
+        missing=0
+        for conf in@CONFS@; do
+            if [[ ! -f "$conf" ]]; then
+                echo "missing-conf: $conf"
+                missing=1
+                continue
+            fi
+            for dev in $(awk "/^scsi[0-9]+: .dev.disk.by-path./ {print \$2}" "$conf" | cut -d, -f1); do
+                if [[ ! -e "$dev" ]]; then
+                    echo "missing: $dev"
+                    missing=1
+                fi
+            done
+        done
+        exit $missing
+    '
+    script="${script//@CONFS@/$confs}"
+    itf_guest_exec "$c_ip" "$script"
+}
+
+# itf_wait_vm_disk_links <c_ip> <timeout-seconds> <vmid>...
+#
+# Bounded poll until itf_vm_disk_links_present succeeds; echoes the
+# elapsed seconds at success (0 = the links were already back — nothing
+# manual was needed).
+itf_wait_vm_disk_links() {
+    local c_ip="$1" timeout="$2"
+    shift 2
+    local start=$SECONDS
+    while (( SECONDS - start < timeout )); do
+        if itf_vm_disk_links_present "$c_ip" "$@" > /dev/null 2>&1; then
+            echo $(( SECONDS - start ))
+            return 0
+        fi
+        sleep "${ITF_LINK_POLL_INTERVAL:-10}"
+    done
+    return 1
+}
+
+# itf_compute_fallout_sample <c_ip> <label> <vmid>...
+#
+# One labeled snapshot of the compute node's user-visible state: iSCSI
+# sessions, by-path links, and per-VM qm status — taken before, during,
+# and after disruptive events.  Observation only; never a gate.
+itf_compute_fallout_sample() {
+    local c_ip="$1" label="$2"
+    shift 2
+    local vm cmd
+    # shellcheck disable=SC2016  # expansions run in the guest
+    cmd='
+        echo "== date =="; date "+%F %T"
+        echo "== iscsi sessions =="
+        iscsiadm -m session 2>&1 || true
+        echo "== disk by-path links =="
+        ls -l /dev/disk/by-path/ 2>&1 | grep -i iscsi || true
+    '
+    for vm in "$@"; do
+        # shellcheck disable=SC2029  # vmid expands host-side by design
+        cmd+="
+        echo \"== qm status $vm ==\"
+        qm status $vm 2>&1 || true
+        "
+    done
+    local log="$ITF_RUN_DIR/fallout-${label}.log"
+    itf_guest_exec "$c_ip" "$cmd" > "$log" 2>&1
+    itf_artifact "fallout-$label" "$log"
+    itf_step info "compute fallout sampled [$label]" "see fallout-${label}.log"
+    return 0
+}
+
+# itf_fence_tick <c_ip> <label>
+#
+# One manual fence tick on the compute guest: start the fence service
+# (Type=oneshot — its rc IS the tick's verdict), then capture what the
+# tick journaled since it began.  Returns the tick's rc.
+itf_fence_tick() {
+    local c_ip="$1" label="$2"
+    local log="$ITF_RUN_DIR/fence-tick-${label}.log"
+    # shellcheck disable=SC2016  # expansions run in the guest
+    itf_guest_exec "$c_ip" '
+        since=$(date "+%F %T")
+        systemctl start zfsutilities-iscsi-fence.service
+        rc=$?
+        echo "tick-rc: $rc"
+        journalctl -u zfsutilities-iscsi-fence.service --since "$since" --no-pager
+        exit $rc
+    ' > "$log" 2>&1
+    local rc=$?
+    itf_artifact "fence-tick-$label" "$log"
+    return "$rc"
+}
+
+# itf_vm_evidence <c_ip> <vmid> <label>
+#
+# Saves a workload sample + checksum pair under <label> (fallout
+# evidence around disruptive events).  rc 1 when the agent channel is
+# down — itself a scenario signal the caller records and classifies.
+itf_vm_evidence() {
+    local c_ip="$1" vm="$2" label="$3"
+    local sample="$ITF_RUN_DIR/workload-${label}-${vm}.txt"
+    local cksum="$ITF_RUN_DIR/workload-${label}-${vm}.cksum"
+    if ! itf_vm_workload_sample "$c_ip" "$vm" > "$sample" 2>/dev/null; then
+        echo "agent-channel-down" > "$sample"
+        itf_artifact "workload-$label-$vm" "$sample"
+        return 1
+    fi
+    itf_vm_workload_checksum "$c_ip" "$vm" > "$cksum" 2>/dev/null || true
+    itf_artifact "workload-$label-$vm" "$sample"
+    itf_artifact "workload-cksum-$label-$vm" "$cksum"
+    return 0
+}
+
+# itf_vm_workload_wait_sample <c_ip> <vmid> <out-file> [timeout-seconds]
+#
+# Bounded poll for a GROWING workload sample (>= 2 timestamps): the
+# writer is nohup'd inside the VM and its first append can lag the
+# agent call by seconds, so a single immediate sample races it.
+itf_vm_workload_wait_sample() {
+    local c_ip="$1" vm="$2" out="$3" timeout="${4:-120}"
+    local start=$SECONDS
+    while (( SECONDS - start < timeout )); do
+        if itf_vm_workload_sample "$c_ip" "$vm" > "$out" 2>/dev/null \
+                && [[ $(wc -l < "$out") -ge 2 ]]; then
+            return 0
+        fi
+        sleep "${ITF_VM_SAMPLE_INTERVAL:-5}"
+    done
+    return 1
+}
+
+# itf_journey_stage_boot_workload_lab <gname> <s_base> <s_vmid> <s_ip> <c_ip>
+#
+# The j15 boot-and-keys staging tail on the encrypted two-node lab
+# (run AFTER j05_two_node_lab_main --encrypted-keys):
+#   - VM 101 becomes the everyday workload VM: its OS rides a plain 4G
+#     LUN (vm-101-disk-2, product-created), boot order scsi2, and the
+#     encrypted spare (vm-101-disk-1) is DETACHED from it — a storage
+#     reboot costs VM 101 a session drop, never the key ceremony.
+#   - VM 202 becomes the encrypted-root workload VM: its OS rides the
+#     product-created encrypted vm-202-disk-0.
+#   - both boot under TCG with the guest agent, run the 1 Hz writer,
+#     and are then parked stopped (the scenario posture); the fence
+#     timer premise and the P6 pre-reboot gates (safe-iscsi-save clean
+#     pass + export-iscsi-state --check OK) close the staging.
+itf_journey_stage_boot_workload_lab() {
+    local gname="$1" s_base="$2" s_vmid="$3" s_ip="$4" c_ip="$5"
+    local pool_a="zfstest1"
+    local key_path="/mnt/ZFSkeys/keys/${ITF_KEYFILE_NAME}"
+    local vm log
+
+    local gz="$ITF_CACHE_DIR/itf-vmos.raw.gz"
+    if [[ -s "$gz" ]]; then
+        itf_step pass "VM-OS image available" \
+            "$(du -h "$gz" | awk '{print $1}') cached"
+    else
+        itf_step fail "VM-OS image available" \
+            "no cached image at $gz — PREP: itf vmimage build"
+        return 1
+    fi
+
+    # The scenarios create disks on the other two test pools; the
+    # documented enrollment is the admin step a user does first.
+    local pool
+    for pool in zfstest2 zfstest3; do
+        log="$ITF_RUN_DIR/enroll-${pool}.log"
+        if itf_guest_exec "$s_ip" "bash -lc 'enroll-proxmox-pool $pool'" \
+                > "$log" 2>&1; then
+            itf_step pass "pool registered as PVE storage" \
+                "$pool on the compute host (see $(basename "$log"))"
+        else
+            itf_step fail "pool registered as PVE storage" \
+                "$pool — see $(basename "$log")"
+            return 1
+        fi
+    done
+
+    # --- VM 101: plain-OS everyday workload VM ---
+    log="$ITF_RUN_DIR/new-vm-disk-101-2.log"
+    if itf_guest_exec "$c_ip" "bash -lc 'new-vm-disk $pool_a 101 2 4G'" \
+            > "$log" 2>&1 \
+            && grep -q "✓ Configuration saved" "$log"; then
+        itf_step pass "plain OS LUN created" \
+            "vm-101-disk-2 (4G) through new-vm-disk (see $(basename "$log"))"
+        itf_artifact "new-vm-disk-101-2" "$log"
+    else
+        itf_step fail "plain OS LUN created" "see new-vm-disk-101-2.log"
+        return 1
+    fi
+    if itf_guest_exec "$c_ip" "qm set 101 --delete scsi1" \
+            > "$ITF_RUN_DIR/vm101-detach-scsi1.log" 2>&1; then
+        itf_step pass "encrypted spare detached from VM 101" \
+            "vm-101-disk-1 stays registered on the target, owned by no VM"
+    else
+        itf_step fail "encrypted spare detached from VM 101" \
+            "see vm101-detach-scsi1.log"
+        return 1
+    fi
+    itf_vmos_image_zvol "$s_ip" "${pool_a}/proxmox/vm-101-disk-2" || return 1
+
+    # --- VM 202: encrypted-OS workload VM ---
+    if itf_guest_exec "$c_ip" \
+            "bash -lc 'qm create 202 --name j15-vm202 --scsihw virtio-scsi-pci'" \
+            > "$ITF_RUN_DIR/qm-create-202.log" 2>&1; then
+        itf_step pass "VM 202 created (stopped)" \
+            "container for the encrypted-root workload VM"
+    else
+        itf_step fail "VM 202 created" "see qm-create-202.log"
+        return 1
+    fi
+    # The G0 lab tail ends in the production posture (store locked and
+    # detached) — new-vm-disk's key-path check runs on the STORAGE side,
+    # so the store must be present again for the encrypted OS LUN.
+    itf_keystore_insert "$s_base" "$s_vmid" || return 1
+    itf_keystore_unlock_mount "$s_ip" || return 1
+    if itf_new_vm_disk_encrypted "$c_ip" "$pool_a" 202 0 4G "$key_path" \
+            new-vm-disk-enc-202-0 \
+            && grep -q "✓ Configuration saved" \
+                "$ITF_RUN_DIR/new-vm-disk-enc-202-0.log" \
+            && itf_guest_exec "$c_ip" \
+                "grep -q '^scsi0: /dev/disk/by-path/' /etc/pve/qemu-server/202.conf"; then
+        itf_step pass "encrypted OS LUN created" \
+            "vm-202-disk-0 (4G) through new-vm-disk --encrypted"
+    else
+        itf_step fail "encrypted OS LUN created" \
+            "see new-vm-disk-enc-202-0.log"
+        return 1
+    fi
+    itf_vmos_image_zvol "$s_ip" "${pool_a}/proxmox/vm-202-disk-0" || return 1
+    # Back to the production posture: lock and detach — the key stays
+    # loaded with the device gone (what every scenario reboot starts
+    # from).
+    itf_keystore_lock_umount "$s_ip" || return 1
+    itf_keystore_remove "$s_base" "$s_vmid" || return 1
+
+    # Boot order: VM 101's root is the OS LUN (scsi2; scsi0 is blank).
+    if itf_guest_exec "$c_ip" "qm set 101 --boot order=scsi2" \
+            > "$ITF_RUN_DIR/vm101-boot-order.log" 2>&1; then
+        itf_step info "VM 101 boot order set" "scsi2 (the plain OS LUN)"
+    else
+        itf_step fail "VM 101 boot order set" "see vm101-boot-order.log"
+        return 1
+    fi
+
+    itf_vm_boot_with_agent "$c_ip" 101 || return 1
+    itf_vm_boot_with_agent "$c_ip" 202 || return 1
+    itf_vm_workload_start "$c_ip" 101 || return 1
+    itf_vm_workload_start "$c_ip" 202 || return 1
+
+    # Both writers checked in: a growing sample proves the agent channel
+    # and the LUN-backed root filesystem (polled — the first append lags
+    # the writer start by seconds).
+    local sample
+    for vm in 101 202; do
+        sample="$ITF_RUN_DIR/workload-staging-${vm}.txt"
+        if itf_vm_workload_wait_sample "$c_ip" "$vm" "$sample" \
+                && itf_vm_workload_gaps "$sample" 5 \
+                    > "$ITF_RUN_DIR/workload-staging-${vm}.gaps"; then
+            itf_step pass "writer baseline [VM $vm]" \
+                "$(cat "$ITF_RUN_DIR/workload-staging-${vm}.gaps")"
+            itf_artifact "workload-staging-$vm" "$sample"
+        else
+            itf_step fail "writer baseline [VM $vm]" \
+                "no clean growing sample — see workload-staging-${vm}.txt"
+            return 1
+        fi
+    done
+
+    # Fence premise: the boot scenarios lean on the timer the units
+    # activation installed (j14 proved installation; this is the
+    # runtime premise).
+    # shellcheck disable=SC2016  # expansions run in the guest
+    if itf_guest_exec "$c_ip" '
+            test "$(systemctl is-enabled zfsutilities-iscsi-fence.timer)" = enabled \
+            && test "$(systemctl is-active zfsutilities-iscsi-fence.timer)" = active
+        ' > "$ITF_RUN_DIR/fence-premise.log" 2>&1; then
+        itf_step pass "fence timer armed" \
+            "zfsutilities-iscsi-fence.timer enabled + active on compute"
+    else
+        itf_step fail "fence timer armed" "see fence-premise.log"
+        return 1
+    fi
+
+    # The P6 pre-reboot gates on the healthy lab.
+    itf_safe_save_gate "$s_ip" "$gname" || return 1
+    itf_iscsi_check_gate "$s_ip" "$gname" || return 1
+
+    # Final writer evidence, then park both VMs stopped (the posture
+    # every scenario reboot starts from).
+    for vm in 101 202; do
+        itf_vm_evidence "$c_ip" "$vm" "staging-final" || return 1
+    done
+    # shellcheck disable=SC2016  # expansions run in the guest
+    if itf_guest_exec "$c_ip" '
+            set -e
+            for vm in 101 202; do
+                qm shutdown $vm --timeout 45 || qm stop $vm
+                test "$(qm status $vm | awk "{print \$2}")" = stopped
+            done
+        ' > "$ITF_RUN_DIR/vm-park.log" 2>&1; then
+        itf_step pass "workload VMs parked" \
+            "both stopped; writers sampled + checksummed (see vm-park.log)"
+    else
+        itf_step fail "workload VMs parked" "see vm-park.log"
+        return 1
+    fi
+
+    # Storage posture snapshot for the report.
+    # shellcheck disable=SC2016  # expansions run in the guest
+    itf_guest_exec "$s_ip" '
+        echo "== encrypted-luns conf =="
+        cat /etc/zfsutilities/iscsi-encrypted-luns.conf
+        echo "== keystatus =="
+        zfs list -t volume -o name,keystatus | grep -E "vm-|^NAME"
+        echo "== backstores =="
+        targetcli ls /backstores 2>/dev/null || true
+    ' > "$ITF_RUN_DIR/storage-posture.log" 2>&1
+    itf_artifact "storage-posture" "$ITF_RUN_DIR/storage-posture.log"
+    return 0
+}
+
+# itf_single_node_lab_main <gname>
+#
+# The single-node lab prefix, factored from j04/j11: clone the
+# post-install baseline template, verify the installed state, and create
+# the documented three-RAIDZ1 test pools.  Sets J_VMID/J_GUEST_IP (the
+# clone stage's globals) for the caller's scenario stages.
+itf_single_node_lab_main() {
+    local gname="$1"
+
+    itf_journey_stage_from_template "$gname" || return 1
+
+    itf_journey_verify_installed "$J_GUEST_IP"
+
+    itf_journey_stage_test_pools "$gname" "${ITF_BASE_HOSTS[0]}" "$J_VMID" \
+        "$J_GUEST_IP" || return 1
     return 0
 }
 

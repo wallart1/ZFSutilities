@@ -194,6 +194,35 @@ build_efidisk_line() {
     echo "$line"
 }
 
+# --- Encrypted-LUN registration (runs on the storage host) ---
+# Registers the just-created backstore in the encrypted-LUNs conf.  The
+# conf line is name:device:target matched FULLY (F-027): a same-name
+# line naming a different device/target is stale (device moved, pool
+# renamed) or foreign (a shipped sample's entry) — the conf must end
+# describing the zvol just created, and the operator must see the
+# change (WARN with both lines, never a silent skip).
+# Extracted for unit testing.  Arguments:
+#   $1  backstore name
+#   $2  zvol device path
+#   $3  target short name
+register_encrypted_lun() {
+    local backstore_name="$1" zvol_dev="$2" target_short="$3"
+    local encrypted_entry old_entry
+    encrypted_entry="${backstore_name}:${zvol_dev}:${target_short}"
+    if grep -qxF "$encrypted_entry" "$encrypted_conf" 2>/dev/null; then
+        log_msg "INFO: ✓ Already in encrypted LUNs config"
+    elif grep -q "^${backstore_name}:" "$encrypted_conf" 2>/dev/null; then
+        old_entry=$(grep "^${backstore_name}:" "$encrypted_conf" | head -1)
+        sed -i "s|^${backstore_name}:.*|${encrypted_entry}|" "$encrypted_conf"
+        log_msg "WARN: Replaced encrypted LUNs config line for ${backstore_name}"
+        log_msg "WARN:   was: ${old_entry}"
+        log_msg "WARN:   now: ${encrypted_entry}"
+    else
+        echo "${encrypted_entry}" >> "$encrypted_conf"
+        log_msg "INFO: ✓ Added to encrypted LUNs config"
+    fi
+}
+
 # --- EFI initialization (runs on the compute host after zvol + LUN are set up) ---
 init_efi_disk() {
     local lun_num="$1"
@@ -548,13 +577,7 @@ if is_two_node; then
 
     # --- Register as encrypted LUN if applicable ---
     if [[ "$encrypted_flag" == true ]]; then
-        target_short="${target##*:}"
-        if [[ -f "$encrypted_conf" ]] && grep -q "^${backstore_name}:" "$encrypted_conf"; then
-            log_msg "INFO: ✓ Already in encrypted LUNs config"
-        else
-            echo "${backstore_name}:${zvol_dev}:${target_short}" >> "$encrypted_conf"
-            log_msg "INFO: ✓ Added to encrypted LUNs config"
-        fi
+        register_encrypted_lun "$backstore_name" "$zvol_dev" "${target##*:}"
     fi
 
     # --- Save targetcli config ---

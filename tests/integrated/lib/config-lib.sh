@@ -69,6 +69,10 @@ to run without a site configuration (fail-closed by design)."
     ITF_PVE_ISO_NAME="${ITF_PVE_ISO_NAME:-}"
     ITF_ISCSI_STORAGE_IP="${ITF_ISCSI_STORAGE_IP:-}"
     ITF_ISCSI_COMPUTE_IP="${ITF_ISCSI_COMPUTE_IP:-}"
+    # Optional encrypted-key lab keys (the LUKS key-device lab is opt-in;
+    # empty on sites that never run it, validated as a pair below).
+    ITF_KEYSTORE_PASSPHRASE="${ITF_KEYSTORE_PASSPHRASE:-}"
+    ITF_KEYFILE_NAME="${ITF_KEYFILE_NAME:-}"
 
     itf_config_validate \
         || itf_config_die "site configuration validation failed (see messages above)"
@@ -240,6 +244,35 @@ itf_config_validate() {
             problems=1
         fi
     done
+
+    # Encrypted-key lab (optional, opt-in — used only by journeys that
+    # provision the LUKS key-device lab): the LUKS passphrase for the lab
+    # key device and the key-file name stored on it.  Both or neither.
+    # The passphrase is a secret: real values live only in the gitignored
+    # site config, never in this repository.
+    if [[ -n "${ITF_KEYSTORE_PASSPHRASE:-}" || -n "${ITF_KEYFILE_NAME:-}" ]]; then
+        if [[ -z "${ITF_KEYSTORE_PASSPHRASE:-}" || -z "${ITF_KEYFILE_NAME:-}" ]]; then
+            echo "itf-config: ITF_KEYSTORE_PASSPHRASE and ITF_KEYFILE_NAME" \
+                "must be set together" >&2
+            problems=1
+        fi
+        if [[ -n "${ITF_KEYSTORE_PASSPHRASE:-}" ]]; then
+            if (( ${#ITF_KEYSTORE_PASSPHRASE} < 8 )); then
+                echo "itf-config: ITF_KEYSTORE_PASSPHRASE must be at least 8 characters" >&2
+                problems=1
+            fi
+            # The passphrase travels through feed files and stdin pipes as
+            # a whole string; an embedded newline would split it.
+            if [[ "$ITF_KEYSTORE_PASSPHRASE" == *$'\n'* ]]; then
+                echo "itf-config: ITF_KEYSTORE_PASSPHRASE must not contain newlines" >&2
+                problems=1
+            fi
+        fi
+        if [[ -n "${ITF_KEYFILE_NAME:-}" && ! "${ITF_KEYFILE_NAME:-}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "itf-config: ITF_KEYFILE_NAME has invalid characters: $ITF_KEYFILE_NAME" >&2
+            problems=1
+        fi
+    fi
 
     case "${ITF_SW_SOURCE:-}" in
         release|dev-tarball) ;;

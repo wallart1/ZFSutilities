@@ -142,7 +142,7 @@ for target in config.get("targets", []):
             if not any(n in lun.get("storage_object", "") for n in skip)
         ]
         kept_indexes = {lun.get("index") for lun in tpg["luns"]}
-        for acl in tpg.get("acls", []):
+        for acl in tpg.get("node_acls", []):
             acl["mapped_luns"] = [
                 ml for ml in acl.get("mapped_luns", [])
                 if ml.get("tpg_lun") in kept_indexes
@@ -213,7 +213,7 @@ def acl_grants(cfg):
     for target in cfg.get("targets", []):
         wwn = target.get("wwn", "")
         for tpg in target.get("tpgs", []):
-            for acl in tpg.get("acls", []):
+            for acl in tpg.get("node_acls", []):
                 init = acl.get("node_wwn", "")
                 for ml in acl.get("mapped_luns", []):
                     tpg_lun = ml.get("tpg_lun")

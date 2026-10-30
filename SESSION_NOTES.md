@@ -974,3 +974,271 @@ mkdocs --strict rc=0; full non-soak run 106 suites green (5721 passed,
 0 failed, standing preflight skips only). Remaining Phase 6 halves (on
 cue): commit/release/publish + production deploy and the reboot
 exercise.
+
+## 2026-10-28 — ITF recovery-scenario campaign, Phase G0 (lab foundation)
+
+Approved plan executed (pub lane; campaign plan rev 3, plan dir file "ITF
+Recovery-Scenario Campaign"). G0 code complete and green; verification
+journeys in flight at note time:
+
+- Keystore site-config pair (ITF_KEYSTORE_PASSPHRASE/ITF_KEYFILE_NAME,
+  both-or-neither) in config-lib + config.example; real gitignored
+  site/config got a generated random passphrase.
+- Pool-recipe dedupe: itf_journey_stage_test_pools in common.sh; j01/j04/
+  j05/j11 converted (j04 added beyond the plan's named three — same
+  duplicated block). itf_single_node_lab_main behind j04/j11.
+- VM-OS image: self-built minimal Debian via the existing preseed
+  machinery (user steered off Alpine — its prebuilt images lack
+  qemu-guest-agent, which would have forced a cloud-init bake pass).
+  lib/vmos-lib.sh + `itf vmimage build|status`; dump is an audit-logged
+  base-side dd of the stopped build guest's disk (pvesm path extended,
+  itf-volumes only); build self-verifies by restoring onto a blank disk,
+  booting it, and requiring qm guest ping. First live run wedged on the
+  installer-time CPU freeze (--freeze 1 survives the install; every
+  later start sits frozen) — fixed by clearing --freeze 0 before the
+  verify boot; regression-pinned in the suite. Image is ~1G gz (Debian
+  standard tasksel; slimmer if ever wanted).
+- Agent-channel workload helpers (boot gate TCG, 1 Hz timestamp writer
+  with per-tick sync on the LUN-backed root fs, sample/checksum via
+  ast.literal_eval of qm's repr output, stall-gap parser), reboot stage
+  (in-guest reboot rc-255 tolerated; --power variant; DHCP rediscovery
+  rewrites guest-<role>.txt), LUKS keystore helpers (passphrase only
+  ever via stdin key-file; production-verbatim fstab line; volid
+  capture/re-attach), itf_journey_stage_encrypted_key_lun behind
+  j05_two_node_lab_main --encrypted-keys (default off; j06/j07/j13/j14
+  untouched).
+- New suite tests/test-itf-lab-stages (in-process sourced stages with
+  stubbed transports + DRY_RUN/dispatch checks); pvesm tests widened in
+  test-itf-base-guard; keystore schema tests in test-itf-config.
+- Docs: integrated-testing.md (site keys, vmimage, recovery-scenario lab
+  layer section, framework-suite list), testing.md suite row,
+  tests/integrated/README.md roadmap row 3.9, journeys/README.md lab
+  layer, common.sh header. PREEXISTING.md stays empty in this lane.
+- Pending at note time: second vmimage build (freeze fix) verifying;
+  then j04 -> j05 plain -> j05 --encrypted-keys journey runs; full
+  non-soak suite; final report. No commits (user cue only).
+
+G0 outcome (final): all gates green. Verification runs — j04 12/0,
+j05 plain 34/0 (campaign gate), j05 --encrypted-keys 46/0 (LUKS device
+stdin-fed, encrypted vm-101-disk-1 through the product with the key
+prompt answered over the compute->storage re-exec, registration
+verified, locked-and-removed posture with keystatus available,
+enc-lab-ready snapshot). Full non-soak suite green (107 suites, 0
+failed, standing preflight skip). Product defect found and filed:
+F-027 (new-vm-disk's encrypted-LUN registration matches the backstore
+name prefix only; the installer-seeded site sample collides and
+silently suppresses registration) + repair-plan 022 awaiting approval;
+the lab stages a fresh-host empty conf around it. Three vmimage-build
+live fixes along the way, all regression-pinned: installer CPU-freeze
+survives the install (clear --freeze 0 before later starts), install
+disk size must match the image size (--sysdisk plumbed through
+stage_os), and the agent ping form is `qm agent <vmid> ping` (no
+`qm guest ping` on PVE 9; VMID before command). VM-OS image cached
+(879M gz; Debian standard install — heavier than the plan's "tens of
+MB" Alpine sketch, fine at one-time cost; slimmer preseed possible if
+ever wanted). Next phase: G1 (j15-iscsi-boot-keys).
+
+G1 progress (j15-iscsi-boot-keys), first working session 2026-10-28:
+detailed coding plan approved through plan mode (boot-verdict oracle
+settled with the user first: assert the documented FAILED+DRIFT
+semantics; the campaign's S1c "next boot OK" and S5 "verifier OK at
+boot" wordings diverge from the code — nothing loads zvol keys at boot,
+and export-iscsi-state has no encrypted-awareness — so those
+divergences are FINDINGS, not journey failures; S1c re-pointed to
+second-boot FAILED shape + within-boot convergence via manual --check;
+S5 split into S5a (file:// still FAILED) + S5b (the legitimate boot OK:
+all registered encrypted LUNs migrated to /root/keys keylocations + a
+lab-authored itf-zfs-load-keys.service ordered Before the restore —
+the drop-in's "separate key-loading unit" clause)). Implemented:
+common.sh gained the G1 section (reboot stage split into
+itf_reboot_guest_begin/wait with the outage window between; boot-workload
+staging stage; key ceremony; boot-state capture + pure journal-order
+parser; load-keys gated on keystatus because zfs load-key -a's exit
+code is noisy about already-loaded keys — no passwordless sudo on the
+dev host to pin the exact rc semantics empirically, so the helper gates
+on the operator-visible outcome instead; keystatus; wrong-passphrase
+unlock; new-vm-disk --encrypted runner; save/check gates; link-presence
+pollers; fence tick; fallout sample; workload evidence). j15 journey
+written (S1, S1c, S1b with --power for a deterministic outage window,
+S2, S3, S4a+S4b via load-key -n (unload-key is impossible with live
+backstores holding the zvols open), M4 via load-key -n -L (pool A's key
+offered to pool B without touching any file), M1 three bad key paths
+against a fresh VM 301, S5a, S5b, wrap). test-itf-lab-stages extended
+(G1 block incl. journal-parser fixtures and the boot-workload staging
+orchestration; the G0 power-path test's vacuous exact-shape guard
+replaced with strict asserts and its step names updated for the
+begin/wait split), test-itf-driver journey list gained j15, shellcheck
+clean, affected suites green. Docs updated (integrated-testing.md
+recovery-scenario section + framework-tests paragraph, journeys/README
+lab layer + j15 row, tests/integrated README roadmap 3.9). Pending:
+full suite, then the live journey run (detached + watch), FINDINGS rows
+for the two doc-claim divergences plus whatever the run surfaces, final
+report. No commits.
+
+G1 outcome (final): GREEN — j15-iscsi-boot-keys 247 steps, 218 pass,
+0 fail, 29 info (results/run-20261029-014746-j15-iscsi-boot-keys),
+after 8 run/fix cycles (each --rerun replayed the lab from as-cloned,
+~30-40 min to the first scenario gate). Product defect found + fixed
+in-cycle: F-028 — the boot drop-in's post-restore verifier wrapper
+swallowed the DRIFT detail because systemd expands % specifiers in Exec
+lines and %s became /bin/bash (root's shell); the drop-in escaped $$
+but not %%; fixed to printf "%%s\n" + comment (share/two-node/
+rtslib-fb-targetctl-boot-config.conf), live-verified via unit restart
+AND by the green S1 journal oracle (DRIFT lines now journalled under
+FAILED). Only site: the one printf — no other unescaped % in shipped
+Exec lines; 0.135.0 not yet deployed anywhere, so no production
+exposure. Two G0 mock-fidelity bugs found by first live exercise:
+qm guest exec payload key is "out-data" (parser read "out" — fixtures
+invented the wrong shape; parser + fixtures fixed, wait-sample poll
+added for the writer's first-append lag). Scenario truths learned and
+asserted honestly: keys-absent boots always journal FAILED+DRIFT
+(cycle idempotent, convergence within-boot via manual --check); the
+encrypted-root VM "starts" on a stale device node and never boots (no
+abort signal — F-030); sessions cling 24h behind PVE's patched
+replacement timeout so the fence is blind to a total storage outage
+(F-031); links re-login automatically after return but BOTH running
+VMs (plain and encrypted root) need a stop/start — writers stay
+stalled (F-032); restart-iscsi-services' Added lines land in the unit
+journal (drop-in hook) not the script transcript — its own shape is
+the "✓ configured" status block; S5b PROVED the boot-time OK:
+itf-zfs-load-keys.service (After zfs-import*, Before restore) + all
+registered encrypted LUNs migrated to file:///root/keys → Added lines
+then post-restore verification OK (ordering prototype for a shipped
+optional unit). Reboot stage gained a gone-first wait phase (in-guest
+reboot races sshd shutdown); boot-state capture gained a bounded
+verdict-wait (sshd can beat the ExecStartPost chain). FINDINGS filed:
+F-029..F-032 (F-029 doc-claim pair incl. the S5b nuance; F-030..F-032
+UX rows → REQUIREMENTS at G5). Docs corrected to the proven shapes
+(integrated-testing.md j15 paragraph, journeys/README j15 row). Guests
+of the green run left in place for inspection (zfstestvm1/8001
+storage, zfstestvm2/8001 compute) — destroy with itf guest destroy
+when done. Next phase: G2 (j16-iscsi-total-loss) on user cue.
+
+## 2026-10-30 — ITF recovery-scenario campaign, Phase G2 (j16-iscsi-total-loss)
+
+Approved plan executed (pub lane; campaign plan rev 3 + agent-made coding
+plan; S18 oracle settled with the user first — Option 1, assert the
+documented one-sided-pool tolerance; ruling recorded in the shared topic
+file). G2 code complete and green: j16 164 pass / 0 fail / 27 info
+(run-20261030-033206, after 14 run/fix cycles — each --rerun replays the
+lab from as-cloned, ~30 min to the first scenario gate), j13 regression
+green, j14 regression green, full suite green, mkdocs rebuilt (standing
+nag only). Guests of the green runs destroyed; PREEXISTING.md unchanged
+(empty — every find was in-scope).
+
+- j16 scenarios (on the full j15 encrypted workload lab; keys stay
+  loaded — no storage reboot in this journey): S6 all-mappings+
+  backstores destroyed live (setup-iscsi-targets' VM-refs signature +
+  declined reconcile offer, --check drifting on every LUN, map-driven
+  rebuild of all 4 incl. encrypted, running-VM fallout: both writers
+  REQUIRED stop/start — F-032's shape again); S9 the 3-of-33 incident
+  shape (PVE start abort on the vanished link, safe-iscsi-save
+  mapping-loss FATAL, --check naming the LUN, repair-iscsi-luns
+  re-mapping at the recorded index); S7a targets-intact wipe →
+  iscsi-restore-luns full restore incl. both ACL nodes + the staged
+  non-identity mapped_lun 8→0; S7b targets-too wipe (clean initiator
+  logout first — PVE's probes storm the shared wildcard portal — then
+  restore-luns honestly refuses, setup rebuilds + saves (overwriting
+  the records: the authority-gap FINDING), declined offer, map-driven
+  reconcile, explicit re-login); S8 corrupt saveconfig (restart
+  restores from boot config; .pre-start preserves the corrupt bytes;
+  degraded-gate save refusal; force escape targetcli saveconfig heals;
+  recover-encrypted refuses without saveconfig indexes — its indexes
+  are saveconfig-read, not map-read; reconcile completes; verdict
+  FAILED honestly recorded); S8b fallback branch fails loudly
+  (Result=exit-code); S18a/S18b pool identity per the ruling
+  (--check silent on the exported pool; GUID-change DRIFT + convergence
+  through the operator-confirmed safe-iscsi-save).
+- Product defects found + fixed in-cycle, all red-proven: F-033
+  iscsi-lib query ssh without -n drained piped feeds (setup's reconcile
+  offer died at read under set -e); F-035 reconcile's ACL grant loop
+  collided with rtslib's auto-grant at node creation (presence-checked
+  now; mock upgraded to real semantics); F-036 ALL saveconfig ACL
+  readers used the wrong TPG key — real schema is node_acls (restore-
+  luns's ACL restore, safe-iscsi-save's P1 grant gate, the boot-config
+  ACL pruning were silent no-ops against every real file); fixtures
+  moved to the real schema. F-027 (plan 022, user-approved mid-turn):
+  new-vm-disk's encrypted-LUN registration now full-line matches
+  name:device:target (same-name/different-device replaced with a WARN);
+  remove-vm-disk mirrors it; extracted register_encrypted_lun/
+  remove_encrypted_lun_entry per the suites' pattern.
+- Filed open: F-034 (setup's portal step a structural no-op — the
+  0.0.0.0 wildcard blocks every specific-portal add; WARN on healthy
+  systems), F-037 (total-loss authority chain: setup's bare save
+  destroys the saveconfig records; the map carries ACL names but no
+  grant indexes), F-038 (UX: check-prerequisites --two-node green on a
+  fully-unmapped target), F-039 (campaign-plan S18 wording vs the
+  documented tolerance — user-owned file).
+- Harness learnings pinned in the shared itf-harness-traps memory:
+  targetcli ls dot-leaders/leading-space parsing, the acls-ls IQN
+  rendering (a wipe loop must iterate node.conf-derived IQNs), the
+  PVE-probe login storm vs sibling target deletions, the auto-grant
+  and node_acls semantics.
+- Docs: journeys/README j16 row, integrated README roadmap 3.9,
+  integrated-testing.md j16 section, messages manual rows for the 022
+  WARNs. test-itf-driver journey list +j16. No commits (user cue).
+  Next phase: G3 (j17-iscsi-interrupted-ops) on user cue.
+
+## 2026-10-30 — G3: j17-iscsi-interrupted-ops (campaign phase G3)
+
+- User approved the G3 plan (same session). Scope: S10-S14 + M2/M3/M5
+  on the composed j15 encrypted workload lab (keys stay loaded; VMs
+  parked; service restarts only, never a storage reboot).
+- j17-iscsi-interrupted-ops.journey written (shellcheck clean):
+  SIGINT machinery via j12's generated-script pattern (setsid +
+  transcript marker + kill -INT on the group), j16's IQN/inventory
+  helpers copied journey-local, scenario order M5 -> S13 -> M2 -> M3 ->
+  S11 -> S10 -> S14 -> S12 (victim dependencies; VM 304 created as the
+  S13 config container — VM 301/303 belong to j15's scenario body and
+  don't exist in a lab-only composition).
+- Fixed during self-review before any run: two grep -vq misuses
+  (inversion+quiet never proves absence), map_n arithmetic compare,
+  wrap-block parameterization for S14's destroy-refused branch.
+- Code facts the oracles rest on (verified in tree): reconcile's apply
+  prompt accepts ONLY exact y/Y (M2 should pass as a safe-default
+  proof); NO locking anywhere in reconcile/restore-luns/safe-iscsi-save
+  (S12 = expected FINDING); export-iscsi-state --check compares
+  topology not devices (S14's hand-destroyed zvol stays rc 0 silent
+  while the backstore lives); reconcile skips+keeps deleted-zvol map
+  entries (no removal planning exists) and its manifest regen silently
+  drops the name; remove-vm-disk FATALs on a missing zvol (no cleanup
+  path for the stale shape).
+- Docs + framework: journeys/README j17 row, integrated-testing.md
+  j17 section, roadmap 3.9 G3 sentence, test-itf-driver journey list
+  +j17 (suite green). First journey run launching next; FINDINGS rows
+  (F-040+: S12 serialization, S14 stale-entry trap) to be filed from
+  live evidence per campaign discipline.
+- Run/fix loop to green (4 fix cycles, all journey-side; no product
+  code changed): run 1 exposed the SIGINT trap (non-interactive bash
+  SURVIVES a group SIGINT — child dies, script continues rc 0; probe
+  live-proven; j17_kill_run now uses kill -TERM per j12 precedent);
+  run 2 green through S10, S14 recorded the REFUSAL branch (zfs
+  destroy "dataset is busy" while LIO holds the zvol — the campaign's
+  stale-live-LUN premise is structurally fenced), S12's converge
+  assert was wrong (the race self-converged; re-run correctly a no-op
+  — assert now accepts both shapes); run 3 all-green except the wrap
+  (required saveconfig.json.pre-start, which exists only after a unit
+  restart — this journey never restarts when S14 skips; wrap now
+  requires the two save-written files and records .pre-start as
+  info); run 4 GREEN 131 pass / 0 fail / 15 info
+  (run-20261030-101505). Post-green honesty pass: journey summary
+  text + journeys/README + integrated-testing.md S14 wording moved
+  from the planned sweep to the live refusal outcome; final proving
+  rerun launched to bind the green report to the exact file.
+- FINDINGS filed from live evidence: F-040 (no serialization between
+  concurrent reconcile/restore-luns: restore silently skips its
+  collisions rc 0 while reconcile FATALs x5 AND installs a
+  comment-only manifest via its ensured-only regen — the -s byte
+  guard passes on comments — which its own save refuses; benign only
+  when the sibling's trailing save heals it; reconcile's summary also
+  prints plan-array counts, not apply successes) and F-041 (zfs
+  destroy of a live-exported zvol refused "dataset is busy" —
+  campaign S14 premise structurally fenced, wording fix awaits user
+  direction like F-039). M3's type-to-confirm gap stays a step-text
+  UX row (→ REQUIREMENTS at G5), consistent with F-032's treatment.
+- Harness traps pinned in itf-harness-traps memory: the SIGINT
+  survival law, the EBUSY fence, the S12 race shapes, the .pre-start
+  only-after-unit-start trap.
+- Full unit suite green at phase end (107 suites; itf suites
+  sandboxed, ran beside the live journey). No version bump, no
+  changelog, no commits (user cue).

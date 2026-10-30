@@ -1087,6 +1087,8 @@ See also [ensure-restored-vm-iscsi](#ensure-restored-vm-iscsi) under Restore and
 | `FATAL: Could not acquire write lock on ...` | The `<pool>/proxmox` write lock is unavailable | Script aborts; resolve the lock |
 | `FATAL: Device node ... did not appear after 10s` | The `/dev/zvol` node never appeared after creation | Script aborts; check udev and the pool state |
 | `INFO: ✓ Added to expected-backstores manifest` | The backstore was recorded in the manifest `safe-iscsi-save` requires; the manifest is created on first use when absent | Informational |
+| `INFO: ✓ Already in encrypted LUNs config` | The exact entry (`name:device:target`) being registered is already in the encrypted-LUNs conf | Informational |
+| `WARN: Replaced encrypted LUNs config line for ...` (with `was:`/`now:` lines) | The conf held the same backstore NAME on a different device/target — stale (device moved, pool renamed) or foreign (a shipped sample's entry); the line now describes the zvol just created (full-line match, F-027) | Verify the `was` line really described a different device before dismissing |
 | `WARN: OVMF firmware file not found: ...` | The EFI-vars firmware file is missing; a manual `dd` command is printed | EFI init skipped; install `pve-edk2-firmware` or run the printed command |
 | `WARN: Device not found: ...` | The by-path iSCSI device did not appear within 10s; manual `dd` instructions printed | EFI init skipped; follow the instructions |
 | `WARN: VM ... already has an efidisk0 entry — not replacing:` | An existing efidisk0 is preserved | Informational |

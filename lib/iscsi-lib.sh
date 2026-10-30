@@ -73,7 +73,9 @@ function iscsi_check_vm_running {
     if [[ "$node_mode" == "single-node" ]]; then
         status=$(qm status "$vmid" 2>/dev/null)
     else
-        status=$(ssh -o ConnectTimeout=5 -o BatchMode=yes root@"$compute_host" \
+        # -n: query-only ssh (remote_zfsutilities_bin's stdin-discipline
+        # rule — a bare ssh drains a piped-stdin answer feed).
+        status=$(ssh -n -o ConnectTimeout=5 -o BatchMode=yes root@"$compute_host" \
             "qm status $vmid 2>/dev/null" 2>/dev/null)
     fi
     if [[ -z "$status" ]]; then
@@ -475,7 +477,10 @@ detect_manifest_without_zvols() {
 iscsi_detect_vm_gather() {
     local remote_script
     remote_script=$(remote_zfsutility_script "$compute_host" "list-vm-disks") || return 1
-    ssh -o ConnectTimeout=10 "root@${compute_host}" \
+    # -n: query-only ssh — without it the gather drains a piped-stdin
+    # answer feed, and a caller's next prompt (setup-iscsi-targets'
+    # reconcile offer) hits EOF and dies under set -e (F-020 family).
+    ssh -n -o ConnectTimeout=10 "root@${compute_host}" \
         "${remote_script} --gather-vm-info" 2>/dev/null
 }
 
@@ -887,7 +892,8 @@ function iscsi_rebuild_torn_down {
         log_msg "INFO: Triggering iSCSI rescan on ${compute_host}..."
         local rescan_path
         rescan_path=$(remote_zfsutility_script "$compute_host" rescan-storage)
-        ssh -o ConnectTimeout=10 root@"$compute_host" \
+        # -n: query-only ssh (stdin-discipline rule, see iscsi_detect_vm_gather).
+        ssh -n -o ConnectTimeout=10 root@"$compute_host" \
             "bash -lc $(printf '%q' "$rescan_path")" 2>/dev/null \
             || log_msg "WARN: Could not rescan $compute_host —" \
                 "run 'sudo rescan-storage' on $compute_host manually"

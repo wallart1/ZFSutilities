@@ -27,7 +27,23 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 # The lab-builder a composable journey (j06) reuses; the wrapper at the
 # bottom of this file keeps the standalone journey_main contract.
+# --encrypted-keys (opt-in, default OFF) appends the LUKS key-device lab
+# and the encrypted vm-101-disk-1 (see itf_journey_stage_encrypted_key_lun
+# in common.sh); composing journeys that do not pass the flag get the
+# plain lab unchanged.  J05_ENCRYPTED_KEYS=1 in the environment is the
+# same opt-in for driver-launched standalone runs (itf journey run
+# passes no arguments to the journey).
 j05_two_node_lab_main() {
+    local encrypted_keys=0
+    if [[ -n "${J05_ENCRYPTED_KEYS:-}" ]]; then
+        encrypted_keys=1
+    fi
+    while (( $# > 0 )); do
+        case "$1" in
+            --encrypted-keys) encrypted_keys=1; shift ;;
+            *) echo "itf: unknown j05_two_node_lab_main option: $1" >&2; return 2 ;;
+        esac
+    done
     local s_base="${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]}}"
     local c_base="${ITF_COMPUTE_BASE:-}"
     if [[ -z "$c_base" || -z "${ITF_COMPUTE_TEMPLATE_NAME:-}" \
@@ -199,68 +215,11 @@ j05_two_node_lab_main() {
     fi
 
     # ------------------------------------------------------------------
-    # Stage P: the documented three-RAIDZ1 test pools (j01/j04 recipe)
+    # Stage P: the documented three-RAIDZ1 test pools (j01/j04 recipe,
+    # shared stage; runs on the STORAGE guest)
     # ------------------------------------------------------------------
 
-    local wait_sdb
-    # shellcheck disable=SC2016  # expansion runs in the guest
-    wait_sdb='for i in $(seq 1 30); do lsblk -dn -o NAME | grep -qx sdb'
-    wait_sdb+=' && exit 0; sleep 2; done; exit 1'
-    if itf_qm "$s_base" set "$s_vmid" --scsi1 \
-            "${ITF_GUEST_STORAGE}:${ITF_GUEST_POOL_DISK_GB}" \
-            > "$ITF_RUN_DIR/pooldisk-attach.log" 2>&1 \
-            && itf_guest_exec "$s_ip" "$wait_sdb"; then
-        itf_step pass "pool disk attached" \
-            "scsi1 (${ITF_GUEST_POOL_DISK_GB}G) hot-plugged, storage guest sees /dev/sdb"
-    else
-        itf_step fail "pool disk attached" "see pooldisk-attach.log"
-        return 1
-    fi
-
-    local pool_script
-    pool_script="$ITF_RUN_DIR/guest-pools.sh"
-    cat > "$pool_script" <<'EOF'
-#!/bin/bash
-# The user recipe from docs/docs/developer-guide/testing.md on /dev/sdb,
-# plus a udev settle the documented recipe lacks.
-set -e
-# parted/partprobe are not part of a base Debian install.
-apt-get install -y parted
-parted -s /dev/sdb mklabel gpt
-for i in {1..15}; do
-    if [[ $i -eq 1 ]]; then start="1MiB"; else start="$(( (i-1)*5120 ))MiB"; fi
-    if [[ $i -eq 15 ]]; then end="100%"; else end="$(( i*5120 ))MiB"; fi
-    parted -a optimal -s /dev/sdb mkpart primary "${start}" "${end}"
-done
-partprobe /dev/sdb
-# udev creates the partition nodes asynchronously after partprobe, so an
-# immediate zpool create races them ("cannot resolve path '/dev/sdbN'").
-udevadm settle --timeout=30 || true
-for i in $(seq 1 30); do
-    [[ -e /dev/sdb15 ]] && break
-    sleep 1
-done
-[[ -e /dev/sdb15 ]]
-zpool create -f zfstest1 raidz1 /dev/sdb1 /dev/sdb2 /dev/sdb3 /dev/sdb4 /dev/sdb5
-zpool create -f zfstest2 raidz1 /dev/sdb6 /dev/sdb7 /dev/sdb8 /dev/sdb9 /dev/sdb10
-zpool create -f zfstest3 raidz1 /dev/sdb11 /dev/sdb12 /dev/sdb13 /dev/sdb14 /dev/sdb15
-zpool list
-EOF
-    itf_guest_put "$s_ip" "$pool_script" /root/itf-pools.sh > /dev/null 2>&1
-    if itf_guest_exec "$s_ip" "bash /root/itf-pools.sh" \
-            > "$ITF_RUN_DIR/guest-pools.log" 2>&1; then
-        itf_step pass "test pools created" "zfstest1/2/3 (three RAIDZ1, docs recipe)"
-        itf_artifact "pools" "$ITF_RUN_DIR/guest-pools.log"
-    else
-        itf_step fail "test pools created" "see guest-pools.log"
-        return 1
-    fi
-
-    if itf_guest_snapshot "$s_base" "$s_vmid" pools-created > /dev/null 2>&1; then
-        itf_step pass "snapshot pools-created" "storage-side checkpoint"
-    else
-        itf_step fail "snapshot pools-created"
-    fi
+    itf_journey_stage_test_pools j05-storage "$s_base" "$s_vmid" "$s_ip" || return 1
 
     # ------------------------------------------------------------------
     # Stage I: current tree on the storage guest, then install-two-node
@@ -453,6 +412,17 @@ EOF
 
     itf_step info "journey stage reached" \
         "two-node install verified: link, installer, deploy, PVE patch, first LUN"
+
+    # ------------------------------------------------------------------
+    # Stage E (opt-in): the LUKS key-device lab + encrypted vm-101-disk-1
+    # ------------------------------------------------------------------
+
+    if (( encrypted_keys )); then
+        itf_journey_stage_encrypted_key_lun j05 "$s_base" "$s_vmid" "$s_ip" "$c_ip" \
+            || return 1
+        itf_step info "journey stage reached" \
+            "encrypted-key lab provisioned: keystore, encrypted LUN, locked posture"
+    fi
     return 0
 }
 

@@ -1,0 +1,1431 @@
+#!/usr/bin/env bash
+# j16-iscsi-total-loss.journey — LIO loss & identity recovery scenarios
+# (campaign G2).
+#
+# The storage host loses iSCSI state in every shape an operator (or a
+# botched script) produces, recovering through user-visible surfaces only:
+#   S6  ALL backstores+mappings destroyed while the OS-disk files still
+#       record them (the deep j13 shape at full scale): the VM-refs
+#       detector WARNs, --check drifts on every LUN, and reconcile
+#       rebuilds EVERY LUN from the pool map (encrypted ones included —
+#       keys stay loaded, no reboot in this journey); running-VM fallout
+#       is sampled through the outage.
+#   S9  ONE mapping hand-deleted via targetcli, backstore left in place
+#       (the 2026-10-27 3-of-33 incident shape): safe-iscsi-save REFUSES
+#       (the P1 mapping gate the incident lacked), --check names the
+#       missing LUN, the session cycle makes PVE abort VM start on the
+#       missing link, and repair-iscsi-luns re-maps at the recorded
+#       index; boot proof.
+#   S7a every backstore+mapping wiped with the TARGETS intact: the
+#       explicit-ACL posture staged first (compute initiator identity
+#       grants + a dummy initiator holding a NON-identity mapped_lun 8 ->
+#       tpg_lun 0 grant), then iscsi-restore-luns does the full
+#       saveconfig-authority restore: backstores, mappings, ACL nodes,
+#       and the non-identity grant, exactly as recorded.
+#   S7b the deeper wipe — targets too.  The obvious iscsi-restore-luns
+#       attempt honestly refuses (rc 1, records preserved), then
+#       setup-iscsi-targets rebuilds the targets and OFFERS the reconcile
+#       (declined for a clean direct run), and reconcile rebuilds every
+#       LUN+ACL from the pool map.  Authority gap recorded live: the map
+#       carries ACL initiator names but not grant indexes, so the
+#       non-identity grant returns only through the saveconfig path.
+#   S8  saveconfig.json truncated (the interrupted-save shape): the unit
+#       restart restores from saveconfig-boot.json unaffected, the
+#       pre-start backup preserves the corrupt bytes as evidence,
+#       safe-iscsi-save FATALs on the unparseable authority, and the
+#       FATAL's own force escape (targetcli saveconfig) heals the file
+#       from the intact live tree.
+#   S8b the boot-config fallback branch: with saveconfig-boot.json moved
+#       aside AND saveconfig corrupt, the restart must degrade loudly
+#       (unit failed), never silently.
+#   S18 pool identity (P5 live): (a) zpool export zfstest3 — identity
+#       WARNs on check-prerequisites and setup-iscsi-targets (own block,
+#       no reconcile offer) while export-iscsi-state --check stays rc 0
+#       (a one-sided pool name is deliberately not drift — the offline
+#       tolerance); re-import goes silent.  (b) destroy+recreate zfstest3
+#       — GUID change on a both-sides name IS drift: identity WARN names
+#       both GUIDs, --check emits the pools DRIFT line, and convergence
+#       runs through the operator-confirmed safe-iscsi-save (map refresh
+#       records the new GUID).
+#
+# Composition: the ENTIRE j15 lab runs first (j05 two-node lab
+# --encrypted-keys + the boot-workload tail: VM 101 plain-root writer,
+# VM 202 encrypted-root writer, encrypted spare vm-101-disk-1, keys
+# loaded + store detached, VMs parked).  Keys stay loaded throughout —
+# this journey never reboots the storage guest.
+#
+# Guest state required: storage template + compute template (j05's).
+# Site config required: j05's two-node keys + the keystore pair.
+# Software source must be dev-tarball — this journey verifies
+# working-tree repairs.
+#
+# Recovery consumes ONLY user-visible signals (detector WARNs, --check,
+# transcripts, qm status, by-path links) and product-documented commands;
+# stumbles become FINDINGS (defects) or UX-gap rows.
+
+# j15 brings common.sh + j05 plus the workload/park/link helpers this
+# journey reuses (j15_read_coords, j15_park_vms, j15_boot_workload_vm,
+# j15_wait_links_classified).
+# shellcheck source=j15-iscsi-boot-keys.journey
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/j15-iscsi-boot-keys.journey"
+
+# Workload/LUN identities (fixed by the composed lab design):
+#   VM 101 — everyday VM, root on the PLAIN vm-101-disk-2 LUN (S9's victim)
+#   VM 202 — encrypted-root VM on vm-202-disk-0
+#   vm-101-disk-0 — j05's blank 1G LUN; vm-101-disk-1 — encrypted spare
+#   (registered on the target, owned by no VM)
+J16_POOL_A=zfstest1
+J16_POOL_ID=zfstest3
+J16_LUN_PLAIN_OS="vm-101-disk-2"
+J16_DUMMY_ACL="iqn.1994-05.com.redhat:itf-dummy"
+
+# The live zfstest1 target IQN (j13's derivation: node.conf prefix).
+j16_target_iqn() {
+    local s_ip="$1"
+    local prefix
+    prefix="$(itf_guest_exec "$s_ip" \
+        'sed -n "s/^IQN_PREFIX=\"\([^\"]*\)\"/\1/p" /etc/zfsutilities/node.conf' \
+        2>/dev/null)"
+    if [[ -n "$prefix" ]]; then
+        echo "${prefix}:${J16_POOL_A}"
+        return 0
+    fi
+    return 1
+}
+
+# The live LUN inventory of one target as "index backstore" lines, parsed
+# line-based from targetcli's own listing (the operator-visible state —
+# dot-leader alignment makes field parsing unreliable).  Empty output =
+# no mappings live.
+j16_lun_inventory() {
+    local s_ip="$1" iqn="$2"
+    # shellcheck disable=SC2016  # expansions run in the guest
+    itf_guest_exec "$s_ip" '
+        targetcli /iscsi/'"$iqn"'/tpg1/luns ls 2>/dev/null \
+            | sed -n "s/^[[:space:]]*o- lun\([0-9][0-9]*\).*block\/\([^ (]*\).*$/\1 \2/p"
+    ' 2>/dev/null
+}
+
+# One labeled writer-resume classification for a running VM: poll the
+# workload sample for growth past the baseline (unaided) up to the bound,
+# else record the REQUIRED stop/start (F-032's live-proven shape) and
+# restart the VM through the agent gate.
+j16_writer_resume_classified() {
+    local c_ip="$1" vm="$2" label="$3" base_max="$4"
+    local probe_start=$SECONDS new_max resumed=0
+    while (( SECONDS - probe_start < 300 )); do
+        new_max="$(itf_vm_workload_sample "$c_ip" "$vm" 2>/dev/null \
+            | tail -n 1 || true)"
+        if [[ "$new_max" =~ ^[0-9]+$ && "$base_max" =~ ^[0-9]+$ ]] \
+                && (( new_max > base_max )); then
+            resumed=1
+            break
+        fi
+        sleep "${ITF_LINK_POLL_INTERVAL:-10}"
+    done
+    local sample="$ITF_RUN_DIR/workload-${label}-resume-${vm}.txt"
+    itf_vm_workload_sample "$c_ip" "$vm" > "$sample" 2>/dev/null || true
+    itf_artifact "workload-$label-resume-$vm" "$sample"
+    if (( resumed )); then
+        itf_step pass "VM $vm writer resume [$label]" \
+            "resumed UNAIDED — no restart needed"
+        return 0
+    fi
+    itf_step pass "VM $vm writer resume [$label]" \
+        "REQUIRED stop/start — the writer never resumed on its own;" \
+        "UX gap (→ REQUIREMENTS at G5)"
+    # shellcheck disable=SC2016  # expansions run in the guest
+    itf_guest_exec "$c_ip" '
+        qm shutdown '"$vm"' --timeout 45 || qm stop '"$vm"'
+        test "$(qm status '"$vm"' | awk "{print \$2}")" = stopped
+    ' > "$ITF_RUN_DIR/vm${vm}-restart-${label}.log" 2>&1
+    j15_boot_workload_vm "$vm" || return 1
+    return 0
+}
+
+j16_iscsi_total_loss_main() {
+    # shellcheck disable=SC2034  # full coordinate pairs
+    local s_base s_vmid s_ip c_base c_vmid c_ip
+    local log rc inv iqn guid_old guid_new sample base_max
+    local ok verdict result prestart_md5 corrupt_md5 identity_block
+    local restored_n drift_n victim_lun init_iqn
+    local rfeed sfeed boot_journal
+    local -a lun_names=()
+
+    itf_step info "journey start" \
+        "j16 LIO loss & identity: S6 S9 S7a S7b S8 S8b S18a S18b on the" \
+        "encrypted workload lab"
+
+    # ------------------------------------------------------------------
+    # Lab staging: the j15 encrypted two-node lab + boot-workload tail
+    # ------------------------------------------------------------------
+
+    j05_two_node_lab_main --encrypted-keys || return 1
+    j15_read_coords || return 1
+    itf_journey_stage_boot_workload_lab j16 "$s_base" "$s_vmid" "$s_ip" "$c_ip" \
+        || return 1
+
+    iqn="$(j16_target_iqn "$s_ip")"
+    if [[ -n "$iqn" ]]; then
+        itf_step pass "live target resolved" "zfstest1 target = $iqn"
+    else
+        itf_step fail "live target resolved" "node.conf IQN_PREFIX unreadable"
+        return 1
+    fi
+
+    inv="$(j16_lun_inventory "$s_ip" "$iqn")"
+    itf_guest_exec "$s_ip" \
+        "targetcli /iscsi/${iqn}/tpg1/luns ls; targetcli /backstores/block ls" \
+        > "$ITF_RUN_DIR/inventory-staged.log" 2>&1
+    itf_artifact "inventory-staged" "$ITF_RUN_DIR/inventory-staged.log"
+    if [[ $(wc -l <<< "$inv") -ge 3 ]]; then
+        itf_step pass "staged LUN inventory" \
+            "$(wc -l <<< "$inv") mappings live on ${J16_POOL_A} (see" \
+            "inventory-staged.log)"
+    else
+        itf_step fail "staged LUN inventory" \
+            "expected the lab's LUNs live, got: ${inv//$'\n'/; }"
+        return 1
+    fi
+    local name
+    while read -r _ name; do
+        lun_names+=("$name")
+    done <<< "$inv"
+
+    # ==================================================================
+    # S6 — ALL backstores+mappings destroyed, OS files left recording
+    #      them: detector WARN, verifier DRIFT, map-driven rebuild
+    # ==================================================================
+
+    j15_boot_workload_vm 101 || return 1
+    j15_boot_workload_vm 202 || return 1
+    itf_vm_evidence "$c_ip" 101 s6-baseline || return 1
+    itf_vm_evidence "$c_ip" 202 s6-baseline || return 1
+    itf_compute_fallout_sample "$c_ip" s6-pre 101 202
+
+    # The destruction itself is the outage event (VMs stay running — the
+    # scenario premise is a botched cleanup while the fleet works).
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            for lun in \$(targetcli /iscsi/${iqn}/tpg1/luns ls 2>/dev/null \
+                    | sed -n 's/^[[:space:]]*o- lun\([0-9][0-9]*\) .*/\1/p'); do
+                targetcli /iscsi/${iqn}/tpg1/luns delete lun\${lun} \
+                    >/dev/null 2>&1
+            done
+            for bs in \$(targetcli /backstores/block ls 2>/dev/null \
+                    | grep -oE 'vm-[0-9]+-disk-[0-9]+' | sort -u); do
+                targetcli /backstores/block delete \"\${bs}\" \
+                    >/dev/null 2>&1
+            done
+            if targetcli /iscsi/${iqn}/tpg1/luns ls 2>/dev/null \
+                    | grep -q 'o- lun[0-9]'; then exit 1; fi
+            if targetcli /backstores/block ls 2>/dev/null \
+                    | grep -qE 'vm-[0-9]+-disk-[0-9]+'; then exit 1; fi
+            echo destroyed
+        " > "$ITF_RUN_DIR/s6-destroy.log" 2>&1 \
+        && grep -q destroyed "$ITF_RUN_DIR/s6-destroy.log"; then
+        itf_step pass "all live LUN exports destroyed [s6]" \
+            "every mapping + backstore gone; saveconfig/manifest untouched"
+    else
+        itf_step fail "all live LUN exports destroyed [s6]" "see s6-destroy.log"
+        itf_artifact "s6-destroy" "$ITF_RUN_DIR/s6-destroy.log"
+        return 1
+    fi
+    itf_artifact "s6-destroy" "$ITF_RUN_DIR/s6-destroy.log"
+
+    itf_compute_fallout_sample "$c_ip" s6-outage 101 202
+    log="$ITF_RUN_DIR/vm101-outage-probe.log"
+    itf_guest_exec "$c_ip" \
+        "timeout 20 qm guest exec 101 -- tail -n 3 /workload.log" \
+        > "$log" 2>&1
+    itf_artifact "vm101-outage-probe" "$log"
+    itf_step info "VM 101 during outage [s6]" \
+        "writer blocked on the dead LUN; last cached timestamps captured"
+
+    # SYMPTOM: the VM-refs detector.  check-prerequisites --two-node
+    # stays GREEN on this shape by design (its detection pass loads
+    # iscsi-lib without node-lib, so only the mtime/manifest detectors
+    # run — live loss with current files is out of its scope); the
+    # signature and the recovery offer live in setup-iscsi-targets.
+    log="$ITF_RUN_DIR/s6-prereq-silent.log"
+    itf_guest_exec "$s_ip" "bash -lc 'check-prerequisites --two-node'" \
+        > "$log" 2>&1
+    itf_artifact "s6-prereq-silent" "$log"
+    if grep -q "no restore signature found" "$log"; then
+        itf_step info "check-prerequisites green on live loss [s6]" \
+            "the health gate's detection pass is mtime/manifest-scoped — a" \
+            "fully-unmapped target passes clean (UX row → REQUIREMENTS at G5)"
+    else
+        itf_step info "check-prerequisites green on live loss [s6]" \
+            "unexpected signature lines — see s6-prereq-silent.log"
+    fi
+
+    sfeed="$ITF_RUN_DIR/s6-setup-answers.txt"
+    printf 'n\n' > "$sfeed"
+    log="$ITF_RUN_DIR/s6-detection.log"
+    itf_guest_exec_feed "$s_ip" "$sfeed" "bash -lc 'setup-iscsi-targets'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s6-detection" "$log"
+    if [[ $rc -eq 0 ]] \
+            && grep -q "Post-restore signature detected" "$log" \
+            && grep -q "VM 101 .* references ${J16_POOL_A} LUN" "$log" \
+            && grep -q "that LUN is not exported live" "$log" \
+            && grep -q "Reconcile not run" "$log"; then
+        itf_step pass "live-loss signature detected [s6]" \
+            "setup-iscsi-targets prints the VM-refs evidence and offers" \
+            "the reconcile (declined for a direct run)"
+    else
+        itf_step fail "live-loss signature detected [s6]" "see s6-detection.log"
+        return 1
+    fi
+
+    # SYMPTOM: the verifier drifts on every recorded LUN.
+    log="$ITF_RUN_DIR/iscsi-check-s6-loss.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "iscsi-check-s6-loss" "$log"
+    drift_n="$(grep -c 'is missing live' "$log" || true)"
+    if [[ $rc -ne 0 && "$drift_n" -ge "${#lun_names[@]}" ]]; then
+        itf_step pass "verifier drifts on every LUN [s6]" \
+            "rc=$rc, ${drift_n} missing-live DRIFT line(s)"
+    else
+        itf_step fail "verifier drifts on every LUN [s6]" \
+            "rc=$rc, ${drift_n} DRIFT line(s) for ${#lun_names[@]} LUNs"
+        return 1
+    fi
+
+    # RECOVER: the map-driven one-command rebuild (feed: y apply).
+    rfeed="$ITF_RUN_DIR/s6-reconcile-answers.txt"
+    printf 'y\n' > "$rfeed"
+    log="$ITF_RUN_DIR/s6-reconcile.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s6-reconcile" "$log"
+    ok=1
+    for name in "${lun_names[@]}"; do
+        grep -q "✓ Created backstore $name " "$log" || ok=0
+        grep -q "✓ Mapped $name to ${J16_POOL_A}/lun" "$log" || ok=0
+    done
+    if [[ $rc -eq 0 && $ok -eq 1 ]] \
+            && grep -q "Regenerated .*expected-backstores.txt from the map" "$log" \
+            && grep -q "✓ iSCSI configuration saved" "$log" \
+            && grep -q "✓ Pool LUN map refreshed" "$log" \
+            && grep -q "✓ Compute host rescan complete" "$log" \
+            && grep -q "✓ Done" "$log"; then
+        itf_step pass "reconcile rebuilds every LUN from the map [s6]" \
+            "${#lun_names[@]} backstores+mappings (encrypted included)," \
+            "manifest, save, map refresh, rescan, done"
+    else
+        itf_step fail "reconcile rebuilds every LUN from the map [s6]" \
+            "rc=$rc — see s6-reconcile.log"
+        return 1
+    fi
+
+    # VERIFY: links, running-VM fallout classified, verifier, fence.
+    j15_wait_links_classified 300 s6-recov 101 202 || return 1
+    base_max="$(tail -n 1 "$ITF_RUN_DIR/workload-s6-baseline-101.txt" 2>/dev/null)"
+    j16_writer_resume_classified "$c_ip" 101 s6 "$base_max" || return 1
+    base_max="$(tail -n 1 "$ITF_RUN_DIR/workload-s6-baseline-202.txt" 2>/dev/null)"
+    j16_writer_resume_classified "$c_ip" 202 s6 "$base_max" || return 1
+    itf_iscsi_check_gate "$s_ip" s6 || return 1
+    if itf_fence_tick "$c_ip" s6-final; then
+        itf_step pass "fence tick healthy [s6-final]" "all VM disk paths present"
+    else
+        itf_step fail "fence tick healthy [s6-final]" "see fence-tick-s6-final.log"
+        return 1
+    fi
+    j15_park_vms s6 || return 1
+
+    # ==================================================================
+    # S9 — one hand-deleted mapping (3-of-33 shape): the P1 save fence,
+    #      the verifier, PVE's start abort, repair at the recorded index
+    # ==================================================================
+
+    # The victim's recorded index, read from the live listing.
+    victim_lun="$(j16_lun_inventory "$s_ip" "$iqn" \
+        | awk -v bs="$J16_LUN_PLAIN_OS" '$2 == bs {print $1; exit}')"
+    if [[ -n "$victim_lun" ]]; then
+        itf_step pass "victim LUN recorded [s9]" \
+            "$J16_LUN_PLAIN_OS rides lun$victim_lun"
+    else
+        itf_step fail "victim LUN recorded [s9]" \
+            "$J16_LUN_PLAIN_OS not found in the live inventory"
+        return 1
+    fi
+
+    # Injection: a hand targetcli deletion, backstore left in place.
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            targetcli /iscsi/${iqn}/tpg1/luns delete lun${victim_lun} \
+                >/dev/null 2>&1
+            if targetcli /iscsi/${iqn}/tpg1/luns ls | grep 'o- lun' \
+                    | grep -q '${J16_LUN_PLAIN_OS}'; then exit 1; fi
+            targetcli /backstores/block ls | grep -q '${J16_LUN_PLAIN_OS}'
+            echo unmapped
+        " > "$ITF_RUN_DIR/s9-delete.log" 2>&1 \
+        && grep -q unmapped "$ITF_RUN_DIR/s9-delete.log"; then
+        itf_step pass "single mapping hand-deleted [s9]" \
+            "lun$victim_lun mapping gone; backstore remains"
+    else
+        itf_step fail "single mapping hand-deleted [s9]" "see s9-delete.log"
+        itf_artifact "s9-delete" "$ITF_RUN_DIR/s9-delete.log"
+        return 1
+    fi
+    itf_artifact "s9-delete" "$ITF_RUN_DIR/s9-delete.log"
+
+    # The session cycle makes the dead LUN's link vanish (j13-proven: a
+    # soft rescan does not drop it on this stack).
+    # shellcheck disable=SC2029  # expansions run on the compute guest
+    if itf_guest_exec "$c_ip" "
+            iscsiadm -m node -T ${iqn} --logout >/dev/null 2>&1
+            iscsiadm -m node -T ${iqn} --login >/dev/null 2>&1
+            for i in \$(seq 1 15); do
+                ls /dev/disk/by-path/ | grep -q 'iscsi-.*-lun-0\$' && break
+                sleep 2
+            done
+            if ls /dev/disk/by-path/ | grep -q 'iscsi-.*-lun-${victim_lun}\$'; then
+                exit 1
+            fi
+            ls /dev/disk/by-path/ | grep -q 'iscsi-.*-lun-0\$'
+        " > "$ITF_RUN_DIR/s9-link-gone.log" 2>&1; then
+        itf_step pass "compute sees the LUN vanish [s9]" \
+            "lun-$victim_lun link gone after the session cycle; others present"
+    else
+        itf_step fail "compute sees the LUN vanish [s9]" "see s9-link-gone.log"
+        itf_artifact "s9-link-gone" "$ITF_RUN_DIR/s9-link-gone.log"
+        return 1
+    fi
+
+    # SYMPTOM: PVE aborts VM start on the missing link (the incident's
+    # own production symptom).
+    log="$ITF_RUN_DIR/s9-start-abort.log"
+    itf_guest_exec "$c_ip" "qm start 101" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s9-start-abort" "$log"
+    if [[ $rc -ne 0 ]] && grep -qE "scsi2|by-path|does not exist|No such" "$log"; then
+        itf_step pass "PVE aborts VM start on the missing link [s9]" \
+            "qm start rc=$rc naming the device (see s9-start-abort.log)"
+    else
+        itf_step fail "PVE aborts VM start on the missing link [s9]" \
+            "rc=$rc — see s9-start-abort.log"
+        return 1
+    fi
+
+    # SYMPTOM: the save gate the incident lacked.
+    log="$ITF_RUN_DIR/s9-save-refusal.log"
+    itf_guest_exec "$s_ip" "bash -lc 'safe-iscsi-save'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s9-save-refusal" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "LUN ${victim_lun} -> ${J16_LUN_PLAIN_OS} would be lost" "$log" \
+            && grep -q "while still expected" "$log" \
+            && grep -q "or force with: targetcli saveconfig" "$log"; then
+        itf_step pass "safe-iscsi-save refuses the degraded save [s9]" \
+            "mapping-loss FATAL names LUN ${victim_lun}; force escape printed"
+    else
+        itf_step fail "safe-iscsi-save refuses the degraded save [s9]" \
+            "rc=$rc — see s9-save-refusal.log"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/iscsi-check-s9-drift.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "iscsi-check-s9-drift" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "map LUN ${victim_lun} -> ${J16_LUN_PLAIN_OS} is missing live" "$log"; then
+        itf_step pass "verifier names the missing LUN [s9]" \
+            "DRIFT: map LUN ${victim_lun} -> ${J16_LUN_PLAIN_OS} is missing live"
+    else
+        itf_step fail "verifier names the missing LUN [s9]" \
+            "rc=$rc — see iscsi-check-s9-drift.log"
+        return 1
+    fi
+
+    # RECOVER: the Dashboard Fix-this engine, manifest-driven.
+    log="$ITF_RUN_DIR/s9-repair.log"
+    itf_guest_exec "$s_ip" "bash -lc 'repair-iscsi-luns'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s9-repair" "$log"
+    if [[ $rc -eq 0 ]] \
+            && grep -q "✓ Mapped ${J16_LUN_PLAIN_OS} to .*lun${victim_lun}" "$log" \
+            && grep -q "✓ Compute host rescan complete" "$log"; then
+        itf_step pass "repair re-maps at the recorded index [s9]" \
+            "lun${victim_lun} — the single hole refilled (see s9-repair.log)"
+    else
+        itf_step fail "repair re-maps at the recorded index [s9]" \
+            "rc=$rc — see s9-repair.log"
+        return 1
+    fi
+
+    itf_safe_save_gate "$s_ip" s9-recovered || return 1
+    itf_iscsi_check_gate "$s_ip" s9 || return 1
+    if itf_vm_disk_links_present "$c_ip" 101 > /dev/null 2>&1; then
+        itf_step pass "victim link restored [s9]" \
+            "lun-$victim_lun by-path entry back after the rescan"
+    else
+        itf_step fail "victim link restored [s9]" \
+            "VM 101's devices still incomplete"
+        return 1
+    fi
+
+    # Boot proof: the restored root disk carries a guest the agent answers.
+    itf_vm_boot_with_agent "$c_ip" 101 || return 1
+    sample="$ITF_RUN_DIR/workload-s9-101.txt"
+    if itf_vm_workload_wait_sample "$c_ip" 101 "$sample" \
+            && itf_vm_workload_gaps "$sample" 5; then
+        itf_step pass "VM 101 boots and writes on the repaired LUN [s9]" \
+            "agent answered; clean writer sample"
+    else
+        itf_step fail "VM 101 boots and writes on the repaired LUN [s9]" \
+            "no clean sample — see workload-s9-101.txt"
+        return 1
+    fi
+    j15_park_vms s9 || return 1
+
+    # ==================================================================
+    # S7a — backstores+mappings wiped, targets intact: the saveconfig
+    #       full restore incl. ACL grants + a non-identity mapping
+    # ==================================================================
+
+    # Stage the explicit-ACL posture first (the lab runs demo-mode TPGs
+    # with no ACL records anywhere — restore-luns can only return what
+    # was recorded).  targetcli semantics (live-proven): `acls create
+    # <initiator>` AUTO-GRANTS every LUN currently mapped on the TPG as
+    # an identity MappedLUN, so the staging only creates the two nodes
+    # (compute initiator + dummy) and adds the one NON-identity grant
+    # the auto-grants cannot express: dummy mapped_lun 8 -> tpg_lun 0.
+    init_iqn="$(itf_guest_exec "$c_ip" \
+        'sed -n "s/^InitiatorName=//p" /etc/iscsi/initiatorname.iscsi' 2>/dev/null)"
+    if [[ -n "$init_iqn" ]]; then
+        itf_step pass "compute initiator read [s7a]" "$init_iqn"
+    else
+        itf_step fail "compute initiator read [s7a]" \
+            "initiatorname.iscsi unreadable on the compute guest"
+        return 1
+    fi
+
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            targetcli /iscsi/${iqn}/tpg1 set attribute generate_node_acls=0 \
+                >/dev/null
+            targetcli /iscsi/${iqn}/tpg1/acls create '${init_iqn}' \
+                >/dev/null 2>&1 || true
+            targetcli /iscsi/${iqn}/tpg1/acls create '${J16_DUMMY_ACL}' \
+                >/dev/null 2>&1 || true
+            targetcli /iscsi/${iqn}/tpg1/acls/'${J16_DUMMY_ACL}' create 8 0 \
+                >/dev/null
+            targetcli /iscsi/${iqn}/tpg1/acls ls | grep -q '${init_iqn}'
+            targetcli /iscsi/${iqn}/tpg1/acls ls | grep -q '${J16_DUMMY_ACL}'
+            targetcli /iscsi/${iqn}/tpg1/acls/'${J16_DUMMY_ACL}' ls \
+                | grep -q 'mapped_lun8'
+            echo acls-staged
+        " > "$ITF_RUN_DIR/s7a-acl-staging.log" 2>&1 \
+        && grep -q acls-staged "$ITF_RUN_DIR/s7a-acl-staging.log"; then
+        itf_step pass "explicit ACL posture staged [s7a]" \
+            "both ACL nodes auto-granted every live LUN (identity) + the" \
+            "dummy's non-identity mapped_lun 8 -> 0"
+    else
+        itf_step fail "explicit ACL posture staged [s7a]" \
+            "see s7a-acl-staging.log"
+        itf_artifact "s7a-acl-staging" "$ITF_RUN_DIR/s7a-acl-staging.log"
+        return 1
+    fi
+    itf_artifact "s7a-acl-staging" "$ITF_RUN_DIR/s7a-acl-staging.log"
+
+    itf_safe_save_gate "$s_ip" s7a-staged || return 1
+    log="$ITF_RUN_DIR/s7a-records.log"
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            grep -q '${J16_DUMMY_ACL}' /etc/rtslib-fb-target/saveconfig.json
+            grep -q '\"index\": 8' /etc/rtslib-fb-target/saveconfig.json
+            bash -lc 'export-iscsi-state --print-map' | grep -q '${J16_DUMMY_ACL}'
+            echo records-ok
+        " > "$log" 2>&1 && grep -q records-ok "$log"; then
+        itf_step pass "records carry the ACL grants [s7a]" \
+            "saveconfig + pool map record both initiators; grant index 8 saved"
+    else
+        itf_step fail "records carry the ACL grants [s7a]" "see s7a-records.log"
+        itf_artifact "s7a-records" "$log"
+        return 1
+    fi
+    itf_artifact "s7a-records" "$log"
+    itf_iscsi_check_gate "$s_ip" s7a-staged || return 1
+
+    # The explicit ACL must still admit the compute initiator.
+    if itf_vm_disk_links_present "$c_ip" 101 202 > /dev/null 2>&1; then
+        itf_step pass "compute still admitted under explicit ACLs [s7a]" \
+            "all VM disk links present"
+    else
+        itf_step fail "compute still admitted under explicit ACLs [s7a]" \
+            "links missing after the flip — staging broke the initiator"
+        return 1
+    fi
+
+    # WIPE (targets kept): every mapping, every backstore, and the ACL
+    # nodes (a cleanup script that took the exports AND the ACL list —
+    # the shape in which restore-luns's ACL/grant restore is reachable;
+    # with the nodes left in place rtslib auto-re-grants identity at
+    # LUN creation and nothing exercises the recorded-grant path).
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            for lun in \$(targetcli /iscsi/${iqn}/tpg1/luns ls 2>/dev/null \
+                    | sed -n 's/^[[:space:]]*o- lun\([0-9][0-9]*\) .*/\1/p'); do
+                targetcli /iscsi/${iqn}/tpg1/luns delete lun\${lun} \
+                    >/dev/null 2>&1
+            done
+            for bs in \$(targetcli /backstores/block ls 2>/dev/null \
+                    | grep -oE 'vm-[0-9]+-disk-[0-9]+' | sort -u); do
+                targetcli /backstores/block delete \"\${bs}\" \
+                    >/dev/null 2>&1
+            done
+            targetcli /iscsi/${iqn}/tpg1/acls delete '${init_iqn}' \
+                >/dev/null 2>&1 || true
+            targetcli /iscsi/${iqn}/tpg1/acls delete '${J16_DUMMY_ACL}' \
+                >/dev/null 2>&1 || true
+            if targetcli /iscsi/${iqn}/tpg1/luns ls 2>/dev/null \
+                    | grep -q 'o- lun[0-9]'; then exit 1; fi
+            if targetcli /backstores/block ls 2>/dev/null \
+                    | grep -qE 'vm-[0-9]+-disk-[0-9]+'; then exit 1; fi
+            if targetcli /iscsi/${iqn}/tpg1/acls ls 2>/dev/null \
+                    | grep -q 'iqn\.'; then exit 1; fi
+            targetcli /iscsi ls | grep -q '${iqn}'
+            echo wiped
+        " > "$ITF_RUN_DIR/s7a-wipe.log" 2>&1 \
+        && grep -q wiped "$ITF_RUN_DIR/s7a-wipe.log"; then
+        itf_step pass "LUN exports + ACLs wiped, targets intact [s7a]" \
+            "mappings, backstores, and both ACL nodes gone; targets remain"
+    else
+        itf_step fail "LUN exports + ACLs wiped, targets intact [s7a]" \
+            "see s7a-wipe.log"
+        itf_artifact "s7a-wipe" "$ITF_RUN_DIR/s7a-wipe.log"
+        return 1
+    fi
+    itf_artifact "s7a-wipe" "$ITF_RUN_DIR/s7a-wipe.log"
+
+    log="$ITF_RUN_DIR/iscsi-check-s7a-drift.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "iscsi-check-s7a-drift" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "is missing live" "$log" \
+            && grep -q "ACL initiator ${J16_DUMMY_ACL} is missing live" "$log"; then
+        itf_step pass "verifier drifts incl. ACL loss [s7a]" \
+            "LUN + ACL-initiator DRIFT lines (see iscsi-check-s7a-drift.log)"
+    else
+        itf_step fail "verifier drifts incl. ACL loss [s7a]" \
+            "rc=$rc — see iscsi-check-s7a-drift.log"
+        return 1
+    fi
+
+    # RECOVER: the saveconfig-authority full restore — backstores,
+    # mappings, both ACL nodes, and every recorded grant including the
+    # dummy's non-identity 8 -> 0 (the identity grants land via rtslib's
+    # ACL-node auto-grant; the recorded non-identity one via the loop).
+    log="$ITF_RUN_DIR/s7a-restore-luns.log"
+    itf_guest_exec "$s_ip" "bash -lc 'iscsi-restore-luns'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s7a-restore-luns" "$log"
+    restored_n="$(grep -c '✓ Added backstore' "$log" || true)"
+    if [[ $rc -eq 0 && "$restored_n" -ge "${#lun_names[@]}" ]] \
+            && grep -q "✓ Added LUN ${victim_lun} (${J16_LUN_PLAIN_OS})" "$log" \
+            && grep -q "✓ Created ACL ${init_iqn}" "$log" \
+            && grep -q "✓ Created ACL ${J16_DUMMY_ACL}" "$log" \
+            && grep -q "✓ Granted MappedLUN 8 (LUN 0) to ${J16_DUMMY_ACL}" "$log" \
+            && grep -q "✓ Restored .*ACL" "$log" \
+            && grep -q "✓ iSCSI configuration saved" "$log" \
+            && grep -q "Rescanning compute host" "$log"; then
+        itf_step pass "restore-luns full restore incl. non-identity [s7a]" \
+            "${restored_n} backstores, mappings, both ACL nodes, and the" \
+            "dummy's mapped_lun 8 -> LUN 0 grant, exactly as recorded"
+    else
+        itf_step fail "restore-luns full restore incl. non-identity [s7a]" \
+            "rc=$rc — see s7a-restore-luns.log"
+        return 1
+    fi
+
+    itf_iscsi_check_gate "$s_ip" s7a || return 1
+    j15_wait_links_classified 300 s7a 101 202 || return 1
+    itf_vm_boot_with_agent "$c_ip" 202 || return 1
+    sample="$ITF_RUN_DIR/workload-s7a-202.txt"
+    if itf_vm_workload_wait_sample "$c_ip" 202 "$sample" \
+            && itf_vm_workload_gaps "$sample" 5; then
+        itf_step pass "VM 202 boots on the restored exports [s7a]" \
+            "agent answered; clean writer sample"
+    else
+        itf_step fail "VM 202 boots on the restored exports [s7a]" \
+            "no clean sample — see workload-s7a-202.txt"
+        return 1
+    fi
+    j15_park_vms s7a || return 1
+
+    # ==================================================================
+    # S7b — the deeper wipe (targets too): the honest operator arc.
+    #       iscsi-restore-luns first (honest refusal), then
+    #       setup-iscsi-targets + the declined offer, then reconcile.
+    #       Live-recorded: the map carries ACL names but not grant
+    #       indexes — the non-identity grant returns only via S7a's path.
+    # ==================================================================
+
+    # Preconditions learned live: deleting a target while the compute
+    # initiator clings with automatic re-login (the storm logs "iSCSI
+    # Login negotiation failed" every ~2s against the shared wildcard
+    # portal) blocks the sibling targets' deletions for minutes.  A
+    # CLEAN logout first stops the storm (manual logout disables
+    # auto-relogin) — the operator's natural step before wiping the
+    # target stack.
+    # shellcheck disable=SC2029  # expansions run on the compute guest
+    if itf_guest_exec "$c_ip" "
+            for t in \$(iscsiadm -m node 2>/dev/null | grep -oE 'iqn\.[^ ,]+'); do
+                iscsiadm -m node -T \"\${t}\" --logout >/dev/null 2>&1 || true
+            done
+            if iscsiadm -m session 2>/dev/null | grep -q iqn; then exit 1; fi
+            echo logged-out
+        " > "$ITF_RUN_DIR/s7b-logout.log" 2>&1 \
+        && grep -q logged-out "$ITF_RUN_DIR/s7b-logout.log"; then
+        itf_step pass "initiator logged out cleanly [s7b]" \
+            "all node sessions dropped; no re-login storm during the wipe"
+    else
+        itf_step fail "initiator logged out cleanly [s7b]" "see s7b-logout.log"
+        itf_artifact "s7b-logout" "$ITF_RUN_DIR/s7b-logout.log"
+        return 1
+    fi
+    itf_artifact "s7b-logout" "$ITF_RUN_DIR/s7b-logout.log"
+
+    # WIPE entirely: every target (mappings die with them), every
+    # backstore.  Candidates are the THREE node.conf-derived target
+    # IQNs — `targetcli /iscsi ls` also renders ACL initiator IQNs
+    # under their target (live-proven: the loop tried to "delete" the
+    # compute initiator's ACL as a target and died on "No such Target
+    # in configfs").  An operator wipes their own targets.
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            for bs in \$(targetcli /backstores/block ls 2>/dev/null \
+                    | grep -oE 'vm-[0-9]+-disk-[0-9]+' | sort -u); do
+                targetcli /backstores/block delete \"\${bs}\" \
+                    >/dev/null 2>&1
+            done
+            for t in '${iqn%:*}:zfstest2' '${iqn%:*}:zfstest3' '${iqn}'; do
+                echo \"--- deleting: \${t}\"
+                ok=0
+                for try in 1 2 3 4 5; do
+                    if targetcli /iscsi delete \"\${t}\" \\
+                            >/dev/null 2>/tmp/itf-tgt-delete.err; then
+                        ok=1
+                        break
+                    fi
+                    sleep 2
+                done
+                if [[ \$ok -ne 1 ]]; then
+                    echo \"--- FAILED: \${t}\"
+                    cat /tmp/itf-tgt-delete.err || true
+                fi
+                [[ \$ok -eq 1 ]]
+            done
+            if targetcli /iscsi ls 2>/dev/null | grep -q 'iqn\.'; then exit 1; fi
+            if targetcli /backstores/block ls 2>/dev/null \
+                    | grep -qE 'vm-[0-9]+-disk-[0-9]+'; then exit 1; fi
+            rm -f /tmp/itf-tgt-delete.err
+            echo wiped-entirely
+        " > "$ITF_RUN_DIR/s7b-wipe.log" 2>&1 \
+        && grep -q wiped-entirely "$ITF_RUN_DIR/s7b-wipe.log"; then
+        itf_step pass "LIO wiped entirely [s7b]" \
+            "no targets, no backstores; all records on disk still present"
+    else
+        itf_step fail "LIO wiped entirely [s7b]" "see s7b-wipe.log"
+        itf_artifact "s7b-wipe" "$ITF_RUN_DIR/s7b-wipe.log"
+        return 1
+    fi
+    itf_artifact "s7b-wipe" "$ITF_RUN_DIR/s7b-wipe.log"
+
+    # The obvious attempt: backstores restore (target-independent), the
+    # mappings/ACLs cannot land, and the trailing save honestly refuses —
+    # rc 1, the records on disk preserved.
+    log="$ITF_RUN_DIR/s7b-restore-first.log"
+    itf_guest_exec "$s_ip" "bash -lc 'iscsi-restore-luns'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s7b-restore-first" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "✓ Added backstore" "$log" \
+            && grep -q "save refused" "$log"; then
+        itf_step pass "restore-luns honestly refuses without targets [s7b]" \
+            "rc=$rc — backstores live-only, saveconfig records preserved"
+    else
+        itf_step fail "restore-luns honestly refuses without targets [s7b]" \
+            "rc=$rc — see s7b-restore-first.log"
+        return 1
+    fi
+
+    # setup-iscsi-targets rebuilds targets/portals, detects the
+    # post-restore signature, offers the reconcile — declined for a
+    # clean direct run (declining leaves the system untouched).
+    sfeed="$ITF_RUN_DIR/s7b-setup-answers.txt"
+    printf 'n\n' > "$sfeed"
+    log="$ITF_RUN_DIR/s7b-setup.log"
+    itf_guest_exec_feed "$s_ip" "$sfeed" "bash -lc 'setup-iscsi-targets'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s7b-setup" "$log"
+    # The fresh targets ride rtslib's default 0.0.0.0:3260 wildcard
+    # portal — the specific-portal add fails against it (F-024's
+    # mechanic, live in setup's own flow; WARN recorded, FINDING row),
+    # so the assert is on target creation, never on "Portal added".
+    if [[ $rc -eq 0 ]] \
+            && [[ $(grep -c "✓ Target created" "$log" || true) -ge 3 ]] \
+            && grep -q "Post-restore signature detected" "$log" \
+            && grep -q "Reconcile not run" "$log" \
+            && grep -q "✓ iSCSI configuration saved" "$log"; then
+        itf_step pass "setup-iscsi-targets rebuilds + offers reconcile [s7b]" \
+            "3 targets + portals; offer declined (see s7b-setup.log)"
+    else
+        itf_step fail "setup-iscsi-targets rebuilds + offers reconcile [s7b]" \
+            "rc=$rc — see s7b-setup.log"
+        return 1
+    fi
+
+    # The authority observation: setup's own save replaced the saveconfig
+    # records with the live tree (targets + restored backstores, no
+    # mappings/ACLs) — the pool map is the only surviving authority.
+    log="$ITF_RUN_DIR/s7b-authority.log"
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            if grep -q 'mapped_luns' /etc/rtslib-fb-target/saveconfig.json; then
+                echo 'saveconfig still carries ACL grants'
+                exit 1
+            fi
+            if grep -q '${J16_DUMMY_ACL}' /etc/rtslib-fb-target/saveconfig.json; then
+                exit 1
+            fi
+            echo 'saveconfig records replaced by the live tree'
+        " > "$log" 2>&1 && grep -q "replaced by the live tree" "$log"; then
+        itf_step pass "authority gap recorded [s7b]" \
+            "setup's save overwrote the LUN/ACL records; the pool map is the" \
+            "only recovery authority left (FINDING row)"
+    else
+        itf_step info "authority gap recorded [s7b]" \
+            "saveconfig still carries grant records — see s7b-authority.log" \
+            "(shape differs from the expected overwrite; recorded)"
+    fi
+    itf_artifact "s7b-authority" "$log"
+
+    # RECOVER: reconcile from the pool map.  The backstores already
+    # exist (restore-luns-first created them target-independently), so
+    # reconcile's work here is the MAPPINGS; "Created backstore" lines
+    # belong to S6's from-nothing rebuild.
+    rfeed="$ITF_RUN_DIR/s7b-reconcile-answers.txt"
+    printf 'y\n' > "$rfeed"
+    log="$ITF_RUN_DIR/s7b-reconcile.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s7b-reconcile" "$log"
+    ok=1
+    for name in "${lun_names[@]}"; do
+        grep -q "✓ Mapped $name to ${J16_POOL_A}/lun" "$log" || ok=0
+    done
+    if [[ $rc -eq 0 && $ok -eq 1 ]] \
+            && grep -q "demo-mode ACLs.*${init_iqn}" "$log" \
+            && grep -q "demo-mode ACLs.*${J16_DUMMY_ACL}" "$log" \
+            && grep -q "✓ Pool LUN map refreshed" "$log"; then
+        itf_step pass "reconcile rebuilds LUNs from the map [s7b]" \
+            "every backstore/mapping recreated; the map's ACL records" \
+            "resolve to demo mode on the fresh TPGs (self-generate note);" \
+            "map refreshed (rescan WARNs honestly — initiator logged out)"
+    else
+        itf_step fail "reconcile rebuilds LUNs from the map [s7b]" \
+            "rc=$rc — see s7b-reconcile.log"
+        return 1
+    fi
+
+    # The grant dimension the map cannot carry: on the demo-flipped
+    # fresh TPG the map's ACL records dissolved — no explicit nodes were
+    # rebuilt, and the dummy's non-identity 8 -> 0 grant exists nowhere
+    # (it returns only through S7a's saveconfig path).
+    log="$ITF_RUN_DIR/s7b-grant-gap.log"
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            if targetcli /iscsi/${iqn}/tpg1/acls ls 2>/dev/null \
+                    | grep -q 'mapped_lun8'; then
+                echo 'mapped_lun8 present'
+            else
+                echo 'mapped_lun8 absent — no explicit ACLs rebuilt; the' \\
+                    'non-identity grant lives only in the saveconfig path'
+            fi
+        " > "$log" 2>&1 && grep -q "absent" "$log"; then
+        itf_step pass "non-identity grant gap recorded [s7b]" \
+            "the map's ACL dimension resolves to demo mode; neither the" \
+            "dummy's node nor its 8->0 grant returned (FINDING row)"
+    else
+        itf_step info "non-identity grant gap recorded [s7b]" \
+            "mapped_lun8 present after reconcile — see s7b-grant-gap.log" \
+            "(shape differs from the expectation; recorded)"
+    fi
+    itf_artifact "s7b-grant-gap" "$log"
+
+    itf_iscsi_check_gate "$s_ip" s7b || return 1
+
+    # The operator's re-login (the sessions were cleanly logged out
+    # before the wipe; rescan-storage needs a live session to rescan).
+    # shellcheck disable=SC2029  # expansions run on the compute guest
+    if itf_guest_exec "$c_ip" "
+            iscsiadm -m node -T ${iqn} --login >/dev/null 2>&1
+            for i in \$(seq 1 15); do
+                iscsiadm -m session 2>/dev/null | grep -q \"\${iqn}\" && break
+                sleep 2
+            done
+            iscsiadm -m session 2>/dev/null | grep -q \"\${iqn}\"
+        " > "$ITF_RUN_DIR/s7b-relogin.log" 2>&1; then
+        itf_step pass "initiator re-logs into the rebuilt target [s7b]" \
+            "session to ${iqn##*:} re-established"
+    else
+        itf_step fail "initiator re-logs into the rebuilt target [s7b]" \
+            "see s7b-relogin.log"
+        itf_artifact "s7b-relogin" "$ITF_RUN_DIR/s7b-relogin.log"
+        return 1
+    fi
+    j15_wait_links_classified 300 s7b 101 202 || return 1
+    itf_vm_boot_with_agent "$c_ip" 202 || return 1
+    itf_step pass "VM 202 boots on the map-rebuilt exports [s7b]" \
+        "agent answered on the encrypted root"
+    j15_park_vms s7b || return 1
+
+    # ==================================================================
+    # S8 — saveconfig.json truncated: boot-config authority, the parse
+    #      fences, and the documented force escape
+    # ==================================================================
+
+    # Staging: the interrupted-write shape — half the file's bytes.
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            bytes=\$(wc -c < /etc/rtslib-fb-target/saveconfig.json)
+            head -c \$(( bytes / 2 )) /etc/rtslib-fb-target/saveconfig.json \\
+                > /etc/rtslib-fb-target/saveconfig.json.corrupt
+            cp /etc/rtslib-fb-target/saveconfig.json.corrupt \\
+                /etc/rtslib-fb-target/saveconfig.json
+            if python3 -c 'import json; json.load(open(\"/etc/rtslib-fb-target/saveconfig.json\"))' \\
+                    >/dev/null 2>&1; then exit 1; fi
+            md5sum /etc/rtslib-fb-target/saveconfig.json
+        " > "$ITF_RUN_DIR/s8-corrupt.log" 2>&1 \
+        && grep -qE '^[0-9a-f]{32}' "$ITF_RUN_DIR/s8-corrupt.log"; then
+        itf_step pass "saveconfig truncated to invalid JSON [s8]" \
+            "half the bytes; md5 recorded (see s8-corrupt.log)"
+    else
+        itf_step fail "saveconfig truncated to invalid JSON [s8]" \
+            "see s8-corrupt.log"
+        return 1
+    fi
+    itf_artifact "s8-corrupt" "$ITF_RUN_DIR/s8-corrupt.log"
+    corrupt_md5="$(grep -oE '^[0-9a-f]{32}' "$ITF_RUN_DIR/s8-corrupt.log" \
+        | head -n 1)"
+
+    # The unit restart: restore runs from the boot config (the corrupt
+    # file is not the restore source), the pre-start backup preserves
+    # the corrupt bytes as evidence, and the verifier journals its
+    # verdict (keys stay loaded across a restart — the add hook re-adds
+    # the encrypted LUNs before the check runs, so OK is the expected
+    # shape; any DRIFT is recorded, not guessed).
+    log="$ITF_RUN_DIR/s8-restart.log"
+    itf_guest_exec "$s_ip" "systemctl restart rtslib-fb-targetctl" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s8-restart" "$log"
+    boot_journal="$ITF_RUN_DIR/s8-boot.journal"
+    # shellcheck disable=SC2016  # expansions run in the guest
+    itf_guest_exec "$s_ip" \
+        'journalctl -u rtslib-fb-targetctl.service --no-pager \
+            -n 200' > "$boot_journal" 2>/dev/null
+    itf_artifact "s8-boot-journal" "$boot_journal"
+    prestart_md5="$(itf_guest_exec "$s_ip" \
+        'md5sum /etc/rtslib-fb-target/saveconfig.json.pre-start' \
+        2>/dev/null | awk '{print $1}')"
+    if [[ $rc -eq 0 ]] \
+            && grep -q "backed up saveconfig.json" "$boot_journal" \
+            && grep -q "restoring boot config" "$boot_journal" \
+            && grep -q "post-restore verification" "$boot_journal" \
+            && [[ "$prestart_md5" == "$corrupt_md5" ]]; then
+        verdict="$(grep -o 'post-restore verification [A-Z]*' "$boot_journal" \
+            | tail -n 1)"
+        itf_step pass "restart restores from the boot config [s8]" \
+            "corrupt file bypassed; ${verdict:-no verdict} journalled;" \
+            ".pre-start holds the corrupt bytes (evidence, not a good copy)"
+        if [[ "$verdict" != *OK* ]]; then
+            itf_step info "verifier verdict [s8]" \
+                "'${verdict:-none}' — keys were expected loaded across the" \
+                "restart; recorded (see s8-boot-journal)"
+        fi
+    else
+        itf_step fail "restart restores from the boot config [s8]" \
+            "rc=$rc prestart=${prestart_md5:-none} — see s8-restart.log /" \
+            "s8-boot-journal"
+        return 1
+    fi
+    # (No link wait yet: VM 202's LUN is legitimately absent until the
+    # recovery below completes the tree — waiting here would be a 300s
+    # stall against the designed state.)
+
+    # Parse/count fences: with the corrupt authority the restart left
+    # the tree at 2 of 4 LUNs (the add hook refuses without recorded
+    # indexes), so the save refuses at the DEGRADED gate before the P1
+    # parse gate is ever reached — either refusal signature proves the
+    # file is never overwritten on a corrupt authority.
+    log="$ITF_RUN_DIR/s8-save-refusal.log"
+    itf_guest_exec "$s_ip" "bash -lc 'safe-iscsi-save'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s8-save-refusal" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "saveconfig.json NOT overwritten" "$log" \
+            && { grep -q "could not parse the saved or staged config" "$log" \
+                || grep -q "iSCSI target is degraded" "$log"; }; then
+        itf_step pass "safe-iscsi-save refuses on the corrupt authority [s8]" \
+            "rc=$rc — degraded-gate refusal (2 of 4 live), file untouched" \
+            "(see s8-save-refusal.log)"
+    else
+        itf_step fail "safe-iscsi-save refuses on the corrupt authority [s8]" \
+            "rc=$rc — see s8-save-refusal.log"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/s8-restore-probe.log"
+    itf_guest_exec "$s_ip" "bash -lc 'iscsi-restore-luns'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s8-restore-probe" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "All LUNs present — nothing to restore" "$log"; then
+        itf_step info "restore-luns verdict on corrupt config [s8]" \
+            "'nothing to restore' on an unparseable saveconfig — reads as" \
+            "healthy while the authority is gone (FINDING row)"
+    else
+        itf_step info "restore-luns verdict on corrupt config [s8]" \
+            "rc=$rc — see s8-restore-probe.log (recorded)"
+    fi
+
+    # The verifier honestly drifts: the encrypted LUNs are missing live
+    # (the corrupt authority carries no recorded indexes for the add
+    # hook), and the map still records them.
+    log="$ITF_RUN_DIR/iscsi-check-s8-corrupt.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "iscsi-check-s8-corrupt" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "map LUN 1 -> vm-101-disk-1 is missing live" "$log" \
+            && grep -q "map LUN 3 -> vm-202-disk-0 is missing live" "$log"; then
+        itf_step pass "verifier names the encrypted gap [s8]" \
+            "rc=$rc — both encrypted LUNs drift while keys pend on the" \
+            "corrupt authority (see iscsi-check-s8-corrupt.log)"
+    else
+        itf_step fail "verifier names the encrypted gap [s8]" \
+            "rc=$rc — see iscsi-check-s8-corrupt.log"
+        return 1
+    fi
+
+    # RECOVER: the FATAL's own documented force escape heals the file
+    # from the live tree; the map-driven reconcile rebuilds the two
+    # encrypted mappings at their recorded indexes (recover-encrypted
+    # reads its indexes from saveconfig and honestly refuses on the
+    # healed 2-LUN file); the trailing save regenerates the boot config
+    # and refreshes the map.
+    log="$ITF_RUN_DIR/s8-heal.log"
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            targetcli saveconfig >/dev/null 2>&1
+            python3 -c 'import json; json.load(open(\"/etc/rtslib-fb-target/saveconfig.json\"))'
+            rm -f /etc/rtslib-fb-target/saveconfig.json.corrupt
+            echo healed
+        " > "$log" 2>&1 && grep -q healed "$log"; then
+        itf_step pass "force escape heals saveconfig [s8]" \
+            "targetcli saveconfig rewrote valid JSON from the live tree"
+    else
+        itf_step fail "force escape heals saveconfig [s8]" "see s8-heal.log"
+        return 1
+    fi
+    itf_artifact "s8-heal" "$log"
+    log="$ITF_RUN_DIR/s8-recover-refusal.log"
+    itf_guest_exec "$s_ip" "bash -lc 'iscsi-recover-encrypted-luns'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s8-recover-refusal" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "vm-101-disk-1 has no recorded LUN index" "$log" \
+            && grep -q "Not guessing an index" "$log"; then
+        itf_step pass "recover honestly refuses without recorded indexes [s8]" \
+            "the healed 2-LUN saveconfig carries no encrypted indexes;" \
+            "auto-assignment refused (see s8-recover-refusal.log)"
+    else
+        itf_step fail "recover honestly refuses without recorded indexes [s8]" \
+            "rc=$rc — see s8-recover-refusal.log"
+        return 1
+    fi
+    rfeed="$ITF_RUN_DIR/s8-reconcile-answers.txt"
+    printf 'y\n' > "$rfeed"
+    log="$ITF_RUN_DIR/s8-reconcile.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s8-reconcile" "$log"
+    if [[ $rc -eq 0 ]] \
+            && grep -q "✓ Mapped vm-101-disk-1 to ${J16_POOL_A}/lun" "$log" \
+            && grep -q "✓ Mapped vm-202-disk-0 to ${J16_POOL_A}/lun" "$log" \
+            && grep -q "✓ iSCSI configuration saved" "$log" \
+            && grep -q "✓ Done" "$log"; then
+        itf_step pass "map-driven rebuild completes the tree [s8]" \
+            "both encrypted mappings rebuilt at recorded indexes;" \
+            "saveconfig, boot config, and map all refreshed"
+    else
+        itf_step fail "map-driven rebuild completes the tree [s8]" \
+            "rc=$rc — see s8-reconcile.log"
+        return 1
+    fi
+    itf_safe_save_gate "$s_ip" s8-healed || return 1
+    itf_iscsi_check_gate "$s_ip" s8 || return 1
+    j15_wait_links_classified 300 s8 101 202 || return 1
+
+    # ==================================================================
+    # S8b — the fallback branch: boot config gone AND saveconfig corrupt
+    #       must degrade loudly (unit failed), never silently
+    # ==================================================================
+
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            mv /etc/rtslib-fb-target/saveconfig-boot.json \\
+                /etc/rtslib-fb-target/saveconfig-boot.json.aside
+            head -c 20 /etc/rtslib-fb-target/saveconfig.json \\
+                > /etc/rtslib-fb-target/saveconfig.json.trunc
+            cp /etc/rtslib-fb-target/saveconfig.json.trunc \\
+                /etc/rtslib-fb-target/saveconfig.json
+            echo staged-fallback
+        " > "$ITF_RUN_DIR/s8b-stage.log" 2>&1 \
+        && grep -q staged-fallback "$ITF_RUN_DIR/s8b-stage.log"; then
+        itf_step pass "fallback branch staged [s8b]" \
+            "boot config aside; saveconfig a 20-byte stub"
+    else
+        itf_step fail "fallback branch staged [s8b]" "see s8b-stage.log"
+        return 1
+    fi
+    itf_artifact "s8b-stage" "$ITF_RUN_DIR/s8b-stage.log"
+
+    log="$ITF_RUN_DIR/s8b-restart.log"
+    itf_guest_exec "$s_ip" "systemctl restart rtslib-fb-targetctl" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s8b-restart" "$log"
+    result="$(itf_guest_exec "$s_ip" \
+        'systemctl show rtslib-fb-targetctl -p Result --value' 2>/dev/null)"
+    boot_journal="$ITF_RUN_DIR/s8b-boot.journal"
+    # shellcheck disable=SC2016  # expansions run in the guest
+    itf_guest_exec "$s_ip" \
+        'journalctl -u rtslib-fb-targetctl.service --no-pager \
+            -n 200' > "$boot_journal" 2>/dev/null
+    itf_artifact "s8b-boot-journal" "$boot_journal"
+    if [[ "$result" == "failure" || "$result" == "exit-code" ]] \
+            && grep -q "boot config not found, using default" "$boot_journal"; then
+        itf_step pass "fallback branch fails loudly [s8b]" \
+            "unit Result=${result} after 'using default' — the corrupt file" \
+            "refused, nothing silently 'succeeded'"
+    else
+        itf_step fail "fallback branch fails loudly [s8b]" \
+            "Result=${result:-unknown} rc=$rc — see s8b-boot.journal" \
+            "(a silent pass would be a FINDING)"
+        return 1
+    fi
+
+    # Heal: boot config back, restart from it, force-save, then the
+    # map-driven reconcile completes the tree (the same arc as S8's
+    # heal) before the gates.
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            mv /etc/rtslib-fb-target/saveconfig-boot.json.aside \\
+                /etc/rtslib-fb-target/saveconfig-boot.json
+            systemctl restart rtslib-fb-targetctl
+            targetcli saveconfig >/dev/null 2>&1
+            rm -f /etc/rtslib-fb-target/saveconfig.json.trunc
+            echo healed
+        " > "$ITF_RUN_DIR/s8b-heal.log" 2>&1 \
+        && grep -q healed "$ITF_RUN_DIR/s8b-heal.log"; then
+        itf_step pass "s8b healed" \
+            "boot config restored; unit restarted cleanly (see s8b-heal.log)"
+    else
+        itf_step fail "s8b healed" "see s8b-heal.log"
+        return 1
+    fi
+    itf_artifact "s8b-heal" "$ITF_RUN_DIR/s8b-heal.log"
+    rfeed="$ITF_RUN_DIR/s8b-reconcile-answers.txt"
+    printf 'y\n' > "$rfeed"
+    log="$ITF_RUN_DIR/s8b-reconcile.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s8b-reconcile" "$log"
+    if [[ $rc -eq 0 ]] \
+            && grep -q "✓ Mapped vm-101-disk-1 to ${J16_POOL_A}/lun" "$log" \
+            && grep -q "✓ Mapped vm-202-disk-0 to ${J16_POOL_A}/lun" "$log" \
+            && grep -q "✓ Done" "$log"; then
+        itf_step pass "map-driven rebuild completes the tree [s8b]" \
+            "tree complete again (see s8b-reconcile.log)"
+    else
+        itf_step fail "map-driven rebuild completes the tree [s8b]" \
+            "rc=$rc — see s8b-reconcile.log"
+        return 1
+    fi
+    itf_safe_save_gate "$s_ip" s8b-healed || return 1
+    itf_iscsi_check_gate "$s_ip" s8b || return 1
+    j15_wait_links_classified 300 s8b 101 202 || return 1
+
+    # ==================================================================
+    # S18a — zpool export zfstest3: identity WARNs, --check silent
+    #        (the one-sided-name tolerance), re-import restores silence
+    # ==================================================================
+
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "zpool export ${J16_POOL_ID}" \
+            > "$ITF_RUN_DIR/s18a-export.log" 2>&1 \
+        && ! itf_guest_exec "$s_ip" \
+            "zpool list -Ho name | grep -qx ${J16_POOL_ID}" > /dev/null 2>&1; then
+        itf_step pass "${J16_POOL_ID} exported [s18a]" \
+            "expected pool absent from the imported set"
+    else
+        itf_step fail "${J16_POOL_ID} exported [s18a]" "see s18a-export.log"
+        return 1
+    fi
+    itf_artifact "s18a-export" "$ITF_RUN_DIR/s18a-export.log"
+
+    log="$ITF_RUN_DIR/s18a-prereq.log"
+    itf_guest_exec "$s_ip" "bash -lc 'check-prerequisites --two-node'" \
+        > "$log" 2>&1
+    itf_artifact "s18a-prereq" "$log"
+    if grep -q "expected pool ${J16_POOL_ID} is not imported" "$log" \
+            && grep -q "identities are never repaired automatically" "$log"; then
+        itf_step pass "identity WARN on check-prerequisites [s18a]" \
+            "'${J16_POOL_ID} is not imported' + the never-repaired notice"
+    else
+        itf_step fail "identity WARN on check-prerequisites [s18a]" \
+            "see s18a-prereq.log"
+        return 1
+    fi
+
+    # setup-iscsi-targets: its own identity WARN block, and the block
+    # must NOT offer the reconcile (identities are not reconcileable).
+    # Targets all exist — the run is read-only for the tree.
+    log="$ITF_RUN_DIR/s18a-setup.log"
+    itf_guest_exec "$s_ip" "bash -lc 'setup-iscsi-targets' </dev/null" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s18a-setup" "$log"
+    identity_block="$(awk '/Pool-identity finding/,/before saving/' "$log")"
+    if [[ $rc -eq 0 ]] \
+            && grep -q "No changes needed" "$log" \
+            && grep -q "Pool-identity finding" "$log" \
+            && grep -q "expected pool ${J16_POOL_ID} is not imported" "$log" \
+            && [[ "$identity_block" != *reconcile* ]]; then
+        itf_step pass "setup identity block without reconcile offer [s18a]" \
+            "own WARN block, terminal — no reconcile suggested"
+    else
+        itf_step fail "setup identity block without reconcile offer [s18a]" \
+            "rc=$rc — see s18a-setup.log"
+        return 1
+    fi
+
+    # --check stays rc 0 on the missing pool: a one-sided name is
+    # deliberately not drift (the offline tolerance — the S18 ruling).
+    log="$ITF_RUN_DIR/iscsi-check-s18a.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "iscsi-check-s18a" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "✓ No drift" "$log" \
+            && ! grep -q "${J16_POOL_ID}" "$log"; then
+        itf_step pass "--check silent on the exported pool [s18a]" \
+            "rc 0, no pools line — the documented offline tolerance" \
+            "(campaign wording divergence = FINDING row)"
+    else
+        itf_step fail "--check silent on the exported pool [s18a]" \
+            "rc=$rc — see iscsi-check-s18a.log"
+        return 1
+    fi
+
+    # RECOVER: re-import; every surface goes quiet again.
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "zpool import ${J16_POOL_ID}" \
+            > "$ITF_RUN_DIR/s18a-import.log" 2>&1 \
+        && itf_guest_exec "$s_ip" \
+            "zpool list -Ho name | grep -qx ${J16_POOL_ID}" > /dev/null 2>&1; then
+        itf_step pass "${J16_POOL_ID} re-imported [s18a]" "back in the set"
+    else
+        itf_step fail "${J16_POOL_ID} re-imported [s18a]" \
+            "see s18a-import.log"
+        return 1
+    fi
+    log="$ITF_RUN_DIR/s18a-prereq-after.log"
+    itf_guest_exec "$s_ip" "bash -lc 'check-prerequisites --two-node'" \
+        > "$log" 2>&1
+    itf_artifact "s18a-prereq-after" "$log"
+    if grep -q "pool identities are consistent" "$log"; then
+        itf_step pass "identity silent after re-import [s18a]" \
+            "check-prerequisites passes the identity gate"
+    else
+        itf_step fail "identity silent after re-import [s18a]" \
+            "see s18a-prereq-after.log"
+        return 1
+    fi
+    itf_iscsi_check_gate "$s_ip" s18a || return 1
+
+    # ==================================================================
+    # S18b — destroy + recreate zfstest3: GUID change on a both-sides
+    #        name IS drift; convergence through the operator-confirmed
+    #        safe-iscsi-save
+    # ==================================================================
+
+    guid_old="$(itf_guest_exec "$s_ip" \
+        "zpool get -H -o value guid ${J16_POOL_ID}" 2>/dev/null \
+        | tr -d '[:space:]')"
+    if [[ "$guid_old" =~ ^[0-9]+$ ]]; then
+        itf_step pass "old GUID recorded [s18b]" "${J16_POOL_ID} = $guid_old"
+    else
+        itf_step fail "old GUID recorded [s18b]" "zpool get guid unreadable"
+        return 1
+    fi
+
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            zpool destroy ${J16_POOL_ID}
+            zpool create -f ${J16_POOL_ID} raidz1 \\
+                /dev/sdb11 /dev/sdb12 /dev/sdb13 /dev/sdb14 /dev/sdb15
+            zpool list -Ho name | grep -qx ${J16_POOL_ID}
+        " > "$ITF_RUN_DIR/s18b-recreate.log" 2>&1; then
+        itf_step pass "${J16_POOL_ID} destroyed + recreated [s18b]" \
+            "same name, new pool (see s18b-recreate.log)"
+    else
+        itf_step fail "${J16_POOL_ID} destroyed + recreated [s18b]" \
+            "see s18b-recreate.log"
+        itf_artifact "s18b-recreate" "$ITF_RUN_DIR/s18b-recreate.log"
+        return 1
+    fi
+    itf_artifact "s18b-recreate" "$ITF_RUN_DIR/s18b-recreate.log"
+    guid_new="$(itf_guest_exec "$s_ip" \
+        "zpool get -H -o value guid ${J16_POOL_ID}" 2>/dev/null \
+        | tr -d '[:space:]')"
+    if [[ "$guid_new" =~ ^[0-9]+$ && "$guid_new" != "$guid_old" ]]; then
+        itf_step pass "new GUID recorded [s18b]" \
+            "${J16_POOL_ID} = $guid_new (was $guid_old)"
+    else
+        itf_step fail "new GUID recorded [s18b]" "guid '$guid_new' unusable"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/s18b-prereq.log"
+    itf_guest_exec "$s_ip" "bash -lc 'check-prerequisites --two-node'" \
+        > "$log" 2>&1
+    itf_artifact "s18b-prereq" "$log"
+    if grep -q "pool ${J16_POOL_ID} renamed or replaced" "$log" \
+            && grep -q "map recorded GUID ${guid_old}, live GUID ${guid_new}" "$log"; then
+        itf_step pass "identity WARN names both GUIDs [s18b]" \
+            "map $guid_old vs live $guid_new"
+    else
+        itf_step fail "identity WARN names both GUIDs [s18b]" \
+            "see s18b-prereq.log"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/iscsi-check-s18b.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "iscsi-check-s18b" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "DRIFT: pools.${J16_POOL_ID}: GUID changed" "$log" \
+            && grep -q "map has '${guid_old}', live has '${guid_new}'" "$log"; then
+        itf_step pass "pools GUID drift asserted [s18b]" \
+            "the variant-b DRIFT line, rc=$rc"
+    else
+        itf_step fail "pools GUID drift asserted [s18b]" \
+            "rc=$rc — see iscsi-check-s18b.log"
+        return 1
+    fi
+
+    # RECOVER (human-resolved by design): the operator confirms the new
+    # pool is legitimate and persists the state — the map refresh that
+    # follows the save records the new GUID, and every surface goes quiet.
+    itf_safe_save_gate "$s_ip" s18b-confirm || return 1
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" \
+        "bash -lc 'export-iscsi-state --print-map' | grep -q '${guid_new}'"; then
+        itf_step pass "map records the new GUID [s18b]" \
+            "${guid_new} present in the pool map"
+    else
+        itf_step fail "map records the new GUID [s18b]" \
+            "the refreshed map lacks ${guid_new}"
+        return 1
+    fi
+    log="$ITF_RUN_DIR/s18b-prereq-after.log"
+    itf_guest_exec "$s_ip" "bash -lc 'check-prerequisites --two-node'" \
+        > "$log" 2>&1
+    itf_artifact "s18b-prereq-after" "$log"
+    if grep -q "pool identities are consistent" "$log"; then
+        itf_step pass "identity silent after convergence [s18b]" \
+            "the operator-confirmed save closed the loop"
+    else
+        itf_step fail "identity silent after convergence [s18b]" \
+            "see s18b-prereq-after.log"
+        return 1
+    fi
+    itf_iscsi_check_gate "$s_ip" s18b || return 1
+
+    # ==================================================================
+    # Wrap
+    # ==================================================================
+
+    # shellcheck disable=SC2016  # expansions run in the guest
+    if itf_guest_exec "$s_ip" '
+            set -e
+            test -s /etc/rtslib-fb-target/saveconfig.json
+            test -s /etc/rtslib-fb-target/saveconfig-boot.json
+            test -s /etc/rtslib-fb-target/saveconfig.json.pre-start
+            n=$(targetcli /iscsi/'"$iqn"'/tpg1/luns ls 2>/dev/null \
+                | grep -c "o- lun[0-9]" || true)
+            echo "live-luns: $n"
+        ' > "$ITF_RUN_DIR/wrap-state.log" 2>&1 \
+        && grep -q "live-luns: ${#lun_names[@]}" "$ITF_RUN_DIR/wrap-state.log"; then
+        itf_step pass "wrap state sane" \
+            "all three config files present; ${#lun_names[@]} LUNs live"
+    else
+        itf_step fail "wrap state sane" "see wrap-state.log"
+        return 1
+    fi
+    if itf_fence_tick "$c_ip" j16-final; then
+        itf_step pass "fence tick healthy [j16-final]" \
+            "all VM disk paths present"
+    else
+        itf_step fail "fence tick healthy [j16-final]" \
+            "see fence-tick-j16-final.log"
+        return 1
+    fi
+
+    itf_step info "journey complete" \
+        "S6 total live loss -> map rebuild with running-VM fallout; S9" \
+        "incident shape -> save fence + verifier + start abort + repair;" \
+        "S7a saveconfig full restore incl. non-identity grant; S7b total" \
+        "wipe -> honest refusals + map authority + grant-gap FINDING; S8" \
+        "corrupt saveconfig -> boot-config authority + force heal; S8b" \
+        "loud fallback; S18 identity export/recreate with the one-sided" \
+        "tolerance and GUID-drift convergence"
+    return 0
+}
+
+journey_main() {
+    j16_iscsi_total_loss_main "$@"
+}

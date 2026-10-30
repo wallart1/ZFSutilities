@@ -545,6 +545,17 @@ apply_changes() {
             fi
             grants_ok=0
             for idx in "${sorted_indexes[@]}"; do
+                # rtslib AUTO-GRANTS every TPG LUN as an identity
+                # MappedLUN at ACL-node creation, so an identity grant
+                # may already be present — presence is the goal, and a
+                # blind create collides ("already exists") on real
+                # targetcli.  Count a present grant as ok; create only
+                # the missing ones.
+                if targetcli "/iscsi/${iqn}/tpg1/acls/${init}" ls 2>/dev/null \
+                        | grep -q "mapped_lun${idx}[^0-9]"; then
+                    ((grants_ok++)) || true
+                    continue
+                fi
                 if targetcli "/iscsi/${iqn}/tpg1/acls/${init}" \
                         create "$idx" "$idx" >/dev/null 2>&1; then
                     ((grants_ok++)) || true

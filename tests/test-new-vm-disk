@@ -11,6 +11,8 @@ setup_test_env
 old_mydir="$mydir"
 func_text=$(sed -n '/^build_efidisk_line() {/,/^}$/p' "$old_mydir/bin/new-vm-disk")
 eval "$func_text"
+reg_text=$(sed -n '/^register_encrypted_lun() {/,/^}$/p' "$old_mydir/bin/new-vm-disk")
+eval "$reg_text"
 
 # ------------------------------------------------------------------
 # Tests
@@ -49,11 +51,93 @@ test_build_efidisk_line_preserves_base_options() {
     assert_contains "$line" "format=raw"
 }
 
+# --- register_encrypted_lun (F-027: full-line match, loud replacement) ---
+
+_enc_conf_tmp=""
+_enc_conf_new() {
+    _enc_conf_tmp="$(mktemp)"
+    encrypted_conf="$_enc_conf_tmp"
+    printf '%s\n' "$@" > "$_enc_conf_tmp"
+}
+
+test_register_encrypted_same_name_different_device_replaced() {
+    test_start "same-name/different-device conf line is replaced with WARN"
+    _enc_conf_new \
+        "vm-101-disk-1:/dev/zvol/threeamigos/proxmox/vm-101-disk-1:threeamigos"
+    register_encrypted_lun "vm-101-disk-1" \
+        "/dev/zvol/zfstest1/proxmox/vm-101-disk-1" "zfstest1"
+    local ok=true
+    [[ $(wc -l < "$_enc_conf_tmp") -eq 1 ]] || ok=false
+    grep -qxF \
+        "vm-101-disk-1:/dev/zvol/zfstest1/proxmox/vm-101-disk-1:zfstest1" \
+        "$_enc_conf_tmp" || ok=false
+    grep -q "WARN: Replaced encrypted LUNs config line for vm-101-disk-1" \
+        "${_TEST_LOG_FILE}" || ok=false
+    grep -q "was: vm-101-disk-1:/dev/zvol/threeamigos" \
+        "${_TEST_LOG_FILE}" || ok=false
+    grep -q "now: vm-101-disk-1:/dev/zvol/zfstest1" \
+        "${_TEST_LOG_FILE}" || ok=false
+    rm -f "$_enc_conf_tmp"
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "conf: $(cat "$_enc_conf_tmp" 2>/dev/null)"
+    fi
+}
+
+test_register_encrypted_exact_match_untouched() {
+    test_start "exact-match line leaves the conf untouched, no WARN"
+    _enc_conf_new \
+        "vm-202-disk-0:/dev/zvol/tank/proxmox/vm-202-disk-0:tank"
+    # _TEST_LOG_FILE accumulates across tests — judge only what this
+    # call appends (the log-scope trap).
+    local log_before
+    log_before=$(wc -l < "${_TEST_LOG_FILE}")
+    register_encrypted_lun "vm-202-disk-0" \
+        "/dev/zvol/tank/proxmox/vm-202-disk-0" "tank"
+    local appended
+    appended=$(tail -n +"$(( log_before + 1 ))" "${_TEST_LOG_FILE}")
+    local ok=true
+    [[ $(wc -l < "$_enc_conf_tmp") -eq 1 ]] || ok=false
+    grep -qxF "vm-202-disk-0:/dev/zvol/tank/proxmox/vm-202-disk-0:tank" \
+        "$_enc_conf_tmp" || ok=false
+    if grep -q "WARN: Replaced" <<< "$appended"; then
+        ok=false
+    fi
+    rm -f "$_enc_conf_tmp"
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "conf: $(cat "$_enc_conf_tmp" 2>/dev/null)"
+    fi
+}
+
+test_register_encrypted_fresh_conf_appends() {
+    test_start "fresh name is appended to the conf"
+    _enc_conf_new "vm-100-disk-0:/dev/zvol/tank/proxmox/vm-100-disk-0:tank"
+    register_encrypted_lun "vm-101-disk-1" \
+        "/dev/zvol/tank/proxmox/vm-101-disk-1" "tank"
+    local ok=true
+    [[ $(wc -l < "$_enc_conf_tmp") -eq 2 ]] || ok=false
+    grep -qxF "vm-101-disk-1:/dev/zvol/tank/proxmox/vm-101-disk-1:tank" \
+        "$_enc_conf_tmp" || ok=false
+    grep -q "✓ Added to encrypted LUNs config" "${_TEST_LOG_FILE}" || ok=false
+    rm -f "$_enc_conf_tmp"
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "conf: $(cat "$_enc_conf_tmp" 2>/dev/null)"
+    fi
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
 test_build_efidisk_line_secure_boot
 test_build_efidisk_line_no_secure_boot
 test_build_efidisk_line_preserves_base_options
+test_register_encrypted_same_name_different_device_replaced
+test_register_encrypted_exact_match_untouched
+test_register_encrypted_fresh_conf_appends
 
 test_summary

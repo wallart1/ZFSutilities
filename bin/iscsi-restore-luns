@@ -151,7 +151,7 @@ for target in config.get("targets", []):
         continue
     for tpg in target.get("tpgs", []):
         tag = tpg.get("tag", 1)
-        for acl in tpg.get("acls", []):
+        for acl in tpg.get("node_acls", []):
             init = acl.get("node_wwn", "")
             if not init:
                 continue

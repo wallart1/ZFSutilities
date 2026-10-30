@@ -1,0 +1,1274 @@
+#!/usr/bin/env bash
+# j17-iscsi-interrupted-ops.journey — interrupted & contradictory
+# operations recovery scenarios (campaign G3).
+#
+# The operator's hand slips halfway through a mutating command, or two
+# commands argue over the same LIO tree; every scenario recovers through
+# user-visible surfaces only:
+#   M5  three mistyped passphrases at luksOpen (three clean rejections,
+#       no mapper leak), then the correct one — the retry arc behind the
+#       modal the product documents.
+#   S13 new-vm-disk run twice for the same disk: the clean collision
+#       FATALs before any mutation; a Ctrl-C after the zvol create
+#       leaves the zvol-without-LUN half state the NEXT run then
+#       collides with — remove-vm-disk converges it, re-create works.
+#   M2  garbage at reconcile's apply prompt ("yes", "yup", bare Enter):
+#       the no-answer default must be SAFE — abort, rc 1, state frozen;
+#       the explicit "Y" applies and heals the hole.
+#   M3  mistyped identifiers at remove-vm-disk (wrong VMID, wrong disk
+#       number, unknown pool, garbage at the destroy confirmations):
+#       rejection before any mutation, nothing destroyed; the y/N (not
+#       type-to-confirm) destroy guard recorded as a UX-gap row.
+#   S11 remove-vm-disk Ctrl-C'd between steps (after the LUN teardown,
+#       before the zvol destroy): the half state drifts, safe-iscsi-save
+#       refuses the degraded save, and the re-run WARN-skips the already-
+#       gone pieces and converges.
+#   S10 reconcile Ctrl-C'd mid-apply (after the first backstore create):
+#       partial tree, pool map untouched (the recovery authority), drift
+#       on every LUN — re-run rebuilds the remainder, a third run finds
+#       nothing to do (idempotence + convergence).
+#   S14 hand `zfs destroy` of an exported zvol under a live LUN: the
+#       zvol layer REFUSES the destroy while LIO holds the device open
+#       ("dataset is busy") — the campaign's stale-live-LUN premise is
+#       structurally fenced (F-041), the sweep is skipped with the state
+#       intact, and the wrap expects the LUN alive.
+#   S12 reconcile and iscsi-restore-luns concurrently over the same
+#       wiped tree: no serialization or safe refusal exists — the race
+#       is recorded live (FINDING row), then a clean re-run converges.
+#
+# Composition: the ENTIRE j15 lab runs first (j05 two-node lab
+# --encrypted-keys + the boot-workload tail: VM 101 plain-root writer,
+# VM 202 encrypted-root writer, encrypted spare vm-101-disk-1, keys
+# loaded + store detached, VMs parked).  Keys stay loaded throughout —
+# this journey never reboots the storage guest (service restarts only).
+#
+# Guest state required: storage template + compute template (j05's).
+# Site config required: j05's two-node keys + the keystore pair.
+# Software source must be dev-tarball — this journey verifies
+# working-tree repairs.
+#
+# Recovery consumes ONLY user-visible signals (--check, transcripts,
+# targetcli listings, qm configs) and product-documented commands;
+# stumbles become FINDINGS (defects) or UX-gap rows.
+
+# j15 brings common.sh + j05 plus the workload/park/link helpers this
+# journey reuses (j15_read_coords, j15_park_vms, j15_wait_links_classified).
+# shellcheck source=j15-iscsi-boot-keys.journey
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/j15-iscsi-boot-keys.journey"
+
+# Workload/LUN identities (fixed by the composed lab design):
+#   VM 101 — everyday VM, root on the PLAIN vm-101-disk-2 LUN (S11's
+#            victim vm-101-disk-0 is its blank scsi0 spare)
+#   VM 202 — encrypted-root VM on vm-202-disk-0
+#   VM 304 — stopped container this journey creates for the S13 disks
+J17_POOL_A=zfstest1
+J17_VM=304
+J17_LUN_HALF="vm-304-disk-1"
+
+# The live zfstest1 target IQN (j15/j16's derivation: node.conf prefix).
+j17_target_iqn() {
+    local s_ip="$1"
+    local prefix
+    prefix="$(itf_guest_exec "$s_ip" \
+        'sed -n "s/^IQN_PREFIX=\"\([^\"]*\)\"/\1/p" /etc/zfsutilities/node.conf' \
+        2>/dev/null)"
+    if [[ -n "$prefix" ]]; then
+        echo "${prefix}:${J17_POOL_A}"
+        return 0
+    fi
+    return 1
+}
+
+# The live LUN inventory of one target as "index backstore" lines, parsed
+# line-based from targetcli's own listing (the operator-visible state —
+# dot-leader alignment makes field parsing unreliable).  Empty output =
+# no mappings live.
+j17_lun_inventory() {
+    local s_ip="$1" iqn="$2"
+    # shellcheck disable=SC2016  # expansions run in the guest
+    itf_guest_exec "$s_ip" '
+        targetcli /iscsi/'"$iqn"'/tpg1/luns ls 2>/dev/null \
+            | sed -n "s/^[[:space:]]*o- lun\([0-9][0-9]*\).*block\/\([^ (]*\).*$/\1 \2/p"
+    ' 2>/dev/null
+}
+
+# One live count of the vm backstores (the partial-state observable).
+j17_live_bs_count() {
+    local s_ip="$1"
+    itf_guest_exec "$s_ip" \
+        "targetcli /backstores/block ls 2>/dev/null | grep -oE 'vm-[0-9]+-disk-[0-9]+' | sort -u | wc -l" \
+        2>/dev/null | tr -d '[:space:]'
+}
+
+# Wipe every vm mapping + backstore live (j16 S6's injection, targets
+# left intact); echoes the transcript and returns the guest rc.
+j17_wipe_exports() {
+    local s_ip="$1" iqn="$2" log="$3"
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    itf_guest_exec "$s_ip" "
+            set -e
+            for lun in \$(targetcli /iscsi/${iqn}/tpg1/luns ls 2>/dev/null \
+                    | sed -n 's/^[[:space:]]*o- lun\([0-9][0-9]*\) .*/\1/p'); do
+                targetcli /iscsi/${iqn}/tpg1/luns delete lun\${lun} \
+                    >/dev/null 2>&1
+            done
+            for bs in \$(targetcli /backstores/block ls 2>/dev/null \
+                    | grep -oE 'vm-[0-9]+-disk-[0-9]+' | sort -u); do
+                targetcli /backstores/block delete \"\${bs}\" \
+                    >/dev/null 2>&1
+            done
+            if targetcli /iscsi/${iqn}/tpg1/luns ls 2>/dev/null \
+                    | grep -q 'o- lun[0-9]'; then exit 1; fi
+            if targetcli /backstores/block ls 2>/dev/null \
+                    | grep -qE 'vm-[0-9]+-disk-[0-9]+'; then exit 1; fi
+            echo wiped
+        " > "$log" 2>&1
+}
+
+# j17_kill_run <s_ip> <marker> <feed-local-or-empty> <stem> <cmd...>
+#
+# The Ctrl-C machinery (j12's generated-script pattern): run the product
+# command on the storage guest under setsid with the feed on stdin, poll
+# the transcript for the marker, signal the process group, wait.  The
+# signal is SIGTERM, not SIGINT: non-interactive bash SURVIVES a group
+# SIGINT (it lets the killed foreground child die, then continues the
+# script — live-proven on the lab guest; rc 0, full transcript), while
+# SIGTERM terminates the group mid-step, which is the user-visible
+# effect a terminal Ctrl-C has.  The transcript lands at
+# $ITF_RUN_DIR/<stem>.log (pulled back); the runner's own report
+# (kill-rc / marker-seen) at kill-<stem>.log.  The CALLER owns the
+# assertions — marker seen, rc, what the transcript must NOT contain,
+# and the half-state probes that follow.
+j17_kill_run() {
+    local s_ip="$1" marker="$2" feed="$3" stem="$4"; shift 4
+    local cmd="$*"
+    local feed_guest="/dev/null"
+    if [[ -n "$feed" ]]; then
+        itf_guest_put "$s_ip" "$feed" /root/itf-j17-feed.txt > /dev/null 2>&1 \
+            || return 1
+        feed_guest="/root/itf-j17-feed.txt"
+    fi
+    local runner="$ITF_RUN_DIR/j17-kill-${stem}.sh"
+    cat > "$runner" <<EOF
+#!/bin/bash
+# itf j17 (generated): SIGTERM <stem> at its transcript marker.
+set -u
+log=/root/itf-j17-${stem}.log
+setsid bash -lc ${cmd@Q} < ${feed_guest} > "\$log" 2>&1 &
+pid=\$!
+for _ in \$(seq 1 1500); do
+    grep -qF ${marker@Q} "\$log" 2>/dev/null && break
+    kill -0 "\$pid" 2>/dev/null || break
+    sleep 0.1
+done
+kill -TERM -- "-\$pid" 2>/dev/null
+wait "\$pid"
+echo "kill-rc: \$?"
+grep -qF ${marker@Q} "\$log" 2>/dev/null \\
+    && echo "marker-seen: yes" || echo "marker-seen: no"
+echo kill-done
+EOF
+    itf_guest_put "$s_ip" "$runner" /root/itf-j17-kill.sh > /dev/null 2>&1 \
+        || return 1
+    itf_guest_exec "$s_ip" "bash /root/itf-j17-kill.sh" \
+        > "$ITF_RUN_DIR/kill-${stem}.log" 2>&1
+    local rc=$?
+    itf_artifact "kill-$stem" "$ITF_RUN_DIR/kill-${stem}.log"
+    itf_guest_get "$s_ip" "/root/itf-j17-${stem}.log" \
+        "$ITF_RUN_DIR/${stem}.log" > /dev/null 2>&1 || true
+    itf_artifact "$stem" "$ITF_RUN_DIR/${stem}.log"
+    return "$rc"
+}
+
+# One mistyped-passphrase luksOpen strike: wrong bytes on stdin, expect
+# a clean rejection and no /dev/mapper/keys left behind.
+j17_m5_strike() {
+    local s_ip="$1" n="$2"
+    local feed log rc
+    feed="$(_itf_keystore_feed_wrong)"
+    log="$ITF_RUN_DIR/m5-strike-${n}.log"
+    itf_guest_exec_feed "$s_ip" "$feed" \
+        "cryptsetup luksOpen --key-file - /dev/sdc keys" > "$log" 2>&1
+    rc=$?
+    itf_artifact "m5-strike-$n" "$log"
+    if [[ $rc -ne 0 ]] \
+            && itf_guest_exec "$s_ip" "test ! -e /dev/mapper/keys" \
+                > /dev/null 2>&1; then
+        itf_step pass "wrong passphrase strike $n rejected [m5]" \
+            "luksOpen rc=$rc, no mapper left behind (see $(basename "$log"))"
+        return 0
+    fi
+    itf_step fail "wrong passphrase strike $n rejected [m5]" \
+        "rc=$rc — see $(basename "$log")"
+    return 1
+}
+
+j17_iscsi_interrupted_ops_main() {
+    # shellcheck disable=SC2034  # full coordinate pairs
+    local s_base s_vmid s_ip c_base c_vmid c_ip
+    local log rc feed rfeed iqn inv name victim_lun n bs_n map_n
+    local drift_n ok stem before_inv after_inv result boot_journal
+    local v304_1_lun s14_destroy_ok
+    local -a lun_names=() s10_names=()
+
+    itf_step info "journey start" \
+        "j17 interrupted & contradictory ops: M5 S13 M2 M3 S11 S10 S14" \
+        "S12 on the encrypted workload lab"
+
+    # ------------------------------------------------------------------
+    # Lab staging: the j15 encrypted two-node lab + boot-workload tail
+    # ------------------------------------------------------------------
+
+    j05_two_node_lab_main --encrypted-keys || return 1
+    j15_read_coords || return 1
+    itf_journey_stage_boot_workload_lab j17 "$s_base" "$s_vmid" "$s_ip" "$c_ip" \
+        || return 1
+
+    iqn="$(j17_target_iqn "$s_ip")"
+    if [[ -n "$iqn" ]]; then
+        itf_step pass "live target resolved" "zfstest1 target = $iqn"
+    else
+        itf_step fail "live target resolved" "node.conf IQN_PREFIX unreadable"
+        return 1
+    fi
+
+    inv="$(j17_lun_inventory "$s_ip" "$iqn")"
+    itf_guest_exec "$s_ip" \
+        "targetcli /iscsi/${iqn}/tpg1/luns ls; targetcli /backstores/block ls" \
+        > "$ITF_RUN_DIR/inventory-staged.log" 2>&1
+    itf_artifact "inventory-staged" "$ITF_RUN_DIR/inventory-staged.log"
+    if [[ $(wc -l <<< "$inv") -ge 4 ]]; then
+        itf_step pass "staged LUN inventory" \
+            "$(wc -l <<< "$inv") mappings live on ${J17_POOL_A} (see" \
+            "inventory-staged.log)"
+    else
+        itf_step fail "staged LUN inventory" \
+            "expected the lab's LUNs live, got: ${inv//$'\n'/; }"
+        return 1
+    fi
+    while read -r _ name; do
+        lun_names+=("$name")
+    done <<< "$inv"
+
+    # ==================================================================
+    # M5 — three mistyped passphrases at luksOpen, then the correct one
+    # ==================================================================
+
+    itf_keystore_insert "$s_base" "$s_vmid" || return 1
+    _itf_keystore_wait_sdc "$s_ip" > /dev/null 2>&1 || true
+    j17_m5_strike "$s_ip" 1 || return 1
+    j17_m5_strike "$s_ip" 2 || return 1
+    j17_m5_strike "$s_ip" 3 || return 1
+    itf_keystore_unlock_mount "$s_ip" || return 1
+    itf_step pass "correct passphrase accepted after three strikes [m5]" \
+        "the fourth luksOpen succeeds; store mounted — no lockout, no" \
+        "state damage from the strikes"
+    itf_keystore_lock_umount "$s_ip" || return 1
+    itf_keystore_remove "$s_base" "$s_vmid" || return 1
+
+    # ==================================================================
+    # S13 — new-vm-disk run twice + the Ctrl-C'd half state it leaves
+    # ==================================================================
+
+    # The config container for the new disks (VM 301/303 belong to j15's
+    # scenario body and do not exist in this composition).
+    log="$ITF_RUN_DIR/s13-qm-create-304.log"
+    if itf_guest_exec "$c_ip" \
+        "bash -lc 'qm create ${J17_VM} --name j17-vm${J17_VM} --scsihw virtio-scsi-pci'" \
+        > "$log" 2>&1; then
+        itf_step pass "VM ${J17_VM} created (stopped)" \
+            "config target for the S13 disks"
+    else
+        itf_step fail "VM ${J17_VM} created" "see $(basename "$log")"
+        return 1
+    fi
+
+    # Run 1: the clean create.
+    log="$ITF_RUN_DIR/s13-create-304-0.log"
+    itf_guest_exec "$c_ip" "bash -lc 'new-vm-disk ${J17_POOL_A} ${J17_VM} 0 1G'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s13-create-304-0" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "✓ Configuration saved" "$log" \
+            && itf_guest_exec "$c_ip" \
+                "grep -q '^scsi0: /dev/disk/by-path/' /etc/pve/qemu-server/${J17_VM}.conf" \
+                > /dev/null 2>&1; then
+        itf_step pass "first create succeeds [s13]" \
+            "vm-${J17_VM}-disk-0 (1G) + scsi0 line in VM ${J17_VM}'s config"
+    else
+        itf_step fail "first create succeeds [s13]" "rc=$rc — see $(basename "$log")"
+        return 1
+    fi
+    before_inv="$(j17_lun_inventory "$s_ip" "$iqn" | sort)"
+
+    # Run 2: the plain collision — refuses before any mutation.
+    log="$ITF_RUN_DIR/s13-collision-304-0.log"
+    itf_guest_exec "$c_ip" "bash -lc 'new-vm-disk ${J17_POOL_A} ${J17_VM} 0 1G'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s13-collision-304-0" "$log"
+    after_inv="$(j17_lun_inventory "$s_ip" "$iqn" | sort)"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "FATAL: Zvol already exists: ${J17_POOL_A}/proxmox/vm-${J17_VM}-disk-0" "$log" \
+            && grep -q "Storage operations failed" "$log" \
+            && [[ "$before_inv" == "$after_inv" ]] \
+            && itf_guest_exec "$s_ip" \
+                "grep -q '^vm-${J17_VM}-disk-0$' /etc/rtslib-fb-target/expected-backstores.txt" \
+                > /dev/null 2>&1; then
+        itf_step pass "second create collides cleanly [s13]" \
+            "zvol-exists FATAL relayed from the storage half; inventory" \
+            "and manifest unchanged"
+    else
+        itf_step fail "second create collides cleanly [s13]" \
+            "rc=$rc — see s13-collision-304-0.log"
+        return 1
+    fi
+
+    # Run 3: Ctrl-C after the zvol create (storage side; the compute half
+    # never hears the result — the network-drop shape).
+    j17_kill_run "$s_ip" "✓ Zvol created" "" s13-half \
+        "new-vm-disk ${J17_POOL_A} ${J17_VM} 1 1G --skip-rescan" > /dev/null 2>&1
+    log="$ITF_RUN_DIR/s13-half.log"
+    if grep -q "marker-seen: yes" "$ITF_RUN_DIR/kill-s13-half.log" \
+            && ! grep -q "✓ Configuration saved" "$log"; then
+        itf_step pass "new-vm-disk interrupted after zvol create [s13]" \
+            "the group TERM landed mid-flow (see kill-s13-half.log)"
+    else
+        itf_step fail "new-vm-disk interrupted after zvol create [s13]" \
+            "marker not seen or the run completed — see kill-s13-half.log /" \
+            "s13-half.log"
+        return 1
+    fi
+    log="$ITF_RUN_DIR/s13-half-state.log"
+    # The backstore create is where the TERM lands, so its existence is
+    # racy by construction — the deterministic postconditions are the
+    # zvol (exists) and the never-reached bookkeeping (no manifest line,
+    # no saved config).
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            zfs list -H -o name ${J17_POOL_A}/proxmox/${J17_LUN_HALF} \
+                | grep -qx ${J17_POOL_A}/proxmox/${J17_LUN_HALF}
+            ! grep -q '${J17_LUN_HALF}' /etc/rtslib-fb-target/expected-backstores.txt
+            if targetcli /backstores/block ls 2>/dev/null \
+                    | grep -q '${J17_LUN_HALF}'; then
+                echo 'note: backstore existed at TERM time'
+            fi
+            echo half-state-ok
+        " > "$log" 2>&1 && grep -q half-state-ok "$log"; then
+        itf_step pass "half state: zvol without a completed flow [s13]" \
+            "zvol exists; no manifest line, nothing saved — the flow died" \
+            "mid-storage-steps$(grep -q 'backstore existed' "$log" && echo ' (backstore half-created)')"
+    else
+        itf_step fail "half state: zvol without LUN [s13]" "see s13-half-state.log"
+        itf_artifact "s13-half-state" "$log"
+        return 1
+    fi
+    itf_artifact "s13-half-state" "$log"
+
+    # Run 4: the next create collides with its own half state (stuck).
+    log="$ITF_RUN_DIR/s13-collision-half.log"
+    itf_guest_exec "$c_ip" "bash -lc 'new-vm-disk ${J17_POOL_A} ${J17_VM} 1 1G'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s13-collision-half" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "FATAL: Zvol already exists: ${J17_POOL_A}/proxmox/${J17_LUN_HALF}" "$log"; then
+        itf_step pass "re-run collides with its own half state [s13]" \
+            "the zvol-exists guard refuses; the half state is stuck until" \
+            "remove-vm-disk runs"
+    else
+        itf_step fail "re-run collides with its own half state [s13]" \
+            "rc=$rc — see s13-collision-half.log"
+        return 1
+    fi
+
+    # RECOVER: remove-vm-disk converges the half state.
+    rfeed="$ITF_RUN_DIR/s13-remove-answers.txt"
+    printf 'y\ny\n' > "$rfeed"
+    log="$ITF_RUN_DIR/s13-remove-repair.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" \
+        "bash -lc 'remove-vm-disk ${J17_POOL_A} ${J17_VM} 1'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s13-remove-repair" "$log"
+    if [[ $rc -eq 0 ]] \
+            && { grep -q "LUN not found in target — skipping LUN removal" "$log" \
+                || grep -q "not found — skipping" "$log"; } \
+            && grep -q "✓ Configuration saved" "$log" \
+            && grep -q "✓ Zvol destroyed" "$log" \
+            && ! itf_guest_exec "$s_ip" \
+                "zfs list -H -o name ${J17_POOL_A}/proxmox/${J17_LUN_HALF}" \
+                > /dev/null 2>&1; then
+        itf_step pass "remove-vm-disk converges the half state [s13]" \
+            "missing pieces WARN-skipped, zvol destroyed (see" \
+            "s13-remove-repair.log)"
+    else
+        itf_step fail "remove-vm-disk converges the half state [s13]" \
+            "rc=$rc — see s13-remove-repair.log"
+        return 1
+    fi
+
+    # Re-create works once the half state is gone.
+    log="$ITF_RUN_DIR/s13-recreate-304-1.log"
+    itf_guest_exec "$c_ip" "bash -lc 'new-vm-disk ${J17_POOL_A} ${J17_VM} 1 1G'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s13-recreate-304-1" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "✓ Configuration saved" "$log" \
+            && itf_guest_exec "$c_ip" \
+                "grep -q '^scsi1: /dev/disk/by-path/' /etc/pve/qemu-server/${J17_VM}.conf" \
+                > /dev/null 2>&1; then
+        itf_step pass "re-create succeeds after repair [s13]" \
+            "vm-${J17_VM}-disk-1 + scsi1 line (S14's victim)"
+    else
+        itf_step fail "re-create succeeds after repair [s13]" \
+            "rc=$rc — see s13-recreate-304-1.log"
+        return 1
+    fi
+    itf_safe_save_gate "$s_ip" s13 || return 1
+    itf_iscsi_check_gate "$s_ip" s13 || return 1
+
+    # ==================================================================
+    # M2 — garbage at reconcile's apply prompt: the safe default
+    # ==================================================================
+
+    victim_lun="$(j17_lun_inventory "$s_ip" "$iqn" \
+        | awk -v bs="vm-${J17_VM}-disk-0" '$2 == bs {print $1; exit}')"
+    if [[ -n "$victim_lun" ]]; then
+        itf_step pass "hole victim recorded [m2]" \
+            "vm-${J17_VM}-disk-0 rides lun$victim_lun"
+    else
+        itf_step fail "hole victim recorded [m2]" \
+            "vm-${J17_VM}-disk-0 not found in the live inventory"
+        return 1
+    fi
+
+    # Inject: one hand-deleted mapping (the j16 S9 shape, unit scale).
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            targetcli /iscsi/${iqn}/tpg1/luns delete lun${victim_lun} \
+                >/dev/null 2>&1
+            targetcli /iscsi/${iqn}/tpg1/luns ls | grep 'o- lun' \
+                | grep -vq 'vm-${J17_VM}-disk-0'
+            echo unmapped
+        " > "$ITF_RUN_DIR/m2-inject.log" 2>&1 \
+        && grep -q unmapped "$ITF_RUN_DIR/m2-inject.log"; then
+        itf_step pass "apply-prompt hole injected [m2]" \
+            "lun$victim_lun mapping deleted; backstore remains"
+    else
+        itf_step fail "apply-prompt hole injected [m2]" "see m2-inject.log"
+        itf_artifact "m2-inject" "$ITF_RUN_DIR/m2-inject.log"
+        return 1
+    fi
+    itf_artifact "m2-inject" "$ITF_RUN_DIR/m2-inject.log"
+
+    local ans
+    for ans in yes yup ""; do
+        rfeed="$ITF_RUN_DIR/m2-answer.txt"
+        printf '%s\n' "$ans" > "$rfeed"
+        log="$ITF_RUN_DIR/m2-abort-rc.log"
+        itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
+            > "$log" 2>&1
+        rc=$?
+        itf_artifact "m2-abort-rc" "$log"
+        if [[ $rc -ne 0 ]] && grep -q "WARN: Aborted — no changes made" "$log"; then
+            itf_step pass "ambiguous answer '${ans:-<Enter>}' aborts safely [m2]" \
+                "rc=$rc, no changes made"
+        else
+            itf_step fail "ambiguous answer '${ans:-<Enter>}' aborts safely [m2]" \
+                "rc=$rc — see m2-abort-rc.log"
+            return 1
+        fi
+        log="$ITF_RUN_DIR/m2-frozen-check.log"
+        itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+            > "$log" 2>&1
+        rc=$?
+        itf_artifact "m2-frozen-check" "$log"
+        if [[ $rc -ne 0 ]] \
+                && grep -q "map LUN ${victim_lun} -> vm-${J17_VM}-disk-0 is missing live" "$log"; then
+            itf_step pass "state frozen after the abort [m2]" \
+                "the same single DRIFT line; nothing was applied"
+        else
+            itf_step fail "state frozen after the abort [m2]" \
+                "rc=$rc — see m2-frozen-check.log"
+            return 1
+        fi
+    done
+
+    # The explicit uppercase yes applies and heals the hole.
+    rfeed="$ITF_RUN_DIR/m2-apply-answers.txt"
+    printf 'Y\n' > "$rfeed"
+    log="$ITF_RUN_DIR/m2-apply.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "m2-apply" "$log"
+    if [[ $rc -eq 0 ]] \
+            && grep -q "✓ Mapped vm-${J17_VM}-disk-0 to ${J17_POOL_A}/lun" "$log" \
+            && grep -q "✓ Done" "$log"; then
+        itf_step pass "explicit Y applies the plan [m2]" \
+            "the hole healed; nothing ambiguous was ever accepted"
+    else
+        itf_step fail "explicit Y applies the plan [m2]" \
+            "rc=$rc — see m2-apply.log"
+        return 1
+    fi
+    itf_iscsi_check_gate "$s_ip" m2 || return 1
+
+    # ==================================================================
+    # M3 — mistyped identifiers at remove-vm-disk prompts
+    # ==================================================================
+
+    before_inv="$(j17_lun_inventory "$s_ip" "$iqn" | sort)"
+
+    log="$ITF_RUN_DIR/m3-wrong-vmid.log"
+    itf_guest_exec "$s_ip" "bash -lc 'remove-vm-disk ${J17_POOL_A} 999 0'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "m3-wrong-vmid" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "FATAL: Zvol does not exist: ${J17_POOL_A}/proxmox/vm-999-disk-0" "$log"; then
+        itf_step pass "wrong VMID rejected [m3]" "FATAL before any mutation"
+    else
+        itf_step fail "wrong VMID rejected [m3]" "rc=$rc — see m3-wrong-vmid.log"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/m3-wrong-disknum.log"
+    itf_guest_exec "$s_ip" "bash -lc 'remove-vm-disk ${J17_POOL_A} 101 9'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "m3-wrong-disknum" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "FATAL: Zvol does not exist: ${J17_POOL_A}/proxmox/vm-101-disk-9" "$log" \
+            && itf_guest_exec "$s_ip" \
+                "zfs list -H -o name ${J17_POOL_A}/proxmox/vm-101-disk-0" \
+                > /dev/null 2>&1; then
+        itf_step pass "wrong disk number rejected [m3]" \
+            "FATAL; the real vm-101-disk-0 untouched"
+    else
+        itf_step fail "wrong disk number rejected [m3]" \
+            "rc=$rc — see m3-wrong-disknum.log"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/m3-wrong-pool.log"
+    itf_guest_exec "$s_ip" "bash -lc 'remove-vm-disk nosuchpool 101 0'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "m3-wrong-pool" "$log"
+    if [[ $rc -ne 0 ]] && grep -q "FATAL: Pool must be one of:" "$log"; then
+        itf_step pass "unknown pool rejected [m3]" "FATAL listing valid pools"
+    else
+        itf_step fail "unknown pool rejected [m3]" "rc=$rc — see m3-wrong-pool.log"
+        return 1
+    fi
+
+    # Garbage at the destroy confirmations against a REAL zvol.
+    rfeed="$ITF_RUN_DIR/m3-garbage1-answers.txt"
+    printf 'yes\ny\n' > "$rfeed"
+    log="$ITF_RUN_DIR/m3-garbage1.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" \
+        "bash -lc 'remove-vm-disk ${J17_POOL_A} 101 0'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "m3-garbage1" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "Aborted." "$log" \
+            && ! grep -q "✓ Zvol destroyed" "$log"; then
+        itf_step pass "'yes' at the first confirm aborts [m3]" \
+            "nothing destroyed — 'yes' is not y"
+    else
+        itf_step fail "'yes' at the first confirm aborts [m3]" \
+            "rc=$rc — see m3-garbage1.log"
+        return 1
+    fi
+
+    rfeed="$ITF_RUN_DIR/m3-garbage2-answers.txt"
+    printf 'y\nyes\n' > "$rfeed"
+    log="$ITF_RUN_DIR/m3-garbage2.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" \
+        "bash -lc 'remove-vm-disk ${J17_POOL_A} 101 0'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "m3-garbage2" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "Aborted." "$log" \
+            && ! grep -q "✓ Zvol destroyed" "$log"; then
+        itf_step pass "'yes' at the second confirm aborts [m3]" \
+            "the first y advanced, the second 'yes' stopped it — nothing" \
+            "destroyed"
+    else
+        itf_step fail "'yes' at the second confirm aborts [m3]" \
+            "rc=$rc — see m3-garbage2.log"
+        return 1
+    fi
+
+    after_inv="$(j17_lun_inventory "$s_ip" "$iqn" | sort)"
+    if [[ "$before_inv" == "$after_inv" ]] \
+            && itf_guest_exec "$s_ip" \
+                "zfs list -H -o name ${J17_POOL_A}/proxmox/vm-101-disk-0" \
+                > /dev/null 2>&1; then
+        itf_step pass "no wrong-object mutation across M3 [m3]" \
+            "inventory identical; vm-101-disk-0 still present"
+    else
+        itf_step fail "no wrong-object mutation across M3 [m3]" \
+            "state changed — compare inventory-staged/m3 runs"
+        return 1
+    fi
+    itf_step info "destroy guard is y/N, not type-to-confirm [m3]" \
+        "a bare y destroys a named zvol — UX gap (→ REQUIREMENTS at G5)"
+
+    # ==================================================================
+    # S11 — remove-vm-disk Ctrl-C'd between steps: half state + repair
+    # ==================================================================
+
+    # The documented precondition: disk removed from Proxmox first (the
+    # VMs are parked stopped — that half of the warning already holds).
+    log="$ITF_RUN_DIR/s11-pve-detach.log"
+    if itf_guest_exec "$c_ip" "qm set 101 --delete scsi0" > "$log" 2>&1; then
+        itf_step pass "victim detached from VM 101 [s11]" \
+            "scsi0 (vm-101-disk-0) removed from the PVE config"
+    else
+        itf_step fail "victim detached from VM 101 [s11]" "see $(basename "$log")"
+        return 1
+    fi
+
+    victim_lun="$(j17_lun_inventory "$s_ip" "$iqn" \
+        | awk -v bs="vm-101-disk-0" '$2 == bs {print $1; exit}')"
+    if [[ -n "$victim_lun" ]]; then
+        itf_step pass "victim LUN recorded [s11]" \
+            "vm-101-disk-0 rides lun$victim_lun"
+    else
+        itf_step fail "victim LUN recorded [s11]" \
+            "vm-101-disk-0 not found in the live inventory"
+        return 1
+    fi
+
+    feed="$ITF_RUN_DIR/s11-remove-answers.txt"
+    printf 'y\ny\n' > "$feed"
+    # Marker = the backstore-removal INFO line: the LUN delete is
+    # already done, the manifest sed and the save are still ahead — the
+    # postconditions (zvol + manifest intact, LUN gone) are deterministic.
+    j17_kill_run "$s_ip" "Removing backstore vm-101-disk-0" "$feed" s11-half \
+        "remove-vm-disk ${J17_POOL_A} 101 0" > /dev/null 2>&1
+    log="$ITF_RUN_DIR/s11-half.log"
+    if grep -q "marker-seen: yes" "$ITF_RUN_DIR/kill-s11-half.log" \
+            && ! grep -q "✓ Zvol destroyed" "$log"; then
+        itf_step pass "remove-vm-disk interrupted mid-teardown [s11]" \
+            "terminated after the LUN teardown, before the zvol destroy" \
+            "(see kill-s11-half.log)"
+    else
+        itf_step fail "remove-vm-disk interrupted mid-teardown [s11]" \
+            "marker not seen or the removal completed — see kill-s11-half.log"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/s11-half-state.log"
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            zfs list -H -o name ${J17_POOL_A}/proxmox/vm-101-disk-0 \
+                | grep -qx ${J17_POOL_A}/proxmox/vm-101-disk-0
+            grep -q '^vm-101-disk-0$' /etc/rtslib-fb-target/expected-backstores.txt
+            echo half-state-ok
+        " > "$log" 2>&1 && grep -q half-state-ok "$log"; then
+        itf_step pass "half state: zvol + manifest intact, LUN gone [s11]" \
+            "the removal died between the iSCSI teardown and the cleanup"
+    else
+        itf_step fail "half state: zvol + manifest intact, LUN gone [s11]" \
+            "see s11-half-state.log"
+        itf_artifact "s11-half-state" "$log"
+        return 1
+    fi
+    itf_artifact "s11-half-state" "$log"
+
+    # SYMPTOM: the verifier names the missing LUN; the save gate refuses.
+    log="$ITF_RUN_DIR/iscsi-check-s11-drift.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "iscsi-check-s11-drift" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "map LUN ${victim_lun} -> vm-101-disk-0 is missing live" "$log"; then
+        itf_step pass "verifier names the half-torn LUN [s11]" \
+            "rc=$rc — the map still records what the teardown removed"
+    else
+        itf_step fail "verifier names the half-torn LUN [s11]" \
+            "rc=$rc — see iscsi-check-s11-drift.log"
+        return 1
+    fi
+    log="$ITF_RUN_DIR/s11-save-refusal.log"
+    itf_guest_exec "$s_ip" "bash -lc 'safe-iscsi-save'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s11-save-refusal" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "LUN ${victim_lun} -> vm-101-disk-0 would be lost" "$log" \
+            && grep -q "while still expected" "$log" \
+            && grep -q "or force with: targetcli saveconfig" "$log"; then
+        itf_step pass "safe-iscsi-save refuses the degraded save [s11]" \
+            "mapping-loss FATAL names LUN ${victim_lun}; force escape printed"
+    else
+        itf_step fail "safe-iscsi-save refuses the degraded save [s11]" \
+            "rc=$rc — see s11-save-refusal.log"
+        return 1
+    fi
+
+    # RECOVER: the re-run WARN-skips the gone pieces and converges.
+    rfeed="$ITF_RUN_DIR/s11-remove-again-answers.txt"
+    printf 'y\ny\n' > "$rfeed"
+    log="$ITF_RUN_DIR/s11-remove-again.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" \
+        "bash -lc 'remove-vm-disk ${J17_POOL_A} 101 0'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s11-remove-again" "$log"
+    if [[ $rc -eq 0 ]] \
+            && { grep -q "LUN not found in target — skipping LUN removal" "$log" \
+                || grep -q "not found — skipping" "$log"; } \
+            && grep -q "✓ Configuration saved" "$log" \
+            && grep -q "✓ Zvol destroyed" "$log"; then
+        itf_step pass "remove-vm-disk re-run converges the half state [s11]" \
+            "skip-WARNs for the gone pieces, then manifest + save + destroy" \
+            "(see s11-remove-again.log)"
+    else
+        itf_step fail "remove-vm-disk re-run converges the half state [s11]" \
+            "rc=$rc — see s11-remove-again.log"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/s11-converged.log"
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            ! zfs list -H -o name ${J17_POOL_A}/proxmox/vm-101-disk-0
+            ! grep -q '^vm-101-disk-0$' /etc/rtslib-fb-target/expected-backstores.txt
+            echo converged
+        " > "$log" 2>&1 && grep -q converged "$log"; then
+        itf_step pass "zvol + manifest entry gone [s11]" \
+            "the re-run completed the removal end to end"
+    else
+        itf_step fail "zvol + manifest entry gone [s11]" "see s11-converged.log"
+        itf_artifact "s11-converged" "$log"
+        return 1
+    fi
+    itf_artifact "s11-converged" "$log"
+    itf_iscsi_check_gate "$s_ip" s11 || return 1
+
+    # ==================================================================
+    # S10 — reconcile Ctrl-C'd mid-apply: partial tree, map preserved,
+    #      re-run idempotence + convergence
+    # ==================================================================
+
+    inv="$(j17_lun_inventory "$s_ip" "$iqn")"
+    s10_names=()
+    while read -r _ name; do
+        s10_names+=("$name")
+    done <<< "$inv"
+    n=${#s10_names[@]}
+    if [[ $n -ge 5 ]]; then
+        itf_step pass "pre-wipe inventory recorded [s10]" \
+            "$n LUNs live (staged minus S11's, plus S13's)"
+    else
+        itf_step fail "pre-wipe inventory recorded [s10]" \
+            "expected at least 5 LUNs, got $n: ${inv//$'\n'/; }"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/s10-wipe.log"
+    j17_wipe_exports "$s_ip" "$iqn" "$log"
+    rc=$?
+    itf_artifact "s10-wipe" "$log"
+    if [[ $rc -eq 0 ]] && grep -q wiped "$log"; then
+        itf_step pass "all live LUN exports destroyed [s10]" \
+            "$n mappings + backstores gone; OS-disk records untouched"
+    else
+        itf_step fail "all live LUN exports destroyed [s10]" "see s10-wipe.log"
+        return 1
+    fi
+
+    # Ctrl-C after the FIRST backstore create lands mid-apply.
+    j17_kill_run "$s_ip" "✓ Created backstore" "" s10-int \
+        "reconcile-iscsi-state --yes" > /dev/null 2>&1
+    log="$ITF_RUN_DIR/s10-int.log"
+    bs_n="$(j17_live_bs_count "$s_ip")"
+    map_n="$(j17_lun_inventory "$s_ip" "$iqn" | wc -l | tr -d '[:space:]')"
+    if grep -q "marker-seen: yes" "$ITF_RUN_DIR/kill-s10-int.log" \
+            && [[ "$bs_n" =~ ^[0-9]+$ ]] && (( bs_n >= 1 && bs_n < n )) \
+            && [[ "$map_n" =~ ^[0-9]+$ ]] && (( map_n == 0 )); then
+        itf_step pass "reconcile interrupted mid-apply [s10]" \
+            "terminated after the first backstore; ${bs_n} of ${n}" \
+            "backstores" \
+            "live, no mappings recreated (see kill-s10-int.log)"
+    else
+        itf_step fail "reconcile interrupted mid-apply [s10]" \
+            "bs=${bs_n:-?} maps=${map_n:-?} of ${n} — see kill-s10-int.log"
+        return 1
+    fi
+
+    # The pool map is the untouched recovery authority.
+    log="$ITF_RUN_DIR/s10-map-preserved.log"
+    ok=1
+    for name in "${s10_names[@]}"; do
+        itf_guest_exec "$s_ip" \
+            "bash -lc 'export-iscsi-state --print-map' | grep -q '\"$name\"'" \
+            >> "$log" 2>&1 || ok=0
+    done
+    itf_artifact "s10-map-preserved" "$log"
+    if [[ $ok -eq 1 ]]; then
+        itf_step pass "pool map preserved through the interruption [s10]" \
+            "every LUN still recorded — the interrupted apply never" \
+            "refreshed the authority"
+    else
+        itf_step fail "pool map preserved through the interruption [s10]" \
+            "see s10-map-preserved.log"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/iscsi-check-s10-drift.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "iscsi-check-s10-drift" "$log"
+    drift_n="$(grep -c 'is missing live' "$log" || true)"
+    if [[ $rc -ne 0 && "$drift_n" -ge $(( n - 1 )) ]]; then
+        itf_step pass "verifier drifts on the partial tree [s10]" \
+            "rc=$rc, ${drift_n} missing-live DRIFT line(s)"
+    else
+        itf_step fail "verifier drifts on the partial tree [s10]" \
+            "rc=$rc, ${drift_n} DRIFT line(s) for ${n} LUNs"
+        return 1
+    fi
+
+    # RECOVER: the re-run rebuilds the remainder and refreshes the map.
+    rfeed="$ITF_RUN_DIR/s10-reconcile-answers.txt"
+    printf 'y\n' > "$rfeed"
+    log="$ITF_RUN_DIR/s10-reconcile.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s10-reconcile" "$log"
+    ok=1
+    for name in "${s10_names[@]}"; do
+        grep -q "✓ Mapped $name to ${J17_POOL_A}/lun" "$log" || ok=0
+    done
+    if [[ $rc -eq 0 && $ok -eq 1 ]] \
+            && grep -q "✓ iSCSI configuration saved" "$log" \
+            && grep -q "✓ Pool LUN map refreshed" "$log" \
+            && grep -q "✓ Done" "$log"; then
+        itf_step pass "re-run rebuilds the remainder [s10]" \
+            "${n} mappings restored; save + map refresh + rescan (see" \
+            "s10-reconcile.log)"
+    else
+        itf_step fail "re-run rebuilds the remainder [s10]" \
+            "rc=$rc — see s10-reconcile.log"
+        return 1
+    fi
+
+    # Idempotence: nothing left to do.
+    log="$ITF_RUN_DIR/s10-idempotent.log"
+    itf_guest_exec "$s_ip" "bash -lc 'reconcile-iscsi-state'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s10-idempotent" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "No target-side changes needed" "$log"; then
+        itf_step pass "third run finds nothing to do [s10]" \
+            "converged — no prompt, no changes, rc 0"
+    else
+        itf_step fail "third run finds nothing to do [s10]" \
+            "rc=$rc — see s10-idempotent.log"
+        return 1
+    fi
+    itf_iscsi_check_gate "$s_ip" s10 || return 1
+    j15_wait_links_classified 300 s10 101 202 || return 1
+
+    # ==================================================================
+    # S14 — hand zfs destroy of an exported zvol: the stale-entry trap
+    # ==================================================================
+
+    v304_1_lun="$(j17_lun_inventory "$s_ip" "$iqn" \
+        | awk -v bs="$J17_LUN_HALF" '$2 == bs {print $1; exit}')"
+    if [[ -n "$v304_1_lun" ]]; then
+        itf_step pass "victim LUN recorded [s14]" \
+            "$J17_LUN_HALF rides lun$v304_1_lun"
+    else
+        itf_step fail "victim LUN recorded [s14]" \
+            "$J17_LUN_HALF not found in the live inventory"
+        return 1
+    fi
+
+    s14_destroy_ok=1
+    log="$ITF_RUN_DIR/s14-destroy.log"
+    if itf_guest_exec "$s_ip" "zfs destroy ${J17_POOL_A}/proxmox/${J17_LUN_HALF}" \
+            > "$log" 2>&1 \
+        && ! itf_guest_exec "$s_ip" \
+            "zfs list -H -o name ${J17_POOL_A}/proxmox/${J17_LUN_HALF}" \
+            > /dev/null 2>&1; then
+        itf_step pass "zvol hand-destroyed under a live LUN [s14]" \
+            "the LIO export outlives its zvol (see s14-destroy.log)"
+    else
+        itf_step info "zfs destroy refused while LIO holds the device [s14]" \
+            "structural fence — the campaign's hand-destroy premise cannot" \
+            "be staged on this stack; sweep skipped, state intact (see" \
+            "s14-destroy.log)"
+        itf_artifact "s14-destroy" "$log"
+        s14_destroy_ok=0
+    fi
+
+    if [[ "$s14_destroy_ok" == 1 ]]; then
+
+    # SYMPTOM 1: the verifier is silent — the backstore still matches.
+    log="$ITF_RUN_DIR/iscsi-check-s14-silent.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "iscsi-check-s14-silent" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "✓ No drift" "$log"; then
+        itf_step pass "verifier silent on the dead zvol [s14]" \
+            "rc 0 — the map compares topology, not devices; a dead LUN" \
+            "served to a VM reads healthy (FINDING row)"
+    else
+        itf_step fail "verifier silent on the dead zvol [s14]" \
+            "rc=$rc — see iscsi-check-s14-silent.log"
+        return 1
+    fi
+
+    # SYMPTOM 2: the save persists the dead backstore.
+    log="$ITF_RUN_DIR/s14-save-dead.log"
+    itf_guest_exec "$s_ip" "bash -lc 'safe-iscsi-save'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s14-save-dead" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "✓ iSCSI configuration saved" "$log"; then
+        itf_step info "save persists the dead backstore [s14]" \
+            "live count still matches the manifest — saveconfig + boot" \
+            "config now record a device that does not exist (evidence" \
+            "for the FINDING row)"
+    else
+        itf_step info "save persists the dead backstore [s14]" \
+            "rc=$rc — a refusal here would itself be a signal; recorded" \
+            "(see s14-save-dead.log)"
+    fi
+
+    # SYMPTOM 3: remove-vm-disk refuses the cleanup (no product path).
+    log="$ITF_RUN_DIR/s14-remove-refusal.log"
+    itf_guest_exec "$s_ip" "bash -lc 'remove-vm-disk ${J17_POOL_A} ${J17_VM} 1'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s14-remove-refusal" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "FATAL: Zvol does not exist: ${J17_POOL_A}/proxmox/${J17_LUN_HALF}" "$log"; then
+        itf_step pass "remove-vm-disk refuses the zvol-gone cleanup [s14]" \
+            "no product path retires a hand-destroyed LUN — UX gap" \
+            "(→ REQUIREMENTS at G5)"
+    else
+        itf_step fail "remove-vm-disk refuses the zvol-gone cleanup [s14]" \
+            "rc=$rc — see s14-remove-refusal.log"
+        return 1
+    fi
+
+    # SYMPTOM 4: reconcile skips + keeps the entry (create-only), and its
+    # manifest regen silently drops the name while the export stays live.
+    rfeed="$ITF_RUN_DIR/s14-reconcile-answers.txt"
+    printf 'y\n' > "$rfeed"
+    log="$ITF_RUN_DIR/s14-reconcile.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s14-reconcile" "$log"
+    if [[ $rc -eq 0 ]] \
+            && grep -q "zvol ${J17_POOL_A}/proxmox/${J17_LUN_HALF} does not exist (offline pool or deleted)" "$log" \
+            && grep -q "Pool LUN map left unchanged" "$log" \
+            && ! itf_guest_exec "$s_ip" \
+                "grep -q '^${J17_LUN_HALF}$' /etc/rtslib-fb-target/expected-backstores.txt" \
+                > /dev/null 2>&1; then
+        itf_step pass "reconcile skips + keeps the map entry [s14]" \
+            "no safe-removal planning exists (the campaign oracle is" \
+            "absent — FINDING row); the regenerated manifest silently" \
+            "dropped the name while the export stays live"
+    else
+        itf_step fail "reconcile skips + keeps the map entry [s14]" \
+            "rc=$rc — see s14-reconcile.log"
+        return 1
+    fi
+
+    # The PVE config references a dead LUN — drop it before the restart
+    # evidence so the cross-check reads cleanly (the operator's step).
+    log="$ITF_RUN_DIR/s14-pve-detach.log"
+    if itf_guest_exec "$c_ip" \
+        "qm set ${J17_VM} --delete scsi1" > "$log" 2>&1; then
+        itf_step pass "dead reference dropped from VM ${J17_VM} [s14]" \
+            "scsi1 removed from the PVE config"
+    else
+        itf_step fail "dead reference dropped from VM ${J17_VM} [s14]" \
+            "see $(basename "$log")"
+        return 1
+    fi
+
+    # AMPLIFIER: the service restart cannot recreate the dead backstore —
+    # the first surface that names the LUN.
+    log="$ITF_RUN_DIR/s14-restart.log"
+    itf_guest_exec "$s_ip" "systemctl restart rtslib-fb-targetctl" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s14-restart" "$log"
+    result="$(itf_guest_exec "$s_ip" \
+        'systemctl show rtslib-fb-targetctl -p Result --value' 2>/dev/null)"
+    boot_journal="$ITF_RUN_DIR/s14-boot.journal"
+    # shellcheck disable=SC2016  # expansions run in the guest
+    itf_guest_exec "$s_ip" \
+        'journalctl -u rtslib-fb-targetctl.service --no-pager \
+            -n 200' > "$boot_journal" 2>/dev/null
+    itf_artifact "s14-boot-journal" "$boot_journal"
+    log="$ITF_RUN_DIR/iscsi-check-s14-post-restart.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "iscsi-check-s14-post-restart" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "map LUN ${v304_1_lun} -> ${J17_LUN_HALF} is missing live" "$log" \
+            && ! j17_lun_inventory "$s_ip" "$iqn" | grep -q "$J17_LUN_HALF"; then
+        itf_step pass "restart surfaces the dead LUN at last [s14]" \
+            "unit Result=${result:-unknown}; the dead LUN is now missing" \
+            "live and the verifier names it — the stale entry bites only" \
+            "after a restore"
+    else
+        itf_step fail "restart surfaces the dead LUN at last [s14]" \
+            "rc=$rc Result=${result:-unknown} — see iscsi-check-s14-post-restart.log"
+        return 1
+    fi
+
+    # Rebuild any restart casualties (encrypted LUNs re-add only when the
+    # unit reaches ExecStartPost); the dead entry skips again, so the map
+    # still records it and --check still names it.
+    rfeed="$ITF_RUN_DIR/s14-rebuild-answers.txt"
+    printf 'y\n' > "$rfeed"
+    log="$ITF_RUN_DIR/s14-rebuild.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s14-rebuild" "$log"
+    log="$ITF_RUN_DIR/iscsi-check-s14-still-drifts.log"
+    itf_guest_exec "$s_ip" "bash -lc 'export-iscsi-state --check'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "iscsi-check-s14-still-drifts" "$log"
+    if [[ $rc -ne 0 ]] \
+            && grep -q "map LUN ${v304_1_lun} -> ${J17_LUN_HALF} is missing live" "$log"; then
+        itf_step pass "the stale map entry never retires [s14]" \
+            "reconcile rebuilt the casualties but kept the dead entry —" \
+            "the map preserves it by design (offline-pool tolerance)"
+    else
+        itf_step fail "the stale map entry never retires [s14]" \
+            "rc=$rc — see iscsi-check-s14-still-drifts.log"
+        return 1
+    fi
+
+    # RECOVER (manual arc, every step REQUIREMENTS evidence): delete any
+    # live remnant, refresh the map from the live tree, gate.
+    log="$ITF_RUN_DIR/s14-retire.log"
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            if targetcli /backstores/block ls 2>/dev/null \
+                    | grep -q '${J17_LUN_HALF}'; then
+                targetcli /backstores/block delete '${J17_LUN_HALF}' \
+                    >/dev/null 2>&1
+            fi
+            bash -lc 'export-iscsi-state'
+            ! bash -lc 'export-iscsi-state --print-map' \
+                | grep -q '\"${J17_LUN_HALF}\"'
+            echo retired
+        " > "$log" 2>&1 && grep -q retired "$log"; then
+        itf_step pass "manual retirement arc converges [s14]" \
+            "hand backstore delete + a direct export-iscsi-state refresh" \
+            "dropped the stale entry — an undocumented sequence (→" \
+            "REQUIREMENTS at G5: retire stale entries through the product)"
+    else
+        itf_step fail "manual retirement arc converges [s14]" \
+            "see s14-retire.log"
+        itf_artifact "s14-retire" "$log"
+        return 1
+    fi
+    itf_artifact "s14-retire" "$log"
+    itf_safe_save_gate "$s_ip" s14 || return 1
+    itf_iscsi_check_gate "$s_ip" s14 || return 1
+
+    fi # end s14_destroy_ok sweep
+
+    # ==================================================================
+    # S12 — reconcile and restore-luns concurrently: the unguarded race
+    # ==================================================================
+
+    log="$ITF_RUN_DIR/s12-wipe.log"
+    j17_wipe_exports "$s_ip" "$iqn" "$log"
+    rc=$?
+    itf_artifact "s12-wipe" "$log"
+    if [[ $rc -eq 0 ]] && grep -q wiped "$log"; then
+        itf_step pass "all live LUN exports destroyed [s12]" \
+            "the contradictory-operations premise"
+    else
+        itf_step fail "all live LUN exports destroyed [s12]" "see s12-wipe.log"
+        return 1
+    fi
+
+    # Launch both mutators over the same wiped tree, concurrently.
+    stem="$ITF_RUN_DIR/j17-s12-concurrent.sh"
+    cat > "$stem" <<'EOF'
+#!/bin/bash
+# itf j17 (generated): reconcile and restore-luns over the same tree.
+set -u
+rlog=/root/itf-j17-s12-reconcile.log
+olog=/root/itf-j17-s12-restore.log
+setsid bash -lc 'reconcile-iscsi-state --yes' > "$rlog" 2>&1 &
+rpid=$!
+setsid bash -lc 'iscsi-restore-luns' > "$olog" 2>&1 &
+opid=$!
+wait "$rpid"; echo "reconcile-rc: $?"
+wait "$opid"; echo "restore-rc: $?"
+echo s12-done
+EOF
+    itf_guest_put "$s_ip" "$stem" /root/itf-j17-s12.sh > /dev/null 2>&1
+    log="$ITF_RUN_DIR/s12-concurrent.log"
+    itf_guest_exec "$s_ip" "bash /root/itf-j17-s12.sh" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s12-concurrent" "$log"
+    itf_guest_get "$s_ip" /root/itf-j17-s12-reconcile.log \
+        "$ITF_RUN_DIR/s12-reconcile.log" > /dev/null 2>&1 || true
+    itf_guest_get "$s_ip" /root/itf-j17-s12-restore.log \
+        "$ITF_RUN_DIR/s12-restore.log" > /dev/null 2>&1 || true
+    itf_artifact "s12-reconcile" "$ITF_RUN_DIR/s12-reconcile.log"
+    itf_artifact "s12-restore" "$ITF_RUN_DIR/s12-restore.log"
+    if [[ $rc -eq 0 ]] && grep -q s12-done "$log" \
+            && grep -q "reconcile-rc:" "$log" && grep -q "restore-rc:" "$log"; then
+        itf_step pass "both mutators ran and exited [s12]" \
+            "no hang, no crash — rcs recorded (see s12-concurrent.log)"
+    else
+        itf_step fail "both mutators ran and exited [s12]" \
+            "rc=$rc — see s12-concurrent.log"
+        return 1
+    fi
+
+    # The race evidence: what each transcript claims, and the tree state.
+    log="$ITF_RUN_DIR/s12-aftermath.log"
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            python3 -c 'import json; json.load(open(\"/etc/rtslib-fb-target/saveconfig.json\"))'
+            echo saveconfig-parseable
+            echo live-backstores: \$(targetcli /backstores/block ls 2>/dev/null \
+                | grep -oE 'vm-[0-9]+-disk-[0-9]+' | sort -u | wc -l)
+            bash -lc 'export-iscsi-state --check' >/dev/null 2>&1 \\
+                && echo check-rc: 0 || echo check-rc: nonzero
+        " > "$log" 2>&1; then
+        itf_step info "post-race tree state [s12]" \
+            "$(grep -oE 'saveconfig-parseable|live-backstores: [0-9]+|check-rc: [a-z0]+' "$log" | paste -sd' ' -)"
+    else
+        itf_step info "post-race tree state [s12]" "see s12-aftermath.log"
+    fi
+    itf_artifact "s12-aftermath" "$log"
+    itf_step info "no serialization between concurrent mutators [s12]" \
+        "neither command refuses or defers to the other — collision" \
+        "evidence in the transcripts (FINDING row: reconcile/restore-luns" \
+        "need a shared fence or an active-mutator refusal)"
+
+    # RECOVER: a clean sequential re-run converges whatever the race left
+    # — either by rebuilding the holes or (live-observed shape: both
+    # create-only mutators happened to complete the tree between them)
+    # by finding nothing left to do.
+    rfeed="$ITF_RUN_DIR/s12-converge-answers.txt"
+    printf 'y\n' > "$rfeed"
+    log="$ITF_RUN_DIR/s12-converge.log"
+    itf_guest_exec_feed "$s_ip" "$rfeed" "bash -lc 'reconcile-iscsi-state'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s12-converge" "$log"
+    ok=1
+    for name in "${s10_names[@]}"; do
+        [[ "$name" == "$J17_LUN_HALF" ]] && continue
+        grep -q "✓ Mapped $name to ${J17_POOL_A}/lun" "$log" || ok=0
+    done
+    if [[ $rc -eq 0 ]] && { { [[ $ok -eq 1 ]] && grep -q "✓ Done" "$log"; } \
+            || grep -q "No target-side changes needed" "$log"; }; then
+        itf_step pass "sequential re-run converges the raced tree [s12]" \
+            "$(grep -q 'No target-side changes needed' "$log" \
+                && echo 'the race had already completed the tree — re-run is a no-op' \
+                || echo 'every surviving LUN mapped from the map authority')"
+    else
+        itf_step fail "sequential re-run converges the raced tree [s12]" \
+            "rc=$rc — see s12-converge.log"
+        return 1
+    fi
+    itf_iscsi_check_gate "$s_ip" s12 || return 1
+    j15_wait_links_classified 300 s12 101 202 || return 1
+
+    # ==================================================================
+    # Wrap
+    # ==================================================================
+
+    # Expected survivors: the staged lab minus S11's vm-101-disk-0, plus
+    # S13's vm-304-disk-0; S14's vm-304-disk-1 retired — unless the hand
+    # destroy was refused (the structural-fence branch), in which case it
+    # legitimately survives.
+    local wrap_expected=4 victims_re='vm-101-disk-0'
+    if [[ "$s14_destroy_ok" == 0 ]]; then
+        wrap_expected=5
+    else
+        victims_re="vm-101-disk-0|${J17_LUN_HALF}"
+    fi
+    log="$ITF_RUN_DIR/wrap-state.log"
+    # .pre-start only exists after a unit start (the boot-path backup):
+    # this journey restarts the unit only inside S14's sweep, which the
+    # destroy-refused branch skips — so its presence is recorded, never
+    # required.  saveconfig.json and saveconfig-boot.json are written by
+    # every safe-iscsi-save and must exist.
+    # shellcheck disable=SC2029  # expansions run on the storage guest
+    if itf_guest_exec "$s_ip" "
+            set -e
+            test -s /etc/rtslib-fb-target/saveconfig.json
+            test -s /etc/rtslib-fb-target/saveconfig-boot.json
+            if test -s /etc/rtslib-fb-target/saveconfig.json.pre-start; then
+                echo 'pre-start: present'
+            else
+                echo 'pre-start: absent (no unit restart in this run)'
+            fi
+            n=\$(targetcli /iscsi/${iqn}/tpg1/luns ls 2>/dev/null \
+                | grep -c 'o- lun[0-9]' || true)
+            echo \"live-luns: \$n\"
+            if targetcli /iscsi/${iqn}/tpg1/luns ls 2>/dev/null \
+                    | grep -qE '${victims_re}'; then
+                echo 'retired-victims-present'
+                exit 1
+            fi
+            echo 'retired-victims-absent'
+        " > "$log" 2>&1 \
+        && grep -q "live-luns: $wrap_expected" "$log" \
+        && grep -q retired-victims-absent "$log"; then
+        itf_step pass "wrap state sane" \
+            "saveconfig + boot config present ($(grep -o 'pre-start: [a-z]*' \
+                "$log" | head -1)); ${wrap_expected} LUNs live; the" \
+            "retired victims gone"
+    else
+        itf_step fail "wrap state sane" "see wrap-state.log"
+        itf_artifact "wrap-state" "$log"
+        return 1
+    fi
+    itf_artifact "wrap-state" "$log"
+    if itf_fence_tick "$c_ip" j17-final; then
+        itf_step pass "fence tick healthy [j17-final]" \
+            "all VM disk paths present"
+    else
+        itf_step fail "fence tick healthy [j17-final]" \
+            "see fence-tick-j17-final.log"
+        return 1
+    fi
+
+    itf_step info "journey complete" \
+        "M5 three-strikes luksOpen; S13 collision + half-state convergence;" \
+        "M2 safe abort default; M3 identifier rejections + y/N guard gap;" \
+        "S11 interrupted removal detected + converged; S10 interrupted" \
+        "reconcile idempotent + convergent; S14 hand destroy REFUSED by" \
+        "the zvol layer while LIO holds the device (dataset is busy — the" \
+        "stale-live-LUN premise is structurally fenced; F-041); S12" \
+        "unguarded concurrent mutators (F-040)"
+    return 0
+}
+
+journey_main() {
+    j17_iscsi_interrupted_ops_main "$@"
+}

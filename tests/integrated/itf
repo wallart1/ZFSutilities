@@ -23,6 +23,11 @@
 #   itf iso fetch [debian|pve]        download installer ISO to dev cache
 #   itf iso upload [BASE] [debian|pve]
 #                                     upload cached ISO to base ISO storage
+#   itf vmimage status                VM-OS disk image cache state
+#   itf vmimage build [--force] [--disk-gb N]
+#                                     build the VM-OS image once (minimal
+#                                     preseed Debian with the guest agent;
+#                                     self-verified boot; cached gzipped)
 #   itf template status               baseline templates presence + stamp
 #   itf template build [--base B] [--profile storage|compute]
 #                                     [--sw-source ..] [--force]
@@ -66,6 +71,8 @@ source "$ITF_BIN_DIR/lib/base-lib.sh"
 source "$ITF_BIN_DIR/lib/guest-lib.sh"
 # shellcheck disable=SC1091
 source "$ITF_BIN_DIR/lib/template-lib.sh"
+# shellcheck disable=SC1091
+source "$ITF_BIN_DIR/lib/vmos-lib.sh"
 # shellcheck disable=SC1091
 source "$ITF_BIN_DIR/lib/report-lib.sh"
 # shellcheck disable=SC1091
@@ -402,6 +409,48 @@ cmd_template() {
     esac
 }
 
+# ---------------------------------------------------------------------------
+# vmimage
+# ---------------------------------------------------------------------------
+
+cmd_vmimage() {
+    itf_config_load
+    local sub="${1:-}"
+    [[ -z "$sub" ]] && {
+        echo "usage: itf vmimage status|build [--force] [--disk-gb N]" >&2
+        return 2
+    }
+    shift
+    case "$sub" in
+        status) itf_vmos_status ;;
+        build)
+            # One run at a time per dev host (see runlock-lib.sh); the
+            # build consumes a reserved VMID and base RAM exactly like a
+            # template build, and guards its install guest with the same
+            # orphan fence.
+            itf_runlock_acquire "vmimage build${*:+ $*}" || return 2
+            ITF_RUN_CALLER="vmimage:build"
+            itf_report_init vmimage-build || return 1
+            if ! itf_runlock_orphan_fence ""; then
+                itf_step fail "orphan fence" \
+                    "guests left by an interrupted run (see messages above)"
+                itf_report_finish > /dev/null || true
+                echo "itf: run refused — see $ITF_RUN_DIR/report.md"
+                return 2
+            fi
+            local rc=0
+            itf_vmos_build "$@" || rc=$?
+            itf_report_finish || rc=1
+            echo "itf: report: $ITF_RUN_DIR/report.md"
+            return "$rc"
+            ;;
+        *)
+            echo "usage: itf vmimage status|build [--force] [--disk-gb N]" >&2
+            return 2
+            ;;
+    esac
+}
+
 # _journey_rerun_prepare <journey-name>
 #
 # --rerun support: resolve the source run (the newest run of the SAME
@@ -672,6 +721,7 @@ main() {
         preflight) cmd_preflight "$@" ;;
         guest) cmd_guest "$@" ;;
         iso) cmd_iso "$@" ;;
+        vmimage) cmd_vmimage "$@" ;;
         template) cmd_template "$@" ;;
         journey) cmd_journey "$@" ;;
         status) cmd_status "$@" ;;

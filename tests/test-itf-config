@@ -253,6 +253,36 @@ test_compute_template_and_base_validated() {
     assert_contains "$load_err" "ITF_STORAGE_BASE ('notabase') must be one of ITF_BASE_HOSTS"
 }
 
+test_keystore_pair_validated() {
+    test_start "keystore keys follow the both-or-neither rule with shape checks"
+    write_valid_config
+    echo 'ITF_KEYFILE_NAME=zfstest1.key' >> "$tmp_dir/valid.conf"
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_KEYSTORE_PASSPHRASE and ITF_KEYFILE_NAME"
+    assert_contains "$load_err" "must be set together"
+
+    write_valid_config
+    printf 'ITF_KEYSTORE_PASSPHRASE=short\n' >> "$tmp_dir/valid.conf"
+    echo 'ITF_KEYFILE_NAME=zfstest1.key' >> "$tmp_dir/valid.conf"
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_KEYSTORE_PASSPHRASE must be at least 8 characters"
+
+    write_valid_config
+    printf 'ITF_KEYSTORE_PASSPHRASE=a-longer-secret\n' >> "$tmp_dir/valid.conf"
+    echo 'ITF_KEYFILE_NAME="bad key!"' >> "$tmp_dir/valid.conf"
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_KEYFILE_NAME has invalid characters"
+
+    write_valid_config
+    printf 'ITF_KEYSTORE_PASSPHRASE=a-longer-secret\n' >> "$tmp_dir/valid.conf"
+    echo 'ITF_KEYFILE_NAME=zfstest1.key' >> "$tmp_dir/valid.conf"
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 0 "$load_rc"
+}
+
 test_missing_config_is_fail_closed
 test_committed_example_passes_validation
 test_valid_config_loads_with_defaults
@@ -265,6 +295,7 @@ test_two_node_keys_load_clean
 test_p2p_ips_validated
 test_pve_iso_pair_validated
 test_compute_template_and_base_validated
+test_keystore_pair_validated
 
 rm -rf "$tmp_dir"
 teardown_test_env

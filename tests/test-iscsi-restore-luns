@@ -187,7 +187,7 @@ _std_saveconfig() {
          {"storage_object": "/backstores/block/vm-100-disk-0", "index": 0},
          {"storage_object": "/backstores/block/vm-101-disk-0", "index": 3}
        ],
-       "acls": [
+       "node_acls": [
          {"node_wwn": "iqn.2026-02.local.tweety:c7d0f1a0",
           "mapped_luns": [
             {"index": 0, "tpg_lun": 0, "write_protect": false},
