@@ -99,8 +99,6 @@ class TestBuildRestoreCommand(unittest.TestCase):
             destfs="threeamigos",
             parent_dir="/usr/local/lib/zfsutilities/current/bin",
             advanced_vars={"label": "dailybackup"},
-            do_part1=True,
-            do_part2=False,
         )
         self.assertIsNotNone(step.metadata)
         self.assertEqual(step.metadata["source"], "backuppool/threeamigos/proxmox")
@@ -114,39 +112,58 @@ class TestBuildRestoreCommand(unittest.TestCase):
             destfs="threeamigos",
             parent_dir="/usr/local/lib/zfsutilities/current/bin",
             advanced_vars={},
-            do_part1=True,
-            do_part2=False,
         )
         self.assertEqual(step.metadata["label"], "")
 
-    def test_ensure_iscsi_step_present_after_part1_only(self):
+    def test_ensure_iscsi_step_present(self):
         step = rr.build_restore_command(
             source="backuppool/threeamigos/proxmox/vm-215-disk-0",
             removequalifiers=1,
             destfs="threeamigos",
             parent_dir="/usr/local/lib/zfsutilities/current/bin",
             advanced_vars={},
-            do_part1=True,
-            do_part2=False,
         )
         script = " ".join(step.command)
         self.assertIn("ensure_restored_iscsi", script)
         self.assertIn('ensure-restored-vm-iscsi"', script)
         self.assertIn("remove_leading_qualifiers", script)
 
-    def test_ensure_iscsi_step_present_after_part1_and_part2(self):
+    def test_payload_always_runs_both_parts(self):
         step = rr.build_restore_command(
-            source="backuppool/threeamigos/proxmox/vm-215-disk-0",
+            source="backuppool/threeamigos/proxmox",
             removequalifiers=1,
             destfs="threeamigos",
             parent_dir="/usr/local/lib/zfsutilities/current/bin",
             advanced_vars={},
-            do_part1=True,
-            do_part2=True,
         )
         script = " ".join(step.command)
-        self.assertIn("ensure_restored_iscsi", script)
-        self.assertIn('ensure-restored-vm-iscsi"', script)
+        self.assertIn("Part one: Full copy using the oldest available snapshot.", script)
+        self.assertIn("Part two: Incremental copy of remaining snapshots.", script)
+
+    def test_payload_enables_restore_resume(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+        )
+        script = " ".join(step.command)
+        self.assertIn('restore_resume="Y"', script)
+
+    def test_payload_cleans_up_temp_file_on_every_exit(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+        )
+        script = " ".join(step.command)
+        # The exit-trap registration covers failed exits; the TERM trap
+        # routes the GUI's cancel signal into those exit traps.
+        self.assertIn("append_exit_trap 'rm -f \"$fsarray_file\"'", script)
+        self.assertIn("trap 'exit 143' TERM", script)
 
     def test_ensure_iscsi_step_skipped_in_dry_run(self):
         step = rr.build_restore_command(
@@ -155,8 +172,6 @@ class TestBuildRestoreCommand(unittest.TestCase):
             destfs="threeamigos",
             parent_dir="/usr/local/lib/zfsutilities/current/bin",
             advanced_vars={},
-            do_part1=True,
-            do_part2=False,
             dryrun=True,
         )
         script = " ".join(step.command)
@@ -170,8 +185,6 @@ class TestBuildRestoreCommand(unittest.TestCase):
             destfs="threeamigos",
             parent_dir="/usr/local/lib/zfsutilities/current/bin",
             advanced_vars={},
-            do_part1=True,
-            do_part2=False,
             recursive=False,
         )
         script = " ".join(step.command)
@@ -184,8 +197,6 @@ class TestBuildRestoreCommand(unittest.TestCase):
             destfs="threeamigos",
             parent_dir="/usr/local/lib/zfsutilities/current/bin",
             advanced_vars={},
-            do_part1=True,
-            do_part2=False,
             recursive=True,
         )
         script = " ".join(step.command)
@@ -199,8 +210,6 @@ class TestBuildRestoreCommand(unittest.TestCase):
             destfs="threeamigos",
             parent_dir="/usr/local/lib/zfsutilities/current/bin",
             advanced_vars={"depth": "2"},
-            do_part1=True,
-            do_part2=False,
             recursive=False,
         )
         script = " ".join(step.command)
@@ -214,8 +223,6 @@ class TestBuildRestoreCommand(unittest.TestCase):
             destfs="threeamigos",
             parent_dir="/usr/local/lib/zfsutilities/current/bin",
             advanced_vars={},
-            do_part1=True,
-            do_part2=False,
         )
         script = " ".join(step.command)
         self.assertIn('verify_after_transfer="Y"', script)
@@ -227,8 +234,6 @@ class TestBuildRestoreCommand(unittest.TestCase):
             destfs="threeamigos",
             parent_dir="/usr/local/lib/zfsutilities/current/bin",
             advanced_vars={},
-            do_part1=True,
-            do_part2=False,
         )
         script = " ".join(step.command)
         self.assertIn('transfer_rate_limit=""', script)
@@ -243,8 +248,6 @@ class TestBuildRestoreCommand(unittest.TestCase):
                 "verify_after_transfer": "N",
                 "transfer_rate_limit": "100M",
             },
-            do_part1=True,
-            do_part2=False,
         )
         script = " ".join(step.command)
         self.assertIn('verify_after_transfer="N"', script)

@@ -287,6 +287,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-zfshold` | `zfshold` hold helper: duplicate-tag detection as INFO (including a nested dataset re-found through a parent-subtree hold), real hold failures surfaced loudly, no-match exit 0, missing pattern rejected |
 | `test-zfsreapplyholds` | Capture/release/apply snapshot holds, no-lock opt-out, CLI argument parsing, dry-run apply/release |
 | `test-zfs-send-receive-holds` | `zfs-send-receive` destination hold preservation: capture/reapply ordering on full copies, skip on plain incrementals, dry-run, and `preserve_target_holds='N'`; capture failure aborts before any transfer |
+| `test-zfs-send-receive-resume` | `zfs-send-receive` interrupted-restore resume: the `restore_resume` lineage gate (GUID-verified destinations skip the destructive full copy), the gate's absence for normal backups and incremental passes, valid resume tokens resumed then caught up, stale tokens aborted and reprocessed, dry-run lineage reporting |
 | `test-zfsrestore` | `zfsrestore` full-copy wrapper: overrides, legacy second overrides, required parameters, single `send-receive` invocation, parameter forwarding |
 | `test-zfsrestoresendstream` | Lock acquisition before each zfs receive destination |
 | `test-zfsresume` | Lock acquisition before reading resume token |

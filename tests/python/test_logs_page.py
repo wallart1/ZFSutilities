@@ -20,12 +20,13 @@ def _patch_log_dir(tmpdir):
 def _make_scan_app():
     """Return a minimal mocked app for _scan_logs()."""
     app = type("App", (), {})()
-    # Complete paths section pointing nowhere: cron-row scanning finds no
-    # files and never touches the real log directory.
+    # Complete paths section pointing nowhere: cron/persistent-row scanning
+    # finds no files and never touches the real log directory.
     app.config = {
         "paths": {
             "cron_log": "/nonexistent-test-logs/cron.log",
             "scrub_manager_log": "/nonexistent-test-logs/scrub-manager.log",
+            "rsync_pull_log": "/nonexistent-test-logs/rsync-pull.log",
             "logrotate_file": "/nonexistent-test-logs/logrotate.d/zfsutilities",
         }
     }
@@ -98,6 +99,67 @@ class TestParseLogFilename(unittest.TestCase):
 
     def test_returns_none_for_unsupported_type(self):
         self.assertIsNone(lp._parse_log_filename("2026-06-21_10-00-00_unknown_gui.log"))
+
+
+class TestSessionLogRouting(unittest.TestCase):
+    """Session-shaped files route to the main or Miscellaneous list by type."""
+
+    def _make_sessions(self, tmpdir):
+        files = {
+            "2026-10-21_06-00-01_backup_profile-daily.log": "INFO: ok\n",
+            "2026-10-21_08-48-17_cli_switch-version.log": "2026-10-21 08:48:17  x:1: WARN: boom\n",
+            "2026-10-22_09-00-00_futuretype_some-run.log": "INFO: new writer\n",
+            "not-a-session-log.log": "ignored\n",
+            "2026-10-21_08-48-17_cli.log": "no underscore after type\n",
+        }
+        for name, content in files.items():
+            with open(os.path.join(tmpdir, name), "w") as fh:
+                fh.write(content)
+        # Keep mtimes outside the 10-second "Running" window.
+        old = time.time() - 60
+        for name in files:
+            os.utime(os.path.join(tmpdir, name), (old, old))
+        return tmpdir
+
+    def test_main_list_gets_core_types_only(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_sessions(tmpdir)
+            with _patch_log_dir(tmpdir):
+                rows = lp._scan_logs(_make_scan_app())
+            names = sorted(row[lp.COL_NAME] for row in rows)
+            self.assertEqual(names, ["profile-daily"])
+            self.assertEqual(rows[0][lp.COL_TYPE], "backup")
+
+    def test_misc_list_gets_cli_and_unknown_types(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_sessions(tmpdir)
+            with _patch_log_dir(tmpdir):
+                rows = lp._scan_misc_logs(_make_scan_app())
+            by_name = {row[lp.COL_NAME]: row for row in rows}
+            self.assertEqual(sorted(by_name), ["some-run", "switch-version"])
+            self.assertEqual(by_name["switch-version"][lp.COL_TYPE], "cli")
+            self.assertEqual(by_name["switch-version"][lp.COL_DATETIME], "2026-10-21 08:48:17")
+            # A WARN line surfaces in the Status column via the shared index.
+            self.assertEqual(by_name["switch-version"][lp.COL_STATUS], "Warn")
+            self.assertEqual(by_name["some-run"][lp.COL_TYPE], "futuretype")
+
+    def test_index_keeps_entries_for_both_lists(self):
+        """A main-list scan must not purge index entries owned by the misc list."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._make_sessions(tmpdir)
+            app = _make_scan_app()
+            with _patch_log_dir(tmpdir):
+                lp._scan_misc_logs(app)
+                cli_entry = app._log_index.get(
+                    os.path.join(tmpdir, "2026-10-21_08-48-17_cli_switch-version.log")
+                )
+                self.assertIsNotNone(cli_entry)
+                lp._scan_logs(app)
+                self.assertIsNotNone(
+                    app._log_index.get(
+                        os.path.join(tmpdir, "2026-10-21_08-48-17_cli_switch-version.log")
+                    )
+                )
 
 
 class TestSelectLogByPath(unittest.TestCase):
@@ -173,19 +235,25 @@ class TestSelectLogByPath(unittest.TestCase):
 
 
 class TestDeleteSelectedLogs(unittest.TestCase):
-    def _make_app(self, paths):
-        """Return a mocked app and selection for the given log paths."""
+    def _make_app(self, paths, misc_paths=()):
+        """Return a mocked app whose main and misc lists select the given paths."""
         app = MagicMock()
-        selection = MagicMock()
-        view = MagicMock()
-        view.get_selection.return_value = selection
-        app.logs_view = view
 
-        model = MagicMock()
-        iters = [{"path": p} for p in paths]
-        model.get_iter.side_effect = lambda p: next((it for it in iters if it["path"] == p), None)
-        model.get_value.side_effect = lambda it, col: it["path"]
-        selection.get_selected_rows.return_value = (model, paths)
+        def make_view(selected):
+            selection = MagicMock()
+            view = MagicMock()
+            view.get_selection.return_value = selection
+            model = MagicMock()
+            iters = [{"path": p} for p in selected]
+            model.get_iter.side_effect = lambda p: next(
+                (it for it in iters if it["path"] == p), None
+            )
+            model.get_value.side_effect = lambda it, col: it["path"]
+            selection.get_selected_rows.return_value = (model, list(selected))
+            return view, selection, model
+
+        app.logs_view, selection, model = make_view(paths)
+        app.logs_misc_view, _misc_sel, _misc_model = make_view(misc_paths)
         return app, selection, model
 
     @patch("logs_page.Gtk.MessageDialog")
@@ -209,6 +277,27 @@ class TestDeleteSelectedLogs(unittest.TestCase):
 
             for p in paths:
                 self.assertFalse(os.path.exists(p))
+            mock_sync.assert_called_once_with(app)
+
+    @patch("logs_page.Gtk.MessageDialog")
+    def test_deletes_selections_from_both_lists(self, mock_dialog_cls):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            main_path = os.path.join(tmpdir, "2026-06-21_10-00-00_backup_gui.log")
+            misc_path = os.path.join(tmpdir, "2026-10-21_08-48-17_cli_switch-version.log")
+            for p in (main_path, misc_path):
+                with open(p, "w") as f:
+                    f.write("log content")
+
+            mock_dialog = MagicMock()
+            mock_dialog.run.return_value = lp.Gtk.ResponseType.YES
+            mock_dialog_cls.return_value = mock_dialog
+
+            app, _selection, _model = self._make_app([main_path], misc_paths=[misc_path])
+            with patch("logs_page._sync_log_list") as mock_sync:
+                lp._on_delete_selected(app)
+
+            self.assertFalse(os.path.exists(main_path))
+            self.assertFalse(os.path.exists(misc_path))
             mock_sync.assert_called_once_with(app)
 
     @patch("logs_page.Gtk.MessageDialog")
@@ -257,10 +346,16 @@ class TestDeleteSelectedLogs(unittest.TestCase):
 
 
 class TestLogsSelectionChanged(unittest.TestCase):
-    def test_disables_button_when_nothing_selected(self):
+    def _make_app(self, main_count, misc_count):
         app = MagicMock()
         button = MagicMock()
         app._logs_delete_button = button
+        app.logs_view.get_selection().count_selected_rows.return_value = main_count
+        app.logs_misc_view.get_selection().count_selected_rows.return_value = misc_count
+        return app, button
+
+    def test_disables_button_when_nothing_selected(self):
+        app, button = self._make_app(0, 0)
         selection = MagicMock()
         selection.get_selected_rows.return_value = (MagicMock(), [])
 
@@ -268,17 +363,31 @@ class TestLogsSelectionChanged(unittest.TestCase):
         button.set_sensitive.assert_called_once_with(False)
 
     def test_enables_button_when_logs_selected(self):
-        app = MagicMock()
-        button = MagicMock()
-        app._logs_delete_button = button
+        app, button = self._make_app(0, 2)
         selection = MagicMock()
-        selection.get_selected_rows.return_value = (MagicMock(), ["/a.log", "/b.log"])
+        selection.get_selected_rows.return_value = (MagicMock(), [])
 
         lp._on_logs_selection_changed(selection, app)
         button.set_sensitive.assert_called_once_with(True)
 
+    def test_enables_button_for_misc_selection_only(self):
+        app, button = self._make_app(1, 0)
+        selection = MagicMock()
+        selection.get_selected_rows.return_value = (MagicMock(), [])
+
+        lp._on_logs_selection_changed(selection, app)
+        button.set_sensitive.assert_called_once_with(True)
+
+    def test_counts_rows_across_both_lists(self):
+        app = MagicMock()
+        app.logs_view.get_selection().count_selected_rows.return_value = 2
+        app.logs_misc_view.get_selection().count_selected_rows.return_value = 3
+        self.assertEqual(lp._count_selected_log_rows(app), 5)
+
     def test_ignores_missing_button(self):
         app = MagicMock()
+        app.logs_view.get_selection().count_selected_rows.return_value = 0
+        app.logs_misc_view.get_selection().count_selected_rows.return_value = 0
         # No _logs_delete_button attribute
         selection = MagicMock()
         selection.get_selected_rows.return_value = (MagicMock(), ["/a.log"])
@@ -287,11 +396,72 @@ class TestLogsSelectionChanged(unittest.TestCase):
         # Should not raise
 
 
+class TestCrossViewSelectionClearing(unittest.TestCase):
+    """Selecting in one list clears the other; the clear must not re-enter."""
+
+    def _make_app(self, misc_selected):
+        app = MagicMock()
+        app._logs_clearing_other_view = False
+        app._logs_current_path = None
+        app._logs_tail_timer = None
+        app.logs_search.entry.get_text.return_value = ""
+        buf = MagicMock()
+        app.logs_text.get_buffer.return_value = buf
+
+        misc_selection = MagicMock()
+        misc_selection.count_selected_rows.return_value = 1 if misc_selected else 0
+        misc_selection.get_selected_rows.return_value = (MagicMock(), [])
+        app.logs_misc_view.get_selection.return_value = misc_selection
+
+        main_selection = MagicMock()
+        model = MagicMock()
+        model.get_value.side_effect = lambda it, col: "/tmp/a.log" if col == lp.COL_PATH else "Done"
+        model.get_iter.return_value = MagicMock()
+        main_selection.get_selected_rows.return_value = (model, [MagicMock()])
+        app.logs_view.get_selection.return_value = main_selection
+        return app, main_selection, misc_selection
+
+    def test_selecting_in_main_clears_misc_selection(self):
+        app, main_selection, misc_selection = self._make_app(misc_selected=True)
+
+        with patch("logs_page._load_log_into_viewer"):
+            lp._on_selection_changed(main_selection, app, app.logs_view)
+
+        misc_selection.unselect_all.assert_called_once()
+        # The guard is reset after the clear.
+        self.assertFalse(app._logs_clearing_other_view)
+
+    def test_guarded_clear_does_not_reload_viewer(self):
+        """The clear's own changed signal must return early, not load a file."""
+        app, _main_selection, misc_selection = self._make_app(misc_selected=False)
+
+        app._logs_clearing_other_view = True
+        with patch("logs_page._load_log_into_viewer") as mock_load:
+            lp._on_selection_changed(misc_selection, app, app.logs_misc_view)
+
+        mock_load.assert_not_called()
+        misc_selection.unselect_all.assert_not_called()
+
+
 class TestSyncLogListPreservesSelection(unittest.TestCase):
+    def _empty_terminating_store(self):
+        """A store mock whose iteration ends immediately (no rows)."""
+        store = MagicMock()
+        store.get_iter_first.return_value = None
+        return store
+
+    def _quiet_view(self):
+        """A view mock with an empty selection and a terminating store."""
+        view = MagicMock()
+        view.get_model.return_value = self._empty_terminating_store()
+        view.get_selection.return_value.get_selected_rows.return_value = (MagicMock(), [])
+        return view
+
     def test_reselects_existing_paths(self):
         app = MagicMock()
         selection = MagicMock()
         app.logs_view.get_selection.return_value = selection
+        app.logs_misc_view = self._quiet_view()
 
         rows = [
             ("dt", "backup", "gui", "Done", "1 MB", "", "", "/a.log"),
@@ -306,15 +476,33 @@ class TestSyncLogListPreservesSelection(unittest.TestCase):
         store.get_iter.side_effect = lambda p: next((it for it in iters if it["path"] == p), None)
         store.get_value.side_effect = lambda it, col: it["path"]
         app.logs_store = store
+        app.logs_view.get_model.return_value = store
 
         selection.get_selected_rows.return_value = (store, ["/a.log", "/c.log"])
 
         with patch("logs_page._scan_logs", return_value=rows):
-            with patch("logs_page._update_success_rate_label"):
-                lp._sync_log_list(app)
+            with patch("logs_page._scan_misc_logs", return_value=[]):
+                with patch("logs_page._update_success_rate_label"):
+                    lp._sync_log_list(app)
 
         selected_paths = {call[0][0]["path"] for call in selection.select_iter.call_args_list}
         self.assertEqual(selected_paths, {"/a.log", "/c.log"})
+
+    def test_updates_misc_expander_count_label(self):
+        app = MagicMock()
+        app.logs_view = self._quiet_view()
+        app.logs_misc_view = self._quiet_view()
+        misc_rows = [
+            ("dt", "cli", "switch-version", "Done", "1 KB", "", "", "/cli.log"),
+            ("dt", "scrub", "scrub-manager.log", "—", "1 KB", "", "", "/scrub.log"),
+        ]
+
+        with patch("logs_page._scan_logs", return_value=[]):
+            with patch("logs_page._scan_misc_logs", return_value=misc_rows):
+                with patch("logs_page._update_success_rate_label"):
+                    lp._sync_log_list(app)
+
+        app.logs_misc_expander.set_label.assert_called_once_with("Miscellaneous Logs (2)")
 
     def _iter_first(self, iters):
         def first():
@@ -390,7 +578,8 @@ class TestScanCronLogRows(unittest.TestCase):
         app.config = {
             "paths": {
                 "cron_log": cron_log,
-                "scrub_manager_log": os.path.join(os.path.dirname(cron_log), "scrub-manager.log"),
+                "scrub_manager_log": "/nonexistent/scrub-manager.log",
+                "rsync_pull_log": "/nonexistent/rsync-pull.log",
                 "logrotate_file": "/nonexistent/logrotate.d/zfsutilities",
             }
         }
@@ -444,6 +633,92 @@ class TestScanCronLogRows(unittest.TestCase):
             self.assertEqual(types["cron"][lp.COL_NAME], "cron.log")
             # The session-log index is not polluted with cron paths.
             self.assertIsNone(app._log_index.get(cron_log))
+
+
+class TestScanPersistentLogRows(unittest.TestCase):
+    """The scrub-manager and rsync-pull logs list in the Miscellaneous rows."""
+
+    def _make_app(self, log_dir):
+        app = _make_scan_app()
+        app.config = {
+            "paths": {
+                "cron_log": os.path.join(log_dir, "cron.log"),
+                "scrub_manager_log": os.path.join(log_dir, "scrub-manager.log"),
+                "rsync_pull_log": os.path.join(log_dir, "rsync-pull.log"),
+                "logrotate_file": "/nonexistent/logrotate.d/zfsutilities",
+            }
+        }
+        return app
+
+    def test_lists_both_logs_with_rotations(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            names = (
+                "scrub-manager.log",
+                "scrub-manager.log.1.gz",
+                "rsync-pull.log",
+                "rsync-pull.log.1",
+                # Near-misses and unrelated logs must not match either prefix.
+                "cron.log",
+                "rsync-backup.log",
+                "scrub-manager.lok",
+            )
+            for name in names:
+                with open(os.path.join(tmpdir, name), "w") as fh:
+                    fh.write("line\n")
+
+            rows = lp._scan_persistent_log_rows(self._make_app(tmpdir))
+
+            by_type = {}
+            for row in rows:
+                by_type.setdefault(row[lp.COL_TYPE], []).append(row[lp.COL_NAME])
+            self.assertEqual(
+                sorted(by_type.get("scrub", [])),
+                ["scrub-manager.log", "scrub-manager.log.1.gz"],
+            )
+            self.assertEqual(
+                sorted(by_type.get("rsync", [])), ["rsync-pull.log", "rsync-pull.log.1"]
+            )
+            self.assertNotIn("cron", by_type)
+            for row in rows:
+                self.assertEqual(row[lp.COL_STATUS], "—")
+                self.assertEqual(row[lp.COL_DURATION], "")
+                self.assertEqual(row[lp.COL_BYTES], "")
+                self.assertRegex(row[lp.COL_DATETIME], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+                self.assertTrue(os.path.isfile(row[lp.COL_PATH]))
+
+    def test_missing_files_return_no_rows(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            rows = lp._scan_persistent_log_rows(self._make_app(tmpdir))
+            self.assertEqual(rows, [])
+
+    def test_scan_misc_logs_includes_persistent_rows_without_index(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sessions = os.path.join(tmpdir, "sessions")
+            os.makedirs(sessions)
+            with open(
+                os.path.join(sessions, "2026-10-21_08-48-17_cli_switch-version.log"), "w"
+            ) as fh:
+                fh.write("INFO: ok\n")
+            scrub_log = os.path.join(tmpdir, "scrub-manager.log")
+            with open(scrub_log, "w") as fh:
+                fh.write("2026-10-21 10:00:00 x:1: INFO: scrub started\n")
+
+            app = self._make_app(tmpdir)
+            with _patch_log_dir(sessions):
+                rows = lp._scan_misc_logs(app)
+
+            types = {row[lp.COL_TYPE]: row for row in rows}
+            self.assertIn("cli", types)
+            self.assertIn("scrub", types)
+            self.assertEqual(types["scrub"][lp.COL_NAME], "scrub-manager.log")
+            # Persistent rows bypass the session-log index.
+            self.assertIsNone(app._log_index.get(scrub_log))
+            # The cli session row does use the index.
+            self.assertIsNotNone(
+                app._log_index.get(
+                    os.path.join(sessions, "2026-10-21_08-48-17_cli_switch-version.log")
+                )
+            )
 
 
 class TestLoadGzipIntoViewer(unittest.TestCase):
@@ -1065,27 +1340,35 @@ class TestCreateLogsPage(unittest.TestCase):
 
         lp.create_logs_page(app)
 
-        expected = {
-            "Date/Time": "Session log timestamp",
-            "Type": "Log type: backup, offsite, restore, prune, dataset, gui, or cron",
-            "Name": "Name of the operation or profile",
-            "Status": "Completion status",
-            "Log Size": "Size of the log file on disk",
-            "Duration": "Elapsed run time",
-            "Transfer": "Bytes transferred during the operation",
-        }
+        # Both the main list and the Miscellaneous list use the same column
+        # set; only the Type tooltip differs per list.
+        expected_tooltips = [
+            "Session log timestamp",
+            "Log type: backup, offsite, restore, prune, dataset, gui, or cron",
+            "Name of the operation or profile",
+            "Completion status",
+            "Size of the log file on disk",
+            "Elapsed run time",
+            "Bytes transferred during the operation",
+            "Session log timestamp",
+            "Log type: cli (directly-executed scripts) or a persistent log (scrub, rsync)",
+            "Name of the operation or profile",
+            "Completion status",
+            "Size of the log file on disk",
+            "Elapsed run time",
+            "Bytes transferred during the operation",
+        ]
 
         # Only the column header labels are passed to TreeViewColumn.set_widget().
         set_widgets = [
             call[0][0] for call in lp.Gtk.TreeViewColumn.return_value.set_widget.call_args_list
         ]
-        self.assertEqual(len(set_widgets), len(expected))
+        self.assertEqual(len(set_widgets), len(expected_tooltips))
 
+        actual_tooltips = [widget.set_tooltip_text.call_args[0][0] for widget in set_widgets]
+        self.assertEqual(sorted(actual_tooltips), sorted(expected_tooltips))
         for widget in set_widgets:
-            text = widget._text
-            self.assertIn(text, expected)
-            widget.set_tooltip_text.assert_called_once_with(expected[text])
-            widget.show_all.assert_called_once()
+            widget.show_all.assert_called_once_with()
 
     @patch("logs_page._sync_log_list")
     @patch("logs_page._update_success_rate_label")
@@ -1305,8 +1588,11 @@ class TestLogViewerStatusLabel(unittest.TestCase):
 
     def test_selection_changed_shows_status_for_running_log(self):
         app = MagicMock()
+        app._logs_clearing_other_view = False
         app._logs_current_path = None
         app._logs_tail_timer = None
+        app.logs_view.get_selection().count_selected_rows.return_value = 0
+        app.logs_misc_view.get_selection().count_selected_rows.return_value = 0
         app.logs_search.entry.get_text.return_value = ""
         buf = MagicMock()
         buf.get_text.return_value = "0:00:01 [10MiB/s] 10% ETA\n"
@@ -1327,15 +1613,18 @@ class TestLogViewerStatusLabel(unittest.TestCase):
         selection.get_selected_rows.return_value = (model, [MagicMock()])
 
         with patch("logs_page._load_log_into_viewer"):
-            lp._on_selection_changed(selection, app)
+            lp._on_selection_changed(selection, app, app.logs_view)
 
         app.logs_status_label.set_text.assert_called_with("0:00:01 [10MiB/s] 10% ETA")
         app.logs_status_label.show.assert_called_once()
 
     def test_selection_changed_hides_status_for_finished_log(self):
         app = MagicMock()
+        app._logs_clearing_other_view = False
         app._logs_current_path = None
         app._logs_tail_timer = None
+        app.logs_view.get_selection().count_selected_rows.return_value = 0
+        app.logs_misc_view.get_selection().count_selected_rows.return_value = 0
         app.logs_search.entry.get_text.return_value = ""
         buf = MagicMock()
         app.logs_text.get_buffer.return_value = buf
@@ -1355,7 +1644,7 @@ class TestLogViewerStatusLabel(unittest.TestCase):
         selection.get_selected_rows.return_value = (model, [MagicMock()])
 
         with patch("logs_page._load_log_into_viewer"):
-            lp._on_selection_changed(selection, app)
+            lp._on_selection_changed(selection, app, app.logs_view)
 
         app.logs_status_label.set_text.assert_called_with("")
         app.logs_status_label.hide.assert_called_once()

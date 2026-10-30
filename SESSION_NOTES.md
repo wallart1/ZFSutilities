@@ -64,6 +64,28 @@ entries were removed, recoverable via `git log`.)
 
 ## Persistent gotchas (not documented in docs/)
 
+- Logs tab two-list structure (2026-10-30): the main list keeps
+  `_LOG_FILENAME_RE` (core types only, unchanged); everything
+  session-shaped with a non-core type routes to the collapsed
+  "Miscellaneous Logs" treeview via `_MISC_LOG_FILENAME_RE` (type class
+  excludes `_` so the type/name split falls on the first underscore —
+  do NOT widen it to `[A-Za-z0-9_-]` or names containing underscores
+  split wrong). Both lists share ONE LogIndex pass
+  (`_scan_session_dir` returns both row sets and the index
+  `remove_missing` runs on the union — splitting the pass into two
+  scans would purge the other list's index entries every refresh).
+  Shared viewer + Delete button: `_on_selection_changed` takes the
+  source view and mutually clears the other list under
+  `app._logs_clearing_other_view` (re-entrancy guard); the delete
+  button sensitivity and `_on_delete_selected` union both views.
+  Persistent-log rows (cron in main; scrub/rsync in misc) come from
+  `paths` config keys via `_scan_log_and_rotations` — add new
+  persistent logs to `_PERSISTENT_LOG_SPECS`, not ad hoc scans.
+  Production facts that motivated this (stewie 2026-10-30): 264 of 294
+  session files were `cli`; sessions dir holds nothing older than
+  2026-10-21 (retention 30, prune mtime-based — the Oct 21–22 bare-metal
+  OS restore is the likely history loss point, not a pruning bug).
+
 - `source_helper` scoping law (vm-205 incident, 2026-10-16): bashinit's
   `source_helper` is a function, so a library sourced through it runs inside
   the helper's frame — every top-level `declare` (incl. `declare -A` maps
@@ -580,3 +602,103 @@ profile cancellation, mount-order repair engine), pub2 PROMPTQUEUE2:
   entry, no new entry. PREEXISTING.md unchanged at 2 entries
   (lane-scoped, awaiting user prompt; the step-1 resolution pass is
   pub-main-only by its own precondition).
+
+## 2026-10-30 — Add Profile to Schedule mirrors the red Save state
+
+- Backup, Offsite, Restore, Retention: the "Add Profile to Schedule"
+  toolbar button now turns red exactly when the page's Save button is
+  red, and clears with it on save/revert/page switch.
+- Mechanism: PAGE_SPECS gives the four buttons attr names
+  (`_backup/_offsite/_restore/_ret_add_profile_btn`); `DirtyTracker`
+  grew an optional `mirror_button_attr` (backup + offsite);
+  restore's `_style_restore_save_button` styles both buttons (unified
+  on `set_button_markup_red` — behavior-identical, hard-coded label
+  markup dropped); retention gained `_style_retention_buttons` shared
+  by `_update_ret_status` and `retention_actions.check_retention_dirty`.
+  Pools page untouched (not requested).
+- Test gotchas hit: retention fixtures that null `_ret_save_button`
+  to dodge styling under MagicMock must also null
+  `_ret_add_profile_btn` (MagicMock auto-creates the attr and the real
+  `set_button_markup_red` dies on `isinstance` vs mock `Gtk.Label`);
+  mock call_args_list comparisons need the real `call` object (aliased
+  `mock_call` — plain tuples do not equal `_Call` entries, and a bare
+  `call` import trips F402 against pre-existing loops named `call`).
+- Docs: the four Add Profile rows in gtk-gui.md note the red
+  mirroring (row widths preserved; docs-integrity green).
+
+## 2026-10-30 (later) — Dashboard Tasks Date / Time header tooltip
+
+- The Tasks "Date / Time" column header now has a tooltip (header-label
+  pattern from logs_page/disks_page): waiting/running rows show the task
+  start time, completed rows show the completion time. gtk-gui.md's
+  Tasks column row already documented these semantics, so no doc edit.
+
+## 2026-10-30 (later still) — zfshold already-present notice at VERB
+
+- bin/zfshold: the "Hold <tag> already present on <snap>" notice moved
+  from INFO to VERB (routine duplicate chatter on multi-dataset runs;
+  GUI log viewers hide it at normal levels). test-zfshold's
+  already-present case asserts VERB + no INFO now; messages/index.md
+  row and the modules.md zfshold paragraph updated to VERB. The
+  changelog's historical "logged at INFO" line stays (off-limits).
+
+## 2026-10-30 (evening) — Restore: no parts checkboxes, state-aware resume of interrupted restores
+
+- Restore page: Restore Steps (Part 1/Part 2 checkboxes) and Notes
+  sections removed; every restore runs both phases. do_part1/do_part2
+  dropped from the schema (migration 30→31 pops them); old scheduled
+  restore profiles carrying the keys still run (ignored, tested).
+- Interrupted restores now RESUME instead of restarting from scratch
+  (user rejected the destroy-and-redo design):
+  - The engine already honored receive resume tokens on every
+    send-receive pass (validate via `zfs send -nP -t`, resume with
+    `zfs send -t | zfs receive`, abort stale with `receive -A`, then
+    reprocess the same dataset via `((i--))`) — no new code needed
+    there.
+  - New: `restore_resume='Y'` gate in zfs-send-receive — in a
+    destructive full-copy pass (force='Y', doincrementals='N'), a
+    plain-mode getcommonsnap GUID check skips datasets whose
+    destination already holds a verified lineage; Part 2 catches them
+    up incrementally. Normal backups (no flag) keep destroy semantics
+    (red-proofed). The gate must neutralize commsnap_mostrecent='OLDEST'
+    around the call or getcommonsnap short-circuits without comparing.
+- Payload: always Part 1 → fsarray file → Part 2 → iSCSI ensure;
+  restore_resume='Y' set; fsarray temp file now guarded by
+  append_exit_trap + `trap 'exit 143' TERM` (GUI cancel = SIGTERM;
+  handler runs after the current zfs pipeline ends — same visible
+  behavior, but the exit traps then fire). Residual: SIGKILL can still
+  leak one /tmp/zfsrestore_fsarray_<pid> (harmless; unique per run).
+- New bash suite test-zfs-send-receive-resume (7 tests, red-proofed by
+  disabling the gate). test-lib mock upgrades: stale-token list for
+  `zfs send -t`, and receive completion consumes the token — via a
+  state-dir FILE because pipelined receives run the mock in a subshell
+  where array writes vanish (the original hang); suites staging tokens
+  must clear received-datasets in their reset.
+- Run Restore dialog always WARNING now, with resume-behavior text.
+  Docs: gtk-gui.md (phases + Interrupted restores bullets, Run Restore
+  row), restore.md "Interrupted Restores" section, messages manual
+  (dropped the at-least-one-part WARN row; lineage-skip rows),
+  modules.md + global-variables.md (restore_resume), testing.md row.
+  mkdocs --strict clean (standing mkdocs-2.0 warning only).
+
+## 2026-10-30 (night) — red action buttons turn their sidebar tab red
+
+- Any page whose action button is red now shows its sidebar tab label in
+  red: Backup/Offsite/Restore/Schedule/Retention/Pools Save (+ the Add
+  Profile mirrors), and Checkagainst's Save AND Get Entries (causes OR-ed
+  per page). Dry Run toggle deliberately excluded — its state is shared
+  across four pages, so it would light four tabs for a mode, not an
+  attention state.
+- Gtk.StackSidebar doesn't expose row labels, so the sidebar is now a
+  custom Gtk.ListBox (rows hold our labels; activation switches the
+  stack; on_page_changed selects the row — select_row doesn't re-emit
+  activate). New gui_helpers.PageAttention (per-page cause OR) +
+  set_page_tab_attention bridge; window.set_page_attention applies the
+  markup. DirtyTracker grew page_name= (backup/offsite trackers pass it);
+  each other page's existing styling choke point calls the bridge.
+- PREEXISTING.md: the cross-file pytest-ordering flake entry gained a
+  second instance — `pytest test_restore_page.py test_checkagainst_page.py`
+  (restore first) fails 4 checkagainst dialog assertions; verified
+  identical with ALL FOUR files at clean HEAD, so pre-existing (alphabetical
+  runs and the sanctioned per-suite runner never pair them this way).
+  Discovered while batching suites in one process; entries remain 3.

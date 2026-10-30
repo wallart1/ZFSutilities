@@ -1373,5 +1373,119 @@ class TestStdinEnableRecompute(unittest.TestCase):
         window.stdin_entry.set_sensitive.assert_called_with(True)
 
 
+class TestPageSidebar(unittest.TestCase):
+    """Custom ListBox sidebar: labeled rows plus per-page attention styling."""
+
+    def _make_window(self):
+        gui = _gui_module()
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
+            window = gui.ZFSUtilitiesWindow()
+            window.stack = MagicMock()
+            window.sidebar = MagicMock()
+            window._page_rows = {}
+            window._page_labels = {}
+            window._page_titles = {}
+            window._page_attention = gui.PageAttention()
+            return window, gui
+
+    def test_add_stack_page_builds_labeled_sidebar_row(self):
+        window, gui = self._make_window()
+        mock_gtk = MagicMock()
+        with patch.object(gui, "Gtk", mock_gtk):
+            window.add_stack_page("checkagainst", "Checkagainst", MagicMock())
+
+        label = mock_gtk.Label.return_value
+        label.set_halign.assert_called_once_with(mock_gtk.Align.START)
+        row = mock_gtk.ListBoxRow.return_value
+        row.add.assert_called_once_with(label)
+        window.sidebar.add.assert_called_once_with(row)
+        window.stack.add_titled.assert_called_once()
+        self.assertIs(window._page_rows["checkagainst"], row)
+        self.assertIs(window._page_labels["checkagainst"], label)
+        self.assertEqual(window._page_titles["checkagainst"], "Checkagainst")
+
+    def test_row_activation_switches_stack_page(self):
+        window, _gui = self._make_window()
+        rows = {name: MagicMock() for name in ("backup", "checkagainst")}
+        window._page_rows = rows
+
+        window._on_sidebar_row_activated(None, rows["checkagainst"])
+
+        window.stack.set_visible_child_name.assert_called_once_with("checkagainst")
+
+    def test_row_activation_ignores_unknown_rows(self):
+        window, _gui = self._make_window()
+        window._page_rows = {"backup": MagicMock()}
+
+        window._on_sidebar_row_activated(None, MagicMock())
+
+        window.stack.set_visible_child_name.assert_not_called()
+
+    def test_attention_turns_tab_label_red(self):
+        window, _gui = self._make_window()
+        window._page_titles["checkagainst"] = "Checkagainst"
+        label = MagicMock()
+        window._page_labels["checkagainst"] = label
+
+        window.set_page_attention("checkagainst", "stale", True)
+
+        label.set_markup.assert_called_once_with("<span foreground='red'>Checkagainst</span>")
+
+    def test_attention_causes_are_ored_per_page(self):
+        window, _gui = self._make_window()
+        window._page_titles["checkagainst"] = "Checkagainst"
+        label = MagicMock()
+        window._page_labels["checkagainst"] = label
+
+        window.set_page_attention("checkagainst", "dirty", True)
+        # A second active cause does not re-style the label (OR unchanged).
+        window.set_page_attention("checkagainst", "stale", True)
+        self.assertEqual(label.set_markup.call_count, 1)
+        # Clearing one cause leaves the other in charge: still red, no reset.
+        window.set_page_attention("checkagainst", "dirty", False)
+        self.assertEqual(label.set_markup.call_count, 1)
+        label.set_text.assert_not_called()
+
+        # Clearing the last cause returns the label to plain text.
+        window.set_page_attention("checkagainst", "stale", False)
+        label.set_text.assert_called_once_with("Checkagainst")
+
+    def test_attention_no_ops_when_state_is_unchanged(self):
+        window, _gui = self._make_window()
+        window._page_titles["backup"] = "Backup"
+        label = MagicMock()
+        window._page_labels["backup"] = label
+
+        window.set_page_attention("backup", "dirty", True)
+        window.set_page_attention("backup", "dirty", True)
+
+        self.assertEqual(label.set_markup.call_count, 1)
+
+    def test_attention_tolerates_unknown_page(self):
+        window, _gui = self._make_window()
+        window.set_page_attention("nonexistent", "dirty", True)  # must not raise
+
+    def test_page_change_selects_sidebar_row(self):
+        window, _gui = self._make_window()
+        row = MagicMock()
+        window._page_rows = {"logs": row}
+        window.update_action_buttons = MagicMock()
+        for name in (
+            "_start_stop_dashboard_timer",
+            "_start_stop_scrub_timer",
+            "_start_stop_pools_timer",
+            "_start_stop_disks_timer",
+            "_start_stop_memory_timer",
+            "_start_stop_schedule_timer",
+        ):
+            setattr(window, name, MagicMock())
+        stack = MagicMock()
+        stack.get_visible_child_name.return_value = "logs"
+
+        window.on_page_changed(stack, None)
+
+        window.sidebar.select_row.assert_called_once_with(row)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -749,6 +749,24 @@ class TestSaveButtonStyling(unittest.TestCase):
             cap.check_checkagainst_dirty(app)
         mock_markup.assert_called_once_with(app._ca_save_button, "Save")
 
+    def test_dirty_styles_tab_red(self):
+        app = self._make_app(
+            [("offsite", "tank/a", "backup/a", "")],
+            [("offsite", "tank/a", "other/a", "")],
+        )
+        with patch.object(cap, "set_button_markup"):
+            cap.check_checkagainst_dirty(app)
+        app.set_page_attention.assert_called_once_with("checkagainst", "dirty", True)
+
+    def test_clean_clears_tab_attention(self):
+        app = self._make_app(
+            [("offsite", "tank/a", "backup/a", "")],
+            [("offsite", "tank/a", "backup/a", "")],
+        )
+        with patch.object(cap, "set_button_markup"):
+            cap.check_checkagainst_dirty(app)
+        app.set_page_attention.assert_called_once_with("checkagainst", "dirty", False)
+
 
 class TestSetButtonMarkup(unittest.TestCase):
     """set_button_markup recurses to find a Gtk.Label."""
@@ -1343,6 +1361,7 @@ class TestDerivedStaleness(unittest.TestCase):
             app._ca_get_entries_button,
             '<span foreground="red">Get Entries</span>',
         )
+        app.set_page_attention.assert_called_with("checkagainst", "stale", True)
 
     def test_get_entries_clears_red_style(self):
         app = self._make_app(

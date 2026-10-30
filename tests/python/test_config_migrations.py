@@ -181,8 +181,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_30(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 30)
+    def test_config_version_is_31(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 31)
 
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
@@ -510,6 +510,29 @@ class TestIndividualMigrations(unittest.TestCase):
         result1 = config_migrations._migrate_29_to_30(dict(config))
         result2 = config_migrations._migrate_29_to_30(result1)
         self.assertEqual(result1, result2)
+
+    def test_migrate_30_to_31_drops_restore_part_keys(self):
+        config = {
+            "config_version": 30,
+            "restore": {
+                "source": "backup/a",
+                "dest": "tank/a",
+                "do_part1": True,
+                "do_part2": False,
+            },
+        }
+        result = config_migrations._migrate_30_to_31(config)
+        self.assertEqual(result["config_version"], 31)
+        self.assertNotIn("do_part1", result["restore"])
+        self.assertNotIn("do_part2", result["restore"])
+        self.assertEqual(result["restore"]["source"], "backup/a")
+        self.assertEqual(result["restore"]["dest"], "tank/a")
+
+    def test_migrate_30_to_31_tolerates_missing_restore_section(self):
+        config = {"config_version": 30}
+        result = config_migrations._migrate_30_to_31(config)
+        self.assertEqual(result["config_version"], 31)
+        self.assertNotIn("restore", result)
 
     def test_migrate_15_to_16_adds_prune_pools_order(self):
         config = {"config_version": 15}

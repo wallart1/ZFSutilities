@@ -12,6 +12,7 @@ from paths import (
     get_config_path,
     get_log_dir,
     get_logrotate_file_path,
+    get_rsync_pull_log_path,
     get_scrub_manager_log_path,
     get_session_log_dir,
 )
@@ -366,6 +367,7 @@ def get_paths_config(config, persist=True):
     defaults = {
         "cron_log": os.path.join(get_log_dir(), "cron.log"),
         "scrub_manager_log": get_scrub_manager_log_path(),
+        "rsync_pull_log": get_rsync_pull_log_path(),
         "logrotate_file": get_logrotate_file_path(),
     }
     for key, value in defaults.items():

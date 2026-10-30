@@ -1166,6 +1166,16 @@ def create_dashboard_page(app):
         attr = "markup" if col_idx == 3 else "text"
         col = Gtk.TreeViewColumn(title_text, r, **{attr: col_idx})
         configure_treeview_column(col, width=width)
+        if col_idx == 0:
+            # TreeViewColumn is not a Gtk.Widget, so the tooltip lives on
+            # the header label instead of on the column itself.
+            header = Gtk.Label(label=title_text)
+            header.set_tooltip_text(
+                "Waiting/running tasks: the time the task started. "
+                "Completed tasks: the time the task finished (completion time)."
+            )
+            header.show_all()
+            col.set_widget(header)
         app.dashboard_tasks_view.append_column(col)
     app._ui_state.bind_treeview(app.dashboard_tasks_view, "dashboard_tasks_view")
 

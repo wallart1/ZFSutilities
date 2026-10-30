@@ -86,8 +86,6 @@ class TestRestoreConfig(unittest.TestCase):
     def test_get_restore_config_defaults(self):
         config = {}
         restore = feature_config.get_restore_config(config)
-        self.assertTrue(restore["do_part1"])
-        self.assertTrue(restore["do_part2"])
         self.assertFalse(restore["auto_dest"])
         self.assertEqual(restore["variables"]["verify_after_transfer"], "Y")
         self.assertEqual(restore["variables"]["transfer_rate_limit"], "")

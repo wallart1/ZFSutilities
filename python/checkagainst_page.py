@@ -35,6 +35,7 @@ from gui_helpers import (
     configure_treeview_column,
     handle_editing_key_press,
     set_button_markup,
+    set_page_tab_attention,
     show_error,
 )
 from logging_config import log_msg
@@ -411,10 +412,12 @@ def _is_derived_stale(app):
 
 def style_get_entries_button(app):
     """Set the Get Entries action button red when derived rows are stale."""
+    stale = _is_derived_stale(app)
+    set_page_tab_attention(app, "checkagainst", "stale", stale)
     btn = getattr(app, "_ca_get_entries_button", None)
     if btn is None:
         return
-    if _is_derived_stale(app):
+    if stale:
         set_button_markup(btn, '<span foreground="red">Get Entries</span>')
     else:
         set_button_markup(btn, "Get Entries")
@@ -763,6 +766,7 @@ def on_checkagainst_add_pair(app):
 def check_checkagainst_dirty(app):
     """Compare current UI state to last-saved state; style Save button accordingly."""
     dirty = _is_ca_dirty(app)
+    set_page_tab_attention(app, "checkagainst", "dirty", dirty)
     btn = getattr(app, "_ca_save_button", None)
     if btn is None:
         return

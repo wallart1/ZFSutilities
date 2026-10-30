@@ -1441,7 +1441,7 @@ zfshold <hold-tag> <dataset> <snapshot-suffix>
 **Globals:** none.
 
 Holds every matching snapshot in the subtree individually. A tag already
-present on a snapshot is logged at INFO and treated as success — nested
+present on a snapshot is logged at VERB and treated as success — nested
 datasets are matched by both their own call and their parent subtree
 call, so duplicates are a designed outcome (the GUI offsite payload calls
 this helper from a strict shell). Any other hold failure is logged at
@@ -1810,6 +1810,14 @@ This applies to any caller of `send-receive` (direct calls included), runs
 only for full copies (`doincrementals='N'`, or `force='Y'`) and never in
 dry-run mode, and aborts before transferring anything if the capture fails.
 
+When `$restore_resume='Y'` (set by the GUI/scheduled restore payload), a
+destructive full-copy pass first checks each destination dataset for a
+GUID-verified snapshot lineage with the source: a dataset that already
+holds one is skipped in that pass (an interrupted restore being completed,
+caught up by the caller's incremental pass) instead of destroyed and
+re-copied. Resume tokens left by interrupted receives are honored on every
+pass regardless of this flag.
+
 ```bash
 source_helper zfs-send-receive
 # Set parameters, then:
@@ -1841,6 +1849,7 @@ arguments. Callers set the variables below, then invoke `send-receive`.
 | `$autoproceed`                                                   | `'N'`           | `'Y'` = no interactive prompts                                                                                                                                                                          | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
 | `$dryrun`                                                        | `'N'`           | `'Y'` = report without writing                                                                                                                                                                          | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
 | `$receive_F_option`                                              | `''`            | `'F'` = roll back destination modifications newer than the target snapshot                                                                                                                              | —                                                                                  |
+| `$restore_resume`                                                | `'N'`           | `'Y'` = in destructive full-copy passes, skip destinations with a GUID-verified lineage (interrupted-restore resume)                                                                                     | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)            |
 | `$receive_s_option`                                              | `''`            | `'s'` = enable resumable receives                                                                                                                                                                       | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$verify_after_transfer`                                         | `'Y'`           | `'Y'` = verify destination snapshot GUID matches source after receive                                                                                                                                   | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$resumablethreshold`                                            | 50 GB           | Size above which resumable receive is used                                                                                                                                                              | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |

@@ -47,7 +47,9 @@ The same dialog also warns about unsaved changes: if any tab with a **Save**
 button has edits that have not been saved yet (Backup, Offsite, Restore,
 Schedule, Pools, Checkagainst, or Retention), the dialog lists those tabs so
 the changes are not silently discarded. Deleting rows without clicking
-**Save** counts as an unsaved change.
+**Save** counts as an unsaved change. Whenever one of those red-button
+states is active, the page's tab label in the sidebar is **red** too, so
+pending work is visible without switching tabs.
 
 Scrub profiles started from this GUI with **Run Now** are not listed either:
 their scrubs continue in the ZFS kernel without the runner, and the persisted
@@ -531,7 +533,7 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
 | **Select None**             | Marks every step as inactive                                                                                                                                                                               |
 | **Save Config**             | Persists the current tab state to JSON. Turns **red** while there are unsaved changes.                                                                                                                     |
 | **Revert Config**           | Discards edits and reloads from JSON                                                                                                                                                                       |
-| **Add Profile to Schedule** | Saves a snapshot of current backup settings as a scheduled profile (see [Schedule tab](#schedule-tab))                                                                                                     |
+| **Add Profile to Schedule** | Saves a snapshot of current backup settings as a scheduled profile (see [Schedule tab](#schedule-tab)). Label turns **red** alongside Save Config while there are unsaved changes.                          |
 | **Recall Profile**          | Loads a previously-saved profile into this tab so you can edit it and/or run on demand (see [Recalling profiles](#recalling-and-editing-profiles))                                                         |
 
 While a backup runs, messages stream to the log panel and any interactive
@@ -577,7 +579,7 @@ This tab configures offsite backups ([`zfssendoffsite`](../commands-and-modules/
 | **Select All / Select None** | Mark every step active or inactive                                                                                                                                                                                                                               |
 | **Save Config**              | Persists the tab state; turns **red** when there are unsaved changes.                                                                                                                                                                                            |
 | **Revert Config**            | Reloads from JSON and refreshes the detected pool label                                                                                                                                                                                                          |
-| **Add Profile to Schedule**  | Saves a copy of the current offsite settings as a profile in the Schedule tab.                                                                                                                                                                                   |
+| **Add Profile to Schedule**  | Saves a copy of the current offsite settings as a profile in the Schedule tab. Label turns **red** alongside Save Config while there are unsaved changes.                                                                                                        |
 | **Recall Profile**           | Loads a previously-saved offsite profile into this tab for editing or on-demand execution                                                                                                                                                                        |
 
 !!! note "Concurrent GUI runners"
@@ -622,25 +624,30 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
   | **label**                         | Snapshot label for matching. Only snapshots with this label are considered as source candidates. |
   | **Pause scrubs during each step** | Pause ZFS scrubs on the source and destination pools while the restore step is running.          |
 
-- **Restore Steps** — Two checkboxes:
-  
-  - **Part 1** — Full copy of the oldest available source snapshot
-  - **Part 2** — Incremental copy of remaining snapshots
+- **Restore phases** — Every restore runs in two phases: a full copy from
+  the oldest source snapshot, then an incremental copy of the remaining
+  snapshots. There are no per-part checkboxes anymore.
 
-- **Notes** — A reminder that Part 1 is destructive on the destination.
-  Part 1 asks once for confirmation of the dataset list (held as a numbered
-  input request) and then proceeds automatically; Part 2 runs incrementally
+- **Interrupted restores** — A restore that is cancelled or interrupted can
+  simply be run again. Before doing anything destructive, the restore
+  inspects each destination dataset: one that already holds a
+  GUID-verified snapshot lineage with the source is caught up
+  incrementally (no destruction), an interrupted resumable receive
+  continues from its resume token, and only a destination without a
+  verified lineage is destroyed and fully re-copied. The destructive
+  phase asks once to confirm the dataset list (held as a numbered input
+  request) and then proceeds automatically; the incremental phase runs
   without prompting.
 
 ### Actions
 
 | Button                      | Behavior                                                                                                                                                                  |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Run Restore**             | Validates entries, warns if Part 1 is selected, then launches the restore                                                                                                 |
+| **Run Restore**             | Validates entries, warns that datasets without a verified lineage are destroyed, then launches the state-aware restore (see [Interrupted restores](#restore-tab))                                         |
 | **Cancel**                  | Stops a running restore                                                                                                                                                   |
 | **Save Config**             | Saves settings; turns **red** when there are unsaved changes                                                                                                              |
 | **Revert Config**           | Reloads from saved settings                                                                                                                                               |
-| **Add Profile to Schedule** | Saves the current restore settings as a profile in the Schedule tab.                                                                                                      |
+| **Add Profile to Schedule** | Saves the current restore settings as a profile in the Schedule tab. Label turns **red** alongside Save Config while there are unsaved changes.                           |
 | **Recall Profile**          | Loads a previously-saved Schedule tab profile into this tab for editing or on-demand execution. Click the Add Profile to Schedule button to save changes to the schedule. |
 
 !!! note "Concurrent GUI runners"
@@ -914,7 +921,7 @@ or when a Min Age is set on a bucket whose Retain Count is 0.
 | **Remove Bucket**           | Removes the selected bucket row                                                                                                                                                                                   |
 | **Save**                    | Saves the policy for the currently-selected pool, any pending bucket edits made to other pools, the prune snapshot label, and the advanced prune options                                                          |
 | **Revert**                  | Discards all pending edits (for every pool) and reloads the saved policy, prune label, and advanced prune options                                                                                                 |
-| **Add Profile to Schedule** | Saves a snapshot of current prune settings (label + selected pools) as a scheduled profile                                                                                                                        |
+| **Add Profile to Schedule** | Saves a snapshot of current prune settings (label + selected pools) as a scheduled profile. Label turns **red** alongside Save while there are unsaved changes.                                                    |
 | **Recall Profile**          | Loads a previously-saved retention profile into this tab for editing or on-demand execution                                                                                                                       |
 
 ### Prune runner
@@ -1127,7 +1134,7 @@ save the updated rows.
 
 | Button          | Behavior                                                                                                                                                                                                                           |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Get Entries** | Refresh the Backup-derived and Offsite-derived sections from the current Backup/Offsite configs. The button label turns **red** when the displayed derived rows are stale; clicking it updates the tables and marks the tab dirty. |
+| **Get Entries** | Refresh the Backup-derived and Offsite-derived sections from the current Backup/Offsite configs. The button label turns **red** when the displayed derived rows are stale (the Checkagainst tab label turns red with it); clicking it updates the tables and marks the tab dirty. |
 | **Add pair...** | Open an assistant that asks for snapshot label, source root, destination root, and comment; it appends the forward row **and** the reverse row to the user table.                                                                  |
 | **Add Row**     | Appends a new empty row to the user table.                                                                                                                                                                                         |
 | **Remove Row**  | Deletes the selected row(s) from the user table.                                                                                                                                                                                   |
@@ -1158,7 +1165,7 @@ A sortable table with columns:
 | Column        | Description                                                              |
 | ------------- | ------------------------------------------------------------------------ |
 | **Date/Time** | When the session started. Default sort is **descending** (newest first). |
-| **Type**      | `backup`, `offsite`, `restore`, `prune` — the operation type; `cron` rows list the persistent cron log and its rotations (see below) |
+| **Type**      | `backup`, `offsite`, `restore`, `prune`, `dataset`, `gui` — the operation type; `cron` rows list the persistent cron log and its rotations (see below) |
 | **Name**      | `gui` for GUI runs, or `profile-<name>` for scheduled/cron runs          |
 | **Status**    | `Done`, `Failed`, `Cancelled`, `Running`, `Warn`, or `Fatal`.            |
 | **Log Size**  | Size of the log file on disk                                             |
@@ -1205,6 +1212,30 @@ is managed by logrotate — rotated
 weekly, compressed, and bounded by an early-rotation size guard — so it never
 grows without bound, and every generation is created readable by non-root
 users (handy for tailing over ssh).
+
+### Miscellaneous logs (collapsed section)
+
+Below the main list sits a collapsed **Miscellaneous Logs** section whose
+title shows the current row count. It holds the high-volume logs that are
+not runner output:
+
+- `cli` — one session log per directly-executed CLI script (written
+  automatically by the shared bash initializer), with the script's name in
+  the **Name** column. Any future writer type outside the core set lands
+  here too.
+- `scrub` — the persistent scrub-manager event log (`scrub-manager.log`)
+  and its rotations.
+- `rsync` — the persistent pull-step rsync output log (`rsync-pull.log`),
+  which the offsite profile truncates once per day and appends to
+  afterwards.
+
+The section uses the same columns, sorting, right-click menu, and shared
+log viewer as the main list: selecting a row here loads it into the viewer
+and clears the main list's selection (and vice versa), and **Delete
+Selected** acts on rows selected in either list. The retention setting
+prunes `cli` session logs exactly like the main list's session logs; the
+persistent logs are managed instead by logrotate (`scrub`) or daily
+self-truncation (`rsync`), like the cron log.
 
 ### Log viewer (bottom pane)
 
@@ -2318,7 +2349,7 @@ marks that pool as an offsite candidate; the Offsite tab detects an online candi
 | **Remove**  | Removes all selected registered pools from the registry (not from ZFS) after confirmation                                                                   |
 | **Import**  | Enabled only when at least one selected pool is `IMPORTABLE`. Imports those pools directly, or opens a dialog listing importable pools if none are selected |
 | **Export**  | Confirms, then runs `zpool export` on all selected online pools                                                                                             |
-| **Save**    | Saves registry changes; turns **red** while there are unsaved changes                                                                                       |
+| **Save**    | Saves registry changes; turns **red** while there are unsaved changes (the Pools tab label turns red with it)                                                  |
 | **Revert**  | Reloads registry from the last saved settings                                                                                                               |
 | **Refresh** | Re-runs `zpool list`, rescans importable pools, and refreshes the table                                                                                     |
 

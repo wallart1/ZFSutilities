@@ -1,0 +1,353 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-zfs-send-receive-resume — Tests for interrupted-restore resume in
+# zfs-send-receive: the $restore_resume lineage gate (a destructive
+# full-copy pass must skip destinations that already hold a GUID-verified
+# lineage with the source) and the receive-resume-token path (valid tokens
+# are resumed, stale tokens are aborted and the dataset reprocessed). The
+# real zfs-send-receive runs against the shared zfs mock; run in subshells
+# so internal `exit 8` aborts cannot kill the suite.
+
+# shellcheck disable=SC2218
+# (source() override below is intentionally not active for test-lib.sh itself.)
+builtin source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+# zfs-send-receive sources helpers with $mydir-relative paths; in the repo
+# layout $mydir must be the bin/ directory.
+repo_root="$mydir"
+mydir="$mydir/bin"
+
+# Prevent re-sourcing bashinit / rootcheck / zfslockmanager / bashsetx /
+# iscsi-lib inside send-receive from overwriting our mocks, enabling xtrace,
+# or requiring a real node configuration.
+source() {
+    local expanded="${1/#\~/$HOME}"
+    [[ "$expanded" == "$HOME/bashinit" ]] && return 0
+    # With the local-bashinit bootstrap, zfs-send-receive sources bashinit from
+    # its own directory. Skip that as well so test mocks remain in place.
+    [[ "$expanded" == "$repo_root/bin/bashinit" ]] && return 0
+    [[ "$expanded" == *"rootcheck" ]] && return 0
+    [[ "$expanded" == *"zfslockmanager" ]] && return 0
+    [[ "$expanded" == *"bashsetx" ]] && return 0
+    [[ "$expanded" == *"iscsi-lib.sh" ]] && return 0
+    builtin source "$@"
+}
+
+# iscsi-lib.sh is skipped above; provide the functions send-receive/delfs call.
+iscsi_rebuild_torn_down() { :; }
+iscsi_teardown_zvol() { return 0; }
+
+# Auto-answer interactive prompts (which use read -p); delegate everything
+# else to the real builtin so `while read` data loops terminate at EOF.
+read() {
+    local _a
+    for _a in "$@"; do
+        if [[ "$_a" == -*p* ]]; then
+            response="y"
+            return 0
+        fi
+    done
+    # shellcheck disable=SC2162
+    # Caller flags (e.g. -r) are forwarded verbatim.
+    builtin read "$@"
+}
+
+_TEST_LOG="$_mock_zfs_state_dir/sendrecv-resume.log"
+
+set_msg_level() {
+    msg_level="$1"
+}
+
+capture_stderr() {
+    exec 2>"$_TEST_LOG"
+}
+
+restore_stderr() {
+    exec 2>&7
+}
+
+get_stderr_log() {
+    cat "$(get_test_log_file)" 2>/dev/null
+}
+
+clear_log() {
+    : > "$_TEST_LOG"
+    : > "$(get_test_log_file)"
+}
+
+reset_mocks() {
+    _mock_zfs_fs_list=""
+    _mock_zfs_snap_list=""
+    _mock_zfs_props=()
+    _mock_zfs_snaps=()
+    _mock_zfs_datasets=()
+    _mock_zfs_snap_lists=()
+    _mock_zfs_guid_lists=()
+    _mock_zfs_holds=()
+    _mock_zfs_clones=()
+    _mock_zfs_stale_tokens=()
+    _mock_zfs_send_size="1000000"
+    _mock_zpool_list=""
+    # Receive completions consume tokens (see test-lib's mock); without this
+    # reset, an earlier test's receive of the same dataset would consume the
+    # token the next test is trying to stage.
+    : > "$_mock_zfs_state_dir/received-datasets" 2>/dev/null || true
+    clear_log
+}
+
+# Shared mock world: one source dataset with one snapshot. Variants add a
+# destination dataset (same-snapshot lineage or unrelated) and/or a resume
+# token on the destination.
+_setup_world() {
+    reset_mocks
+    set_msg_level INFO
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/src/data@snap1:creation"]="1700000000"
+    _mock_zfs_snaps["pool/src/data@snap1"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_guid_lists["pool/src/data"]="guid1"
+}
+
+_add_dest_with_lineage() {
+    _mock_zfs_datasets["pool/dest/data"]=1
+    _mock_zfs_props["pool/dest/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:receive_resume_token"]="-"
+    _mock_zfs_props["pool/dest/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/data@snap1:creation"]="1700000000"
+    _mock_zfs_snaps["pool/dest/data@snap1"]=1
+    _mock_zfs_snap_lists["pool/dest/data"]="pool/dest/data@snap1"
+    # Same GUID as the source snap: a verified restore lineage.
+    _mock_zfs_guid_lists["pool/dest/data"]="guid1"
+}
+
+_add_dest_without_lineage() {
+    _mock_zfs_datasets["pool/dest/data"]=1
+    _mock_zfs_props["pool/dest/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:receive_resume_token"]="-"
+    _mock_zfs_props["pool/dest/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/data@snap1:creation"]="1700000000"
+    _mock_zfs_snaps["pool/dest/data@snap1"]=1
+    _mock_zfs_snap_lists["pool/dest/data"]="pool/dest/data@snap1"
+    # Different GUID: the destination data is unrelated to the source.
+    _mock_zfs_guid_lists["pool/dest/data"]="guid-other"
+}
+
+_run_restore_full_copy_pass() {
+    (
+        restore_resume='Y'
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@snap1'
+        send-receive "pool/src" "pool/dest"
+    )
+}
+
+source "$mydir/zfs-send-receive"
+# The script's strict line leaks into this test shell at the source point;
+# restore the test harness's own option state so a failing test reports
+# normally instead of aborting the suite.
+set +euo pipefail
+
+# Keep a dup of the original stderr so capture/restore work across tests.
+exec 7>&2
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+test_full_copy_skips_verified_lineage() {
+    test_start "restore_resume full copy skips a GUID-verified destination"
+    _setup_world
+    _add_dest_with_lineage
+
+    capture_stderr
+    local rc
+    _run_restore_full_copy_pass
+    rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" "already holds a verified snapshot lineage"
+    assert_contains "$log" "Skipping destructive full copy"
+    if [[ "$log" == *"Doing a full copy"* ]]; then
+        test_fail "A verified lineage must not be re-copied"
+    else
+        test_pass
+    fi
+}
+
+test_full_copy_destroys_destination_without_lineage() {
+    test_start "restore_resume full copy still copies destinations without lineage"
+    _setup_world
+    _add_dest_without_lineage
+
+    capture_stderr
+    local rc
+    _run_restore_full_copy_pass
+    rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" "Doing a full copy of pool/src/data to pool/dest/data"
+    if [[ "$log" == *"Skipping destructive full copy"* ]]; then
+        test_fail "An unrelated destination must be fully re-copied"
+    else
+        test_pass
+    fi
+}
+
+test_gate_requires_restore_resume() {
+    test_start "Without restore_resume a verified lineage is still re-copied (backup semantics)"
+    _setup_world
+    _add_dest_with_lineage
+
+    capture_stderr
+    local rc
+    (
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@snap1'
+        send-receive "pool/src" "pool/dest"
+    )
+    rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" "Doing a full copy of pool/src/data to pool/dest/data"
+    if [[ "$log" == *"Skipping destructive full copy"* ]]; then
+        test_fail "restore_resume must gate the lineage skip"
+    else
+        test_pass
+    fi
+}
+
+test_gate_inactive_on_incremental_pass() {
+    test_start "The lineage gate does not apply to incremental passes"
+    _setup_world
+    _add_dest_with_lineage
+
+    capture_stderr
+    local rc
+    (
+        restore_resume='Y'
+        doincrementals='Y'; dointermediates='Y'; force='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@snap1'
+        send-receive "pool/src" "pool/dest"
+    )
+    rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    if [[ "$log" == *"Skipping destructive full copy"* ]]; then
+        test_fail "Incremental passes must run their own commsnap logic"
+    else
+        test_pass
+    fi
+}
+
+test_valid_token_is_resumed_and_then_caught_up() {
+    test_start "A valid resume token is resumed, then the dataset skips the full copy"
+    _setup_world
+    _add_dest_with_lineage
+    _mock_zfs_props["pool/dest/data:receive_resume_token"]="token-1"
+
+    capture_stderr
+    local rc
+    _run_restore_full_copy_pass
+    rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" "Found resume token for pool/dest/data"
+    # The engine logs the exact send options before the resumed transfer.
+    assert_contains "$log" "zfs send -t token-1"
+    # After the resumed receive completes, the reprocessed dataset must skip
+    # the destructive full copy (the lineage gate) — not loop on the token
+    # and not re-copy.
+    assert_contains "$log" "already holds a verified snapshot lineage"
+    if [[ "$log" == *"Doing a full copy"* ]]; then
+        test_fail "A resumed dataset must be caught up incrementally"
+    else
+        test_pass
+    fi
+}
+
+test_stale_token_is_aborted_and_dataset_reprocessed() {
+    test_start "A stale resume token is aborted and the dataset reprocessed"
+    _setup_world
+    _add_dest_with_lineage
+    _mock_zfs_props["pool/dest/data:receive_resume_token"]="token-stale"
+    _mock_zfs_stale_tokens["token-stale"]=1
+
+    capture_stderr
+    local rc
+    _run_restore_full_copy_pass
+    rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" "Resume token is invalid or stale"
+    # After the abort the reprocessed dataset has a verified lineage and
+    # must skip the destructive full copy.
+    assert_contains "$log" "already holds a verified snapshot lineage"
+    if [[ "$log" == *"Doing a full copy"* ]]; then
+        test_fail "A stale token must not force a destructive re-copy"
+    else
+        test_pass
+    fi
+}
+
+test_dry_run_reports_the_lineage_skip() {
+    test_start "Dry-run reports the lineage skip without transferring"
+    _setup_world
+    _add_dest_with_lineage
+
+    capture_stderr
+    local rc
+    (
+        restore_resume='Y'
+        dryrun='Y'; doincrementals='N'; force='Y'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@snap1'
+        send-receive "pool/src" "pool/dest"
+    )
+    rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" "Dry-run: Would skip full copy of pool/src/data"
+    assert_contains "$log" "verified snapshot lineage"
+    test_pass
+}
+
+# =============================================================================
+# Run
+# =============================================================================
+
+test_full_copy_skips_verified_lineage
+test_full_copy_destroys_destination_without_lineage
+test_gate_requires_restore_resume
+test_gate_inactive_on_incremental_pass
+test_valid_token_is_resumed_and_then_caught_up
+test_stale_token_is_aborted_and_dataset_reprocessed
+test_dry_run_reports_the_lineage_skip
+
+test_summary

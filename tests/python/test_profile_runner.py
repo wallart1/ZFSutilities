@@ -88,29 +88,14 @@ class TestBuildRestoreCommand(unittest.TestCase):
             "startwith": "",
             "endwith": "",
         }
-        step = restore_runner.build_restore_command(
-            "tank/src", 0, "tank/dst", "/bin", variables, do_part1=True, do_part2=False
-        )
+        step = restore_runner.build_restore_command("tank/src", 0, "tank/dst", "/bin", variables)
         self.assertIsInstance(step, BashStep)
         script = step.command[2]
+        # The payload always runs both passes: the destructive full-copy
+        # pass (lineage-gated via restore_resume) and the incremental one.
+        self.assertIn('restore_resume="Y"', script)
         self.assertIn('doincrementals="N"', script)
-        self.assertNotIn('doincrementals="Y"', script)
-        self.assertIn("(full copy)", step.description)
-
-    def test_part2_only(self):
-        variables = {}
-        step = restore_runner.build_restore_command(
-            "tank/src", 0, "tank/dst", "/bin", variables, do_part1=False, do_part2=True
-        )
-        script = step.command[2]
         self.assertIn('doincrementals="Y"', script)
-        self.assertIn("(incremental)", step.description)
-
-    def test_both_parts(self):
-        variables = {}
-        step = restore_runner.build_restore_command(
-            "tank/src", 0, "tank/dst", "/bin", variables, do_part1=True, do_part2=True
-        )
         self.assertIn("(full copy + incremental)", step.description)
 
 
@@ -746,8 +731,6 @@ class TestRunRestoreProfile(unittest.TestCase):
             "config": {
                 "source": "",
                 "dest": "",
-                "do_part1": True,
-                "do_part2": True,
                 "variables": {},
             }
         }
@@ -759,14 +742,33 @@ class TestRunRestoreProfile(unittest.TestCase):
             any("FATAL: Source and destination must be specified" in msg for msg in logs)
         )
 
+    def test_stale_part_keys_in_profile_are_ignored(self):
+        """Profiles saved before the parts checkboxes were removed still run."""
+        profile = {
+            "config": {
+                "source": "tank/vm/100",
+                "dest": "backup/vm/100",
+                "do_part1": True,
+                "do_part2": False,
+                "variables": {},
+            }
+        }
+        config = {}
+        with patch("profile_runner.subprocess.Popen") as mock_popen:
+            mock_popen.return_value = _mock_popen_process(rc=0)
+            rc = profile_runner.run_restore_profile(profile, config, "/bin")
+        self.assertEqual(rc, 0)
+        script = mock_popen.call_args[0][0][2]
+        # The restore runs both passes regardless of the stale keys.
+        self.assertIn('restore_resume="Y"', script)
+        self.assertIn('doincrementals="Y"', script)
+
     def test_step_failure_logs_fatal_abort(self):
         """A failed restore step aborts the run with a task-level FATAL."""
         profile = {
             "config": {
                 "source": "tank/vm/100",
                 "dest": "backup/vm/100",
-                "do_part1": True,
-                "do_part2": True,
                 "variables": {},
             }
         }
@@ -785,8 +787,6 @@ class TestRunRestoreProfile(unittest.TestCase):
                 "source": "tank/vm/100",
                 "dest": "backup/vm/100",
                 "recursive": True,
-                "do_part1": True,
-                "do_part2": False,
                 "variables": {},
             }
         }
@@ -1433,8 +1433,6 @@ class TestDryRunProfiles(unittest.TestCase):
             "config": {
                 "source": "tank/vm/100",
                 "dest": "backup/vm/100",
-                "do_part1": True,
-                "do_part2": False,
                 "variables": {},
             },
         }

@@ -2,7 +2,7 @@
 
 import copy
 
-CONFIG_VERSION = 30
+CONFIG_VERSION = 31
 
 
 def _migrate_1_to_2(config):
@@ -413,6 +413,21 @@ def _migrate_29_to_30(config):
     return config
 
 
+def _migrate_30_to_31(config):
+    """Drop the restore do_part1/do_part2 selection keys.
+
+    The restore always runs both parts now; the per-part checkboxes are gone
+    from the Restore page and nothing reads the keys. Stale keys in saved
+    restore profiles are simply ignored.
+    """
+    restore = config.get("restore")
+    if isinstance(restore, dict):
+        restore.pop("do_part1", None)
+        restore.pop("do_part2", None)
+    config["config_version"] = 31
+    return config
+
+
 MIGRATIONS = [
     _migrate_1_to_2,
     _migrate_2_to_3,
@@ -443,6 +458,7 @@ MIGRATIONS = [
     _migrate_27_to_28,
     _migrate_28_to_29,
     _migrate_29_to_30,
+    _migrate_30_to_31,
 ]
 
 

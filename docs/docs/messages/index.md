@@ -394,8 +394,7 @@ GUI Restore tab. Validates source/destination and launches the restore. The same
 | `WARN: Specify datasets, not snapshots (no '@' allowed)` | Source or destination contains a snapshot qualifier | Run aborted |
 | `WARN: Error: ...` (at run time) | Destination/parameter computation raised | Run aborted |
 | `WARN: Destination dataset must be specified, or enable auto-determine destination` | No destination given and auto-destination off | Run aborted |
-| `WARN: At least one restore part must be selected` | Both Part 1 and Part 2 unchecked | Run aborted |
-| `INFO: Restore cancelled` | User cancelled the warning/confirmation dialog (which spells out Part 1 destructiveness) | Run aborted |
+| `INFO: Restore cancelled` | User cancelled the warning/confirmation dialog (which spells out the resume behavior and destructiveness) | Run aborted |
 | `INFO: Dry run mode enabled — no changes will be made` | Dry-run active | Passed into the command builder |
 | `INFO: Starting restore: ... -> ...` | Final start record after confirmation | Restore runner starts |
 | `INFO: Restore config saved` | Save Config succeeded | Saved state updated |
@@ -410,8 +409,10 @@ Builds the two-part restore script. The messages below are emitted inside the ge
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `INFO: Ensuring iSCSI LUNs for restored VM disks...` | Post-restore hook firing; gated on a non-dry-run and a non-empty destination list | `ensure-restored-vm-iscsi` runs on the restored datasets; skipped entirely in dry-run |
-| `Part one: Full copy using the oldest available snapshot.` | Phase marker — Part 1 selected; force/releaseholds set, incrementals off, commsnap OLDEST, autoproceed N | Send/receive runs with confirmation prompts; non-zero rc exits |
-| `Part two: Incremental copy of remaining snapshots.` | Phase marker — Part 2 selected; incrementals and intermediates on, autoproceed Y; reuses the fsarray saved by Part 1 | Incremental send/receive runs, then iSCSI ensure and temp-file cleanup |
+| `Part one: Full copy using the oldest available snapshot.` | Phase marker — the full-copy pass always runs; force/releaseholds set, incrementals off, commsnap OLDEST, autoproceed N, and restore_resume gates each destination (see below) | Send/receive runs with confirmation prompts; non-zero rc exits |
+| `Part two: Incremental copy of remaining snapshots.` | Phase marker — the incremental pass always runs; incrementals and intermediates on, autoproceed Y; reuses the fsarray saved by Part 1 | Incremental send/receive runs, then iSCSI ensure; the exit trap removes the temp file |
+| `INFO: ... already holds a verified snapshot lineage with ... (common snapshot ...). Skipping destructive full copy; catching up incrementally.` | restore_resume gate — the destination's snapshots GUID-match the source, so this dataset is an interrupted restore being completed, not re-copied | Dataset is skipped in the full-copy pass; the incremental pass catches it up |
+| `INFO: Dry-run: Would skip full copy of ... — ... already holds a verified snapshot lineage ...` | Dry-run form of the restore_resume lineage gate | Informational |
 
 ## Retention and Snapshot/Hold Cleanup
 
@@ -562,7 +563,7 @@ Releases holds matching tag patterns (used by the offsite release pipeline), or 
 | -------------- | ------- | -------- |
 | `WARN: zfshold requires a snapshot pattern ($3). Skipping.` | The snapshot-name pattern is missing | Skips (return 1); supply a pattern |
 | `WARN: Could not acquire write lock on ...; aborting.` | The subtree's write lock is unavailable | Aborts (return 1); resolve the lock |
-| `INFO: Hold <tag> already present on <snap>` | The tag is already held on that snapshot — normal when nested datasets are matched by both their own call and their parent subtree call | Informational; treated as success |
+| `VERB: Hold <tag> already present on <snap>` | The tag is already held on that snapshot — normal when nested datasets are matched by both their own call and their parent subtree call | Treated as success; visible in the GUI log viewers when the level filter is `VERB` or `DEBUG` |
 | `WARN: Could not apply hold <tag> to <snap>` | A hold failed for a reason other than the tag already being present | Return 1; check the pool and dataset state |
 
 ### [zfsholds](../commands-and-modules/commands.md#zfsholds)

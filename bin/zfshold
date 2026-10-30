@@ -41,7 +41,7 @@ function zfshold {
         [[ -z "$_snap" ]] && continue
         if ! zfs hold "$1" "$_snap" 2>/dev/null; then
             if zfs holds -H "$_snap" 2>/dev/null | awk '{print $2}' | grep -qF -- "$1"; then
-                log_msg "INFO: Hold $1 already present on $_snap"
+                log_msg "VERB: Hold $1 already present on $_snap"
             else
                 log_msg "WARN: Could not apply hold $1 to $_snap"
                 _failed=1

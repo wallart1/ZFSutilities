@@ -101,6 +101,11 @@ def get_scrub_manager_log_path() -> str:
     return os.path.join(get_log_dir(), "scrub-manager.log")
 
 
+def get_rsync_pull_log_path() -> str:
+    """Return the path to the persistent pull-step rsync output log."""
+    return os.path.join(get_log_dir(), "rsync-pull.log")
+
+
 def get_surface_test_state_path() -> str:
     """Return the path to the disk surface-test state file."""
     return os.path.join(get_state_dir(), "surface_test_state.json")

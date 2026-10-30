@@ -170,6 +170,30 @@ also available on the Backup and Offsite tabs:
 - `transfer_rate_limit` — Optional rate limit used during the transfer,
   for example `100M` to cap throughput at 100 MB/s. Leave blank for no limit.
 
+## Interrupted Restores
+
+A restore that is cancelled or interrupted (GUI closed, host rebooted, SSH
+drop) can simply be run again — the rerun analyzes each destination dataset
+and completes only what is missing:
+
+- **Interrupted resumable receive** — transfers above the resumable
+  threshold are received with `zfs receive -s`, so an interrupted receive
+  leaves a resume token on the destination. The rerun validates each token
+  and continues the interrupted receive from it (a stale token is discarded
+  and the dataset continues down the checks below).
+- **Verified snapshot lineage** — a destination dataset whose snapshots
+  GUID-match the source already has completed restore work. The rerun
+  skips the destructive full copy for it and only catches the remaining
+  snapshots up incrementally.
+- **No lineage** — a destination that does not exist or shares no
+  GUID-matched snapshot with the source is destroyed and fully re-copied
+  from the oldest snapshot, as a first-run restore would.
+
+The analysis is per dataset, so a run interrupted mid-way (some datasets
+done, some mid-receive, some untouched) resumes correctly in one pass.
+Both the GUI's Run Restore and scheduled restore profiles use this
+behavior.
+
 ## Preserving Target Holds During a Restore
 
 A ZFS send stream does not include snapshot holds, so a full copy normally

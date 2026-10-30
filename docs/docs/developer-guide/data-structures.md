@@ -283,7 +283,8 @@ without writing.
 | -------------------- | ------ | ------------------------------------------------------------------------------------------------- |
 | `cron_log`           | string | Persistent cron output log (default `/var/log/zfsutilities/cron.log`); embedded in the generated cron lines |
 | `scrub_manager_log`  | string | Scrub-manager event log (default `/var/log/zfsutilities/scrub-manager.log`)                       |
-| `logrotate_file`     | string | Logrotate drop-in managed for the two logs above (default `/etc/logrotate.d/zfsutilities`)         |
+| `rsync_pull_log`     | string | Pull-step rsync output log on the source host (default `/var/log/zfsutilities/rsync-pull.log`); truncated once per day by the offsite pull step |
+| `logrotate_file`     | string | Logrotate drop-in managed for the cron and scrub-manager logs above (rsync-pull self-truncates daily) (default `/etc/logrotate.d/zfsutilities`) |
 
 ### Python access
 

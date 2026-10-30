@@ -47,6 +47,30 @@ def _make_app(known_pools=None):
     return app
 
 
+class TestCheckPoolsDirty(unittest.TestCase):
+    """check_pools_dirty styles the Save button and the Pools tab together."""
+
+    def test_dirty_styles_tab_red(self):
+        pa = _import_pool_actions()
+        app = _make_app()
+        app.pools_dirty = True
+
+        with patch.object(pa, "set_button_markup_red") as mock_red:
+            pa.check_pools_dirty(app)
+
+        mock_red.assert_called_once_with(app._pools_save_btn, True)
+        app.set_page_attention.assert_called_once_with("pools", "dirty", True)
+
+    def test_clean_clears_tab_attention(self):
+        pa = _import_pool_actions()
+        app = _make_app()
+
+        with patch.object(pa, "set_button_markup_red"):
+            pa.check_pools_dirty(app)
+
+        app.set_page_attention.assert_called_once_with("pools", "dirty", False)
+
+
 def _make_app_with_pool_selection(pa, known_pools, selected):
     """Return an app whose pool_view has selected pool rows.
 

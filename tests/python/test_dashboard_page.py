@@ -2970,13 +2970,13 @@ class TestCreateDashboardPage(unittest.TestCase):
         app.enable_treeview_copy = MagicMock()
         return app
 
-    def _run_create(self, app, two_node=False):
+    def _run_create(self, app, two_node=False, label_factory=None):
         with mock_gtk() as gtk_mock:
             # Use factory classes so each widget is a distinct instance.
             gtk_mock.Box = _WidgetRecorder
             gtk_mock.Frame = _WidgetRecorder
             gtk_mock.ScrolledWindow = _WidgetRecorder
-            gtk_mock.Label = MagicMock
+            gtk_mock.Label = label_factory or MagicMock
             gtk_mock.SpinButton = MagicMock
             # gui_helpers stays real-Gtk-bound here (no fresh re-import),
             # and the shared capped_treeview_scroll builds its windows
@@ -3013,6 +3013,32 @@ class TestCreateDashboardPage(unittest.TestCase):
         app._ui_state.bind_treeview.assert_any_call(
             app.dashboard_tasks_view, "dashboard_tasks_view"
         )
+
+    def test_tasks_datetime_header_explains_completion_time(self):
+        """The Date / Time column header tooltip covers both row meanings."""
+        labels_by_text = {}
+
+        def fake_label(*args, **kwargs):
+            lbl = MagicMock()
+            text = kwargs.get("label") or (args[0] if args else None)
+            lbl._text = text
+            labels_by_text.setdefault(text, []).append(lbl)
+            return lbl
+
+        app = self._create_app()
+        self._run_create(app, label_factory=fake_label)
+
+        headers = labels_by_text.get("Date / Time", [])
+        self.assertTrue(headers, "Expected a Date / Time header label")
+        tooltips = [call.args[0] for lbl in headers for call in lbl.set_tooltip_text.call_args_list]
+        self.assertEqual(len(tooltips), 1)
+        self.assertIn("the time the task started", tooltips[0])
+        self.assertIn("the time the task finished (completion time)", tooltips[0])
+
+        # No other Tasks column header carries a tooltip.
+        for title in ("Type", "Name", "Status"):
+            for lbl in labels_by_text.get(title, []):
+                lbl.set_tooltip_text.assert_not_called()
 
     def test_section_order_in_top_level_box(self):
         app = self._create_app()

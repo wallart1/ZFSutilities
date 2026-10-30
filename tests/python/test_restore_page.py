@@ -5,6 +5,7 @@ import sys
 import unittest
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
+from unittest.mock import call as mock_call
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
@@ -145,8 +146,6 @@ def _restore_app(source="", dest="", auto_dest=False, recursive=False):
     app.restore_auto_dest_check = _FakeCheckButton(auto_dest)
     app.restore_recursive_check = _FakeCheckButton(recursive)
     app.restore_var_widgets = {}
-    app.restore_part1_check = _FakeCheckButton()
-    app.restore_part2_check = _FakeCheckButton()
     app.restore_pause_scrubs = _FakeCheckButton()
     app._restore_saved_state = None
     return app
@@ -158,7 +157,7 @@ class TestRestorePageFrames(unittest.TestCase):
     @patch.object(rp, "_on_auto_dest_toggled")
     @patch.object(rp, "_style_restore_save_button")
     def test_frames_use_bold_label_widgets(self, _mock_style, _mock_auto):
-        frames = [MagicMock() for _ in range(3)]
+        frames = [MagicMock() for _ in range(1)]
         expanders = [MagicMock() for _ in range(1)]
         rp.Gtk.Frame.side_effect = frames
         rp.Gtk.Expander.side_effect = expanders
@@ -276,8 +275,6 @@ class TestCollectRestoreConfig(unittest.TestCase):
 
     def test_collects_recursive_flag(self):
         app = _restore_app(recursive=True)
-        app.restore_part1_check._active = True
-        app.restore_part2_check._active = False
         cfg = rp.collect_restore_config(app)
         self.assertTrue(cfg["recursive"])
 
@@ -310,8 +307,6 @@ class TestLoadRestoreConfig(unittest.TestCase):
                 "auto_dest": False,
                 "recursive": True,
                 "variables": {},
-                "do_part1": True,
-                "do_part2": True,
                 "pause_scrubs": False,
             },
         )
@@ -334,8 +329,6 @@ class TestLoadRestoreConfig(unittest.TestCase):
                     "verify_after_transfer": "N",
                     "transfer_rate_limit": "75M",
                 },
-                "do_part1": True,
-                "do_part2": True,
                 "pause_scrubs": False,
             },
         )
@@ -367,7 +360,6 @@ class TestRestoreRunDialog(unittest.TestCase):
         """Restore should not bail out just because backup is running."""
         app = self._make_app()
         app.backup_runner.running = True
-        app.restore_part1_check._active = True
 
         dialog_mock = MagicMock()
         dialog_mock.run.return_value = rp.Gtk.ResponseType.OK
@@ -382,8 +374,6 @@ class TestRestoreRunDialog(unittest.TestCase):
                     "dest": "threeamigos/data",
                     "auto_dest": False,
                     "recursive": False,
-                    "do_part1": True,
-                    "do_part2": False,
                     "variables": {},
                     "pause_scrubs": False,
                 },
@@ -421,7 +411,7 @@ class TestRestoreAdvancedLabel(unittest.TestCase):
     def _create_page(self):
         expander = MagicMock()
         rp.Gtk.Expander.side_effect = [expander]
-        rp.Gtk.Frame.side_effect = [MagicMock() for _ in range(3)]
+        rp.Gtk.Frame.side_effect = [MagicMock() for _ in range(1)]
 
         app = _AppNamespace()
 
@@ -567,6 +557,50 @@ class _StatefulComboBoxText:
         if name.startswith("_"):
             raise AttributeError(name)
         return lambda *args, **kwargs: None
+
+
+class TestStyleRestoreSaveButton(unittest.TestCase):
+    """The Save button and Add Profile to Schedule share dirty styling."""
+
+    def _make_app(self):
+        app = MagicMock()
+        app._restore_save_button = MagicMock()
+        app._restore_add_profile_btn = MagicMock()
+        return app
+
+    def test_dirty_styles_both_buttons_red(self):
+        app = self._make_app()
+        with patch.object(rp, "set_button_markup_red") as mock_red:
+            rp._style_restore_save_button(app, True)
+        self.assertEqual(
+            mock_red.call_args_list,
+            [
+                mock_call(app._restore_save_button, True),
+                mock_call(app._restore_add_profile_btn, True),
+            ],
+        )
+
+    def test_clean_styles_both_buttons_normal(self):
+        app = self._make_app()
+        with patch.object(rp, "set_button_markup_red") as mock_red:
+            rp._style_restore_save_button(app, False)
+        self.assertEqual(
+            mock_red.call_args_list,
+            [
+                mock_call(app._restore_save_button, False),
+                mock_call(app._restore_add_profile_btn, False),
+            ],
+        )
+
+    def test_missing_add_profile_button_is_tolerated(self):
+        class _PlainApp:
+            pass
+
+        app = _PlainApp()
+        app._restore_save_button = MagicMock()
+        with patch.object(rp, "set_button_markup_red") as mock_red:
+            rp._style_restore_save_button(app, True)
+        mock_red.assert_called_once_with(app._restore_save_button, True)
 
 
 if __name__ == "__main__":

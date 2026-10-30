@@ -821,5 +821,39 @@ class TestOffsiteAdvancedLabel(unittest.TestCase):
         self.assertIn('foreground="orange"', self._label_markup(expander))
 
 
+class TestOffsiteTrackerMirrorButton(unittest.TestCase):
+    """The Offsite dirty tracker mirrors its styling onto Add Profile."""
+
+    def test_tracker_constructed_with_mirror_attr(self):
+        op = _import_offsite_page()
+        app = MagicMock()
+        app.ctx = MagicMock()
+        app.ctx.config = {}
+        real_tracker = op.DirtyTracker
+        op.DirtyTracker = MagicMock()
+        self.addCleanup(setattr, op, "DirtyTracker", real_tracker)
+
+        with (
+            patch.object(op, "do_detect_offsite_pool"),
+            patch.object(op, "_read_snapfile", return_value=None),
+            patch.object(op, "_do_generate_snap"),
+        ):
+            op.create_offsite_page(app, app.ctx)
+
+        op.DirtyTracker.assert_called_once()
+        self.assertEqual(
+            op.DirtyTracker.call_args.args[-1],
+            "_offsite_save_button",
+        )
+        self.assertEqual(
+            op.DirtyTracker.call_args.kwargs.get("mirror_button_attr"),
+            "_offsite_add_profile_btn",
+        )
+        self.assertEqual(
+            op.DirtyTracker.call_args.kwargs.get("page_name"),
+            "offsite",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

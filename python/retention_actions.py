@@ -18,13 +18,14 @@ from backup_config import (
 from command_builders import BashStep, _dryrun_assignments
 from feature_config import get_offsite_candidate_names
 from gi.repository import Gtk
-from gui_helpers import set_button_markup_red, show_error
+from gui_helpers import show_error
 from offsite_runner import detect_offsite_pools
 from retention_page import (
     BUCKET_LABELS,
     _get_online_pool_names,
     _on_ret_revert,
     _on_ret_save,
+    _style_retention_buttons,
     _update_ret_status,
     refresh_prune_pools,
 )
@@ -403,7 +404,5 @@ def is_retention_dirty(app):
 
 
 def check_retention_dirty(app):
-    """Compare current UI state to last-saved state; style Save button accordingly."""
-    btn = getattr(app, "_ret_save_button", None)
-    if btn:
-        set_button_markup_red(btn, is_retention_dirty(app))
+    """Compare current UI state to last-saved state; style dirty buttons."""
+    _style_retention_buttons(app, is_retention_dirty(app))

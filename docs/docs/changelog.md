@@ -1,5 +1,123 @@
 # Changelog
 
+## 0.136.0
+
+*Released 2026-10-30*
+
+### Added
+
+- **Interrupted restores resume.** A restore that is cancelled or
+  interrupted — GUI closed, host rebooted, SSH drop — can simply be run
+  again: the rerun analyzes each destination dataset and completes only
+  what is missing. A destination whose snapshots GUID-match the source
+  already holds completed restore work, so the destructive full-copy pass
+  skips it and the incremental pass catches the remaining snapshots up; an
+  interrupted resumable receive continues from its resume token (a stale
+  token is discarded and the dataset continues down the same checks); only
+  a destination without a verified lineage is destroyed and fully
+  re-copied, as a first-run restore would be. The analysis is per dataset,
+  so a run interrupted mid-way resumes correctly in one pass, and both the
+  GUI's Run Restore and scheduled restore profiles use this behavior. In
+  `zfs-send-receive` the new `$restore_resume='Y'` parameter gates the
+  lineage skip (default `'N'` keeps normal backup semantics — a verified
+  common lineage is still destroyed and re-copied there); dry-runs report
+  the would-skip per dataset. Resume tokens left by interrupted receives
+  are honored on every pass regardless of the flag.
+- **Miscellaneous Logs section on the Logs tab.** A collapsed second
+  list between the main list and the viewer holds the high-volume logs
+  that are not runner output: one session log per directly-executed CLI
+  script (type `cli`, the script's name in the Name column; any future
+  writer type outside the core set lands here too) and the persistent
+  scrub-manager and pull-step rsync logs with their rotations (types
+  `scrub` and `rsync`). The main list stays focused on the core runner
+  types plus the cron log. Both lists share one indexing pass — entries
+  are never dropped for files owned by the other list — and feed the
+  same log viewer; selecting in either list clears the other so the
+  viewer always has a single source, right-click delete and **Delete
+  Selected** act on rows selected in either list, and the section title
+  shows the current row count. The retention setting prunes `cli`
+  session logs exactly like the main list's; the persistent logs are
+  managed by logrotate (`scrub`) or daily self-truncation (`rsync`), like
+  the cron log. The rsync log's location is now a `rsync_pull_log` key in
+  the paths configuration (default `/var/log/zfsutilities/rsync-pull.log`)
+  instead of a hard-coded constant.
+
+### Changed
+
+- **The Restore tab always runs both parts.** The Part 1 / Part 2
+  checkboxes are gone — every restore runs the full-copy pass from the
+  oldest snapshot and then the incremental catch-up pass, which is what
+  the resume behavior above needs to finish interrupted work. The
+  confirmation dialog now always carries the destructive warning and
+  spells out the resume behavior; saved profiles keep working unchanged
+  (a configuration migration removes the stale per-part keys). The
+  generated payload also cleans up its dataset-list temp file on every
+  exit path, including a GUI cancel mid-run.
+- **Unsaved changes are visible from the sidebar.** While a page with a
+  Save button has unsaved edits (Backup, Offsite, Restore, Schedule,
+  Pools, Checkagainst, Retention), the page's tab label in the sidebar
+  turns red alongside the Save button, so pending work is visible without
+  switching tabs; Checkagainst's tab also turns red while its derived
+  entries are stale. Each **Add Profile to Schedule** button mirrors the
+  Save button's red state too. The sidebar itself was rebuilt as a
+  custom list (the stock GTK widget's row labels cannot be restyled from
+  outside); its behavior is unchanged.
+- **`zfshold` already-present notices demoted to `VERB`.** A hold tag
+  already present on a snapshot — the designed outcome when nested
+  datasets are matched by both their own call and their parent subtree
+  call — no longer pollutes default-level logs; it is still visible in
+  the GUI log viewers at the `VERB`/`DEBUG` filter and still counts as
+  success.
+- **Dashboard Tasks Date/Time tooltip.** The column header explains that
+  waiting/running tasks show their start time while completed tasks show
+  their finish time.
+
+### Tests
+
+- New `test-zfs-send-receive-resume` suite: the lineage gate skips
+  GUID-verified destinations in the full-copy pass, unrelated
+  destinations are still fully re-copied, the gate stays off for normal
+  backups (no `restore_resume`) and for incremental passes, valid resume
+  tokens are resumed and the dataset then caught up rather than
+  re-copied, stale tokens are aborted with the dataset reprocessed, and
+  dry-runs report the would-skip. The shared zfs mock models real-ZFS
+  resume-token semantics (a completed receive consumes the token; a stale
+  token fails the send), so token-retry loops terminate in tests as they
+  do in production.
+- The restore payload is asserted to enable `restore_resume`, always run
+  both passes regardless of stale saved keys, carry the iSCSI ensure
+  step, and remove its temp file on every exit path. Migration coverage
+  drops the per-part keys (including a missing restore section); profile
+  and config defaults no longer carry them.
+- The Logs tab coverage spans both lists: type routing (core types main,
+  `cli` and unknown types misc), persistent rows with rotations outside
+  the session index, index entries kept for both lists, the expander
+  count, cross-list selection clearing without viewer reloads, and
+  delete acting on selections from either list.
+- Sidebar attention is covered at the logic level (per-page cause OR,
+  no-op on unchanged state, unknown pages tolerated), the window level
+  (labeled rows, row activation, stack↔sidebar sync, red markup on
+  dirty), and per page (dirty styling of Save plus the mirrored Add
+  Profile button, tab red on dirty and clean restore, Checkagainst's
+  stale cause, tolerance of missing buttons). The Dashboard tooltip and
+  the registered action-button attributes have dedicated assertions.
+
+### Documentation
+
+- User guide: new "Interrupted Restores" section in the restore guide;
+  the GUI guide's Restore tab drops the per-part checkboxes for the
+  two-phase + resume description, documents the Miscellaneous Logs
+  section, the red sidebar tab labels, the mirrored red action buttons,
+  the Checkagainst stale-tab red, the Pools tab red, and the main log
+  list's full core type set.
+- Reference: `$restore_resume` in the global-variables table and the
+  `zfs-send-receive` module page (usage block and parameter table); the
+  `zfshold` VERB semantics; `rsync_pull_log` in the data-structures
+  paths table; the new test suite in the developer testing catalog.
+- Messages manual: the removed "At least one restore part must be
+  selected" row, the rewritten part-one/part-two phase markers, the two
+  new lineage-skip INFO rows, and the `VERB:` hold row.
+
 ## 0.134.0
 
 *Released 2026-10-26*

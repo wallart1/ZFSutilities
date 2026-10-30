@@ -14,6 +14,14 @@
   a regression. The sanctioned per-suite runner (tests/run-python-tests /
   run-tests) is unaffected. If pursued: isolate the leaked patch/module state
   between files; do not change product code for it.
+  Another instance (found 2026-10-30, same class):
+  `pytest tests/python/test_restore_page.py tests/python/test_checkagainst_page.py`
+  (restore first) fails 4 checkagainst dialog assertions
+  (TestActionHandlers::test_on_ca_save_rejects_empty_rows,
+  TestActionHandlersEmptyFields empty-label/source_root/dest_root) that pass
+  per-file; verified identical on clean HEAD with all four involved files
+  reverted. Alphabetical full-suite ordering never pairs them this way, and
+  the sanctioned per-suite runner is unaffected.
 
 - (test collision, concurrent full runs, found 2026-10-26): two
   `tests/run-tests --with-soak` runs executing at the same time fail

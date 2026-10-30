@@ -51,8 +51,6 @@ class TestRestorePageRun(unittest.TestCase):
                     "source": "backuppool/tank/source",
                     "dest": dest,
                     "auto_dest": auto_dest,
-                    "do_part1": True,
-                    "do_part2": False,
                     "variables": {},
                 }
             ),
@@ -95,8 +93,6 @@ class TestRestorePageRun(unittest.TestCase):
                     "source": "backuppool/tank/source",
                     "dest": "",
                     "auto_dest": True,
-                    "do_part1": True,
-                    "do_part2": False,
                     "variables": {},
                 },
             ),
