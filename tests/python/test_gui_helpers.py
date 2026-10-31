@@ -3,6 +3,7 @@
 import re
 import unittest
 from unittest.mock import MagicMock, patch
+from unittest.mock import call as mock_call
 
 from test_support import mock_gtk
 
@@ -821,6 +822,187 @@ class TestCappedTreeviewScroll(unittest.TestCase):
         cap = (30 + 2) + (gui_helpers.TABLE_ROW_TARGET + 1) * 30
         mock.set_min_content_height.assert_called_once_with(cap)
         mock.set_max_content_height.assert_called_once_with(cap)
+
+
+class TestDirtyTrackerMirrorButton(unittest.TestCase):
+    """DirtyTracker styles the mirror button with the same state as Save."""
+
+    def _make_tracker(self, gui_helpers, mirror_attr="_mirror_btn"):
+        class _App:
+            pass
+
+        app = _App()
+        app._save_btn = MagicMock()
+        app._mirror_btn = MagicMock()
+        state = {"cfg": 1}
+        tracker = gui_helpers.DirtyTracker(
+            app, lambda: state["cfg"], "_save_btn", mirror_button_attr=mirror_attr
+        )
+        return tracker, app, state
+
+    def test_check_styles_save_and_mirror_red_when_dirty(self):
+        gui_helpers = _import_gui_helpers()
+        tracker, app, state = self._make_tracker(gui_helpers)
+        state["cfg"] = 2
+
+        with patch.object(gui_helpers, "set_button_markup_red") as mock_red:
+            self.assertTrue(tracker.check())
+
+        self.assertEqual(
+            mock_red.call_args_list,
+            [mock_call(app._save_btn, True), mock_call(app._mirror_btn, True)],
+        )
+
+    def test_mark_clean_styles_both_clean(self):
+        gui_helpers = _import_gui_helpers()
+        tracker, app, _state = self._make_tracker(gui_helpers)
+
+        with patch.object(gui_helpers, "set_button_markup_red") as mock_red:
+            tracker.mark_clean()
+
+        self.assertEqual(
+            mock_red.call_args_list,
+            [mock_call(app._save_btn, False), mock_call(app._mirror_btn, False)],
+        )
+
+    def test_revert_styles_both_clean(self):
+        gui_helpers = _import_gui_helpers()
+        tracker, app, _state = self._make_tracker(gui_helpers)
+
+        with patch.object(gui_helpers, "set_button_markup_red") as mock_red:
+            tracker.revert(lambda _cfg: None)
+
+        self.assertEqual(
+            mock_red.call_args_list,
+            [mock_call(app._save_btn, False), mock_call(app._mirror_btn, False)],
+        )
+
+    def test_mirror_attr_optional(self):
+        gui_helpers = _import_gui_helpers()
+        tracker, app, state = self._make_tracker(gui_helpers, mirror_attr=None)
+        state["cfg"] = 2
+
+        with patch.object(gui_helpers, "set_button_markup_red") as mock_red:
+            self.assertTrue(tracker.check())
+
+        self.assertEqual(mock_red.call_args_list, [mock_call(app._save_btn, True)])
+
+    def test_missing_mirror_button_is_tolerated(self):
+        gui_helpers = _import_gui_helpers()
+        tracker, app, state = self._make_tracker(gui_helpers, mirror_attr="_not_created_yet")
+        state["cfg"] = 2
+
+        with patch.object(gui_helpers, "set_button_markup_red") as mock_red:
+            self.assertTrue(tracker.check())
+
+        self.assertEqual(mock_red.call_args_list, [mock_call(app._save_btn, True)])
+
+
+class TestDirtyTrackerPageAttention(unittest.TestCase):
+    """DirtyTracker turns the page's tab red together with the Save button."""
+
+    def _make_tracker(self, gui_helpers):
+        class _App:
+            def __init__(self):
+                self.set_page_attention = MagicMock()
+
+        app = _App()
+        state = {"cfg": 1}
+        tracker = gui_helpers.DirtyTracker(
+            app,
+            lambda: state["cfg"],
+            "_save_btn",
+            page_name="backup",
+        )
+        return tracker, app, state
+
+    def test_check_signals_tab_attention(self):
+        gui_helpers = _import_gui_helpers()
+        tracker, app, state = self._make_tracker(gui_helpers)
+        state["cfg"] = 2
+
+        with patch.object(gui_helpers, "set_button_markup_red"):
+            self.assertTrue(tracker.check())
+
+        app.set_page_attention.assert_called_with("backup", "dirty", True)
+
+    def test_mark_clean_clears_tab_attention(self):
+        gui_helpers = _import_gui_helpers()
+        tracker, app, _state = self._make_tracker(gui_helpers)
+
+        with patch.object(gui_helpers, "set_button_markup_red"):
+            tracker.mark_clean()
+
+        app.set_page_attention.assert_called_with("backup", "dirty", False)
+
+    def test_no_page_name_means_no_tab_attention(self):
+        gui_helpers = _import_gui_helpers()
+
+        class _App:
+            def __init__(self):
+                self.set_page_attention = MagicMock()
+
+        app = _App()
+        tracker = gui_helpers.DirtyTracker(app, lambda: 1, "_save_btn")
+        with patch.object(gui_helpers, "set_button_markup_red"):
+            tracker.check()
+        app.set_page_attention.assert_not_called()
+
+
+class TestPageAttention(unittest.TestCase):
+    """PageAttention ORs per-page causes into one red/not-red verdict."""
+
+    def _attention(self):
+        gui_helpers = _import_gui_helpers()
+        return gui_helpers.PageAttention()
+
+    def test_inactive_by_default(self):
+        att = self._attention()
+        self.assertFalse(att.is_active("checkagainst"))
+        self.assertEqual(att.label_text("checkagainst", "Checkagainst"), "Checkagainst")
+
+    def test_active_cause_turns_label_red(self):
+        att = self._attention()
+        self.assertTrue(att.set("checkagainst", "stale", True))
+        self.assertTrue(att.is_active("checkagainst"))
+        self.assertEqual(
+            att.label_text("checkagainst", "Checkagainst"),
+            "<span foreground='red'>Checkagainst</span>",
+        )
+
+    def test_causes_are_ored(self):
+        att = self._attention()
+        self.assertTrue(att.set("checkagainst", "dirty", True))
+        # A second active cause does not change the OR verdict.
+        self.assertFalse(att.set("checkagainst", "stale", True))
+        self.assertTrue(att.is_active("checkagainst"))
+        # Clearing one cause leaves the other in charge.
+        self.assertFalse(att.set("checkagainst", "dirty", False))
+        self.assertTrue(att.is_active("checkagainst"))
+        # Clearing the last cause deactivates the page.
+        self.assertTrue(att.set("checkagainst", "stale", False))
+        self.assertFalse(att.is_active("checkagainst"))
+        self.assertEqual(att.label_text("checkagainst", "Checkagainst"), "Checkagainst")
+
+    def test_pages_are_independent(self):
+        att = self._attention()
+        att.set("backup", "dirty", True)
+        self.assertFalse(att.is_active("offsite"))
+        self.assertEqual(att.label_text("offsite", "Offsite"), "Offsite")
+
+    def test_bridge_reaches_window_styler(self):
+        gui_helpers = _import_gui_helpers()
+        app = MagicMock()
+        gui_helpers.set_page_tab_attention(app, "pools", "dirty", True)
+        app.set_page_attention.assert_called_once_with("pools", "dirty", True)
+
+    def test_bridge_tolerates_apps_without_styler(self):
+        gui_helpers = _import_gui_helpers()
+
+        class _PlainApp:
+            pass
+
+        gui_helpers.set_page_tab_attention(_PlainApp(), "pools", "dirty", True)  # no crash
 
 
 if __name__ == "__main__":

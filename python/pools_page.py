@@ -26,6 +26,7 @@ from gui_helpers import (
     configure_treeview_column,
     set_button_markup_red,
     set_monospace_font,
+    set_page_tab_attention,
     setup_row_scroll,
 )
 from logging_config import log_msg
@@ -934,6 +935,7 @@ def _update_pools_dirty_indicator(app):
     btn = getattr(app, "_pools_save_btn", None)
     if btn:
         set_button_markup_red(btn, app.pools_dirty)
+    set_page_tab_attention(app, "pools", "dirty", app.pools_dirty)
 
 
 def _get_selected_pool_rows(treeview):

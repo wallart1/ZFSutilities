@@ -648,5 +648,24 @@ class TestOnRetentionRemovePolicy(unittest.TestCase):
         mock_refresh.assert_called_once_with(app)
 
 
+class TestCheckRetentionDirty(unittest.TestCase):
+    """check_retention_dirty styles Save and Add Profile to Schedule together."""
+
+    def test_styles_both_buttons_with_dirty_state(self):
+        ra = _import_retention_actions()
+        app = MagicMock()
+        app._ret_save_button = MagicMock()
+        app._ret_add_profile_btn = MagicMock()
+
+        with (
+            patch.object(ra, "is_retention_dirty", return_value=True) as mock_dirty,
+            patch.object(ra, "_style_retention_buttons") as mock_style,
+        ):
+            ra.check_retention_dirty(app)
+
+        mock_dirty.assert_called_once_with(app)
+        mock_style.assert_called_once_with(app, True)
+
+
 if __name__ == "__main__":
     unittest.main()

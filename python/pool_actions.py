@@ -19,6 +19,7 @@ from gui_helpers import (
     create_dialog,
     diagnose_dataset_busy,
     set_button_markup_red,
+    set_page_tab_attention,
 )
 from pool_watch import PoolWatchWindow
 from pools_page import (
@@ -423,6 +424,7 @@ def on_pools_revert(app):
 
 def check_pools_dirty(app):
     """Style the Save button to match the Backup tab pattern."""
+    set_page_tab_attention(app, "pools", "dirty", app.pools_dirty)
     btn = getattr(app, "_pools_save_btn", None)
     if btn:
         set_button_markup_red(btn, app.pools_dirty)

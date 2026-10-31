@@ -967,5 +967,39 @@ class TestBackupAdvancedLabel(unittest.TestCase):
         self.assertIn('foreground="orange"', label.set_markup.call_args[0][0])
 
 
+class TestBackupTrackerMirrorButton(unittest.TestCase):
+    """The Backup dirty tracker mirrors its styling onto Add Profile."""
+
+    def test_tracker_constructed_with_mirror_attr(self):
+        with temp_config_dir(), mock_gtk():
+            import backup_page
+            import gui_helpers
+
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+            gui_helpers.Gtk.Entry = _FakeEntry
+            gui_helpers.Gtk.CheckButton = _FakeCheckButton
+            real_tracker = backup_page.DirtyTracker
+            backup_page.DirtyTracker = MagicMock()
+            self.addCleanup(setattr, backup_page, "DirtyTracker", real_tracker)
+
+            app = _FakeApp()
+            backup_page.create_backup_page(app, app.ctx)
+
+            backup_page.DirtyTracker.assert_called_once()
+            self.assertEqual(
+                backup_page.DirtyTracker.call_args.args[-1],
+                "_save_config_button",
+            )
+            self.assertEqual(
+                backup_page.DirtyTracker.call_args.kwargs.get("mirror_button_attr"),
+                "_backup_add_profile_btn",
+            )
+            self.assertEqual(
+                backup_page.DirtyTracker.call_args.kwargs.get("page_name"),
+                "backup",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -995,6 +995,47 @@ def show_warning_dialog(app, message):
 # ---------------------------------------------------------------------------
 
 
+class PageAttention:
+    """Per-page "needs attention" bookkeeping for sidebar tab labels.
+
+    Each page can have several independent causes (e.g. Checkagainst's
+    unsaved changes and its stale derived entries); the page's tab label
+    turns red when ANY cause is active. Pure logic — the window applies
+    ``label_text`` to the real label widgets.
+    """
+
+    def __init__(self):
+        self._causes = {}
+
+    def set(self, page, cause, active):
+        """Record a cause state; return True when the page's OR changed."""
+        causes = self._causes.setdefault(page, {})
+        was_active = any(causes.values())
+        causes[cause] = bool(active)
+        return any(causes.values()) != was_active
+
+    def is_active(self, page):
+        return any(self._causes.get(page, {}).values())
+
+    def label_text(self, page, title):
+        """Markup for the page's tab label: red when attention is active."""
+        if self.is_active(page):
+            return f"<span foreground='red'>{title}</span>"
+        return title
+
+
+def set_page_tab_attention(app, page, cause, active):
+    """Turn a page's sidebar tab text red while the page needs attention.
+
+    Bridge for page modules: reaches the window's attention styler when the
+    app provides one ( MagicMock test apps and partially built windows just
+    no-op ).
+    """
+    styler = getattr(app, "set_page_attention", None)
+    if styler is not None:
+        styler(page, cause, active)
+
+
 class DirtyTracker:
     """Generic dirty-state tracker for a page.
 
@@ -1003,12 +1044,19 @@ class DirtyTracker:
         tracker.mark_clean()          # call after saving
         tracker.check()               # call on any change
         tracker.revert(load_fn)       # call to revert
+
+    *mirror_button_attr* names a second button (e.g. "Add Profile to
+    Schedule") that mirrors the Save button's red dirty styling.
+    *page_name* additionally turns the page's sidebar tab text red while
+    dirty.
     """
 
-    def __init__(self, app, collect_fn, save_button_attr):
+    def __init__(self, app, collect_fn, save_button_attr, mirror_button_attr=None, page_name=None):
         self.app = app
         self.collect_fn = collect_fn
         self.save_button_attr = save_button_attr
+        self.mirror_button_attr = mirror_button_attr
+        self.page_name = page_name
         self._saved = collect_fn()
 
     def mark_clean(self):
@@ -1028,6 +1076,12 @@ class DirtyTracker:
         btn = getattr(self.app, self.save_button_attr, None)
         if btn:
             set_button_markup_red(btn, dirty)
+        if self.mirror_button_attr:
+            mirror = getattr(self.app, self.mirror_button_attr, None)
+            if mirror:
+                set_button_markup_red(mirror, dirty)
+        if self.page_name:
+            set_page_tab_attention(self.app, self.page_name, "dirty", dirty)
 
 
 # ---------------------------------------------------------------------------

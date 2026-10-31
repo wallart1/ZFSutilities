@@ -104,16 +104,23 @@ def build_restore_command(
     destfs,
     parent_dir,
     advanced_vars,
-    do_part1,
-    do_part2,
     dryrun=False,
     recursive=False,
 ):
     """Build the bash command for a restore operation.
 
-    Both parts are combined into a single bash script. After Part 1, the
-    dataset list (fsarray) is saved to a temp file. Part 2 loads it and
-    uses exact-match includes to operate on the same datasets.
+    Both parts are combined into a single bash script. Part 1 does the
+    destructive full-copy pass from the oldest snapshot; Part 2 catches the
+    remaining snapshots up incrementally, using the dataset list (fsarray)
+    Part 1 saved to a temp file as exact-match includes.
+
+    The payload is idempotent when interrupted and re-run: it sets
+    restore_resume="Y", so Part 1 skips any destination dataset that already
+    holds a GUID-verified snapshot lineage with the source (those are caught
+    up by Part 2), and zfs-send-receive honors receive resume tokens on every
+    pass — an interrupted resumable receive continues from its token instead
+    of being discarded. Only datasets without a verified lineage are
+    destroyed and fully re-copied.
 
     Args:
         source: Source dataset
@@ -122,8 +129,6 @@ def build_restore_command(
         parent_dir: Path to the project root directory
         advanced_vars: dict with keys: depth, label, includes, excludes,
                        startwith, endwith (all strings, may be empty)
-        do_part1: bool — run Part 1 (full copy)
-        do_part2: bool — run Part 2 (incremental)
         recursive: bool — when True, restore all descendant datasets;
                          when False, restore only the named dataset unless
                          an explicit depth is provided in advanced_vars
@@ -207,64 +212,58 @@ def build_restore_command(
         f"sourcefsremovequalifiers={removequalifiers}; "
         f'destfs="{destfs}"; '
         f'nextsnap="notneeded"; '
+        f'restore_resume="Y"; '
         f"{adv}"
         f'fsarray_file="/tmp/zfsrestore_fsarray_$$"; '
+        # Interrupt hygiene: the fsarray temp file must not survive a failed
+        # or cancelled run. append_exit_trap covers every exit path; the TERM
+        # trap routes the GUI's cancel signal (SIGTERM to this shell) into an
+        # orderly exit so the exit traps run after the current zfs pipeline
+        # ends. (Lock-wait SIGINT already flows through zfslockmanager's own
+        # INT trap into a normal error exit.)
+        f"append_exit_trap 'rm -f \"$fsarray_file\"'; "
+        f"trap 'exit 143' TERM; "
     )
 
-    parts = []
+    # Part 1: destructive full-copy pass from the oldest snapshot. With
+    # restore_resume="Y" this destroys only datasets without a verified
+    # lineage; interrupted resumable receives are resumed from their tokens.
+    part1_script = (
+        'log_msg "Part one: Full copy using the oldest available snapshot."; '
+        'force="Y"; releaseholds="Y"; '
+        'releaseholds_tags=("offsite-*"); '
+        'doincrementals="N"; dointermediates="N"; '
+        'commsnap_mostrecent="OLDEST"; '
+        'autoproceed="N"; '
+        'send-receive "$sourcefs"; rc=$?; '
+        "if [[ $rc -ne 0 ]]; then exit $rc; fi; "
+        # Save fsarray for Part 2
+        'printf "%s\\n" "${fsarray[@]}" > "$fsarray_file"; '
+    )
 
-    if do_part1:
-        parts.append(
-            'log_msg "Part one: Full copy using the oldest available snapshot."; '
-            'force="Y"; releaseholds="Y"; '
-            'releaseholds_tags=("offsite-*"); '
-            'doincrementals="N"; dointermediates="N"; '
-            'commsnap_mostrecent="OLDEST"; '
-            'autoproceed="N"; '
-            'send-receive "$sourcefs"; rc=$?; '
-            'if [[ $rc -ne 0 ]]; then rm -f "$fsarray_file"; exit $rc; fi; '
-            # Save fsarray for Part 2
-            'printf "%s\\n" "${fsarray[@]}" > "$fsarray_file"; '
-        )
+    # Part 2: incremental catch-up of the remaining snapshots, resuming from
+    # each dataset's newest common snapshot (and any resume tokens).
+    part2_script = (
+        'log_msg "Part two: Incremental copy of remaining snapshots."; '
+        'force="N"; releaseholds="N"; '
+        'doincrementals="Y"; dointermediates="Y"; '
+        'commsnap_mostrecent=""; '
+        'autoproceed="Y"; '
+        # Load Part 1's fsarray as exact-match includes
+        'if [[ -f "$fsarray_file" ]]; then '
+        "includes=(); "
+        'while IFS= read -r _ds; do includes+=("=$_ds"); done < "$fsarray_file"; '
+        "fi; "
+        'send-receive "$sourcefs"; rc=$?; '
+        "if [[ $rc -ne 0 ]]; then exit $rc; fi; "
+        "ensure_restored_iscsi; "
+        "exit 0"
+    )
 
-    if do_part2:
-        part2_script = (
-            'log_msg "Part two: Incremental copy of remaining snapshots."; '
-            'force="N"; releaseholds="N"; '
-            'doincrementals="Y"; dointermediates="Y"; '
-            'commsnap_mostrecent=""; '
-            'autoproceed="Y"; '
-        )
-        if do_part1:
-            # Load saved fsarray as exact-match includes
-            part2_script += (
-                'if [[ -f "$fsarray_file" ]]; then '
-                "includes=(); "
-                'while IFS= read -r _ds; do includes+=("=$_ds"); done < "$fsarray_file"; '
-                'rm -f "$fsarray_file"; '
-                "fi; "
-            )
-        part2_script += (
-            'send-receive "$sourcefs"; rc=$?; '
-            'if [[ $rc -ne 0 ]]; then rm -f "$fsarray_file"; exit $rc; fi; '
-            "ensure_restored_iscsi; "
-            'rm -f "$fsarray_file"; '
-            "exit 0"
-        )
-        parts.append(part2_script)
-    else:
-        # Part 1 only — ensure iSCSI LUNs, then clean up temp file
-        parts.append('ensure_restored_iscsi; rm -f "$fsarray_file"; exit 0')
-
-    bash_script = preamble + "".join(parts)
+    bash_script = preamble + part1_script + part2_script
     cmd = ["bash", "-c", bash_script]
 
-    which = []
-    if do_part1:
-        which.append("full copy")
-    if do_part2:
-        which.append("incremental")
-    desc = f"restore: {source} -> {destfs} ({' + '.join(which)})"
+    desc = f"restore: {source} -> {destfs} (full copy + incremental)"
 
     metadata = {
         "source": source,

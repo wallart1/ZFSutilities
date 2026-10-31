@@ -4,8 +4,14 @@ Logs tab UI — browse, view, and prune session log files.
 Log files live in /var/log/zfsutilities/sessions/ and are named:
     YYYY-MM-DD_HH-MM-SS_<type>_<name>.log
 
-The persistent cron log and its logrotate copies (plain or compressed) in
-the log directory are listed alongside session logs as type "cron".
+The main list shows the core runner types (backup, offsite, restore, prune,
+dataset, gui) plus the persistent cron log and its logrotate copies (plain or
+compressed), listed with type "cron".
+
+A second, collapsed "Miscellaneous Logs" list holds everything else: session
+logs from directly-executed CLI scripts (type "cli", created by bashinit) and
+any future writer type, plus the persistent scrub-manager and rsync-pull logs
+with their rotations (types "scrub" and "rsync").
 """
 
 import gzip
@@ -109,6 +115,25 @@ _LOG_FILENAME_RE = re.compile(
     r"(backup|offsite|restore|prune|dataset|gui)_(.+)\.log$"
 )
 
+# Regex: ^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_([A-Za-z0-9-]+)_(.+)\.log$
+# Purpose: Parse any session-log filename whose type is outside the core set,
+#          for the Miscellaneous list (bashinit's "cli" logs today, plus any
+#          future writer type).  Core-typed files match _LOG_FILENAME_RE
+#          first, so they never land here.  The type class excludes "_" so
+#          the type/name split always falls on the first underscore after
+#          the timestamp.
+# Group 1: ISO date   e.g. "2026-10-21"
+# Group 2: Time       e.g. "08-48-17"
+# Group 3: Log type   e.g. "cli"
+# Group 4: Base name  e.g. "switch-version"
+# Examples:
+#   "2026-10-21_08-48-17_cli_switch-version.log"     -> type=cli, name=switch-version
+#   "2026-10-21_08-48-17_cli_iscsi-add-luns.log"     -> type=cli, name=iscsi-add-luns
+#   "2026-10-21_06-00-01_backup_profile-daily.log"  -> routed to the main list instead
+_MISC_LOG_FILENAME_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_([A-Za-z0-9-]+)_(.+)\.log$"
+)
+
 _CHUNK_READ_BYTES = 256 * 1024  # 256 KB per "Show More" click
 
 # Regex: # END: (?:rc=(\d+)|cancelled), duration=([\d.]+)s(?:, bytes=(\d+))?
@@ -159,15 +184,17 @@ def _format_size(size):
     return f"{size:.1f} TB"
 
 
-def _scan_logs(app):
-    """Scan SESSION_LOG_DIR and return list of row tuples for the model.
+def _scan_session_dir(app):
+    """Scan SESSION_LOG_DIR once, splitting files into main-list and misc rows.
 
     Uses and updates the persistent log index so historical logs are not
-    re-read on every refresh.
+    re-read on every refresh.  Every session-shaped file participates in the
+    index pass regardless of which list shows it, so index entries are never
+    dropped for files owned by the other list.
     """
-    rows = []
+    core_rows, misc_rows = [], []
     if not os.path.isdir(SESSION_LOG_DIR):
-        return rows
+        return core_rows, misc_rows
 
     index = getattr(app, "_log_index", None)
     if index is None:
@@ -182,14 +209,16 @@ def _scan_logs(app):
         path = os.path.join(SESSION_LOG_DIR, name)
         if not os.path.isfile(path):
             continue
-        parsed = _parse_log_filename(name)
-        if not parsed:
+        core_match = _LOG_FILENAME_RE.match(name)
+        misc_match = None if core_match else _MISC_LOG_FILENAME_RE.match(name)
+        if not core_match and not misc_match:
             continue
+        date_part, time_part, log_type, log_name = (core_match or misc_match).groups()
+        dt = f"{date_part} {time_part.replace('-', ':')}"
 
         current_paths.add(path)
         entry = index.update(path)
 
-        dt, log_type, log_name = parsed
         size = entry.get("size", 0)
         status = entry.get("status", "Done")
         duration_str = ""
@@ -205,29 +234,48 @@ def _scan_logs(app):
             if highest in ("WARN", "FATAL"):
                 status = highest.title()
 
-        rows.append(
-            (dt, log_type, log_name, status, _format_size(size), duration_str, bytes_str, path)
-        )
+        row = (dt, log_type, log_name, status, _format_size(size), duration_str, bytes_str, path)
+        if core_match:
+            core_rows.append(row)
+        else:
+            misc_rows.append(row)
 
     index.remove_missing(current_paths)
     index.save()
 
-    rows.extend(_scan_cron_log_rows(app))
+    return core_rows, misc_rows
 
+
+def _scan_logs(app):
+    """Return rows for the main log list (core session types plus cron)."""
+    rows, _misc_rows = _scan_session_dir(app)
+    rows.extend(_scan_cron_log_rows(app))
     return rows
 
 
-def _scan_cron_log_rows(app):
-    """Return rows for the cron log and its logrotate copies.
+def _scan_misc_logs(app):
+    """Return rows for the Miscellaneous list.
+
+    Everything session-shaped that is not a core type — bashinit's "cli"
+    logs and any future writer type — plus the persistent scrub-manager and
+    rsync-pull logs with their rotations.  Persistent rows bypass the
+    session-log index on purpose, exactly like the cron rows.
+    """
+    _core_rows, rows = _scan_session_dir(app)
+    rows.extend(_scan_persistent_log_rows(app))
+    return rows
+
+
+def _scan_log_and_rotations(log_path, type_label):
+    """Return rows for a persistent log and its logrotate copies.
 
     Unlike session logs these have no filename-encoded start time and no
     structured trailer, so Date/Time is the file's last-write time and
-    Status is blank.  Each rotation (cron.log.1, cron.log.1.gz, ...) is a
-    row of its own.  They bypass the session-log index on purpose.
+    Status is blank.  Each rotation (foo.log.1, foo.log.1.gz, ...) is a row
+    of its own.
     """
     rows = []
-    cron_log = get_paths_config(app.config, persist=False)["cron_log"]
-    directory, base = os.path.split(cron_log)
+    directory, base = os.path.split(log_path)
     if not os.path.isdir(directory):
         return rows
     prefix = base + "."
@@ -242,7 +290,30 @@ def _scan_cron_log_rows(app):
             size = os.path.getsize(path)
         except OSError:
             continue
-        rows.append((dt, "cron", name, "—", _format_size(size), "", "", path))
+        rows.append((dt, type_label, name, "—", _format_size(size), "", "", path))
+    return rows
+
+
+def _scan_cron_log_rows(app):
+    """Return main-list rows for the cron log and its logrotate copies."""
+    cron_log = get_paths_config(app.config, persist=False)["cron_log"]
+    return _scan_log_and_rotations(cron_log, "cron")
+
+
+# Persistent logs listed in the Miscellaneous section: paths-config key and
+# the Type label shown for the live file and each of its rotations.
+_PERSISTENT_LOG_SPECS = (
+    ("scrub_manager_log", "scrub"),
+    ("rsync_pull_log", "rsync"),
+)
+
+
+def _scan_persistent_log_rows(app):
+    """Return Miscellaneous-list rows for the persistent product logs."""
+    paths_cfg = get_paths_config(app.config, persist=False)
+    rows = []
+    for key, type_label in _PERSISTENT_LOG_SPECS:
+        rows.extend(_scan_log_and_rotations(paths_cfg.get(key, ""), type_label))
     return rows
 
 
@@ -273,6 +344,36 @@ def _on_logs_popout_toggled(button, app, viewer_box, viewer_frame, outer):
         outer.pack_start(viewer_frame, True, True, 0)
         viewer_frame.show_all()
         app.logs_popout_window.hide()
+
+
+def _make_log_view_columns(view, type_tooltip):
+    """Attach the shared column set to a log-list treeview."""
+    cols = [
+        (COL_DATETIME, "Date/Time", 160, "Session log timestamp"),
+        (COL_TYPE, "Type", 70, type_tooltip),
+        (COL_NAME, "Name", 140, "Name of the operation or profile"),
+        (COL_STATUS, "Status", 70, "Completion status"),
+        (COL_SIZE, "Log Size", 65, "Size of the log file on disk"),
+        (COL_DURATION, "Duration", 65, "Elapsed run time"),
+        (COL_BYTES, "Transfer", 70, "Bytes transferred during the operation"),
+    ]
+    for col_idx, title_text, width, tooltip in cols:
+        renderer = Gtk.CellRendererText()
+        renderer.set_property("editable", False)
+        if col_idx == COL_DATETIME:
+            set_monospace_font(renderer)
+        column = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
+        configure_treeview_column(column, width=width)
+        column.set_sort_column_id(col_idx)
+
+        # TreeViewColumn is not a Gtk.Widget, so tooltips must live on the
+        # header label instead of on the column itself.
+        header = Gtk.Label(label=title_text)
+        header.set_tooltip_text(tooltip)
+        header.show_all()
+        column.set_widget(header)
+
+        view.append_column(column)
 
 
 def create_logs_page(app):
@@ -316,32 +417,10 @@ def create_logs_page(app):
     app.logs_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.logs_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
 
-    cols = [
-        (COL_DATETIME, "Date/Time", 160, "Session log timestamp"),
-        (COL_TYPE, "Type", 70, "Log type: backup, offsite, restore, prune, dataset, gui, or cron"),
-        (COL_NAME, "Name", 140, "Name of the operation or profile"),
-        (COL_STATUS, "Status", 70, "Completion status"),
-        (COL_SIZE, "Log Size", 65, "Size of the log file on disk"),
-        (COL_DURATION, "Duration", 65, "Elapsed run time"),
-        (COL_BYTES, "Transfer", 70, "Bytes transferred during the operation"),
-    ]
-    for col_idx, title_text, width, tooltip in cols:
-        renderer = Gtk.CellRendererText()
-        renderer.set_property("editable", False)
-        if col_idx == COL_DATETIME:
-            set_monospace_font(renderer)
-        column = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
-        configure_treeview_column(column, width=width)
-        column.set_sort_column_id(col_idx)
-
-        # TreeViewColumn is not a Gtk.Widget, so tooltips must live on the
-        # header label instead of on the column itself.
-        header = Gtk.Label(label=title_text)
-        header.set_tooltip_text(tooltip)
-        header.show_all()
-        column.set_widget(header)
-
-        app.logs_view.append_column(column)
+    _make_log_view_columns(
+        app.logs_view,
+        "Log type: backup, offsite, restore, prune, dataset, gui, or cron",
+    )
     app._ui_state.bind_treeview(app.logs_view, "logs_view")
 
     list_scroll = Gtk.ScrolledWindow()
@@ -349,6 +428,35 @@ def create_logs_page(app):
     list_scroll.set_min_content_height(200)
     list_scroll.add(app.logs_view)
     outer.pack_start(list_scroll, True, True, 0)
+
+    # Miscellaneous logs — collapsed section between the main list and the
+    # viewer.  Holds the high-volume non-runner logs (CLI script sessions,
+    # scrub-manager, rsync-pull) so the main list stays focused on runner
+    # output.  Either list feeds the shared Log Viewer below.
+    app.logs_misc_expander = Gtk.Expander(label="Miscellaneous Logs (0)")
+    app.logs_misc_expander.set_tooltip_text(
+        "Session logs from directly-executed CLI scripts plus the persistent "
+        "scrub-manager and rsync-pull logs"
+    )
+    misc_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+    app.logs_misc_store = Gtk.ListStore(str, str, str, str, str, str, str, str)
+    app.logs_misc_view = Gtk.TreeView(model=app.logs_misc_store)
+    app.logs_misc_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+    app.logs_misc_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+
+    _make_log_view_columns(
+        app.logs_misc_view,
+        "Log type: cli (directly-executed scripts) or a persistent log (scrub, rsync)",
+    )
+    app._ui_state.bind_treeview(app.logs_misc_view, "logs_misc_view")
+
+    misc_scroll = Gtk.ScrolledWindow()
+    misc_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+    misc_scroll.set_min_content_height(150)
+    misc_scroll.add(app.logs_misc_view)
+    misc_box.pack_start(misc_scroll, True, True, 0)
+    app.logs_misc_expander.add(misc_box)
+    outer.pack_start(app.logs_misc_expander, False, False, 0)
 
     # Bottom pane: log viewer
     viewer_frame = Gtk.Frame()
@@ -458,14 +566,20 @@ def create_logs_page(app):
     app._logs_full_mode = False
     app._logs_tail_timer = None
     app._logs_sync_debounce_id = None
+    # True while one list's selection handler clears the other list's
+    # selection, so the clear does not re-enter the handler.
+    app._logs_clearing_other_view = False
 
-    # Selection change loads viewer and updates action button sensitivity
-    selection = app.logs_view.get_selection()
-    selection.connect("changed", _on_selection_changed, app)
-    selection.connect("changed", _on_logs_selection_changed, app)
+    # Selection change loads the shared viewer and updates action button
+    # sensitivity.  Selecting in either list clears the other so the viewer
+    # always has a single source.
+    for view in (app.logs_view, app.logs_misc_view):
+        view_selection = view.get_selection()
+        view_selection.connect("changed", _on_selection_changed, app, view)
+        view_selection.connect("changed", _on_logs_selection_changed, app)
 
-    # Right-click context menu
-    app.logs_view.connect("button-press-event", _on_log_button_press, app)
+        # Right-click context menu
+        view.connect("button-press-event", _on_log_button_press, app)
 
     # Initial load
     _sync_log_list(app)
@@ -498,57 +612,73 @@ def create_logs_page(app):
 
 
 def _sync_log_list(app):
-    """Rescan the sessions directory and update the list incrementally.
+    """Rescan the log directories and update both lists incrementally.
 
-    Preserves the current selection and viewer state when the selected
-    file still exists.  Only reloads the viewer when the selection
+    Preserves each list's current selection and viewer state when the
+    selected file still exists.  Only reloads the viewer when the selection
     actually changes.
     """
-    selection = app.logs_view.get_selection()
+    _update_log_store(app, app.logs_view, _scan_logs(app))
+    misc_rows = _scan_misc_logs(app)
+    _update_log_store(app, app.logs_misc_view, misc_rows)
+
+    expander = getattr(app, "logs_misc_expander", None)
+    if expander is not None:
+        expander.set_label(f"Miscellaneous Logs ({len(misc_rows)})")
+
+    _update_success_rate_label(app)
+
+
+def _update_log_store(app, view, current_rows):
+    """Incrementally sync *view*'s store to *current_rows*.
+
+    Rows for files that no longer exist are removed, existing rows are
+    updated in place, and new rows are appended.  The selection is restored
+    for paths that still exist.
+    """
+    store = view.get_model()
+    selection = view.get_selection()
     model, pathlist = selection.get_selected_rows()
     selected_paths = {model.get_value(model.get_iter(p), COL_PATH) for p in pathlist}
 
-    current_rows = _scan_logs(app)
     current_by_path = {r[COL_PATH]: r for r in current_rows}
 
     # Remove rows for files that no longer exist
     iters_to_remove = []
-    tree_iter = app.logs_store.get_iter_first()
+    tree_iter = store.get_iter_first()
     while tree_iter:
-        path = app.logs_store.get_value(tree_iter, COL_PATH)
+        path = store.get_value(tree_iter, COL_PATH)
         if path not in current_by_path:
             iters_to_remove.append(tree_iter)
-        tree_iter = app.logs_store.iter_next(tree_iter)
+        tree_iter = store.iter_next(tree_iter)
     for tree_iter in iters_to_remove:
-        app.logs_store.remove(tree_iter)
+        store.remove(tree_iter)
 
     # Update existing rows and add new ones
     for row_data in current_rows:
         path = row_data[COL_PATH]
         found = False
-        tree_iter = app.logs_store.get_iter_first()
+        tree_iter = store.get_iter_first()
         while tree_iter:
-            if app.logs_store.get_value(tree_iter, COL_PATH) == path:
+            if store.get_value(tree_iter, COL_PATH) == path:
                 found = True
                 for col, val in enumerate(row_data):
-                    app.logs_store.set_value(tree_iter, col, val)
+                    store.set_value(tree_iter, col, val)
                 break
-            tree_iter = app.logs_store.iter_next(tree_iter)
+            tree_iter = store.iter_next(tree_iter)
         if not found:
-            app.logs_store.append(row_data)
+            store.append(row_data)
 
-    app.logs_store.set_sort_column_id(COL_DATETIME, Gtk.SortType.DESCENDING)
+    store.set_sort_column_id(COL_DATETIME, Gtk.SortType.DESCENDING)
 
     # Restore multi-selection for paths that still exist
     if selected_paths:
-        tree_iter = app.logs_store.get_iter_first()
+        tree_iter = store.get_iter_first()
         while tree_iter:
-            path = app.logs_store.get_value(tree_iter, COL_PATH)
+            path = store.get_value(tree_iter, COL_PATH)
             if path in selected_paths:
                 selection.select_iter(tree_iter)
-            tree_iter = app.logs_store.iter_next(tree_iter)
-
-    _update_success_rate_label(app)
+            tree_iter = store.iter_next(tree_iter)
 
 
 def select_log_by_path(app, path):
@@ -751,13 +881,22 @@ def _setup_logs_actions(app):
     _on_logs_selection_changed(app.logs_view.get_selection(), app)
 
 
+def _count_selected_log_rows(app):
+    """Return the number of rows selected across both log lists."""
+    count = 0
+    for view in (app.logs_view, getattr(app, "logs_misc_view", None)):
+        if view is None:
+            continue
+        count += view.get_selection().count_selected_rows()
+    return count
+
+
 def _on_logs_selection_changed(selection, app):
     """Enable or disable the Delete Selected action button."""
     button = getattr(app, "_logs_delete_button", None)
     if button is None:
         return
-    _model, pathlist = selection.get_selected_rows()
-    button.set_sensitive(bool(pathlist))
+    button.set_sensitive(_count_selected_log_rows(app) > 0)
 
 
 def _load_gzip_into_viewer(app, path):
@@ -876,8 +1015,26 @@ def _on_load_full_log_clicked(app):
     _load_log_into_viewer(app)
 
 
-def _on_selection_changed(selection, app):
-    """Load the selected log file into the viewer."""
+def _on_selection_changed(selection, app, source_view):
+    """Load the selected log file into the shared viewer.
+
+    *source_view* is the treeview whose selection changed.  The other list's
+    selection is cleared first so both lists cannot claim the viewer at
+    once; the re-entrancy guard stops that clear from bouncing back into
+    this handler.
+    """
+    if getattr(app, "_logs_clearing_other_view", False):
+        return
+
+    other_view = app.logs_misc_view if source_view is app.logs_view else app.logs_view
+    other_selection = other_view.get_selection()
+    if other_selection.count_selected_rows():
+        app._logs_clearing_other_view = True
+        try:
+            other_selection.unselect_all()
+        finally:
+            app._logs_clearing_other_view = False
+
     # Stop any existing tail timer
     if app._logs_tail_timer is not None:
         GLib.source_remove(app._logs_tail_timer)
@@ -1034,16 +1191,18 @@ def _load_next_chunk(app):
 
 def _on_delete_selected(app):
     """Delete all selected log files after confirmation."""
-    selection = app.logs_view.get_selection()
-    model, pathlist = selection.get_selected_rows()
-    if not pathlist:
+    paths = []
+    for view in (app.logs_view, getattr(app, "logs_misc_view", None)):
+        if view is None:
+            continue
+        selection = view.get_selection()
+        model, pathlist = selection.get_selected_rows()
+        for tree_path in pathlist:
+            paths.append(model.get_value(model.get_iter(tree_path), COL_PATH))
+
+    if not paths:
         log_msg("WARN: No log selected")
         return
-
-    paths = []
-    for tree_path in pathlist:
-        tree_iter = model.get_iter(tree_path)
-        paths.append(model.get_value(tree_iter, COL_PATH))
 
     count = len(paths)
     names = [os.path.basename(p) for p in paths]

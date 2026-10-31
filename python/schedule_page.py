@@ -31,6 +31,7 @@ from gui_helpers import (
     enable_textview_copy,
     set_button_markup_red,
     set_monospace_font,
+    set_page_tab_attention,
     show_error_dialog,
 )
 from logging_config import log_msg
@@ -1068,6 +1069,7 @@ def _update_schedule_dirty(app):
     btn = getattr(app, "_schedule_save_button", None)
     if btn:
         set_button_markup_red(btn, dirty)
+    set_page_tab_attention(app, "schedule", "dirty", dirty)
 
 
 def check_schedule_dirty(app):

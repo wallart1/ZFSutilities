@@ -427,6 +427,23 @@ class TestPoolsPageSpec(unittest.TestCase):
         self.assertEqual(matches[0][2], "_pools_add_profile_btn")
 
 
+class TestDirtyMirrorAddProfileButtons(unittest.TestCase):
+    """Add Profile to Schedule carries an attr name on the tracker-mirrored pages."""
+
+    def test_add_profile_buttons_have_attr_names(self):
+        expected = {
+            "backup": "_backup_add_profile_btn",
+            "offsite": "_offsite_add_profile_btn",
+            "restore": "_restore_add_profile_btn",
+            "retention": "_ret_add_profile_btn",
+        }
+        for page, attr in expected.items():
+            buttons = action_dispatch.PAGE_SPECS[page]["buttons"]
+            matches = [b for b in buttons if b[0] == "Add Profile to Schedule"]
+            self.assertEqual(len(matches), 1, f"Missing unique button on {page}")
+            self.assertEqual(matches[0][2], attr, f"Wrong attr name on {page}")
+
+
 class TestSchedulePageSpec(unittest.TestCase):
     """Schedule page exposes Run Now alongside Save/Revert/Delete."""
 

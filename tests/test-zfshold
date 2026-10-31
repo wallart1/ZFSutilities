@@ -7,7 +7,7 @@
 # runs under set -euo pipefail. A "tag already exists" hold failure is a
 # designed outcome there — nested datasets are matched by both their own
 # call and their parent subtree call — so the helper must tolerate it
-# (INFO + rc 0) while still failing loudly (WARN + rc 1) on real hold
+# (VERB + rc 0) while still failing loudly (WARN + rc 1) on real hold
 # failures.
 
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
@@ -86,8 +86,8 @@ reset_mocks() {
 # Tests
 # ------------------------------------------------------------------------------
 
-test_already_present_tag_is_info_not_failure() {
-    test_start "already-present hold tag logs INFO and returns 0"
+test_already_present_tag_is_verb_not_failure() {
+    test_start "already-present hold tag logs VERB and returns 0"
     reset_mocks
     _mock_snaps=("pool/fs@snap-1")
     _mock_holds["pool/fs@snap-1"]="offsite-dest "
@@ -97,8 +97,9 @@ test_already_present_tag_is_info_not_failure() {
     log=$(cat "$(get_test_log_file)")
     local failed=0
     [[ $rc -eq 0 ]] || { failed=1; echo "    rc=$rc (duplicate must not fail)"; }
-    [[ "$log" == *"Hold offsite-dest already present on pool/fs@snap-1"* ]] \
-        || { failed=1; echo "    missing already-present INFO"; }
+    [[ "$log" == *"VERB: Hold offsite-dest already present on pool/fs@snap-1"* ]] \
+        || { failed=1; echo "    missing already-present VERB"; }
+    [[ "$log" != *"INFO:"* ]] || { failed=1; echo "    no INFO expected"; }
     [[ "$log" != *"WARN"* ]] || { failed=1; echo "    no WARN expected"; }
     if [[ $failed -eq 0 ]]; then test_pass; else test_fail "duplicate hold mishandled"; fi
 }
@@ -169,7 +170,7 @@ test_missing_pattern_argument_is_rejected() {
 # Run
 # =============================================================================
 
-test_already_present_tag_is_info_not_failure
+test_already_present_tag_is_verb_not_failure
 test_nested_dataset_duplicate_from_parent_subtree_hold
 test_real_hold_failure_is_loud
 test_no_matching_snapshots_returns_zero

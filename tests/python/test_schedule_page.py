@@ -1056,6 +1056,18 @@ class TestScheduleSavedState(unittest.TestCase):
         mock_red.assert_called_once_with(app._schedule_save_button, True)
 
     @patch("schedule_page.set_button_markup_red")
+    def test_tab_switch_styles_page_tab_red_when_dirty(self, _mock_red):
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        app._schedule_save_button = MagicMock()
+        app._schedule_pending = {"p1": {"active": True}}
+        app._schedule_saved_state = True
+
+        schedule_page.check_schedule_dirty(app)
+
+        app.set_page_attention.assert_called_once_with("schedule", "dirty", True)
+
+    @patch("schedule_page.set_button_markup_red")
     def test_tab_switch_clears_save_button_when_clean(self, mock_red):
         schedule_page = self._import_schedule_page()
         app = MagicMock()

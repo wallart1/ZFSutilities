@@ -208,8 +208,8 @@ class TestRestoreConfig(unittest.TestCase):
     def test_get_restore_config_defaults(self):
         config = {}
         restore = backup_config.get_restore_config(config)
-        self.assertTrue(restore["do_part1"])
-        self.assertTrue(restore["do_part2"])
+        self.assertNotIn("do_part1", restore)
+        self.assertNotIn("do_part2", restore)
         self.assertFalse(restore["auto_dest"])
 
 

@@ -116,8 +116,6 @@ RESTORE_DEFAULTS = {
         "verify_after_transfer": "Y",
         "transfer_rate_limit": "",
     },
-    "do_part1": True,
-    "do_part2": True,
     "pause_scrubs": False,
 }
 
@@ -130,8 +128,6 @@ def get_restore_config(config):
         "dest",
         "auto_dest",
         "recursive",
-        "do_part1",
-        "do_part2",
         "pause_scrubs",
     ):
         if key not in restore:

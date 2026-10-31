@@ -295,7 +295,13 @@ def create_offsite_page(app, ctx):
     )
     adv_box.pack_start(app.offsite_pause_scrubs, False, False, 0)
 
-    tracker = DirtyTracker(app, lambda: collect_offsite_config(app), "_offsite_save_button")
+    tracker = DirtyTracker(
+        app,
+        lambda: collect_offsite_config(app),
+        "_offsite_save_button",
+        mirror_button_attr="_offsite_add_profile_btn",
+        page_name="offsite",
+    )
     app._offsite_tracker = tracker
     for widget in app.offsite_var_widgets.values():
         widget.connect("changed", lambda _w, t=tracker: t.check())

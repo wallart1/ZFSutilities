@@ -103,6 +103,7 @@ class TestGetPathsConfig(unittest.TestCase):
             paths = config_core.get_paths_config(cfg)
             self.assertEqual(paths["cron_log"], os.path.join(config_core.get_log_dir(), "cron.log"))
             self.assertEqual(paths["scrub_manager_log"], config_core.get_scrub_manager_log_path())
+            self.assertEqual(paths["rsync_pull_log"], config_core.get_rsync_pull_log_path())
             self.assertEqual(paths["logrotate_file"], config_core.get_logrotate_file_path())
             # The seeded section is written back so the configuration file
             # visibly holds every path.
@@ -117,6 +118,7 @@ class TestGetPathsConfig(unittest.TestCase):
             self.assertEqual(paths["cron_log"], "/srv/custom/cron.log")
             # Keys the user did not set still seed.
             self.assertIn("scrub_manager_log", paths)
+            self.assertIn("rsync_pull_log", paths)
             self.assertIn("logrotate_file", paths)
 
     def test_persist_false_leaves_disk_untouched(self):
@@ -136,6 +138,7 @@ class TestGetPathsConfig(unittest.TestCase):
                 paths = config_core.get_paths_config(cfg, persist=False)
             self.assertEqual(paths["cron_log"], "/tmp/custom-logs/cron.log")
             self.assertEqual(paths["scrub_manager_log"], "/tmp/custom-logs/scrub-manager.log")
+            self.assertEqual(paths["rsync_pull_log"], "/tmp/custom-logs/rsync-pull.log")
 
 
 class TestDeepCopy(unittest.TestCase):

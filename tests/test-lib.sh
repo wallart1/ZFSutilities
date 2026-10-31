@@ -334,6 +334,7 @@ declare -gA _mock_zfs_guid_lists=()
 declare -gA _mock_zfs_holds=()
 declare -gA _mock_zfs_clones=()
 declare -gA _mock_zpool_guid=()
+declare -gA _mock_zfs_stale_tokens=()
 _mock_zfs_send_size="0"
 _mock_zpool_list=""
 _mock_zfs_last_sequence=""  # tracks -s / -S passed to zfs list
@@ -710,6 +711,15 @@ zfs() {
             else
                 value="-"
             fi
+            # A completed receive consumes the resume token (real-ZFS
+            # semantics). The receive branch records completions in a
+            # state-dir file because pipelined receives run it in a
+            # subshell where array writes do not propagate.
+            if [[ "$prop" == "receive_resume_token" && "$value" != "-" \
+                && -n "${_mock_zfs_state_dir:-}" ]] \
+                && grep -qxF "$dataset" "$_mock_zfs_state_dir/received-datasets" 2>/dev/null; then
+                value="-"
+            fi
             if [[ $output_value_only -eq 1 ]]; then
                 echo "$value"
             else
@@ -719,10 +729,24 @@ zfs() {
             ;;
 
         send)
-            local is_dryrun=0
+            local is_dryrun=0 _send_token=""
             for a in "$@"; do
                 [[ "$a" == "-nP" ]] && is_dryrun=1
+                # Track the resume token: the argv word after -t.
+                if [[ -n "$_send_token" ]]; then
+                    _send_token="$a"
+                    continue
+                fi
+                [[ "$a" == "-t" ]] && { _send_token="pending"; continue; }
+                [[ "$a" == "-t"* && "$a" != "-t" ]] && _send_token="${a#-t}"
             done
+            # Real ZFS rejects a stale/invalid resume token on send (both the
+            # -nP validation dry-run and a real resumed send).
+            if [[ -n "$_send_token" && "$_send_token" != "pending" ]] \
+                && [[ -n "${_mock_zfs_stale_tokens[$_send_token]+x}" ]]; then
+                echo "cannot send: resume token no longer exists" >&2
+                return 1
+            fi
             if [[ $is_dryrun -eq 1 ]]; then
                 echo "size	$_mock_zfs_send_size"
                 return 0
@@ -745,6 +769,17 @@ zfs() {
             done
             # A successful receive creates the target dataset.
             _mock_zfs_datasets["${args[-1]}"]=1
+            # Completing (or aborting with -A) a receive clears resumable
+            # state on real ZFS; model that so token-retry loops terminate.
+            # Pipelined receives (zfs send | zfs receive) run this mock in a
+            # subshell, so the prop-unset below does not propagate — the
+            # append to the state-dir file does, and the get branch below
+            # consults it.
+            local _rt_key="${args[-1]}:receive_resume_token"
+            [[ -n "${_mock_zfs_props[$_rt_key]+x}" ]] \
+                && unset "_mock_zfs_props[${_rt_key}]"
+            [[ -n "${_mock_zfs_state_dir:-}" ]] \
+                && printf '%s\n' "${args[-1]}" >> "$_mock_zfs_state_dir/received-datasets"
             return 0
             ;;
 

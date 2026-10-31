@@ -4,6 +4,7 @@ import os
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
+from unittest.mock import call as mock_call
 
 from app_context import AppContext
 from test_support import capture_logs, mock_gtk, temp_config_dir
@@ -194,6 +195,7 @@ class TestRetentionPagePoolLabel(unittest.TestCase):
             app._ret_original_prune_label = "dailybackup"
             app._ret_status_label = _FakeLabel()
             app._ret_save_button = None
+            app._ret_add_profile_btn = None
             app._ret_pool_list = ["default"]
             app._ret_pending = {}
             app._ret_original = {}
@@ -238,6 +240,7 @@ class TestRetentionPageLabelDirtyState(unittest.TestCase):
         app._ret_pool = "default"
         app._ret_status_label = _FakeLabel()
         app._ret_save_button = MagicMock()
+        app._ret_add_profile_btn = MagicMock()
         return app
 
     def test_label_change_marks_dirty(self):
@@ -266,7 +269,41 @@ class TestRetentionPageLabelDirtyState(unittest.TestCase):
             with patch.object(rp, "set_button_markup_red") as mock_red:
                 app._ret_prune_label_entry.set_text("weekly")
                 rp._update_ret_status(app)
-                mock_red.assert_called_with(app._ret_save_button, True)
+                mock_red.assert_any_call(app._ret_save_button, True)
+
+    def test_update_status_styles_add_profile_button_alongside_save(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+            app = self._make_app(rp)
+
+            with (
+                patch.object(rp, "set_button_markup_red") as mock_red,
+                patch.object(rp, "set_page_tab_attention") as mock_tab,
+            ):
+                app._ret_prune_label_entry.set_text("weekly")
+                rp._update_ret_status(app)
+
+            self.assertEqual(
+                mock_red.call_args_list,
+                [
+                    mock_call(app._ret_save_button, True),
+                    mock_call(app._ret_add_profile_btn, True),
+                ],
+            )
+            mock_tab.assert_called_with(app, "retention", "dirty", True)
+
+    def test_style_retention_buttons_skips_missing_buttons(self):
+        with temp_config_dir():
+            rp = self._fresh_module()
+
+            class _PlainApp:
+                pass
+
+            app = _PlainApp()
+            app._ret_save_button = MagicMock()
+            with patch.object(rp, "set_button_markup_red") as mock_red:
+                rp._style_retention_buttons(app, True)
+            mock_red.assert_called_once_with(app._ret_save_button, True)
 
     def test_save_persists_label_and_clears_dirty(self):
         with temp_config_dir():
@@ -396,6 +433,7 @@ class TestRetentionPageMultiPoolSave(unittest.TestCase):
         app._ret_original_verb = None
         app._ret_status_label = _FakeLabel()
         app._ret_save_button = None
+        app._ret_add_profile_btn = None
         app._ret_pool_list = ["default", "fivebays"]
         app._ret_pending = {}
         app._ret_original = {}
@@ -1247,6 +1285,7 @@ class TestRetentionPageMassDelete(unittest.TestCase):
             app._ret_pool = "default"
             app._ret_status_label = _FakeLabel()
             app._ret_save_button = None
+            app._ret_add_profile_btn = None
             app._ret_pending = {}
             app._ret_mass_delete_widgets = {key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES}
             app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("")
@@ -1564,6 +1603,7 @@ class TestRetentionVerbCheckbox(unittest.TestCase):
             app._ret_pool = "default"
             app._ret_status_label = _FakeLabel()
             app._ret_save_button = None
+            app._ret_add_profile_btn = None
             app._ret_pending = {}
             app._ret_mass_delete_widgets = {key: _FakeEntry("") for key in rp.MASS_DELETE_VARIABLES}
             app._ret_mass_delete_widgets["snapshot_has"] = _FakeEntry("")

@@ -296,7 +296,7 @@ _last_log_size_check = 0.0
 _PROFILE_LOG_SIZE_CHECK_INTERVAL = session_log._LOG_SIZE_CHECK_INTERVAL
 
 # Log path used on the source host for pull-step rsync output in headless mode.
-_REMOTE_RSYNC_LOG_PATH = "/var/log/zfsutilities/rsync-pull.log"
+_REMOTE_RSYNC_LOG_PATH = paths.get_rsync_pull_log_path()
 
 
 def _run_command(step, session_log_file=None):
@@ -664,8 +664,6 @@ def run_restore_profile(profile, config, parent_dir, session_log_file=None):
         log_msg("INFO: Dry run mode enabled — no changes will be made")
     source = cfg.get("source", "").strip()
     dest = cfg.get("dest", "").strip()
-    do_part1 = cfg.get("do_part1", True)
-    do_part2 = cfg.get("do_part2", True)
     if not source or not dest:
         log_msg("FATAL: Source and destination must be specified")
         return 1
@@ -676,8 +674,6 @@ def run_restore_profile(profile, config, parent_dir, session_log_file=None):
         destfs,
         parent_dir,
         cfg.get("variables", {}),
-        do_part1,
-        do_part2,
         dryrun=dryrun,
         recursive=cfg.get("recursive", False),
     )

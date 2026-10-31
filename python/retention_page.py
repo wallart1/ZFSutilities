@@ -35,6 +35,7 @@ from gui_helpers import (
     configure_treeview_column,
     handle_editing_key_press,
     set_button_markup_red,
+    set_page_tab_attention,
     show_error,
     style_expander_label,
     style_var_widgets_nondefault,
@@ -692,9 +693,16 @@ def _update_ret_status(app):
         app._ret_status_label.set_text("")
 
     # Also update Save button styling
-    btn = getattr(app, "_ret_save_button", None)
-    if btn:
-        set_button_markup_red(btn, _is_dirty(app))
+    _style_retention_buttons(app, _is_dirty(app))
+
+
+def _style_retention_buttons(app, dirty):
+    """Style the Save and Add Profile to Schedule buttons for dirty state."""
+    for attr in ("_ret_save_button", "_ret_add_profile_btn"):
+        btn = getattr(app, attr, None)
+        if btn:
+            set_button_markup_red(btn, dirty)
+    set_page_tab_attention(app, "retention", "dirty", dirty)
 
 
 def _on_pool_changed(combo, app):

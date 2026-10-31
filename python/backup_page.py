@@ -363,7 +363,13 @@ def create_backup_page(app, ctx):
     app.backup_post_script_text.set_placeholder_text("Command to run after backup...")
     post_grid.attach(app.backup_post_script_text, 0, 3, 2, 1)
 
-    tracker = DirtyTracker(app, lambda: collect_backup_config(app), "_save_config_button")
+    tracker = DirtyTracker(
+        app,
+        lambda: collect_backup_config(app),
+        "_save_config_button",
+        mirror_button_attr="_backup_add_profile_btn",
+        page_name="backup",
+    )
     app._backup_tracker = tracker
     pull_elv.set_on_changed(tracker.check)
     sr_elv.set_on_changed(tracker.check)

@@ -46,6 +46,7 @@ from feature_config import get_checkagainst, get_pools
 from gui_helpers import (
     LOG_FONT_STATE_INFO,
     LOG_FONT_STATE_LOGS,
+    PageAttention,
     UIStateManager,
     confirm_and_minimize_width,
     create_info_panel,
@@ -255,10 +256,18 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_UP_DOWN)
         self.stack.set_transition_duration(200)
 
-        # Sidebar shows tabs for the stack
-        self.sidebar = Gtk.StackSidebar()
-        self.sidebar.set_stack(self.stack)
+        # Sidebar shows tabs for the stack. A custom ListBox instead of
+        # Gtk.StackSidebar: the sidebar's row labels are ours, so a page's
+        # tab text can turn red while the page needs attention (see
+        # set_page_attention). StackSidebar's internal rows are not
+        # reachable from outside the widget.
+        self.sidebar = Gtk.ListBox()
         self.sidebar.set_size_request(150, -1)
+        self._page_rows = {}
+        self._page_labels = {}
+        self._page_titles = {}
+        self._page_attention = PageAttention()
+        self.sidebar.connect("row-activated", self._on_sidebar_row_activated)
 
         # Add sidebar to content area
         sidebar_frame = Gtk.Frame()
@@ -288,8 +297,46 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         self._start_stop_memory_timer(initial_page)
 
     def add_stack_page(self, name, title, widget):
-        """Add a page to the stack."""
+        """Add a page to the stack and a labeled row to the sidebar."""
         self.stack.add_titled(widget, name, title)
+        self._page_titles[name] = title
+        label = Gtk.Label(label=title)
+        label.set_halign(Gtk.Align.START)
+        label.set_margin_top(6)
+        label.set_margin_bottom(6)
+        label.set_margin_start(10)
+        label.set_margin_end(10)
+        row = Gtk.ListBoxRow()
+        row.add(label)
+        self.sidebar.add(row)
+        self._page_rows[name] = row
+        self._page_labels[name] = label
+
+    def _on_sidebar_row_activated(self, _listbox, row):
+        """Switch the stack to the activated sidebar row's page."""
+        for name, page_row in self._page_rows.items():
+            if page_row is row:
+                self.stack.set_visible_child_name(name)
+                return
+
+    def set_page_attention(self, page, cause, active):
+        """Turn a page's sidebar tab text red while the page needs attention.
+
+        Causes are OR-ed per page (e.g. Checkagainst's unsaved changes and
+        stale derived entries), so several features can share one tab.
+        """
+        if self._page_attention.set(page, cause, active):
+            self._apply_page_attention(page)
+
+    def _apply_page_attention(self, page):
+        label = self._page_labels.get(page)
+        if label is None:
+            return
+        text = self._page_attention.label_text(page, self._page_titles.get(page, page))
+        if self._page_attention.is_active(page):
+            label.set_markup(text)
+        else:
+            label.set_text(text)
 
     def create_action_panel(self):
         """Create the context action buttons panel on the right."""
@@ -606,6 +653,12 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         """Handle page changes in the stack."""
         page_name = stack.get_visible_child_name()
         if page_name:
+            # Keep the sidebar row in sync with the stack (e.g. keyboard or
+            # menu-driven switches). select_row does not emit row-activated,
+            # so this cannot bounce back into the stack.
+            row = getattr(self, "_page_rows", {}).get(page_name)
+            if row is not None:
+                self.sidebar.select_row(row)
             self.update_action_buttons(page_name)
             if page_name == "retention":
                 refresh_prune_pools(self)

@@ -25,6 +25,10 @@
 #     $dointermediates        'Y' (default) includes intermediate snapshots (-I); 'N' uses -i.
 #     $force                  'Y' destroys the destination before a full copy.
 #     $allow_destructive      'Y' permits destructive destination preparation.
+#     $restore_resume         'Y' makes destructive full-copy passes skip datasets whose
+#                             destination already holds a GUID-verified snapshot lineage with
+#                             the source (interrupted restores are caught up incrementally
+#                             instead of destroyed and re-copied). Default 'N'.
 #     $preserve_target_holds  'Y' (default) captures and reapplies destination holds around
 #                             full copies; no-op on plain incremental runs and in dry-run.
 #     $verify_after_transfer  'Y' compares source/destination snapshot GUIDs after receive.
@@ -642,6 +646,35 @@ function send-receive {
             [[ $dryrun != 'N' ]] && log_msg \
                 "INFO: Dry-run: Would create destination dataset $destfs$restorefs"
             [[ $dryrun = 'N' ]] && zfs create -pu "$destfs""$restorefs" > /dev/null
+        fi
+
+        # Restore resume gate. In a destructive full-copy pass, a destination
+        # that already holds a GUID-verified lineage with this source is an
+        # interrupted restore being re-run: it must be caught up
+        # incrementally by the caller's incremental pass, not destroyed and
+        # re-copied from scratch. The plain-mode getcommonsnap call performs
+        # the GUID comparison; $commsnap_mostrecent is 'OLDEST' in this pass
+        # and would bypass it, so it is neutralized around the call.
+        if [[ ${restore_resume:-} = 'Y' && $doincrementals != 'Y' && $force = 'Y' ]] \
+            && zfs list -t filesystem,volume "$destfs""$restorefs" > /dev/null 2>&1; then
+            local _rr_saved_mostrecent="${commsnap_mostrecent:-}" _rr_rc=0 _rr_common
+            commsnap_mostrecent=''
+            _rr_common=$(getcommonsnap "$fs" "$destfs""$restorefs") || _rr_rc=$?
+            commsnap_mostrecent="$_rr_saved_mostrecent"
+            if [[ $_rr_rc -eq 0 || $_rr_rc -eq 16 ]]; then
+                if [[ $dryrun != 'N' ]]; then
+                    log_msg "INFO: Dry-run: Would skip full copy of $fs —" \
+                        "$destfs$restorefs already holds a verified snapshot lineage" \
+                        "(common snapshot $_rr_common); catching up incrementally."
+                else
+                    log_msg "INFO: $destfs$restorefs already holds a verified snapshot" \
+                        "lineage with $fs (common snapshot $_rr_common)." \
+                        "Skipping destructive full copy; catching up incrementally."
+                fi
+                zfslock_release "$lock_source"
+                zfslock_release "$lock_dest"
+                continue
+            fi
         fi
 
         if zfs list "$destfs""$restorefs""$nextsnap" > /dev/null 2>&1 && [[ $force != "Y" ]]; then
