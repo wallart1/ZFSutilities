@@ -19,7 +19,12 @@
 #        - (re)create the block backstore and map it at the LUN index
 #          recorded in saveconfig.json for THIS target — never an
 #          auto-assigned index, which can collide or pick the wrong
-#          slot when orphan targets under a different IQN prefix exist
+#          slot when orphan targets under a different IQN prefix exist.
+#          When saveconfig.json holds no index (a keys-pending fence
+#          save can rewrite it without the encrypted records), the
+#          newest pool state map supplies the index — the same map
+#          reconcile-iscsi-state rebuilds from and the declared
+#          recovery authority for exactly that state
 #        - grant the LUN to every existing ACL initiator on the target
 #          at the same index (idempotent; explicit-mode ACLs grant
 #          nothing until they carry a MappedLUN for the new index)
@@ -111,6 +116,63 @@ for target in config.get("targets", []):
 PYEOF
 }
 
+# The pool-resident state map — resolved once per run, exactly as
+# reconcile-iscsi-state resolves it. A keys-pending fence save can rewrite
+# saveconfig.json without the encrypted records while the map keeps the
+# last-known indexes, so the map is the fallback index source; a map from
+# another host describes a different site and never supplies one.
+recover_map_file=""
+recover_map_file=$(newest_iscsi_state_map || true)
+if [[ -n "$recover_map_file" ]]; then
+    map_host=$(read_json_string_field "$recover_map_file" "host")
+    if [[ -n "$map_host" && "$map_host" != "$my_host" ]]; then
+        log_msg "WARN: Newest pool map was generated on $map_host, not this host ($my_host) — ignoring it for the LUN-index fallback"
+        recover_map_file=""
+    fi
+fi
+
+# Look up the recorded LUN index for a backstore from the pool state map,
+# scoped to one full target IQN — the same scoping law as
+# lookup_lun_number, so orphan targets under a different IQN prefix cannot
+# influence the index. Prints the index, or nothing when the map records
+# no mapping for the backstore on that exact target.
+lookup_lun_number_in_map() {
+    local bsname="$1" target_iqn="$2"
+    [[ -z "$recover_map_file" ]] && return 0
+    bsname="$bsname" target_iqn="$target_iqn" python3 - "$recover_map_file" << 'PYEOF' 2>/dev/null
+import json, os, sys
+name = os.environ["bsname"]
+target_iqn = os.environ["target_iqn"]
+with open(sys.argv[1]) as f:
+    m = json.load(f)
+luns = m.get("targets", {}).get(target_iqn, {}).get("luns", {})
+for idx in sorted(luns, key=lambda s: int(s) if s.isdigit() else -1):
+    if idx.isdigit() and luns[idx] == name:
+        print(int(idx))
+        break
+PYEOF
+}
+
+# Resolve the recorded LUN index for a backstore on one target IQN.
+# saveconfig.json is the primary source; the pool state map answers only
+# when saveconfig is silent. Sets lun_num (empty when neither records
+# one) — an index no source records stays empty, never guessed. The INFO
+# names the fallback source so the transcript shows which authority
+# supplied the slot.
+resolve_lun_number() {
+    local bsname="$1" target_iqn="$2"
+    lun_num=""
+    lun_num=$(lookup_lun_number "$bsname" "$target_iqn") || lun_num=""
+    if [[ -n "$lun_num" ]]; then
+        return 0
+    fi
+    lun_num=$(lookup_lun_number_in_map "$bsname" "$target_iqn") || lun_num=""
+    if [[ -n "$lun_num" ]]; then
+        log_msg "INFO:   $bsname — no LUN index in $savefile; using map-recorded LUN $lun_num from $recover_map_file"
+    fi
+    return 0
+}
+
 log_msg "INFO: === Recovering encrypted iSCSI LUNs ==="
 
 added=0
@@ -143,9 +205,10 @@ while IFS=: read -r name device target; do
         already=$((already + 1))
         log_msg "INFO:   ✓ $name already present on $full_iqn"
         # A re-run must also heal grants for mappings that already exist:
-        # the recorded index names the slot the ACL grant belongs at. No
-        # recorded index means nothing authoritative to grant — skip.
-        lun_num=$(lookup_lun_number "$name" "$full_iqn")
+        # the recorded index (saveconfig, or the map when saveconfig is
+        # silent) names the slot the ACL grant belongs at. No recorded
+        # index anywhere means nothing authoritative to grant — skip.
+        resolve_lun_number "$name" "$full_iqn"
         if [[ -n "$lun_num" ]] \
             && ! iscsi_grant_lun_to_acls "$full_iqn" "$lun_num"; then
             failed=$((failed + 1))
@@ -154,12 +217,14 @@ while IFS=: read -r name device target; do
         continue
     fi
 
-    lun_num=$(lookup_lun_number "$name" "$full_iqn")
+    resolve_lun_number "$name" "$full_iqn"
     if [[ -z "$lun_num" ]]; then
         log_msg "FATAL:   $name has no recorded LUN index under $full_iqn in $savefile"
-        log_msg "FATAL:     Not guessing an index (auto-assignment can collide or pick"
-        log_msg "FATAL:     the wrong slot when orphan targets exist). Check with"
-        log_msg "FATAL:     show-lun-map and saveconfig.json, then fix the conf entry."
+        log_msg "FATAL:     or in the pool state map — not guessing an index (auto-assignment"
+        log_msg "FATAL:     can collide or pick the wrong slot when orphan targets exist)."
+        log_msg "FATAL:     Inspect the map (export-iscsi-state --print-map) and"
+        log_msg "FATAL:     saveconfig.json (incl. its .pre-start boot backup) for a"
+        log_msg "FATAL:     recorded index."
         failed=$((failed + 1))
         continue
     fi

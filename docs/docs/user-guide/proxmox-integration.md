@@ -729,14 +729,16 @@ sudo iscsi-recover-encrypted-luns
 
 [`iscsi-recover-encrypted-luns`](../commands-and-modules/two-node.md#iscsi-recover-encrypted-luns-storage-node)
 recreates each encrypted backstore, maps it at its recorded LUN index (read
-from `saveconfig.json`, scoped to the configured target — never an
-auto-assigned index), grants the LUN to every existing ACL initiator on the
+from `saveconfig.json`, scoped to the configured target — or, when
+saveconfig lost the encrypted records, from the pool state map's recorded
+index for the same target — never an auto-assigned index), grants the LUN
+to every existing ACL initiator on the
 target at the same index (the manual `mapped_lun` step this used to require
 is gone), saves the config with `safe-iscsi-save`, and rescans the compute
 host. It is idempotent and safe to re-run, and refuses (rather than guesses)
-when an entry has no recorded index. Once it reports recovery
-complete, start the affected VMs from the Proxmox GUI (or `qm start <vmid>`
-on the compute host).
+when an entry has no recorded index in either source. Once it reports
+recovery complete, start the affected VMs from the Proxmox GUI (or
+`qm start <vmid>` on the compute host).
 
 ### The manual equivalent
 
@@ -746,7 +748,9 @@ For reference, the steps the script performs:
 2. `targetcli /backstores/block create <name> /dev/zvol/<pool>/<path>` for
    each encrypted backstore.
 3. `targetcli /iscsi/<iqn>/tpg1/luns create /backstores/block/<name> <lun_idx>`
-   using the LUN index recorded in `saveconfig.json` for that target —
+   using the LUN index recorded in `saveconfig.json` for that target — or
+   the pool state map's recorded index when saveconfig lost the encrypted
+   records —
    NOT an auto-assigned index: when orphan targets under an old IQN prefix
    exist, auto-assignment can collide or pick the wrong slot and break
    Proxmox disk mappings.

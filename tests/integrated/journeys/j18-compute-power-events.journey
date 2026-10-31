@@ -30,10 +30,11 @@
 #       "keys not loaded?" hint and preserves the pool map as the
 #       recovery authority); the F-042 arc (that same return tick's
 #       keys-pending save drops the encrypted records from
-#       saveconfig.json, the documented recover FATALs on its
-#       saveconfig-only index lookup, and a keys-loaded tick's
-#       map-driven rebuild + recover's already-present grant heal
-#       close it), both VMs booting with intact writers.
+#       saveconfig.json, and the documented recover restores both
+#       LUNs directly via the map fallback — the pool map is the
+#       declared recovery authority — before the keys-loaded tick and
+#       the grant-healing re-run close it), both VMs booting with
+#       intact writers.
 #   S17 the orphan LUN, both shapes: a VM deleted in PVE (qm destroy)
 #       and a hand-removed scsi line each leave a live-exported LUN
 #       no VM references — the symptom walk proves the fence, the
@@ -716,18 +717,15 @@ j18_compute_power_events_main() {
     fi
 
     # The encrypted tail: the power-off unloaded the keys — and the
-    # ceremony exposes run-4's finding (F-042): the fence's RETURN
-    # tick ran reconcile while keys were pending, and its trailing
-    # save rewrote saveconfig.json from live state — the encrypted
-    # LUN records (and the indexes iscsi-recover-encrypted-luns
-    # reads ONLY from there) are gone while the pool map kept them
-    # (its declared recovery authority).  The documented recover
-    # FATALs; its conf-entry advice is unactionable (the conf has no
-    # index field).  The blind operator arc: keys are loaded now, so
-    # one more fence tick drives a keys-loaded reconcile that
-    # rebuilds both encrypted LUNs at the map-recorded indexes and
-    # re-records them in saveconfig.json; the recover re-run then
-    # lands on its already-present path and heals the ACL grants.
+    # ceremony exercises the F-042 fix.  The fence's RETURN tick ran
+    # reconcile while keys were pending, and its trailing save rewrote
+    # saveconfig.json from live state — the encrypted LUN records (and
+    # the indexes iscsi-recover-encrypted-luns reads from there) are
+    # gone while the pool map kept them (its declared recovery
+    # authority).  Recover falls back to the map-recorded indexes and
+    # restores both LUNs directly (repair-plan 023); the keys-loaded
+    # tick then proves full convergence, and recover's re-run lands on
+    # its already-present path with healed grants.
     itf_keystore_insert "$s_base" "$s_vmid" || return 1
     itf_keystore_unlock_mount "$s_ip" || return 1
     itf_storage_load_keys "$s_ip" || return 1
@@ -737,14 +735,18 @@ j18_compute_power_events_main() {
         > "$log" 2>&1
     rc=$?
     itf_artifact "recover-encrypted-s16-first" "$log"
-    if [[ $rc -ne 0 ]] && grep -q "has no recorded LUN index" "$log" \
-            && grep -qE "Failed: +2" "$log"; then
-        itf_step pass "recover dead-ends after a keys-pending fence save [s16]" \
-            "FINDING (F-042): the return tick's reconcile saved live" \
-            "state while keys were pending, dropping the encrypted" \
-            "records from saveconfig.json; recover reads indexes only" \
-            "from saveconfig — the map kept them but is never consulted" \
-            "(FINDINGS row filed; repair-plan 023 proposed)"
+    if [[ $rc -eq 0 ]] \
+            && grep -q "no LUN index in .*saveconfig.json; using map-recorded LUN" "$log" \
+            && grep -q "${J15_LUN_SPARE} mapped at LUN" "$log" \
+            && grep -q "${J15_LUN_ENC_OS} mapped at LUN" "$log" \
+            && grep -q "Recovery complete" "$log" \
+            && ! grep -q "FATAL" "$log"; then
+        itf_step pass "recover heals directly after a keys-pending fence save [s16]" \
+            "the return tick's reconcile saved live state while keys" \
+            "were pending, dropping the encrypted records from" \
+            "saveconfig.json; recover fell back to the pool map's" \
+            "recorded indexes and restored both LUNs in one run" \
+            "(F-042 fixed, repair-plan 023)"
     else
         itf_step fail "recover first attempt [s16]" \
             "rc=$rc — unexpected shape, see $(basename "$log")"
@@ -754,7 +756,7 @@ j18_compute_power_events_main() {
     itf_fence_tick "$c_ip" s16-keys-loaded > /dev/null 2>&1 || true
     if ! itf_wait_vm_disk_links "$c_ip" 300 101 202 \
             > "$ITF_RUN_DIR/s16-enc-links-elapsed.txt"; then
-        itf_step fail "encrypted LUNs rebuilt by the keys-loaded tick [s16]" \
+        itf_step fail "links return after recover's rebuild [s16]" \
             "links still missing 300s after it — see" \
             "fence-tick-s16-keys-loaded.log"
         return 1
@@ -762,11 +764,11 @@ j18_compute_power_events_main() {
     if itf_fence_tick "$c_ip" s16-keys-loaded2 \
             && grep -q "All .* VM disk path(s) present" \
                 "$ITF_RUN_DIR/fence-tick-s16-keys-loaded2.log"; then
-        itf_step pass "encrypted LUNs rebuilt by the keys-loaded tick [s16]" \
-            "reconcile recreated both backstores at the map-recorded" \
-            "indexes and saved; links back in $(cat "$ITF_RUN_DIR/s16-enc-links-elapsed.txt")s"
+        itf_step pass "keys-loaded tick green after recover's rebuild [s16]" \
+            "the fence reads healthy over recover's map-fallback rebuild;" \
+            "links back in $(cat "$ITF_RUN_DIR/s16-enc-links-elapsed.txt")s"
     else
-        itf_step fail "encrypted LUNs rebuilt by the keys-loaded tick [s16]" \
+        itf_step fail "keys-loaded tick green after recover's rebuild [s16]" \
             "see fence-tick-s16-keys-loaded2.log"
         return 1
     fi
@@ -789,9 +791,9 @@ j18_compute_power_events_main() {
     itf_keystore_remove "$s_base" "$s_vmid" || return 1
     itf_iscsi_check_gate "$s_ip" s16 || return 1
     itf_step pass "S16 within-boot convergence" \
-        "keys + the fence-driven rebuild + recover's grant heal; manual" \
-        "--check rc 0, no drift — the both-node power-cycle arc closed" \
-        "through documented surfaces (with F-042 recorded)"
+        "keys + recover's map-fallback rebuild + the grant-healing" \
+        "re-run; manual --check rc 0, no drift — the both-node power-cycle" \
+        "arc closed through documented surfaces (F-042 fixed)"
 
     # VM boot + integrity: VM 101 on the restored plain LUN (prefix vs
     # the s16 baseline), VM 202 on the recovered encrypted LUN (prefix
@@ -1183,8 +1185,8 @@ j18_compute_power_events_main() {
         "the late return; sessions + plain LUNs return unaided while" \
         "the fence stays red exactly for the keys-pending LUN; F-042:" \
         "the keys-pending fence save strands the encrypted index" \
-        "records, closed via a keys-loaded tick's map-driven rebuild +" \
-        "recover's grant heal; both VMs boot with intact data); S17" \
+        "records, and recover restores both LUNs directly via the" \
+        "map fallback; both VMs boot with intact data); S17" \
         "orphan LUN (fence/verifier/rescan/show-lun-map/repair all" \
         "blind by design; remove-vm's classifier names + spares it;" \
         "both documented teardown paths converge, each leaving a ghost" \

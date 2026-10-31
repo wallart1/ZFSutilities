@@ -1031,11 +1031,11 @@ j16_iscsi_total_loss_main() {
     fi
 
     # RECOVER: the FATAL's own documented force escape heals the file
-    # from the live tree; the map-driven reconcile rebuilds the two
-    # encrypted mappings at their recorded indexes (recover-encrypted
-    # reads its indexes from saveconfig and honestly refuses on the
-    # healed 2-LUN file); the trailing save regenerates the boot config
-    # and refreshes the map.
+    # from the live tree; the map fallback then rebuilds the two
+    # encrypted mappings at their map-recorded indexes directly (the
+    # healed 2-LUN saveconfig carries no indexes — the pool map, the
+    # declared recovery authority, supplies them; F-042 fixed); the
+    # trailing save regenerates the boot config and refreshes the map.
     log="$ITF_RUN_DIR/s8-heal.log"
     # shellcheck disable=SC2029  # expansions run on the storage guest
     if itf_guest_exec "$s_ip" "
@@ -1052,20 +1052,26 @@ j16_iscsi_total_loss_main() {
         return 1
     fi
     itf_artifact "s8-heal" "$log"
-    log="$ITF_RUN_DIR/s8-recover-refusal.log"
+    log="$ITF_RUN_DIR/s8-recover.log"
     itf_guest_exec "$s_ip" "bash -lc 'iscsi-recover-encrypted-luns'" \
         > "$log" 2>&1
     rc=$?
-    itf_artifact "s8-recover-refusal" "$log"
-    if [[ $rc -ne 0 ]] \
-            && grep -q "vm-101-disk-1 has no recorded LUN index" "$log" \
-            && grep -q "Not guessing an index" "$log"; then
-        itf_step pass "recover honestly refuses without recorded indexes [s8]" \
+    itf_artifact "s8-recover" "$log"
+    if [[ $rc -eq 0 ]] \
+            && grep -q "vm-101-disk-1 .*using map-recorded LUN 1 " "$log" \
+            && grep -q "vm-202-disk-0 .*using map-recorded LUN 3 " "$log" \
+            && grep -q "vm-101-disk-1 mapped at LUN 1 " "$log" \
+            && grep -q "vm-202-disk-0 mapped at LUN 3 " "$log" \
+            && grep -q "Recovery complete" "$log" \
+            && ! grep -q "FATAL" "$log"; then
+        itf_step pass "recover rebuilds from the map when saveconfig is silent [s8]" \
             "the healed 2-LUN saveconfig carries no encrypted indexes;" \
-            "auto-assignment refused (see s8-recover-refusal.log)"
+            "recover rebuilt both mappings at the map-recorded ones" \
+            "(LUNs 1 and 3) — the map-fallback recovery (F-042 fixed;" \
+            "see s8-recover.log)"
     else
-        itf_step fail "recover honestly refuses without recorded indexes [s8]" \
-            "rc=$rc — see s8-recover-refusal.log"
+        itf_step fail "recover rebuilds from the map when saveconfig is silent [s8]" \
+            "rc=$rc — see s8-recover.log"
         return 1
     fi
     rfeed="$ITF_RUN_DIR/s8-reconcile-answers.txt"
@@ -1076,15 +1082,13 @@ j16_iscsi_total_loss_main() {
     rc=$?
     itf_artifact "s8-reconcile" "$log"
     if [[ $rc -eq 0 ]] \
-            && grep -q "✓ Mapped vm-101-disk-1 to ${J16_POOL_A}/lun" "$log" \
-            && grep -q "✓ Mapped vm-202-disk-0 to ${J16_POOL_A}/lun" "$log" \
-            && grep -q "✓ iSCSI configuration saved" "$log" \
+            && grep -q "No target-side changes needed" "$log" \
             && grep -q "✓ Done" "$log"; then
-        itf_step pass "map-driven rebuild completes the tree [s8]" \
-            "both encrypted mappings rebuilt at recorded indexes;" \
-            "saveconfig, boot config, and map all refreshed"
+        itf_step pass "reconcile agrees after recover's rebuild [s8]" \
+            "live tree matches the map — no drift, map + boot config" \
+            "refreshed (see s8-reconcile.log)"
     else
-        itf_step fail "map-driven rebuild completes the tree [s8]" \
+        itf_step fail "reconcile agrees after recover's rebuild [s8]" \
             "rc=$rc — see s8-reconcile.log"
         return 1
     fi
@@ -1143,8 +1147,9 @@ j16_iscsi_total_loss_main() {
     fi
 
     # Heal: boot config back, restart from it, force-save, then the
-    # map-driven reconcile completes the tree (the same arc as S8's
-    # heal) before the gates.
+    # map-driven reconcile completes the tree (reconcile's own rebuild
+    # arc — S8's recovery now runs through recover's map fallback)
+    # before the gates.
     # shellcheck disable=SC2029  # expansions run on the storage guest
     if itf_guest_exec "$s_ip" "
             set -e

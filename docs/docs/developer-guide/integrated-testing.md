@@ -583,13 +583,12 @@ sessions and the plain LUNs return unaided, while the return tick
 stays red exactly for the keys-pending encrypted LUN (reconcile
 skips it with the `keys not loaded?` hint and preserves the pool map
 as the recovery authority) — F-042: that same return tick's trailing
-save drops the encrypted records from saveconfig.json, so the
-documented `iscsi-recover-encrypted-luns` FATALs on its
-saveconfig-only index lookup; the arc closes through a keys-loaded
-tick whose map-driven reconcile rebuilds both LUNs at the recorded
-indexes, with recover's re-run healing the ACL grants (repair-plan 023
-proposed). Both VMs then boot with intact writers and `--check` reads
-rc 0; S17 leaves an
+save drops the encrypted records from saveconfig.json, and the
+documented `iscsi-recover-encrypted-luns` restores both LUNs directly
+through the pool-map fallback (the map's recorded indexes, repair-plan
+023 executed), with the keys-loaded tick proving convergence and
+recover's re-run healing the ACL grants. Both VMs then boot with
+intact writers and `--check` reads rc 0; S17 leaves an
 orphan live-exported LUN behind in both shapes (a VM deleted in PVE
 and a hand-removed scsi line) and proves every checking surface blind
 to it by design (the fence, `--check`, `rescan-storage`,

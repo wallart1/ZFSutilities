@@ -906,6 +906,11 @@ Semantics:
   `--from`) and recreates the recorded backstores/LUNs/ACLs create-only.
   After a partial reconcile (refused or skipped entries) the map refresh is
   suppressed so entries whose zvols are still missing survive in it.
+  [iscsi-recover-encrypted-luns](../commands-and-modules/two-node.md#iscsi-recover-encrypted-luns-storage-node)
+  also reads the newest map as its fallback LUN-index source when
+  `saveconfig.json` no longer records the encrypted entries (a keys-pending
+  fence save can rewrite it without them); a map generated on another host
+  is never consulted for it.
 - **Pool identity, compared and never rewritten.** The `pools` GUIDs are
   recorded at export and compared by `export-iscsi-state --check` (a GUID
   change is a `DRIFT:` line), by the `detect_pool_identity` detector

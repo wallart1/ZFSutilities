@@ -524,7 +524,7 @@ sudo iscsi-recover-encrypted-luns
 
 | Script | Purpose |
 | ------ | ------- |
-| `lib/iscsi-lib.sh` | ACL MappedLUN binding after a LUN is (re)mapped (`iscsi_grant_lun_to_acls`) |
+| `lib/iscsi-lib.sh` | ACL MappedLUN binding after a LUN is (re)mapped (`iscsi_grant_lun_to_acls`); pool-map locator for the LUN-index fallback (`newest_iscsi_state_map`) |
 | `safe-iscsi-save` | Persist config after changes (only when something was added) |
 | `rescan-storage` | Surface restored LUNs on the compute host (self-delegates via SSH) |
 
@@ -533,7 +533,8 @@ sudo iscsi-recover-encrypted-luns
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
 | `/etc/zfsutilities/iscsi-encrypted-luns.conf` | Authoritative list of encrypted backstores to recover | [Encrypted-LUNs config](../developer-guide/data-structures.md#iscsi-encrypted-luns-config) |
-| `/etc/rtslib-fb-target/saveconfig.json` | Source of the recorded LUN index per backstore and target | [iSCSI boot-safe config](../developer-guide/data-structures.md#iscsi-boot-safe-config) |
+| `/etc/rtslib-fb-target/saveconfig.json` | Primary source of the recorded LUN index per backstore and target | [iSCSI boot-safe config](../developer-guide/data-structures.md#iscsi-boot-safe-config) |
+| Pool state map (`<pool>/zfsutilities/iscsi-state.json`) | Fallback LUN-index source when `saveconfig.json` lost the encrypted records (a keys-pending fence save can rewrite it without them); a map generated on another host is ignored | [iSCSI pool-resident state map](../developer-guide/data-structures.md#iscsi-pool-resident-state-map) |
 
 **Internal flow / algorithm:**
 
@@ -543,9 +544,14 @@ sudo iscsi-recover-encrypted-luns
       loaded).
     - Skip when the backstore and its LUN mapping already exist (idempotent).
     - Look up the recorded LUN index from `saveconfig.json`, scoped to the
-      exact target IQN. Never auto-assign: a missing index is a FATAL for
-      that entry, because auto-assignment can collide or pick the wrong
-      slot when orphan targets under a different IQN prefix exist.
+      exact target IQN; when saveconfig holds no index for the backstore
+      (a keys-pending fence save can rewrite it without the encrypted
+      records), fall back to the index the newest pool state map records
+      for that backstore on the same target — the declared recovery
+      authority. Never auto-assign: an index missing from both sources is
+      a FATAL for that entry, because auto-assignment can collide or pick
+      the wrong slot when orphan targets under a different IQN prefix
+      exist.
     - (Re)create the backstore and mapping, then verify the mapping took.
     - Grant the LUN to every existing ACL initiator on the target at the
       same index via `iscsi_grant_lun_to_acls` (idempotent). This runs on

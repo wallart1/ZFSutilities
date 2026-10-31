@@ -2,11 +2,15 @@
 # shellcheck disable=SC1090,SC2034,SC2154
 # test-iscsi-recover-encrypted-luns — Verify the post-key-load encrypted-LUN
 # recovery flow: explicit recorded LUN indexes scoped to the configured
-# target, refusal to auto-assign, idempotency, and persistence triggers.
+# target, the pool-map fallback when saveconfig.json lost the records
+# (F-042), refusal to auto-assign, idempotency, and persistence triggers.
 #
 # Assertions are state-based (the targetcli mock appends to files, the
 # persistence helpers append to a calls file): log_msg output goes to the
 # bashinit log, not stdout, so behavioral state is the observable contract.
+# The runner's stderr (where log_msg writes) is captured into the LOG block
+# for the message-text cases (fallback INFO naming its source, the reworded
+# no-index FATAL, the foreign-map WARN).
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
@@ -21,6 +25,8 @@ _run_recover() {
     local savefile="$2"
     local prestate="$3"   # optional dir pre-seeded with backstores/luns state
     local grant_fail="${4:-}"  # optional space-separated LUN indexes whose grant create fails
+    local map_pool="${5:-}"    # optional pool name whose zfsutilities dataset holds a state map
+    local map_mnt="${6:-}"     # optional mountpoint of that dataset (holds iscsi-state.json)
     local tmpdir
     tmpdir=$(mktemp -d)
     local script_copy="$tmpdir/iscsi-recover-encrypted-luns"
@@ -81,6 +87,8 @@ export mydir="$tmpdir"
 export ZFSUTILITIES_SYSTEM_CONFIG_DIR="$confdir"
 export CALLS="$tmpdir/calls"
 export GRANT_FAIL="$grant_fail"
+export MAP_POOL="$map_pool"
+export MAP_MNT="$map_mnt"
 touch "\$CALLS"
 find_zfsutility_script() {
     case "\$1" in
@@ -90,6 +98,25 @@ find_zfsutility_script() {
     esac
 }
 hostname() { echo stewie; }
+# Pool-map plumbing for newest_iscsi_state_map (real iscsi-lib.sh is
+# loaded): zpool lists the configured map pool only; zfs resolves exactly
+# its zfsutilities dataset mountpoint. Unset MAP_POOL = no map anywhere.
+zpool() {
+    if [[ "\$1 \$2" == "list -Ho" && -n "\$MAP_POOL" ]]; then
+        echo "\$MAP_POOL"
+    fi
+    return 0
+}
+zfs() {
+    if [[ "\$1 \$2 \$3 \$4" == "list -H -o mountpoint" ]]; then
+        if [[ -n "\$MAP_MNT" && "\$5" == "\$MAP_POOL/zfsutilities" ]]; then
+            echo "\$MAP_MNT"
+            return 0
+        fi
+        return 1
+    fi
+    return 0
+}
 targetcli() {
     case "\$*" in
         "/backstores/block ls")
@@ -144,10 +171,11 @@ source "$script_copy"
 RUNNEREOF
     chmod +x "$tmpdir/runner"
 
-    local calls luns_main luns_orphan luns_nvme backstores acls_main
-    bash "$tmpdir/runner" >/dev/null 2>&1
+    local calls luns_main luns_orphan luns_nvme backstores acls_main log
+    bash "$tmpdir/runner" >"$tmpdir/runner.out" 2>"$tmpdir/runner.err"
     local rc=$?
     calls=$(cat "$tmpdir/calls" 2>/dev/null || true)
+    log=$(cat "$tmpdir/runner.err" 2>/dev/null || true)
     luns_main=$(cat "$state/luns/iqn.2026-02.local.stewie:threeamigos" 2>/dev/null || true)
     luns_orphan=$(cat "$state/luns/iqn.2026-10.local.stewie:threeamigos" 2>/dev/null || true)
     luns_nvme=$(cat "$state/luns/iqn.2026-02.local.stewie:nvme1" 2>/dev/null || true)
@@ -155,8 +183,8 @@ RUNNEREOF
     acls_main=$(cat "$state/acls-grants/iqn.2026-02.local.stewie:threeamigos"/* \
         2>/dev/null || true)
     rm -rf "$tmpdir"
-    printf 'CALLS:[%s]\nBACKSTORES:[%s]\nLUNS-MAIN:[%s]\nLUNS-ORPHAN:[%s]\nLUNS-NVME:[%s]\nACLS-MAIN:[%s]\n' \
-        "$calls" "$backstores" "$luns_main" "$luns_orphan" "$luns_nvme" "$acls_main"
+    printf 'CALLS:[%s]\nBACKSTORES:[%s]\nLUNS-MAIN:[%s]\nLUNS-ORPHAN:[%s]\nLUNS-NVME:[%s]\nACLS-MAIN:[%s]\nLOG:[%s]\n' \
+        "$calls" "$backstores" "$luns_main" "$luns_orphan" "$luns_nvme" "$acls_main" "$log"
     return "$rc"
 }
 
@@ -176,6 +204,64 @@ _std_saveconfig() {
       {"storage_object": "/backstores/block/vm-101-disk-0", "index": 9}
     ]}]}
   ]
+}
+EOF
+}
+
+# Fixture saveconfig after a keys-pending fence save (the F-042 shape): the
+# configured target's encrypted records are gone; only the orphan target
+# under a different IQN prefix still carries one (the wrong-index trap the
+# map fallback must also refuse to follow).
+_stripped_saveconfig() {
+    local savefile="$1"
+    cat > "$savefile" <<'EOF'
+{
+  "targets": [
+    {"wwn": "iqn.2026-02.local.stewie:threeamigos", "tpgs": [{"luns": []}]},
+    {"wwn": "iqn.2026-10.local.stewie:threeamigos", "tpgs": [{"luns": [
+      {"storage_object": "/backstores/block/vm-101-disk-0", "index": 9}
+    ]}]}
+  ]
+}
+EOF
+}
+
+# Fixture pool state map in the canonical export-iscsi-state shape. The
+# main target records both encrypted backstores (LUNs 0 and 5); the nvme1
+# target records an unrelated backstore (map-miss case). Host overridable
+# for the foreign-map guard.
+_write_state_map() {
+    local file="$1" map_host="${2:-stewie}"
+    cat > "$file" <<EOF
+{
+  "version": 1,
+  "generated": "2026-10-30T12:00:00+00:00",
+  "host": "$map_host",
+  "iqn_prefix": "iqn.2026-02.local.stewie",
+  "storage_ip": "192.168.100.1",
+  "pools": {"threeamigos": "4338716537971988948"},
+  "targets": {
+    "iqn.2026-02.local.stewie:threeamigos": {
+      "acls": ["iqn.2026-02.local.tweety"],
+      "luns": {"0": "vm-100-disk-0", "5": "vm-101-disk-0"}
+    },
+    "iqn.2026-02.local.stewie:nvme1": {
+      "acls": [],
+      "luns": {"7": "vm-300-disk-0"}
+    }
+  },
+  "backstores": {
+    "vm-100-disk-0": {
+      "dev": "/dev/zvol/threeamigos/proxmox/vm-100-disk-0",
+      "target": "iqn.2026-02.local.stewie:threeamigos",
+      "lun": 0
+    },
+    "vm-101-disk-0": {
+      "dev": "/dev/zvol/threeamigos/proxmox/vm-101-disk-0",
+      "target": "iqn.2026-02.local.stewie:threeamigos",
+      "lun": 5
+    }
+  }
 }
 EOF
 }
@@ -231,6 +317,133 @@ test_refuses_when_no_recorded_index() {
         && [[ "$result" == *"LUNS-NVME:[]"* ]] \
         && [[ "$result" != *"lun"*"block/vm-202-disk-5"* ]] \
         && [[ "$result" != *"safe-iscsi-save"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_map_fallback_recovers_when_saveconfig_silent() {
+    test_start "Recovers at map-recorded indexes when saveconfig lost the records"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    _std_encrypted_conf "$confdir" "$tmpdir"
+    _stripped_saveconfig "$tmpdir/save.json"
+    local mapdir="$tmpdir/poolmap"
+    mkdir -p "$mapdir"
+    _write_state_map "$mapdir/iscsi-state.json"
+
+    local result rc=0
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "" "" threeamigos "$mapdir") || rc=$?
+
+    if [[ "$rc" -eq 0 ]] \
+        && [[ "$result" == *"lun0 block/vm-100-disk-0"* ]] \
+        && [[ "$result" == *"lun5 block/vm-101-disk-0"* ]] \
+        && [[ "$result" != *"lun9"* ]] \
+        && [[ "$result" == *"LUNS-ORPHAN:[]"* ]] \
+        && [[ "$result" == *"safe-iscsi-save"* ]] \
+        && [[ "$result" == *"rescan-storage"* ]] \
+        && [[ "$result" == *"no LUN index in $tmpdir/save.json; using map-recorded LUN 0 from $mapdir/iscsi-state.json"* ]] \
+        && [[ "$result" == *"no LUN index in $tmpdir/save.json; using map-recorded LUN 5 from $mapdir/iscsi-state.json"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_refusal_stands_when_map_silent_too() {
+    test_start "Refusal stands, reworded, when neither saveconfig nor the map records the index"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    mkdir -p "$confdir"
+    touch "$tmpdir/dev"
+    # vm-202-disk-5 on nvme1: absent from the stripped saveconfig AND from
+    # the map's nvme1 target (which records an unrelated backstore).
+    printf 'vm-202-disk-5:%s/dev:nvme1\n' "$tmpdir" \
+        > "$confdir/iscsi-encrypted-luns.conf"
+    _stripped_saveconfig "$tmpdir/save.json"
+    local mapdir="$tmpdir/poolmap"
+    mkdir -p "$mapdir"
+    _write_state_map "$mapdir/iscsi-state.json"
+
+    local result rc=0
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "" "" threeamigos "$mapdir") || rc=$?
+
+    if [[ "$rc" -ne 0 ]] \
+        && [[ "$result" == *"LUNS-NVME:[]"* ]] \
+        && [[ "$result" != *"safe-iscsi-save"* ]] \
+        && [[ "$result" == *"has no recorded LUN index"* ]] \
+        && [[ "$result" == *"or in the pool state map"* ]] \
+        && [[ "$result" != *"Not guessing an index (auto-assignment can collide or pick the wrong slot when orphan targets exist). Check with"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_foreign_host_map_is_ignored() {
+    test_start "A map generated on another host never supplies the fallback index"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    _std_encrypted_conf "$confdir" "$tmpdir"
+    _stripped_saveconfig "$tmpdir/save.json"
+    local mapdir="$tmpdir/poolmap"
+    mkdir -p "$mapdir"
+    _write_state_map "$mapdir/iscsi-state.json" otherhost
+
+    local result rc=0
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "" "" threeamigos "$mapdir") || rc=$?
+
+    if [[ "$rc" -ne 0 ]] \
+        && [[ "$result" == *"LUNS-MAIN:[]"* ]] \
+        && [[ "$result" != *"safe-iscsi-save"* ]] \
+        && [[ "$result" == *"generated on otherhost, not this host"* ]] \
+        && [[ "$result" == *"has no recorded LUN index"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
+test_already_present_grants_heal_from_map_index() {
+    test_start "Already-present mappings heal grants at the map-recorded index"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    _std_encrypted_conf "$confdir" "$tmpdir"
+    _stripped_saveconfig "$tmpdir/save.json"
+    local mapdir="$tmpdir/poolmap"
+    mkdir -p "$mapdir"
+    _write_state_map "$mapdir/iscsi-state.json"
+    local prestate="$tmpdir/prestate"
+    mkdir -p "$prestate/luns"
+    cat > "$prestate/backstores" <<'EOF'
+  vm-100-disk-0  /dev/zvol/threeamigos/proxmox/vm-100-disk-0  50G
+  vm-101-disk-0  /dev/zvol/threeamigos/proxmox/vm-101-disk-0  50G
+EOF
+    cat > "$prestate/luns/iqn.2026-02.local.stewie:threeamigos" <<'EOF'
+  lun0 block/vm-100-disk-0 (rw) oops
+  lun5 block/vm-101-disk-0 (rw) oops
+EOF
+    _std_acl_prestate "$prestate"
+
+    local result rc=0
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "$prestate" "" threeamigos "$mapdir") || rc=$?
+
+    # Both mappings count as "already" (no save/rescan), but the missing
+    # grants are healed at the map-recorded indexes.
+    if [[ "$rc" -eq 0 ]] \
+        && [[ "$result" == *"CALLS:[]"* ]] \
+        && [[ "$result" == *"[lun0 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"[lun5 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"using map-recorded LUN 0 from $mapdir/iscsi-state.json"* ]]; then
         test_pass
     else
         test_fail "rc=$rc result=$result"
@@ -404,6 +617,10 @@ test_grant_failure_fails_the_entry() {
 # ------------------------------------------------------------------
 test_recovers_with_recorded_lun_indexes
 test_refuses_when_no_recorded_index
+test_map_fallback_recovers_when_saveconfig_silent
+test_refusal_stands_when_map_silent_too
+test_foreign_host_map_is_ignored
+test_already_present_grants_heal_from_map_index
 test_idempotent_when_already_present
 test_unavailable_device_warns_and_fails
 test_grants_recovered_luns_to_existing_acls

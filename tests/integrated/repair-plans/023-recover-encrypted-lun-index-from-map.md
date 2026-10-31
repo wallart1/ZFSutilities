@@ -1,10 +1,17 @@
 # Repair Plan 023 — recover-encrypted-luns: LUN index from the pool map when saveconfig lacks it
 
 Finding: **F-042** (tests/integrated/FINDINGS.md)
-Status: **PROPOSED 2026-10-30 — awaiting user approval.** Not executed;
-the j18 journey proceeds via the documented keys-loaded-tick workaround
-(reconcile rebuilds at the map-recorded indexes, recover's re-run heals
-the grants on its already-present path).
+Status: **EXECUTED 2026-10-30 — user-approved ("Please execute repair plan
+023").** Landed as proposed: `lookup_lun_number_in_map` (same IQN scoping
+law as the saveconfig lookup) + `resolve_lun_number` resolver used by both
+the recovery and already-present grant-heal paths; the map is resolved once
+per run via `newest_iscsi_state_map`, and a map generated on another host
+is ignored with a WARN (the reconcile site-identity rule). The no-index
+FATAL was reworded to point at the map and the `.pre-start` backup instead
+of the unactionable conf-entry advice. Unit suite red-proven (4 new tests
+failing on the pre-fix script) then green; j16 S8 and j18 S16 gates
+flipped to assert the healed path (journey rerun pending). This file keeps
+the original proposal below for traceability.
 
 ## Root cause
 

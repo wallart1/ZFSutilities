@@ -1327,3 +1327,61 @@ nag only). Guests of the green runs destroyed; PREEXISTING.md unchanged
   Uncommitted tail on 4c61e08: the journey, the driver list, the
   three docs surfaces, FINDINGS F-042/F-043, repair-plan 023, and the
   repair-vm-disk-refs mode fix.
+
+## 2026-10-30 — Repair plan 023 executed: recover-encrypted-luns map fallback (F-042)
+
+- Executed the user-approved repair plan 023 verbatim (no plan edits).
+  `bin/iscsi-recover-encrypted-luns` now resolves each encrypted LUN's
+  index from the newest pool state map when saveconfig.json is silent —
+  same IQN scoping law as the saveconfig lookup, so orphan targets under
+  a different prefix still cannot influence the slot. New pieces:
+  `lookup_lun_number_in_map` (reads `targets.<iqn>.luns`), a
+  `resolve_lun_number` resolver used by BOTH the recovery path and the
+  already-present grant-heal path, and a once-per-run map resolution via
+  `newest_iscsi_state_map` (the same locator reconcile uses). A map
+  generated on another host is ignored with a WARN (reconcile's
+  site-identity rule). The no-index FATAL was reworded to point at the
+  map + the `.pre-start` boot backup instead of the unactionable
+  "fix the conf entry" advice; the never-guess refusal stands verbatim
+  when neither authority records an index.
+- Latent defect fixed in the same lines (found during implementation):
+  `lun_num=$(lookup_lun_number ...)` under `set -e` could abort the
+  whole script silently on an unparseable saveconfig (python traceback
+  swallowed by `2>/dev/null`, rc 1 propagating through the assignment).
+  Both lookup call sites now carry `|| lun_num=""`, so a corrupt
+  saveconfig degrades to the honest per-entry FATAL instead of a silent
+  mid-loop abort.
+- Unit suite: 4 new tests (map-hit recovery at recorded indexes with the
+  INFO naming the map source, map-miss refusal with the reworded FATAL,
+  foreign-host map ignored, already-present grant heal at the
+  map-recorded index). Red-proven first (exactly the 4 failed on the
+  pre-fix script, 8 old tests still green), then 12/12 green after the
+  fix. Runner gained zfs/zpool mocks feeding a pool-map fixture and
+  stderr capture (LOG block) for the message-text assertions.
+- Journey gates flipped to the healed path: j18 S16's "recover dead-ends
+  after a keys-pending fence save" gate now asserts the direct
+  map-fallback recovery (both LUNs mapped, Recovery complete, no FATAL),
+  the keys-loaded tick gate renamed to the convergence proof, header
+  bullet + summary updated. j16 S8's "recover honestly refuses" gate
+  (same map-populated scenario shape — the corrupt-authority heal)
+  flipped to assert the map-fallback rebuild at LUNs 1 and 3, and its
+  follow-on reconcile step now asserts the no-drift agreement ("No
+  target-side changes needed"); S8b keeps reconcile's own map-driven
+  rebuild coverage. j15 unaffected (saveconfig intact in its arcs — the
+  ceremony helper asserts rc only). Both journeys parse via
+  `itf journey list`.
+- FINDINGS F-042 closed "accepted" per the plan's wording, with the
+  execution record and a link to repair-plan 023 (whose status header
+  now records the execution). Journey rerun (j16/j18 via dev tarball)
+  still pending — that's the row's honest tail.
+- Docs updated: two-node.md recover section (fallback step + pool-map
+  row in data structures + iscsi-lib purpose), messages/index.md
+  (reworded FATAL row + new fallback INFO + foreign-map WARN rows),
+  proxmox-integration.md (recovery narrative + manual-equivalent step 3),
+  data-structures.md (recover named as a map consumer),
+  integrated-testing.md (j18 F-042 paragraph).
+- Affected suites green in iteration (recover, strict-mode,
+  itf-lab-stages); full suite green once at phase end. PREEXISTING.md:
+  0 entries before, 0 after (the one latent defect found was fixed
+  in-cycle in the touched lines). No version bump, no changelog, no
+  commit (user cue).
