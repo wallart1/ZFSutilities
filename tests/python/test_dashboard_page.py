@@ -529,17 +529,34 @@ class TestComputeIscsiMissingLuns(unittest.TestCase):
                 self.assertIsNone(dp._compute_iscsi_missing_luns())
 
 
+class _ControlledClock:
+    """Deterministic monotonic() for the TTL-cache suites.
+
+    The getters read the clock through the module's ``time`` binding;
+    patching that binding (and the cache dict) with per-test private
+    objects makes the TTL assertions independent of wall-clock time and
+    of any state an earlier test left in the shared module caches.
+    dashboard_page uses time.monotonic() only.
+    """
+
+    def __init__(self, start=1000.0):
+        self.now = start
+
+    def monotonic(self):
+        return self.now
+
+
 class TestIscsiLunsCache(unittest.TestCase):
     """_get_iscsi_missing_luns() TTL-caches completed scans, not failures."""
 
     def setUp(self):
-        dp._iscsi_luns_cache["time"] = 0.0
-        dp._iscsi_luns_cache["value"] = []
-        self.addCleanup(self._reset)
-
-    def _reset(self):
-        dp._iscsi_luns_cache["time"] = 0.0
-        dp._iscsi_luns_cache["value"] = []
+        clock = _ControlledClock()
+        for patcher in (
+            patch.object(dp, "time", clock),
+            patch.object(dp, "_iscsi_luns_cache", {"time": 0.0, "value": []}),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_result_served_from_cache_within_ttl(self):
         with patch.object(
@@ -552,7 +569,10 @@ class TestIscsiLunsCache(unittest.TestCase):
 
     def test_failure_is_not_cached(self):
         with patch.object(dp, "_compute_iscsi_missing_luns", return_value=None) as mock_compute:
-            self.assertIsNone(dp._get_iscsi_missing_luns())
+            self.assertIsNone(
+                dp._get_iscsi_missing_luns(),
+                f"dp module {dp.__file__} (id {id(dp)}), cache {dp._iscsi_luns_cache!r}",
+            )
             self.assertIsNone(dp._get_iscsi_missing_luns())
         self.assertEqual(mock_compute.call_count, 2)
 
@@ -724,13 +744,13 @@ class TestComputeFenceFailureWarning(unittest.TestCase):
     """_compute_fence_failure_warning() warns only on a definite failed state."""
 
     def setUp(self):
-        dp._fence_cache["time"] = 0.0
-        dp._fence_cache["warning"] = None
-        self.addCleanup(self._reset)
-
-    def _reset(self):
-        dp._fence_cache["time"] = 0.0
-        dp._fence_cache["warning"] = None
+        clock = _ControlledClock()
+        for patcher in (
+            patch.object(dp, "time", clock),
+            patch.object(dp, "_fence_cache", {"time": 0.0, "warning": None}),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def _peer_stack(self, peer="tweety", local="stewie"):
         return [
@@ -821,13 +841,13 @@ class TestComputePoolIdentityWarnings(unittest.TestCase):
     """_compute_pool_identity_warnings() flags renamed/replaced pools."""
 
     def setUp(self):
-        dp._pool_identity_cache["time"] = 0.0
-        dp._pool_identity_cache["value"] = []
-        self.addCleanup(self._reset)
-
-    def _reset(self):
-        dp._pool_identity_cache["time"] = 0.0
-        dp._pool_identity_cache["value"] = []
+        clock = _ControlledClock()
+        for patcher in (
+            patch.object(dp, "time", clock),
+            patch.object(dp, "_pool_identity_cache", {"time": 0.0, "value": []}),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def _rows(self, *specs):
         from zfs_repository import PoolRow

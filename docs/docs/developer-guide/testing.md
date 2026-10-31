@@ -664,9 +664,10 @@ launch the real asynchronous dashboard refresh (the page-switch handler
 does), and on hosts where the gather's ssh/zpool subprocesses time out
 instead of failing fast, that worker's cache writes can land inside
 later tests. The drain — not per-suite discipline — is what makes the
-TTL-cache suites deterministic; suites that inspect those caches still
-reset them in `setUp` for their own clarity, but no suite needs to worry
-about another suite's refresh threads.
+TTL-cache suites deterministic; the TTL suites additionally patch in a
+private cache dict and a controlled `monotonic()` clock per test, so
+their assertions depend on neither wall-clock time nor any shared
+module state at all.
 
 ### Python Mock Subprocess
 
