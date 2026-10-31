@@ -1385,3 +1385,171 @@ nag only). Guests of the green runs destroyed; PREEXISTING.md unchanged
   0 entries before, 0 after (the one latent defect found was fixed
   in-cycle in the touched lines). No version bump, no changelog, no
   commit (user cue).
+
+## 2026-10-31 — G5: coverage map + requirements register + campaign wrap
+
+Phase plan approved rev 2 (one revision round: j13/j14-vs-024 disclosure
+reworded, 025 ordering law, 026 blast radius + S18 tolerance invariant,
+024 refusal WARN names the sibling, F-042-window end-user headline).
+Pre-plan adjudications: journey set j16+j18+j15+j07 (+j17 via F-040);
+F-040 draft+execute in-phase; F-034/F-037 promote to proposals.
+
+- Repair-plan 024 (F-040 concurrent LIO mutators) DRAFTED + EXECUTED:
+  `zfslock_acquire_lio_mutator` added to bin/zfslockmanager (global
+  slash-free `iscsi-lio` key → flat lock, never remote-forwarded;
+  refuse-never-wait; holder named pid+script+since via
+  _zfslock_read_field; lock-manager error = fail closed); reconcile
+  acquires post-prompt → releases post-rescan (EXIT trap backstop);
+  restore-luns acquires post-saveconfig-check → releases post-rescan.
+  Sub-defects: regenerate_manifest_from_map counts ok_names (failed
+  applies skipped first) — zero names keeps the previous manifest (WARN
+  "no ensured backstores survived apply"); summary now "N of M planned"
+  per dimension (apply-truthful). Unit tests red-proven (4 fail pre-fix)
+  → green: reconcile 29/29, restore 6/6, zfslock suites green,
+  shellcheck clean. GOTCHA pinned: the restore-luns runner heredoc — a
+  bare `$1` in my source_helper override collapsed to "" at write time
+  (the suite's unquoted RUNNEREOF); escaped `\$1` fixes it (the
+  itf-harness heredoc-escape trap, now hit in a unit suite too).
+- j17 S12 gates flipped to the fence oracle (either winner; loser rc 1
+  with the sibling named, zero mutations); header + journeys/README row
+  + integrated-testing.md j17 paragraph updated; concurrency-collisions
+  gained a "Recently resolved (LIO mutator fence)" section;
+  messages/index.md rows added (both scripts' refusal WARN/FATAL, regen
+  guard wording, apply-truthful summary); two-node.md flow/safety notes
+  on both mutators.
+- tests/integrated/REQUIREMENTS.md created (R-01..R-09 seeded; status
+  values; maintenance rules). developer-guide/itf-coverage.md created +
+  mkdocs nav (ITF Coverage Map); gap rows two (two-node interrupted
+  upgrade w/ keys pending; uninstall/reinstall w/ live LUNs), parked
+  rows (GUI automation, OS matrix) + the closed 17-command exclusion.
+- Repair plans 025 (portal binding: create-then-replace at
+  target-creation only, ordering law from F-024: add specific BEFORE
+  removing wildcard, never portal-less mid-flight) and 026 (map grants
+  dimension: acls gain mapped_lun→tpg_lun pairs; map-fixture suites +
+  data-structures.md in blast radius; one-sided-pools tolerance
+  explicitly untouched) — both PROPOSED only, execution awaits user
+  approval.
+- Docs clarifications: boot drop-in comment (loadedness vs file://
+  availability; the one legitimate loader = a key-loading unit ordered
+  before the restore), zfs-keys.md Requirements note ("Available is not
+  loaded"), two-node.md runbook gained "Power events — what returns
+  unaided and what needs you" (stop/start after storage outage; fence
+  blind to total outage; onboot race never retries; ghost 0-GiB rows).
+- integrated-testing.md: findings section gained the terminal-states
+  rule + a Requirements-register section pointing at the coverage map.
+- Journeys (fresh runs — bases held only templates, no --rerun
+  possible): j17 LAUNCHED (run-20261030-232609) to verify 024's S12
+  fence live; queue: j16 (plan-023 gates + 024 regression), j18
+  (plan-023 gates; F-043 verified status), j15 (final-tree record), j07
+  (regression). Not rerun (disclosed in the phase plan): j13/j14
+  (single-mutator shapes; 024's uncontended lock changes nothing;
+  reconcile re-proven by j16/j17), j01–j06/j08–j12 (paths untouched;
+  j05 lab flow proven current via composition).
+- Pending at this note: FINDINGS triage rows (after greens), README
+  roadmap 3.9 → complete + layout row, mkdocs build, full suite once,
+  PREEXISTING re-read, final report with the F-042-window headline
+  (plan 023 in the next deploy closes the fence-tick window; the P6
+  exercise's post-boot recovery runs clean end-to-end).
+
+### G5 addendum — j16 fix loop (fence-timer race + resource lesson)
+
+- j16 fresh run 1 died at P2P first-connect (publickey denied) and rerun
+  2 at install-two-node's BatchMode ssh check — both storage→compute ssh
+  over the P2P link. ROOT CAUSE (partial): I had left j17's green-run
+  guests (8001 pair) running while j16 cloned its own pair — 32 GB of
+  guests across the two bases; destroying the 8001 pair fixed the ssh
+  flakiness. STANDING RULE (already G2/G4 practice, now re-earned):
+  destroy each journey's guests as soon as its run is green, BEFORE the
+  next journey's fresh clone.
+- Runs 3 and 4 then failed REPRODUCIBLY at j16 S7b ("setup rebuilds +
+  offers reconcile"): the compute guest's always-on 5-min fence timer
+  (check-vm-disk-paths --recover) can land INSIDE the scenario's
+  operator-paced window (wipe → restore-refusal → setup's detection) —
+  its ssh reconcile heals the LUN tree before setup's detector runs, so
+  "No post-restore signature found" and the offer never appears. Proven
+  live: a tick during the investigation rebuilt all 4 LUNs + 2 ACLs
+  unattended (with 024's new "N of M planned" counts in its journal
+  output). The G2-era runs never collided — timing luck. JOURNEY FIX
+  (scenario hygiene, harness-side): j16 parks the fence timer
+  (systemctl stop …timer, INFO step) before S6 and restarts + asserts it
+  before the final tick gate; the unattended heal itself stays j14/j18
+  coverage. Fix-loop run 5 GREEN: run-20261031-031917 (165/0/28) with
+  the plan-023 flipped S8 gate ("recover rebuilds from the map when
+  saveconfig is silent" + "reconcile agrees") passing live.
+- All j16-run guests destroyed post-green (both pairs).
+
+### G5 final — journey ladder + gates (2026-10-31)
+
+- j18 fix loop: first rerun failed at "recover re-run" — a TRANSIENT
+  luns-ls false negative made recover FATAL against its own mapping
+  ("another backstore may hold that index" while the tree was intact;
+  proven live). Fixed in-cycle: on a refused LUN create, recover
+  re-queries by name (F-044; red-proven by temporary revert, suite
+  13/13; mock gained one-shot transient-listing + real index-collision
+  refusal). Also parked j18's ceremony-window fence timer (same race
+  class as j16: an ambient tick with keys loaded pre-mapped vm-202-disk-0
+  under recover's own run). Rerun GREEN: run-20261031-065358 (162/0/30).
+- j15 GREEN first try: run-20261031-082313 (218/0/28) — the final-tree
+  record. j07 GREEN: run-20261031-095651 (45/0/4). Every journey's
+  guests destroyed post-green; bases clean.
+- FINDINGS: F-042 rerun-verified (both run ids recorded), F-043 verified,
+  F-044 filed + fixed in-cycle + verified; every row F-001..F-044 now in
+  a terminal state; guidelines carry the disposition rule. REQUIREMENTS
+  register R-01..R-09; repair plans 025/026 PROPOSED (await user
+  approval); roadmap 3.9 → complete (G5 recorded).
+- Gates: shellcheck clean (7 touched scripts + 3 journeys); docs site
+  builds clean; FULL SUITE: 107 suites — all bash suites green; the
+  python suite carries 3 test failures OUT of G5's blast radius (2×
+  alignment geometry, 1× e2e backup-prune checkagainst prompt) —
+  isolation-stable, no G5 change touches python/payload code, suite was
+  green at d127c79 yesterday; both recorded in PREEXISTING.md (2 entries
+  remain). Disclosed in the G5 report.
+- Headline numbers: 27 files — 22 modified (698 insertions / 68
+  deletions) + 5 new (354 lines): ~1,052 insertions total. No version
+  bump, no changelog, no commit (user cue). P6 next, on cue.
+
+### Development-cycle wrap-up (2026-10-31, frozen)
+
+- Step 1 — both PREEXISTING entries resolved, file now empty of entries:
+  - e2e backup-prune: root cause was NOT a stray dataset — the host
+    GUI config (v31, newer than this tree's v30) had auto-DERIVED
+    checkagainst rows mapping dailybackup zfstest1↔zfstest2/zfstest1,
+    so the removal gate correctly stopped prompting. Structural fix:
+    the e2e pytest front ends now run payloads hermetically —
+    `pin_payload_env()` in e2e_support pins `ZFSCONFIG_PATH` at a
+    harness-owned fixture (test pools + DEFAULT_RETENTION + no
+    checkagainst rows; legacy fallback only names production pools)
+    and `ZFSUTILITIES_RUN_NEXTSNAP_PREFIX` at a per-test dir. The
+    second pin fixed a sibling failure the first full-module rerun
+    exposed: a leftover /run nextsnap file made orch-zfssend hang on a
+    second prompt. Both modules 24/24 under sudo; module runtime
+    6:48 → 1:54 (watchdog stalls gone). Guest driver (j11) untouched —
+    runs unpytested, guest fresh-install config already satisfies the
+    premise.
+  - alignment: proven leak — GDK_DPI_SCALE=2 reproduced the G5 failure
+    class through the "private" Xvfb (GTK font metrics arrive via env
+    + the ambient session bus, which Xvfb does not fence). Fix:
+    `_scrub_ambient_gtk_environment()` in alignment_realized_check.py
+    drops GDK_SCALE/GDK_DPI_SCALE/GTK_THEME/GTK_MODULES/DBUS_*/XDG_RUNTIME_DIR
+    before Gtk binds. Hostile-env run now passes.
+- Step 2 — ruff check + documented shellcheck command both clean; ruff
+  format fixed one file. Line-length sweep: wrapped all token-splittable
+  and double-quoted-token overages (bin/, lib/, journeys j17/j18, six
+  test suites); message texts byte-identical (log_msg joins args).
+  Deliberately left >100: single-quoted printf formats (JSON/golden),
+  heredoc journal fixtures, embedded ssh/awk payload strings in
+  journeys/common.sh — unwrappable without changing bytes.
+- Step 3 — added direct fence-API unit tests (test-zfslockmanager:
+  acquire/free-tree, refusal naming holder, empty-name rc=2; uses
+  clear/get_test_log_file idioms) and an alignment hostile-env
+  regression test (GDK_DPI_SCALE=2 must not change the verdict). All
+  seven wrap-affected suites rerun green.
+- Steps 5-6 — testing.md documents the hermetic payload env; docs
+  integrity 23/23; site rebuilt. FULL SUITE (user, no soaks): 107
+  bash suites + python 4227 passed / 0 failed (18 root-tier e2e skips
+  are by design; that tier verified 24/24 under sudo earlier in the
+  session). NOTE: `sudo tests/run-tests` cannot launch the python leg
+  (root's python lacks pytest-xdist → `-n` rejected); the canonical
+  gate runs as the user — run the sudo e2e leg separately.
+- Step 7 — tree FROZEN here: 33 modified + 5 untracked files, no
+  commit/version/changelog (user cue, per Hard Rules).

@@ -126,7 +126,8 @@ recover_map_file=$(newest_iscsi_state_map || true)
 if [[ -n "$recover_map_file" ]]; then
     map_host=$(read_json_string_field "$recover_map_file" "host")
     if [[ -n "$map_host" && "$map_host" != "$my_host" ]]; then
-        log_msg "WARN: Newest pool map was generated on $map_host, not this host ($my_host) — ignoring it for the LUN-index fallback"
+        log_msg "WARN: Newest pool map was generated on $map_host, not this host ($my_host)" \
+                "— ignoring it for the LUN-index fallback"
         recover_map_file=""
     fi
 fi
@@ -168,7 +169,8 @@ resolve_lun_number() {
     fi
     lun_num=$(lookup_lun_number_in_map "$bsname" "$target_iqn") || lun_num=""
     if [[ -n "$lun_num" ]]; then
-        log_msg "INFO:   $bsname — no LUN index in $savefile; using map-recorded LUN $lun_num from $recover_map_file"
+        log_msg "INFO:   $bsname — no LUN index in $savefile; using map-recorded LUN $lun_num" \
+                "from $recover_map_file"
     fi
     return 0
 }
@@ -240,10 +242,23 @@ while IFS=: read -r name device target; do
     if [[ "$mapped_present" != true ]]; then
         if ! targetcli "/iscsi/${full_iqn}/tpg1/luns" \
                 create "/backstores/block/${name}" "$lun_num" >/dev/null 2>&1; then
-            log_msg "FATAL:   $name — could not map LUN $lun_num on $full_iqn"
-            log_msg "FATAL:     (another backstore may hold that index; inspect with show-lun-map)"
-            failed=$((failed + 1))
-            continue
+            # A create can refuse because the mapping already exists —
+            # including when the presence read above was a transient
+            # false negative (live-observed: a re-run's single luns-ls
+            # read came back incomplete, the create collided with the
+            # very mapping being recovered, and the FATAL below wrongly
+            # pointed at a foreign holder). Re-query by name before
+            # declaring failure; the verify block below owns the final
+            # say either way.
+            if ! targetcli "/iscsi/${full_iqn}/tpg1/luns" ls 2>/dev/null \
+                | grep -q "block/${name}"; then
+                log_msg "FATAL:   $name — could not map LUN $lun_num on $full_iqn"
+                log_msg "FATAL:     (another backstore may hold that index;" \
+                    "inspect with show-lun-map)"
+                failed=$((failed + 1))
+                continue
+            fi
+            log_msg "INFO:   $name — create refused but the mapping is present (already existed)"
         fi
     fi
 

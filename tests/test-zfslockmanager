@@ -1301,6 +1301,66 @@ test_remote_poll_interval_fallback() {
 }
 
 # ---------------------------------------------------------------------------
+# LIO mutator fence — reconcile-iscsi-state and iscsi-restore-luns share the
+# global iscsi-lio lock; zfslock_acquire_lio_mutator is its acquire-or-refuse
+# front end (the caller-level refusal paths are exercised by
+# test-reconcile-iscsi-state and test-iscsi-restore-luns with planted locks).
+# ---------------------------------------------------------------------------
+
+test_lio_mutator_fence() {
+    echo ""
+    echo "=== LIO Mutator Fence Tests ==="
+    cleanup_test_locks
+
+    test_start "LIO mutator fence acquires the global iscsi-lio lock"
+    if zfslock_acquire_lio_mutator "unit-fence" "test action" >/dev/null 2>&1; then
+        assert_equals "iscsi-lio" "$(_zfslock_read_field "$zfslock_id" "dataset")"
+    else
+        test_fail "acquire refused on a free lock tree"
+    fi
+    zfslock_release "$zfslock_id"
+
+    test_start "LIO mutator fence refuses naming the holder"
+    _bg_lock_start "iscsi-lio" "w" "background fence holder" 3600
+    local bg_rc out_rc
+    bg_rc=$(_bg_lock_wait_rc)
+    if [[ "$bg_rc" -ne 0 ]]; then
+        _bg_lock_kill
+        test_fail "Background lock could not be acquired (rc=$bg_rc)"
+        cleanup_test_locks
+        return
+    fi
+    clear_test_log_file
+    out_rc=0
+    zfslock_acquire_lio_mutator "unit-fence" "test action" </dev/null >/dev/null 2>&1 \
+        || out_rc=$?
+    _bg_lock_kill
+    local log_file
+    log_file=$(get_test_log_file)
+    if [[ $out_rc -eq 1 ]] \
+        && grep -q "WARN: unit-fence: another iSCSI mutator is running —" "$log_file" \
+        && grep -q "bg_lock" "$log_file" \
+        && grep -q "FATAL: unit-fence: refusing to test action concurrently" "$log_file"; then
+        test_pass
+    else
+        test_fail "rc=$out_rc (want refusal naming the holder)"
+    fi
+
+    test_start "LIO mutator fence requires a script name"
+    clear_test_log_file
+    out_rc=0
+    zfslock_acquire_lio_mutator "" </dev/null >/dev/null 2>&1 || out_rc=$?
+    log_file=$(get_test_log_file)
+    if [[ $out_rc -eq 2 ]] \
+        && grep -q "WARN: zfslock_acquire_lio_mutator requires a script name" "$log_file"; then
+        test_pass
+    else
+        test_fail "rc=$out_rc (want 2 with the WARN)"
+    fi
+    cleanup_test_locks
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1324,5 +1384,6 @@ test_source_helper_context_declares_global_arrays
 test_remote_acquire_and_release
 test_remote_conflict
 test_remote_poll_interval_fallback
+test_lio_mutator_fence
 
 test_summary

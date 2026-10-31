@@ -443,7 +443,8 @@ j18_compute_power_events_main() {
         ck_after="$(j18_prefix_cksum "$c_ip" "$vm" "${base_lines[$idx]}")"
         if [[ "$ck_after" == "${base_ck[$idx]}" ]]; then
             itf_step pass "writer resumed + prefix intact [s15/VM $vm]" \
-                "log grew past the baseline; $(cat "$ITF_RUN_DIR/workload-s15-resumed-${vm}.gaps")" \
+                "log grew past the baseline; \
+$(cat "$ITF_RUN_DIR/workload-s15-resumed-${vm}.gaps")" \
                 "(the gap = the reboot window); pre-event bytes unchanged"
         else
             itf_step fail "writer resumed + prefix intact [s15/VM $vm]" \
@@ -716,6 +717,26 @@ j18_compute_power_events_main() {
         return 1
     fi
 
+    # Park the fence timer for the ceremony + first-recover window: with
+    # keys loaded, an ambient 5-min tick's reconcile would race the
+    # operator-paced recover and pre-map LUNs (live-observed: vm-202-disk-0
+    # "already present" under recover's own run), stealing the very shape
+    # the gate proves. This journey drives its ticks manually; the timer
+    # restarts right after the recover gate.
+    # shellcheck disable=SC2029  # expansions run on the compute guest
+    if itf_guest_exec "$c_ip" \
+            "systemctl stop zfsutilities-iscsi-fence.timer" \
+            > "$ITF_RUN_DIR/s16-fence-parked.log" 2>&1 \
+        && ! itf_guest_exec "$c_ip" \
+            "systemctl is-active --quiet zfsutilities-iscsi-fence.timer"; then
+        itf_step info "fence timer parked for the ceremony window [s16]" \
+            "restarted after the first-recover gate"
+    else
+        itf_step fail "fence timer parked for the ceremony window [s16]" \
+            "see s16-fence-parked.log"
+        return 1
+    fi
+
     # The encrypted tail: the power-off unloaded the keys — and the
     # ceremony exercises the F-042 fix.  The fence's RETURN tick ran
     # reconcile while keys were pending, and its trailing save rewrote
@@ -752,6 +773,13 @@ j18_compute_power_events_main() {
             "rc=$rc — unexpected shape, see $(basename "$log")"
         return 1
     fi
+
+    # Restart the parked fence timer — the convergence proof below uses
+    # the journey's own manual ticks, and the timer must be back for the
+    # wrap's premise.
+    # shellcheck disable=SC2029  # expansions run on the compute guest
+    itf_guest_exec "$c_ip" "systemctl start zfsutilities-iscsi-fence.timer" \
+        > "$ITF_RUN_DIR/s16-fence-restarted.log" 2>&1 || true
 
     itf_fence_tick "$c_ip" s16-keys-loaded > /dev/null 2>&1 || true
     if ! itf_wait_vm_disk_links "$c_ip" 300 101 202 \
@@ -993,7 +1021,8 @@ j18_compute_power_events_main() {
     rc=$?
     itf_artifact "s17a-remove-vm-spared" "$log"
     if [[ $rc -eq 0 ]] \
-            && grep -q "Orphaned zvols (not referenced by any VM config, will NOT be removed)" "$log" \
+            && grep -q "Orphaned zvols (not referenced by any VM config, will NOT be removed)" \
+                "$log" \
             && grep -q "vm-${J18_VM_A}-disk-0" "$log" \
             && grep -q "Pass --cleanup-orphans to remove these as well" "$log" \
             && grep -q "Aborted." "$log" \

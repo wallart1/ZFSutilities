@@ -185,6 +185,16 @@ dataset-mutating ioctl needs `CAP_SYS_ADMIN`, so mutating scenarios
 self-skip and the script verifies the host pool set is unchanged). The
 full matrix runs in the ITF guest via the `j11-payload-e2e` journey.
 
+The pytest front ends run their payloads hermetically: each test pins
+`ZFSCONFIG_PATH` at a harness-owned config (the three test pools, the
+product's default retention buckets, and no checkagainst rows covering
+the test pools) and `ZFSUTILITIES_RUN_NEXTSNAP_PREFIX` at a per-test
+state directory. Scenario outcomes therefore never depend on the
+operator GUI's live config or on leftover run-level state — the same
+premise the ITF guest's fresh-install config provides, which is why the
+standalone guest driver (`tests/integrated/e2e/payload-e2e-driver.py`)
+needs no pinning of its own.
+
 `.github/workflows/tests.yml` runs on every push and pull request: install
 dependencies, run the suite under `xvfb-run -a`, then run the
 documentation-integrity suite. A scheduled nightly job runs

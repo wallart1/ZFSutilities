@@ -333,6 +333,7 @@ itf_vmos_build() {
     mv "$gz" "$ITF_CACHE_DIR/$ITF_VMOS_NAME.raw.gz"
     itf_vmos_stamp_want "$disk_gb" > "$ITF_CACHE_DIR/$ITF_VMOS_NAME.stamp"
     itf_step pass "VM-OS image cached" \
-        "$ITF_CACHE_DIR/$ITF_VMOS_NAME.raw.gz ($(du -h "$ITF_CACHE_DIR/$ITF_VMOS_NAME.raw.gz" | awk '{print $1}'))"
+        "$ITF_CACHE_DIR/$ITF_VMOS_NAME.raw.gz \
+($(du -h "$ITF_CACHE_DIR/$ITF_VMOS_NAME.raw.gz" | awk '{print $1}'))"
     return 0
 }

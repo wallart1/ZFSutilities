@@ -299,7 +299,8 @@ itf_pvesm() {
             itf_base_exec "$base" "pvesm path $(printf '%q' "$volid")"
             ;;
         *)
-            echo "itf-guard: pvesm '$sub' refused (status and itf-volume path are the only allowed subcommands)" >&2
+            echo "itf-guard: pvesm '$sub' refused" \
+                 "(status and itf-volume path are the only allowed subcommands)" >&2
             return 22
             ;;
     esac

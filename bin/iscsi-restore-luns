@@ -26,6 +26,10 @@ unset _local_bashinit
 NODE_LIB="${NODE_LIB:-$(find_zfsutility_script node-lib.sh)}"
 source "$NODE_LIB"
 source_helper rootcheck
+# The concurrent-mutator fence (repair-plan 024 / F-040): this script and
+# reconcile-iscsi-state mutate the same LIO authorities with no mutual
+# exclusion unless both hold the global iscsi-lio lock.
+source_helper zfslockmanager
 rootcheck
 
 # iSCSI-only script — exit silently in single-node mode
@@ -40,6 +44,11 @@ fi
 
 log_msg "INFO: === Restoring missing iSCSI LUNs ==="
 echo ""
+
+# Fence before the first mutation: refuse when another LIO mutator holds
+# the global iscsi-lio lock (the refusal names the holder); the EXIT trap
+# releases on any exit path if the explicit release below is not reached.
+zfslock_acquire_lio_mutator "iscsi-restore-luns" "restore" || exit 1
 
 added_bs=0
 added_luns=0
@@ -189,5 +198,8 @@ if [[ $added_bs -gt 0 || $added_luns -gt 0 || $added_grants -gt 0 ]]; then
     log_msg "INFO: === Rescanning compute host ==="
     "$mydir/rescan-storage"
 fi
+
+# Release the fence (the EXIT trap is the backstop on any earlier exit).
+[[ -n "${zfslock_id:-}" ]] && zfslock_release "$zfslock_id" || true
 
 exit "$save_refused"

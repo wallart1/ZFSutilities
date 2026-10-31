@@ -59,6 +59,7 @@ nav:
     - Bash Logging Exceptions: 'developer-guide/bash-logging-exceptions.md'
     - Testing: 'developer-guide/testing.md'
     - Integrated Testing: 'developer-guide/integrated-testing.md'
+    - ITF Coverage Map: 'developer-guide/itf-coverage.md'
     - Lock Manager: 'developer-guide/lock-manager.md'
     - Concurrency Collisions: 'developer-guide/concurrency-collisions.md'
     - Node Configuration: 'developer-guide/two-node-config.md'

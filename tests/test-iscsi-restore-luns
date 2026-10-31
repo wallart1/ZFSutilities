@@ -25,6 +25,7 @@ _run_restore() {
     local savefile="$1"
     local prestate="$2"           # optional dir pre-seeded with live state
     local save_mock_rc="${3:-0}"  # rc of the safe-iscsi-save mock
+    local holder_script="${4:-}"  # repair-plan 024: plant a live fence holder
     local tmpdir
     tmpdir=$(mktemp -d)
     local script_copy="$tmpdir/iscsi-restore-luns"
@@ -148,23 +149,52 @@ targetcli() {
     esac
 }
 rootcheck() { true; }
+# Fence support (repair-plan 024): the script copy calls
+# `source_helper zfslockmanager`; bashinit keeps this override (its own
+# source_helper def is guarded by declare -f), handing the copy the real
+# manager pinned to a per-run lock dir with remote forwarding disabled so
+# the suite is hermetic. \$1 must stay escaped — this is an unquoted
+# heredoc, and a bare $1 collapses to empty at write time.
+source_helper() {
+    [[ "\$1" == "zfslockmanager" ]] && source "$mydir/bin/zfslockmanager"
+    return 0
+}
+export ZFSLOCK_DIR="$tmpdir/locks"
+export ZFSLOCK_REMOTE_DISABLED=1
 source "$script_copy"
 RUNNEREOF
     chmod +x "$tmpdir/runner"
 
     local main_iqn="iqn.2026-02.local.stewie:threeamigos"
     local init="iqn.2026-02.local.tweety:c7d0f1a0"
-    local calls backstores luns_main acls_main grants
-    bash "$tmpdir/runner" >/dev/null 2>&1
+    local calls backstores luns_main acls_main grants out=""
+    local holder_pid=""
+    if [[ -n "$holder_script" ]]; then
+        # exec -a puts the recorded script name in the holder's cmdline so
+        # the lock manager's stale check sees an ACTIVE lock, like a real
+        # concurrent mutator; stderr is captured this run for the WARN.
+        bash -c "exec -a ${holder_script} sleep 300" & holder_pid=$!
+        mkdir -p "$tmpdir/locks/.locks"
+        printf '{"dataset":"iscsi-lio","type":"w","pid":%s,"script":"%s","acquired":"2026-10-30T12:00:00+00:00","description":"concurrent"}\n' \
+            "$holder_pid" "$holder_script" > "$tmpdir/locks/.locks/iscsi-lio.lock"
+        bash "$tmpdir/runner" > "$tmpdir/out.log" 2>&1
+    else
+        bash "$tmpdir/runner" >/dev/null 2>&1
+    fi
     local rc=$?
+    [[ -n "$holder_pid" ]] && {
+        kill "$holder_pid" 2>/dev/null || true
+        wait "$holder_pid" 2>/dev/null || true
+    }
+    out=$(cat "$tmpdir/out.log" 2>/dev/null || true)
     calls=$(cat "$tmpdir/calls" 2>/dev/null || true)
     backstores=$(cat "$state/backstores" 2>/dev/null || true)
     luns_main=$(cat "$state/luns/$main_iqn" 2>/dev/null || true)
     acls_main=$(cat "$state/acls/$main_iqn" 2>/dev/null || true)
     grants=$(cat "$state/acls-grants/$main_iqn/$init" 2>/dev/null || true)
     rm -rf "$tmpdir"
-    printf 'CALLS:[%s]\nBACKSTORES:[%s]\nLUNS-MAIN:[%s]\nACLS-MAIN:[%s]\nGRANTS:[%s]\n' \
-        "$calls" "$backstores" "$luns_main" "$acls_main" "$grants"
+    printf 'CALLS:[%s]\nBACKSTORES:[%s]\nLUNS-MAIN:[%s]\nACLS-MAIN:[%s]\nGRANTS:[%s]\nOUT:[%s]\n' \
+        "$calls" "$backstores" "$luns_main" "$acls_main" "$grants" "$out"
     return "$rc"
 }
 
@@ -204,8 +234,33 @@ EOF
 # Tests
 # ------------------------------------------------------------------
 
+test_concurrent_mutator_refused() {
+    test_start "Concurrent LIO mutator: refusal names the holder, zero mutations (repair-plan 024)"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    touch "$tmpdir/dev100" "$tmpdir/dev101"
+    _std_saveconfig "$tmpdir/save.json" "$tmpdir"
+
+    local result rc=0
+    result=$(_run_restore "$tmpdir/save.json" "" 0 "reconcile-iscsi-state") || rc=$?
+
+    if [[ "$rc" -eq 1 ]] \
+        && [[ "$result" == *"another iSCSI mutator is running"* ]] \
+        && [[ "$result" == *"reconcile-iscsi-state (pid"* ]] \
+        && [[ "$result" == *"refusing to"* ]] \
+        && [[ "$result" != *"safe-iscsi-save"* ]] \
+        && [[ "$result" != *"rescan-storage"* ]] \
+        && [[ "$result" != *"vm-100-disk-0"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
 test_full_restore_from_empty_state() {
-    test_start "Restores backstores, LUN mappings, ACL node, and MappedLUN grants (incl. non-identity)"
+    test_start "Restores backstores, LUN mappings, ACL node, and MappedLUN grants \
+(incl. non-identity)"
     local tmpdir
     tmpdir=$(mktemp -d)
     touch "$tmpdir/dev100" "$tmpdir/dev101"
@@ -370,5 +425,6 @@ test_idempotent_rerun
 test_save_refusal_still_rescans_and_exits_1
 test_unavailable_device_skips_backstore_and_grant
 test_present_but_wrong_grant_is_not_remapped
+test_concurrent_mutator_refused
 
 test_summary

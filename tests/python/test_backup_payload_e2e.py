@@ -55,6 +55,7 @@ class TestNoPoolScenarios:
     @pytest.fixture(autouse=True)
     def _isolate_runner_state(self, tmp_path, monkeypatch):
         isolate_runner_state(monkeypatch, tmp_path)
+        e2e.pin_payload_env(monkeypatch, tmp_path)
         yield
 
     @pytest.mark.parametrize("name,fn,level,engine", NO_POOL_SCENARIOS)
@@ -68,6 +69,10 @@ class TestNoPoolScenarios:
     reason="needs root + zfstest1/2/3 online (dev container or sudo)",
 )
 class TestBackupPayloadScenarios:
+    @pytest.fixture(autouse=True)
+    def _pin_payload_env(self, tmp_path, monkeypatch):
+        e2e.pin_payload_env(monkeypatch, tmp_path)
+
     @pytest.mark.parametrize("name,fn,level,engine", BACKUP_SCENARIOS)
     def test_backup_scenario(self, name, fn, level, engine):
         if level == "mutation" and not e2e.mutation_capable():

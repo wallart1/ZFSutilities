@@ -144,6 +144,7 @@ def isolate_runner_state(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(backup_runner, "_truncate_rsync_log", lambda: None)
     monkeypatch.setattr(session_log, "LogIndex", _StubLogIndex)
+    e2e.pin_payload_env(monkeypatch, tmp_path)
 
 
 class TestBackupRunnerMechanics:
@@ -220,6 +221,10 @@ OFFSITE_SCENARIOS = [
     reason="needs root + zfstest1/2/3 online (dev container or sudo)",
 )
 class TestOffsitePayloadScenarios:
+    @pytest.fixture(autouse=True)
+    def _pin_payload_env(self, tmp_path, monkeypatch):
+        e2e.pin_payload_env(monkeypatch, tmp_path)
+
     @pytest.mark.parametrize("name,fn,level,engine", OFFSITE_SCENARIOS)
     def test_offsite_scenario(self, name, fn, level, engine):
         if level == "mutation" and not e2e.mutation_capable():

@@ -44,9 +44,21 @@ support intact without any of the boot-time races.
 ## Requirements
 
 - A secure location for ZFS key files. A LUKS-encrypted USB drive is a common
-  choice, but any path the operator can make available at boot time will work.
+  choice, but any path the operator can read when needed will work.
 - Root access to the storage node.
 - The `cryptsetup` package installed if you use LUKS.
+
+!!! note "Available is not loaded"
+    Wherever the key files live, nothing loads them at boot — the old
+    boot-time loading automation was deliberately removed (see above). Even a
+    `file://` keylocation on a non-encrypted filesystem only makes the key
+    file *readable*; keys stay unloaded until the operator runs the load
+    step, and every keys-absent boot still journals the expected
+    post-restore verification FAILED for the encrypted LUNs. The one
+    legitimate boot-time loader is a key-loading unit you author yourself,
+    ordered before the iSCSI restore (`After=zfs-import-cache.service`,
+    running `zfs load-key -a`) — the boot drop-in's own "separate
+    key-loading unit" clause.
 
 ## Preparing a LUKS-encrypted USB key store (optional)
 

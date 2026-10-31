@@ -489,6 +489,16 @@ documented semantics (`two-node-config.md`): every keys-absent boot
 journals `post-restore verification FAILED` with DRIFT detail until the
 key ceremony completes.
 
+- **Scenario windows park the compute fence timer.** Operator-paced
+  recovery arcs (j16's loss scenarios, j18's key ceremony) assume nothing
+  heals before the operator surface under test shows its evidence — but
+  the always-on 5-minute fence tick can land inside the window and its
+  ssh reconcile heals the tree first (live-proven: a tick rebuilt every
+  LUN mid-scenario). Those journeys `systemctl stop
+  zfsutilities-iscsi-fence.timer` for their mutation-sensitive stretch
+  (an INFO step records it) and restart + assert it before their final
+  tick gate; the unattended heal itself is j14/j18 coverage.
+
 The **j16-iscsi-total-loss** journey runs the LIO-loss scenario catalog
 on the same lab (keys stay loaded throughout — the storage guest is
 never rebooted): S6 destroys every live mapping+backstore while the
@@ -549,12 +559,10 @@ LUN and the zvol layer refuses it while LIO holds the device
 ("dataset is busy") — the campaign's stale-live-LUN premise is
 structurally fenced at the zvol layer (F-041), so the journey records
 the fence and skips the sweep; and S12 runs reconcile and
-`iscsi-restore-luns` concurrently over the same wiped tree, recording
-live that no serialization or safe refusal exists between the two
-mutators (F-040: restore-luns silently skips its collisions while
-reconcile FATALs on its own and installs a comment-only manifest that
-its trailing save then refuses — benign only when the sibling's save
-heals it) before a clean sequential re-run converges the tree.
+`iscsi-restore-luns` concurrently over the same wiped tree, proving the
+global `iscsi-lio` fence live (repair-plan 024, F-040): the second
+mutator is refused before it can mutate, its WARN naming the running
+sibling by pid and command, and the sequential re-run converges the tree.
 
 The **j18-compute-power-events** journey runs the compute & power-event
 catalog on the same lab (keys stay loaded through S15; S16's storage
@@ -612,6 +620,24 @@ campaign, recorded in the finding's status cell), shipped to the guest
 as a dev tarball, and verified by
 rerunning the affected journeys. Product bugs are never fixed inside a
 guest.
+
+Every finding ends in exactly one terminal state: fixed in-cycle,
+repair-plan executed + journey-verified, DOCUMENTED (product-truth rows
+→ repo docs; UX/future-direction rows → the
+[requirements register](#requirements-register)), accepted/waived by the
+user, or superseded. No row stays open past a campaign wrap.
+
+## Requirements register
+
+UX gaps and design directions that the journeys prove — but that are
+not defects to fix now — are seeded into
+`tests/integrated/REQUIREMENTS.md` as numbered rows (R-nn) with their
+source scenario and a status (`open` → promoted to a repair plan →
+addressed, or declined). The register is the durable input for future
+coding; promotion from a row to a plan is the owner's call. Journey
+coverage by product surface and node mode is tracked in the
+[ITF Coverage Map](itf-coverage.md); gap rows there are candidates only,
+built when a real need names them.
 
 ## Testing the framework itself
 

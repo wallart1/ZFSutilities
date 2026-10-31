@@ -130,6 +130,13 @@ targetcli() {
             local tpgdir="\$1"
             local iqn="\${tpgdir#/iscsi/}"
             iqn="\${iqn%/tpg1/luns}"
+            # LUNS_TRANSIENT: the FIRST luns-ls read comes back empty even
+            # though the state file exists (the live false-negative that
+            # made a re-run FATAL against its own mapping).
+            if [[ -n "\${LUNS_TRANSIENT:-}" && ! -f "$state/.luns-blind" ]]; then
+                touch "$state/.luns-blind"
+                return 0
+            fi
             [[ -f "$state/luns/\$iqn" ]] && cat "$state/luns/\$iqn"
             ;;
         "/iscsi/"*"/tpg1/luns create "*)
@@ -137,6 +144,9 @@ targetcli() {
             local iqn="\${tpgdir#/iscsi/}"
             iqn="\${iqn%/tpg1/luns}"
             local nm="\${ref#/backstores/block/}"
+            # rtslib refuses a create whose index is already mapped.
+            [[ -f "$state/luns/\$iqn" ]] && grep -q " lun\$idx " "$state/luns/\$iqn" \\
+                && return 1
             echo "  lun\$idx block/\$nm (rw) oops" >> "$state/luns/\$iqn"
             ;;
         "/iscsi/"*"/tpg1/acls/"*" ls")
@@ -153,7 +163,8 @@ targetcli() {
             local init="\${aclpath##*/}"
             [[ " \${GRANT_FAIL:-} " == *" \$ml "* ]] && return 1
             mkdir -p "$state/acls-grants/\$iqn"
-            echo "  o- mapped_lun\$ml ....... [lun\$tp block/vm (rw)]" >> "$state/acls-grants/\$iqn/\$init"
+            echo "  o- mapped_lun\$ml ....... [lun\$tp block/vm (rw)]" \
+                >> "$state/acls-grants/\$iqn/\$init"
             ;;
         "/iscsi/"*"/tpg1/acls ls")
             local tpgdir="\$1"
@@ -270,6 +281,40 @@ EOF
 # Tests
 # ------------------------------------------------------------------
 
+test_transient_listing_false_negative() {
+    test_start "A transient luns-ls false negative on a re-run is tolerated (no misleading FATAL)"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    mkdir -p "$confdir"
+    touch "$tmpdir/dev101"
+    printf 'vm-101-disk-0:%s/dev101:threeamigos\n' "$tmpdir" \
+        > "$confdir/iscsi-encrypted-luns.conf"
+    _std_saveconfig "$tmpdir/save.json"
+    # Pre-state: the re-run shape — backstore exists, the mapping exists at
+    # the saveconfig-recorded index, but the first luns-ls read is blind.
+    local pre="$tmpdir/pre"
+    mkdir -p "$pre/luns"
+    printf '  vm-101-disk-0  %s/dev101  50G\n' "$tmpdir" > "$pre/backstores"
+    printf '  lun5 block/vm-101-disk-0 (rw) oops\n' \
+        > "$pre/luns/iqn.2026-02.local.stewie:threeamigos"
+
+    local result rc=0
+    result=$(LUNS_TRANSIENT=1 _run_recover "$confdir" "$tmpdir/save.json" "$pre") || rc=$?
+
+    if [[ "$rc" -eq 0 ]] \
+        && [[ "$result" == *"create refused but the mapping is present"* ]] \
+        && [[ "$result" != *"could not map LUN 5"* ]] \
+        && [[ "$result" == *"mapped at LUN 5"* ]] \
+        && [[ "$result" == *"safe-iscsi-save"* ]] \
+        && [[ "$result" == *"rescan-storage"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
 test_recovers_with_recorded_lun_indexes() {
     test_start "Recovers LUNs at recorded indexes, ignoring orphan-target indexes"
     local tmpdir
@@ -345,8 +390,10 @@ test_map_fallback_recovers_when_saveconfig_silent() {
         && [[ "$result" == *"LUNS-ORPHAN:[]"* ]] \
         && [[ "$result" == *"safe-iscsi-save"* ]] \
         && [[ "$result" == *"rescan-storage"* ]] \
-        && [[ "$result" == *"no LUN index in $tmpdir/save.json; using map-recorded LUN 0 from $mapdir/iscsi-state.json"* ]] \
-        && [[ "$result" == *"no LUN index in $tmpdir/save.json; using map-recorded LUN 5 from $mapdir/iscsi-state.json"* ]]; then
+        && [[ "$result" == *"no LUN index in $tmpdir/save.json; using map-recorded LUN 0 \
+from $mapdir/iscsi-state.json"* ]] \
+        && [[ "$result" == *"no LUN index in $tmpdir/save.json; using map-recorded LUN 5 \
+from $mapdir/iscsi-state.json"* ]]; then
         test_pass
     else
         test_fail "rc=$rc result=$result"
@@ -378,7 +425,8 @@ test_refusal_stands_when_map_silent_too() {
         && [[ "$result" != *"safe-iscsi-save"* ]] \
         && [[ "$result" == *"has no recorded LUN index"* ]] \
         && [[ "$result" == *"or in the pool state map"* ]] \
-        && [[ "$result" != *"Not guessing an index (auto-assignment can collide or pick the wrong slot when orphan targets exist). Check with"* ]]; then
+        && [[ "$result" != *"Not guessing an index (auto-assignment can collide or pick \
+the wrong slot when orphan targets exist). Check with"* ]]; then
         test_pass
     else
         test_fail "rc=$rc result=$result"
@@ -435,7 +483,8 @@ EOF
     _std_acl_prestate "$prestate"
 
     local result rc=0
-    result=$(_run_recover "$confdir" "$tmpdir/save.json" "$prestate" "" threeamigos "$mapdir") || rc=$?
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "$prestate" "" threeamigos "$mapdir") \
+        || rc=$?
 
     # Both mappings count as "already" (no save/rescan), but the missing
     # grants are healed at the map-recorded indexes.
@@ -644,5 +693,6 @@ test_never_prints_qm_start_commands() {
     test_pass
 }
 test_never_prints_qm_start_commands
+test_transient_listing_false_negative
 
 test_summary

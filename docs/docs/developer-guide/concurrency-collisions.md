@@ -376,6 +376,29 @@ snapshot.
   `getcommonsnap`.
 * `tests/test-zfs-send-receive-dryrun` checks the lock-before-snapshot ordering.
 
+## Recently resolved (LIO mutator fence)
+
+The two iSCSI recovery mutators — `reconcile-iscsi-state` and
+`iscsi-restore-luns` — share three authorities (the live LIO tree,
+`saveconfig.json`, and the expected-backstores manifest) with no mutual
+exclusion. They now hold the lock manager's global `iscsi-lio` `w` lock
+for their whole mutate+persist extent (`zfslock_acquire_lio_mutator`).
+The key is deliberately slash-free, so the hierarchy walk treats it as a
+flat lock and the two-node forwarder ignores it; the semantics are
+refuse, never wait — the refusal WARN names the running sibling by pid
+and command, and a lock-manager error also refuses (fail closed). Two
+residue classes died with the fence: reconcile's manifest regen can no
+longer install a comment-only manifest when every apply action failed,
+and its summary now prints apply-truthful counts (`created: N of M`)
+instead of plan totals. Found live by the j17 journey (F-040); verified
+by unit suites and the journey's fenced-race gate.
+
+* `tests/test-reconcile-iscsi-state`,
+  `tests/test-iscsi-restore-luns` — refusal, manifest guard, counts.
+* The fence is scoped to the two recovery mutators only; the everyday
+  LIO writers (`new-vm-disk`, `remove-vm-disk`, `setup-iscsi-targets`,
+  …) are unchanged — widening it is a separate decision.
+
 ## Related files and tests
 
 - `zfslockmanager` — lock implementation.

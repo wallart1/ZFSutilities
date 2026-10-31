@@ -192,6 +192,28 @@ j16_iscsi_total_loss_main() {
         lun_names+=("$name")
     done <<< "$inv"
 
+    # Park the compute fence timer for the scenario stretch. Every
+    # scenario here walks an operator-paced arc whose evidence window
+    # (wipe → detect → recover) the always-on 5-minute tick would
+    # otherwise close: a tick landing inside the window runs the fence's
+    # ssh reconcile and heals the tree before the operator surface under
+    # test (setup's offer, restore-luns' refusal) gets to show it — the
+    # unattended heal itself is j14/j18 coverage, not this journey's.
+    # Restarted before the final tick gate.
+    # shellcheck disable=SC2029  # expansions run on the compute guest
+    if itf_guest_exec "$c_ip" \
+            "systemctl stop zfsutilities-iscsi-fence.timer" \
+            > "$ITF_RUN_DIR/j16-fence-parked.log" 2>&1 \
+        && ! itf_guest_exec "$c_ip" \
+            "systemctl is-active --quiet zfsutilities-iscsi-fence.timer"; then
+        itf_step info "fence timer parked for the scenario stretch" \
+            "operator-paced arcs; restarted before the final tick gate"
+    else
+        itf_step fail "fence timer parked for the scenario stretch" \
+            "see j16-fence-parked.log"
+        return 1
+    fi
+
     # ==================================================================
     # S6 — ALL backstores+mappings destroyed, OS files left recording
     #      them: detector WARN, verifier DRIFT, map-driven rebuild
@@ -1409,6 +1431,21 @@ j16_iscsi_total_loss_main() {
             "all three config files present; ${#lun_names[@]} LUNs live"
     else
         itf_step fail "wrap state sane" "see wrap-state.log"
+        return 1
+    fi
+    # Restart the fence timer parked before S6 and confirm the staging
+    # premise (enabled + active) is restored for the final tick gate.
+    # shellcheck disable=SC2029  # expansions run on the compute guest
+    if itf_guest_exec "$c_ip" \
+            "systemctl start zfsutilities-iscsi-fence.timer" \
+            > "$ITF_RUN_DIR/j16-fence-restarted.log" 2>&1 \
+        && itf_guest_exec "$c_ip" \
+            "systemctl is-active --quiet zfsutilities-iscsi-fence.timer"; then
+        itf_step pass "fence timer restarted after the scenarios" \
+            "the staging premise (enabled + active) is restored"
+    else
+        itf_step fail "fence timer restarted after the scenarios" \
+            "see j16-fence-restarted.log"
         return 1
     fi
     if itf_fence_tick "$c_ip" j16-final; then

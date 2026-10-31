@@ -926,6 +926,52 @@ zfslock_acquire() {
     return 0
 }
 
+# Acquire the global LIO-mutator fence, or refuse naming the holder.
+# Purpose-built API for the iSCSI recovery mutators (reconcile-iscsi-state,
+# iscsi-restore-luns) that share three authorities — the live LIO tree,
+# saveconfig.json, and expected-backstores.txt — with no mutual exclusion
+# (repair-plan 024 / F-040). The key is deliberately slash-free: the
+# hierarchy walk treats it as a flat lock and the two-node forwarder ignores
+# it (it matches no configured pool; LIO mutators run on the storage host).
+# Semantics: refuse, never wait — the caller surfaces the refusal and the
+# operator re-runs once the holder completes. A lock-manager error also
+# refuses (an unverifiable lock state must never proceed into mutation).
+# Usage: zfslock_acquire_lio_mutator "<script-name>" "<action>"
+# Returns: 0 with $zfslock_id set (release with zfslock_release, or let the
+#          EXIT trap handle it); 1 after logging the refusal.
+zfslock_acquire_lio_mutator() {
+    local script_name="$1"
+    local action="${2:-mutate}"
+    local rc=0 holder_pid holder_script holder_acquired
+
+    if [[ -z "$script_name" ]]; then
+        log_msg "WARN: zfslock_acquire_lio_mutator requires a script name"
+        return 2
+    fi
+
+    zfslock_init || {
+        log_msg "FATAL: ${script_name}: lock manager unavailable — refusing to ${action}"
+        return 1
+    }
+    zfslock_acquire "iscsi-lio" "w" "${script_name} ${action}" || rc=$?
+    if [[ $rc -eq 1 ]]; then
+        holder_pid=$(_zfslock_read_field "$zfslock_conflict_info" pid || echo "?")
+        holder_script=$(_zfslock_read_field "$zfslock_conflict_info" script || echo "unknown")
+        holder_acquired=$(_zfslock_read_field "$zfslock_conflict_info" acquired || echo "?")
+        log_msg "WARN: ${script_name}: another iSCSI mutator is running —" \
+            "${holder_script} (pid ${holder_pid}, since ${holder_acquired})"
+        log_msg "FATAL: ${script_name}: refusing to ${action} concurrently —" \
+            "let it finish, then re-run this command"
+        return 1
+    fi
+    if [[ $rc -ne 0 ]]; then
+        log_msg "FATAL: ${script_name}: could not verify the iSCSI mutator lock —" \
+            "refusing to ${action}"
+        return 1
+    fi
+    return 0
+}
+
 # Acquire locks on multiple datasets in a deadlock-free order.
 # Returns: 0=success, 1=conflict, 2=error
 # Sets: zfslock_ids array with the lock-file paths of all acquired locks.

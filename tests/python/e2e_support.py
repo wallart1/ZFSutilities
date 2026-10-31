@@ -60,6 +60,68 @@ from command_builders import BashStep
 TEST_POOLS = ("zfstest1", "zfstest2", "zfstest3")
 DATASET_PREFIX = "test-e2e"
 
+# The config premise the payload scenarios assert, written once per
+# process and pointed at by ZFSCONFIG_PATH (zfsconfig's documented
+# override).  The payload side (zfscleanup/zfsretain/zfscheckagainst
+# &c.) otherwise reads the live GUI config, so the scenarios would
+# silently inherit whatever the operator's GUI last saved there —
+# derived checkagainst rows from real backup steps once flipped the
+# prune gate from prompting to silent on the dev host.  Pinned instead:
+# the three test pools, the product's default retention buckets, and no
+# checkagainst rows covering the test pools (the merged mapping is
+# empty, so zfscheckagainst's legacy fallback — which names only
+# production pools — applies and the test pools stay unmapped).
+_payload_config_file = None
+
+
+def payload_config_path():
+    """Return the path of the harness-owned payload config, writing it
+    on first use."""
+    global _payload_config_file
+    if _payload_config_file is None:
+        import atexit
+        import json
+        import tempfile
+
+        import config_migrations
+        import feature_config
+
+        fixture = {
+            "config_version": config_migrations.CONFIG_VERSION,
+            "pools": [
+                {"name": pool, "offsite_candidate": pool == TEST_POOLS[-1]} for pool in TEST_POOLS
+            ],
+            "retention": {
+                "default": [dict(b) for b in feature_config.DEFAULT_RETENTION],
+            },
+        }
+        fd, _payload_config_file = tempfile.mkstemp(
+            prefix="zfsu-e2e-payload-config-", suffix=".json"
+        )
+        with os.fdopen(fd, "w") as f:
+            json.dump(fixture, f, indent=1)
+        atexit.register(os.unlink, _payload_config_file)
+    return _payload_config_file
+
+
+def pin_payload_config(monkeypatch):
+    """Run this test's payload children against the harness-owned config."""
+    monkeypatch.setenv("ZFSCONFIG_PATH", payload_config_path())
+
+
+def pin_payload_env(monkeypatch, tmp_path):
+    """Isolate the payload children's ambient host state for one test.
+
+    Extends pin_payload_config with the run-level state a payload reads:
+    zfssnapbuild's per-caller nextsnap cache.  Unpinned, a leftover (the
+    operator's GUI run, or an earlier scenario) makes the orchestrator
+    payloads ask a "prior nextsnap was found" question, and the
+    scenarios' single-prefeed prompt contracts time out.  The prefix
+    env is zfssnapbuild's documented override for exactly this."""
+    pin_payload_config(monkeypatch)
+    monkeypatch.setenv("ZFSUTILITIES_RUN_NEXTSNAP_PREFIX", str(tmp_path / "nextsnap-"))
+
+
 # Signatures that must never appear in a payload run: each is either a
 # strict-mode abort, a missing helper, or a bash-level failure that the
 # orchestrators are supposed to catch and report as clean FATALs instead.

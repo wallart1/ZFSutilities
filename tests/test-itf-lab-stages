@@ -1286,9 +1286,11 @@ test_key_ceremony_modes() {
         "run:[bash -lc 'iscsi-add-encrypted-luns']"
     # Each ceremony runs the documented order end to end.
     assert_contains "$(cat "$work/calls")" \
-        "insert unlock loadkeys run:[bash -lc 'iscsi-recover-encrypted-luns'] step:pass:encrypted LUNs recovered [lbl] lock remove "
+        "insert unlock loadkeys run:[bash -lc 'iscsi-recover-encrypted-luns'] \
+step:pass:encrypted LUNs recovered [lbl] lock remove "
     assert_contains "$(cat "$work/calls")" \
-        "insert unlock loadkeys run:[bash -lc 'iscsi-add-encrypted-luns'] step:pass:encrypted LUNs recovered [lbl] lock remove "
+        "insert unlock loadkeys run:[bash -lc 'iscsi-add-encrypted-luns'] \
+step:pass:encrypted LUNs recovered [lbl] lock remove "
 }
 
 test_new_vm_disk_encrypted_runner() {

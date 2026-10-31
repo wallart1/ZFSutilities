@@ -33,8 +33,10 @@
 #       structurally fenced (F-041), the sweep is skipped with the state
 #       intact, and the wrap expects the LUN alive.
 #   S12 reconcile and iscsi-restore-luns concurrently over the same
-#       wiped tree: no serialization or safe refusal exists — the race
-#       is recorded live (FINDING row), then a clean re-run converges.
+#       wiped tree: the global iscsi-lio fence (repair-plan 024 / F-040)
+#       refuses the second mutator before it can mutate — its WARN names
+#       the running sibling (pid + command) — and the sequential re-run
+#       converges.
 #
 # Composition: the ENTIRE j15 lab runs first (j05 two-node lab
 # --encrypted-keys + the boot-workload tail: VM 101 plain-root writer,
@@ -309,7 +311,8 @@ j17_iscsi_interrupted_ops_main() {
     itf_artifact "s13-collision-304-0" "$log"
     after_inv="$(j17_lun_inventory "$s_ip" "$iqn" | sort)"
     if [[ $rc -ne 0 ]] \
-            && grep -q "FATAL: Zvol already exists: ${J17_POOL_A}/proxmox/vm-${J17_VM}-disk-0" "$log" \
+            && grep -q "FATAL: Zvol already exists: ${J17_POOL_A}/proxmox/vm-${J17_VM}-disk-0" \
+                "$log" \
             && grep -q "Storage operations failed" "$log" \
             && [[ "$before_inv" == "$after_inv" ]] \
             && itf_guest_exec "$s_ip" \
@@ -373,7 +376,8 @@ j17_iscsi_interrupted_ops_main() {
     rc=$?
     itf_artifact "s13-collision-half" "$log"
     if [[ $rc -ne 0 ]] \
-            && grep -q "FATAL: Zvol already exists: ${J17_POOL_A}/proxmox/${J17_LUN_HALF}" "$log"; then
+            && grep -q "FATAL: Zvol already exists: ${J17_POOL_A}/proxmox/${J17_LUN_HALF}" \
+                "$log"; then
         itf_step pass "re-run collides with its own half state [s13]" \
             "the zvol-exists guard refuses; the half state is stuck until" \
             "remove-vm-disk runs"
@@ -486,7 +490,8 @@ j17_iscsi_interrupted_ops_main() {
         rc=$?
         itf_artifact "m2-frozen-check" "$log"
         if [[ $rc -ne 0 ]] \
-                && grep -q "map LUN ${victim_lun} -> vm-${J17_VM}-disk-0 is missing live" "$log"; then
+                && grep -q "map LUN ${victim_lun} -> vm-${J17_VM}-disk-0 is missing live" \
+                    "$log"; then
             itf_step pass "state frozen after the abort [m2]" \
                 "the same single DRIFT line; nothing was applied"
         else
@@ -528,7 +533,8 @@ j17_iscsi_interrupted_ops_main() {
     rc=$?
     itf_artifact "m3-wrong-vmid" "$log"
     if [[ $rc -ne 0 ]] \
-            && grep -q "FATAL: Zvol does not exist: ${J17_POOL_A}/proxmox/vm-999-disk-0" "$log"; then
+            && grep -q "FATAL: Zvol does not exist: ${J17_POOL_A}/proxmox/vm-999-disk-0" \
+                "$log"; then
         itf_step pass "wrong VMID rejected [m3]" "FATAL before any mutation"
     else
         itf_step fail "wrong VMID rejected [m3]" "rc=$rc — see m3-wrong-vmid.log"
@@ -952,7 +958,8 @@ j17_iscsi_interrupted_ops_main() {
     rc=$?
     itf_artifact "s14-remove-refusal" "$log"
     if [[ $rc -ne 0 ]] \
-            && grep -q "FATAL: Zvol does not exist: ${J17_POOL_A}/proxmox/${J17_LUN_HALF}" "$log"; then
+            && grep -q "FATAL: Zvol does not exist: ${J17_POOL_A}/proxmox/${J17_LUN_HALF}" \
+                "$log"; then
         itf_step pass "remove-vm-disk refuses the zvol-gone cleanup [s14]" \
             "no product path retires a hand-destroyed LUN — UX gap" \
             "(→ REQUIREMENTS at G5)"
@@ -972,7 +979,9 @@ j17_iscsi_interrupted_ops_main() {
     rc=$?
     itf_artifact "s14-reconcile" "$log"
     if [[ $rc -eq 0 ]] \
-            && grep -q "zvol ${J17_POOL_A}/proxmox/${J17_LUN_HALF} does not exist (offline pool or deleted)" "$log" \
+            && grep -q "zvol ${J17_POOL_A}/proxmox/${J17_LUN_HALF} does not exist \
+(offline pool or deleted)" \
+                "$log" \
             && grep -q "Pool LUN map left unchanged" "$log" \
             && ! itf_guest_exec "$s_ip" \
                 "grep -q '^${J17_LUN_HALF}$' /etc/rtslib-fb-target/expected-backstores.txt" \
@@ -1092,7 +1101,9 @@ j17_iscsi_interrupted_ops_main() {
     fi # end s14_destroy_ok sweep
 
     # ==================================================================
-    # S12 — reconcile and restore-luns concurrently: the unguarded race
+    # S12 — reconcile and restore-luns concurrently: the fenced race
+    # (repair-plan 024 / F-040: the global iscsi-lio lock refuses the
+    # second mutator before it can mutate)
     # ==================================================================
 
     log="$ITF_RUN_DIR/s12-wipe.log"
@@ -1144,7 +1155,43 @@ EOF
         return 1
     fi
 
-    # The race evidence: what each transcript claims, and the tree state.
+    # The fence evidence (repair-plan 024): exactly one mutator wins the
+    # global iscsi-lio lock and runs to completion; the other REFUSES rc 1
+    # before any mutation, its WARN naming the running sibling (pid +
+    # command). Either may win the race — the gate asserts the shape, not
+    # the winner.
+    rlog_content=$(cat "$ITF_RUN_DIR/s12-reconcile.log" 2>/dev/null || true)
+    olog_content=$(cat "$ITF_RUN_DIR/s12-restore.log" 2>/dev/null || true)
+    rrc=$(grep -oE 'reconcile-rc: [0-9]+' "$log" | grep -oE '[0-9]+' | head -1)
+    orc=$(grep -oE 'restore-rc: [0-9]+' "$log" | grep -oE '[0-9]+' | head -1)
+    rrefused=0 orefused=0
+    [[ "$rlog_content" == *"reconcile-iscsi-state: another iSCSI mutator is running — \
+iscsi-restore-luns (pid"* ]] \
+        && rrefused=1
+    [[ "$olog_content" == *"iscsi-restore-luns: another iSCSI mutator is running — \
+reconcile-iscsi-state (pid"* ]] \
+        && orefused=1
+    fence_ok=0
+    if [[ $((rrefused + orefused)) -eq 1 ]]; then
+        if [[ $rrefused -eq 1 && "$rrc" == 1 && "$orc" == 0 ]] \
+            || [[ $orefused -eq 1 && "$orc" == 1 && "$rrc" == 0 ]]; then
+            fence_ok=1
+        fi
+    fi
+    if [[ $fence_ok -eq 1 ]]; then
+        itf_step pass "the fence refuses the second mutator [s12]" \
+            "$([[ $rrefused -eq 1 ]] && echo restore-luns \
+                || echo reconcile-iscsi-state) won the lock and completed (rc 0);" \
+            "the loser refused rc 1 before any mutation, naming the holder"
+    else
+        itf_step fail "the fence refuses the second mutator [s12]" \
+            "rrefused=$rrefused rrc=$rrc orefused=$orefused orc=$orc \
+— see s12-reconcile.log / s12-restore.log"
+        return 1
+    fi
+
+    # The tree state after the fenced race: the winner's output alone — no
+    # interleaved writes, no comment-only manifest residue possible.
     log="$ITF_RUN_DIR/s12-aftermath.log"
     # shellcheck disable=SC2029  # expansions run on the storage guest
     if itf_guest_exec "$s_ip" "
@@ -1162,15 +1209,9 @@ EOF
         itf_step info "post-race tree state [s12]" "see s12-aftermath.log"
     fi
     itf_artifact "s12-aftermath" "$log"
-    itf_step info "no serialization between concurrent mutators [s12]" \
-        "neither command refuses or defers to the other — collision" \
-        "evidence in the transcripts (FINDING row: reconcile/restore-luns" \
-        "need a shared fence or an active-mutator refusal)"
 
-    # RECOVER: a clean sequential re-run converges whatever the race left
-    # — either by rebuilding the holes or (live-observed shape: both
-    # create-only mutators happened to complete the tree between them)
-    # by finding nothing left to do.
+    # RECOVER: the sequential re-run converges whatever the winner left —
+    # holes the loser would have filled (rebuild) or nothing at all.
     rfeed="$ITF_RUN_DIR/s12-converge-answers.txt"
     printf 'y\n' > "$rfeed"
     log="$ITF_RUN_DIR/s12-converge.log"

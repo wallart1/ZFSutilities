@@ -416,7 +416,8 @@ test_status_shows_run_lock_section() {
 # ------------------------------------------------------------------------------
 
 test_orphan_fence_refuses_naming_leftover_and_both_recoveries() {
-    test_start "orphan fence refuses while an interrupted run's guest lives on, naming both recoveries"
+    test_start "orphan fence refuses while an interrupted run's guest lives on, \
+naming both recoveries"
     local runs table out
     runs=$(mktemp -d)
     _plant_run "$runs" run-20260101-010101-j13-test interrupted \
@@ -431,7 +432,8 @@ test_orphan_fence_refuses_naming_leftover_and_both_recoveries() {
         return
     fi
     if [[ "$out" != *"refusing to start"* ]] \
-            || [[ "$out" != *"run-20260101-010101-j13-test: base.invalid/8010 (guest-storage.txt)"* ]]; then
+            || [[ "$out" != *"run-20260101-010101-j13-test: \
+base.invalid/8010 (guest-storage.txt)"* ]]; then
         test_fail "refusal does not name the leftover: $out"
         return
     fi
@@ -605,7 +607,8 @@ test_template_build_fenced_by_interrupted_run_guests() {
 }
 
 test_journey_rerun_of_interrupted_source_not_fenced() {
-    test_start "journey --rerun of its own interrupted source passes the fence and reuses the guests"
+    test_start "journey --rerun of its own interrupted source passes the fence \
+and reuses the guests"
     local runs_dir new_run spec
     runs_dir=$(mktemp -d)
     _plant_run "$runs_dir" run-20260101-010101-j04-post-install-baseline interrupted \

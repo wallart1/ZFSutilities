@@ -235,6 +235,34 @@ Run Scenario A first (restore the LUN topology from the pool map), then
 Scenario B (re-point any regressed configs). The map on the pools is the
 surviving authority for both halves.
 
+### Power events — what returns unaided and what needs you
+
+Proven live in the recovery-scenario lab (journeys j15/j18); each row
+also lives in the requirements register as future-coding direction.
+
+- **After a storage-node power event or reboot, running VMs need a
+  stop/start.** The iSCSI sessions and by-path links re-login
+  automatically once storage returns, but the VMs' disk IO does not
+  resume — writers stay stalled behind healthy-looking paths. Stopped
+  VMs start normally; a `qm stop` + `qm start` is the standard
+  post-outage step for anything that was running.
+- **The fence cannot see a total storage outage.** Proxmox patches the
+  iSCSI replacement timeout to 24 h; the dead sessions keep the by-path
+  links present, and link existence is the fence's only outage signal —
+  ticks report healthy for hours into a full storage power-off. Absence
+  of the storage host is detected by the operator (or monitoring), not
+  by the fence.
+- **PVE boot-time autostart races the iSCSI login and never retries.**
+  With `onboot: 1`, startall fires before the links exist, the start
+  fails on the by-path path, and nothing retries it — the fence heals
+  links, not starts. After a compute-node reboot, the everyday path for
+  returning VMs is the operator's `qm start`.
+- **Documented teardowns can leave a ghost 0-GiB device row** on the
+  compute host (`remove-vm --cleanup-orphans`, `remove-vm-disk`): the
+  LUN is gone but the device row persists until the session re-logs in.
+  Harmless, and cleared by the next session cycle or a rescan after
+  re-login.
+
 ### Coexistence with a hand-rolled health check
 
 The fence units installed by switch-version activation leave any existing
@@ -609,16 +637,20 @@ sudo iscsi-restore-luns
 
 1. Exit silently in single-node mode.
 2. Parse `/etc/rtslib-fb-target/saveconfig.json` directly (not `expected-backstores.txt`).
-3. For each block storage object in `saveconfig.json`, create the backstore if
+3. Acquire the global `iscsi-lio` mutator fence (shared with
+   [`reconcile-iscsi-state`](#reconcile-iscsi-state-storage-node)): if
+   another LIO mutator holds it, refuse before any mutation — the WARN
+   names the holder (pid + command); let it finish and re-run.
+4. For each block storage object in `saveconfig.json`, create the backstore if
    missing and its backing device is available.
-4. For each LUN mapping in `saveconfig.json`, recreate the mapping at the
+5. For each LUN mapping in `saveconfig.json`, recreate the mapping at the
    original LUN index if missing.
-5. For each ACL in `saveconfig.json`, create the ACL initiator node if
+6. For each ACL in `saveconfig.json`, create the ACL initiator node if
    missing, then recreate each recorded MappedLUN grant
    (`mapped_lun → tpg_lun`, non-identity mappings included) if missing. A
    grant whose index exists but maps a different TPG LUN than recorded is
    left untouched with a WARN — identities are never remapped automatically.
-6. Save via `safe-iscsi-save`; a refusal (still-expected mappings or grants
+7. Save via `safe-iscsi-save`; a refusal (still-expected mappings or grants
    would be lost, i.e. the live tree is incomplete relative to the recorded
    config) logs a WARN — the restored state exists live only — and the
    rescan below still runs, but the script exits 1 so an incomplete restore
@@ -2012,6 +2044,13 @@ offers to run this script directly.
   returns (a partial reconcile must never overwrite the recovery authority —
   nor may one with failed actions, an unpersisted save, or unresolved VM
   cross-check refs).
+- The apply phase holds the global `iscsi-lio` mutator fence (shared with
+  [`iscsi-restore-luns`](#iscsi-restore-luns-storage-node)): a concurrent
+  LIO mutator makes this script refuse before any mutation — the WARN names
+  the holder (pid + command); let it finish and re-run. The manifest regen
+  never installs a comment-only manifest (a run whose every apply action
+  failed keeps the previous one), and the summary's created counts are
+  apply-truthful (`N of M planned`).
 
 **Arguments:**
 

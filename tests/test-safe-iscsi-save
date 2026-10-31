@@ -780,7 +780,8 @@ PYEOF
 
     local ok=true
     [[ "$rc" -ne 0 ]] || ok=false
-    [[ "$output" == *"ACL iqn.2026-02.local.tweety MappedLUN 0 on iqn.2026-02.local.stewie:threeamigos (vm-100-disk-0) would be lost"* ]] || ok=false
+    [[ "$output" == *"ACL iqn.2026-02.local.tweety MappedLUN 0 \
+on iqn.2026-02.local.stewie:threeamigos (vm-100-disk-0) would be lost"* ]] || ok=false
     [[ "$output" == *"refusing to save — 2 ACL MappedLUN grant(s) would be lost"* ]] || ok=false
     cmp -s "${savefile}.orig" "$savefile" || ok=false
 
@@ -830,7 +831,8 @@ PYEOF
 
     local ok=true
     [[ "$rc" -eq 0 ]] || ok=false
-    [[ "$output" == *"vm-101-disk-0: manifest no longer expects it but zvol ${zvol} still exists"* ]] || ok=false
+    [[ "$output" == *"vm-101-disk-0: manifest no longer expects it \
+but zvol ${zvol} still exists"* ]] || ok=false
     [[ "$output" == *"the manifest may be stale"* ]] || ok=false
 
     if [[ "$ok" == true ]]; then

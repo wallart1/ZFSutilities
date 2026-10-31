@@ -34,10 +34,12 @@ _TIMEOUT_SECONDS = 120
 
 
 class TestAlignmentScrollRealized(unittest.TestCase):
-    def _run_check(self, renderer=None):
+    def _run_check(self, renderer=None, extra_env=None):
         env = dict(os.environ)
         if renderer is not None:
             env["REALIZED_CHART_RENDERER"] = renderer
+        if extra_env:
+            env.update(extra_env)
         return subprocess.run(
             [sys.executable, _CHECK_SCRIPT],
             capture_output=True,
@@ -83,6 +85,20 @@ class TestAlignmentScrollRealized(unittest.TestCase):
                     "PASS geometry: empty tables keep their 20-row windows",
                 ):
                     self.assertIn(pass_line, proc.stdout)
+
+    def test_realized_check_is_immune_to_ambient_font_scaling(self):
+        """A private Xvfb fences the display but not the inherited
+        environment: GDK scaling variables (and, over the ambient session
+        bus, the desktop's text-scaling-factor) change the font metrics
+        the geometry findings measure.  The check scrubs those channels
+        before Gtk binds, so a hostile environment must not change its
+        verdict."""
+        proc = self._run_check(extra_env={"GDK_DPI_SCALE": "2"})
+        output = proc.stdout + proc.stderr
+        if proc.returncode == _SKIP_RC:
+            self.skipTest(output.strip() or "realized check skipped (no display)")
+        self.assertEqual(proc.returncode, 0, f"realized check failed:\n{output}")
+        self.assertIn("ALIGNMENT-REALIZED-OK", proc.stdout)
 
     def test_realized_check_never_uses_the_ambient_display(self):
         proc = self._run_check()

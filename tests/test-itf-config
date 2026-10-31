@@ -80,7 +80,8 @@ test_valid_config_loads_with_defaults() {
     ) 2>/dev/null )
     assert_rc 0 $?
     assert_equals \
-        "8000|virtio|$mydir/tests/integrated/results|zfstestvm1|zfstestvm2|$mydir/tests/integrated/cache|itf-template" \
+        "8000|virtio|$mydir/tests/integrated/results|zfstestvm1|zfstestvm2|\
+$mydir/tests/integrated/cache|itf-template" \
         "$out"
 }
 

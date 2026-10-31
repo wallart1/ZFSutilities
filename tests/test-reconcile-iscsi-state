@@ -88,6 +88,15 @@ targetcli() {
     esac
 
     # Create effects (mock fidelity: state must evolve like real targetcli).
+    # Optional failure injection (repair-plan 024 tests) runs first so a
+    # doomed create never mutates the fixtures: blanket or single-name.
+    if [[ "$1" == "/backstores/block" && "$2" == "create" ]] \
+        && { [[ -n "${_mock_bs_fail:-}" ]] || [[ "${_mock_bs_fail_single:-}" == "$3" ]]; }; then
+        return 1
+    fi
+    if [[ "$2" == "create" && -z "${1##/iscsi/*/tpg1/luns}" && -n "${_mock_lun_fail:-}" ]]; then
+        return 1
+    fi
     if [[ "$1" == "/backstores/block" && "$2" == "create" ]]; then
         _mock_backstores+="  o- ${3} ........ [${4} (1.0GiB) write-thru activated]"$'\n'
         return 0
@@ -111,7 +120,8 @@ targetcli() {
             local _idx _bs
             while IFS='|' read -r _idx _bs; do
                 [[ -n "$_idx" ]] || continue
-                _mock_init_grants_1+="  o- mapped_lun${_idx} ... [lun${_idx} block/${_bs} (rw)]"$'\n'
+                _mock_init_grants_1+="  o- mapped_lun${_idx} ... [lun${_idx} \
+block/${_bs} (rw)]"$'\n'
             done < <(printf '%s\n' "$_mock_luns_1" \
                 | sed -n 's/.*o- lun\([0-9][0-9]*\)  \[block\/\([^ ]*\) .*/\1|\2/p')
         fi
@@ -181,6 +191,17 @@ eval "$script_text"
 # restore the test harness's own option state so a failing test reports
 # normally instead of aborting the suite.
 set +euo pipefail
+
+# The fence (repair-plan 024): the script under test calls
+# `source_helper zfslockmanager`, which the /dev/null find_zfsutility_script
+# override turns into a no-op — provide the real manager here, with the lock
+# dir and remote forwarding pinned so the suite is hermetic and never touches
+# /run/lock or reads the host's node config.
+_lock_dir=$(mktemp -d)
+ZFSLOCK_DIR="$_lock_dir"
+ZFSLOCK_REMOTE_DISABLED=1
+export ZFSLOCK_DIR ZFSLOCK_REMOTE_DISABLED
+source "$old_mydir/bin/zfslockmanager"
 
 # VM-reference gather override (records in _mock_vm_records).
 vm_gather_cmd() { printf '%s\n' "${_mock_vm_records:-}"; }
@@ -344,6 +365,10 @@ reset_mocks() {
     _mock_gen_acls_2="1"
     _mock_grant_fail=""
     _mock_no_autogrant=""
+    _mock_bs_fail=""
+    _mock_lun_fail=""
+    _mock_bs_fail_single=""
+    rm -rf "${_lock_dir:?}/.locks" "${_lock_dir:?}/.pids"
     _mock_zfs_mountpoint=()
     _mock_encryption=()
     _mock_zvols_threeamigos=()
@@ -1011,7 +1036,8 @@ test_map_pool_records_parsed() {
     if [[ "$ok" == true ]]; then
         test_pass
     else
-        test_fail "pool GUID records wrong: threeamigos=${_map_pool_guid[threeamigos]:-none} NVME1=${_map_pool_guid[NVME1]:-none}"
+        test_fail "pool GUID records wrong: threeamigos=${_map_pool_guid[threeamigos]:-none} \
+NVME1=${_map_pool_guid[NVME1]:-none}"
     fi
 }
 
@@ -1064,7 +1090,87 @@ PYEOF
     if [[ -z "$bad" && "$good" == "252995746834113014" ]]; then
         test_pass
     else
-        test_fail "malformed record kept (threeamigos='${bad}') or healthy one lost (NVME1='${good}')"
+        test_fail "malformed record kept (threeamigos='${bad}') \
+or healthy one lost (NVME1='${good}')"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Repair-plan 024: concurrent-mutator fence + truthful apply accounting
+# ------------------------------------------------------------------
+
+test_concurrent_mutator_refused() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    assume_yes=true
+    # Plant a live sibling mutator holding the global fence. exec -a makes
+    # the holder's cmdline contain the recorded script name — the lock
+    # manager's stale check (pid alive + script in cmdline) must see it as
+    # an active lock, exactly like a real concurrent restore-luns.
+    bash -c 'exec -a iscsi-restore-luns sleep 300' & local holder_pid=$!
+    mkdir -p "${_lock_dir}/.locks"
+    printf '{"dataset":"iscsi-lio","type":"w","pid":%s,"script":"iscsi-restore-luns","acquired":"2026-10-30T12:00:00+00:00","description":"restore"}\n' \
+        "$holder_pid" > "${_lock_dir}/.locks/iscsi-lio.lock"
+    test_start "Concurrent LIO mutator: refusal names the holder, zero mutations"
+
+    run_main
+    kill "$holder_pid" 2>/dev/null || true
+    wait "$holder_pid" 2>/dev/null || true
+
+    if [[ "$_main_rc" -eq 1 ]] \
+        && log_has "another iSCSI mutator is running" \
+        && log_has "iscsi-restore-luns (pid ${holder_pid}" \
+        && log_has "refusing to" \
+        && ! targetcli_log_content | grep -q " create "; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc out='$_main_out'"
+    fi
+}
+
+test_all_creates_fail_keeps_previous_manifest() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    assume_yes=true
+    _mock_bs_fail=1
+    printf '# previous manifest\nvm-old-disk-0\n' > "$_manifest_file"
+    test_start "Every apply failing keeps the previous manifest (no comment-only install)"
+
+    run_main
+
+    if [[ "$_main_rc" -eq 1 ]] \
+        && grep -qxF "vm-old-disk-0" "$_manifest_file" \
+        && ! grep -q "Generated by reconcile-iscsi-state" "$_manifest_file" \
+        && log_has "no ensured backstores survived" \
+        && log_has "Backstores created: 0 of 2" \
+        && log_has "Reconcile incomplete"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc manifest=[$(cat "$_manifest_file")] out='$_main_out'"
+    fi
+}
+
+test_summary_counts_are_apply_truthful() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    assume_yes=true
+    # First backstore create fails, second succeeds: the LUN of the failed
+    # backstore is skipped, so 1 of 2 backstores and 1 of 2 LUNs apply.
+    _mock_bs_fail_single="vm-101-disk-0"
+    test_start "Summary prints apply-truthful counts (1 of 2), not plan totals"
+
+    run_main
+
+    if [[ "$_main_rc" -eq 1 ]] \
+        && log_has "Backstores created: 1 of 2" \
+        && log_has "LUN mappings created: 1 of 2" \
+        && log_has "Failed to create backstore vm-101-disk-0"; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc out='$_main_out'"
     fi
 }
 
@@ -1097,10 +1203,14 @@ test_target_missing_refused
 test_prompt_decline_aborts
 test_no_changes_idempotent
 test_save_failure_fails
+test_concurrent_mutator_refused
+test_all_creates_fail_keeps_previous_manifest
+test_summary_counts_are_apply_truthful
 
 # Cleanup
 [[ -n "$_scratch_root" && -d "$_scratch_root" ]] && rm -rf "$_scratch_root"
 rm -f "$_manifest_file" "$_encrypted_file" "$_helper_log" "$_targetcli_log"
+rm -rf "$_lock_dir"
 local_cleanup() {
     local _p
     for _p in "${_helper_scripts[@]:-}" \

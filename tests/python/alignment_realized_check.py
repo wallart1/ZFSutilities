@@ -42,6 +42,30 @@ def _skip(reason):
     raise SystemExit(_SKIP_RC)
 
 
+# Environment channels that quietly change GTK font metrics and theme
+# inside a private display: the scaling variables, theme overrides, and
+# the ambient session bus (GSettings reads text-scaling-factor and
+# font-name over it — a private Xvfb does not fence those).  The check's
+# subject is geometry stability, so it scrubs them before Gtk binds and
+# the compiled defaults apply.
+_GTK_ENV_SCRUB = (
+    "GDK_SCALE",
+    "GDK_DPI_SCALE",
+    "GTK_THEME",
+    "GTK_MODULES",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DBUS_SESSION_PID",
+    "DBUS_STARTER_BUS_TYPE",
+    "DBUS_STARTER_ADDRESS",
+    "XDG_RUNTIME_DIR",
+)
+
+
+def _scrub_ambient_gtk_environment():
+    for name in _GTK_ENV_SCRUB:
+        os.environ.pop(name, None)
+
+
 def _start_xvfb():
     """Start a private Xvfb and point DISPLAY at it; None when impossible."""
     if not os.path.exists("/usr/bin/Xvfb"):
@@ -124,6 +148,7 @@ def _ensure_display():
     plain retry would raise from every widget constructor even after the
     environment is healthy again.
     """
+    _scrub_ambient_gtk_environment()
     xvfb = _start_xvfb()
     if xvfb is None:
         _skip("no private Xvfb available (the ambient display is never used)")
