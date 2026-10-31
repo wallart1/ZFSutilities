@@ -61,6 +61,7 @@ from input_requests import (
 from logging_config import format_log_line_short, log_msg
 from logs_page import create_logs_page
 from memory_page import create_memory_page, refresh_memory_page
+from notifications_dialog import NotificationsDialog
 from offsite_page import create_offsite_page, do_detect_offsite_pool
 from path_utils import get_version
 from pools_page import create_pools_page, on_pools_refresh
@@ -967,6 +968,11 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         dialog.set_license_type(Gtk.License.GPL_3_0)
         dialog.run()
         dialog.destroy()
+
+    def on_notifications(self, widget):
+        """Open the desktop/email notifications configuration dialog."""
+        dialog = NotificationsDialog(self, self.config)
+        dialog.run()
 
     def on_set_docs_editor(self, widget):
         """Show a dialog to configure the external markdown editor."""

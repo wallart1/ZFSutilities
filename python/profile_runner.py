@@ -62,6 +62,7 @@ from feature_config import (
     remove_snapfile,
 )
 from logging_config import log_msg, session_log_context
+from notifications import notify_run_finished
 from offsite_runner import build_offsite_step_command, detect_offsite_pool, detect_offsite_pools
 from profile_manager import list_profiles, load_profile
 from profile_validation import validate_profiles
@@ -946,6 +947,15 @@ def main():
         try:
             if profile is None:
                 log_msg(f"FATAL: Profile not found: {profile_name}")
+                notify_run_finished(
+                    result="failed",
+                    name=profile_name,
+                    run_type=tab_type,
+                    rc=1,
+                    duration=time.time() - _session_start_time if _session_start_time else None,
+                    log_file=_session_log_file,
+                    session_log_file=_session_log_file,
+                )
                 session_log.write_session_trailer(_session_log_file, _session_start_time, rc=1)
                 sys.exit(1)
 
@@ -957,6 +967,15 @@ def main():
                     log_msg(
                         f"INFO: Profile '{profile_name}' cancelled while waiting "
                         "for the profile lock"
+                    )
+                    notify_run_finished(
+                        result="cancelled",
+                        name=profile_name,
+                        run_type=tab_type,
+                        rc=PROFILE_CANCELLED_RC,
+                        duration=time.time() - _session_start_time if _session_start_time else None,
+                        log_file=_session_log_file,
+                        session_log_file=_session_log_file,
                     )
                     session_log.write_session_trailer(
                         _session_log_file,
@@ -1044,6 +1063,16 @@ def main():
                 log_file=_session_log_file,
             )
             add_history_entry(entry)
+            notify_run_finished(
+                result=result,
+                name=profile_name,
+                run_type=tab_type,
+                rc=rc,
+                duration=duration,
+                bytes_transferred=bytes_transferred,
+                log_file=_session_log_file,
+                session_log_file=_session_log_file,
+            )
             session_log.write_session_trailer(
                 _session_log_file,
                 _session_start_time,
@@ -1071,6 +1100,15 @@ def main():
                 _write_cron_breadcrumb(
                     cron_log, f"Scheduled run finished (cron): {profile_name} rc=1"
                 )
+            notify_run_finished(
+                result="failed",
+                name=profile_name,
+                run_type=tab_type,
+                rc=1,
+                duration=time.time() - _session_start_time if _session_start_time else None,
+                log_file=_session_log_file,
+                session_log_file=_session_log_file,
+            )
             session_log.write_session_trailer(_session_log_file, _session_start_time, rc=1)
             sys.exit(1)
         finally:

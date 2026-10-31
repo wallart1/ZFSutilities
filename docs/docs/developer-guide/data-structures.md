@@ -250,11 +250,40 @@ Top-level keys:
 | `archive_rate_limit`                                                  | string                    | Default transfer rate limit for archive-vm/unarchive-vm (rate value, e.g. `100M`; empty = unlimited; prompt-saved, seeded by migration v28) |
 | `transfer_rate_limit` (variables)                                     | string                    | GUI profile/backup-offsite-restore rate-limit variable (renamed from `pv_rate_limit` by migration v29; enforced by `lib/pace_stream.py`) |
 | `enclosures`                                                          | object                    | Per-enclosure settings keyed by discovery id (see below; seeded empty by migration v30)                                                                                |
+| `notifications`                                                       | object                    | Desktop/email run-completion notification settings (see below; absent until first configured — both channels default off)              |
 | `paths`                                                               | object                    | Installation-specific file paths (see below); seeded from the centralized path layer on first access                  |
 | `config_version`                                                      | integer                   | Config schema version (see migrations below)                                                                         |
 
 All sections default to empty on first run — the user populates them through
 the GUI. Override the path in the environment with `$ZFSCONFIG_PATH`.
+
+### `notifications` object
+
+Written by the File → **Notifications…** dialog and read by
+`python/notifications.py` when a run finishes (scheduled profile, Run Now,
+or interactive GUI run). No migration seeds it: the key is absent until the
+dialog is first saved, and absence means both channels off with every
+run-type toggle enabled. The SMTP password is deliberately NOT stored here
+— it lives in the root-only file `/etc/zfsutilities/smtp-credentials.json`
+(mode `0600`).
+
+| Key                        | Type                 | Contents                                                                                     |
+| -------------------------- | -------------------- | -------------------------------------------------------------------------------------------- |
+| `desktop.mode`             | string               | `off`, `failures`, or `all`                                                                   |
+| `desktop.types`            | object of booleans   | Per-run-type toggles (`backup`, `offsite`, `restore`, `retention`, `scrub`, `dataset`); missing keys read as enabled |
+| `email.mode`               | string               | `off`, `failures`, or `all`                                                                   |
+| `email.types`              | object of booleans   | Per-run-type toggles, as above                                                                |
+| `email.smtp_host`          | string               | SMTP server hostname                                                                          |
+| `email.smtp_port`          | integer              | SMTP port (default `587`)                                                                     |
+| `email.smtp_security`      | string               | `starttls`, `ssl`, or `none`                                                                  |
+| `email.smtp_username`      | string               | SMTP login user; blank skips authentication                                                    |
+| `email.smtp_from`          | string               | Envelope sender; blank defaults to the username, then `zfsutilities@<hostname>`               |
+| `email.smtp_to`            | array of strings     | Recipient addresses (dialog accepts comma-separated input)                                    |
+
+A channel notifies only when its mode matches the result **and** the run
+type's toggle is on: `failures` covers result `failed`; `all` also covers
+`success` and `cancelled`. No-op skips (duplicate invocation, weekday
+ordinal) never notify.
 
 ### `ui_state` object
 
@@ -308,6 +337,7 @@ The Python config API is split across two modules:
 - `feature_config.generate_snapshot_name()` / `generate_offsite_snapshot_name()` — snapshot naming
 - `feature_config.get_workload_profiles()` / `save_workload_profiles()` / `delete_workload_profile()` / `reset_workload_profiles()` — workload profile config
 - `feature_config.get_enclosures_config()` / `save_enclosures_config()` — per-enclosure names and rate caps
+- `feature_config.get_notifications_config()` / `save_notifications_config()` — notification channels, modes, run-type toggles, and SMTP settings
 
 `backup_config.py` still re-exports all of these for backward compatibility.
 

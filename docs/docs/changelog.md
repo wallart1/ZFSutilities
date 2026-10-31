@@ -52,6 +52,42 @@
   apply-truthful — "N of M planned" per dimension — instead of
   counting planned work as done.
 
+- **Run-completion notifications: desktop and email.** Every finished
+  run — scheduled profile, Run Now, or a tab's interactive run — can
+  notify through two independent channels. Each channel picks a mode
+  (Off — the default, Failures only, All runs) and a per-run-type toggle
+  set (Backup, Offsite backup, Restore, Retention prune, Scrub, Dataset
+  action; the GUI's prune runs report as retention), so email can carry
+  only backup and scrub results while the desktop shows every failure of
+  every type. Failures-only reports failed runs; cancellations report in
+  All-runs mode only; no-op skips (duplicate invocation, unmatched
+  weekday ordinal) never notify. Delivery is best effort — a
+  notification problem WARNs to the session log and never affects the
+  run it reports on.
+- **File → Notifications… dialog.** Modes, toggles, and the SMTP
+  connection (server, port, STARTTLS/SSL/none security, username,
+  password, From address, comma-separated recipients) with a masked
+  password entry; **Show test notification** and **Send test email**
+  exercise the delivery path with the dialog's current — including
+  unsaved — values, reporting the outcome next to the button. The SMTP
+  password is stored in a root-only `0600` file
+  (`/etc/zfsutilities/smtp-credentials.json`), separate from the shared
+  config; an empty password on save removes the file so no stale secret
+  survives disabling SMTP authentication.
+- **Delivery plumbing.** Desktop bubbles go to the logged-in desktop
+  session's notification daemon — target user resolved from `SUDO_USER`
+  (or the `ZFSUTILITIES_NOTIFICATION_DESKTOP_USER` override), then the
+  X11 socket owner — preferring `notify-send` and falling back to
+  `gdbus` (`dbus-send` cannot express the `a{sv}` hints argument); email
+  goes through user-configured SMTP via `smtplib`, so it works from root
+  cron without a local mail agent. On the GUI main thread delivery runs
+  on a daemon thread and log lines hop back via `GLib.idle_add`, so a
+  slow SMTP server can never freeze the interface; headless callers run
+  synchronously. GLib is imported dynamically, so importing the module
+  never requires `python3-gi` on GUI-less hosts. Delivery timeouts are
+  environment-tunable (`ZFSUTILITIES_NOTIFICATION_DESKTOP_TIMEOUT`,
+  `ZFSUTILITIES_NOTIFICATION_EMAIL_TIMEOUT`).
+
 ### Fixed
 
 - **Encrypted-LUN recovery re-queries before failing.** A mapping
@@ -121,6 +157,23 @@
   stale cause, tolerance of missing buttons). The Dashboard tooltip and
   the registered action-button attributes have dedicated assertions.
 
+- New suites cover the gating matrix (mode × result × run type), dispatch
+  routing and never-raises semantics, message building, desktop command
+  construction (notify-send / gdbus / neither), desktop-user resolution,
+  both channels' best-effort paths, and the `0600` credentials file.
+  GUI-thread safety is exercised directly: daemon-thread delivery off the
+  main thread with the completion callback marshalled through
+  `idle_add`, the thread-local log hop, and the GLib/log-sink guards.
+- The profile runner's four notification exits — completed run, missing
+  profile, cancellation while waiting for the profile lock, unhandled
+  exception — and its silent skip paths (duplicate invocation, unmatched
+  weekday ordinal) have dedicated tests, as do BackupRunner's finish and
+  cancel hooks. The config layer gains a normalization suite (defaults,
+  coercion, comma-splitting recipients, save round trip), the menu bar
+  gains a Notifications-before-Quit ordering test, and the dialog suite
+  covers load, collect, save, run/cancel, and both test buttons with
+  unsaved values.
+
 ### Documentation
 
 - User guide: new "Interrupted Restores" section in the restore guide;
@@ -136,6 +189,13 @@
 - Messages manual: the removed "At least one restore part must be
   selected" row, the rewritten part-one/part-two phase markers, the two
   new lineage-skip INFO rows, and the `VERB:` hold row.
+
+- User guide: the File-menu row and a Notifications dialog section; the
+  profiles guide explains what notifies and what never does. The Python
+  module reference covers both new modules including the environment
+  overrides; the data-structures guide documents the `notifications`
+  config object and the credentials file; the messages manual gains the
+  delivery and dialog rows.
 
 ## 0.135.0
 
@@ -1008,4 +1068,5 @@
   failure paths complete); the testing overview's orchestrator
   paragraph now describes the real coverage; `tests/AGENTS.md` gained
   the integrated-validation guidance section.
+
 

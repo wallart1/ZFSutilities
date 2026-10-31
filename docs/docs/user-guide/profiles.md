@@ -71,6 +71,22 @@ GUI's **Logs** tab.
 The Dashboard **Tasks** list shows a waiting profile with the status
 `Waiting since <time>`; cancel it there like any other task.
 
+## Notifications on finished runs
+
+Every finished profile run — scheduled by cron, launched with **Run Now**,
+or started from a tab's run button — can notify you through the channels
+configured in the GUI's File → **Notifications…** dialog (see
+[the GTK GUI guide](gtk-gui.md#notifications-dialog)): a desktop bubble on
+the host's logged-in session and/or an email, each independently set to
+failures-only or all runs, with per-run-type on/off toggles. Failed runs
+(a missing profile, a crashed runner, or a non-zero exit) notify in
+failures-only mode; cancelled runs only in all-runs mode. Skipped
+invocations (duplicate run while the profile is still busy, or a weekday
+that does not match the schedule's ordinal) never notify, and neither does
+anything while both channels are Off — the default until you configure
+them. Delivery is best effort: a notification problem is logged (visible in
+the Logs tab) and never affects the run itself.
+
 ## Running profiles from the command line
 
 ```bash

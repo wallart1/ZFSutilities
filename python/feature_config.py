@@ -574,6 +574,74 @@ def save_enclosures_config(config, data):
     save_config(config)
 
 
+NOTIFICATION_MODES = ("off", "failures", "all")
+NOTIFICATION_TYPES = ("backup", "offsite", "restore", "retention", "scrub", "dataset")
+NOTIFICATION_SECURITY = ("starttls", "ssl", "none")
+NOTIFICATION_DEFAULT_PORT = 587
+
+
+def _normalize_notification_channel(data):
+    """Normalize one notification channel (desktop/email) in place.
+
+    Ensures *mode* is one of NOTIFICATION_MODES (default "off") and *types*
+    carries a boolean for every run type (default True, so the modes alone
+    reproduce the simple behavior and toggles only narrow it).
+    """
+    if not isinstance(data, dict):
+        data = {}
+    mode = data.get("mode")
+    if mode not in NOTIFICATION_MODES:
+        data["mode"] = "off"
+    types = data.get("types")
+    if not isinstance(types, dict):
+        types = {}
+    for run_type in NOTIFICATION_TYPES:
+        types[run_type] = bool(types.get(run_type, True))
+    data["types"] = types
+    return data
+
+
+def get_notifications_config(config):
+    """Return the notifications section, normalized.
+
+    Shape: {"desktop": {mode, types}, "email": {mode, types, smtp_*}}.
+    Absent keys resolve to both channels off with all type toggles on.
+    """
+    data = config.get("notifications")
+    if not isinstance(data, dict):
+        data = {}
+    desktop = _normalize_notification_channel(data.get("desktop"))
+    email = _normalize_notification_channel(data.get("email"))
+    email.setdefault("smtp_host", "")
+    try:
+        email["smtp_port"] = int(email.get("smtp_port") or NOTIFICATION_DEFAULT_PORT)
+    except (TypeError, ValueError):
+        email["smtp_port"] = NOTIFICATION_DEFAULT_PORT
+    security = email.get("smtp_security")
+    if security not in NOTIFICATION_SECURITY:
+        email["smtp_security"] = "starttls"
+    email.setdefault("smtp_username", "")
+    email.setdefault("smtp_from", "")
+    to_addrs = email.get("smtp_to")
+    if isinstance(to_addrs, str):
+        to_addrs = [addr.strip() for addr in to_addrs.split(",") if addr.strip()]
+    elif not isinstance(to_addrs, list):
+        to_addrs = []
+    else:
+        to_addrs = [str(addr).strip() for addr in to_addrs if str(addr).strip()]
+    email["smtp_to"] = to_addrs
+    data["desktop"] = desktop
+    data["email"] = email
+    config["notifications"] = data
+    return data
+
+
+def save_notifications_config(config, data):
+    """Persist the notifications section (normalized like get_notifications_config)."""
+    config["notifications"] = get_notifications_config({"notifications": data})
+    save_config(config)
+
+
 DEFAULT_WORKLOAD_PROFILES = {
     "general": {
         "description": "General-purpose mixed files. Baseline for most datasets.",

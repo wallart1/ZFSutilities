@@ -22,6 +22,7 @@ from backup_history import _parse_human_size, add_history_entry, build_entry
 from command_builders import _PV_RATE_RE, _diagnose_rsync_failure
 from gi.repository import GLib
 from logging_config import log_msg, restore_session_log, set_session_log
+from notifications import notify_run_finished
 
 RSYNC_LOG_DIR = "/var/log/zfsutilities"
 RSYNC_LOG_FILE = os.path.join(RSYNC_LOG_DIR, "rsync-backup.log")
@@ -281,6 +282,16 @@ class BackupRunner:
         if self.progress:
             self.progress(None, None)
         self._write_session_trailer(cancelled=True)
+        notify_run_finished(
+            result="cancelled",
+            name=self.label,
+            run_type=self._get_tab_type(),
+            rc=None,
+            duration=time.time() - self._session_start_time if self._session_start_time else None,
+            bytes_transferred=self._total_bytes_received,
+            log_file=self._session_log_file,
+            session_log_file=self._session_log_file,
+        )
         if self._session_log_prev is not None:
             restore_session_log(self._session_log_prev)
             self._session_log_prev = None
@@ -779,6 +790,19 @@ class BackupRunner:
             add_history_entry(entry)
         except Exception as exc:
             self._log(f"WARN: Could not add history entry: {exc}")
+
+        # Pass the session-log path explicitly: delivery may continue on a
+        # daemon thread after this runner has cleared its own references.
+        notify_run_finished(
+            result=result,
+            name=self.label,
+            run_type=self._get_tab_type(),
+            rc=rc,
+            duration=duration,
+            bytes_transferred=self._total_bytes_received,
+            log_file=self._session_log_file,
+            session_log_file=self._session_log_file,
+        )
 
         try:
             self._write_session_trailer(rc=rc, bytes_transferred=self._total_bytes_received)

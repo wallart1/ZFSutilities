@@ -2222,6 +2222,13 @@ def create_menu_bar(app):
     file_item.set_submenu(file_menu)
     menu_bar.append(file_item)
 
+    notifications_item = Gtk.MenuItem(label="Notifications…")
+    notifications_item.connect("activate", app.on_notifications)
+    file_menu.append(notifications_item)
+
+    file_sep = Gtk.SeparatorMenuItem()
+    file_menu.append(file_sep)
+
     quit_item = Gtk.MenuItem(label="Quit")
     quit_item.connect("activate", app.on_quit)
     file_menu.append(quit_item)

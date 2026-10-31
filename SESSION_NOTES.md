@@ -1675,3 +1675,72 @@ F-040 draft+execute in-phase; F-034/F-037 promote to proposals.
   identical with ALL FOUR files at clean HEAD, so pre-existing (alphabetical
   runs and the sanctioned per-suite runner never pair them this way).
   Discovered while batching suites in one process; entries remain 3.
+
+## 2026-10-30 — Desktop + email run-completion notifications (pub3)
+
+- New feature, approved plan: per-channel (desktop/email) Off/Failures/All
+  modes plus per-run-type toggles (backup, offsite, restore, retention,
+  scrub, dataset; GUI "prune" maps to retention).
+- python/notifications.py: gating + delivery; notify_run_finished() hooked
+  at profile_runner.main() (completed, missing-profile, cancelled-lock-wait,
+  unhandled-exception paths; skip exits silent) and BackupRunner
+  _finish()/cancel() (covers all five GUI runners).
+- Delivery facts verified live: notify-send missing on stewie/tweety;
+  dbus-send cannot express a{sv} (plan said dbus-send fallback — replaced
+  with gdbus, verified working on dev host; both prod hosts have gdbus +
+  Cinnamon session buses). Local MTA on 127.0.0.1:25 both hosts; email uses
+  user-configured SMTP via smtplib instead (plan as approved).
+- GUI-thread safety: delivery runs on a daemon thread from the GUI main
+  thread; log lines hop back via GLib.idle_add (guarded by a thread-local
+  so non-GUI contexts log directly). GLib loaded dynamically so the module
+  stays out of the GUI-module closure (scanner initially misclassified it).
+- File → Notifications… dialog (notifications_dialog.py): modes, toggles,
+  SMTP fields, masked password (0600 /etc/zfsutilities/smtp-credentials.json,
+  empty removes the file), test buttons test unsaved dialog values.
+- Tests: new test_notifications.py + test_notifications_dialog.py; extended
+  test_feature_config/test_profile_runner/test_backup_runner/test_gui_helpers;
+  requirements.manifest gained the dialog suite. Docs: python-modules,
+  messages manual (new rows), data-structures (notifications object),
+  gtk-gui (menu + dialog section), profiles (notifications section).
+
+## 2026-10-30 — Development cycle wrap-up (pub3 lane)
+
+- Steps 1/4 (resolve PREEXISTING.md) skipped by their own precondition:
+  pub-main-only; this lane's PREEXISTING.md unchanged at 3 entries.
+- Step 2 code review vs coding-policies.md: clean. ruff check whole-repo
+  green; ruff format green on every changed/new Python file. No bash
+  changes in the cycle (shellcheck N/A). Verified no double-fire risk:
+  profile runs launch profile_runner.py as a subprocess, BackupRunner
+  serves interactive GUI tabs only — hook sites disjoint.
+- Step 3 test review: no obsolete/incorrect tests found; 8 missing tests
+  added — TestAsyncDelivery (daemon-thread delivery, idle_add log hop,
+  thread-local gating, _on_gui_main_thread guards), email timeout env
+  knob, profile_runner lock-wait-cancel + unhandled-exception hook paths,
+  dialog password-visibility toggle. Affected suites green after one
+  ruff-format fixup.
+- Step 5 docs: all diffs verified against code (config keys, credentials
+  path /etc/zfsutilities/smtp-credentials.json via get_config_dir, message
+  rows match strings, env knobs documented). No updates needed; no user
+  hand-edits found to preserve beyond the feature's own additions. Docs
+  integrity suite green; site/ rebuilt via mkdocs build from docs/ (the
+  MkDocs 1.x unmaintained banner is the known standing stance).
+- Step 6 full run without soaks: ALL SUITES PASSED, no failures; skips are
+  environment preflight only (e2e suites needing root + zfstest pools).
+  Cleared no stale /tmp/sever-vm-clone state beforehand (none present).
+  No new PREEXISTING entries.
+- Step 7: codebase FROZEN at this point. No further changes before the
+  user-directed commit/publish.
+
+## 2026-10-30 — Release 0.136.0 prep (pub3 lane, user-directed)
+
+- Step 8: VERSION 0.136.0 + changelog section (user explicitly directed
+  both). Docs integrity green after the edits.
+- Final gate: tests/run-tests --with-soak — ALL SUITES PASSED, zero
+  failures, zero bash skips; python skips are environment preflight only
+  (e2e needing root + zfstest pools). test-zfslockmanager-soak ran and
+  passed. No fixes were needed; /tmp had no stale sever-vm-clone state.
+- Steps 9-10: no further code changes; stage + commit of the whole cycle
+  (notifications feature + wrap-up test additions + release files)
+  performed under the user's explicit step-10 instruction.
+
+
