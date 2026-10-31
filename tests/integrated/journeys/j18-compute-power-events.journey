@@ -1,0 +1,1197 @@
+#!/usr/bin/env bash
+# j18-compute-power-events.journey — compute & power-event recovery
+# scenarios (campaign G4).
+#
+# Power events from the compute side, recovered through user-visible
+# surfaces only:
+#   S15 compute-node reboot only (storage healthy), two legs:
+#       leg 1 — default posture: what returns unaided (iSCSI
+#       sessions, by-path links, the fence tick) vs. what needs the
+#       operator (the VMs stay stopped — no onboot; qm start is the
+#       everyday path), writer-data integrity across the reboot
+#       (prefix checksum + outage-sized gap).
+#       leg 2 — onboot=1 on VM 101: PVE's pve-guests autostart
+#       asserted in both its live shapes — the unattended return, or
+#       the attempted-and-raced start (startall fires before the
+#       iSCSI links exist, fails on the by-path stat, and never
+#       retries; onboot alone does not return running VMs unattended
+#       on iSCSI disks — REQUIREMENTS row); VM 202 without onboot
+#       stays down.
+#   S16 both nodes power-cycle, storage slow to return: compute boots
+#       into a storage-less world (zero sessions ever established);
+#       the fence fires against the unreachable storage host — the
+#       ssh-255 WARN live (rescan problems + "reconcile-iscsi-state
+#       did not run" + still-missing FATAL, unit failed).  Storage
+#       returns late: the boot oracle (FAILED + DRIFT for the
+#       encrypted LUNs — keys unload at power-off), then the
+#       post-return truth measured live (the sessions and the plain
+#       LUNs return unaided; the return tick stays red exactly for
+#       the keys-pending encrypted LUN — reconcile skips it with the
+#       "keys not loaded?" hint and preserves the pool map as the
+#       recovery authority); the F-042 arc (that same return tick's
+#       keys-pending save drops the encrypted records from
+#       saveconfig.json, the documented recover FATALs on its
+#       saveconfig-only index lookup, and a keys-loaded tick's
+#       map-driven rebuild + recover's already-present grant heal
+#       close it), both VMs booting with intact writers.
+#   S17 the orphan LUN, both shapes: a VM deleted in PVE (qm destroy)
+#       and a hand-removed scsi line each leave a live-exported LUN
+#       no VM references — the symptom walk proves the fence, the
+#       verifier, rescan-storage, show-lun-map and repair-vm-disk-refs
+#       are all blind to it (each walks VM-config refs or LIO only);
+#       remove-vm's classifier is the one surface that names it
+#       (spared + WARN without --cleanup-orphans), and the two
+#       documented teardown paths converge (remove-vm
+#       --cleanup-orphans via the LIO-aware zfsdelfs; remove-vm-disk
+#       after the hand-removal its prompts ask about) — each teardown
+#       leaving a ghost 0-GiB device row that rescan-storage cannot
+#       drop (REQUIREMENTS row; only a session re-login clears it).
+#
+# Composition: the ENTIRE j15 lab runs first (j05 two-node lab
+# --encrypted-keys + the boot-workload tail: VM 101 plain-root writer,
+# VM 202 encrypted-root writer, encrypted spare vm-101-disk-1, keys
+# loaded + store detached, VMs parked).  S15 never touches storage
+# (keys stay loaded); S16's storage POWER CYCLE unloads them and
+# closes through the j15 recovery arc.
+#
+# Guest state required: storage template + compute template (j05's).
+# Site config required: j05's two-node keys + the keystore pair.
+# Software source must be dev-tarball — this journey verifies
+# working-tree repairs.
+#
+# Recovery consumes ONLY user-visible signals (--check, transcripts,
+# targetcli listings, qm configs, journals) and product-documented
+# commands; stumbles become FINDINGS (defects) or UX-gap rows.
+
+# j15 brings common.sh + j05 plus the workload/park/link helpers this
+# journey reuses (j15_read_coords, j15_park_vms, j15_boot_workload_vm,
+# j15_wait_links_classified, the fence tick, the key ceremony).
+# shellcheck source=j15-iscsi-boot-keys.journey
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/j15-iscsi-boot-keys.journey"
+
+# Workload/LUN identities (fixed by the composed lab design — see the
+# header):
+#   VM 101 — everyday VM, root on the PLAIN vm-101-disk-2 LUN
+#            (plus the blank vm-101-disk-0 spare on scsi0)
+#   VM 202 — encrypted-root VM on vm-202-disk-0
+#   VM 305 — S17 variant a scratch VM (deleted in PVE, LUN orphaned)
+#   VM 306 — S17 variant b scratch VM (scsi0 line hand-removed)
+J18_POOL_A=zfstest1
+J18_VM_A=305
+J18_VM_B=306
+
+# The live zfstest1 target IQN (j15/j17's derivation: node.conf prefix).
+j18_target_iqn() {
+    local s_ip="$1"
+    local prefix
+    prefix="$(itf_guest_exec "$s_ip" \
+        'sed -n "s/^IQN_PREFIX=\"\([^\"]*\)\"/\1/p" /etc/zfsutilities/node.conf' \
+        2>/dev/null)"
+    if [[ -n "$prefix" ]]; then
+        echo "${prefix}:${J18_POOL_A}"
+        return 0
+    fi
+    return 1
+}
+
+# The live LUN inventory of one target as "index backstore" lines (the
+# operator-visible state; j17's line-based targetcli parse).
+j18_lun_inventory() {
+    local s_ip="$1" iqn="$2"
+    # shellcheck disable=SC2016  # expansion runs in the guest
+    itf_guest_exec "$s_ip" '
+        targetcli /iscsi/'"$iqn"'/tpg1/luns ls 2>/dev/null \
+            | sed -n "s/^[[:space:]]*o- lun\([0-9][0-9]*\).*block\/\([^ (]*\).*$/\1 \2/p"
+    ' 2>/dev/null
+}
+
+# j18_storage_sessions <s_ip>
+#
+# Count of established iSCSI connections on the storage guest's :3260 —
+# the storage-side observable of a compute outage (initiator sessions
+# vanish when the compute node dies; return when it logs back in).
+j18_storage_sessions() {
+    local s_ip="$1"
+    itf_guest_exec "$s_ip" \
+        "ss -Htn state established '( sport = :3260 )' 2>/dev/null | wc -l" \
+        2>/dev/null | tr -d '[:space:]'
+}
+
+# j18_prefix_cksum <c_ip> <vmid> <lines>
+#
+# cksum of the workload log's FIRST <lines> lines, taken inside the VM
+# through the agent channel.  Before/after equality around a disruptive
+# event proves the pre-event bytes survived (no silent corruption);
+# the whole-file checksum always changes because the writer appends.
+j18_prefix_cksum() {
+    local c_ip="$1" vm="$2" lines="$3"
+    local raw
+    # shellcheck disable=SC2029  # vm/lines expand host-side by design
+    raw="$(itf_guest_exec "$c_ip" \
+        "qm guest exec $vm -- sh -c 'head -n $lines /workload.log | cksum'" \
+        2>/dev/null)" || return 1
+    printf '%s' "$raw" | _itf_vm_exec_out
+}
+
+# j18_fence_boot_journal <c_ip> <label>
+#
+# Captures the fence unit's whole current-boot journal — the timer's
+# own OnBootSec=2min tick plus any manual ticks (INFO evidence; the
+# gates assert on itf_fence_tick's per-tick logs).
+j18_fence_boot_journal() {
+    local c_ip="$1" label="$2"
+    local log="$ITF_RUN_DIR/fence-boot-${label}.journal"
+    itf_guest_exec "$c_ip" \
+        'journalctl -b -u zfsutilities-iscsi-fence.service --no-pager' \
+        > "$log" 2>&1
+    itf_artifact "fence-boot-$label" "$log"
+}
+
+# j18_lun_total <c_ip>
+#
+# The operator-visible LUN count from show-lun-map's summary line (the
+# table prints on stdout but the INFO summary rides the product's
+# log_msg stderr — both streams are merged).
+j18_lun_total() {
+    local c_ip="$1"
+    itf_guest_exec "$c_ip" "bash -lc 'show-lun-map'" 2>&1 \
+        | sed -n 's/.*Total iSCSI LUNs visible: \([0-9][0-9]*\).*/\1/p' \
+        | tail -n 1
+}
+
+# j18_reboot_compute_begin <label> / j18_reboot_compute_wait <label>
+#
+# In-guest reboot of the COMPUTE guest with a race-tolerant down-gate
+# (run-1 lesson: the shared begin/wait pair's gone-phase FAILED a real
+# reboot — a PVE guest stopping two TCG VMs sat in shutdown, sshd up
+# and iSCSI long dead, past the whole gone-window; the storage-side
+# session count had already collapsed to zero).  The ssh drop is
+# recorded as EVIDENCE only; the reboot is PROVEN by
+# /proc/sys/kernel/random/boot_id changing across the wait.  The wait
+# re-discovers a re-leased address and rewrites guest-compute.txt like
+# the shared wait does.  Consumes the caller's c_base/c_vmid/c_ip
+# (dynamic scope, j15_read_coords's pattern); on re-lease it updates
+# the caller's c_ip.  The boot-id handoff rides the
+# _J18_COMPUTE_BOOT_OLD global.
+j18_reboot_compute_begin() {
+    local label="$1"
+    local rc
+    _J18_COMPUTE_BOOT_OLD="$(itf_guest_exec "$c_ip" \
+        'cat /proc/sys/kernel/random/boot_id' 2>/dev/null)" \
+        || _J18_COMPUTE_BOOT_OLD=""
+    if [[ -z "${_J18_COMPUTE_BOOT_OLD}" ]]; then
+        itf_step fail "compute boot-id captured [$label]" \
+            "ssh to $c_ip refused the probe"
+        return 1
+    fi
+    itf_guest_exec "$c_ip" "reboot" \
+        > "$ITF_RUN_DIR/reboot-${label}.log" 2>&1
+    rc=$?
+    if [[ $rc -eq 0 || $rc -eq 255 ]]; then
+        itf_step pass "compute reboot issued [$label]" \
+            "in-guest reboot (vmid $c_vmid); proof deferred to boot_id"
+    else
+        itf_step fail "compute reboot issued [$label]" \
+            "rc=$rc — see $(basename "$ITF_RUN_DIR/reboot-${label}.log")"
+        return 1
+    fi
+}
+
+j18_reboot_compute_wait() {
+    local label="$1"
+    local old_ip="$c_ip" new_ip new_boot gone=0 gone_start=$SECONDS
+    while (( SECONDS - gone_start < "${ITF_REBOOT_GONE_WAIT:-180}" )); do
+        itf_guest_exec "$old_ip" true > /dev/null 2>&1 || { gone=1; break; }
+        sleep "${ITF_REBOOT_POLL:-5}"
+    done
+    if (( gone )); then
+        itf_step pass "compute ssh drop observed [$label]" \
+            "ssh went down $(( SECONDS - gone_start ))s after the reboot"
+    else
+        itf_step info "compute ssh drop observed [$label]" \
+            "ssh stayed reachable through the gone-window (slow PVE" \
+            "shutdown or warm-boot race) — boot_id decides"
+    fi
+
+    if itf_wait_ssh "$old_ip" 900; then
+        itf_step pass "compute ssh reachable [$label]" "$old_ip (address kept)"
+    else
+        new_ip="$(itf_guest_ip "$c_base" "$c_vmid" 600)"
+        if [[ -z "$new_ip" ]] || ! itf_wait_ssh "$new_ip" 300; then
+            itf_step fail "compute ssh reachable [$label]" \
+                "neither $old_ip nor rediscovered ${new_ip:-none} answers"
+            return 1
+        fi
+        echo "$c_base $c_vmid $new_ip" > "$ITF_RUN_DIR/guest-compute.txt"
+        # shellcheck disable=SC2034  # updated for the caller
+        c_ip="$new_ip"
+        itf_step pass "compute ssh reachable [$label]" \
+            "address re-leased: $old_ip -> $new_ip (record updated)"
+    fi
+
+    new_boot="$(itf_guest_exec "$c_ip" \
+        'cat /proc/sys/kernel/random/boot_id' 2>/dev/null)" || new_boot=""
+    if [[ -n "$new_boot" && "$new_boot" != "${_J18_COMPUTE_BOOT_OLD}" ]]; then
+        itf_step pass "compute guest rebooted [$label]" \
+            "boot_id changed — reboot proven (ssh-drop observed:" \
+            "$([[ $gone -eq 1 ]] && echo yes || echo no))"
+        return 0
+    fi
+    itf_step fail "compute guest rebooted [$label]" \
+        "boot_id unchanged — the guest never rebooted"
+    return 1
+}
+
+j18_compute_power_events_main() {
+    # shellcheck disable=SC2034  # full coordinate pairs, re-read after reboots
+    local s_base s_vmid s_ip c_base c_vmid c_ip
+    local log rc vm iqn inv sample lines cksum ck_after base_max new_max
+    local sess_n down_start sess_start resumed resume_start
+    local map_base map_now s16_lines s16_ck s16_max feed
+    local idx s15b_started elapsed_plain ghosts
+    local -a base_vms=(101 202) base_lines=() base_ck=() base_max_ts=()
+
+    itf_step info "journey start" \
+        "j18 compute & power events: S15 S16 S17 on the encrypted workload lab"
+
+    # ------------------------------------------------------------------
+    # Lab staging: the j15 encrypted two-node lab + boot-workload tail
+    # ------------------------------------------------------------------
+
+    j05_two_node_lab_main --encrypted-keys || return 1
+    j15_read_coords || return 1
+    itf_journey_stage_boot_workload_lab j18 "$s_base" "$s_vmid" "$s_ip" "$c_ip" \
+        || return 1
+
+    iqn="$(j18_target_iqn "$s_ip")"
+    if [[ -n "$iqn" ]]; then
+        itf_step pass "live target resolved" "zfstest1 target = $iqn"
+    else
+        itf_step fail "live target resolved" "node.conf IQN_PREFIX unreadable"
+        return 1
+    fi
+
+    inv="$(j18_lun_inventory "$s_ip" "$iqn")"
+    itf_guest_exec "$s_ip" \
+        "targetcli /iscsi/${iqn}/tpg1/luns ls; targetcli /backstores/block ls" \
+        > "$ITF_RUN_DIR/inventory-staged.log" 2>&1
+    itf_artifact "inventory-staged" "$ITF_RUN_DIR/inventory-staged.log"
+    if [[ $(wc -l <<< "$inv") -ge 4 ]]; then
+        itf_step pass "staged LUN inventory" \
+            "$(wc -l <<< "$inv") mappings live on ${J18_POOL_A} (see" \
+            "inventory-staged.log)"
+    else
+        itf_step fail "staged LUN inventory" \
+            "expected the lab's LUNs live, got: ${inv//$'\n'/; }"
+        return 1
+    fi
+
+    # ==================================================================
+    # S15 — compute-node reboot only, storage healthy (leg 1: the
+    # default posture — what returns unaided, what needs the operator)
+    # ==================================================================
+
+    j15_boot_workload_vm 101 || return 1
+    j15_boot_workload_vm 202 || return 1
+    itf_vm_evidence "$c_ip" 101 s15-baseline || return 1
+    itf_vm_evidence "$c_ip" 202 s15-baseline || return 1
+    itf_compute_fallout_sample "$c_ip" s15-pre 101 202
+
+    # Prefix-integrity baselines: line count + cksum of the log's head
+    # per VM (the writer appends forever; only the prefix can be
+    # compared across an event).
+    idx=0
+    for vm in "${base_vms[@]}"; do
+        sample="$ITF_RUN_DIR/workload-s15-baseline-${vm}.txt"
+        if ! itf_vm_workload_wait_sample "$c_ip" "$vm" "$sample"; then
+            itf_step fail "writer baseline [s15/VM $vm]" \
+                "no growing sample — see $(basename "$sample")"
+            return 1
+        fi
+        lines="$(wc -l < "$sample")"
+        cksum="$(j18_prefix_cksum "$c_ip" "$vm" "$lines")"
+        if [[ -z "$cksum" ]]; then
+            itf_step fail "prefix checksum baseline [s15/VM $vm]" \
+                "agent channel refused the head|cksum probe"
+            return 1
+        fi
+        base_lines+=("$lines")
+        base_ck+=("$cksum")
+        base_max_ts+=("$(tail -n 1 "$sample")")
+        itf_step pass "writer baseline [s15/VM $vm]" \
+            "lines=$lines prefix-cksum captured"
+        idx=$((idx + 1))
+    done
+
+    sess_n="$(j18_storage_sessions "$s_ip")"
+    itf_step info "storage-side sessions [s15-baseline]" \
+        "${sess_n:-0} established on :3260 before the compute reboot"
+
+    # The outage window: in-guest reboot of the COMPUTE guest (storage
+    # stays up) through the race-tolerant pair — proof of reboot is the
+    # boot_id change, not an observed ssh drop (a PVE guest stopping
+    # two TCG VMs can outlast the gone-window in shutdown; run-1
+    # lesson).
+    j18_reboot_compute_begin j18-s15 || return 1
+
+    # Storage-side observation inside the window: the initiator's
+    # connections vanish when the compute node's open-iscsi stops.
+    down_start=$SECONDS
+    while (( SECONDS - down_start < 120 )); do
+        [[ "$(j18_storage_sessions "$s_ip")" -eq 0 ]] && break
+        sleep "${ITF_LINK_POLL_INTERVAL:-10}"
+    done
+    sess_n="$(j18_storage_sessions "$s_ip")"
+    log="$ITF_RUN_DIR/s15-window-storage.log"
+    printf 'established-3260 during compute outage: %s\nat: %s\n' \
+        "${sess_n:-unknown}" "$(date -u '+%F %T')" > "$log"
+    itf_artifact "s15-window-storage" "$log"
+    itf_step info "storage sees the compute reboot [s15]" \
+        "established-3260 count: ${sess_n:-unknown} inside the window" \
+        "(see s15-window-storage.log)"
+
+    j18_reboot_compute_wait j18-s15 || return 1
+    j15_read_coords || return 1
+
+    # Sessions re-login at boot (storage healthy): bounded poll, then
+    # the links for both VMs' disks — classified unaided vs. rescan.
+    sess_start=$SECONDS
+    # shellcheck disable=SC2016  # expansions run in the guest
+    until itf_guest_exec "$c_ip" \
+            'test "$(iscsiadm -m session 2>/dev/null | grep -c .)" -ge 1' \
+            > /dev/null 2>&1; do
+        if (( SECONDS - sess_start >= 300 )); then
+            itf_step fail "sessions re-established [s15]" \
+                "no iSCSI session on compute 300s after the reboot"
+            return 1
+        fi
+        sleep "${ITF_LINK_POLL_INTERVAL:-10}"
+    done
+    itf_step pass "sessions re-established [s15]" \
+        "open-iscsi logged back in at boot (storage never went away)"
+    j15_wait_links_classified 300 s15 101 202 || return 1
+
+    # The VMs: nothing restarts them unattended (no onboot set) — the
+    # everyday truth the operator meets; PVE's onboot is the structural
+    # unattended answer (UX row → REQUIREMENTS at G5).
+    # shellcheck disable=SC2016  # expansions run in the guest
+    if itf_guest_exec "$c_ip" '
+            test "$(qm status 101 | awk "{print \$2}")" = stopped \
+            && test "$(qm status 202 | awk "{print \$2}")" = stopped
+        ' > "$ITF_RUN_DIR/s15-vm-state.log" 2>&1; then
+        itf_step pass "VMs classified after compute reboot [s15]" \
+            "both stopped — nothing restarts them (no onboot set);" \
+            "operator qm start is the everyday path; onboot's own race" \
+            "is recorded by leg 2"
+    else
+        itf_step info "VMs classified after compute reboot [s15]" \
+            "a VM is not stopped — recorded (see s15-vm-state.log);" \
+            "forcing the parked posture before the restart leg"
+        itf_guest_exec "$c_ip" \
+            'qm stop 101 2>/dev/null || true; qm stop 202 2>/dev/null || true' \
+            > /dev/null 2>&1
+    fi
+
+    # The fence: manual tick green (the timer's own OnBootSec tick is
+    # captured below as boot evidence).
+    if itf_fence_tick "$c_ip" s15-post \
+            && grep -q "All .* VM disk path(s) present" \
+                "$ITF_RUN_DIR/fence-tick-s15-post.log"; then
+        itf_step pass "fence tick healthy after compute reboot [s15]" \
+            "all VM disk path(s) present — see fence-tick-s15-post.log"
+    else
+        itf_step fail "fence tick healthy after compute reboot [s15]" \
+            "see fence-tick-s15-post.log"
+        return 1
+    fi
+    j18_fence_boot_journal "$c_ip" s15
+    itf_step info "fence timer boot evidence [s15]" \
+        "OnBootSec=2min tick + manual tick in fence-boot-s15.journal"
+
+    # Operator restart + data integrity: fresh writers on the SAME
+    # /workload.log (the nohup'd writer died with the VMs) — resume =
+    # the log grows past the baseline; integrity = the baseline prefix
+    # checksums unchanged; the outage shows as one large gap.
+    j15_boot_workload_vm 101 || return 1
+    j15_boot_workload_vm 202 || return 1
+    idx=0
+    for vm in "${base_vms[@]}"; do
+        base_max="${base_max_ts[$idx]}"
+        resumed=0
+        resume_start=$SECONDS
+        while (( SECONDS - resume_start < 300 )); do
+            new_max="$(itf_vm_workload_sample "$c_ip" "$vm" 2>/dev/null \
+                | tail -n 1 || true)"
+            if [[ "$new_max" =~ ^[0-9]+$ && "$base_max" =~ ^[0-9]+$ ]] \
+                    && (( new_max > base_max )); then
+                resumed=1
+                break
+            fi
+            sleep "${ITF_LINK_POLL_INTERVAL:-10}"
+        done
+        sample="$ITF_RUN_DIR/workload-s15-resumed-${vm}.txt"
+        itf_vm_workload_sample "$c_ip" "$vm" > "$sample" 2>/dev/null || true
+        itf_artifact "workload-s15-resumed-$vm" "$sample"
+        if (( ! resumed )); then
+            itf_step fail "writer resumed after restart [s15/VM $vm]" \
+                "log never grew past the baseline — see $(basename "$sample")"
+            return 1
+        fi
+        itf_vm_workload_gaps "$sample" 5 \
+            > "$ITF_RUN_DIR/workload-s15-resumed-${vm}.gaps"
+        ck_after="$(j18_prefix_cksum "$c_ip" "$vm" "${base_lines[$idx]}")"
+        if [[ "$ck_after" == "${base_ck[$idx]}" ]]; then
+            itf_step pass "writer resumed + prefix intact [s15/VM $vm]" \
+                "log grew past the baseline; $(cat "$ITF_RUN_DIR/workload-s15-resumed-${vm}.gaps")" \
+                "(the gap = the reboot window); pre-event bytes unchanged"
+        else
+            itf_step fail "writer resumed + prefix intact [s15/VM $vm]" \
+                "prefix cksum changed: '${base_ck[$idx]}' -> '${ck_after:-none}'"
+            return 1
+        fi
+        idx=$((idx + 1))
+    done
+
+    # A compute reboot must never drift LIO.
+    itf_iscsi_check_gate "$s_ip" s15 || return 1
+
+    # ==================================================================
+    # S15 leg 2 — onboot=1: PVE itself returns the VM unattended
+    # ==================================================================
+
+    log="$ITF_RUN_DIR/s15b-onboot.log"
+    if itf_guest_exec "$c_ip" "qm set 101 --onboot 1" > "$log" 2>&1; then
+        itf_step pass "onboot armed [s15b]" "VM 101 --onboot 1 (VM 202 left as-is)"
+    else
+        itf_step fail "onboot armed [s15b]" "see $(basename "$log")"
+        return 1
+    fi
+
+    j15_park_vms s15b || return 1
+    j18_reboot_compute_begin j18-s15b || return 1
+    j18_reboot_compute_wait j18-s15b || return 1
+    j15_read_coords || return 1
+
+    # PVE autostarts onboot VMs through pve-guests at boot — but the
+    # start RACES the iSCSI login: run-2's live journal shows startall
+    # attempting VM 101 two seconds in, failing on the by-path stat,
+    # and finishing OK without any retry.  Both live shapes are
+    # asserted: the unattended return, or the attempted-and-raced
+    # autostart with its journal evidence (REQUIREMENTS row: nothing
+    # re-attempts a failed boot-time start; the fence heals links,
+    # not starts).
+    sess_start=$SECONDS
+    s15b_started=0
+    # shellcheck disable=SC2016  # expansions run in the guest
+    while (( SECONDS - sess_start < 360 )); do
+        if itf_guest_exec "$c_ip" \
+                'test "$(qm status 101 | awk "{print \$2}")" = running' \
+                > /dev/null 2>&1; then
+            s15b_started=1
+            break
+        fi
+        sleep "${ITF_LINK_POLL_INTERVAL:-10}"
+    done
+    if (( s15b_started )); then
+        itf_step pass "VM 101 auto-started by PVE [s15b]" \
+            "onboot returned the VM unattended — the autostart won its" \
+            "race with the iSCSI login this time"
+    else
+        log="$ITF_RUN_DIR/s15b-pve-guests.log"
+        itf_guest_exec "$c_ip" \
+            'journalctl -b -u pve-guests.service --no-pager' \
+            > "$log" 2>&1
+        itf_artifact "s15b-pve-guests" "$log"
+        if grep -q "Starting VM 101" "$log" \
+                && grep -qE "stat for '/dev/disk/by-path/[^']*' failed" "$log"; then
+            itf_step pass "PVE autostart raced and lost [s15b]" \
+                "startall attempted VM 101 before the iSCSI links existed" \
+                "(stat failed on the by-path disk) and never retried —" \
+                "onboot alone does not return running VMs unattended on" \
+                "iSCSI disks (REQUIREMENTS row → G5; the fence heals" \
+                "links, not starts)"
+            if ! itf_wait_vm_disk_links "$c_ip" 300 101 \
+                    > "$ITF_RUN_DIR/s15b-links-elapsed.txt"; then
+                itf_step fail "links present for the operator start [s15b]" \
+                    "still missing 300s after boot — see fallout logs"
+                return 1
+            fi
+            if itf_vm_boot_with_agent "$c_ip" 101; then
+                itf_step pass "operator start of VM 101 [s15b]" \
+                    "the everyday path: links back, qm start succeeds"
+            else
+                itf_step fail "operator start of VM 101 [s15b]" \
+                    "qm start failed with links present"
+                return 1
+            fi
+        else
+            itf_step fail "VM 101 auto-started by PVE [s15b]" \
+                "not running and no autostart attempt in the journal —" \
+                "see $(basename "$log")"
+            return 1
+        fi
+    fi
+
+    # shellcheck disable=SC2016  # expansions run in the guest
+    if itf_guest_exec "$c_ip" \
+            'test "$(qm status 202 | awk "{print \$2}")" = stopped' \
+            > /dev/null 2>&1; then
+        itf_step pass "VM 202 stayed stopped [s15b]" "no onboot — the contrast case"
+    else
+        itf_step info "VM 202 stayed stopped [s15b]" \
+            "running without onboot — recorded (unexpected)"
+    fi
+
+    itf_guest_exec "$c_ip" "qm set 101 --onboot 0" > "$ITF_RUN_DIR/s15b-onboot-off.log" 2>&1
+    itf_step info "onboot restored [s15b]" "VM 101 --onboot 0 (lab posture)"
+
+    # ==================================================================
+    # S16 — both nodes power-cycle, storage slow to return
+    # ==================================================================
+
+    # Prep: VM 101 came back running with the autostart; arm a fresh
+    # writer baseline on it.  VM 202 stays parked.
+    itf_vm_wait_agent "$c_ip" 101 600 || {
+        itf_step fail "VM 101 agent after autostart [s16-prep]" \
+            "agent channel not back — see fence-boot/journal artifacts"
+        return 1
+    }
+    itf_vm_workload_start "$c_ip" 101 || return 1
+    sample="$ITF_RUN_DIR/workload-s16-baseline-101.txt"
+    if ! itf_vm_workload_wait_sample "$c_ip" 101 "$sample"; then
+        itf_step fail "writer baseline [s16/VM 101]" \
+            "no growing sample — see $(basename "$sample")"
+        return 1
+    fi
+    s16_lines="$(wc -l < "$sample")"
+    s16_ck="$(j18_prefix_cksum "$c_ip" 101 "$s16_lines")"
+    s16_max="$(tail -n 1 "$sample")"
+    itf_step pass "writer baseline [s16/VM 101]" \
+        "lines=$s16_lines prefix-cksum captured (VM 202 parked)"
+
+    itf_compute_fallout_sample "$c_ip" s16-pre 101
+    # The P6 pre-reboot gates on the healthy lab.
+    itf_safe_save_gate "$s_ip" s16-pre || return 1
+    itf_iscsi_check_gate "$s_ip" s16-pre || return 1
+
+    # Power stroke: storage first (the writer stalls on the dead LUN
+    # while compute still runs — j15's cling datum, one sample), then
+    # compute (the writer dies with the node).
+    itf_reboot_guest_begin j18-s16 storage --power || return 1
+    itf_compute_fallout_sample "$c_ip" s16-storage-down 101
+    itf_reboot_guest_begin j18-s16 compute --power || return 1
+    itf_step info "VM 101 dies with the node [s16]" \
+        "the compute power-off stopped it (no onboot — S15b restored 0)"
+
+    # Compute returns FIRST; storage stays down (the "slow to boot"
+    # leg).  A fresh-booted compute against dead storage never
+    # established a single session — there is nothing to cling and
+    # nothing to rescan.
+    itf_reboot_guest_wait j18-s16 compute || return 1
+    j15_read_coords || return 1
+
+    itf_compute_fallout_sample "$c_ip" s16-window 101
+    # shellcheck disable=SC2016  # expansions run in the guest
+    if itf_guest_exec "$c_ip" \
+            'test "$(qm status 101 | awk "{print \$2}")" = stopped' \
+            > /dev/null 2>&1; then
+        itf_step info "VM 101 stopped inside the window [s16]" \
+            "no session, no links — the compute booted storage-less"
+    fi
+
+    # The campaign's ssh-255 WARN, live: the fence tick against the
+    # unreachable storage host.  rc 1 + the documented WARN/FATAL set
+    # (the rescan leg found no sessions; the reconcile leg could not
+    # even resolve the remote script; the refs stay missing).
+    itf_fence_tick "$c_ip" s16-outage
+    rc=$?
+    log="$ITF_RUN_DIR/fence-tick-s16-outage.log"
+    if (( rc != 0 )) \
+            && grep -q "by-path link missing" "$log" \
+            && grep -q "Local iSCSI rescan reported problems" "$log" \
+            && grep -q "ssh to storage host .* failed" "$log" \
+            && grep -q "reconcile-iscsi-state did not run" "$log" \
+            && grep -qE \
+                "FATAL: [0-9]+ of [0-9]+ VM disk path\(s\) still missing after recovery" \
+                "$log" \
+            && ! grep -q "reconcile-iscsi-state reported problems" "$log"; then
+        itf_step pass "fence fires against unreachable storage [s16]" \
+            "tick rc=1: per-ref WARNs, rescan problems, the ssh-255 WARN," \
+            "still-missing FATAL — and never the reported-problems WARN" \
+            "(the distinct-warning contract)"
+    else
+        itf_step fail "fence fires against unreachable storage [s16]" \
+            "rc=$rc — see $(basename "$log")"
+        return 1
+    fi
+
+    # Storage returns LATE: the wait half starts it and brings ssh back.
+    itf_reboot_guest_wait j18-s16 storage || return 1
+    j15_read_coords || return 1
+
+    # The boot oracle in the power-cycle shape: same restore chain +
+    # FAILED + DRIFT naming the encrypted LUNs (the power-off unloaded
+    # the keys — the expected-every-boot shape).
+    itf_storage_reboot_assert j18-s16 "$s_ip" failed \
+        "$J15_LUN_SPARE" "$J15_LUN_ENC_OS" || return 1
+
+    # Post-return convergence, classified per the G4 oracle ruling —
+    # per LUN class (run-3's live truth): the sessions and the PLAIN
+    # LUNs return unaided after the storage return; the ENCRYPTED LUN
+    # stays missing BY DESIGN until the key ceremony (the boot restore
+    # strips it — no session rescan can materialize a LUN the target
+    # does not export yet).
+    # shellcheck disable=SC2016  # expansions run in the guest
+    if itf_guest_exec "$c_ip" \
+            'test "$(iscsiadm -m session 2>/dev/null | grep -c .)" -ge 1' \
+            > /dev/null 2>&1; then
+        itf_step pass "sessions re-logged-in unaided [s16]" \
+            "the sessions came back on their own after the storage" \
+            "return — no operator step (the tick artifact shows which" \
+            "daemon did it)"
+    else
+        itf_step fail "sessions re-logged-in unaided [s16]" \
+            "no session after the storage return — see fallout logs"
+        return 1
+    fi
+
+    if elapsed_plain="$(itf_wait_vm_disk_links "$c_ip" 300 101)"; then
+        itf_step pass "plain LUNs returned unaided [s16]" \
+            "VM 101's links back ${elapsed_plain}s after the storage" \
+            "return — no manual step"
+    else
+        # The manual arc for the genuinely session-less class (not
+        # run-3's shape; kept for the class): documented rescan first,
+        # then the operator's node login — the step no product command
+        # performs (UX row → REQUIREMENTS at G5).
+        log="$ITF_RUN_DIR/rescan-s16-manual.log"
+        itf_guest_exec "$c_ip" "bash -lc 'rescan-storage'" > "$log" 2>&1
+        itf_artifact "rescan-s16-manual" "$log"
+        itf_guest_exec "$c_ip" "bash -lc 'diagnose-storage'" \
+            > "$ITF_RUN_DIR/diagnose-s16.log" 2>&1 || true
+        itf_artifact "diagnose-s16" "$ITF_RUN_DIR/diagnose-s16.log"
+        log="$ITF_RUN_DIR/s16-node-login.log"
+        if itf_guest_exec "$c_ip" "iscsiadm -m node --login" \
+                > "$log" 2>&1; then
+            itf_step info "manual node login [s16]" \
+                "operator ran iscsiadm -m node --login — the step no" \
+                "product surface offers (UX row → REQUIREMENTS at G5)"
+        else
+            itf_step fail "manual node login [s16]" "see $(basename "$log")"
+            return 1
+        fi
+        if itf_wait_vm_disk_links "$c_ip" 300 101 \
+                > "$ITF_RUN_DIR/s16-links-elapsed.txt"; then
+            itf_step pass "plain LUNs returned via manual arc [s16]" \
+                "links back after the node login (FINDING: the fence" \
+                "cannot converge a session-less compute unaided)"
+        else
+            itf_step fail "plain LUNs returned via manual arc [s16]" \
+                "still missing after the login — see fallout logs"
+            return 1
+        fi
+    fi
+
+    # The return tick asserts the keys-pending truth: rc 1 naming ONLY
+    # the encrypted LUN — reconcile's own transcript skips it with the
+    # "keys not loaded?" hint and preserves the pool map as the
+    # recovery authority.  Red for the right reason: the everyday boot
+    # shape until the ceremony closes it within-boot.
+    itf_fence_tick "$c_ip" s16-return
+    rc=$?
+    log="$ITF_RUN_DIR/fence-tick-s16-return.log"
+    if (( rc != 0 )) \
+            && grep -q "VM 202 .*scsi0.*by-path link missing" "$log" \
+            && ! grep -q "VM 101 .*by-path link missing" "$log" \
+            && grep -q "keys not loaded" "$log" \
+            && grep -q "Pool LUN map left unchanged" "$log"; then
+        itf_step pass "fence red exactly for the keys-pending LUN [s16]" \
+            "the encrypted LUN stays unexported until the ceremony;" \
+            "reconcile skips it (\"keys not loaded?\"), keeps the map" \
+            "as the recovery authority, and saves the rest"
+    else
+        itf_step fail "fence red exactly for the keys-pending LUN [s16]" \
+            "rc=$rc — see $(basename "$log")"
+        return 1
+    fi
+
+    # The encrypted tail: the power-off unloaded the keys — and the
+    # ceremony exposes run-4's finding (F-042): the fence's RETURN
+    # tick ran reconcile while keys were pending, and its trailing
+    # save rewrote saveconfig.json from live state — the encrypted
+    # LUN records (and the indexes iscsi-recover-encrypted-luns
+    # reads ONLY from there) are gone while the pool map kept them
+    # (its declared recovery authority).  The documented recover
+    # FATALs; its conf-entry advice is unactionable (the conf has no
+    # index field).  The blind operator arc: keys are loaded now, so
+    # one more fence tick drives a keys-loaded reconcile that
+    # rebuilds both encrypted LUNs at the map-recorded indexes and
+    # re-records them in saveconfig.json; the recover re-run then
+    # lands on its already-present path and heals the ACL grants.
+    itf_keystore_insert "$s_base" "$s_vmid" || return 1
+    itf_keystore_unlock_mount "$s_ip" || return 1
+    itf_storage_load_keys "$s_ip" || return 1
+
+    log="$ITF_RUN_DIR/recover-encrypted-s16-first.log"
+    itf_guest_exec "$s_ip" "bash -lc 'iscsi-recover-encrypted-luns'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "recover-encrypted-s16-first" "$log"
+    if [[ $rc -ne 0 ]] && grep -q "has no recorded LUN index" "$log" \
+            && grep -qE "Failed: +2" "$log"; then
+        itf_step pass "recover dead-ends after a keys-pending fence save [s16]" \
+            "FINDING (F-042): the return tick's reconcile saved live" \
+            "state while keys were pending, dropping the encrypted" \
+            "records from saveconfig.json; recover reads indexes only" \
+            "from saveconfig — the map kept them but is never consulted" \
+            "(FINDINGS row filed; repair-plan 023 proposed)"
+    else
+        itf_step fail "recover first attempt [s16]" \
+            "rc=$rc — unexpected shape, see $(basename "$log")"
+        return 1
+    fi
+
+    itf_fence_tick "$c_ip" s16-keys-loaded > /dev/null 2>&1 || true
+    if ! itf_wait_vm_disk_links "$c_ip" 300 101 202 \
+            > "$ITF_RUN_DIR/s16-enc-links-elapsed.txt"; then
+        itf_step fail "encrypted LUNs rebuilt by the keys-loaded tick [s16]" \
+            "links still missing 300s after it — see" \
+            "fence-tick-s16-keys-loaded.log"
+        return 1
+    fi
+    if itf_fence_tick "$c_ip" s16-keys-loaded2 \
+            && grep -q "All .* VM disk path(s) present" \
+                "$ITF_RUN_DIR/fence-tick-s16-keys-loaded2.log"; then
+        itf_step pass "encrypted LUNs rebuilt by the keys-loaded tick [s16]" \
+            "reconcile recreated both backstores at the map-recorded" \
+            "indexes and saved; links back in $(cat "$ITF_RUN_DIR/s16-enc-links-elapsed.txt")s"
+    else
+        itf_step fail "encrypted LUNs rebuilt by the keys-loaded tick [s16]" \
+            "see fence-tick-s16-keys-loaded2.log"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/recover-encrypted-s16-second.log"
+    if itf_guest_exec "$s_ip" "bash -lc 'iscsi-recover-encrypted-luns'" \
+            > "$log" 2>&1 \
+            && grep -q "already present" "$log" \
+            && ! grep -q "FATAL" "$log"; then
+        itf_step pass "recover re-run heals the ACL grants [s16]" \
+            "already-present path, grants rebound at the recorded" \
+            "indexes — see $(basename "$log")"
+    else
+        itf_step fail "recover re-run [s16]" \
+            "unexpected shape — see $(basename "$log")"
+        return 1
+    fi
+
+    itf_keystore_lock_umount "$s_ip" || return 1
+    itf_keystore_remove "$s_base" "$s_vmid" || return 1
+    itf_iscsi_check_gate "$s_ip" s16 || return 1
+    itf_step pass "S16 within-boot convergence" \
+        "keys + the fence-driven rebuild + recover's grant heal; manual" \
+        "--check rc 0, no drift — the both-node power-cycle arc closed" \
+        "through documented surfaces (with F-042 recorded)"
+
+    # VM boot + integrity: VM 101 on the restored plain LUN (prefix vs
+    # the s16 baseline), VM 202 on the recovered encrypted LUN (prefix
+    # vs its s15 baseline).
+    j15_boot_workload_vm 101 || return 1
+    resumed=0
+    resume_start=$SECONDS
+    while (( SECONDS - resume_start < 300 )); do
+        new_max="$(itf_vm_workload_sample "$c_ip" 101 2>/dev/null \
+            | tail -n 1 || true)"
+        if [[ "$new_max" =~ ^[0-9]+$ && "$s16_max" =~ ^[0-9]+$ ]] \
+                && (( new_max > s16_max )); then
+            resumed=1
+            break
+        fi
+        sleep "${ITF_LINK_POLL_INTERVAL:-10}"
+    done
+    sample="$ITF_RUN_DIR/workload-s16-resumed-101.txt"
+    itf_vm_workload_sample "$c_ip" 101 > "$sample" 2>/dev/null || true
+    itf_artifact "workload-s16-resumed-101" "$sample"
+    ck_after="$(j18_prefix_cksum "$c_ip" 101 "$s16_lines")"
+    if (( resumed )) && [[ "$ck_after" == "$s16_ck" ]]; then
+        itf_vm_workload_gaps "$sample" 5 \
+            > "$ITF_RUN_DIR/workload-s16-resumed-101.gaps"
+        itf_step pass "VM 101 boots with intact data [s16]" \
+            "log grew past the baseline; $(cat "$ITF_RUN_DIR/workload-s16-resumed-101.gaps");" \
+            "pre-event bytes unchanged"
+    else
+        itf_step fail "VM 101 boots with intact data [s16]" \
+            "resumed=$resumed prefix '${s16_ck}' -> '${ck_after:-none}'"
+        return 1
+    fi
+
+    j15_boot_workload_vm 202 || return 1
+    base_max="${base_max_ts[1]}"
+    resumed=0
+    resume_start=$SECONDS
+    while (( SECONDS - resume_start < 300 )); do
+        new_max="$(itf_vm_workload_sample "$c_ip" 202 2>/dev/null \
+            | tail -n 1 || true)"
+        if [[ "$new_max" =~ ^[0-9]+$ && "$base_max" =~ ^[0-9]+$ ]] \
+                && (( new_max > base_max )); then
+            resumed=1
+            break
+        fi
+        sleep "${ITF_LINK_POLL_INTERVAL:-10}"
+    done
+    sample="$ITF_RUN_DIR/workload-s16-resumed-202.txt"
+    itf_vm_workload_sample "$c_ip" 202 > "$sample" 2>/dev/null || true
+    itf_artifact "workload-s16-resumed-202" "$sample"
+    ck_after="$(j18_prefix_cksum "$c_ip" 202 "${base_lines[1]}")"
+    if (( resumed )) && [[ "$ck_after" == "${base_ck[1]}" ]]; then
+        itf_step pass "VM 202 boots on the recovered encrypted LUN [s16]" \
+            "writer past its s15 baseline; pre-event bytes unchanged" \
+            "(see $(basename "$sample"))"
+    else
+        itf_step fail "VM 202 boots on the recovered encrypted LUN [s16]" \
+            "resumed=$resumed prefix '${base_ck[1]}' -> '${ck_after:-none}'"
+        return 1
+    fi
+
+    # Park both for S17 (fence refs come from configs, running or not).
+    j15_park_vms s16-post || return 1
+
+    # ==================================================================
+    # S17 — the orphan LUN (VM deleted in PVE / scsi line hand-removed)
+    # ==================================================================
+
+    # Setup: two scratch stopped VMs + a 1G LUN each through the
+    # product flow (j17's S13 pattern).
+    for vm in "$J18_VM_A" "$J18_VM_B"; do
+        log="$ITF_RUN_DIR/s17-qm-create-${vm}.log"
+        if itf_guest_exec "$c_ip" \
+                "bash -lc 'qm create ${vm} --name j18-vm${vm} --scsihw virtio-scsi-pci'" \
+                > "$log" 2>&1; then
+            itf_step pass "VM ${vm} created (stopped)" "S17 scratch config"
+        else
+            itf_step fail "VM ${vm} created" "see $(basename "$log")"
+            return 1
+        fi
+        log="$ITF_RUN_DIR/s17-create-${vm}-0.log"
+        itf_guest_exec "$c_ip" \
+            "bash -lc 'new-vm-disk ${J18_POOL_A} ${vm} 0 1G'" > "$log" 2>&1
+        rc=$?
+        itf_artifact "s17-create-${vm}-0" "$log"
+        if [[ $rc -eq 0 ]] && grep -q "✓ Configuration saved" "$log" \
+                && itf_guest_exec "$c_ip" \
+                    "grep -q '^scsi0: /dev/disk/by-path/' /etc/pve/qemu-server/${vm}.conf" \
+                    > /dev/null 2>&1; then
+            itf_step pass "LUN created for VM ${vm} [s17]" \
+                "vm-${vm}-disk-0 (1G) + scsi0 line in its config"
+        else
+            itf_step fail "LUN created for VM ${vm} [s17]" \
+                "rc=$rc — see $(basename "$log")"
+            return 1
+        fi
+    done
+    if ! itf_wait_vm_disk_links "$c_ip" 300 "$J18_VM_A" "$J18_VM_B" \
+            > "$ITF_RUN_DIR/s17-links-elapsed.txt"; then
+        itf_step fail "scratch LUN links present [s17]" \
+            "by-path links missing 300s after the creates"
+        return 1
+    fi
+    itf_step pass "scratch LUN links present [s17]" \
+        "both scratch LUNs visible on compute"
+    map_base="$(j18_lun_total "$c_ip")"
+    if [[ "$map_base" =~ ^[0-9]+$ ]]; then
+        itf_step pass "LUN-count baseline [s17]" \
+            "show-lun-map total: ${map_base}"
+    else
+        itf_step fail "LUN-count baseline [s17]" "show-lun-map unparseable"
+        return 1
+    fi
+    itf_iscsi_check_gate "$s_ip" s17-base || return 1
+
+    # ------------------------------------------------------------------
+    # S17 variant a — VM deleted in PVE (qm destroy), LUN left behind
+    # ------------------------------------------------------------------
+
+    log="$ITF_RUN_DIR/s17a-destroy.log"
+    if itf_guest_exec "$c_ip" "qm destroy ${J18_VM_A} --purge" > "$log" 2>&1; then
+        itf_step pass "VM ${J18_VM_A} deleted in PVE [s17a]" \
+            "config gone; the by-path LUN is not PVE-owned and stays"
+    else
+        itf_step fail "VM ${J18_VM_A} deleted in PVE [s17a]" \
+            "see $(basename "$log")"
+        return 1
+    fi
+
+    # Blind-operator symptom walk: every checking surface is blind to
+    # the orphan (each walks VM-config refs or LIO-vs-map only).
+    log="$ITF_RUN_DIR/s17a-fence.log"
+    itf_guest_exec "$c_ip" "bash -lc 'check-vm-disk-paths'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s17a-fence" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "All .* VM disk path(s) present" "$log" \
+            && ! grep -q "vm-${J18_VM_A}" "$log"; then
+        itf_step pass "fence blind to the orphan [s17a]" \
+            "rc 0 — it walks VM-config refs only; the unreferenced LUN" \
+            "is invisible (design row)"
+    else
+        itf_step fail "fence blind to the orphan [s17a]" \
+            "rc=$rc — see $(basename "$log")"
+        return 1
+    fi
+
+    itf_iscsi_check_gate "$s_ip" s17a || return 1
+    itf_step pass "verifier blind to the orphan [s17a]" \
+        "no drift — VM configs are not an input to --check (design row)"
+
+    log="$ITF_RUN_DIR/s17a-rescan.log"
+    if itf_guest_exec "$c_ip" "bash -lc 'rescan-storage'" > "$log" 2>&1 \
+            && grep -q "Total iSCSI devices visible:" "$log"; then
+        itf_artifact "s17a-rescan" "$log"
+        itf_step pass "rescan-storage still green [s17a]" \
+            "the orphan is counted among the visible devices — nothing" \
+            "flags it (see $(basename "$log"))"
+    else
+        itf_step fail "rescan-storage still green [s17a]" \
+            "see $(basename "$log")"
+        return 1
+    fi
+
+    map_now="$(j18_lun_total "$c_ip")"
+    if [[ "$map_now" == "$map_base" ]]; then
+        itf_step pass "orphan persists in show-lun-map [s17a]" \
+            "total unchanged (${map_base}) — the LUN stays exported and" \
+            "visible after the VM deletion; the row exists but nothing" \
+            "attributes it to a VM"
+    else
+        itf_step fail "orphan persists in show-lun-map [s17a]" \
+            "total ${map_base} -> ${map_now:-unparseable} (expected unchanged)"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/s17a-repair-dry.log"
+    itf_guest_exec "$c_ip" "bash -lc 'repair-vm-disk-refs --dry-run'" \
+        > "$log" 2>&1
+    rc=$?
+    itf_artifact "s17a-repair-dry" "$log"
+    if [[ $rc -eq 0 ]] && ! grep -q "vm-${J18_VM_A}" "$log"; then
+        itf_step pass "repair-vm-disk-refs silent on the orphan [s17a]" \
+            "it repairs wrong-backstore refs only — no surface names the" \
+            "orphan except remove-vm's classifier (design row)"
+    else
+        itf_step fail "repair-vm-disk-refs silent on the orphan [s17a]" \
+            "rc=$rc — see $(basename "$log")"
+        return 1
+    fi
+
+    # Honest recovery: remove-vm's classifier names it and spares it.
+    feed="$ITF_RUN_DIR/s17a-decline-feed.txt"
+    printf 'n\n' > "$feed"
+    log="$ITF_RUN_DIR/s17a-remove-vm-spared.log"
+    itf_guest_exec_feed "$c_ip" "$feed" \
+        "bash -lc 'remove-vm ${J18_VM_A}'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s17a-remove-vm-spared" "$log"
+    if [[ $rc -eq 0 ]] \
+            && grep -q "Orphaned zvols (not referenced by any VM config, will NOT be removed)" "$log" \
+            && grep -q "vm-${J18_VM_A}-disk-0" "$log" \
+            && grep -q "Pass --cleanup-orphans to remove these as well" "$log" \
+            && grep -q "Aborted." "$log" \
+            && itf_guest_exec "$s_ip" \
+                "zfs list -H -o name ${J18_POOL_A}/proxmox/vm-${J18_VM_A}-disk-0" \
+                > /dev/null 2>&1; then
+        itf_step pass "remove-vm spares + names the orphan [s17a]" \
+            "declined at the proceed prompt — the WARN names the zvol," \
+            "the hint shows the deliberate path, nothing was removed"
+    else
+        itf_step fail "remove-vm spares + names the orphan [s17a]" \
+            "rc=$rc — see $(basename "$log")"
+        return 1
+    fi
+
+    feed="$ITF_RUN_DIR/s17a-cleanup-feed.txt"
+    printf 'y\n' > "$feed"
+    log="$ITF_RUN_DIR/s17a-remove-vm-cleanup.log"
+    itf_guest_exec_feed "$c_ip" "$feed" \
+        "bash -lc 'remove-vm ${J18_VM_A} --cleanup-orphans'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s17a-remove-vm-cleanup" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "=== Done ===" "$log" \
+            && ! itf_guest_exec "$s_ip" \
+                "zfs list -H -o name ${J18_POOL_A}/proxmox/vm-${J18_VM_A}-disk-0" \
+                > /dev/null 2>&1; then
+        itf_step pass "cleanup-orphans removes the live orphan [s17a]" \
+            "zfsdelfs's LIO-aware teardown removed LUN + backstore + zvol" \
+            "(see $(basename "$log"))"
+    else
+        itf_step pass "cleanup-orphans recorded live [s17a]" \
+            "rc=$rc — the live-exported orphan was NOT cleanly removed" \
+            "by remove-vm --cleanup-orphans (FINDING); converging via" \
+            "remove-vm-disk below"
+        feed="$ITF_RUN_DIR/s17a-converge-feed.txt"
+        printf 'y\ny\n' > "$feed"
+        log="$ITF_RUN_DIR/s17a-converge.log"
+        itf_guest_exec_feed "$s_ip" "$feed" \
+            "bash -lc 'remove-vm-disk ${J18_POOL_A} ${J18_VM_A} 0'" \
+            > "$log" 2>&1 || true
+        itf_artifact "s17a-converge" "$log"
+        if ! itf_guest_exec "$s_ip" \
+                "zfs list -H -o name ${J18_POOL_A}/proxmox/vm-${J18_VM_A}-disk-0" \
+                > /dev/null 2>&1; then
+            itf_step pass "remove-vm-disk converges the orphan [s17a]" \
+                "the documented per-disk path completed the teardown"
+        else
+            itf_step fail "orphan converged [s17a]" \
+                "zvol still present after both paths — see $(basename "$log"))"
+            return 1
+        fi
+    fi
+
+    # Variant-a end state: the zvol/LIO removal is gated above; the
+    # count keeps a GHOST row (run-8 live truth, re-verified by hand):
+    # the teardown's trailing rescan does not drop the removed LUN's
+    # device node — it lingers at 0G until a session re-login
+    # (REQUIREMENTS-class row; the fence is blind to it — no refs).
+    itf_guest_exec "$c_ip" "bash -lc 'show-lun-map'" \
+        > "$ITF_RUN_DIR/s17a-post-map.log" 2>&1
+    itf_artifact "s17a-post-map" "$ITF_RUN_DIR/s17a-post-map.log"
+    if grep -qE "lun[0-9]+ +/dev/sd[a-z]+ +0G" "$ITF_RUN_DIR/s17a-post-map.log"; then
+        itf_step pass "ghost device datum [s17a]" \
+            "the removed LUN's device lingers at 0G in show-lun-map —" \
+            "rescan-storage cannot drop it, only a session re-login" \
+            "would (REQUIREMENTS row → G5); the teardown itself is" \
+            "complete (zvol gone, LIO clean, --check OK below)"
+    else
+        itf_step info "ghost device datum [s17a]" \
+            "no 0G row — the device dropped cleanly this time (see" \
+            "s17a-post-map.log)"
+    fi
+    itf_iscsi_check_gate "$s_ip" s17a-post || return 1
+
+    # ------------------------------------------------------------------
+    # S17 variant b — scsi line hand-removed, LUN left behind
+    # ------------------------------------------------------------------
+
+    log="$ITF_RUN_DIR/s17b-sed.log"
+    if itf_guest_exec "$c_ip" \
+            "sed -i '/^scsi0:/d' /etc/pve/qemu-server/${J18_VM_B}.conf" \
+            > "$log" 2>&1 \
+            && itf_guest_exec "$c_ip" \
+                "! grep -q '^scsi0:' /etc/pve/qemu-server/${J18_VM_B}.conf" \
+                > /dev/null 2>&1; then
+        itf_step pass "scsi0 hand-removed from VM ${J18_VM_B} [s17b]" \
+            "the hand-edit shape: config without its disk line"
+    else
+        itf_step fail "scsi0 hand-removed [s17b]" "see $(basename "$log")"
+        return 1
+    fi
+
+    log="$ITF_RUN_DIR/s17b-fence.log"
+    itf_guest_exec "$c_ip" "bash -lc 'check-vm-disk-paths'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s17b-fence" "$log"
+    if [[ $rc -eq 0 ]] && grep -q "All .* VM disk path(s) present" "$log" \
+            && ! grep -q "vm-${J18_VM_B}" "$log"; then
+        itf_step pass "fence blind to the orphan [s17b]" \
+            "no reference left to check — the LUN is invisible (design row)"
+    else
+        itf_step fail "fence blind to the orphan [s17b]" \
+            "rc=$rc — see $(basename "$log")"
+        return 1
+    fi
+    itf_iscsi_check_gate "$s_ip" s17b || return 1
+    itf_step pass "verifier blind to the orphan [s17b]" \
+        "no drift — the LUN still matches the map"
+
+    # Recovery via remove-vm-disk (its designed precondition — the disk
+    # already removed from Proxmox, the prompt asks exactly that).
+    feed="$ITF_RUN_DIR/s17b-feed.txt"
+    printf 'y\ny\n' > "$feed"
+    log="$ITF_RUN_DIR/s17b-remove-vm-disk.log"
+    itf_guest_exec_feed "$s_ip" "$feed" \
+        "bash -lc 'remove-vm-disk ${J18_POOL_A} ${J18_VM_B} 0'" > "$log" 2>&1
+    rc=$?
+    itf_artifact "s17b-remove-vm-disk" "$log"
+    if [[ $rc -eq 0 ]] \
+            && grep -q "✓ LUN removed from target" "$log" \
+            && grep -q "✓ Backstore removed" "$log" \
+            && grep -q "✓ Removed from expected-backstores manifest" "$log" \
+            && grep -q "✓ Configuration saved" "$log" \
+            && grep -q "✓ Zvol destroyed" "$log" \
+            && grep -q "=== Done ===" "$log"; then
+        itf_step pass "remove-vm-disk converges the orphan [s17b]" \
+            "LUN, backstore, manifest line, saved config, destroyed zvol" \
+            "— the full documented teardown"
+    else
+        itf_step fail "remove-vm-disk converges the orphan [s17b]" \
+            "rc=$rc — see $(basename "$log")"
+        return 1
+    fi
+
+    if ! itf_guest_exec "$s_ip" \
+            "zfs list -H -o name ${J18_POOL_A}/proxmox/vm-${J18_VM_B}-disk-0" \
+            > /dev/null 2>&1 \
+            && itf_guest_exec "$c_ip" \
+                "test -f /etc/pve/qemu-server/${J18_VM_B}.conf" \
+                > /dev/null 2>&1; then
+        itf_step pass "variant-b end state [s17b]" \
+            "zvol gone; VM ${J18_VM_B}'s config intact sans the scsi line"
+    else
+        itf_step fail "variant-b end state [s17b]" \
+            "zvol still present or config lost"
+        return 1
+    fi
+    # Variant-b end: same ghost datum — the second removed LUN joins
+    # the first as a 0G row (counted, never gated on the number).
+    itf_guest_exec "$c_ip" "bash -lc 'show-lun-map'" \
+        > "$ITF_RUN_DIR/s17b-post-map.log" 2>&1
+    itf_artifact "s17b-post-map" "$ITF_RUN_DIR/s17b-post-map.log"
+    ghosts="$(grep -cE "lun[0-9]+ +/dev/sd[a-z]+ +0G" "$ITF_RUN_DIR/s17b-post-map.log")"
+    if (( ghosts >= 2 )); then
+        itf_step pass "ghost devices datum [s17b]" \
+            "both removed scratch LUNs linger as 0G rows (REQUIREMENTS" \
+            "row → G5); the teardowns themselves are complete (zvols" \
+            "gone, --check OK above)"
+    else
+        itf_step info "ghost devices datum [s17b]" \
+            "${ghosts} 0G row(s) — see s17b-post-map.log"
+    fi
+
+    # Scratch tidy: destroy the empty VM ${J18_VM_B} config.
+    itf_guest_exec "$c_ip" "qm destroy ${J18_VM_B} --purge" \
+        > "$ITF_RUN_DIR/s17b-tidy.log" 2>&1 || true
+    itf_step info "scratch VM ${J18_VM_B} destroyed" "config-only tidy"
+
+    # ==================================================================
+    # Wrap — final posture
+    # ==================================================================
+
+    if itf_fence_tick "$c_ip" j18-final; then
+        itf_step pass "fence tick healthy [j18-final]" \
+            "all VM disk path(s) present"
+    else
+        itf_step fail "fence tick healthy [j18-final]" \
+            "see fence-tick-j18-final.log"
+        return 1
+    fi
+    itf_iscsi_check_gate "$s_ip" j18-final || return 1
+
+    itf_step info "journey complete" \
+        "S15 compute reboot (sessions/links/fence return unaided; the" \
+        "VMs stay stopped — operator qm start, and onboot's autostart" \
+        "RACES the iSCSI login and is never retried, recorded live" \
+        "with journal evidence); S16 both-node power cycle (ssh-255" \
+        "WARN live against dead storage; FAILED+DRIFT boot oracle after" \
+        "the late return; sessions + plain LUNs return unaided while" \
+        "the fence stays red exactly for the keys-pending LUN; F-042:" \
+        "the keys-pending fence save strands the encrypted index" \
+        "records, closed via a keys-loaded tick's map-driven rebuild +" \
+        "recover's grant heal; both VMs boot with intact data); S17" \
+        "orphan LUN (fence/verifier/rescan/show-lun-map/repair all" \
+        "blind by design; remove-vm's classifier names + spares it;" \
+        "both documented teardown paths converge, each leaving a ghost" \
+        "0G device row rescan cannot drop)"
+    return 0
+}
+
+journey_main() {
+    j18_compute_power_events_main "$@"
+}

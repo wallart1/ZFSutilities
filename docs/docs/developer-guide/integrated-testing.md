@@ -556,6 +556,52 @@ reconcile FATALs on its own and installs a comment-only manifest that
 its trailing save then refuses — benign only when the sibling's save
 heals it) before a clean sequential re-run converges the tree.
 
+The **j18-compute-power-events** journey runs the compute & power-event
+catalog on the same lab (keys stay loaded through S15; S16's storage
+power cycle unloads them and closes through the j15 recovery arc):
+S15 proves a compute-node reboot the everyday way, in two legs — the
+default posture returns the iSCSI sessions, the by-path links, and a
+green fence tick unaided while both VMs stay stopped (nothing
+restarts them without onboot; the operator's `qm start` restarts them
+and the writer data survives: the log grows past the baseline, the
+pre-event prefix checksum is unchanged, and the outage appears as one
+gap), while `--onboot 1` asserts PVE's boot-time autostart in both its
+live shapes — the unattended return, or the attempted-and-raced start
+(startall fires before the iSCSI links exist, fails on the by-path
+stat, and never retries: onboot alone does not return running VMs
+unattended on iSCSI disks — a REQUIREMENTS row, since the fence heals
+links but not starts), with the contrast VM without onboot staying
+down; S16 power-cycles both nodes
+with storage slow to return — the compute node boots into a
+storage-less world (zero sessions ever established, so nothing clings
+and nothing rescan-able exists), the fence tick fires against the
+unreachable storage host (per-ref WARNs, rescan problems, the ssh-255
+WARN, the still-missing FATAL, never the reported-problems WARN),
+storage's late return journals the FAILED+DRIFT boot oracle for the
+encrypted LUNs, and the post-return truth is measured live: the
+sessions and the plain LUNs return unaided, while the return tick
+stays red exactly for the keys-pending encrypted LUN (reconcile
+skips it with the `keys not loaded?` hint and preserves the pool map
+as the recovery authority) — F-042: that same return tick's trailing
+save drops the encrypted records from saveconfig.json, so the
+documented `iscsi-recover-encrypted-luns` FATALs on its
+saveconfig-only index lookup; the arc closes through a keys-loaded
+tick whose map-driven reconcile rebuilds both LUNs at the recorded
+indexes, with recover's re-run healing the ACL grants (repair-plan 023
+proposed). Both VMs then boot with intact writers and `--check` reads
+rc 0; S17 leaves an
+orphan live-exported LUN behind in both shapes (a VM deleted in PVE
+and a hand-removed scsi line) and proves every checking surface blind
+to it by design (the fence, `--check`, `rescan-storage`,
+`show-lun-map`, and `repair-vm-disk-refs --dry-run` each walk
+VM-config refs or LIO-vs-map only) — `remove-vm`'s classifier is the
+one surface that names and spares it, and both documented teardown
+paths converge (`remove-vm --cleanup-orphans` through the LIO-aware
+`zfsdelfs`; `remove-vm-disk` after the hand-removal its prompts ask
+about) — each teardown leaving a ghost 0-GiB device row that
+rescan-storage cannot drop (only a session re-login clears it;
+REQUIREMENTS row).
+
 ## Findings and repair loop
 
 Failures observed through the end-user surface become entries in

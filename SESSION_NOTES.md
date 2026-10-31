@@ -1242,3 +1242,88 @@ nag only). Guests of the green runs destroyed; PREEXISTING.md unchanged
 - Full unit suite green at phase end (107 suites; itf suites
   sandboxed, ran beside the live journey). No version bump, no
   changelog, no commits (user cue).
+
+## 2026-10-30 — G4: j18-compute-power-events (campaign phase G4)
+
+- User approved the G4 plan (same session) with one oracle ruling
+  gathered BEFORE planning (G1/G2 pattern): S16's post-return leg
+  hard-gates only documented strings while storage is down (the
+  ssh-255 WARN live), and post-return convergence is classified live
+  rather than hard-gated — the campaign's "next-tick auto-recovery"
+  expectation was doubted from code reading (correctly, though the
+  live shape differed from both predictions).
+- j18-compute-power-events.journey written (shellcheck clean):
+  sources j15 (j17's composition pattern), identical staging, journey-
+  local helpers only (target/inventory, storage-side :3260 session
+  counter, workload prefix-cksum, fence boot-journal capture,
+  show-lun-map total parser, race-tolerant compute reboot pair);
+  S15 (two legs) -> S16 -> S17 (two variants) -> wrap. Registered in
+  test-itf-driver's journey list; docs: journeys/README row,
+  integrated-testing.md section, roadmap 3.9 G4 sentence (each updated
+  repeatedly as live truths replaced predictions — the honesty-pass
+  discipline held through the ladder).
+- Run ladder, ten runs (every fix via --rerun replays from as-cloned):
+  run 1 — the shared reboot gate's gone-phase FAILED a real compute
+  reboot (a PVE guest stopping two TCG VMs outlasts the 180s window
+  with sshd up while the storage-side window log proved the sessions
+  collapsed to zero); fix = journey-local j18_reboot_compute
+  begin/wait proving the reboot by boot_id change, ssh drop demoted
+  to evidence. run 2 — S15b: --onboot 1 did NOT return VM 101; live
+  journal shows pve-guests startall fired 2s after boot, failed on
+  the by-path stat (links not yet back), finished OK, never retried
+  (REQUIREMENTS row: onboot alone does not return running VMs
+  unattended on iSCSI disks; the fence heals links, not starts); gate
+  now asserts both live shapes with journal evidence. run 3 — S16's
+  branch-B was mispredicted: sessions re-logged-in unaided (loginall
+  found no node records — step text kept mechanism-neutral), plain
+  LUNs back at 0s, and the return tick red exactly for the keys-
+  pending encrypted LUN (reconcile skipping the encrypted zvols with
+  the "keys not loaded?" hint, pool map preserved); per-class gates
+  written. run 4 — F-042 (below). run 5 — show-lun-map's summary
+  line rides log_msg STDERR (helper merged streams; the table is
+  stdout). run 6 — my count arithmetic: the baseline already includes
+  the scratch LUNs, so a VM deletion leaves the count unchanged.
+  run 7 — F-043 (below). run 8 — ghost device datum: documented
+  teardowns leave 0G device rows rescan-storage cannot drop (only a
+  session re-login clears them; REQUIREMENTS row); gates reframed to
+  the ghost shape. runs 9 and 10 GREEN — 191 steps, 161 pass, 0 fail,
+  30 info (run-20261030-195020, then the honesty-pass proving rerun
+  run-20261030-204426 after the wrap text was corrected; identical
+  verdicts bind the green report to the exact final file).
+- F-042 filed (open; repair-plan 023 PROPOSED, user adjudicates): the
+  fence's post-return tick runs reconcile-iscsi-state while encrypted
+  keys are pending; reconcile correctly skips the encrypted zvols and
+  preserves the pool map, but its trailing safe-iscsi-save rewrites
+  saveconfig.json from the encrypted-less live state — dropping the
+  LUN indexes iscsi-recover-encrypted-luns reads ONLY from
+  saveconfig.json, so the documented recover FATALs ("no recorded LUN
+  index"; its conf-entry advice is unactionable — the conf has no
+  index field). The indexes survive in the pool map (the declared
+  recovery authority) and saveconfig.json.pre-start, neither
+  consulted. j15 never hit this (compute up through storage reboots =
+  clinging sessions = healthy tick = no reconcile). THE PENDING P6
+  EXERCISE HAS THE SAME WINDOW (5-min fence cadence between storage
+  return and key loading). The journey closes through the documented
+  arc: a keys-loaded fence tick drives reconcile to rebuild both
+  encrypted LUNs at the map-recorded indexes, then recover's re-run
+  heals the ACL grants on its already-present path.
+- F-043 filed and FIXED in-cycle: bin/repair-vm-disk-refs was
+  committed mode 100644 (the only non-executable script in bin/) —
+  deployed copies cannot execute (rc 126, live-proven on the lab's
+  compute guest; the runbook's compute-restore Scenario B dead-ends on
+  a stock deployment; production stewie/tweety carry the dead copy
+  until the next deploy). Execute bit restored to match every sibling;
+  test-repair-vm-disk-refs green; the rerun verified the deployed fix
+  at the dry-run gate.
+- REQUIREMENTS-class step-text rows queued for the G5 register: the
+  PVE autostart race never retried; ghost 0G device rows after
+  teardowns; the S15 operator-restart classification.
+- Zero product behavior changes (the F-043 fix is mode-only);
+  test-itf-driver + test-repair-vm-disk-refs suites green during
+  iteration; full unit suite green at phase end (itf suites
+  sandboxed, run beside the live proving run).
+- All run guests destroyed post-green (bases hold only the
+  templates). No version bump, no changelog, no commits (user cue).
+  Uncommitted tail on 4c61e08: the journey, the driver list, the
+  three docs surfaces, FINDINGS F-042/F-043, repair-plan 023, and the
+  repair-vm-disk-refs mode fix.
