@@ -654,6 +654,20 @@ Compare-mode skips are environment or marker skips only.
 | `requires_gi` | Module-level `pytest.mark.skipif` for suites that use GTK only inside test bodies |
 | `check_pyyaml()` | Skips the current test if `pyyaml` is not installed |
 
+### Dashboard Refresh-Thread Drain
+
+`tests/python/conftest.py` installs an autouse fixture that wraps
+`dashboard_page._dashboard_refresh_worker` so every refresh thread is
+tracked, and after each test joins any still-running worker and resets
+the iscsi/fence/pool-identity TTL caches to cold. A real-GUI test can
+launch the real asynchronous dashboard refresh (the page-switch handler
+does), and on hosts where the gather's ssh/zpool subprocesses time out
+instead of failing fast, that worker's cache writes can land inside
+later tests. The drain — not per-suite discipline — is what makes the
+TTL-cache suites deterministic; suites that inspect those caches still
+reset them in `setUp` for their own clarity, but no suite needs to worry
+about another suite's refresh threads.
+
 ### Python Mock Subprocess
 
 The `MockSubprocess` class tracks every call and returns canned output:

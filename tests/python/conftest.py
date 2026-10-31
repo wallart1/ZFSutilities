@@ -19,6 +19,8 @@ import tempfile
 import time
 import warnings
 
+import pytest
+
 # Suppress the GTK/AT-SPI "Couldn't connect to accessibility bus" warning when
 # tests import real GTK modules (e.g. test_datasets_tree, test_main) in a
 # headless environment. Mirrors the guard in python/docs_viewer.py and the one
@@ -158,3 +160,67 @@ def _fence_display():
     os.environ["ZFSUTILITIES_TEST_DISPLAY"] = "private"
     _XVFB_PROC = proc
     atexit.register(_stop_private_xvfb)
+
+
+# --- Dashboard refresh-thread drain -----------------------------------------
+#
+# refresh_dashboard_page() defaults to async: it launches a daemon worker
+# whose gather calls the iscsi/fence/pool-identity TTL-cache getters. A
+# real-GUI test that triggers a refresh (the page-switch handler does) can
+# leave that worker running past the test's end. On CI runners the gather's
+# ssh/zpool subprocesses time out over seconds instead of failing fast, so
+# the straggler's cache writes landed INSIDE later tests on the same xdist
+# worker — defeating their setUp resets (observed on the v0.136.0 CI runs:
+# compute-mocks with 0 calls, one `[] is not None`). Wrap the worker so its
+# threads are tracked, then join them and reset the caches after EVERY test.
+
+_REFRESH_THREADS = []
+_ORIG_REFRESH_WORKER = None
+
+# Generously above the gather's own bound (its subprocesses run with 5-10s
+# timeouts), so a live straggler is always reaped, never just abandoned.
+_REFRESH_JOIN_TIMEOUT = 70.0
+
+
+def _reset_dashboard_caches(dp):
+    """Leave the three TTL caches cold, as at module import."""
+    dp._iscsi_luns_cache["time"] = 0.0
+    dp._iscsi_luns_cache["value"] = []
+    dp._fence_cache["time"] = 0.0
+    dp._fence_cache["warning"] = None
+    dp._pool_identity_cache["time"] = 0.0
+    dp._pool_identity_cache["value"] = []
+
+
+@pytest.fixture(autouse=True)
+def _drain_dashboard_refresh_threads():
+    """Join leaked dashboard refresh workers; reset the TTL caches.
+
+    Installs the tracking wrapper once dashboard_page first appears in
+    sys.modules (a suite that never imports it pays nothing), and drains
+    after every test so no cache write can land inside a later test.
+    """
+    global _ORIG_REFRESH_WORKER
+    import threading
+
+    dp = sys.modules.get("dashboard_page")
+    if dp is not None and _ORIG_REFRESH_WORKER is None:
+        if hasattr(dp, "_dashboard_refresh_worker"):
+            _ORIG_REFRESH_WORKER = dp._dashboard_refresh_worker
+
+            def _tracking_refresh_worker(*args, **kwargs):
+                thread = threading.current_thread()
+                _REFRESH_THREADS.append(thread)
+                try:
+                    return _ORIG_REFRESH_WORKER(*args, **kwargs)
+                finally:
+                    _REFRESH_THREADS.remove(thread)
+
+            dp._dashboard_refresh_worker = _tracking_refresh_worker
+    try:
+        yield
+    finally:
+        for thread in list(_REFRESH_THREADS):
+            thread.join(timeout=_REFRESH_JOIN_TIMEOUT)
+        if dp is not None:
+            _reset_dashboard_caches(dp)
