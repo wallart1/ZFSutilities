@@ -817,6 +817,9 @@ class _FakeCombo:
             return self.items[self.active]
         return ""
 
+    def set_tooltip_text(self, text):
+        self.tooltip = text
+
     def connect(self, signal, handler, *args):
         self.handlers[signal] = (handler, args)
 
@@ -952,6 +955,100 @@ class TestSettingsPageBlocksizeRecommendation(unittest.TestCase):
         refresh()
         self.assertEqual(combo.active, 2)
         self.assertEqual(state.ashift, 12)
+
+
+class TestWizardStaticTooltips(unittest.TestCase):
+    """Static tooltips across the wizard's pages and nav buttons."""
+
+    def test_disk_table_headers_carry_tooltips(self):
+        pcw = _import_wizard()
+        expected = {"Use", "by-id", "Size", "Model", "Transport", "Status"}
+        self.assertEqual(set(pcw._DISK_HEADER_TOOLTIP), expected)
+        for title, tip in pcw._DISK_HEADER_TOOLTIP.items():
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+        state = _state(pcw)
+        ctx = SimpleNamespace(repository=MagicMock())
+        with patch.object(pcw, "set_column_header_tooltip") as recorder:
+            pcw._build_disks_page(MagicMock(), state, ctx, lambda: None)
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            ["Use", "by-id", "Size", "Model", "Transport", "Status"],
+        )
+        for title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+    def test_topology_radios_carry_tooltips(self):
+        pcw = _import_wizard()
+        self.assertEqual(set(pcw._TOPOLOGY_RADIO_TOOLTIPS), set(pcw.TOPOLOGIES))
+        for name, tip in pcw._TOPOLOGY_RADIO_TOOLTIPS.items():
+            self.assertTrue(tip and tip.strip(), f"{name} radio tooltip is empty")
+        self.assertTrue(pcw._RAID10_RADIO_TOOLTIP.strip())
+
+        state = _state(pcw)
+        ctx = SimpleNamespace(repository=MagicMock())
+        pcw._build_topology_page(MagicMock(), state, ctx, lambda: None)
+
+        # The first radio is built through the constructor, the rest through
+        # new_from_widget — two different mocks under mock_gtk.
+        radio_texts = [
+            c.args[0] for c in pcw.Gtk.RadioButton.return_value.set_tooltip_text.call_args_list
+        ] + [
+            c.args[0]
+            for c in pcw.Gtk.RadioButton.new_from_widget.return_value.set_tooltip_text.call_args_list
+        ]
+        for tip in list(pcw._TOPOLOGY_RADIO_TOOLTIPS.values()) + [pcw._RAID10_RADIO_TOOLTIP]:
+            self.assertIn(tip, radio_texts)
+
+    def test_settings_page_name_and_combos_carry_tooltips(self):
+        pcw = _import_wizard()
+        combos = []
+        factory = MagicMock(side_effect=lambda: combos.append(_FakeCombo()) or combos[-1])
+        state = _state(pcw)
+        state.profile_name = "general"
+        ctx = SimpleNamespace(
+            profiles={"general": GENERAL_PROFILE},
+            existing_names=set(),
+            repository=MagicMock(),
+        )
+        with patch.object(pcw.Gtk, "ComboBoxText", factory):
+            pcw._build_settings_page(MagicMock(), state, ctx, lambda: None)
+
+        entry_texts = [
+            c.args[0] for c in pcw.Gtk.Entry.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertTrue(any("Name for the new pool" in t for t in entry_texts))
+        self.assertEqual(len(combos), 2)
+        for combo in combos:
+            self.assertTrue(
+                combo.tooltip and combo.tooltip.strip(),
+                "settings combo lacks a tooltip",
+            )
+
+    def test_review_typed_entry_and_nav_buttons_carry_tooltips(self):
+        pcw = _import_wizard()
+        state = _state(pcw)
+        ctx = SimpleNamespace(repository=MagicMock())
+        pcw._build_review_page(MagicMock(), state, ctx, lambda: None)
+
+        entry_texts = [
+            c.args[0] for c in pcw.Gtk.Entry.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertTrue(any("Safety confirmation" in t for t in entry_texts))
+
+        app = _make_app()
+        driver = _WizardDriver(pcw, [CANCEL])
+        with _wizard_session(pcw, app, driver):
+            pass
+        nav_texts = [
+            c.args[0]
+            for c in driver.fake_dlg.add_button.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertIn("Return to the previous step", nav_texts)
+        self.assertIn("Continue to the next step", nav_texts)
+        self.assertTrue(any("Create the pool" in t for t in nav_texts))
 
 
 class TestHandlerGuards(unittest.TestCase):

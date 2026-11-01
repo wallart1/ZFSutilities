@@ -205,6 +205,10 @@ def _show_enroll_dialog(app, pool_name: str, default_id: str, config: dict) -> s
     entry = Gtk.Entry()
     entry.set_text(default_id)
     entry.set_activates_default(True)
+    entry.set_tooltip_text(
+        "Name the pool is registered under in Proxmox (Datacenter → Storage); "
+        "letters, digits, dot, underscore, hyphen"
+    )
     dialog.set_default_response(Gtk.ResponseType.YES)
     content = dialog.get_content_area()
     content.add(label)

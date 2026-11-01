@@ -242,6 +242,9 @@ def show_surface_test_dialog(app, disk, entry, repo):
             parent,
             [("Close", Gtk.ResponseType.CLOSE), ("Cancel Test", _RESPONSE_CANCEL_TEST)],
         )
+        cancel_btn = dialog.get_widget_for_response(_RESPONSE_CANCEL_TEST)
+        if cancel_btn is not None:
+            cancel_btn.set_tooltip_text("Ask the drive's firmware to abort the running self-test")
         content = dialog.get_content_area()
         status = Gtk.Label(
             label=(
@@ -266,10 +269,23 @@ def show_surface_test_dialog(app, disk, entry, repo):
         [("Cancel", Gtk.ResponseType.CANCEL), ("Start", Gtk.ResponseType.OK)],
         default_response=Gtk.ResponseType.OK,
     )
+    start_btn = dialog.get_widget_for_response(Gtk.ResponseType.OK)
+    if start_btn is not None:
+        start_btn.set_tooltip_text(
+            "Hand the selected self-test to the drive firmware — it keeps "
+            "running even if the GUI closes"
+        )
     content = dialog.get_content_area()
     content.pack_start(bold_label("Test type"), False, False, 0)
     fast_radio = Gtk.RadioButton(label=short_label)
     slow_radio = Gtk.RadioButton(label=long_label)
+    fast_radio.set_tooltip_text(
+        "Short self-test: a quick sweep of mainly-adjacent regions — minutes, catches gross faults"
+    )
+    slow_radio.set_tooltip_text(
+        "Extended self-test: reads the whole disk surface — hours, adds I/O "
+        "load but is safe on pooled disks"
+    )
     slow_radio.join_group(fast_radio)
     content.pack_start(fast_radio, False, False, 0)
     content.pack_start(slow_radio, False, False, 0)

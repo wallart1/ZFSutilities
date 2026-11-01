@@ -774,6 +774,11 @@ def show_sever_clone_dialog(app, items):
         size=(640, 520),
     )
     sever_btn = dialog.add_button("Sever", _RESPONSE_SEVER)
+    sever_btn._action_tooltip = (
+        "Copy each selected clone zvol in full and swap the copy in under "
+        "the same name — enabled once 'sever' is typed"
+    )
+    sever_btn.set_tooltip_text(sever_btn._action_tooltip)
     sever_btn.set_sensitive(False)
 
     header = Gtk.Label()
@@ -826,10 +831,15 @@ def show_sever_clone_dialog(app, items):
     content.pack_start(typed_hint, False, False, 0)
     typed_entry = Gtk.Entry()
     typed_entry.set_hexpand(True)
+    typed_entry.set_tooltip_text(
+        "Safety confirmation: type 'sever' exactly — the button stays disabled until it matches"
+    )
     content.pack_start(typed_entry, False, False, 0)
 
     def _on_typed_changed(entry):
-        sever_btn.set_sensitive(entry.get_text().strip().lower() == _SEVER_CONFIRM_WORD)
+        typed = entry.get_text().strip().lower() == _SEVER_CONFIRM_WORD
+        sever_btn.set_sensitive(typed)
+        set_action_tooltip(sever_btn, None if typed else "Type 'sever' to enable the action")
 
     typed_entry.connect("changed", _on_typed_changed)
 

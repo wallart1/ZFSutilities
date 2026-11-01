@@ -57,7 +57,7 @@ def _unique_parent_datasets(snapshot_items: list) -> list:
     return parents
 
 
-def _input_dialog(parent, title, widgets, default=""):
+def _input_dialog(parent, title, widgets, default="", tooltip=None):
     """Show a dialog with extra *widgets* and a single text entry."""
     dialog = create_dialog(
         title,
@@ -75,6 +75,8 @@ def _input_dialog(parent, title, widgets, default=""):
     entry.set_width_chars(1)
     entry.set_text(default)
     entry.set_activates_default(True)
+    if tooltip:
+        entry.set_tooltip_text(tooltip)
     content.add(entry)
     dialog.show_all()
     response = dialog.run()
@@ -195,6 +197,10 @@ def on_datasets_snapshot(app):
         "Create Snapshots" if len(datasets) > 1 else "Create Snapshot",
         widgets + [Gtk.Label(label="Snapshot name (without @):")],
         suggested,
+        tooltip=(
+            "Name for the new snapshot, without the leading @ — no spaces or "
+            "slashes; taken on every selected dataset"
+        ),
     )
     if response != Gtk.ResponseType.OK or not snap_name:
         return
@@ -454,7 +460,14 @@ def on_datasets_hold(app):
         log_msg("WARN: Select one or more snapshots to hold")
         return
 
-    response, tag = _input_dialog(app, "Add Hold", [Gtk.Label(label="Hold tag name:")], "keep")
+    response, tag = _input_dialog(
+        app,
+        "Add Hold",
+        [Gtk.Label(label="Hold tag name:")],
+        "keep",
+        tooltip="Tag for the hold — prevents the selected snapshot(s) from "
+        "being destroyed until the hold is released",
+    )
     if response != Gtk.ResponseType.OK or not tag:
         return
 

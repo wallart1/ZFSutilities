@@ -380,6 +380,122 @@ class TestCreateMemoryPage(unittest.TestCase):
             app._start_stop_memory_timer.assert_called_once_with("memory")
 
 
+class TestPerformanceStaticTooltips(unittest.TestCase):
+    """Static tooltips on the Performance page's tables and controls."""
+
+    def test_device_table_headers_carry_tooltips(self):
+        """Every L2ARC/SLOG/Enclosures device-table header explains its column."""
+        with mock_gtk(fresh=True):
+            import memory_page as mp
+
+            app = _make_app()
+            with patch.object(mp, "set_column_header_tooltip") as recorder:
+                mp.create_memory_page(app)
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            [
+                # L2ARC (5)
+                "Pool",
+                "Vdev",
+                "Capacity (alloc/free)",
+                "Read rate",
+                "Write rate",
+                # SLOG (5)
+                "Pool",
+                "Vdev",
+                "Capacity (alloc/free)",
+                "Writes/s",
+                "Write rate",
+                # Enclosures (6)
+                "Enclosure",
+                "Pools",
+                "Read",
+                "Write",
+                "Cap",
+                "% of cap",
+            ],
+        )
+        for title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+    def test_alignment_view_headers_carry_tooltips(self):
+        """The alignment view's four tables carry header tooltips."""
+        with mock_gtk(fresh=True):
+            import alignment_page as ap
+            import memory_page as mp
+
+            app = _make_app()
+            with patch.object(ap, "set_column_header_tooltip") as recorder:
+                mp.create_memory_page(app)
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            [
+                # Scan chain (4)
+                "Layer",
+                "Object",
+                "Block size",
+                "Detail",
+                # Pool topology (6)
+                "Pool",
+                "Class",
+                "Vdev",
+                "Type",
+                "Members",
+                "Block size",
+                # Findings (5)
+                "Severity",
+                "Layer",
+                "Subject",
+                "Finding",
+                "Recommendation",
+                # Workload (6)
+                "Pool",
+                "Verdict",
+                "Dominant sync",
+                "Dominant (all)",
+                "Ops since boot",
+                "Prefetch hit rate",
+            ],
+        )
+        for title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+    def test_value_row_captions_carry_full_caption(self):
+        """Ellipsized captions keep their full text on hover."""
+        with mock_gtk(fresh=True) as gtk:
+            import memory_page as mp
+
+            grid = MagicMock()
+            mp._value_row(grid, 0, "Size (MiB) — total cache device capacity")
+            mp._value_row(grid, 1, "Hit ratio")
+
+        texts = [c.args[0] for c in gtk.Label.return_value.set_tooltip_text.call_args_list]
+        self.assertIn("Size (MiB) — total cache device capacity", texts)
+        self.assertIn("Hit ratio", texts)
+
+    def test_refresh_spin_and_view_radios_carry_tooltips(self):
+        with mock_gtk(fresh=True):
+            import memory_page as mp
+
+            app = _make_app()
+            mp.create_memory_page(app)
+
+            # Radios share one mock under mock_gtk; assert by membership.
+            radio_texts = [
+                c.args[0] for c in app._memory_view_radios["charts"].set_tooltip_text.call_args_list
+            ]
+
+        spin_tip = app._memory_ref_spin.set_tooltip_text.call_args.args[0]
+        self.assertTrue(spin_tip.strip())
+        self.assertIn("1-300", spin_tip)
+        self.assertTrue(any("live ARC" in t for t in radio_texts))
+        self.assertTrue(any("blocksize alignment analysis" in t for t in radio_texts))
+
+
 class TestApplyMemorySample(unittest.TestCase):
     def _prepared(self):
         """Return (module, app) with the page built and stores made iterable.

@@ -449,6 +449,32 @@ class TestOnRetentionAddPolicyValidation(unittest.TestCase):
         mock_error.assert_called_once()
         self.assertIn("notapool", mock_error.call_args[0][1])
 
+    def test_policy_combo_carries_tooltip(self):
+        app = self._make_app(
+            [{"name": "tank", "offsite_candidate": False}],
+            retention={"default": []},
+        )
+        _ra, _save, _error, _refresh = self._run_with_entry_text(app, "<offsite>", {"default": []})
+
+        # _run_with_entry_text drives the candidates path, whose pool input
+        # is a ComboBoxText with an embedded entry.
+        tips = _ra.Gtk.ComboBoxText.new_with_entry.return_value.set_tooltip_text.call_args_list
+        self.assertEqual(len(tips), 1)
+        self.assertIn("Pool the new policy belongs to", tips[0].args[0])
+
+    def test_add_bucket_entry_carries_tooltip(self):
+        ra = _import_retention_actions()
+        app = MagicMock()
+        app._ret_store = []
+        ctx = MagicMock()
+
+        ra.Gtk.Dialog.return_value.run.return_value = ra.Gtk.ResponseType.CANCEL
+        ra.on_retention_add_bucket(app, ctx)
+
+        tip = ra.Gtk.Entry.return_value.set_tooltip_text.call_args.args[0]
+        self.assertTrue(tip.strip())
+        self.assertIn("Single letter", tip)
+
     def test_accepts_offsite_placeholder(self):
         app = self._make_app(
             [{"name": "tank", "offsite_candidate": False}],

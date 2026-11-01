@@ -307,6 +307,69 @@ class TestCreateDisksPage(unittest.TestCase):
         self.assertIsNotNone(app.disks_topology_view)
         self.assertIsNotNone(app._disks_pool_selector)
 
+    def test_inventory_enclosure_and_topology_headers_carry_tooltips(self):
+        """Every column header on all three tables explains its column."""
+        dp = _import_disks_page()
+        app = MagicMock()
+        app.config = {"pools": []}
+        app.enable_treeview_copy = MagicMock()
+        app.ctx = MagicMock()
+
+        with patch.object(dp, "set_column_header_tooltip") as recorder:
+            with patch.object(dp, "refresh_disks_page"):
+                dp.create_disks_page(app)
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            [
+                # Disk inventory (13)
+                "Name",
+                "by-id",
+                "Model",
+                "Serial",
+                "Size",
+                "Type",
+                "Log-sec",
+                "Phy-sec",
+                "Transport",
+                "Enclosure",
+                "Pools",
+                "SMART",
+                "Wear/Test",
+                # Enclosures (5)
+                "Name",
+                "Kind/Location",
+                "Disks",
+                "Pools",
+                "Max I/O Rate",
+                # Pool topology (7)
+                "Name",
+                "Type",
+                "State",
+                "Read",
+                "Write",
+                "Cksum",
+                "Blocksize",
+            ],
+        )
+        for title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+    def test_pool_selector_combo_carries_tooltip(self):
+        dp = _import_disks_page()
+        app = MagicMock()
+        app.config = {"pools": []}
+        app.enable_treeview_copy = MagicMock()
+        app.ctx = MagicMock()
+
+        with patch.object(dp, "refresh_disks_page"):
+            dp.create_disks_page(app)
+
+        tip = app._disks_pool_selector.set_tooltip_text.call_args.args[0]
+        self.assertTrue(tip.strip())
+        self.assertIn("Pick the pool", tip)
+
     def test_create_disks_page_is_vertically_scrollable(self):
         """The tab is wrapped in a vertical-only ScrolledWindow like other tabs."""
         dp = _import_disks_page()
@@ -1587,6 +1650,32 @@ class TestEnclosureRateDialog(unittest.TestCase):
         result, dialog, _labels = self._run_dialog(dp, [dp.Gtk.ResponseType.CANCEL], [""], [""])
         self.assertIsNone(result)
         dialog.destroy.assert_called_once()
+
+    def test_dialog_entries_and_save_button_carry_tooltips(self):
+        dp = _import_disks_page()
+        dialog = MagicMock()
+        entries = []
+
+        def fake_entry(*_args, **_kwargs):
+            entry = MagicMock()
+            entry.get_text.side_effect = ["fivebays"] if not entries else ["100m"]
+            entries.append(entry)
+            return entry
+
+        app = MagicMock()
+        with (
+            patch.object(dp, "create_dialog", return_value=dialog),
+            patch.object(dp.Gtk, "Entry", side_effect=fake_entry),
+        ):
+            dp._show_enclosure_rate_dialog(app, _enclosure(), {"name": "", "max_rate": ""})
+
+        self.assertEqual(len(entries), 2)
+        for entry in entries:
+            tips = entry.set_tooltip_text.call_args_list
+            self.assertEqual(len(tips), 1, "rate-dialog entry lacks a tooltip")
+            self.assertTrue(tips[0].args[0].strip())
+        save_tip = dialog.get_widget_for_response.return_value.set_tooltip_text.call_args
+        self.assertTrue(save_tip.args[0].strip())
 
 
 class TestSetEnclosureRateHandler(unittest.TestCase):

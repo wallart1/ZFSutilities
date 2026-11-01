@@ -188,6 +188,22 @@ class TestOnPoolsAdd(unittest.TestCase):
             pa.on_pools_add(app)
         self.assertIn("unknown", app.known_pools[-1].values())
 
+    def test_add_dialog_entry_carries_tooltip(self):
+        pa = _import_pool_actions()
+        app = _make_app([{"name": "tank", "offsite_candidate": False}])
+        dialog_mock = _make_add_dialog("archive")
+
+        with (
+            patch.object(pa, "create_dialog", dialog_mock),
+            patch.object(pa, "refresh_pools_page"),
+        ):
+            _patch_entry(pa, "archive")
+            pa.on_pools_add(app)
+
+        tip = pa.Gtk.Entry.return_value.set_tooltip_text.call_args.args[0]
+        self.assertTrue(tip.strip())
+        self.assertIn("registration", tip)
+
     def test_adds_dict_with_offsite_candidate_false(self):
         pa = _import_pool_actions()
         app = _make_app([{"name": "tank", "offsite_candidate": False}])

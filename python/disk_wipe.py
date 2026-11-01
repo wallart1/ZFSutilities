@@ -23,7 +23,7 @@ gi.require_version("Gtk", "3.0")
 
 from disk_repository import DiskInfo
 from gi.repository import Gtk
-from gui_helpers import create_scrolled_dialog
+from gui_helpers import create_scrolled_dialog, set_action_tooltip
 from path_utils import resolve_local_bin
 
 # Custom dialog response id for the Wipe button. Distinct from
@@ -145,6 +145,11 @@ def show_wipe_dialog(app, disk: DiskInfo, warnings: list[str]) -> bool:
         size=(640, 520),
     )
     wipe_btn = dialog.add_button("Wipe", _RESPONSE_WIPE)
+    wipe_btn._action_tooltip = (
+        "Erase the disk's ZFS labels, signatures, and boundary areas — "
+        "enabled once the device name is typed"
+    )
+    wipe_btn.set_tooltip_text(wipe_btn._action_tooltip)
     wipe_btn.set_sensitive(False)
 
     grid = Gtk.Grid(column_spacing=10, row_spacing=4)
@@ -192,10 +197,18 @@ def show_wipe_dialog(app, disk: DiskInfo, warnings: list[str]) -> bool:
     content.pack_start(typed_hint, False, False, 0)
     typed_entry = Gtk.Entry()
     typed_entry.set_hexpand(True)
+    typed_entry.set_tooltip_text(
+        f"Safety confirmation: type the device name '{target}' exactly — "
+        "Wipe stays disabled until it matches"
+    )
     content.pack_start(typed_entry, False, False, 0)
 
     def _on_typed_changed(entry):
-        wipe_btn.set_sensitive(entry.get_text().strip() == target)
+        typed = entry.get_text().strip() == target
+        wipe_btn.set_sensitive(typed)
+        set_action_tooltip(
+            wipe_btn, None if typed else f"Type the device name '{target}' to enable Wipe"
+        )
 
     typed_entry.connect("changed", _on_typed_changed)
 

@@ -334,6 +334,23 @@ class TestOfferDialog(unittest.TestCase):
         stack.enter_context(patch.object(ie, "on_pools_refresh"))
         return stack
 
+    def test_offer_dialog_entry_carries_tooltip(self):
+        ie = _import_enroll()
+        app = _make_app()
+        dialog = MagicMock()
+        dialog.run.return_value = ie.Gtk.ResponseType.NO
+        nc = MagicMock()
+        nc.is_two_node.return_value = False
+        with (
+            patch.object(ie.Gtk, "MessageDialog", return_value=dialog),
+            patch.object(ie, "node_config", nc),
+        ):
+            ie._show_enroll_dialog(app, "newpool", "newpool", {})
+
+        tip = ie.Gtk.Entry.return_value.set_tooltip_text.call_args.args[0]
+        self.assertTrue(tip.strip())
+        self.assertIn("registered under in Proxmox", tip)
+
     def test_yes_enrolls_with_entry_storage_id(self):
         ie = _import_enroll()
         app = _make_app()

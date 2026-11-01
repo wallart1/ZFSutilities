@@ -33,10 +33,19 @@ from command_builders import BashStep
 from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from gi.repository import Gtk
-from gui_helpers import configure_treeview_column, create_scrolled_dialog
+from gui_helpers import (
+    configure_treeview_column,
+    create_scrolled_dialog,
+    set_action_tooltip,
+    set_column_header_tooltip,
+)
 from logging_config import log_msg
 from pool_create import TOPOLOGIES, EligibilityResult, disk_eligibility
-from pool_create_wizard import _leaf_paths_by_pool
+from pool_create_wizard import (
+    _DISK_HEADER_TOOLTIP,
+    _TOPOLOGY_RADIO_TOOLTIPS,
+    _leaf_paths_by_pool,
+)
 from pool_growth import (
     ATTACH_MIRROR_GROW,
     ATTACH_RAIDZ_EXPANSION,
@@ -724,6 +733,7 @@ def _build_disk_picker(
     toggle = Gtk.CellRendererToggle()
     toggle.connect("toggled", _on_disk_toggled, store, state, on_change, single)
     use_column = Gtk.TreeViewColumn("Use", toggle, active=_COL_USE)
+    set_column_header_tooltip(use_column, "Use", _DISK_HEADER_TOOLTIP["Use"])
     configure_treeview_column(use_column, width=40, resizable=False)
     view.append_column(use_column)
 
@@ -736,6 +746,7 @@ def _build_disk_picker(
     ):
         renderer = Gtk.CellRendererText()
         tree_column = Gtk.TreeViewColumn(title, renderer, text=column_index, foreground=_COL_FG)
+        set_column_header_tooltip(tree_column, title, _DISK_HEADER_TOOLTIP[title])
         configure_treeview_column(tree_column, width=width)
         view.append_column(tree_column)
 
@@ -781,9 +792,16 @@ class _ReviewScaffold:
         parent_box.pack_start(self._typed_hint, False, False, 0)
         self.typed_entry = Gtk.Entry()
         self.typed_entry.set_hexpand(True)
+        self.typed_entry.set_tooltip_text(
+            "Safety confirmation: type the pool's name exactly — the action "
+            "button stays disabled until it matches"
+        )
         parent_box.pack_start(self.typed_entry, False, False, 0)
 
         self.confirm_checkbox = Gtk.CheckButton()
+        self.confirm_checkbox.set_tooltip_text(
+            "Required acknowledgment: the action stays disabled until this box is ticked"
+        )
         self.confirm_checkbox.connect("toggled", lambda _btn: on_change())
         parent_box.pack_start(self.confirm_checkbox, False, False, 0)
         self.confirm_checkbox.hide()
@@ -885,6 +903,11 @@ def show_add_vdev_dialog(app, pools, eligibility, preselected_pool):
         size=(820, 700),
     )
     confirm_btn = dialog.add_button("Add", _RESPONSE_CONFIRM)
+    confirm_btn._action_tooltip = (
+        "Add the selected disks to the pool as a new data vdev — capacity, "
+        "redundancy, and wiping rules follow the chosen topology"
+    )
+    confirm_btn.set_tooltip_text(confirm_btn._action_tooltip)
 
     pool_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     pool_label = Gtk.Label(label="Pool:")
@@ -897,6 +920,7 @@ def show_add_vdev_dialog(app, pools, eligibility, preselected_pool):
         state.pools.index(state.pool_name) if state.pool_name in state.pools else 0
     )
     pool_combo.set_hexpand(True)
+    pool_combo.set_tooltip_text("Imported pool the operation applies to")
     pool_row.pack_start(pool_combo, True, True, 0)
     content.pack_start(pool_row, False, False, 0)
 
@@ -906,7 +930,7 @@ def show_add_vdev_dialog(app, pools, eligibility, preselected_pool):
         scaffold.refresh(state.command, _add_vdev_warnings(state), state.pool_name)
         confirm_btn.set_label(f"Add to '{state.pool_name}'")
         confirm_btn.set_sensitive(not problems)
-        confirm_btn.set_tooltip_text(problems[0] if problems else "")
+        set_action_tooltip(confirm_btn, problems[0] if problems else None)
 
     pool_combo.connect("changed", _on_pool_changed, state, _refresh)
     content.pack_start(
@@ -939,6 +963,7 @@ def show_add_vdev_dialog(app, pools, eligibility, preselected_pool):
             radio.set_label(label_text)
         radios.append((radio, name))
         radio.set_halign(Gtk.Align.START)
+        radio.set_tooltip_text(_TOPOLOGY_RADIO_TOOLTIPS[name])
         radio_stack.pack_start(radio, False, False, 0)
         if name == state.topology:
             radio.set_active(True)
@@ -1109,14 +1134,15 @@ def _build_target_tree(
     view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
     view.get_selection().connect("changed", _on_target_changed, store, state, on_change)
 
-    for title, column_index, width in (
-        ("Member / group", _TCOL_NAME, 280),
-        ("Type", _TCOL_TYPE, 90),
-        ("Size", _TCOL_SIZE, 90),
-        ("State", _TCOL_STATE, 240),
+    for title, column_index, width, tooltip in (
+        ("Member / group", _TCOL_NAME, 280, "Device or vdev-group name in the pool's topology"),
+        ("Type", _TCOL_TYPE, 90, "Vdev type: disk, mirror, raidz group, or the pool root"),
+        ("Size", _TCOL_SIZE, 90, "Disk size, or the summed size of a group's leaves"),
+        ("State", _TCOL_STATE, 240, "Pool-reported state; greyed rows cannot be selected"),
     ):
         renderer = Gtk.CellRendererText()
         tree_column = Gtk.TreeViewColumn(title, renderer, text=column_index, foreground=_TCOL_FG)
+        set_column_header_tooltip(tree_column, title, tooltip)
         configure_treeview_column(tree_column, width=width)
         view.append_column(tree_column)
 
@@ -1156,6 +1182,11 @@ def show_attach_dialog(app, pools, topologies, eligibility, disks, preselected_p
         size=(820, 700),
     )
     confirm_btn = dialog.add_button("Expand", _RESPONSE_CONFIRM)
+    confirm_btn._action_tooltip = (
+        "Expand the selected vdev with the chosen disk — stripe→mirror and "
+        "mirror grows are reversible; RAIDZ expansion restripes the group"
+    )
+    confirm_btn.set_tooltip_text(confirm_btn._action_tooltip)
 
     pool_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     pool_label = Gtk.Label(label="Pool:")
@@ -1168,6 +1199,7 @@ def show_attach_dialog(app, pools, topologies, eligibility, disks, preselected_p
         state.pools.index(state.pool_name) if state.pool_name in state.pools else 0
     )
     pool_combo.set_hexpand(True)
+    pool_combo.set_tooltip_text("Imported pool the operation applies to")
     pool_row.pack_start(pool_combo, True, True, 0)
     content.pack_start(pool_row, False, False, 0)
 
@@ -1178,7 +1210,7 @@ def show_attach_dialog(app, pools, topologies, eligibility, disks, preselected_p
         scaffold.refresh(state.command, _attach_warnings(state), typed_target)
         confirm_btn.set_label(f"Expand vdev in '{state.pool_name}'")
         confirm_btn.set_sensitive(not problems)
-        confirm_btn.set_tooltip_text(problems[0] if problems else "")
+        set_action_tooltip(confirm_btn, problems[0] if problems else None)
 
     target_page, target_store, target_view = _build_target_tree(state, _refresh, caps)
     content.pack_start(target_page, True, True, 0)
@@ -1281,6 +1313,10 @@ def show_replace_dialog(app, pools, topologies, eligibility, disks, preselected_
         size=(820, 700),
     )
     confirm_btn = dialog.add_button("Replace", _RESPONSE_CONFIRM)
+    confirm_btn._action_tooltip = (
+        "Replace the selected member with the chosen disk and resilver the data across it"
+    )
+    confirm_btn.set_tooltip_text(confirm_btn._action_tooltip)
 
     pool_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     pool_label = Gtk.Label(label="Pool:")
@@ -1293,6 +1329,7 @@ def show_replace_dialog(app, pools, topologies, eligibility, disks, preselected_
         state.pools.index(state.pool_name) if state.pool_name in state.pools else 0
     )
     pool_combo.set_hexpand(True)
+    pool_combo.set_tooltip_text("Imported pool the operation applies to")
     pool_row.pack_start(pool_combo, True, True, 0)
     content.pack_start(pool_row, False, False, 0)
 
@@ -1302,7 +1339,7 @@ def show_replace_dialog(app, pools, topologies, eligibility, disks, preselected_
         scaffold.refresh(state.command, _replace_warnings(state), state.pool_name)
         confirm_btn.set_label(f"Replace in '{state.pool_name}'")
         confirm_btn.set_sensitive(not problems)
-        confirm_btn.set_tooltip_text(problems[0] if problems else "")
+        set_action_tooltip(confirm_btn, problems[0] if problems else None)
 
     target_page, target_store, target_view = _build_target_tree(
         state, _refresh, caps, gate_raidz=False
@@ -1396,6 +1433,10 @@ def show_detach_dialog(app, pools, topologies, disks, preselected_pool):
         size=(820, 560),
     )
     confirm_btn = dialog.add_button("Detach", _RESPONSE_CONFIRM)
+    confirm_btn._action_tooltip = (
+        "Detach the selected mirror member — irreversible and reduces the mirror's redundancy"
+    )
+    confirm_btn.set_tooltip_text(confirm_btn._action_tooltip)
 
     pool_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     pool_label = Gtk.Label(label="Pool:")
@@ -1408,6 +1449,7 @@ def show_detach_dialog(app, pools, topologies, disks, preselected_pool):
         state.pools.index(state.pool_name) if state.pool_name in state.pools else 0
     )
     pool_combo.set_hexpand(True)
+    pool_combo.set_tooltip_text("Imported pool the operation applies to")
     pool_row.pack_start(pool_combo, True, True, 0)
     content.pack_start(pool_row, False, False, 0)
 
@@ -1417,7 +1459,7 @@ def show_detach_dialog(app, pools, topologies, disks, preselected_pool):
         scaffold.refresh(state.command, _detach_warnings(state), state.pool_name)
         confirm_btn.set_label(f"Detach from '{state.pool_name}'")
         confirm_btn.set_sensitive(not problems)
-        confirm_btn.set_tooltip_text(problems[0] if problems else "")
+        set_action_tooltip(confirm_btn, problems[0] if problems else None)
 
     target_page, target_store, target_view = _build_target_tree(
         state,
@@ -1496,6 +1538,11 @@ def show_add_infra_vdev_dialog(app, pools, eligibility, preselected_pool):
         size=(820, 700),
     )
     confirm_btn = dialog.add_button("Add", _RESPONSE_CONFIRM)
+    confirm_btn._action_tooltip = (
+        "Add the selected disks as the chosen infrastructure vdev — kind "
+        "rules and the matching confirmation apply"
+    )
+    confirm_btn.set_tooltip_text(confirm_btn._action_tooltip)
 
     pool_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
     pool_label = Gtk.Label(label="Pool:")
@@ -1508,6 +1555,7 @@ def show_add_infra_vdev_dialog(app, pools, eligibility, preselected_pool):
         state.pools.index(state.pool_name) if state.pool_name in state.pools else 0
     )
     pool_combo.set_hexpand(True)
+    pool_combo.set_tooltip_text("Imported pool the operation applies to")
     pool_row.pack_start(pool_combo, True, True, 0)
     content.pack_start(pool_row, False, False, 0)
 
@@ -1520,6 +1568,10 @@ def show_add_infra_vdev_dialog(app, pools, eligibility, preselected_pool):
         kind_combo.append_text(kind)
     kind_combo.set_active(0)
     kind_combo.set_hexpand(True)
+    kind_combo.set_tooltip_text(
+        "special holds small blocks and metadata (losing it loses the pool), "
+        "log accelerates sync writes, cache is read cache (L2ARC)"
+    )
     kind_row.pack_start(kind_combo, True, True, 0)
     content.pack_start(kind_row, False, False, 0)
 
@@ -1537,7 +1589,7 @@ def show_add_infra_vdev_dialog(app, pools, eligibility, preselected_pool):
             scaffold.refresh(state.command, _infra_warnings(state))
         confirm_btn.set_label(f"Add {state.kind} to '{state.pool_name}'")
         confirm_btn.set_sensitive(not problems)
-        confirm_btn.set_tooltip_text(problems[0] if problems else "")
+        set_action_tooltip(confirm_btn, problems[0] if problems else None)
 
     pool_combo.connect("changed", _on_pool_changed, state, _refresh)
     kind_combo.connect("changed", _on_kind_changed, state, _refresh)

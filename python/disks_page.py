@@ -810,6 +810,11 @@ def _show_enclosure_rate_dialog(app, enclosure: EnclosureInfo, entry: dict):
         [("Cancel", Gtk.ResponseType.CANCEL), ("Save", Gtk.ResponseType.OK)],
         default_response=Gtk.ResponseType.OK,
     )
+    save_btn = dialog.get_widget_for_response(Gtk.ResponseType.OK)
+    if save_btn is not None:
+        save_btn.set_tooltip_text(
+            "Store this enclosure name and rate cap in the saved configuration"
+        )
     content = dialog.get_content_area()
 
     pools_text = ", ".join(enclosure.pools) if enclosure.pools else "no pools"
@@ -829,6 +834,9 @@ def _show_enclosure_rate_dialog(app, enclosure: EnclosureInfo, entry: dict):
     name_entry = Gtk.Entry()
     name_entry.set_text(entry.get("name", ""))
     name_entry.set_placeholder_text(f"e.g. {enclosure.kind}-enclosure")
+    name_entry.set_tooltip_text(
+        "Friendly label for this enclosure shown next to its disks; blank keeps the generated name"
+    )
     content.pack_start(name_entry, False, False, 0)
 
     rate_label = Gtk.Label(label="Max I/O rate (blank = unlimited)")
@@ -837,6 +845,9 @@ def _show_enclosure_rate_dialog(app, enclosure: EnclosureInfo, entry: dict):
     rate_entry = Gtk.Entry()
     rate_entry.set_text(entry.get("max_rate", ""))
     rate_entry.set_placeholder_text("e.g. 100m")
+    rate_entry.set_tooltip_text(
+        "Cap on this enclosure's total disk I/O, e.g. 100m or 64KiB — blank means unlimited"
+    )
     content.pack_start(rate_entry, False, False, 0)
 
     problem_label = Gtk.Label(label="")

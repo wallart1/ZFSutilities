@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -16,6 +17,22 @@ pytestmark = requires_gi
 
 
 class _FakeComboBoxText:
+    def __getattr__(self, _name):
+        return lambda *args, **kwargs: None
+
+
+class _RecordingComboBoxText:
+    """ComboBoxText stand-in that records each instance's tooltip calls."""
+
+    instances: ClassVar[list] = []
+
+    def __init__(self, *args, **kwargs):
+        self.tooltip_calls = []
+        type(self).instances.append(self)
+
+    def set_tooltip_text(self, text):
+        self.tooltip_calls.append(text)
+
     def __getattr__(self, _name):
         return lambda *args, **kwargs: None
 
@@ -326,6 +343,87 @@ class TestOffsitePageFrames(unittest.TestCase):
                 adv_expander,
             ],
         )
+
+
+class TestOffsiteStaticTooltips(unittest.TestCase):
+    """Static tooltips on the Offsite page beyond the var rows."""
+
+    def _build_page(self, combo_cls=None):
+        op = _import_offsite_page()
+        op.Gtk.ComboBoxText = combo_cls or _FakeComboBoxText
+        app = MagicMock()
+        app.ctx = MagicMock()
+        app.ctx.config = {"pools": []}
+        app.config = {"pools": []}
+
+        with patch("offsite_page._do_generate_snap"), patch("offsite_page.do_detect_offsite_pool"):
+            op.create_offsite_page(app, app.ctx)
+        return op, app
+
+    def test_snapshot_entry_and_generate_button_carry_tooltips(self):
+        op, _app = self._build_page()
+
+        # Entries share one mock under mock_gtk; the nextsnap tooltip must be
+        # among the accumulated calls.
+        entry_texts = [c.args[0] for c in op.Gtk.Entry.return_value.set_tooltip_text.call_args_list]
+        self.assertTrue(
+            any("Snapshot name" in t for t in entry_texts),
+            "nextsnap entry tooltip missing",
+        )
+
+    def test_step_table_headers_carry_tooltips(self):
+        op = _import_offsite_page()
+        op.Gtk.ComboBoxText = _FakeComboBoxText
+        app = MagicMock()
+        app.ctx = MagicMock()
+        app.ctx.config = {"pools": []}
+        app.config = {"pools": []}
+
+        with patch.object(op, "set_column_header_tooltip") as recorder:
+            with (
+                patch("offsite_page._do_generate_snap"),
+                patch("offsite_page.do_detect_offsite_pool"),
+            ):
+                op.create_offsite_page(app, app.ctx)
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            ["Active", "Source", "Destination", "Includes", "Excludes"],
+        )
+        for title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+    def test_step_add_remove_buttons_and_advanced_carry_tooltips(self):
+        op, app = self._build_page()
+
+        button_texts = [
+            c.args[0] for c in op.Gtk.Button.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertIn("Add a step row.", button_texts)
+        self.assertIn("Remove the selected step row.", button_texts)
+        self.assertIn("Build a new snapshot name from the current time.", button_texts)
+
+        expander_tips = op.Gtk.Expander.return_value.set_tooltip_text.call_args_list
+        self.assertEqual(len(expander_tips), 1)
+        self.assertTrue(expander_tips[0].args[0].strip())
+
+        pause_tip = app.offsite_pause_scrubs.set_tooltip_text.call_args.args[0]
+        self.assertTrue(pause_tip.strip())
+
+    def test_every_var_row_widget_receives_its_dict_tooltip(self):
+        _RecordingComboBoxText.instances = []
+        op, app = self._build_page(combo_cls=_RecordingComboBoxText)
+
+        entry_texts = [
+            c.args[0] for c in app.offsite_var_widgets["includes"].set_tooltip_text.call_args_list
+        ]
+        yn_texts = [
+            text for combo in _RecordingComboBoxText.instances for text in combo.tooltip_calls
+        ]
+        for key, tooltip in op._OFFSITE_VAR_TOOLTIPS.items():
+            texts = yn_texts if key in op.OFFSITE_YN_VARIABLES else entry_texts
+            self.assertIn(tooltip, texts, f"{key} widget missed its tooltip")
 
 
 class TestOffsiteRunDialog(unittest.TestCase):

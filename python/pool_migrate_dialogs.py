@@ -49,7 +49,7 @@ from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from feature_config import get_pool_profiles
 from gi.repository import Gtk
-from gui_helpers import create_dialog, create_scrolled_dialog
+from gui_helpers import create_dialog, create_scrolled_dialog, set_action_tooltip
 from iscsi_enroll import is_iscsi_managed_pool, log_manual_enrollment_steps
 from logging_config import log_msg
 from path_utils import resolve_local_bin
@@ -62,7 +62,7 @@ from pool_create import (
     recommend_ashift,
     validate_vdev_selection,
 )
-from pool_create_wizard import _leaf_paths_by_pool
+from pool_create_wizard import _TOPOLOGY_RADIO_TOOLTIPS, _leaf_paths_by_pool
 from pool_growth import (
     _find_disk,
     mixed_size_warning,
@@ -1155,6 +1155,11 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
         size=(860, 760),
     )
     migrate_btn = dialog.add_button("Migrate", _RESPONSE_MIGRATE)
+    migrate_btn._action_tooltip = (
+        "Run the copy phase of the migration — the destructive cutover asks "
+        "for a second typed confirmation"
+    )
+    migrate_btn.set_tooltip_text(migrate_btn._action_tooltip)
 
     caption = Gtk.Label()
     caption.set_halign(Gtk.Align.START)
@@ -1177,6 +1182,9 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
         state.pools.index(state.pool_name) if state.pool_name in state.pools else 0
     )
     pool_combo.set_hexpand(True)
+    pool_combo.set_tooltip_text(
+        "Pool to migrate — every dataset below it is copied, and the pool is swapped at cutover"
+    )
     pool_row.pack_start(pool_combo, True, True, 0)
     content.pack_start(pool_row, False, False, 0)
 
@@ -1200,6 +1208,16 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
             radio = Gtk.RadioButton.new_from_widget(mode_group)
             radio.set_label(label_text)
         radio.set_halign(Gtk.Align.START)
+        if mode == MIGRATE_NEW_DISKS:
+            radio.set_tooltip_text(
+                "Build a new pool on disks you select, copy to it, then swap "
+                "it in under the source pool's name"
+            )
+        else:
+            radio.set_tooltip_text(
+                "Copy to another imported pool first, destroy and rebuild the "
+                "source pool on freed disks, then copy back and swap"
+            )
         mode_box.pack_start(radio, False, False, 0)
         mode_radios[mode] = radio
     content.pack_start(mode_box, False, False, 0)
@@ -1224,6 +1242,7 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
             radio = Gtk.RadioButton.new_from_widget(group)
             radio.set_label(label_text)
         radio.set_halign(Gtk.Align.START)
+        radio.set_tooltip_text(_TOPOLOGY_RADIO_TOOLTIPS[name])
         radio_stack.pack_start(radio, False, False, 0)
         topology_radios.append((radio, name))
     content.pack_start(topology_box, False, False, 0)
@@ -1239,6 +1258,11 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
         profile_combo.append_text(profile_name)
     profile_combo.set_active(0)
     profile_combo.set_hexpand(True)
+    profile_combo.set_tooltip_text(
+        "Settings for the new/rebuilt pool: Match origin keeps the source "
+        "pool's live blocksize and properties; a named pool profile overrides "
+        "them"
+    )
     profile_row.pack_start(profile_combo, True, True, 0)
     settings_box.pack_start(profile_row, False, False, 0)
     profile_desc = Gtk.Label()
@@ -1254,6 +1278,11 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
         blocksize_combo.append_text(blocksize_choice)
     blocksize_combo.set_active(0)
     blocksize_combo.set_hexpand(True)
+    blocksize_combo.set_tooltip_text(
+        "Physical sector size (ashift) of the new pool — creation-only, so "
+        "changing layout is one reason to migrate. Follows the profile until "
+        "you edit it"
+    )
     blocksize_row.pack_start(blocksize_combo, True, True, 0)
     settings_box.pack_start(blocksize_row, False, False, 0)
     blocksize_hint = Gtk.Label()
@@ -1286,6 +1315,11 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
             check = Gtk.CheckButton()
             check.set_active(prop in state.replay_selection)
+            check.set_tooltip_text(
+                f"Checked: {prop}={state.origin_pool_props[prop]} is reapplied "
+                "with zpool set after the migrated pool is imported; uncheck "
+                "to leave it at the new pool's default"
+            )
             check.connect("toggled", _on_replay_prop_toggled, prop, state, _refresh)
             value_label = Gtk.Label(label=f"{prop} = {state.origin_pool_props[prop]}")
             value_label.set_halign(Gtk.Align.START)
@@ -1303,6 +1337,10 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
     holding_row.pack_start(holding_label, False, False, 0)
     holding_combo = Gtk.ComboBoxText()
     holding_combo.set_hexpand(True)
+    holding_combo.set_tooltip_text(
+        "Other imported pool that receives the data first — needs free space "
+        "at least equal to the source pool's allocated data"
+    )
     holding_row.pack_start(holding_combo, True, True, 0)
     holding_box.pack_start(holding_row, False, False, 0)
     holding_hint = Gtk.Label()
@@ -1378,6 +1416,9 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
     rate_row.pack_start(rate_label, False, False, 0)
     rate_entry = Gtk.Entry()
     rate_entry.set_hexpand(True)
+    rate_entry.set_tooltip_text(
+        "Optional cap on copy bandwidth, e.g. 100m or 64KiB — blank paces the copy at full speed"
+    )
     rate_row.pack_start(rate_entry, True, True, 0)
     content.pack_start(rate_row, False, False, 0)
 
@@ -1406,6 +1447,10 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
     content.pack_start(typed_hint, False, False, 0)
     typed_entry = Gtk.Entry()
     typed_entry.set_hexpand(True)
+    typed_entry.set_tooltip_text(
+        "Safety confirmation: type the source pool's name exactly — Migrate "
+        "stays disabled until it matches"
+    )
     content.pack_start(typed_entry, False, False, 0)
 
     def _populate_holding_combo() -> None:
@@ -1474,7 +1519,7 @@ def show_migrate_pool_dialog(app, state: _MigrateState) -> MigrationRequest | No
         profile_desc.set_text(profile.get("description", ""))
         typed_hint.set_text(f"Type the pool name '{state.pool_name}' exactly to enable Migrate.")
         migrate_btn.set_sensitive(not problems)
-        migrate_btn.set_tooltip_text(problems[0] if problems else "")
+        set_action_tooltip(migrate_btn, problems[0] if problems else None)
 
     # GTK emits "toggled" from set_active during construction; connect only
     # after the initial state is set or the handlers run before the refresh
@@ -1565,6 +1610,10 @@ def _show_cutover_confirm(app, request: MigrationRequest) -> bool:
         size=(640, 320),
     )
     ok_btn = dialog.add_button("Cut Over", _RESPONSE_MIGRATE)
+    ok_btn.set_tooltip_text(
+        "Take the catch-up snapshot, export the source pool, and swap in the "
+        "migrated pool — the pool must stay quiesced from here on"
+    )
     content = dialog.get_content_area()
     text = Gtk.Label()
     text.set_halign(Gtk.Align.START)
@@ -1582,6 +1631,10 @@ def _show_cutover_confirm(app, request: MigrationRequest) -> bool:
     content.pack_start(text, False, False, 0)
     entry = Gtk.Entry()
     entry.set_hexpand(True)
+    entry.set_tooltip_text(
+        "Safety confirmation: type the source pool's name exactly — Cut Over "
+        "stays disabled until it matches"
+    )
     content.pack_start(entry, False, False, 0)
 
     def _entry_text() -> str:
@@ -1618,7 +1671,11 @@ def _show_running_vms_warning(app, source_pool: str, running: dict[str, list[str
         [(Gtk.STOCK_NO, Gtk.ResponseType.NO)],
         size=(640, 360),
     )
-    dialog.add_button("Continue", Gtk.ResponseType.YES)
+    continue_btn = dialog.add_button("Continue", Gtk.ResponseType.YES)
+    continue_btn.set_tooltip_text(
+        "Proceed with the cutover even though the listed VMs are still "
+        "running — writes they make after the cutover snapshot are lost"
+    )
     content = dialog.get_content_area()
     lines = "\n".join(f"• VM {vmid}: {', '.join(zvols)}" for vmid, zvols in sorted(running.items()))
     text = Gtk.Label()

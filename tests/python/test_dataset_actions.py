@@ -212,6 +212,39 @@ class TestSnapshot(unittest.TestCase):
         mock_log.assert_any_call("INFO: Snapshot created: tank/a@manual-test")
         mock_refresh.assert_called_once_with(app)
 
+    def test_snapshot_dialog_entry_carries_tooltip(self):
+        """The name dialog passes a non-empty tooltip; _input_dialog applies it."""
+        da = self._import_under_mock()
+        app = _make_app()
+        app.datasets_view = MagicMock()
+        app.ctx.zfs_repository.snapshot.return_value = True
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[{"type": "dataset", "name": "tank/a", "zfs_type": "filesystem"}],
+            ),
+            patch.object(da, "_input_dialog") as mock_dialog,
+            patch.object(da, "log_msg"),
+            patch.object(da, "refresh_datasets_page"),
+            patch.object(da, "zlm"),
+        ):
+            mock_dialog.return_value = (da.Gtk.ResponseType.OK, "manual-test")
+            da.on_datasets_snapshot(app)
+
+        tooltip = mock_dialog.call_args.kwargs.get("tooltip")
+        self.assertTrue(tooltip and tooltip.strip(), "snapshot name entry lacks a tooltip")
+        self.assertIn("snapshot", tooltip.lower())
+
+        dialog = MagicMock()
+        dialog.run.return_value = da.Gtk.ResponseType.OK
+        da.Gtk.Entry.return_value.get_text.return_value = "manual-test"
+        with patch.object(da, "create_dialog", return_value=dialog):
+            _response, text = da._input_dialog(None, "Create Snapshot", [], "x", tooltip=tooltip)
+        self.assertEqual(text, "manual-test")
+        da.Gtk.Entry.return_value.set_tooltip_text.assert_called_once_with(tooltip)
+
     def test_multiple_filesystems_and_volumes_snapshot_together(self):
         da = self._import_under_mock()
         items = [

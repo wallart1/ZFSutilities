@@ -28,7 +28,12 @@ from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from feature_config import get_pool_profiles
 from gi.repository import Gtk
-from gui_helpers import configure_treeview_column, create_scrolled_dialog
+from gui_helpers import (
+    configure_treeview_column,
+    create_scrolled_dialog,
+    set_action_tooltip,
+    set_column_header_tooltip,
+)
 from iscsi_enroll import offer_iscsi_enrollment
 from logging_config import log_msg
 from pool_create import (
@@ -102,6 +107,33 @@ _BLOCKSIZE_LABEL_BY_ASHIFT = {
     value: label for value, label in _BLOCKSIZE_CHOICES if value is not None
 }
 _BLOCKSIZE_LABELS = [label for _, label in _BLOCKSIZE_CHOICES]
+
+# Disk-table header tooltips, shared by this wizard's disk picker and the
+# growth/migrate dialogs' pickers (pool_growth_dialogs imports the tuple).
+_DISK_TABLE_HEADER_TOOLTIPS = (
+    ("Use", "Tick a row to include the disk in the operation"),
+    ("by-id", "Stable /dev/disk/by-id device name every pool command will use"),
+    ("Size", "Advertised capacity of the disk"),
+    ("Model", "Manufacturer and model string reported by the drive"),
+    ("Transport", "Connection type (sata, sas, nvme, usb…)"),
+    ("Status", "Why the disk is usable or not; existing warnings are listed too"),
+)
+_DISK_HEADER_TOOLTIP = dict(_DISK_TABLE_HEADER_TOOLTIPS)
+
+# One-line explanations for the topology radios, shared by the wizard, the
+# Add-Data-Vdev dialog, and the Migrate-Pool dialog (minimum disk counts are
+# already part of each radio's label; raid10 has its own below).
+_TOPOLOGY_RADIO_TOOLTIPS = {
+    "stripe": "No redundancy — the loss of any member disk loses the vdev",
+    "mirror": "Every member holds a full copy; any single member may fail",
+    "raidz1": "Single-parity RAIDZ — any one member disk may fail",
+    "raidz2": "Double-parity RAIDZ — any two member disks may fail",
+    "raidz3": "Triple-parity RAIDZ — any three member disks may fail",
+}
+_RAID10_RADIO_TOOLTIP = (
+    "Striped mirrors: any single disk, plus one disk from each other mirror, "
+    "may fail without data loss"
+)
 
 
 def _format_blocksize(ashift: int) -> str:
@@ -452,6 +484,7 @@ def _build_disks_page(dialog, state: _WizardState, ctx: _WizardContext, on_chang
     toggle = Gtk.CellRendererToggle()
     toggle.connect("toggled", _on_disk_toggled, store, state, on_change)
     use_column = Gtk.TreeViewColumn("Use", toggle, active=_COL_USE)
+    set_column_header_tooltip(use_column, "Use", _DISK_HEADER_TOOLTIP["Use"])
     configure_treeview_column(use_column, width=40, resizable=False)
     view.append_column(use_column)
 
@@ -464,6 +497,7 @@ def _build_disks_page(dialog, state: _WizardState, ctx: _WizardContext, on_chang
     ):
         renderer = Gtk.CellRendererText()
         tree_column = Gtk.TreeViewColumn(title, renderer, text=column_index, foreground=_COL_FG)
+        set_column_header_tooltip(tree_column, title, _DISK_HEADER_TOOLTIP[title])
         configure_treeview_column(tree_column, width=width)
         view.append_column(tree_column)
 
@@ -502,6 +536,7 @@ def _build_topology_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
             radio = Gtk.RadioButton.new_from_widget(group)
             radio.set_label(label_text)
         radio.connect("toggled", _on_topology_toggled, name, state, on_change)
+        radio.set_tooltip_text(_TOPOLOGY_RADIO_TOOLTIPS[name])
         page.pack_start(radio, False, False, 0)
         radios[name] = radio
 
@@ -509,6 +544,7 @@ def _build_topology_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
     # TOPOLOGIES and must not offer it); add its radio separately.
     raid10_radio = Gtk.RadioButton.new_from_widget(group)
     raid10_radio.set_label("raid10 (striped mirrors, 4+ disks, even)")
+    raid10_radio.set_tooltip_text(_RAID10_RADIO_TOOLTIP)
     raid10_radio.connect("toggled", _on_topology_toggled, "raid10", state, on_change)
     page.pack_start(raid10_radio, False, False, 0)
     radios["raid10"] = raid10_radio
@@ -553,6 +589,11 @@ def _build_settings_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
     grid.attach(name_label, 0, 0, 1, 1)
     name_entry = Gtk.Entry()
     name_entry.set_hexpand(True)
+    name_entry.set_tooltip_text(
+        "Name for the new pool: begins with a letter, then letters, digits, "
+        "dash, underscore, dot, or colon; must not collide with an imported "
+        "or importable pool"
+    )
     grid.attach(name_entry, 1, 0, 1, 1)
     name_feedback = Gtk.Label()
     name_feedback.set_halign(Gtk.Align.START)
@@ -566,6 +607,11 @@ def _build_settings_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
     for _, blocksize_label in _BLOCKSIZE_CHOICES:
         ashift_combo.append_text(blocksize_label)
     ashift_combo.set_active(0)
+    ashift_combo.set_tooltip_text(
+        "Physical sector size (ashift) ZFS writes at. Auto lets ZFS decide; "
+        "4096 bytes suits modern drives. Pre-filled from the profile and the "
+        "disks' own recommendation"
+    )
     grid.attach(ashift_combo, 1, 2, 1, 1)
     ashift_hint = Gtk.Label()
     ashift_hint.set_halign(Gtk.Align.START)
@@ -579,6 +625,10 @@ def _build_settings_page(dialog, state: _WizardState, ctx: _WizardContext, on_ch
     for profile_name in ctx.profiles:
         profile_combo.append_text(profile_name)
     profile_combo.set_active(0)
+    profile_combo.set_tooltip_text(
+        "Pool profile supplying the pool (-o) and root-filesystem (-O) "
+        "properties; the blocksize above follows it until you edit it"
+    )
     grid.attach(profile_combo, 1, 4, 1, 1)
     profile_desc = Gtk.Label()
     profile_desc.set_halign(Gtk.Align.START)
@@ -688,6 +738,10 @@ def _build_review_page(dialog, state: _WizardState, ctx: _WizardContext, on_chan
     page.pack_start(typed_hint, False, False, 0)
     typed_entry = Gtk.Entry()
     typed_entry.set_hexpand(True)
+    typed_entry.set_tooltip_text(
+        "Safety confirmation: type the new pool's name exactly as entered on "
+        "the settings page — Create stays disabled until it matches"
+    )
     page.pack_start(typed_entry, False, False, 0)
     typed_entry.connect("changed", _on_typed_changed, state, on_change)
 
@@ -730,7 +784,7 @@ def _refresh_chrome(caption, back_btn, next_btn, create_btn, state, ctx) -> None
         create_btn.set_label(f"Create '{state.pool_name}'")
     primary = create_btn if on_review else next_btn
     primary.set_sensitive(not problems)
-    primary.set_tooltip_text(problems[0] if problems else "")
+    set_action_tooltip(primary, problems[0] if problems else None)
 
 
 def _show_validation_error(parent, message: str) -> None:
@@ -793,6 +847,14 @@ def show_create_pool_wizard(app, eligibility, profiles, existing_names):
     back_btn = dialog.add_button("Back", _RESPONSE_BACK)
     next_btn = dialog.add_button("Next", _RESPONSE_NEXT)
     create_btn = dialog.add_button("Create", _RESPONSE_CREATE)
+    back_btn.set_tooltip_text("Return to the previous step")
+    next_btn._action_tooltip = "Continue to the next step"
+    next_btn.set_tooltip_text(next_btn._action_tooltip)
+    create_btn._action_tooltip = (
+        "Create the pool, destroying all data on the selected disks — "
+        "enabled once the dry run succeeds and the pool name is typed"
+    )
+    create_btn.set_tooltip_text(create_btn._action_tooltip)
 
     caption = Gtk.Label()
     caption.set_halign(Gtk.Align.START)

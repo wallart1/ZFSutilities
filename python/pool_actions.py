@@ -122,6 +122,10 @@ def on_pools_add(app):
     entry.set_width_chars(1)
     entry.set_text(prefill)
     entry.set_activates_default(True)
+    entry.set_tooltip_text(
+        "Name of an existing (imported or importable) pool to add to the "
+        "registry — registration is what includes it in backups and retention"
+    )
     content.add(entry)
 
     dialog.show_all()

@@ -121,6 +121,40 @@ class TestCreateDatasetsPage(unittest.TestCase):
         )
         self.assertIn(expected, markups)
 
+    def test_tree_headers_carry_tooltips(self):
+        """Every dataset-tree column header explains its column."""
+        app = self._make_app()
+        with patch.object(dp, "refresh_datasets_page"):
+            with patch.object(dp, "set_column_header_tooltip") as recorder:
+                dp.create_datasets_page(app)
+
+        recorded = [(c.args[1], c.args[2], c.kwargs.get("xalign")) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip, _x in recorded],
+            ["Name", "Created", "Type", "Used", "Avail", "Refer", "Origin / Clones"],
+        )
+        for title, tip, xalign in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+            if title in ("Used", "Avail", "Refer"):
+                self.assertEqual(xalign, 1.0, f"{title} heading should stay right-aligned")
+
+    def test_search_controls_carry_tooltips(self):
+        """The search entry and its navigation buttons explain themselves."""
+        app = self._make_app()
+        with patch.object(dp, "refresh_datasets_page"):
+            dp.create_datasets_page(app)
+
+        widgets = {
+            "search entry": app.datasets_search_entry,
+            "clear button": app.datasets_search_clear_btn,
+            "previous button": app.datasets_search_prev_btn,
+            "next button": app.datasets_search_next_btn,
+        }
+        for name, widget in widgets.items():
+            tips = widget.set_tooltip_text.call_args_list
+            self.assertTrue(tips, f"{name} tooltip missing")
+            self.assertTrue(all(t.args[0].strip() for t in tips))
+
 
 class TestRefreshDatasetsPage(unittest.TestCase):
     """refresh_datasets_page loads online pools into the tree."""

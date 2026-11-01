@@ -293,6 +293,134 @@ class TestBackupVarTooltips(unittest.TestCase):
             self.assertIn("post-backup prune step", getattr(widget, "tooltip", ""))
 
 
+class TestBackupStaticTooltips(unittest.TestCase):
+    """Static tooltips on the Backup page's non-var-row widgets and tables."""
+
+    def _build_page(self):
+        with temp_config_dir(), mock_gtk(fresh=True):
+            import backup_page
+            import gui_helpers
+
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+            gui_helpers.Gtk.Entry = _FakeEntry
+            gui_helpers.Gtk.CheckButton = _FakeCheckButton
+            backup_page.DirtyTracker = _NoOpDirtyTracker
+
+            app = _FakeApp()
+            backup_page.create_backup_page(app, app.ctx)
+        return app
+
+    def test_script_snapshot_keys_and_check_widgets_carry_tooltips(self):
+        app = self._build_page()
+
+        widgets = {
+            "pre command check": app.backup_pre_script_enabled,
+            "pre command entry": app.backup_pre_script_text,
+            "pull steps active": app.backup_pull_steps_active,
+            "nextsnap entry": app.backup_nextsnap_entry,
+            "zfs keys path": app.backup_zfs_keys_path,
+            "zfs keys dest": app.backup_zfs_keys_dest,
+            "pause scrubs": app.backup_pause_scrubs,
+            "clear snapshot memory": app.backup_post_snapfile,
+            "post prune": app.backup_post_retention,
+            "post command check": app.backup_post_script_enabled,
+            "post command entry": app.backup_post_script_text,
+        }
+        for name, widget in widgets.items():
+            tooltip = getattr(widget, "tooltip", None)
+            self.assertTrue(tooltip and tooltip.strip(), f"{name} widget lacks a tooltip")
+
+        self.assertIn("before all backup steps", app.backup_pre_script_text.tooltip)
+        self.assertIn("Snapshot name", app.backup_nextsnap_entry.tooltip)
+        self.assertIn("forget the remembered nextsnap", app.backup_post_snapfile.tooltip)
+        self.assertIn("retention policies", app.backup_post_retention.tooltip)
+
+    def test_generate_button_and_advanced_expander_carry_tooltips(self):
+        buttons = []
+
+        class _RecordingButton:
+            def __init__(self, *args, **kwargs):
+                self.label = kwargs.get("label") or (args[0] if args else None)
+                self.tooltip = None
+                buttons.append(self)
+
+            def connect(self, *_args, **_kwargs):
+                pass
+
+            def set_tooltip_text(self, text):
+                self.tooltip = text
+
+        with temp_config_dir(), mock_gtk(fresh=True) as gtk_mock:
+            import backup_page
+            import gui_helpers
+
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+            backup_page.Gtk.Button = _RecordingButton
+            gui_helpers.Gtk.Entry = _FakeEntry
+            gui_helpers.Gtk.CheckButton = _FakeCheckButton
+            backup_page.DirtyTracker = _NoOpDirtyTracker
+
+            app = _FakeApp()
+            backup_page.create_backup_page(app, app.ctx)
+
+            expander_tips = gtk_mock.Expander.return_value.set_tooltip_text.call_args_list
+
+        generate = [b for b in buttons if b.label == "Generate"]
+        self.assertEqual(len(generate), 1, "expected exactly one Generate button")
+        self.assertTrue(generate[0].tooltip and generate[0].tooltip.strip())
+        self.assertIn("snapshot name", generate[0].tooltip)
+
+        self.assertEqual(len(expander_tips), 1, "Advanced expander tooltip missing")
+        self.assertTrue(expander_tips[0].args[0].strip())
+
+    def test_editable_list_views_pass_header_tooltips(self):
+        created = []
+
+        class _RecordingELV:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.view = MagicMock()
+                created.append(self)
+
+            def get_store(self):
+                return MagicMock()
+
+            def get_widget(self):
+                return MagicMock()
+
+            def set_data(self, _rows):
+                pass
+
+            def set_on_changed(self, _cb):
+                pass
+
+        with temp_config_dir(), mock_gtk(fresh=True):
+            import backup_page
+            import gui_helpers
+
+            backup_page.EditableListView = _RecordingELV
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+            gui_helpers.Gtk.Entry = _FakeEntry
+            gui_helpers.Gtk.CheckButton = _FakeCheckButton
+            backup_page.DirtyTracker = _NoOpDirtyTracker
+
+            app = _FakeApp()
+            backup_page.create_backup_page(app, app.ctx)
+
+        self.assertEqual(len(created), 2, "expected pull and send/receive tables")
+        for elv in created:
+            tips = elv.kwargs.get("header_tooltips")
+            self.assertTrue(tips, "EditableListView built without header_tooltips")
+            self.assertEqual(
+                len(tips), len(elv.kwargs["columns"]), "header_tooltips/columns mismatch"
+            )
+            for tip in tips:
+                self.assertTrue(tip and tip.strip())
+
+
 class TestBackupConfigHelpers(unittest.TestCase):
     """Tests for load_backup_config and collect_backup_config."""
 

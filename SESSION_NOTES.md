@@ -1897,3 +1897,92 @@ F-040 draft+execute in-phase; F-034/F-037 promote to proposals.
   legs all green in round 1.
 - Phase 2 diff ≈ +440/−105 over 12 files. Next: Phase 3 (dialogs, user
   priority) on user cue.
+
+## Tooltips Phase 3 — all reachable dialogs (2026-11-01)
+
+- Executed on the approved per-phase plan (user-given Tooltips Plan file);
+  Phases 1 (f1b315c) and 2 (83525b9) already landed. Dialogs only — no
+  attach_cell_tooltips anywhere (no dialog renderer ellipsizes).
+- Shared constants in pool_create_wizard.py: _DISK_TABLE_HEADER_TOOLTIPS
+  (6 headers, wizard picker + growth/migrate shared picker) and
+  _TOPOLOGY_RADIO_TOOLTIPS + _RAID10_RADIO_TOOLTIP (wizard + add-vdev +
+  migrate radio groups); growth/migrate import both (import direction
+  already existed).
+- Dynamic problem-tooltip write paths migrated to set_action_tooltip so
+  statics survive the clear branch: wizard _refresh_chrome primary
+  (Back/Next/Create), growth confirm buttons x5 (add/expand/replace/detach/
+  infra), migrate Migrate button, both manage-profiles dialogs' Edit/Delete
+  (built-in reason stays the dynamic reason), disk_wipe + sever-clone
+  typed-gate handlers (typed-mismatch reason added where there was none).
+- One edit per shared block covers many dialogs: _build_disk_picker headers
+  (6 dialogs), _ReviewScaffold typed entry + log checkbox (4), target-tree
+  headers (3), dataset_actions._input_dialog gained tooltip= param (snapshot
+  name + Add Hold callers).
+- Plan-text vs code mappings: no pool rename dialog exists (pool_actions
+  Add only); recall dialog has no name entry (Profile/Schedule headers +
+  Recall button instead); "per-dataset checks" = migrate's per-property
+  replay checkboxes.
+- Additions beyond the plan file's named list (approved in the Phase-3
+  plan): pool_profile_dialogs manage dialog (4 headers + 4 buttons; its
+  editor already had field tooltips — untouched), alignment survey combos
+  (Performance tab Survey...), migrate cutover-confirm entry/Cut Over and
+  running-VMs Continue buttons. Button rule: non-stock affirmative/danger
+  buttons get tooltips; plain Cancel/Close text and stock buttons stay bare
+  (enclosure Save / surface Start + Cancel Test / recall Recall reached via
+  dialog.get_widget_for_response).
+- Test-side accommodations (campaign pattern): set_tooltip_text added to
+  hand-rolled fakes — _FakeCombo (test_pool_create_wizard, recording),
+  _FakeRadio (test_pool_growth_dialogs), _FakeEntry/_FakeCheckButton
+  (test_profile_dialogs), _FakeCombo (test_alignment_page). No existing
+  assertions changed.
+- Per-suite greens during work; full gate once at the end: 108 suites,
+  5960 passed, 0 failed (python leg 4397 passed, 18 environment skips).
+  Phase 2's profile_runner SIGTERM flake did not recur. ruff clean, 9 files
+  reformatted.
+- Phase 3 diff: +425/−42 over 15 python files + 4 test files. Next: Phase 4
+  (per-suite tooltip assertions, red-proofed) on user cue.
+
+## Tooltips Phase 4 — test assertions (2026-11-01)
+
+- Executed on the approved Phase-4-only plan. Tests-only diff: no product
+  changes (every product file's diff after this phase is byte-identical to
+  its Phase 3 state).
+- The plan file's "Update" bullet was already satisfied by the Phase 1
+  commit (f1b315c): TestPageSpecTooltipUniformity in test_action_dispatch,
+  gui_helpers helper tests, update_action_buttons + set_action_tooltip
+  tests in test_zfsutilities_gui; EditableListView header-tooltip tests
+  live in test_gui_infrastructure (~2006), not test_gui_helpers. Phase 4
+  verified those green; test_alignment_page likewise verify-only.
+- 22 test files extended. test_pool_profile_dialogs added beyond the plan
+  file's list (approved in the Phase 4 plan; its product file carried
+  Phase 3 changes the list missed).
+- Assertion patterns, all in each suite's established idiom:
+  set_column_header_tooltip recorder walks pinning full title sequences
+  (Disks 25, Pools 16, Datasets 7, Schedule 6, Retention 6, Offsite 5,
+  Performance device tables 16 + alignment view 17, wizard 6, growth
+  picker 6, manage-profiles 4+4); shared-mock membership asserts where
+  mock_gtk shares instances (Entry/CheckButton/SpinButton accumulate;
+  RadioButton splits into constructor and new_from_widget recorders);
+  EditableListView header_tooltips asserted via constructor-kwarg
+  recorders; typed-gate reason↔static asserts through set_action_tooltip
+  (growth add-vdev, disk wipe, pool-profile builtin guards).
+- Every new assertion red-proofed by blanking one tooltip at its product
+  source, rerunning only that suite, and restoring (Edit-anchored exact
+  strings). One early sed restore on backup_page.py hit the wrong "" and
+  corrupted the module docstring — repaired byte-identical within the
+  turn; lesson recorded: never blind-replace short strings in product
+  files, always Edit with a unique multi-line anchor.
+- Cross-file facts: growth/migrate import the wizard's
+  _DISK_TABLE_HEADER_TOOLTIPS/_TOPOLOGY_RADIO_TOOLTIPS, so the wizard dict
+  tests cover all three modules' wiring. pool_profile manage dialog CLEARS
+  its ListStore and refills from config — pre-seeded adapter rows don't
+  survive, so custom-selection tests must put the profile in app.config.
+- _FakeComboBoxText-style no-op mocks from Phase 3 upgraded to recorders
+  where assertions needed values (offsite _RecordingComboBoxText with
+  ClassVar; profile-dialogs recording Entry/CheckButton classes).
+- ruff check clean across tests/python; 13 touched files ruff-formatted.
+- Full gate once: 108 suites; single failure was the known PREEXISTING
+  test_sigterm_cancels_running_profile timing flake (verified green
+  standalone on this tree immediately after). PREEXISTING.md unchanged at
+  3 entries; nothing new found in Phase 4.
+- Phase 5 (gtk-gui.md Tooltips note, wrap-up gate) remains on user cue.

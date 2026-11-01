@@ -1109,6 +1109,66 @@ class TestDialogFlow(unittest.TestCase):
         mock_info.assert_called_once_with(fake, "scrub is running on pool1")
         fake.run.assert_called_with()  # second run() consumed the CANCEL
 
+    def test_dialog_controls_carry_tooltips(self):
+        """Combos, radios, entries, replay checks, and Migrate explain themselves."""
+        pmd = _import_dialogs()
+        state = _state(pmd)
+        state.typed = state.pool_name
+        # At least one replayable property so the props section builds a row.
+        state.origin_pool_props = {"autotrim": "on"}
+
+        fake = MagicMock()
+        fake.run.side_effect = [pmd._RESPONSE_MIGRATE]
+        app = MagicMock()
+        with (
+            patch.object(pmd, "create_scrolled_dialog", return_value=(fake, MagicMock())),
+            patch.object(pmd, "scrub_blocks_pool_op", return_value=None),
+        ):
+            request = pmd.show_migrate_pool_dialog(app, state)
+        self.assertIsNotNone(request)
+
+        combo_texts = [
+            c.args[0] for c in pmd.Gtk.ComboBoxText.return_value.set_tooltip_text.call_args_list
+        ]
+        # Pool, profile, blocksize, and holding combos.
+        self.assertGreaterEqual(len(combo_texts), 4)
+        for text in combo_texts:
+            self.assertTrue(text and text.strip(), "migrate combo tooltip is empty")
+        self.assertTrue(any("Pool to migrate" in t for t in combo_texts))
+
+        entry_texts = [
+            c.args[0] for c in pmd.Gtk.Entry.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertTrue(any("rate" in t.lower() for t in entry_texts))
+        self.assertTrue(any("type" in t.lower() and "pool" in t.lower() for t in entry_texts))
+
+        check_texts = [
+            c.args[0] for c in pmd.Gtk.CheckButton.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertTrue(check_texts, "replay checkboxes carry no tooltips")
+        for text in check_texts:
+            self.assertTrue(text.strip())
+
+        radio_texts = [
+            c.args[0] for c in pmd.Gtk.RadioButton.return_value.set_tooltip_text.call_args_list
+        ] + [
+            c.args[0]
+            for c in pmd.Gtk.RadioButton.new_from_widget.return_value.set_tooltip_text.call_args_list
+        ]
+        for tip in pmd._TOPOLOGY_RADIO_TOOLTIPS.values():
+            self.assertIn(tip, radio_texts)
+        self.assertTrue(
+            all(text.strip() for text in radio_texts),
+            "mode radio tooltip is empty",
+        )
+        # Two mode radios beyond the topology radios.
+        self.assertGreaterEqual(len(radio_texts), len(pmd._TOPOLOGY_RADIO_TOOLTIPS) + 2)
+
+        migrate_texts = [
+            c.args[0] for c in fake.add_button.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertTrue(any("destructive cutover" in t for t in migrate_texts))
+
 
 class FakeDatasetRunner:
     """BackupRunner stand-in for dataset action tests."""

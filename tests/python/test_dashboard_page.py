@@ -3531,6 +3531,52 @@ class TestCreateDashboardPage(unittest.TestCase):
             self.assertIs(handler_calls[0].args[2], store)
             self.assertEqual(handler_calls[0].args[3], 0)
 
+    def test_locks_headers_carry_tooltips(self):
+        """Every Active Locks column header explains its column."""
+        labels_by_text = {}
+
+        def fake_label(*args, **kwargs):
+            lbl = MagicMock()
+            text = kwargs.get("label") or (args[0] if args else None)
+            lbl._text = text
+            labels_by_text.setdefault(text, []).append(lbl)
+            return lbl
+
+        app = self._create_app()
+        self._run_create(app, label_factory=fake_label)
+
+        for title in ("Dataset", "Type", "PID", "Script", "Host", "Acquired", "Description"):
+            headers_for_title = labels_by_text.get(title, [])
+            self.assertTrue(headers_for_title, f"Expected a {title} header label")
+            for lbl in headers_for_title:
+                tooltips = [call.args[0] for call in lbl.set_tooltip_text.call_args_list]
+                self.assertEqual(len(tooltips), 1)
+                self.assertTrue(tooltips[0].strip(), f"{title} header tooltip is empty")
+
+        # Locks-specific wording: these titles exist only on the Locks view,
+        # so their tooltip content can be pinned without ambiguity.
+        self.assertIn(
+            "the dataset the lock protects",
+            labels_by_text["Dataset"][0].set_tooltip_text.call_args.args[0].lower(),
+        )
+        self.assertIn(
+            "when the lock was taken",
+            labels_by_text["Acquired"][0].set_tooltip_text.call_args.args[0].lower(),
+        )
+
+    def test_refresh_and_threshold_spinbuttons_carry_tooltips(self):
+        """Both Dashboard spinbuttons explain what their value controls."""
+        app = self._create_app()
+        self._run_create(app)
+
+        refresh_tip = app.dashboard_refresh_spin.set_tooltip_text.call_args.args[0]
+        self.assertTrue(refresh_tip.strip())
+        self.assertIn("1-300", refresh_tip)
+
+        threshold_tip = app.dashboard_threshold_spin.set_tooltip_text.call_args.args[0]
+        self.assertTrue(threshold_tip.strip())
+        self.assertIn("50-95", threshold_tip)
+
     def test_section_order_in_top_level_box(self):
         app = self._create_app()
         page = self._run_create(app)

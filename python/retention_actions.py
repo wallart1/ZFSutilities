@@ -77,10 +77,17 @@ def on_retention_add_policy(app, ctx):
             combo.append_text(p)
         combo.set_active(0)
         entry = combo.get_child()
+        combo.set_tooltip_text(
+            "Pool the new policy belongs to — pick a candidate or type a "
+            "known/online pool name; <offsite> covers offsite copies"
+        )
         content.add(combo)
     else:
         entry = Gtk.Entry()
         entry.set_width_chars(1)
+        entry.set_tooltip_text(
+            "Pool the new policy belongs to — a known pool, an online pool, or <offsite>"
+        )
         content.add(entry)
     entry.set_activates_default(True)
 
@@ -346,6 +353,10 @@ def on_retention_add_bucket(app, ctx):
     entry.set_width_chars(1)
     entry.set_max_length(1)
     entry.set_activates_default(True)
+    entry.set_tooltip_text(
+        "Single letter naming the new bucket (e.g. 'x'); its row appears in "
+        "the policy table, unsaved until Save"
+    )
     content.add(entry)
 
     dlg.show_all()

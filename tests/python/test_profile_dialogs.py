@@ -853,6 +853,9 @@ class _FakeEntry:
     def set_placeholder_text(self, text):
         pass
 
+    def set_tooltip_text(self, text):
+        pass
+
 
 class _FakeCheckButton:
     """CheckButton stand-in that returns a state fixed at creation time."""
@@ -866,6 +869,9 @@ class _FakeCheckButton:
         return bool(self._values.get(self._keys[self._idx], False))
 
     def set_active(self, value):
+        pass
+
+    def set_tooltip_text(self, text):
         pass
 
 
@@ -2181,6 +2187,149 @@ class TestProfileEditorDialog(unittest.TestCase):
             ):
                 pd.show_profile_editor_dialog(app)
             mock_save.assert_not_called()
+
+
+class TestProfileDialogStaticTooltips(unittest.TestCase):
+    """Static tooltips on the profile dialogs' widgets and buttons."""
+
+    def _cancel_dialog(self, pd):
+        dialog = MagicMock()
+        dialog.run.return_value = pd.Gtk.ResponseType.CANCEL
+        return dialog, patch.object(pd, "create_dialog", return_value=dialog)
+
+    def test_editor_entries_and_checks_carry_tooltips(self):
+        pd = _import_profile_dialogs()
+        app = _make_app()
+        app.config["workload_profiles"] = {
+            "general": {
+                "description": "Balanced.",
+                "applies_to": ["filesystem", "volume"],
+                "properties": {"compression": "zstd"},
+                "notes": "",
+            },
+        }
+        entries = []
+        checks = []
+
+        class _RecordingEntry:
+            def __init__(self, *args, **kwargs):
+                self.tooltip = None
+                self._text = ""
+                entries.append(self)
+
+            def set_text(self, text):
+                self._text = text
+
+            def get_text(self):
+                return self._text
+
+            def set_tooltip_text(self, text):
+                self.tooltip = text
+
+            def __getattr__(self, name):
+                return lambda *args, **kwargs: None
+
+        class _RecordingCheck:
+            def __init__(self, label=None):
+                self.label = label
+                self.tooltip = None
+                checks.append(self)
+
+            def set_tooltip_text(self, text):
+                self.tooltip = text
+
+            def __getattr__(self, name):
+                return lambda *args, **kwargs: None
+
+        _dialog, dialog_patch = self._cancel_dialog(pd)
+        with dialog_patch:
+            pd.Gtk.Entry = _RecordingEntry
+            pd.Gtk.CheckButton = _RecordingCheck
+            pd.show_profile_editor_dialog(app)
+
+        # Name, description, every property row, volblocksize, and ashift.
+        self.assertGreaterEqual(len(entries), 5)
+        for entry in entries:
+            self.assertTrue(
+                entry.tooltip and entry.tooltip.strip(),
+                "profile-editor entry lacks a tooltip",
+            )
+        self.assertTrue(any("Profile name" in e.tooltip for e in entries))
+        self.assertTrue(any("Free-text summary" in e.tooltip for e in entries))
+
+        self.assertEqual(len(checks), 2, "expected filesystem and volume checks")
+        for check in checks:
+            self.assertTrue(check.tooltip and check.tooltip.strip())
+
+    def test_manage_dialog_headers_and_buttons_carry_tooltips(self):
+        pd = _import_profile_dialogs()
+        app = _make_app()
+        app.config["workload_profiles"] = {
+            "general": {
+                "description": "Balanced settings.",
+                "applies_to": ["filesystem", "volume"],
+                "properties": {"compression": "zstd"},
+                "notes": "",
+            },
+        }
+        _dialog, dialog_patch = self._cancel_dialog(pd)
+        view = _make_tree_view(GtkListStoreAdapter(), [])
+
+        with (
+            dialog_patch,
+            patch.object(pd.Gtk, "ListStore", return_value=MagicMock()),
+            patch.object(pd.Gtk, "TreeView", return_value=view),
+            patch.object(pd, "set_column_header_tooltip") as recorder,
+        ):
+            pd.show_manage_profiles_dialog(app)
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            ["Name", "Applies to", "Description", "Kind"],
+        )
+        for title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+        button_texts = [
+            c.args[0] for c in pd.Gtk.Button.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertIn("Create a new workload profile from scratch", button_texts)
+        self.assertTrue(any("restore the seeded defaults" in t for t in button_texts))
+        self.assertTrue(any("Open the selected profile in the editor" in t for t in button_texts))
+        self.assertTrue(any("Delete the selected custom profile" in t for t in button_texts))
+
+    def test_add_profile_name_entry_carries_tooltip(self):
+        pd = _import_profile_dialogs()
+        app = _make_app()
+        _dialog, dialog_patch = self._cancel_dialog(pd)
+
+        with dialog_patch:
+            with patch.object(pd, "get_user", return_value="tester"):
+                pd.show_add_profile_dialog(app, "backup", {})
+
+        entry_texts = [c.args[0] for c in pd.Gtk.Entry.return_value.set_tooltip_text.call_args_list]
+        self.assertTrue(
+            any("Short name appended to" in t for t in entry_texts),
+            "Add Profile to Schedule name entry lacks a tooltip",
+        )
+
+    def test_recall_button_carries_tooltip(self):
+        pd = _import_profile_dialogs()
+        app = _make_app()
+        dialog, dialog_patch = self._cancel_dialog(pd)
+
+        with dialog_patch:
+            with patch.object(
+                pd,
+                "list_profiles",
+                return_value=[{"tab_type": "backup", "profile_name": "p1", "cron": {}}],
+            ):
+                pd.show_recall_profile_dialog(app, "backup", lambda *_args: None)
+
+        tip = dialog.get_widget_for_response.return_value.set_tooltip_text.call_args.args[0]
+        self.assertTrue(tip.strip())
+        self.assertIn("backup tab", tip)
 
 
 class TestActionDispatch(unittest.TestCase):
