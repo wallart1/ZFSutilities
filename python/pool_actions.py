@@ -547,6 +547,25 @@ def _collect_export_blockers(repo, pool):
     return blockers
 
 
+def _log_pool_mount_state(repo, pool):
+    """Log how many of the pool's filesystems remain mounted after a failed
+    export.
+
+    ``zpool export`` unmounts the pool's datasets as part of its attempt, so
+    by the time the failure is diagnosed the unmount work is usually already
+    done — say so, instead of leaving the operator to unmount blind.
+    """
+    try:
+        rows = [r for r in repo.list_datasets(pool=pool) if r.ds_type == "filesystem"]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return
+    mounted = sum(1 for r in rows if r.mounted == "yes")
+    if mounted:
+        log_msg(f"INFO: {mounted} of {len(rows)} datasets in '{pool}' are still mounted")
+    else:
+        log_msg(f"INFO: All datasets in '{pool}' are already unmounted")
+
+
 def _unmount_pool_filesystems(repo, pool, blockers):
     """Unmount mounted filesystems in *pool* that have no other blocker.
 
@@ -809,6 +828,7 @@ def _try_export_with_recovery(app, pool_name, stderr):
             log_msg(f"WARN: zpool export stderr: {stderr.strip()}")
 
     blockers = _collect_export_blockers(repo, pool_name)
+    _log_pool_mount_state(repo, pool_name)
     resolvable = [b for b in blockers if b.resolvable]
     unresolvable = [b for b in blockers if not b.resolvable]
 

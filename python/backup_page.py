@@ -87,6 +87,30 @@ _BACKUP_TOPIC_MAP = {
     "transfer_rate_limit": "backup_transfer_rate_limit",
 }
 
+# One-line tooltips for the variable rows, set on both the label and the
+# input widget (gui_helpers.add_var_row). Wording follows the variable
+# reference table in docs/docs/user-guide/gtk-gui.md.
+_BACKUP_VAR_TOOLTIPS = {
+    "includes": "Keep only datasets matching at least one of these patterns; empty keeps all.",
+    "excludes": "Skip datasets matching any of these patterns.",
+    "startwith": "Skip everything before the first dataset matching this pattern (the match is kept).",
+    "endwith": "Skip everything after the first dataset matching this pattern (the match is kept).",
+    "label": "Snapshot label this step uses for matching and bucket assignment.",
+    "autoresume": "Y = resume interrupted resumable receives instead of restarting them (zfs receive -s).",
+    "receive_F_option": "F = force rollback of destination modifications later than the common snapshot.",
+    "releaseholds": "Y = release holds on snapshots before destroying rather than refusing.",
+    "releaseholds_tags": "Hold tag patterns eligible for release (default offsite-*).",
+    "doincrementals": "Y = incremental send from the most recent common snapshot; N = full send.",
+    "dointermediates": "Y = include all intermediate snapshots (-I); N = skip them (-i).",
+    "allow_destructive": (
+        "Y = a full copy may destroy an existing populated destination dataset and its children."
+    ),
+    "verify_after_transfer": (
+        "Y = compare destination snapshot GUID with source after each receive; mismatch is fatal."
+    ),
+    "transfer_rate_limit": "Max transfer rate for the pacer (e.g. 200M, 1G); empty = no limit.",
+}
+
 
 def _frame_grid(parent, label):
     """Create a Frame containing a Grid with standard margins."""
@@ -255,6 +279,7 @@ def create_backup_page(app, ctx):
             app.backup_var_widgets,
             yn_vars=YN_VARIABLES,
             topic_map=_BACKUP_TOPIC_MAP,
+            tooltip=_BACKUP_VAR_TOOLTIPS.get(key),
             block_scroll=True,
         )
 
@@ -276,6 +301,7 @@ def create_backup_page(app, ctx):
             app.backup_var_widgets,
             yn_vars=YN_VARIABLES,
             topic_map=_BACKUP_TOPIC_MAP,
+            tooltip=_BACKUP_VAR_TOOLTIPS.get(key),
             block_scroll=True,
         )
 

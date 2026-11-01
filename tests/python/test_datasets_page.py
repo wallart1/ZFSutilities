@@ -981,9 +981,13 @@ class TestDatasetsContextMenu(unittest.TestCase):
 class TestVolumeLoopButtonSensitivity(unittest.TestCase):
     """Mount/Unmount/Browse sensitivity for volumes and loop partitions."""
 
+    # The static PAGE_SPECS tooltip set_action_tooltip restores on clear.
+    _MOUNT_TOOLTIP = "Mount the selected dataset."
+
     def _make_app(self, items, loop_attached=None):
         app = MagicMock()
         app.datasets_view = MagicMock()
+        app._ds_mount_btn._action_tooltip = self._MOUNT_TOOLTIP
         app.ctx.zfs_repository.loop_find.return_value = "/dev/loop0" if loop_attached else None
         with patch.object(dp, "get_tree_selection_items", return_value=items):
             dp.update_ds_button_sensitivity(app)
@@ -1069,7 +1073,7 @@ class TestVolumeLoopButtonSensitivity(unittest.TestCase):
     def test_filesystem_snapshot_enables_mount_and_clears_tooltip(self):
         app = self._make_app([self._snapshot_item("filesystem")])
         app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
-        app._ds_mount_btn.set_tooltip_text.assert_called_once_with("")
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with(self._MOUNT_TOOLTIP)
 
     def test_volume_plus_mixed_selection_keeps_mount_enabled(self):
         app = self._make_app(
@@ -1086,6 +1090,9 @@ class TestVolumeLoopButtonSensitivity(unittest.TestCase):
 class TestCanmountButtonSensitivity(unittest.TestCase):
     """Mount stays disabled for unmounted filesystems with canmount=off."""
 
+    # The static PAGE_SPECS tooltip set_action_tooltip restores on clear.
+    _MOUNT_TOOLTIP = "Mount the selected dataset."
+
     def _fs_item(self, **kw):
         item = {
             "type": "dataset",
@@ -1099,6 +1106,7 @@ class TestCanmountButtonSensitivity(unittest.TestCase):
     def _make_app(self, items, canmount=None):
         app = MagicMock()
         app.datasets_view = MagicMock()
+        app._ds_mount_btn._action_tooltip = self._MOUNT_TOOLTIP
         app.ctx.zfs_repository.loop_find.return_value = None
         values = canmount or {}
         app.ctx.zfs_repository.get_property.side_effect = lambda name, prop: values.get(name, "on")
@@ -1116,7 +1124,7 @@ class TestCanmountButtonSensitivity(unittest.TestCase):
     def test_canmount_on_enables_mount(self):
         app = self._make_app([self._fs_item()], canmount={"tank/nomount": "on"})
         app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
-        app._ds_mount_btn.set_tooltip_text.assert_called_once_with("")
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with(self._MOUNT_TOOLTIP)
 
     def test_canmount_noauto_enables_mount(self):
         """noauto only blocks automatic mounts; manual Mount stays available."""
@@ -1149,7 +1157,7 @@ class TestCanmountButtonSensitivity(unittest.TestCase):
             canmount={"tank/nomount": "off", "tank/ok": "on"},
         )
         app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
-        app._ds_mount_btn.set_tooltip_text.assert_called_once_with("")
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with(self._MOUNT_TOOLTIP)
 
     def test_volume_not_queried_for_canmount(self):
         app = self._make_app(

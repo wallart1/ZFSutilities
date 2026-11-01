@@ -14,3 +14,15 @@
   contexts fresh=True; restore/checkagainst are not covered). Alphabetical
   full-suite ordering never pairs them this way, and the sanctioned
   per-suite runner is unaffected.
+
+- (false positive, bash pool-identity detector, found 2026-10-31):
+  `detect_pool_identity` in `lib/iscsi-lib.sh` (surfaced by
+  `bin/check-prerequisites` and `bin/setup-iscsi-targets`) reports
+  "expected pool ... is not imported — offline, renamed, or replaced" for
+  offsite rotation pools that are exported on purpose (live instance on
+  stewie: z22tb). The Dashboard's copy of the check
+  (`_compute_pool_identity_warnings`) now exempts GUI-config offsite
+  candidates, but the bash layer has no offsite knowledge; closing the
+  bash side needs an offsite marker in node.conf (a schema the user owns)
+  or another bash-readable source. Not fixed: requires a config-schema
+  decision.

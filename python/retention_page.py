@@ -47,6 +47,21 @@ from offsite_runner import detect_offsite_pools
 # Advanced prune dataset criteria shown in the Advanced expander
 MASS_DELETE_VARIABLES = ["includes", "excludes", "startwith", "endwith"]
 
+# One-line tooltips for the mass-delete variable rows, set on both the
+# label and the input widget (gui_helpers.add_var_row).
+_RETENTION_MASS_DELETE_TOOLTIPS = {
+    "includes": "Mass-delete only datasets matching at least one of these patterns; empty matches all.",
+    "excludes": "Never mass-delete datasets matching any of these patterns.",
+    "startwith": "Skip everything before the first dataset matching this pattern (the match is kept).",
+    "endwith": "Skip everything after the first dataset matching this pattern (the match is kept).",
+    "snapshot_has": "Only snapshots whose full name contains this substring are matched.",
+    "releaseholds": (
+        "When enabled, only system offsite-* holds are released; "
+        "user-added holds are left in place and block deletion. "
+        "Applies to both normal prune and ignore-retention prune."
+    ),
+}
+
 # Human-readable bucket labels
 BUCKET_LABELS = {
     "d": "Daily",
@@ -425,16 +440,10 @@ def create_retention_page(app, ctx):
             variables,
             app._ret_mass_delete_widgets,
             yn_vars={"releaseholds"},
+            tooltip=_RETENTION_MASS_DELETE_TOOLTIPS.get(key),
         )
         row += 1
     for key in ("snapshot_has", "releaseholds"):
-        tooltip = None
-        if key == "releaseholds":
-            tooltip = (
-                "When enabled, only system offsite-* holds are released; "
-                "user-added holds are left in place and block deletion. "
-                "Applies to both normal prune and ignore-retention prune."
-            )
         add_var_row(
             danger_grid,
             row,
@@ -442,7 +451,7 @@ def create_retention_page(app, ctx):
             variables,
             app._ret_mass_delete_widgets,
             yn_vars={"releaseholds"},
-            tooltip=tooltip,
+            tooltip=_RETENTION_MASS_DELETE_TOOLTIPS.get(key),
         )
         row += 1
 

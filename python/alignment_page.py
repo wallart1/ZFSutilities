@@ -57,8 +57,16 @@ from charting import (
 from disk_repository import format_bytes
 from feature_config import get_alignment_survey, get_workload_profiles
 from gi.repository import GLib, Gtk, Pango
-from gui_helpers import (
+
+# The cell-tooltip machinery lives in gui_helpers now; the underscore
+# imports re-export it under the module-qualified names this page (and its
+# tests) have always referenced.
+from gui_helpers import (  # noqa: F401
+    _CELL_FIT_SLACK_PX,
     TREEVIEW_MIN_WIDTH,
+    _cell_text_fits,
+    _on_cell_query_tooltip,
+    attach_cell_tooltips,
     capped_treeview_scroll,
     configure_treeview_column,
     note_label,
@@ -82,11 +90,6 @@ _MEMORY_ROWS = (
 )
 
 _SEVERITY_MARKERS = {"OK": "✓ OK", "info": "• info", "WARN": "⚠ WARN"}
-
-# Slack subtracted from a column's width when deciding whether cell text
-# fits: the cell's focus padding plus a pixel or two, so exactly-fitting
-# text does not pop a tooltip.
-_CELL_FIT_SLACK_PX = 6
 
 
 def _fmt_pct(fraction):
@@ -389,8 +392,9 @@ def _table(
     the page-level scroll restore stay as they are). The window carries
     its own horizontal scrollbar for wide columns (see
     ``gui_helpers.capped_treeview_scroll``). Cells ellipsize and expose
-    their full text through ``_on_cell_query_tooltip`` — wrapping would
-    churn row heights, which the scroll-stability design depends on.
+    their full text through ``gui_helpers.attach_cell_tooltips`` —
+    wrapping would churn row heights, which the scroll-stability design
+    depends on.
     """
     store = Gtk.ListStore(*([str] * (len(columns) + 1 if hidden_key else len(columns))))
     view = Gtk.TreeView(model=store)
@@ -410,55 +414,9 @@ def _table(
     setattr(app, store_attr, store)
     app._ui_state.bind_treeview(view, state_key)
     view.set_size_request(-1, 60)
-    view.set_has_tooltip(True)
-    view.connect("query-tooltip", _on_cell_query_tooltip, store, offset)
+    attach_cell_tooltips(view, store, offset)
     scroll = capped_treeview_scroll(view)
     return scroll, store, view
-
-
-def _on_cell_query_tooltip(view, x, y, keyboard_mode, tooltip, store, offset):
-    """Show the full text of a hovered cell whose text does not fit.
-
-    Cells ellipsize, so the tooltip matters only where the rendered text
-    is actually clipped: the text is measured with the view's own Pango
-    context against the column's allocated width (``_cell_text_fits``).
-    Hovers over empty space, cells whose text fits, and empty cells
-    return False so GTK falls through to the default behaviour. The
-    store column is the visible column index plus *offset* (the hidden
-    identity key occupies column 0 when present).
-    """
-    bin_x, bin_y = view.convert_widget_to_bin_window_coords(x, y)
-    hit = view.get_path_at_pos(bin_x, bin_y)
-    if not hit or hit[1] is None:
-        return False
-    path, column = hit[0], hit[1]
-    col_index = view.get_columns().index(column)
-    text = store[path][col_index + offset]
-    if not isinstance(text, str) or not text:
-        return False
-    if _cell_text_fits(view, column, text):
-        return False
-    tooltip.set_text(text)
-    return True
-
-
-def _cell_text_fits(view, column, text):
-    """True when *text* renders within *column*'s width; None when unsure.
-
-    The comparison needs real integers out of GTK (the Pango layout's
-    pixel size, the column's allocated width); anything else — the
-    mocked-GTK test environment, an exotic backend — answers None so the
-    caller shows the tooltip rather than suppressing it on a guess.
-    """
-    try:
-        layout = view.create_pango_layout(text)
-        pixel_width, _pixel_height = layout.get_pixel_size()
-        column_width = column.get_width()
-    except (AttributeError, TypeError, ValueError):
-        return None
-    if not isinstance(pixel_width, int) or not isinstance(column_width, int):
-        return None
-    return pixel_width <= max(0, column_width - _CELL_FIT_SLACK_PX)
 
 
 def _reconcile_rows(store, rows, key_column=0):

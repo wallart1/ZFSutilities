@@ -597,6 +597,27 @@ class TestPoolsPageLayout(unittest.TestCase):
 
         paned_mock.pack2.assert_called_with(ANY, True, False)
 
+    def test_scrub_view_attaches_cell_tooltips(self):
+        """Ellipsized scrub cells show their full text on hover."""
+        pp = _import_pools_page()
+        with patch.object(pp, "refresh_pools_page", MagicMock()):
+            with patch.object(pp, "ScrubQueue", MagicMock()):
+                app = self._make_app()
+                pp.create_pools_page(app)
+
+        # pools_page was imported under a fresh mock context; reach the
+        # handler through the helper it actually bound rather than through
+        # sys.modules, which mock_gtk(fresh=True) restores on exit.
+        expected_handler = pp.attach_cell_tooltips.__globals__["_on_cell_query_tooltip"]
+
+        view, store = app.scrub_view, app.scrub_store
+        view.set_has_tooltip.assert_any_call(True)
+        handler_calls = [c for c in view.connect.call_args_list if c.args[:1] == ("query-tooltip",)]
+        self.assertEqual(len(handler_calls), 1)
+        self.assertIs(handler_calls[0].args[1], expected_handler)
+        self.assertIs(handler_calls[0].args[2], store)
+        self.assertEqual(handler_calls[0].args[3], 0)
+
 
 class TestPoolsDirtyState(unittest.TestCase):
     """Dirty state reflects dict-pool inequality including offsite_candidate."""

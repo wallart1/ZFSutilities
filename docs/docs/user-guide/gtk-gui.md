@@ -209,7 +209,10 @@ job.
 
 The bottom panel shows a scrollable log of all operations. Every line is
 prefixed with a `YYYY-MM-DD HH:MM:SS` timestamp in the system's local time.
-The divider between the main content area and the log panel can be dragged to
+Numbered input prompts (`INFO: [Input N][label] …` questions the GUI is
+waiting on you to answer) are tinted bright blue so they stand out while
+reviewing the log. The divider between the main content area and the log
+panel can be dragged to
 resize the log. The text size can be changed with
 **View → GUI Log Font** (see [View Menu](#view-menu)) and is remembered across
 GUI restarts.

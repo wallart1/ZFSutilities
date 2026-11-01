@@ -1744,3 +1744,117 @@ F-040 draft+execute in-phase; F-034/F-037 promote to proposals.
   performed under the user's explicit step-10 instruction.
 
 
+
+## 2026-10-31 — Dashboard offsite-pool false warning fixed (pub3)
+
+- User report: Dashboard warned "Pool z22tb is configured in node.conf but
+  not imported" while z22tb is an offsite candidate exported on purpose
+  (verified live on stewie: 4 pools imported, z22tb still in POOL_TARGET).
+- Fix: `_compute_pool_identity_warnings` takes optional GUI config;
+  offsite-candidate pools (`feature_config.get_offsite_candidate_names`)
+  are exempt from the not-imported shape only — imported-but-unconfigured
+  and GUID-mismatch shapes unchanged. Plumbed via
+  `_get_pool_identity_warnings(app.config)`; TTL-cache behavior unchanged.
+- 3 new tests in TestComputePoolIdentityWarnings; targeted suite + full
+  tests/run-tests green; ruff clean. Docs messages row updated.
+- Out of scope, recorded in PREEXISTING.md: bash-side
+  detect_pool_identity (check-prerequisites / setup-iscsi-targets) has the
+  same false positive and no offsite knowledge — needs a node.conf-side
+  marker decision.
+
+## 2026-10-31 (later) — root-owned __pycache__ structural fix (pub3)
+
+- User report (named PUB): root-owned files keep reappearing in
+  __pycache__. Cause: dev-host root interpreters (sudo GUI launches, sudo
+  pytest e2e legs) import repo modules and write missing/stale .pyc caches
+  as root into the dan-owned tree; sweeps delete, next root session
+  recreates. Live evidence: pub2+pub3 each held one root-owned
+  disk_surface_test.cpython-312.pyc (2026-10-30 10:26/10:47) — same file
+  swept 2026-10-26; pub's __pycache__ dir itself was root-owned then.
+- Fix: when euid==0, redirect bytecode via sys.pycache_prefix to
+  /var/cache/zfsutilities/pycache (env ZFSUTILITIES_PYCACHE_DIR; existing
+  interpreter prefix respected). Hooks: _redirect_root_pycache() before
+  product imports in python/zfsutilities_gui.py (E402 per-file-ignore
+  added) + same block in tests/python/conftest.py beside the LOCK_DIR
+  isolation. 3 new tests (TestRedirectRootPycache); docs testing.md gained
+  the root-run cache story incl. the conftest-own-pyc residual.
+- pub3 straggler unlinked; find -user root = 0 in pub3. pub2's straggler
+  NOT touched (outside working dir) — needs one unlink in that lane.
+- Lands in pub via the lane-merge cycle. Live root verification is the
+  user's (sudo GUI launch, then find -user root).
+
+## 2026-10-31 (evening) — Datasets unmount FATAL after failed export (pub3)
+
+- Incident (stewie, 0.134.0, journal-verified): 10:05:51 zpool export z22tb
+  unmounted all pool datasets as part of its attempt, then failed (blocker
+  unknown — foreground GUI actions log only to the in-app pane; no
+  rsync/send/scrub active). Datasets page kept the stale pre-export
+  "mounted" rows (no page-switch refresh branch, no timer, manual Refresh
+  only). 10:07:18 user unmounted z22tb row (stale gate passed) → kernel
+  "not currently mounted" → generic FATAL (dataset_actions.py:1208) —
+  goal state presented as failure; wrapper skipped refresh (changed=False),
+  stale display survived the user's manual child walk 10:09:43-10:10:49.
+  10:11:36 unrelated successful mount refreshed the page ("unmounted on its
+  own"); 10:12:45 export retry succeeded (zed EXPORTED 10:12:46).
+- Fix: idempotent unmount — live-listing pre-check (target mounted!=yes →
+  VERB "was already unmounted", success) + "not currently mounted" stderr
+  branch (same VERB, continue); repo.unmount_filesystem treats that stderr
+  as success (only caller: export-recovery auto-unmount); on_page_changed
+  gained the missing datasets branch (refresh on switch);
+  _try_export_with_recovery logs _log_pool_mount_state ("N of M still
+  mounted" / "All datasets ... already unmounted") after blocker collection.
+- Tests: 2 in TestUnmountDataset, 1 repo, 1 page-switch, 3 in new
+  TestLogPoolMountState. Docs: 2 new message rows.
+
+## 2026-10-31 (night) — info-panel input-prompt tint (pub3)
+
+- User ask: tint numbered operator questions ("INFO: [Input 4][Prune] ...
+  [y/N]:") bright blue (#00A3F5) in the bottom info-panel log (NOT the Logs
+  tab viewer — first reading was wrong, corrected by user, plan re-approved).
+- Fix: third tag branch in ZFSUtilitiesWindow._insert_info_line — level INFO
+  + _INPUT_PROMPT_RE ([Input N][label]) → lazily created "input_prompt" tag,
+  same start-mark/apply_tag_by_name pattern as fatal/warn. Re-renders
+  (_render_info_panel replay) keep the tint; close/withdrawn VERB lines
+  stay default-colored. 5 new tests; docs gtk-gui.md Log Panel sentence.
+
+## 2026-10-31 (late) — Tooltips campaign Phase 1: shared infrastructure (pub3)
+
+- Plan: user-given "Tooltips Plan", Phase 1 only; Phase 1 coding plan
+  approved this session. All six work items executed.
+- gui_helpers gained the three shared helpers: set_column_header_tooltip
+  (header-label pattern extracted; dashboard Date/Time + disks Wear/Test
+  migrated, logs_page left as-is per plan), attach_cell_tooltips +
+  _on_cell_query_tooltip/_cell_text_fits/_CELL_FIT_SLACK_PX (moved from
+  alignment_page, re-exported there under the old names so
+  test_alignment_page passes unedited), and set_action_tooltip
+  (reason-or-stored-static single write path).
+- add_var_row now sets the tooltip on the Entry/ComboBoxText too, not just
+  the label. EditableListView gained optional header_tooltips (Active
+  column always gets one) and Add/Remove button tooltips; consumers pass
+  lists in Phase 2.
+- PAGE_SPECS buttons are 4-tuples (label, icon, attr, tooltip); spacers
+  4×None; runner pages carry run_tooltip/cancel_tooltip; add_action_button
+  applies + stores button._action_tooltip. disks
+  update_disks_button_sensitivity and the datasets mount button now reset
+  via set_action_tooltip — static tooltips survive state changes (their
+  tests pre-set _action_tooltip and assert the static text).
+- Var-tooltip dicts: _BACKUP_VAR_TOOLTIPS (14), _OFFSITE_VAR_TOOLTIPS (11),
+  _RETENTION_MASS_DELETE_TOOLTIPS (6) — wording from the gtk-gui.md
+  variable reference; Backup's post-hoc prune-filter/allow_destructive
+  overrides kept (verified by test).
+- Cell tooltips attached to Dashboard Tasks + Active Locks and Pools scrub
+  (offset 0 everywhere; Tasks hides its trailing store columns).
+- Test notes: test_gui_infrastructure is the established home for
+  EditableListView tests (plan said test_gui_helpers; placed beside the
+  existing ones). _FakeWidgetBase in test_backup_page had a duplicate
+  no-op set_tooltip_text shadowing the new recorder — removed. Module-level
+  gui_helpers import in test_zfsutilities_gui via import_or_skip_gi (the
+  in-function AST guard requires a mock_gtk context).
+- Red-proofed: header helper, three attach sites, stored _action_tooltip,
+  all three var-tooltip dicts/widget passes. Full gate run at phase end.
+- Next: Phase 2 (nine tab pages) on user cue.
+- Full-gate round 1 found 5 failures in two suites my affected-list missed
+  because they exercise update_disks_button_sensitivity from outside
+  test_disks_page: test_pool_create_wizard (3) and
+  test_disks_page_growth_buttons (2) — same _action_tooltip-reset fix
+  applied; gate rerun green (see final report).

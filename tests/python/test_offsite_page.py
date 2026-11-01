@@ -260,6 +260,32 @@ class TestOffsitePageFrames(unittest.TestCase):
 
     @patch("offsite_page._do_generate_snap")
     @patch("offsite_page.do_detect_offsite_pool")
+    def test_var_rows_carry_tooltips(self, _mock_detect, _mock_gen):
+        """Every variable row's input widget carries a tooltip."""
+        op = _import_offsite_page()
+        op.Gtk.ComboBoxText = _FakeComboBoxText
+
+        expected = set(op.OFFSITE_DATASET_VARIABLES) | set(op.OFFSITE_VARIABLES)
+        self.assertEqual(set(op._OFFSITE_VAR_TOOLTIPS), expected)
+        for key, tooltip in op._OFFSITE_VAR_TOOLTIPS.items():
+            self.assertTrue(tooltip.strip(), f"{key} tooltip is empty")
+
+        app = MagicMock()
+        app.ctx = MagicMock()
+        app.ctx.config = {"pools": []}
+        app.config = {"pools": []}
+
+        op.create_offsite_page(app, app.ctx)
+
+        # Entry widgets share one mock under mock_gtk, so each var-row
+        # tooltip must appear in that widget's accumulated call list.
+        widget = app.offsite_var_widgets["includes"]
+        texts = [c.args[0] for c in widget.set_tooltip_text.call_args_list]
+        for key in ("includes", "excludes", "startwith", "endwith", "transfer_rate_limit"):
+            self.assertIn(op._OFFSITE_VAR_TOOLTIPS[key], texts)
+
+    @patch("offsite_page._do_generate_snap")
+    @patch("offsite_page.do_detect_offsite_pool")
     def test_snapshot_frame_above_send_receive_steps(self, _mock_detect, _mock_gen):
         """Snapshot frame is before Send/Receive Steps; Advanced is after them."""
         op = _import_offsite_page()

@@ -72,6 +72,27 @@ _OFFSITE_TOPIC_MAP = {
     "verify_after_transfer": "offsite_verify_after_transfer",
     "transfer_rate_limit": "backup_transfer_rate_limit",
 }
+
+# One-line tooltips for the variable rows, set on both the label and the
+# input widget (gui_helpers.add_var_row). Wording follows the variable
+# reference table in docs/docs/user-guide/gtk-gui.md.
+_OFFSITE_VAR_TOOLTIPS = {
+    "includes": "Keep only datasets matching at least one of these patterns; empty keeps all.",
+    "excludes": "Skip datasets matching any of these patterns.",
+    "startwith": "Skip everything before the first dataset matching this pattern (the match is kept).",
+    "endwith": "Skip everything after the first dataset matching this pattern (the match is kept).",
+    "applyholds": "Y = apply offsite-<pool> holds after each offsite step.",
+    "doincrementals": "Y = incremental send from the most recent common snapshot; N = full send.",
+    "dointermediates": "Y = include all intermediate snapshots (-I); N = skip them (-i).",
+    "allow_destructive": (
+        "Y = a full copy may destroy an existing populated destination dataset and its children."
+    ),
+    "receive_F_option": "F = force rollback of destination modifications later than the common snapshot.",
+    "verify_after_transfer": (
+        "Y = compare destination snapshot GUID with source after each receive; mismatch is fatal."
+    ),
+    "transfer_rate_limit": "Max transfer rate for the pacer (e.g. 200M, 1G); empty = no limit.",
+}
 _EDITABLE_COLS = [1, 2, 3, 4]
 
 
@@ -266,6 +287,7 @@ def create_offsite_page(app, ctx):
             app.offsite_var_widgets,
             yn_vars=OFFSITE_YN_VARIABLES,
             topic_map=_OFFSITE_TOPIC_MAP,
+            tooltip=_OFFSITE_VAR_TOOLTIPS.get(key),
             block_scroll=True,
         )
 
@@ -283,6 +305,7 @@ def create_offsite_page(app, ctx):
             app.offsite_var_widgets,
             yn_vars=OFFSITE_YN_VARIABLES,
             topic_map=_OFFSITE_TOPIC_MAP,
+            tooltip=_OFFSITE_VAR_TOOLTIPS.get(key),
             block_scroll=True,
         )
 

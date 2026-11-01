@@ -959,6 +959,50 @@ class TestComputePoolIdentityWarnings(unittest.TestCase):
             dp._get_pool_identity_warnings()
         mock_compute.assert_called_once()
 
+    def test_offsite_candidate_not_imported_is_exempt(self):
+        # An offsite rotation pool is routinely disconnected by design —
+        # its absence is not an identity warning. A sibling non-offsite
+        # pool missing in the same state still warns.
+        config = {
+            "pools": [
+                {"name": "z22tb", "offsite_candidate": True},
+                {"name": "NVME1", "offsite_candidate": False},
+            ]
+        }
+        patches, repo = self._stack(
+            {"z22tb", "NVME1", "threeamigos"},
+            self._rows(("threeamigos", "111")),
+            {"threeamigos": "111"},
+        )
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            warnings = dp._compute_pool_identity_warnings(repo=repo, config=config)
+        self.assertFalse(any("z22tb" in w for w in warnings))
+        self.assertTrue(any("NVME1" in w and "not imported" in w for w in warnings))
+
+    def test_offsite_candidate_guid_mismatch_still_warns(self):
+        # The exemption covers only the not-imported shape: an imported
+        # offsite pool must still pass the GUID identity check.
+        config = {"pools": [{"name": "z22tb", "offsite_candidate": True}]}
+        patches, repo = self._stack(
+            {"z22tb"},
+            self._rows(("z22tb", "111222333444555666")),
+            {"z22tb": "4338716537971988948"},
+        )
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            warnings = dp._compute_pool_identity_warnings(repo=repo, config=config)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Pool z22tb GUID changed", warnings[0])
+
+    def test_get_pool_identity_warnings_forwards_config(self):
+        config = {"pools": [{"name": "z22tb", "offsite_candidate": True}]}
+        with patch.object(dp, "_compute_pool_identity_warnings", return_value=[]) as mock_compute:
+            dp._get_pool_identity_warnings(config)
+        mock_compute.assert_called_once_with(config=config)
+
 
 class TestLockPid(unittest.TestCase):
     """_lock_pid() extracts PIDs from lock files."""
@@ -3392,7 +3436,7 @@ class TestCreateDashboardPage(unittest.TestCase):
         app.enable_treeview_copy = MagicMock()
         return app
 
-    def _run_create(self, app, two_node=False, label_factory=None):
+    def _run_create(self, app, two_node=False, label_factory=None, extra_factories=None):
         with mock_gtk() as gtk_mock:
             # Use factory classes so each widget is a distinct instance.
             gtk_mock.Box = _WidgetRecorder
@@ -3400,6 +3444,8 @@ class TestCreateDashboardPage(unittest.TestCase):
             gtk_mock.ScrolledWindow = _WidgetRecorder
             gtk_mock.Label = label_factory or MagicMock
             gtk_mock.SpinButton = MagicMock
+            for attr, factory in (extra_factories or {}).items():
+                setattr(gtk_mock, attr, factory)
             # gui_helpers stays real-Gtk-bound here (no fresh re-import),
             # and the shared capped_treeview_scroll builds its windows
             # through gui_helpers' Gtk — patch it too or real widgets get
@@ -3461,6 +3507,25 @@ class TestCreateDashboardPage(unittest.TestCase):
         for title in ("Type", "Name", "Status"):
             for lbl in labels_by_text.get(title, []):
                 lbl.set_tooltip_text.assert_not_called()
+
+    def test_tasks_and_locks_views_attach_cell_tooltips(self):
+        """Ellipsized cells on both views show their full text on hover."""
+        app = self._create_app()
+        # Fresh TreeView/ListStore mocks per construction, else the shared
+        # mock instances merge both views' connect calls into one recorder.
+        self._run_create(app, extra_factories={"TreeView": MagicMock, "ListStore": MagicMock})
+        for view, store in (
+            (app.dashboard_tasks_view, app.dashboard_tasks_store),
+            (app.dashboard_locks_view, app.dashboard_locks_store),
+        ):
+            view.set_has_tooltip.assert_any_call(True)
+            handler_calls = [
+                c for c in view.connect.call_args_list if c.args[:1] == ("query-tooltip",)
+            ]
+            self.assertEqual(len(handler_calls), 1)
+            self.assertIs(handler_calls[0].args[1], gh._on_cell_query_tooltip)
+            self.assertIs(handler_calls[0].args[2], store)
+            self.assertEqual(handler_calls[0].args[3], 0)
 
     def test_section_order_in_top_level_box(self):
         app = self._create_app()

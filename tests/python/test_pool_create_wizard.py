@@ -1058,10 +1058,14 @@ class TestHandlerGuards(unittest.TestCase):
 class TestCreatePoolButtonSensitivity(unittest.TestCase):
     """update_disks_button_sensitivity gates the Create Pool button."""
 
+    # The static PAGE_SPECS tooltip set_action_tooltip restores on clear.
+    _CREATE_TOOLTIP = "Open the pool-creation wizard for the selected unused disks."
+
     def _make(self):
         dp = _import_disks_page()
         app = _make_app()
         app._disks_create_pool_btn = MagicMock()
+        app._disks_create_pool_btn._action_tooltip = self._CREATE_TOOLTIP
         return dp, app
 
     def test_enabled_on_single_host(self):
@@ -1071,7 +1075,7 @@ class TestCreatePoolButtonSensitivity(unittest.TestCase):
         with patch.object(dp, "node_config", nc):
             dp.update_disks_button_sensitivity(app)
         app._disks_create_pool_btn.set_sensitive.assert_called_with(True)
-        app._disks_create_pool_btn.set_tooltip_text.assert_called_with("")
+        app._disks_create_pool_btn.set_tooltip_text.assert_called_with(self._CREATE_TOOLTIP)
 
     def test_disabled_on_two_node_compute_host(self):
         dp, app = self._make()
@@ -1093,7 +1097,7 @@ class TestCreatePoolButtonSensitivity(unittest.TestCase):
         with patch.object(dp, "node_config", nc):
             dp.update_disks_button_sensitivity(app)
         app._disks_create_pool_btn.set_sensitive.assert_called_with(True)
-        app._disks_create_pool_btn.set_tooltip_text.assert_called_with("")
+        app._disks_create_pool_btn.set_tooltip_text.assert_called_with(self._CREATE_TOOLTIP)
 
     def test_disabled_while_runner_busy(self):
         dp, app = self._make()
@@ -1123,16 +1127,18 @@ class TestCreatePoolButtonSensitivity(unittest.TestCase):
     def test_works_before_dataset_runner_exists(self):
         """Regression: page creation runs before the window builds dataset_runner."""
         dp = _import_disks_page()
+        create_btn = MagicMock()
+        create_btn._action_tooltip = self._CREATE_TOOLTIP
         app = SimpleNamespace(
             disks_view=FakeTreeView(FakeListStoreIterable(), []),
-            _disks_create_pool_btn=MagicMock(),
+            _disks_create_pool_btn=create_btn,
         )
         nc = MagicMock()
         nc.is_two_node.return_value = False
         with patch.object(dp, "node_config", nc):
             dp.update_disks_button_sensitivity(app)
         app._disks_create_pool_btn.set_sensitive.assert_called_with(True)
-        app._disks_create_pool_btn.set_tooltip_text.assert_called_with("")
+        app._disks_create_pool_btn.set_tooltip_text.assert_called_with(self._CREATE_TOOLTIP)
 
 
 class TestWizardFlow(unittest.TestCase):

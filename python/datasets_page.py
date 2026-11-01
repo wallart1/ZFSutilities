@@ -32,6 +32,7 @@ from gui_helpers import (
     get_tree_selection_items,
     on_row_expanded,
     restore_expanded_rows,
+    set_action_tooltip,
     set_monospace_font,
     setup_row_scroll,
 )
@@ -588,11 +589,11 @@ def update_ds_button_sensitivity(app):
         if not can_mount and any(
             i["type"] == "snapshot" and i.get("parent_type") == "volume" for i in items
         ):
-            mount_btn.set_tooltip_text("Snapshots of ZFS volumes cannot be mounted")
+            set_action_tooltip(mount_btn, "Snapshots of ZFS volumes cannot be mounted")
         elif not can_mount and canmount_off:
-            mount_btn.set_tooltip_text("Datasets with canmount=off cannot be mounted")
+            set_action_tooltip(mount_btn, "Datasets with canmount=off cannot be mounted")
         else:
-            mount_btn.set_tooltip_text("")
+            set_action_tooltip(mount_btn)
 
 
 # ---------------------------------------------------------------------------

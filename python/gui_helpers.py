@@ -291,6 +291,95 @@ def configure_treeview_column(col, width=None, min_width=20, resizable=True):
         col.set_resizable(True)
 
 
+def set_column_header_tooltip(col, title, tooltip):
+    """Put *tooltip* on *col*'s header, titled *title*.
+
+    TreeViewColumn is not a Gtk.Widget, so the tooltip must live on the
+    header label instead of on the column itself: the label is set as the
+    column's title widget via ``col.set_widget()``.
+    """
+    header = Gtk.Label(label=title)
+    header.set_tooltip_text(tooltip)
+    header.show_all()
+    col.set_widget(header)
+
+
+# Slack subtracted from a column's width when deciding whether cell text
+# fits: the cell's focus padding plus a pixel or two, so exactly-fitting
+# text does not pop a tooltip.
+_CELL_FIT_SLACK_PX = 6
+
+
+def attach_cell_tooltips(view, store, offset=0):
+    """Show hovered cells' full text on an ellipsizing treeview.
+
+    Enables the view's tooltip window and connects the shared
+    ``_on_cell_query_tooltip`` handler with *store* and *offset* (the
+    number of leading store columns — typically a hidden identity key —
+    that precede the visible columns).
+    """
+    view.set_has_tooltip(True)
+    view.connect("query-tooltip", _on_cell_query_tooltip, store, offset)
+
+
+def _on_cell_query_tooltip(view, x, y, keyboard_mode, tooltip, store, offset):
+    """Show the full text of a hovered cell whose text does not fit.
+
+    Cells ellipsize, so the tooltip matters only where the rendered text
+    is actually clipped: the text is measured with the view's own Pango
+    context against the column's allocated width (``_cell_text_fits``).
+    Hovers over empty space, cells whose text fits, and empty cells
+    return False so GTK falls through to the default behaviour. The
+    store column is the visible column index plus *offset* (the hidden
+    identity key occupies column 0 when present).
+    """
+    bin_x, bin_y = view.convert_widget_to_bin_window_coords(x, y)
+    hit = view.get_path_at_pos(bin_x, bin_y)
+    if not hit or hit[1] is None:
+        return False
+    path, column = hit[0], hit[1]
+    col_index = view.get_columns().index(column)
+    text = store[path][col_index + offset]
+    if not isinstance(text, str) or not text:
+        return False
+    if _cell_text_fits(view, column, text):
+        return False
+    tooltip.set_text(text)
+    return True
+
+
+def _cell_text_fits(view, column, text):
+    """True when *text* renders within *column*'s width; None when unsure.
+
+    The comparison needs real integers out of GTK (the Pango layout's
+    pixel size, the column's allocated width); anything else — the
+    mocked-GTK test environment, an exotic backend — answers None so the
+    caller shows the tooltip rather than suppressing it on a guess.
+    """
+    try:
+        layout = view.create_pango_layout(text)
+        pixel_width, _pixel_height = layout.get_pixel_size()
+        column_width = column.get_width()
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not isinstance(pixel_width, int) or not isinstance(column_width, int):
+        return None
+    return pixel_width <= max(0, column_width - _CELL_FIT_SLACK_PX)
+
+
+def set_action_tooltip(button, reason=None):
+    """Set *button*'s tooltip to *reason*, or restore its static tooltip.
+
+    Action-panel buttons carry a static description (stored as
+    ``button._action_tooltip`` when built); sensitivity handlers overwrite
+    it with the reason a button is currently unavailable. This helper is
+    the single write path: a *reason* explains the disabled state, no
+    reason restores the static tooltip instead of blanking it. Buttons
+    without a stored static tooltip fall back to "" as before.
+    """
+    button.set_tooltip_text(reason or getattr(button, "_action_tooltip", None) or "")
+
+
 # Fallback row height when theme metrics are unavailable (mocked tests,
 # exotic backends): text plus the GTK3 treeview vertical separator.
 TREEVIEW_ROW_HEIGHT_FALLBACK = 26
@@ -1531,13 +1620,22 @@ def diagnose_dataset_busy(target, stderr_text="", repo=None):
 class EditableListView:
     """Reusable ListStore(bool, str, ...) with Add/Remove/Move buttons."""
 
-    def __init__(self, on_changed=None, columns=None, column_names=None):
+    # Tooltip on the Active toggle column's header, shared by every table.
+    ACTIVE_HEADER_TOOLTIP = "Include this row when the operation runs"
+
+    def __init__(self, on_changed=None, columns=None, column_names=None, header_tooltips=None):
         self.on_changed = on_changed
         self.columns = columns or [(1, "Source", 120), (2, "Destination", 120)]
         self.column_names = column_names or self._default_column_names()
         if len(self.column_names) != len(self.columns):
             raise ValueError(
                 f"column_names length ({len(self.column_names)}) must match "
+                f"columns length ({len(self.columns)})"
+            )
+        self.header_tooltips = header_tooltips
+        if header_tooltips is not None and len(header_tooltips) != len(self.columns):
+            raise ValueError(
+                f"header_tooltips length ({len(header_tooltips)}) must match "
                 f"columns length ({len(self.columns)})"
             )
         types = [bool] + [str] * len(self.columns)
@@ -1549,15 +1647,20 @@ class EditableListView:
         toggle.connect("toggled", self._on_toggle)
         col0 = Gtk.TreeViewColumn("Active", toggle, active=0)
         configure_treeview_column(col0, width=ACTIVE_COLUMN_WIDTH, min_width=ACTIVE_COLUMN_WIDTH)
+        set_column_header_tooltip(col0, "Active", self.ACTIVE_HEADER_TOOLTIP)
         self.view.append_column(col0)
 
-        for idx, title, width in self.columns:
+        for (idx, title, width), tooltip in zip(
+            self.columns, header_tooltips or [None] * len(self.columns)
+        ):
             r = Gtk.CellRendererText()
             r.set_property("editable", True)
             r.connect("edited", self._on_edited, idx)
             r.connect("editing-started", self._on_editing_started, idx)
             col = Gtk.TreeViewColumn(title, r, text=idx)
             configure_treeview_column(col, width=width)
+            if tooltip:
+                set_column_header_tooltip(col, title, tooltip)
             self.view.append_column(col)
 
         self.view.connect("row-activated", on_row_activated, self.columns[0][0])
@@ -1570,8 +1673,12 @@ class EditableListView:
         setup_row_scroll(scroll, self.view)
 
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        for label, cb in (("Add", self._on_add), ("Remove", self._on_remove)):
+        for label, cb, tip in (
+            ("Add", self._on_add, "Append a new empty row"),
+            ("Remove", self._on_remove, "Delete the selected row"),
+        ):
             btn = Gtk.Button(label=label)
+            btn.set_tooltip_text(tip)
             btn.connect("clicked", cb)
             btn_box.pack_start(btn, False, False, 0)
 
@@ -1674,6 +1781,7 @@ def add_var_row(
     If key is in yn_vars, a Y/N ComboBoxText is created.
     Otherwise a Gtk.Entry is created.
     The widget is stored in widgets_dict[key].
+    When *tooltip* is given it is set on both the label and the widget.
 
     When *block_scroll* is True, the widget's default scroll-event handling is
     suppressed so the mouse wheel cannot change ComboBox/SpinButton values; the
@@ -1705,6 +1813,9 @@ def add_var_row(
             return False
 
         widget.connect("scroll-event", _on_scroll_event)
+
+    if tooltip:
+        widget.set_tooltip_text(tooltip)
 
     grid.attach(widget, 1, row, 1, 1)
     widgets_dict[key] = widget

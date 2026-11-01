@@ -23,32 +23,60 @@ class TestDisksPageSpec(unittest.TestCase):
     def test_create_pool_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
         self.assertIn(
-            ("Create Pool…", "list-add", "_disks_create_pool_btn"),
+            (
+                "Create Pool…",
+                "list-add",
+                "_disks_create_pool_btn",
+                "Open the pool-creation wizard for the selected unused disks.",
+            ),
             buttons,
         )
 
     def test_smart_details_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
         self.assertIn(
-            ("SMART Details", "dialog-information", "_disks_smart_details_btn"),
+            (
+                "SMART Details",
+                "dialog-information",
+                "_disks_smart_details_btn",
+                "Write the selected disk's SMART health details to the log.",
+            ),
             buttons,
         )
 
     def test_refresh_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
-        self.assertIn(("Refresh", "view-refresh", "_disks_refresh_btn"), buttons)
+        self.assertIn(
+            (
+                "Refresh",
+                "view-refresh",
+                "_disks_refresh_btn",
+                "Rescan disks, enclosures, and pool topology.",
+            ),
+            buttons,
+        )
 
     def test_enroll_proxmox_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
         self.assertIn(
-            ("Enroll in Proxmox…", "network-server", "_disks_proxmox_enroll_btn"),
+            (
+                "Enroll in Proxmox…",
+                "network-server",
+                "_disks_proxmox_enroll_btn",
+                "Register the selected pool's datasets as Proxmox storage.",
+            ),
             buttons,
         )
 
     def test_enclosure_rate_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
         self.assertIn(
-            ("Set Max I/O Rate…", "utilities-system-monitor", "_disks_enclosure_rate_btn"),
+            (
+                "Set Max I/O Rate…",
+                "utilities-system-monitor",
+                "_disks_enclosure_rate_btn",
+                "Set the USB/eSATA I/O rate cap for the selected enclosure.",
+            ),
             buttons,
         )
 
@@ -84,35 +112,67 @@ class TestDisksHandlers(unittest.TestCase):
 class TestDisksGrowthButtons(unittest.TestCase):
     """Phase 4 pool-growth buttons and handlers are wired correctly."""
 
+    # (label, icon, attr, tooltip, handler name)
     _SPECS = (
-        ("Add Data Vdev…", "list-add", "_disks_add_vdev_btn", "on_disks_add_vdev"),
-        ("Expand Vdev…", "drive-multidisk", "_disks_attach_btn", "on_disks_attach_device"),
-        ("Replace…", "edit-find-replace", "_disks_replace_btn", "on_disks_replace_device"),
-        ("Detach…", "media-eject", "_disks_detach_btn", "on_disks_detach_device"),
+        (
+            "Add Data Vdev…",
+            "list-add",
+            "_disks_add_vdev_btn",
+            "Add a data vdev built from the selected disks to an existing pool.",
+            "on_disks_add_vdev",
+        ),
+        (
+            "Expand Vdev…",
+            "drive-multidisk",
+            "_disks_attach_btn",
+            "Attach the selected disk to an existing single-disk or mirror vdev to expand it.",
+            "on_disks_attach_device",
+        ),
+        (
+            "Replace…",
+            "edit-find-replace",
+            "_disks_replace_btn",
+            "Replace a disk in an existing vdev with the selected disk.",
+            "on_disks_replace_device",
+        ),
+        (
+            "Detach…",
+            "media-eject",
+            "_disks_detach_btn",
+            "Detach a disk from a mirror vdev, shrinking it to its remaining member.",
+            "on_disks_detach_device",
+        ),
         (
             "Add Infra Vdev…",
             "drive-harddisk",
             "_disks_add_infra_vdev_btn",
+            "Add a cache/log/special/spare vdev built from the selected disks.",
             "on_disks_add_infra_vdev",
         ),
-        ("Migrate Pool…", "edit-copy", "_disks_migrate_pool_btn", "on_disks_migrate_pool"),
+        (
+            "Migrate Pool…",
+            "edit-copy",
+            "_disks_migrate_pool_btn",
+            "Rewrite a pool's data with a new vdev layout or profile settings.",
+            "on_disks_migrate_pool",
+        ),
     )
 
     def test_growth_buttons_present(self):
         buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
-        for label, icon, attr, _handler in self._SPECS:
+        for label, icon, attr, tooltip, _handler in self._SPECS:
             with self.subTest(label=label):
-                self.assertIn((label, icon, attr), buttons)
+                self.assertIn((label, icon, attr, tooltip), buttons)
 
     def test_growth_handlers_registered(self):
         handlers = action_dispatch.ACTION_HANDLERS["disks"]
-        for label, _icon, _attr, handler_name in self._SPECS:
+        for label, _icon, _attr, _tooltip, handler_name in self._SPECS:
             with self.subTest(label=label):
                 self.assertIs(getattr(action_dispatch, handler_name), handlers[label])
 
     def test_growth_buttons_after_create_pool(self):
         buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
-        labels = [label for label, _icon, _attr in buttons if label is not None]
+        labels = [b[0] for b in buttons if b[0] is not None]
         first_growth = labels.index("Add Data Vdev…")
         last_growth = labels.index("Migrate Pool…")
         self.assertLess(labels.index("Create Pool…"), first_growth)
@@ -208,11 +268,30 @@ class TestCheckagainstPageSpec(unittest.TestCase):
 
     def test_get_entries_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["checkagainst"]["buttons"]
-        self.assertIn(("Get Entries", "view-refresh", "_ca_get_entries_button"), buttons)
+        self.assertIn(
+            (
+                "Get Entries",
+                "view-refresh",
+                "_ca_get_entries_button",
+                (
+                    "Rebuild the derived comparison rows from the current Backup and "
+                    "Offsite configs."
+                ),
+            ),
+            buttons,
+        )
 
     def test_add_pair_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["checkagainst"]["buttons"]
-        self.assertIn(("Add pair...", "list-add", None), buttons)
+        self.assertIn(
+            (
+                "Add pair...",
+                "list-add",
+                None,
+                "Open the assistant for adding a source/destination pair to compare.",
+            ),
+            buttons,
+        )
 
 
 class TestCheckagainstHandlers(unittest.TestCase):
@@ -232,11 +311,27 @@ class TestDashboardPageSpec(unittest.TestCase):
 
     def test_includes_view_log_button(self):
         buttons = action_dispatch.PAGE_SPECS["dashboard"]["buttons"]
-        self.assertIn(("View Log", "text-x-generic", "_view_log_button"), buttons)
+        self.assertIn(
+            (
+                "View Log",
+                "text-x-generic",
+                "_view_log_button",
+                "Open the selected task's log in the Logs tab.",
+            ),
+            buttons,
+        )
 
     def test_includes_remove_selected_button(self):
         buttons = action_dispatch.PAGE_SPECS["dashboard"]["buttons"]
-        self.assertIn(("Remove Selected", "edit-delete", "_remove_button"), buttons)
+        self.assertIn(
+            (
+                "Remove Selected",
+                "edit-delete",
+                "_remove_button",
+                "Remove the selected completed tasks from the list.",
+            ),
+            buttons,
+        )
 
 
 class TestDashboardHandlers(unittest.TestCase):
@@ -257,7 +352,12 @@ class TestLogsPageSpec(unittest.TestCase):
     def test_delete_selected_button_has_name(self):
         buttons = action_dispatch.PAGE_SPECS["logs"]["buttons"]
         self.assertIn(
-            ("Delete Selected", "edit-delete", "_logs_delete_button"),
+            (
+                "Delete Selected",
+                "edit-delete",
+                "_logs_delete_button",
+                "Delete the selected log files.",
+            ),
             buttons,
         )
 
@@ -281,7 +381,15 @@ class TestOffsitePageSpec(unittest.TestCase):
 
     def test_save_config_button_still_present(self):
         buttons = action_dispatch.PAGE_SPECS["offsite"]["buttons"]
-        self.assertIn(("Save Config", "document-save", "_offsite_save_button"), buttons)
+        self.assertIn(
+            (
+                "Save Config",
+                "document-save",
+                "_offsite_save_button",
+                "Save the current Offsite settings to the configuration file.",
+            ),
+            buttons,
+        )
 
 
 class TestOffsiteHandlers(unittest.TestCase):
@@ -329,52 +437,85 @@ class TestDatasetsPageSpec(unittest.TestCase):
     def test_expand_selected_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
         self.assertIn(
-            ("Expand Selected", "zoom-in", "_ds_expand_selected_btn"),
+            (
+                "Expand Selected",
+                "zoom-in",
+                "_ds_expand_selected_btn",
+                "Expand the selected rows and all their children.",
+            ),
             buttons,
         )
 
     def test_collapse_all_button_still_present(self):
         buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
-        self.assertIn(("Collapse All", "list-remove", None), buttons)
+        self.assertIn(
+            ("Collapse All", "list-remove", None, "Collapse every expanded row in the tree."),
+            buttons,
+        )
 
     def test_show_big_stuff_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
         self.assertIn(
-            ("Show Big Stuff", "zoom-fit-best", "_ds_showbigstuff_btn"),
+            (
+                "Show Big Stuff",
+                "zoom-fit-best",
+                "_ds_showbigstuff_btn",
+                "List the largest items under the selected dataset in the log.",
+            ),
             buttons,
         )
 
     def test_show_details_in_log_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
         self.assertIn(
-            ("Show Details in Log", "dialog-information", "_ds_details_btn"),
+            (
+                "Show Details in Log",
+                "dialog-information",
+                "_ds_details_btn",
+                "Write the selected item's properties to the log.",
+            ),
             buttons,
         )
 
     def test_apply_profile_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
         self.assertIn(
-            ("Apply Profile…", "dialog-apply", "_ds_apply_profile_btn"),
+            (
+                "Apply Profile…",
+                "dialog-apply",
+                "_ds_apply_profile_btn",
+                "Apply a saved workload profile to the selected datasets.",
+            ),
             buttons,
         )
 
     def test_rewrite_data_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
         self.assertIn(
-            ("Rewrite Data", "document-edit", "_ds_rewrite_data_btn"),
+            (
+                "Rewrite Data",
+                "document-edit",
+                "_ds_rewrite_data_btn",
+                "Rewrite the selected dataset's data with new recordsize/volblock settings.",
+            ),
             buttons,
         )
 
     def test_manage_profiles_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["datasets"]["buttons"]
         self.assertIn(
-            ("Advanced: Manage Profiles…", "preferences-system", "_ds_manage_profiles_btn"),
+            (
+                "Advanced: Manage Profiles…",
+                "preferences-system",
+                "_ds_manage_profiles_btn",
+                "Open the workload-profile manager.",
+            ),
             buttons,
         )
 
     def test_profile_buttons_not_on_disks_page(self):
         buttons = action_dispatch.PAGE_SPECS["disks"]["buttons"]
-        labels = [label for label, _icon, _attr in buttons if label is not None]
+        labels = [b[0] for b in buttons if b[0] is not None]
         self.assertNotIn("Apply Profile…", labels)
         self.assertNotIn("Rewrite Data", labels)
         self.assertNotIn("Advanced: Manage Profiles…", labels)
@@ -449,7 +590,15 @@ class TestSchedulePageSpec(unittest.TestCase):
 
     def test_run_now_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["schedule"]["buttons"]
-        self.assertIn(("Run Now", "media-playback-start", None), buttons)
+        self.assertIn(
+            (
+                "Run Now",
+                "media-playback-start",
+                None,
+                "Run the selected profiles immediately, ignoring their Active status.",
+            ),
+            buttons,
+        )
 
 
 class TestScheduleHandlers(unittest.TestCase):
@@ -532,11 +681,27 @@ class TestMemoryPageSpec(unittest.TestCase):
 
     def test_survey_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["memory"]["buttons"]
-        self.assertIn(("Survey…", "document-properties", None), buttons)
+        self.assertIn(
+            (
+                "Survey…",
+                "document-properties",
+                None,
+                "Run the blocksize-alignment survey and open its report.",
+            ),
+            buttons,
+        )
 
     def test_refresh_button_present(self):
         buttons = action_dispatch.PAGE_SPECS["memory"]["buttons"]
-        self.assertIn(("Refresh", "view-refresh", None), buttons)
+        self.assertIn(
+            (
+                "Refresh",
+                "view-refresh",
+                None,
+                "Refresh memory-tier statistics and charts.",
+            ),
+            buttons,
+        )
 
     def test_survey_handler_wired(self):
         handler = action_dispatch.ACTION_HANDLERS["memory"]["Survey…"]
@@ -546,6 +711,33 @@ class TestMemoryPageSpec(unittest.TestCase):
     def test_refresh_handler_still_wired(self):
         handler = action_dispatch.ACTION_HANDLERS["memory"]["Refresh"]
         self.assertIs(handler, action_dispatch.refresh_memory_page)
+
+
+class TestPageSpecTooltipUniformity(unittest.TestCase):
+    """PAGE_SPECS button entries are 4-tuples; every real button has a tooltip."""
+
+    def test_every_button_entry_is_a_four_tuple_with_tooltip(self):
+        for page, spec in action_dispatch.PAGE_SPECS.items():
+            for entry in spec["buttons"]:
+                with self.subTest(page=page, entry=entry):
+                    self.assertEqual(len(entry), 4)
+                    label, _icon, _attr, tooltip = entry
+                    if label is None:
+                        # Spacer row.
+                        self.assertIsNone(tooltip)
+                    else:
+                        self.assertTrue(
+                            tooltip and tooltip.strip(),
+                            f"{page} button {label!r} lacks a tooltip",
+                        )
+
+    def test_runner_pages_carry_run_and_cancel_tooltips(self):
+        for page, spec in action_dispatch.PAGE_SPECS.items():
+            if "runner" not in spec:
+                continue
+            with self.subTest(page=page):
+                self.assertTrue(spec.get("run_tooltip", "").strip())
+                self.assertTrue(spec.get("cancel_tooltip", "").strip())
 
 
 class TestDirtyPredicates(unittest.TestCase):

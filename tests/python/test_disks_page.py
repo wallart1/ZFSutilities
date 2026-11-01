@@ -1644,8 +1644,13 @@ class TestSetEnclosureRateHandler(unittest.TestCase):
 class TestEnclosureRateButtonSensitivity(unittest.TestCase):
     """update_disks_button_sensitivity() gates the Set Max I/O Rate… button."""
 
+    _RATE_TOOLTIP = "Set the USB/eSATA I/O rate cap for the selected enclosure."
+
     def _app(self, with_selection):
         app = _make_app()
+        # update_disks_button_sensitivity restores each button's stored
+        # static tooltip when the gating reason clears.
+        app._disks_enclosure_rate_btn._action_tooltip = self._RATE_TOOLTIP
         if with_selection:
             app.enclosures_store = FakeListStore(
                 [["deadbeef01", "fivebays", "usb usb2/2-2", "2", "tank", "100m"]]
@@ -1662,7 +1667,7 @@ class TestEnclosureRateButtonSensitivity(unittest.TestCase):
         ):
             dp.update_disks_button_sensitivity(app)
         app._disks_enclosure_rate_btn.set_sensitive.assert_called_once_with(True)
-        app._disks_enclosure_rate_btn.set_tooltip_text.assert_called_once_with("")
+        app._disks_enclosure_rate_btn.set_tooltip_text.assert_called_once_with(self._RATE_TOOLTIP)
 
     def test_disabled_on_compute_host(self):
         dp = _import_disks_page()
@@ -1703,7 +1708,7 @@ class TestEnclosureRateButtonSensitivity(unittest.TestCase):
         ):
             dp.update_disks_button_sensitivity(app)
         app._disks_enclosure_rate_btn.set_sensitive.assert_called_once_with(True)
-        app._disks_enclosure_rate_btn.set_tooltip_text.assert_called_once_with("")
+        app._disks_enclosure_rate_btn.set_tooltip_text.assert_called_once_with(self._RATE_TOOLTIP)
 
 
 if __name__ == "__main__":

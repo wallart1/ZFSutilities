@@ -24,6 +24,8 @@ from gui_helpers import (
     bold_label,
     configure_treeview_column,
     create_dialog,
+    set_action_tooltip,
+    set_column_header_tooltip,
     setup_row_scroll,
 )
 from logging_config import log_msg
@@ -357,17 +359,14 @@ def create_disks_page(app):
         col.set_cell_data_func(renderer, _disk_cell_highlight_func)
         configure_treeview_column(col, width=width)
         if col_idx == COL_D_HEALTH:
-            # TreeViewColumn is not a Gtk.Widget, so the tooltip lives on
-            # the header label instead of on the column itself.
-            header = Gtk.Label(label=title_text)
-            header.set_tooltip_text(
+            set_column_header_tooltip(
+                col,
+                title_text,
                 "SSD/NVMe: wear percentage from SMART data. HDD: surface "
                 "self-test status (percent and ETA while running, then "
                 "Passed/Failed/Aborted/Canceled). Select an HDD and use "
-                "Surface Test… to start one."
+                "Surface Test… to start one.",
             )
-            header.show_all()
-            col.set_widget(header)
         app.disks_view.append_column(col)
 
     app.enable_treeview_copy(app.disks_view)
@@ -960,13 +959,13 @@ def update_disks_button_sensitivity(app):
     if create_btn:
         if compute_host:
             create_btn.set_sensitive(False)
-            create_btn.set_tooltip_text("Pool creation is available only on the storage host")
+            set_action_tooltip(create_btn, "Pool creation is available only on the storage host")
         elif runner_busy:
             create_btn.set_sensitive(False)
-            create_btn.set_tooltip_text("A dataset action is already running")
+            set_action_tooltip(create_btn, "A dataset action is already running")
         else:
             create_btn.set_sensitive(True)
-            create_btn.set_tooltip_text("")
+            set_action_tooltip(create_btn)
 
     # Pool-growth/maintenance buttons share the Create Pool gating:
     # compute-host, then runner-busy.
@@ -984,13 +983,13 @@ def update_disks_button_sensitivity(app):
             continue
         if compute_host:
             btn.set_sensitive(False)
-            btn.set_tooltip_text(host_tooltip)
+            set_action_tooltip(btn, host_tooltip)
         elif runner_busy:
             btn.set_sensitive(False)
-            btn.set_tooltip_text("A dataset action is already running")
+            set_action_tooltip(btn, "A dataset action is already running")
         else:
             btn.set_sensitive(True)
-            btn.set_tooltip_text("")
+            set_action_tooltip(btn)
 
     # Proxmox enrollment acts on the selected pool.
     proxmox_btn = getattr(app, "_disks_proxmox_enroll_btn", None)
@@ -999,27 +998,31 @@ def update_disks_button_sensitivity(app):
         pool_name = selector.get_active_text() if selector is not None else ""
         if compute_host:
             proxmox_btn.set_sensitive(False)
-            proxmox_btn.set_tooltip_text("Proxmox enrollment is available only on the storage host")
+            set_action_tooltip(
+                proxmox_btn, "Proxmox enrollment is available only on the storage host"
+            )
         elif runner_busy:
             proxmox_btn.set_sensitive(False)
-            proxmox_btn.set_tooltip_text("A dataset action is already running")
+            set_action_tooltip(proxmox_btn, "A dataset action is already running")
         else:
             proxmox_btn.set_sensitive(bool(pool_name))
-            proxmox_btn.set_tooltip_text("" if pool_name else "Select a pool to enroll in Proxmox")
+            set_action_tooltip(
+                proxmox_btn, None if pool_name else "Select a pool to enroll in Proxmox"
+            )
 
     surf_btn = getattr(app, "_disks_surface_test_btn", None)
     if surf_btn:
         selected_hdd = single_selection and _selected_disk_is_hdd(app)
         if compute_host:
             surf_btn.set_sensitive(False)
-            surf_btn.set_tooltip_text("Surface tests run on the storage host")
+            set_action_tooltip(surf_btn, "Surface tests run on the storage host")
         elif runner_busy:
             surf_btn.set_sensitive(False)
-            surf_btn.set_tooltip_text("A dataset action is already running")
+            set_action_tooltip(surf_btn, "A dataset action is already running")
         else:
             surf_btn.set_sensitive(bool(selected_hdd))
-            surf_btn.set_tooltip_text(
-                "" if selected_hdd else "Select a single HDD to run a surface test"
+            set_action_tooltip(
+                surf_btn, None if selected_hdd else "Select a single HDD to run a surface test"
             )
 
     wipe_btn = getattr(app, "_disks_wipe_btn", None)
@@ -1027,16 +1030,17 @@ def update_disks_button_sensitivity(app):
         wipeable = single_selection and _selected_disk_is_wipeable(app)
         if compute_host:
             wipe_btn.set_sensitive(False)
-            wipe_btn.set_tooltip_text("Disk wipe is available only on the storage host")
+            set_action_tooltip(wipe_btn, "Disk wipe is available only on the storage host")
         elif runner_busy:
             wipe_btn.set_sensitive(False)
-            wipe_btn.set_tooltip_text("A dataset action is already running")
+            set_action_tooltip(wipe_btn, "A dataset action is already running")
         else:
             wipe_btn.set_sensitive(bool(wipeable))
-            wipe_btn.set_tooltip_text(
-                ""
+            set_action_tooltip(
+                wipe_btn,
+                None
                 if wipeable
-                else "Select a single disk that belongs to no pool to wipe its labels"
+                else "Select a single disk that belongs to no pool to wipe its labels",
             )
 
     # Enclosure rate setting edits configuration only — no ZFS I/O, so it is
@@ -1046,11 +1050,11 @@ def update_disks_button_sensitivity(app):
         enclosure_id = _selected_enclosure_id(app)
         if compute_host:
             rate_btn.set_sensitive(False)
-            rate_btn.set_tooltip_text("Enclosure rates are set on the storage host")
+            set_action_tooltip(rate_btn, "Enclosure rates are set on the storage host")
         else:
             rate_btn.set_sensitive(bool(enclosure_id))
-            rate_btn.set_tooltip_text(
-                "" if enclosure_id else "Select an enclosure to set its max I/O rate"
+            set_action_tooltip(
+                rate_btn, None if enclosure_id else "Select an enclosure to set its max I/O rate"
             )
 
 

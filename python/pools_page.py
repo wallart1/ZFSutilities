@@ -23,6 +23,7 @@ from feature_config import (
 from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
     append_treeview_copy_items,
+    attach_cell_tooltips,
     configure_treeview_column,
     set_button_markup_red,
     set_monospace_font,
@@ -332,6 +333,8 @@ def create_pools_page(app):
         app.scrub_view.append_column(col)
 
     app.enable_treeview_copy(app.scrub_view)
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(app.scrub_view, app.scrub_store)
     app._ui_state.bind_treeview(app.scrub_view, "pools_scrub_view")
     app.scrub_view.get_selection().connect("changed", _on_scrub_selection_changed, app)
 

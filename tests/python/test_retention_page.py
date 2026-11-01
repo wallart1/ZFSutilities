@@ -164,6 +164,52 @@ class TestRetentionPagePruneLabel(unittest.TestCase):
             app._ret_prune_label_entry.set_width_chars.assert_any_call(20)
 
 
+class TestMassDeleteVarTooltips(unittest.TestCase):
+    """Every mass-delete variable row's input widget carries a tooltip."""
+
+    def _build_page(self):
+        _clear_cached_modules(
+            "retention_page",
+            "retention_actions",
+            "action_dispatch",
+            "zfsutilities_gui",
+        )
+        with temp_config_dir(), mock_gtk(fresh=True):
+            import retention_page as rp
+
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={"retention": {"default": []}},
+                script_dir="",
+                parent_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                version="dev",
+            )
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            return rp, app
+
+    def test_dict_covers_every_mass_delete_variable(self):
+        rp, _app = self._build_page()
+        expected = set(rp.MASS_DELETE_VARIABLES) | {"snapshot_has", "releaseholds"}
+        self.assertEqual(set(rp._RETENTION_MASS_DELETE_TOOLTIPS), expected)
+        for key, tooltip in rp._RETENTION_MASS_DELETE_TOOLTIPS.items():
+            self.assertTrue(tooltip.strip(), f"{key} tooltip is empty")
+
+    def test_widgets_receive_tooltips(self):
+        rp, app = self._build_page()
+        # Entry widgets share one mock under mock_gtk, so the accumulated
+        # call list must hold every entry-typed row's tooltip.
+        widget = app._ret_mass_delete_widgets["includes"]
+        texts = [c.args[0] for c in widget.set_tooltip_text.call_args_list]
+        for key in ("includes", "excludes", "startwith", "endwith", "snapshot_has"):
+            self.assertIn(rp._RETENTION_MASS_DELETE_TOOLTIPS[key], texts)
+
+
 class TestRetentionPagePoolLabel(unittest.TestCase):
     """Verify the current-pool label is updated when a pool is loaded."""
 

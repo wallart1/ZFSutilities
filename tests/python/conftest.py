@@ -38,6 +38,18 @@ if "ZFSUTILITIES_LOCK_DIR" not in os.environ:
     os.environ["ZFSUTILITIES_LOCK_DIR"] = _isolated_lock_dir
     atexit.register(shutil.rmtree, _isolated_lock_dir, ignore_errors=True)
 
+# Redirect bytecode caching out of the checkout for sudo test legs. A root
+# pytest run that imports a module with a missing or stale .pyc would leave
+# a root-owned __pycache__ file in the user-owned tree — unwritable for the
+# user and recurring after every sweep. Set at conftest import time, before
+# collection imports any test or product module; python/zfsutilities_gui.py
+# carries the same block for sudo GUI launches. An interpreter-level
+# PYTHONPYCACHEPREFIX is respected and left alone.
+if os.geteuid() == 0 and sys.pycache_prefix is None:
+    _pycache_dir = os.environ.get("ZFSUTILITIES_PYCACHE_DIR", "/var/cache/zfsutilities/pycache")
+    os.makedirs(_pycache_dir, exist_ok=True)
+    sys.pycache_prefix = _pycache_dir
+
 # Suppress a harmless GLib IOChannel warning that occurs when mocked tests close
 # file descriptors that the real GLib override still references.
 warnings.filterwarnings(

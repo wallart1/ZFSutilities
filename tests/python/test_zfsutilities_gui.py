@@ -1,7 +1,9 @@
 """Tests for zfsutilities_gui.py window behavior."""
 
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -12,7 +14,7 @@ PYTHON_SRC = os.path.join(REPO_ROOT, "python")
 if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
-from test_support import mock_subprocess, requires_gi
+from test_support import import_or_skip_gi, mock_subprocess, requires_gi
 
 pytestmark = requires_gi
 
@@ -36,6 +38,11 @@ def _ensure_real_gui_module():
     if cached is not None and isinstance(getattr(cached, "Gtk", None), MagicMock):
         sys.modules.pop("zfsutilities_gui", None)
     import zfsutilities_gui  # noqa: F401
+
+# Module-level via the suite's gi guard: in-function imports of GUI modules
+# must sit inside a mock_gtk context (TestGiImportGuards), and
+# set_action_tooltip needs none at all.
+gui_helpers = import_or_skip_gi("gui_helpers")
 
 
 def _gui_module():
@@ -620,6 +627,23 @@ class TestOnPageChanged(unittest.TestCase):
         mock_refresh.assert_called_once_with(window)
         window._start_stop_schedule_timer.assert_called_once_with("schedule")
 
+    @patch("zfsutilities_gui.refresh_datasets_page")
+    def test_datasets_page_refreshes_on_switch(self, mock_refresh):
+        """Switching to the Datasets tab re-reads dataset/mount state.
+
+        The page has no auto-refresh timer, so externally-changed mount
+        state (e.g. a failed pool export unmounting datasets) must surface
+        on switch instead of lingering on a stale page.
+        """
+        window = self._make_window({"pools": []})
+        stack = MagicMock()
+        stack.get_visible_child_name.return_value = "datasets"
+
+        window.on_page_changed(stack, None)
+
+        window.update_action_buttons.assert_called_once_with("datasets")
+        mock_refresh.assert_called_once_with(window)
+
     def test_pools_page_starts_registry_timer(self):
         """Switching to the Pools tab runs the registry timer start/stop hook."""
         window = self._make_window({"pools": []})
@@ -677,7 +701,7 @@ class TestUpdateActionButtonsGuard(unittest.TestCase):
         window, gui = self._make_window("retention")
         fake_specs = {
             "retention": {
-                "buttons": [("Save", "document-save", "_ret_save_button")],
+                "buttons": [("Save", "document-save", "_ret_save_button", "Save settings.")],
             },
         }
         with patch.object(gui, "PAGE_SPECS", fake_specs):
@@ -692,7 +716,7 @@ class TestUpdateActionButtonsGuard(unittest.TestCase):
         window, gui = self._make_window("logs")
         fake_specs = {
             "retention": {
-                "buttons": [("Save", "document-save", "_ret_save_button")],
+                "buttons": [("Save", "document-save", "_ret_save_button", "Save settings.")],
             },
         }
         with patch.object(gui, "PAGE_SPECS", fake_specs):
@@ -706,7 +730,7 @@ class TestUpdateActionButtonsGuard(unittest.TestCase):
         window, gui = self._make_window("logs")
         fake_specs = {
             "retention": {
-                "buttons": [("Save", "document-save", "_ret_save_button")],
+                "buttons": [("Save", "document-save", "_ret_save_button", "Save settings.")],
             },
         }
         with patch.object(gui, "PAGE_SPECS", fake_specs):
@@ -718,6 +742,91 @@ class TestUpdateActionButtonsGuard(unittest.TestCase):
 
         window.action_box.remove.assert_called()
         window.action_box.show_all.assert_called_once()
+
+    def test_spec_tooltip_applied_and_stored_on_button(self):
+        """The 4-tuple tooltip is set on the button and stored for restores."""
+        window, gui = self._make_window("retention")
+        fake_specs = {
+            "retention": {
+                "buttons": [("Save", "document-save", "_ret_save_button", "Save settings.")],
+            },
+        }
+        with patch.object(gui, "PAGE_SPECS", fake_specs):
+            window.update_action_buttons("retention")
+
+        btn = getattr(window, "_ret_save_button", None)
+        self.assertIsNotNone(btn, "attr-named button should be stored on the window")
+        # Real Gtk.Button: read the tooltip back through the public API.
+        self.assertEqual(btn.get_tooltip_text(), "Save settings.")
+        self.assertEqual(btn._action_tooltip, "Save settings.")
+
+    def test_run_tooltip_applied_when_runner_idle(self):
+        """An idle runner page shows the spec's run tooltip on its run button."""
+        window, gui = self._make_window("retention")
+        fake_specs = {
+            "retention": {
+                "runner": "retention_runner",
+                "run": ("Prune", "media-playback-start"),
+                "run_tooltip": "Apply retention policies.",
+                "cancel_tooltip": "Stop the running prune.",
+                "buttons": [],
+            },
+        }
+        window.retention_runner = MagicMock()
+        window.retention_runner.running = False
+        with patch.object(gui, "PAGE_SPECS", fake_specs):
+            window.update_action_buttons("retention")
+
+        run_btn = window.action_box.pack_start.call_args_list[0].args[0]
+        self.assertEqual(run_btn.get_tooltip_text(), "Apply retention policies.")
+
+    def test_cancel_tooltip_applied_when_runner_busy(self):
+        """A busy runner page shows the spec's cancel tooltip instead."""
+        window, gui = self._make_window("retention")
+        fake_specs = {
+            "retention": {
+                "runner": "retention_runner",
+                "run": ("Prune", "media-playback-start"),
+                "run_tooltip": "Apply retention policies.",
+                "cancel_tooltip": "Stop the running prune.",
+                "buttons": [],
+            },
+        }
+        window.retention_runner = MagicMock()
+        window.retention_runner.running = True
+        with patch.object(gui, "PAGE_SPECS", fake_specs):
+            window.update_action_buttons("retention")
+
+        cancel_btn = window.action_box.pack_start.call_args_list[0].args[0]
+        self.assertEqual(cancel_btn.get_tooltip_text(), "Stop the running prune.")
+
+    def test_set_action_tooltip_restores_static_tooltip(self):
+        """set_action_tooltip shows a reason and restores the stored static."""
+        button = MagicMock()
+        button._action_tooltip = "Static description."
+
+        gui_helpers.set_action_tooltip(button, "Unavailable because X")
+        button.set_tooltip_text.assert_called_once_with("Unavailable because X")
+
+        button.set_tooltip_text.reset_mock()
+        gui_helpers.set_action_tooltip(button)
+        button.set_tooltip_text.assert_called_once_with("Static description.")
+
+    def test_set_action_tooltip_without_stored_static_blanks(self):
+        """Buttons with no stored tooltip keep the old blank-reset behavior."""
+
+        class _StubButton:
+            """Real attribute semantics: no _action_tooltip exists."""
+
+            def __init__(self):
+                self.calls = []
+
+            def set_tooltip_text(self, text):
+                self.calls.append(text)
+
+        button = _StubButton()
+        gui_helpers.set_action_tooltip(button)
+        self.assertEqual(button.calls, [""])
 
 
 class TestTerminateConfirmation(unittest.TestCase):
@@ -1485,6 +1594,103 @@ class TestPageSidebar(unittest.TestCase):
         window.on_page_changed(stack, None)
 
         window.sidebar.select_row.assert_called_once_with(row)
+
+
+class TestRedirectRootPycache(unittest.TestCase):
+    """_redirect_root_pycache() keeps root bytecode out of the checkout."""
+
+    def setUp(self):
+        # sys.pycache_prefix must be restored exactly: a value leaked here
+        # would redirect the rest of the test session's own bytecode.
+        self._saved_prefix = sys.pycache_prefix
+        self.addCleanup(self._restore)
+        self._tmp = tempfile.mkdtemp(prefix="zfsutilities-pycache-test-")
+        self.addCleanup(shutil.rmtree, self._tmp, ignore_errors=True)
+
+    def _restore(self):
+        sys.pycache_prefix = self._saved_prefix
+
+    def test_root_run_redirects_to_env_override_dir(self):
+        target = os.path.join(self._tmp, "pycache")
+        with (
+            patch.object(os, "geteuid", return_value=0),
+            patch.dict(os.environ, {"ZFSUTILITIES_PYCACHE_DIR": target}),
+        ):
+            _gui_module()._redirect_root_pycache()
+        self.assertEqual(sys.pycache_prefix, target)
+        self.assertTrue(os.path.isdir(target))
+
+    def test_existing_interpreter_prefix_is_respected(self):
+        preset = os.path.join(self._tmp, "preset")
+        sys.pycache_prefix = preset
+        with (
+            patch.object(os, "geteuid", return_value=0),
+            patch.dict(os.environ, {"ZFSUTILITIES_PYCACHE_DIR": os.path.join(self._tmp, "other")}),
+        ):
+            _gui_module()._redirect_root_pycache()
+        self.assertEqual(sys.pycache_prefix, preset)
+        self.assertFalse(os.path.exists(os.path.join(self._tmp, "other")))
+
+    def test_non_root_run_is_noop(self):
+        with patch.object(os, "geteuid", return_value=1000):
+            _gui_module()._redirect_root_pycache()
+        self.assertIsNone(sys.pycache_prefix)
+
+
+class TestInfoPanelInputPromptTint(unittest.TestCase):
+    """The info panel tints numbered input prompts bright blue."""
+
+    def _make_window(self):
+        gui = _gui_module()
+        with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
+            window = gui.ZFSUtilitiesWindow()
+        buffer = MagicMock()
+        buffer.get_tag_table().lookup.return_value = None
+        window.info_text = MagicMock()
+        window.info_text.get_buffer.return_value = buffer
+        window._info_panel_level = "VERB"
+        window._info_panel_short_prefix = True
+        return window, buffer
+
+    def _applied_tags(self, buffer):
+        return [c.args[0] for c in buffer.apply_tag_by_name.call_args_list]
+
+    def test_prefixed_prompt_line_gets_blue_tag(self):
+        window, buffer = self._make_window()
+        msg = (
+            "/usr/local/lib/zfsutilities/versions/0.136.0/python/"
+            "zfsutilities_gui.py:1155: INFO: [Input 4][Prune] "
+            "Do you want to remove this snapshot? [y/N]:"
+        )
+        window._insert_info_line("2026-10-30 18:48:14", "INFO", msg)
+        self.assertIn("input_prompt", self._applied_tags(buffer))
+        buffer.create_tag.assert_called_once_with("input_prompt", foreground="#00A3F5")
+
+    def test_bare_prompt_line_gets_blue_tag(self):
+        window, buffer = self._make_window()
+        window._insert_info_line(
+            "2026-10-31 09:00:00", "INFO", "INFO: [Input 1][Backup] Proceed with 3 steps?"
+        )
+        self.assertIn("input_prompt", self._applied_tags(buffer))
+
+    def test_plain_info_line_is_untagged(self):
+        window, buffer = self._make_window()
+        window._insert_info_line("2026-10-31 09:00:00", "INFO", "INFO: Snapshot created")
+        self.assertEqual(self._applied_tags(buffer), [])
+        buffer.create_tag.assert_not_called()
+
+    def test_input_close_line_is_untagged(self):
+        # Only the questions carry the tint; the close/withdrawn bookkeeping
+        # lines do not.
+        window, buffer = self._make_window()
+        window._insert_info_line("2026-10-31 09:00:00", "VERB", "VERB: [Input 4] closed")
+        self.assertEqual(self._applied_tags(buffer), [])
+
+    def test_warn_still_uses_warn_tag(self):
+        window, buffer = self._make_window()
+        window._insert_info_line("2026-10-31 09:00:00", "WARN", "WARN: something happened")
+        self.assertIn("warn", self._applied_tags(buffer))
+        buffer.create_tag.assert_called_once_with("warn", foreground="#FF8C00")
 
 
 if __name__ == "__main__":

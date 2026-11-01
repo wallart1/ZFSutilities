@@ -73,10 +73,11 @@ class _FakeWidgetBase:
     def set_width_chars(self, *args):
         pass
 
-    def set_placeholder_text(self, *args):
-        pass
+    def set_tooltip_text(self, text):
+        """Record tooltips so var-row tests can assert them."""
+        self.tooltip = text
 
-    def set_tooltip_text(self, *args):
+    def set_placeholder_text(self, *args):
         pass
 
     def connect(self, signal, callback, *args):
@@ -239,6 +240,57 @@ class TestBackupVariables(unittest.TestCase):
                 backup_page._BACKUP_TOPIC_MAP["releaseholds_tags"],
                 "backup_releaseholds_tags",
             )
+
+
+class TestBackupVarTooltips(unittest.TestCase):
+    """Every Backup variable row's input widget carries a tooltip."""
+
+    def test_dict_covers_every_variable(self):
+        with mock_gtk(fresh=True):
+            import backup_page
+
+            expected = set(backup_page.DATASET_VARIABLES) | set(backup_page.ADVANCED_VARIABLES)
+            self.assertEqual(set(backup_page._BACKUP_VAR_TOOLTIPS), expected)
+            for key, tooltip in backup_page._BACKUP_VAR_TOOLTIPS.items():
+                self.assertTrue(tooltip.strip(), f"{key} tooltip is empty")
+
+    def test_entry_widget_receives_dict_tooltip(self):
+        with temp_config_dir(), mock_gtk(fresh=True):
+            import backup_page
+            import gui_helpers
+
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+            gui_helpers.Gtk.Entry = _FakeEntry
+            gui_helpers.Gtk.CheckButton = _FakeCheckButton
+            backup_page.DirtyTracker = _NoOpDirtyTracker
+
+            app = _FakeApp()
+            backup_page.create_backup_page(app, app.ctx)
+
+            widget = app.backup_var_widgets["label"]
+            self.assertEqual(
+                getattr(widget, "tooltip", None),
+                backup_page._BACKUP_VAR_TOOLTIPS["label"],
+            )
+
+    def test_prune_filter_tooltip_still_overrides(self):
+        """The richer post-hoc prune-filter tooltip keeps winning."""
+        with temp_config_dir(), mock_gtk(fresh=True):
+            import backup_page
+            import gui_helpers
+
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+            gui_helpers.Gtk.Entry = _FakeEntry
+            gui_helpers.Gtk.CheckButton = _FakeCheckButton
+            backup_page.DirtyTracker = _NoOpDirtyTracker
+
+            app = _FakeApp()
+            backup_page.create_backup_page(app, app.ctx)
+
+            widget = app.backup_var_widgets["includes"]
+            self.assertIn("post-backup prune step", getattr(widget, "tooltip", ""))
 
 
 class TestBackupConfigHelpers(unittest.TestCase):

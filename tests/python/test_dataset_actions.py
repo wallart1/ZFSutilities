@@ -829,6 +829,94 @@ class TestUnmountDataset(unittest.TestCase):
             )
             mock_refresh.assert_not_called()
 
+    def test_stale_mounted_row_skips_unmount_when_live_listing_disagrees(self):
+        # The page row said mounted, but the live listing (e.g. after a
+        # failed pool export unmounted everything) says otherwise — the
+        # requested state already holds, so no zfs unmount is attempted.
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        class _FakeRow:
+            def __init__(self, name, mounted="yes", ds_type="filesystem"):
+                self.name = name
+                self.mounted = mounted
+                self.ds_type = ds_type
+
+        app.ctx.zfs_repository.list_datasets.return_value = [
+            _FakeRow("tank/vm-100", mounted="no"),
+        ]
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm"),
+        ):
+            da.on_datasets_unmount(app)
+
+            mock_subprocess.run.assert_not_called()
+            mock_log.assert_any_call("VERB: tank/vm-100 was already unmounted")
+            self.assertFalse(any("FATAL" in str(call) for call in mock_log.call_args_list))
+            mock_refresh.assert_called_once_with(app)
+
+    def test_not_currently_mounted_stderr_is_idempotent_success(self):
+        # The live listing said mounted, but the kernel reports the target
+        # as not currently mounted — goal state, not an error.
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        class _FakeRow:
+            def __init__(self, name, mounted="yes", ds_type="filesystem"):
+                self.name = name
+                self.mounted = mounted
+                self.ds_type = ds_type
+
+        app.ctx.zfs_repository.list_datasets.return_value = [
+            _FakeRow("tank/vm-100", mounted="yes"),
+        ]
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm"),
+        ):
+            mock_subprocess.run.return_value = MagicMock(
+                returncode=1,
+                stderr="cannot unmount 'tank/vm-100': not currently mounted",
+            )
+            da.on_datasets_unmount(app)
+
+            mock_log.assert_any_call("VERB: tank/vm-100 was already unmounted")
+            self.assertFalse(any("FATAL" in str(call) for call in mock_log.call_args_list))
+            mock_refresh.assert_called_once_with(app)
+
     def test_unmounts_descendants_before_parent(self):
         da = self._import_under_mock()
         app = self._make_app()

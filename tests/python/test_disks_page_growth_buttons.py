@@ -57,7 +57,10 @@ class FakeDatasetRunner:
 
 
 def _make_app():
-    """Return a mocked app object with the six growth buttons attached."""
+    """Return a mocked app object with the six growth buttons attached.
+
+    Each button carries a distinct stored static tooltip (what
+    set_action_tooltip restores when a gating reason clears)."""
     app = MagicMock()
     app.config = {"pools": []}
     app.disks_view = FakeTreeView(None, [])
@@ -73,7 +76,9 @@ def _make_app():
         "_disks_add_infra_vdev_btn",
         "_disks_migrate_pool_btn",
     ):
-        setattr(app, attr, MagicMock())
+        btn = MagicMock()
+        btn._action_tooltip = f"static tooltip for {attr}"
+        setattr(app, attr, btn)
     return app
 
 
@@ -127,7 +132,7 @@ class TestGrowthButtonSensitivity(unittest.TestCase):
             with self.subTest(attr=attr):
                 btn = getattr(app, attr)
                 btn.set_sensitive.assert_called_with(True)
-                btn.set_tooltip_text.assert_called_with("")
+                btn.set_tooltip_text.assert_called_with(btn._action_tooltip)
 
     def test_disabled_on_two_node_compute_host(self):
         dp, app = self._make()
@@ -207,6 +212,7 @@ class TestProxmoxButtonSensitivity(unittest.TestCase):
         dp = _import_disks_page()
         app = _make_app()
         btn = MagicMock()
+        btn._action_tooltip = "static tooltip for the enroll button"
         setattr(app, self._ATTR, btn)
         selector = MagicMock()
         selector.get_active_text.return_value = pool_name
@@ -219,7 +225,7 @@ class TestProxmoxButtonSensitivity(unittest.TestCase):
         with _single_host(dp):
             dp.update_disks_button_sensitivity(app)
         btn.set_sensitive.assert_called_with(True)
-        btn.set_tooltip_text.assert_called_with("")
+        btn.set_tooltip_text.assert_called_with(btn._action_tooltip)
 
     def test_disabled_without_selected_pool(self):
         dp, app, btn = self._make(pool_name="")

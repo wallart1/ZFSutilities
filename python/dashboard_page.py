@@ -17,7 +17,13 @@ gi.require_version("Gtk", "3.0")
 from backup_history import load_history
 from config_core import get_dashboard_config, save_dashboard_config
 from gi.repository import GLib, Gtk
-from gui_helpers import capped_treeview_scroll, configure_treeview_column, set_monospace_font
+from gui_helpers import (
+    attach_cell_tooltips,
+    capped_treeview_scroll,
+    configure_treeview_column,
+    set_column_header_tooltip,
+    set_monospace_font,
+)
 from log_index import LogIndex
 from logging_config import log_msg
 from logs_page import select_log_by_path
@@ -981,19 +987,20 @@ _pool_identity_lock = threading.Lock()
 _ISCSI_STATE_FILENAME = "iscsi-state.json"
 
 
-def _get_pool_identity_warnings():
+def _get_pool_identity_warnings(config=None):
     """Compare configured/imported/map pool identities, TTL-cached.
 
     Wraps _compute_pool_identity_warnings() with the fence-gatherer cache
     pattern: a completed scan (list, possibly empty) is served from cache
     for _POOL_IDENTITY_CACHE_TTL seconds; a failed scan (None) is not
-    cached, so the next refresh retries.
+    cached, so the next refresh retries. *config* (the GUI config) enables
+    the offsite-candidate exemption in the compute step.
     """
     now = time.monotonic()
     with _pool_identity_lock:
         if now - _pool_identity_cache["time"] < _POOL_IDENTITY_CACHE_TTL:
             return _pool_identity_cache["value"]
-    value = _compute_pool_identity_warnings()
+    value = _compute_pool_identity_warnings(config=config)
     if value is not None:
         now = time.monotonic()
         with _pool_identity_lock:
@@ -1035,7 +1042,7 @@ def _read_newest_state_map_pools(expected_pools):
     return pools
 
 
-def _compute_pool_identity_warnings(repo=None):
+def _compute_pool_identity_warnings(repo=None, config=None):
     """Warn when a pool name is not backed by the pool the config expects.
 
     Three shapes, mirroring lib/iscsi-lib.sh's detect_pool_identity:
@@ -1043,6 +1050,12 @@ def _compute_pool_identity_warnings(repo=None):
     - an imported pool that is not configured;
     - an imported pool whose live GUID differs from the GUID recorded in
       the newest pool-resident iSCSI state map (renamed or replaced).
+
+    Pools marked as offsite candidates in the GUI config (when *config* is
+    provided) are exempt from the not-imported shape only: an offsite
+    rotation pool is routinely disconnected by design. The other two shapes
+    fire only when a pool IS imported, and an imported offsite pool must
+    still pass the identity checks.
 
     Returns a list of warning strings, [] in single-node mode or when
     everything is consistent, and None when the live pool list could not
@@ -1054,6 +1067,11 @@ def _compute_pool_identity_warnings(repo=None):
         return []
 
     expected = _get_node_config().get("pools") or set()
+    offsite = set()
+    if config is not None:
+        from feature_config import get_offsite_candidate_names
+
+        offsite = set(get_offsite_candidate_names(config))
 
     repo = repo or get_default_repository()
     try:
@@ -1068,7 +1086,7 @@ def _compute_pool_identity_warnings(repo=None):
     live = {row.name: row.guid for row in rows}
 
     warnings = []
-    for pool in sorted(expected - set(live)):
+    for pool in sorted(expected - set(live) - offsite):
         warnings.append(
             f"Pool {pool} is configured in node.conf but not imported — "
             "offline, renamed, or replaced"
@@ -1405,19 +1423,20 @@ def create_dashboard_page(app):
         col = Gtk.TreeViewColumn(title_text, r, **{attr: col_idx})
         configure_treeview_column(col, width=width)
         if col_idx == 0:
-            # TreeViewColumn is not a Gtk.Widget, so the tooltip lives on
-            # the header label instead of on the column itself.
-            header = Gtk.Label(label=title_text)
-            header.set_tooltip_text(
+            set_column_header_tooltip(
+                col,
+                title_text,
                 "Waiting/running tasks: the time the task started. "
-                "Completed tasks: the time the task finished (completion time)."
+                "Completed tasks: the time the task finished (completion time).",
             )
-            header.show_all()
-            col.set_widget(header)
         app.dashboard_tasks_view.append_column(col)
     app._ui_state.bind_treeview(app.dashboard_tasks_view, "dashboard_tasks_view")
 
     app.enable_treeview_copy(app.dashboard_tasks_view)
+
+    # Cells ellipsize; the shared handler shows the full text on hover
+    # (hidden store columns sit at the end, so offset is 0).
+    attach_cell_tooltips(app.dashboard_tasks_view, app.dashboard_tasks_store)
 
     # Keep the old sections' ten-row footprint: the window shows ten rows
     # whatever the list length, and taller lists scroll inside it.
@@ -1460,6 +1479,9 @@ def create_dashboard_page(app):
     app._ui_state.bind_treeview(app.dashboard_locks_view, "dashboard_locks_view")
 
     app.enable_treeview_copy(app.dashboard_locks_view)
+
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(app.dashboard_locks_view, app.dashboard_locks_store)
 
     locks_scrolled = capped_treeview_scroll(app.dashboard_locks_view, fixed_rows=False)
 
@@ -1580,8 +1602,10 @@ def _gather_dashboard_data(app):
     if fence_warning:
         warnings.append(fence_warning)
     # Pool identity (renamed/replaced pool under a known name) — mirrors
-    # lib/iscsi-lib.sh's detect_pool_identity for the Dashboard.
-    pool_identity_warnings = _get_pool_identity_warnings()
+    # lib/iscsi-lib.sh's detect_pool_identity for the Dashboard. Offsite
+    # candidates are exempt from the not-imported shape while rotated
+    # offsite.
+    pool_identity_warnings = _get_pool_identity_warnings(app.config)
     if pool_identity_warnings:
         warnings.extend(pool_identity_warnings)
     if not app.config.get("backup", {}).get("pull_steps") and not app.config.get("backup", {}).get(
