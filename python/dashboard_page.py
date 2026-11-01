@@ -1341,6 +1341,9 @@ def create_dashboard_page(app):
     app.dashboard_refresh_spin.set_increments(1, 10)
     app.dashboard_refresh_spin.set_value(dashboard_cfg.get("refresh_seconds", 30))
     app.dashboard_refresh_spin.connect("value-changed", _on_refresh_interval_changed, app)
+    app.dashboard_refresh_spin.set_tooltip_text(
+        "Seconds between automatic Dashboard refreshes (1-300)."
+    )
     refresh_box.pack_start(app.dashboard_refresh_spin, False, False, 0)
 
     app.dashboard_refreshing_label = Gtk.Label(label="Refreshing")
@@ -1362,6 +1365,9 @@ def create_dashboard_page(app):
     app.dashboard_threshold_spin.set_increments(5, 5)
     app.dashboard_threshold_spin.set_value(dashboard_cfg.get("low_space_threshold", 80))
     app.dashboard_threshold_spin.connect("value-changed", _on_threshold_changed, app)
+    app.dashboard_threshold_spin.set_tooltip_text(
+        "Pool capacity, in percent, at or above which the low-space warning lights up (50-95)."
+    )
     threshold_box.pack_start(app.dashboard_threshold_spin, False, False, 0)
 
     threshold_pct = Gtk.Label(label="%")
@@ -1408,11 +1414,27 @@ def create_dashboard_page(app):
     app.dashboard_tasks_view.set_headers_visible(True)
     app.dashboard_tasks_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
 
-    for col_idx, title_text, width in [
-        (0, "Date / Time", 150),
-        (1, "Type", 100),
-        (2, "Name", 140),
-        (3, "Status", 220),
+    for col_idx, title_text, width, header_tip in [
+        (
+            0,
+            "Date / Time",
+            150,
+            (
+                "Waiting/running tasks: the time the task started. "
+                "Completed tasks: the time the task finished (completion time)."
+            ),
+        ),
+        (1, "Type", 100, "The kind of task (backup, restore, prune, scrub, and so on)."),
+        (2, "Name", 140, "The dataset or pool the task is working on."),
+        (
+            3,
+            "Status",
+            220,
+            (
+                "Waiting/running state with live progress; the colored outcome "
+                "line once the task completes."
+            ),
+        ),
     ]:
         r = Gtk.CellRendererText()
         r.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
@@ -1422,13 +1444,7 @@ def create_dashboard_page(app):
         attr = "markup" if col_idx == 3 else "text"
         col = Gtk.TreeViewColumn(title_text, r, **{attr: col_idx})
         configure_treeview_column(col, width=width)
-        if col_idx == 0:
-            set_column_header_tooltip(
-                col,
-                title_text,
-                "Waiting/running tasks: the time the task started. "
-                "Completed tasks: the time the task finished (completion time).",
-            )
+        set_column_header_tooltip(col, title_text, header_tip)
         app.dashboard_tasks_view.append_column(col)
     app._ui_state.bind_treeview(app.dashboard_tasks_view, "dashboard_tasks_view")
 
@@ -1460,14 +1476,14 @@ def create_dashboard_page(app):
     app.dashboard_locks_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.dashboard_locks_view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
 
-    for col_idx, title_text, width in [
-        (0, "Dataset", 180),
-        (1, "Type", 60),
-        (2, "PID", 70),
-        (3, "Script", 120),
-        (4, "Host", 100),
-        (5, "Acquired", 150),
-        (6, "Description", 200),
+    for col_idx, title_text, width, header_tip in [
+        (0, "Dataset", 180, "The dataset the lock protects."),
+        (1, "Type", 60, "The lock type: read, write, or destroy."),
+        (2, "PID", 70, "Process ID of the lock holder."),
+        (3, "Script", 120, "The script or section that took the lock."),
+        (4, "Host", 100, "The host the lock holder runs on."),
+        (5, "Acquired", 150, "When the lock was taken."),
+        (6, "Description", 200, "Why the lock is held."),
     ]:
         r = Gtk.CellRendererText()
         r.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
@@ -1475,6 +1491,7 @@ def create_dashboard_page(app):
             set_monospace_font(r)
         col = Gtk.TreeViewColumn(title_text, r, text=col_idx)
         configure_treeview_column(col, width=width)
+        set_column_header_tooltip(col, title_text, header_tip)
         app.dashboard_locks_view.append_column(col)
     app._ui_state.bind_treeview(app.dashboard_locks_view, "dashboard_locks_view")
 

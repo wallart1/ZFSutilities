@@ -291,15 +291,20 @@ def configure_treeview_column(col, width=None, min_width=20, resizable=True):
         col.set_resizable(True)
 
 
-def set_column_header_tooltip(col, title, tooltip):
+def set_column_header_tooltip(col, title, tooltip, xalign=None):
     """Put *tooltip* on *col*'s header, titled *title*.
 
     TreeViewColumn is not a Gtk.Widget, so the tooltip must live on the
     header label instead of on the column itself: the label is set as the
-    column's title widget via ``col.set_widget()``.
+    column's title widget via ``col.set_widget()``. *xalign*, when given,
+    mirrors an explicit column heading alignment (e.g. right-aligned
+    numeric headings) on the label, which the header button would
+    otherwise center.
     """
     header = Gtk.Label(label=title)
     header.set_tooltip_text(tooltip)
+    if xalign is not None:
+        header.set_xalign(xalign)
     header.show_all()
     col.set_widget(header)
 

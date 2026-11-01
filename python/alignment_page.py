@@ -71,6 +71,7 @@ from gui_helpers import (  # noqa: F401
     configure_treeview_column,
     note_label,
     section_header,
+    set_column_header_tooltip,
     set_text_if_changed,
     show_note,
 )
@@ -370,7 +371,14 @@ def _availability_note(sample):
 
 
 def _table(
-    app, store_attr, columns, state_key, hidden_key=False, sortable=False, expand_index=None
+    app,
+    store_attr,
+    columns,
+    state_key,
+    hidden_key=False,
+    sortable=False,
+    expand_index=None,
+    header_tooltips=None,
 ):
     """Build a bound TreeView in a 20-row scrolled window; return both.
 
@@ -385,6 +393,8 @@ def _table(
     than on rendered text) keeps row identity stable while visible cells
     drift between refreshes. *sortable* makes every visible column
     clickable and sorted (text order, the schedule-page convention).
+    *header_tooltips*, when given, is a per-column tooltip list of the
+    same length as *columns* (the ``EditableListView`` convention).
 
     The view sits in its own scrolled window sized for at most 20 rows so
     one long table cannot stretch the page: fewer rows keep the natural
@@ -396,6 +406,11 @@ def _table(
     wrapping would churn row heights, which the scroll-stability design
     depends on.
     """
+    if header_tooltips is not None and len(header_tooltips) != len(columns):
+        raise ValueError(
+            f"header_tooltips length ({len(header_tooltips)}) must match "
+            f"columns length ({len(columns)})"
+        )
     store = Gtk.ListStore(*([str] * (len(columns) + 1 if hidden_key else len(columns))))
     view = Gtk.TreeView(model=store)
     view.set_headers_visible(True)
@@ -410,6 +425,8 @@ def _table(
         if sortable:
             col.set_sort_column_id(index + offset)
             col.set_clickable(True)
+        if header_tooltips and header_tooltips[index]:
+            set_column_header_tooltip(col, title, header_tooltips[index])
         view.append_column(col)
     setattr(app, store_attr, store)
     app._ui_state.bind_treeview(view, state_key)
@@ -482,11 +499,13 @@ def _value_row(grid, row, caption):
     """Add a caption/value row to a Gtk.Grid; return the value label.
 
     The caption ellipsizes so a long caption never pins the grid's (and
-    with it the page's) minimum width in narrow windows.
+    with it the page's) minimum width in narrow windows; its tooltip
+    carries the full caption text when it is clipped.
     """
     caption_label = Gtk.Label(label=caption)
     caption_label.set_halign(Gtk.Align.START)
     caption_label.set_ellipsize(Pango.EllipsizeMode.END)
+    caption_label.set_tooltip_text(caption)
     grid.attach(caption_label, 0, row, 1, 1)
     value = Gtk.Label(label="—")
     value.set_halign(Gtk.Align.START)
@@ -546,6 +565,18 @@ def create_alignment_view(app):
         hidden_key=True,
         sortable=True,
         expand_index=1,
+        header_tooltips=[
+            "Scan-chain level: Pool, Device, Dataset, or VM. Click to sort.",
+            "The pool, disk, dataset, or zvol probed. Click to sort.",
+            (
+                "Detected blocksize for the layer (ashift, recordsize, or volblocksize). "
+                "Click to sort."
+            ),
+            (
+                "How the blocksize was determined (probe source, PVE disk line, "
+                "guest filesystem). Click to sort."
+            ),
+        ],
     )
     box.pack_start(chain_scroll, False, False, 0)
 
@@ -595,6 +626,14 @@ def create_alignment_view(app):
         "alignment_topology_view",
         hidden_key=True,
         expand_index=4,
+        header_tooltips=[
+            "Pool the vdev group belongs to.",
+            "Vdev class (data, special, log, cache, spare).",
+            "Vdev group name (a mirror/raidz group or a bare disk).",
+            "Group type (mirror, raidz1, disk, ...).",
+            "Leaf disks in the group.",
+            "The pool's detected blocksize, from its ashift.",
+        ],
     )
     box.pack_start(topology_scroll, False, False, 0)
 
@@ -613,6 +652,13 @@ def create_alignment_view(app):
         "alignment_findings_view",
         hidden_key=True,
         expand_index=3,
+        header_tooltips=[
+            "How much the finding matters.",
+            "Scan layer that emitted the finding.",
+            "Pool, dataset, or device the finding is about.",
+            "What was observed.",
+            "What to do about it.",
+        ],
     )
     box.pack_start(findings_scroll, False, False, 0)
 
@@ -631,6 +677,14 @@ def create_alignment_view(app):
         ],
         "alignment_workload_view",
         expand_index=1,
+        header_tooltips=[
+            "Pool the workload classification describes.",
+            "Classified workload type (sequential, random-sync, mixed, ...).",
+            "The most common synchronous I/O bucket.",
+            "The most common I/O bucket overall.",
+            "ZFS operations counted since boot.",
+            "Share of prefetches served without a disk read.",
+        ],
     )
     box.pack_start(workload_scroll, False, False, 0)
 

@@ -192,6 +192,10 @@ def create_backup_page(app, ctx):
     app.backup_pre_script_text.set_hexpand(True)
     app.backup_pre_script_text.set_width_chars(1)
     app.backup_pre_script_text.set_placeholder_text("Command to run before backup...")
+    app.backup_pre_script_text.set_tooltip_text(
+        "Command run before all backup steps when the checkbox is on; "
+        "if it fails, the backup aborts."
+    )
     pre_grid.attach(app.backup_pre_script_text, 0, 1, 2, 1)
 
     # --- Pull Steps (rsync) ---
@@ -203,6 +207,11 @@ def create_backup_page(app, ctx):
     pull_elv = EditableListView(
         columns=[(1, "Source", 120), (2, "Destination", 120), (3, "Excludes", 120)],
         column_names=["source", "dest", "excludes"],
+        header_tooltips=[
+            "Remote hostname or IP and file path to pull from (e.g. proxmox1:/etc)",
+            "Local directory where the pulled files are placed",
+            "Optional rsync exclude patterns as a space-separated list",
+        ],
     )
     app.backup_pull_store = pull_elv.get_store()
     pull_box.pack_start(pull_elv.get_widget(), True, True, 0)
@@ -229,10 +238,18 @@ def create_backup_page(app, ctx):
     app.backup_nextsnap_entry = Gtk.Entry()
     app.backup_nextsnap_entry.set_hexpand(True)
     app.backup_nextsnap_entry.set_width_chars(1)
+    app.backup_nextsnap_entry.set_tooltip_text(
+        "Snapshot name used for every snapshot this backup creates; "
+        "the '@' prefix is added if omitted. The remembered previous "
+        "name loads here at startup."
+    )
     snap_box.pack_start(app.backup_nextsnap_entry, True, True, 0)
 
     gen_btn = Gtk.Button(label="Generate")
     gen_btn.connect("clicked", _on_generate_snap, app)
+    gen_btn.set_tooltip_text(
+        "Build a new snapshot name from the current time and the label variable."
+    )
     snap_box.pack_start(gen_btn, False, False, 0)
     snap_grid.attach(snap_box, 1, 0, 1, 1)
 
@@ -250,6 +267,10 @@ def create_backup_page(app, ctx):
 
     sr_elv = EditableListView(
         columns=[(1, "Source Pool/Subpool", 160), (2, "Destination Pool", 120)],
+        header_tooltips=[
+            "Pool (and subpool) the snapshots are sent from",
+            "Pool the snapshots are received into",
+        ],
     )
     app.backup_sr_store = sr_elv.get_store()
     sr_box.pack_start(sr_elv.get_widget(), True, True, 0)
@@ -260,6 +281,9 @@ def create_backup_page(app, ctx):
     # --- Advanced (collapsed expander) ---
     advanced_exp = Gtk.Expander()
     advanced_exp.set_label_widget(bold_label("Advanced"))
+    advanced_exp.set_tooltip_text(
+        "Dataset-selection criteria, advanced options, ZFS keys backup, and scrub pausing."
+    )
     advanced_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     advanced_box.set_margin_start(10)
     advanced_box.set_margin_end(10)
@@ -320,6 +344,10 @@ def create_backup_page(app, ctx):
     app.backup_zfs_keys_path.set_hexpand(True)
     app.backup_zfs_keys_path.set_width_chars(1)
     app.backup_zfs_keys_path.set_placeholder_text("host:/path/to/keys/")
+    app.backup_zfs_keys_path.set_tooltip_text(
+        "rsync endpoint where the key files currently live "
+        "(e.g. /mnt/ZFSkeys/ or storage-host:/backups/zfs-keys/)"
+    )
     zfs_keys_grid.attach(app.backup_zfs_keys_path, 1, 0, 1, 1)
 
     zfs_keys_dest_lbl = Gtk.Label(label="ZFS keys dest:")
@@ -329,6 +357,11 @@ def create_backup_page(app, ctx):
     app.backup_zfs_keys_dest = Gtk.Entry()
     app.backup_zfs_keys_dest.set_hexpand(True)
     app.backup_zfs_keys_dest.set_width_chars(1)
+    app.backup_zfs_keys_dest.set_tooltip_text(
+        "rsync endpoint where the copied keys are placed; must resolve "
+        "to an encrypted ZFS dataset (the step is skipped with a warning "
+        "otherwise)"
+    )
     zfs_keys_grid.attach(app.backup_zfs_keys_dest, 1, 1, 1, 1)
 
     advanced_box.pack_start(zfs_keys_grid, False, False, 0)
@@ -363,6 +396,10 @@ def create_backup_page(app, ctx):
     post_cfg = backup_cfg["post_steps"]
     app.backup_post_snapfile = Gtk.CheckButton(label="Clear snapshot name memory")
     app.backup_post_snapfile.set_active(post_cfg.get("remove_snapfile", True))
+    app.backup_post_snapfile.set_tooltip_text(
+        "After a run that was not cancelled, forget the remembered nextsnap "
+        "name so the next backup generates a fresh one."
+    )
     post_grid.attach(app.backup_post_snapfile, 0, 0, 2, 1)
 
     app.backup_post_retention = Gtk.CheckButton(label="Prune snapshots")
@@ -387,6 +424,9 @@ def create_backup_page(app, ctx):
     app.backup_post_script_text.set_hexpand(True)
     app.backup_post_script_text.set_width_chars(1)
     app.backup_post_script_text.set_placeholder_text("Command to run after backup...")
+    app.backup_post_script_text.set_tooltip_text(
+        "Command run after all backup steps when the checkbox is on, even if a backup step failed."
+    )
     post_grid.attach(app.backup_post_script_text, 0, 3, 2, 1)
 
     tracker = DirtyTracker(

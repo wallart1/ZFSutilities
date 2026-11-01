@@ -35,6 +35,7 @@ from gui_helpers import (
     configure_treeview_column,
     handle_editing_key_press,
     set_button_markup_red,
+    set_column_header_tooltip,
     set_page_tab_attention,
     show_error,
     style_expander_label,
@@ -238,6 +239,7 @@ def create_retention_page(app, ctx):
     for p in pool_list:
         combo.append_text(p)
     combo.set_active(0)
+    combo.set_tooltip_text("Choose the pool whose retention buckets are edited.")
     pool_box.pack_start(combo, False, False, 0)
 
     app._ret_pool_label = Gtk.Label()
@@ -258,12 +260,18 @@ def create_retention_page(app, ctx):
     r0 = Gtk.CellRendererText()
     c0 = Gtk.TreeViewColumn("Bucket", r0, text=0)
     configure_treeview_column(c0, width=70)
+    set_column_header_tooltip(
+        c0, "Bucket", "The retention bucket's short code (d=daily, w=weekly, m=monthly, s=offsite)."
+    )
     tv.append_column(c0)
 
     r1 = Gtk.CellRendererText()
     r1.set_property("foreground", "gray")
     c1 = Gtk.TreeViewColumn("Type", r1, text=1)
     configure_treeview_column(c1, width=60)
+    set_column_header_tooltip(
+        c1, "Type", "The bucket's full name (Daily, Weekly, Monthly, Offsite)."
+    )
     tv.append_column(c1)
 
     r2 = Gtk.CellRendererSpin()
@@ -277,6 +285,11 @@ def create_retention_page(app, ctx):
     r2.connect("editing-started", _on_editing_started, tv, 2)
     c2 = Gtk.TreeViewColumn("Retain Count", r2, text=2)
     configure_treeview_column(c2, width=90)
+    set_column_header_tooltip(
+        c2,
+        "Retain Count",
+        "How many snapshots in this bucket to keep; click a cell to edit.",
+    )
     tv.append_column(c2)
     app._ret_retain_renderer = r2
 
@@ -291,6 +304,12 @@ def create_retention_page(app, ctx):
     r3.connect("editing-started", _on_editing_started, tv, 3)
     c3 = Gtk.TreeViewColumn("Min Age (days)", r3, text=3)
     configure_treeview_column(c3, width=110)
+    set_column_header_tooltip(
+        c3,
+        "Min Age (days)",
+        "Minimum age in days before a snapshot in this bucket may be "
+        "deleted; click a cell to edit.",
+    )
     tv.append_column(c3)
     app._ret_minage_renderer = r3
 
@@ -341,10 +360,22 @@ def create_retention_page(app, ctx):
     rp0 = Gtk.CellRendererText()
     cp0 = Gtk.TreeViewColumn("Pool", rp0, text=0)
     configure_treeview_column(cp0, width=140)
+    set_column_header_tooltip(
+        cp0,
+        "Pool",
+        "Online pool with a retention policy; select one or more, then "
+        "click Prune. <offsite> stands for every offsite-candidate pool.",
+    )
     pv.append_column(cp0)
     rp1 = Gtk.CellRendererText()
     cp1 = Gtk.TreeViewColumn("Health", rp1, text=1)
     configure_treeview_column(cp1, width=90)
+    set_column_header_tooltip(
+        cp1,
+        "Health",
+        "ONLINE for direct pools; for <offsite>, the currently online "
+        "offsite pools or 'not online'.",
+    )
     pv.append_column(cp1)
 
     psw = Gtk.ScrolledWindow()
@@ -360,6 +391,9 @@ def create_retention_page(app, ctx):
     prune_label = get_prune_label(ctx.config)
     app._ret_prune_label_entry.set_text(prune_label)
     app._ret_prune_label_entry.set_width_chars(20)
+    app._ret_prune_label_entry.set_tooltip_text(
+        "Only snapshots carrying this label are pruned (default: dailybackup)."
+    )
     app._ret_prune_label_entry.connect("changed", lambda *_a: _update_ret_status(app))
     app._ret_original_prune_label = prune_label
     label_box.pack_start(app._ret_prune_label_entry, False, False, 0)
@@ -370,6 +404,7 @@ def create_retention_page(app, ctx):
         label="Verbose retention decisions (logs why each snapshot is kept)"
     )
     verb_check.set_active(get_retention_verb_messages(ctx.config))
+    verb_check.set_tooltip_text("Log why each snapshot is kept or deleted whenever retention runs.")
     app._ret_verb_check = verb_check
     verb_check.connect("toggled", lambda *_a: _update_ret_status(app))
     outer.pack_start(verb_check, False, False, 0)
@@ -378,6 +413,9 @@ def create_retention_page(app, ctx):
     # ── Advanced Prune Options ─────────────────────
     advanced_exp = Gtk.Expander()
     advanced_exp.set_label_widget(bold_label("Advanced Prune Options"))
+    advanced_exp.set_tooltip_text(
+        "Ignore-policies toggle and the pattern-based Mass Delete Filters the prune applies."
+    )
     advanced_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     advanced_box.set_margin_start(10)
     advanced_box.set_margin_end(10)

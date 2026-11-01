@@ -1858,3 +1858,42 @@ F-040 draft+execute in-phase; F-034/F-037 promote to proposals.
   test_disks_page: test_pool_create_wizard (3) and
   test_disks_page_growth_buttons (2) — same _action_tooltip-reset fix
   applied; gate rerun green (see final report).
+
+## Tooltips Phase 2 — nine tab pages (2026-11-01)
+
+- Executed on the approved per-phase plan (user-given Tooltips Plan file);
+  Phase 1 infrastructure already committed in f1b315c.
+- Helper extensions: set_column_header_tooltip gained optional xalign
+  (right-aligned numeric headers keep their alignment through the custom
+  header label — Pools numeric 7, Datasets Used/Avail/Refer pass 1.0);
+  alignment_page._table and memory_page._device_table gained
+  header_tooltips lists (EditableListView contract: length-validated).
+- Loop-driven title lists grew to tooltip-carrying tuples (Dashboard
+  Tasks/Locks, Disks 3 tables, Datasets, Schedule, Pools scrub); hand-built
+  columns got at-site helper calls (Offsite steps, Pools pool table,
+  Retention bucket/prune). Backup's two EditableListViews pass
+  header_tooltips. _value_row captions (both copies) carry the full
+  caption — they ellipsize.
+- Sortable headers say "Click to sort." (Schedule 4, Pools 9 of 11,
+  alignment chain 4). Wording truth-passed against each column's fill code
+  (lock types read/write/destroy; retention Type = bucket full name;
+  topology Read/Write/Cksum = zpool-status error counters; Blocksize =
+  ashift-derived sector size; scrub Status states; enclosure "% of cap" =
+  busier direction) and lifted from gtk-gui.md where it describes the
+  item (pull steps, nextsnap, ZFS keys, Retain Count/Min Age, scrub
+  table, Origin/Clones, Config Summary).
+- One existing test updated: test_dashboard_page's Date/Time header test
+  asserted Type/Name/Status headers carry NO tooltip — the exact state
+  this phase changes; now asserts exactly-one non-empty tooltip each.
+- Per-suite greens: dashboard 300, backup+gui_infrastructure 207,
+  offsite 32, schedule 79, retention(+actions) 85, disks 77, pools 51,
+  datasets(+actions) 238, memory+alignment 117. ruff clean after ISC004
+  paren fixes (concatenated strings inside collections).
+- Full gate round 1: 5959 passed, 1 failed —
+  test_profile_runner::test_sigterm_cancels_running_profile timed out
+  under 6-worker load (SIGKILLed past its 15 s deadline). Passes
+  standalone (110/110 in 4 s) and in a same-worker-count python-leg rerun
+  (4397 passed); logged in PREEXISTING.md as a load-timing flake. Bash
+  legs all green in round 1.
+- Phase 2 diff ≈ +440/−105 over 12 files. Next: Phase 3 (dialogs, user
+  priority) on user cue.

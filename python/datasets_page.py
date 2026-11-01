@@ -33,6 +33,7 @@ from gui_helpers import (
     on_row_expanded,
     restore_expanded_rows,
     set_action_tooltip,
+    set_column_header_tooltip,
     set_monospace_font,
     setup_row_scroll,
 )
@@ -75,6 +76,9 @@ def create_datasets_page(app):
 
     app.datasets_search_entry = Gtk.Entry()
     app.datasets_search_entry.set_placeholder_text("Search datasets...")
+    app.datasets_search_entry.set_tooltip_text(
+        "Filter the tree by name; the arrows step through the matches."
+    )
     app.datasets_search_entry.set_width_chars(1)
     search_box.pack_start(app.datasets_search_entry, True, True, 0)
 
@@ -127,15 +131,30 @@ def create_datasets_page(app):
     app.datasets_search_clear_btn.connect("clicked", lambda _b: app.datasets_search.clear())
 
     ds_columns = [
-        ("Name", 0, 150),
-        ("Created", 1, 110),
-        ("Type", 2, 70),
-        ("Used", 3, 65),
-        ("Avail", 4, 65),
-        ("Refer", 5, 65),
-        ("Origin / Clones", 6, 130),
+        (
+            "Name",
+            0,
+            150,
+            ("Dataset name; children indent under their parent (snapshots and holds nest inside)."),
+            None,
+        ),
+        ("Created", 1, 110, "When the dataset was created (zfs creation date).", None),
+        ("Type", 2, 70, "Filesystem, volume, or snapshot.", None),
+        ("Used", 3, 65, "Space used by the dataset and its children.", 1.0),
+        ("Avail", 4, 65, "Space the pool can still give this dataset.", 1.0),
+        ("Refer", 5, 65, "Space the dataset's own data references.", 1.0),
+        (
+            "Origin / Clones",
+            6,
+            130,
+            (
+                "Clones: the origin snapshot they came from. Snapshots: their "
+                "dependent clones, comma-separated. Empty for other rows."
+            ),
+            None,
+        ),
     ]
-    for title, col_idx, width in ds_columns:
+    for title, col_idx, width, header_tip, header_xalign in ds_columns:
         renderer = Gtk.CellRendererText()
         if title == "Created":
             set_monospace_font(renderer)
@@ -144,6 +163,7 @@ def create_datasets_page(app):
             renderer.set_property("xalign", 1.0)
             col.set_alignment(1.0)
         configure_treeview_column(col, width=width)
+        set_column_header_tooltip(col, title, header_tip, xalign=header_xalign)
         if col_idx == 0:
             col.set_cell_data_func(renderer, dataset_name_cell_func)
         elif col_idx == 6:

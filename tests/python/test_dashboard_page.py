@@ -3503,10 +3503,14 @@ class TestCreateDashboardPage(unittest.TestCase):
         self.assertIn("the time the task started", tooltips[0])
         self.assertIn("the time the task finished (completion time)", tooltips[0])
 
-        # No other Tasks column header carries a tooltip.
+        # Every other Tasks column header carries exactly one tooltip.
         for title in ("Type", "Name", "Status"):
-            for lbl in labels_by_text.get(title, []):
-                lbl.set_tooltip_text.assert_not_called()
+            headers_for_title = labels_by_text.get(title, [])
+            self.assertTrue(headers_for_title, f"Expected a {title} header label")
+            for lbl in headers_for_title:
+                tooltips = [call.args[0] for call in lbl.set_tooltip_text.call_args_list]
+                self.assertEqual(len(tooltips), 1)
+                self.assertTrue(tooltips[0], f"{title} header tooltip is empty")
 
     def test_tasks_and_locks_views_attach_cell_tooltips(self):
         """Ellipsized cells on both views show their full text on hover."""
