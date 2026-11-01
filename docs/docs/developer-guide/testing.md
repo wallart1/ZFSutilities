@@ -436,7 +436,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_config_core` | JSON config load/save and generic state helpers |
 | `test_config_migrations` | Schema migrations 1→26, idempotency, missing migration errors |
 | `test_cron_manager` | Cron line generation, condition support, configured cron-log path, timestamp-stamped sink, human-readable interpretation, next-run computation |
-| `test_dashboard_page` | Dashboard layout (the section tables in their own 20-row capped scrolled windows, the page viewport sizing content by natural height), task handling, pool/VM/scrub/history queries, warning indicators (incl. SSD/NVMe wear), surface-test running-task cancel, async refresh loading state |
+| `test_dashboard_page` | Dashboard layout (the section tables in their own capped scrolled windows, the page viewport sizing content by natural height), task handling, pool/VM/scrub/history queries, warning indicators (incl. SSD/NVMe wear), surface-test running-task cancel, async refresh loading state |
 | `test_dataset_actions` | Datasets tab actions (mount/unmount/destroy/holds) driven through BackupRunner |
 | `test_datasets_page` | Datasets tab UI, dataset tree, and mounted-state refresh |
 | `test_datasets_tree` | Lazy dataset-tree loading in `gui_helpers` |
@@ -452,7 +452,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_feature_config` | Per-feature config getters/setters, snapshot name generation, checkagainst entry merge, workload and pool profile quintets/immutability |
 | `test_file_locking` | Advisory flock helpers |
 | `test_golden` | `golden.py` golden-file helper — canonical serialization, compare/update modes, missing-golden errors |
-| `test_gui_helpers` | `gui_helpers` utilities, including mounted-snapshot detection via `mount -t zfs`, orange non-default expander labels, log font scaling (CSS steps, persistence, restore, View menu wiring), Pango-escaping in section headers / notes, and the capped table-window helper (fixed twenty-row minimum pinned to the cap for the Performance pages, the Dashboard's explicit natural-height convention, row-target scaling, and the cap following the measured row height) |
+| `test_gui_helpers` | `gui_helpers` utilities, including mounted-snapshot detection via `mount -t zfs`, orange non-default expander labels, log font scaling (CSS steps, persistence, restore, View menu wiring), Pango-escaping in section headers / notes, and the capped table-window helper (natural height up to the cap by default with the empty-table floor, the fixed-window branch pinned to the cap, row-target scaling, and the cap following the measured row height) |
 | `test_gui_infrastructure` | GTK mock setup, GUI module imports, docs viewer zoom/navigation/state persistence, anchor scrolling |
 | `test_installer_retention` | Installer retention profile initialization: default-only on new install and preservation of existing profiles |
 | `test_iscsi_enroll` | `iscsi_enroll.py` — derive_target_short, is_iscsi_managed_pool, enroll argv building, post-create enrollment offer (two-node gating, decline/failure paths) |
@@ -463,7 +463,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_logrotate_manager` | Logrotate drop-in content (per-log stanzas, rotation policy, configured paths) and write behaviour incl. FATAL-on-failure |
 | `test_logs_page` | Log list scanning, filtering, deletion, status parsing, cron-log rows incl. rotated copies, gzip decompression in the viewer, tail-only viewer for large files, column-header label tooltips, saved font-scale restore, and pop-out reparenting |
 | `test_main` | GUI entry point: PID-file single-instance, auto-replace, transient wait dialog, event pumping, retry-after-remote registration, pkexec logic, initial dashboard refresh |
-| `test_memory_page` | Performance tab: Live Charts / Blocksize Alignment view switcher, charts value grids/notes/charts, every table window pinned to the fixed twenty-row cap (both views), the ladder window's page-width floor wiring, device-table column-width persistence binding, the exposed page ScrolledWindow (`performance_scrolled`), refresh-interval persistence, fixed chart heights at the pack sites |
+| `test_memory_page` | Performance tab: Live Charts / Blocksize Alignment view switcher, charts value grids/notes/charts, every table window sized naturally up to the twenty-row cap (both views), the ladder window's page-width floor wiring, device-table column-width persistence binding, the exposed page ScrolledWindow (`performance_scrolled`), refresh-interval persistence, fixed chart heights at the pack sites |
 | `test_migration` | One-time state-file migration helper |
 | `test_node_config` | Two-node configuration loading and resolution |
 | `test_offsite_page` | Offsite tab UI, offsite pool detection, and config helpers |

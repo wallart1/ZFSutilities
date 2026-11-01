@@ -24,7 +24,12 @@ from feature_config import (
     save_pool_profiles,
 )
 from gi.repository import Gtk
-from gui_helpers import configure_treeview_column, create_dialog, create_scrolled_dialog
+from gui_helpers import (
+    capped_treeview_scroll,
+    configure_treeview_column,
+    create_dialog,
+    create_scrolled_dialog,
+)
 from logging_config import log_msg
 from pool_profiles import (
     BLOCKSIZE_CHOICES,
@@ -225,10 +230,9 @@ def show_manage_pool_profiles_dialog(app):
         configure_treeview_column(col, width=width)
         view.append_column(col)
 
-    scrolled = Gtk.ScrolledWindow()
-    scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    scrolled.set_min_content_height(250)
-    scrolled.add(view)
+    # Dialog table: expand stays on so an enlarged dialog grows the list;
+    # the default height follows the natural row count.
+    scrolled = capped_treeview_scroll(view)
     content.pack_start(scrolled, True, True, 0)
 
     btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)

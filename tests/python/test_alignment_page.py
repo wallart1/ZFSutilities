@@ -1605,12 +1605,12 @@ class TestTableViewPolish(_PageTestCase):
         )
 
     def test_capped_scroll_shows_twenty_rows(self):
-        """The shared capped scroll: a fixed 20-row window (min == max).
+        """The shared capped scroll: natural height up to the 20-row cap.
 
-        ``min_content_height`` pinned at the cap keeps short and empty
-        tables at their full 20-line window, and
         ``propagate_natural_height`` keeps taller tables from collapsing
-        to the old couple-of-rows minimum.
+        to the old couple-of-rows minimum, ``max_content_height`` stops
+        the growth at the 20-row cap, and the minimum keeps only a small
+        floor for short and empty tables.
         """
         with mock_gtk(fresh=True):
             import gui_helpers as gh
@@ -1629,7 +1629,7 @@ class TestTableViewPolish(_PageTestCase):
             self.assertIs(scroll, scrolls[0])
             fallback = gh.TREEVIEW_ROW_HEIGHT_FALLBACK
             cap = fallback + 2 + 21 * fallback
-            scroll.set_min_content_height.assert_called_once_with(cap)
+            scroll.set_min_content_height.assert_called_once_with(60)
             scroll.set_max_content_height.assert_called_once_with(cap)
             scroll.set_propagate_natural_height.assert_called_once_with(True)
             scroll.add.assert_called_once_with(view)

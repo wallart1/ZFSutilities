@@ -323,6 +323,13 @@ class TestCreateDisksPage(unittest.TestCase):
             dp.Gtk.PolicyType.AUTOMATIC,
         )
         page.add.assert_called()
+        # The page viewport sizes its content by NATURAL height: the
+        # section tables sit in capped scrolled windows whose minimums are
+        # tiny, and the default MINIMUM policy would crush them at short
+        # window heights.
+        page.get_child.return_value.set_vscroll_policy.assert_called_once_with(
+            dp.Gtk.ScrollablePolicy.NATURAL
+        )
         # The page content enforces a minimum height so the page-level
         # scrollbar engages instead of squashing it.
         dp.Gtk.Box.return_value.set_size_request.assert_any_call(

@@ -785,13 +785,13 @@ class TestTreeviewRowHeight(unittest.TestCase):
 
 
 class TestCappedTreeviewScroll(unittest.TestCase):
-    """capped_treeview_scroll: fixed 20-row windows by default, natural
-    height up to the same cap when fixed_rows=False.
+    """capped_treeview_scroll: natural height up to the 20-row cap by
+    default, a fixed *row_target*-line window when fixed_rows=True.
 
-    The fixed window (the Performance-page convention) pins min == max ==
-    the cap so short and empty tables keep their full 20-line window; the
-    one-row allowance over the target absorbs a classic horizontal
-    scrollbar's height so the target row count stays visible.
+    The natural window (the app-wide convention) grows with the table's
+    rows and stops at the cap, keeping a small 60px floor for empty
+    tables; the one-row allowance over the target absorbs a classic
+    horizontal scrollbar's height so the target row count stays visible.
     """
 
     def _scroll_for(self, gui_helpers, view=None, **kwargs):
@@ -803,24 +803,24 @@ class TestCappedTreeviewScroll(unittest.TestCase):
         finally:
             gui_helpers.Gtk.ScrolledWindow = old_window
 
-    def test_fixed_rows_pins_min_to_the_cap(self):
+    def test_default_keeps_natural_height_convention(self):
         gui_helpers = _import_gui_helpers()
         _scroll, mock = self._scroll_for(gui_helpers)
         row = gui_helpers.TREEVIEW_ROW_HEIGHT_FALLBACK
         cap = (row + 2) + (gui_helpers.TABLE_ROW_TARGET + 1) * row
-        mock.set_min_content_height.assert_called_once_with(cap)
+        mock.set_min_content_height.assert_called_once_with(60)
         mock.set_max_content_height.assert_called_once_with(cap)
         mock.set_propagate_natural_height.assert_called_once_with(True)
         mock.set_policy.assert_called_once_with(
             gui_helpers.Gtk.PolicyType.AUTOMATIC, gui_helpers.Gtk.PolicyType.AUTOMATIC
         )
 
-    def test_fixed_rows_false_keeps_natural_height_convention(self):
+    def test_fixed_rows_pins_min_to_the_cap(self):
         gui_helpers = _import_gui_helpers()
         row = gui_helpers.TREEVIEW_ROW_HEIGHT_FALLBACK
         cap = (row + 2) + (gui_helpers.TABLE_ROW_TARGET + 1) * row
-        _scroll, mock = self._scroll_for(gui_helpers, fixed_rows=False)
-        mock.set_min_content_height.assert_called_once_with(60)
+        _scroll, mock = self._scroll_for(gui_helpers, fixed_rows=True)
+        mock.set_min_content_height.assert_called_once_with(cap)
         mock.set_max_content_height.assert_called_once_with(cap)
 
     def test_row_target_scales_the_window(self):
@@ -828,7 +828,7 @@ class TestCappedTreeviewScroll(unittest.TestCase):
         row = gui_helpers.TREEVIEW_ROW_HEIGHT_FALLBACK
         cap = (row + 2) + (5 + 1) * row
         _scroll, mock = self._scroll_for(gui_helpers, row_target=5)
-        mock.set_min_content_height.assert_called_once_with(cap)
+        mock.set_min_content_height.assert_called_once_with(60)
         mock.set_max_content_height.assert_called_once_with(cap)
 
     def test_cap_follows_the_measured_row_height(self):
@@ -836,7 +836,7 @@ class TestCappedTreeviewScroll(unittest.TestCase):
         with patch.object(gui_helpers, "treeview_row_height", return_value=30):
             _scroll, mock = self._scroll_for(gui_helpers)
         cap = (30 + 2) + (gui_helpers.TABLE_ROW_TARGET + 1) * 30
-        mock.set_min_content_height.assert_called_once_with(cap)
+        mock.set_min_content_height.assert_called_once_with(60)
         mock.set_max_content_height.assert_called_once_with(cap)
 
 

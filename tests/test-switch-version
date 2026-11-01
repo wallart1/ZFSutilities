@@ -42,6 +42,15 @@ _make_fake_version() {
         printf '#!/bin/bash\nexit 0\n' > "$version_base/versions/$version/bin/switch-version"
     fi
     chmod +x "$version_base/versions/$version/bin/switch-version"
+
+    # Optional 4th arg: the release's config generation.  When set, the
+    # fake version carries a python/config_migrations.py so the config
+    # gate sees a CONFIG_VERSION the way real releases do.
+    if [[ -n "${4:-}" ]]; then
+        mkdir -p "$version_base/versions/$version/python"
+        printf 'CONFIG_VERSION = %s\n' "$4" \
+            > "$version_base/versions/$version/python/config_migrations.py"
+    fi
 }
 
 # Helper: set up a temp environment and configure switch-version paths.
@@ -60,9 +69,13 @@ _setup_switch_env() {
     export ZFSUTILITIES_ISCSI_LIB_LINK="$_tmpdir/usr/local/lib/iscsi-lib.sh"
     export ZFSUTILITIES_ROOTCHECK_LINK="$_tmpdir/usr/local/lib/rootcheck"
     export ZFSUTILITIES_LOCAL_BIN_DIR="$_tmpdir/usr/local/bin"
+    # Keep the config gate hermetic: without this the tests would read
+    # (and archive beside) the host's real /var/lib/zfsutilities/config.json.
+    export ZFSUTILITIES_CONFIG_PATH="$_tmpdir/var/lib/zfsutilities/config.json"
 
     mkdir -p "$_tmpdir/root" "$_tmpdir/etc/profile.d" "$_tmpdir/etc/sudoers.d" \
-        "$_tmpdir/usr/local/lib" "$_tmpdir/usr/local/bin"
+        "$_tmpdir/usr/local/lib" "$_tmpdir/usr/local/bin" \
+        "$_tmpdir/var/lib/zfsutilities"
 
     printf -v "$_varname" '%s' "$_tmpdir"
 }
@@ -79,6 +92,8 @@ _teardown_switch_env() {
     unset ZFSUTILITIES_ISCSI_LIB_LINK
     unset ZFSUTILITIES_ROOTCHECK_LINK
     unset ZFSUTILITIES_LOCAL_BIN_DIR
+    unset ZFSUTILITIES_CONFIG_PATH
+    unset ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE
     rm -rf "$tmpdir"
 }
 
@@ -1169,12 +1184,260 @@ test_shipped_rtslib_dropins_match_dropin_design() {
     fi
 }
 
+test_switch_downgrade_restores_archived_config() {
+    test_start "switch-version downgrade restores the target generation's archived config"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_fake_version "$tmpdir" "A" "" 30
+    _make_fake_version "$tmpdir" "B" "" 31
+    ln -sfn "versions/B" "$tmpdir/current"
+
+    local config_file="$tmpdir/var/lib/zfsutilities/config.json"
+    local archive_dir="$tmpdir/var/lib/zfsutilities/config-archive"
+    mkdir -p "$archive_dir"
+    printf '{"config_version": 31, "backup": {"label": "newer"}}\n' > "$config_file"
+    printf '{"config_version": 30, "backup": {"label": "as-30-knew-it"}}\n' \
+        > "$archive_dir/config.v30.json"
+
+    exec() { echo "MOCK_EXEC: $*"; }
+    local output rc=0
+    output=$(switch_version_main "A" 2>&1) || rc=$?
+    unset -f exec
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0, got $rc; output: $output"
+    fi
+    if [[ "$(readlink "$tmpdir/current")" != "versions/A" ]]; then
+        failed=1
+        echo "    current symlink did not point to versions/A"
+    fi
+    if ! grep -q '"config_version": 30' "$config_file"; then
+        failed=1
+        echo "    live config was not restored to generation 30"
+    fi
+    if ! grep -q 'as-30-knew-it' "$config_file"; then
+        failed=1
+        echo "    restored config did not carry the generation-30 content"
+    fi
+    if ! grep -q '"label": "newer"' "$archive_dir/config.v31.json"; then
+        failed=1
+        echo "    newer config was not archived before the restore"
+    fi
+    if compgen -G "$config_file.*" >/dev/null; then
+        failed=1
+        echo "    leftover temp file beside config.json after atomic install"
+    fi
+
+    _teardown_switch_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "downgrade restore misbehaved"
+    fi
+}
+
+test_switch_downgrade_without_archive_refuses() {
+    test_start "switch-version downgrade without an archive refuses and mutates nothing"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_fake_version "$tmpdir" "A" "" 30
+    _make_fake_version "$tmpdir" "B" "" 31
+    ln -sfn "versions/B" "$tmpdir/current"
+
+    local config_file="$tmpdir/var/lib/zfsutilities/config.json"
+    printf '{"config_version": 31, "backup": {"label": "pristine"}}\n' > "$config_file"
+
+    # Mock exec so a broken gate that lets the switch proceed rewires the
+    # temp env instead of replacing the test shell via the re-exec.
+    exec() { echo "MOCK_EXEC: $*"; }
+    local output rc=0
+    output=$(switch_version_main "A" 2>&1) || rc=$?
+    unset -f exec
+
+    local failed=0
+    if [[ $rc -eq 0 ]]; then
+        failed=1
+        echo "    Expected a non-zero return from the refusal, got 0"
+    fi
+    if [[ "$(readlink "$tmpdir/current")" != "versions/B" ]]; then
+        failed=1
+        echo "    refusal must not touch the current symlink"
+    fi
+    if ! grep -q '"label": "pristine"' "$config_file"; then
+        failed=1
+        echo "    refusal must not touch the saved config"
+    fi
+    if [[ -d "$tmpdir/var/lib/zfsutilities/config-archive" ]]; then
+        failed=1
+        echo "    refusal must not create the archive directory"
+    fi
+
+    _teardown_switch_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "refusal path mutated state or returned success"
+    fi
+}
+
+test_switch_downgrade_override_archives_and_resets() {
+    test_start "ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE=1 archives the newer config and resets"
+    local tmpdir
+    _setup_switch_env tmpdir
+    export ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE=1
+
+    _make_fake_version "$tmpdir" "A" "" 30
+    _make_fake_version "$tmpdir" "B" "" 31
+    ln -sfn "versions/B" "$tmpdir/current"
+
+    local config_file="$tmpdir/var/lib/zfsutilities/config.json"
+    local archive_dir="$tmpdir/var/lib/zfsutilities/config-archive"
+    printf '{"config_version": 31, "backup": {"label": "saved-aside"}}\n' > "$config_file"
+
+    exec() { echo "MOCK_EXEC: $*"; }
+    local output rc=0
+    output=$(switch_version_main "A" 2>&1) || rc=$?
+    unset -f exec
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0, got $rc; output: $output"
+    fi
+    if [[ "$(readlink "$tmpdir/current")" != "versions/A" ]]; then
+        failed=1
+        echo "    current symlink did not point to versions/A"
+    fi
+    if [[ -f "$config_file" ]]; then
+        failed=1
+        echo "    config.json must be removed so the older release starts from defaults"
+    fi
+    if ! grep -q '"label": "saved-aside"' "$archive_dir/config.v31.json"; then
+        failed=1
+        echo "    newer config was not archived aside before removal"
+    fi
+
+    _teardown_switch_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "override path misbehaved"
+    fi
+}
+
+test_switch_upgrade_skips_config_gate() {
+    test_start "switch-version upgrade leaves the saved config to the migrator"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    _make_fake_version "$tmpdir" "A" "" 30
+    _make_fake_version "$tmpdir" "B" "" 31
+    ln -sfn "versions/A" "$tmpdir/current"
+
+    local config_file="$tmpdir/var/lib/zfsutilities/config.json"
+    printf '{"config_version": 30, "backup": {"label": "untouched"}}\n' > "$config_file"
+
+    exec() { echo "MOCK_EXEC: $*"; }
+    local output rc=0
+    output=$(switch_version_main "B" 2>&1) || rc=$?
+    unset -f exec
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0, got $rc; output: $output"
+    fi
+    if [[ "$(readlink "$tmpdir/current")" != "versions/B" ]]; then
+        failed=1
+        echo "    current symlink did not point to versions/B"
+    fi
+    if ! grep -q '"label": "untouched"' "$config_file"; then
+        failed=1
+        echo "    an upgrade must leave the saved config for load_config to migrate"
+    fi
+    if [[ -d "$tmpdir/var/lib/zfsutilities/config-archive" ]]; then
+        failed=1
+        echo "    an upgrade must not create config archives"
+    fi
+
+    _teardown_switch_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "upgrade path touched the config"
+    fi
+}
+
+test_switch_unknown_generation_or_missing_config_skips_gate() {
+    test_start "config gate skips for generation-less releases and missing configs"
+    local tmpdir
+    _setup_switch_env tmpdir
+
+    # A release with no python/config_migrations.py (pre-schema era) and
+    # a saved config of an arbitrarily newer generation: the gate cannot
+    # judge, so activation proceeds unchanged.
+    _make_fake_version "$tmpdir" "A" ""
+    _make_fake_version "$tmpdir" "B" ""
+    ln -sfn "versions/B" "$tmpdir/current"
+
+    local config_file="$tmpdir/var/lib/zfsutilities/config.json"
+    printf '{"config_version": 99}\n' > "$config_file"
+
+    exec() { echo "MOCK_EXEC: $*"; }
+    local output rc=0
+    output=$(switch_version_main "A" 2>&1) || rc=$?
+    unset -f exec
+
+    local failed=0
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0, got $rc; output: $output"
+    fi
+    if [[ "$(readlink "$tmpdir/current")" != "versions/A" ]]; then
+        failed=1
+        echo "    current symlink did not point to versions/A"
+    fi
+
+    # Fresh install: no saved config at all, target does carry a
+    # generation — the gate must still let the activation through.
+    rm -f "$config_file"
+    _make_fake_version "$tmpdir" "B" "" 31
+    ln -sfn "versions/B" "$tmpdir/current"
+    output=$(switch_version_main "B" 2>&1) || rc=$?
+    if [[ $rc -ne 0 ]]; then
+        failed=1
+        echo "    Expected return code 0 with no saved config, got $rc; output: $output"
+    fi
+
+    _teardown_switch_env "$tmpdir"
+
+    if [[ $failed -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "gate did not skip when it cannot judge"
+    fi
+}
+
 test_install_iscsi_fence_units_installs_enables_and_refreshes
 test_install_iscsi_fence_units_skips_without_qm
 test_install_iscsi_fence_units_skips_single_node
 test_install_iscsi_fence_units_installs_without_node_conf
 test_shipped_fence_units_match_fence_design
 test_shipped_rtslib_dropins_match_dropin_design
+
+test_switch_downgrade_restores_archived_config
+test_switch_downgrade_without_archive_refuses
+test_switch_downgrade_override_archives_and_resets
+test_switch_upgrade_skips_config_gate
+test_switch_unknown_generation_or_missing_config_skips_gate
 
 test_summary
 teardown_test_env

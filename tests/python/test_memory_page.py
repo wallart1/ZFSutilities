@@ -240,9 +240,10 @@ class TestCreateMemoryPage(unittest.TestCase):
             # table, the ladder window, then topology/findings/workload,
             # then L2ARC/SLOG/Enclosures.
             self.assertEqual(len(scrolls), 9)
-            # The fixed Performance-page window: min == max == the 20-row
-            # cap, so short and empty tables keep their 20-line window
-            # (the one-row allowance absorbs the horizontal scrollbar).
+            # Every table window keeps the app-wide natural-height
+            # convention: the window grows with its rows up to the 20-row
+            # cap (max) and keeps a small floor when empty (the one-row
+            # allowance absorbs the horizontal scrollbar).
             row = gh.TREEVIEW_ROW_HEIGHT_FALLBACK
             cap = (row + 2) + (gh.TABLE_ROW_TARGET + 1) * row
             table_scrolls = scrolls[1:2] + scrolls[3:6] + scrolls[6:9]
@@ -250,7 +251,7 @@ class TestCreateMemoryPage(unittest.TestCase):
             for scroll, view in zip(table_scrolls, table_views):
                 scroll.add.assert_called_once_with(view)
                 scroll.set_propagate_natural_height.assert_called_once_with(True)
-                scroll.set_min_content_height.assert_called_once_with(cap)
+                scroll.set_min_content_height.assert_called_once_with(60)
                 scroll.set_max_content_height.assert_called_once_with(cap)
             # The ladder window is not a capped table window: it carries a
             # small minimum width so the canvas's request can never widen

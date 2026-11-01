@@ -14,7 +14,7 @@ if PYTHON_SRC not in sys.path:
     sys.path.insert(0, PYTHON_SRC)
 
 import config_core
-from test_support import temp_config_dir
+from test_support import capture_logs, temp_config_dir
 
 
 class TestConfigPathDefaults(unittest.TestCase):
@@ -408,6 +408,83 @@ class TestMemoryConfig(unittest.TestCase):
                 data = json.load(f)
             self.assertEqual(data["memory"]["refresh_seconds"], 9)
             self.assertEqual(config["memory"]["refresh_seconds"], 9)
+
+
+class TestConfigArchival(unittest.TestCase):
+    """load_config archives configs it migrates or finds newer than itself."""
+
+    def _write_config(self, version, label=None):
+        path = config_core.CONFIG_PATH
+        with open(path, "w") as f:
+            json.dump(
+                {
+                    "backup": {"variables": {"label": label or f"v{version}"}},
+                    "config_version": version,
+                },
+                f,
+            )
+        return path
+
+    def _archive_path(self, generation):
+        return os.path.join(
+            os.path.dirname(config_core.CONFIG_PATH),
+            "config-archive",
+            f"config.v{generation}.json",
+        )
+
+    def test_migration_archives_previous_generation(self):
+        with temp_config_dir():
+            older = config_core.CONFIG_VERSION - 1
+            self._write_config(older)
+            cfg = config_core.load_config()
+            self.assertEqual(cfg["config_version"], config_core.CONFIG_VERSION)
+            with open(self._archive_path(older)) as f:
+                archived = json.load(f)
+            self.assertEqual(archived["config_version"], older)
+            self.assertEqual(archived["backup"]["variables"]["label"], f"v{older}")
+
+    def test_newer_config_is_archived_and_warns_with_remedy(self):
+        with temp_config_dir():
+            newer = config_core.CONFIG_VERSION + 1
+            self._write_config(newer)
+            with capture_logs() as logs:
+                cfg = config_core.load_config()
+            self.assertEqual(cfg["config_version"], newer)
+            with open(self._archive_path(newer)) as f:
+                self.assertEqual(json.load(f)["config_version"], newer)
+            warned = [
+                line
+                for line in logs
+                if "newer than this build expects" in line and "switch-version" in line
+            ]
+            self.assertTrue(warned, logs)
+
+    def test_matching_version_writes_no_archive(self):
+        with temp_config_dir():
+            self._write_config(config_core.CONFIG_VERSION)
+            config_core.load_config()
+            self.assertFalse(os.path.exists(self._archive_path(0)))
+
+    def test_freshest_state_wins_per_generation(self):
+        with temp_config_dir():
+            older = config_core.CONFIG_VERSION - 1
+            self._write_config(older)
+            config_core.load_config()
+            # Regress the on-disk file to the same generation with
+            # different content: the next load must overwrite the archive
+            # with the freshest state of that generation.
+            with open(config_core.CONFIG_PATH, "w") as f:
+                json.dump(
+                    {
+                        "backup": {"variables": {"label": "fresher"}},
+                        "config_version": older,
+                    },
+                    f,
+                )
+            config_core.load_config()
+            with open(self._archive_path(older)) as f:
+                archived = json.load(f)
+            self.assertEqual(archived["backup"]["variables"]["label"], "fresher")
 
 
 if __name__ == "__main__":

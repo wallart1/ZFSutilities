@@ -27,6 +27,7 @@ from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
     ACTIVE_COLUMN_WIDTH,
     bold_label,
+    capped_treeview_scroll,
     configure_treeview_column,
     enable_textview_copy,
     set_button_markup_red,
@@ -158,10 +159,7 @@ def create_schedule_page(app):
     app.schedule_view.set_has_tooltip(True)
     app.schedule_view.connect("query-tooltip", _on_next_run_query_tooltip, app, next_run_col)
 
-    scroll = Gtk.ScrolledWindow()
-    scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    scroll.set_min_content_height(180)
-    scroll.add(app.schedule_view)
+    scroll = capped_treeview_scroll(app.schedule_view)
     outer.pack_start(scroll, False, False, 0)
 
     app.schedule_view.get_selection().connect("changed", _on_selection_changed, app)
@@ -292,6 +290,12 @@ def create_schedule_page(app):
     scrolled = Gtk.ScrolledWindow()
     scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
     scrolled.add(outer)
+    # NATURAL vscroll policy: the profile table's capped window has a
+    # tiny minimum, and the default MINIMUM policy would crush it at
+    # short window heights (dashboard-page idiom).
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
     return scrolled
 
 

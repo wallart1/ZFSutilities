@@ -16,10 +16,11 @@
 #   X1  SIGTERM during the early upgrade (download/extract phase): the
 #       graceful kill must run the EXIT trap (staging cleaned) and
 #       nothing may have been deployed, salvaged, or activated.
-#   X2  SIGKILL of the whole process group once the transcript shows
-#       the deploy marker: deploy-version's local rsyncs + mkdocs build
-#       give the kill a multi-second window (MANIFEST.sha256 is written
-#       last).  Expected remains: a PARTIAL versions/<target> dir, the
+#   X2  SIGKILL of the whole process group once the target
+#       versions/<target> dir exists — deploy-version's FIRST deploy
+#       action (its mkdir), so the kill lands inside the local rsyncs +
+#       mkdocs build that follow (MANIFEST.sha256 is written last).
+#       Expected remains: a PARTIAL versions/<target> dir, the
 #       salvage archive from the killed run (salvage precedes deploy),
 #       the current symlink untouched, PATH wiring intact.  The
 #       SIGKILLed staging dir cannot be trap-cleaned — recorded as
@@ -194,14 +195,18 @@ EOF
 set -u
 ${env_exports}log=/root/itf-j12-kill2-upgrade.log
 feed=/root/itf-j12-answers.txt
+vd="$vb/versions/$target_version"
 cd /root/ZFSutilities
 setsid ./bin/upgrade-zfsutilities < "\$feed" > "\$log" 2>&1 &
 pid=\$!
-# The upgrade prints the deploy marker immediately before invoking
-# deploy-version; the local rsyncs + mkdocs build inside give the kill
-# a multi-second window (MANIFEST.sha256 is written last).
+# deploy-version's FIRST deploy action is the version-dir mkdir; the
+# rsyncs + mkdocs build after it give the kill a multi-second window
+# (MANIFEST.sha256 is written last).  Waiting for the DIR — not the
+# transcript's deploy marker, which the upgrade prints BEFORE
+# deploy-version starts, where the kill races deploy-version's startup
+# and can land before the mkdir — makes the partial dir deterministic.
 for _ in \$(seq 1 900); do
-    grep -q 'via deploy-version' "\$log" 2>/dev/null && break
+    [[ -d "\$vd" ]] && break
     kill -0 "\$pid" 2>/dev/null || break
     sleep 0.2
 done
@@ -210,7 +215,6 @@ pkill -9 -f 'bin/deploy-version' 2>/dev/null
 wait "\$pid"
 echo "upgrade-rc: \$?"
 echo "current: \$(basename "\$(readlink $vb/current)")"
-vd="$vb/versions/$target_version"
 if [[ -d "\$vd" ]]; then
     echo "new-version-dir: present"
     if [[ -s "\$vd/MANIFEST.sha256" ]]; then
@@ -242,8 +246,8 @@ EOF
     else
         itf_step fail "SIGKILL lands mid-deploy" \
             "rc=${k2_rc:-?} — see guest-kill2.log / guest-kill2-upgrade.log" \
-            "(a lost race would show rc=0: the deploy finished inside one" \
-            "0.2 s poll interval — re-run the journey)"
+            "(a lost race would show rc=0: the deploy finished before the" \
+            "version dir was seen — re-run the journey)"
         return 1
     fi
 

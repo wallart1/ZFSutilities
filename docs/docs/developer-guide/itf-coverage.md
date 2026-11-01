@@ -13,7 +13,7 @@ speculative coverage). The journeys themselves are described in
 | Installer failure paths (declined remediation, dead apt) | j08, j09 | — |
 | Uninstall / reinstall / install over leftovers | j02, j03 | *(gap: uninstall/reinstall with live LUNs)* |
 | Post-install baseline (wiring, pools, product surface) | j04 | j05 verify stages |
-| Release upgrade (scan/salvage/deploy/activate) | j10, j12 (interrupted: SIGTERM early, SIGKILL mid-deploy) | *(gap: two-node interrupted upgrade with keys pending)* |
+| Release upgrade (scan/salvage/deploy/activate) | j10, j12 (interrupted: SIGTERM early, SIGKILL mid-deploy), j19 (trust-on-first-upgrade baseline capture) | *(gap: two-node release upgrade — remote scan/salvage over SSH; interrupted variant with keys pending)* |
 | GUI payload e2e matrix (offsite chain, backup/prune/rsync orchestrators) | j11 (+dev-container/dev-host contexts) | — |
 | First LUN round trip (new-vm-disk → iSCSI → VM config → save) | — | j05 (composed by every j06+ lab journey) |
 | Guest-probe validator (pools/datasets/PVE fetch, honest degradation) | — | j06 |
@@ -31,6 +31,12 @@ recovery scenarios (the blind-recovery rule).
 
 ## Gap rows (future candidates — built only when a real need names them)
 
+- **Two-node release upgrade (remote-target surface)** —
+  upgrade-zfsutilities' remote half (deploy.conf groups, per-host SSH
+  control masters, remote scan/salvage/baseline, per-host
+  switch-version output) has no journey: j10/j12/j19 are single-node;
+  needs a two-product-node lab (only the storage template exists
+  today).
 - **Two-node interrupted upgrade with keys pending** — j12's
   interrupt injections against a two-node lab where the storage guest
   carries encrypted LUNs; needs a real upgrade-path report to name it.

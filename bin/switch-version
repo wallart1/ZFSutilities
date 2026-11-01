@@ -409,6 +409,93 @@ list_versions() {
 }
 
 # ------------------------------------------------------------------
+# Config-generation gate
+# ------------------------------------------------------------------
+
+# Print the CONFIG_VERSION the named release expects from its
+# config_migrations.py, or nothing when unknown (release predates the
+# config schema or ships no such file).
+_target_config_generation() {
+    local migrations="$version_base/versions/$1/python/config_migrations.py"
+    if [[ ! -f "$migrations" ]]; then
+        return 0
+    fi
+    sed -n 's/^CONFIG_VERSION *= *\([0-9][0-9]*\).*/\1/p' "$migrations" 2>/dev/null \
+        | head -n 1 || true
+}
+
+# Print the saved config's generation, or nothing (no config yet).
+_live_config_generation() {
+    local config_file="${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}"
+    if [[ ! -f "$config_file" ]]; then
+        return 0
+    fi
+    sed -n 's/.*"config_version": *\([0-9][0-9]*\).*/\1/p' "$config_file" 2>/dev/null \
+        | head -n 1 || true
+}
+
+# Guard against activating a release older than the saved config's
+# generation: pairing an older build with a newer config makes every
+# start warn while the older build may rewrite newer-shaped settings.
+# On a downgrade, restore the archived config of the target's
+# generation (load_config writes one before each forward migration);
+# refuse when no archive exists, unless ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE=1
+# archives the newer config aside and starts the target from defaults.
+# Runs before any wiring change; a refusal mutates nothing.
+gate_config_generation() {
+    local target_version="$1"
+    local config_file="${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}"
+    local archive_dir
+    archive_dir="$(dirname "$config_file")/config-archive"
+    local target_gen live_gen
+    target_gen=$(_target_config_generation "$target_version")
+    live_gen=$(_live_config_generation)
+    if [[ -z "$target_gen" || -z "$live_gen" ]]; then
+        # Unknown target generation or no saved config: nothing to guard.
+        return 0
+    fi
+    if [[ "$target_gen" -ge "$live_gen" ]]; then
+        return 0
+    fi
+
+    log_msg "WARN:   $target_version expects config generation $target_gen" \
+        "but the saved config is generation $live_gen."
+
+    local target_archive="$archive_dir/config.v$target_gen.json"
+    if [[ -f "$target_archive" ]]; then
+        # Preserve the newer config for the eventual switch back, then
+        # restore the target generation's own archived state atomically.
+        cp -f "$config_file" "$archive_dir/config.v$live_gen.json"
+        local restore_tmp
+        restore_tmp=$(mktemp "$config_file.XXXXXX")
+        cp -f "$target_archive" "$restore_tmp"
+        mv -f "$restore_tmp" "$config_file"
+        log_msg "INFO:   Archived generation-$live_gen config to" \
+            "config-archive/config.v$live_gen.json"
+        log_msg "INFO:   Restored generation-$target_gen config from" \
+            "config-archive/config.v$target_gen.json"
+        return 0
+    fi
+
+    if [[ "${ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE:-}" == "1" ]]; then
+        mkdir -p "$archive_dir"
+        cp -f "$config_file" "$archive_dir/config.v$live_gen.json"
+        rm -f "$config_file"
+        log_msg "WARN:   No archived generation-$target_gen config;" \
+            "ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE=1 set."
+        log_msg "WARN:   Archived the generation-$live_gen config aside and" \
+            "removed config.json; $target_version starts from default settings."
+        return 0
+    fi
+
+    die "Refusing to activate $target_version: no archived config for" \
+        "generation $target_gen (saved config is generation $live_gen)." \
+        "Re-activate a newer release, or set" \
+        "ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE=1 to archive the newer config" \
+        "aside and start $target_version from default settings."
+}
+
+# ------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------
 
@@ -448,6 +535,9 @@ switch_version_main() {
 
     local target="versions/$version"
     [[ -d "$version_base/$target" ]] || die "Version not found: $version"
+
+    # Guard the saved config before any wiring change.
+    gate_config_generation "$version"
 
     local current
     current=$(readlink "$version_base/current" 2>/dev/null || true)

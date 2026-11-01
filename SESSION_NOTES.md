@@ -1743,4 +1743,244 @@ F-040 draft+execute in-phase; F-034/F-037 promote to proposals.
   (notifications feature + wrap-up test additions + release files)
   performed under the user's explicit step-10 instruction.
 
+## 2026-10-31 — GLOSSARY.md created (user request)
 
+- New root-level GLOSSARY.md with the nine seed terms the user named
+  (CI listed once — their list had it twice): CI, controlled reboot,
+  dp module identity, green, GUI, mock, shape, suite, TTL. Alphabetical;
+  each entry gives the plain-language meaning plus the project-specific
+  anchors (e.g. dp module identity ← the 2026-10-31 CI TTL-flake
+  diagnostic; controlled reboot ← the boot-incident exercise, oracle =
+  the user's "Corrected exercise sequence" file).
+- STANDING INSTRUCTION (user, 2026-10-31): keep adding entries as new
+  jargon comes to light — proactively, without waiting to be told. Also
+  recorded in the glossary intro itself.
+- Entry 2 (same day, user-fed): "config version" — decodes the GUI-start
+  WARN "Config version 31 is newer than software expects (30)". Instance
+  diagnosed read-only on the dev host: config migrated to generation 31
+  by 0.136.0-era software (deployed current + all three lane trees at
+  CONFIG_VERSION 31), then the switch-version rollback to 0.134.0
+  (generation 30) read it — user's rollback theory confirmed. Benign:
+  v31's migration only drops the dead do_part1/do_part2 restore keys;
+  unknown keys ride along; warning self-clears on newer software.
+- Queue mechanism added by the user 2026-10-31: an "Items to add:" hand
+  list at the file head. Standing rule — every glossary edit processes
+  the queue: define each listed term, then remove it from the list
+  (header kept). First queued term "full unit gate" defined same turn.
+- Docs-integrity suite green after the addition (a root .md is outside
+  its docs/ walk; run was confirmation only). No code changed; not
+  committed.
+
+## 2026-10-31 — Config-generation downgrade safety (user: "I need you to fix it")
+
+- Trigger: the GUI-start WARN "Config version 31 is newer than software
+  expects (30)" after the switch-version rollback to 0.134.0. Root cause
+  is structural: switch-version had zero config-generation awareness, so
+  any rollback could pair a newer config with older software forever,
+  and the warn branch neither protected the newer config nor named a
+  remedy.
+- python/config_core.py: new _archive_config() writes the exact loaded
+  dict to <state>/config-archive/config.v<N>.json — on every forward
+  migration (pre-migration state) and on the newer-than-build warn
+  branch (pristine state, before the older build can rewrite it). WARN
+  message rewritten to name cause + remedy. Archiving failures log WARN
+  and never block a load.
+- bin/switch-version: gate_config_generation() runs before any wiring
+  change. Downgrade (target CONFIG_VERSION < live config_version) with
+  an archive of the target generation: back up the newer config to the
+  archive, atomically restore the target's. No archive: FATAL refusal
+  (mutates nothing); ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE=1 archives the
+  newer config aside and removes config.json (older release starts from
+  defaults). Unknown target generation (pre-schema releases) or no
+  saved config: gate skips. Target gen helper bug found via bash -x:
+  missing versions/ path segment (first red run silently no-opped).
+- Tests: test_config_core +4 (archive-on-migrate, archive-on-warn +
+  remedy message, no-archive-on-match, freshest-wins); test-switch-version
+  +5 (restore, refuse-and-mutate-nothing, override, upgrade-untouched,
+  skip-when-unknown/no-config). Harness: _make_fake_version optional 4th
+  arg writes python/config_migrations.py; _setup_switch_env redirects
+  ZFSUTILITIES_CONFIG_PATH (was missing — tests would have touched the
+  host's real config). || rc=$? idiom on all new main calls (a die-path
+  rc=1 previously killed the suite shell).
+- Red-proof: python exact (3 archive tests fail with the archiver
+  disabled); bash — disabling the gate fails test 18 with explicit
+  reasons and the suite goes red. Known loose end, disclosed: with the
+  gate artificially disabled the suite shell dies at the first test_fail
+  of a NEW gate test (set -e leak through that path not root-caused; an
+  artificial failure of a pre-existing test runs the full suite cleanly,
+  so it is specific to the disabled-gate flow and never ships).
+- Docs: messages rows (config_core WARN reworded + Could-not-archive +
+  4 switch-version gate rows), index.md path-layout config-archive/,
+  commands.md switch-version gate prose + globals + data-structure rows,
+  GLOSSARY config-version entry updated. ruff/shellcheck clean.
+- Not committed. VERSION/changelog untouched per Hard Rules.
+
+## 2026-10-31 — zfsshowbigstuff oldest-snapshots section (user request)
+
+- New section between the recordsize block and the sort loop: the
+  `count` (default 5) oldest snapshots under the target, recursive,
+  oldest first, columns name/creation/used (user chose the used column).
+  Command spelled `-r -t snapshot -s creation` — split flags because the
+  shared zfs mock's parser only recognizes the split form (same real-zfs
+  semantics). Placement BEFORE the loop is load-bearing: the mock's
+  sequence marker is last-call-wins, so an after-the-loop section would
+  overwrite the -S/-s marker the existing sequence tests assert.
+- Usage line corrected (count was documented as smallest-only; it applies
+  to every section).
+- Tests +3 (five-oldest default w/ 7-snap fixture proving newest-two
+  excluded, count honored, section-before-sort-sections). Red-proof:
+  disabling the header → exactly 3 failures (displayed PASS after a
+  failed assert is the known assert-chain verdict flip; counts are
+  truth). shellcheck clean; suite green.
+- Docs: commands.md section + internal flow, messages row
+  `INFO: Oldest ... snapshots`. GLOSSARY queue processed: TCG (QEMU
+  Tiny Code Generator — the lab's no-KVM boot mode) and drift added.
+- Not committed. VERSION/changelog untouched per Hard Rules.
+
+## 2026-10-31 — All treeviews natural-until-20 (user request, approved plan)
+
+- `gui_helpers.capped_treeview_scroll` default flipped to
+  `fixed_rows=False`; every treeview (28 sites: all nine tab pages,
+  dialogs/wizards, EditableListView, pool watch) now sizes to its rows
+  up to the 20-row cap and scrolls inside beyond. Dashboard Tasks'
+  deliberate ten-row fixed window superseded (user confirmed uniform
+  rule). Page tables pack non-expanding; dialogs/pool-watch keep expand
+  (dialog default follows natural, user resize still fills). Pools VPaned
+  children keep expand — divider governs — plus a new first-map divider
+  default at the top pane's natural height (Xvfb probe: GTK's unset
+  default hands pane 1 half the window, divider 400 vs natural 124;
+  saved bind_paned restore wins over the default).
+- Page-viewport MINIMUM-policy crush cure applied to logs, schedule,
+  offsite, checkagainst, disks, retention (dashboard/memory had it);
+  Xvfb probe: at a 240px window MINIMUM crushes both tables to 92px,
+  NATURAL keeps 100/464 and the page scrollbar engages.
+- Test-order gotcha (structural fix): test_dashboard_page imports
+  gui_helpers/logs_page under REAL gi; in a shared pytest worker the
+  mock-based suites then bind the real capped_treeview_scroll and die on
+  real-SW.add(mock view). Fixed by evicting the preloaded bindings
+  before the suite's own mock import — and the eviction list must
+  include the PAGE module too, not just gui_helpers: the first full-gate
+  run failed 3 SetButtonMarkup tests because checkagainst_page was
+  preloaded by an earlier suite bound to a DIFFERENT gui_helpers, so
+  patching this suite's fresh gui_helpers diverged from what the page
+  called (datasets/logs/pool_watch hardened the same way). Lesson:
+  log_index must NOT be evicted — temp_config_dir patches it through
+  test_support's own module reference, so a fresh copy escapes the
+  redirect (PermissionError into /var/log). Module-level
+  mock_gtk(fresh=True) is the WRONG tool here: string-target @patch
+  resolves sys.modules after restore and diverges from the local
+  binding. The 2026-10-30 PREEXISTING entry (restore→checkagainst
+  ordering flake) was this same class — fixed here, entry retired.
+- alignment_realized_check.py assert_twenty_rows updated to the natural
+  convention (window hugs rows below the cap, 19.4–21.6 visible above);
+  the realized suite re-verified green under its private Xvfb.
+- Xvfb probes: natural==cap exactly at ≥20 rows (464px @ row 21), empty
+  floor 71px, vscroll beyond cap, divider default + restore precedence,
+  viewport cure. Probe laws reconfirmed: preferred-height needs
+  parenting; a bare window stretches its only child (max_content bounds
+  the request, not the allocation).
+- Docs: gtk-gui.md Dashboard/Performance/Alignment table passages,
+  testing.md three suite rows, GLOSSARY capped-table-window entry.
+- Not committed. VERSION/changelog untouched per Hard Rules.
+
+
+
+## 2026-11-01 — upgrade-zfsutilities ITF coverage (user prompt)
+
+- Prompt: "`upgrade-zfsutilities`: Ensure it's tested in the ITF."
+- Investigation: j10/j12 already cover the single-node upgrade path but
+  had never been run from THIS lane (last documented j10 green was
+  2026-10-24, 0.132.0-era tree); the F-025 trust-on-first-upgrade
+  baseline capture (0.132.0) is structurally unreachable in both —
+  the shared staging always provisions a pristine scan source; the
+  DEL scan classification was never injected by any journey.
+- User decision: two-node upgrade journey NOT built this cycle (ITF
+  contended by the pub lane) — recorded as a gap row in
+  developer-guide/itf-coverage.md instead.
+- common.sh: itf_journey_stage_upgrade_env gained
+  ITF_UPGRADE_BASELINE=none (skip pristine provisioning entirely;
+  j10/j12 default behavior unchanged).
+- New journey j19-baseline-capture: upgrade 1 on the untagged 0.118.0
+  tree must capture a baseline manifest additively (pre-capture mods
+  absorbed, not flagged, nothing salvaged); upgrade 2 must scan
+  against the CAPTURED baseline (MOD + ADD + DEL — first journey
+  exercise of the removed classification), salvage with local
+  content, degrade diffing honestly; then switch-version + wiring
+  verify.
+- j10 fresh run GREEN (run-20261101-103911): all stages pass on the
+  0.136.0 dev tree — including switch-version activation, which
+  exercises the user's uncommitted bin/switch-version edits (the dev
+  tarball packs the working tree).
+- j12 first fresh run FAILED at X2 — journey-side race, not product:
+  the wrapper SIGKILLed ≤0.2 s after the transcript's deploy marker,
+  which the upgrade prints BEFORE deploy-version execs, so the kill
+  landed in deploy-version's startup, before the versions-dir mkdir
+  (deploy-version itself unchanged since before j12 existed; the
+  origin green was polling luck). Fix: the X2 trigger now waits for
+  versions/<target> to exist (deploy's first action) — the partial
+  dir becomes deterministic. --rerun GREEN.
+- j19 first run failed its own M2 guard loudly: README.md is NOT in a
+  deployed tree (deploy-version copies bin/lib/python/docs/share/
+  VERSION only — no repo-root files). DEL anchor switched to
+  docs/docs/user-guide/gtk-gui.md (verified present at the template
+  rev 200577d). --rerun GREEN (run-20261101-111606).
+- Final: j10 GREEN (run-20261101-103911), j12 GREEN
+  (run-20261101-110536), j19 GREEN (run-20261101-111606) — all on the
+  0.136.0 dev tree; upgrade-zfsutilities's single-node surface is now
+  fully journey-covered including the F-025 capture path and the DEL
+  classification. Two-node remote-target surface recorded as a gap row
+  in developer-guide/itf-coverage.md per user decision.
+- Full unit gate green on the final tree (bash + python legs, user
+  mode; sudo e2e leg not run — no payload/product changes in scope).
+  Journey-list test synced to j01–j19. Not committed; VERSION/
+  changelog untouched per Hard Rules.
+
+## 2026-11-01 — Development-cycle wrap-up (pub2 lane, frozen)
+
+- Step 1/4 (PREEXISTING resolution) skipped by the step's own
+  precondition: pub-main-only, this is the pub2 lane. Lane file had 0
+  open entries at step 1 (sole entry fixed by the treeview change's
+  test-order hardening).
+- Step 2 standards (coding-policies.md): ruff check clean; ruff format
+  fixed one blank-line nit in pools_page.py (271 files clean after);
+  documented shellcheck file set exit 0; column sweep — wrapped the new
+  134-char test_fail line in test-zfsshowbigstuff byte-identically via
+  reason+= ; 4 pre-existing >100 common.sh payload lines left (the
+  unwrappable-bytes class); by-eye review of every new hunk (gate,
+  archiver, oldest-section, knob, j12 fix, j19, page diffs) clean.
+  PREEXISTING +2: test_lib's test_fail reads only $1 while several
+  suites pass multi-arg reasons (detail silently dropped on failure —
+  diagnostic-only); three pre-existing >100-col python lines.
+- Step 3 tests: added the missing pools-page first-map divider-default
+  test (new product logic had no unit coverage; suite 51/51). Rerun
+  green: test-zfsshowbigstuff (after the line wrap), test_pools_page,
+  test-switch-version 22/22, test-itf-driver (j19 registered). No
+  obsolete tests (old fixed-height asserts all updated by the cycle;
+  migrate-dialog min-120 site is a TextView, correctly outside the
+  sweep); ITF_UPGRADE_BASELINE knob is journey-tier covered (j19).
+- Step 5 docs: all 7 changed docs surfaces verified against code
+  (switch-version gate prose + env/data rows, zfsshowbigstuff section,
+  messages rows incl. reworded config WARN, natural-table passages,
+  config-archive/ path row, j19 + gap rows); test_docs_integrity 23/23;
+  site rebuilt rc=0 (standing MkDocs-1.x banner only).
+- Step 6 full run without soaks: 108 suites, all passed, 0 failed;
+  1 bash skip = the soak suite (runner design in no-soak mode), 18
+  python skips = standing root-tier e2e preflight. Over-budget list is
+  the routine runtime advisory, no action.
+- Step 7: tree FROZEN here — 52 modified files (+1,269/−230) + 2
+  untracked (GLOSSARY.md 240 lines, j19 journey 378). No commit, no
+  version bump, no changelog (user cue, per Hard Rules).
+
+## 2026-11-01 — Release 0.137.0 prep (pub2 lane, user-directed steps 8-10)
+
+- Step 8: VERSION → 0.137.0; changelog 0.137.0 section written
+  (Added: config-generation downgrade safety, oldest-snapshots section,
+  j19-baseline-capture journey, GLOSSARY.md; Fixed: cross-suite
+  test-order flake; Changed: all tables natural-until-20; Tests;
+  Documentation). docs-integrity 23/23; site rebuilt rc=0. Final gate
+  `tests/run-tests --with-soak`: 108 suites, all passed, 0 failed, 0
+  bash skips (soak suite ran), 18 standing python e2e preflight skips.
+  No fixes needed.
+- Step 9: no further code changes.
+- Step 10: whole cycle staged + committed as the 0.137.0 release
+  commit under the user's explicit instruction.

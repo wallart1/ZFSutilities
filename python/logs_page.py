@@ -40,6 +40,7 @@ from gui_helpers import (
     LogPopoutWindow,
     TextViewSearch,
     bold_label,
+    capped_treeview_scroll,
     configure_treeview_column,
     restore_log_font_scale,
     set_monospace_font,
@@ -423,11 +424,10 @@ def create_logs_page(app):
     )
     app._ui_state.bind_treeview(app.logs_view, "logs_view")
 
-    list_scroll = Gtk.ScrolledWindow()
-    list_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    list_scroll.set_min_content_height(200)
-    list_scroll.add(app.logs_view)
-    outer.pack_start(list_scroll, True, True, 0)
+    list_scroll = capped_treeview_scroll(app.logs_view)
+    # Non-expanding: the list is only as tall as its rows (up to the
+    # 20-row cap); the Log Viewer below absorbs the leftover page space.
+    outer.pack_start(list_scroll, False, False, 0)
 
     # Miscellaneous logs — collapsed section between the main list and the
     # viewer.  Holds the high-volume non-runner logs (CLI script sessions,
@@ -450,11 +450,8 @@ def create_logs_page(app):
     )
     app._ui_state.bind_treeview(app.logs_misc_view, "logs_misc_view")
 
-    misc_scroll = Gtk.ScrolledWindow()
-    misc_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    misc_scroll.set_min_content_height(150)
-    misc_scroll.add(app.logs_misc_view)
-    misc_box.pack_start(misc_scroll, True, True, 0)
+    misc_scroll = capped_treeview_scroll(app.logs_misc_view)
+    misc_box.pack_start(misc_scroll, False, False, 0)
     app.logs_misc_expander.add(misc_box)
     outer.pack_start(app.logs_misc_expander, False, False, 0)
 
@@ -608,6 +605,14 @@ def create_logs_page(app):
     scrolled = Gtk.ScrolledWindow()
     scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
     scrolled.add(outer)
+    # The page viewport must size its content by NATURAL height: the two
+    # log lists sit in their own capped scrolled windows whose minimum
+    # heights are tiny, and the default MINIMUM policy would clamp the
+    # page box to the window height and crush both table windows toward
+    # that minimum (dashboard-page idiom).
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
     return scrolled
 
 

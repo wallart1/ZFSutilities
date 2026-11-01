@@ -37,6 +37,7 @@ from feature_config import (
 from gi.repository import Gtk, Pango
 from gui_helpers import (
     _ensure_treeview_scrolling,
+    capped_treeview_scroll,
     configure_treeview_column,
     create_dialog,
     show_error_dialog,
@@ -457,10 +458,9 @@ def show_manage_profiles_dialog(app):
         configure_treeview_column(col, width=width)
         view.append_column(col)
 
-    scrolled = Gtk.ScrolledWindow()
-    scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    scrolled.set_min_content_height(250)
-    scrolled.add(view)
+    # Dialog table: expand stays on so an enlarged dialog grows the list;
+    # the default height follows the natural row count.
+    scrolled = capped_treeview_scroll(view)
     content.pack_start(scrolled, True, True, 0)
 
     btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -901,10 +901,7 @@ def show_apply_profile_dialog(app, datasets, pool_has_special=False):
     configure_treeview_column(desc_col, width=350)
     picker_view.append_column(desc_col)
 
-    picker_sw = Gtk.ScrolledWindow()
-    picker_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    picker_sw.set_min_content_height(240)
-    picker_sw.add(picker_view)
+    picker_sw = capped_treeview_scroll(picker_view)
     # Expand so resizing the dialog vertically grows the profile list (and
     # the preview below it) instead of only the preview.
     content.pack_start(picker_sw, True, True, 0)
@@ -1260,10 +1257,7 @@ def show_recall_profile_dialog(app, tab_type, on_select):
     configure_treeview_column(c1, width=150)
     view.append_column(c1)
 
-    scroll = Gtk.ScrolledWindow()
-    scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-    scroll.set_min_content_height(150)
-    scroll.add(view)
+    scroll = capped_treeview_scroll(view)
     _ensure_treeview_scrolling(view)
     content.add(scroll)
 

@@ -40,6 +40,16 @@ if PYTHON_SRC not in sys.path:
 
 from test_support import mock_gtk, temp_config_dir
 
+# dashboard_page imports logs_page under the real gi, and
+# test_dashboard_page imports gui_helpers the same way; when one of
+# those suites ran first in this process, the cached real bindings would
+# silently replace this suite's mocks (and the real capped_treeview_
+# scroll cannot take a mock view). Evict them so logs_page and
+# gui_helpers share this suite's mock GTK. log_index is deliberately
+# left alone: test_support's temp_config_dir patches it through its own
+# module reference, so a fresh copy here would escape that patching.
+for _module in ("gui_helpers", "logs_page"):
+    sys.modules.pop(_module, None)
 with mock_gtk():
     import log_index as li
     import logs_page as lp
@@ -1384,6 +1394,31 @@ class TestCreateLogsPage(unittest.TestCase):
 
         mock_prune.assert_called_once_with(7)
         self.assertEqual(mock_sync.call_count, 2)
+
+    @patch("logs_page._sync_log_list")
+    @patch("logs_page._update_success_rate_label")
+    @patch("logs_page.prune_old_logs")
+    def test_page_viewport_sizes_content_by_natural_height(self, _prune, _upd, _sync):
+        """The page viewport uses NATURAL height so the two log lists'
+        capped windows are never crushed at short window heights."""
+        app = MagicMock()
+        app.config = {"log_retention_days": 7}
+        app._ui_state.bind_treeview = MagicMock()
+        app._ui_state.bind_popout = MagicMock()
+        # Isolate from any earlier test's one-shot Gtk mock side effects
+        # (e.g. the viewer-frame sentinel list) and from the shared
+        # ScrolledWindow return-value's accumulated call history; the
+        # default MagicMock behavior is all this test needs.
+        lp.Gtk.Frame.side_effect = None
+        page_sw = lp.Gtk.ScrolledWindow.return_value
+        page_sw.get_child.return_value.set_vscroll_policy.reset_mock()
+
+        page = lp.create_logs_page(app)
+
+        self.assertIs(page, page_sw)
+        page_sw.get_child.return_value.set_vscroll_policy.assert_called_once_with(
+            lp.Gtk.ScrollablePolicy.NATURAL
+        )
 
     @patch("logs_page._sync_log_list")
     @patch("logs_page._update_success_rate_label")

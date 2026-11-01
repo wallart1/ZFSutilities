@@ -640,6 +640,16 @@ live-reload site is served. MkDocs is required.
 Activates a deployed version by updating production wiring: symlinks, `PATH`,
 sudoers, `/root/bashinit`, library links, and desktop shortcuts.
 
+Before any wiring changes, a config-generation gate compares the target
+release's `CONFIG_VERSION` against the saved config's generation. On a
+downgrade it restores the archived config of the target generation
+(see `config-archive/` beside `config.json`, written by the GUI's config
+loader before each forward migration), so a rollback never pairs an older
+build with a newer config. With no archived config of the target
+generation the switch refuses; `ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE=1`
+archives the newer config aside and starts the older release from
+default settings instead.
+
 ```bash
 sudo switch-version <version>|previous|--list|--uninstall
 ```
@@ -666,6 +676,8 @@ sudo switch-version <version>|previous|--list|--uninstall
 | `ZFSUTILITIES_ISCSI_LIB_LINK`    | Override `/usr/local/lib/iscsi-lib.sh` (used by tests)    |
 | `ZFSUTILITIES_ROOTCHECK_LINK`    | Override `/usr/local/lib/rootcheck` (used by tests)       |
 | `ZFSUTILITIES_LOCAL_BIN_DIR`     | Override `/usr/local/bin` (used by tests)                 |
+| `ZFSUTILITIES_CONFIG_PATH`       | Override the saved config location (used by tests)        |
+| `ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE` | Set to `1` to allow a downgrade with no archived config: the newer config is archived aside and the older release starts from defaults |
 
 **Called modules:**
 
@@ -687,6 +699,7 @@ sudo switch-version <version>|previous|--list|--uninstall
 | `/usr/local/lib/two-node-lib.sh`       | Compatibility symlink to the node library        |
 | `/usr/local/lib/iscsi-lib.sh`          | Symlink to the active version's iSCSI library    |
 | `/usr/local/lib/rootcheck`             | Symlink to the active version's rootcheck helper |
+| `config-archive/config.v<N>.json`      | Per-generation archived configs beside `config.json`; the downgrade gate restores these |
 
 **Internal flow:**
 
@@ -2581,6 +2594,11 @@ zfsshowbigstuff <pool-or-dataset> [largest|smallest] [count]
 Sorts by: `used`, `usedds`, `usedsnap`, `written`, `quota`, `refer`,
 `refquota`, `reservation`.
 
+Before the sort sections, an **oldest-snapshots section** lists the
+`count` oldest snapshots under the target (recursive, oldest first)
+with `name`, `creation`, and `used` — the default `count` of 5 shows
+the five oldest.
+
 **Called modules:** none.
 
 **Data structures consumed / produced:** none.
@@ -2588,9 +2606,10 @@ Sorts by: `used`, `usedds`, `usedsnap`, `written`, `quota`, `refer`,
 **Internal flow:**
 
 1. Run `zfs list` for the target pool or dataset.
-2. For each dataset, read `used`, `usedds`, `usedsnap`, `written`, `quota`,
+2. List the `count` oldest snapshots under the target, oldest first.
+3. For each dataset, read `used`, `usedds`, `usedsnap`, `written`, `quota`,
    `refer`, `refquota`, and `reservation`.
-3. Sort by each property and report the largest or smallest datasets.
+4. Sort by each property and report the largest or smallest datasets.
 
 **Return codes:**
 

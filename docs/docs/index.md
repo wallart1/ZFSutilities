@@ -20,7 +20,7 @@ ZFS Utilities stores its files in the following FHS-aligned locations:
 | Category | Directory | Contents |
 |----------|-----------|----------|
 | System / admin config | `/etc/zfsutilities/` | `node.conf`, `deploy.conf`, `iscsi-encrypted-luns.conf`, legacy `two-node.conf` |
-| Runtime state / data | `/var/lib/zfsutilities/` | `config.json`, `history.json`, `profiles/`, `scrub_state.json`, `nextsnap`, `nextsnap_offsite` |
+| Runtime state / data | `/var/lib/zfsutilities/` | `config.json`, `config-archive/`, `history.json`, `profiles/`, `scrub_state.json`, `nextsnap`, `nextsnap_offsite` |
 | Logs | `/var/log/zfsutilities/` | `sessions/`, `cron.log`, `rsync-pull.log`, etc. |
 | Transient runtime state | `/run/zfsutilities/` | `nextsnap_<caller>`, `zfsscruball.state`, `main.pid` |
 | Advisory locks | `/run/lock/zfsutilities/` | `.config.lock`, `.history.lock`, `.snapname.lock`, dataset locks, profile locks |

@@ -510,13 +510,24 @@ def _run_geometry_checks():
         return bar is not None and bar.get_visible() and bar.get_child_visible()
 
     def assert_twenty_rows(name, sw, view):
+        """The window hugs its rows up to the shared 20-row cap."""
         row_h = gh.treeview_row_height(view)
         header = row_h + 2
         height = sw.get_allocated_height()
         visible = (height - header) / row_h
-        assert 19.4 <= visible <= 21.6, (
-            f"{name}: window shows {visible:.1f} rows (alloc {height}, row {row_h})"
-        )
+        model = view.get_model()
+        rows = len(model) if model is not None else 0
+        if rows > gh.TABLE_ROW_TARGET:
+            assert 19.4 <= visible <= 21.6, (
+                f"{name}: {rows} rows but window shows {visible:.1f} (alloc {height}, row {row_h})"
+            )
+        else:
+            # Natural sizing: a short table keeps a window close to its
+            # row count, never a tall blank one; an empty table keeps the
+            # small floor (a couple of rows with the header).
+            assert -1 <= visible <= rows + 2.6, (
+                f"{name}: {rows} rows but window shows {visible:.1f} (alloc {height}, row {row_h})"
+            )
 
     def assert_honest_last_column(name, view, sw):
         columns = view.get_columns()

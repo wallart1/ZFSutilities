@@ -596,7 +596,7 @@ class TestApplyProfileDialog(unittest.TestCase):
         self.assertIn(("wrap-mode", pd.Pango.WrapMode.WORD), properties)
         self.assertIn(("wrap-width", 350), properties)
 
-    def test_apply_profile_picker_is_tall_and_expands(self):
+    def test_apply_profile_picker_sizes_to_rows_and_expands(self):
         pd = _import_profile_dialogs()
         windows = []
 
@@ -613,12 +613,13 @@ class TestApplyProfileDialog(unittest.TestCase):
                 pd, app, datasets, [pd.Gtk.ResponseType.CANCEL]
             )
 
-        picker_sws = [
-            sw
-            for sw in windows
-            if (240,) in [call.args for call in sw.set_min_content_height.call_args_list]
-        ]
+        # The picker table sits in a capped scrolled window (the only one
+        # in this dialog that propagates natural height); the raw preview
+        # text window does not.
+        picker_sws = [sw for sw in windows if sw.set_propagate_natural_height.call_args_list]
         self.assertEqual(len(picker_sws), 1)
+        picker_sws[0].set_min_content_height.assert_called_once_with(60)
+        picker_sws[0].set_max_content_height.assert_called_once()
         content = dialog.get_content_area.return_value
         pack_calls = [
             call for call in content.pack_start.call_args_list if call.args[0] is picker_sws[0]

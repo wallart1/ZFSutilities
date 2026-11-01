@@ -22,6 +22,7 @@ from feature_config import get_enclosures_config, save_enclosures_config
 from gi.repository import GLib, Gtk
 from gui_helpers import (
     bold_label,
+    capped_treeview_scroll,
     configure_treeview_column,
     create_dialog,
     setup_row_scroll,
@@ -372,11 +373,11 @@ def create_disks_page(app):
 
     app.enable_treeview_copy(app.disks_view)
 
-    disks_scrolled = Gtk.ScrolledWindow()
-    disks_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    disks_scrolled.add(app.disks_view)
+    disks_scrolled = capped_treeview_scroll(app.disks_view)
     setup_row_scroll(disks_scrolled, app.disks_view)
-    inventory_box.pack_start(disks_scrolled, True, True, 0)
+    # Non-expanding: the table is only as tall as its rows (up to the
+    # 20-row cap).
+    inventory_box.pack_start(disks_scrolled, False, False, 0)
 
     inventory_box.pack_start(Gtk.Separator(), False, False, 0)
 
@@ -420,11 +421,9 @@ def create_disks_page(app):
 
     app.enable_treeview_copy(app.enclosures_view)
 
-    enclosures_scrolled = Gtk.ScrolledWindow()
-    enclosures_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    enclosures_scrolled.add(app.enclosures_view)
+    enclosures_scrolled = capped_treeview_scroll(app.enclosures_view)
     setup_row_scroll(enclosures_scrolled, app.enclosures_view)
-    enclosures_box.pack_start(enclosures_scrolled, True, True, 0)
+    enclosures_box.pack_start(enclosures_scrolled, False, False, 0)
 
     inventory_box.pack_start(Gtk.Separator(), False, False, 0)
 
@@ -467,11 +466,9 @@ def create_disks_page(app):
 
     app.enable_treeview_copy(app.disks_topology_view)
 
-    topo_scrolled = Gtk.ScrolledWindow()
-    topo_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    topo_scrolled.add(app.disks_topology_view)
+    topo_scrolled = capped_treeview_scroll(app.disks_topology_view)
     setup_row_scroll(topo_scrolled, app.disks_topology_view)
-    inventory_box.pack_start(topo_scrolled, True, True, 0)
+    inventory_box.pack_start(topo_scrolled, False, False, 0)
 
     refresh_disks_page(app)
 
@@ -480,6 +477,12 @@ def create_disks_page(app):
     scrolled = Gtk.ScrolledWindow()
     scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
     scrolled.add(page_box)
+    # NATURAL vscroll policy: the section tables' capped windows have
+    # tiny minimums, and the default MINIMUM policy would crush them at
+    # short window heights (dashboard-page idiom).
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
     return scrolled
 
 
