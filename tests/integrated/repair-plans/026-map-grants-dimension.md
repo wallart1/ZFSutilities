@@ -1,7 +1,19 @@
 # Repair Plan 026 — pool map grants dimension (F-037)
 
-Status: PROPOSED 2026-10-30 — awaiting user approval; execution is NOT
-authorized yet (G5 adjudication: "promote to repair plan now").
+Status: **EXECUTED 2026-11-01 (user-cued "run repair plan 026").
+Migration decided at execution: dual-read with the `version` marker bumped
+to 2 — legacy name-list maps keep parsing and keep today's identity-grant
+behavior (the map's own pools-key precedent). Two in-cycle finds fixed
+with the plan: reconcile's map-refresh gate now blocks on ANY apply
+failure (a failed ACL grant previously let the refresh overwrite the
+recorded authority), and the `targetcli ... | grep -q` SIGPIPE race under
+pipefail (live-proven: it flipped S6's live target to "missing" and
+aborted the first fresh run) is fixed on every plan surface plus
+setup-iscsi-targets' `/iscsi ls` probes; the remaining call sites are
+recorded in PREEXISTING.md. Unit-verified and full-suite green; the j16
+fresh-run verification is queued behind the parallel lane's itf lab
+occupancy (orphan fence + shared VMID budget) and closes this row when
+green.**
 
 ## Finding
 

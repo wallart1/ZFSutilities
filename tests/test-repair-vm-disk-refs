@@ -116,9 +116,9 @@ targets, backstores = {}, {}
 for spec in sys.argv[2:]:
     short, lun, bs, zvol = spec.split("|")
     iqn = "iqn.2026-02.local.stewie:" + short
-    targets.setdefault(iqn, {"acls": [], "luns": {}})["luns"][lun] = bs
+    targets.setdefault(iqn, {"acls": {}, "luns": {}})["luns"][lun] = bs
     backstores[bs] = {"dev": zvol, "target": iqn, "lun": int(lun)}
-m = {"version": 1, "generated": "2026-10-24T10:00:00+00:00", "host": "stewie",
+m = {"version": 2, "generated": "2026-10-24T10:00:00+00:00", "host": "stewie",
      "iqn_prefix": "iqn.2026-02.local.stewie", "storage_ip": "192.168.100.1",
      "targets": targets, "backstores": backstores}
 with open(path, "w") as f:

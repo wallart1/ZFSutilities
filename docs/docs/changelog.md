@@ -1,5 +1,101 @@
 # Changelog
 
+## 0.137.0
+
+*Released 2026-11-01*
+
+### Added
+
+- **Storage-IP portal binding on fresh installs.** LIO portals are
+  host-level sockets: while any TPG on the host rides the default
+  `0.0.0.0:3260` wildcard, no specific `:3260` portal can be created
+  anywhere (live-verified — a per-target create-then-replace is
+  impossible). `setup-iscsi-targets` therefore binds portals in a
+  post-loop pass: on an all-fresh install (every target created this
+  run) it purges the wildcard from every TPG and binds the configured
+  storage IP on each, so the dedicated storage network is the
+  isolation boundary from the first boot; on a host with any
+  pre-existing target nothing is purged (removing a wildcard an
+  established target rides would drop live sessions) — only the
+  per-target specific add is attempted, with an honest WARN when the
+  host-wide wildcard blocks it. A failed specific bind rolls the
+  wildcard back so no TPG is left serving-less, and a TPG that cannot
+  get any portal back is a FATAL (the never-strand-a-TPG law). Portal
+  creation uses the two-argument `portals create <ip> <port>` form.
+- **State-map ACL grants dimension (map version 2).** The pool state
+  map now records, per ACL initiator, the exact `mapped_lun ->
+  tpg_lun` pairs the initiator holds — the shape a total-loss rebuild
+  needs, because a non-identity grant (the initiator sees TPG LUN 0 at
+  mapped LUN 8) dissolves to identity on every identity-based rebuild.
+  `export-iscsi-state` writes `version: 2` maps with the pairs and its
+  `--check` reports moved, missing, or unrecorded grant pairs as
+  drift. `reconcile-iscsi-state` recreates recorded pairs exactly — in
+  either TPG mode, since a demo-mode login can only self-generate
+  identity grants — and a pair already present but mapping a different
+  TPG LUN is refused (FATAL), never remapped. The ACL grant heal in
+  `iscsi-recover-encrypted-luns` and `iscsi-add-encrypted-luns`
+  recreates recorded pairs and leaves an initiator whose recorded set
+  does not include the LUN ungranted instead of blanket-granting
+  identity over the record. Maps written before version 2 carry the
+  old initiator-name list; readers accept both shapes, legacy maps
+  keep today's identity-grant behavior, and a legacy map is refreshed
+  to version 2 at its next save. A map generated on another host never
+  supplies grants. Any failed apply action now blocks the map refresh,
+  so a failed grant cannot let the refresh overwrite the recorded
+  authority.
+- **Contribution guide.** `CONTRIBUTING.md` and a README Contributing
+  section document how outside contributions are processed: issues
+  first for anything substantial, small rebased-on-`main` pull
+  requests, honest statements of what was tested, manual review of
+  every submission (nothing merges automatically), and the AGENTS.md
+  coding contract; `VERSION` and the change log stay maintainer-only.
+
+### Fixed
+
+- **`targetcli ... | grep -q` presence-probe race.** Under
+  `set -o pipefail`, a piped `grep -q` flips a FOUND object to
+  "missing" when grep exits on the match while targetcli is still
+  writing (SIGPIPE -> 141 -> pipeline failed) — live-proven by a
+  reconcile run refusing a live target whose iSCSI sessions stayed up
+  throughout. Every presence probe across the iSCSI family now
+  captures the listing once and greps the captured variable:
+  setup-iscsi-targets (target, ACL, and portal probes), reconcile,
+  iscsi-restore-luns, iscsi-recover/add-encrypted-luns, the vm-disk
+  attach/detach/remove/new/rename/move family, clone-vm, zfsclone-vm,
+  sever-vm-clone, unarchive-vm, zfsdelfs, zfs-diagnose-busy,
+  restart-iscsi-services, ensure-restored-vm-iscsi, and
+  `iscsi_grant_lun_to_acls` in iscsi-lib.
+- **Cross-file test pollution (restore -> checkagainst).** Running the
+  restore-page and checkagainst-page suites in one pytest process
+  failed checkagainst dialog assertions that pass per-file; both
+  suites' module-level GUI mock contexts are now fresh, so each file
+  binds its own mocks.
+
+### Tests
+
+- Portal unit mock rebuilt to model host-level sockets — shared
+  `ip:port` references and an ANY-bind blocking specifics — replacing
+  the per-TPG mock that let units stay green against an impossible
+  mechanism; the demo-mode guard audit tracks the captured-probe
+  shape. Grants-dimension suites across export (golden regenerated,
+  legacy no-false-drift), reconcile (pairs rebuilt on demo TPGs,
+  mismatch refused, refresh gate), and the encrypted-LUN heal paths.
+- Dashboard refresh-thread drain in the shared conftest plus per-test
+  private TTL caches and a controlled clock for the three dashboard
+  cache suites — the CI failures these fix were observed on the
+  published 0.136.0 tree, not locally reproducible. Executed repair
+  plans pruned from the registry; the findings register keeps its open
+  rows only.
+
+### Documentation
+
+- Two-node guide: portal-binding pass and the recorded-grant behavior
+  of every rebuild/heal flow; data-structures: the version-2 map schema
+  and its legacy shape; messages manual: the new portal-binding and
+  grant messages; restore guide: why backups are not reblocked to the
+  largest block size; integrated-testing: the j05/j16 journey updates;
+  README: Contributing section.
+
 ## 0.136.0
 
 *Released 2026-10-30*

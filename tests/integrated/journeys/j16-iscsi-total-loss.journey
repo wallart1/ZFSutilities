@@ -26,9 +26,11 @@
 #       attempt honestly refuses (rc 1, records preserved), then
 #       setup-iscsi-targets rebuilds the targets and OFFERS the reconcile
 #       (declined for a clean direct run), and reconcile rebuilds every
-#       LUN+ACL from the pool map.  Authority gap recorded live: the map
-#       carries ACL initiator names but not grant indexes, so the
-#       non-identity grant returns only through the saveconfig path.
+#       LUN+ACL from the pool map.  The map's grants dimension is the
+#       surviving authority: setup's own save overwrites the saveconfig
+#       records exactly when they are needed, but the map records each
+#       initiator's grant pairs, so the map-driven rebuild recreates the
+#       non-identity grant exactly (F-037 healed).
 #   S8  saveconfig.json truncated (the interrupted-save shape): the unit
 #       restart restores from saveconfig-boot.json unaffected, the
 #       pre-start backup preserves the corrupt bytes as evidence,
@@ -570,10 +572,12 @@ j16_iscsi_total_loss_main() {
             grep -q '${J16_DUMMY_ACL}' /etc/rtslib-fb-target/saveconfig.json
             grep -q '\"index\": 8' /etc/rtslib-fb-target/saveconfig.json
             bash -lc 'export-iscsi-state --print-map' | grep -q '${J16_DUMMY_ACL}'
+            bash -lc 'export-iscsi-state --print-map' | grep -q '\"8\": 0'
             echo records-ok
         " > "$log" 2>&1 && grep -q records-ok "$log"; then
         itf_step pass "records carry the ACL grants [s7a]" \
-            "saveconfig + pool map record both initiators; grant index 8 saved"
+            "saveconfig + pool map record both initiators; the map's grants" \
+            "dimension records the 8 -> 0 pair"
     else
         itf_step fail "records carry the ACL grants [s7a]" "see s7a-records.log"
         itf_artifact "s7a-records" "$log"
@@ -695,8 +699,8 @@ j16_iscsi_total_loss_main() {
     # S7b — the deeper wipe (targets too): the honest operator arc.
     #       iscsi-restore-luns first (honest refusal), then
     #       setup-iscsi-targets + the declined offer, then reconcile.
-    #       Live-recorded: the map carries ACL names but not grant
-    #       indexes — the non-identity grant returns only via S7a's path.
+    #       The map's grants dimension is the surviving authority: the
+    #       rebuild recreates the staged non-identity grant exactly.
     # ==================================================================
 
     # Preconditions learned live: deleting a target while the compute
@@ -799,17 +803,20 @@ j16_iscsi_total_loss_main() {
         > "$log" 2>&1
     rc=$?
     itf_artifact "s7b-setup" "$log"
-    # The fresh targets ride rtslib's default 0.0.0.0:3260 wildcard
-    # portal — the specific-portal add fails against it (F-024's
-    # mechanic, live in setup's own flow; WARN recorded, FINDING row),
-    # so the assert is on target creation, never on "Portal added".
+    # F-034 fixed: the fresh targets end storage-IP-specific — the
+    # create-then-replace portal recipe binds each specific portal and
+    # drops rtslib's default wildcard (the re-login below then works
+    # end to end through the specific portal alone).
     if [[ $rc -eq 0 ]] \
             && [[ $(grep -c "✓ Target created" "$log" || true) -ge 3 ]] \
+            && [[ $(grep -c "bound on .* (default wildcard removed)" "$log" || true) -ge 3 ]] \
+            && ! grep -q "Could not add portal" "$log" \
             && grep -q "Post-restore signature detected" "$log" \
             && grep -q "Reconcile not run" "$log" \
             && grep -q "✓ iSCSI configuration saved" "$log"; then
         itf_step pass "setup-iscsi-targets rebuilds + offers reconcile [s7b]" \
-            "3 targets + portals; offer declined (see s7b-setup.log)"
+            "3 targets, each storage-IP-bound (wildcard removed); offer" \
+            "declined (see s7b-setup.log)"
     else
         itf_step fail "setup-iscsi-targets rebuilds + offers reconcile [s7b]" \
             "rc=$rc — see s7b-setup.log"
@@ -818,7 +825,8 @@ j16_iscsi_total_loss_main() {
 
     # The authority observation: setup's own save replaced the saveconfig
     # records with the live tree (targets + restored backstores, no
-    # mappings/ACLs) — the pool map is the only surviving authority.
+    # mappings/ACLs) — the pool map, grants dimension included, is the
+    # only surviving authority (F-037's premise, now survivable).
     log="$ITF_RUN_DIR/s7b-authority.log"
     # shellcheck disable=SC2029  # expansions run on the storage guest
     if itf_guest_exec "$s_ip" "
@@ -829,22 +837,29 @@ j16_iscsi_total_loss_main() {
             if grep -q '${J16_DUMMY_ACL}' /etc/rtslib-fb-target/saveconfig.json; then
                 exit 1
             fi
+            if ! bash -lc 'export-iscsi-state --print-map' \
+                    | grep -q '\"8\": 0'; then
+                echo 'pool map lost the recorded grant pair'
+                exit 1
+            fi
             echo 'saveconfig records replaced by the live tree'
         " > "$log" 2>&1 && grep -q "replaced by the live tree" "$log"; then
-        itf_step pass "authority gap recorded [s7b]" \
-            "setup's save overwrote the LUN/ACL records; the pool map is the" \
-            "only recovery authority left (FINDING row)"
+        itf_step pass "surviving authority recorded [s7b]" \
+            "setup's save overwrote the LUN/ACL records; the pool map —" \
+            "grants dimension included — is the only recovery authority left"
     else
-        itf_step info "authority gap recorded [s7b]" \
-            "saveconfig still carries grant records — see s7b-authority.log" \
-            "(shape differs from the expected overwrite; recorded)"
+        itf_step info "surviving authority recorded [s7b]" \
+            "shape differs from the expected overwrite — see s7b-authority.log" \
+            "(recorded)"
     fi
     itf_artifact "s7b-authority" "$log"
 
     # RECOVER: reconcile from the pool map.  The backstores already
     # exist (restore-luns-first created them target-independently), so
     # reconcile's work here is the MAPPINGS; "Created backstore" lines
-    # belong to S6's from-nothing rebuild.
+    # belong to S6's from-nothing rebuild.  The map's grant-bearing ACL
+    # records rebuild explicitly even on the demo-mode fresh TPGs, at
+    # the recorded pairs — the dummy's non-identity 8 -> 0 included.
     rfeed="$ITF_RUN_DIR/s7b-reconcile-answers.txt"
     printf 'y\n' > "$rfeed"
     log="$ITF_RUN_DIR/s7b-reconcile.log"
@@ -857,43 +872,47 @@ j16_iscsi_total_loss_main() {
         grep -q "✓ Mapped $name to ${J16_POOL_A}/lun" "$log" || ok=0
     done
     if [[ $rc -eq 0 && $ok -eq 1 ]] \
-            && grep -q "demo-mode ACLs.*${init_iqn}" "$log" \
-            && grep -q "demo-mode ACLs.*${J16_DUMMY_ACL}" "$log" \
+            && grep -q "✓ Created ACL ${init_iqn}" "$log" \
+            && grep -q "✓ Created ACL ${J16_DUMMY_ACL}" "$log" \
+            && grep -q "recorded grant(s) to ACL ${init_iqn}" "$log" \
+            && grep -q "recorded grant(s) to ACL ${J16_DUMMY_ACL}" "$log" \
             && grep -q "✓ Pool LUN map refreshed" "$log"; then
-        itf_step pass "reconcile rebuilds LUNs from the map [s7b]" \
-            "every backstore/mapping recreated; the map's ACL records" \
-            "resolve to demo mode on the fresh TPGs (self-generate note);" \
-            "map refreshed (rescan WARNs honestly — initiator logged out)"
+        itf_step pass "reconcile rebuilds LUNs + ACLs from the map [s7b]" \
+            "every backstore/mapping recreated; both ACL nodes rebuilt at" \
+            "their recorded grants — the dummy's 8 -> 0 pair included" \
+            "(demo TPGs notwithstanding); map refreshed (rescan WARNs" \
+            "honestly — initiator logged out)"
     else
-        itf_step fail "reconcile rebuilds LUNs from the map [s7b]" \
+        itf_step fail "reconcile rebuilds LUNs + ACLs from the map [s7b]" \
             "rc=$rc — see s7b-reconcile.log"
         return 1
     fi
 
-    # The grant dimension the map cannot carry: on the demo-flipped
-    # fresh TPG the map's ACL records dissolved — no explicit nodes were
-    # rebuilt, and the dummy's non-identity 8 -> 0 grant exists nowhere
-    # (it returns only through S7a's saveconfig path).
-    log="$ITF_RUN_DIR/s7b-grant-gap.log"
+    # The healed grant dimension: the dummy's non-identity grant is back
+    # through the MAP path alone (saveconfig lost it in setup's save) —
+    # the exact gap F-037 recorded before the grants dimension.
+    log="$ITF_RUN_DIR/s7b-grant-restored.log"
     # shellcheck disable=SC2029  # expansions run on the storage guest
     if itf_guest_exec "$s_ip" "
             if targetcli /iscsi/${iqn}/tpg1/acls ls 2>/dev/null \
                     | grep -q 'mapped_lun8'; then
                 echo 'mapped_lun8 present'
             else
-                echo 'mapped_lun8 absent — no explicit ACLs rebuilt; the' \\
-                    'non-identity grant lives only in the saveconfig path'
+                echo 'mapped_lun8 absent — the map-driven rebuild lost the' \\
+                    'non-identity grant'
+                exit 1
             fi
-        " > "$log" 2>&1 && grep -q "absent" "$log"; then
-        itf_step pass "non-identity grant gap recorded [s7b]" \
-            "the map's ACL dimension resolves to demo mode; neither the" \
-            "dummy's node nor its 8->0 grant returned (FINDING row)"
+        " > "$log" 2>&1 && grep -q "present" "$log"; then
+        itf_step pass "non-identity grant restored from the map [s7b]" \
+            "mapped_lun 8 -> tpg_lun 0 recreated exactly by the" \
+            "map-driven rebuild (F-037 healed)"
     else
-        itf_step info "non-identity grant gap recorded [s7b]" \
-            "mapped_lun8 present after reconcile — see s7b-grant-gap.log" \
-            "(shape differs from the expectation; recorded)"
+        itf_step fail "non-identity grant restored from the map [s7b]" \
+            "see s7b-grant-restored.log"
+        itf_artifact "s7b-grant-restored" "$log"
+        return 1
     fi
-    itf_artifact "s7b-grant-gap" "$log"
+    itf_artifact "s7b-grant-restored" "$log"
 
     itf_iscsi_check_gate "$s_ip" s7b || return 1
 

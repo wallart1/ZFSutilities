@@ -189,8 +189,12 @@ target="$4"
 
 mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)
 
-# Check if backstore exists
-if targetcli /backstores/block ls 2>/dev/null | grep -q " ${backstore_name} "; then
+# Check if backstore exists. The listing is captured and grepped as a
+# variable — a piped `grep -q` under `set -o pipefail` flips a found
+# backstore to "missing" when grep exits on the match while targetcli
+# is still writing (SIGPIPE -> 141 -> pipeline failed).
+_bs_listing=$(targetcli /backstores/block ls 2>/dev/null || true)
+if grep -q " ${backstore_name} " <<< "$_bs_listing"; then
     log_msg "INFO: BACKSTORE_EXISTS"
 else
     targetcli /backstores/block create "$backstore_name" "$zvol_dev"

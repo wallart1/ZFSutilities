@@ -64,6 +64,7 @@ EOF
     : > "$tmpdir/zpool-import"
 
     local mock_ls="$IQN1" mock_luns="" mock_portals="" mock_acls="" mock_gen=1
+    local mock_portal_create_fail=0 mock_portal_delete_fail=0
     case "$scenario" in
         healthy)
             printf 'vm-101-disk-0\n' > "$tmpdir/manifest"
@@ -97,6 +98,50 @@ EOF
             mock_ls=""
             mock_gen=0
             ;;
+        fresh-bind-fails)
+            # All-fresh install, but the specific bind is refused: the
+            # purge runs, the bind WARNs, the rollback restores the
+            # wildcard serving posture — never a portal-less TPG.
+            printf 'vm-101-disk-0\n' > "$tmpdir/manifest"
+            touch "$tmpdir/saveconfig.json" "$tmpdir/manifest"
+            : > "$tmpdir/vmrefs"
+            mock_ls=""
+            mock_gen=0
+            mock_portal_create_fail=1
+            ;;
+        fresh-purge-fails)
+            # All-fresh install, but the wildcard purge is refused: the
+            # wildcard keeps the port, the binds fail honestly, nothing
+            # is left portal-less (the wildcard never left).
+            printf 'vm-101-disk-0\n' > "$tmpdir/manifest"
+            touch "$tmpdir/saveconfig.json" "$tmpdir/manifest"
+            : > "$tmpdir/vmrefs"
+            mock_ls=""
+            mock_gen=0
+            mock_portal_delete_fail=1
+            ;;
+        existing-portal-add)
+            # Established wildcard-bound target, specific missing: the
+            # add is refused by the host-wide wildcard — honest WARN,
+            # no purge (established portals are never touched).
+            printf 'vm-101-disk-0\n' > "$tmpdir/manifest"
+            touch "$tmpdir/saveconfig.json" "$tmpdir/manifest"
+            mock_luns="  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/x) (default_tg_pt_gp)]"
+            mock_portals="0.0.0.0:3260"
+            mock_acls="  o- ${INIT1} .......... [Mapped LUNs: 1]"
+            ;;
+        mixed-fresh-add)
+            # One established wildcard-bound target + one fresh target:
+            # mixed hosts never purge — the fresh target's bind is
+            # refused by the existing wildcard, honest WARN on both.
+            printf 'declare -A POOL_TARGET+=( [secondpool]="secondtgt" )\n' \
+                >> "$tmpdir/node.conf"
+            printf 'vm-101-disk-0\n' > "$tmpdir/manifest"
+            touch "$tmpdir/saveconfig.json" "$tmpdir/manifest"
+            mock_luns="  | o- lun0  [block/vm-101-disk-0 (/dev/zvol/x) (default_tg_pt_gp)]"
+            mock_portals="0.0.0.0:3260"
+            mock_acls="  o- ${INIT1} .......... [Mapped LUNs: 1]"
+            ;;
     esac
 
     sed \
@@ -109,6 +154,32 @@ EOF
 # Mocks first: the setup copy runs its whole top level at source time.
 hostname() { echo stewie; }
 rootcheck() { true; }
+
+# Host-level portal sockets (F-034, live-verified): LIO portals are
+# host-level binds shared by TPG references. INADDR_ANY (0.0.0.0) or a
+# different IP holding the port blocks a new bind on that port; the
+# same ip:port is shared by multiple TPGs.
+declare -A MOCK_TPG_PORTALS
+MOCK_HOST_SOCKETS=""
+mock_socket_present() {
+    printf '%s\n' "$MOCK_HOST_SOCKETS" | grep -qx "$1" 2>/dev/null
+}
+mock_port_held() {
+    printf '%s\n' "$MOCK_HOST_SOCKETS" | grep -q ":$1$" 2>/dev/null
+}
+mock_bind_ok() {
+    local ip="$1" port="$2"
+    mock_socket_present "${ip}:${port}" && return 0
+    mock_port_held "$port" && return 1
+    return 0
+}
+# Seed the existing target's portals (and their host sockets).
+MOCK_TPG_PORTALS["/iscsi/${MOCK_IQN1}/tpg1"]="${MOCK_PORTALS:-}"
+while IFS= read -r _p; do
+    [[ -z "$_p" ]] && continue
+    mock_socket_present "$_p" || MOCK_HOST_SOCKETS+="${MOCK_HOST_SOCKETS:+$'\n'}$_p"
+done <<< "${MOCK_PORTALS:-}"
+
 targetcli() {
     local args="$*"
     case "$args" in
@@ -116,18 +187,80 @@ targetcli() {
             [[ -n "$MOCK_ISCSI_LS" ]] && printf '%s\n' "$MOCK_ISCSI_LS"
             ;;
         "/iscsi create "*)
-            MOCK_ISCSI_LS+=$'\n  o- '"${args##*create }"' [TPGs: 1]'
+            local _iq="${args##*create }"
+            MOCK_ISCSI_LS+=$'\n  o- '"${_iq}"' [TPGs: 1]'
+            local _tpg="/iscsi/${_iq}/tpg1"
+            # rtslib fidelity (F-034): a fresh TPG rides the default
+            # wildcard — unless the port is already held, in which case
+            # it comes up portal-less.
+            if mock_bind_ok 0.0.0.0 3260; then
+                MOCK_HOST_SOCKETS+="${MOCK_HOST_SOCKETS:+$'\n'}0.0.0.0:3260"
+                MOCK_TPG_PORTALS[$_tpg]="0.0.0.0:3260"
+            else
+                MOCK_TPG_PORTALS[$_tpg]=""
+            fi
             printf 'target-create\n' >> "$MOCK_ACTION_LOG"
             ;;
         *"/tpg1/luns ls")
             [[ -n "$MOCK_LUNS" ]] && printf '%s\n' "$MOCK_LUNS"
             ;;
         *"/tpg1/portals ls")
-            [[ -n "$MOCK_PORTALS" ]] && printf '%s\n' "$MOCK_PORTALS"
+            local _key="${args% ls}"; _key="${_key%/portals}"
+            [[ -n "${MOCK_TPG_PORTALS[$_key]:-}" ]] \
+                && printf '%s\n' "${MOCK_TPG_PORTALS[$_key]}"
             ;;
         *"/tpg1/portals create "*)
-            MOCK_PORTALS+=$'\n'"${args##*create }"
-            printf 'portal-create\n' >> "$MOCK_ACTION_LOG"
+            local _path="${args% create *}"; local _key="${_path%/portals}"
+            local _rest="${args##*create }"
+            local _ip="${_rest%% *}" _port="${_rest##* }"
+            # targetcli fidelity: the one-token "ip:port" form parses as
+            # a bare invalid IP — it can never bind. Two args is the
+            # valid form.
+            [[ "$_ip" == *:* ]] && return 1
+            if [[ "${MOCK_PORTAL_CREATE_FAIL:-0}" == 1 && "$_ip" != "0.0.0.0" ]]; then
+                return 1
+            fi
+            if mock_bind_ok "$_ip" "$_port"; then
+                mock_socket_present "${_ip}:${_port}" \
+                    || MOCK_HOST_SOCKETS+="${MOCK_HOST_SOCKETS:+$'\n'}${_ip}:${_port}"
+                MOCK_TPG_PORTALS[$_key]+="${MOCK_TPG_PORTALS[$_key]:+$'\n'}${_ip}:${_port}"
+                if [[ "$_ip" == "0.0.0.0" ]]; then
+                    printf 'portal-create-wildcard\n' >> "$MOCK_ACTION_LOG"
+                else
+                    printf 'portal-create\n' >> "$MOCK_ACTION_LOG"
+                fi
+                return 0
+            fi
+            return 1
+            ;;
+        *"/tpg1/portals delete "*)
+            local _dpath="${args% delete *}"; local _key="${_dpath%/portals}"
+            local _rest="${args##*delete }"
+            local _ip="${_rest%% *}" _port="${_rest##* }"
+            if [[ "${MOCK_PORTAL_DELETE_FAIL:-0}" == 1 && "$_ip" == "0.0.0.0" ]]; then
+                return 1
+            fi
+            local _sock="${_ip}:${_port}"
+            if printf '%s\n' "${MOCK_TPG_PORTALS[$_key]:-}" | grep -qxF "$_sock"; then
+                MOCK_TPG_PORTALS[$_key]=$(printf '%s\n' "${MOCK_TPG_PORTALS[$_key]}" \
+                    | grep -vxF "$_sock")
+                local _refs=0 _k
+                for _k in "${!MOCK_TPG_PORTALS[@]}"; do
+                    printf '%s\n' "${MOCK_TPG_PORTALS[$_k]}" | grep -qxF "$_sock" \
+                        && _refs=$((_refs + 1))
+                done
+                if (( _refs == 0 )); then
+                    MOCK_HOST_SOCKETS=$(printf '%s\n' "$MOCK_HOST_SOCKETS" \
+                        | grep -vxF "$_sock")
+                fi
+                if [[ "$_ip" == "0.0.0.0" ]]; then
+                    printf 'portal-delete-wildcard\n' >> "$MOCK_ACTION_LOG"
+                else
+                    printf 'portal-delete-specific\n' >> "$MOCK_ACTION_LOG"
+                fi
+                return 0
+            fi
+            return 1
             ;;
         *"/tpg1/acls ls")
             [[ -n "$MOCK_ACLS" ]] && printf '%s\n' "$MOCK_ACLS"
@@ -186,10 +319,13 @@ RUNNEREOF
     _run_output=$(printf '%s\n' "$answer" | env \
         SETUP_COPY="$tmpdir/setup-copy" \
         MOCK_ISCSI_LS="$mock_ls" \
+        MOCK_IQN1="$IQN1" \
         MOCK_LUNS="$mock_luns" \
         MOCK_PORTALS="$mock_portals" \
         MOCK_ACLS="$mock_acls" \
         MOCK_GEN_ACLS="$mock_gen" \
+        MOCK_PORTAL_CREATE_FAIL="$mock_portal_create_fail" \
+        MOCK_PORTAL_DELETE_FAIL="$mock_portal_delete_fail" \
         MOCK_ACTION_LOG="$_action_log" \
         ZVOLS_FIXTURE="$tmpdir/zvols" \
         ZPOOL_LIST_FIXTURE="$tmpdir/zpool-list" \
@@ -353,7 +489,7 @@ test_missing_reconcile_script_warns() {
 }
 
 test_fresh_install_creates_and_still_detects_clean() {
-    test_start "fresh install path: targets/portals created, ACL flip, clean detection"
+    test_start "fresh install path: targets created, purge-then-bind portals, ACL flip"
     run_setup_targets fresh ""
     local ok=true
     [[ "$_run_rc" -eq 0 ]] || ok=false
@@ -361,7 +497,12 @@ test_fresh_install_creates_and_still_detects_clean() {
     out_has "Portals added:     1" || ok=false
     out_has "Demo-mode ACLs enabled" || ok=false
     actions_has "target-create" || ok=false
+    # F-034 corrected recipe: the host-wide wildcard purge happens
+    # first, then the specific bind lands on the freed port.
+    actions_has "portal-delete-wildcard" || ok=false
     actions_has "portal-create" || ok=false
+    out_has "bound on threeamigos (default wildcard removed)" || ok=false
+    out_has "Could not add portal" && ok=false
     actions_has "gen-acls-flip" || ok=false
     actions_has "saveconfig" || ok=false
     # No VM refs gathered (empty fixture): detection reports clean.
@@ -370,6 +511,88 @@ test_fresh_install_creates_and_still_detects_clean() {
         test_pass
     else
         test_fail "rc=$_run_rc — fresh-install flow incomplete"
+    fi
+    setup_teardown
+}
+
+test_fresh_bind_fail_restores_wildcard() {
+    test_start "all-fresh bind refused: purge runs, WARN, wildcard restored, rc 0"
+    run_setup_targets fresh-bind-fails ""
+    local ok=true
+    [[ "$_run_rc" -eq 0 ]] || ok=false
+    out_has "Could not add portal 192.168.100.1:3260 on threeamigos" \
+        || ok=false
+    out_has "bind refused" || ok=false
+    # Rollback: the purged TPG gets its wildcard back — never portal-less.
+    out_has "Wildcard restored on threeamigos" || ok=false
+    actions_has "portal-delete-wildcard" || ok=false
+    actions_has "portal-create-wildcard" || ok=false
+    ! actions_has "portal-create" || ok=false
+    out_has "Portals added:     0" || ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_run_rc — rollback posture wrong"
+    fi
+    setup_teardown
+}
+
+test_fresh_purge_fail_keeps_wildcard() {
+    test_start "all-fresh purge refused: wildcard keeps the port, binds WARN honestly"
+    run_setup_targets fresh-purge-fails ""
+    local ok=true
+    [[ "$_run_rc" -eq 0 ]] || ok=false
+    out_has "Could not remove the default wildcard on threeamigos" \
+        || ok=false
+    out_has "bind refused" || ok=false
+    # The wildcard never left, so no restore is needed or attempted.
+    out_has "Wildcard restored" && ok=false
+    ! actions_has "portal-delete-wildcard" || ok=false
+    ! actions_has "portal-create" || ok=false
+    out_has "Portals added:     0" || ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_run_rc — purge-fail posture wrong"
+    fi
+    setup_teardown
+}
+
+test_existing_target_never_purged() {
+    test_start "established wildcard target: add refused honestly, never purged"
+    run_setup_targets existing-portal-add ""
+    local ok=true
+    [[ "$_run_rc" -eq 0 ]] || ok=false
+    out_has "Target already exists" || ok=false
+    out_has "Could not add portal 192.168.100.1:3260 on threeamigos" \
+        || ok=false
+    out_has "target keeps its current portal" || ok=false
+    ! actions_has "portal-delete-wildcard" || ok=false
+    ! actions_has "portal-create" || ok=false
+    out_has "Portals added:     0" || ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_run_rc — established portal composition touched"
+    fi
+    setup_teardown
+}
+
+test_mixed_host_never_purges() {
+    test_start "mixed host (existing wildcard + fresh target): no purge, honest WARNs"
+    run_setup_targets mixed-fresh-add ""
+    local ok=true
+    [[ "$_run_rc" -eq 0 ]] || ok=false
+    out_has "Targets created:   1" || ok=false
+    out_has "Targets existing:  1" || ok=false
+    [[ $(printf '%s\n' "$_run_output" | grep -c "Could not add portal") -eq 2 ]] \
+        || ok=false
+    ! actions_has "portal-delete-wildcard" || ok=false
+    out_has "Portals added:     0" || ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_run_rc — mixed-host purge guard failed"
     fi
     setup_teardown
 }
@@ -421,6 +644,10 @@ test_offer_accepted_runs_reconcile
 test_reconcile_failure_fails_setup
 test_missing_reconcile_script_warns
 test_fresh_install_creates_and_still_detects_clean
+test_fresh_bind_fail_restores_wildcard
+test_fresh_purge_fail_keeps_wildcard
+test_existing_target_never_purged
+test_mixed_host_never_purges
 test_identity_finding_prints_own_block
 
 test_summary

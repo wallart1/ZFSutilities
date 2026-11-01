@@ -152,7 +152,13 @@ function diagnose_dataset_busy {
     local bsname="${target##*/}"
     if is_vm_disk_basename "$bsname"; then
         if command -v targetcli >/dev/null 2>&1; then
-            if targetcli /backstores/block ls 2>/dev/null | grep -q " ${bsname} "; then
+            # Captured and grepped as a variable — a piped `grep -q`
+            # under `set -o pipefail` flips a found backstore to
+            # "missing" when grep exits on the match while targetcli is
+            # still writing (SIGPIPE -> 141 -> pipeline failed).
+            local _bs_listing
+            _bs_listing=$(targetcli /backstores/block ls 2>/dev/null || true)
+            if grep -q " ${bsname} " <<< "$_bs_listing"; then
                 local lun_info=""
                 local t
                 while IFS= read -r t; do

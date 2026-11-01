@@ -508,8 +508,11 @@ the iSCSI target service.
       keeps).
     - Create the block backstore and map it to the target at the original
       LUN index.
-    - Grant the new LUN to every existing ACL initiator on the target at
-      the same index via `iscsi_grant_lun_to_acls` (idempotent); a grant
+    - Grant the new LUN to every existing ACL initiator on the target via
+      `iscsi_grant_lun_to_acls` (idempotent): at the recorded pair when the
+      pool state map records the initiator's grant for this LUN (the map's
+      grants dimension — non-identity pairs return exactly as recorded),
+      at the same index otherwise; a grant
       failure logs a WARN and the run continues — the boot-time
       `ExecStartPost` invocation must not fail the iSCSI target unit.
 3. Save the iSCSI config via `safe-iscsi-save`, but only when a backstore was
@@ -581,8 +584,12 @@ sudo iscsi-recover-encrypted-luns
       the wrong slot when orphan targets under a different IQN prefix
       exist.
     - (Re)create the backstore and mapping, then verify the mapping took.
-    - Grant the LUN to every existing ACL initiator on the target at the
-      same index via `iscsi_grant_lun_to_acls` (idempotent). This runs on
+    - Grant the LUN to every existing ACL initiator on the target via
+      `iscsi_grant_lun_to_acls` (idempotent): at the recorded pair when the
+      pool state map records the initiator's grant for this LUN (non-identity
+      pairs return exactly as recorded), at the same index otherwise; an
+      initiator whose recorded grant set does not include the LUN is left
+      ungranted rather than blanket-granted at identity. This runs on
       both the newly-mapped and the already-present paths, so a re-run also
       heals grants for mappings that survived while their ACL grants did
       not; a grant failure is a FATAL for that entry. Demo-mode targets
@@ -2098,11 +2105,17 @@ offers to run this script directly.
    points at a different device, is mapped at a different (target, LUN), or
    the recorded slot is held by a different backstore, or the target is
    missing live. Skip (with a warning) when the zvol does not exist.
-5. Recreate explicit-mode ACL initiators recorded in the map, granting every
-   LUN the target now has at its own TPG index (identity mapping — the
+5. Recreate ACL initiators recorded in the map. When the map records the
+   initiator's grant pairs (the grants dimension), they are recreated
+   exactly — non-identity `mapped_lun → tpg_lun` mappings included, in
+   either TPG mode (a demo-mode login self-generates identity grants only,
+   so the node is rebuilt for the pair; a pair already present but mapping
+   a different TPG LUN is refused, never remapped). Without recorded pairs
+   (legacy name-list maps), explicit-mode initiators are granted every LUN
+   the target now has at its own TPG index (identity mapping — the
    demo-mode equivalent); a grant failure is a FATAL and fails the run.
-   Demo-mode TPGs are left alone — their ACL nodes self-generate on
-   initiator login.
+   Demo-mode TPGs are otherwise left alone — their pair-less ACL nodes
+   self-generate on initiator login.
 6. Show the evidence (actions, skips, refuses) and ask `y/N` before applying
    (`--yes` skips; `--dry-run` stops here after the cross-check).
 7. Apply the plan, re-collect live state, re-flag encrypted backstores, and

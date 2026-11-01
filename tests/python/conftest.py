@@ -204,23 +204,26 @@ def _drain_dashboard_refresh_threads():
     import threading
 
     dp = sys.modules.get("dashboard_page")
-    if dp is not None and _ORIG_REFRESH_WORKER is None:
-        if hasattr(dp, "_dashboard_refresh_worker"):
-            _ORIG_REFRESH_WORKER = dp._dashboard_refresh_worker
+    if dp is not None and _ORIG_REFRESH_WORKER is None \
+            and hasattr(dp, "_dashboard_refresh_worker"):
+        _ORIG_REFRESH_WORKER = dp._dashboard_refresh_worker
 
-            def _tracking_refresh_worker(*args, **kwargs):
-                thread = threading.current_thread()
-                _REFRESH_THREADS.append(thread)
-                try:
-                    return _ORIG_REFRESH_WORKER(*args, **kwargs)
-                finally:
-                    _REFRESH_THREADS.remove(thread)
+        def _tracking_refresh_worker(*args, **kwargs):
+            thread = threading.current_thread()
+            _REFRESH_THREADS.append(thread)
+            try:
+                return _ORIG_REFRESH_WORKER(*args, **kwargs)
+            finally:
+                _REFRESH_THREADS.remove(thread)
 
-            dp._dashboard_refresh_worker = _tracking_refresh_worker
+        dp._dashboard_refresh_worker = _tracking_refresh_worker
     try:
         yield
     finally:
-        for thread in list(_REFRESH_THREADS):
+        # Snapshot: each joined worker's finally removes itself from
+        # _REFRESH_THREADS from its own thread, so the drain must not
+        # iterate the live list while the joins mutate it.
+        for thread in list(_REFRESH_THREADS):  # noqa: PERF101
             thread.join(timeout=_REFRESH_JOIN_TIMEOUT)
         if dp is not None:
             _reset_dashboard_caches(dp)

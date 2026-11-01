@@ -119,8 +119,12 @@ test_setup_targets_enables_demo_mode_acls() {
         test_fail "setup-iscsi-targets never enables demo-mode ACLs"
         return
     fi
-    # The guard: never flip a TPG that already carries explicit ACLs.
-    if ! grep -qF 'acls" ls 2>/dev/null | grep -q "iqn\."' "$script"; then
+    # The guard: never flip a TPG that already carries explicit ACLs —
+    # the acls listing is captured and grepped as a variable (the
+    # SIGPIPE-safe shape: a piped `grep -q` flips present ACL nodes to
+    # "none" when grep exits on the match while targetcli is writing).
+    if ! grep -qF '_acls_ls=$(targetcli "${tpg_path}/acls" ls' "$script" \
+            || ! grep -qF 'grep -q "iqn\." <<< "$_acls_ls"' "$script"; then
         test_fail "demo-mode flip lacks the explicit-ACL guard"
         return
     fi

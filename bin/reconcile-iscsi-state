@@ -147,6 +147,9 @@ is_digits() {
 #   _map_target_of_short[short]  target short name -> full IQN
 #   _map_lun_bs["iqn|lun"] LUN slot -> backstore name
 #   _map_acls_of[iqn]      space-separated sorted initiator IQNs
+#   _map_grant_tp["iqn|init|ml"]  recorded tpg_lun of a grant pair (the
+#                          grants dimension; empty for legacy name-list
+#                          maps, whose rebuild keeps identity grants)
 #   _map_pool_guid[pool]   recorded pool GUID (pool-identity evidence only —
 #                          reconcile rebuilds LUNs, never pool identities)
 #   _map_invalid[]         names whose records disagree (refused at plan time)
@@ -162,9 +165,9 @@ parse_state_map() {
     _map_iqn_prefix=""
     _map_storage_ip=""
     unset -v _map_bs_dev _map_bs_target _map_bs_lun _map_lun_bs \
-        _map_acls_of _map_target_of_short _map_target_seen _map_pool_guid
+        _map_acls_of _map_grant_tp _map_target_of_short _map_target_seen _map_pool_guid
     declare -gA _map_bs_dev=() _map_bs_target=() _map_bs_lun=() \
-        _map_lun_bs=() _map_acls_of=() _map_target_of_short=() \
+        _map_lun_bs=() _map_acls_of=() _map_grant_tp=() _map_target_of_short=() \
         _map_target_seen=() _map_pool_guid=()
 
     local -a rec=()
@@ -210,6 +213,15 @@ parse_state_map() {
                 _map_target_seen["$aiqn"]=1
                 _map_target_of_short["${aiqn##*:}"]="$aiqn"
                 ;;
+            GRANT)
+                # Recorded ACL grant pair (the grants dimension):
+                # (initiator, mapped_lun) -> tpg_lun exactly as exported.
+                local giqn="${rec[1]:-}" ginit="${rec[2]:-}" gml="${rec[3]:-}" gtp="${rec[4]:-}"
+                [[ "$giqn" == iqn.* && "$ginit" == iqn.* ]] || continue
+                is_digits "$gml" || continue
+                is_digits "$gtp" || continue
+                _map_grant_tp["${giqn}|${ginit}|${gml}"]="$gtp"
+                ;;
             POOL)
                 # Recorded pool identity. Evidence only: the reconcile
                 # never renames, re-creates, or remaps pools.
@@ -239,8 +251,22 @@ for iqn, t in sorted(m.get("targets", {}).items()):
     luns = t.get("luns", {})
     for lun in sorted(luns, key=lambda s: int(s) if s.isdigit() else 0):
         print("LUN|%s|%s|%s" % (iqn, lun, luns[lun]))
-    for init in sorted(t.get("acls", [])):
-        print("ACL|%s|%s" % (iqn, init))
+    acls = t.get("acls")
+    if isinstance(acls, dict):
+        # Grants shape (map version 2): initiator -> {mapped_lun: tpg_lun}.
+        for init in sorted(acls):
+            print("ACL|%s|%s" % (iqn, init))
+            grants = acls[init]
+            if not isinstance(grants, dict):
+                continue
+            for ml, tp in sorted(grants.items()):
+                if ml.isdigit() and isinstance(tp, int):
+                    print("GRANT|%s|%s|%s|%d" % (iqn, init, ml, tp))
+    else:
+        # Legacy shape (map version 1): a bare initiator name list — ACL
+        # membership without grant pairs.
+        for init in sorted(acls if isinstance(acls, list) else []):
+            print("ACL|%s|%s" % (iqn, init))
 PYEOF
     )
 
@@ -280,9 +306,18 @@ collect_live_lun_state() {
     declare -gA _live_lun_owner=() _live_bs_lun=() _live_acl_of=() \
         _target_missing=() _tpg_explicit=()
 
+    # The target listing is captured ONCE and grepped as a variable: a
+    # `targetcli /iscsi ls | grep -q` pipeline under `set -o pipefail`
+    # flips a found target to "missing" when grep -q exits on the match
+    # while targetcli is still writing (SIGPIPE -> 141 -> pipeline
+    # failed) — live-proven by j16's S6 reconcile refusing a target whose
+    # sessions stayed up through the whole run.
+    local live_iscsi
+    live_iscsi=$(targetcli /iscsi ls 2>/dev/null || true)
+
     local iqn name
     for iqn in "${_map_target_iqns[@]}"; do
-        if ! targetcli /iscsi ls 2>/dev/null | grep -qF -- "$iqn"; then
+        if ! grep -qF -- "$iqn" <<< "$live_iscsi"; then
             _target_missing["$iqn"]=1
             continue
         fi
@@ -309,6 +344,18 @@ collect_live_lun_state() {
 # ------------------------------------------------------------------
 # Planning
 # ------------------------------------------------------------------
+
+# True when the map records grant pairs for (target, initiator) — the
+# grants dimension. Such records are rebuilt explicitly in either TPG mode:
+# a demo-mode login self-generates identity grants only, so a recorded
+# non-identity pair can return only through the node itself.
+map_records_grants() {
+    local key
+    for key in "${!_map_grant_tp[@]}"; do
+        [[ "$key" == "$1|$2|"* ]] && return 0
+    done
+    return 1
+}
 
 # Compare the map against live state and build the action plan plus the
 # skip/refuse reports. Outcome per map backstore is recorded in
@@ -425,17 +472,21 @@ plan_reconciliation() {
         local -a want_acls=(${_map_acls_of[$iqn]:-})
         for init in "${want_acls[@]}"; do
             [[ " ${_live_acl_of[$iqn]:-} " == *" $init "* ]] && continue
-            if [[ -n "${_tpg_explicit[$iqn]:-}" ]]; then
+            # Explicit-mode TPGs need the node rebuilt; demo-mode TPGs need
+            # it too when the map records grants for the initiator — demo
+            # logins self-generate identity grants only, so a recorded
+            # non-identity pair returns only through the rebuilt node.
+            # Name-only records on demo TPGs keep the self-generate note.
+            if [[ -n "${_tpg_explicit[$iqn]:-}" ]] || map_records_grants "$iqn" "$init"; then
                 _plan_create_acl+=("${iqn}|${init}")
             fi
-            # Demo-mode ACLs self-generate on login; noted in the evidence.
         done
     done
 }
 
 # Print the plan evidence: map identity, per-item actions, skips, refuses.
 print_plan_evidence() {
-    local name iqn init line
+    local name iqn init line line2
     log_msg "INFO: Map: ${map_file} (generated ${_map_generated:-unknown})"
     log_msg "INFO: Map records ${#_map_bs_names[@]} backstore(s) on" \
         "${#_map_target_iqns[@]} target(s); live backstores: ${#_bs_names[@]}"
@@ -455,9 +506,19 @@ print_plan_evidence() {
     fi
     if [[ ${#_plan_create_acl[@]} -gt 0 ]]; then
         log_msg "INFO: ACL bindings to create:"
+        local ngrants
         for line in "${_plan_create_acl[@]}"; do
             iqn="${line%%|*}"
-            log_msg "INFO:   ${line##*|} on ${iqn##*:}"
+            init="${line##*|}"
+            ngrants=0
+            for line2 in "${!_map_grant_tp[@]}"; do
+                [[ "$line2" == "${iqn}|${init}|"* ]] && ngrants=$((ngrants + 1))
+            done
+            if [[ "$ngrants" -gt 0 ]]; then
+                log_msg "INFO:   ${init} on ${iqn##*:} (with ${ngrants} recorded grant(s))"
+            else
+                log_msg "INFO:   ${init} on ${iqn##*:}"
+            fi
         done
     fi
     if [[ ${#_skip_lines[@]} -gt 0 ]]; then
@@ -479,7 +540,9 @@ print_plan_evidence() {
         done
     fi
     # Demo-mode ACL note: map ACLs missing live that will not be created
-    # because the TPG admits every initiator anyway.
+    # because the TPG admits every initiator anyway. Grant-bearing records
+    # are created even on demo TPGs (a demo login cannot express a
+    # recorded non-identity grant), so they are not "not created".
     for iqn in "${_map_target_iqns[@]}"; do
         [[ -n "${_tpg_explicit[$iqn]:-}" ]] && continue
         [[ -n "${_target_missing[$iqn]:-}" ]] && continue
@@ -487,7 +550,9 @@ print_plan_evidence() {
         # shellcheck disable=SC2206
         local -a want_acls=(${_map_acls_of[$iqn]:-})
         for init in "${want_acls[@]}"; do
-            [[ " ${_live_acl_of[$iqn]:-} " == *" $init "* ]] || missing_demo+="${init} "
+            [[ " ${_live_acl_of[$iqn]:-} " == *" $init "* ]] && continue
+            map_records_grants "$iqn" "$init" && continue
+            missing_demo+="${init} "
         done
         [[ -n "$missing_demo" ]] && log_msg "INFO: ${iqn##*:}: demo-mode ACLs (${missing_demo})" \
             "self-generate on initiator login — not created"
@@ -506,7 +571,7 @@ apply_changes() {
     _bs_ok=0
     _lun_ok=0
     _acl_ok=0
-    local name dev iqn lun init idx grants_ok
+    local name dev iqn lun init idx grants_ok lun_tp grant_line
     local -a sorted_indexes=()
 
     for name in "${_plan_create_bs[@]}"; do
@@ -545,16 +610,71 @@ apply_changes() {
             _acl_ok=$((_acl_ok + 1))
             log_msg "INFO:   ✓ Created ACL $init on ${iqn##*:}"
             # An explicit-mode ACL node grants nothing until it carries
-            # mapped LUNs; grant every LUN the target now has (demo-mode
-            # equivalent), at the LUN's own TPG index (identity mapping).
+            # mapped LUNs. When the map records the initiator's grant
+            # pairs (the grants dimension), the RECORDED pairs are
+            # recreated exactly — a non-identity mapping returns as it
+            # was recorded instead of dissolving to identity. Without
+            # recorded pairs (legacy maps), every LUN the target now has
+            # is granted at the LUN's own TPG index (identity mapping).
             # The argument order is targetcli's UIACL create:
             #   acls/<initiator> create <mapped_lun> <tpg_lun>
             # — the FIRST argument is the LUN number the initiator sees.
+            local -a want_pairs=()
+            local key
+            for key in "${!_map_grant_tp[@]}"; do
+                [[ "$key" == "${iqn}|${init}|"* ]] \
+                    && want_pairs+=("${key##*|}:${_map_grant_tp[$key]}")
+            done
+            if [[ ${#want_pairs[@]} -gt 0 ]]; then
+                mapfile -t sorted_indexes < <(printf '%s\n' "${want_pairs[@]}" | sort -n -t: -k1,1)
+                grants_ok=0
+                local pr
+                for pr in "${sorted_indexes[@]}"; do
+                    idx="${pr%%:*}"
+                    lun_tp="${pr##*:}"
+                    # rtslib AUTO-GRANTS every TPG LUN as an identity
+                    # MappedLUN at ACL-node creation, so an identity pair
+                    # may already be present — presence is the goal, and a
+                    # blind create collides ("already exists") on real
+                    # targetcli. A present pair must map the RECORDED TPG
+                    # LUN; one that maps differently is never remapped
+                    # (the identity law) — the item fails and a human
+                    # resolves it.
+                    grant_line=$(targetcli "/iscsi/${iqn}/tpg1/acls/${init}" ls 2>/dev/null \
+                        | grep "mapped_lun${idx}[^0-9]" || true)
+                    if [[ -n "$grant_line" ]]; then
+                        if [[ "$grant_line" != *"lun${lun_tp} block/"* ]]; then
+                            log_msg "FATAL: ${init} — mapped_lun ${idx} exists but does" \
+                                "not map TPG LUN ${lun_tp} as recorded on ${iqn##*:};" \
+                                "not remapped"
+                            _apply_failed=1
+                            continue
+                        fi
+                        ((grants_ok++)) || true
+                        continue
+                    fi
+                    if targetcli "/iscsi/${iqn}/tpg1/acls/${init}" \
+                            create "$idx" "$lun_tp" >/dev/null 2>&1; then
+                        ((grants_ok++)) || true
+                    else
+                        log_msg "FATAL: Failed to grant LUN $idx to ACL $init on ${iqn##*:}"
+                        _apply_failed=1
+                    fi
+                done
+                log_msg "INFO:   ✓ Granted $grants_ok/${#sorted_indexes[@]} recorded grant(s)" \
+                    "to ACL $init"
+                continue
+            fi
             parse_target_luns "$iqn"
             sorted_indexes=()
             if [[ ${#_used_indexes[@]} -gt 0 ]]; then
                 mapfile -t sorted_indexes < <(printf '%s\n' "${_used_indexes[@]}" | sort -n)
             fi
+            # Captured once, grepped as a variable (the SIGPIPE law above):
+            # a piped `grep -q` flips present grants to missing the same
+            # way it flipped live targets.
+            local acl_listing
+            acl_listing=$(targetcli "/iscsi/${iqn}/tpg1/acls/${init}" ls 2>/dev/null || true)
             grants_ok=0
             for idx in "${sorted_indexes[@]}"; do
                 # rtslib AUTO-GRANTS every TPG LUN as an identity
@@ -563,8 +683,7 @@ apply_changes() {
                 # blind create collides ("already exists") on real
                 # targetcli.  Count a present grant as ok; create only
                 # the missing ones.
-                if targetcli "/iscsi/${iqn}/tpg1/acls/${init}" ls 2>/dev/null \
-                        | grep -q "mapped_lun${idx}[^0-9]"; then
+                if grep -q "mapped_lun${idx}[^0-9]" <<< "$acl_listing"; then
                     ((grants_ok++)) || true
                     continue
                 fi
@@ -694,7 +813,7 @@ run_safe_iscsi_save() {
 # incident the fence's reconcile ticks overwrote the map while VM refs were
 # still missing or without map entries.
 refresh_pool_map() {
-    local complete=true outcome
+    local complete=true
     local -a blockers=()
     if [[ ${#_refuse_lines[@]} -gt 0 ]]; then
         blockers+=("refused identity-conflict entries")
@@ -711,12 +830,12 @@ refresh_pool_map() {
     if [[ "${_save_failed:-0}" -eq 1 ]]; then
         blockers+=("safe-iscsi-save did not persist the rebuilt tree")
     fi
-    for outcome in "${_item_outcome[@]}"; do
-        if [[ "$outcome" == failed:* ]]; then
-            blockers+=("failed apply actions")
-            break
-        fi
-    done
+    # Any apply failure blocks the refresh — backstore, LUN, or ACL grant
+    # alike: a failed grant records no per-backstore outcome, but its
+    # recorded authority must survive for a human to resolve.
+    if [[ "${_apply_failed:-0}" -eq 1 ]]; then
+        blockers+=("failed apply actions")
+    fi
     if [[ ${#blockers[@]} -gt 0 ]]; then
         complete=false
     fi

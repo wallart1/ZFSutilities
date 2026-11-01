@@ -147,7 +147,8 @@ register_online_pool() {
 }
 
 # A healthy two-target mock topology:
-#   threeamigos: vm-101-disk-0 @ lun0, ACL iqn.2026-02.local.tweety
+#   threeamigos: vm-101-disk-0 @ lun0, ACL iqn.2026-02.local.tweety holding
+#                the identity grant mapped_lun0 -> lun0
 #   nvme1:       vm-205-disk-3 @ lun5, no ACLs
 # Pool GUIDs are staged for the pools section (the identity fence).
 load_healthy_topology() {
@@ -159,7 +160,8 @@ load_healthy_topology() {
     _mock_luns_nvme1='  | o- lun5  [block/vm-205-disk-3 '
     _mock_luns_nvme1+='(/dev/zvol/NVME1/proxmox/vm-205-disk-3) (default_tg_pt_gp)]'
     _mock_acls_threeamigos='o- acls ....... [ACLs: 1]\n  o- iqn.2026-02.local.tweety '
-    _mock_acls_threeamigos+='.............. [Mapped LUNs: 0]'
+    _mock_acls_threeamigos+='.............. [Mapped LUNs: 1]\n  | o- mapped_lun0 ... '
+    _mock_acls_threeamigos+='[lun0 block/vm-101-disk-0 (rw)]'
     _mock_acls_nvme1=""
     _mock_zpool_guid[threeamigos]=4338716537971988948
     _mock_zpool_guid[NVME1]=252995746834113014
@@ -238,6 +240,29 @@ test_parse_target_acls() {
     fi
 }
 
+test_parse_target_acls_grants() {
+    reset_mocks
+    load_healthy_topology
+    # Add a second ACL node holding the non-identity grant the map must be
+    # able to record: mapped_lun 8 -> tpg_lun 0.
+    _mock_acls_threeamigos+='\n  o- iqn.2026-02.local.dummy ............... '
+    _mock_acls_threeamigos+='[Mapped LUNs: 1]\n  | o- mapped_lun8 ... [lun0 '
+    _mock_acls_threeamigos+='block/vm-101-disk-0 (rw)]'
+    test_start "parse_target_acls extracts mapped_lun -> tpg_lun grant pairs"
+
+    parse_target_acls "iqn.2026-02.local.stewie:threeamigos"
+
+    local ok=true
+    [[ "${_acl_grants_of[iqn.2026-02.local.tweety]:-}" == "0:0 " ]] || ok=false
+    [[ "${_acl_grants_of[iqn.2026-02.local.dummy]:-}" == "8:0 " ]] || ok=false
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "grants wrong: tweety='${_acl_grants_of[iqn.2026-02.local.tweety]:-none}' \
+dummy='${_acl_grants_of[iqn.2026-02.local.dummy]:-none}'"
+    fi
+}
+
 test_state_json_structure() {
     reset_mocks
     load_healthy_topology
@@ -255,7 +280,7 @@ p = "/tmp/export-iscsi-state-struct.%s.json" % sys.argv[1]
 with open(p) as f:
     m = json.load(f)
 checks = [
-    m.get("version") == 1,
+    m.get("version") == 2,
     m.get("iqn_prefix") == "iqn.2026-02.local.stewie",
     m.get("storage_ip") == "192.168.100.1",
     m.get("host") == "stewie",
@@ -263,8 +288,10 @@ checks = [
     m["pools"] == {"NVME1": "252995746834113014",
                    "threeamigos": "4338716537971988948"},
     m["targets"]["iqn.2026-02.local.stewie:threeamigos"]["luns"] == {"0": "vm-101-disk-0"},
-    m["targets"]["iqn.2026-02.local.stewie:threeamigos"]["acls"] == ["iqn.2026-02.local.tweety"],
+    m["targets"]["iqn.2026-02.local.stewie:threeamigos"]["acls"]
+        == {"iqn.2026-02.local.tweety": {"0": 0}},
     m["targets"]["iqn.2026-02.local.stewie:nvme1"]["luns"] == {"5": "vm-205-disk-3"},
+    m["targets"]["iqn.2026-02.local.stewie:nvme1"]["acls"] == {},
     m["backstores"]["vm-101-disk-0"] == {
         "dev": "/dev/zvol/threeamigos/proxmox/vm-101-disk-0",
         "target": "iqn.2026-02.local.stewie:threeamigos",
@@ -280,6 +307,39 @@ PYEOF
         test_pass
     else
         test_fail "Structure check failed ($ok)"
+    fi
+}
+
+test_state_json_records_non_identity_grants() {
+    reset_mocks
+    load_healthy_topology
+    # The non-identity grant shape from the j16 lab: the dummy ACL sees
+    # tpg_lun 0 at mapped_lun 8, a pair identity grants cannot express.
+    _mock_acls_threeamigos+='\n  o- iqn.2026-02.local.dummy ............... '
+    _mock_acls_threeamigos+='[Mapped LUNs: 1]\n  | o- mapped_lun8 ... [lun0 '
+    _mock_acls_threeamigos+='block/vm-101-disk-0 (rw)]'
+    test_start "State map records non-identity grant pairs (grants dimension)"
+
+    collect_live_state
+    printf '%s\n' "$(emit_state_json)" > /tmp/export-iscsi-state-grants.$$.json
+    local ok
+    ok=$(python3 - "$$" <<'PYEOF'
+import json, sys, os
+p = "/tmp/export-iscsi-state-grants.%s.json" % sys.argv[1]
+with open(p) as f:
+    m = json.load(f)
+acls = m["targets"]["iqn.2026-02.local.stewie:threeamigos"]["acls"]
+os.unlink(p)
+ok = acls == {"iqn.2026-02.local.tweety": {"0": 0},
+              "iqn.2026-02.local.dummy": {"8": 0}}
+print("OK" if ok else "FAIL:%r" % acls)
+PYEOF
+    )
+
+    if [[ "$ok" == "OK" ]]; then
+        test_pass
+    else
+        test_fail "grants dimension wrong ($ok)"
     fi
 }
 
@@ -720,6 +780,93 @@ test_check_reports_drift() {
     rm -f "$NODE_CONF"
 }
 
+test_check_reports_grant_drift() {
+    reset_mocks
+    load_healthy_topology
+    _mock_acls_threeamigos+='\n  o- iqn.2026-02.local.dummy ............... '
+    _mock_acls_threeamigos+='[Mapped LUNs: 1]\n  | o- mapped_lun8 ... [lun0 '
+    _mock_acls_threeamigos+='block/vm-101-disk-0 (rw)]'
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    # Manual targetcli edits on the grants dimension: the dummy's grant now
+    # maps a different TPG LUN (moved), and tweety's grant was deleted
+    # (missing live).
+    _mock_acls_threeamigos='o- acls ....... [ACLs: 2]\n  o- iqn.2026-02.local.tweety '
+    _mock_acls_threeamigos+='.............. [Mapped LUNs: 0]\n  o- iqn.2026-02.local.dummy '
+    _mock_acls_threeamigos+='............... [Mapped LUNs: 1]\n  | o- mapped_lun8 ... [lun5 '
+    _mock_acls_threeamigos+='block/vm-205-disk-3 (rw)]'
+
+    test_start "--check reports ACL grant drift (moved and missing), exit 1"
+
+    check_only=true
+    rc=0
+    out=$( main 2>/dev/null ) || rc=$?
+    check_only=false
+
+    if [[ "$rc" -eq 1 ]] \
+        && [[ "$out" == *"ACL iqn.2026-02.local.tweety grant mapped_lun 0 -> tpg_lun 0 is missing live"* ]] \
+        && [[ "$out" == *"ACL iqn.2026-02.local.dummy grant mapped_lun 8 moved: map -> tpg_lun 0, live -> tpg_lun 5"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_check_legacy_list_map_no_false_drift() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    # A map written before the grants dimension (legacy bare name list).
+    # The membership matches live; the map records no grant pairs, so the
+    # grants comparison must stay silent until the next save rewrites the
+    # map in the new shape (the dual-read window).
+    python3 - "${_mock_pools_root}/threeamigos/iscsi-state.json" <<'PYEOF'
+import json, sys
+m = {"version": 1, "generated": "2026-10-30T12:00:00+00:00", "host": "stewie",
+     "iqn_prefix": "iqn.2026-02.local.stewie", "storage_ip": "192.168.100.1",
+     "targets": {"iqn.2026-02.local.stewie:threeamigos":
+                 {"acls": ["iqn.2026-02.local.tweety"],
+                  "luns": {"0": "vm-101-disk-0"}},
+                 "iqn.2026-02.local.stewie:nvme1":
+                 {"acls": [], "luns": {"5": "vm-205-disk-3"}}},
+     "backstores": {
+         "vm-101-disk-0": {
+             "dev": "/dev/zvol/threeamigos/proxmox/vm-101-disk-0",
+             "target": "iqn.2026-02.local.stewie:threeamigos", "lun": 0},
+         "vm-205-disk-3": {
+             "dev": "/dev/zvol/NVME1/proxmox/vm-205-disk-3",
+             "target": "iqn.2026-02.local.stewie:nvme1", "lun": 5}}}
+with open(sys.argv[1], "w") as f:
+    json.dump(m, f, indent=2)
+PYEOF
+
+    test_start "--check stays silent on grants against a legacy name-list map"
+
+    check_only=true
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    check_only=false
+
+    if [[ "$rc" -eq 0 && "$out" != *"grant mapped_lun"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+    rm -f "$NODE_CONF"
+}
+
 test_pool_guid_unreadable_omitted() {
     reset_mocks
     load_healthy_topology
@@ -918,7 +1065,9 @@ test_print_map_conflicts_with_check() {
 test_script_loads
 test_single_node_silent_exit
 test_parse_target_acls
+test_parse_target_acls_grants
 test_state_json_structure
+test_state_json_records_non_identity_grants
 test_golden_state_json
 test_unmapped_backstore_dev_only
 test_state_written_to_all_online_pools
@@ -934,6 +1083,8 @@ test_legit_shrinkage_refreshes_map
 test_empty_manifest_broken_refuses
 test_check_no_drift
 test_check_reports_drift
+test_check_reports_grant_drift
+test_check_legacy_list_map_no_false_drift
 test_pool_guid_unreadable_omitted
 test_check_reports_guid_drift
 test_check_without_map_fails

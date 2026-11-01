@@ -171,7 +171,12 @@ main() {
     if [[ -f "$conf" ]]; then
         while IFS=: read -r name device _target; do
             [[ -z "$name" || "$name" == \#* ]] && continue
-            if targetcli /backstores/block ls 2>/dev/null | grep -q " ${name} "; then
+            # Captured and grepped as a variable — a piped `grep -q`
+            # under `set -o pipefail` flips a found backstore to
+            # "missing" when grep exits on the match while targetcli is
+            # still writing (SIGPIPE -> 141 -> pipeline failed).
+            _bs_listing=$(targetcli /backstores/block ls 2>/dev/null || true)
+            if grep -q " ${name} " <<< "$_bs_listing"; then
                 log_msg "INFO:   ✓ $name configured"
             elif [[ ! -e "$device" ]]; then
                 log_msg "WARN:   $name — device not available (keys not loaded?)"

@@ -147,11 +147,17 @@ function delfs {
                 # plus fixed-string digit validation of the numeric parts.
                 local _vmid="${_bsname#vm-}"; _vmid="${_vmid%%-disk-*}"
                 local _diskno="${_bsname##*-disk-}"
+                # Captured and grepped as a variable — a piped `grep -q`
+                # under `set -o pipefail` flips a found backstore to
+                # "missing" when grep exits on the match while targetcli
+                # is still writing (SIGPIPE -> 141 -> pipeline failed).
+                local _bs_listing
+                _bs_listing=$(targetcli /backstores/block ls 2>/dev/null || true)
                 if [[ "$node_mode" != "single-node" && "$_bsname" == vm-*-disk-* \
                         && -n "$_vmid" && "$_vmid" != *[!0-9]* \
                         && -n "$_diskno" && "$_diskno" != *[!0-9]* \
                         && "${_bsname#*-disk-}" != *-disk-* ]] && \
-                        targetcli /backstores/block ls 2>/dev/null | grep -q " ${_bsname} "; then
+                        grep -q " ${_bsname} " <<< "$_bs_listing"; then
                     local _bs_dev
                     _bs_dev=$(targetcli "/backstores/block/${_bsname}" info 2>/dev/null \
                         | awk '{ for (i = 1; i <= NF; i++) { \

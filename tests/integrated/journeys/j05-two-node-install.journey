@@ -301,10 +301,22 @@ j05_two_node_lab_main() {
         ls /usr/local/lib/zfsutilities/versions/
         test -f /etc/systemd/system/rtslib-fb-targetctl.service.d/boot-config.conf
         targetcli ls | grep -q iqn
+        # F-034: the installer-created targets must end storage-IP-specific
+        # (wildcard dropped) — probe each live portal list per target. (The
+        # one-shot `... ls <depth>` form is not a valid targetcli call —
+        # the depth arg parses as a path — so per-TPG portals ls it is;
+        # sourcing node.conf supplies the IQN prefix and pool map.)
+        source /etc/zfsutilities/node.conf
+        for _pool in "${!POOL_TARGET[@]}"; do
+            _tpg="/iscsi/${IQN_PREFIX}:${POOL_TARGET[$_pool]}/tpg1"
+            targetcli "${_tpg}/portals" ls | grep -q "${STORAGE_IP}:3260"
+            ! targetcli "${_tpg}/portals" ls | grep -q "0.0.0.0:3260"
+        done
         echo "storage-verified"
     ' > "$v_log" 2>&1 && grep -q storage-verified "$v_log"; then
         itf_step pass "storage host verified" \
-            "node.conf two-node, deployed version, targets — see verify-storage.log"
+            "node.conf two-node, deployed version, targets storage-IP-bound" \
+            "(wildcard dropped) — see verify-storage.log"
     else
         itf_step fail "storage host verified" "see verify-storage.log"
         return 1

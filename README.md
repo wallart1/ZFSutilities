@@ -301,8 +301,17 @@ for details on writing new tests.
   [GitHub Issues](https://github.com/wallart1/ZFSutilities/issues).
 - Ask questions and discuss usage on
   [GitHub Discussions](https://github.com/wallart1/ZFSutilities/discussions).
-- Contributions are welcome via
-  [Pull Requests](https://github.com/wallart1/ZFSutilities/pulls).
+- Contributions are welcome — see [Contributing](#contributing) below.
+
+## Contributing
+
+This project moves quickly, and not every contribution shape survives
+that pace. The rules of the road — issues first, small rebased pull
+requests, what to run before submitting, and how submissions are manually
+reviewed — are in [CONTRIBUTING.md](CONTRIBUTING.md). In short: open an
+issue for anything substantial, keep pull requests small and rebased on
+the latest `main`, and expect manual review; nothing merges
+automatically.
 
 ## Security
 

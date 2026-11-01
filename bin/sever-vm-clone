@@ -1408,11 +1408,18 @@ sev_iscsi_teardown() {
         log_msg "INFO: Detaching iSCSI LUN ${lun} / backstore ${bs} (target ${tgt##*:}) before" \
                 "the swap..."
     # The lun line slash-prefixes the backstore name, so anchor the guard
-    # on "block/<name> " — a space-anchored name never matches it.
-    if targetcli "/iscsi/${tgt}/tpg1/luns" ls 2>/dev/null | grep -qF "block/${bs} "; then
+    # on "block/<name> " — a space-anchored name never matches it. Both
+    # listings are captured and grepped as variables — a piped `grep -q`
+    # under `set -o pipefail` flips a found object to "missing" when
+    # grep exits on the match while targetcli is still writing
+    # (SIGPIPE -> 141 -> pipeline failed).
+    local _luns_ls _bs_ls
+    _luns_ls=$(targetcli "/iscsi/${tgt}/tpg1/luns" ls 2>/dev/null || true)
+    if grep -qF "block/${bs} " <<< "$_luns_ls"; then
         targetcli "/iscsi/${tgt}/tpg1/luns" delete "lun${lun}"
     fi
-    if targetcli /backstores/block ls 2>/dev/null | grep -qF " ${bs} "; then
+    _bs_ls=$(targetcli /backstores/block ls 2>/dev/null || true)
+    if grep -qF " ${bs} " <<< "$_bs_ls"; then
         targetcli /backstores/block delete "${bs}"
     fi
     manifest_remove "${bs}"
@@ -1436,13 +1443,17 @@ sev_iscsi_reattach() {
     isc_target="$tgt"; isc_backstore="$bs"
     dev="/dev/zvol/${zvol}"
 
-    if ! targetcli /backstores/block ls 2>/dev/null | grep -qF " ${bs} "; then
+    # Captured, not piped (the SIGPIPE law in sev_iscsi_teardown above).
+    local _bs_ls _luns_ls
+    _bs_ls=$(targetcli /backstores/block ls 2>/dev/null || true)
+    if ! grep -qF " ${bs} " <<< "$_bs_ls"; then
         log_msg "INFO: Re-creating backstore ${bs} on ${dev}..."
         targetcli /backstores/block create "${bs}" "${dev}"
     fi
     targetcli "/backstores/block/${bs}" set attribute emulate_tpu=1
 
-    if targetcli "/iscsi/${tgt}/tpg1/luns" ls 2>/dev/null | grep -qF "block/${bs} "; then
+    _luns_ls=$(targetcli "/iscsi/${tgt}/tpg1/luns" ls 2>/dev/null || true)
+    if grep -qF "block/${bs} " <<< "$_luns_ls"; then
         # Already exported (crash between the create and the marker, or an
         # earlier --continue): keep the LUN as it exists now.
         new_lun="$(sev_iscsi_lun_of)"

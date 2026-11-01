@@ -1,7 +1,44 @@
 # Repair Plan 025 — setup-iscsi-targets portal binding (F-034)
 
-Status: PROPOSED 2026-10-30 — awaiting user approval; execution is NOT
-authorized yet (G5 adjudication: "promote to repair plan now").
+Status: **EXECUTED 2026-10-31 (user-approved); mechanism corrected the
+same day after live disproof — see the amendment below; VERIFIED
+2026-11-01 — j05 and j16 reruns green (three storage-IP-specific binds
+live, wildcard purged, total-wipe rebuild + recovery through the
+specific portal). F-034 `verified`; plan closes at the next release
+prune.**
+
+## Amendment 2026-10-31 — mechanism corrected after live disproof
+
+The step-1 premise ("adding the specific portal before removing the
+wildcard is safe — the port conflict only exists for the SAME address")
+is false — contradicted by F-024's own verified row and disproven live
+on the j05 lab guest (run-20261031-201409, guest-picked evidence): LIO
+portals are host-level sockets. The `0.0.0.0:3260` wildcard binds
+`INADDR_ANY:3260`, and while ANY TPG on the host rides it, no specific
+`:3260` portal can be created anywhere ("Could not create NetworkPortal
+in configFS"). A per-target create-then-replace is therefore impossible.
+(The one-token `portals create <ip>:<port>` form is also invalid —
+targetcli parses it as a bare IP with a defaulted port; the two-arg
+`create <ip> <port>` form is required. The purge-then-rebind sequence
+was itself verified live: after deleting the wildcard from all three
+TPGs, all three specific binds succeeded.)
+
+Corrected recipe (user-approved 2026-10-31), replacing the Proposed
+change above:
+
+- Portal binding moves out of the per-target loop into a post-loop
+  host-wide pass.
+- All-fresh window only (every target created this run, none skipped for
+  orphans): purge the wildcard from every TPG, then bind each specific
+  portal (two-arg). A failed bind rolls back by restoring the wildcard;
+  a TPG that cannot get any portal back is FATAL (the F-024 law).
+- Mixed or established hosts: no purge, ever — per-target add attempt
+  with an honest WARN naming the blocking wildcard; established portal
+  compositions are never touched.
+- The unit portal mock now models host-level sockets (shared ip:port
+  references, ANY-bind blocking) — the per-TPG mock it replaces is what
+  let the suite stay green against an impossible mechanism. Red-proven
+  against the pre-025 script; the j05 journey caught the live gap.
 
 ## Finding
 

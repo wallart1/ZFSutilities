@@ -427,7 +427,12 @@ if zfs list -H -o name "$zvol_name" 2>/dev/null | grep -q .; then
 fi
 
 # --- Check backstore doesn't already exist ---
-if targetcli /backstores/block ls 2>/dev/null | grep -q " ${backstore_name} "; then
+# Captured and grepped as a variable — a piped `grep -q` under
+# `set -o pipefail` flips a found backstore to "missing" when grep
+# exits on the match while targetcli is still writing (SIGPIPE ->
+# 141 -> pipeline failed).
+_bs_listing=$(targetcli /backstores/block ls 2>/dev/null || true)
+if grep -q " ${backstore_name} " <<< "$_bs_listing"; then
     log_msg "FATAL: iSCSI backstore already exists: $backstore_name"
     exit 1
 fi

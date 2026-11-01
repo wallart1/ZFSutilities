@@ -237,15 +237,17 @@ _stripped_saveconfig() {
 EOF
 }
 
-# Fixture pool state map in the canonical export-iscsi-state shape. The
-# main target records both encrypted backstores (LUNs 0 and 5); the nvme1
-# target records an unrelated backstore (map-miss case). Host overridable
-# for the foreign-map guard.
+# Fixture pool state map in the canonical export-iscsi-state shape
+# (version 2, grants dimension): the main target records both encrypted
+# backstores (LUNs 0 and 5) plus tweety's identity grants and the dummy's
+# non-identity mapped_lun 8 -> tpg_lun 0 pair; the nvme1 target records an
+# unrelated backstore (map-miss case). Host overridable for the foreign-map
+# guard.
 _write_state_map() {
     local file="$1" map_host="${2:-stewie}"
     cat > "$file" <<EOF
 {
-  "version": 1,
+  "version": 2,
   "generated": "2026-10-30T12:00:00+00:00",
   "host": "$map_host",
   "iqn_prefix": "iqn.2026-02.local.stewie",
@@ -253,11 +255,14 @@ _write_state_map() {
   "pools": {"threeamigos": "4338716537971988948"},
   "targets": {
     "iqn.2026-02.local.stewie:threeamigos": {
-      "acls": ["iqn.2026-02.local.tweety"],
+      "acls": {
+        "iqn.2026-02.local.tweety": {"0": 0, "5": 5},
+        "iqn.2026-02.local.dummy": {"8": 0}
+      },
       "luns": {"0": "vm-100-disk-0", "5": "vm-101-disk-0"}
     },
     "iqn.2026-02.local.stewie:nvme1": {
-      "acls": [],
+      "acls": {},
       "luns": {"7": "vm-300-disk-0"}
     }
   },
@@ -500,6 +505,56 @@ EOF
     rm -rf "$tmpdir"
 }
 
+test_recorded_non_identity_pair_heals() {
+    test_start "Heal recreates a recorded non-identity grant pair exactly"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local confdir="$tmpdir/etc/zfsutilities"
+    _std_encrypted_conf "$confdir" "$tmpdir"
+    _stripped_saveconfig "$tmpdir/save.json"
+    local mapdir="$tmpdir/poolmap"
+    mkdir -p "$mapdir"
+    _write_state_map "$mapdir/iscsi-state.json"
+    local prestate="$tmpdir/prestate"
+    mkdir -p "$prestate/luns"
+    cat > "$prestate/backstores" <<'EOF'
+  vm-100-disk-0  /dev/zvol/threeamigos/proxmox/vm-100-disk-0  50G
+  vm-101-disk-0  /dev/zvol/threeamigos/proxmox/vm-101-disk-0  50G
+EOF
+    cat > "$prestate/luns/iqn.2026-02.local.stewie:threeamigos" <<'EOF'
+  lun0 block/vm-100-disk-0 (rw) oops
+  lun5 block/vm-101-disk-0 (rw) oops
+EOF
+    # Live ACL nodes: the dummy initiator holding the recorded non-identity
+    # pair (mapped_lun 8 -> tpg_lun 0) and tweety with its identity pair —
+    # both stripped, the shape a keys-pending fence save leaves behind.
+    mkdir -p "$prestate/acls" "$prestate/acls-grants/iqn.2026-02.local.stewie:threeamigos"
+    cat > "$prestate/acls/iqn.2026-02.local.stewie:threeamigos" <<'EOF'
+  o- iqn.2026-02.local.tweety ....... [Mapped LUNs: 0]
+  o- iqn.2026-02.local.dummy ....... [Mapped LUNs: 0]
+EOF
+
+    local result rc=0
+    result=$(_run_recover "$confdir" "$tmpdir/save.json" "$prestate" "" threeamigos "$mapdir") \
+        || rc=$?
+
+    # The dummy's grant returns at the recorded pair (8 -> 0), tweety's at
+    # identity (0 -> 0, 5 -> 5) — and the dummy gets NO blanket LUN 5 grant
+    # its record does not carry.
+    if [[ "$rc" -eq 0 ]] \
+        && [[ "$result" == *"mapped_lun8 ....... [lun0 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"mapped_lun0 ....... [lun0 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"mapped_lun5 ....... [lun5 block/vm (rw)]"* ]] \
+        && [[ "$result" != *"mapped_lun5 ....... [lun0 block/vm (rw)]"* ]] \
+        && [[ "$result" != *"mapped_lun8 ....... [lun5 block/vm (rw)]"* ]] \
+        && [[ "$result" == *"holds no recorded grant for LUN 5"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc result=$result"
+    fi
+    rm -rf "$tmpdir"
+}
+
 test_idempotent_when_already_present() {
     test_start "Skips everything when backstores and mappings already exist"
     local tmpdir
@@ -670,6 +725,7 @@ test_map_fallback_recovers_when_saveconfig_silent
 test_refusal_stands_when_map_silent_too
 test_foreign_host_map_is_ignored
 test_already_present_grants_heal_from_map_index
+test_recorded_non_identity_pair_heals
 test_idempotent_when_already_present
 test_unavailable_device_warns_and_fails
 test_grants_recovered_luns_to_existing_acls

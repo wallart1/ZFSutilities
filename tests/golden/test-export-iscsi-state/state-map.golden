@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "host": "stewie",
   "iqn_prefix": "iqn.2026-02.local.stewie",
   "storage_ip": "192.168.100.1",
@@ -9,17 +9,19 @@
   },
   "targets": {
     "iqn.2026-02.local.stewie:nvme1": {
-      "acls": [
+      "acls": {
 
-      ],
+      },
       "luns": {
       "5": "vm-205-disk-3"
       }
     },
     "iqn.2026-02.local.stewie:threeamigos": {
-      "acls": [
-      "iqn.2026-02.local.tweety"
-      ],
+      "acls": {
+        "iqn.2026-02.local.tweety": {
+          "0": 0
+        }
+      },
       "luns": {
       "0": "vm-101-disk-0"
       }

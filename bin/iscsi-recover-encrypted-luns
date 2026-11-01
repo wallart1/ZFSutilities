@@ -193,13 +193,19 @@ while IFS=: read -r name device target; do
 
     full_iqn="${iqn_prefix}:${target}"
 
+    # Presence probes are captured and grepped as variables — a piped
+    # `grep -q` under `set -o pipefail` flips a found object to
+    # "missing" when grep exits on the match while targetcli is still
+    # writing (SIGPIPE -> 141 -> pipeline failed).
     backstore_present=false
-    if targetcli /backstores/block ls 2>/dev/null | grep -q " ${name} "; then
+    _bs_ls=$(targetcli /backstores/block ls 2>/dev/null || true)
+    if grep -q " ${name} " <<< "$_bs_ls"; then
         backstore_present=true
     fi
 
     mapped_present=false
-    if targetcli "/iscsi/${full_iqn}/tpg1/luns" ls 2>/dev/null | grep -q "block/${name}"; then
+    _luns_ls=$(targetcli "/iscsi/${full_iqn}/tpg1/luns" ls 2>/dev/null || true)
+    if grep -q "block/${name}" <<< "$_luns_ls"; then
         mapped_present=true
     fi
 
@@ -250,8 +256,9 @@ while IFS=: read -r name device target; do
             # pointed at a foreign holder). Re-query by name before
             # declaring failure; the verify block below owns the final
             # say either way.
-            if ! targetcli "/iscsi/${full_iqn}/tpg1/luns" ls 2>/dev/null \
-                | grep -q "block/${name}"; then
+            # Captured, not piped (the SIGPIPE law above).
+            _luns_recheck=$(targetcli "/iscsi/${full_iqn}/tpg1/luns" ls 2>/dev/null || true)
+            if ! grep -q "block/${name}" <<< "$_luns_recheck"; then
                 log_msg "FATAL:   $name — could not map LUN $lun_num on $full_iqn"
                 log_msg "FATAL:     (another backstore may hold that index;" \
                     "inspect with show-lun-map)"
@@ -262,8 +269,10 @@ while IFS=: read -r name device target; do
         fi
     fi
 
-    # Verify the mapping took, by name, on the exact target.
-    if targetcli "/iscsi/${full_iqn}/tpg1/luns" ls 2>/dev/null | grep -q "block/${name}"; then
+    # Verify the mapping took, by name, on the exact target. Captured,
+    # not piped (the SIGPIPE law above).
+    _luns_verify=$(targetcli "/iscsi/${full_iqn}/tpg1/luns" ls 2>/dev/null || true)
+    if grep -q "block/${name}" <<< "$_luns_verify"; then
         added=$((added + 1))
         log_msg "INFO:   ✓ $name mapped at LUN $lun_num on $full_iqn"
         if ! iscsi_grant_lun_to_acls "$full_iqn" "$lun_num"; then

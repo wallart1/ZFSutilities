@@ -14,7 +14,7 @@ if PYTHON_SRC not in sys.path:
 
 from test_support import mock_gtk
 
-with mock_gtk():
+with mock_gtk(fresh=True):
     import restore_page as rp
 
 

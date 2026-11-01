@@ -166,11 +166,22 @@ parse_target_luns() {
 }
 
 # Parse targetcli ACL list for a given target IQN.
-# Output variable: _acl_initiators[] sorted, deduplicated array of
-# initiator IQNs.
+# Output variables:
+#   _acl_initiators[]        sorted, deduplicated array of initiator IQNs
+#   _acl_grants_of[initiator]  space-separated "mapped_lun:tpg_lun" pairs the
+#                            initiator holds on the target (empty/absent when
+#                            the ACL node grants nothing). The two-level acls
+#                            listing renders each node's MappedLUNs as
+#                            "o- mapped_lun<ml> ....... [lun<tp> block/<name>
+#                            (rw)]" beneath the initiator's node line, so the
+#                            walk tracks the current initiator node and reads
+#                            its mapped_lun children — the same live-proven
+#                            listing j16 greps mapped_lun8 from.
 parse_target_acls() {
     local iqn="$1"
     _acl_initiators=()
+    unset -v _acl_grants_of
+    declare -gA _acl_grants_of=()
 
     local raw
     raw=$(targetcli "/iscsi/${iqn}/tpg1/acls" ls 2>/dev/null) || return 0
@@ -183,29 +194,193 @@ parse_target_acls() {
     # probe_target_usage in node-lib.sh.
     mapfile -t _acl_initiators < <(printf '%s\n' "$raw" \
         | grep -o 'iqn\.[A-Za-z0-9.:_-]*' | sort -u)
+
+    # Grants walk. Fixed-string decomposition only: an ACL node line is the
+    # only "o- iqn." node line in the listing (mapped_lun lines carry no
+    # IQN), and a mapped_lun line's bracket summary starts with the TPG LUN
+    # it maps ("[lun<tp> block/..."). Anything that does not decompose into
+    # digits on both indexes is skipped, never guessed.
+    local line cur="" rest ml tp
+    while IFS= read -r line; do
+        if [[ "$line" == *"o- iqn."* ]]; then
+            cur="${line#*"o- "}"
+            cur="${cur%%[[:space:]]*}"
+            # Same iSCSI-name grammar as the initiator extraction above.
+            [[ "$cur" =~ ^iqn\.[A-Za-z0-9.:_-]+$ ]] || cur=""
+            continue
+        fi
+        [[ "$line" == *"o- mapped_lun"*"[lun"*" block/"* ]] || continue
+        [[ -n "$cur" ]] || continue
+        rest="${line#*"o- mapped_lun"}"
+        ml="${rest%%[![:digit:]]*}"
+        [[ "$ml" =~ ^[0-9]+$ ]] || continue
+        rest="${line#*"[lun"}"
+        tp="${rest%%[![:digit:]]*}"
+        [[ "$tp" =~ ^[0-9]+$ ]] || continue
+        _acl_grants_of["$cur"]+="${ml}:${tp} "
+    done <<< "$raw"
     return 0
 }
 
-# Grant a TPG LUN to every existing ACL initiator on a target, at the same
-# index the TPG LUN holds (identity mapping: create <lun> <lun>). Used after a
-# LUN is (re)created: an explicit-mode ACL node grants nothing until it carries
-# a MappedLUN for the new index, so without this the initiator cannot see the
-# LUN even though the mapping exists. Idempotent — initiators whose ACL already
-# shows a mapped_lun at that index are skipped. Demo-mode targets with no live
-# ACL nodes no-op: their ACL nodes (with grants for every LUN) self-generate on
-# initiator login.
-# Returns 0 when every existing initiator has the grant, 1 otherwise.
+# Recorded grant pairs from the newest pool state map: the grants dimension
+# of the map's ACL section (mapped_lun -> tpg_lun per initiator), loaded once
+# per process. _grants_map_tp["iqn|init|ml"] = tp, plus
+# _grants_map_acl["iqn|init"] = 1 for every initiator whose grant set the map
+# records (a v2 dict entry, even an empty one). Empty when no map exists,
+# when it was written on another host (a foreign map never supplies grants,
+# the same fence reconcile and iscsi-recover-encrypted-luns apply), or when
+# its ACL section predates the grants dimension (legacy name-list maps carry
+# no pairs — identity grants remain the behavior for them).
+_grants_map_loaded=false
+load_recorded_grants_map() {
+    [[ "$_grants_map_loaded" == true ]] && return 0
+    _grants_map_loaded=true
+    unset -v _grants_map_tp _grants_map_acl
+    declare -gA _grants_map_tp=() _grants_map_acl=()
+
+    local map_file map_host
+    map_file=$(newest_iscsi_state_map 2>/dev/null) || map_file=""
+    [[ -n "$map_file" ]] || return 0
+    map_host=$(read_json_string_field "$map_file" "host")
+    if [[ -n "$map_host" && "$map_host" != "$(hostname -s)" ]]; then
+        return 0
+    fi
+
+    local -a rec=()
+    while IFS='|' read -r -a rec; do
+        case "${rec[0]:-}" in
+            ACLREC)
+                [[ "${rec[1]:-}" == iqn.* && "${rec[2]:-}" == iqn.* ]] || continue
+                _grants_map_acl["${rec[1]}|${rec[2]}"]=1
+                ;;
+            GRANT)
+                [[ "${rec[1]:-}" == iqn.* && "${rec[2]:-}" == iqn.* ]] || continue
+                [[ "${rec[3]:-}" != *[!0-9]* && -n "${rec[3]:-}" ]] || continue
+                [[ "${rec[4]:-}" != *[!0-9]* && -n "${rec[4]:-}" ]] || continue
+                _grants_map_tp["${rec[1]}|${rec[2]}|${rec[3]}"]="${rec[4]}"
+                ;;
+        esac
+    done < <(python3 - "$map_file" << 'PYEOF' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        m = json.load(f)
+except Exception:
+    sys.exit(0)
+for iqn, t in sorted(m.get("targets", {}).items()):
+    acls = t.get("acls")
+    if not isinstance(acls, dict):
+        continue
+    for init, grants in sorted(acls.items()):
+        print("ACLREC|%s|%s" % (iqn, init))
+        if not isinstance(grants, dict):
+            continue
+        for ml, tp in sorted(grants.items()):
+            if ml.isdigit() and isinstance(tp, int):
+                print("GRANT|%s|%s|%s|%d" % (iqn, init, ml, tp))
+PYEOF
+    )
+    return 0
+}
+
+# Ensure one recorded (mapped_lun -> tpg_lun) grant pair on an initiator.
+# Present grants must map the recorded TPG LUN: a pair that exists but maps
+# differently is never remapped (the identity law) — reported and failed so
+# a human resolves it. Missing pairs are created at the recorded pair. The
+# mapped_lun listing summary is "lun<tp> block/<name> (rw)"; matching it
+# (not just "lun<tp>") avoids the node name itself, which contains
+# "lun<ml>" for identity mappings. Returns 0 when the initiator holds the
+# recorded pair.
 # The grant-create argument order is targetcli's UIACL create:
 #   acls/<initiator> create <mapped_lun> <tpg_lun>
 # — the FIRST argument is the LUN number the initiator sees.
+_grant_recorded_pair() {
+    local iqn="$1" init="$2" ml="$3" tp="$4"
+    local grant_line
+    grant_line=$(targetcli "/iscsi/${iqn}/tpg1/acls/${init}" ls 2>/dev/null \
+        | grep "mapped_lun${ml}[^0-9]" || true)
+    if [[ -n "$grant_line" ]]; then
+        if [[ "$grant_line" != *"lun${tp} block/"* ]]; then
+            log_msg "WARN: ${init} — mapped_lun ${ml} exists but does not map" \
+                "TPG LUN ${tp} as recorded; not remapped"
+            return 1
+        fi
+        return 0
+    fi
+    if ! targetcli "/iscsi/${iqn}/tpg1/acls/${init}" \
+            create "$ml" "$tp" >/dev/null 2>&1; then
+        log_msg "WARN: ${init} — could not grant mapped_lun ${ml} (TPG LUN ${tp})" \
+            "on ${iqn} (create failed)"
+        return 1
+    fi
+    # Post-create verification, the same contract the LUN-mapping steps
+    # keep: a create that reports success must be visible in the listing.
+    if targetcli "/iscsi/${iqn}/tpg1/acls/${init}" ls 2>/dev/null \
+            | grep -q "mapped_lun${ml}[^0-9]"; then
+        log_msg "INFO:   ✓ granted mapped_lun ${ml} (LUN ${tp}) to ${init}"
+        return 0
+    fi
+    log_msg "WARN: ${init} — could not grant mapped_lun ${ml} (TPG LUN ${tp})" \
+        "on ${iqn} (verify failed)"
+    return 1
+}
+
+# Grant a TPG LUN to every existing ACL initiator on a target. Used after a
+# LUN is (re)created: an explicit-mode ACL node grants nothing until it carries
+# a MappedLUN for the new index, so without this the initiator cannot see the
+# LUN even though the mapping exists. When the pool state map records the
+# initiator's grant set on the target (the grants dimension), the RECORD is
+# the authority: a recorded pair for this TPG LUN is (re)created exactly — a
+# non-identity mapped_lun 8 -> tpg_lun 0 grant returns as recorded, not
+# dissolved to identity — and an initiator whose recorded set does not
+# include this LUN gets nothing (never blanket-granted over the record).
+# Initiators the map does not record at all (no map, foreign map, legacy
+# name-list shape) keep the identity grant at the LUN's own index. Idempotent
+# — present grants are verified, never re-created. Demo-mode targets with no
+# live ACL nodes no-op: their ACL nodes (with grants for every LUN)
+# self-generate on initiator login.
+# Returns 0 when every existing initiator has the grant, 1 otherwise.
 iscsi_grant_lun_to_acls() {
     local iqn="$1" lun="$2"
-    local init failed=0
+    local init key failed=0
 
+    load_recorded_grants_map
     parse_target_acls "$iqn"
     for init in "${_acl_initiators[@]}"; do
-        if targetcli "/iscsi/${iqn}/tpg1/acls/${init}" ls 2>/dev/null \
-                | grep -q "mapped_lun${lun}[^0-9]"; then
+        # Presence probes capture the listing and grep the variable: a
+        # piped `grep -q` under `set -o pipefail` flips a present grant to
+        # missing when grep -q exits on the match while targetcli is still
+        # writing (SIGPIPE -> 141 -> pipeline failed).
+        local acl_listing
+        acl_listing=$(targetcli "/iscsi/${iqn}/tpg1/acls/${init}" ls 2>/dev/null || true)
+        # Recorded pairs for this initiator that map THIS TPG LUN (there is
+        # at most one in a healthy tree; a pathological double mapping is
+        # handled by ensuring each in turn). Sorted for deterministic logs.
+        local -a recorded=()
+        local -a _cand=()
+        for key in "${!_grants_map_tp[@]}"; do
+            [[ "$key" == "${iqn}|${init}|"* ]] || continue
+            [[ "${_grants_map_tp[$key]}" == "$lun" ]] || continue
+            _cand+=("${key##*|}")
+        done
+        [[ ${#_cand[@]} -gt 0 ]] \
+            && mapfile -t recorded < <(printf '%s\n' "${_cand[@]}" | sort -n)
+        if [[ ${#recorded[@]} -gt 0 ]]; then
+            local ml
+            for ml in "${recorded[@]}"; do
+                _grant_recorded_pair "$iqn" "$init" "$ml" "$lun" || failed=1
+            done
+            continue
+        fi
+        if [[ -n "${_grants_map_acl[${iqn}|${init}]:-}" ]]; then
+            # The map records this initiator's grant set on the target and
+            # it does not include this LUN: the recorded authority says no
+            # grant — never blanket-grant identity over it.
+            log_msg "INFO:   ${init} holds no recorded grant for LUN ${lun} on" \
+                "${iqn} — not granted"
+            continue
+        fi
+        if grep -q "mapped_lun${lun}[^0-9]" <<< "$acl_listing"; then
             continue
         fi
         if ! targetcli "/iscsi/${iqn}/tpg1/acls/${init}" \
@@ -214,10 +389,8 @@ iscsi_grant_lun_to_acls() {
             failed=1
             continue
         fi
-        # Post-create verification, the same contract the LUN-mapping steps
-        # keep: a create that reports success must be visible in the listing.
-        if targetcli "/iscsi/${iqn}/tpg1/acls/${init}" ls 2>/dev/null \
-                | grep -q "mapped_lun${lun}[^0-9]"; then
+        acl_listing=$(targetcli "/iscsi/${iqn}/tpg1/acls/${init}" ls 2>/dev/null || true)
+        if grep -q "mapped_lun${lun}[^0-9]" <<< "$acl_listing"; then
             log_msg "INFO:   ✓ granted LUN ${lun} to ${init}"
         else
             log_msg "WARN: ${init} — could not grant LUN ${lun} on ${iqn} (verify failed)"

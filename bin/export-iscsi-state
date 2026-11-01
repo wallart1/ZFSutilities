@@ -127,6 +127,10 @@ pools_written=0
 #   _state_target_iqns[]     target IQNs (one per configured pool)
 #   _state_luns[iqn]         "lun:backstore" lines for the target
 #   _state_acls[iqn]         space-separated sorted initiator IQNs
+#   _state_grants[iqn]       "<initiator>|<ml>:<tp> <ml>:<tp>" lines (one per
+#                            initiator holding grants; the ACL grants
+#                            dimension — mapped_lun -> tpg_lun pairs, so a
+#                            non-identity grant survives a total wipe)
 #   _state_bs_names[]        backstore names from the LIO backstore list
 #   _state_bs_devs[bs]       zvol device path of the backstore
 #   _state_bs_target[bs]     full IQN of the target that maps the backstore
@@ -137,12 +141,12 @@ pools_written=0
 collect_live_state() {
     _state_target_iqns=()
     _state_bs_names=()
-    unset -v _state_luns _state_acls _state_bs_devs _state_bs_target \
+    unset -v _state_luns _state_acls _state_grants _state_bs_devs _state_bs_target \
         _state_bs_lun _state_pool_guids
-    declare -gA _state_luns=() _state_acls=() _state_bs_devs=() \
+    declare -gA _state_luns=() _state_acls=() _state_grants=() _state_bs_devs=() \
         _state_bs_target=() _state_bs_lun=() _state_pool_guids=()
 
-    local pool iqn name entries guid
+    local pool iqn name entries guid grants init
     while IFS= read -r pool; do
         [[ -z "$pool" ]] && continue
         iqn=$(pool_to_target "$pool") || continue
@@ -162,6 +166,12 @@ collect_live_state() {
 
         parse_target_acls "$iqn"
         _state_acls["$iqn"]="${_acl_initiators[*]}"
+        grants=""
+        for init in "${_acl_initiators[@]}"; do
+            [[ -n "${_acl_grants_of[$init]:-}" ]] || continue
+            grants+="${init}|${_acl_grants_of[$init]% }"$'\n'
+        done
+        _state_grants["$iqn"]="$grants"
     done < <(pool_list)
 
     parse_backstores
@@ -178,14 +188,15 @@ collect_live_state() {
 # byte-identical (apart from the generated timestamp).
 emit_state_json() {
     printf '{\n'
-    printf '  "version": 1,\n'
+    printf '  "version": 2,\n'
     printf '  "generated": "%s",\n' "$(date -Iseconds)"
     printf '  "host": "%s",\n' "$my_host"
     printf '  "iqn_prefix": "%s",\n' "$iqn_prefix"
     printf '  "storage_ip": "%s",\n' "$storage_ip"
 
-    local iqn name line
-    local -a tblocks=() litems=() aitems=() bblocks=() pitems=()
+    local iqn name line init pr
+    local -a tblocks=() litems=() aitems=() gitems=() bblocks=() pitems=()
+    local -A pair_of=()
 
     # Pool identity at export time: name -> GUID. The recorded GUID is what
     # the pool-identity fence compares against later (a renamed or replaced
@@ -203,17 +214,42 @@ emit_state_json() {
             [[ -z "$line" ]] && continue
             litems+=("      \"${line%%:*}\": \"${line#*:}\"")
         done < <(printf '%s' "${_state_luns[$iqn]}" | sort -n -t: -k1,1)
-        aitems=()
+        # ACL grants dimension: initiator -> {mapped_lun: tpg_lun}. The
+        # recorded pairs are what a map-driven rebuild recreates exactly —
+        # a non-identity grant (mapped_lun 8 -> tpg_lun 0) otherwise
+        # dissolves to identity on every rebuild path.
+        pair_of=()
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            pair_of["${line%%|*}"]="${line#*|}"
+        done < <(printf '%s' "${_state_grants[$iqn]:-}")
         # Word splitting is intended: _state_acls holds space-separated IQNs,
         # and the IQN alphabet contains no whitespace or glob characters.
         # shellcheck disable=SC2206
-        for name in ${_state_acls[$iqn]}; do
-            aitems+=("      \"${name}\"")
+        for init in ${_state_acls[$iqn]}; do
+            [[ -n "${pair_of[$init]:-}" ]] || pair_of["$init"]=""
         done
+        aitems=()
+        while IFS= read -r init; do
+            [[ -z "$init" ]] && continue
+            gitems=()
+            if [[ -n "${pair_of[$init]}" ]]; then
+                # Word splitting is intended: the pairs string holds
+                # space-separated ml:tp tokens, both all-digit.
+                # shellcheck disable=SC2086
+                while IFS= read -r pr; do
+                    [[ -z "$pr" ]] && continue
+                    gitems+=("          \"${pr%%:*}\": ${pr##*:}")
+                done < <(printf '%s\n' ${pair_of[$init]} | sort -n -t: -k1,1)
+            fi
+            aitems+=("        \"${init}\": {
+$(json_join_args "${gitems[@]}")
+        }")
+        done < <(printf '%s\n' "${!pair_of[@]}" | sort -u)
         tblocks+=("    \"${iqn}\": {
-      \"acls\": [
+      \"acls\": {
 $(json_join_args "${aitems[@]}")
-      ],
+      },
       \"luns\": {
 $(json_join_args "${litems[@]}")
       }
@@ -499,6 +535,27 @@ with open(sys.argv[2]) as f:
 
 drift = []
 
+def acl_records(a):
+    # Normalize the ACL section to {initiator: {ml: tp}}: the grants shape
+    # is a dict of dicts; the legacy shape is a bare name list (maps written
+    # before the grants dimension) and normalizes to names with no pairs.
+    if isinstance(a, dict):
+        return {k: v for k, v in a.items() if isinstance(v, dict)}
+    if isinstance(a, list):
+        return {name: {} for name in a}
+    return {}
+
+def grant_pairs(grants):
+    # {str(ml): int(tp)} — the writer emits numeric tpg_lun values; anything
+    # else is a malformed record, dropped rather than guessed.
+    if not isinstance(grants, dict):
+        return {}
+    out = {}
+    for ml, tp in grants.items():
+        if isinstance(ml, str) and ml.isdigit() and isinstance(tp, int):
+            out[ml] = tp
+    return out
+
 if old.get("iqn_prefix") != new.get("iqn_prefix"):
     drift.append("iqn_prefix: map has %r, live has %r"
                  % (old.get("iqn_prefix"), new.get("iqn_prefix")))
@@ -538,11 +595,29 @@ for iqn in sorted(set(old_tg) | set(new_tg)):
         elif ol[idx] != nl[idx]:
             drift.append("target %s: LUN %s moved: map -> %s, live -> %s"
                          % (iqn, idx, ol[idx], nl[idx]))
-    oa, na = set(o.get("acls", [])), set(n.get("acls", []))
-    for a in sorted(oa - na):
+    oa, na = acl_records(o.get("acls", [])), acl_records(n.get("acls", []))
+    for a in sorted(set(oa) - set(na)):
         drift.append("target %s: ACL initiator %s is missing live" % (iqn, a))
-    for a in sorted(na - oa):
+    for a in sorted(set(na) - set(oa)):
         drift.append("target %s: live ACL initiator %s is not in the map" % (iqn, a))
+    # Grant pairs are compared only when the MAP side records them (the
+    # dict shape): a legacy list map carries no grant dimension to compare
+    # against, and it is refreshed to the new shape at the next save.
+    if isinstance(o.get("acls"), dict) and isinstance(n.get("acls"), dict):
+        for a in sorted(set(oa) & set(na)):
+            og, ng = grant_pairs(oa[a]), grant_pairs(na[a])
+            for ml in sorted(set(og) | set(ng),
+                             key=lambda s: int(s) if s.isdigit() else 1 << 30):
+                if ml not in ng:
+                    drift.append("target %s: ACL %s grant mapped_lun %s -> tpg_lun %s"
+                                 " is missing live" % (iqn, a, ml, og[ml]))
+                elif ml not in og:
+                    drift.append("target %s: ACL %s live grant mapped_lun %s ->"
+                                 " tpg_lun %s is not in the map" % (iqn, a, ml, ng[ml]))
+                elif og[ml] != ng[ml]:
+                    drift.append("target %s: ACL %s grant mapped_lun %s moved:"
+                                 " map -> tpg_lun %s, live -> tpg_lun %s"
+                                 % (iqn, a, ml, og[ml], ng[ml]))
 
 old_bs = old.get("backstores", {})
 new_bs = new.get("backstores", {})

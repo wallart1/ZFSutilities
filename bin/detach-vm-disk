@@ -171,8 +171,12 @@ if is_two_node && [[ -n "$backstore_name" ]]; then
             log_msg "WARN: Could not remove LUN (may already be removed)"
     fi
 
-    # Remove backstore
-    if targetcli /backstores/block ls 2>/dev/null | grep -q " ${backstore_name} "; then
+    # Remove backstore. Captured and grepped as a variable — a piped
+    # `grep -q` under `set -o pipefail` flips a found backstore to
+    # "missing" when grep exits on the match while targetcli is still
+    # writing (SIGPIPE -> 141 -> pipeline failed).
+    _bs_listing=$(targetcli /backstores/block ls 2>/dev/null || true)
+    if grep -q " ${backstore_name} " <<< "$_bs_listing"; then
         log_msg "INFO: Removing backstore $backstore_name..."
         targetcli /backstores/block delete "$backstore_name"
         log_msg "INFO: ✓ Backstore removed"

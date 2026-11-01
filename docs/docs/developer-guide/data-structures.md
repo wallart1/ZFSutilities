@@ -875,7 +875,7 @@ beside the map so the pool-resident pair is self-contained for recovery.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "generated": "2026-10-23T14:00:00-04:00",
   "host": "stewie",
   "iqn_prefix": "iqn.2026-02.local.stewie",
@@ -885,7 +885,10 @@ beside the map so the pool-resident pair is self-contained for recovery.
   },
   "targets": {
     "iqn.2026-02.local.stewie:threeamigos": {
-      "acls": ["iqn.2026-02.local.tweety"],
+      "acls": {
+        "iqn.2026-02.local.tweety": { "0": 0, "19": 19 },
+        "iqn.2026-02.local.dummy": { "8": 0 }
+      },
       "luns": { "0": "vm-101-disk-0", "19": "vm-207-disk-2" }
     }
   },
@@ -901,13 +904,13 @@ beside the map so the pool-resident pair is self-contained for recovery.
 
 | Key | Type | Description |
 | --- | ---- | ----------- |
-| `version` | number | Map schema version (currently `1`) |
+| `version` | number | Map schema version (currently `2`) |
 | `generated` | string | `date -Iseconds` timestamp of the export |
 | `host` | string | Short hostname of the storage host that wrote the map |
 | `iqn_prefix` / `storage_ip` | string | Node identity at export time (drift in these is reported by `--check`) |
 | `pools.<name>` | string | Pool GUID at export time — the pool-identity fence (a renamed or replaced pool reuses a name but never a GUID); additive key, maps written before it simply omit it |
 | `targets.<iqn>.luns` | object | LUN number (string key) → backstore name for that target |
-| `targets.<iqn>.acls` | array | Initiator IQNs bound to the target's ACLs |
+| `targets.<iqn>.acls` | object | Initiator IQN → its recorded grant pairs: `mapped_lun` (string key) → `tpg_lun` (number), exactly as the initiator holds them live. A non-identity pair (`"8": 0` above — the initiator sees TPG LUN 0 at mapped LUN 8) is what the grants dimension exists for: identity rebuilds cannot express it. Maps written before version 2 carry a bare initiator-name array instead; readers accept both shapes and treat the legacy list as names with unrecorded grants |
 | `backstores.<name>.dev` | string | Zvol device path backing the backstore |
 | `backstores.<name>.target` / `.lun` | string / number | Owning target IQN and LUN index; omitted when a loaded backstore has no LUN mapping |
 
@@ -931,17 +934,28 @@ Semantics:
 - **Deterministic content.** Sections are sorted, so repeated exports of an
   unchanged topology differ only in `generated`; `--check` compares the
   recorded map with live state and reports `DRIFT:` lines for manual
-  `targetcli` edits.
+  `targetcli` edits (grant-pair drift included — a moved or deleted
+  MappedLUN is a `DRIFT:` line once the map records pairs; against a legacy
+  name-list map the grants comparison stays silent, since that map carries
+  no pairs to compare).
 - **Recovery consumer.** [reconcile-iscsi-state](../commands-and-modules/two-node.md#reconcile-iscsi-state-storage-node)
   reads the newest map across online pools (or an explicit snapshot via
   `--from`) and recreates the recorded backstores/LUNs/ACLs create-only.
-  After a partial reconcile (refused or skipped entries) the map refresh is
+  Recorded grant pairs are recreated exactly — an initiator whose record
+  carries a non-identity `mapped_lun 8 → tpg_lun 0` grant gets it back as
+  recorded, in either TPG mode (a demo-mode login self-generates identity
+  grants only, so the node is rebuilt for the pair; a pair already present
+  but mapping a different TPG LUN is refused, never remapped). Legacy
+  name-list records keep the identity-grant rebuild. After a partial
+  reconcile (refused, skipped, or failed entries) the map refresh is
   suppressed so entries whose zvols are still missing survive in it.
   [iscsi-recover-encrypted-luns](../commands-and-modules/two-node.md#iscsi-recover-encrypted-luns-storage-node)
   also reads the newest map as its fallback LUN-index source when
   `saveconfig.json` no longer records the encrypted entries (a keys-pending
-  fence save can rewrite it without them); a map generated on another host
-  is never consulted for it.
+  fence save can rewrite it without them); its ACL grant heal uses the same
+  recorded pairs, and an initiator whose recorded grant set does not include
+  the LUN is left ungranted rather than blanket-granted at identity. A map
+  generated on another host is never consulted for it.
 - **Pool identity, compared and never rewritten.** The `pools` GUIDs are
   recorded at export and compared by `export-iscsi-state --check` (a GUID
   change is a `DRIFT:` line), by the `detect_pool_identity` detector

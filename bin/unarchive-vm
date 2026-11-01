@@ -838,8 +838,12 @@ for i in "${!new_zvols[@]}"; do
     echo "TARGET:${target}"
     echo "DISK:${disknum}"
 
-    # Create backstore if missing
-    if targetcli /backstores/block ls 2>/dev/null | grep -qF " ${backstore} "; then
+    # Create backstore if missing. Captured and grepped as a variable —
+    # a piped `grep -q` under `set -o pipefail` flips a found backstore
+    # to "missing" when grep exits on the match while targetcli is
+    # still writing (SIGPIPE -> 141 -> pipeline failed).
+    _bs_listing=$(targetcli /backstores/block ls 2>/dev/null || true)
+    if grep -qF " ${backstore} " <<< "$_bs_listing"; then
         echo "BACKSTORE_EXISTS:${backstore}"
     else
         targetcli /backstores/block create "$backstore" "$zvol_dev"

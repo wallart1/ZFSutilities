@@ -31,3 +31,7 @@ row).  A plan contains:
 
 Plans for findings the user explicitly accepts (waives) are closed with
 an `accepted` note instead of execution.
+
+Executed and closed plans are pruned once their release publishes; plan
+numbers are never reused — the next free number continues the sequence
+(pruned plans are recoverable via `git log`).

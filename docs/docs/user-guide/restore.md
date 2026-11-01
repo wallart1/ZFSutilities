@@ -144,6 +144,38 @@ consequences:
   [archive-vm](../commands-and-modules/commands.md#archive-vm) copy method
   takes.
 
+### Why not reblock backups to the largest block size
+
+Saving space by reblocking every backed-up zvol to the largest possible
+`volblocksize` does work — but only on write-once copies, never on the
+incremental chain:
+
+- **Incremental destinations must stay bit-identical.** Each backup is
+  received into a snapshot lineage; the next incremental builds on the
+  snapshots the destination already holds. A reblocked copy is a new
+  dataset with no snapshot history, so an incremental receive into it is
+  impossible — every later backup would have to be a full transfer. The
+  space saved is paid back many times over in transfer volume.
+- **Reblocking pays where data is written once.** Larger blocks pack RAIDZ
+  parity more efficiently and give compression more to work with, so a
+  write-once copy at a large block size commonly occupies a fraction of
+  its live footprint. That is what the
+  [archive-vm](../commands-and-modules/commands.md#archive-vm) copy method
+  is: the archive zvol is created thin at `volblocksize=1M` and the source
+  is device-copied onto it — the reblock-for-space-efficiency mechanism.
+  Encrypted zvols are the exception (raw receive keeps their original
+  block size, because a device copy would read plaintext), and
+  `unarchive-vm` restores each zvol's original `volblocksize` from its
+  sidecar.
+- **Running VMs want small blocks.** Live zvol block sizes are small by
+  design: with very large blocks, every random guest write triggers
+  copy-on-write write amplification. Large blocks are for cold data.
+
+The rule of thumb: **reblock write-once copies (archives, long-term
+retention); keep incremental chains bit-identical.** When pool space is
+the concern, the lever is archiving cold VMs — the reblock happens as
+part of the archive.
+
 ## Pause Scrubs During Restore
 
 The Restore tab in the GUI has an option to **pause scrubs on the source and destination

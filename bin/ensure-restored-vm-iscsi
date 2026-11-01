@@ -325,8 +325,12 @@ if [[ ! -e "$zvol_dev" ]]; then
     exit 0
 fi
 
-# Ensure backstore exists.
-if ! targetcli /backstores/block ls 2>/dev/null | grep -qF " ${bsname} "; then
+# Ensure backstore exists. Captured and grepped as a variable — a piped
+# `grep -q` under `set -o pipefail` flips a found backstore to "missing"
+# when grep exits on the match while targetcli is still writing
+# (SIGPIPE -> 141 -> pipeline failed).
+_bs_listing=$(targetcli /backstores/block ls 2>/dev/null || true)
+if ! grep -qF " ${bsname} " <<< "$_bs_listing"; then
     targetcli /backstores/block create "$bsname" "$zvol_dev"
     targetcli "/backstores/block/${bsname}" set attribute emulate_tpu=1
     echo "BACKSTORE_CREATED:${bsname}"

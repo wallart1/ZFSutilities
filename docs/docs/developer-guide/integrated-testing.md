@@ -515,10 +515,11 @@ full saveconfig-authority restore including ACL grants and a staged
 non-identity `mapped_lun 8 → tpg_lun 0` grant — with a targets-too
 wipe, where the restore attempt honestly refuses without targets and
 the recovery runs through `setup-iscsi-targets` plus the map-driven
-reconcile (the journey records the authority gap this exposes:
+reconcile (the map's grants dimension is the surviving authority:
 setup's own save overwrites the saveconfig records exactly when they
-are needed, and the pool map carries ACL initiator names but never
-grant indexes); S8 corrupts `saveconfig.json` (the unit restart
+are needed, but the map records each initiator's grant pairs, so the
+reconcile recreates the staged non-identity grant exactly); S8
+corrupts `saveconfig.json` (the unit restart
 restores from `saveconfig-boot.json` unaffected, the pre-start backup
 preserves the corrupt bytes as evidence, `safe-iscsi-save` FATALs on
 the unparseable authority, and the FATAL's own force escape

@@ -451,7 +451,12 @@ zfs list -H "$src_zvol" >/dev/null 2>&1 \
     || { log_msg "FATAL: Source zvol not found: ${src_zvol}"; exit 1; }
 ! zfs list -H "$dst_zvol" >/dev/null 2>&1 \
     || { log_msg "FATAL: Destination zvol already exists: ${dst_zvol}"; exit 1; }
-! targetcli /backstores/block ls 2>/dev/null | grep -qF " ${dst_backstore} " \
+# Captured and grepped as a variable — a piped `grep -q` under
+# `set -o pipefail` flips a found backstore to "missing" when grep
+# exits on the match while targetcli is still writing (SIGPIPE ->
+# 141 -> pipeline failed).
+_bs_listing=$(targetcli /backstores/block ls 2>/dev/null || true)
+! grep -qF " ${dst_backstore} " <<< "$_bs_listing" \
     || { log_msg "FATAL: Backstore already exists: ${dst_backstore}"; exit 1; }
 
 # Take snapshot if it doesn't already exist (same name reused across all disks of this VM)

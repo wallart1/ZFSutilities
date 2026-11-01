@@ -12,6 +12,7 @@ setup_test_env
 IQN1="iqn.2026-02.local.stewie:threeamigos"
 IQN2="iqn.2026-02.local.stewie:nvme1"
 INIT1="iqn.2026-02.local.tweety"
+DUMMY="iqn.2026-02.local.dummy"
 
 # Mock node-lib.sh behavior
 NODE_MODE="two-node"
@@ -50,6 +51,7 @@ _mock_luns_2=""
 _mock_acls_1=""
 _mock_acls_2=""
 _mock_init_grants_1=""
+_mock_dummy_grants_1=""
 _mock_gen_acls_1="1"
 _mock_gen_acls_2="1"
 
@@ -75,6 +77,9 @@ targetcli() {
             ;;
         "/iscsi/${IQN1}/tpg1/acls/${INIT1} ls")
             [[ -n "${_mock_init_grants_1:-}" ]] && printf '%s\n' "$_mock_init_grants_1"
+            ;;
+        "/iscsi/${IQN1}/tpg1/acls/${DUMMY} ls")
+            [[ -n "${_mock_dummy_grants_1:-}" ]] && printf '%s\n' "$_mock_dummy_grants_1"
             ;;
         "/iscsi/${IQN2}/tpg1/acls ls")
             [[ -n "$_mock_acls_2" ]] && printf '%s\n' "$_mock_acls_2"
@@ -116,12 +121,16 @@ targetcli() {
         # listing immediately carries one mapped_lun per mapped LUN.
         # _mock_no_autogrant models stacks/moments without it so the
         # explicit create path stays covered.
-        if [[ -z "${_mock_no_autogrant:-}" && "$3" == "${INIT1}" ]]; then
-            local _idx _bs
+        if [[ -z "${_mock_no_autogrant:-}" ]]; then
+            local _idx _bs _g
             while IFS='|' read -r _idx _bs; do
                 [[ -n "$_idx" ]] || continue
-                _mock_init_grants_1+="  o- mapped_lun${_idx} ... [lun${_idx} \
-block/${_bs} (rw)]"$'\n'
+                _g="  o- mapped_lun${_idx} ... [lun${_idx} block/${_bs} (rw)]"$'\n'
+                if [[ "$3" == "${DUMMY}" ]]; then
+                    _mock_dummy_grants_1+="${_g}"
+                else
+                    _mock_init_grants_1+="${_g}"
+                fi
             done < <(printf '%s\n' "$_mock_luns_1" \
                 | sed -n 's/.*o- lun\([0-9][0-9]*\)  \[block\/\([^ ]*\) .*/\1|\2/p')
         fi
@@ -309,6 +318,50 @@ write_base_map() {
     fi
 }
 
+# A map in the version-2 grants shape (the repair-plan 026 dimension):
+# INIT1 holds the identity grant for LUN 0; DUMMY holds the same identity
+# grant plus the non-identity pair the identity rebuild cannot express —
+# mapped_lun 8 -> tpg_lun 0.
+write_grants_map() {
+    local dst="$1"
+    python3 - "$dst" <<'PYEOF'
+import json, sys
+m = {
+    "version": 2,
+    "generated": "2026-10-30T12:00:00+00:00",
+    "host": "stewie",
+    "iqn_prefix": "iqn.2026-02.local.stewie",
+    "storage_ip": "192.168.100.1",
+    "pools": {"NVME1": "252995746834113014",
+              "threeamigos": "4338716537971988948"},
+    "targets": {
+        "iqn.2026-02.local.stewie:threeamigos": {
+            "acls": {"iqn.2026-02.local.tweety": {"0": 0},
+                     "iqn.2026-02.local.dummy": {"0": 0, "8": 0}},
+            "luns": {"0": "vm-101-disk-0"}},
+        "iqn.2026-02.local.stewie:nvme1": {
+            "acls": {},
+            "luns": {"5": "vm-205-disk-3"}}},
+    "backstores": {
+        "vm-101-disk-0": {
+            "dev": "/dev/zvol/threeamigos/proxmox/vm-101-disk-0",
+            "target": "iqn.2026-02.local.stewie:threeamigos",
+            "lun": 0},
+        "vm-205-disk-3": {
+            "dev": "/dev/zvol/NVME1/proxmox/vm-205-disk-3",
+            "target": "iqn.2026-02.local.stewie:nvme1",
+            "lun": 5}}}
+with open(sys.argv[1], "w") as f:
+    json.dump(m, f, indent=2)
+PYEOF
+}
+
+# Overwrite both registered pools' maps with the grants-shape map.
+use_grants_map_on_pools() {
+    write_grants_map "${_scratch_root}/threeamigos/iscsi-state.json"
+    write_grants_map "${_scratch_root}/NVME1/iscsi-state.json"
+}
+
 # Register both pools as online with a zfsutilities dataset + the base map.
 register_pools_with_map() {
     _scratch_root=$(mktemp -d)
@@ -361,6 +414,7 @@ reset_mocks() {
     _mock_acls_1=""
     _mock_acls_2=""
     _mock_init_grants_1=""
+    _mock_dummy_grants_1=""
     _mock_gen_acls_1="1"
     _mock_gen_acls_2="1"
     _mock_grant_fail=""
@@ -1096,6 +1150,107 @@ or healthy one lost (NVME1='${good}')"
 }
 
 # ------------------------------------------------------------------
+# Repair-plan 026: map grants dimension (recorded mapped_lun -> tpg_lun)
+# ------------------------------------------------------------------
+
+test_map_grant_records_parsed() {
+    local dst
+    dst=$(mktemp)
+    write_grants_map "$dst"
+    test_start "parse_state_map records ACL grant pairs"
+
+    parse_state_map "$dst"
+    local ok=true
+    [[ "${_map_grant_tp["$IQN1|$INIT1|0"]:-}" == "0" ]] || ok=false
+    [[ "${_map_grant_tp["$IQN1|$DUMMY|0"]:-}" == "0" ]] || ok=false
+    [[ "${_map_grant_tp["$IQN1|$DUMMY|8"]:-}" == "0" ]] || ok=false
+    # ACL membership parses from the dict shape too.
+    [[ "${_map_acls_of[$IQN1]:-}" == *"$DUMMY"* ]] || ok=false
+    rm -f "$dst"
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "grant records wrong: init0='${_map_grant_tp["$IQN1|$INIT1|0"]:-none}' \
+dummy0='${_map_grant_tp["$IQN1|$DUMMY|0"]:-none}' dummy8='${_map_grant_tp["$IQN1|$DUMMY|8"]:-none}'"
+    fi
+}
+
+test_recorded_grants_rebuilt_on_demo_tpg() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    use_grants_map_on_pools
+    assume_yes=true
+    test_start "Grant-bearing ACL records rebuild on demo TPGs at the recorded pairs"
+
+    run_main
+    local tlog
+    tlog=$(targetcli_log_content)
+
+    local ok=true
+    [[ "$_main_rc" -eq 0 ]] || ok=false
+    # Both ACL nodes are created despite the demo-mode TPGs: a demo login
+    # self-generates identity grants only, so a recorded pair returns only
+    # through the node.
+    [[ "$tlog" == *"/iscsi/${IQN1}/tpg1/acls create ${INIT1}"* ]] || ok=false
+    [[ "$tlog" == *"/iscsi/${IQN1}/tpg1/acls create ${DUMMY}"* ]] || ok=false
+    # The non-identity pair is recreated exactly: create 8 0 (UIACL order
+    # <mapped_lun> <tpg_lun>). The identity pair landed via the mock's
+    # rtslib auto-grant and is counted present.
+    [[ "$tlog" == *"/iscsi/${IQN1}/tpg1/acls/${DUMMY} create 8 0"* ]] || ok=false
+    [[ "$tlog" != *"/iscsi/${IQN1}/tpg1/acls/${DUMMY} create 0 0"* ]] || ok=false
+    log_has "Granted 2/2 recorded grant(s) to ACL ${DUMMY}" || ok=false
+    log_has "Granted 1/1 recorded grant(s) to ACL ${INIT1}" || ok=false
+    # Neither initiator is left to the demo self-generate note.
+    log_has "self-generate on initiator login" && ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — recorded grants not rebuilt as recorded (log: $tlog)"
+    fi
+}
+
+test_present_recorded_pair_mapping_differently_refused() {
+    reset_mocks
+    live_restored_empty
+    register_pools_with_map
+    use_grants_map_on_pools
+    assume_yes=true
+    # Live LUN 8 exists (a backstore the map does not know — left
+    # untouched), so rtslib's ACL-node auto-grant creates mapped_lun8 ->
+    # lun8 at node creation while the map records 8 -> 0.
+    _mock_backstores=$(bs_line vm-101-disk-0 /dev/zvol/threeamigos/proxmox/vm-101-disk-0)$'\n'
+    _mock_backstores+=$(bs_line vm-999-disk-8 /dev/zvol/threeamigos/proxmox/vm-999-disk-8)$'\n'
+    _mock_luns_1=$(lun_line 0 vm-101-disk-0)$'\n'
+    _mock_luns_1+=$(lun_line 8 vm-999-disk-8)
+    test_start "A recorded pair present but mapping differently is refused, never remapped"
+
+    run_main
+    local tlog hlog
+    tlog=$(targetcli_log_content)
+    hlog=$(helper_log_content)
+
+    local ok=true
+    [[ "$_main_rc" -eq 1 ]] || ok=false
+    log_has "mapped_lun 8 exists but does not map TPG LUN 0 as recorded" || ok=false
+    log_has "Actions failed during apply" || ok=false
+    # No remap attempt was issued for the mismatching pair.
+    [[ "$tlog" != *"/iscsi/${IQN1}/tpg1/acls/${DUMMY} create 8 "* ]] || ok=false
+    # The failed apply blocks the map refresh: the recorded authority
+    # survives for a human to resolve.
+    log_has "Pool LUN map left unchanged" || ok=false
+    [[ "$hlog" != *"export"* ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$_main_rc — mismatching pair not refused (log: $tlog)"
+    fi
+}
+
+# ------------------------------------------------------------------
 # Repair-plan 024: concurrent-mutator fence + truthful apply accounting
 # ------------------------------------------------------------------
 
@@ -1186,6 +1341,9 @@ test_from_explicit_map_wins
 test_map_pool_records_parsed
 test_map_without_pools_key_parses
 test_map_malformed_guid_ignored
+test_map_grant_records_parsed
+test_recorded_grants_rebuilt_on_demo_tpg
+test_present_recorded_pair_mapping_differently_refused
 test_clean_restore
 test_clean_restore_dry_run
 test_lun_slot_conflict_refused

@@ -121,8 +121,13 @@ PYEOF
 # ------------------------------------------------------------------
 while IFS='|' read -r iqn tag init ml tp; do
     [[ -z "$iqn" ]] && continue
-    if ! targetcli "/iscsi/${iqn}/tpg${tag}/acls" ls 2>/dev/null \
-            | grep -qF -- "$init"; then
+    # Presence probe captured, not piped: a `targetcli ... | grep -q`
+    # pipeline under `set -o pipefail` flips a present ACL node to
+    # missing when grep -q exits on the match while targetcli is still
+    # writing (SIGPIPE -> 141 -> pipeline failed) — the restore would
+    # then re-create an existing node and wrongly WARN.
+    acl_ls=$(targetcli "/iscsi/${iqn}/tpg${tag}/acls" ls 2>/dev/null || true)
+    if ! grep -qF -- "$init" <<< "$acl_ls"; then
         if targetcli "/iscsi/${iqn}/tpg${tag}/acls" create "$init" >/dev/null 2>&1; then
             log_msg "INFO:   ✓ Created ACL $init on ${iqn}"
             ((added_acls++)) || true

@@ -329,11 +329,17 @@ lock_new="$zfslock_id"
 # Tear down old lun and backstore if present.
 if [[ -n "$old_bs" ]]; then
     # The lun line slash-prefixes the backstore name, so anchor the guard
-    # on "block/<name> " — a space-anchored name never matches it.
-    if targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null | grep -qF "block/${old_bs} "; then
+    # on "block/<name> " — a space-anchored name never matches it. Both
+    # listings are captured and grepped as variables — a piped `grep -q`
+    # under `set -o pipefail` flips a found object to "missing" when
+    # grep exits on the match while targetcli is still writing
+    # (SIGPIPE -> 141 -> pipeline failed).
+    _luns_ls=$(targetcli "/iscsi/${target}/tpg1/luns" ls 2>/dev/null || true)
+    if grep -qF "block/${old_bs} " <<< "$_luns_ls"; then
         targetcli "/iscsi/${target}/tpg1/luns" delete "lun${lun}"
     fi
-    if targetcli /backstores/block ls 2>/dev/null | grep -qF " ${old_bs} "; then
+    _bs_ls=$(targetcli /backstores/block ls 2>/dev/null || true)
+    if grep -qF " ${old_bs} " <<< "$_bs_ls"; then
         targetcli /backstores/block delete "${old_bs}"
     fi
     manifest_remove "${old_bs}"

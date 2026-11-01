@@ -63,8 +63,14 @@ portals_added=0
 acls_fixed=0
 orphans_removed=0
 skipped_for_orphans=0
+portal_fatal=0
 
 # Iterate over pool_target values (target short names)
+# The target listing is captured once and grepped as a variable: a piped
+# `targetcli /iscsi ls | grep -q` under `set -o pipefail` can flip a found
+# target to "missing" when grep -q exits on the match while targetcli is
+# still writing (SIGPIPE -> 141 -> pipeline failed).
+_iscsi_ls_listing=$(targetcli /iscsi ls 2>/dev/null || true)
 for pool in "${!pool_target[@]}"; do
     target_short="${pool_target[$pool]}"
     target_iqn="${iqn_prefix}:${target_short}"
@@ -72,7 +78,7 @@ for pool in "${!pool_target[@]}"; do
     log_msg "INFO:   Pool: $pool → Target: $target_iqn"
 
     # Check if target already exists
-    if targetcli /iscsi ls 2>/dev/null | grep -q "${target_iqn}"; then
+    if grep -q "${target_iqn}" <<< "$_iscsi_ls_listing"; then
         existing=$((existing + 1))
         log_msg "INFO:     ✓ Target already exists"
     else
@@ -138,9 +144,12 @@ for pool in "${!pool_target[@]}"; do
             done
             # Re-check: only create the new target when no live orphan with
             # this short name remains (a kept orphan keeps the tree split).
+            # Fresh capture (orphans may have just been deleted), grepped as
+            # a variable — same SIGPIPE law as the listing above.
             _still_orphan=false
+            _orphan_recheck=$(targetcli /iscsi ls 2>/dev/null || true)
             for _orphan in "${orphan_iqns[@]}"; do
-                if targetcli /iscsi ls 2>/dev/null | grep -q "$_orphan"; then
+                if grep -q "$_orphan" <<< "$_orphan_recheck"; then
                     _still_orphan=true
                 fi
             done
@@ -170,30 +179,15 @@ for pool in "${!pool_target[@]}"; do
     targetcli "${tpg_path}" set attribute authentication=0 >/dev/null 2>&1
     targetcli "${tpg_path}" set attribute demo_mode_write_protect=0 >/dev/null 2>&1
 
-    # Check if portal already exists
-    portal_exists=false
-    if targetcli "${tpg_path}/portals" ls 2>/dev/null | grep -q "${storage_ip}:3260"; then
-        portal_exists=true
-    fi
-
-        if [[ "$portal_exists" == true ]]; then
-            log_msg "INFO:     ✓ Portal ${storage_ip}:3260 already exists"
-        else
-            # Create the portal
-            if targetcli "${tpg_path}/portals" create "${storage_ip}:3260" >/dev/null 2>&1; then
-                portals_added=$((portals_added + 1))
-                log_msg "INFO:     ✓ Portal ${storage_ip}:3260 added"
-            else
-                log_msg "WARN:   Could not add portal ${storage_ip}:3260"
-            fi
-        fi
-
     # A fresh TPG defaults to explicit-ACL mode with an empty ACL list,
     # which refuses every initiator (iscsiadm error 24 — authorization
     # failure). The dedicated storage network is the isolation boundary
     # in the two-node model, so admit initiators unless this TPG is under
     # explicit ACL management — never flip a TPG that already carries ACLs.
-    if ! targetcli "${tpg_path}/acls" ls 2>/dev/null | grep -q "iqn\."; then
+    # Captured and grepped as a variable (the SIGPIPE law at the /iscsi ls
+    # probes above): a piped `grep -q` flips present ACL nodes to "none".
+    _acls_ls=$(targetcli "${tpg_path}/acls" ls 2>/dev/null || true)
+    if ! grep -q "iqn\." <<< "$_acls_ls"; then
         if targetcli "${tpg_path}" get attribute generate_node_acls 2>/dev/null \
             | grep -q "generate_node_acls=0"; then
             if targetcli "${tpg_path}" set attribute generate_node_acls=1 >/dev/null 2>&1; then
@@ -205,6 +199,100 @@ for pool in "${!pool_target[@]}"; do
         fi
     fi
 done
+
+# ------------------------------------------------------------------
+# Portal binding pass. LIO portals are host-level sockets: rtslib's
+# default 0.0.0.0:3260 wildcard binds INADDR_ANY:3260, and while ANY
+# TPG on the host rides it, no specific :3260 portal can be created
+# anywhere ("Could not create NetworkPortal in configFS" — F-034,
+# live-verified). A per-target create-then-replace is therefore
+# impossible; the specific bind requires purging the wildcard from
+# every TPG first — safe only in the all-fresh window below, where no
+# TPG can hold a session. Hosts with any pre-existing target keep
+# today's posture: no purge, per-target attempt, honest WARN.
+# (portals create takes TWO args; the one-token ip:port form is not a
+# valid targetcli invocation.)
+# ------------------------------------------------------------------
+
+portal_tpgs=()
+portal_missing=()
+for pool in "${!pool_target[@]}"; do
+    _tpg="/iscsi/${iqn_prefix}:${pool_target[$pool]}/tpg1"
+    portal_tpgs+=("$_tpg")
+    # Captured, not piped (the SIGPIPE law at the /iscsi ls probes).
+    _portals_ls=$(targetcli "${_tpg}/portals" ls 2>/dev/null || true)
+    if grep -q "${storage_ip}:3260" <<< "$_portals_ls"; then
+        log_msg "INFO:     ✓ Portal ${storage_ip}:3260 already exists (${pool_target[$pool]})"
+    else
+        portal_missing+=("$_tpg")
+    fi
+done
+
+if (( ${#portal_missing[@]} > 0 )) \
+        && (( created > 0 && existing == 0 && skipped_for_orphans == 0 )); then
+    # All-fresh window: purge the wildcard from every TPG (all of them
+    # are this run's), then bind each missing specific portal.
+    for _tpg in "${portal_tpgs[@]}"; do
+        # Captured, not piped (the SIGPIPE law at the /iscsi ls probes).
+        _portals_ls=$(targetcli "${_tpg}/portals" ls 2>/dev/null || true)
+        if grep -q "0.0.0.0:3260" <<< "$_portals_ls"; then
+            if targetcli "${_tpg}/portals" delete 0.0.0.0 3260 >/dev/null 2>&1; then
+                :
+            else
+                _short="${_tpg##*:}"; _short="${_short%%/*}"
+                log_msg "WARN:   Could not remove the default wildcard on ${_short}" \
+                    "— the specific bind needs a host-wide purge; retry after fixing targetcli"
+            fi
+        fi
+    done
+    _bind_failed=false
+    for _tpg in "${portal_missing[@]}"; do
+        _short="${_tpg##*:}"; _short="${_short%%/*}"
+        if targetcli "${_tpg}/portals" create "${storage_ip}" 3260 >/dev/null 2>&1; then
+            portals_added=$((portals_added + 1))
+            log_msg "INFO:     ✓ Portal ${storage_ip}:3260 bound on ${_short}" \
+                "(default wildcard removed)"
+        else
+            _bind_failed=true
+            log_msg "WARN:   Could not add portal ${storage_ip}:3260 on ${_short}" \
+                "(bind refused — see the wildcard handling below)"
+        fi
+    done
+    if [[ "$_bind_failed" == true ]]; then
+        # Rollback: restore the wildcard serving posture on any TPG the
+        # purge left portal-less; a TPG that cannot get ANY portal back
+        # is fatal (the F-024 law — never strand a TPG portal-less).
+        for _tpg in "${portal_missing[@]}"; do
+            _short="${_tpg##*:}"; _short="${_short%%/*}"
+            # Captured, not piped (the SIGPIPE law at the /iscsi ls probes).
+            _portals_ls=$(targetcli "${_tpg}/portals" ls 2>/dev/null || true)
+            if ! grep -q ":3260" <<< "$_portals_ls"; then
+                if targetcli "${_tpg}/portals" create 0.0.0.0 3260 >/dev/null 2>&1; then
+                    log_msg "WARN:   Wildcard restored on ${_short} — the specific bind" \
+                        "failed; target serves on 0.0.0.0:3260 (fix targetcli and re-run)"
+                else
+                    portal_fatal=1
+                    log_msg "FATAL: ${_short} left portal-less — the specific bind and" \
+                        "the wildcard restore both failed"
+                fi
+            fi
+        done
+    fi
+elif (( ${#portal_missing[@]} > 0 )); then
+    # Mixed or established host: an existing target's portal composition
+    # is established state — only the per-target specific add is
+    # attempted, never a wildcard removal.
+    for _tpg in "${portal_missing[@]}"; do
+        _short="${_tpg##*:}"; _short="${_short%%/*}"
+        if targetcli "${_tpg}/portals" create "${storage_ip}" 3260 >/dev/null 2>&1; then
+            portals_added=$((portals_added + 1))
+            log_msg "INFO:     ✓ Portal ${storage_ip}:3260 added on ${_short}"
+        else
+            log_msg "WARN:   Could not add portal ${storage_ip}:3260 on ${_short} — target" \
+                "keeps its current portal (a host-wide 0.0.0.0:3260 wildcard blocks the bind)"
+        fi
+    done
+fi
 
 echo ""
 
@@ -224,6 +312,10 @@ log_msg "INFO:   Orphans removed:   $orphans_removed"
 if [[ $skipped_for_orphans -gt 0 ]]; then
     log_msg "INFO:   Skipped (orphans kept): $skipped_for_orphans"
     log_msg "FATAL: Resolve the orphan targets above, then re-run."
+    exit 1
+fi
+if [[ $portal_fatal -gt 0 ]]; then
+    log_msg "FATAL: At least one target was left portal-less — fix targetcli and re-run."
     exit 1
 fi
 
