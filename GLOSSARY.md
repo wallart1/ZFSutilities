@@ -198,9 +198,12 @@ restore. One file per dataset per generation, named
 `<dataset with / → %2F>@<snapname>`, stored on a dedicated filesystem
 (`<destfs>/<source pool>/zfsutilities-manifests`) that is snapshotted
 under the same generation snapname as the data — so ordinary retention
-prunes it in lockstep. Excludes what the raw stream already carries
-(the encryption family, `volblocksize`); `keylocation` is deliberately
-kept.
+prunes it in lockstep. The store also travels: offsite onward legs carry
+it to the offsite pool as an ordinary dataset (capture stays off — copies
+hold no local properties), and replay finds it by probing the deeper
+offsite-hop shape before the direct backup root. Excludes what the raw
+stream already carries (the encryption family, `volblocksize`);
+`keylocation` is deliberately kept.
 
 **Replay** is the restore-time half: after the transfer, `zfsreplayprops`
 (shared by `zfsrestore`, the GUI restore payload, and `zfsrestoresendstream`'s

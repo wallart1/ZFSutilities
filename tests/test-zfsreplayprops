@@ -5,7 +5,8 @@
 # (store/key derivation, exact-generation lookup with newest-available
 # fallback, header/sha256 verification, per-property set with skip+WARN,
 # the keylocation best-effort load-key flow, fail-open WARN contract,
-# multi-store mount switching, and the wrapper's dataset mapping).
+# multi-store mount switching, the offsite-hop store-depth probe, and
+# the wrapper's dataset mapping).
 
 # shellcheck disable=SC2218
 # (source() override below is intentionally not active for test-lib.sh itself.)
@@ -715,6 +716,75 @@ test_replay_corrupt_manifest_fails_open() {
     test_pass
 }
 
+test_store_candidates_derivation() {
+    test_start "store candidates list the offsite hop before the direct root"
+
+    assert_equals \
+        "backup/tank/zfsutilities-manifests tank" \
+        "$(propmanifest_store_candidates backup/tank)"
+    assert_equals \
+        $'backup/tank/src/zfsutilities-manifests src/data\nbackup/tank/zfsutilities-manifests tank/src/data' \
+        "$(propmanifest_store_candidates backup/tank/src/data)"
+    assert_equals \
+        $'offsite/fivebays/tank/zfsutilities-manifests tank/src/data\noffsite/fivebays/zfsutilities-manifests fivebays/tank/src/data' \
+        "$(propmanifest_store_candidates offsite/fivebays/tank/src/data)"
+    local rc=0
+    propmanifest_store_candidates backup >/dev/null 2>&1 || rc=$?
+    assert_rc 1 "$rc"
+    test_pass
+}
+
+test_replay_offsite_hop_finds_traveled_store() {
+    test_start "an offsite-hop copy finds its store one component deeper"
+
+    reset_state
+    add_store offsite/fivebays/tank/zfsutilities-manifests "$_rmock_store"
+    add_snap offsite/fivebays/tank/src/data offsite-20261102T1200Z-s
+    write_manifest "$_rmock_store" tank/src/data offsite-20261102T1200Z-s \
+        compression=lz4 recordsize=131072
+
+    local rc=0
+    propmanifest_replay offsite/fivebays/tank/src/data tank/src/data || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_zfs_capture_file")" \
+        "zfs set compression=lz4 tank/src/data"
+    assert_contains "$(get_log)" \
+        "VERB: Replayed 2 properties onto tank/src/data from its property manifest (0 skipped)."
+    if [[ "$(get_log)" == *"WARN"* ]]; then
+        test_fail "an offsite-hop exact hit must not WARN: $(get_log)"
+        return
+    fi
+    test_pass
+}
+
+test_replay_prefers_deep_store_over_stale_shallow() {
+    test_start "a stale shallow store never shadows the traveled deep one"
+
+    reset_state
+    local shallow deep
+    shallow=$(mktemp -d "${TMPDIR:-/tmp}/replayprops_sh.XXXXXX")
+    deep=$(mktemp -d "${TMPDIR:-/tmp}/replayprops_dp.XXXXXX")
+    add_store offsite/fivebays/zfsutilities-manifests "$shallow"
+    add_store offsite/fivebays/tank/zfsutilities-manifests "$deep"
+    add_snap offsite/fivebays/tank/src/data offsite-20261102T1200Z-s
+    write_manifest "$shallow" fivebays/tank/src/data offsite-20261102T1200Z-s \
+        compression=zstd
+    write_manifest "$deep" tank/src/data offsite-20261102T1200Z-s \
+        compression=lz4
+
+    local rc=0
+    propmanifest_replay offsite/fivebays/tank/src/data tank/src/data || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_zfs_capture_file")" \
+        "zfs set compression=lz4 tank/src/data"
+    if [[ "$(cat "$_zfs_capture_file")" == *"compression=zstd"* ]]; then
+        test_fail "the stale shallow store must not apply anything"
+        return
+    fi
+    rm -rf "$shallow" "$deep"
+    test_pass
+}
+
 # ---------------------------------------------------------------------------
 # bin/zfsreplayprops wrapper
 # ---------------------------------------------------------------------------
@@ -878,6 +948,9 @@ test_replay_lock_conflict_fails_open
 test_replay_lock_manager_not_loaded
 test_replay_switches_between_stores
 test_replay_corrupt_manifest_fails_open
+test_store_candidates_derivation
+test_replay_offsite_hop_finds_traveled_store
+test_replay_prefers_deep_store_over_stale_shallow
 test_wrapper_datasets_mapping
 test_wrapper_datasets_zero_qualifiers
 test_wrapper_datasets_replay_failure_fails_open

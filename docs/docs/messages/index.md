@@ -364,6 +364,8 @@ Builds the offsite send step. The messages below are emitted inside the generate
 | -------------- | ------- | -------- |
 | `Applying holds to $sourcefspool and $destfspool snapshots.` | Send/receive succeeded, applyholds is set, and this is not a dry-run — holds now protect the copied datasets on both pools | The hold loop runs for each dataset in the fsarray |
 | `Dry-run: Would apply holds to source and destination snapshots.` | Dry-run variant — the send "succeeded" but holds are suppressed | No holds applied; script exits with its rc |
+| `INFO: Onward leg ... -> ...: property manifests travel via ...` | The step's source is itself a backup destination, so its manifest datasets were added to the includes and travel to the offsite pool as ordinary datasets (`property_manifest='N'`) | Informational; the listed stores ride the chain |
+| `INFO: Onward leg ... -> ...: property manifest capture disabled (copies hold no local properties).` | The step is an onward leg but nothing needs adding — no manifest stores exist under its source, or its includes are empty (stores under a fully-copied source ride as ordinary children) | Informational; capture stays off for this leg |
 
 ## Restore
 

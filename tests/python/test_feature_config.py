@@ -72,6 +72,14 @@ class TestOffsiteConfig(unittest.TestCase):
         offsite = feature_config.get_offsite_config(config)
         self.assertEqual(offsite["variables"]["applyholds"], "Y")
 
+    def test_get_offsite_config_lazy_seeds_property_manifest(self):
+        # A saved config from before property manifests must gain the
+        # default without a CONFIG_VERSION bump.
+        config = {"offsite": {"variables": {"applyholds": "N"}, "steps": []}}
+        offsite = feature_config.get_offsite_config(config)
+        self.assertEqual(offsite["variables"]["property_manifest"], "Y")
+        self.assertEqual(offsite["variables"]["applyholds"], "N")
+
     def test_generate_offsite_snapshot_name(self):
         with temp_config_dir():
             name = feature_config.generate_offsite_snapshot_name()

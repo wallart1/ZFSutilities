@@ -31,8 +31,12 @@ are sent with `zfs send -cw`, so properties such as `compression`,
 `recordsize`, and quotas do not travel, and destinations keep the settings
 they inherit from their parent in the destination pool. Encrypted data stays
 encrypted end to end (raw streams), and transfer verification compares
-snapshot GUIDs. For the full picture — including how encrypted datasets come
-back and how block sizes behave — see
+snapshot GUIDs. Locally-set properties are recorded separately, as property
+manifests captured next to each backup copy after the transfer verifies; the
+offsite job carries the manifest datasets onward, and retention prunes them
+in lockstep with the data because they wear the same labels. For the full
+picture — including how encrypted datasets come back and how block sizes
+behave — see
 [What a Restore Preserves](restore.md#what-a-restore-preserves).
 
 ## Step Failure Handling

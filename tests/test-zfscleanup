@@ -249,6 +249,27 @@ test_prune_datasets_mode_continues_after_retain_error() {
     assert_equals "dest/y @dailybackup" "${zfscleanup_processed[*]}"
 }
 
+test_manifests_dataset_pruned_in_lockstep() {
+    test_start "a zfsutilities-manifests dataset is retained like any other"
+    # Retention lockstep: the property-manifest stores snapshot themselves
+    # under the same generation snapnames as the data, so the ordinary pool
+    # walk must hand them to retain with the same label — no special
+    # casing anywhere (the tripwire against a future carve-out).
+    reset_state
+    zfscleanup_test_pools=(fivebays)
+    _mock_fsarray=(
+        fivebays/threeamigos/proxmox/vm-100-disk-0
+        fivebays/threeamigos/zfsutilities-manifests
+        fivebays/NVME1/proxmox/vm-205-disk-0
+        fivebays/NVME1/zfsutilities-manifests
+    )
+    cleanup "" "" "offsite"
+    assert_equals \
+        "fivebays/threeamigos/proxmox/vm-100-disk-0 @offsite fivebays/threeamigos/zfsutilities-manifests @offsite fivebays/NVME1/proxmox/vm-205-disk-0 @offsite fivebays/NVME1/zfsutilities-manifests @offsite" \
+        "${zfscleanup_processed[*]}"
+    assert_equals "|||" "${zfscleanup_selection[0]}"
+}
+
 # -----------------------------------------------------------------------------
 # Run tests
 # -----------------------------------------------------------------------------
@@ -268,6 +289,7 @@ test_temp_pool_has_no_builtin_exclude
 test_prune_datasets_mode_skips_pool_discovery
 test_prune_datasets_mode_ignores_pool_argument
 test_prune_datasets_mode_continues_after_retain_error
+test_manifests_dataset_pruned_in_lockstep
 
 rm -rf "$mock_mydir"
 mydir="$old_mydir"

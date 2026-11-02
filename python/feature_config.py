@@ -73,6 +73,7 @@ OFFSITE_DEFAULTS = {
         "allow_destructive": "N",
         "receive_F_option": "F",
         "verify_after_transfer": "Y",
+        "property_manifest": "Y",
         "includes": "",
         "excludes": "",
         "startwith": "",

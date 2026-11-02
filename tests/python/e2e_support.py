@@ -748,7 +748,17 @@ def _local_snap_name(label):
     return f"@{label}-{ts}-s"
 
 
-def build_offsite_step(source, dest, variables, nextsnap, includes="", excludes="", dryrun=False):
+def build_offsite_step(
+    source,
+    dest,
+    variables,
+    nextsnap,
+    includes="",
+    excludes="",
+    dryrun=False,
+    sibling_steps=None,
+    backup_dests=(),
+):
     """The exact step object on_offsite_run builds for one GUI step."""
     return offsite_runner.build_offsite_step_command(
         source,
@@ -759,6 +769,8 @@ def build_offsite_step(source, dest, variables, nextsnap, includes="", excludes=
         includes,
         excludes,
         dryrun=dryrun,
+        sibling_steps=sibling_steps,
+        backup_dests=backup_dests,
     )
 
 
@@ -978,6 +990,73 @@ def offsite_chain_step2(h):
     assert_hold(f"{step1_dest_root}{snap2}", "offsite-zfstest3")
     assert_hold(f"{dst_parent}{snap2}", "offsite-zfstest2")
     assert_guid_match(step1_dest_root, dst_parent, snap2)
+
+
+@scenario("offsite-onward-leg-manifest-travel")
+def offsite_onward_manifest_travel(h):
+    """GUI onward leg: the zfssendoffsite step-4 shape.
+
+    A step whose source is another step's destination must set
+    property_manifest='N' (copies hold no local properties) and carry the
+    existing zfsutilities-manifests dataset along as an ordinary dataset —
+    holds included — while the destination grows NO capture store of its
+    own.
+    """
+    live = h.registry.create("zfstest1", "onward", "live")
+    h.registry.create("zfstest1", "onward", "live", "data")
+    store = h.registry.create("zfstest1", "onward", "live", "zfsutilities-manifests")
+    root = "zfstest1/onward"
+    snap = fresh_snap()
+
+    # The config says an earlier step wrote live's backups under root, so
+    # this step hops root's copies onward to zfstest2.
+    siblings = [{"active": True, "source": live, "dest": root}]
+    step = build_offsite_step(
+        root,
+        "zfstest2",
+        offsite_variables(),
+        snap,
+        includes="live/data",
+        sibling_steps=siblings,
+    )
+    result = h.run(step)
+    h.require_output(result, "property manifests travel via live/zfsutilities-manifests")
+
+    dst_data = h.registry.register(dest_path_for("zfstest2", f"{root}/live/data"))
+    dst_store = h.registry.register(dest_path_for("zfstest2", store))
+    for src_ds, dst_ds in ((f"{root}/live/data", dst_data), (store, dst_store)):
+        assert_snapshot(f"{src_ds}{snap}")
+        assert_snapshot(f"{dst_ds}{snap}")
+        assert_guid_match(src_ds, dst_ds, snap)
+        assert_hold(f"{src_ds}{snap}", "offsite-zfstest2")
+        assert_hold(f"{dst_ds}{snap}", "offsite-zfstest1")
+    # The onward destination must not grow a capture store of its own.
+    if dataset_exists("zfstest2/onward/zfsutilities-manifests"):
+        raise E2EError("onward leg captured manifests (zfstest2/onward/zfsutilities-manifests)")
+
+
+@scenario("offsite-onward-dryrun", level="read")
+def offsite_onward_dryrun(h):
+    """Dry-run onward leg: capture disabled even with nothing to carry.
+
+    The onward flag comes from the sibling-step shape alone, so this runs
+    in read-only contexts: the payload must log the disabled-capture line
+    and never log a Would-capture (property_manifest='N').
+    """
+    snap = fresh_snap()
+    step = build_offsite_step(
+        "zfstest1",
+        "zfstest2",
+        offsite_variables(),
+        snap,
+        dryrun=True,
+        sibling_steps=[{"active": True, "source": "somewhere", "dest": "zfstest1"}],
+    )
+    result = h.run(step, allow_prompts=True)
+    h.require_output(result, "property manifest capture disabled")
+    if "Would capture" in result.output:
+        raise E2EError("onward dry-run must not plan manifest capture")
+    assert_no_snapshot(f"zfstest1{snap}")
 
 
 @scenario("offsite-incremental-rerun")

@@ -987,7 +987,10 @@ Offsite-specific command building and pool detection.
 | Function                          | Purpose                                                |
 | --------------------------------- | ------------------------------------------------------ |
 | `detect_offsite_pool(candidates)` | Find the first online pool in the candidate list       |
-| `build_offsite_step_command(...)` | Build an offsite send/receive step with optional holds |
+| `build_offsite_step_command(...)` | Build an offsite send/receive step with optional holds; with sibling-step context, an onward leg forces `property_manifest='N'` and adds the manifest datasets to the step's includes |
+| `is_onward_leg(source, steps, backup_dests)` | True when a step's source is itself a configured backup destination (the zfssendoffsite step-4 shape) |
+| `discover_manifest_stores(source)` | List the `zfsutilities-manifests` datasets that exist under a source (depth-2 listing) |
+| `manifests_include_patterns(includes, stores, source)` | Pick which manifest datasets ride an onward leg (anchored includes name their pool; unanchored ones ride all stores) |
 
 **Called modules / imported helpers:**
 

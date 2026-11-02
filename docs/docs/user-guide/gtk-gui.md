@@ -631,7 +631,12 @@ This tab configures offsite backups ([`zfssendoffsite`](../commands-and-modules/
 - **Send/Receive Steps** — Editable list with columns: Active, Source,
   Destination, Includes, Excludes. Reorder rows by dragging. The `<offsite>`
   token in the Destination column is replaced at runtime with the detected
-  offsite pool name.
+  offsite pool name. A step whose Source is another step's (or the Backup
+  tab's) Destination is an **onward leg**: it copies backup copies, so the
+  run disables property-manifest capture for it and automatically adds the
+  `zfsutilities-manifests` datasets that exist under its source to its
+  includes, letting the manifests travel to the offsite pool as ordinary
+  datasets (the run log names what travels).
 
 - **Advanced** — Collapsible expander, placed after the send/receive steps, with
   [dataset-selection criteria](#dataset-selection-criteria)
@@ -2830,6 +2835,7 @@ which fields have been changed from their defaults.
 | **dointermediates**       | Backup, Offsite          | Y/N  | `'Y'` = include all intermediate snapshots (`-I`); `'N'` = skip them (`-i`).                        |
 | **allow_destructive**     | Backup, Offsite          | Y/N  | `'Y'` = full copy may destroy an existing destination dataset and its children.                     |
 | **verify_after_transfer** | Backup, Offsite          | Y/N  | `'Y'` = after each receive, compare destination snapshot GUID with source; treat mismatch as fatal. |
+| **property_manifest**     | Offsite                  | Y/N  | `'Y'` = capture property manifests on first-hop transfers. Onward legs (a step whose source is another step's or the backup's destination) never capture — their manifest datasets are added to the step automatically. |
 | **transfer_rate_limit**   | Backup, Offsite          | text | Max transfer rate enforced by the pacer `lib/pace_stream.py` (e.g. `200M`, `1G`). Empty = no limit. |
 | **applyholds**            | Offsite                  | Y/N  | `'Y'` = apply `offsite-<pool>` holds after each offsite step.                                       |
 

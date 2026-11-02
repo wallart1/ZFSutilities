@@ -26,9 +26,11 @@
 # backup copy's manifest (exact generation first, newest available as the
 # fallback), verifies the header and body checksum, and re-applies the
 # properties with `zfs set` — keylocation additionally triggers a
-# best-effort non-interactive `zfs load-key`. Used by bin/zfsreplayprops,
-# which zfsrestore, the GUI restore payload, and zfsrestoresendstream
-# (.props siblings) share.
+# best-effort non-interactive `zfs load-key`. The store is looked up at
+# two backup-root depths, deepest first: a direct backup root, and the
+# offsite hop, where an onward leg copied a whole backup root under
+# another pool. Used by bin/zfsreplayprops, which zfsrestore, the GUI
+# restore payload, and zfsrestoresendstream (.props siblings) share.
 #
 # The manifest dataset itself is snapshotted once per generation under
 # the same generation snapname as the data, so the existing cleanup /
@@ -299,7 +301,9 @@ function propmanifest_finish {
 # source pool in the second component: <backup root>/<source pool>/...,
 # so the store is the first two components plus zfsutilities-manifests
 # and the key is the name minus its first component — exactly what
-# propmanifest_dataset/escape wrote at capture time. Pure string work.
+# propmanifest_dataset/escape wrote at capture time. This is the depth-1
+# candidate; propmanifest_store_candidates adds the deeper offsite-hop
+# shape. Pure string work.
 # Usage: propmanifest_store_of <backup-copy-fs>
 # Output: <manifest-ds> <lookup-key> (space-separated; dataset names
 #         never contain spaces)
@@ -310,6 +314,34 @@ function propmanifest_store_of {
     rest="${fs#*/}"
     if [[ "$rest" = "$fs" ]]; then
         return 1
+    fi
+    printf '%s/%s/zfsutilities-manifests %s\n' \
+        "$first" "${rest%%/*}" "$rest"
+}
+
+# Derive the manifest-store lookup candidates for a backup copy at <fs>:
+# one "<store> <key>" line per possible backup-root depth, DEEPEST FIRST.
+# Depth 1 is every direct backup root (what propmanifest_store_of
+# returns). Depth 2 is the offsite hop: an onward leg copies a whole
+# backup root under another pool (<offsite>/<root>/<pool>/...), so the
+# store sits one component deeper and the key loses a second leading
+# component — exactly where the traveling store lands, since capture
+# keyed those manifests by their original names. Pure string work — no
+# zfs calls, safe in dry-run.
+# Usage: propmanifest_store_candidates <fs>
+# Output: <manifest-ds> <lookup-key> lines, deepest candidate first.
+# Returns: 1 when the name has fewer than two components.
+function propmanifest_store_candidates {
+    local fs="$1" first rest deeper
+    first="${fs%%/*}"
+    rest="${fs#*/}"
+    if [[ "$rest" = "$fs" ]]; then
+        return 1
+    fi
+    deeper="${rest#*/}"
+    if [[ "$deeper" != "$rest" ]]; then
+        printf '%s/%s/%s/zfsutilities-manifests %s\n' \
+            "$first" "${rest%%/*}" "${deeper%%/*}" "$deeper"
     fi
     printf '%s/%s/zfsutilities-manifests %s\n' \
         "$first" "${rest%%/*}" "$rest"
@@ -488,12 +520,13 @@ function propmanifest_switch_mount {
 # (the backup copy's newest snapshot — the generation just restored),
 # then the newest available manifest for that dataset with a WARN, then
 # nothing but a WARN (pre-feature generations keep inherited defaults).
-# Entire contract is fail-open: every failure WARNs and returns 0 — the
-# restore result is never affected.
+# The manifest store is probed at two backup-root depths, deepest first
+# (propmanifest_store_candidates). Entire contract is fail-open: every
+# failure WARNs and returns 0 — the restore result is never affected.
 # Usage: propmanifest_replay <backup-copy-fs> <dest-fs>
 function propmanifest_replay {
     local fs="$1" dest="$2"
-    local mds key store lock_rc=0 lock_id mnt snaps snap exact file body rc=0
+    local candidates store mds key lock_rc=0 lock_id mnt snaps snap exact file body rc=0
 
     if [[ ${dryrun:-N} != 'N' ]]; then
         store=$(propmanifest_store_of "$fs" 2>/dev/null || true)
@@ -502,14 +535,12 @@ function propmanifest_replay {
         return 0
     fi
 
-    store=$(propmanifest_store_of "$fs") || store=""
-    if [[ -z "$store" ]]; then
+    candidates=$(propmanifest_store_candidates "$fs") || candidates=""
+    if [[ -z "$candidates" ]]; then
         log_msg "WARN: Cannot derive a property-manifest store from $fs —" \
             "replay skipped for $dest."
         return 0
     fi
-    mds="${store%% *}"
-    key="${store#* }"
 
     # Write lock on the destination — the replay's `zfs set` batch is a
     # mutation like any other. Any lock failure WARNs and skips replay
@@ -527,53 +558,66 @@ function propmanifest_replay {
     fi
     lock_id="$zfslock_id"
 
-    if ! zfs list -H -o name "$mds" >/dev/null 2>&1; then
-        log_msg "WARN: No property-manifest store $mds — $dest keeps its" \
-            "inherited defaults (backup predates property manifests)."
-        zfslock_release "$lock_id"
-        return 0
-    fi
+    # First existing store wins, deepest candidate first: the store that
+    # traveled with the copy is nested at its own depth, and a stale
+    # shallow store can never shadow it. A store that exists owns the
+    # lookup — a manifest miss inside it does not fall through to a
+    # shallower candidate.
+    while IFS= read -r store; do
+        mds="${store%% *}"
+        key="${store#* }"
+        if [[ -z "$mds" || -z "$key" ]] \
+                || ! zfs list -H -o name "$mds" >/dev/null 2>&1; then
+            continue
+        fi
 
-    propmanifest_switch_mount "$mds"
-    mnt="$_propmanifest_mnt"
-    if [[ -z "$mnt" ]]; then
-        zfslock_release "$lock_id"
-        return 0
-    fi
-
-    # Exact generation = the newest snapshot on the backup copy (name
-    # sort: UTC-canonical names sort chronologically).
-    snaps=$(zfs list -t snapshot -H -o name -S name "$fs" 2>/dev/null) || snaps=""
-    snap="${snaps%%$'\n'*}"
-    snap="${snap#*@}"
-    if [[ -z "$snap" ]]; then
-        log_msg "WARN: No snapshots on $fs — property replay skipped for $dest."
-        zfslock_release "$lock_id"
-        return 0
-    fi
-
-    exact="$mnt/$(propmanifest_escape "$key")@$snap"
-    file="$exact"
-    if [[ ! -f "$exact" ]]; then
-        file=$(propmanifest_newest_file "$mnt/$(propmanifest_escape "$key")@")
-        if [[ -z "$file" ]]; then
-            log_msg "WARN: No property manifest for $key in $mds — $dest" \
-                "keeps its inherited defaults."
+        propmanifest_switch_mount "$mds"
+        mnt="$_propmanifest_mnt"
+        if [[ -z "$mnt" ]]; then
             zfslock_release "$lock_id"
             return 0
         fi
-        log_msg "WARN: Exact-generation manifest @$snap not found for" \
-            "$key — using the newest available (${file##*/})."
-    fi
 
-    body=$(propmanifest_parse "$file" "$key") || rc=$?
-    if [[ $rc -ne 0 ]]; then
-        propmanifest_parse_warn "$rc" "$file" "$key" "$dest"
+        # Exact generation = the newest snapshot on the backup copy (name
+        # sort: UTC-canonical names sort chronologically).
+        snaps=$(zfs list -t snapshot -H -o name -S name "$fs" 2>/dev/null) || snaps=""
+        snap="${snaps%%$'\n'*}"
+        snap="${snap#*@}"
+        if [[ -z "$snap" ]]; then
+            log_msg "WARN: No snapshots on $fs — property replay skipped for $dest."
+            zfslock_release "$lock_id"
+            return 0
+        fi
+
+        exact="$mnt/$(propmanifest_escape "$key")@$snap"
+        file="$exact"
+        if [[ ! -f "$exact" ]]; then
+            file=$(propmanifest_newest_file "$mnt/$(propmanifest_escape "$key")@")
+            if [[ -z "$file" ]]; then
+                log_msg "WARN: No property manifest for $key in $mds — $dest" \
+                    "keeps its inherited defaults."
+                zfslock_release "$lock_id"
+                return 0
+            fi
+            log_msg "WARN: Exact-generation manifest @$snap not found for" \
+                "$key — using the newest available (${file##*/})."
+        fi
+
+        body=$(propmanifest_parse "$file" "$key") || rc=$?
+        if [[ $rc -ne 0 ]]; then
+            propmanifest_parse_warn "$rc" "$file" "$key" "$dest"
+            zfslock_release "$lock_id"
+            return 0
+        fi
+
+        propmanifest_apply_body "$body" "$dest"
         zfslock_release "$lock_id"
         return 0
-    fi
+    done <<< "$candidates"
 
-    propmanifest_apply_body "$body" "$dest"
+    store=$(propmanifest_store_of "$fs") || store=""
+    log_msg "WARN: No property-manifest store ${store%% *} — $dest keeps its" \
+        "inherited defaults (backup predates property manifests)."
     zfslock_release "$lock_id"
     return 0
 }

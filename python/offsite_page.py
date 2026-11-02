@@ -52,6 +52,7 @@ OFFSITE_VARIABLES = [
     "allow_destructive",
     "receive_F_option",
     "verify_after_transfer",
+    "property_manifest",
     "transfer_rate_limit",
 ]
 OFFSITE_YN_VARIABLES = {
@@ -60,6 +61,7 @@ OFFSITE_YN_VARIABLES = {
     "dointermediates",
     "allow_destructive",
     "verify_after_transfer",
+    "property_manifest",
 }
 _OFFSITE_TOPIC_MAP = {
     "includes": "offsite_includes",
@@ -72,6 +74,7 @@ _OFFSITE_TOPIC_MAP = {
     "allow_destructive": "backup_allow_destructive",
     "receive_F_option": "backup_receive_F_option",
     "verify_after_transfer": "offsite_verify_after_transfer",
+    "property_manifest": "backup_property_manifest",
     "transfer_rate_limit": "backup_transfer_rate_limit",
 }
 
@@ -92,6 +95,10 @@ _OFFSITE_VAR_TOOLTIPS = {
     "receive_F_option": "F = force rollback of destination modifications later than the common snapshot.",
     "verify_after_transfer": (
         "Y = compare destination snapshot GUID with source after each receive; mismatch is fatal."
+    ),
+    "property_manifest": (
+        "Y = capture property manifests on first-hop transfers; onward hops never capture — "
+        "their manifest datasets travel along automatically."
     ),
     "transfer_rate_limit": "Max transfer rate for the pacer (e.g. 200M, 1G); empty = no limit.",
 }
@@ -570,6 +577,11 @@ def on_offsite_run(app, ctx):
 
     steps = []
     pause_scrubs = offsite_cfg.get("pause_scrubs", False)
+    backup_dests = tuple(
+        s["dest"]
+        for s in get_backup_config(ctx.config).get("send_receive_steps", [])
+        if s.get("dest")
+    )
     for step in offsite_cfg["steps"]:
         if not step["active"]:
             continue
@@ -587,6 +599,8 @@ def on_offsite_run(app, ctx):
             includes,
             excludes,
             dryrun=dryrun,
+            sibling_steps=offsite_cfg["steps"],
+            backup_dests=backup_dests,
         )
         attach_step_scrub_callbacks(
             offsite_step,

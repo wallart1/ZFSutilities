@@ -2460,7 +2460,7 @@ sudo zfssendoffsite [overrides]
 | ----------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------- |
 | `$autoproceed`, `$dryrun`, `$force` | Forwarded to `zfs-send-receive`    | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$label`                            | Set to `offsite` for this workflow | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
-| `$property_manifest`                | Engine default `'Y'`: each leg captures local-property manifests next to its destination (a copy-source holds none, so copy→copy legs write header-only manifests) | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
+| `$property_manifest`                | Engine default `'Y'` for steps 1–3 (the capture points); step 4 sets `'N'` and instead includes the `zfsutilities-manifests` datasets so the captured manifests travel onward as ordinary datasets | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
 
 | Step | Source        | Destination |
 | ---- | ------------- | ----------- |

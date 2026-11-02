@@ -7,6 +7,11 @@
 # - ZFS holds are applied to the source and destination snapshots to prevent accidental removal.
 # - The snapshot name's label field is set to "offsite", and the bucket field is set to "s".
 # - Only the offsite snapshot is copied. Other intermediate snapshots are ignored.
+# - Property manifests travel with the backups: steps 2 and 3 capture them on fivebays
+#   (the engine default), and step 4 carries the manifest datasets onward as ordinary
+#   datasets with property_manifest='N' — copying a copy would record nothing, since
+#   backup copies hold no local properties. Retention (zfscleanup/zfsoffsiteretain)
+#   prunes the manifest datasets in lockstep because they wear the same labels.
 
 set -euo pipefail
 
@@ -153,15 +158,21 @@ if [[ $step3 = 'Y' ]]; then
 fi
 
 #   (4) Send the fivebays/threeamigos/proxmox and fivebays/NVME1/proxmox subpools to offsite pool.
+#       The zfsutilities-manifests datasets ride along as ordinary datasets so a restore
+#       from the offsite pool can replay properties. property_manifest='N' because this
+#       step copies copies — capturing from them would record nothing.
 if [[ $step4 = 'Y' ]]; then
     nextsnap=$nextsnap_save
     sourcefs="fivebays"
     destfs="$onlineoffsitepool"
     # shellcheck disable=SC2034
     # Intentionally set for sourced zfs-send-receive helper.
-    includes=('threeamigos/proxmox' 'NVME1/proxmox')
+    includes=('threeamigos/proxmox' 'threeamigos/zfsutilities-manifests' 'NVME1/proxmox' 'NVME1/zfsutilities-manifests')
     # shellcheck disable=SC2034
     excludes=()
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced zfs-send-receive helper.
+    property_manifest='N'
     log_msg "INFO: ***  Step 4: Sending $sourcefs to $destfs  ***"
     if send-receive; then
         applyholds

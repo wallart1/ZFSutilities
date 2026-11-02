@@ -103,6 +103,10 @@ applies a `<name>.props` sibling when one sits next to a
   just restored — is used; if it is missing, the newest available manifest
   for that dataset applies instead, with a WARN that the settings may be
   from an older generation.
+- The manifest store is looked up by the backup copy's position in the
+  chain, probing the deeper offsite hop (`<offsite>/<root>/<pool>/...`)
+  before the direct backup root — so restores from an offsite pool find
+  the manifests that traveled with the copies.
 - Backups that predate property manifests have none: the restore WARNs and
   the datasets keep their inherited defaults (the data is unaffected).
 - A manifest is verified (format, dataset, and body checksum) before

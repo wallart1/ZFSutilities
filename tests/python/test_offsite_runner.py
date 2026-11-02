@@ -101,6 +101,194 @@ class TestDetectOffsitePools(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+class TestIsOnwardLeg(unittest.TestCase):
+    """is_onward_leg detects steps whose source is a backup destination."""
+
+    def test_matches_sibling_step_dest(self):
+        steps = [
+            {"active": True, "source": "tank", "dest": "fivebays"},
+            {"active": True, "source": "fivebays", "dest": "z40tb"},
+        ]
+        self.assertTrue(offsite_runner.is_onward_leg("fivebays", steps))
+
+    def test_matches_backup_dest(self):
+        steps = [{"active": True, "source": "z40tb", "dest": "elsewhere"}]
+        self.assertTrue(offsite_runner.is_onward_leg("fivebays", steps, backup_dests=("fivebays",)))
+
+    def test_live_source_is_not_onward(self):
+        steps = [
+            {"active": True, "source": "tank", "dest": "fivebays"},
+            {"active": True, "source": "temp", "dest": "z40tb"},
+        ]
+        self.assertFalse(offsite_runner.is_onward_leg("tank", steps))
+
+    def test_inactive_sibling_counts(self):
+        # Any configured step writing to the source proves it is a backup
+        # destination, active tonight or not.
+        steps = [
+            {"active": False, "source": "tank", "dest": "fivebays"},
+        ]
+        self.assertTrue(offsite_runner.is_onward_leg("fivebays", steps))
+
+    def test_empty_dests_ignored(self):
+        steps = [{"active": True, "source": "tank", "dest": ""}]
+        self.assertFalse(offsite_runner.is_onward_leg("fivebays", steps))
+
+
+class TestDiscoverManifestStores(unittest.TestCase):
+    """discover_manifest_stores finds depth-2 stores under a source."""
+
+    def test_returns_pool_anchored_stores(self):
+        with mock_subprocess() as m:
+            m.add_zfs_list(
+                [
+                    {"name": "fivebays"},
+                    {"name": "fivebays/threeamigos"},
+                    {"name": "fivebays/threeamigos/zfsutilities-manifests"},
+                    {"name": "fivebays/NVME1"},
+                    {"name": "fivebays/NVME1/zfsutilities-manifests"},
+                    {"name": "fivebays/threeamigos/proxmox/vm-100-disk-0"},
+                ]
+            )
+            result = offsite_runner.discover_manifest_stores("fivebays")
+        self.assertEqual(
+            result,
+            ["threeamigos/zfsutilities-manifests", "NVME1/zfsutilities-manifests"],
+        )
+
+    def test_empty_when_no_stores_exist(self):
+        with mock_subprocess() as m:
+            m.add_zfs_list([{"name": "fivebays"}, {"name": "fivebays/tank/src"}])
+            result = offsite_runner.discover_manifest_stores("fivebays")
+        self.assertEqual(result, [])
+
+    def test_empty_on_subprocess_error(self):
+        with mock_subprocess() as m:
+            m.set_command_handler(
+                r"zfs list",
+                lambda _cmd, **_kw: m._completed("", rc=1),
+            )
+            result = offsite_runner.discover_manifest_stores("fivebays")
+        self.assertEqual(result, [])
+
+
+class TestManifestsIncludePatterns(unittest.TestCase):
+    """manifests_include_patterns picks the stores that must ride along."""
+
+    STORES = ("threeamigos/zfsutilities-manifests", "NVME1/zfsutilities-manifests")
+
+    def test_empty_includes_add_nothing(self):
+        self.assertEqual(
+            offsite_runner.manifests_include_patterns("", self.STORES, "fivebays"),
+            [],
+        )
+
+    def test_anchored_pattern_adds_its_pool_store(self):
+        self.assertEqual(
+            offsite_runner.manifests_include_patterns(
+                "threeamigos/proxmox", self.STORES, "fivebays"
+            ),
+            ["threeamigos/zfsutilities-manifests"],
+        )
+
+    def test_exact_pattern_with_source_prefix_adds_its_pool_store(self):
+        self.assertEqual(
+            offsite_runner.manifests_include_patterns(
+                "=fivebays/threeamigos/proxmox/vm-100-disk-0",
+                self.STORES,
+                "fivebays",
+            ),
+            ["threeamigos/zfsutilities-manifests"],
+        )
+
+    def test_unanchored_pattern_adds_all_stores(self):
+        self.assertEqual(
+            offsite_runner.manifests_include_patterns("proxmox", self.STORES, "fivebays"),
+            list(self.STORES),
+        )
+
+
+class TestBuildOnwardStepCommand(unittest.TestCase):
+    """build_offsite_step_command derives onward-leg behavior from context."""
+
+    def _build(self, *, sibling_steps=None, backup_dests=(), includes="", variables=None):
+        return offsite_runner.build_offsite_step_command(
+            source="fivebays",
+            dest="z40tb/fivebays",
+            variables=variables or {},
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            nextsnap="@offsite-2026-06-21T12:00-s",
+            includes_str=includes,
+            excludes_str="",
+            sibling_steps=sibling_steps,
+            backup_dests=backup_dests,
+        )
+
+    def test_onward_leg_forces_manifest_off_and_carries_stores(self):
+        with mock_subprocess() as m:
+            m.add_zfs_list(
+                [
+                    {"name": "fivebays/threeamigos/zfsutilities-manifests"},
+                    {"name": "fivebays/NVME1/zfsutilities-manifests"},
+                ]
+            )
+            step = self._build(
+                sibling_steps=[{"active": True, "source": "tank", "dest": "fivebays"}],
+                includes="threeamigos/proxmox NVME1/proxmox",
+            )
+        script = step.command[2]
+        self.assertIn('property_manifest="N"', script)
+        self.assertIn(
+            'includes=("threeamigos/proxmox" "NVME1/proxmox" '
+            '"threeamigos/zfsutilities-manifests" "NVME1/zfsutilities-manifests")',
+            script,
+        )
+        self.assertIn(
+            "INFO: Onward leg fivebays -> z40tb/fivebays: property manifests "
+            "travel via threeamigos/zfsutilities-manifests NVME1/zfsutilities-manifests.",
+            script,
+        )
+        self.assertTrue(step.metadata["onward"])
+        self.assertEqual(
+            step.metadata["manifests"],
+            ["threeamigos/zfsutilities-manifests", "NVME1/zfsutilities-manifests"],
+        )
+
+    def test_onward_leg_with_empty_includes_adds_nothing(self):
+        with mock_subprocess() as m:
+            m.add_zfs_list([{"name": "fivebays/threeamigos/zfsutilities-manifests"}])
+            step = self._build(
+                sibling_steps=[{"active": True, "source": "tank", "dest": "fivebays"}],
+            )
+        script = step.command[2]
+        self.assertIn('property_manifest="N"', script)
+        self.assertIn("includes=(); ", script)
+        self.assertIn(
+            "property manifest capture disabled (copies hold no local properties)",
+            script,
+        )
+        self.assertEqual(step.metadata["manifests"], [])
+
+    def test_live_step_keeps_default_and_variables_override(self):
+        step = self._build(sibling_steps=[{"active": True, "source": "a", "dest": "b"}])
+        self.assertIn('property_manifest="Y"', step.command[2])
+        self.assertFalse(step.metadata["onward"])
+        step = self._build(
+            sibling_steps=[{"active": True, "source": "a", "dest": "b"}],
+            variables={"property_manifest": "N"},
+        )
+        self.assertIn('property_manifest="N"', step.command[2])
+        self.assertFalse(step.metadata["onward"])
+
+    def test_backup_dests_make_the_leg_onward(self):
+        step = self._build(
+            sibling_steps=[{"active": True, "source": "a", "dest": "b"}],
+            backup_dests=("fivebays",),
+        )
+        self.assertIn('property_manifest="N"', step.command[2])
+        self.assertTrue(step.metadata["onward"])
+
+
 class TestBuildOffsiteStepCommand(unittest.TestCase):
     """build_offsite_step_command produces a BashStep for offsite send/receive."""
 

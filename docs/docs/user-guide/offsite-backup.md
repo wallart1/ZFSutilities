@@ -48,7 +48,7 @@ NVME1 ───────────────────┘
 | 1    | `temp`        | `<offsite>` | Excludes `temp/temp`                           |
 | 2    | `threeamigos` | `fivebays`  | `proxmox` subtree only                         |
 | 3    | `NVME1`       | `fivebays`  | All datasets                                   |
-| 4    | `fivebays`    | `<offsite>` | `threeamigos/proxmox` and `NVME1/proxmox` only |
+| 4    | `fivebays`    | `<offsite>` | `threeamigos/proxmox`, `NVME1/proxmox`, and their `zfsutilities-manifests` datasets |
 
 The `<offsite>` token is replaced at run time with the first online offsite
 pool marked as an offsite candidate in the pool registry.  When the
@@ -60,6 +60,12 @@ destination is just `<offsite>`, the source dataset tree is appended under that 
 
 The offsite copies are data-only streams (`zfs send -cw`), just like the
 daily backup: snapshot data and encryption travel, dataset settings do not.
+The dataset settings travel separately, as [property
+manifests](restore.md#what-a-restore-preserves): steps 2 and 3 capture them
+on `fivebays`, and step 4 carries the manifest datasets onward to the
+offsite pool as ordinary datasets (it copies copies, which hold no local
+properties, so it captures nothing itself).  A restore from the offsite
+pool finds the traveled manifests and replays them.
 See [What a Restore Preserves](restore.md#what-a-restore-preserves) for
 details.
 
@@ -188,3 +194,8 @@ sudo ./zfscleanup '<poolname>' '' 'offsite'
 
 This removes `offsite`-labeled snapshots beyond the retention count for that
 pool's policy. The same safety checks apply.
+
+All three routes prune the `zfsutilities-manifests` datasets in lockstep with
+the data: the stores snapshot themselves under the same generation snapnames,
+so the ordinary label-based walk treats them like any other dataset — no
+separate retention policy is needed.
