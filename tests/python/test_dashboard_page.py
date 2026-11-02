@@ -29,6 +29,14 @@ from test_support import (
 
 pytestmark = requires_gi
 
+# gui_helpers may have been evicted and re-imported by an earlier
+# suite's module-level context, leaving the cached dashboard_page bound
+# to a gui_helpers that is no longer the one a fresh import returns —
+# the header/tooltip tests patch gh and assert handler identity against
+# what dp actually calls, so evict both and import them as one pair
+# (the same pairing the eviction suites keep for their own pages).
+for _module in ("gui_helpers", "dashboard_page"):
+    sys.modules.pop(_module, None)
 dp = import_or_skip_gi("dashboard_page")
 gh = import_or_skip_gi("gui_helpers")
 
