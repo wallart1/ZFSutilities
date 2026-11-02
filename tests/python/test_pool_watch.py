@@ -12,6 +12,13 @@ if PYTHON_SRC not in sys.path:
 
 from test_support import mock_gtk
 
+# gui_helpers may already be bound to the real gi by an earlier suite in
+# the process (test_dashboard_page imports it under real gi), and
+# pool_watch itself may already be bound by any earlier suite; evict both
+# so pool_watch and gui_helpers share this suite's mock GTK and one
+# consistent gui_helpers binding.
+for _module in ("gui_helpers", "pool_watch"):
+    sys.modules.pop(_module, None)
 with mock_gtk():
     import pool_watch
     from pool_watch import PoolWatchWindow

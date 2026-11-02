@@ -26,6 +26,7 @@ from gui_helpers import (
     DirtyTracker,
     add_var_row,
     bold_label,
+    capped_treeview_scroll,
     configure_treeview_column,
     handle_editing_key_press,
     on_cell_edited,
@@ -94,6 +95,12 @@ def create_offsite_page(app, ctx):
     box.set_margin_top(10)
     box.set_margin_bottom(10)
     scrolled.add(box)
+    # NATURAL vscroll policy: the step table's capped window has a tiny
+    # minimum, and the default MINIMUM policy would crush it at short
+    # window heights (dashboard-page idiom).
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
 
     # Title
     title = Gtk.Label()
@@ -208,12 +215,11 @@ def create_offsite_page(app, ctx):
     app.offsite_step_view = step_view
     app._ui_state.bind_treeview(app.offsite_step_view, "offsite_steps_view")
 
-    step_scroll = Gtk.ScrolledWindow()
-    step_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    step_scroll.set_min_content_height(140)
-    step_scroll.add(step_view)
+    step_scroll = capped_treeview_scroll(step_view)
     setup_row_scroll(step_scroll, step_view)
-    sr_box.pack_start(step_scroll, True, True, 0)
+    # Non-expanding: the step table is only as tall as its rows (up to
+    # the 20-row cap).
+    sr_box.pack_start(step_scroll, False, False, 0)
 
     btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
     for label, cb in [("Add", _on_step_add), ("Remove", _on_step_remove)]:

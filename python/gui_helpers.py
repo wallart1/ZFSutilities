@@ -321,26 +321,24 @@ def treeview_row_height(view):
         return TREEVIEW_ROW_HEIGHT_FALLBACK
 
 
-def capped_treeview_scroll(view, row_target=TABLE_ROW_TARGET, fixed_rows=True):
-    """Wrap a TreeView in its own scrolled window sized for *row_target* rows.
+def capped_treeview_scroll(view, row_target=TABLE_ROW_TARGET, fixed_rows=False):
+    """Wrap a TreeView in its own scrolled window sized by its rows.
 
-    Every table on the Performance page scrolls on its own: the window
-    shows at most *row_target* rows (taller tables scroll inside it), the
-    vertical scrollbar sits permanently at the window's right edge, and a
-    horizontal scrollbar appears whenever the fixed-width columns overflow
-    it. With *fixed_rows* (the Performance-page convention) the window's
-    minimum height equals the cap, so every table keeps its full
-    *row_target*-line window whatever its row count — short and empty
-    tables show 20 lines instead of collapsing to their content. The
-    one-row allowance over the target absorbs a classic (non-overlay)
-    horizontal scrollbar's height, so the target row count stays visible
-    with or without one. With ``fixed_rows=False`` a short table keeps
-    its natural height up to the same cap (the Dashboard's Active Locks
-    table; the Dashboard Tasks list instead uses *fixed_rows* so its
-    window stays a constant ten rows whatever the list length).
-    ``propagate_natural_height`` is essential — without it the
-    scrolled window's natural height is its ``min_content_height`` and
-    the table collapses to a couple of rows.
+    Every table in the GUI sizes to its data: the window grows with the
+    rows up to *row_target* rows and stops there — taller tables scroll
+    inside the window, which shows at most *row_target* rows whatever
+    the row count. The vertical scrollbar sits at the window's right
+    edge, and a horizontal scrollbar appears whenever the fixed-width
+    columns overflow it. The one-row allowance over the target absorbs
+    a classic (non-overlay) horizontal scrollbar's height, so the
+    target row count stays visible with or without one; an empty table
+    keeps a small header-only floor. ``propagate_natural_height`` is
+    essential — without it the scrolled window's natural height is its
+    ``min_content_height`` and the table collapses to a couple of rows.
+    Callers wanting a constant *row_target*-line window whatever the
+    row count (short and empty tables included) may pass
+    ``fixed_rows=True``, which pins the window's minimum height to the
+    cap.
     """
     scroll = Gtk.ScrolledWindow()
     scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -1563,10 +1561,7 @@ class EditableListView:
         self.view.connect("row-activated", on_row_activated, self.columns[0][0])
         self.view.set_reorderable(True)
 
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scroll.set_min_content_height(120)
-        scroll.add(self.view)
+        scroll = capped_treeview_scroll(self.view)
         setup_row_scroll(scroll, self.view)
 
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)

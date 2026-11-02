@@ -1419,11 +1419,9 @@ def create_dashboard_page(app):
 
     app.enable_treeview_copy(app.dashboard_tasks_view)
 
-    # Keep the old sections' ten-row footprint: the window shows ten rows
-    # whatever the list length, and taller lists scroll inside it.
-    tasks_scrolled = capped_treeview_scroll(
-        app.dashboard_tasks_view, row_target=10, fixed_rows=True
-    )
+    # Like every table now: the window sizes to the task rows up to the
+    # 20-row cap and scrolls inside beyond that.
+    tasks_scrolled = capped_treeview_scroll(app.dashboard_tasks_view)
 
     tasks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     tasks_box.set_margin_start(10)
@@ -1461,7 +1459,7 @@ def create_dashboard_page(app):
 
     app.enable_treeview_copy(app.dashboard_locks_view)
 
-    locks_scrolled = capped_treeview_scroll(app.dashboard_locks_view, fixed_rows=False)
+    locks_scrolled = capped_treeview_scroll(app.dashboard_locks_view)
 
     locks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     locks_box.set_margin_start(10)

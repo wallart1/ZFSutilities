@@ -50,6 +50,42 @@
   every submission (nothing merges automatically), and the AGENTS.md
   coding contract; `VERSION` and the change log stay maintainer-only.
 
+- **Config-generation downgrade safety.** Switching back to an older
+  release can no longer leave a newer config paired with older software.
+  The GUI's config loader now archives the exact loaded config, keyed by
+  generation, to `config-archive/config.v<N>.json` beside `config.json` —
+  before every forward migration and, pristine, whenever a build reads a
+  config written by a newer release (that WARN now names the cause and
+  the remedy). `switch-version` gained a config-generation gate that runs
+  before any wiring change: a downgrade restores the target generation's
+  archived config (the newer one is preserved for the switch back), and
+  with no archived config of the target generation the switch refuses
+  outright — `ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE=1` archives the newer
+  config aside and starts the older release from default settings
+  instead. Unknown target generations (pre-schema releases) and missing
+  saved configs skip the gate.
+- **Oldest-snapshots section in `zfsshowbigstuff`.** A new section
+  between the recordsize block and the sort sections lists the `count`
+  (default 5) oldest snapshots under the target — recursive, oldest
+  first, with name, creation, and used. The usage line now documents
+  that `count` applies to every section, not only the smallest datasets.
+- **`j19-baseline-capture` upgrade journey.** The trust-on-first-upgrade
+  path (F-025): when an old tree has no deployment manifest and no
+  obtainable release tarball, `upgrade-zfsutilities` captures a baseline
+  manifest from the active tree and scans against it on every later
+  upgrade. j19 provisions no pristine scan source (new
+  `ITF_UPGRADE_BASELINE=none` staging knob) and walks the full contract
+  live — pre-capture modifications absorbed into the baseline, a second
+  upgrade detecting modified, added, and removed files (the removal
+  classification's first journey exercise) with local-content salvage,
+  then switch-version and wiring verification. With j10 and j12 this
+  completes the single-node upgrade coverage; the two-node remote-target
+  surface is recorded as a gap row in the ITF coverage map.
+- **`GLOSSARY.md`** at the repository root: plain-language definitions of
+  project terms (CI, controlled reboot, green, mock, shape, suite, TTL,
+  config version, drift, …) with project-specific anchors, maintained
+  proactively as jargon surfaces.
+
 ### Fixed
 
 - **`targetcli ... | grep -q` presence-probe race.** Under
@@ -71,6 +107,30 @@
   suites' module-level GUI mock contexts are now fresh, so each file
   binds its own mocks.
 
+- **Cross-suite test-order pollution retired.** GUI test suites evict
+  previously imported real-GTK module bindings before their mock import,
+  and the restore/checkagainst suites use fresh per-suite mock contexts,
+  so a page module can never stay bound to another suite's
+  `gui_helpers` nor accumulate shared mock history — fixing the
+  recorded restore-then-checkagainst pytest ordering failure class for
+  good.
+
+### Changed
+
+- **All tables size to their rows.** Every treeview in the GUI — the
+  nine tab pages, dialogs and wizards, the editable variable lists, and
+  the pool watch window — now grows with its content up to a 20-row cap
+  and scrolls inside beyond it, instead of keeping a fixed-height
+  window; a short or empty table keeps a compact window. The page
+  viewports size their content by natural height, so small windows no
+  longer crush both tables of a two-table page (the page scrollbar
+  engages instead). The Dashboard Tasks table's former constant ten-row
+  window follows the same uniform rule now, and the Pools page's
+  top/bottom divider defaults on first map to the pool table's natural
+  height (a saved divider position still wins). Callers of
+  `gui_helpers.capped_treeview_scroll` that want the old fixed-window
+  behavior pass `fixed_rows=True` explicitly.
+
 ### Tests
 
 - Portal unit mock rebuilt to model host-level sockets — shared
@@ -87,6 +147,17 @@
   plans pruned from the registry; the findings register keeps its open
   rows only.
 
+- New coverage: config archiving (migration, newer-than-build with
+  remedy WARN, no-archive-on-match, freshest-wins) and the
+  switch-version gate (restore, refuse-without-mutation, override,
+  upgrade-untouched, skip cases; the suite's environment now redirects
+  the config path away from the host's real config);
+  `zfsshowbigstuff` oldest-snapshots section (default five, count
+  honored, ordering); the pools-page first-map divider default; the
+  j19 journey registered in the ITF driver. j10, j12 (X2 kill-race
+  fixed to wait for the version directory), and j19 ran green on the
+  release tree.
+
 ### Documentation
 
 - Two-node guide: portal-binding pass and the recorded-grant behavior
@@ -95,6 +166,15 @@
   grant messages; restore guide: why backups are not reblocked to the
   largest block size; integrated-testing: the j05/j16 journey updates;
   README: Contributing section.
+
+- `switch-version` gate semantics, environment-variable and
+  data-structure rows; `zfsshowbigstuff` oldest-snapshots section and
+  flow; message-manual rows for the new gate WARN/FATAL/INFO lines, the
+  reworded config-version WARN, the archive-failure WARN, and the
+  oldest-snapshots header; GUI guide table passages rewritten for the
+  natural sizing; testing-guide suite descriptions; path-layout row for
+  `config-archive/`; integrated-testing j19 section and ITF coverage-map
+  gap row; new `GLOSSARY.md`.
 
 ## 0.136.0
 

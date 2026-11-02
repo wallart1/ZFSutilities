@@ -14,6 +14,7 @@ from backup_config import log_msg, save_pools
 from gi.repository import Gtk
 from gui_helpers import (
     add_scrolled_text_view,
+    capped_treeview_scroll,
     collect_dataset_busy_reasons,
     configure_treeview_column,
     create_dialog,
@@ -286,10 +287,7 @@ def on_pools_import(app):
     configure_treeview_column(col, width=150)
     tree_view.append_column(col)
 
-    scrolled = Gtk.ScrolledWindow()
-    scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-    scrolled.set_min_content_height(150)
-    scrolled.add(tree_view)
+    scrolled = capped_treeview_scroll(tree_view)
     content.add(scrolled)
 
     if filtered:

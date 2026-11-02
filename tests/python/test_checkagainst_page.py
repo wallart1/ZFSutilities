@@ -13,6 +13,17 @@ if PYTHON_SRC not in sys.path:
 
 from test_support import mock_gtk, temp_config_dir
 
+# gui_helpers may already be bound to the real gi by an earlier suite in
+# the process (test_dashboard_page imports it under real gi), and
+# checkagainst_page itself may already be bound by any earlier suite — to
+# either. Evict both so checkagainst_page and gui_helpers share this
+# suite's mock GTK and one consistent gui_helpers binding (a page module
+# left over from another suite keeps ITS gui_helpers, and patching this
+# suite's copy then diverges from what the page calls). The fresh context
+# then evicts every loaded GUI module, so the imports inside bind this
+# context's mocks with no shared call history either.
+for _module in ("gui_helpers", "checkagainst_page"):
+    sys.modules.pop(_module, None)
 with mock_gtk(fresh=True):
     import checkagainst_page as cap
     import gui_helpers
@@ -655,6 +666,12 @@ class TestPageConstruction(unittest.TestCase):
             cap.Gtk.PolicyType.NEVER, cap.Gtk.PolicyType.AUTOMATIC
         )
         page_sw.add.assert_called_once()
+        # The page viewport sizes its content by NATURAL height so the
+        # section tables' capped windows are never crushed at short
+        # window heights.
+        page_sw.get_child.return_value.set_vscroll_policy.assert_called_once_with(
+            cap.Gtk.ScrollablePolicy.NATURAL
+        )
 
 
 class TestColumnTooltips(unittest.TestCase):

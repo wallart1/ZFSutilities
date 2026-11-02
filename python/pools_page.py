@@ -23,6 +23,7 @@ from feature_config import (
 from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
     append_treeview_copy_items,
+    capped_treeview_scroll,
     configure_treeview_column,
     set_button_markup_red,
     set_monospace_font,
@@ -230,9 +231,9 @@ def create_pools_page(app):
     app.pool_view.connect("drag-end", _on_pools_drag_end, app)
     app.pool_view.get_selection().connect("changed", _on_pool_selection_changed, app)
 
-    scrolled = Gtk.ScrolledWindow()
-    scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    scrolled.add(app.pool_view)
+    # Paned child: expand stays on (the divider governs), the window's
+    # natural request sizes the initial divider.
+    scrolled = capped_treeview_scroll(app.pool_view)
     setup_row_scroll(scrolled, app.pool_view)
     top_box.pack_start(scrolled, True, True, 0)
 
@@ -340,10 +341,9 @@ def create_pools_page(app):
     app.scrub_store.connect("sort-column-changed", _on_scrub_sort_column_changed, app)
     app.scrub_view.connect("drag-end", _on_scrub_drag_end, app)
 
-    scrub_scrolled = Gtk.ScrolledWindow()
-    scrub_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    scrub_scrolled.set_min_content_height(150)
-    scrub_scrolled.add(app.scrub_view)
+    # Paned child: expand stays on (the divider governs), the window's
+    # natural request sizes the initial divider.
+    scrub_scrolled = capped_treeview_scroll(app.scrub_view)
     setup_row_scroll(scrub_scrolled, app.scrub_view)
     bottom_box.pack_start(scrub_scrolled, True, True, 0)
 
@@ -355,6 +355,19 @@ def create_pools_page(app):
     paned.pack1(top_box, True, False)
     paned.pack2(bottom_box, True, False)
     app._ui_state.bind_paned(paned, "pools_paned")
+
+    # GTK's unset-position default hands pane 1 over half the window,
+    # stretching the pool table's window far beyond its rows (probed under
+    # Xvfb: divider 400 of 700 for a 3-row top pane). Default the divider
+    # to the top pane's natural height once — after bind_paned's idle has
+    # had its chance to restore a saved position, which wins when present.
+    def _default_divider_position():
+        if not paned.get_property("position-set"):
+            _min_height, top_natural = top_box.get_preferred_height()
+            paned.set_position(top_natural)
+        return False
+
+    GLib.idle_add(_default_divider_position)
     box.pack_start(paned, True, True, 0)
 
     return box

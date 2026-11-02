@@ -269,6 +269,25 @@ the post-install point in a minute or two instead of repeating the
   without activating, and the journey finishes with `switch-version`,
   wiring verification, and the "Nothing to upgrade" rerun.
 
+  **j19-baseline-capture** exercises the trust-on-first-upgrade
+  capture path itself — the F-025 behavior the other two upgrade
+  journeys bypass, because their shared staging always provisions a
+  pristine scan source (the GitHub tag tarball, or the as-deployed
+  tree via `ZFSUTILITIES_TAG_TARBALL_URL`). j19 runs the same staging
+  with `ITF_UPGRADE_BASELINE=none`: no tag tarball, no override, so
+  the first upgrade on the untagged old tree cannot obtain any
+  baseline and must capture one from the active tree itself.
+  Modifications injected before that upgrade are absorbed into the
+  captured manifest — indistinguishable from pristine content: not
+  flagged, nothing salvageable — and the manifest lands additively in
+  the still-active old tree, which every later upgrade then scans
+  against. The journey's second upgrade proves exactly that: new
+  modifications (modified, added, and removed — the removal
+  classification's first journey exercise) are detected against the
+  captured baseline, salvaged with their local content, and diffing
+  degrades honestly (no pristine source exists for an untagged
+  version). Then `switch-version` and wiring verification, as in j10.
+
 ## Fast re-verification: `journey run --rerun`
 
 Fix-verify loops are the daily reality of the repair workflow, and the

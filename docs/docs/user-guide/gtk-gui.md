@@ -328,10 +328,11 @@ The sidebar exposes these pages, with the storage-infrastructure tabs
 
 The Dashboard provides an at-a-glance overview of ZFS health and active locks.
 It refreshes automatically every 30 seconds while visible, or manually via the
-**Refresh** action button. The Tasks table keeps a constant ten-row window and
-grows its own vertical scrollbar when the list is longer; the Active Locks
-table sizes to its content up to 20 rows and scrolls beyond that (a horizontal
-scrollbar appears in either table whenever the columns overflow the window).
+**Refresh** action button. Like every table in the GUI, the Tasks and Active
+Locks tables size to their content: the window grows with the rows up to 20
+rows and scrolls inside beyond that, while a short or empty list keeps a
+compact window (a horizontal scrollbar appears in either table whenever the
+columns overflow the window).
 
 !!! tip "Dashboard data during heavy load"
     Pool and iSCSI information comes from live `zpool`/`targetcli` commands with
@@ -1438,12 +1439,12 @@ context.
 
 The device tables have user-resizable columns whose widths are
 retained across GUI restarts, like the tables on the other tabs. Each
-sits in its own scrolled window with a fixed twenty-line height: the
-vertical scrollbar stays at the table's right edge, a horizontal
-scrollbar appears whenever the columns overflow the window, and a table
-with more rows scrolls inside that fixed height instead of stretching
-the page — while a short or empty table keeps its full twenty-line
-window rather than collapsing to its content. Spare width beyond the
+sits in its own scrolled window that sizes to its rows: the window grows
+with the table up to 20 rows and stops there, the vertical scrollbar
+sits at the table's right edge, a horizontal scrollbar appears whenever
+the columns overflow the window, and a table with more rows scrolls
+inside that cap instead of stretching the page — while a short or empty
+table keeps a compact window close to its content. Spare width beyond the
 columns' widths goes to the Vdev column (the Enclosure column in the
 Enclosures table), so the right-most column always shows its true width
 and shrinks honestly when resized.
@@ -1550,8 +1551,9 @@ charts view:
   `iothread`, `secs=…`) plus the guest filesystems probed on that volume
   (e.g. `ext4 4K on / · xfs 4K on /var`). Every column sorts (click a
   header; text order), long cells ellipsize with the full text on hover,
-  and every table on this view keeps a fixed twenty-line window — longer
-  tables scroll inside it, shorter or empty ones keep the full height.
+  and every table on this view sizes to its rows up to the shared 20-row
+  cap — longer tables scroll inside it, shorter or empty ones keep a
+  compact window.
   Like every
   table on this tab it scrolls on its own — vertical scrollbar at the
   table's right edge, horizontal scrollbar whenever the columns overflow

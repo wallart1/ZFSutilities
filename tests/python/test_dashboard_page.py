@@ -3574,8 +3574,8 @@ class TestCreateDashboardPage(unittest.TestCase):
 
     def test_table_windows_are_capped_scrolls(self):
         """Tasks / Active Locks sit in the shared capped scrolled windows;
-        the Tasks window keeps a constant ten-row footprint (fixed_rows),
-        while Active Locks keeps the Dashboard's natural-height convention.
+        both keep the app-wide natural-height convention — the window
+        grows with the rows up to the 20-row cap and scrolls beyond it.
         The page viewport sizes its content by natural height so the box is
         never clamped to the window height."""
         with mock_gtk(fresh=True) as gtk:
@@ -3610,9 +3610,9 @@ class TestCreateDashboardPage(unittest.TestCase):
                 with patch.object(dp_fresh, "refresh_dashboard_page"):
                     with patch.object(dp_fresh, "_is_two_node", return_value=False):
                         page = dp_fresh.create_dashboard_page(app)
-            # The Tasks table pins a ten-row window; Active Locks keeps the
-            # natural-height convention.
-            self.assertEqual(capped_choices, [(10, True), ("default", False)])
+            # Both tables take the helper's defaults: natural height up to
+            # the 20-row cap.
+            self.assertEqual(capped_choices, [("default", "default"), ("default", "default")])
 
             # ScrolledWindow creation order: the page window, the pool
             # grid, the two table windows, then the config grid.
@@ -3623,13 +3623,8 @@ class TestCreateDashboardPage(unittest.TestCase):
             ):
                 scroll.add.assert_called_once_with(view)
                 scroll.set_propagate_natural_height.assert_called_once_with(True)
-                scroll.set_min_content_height.assert_called_once()
+                scroll.set_min_content_height.assert_called_once_with(60)
                 scroll.set_max_content_height.assert_called_once()
-            # The fixed ten-row Tasks window sizes above the natural-height
-            # floor Active Locks falls back to.
-            tasks_min = tasks_sw.set_min_content_height.call_args[0][0]
-            self.assertGreater(tasks_min, 60)
-            locks_sw.set_min_content_height.assert_called_once_with(60)
             viewport = page.get_child()
             viewport.set_vscroll_policy.assert_called_once_with(
                 dp_fresh.Gtk.ScrollablePolicy.NATURAL

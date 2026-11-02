@@ -77,6 +77,25 @@ def _deep_copy(obj):
     return json.loads(json.dumps(obj))
 
 
+def _archive_config(config, generation):
+    """Archive the exact dict just loaded, keyed by its generation.
+
+    One file per generation under config-archive/ beside CONFIG_PATH,
+    freshest state winning. switch-version restores these when rolling
+    back to a release of an older generation, so the pre-migration state
+    of every generation must survive the forward migrations. Archiving
+    must never block a load: failures log WARN and move on.
+    """
+    archive_dir = os.path.join(os.path.dirname(CONFIG_PATH), "config-archive")
+    archive_path = os.path.join(archive_dir, f"config.v{generation}.json")
+    try:
+        os.makedirs(archive_dir, exist_ok=True)
+        with config_lock_write(), open(archive_path, "w") as f:
+            json.dump(config, f, indent=2)
+    except OSError as exc:
+        log_msg(f"WARN: Could not archive generation-{generation} config to {archive_path}: {exc}")
+
+
 def load_config():
     """Load JSON config from CONFIG_PATH. Returns defaults on any error."""
     run_migration()
@@ -97,12 +116,22 @@ def load_config():
             except OSError:
                 pass
         elif current_ver < CONFIG_VERSION:
+            # The pre-migration state of this generation must survive the
+            # forward migrations so a later version downgrade can restore it.
+            _archive_config(config, current_ver)
             config = run_migrations(config, save_config)
         elif current_ver > CONFIG_VERSION:
+            # A newer release saved this config (e.g. after a version
+            # rollback). Archive the pristine newer state before this older
+            # build can rewrite it, then warn with the remedy.
+            _archive_config(config, current_ver)
             log_msg(
-                f"WARN: Config version {current_ver} is newer than "
-                f"software expects ({CONFIG_VERSION}). "
-                f"Some features may not work correctly."
+                f"WARN: Config version {current_ver} is newer than this "
+                f"build expects ({CONFIG_VERSION}); it was saved by a "
+                f"newer release. Switch to a release at generation "
+                f"{current_ver} or newer, or use switch-version to "
+                f"restore the matching archived config. Loading "
+                f"continues; some features may not work correctly."
             )
         return config
 

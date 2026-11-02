@@ -1800,6 +1800,7 @@ Emits no log messages; it is a commented example transcript for browsing a datas
 | -------------- | ------- | -------- |
 | `FATAL: A dataset must be specified.` | No dataset argument | Script aborts (exit 1) |
 | `FATAL: Sort option must be either 'largest' or 'smallest'.` | Invalid sort argument | Script aborts (exit 1) |
+| `INFO: Oldest ... snapshots` | Header of the oldest-snapshots section (the count matches the `count` argument) | Informational; the rows below it are the oldest snapshots under the target, oldest first |
 
 ### [zfsshowtuneables](../commands-and-modules/commands.md#zfsshowtuneables)
 
@@ -2396,6 +2397,10 @@ Echo-based installer; must run on the storage host.
 | `INFO:   Installed /etc/systemd/system/zfsutilities-iscsi-fence.service/.timer` (+ `INFO:   Reloaded systemd daemon` / `INFO:   Enabled zfsutilities-iscsi-fence.timer (5-min iSCSI fence)`) | On a two-node compute host (qm present, node config not single-node), activation installed/enabled the iSCSI fence units from the activated version's `share/two-node/` | Informational; the units are refreshed on every activation |
 | `WARN:   Could not enable zfsutilities-iscsi-fence.timer` | The units were installed but the timer could not be enabled (systemd error) | Run `systemctl enable --now zfsutilities-iscsi-fence.timer` by hand and check its output |
 | `INFO:   Active: ... / Previous: ... / New invocations will use ... immediately. / Already-running scripts are unaffected.` | Final outcome of the switch | Informational |
+| `WARN:   ... expects config generation ... but the saved config is generation ...` | The target release is older than the saved config's schema generation (rollback/downgrade detected) before any wiring change | The gate restores the archived config of the target generation next |
+| `INFO:   Archived generation-... config to config-archive/config.v....json` / `INFO:   Restored generation-... config from config-archive/config.v....json` | The downgrade gate preserved the newer config and installed the target generation's archived config | Informational; the newer config returns on the next upgrade |
+| `WARN:   No archived generation-... config; ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE=1 set.` / `WARN:   Archived the generation-... config aside and removed config.json; ... starts from default settings.` | No archived config exists for the target generation and the override was set | The older release starts from defaults; re-enter settings by hand or switch back to a newer release |
+| `FATAL: Refusing to activate ...: no archived config for generation ...` | The target is a config downgrade, no archived config of its generation exists, and `ZFSUTILITIES_ALLOW_CONFIG_DOWNGRADE` is not set | Re-activate a newer release, or set the override to start the older release from default settings |
 | `FATAL: No previous version recorded` | `previous` requested but no previous link exists | Switch to an explicit version |
 | `FATAL: Version not found: ...` | No such deployed version | Check `switch-version --list` |
 
@@ -2699,7 +2704,8 @@ JSON config load/save with versioning, plus session-log retention pruning.
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
-| `WARN: Config version ... is newer than software expects (...). Some features may not work correctly.` | The config was written by a newer build (downgrade detected) | Load proceeds with the newer config as-is |
+| `WARN: Config version ... is newer than this build expects (...); it was saved by a newer release. Switch to a release at generation ... or newer, or use switch-version to restore the matching archived config. Loading continues; some features may not work correctly.` | The config was written by a newer build (downgrade detected); the pristine newer config is archived under `config-archive/` before this build can rewrite it | Load proceeds with the newer config as-is; switch to a newer release or let switch-version restore the matching archived config |
+| `WARN: Could not archive generation-... config to ...: ...` | Archiving the pre-migration (or newer-than-build) config failed (OSError) | The load continues without an archive; check permissions on the config directory |
 | `VERB: Pruned old log: ...` | A session log older than the retention days was removed | Pruning continues |
 | `INFO: Pruned ... old log file(s)` | Final summary of the prune pass | Count reported to the caller |
 

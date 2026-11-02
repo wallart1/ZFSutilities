@@ -32,6 +32,7 @@ from gi.repository import Gtk
 from gui_helpers import (
     add_var_row,
     bold_label,
+    capped_treeview_scroll,
     configure_treeview_column,
     handle_editing_key_press,
     set_button_markup_red,
@@ -200,6 +201,12 @@ def create_retention_page(app, ctx):
     outer.set_margin_top(10)
     outer.set_margin_bottom(10)
     scrolled.add(outer)
+    # NATURAL vscroll policy: both policy tables' capped windows have
+    # tiny minimums, and the default MINIMUM policy would crush them at
+    # short window heights (dashboard-page idiom).
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
 
     # ── Header ──────────────────────────
     hdr = Gtk.Label()
@@ -279,10 +286,7 @@ def create_retention_page(app, ctx):
     tv.append_column(c3)
     app._ret_minage_renderer = r3
 
-    sw = Gtk.ScrolledWindow()
-    sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-    sw.set_size_request(-1, 160)
-    sw.add(tv)
+    sw = capped_treeview_scroll(tv)
     outer.pack_start(sw, False, False, 0)
 
     app._ret_store.connect("row-changed", lambda *_a: _update_ret_status(app))
@@ -332,10 +336,7 @@ def create_retention_page(app, ctx):
     configure_treeview_column(cp1, width=90)
     pv.append_column(cp1)
 
-    psw = Gtk.ScrolledWindow()
-    psw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-    psw.set_size_request(-1, 200)
-    psw.add(pv)
+    psw = capped_treeview_scroll(pv)
     outer.pack_start(psw, False, False, 0)
 
     # Snapshot label entry for prune

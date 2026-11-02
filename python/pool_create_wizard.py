@@ -28,7 +28,11 @@ from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from feature_config import get_pool_profiles
 from gi.repository import Gtk
-from gui_helpers import configure_treeview_column, create_scrolled_dialog
+from gui_helpers import (
+    capped_treeview_scroll,
+    configure_treeview_column,
+    create_scrolled_dialog,
+)
 from iscsi_enroll import offer_iscsi_enrollment
 from logging_config import log_msg
 from pool_create import (
@@ -467,10 +471,9 @@ def _build_disks_page(dialog, state: _WizardState, ctx: _WizardContext, on_chang
         configure_treeview_column(tree_column, width=width)
         view.append_column(tree_column)
 
-    scrolled = Gtk.ScrolledWindow()
-    scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    scrolled.set_min_content_height(260)
-    scrolled.add(view)
+    # Dialog/wizard page: expand stays on so an enlarged wizard page grows
+    # the disk table; the default height follows the natural row count.
+    scrolled = capped_treeview_scroll(view)
     page.pack_start(scrolled, True, True, 0)
 
     def _refresh_disks():

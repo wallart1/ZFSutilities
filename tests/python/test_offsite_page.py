@@ -234,6 +234,25 @@ class TestOffsitePageFrames(unittest.TestCase):
 
     @patch("offsite_page._do_generate_snap")
     @patch("offsite_page.do_detect_offsite_pool")
+    def test_page_viewport_sizes_content_by_natural_height(self, _mock_detect, _mock_gen):
+        """The page viewport uses NATURAL height so the step table's capped
+        window is never crushed at short window heights."""
+        op = _import_offsite_page()
+        op.Gtk.ComboBoxText = _FakeComboBoxText
+
+        app = MagicMock()
+        app.ctx = MagicMock()
+        app.ctx.config = {"pools": []}
+        app.config = {"pools": []}
+
+        page = op.create_offsite_page(app, app.ctx)
+
+        page.get_child.return_value.set_vscroll_policy.assert_called_once_with(
+            op.Gtk.ScrollablePolicy.NATURAL
+        )
+
+    @patch("offsite_page._do_generate_snap")
+    @patch("offsite_page.do_detect_offsite_pool")
     def test_frames_use_bold_label_widgets(self, _mock_detect, _mock_gen):
         op = _import_offsite_page()
         op.Gtk.ComboBoxText = _FakeComboBoxText

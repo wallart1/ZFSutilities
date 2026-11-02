@@ -1539,6 +1539,12 @@ class TestRetentionPageLayout(unittest.TestCase):
                 page = rp.create_retention_page(app, app.ctx)
 
             self.assertIs(page, sentinels[0])
+            # The page viewport sizes its content by NATURAL height so the
+            # policy tables' capped windows are never crushed at short
+            # window heights.
+            sentinels[0].get_child.return_value.set_vscroll_policy.assert_called_once_with(
+                rp.Gtk.ScrollablePolicy.NATURAL
+            )
 
 
 class TestRetentionVerbCheckbox(unittest.TestCase):

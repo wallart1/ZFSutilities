@@ -928,14 +928,24 @@ itf_journey_stage_upgrade_env() {
     # guest's as-deployed active tree (pristine by construction —
     # nothing has touched it yet) and serve it via the documented
     # ZFSUTILITIES_TAG_TARBALL_URL override, the way an operator with
-    # the original tree would.
+    # the original tree would.  ITF_UPGRADE_BASELINE=none (j19)
+    # provisions NO pristine source at all: the upgrade must then
+    # capture its own baseline from the active tree — the
+    # trust-on-first-upgrade path (F-025) the override otherwise
+    # bypasses.
     local tag_url
     tag_url="https://github.com/${ITF_GITHUB_REPO}/archive/refs/tags/v${active_version}.tar.gz"
     local tag_http="" pristine_env="" api_env=""
-    tag_http="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -L \
-        "$tag_url" 2>/dev/null)" || tag_http=""
+    if [[ "${ITF_UPGRADE_BASELINE:-}" != "none" ]]; then
+        tag_http="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -L \
+            "$tag_url" 2>/dev/null)" || tag_http=""
+    fi
     local dev_ip="" serve_dir=""
-    if [[ "$tag_http" == "200" ]]; then
+    if [[ "${ITF_UPGRADE_BASELINE:-}" == "none" ]]; then
+        itf_step info "change-scan baseline available" \
+            "ITF_UPGRADE_BASELINE=none — no pristine source provisioned;" \
+            "the upgrade captures its own baseline from the active tree (F-025)"
+    elif [[ "$tag_http" == "200" ]]; then
         itf_step pass "change-scan baseline available" \
             "GitHub has the v$active_version tag tarball — no override needed"
     else

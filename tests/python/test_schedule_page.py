@@ -1041,6 +1041,20 @@ class TestScheduleSavedState(unittest.TestCase):
         self.assertTrue(hasattr(app, "_schedule_saved_state"))
         self.assertTrue(app._schedule_saved_state)
 
+    @patch("schedule_page.list_profiles", return_value=[])
+    def test_page_viewport_sizes_content_by_natural_height(self, _lst):
+        """The page viewport uses NATURAL height so the profile table's
+        capped window is never crushed at short window heights."""
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        app._ui_state.bind_treeview = MagicMock()
+
+        page = schedule_page.create_schedule_page(app)
+
+        page.get_child.return_value.set_vscroll_policy.assert_called_once_with(
+            schedule_page.Gtk.ScrollablePolicy.NATURAL
+        )
+
     @patch("schedule_page.set_button_markup_red")
     def test_tab_switch_restyles_save_button_from_pending(self, mock_red):
         """When the Schedule tab is selected, the Save button must reflect

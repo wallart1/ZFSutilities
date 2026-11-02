@@ -32,6 +32,7 @@ from feature_config import (
 )
 from gi.repository import Gtk
 from gui_helpers import (
+    capped_treeview_scroll,
     configure_treeview_column,
     handle_editing_key_press,
     set_button_markup,
@@ -103,6 +104,12 @@ def create_checkagainst_page(app):
     scrolled = Gtk.ScrolledWindow()
     scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
     scrolled.add(outer)
+    # NATURAL vscroll policy: the section tables' capped windows have
+    # tiny minimums, and the default MINIMUM policy would crush them at
+    # short window heights (dashboard-page idiom).
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
 
     # Header
     hdr = Gtk.Label()
@@ -137,7 +144,7 @@ def create_checkagainst_page(app):
         app._ca_backup_active_chk,
         "checkagainst_backup_derived_view",
     )
-    outer.pack_start(backup_section, True, True, 0)
+    outer.pack_start(backup_section, False, False, 0)
     app._ui_state.bind_treeview(backup_tv, "checkagainst_backup_derived_view")
 
     app._ca_offsite_active_chk = Gtk.CheckButton(label="Active")
@@ -151,7 +158,7 @@ def create_checkagainst_page(app):
         app._ca_offsite_active_chk,
         "checkagainst_offsite_derived_view",
     )
-    outer.pack_start(offsite_section, True, True, 0)
+    outer.pack_start(offsite_section, False, False, 0)
     app._ui_state.bind_treeview(offsite_tv, "checkagainst_offsite_derived_view")
 
     # User entries section
@@ -181,13 +188,10 @@ def create_checkagainst_page(app):
         tv.append_column(col)
     app._ui_state.bind_treeview(app._ca_view, "checkagainst_view")
 
-    sw = Gtk.ScrolledWindow()
-    sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    sw.set_size_request(-1, 150)
-    sw.add(tv)
-    user_box.pack_start(sw, True, True, 0)
+    sw = capped_treeview_scroll(tv)
+    user_box.pack_start(sw, False, False, 0)
 
-    outer.pack_start(user_frame, True, True, 0)
+    outer.pack_start(user_frame, False, False, 0)
 
     # Status label
     app._ca_status_label = Gtk.Label()
@@ -201,7 +205,7 @@ def create_checkagainst_page(app):
         None,
         "checkagainst_merged_view",
     )
-    outer.pack_start(merged_section, True, True, 0)
+    outer.pack_start(merged_section, False, False, 0)
     app._ui_state.bind_treeview(merged_tv, "checkagainst_merged_view")
 
     merged_hint = Gtk.Label()
@@ -260,10 +264,7 @@ def _build_readonly_treeview(store, state_key):
     # The caller binds the view after it is attached to a toplevel.
     tv._ca_state_key = state_key
 
-    sw = Gtk.ScrolledWindow()
-    sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    sw.set_size_request(-1, 100)
-    sw.add(tv)
+    sw = capped_treeview_scroll(tv)
     return tv, sw
 
 
@@ -284,7 +285,7 @@ def _build_section_box(title, store, checkbox, state_key):
         box.pack_start(header, False, False, 0)
 
     tv, sw = _build_readonly_treeview(store, state_key)
-    box.pack_start(sw, True, True, 0)
+    box.pack_start(sw, False, False, 0)
 
     frame.add(box)
     return frame, tv

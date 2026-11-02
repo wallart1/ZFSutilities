@@ -597,6 +597,39 @@ class TestPoolsPageLayout(unittest.TestCase):
 
         paned_mock.pack2.assert_called_with(ANY, True, False)
 
+    def test_first_map_divider_defaults_to_top_pane_natural_height(self):
+        pp = _import_pools_page()
+        paned_mock = MagicMock()
+
+        def _make_box(*args, **kwargs):
+            box = MagicMock()
+            box.get_preferred_height.return_value = (10, 124)
+            return box
+
+        with mock_gtk(), patch.object(pp.Gtk, "Paned", return_value=paned_mock):
+            with patch.object(pp.Gtk, "Box", side_effect=_make_box):
+                with patch.object(pp, "refresh_pools_page", MagicMock()):
+                    with patch.object(pp, "ScrubQueue", MagicMock()):
+                        app = self._make_app()
+                        pp.create_pools_page(app)
+
+        # The divider default is scheduled as a one-shot idle callback,
+        # after bind_paned's own idle had its chance to restore a saved
+        # position.
+        pp.GLib.idle_add.assert_called_once()
+        divider_cb = pp.GLib.idle_add.call_args[0][0]
+
+        # A saved position was restored: the default must yield.
+        paned_mock.get_property.return_value = True
+        self.assertFalse(divider_cb())
+        paned_mock.set_position.assert_not_called()
+
+        # No saved position: the divider defaults once to the top pane's
+        # natural height and the callback removes itself.
+        paned_mock.get_property.return_value = False
+        self.assertFalse(divider_cb())
+        paned_mock.set_position.assert_called_once_with(124)
+
 
 class TestPoolsDirtyState(unittest.TestCase):
     """Dirty state reflects dict-pool inequality including offsite_candidate."""

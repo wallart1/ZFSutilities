@@ -9,6 +9,7 @@ from gi.repository import GLib, Gtk
 from gui_helpers import (
     _ensure_treeview_scrolling,
     build_full_dataset_name,
+    capped_treeview_scroll,
     configure_treeview_column,
     dataset_name_cell_func,
     get_expanded_rows,
@@ -89,9 +90,9 @@ class PoolWatchWindow(Gtk.Window):
         self.view.connect("button-press-event", self._on_right_click)
         self.view.connect("row-expanded", on_row_expanded, None)
 
-        self.scrolled = Gtk.ScrolledWindow()
-        self.scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        self.scrolled.add(self.view)
+        # Standalone window: expand stays on so an enlarged window grows
+        # the tree; the default height follows the natural visible rows.
+        self.scrolled = capped_treeview_scroll(self.view)
         setup_row_scroll(self.scrolled, self.view)
         _ensure_treeview_scrolling(self.view)
         list_box.pack_start(self.scrolled, True, True, 0)

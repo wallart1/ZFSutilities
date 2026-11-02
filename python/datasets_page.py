@@ -23,6 +23,7 @@ from gui_helpers import (
     add_scrolled_text_view,
     append_treeview_copy_items,
     build_full_dataset_name,
+    capped_treeview_scroll,
     configure_treeview_column,
     create_scrolled_dialog,
     dataset_name_cell_func,
@@ -151,12 +152,12 @@ def create_datasets_page(app):
 
     app._ui_state.bind_treeview(app.datasets_view, "datasets_view")
 
-    scrolled = Gtk.ScrolledWindow()
-    scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    scrolled.add(app.datasets_view)
+    scrolled = capped_treeview_scroll(app.datasets_view)
     setup_row_scroll(scrolled, app.datasets_view)
     app.datasets_scrolled = scrolled
-    box.pack_start(scrolled, True, True, 0)
+    # Non-expanding: the tree is only as tall as its visible rows (up to
+    # the 20-row cap); leftover page space stays blank below.
+    box.pack_start(scrolled, False, False, 0)
 
     # Summary row: dataset count on the left, color legend on the right
     summary_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)

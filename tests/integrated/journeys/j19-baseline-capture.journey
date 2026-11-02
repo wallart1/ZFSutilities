@@ -1,0 +1,378 @@
+#!/usr/bin/env bash
+# j19-baseline-capture.journey — the trust-on-first-upgrade journey.
+#
+# F-025 (repair plan 021): when a host's active version has neither a
+# deployment manifest (trees older than 0.125.0) nor an obtainable
+# release tarball (many released versions were never tagged on GitHub),
+# upgrade-zfsutilities captures a baseline manifest from the current
+# tree and scans against it on every future upgrade.  j10 and j12
+# cannot exercise that path: their shared staging always provisions a
+# pristine scan source (the tag tarball, or the as-deployed tree via
+# ZFSUTILITIES_TAG_TARBALL_URL), so the scan always classifies against
+# something pristine and the capture branch never runs.  This journey
+# provisions NO pristine source (ITF_UPGRADE_BASELINE=none) and walks
+# the capture contract live, against the same untagged 0.118.0
+# template the other upgrade journeys start from:
+#
+#   upgrade 1 — capture:  modifications injected BEFORE the upgrade
+#     must be absorbed into the captured baseline (indistinguishable
+#     from pristine content, not flagged, nothing salvageable); the
+#     manifest lands additively in the still-active old tree; the new
+#     version deploys without activating, exactly like a normal
+#     upgrade.
+#   upgrade 2 — scan against the CAPTURED baseline: NEW modifications
+#     (made after the capture) must be detected — modified, added, AND
+#     removed, the removed classification no other journey injects —
+#     salvaged with their local content, and diffing must degrade
+#     honestly (no pristine source exists for an untagged version).
+#   then switch-version and wiring verify, as in j10.
+#
+# The premise is the same stale-template old-to-new upgrade as j10;
+# only the baseline provisioning differs, so the journey reuses the
+# shared staging and j10's verify-script shapes throughout.
+#
+# Guest state required: post-install baseline template whose product
+# version is strictly older than the tree under test AND is untagged
+# on GitHub (0.118.0 at authorship; the premise gate fails fast
+# otherwise).
+# Snapshots produced: as-cloned (post-install checkpoint).
+
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+journey_main() {
+    local gname="j19"
+    local vb=/usr/local/lib/zfsutilities
+
+    # No pristine scan source may be provisioned for this journey —
+    # the whole premise is that the upgrade cannot obtain one and must
+    # capture its own baseline.  Read by itf_journey_stage_upgrade_env.
+    export ITF_UPGRADE_BASELINE=none
+
+    itf_step info "journey start" \
+        "j19 baseline capture; sw-source=$ITF_SW_SOURCE repo=$ITF_GITHUB_REPO" \
+        "baseline=none (trust-on-first-upgrade, F-025)"
+
+    # ------------------------------------------------------------------
+    # Stage T: clone start from the (deliberately stale) baseline
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_from_template "$gname" || return 1
+    local guest_ip="$J_GUEST_IP"
+
+    itf_journey_verify_installed "$guest_ip"
+
+    # ------------------------------------------------------------------
+    # Stage E: the shared upgrade staging with baseline provisioning
+    # disabled — premise gate, user download, served release, NO
+    # pristine override (common.sh)
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_upgrade_env "$gname" || return 1
+    local active_version="$J_ACTIVE_VERSION"
+    local target_version="$J_TARGET_VERSION"
+    local upgrade_cmd="$J_UPGRADE_CMD"
+
+    # ------------------------------------------------------------------
+    # Stage M1: modifications a site carried for YEARS — injected before
+    # any upgrade ran, so no baseline can distinguish them from
+    # pristine content
+    # ------------------------------------------------------------------
+
+    local pre_script="$ITF_RUN_DIR/guest-modify-pre.sh"
+    local pre_tweak_bin="$vb/versions/$active_version/bin/itf-pre-tweak"
+    local tweak_doc="$vb/versions/$active_version/docs/docs/index.md"
+    cat > "$pre_script" <<EOF
+set -e
+printf '\n<!-- itf local tweak, pre-capture (j19) -->\n' >> "$tweak_doc"
+printf '#!/bin/bash\n# itf local addition, pre-capture (j19)\n' > "$pre_tweak_bin"
+chmod 755 "$pre_tweak_bin"
+sha256sum "$tweak_doc"
+echo injected-pre-ok
+EOF
+    itf_guest_put "$guest_ip" "$pre_script" /root/itf-j19-modify-pre.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j19-modify-pre.sh" \
+            > "$ITF_RUN_DIR/guest-modify-pre.log" 2>&1 \
+            && grep -q injected-pre-ok "$ITF_RUN_DIR/guest-modify-pre.log"; then
+        itf_step pass "pre-capture modifications injected" \
+            "docs/docs/index.md (modified) + bin/itf-pre-tweak (added)," \
+            "before any baseline exists"
+    else
+        itf_step fail "pre-capture modifications injected" \
+            "see guest-modify-pre.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage U1: the first upgrade — no manifest, no obtainable tarball:
+    # the trust-on-first-upgrade capture
+    # ------------------------------------------------------------------
+
+    # Every interactive prompt on the happy path answers y (download
+    # offer; prerequisite remediation, if the new tree's checker finds
+    # anything).  No archive prompt may appear this run — nothing is
+    # detectable against a just-captured baseline.  Unconsumed lines
+    # are harmless; the download prompt defaults to N, so the y must be
+    # explicit.
+    local up1_feed="$ITF_RUN_DIR/upgrade1-answers.txt"
+    printf 'y\ny\ny\ny\ny\ny\n' > "$up1_feed"
+    local up1_log="$ITF_RUN_DIR/guest-upgrade1.log"
+    itf_guest_exec_feed "$guest_ip" "$up1_feed" "$upgrade_cmd" \
+        > "$up1_log" 2>&1
+    local up1_rc=$?
+    itf_artifact "upgrade1-transcript" "$up1_log"
+    if [[ $up1_rc -ne 0 ]]; then
+        itf_step fail "first upgrade captures a baseline" \
+            "rc=$up1_rc — see guest-upgrade1.log"
+        return 1
+    fi
+    local -a want1=(
+        "A baseline manifest was captured"
+        "modifications made before this upgrade"
+        "cannot be distinguished from pristine content"
+        "Deployed version:  $target_version — NOT activated"
+        "Active version:    $active_version (unchanged on this host)"
+        "sudo switch-version $target_version"
+    )
+    local -a forbid1=(
+        "modified:   docs/docs/index.md"
+        "added:      bin/itf-pre-tweak"
+        "Local modifications found"
+        "Salvaged on"
+        "CANNOT be detected"
+    )
+    local marker bad_markers=""
+    for marker in "${want1[@]}"; do
+        grep -qF "$marker" "$up1_log" || bad_markers+=" [missing: $marker]"
+    done
+    for marker in "${forbid1[@]}"; do
+        grep -qF "$marker" "$up1_log" && bad_markers+=" [unexpected: $marker]"
+    done
+    if [[ -z "$bad_markers" ]]; then
+        itf_step pass "first upgrade captures a baseline" \
+            "capture notice printed, pre-capture modifications absorbed" \
+            "(not flagged, nothing salvaged), $target_version deployed" \
+            "without activating"
+    else
+        itf_step fail "first upgrade captures a baseline" \
+            "$bad_markers — see guest-upgrade1.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage W1: the captured baseline landed additively in the old tree
+    # ------------------------------------------------------------------
+
+    local cap_script="$ITF_RUN_DIR/guest-captured-verify.sh"
+    cat > "$cap_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$active_version"
+test -s "$vb/versions/$active_version/MANIFEST.sha256"
+grep -q "bin/itf-pre-tweak" "$vb/versions/$active_version/MANIFEST.sha256"
+test -f "$vb/versions/$active_version/bin/itf-pre-tweak"
+test -s "$vb/versions/$target_version/MANIFEST.sha256"
+test ! -e "$vb/salvaged-changes"
+echo captured-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$cap_script" /root/itf-j19-captured.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j19-captured.sh" \
+            > "$ITF_RUN_DIR/guest-captured-verify.log" 2>&1 \
+            && grep -q captured-state-ok "$ITF_RUN_DIR/guest-captured-verify.log"; then
+        itf_step pass "captured baseline verified" \
+            "MANIFEST.sha256 in the still-active $active_version tree," \
+            "records itf-pre-tweak as pristine; nothing else touched;" \
+            "no salvage dir; $target_version deployed"
+    else
+        itf_step fail "captured baseline verified" \
+            "see guest-captured-verify.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage M2: NEW modifications after the capture — the next upgrade
+    # must catch all three classifications, including a removal
+    # ------------------------------------------------------------------
+
+    local post_script="$ITF_RUN_DIR/guest-modify-post.sh"
+    local post_tweak_bin="$vb/versions/$active_version/bin/itf-post-tweak"
+    cat > "$post_script" <<EOF
+set -e
+printf '\n<!-- itf local tweak, post-capture (j19) -->\n' >> "$tweak_doc"
+printf '#!/bin/bash\n# itf local addition, post-capture (j19)\n' > "$post_tweak_bin"
+chmod 755 "$post_tweak_bin"
+rm "$vb/versions/$active_version/docs/docs/user-guide/gtk-gui.md"
+sha256sum "$tweak_doc"
+test -f "$post_tweak_bin"
+test ! -e "$vb/versions/$active_version/docs/docs/user-guide/gtk-gui.md"
+echo injected-post-ok
+EOF
+    itf_guest_put "$guest_ip" "$post_script" /root/itf-j19-modify-post.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j19-modify-post.sh" \
+            > "$ITF_RUN_DIR/guest-modify-post.log" 2>&1 \
+            && grep -q injected-post-ok "$ITF_RUN_DIR/guest-modify-post.log"; then
+        itf_step pass "post-capture modifications injected" \
+            "docs/docs/index.md (modified again) + bin/itf-post-tweak" \
+            "(added) + docs/docs/user-guide/gtk-gui.md (removed)"
+    else
+        itf_step fail "post-capture modifications injected" \
+            "see guest-modify-post.log"
+        return 1
+    fi
+    # The salvaged copy later must carry the LOCAL content — its hash
+    # is compared against this one, not against the pristine release.
+    # The log's first line is the ssh host-key banner, so select by
+    # path.
+    local post_docs_hash=""
+    post_docs_hash="$(grep 'docs/docs/index.md' "$ITF_RUN_DIR/guest-modify-post.log" \
+        | head -1 | awk '{print $1}')"
+
+    # ------------------------------------------------------------------
+    # Stage U2: the second upgrade — scans against the CAPTURED
+    # baseline: detect, list, ask, salvage, deploy, stop
+    # ------------------------------------------------------------------
+
+    # The archive-changes offer appears this time (changes are
+    # detectable now); both prompts default to N, so the y's must be
+    # explicit.
+    local up2_feed="$ITF_RUN_DIR/upgrade2-answers.txt"
+    printf 'y\ny\ny\ny\ny\ny\n' > "$up2_feed"
+    local up2_log="$ITF_RUN_DIR/guest-upgrade2.log"
+    itf_guest_exec_feed "$guest_ip" "$up2_feed" "$upgrade_cmd" \
+        > "$up2_log" 2>&1
+    local up2_rc=$?
+    itf_artifact "upgrade2-transcript" "$up2_log"
+    if [[ $up2_rc -ne 0 ]]; then
+        itf_step fail "second upgrade scans the captured baseline" \
+            "rc=$up2_rc — see guest-upgrade2.log"
+        return 1
+    fi
+    local -a want2=(
+        "modified:   docs/docs/index.md"
+        "added:      bin/itf-post-tweak"
+        "removed:    docs/docs/user-guide/gtk-gui.md"
+        "Salvaged on"
+        "Diff unavailable: no pristine source for version $active_version"
+        "Deployed version:  $target_version — NOT activated"
+        "Active version:    $active_version (unchanged on this host)"
+        "sudo switch-version $target_version"
+    )
+    local -a forbid2=(
+        "added:      bin/itf-pre-tweak"
+        "A baseline manifest was captured"
+        "CANNOT be detected"
+    )
+    bad_markers=""
+    for marker in "${want2[@]}"; do
+        grep -qF "$marker" "$up2_log" || bad_markers+=" [missing: $marker]"
+    done
+    for marker in "${forbid2[@]}"; do
+        grep -qF "$marker" "$up2_log" && bad_markers+=" [unexpected: $marker]"
+    done
+    if [[ -z "$bad_markers" ]]; then
+        itf_step pass "second upgrade scans the captured baseline" \
+            "detected modified + added + removed (first journey exercise" \
+            "of the removed classification), salvaged, deployed" \
+            "$target_version without activating, and reported the" \
+            "honest no-pristine-source diff degradation"
+    else
+        itf_step fail "second upgrade scans the captured baseline" \
+            "$bad_markers — see guest-upgrade2.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage W2: salvage archived with the LOCAL content; the removed
+    # file is listed, not copied (there is nothing to copy)
+    # ------------------------------------------------------------------
+
+    local sal_script="$ITF_RUN_DIR/guest-salvage-verify.sh"
+    cat > "$sal_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$active_version"
+ts_dir="\$(ls -1d $vb/salvaged-changes/$active_version/*/ | head -1)"
+test -n "\$ts_dir"
+test -f "\$ts_dir/docs/docs/index.md"
+test -f "\$ts_dir/bin/itf-post-tweak"
+test -f "\$ts_dir/README.txt"
+test ! -e "\$ts_dir/docs/docs/user-guide/gtk-gui.md"
+ls "$vb"/salvaged-changes/changes-*.diff > /dev/null
+echo "salvaged-dir: \$ts_dir"
+sha256sum "\$ts_dir/docs/docs/index.md"
+echo salvage-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$sal_script" /root/itf-j19-salvage.sh > /dev/null 2>&1
+    local sal_log="$ITF_RUN_DIR/guest-salvage-verify.log"
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j19-salvage.sh" \
+            > "$sal_log" 2>&1 \
+            && grep -q salvage-state-ok "$sal_log"; then
+        local salvaged_docs_hash
+        salvaged_docs_hash="$(awk '/salvaged-changes.*index.md/{print $1}' "$sal_log")"
+        if [[ -n "$post_docs_hash" && "$salvaged_docs_hash" == "$post_docs_hash" ]]; then
+            itf_step pass "salvage archived with local content" \
+                "post-capture copies carry the LOCAL content (hash match);" \
+                "the removed gtk-gui.md is not in the archive (nothing to copy)"
+            itf_artifact "salvage-readme" "$sal_log"
+        else
+            itf_step fail "salvage archived with local content" \
+                "salvaged docs hash ${salvaged_docs_hash:-none} != injected $post_docs_hash"
+            return 1
+        fi
+    else
+        itf_step fail "salvage archived with local content" \
+            "see guest-salvage-verify.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage A + W3: activate and verify the wiring, exactly as the
+    # upgrade printed for the user (j10's closing stages)
+    # ------------------------------------------------------------------
+
+    local sw_log="$ITF_RUN_DIR/guest-switch.log"
+    itf_guest_exec "$guest_ip" "bash -lc 'switch-version $target_version'" \
+        > "$sw_log" 2>&1
+    local sw_rc=$?
+    itf_artifact "switch-transcript" "$sw_log"
+    if [[ $sw_rc -eq 0 ]]; then
+        itf_step pass "switch-version activates" \
+            "rc=0 — the exact command the upgrade printed (see guest-switch.log)"
+    else
+        itf_step fail "switch-version activates" "rc=$sw_rc — see guest-switch.log"
+        return 1
+    fi
+
+    local post_script="$ITF_RUN_DIR/guest-post-verify.sh"
+    cat > "$post_script" <<EOF
+set -e
+cur=\$(basename "\$(readlink $vb/current)")
+echo "active-now: \$cur"
+test "\$cur" = "$target_version"
+test -d "$vb/versions/$active_version"
+grep -q 'NODE_MODE="single-node"' /etc/zfsutilities/node.conf
+test -s /var/lib/zfsutilities/config.json
+echo post-upgrade-ok
+EOF
+    itf_guest_put "$guest_ip" "$post_script" /root/itf-j19-post.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j19-post.sh" \
+            > "$ITF_RUN_DIR/guest-post-verify.log" 2>&1 \
+            && grep -q post-upgrade-ok "$ITF_RUN_DIR/guest-post-verify.log"; then
+        itf_step pass "post-upgrade state verified" \
+            "current -> $target_version; $active_version retained for rollback;" \
+            "node.conf and config.json preserved"
+    else
+        itf_step fail "post-upgrade state verified" "see guest-post-verify.log"
+        return 1
+    fi
+    itf_journey_verify_installed "$guest_ip"
+
+    itf_step info "journey stage reached" \
+        "trust-on-first-upgrade validated: capture absorbs pre-existing" \
+        "changes additively, the next upgrade scans against the captured" \
+        "baseline (modified + added + removed), salvage keeps local" \
+        "content, activation and wiring verified"
+    return 0
+}

@@ -33,7 +33,11 @@ from command_builders import BashStep
 from disk_repository import DiskInfo, format_bytes
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from gi.repository import Gtk
-from gui_helpers import configure_treeview_column, create_scrolled_dialog
+from gui_helpers import (
+    capped_treeview_scroll,
+    configure_treeview_column,
+    create_scrolled_dialog,
+)
 from logging_config import log_msg
 from pool_create import TOPOLOGIES, EligibilityResult, disk_eligibility
 from pool_create_wizard import _leaf_paths_by_pool
@@ -739,10 +743,9 @@ def _build_disk_picker(
         configure_treeview_column(tree_column, width=width)
         view.append_column(tree_column)
 
-    scrolled = Gtk.ScrolledWindow()
-    scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    scrolled.set_min_content_height(200)
-    scrolled.add(view)
+    # Dialog/wizard page: expand stays on so an enlarged page grows the
+    # table; the default height follows the natural row count.
+    scrolled = capped_treeview_scroll(view)
     page.pack_start(scrolled, True, True, 0)
     return page
 
@@ -1120,10 +1123,9 @@ def _build_target_tree(
         configure_treeview_column(tree_column, width=width)
         view.append_column(tree_column)
 
-    scrolled = Gtk.ScrolledWindow()
-    scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    scrolled.set_min_content_height(160)
-    scrolled.add(view)
+    # Dialog/wizard page: expand stays on so an enlarged page grows the
+    # table; the default height follows the natural row count.
+    scrolled = capped_treeview_scroll(view)
     page.pack_start(scrolled, True, True, 0)
     return page, store, view
 

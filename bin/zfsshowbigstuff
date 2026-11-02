@@ -18,7 +18,7 @@ usage() {
     log_msg "INFO: Usage: $0 <dataset> [largest|smallest] [count]"
     log_msg "INFO:   dataset   Pool or dataset to examine (required)."
     log_msg "INFO:   sequence  Sort order: 'largest' (default) or 'smallest'."
-    log_msg "INFO:   count     Number of datasets to show for smallest (default: 5)."
+    log_msg "INFO:   count     Number of results to show per section (default: 5)."
 }
 
 if [[ $# -lt 1 ]]; then
@@ -50,6 +50,13 @@ log_msg "INFO: Number of datasets=${numberofdatasets}."
 
 zpool list -o name,size,alloc,free,freeing,ckpoint,frag,cap,health "$pool"
 zfs get -o name,property,value recordsize "$target"
+
+# Oldest snapshots under the target (recursive), oldest first — the count
+# matches the dataset sections; stdbuf/|| true per the loop below.
+log_msg "INFO: Oldest ${numberofdatasets} snapshots"
+stdbuf -oL zfs list -r -t snapshot -s creation \
+    -o name,creation,used "$target" \
+    | head -n "$((numberofdatasets + 1))" || true
 
 # Show top datasets for each sort column. head truncates the zfs list output,
 # so append || true to keep set -e/o pipefail from aborting the loop after the

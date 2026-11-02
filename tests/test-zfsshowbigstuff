@@ -277,5 +277,124 @@ test_zfs_list_uses_line_buffering
 test_largest_shows_requested_number_of_datasets
 test_smallest_shows_requested_number_of_datasets
 
+# Shared fixture: seven snapshots under the target, pre-sorted oldest
+# first (the mock serves the table verbatim; real zfs -s creation
+# produces this order).  The two recent ones must never survive head.
+_set_oldest_snapshot_fixture() {
+    mock_zfs_snap_list_for "threeamigos/proxmox" \
+$'NAME\tCREATION\tUSED\n'\
+$'threeamigos/proxmox/vm-100-disk-0@snap-oldest-1\tSat Feb  1 01:00 2025\t4.2G\n'\
+$'threeamigos/proxmox/vm-100-disk-0@snap-oldest-2\tSun Feb  2 01:00 2025\t3.9G\n'\
+$'threeamigos/proxmox@snap-oldest-3\tMon Feb  3 01:00 2025\t512K\n'\
+$'threeamigos/proxmox@snap-oldest-4\tTue Feb  4 01:00 2025\t1.1M\n'\
+$'threeamigos/proxmox/vm-100-disk-0@snap-oldest-5\tWed Feb  5 01:00 2025\t890M\n'\
+$'threeamigos/proxmox@recent-a\tThu Oct 30 01:00 2025\t2.0G\n'\
+$'threeamigos/proxmox@recent-b\tFri Oct 31 01:00 2025\t2.1G'
+}
+
+_oldest_section_row_count() {
+    awk '/INFO: Oldest [0-9]+ snapshots/{p=1;next}
+         /INFO: Sorted by:/{p=0}
+         p && /^threeamigos\//{c++}
+         END{print c+0}' <<< "$1"
+}
+
+test_oldest_snapshots_section_shows_five_by_default() {
+    test_start "oldest-snapshots section shows the five oldest by default"
+    local output rc count
+    output=$(
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+        setup_test_env
+        _use_rootcheck_stub
+
+        stdbuf() {
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    -*) shift ;;
+                    *) break ;;
+                esac
+            done
+            "$@"
+        }
+        export -f stdbuf
+
+        mock_zpool_list "threeamigos"
+        mock_zfs_fs_list "threeamigos\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-100-disk-0"
+        mock_zfs_dataset_exists "threeamigos"
+        mock_zfs_dataset_exists "threeamigos/proxmox"
+        mock_zfs_dataset_exists "threeamigos/proxmox/vm-100-disk-0"
+        mock_zfs_prop "threeamigos/proxmox/vm-100-disk-0" "recordsize" "8K"
+        _set_oldest_snapshot_fixture
+        source "$SHOWBIG_SCRIPT" "threeamigos/proxmox" 2>&1
+    ) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$output" "INFO: Oldest 5 snapshots"
+    count=$(_oldest_section_row_count "$output")
+    assert_equals "5" "$count"
+    if [[ "$output" == *"recent-a"* || "$output" == *"recent-b"* ]]; then
+        test_fail "Newest snapshots leaked into the oldest-snapshots section"
+        return
+    fi
+    test_pass
+}
+
+test_oldest_snapshots_section_honors_count() {
+    test_start "oldest-snapshots section honors the count argument"
+    local output rc count
+    output=$(
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+        setup_test_env
+        _use_rootcheck_stub
+
+        stdbuf() {
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    -*) shift ;;
+                    *) break ;;
+                esac
+            done
+            "$@"
+        }
+        export -f stdbuf
+
+        mock_zpool_list "threeamigos"
+        mock_zfs_fs_list "threeamigos\nthreeamigos/proxmox\nthreeamigos/proxmox/vm-100-disk-0"
+        mock_zfs_dataset_exists "threeamigos"
+        mock_zfs_dataset_exists "threeamigos/proxmox"
+        mock_zfs_dataset_exists "threeamigos/proxmox/vm-100-disk-0"
+        mock_zfs_prop "threeamigos/proxmox/vm-100-disk-0" "recordsize" "8K"
+        _set_oldest_snapshot_fixture
+        source "$SHOWBIG_SCRIPT" "threeamigos/proxmox" "largest" "2" 2>&1
+    ) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$output" "INFO: Oldest 2 snapshots"
+    count=$(_oldest_section_row_count "$output")
+    assert_equals "2" "$count"
+    test_pass
+}
+
+test_oldest_snapshots_section_precedes_sort_sections() {
+    test_start "oldest-snapshots section is emitted before the sort sections"
+    local output rc oldest_line first_sort_line reason
+    output=$(
+        _run_showbig "threeamigos/proxmox"
+    ) && rc=0 || rc=$?
+    assert_rc 0 "$rc"
+    oldest_line=$(grep -nm1 "INFO: Oldest 5 snapshots" <<< "$output" | cut -d: -f1)
+    first_sort_line=$(grep -nm1 "INFO: Sorted by:" <<< "$output" | cut -d: -f1)
+    if [[ -n "$oldest_line" && -n "$first_sort_line" \
+        && "$oldest_line" -lt "$first_sort_line" ]]; then
+        test_pass
+    else
+        reason="oldest-snapshots section missing or out of order"
+        reason+=" (oldest=${oldest_line:-none} first-sort=${first_sort_line:-none})"
+        test_fail "$reason"
+    fi
+}
+
+test_oldest_snapshots_section_shows_five_by_default
+test_oldest_snapshots_section_honors_count
+test_oldest_snapshots_section_precedes_sort_sections
+
 test_summary
 teardown_test_env

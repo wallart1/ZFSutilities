@@ -265,7 +265,7 @@ Key sections:
 To browse the docs directly from a clone:
 
 ```bash
-sudo startdocserver
+./bin/startdocserver
 ```
 
 Then open `http://localhost:8000` in a browser.

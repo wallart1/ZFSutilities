@@ -13,6 +13,13 @@ if PYTHON_SRC not in sys.path:
 
 from test_support import mock_gtk
 
+# gui_helpers may already be bound to the real gi by an earlier suite in
+# the same process (test_dashboard_page imports it under real gi), and
+# datasets_page itself may already be bound by any earlier suite; evict
+# both so datasets_page and gui_helpers share this suite's mock GTK and
+# one consistent gui_helpers binding.
+for _module in ("gui_helpers", "datasets_page"):
+    sys.modules.pop(_module, None)
 with mock_gtk():
     import datasets_page as dp
 
