@@ -96,7 +96,7 @@ itf_journey_stage_os() {
     # the journey labels the stage's role.
     local guest_file="$ITF_RUN_DIR/guest.txt"
     [[ -n "$role" ]] && guest_file="$ITF_RUN_DIR/guest-${role}.txt"
-    local vmid guest_ip dev_ip preseed_file serve_dir
+    local vmid guest_ip dev_ip preseed_file serve_dir qname
 
     # --rerun: replay on the previous run's guest — a rollback to the
     # os-installed checkpoint replaces the whole install machinery (the
@@ -111,7 +111,12 @@ itf_journey_stage_os() {
         r_base="${rerun_pair%% *}"
         r_vmid="${rerun_pair##* }"
         # Remember the guest for post-mortem/diagnostics even if we abort.
-        echo "$r_base $r_vmid" > "$guest_file"
+        # The record carries the guest's live qm NAME (4th field; "-" holds
+        # the IP slot until discovery) — the orphan fence's ownership
+        # evidence for a guest this run did not create.
+        local rname
+        rname="$(itf_qm_name "$r_base" "$r_vmid")"
+        echo "$r_base $r_vmid -${rname:+ $rname}" > "$guest_file"
         if itf_qm "$r_base" status "$r_vmid" \
                 > "$ITF_RUN_DIR/guest-status-${gname}.log" 2>&1; then
             itf_step pass "rerun guest present" "vmid $r_vmid on $r_base"
@@ -188,7 +193,7 @@ itf_journey_stage_os() {
         guest_ip="$(itf_guest_ip "$r_base" "$r_vmid" 600)"
         if [[ -n "$guest_ip" ]]; then
             itf_step pass "guest IP discovered" "$guest_ip"
-            echo "$r_base $r_vmid $guest_ip" > "$guest_file"
+            echo "$r_base $r_vmid $guest_ip${rname:+ $rname}" > "$guest_file"
         else
             itf_step fail "guest IP discovered" "guest agent reported nothing in 600s"
             return 1
@@ -293,7 +298,11 @@ itf_journey_stage_os() {
         return 1
     fi
 
-    vmid="$(itf_guest_create "$gname" --base "$base" --iso "$boot_iso" \
+    # Run-tagged qm NAME (the fence's ownership evidence — see
+    # itf_guest_qname); preseed filenames and step labels keep the bare
+    # guest name.
+    qname="$(itf_guest_qname "$gname")"
+    vmid="$(itf_guest_create "$qname" --base "$base" --iso "$boot_iso" \
         --sysdisk "$sysdisk" --freeze 2>"$ITF_RUN_DIR/guest-create.log")"
     if [[ -n "$vmid" ]]; then
         itf_step pass "guest created (CPU-frozen)" "vmid $vmid"
@@ -304,7 +313,9 @@ itf_journey_stage_os() {
         return 1
     fi
     # Remember the guest for post-mortem/diagnostics even if we abort.
-    echo "$base $vmid" > "$guest_file"
+    # 4th field = the run-tagged qm NAME (fence ownership evidence);
+    # "-" holds the IP slot until discovery.
+    echo "$base $vmid - $qname" > "$guest_file"
 
     # Installer syslog capture listener on the base (target address was
     # baked into the boot append above).
@@ -398,7 +409,7 @@ itf_journey_stage_os() {
     guest_ip="$(itf_guest_ip "$base" "$vmid" 600)"
     if [[ -n "$guest_ip" ]]; then
         itf_step pass "guest IP discovered" "$guest_ip"
-        echo "$base $vmid $guest_ip" > "$guest_file"
+        echo "$base $vmid $guest_ip $qname" > "$guest_file"
     else
         itf_step fail "guest IP discovered" "guest agent reported nothing in 600s"
         return 1
@@ -448,7 +459,7 @@ itf_journey_stage_pve_os() {
     done
     local guest_file="$ITF_RUN_DIR/guest-pve.txt"
     [[ -n "$role" ]] && guest_file="$ITF_RUN_DIR/guest-${role}.txt"
-    local vmid guest_ip boot_iso
+    local vmid guest_ip boot_iso qname
 
     boot_iso="$(itf_pve_iso_customize "$base" "$guest_hostname" \
         2>"$ITF_RUN_DIR/iso-customize.log")"
@@ -460,7 +471,10 @@ itf_journey_stage_pve_os() {
         return 1
     fi
 
-    vmid="$(itf_guest_create "$gname" --base "$base" --iso "$boot_iso" \
+    # Run-tagged qm NAME (the fence's ownership evidence — see
+    # itf_guest_qname).
+    qname="$(itf_guest_qname "$gname")"
+    vmid="$(itf_guest_create "$qname" --base "$base" --iso "$boot_iso" \
         --freeze 2>"$ITF_RUN_DIR/guest-create.log")"
     if [[ -n "$vmid" ]]; then
         itf_step pass "guest created (CPU-frozen)" "vmid $vmid"
@@ -468,7 +482,8 @@ itf_journey_stage_pve_os() {
         itf_step fail "guest created" "see guest-create.log"
         return 1
     fi
-    echo "$base $vmid" > "$guest_file"
+    # 4th field = the run-tagged qm NAME; "-" holds the IP slot.
+    echo "$base $vmid - $qname" > "$guest_file"
 
     # Power on FROZEN, attach the serial console, then resume — same
     # first-byte capture as stage_os.  grub's stock menu auto-boots the
@@ -533,7 +548,7 @@ itf_journey_stage_pve_os() {
     guest_ip="$(itf_guest_ip "$base" "$vmid" 900)"
     if [[ -n "$guest_ip" ]]; then
         itf_step pass "guest IP discovered" "$guest_ip"
-        echo "$base $vmid $guest_ip" > "$guest_file"
+        echo "$base $vmid $guest_ip $qname" > "$guest_file"
     else
         itf_step fail "guest IP discovered" \
             "guest agent reported nothing in 900s (first-boot hook installs it)"
@@ -1320,11 +1335,13 @@ itf_reboot_guest_begin() {
             "no $guest_file — stage the lab first"
         return 1
     fi
-    local base vmid old_ip
-    read -r base vmid old_ip < "$guest_file" || {
+    local base vmid old_ip rec_name
+    read -r base vmid old_ip rec_name < "$guest_file" || {
         itf_step fail "guest record present [$role]" "malformed $guest_file"
         return 1
     }
+    # "-" is the pre-IP-discovery placeholder in name-bearing records.
+    [[ "$old_ip" == "-" ]] && old_ip=""
 
     if (( power )); then
         if itf_guest_stop "$base" "$vmid" \
@@ -1379,11 +1396,13 @@ itf_reboot_guest_wait() {
     rm -f "$mode_file"
 
     local guest_file="$ITF_RUN_DIR/guest-${role}.txt"
-    local base vmid old_ip
-    read -r base vmid old_ip < "$guest_file" || {
+    local base vmid old_ip rec_name
+    read -r base vmid old_ip rec_name < "$guest_file" || {
         itf_step fail "guest record present [$role]" "malformed $guest_file"
         return 1
     }
+    # "-" is the pre-IP-discovery placeholder in name-bearing records.
+    [[ "$old_ip" == "-" ]] && old_ip=""
 
     if [[ "$mode" == power ]]; then
         if itf_guest_start "$base" "$vmid" \
@@ -1431,7 +1450,11 @@ itf_reboot_guest_wait() {
             "neither $old_ip nor rediscovered $new_ip answers ssh"
         return 1
     fi
-    echo "$base $vmid $new_ip" > "$guest_file"
+    if [[ -n "${rec_name:-}" ]]; then
+        echo "$base $vmid $new_ip $rec_name" > "$guest_file"
+    else
+        echo "$base $vmid $new_ip" > "$guest_file"
+    fi
     itf_step pass "guest ssh reachable [$role]" \
         "address re-leased during reboot: $old_ip -> $new_ip (record updated)"
     # shellcheck disable=SC2034  # consumed by the journey scripts
@@ -2552,7 +2575,12 @@ itf_journey_stage_from_template() {
         r_base="${rerun_pair%% *}"
         r_vmid="${rerun_pair##* }"
         # Remember the guest for post-mortem/diagnostics even if we abort.
-        echo "$r_base $r_vmid" > "$guest_file"
+        # The record carries the guest's live qm NAME (4th field; "-" holds
+        # the IP slot until discovery) — the orphan fence's ownership
+        # evidence for a guest this run did not create.
+        local rname
+        rname="$(itf_qm_name "$r_base" "$r_vmid")"
+        echo "$r_base $r_vmid -${rname:+ $rname}" > "$guest_file"
         if itf_qm "$r_base" status "$r_vmid" \
                 > "$ITF_RUN_DIR/guest-status-${gname}.log" 2>&1; then
             itf_step pass "rerun guest present" "vmid $r_vmid on $r_base"
@@ -2604,7 +2632,7 @@ itf_journey_stage_from_template() {
         guest_ip="$(itf_guest_ip "$r_base" "$r_vmid" 600)"
         if [[ -n "$guest_ip" ]]; then
             itf_step pass "guest IP discovered" "$guest_ip"
-            echo "$r_base $r_vmid $guest_ip" > "$guest_file"
+            echo "$r_base $r_vmid $guest_ip${rname:+ $rname}" > "$guest_file"
         else
             itf_step fail "guest IP discovered" "guest agent reported nothing in 600s"
             return 1
@@ -2636,7 +2664,11 @@ itf_journey_stage_from_template() {
     itf_step pass "baseline template available" \
         "$template (vmid $tmpl_vmid): ${stamp#itf-stamp| }"
 
-    vmid="$(itf_guest_clone "$gname" --base "$base" --template "$template" \
+    # Run-tagged qm NAME (the fence's ownership evidence — see
+    # itf_guest_qname); log names keep the bare guest name.
+    local qname
+    qname="$(itf_guest_qname "$gname")"
+    vmid="$(itf_guest_clone "$qname" --base "$base" --template "$template" \
         2>"$ITF_RUN_DIR/guest-clone-${gname}.log")"
     if [[ -n "$vmid" ]]; then
         itf_step pass "guest cloned from template" \
@@ -2646,7 +2678,9 @@ itf_journey_stage_from_template() {
         return 1
     fi
     # Remember the guest for post-mortem/diagnostics even if we abort.
-    echo "$base $vmid" > "$guest_file"
+    # 4th field = the run-tagged qm NAME (fence ownership evidence);
+    # "-" holds the IP slot until discovery.
+    echo "$base $vmid - $qname" > "$guest_file"
 
     if itf_guest_start "$base" "$vmid" > "$ITF_RUN_DIR/guest-start-${gname}.log" 2>&1; then
         itf_step pass "guest started" "vmid $vmid"
@@ -2658,7 +2692,7 @@ itf_journey_stage_from_template() {
     guest_ip="$(itf_guest_ip "$base" "$vmid" 600)"
     if [[ -n "$guest_ip" ]]; then
         itf_step pass "guest IP discovered" "$guest_ip"
-        echo "$base $vmid $guest_ip" > "$guest_file"
+        echo "$base $vmid $guest_ip $qname" > "$guest_file"
     else
         itf_step fail "guest IP discovered" "guest agent reported nothing in 600s"
         return 1

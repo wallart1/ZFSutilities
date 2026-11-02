@@ -361,7 +361,15 @@ of this tree that still exist in their base's `qm list` — the base host
 is the authority, which is what makes the check correct across dev
 restarts — refuse the new start, naming each leftover and its two
 recoveries (reuse with `itf journey run <same> --rerun`, discard with
-`itf guest destroy`). A rerun exempts exactly the guests it takes over;
+`itf guest destroy`). Ownership is decided by NAME, not just VMID:
+every guest is named for its run (`itf_guest_qname` — the journey's
+guest name plus the run timestamp, recorded as the 4th field of each
+`guest*.txt`), so a live VMID whose qm name differs from the recorded
+one is another run's guest (the VMID was legitimately recycled after
+this run's guest was destroyed) — the stale claim is noted and ignored,
+and no destroy or rerun is ever offered against that guest. Records
+older than the name field keep the fail-closed VMID-only match. A rerun
+exempts exactly the guests it takes over;
 a results directory with no interrupted runs costs no base query at
 all; an unreachable base fails closed (unverified is not clean); and
 guests of finished runs are exempt by design — they are the kept lab of

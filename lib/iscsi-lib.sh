@@ -753,6 +753,30 @@ _detect_is_zvol_leaf() {
 # Returns quietly when zpool is absent, nothing is imported, no expected-set
 # source exists (pre-install gate), or a scan is unreadable — a detector
 # never fails the caller.
+# Offsite-candidate pool names from the GUI config — the same authority
+# the Dashboard's identity warnings exempt. A pool marked for offsite
+# rotation is routinely disconnected by design, so the "expected pool
+# ... is not imported" shape skips it; the GUID and unexpected-import
+# shapes still apply (they only fire when the pool IS imported). Empty
+# when no config exists, it is unreadable, or none are marked — the
+# pre-exemption behavior.
+_offsite_candidate_names() {
+    local config_file="${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/config.json}"
+    [[ -f "$config_file" ]] || return 0
+    python3 - "$config_file" << 'PYEOF' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        cfg = json.load(f)
+except Exception:
+    sys.exit(0)
+for p in cfg.get("pools", []):
+    if isinstance(p, dict) and p.get("offsite_candidate") and p.get("name"):
+        print(p["name"])
+PYEOF
+    return 0
+}
+
 detect_pool_identity() {
     command -v zpool >/dev/null 2>&1 || return 0
 
@@ -769,11 +793,15 @@ detect_pool_identity() {
         done < <(read_map_pool_guids "$map_file")
     fi
 
-    # (a) expected vs imported.
-    local -A expected=() imported_set=()
+    # (a) expected vs imported. Offsite rotation pools are exempt from
+    # the not-imported shape only (routinely disconnected by design).
+    local -A expected=() imported_set=() offsite=()
     while IFS= read -r name; do
         [[ -n "$name" ]] && imported_set["$name"]=1
     done <<< "$imported"
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && offsite["$name"]=1
+    done < <(_offsite_candidate_names)
     if [[ $(type -t pool_list 2>/dev/null) == "function" ]]; then
         while IFS= read -r name; do
             [[ -n "$name" ]] && expected["$name"]=1
@@ -787,6 +815,7 @@ detect_pool_identity() {
     if [[ ${#expected[@]} -gt 0 ]]; then
         for name in "${!expected[@]}"; do
             if [[ -z "${imported_set[$name]:-}" ]]; then
+                [[ -n "${offsite[$name]:-}" ]] && continue
                 msg="expected pool ${name} is not imported"
                 msg+=" — offline, renamed, or replaced"
                 _detect_lines+=("$msg")

@@ -426,7 +426,7 @@ naming both recoveries"
     sed -i 's/^caller:   journey:test$/caller:   journey:j13-test/' \
         "$runs/run-20260101-010101-j13-test/meta.txt"
     table="$tmp_dir/fence-table-live"
-    printf '      VMID Status    Name\n8010     running  itf-guest\n' > "$table"
+    printf '      VMID NAME      STATUS\n8010     itf-guest running\n' > "$table"
     out="$(_fence_child "$runs" "" "$table" 0)"
     if [[ "$out" != *"fence-rc=1"* ]]; then
         test_fail "fence passed while a recorded guest lives on its base: $out"
@@ -458,10 +458,66 @@ test_orphan_fence_passes_when_leftover_no_longer_exists() {
         "guest-storage.txt:base.invalid 8010 10.0.0.5"
     # The base answers, but the VMID is gone — nothing to collide with.
     table="$tmp_dir/fence-table-gone"
-    printf '      VMID Status    Name\n8003     stopped  other-guest\n' > "$table"
+    printf '      VMID NAME       STATUS\n8003     other-guest stopped\n' > "$table"
     out="$(_fence_child "$runs" "" "$table" 0)"
     if [[ "$out" != *"fence-rc=0"* ]] || [[ "$out" == *"refusing to start"* ]]; then
         test_fail "fence refused a destroyed leftover: $out"
+        return
+    fi
+    rm -rf "$runs"
+    test_pass
+}
+
+test_orphan_fence_name_match_still_refuses() {
+    test_start "orphan fence refuses while the live VMID carries the recorded \
+run-tagged name"
+    local runs table out
+    runs=$(mktemp -d)
+    # Name-bearing record (4th field): the guest was named for its run.
+    _plant_run "$runs" run-20260101-010101-j13-test interrupted \
+        "guest-storage.txt:base.invalid 8010 10.0.0.5 j13-20260101-010101"
+    sed -i 's/^caller:   journey:test$/caller:   journey:j13-test/' \
+        "$runs/run-20260101-010101-j13-test/meta.txt"
+    table="$tmp_dir/fence-table-named"
+    printf '      VMID NAME              STATUS\n8010     j13-20260101-010101 running\n' > "$table"
+    out="$(_fence_child "$runs" "" "$table" 0)"
+    if [[ "$out" != *"fence-rc=1"* ]] || [[ "$out" != *"refusing to start"* ]]; then
+        test_fail "fence passed on a name-matching live leftover: $out"
+        return
+    fi
+    if [[ "$out" != *"itf guest destroy base.invalid 8010"* ]] \
+            || [[ "$out" != *"itf journey run j13-test --rerun"* ]]; then
+        test_fail "name-matched leftover lacks its recoveries: $out"
+        return
+    fi
+    rm -rf "$runs"
+    test_pass
+}
+
+test_orphan_fence_name_mismatch_ignores_stale_claim() {
+    test_start "orphan fence ignores a stale claim whose VMID now hosts another \
+run's live guest"
+    local runs table out
+    runs=$(mktemp -d)
+    # The claim names ITS guest j13-20260101-010101; the live 8010 is a
+    # different run's guest (the VMID was recycled after this run's
+    # guest was destroyed) — not ours to destroy or roll back.
+    _plant_run "$runs" run-20260101-010101-j13-test interrupted \
+        "guest-storage.txt:base.invalid 8010 10.0.0.5 j13-20260101-010101"
+    table="$tmp_dir/fence-table-recycled"
+    printf '      VMID NAME              STATUS\n8010     j05-20261031-204041 running\n' > "$table"
+    out="$(_fence_child "$runs" "" "$table" 0)"
+    if [[ "$out" != *"fence-rc=0"* ]] || [[ "$out" == *"refusing to start"* ]]; then
+        test_fail "fence refused a stale claim on a recycled VMID: $out"
+        return
+    fi
+    if [[ "$out" != *"another run's"* ]] \
+            || [[ "$out" != *"claim ignored, guest untouched"* ]]; then
+        test_fail "stale-claim note missing: $out"
+        return
+    fi
+    if [[ "$out" == *"guest destroy base.invalid 8010"* ]]; then
+        test_fail "destroy offered for another run's live guest: $out"
         return
     fi
     rm -rf "$runs"
@@ -477,7 +533,7 @@ test_orphan_fence_healthy_results_dir_never_queries_bases() {
     _plant_run "$runs" run-20260101-010101-j04-test finished \
         "guest.txt:base.invalid 8005 10.0.0.9"
     table="$tmp_dir/fence-table-healthy"
-    printf '      VMID Status    Name\n' > "$table"
+    printf '      VMID NAME STATUS\n' > "$table"
     out="$(_fence_child "$runs" "" "$table" 0)"
     if [[ "$out" != *"fence-rc=0"* ]]; then
         test_fail "fence refused on a healthy results dir: $out"
@@ -502,7 +558,7 @@ test_orphan_fence_rerun_spec_exempts_only_its_own_takeovers() {
     spec="$tmp_dir/rerun-guests.tsv"
     printf 'guest.txt base.invalid 8005\n' > "$spec"
     table="$tmp_dir/fence-table-two"
-    printf '      VMID Status    Name\n8005     running  a\n8010     running  b\n' > "$table"
+    printf '      VMID NAME STATUS\n8005     a    running\n8010     b    running\n' > "$table"
     out="$(_fence_child "$runs" "$spec" "$table" 0)"
     if [[ "$out" != *"fence-rc=1"* ]]; then
         test_fail "fence passed with a non-exempt leftover live: $out"
@@ -532,7 +588,7 @@ test_orphan_fence_all_exempt_never_queries_bases() {
     spec="$tmp_dir/rerun-guests.tsv"
     printf 'guest.txt base.invalid 8005\n' > "$spec"
     table="$tmp_dir/fence-table-unused"
-    printf '      VMID Status    Name\n' > "$table"
+    printf '      VMID NAME STATUS\n' > "$table"
     out="$(_fence_child "$runs" "$spec" "$table" 0)"
     if [[ "$out" != *"fence-rc=0"* ]]; then
         test_fail "fence refused its own takeover pairs: $out"
@@ -1027,6 +1083,8 @@ test_journey_run_blocked_while_lock_held
 test_status_shows_run_lock_section
 test_orphan_fence_refuses_naming_leftover_and_both_recoveries
 test_orphan_fence_passes_when_leftover_no_longer_exists
+test_orphan_fence_name_match_still_refuses
+test_orphan_fence_name_mismatch_ignores_stale_claim
 test_orphan_fence_healthy_results_dir_never_queries_bases
 test_orphan_fence_rerun_spec_exempts_only_its_own_takeovers
 test_orphan_fence_all_exempt_never_queries_bases

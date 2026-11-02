@@ -1004,6 +1004,42 @@ test_two_node_identity_expected_pool_missing_warns() {
     test_pass
 }
 
+test_two_node_identity_offsite_candidate_exempt() {
+    test_start "--two-node: offsite-candidate pool not imported is exempt"
+
+    local fx output rc cfg
+    fx=$(make_identity_fixtures)
+    stage_identity_fixtures "$fx"
+    printf '{"version":1,"generated":"2026-10-28T10:00:00+00:00","host":"stewie","pools":{"threeamigos":"4338716537971988948","NVME1":"252995746834113014","fivebays":"777888999000111222"}}\n' \
+        > "${fx}/map/iscsi-state.json"
+    # GUI config: NVME1 is an offsite rotation candidate (disconnected on
+    # purpose), fivebays is not — both are absent from zpool-list.
+    cfg="${fx}/config.json"
+    printf '{"config_version": 31, "pools": [{"name": "threeamigos"}, {"name": "NVME1", "offsite_candidate": true}, {"name": "fivebays"}]}\n' \
+        > "$cfg"
+    output=$(ZFSUTILITIES_CONFIG_PATH="$cfg" run_identity_check "$fx" --two-node 2>&1)
+    rc=$?
+    rm -rf "$fx"
+
+    if [[ $rc -eq 255 ]]; then
+        test_skip "Requires root or fakeroot"
+        return
+    fi
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 with identity findings, got $rc"
+        return
+    fi
+    if [[ "$output" == *"expected pool NVME1 is not imported"* ]]; then
+        test_fail "Offsite-candidate pool must be exempt from the not-imported warn"
+        return
+    fi
+    if [[ "$output" != *"expected pool fivebays is not imported — offline, renamed, or replaced"* ]]; then
+        test_fail "Non-offsite missing pool must still warn (exemption is selective)"
+        return
+    fi
+    test_pass
+}
+
 test_two_node_identity_unexpected_pool_warns() {
     test_start "--two-node: imported pool outside the expected set warns"
 
@@ -1169,6 +1205,7 @@ test_two_node_detection_healthy_passes
 test_two_node_detection_not_in_list_failures
 test_two_node_identity_guid_mismatch_warns
 test_two_node_identity_expected_pool_missing_warns
+test_two_node_identity_offsite_candidate_exempt
 test_two_node_identity_unexpected_pool_warns
 test_two_node_identity_duplicate_import_candidate_warns
 test_two_node_identity_zvol_candidate_stays_silent

@@ -2586,7 +2586,12 @@ class TestCancelSubprocess(unittest.TestCase):
                         time.sleep(0.05)
                     self.assertTrue(started, "pre-backup step never appeared in the log")
                     os.kill(proc.pid, signal.SIGTERM)
-                    rc = proc.wait(timeout=15)
+                    # Generous on purpose: under a loaded full gate the
+                    # runner's SIGTERM teardown (child reaping, session
+                    # log trailer) can outrun a tight budget — a 15 s
+                    # wait once SIGKILLed a healthy cancellation
+                    # (standing standalone at 4 s).
+                    rc = proc.wait(timeout=60)
                 except Exception:
                     if proc.poll() is None:
                         proc.kill()

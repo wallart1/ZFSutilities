@@ -200,11 +200,15 @@ itf_runlock_orphan_fence() {
             "$run/meta.txt" 2>/dev/null)" || caller=""
         for rec in "$run"/guest*.txt; do
             [[ -f "$rec" ]] || continue
-            base="" vmid=""
-            read -r base vmid _ < "$rec" || true
+            base="" vmid="" rec_name=""
+            # 4th field = the run-tagged qm NAME the record's run gave
+            # its guest (absent in records older than the name field —
+            # those keep the fail-closed VMID-only match below).
+            read -r base vmid _ rec_name < "$rec" || true
             [[ -n "$base" && "$vmid" =~ ^[0-9]+$ ]] || continue
             rec_line="$(basename "$run")"$'\t'"${caller:-unknown}"
             rec_line+=$'\t'"$(basename "$rec")"$'\t'"$base"$'\t'"$vmid"
+            rec_line+=$'\t'"$rec_name"
             cands+=("$rec_line")
         done
     done < <(ls -1d "$runs_dir"/run-* 2>/dev/null | sort -r)
@@ -215,32 +219,36 @@ itf_runlock_orphan_fence() {
     local -a check=()
     local cand
     for cand in "${cands[@]}"; do
-        IFS=$'\t' read -r _ _ _ base vmid <<< "$cand"
+        IFS=$'\t' read -r _ _ _ base vmid _ <<< "$cand"
         [[ -n "${exempt["$base/$vmid"]:-}" ]] || check+=("$cand")
     done
     (( ${#check[@]} > 0 )) || return 0
 
     # One `qm list` per involved base is the authority on what exists —
     # the recorded file state never is (a dev restart orphans exactly
-    # the kind of stale record a file-only check would trust).
-    local -A present=() unreachable=() want=()
+    # the kind of stale record a file-only check would trust). Its NAME
+    # column is the authority on WHO owns a live VMID: guests are named
+    # for their run (itf_guest_qname), so a live name that differs from
+    # the recorded one means the VMID was recycled by another run.
+    local -A present=() present_name=() unreachable=() want=()
     local -a bases=()
     for cand in "${check[@]}"; do
-        IFS=$'\t' read -r _ _ _ base vmid <<< "$cand"
+        IFS=$'\t' read -r _ _ _ base vmid _ <<< "$cand"
         if [[ -z "${want["$base"]:-}" ]]; then
             want["$base"]=1
             bases+=("$base")
         fi
     done
-    local b out v
+    local b out v vname
     for b in "${bases[@]}"; do
         if ! out="$(itf_qm "$b" list 2>/dev/null)"; then
             unreachable["$b"]=1
             continue
         fi
-        while read -r v _; do
+        while read -r v vname _; do
             [[ "$v" =~ ^[0-9]+$ ]] || continue
             present["$b/$v"]=1
+            present_name["$b/$v"]="$vname"
         done <<< "$out"
     done
 
@@ -248,9 +256,9 @@ itf_runlock_orphan_fence() {
     # the rerun hint that reuses its guests in place.
     local -a blockers=() destroys=() hints=()
     local -A seen=() destroy_seen=() hint_seen=()
-    local rname rcaller gfile
+    local rname rcaller gfile rec_name
     for cand in "${check[@]}"; do
-        IFS=$'\t' read -r rname rcaller gfile base vmid <<< "$cand"
+        IFS=$'\t' read -r rname rcaller gfile base vmid rec_name <<< "$cand"
         [[ -n "${seen["$rname/$base/$vmid"]:-}" ]] && continue
         seen["$rname/$base/$vmid"]=1
         if [[ -n "${unreachable["$base"]:-}" ]]; then
@@ -258,6 +266,19 @@ itf_runlock_orphan_fence() {
 "— base unreachable, existence unverified")
         else
             [[ -n "${present["$base/$vmid"]:-}" ]] || continue
+            # Name-aware ownership: a record that names its guest only
+            # blocks while the live VMID still carries THAT name. A
+            # different live name means itf_vmid_pick legitimately
+            # re-allocated the freed VMID to another run's guest — this
+            # claim is stale, the live guest is not ours to destroy or
+            # roll back, and the run may proceed on other VMIDs.
+            if [[ -n "$rec_name" ]] \
+                    && [[ "$rec_name" != "${present_name["$base/$vmid"]:-}" ]]; then
+                echo "itf: note: ${rname}: claim on ${base}/${vmid} is stale — the" \
+                    "VMID now hosts '${present_name["$base/$vmid"]}' (another run's" \
+                    "live guest); claim ignored, guest untouched" >&2
+                continue
+            fi
             blockers+=("$rname: $base/$vmid ($gfile)")
         fi
         if [[ -z "${destroy_seen["$base/$vmid"]:-}" ]]; then

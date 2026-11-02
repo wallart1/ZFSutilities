@@ -35,6 +35,33 @@ itf_vmid_pick() {
     return 1
 }
 
+# itf_guest_qname <gname>
+#
+# The qm NAME for a guest of this run: the journey's guest name made
+# run-unique with the run's timestamp. Journey guest names repeat across
+# runs — and across repos sharing the lab — so a bare name cannot prove
+# which run a leftover guest belongs to; the run-tagged name can, and the
+# orphan fence compares it against qm list's NAME column (a live VMID
+# whose name differs from the recorded one is another run's guest, never
+# a leftover to destroy or roll back).
+itf_guest_qname() {
+    local tag="${ITF_RUN_DIR##*/}"
+    tag="${tag#run-}"
+    local day="${tag%%-*}"
+    local clock="${tag#*-}"
+    clock="${clock%%-*}"
+    printf '%s-%s-%s\n' "$1" "$day" "$clock"
+}
+
+# itf_qm_name <base> <vmid>
+#
+# Resolves a guest's live qm NAME (its config's name: line). Used for
+# records written about a guest this run did not create itself (--rerun
+# takeovers replay on the previous run's guest).
+itf_qm_name() {
+    itf_qm "$1" config "$2" 2>/dev/null | awk '/^name: /{print $2; exit}'
+}
+
 # itf_guest_create <name> [--base B] [--vmid V] [--mem MB] [--cores N]
 #                   [--sysdisk GB] [--pooldisk GB] [--iso NAME] [--freeze] [--start]
 #
