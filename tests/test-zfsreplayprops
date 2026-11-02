@@ -1,0 +1,887 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-zfsreplayprops — Unit tests for the replay half of
+# lib/property-manifest-lib.sh and the bin/zfsreplayprops wrapper
+# (store/key derivation, exact-generation lookup with newest-available
+# fallback, header/sha256 verification, per-property set with skip+WARN,
+# the keylocation best-effort load-key flow, fail-open WARN contract,
+# multi-store mount switching, and the wrapper's dataset mapping).
+
+# shellcheck disable=SC2218
+# (source() override below is intentionally not active for test-lib.sh itself.)
+builtin source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+repo_root="$mydir"
+
+# Keep test-lib's log_msg mock: skip re-sourcing bashinit from the library.
+source() {
+    local expanded="${1/#\~/$HOME}"
+    [[ "$expanded" == "$HOME/bashinit" ]] && return 0
+    [[ "$expanded" == "$repo_root/bin/bashinit" ]] && return 0
+    builtin source "$@"
+}
+
+source "$mydir/lib/property-manifest-lib.sh"
+
+# ---------------------------------------------------------------------------
+# Mock zfs: every invocation is recorded to a capture file. Manifest data
+# comes from REAL manifest files written into a REAL store directory (the
+# same header+sha256 format propmanifest_capture produces), so parse and
+# verify run against the actual file bytes. Mountpoints live in a
+# tab-separated fixture (dataset, mountpoint) so a test can register
+# several manifest stores; snapshot listings come from a per-dataset
+# fixture of fs@snap lines.
+# ---------------------------------------------------------------------------
+
+_zfs_capture_file="$_mock_zfs_state_dir/replayprops_zfs_calls"
+_rmock_snaps_file="$_mock_zfs_state_dir/replayprops_snaps"
+_rmock_mounts_file="$_mock_zfs_state_dir/replayprops_mounts"
+_rmock_set_fail="$_mock_zfs_state_dir/replayprops_set_fail"
+_rmock_calls_file="$_mock_zfs_state_dir/replayprops_wrapper_calls"
+_rmock_store=$(mktemp -d "${TMPDIR:-/tmp}/replayprops_store.XXXXXX")
+
+zfs() {
+    echo "zfs $*" >> "$_zfs_capture_file"
+    local -a a=()
+    local target value prop d _new
+    case "$1" in
+        list)
+            a=("${@:2}")
+            target="${a[${#a[@]}-1]}"
+            if [[ "$*" == *" -t snapshot"* ]]; then
+                # Snapshot listing for one dataset, name-sorted descending
+                # (the -S name form the replay lookup uses).
+                awk -v ds="$target" 'index($0, ds "@") == 1' \
+                    "$_rmock_snaps_file" 2>/dev/null | LC_ALL=C sort -r
+                return 0
+            fi
+            case " ${_rmock_existing:-} " in
+                *" $target "*) return 0 ;;
+            esac
+            return 1
+            ;;
+        get)
+            a=("${@:2}")
+            target="${a[${#a[@]}-1]}"
+            prop="${a[${#a[@]}-2]}"
+            value="-"
+            case "$prop" in
+                mountpoint)
+                    value=$(awk -F'\t' -v ds="$target" \
+                        '$1 == ds {print $2; exit}' "$_rmock_mounts_file")
+                    ;;
+                mounted)
+                    case " ${_rmock_mounted_list:-} " in
+                        *" $target "*) value="yes" ;;
+                        *) value="no" ;;
+                    esac
+                    ;;
+            esac
+            echo "$value"
+            return 0
+            ;;
+        mount)
+            _rmock_mounted_list="$_rmock_mounted_list $2"
+            return 0
+            ;;
+        unmount)
+            _new=""
+            for d in ${_rmock_mounted_list:-}; do
+                [[ "$d" != "$2" ]] && _new="$_new $d"
+            done
+            _rmock_mounted_list="$_new"
+            return 0
+            ;;
+        set)
+            # zfs set <prop>=<value> <dest>: rc driven by the fail fixture.
+            prop="${2%%=*}"
+            if grep -qxF "$prop" "$_rmock_set_fail" 2>/dev/null; then
+                echo "cannot set '$prop': bad property on this host" >&2
+                return 1
+            fi
+            return 0
+            ;;
+        load-key)
+            return "${_rmock_loadkey_rc:-0}"
+            ;;
+    esac
+    return 0
+}
+
+# Default lock-manager mocks (individual tests override and restore them,
+# or unset -f them for the not-loaded case).
+zfslock_wait_or_resolve() {
+    echo "zfslock_wait_or_resolve $1 $2" >> "$_zfs_capture_file"
+    zfslock_id="mock-lock-$1"
+    return 0
+}
+zfslock_release() {
+    echo "zfslock_release $1" >> "$_zfs_capture_file"
+}
+
+get_log() {
+    cat "$(get_test_log_file)" 2>/dev/null
+}
+
+# Write one real manifest file (capture's exact format) for <dataset> at
+# generation <snap> into <dir>, with the sorted given property=value body.
+write_manifest() {
+    local dir="$1" ds="$2" snap="$3"
+    shift 3
+    local body="" line sum f
+    for line in "$@"; do
+        body+="$line"$'\n'
+    done
+    body=$(printf '%s' "$body" | LC_ALL=C sort)
+    sum=$(printf '%s' "$body" | sha256sum | awk '{print $1}')
+    f="$dir/$(propmanifest_escape "$ds")@$snap"
+    {
+        printf '# zfsutilities property manifest v1\n'
+        printf '# dataset: %s\n' "$ds"
+        printf '# snapshot: @%s\n' "$snap"
+        printf '# sha256: %s\n' "$sum"
+        printf '\n'
+        printf '%s' "$body"
+    } > "$f"
+    printf '%s\n' "$f"
+}
+
+# Register a manifest store: exists (zfs list) and mounts at <dir>.
+add_store() {
+    _rmock_existing="$_rmock_existing $1"
+    printf '%s\t%s\n' "$1" "$2" >> "$_rmock_mounts_file"
+}
+
+# Register a snapshot on a backup-copy dataset.
+add_snap() {
+    printf '%s@%s\n' "$1" "$2" >> "$_rmock_snaps_file"
+}
+
+reset_state() {
+    clear_test_log_file
+    : > "$_zfs_capture_file"
+    : > "$_rmock_snaps_file"
+    : > "$_rmock_mounts_file"
+    : > "$_rmock_set_fail"
+    : > "$_rmock_calls_file"
+    # Fresh store per test: file-presence assertions must not see earlier
+    # tests' manifests.
+    rm -rf "$_rmock_store"
+    _rmock_store=$(mktemp -d "${TMPDIR:-/tmp}/replayprops_store.XXXXXX")
+    _rmock_existing=""
+    _rmock_mounted_list=""
+    _rmock_loadkey_rc=0
+    dryrun="N"
+    _propmanifest_ok=""
+    _propmanifest_skip=""
+    _propmanifest_mounted=""
+    _propmanifest_mnt=""
+}
+
+# ---------------------------------------------------------------------------
+# Store/key derivation and newest-file selection
+# ---------------------------------------------------------------------------
+
+test_store_derivation() {
+    test_start "store derivation maps a backup copy to its manifest store"
+
+    assert_equals \
+        "backup/tank/zfsutilities-manifests tank/src/data" \
+        "$(propmanifest_store_of backup/tank/src/data)"
+    assert_equals \
+        "offsite/fivebays/zfsutilities-manifests fivebays/vms/disk1" \
+        "$(propmanifest_store_of offsite/fivebays/vms/disk1)"
+    assert_equals \
+        "backup/tank/zfsutilities-manifests tank" \
+        "$(propmanifest_store_of backup/tank)"
+    local rc=0
+    propmanifest_store_of backup >/dev/null 2>&1 || rc=$?
+    assert_rc 1 "$rc"
+    test_pass
+}
+
+test_newest_file_byte_order() {
+    test_start "newest-file selection uses byte order over generation names"
+
+    local dir
+    dir=$(mktemp -d "${TMPDIR:-/tmp}/replayprops_newest.XXXXXX")
+    printf x > "$dir/ds@20261101T0500Z-d"
+    printf x > "$dir/ds@20261102T0500Z-d"
+    printf x > "$dir/ds@20261031T0500Z-d"
+    assert_equals "$dir/ds@20261102T0500Z-d" \
+        "$(propmanifest_newest_file "$dir/ds@")"
+    assert_equals "" "$(propmanifest_newest_file "$dir/none@")"
+    rm -rf "$dir"
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# Parse + verify
+# ---------------------------------------------------------------------------
+
+test_parse_verifies_good_manifest() {
+    test_start "parse returns the verified body of a well-formed manifest"
+
+    reset_state
+    local f
+    f=$(write_manifest "$_rmock_store" tank/src/data daily-20261102T0500Z-d \
+        compression=lz4 recordsize=131072)
+    local out rc=0
+    out=$(propmanifest_parse "$f" tank/src/data) || rc=$?
+    assert_rc 0 "$rc"
+    assert_equals "compression=lz4
+recordsize=131072" "$out"
+    test_pass
+}
+
+test_parse_empty_body() {
+    test_start "a header-only manifest parses to an empty body"
+
+    reset_state
+    local f
+    f=$(write_manifest "$_rmock_store" tank/src/data daily-20261102T0500Z-d)
+    local out rc=0
+    out=$(propmanifest_parse "$f" tank/src/data) || rc=$?
+    assert_rc 0 "$rc"
+    assert_equals "" "$out"
+    test_pass
+}
+
+test_parse_unknown_version() {
+    test_start "an unknown format version is refused"
+
+    reset_state
+    local f
+    f=$(write_manifest "$_rmock_store" tank/src/data daily-20261102T0500Z-d \
+        compression=lz4)
+    sed -i '1s/.*/# zfsutilities property manifest v2/' "$f"
+    local rc=0
+    propmanifest_parse "$f" tank/src/data >/dev/null 2>&1 || rc=$?
+    assert_rc 2 "$rc"
+    test_pass
+}
+
+test_parse_dataset_mismatch() {
+    test_start "a dataset mismatch is refused unless no dataset is expected"
+
+    reset_state
+    local f
+    f=$(write_manifest "$_rmock_store" tank/src/data daily-20261102T0500Z-d \
+        compression=lz4)
+    local rc=0
+    propmanifest_parse "$f" tank/other >/dev/null 2>&1 || rc=$?
+    assert_rc 3 "$rc"
+    rc=0
+    propmanifest_parse "$f" "" >/dev/null 2>&1 || rc=$?
+    assert_rc 0 "$rc"
+    test_pass
+}
+
+test_parse_checksum_mismatch() {
+    test_start "a tampered body fails the sha256 check"
+
+    reset_state
+    local f
+    f=$(write_manifest "$_rmock_store" tank/src/data daily-20261102T0500Z-d \
+        compression=lz4 recordsize=131072)
+    printf 'compression=zstd\n' > "$f.body"
+    {
+        sed -n '1,5p' "$f"
+        cat "$f.body"
+    } > "$f.tmp"
+    mv -f "$f.tmp" "$f"
+    rm -f "$f.body"
+    local rc=0
+    propmanifest_parse "$f" tank/src/data >/dev/null 2>&1 || rc=$?
+    assert_rc 4 "$rc"
+    test_pass
+}
+
+test_parse_unreadable_file() {
+    test_start "a missing file is refused with rc 1"
+
+    reset_state
+    local rc=0
+    propmanifest_parse "$_rmock_store/nosuchfile" "" >/dev/null 2>&1 || rc=$?
+    assert_rc 1 "$rc"
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# Apply body
+# ---------------------------------------------------------------------------
+
+test_apply_body_sets_each_property() {
+    test_start "apply sets each manifest property on the destination"
+
+    reset_state
+    propmanifest_apply_body "compression=lz4
+recordsize=131072
+org.debian:periodic-scrub=disable" tank/restored/data
+    local capture
+    capture=$(cat "$_zfs_capture_file")
+    assert_contains "$capture" "zfs set compression=lz4 tank/restored/data"
+    assert_contains "$capture" "zfs set recordsize=131072 tank/restored/data"
+    assert_contains "$capture" \
+        "zfs set org.debian:periodic-scrub=disable tank/restored/data"
+    assert_contains "$(get_log)" \
+        "VERB: Replayed 3 properties onto tank/restored/data from its property manifest (0 skipped)."
+    test_pass
+}
+
+test_apply_body_set_failure_skips_one() {
+    test_start "one unsettable property skips with a WARN; the rest apply"
+
+    reset_state
+    printf 'recordsize\n' > "$_rmock_set_fail"
+    propmanifest_apply_body "compression=lz4
+recordsize=131072" tank/restored/data
+    local capture
+    capture=$(cat "$_zfs_capture_file")
+    assert_contains "$capture" "zfs set compression=lz4 tank/restored/data"
+    if [[ "$(grep -c "zfs set recordsize=131072 tank/restored/data" \
+            "$_zfs_capture_file")" != "1" ]]; then
+        test_fail "the failing set must be attempted exactly once"
+        return
+    fi
+    assert_contains "$(get_log)" \
+        "WARN: Could not set recordsize on tank/restored/data — skipped (not settable on this host)."
+    assert_contains "$(get_log)" \
+        "VERB: Replayed 1 properties onto tank/restored/data from its property manifest (1 skipped)."
+    test_pass
+}
+
+test_apply_body_excluded_property_never_set() {
+    test_start "an exclusion-set property is refused even from a hand-made body"
+
+    reset_state
+    propmanifest_apply_body "compression=lz4
+volblocksize=64K" tank/restored/data
+    local capture
+    capture=$(cat "$_zfs_capture_file")
+    assert_contains "$capture" "zfs set compression=lz4 tank/restored/data"
+    if [[ "$capture" == *"volblocksize"* ]]; then
+        test_fail "volblocksize must never be set by replay"
+        return
+    fi
+    assert_contains "$(get_log)" \
+        "WARN: Property volblocksize is excluded from replay — skipped on tank/restored/data."
+    test_pass
+}
+
+test_apply_body_keylocation_file_loads_key() {
+    test_start "a file:// keylocation is set and its key loaded"
+
+    reset_state
+    propmanifest_apply_body "keylocation=file:///mnt/ZFSkeys/key1" \
+        tank/restored/data
+    local capture
+    capture=$(cat "$_zfs_capture_file")
+    assert_contains "$capture" \
+        "zfs set keylocation=file:///mnt/ZFSkeys/key1 tank/restored/data"
+    assert_contains "$capture" "zfs load-key tank/restored/data"
+    assert_contains "$(get_log)" \
+        "VERB: Loaded the key for tank/restored/data from its keylocation."
+    test_pass
+}
+
+test_apply_body_keylocation_load_failure_warns() {
+    test_start "a load-key failure WARNs but never fails the replay"
+
+    reset_state
+    _rmock_loadkey_rc=1
+    propmanifest_apply_body "keylocation=file:///mnt/ZFSkeys/key1" \
+        tank/restored/data
+    assert_contains "$(get_log)" \
+        "WARN: Could not load the key for tank/restored/data (keylocation file missing or unreadable) — the dataset stays locked until its key is loaded."
+    assert_contains "$(get_log)" \
+        "VERB: Replayed 1 properties onto tank/restored/data from its property manifest (0 skipped)."
+    test_pass
+}
+
+test_apply_body_keylocation_non_file_never_loads() {
+    test_start "a non-file keylocation is set but never loaded (no prompts)"
+
+    reset_state
+    propmanifest_apply_body "keylocation=prompt" tank/restored/data
+    local capture
+    capture=$(cat "$_zfs_capture_file")
+    assert_contains "$capture" "zfs set keylocation=prompt tank/restored/data"
+    if [[ "$capture" == *"load-key"* ]]; then
+        test_fail "load-key must not run for a non-file keylocation"
+        return
+    fi
+    assert_contains "$(get_log)" \
+        "WARN: keylocation on tank/restored/data set to prompt; key not loaded (only file:// locations load non-interactively)."
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# apply_file (the .props sibling entry)
+# ---------------------------------------------------------------------------
+
+test_apply_file_roundtrip() {
+    test_start "apply_file verifies and applies a directly-given file"
+
+    reset_state
+    local f
+    f=$(write_manifest "$_rmock_store" threeamigos/proxmox/vm-205-disk-0 \
+        initial-20261101T0500Z-w compression=lz4)
+    propmanifest_apply_file "$f" threeamigos/proxmox/vm-205-disk-0
+    local capture
+    capture=$(cat "$_zfs_capture_file")
+    assert_contains "$capture" \
+        "zfslock_wait_or_resolve threeamigos/proxmox/vm-205-disk-0 w"
+    assert_contains "$capture" \
+        "zfs set compression=lz4 threeamigos/proxmox/vm-205-disk-0"
+    assert_contains "$capture" "zfslock_release mock-lock-threeamigos/proxmox/vm-205-disk-0"
+    test_pass
+}
+
+test_apply_file_corrupt_fails_open() {
+    test_start "a corrupt apply_file target WARNs and applies nothing"
+
+    reset_state
+    local f
+    f=$(write_manifest "$_rmock_store" tank/src/data daily-20261102T0500Z-d \
+        compression=lz4)
+    printf 'compression=zstd\nrecordsize=131072\n' >> "$f"
+    propmanifest_apply_file "$f" tank/restored/data
+    if grep -q "zfs set" "$_zfs_capture_file"; then
+        test_fail "no property may be set from a corrupt manifest"
+        return
+    fi
+    assert_contains "$(get_log)" \
+        "WARN: Property manifest $f failed its sha256 check — replay skipped for tank/restored/data."
+    test_pass
+}
+
+test_apply_file_dryrun() {
+    test_start "apply_file dry-run logs the Would line and does nothing"
+
+    reset_state
+    local f
+    f=$(write_manifest "$_rmock_store" tank/src/data daily-20261102T0500Z-d \
+        compression=lz4)
+    dryrun="Y"
+    propmanifest_apply_file "$f" tank/restored/data
+    assert_contains "$(get_log)" \
+        "INFO: Dry-run: Would replay property manifest $f onto tank/restored/data"
+    if [[ -s "$_zfs_capture_file" ]]; then
+        test_fail "dry-run must not touch zfs: $(cat "$_zfs_capture_file")"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# propmanifest_replay
+# ---------------------------------------------------------------------------
+
+test_replay_exact_generation() {
+    test_start "replay uses the backup copy's newest-snapshot manifest"
+
+    reset_state
+    add_store backup/tank/zfsutilities-manifests "$_rmock_store"
+    add_snap backup/tank/src/data daily-20261101T0500Z-d
+    add_snap backup/tank/src/data daily-20261102T0500Z-d
+    write_manifest "$_rmock_store" tank/src/data daily-20261101T0500Z-d \
+        compression=on
+    write_manifest "$_rmock_store" tank/src/data daily-20261102T0500Z-d \
+        compression=lz4 recordsize=131072
+
+    local rc=0
+    propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(cat "$_zfs_capture_file")" \
+        "zfs set compression=lz4 tank/src/data"
+    assert_contains "$(get_log)" \
+        "VERB: Replayed 2 properties onto tank/src/data from its property manifest (0 skipped)."
+    if [[ "$(get_log)" == *"WARN"* ]]; then
+        test_fail "an exact hit must not WARN: $(get_log)"
+        return
+    fi
+    test_pass
+}
+
+test_replay_falls_back_to_newest_manifest() {
+    test_start "an exact-generation miss uses the newest manifest with a WARN"
+
+    reset_state
+    add_store backup/tank/zfsutilities-manifests "$_rmock_store"
+    add_snap backup/tank/src/data daily-20261102T0500Z-d
+    write_manifest "$_rmock_store" tank/src/data daily-20261101T0500Z-d \
+        compression=on
+
+    local rc=0
+    propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" \
+        "WARN: Exact-generation manifest @daily-20261102T0500Z-d not found for tank/src/data — using the newest available (tank%2Fsrc%2Fdata@daily-20261101T0500Z-d)."
+    assert_contains "$(cat "$_zfs_capture_file")" \
+        "zfs set compression=on tank/src/data"
+    test_pass
+}
+
+test_replay_no_manifest_keeps_defaults() {
+    test_start "no manifest at all WARNs and keeps inherited defaults"
+
+    reset_state
+    add_store backup/tank/zfsutilities-manifests "$_rmock_store"
+    add_snap backup/tank/src/data daily-20261102T0500Z-d
+
+    local rc=0
+    propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" \
+        "WARN: No property manifest for tank/src/data in backup/tank/zfsutilities-manifests — tank/src/data keeps its inherited defaults."
+    if grep -q "zfs set" "$_zfs_capture_file"; then
+        test_fail "nothing may be set when no manifest exists"
+        return
+    fi
+    test_pass
+}
+
+test_replay_no_store_predates_feature() {
+    test_start "a missing store WARNs (pre-feature backup) and fails open"
+
+    reset_state
+    add_snap backup/tank/src/data daily-20261102T0500Z-d
+    local rc=0
+    propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" \
+        "WARN: No property-manifest store backup/tank/zfsutilities-manifests — tank/src/data keeps its inherited defaults (backup predates property manifests)."
+    test_pass
+}
+
+test_replay_derivation_guard() {
+    test_start "a single-component name cannot derive a store"
+
+    reset_state
+    local rc=0
+    propmanifest_replay backup tank || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" \
+        "WARN: Cannot derive a property-manifest store from backup — replay skipped for tank."
+    test_pass
+}
+
+test_replay_no_snapshots() {
+    test_start "a backup copy without snapshots skips replay with a WARN"
+
+    reset_state
+    add_store backup/tank/zfsutilities-manifests "$_rmock_store"
+    local rc=0
+    propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" \
+        "WARN: No snapshots on backup/tank/src/data — property replay skipped for tank/src/data."
+    test_pass
+}
+
+test_replay_dryrun() {
+    test_start "replay dry-run logs the Would line and touches nothing"
+
+    reset_state
+    add_store backup/tank/zfsutilities-manifests "$_rmock_store"
+    add_snap backup/tank/src/data daily-20261102T0500Z-d
+    write_manifest "$_rmock_store" tank/src/data daily-20261102T0500Z-d \
+        compression=lz4
+    dryrun="Y"
+    local rc=0
+    propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" \
+        "INFO: Dry-run: Would replay property manifest for tank/src/data from backup/tank/zfsutilities-manifests"
+    if [[ -s "$_zfs_capture_file" ]]; then
+        test_fail "dry-run must not touch zfs: $(cat "$_zfs_capture_file")"
+        return
+    fi
+    test_pass
+}
+
+test_replay_lock_conflict_fails_open() {
+    test_start "a destination lock conflict WARNs and skips the dataset"
+
+    reset_state
+    add_store backup/tank/zfsutilities-manifests "$_rmock_store"
+    add_snap backup/tank/src/data daily-20261102T0500Z-d
+    write_manifest "$_rmock_store" tank/src/data daily-20261102T0500Z-d \
+        compression=lz4
+    local saved_wait saved_release
+    saved_wait=$(declare -f zfslock_wait_or_resolve)
+    saved_release=$(declare -f zfslock_release)
+    zfslock_wait_or_resolve() { return 2; }
+    zfslock_release() { echo "zfslock_release $*" >> "$_zfs_capture_file"; }
+    local rc=0
+    propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
+    assert_rc 0 "$rc"
+    eval "$saved_wait"
+    eval "$saved_release"
+    assert_contains "$(get_log)" \
+        "WARN: Property replay for tank/src/data skipped (lock conflict on tank/src/data)."
+    if grep -q "zfs set" "$_zfs_capture_file"; then
+        test_fail "no property may be set on a lock conflict"
+        return
+    fi
+    if [[ "$(grep -c zfslock_release "$_zfs_capture_file")" != "0" ]]; then
+        test_fail "release must not run for a lock never acquired"
+        return
+    fi
+    test_pass
+}
+
+test_replay_lock_manager_not_loaded() {
+    test_start "a missing lock manager WARNs and skips replay"
+
+    reset_state
+    add_store backup/tank/zfsutilities-manifests "$_rmock_store"
+    add_snap backup/tank/src/data daily-20261102T0500Z-d
+    unset -f zfslock_wait_or_resolve zfslock_release
+    local rc=0
+    propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
+    zfslock_wait_or_resolve() {
+        echo "zfslock_wait_or_resolve $1 $2" >> "$_zfs_capture_file"
+        zfslock_id="mock-lock-$1"
+        return 0
+    }
+    zfslock_release() {
+        echo "zfslock_release $1" >> "$_zfs_capture_file"
+    }
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" \
+        "WARN: Property replay for tank/src/data skipped (lock manager not loaded)."
+    test_pass
+}
+
+test_replay_switches_between_stores() {
+    test_start "a multi-store run unmounts the previous store before the next"
+
+    reset_state
+    local dir1 dir2
+    dir1=$(mktemp -d "${TMPDIR:-/tmp}/replayprops_s1.XXXXXX")
+    dir2=$(mktemp -d "${TMPDIR:-/tmp}/replayprops_s2.XXXXXX")
+    add_store backup/tank/zfsutilities-manifests "$dir1"
+    add_store backup/nvme/zfsutilities-manifests "$dir2"
+    add_snap backup/tank/src/a daily-20261102T0500Z-d
+    add_snap backup/nvme/dsk/b daily-20261102T0500Z-d
+    write_manifest "$dir1" tank/src/a daily-20261102T0500Z-d compression=on
+    write_manifest "$dir2" nvme/dsk/b daily-20261102T0500Z-d compression=lz4
+
+    propmanifest_replay backup/tank/src/a tank/src/a || true
+    propmanifest_replay backup/nvme/dsk/b nvme/dsk/b || true
+    propmanifest_finish
+
+    local capture mount_at unmount_at
+    capture=$(cat "$_zfs_capture_file")
+    mount_at=$(printf '%s\n' "$capture" \
+        | grep -n "zfs mount backup/nvme/zfsutilities-manifests" | cut -d: -f1)
+    unmount_at=$(printf '%s\n' "$capture" \
+        | grep -n "zfs unmount backup/tank/zfsutilities-manifests" | cut -d: -f1)
+    if [[ -z "$mount_at" || -z "$unmount_at" || "$unmount_at" -gt "$mount_at" ]]; then
+        test_fail "store switch must unmount the old store before the new one: $capture"
+        return
+    fi
+    if [[ "$(grep -c "zfs unmount backup/nvme/zfsutilities-manifests" \
+            "$_zfs_capture_file")" != "1" ]]; then
+        test_fail "finish must unmount exactly the last store"
+        return
+    fi
+    rm -rf "$dir1" "$dir2"
+    test_pass
+}
+
+test_replay_corrupt_manifest_fails_open() {
+    test_start "a checksum-failed manifest WARNs and sets nothing"
+
+    reset_state
+    add_store backup/tank/zfsutilities-manifests "$_rmock_store"
+    add_snap backup/tank/src/data daily-20261102T0500Z-d
+    local f
+    f=$(write_manifest "$_rmock_store" tank/src/data daily-20261102T0500Z-d \
+        compression=lz4)
+    printf 'recordsize=131072\n' >> "$f"
+    local rc=0
+    propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" \
+        "WARN: Property manifest $f failed its sha256 check — replay skipped for tank/src/data."
+    if grep -q "zfs set" "$_zfs_capture_file"; then
+        test_fail "no property may be set from a corrupt manifest"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# bin/zfsreplayprops wrapper
+# ---------------------------------------------------------------------------
+# Sourcing bin/zfsreplayprops enables set -euo pipefail in the sourcing
+# shell (house convention), so every wrapper test runs the wrapper inside
+# a subshell that stubs source_helper and the helpers it would load, and
+# records the propmanifest calls to a file the outer test asserts on.
+
+run_wrapper() {
+    (
+        source_helper() { :; }
+        calledbybash() { return 1; }
+        # Mock fidelity: the real remove_leading_qualifiers cuts the first
+        # N qualifiers off the dataset name.
+        remove_leading_qualifiers() {
+            echo "$2" | cut -d'/' -f$(("$1" + 1))-
+        }
+        propmanifest_replay() {
+            echo "replay $1 -> $2" >> "$_rmock_calls_file"
+            return 0
+        }
+        propmanifest_finish() {
+            echo "finish" >> "$_rmock_calls_file"
+            return 0
+        }
+        # shellcheck disable=SC1090
+        source "$repo_root/bin/zfsreplayprops"
+        "$@"
+    )
+}
+
+test_wrapper_datasets_mapping() {
+    test_start "replayprops_datasets maps each fsarray entry to its destination"
+
+    reset_state
+    run_wrapper replayprops_datasets tank 2 \
+        backup/tank/src/a backup/tank/src/b >/dev/null 2>&1
+    local calls
+    calls=$(cat "$_rmock_calls_file")
+    assert_contains "$calls" "replay backup/tank/src/a -> tank/src/a"
+    assert_contains "$calls" "replay backup/tank/src/b -> tank/src/b"
+    assert_contains "$calls" "finish"
+    if [[ "$(grep -c '^replay ' "$_rmock_calls_file")" != "2" ]]; then
+        test_fail "expected exactly two replay calls"
+        return
+    fi
+    test_pass
+}
+
+test_wrapper_datasets_zero_qualifiers() {
+    test_start "zero qualifiers keeps the full backup-copy name under destfs"
+
+    reset_state
+    run_wrapper replayprops_datasets restored 0 backup/tank/src/a \
+        >/dev/null 2>&1
+    assert_contains "$(cat "$_rmock_calls_file")" \
+        "replay backup/tank/src/a -> restored/backup/tank/src/a"
+    test_pass
+}
+
+test_wrapper_datasets_replay_failure_fails_open() {
+    test_start "a replay failure never fails replayprops_datasets"
+
+    reset_state
+    (
+        source_helper() { :; }
+        calledbybash() { return 1; }
+        remove_leading_qualifiers() { echo "$2" | cut -d'/' -f$(("$1" + 1))-; }
+        propmanifest_replay() {
+            echo "replay $1 -> $2" >> "$_rmock_calls_file"
+            return 3
+        }
+        propmanifest_finish() {
+            echo "finish" >> "$_rmock_calls_file"
+            return 0
+        }
+        # shellcheck disable=SC1090
+        source "$repo_root/bin/zfsreplayprops"
+        replayprops_datasets tank 2 backup/tank/src/a backup/tank/src/b
+    ) >/dev/null 2>&1
+    local rc=$?
+    assert_rc 0 "$rc"
+    local calls
+    calls=$(cat "$_rmock_calls_file")
+    assert_contains "$calls" "replay backup/tank/src/a -> tank/src/a"
+    assert_contains "$calls" "replay backup/tank/src/b -> tank/src/b"
+    assert_contains "$calls" "finish"
+    test_pass
+}
+
+test_wrapper_standalone_overrides() {
+    test_start "standalone replayprops applies overrides and walks fsarray"
+
+    reset_state
+    (
+        source_helper() { :; }
+        calledbybash() { return 1; }
+        rootcheck() { :; }
+        zfslock_init() { :; }
+        buildfsarray() {
+            fsarray=(backup/tank/src/a backup/tank/src/b)
+        }
+        overrides() {
+            local overrides="$1"
+            eval "$overrides"
+        }
+        remove_leading_qualifiers() { echo "$2" | cut -d'/' -f$(("$1" + 1))-; }
+        propmanifest_replay() {
+            echo "replay $1 -> $2" >> "$_rmock_calls_file"
+            return 0
+        }
+        propmanifest_finish() {
+            echo "finish" >> "$_rmock_calls_file"
+            return 0
+        }
+        # shellcheck disable=SC1090
+        source "$repo_root/bin/zfsreplayprops"
+        replayprops \
+            "restoresourcefs=backup/tank; sourcefsremovequalifiers=2; destfs=tank"
+    ) >/dev/null 2>&1
+    local rc=$?
+    assert_rc 0 "$rc"
+    local calls
+    calls=$(cat "$_rmock_calls_file")
+    assert_contains "$calls" "replay backup/tank/src/a -> tank/src/a"
+    assert_contains "$calls" "replay backup/tank/src/b -> tank/src/b"
+    assert_contains "$calls" "finish"
+    assert_contains "$(get_log)" "INFO: zfsreplayprops completed."
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# Run all tests
+# ---------------------------------------------------------------------------
+
+test_store_derivation
+test_newest_file_byte_order
+test_parse_verifies_good_manifest
+test_parse_empty_body
+test_parse_unknown_version
+test_parse_dataset_mismatch
+test_parse_checksum_mismatch
+test_parse_unreadable_file
+test_apply_body_sets_each_property
+test_apply_body_set_failure_skips_one
+test_apply_body_excluded_property_never_set
+test_apply_body_keylocation_file_loads_key
+test_apply_body_keylocation_load_failure_warns
+test_apply_body_keylocation_non_file_never_loads
+test_apply_file_roundtrip
+test_apply_file_corrupt_fails_open
+test_apply_file_dryrun
+test_replay_exact_generation
+test_replay_falls_back_to_newest_manifest
+test_replay_no_manifest_keeps_defaults
+test_replay_no_store_predates_feature
+test_replay_derivation_guard
+test_replay_no_snapshots
+test_replay_dryrun
+test_replay_lock_conflict_fails_open
+test_replay_lock_manager_not_loaded
+test_replay_switches_between_stores
+test_replay_corrupt_manifest_fails_open
+test_wrapper_datasets_mapping
+test_wrapper_datasets_zero_qualifiers
+test_wrapper_datasets_replay_failure_fails_open
+test_wrapper_standalone_overrides
+
+rm -rf "$_rmock_store"
+test_summary

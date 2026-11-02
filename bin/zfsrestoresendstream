@@ -16,6 +16,7 @@ function restoresendstream {
     rootcheck
     source_helper bashsetx
     source_helper zfslockmanager
+    source_helper property-manifest-lib.sh
 
     zfslock_init
     
@@ -109,6 +110,15 @@ function restoresendstream {
             source "$(find_zfsutility_script bashreturn)" 8
         fi
         zfslock_release "$receive_lock" || true
+
+        # Property manifest (.props sibling): when an export carries one,
+        # replay it onto the received dataset. No in-tree producer writes
+        # these files — this is consumption support for hand-made exports.
+        # WARN-only; a missing or corrupt sibling never fails the restore.
+        local _propsfile="${file%.zfssendstream}.props"
+        if [[ -f "$_propsfile" ]]; then
+            propmanifest_apply_file "$_propsfile" "$fulldestfs" || true
+        fi
     done
 }
 restoresendstream

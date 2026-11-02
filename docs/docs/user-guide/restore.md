@@ -81,15 +81,37 @@ snapshots with `zfs send -cw` (compressed, raw) through the shared
 engine; the restore paths (`zfsrestore`, `zfsfullcopy`) use the same engine.
 
 Those streams carry the snapshot data and the encryption state, but **no
-dataset properties**: the destination dataset is created with the settings it
-inherits from its parent in the destination pool, and later incremental
-transfers never propagate source-side property changes. A restored dataset
-comes back with its data intact (transfer verification compares snapshot
-GUIDs — see [Advanced Options](#advanced-options)) but wearing the
-destination hierarchy's `compression`, `recordsize`, `quota`, and similar
-settings rather than the source's.
+dataset properties** — so each dataset's locally-set properties are recorded
+separately, in a **property manifest** written next to the backup right
+after its transfer verifies
+([property-manifest-lib.sh](../commands-and-modules/modules.md#property-manifest-libsh)).
+At restore time the replay step re-applies them with `zfs set`, so the
+restored datasets come back with their data intact (transfer verification
+compares snapshot GUIDs — see [Advanced Options](#advanced-options))
+*wearing the source's* `compression`, `recordsize`, `keylocation`, user
+properties (for example `org.debian:periodic-scrub`), and similar settings
+rather than the destination hierarchy's inherited defaults.
 
-Two deliberate exceptions:
+Replay runs automatically after the transfer in `zfsrestore`, the GUI
+Restore tab, and scheduled restore profiles (the Advanced
+`replay_properties` option, default **Y**, turns it off).
+[`zfsrestoresendstream`](../commands-and-modules/commands.md#zfsrestoresendstream)
+applies a `<name>.props` sibling when one sits next to a
+`<name>.zfssendstream` file. The replay is best-effort by contract:
+
+- The manifest for the backup copy's **newest snapshot** — the generation
+  just restored — is used; if it is missing, the newest available manifest
+  for that dataset applies instead, with a WARN that the settings may be
+  from an older generation.
+- Backups that predate property manifests have none: the restore WARNs and
+  the datasets keep their inherited defaults (the data is unaffected).
+- A manifest is verified (format, dataset, and body checksum) before
+  anything is applied; a corrupt or wrong-dataset manifest is skipped with
+  a WARN.
+- A property this host cannot set (older OpenZFS release, unknown
+  property) is skipped with a WARN; the remaining properties still apply.
+
+Two deliberate exceptions keep their own property handling:
 
 - **Migrate Pool** (Disks page) uses replication streams (`zfs send -Rw`,
   with `-RIw` incrementals at cutover), which do carry dataset properties —
@@ -98,6 +120,8 @@ Two deliberate exceptions:
   `.original_volblocksize` sidecar and `unarchive-vm` re-applies it on
   restore; see
   [archive-vm](../commands-and-modules/commands.md#archive-vm).
+  `volblocksize` is also excluded from property manifests: raw streams
+  carry it, and it cannot be set after creation.
 
 Snapshot holds are handled separately; see
 [Preserving Target Holds During a Restore](#preserving-target-holds-during-a-restore).
@@ -112,10 +136,14 @@ encryption algorithm, key format, PBKDF2 iterations, and key material all
 travel inside the stream, so the data comes back encrypted exactly as it was
 sent.
 
-One property is deliberately not carried: `keylocation`. A received encrypted
-dataset always starts with `keylocation=prompt`, because the source's key-file
-path would not exist on the destination. After restoring, point it at your
-key store and unlock:
+The streams do not carry `keylocation`: a received encrypted dataset starts
+with `keylocation=prompt`, because the source's key-file path would not
+exist on the destination. The property manifest deliberately records the
+source's `keylocation`, and the replay step sets it and then attempts a
+non-interactive `zfs load-key` — but only for `file://` locations (any other
+location is set and left locked for you to unlock by hand). When the key
+file is missing or unreadable on the restore host, the replay WARNs and the
+dataset stays locked; point it at your key store and unlock:
 
 ```bash
 sudo zfs set keylocation=file:///mnt/ZFSkeys/pool.key pool/dataset
@@ -199,6 +227,11 @@ also available on the Backup and Offsite tabs:
   ZFS property of the destination snapshot against the source snapshot; a
   mismatch is treated as fatal. This applies to both Part 1 (full copy) and
   Part 2 (incremental copy).
+- `replay_properties` — Replay each restored dataset's captured
+  [property manifest](#what-a-restore-preserves) onto the destination after
+  the transfer (default **Y**). Missing or unreadable manifests only WARN;
+  the affected datasets keep their inherited defaults. Set **N** to restore
+  with the destination's inherited settings only.
 - `transfer_rate_limit` — Optional rate limit used during the transfer,
   for example `100M` to cap throughput at 100 MB/s. Leave blank for no limit.
 

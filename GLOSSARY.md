@@ -202,6 +202,14 @@ prunes it in lockstep. Excludes what the raw stream already carries
 (the encryption family, `volblocksize`); `keylocation` is deliberately
 kept.
 
+**Replay** is the restore-time half: after the transfer, `zfsreplayprops`
+(shared by `zfsrestore`, the GUI restore payload, and `zfsrestoresendstream`'s
+`.props` siblings) verifies the manifest (header, dataset, sha256) and
+re-applies each property with `zfs set` — a `file://` keylocation
+additionally gets a best-effort non-interactive `zfs load-key`. Everything
+about replay is WARN-only: a missing, stale, or corrupt manifest never
+fails a restore; the dataset simply keeps its inherited defaults.
+
 ## shape
 
 Report shorthand for the exact pattern or structure of a thing. An output

@@ -666,13 +666,16 @@ caller's `$dryrun` for token aborts.
 
 ### `property-manifest-lib.sh`
 
-Property-manifest capture for backup fidelity: after a dataset's backup
-transfer completes, record its locally-set properties next to the backup
-copy so a restore can replay them later. Used by
-[`zfs-send-receive`](modules.md#zfs-send-receive)'s post-transfer capture
-hook (`$property_manifest`, default `'Y'`). The transfer streams stay
-property-less (`-cw`) by design — the manifest is the only property
-carrier.
+Property manifests for backup fidelity: after a dataset's backup transfer
+completes, capture records its locally-set properties next to the backup
+copy; after a restore, replay re-applies them with `zfs set` so the
+restored datasets wear the source's settings instead of inherited
+defaults. Capture is used by [`zfs-send-receive`](modules.md#zfs-send-receive)'s
+post-transfer hook (`$property_manifest`, default `'Y'`); replay is used by
+[`zfsreplayprops`](commands.md#zfsreplayprops) (shared by `zfsrestore`, the
+GUI restore payload, and `zfsrestoresendstream`'s `.props` siblings). The
+transfer streams stay property-less (`-cw`) by design — the manifest is the
+only property carrier.
 
 ```bash
 source_helper property-manifest-lib.sh
@@ -691,6 +694,13 @@ source_helper property-manifest-lib.sh
 | `propmanifest_snapshot <manifest-ds> <snapname>`                     | Idempotent snapshot of the manifest dataset under the same generation snapname — existing retention prunes it in lockstep                                                                 |
 | `propmanifest_capture <fs> <destfs> <snapname>`                      | The whole capture under a write lock on the manifest dataset: ensure → mount → write (tmp+rename, sha256 header) → lockstep snapshot. Dry-run aware; every failure WARNs and returns 0     |
 | `propmanifest_finish`                                                | Unmount the manifest dataset when this library mounted it (EXIT trap covers abnormal ends)                                                                                                 |
+| `propmanifest_store_of <backup-copy-fs>`                             | Derive `<manifest-ds> <lookup-key>` from a backup copy's first two components (the mirrored-chain shape); rc 1 when the name has fewer than two components                               |
+| `propmanifest_newest_file <prefix@>`                                 | Newest manifest file for one dataset by byte order (UTC-canonical generation names sort chronologically); empty when none                                                                 |
+| `propmanifest_parse <file> <expected-ds-or-empty>`                   | Pure parse + verify: header version, dataset field, body sha256. Prints the verified body; rc 0 ok / 1 unreadable / 2 unknown version / 3 dataset mismatch / 4 checksum mismatch          |
+| `propmanifest_apply_body <body> <dest>`                              | `zfs set` per property with per-property skip+WARN; `keylocation=file://…` additionally triggers a best-effort non-interactive `zfs load-key` (other locations are never loaded)          |
+| `propmanifest_apply_file <file> <dest>`                              | Verify + apply a directly-given manifest file (`.props` siblings) under a write lock on the destination; WARN-only                                        |
+| `propmanifest_switch_mount <manifest-ds>`                            | Replay-side mount helper: unmount a different store this library mounted before mounting the new one (multi-store restores)                                                               |
+| `propmanifest_replay <backup-copy-fs> <dest-fs>`                     | The whole replay under a write lock on the destination: store/key derivation → exact-generation lookup (backup copy's newest snapshot) with newest-available fallback → verify → apply. Dry-run aware; every failure WARNs and returns 0 |
 
 **Globals:** reads the caller's `$dryrun` (dry-run logs and touches
 nothing) and `$zfslock_id` set by the lock manager; latches run state in

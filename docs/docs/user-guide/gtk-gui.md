@@ -689,11 +689,16 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
   | Option                            | Purpose                                                                                          |
   | --------------------------------- | ------------------------------------------------------------------------------------------------ |
   | **label**                         | Snapshot label for matching. Only snapshots with this label are considered as source candidates. |
+  | **Replay properties**             | Y/N combo (default Y). Replay each restored dataset's captured property manifest after the transfer, so the source's local settings come back instead of the destination's inherited defaults; missing manifests only warn. |
   | **Pause scrubs during each step** | Pause ZFS scrubs on the source and destination pools while the restore step is running.          |
 
 - **Restore phases** — Every restore runs in two phases: a full copy from
   the oldest source snapshot, then an incremental copy of the remaining
-  snapshots. There are no per-part checkboxes anymore.
+  snapshots. There are no per-part checkboxes anymore. With
+  **Replay properties** on, a property-replay step follows the incremental
+  phase: each restored dataset's captured local properties are re-applied
+  with `zfs set` before the iSCSI LUN helper runs (best-effort — see
+  [What a Restore Preserves](restore.md#what-a-restore-preserves)).
 
 - **Interrupted restores** — A restore that is cancelled or interrupted can
   simply be run again. Before doing anything destructive, the restore

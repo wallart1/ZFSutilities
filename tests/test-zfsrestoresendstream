@@ -32,6 +32,10 @@ EOF
     cat > "$tmpdir/bashreturn" << 'EOF'
 return ${1:-8}
 EOF
+    cat > "$tmpdir/property-manifest-lib.sh" << 'EOF'
+propmanifest_apply_file() { true; }
+propmanifest_finish() { true; }
+EOF
 
     local lock_log="$tmpdir/lock_calls.log"
     : > "$lock_log"
@@ -112,6 +116,10 @@ EOF
 EOF
     cat > "$tmpdir/bashreturn" << 'EOF'
 return ${1:-8}
+EOF
+    cat > "$tmpdir/property-manifest-lib.sh" << 'EOF'
+propmanifest_apply_file() { true; }
+propmanifest_finish() { true; }
 EOF
 
     local lock_log="$tmpdir/lock_calls.log"
@@ -207,6 +215,10 @@ EOF
     cat > "$tmpdir/bashreturn" << 'EOF'
 return ${1:-8}
 EOF
+    cat > "$tmpdir/property-manifest-lib.sh" << 'EOF'
+propmanifest_apply_file() { true; }
+propmanifest_finish() { true; }
+EOF
 
     cat > "$tmpdir/zfslockmanager" << 'EOF'
 zfslock_init() { true; }
@@ -283,9 +295,98 @@ EOF
     test_pass
 }
 
+# ------------------------------------------------------------------
+# Test: A .props sibling next to a .zfssendstream file is applied
+# ------------------------------------------------------------------
+test_restoresendstream_applies_props_sibling() {
+    test_start "zfsrestoresendstream replays a .props sibling after its receive"
+
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    cp "$old_mydir/bin/zfsrestoresendstream" "$tmpdir/zfsrestoresendstream"
+    sed -i "s|local sourcedir=.*|local sourcedir=\"$tmpdir/source/threeamigos/proxmox\"|" \
+        "$tmpdir/zfsrestoresendstream"
+
+    cat > "$tmpdir/rootcheck" << 'EOF'
+rootcheck() { true; }
+EOF
+    cat > "$tmpdir/bashsetx" << 'EOF'
+EOF
+    cat > "$tmpdir/bashreturn" << 'EOF'
+return ${1:-8}
+EOF
+    cat > "$tmpdir/property-manifest-lib.sh" << 'EOF'
+propmanifest_apply_file() { true; }
+propmanifest_finish() { true; }
+EOF
+
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() {
+    zfslock_id="stub-lock"
+    return 0
+}
+zfslock_release() { true; }
+zfslock_release_all() { true; }
+EOF
+
+    # Recording lib stub: the .props hookup is under test here (the real
+    # apply/verify logic has its own coverage in test-zfsreplayprops).
+    local apply_log="$tmpdir/apply_calls.log"
+    : > "$apply_log"
+    cat > "$tmpdir/property-manifest-lib.sh" << EOF
+propmanifest_apply_file() {
+    echo "apply_file \$1 -> \$2" >> "$apply_log"
+    return 0
+}
+propmanifest_finish() { true; }
+EOF
+
+    mkdir -p "$tmpdir/source/threeamigos/proxmox"
+    touch "$tmpdir/source/threeamigos/proxmox/vm-205-disk-0.zfssendstream"
+    touch "$tmpdir/source/threeamigos/proxmox/vm-205-disk-0.props"
+    touch "$tmpdir/source/threeamigos/proxmox/vm-205-disk-1.zfssendstream"
+
+    cat > "$tmpdir/zfs" << EOF
+#!/usr/bin/bash
+exit 0
+EOF
+    chmod +x "$tmpdir/zfs"
+    cat > "$tmpdir/pv" << 'EOF'
+#!/usr/bin/bash
+cat
+EOF
+    chmod +x "$tmpdir/pv"
+
+    local output rc=0
+    output=$(
+        PATH="$tmpdir:$PATH" \
+        bash -c "mydir='$tmpdir'; source '$tmpdir/zfsrestoresendstream'" 2>&1
+    ) || rc=$?
+    local apply_calls
+    apply_calls=$(cat "$apply_log" 2>/dev/null)
+    rm -rf "$tmpdir"
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected rc=0, got rc=$rc output: $output"
+        return
+    fi
+    if [[ "$apply_calls" != *"apply_file $tmpdir/source/threeamigos/proxmox/vm-205-disk-0.props -> threeamigos/proxmox/vm-205-disk-0"* ]]; then
+        test_fail "props sibling not applied to its dataset: '$apply_calls'"
+        return
+    fi
+    if [[ "$(grep -c '^apply_file' <<< "$apply_calls")" != "1" ]]; then
+        test_fail "only the file with a sibling may be applied: '$apply_calls'"
+        return
+    fi
+    test_pass
+}
+
 test_restoresendstream_acquires_locks
 test_restoresendstream_paces_at_enclosure_cap
 test_restoresendstream_resolver_failure_fails_open
+test_restoresendstream_applies_props_sibling
 
 test_summary
 teardown_test_env

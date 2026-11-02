@@ -114,6 +114,7 @@ RESTORE_DEFAULTS = {
         "startwith": "",
         "endwith": "",
         "verify_after_transfer": "Y",
+        "replay_properties": "Y",
         "transfer_rate_limit": "",
     },
     "pause_scrubs": False,

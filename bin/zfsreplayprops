@@ -1,0 +1,110 @@
+#!/usr/bin/bash
+
+# Replay captured property manifests onto restored datasets.
+#
+# Backups record each dataset's locally-set properties next to the backup
+# copy (lib/property-manifest-lib.sh); this helper applies them back after
+# a restore, so the restored datasets wear the source's compression,
+# recordsize, keylocation, user properties and friends instead of the
+# destination hierarchy's inherited defaults. Streams stay property-less
+# -cw — the manifest is the only property carrier.
+#
+# Two entries share this file (callable + sourceable, zfssend pattern):
+#   replayprops_datasets <destfs> <sourcefsremovequalifiers> <fs...>
+#       Post-restore entry used by zfsrestore and the GUI restore payload
+#       with the backup-copy datasets they already selected (fsarray).
+#   replayprops '<overrides>'
+#       Standalone entry with zfsrestore's overrides shape, for replaying
+#       a finished restore's properties by hand.
+#
+# The whole replay is fail-open (WARN-only): a missing or unreadable
+# manifest never fails the restore.
+
+set -euo pipefail
+
+_local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
+if [[ -f "$_local_bashinit" ]]; then
+    source "$_local_bashinit"
+else
+    source ~/bashinit
+fi
+bashinit
+unset _local_bashinit
+
+# Post-restore entry: map each backup-copy dataset to its restored
+# destination exactly as ensure_restored_iscsi does (destination =
+# <destfs>/<fs minus its leading qualifiers>) and replay its manifest.
+# Usage: replayprops_datasets <destfs> <sourcefsremovequalifiers> <fs...>
+function replayprops_datasets {
+    source_helper property-manifest-lib.sh
+    source_helper zfsremoveleadingqualifiers
+    local destfs="$1" qual="$2"
+    shift 2
+    local fs dest
+    for fs in "$@"; do
+        dest=$(remove_leading_qualifiers "$qual" "$fs")
+        [[ "$dest" != "" && ${dest:0:1} != "/" ]] && dest="/$dest"
+        propmanifest_replay "$fs" "${destfs}${dest}" || true
+    done
+    propmanifest_finish
+    return 0
+}
+
+# Standalone entry: select the backup-copy datasets with zfsrestore's
+# overrides (restoresourcefs, sourcefsremovequalifiers, destfs, plus the
+# zfsbuildfsarray selection variables) and replay their manifests.
+# Required overrides:
+# 'restoresourcefs=<backup copy>; sourcefsremovequalifiers=<n>; destfs=<destination>'
+function replayprops {
+    source_helper rootcheck
+    rootcheck
+    source_helper zfssnapbuild
+    source_helper zfsbuildfsarray
+    source_helper zfsremoveleadingqualifiers
+    source_helper zfsoverrides
+    source_helper property-manifest-lib.sh
+    source_helper zfslockmanager
+
+    zfslock_init
+
+    restoresourcefs="notgiven"
+    sourcefsremovequalifiers='0'    # '0' = Keep the full sourcefs name in the destfs name.
+    destfs="notgiven"               # Add the dest pool name and '/' at the beginning.
+
+    # Parameters for zfsbuildfsarray
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced zfsbuildfsarray helper.
+    depth=''
+    # shellcheck disable=SC2034
+    label=''
+    # shellcheck disable=SC2034
+    includes=()
+    # shellcheck disable=SC2034
+    excludes=()
+    # shellcheck disable=SC2034
+    startwith=''
+    # shellcheck disable=SC2034
+    endwith=''
+
+    if [[ ${1:-} != '' ]]; then overrides "$1"; fi
+
+    if [[ $restoresourcefs == '' || $restoresourcefs == 'notgiven' ]]; then
+        log_msg "FATAL: \$restoresourcefs was not specified."
+        source "$(find_zfsutility_script bashfatal)" 8
+    fi
+    if [[ $destfs == '' || $destfs == 'notgiven' ]]; then
+        log_msg "FATAL: \$destfs was not specified."
+        source "$(find_zfsutility_script bashfatal)" 8
+    fi
+
+    # shellcheck disable=SC2034
+    # Intentionally set for sourced zfsbuildfsarray helper.
+    sourcefs="$restoresourcefs"
+    buildfsarray
+
+    replayprops_datasets "$destfs" "$sourcefsremovequalifiers" "${fsarray[@]}"
+
+    log_msg "INFO: zfsreplayprops completed."
+}
+
+if calledbybash; then replayprops "${1:-}"; fi

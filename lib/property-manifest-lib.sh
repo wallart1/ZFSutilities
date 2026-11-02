@@ -22,6 +22,14 @@
 # at first capture, unmounted at propmanifest_finish and on EXIT, each
 # only when this library did the mounting.
 #
+# The replay half restores captured settings: propmanifest_replay finds a
+# backup copy's manifest (exact generation first, newest available as the
+# fallback), verifies the header and body checksum, and re-applies the
+# properties with `zfs set` — keylocation additionally triggers a
+# best-effort non-interactive `zfs load-key`. Used by bin/zfsreplayprops,
+# which zfsrestore, the GUI restore payload, and zfsrestoresendstream
+# (.props siblings) share.
+#
 # The manifest dataset itself is snapshotted once per generation under
 # the same generation snapname as the data, so the existing cleanup /
 # zfsoffsiteretain retention prunes it in lockstep — no new pruning code.
@@ -279,5 +287,293 @@ function propmanifest_finish {
         zfs unmount "$_propmanifest_mounted" 2>/dev/null || true
         _propmanifest_mounted=""
     fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Replay (restore fidelity)
+# ---------------------------------------------------------------------------
+
+# Derive the manifest store and dataset lookup key for a backup copy at
+# <fs>. The mirrored-chain shape every fleet chain uses puts the original
+# source pool in the second component: <backup root>/<source pool>/...,
+# so the store is the first two components plus zfsutilities-manifests
+# and the key is the name minus its first component — exactly what
+# propmanifest_dataset/escape wrote at capture time. Pure string work.
+# Usage: propmanifest_store_of <backup-copy-fs>
+# Output: <manifest-ds> <lookup-key> (space-separated; dataset names
+#         never contain spaces)
+# Returns: 1 when the name has fewer than two components.
+function propmanifest_store_of {
+    local fs="$1" first rest
+    first="${fs%%/*}"
+    rest="${fs#*/}"
+    if [[ "$rest" = "$fs" ]]; then
+        return 1
+    fi
+    printf '%s/%s/zfsutilities-manifests %s\n' \
+        "$first" "${rest%%/*}" "$rest"
+}
+
+# Newest manifest file for one dataset: the last file (byte order — the
+# UTC-canonical generation names sort chronologically) whose name starts
+# with <prefix>. Pure string/file work, no zfs calls.
+# Usage: propmanifest_newest_file <prefix-including-trailing-@>
+# Output: the newest matching file name (empty when none).
+function propmanifest_newest_file {
+    local LC_ALL=C
+    local prefix="$1" best="" f
+    for f in "$prefix"*; do
+        [[ -f "$f" ]] && best="$f"
+    done
+    printf '%s\n' "$best"
+}
+
+# Parse and verify one manifest file. Pure: no logging, no state, no zfs
+# calls — safe inside a command substitution. The expected dataset may be
+# empty to skip the dataset check (callers that were handed the file
+# directly trust its dataset field).
+# Usage: body=$(propmanifest_parse <file> <expected-dataset-or-empty>)
+# Output: the verified property=value body (rc 0 only).
+# Returns: 0 ok; 1 unreadable; 2 unknown format version; 3 dataset
+#          mismatch; 4 sha256 mismatch.
+function propmanifest_parse {
+    local file="$1" expect="$2"
+    local line seen_blank=0 version_ok=0 ds_field="" sum_field="" body=""
+    [[ -r "$file" ]] || return 1
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ $seen_blank -eq 0 ]]; then
+            case "$line" in
+                '# zfsutilities property manifest v1') version_ok=1 ;;
+                '# dataset: '*) ds_field="${line#\# dataset: }" ;;
+                '# snapshot: '*) : ;;
+                '# sha256: '*) sum_field="${line#\# sha256: }" ;;
+                '') seen_blank=1 ;;
+            esac
+        else
+            # Capture writes the body without a trailing newline (its
+            # sort ran through a command substitution), so the verified
+            # reconstruction joins lines with separators only.
+            if [[ -n "$line" ]]; then
+                [[ -n "$body" ]] && body+=$'\n'
+                body+="$line"
+            fi
+        fi
+    done < "$file"
+    [[ $version_ok -eq 1 ]] || return 2
+    [[ -z "$expect" || "$ds_field" = "$expect" ]] || return 3
+    local sum
+    sum=$(printf '%s' "$body" | sha256sum | awk '{print $1}')
+    [[ "$sum" = "$sum_field" ]] || return 4
+    printf '%s' "$body"
+}
+
+# Apply a verified manifest body to <dest> with `zfs set`, one property at
+# time: a property this host cannot set (or that the exclusion set kept
+# out of manifests by design) is skipped with a WARN, never fatal.
+# keylocation is special: after setting it, a file:// location triggers a
+# best-effort non-interactive `zfs load-key` (a missing/unreadable key
+# file WARNs — the dataset simply stays locked); any other location is
+# set but never loaded (loading it would need an interactive prompt).
+# Usage: propmanifest_apply_body <body> <dest>
+function propmanifest_apply_body {
+    local body="$1" dest="$2"
+    local applied=0 skipped=0 line prop val
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        prop="${line%%=*}"
+        val="${line#*=}"
+        if propmanifest_excluded "$prop"; then
+            log_msg "WARN: Property $prop is excluded from replay —" \
+                "skipped on $dest."
+            skipped=$((skipped + 1))
+            continue
+        fi
+        if ! zfs set "$prop=$val" "$dest" 2>/dev/null; then
+            log_msg "WARN: Could not set $prop on $dest — skipped" \
+                "(not settable on this host)."
+            skipped=$((skipped + 1))
+            continue
+        fi
+        applied=$((applied + 1))
+        if [[ "$prop" = "keylocation" ]]; then
+            if [[ "$val" = file://* ]]; then
+                if zfs load-key "$dest" 2>/dev/null; then
+                    log_msg "VERB: Loaded the key for $dest from its keylocation."
+                else
+                    log_msg "WARN: Could not load the key for $dest" \
+                        "(keylocation file missing or unreadable) — the" \
+                        "dataset stays locked until its key is loaded."
+                fi
+            else
+                log_msg "WARN: keylocation on $dest set to $val; key not" \
+                    "loaded (only file:// locations load non-interactively)."
+            fi
+        fi
+    done <<< "$body"
+    log_msg "VERB: Replayed $applied properties onto $dest from its" \
+        "property manifest ($skipped skipped)."
+    return 0
+}
+
+# Replay one manifest file handed over directly (the .props sibling of a
+# .zfssendstream file) onto <dest>: verify (no dataset expectation — the
+# caller chose the file), then apply. Runs under a write lock on the
+# destination. WARN-only, never fatal.
+# Usage: propmanifest_apply_file <file> <dest>
+function propmanifest_apply_file {
+    local file="$1" dest="$2"
+    local lock_rc=0 lock_id body rc=0
+
+    if [[ ${dryrun:-N} != 'N' ]]; then
+        log_msg "INFO: Dry-run: Would replay property manifest $file onto $dest"
+        return 0
+    fi
+    if ! declare -f zfslock_wait_or_resolve >/dev/null 2>&1 \
+            || ! declare -f zfslock_release >/dev/null 2>&1; then
+        log_msg "WARN: Property manifest $file not replayed (lock manager not loaded)."
+        return 0
+    fi
+    zfslock_wait_or_resolve "$dest" "w" \
+        "property manifest replay: $file -> $dest" || lock_rc=$?
+    if [[ $lock_rc -ne 0 ]]; then
+        log_msg "WARN: Property manifest $file not replayed (lock conflict on $dest)."
+        return 0
+    fi
+    lock_id="$zfslock_id"
+
+    body=$(propmanifest_parse "$file" "") || rc=$?
+    if [[ $rc -ne 0 ]]; then
+        propmanifest_parse_warn "$rc" "$file" "" "$dest"
+        zfslock_release "$lock_id"
+        return 0
+    fi
+    propmanifest_apply_body "$body" "$dest"
+    zfslock_release "$lock_id"
+    return 0
+}
+
+# Map a propmanifest_parse rc to its WARN line. Internal helper.
+# Usage: propmanifest_parse_warn <rc> <file> <expected-ds> <dest>
+function propmanifest_parse_warn {
+    case "$1" in
+        1) log_msg "WARN: Property manifest $2 could not be read —" \
+            "replay skipped for $4." ;;
+        2) log_msg "WARN: Property manifest $2 has an unknown format" \
+            "version — replay skipped for $4." ;;
+        3) log_msg "WARN: Property manifest $2 records a different" \
+            "dataset than $3 — replay skipped for $4." ;;
+        4) log_msg "WARN: Property manifest $2 failed its sha256 check —" \
+            "replay skipped for $4." ;;
+    esac
+    return 0
+}
+
+# Mount <mds> for replay, unmounting a different store this library
+# mounted earlier (a restore spanning several source pools touches one
+# store per pool; only one stays mounted at a time). Internal helper.
+# Usage: propmanifest_switch_mount <manifest-ds>
+# Sets: $_propmanifest_mnt via propmanifest_mount (empty on failure).
+function propmanifest_switch_mount {
+    local mds="$1"
+    if [[ -n "$_propmanifest_mounted" && "$_propmanifest_mounted" != "$mds" ]]; then
+        zfs unmount "$_propmanifest_mounted" 2>/dev/null || true
+        _propmanifest_mounted=""
+    fi
+    propmanifest_mount "$mds"
+}
+
+# Replay one dataset's captured local properties onto <dest> after it was
+# restored from the backup copy <fs>. Lookup: the exact generation first
+# (the backup copy's newest snapshot — the generation just restored),
+# then the newest available manifest for that dataset with a WARN, then
+# nothing but a WARN (pre-feature generations keep inherited defaults).
+# Entire contract is fail-open: every failure WARNs and returns 0 — the
+# restore result is never affected.
+# Usage: propmanifest_replay <backup-copy-fs> <dest-fs>
+function propmanifest_replay {
+    local fs="$1" dest="$2"
+    local mds key store lock_rc=0 lock_id mnt snaps snap exact file body rc=0
+
+    if [[ ${dryrun:-N} != 'N' ]]; then
+        store=$(propmanifest_store_of "$fs" 2>/dev/null || true)
+        log_msg "INFO: Dry-run: Would replay property manifest for $dest" \
+            "from ${store%% *}"
+        return 0
+    fi
+
+    store=$(propmanifest_store_of "$fs") || store=""
+    if [[ -z "$store" ]]; then
+        log_msg "WARN: Cannot derive a property-manifest store from $fs —" \
+            "replay skipped for $dest."
+        return 0
+    fi
+    mds="${store%% *}"
+    key="${store#* }"
+
+    # Write lock on the destination — the replay's `zfs set` batch is a
+    # mutation like any other. Any lock failure WARNs and skips replay
+    # for this dataset only.
+    if ! declare -f zfslock_wait_or_resolve >/dev/null 2>&1 \
+            || ! declare -f zfslock_release >/dev/null 2>&1; then
+        log_msg "WARN: Property replay for $dest skipped (lock manager not loaded)."
+        return 0
+    fi
+    zfslock_wait_or_resolve "$dest" "w" \
+        "property manifest replay: $fs -> $dest" || lock_rc=$?
+    if [[ $lock_rc -ne 0 ]]; then
+        log_msg "WARN: Property replay for $dest skipped (lock conflict on $dest)."
+        return 0
+    fi
+    lock_id="$zfslock_id"
+
+    if ! zfs list -H -o name "$mds" >/dev/null 2>&1; then
+        log_msg "WARN: No property-manifest store $mds — $dest keeps its" \
+            "inherited defaults (backup predates property manifests)."
+        zfslock_release "$lock_id"
+        return 0
+    fi
+
+    propmanifest_switch_mount "$mds"
+    mnt="$_propmanifest_mnt"
+    if [[ -z "$mnt" ]]; then
+        zfslock_release "$lock_id"
+        return 0
+    fi
+
+    # Exact generation = the newest snapshot on the backup copy (name
+    # sort: UTC-canonical names sort chronologically).
+    snaps=$(zfs list -t snapshot -H -o name -S name "$fs" 2>/dev/null) || snaps=""
+    snap="${snaps%%$'\n'*}"
+    snap="${snap#*@}"
+    if [[ -z "$snap" ]]; then
+        log_msg "WARN: No snapshots on $fs — property replay skipped for $dest."
+        zfslock_release "$lock_id"
+        return 0
+    fi
+
+    exact="$mnt/$(propmanifest_escape "$key")@$snap"
+    file="$exact"
+    if [[ ! -f "$exact" ]]; then
+        file=$(propmanifest_newest_file "$mnt/$(propmanifest_escape "$key")@")
+        if [[ -z "$file" ]]; then
+            log_msg "WARN: No property manifest for $key in $mds — $dest" \
+                "keeps its inherited defaults."
+            zfslock_release "$lock_id"
+            return 0
+        fi
+        log_msg "WARN: Exact-generation manifest @$snap not found for" \
+            "$key — using the newest available (${file##*/})."
+    fi
+
+    body=$(propmanifest_parse "$file" "$key") || rc=$?
+    if [[ $rc -ne 0 ]]; then
+        propmanifest_parse_warn "$rc" "$file" "$key" "$dest"
+        zfslock_release "$lock_id"
+        return 0
+    fi
+
+    propmanifest_apply_body "$body" "$dest"
+    zfslock_release "$lock_id"
     return 0
 }

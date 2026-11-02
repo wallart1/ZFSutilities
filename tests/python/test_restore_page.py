@@ -293,6 +293,19 @@ class TestCollectRestoreConfig(unittest.TestCase):
         self.assertEqual(cfg["variables"]["verify_after_transfer"], "N")
         self.assertEqual(cfg["variables"]["transfer_rate_limit"], "50M")
 
+    def test_collects_replay_properties_combo(self):
+        app = _restore_app()
+        app.restore_var_widgets = {
+            "replay_properties": _FakeComboBoxText("N"),
+        }
+        cfg = rp.collect_restore_config(app)
+        self.assertEqual(cfg["variables"]["replay_properties"], "N")
+
+    def test_replay_properties_is_an_advanced_variable(self):
+        # The Advanced rows (and therefore collect/load coverage) derive
+        # from this list; the combo branch renders it as a Y/N pair.
+        self.assertIn("replay_properties", rp.RESTORE_ADVANCED_VARIABLES)
+
 
 class TestLoadRestoreConfig(unittest.TestCase):
     """Tests for load_restore_config."""
@@ -334,6 +347,24 @@ class TestLoadRestoreConfig(unittest.TestCase):
         )
         self.assertEqual(app.restore_var_widgets["verify_after_transfer"].get_active_text(), "N")
         self.assertEqual(app.restore_var_widgets["transfer_rate_limit"].get_text(), "75M")
+
+    def test_loads_replay_properties(self):
+        app = _restore_app()
+        app.restore_var_widgets = {
+            "replay_properties": _FakeComboBoxText("Y"),
+        }
+        rp.load_restore_config(
+            app,
+            {
+                "source": "a/b",
+                "dest": "c/b",
+                "auto_dest": False,
+                "recursive": False,
+                "variables": {"replay_properties": "N"},
+                "pause_scrubs": False,
+            },
+        )
+        self.assertEqual(app.restore_var_widgets["replay_properties"].get_active_text(), "N")
 
 
 class TestRestoreRunDialog(unittest.TestCase):

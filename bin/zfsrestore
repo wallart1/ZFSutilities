@@ -32,6 +32,7 @@ source_helper zfssnapbuild
 source_helper zfs-send-receive
 source_helper zfsremoveleadingqualifiers
 source_helper zfsoverrides
+source_helper zfsreplayprops
 
 # shellcheck disable=SC2034
 # Intentionally set for sourced zfs-send-receive helper.
@@ -83,6 +84,9 @@ nextsnap='notneeded'            # Inhibit creation of a new snapshot name.
 # Intentionally set for sourced zfs-send-receive helper.
 property_manifest='N'           # Restore targets must not grow manifest stores;
                                 # replaying captured manifests is a separate step.
+replay_properties='Y'           # 'Y' (default) replays each restored dataset's
+                                # captured property manifest after the transfer
+                                # (zfsreplayprops); 'N' skips. WARN-only.
 # Hold preservation on the destination is handled inside zfs-send-receive
 # on every full copy ($preserve_target_holds, default 'Y').
 releaseholds_tags=()            # May arrive via overrides; defaulted below.
@@ -121,6 +125,14 @@ if [[ $destfs == '' || $destfs == 'notgiven' ]]; then
 fi
 
 send-receive "$restoresourcefs" || exit $?
+
+# Property replay (backup fidelity): re-apply each restored dataset's
+# captured local properties before the iSCSI helper runs. Fail-open —
+# zfsreplayprops only WARNs; the restore result is never affected.
+if [[ ${replay_properties:-Y} = 'Y' && ${#fsarray[@]} -gt 0 ]]; then
+    replayprops_datasets "$destfs" "$sourcefsremovequalifiers" "${fsarray[@]}" || true
+fi
+
 ensure_restored_iscsi || exit $?
 
 log_msg "INFO: zfsrestore completed."

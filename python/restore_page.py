@@ -31,7 +31,8 @@ from restore_runner import (
 )
 from scrub_manager import attach_step_scrub_callbacks
 
-# Advanced variables (entry widgets; verify_after_transfer uses a Y/N combo)
+# Advanced variables (entry widgets; Y/N combos for verify_after_transfer
+# and replay_properties)
 RESTORE_ADVANCED_VARIABLES = [
     "depth",
     "label",
@@ -40,6 +41,7 @@ RESTORE_ADVANCED_VARIABLES = [
     "startwith",
     "endwith",
     "verify_after_transfer",
+    "replay_properties",
     "transfer_rate_limit",
 ]
 
@@ -149,14 +151,22 @@ def create_restore_page(app, ctx):
         lbl.set_halign(Gtk.Align.END)
         adv_grid.attach(lbl, 0, row, 1, 1)
 
-        if key == "verify_after_transfer":
+        if key in ("verify_after_transfer", "replay_properties"):
             widget = Gtk.ComboBoxText()
             widget.append_text("Y")
             widget.append_text("N")
             widget.set_active(0 if variables.get(key, "Y") == "Y" else 1)
-            widget.set_tooltip_text(
-                "Re-read the received ZFS stream to detect corruption after each transfer step"
-            )
+            if key == "verify_after_transfer":
+                widget.set_tooltip_text(
+                    "Re-read the received ZFS stream to detect corruption after each transfer step"
+                )
+            else:
+                widget.set_tooltip_text(
+                    "Replay the property manifest captured with the backup onto "
+                    "each restored dataset (compression, recordsize, keylocation, "
+                    "user properties); missing manifests only warn and the "
+                    "dataset keeps its inherited defaults"
+                )
 
             def _on_scroll_event(w, _event):
                 w.stop_emission_by_name("scroll-event")

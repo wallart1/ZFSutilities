@@ -56,6 +56,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`zfsoffsiteretain`](#zfsoffsiteretain)
 - [`zfsreadthru`](#zfsreadthru)
 - [`zfsrecurse`](#zfsrecurse)
+- [`zfsreplayprops`](#zfsreplayprops)
 - [`zfsrestore`](#zfsrestore)
 - [`zfsrestoresendstream`](#zfsrestoresendstream)
 - [`zfsresume`](#zfsresume)
@@ -2093,6 +2094,63 @@ Exits immediately with an error message. The intended implementation would build
 
 ---
 
+### `zfsreplayprops`
+
+Replays captured [property manifests](../user-guide/restore.md#what-a-restore-preserves)
+onto restored datasets: each dataset's locally-set properties, recorded next
+to the backup when its transfer verified, are re-applied with `zfs set` so
+the restore wears the source's settings instead of the destination's
+inherited defaults. Callable and sourceable (the `zfssend` pattern):
+`zfsrestore` and the GUI restore payload call its `replayprops_datasets`
+entry with the fsarray they already built.
+
+```bash
+sudo zfsreplayprops [overrides]
+```
+
+**Arguments:**
+
+| Argument | Description                                    |
+| -------- | ---------------------------------------------- |
+| `$1`     | Optional override string (zfsrestore's shape) |
+
+**Overrides:**
+
+| Override                     | Role                                                |
+| ---------------------------- | --------------------------------------------------- |
+| `$restoresourcefs`           | Backup-copy subtree to replay (required)            |
+| `$sourcefsremovequalifiers`  | Leading qualifiers to strip (`0` default)           |
+| `$destfs`                    | Pool/subpool to prepend after stripping (required) |
+| `$depth`, `$label`, `$includes`, `$excludes`, `$startwith`, `$endwith` | Dataset selection for the backup-copy walk |
+
+The lookup uses the mirrored-chain shape every fleet chain has: the
+manifest store is the backup copy's first two components plus
+`zfsutilities-manifests`, and the dataset key is the name minus its first
+component. The exact generation is the backup copy's newest snapshot; a
+miss falls back to the newest available manifest for that dataset with a
+WARN, and no manifest at all (pre-feature backups) WARNs and leaves the
+inherited defaults. `keylocation` is set and then loaded best-effort —
+non-interactively, and only for `file://` locations. Every failure is a
+WARN; a replay problem never fails a restore.
+
+**Called modules:**
+
+| Module                                                              | Purpose in this command                                        |
+| ------------------------------------------------------------------- | -------------------------------------------------------------- |
+| [zfsbuildfsarray](modules.md#zfsbuildfsarray)| Build the backup-copy dataset list from `$restoresourcefs`      |
+| [zfsoverrides](modules.md#zfsoverrides)| Apply the override string                                       |
+| [zfsremoveleadingqualifiers](modules.md#zfsremoveleadingqualifiers)| Map each backup copy to its restored destination               |
+| [property-manifest-lib.sh](modules.md#property-manifest-libsh)| Manifest lookup, verification, and the `zfs set` replay         |
+
+**Return codes:**
+
+| Code     | Meaning                                                      |
+| -------- | ------------------------------------------------------------ |
+| `0`      | Completed (individual failures are WARNs, never exit codes). |
+| `8`      | `$restoresourcefs` or `$destfs` missing.                      |
+
+---
+
 ### `zfsrestore`
 
 Interactive two-step full dataset restore. Configured by editing variables
@@ -2121,6 +2179,7 @@ sudo zfsrestore [overrides]
 | `$includes`, `$excludes`    | Dataset filters                                                           | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 | `$nextsnap`                 | Snapshot name limit (optional; `'notneeded'` to look up newest on source) | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$property_manifest`        | Set to `'N'`: restore targets must not grow manifest stores; replaying captured manifests is a separate step | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
+| `$replay_properties`        | `'Y'` (default) replays each restored dataset's captured property manifest after the transfer; `'N'` skips | [`zfsreplayprops`](#zfsreplayprops)                                                |
 
 The restore sends the oldest source snapshot as a full stream, then sends
 an incremental stream with intermediates to catch up to the newest source
@@ -2131,7 +2190,9 @@ to restore only the named dataset. Destination hold tags are preserved by
 `zfs-send-receive` itself during the full copy (`$preserve_target_holds`,
 default `'Y'`). Property-manifest capture is deliberately off here
 (`$property_manifest='N'`): the restore destination should receive only
-what was asked for.
+what was asked for. The captured manifests are instead replayed onto the
+restored datasets by [`zfsreplayprops`](#zfsreplayprops) after the
+transfer (`$replay_properties`, default `'Y'`).
 
 **Called modules:**
 
@@ -2141,6 +2202,7 @@ what was asked for.
 | [zfs-send-receive](modules.md#zfs-send-receive)| Perform full then incremental copy, preserving destination holds            |
 | [zfsoverrides](modules.md#zfsoverrides)| Apply override string(s)                                                    |
 | [zfsremoveleadingqualifiers](modules.md#zfsremoveleadingqualifiers)| Strip leading qualifiers when building destination zvol paths               |
+| [`zfsreplayprops`](#zfsreplayprops)| Replay captured property manifests onto the restored datasets (after the send-receive, before the iSCSI helper) |
 | [`ensure-restored-vm-iscsi`](#ensure-restored-vm-iscsi) (two-node)| Re-export restored VM disk zvols as iSCSI LUNs after the final send-receive |
 
 **Data structures consumed / produced:**
@@ -2158,7 +2220,10 @@ what was asked for.
 3. Call `send-receive` once. `zfs-send-receive` performs the full copy of the
    oldest snapshot and the incremental catch-up to the target internally —
    including preservation of destination hold tags.
-4. In two-node mode, call `ensure-restored-vm-iscsi` after the send-receive
+4. Replay property manifests (`zfsreplayprops`'s `replayprops_datasets`
+   with the fsarray `zfs-send-receive` built) unless
+   `$replay_properties='N'`. Fail-open: WARNs never fail the restore.
+5. In two-node mode, call `ensure-restored-vm-iscsi` after the replay
    to recreate missing iSCSI LUNs for restored VM disk zvols.  EFI disks are matched
    to the `efidisk0:` entry by their 4 MiB size, independent of the zvol disk number.
 
@@ -2194,7 +2259,11 @@ file). Configured by editing variables inside the script.
 | `$force`       | `'Y'` = destroy destination before receive | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$autoproceed` | `'Y'` = skip confirmations                 | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 
-**Called modules:** none.
+**Called modules:**
+
+| Module                                                              | Purpose in this command                                        |
+| ------------------------------------------------------------------- | -------------------------------------------------------------- |
+| [property-manifest-lib.sh](modules.md#property-manifest-libsh)| Replay a `.props` sibling onto the received dataset, when present |
 
 **Data structures consumed / produced:** none.
 
@@ -2206,6 +2275,10 @@ file). Configured by editing variables inside the script.
 3. Optionally destroy the destination if `$force='Y'`.
 4. Pipe each stream through `pv` and (when a cap resolved) the
    [`pace_stream.py`](modules.md#pace_streampy) pacer into `zfs receive`.
+5. After each receive, replay a `<name>.props` sibling when one sits next
+   to the `.zfssendstream` file (consumption support only — no in-tree
+   producer writes these). Same manifest format and WARN-only contract as
+   the engine-captured manifests.
 
 **Return codes:**
 

@@ -1007,7 +1007,11 @@ Offsite-specific command building and pool detection.
 
 ### `restore_runner.py`
 
-Computes restore destination paths and builds the restore `BashStep`.
+Computes restore destination paths and builds the restore `BashStep`. The
+payload sources `zfsreplayprops` and — with the advanced `replay_properties`
+variable, default `Y` — replays each restored dataset's captured property
+manifest after Part 2, before the iSCSI helper; it also sets
+`property_manifest='N'` so restore targets never grow manifest stores.
 
 **Key functions:**
 
@@ -1534,7 +1538,9 @@ detection, and snapshot-name generation.
 ### `restore_page.py`
 
 Restore tab: choose a source snapshot, compute an auto-destination, and run
-`zfs-send-receive` in restore mode.
+`zfs-send-receive` in restore mode. The Advanced expander includes the
+`replay_properties` Y/N combo (default `Y`) alongside
+`verify_after_transfer`, feeding `restore_runner`'s replay step.
 
 **Key functions:**
 

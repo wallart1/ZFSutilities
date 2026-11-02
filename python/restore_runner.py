@@ -180,6 +180,10 @@ def build_restore_command(
     adv += f'verify_after_transfer="{verify_after_transfer}"; '
     adv += f'transfer_rate_limit="{transfer_rate_limit}"; '
 
+    # Property replay (backup fidelity): applied post-transfer by
+    # zfsreplayprops — see the replay step in part 2 below.
+    replay_properties = v.get("replay_properties", "Y").strip() or "Y"
+
     # Post-restore helper: ensure VM disk zvols are exported as iSCSI LUNs.
     ensure_func = (
         "ensure_restored_iscsi() { "
@@ -206,6 +210,7 @@ def build_restore_command(
         f'source "$mydir/zfssnapbuild"; '
         f'source "$mydir/zfs-send-receive"; '
         f'source "$mydir/zfsremoveleadingqualifiers"; '
+        f'source "$mydir/zfsreplayprops"; '
         f"{ensure_func}"
         f"{_dryrun_assignments(dryrun)}"
         f'sourcefs="{source}"; '
@@ -213,6 +218,7 @@ def build_restore_command(
         f'destfs="{destfs}"; '
         f'nextsnap="notneeded"; '
         f'restore_resume="Y"; '
+        f'property_manifest="N"; '
         f"{adv}"
         f'fsarray_file="/tmp/zfsrestore_fsarray_$$"; '
         # Interrupt hygiene: the fsarray temp file must not survive a failed
@@ -243,6 +249,17 @@ def build_restore_command(
 
     # Part 2: incremental catch-up of the remaining snapshots, resuming from
     # each dataset's newest common snapshot (and any resume tokens).
+    # Property replay runs after Part 2's transfer and before the iSCSI
+    # helper, mirroring zfsrestore: each restored dataset gets its captured
+    # local properties back (fail-open — zfsreplayprops only WARNs).
+    replay_step = ""
+    if replay_properties == "Y":
+        replay_step = (
+            "if [[ ${#fsarray[@]} -gt 0 ]]; then "
+            'replayprops_datasets "$destfs" "$sourcefsremovequalifiers" '
+            '"${fsarray[@]}" || true; '
+            "fi; "
+        )
     part2_script = (
         'log_msg "Part two: Incremental copy of remaining snapshots."; '
         'force="N"; releaseholds="N"; '
@@ -256,6 +273,7 @@ def build_restore_command(
         "fi; "
         'send-receive "$sourcefs"; rc=$?; '
         "if [[ $rc -ne 0 ]]; then exit $rc; fi; "
+        f"{replay_step}"
         "ensure_restored_iscsi; "
         "exit 0"
     )

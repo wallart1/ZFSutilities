@@ -151,6 +151,71 @@ class TestBuildRestoreCommand(unittest.TestCase):
         script = " ".join(step.command)
         self.assertIn('restore_resume="Y"', script)
 
+    def test_payload_opts_out_of_manifest_capture(self):
+        # Restore targets must not grow manifest stores; replay is the
+        # separate post-transfer step.
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+        )
+        script = " ".join(step.command)
+        self.assertIn('property_manifest="N"', script)
+
+    def test_payload_sources_replay_helper(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+        )
+        script = " ".join(step.command)
+        self.assertIn('source "$mydir/zfsreplayprops"', script)
+
+    def test_replay_step_between_part2_and_iscsi(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox/vm-215-disk-0",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+        )
+        script = " ".join(step.command)
+        replay_call = 'replayprops_datasets "$destfs" "$sourcefsremovequalifiers" "${fsarray[@]}"'
+        self.assertIn(replay_call, script)
+        idx_last_rc = script.rindex("if [[ $rc -ne 0 ]]; then exit $rc; fi; ")
+        idx_replay = script.index(replay_call)
+        idx_iscsi_call = script.index("ensure_restored_iscsi; ")
+        self.assertLess(idx_last_rc, idx_replay)
+        self.assertLess(idx_replay, idx_iscsi_call)
+
+    def test_replay_step_absent_when_disabled(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={"replay_properties": "N"},
+        )
+        script = " ".join(step.command)
+        self.assertNotIn("replayprops_datasets", script)
+
+    def test_dry_run_keeps_replay_step(self):
+        # The lib logs a Would-replay line in dry-run, so the call stays.
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={},
+            dryrun=True,
+        )
+        script = " ".join(step.command)
+        self.assertIn("replayprops_datasets", script)
+
     def test_payload_cleans_up_temp_file_on_every_exit(self):
         step = rr.build_restore_command(
             source="backuppool/threeamigos/proxmox",
