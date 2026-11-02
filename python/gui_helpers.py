@@ -392,6 +392,13 @@ TREEVIEW_ROW_HEIGHT_FALLBACK = 26
 # Rows a capped table shows at most before it starts scrolling.
 TABLE_ROW_TARGET = 20
 
+# Pixel floor a capped table's window keeps when its rows do not reach
+# the cap (short and empty tables) — the scrolled window's
+# min_content_height.  Realized-geometry checks bound window slack in
+# pixels, never row units: a row-unit bound drifts with the host's row
+# height.
+TABLE_MIN_FLOOR_PX = 60
+
 
 def treeview_row_height(view):
     """One treeview row's pixel height from the theme, or the fallback.
@@ -441,7 +448,7 @@ def capped_treeview_scroll(view, row_target=TABLE_ROW_TARGET, fixed_rows=False):
     # The +1-row allowance absorbs the horizontal scrollbar's height so
     # the target row count stays visible.
     cap = header + (row_target + 1) * row_height
-    scroll.set_min_content_height(cap if fixed_rows else 60)
+    scroll.set_min_content_height(cap if fixed_rows else TABLE_MIN_FLOOR_PX)
     scroll.set_max_content_height(cap)
     scroll.set_propagate_natural_height(True)
     scroll.add(view)

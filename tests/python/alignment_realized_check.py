@@ -524,8 +524,17 @@ def _run_geometry_checks():
         else:
             # Natural sizing: a short table keeps a window close to its
             # row count, never a tall blank one; an empty table keeps the
-            # small floor (a couple of rows with the header).
-            assert -1 <= visible <= rows + 2.6, (
+            # small floor (capped_treeview_scroll's pixel minimum).  The
+            # slack over the rows is a stable ~50-54 px block (header
+            # underline, viewport borders, a classic h-scrollbar) — NOT a
+            # row multiple: rendered in row units it reads ~2.57 rows
+            # under the dev host's 21 px fonts and ~2.63 under CI's
+            # theme-less 19 px fonts, so a rows+2.6 bound passed locally
+            # and failed CI on the same geometry.  Bound the slack in
+            # pixels (measured 50-54 across both, 60 leaves margin).
+            overhead_px = 60
+            bound = header + rows * row_h + overhead_px
+            assert height <= bound, (
                 f"{name}: {rows} rows but window shows {visible:.1f} (alloc {height}, row {row_h})"
             )
 
