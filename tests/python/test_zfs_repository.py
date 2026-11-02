@@ -316,6 +316,21 @@ class TestZfsRepositoryWrites(unittest.TestCase):
         repo.unmount_filesystem("tank/data")
         self.assertEqual(calls, [["zfs", "unmount", "tank/data"]])
 
+    def test_unmount_filesystem_not_currently_mounted_is_success(self):
+        # The goal state already holds (e.g. a failed pool export already
+        # unmounted the dataset) — rc!=0 with this stderr is success.
+        result = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="cannot unmount 'tank/data': not currently mounted",
+        )
+        repo = ZfsRepository(sudo=False)
+        repo._run = lambda *a, **k: result
+        success, stderr = repo.unmount_filesystem("tank/data")
+        self.assertTrue(success)
+        self.assertIn("not currently mounted", stderr)
+
     def test_dataset_for_mountpoint_uses_findmnt_source(self):
         repo = ZfsRepository(sudo=False)
 

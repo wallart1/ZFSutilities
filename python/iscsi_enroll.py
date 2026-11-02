@@ -115,6 +115,10 @@ def _show_enroll_dialog(app, pool_name: str, default_short: str) -> str | None:
     entry = Gtk.Entry()
     entry.set_text(default_short)
     entry.set_activates_default(True)
+    entry.set_tooltip_text(
+        "iSCSI target short name for the pool (lowercase letters, digits, "
+        "dot, hyphen) — becomes the POOL_TARGET value on both nodes"
+    )
     dialog.set_default_response(Gtk.ResponseType.YES)
     content = dialog.get_content_area()
     content.add(entry)

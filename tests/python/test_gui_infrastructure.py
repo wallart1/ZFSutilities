@@ -1986,6 +1986,95 @@ class TestTreeviewColumnHelpers(unittest.TestCase):
                     column_names=["source", "dest"],
                 )
 
+    def _elv_with_recorded_columns(self, gui_helpers, gtk_mock, **kwargs):
+        """Build an EditableListView whose TreeViewColumns and Labels are
+        fresh, individually recorded mocks (default mock_gtk shares one
+        instance across every construction, merging the call histories)."""
+        created = []
+
+        def record_column(*args, **kwargs_c):
+            col = MagicMock()
+            created.append((args[0], col))
+            return col
+
+        gtk_mock.TreeViewColumn = record_column
+        gtk_mock.Label = lambda *a, **k: MagicMock()
+        with patch.object(gui_helpers, "Gtk", gtk_mock):
+            elv = gui_helpers.EditableListView(**kwargs)
+        return elv, created
+
+    def test_editable_list_view_applies_header_tooltips(self):
+        with mock_gtk() as gtk_mock:
+            import gui_helpers
+
+            _elv, created = self._elv_with_recorded_columns(
+                gui_helpers,
+                gtk_mock,
+                columns=[(1, "Source", 120), (2, "Destination", 120)],
+                header_tooltips=["Source datasets to pull from", "Destination to send to"],
+            )
+
+        titles = [title for title, _col in created]
+        self.assertEqual(titles, ["Active", "Source", "Destination"])
+        expected = [
+            "Include this row when the operation runs",
+            "Source datasets to pull from",
+            "Destination to send to",
+        ]
+        for (_title, col), tooltip in zip(created, expected):
+            header = col.set_widget.call_args[0][0]
+            header.set_tooltip_text.assert_called_once_with(tooltip)
+
+    def test_editable_list_view_without_header_tooltips_keeps_only_active(self):
+        with mock_gtk() as gtk_mock:
+            import gui_helpers
+
+            _elv, created = self._elv_with_recorded_columns(
+                gui_helpers,
+                gtk_mock,
+                columns=[(1, "Source", 120), (2, "Destination", 120)],
+            )
+
+        active_title, active_col = created[0]
+        self.assertEqual(active_title, "Active")
+        header = active_col.set_widget.call_args[0][0]
+        header.set_tooltip_text.assert_called_once_with("Include this row when the operation runs")
+        for _title, col in created[1:]:
+            col.set_widget.assert_not_called()
+
+    def test_editable_list_view_rejects_mismatched_header_tooltips(self):
+        with mock_gtk() as gtk_mock:
+            import gui_helpers
+
+            with self.assertRaises(ValueError):
+                self._elv_with_recorded_columns(
+                    gui_helpers,
+                    gtk_mock,
+                    columns=[(1, "Source", 120)],
+                    header_tooltips=["a", "b"],
+                )
+
+    def test_editable_list_view_add_remove_buttons_carry_tooltips(self):
+        with mock_gtk() as gtk_mock:
+            buttons = []
+
+            def record_button(*args, **kwargs):
+                btn = MagicMock()
+                buttons.append((args, kwargs, btn))
+                return btn
+
+            gtk_mock.Button = record_button
+            import gui_helpers
+
+            with patch.object(gui_helpers, "Gtk", gtk_mock):
+                gui_helpers.EditableListView()
+
+        self.assertEqual(len(buttons), 2)
+        for (args, _kwargs, btn), tooltip in zip(buttons, ("Add", "Remove")):
+            self.assertIn(tooltip, str(args) + str(_kwargs))
+        buttons[0][2].set_tooltip_text.assert_called_once_with("Append a new empty row")
+        buttons[1][2].set_tooltip_text.assert_called_once_with("Delete the selected row")
+
     def test_editable_list_view_get_data_uses_column_names(self):
         with mock_gtk():
             import gui_helpers

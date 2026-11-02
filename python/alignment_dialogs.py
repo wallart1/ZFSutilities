@@ -65,10 +65,17 @@ def open_alignment_survey(app):
     for name in datasets:
         dataset_combo.append_text(name)
     dataset_combo.set_active(0)
+    dataset_combo.set_tooltip_text(
+        "Dataset the declaration below applies to (from the last Alignment-view sample)"
+    )
 
     profile_combo = Gtk.ComboBoxText()
     for choice in [NOT_SURVEYED] + sorted(profiles):
         profile_combo.append_text(choice)
+    profile_combo.set_tooltip_text(
+        "Declared workload for the dataset — sharpens Alignment-view "
+        f"recommendations; {NOT_SURVEYED} clears the declaration"
+    )
 
     def _sync_profile_combo():
         name = dataset_combo.get_active_text()

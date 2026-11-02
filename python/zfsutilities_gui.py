@@ -6,9 +6,33 @@ A GTK3 frontend for ZFS backup, snapshot, and retention operations.
 """
 
 import os
+import re
 import sys
 import threading
 from typing import ClassVar
+
+
+def _redirect_root_pycache():
+    """Keep root runs from writing bytecode caches into the source tree.
+
+    On workstations the GUI runs as root over a user-owned checkout
+    (sudo python3 ...), and any root import with a missing or stale .pyc
+    would leave a root-owned __pycache__ file behind — unwritable and
+    unrefreshable for the user, recurring after every sweep. When this
+    process is root, redirect bytecode caching to a system cache dir
+    instead (env-overridable; an interpreter-level PYTHONPYCACHEPREFIX is
+    respected and left alone). Must run before any product import: the
+    entry itself runs as __main__ and is never cached. tests/python/
+    conftest.py carries the same block for sudo pytest legs.
+    """
+    if os.geteuid() != 0 or sys.pycache_prefix is not None:
+        return
+    cache_dir = os.environ.get("ZFSUTILITIES_PYCACHE_DIR", "/var/cache/zfsutilities/pycache")
+    os.makedirs(cache_dir, exist_ok=True)
+    sys.pycache_prefix = cache_dir
+
+
+_redirect_root_pycache()
 
 import gi
 
@@ -73,6 +97,12 @@ from schedule_page import create_schedule_page, refresh_schedule_page
 
 # Pool Registry refresh interval while the Pools tab is visible (seconds).
 POOLS_REFRESH_SECONDS = 30
+
+# Numbered operator questions ("INFO: [Input 4][Prune] Remove this
+# snapshot? [y/N]:") — matched anywhere in the message so the file:line
+# prefixed form the info panel receives also hits. Tinted bright blue in
+# the panel so the questions stand out during review.
+_INPUT_PROMPT_RE = re.compile(r"\[Input \d+\]\[[^\]]+\]")
 
 # Sidebar pages in display order: (stack name, sidebar title, page factory).
 # The task-oriented pages come first, then the infrastructure tabs (Disks,
@@ -375,19 +405,21 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             runner = getattr(self, runner_name, None)
             if runner and runner.running:
                 label, icon = spec.get("cancel", ("Cancel", "process-stop"))
+                tooltip = spec.get("cancel_tooltip", "Stop the running operation.")
             else:
                 label, icon = spec["run"]
-            self.add_action_button(label, icon, self.on_action_clicked)
+                tooltip = spec.get("run_tooltip")
+            self.add_action_button(label, icon, self.on_action_clicked, tooltip=tooltip)
 
         if spec.get("dry_run"):
             self.add_dry_run_toggle()
 
-        for label, icon, attr_name in spec["buttons"]:
+        for label, icon, attr_name, tooltip in spec["buttons"]:
             if label is None:
                 # Spacer
                 self.action_box.pack_start(Gtk.Separator(), False, False, 5)
                 continue
-            btn = self.add_action_button(label, icon, self.on_action_clicked)
+            btn = self.add_action_button(label, icon, self.on_action_clicked, tooltip=tooltip)
             if attr_name:
                 setattr(self, attr_name, btn)
 
@@ -437,11 +469,19 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         self._dry_run_active = button.get_active()
         self._update_dry_run_button_style(button, label)
 
-    def add_action_button(self, label, icon_name, callback):
-        """Add a button to the action panel. Returns the button widget."""
+    def add_action_button(self, label, icon_name, callback, tooltip=None):
+        """Add a button to the action panel. Returns the button widget.
+
+        The static *tooltip* is applied and stored on the button
+        (``_action_tooltip``) so gui_helpers.set_action_tooltip can restore
+        it after a transient disabled-state reason clears.
+        """
         button = Gtk.Button(label=label)
         button.set_image(Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.BUTTON))
         button.set_always_show_image(True)
+        if tooltip:
+            button.set_tooltip_text(tooltip)
+        button._action_tooltip = tooltip or ""
         button.connect("clicked", callback)
         self.action_box.pack_start(button, False, False, 0)
         return button
@@ -473,7 +513,9 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
 
         All messages are stored; the main level selector controls which lines
         are visible in the panel.  The Short prefix toggle controls whether
-        the source file:line location is shown.
+        the source file:line location is shown.  Numbered input prompts
+        ([Input N][label] questions) are tinted bright blue so operator
+        questions stand out.
         """
         if not hasattr(self, "info_text"):
             return
@@ -515,12 +557,16 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             tag_name = "fatal"
         elif level == "WARN":
             tag_name = "warn"
+        elif level == "INFO" and _INPUT_PROMPT_RE.search(message):
+            tag_name = "input_prompt"
 
         if tag_name:
             tag_table = buffer.get_tag_table()
             if not tag_table.lookup(tag_name):
                 if tag_name == "fatal":
                     buffer.create_tag("fatal", foreground="#CC0000")
+                elif tag_name == "input_prompt":
+                    buffer.create_tag("input_prompt", foreground="#00A3F5")
                 else:
                     buffer.create_tag("warn", foreground="#FF8C00")
             end_iter = buffer.get_end_iter()
@@ -683,6 +729,11 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
                 refresh_dashboard_page(self)
             elif page_name == "disks":
                 refresh_disks_page(self)
+            elif page_name == "datasets":
+                # No datasets auto-refresh timer exists — re-read on switch so
+                # externally-changed mount state (e.g. a failed pool export
+                # unmounting datasets) cannot linger on a stale page.
+                refresh_datasets_page(self)
             log_msg(f"VERB: Switched to: {page_name.title()}")
 
     def _start_stop_dashboard_timer(self, page_name):

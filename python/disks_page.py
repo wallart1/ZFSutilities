@@ -25,6 +25,8 @@ from gui_helpers import (
     capped_treeview_scroll,
     configure_treeview_column,
     create_dialog,
+    set_action_tooltip,
+    set_column_header_tooltip,
     setup_row_scroll,
 )
 from logging_config import log_msg
@@ -338,37 +340,49 @@ def create_disks_page(app):
     app.disks_view.get_selection().connect("changed", _on_disk_selection_changed, app)
 
     disk_cols = [
-        (COL_D_NAME, "Name", 160),
-        (COL_D_BYID, "by-id", 160),
-        (COL_D_MODEL, "Model", 130),
-        (COL_D_SERIAL, "Serial", 130),
-        (COL_D_SIZE, "Size", 70),
-        (COL_D_TYPE, "Type", 60),
-        (COL_D_LSEC, "Log-sec", 60),
-        (COL_D_PSEC, "Phy-sec", 60),
-        (COL_D_TRANSPORT, "Transport", 80),
-        (COL_D_ENCLOSURE, "Enclosure", 130),
-        (COL_D_POOLS, "Pools", 100),
-        (COL_D_SMART, "SMART", 60),
-        (COL_D_HEALTH, "Wear/Test", 110),
-    ]
-    for col_idx, title_text, width in disk_cols:
-        renderer = Gtk.CellRendererText()
-        col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
-        col.set_cell_data_func(renderer, _disk_cell_highlight_func)
-        configure_treeview_column(col, width=width)
-        if col_idx == COL_D_HEALTH:
-            # TreeViewColumn is not a Gtk.Widget, so the tooltip lives on
-            # the header label instead of on the column itself.
-            header = Gtk.Label(label=title_text)
-            header.set_tooltip_text(
+        (COL_D_NAME, "Name", 160, "Device name the OS assigned the disk (sdX, nvmeXnY)."),
+        (COL_D_BYID, "by-id", 160, "Stable by-id name; the identity ZFS and the tools key on."),
+        (COL_D_MODEL, "Model", 130, "Vendor model string."),
+        (COL_D_SERIAL, "Serial", 130, "Serial number."),
+        (COL_D_SIZE, "Size", 70, "Capacity."),
+        (
+            COL_D_TYPE,
+            "Type",
+            60,
+            "HDD, SSD, NVMe, or part (a partition of another disk).",
+        ),
+        (COL_D_LSEC, "Log-sec", 60, "Logical sector size in bytes."),
+        (COL_D_PSEC, "Phy-sec", 60, "Physical sector size in bytes."),
+        (COL_D_TRANSPORT, "Transport", 80, "How the disk is attached (sata, usb, nvme, ...)."),
+        (
+            COL_D_ENCLOSURE,
+            "Enclosure",
+            130,
+            (
+                "Enclosure the disk sits in, when one was discovered; "
+                "internal disks show a blank cell."
+            ),
+        ),
+        (COL_D_POOLS, "Pools", 100, "Pools with this disk as a member."),
+        (COL_D_SMART, "SMART", 60, "SMART overall-health verdict, or '-' when unavailable."),
+        (
+            COL_D_HEALTH,
+            "Wear/Test",
+            110,
+            (
                 "SSD/NVMe: wear percentage from SMART data. HDD: surface "
                 "self-test status (percent and ETA while running, then "
                 "Passed/Failed/Aborted/Canceled). Select an HDD and use "
                 "Surface Test… to start one."
-            )
-            header.show_all()
-            col.set_widget(header)
+            ),
+        ),
+    ]
+    for col_idx, title_text, width, header_tip in disk_cols:
+        renderer = Gtk.CellRendererText()
+        col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
+        col.set_cell_data_func(renderer, _disk_cell_highlight_func)
+        configure_treeview_column(col, width=width)
+        set_column_header_tooltip(col, title_text, header_tip)
         app.disks_view.append_column(col)
 
     app.enable_treeview_copy(app.disks_view)
@@ -407,16 +421,22 @@ def create_disks_page(app):
     app.enclosures_view.get_selection().connect("changed", _on_enclosure_selection_changed, app)
 
     enclosure_cols = [
-        (COL_E_NAME, "Name", 190),
-        (COL_E_KIND, "Kind/Location", 150),
-        (COL_E_DISKS, "Disks", 60),
-        (COL_E_POOLS, "Pools", 170),
-        (COL_E_RATE, "Max I/O Rate", 110),
+        (COL_E_NAME, "Name", 190, "Enclosure display name (config name or kind/location)."),
+        (COL_E_KIND, "Kind/Location", 150, "Connection kind and where the enclosure sits."),
+        (COL_E_DISKS, "Disks", 60, "Number of disks inside."),
+        (COL_E_POOLS, "Pools", 170, "Pools with disks inside this enclosure."),
+        (
+            COL_E_RATE,
+            "Max I/O Rate",
+            110,
+            ("Per-enclosure transfer cap for paced operations; 'unlimited' when no cap is set."),
+        ),
     ]
-    for col_idx, title_text, width in enclosure_cols:
+    for col_idx, title_text, width, header_tip in enclosure_cols:
         renderer = Gtk.CellRendererText()
         col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
         configure_treeview_column(col, width=width)
+        set_column_header_tooltip(col, title_text, header_tip)
         app.enclosures_view.append_column(col)
 
     app.enable_treeview_copy(app.enclosures_view)
@@ -434,6 +454,9 @@ def create_disks_page(app):
     controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     controls.set_halign(Gtk.Align.START)
     app._disks_pool_selector = Gtk.ComboBoxText()
+    app._disks_pool_selector.set_tooltip_text(
+        "Pick the pool this pane shows; its members highlight in the table above."
+    )
     app._disks_pool_selector.connect("changed", _on_pool_selector_changed, app)
     controls.pack_start(app._disks_pool_selector, False, False, 0)
 
@@ -449,19 +472,25 @@ def create_disks_page(app):
     app.disks_topology_view.get_selection().connect("changed", _on_topology_selection_changed, app)
 
     topo_cols = [
-        (COL_T_NAME, "Name", 250),
-        (COL_T_TYPE, "Type", 80),
-        (COL_T_STATE, "State", 80),
-        (COL_T_READ, "Read", 60),
-        (COL_T_WRITE, "Write", 60),
-        (COL_T_CKSUM, "Cksum", 60),
-        (COL_T_ASHIFT, "Blocksize", 90),
+        (COL_T_NAME, "Name", 250, "Pool, vdev, or member name; children indent under parents."),
+        (COL_T_TYPE, "Type", 80, "Vdev type (mirror, raidz1, raidz2, disk, ...)."),
+        (COL_T_STATE, "State", 80, "Vdev state (ONLINE, DEGRADED, OFFLINE, ...)."),
+        (COL_T_READ, "Read", 60, "Read I/O errors reported by zpool status."),
+        (COL_T_WRITE, "Write", 60, "Write I/O errors reported by zpool status."),
+        (COL_T_CKSUM, "Cksum", 60, "Checksum errors reported by zpool status."),
+        (
+            COL_T_ASHIFT,
+            "Blocksize",
+            90,
+            ("On-disk sector size from the member's ashift (e.g. 4096 bytes); '-' when unknown."),
+        ),
     ]
-    for col_idx, title_text, width in topo_cols:
+    for col_idx, title_text, width, header_tip in topo_cols:
         renderer = Gtk.CellRendererText()
         col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
         col.set_cell_data_func(renderer, _topology_cell_highlight_func)
         configure_treeview_column(col, width=width)
+        set_column_header_tooltip(col, title_text, header_tip)
         app.disks_topology_view.append_column(col)
 
     app.enable_treeview_copy(app.disks_topology_view)
@@ -784,6 +813,11 @@ def _show_enclosure_rate_dialog(app, enclosure: EnclosureInfo, entry: dict):
         [("Cancel", Gtk.ResponseType.CANCEL), ("Save", Gtk.ResponseType.OK)],
         default_response=Gtk.ResponseType.OK,
     )
+    save_btn = dialog.get_widget_for_response(Gtk.ResponseType.OK)
+    if save_btn is not None:
+        save_btn.set_tooltip_text(
+            "Store this enclosure name and rate cap in the saved configuration"
+        )
     content = dialog.get_content_area()
 
     pools_text = ", ".join(enclosure.pools) if enclosure.pools else "no pools"
@@ -803,6 +837,9 @@ def _show_enclosure_rate_dialog(app, enclosure: EnclosureInfo, entry: dict):
     name_entry = Gtk.Entry()
     name_entry.set_text(entry.get("name", ""))
     name_entry.set_placeholder_text(f"e.g. {enclosure.kind}-enclosure")
+    name_entry.set_tooltip_text(
+        "Friendly label for this enclosure shown next to its disks; blank keeps the generated name"
+    )
     content.pack_start(name_entry, False, False, 0)
 
     rate_label = Gtk.Label(label="Max I/O rate (blank = unlimited)")
@@ -811,6 +848,9 @@ def _show_enclosure_rate_dialog(app, enclosure: EnclosureInfo, entry: dict):
     rate_entry = Gtk.Entry()
     rate_entry.set_text(entry.get("max_rate", ""))
     rate_entry.set_placeholder_text("e.g. 100m")
+    rate_entry.set_tooltip_text(
+        "Cap on this enclosure's total disk I/O, e.g. 100m or 64KiB — blank means unlimited"
+    )
     content.pack_start(rate_entry, False, False, 0)
 
     problem_label = Gtk.Label(label="")
@@ -963,13 +1003,13 @@ def update_disks_button_sensitivity(app):
     if create_btn:
         if compute_host:
             create_btn.set_sensitive(False)
-            create_btn.set_tooltip_text("Pool creation is available only on the storage host")
+            set_action_tooltip(create_btn, "Pool creation is available only on the storage host")
         elif runner_busy:
             create_btn.set_sensitive(False)
-            create_btn.set_tooltip_text("A dataset action is already running")
+            set_action_tooltip(create_btn, "A dataset action is already running")
         else:
             create_btn.set_sensitive(True)
-            create_btn.set_tooltip_text("")
+            set_action_tooltip(create_btn)
 
     # Pool-growth/maintenance buttons share the Create Pool gating:
     # compute-host, then runner-busy.
@@ -987,13 +1027,13 @@ def update_disks_button_sensitivity(app):
             continue
         if compute_host:
             btn.set_sensitive(False)
-            btn.set_tooltip_text(host_tooltip)
+            set_action_tooltip(btn, host_tooltip)
         elif runner_busy:
             btn.set_sensitive(False)
-            btn.set_tooltip_text("A dataset action is already running")
+            set_action_tooltip(btn, "A dataset action is already running")
         else:
             btn.set_sensitive(True)
-            btn.set_tooltip_text("")
+            set_action_tooltip(btn)
 
     # Proxmox enrollment acts on the selected pool.
     proxmox_btn = getattr(app, "_disks_proxmox_enroll_btn", None)
@@ -1002,27 +1042,31 @@ def update_disks_button_sensitivity(app):
         pool_name = selector.get_active_text() if selector is not None else ""
         if compute_host:
             proxmox_btn.set_sensitive(False)
-            proxmox_btn.set_tooltip_text("Proxmox enrollment is available only on the storage host")
+            set_action_tooltip(
+                proxmox_btn, "Proxmox enrollment is available only on the storage host"
+            )
         elif runner_busy:
             proxmox_btn.set_sensitive(False)
-            proxmox_btn.set_tooltip_text("A dataset action is already running")
+            set_action_tooltip(proxmox_btn, "A dataset action is already running")
         else:
             proxmox_btn.set_sensitive(bool(pool_name))
-            proxmox_btn.set_tooltip_text("" if pool_name else "Select a pool to enroll in Proxmox")
+            set_action_tooltip(
+                proxmox_btn, None if pool_name else "Select a pool to enroll in Proxmox"
+            )
 
     surf_btn = getattr(app, "_disks_surface_test_btn", None)
     if surf_btn:
         selected_hdd = single_selection and _selected_disk_is_hdd(app)
         if compute_host:
             surf_btn.set_sensitive(False)
-            surf_btn.set_tooltip_text("Surface tests run on the storage host")
+            set_action_tooltip(surf_btn, "Surface tests run on the storage host")
         elif runner_busy:
             surf_btn.set_sensitive(False)
-            surf_btn.set_tooltip_text("A dataset action is already running")
+            set_action_tooltip(surf_btn, "A dataset action is already running")
         else:
             surf_btn.set_sensitive(bool(selected_hdd))
-            surf_btn.set_tooltip_text(
-                "" if selected_hdd else "Select a single HDD to run a surface test"
+            set_action_tooltip(
+                surf_btn, None if selected_hdd else "Select a single HDD to run a surface test"
             )
 
     wipe_btn = getattr(app, "_disks_wipe_btn", None)
@@ -1030,16 +1074,17 @@ def update_disks_button_sensitivity(app):
         wipeable = single_selection and _selected_disk_is_wipeable(app)
         if compute_host:
             wipe_btn.set_sensitive(False)
-            wipe_btn.set_tooltip_text("Disk wipe is available only on the storage host")
+            set_action_tooltip(wipe_btn, "Disk wipe is available only on the storage host")
         elif runner_busy:
             wipe_btn.set_sensitive(False)
-            wipe_btn.set_tooltip_text("A dataset action is already running")
+            set_action_tooltip(wipe_btn, "A dataset action is already running")
         else:
             wipe_btn.set_sensitive(bool(wipeable))
-            wipe_btn.set_tooltip_text(
-                ""
+            set_action_tooltip(
+                wipe_btn,
+                None
                 if wipeable
-                else "Select a single disk that belongs to no pool to wipe its labels"
+                else "Select a single disk that belongs to no pool to wipe its labels",
             )
 
     # Enclosure rate setting edits configuration only — no ZFS I/O, so it is
@@ -1049,11 +1094,11 @@ def update_disks_button_sensitivity(app):
         enclosure_id = _selected_enclosure_id(app)
         if compute_host:
             rate_btn.set_sensitive(False)
-            rate_btn.set_tooltip_text("Enclosure rates are set on the storage host")
+            set_action_tooltip(rate_btn, "Enclosure rates are set on the storage host")
         else:
             rate_btn.set_sensitive(bool(enclosure_id))
-            rate_btn.set_tooltip_text(
-                "" if enclosure_id else "Select an enclosure to set its max I/O rate"
+            set_action_tooltip(
+                rate_btn, None if enclosure_id else "Select an enclosure to set its max I/O rate"
             )
 
 

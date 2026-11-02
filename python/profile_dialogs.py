@@ -40,6 +40,8 @@ from gui_helpers import (
     capped_treeview_scroll,
     configure_treeview_column,
     create_dialog,
+    set_action_tooltip,
+    set_column_header_tooltip,
     show_error_dialog,
     show_warning_dialog,
 )
@@ -447,14 +449,20 @@ def show_manage_profiles_dialog(app):
     view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
 
     cols = [
-        (0, "Name", 180),
-        (1, "Applies to", 120),
-        (2, "Description", 350),
-        (3, "Kind", 80),
+        (0, "Name", 180, "Profile name as used by the Apply Profile and survey pickers"),
+        (1, "Applies to", 120, "Dataset types the profile can be applied to"),
+        (2, "Description", 350, "Free-text summary shown next to the profile name"),
+        (
+            3,
+            "Kind",
+            80,
+            "built-in profiles are seeded and cannot be deleted; custom ones are yours",
+        ),
     ]
-    for col_idx, title_text, width in cols:
+    for col_idx, title_text, width, header_tip in cols:
         renderer = Gtk.CellRendererText()
         col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
+        set_column_header_tooltip(col, title_text, header_tip)
         configure_treeview_column(col, width=width)
         view.append_column(col)
 
@@ -470,6 +478,17 @@ def show_manage_profiles_dialog(app):
     edit_btn = Gtk.Button(label="Edit")
     delete_btn = Gtk.Button(label="Delete")
     reset_btn = Gtk.Button(label="Reset to Defaults")
+
+    add_btn.set_tooltip_text("Create a new workload profile from scratch")
+    reset_btn.set_tooltip_text(
+        "Discard all custom profiles and restore the seeded defaults (asks for confirmation)"
+    )
+    edit_btn._action_tooltip = (
+        "Open the selected profile in the editor — built-ins must be saved under a new name"
+    )
+    edit_btn.set_tooltip_text(edit_btn._action_tooltip)
+    delete_btn._action_tooltip = "Delete the selected custom profile (asks for confirmation)"
+    delete_btn.set_tooltip_text(delete_btn._action_tooltip)
 
     btn_box.pack_start(add_btn, False, False, 0)
     btn_box.pack_start(edit_btn, False, False, 0)
@@ -508,16 +527,18 @@ def show_manage_profiles_dialog(app):
         builtin = _selected_is_builtin()
         edit_btn.set_sensitive(True)
         delete_btn.set_sensitive(not builtin)
-        edit_btn.set_tooltip_text(
+        set_action_tooltip(
+            edit_btn,
             "Built-in profiles cannot be overwritten; saving edits requires a new "
             "profile name or an existing custom profile"
             if builtin
-            else ""
+            else None,
         )
-        delete_btn.set_tooltip_text(
+        set_action_tooltip(
+            delete_btn,
             "Built-in profiles cannot be deleted; use Reset to Defaults to restore them"
             if builtin
-            else ""
+            else None,
         )
 
     def _on_add(_btn):
@@ -595,6 +616,22 @@ def _is_builtin_profile_name(name: str) -> bool:
     return any(builtin.lower() == lowered for builtin in DEFAULT_WORKLOAD_PROFILES)
 
 
+# Field tooltips for the workload-profile editor's editable properties.
+_EDITOR_PROP_TOOLTIPS = {
+    "recordsize": "Largest block written per record — 128K suits general use, "
+    "smaller favors latency-sensitive workloads",
+    "compression": "Compression algorithm, e.g. lz4 (fast) or zstd (denser)",
+    "atime": "on updates access times on every read; off avoids that write load",
+    "logbias": "latency (default, uses the ZIL) or throughput (logbias=throughput)",
+    "sync": "sync write guarantee: standard, always (safest), or disabled (risky)",
+    "primarycache": "What the ARC caches: all, metadata, or none",
+    "special_small_blocks": "Route blocks up to this size to the special vdev "
+    "(needs one); blank leaves it unset",
+    "canmount": "on mounts the dataset automatically; noauto mounts only on "
+    "request; off never mounts",
+}
+
+
 def show_profile_editor_dialog(app, name=None):
     """Show the Add/Edit Workload Profile dialog and persist on OK.
 
@@ -657,18 +694,31 @@ def show_profile_editor_dialog(app, name=None):
     name_entry = Gtk.Entry()
     name_entry.set_text(name or "")
     name_entry.set_sensitive(not is_edit or editing_builtin)
+    name_entry.set_tooltip_text(
+        "Profile name; when editing a built-in, saving requires a new name "
+        "or an existing custom profile"
+    )
     _add_row(row, "Name:", name_entry)
     row += 1
 
     desc_entry = Gtk.Entry()
     desc_entry.set_text(existing.get("description", ""))
+    desc_entry.set_tooltip_text("Free-text summary shown in the profile pickers")
     _add_row(row, "Description:", desc_entry)
     row += 1
 
     fs_check = Gtk.CheckButton(label="filesystem")
     fs_check.set_active("filesystem" in existing.get("applies_to", []))
+    fs_check.set_tooltip_text(
+        "Offer this profile when applying to filesystem datasets; at least "
+        "one of filesystem/volume is required"
+    )
     vol_check = Gtk.CheckButton(label="volume")
     vol_check.set_active("volume" in existing.get("applies_to", []))
+    vol_check.set_tooltip_text(
+        "Offer this profile when applying to ZFS volumes (zvols); at least "
+        "one of filesystem/volume is required"
+    )
     applies_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     applies_box.pack_start(fs_check, False, False, 0)
     applies_box.pack_start(vol_check, False, False, 0)
@@ -682,6 +732,9 @@ def show_profile_editor_dialog(app, name=None):
         entry = Gtk.Entry()
         entry.set_text(live_props.get(prop, ""))
         entry.set_placeholder_text(placeholders.get(prop, "e.g. zstd"))
+        entry.set_tooltip_text(
+            _EDITOR_PROP_TOOLTIPS.get(prop, f"{prop} value; blank leaves it unset")
+        )
         _add_row(row, f"{prop}:", entry)
         prop_entries[prop] = entry
         row += 1
@@ -689,6 +742,10 @@ def show_profile_editor_dialog(app, name=None):
     volblock_entry = Gtk.Entry()
     volblock_entry.set_text(live_props.get("volblocksize", ""))
     volblock_entry.set_placeholder_text("creation-only, e.g. 16K")
+    volblock_entry.set_tooltip_text(
+        "Block size new zvols get at creation — applies only when the volume "
+        "is created, never to existing ones"
+    )
     _add_row(row, "volblocksize (creation-only):", volblock_entry)
     prop_entries["volblocksize"] = volblock_entry
     row += 1
@@ -696,6 +753,9 @@ def show_profile_editor_dialog(app, name=None):
     ashift_entry = Gtk.Entry()
     ashift_entry.set_text(live_props.get("ashift", ""))
     ashift_entry.set_placeholder_text("informational only, auto-detected")
+    ashift_entry.set_tooltip_text(
+        "Pool blocksize the profile expects — recorded for reference; the pool itself controls it"
+    )
     ashift_entry.set_editable(False)
     ashift_entry.set_can_focus(False)
     _add_row(row, "pool blocksize (informational):", ashift_entry)
@@ -710,6 +770,7 @@ def show_profile_editor_dialog(app, name=None):
     notes_sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
     notes_sw.set_min_content_height(80)
     notes_sw.add(notes_tv)
+    notes_tv.set_tooltip_text("Free-form notes kept with the profile; never applied to datasets")
     _add_row(row, "Notes:", notes_sw)
     row += 1
 
@@ -864,6 +925,9 @@ def show_apply_profile_dialog(app, datasets, pool_has_special=False):
 
     confirm_check = Gtk.CheckButton(label="I understand and want to apply this profile")
     confirm_check.set_no_show_all(True)
+    confirm_check.set_tooltip_text(
+        "Required for profiles with a warning: tick to acknowledge it and enable OK"
+    )
     content.pack_start(confirm_check, False, False, 0)
 
     selector_label = Gtk.Label(label="Select a profile:")
@@ -884,11 +948,17 @@ def show_apply_profile_dialog(app, datasets, pool_has_special=False):
 
     name_renderer = Gtk.CellRendererText()
     name_col = Gtk.TreeViewColumn("Profile", name_renderer, text=0)
+    set_column_header_tooltip(
+        name_col, "Profile", "Profiles that apply to the selected dataset type"
+    )
     configure_treeview_column(name_col, width=150)
     picker_view.append_column(name_col)
 
     applies_renderer = Gtk.CellRendererText()
     applies_col = Gtk.TreeViewColumn("Applies to", applies_renderer, text=1)
+    set_column_header_tooltip(
+        applies_col, "Applies to", "Dataset types the profile can be applied to"
+    )
     configure_treeview_column(applies_col, width=100)
     picker_view.append_column(applies_col)
 
@@ -898,6 +968,7 @@ def show_apply_profile_dialog(app, datasets, pool_has_special=False):
     desc_renderer.set_property("wrap-mode", Pango.WrapMode.WORD)
     desc_renderer.set_property("wrap-width", 350)
     desc_col = Gtk.TreeViewColumn("Description", desc_renderer, text=2)
+    set_column_header_tooltip(desc_col, "Description", "Free-text summary of the profile")
     configure_treeview_column(desc_col, width=350)
     picker_view.append_column(desc_col)
 
@@ -1133,6 +1204,9 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None, dry_run
     name_entry.set_width_chars(1)
     name_entry.set_activates_default(True)
     name_entry.set_hexpand(True)
+    name_entry.set_tooltip_text(
+        f"Short name appended to '{prefix}' — letters, digits, hyphens, and underscores only"
+    )
     name_box.pack_start(name_entry, True, True, 0)
     content.add(name_box)
 
@@ -1226,6 +1300,9 @@ def show_recall_profile_dialog(app, tab_type, on_select):
         [(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL), ("Recall", Gtk.ResponseType.OK)],
         default_response=Gtk.ResponseType.OK,
     )
+    recall_btn = dlg.get_widget_for_response(Gtk.ResponseType.OK)
+    if recall_btn is not None:
+        recall_btn.set_tooltip_text(f"Load the selected profile's settings into the {tab_type} tab")
     content = dlg.get_content_area()
 
     label = Gtk.Label(label=f"Select a {tab_type} profile to load:")
@@ -1249,11 +1326,13 @@ def show_recall_profile_dialog(app, tab_type, on_select):
 
     r0 = Gtk.CellRendererText()
     c0 = Gtk.TreeViewColumn("Profile", r0, text=0)
+    set_column_header_tooltip(c0, "Profile", f"Saved {tab_type} profiles")
     configure_treeview_column(c0, width=150)
     view.append_column(c0)
 
     r1 = Gtk.CellRendererText()
     c1 = Gtk.TreeViewColumn("Schedule", r1, text=1)
+    set_column_header_tooltip(c1, "Schedule", "Cron schedule the profile runs on")
     configure_treeview_column(c1, width=150)
     view.append_column(c1)
 

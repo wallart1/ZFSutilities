@@ -213,6 +213,18 @@ class TestOfferRunnerBusy(unittest.TestCase):
 
 
 class TestOfferDialog(unittest.TestCase):
+    def test_offer_dialog_entry_carries_tooltip(self):
+        ie = _import_enroll()
+        app = _make_app()
+        dialog = MagicMock()
+        dialog.run.return_value = ie.Gtk.ResponseType.NO
+        with patch.object(ie.Gtk, "MessageDialog", return_value=dialog):
+            ie._show_enroll_dialog(app, "newpool", "newpool")
+
+        tip = ie.Gtk.Entry.return_value.set_tooltip_text.call_args.args[0]
+        self.assertTrue(tip.strip())
+        self.assertIn("POOL_TARGET", tip)
+
     def _patch_offer(self, ie, short_name, nc=None):
         """Common patchers: node config, dialog helper, refresh functions."""
         stack = contextlib.ExitStack()

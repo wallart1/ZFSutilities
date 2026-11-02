@@ -849,6 +849,21 @@ correctly.
 
 ### Python
 
+- **Root runs cache bytecode outside the checkout.** On a workstation the
+GUI and the sudo pytest legs run as root over a user-owned checkout, and a
+root import with a missing or stale `.pyc` used to leave root-owned
+`__pycache__` files behind — unwritable for the user and recurring after
+every sweep. Both entry points now redirect root bytecode caching to
+`/var/cache/zfsutilities/pycache` when the process runs as root (the GUI
+entry `python/zfsutilities_gui.py` via `_redirect_root_pycache()`, the
+pytest bootstrap `tests/python/conftest.py` at import time), so root-owned
+cache files no longer appear in the tree. Override the location with
+`ZFSUTILITIES_PYCACHE_DIR`; an interpreter-level `PYTHONPYCACHEPREFIX` is
+respected and left alone (the container run keeps its own
+`PYTHONDONTWRITEBYTECODE=1` setting). One residual: pytest writes
+conftest's own rewritten `.pyc` before the conftest body runs, so a sudo
+pytest leg that is the first import after a conftest.py edit can still
+leave one root-owned `conftest...pyc` — remove it by hand.
 - **Clear stale bytecode as a wrap-up practice.** `__pycache__` directories
 are gitignored artifacts that Python regenerates on demand, but stale `.pyc`
 files (for example a cache left behind by a renamed or deleted suite) can

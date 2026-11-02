@@ -188,6 +188,22 @@ class TestOnPoolsAdd(unittest.TestCase):
             pa.on_pools_add(app)
         self.assertIn("unknown", app.known_pools[-1].values())
 
+    def test_add_dialog_entry_carries_tooltip(self):
+        pa = _import_pool_actions()
+        app = _make_app([{"name": "tank", "offsite_candidate": False}])
+        dialog_mock = _make_add_dialog("archive")
+
+        with (
+            patch.object(pa, "create_dialog", dialog_mock),
+            patch.object(pa, "refresh_pools_page"),
+        ):
+            _patch_entry(pa, "archive")
+            pa.on_pools_add(app)
+
+        tip = pa.Gtk.Entry.return_value.set_tooltip_text.call_args.args[0]
+        self.assertTrue(tip.strip())
+        self.assertIn("registration", tip)
+
     def test_adds_dict_with_offsite_candidate_false(self):
         pa = _import_pool_actions()
         app = _make_app([{"name": "tank", "offsite_candidate": False}])
@@ -977,6 +993,49 @@ class TestOnPoolsExport(unittest.TestCase):
             logged = "\n".join(call.args[0] for call in mock_log.call_args_list)
             self.assertIn("cancelled by user", logged)
             mock_refresh.assert_called_once_with(app)
+
+
+class TestLogPoolMountState(unittest.TestCase):
+    """_log_pool_mount_state reports the post-failure mount state."""
+
+    class _Row:
+        def __init__(self, name, mounted):
+            self.name = name
+            self.mounted = mounted
+            self.ds_type = "filesystem"
+
+    def _repo(self, rows):
+        repo = MagicMock()
+        repo.list_datasets.return_value = rows
+        return repo
+
+    def test_reports_remaining_mounted_count(self):
+        pa = _import_pool_actions()
+        repo = self._repo(
+            [
+                self._Row("tank", "yes"),
+                self._Row("tank/data", "no"),
+                self._Row("tank/vms", "yes"),
+            ]
+        )
+        with patch.object(pa, "log_msg") as mock_log:
+            pa._log_pool_mount_state(repo, "tank")
+        mock_log.assert_called_once_with("INFO: 2 of 3 datasets in 'tank' are still mounted")
+
+    def test_all_unmounted_says_so(self):
+        pa = _import_pool_actions()
+        repo = self._repo([self._Row("tank", "no"), self._Row("tank/data", "no")])
+        with patch.object(pa, "log_msg") as mock_log:
+            pa._log_pool_mount_state(repo, "tank")
+        mock_log.assert_called_once_with("INFO: All datasets in 'tank' are already unmounted")
+
+    def test_listing_failure_stays_silent(self):
+        pa = _import_pool_actions()
+        repo = MagicMock()
+        repo.list_datasets.side_effect = subprocess.CalledProcessError(1, "zfs")
+        with patch.object(pa, "log_msg") as mock_log:
+            pa._log_pool_mount_state(repo, "tank")
+        mock_log.assert_not_called()
 
 
 if __name__ == "__main__":

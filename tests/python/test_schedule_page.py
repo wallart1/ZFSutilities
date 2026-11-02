@@ -737,6 +737,45 @@ class TestSchedulePageWidgets(unittest.TestCase):
             "Expected query-tooltip to be connected to _on_next_run_query_tooltip",
         )
 
+    @patch("schedule_page.Gtk")
+    @patch("schedule_page.list_profiles", return_value=[])
+    @patch("schedule_page.set_column_header_tooltip")
+    def test_all_six_headers_carry_tooltips(self, recorder, _lst, _mock_gtk):
+        """Every schedule-list column header explains its column."""
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        app._ui_state = MagicMock()
+
+        schedule_page.create_schedule_page(app)
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            ["Active", "Profile Name", "Type", "Schedule", "Comment", "Next Run"],
+        )
+        sortable = ("Profile Name", "Type", "Comment", "Next Run")
+        for title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+            if title in sortable:
+                self.assertIn("Click to sort", tip, f"{title} should note click-to-sort")
+        self.assertNotIn(
+            "Click to sort", dict(recorded)["Schedule"], "Schedule column is not sortable"
+        )
+
+    @patch("schedule_page.Gtk")
+    @patch("schedule_page.list_profiles", return_value=[])
+    def test_config_summary_expander_carries_tooltip(self, _lst, mock_gtk):
+        """The Config Summary expander explains what the dump shows."""
+        schedule_page = self._import_schedule_page()
+        app = MagicMock()
+        app._ui_state = MagicMock()
+
+        schedule_page.create_schedule_page(app)
+
+        tips = mock_gtk.Expander.return_value.set_tooltip_text.call_args_list
+        self.assertEqual(len(tips), 1)
+        self.assertIn("JSON dump", tips[0].args[0])
+
 
 class TestNextRunQueryTooltip(unittest.TestCase):
     """_on_next_run_query_tooltip resolves the hovered Next Run cell."""

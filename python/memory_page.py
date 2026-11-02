@@ -57,6 +57,7 @@ from gui_helpers import (
     note_label,
     reconcile_rows,
     section_header,
+    set_column_header_tooltip,
     set_text_if_changed,
     show_note,
 )
@@ -258,11 +259,13 @@ def _value_row(grid, row, caption):
     """Add a caption/value row to a Gtk.Grid; return the value label.
 
     The caption ellipsizes so a long caption never pins the grid's (and
-    with it the page's) minimum width in narrow windows.
+    with it the page's) minimum width in narrow windows; its tooltip
+    carries the full caption text when it is clipped.
     """
     caption_label = Gtk.Label(label=caption)
     caption_label.set_halign(Gtk.Align.START)
     caption_label.set_ellipsize(Pango.EllipsizeMode.END)
+    caption_label.set_tooltip_text(caption)
     grid.attach(caption_label, 0, row, 1, 1)
     value = Gtk.Label(label="—")
     value.set_halign(Gtk.Align.START)
@@ -270,18 +273,25 @@ def _value_row(grid, row, caption):
     return value
 
 
-def _device_table(app, store_attr, columns, state_key, expand_index=None):
+def _device_table(app, store_attr, columns, state_key, expand_index=None, header_tooltips=None):
     """Build a vdev TreeView in its own capped scrolled window.
 
     *columns* are ``(title, width)`` pairs; *expand_index* names the one
     non-last column that absorbs width slack so the far-right column
     keeps an honest fixed width (GTK otherwise re-expands the last
-    column, which makes shrinking it look ineffective). The window shows
-    at most 20 rows and carries its own vertical and horizontal
-    scrollbars (see ``gui_helpers.capped_treeview_scroll``). The view is
-    bound to the UI-state persistence layer so column widths survive GUI
-    restarts, like every other table.
+    column, which makes shrinking it look ineffective).
+    *header_tooltips*, when given, is a per-column tooltip list of the
+    same length as *columns* (the ``EditableListView`` convention). The
+    window shows at most 20 rows and carries its own vertical and
+    horizontal scrollbars (see ``gui_helpers.capped_treeview_scroll``).
+    The view is bound to the UI-state persistence layer so column widths
+    survive GUI restarts, like every other table.
     """
+    if header_tooltips is not None and len(header_tooltips) != len(columns):
+        raise ValueError(
+            f"header_tooltips length ({len(header_tooltips)}) must match "
+            f"columns length ({len(columns)})"
+        )
     store = Gtk.ListStore(*([str] * len(columns)))
     view = Gtk.TreeView(model=store)
     view.set_headers_visible(True)
@@ -291,6 +301,8 @@ def _device_table(app, store_attr, columns, state_key, expand_index=None):
         configure_treeview_column(col, width=width, min_width=60)
         if index == expand_index:
             col.set_expand(True)
+        if header_tooltips and header_tooltips[index]:
+            set_column_header_tooltip(col, title, header_tooltips[index])
         view.append_column(col)
     setattr(app, store_attr, store)
     app._ui_state.bind_treeview(view, state_key)
@@ -383,6 +395,7 @@ def create_memory_page(app):
     app._memory_ref_spin.set_increments(1, 10)
     app._memory_ref_spin.set_value(memory_cfg.get("refresh_seconds", 5))
     app._memory_ref_spin.connect("value-changed", _on_memory_refresh_changed, app)
+    app._memory_ref_spin.set_tooltip_text("Seconds between Performance refreshes (1-300).")
     controls.pack_start(app._memory_ref_spin, False, False, 0)
     app.memory_refreshing_label = Gtk.Label(label="Refreshing")
     app.memory_refreshing_label.set_no_show_all(True)
@@ -393,9 +406,11 @@ def create_memory_page(app):
     # --- View switcher: Live Charts / Blocksize Alignment ---
     view_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
     charts_radio = Gtk.RadioButton.new_with_label_from_widget(None, "Live Charts")
+    charts_radio.set_tooltip_text("Show the live ARC / L2ARC / SLOG charts.")
     alignment_radio = Gtk.RadioButton.new_with_label_from_widget(
         charts_radio, "Blocksize Alignment"
     )
+    alignment_radio.set_tooltip_text("Show the blocksize alignment analysis.")
     app._memory_view_radios = {"charts": charts_radio, "alignment": alignment_radio}
     for radio in (charts_radio, alignment_radio):
         radio.connect("toggled", _on_memory_view_radio_toggled, app)
@@ -514,6 +529,13 @@ def create_memory_page(app):
         ],
         "memory_l2_view",
         expand_index=1,
+        header_tooltips=[
+            "Pool the cache vdev belongs to.",
+            "Cache vdev name from zpool status.",
+            "Allocated and free space on the cache vdev.",
+            "Recent reads served from the cache (zpool iostat).",
+            "Recent writes feeding the cache.",
+        ],
     )
     charts_box.pack_start(l2_scroll, False, False, 0)
 
@@ -553,6 +575,13 @@ def create_memory_page(app):
         ],
         "memory_slog_view",
         expand_index=1,
+        header_tooltips=[
+            "Pool the log vdev belongs to.",
+            "Log vdev name from zpool status.",
+            "Allocated and free space on the log vdev.",
+            "Log writes per second (zpool iostat).",
+            "Recent write throughput to the log.",
+        ],
     )
     charts_box.pack_start(slog_scroll, False, False, 0)
 
@@ -587,6 +616,17 @@ def create_memory_page(app):
         ],
         "memory_enclosures_view",
         expand_index=0,
+        header_tooltips=[
+            "Enclosure display name (named on the Disks tab).",
+            "Pools with disks in this enclosure.",
+            "Read rate summed across the enclosure's disks.",
+            "Write rate summed across the enclosure's disks.",
+            "The configured max I/O rate; 'unlimited' when none is set.",
+            (
+                "The busier direction as a share of the cap (a paced stream "
+                "loads one direction at a time)."
+            ),
+        ],
     )
     charts_box.pack_start(enclosures_scroll, False, False, 0)
 

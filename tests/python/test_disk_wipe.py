@@ -238,6 +238,33 @@ class TestShowWipeDialog(unittest.TestCase):
             entry.connect.call_args[0][1](entry)
             wipe_btn.set_sensitive.assert_called_with(False)
 
+    def test_typed_entry_carries_tooltip(self):
+        dw = _import_disk_wipe()
+        with _wipe_dialog(dw, dw.Gtk.ResponseType.CANCEL, "sdb") as (_dialog, _btn, entry):
+            dw.show_wipe_dialog(MagicMock(), _disk("/dev/sdb"), [])
+
+        tips = entry.set_tooltip_text.call_args_list
+        self.assertEqual(len(tips), 1, "typed-confirm entry lacks a tooltip")
+        self.assertIn("Safety confirmation", tips[0].args[0])
+        self.assertIn("sdb", tips[0].args[0])
+
+    def test_wipe_button_tooltip_gates_on_typed_match(self):
+        """Mismatch shows the reason; the exact name restores the static."""
+        dw = _import_disk_wipe()
+        with _wipe_dialog(dw, dw.Gtk.ResponseType.CANCEL, "") as (_dialog, wipe_btn, entry):
+            dw.show_wipe_dialog(MagicMock(), _disk("/dev/sdb"), [])
+            handler = entry.connect.call_args[0][1]
+
+            entry.get_text.return_value = "sdc"
+            handler(entry)
+            reason_tip = wipe_btn.set_tooltip_text.call_args.args[0]
+            self.assertIn("Type the device name 'sdb' to enable Wipe", reason_tip)
+
+            entry.get_text.return_value = "sdb"
+            handler(entry)
+            restored_tip = wipe_btn.set_tooltip_text.call_args.args[0]
+            self.assertIn("Erase the disk's ZFS labels", restored_tip)
+
 
 class TestOnDisksWipeLabels(unittest.TestCase):
     """Handler gating and execution wiring in disk_actions."""

@@ -16,3 +16,5 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Test code commonly uses nested with statements for context-manager patches.
 "tests/python/*" = ["SIM117"]
+# The GUI entry must run _redirect_root_pycache() before its product imports.
+"python/zfsutilities_gui.py" = ["E402"]

@@ -629,6 +629,83 @@ class TestPoolsPageLayout(unittest.TestCase):
         paned_mock.get_property.return_value = False
         self.assertFalse(divider_cb())
         paned_mock.set_position.assert_called_once_with(124)
+    def test_scrub_view_attaches_cell_tooltips(self):
+        """Ellipsized scrub cells show their full text on hover."""
+        pp = _import_pools_page()
+        with patch.object(pp, "refresh_pools_page", MagicMock()):
+            with patch.object(pp, "ScrubQueue", MagicMock()):
+                app = self._make_app()
+                pp.create_pools_page(app)
+
+        # pools_page was imported under a fresh mock context; reach the
+        # handler through the helper it actually bound rather than through
+        # sys.modules, which mock_gtk(fresh=True) restores on exit.
+        expected_handler = pp.attach_cell_tooltips.__globals__["_on_cell_query_tooltip"]
+
+        view, store = app.scrub_view, app.scrub_store
+        view.set_has_tooltip.assert_any_call(True)
+        handler_calls = [c for c in view.connect.call_args_list if c.args[:1] == ("query-tooltip",)]
+        self.assertEqual(len(handler_calls), 1)
+        self.assertIs(handler_calls[0].args[1], expected_handler)
+        self.assertIs(handler_calls[0].args[2], store)
+        self.assertEqual(handler_calls[0].args[3], 0)
+
+    def test_pool_and_scrub_table_headers_carry_tooltips(self):
+        """Every pool-table and scrub-table header explains its column."""
+        pp = _import_pools_page()
+        with patch.object(pp, "refresh_pools_page", MagicMock()):
+            with patch.object(pp, "ScrubQueue", MagicMock()):
+                with patch.object(pp, "set_column_header_tooltip") as recorder:
+                    app = self._make_app()
+                    pp.create_pools_page(app)
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            [
+                # Pool table (11)
+                "Pool",
+                "Offsite",
+                "Health",
+                "Errors",
+                "Size",
+                "Alloc",
+                "Free",
+                "Freeing",
+                "Ckpoint",
+                "Frag",
+                "Cap",
+                # Scrub table (5)
+                "Pool",
+                "Status",
+                "Progress",
+                "As Of",
+                "Scan Line",
+            ],
+        )
+        sortable = {"Pool", "Health", "Size", "Alloc", "Free", "Freeing", "Ckpoint", "Frag", "Cap"}
+        for position, (title, tip) in enumerate(recorded):
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+            if position < 11 and title in sortable:
+                self.assertIn("Click to sort", tip, f"{title} should note click-to-sort")
+
+    def test_scrub_spinbuttons_and_checks_carry_tooltips(self):
+        """Scrub controls explain what their value or state controls."""
+        pp = _import_pools_page()
+        with patch.object(pp, "refresh_pools_page", MagicMock()):
+            with patch.object(pp, "ScrubQueue", MagicMock()):
+                app = self._make_app()
+                pp.create_pools_page(app)
+
+        # SpinButtons share one mock under mock_gtk (likewise CheckButtons),
+        # so each control's tooltip is asserted by membership.
+        spin_texts = [c.args[0] for c in app._scrub_sim_spin.set_tooltip_text.call_args_list]
+        self.assertTrue(any("How many scrubs may run at once" in t for t in spin_texts))
+        self.assertTrue(any("Seconds between scrub-table refreshes" in t for t in spin_texts))
+
+        check_texts = [c.args[0] for c in app._scrub_weekly_check.set_tooltip_text.call_args_list]
+        self.assertTrue(any("weekly scrub schedule" in t for t in check_texts))
+        self.assertTrue(any("monthly scrub schedule" in t for t in check_texts))
 
 
 class TestPoolsDirtyState(unittest.TestCase):

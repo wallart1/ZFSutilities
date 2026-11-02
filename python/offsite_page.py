@@ -32,6 +32,7 @@ from gui_helpers import (
     on_cell_edited,
     on_row_activated,
     on_toggle,
+    set_column_header_tooltip,
     setup_row_scroll,
     show_warning_dialog,
     style_expander_label,
@@ -72,6 +73,27 @@ _OFFSITE_TOPIC_MAP = {
     "receive_F_option": "backup_receive_F_option",
     "verify_after_transfer": "offsite_verify_after_transfer",
     "transfer_rate_limit": "backup_transfer_rate_limit",
+}
+
+# One-line tooltips for the variable rows, set on both the label and the
+# input widget (gui_helpers.add_var_row). Wording follows the variable
+# reference table in docs/docs/user-guide/gtk-gui.md.
+_OFFSITE_VAR_TOOLTIPS = {
+    "includes": "Keep only datasets matching at least one of these patterns; empty keeps all.",
+    "excludes": "Skip datasets matching any of these patterns.",
+    "startwith": "Skip everything before the first dataset matching this pattern (the match is kept).",
+    "endwith": "Skip everything after the first dataset matching this pattern (the match is kept).",
+    "applyholds": "Y = apply offsite-<pool> holds after each offsite step.",
+    "doincrementals": "Y = incremental send from the most recent common snapshot; N = full send.",
+    "dointermediates": "Y = include all intermediate snapshots (-I); N = skip them (-i).",
+    "allow_destructive": (
+        "Y = a full copy may destroy an existing populated destination dataset and its children."
+    ),
+    "receive_F_option": "F = force rollback of destination modifications later than the common snapshot.",
+    "verify_after_transfer": (
+        "Y = compare destination snapshot GUID with source after each receive; mismatch is fatal."
+    ),
+    "transfer_rate_limit": "Max transfer rate for the pacer (e.g. 200M, 1G); empty = no limit.",
 }
 _EDITABLE_COLS = [1, 2, 3, 4]
 
@@ -157,10 +179,16 @@ def create_offsite_page(app, ctx):
     app.offsite_nextsnap_entry = Gtk.Entry()
     app.offsite_nextsnap_entry.set_hexpand(True)
     app.offsite_nextsnap_entry.set_width_chars(1)
+    app.offsite_nextsnap_entry.set_tooltip_text(
+        "Snapshot name used for every snapshot this offsite run creates; "
+        "the '@' prefix is added if omitted. The remembered previous "
+        "name loads here at startup."
+    )
     snap_box.pack_start(app.offsite_nextsnap_entry, True, True, 0)
 
     gen_btn = Gtk.Button(label="Generate")
     gen_btn.connect("clicked", lambda _b, a=app: _do_generate_snap(a))
+    gen_btn.set_tooltip_text("Build a new snapshot name from the current time.")
     snap_box.pack_start(gen_btn, False, False, 0)
     snap_grid.attach(snap_box, 1, 0, 1, 1)
 
@@ -193,21 +221,43 @@ def create_offsite_page(app, ctx):
     toggle_r.connect("toggled", on_toggle, app.offsite_step_store)
     col_active = Gtk.TreeViewColumn("Active", toggle_r, active=0)
     configure_treeview_column(col_active, width=ACTIVE_COLUMN_WIDTH, min_width=ACTIVE_COLUMN_WIDTH)
+    set_column_header_tooltip(
+        col_active, "Active", "Include this step when the offsite run starts."
+    )
     step_view.append_column(col_active)
 
     col_defs = [
-        (1, "Source", 110),
-        (2, "Destination", 110),
-        (3, "Includes", 140),
-        (4, "Excludes", 110),
+        (1, "Source", 110, "Source dataset root this step sends from."),
+        (
+            2,
+            "Destination",
+            110,
+            (
+                "Destination dataset root this step sends to; <offsite> expands "
+                "to the detected offsite pool."
+            ),
+        ),
+        (
+            3,
+            "Includes",
+            140,
+            ("Extra dataset patterns this step includes (merged with the global ones)."),
+        ),
+        (
+            4,
+            "Excludes",
+            110,
+            "Extra dataset patterns this step skips (merged with the global ones).",
+        ),
     ]
-    for col_idx, col_title, width in col_defs:
+    for col_idx, col_title, width, header_tip in col_defs:
         renderer = Gtk.CellRendererText()
         renderer.set_property("editable", True)
         renderer.connect("edited", on_cell_edited, app.offsite_step_store, col_idx)
         renderer.connect("editing-started", _on_editing_started, step_view, col_idx)
         col = Gtk.TreeViewColumn(col_title, renderer, text=col_idx)
         configure_treeview_column(col, width=width)
+        set_column_header_tooltip(col, col_title, header_tip)
         step_view.append_column(col)
 
     step_view.connect("row-activated", on_row_activated, 1)
@@ -222,8 +272,12 @@ def create_offsite_page(app, ctx):
     sr_box.pack_start(step_scroll, False, False, 0)
 
     btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-    for label, cb in [("Add", _on_step_add), ("Remove", _on_step_remove)]:
+    for label, cb, tip in (
+        ("Add", _on_step_add, "Add a step row."),
+        ("Remove", _on_step_remove, "Remove the selected step row."),
+    ):
         btn = Gtk.Button(label=label)
+        btn.set_tooltip_text(tip)
         btn.connect("clicked", cb, app)
         btn_box.pack_start(btn, False, False, 0)
     sr_box.pack_start(btn_box, False, False, 0)
@@ -242,6 +296,7 @@ def create_offsite_page(app, ctx):
     # --- Advanced expander ---
     adv_exp = Gtk.Expander()
     adv_exp.set_label_widget(bold_label("Advanced"))
+    adv_exp.set_tooltip_text("Dataset-selection criteria and advanced send/receive options.")
     adv_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
     adv_box.set_margin_start(10)
     adv_box.set_margin_end(10)
@@ -272,6 +327,7 @@ def create_offsite_page(app, ctx):
             app.offsite_var_widgets,
             yn_vars=OFFSITE_YN_VARIABLES,
             topic_map=_OFFSITE_TOPIC_MAP,
+            tooltip=_OFFSITE_VAR_TOOLTIPS.get(key),
             block_scroll=True,
         )
 
@@ -289,6 +345,7 @@ def create_offsite_page(app, ctx):
             app.offsite_var_widgets,
             yn_vars=OFFSITE_YN_VARIABLES,
             topic_map=_OFFSITE_TOPIC_MAP,
+            tooltip=_OFFSITE_VAR_TOOLTIPS.get(key),
             block_scroll=True,
         )
 

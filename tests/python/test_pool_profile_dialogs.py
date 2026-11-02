@@ -254,6 +254,96 @@ class TestManagePoolProfilesDialog(unittest.TestCase):
                 appended,
             )
 
+    def test_manage_dialog_headers_and_buttons_carry_tooltips(self):
+        ppd = _import_pool_profile_dialogs()
+        app = self._dialog_app()
+        view = _make_tree_view(GtkListStoreAdapter(), [])
+
+        with (
+            patch.object(
+                ppd,
+                "create_dialog",
+                return_value=MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+            ),
+            patch.object(ppd.Gtk, "ListStore", return_value=MagicMock()),
+            patch.object(ppd.Gtk, "TreeView", return_value=view),
+            patch.object(ppd, "set_column_header_tooltip") as recorder,
+        ):
+            ppd.show_manage_pool_profiles_dialog(app)
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            ["Name", "Blocksize", "Description", "Kind"],
+        )
+        for title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+        button_texts = [
+            c.args[0] for c in ppd.Gtk.Button.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertIn("Create a new pool profile from scratch", button_texts)
+        self.assertTrue(any("restore the seeded defaults" in t for t in button_texts))
+        self.assertTrue(
+            any("Open the selected pool profile in the editor" in t for t in button_texts)
+        )
+        self.assertTrue(any("Delete the selected custom pool profile" in t for t in button_texts))
+
+    def _drive_with_selection(self, profiles):
+        """Build the dialog over *profiles* (row 0 selected); return buttons."""
+        ppd = _import_pool_profile_dialogs()
+        app = _make_app()
+        app.config["pool_profiles"] = profiles
+        buttons = []
+
+        def make_button(*args, **kwargs):
+            btn = MagicMock()
+            buttons.append(btn)
+            return btn
+
+        store = GtkListStoreAdapter()
+        view = _make_tree_view(store, [0])
+
+        with (
+            patch.object(
+                ppd,
+                "create_dialog",
+                return_value=MagicMock(run=MagicMock(return_value=ppd.Gtk.ResponseType.CLOSE)),
+            ),
+            patch.object(ppd.Gtk, "Button", side_effect=make_button),
+            patch.object(ppd.Gtk, "ListStore", return_value=store),
+            patch.object(ppd.Gtk, "TreeView", return_value=view),
+        ):
+            ppd.show_manage_pool_profiles_dialog(app)
+
+        return buttons
+
+    def test_builtin_selection_shows_guard_reasons(self):
+        buttons = self._drive_with_selection(self._profiles())
+        edit_tip = buttons[1].set_tooltip_text.call_args.args[-1]
+        self.assertIn("cannot be overwritten", edit_tip)
+        delete_tip = buttons[2].set_tooltip_text.call_args.args[-1]
+        self.assertIn("cannot be deleted", delete_tip)
+
+    def test_custom_selection_keeps_static_tooltips(self):
+        # The store is rebuilt from config, so the custom profile must live
+        # there; a name outside the seeded defaults keeps the statics.
+        buttons = self._drive_with_selection(
+            {
+                "mycustom": {
+                    "description": "Custom pool.",
+                    "blocksize": "recommended",
+                    "pool_properties": {},
+                    "filesystem_properties": {},
+                    "notes": "",
+                }
+            }
+        )
+        edit_tip = buttons[1].set_tooltip_text.call_args.args[-1]
+        self.assertIn("Open the selected pool profile in the editor", edit_tip)
+        delete_tip = buttons[2].set_tooltip_text.call_args.args[-1]
+        self.assertIn("Delete the selected custom pool profile", delete_tip)
+
     def test_manage_dialog_add_opens_editor(self):
         ppd = _import_pool_profile_dialogs()
         app = self._dialog_app()

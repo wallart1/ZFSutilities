@@ -443,6 +443,36 @@ class TestSurfaceTestDialog(unittest.TestCase):
             result = dst.show_surface_test_dialog(self._app(), disk, None, self._repo())
         self.assertEqual(result, "short")
 
+    def test_dialog_controls_carry_tooltips(self):
+        """Fast/Slow radios and the Start button explain themselves."""
+        dst = _import_surface_module()
+        dialog = MagicMock()
+        dialog.run.return_value = dst.Gtk.ResponseType.CANCEL
+        radios = []
+
+        def fake_radio(label=None):
+            btn = MagicMock()
+            btn.get_active.return_value = True
+            radios.append(btn)
+            return btn
+
+        disk = SimpleNamespace(path="/dev/sdb", model="WD")
+        with (
+            patch.object(dst, "create_dialog", return_value=dialog),
+            patch.object(dst.Gtk, "RadioButton", side_effect=fake_radio),
+            patch.object(dst.Gtk, "Label", MagicMock()),
+        ):
+            dst.show_surface_test_dialog(self._app(), disk, None, self._repo())
+
+        self.assertEqual(len(radios), 2)
+        fast_tip = radios[0].set_tooltip_text.call_args.args[0]
+        self.assertIn("Short self-test", fast_tip)
+        slow_tip = radios[1].set_tooltip_text.call_args.args[0]
+        self.assertIn("Extended self-test", slow_tip)
+
+        start_tip = dialog.get_widget_for_response.return_value.set_tooltip_text.call_args
+        self.assertTrue(start_tip.args[0].strip())
+
     def test_start_long_when_second_radio_active(self):
         dst = _import_surface_module()
         dialog = MagicMock()

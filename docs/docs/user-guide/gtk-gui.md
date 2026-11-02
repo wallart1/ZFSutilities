@@ -209,7 +209,10 @@ job.
 
 The bottom panel shows a scrollable log of all operations. Every line is
 prefixed with a `YYYY-MM-DD HH:MM:SS` timestamp in the system's local time.
-The divider between the main content area and the log panel can be dragged to
+Numbered input prompts (`INFO: [Input N][label] …` questions the GUI is
+waiting on you to answer) are tinted bright blue so they stand out while
+reviewing the log. The divider between the main content area and the log
+panel can be dragged to
 resize the log. The text size can be changed with
 **View → GUI Log Font** (see [View Menu](#view-menu)) and is remembered across
 GUI restarts.
@@ -324,6 +327,19 @@ The sidebar exposes these pages, with the storage-infrastructure tabs
 | [Datasets](#datasets-tab)         | Collapsible dataset tree with inline snapshot/hold management (pool root datasets at top level) |
 | [Performance](#performance-tab)   | Real-time ARC / L2ARC / SLOG monitors and live enclosure rates with rolling charts             |
 
+## Tooltips
+
+Nearly everything in the GUI explains itself when you hover the mouse
+pointer over it. Every column heading, entry field, and clickable widget on
+the tab pages carries a tooltip describing what it does, and so does every
+dialog opened from them — including the Logs tab's tables. Hovering a
+disabled action button shows the reason it is unavailable, and dialogs that
+ask you to type a pool or disk name to confirm a destructive operation
+explain that rule on the entry itself. Sortable column headings note that
+clicking them sorts the table. Table cells whose text does not fit the
+column are clipped with an ellipsis (`…`); hovering such a cell shows its
+full text.
+
 ## Dashboard Tab
 
 The Dashboard provides an at-a-glance overview of ZFS health and active locks.
@@ -353,6 +369,11 @@ Live compilation of issues that need attention:
 - SSD/NVMe disks at or above 80% wear (e.g. `SSD "/dev/sda" (Samsung SSD 870 QVO 1TB) wear at 85%`); probed in the background and cached for a few minutes
 - Missing backup/offsite/checkagainst configuration
 - Unregistered pools
+- Pool-identity mismatches (two-node systems only): a pool configured in
+  node.conf that is not imported — pools marked as offsite candidates in the
+  Pools tab are exempt, since they are routinely disconnected by design — an
+  imported pool outside the node config, or a known pool name whose GUID
+  changed (renamed or replaced)
 - Stale lock files in `/run/lock/zfsutilities/.locks/`
 
 ### Pool Health

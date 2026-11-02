@@ -1265,8 +1265,15 @@ class ZfsRepository:
         return result.returncode == 0, result.stderr
 
     def unmount_filesystem(self, dataset: str) -> tuple[bool, str]:
-        """Unmount one filesystem dataset, returning success and stderr."""
+        """Unmount one filesystem dataset, returning success and stderr.
+
+        ``not currently mounted`` counts as success: the goal state already
+        holds (e.g. a failed pool export already unmounted the dataset as
+        part of its attempt).
+        """
         result = self._run(self._zfs("unmount", dataset), check=False)
+        if result.returncode != 0 and "not currently mounted" in result.stderr:
+            return True, result.stderr
         return result.returncode == 0, result.stderr
 
     def create_pool_dry_run(self, cmd: list[str]) -> tuple[int, str]:

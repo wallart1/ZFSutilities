@@ -57,7 +57,7 @@ def _unique_parent_datasets(snapshot_items: list) -> list:
     return parents
 
 
-def _input_dialog(parent, title, widgets, default=""):
+def _input_dialog(parent, title, widgets, default="", tooltip=None):
     """Show a dialog with extra *widgets* and a single text entry."""
     dialog = create_dialog(
         title,
@@ -75,6 +75,8 @@ def _input_dialog(parent, title, widgets, default=""):
     entry.set_width_chars(1)
     entry.set_text(default)
     entry.set_activates_default(True)
+    if tooltip:
+        entry.set_tooltip_text(tooltip)
     content.add(entry)
     dialog.show_all()
     response = dialog.run()
@@ -195,6 +197,10 @@ def on_datasets_snapshot(app):
         "Create Snapshots" if len(datasets) > 1 else "Create Snapshot",
         widgets + [Gtk.Label(label="Snapshot name (without @):")],
         suggested,
+        tooltip=(
+            "Name for the new snapshot, without the leading @ — no spaces or "
+            "slashes; taken on every selected dataset"
+        ),
     )
     if response != Gtk.ResponseType.OK or not snap_name:
         return
@@ -454,7 +460,14 @@ def on_datasets_hold(app):
         log_msg("WARN: Select one or more snapshots to hold")
         return
 
-    response, tag = _input_dialog(app, "Add Hold", [Gtk.Label(label="Hold tag name:")], "keep")
+    response, tag = _input_dialog(
+        app,
+        "Add Hold",
+        [Gtk.Label(label="Hold tag name:")],
+        "keep",
+        tooltip="Tag for the hold — prevents the selected snapshot(s) from "
+        "being destroyed until the hold is released",
+    )
     if response != Gtk.ResponseType.OK or not tag:
         return
 
@@ -1096,7 +1109,9 @@ def _unmount_one_dataset(item, repo, app):
     Descendant datasets are unmounted first (deepest first), because ZFS
     refuses to unmount a parent while any of its children are still mounted.
     A shadowed mount (unreachable path under a covering ancestor) is exposed
-    by lifting the cover and remounting it afterwards.
+    by lifting the cover and remounting it afterwards. Unmounting is
+    idempotent: a target the kernel reports as not currently mounted is a
+    success, not an error — the page row may simply be stale.
     """
     dataset = item["name"]
     try:
@@ -1126,16 +1141,24 @@ def _unmount_one_dataset(item, repo, app):
         return False
 
     # Build the list of mounted descendants, deepest first, so children are
-    # unmounted before their parents.
+    # unmounted before their parents. The listing also carries the target's
+    # own live mounted state — a page row can be stale long after something
+    # else (e.g. a failed pool export, which unmounts datasets before it
+    # fails) changed it.
     unmount_targets = [dataset]
+    target_mounted = None
     try:
+        rows = repo.list_datasets(pool=dataset)
         descendants = [
             row.name
-            for row in repo.list_datasets(pool=dataset)
+            for row in rows
             if row.name != dataset and row.ds_type != "snapshot" and row.mounted == "yes"
         ]
         descendants.sort(key=lambda name: name.count("/"), reverse=True)
         unmount_targets = descendants + [dataset]
+        own = next((row for row in rows if row.name == dataset), None)
+        if own is not None:
+            target_mounted = own.mounted == "yes"
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         log_msg(f"WARN: Could not list descendants of {dataset}: {e}")
 
@@ -1157,6 +1180,13 @@ def _unmount_one_dataset(item, repo, app):
                         any_unmounted = True
                         log_msg(f"VERB: Unmounted {target}")
                         continue
+                    if target == dataset and target_mounted is False:
+                        # The live listing says the selection is not mounted
+                        # — the page row was stale (something else already
+                        # unmounted it). The requested state already holds.
+                        any_unmounted = True
+                        log_msg(f"VERB: {target} was already unmounted")
+                        continue
                     result = subprocess.run(
                         ["sudo", "zfs", "unmount", target],
                         capture_output=True,
@@ -1172,6 +1202,13 @@ def _unmount_one_dataset(item, repo, app):
                         continue
 
                     stderr = result.stderr.strip()
+                    if "not currently mounted" in stderr:
+                        # The kernel already has the target in the requested
+                        # state — the listing raced or the mount vanished
+                        # between listing and unmount. Idempotent success.
+                        any_unmounted = True
+                        log_msg(f"VERB: {target} was already unmounted")
+                        continue
                     if "no such pool or dataset" in stderr:
                         # Orphaned mount: the kernel still lists the dataset
                         # as mounted, but its mountpoint path is unreachable.

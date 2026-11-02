@@ -817,6 +817,9 @@ class _FakeCombo:
             return self.items[self.active]
         return ""
 
+    def set_tooltip_text(self, text):
+        self.tooltip = text
+
     def connect(self, signal, handler, *args):
         self.handlers[signal] = (handler, args)
 
@@ -954,6 +957,100 @@ class TestSettingsPageBlocksizeRecommendation(unittest.TestCase):
         self.assertEqual(state.ashift, 12)
 
 
+class TestWizardStaticTooltips(unittest.TestCase):
+    """Static tooltips across the wizard's pages and nav buttons."""
+
+    def test_disk_table_headers_carry_tooltips(self):
+        pcw = _import_wizard()
+        expected = {"Use", "by-id", "Size", "Model", "Transport", "Status"}
+        self.assertEqual(set(pcw._DISK_HEADER_TOOLTIP), expected)
+        for title, tip in pcw._DISK_HEADER_TOOLTIP.items():
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+        state = _state(pcw)
+        ctx = SimpleNamespace(repository=MagicMock())
+        with patch.object(pcw, "set_column_header_tooltip") as recorder:
+            pcw._build_disks_page(MagicMock(), state, ctx, lambda: None)
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            ["Use", "by-id", "Size", "Model", "Transport", "Status"],
+        )
+        for title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+    def test_topology_radios_carry_tooltips(self):
+        pcw = _import_wizard()
+        self.assertEqual(set(pcw._TOPOLOGY_RADIO_TOOLTIPS), set(pcw.TOPOLOGIES))
+        for name, tip in pcw._TOPOLOGY_RADIO_TOOLTIPS.items():
+            self.assertTrue(tip and tip.strip(), f"{name} radio tooltip is empty")
+        self.assertTrue(pcw._RAID10_RADIO_TOOLTIP.strip())
+
+        state = _state(pcw)
+        ctx = SimpleNamespace(repository=MagicMock())
+        pcw._build_topology_page(MagicMock(), state, ctx, lambda: None)
+
+        # The first radio is built through the constructor, the rest through
+        # new_from_widget — two different mocks under mock_gtk.
+        radio_texts = [
+            c.args[0] for c in pcw.Gtk.RadioButton.return_value.set_tooltip_text.call_args_list
+        ] + [
+            c.args[0]
+            for c in pcw.Gtk.RadioButton.new_from_widget.return_value.set_tooltip_text.call_args_list
+        ]
+        for tip in list(pcw._TOPOLOGY_RADIO_TOOLTIPS.values()) + [pcw._RAID10_RADIO_TOOLTIP]:
+            self.assertIn(tip, radio_texts)
+
+    def test_settings_page_name_and_combos_carry_tooltips(self):
+        pcw = _import_wizard()
+        combos = []
+        factory = MagicMock(side_effect=lambda: combos.append(_FakeCombo()) or combos[-1])
+        state = _state(pcw)
+        state.profile_name = "general"
+        ctx = SimpleNamespace(
+            profiles={"general": GENERAL_PROFILE},
+            existing_names=set(),
+            repository=MagicMock(),
+        )
+        with patch.object(pcw.Gtk, "ComboBoxText", factory):
+            pcw._build_settings_page(MagicMock(), state, ctx, lambda: None)
+
+        entry_texts = [
+            c.args[0] for c in pcw.Gtk.Entry.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertTrue(any("Name for the new pool" in t for t in entry_texts))
+        self.assertEqual(len(combos), 2)
+        for combo in combos:
+            self.assertTrue(
+                combo.tooltip and combo.tooltip.strip(),
+                "settings combo lacks a tooltip",
+            )
+
+    def test_review_typed_entry_and_nav_buttons_carry_tooltips(self):
+        pcw = _import_wizard()
+        state = _state(pcw)
+        ctx = SimpleNamespace(repository=MagicMock())
+        pcw._build_review_page(MagicMock(), state, ctx, lambda: None)
+
+        entry_texts = [
+            c.args[0] for c in pcw.Gtk.Entry.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertTrue(any("Safety confirmation" in t for t in entry_texts))
+
+        app = _make_app()
+        driver = _WizardDriver(pcw, [CANCEL])
+        with _wizard_session(pcw, app, driver):
+            pass
+        nav_texts = [
+            c.args[0]
+            for c in driver.fake_dlg.add_button.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertIn("Return to the previous step", nav_texts)
+        self.assertIn("Continue to the next step", nav_texts)
+        self.assertTrue(any("Create the pool" in t for t in nav_texts))
+
+
 class TestHandlerGuards(unittest.TestCase):
     """Early-return guards in on_disks_create_pool."""
 
@@ -1058,10 +1155,14 @@ class TestHandlerGuards(unittest.TestCase):
 class TestCreatePoolButtonSensitivity(unittest.TestCase):
     """update_disks_button_sensitivity gates the Create Pool button."""
 
+    # The static PAGE_SPECS tooltip set_action_tooltip restores on clear.
+    _CREATE_TOOLTIP = "Open the pool-creation wizard for the selected unused disks."
+
     def _make(self):
         dp = _import_disks_page()
         app = _make_app()
         app._disks_create_pool_btn = MagicMock()
+        app._disks_create_pool_btn._action_tooltip = self._CREATE_TOOLTIP
         return dp, app
 
     def test_enabled_on_single_host(self):
@@ -1071,7 +1172,7 @@ class TestCreatePoolButtonSensitivity(unittest.TestCase):
         with patch.object(dp, "node_config", nc):
             dp.update_disks_button_sensitivity(app)
         app._disks_create_pool_btn.set_sensitive.assert_called_with(True)
-        app._disks_create_pool_btn.set_tooltip_text.assert_called_with("")
+        app._disks_create_pool_btn.set_tooltip_text.assert_called_with(self._CREATE_TOOLTIP)
 
     def test_disabled_on_two_node_compute_host(self):
         dp, app = self._make()
@@ -1093,7 +1194,7 @@ class TestCreatePoolButtonSensitivity(unittest.TestCase):
         with patch.object(dp, "node_config", nc):
             dp.update_disks_button_sensitivity(app)
         app._disks_create_pool_btn.set_sensitive.assert_called_with(True)
-        app._disks_create_pool_btn.set_tooltip_text.assert_called_with("")
+        app._disks_create_pool_btn.set_tooltip_text.assert_called_with(self._CREATE_TOOLTIP)
 
     def test_disabled_while_runner_busy(self):
         dp, app = self._make()
@@ -1123,16 +1224,18 @@ class TestCreatePoolButtonSensitivity(unittest.TestCase):
     def test_works_before_dataset_runner_exists(self):
         """Regression: page creation runs before the window builds dataset_runner."""
         dp = _import_disks_page()
+        create_btn = MagicMock()
+        create_btn._action_tooltip = self._CREATE_TOOLTIP
         app = SimpleNamespace(
             disks_view=FakeTreeView(FakeListStoreIterable(), []),
-            _disks_create_pool_btn=MagicMock(),
+            _disks_create_pool_btn=create_btn,
         )
         nc = MagicMock()
         nc.is_two_node.return_value = False
         with patch.object(dp, "node_config", nc):
             dp.update_disks_button_sensitivity(app)
         app._disks_create_pool_btn.set_sensitive.assert_called_with(True)
-        app._disks_create_pool_btn.set_tooltip_text.assert_called_with("")
+        app._disks_create_pool_btn.set_tooltip_text.assert_called_with(self._CREATE_TOOLTIP)
 
 
 class TestWizardFlow(unittest.TestCase):

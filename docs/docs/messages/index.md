@@ -1922,6 +1922,7 @@ GUI Pools tab actions: watch windows, details dump, registry add/remove/save/rev
 | `WARN: Error importing pool '...'` | Import failed | That import aborted; others continue |
 | `INFO: Pool '...' exported successfully` | Export succeeded after the Yes/No confirm | Informational |
 | `WARN: Error exporting pool '...'` | Export failed; the blocker-diagnosis/recovery path is entered | Recovery continues |
+| `INFO: ... of ... datasets in '...' are still mounted` / `INFO: All datasets in '...' are already unmounted` | Mount state after a failed export — `zpool export` unmounts the pool's datasets as part of its attempt, so the unmount work is usually already done before the failure | Informational; only the named blockers remain |
 | `INFO: Pool '...' exported successfully after resolving blockers` | Export succeeded on retry after VM/LUN/share/process teardown | Informational |
 | `INFO: Removed '...' from pool registry (unsaved)` | Pool dropped from the known list after Yes/No confirm (the pool itself is not destroyed) | Save persists |
 | `INFO: No changes to save` | The dirty flag is false | Save skipped |
@@ -2139,6 +2140,7 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 | `FATAL: Dataset ... is busy; unmount aborted` / `FATAL: Snapshot ... is busy; unmount aborted` / `FATAL: Partition ... is busy; unmount aborted` | The pre-unmount busy check found holder processes; a dialog lists them | That item's unmount aborted |
 | `FATAL: Error unmounting ...: ...` | Unmount failed with unrecognized stderr | Stop at first failure |
 | `FATAL: cannot unmount ...: ...` | Lock conflict for dataset/snapshot unmount | That unmount aborted |
+| `VERB: ... was already unmounted` | Unmount requested on a dataset the kernel reports as not mounted (stale page row or a listing race — e.g. a failed pool export already unmounted it) | Idempotent success; continue |
 | `VERB: Unmounted ...` | Dataset unmounted (selected dataset or child-first descendant; also emitted after orphaned-mount recovery) | Continue |
 | `VERB: Unmounted snapshot ...` | Unmounting the snapshot path succeeded | Continue |
 | `INFO: Detached ... from loop device ...` | Volume detach completed | Row children reloaded |
@@ -2617,7 +2619,7 @@ Dashboard tab: status overview, peer-node version check, and task cancellation.
 | `WARN: Peer node ... is running ZFSutilities ...; this node is running ...` | Two-node version mismatch detected at startup | Align versions |
 | `INFO: Peer node ... is running the same ZFSutilities version (...)` | Version parity confirmed | Informational |
 | `WARN: Dashboard data gathering failed: ...` | The background gather thread raised | UI not updated this cycle |
-| `Pool ... is configured in node.conf but not imported — offline, renamed, or replaced` | Dashboard pool-identity warning (Warnings section, two-node only): a configured pool is not imported | Check whether the pool is merely offline; if renamed or replaced, resolve the identity by hand |
+| `Pool ... is configured in node.conf but not imported — offline, renamed, or replaced` | Dashboard pool-identity warning (Warnings section, two-node only): a configured pool is not imported. Pools marked as offsite candidates in the Pools tab are exempt — their absence is expected while the pool is rotated offsite | Check whether the pool is merely offline; if renamed or replaced, resolve the identity by hand |
 | `Pool ... is imported but not configured in node.conf — an unexpected pool is serving data here` | Dashboard pool-identity warning: an imported pool is outside the node-config expected set | Add the pool to the node config (or export it) after verifying what it is |
 | `Pool ... GUID changed — map recorded ..., live ... (pool renamed or replaced)` | Dashboard pool-identity warning: the pool under a known name carries a different GUID than the newest state map recorded | Verify which physical pool carries the name; nothing is renamed automatically |
 | `INFO: Running repair-iscsi-luns...` | "Fix this" clicked on an iSCSI warning row | Repair script runs with a timeout, then refresh |

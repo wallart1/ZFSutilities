@@ -23,9 +23,11 @@ from feature_config import (
 from gi.repository import GLib, Gtk, Pango
 from gui_helpers import (
     append_treeview_copy_items,
+    attach_cell_tooltips,
     capped_treeview_scroll,
     configure_treeview_column,
     set_button_markup_red,
+    set_column_header_tooltip,
     set_monospace_font,
     set_page_tab_attention,
     setup_row_scroll,
@@ -169,6 +171,11 @@ def create_pools_page(app):
     name_col = Gtk.TreeViewColumn("Pool", name_renderer, text=COL_NAME)
     name_col.set_cell_data_func(name_renderer, _pool_name_cell_func)
     configure_treeview_column(name_col, width=120)
+    set_column_header_tooltip(
+        name_col,
+        "Pool",
+        "Pool name; registered pools are compared with live status. Click to sort.",
+    )
     name_col.set_clickable(True)
     name_col.connect("clicked", _on_pool_column_clicked, app, COL_NAME)
     app.pool_view.append_column(name_col)
@@ -179,6 +186,12 @@ def create_pools_page(app):
     offsite_col = Gtk.TreeViewColumn("Offsite", offsite_renderer, active=COL_OFFSITE)
     offsite_col.set_cell_data_func(offsite_renderer, _pool_offsite_cell_func)
     configure_treeview_column(offsite_col, width=55)
+    set_column_header_tooltip(
+        offsite_col,
+        "Offsite",
+        "Mark this registered pool as an offsite candidate; <offsite> "
+        "tokens in offsite steps and the retention prune expand to it.",
+    )
     app.pool_view.append_column(offsite_col)
 
     # Health — replaces the removed Status column at position 1
@@ -186,6 +199,11 @@ def create_pools_page(app):
     health_col = Gtk.TreeViewColumn("Health", health_renderer, text=COL_HEALTH)
     health_col.set_cell_data_func(health_renderer, _pool_health_cell_func)
     configure_treeview_column(health_col, width=80)
+    set_column_header_tooltip(
+        health_col,
+        "Health",
+        "Live health from zpool list (ONLINE, DEGRADED, IMPORTABLE, OFFLINE). Click to sort.",
+    )
     health_col.set_clickable(True)
     health_col.connect("clicked", _on_pool_column_clicked, app, COL_HEALTH)
     app.pool_view.append_column(health_col)
@@ -195,24 +213,32 @@ def create_pools_page(app):
     errors_col = Gtk.TreeViewColumn("Errors", errors_renderer, text=COL_ERRORS)
     errors_col.set_cell_data_func(errors_renderer, _pool_errors_cell_func)
     configure_treeview_column(errors_col, width=120)
+    set_column_header_tooltip(
+        errors_col,
+        "Errors",
+        "Error summary from zpool status: 'No errors' or the read/write/cksum errors found.",
+    )
     app.pool_view.append_column(errors_col)
 
     # Numeric columns — narrower, right-aligned headings and cells
     numeric_cols = [
-        ("Size", COL_SIZE, 55),
-        ("Alloc", COL_ALLOC, 55),
-        ("Free", COL_FREE, 55),
-        ("Freeing", COL_FREEING, 50),
-        ("Ckpoint", COL_CKPOINT, 50),
-        ("Frag", COL_FRAG, 45),
-        ("Cap", COL_CAP, 45),
+        ("Size", COL_SIZE, 55, "Total pool capacity. Click to sort."),
+        ("Alloc", COL_ALLOC, 55, "Allocated space. Click to sort."),
+        ("Free", COL_FREE, 55, "Free space. Click to sort."),
+        ("Freeing", COL_FREEING, 50, "Space being freed by destroyed datasets. Click to sort."),
+        ("Ckpoint", COL_CKPOINT, 50, "Space held by a pool checkpoint. Click to sort."),
+        ("Frag", COL_FRAG, 45, "Fragmentation percentage. Click to sort."),
+        ("Cap", COL_CAP, 45, "Capacity used, in percent. Click to sort."),
     ]
-    for title, col_idx, width in numeric_cols:
+    for title, col_idx, width, header_tip in numeric_cols:
         renderer = Gtk.CellRendererText()
         renderer.set_property("xalign", 1.0)
         col = Gtk.TreeViewColumn(title, renderer, text=col_idx)
         col.set_alignment(1.0)  # right-align the header
         configure_treeview_column(col, width=width)
+        # The custom header label replaces the column-button text, so the
+        # right alignment is mirrored on it.
+        set_column_header_tooltip(col, title, header_tip, xalign=1.0)
         col.set_clickable(True)
         col.connect("clicked", _on_pool_column_clicked, app, col_idx)
         if col_idx in (COL_FRAG, COL_CAP):
@@ -277,6 +303,9 @@ def create_pools_page(app):
     app._scrub_sim_spin.set_increments(1, 1)
     app._scrub_sim_spin.set_value(scrub_cfg.get("simultaneous", 1))
     app._scrub_sim_spin.connect("value-changed", _on_scrub_sim_changed, app)
+    app._scrub_sim_spin.set_tooltip_text(
+        "How many scrubs may run at once across pools (1-10); pending pools wait for a free slot."
+    )
     sim_box.pack_start(app._scrub_sim_spin, False, False, 0)
     controls_box.pack_start(sim_box, False, False, 0)
 
@@ -288,6 +317,7 @@ def create_pools_page(app):
     app._scrub_ref_spin.set_increments(1, 10)
     app._scrub_ref_spin.set_value(scrub_cfg.get("refresh_seconds", 10))
     app._scrub_ref_spin.connect("value-changed", _on_scrub_ref_changed, app)
+    app._scrub_ref_spin.set_tooltip_text("Seconds between scrub-table refreshes (1-300).")
     ref_box.pack_start(app._scrub_ref_spin, False, False, 0)
     controls_box.pack_start(ref_box, False, False, 0)
 
@@ -295,11 +325,17 @@ def create_pools_page(app):
     check_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     app._scrub_weekly_check = Gtk.CheckButton(label="System weekly scrub")
     app._scrub_weekly_check.set_active(scrub_cfg.get("system_scrub_weekly", False))
+    app._scrub_weekly_check.set_tooltip_text(
+        "Install the system-level weekly scrub schedule for every known pool."
+    )
     app._scrub_weekly_check.connect("toggled", _on_scrub_weekly_toggled, app)
     check_box.pack_start(app._scrub_weekly_check, False, False, 0)
 
     app._scrub_monthly_check = Gtk.CheckButton(label="System monthly scrub")
     app._scrub_monthly_check.set_active(scrub_cfg.get("system_scrub_monthly", False))
+    app._scrub_monthly_check.set_tooltip_text(
+        "Install the system-level monthly scrub schedule for every known pool."
+    )
     app._scrub_monthly_check.connect("toggled", _on_scrub_monthly_toggled, app)
     check_box.pack_start(app._scrub_monthly_check, False, False, 0)
     controls_box.pack_start(check_box, False, False, 0)
@@ -317,12 +353,12 @@ def create_pools_page(app):
     app.scrub_view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
     app.scrub_view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
 
-    for col_idx, title_text, width in [
-        (0, "Pool", 90),
-        (1, "Status", 70),
-        (2, "Progress", 65),
-        (3, "As Of", 130),
-        (4, "Scan Line", 150),
+    for col_idx, title_text, width, header_tip in [
+        (0, "Pool", 90, "Pool this row tracks, in scrub priority order (drag rows to reorder)."),
+        (1, "Status", 70, "Scrub state: none, pending, scrubbing, paused, or finished."),
+        (2, "Progress", 65, "Percent of the scrub completed; '-' when not scanning."),
+        (3, "As Of", 130, "When this scrub status was last observed."),
+        (4, "Scan Line", 150, "Additional information ZFS reports about the scan."),
     ]:
         r = Gtk.CellRendererText()
         r.set_property("ellipsize", 3)  # Pango.EllipsizeMode.END
@@ -330,9 +366,12 @@ def create_pools_page(app):
             set_monospace_font(r)
         col = Gtk.TreeViewColumn(title_text, r, text=col_idx)
         configure_treeview_column(col, width=width)
+        set_column_header_tooltip(col, title_text, header_tip)
         app.scrub_view.append_column(col)
 
     app.enable_treeview_copy(app.scrub_view)
+    # Cells ellipsize; the shared handler shows the full text on hover.
+    attach_cell_tooltips(app.scrub_view, app.scrub_store)
     app._ui_state.bind_treeview(app.scrub_view, "pools_scrub_view")
     app.scrub_view.get_selection().connect("changed", _on_scrub_selection_changed, app)
 

@@ -815,6 +815,9 @@ class TestDialogFlow(unittest.TestCase):
             def set_halign(self, _align):
                 pass
 
+            def set_tooltip_text(self, _text):
+                pass
+
             @classmethod
             def new_from_widget(cls, _widget):
                 return cls()
@@ -824,6 +827,85 @@ class TestDialogFlow(unittest.TestCase):
             with _handler_session(pgd, app, driver):
                 pass
         self.assertEqual(driver.runs_seen, ["pool1"])
+
+
+class TestGrowthDialogStaticTooltips(unittest.TestCase):
+    """Static tooltips on the growth dialogs' shared pieces and controls."""
+
+    def test_shared_disk_picker_headers_carry_tooltips(self):
+        """The picker shared by the growth dialogs headers every column."""
+        pgd = _import_dialogs()
+        with patch.object(pgd, "set_column_header_tooltip") as recorder:
+            pgd._build_disk_picker(_state(pgd), lambda: None, "Pick disks")
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            ["Use", "by-id", "Size", "Model", "Transport", "Status"],
+        )
+        for title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+    def test_review_scaffold_typed_entry_and_checkbox_carry_tooltips(self):
+        pgd = _import_dialogs()
+        scaffold = pgd._ReviewScaffold(MagicMock(), lambda: None)
+
+        typed_tip = scaffold.typed_entry.set_tooltip_text.call_args.args[0]
+        self.assertTrue(typed_tip.strip())
+        self.assertIn("Safety confirmation", typed_tip)
+        checkbox_tip = scaffold.confirm_checkbox.set_tooltip_text.call_args.args[0]
+        self.assertTrue(checkbox_tip.strip())
+
+    def test_pool_combo_and_topology_radios_carry_tooltips(self):
+        pgd = _import_dialogs()
+        app = _make_app()
+        driver = _AddVdevDriver(
+            pgd,
+            [lambda state: (_select_all(state), _confirm(state), CONFIRM)[2]],
+        )
+        with _handler_session(pgd, app, driver):
+            pass
+
+        combo_texts = [
+            c.args[0] for c in pgd.Gtk.ComboBoxText.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertIn("Imported pool the operation applies to", combo_texts)
+
+        radio_texts = [
+            c.args[0] for c in pgd.Gtk.RadioButton.return_value.set_tooltip_text.call_args_list
+        ] + [
+            c.args[0]
+            for c in pgd.Gtk.RadioButton.new_from_widget.return_value.set_tooltip_text.call_args_list
+        ]
+        for tip in pgd._TOPOLOGY_RADIO_TOOLTIPS.values():
+            self.assertIn(tip, radio_texts)
+
+    def test_confirm_button_tooltip_gates_on_typed_match(self):
+        """Mismatch shows the reason; a match restores the static tooltip."""
+        pgd = _import_dialogs()
+        app = _make_app()
+
+        def _select_and_mistype(state):
+            _select_all(state)
+            state.typed = "wrongpool"
+            return CONFIRM
+
+        driver = _AddVdevDriver(
+            pgd,
+            [_select_and_mistype, lambda state: (_confirm(state), CONFIRM)[1]],
+        )
+        with _handler_session(pgd, app, driver):
+            pass
+
+        texts = [
+            c.args[0]
+            for c in driver.fake_dlg.add_button.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertTrue(
+            any("Type the pool name 'pool1' to confirm" in t for t in texts),
+            "mismatch reason missing from confirm-button tooltip",
+        )
+        self.assertTrue(any("Add the selected disks" in t for t in texts))
 
 
 # ---------------------------------------------------------------------------

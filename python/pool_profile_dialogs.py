@@ -29,6 +29,8 @@ from gui_helpers import (
     configure_treeview_column,
     create_dialog,
     create_scrolled_dialog,
+    set_action_tooltip,
+    set_column_header_tooltip,
 )
 from logging_config import log_msg
 from pool_profiles import (
@@ -219,14 +221,20 @@ def show_manage_pool_profiles_dialog(app):
     view.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
 
     cols = [
-        (0, "Name", 180),
-        (1, "Blocksize", 120),
-        (2, "Description", 350),
-        (3, "Kind", 80),
+        (0, "Name", 180, "Profile name offered by the pool-create wizard and Migrate Pool"),
+        (1, "Blocksize", 120, "Pool blocksize (ashift) the profile requests at create time"),
+        (2, "Description", 350, "Free-text summary shown next to the profile name"),
+        (
+            3,
+            "Kind",
+            80,
+            "built-in profiles are seeded and cannot be deleted; custom ones are yours",
+        ),
     ]
-    for col_idx, title_text, width in cols:
+    for col_idx, title_text, width, header_tip in cols:
         renderer = Gtk.CellRendererText()
         col = Gtk.TreeViewColumn(title_text, renderer, text=col_idx)
+        set_column_header_tooltip(col, title_text, header_tip)
         configure_treeview_column(col, width=width)
         view.append_column(col)
 
@@ -242,6 +250,17 @@ def show_manage_pool_profiles_dialog(app):
     edit_btn = Gtk.Button(label="Edit")
     delete_btn = Gtk.Button(label="Delete")
     reset_btn = Gtk.Button(label="Reset to Defaults")
+
+    add_btn.set_tooltip_text("Create a new pool profile from scratch")
+    reset_btn.set_tooltip_text(
+        "Discard all custom pool profiles and restore the seeded defaults (asks for confirmation)"
+    )
+    edit_btn._action_tooltip = (
+        "Open the selected pool profile in the editor — built-ins must be saved under a new name"
+    )
+    edit_btn.set_tooltip_text(edit_btn._action_tooltip)
+    delete_btn._action_tooltip = "Delete the selected custom pool profile (asks for confirmation)"
+    delete_btn.set_tooltip_text(delete_btn._action_tooltip)
 
     btn_box.pack_start(add_btn, False, False, 0)
     btn_box.pack_start(edit_btn, False, False, 0)
@@ -280,16 +299,18 @@ def show_manage_pool_profiles_dialog(app):
         builtin = _selected_is_builtin()
         edit_btn.set_sensitive(True)
         delete_btn.set_sensitive(not builtin)
-        edit_btn.set_tooltip_text(
+        set_action_tooltip(
+            edit_btn,
             "Built-in profiles cannot be overwritten; saving edits requires a new "
             "profile name or an existing custom profile"
             if builtin
-            else ""
+            else None,
         )
-        delete_btn.set_tooltip_text(
+        set_action_tooltip(
+            delete_btn,
             "Built-in profiles cannot be deleted; use Reset to Defaults to restore them"
             if builtin
-            else ""
+            else None,
         )
 
     def _on_add(_btn):

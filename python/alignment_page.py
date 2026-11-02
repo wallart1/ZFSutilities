@@ -57,12 +57,21 @@ from charting import (
 from disk_repository import format_bytes
 from feature_config import get_alignment_survey, get_workload_profiles
 from gi.repository import GLib, Gtk, Pango
-from gui_helpers import (
+
+# The cell-tooltip machinery lives in gui_helpers now; the underscore
+# imports re-export it under the module-qualified names this page (and its
+# tests) have always referenced.
+from gui_helpers import (  # noqa: F401
+    _CELL_FIT_SLACK_PX,
     TREEVIEW_MIN_WIDTH,
+    _cell_text_fits,
+    _on_cell_query_tooltip,
+    attach_cell_tooltips,
     capped_treeview_scroll,
     configure_treeview_column,
     note_label,
     section_header,
+    set_column_header_tooltip,
     set_text_if_changed,
     show_note,
 )
@@ -82,11 +91,6 @@ _MEMORY_ROWS = (
 )
 
 _SEVERITY_MARKERS = {"OK": "✓ OK", "info": "• info", "WARN": "⚠ WARN"}
-
-# Slack subtracted from a column's width when deciding whether cell text
-# fits: the cell's focus padding plus a pixel or two, so exactly-fitting
-# text does not pop a tooltip.
-_CELL_FIT_SLACK_PX = 6
 
 
 def _fmt_pct(fraction):
@@ -367,7 +371,14 @@ def _availability_note(sample):
 
 
 def _table(
-    app, store_attr, columns, state_key, hidden_key=False, sortable=False, expand_index=None
+    app,
+    store_attr,
+    columns,
+    state_key,
+    hidden_key=False,
+    sortable=False,
+    expand_index=None,
+    header_tooltips=None,
 ):
     """Build a bound TreeView in a 20-row scrolled window; return both.
 
@@ -382,6 +393,8 @@ def _table(
     than on rendered text) keeps row identity stable while visible cells
     drift between refreshes. *sortable* makes every visible column
     clickable and sorted (text order, the schedule-page convention).
+    *header_tooltips*, when given, is a per-column tooltip list of the
+    same length as *columns* (the ``EditableListView`` convention).
 
     The view sits in its own scrolled window sized for at most 20 rows so
     one long table cannot stretch the page: fewer rows keep the natural
@@ -389,9 +402,15 @@ def _table(
     the page-level scroll restore stay as they are). The window carries
     its own horizontal scrollbar for wide columns (see
     ``gui_helpers.capped_treeview_scroll``). Cells ellipsize and expose
-    their full text through ``_on_cell_query_tooltip`` — wrapping would
-    churn row heights, which the scroll-stability design depends on.
+    their full text through ``gui_helpers.attach_cell_tooltips`` —
+    wrapping would churn row heights, which the scroll-stability design
+    depends on.
     """
+    if header_tooltips is not None and len(header_tooltips) != len(columns):
+        raise ValueError(
+            f"header_tooltips length ({len(header_tooltips)}) must match "
+            f"columns length ({len(columns)})"
+        )
     store = Gtk.ListStore(*([str] * (len(columns) + 1 if hidden_key else len(columns))))
     view = Gtk.TreeView(model=store)
     view.set_headers_visible(True)
@@ -406,59 +425,15 @@ def _table(
         if sortable:
             col.set_sort_column_id(index + offset)
             col.set_clickable(True)
+        if header_tooltips and header_tooltips[index]:
+            set_column_header_tooltip(col, title, header_tooltips[index])
         view.append_column(col)
     setattr(app, store_attr, store)
     app._ui_state.bind_treeview(view, state_key)
     view.set_size_request(-1, 60)
-    view.set_has_tooltip(True)
-    view.connect("query-tooltip", _on_cell_query_tooltip, store, offset)
+    attach_cell_tooltips(view, store, offset)
     scroll = capped_treeview_scroll(view)
     return scroll, store, view
-
-
-def _on_cell_query_tooltip(view, x, y, keyboard_mode, tooltip, store, offset):
-    """Show the full text of a hovered cell whose text does not fit.
-
-    Cells ellipsize, so the tooltip matters only where the rendered text
-    is actually clipped: the text is measured with the view's own Pango
-    context against the column's allocated width (``_cell_text_fits``).
-    Hovers over empty space, cells whose text fits, and empty cells
-    return False so GTK falls through to the default behaviour. The
-    store column is the visible column index plus *offset* (the hidden
-    identity key occupies column 0 when present).
-    """
-    bin_x, bin_y = view.convert_widget_to_bin_window_coords(x, y)
-    hit = view.get_path_at_pos(bin_x, bin_y)
-    if not hit or hit[1] is None:
-        return False
-    path, column = hit[0], hit[1]
-    col_index = view.get_columns().index(column)
-    text = store[path][col_index + offset]
-    if not isinstance(text, str) or not text:
-        return False
-    if _cell_text_fits(view, column, text):
-        return False
-    tooltip.set_text(text)
-    return True
-
-
-def _cell_text_fits(view, column, text):
-    """True when *text* renders within *column*'s width; None when unsure.
-
-    The comparison needs real integers out of GTK (the Pango layout's
-    pixel size, the column's allocated width); anything else — the
-    mocked-GTK test environment, an exotic backend — answers None so the
-    caller shows the tooltip rather than suppressing it on a guess.
-    """
-    try:
-        layout = view.create_pango_layout(text)
-        pixel_width, _pixel_height = layout.get_pixel_size()
-        column_width = column.get_width()
-    except (AttributeError, TypeError, ValueError):
-        return None
-    if not isinstance(pixel_width, int) or not isinstance(column_width, int):
-        return None
-    return pixel_width <= max(0, column_width - _CELL_FIT_SLACK_PX)
 
 
 def _reconcile_rows(store, rows, key_column=0):
@@ -524,11 +499,13 @@ def _value_row(grid, row, caption):
     """Add a caption/value row to a Gtk.Grid; return the value label.
 
     The caption ellipsizes so a long caption never pins the grid's (and
-    with it the page's) minimum width in narrow windows.
+    with it the page's) minimum width in narrow windows; its tooltip
+    carries the full caption text when it is clipped.
     """
     caption_label = Gtk.Label(label=caption)
     caption_label.set_halign(Gtk.Align.START)
     caption_label.set_ellipsize(Pango.EllipsizeMode.END)
+    caption_label.set_tooltip_text(caption)
     grid.attach(caption_label, 0, row, 1, 1)
     value = Gtk.Label(label="—")
     value.set_halign(Gtk.Align.START)
@@ -588,6 +565,18 @@ def create_alignment_view(app):
         hidden_key=True,
         sortable=True,
         expand_index=1,
+        header_tooltips=[
+            "Scan-chain level: Pool, Device, Dataset, or VM. Click to sort.",
+            "The pool, disk, dataset, or zvol probed. Click to sort.",
+            (
+                "Detected blocksize for the layer (ashift, recordsize, or volblocksize). "
+                "Click to sort."
+            ),
+            (
+                "How the blocksize was determined (probe source, PVE disk line, "
+                "guest filesystem). Click to sort."
+            ),
+        ],
     )
     box.pack_start(chain_scroll, False, False, 0)
 
@@ -637,6 +626,14 @@ def create_alignment_view(app):
         "alignment_topology_view",
         hidden_key=True,
         expand_index=4,
+        header_tooltips=[
+            "Pool the vdev group belongs to.",
+            "Vdev class (data, special, log, cache, spare).",
+            "Vdev group name (a mirror/raidz group or a bare disk).",
+            "Group type (mirror, raidz1, disk, ...).",
+            "Leaf disks in the group.",
+            "The pool's detected blocksize, from its ashift.",
+        ],
     )
     box.pack_start(topology_scroll, False, False, 0)
 
@@ -655,6 +652,13 @@ def create_alignment_view(app):
         "alignment_findings_view",
         hidden_key=True,
         expand_index=3,
+        header_tooltips=[
+            "How much the finding matters.",
+            "Scan layer that emitted the finding.",
+            "Pool, dataset, or device the finding is about.",
+            "What was observed.",
+            "What to do about it.",
+        ],
     )
     box.pack_start(findings_scroll, False, False, 0)
 
@@ -673,6 +677,14 @@ def create_alignment_view(app):
         ],
         "alignment_workload_view",
         expand_index=1,
+        header_tooltips=[
+            "Pool the workload classification describes.",
+            "Classified workload type (sequential, random-sync, mixed, ...).",
+            "The most common synchronous I/O bucket.",
+            "The most common I/O bucket overall.",
+            "ZFS operations counted since boot.",
+            "Share of prefetches served without a disk read.",
+        ],
     )
     box.pack_start(workload_scroll, False, False, 0)
 

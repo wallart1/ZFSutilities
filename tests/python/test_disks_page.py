@@ -307,6 +307,69 @@ class TestCreateDisksPage(unittest.TestCase):
         self.assertIsNotNone(app.disks_topology_view)
         self.assertIsNotNone(app._disks_pool_selector)
 
+    def test_inventory_enclosure_and_topology_headers_carry_tooltips(self):
+        """Every column header on all three tables explains its column."""
+        dp = _import_disks_page()
+        app = MagicMock()
+        app.config = {"pools": []}
+        app.enable_treeview_copy = MagicMock()
+        app.ctx = MagicMock()
+
+        with patch.object(dp, "set_column_header_tooltip") as recorder:
+            with patch.object(dp, "refresh_disks_page"):
+                dp.create_disks_page(app)
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            [
+                # Disk inventory (13)
+                "Name",
+                "by-id",
+                "Model",
+                "Serial",
+                "Size",
+                "Type",
+                "Log-sec",
+                "Phy-sec",
+                "Transport",
+                "Enclosure",
+                "Pools",
+                "SMART",
+                "Wear/Test",
+                # Enclosures (5)
+                "Name",
+                "Kind/Location",
+                "Disks",
+                "Pools",
+                "Max I/O Rate",
+                # Pool topology (7)
+                "Name",
+                "Type",
+                "State",
+                "Read",
+                "Write",
+                "Cksum",
+                "Blocksize",
+            ],
+        )
+        for title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+    def test_pool_selector_combo_carries_tooltip(self):
+        dp = _import_disks_page()
+        app = MagicMock()
+        app.config = {"pools": []}
+        app.enable_treeview_copy = MagicMock()
+        app.ctx = MagicMock()
+
+        with patch.object(dp, "refresh_disks_page"):
+            dp.create_disks_page(app)
+
+        tip = app._disks_pool_selector.set_tooltip_text.call_args.args[0]
+        self.assertTrue(tip.strip())
+        self.assertIn("Pick the pool", tip)
+
     def test_create_disks_page_is_vertically_scrollable(self):
         """The tab is wrapped in a vertical-only ScrolledWindow like other tabs."""
         dp = _import_disks_page()
@@ -1595,6 +1658,32 @@ class TestEnclosureRateDialog(unittest.TestCase):
         self.assertIsNone(result)
         dialog.destroy.assert_called_once()
 
+    def test_dialog_entries_and_save_button_carry_tooltips(self):
+        dp = _import_disks_page()
+        dialog = MagicMock()
+        entries = []
+
+        def fake_entry(*_args, **_kwargs):
+            entry = MagicMock()
+            entry.get_text.side_effect = ["fivebays"] if not entries else ["100m"]
+            entries.append(entry)
+            return entry
+
+        app = MagicMock()
+        with (
+            patch.object(dp, "create_dialog", return_value=dialog),
+            patch.object(dp.Gtk, "Entry", side_effect=fake_entry),
+        ):
+            dp._show_enclosure_rate_dialog(app, _enclosure(), {"name": "", "max_rate": ""})
+
+        self.assertEqual(len(entries), 2)
+        for entry in entries:
+            tips = entry.set_tooltip_text.call_args_list
+            self.assertEqual(len(tips), 1, "rate-dialog entry lacks a tooltip")
+            self.assertTrue(tips[0].args[0].strip())
+        save_tip = dialog.get_widget_for_response.return_value.set_tooltip_text.call_args
+        self.assertTrue(save_tip.args[0].strip())
+
 
 class TestSetEnclosureRateHandler(unittest.TestCase):
     """on_disks_set_enclosure_rate() saves config and refreshes the page."""
@@ -1651,8 +1740,13 @@ class TestSetEnclosureRateHandler(unittest.TestCase):
 class TestEnclosureRateButtonSensitivity(unittest.TestCase):
     """update_disks_button_sensitivity() gates the Set Max I/O Rate… button."""
 
+    _RATE_TOOLTIP = "Set the USB/eSATA I/O rate cap for the selected enclosure."
+
     def _app(self, with_selection):
         app = _make_app()
+        # update_disks_button_sensitivity restores each button's stored
+        # static tooltip when the gating reason clears.
+        app._disks_enclosure_rate_btn._action_tooltip = self._RATE_TOOLTIP
         if with_selection:
             app.enclosures_store = FakeListStore(
                 [["deadbeef01", "fivebays", "usb usb2/2-2", "2", "tank", "100m"]]
@@ -1669,7 +1763,7 @@ class TestEnclosureRateButtonSensitivity(unittest.TestCase):
         ):
             dp.update_disks_button_sensitivity(app)
         app._disks_enclosure_rate_btn.set_sensitive.assert_called_once_with(True)
-        app._disks_enclosure_rate_btn.set_tooltip_text.assert_called_once_with("")
+        app._disks_enclosure_rate_btn.set_tooltip_text.assert_called_once_with(self._RATE_TOOLTIP)
 
     def test_disabled_on_compute_host(self):
         dp = _import_disks_page()
@@ -1710,7 +1804,7 @@ class TestEnclosureRateButtonSensitivity(unittest.TestCase):
         ):
             dp.update_disks_button_sensitivity(app)
         app._disks_enclosure_rate_btn.set_sensitive.assert_called_once_with(True)
-        app._disks_enclosure_rate_btn.set_tooltip_text.assert_called_once_with("")
+        app._disks_enclosure_rate_btn.set_tooltip_text.assert_called_once_with(self._RATE_TOOLTIP)
 
 
 if __name__ == "__main__":

@@ -2074,3 +2074,298 @@ failure was my run racing the user's live doc edits ("file changed as
 we read it") — timing only. Full bash suite green once at the end;
 python 4355 passed with one host-load flake (profile_runner 15s
 subprocess timeout under pub2's VM load; 110/110 green in isolation).
+
+
+## 2026-10-31 — Dashboard offsite-pool false warning fixed (pub3)
+
+- User report: Dashboard warned "Pool z22tb is configured in node.conf but
+  not imported" while z22tb is an offsite candidate exported on purpose
+  (verified live on stewie: 4 pools imported, z22tb still in POOL_TARGET).
+- Fix: `_compute_pool_identity_warnings` takes optional GUI config;
+  offsite-candidate pools (`feature_config.get_offsite_candidate_names`)
+  are exempt from the not-imported shape only — imported-but-unconfigured
+  and GUID-mismatch shapes unchanged. Plumbed via
+  `_get_pool_identity_warnings(app.config)`; TTL-cache behavior unchanged.
+- 3 new tests in TestComputePoolIdentityWarnings; targeted suite + full
+  tests/run-tests green; ruff clean. Docs messages row updated.
+- Out of scope, recorded in PREEXISTING.md: bash-side
+  detect_pool_identity (check-prerequisites / setup-iscsi-targets) has the
+  same false positive and no offsite knowledge — needs a node.conf-side
+  marker decision.
+
+## 2026-10-31 (later) — root-owned __pycache__ structural fix (pub3)
+
+- User report (named PUB): root-owned files keep reappearing in
+  __pycache__. Cause: dev-host root interpreters (sudo GUI launches, sudo
+  pytest e2e legs) import repo modules and write missing/stale .pyc caches
+  as root into the dan-owned tree; sweeps delete, next root session
+  recreates. Live evidence: pub2+pub3 each held one root-owned
+  disk_surface_test.cpython-312.pyc (2026-10-30 10:26/10:47) — same file
+  swept 2026-10-26; pub's __pycache__ dir itself was root-owned then.
+- Fix: when euid==0, redirect bytecode via sys.pycache_prefix to
+  /var/cache/zfsutilities/pycache (env ZFSUTILITIES_PYCACHE_DIR; existing
+  interpreter prefix respected). Hooks: _redirect_root_pycache() before
+  product imports in python/zfsutilities_gui.py (E402 per-file-ignore
+  added) + same block in tests/python/conftest.py beside the LOCK_DIR
+  isolation. 3 new tests (TestRedirectRootPycache); docs testing.md gained
+  the root-run cache story incl. the conftest-own-pyc residual.
+- pub3 straggler unlinked; find -user root = 0 in pub3. pub2's straggler
+  NOT touched (outside working dir) — needs one unlink in that lane.
+- Lands in pub via the lane-merge cycle. Live root verification is the
+  user's (sudo GUI launch, then find -user root).
+
+## 2026-10-31 (evening) — Datasets unmount FATAL after failed export (pub3)
+
+- Incident (stewie, 0.134.0, journal-verified): 10:05:51 zpool export z22tb
+  unmounted all pool datasets as part of its attempt, then failed (blocker
+  unknown — foreground GUI actions log only to the in-app pane; no
+  rsync/send/scrub active). Datasets page kept the stale pre-export
+  "mounted" rows (no page-switch refresh branch, no timer, manual Refresh
+  only). 10:07:18 user unmounted z22tb row (stale gate passed) → kernel
+  "not currently mounted" → generic FATAL (dataset_actions.py:1208) —
+  goal state presented as failure; wrapper skipped refresh (changed=False),
+  stale display survived the user's manual child walk 10:09:43-10:10:49.
+  10:11:36 unrelated successful mount refreshed the page ("unmounted on its
+  own"); 10:12:45 export retry succeeded (zed EXPORTED 10:12:46).
+- Fix: idempotent unmount — live-listing pre-check (target mounted!=yes →
+  VERB "was already unmounted", success) + "not currently mounted" stderr
+  branch (same VERB, continue); repo.unmount_filesystem treats that stderr
+  as success (only caller: export-recovery auto-unmount); on_page_changed
+  gained the missing datasets branch (refresh on switch);
+  _try_export_with_recovery logs _log_pool_mount_state ("N of M still
+  mounted" / "All datasets ... already unmounted") after blocker collection.
+- Tests: 2 in TestUnmountDataset, 1 repo, 1 page-switch, 3 in new
+  TestLogPoolMountState. Docs: 2 new message rows.
+
+## 2026-10-31 (night) — info-panel input-prompt tint (pub3)
+
+- User ask: tint numbered operator questions ("INFO: [Input 4][Prune] ...
+  [y/N]:") bright blue (#00A3F5) in the bottom info-panel log (NOT the Logs
+  tab viewer — first reading was wrong, corrected by user, plan re-approved).
+- Fix: third tag branch in ZFSUtilitiesWindow._insert_info_line — level INFO
+  + _INPUT_PROMPT_RE ([Input N][label]) → lazily created "input_prompt" tag,
+  same start-mark/apply_tag_by_name pattern as fatal/warn. Re-renders
+  (_render_info_panel replay) keep the tint; close/withdrawn VERB lines
+  stay default-colored. 5 new tests; docs gtk-gui.md Log Panel sentence.
+
+## 2026-10-31 (late) — Tooltips campaign Phase 1: shared infrastructure (pub3)
+
+- Plan: user-given "Tooltips Plan", Phase 1 only; Phase 1 coding plan
+  approved this session. All six work items executed.
+- gui_helpers gained the three shared helpers: set_column_header_tooltip
+  (header-label pattern extracted; dashboard Date/Time + disks Wear/Test
+  migrated, logs_page left as-is per plan), attach_cell_tooltips +
+  _on_cell_query_tooltip/_cell_text_fits/_CELL_FIT_SLACK_PX (moved from
+  alignment_page, re-exported there under the old names so
+  test_alignment_page passes unedited), and set_action_tooltip
+  (reason-or-stored-static single write path).
+- add_var_row now sets the tooltip on the Entry/ComboBoxText too, not just
+  the label. EditableListView gained optional header_tooltips (Active
+  column always gets one) and Add/Remove button tooltips; consumers pass
+  lists in Phase 2.
+- PAGE_SPECS buttons are 4-tuples (label, icon, attr, tooltip); spacers
+  4×None; runner pages carry run_tooltip/cancel_tooltip; add_action_button
+  applies + stores button._action_tooltip. disks
+  update_disks_button_sensitivity and the datasets mount button now reset
+  via set_action_tooltip — static tooltips survive state changes (their
+  tests pre-set _action_tooltip and assert the static text).
+- Var-tooltip dicts: _BACKUP_VAR_TOOLTIPS (14), _OFFSITE_VAR_TOOLTIPS (11),
+  _RETENTION_MASS_DELETE_TOOLTIPS (6) — wording from the gtk-gui.md
+  variable reference; Backup's post-hoc prune-filter/allow_destructive
+  overrides kept (verified by test).
+- Cell tooltips attached to Dashboard Tasks + Active Locks and Pools scrub
+  (offset 0 everywhere; Tasks hides its trailing store columns).
+- Test notes: test_gui_infrastructure is the established home for
+  EditableListView tests (plan said test_gui_helpers; placed beside the
+  existing ones). _FakeWidgetBase in test_backup_page had a duplicate
+  no-op set_tooltip_text shadowing the new recorder — removed. Module-level
+  gui_helpers import in test_zfsutilities_gui via import_or_skip_gi (the
+  in-function AST guard requires a mock_gtk context).
+- Red-proofed: header helper, three attach sites, stored _action_tooltip,
+  all three var-tooltip dicts/widget passes. Full gate run at phase end.
+- Next: Phase 2 (nine tab pages) on user cue.
+- Full-gate round 1 found 5 failures in two suites my affected-list missed
+  because they exercise update_disks_button_sensitivity from outside
+  test_disks_page: test_pool_create_wizard (3) and
+  test_disks_page_growth_buttons (2) — same _action_tooltip-reset fix
+  applied; gate rerun green (see final report).
+
+## Tooltips Phase 2 — nine tab pages (2026-11-01)
+
+- Executed on the approved per-phase plan (user-given Tooltips Plan file);
+  Phase 1 infrastructure already committed in f1b315c.
+- Helper extensions: set_column_header_tooltip gained optional xalign
+  (right-aligned numeric headers keep their alignment through the custom
+  header label — Pools numeric 7, Datasets Used/Avail/Refer pass 1.0);
+  alignment_page._table and memory_page._device_table gained
+  header_tooltips lists (EditableListView contract: length-validated).
+- Loop-driven title lists grew to tooltip-carrying tuples (Dashboard
+  Tasks/Locks, Disks 3 tables, Datasets, Schedule, Pools scrub); hand-built
+  columns got at-site helper calls (Offsite steps, Pools pool table,
+  Retention bucket/prune). Backup's two EditableListViews pass
+  header_tooltips. _value_row captions (both copies) carry the full
+  caption — they ellipsize.
+- Sortable headers say "Click to sort." (Schedule 4, Pools 9 of 11,
+  alignment chain 4). Wording truth-passed against each column's fill code
+  (lock types read/write/destroy; retention Type = bucket full name;
+  topology Read/Write/Cksum = zpool-status error counters; Blocksize =
+  ashift-derived sector size; scrub Status states; enclosure "% of cap" =
+  busier direction) and lifted from gtk-gui.md where it describes the
+  item (pull steps, nextsnap, ZFS keys, Retain Count/Min Age, scrub
+  table, Origin/Clones, Config Summary).
+- One existing test updated: test_dashboard_page's Date/Time header test
+  asserted Type/Name/Status headers carry NO tooltip — the exact state
+  this phase changes; now asserts exactly-one non-empty tooltip each.
+- Per-suite greens: dashboard 300, backup+gui_infrastructure 207,
+  offsite 32, schedule 79, retention(+actions) 85, disks 77, pools 51,
+  datasets(+actions) 238, memory+alignment 117. ruff clean after ISC004
+  paren fixes (concatenated strings inside collections).
+- Full gate round 1: 5959 passed, 1 failed —
+  test_profile_runner::test_sigterm_cancels_running_profile timed out
+  under 6-worker load (SIGKILLed past its 15 s deadline). Passes
+  standalone (110/110 in 4 s) and in a same-worker-count python-leg rerun
+  (4397 passed); logged in PREEXISTING.md as a load-timing flake. Bash
+  legs all green in round 1.
+- Phase 2 diff ≈ +440/−105 over 12 files. Next: Phase 3 (dialogs, user
+  priority) on user cue.
+
+## Tooltips Phase 3 — all reachable dialogs (2026-11-01)
+
+- Executed on the approved per-phase plan (user-given Tooltips Plan file);
+  Phases 1 (f1b315c) and 2 (83525b9) already landed. Dialogs only — no
+  attach_cell_tooltips anywhere (no dialog renderer ellipsizes).
+- Shared constants in pool_create_wizard.py: _DISK_TABLE_HEADER_TOOLTIPS
+  (6 headers, wizard picker + growth/migrate shared picker) and
+  _TOPOLOGY_RADIO_TOOLTIPS + _RAID10_RADIO_TOOLTIP (wizard + add-vdev +
+  migrate radio groups); growth/migrate import both (import direction
+  already existed).
+- Dynamic problem-tooltip write paths migrated to set_action_tooltip so
+  statics survive the clear branch: wizard _refresh_chrome primary
+  (Back/Next/Create), growth confirm buttons x5 (add/expand/replace/detach/
+  infra), migrate Migrate button, both manage-profiles dialogs' Edit/Delete
+  (built-in reason stays the dynamic reason), disk_wipe + sever-clone
+  typed-gate handlers (typed-mismatch reason added where there was none).
+- One edit per shared block covers many dialogs: _build_disk_picker headers
+  (6 dialogs), _ReviewScaffold typed entry + log checkbox (4), target-tree
+  headers (3), dataset_actions._input_dialog gained tooltip= param (snapshot
+  name + Add Hold callers).
+- Plan-text vs code mappings: no pool rename dialog exists (pool_actions
+  Add only); recall dialog has no name entry (Profile/Schedule headers +
+  Recall button instead); "per-dataset checks" = migrate's per-property
+  replay checkboxes.
+- Additions beyond the plan file's named list (approved in the Phase-3
+  plan): pool_profile_dialogs manage dialog (4 headers + 4 buttons; its
+  editor already had field tooltips — untouched), alignment survey combos
+  (Performance tab Survey...), migrate cutover-confirm entry/Cut Over and
+  running-VMs Continue buttons. Button rule: non-stock affirmative/danger
+  buttons get tooltips; plain Cancel/Close text and stock buttons stay bare
+  (enclosure Save / surface Start + Cancel Test / recall Recall reached via
+  dialog.get_widget_for_response).
+- Test-side accommodations (campaign pattern): set_tooltip_text added to
+  hand-rolled fakes — _FakeCombo (test_pool_create_wizard, recording),
+  _FakeRadio (test_pool_growth_dialogs), _FakeEntry/_FakeCheckButton
+  (test_profile_dialogs), _FakeCombo (test_alignment_page). No existing
+  assertions changed.
+- Per-suite greens during work; full gate once at the end: 108 suites,
+  5960 passed, 0 failed (python leg 4397 passed, 18 environment skips).
+  Phase 2's profile_runner SIGTERM flake did not recur. ruff clean, 9 files
+  reformatted.
+- Phase 3 diff: +425/−42 over 15 python files + 4 test files. Next: Phase 4
+  (per-suite tooltip assertions, red-proofed) on user cue.
+
+## Tooltips Phase 4 — test assertions (2026-11-01)
+
+- Executed on the approved Phase-4-only plan. Tests-only diff: no product
+  changes (every product file's diff after this phase is byte-identical to
+  its Phase 3 state).
+- The plan file's "Update" bullet was already satisfied by the Phase 1
+  commit (f1b315c): TestPageSpecTooltipUniformity in test_action_dispatch,
+  gui_helpers helper tests, update_action_buttons + set_action_tooltip
+  tests in test_zfsutilities_gui; EditableListView header-tooltip tests
+  live in test_gui_infrastructure (~2006), not test_gui_helpers. Phase 4
+  verified those green; test_alignment_page likewise verify-only.
+- 22 test files extended. test_pool_profile_dialogs added beyond the plan
+  file's list (approved in the Phase 4 plan; its product file carried
+  Phase 3 changes the list missed).
+- Assertion patterns, all in each suite's established idiom:
+  set_column_header_tooltip recorder walks pinning full title sequences
+  (Disks 25, Pools 16, Datasets 7, Schedule 6, Retention 6, Offsite 5,
+  Performance device tables 16 + alignment view 17, wizard 6, growth
+  picker 6, manage-profiles 4+4); shared-mock membership asserts where
+  mock_gtk shares instances (Entry/CheckButton/SpinButton accumulate;
+  RadioButton splits into constructor and new_from_widget recorders);
+  EditableListView header_tooltips asserted via constructor-kwarg
+  recorders; typed-gate reason↔static asserts through set_action_tooltip
+  (growth add-vdev, disk wipe, pool-profile builtin guards).
+- Every new assertion red-proofed by blanking one tooltip at its product
+  source, rerunning only that suite, and restoring (Edit-anchored exact
+  strings). One early sed restore on backup_page.py hit the wrong "" and
+  corrupted the module docstring — repaired byte-identical within the
+  turn; lesson recorded: never blind-replace short strings in product
+  files, always Edit with a unique multi-line anchor.
+- Cross-file facts: growth/migrate import the wizard's
+  _DISK_TABLE_HEADER_TOOLTIPS/_TOPOLOGY_RADIO_TOOLTIPS, so the wizard dict
+  tests cover all three modules' wiring. pool_profile manage dialog CLEARS
+  its ListStore and refills from config — pre-seeded adapter rows don't
+  survive, so custom-selection tests must put the profile in app.config.
+- _FakeComboBoxText-style no-op mocks from Phase 3 upgraded to recorders
+  where assertions needed values (offsite _RecordingComboBoxText with
+  ClassVar; profile-dialogs recording Entry/CheckButton classes).
+- ruff check clean across tests/python; 13 touched files ruff-formatted.
+- Full gate once: 108 suites; single failure was the known PREEXISTING
+  test_sigterm_cancels_running_profile timing flake (verified green
+  standalone on this tree immediately after). PREEXISTING.md unchanged at
+  3 entries; nothing new found in Phase 4.
+- Phase 5 (gtk-gui.md Tooltips note, wrap-up gate) remains on user cue.
+
+## Tooltips Phase 5 — lint, docs, wrap-up (2026-11-01)
+
+- Campaign complete. Commit mapping: Phase 1 rode f1b315c, Phase 2 rode
+  83525b9, Phases 3+4 rode the user's a1d74dd; Phase 5 is left uncommitted
+  for the user (expected diff: gtk-gui.md + this file only).
+- Lint verification pass: ruff check clean across python/ and tests/python/;
+  all 24 campaign-touched python files already formatted (Phase 4's
+  formatting pass covered the test side).
+- docs/docs/user-guide/gtk-gui.md gained an additive "## Tooltips" section
+  after the Tabs table (headings/fields/buttons/dialogs, disabled-button
+  reasons, typed-confirm rules, click-to-sort notes, clipped-cell hover).
+  Purely additive; existing tooltip mentions and user hand-edits untouched.
+  docs integrity + docs viewer suites green after the edit.
+- PREEXISTING.md read before report: 3 entries (the plan file's "2" was
+  stale). Nothing new found in Phase 5; nothing addressed.
+- Full gate once at the end; see the turn report for the outcome.
+
+## Development-cycle wrap-up (2026-11-01, pub3 lane)
+
+- Seven-step wrap-up procedure over everything since 0.136.0 (55d4c3d):
+  commits f1b315c, 83525b9, a1d74dd plus the working tree.
+- Steps 1/4 (resolve PREEXISTING) skipped by their own precondition —
+  pub-main-only, this is the pub3 lane. No entries addressed; file read
+  before report at 3 entries.
+- Step 2: ruff check clean repo-wide; one ruff format nit found in this
+  cycle's test_zfsutilities_gui.py (missing blank line after the autouse
+  fixture) — fixed. No bash changed since 0.136.0, so shellcheck N/A.
+  Manual review of gui_helpers/zfsutilities_gui/conftest/dashboard/
+  dataset_actions/action_dispatch diffs: no policy violations; the one new
+  regex (_INPUT_PROMPT_RE) is documented per policy.
+- Step 3: coverage map of every new behavior (pycache redirect, prompt
+  tint, header/cell/action tooltips, offsite exemption, unmount
+  idempotence, page-switch datasets refresh, add_var_row tooltip,
+  header_tooltips validation) — all covered behavior-level, including
+  negative/sibling cases. No obsolete or incorrect tests found; no
+  additions needed. Affected suite (test_zfsutilities_gui) green after
+  the format fix.
+- Step 5: docs integrity 23 passed; mkdocs build clean except the known
+  MkDocs-2.0/Material warning (user's standing version stance —
+  suppressed). gtk-gui.md Dashboard Warnings list gained the missing
+  pool-identity bullet, including the offsite-candidate exemption note
+  (pre-existing docs gap, fixed in-step rather than parked). docs/site
+  rebuilt (gitignored).
+- Step 6: full gate without soaks, background, log at
+  /tmp/zfs-run-pub3-wrapup.log — 108 suites, 6010 passed, 0 failed, 18
+  python environment-preflight skips (root/zfstest e2e legs). The
+  recorded test_profile_runner cancel-deadline flake did not reappear.
+- Step 7: codebase frozen. Wrap-up touched exactly two files beyond the
+  Phase 5 leftovers: tests/python/test_zfsutilities_gui.py (+1 blank
+  line) and the gtk-gui.md Warnings bullet (+8); this notes entry.
+  Nothing committed — tree awaits the user's commit cue.

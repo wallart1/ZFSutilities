@@ -114,6 +114,91 @@ class TestAddVarRow(unittest.TestCase):
         for call in widget.connect.call_args_list:
             self.assertNotEqual(call.args[0], "scroll-event")
 
+    def test_tooltip_set_on_label_and_widget(self):
+        """The tooltip lands on the input widget, not just the label."""
+        with mock_gtk() as gtk_mock:
+            import gui_helpers
+
+            with patch.object(gui_helpers, "Gtk", gtk_mock):
+                grid = MagicMock()
+                widgets = {}
+                gui_helpers.add_var_row(
+                    grid,
+                    row=0,
+                    key="includes",
+                    variables={"includes": "tank/*"},
+                    widgets_dict=widgets,
+                    tooltip="Dataset pattern this step visits",
+                )
+
+        widgets["includes"].set_tooltip_text.assert_called_once_with(
+            "Dataset pattern this step visits"
+        )
+        gtk_mock.Label.return_value.set_tooltip_text.assert_called_once_with(
+            "Dataset pattern this step visits"
+        )
+
+    def test_no_tooltip_leaves_widget_untouched(self):
+        """Without a tooltip, neither the label nor the widget gets one."""
+        with mock_gtk() as gtk_mock:
+            import gui_helpers
+
+            with patch.object(gui_helpers, "Gtk", gtk_mock):
+                grid = MagicMock()
+                widgets = {}
+                gui_helpers.add_var_row(
+                    grid,
+                    row=0,
+                    key="includes",
+                    variables={},
+                    widgets_dict=widgets,
+                )
+
+        widgets["includes"].set_tooltip_text.assert_not_called()
+        gtk_mock.Label.return_value.set_tooltip_text.assert_not_called()
+
+
+class TestSetColumnHeaderTooltip(unittest.TestCase):
+    """set_column_header_tooltip puts the tooltip on the header label."""
+
+    def test_sets_tooltip_label_and_widget_on_column(self):
+        """The header label carries the tooltip and becomes the column widget."""
+        with mock_gtk() as gtk_mock:
+            import gui_helpers
+
+            with patch.object(gui_helpers, "Gtk", gtk_mock):
+                col = MagicMock()
+                gui_helpers.set_column_header_tooltip(col, "Wear/Test", "Wear or test state")
+
+        gtk_mock.Label.assert_called_once_with(label="Wear/Test")
+        header = gtk_mock.Label.return_value
+        header.set_tooltip_text.assert_called_once_with("Wear or test state")
+        header.show_all.assert_called_once()
+        col.set_widget.assert_called_once_with(header)
+
+
+class TestAttachCellTooltips(unittest.TestCase):
+    """attach_cell_tooltips wires the shared handler with store and offset."""
+
+    def test_connects_handler_with_default_offset(self):
+        gui_helpers = _import_gui_helpers()
+        view = MagicMock()
+        store = MagicMock()
+        gui_helpers.attach_cell_tooltips(view, store)
+        view.set_has_tooltip.assert_called_once_with(True)
+        view.connect.assert_called_once_with(
+            "query-tooltip", gui_helpers._on_cell_query_tooltip, store, 0
+        )
+
+    def test_connects_handler_with_explicit_offset(self):
+        gui_helpers = _import_gui_helpers()
+        view = MagicMock()
+        store = MagicMock()
+        gui_helpers.attach_cell_tooltips(view, store, 1)
+        view.connect.assert_called_once_with(
+            "query-tooltip", gui_helpers._on_cell_query_tooltip, store, 1
+        )
+
 
 class _FakeIter:
     """Minimal stand-in for Gtk.TextIter; records its character offset."""

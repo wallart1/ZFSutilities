@@ -164,6 +164,131 @@ class TestRetentionPagePruneLabel(unittest.TestCase):
             app._ret_prune_label_entry.set_width_chars.assert_any_call(20)
 
 
+class TestMassDeleteVarTooltips(unittest.TestCase):
+    """Every mass-delete variable row's input widget carries a tooltip."""
+
+    def _build_page(self):
+        _clear_cached_modules(
+            "retention_page",
+            "retention_actions",
+            "action_dispatch",
+            "zfsutilities_gui",
+        )
+        with temp_config_dir(), mock_gtk(fresh=True):
+            import retention_page as rp
+
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={"retention": {"default": []}},
+                script_dir="",
+                parent_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                version="dev",
+            )
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                rp.create_retention_page(app, app.ctx)
+
+            return rp, app
+
+    def test_dict_covers_every_mass_delete_variable(self):
+        rp, _app = self._build_page()
+        expected = set(rp.MASS_DELETE_VARIABLES) | {"snapshot_has", "releaseholds"}
+        self.assertEqual(set(rp._RETENTION_MASS_DELETE_TOOLTIPS), expected)
+        for key, tooltip in rp._RETENTION_MASS_DELETE_TOOLTIPS.items():
+            self.assertTrue(tooltip.strip(), f"{key} tooltip is empty")
+
+    def test_widgets_receive_tooltips(self):
+        rp, app = self._build_page()
+        # Entry widgets share one mock under mock_gtk, so the accumulated
+        # call list must hold every entry-typed row's tooltip.
+        widget = app._ret_mass_delete_widgets["includes"]
+        texts = [c.args[0] for c in widget.set_tooltip_text.call_args_list]
+        for key in ("includes", "excludes", "startwith", "endwith", "snapshot_has"):
+            self.assertIn(rp._RETENTION_MASS_DELETE_TOOLTIPS[key], texts)
+
+    def test_releaseholds_combo_receives_tooltip(self):
+        """The one Y/N mass-delete row's combo carries its dict tooltip."""
+        rp, app = self._build_page()
+        widget = app._ret_mass_delete_widgets["releaseholds"]
+        texts = [c.args[0] for c in widget.set_tooltip_text.call_args_list]
+        self.assertIn(rp._RETENTION_MASS_DELETE_TOOLTIPS["releaseholds"], texts)
+
+
+class TestRetentionStaticTooltips(unittest.TestCase):
+    """Static tooltips on the retention tables and prune controls."""
+
+    def _build_page(self, header_recorder=None):
+        _clear_cached_modules(
+            "retention_page",
+            "retention_actions",
+            "action_dispatch",
+            "zfsutilities_gui",
+        )
+        with temp_config_dir(), mock_gtk(fresh=True):
+            import retention_page as rp
+
+            rp._get_online_pool_names = MagicMock(return_value=[])
+            rp._load_pool_into_store = MagicMock()
+
+            app = MagicMock()
+            app.ctx = AppContext(
+                config={"retention": {"default": []}},
+                script_dir="",
+                parent_dir=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                version="dev",
+            )
+
+            with patch.object(rp, "import_legacy_retention", return_value=False):
+                if header_recorder is not None:
+                    with patch.object(rp, "set_column_header_tooltip", header_recorder):
+                        rp.create_retention_page(app, app.ctx)
+                else:
+                    rp.create_retention_page(app, app.ctx)
+
+            return rp, app
+
+    def test_bucket_and_prune_table_headers_carry_tooltips(self):
+        recorder = MagicMock()
+        _rp, _app = self._build_page(header_recorder=recorder)
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            ["Bucket", "Type", "Retain Count", "Min Age (days)", "Pool", "Health"],
+        )
+        for title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), f"{title} header tooltip is empty")
+
+    def test_pool_combo_and_prune_controls_carry_tooltips(self):
+        rp, app = self._build_page()
+
+        combo_texts = [
+            c.args[0] for c in rp.Gtk.ComboBoxText.return_value.set_tooltip_text.call_args_list
+        ]
+        self.assertIn("Choose the pool whose retention buckets are edited.", combo_texts)
+
+        entry_texts = [
+            c.args[0] for c in app._ret_prune_label_entry.set_tooltip_text.call_args_list
+        ]
+        self.assertTrue(
+            any("Only snapshots carrying this label are pruned" in t for t in entry_texts)
+        )
+
+        check_texts = [c.args[0] for c in app._ret_verb_check.set_tooltip_text.call_args_list]
+        self.assertTrue(any("Log why each snapshot is kept or deleted" in t for t in check_texts))
+        ignore_texts = [
+            c.args[0] for c in app._ret_ignore_retention_check.set_tooltip_text.call_args_list
+        ]
+        self.assertTrue(any("regardless of" in t for t in ignore_texts))
+
+        expander_tips = rp.Gtk.Expander.return_value.set_tooltip_text.call_args_list
+        self.assertEqual(len(expander_tips), 1)
+        self.assertTrue(expander_tips[0].args[0].strip())
+
+
 class TestRetentionPagePoolLabel(unittest.TestCase):
     """Verify the current-pool label is updated when a pool is loaded."""
 

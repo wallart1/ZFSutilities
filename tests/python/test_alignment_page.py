@@ -1275,6 +1275,9 @@ class _FakeCombo:
     def get_model(self):
         return [(choice,) for choice in self.choices]
 
+    def set_tooltip_text(self, _text):
+        pass
+
     def connect(self, *_args):
         pass
 

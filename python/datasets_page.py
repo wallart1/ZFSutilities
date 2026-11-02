@@ -33,6 +33,8 @@ from gui_helpers import (
     get_tree_selection_items,
     on_row_expanded,
     restore_expanded_rows,
+    set_action_tooltip,
+    set_column_header_tooltip,
     set_monospace_font,
     setup_row_scroll,
 )
@@ -75,6 +77,9 @@ def create_datasets_page(app):
 
     app.datasets_search_entry = Gtk.Entry()
     app.datasets_search_entry.set_placeholder_text("Search datasets...")
+    app.datasets_search_entry.set_tooltip_text(
+        "Filter the tree by name; the arrows step through the matches."
+    )
     app.datasets_search_entry.set_width_chars(1)
     search_box.pack_start(app.datasets_search_entry, True, True, 0)
 
@@ -127,15 +132,30 @@ def create_datasets_page(app):
     app.datasets_search_clear_btn.connect("clicked", lambda _b: app.datasets_search.clear())
 
     ds_columns = [
-        ("Name", 0, 150),
-        ("Created", 1, 110),
-        ("Type", 2, 70),
-        ("Used", 3, 65),
-        ("Avail", 4, 65),
-        ("Refer", 5, 65),
-        ("Origin / Clones", 6, 130),
+        (
+            "Name",
+            0,
+            150,
+            ("Dataset name; children indent under their parent (snapshots and holds nest inside)."),
+            None,
+        ),
+        ("Created", 1, 110, "When the dataset was created (zfs creation date).", None),
+        ("Type", 2, 70, "Filesystem, volume, or snapshot.", None),
+        ("Used", 3, 65, "Space used by the dataset and its children.", 1.0),
+        ("Avail", 4, 65, "Space the pool can still give this dataset.", 1.0),
+        ("Refer", 5, 65, "Space the dataset's own data references.", 1.0),
+        (
+            "Origin / Clones",
+            6,
+            130,
+            (
+                "Clones: the origin snapshot they came from. Snapshots: their "
+                "dependent clones, comma-separated. Empty for other rows."
+            ),
+            None,
+        ),
     ]
-    for title, col_idx, width in ds_columns:
+    for title, col_idx, width, header_tip, header_xalign in ds_columns:
         renderer = Gtk.CellRendererText()
         if title == "Created":
             set_monospace_font(renderer)
@@ -144,6 +164,7 @@ def create_datasets_page(app):
             renderer.set_property("xalign", 1.0)
             col.set_alignment(1.0)
         configure_treeview_column(col, width=width)
+        set_column_header_tooltip(col, title, header_tip, xalign=header_xalign)
         if col_idx == 0:
             col.set_cell_data_func(renderer, dataset_name_cell_func)
         elif col_idx == 6:
@@ -589,11 +610,11 @@ def update_ds_button_sensitivity(app):
         if not can_mount and any(
             i["type"] == "snapshot" and i.get("parent_type") == "volume" for i in items
         ):
-            mount_btn.set_tooltip_text("Snapshots of ZFS volumes cannot be mounted")
+            set_action_tooltip(mount_btn, "Snapshots of ZFS volumes cannot be mounted")
         elif not can_mount and canmount_off:
-            mount_btn.set_tooltip_text("Datasets with canmount=off cannot be mounted")
+            set_action_tooltip(mount_btn, "Datasets with canmount=off cannot be mounted")
         else:
-            mount_btn.set_tooltip_text("")
+            set_action_tooltip(mount_btn)
 
 
 # ---------------------------------------------------------------------------
@@ -754,6 +775,11 @@ def show_sever_clone_dialog(app, items):
         size=(640, 520),
     )
     sever_btn = dialog.add_button("Sever", _RESPONSE_SEVER)
+    sever_btn._action_tooltip = (
+        "Copy each selected clone zvol in full and swap the copy in under "
+        "the same name — enabled once 'sever' is typed"
+    )
+    sever_btn.set_tooltip_text(sever_btn._action_tooltip)
     sever_btn.set_sensitive(False)
 
     header = Gtk.Label()
@@ -806,10 +832,15 @@ def show_sever_clone_dialog(app, items):
     content.pack_start(typed_hint, False, False, 0)
     typed_entry = Gtk.Entry()
     typed_entry.set_hexpand(True)
+    typed_entry.set_tooltip_text(
+        "Safety confirmation: type 'sever' exactly — the button stays disabled until it matches"
+    )
     content.pack_start(typed_entry, False, False, 0)
 
     def _on_typed_changed(entry):
-        sever_btn.set_sensitive(entry.get_text().strip().lower() == _SEVER_CONFIRM_WORD)
+        typed = entry.get_text().strip().lower() == _SEVER_CONFIRM_WORD
+        sever_btn.set_sensitive(typed)
+        set_action_tooltip(sever_btn, None if typed else "Type 'sever' to enable the action")
 
     typed_entry.connect("changed", _on_typed_changed)
 

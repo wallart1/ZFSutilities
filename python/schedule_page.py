@@ -31,6 +31,7 @@ from gui_helpers import (
     configure_treeview_column,
     enable_textview_copy,
     set_button_markup_red,
+    set_column_header_tooltip,
     set_monospace_font,
     set_page_tab_attention,
     show_error_dialog,
@@ -121,15 +122,26 @@ def create_schedule_page(app):
     toggle_r.connect("toggled", _on_active_toggled, app)
     col_active = Gtk.TreeViewColumn("Active", toggle_r, active=COL_ACTIVE)
     configure_treeview_column(col_active, width=ACTIVE_COLUMN_WIDTH, min_width=ACTIVE_COLUMN_WIDTH)
+    set_column_header_tooltip(col_active, "Active", "Turn this schedule entry on or off.")
     app.schedule_view.append_column(col_active)
 
     next_run_col = None
-    for col_idx, title_text, width in [
-        (COL_NAME, "Profile Name", 140),
-        (COL_TYPE, "Type", 70),
-        (COL_SCHEDULE, "Schedule", 90),
-        (COL_COMMENT, "Comment", 180),
-        (COL_NEXT_RUN, "Next Run", 230),
+    for col_idx, title_text, width, header_tip in [
+        (COL_NAME, "Profile Name", 140, "The profile this row schedules. Click to sort."),
+        (
+            COL_TYPE,
+            "Type",
+            70,
+            "The tab this profile runs (backup, offsite, and so on). Click to sort.",
+        ),
+        (COL_SCHEDULE, "Schedule", 90, "The cron fields that decide when it fires."),
+        (
+            COL_COMMENT,
+            "Comment",
+            180,
+            "Free-text note; click a cell to edit. Click to sort.",
+        ),
+        (COL_NEXT_RUN, "Next Run", 230, "Next time the cron fields will fire. Click to sort."),
     ]:
         r = Gtk.CellRendererText()
         if col_idx == COL_COMMENT:
@@ -147,6 +159,7 @@ def create_schedule_page(app):
         if col_idx == COL_NEXT_RUN:
             next_run_col = col
         configure_treeview_column(col, width=width)
+        set_column_header_tooltip(col, title_text, header_tip)
         if col_idx in (COL_NAME, COL_TYPE, COL_COMMENT):
             col.set_sort_column_id(col_idx)
             col.set_clickable(True)
@@ -268,6 +281,10 @@ def create_schedule_page(app):
 
     sum_exp = Gtk.Expander()
     sum_exp.set_label_widget(bold_label("Config Summary"))
+    sum_exp.set_tooltip_text(
+        "JSON dump of the selected profile's full config; right-click "
+        "the text for Copy and Select All."
+    )
     app.schedule_summary_textview = Gtk.TextView()
     app.schedule_summary_textview.set_editable(False)
     app.schedule_summary_textview.set_cursor_visible(False)
