@@ -90,6 +90,23 @@ reset_mocks() {
 
 # Shared mock world: one source dataset with one snapshot, replicated to a
 # destination that carries a user hold tag on its snapshot.
+#
+# World for the destination pre-create contract: the same single source
+# dataset, but the DESTINATION does not exist — the first-copy-to-a-new-
+# destination shape where the engine's pre-create decision matters.
+_setup_precreate_world() {
+    reset_mocks
+    set_msg_level VERB
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/src/data@snap1:creation"]="1700000000"
+    _mock_zfs_snaps["pool/src/data@snap1"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_guid_lists["pool/src/data"]="guid1"
+}
+
 _setup_full_copy_world() {
     reset_mocks
     set_msg_level INFO
@@ -274,6 +291,87 @@ test_rollback_reads_remaining_tags_contract() {
 }
 
 # ---------------------------------------------------------------------------
+# Destination pre-create contract (first copy to a new destination)
+# ---------------------------------------------------------------------------
+
+test_full_copy_skips_dest_precreate_for_encrypted_source() {
+    test_start "Full copy skips destination pre-create for an encrypted source"
+    _setup_precreate_world
+    _mock_zfs_props["pool/src/data:encryption"]="aes-256-gcm"
+
+    capture_stderr
+    (
+        dryrun='Y'; doincrementals='N'; force='Y'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" "no destination pre-create"
+    if [[ "$log" == *"Would create destination dataset pool/dest/data"* ]]; then
+        test_fail "encrypted source must not pre-create the destination"
+    else
+        test_pass
+    fi
+}
+
+test_full_copy_skips_dest_precreate_for_volume_source() {
+    test_start "Full copy skips destination pre-create for a volume source"
+    _setup_precreate_world
+    _mock_zfs_props["pool/src/data:type"]="volume"
+
+    capture_stderr
+    (
+        dryrun='Y'; doincrementals='N'; force='Y'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" "no destination pre-create"
+    if [[ "$log" == *"Would create destination dataset pool/dest/data"* ]]; then
+        test_fail "volume source must not pre-create the destination"
+    else
+        test_pass
+    fi
+}
+
+test_full_copy_keeps_dest_precreate_for_plain_filesystem() {
+    test_start "Full copy keeps destination pre-create for a plain filesystem"
+    _setup_precreate_world
+
+    capture_stderr
+    (
+        dryrun='Y'; doincrementals='N'; force='Y'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" "Would create destination dataset pool/dest/data"
+    if [[ "$log" == *"no destination pre-create"* ]]; then
+        test_fail "plain filesystem must keep the destination pre-create"
+    else
+        test_pass
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Run tests
 # ---------------------------------------------------------------------------
 
@@ -283,6 +381,9 @@ test_dry_run_skips_hold_preservation
 test_capture_failure_aborts_before_any_transfer
 test_preserve_target_holds_N_skips_bookkeeping
 test_rollback_reads_remaining_tags_contract
+test_full_copy_skips_dest_precreate_for_encrypted_source
+test_full_copy_skips_dest_precreate_for_volume_source
+test_full_copy_keeps_dest_precreate_for_plain_filesystem
 
 teardown_test_env
 test_summary

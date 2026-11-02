@@ -135,6 +135,7 @@ DEBUG:  VERB:  INFO:  WARN:  FATAL:  [none]
 | `WARN: Unable to get stream size estimate of ... .....` | The `zfs send -nPc` size estimate failed; the transfer proceeds without a space check | Informational; verify destination space manually |
 | `INFO: Dry-run: stream size estimate not available for ... ... (snapshot not created)` | Dry-run only: the estimate dry-run cannot run because dry-run never created the snapshot | Informational |
 | `INFO: Dry-run: Would create destination dataset ...` | Dry-run replacement for `zfs create -pu` of the destination | Informational |
+| `VERB: ... will be created by the receive itself (source ... is a volume or encrypted — no destination pre-create).` | The destination pre-create is skipped for a volume or encrypted source: the raw stream must create the destination (a pre-created unencrypted filesystem placeholder could not be overwritten) | Informational |
 | `INFO: Dry-run: Would rebuild iSCSI LUNs for ...` | Dry-run preview of the iSCSI rebuild step after a destructive full copy | Informational |
 | `WARN: Hold reapply on ... incomplete; see messages above.` | End of run: restoring the destination holds captured before a full copy failed for at least one hold | Check the destination's holds manually |
 

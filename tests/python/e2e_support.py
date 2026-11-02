@@ -1002,10 +1002,14 @@ def offsite_onward_manifest_travel(h):
     holds included — while the destination grows NO capture store of its
     own.
     """
+    # The step sources the backup ROOT itself, so the root is a real
+    # registry dataset (first live exercise of this mutation scenario
+    # caught the hole: a literal unprefixed root never exists — every
+    # registry name carries the run's unique prefix).
+    root = h.registry.create("zfstest1", "onward")
     live = h.registry.create("zfstest1", "onward", "live")
     h.registry.create("zfstest1", "onward", "live", "data")
     store = h.registry.create("zfstest1", "onward", "live", "zfsutilities-manifests")
-    root = "zfstest1/onward"
     snap = fresh_snap()
 
     # The config says an earlier step wrote live's backups under root, so
@@ -1030,9 +1034,12 @@ def offsite_onward_manifest_travel(h):
         assert_guid_match(src_ds, dst_ds, snap)
         assert_hold(f"{src_ds}{snap}", "offsite-zfstest2")
         assert_hold(f"{dst_ds}{snap}", "offsite-zfstest1")
-    # The onward destination must not grow a capture store of its own.
-    if dataset_exists("zfstest2/onward/zfsutilities-manifests"):
-        raise E2EError("onward leg captured manifests (zfstest2/onward/zfsutilities-manifests)")
+    # The onward destination must not grow a capture store of its own:
+    # capture would place it at <dest>/<source's first component>/
+    # zfsutilities-manifests — the run-prefix component of the source.
+    dest_capture_store = f"zfstest2/{root.split('/')[1]}/zfsutilities-manifests"
+    if dataset_exists(dest_capture_store):
+        raise E2EError(f"onward leg captured manifests ({dest_capture_store})")
 
 
 @scenario("offsite-onward-dryrun", level="read")

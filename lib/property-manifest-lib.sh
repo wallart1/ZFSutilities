@@ -101,7 +101,11 @@ function propmanifest_ensure_dataset {
         return 0
     fi
     local err
-    if err=$(zfs create -p "$mds" 2>&1); then
+    # Created unmounted on purpose: propmanifest_mount is the single owner
+    # of the store's mounted life (it records the mount only when THIS
+    # library did it), so a create-time auto-mount would leak past
+    # propmanifest_finish. -u keeps the bookkeeping honest.
+    if err=$(zfs create -pu "$mds" 2>&1); then
         log_msg "VERB: Created property-manifest dataset $mds"
         _propmanifest_ok="$mds"
     else

@@ -187,6 +187,27 @@ scenarios (zfssend, zfsfullcopy, zfsrestore, the zfshold round trip) run
 protocol-off as cron/terminal would, with known raw prompts pre-fed on
 the pty and any unexpected prompt caught by the watchdog.
 
+## Backup property fidelity (j20)
+
+The **j20-property-manifest** journey walks the property-manifest
+sidecar end to end against real ZFS in one guest (clone start, j04 pool
+recipe, today's tree — the deployed template version is irrelevant
+because the feature lives in the tree under test): an engine backup
+captures per-dataset manifests with distinctive settings (local props,
+a user prop, an encrypted child's `keylocation`, a zvol whose
+`volblocksize` must stay excluded); a rename-and-restore round trip
+replays every setting and loads the key; a capture-disabled generation
+exercises the exact-miss → newest-available fallback WARN; a
+never-captured backup the pre-feature WARN with inherited defaults; the
+`zfssendoffsite` step-4 shape hops the backup pool onward with
+`property_manifest='N'` carrying the store as an ordinary dataset, and
+a restore from the offsite copy replays through the traveled store (the
+deeper store-candidate lookup) — including the hidden-key WARN that
+leaves the dataset locked — before `zfsoffsiteretain` prunes the
+store's offsite snapshots in lockstep with the data copies'. The
+journey closes by running the payload-e2e driver's offsite-onward pair,
+the mutation scenario the unprivileged container tier cannot run.
+
 ## Post-install baseline template
 
 Journeys whose scenario begins *after* installation start from a

@@ -648,9 +648,26 @@ function send-receive {
                 fi
             fi
         else
-            [[ $dryrun != 'N' ]] && log_msg \
-                "INFO: Dry-run: Would create destination dataset $destfs$restorefs"
-            [[ $dryrun = 'N' ]] && zfs create -pu "$destfs""$restorefs" > /dev/null
+            # A volume or encrypted source must create the destination
+            # itself: a pre-created unencrypted filesystem placeholder
+            # cannot be overwritten by the raw (-cw) stream (zfs receive
+            # -F refuses an encrypted stream onto an unencrypted dataset,
+            # and a filesystem cannot receive a zvol stream), so the
+            # pre-create runs only for plain filesystem sources.  Unknown
+            # probe values keep the historical pre-create.
+            local _src_type _src_encryption
+            _src_type=$(zfs get -H -o value type "$fs" 2>/dev/null || true)
+            _src_encryption=$(zfs get -H -o value encryption "$fs" 2>/dev/null || true)
+            if [[ "$_src_type" == "volume" ]] \
+                || { [[ -n "$_src_encryption" ]] \
+                    && [[ "$_src_encryption" != "off" && "$_src_encryption" != "-" ]]; }; then
+                log_msg "VERB: $destfs$restorefs will be created by the receive itself" \
+                    "(source $fs is a volume or encrypted — no destination pre-create)."
+            else
+                [[ $dryrun != 'N' ]] && log_msg \
+                    "INFO: Dry-run: Would create destination dataset $destfs$restorefs"
+                [[ $dryrun = 'N' ]] && zfs create -pu "$destfs""$restorefs" > /dev/null
+            fi
         fi
 
         # Restore resume gate. In a destructive full-copy pass, a destination

@@ -15,6 +15,7 @@ speculative coverage). The journeys themselves are described in
 | Post-install baseline (wiring, pools, product surface) | j04 | j05 verify stages |
 | Release upgrade (scan/salvage/deploy/activate) | j10, j12 (interrupted: SIGTERM early, SIGKILL mid-deploy), j19 (trust-on-first-upgrade baseline capture) | *(gap: two-node release upgrade — remote scan/salvage over SSH; interrupted variant with keys pending)* |
 | GUI payload e2e matrix (offsite chain, backup/prune/rsync orchestrators) | j11 (+dev-container/dev-host contexts) | — |
+| Backup property fidelity (manifest capture, offsite travel, replay, retention lockstep) | j20 (incl. the offsite-onward payload pair) | — |
 | First LUN round trip (new-vm-disk → iSCSI → VM config → save) | — | j05 (composed by every j06+ lab journey) |
 | Guest-probe validator (pools/datasets/PVE fetch, honest degradation) | — | j06 |
 | Archive / unarchive + target rebuild (IQN drift) | — | j07 |

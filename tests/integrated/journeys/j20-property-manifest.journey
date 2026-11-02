@@ -1,0 +1,810 @@
+#!/usr/bin/env bash
+# j20-property-manifest.journey — the backup property-fidelity journey.
+#
+# The property-manifest sidecar (campaign P1-P3): backup streams stay
+# property-less (-cw) by design, and the engine captures each dataset's
+# locally-set properties into a small dedicated filesystem next to the
+# backup copies; zfsrestore replays them after the transfer.  Unit and
+# container tiers covered the halves; this journey walks the whole chain
+# against real ZFS in one guest:
+#
+#   capture  —  an engine backup (zfssend, the zfsdailybackup shape)
+#     writes per-dataset manifests (distinctive local props + a user
+#     prop, an encrypted child's keylocation, a zvol with volblocksize
+#     excluded) and snapshots the store under the generation snapname.
+#   replay   —  rename the originals away, zfsrestore in place: every
+#     prop round-trips (zfs get -s local), the key file loads the key,
+#     volsize replays while volblocksize stays stream-carried.
+#   degrade  —  a capture-disabled second generation (exact-generation
+#     miss -> newest-available WARN), a never-captured backup (no store
+#     at all -> pre-feature WARN + inherited defaults).
+#   travel   —  the zfssendoffsite step-4 shape: an onward leg with
+#     property_manifest='N' carries the store along as an ordinary
+#     dataset; a restore from the offsite copy replays through the
+#     traveled store (the deeper store-candidate lookup), and a
+#     missing key file WARNs with the dataset left locked.
+#   lockstep —  zfsoffsiteretain prunes the store's offsite snapshots
+#     exactly like the data copies'.
+#   GUI      —  the offsite-onward e2e pair (payload-e2e-driver), the
+#     mutation scenario the unprivileged container tier cannot run.
+#
+# The chain shape mirrors production (threeamigos -> fivebays ->
+# offsite): sourcefs keeps its full name (removequalifiers=0), so the
+# copies land at <destfs>/<source pool>/<dataset> and the store at
+# <destfs>/<source pool>/zfsutilities-manifests; the onward leg copies
+# the backup pool under a second root, one component deeper.
+#
+# Guest state required: post-install baseline template (the deployed
+# product version is irrelevant — every invocation below runs from the
+# downloaded tree under test, /root/ZFSutilities, where the feature
+# lives).
+# Snapshots produced: as-cloned (post-install checkpoint),
+# pools-created.
+
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+journey_main() {
+    local gname="j20"
+    local tree=/root/ZFSutilities
+    # Fixed UTC-canonical generation names (retain parses label and
+    # bucket positionally; both offsite snaps share a month so the
+    # same-month rule must prune the older one).
+    local g1snap="@j20-g1-2026-11-01T10:00Z-d"
+    local g2snap="@j20-g2-2026-11-02T11:30Z-d"
+    local oldsnap="@j20-old1-2026-11-01T10:00Z-d"
+    local o1snap="@offsite-2026-11-01T10:00Z-d"
+    local o2snap="@offsite-2026-11-02T11:00Z-d"
+    local store2=zfstest2/zfstest1/zfsutilities-manifests
+    local hopstore=zfstest3/j20hop/zfstest1/zfsutilities-manifests
+
+    itf_step info "journey start" \
+        "j20 property manifest; sw-source=$ITF_SW_SOURCE repo=$ITF_GITHUB_REPO"
+
+    # ------------------------------------------------------------------
+    # Stages T + D: the single-node lab (clone, installed-state verify,
+    # test pools — shared builder in common.sh), then today's tree
+    # ------------------------------------------------------------------
+
+    itf_single_node_lab_main "$gname" || return 1
+    local guest_ip="$J_GUEST_IP"
+
+    itf_journey_stage_download "$guest_ip" || return 1
+
+    # zfssend prompts once with a raw read -rp BEFORE its overrides
+    # apply (autoproceed in the overrides cannot suppress it), and when
+    # a prior run left /run/zfsutilities/nextsnap state, zfssnapbuild's
+    # ask_yn fires first and eats a line — every zfssend call below is
+    # fed several newlines so any combination of prompts is satisfied.
+    # Unconsumed input is harmless; zfsrestore takes no feed
+    # (autoproceed=Y suppresses its engine gate).  Name note: guest*.txt
+    # in the run dir is the harness's guest-record namespace (read by
+    # --rerun) — journey files must not match that glob.
+    local enter_feed="$ITF_RUN_DIR/j20-enter-feed.txt"
+    printf '\n\n\n\n' > "$enter_feed"
+
+    # ------------------------------------------------------------------
+    # Stage S: sources with distinctive local settings
+    # ------------------------------------------------------------------
+
+    local s_script="$ITF_RUN_DIR/guest-setup.sh"
+    cat > "$s_script" <<'EOF'
+#!/bin/bash
+set -e
+# The raw key file (32 bytes for aes-256-gcm) the encrypted child and
+# the replay flow share.
+head -c 32 /dev/urandom > /root/j20.key
+zfs create -o compression=zstd -o recordsize=64K -o atime=off \
+    -o com.itf:j20=marker1 zfstest1/j20src
+zfs create -o compression=lz4 -o recordsize=16K -o atime=on \
+    -o com.itf:j20=marker2 zfstest1/j20src/child
+zfs create -V 16M -o compression=lz4 -o volmode=dev \
+    -o com.itf:j20=marker3 zfstest1/j20src/vol
+zfs create -o encryption=on -o keyformat=raw \
+    -o keylocation=file:///root/j20.key -o compression=zstd \
+    -o com.itf:j20=marker4 zfstest1/j20src/enc
+echo g1-data > /zfstest1/j20src/file-a.txt
+echo child-data > /zfstest1/j20src/child/file-c.txt
+echo enc-data > /zfstest1/j20src/enc/file-e.txt
+# The pre-feature-era dataset: real local settings, but its backup will
+# run with capture disabled — the store never exists for it.
+zfs create -o compression=gzip -o com.itf:j20=markerold zfstest1/j20old
+echo old-data > /zfstest1/j20old/file-o.txt
+# Restore-target containers (zfs create takes one dataset per call).
+zfs create zfstest1/j20fb
+zfs create zfstest1/j20pre
+zfs create zfstest1/j20offsite
+zfs create zfstest1/j20kl
+zfs list -o name,compression,recordsize,atime -r zfstest1/j20src zfstest1/j20old
+echo j20-setup-ok
+EOF
+    itf_guest_put "$guest_ip" "$s_script" /root/itf-j20-setup.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-setup.sh" \
+            > "$ITF_RUN_DIR/guest-setup.log" 2>&1 \
+            && grep -q j20-setup-ok "$ITF_RUN_DIR/guest-setup.log"; then
+        itf_step pass "sources with distinctive local settings" \
+            "fs + child + zvol + encrypted child (raw key file) + the" \
+            "pre-feature j20old dataset; user prop com.itf:j20 on each"
+    else
+        itf_step fail "sources with distinctive local settings" \
+            "see guest-setup.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage B1: generation-1 backup with capture — the manifests land
+    # next to the copies and the store is snapshotted in lockstep
+    # ------------------------------------------------------------------
+
+    local b1_log="$ITF_RUN_DIR/guest-backup1.log"
+    itf_guest_exec_feed "$guest_ip" "$enter_feed" \
+        "$tree/bin/zfssend 'sourcefs=zfstest1/j20src;sourcefsremovequalifiers=0;destfs=zfstest2;nextsnap=$g1snap;autoproceed=Y'" \
+        > "$b1_log" 2>&1
+    local b1_rc=$?
+    itf_artifact "backup1-transcript" "$b1_log"
+    if [[ $b1_rc -ne 0 ]]; then
+        itf_step fail "generation-1 backup captures manifests" \
+            "rc=$b1_rc — see guest-backup1.log"
+        return 1
+    fi
+    local -a want_b1=(
+        "VERB: Created property-manifest dataset $store2"
+        "VERB: Wrote property manifest for zfstest1/j20src to $store2"
+        "VERB: Wrote property manifest for zfstest1/j20src/child to $store2"
+        "VERB: Wrote property manifest for zfstest1/j20src/vol to $store2"
+        "VERB: Wrote property manifest for zfstest1/j20src/enc to $store2"
+        "VERB: Snapshot $store2$g1snap holds this generation's property manifests."
+        )
+    local -a forbid_b1=(
+        "not written"
+        "Could not create property-manifest dataset"
+        "retention lockstep may lag"
+        )
+    local marker bad_markers=""
+    for marker in "${want_b1[@]}"; do
+        grep -qF "$marker" "$b1_log" || bad_markers+=" [missing: $marker]"
+    done
+    for marker in "${forbid_b1[@]}"; do
+        grep -qiF "$marker" "$b1_log" && bad_markers+=" [unexpected: $marker]"
+    done
+    if [[ -n "$bad_markers" ]]; then
+        itf_step fail "generation-1 backup captures manifests" \
+            "$bad_markers — see guest-backup1.log"
+        return 1
+    fi
+    itf_step pass "generation-1 backup captures manifests" \
+        "per-dataset manifest lines for all four datasets; store" \
+        "snapshotted under the generation snapname"
+
+    # Manifest files and bodies, guest-side.  R1's green replay below
+    # is itself the live checksum verification (parse rejects any body
+    # that fails the header sha256), so this script asserts shape and
+    # content only.
+    local b1s_script="$ITF_RUN_DIR/guest-backup1-state.sh"
+    cat > "$b1s_script" <<EOF
+#!/bin/bash
+set -e
+# Report the failing line's context and never leak the store mount on a
+# failed assertion (the run's own unmount discipline is being pinned
+# here too).  The bodies are tiny — dump them all for diagnosis.
+trap 'rc=\$?; if [[ \$rc -ne 0 ]]; then echo "b1state-failed rc=\$rc"; for f in /$store2/*; do echo "== \$f"; cat "\$f"; done; fi; cd /; zfs unmount $store2 2>/dev/null || true' EXIT
+# Manifest file names: escaped dataset + generation snap, bare (the
+# script cds into the store's mountpoint).
+f1='zfstest1%2Fj20src$g1snap'
+fc='zfstest1%2Fj20src%2Fchild$g1snap'
+fv='zfstest1%2Fj20src%2Fvol$g1snap'
+fe='zfstest1%2Fj20src%2Fenc$g1snap'
+zfs mount $store2
+cd /$store2
+test -s "\$f1" && test -s "\$fc" && test -s "\$fv" && test -s "\$fe"
+head -1 "\$f1" | grep -q '# zfsutilities property manifest v1'
+grep -q '^# dataset: zfstest1/j20src$' "\$f1"
+grep -q '^# sha256: [0-9a-f]\{64\}$' "\$f1"
+grep -qx 'compression=zstd' "\$f1"
+grep -qx 'recordsize=65536' "\$f1"
+grep -qx 'atime=off' "\$f1"
+grep -qx 'com.itf:j20=marker1' "\$f1"
+grep -qx 'compression=lz4' "\$fc"
+grep -qx 'recordsize=16384' "\$fc"
+grep -qx 'com.itf:j20=marker3' "\$fv"
+# volblocksize must NOT ride the manifest (the raw stream carries it).
+! grep -q 'volblocksize' "\$fv"
+grep -qx 'keylocation=file:///root/j20.key' "\$fe"
+grep -qx 'com.itf:j20=marker4' "\$fe"
+! grep -q '^encryption=' "\$fe"
+cd /
+zfs unmount $store2
+zfs list -t snapshot -H -o name $store2$g1snap > /dev/null
+echo b1-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$b1s_script" /root/itf-j20-b1state.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-b1state.sh" \
+            > "$ITF_RUN_DIR/guest-backup1-state.log" 2>&1 \
+            && grep -q b1-state-ok "$ITF_RUN_DIR/guest-backup1-state.log"; then
+        itf_step pass "manifest files verified" \
+            "headers + bodies; user props ride; keylocation captured;" \
+            "volblocksize and the encryption family excluded"
+    else
+        itf_step fail "manifest files verified" \
+            "see guest-backup1-state.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage R1: rename the originals away, restore in place — every
+    # captured setting must come back (exact-generation replay)
+    # ------------------------------------------------------------------
+
+    local r1_log="$ITF_RUN_DIR/guest-restore1.log"
+    if ! itf_guest_exec "$guest_ip" \
+            "zfs rename zfstest1/j20src zfstest1/j20src.saved" \
+            > "$ITF_RUN_DIR/guest-rename.log" 2>&1; then
+        itf_step fail "originals renamed away" "see guest-rename.log"
+        return 1
+    fi
+    itf_guest_exec "$guest_ip" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;destfs=zfstest1;autoproceed=Y'" \
+        > "$r1_log" 2>&1
+    local r1_rc=$?
+    itf_artifact "restore1-transcript" "$r1_log"
+    if [[ $r1_rc -ne 0 ]]; then
+        itf_step fail "in-place restore replays properties" \
+            "rc=$r1_rc — see guest-restore1.log"
+        return 1
+    fi
+    local -a want_r1=(
+        "VERB: Replayed"
+        "VERB: Loaded the key for zfstest1/j20src/enc from its keylocation."
+        )
+    local -a forbid_r1=(
+        "keeps its inherited defaults"
+        "No property manifest for"
+        "No property-manifest store"
+        "Could not set"
+        "failed its sha256 check"
+        )
+    bad_markers=""
+    for marker in "${want_r1[@]}"; do
+        grep -qF "$marker" "$r1_log" || bad_markers+=" [missing: $marker]"
+    done
+    for marker in "${forbid_r1[@]}"; do
+        grep -qF "$marker" "$r1_log" && bad_markers+=" [unexpected: $marker]"
+    done
+    if [[ -n "$bad_markers" ]]; then
+        itf_step fail "in-place restore replays properties" \
+            "$bad_markers — see guest-restore1.log"
+        return 1
+    fi
+
+    local r1s_script="$ITF_RUN_DIR/guest-restore1-state.sh"
+    cat > "$r1s_script" <<'EOF'
+#!/bin/bash
+set -e
+# Every replayed value, from zfs get -s local (the same query capture
+# used), plus the key state the load-key step must produce.
+check() { # <dataset> <property> <want>
+    local got
+    got=$(zfs get -Hpo value -s local "$2" "$3" 2>/dev/null || true)
+    test "$got" = "$1" || { echo "MISMATCH: $3 $2=$got want $1"; exit 1; }
+}
+check zstd compression zfstest1/j20src
+check 65536 recordsize zfstest1/j20src
+check off atime zfstest1/j20src
+check marker1 com.itf:j20 zfstest1/j20src
+check lz4 compression zfstest1/j20src/child
+check 16384 recordsize zfstest1/j20src/child
+check marker2 com.itf:j20 zfstest1/j20src/child
+check lz4 compression zfstest1/j20src/vol
+check dev volmode zfstest1/j20src/vol
+check 16777216 volsize zfstest1/j20src/vol
+check marker3 com.itf:j20 zfstest1/j20src/vol
+check zstd compression zfstest1/j20src/enc
+check marker4 com.itf:j20 zfstest1/j20src/enc
+check file:///root/j20.key keylocation zfstest1/j20src/enc
+# The raw stream carries volblocksize; replay must not have set it.
+! zfs get -H -s local volblocksize zfstest1/j20src/vol | grep -q .
+keystat=$(zfs get -Hpo value keystatus zfstest1/j20src/enc)
+test "$keystat" = available
+zfs list -t snapshot -H -o name zfstest1/j20src@j20-g1-2026-11-01T10:00Z-d > /dev/null
+echo r1-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$r1s_script" /root/itf-j20-r1state.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-r1state.sh" \
+            > "$ITF_RUN_DIR/guest-restore1-state.log" 2>&1 \
+            && grep -q r1-state-ok "$ITF_RUN_DIR/guest-restore1-state.log"; then
+        itf_step pass "in-place restore replays properties" \
+            "all local values + user props round-trip; keylocation set and" \
+            "the key loaded (keystatus available); volblocksize untouched"
+    else
+        itf_step fail "in-place restore replays properties" \
+            "see guest-restore1-state.log"
+        return 1
+    fi
+
+    # Put the lab back: drop the restored tree, restore the saved
+    # originals (the generations that follow source them).
+    if itf_guest_exec "$guest_ip" \
+            "zfs destroy -r zfstest1/j20src && zfs rename zfstest1/j20src.saved zfstest1/j20src" \
+            > "$ITF_RUN_DIR/guest-unrestore.log" 2>&1; then
+        itf_step pass "originals reinstated" \
+            "restored tree destroyed; saved originals renamed back for" \
+            "the generation-2 and offsite stages"
+    else
+        itf_step fail "originals reinstated" "see guest-unrestore.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage B2: generation-2 backup with capture disabled — the
+    # exact-generation-miss fixture
+    # ------------------------------------------------------------------
+
+    local b2_log="$ITF_RUN_DIR/guest-backup2.log"
+    itf_guest_exec "$guest_ip" \
+        "echo g2-data > /zfstest1/j20src/file-b.txt" > /dev/null 2>&1
+    itf_guest_exec_feed "$guest_ip" "$enter_feed" \
+        "$tree/bin/zfssend 'sourcefs=zfstest1/j20src;sourcefsremovequalifiers=0;destfs=zfstest2;nextsnap=$g2snap;property_manifest=N;autoproceed=Y'" \
+        > "$b2_log" 2>&1
+    local b2_rc=$?
+    itf_artifact "backup2-transcript" "$b2_log"
+    local b2s_script="$ITF_RUN_DIR/guest-backup2-state.sh"
+    cat > "$b2s_script" <<EOF
+#!/bin/bash
+set -e
+trap 'cd /; zfs unmount $store2 2>/dev/null || true' EXIT
+zfs list -t snapshot -H -o name zfstest2/zfstest1/j20src$g2snap > /dev/null
+zfs mount $store2
+if compgen -G '/$store2/*$g2snap' > /dev/null; then
+    echo "unexpected generation-2 manifest files"; exit 1
+fi
+zfs unmount $store2
+if zfs list -t snapshot -H -o name $store2$g2snap > /dev/null 2>&1; then
+    echo "unexpected store generation-2 snapshot"; exit 1
+fi
+echo b2-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$b2s_script" /root/itf-j20-b2state.sh > /dev/null 2>&1
+    if [[ $b2_rc -eq 0 ]] \
+            && ! grep -qiF "property manifest" "$b2_log" \
+            && itf_guest_exec "$guest_ip" "bash /root/itf-j20-b2state.sh" \
+                > "$ITF_RUN_DIR/guest-backup2-state.log" 2>&1 \
+            && grep -q b2-state-ok "$ITF_RUN_DIR/guest-backup2-state.log"; then
+        itf_step pass "capture-disabled generation stays silent" \
+            "rc=0, generation-2 data copied, no manifest lines, no new" \
+            "manifest files, no store snapshot"
+    else
+        itf_step fail "capture-disabled generation stays silent" \
+            "see guest-backup2.log / guest-backup2-state.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage R2: restore the newest copy — the exact generation has no
+    # manifest, so replay falls back to the newest available + WARN
+    # ------------------------------------------------------------------
+
+    local r2_log="$ITF_RUN_DIR/guest-restore2.log"
+    itf_guest_exec "$guest_ip" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;destfs=zfstest1/j20fb;autoproceed=Y'" \
+        > "$r2_log" 2>&1
+    local r2_rc=$?
+    itf_artifact "restore2-transcript" "$r2_log"
+    if [[ $r2_rc -ne 0 ]]; then
+        itf_step fail "generation-miss restore degrades to newest" \
+            "rc=$r2_rc — see guest-restore2.log"
+        return 1
+    fi
+    local -a want_r2=(
+        "WARN: Exact-generation manifest $g2snap not found for zfstest1/j20src"
+        "using the newest available (zfstest1%2Fj20src$g1snap)"
+        "VERB: Replayed"
+        )
+    local -a forbid_r2=(
+        "keeps its inherited defaults"
+        "failed its sha256 check"
+        )
+    bad_markers=""
+    for marker in "${want_r2[@]}"; do
+        grep -qF "$marker" "$r2_log" || bad_markers+=" [missing: $marker]"
+    done
+    for marker in "${forbid_r2[@]}"; do
+        grep -qF "$marker" "$r2_log" && bad_markers+=" [unexpected: $marker]"
+    done
+    if [[ -n "$bad_markers" ]]; then
+        itf_step fail "generation-miss restore degrades to newest" \
+            "$bad_markers — see guest-restore2.log"
+        return 1
+    fi
+    local r2s_script="$ITF_RUN_DIR/guest-restore2-state.sh"
+    cat > "$r2s_script" <<'EOF'
+#!/bin/bash
+set -e
+trap 'zfs unmount zfstest1/j20fb/j20src 2>/dev/null || true' EXIT
+got=$(zfs get -Hpo value -s local compression zfstest1/j20fb/j20src)
+test "$got" = zstd
+got=$(zfs get -Hpo value -s local com.itf:j20 zfstest1/j20fb/j20src)
+test "$got" = marker1
+# The generation-2 DATA must be there (the fallback replayed generation-1
+# SETTINGS onto generation-2 data).
+zfs mount zfstest1/j20fb/j20src
+grep -q g2-data /zfstest1/j20fb/j20src/file-b.txt
+zfs unmount zfstest1/j20fb/j20src
+echo r2-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$r2s_script" /root/itf-j20-r2state.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-r2state.sh" \
+            > "$ITF_RUN_DIR/guest-restore2-state.log" 2>&1 \
+            && grep -q r2-state-ok "$ITF_RUN_DIR/guest-restore2-state.log"; then
+        itf_step pass "generation-miss restore degrades to newest" \
+            "WARN names the fallback manifest; generation-1 settings" \
+            "replayed onto generation-2 data"
+    else
+        itf_step fail "generation-miss restore degrades to newest" \
+            "see guest-restore2-state.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage PF: the pre-feature backup — no store exists at all
+    # ------------------------------------------------------------------
+
+    local pf_log="$ITF_RUN_DIR/guest-prefeature.log"
+    itf_guest_exec_feed "$guest_ip" "$enter_feed" \
+        "$tree/bin/zfssend 'sourcefs=zfstest1/j20old;sourcefsremovequalifiers=0;destfs=zfstest3;nextsnap=$oldsnap;property_manifest=N;autoproceed=Y'" \
+        > "$ITF_RUN_DIR/guest-pf-backup.log" 2>&1
+    local pfb_rc=$?
+    itf_guest_exec "$guest_ip" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest3/zfstest1/j20old;sourcefsremovequalifiers=2;destfs=zfstest1/j20pre;autoproceed=Y'" \
+        > "$pf_log" 2>&1
+    local pf_rc=$?
+    itf_artifact "prefeature-restore-transcript" "$pf_log"
+    if [[ $pfb_rc -ne 0 || $pf_rc -ne 0 ]]; then
+        itf_step fail "pre-feature restore WARNs to defaults" \
+            "backup rc=$pfb_rc restore rc=$pf_rc — see guest-pf-backup.log / guest-prefeature.log"
+        return 1
+    fi
+    local -a want_pf=(
+        "WARN: No property-manifest store zfstest3/zfstest1/zfsutilities-manifests — zfstest1/j20pre/j20old keeps its inherited defaults (backup predates property manifests)."
+        )
+    bad_markers=""
+    for marker in "${want_pf[@]}"; do
+        grep -qF "$marker" "$pf_log" || bad_markers+=" [missing: $marker]"
+    done
+    if [[ -n "$bad_markers" ]] \
+            || grep -qF "VERB: Replayed" "$pf_log"; then
+        itf_step fail "pre-feature restore WARNs to defaults" \
+            "${bad_markers:-[unexpected: VERB: Replayed]} — see guest-prefeature.log"
+        return 1
+    fi
+    local pfs_script="$ITF_RUN_DIR/guest-prefeature-state.sh"
+    cat > "$pfs_script" <<'EOF'
+#!/bin/bash
+set -e
+trap 'zfs unmount zfstest1/j20pre/j20old 2>/dev/null || true' EXIT
+# Nothing local on the restored dataset — the honest pre-feature shape.
+! zfs get -Hpo property,value,source -s local all zfstest1/j20pre/j20old | grep -q .
+# No store ever grew on the pre-feature destination pool either.
+! zfs list -H -o name zfstest3/zfstest1/zfsutilities-manifests > /dev/null 2>&1
+zfs mount zfstest1/j20pre/j20old
+grep -q old-data /zfstest1/j20pre/j20old/file-o.txt
+zfs unmount zfstest1/j20pre/j20old
+echo pf-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$pfs_script" /root/itf-j20-pfstate.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-pfstate.sh" \
+            > "$ITF_RUN_DIR/guest-prefeature-state.log" 2>&1 \
+            && grep -q pf-state-ok "$ITF_RUN_DIR/guest-prefeature-state.log"; then
+        itf_step pass "pre-feature restore WARNs to defaults" \
+            "names the absent store, keeps inherited defaults, replays" \
+            "nothing; the data itself is intact"
+    else
+        itf_step fail "pre-feature restore WARNs to defaults" \
+            "see guest-prefeature-state.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stages O1 + O2: the onward hop (zfssendoffsite step-4 shape) —
+    # the store rides as an ordinary dataset, capture stays off
+    # ------------------------------------------------------------------
+
+    # zfssendoffsite step-4 shape: the source pool component is stripped
+    # (qualifiers=1), so the backup root's children land directly under
+    # the offsite destination — one component deeper than the source-side
+    # store, exactly the depth the replay's deeper candidate probes.
+    local hop_cmd="sourcefs=zfstest2;sourcefsremovequalifiers=1;destfs=zfstest3/j20hop;includes=(zfstest1/j20src zfstest1/zfsutilities-manifests);property_manifest=N;autoproceed=Y"
+    local o1_log="$ITF_RUN_DIR/guest-onward1.log"
+    itf_guest_exec_feed "$guest_ip" "$enter_feed" \
+        "$tree/bin/zfssend '$hop_cmd;nextsnap=$o1snap'" \
+        > "$o1_log" 2>&1
+    local o1_rc=$?
+    itf_artifact "onward1-transcript" "$o1_log"
+    local o2_log="$ITF_RUN_DIR/guest-onward2.log"
+    itf_guest_exec_feed "$guest_ip" "$enter_feed" \
+        "$tree/bin/zfssend '$hop_cmd;nextsnap=$o2snap'" \
+        > "$o2_log" 2>&1
+    local o2_rc=$?
+    itf_artifact "onward2-transcript" "$o2_log"
+    if [[ $o1_rc -ne 0 || $o2_rc -ne 0 ]]; then
+        itf_step fail "onward legs carry the manifests dataset" \
+            "rc=$o1_rc/$o2_rc — see guest-onward1.log / guest-onward2.log"
+        return 1
+    fi
+    if grep -qiF "property manifest" "$o1_log" "$o2_log"; then
+        itf_step fail "onward legs carry the manifests dataset" \
+            "capture lines in an onward leg — see guest-onward1.log / guest-onward2.log"
+        return 1
+    fi
+    local o12s_script="$ITF_RUN_DIR/guest-onward-state.sh"
+    cat > "$o12s_script" <<EOF
+#!/bin/bash
+set -e
+trap 'cd /; zfs unmount $hopstore 2>/dev/null || true' EXIT
+# Two offsite generations on the traveled copy AND the traveled store.
+for ds in zfstest3/j20hop/zfstest1/j20src $hopstore; do
+    zfs list -t snapshot -H -o name "\$ds$o1snap" > /dev/null
+    zfs list -t snapshot -H -o name "\$ds$o2snap" > /dev/null
+done
+# The traveled store carries the generation-1 manifest files.
+zfs mount $hopstore
+test -s "/$hopstore/zfstest1%2Fj20src$g1snap"
+# An onward-leg capture would have written manifests keyed by the offsite
+# generation — none may exist (copies hold no local properties).
+! compgen -G "/$hopstore/*offsite-*" > /dev/null
+zfs unmount $hopstore
+echo onward-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$o12s_script" /root/itf-j20-onwardstate.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-onwardstate.sh" \
+            > "$ITF_RUN_DIR/guest-onward-state.log" 2>&1 \
+            && grep -q onward-state-ok "$ITF_RUN_DIR/guest-onward-state.log"; then
+        itf_step pass "onward legs carry the manifests dataset" \
+            "store traveled under the hop root with both offsite" \
+            "generations; manifest files intact; no capture store grown"
+    else
+        itf_step fail "onward legs carry the manifests dataset" \
+            "see guest-onward-state.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage R3: restore from the offsite copy — replay must find the
+    # TRAVELED store (the deeper store-candidate lookup)
+    # ------------------------------------------------------------------
+
+    local r3_log="$ITF_RUN_DIR/guest-restore3.log"
+    itf_guest_exec "$guest_ip" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest3/j20hop/zfstest1/j20src;sourcefsremovequalifiers=3;destfs=zfstest1/j20offsite;autoproceed=Y'" \
+        > "$r3_log" 2>&1
+    local r3_rc=$?
+    itf_artifact "restore3-transcript" "$r3_log"
+    if [[ $r3_rc -ne 0 ]]; then
+        itf_step fail "offsite restore replays via the traveled store" \
+            "rc=$r3_rc — see guest-restore3.log"
+        return 1
+    fi
+    local -a want_r3=(
+        "using the newest available (zfstest1%2Fj20src$g1snap)"
+        "VERB: Replayed"
+        "VERB: Loaded the key for zfstest1/j20offsite/j20src/enc from its keylocation."
+        )
+    local -a forbid_r3=(
+        "No property-manifest store"
+        "keeps its inherited defaults"
+        )
+    bad_markers=""
+    for marker in "${want_r3[@]}"; do
+        grep -qF "$marker" "$r3_log" || bad_markers+=" [missing: $marker]"
+    done
+    for marker in "${forbid_r3[@]}"; do
+        grep -qF "$marker" "$r3_log" && bad_markers+=" [unexpected: $marker]"
+    done
+    if [[ -n "$bad_markers" ]]; then
+        itf_step fail "offsite restore replays via the traveled store" \
+            "$bad_markers — see guest-restore3.log"
+        return 1
+    fi
+    local r3s_script="$ITF_RUN_DIR/guest-restore3-state.sh"
+    cat > "$r3s_script" <<'EOF'
+#!/bin/bash
+set -e
+got=$(zfs get -Hpo value -s local compression zfstest1/j20offsite/j20src)
+test "$got" = zstd
+got=$(zfs get -Hpo value -s local com.itf:j20 zfstest1/j20offsite/j20src)
+test "$got" = marker1
+got=$(zfs get -Hpo value -s local keylocation zfstest1/j20offsite/j20src/enc)
+test "$got" = file:///root/j20.key
+keystat=$(zfs get -Hpo value keystatus zfstest1/j20offsite/j20src/enc)
+test "$keystat" = available
+echo r3-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$r3s_script" /root/itf-j20-r3state.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-r3state.sh" \
+            > "$ITF_RUN_DIR/guest-restore3-state.log" 2>&1 \
+            && grep -q r3-state-ok "$ITF_RUN_DIR/guest-restore3-state.log"; then
+        itf_step pass "offsite restore replays via the traveled store" \
+            "depth-2 store lookup found the traveled manifests;" \
+            "settings + keylocation round-trip, key loaded"
+    else
+        itf_step fail "offsite restore replays via the traveled store" \
+            "see guest-restore3-state.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage KL: the missing key file — keylocation still set, key NOT
+    # loaded, WARN, dataset stays locked
+    # ------------------------------------------------------------------
+
+    local kl_log="$ITF_RUN_DIR/guest-keylost.log"
+    itf_guest_exec "$guest_ip" "mv /root/j20.key /root/j20.key.hidden" \
+        > /dev/null 2>&1
+    itf_guest_exec "$guest_ip" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest3/j20hop/zfstest1/j20src/enc;sourcefsremovequalifiers=4;destfs=zfstest1/j20kl;autoproceed=Y'" \
+        > "$kl_log" 2>&1
+    local kl_rc=$?
+    itf_artifact "keylost-transcript" "$kl_log"
+    itf_guest_exec "$guest_ip" "mv /root/j20.key.hidden /root/j20.key" \
+        > /dev/null 2>&1
+    if [[ $kl_rc -ne 0 ]]; then
+        itf_step fail "missing key file WARNs, stays locked" \
+            "rc=$kl_rc — see guest-keylost.log"
+        return 1
+    fi
+    local -a want_kl=(
+        "WARN: Could not load the key for zfstest1/j20kl/enc"
+        "the dataset stays locked until its key is loaded"
+        )
+    local -a forbid_kl=(
+        "Could not set keylocation"
+        "FATAL"
+        )
+    bad_markers=""
+    for marker in "${want_kl[@]}"; do
+        grep -qF "$marker" "$kl_log" || bad_markers+=" [missing: $marker]"
+    done
+    for marker in "${forbid_kl[@]}"; do
+        grep -qF "$marker" "$kl_log" && bad_markers+=" [unexpected: $marker]"
+    done
+    if [[ -n "$bad_markers" ]]; then
+        itf_step fail "missing key file WARNs, stays locked" \
+            "$bad_markers — see guest-keylost.log"
+        return 1
+    fi
+    local kls_script="$ITF_RUN_DIR/guest-keylost-state.sh"
+    cat > "$kls_script" <<'EOF'
+#!/bin/bash
+set -e
+got=$(zfs get -Hpo value -s local keylocation zfstest1/j20kl/enc)
+test "$got" = file:///root/j20.key
+keystat=$(zfs get -Hpo value keystatus zfstest1/j20kl/enc)
+test "$keystat" = unavailable
+echo kl-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$kls_script" /root/itf-j20-klstate.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-klstate.sh" \
+            > "$ITF_RUN_DIR/guest-keylost-state.log" 2>&1 \
+            && grep -q kl-state-ok "$ITF_RUN_DIR/guest-keylost-state.log"; then
+        itf_step pass "missing key file WARNs, stays locked" \
+            "keylocation set, load-key WARNed, keystatus unavailable —" \
+            "the documented degraded shape"
+    else
+        itf_step fail "missing key file WARNs, stays locked" \
+            "see guest-keylost-state.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage P: retention lockstep — the offsite pruner treats the
+    # stores exactly like the data copies
+    # ------------------------------------------------------------------
+
+    local p_log="$ITF_RUN_DIR/guest-prune.log"
+    # The lab's offsite snaps carry no counterpart holds (zfssendoffsite
+    # applies those in its own loop; the journey drives the engine legs
+    # directly), so every deletion hits delsnap's zfscheckagainst rc-5
+    # confirm — the interactive operator answers y at each one (EOF
+    # defaults to N by design, the conservative cron default).
+    local y_feed="$ITF_RUN_DIR/j20-prune-feed.txt"
+    printf 'y\n%.0s' {1..40} > "$y_feed"
+    itf_guest_exec_feed "$guest_ip" "$y_feed" "$tree/bin/zfsoffsiteretain" \
+        > "$p_log" 2>&1
+    local p_rc=$?
+    itf_artifact "prune-transcript" "$p_log"
+    if [[ $p_rc -ne 0 ]]; then
+        itf_step fail "offsite retention prunes the store in lockstep" \
+            "rc=$p_rc — see guest-prune.log"
+        return 1
+    fi
+    local -a want_p=(
+        "INFO: Pruning offsite snapshots from zfstest2."
+        "INFO: Pruning offsite snapshots from zfstest3."
+        )
+    bad_markers=""
+    for marker in "${want_p[@]}"; do
+        grep -qF "$marker" "$p_log" || bad_markers+=" [missing: $marker]"
+    done
+    if [[ -n "$bad_markers" ]]; then
+        itf_step fail "offsite retention prunes the store in lockstep" \
+            "$bad_markers — see guest-prune.log"
+        return 1
+    fi
+    local ps_script="$ITF_RUN_DIR/guest-prune-state.sh"
+    cat > "$ps_script" <<EOF
+#!/bin/bash
+set -e
+# Same-month rule: the older offsite generation must be gone everywhere
+# it exists — data copies, source-side store, traveled store alike.
+# (-r takes one dataset per listing; walk both pools separately.)
+{ zfs list -t snapshot -H -o name -r zfstest2 2>/dev/null \
+    ; zfs list -t snapshot -H -o name -r zfstest3 2>/dev/null; } \
+    | grep -F '$o1snap' | grep . && {
+    echo "older offsite generation survived somewhere"; exit 1; }
+for ds in zfstest2/zfstest1/j20src $store2 zfstest3/j20hop/zfstest1/j20src $hopstore; do
+    zfs list -t snapshot -H -o name "\$ds$o2snap" > /dev/null
+done
+echo prune-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$ps_script" /root/itf-j20-prunestate.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-prunestate.sh" \
+            > "$ITF_RUN_DIR/guest-prune-state.log" 2>&1 \
+            && grep -q prune-state-ok "$ITF_RUN_DIR/guest-prune-state.log"; then
+        itf_step pass "offsite retention prunes the store in lockstep" \
+            "older same-month generation pruned pool-wide; the newer" \
+            "retained on data and both stores alike"
+    else
+        itf_step fail "offsite retention prunes the store in lockstep" \
+            "see guest-prune-state.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage E2E: the GUI-payload offsite-onward pair — the mutation
+    # scenario the unprivileged container tier cannot run
+    # ------------------------------------------------------------------
+
+    local e2e_log="$ITF_RUN_DIR/guest-payload-e2e.log"
+    if itf_guest_exec "$guest_ip" \
+            "cd /root/ZFSutilities && python3 tests/integrated/e2e/payload-e2e-driver.py --scenarios offsite-onward-" \
+            > "$e2e_log" 2>&1; then
+        if grep -qE 'payload e2e: [0-9]+ passed, 0 failed, [0-9]+ total' "$e2e_log" \
+                && grep -q 'offsite-onward-leg-manifest-travel' "$e2e_log" \
+                && grep -q 'offsite-onward-dryrun' "$e2e_log"; then
+            itf_step pass "payload e2e offsite-onward pair" \
+                "mutation + read scenarios green (see guest-payload-e2e.log)"
+            itf_artifact "payload-e2e" "$e2e_log"
+        else
+            itf_step fail "payload e2e offsite-onward pair" \
+                "footer or scenario lines missing — see guest-payload-e2e.log"
+            itf_artifact "payload-e2e" "$e2e_log"
+            return 1
+        fi
+    else
+        itf_step fail "payload e2e offsite-onward pair" \
+            "see guest-payload-e2e.log"
+        itf_artifact "payload-e2e" "$e2e_log"
+        return 1
+    fi
+
+    # The pair must leave nothing behind in the pools it borrowed.
+    local leftover_log="$ITF_RUN_DIR/guest-pool-residue.log"
+    # shellcheck disable=SC2016  # the $ expansions run in the guest
+    if itf_guest_exec "$guest_ip" \
+            'zfs list -H -o name -r zfstest1 zfstest2 zfstest3 | grep -qE "onward|test-e2e-"' \
+            > "$leftover_log" 2>&1; then
+        itf_step fail "pool residue check" \
+            "onward/test-e2e-* datasets left behind"
+        itf_artifact "pool-residue" "$leftover_log"
+        return 1
+    else
+        itf_step pass "pool residue check" \
+            "no onward or test-e2e-* datasets remain"
+    fi
+
+    itf_step info "journey stage reached" \
+        "property-manifest fidelity validated end to end: capture," \
+        "exact-generation replay, generation-miss and pre-feature" \
+        "degradation, offsite travel through the deeper store lookup," \
+        "missing-key WARN, retention lockstep, and the GUI onward pair"
+    return 0
+}

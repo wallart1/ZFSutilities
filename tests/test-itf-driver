@@ -193,7 +193,7 @@ test_journey_list_lists_committed_journeys() {
         j13-iscsi-storage-restore j14-iscsi-fence-recover \
         j15-iscsi-boot-keys j16-iscsi-total-loss \
         j17-iscsi-interrupted-ops j18-compute-power-events \
-        j19-baseline-capture; do
+        j19-baseline-capture j20-property-manifest; do
         assert_contains "$run_out" "$j"
     done
 }

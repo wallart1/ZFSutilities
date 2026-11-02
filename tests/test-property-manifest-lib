@@ -258,7 +258,7 @@ test_ensure_creates_once() {
     reset_state
     propmanifest_ensure_dataset backup/tank/zfsutilities-manifests
     propmanifest_ensure_dataset backup/tank/zfsutilities-manifests
-    if [[ "$(grep -c 'zfs create -p backup/tank/zfsutilities-manifests' \
+    if [[ "$(grep -c 'zfs create -pu backup/tank/zfsutilities-manifests' \
             "$_zfs_capture_file")" != "1" ]]; then
         test_fail "expected exactly one zfs create -p"
         return
@@ -351,7 +351,7 @@ test_capture_happy_path() {
     assert_contains "$(get_log)" "VERB: Wrote property manifest for tank/src/data to backup/tank/zfsutilities-manifests (5 properties)."
     local capture
     capture=$(cat "$_zfs_capture_file")
-    if [[ "$capture" != *"zfs create -p backup/tank/zfsutilities-manifests"* \
+    if [[ "$capture" != *"zfs create -pu backup/tank/zfsutilities-manifests"* \
           || "$capture" != *"zfs mount backup/tank/zfsutilities-manifests"* \
           || "$capture" != *"zfs snapshot backup/tank/zfsutilities-manifests@daily-20261102T0500Z-d"* \
           || "$capture" != *"zfslock_release"* ]]; then
