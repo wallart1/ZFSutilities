@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.137.0
+
+*Released 2026-11-01*
+
+### Added
+
+- **Tooltips across the GUI.** Nearly everything explains itself on hover:
+  every column heading, entry field, and clickable widget on the nine tab
+  pages, and every dialog opened from them — including the Logs tab's
+  tables. A disabled action button shows the reason it is unavailable
+  (and the static description returns when the reason clears); entries
+  that ask you to type a pool or disk name to confirm a destructive
+  operation explain that rule on the entry itself; sortable column
+  headings note that clicking them sorts the table; table cells whose
+  text is clipped with an ellipsis show their full text on hover.
+
+### Fixed
+
+- **Offsite pools are no longer flagged as missing.** The Dashboard's
+  pool-identity warning exempts pools marked as offsite candidates in the
+  Pools tab from the "configured but not imported" shape — an offsite
+  rotation pool is routinely disconnected by design. The other identity
+  shapes still fire for offsite pools: an offsite pool that is imported
+  under a known name with a changed GUID still warns.
+- **Root runs stop leaving root-owned `__pycache__` behind.** The GUI
+  entry and the sudo pytest legs redirect root bytecode caching to
+  `/var/cache/zfsutilities/pycache` (override with the
+  `ZFSUTILITIES_PYCACHE_DIR` environment variable; an interpreter-level
+  `PYTHONPYCACHEPREFIX` is respected and left alone), so root-owned cache
+  files stop reappearing in user-owned checkouts. One residual: the first
+  sudo pytest import after a `conftest.py` edit can still leave one
+  root-owned `conftest...pyc`.
+- **Unmounting after a failed pool export is idempotent.** A failed
+  `zpool export` has usually already unmounted the pool's datasets as
+  part of its attempt, so the follow-up unmount no longer reports failure
+  on a target the kernel answers "not currently mounted": the repository
+  layer treats that answer as success, and the Datasets page skips the
+  call entirely when its live listing already shows the selection
+  unmounted (a stale page row). New `INFO`/`VERB` messages document the
+  mount state on that path, and the Datasets page re-reads its tree on
+  every switch to the tab so externally-changed mount state cannot
+  linger.
+
+### Changed
+
+- **Numbered input prompts are tinted bright blue.** The log panel colors
+  the `INFO: [Input N][label]` questions the GUI is waiting on you to
+  answer, so they stand out while reviewing the log.
+
+### Tests
+
+- Per-surface tooltip assertion suites across the tab pages, dialogs, and
+  shared helpers (header labels, stored static action tooltips with
+  runtime disabled-state reasons, clipped-cell hover behavior); dashboard
+  pool-identity exemption (offsite exempt, sibling non-offsite still
+  warns, GUID mismatch still warns); unmount idempotence at the
+  repository layer and the stale-row skip on the Datasets page; root
+  bytecode redirect (env override, interpreter prefix respected, non-root
+  no-op); input-prompt tint tag.
+
+### Documentation
+
+- New **Tooltips** section in the GTK GUI guide; the Dashboard's
+  Warnings list now enumerates the pool-identity warnings including the
+  offsite-candidate exemption; the input-prompt tint is described with
+  the log panel. The messages reference documents the new export/unmount
+  `INFO`/`VERB` messages. The developer testing guide documents the root
+  bytecode cache redirect and its residual.
+
 ## 0.136.0
 
 *Released 2026-10-30*

@@ -1986,3 +1986,55 @@ F-040 draft+execute in-phase; F-034/F-037 promote to proposals.
   standalone on this tree immediately after). PREEXISTING.md unchanged at
   3 entries; nothing new found in Phase 4.
 - Phase 5 (gtk-gui.md Tooltips note, wrap-up gate) remains on user cue.
+
+## Tooltips Phase 5 — lint, docs, wrap-up (2026-11-01)
+
+- Campaign complete. Commit mapping: Phase 1 rode f1b315c, Phase 2 rode
+  83525b9, Phases 3+4 rode the user's a1d74dd; Phase 5 is left uncommitted
+  for the user (expected diff: gtk-gui.md + this file only).
+- Lint verification pass: ruff check clean across python/ and tests/python/;
+  all 24 campaign-touched python files already formatted (Phase 4's
+  formatting pass covered the test side).
+- docs/docs/user-guide/gtk-gui.md gained an additive "## Tooltips" section
+  after the Tabs table (headings/fields/buttons/dialogs, disabled-button
+  reasons, typed-confirm rules, click-to-sort notes, clipped-cell hover).
+  Purely additive; existing tooltip mentions and user hand-edits untouched.
+  docs integrity + docs viewer suites green after the edit.
+- PREEXISTING.md read before report: 3 entries (the plan file's "2" was
+  stale). Nothing new found in Phase 5; nothing addressed.
+- Full gate once at the end; see the turn report for the outcome.
+
+## Development-cycle wrap-up (2026-11-01, pub3 lane)
+
+- Seven-step wrap-up procedure over everything since 0.136.0 (55d4c3d):
+  commits f1b315c, 83525b9, a1d74dd plus the working tree.
+- Steps 1/4 (resolve PREEXISTING) skipped by their own precondition —
+  pub-main-only, this is the pub3 lane. No entries addressed; file read
+  before report at 3 entries.
+- Step 2: ruff check clean repo-wide; one ruff format nit found in this
+  cycle's test_zfsutilities_gui.py (missing blank line after the autouse
+  fixture) — fixed. No bash changed since 0.136.0, so shellcheck N/A.
+  Manual review of gui_helpers/zfsutilities_gui/conftest/dashboard/
+  dataset_actions/action_dispatch diffs: no policy violations; the one new
+  regex (_INPUT_PROMPT_RE) is documented per policy.
+- Step 3: coverage map of every new behavior (pycache redirect, prompt
+  tint, header/cell/action tooltips, offsite exemption, unmount
+  idempotence, page-switch datasets refresh, add_var_row tooltip,
+  header_tooltips validation) — all covered behavior-level, including
+  negative/sibling cases. No obsolete or incorrect tests found; no
+  additions needed. Affected suite (test_zfsutilities_gui) green after
+  the format fix.
+- Step 5: docs integrity 23 passed; mkdocs build clean except the known
+  MkDocs-2.0/Material warning (user's standing version stance —
+  suppressed). gtk-gui.md Dashboard Warnings list gained the missing
+  pool-identity bullet, including the offsite-candidate exemption note
+  (pre-existing docs gap, fixed in-step rather than parked). docs/site
+  rebuilt (gitignored).
+- Step 6: full gate without soaks, background, log at
+  /tmp/zfs-run-pub3-wrapup.log — 108 suites, 6010 passed, 0 failed, 18
+  python environment-preflight skips (root/zfstest e2e legs). The
+  recorded test_profile_runner cancel-deadline flake did not reappear.
+- Step 7: codebase frozen. Wrap-up touched exactly two files beyond the
+  Phase 5 leftovers: tests/python/test_zfsutilities_gui.py (+1 blank
+  line) and the gtk-gui.md Warnings bullet (+8); this notes entry.
+  Nothing committed — tree awaits the user's commit cue.

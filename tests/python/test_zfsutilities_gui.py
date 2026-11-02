@@ -39,6 +39,7 @@ def _ensure_real_gui_module():
         sys.modules.pop("zfsutilities_gui", None)
     import zfsutilities_gui  # noqa: F401
 
+
 # Module-level via the suite's gi guard: in-function imports of GUI modules
 # must sit inside a mock_gtk context (TestGiImportGuards), and
 # set_action_tooltip needs none at all.
