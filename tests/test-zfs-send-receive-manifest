@@ -1,0 +1,330 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-zfs-send-receive-manifest — Engine contract tests for the property
+# manifest capture hook: after each dataset's transfer completes (both the
+# incremental and the full-copy paths), zfs-send-receive calls
+# propmanifest_capture with the dataset, the destination root, and the
+# generation snapshot, and propmanifest_finish at run end;
+# property_manifest='N' skips the calls entirely; a capture failure never
+# aborts the run. The library is replaced by recording fakes — its own
+# behavior has its own suite (test-property-manifest-lib).
+
+# shellcheck disable=SC2218
+# (source() override below is intentionally not active for test-lib.sh itself.)
+builtin source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+# zfs-send-receive sources helpers with $mydir-relative paths; in the repo
+# layout $mydir must be the bin/ directory.
+repo_root="$mydir"
+mydir="$mydir/bin"
+
+# Prevent re-sourcing bashinit / rootcheck / zfslockmanager / bashsetx /
+# iscsi-lib / property-manifest-lib inside send-receive from overwriting
+# our mocks, enabling xtrace, or requiring a real node configuration.
+source() {
+    local expanded="${1/#\~/$HOME}"
+    [[ "$expanded" == "$HOME/bashinit" ]] && return 0
+    # With the local-bashinit bootstrap, zfs-send-receive sources bashinit from
+    # its own directory. Skip that as well so test mocks remain in place.
+    [[ "$expanded" == "$repo_root/bin/bashinit" ]] && return 0
+    [[ "$expanded" == *"rootcheck" ]] && return 0
+    [[ "$expanded" == *"zfslockmanager" ]] && return 0
+    [[ "$expanded" == *"bashsetx" ]] && return 0
+    [[ "$expanded" == *"iscsi-lib.sh" ]] && return 0
+    [[ "$expanded" == *"property-manifest-lib.sh" ]] && return 0
+    builtin source "$@"
+}
+
+# iscsi-lib.sh is skipped above; provide the functions send-receive/delfs call.
+iscsi_rebuild_torn_down() { :; }
+iscsi_teardown_zvol() { return 0; }
+
+# property-manifest-lib.sh is skipped above; record the engine's calls.
+_prop_cap_file="$_mock_zfs_state_dir/propmanifest_engine_calls"
+_prop_cap_rc=0
+propmanifest_capture() {
+    echo "capture $*" >> "$_prop_cap_file"
+    return "${_prop_cap_rc:-0}"
+}
+propmanifest_finish() {
+    echo "finish" >> "$_prop_cap_file"
+}
+
+# Auto-answer interactive prompts (which use read -p); delegate everything
+# else to the real builtin so `while read` data loops terminate at EOF.
+read() {
+    local _a
+    for _a in "$@"; do
+        if [[ "$_a" == -*p* ]]; then
+            response="y"
+            return 0
+        fi
+    done
+    # shellcheck disable=SC2162
+    # Caller flags (e.g. -r) are forwarded verbatim.
+    builtin read "$@"
+}
+
+_TEST_LOG="$_mock_zfs_state_dir/sendrecv-manifest.log"
+
+set_msg_level() {
+    msg_level="$1"
+}
+
+capture_stderr() {
+    exec 2>"$_TEST_LOG"
+}
+
+restore_stderr() {
+    exec 2>&1
+    # send-receive re-sources strict scripts (e.g. zfsdelfs) at runtime,
+    # which re-enables their set line in this shell mid-test. Restore the
+    # harness's option state after every captured call.
+    set +euo pipefail
+}
+
+get_stderr_log() {
+    # log_msg is redirected to the per-test log file by test-lib.sh.
+    cat "$(get_test_log_file)" 2>/dev/null
+}
+
+clear_log() {
+    : > "$_TEST_LOG"
+    : > "$(get_test_log_file)"
+}
+
+reset_mocks() {
+    _mock_zfs_fs_list=""
+    _mock_zfs_snap_list=""
+    _mock_zfs_props=()
+    _mock_zfs_snaps=()
+    _mock_zfs_datasets=()
+    _mock_zfs_snap_lists=()
+    _mock_zfs_guid_lists=()
+    _mock_zfs_send_size="0"
+    _mock_zpool_list=""
+    _mock_ask_yn_rc=0
+    _prop_cap_rc=0
+    : > "$_prop_cap_file"
+    clear_log
+}
+
+# One dataset, one common snapshot on both sides: the plain incremental
+# backup shape.
+_setup_incremental_world() {
+    reset_mocks
+    set_msg_level INFO
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:receive_resume_token"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/data@snap1:type"]="snapshot"
+    _mock_zfs_datasets["pool/dest/data"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_snap_lists["pool/dest/data"]="pool/dest/data@snap1"
+    _mock_zfs_guid_lists["pool/src/data"]="guid1"
+    _mock_zfs_guid_lists["pool/dest/data"]="guid1"
+    _mock_zfs_send_size="1000000"
+}
+
+# Full-copy shape (doincrementals='N', force='Y'), modeled on the holds
+# suite's world: creation times make snap1 both the oldest and the target.
+_setup_full_copy_world() {
+    _setup_incremental_world
+    _mock_zfs_props["pool/src/data@snap1:creation"]="1700000000"
+    _mock_zfs_props["pool/dest/data@snap1:creation"]="1700000000"
+    _mock_zfs_snaps["pool/src/data@snap1"]=1
+    _mock_zfs_snaps["pool/dest/data@snap1"]=1
+    _mock_zfs_snap_lists["pool/dest"]="pool/dest/data@snap1"
+}
+
+source "$mydir/zfs-send-receive"
+# The script's strict line leaks into this test shell at the source point;
+# restore the test harness's own option state so a failing test reports
+# normally instead of aborting the suite.
+set +euo pipefail
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+test_incremental_path_captures() {
+    test_start "incremental transfer: capture called post-transfer with" \
+        "fs, destfs, and generation snap"
+
+    _setup_incremental_world
+
+    capture_stderr
+    (
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local calls
+    calls=$(cat "$_prop_cap_file")
+    assert_equals "capture pool/src/data pool/dest @test-2025-06-15T10:00-04:00-d
+finish" "$calls"
+    test_pass
+}
+
+test_full_copy_path_captures() {
+    test_start "full-copy transfer: capture called post-transfer"
+
+    _setup_full_copy_world
+
+    capture_stderr
+    (
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    if ! grep -q '^capture pool/src/data pool/dest @' "$_prop_cap_file"; then
+        test_fail "capture not called on the full-copy path:" \
+            "$(cat "$_prop_cap_file")"
+        return
+    fi
+    if ! grep -q '^finish$' "$_prop_cap_file"; then
+        test_fail "finish not called at run end"
+        return
+    fi
+    test_pass
+}
+
+test_capture_per_dataset() {
+    test_start "capture runs once per transferred dataset, finish once"
+
+    _setup_incremental_world
+    _mock_zfs_fs_list=$'pool/src/data\npool/src/other'
+    _mock_zfs_props["pool/src/other:origin"]="-"
+    _mock_zfs_props["pool/dest/other:origin"]="-"
+    _mock_zfs_props["pool/dest/other:receive_resume_token"]="-"
+    _mock_zfs_props["pool/src/other@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/other@snap1:type"]="snapshot"
+    _mock_zfs_datasets["pool/dest/other"]=1
+    _mock_zfs_snap_lists["pool/src/other"]="pool/src/other@snap1"
+    _mock_zfs_snap_lists["pool/dest/other"]="pool/dest/other@snap1"
+    _mock_zfs_guid_lists["pool/src/other"]="guid2"
+    _mock_zfs_guid_lists["pool/dest/other"]="guid2"
+
+    capture_stderr
+    (
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    if [[ "$(grep -c '^capture ' "$_prop_cap_file")" != "2" \
+          || "$(grep -c '^finish$' "$_prop_cap_file")" != "1" ]]; then
+        test_fail "expected 2 captures + 1 finish:" \
+            "$(cat "$_prop_cap_file")"
+        return
+    fi
+    test_pass
+}
+
+test_disabled_skips_entirely() {
+    test_start "property_manifest='N' skips capture and finish"
+
+    _setup_incremental_world
+
+    capture_stderr
+    (
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest" "property_manifest='N'"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    # finish may legitimately run (it is a no-op when nothing mounted);
+    # capture must not be called at all.
+    if [[ "$(grep -c '^capture ' "$_prop_cap_file")" != "0" ]]; then
+        test_fail "no capture call expected:" \
+            "$(cat "$_prop_cap_file")"
+        return
+    fi
+    test_pass
+}
+
+test_capture_failure_never_aborts() {
+    test_start "a failing capture WARNs at most and never aborts the run"
+
+    _setup_incremental_world
+    _prop_cap_rc=1
+
+    capture_stderr
+    (
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    if [[ "$log" == *"FATAL"* ]]; then
+        test_fail "capture failure must not go fatal"
+        return
+    fi
+    if ! grep -q '^finish$' "$_prop_cap_file"; then
+        test_fail "run must still reach finish"
+        return
+    fi
+    test_pass
+}
+
+test_restore_opt_out_via_caller_variable() {
+    test_start "a caller-preset property_manifest='N' (zfsrestore shape)" \
+        "stays off"
+
+    _setup_incremental_world
+
+    capture_stderr
+    (
+        property_manifest='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    if [[ "$(grep -c '^capture ' "$_prop_cap_file")" != "0" ]]; then
+        test_fail "no capture call expected:" \
+            "$(cat "$_prop_cap_file")"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# Run all tests
+# ---------------------------------------------------------------------------
+
+test_incremental_path_captures
+test_full_copy_path_captures
+test_capture_per_dataset
+test_disabled_skips_entirely
+test_capture_failure_never_aborts
+test_restore_opt_out_via_caller_variable
+
+test_summary
+teardown_test_env

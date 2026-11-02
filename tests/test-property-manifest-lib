@@ -1,0 +1,571 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034,SC2154
+# test-property-manifest-lib — Unit tests for lib/property-manifest-lib.sh
+# (manifest dataset derivation/lifecycle, property capture with the
+# exclusion set, %2F file naming, atomic writes with sha256 header,
+# generation snapshot idempotence, mount/unmount trap hygiene, and the
+# fail-open WARN contract).
+
+# shellcheck disable=SC2218
+# (source() override below is intentionally not active for test-lib.sh itself.)
+builtin source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+repo_root="$mydir"
+
+# Keep test-lib's log_msg mock: skip re-sourcing bashinit from the library.
+source() {
+    local expanded="${1/#\~/$HOME}"
+    [[ "$expanded" == "$HOME/bashinit" ]] && return 0
+    [[ "$expanded" == "$repo_root/bin/bashinit" ]] && return 0
+    builtin source "$@"
+}
+
+source "$mydir/lib/property-manifest-lib.sh"
+
+# ---------------------------------------------------------------------------
+# Mock zfs: every invocation is recorded to a capture file. Property data
+# comes from a tab-separated fixture file (dataset, property, value); the
+# manifest dataset's mountpoint is a REAL directory so atomic writes and
+# file assertions run against the filesystem.
+# ---------------------------------------------------------------------------
+
+_zfs_capture_file="$_mock_zfs_state_dir/propmanifest_zfs_calls"
+_pmock_props_file="$_mock_zfs_state_dir/propmanifest_props"
+_pmock_snaps_file="$_mock_zfs_state_dir/propmanifest_snaps"
+_pmock_store=$(mktemp -d "${TMPDIR:-/tmp}/propmanifest_store.XXXXXX")
+
+zfs() {
+    echo "zfs $*" >> "$_zfs_capture_file"
+    local -a a=()
+    local i target value hit
+    case "$1" in
+        get)
+            a=("${@:2}")
+            local prop="" dataset="" fields=""
+            for (( i=0; i<${#a[@]}; i++ )); do
+                case "${a[$i]}" in
+                    -Hpo) fields="${a[$((i+1))]}"; ((i++)) ;;
+                    -o) fields="${a[$((i+1))]}"; ((i++)) ;;
+                    -s) ((i++)) ;;
+                    -*) ;;
+                    *)
+                        if [[ -z "$prop" ]]; then
+                            prop="${a[$i]}"
+                        else
+                            dataset="${a[$i]}"
+                        fi
+                        ;;
+                esac
+            done
+            if [[ "$prop" == "all" ]]; then
+                # Bulk local-source query (the capture path).
+                [[ "${_pmock_get_rc:-0}" != "0" ]] && return "$_pmock_get_rc"
+                awk -F'\t' -v ds="$dataset" \
+                    '$1 == ds {printf "%s\t%s\tlocal\n", $2, $3}' \
+                    "$_pmock_props_file"
+                return 0
+            fi
+            # Single-value property query (mountpoint/mounted/lifecycle).
+            value="-"
+            case "$prop" in
+                mountpoint) value="${_pmock_mountpoint:-}" ;;
+                mounted) value="${_pmock_mounted:-no}" ;;
+                *)
+                    hit=$(awk -F'\t' -v ds="$dataset" -v p="$prop" \
+                        '$1 == ds && $2 == p {print $3; exit}' \
+                        "$_pmock_props_file")
+                    [[ -n "$hit" ]] && value="$hit"
+                    ;;
+            esac
+            echo "$value"
+            return 0
+            ;;
+        list)
+            a=("${@:2}")
+            target="${a[${#a[@]}-1]}"
+            if [[ "$*" == *" -t snapshot"* ]]; then
+                grep -qxF "$target" "$_pmock_snaps_file" 2>/dev/null && return 0
+                return 1
+            fi
+            case " ${_pmock_existing:-} " in
+                *" $target "*) return 0 ;;
+            esac
+            return 1
+            ;;
+        create)
+            target="${*: -1}"
+            if [[ "${_pmock_create_rc:-0}" != "0" ]]; then
+                echo "cannot create '${target}': parent has encryption" >&2
+                return "${_pmock_create_rc}"
+            fi
+            _pmock_existing="$_pmock_existing $target"
+            return 0
+            ;;
+        mount)
+            if [[ "${_pmock_mount_rc:-0}" != "0" ]]; then
+                return "${_pmock_mount_rc}"
+            fi
+            _pmock_mounted="yes"
+            return 0
+            ;;
+        unmount)
+            _pmock_mounted="no"
+            return 0
+            ;;
+        snapshot)
+            if [[ "${_pmock_snapshot_rc:-0}" != "0" ]]; then
+                return "${_pmock_snapshot_rc}"
+            fi
+            echo "$2" >> "$_pmock_snaps_file"
+            return 0
+            ;;
+    esac
+    return 0
+}
+
+get_log() {
+    cat "$(get_test_log_file)" 2>/dev/null
+}
+
+add_prop() {
+    printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$_pmock_props_file"
+}
+
+reset_state() {
+    clear_test_log_file
+    : > "$_zfs_capture_file"
+    : > "$_pmock_props_file"
+    : > "$_pmock_snaps_file"
+    # Fresh store per test: file-presence assertions (dry-run, lock
+    # conflict) must not see earlier tests' manifests.
+    rm -rf "$_pmock_store"
+    _pmock_store=$(mktemp -d "${TMPDIR:-/tmp}/propmanifest_store.XXXXXX")
+    _pmock_existing=""
+    _pmock_create_rc=0
+    _pmock_mount_rc=0
+    _pmock_snapshot_rc=0
+    _pmock_get_rc=0
+    _pmock_mountpoint="$_pmock_store"
+    _pmock_mounted="no"
+    dryrun="N"
+    _propmanifest_ok=""
+    _propmanifest_skip=""
+    _propmanifest_mounted=""
+    _propmanifest_mnt=""
+}
+
+# ---------------------------------------------------------------------------
+# Derivation, escaping, exclusion set
+# ---------------------------------------------------------------------------
+
+test_dataset_derivation() {
+    test_start "manifest dataset derives from destfs and the source pool"
+
+    assert_equals "backup/tank/zfsutilities-manifests" \
+        "$(propmanifest_dataset backup tank/src/data)"
+    assert_equals "backup/tank/zfsutilities-manifests" \
+        "$(propmanifest_dataset backup tank)"
+    assert_equals "offsite/fivebays/zfsutilities-manifests" \
+        "$(propmanifest_dataset offsite fivebays/vms/disk1)"
+    test_pass
+}
+
+test_escape_slashes() {
+    test_start "%2F escaping of dataset names for file names"
+
+    assert_equals "tank%2Fsrc%2Fdata" "$(propmanifest_escape tank/src/data)"
+    assert_equals "tank" "$(propmanifest_escape tank)"
+    test_pass
+}
+
+test_exclusion_set() {
+    test_start "exclusion set drops stream-carried and unsettable props"
+
+    local p
+    for p in encryption keyformat pbkdf2iters keystatus encryptionroot volblocksize; do
+        if ! propmanifest_excluded "$p"; then
+            test_fail "$p should be excluded"
+            return
+        fi
+    done
+    for p in keylocation compression recordsize volsize org.debian:periodic-scrub; do
+        if propmanifest_excluded "$p"; then
+            test_fail "$p should be kept"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_props_filter_and_sort() {
+    test_start "propmanifest_props filters exclusions and sorts the body"
+
+    reset_state
+    add_prop tank/src/data volblocksize 64K
+    add_prop tank/src/data encryption aes-256-gcm
+    add_prop tank/src/data recordsize 131072
+    add_prop tank/src/data keystatus available
+    add_prop tank/src/data compression lz4
+    add_prop tank/src/data org.debian:periodic-scrub disable
+    add_prop tank/src/data keylocation file:///mnt/ZFSkeys/key1
+    add_prop tank/src/data volsize 8589934592
+    add_prop tank/other/data compression on
+
+    local out
+    out=$(propmanifest_props tank/src/data)
+    local expected
+    expected=$(printf '%s\n' \
+        'compression=lz4' \
+        'keylocation=file:///mnt/ZFSkeys/key1' \
+        'org.debian:periodic-scrub=disable' \
+        'recordsize=131072' \
+        'volsize=8589934592' | LC_ALL=C sort)
+    assert_equals "$expected" "$out"
+    test_pass
+}
+
+test_props_empty_is_valid() {
+    test_start "a dataset with no local props yields an empty body, rc 0"
+
+    reset_state
+    local out rc=0
+    out=$(propmanifest_props tank/plain) || rc=$?
+    assert_rc 0 "$rc"
+    assert_equals "" "$out"
+    test_pass
+}
+
+test_props_get_failure() {
+    test_start "propmanifest_props fails only when zfs get itself fails"
+
+    reset_state
+    add_prop tank/src/data compression on
+    _pmock_get_rc=1
+    local rc=0
+    propmanifest_props tank/src/data >/dev/null 2>&1 || rc=$?
+    assert_rc 1 "$rc"
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# Dataset lifecycle
+# ---------------------------------------------------------------------------
+
+test_ensure_creates_once() {
+    test_start "ensure creates the missing dataset once, then latches"
+
+    reset_state
+    propmanifest_ensure_dataset backup/tank/zfsutilities-manifests
+    propmanifest_ensure_dataset backup/tank/zfsutilities-manifests
+    if [[ "$(grep -c 'zfs create -p backup/tank/zfsutilities-manifests' \
+            "$_zfs_capture_file")" != "1" ]]; then
+        test_fail "expected exactly one zfs create -p"
+        return
+    fi
+    assert_contains "$(get_log)" \
+        "VERB: Created property-manifest dataset backup/tank/zfsutilities-manifests"
+    test_pass
+}
+
+test_ensure_existing_never_creates() {
+    test_start "an existing manifest dataset is only verified"
+
+    reset_state
+    _pmock_existing="backup/tank/zfsutilities-manifests"
+    propmanifest_ensure_dataset backup/tank/zfsutilities-manifests
+    if [[ "$(grep -c 'zfs create' "$_zfs_capture_file")" != "0" ]]; then
+        test_fail "create must not run for an existing dataset"
+        return
+    fi
+    test_pass
+}
+
+test_ensure_refusal_fails_open_and_latches() {
+    test_start "a creation refusal WARNs once and latches a run-level skip"
+
+    reset_state
+    _pmock_create_rc=1
+    local rc=0
+    propmanifest_ensure_dataset backup/tank/zfsutilities-manifests || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" "WARN: Could not create property-manifest dataset backup/tank/zfsutilities-manifests — skipping property manifests for this run"
+    clear_test_log_file
+    _pmock_create_rc=0
+    propmanifest_ensure_dataset backup/tank/zfsutilities-manifests
+    if [[ "$(grep -c 'zfs create' "$_zfs_capture_file")" != "1" ]]; then
+        test_fail "latched skip must not retry the create"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# Capture
+# ---------------------------------------------------------------------------
+
+test_capture_happy_path() {
+    test_start "capture writes the manifest file, header, body, and snapshot"
+
+    reset_state
+    add_prop tank/src/data volblocksize 64K
+    add_prop tank/src/data encryption aes-256-gcm
+    add_prop tank/src/data recordsize 131072
+    add_prop tank/src/data keystatus available
+    add_prop tank/src/data compression lz4
+    add_prop tank/src/data org.debian:periodic-scrub disable
+    add_prop tank/src/data keylocation file:///mnt/ZFSkeys/key1
+    add_prop tank/src/data volsize 8589934592
+
+    local saved_release
+    saved_release=$(declare -f zfslock_release)
+    zfslock_release() { echo "zfslock_release $*" >> "$_zfs_capture_file"; }
+
+    local rc=0
+    propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
+    assert_rc 0 "$rc"
+    eval "$saved_release"
+
+    local mfile="$_pmock_store/tank%2Fsrc%2Fdata@daily-20261102T0500Z-d"
+    if [[ ! -f "$mfile" ]]; then
+        test_fail "manifest file not written: $mfile"
+        return
+    fi
+    local expected_body sum
+    expected_body=$(printf '%s\n' \
+        'compression=lz4' \
+        'keylocation=file:///mnt/ZFSkeys/key1' \
+        'org.debian:periodic-scrub=disable' \
+        'recordsize=131072' \
+        'volsize=8589934592' | LC_ALL=C sort)
+    sum=$(printf '%s' "$expected_body" | sha256sum | awk '{print $1}')
+    assert_equals "# zfsutilities property manifest v1" "$(sed -n '1p' "$mfile")"
+    assert_equals "# dataset: tank/src/data" "$(sed -n '2p' "$mfile")"
+    assert_equals "# snapshot: @daily-20261102T0500Z-d" "$(sed -n '3p' "$mfile")"
+    assert_equals "# sha256: $sum" "$(sed -n '4p' "$mfile")"
+    assert_equals "$expected_body" "$(awk 'NR > 5' "$mfile")"
+    if [[ -n "$(find "$_pmock_store" -name '.tmp.*' -print -quit)" ]]; then
+        test_fail "temporary file left behind"
+        return
+    fi
+    assert_contains "$(get_log)" "VERB: Wrote property manifest for tank/src/data to backup/tank/zfsutilities-manifests (5 properties)."
+    local capture
+    capture=$(cat "$_zfs_capture_file")
+    if [[ "$capture" != *"zfs create -p backup/tank/zfsutilities-manifests"* \
+          || "$capture" != *"zfs mount backup/tank/zfsutilities-manifests"* \
+          || "$capture" != *"zfs snapshot backup/tank/zfsutilities-manifests@daily-20261102T0500Z-d"* \
+          || "$capture" != *"zfslock_release"* ]]; then
+        test_fail "missing expected zfs calls: $capture"
+        return
+    fi
+    test_pass
+}
+
+test_capture_empty_props_writes_header_only() {
+    test_start "a dataset with no local props gets a header-only manifest"
+
+    reset_state
+    local rc=0
+    propmanifest_capture tank backup '@daily-20261102T0500Z-d' || rc=$?
+    assert_rc 0 "$rc"
+    local mfile="$_pmock_store/tank@daily-20261102T0500Z-d"
+    if [[ ! -f "$mfile" ]]; then
+        test_fail "manifest file not written: $mfile"
+        return
+    fi
+    assert_equals "" "$(awk 'NR > 5' "$mfile")"
+    assert_contains "$(get_log)" "VERB: Wrote property manifest for tank to backup/tank/zfsutilities-manifests (0 properties)."
+    test_pass
+}
+
+test_capture_snapshot_idempotent() {
+    test_start "an existing generation snapshot is not re-created"
+
+    reset_state
+    echo "backup/tank/zfsutilities-manifests@daily-20261102T0500Z-d" \
+        >> "$_pmock_snaps_file"
+    propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || true
+    if [[ "$(grep -c 'zfs snapshot' "$_zfs_capture_file")" != "0" ]]; then
+        test_fail "snapshot re-created despite existing generation snapshot"
+        return
+    fi
+    test_pass
+}
+
+test_capture_dryrun_logs_and_does_nothing() {
+    test_start "dry-run logs the Would line and touches nothing"
+
+    reset_state
+    dryrun="Y"
+    local rc=0
+    propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" "INFO: Dry-run: Would capture property manifest for tank/src/data under backup/tank/zfsutilities-manifests"
+    if [[ -s "$_zfs_capture_file" ]]; then
+        test_fail "dry-run must not call zfs: $(cat "$_zfs_capture_file")"
+        return
+    fi
+    if [[ -n "$(find "$_pmock_store" -type f -print -quit)" ]]; then
+        test_fail "dry-run must not write files"
+        return
+    fi
+    test_pass
+}
+
+test_capture_lock_conflict_fails_open() {
+    test_start "a lock conflict WARNs, skips the dataset, releases nothing"
+
+    reset_state
+    local saved_wait saved_release
+    saved_wait=$(declare -f zfslock_wait_or_resolve)
+    saved_release=$(declare -f zfslock_release)
+    zfslock_wait_or_resolve() { return 2; }
+    zfslock_release() { echo "zfslock_release $*" >> "$_zfs_capture_file"; }
+    local rc=0
+    propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
+    assert_rc 0 "$rc"
+    eval "$saved_wait"
+    eval "$saved_release"
+    assert_contains "$(get_log)" "WARN: Property manifest for tank/src/data not written (lock conflict on backup/tank/zfsutilities-manifests)."
+    if [[ "$(grep -c zfslock_release "$_zfs_capture_file")" != "0" ]]; then
+        test_fail "release must not run for a lock never acquired"
+        return
+    fi
+    if [[ -n "$(find "$_pmock_store" -type f -print -quit)" ]]; then
+        test_fail "no file may be written on a lock conflict"
+        return
+    fi
+    test_pass
+}
+
+test_capture_get_failure_fails_open() {
+    test_start "a zfs get failure WARNs and fails open"
+
+    reset_state
+    _pmock_get_rc=1
+    local rc=0
+    propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" "WARN: Property manifest for tank/src/data not written (zfs get failed)."
+    test_pass
+}
+
+test_capture_write_failure_fails_open() {
+    test_start "a write failure WARNs, leaves no temp file, fails open"
+
+    reset_state
+    add_prop tank/src/data compression on
+    _pmock_mountpoint="/proc"
+    local rc=0
+    propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" "WARN: Property manifest for tank/src/data not written (write to backup/tank/zfsutilities-manifests failed)."
+    test_pass
+}
+
+test_capture_mount_refusal_latches_skip() {
+    test_start "a mount refusal WARNs once and latches a run-level skip"
+
+    reset_state
+    _pmock_mount_rc=1
+    local rc=0
+    propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" "WARN: Could not mount backup/tank/zfsutilities-manifests — skipping property manifests for this run."
+    clear_test_log_file
+    _pmock_mount_rc=0
+    propmanifest_capture tank/other/data backup '@daily-20261102T0500Z-d' || true
+    if [[ -n "$(get_log)" ]]; then
+        test_fail "latched skip must silence later captures"
+        return
+    fi
+    test_pass
+}
+
+test_capture_legacy_mountpoint_latches_skip() {
+    test_start "a legacy mountpoint cannot be used and latches a skip"
+
+    reset_state
+    _pmock_mountpoint="legacy"
+    local rc=0
+    propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$(get_log)" "WARN: Property-manifest dataset backup/tank/zfsutilities-manifests has no usable mountpoint ('legacy') — skipping property manifests for this run."
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# Mount/unmount hygiene
+# ---------------------------------------------------------------------------
+
+test_finish_unmounts_what_we_mounted() {
+    test_start "finish unmounts a library-made mount exactly once"
+
+    reset_state
+    propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || true
+    propmanifest_finish
+    propmanifest_finish
+    if [[ "$(grep -c 'zfs unmount backup/tank/zfsutilities-manifests' \
+            "$_zfs_capture_file")" != "1" ]]; then
+        test_fail "expected exactly one unmount"
+        return
+    fi
+    test_pass
+}
+
+test_finish_skips_preexisting_mount() {
+    test_start "a mount this library did not make is left mounted"
+
+    reset_state
+    _pmock_mounted="yes"
+    propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || true
+    propmanifest_finish
+    if [[ "$(grep -c 'zfs unmount' "$_zfs_capture_file")" != "0" ]]; then
+        test_fail "must not unmount a mount it did not make"
+        return
+    fi
+    test_pass
+}
+
+test_mount_arms_exit_trap() {
+    test_start "mounting arms the EXIT-trap unmount backstop"
+
+    reset_state
+    propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || true
+    if ! declare -p _EXIT_TRAP_HANDLERS 2>/dev/null | grep -q \
+        "zfs unmount 'backup/tank/zfsutilities-manifests'"; then
+        test_fail "EXIT trap missing the unmount backstop: $(declare -p _EXIT_TRAP_HANDLERS)"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# Run all tests
+# ---------------------------------------------------------------------------
+
+test_dataset_derivation
+test_escape_slashes
+test_exclusion_set
+test_props_filter_and_sort
+test_props_empty_is_valid
+test_props_get_failure
+test_ensure_creates_once
+test_ensure_existing_never_creates
+test_ensure_refusal_fails_open_and_latches
+test_capture_happy_path
+test_capture_empty_props_writes_header_only
+test_capture_snapshot_idempotent
+test_capture_dryrun_logs_and_does_nothing
+test_capture_lock_conflict_fails_open
+test_capture_get_failure_fails_open
+test_capture_write_failure_fails_open
+test_capture_mount_refusal_latches_skip
+test_capture_legacy_mountpoint_latches_skip
+test_finish_unmounts_what_we_mounted
+test_finish_skips_preexisting_mount
+test_mount_arms_exit_trap
+
+rm -rf "$_pmock_store"
+test_summary
+teardown_test_env

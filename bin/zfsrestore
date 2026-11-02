@@ -79,6 +79,10 @@ endwith=''
 # shellcheck disable=SC2034
 # Intentionally set for sourced zfs-send-receive helper.
 nextsnap='notneeded'            # Inhibit creation of a new snapshot name.
+# shellcheck disable=SC2034
+# Intentionally set for sourced zfs-send-receive helper.
+property_manifest='N'           # Restore targets must not grow manifest stores;
+                                # replaying captured manifests is a separate step.
 # Hold preservation on the destination is handled inside zfs-send-receive
 # on every full copy ($preserve_target_holds, default 'Y').
 releaseholds_tags=()            # May arrive via overrides; defaulted below.

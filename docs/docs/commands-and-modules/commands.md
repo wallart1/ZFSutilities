@@ -1288,6 +1288,7 @@ sudo zfsdailybackup [overrides]
 | `$releaseholds`                             | Passed to `zfscleanup` during prune                                                | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
 | `$releaseholds_tags`                        | Hold tag patterns passed to `zfscleanup` during prune (default `offsite-*`)        | [Execution Control](../developer-guide/global-variables.md#execution-control)      |
 | `$includes`, `$excludes`, `$startwith`      | Dataset filters forwarded to `zfs-send-receive`                                    | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
+| `$property_manifest`                        | Engine default `'Y'`: each transferred dataset's local properties are captured into a manifest under the backup root for later replay | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `node_mode`, `compute_host`, `storage_host` | Lowercase node-lib copies that gate the two-node rsync-pull steps                  | [Node Configuration](../developer-guide/global-variables.md#node-configuration)    |
 
 Example overrides:
@@ -2119,6 +2120,7 @@ sudo zfsrestore [overrides]
 | `$depth`                    | Recursion depth (`''` = full subtree, `0` = named dataset only)           | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 | `$includes`, `$excludes`    | Dataset filters                                                           | [Selection](../developer-guide/global-variables.md#dataset-and-snapshot-selection) |
 | `$nextsnap`                 | Snapshot name limit (optional; `'notneeded'` to look up newest on source) | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
+| `$property_manifest`        | Set to `'N'`: restore targets must not grow manifest stores; replaying captured manifests is a separate step | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 
 The restore sends the oldest source snapshot as a full stream, then sends
 an incremental stream with intermediates to catch up to the newest source
@@ -2127,7 +2129,9 @@ invocation. By default the dataset list is built with unlimited recursion,
 so the named dataset and all of its descendants are restored. Set `depth=0`
 to restore only the named dataset. Destination hold tags are preserved by
 `zfs-send-receive` itself during the full copy (`$preserve_target_holds`,
-default `'Y'`).
+default `'Y'`). Property-manifest capture is deliberately off here
+(`$property_manifest='N'`): the restore destination should receive only
+what was asked for.
 
 **Called modules:**
 
@@ -2321,6 +2325,7 @@ script. Primarily used for ad-hoc sends during development and testing.
 | `$destfs`         | Destination pool                       | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
 | `$doincrementals` | `'Y'` = incremental, `'N'` = full copy | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
 | `$autoproceed`    | `'Y'` = no prompts                     | [Execution Control](../developer-guide/global-variables.md#execution-control) |
+| `$property_manifest` | Engine default `'Y'`: captures each transferred dataset's local properties next to the backup (set `'N'` to skip) | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)    |
 
 **Called modules:**
 
@@ -2382,6 +2387,7 @@ sudo zfssendoffsite [overrides]
 | ----------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------- |
 | `$autoproceed`, `$dryrun`, `$force` | Forwarded to `zfs-send-receive`    | [Execution Control](../developer-guide/global-variables.md#execution-control) |
 | `$label`                            | Set to `offsite` for this workflow | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
+| `$property_manifest`                | Engine default `'Y'`: each leg captures local-property manifests next to its destination (a copy-source holds none, so copy→copy legs write header-only manifests) | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)        |
 
 | Step | Source        | Destination |
 | ---- | ------------- | ----------- |

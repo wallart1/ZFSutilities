@@ -134,6 +134,59 @@ test_bootstrap_inner_functions() {
 }
 
 # ---------------------------------------------------------------------------
+# Property manifest capture in dry-run (the real property-manifest-lib is
+# sourced by send-receive here; its dry-run guard logs and touches nothing).
+# ---------------------------------------------------------------------------
+
+test_dryrun_would_capture_property_manifest() {
+    test_start "dry-run reports the property manifest capture; 'N' silences it"
+
+    reset_mocks
+    set_msg_level INFO
+
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:receive_resume_token"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/data@snap1:type"]="snapshot"
+    _mock_zfs_datasets["pool/dest/data"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_snap_lists["pool/dest/data"]="pool/dest/data@snap1"
+    _mock_zfs_guid_lists["pool/src/data"]="guid1"
+    _mock_zfs_guid_lists["pool/dest/data"]="guid1"
+    _mock_zfs_send_size="1000000"
+
+    nextsnap="@test-2025-06-15T10:00-04:00-d"
+
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=2" || true
+    restore_stderr
+
+    local log
+    log=$(get_stderr_log)
+    if [[ "$log" != *"Dry-run: Would capture property manifest for pool/src/data under pool/dest/pool/zfsutilities-manifests"* ]]; then
+        test_fail "Missing Would-capture line"
+        return
+    fi
+
+    clear_log
+    capture_stderr
+    send-receive "pool/src" "pool/dest" \
+        "dryrun='Y'; autoproceed='Y'; sourcefsremovequalifiers=2; property_manifest='N'" || true
+    restore_stderr
+
+    log=$(get_stderr_log)
+    if [[ "$log" == *"property manifest"* ]]; then
+        test_fail "property_manifest='N' must silence the capture line"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
 # Test autoproceed='N' prompts once for the dataset list then continues
 # ---------------------------------------------------------------------------
 
@@ -1754,6 +1807,7 @@ test_trailer_suppressed_with_inherit
 test_dailybackup_trailer_written_without_inherit
 test_dailybackup_trailer_suppressed_with_inherit
 test_lock_before_snapshot_creation
+test_dryrun_would_capture_property_manifest
 test_full_copy_releases_dest_lock_around_zfsdelfs
 test_full_copy_keeps_dest_lock_in_dryrun
 test_full_copy_releases_dest_lock_zfsdelfs_failure

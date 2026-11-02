@@ -187,6 +187,21 @@ verified against that file's steps, not against a summary or memory.
 Distinguished from a mock (which fakes a dependency for testing): an
 oracle defines truth for a verification.
 
+## property manifest
+
+A small file recording one dataset's locally-set ZFS properties, captured
+next to the backup after the transfer verifies (`lib/property-manifest-lib.sh`).
+Backups send property-less `-cw` streams, so compression, recordsize,
+`keylocation`, user properties and friends would otherwise never reach the
+backup; the manifest is the sidecar that carries them for replay at
+restore. One file per dataset per generation, named
+`<dataset with / → %2F>@<snapname>`, stored on a dedicated filesystem
+(`<destfs>/<source pool>/zfsutilities-manifests`) that is snapshotted
+under the same generation snapname as the data — so ordinary retention
+prunes it in lockstep. Excludes what the raw stream already carries
+(the encryption family, `volblocksize`); `keylocation` is deliberately
+kept.
+
 ## shape
 
 Report shorthand for the exact pattern or structure of a thing. An output

@@ -22,6 +22,7 @@ arrays and on-disk tables are on [Data Structures](../developer-guide/data-struc
 - [`node-lib.sh`](#node-libsh)
 - [`archive-engine.sh`](#archive-enginesh)
 - [`transfer-lib.sh`](#transfer-libsh)
+- [`property-manifest-lib.sh`](#property-manifest-libsh)
 - [`pace_stream.py`](#pace_streampy)
 - [`enclosure_rate.py`](#enclosure_ratepy)
 - [`upgrade-lib.sh`](#upgrade-libsh)
@@ -660,6 +661,45 @@ and `$ZFSUTILITIES_ENCLOSURE_RATE` (resolver location override); honors the
 caller's `$dryrun` for token aborts.
 
 **Called modules:** `bashinit`.
+
+---
+
+### `property-manifest-lib.sh`
+
+Property-manifest capture for backup fidelity: after a dataset's backup
+transfer completes, record its locally-set properties next to the backup
+copy so a restore can replay them later. Used by
+[`zfs-send-receive`](modules.md#zfs-send-receive)'s post-transfer capture
+hook (`$property_manifest`, default `'Y'`). The transfer streams stay
+property-less (`-cw`) by design — the manifest is the only property
+carrier.
+
+```bash
+source_helper property-manifest-lib.sh
+```
+
+**Functions:**
+
+| Function                                                             | Purpose                                                                                                                                                                                    |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `propmanifest_dataset <destfs> <fs>`                                 | Derive the manifest dataset `<destfs>/<source pool>/zfsutilities-manifests` (pure string work, safe in dry-run)                                                                            |
+| `propmanifest_excluded <property>`                                   | True for properties excluded from manifests: `encryption`, `keyformat`, `pbkdf2iters`, `keystatus`, `encryptionroot`, `volblocksize` (raw stream carries them or unsettable post-create; `keylocation` is kept) |
+| `propmanifest_escape <dataset>`                                      | `/` → `%2F` escaping for manifest file names                                                                                                                                               |
+| `propmanifest_ensure_dataset <manifest-ds>`                          | Create the manifest dataset once per run (`zfs create -p`); a refusal WARNs and latches a run-level skip (fail open)                                                                       |
+| `propmanifest_props <fs>`                                            | Sorted `property=value` lines of `zfs get -s local all` minus the exclusion set (user properties ride free); rc 1 only when the `zfs get` itself fails                                     |
+| `propmanifest_mount <manifest-ds>`                                   | Mount-on-demand; sets `$_propmanifest_mnt` (empty on failure); arms the EXIT-trap unmount backstop when it mounts                                                                        |
+| `propmanifest_snapshot <manifest-ds> <snapname>`                     | Idempotent snapshot of the manifest dataset under the same generation snapname — existing retention prunes it in lockstep                                                                 |
+| `propmanifest_capture <fs> <destfs> <snapname>`                      | The whole capture under a write lock on the manifest dataset: ensure → mount → write (tmp+rename, sha256 header) → lockstep snapshot. Dry-run aware; every failure WARNs and returns 0     |
+| `propmanifest_finish`                                                | Unmount the manifest dataset when this library mounted it (EXIT trap covers abnormal ends)                                                                                                 |
+
+**Globals:** reads the caller's `$dryrun` (dry-run logs and touches
+nothing) and `$zfslock_id` set by the lock manager; latches run state in
+`$_propmanifest_ok` / `$_propmanifest_skip` / `$_propmanifest_mounted` /
+`$_propmanifest_mnt`.
+
+**Called modules:** `bashinit`; requires the caller to have sourced
+`zfslockmanager` (probed with `declare -f`; without it capture WARNs and
+skips — fail open).
 
 ---
 
@@ -1852,6 +1892,7 @@ arguments. Callers set the variables below, then invoke `send-receive`.
 | `$restore_resume`                                                | `'N'`           | `'Y'` = in destructive full-copy passes, skip destinations with a GUID-verified lineage (interrupted-restore resume)                                                                                     | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)            |
 | `$receive_s_option`                                              | `''`            | `'s'` = enable resumable receives                                                                                                                                                                       | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$verify_after_transfer`                                         | `'Y'`           | `'Y'` = verify destination snapshot GUID matches source after receive                                                                                                                                   | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
+| `$property_manifest`                                             | `'Y'`           | `'Y'` = capture each dataset's local properties into a manifest under `<destfs>/<source pool>/zfsutilities-manifests` after its transfer ([property-manifest-lib.sh](#property-manifest-libsh)); WARN-only, never fails the backup                                                                     | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$resumablethreshold`                                            | 50 GB           | Size above which resumable receive is used                                                                                                                                                              | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$maxcommsnapperiod`                                             | `130`           | Max age (days) of an acceptable common snapshot                                                                                                                                                         | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |
 | `$transfer_rate_limit`                                           | `''`            | Max transfer rate enforced by `lib/pace_stream.py` (e.g. `200M`, `1G`). Empty = no limit                                                                                                                | [Send/Receive](../developer-guide/global-variables.md#zfs-sendreceive)             |

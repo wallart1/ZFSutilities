@@ -32,6 +32,9 @@
 #     $preserve_target_holds  'Y' (default) captures and reapplies destination holds around
 #                             full copies; no-op on plain incremental runs and in dry-run.
 #     $verify_after_transfer  'Y' compares source/destination snapshot GUIDs after receive.
+#     $property_manifest     'Y' (default) captures each transferred dataset's local properties
+#                             into a manifest under <destfs>/<sourcepool>/zfsutilities-manifests
+#                             (lib/property-manifest-lib.sh); 'N' skips. Fail-open: WARN only.
 #     $releaseholds           'Y' releases matching holds when destroying snapshots.
 # Execution control:
 #     $autoproceed            'Y' (default) suppresses "press enter" confirmations.
@@ -82,6 +85,7 @@ function send-receive {
     source_helper zfsreapplyholds
     source_helper iscsi-lib.sh
     source_helper transfer-lib.sh
+    source_helper property-manifest-lib.sh
     source_helper zfsdelfs
     source_helper zfsoverrides
     source_helper zfslockmanager
@@ -425,6 +429,7 @@ function send-receive {
     [[ ${dointermediates:-} = "" ]] && dointermediates="Y"
     [[ ${releaseholds:-} = "" ]] && releaseholds="N"
     [[ ${preserve_target_holds:-} = "" ]] && preserve_target_holds='Y'
+    [[ ${property_manifest:-} = "" ]] && property_manifest='Y'
     [[ ${autoproceed:-} = "" ]] && autoproceed='Y'
     # Glob prefix check on declare -p output: test whether a variable is an
     # indexed or associative array.
@@ -857,6 +862,14 @@ function send-receive {
             nextsnap="$target_snap"
         fi
 
+        # Property manifest (backup fidelity): record this dataset's local
+        # properties next to the backup now that its transfer (and optional
+        # verify) completed. Fail-open by contract — the library only WARNs;
+        # the backup result is never affected.
+        if [[ ${property_manifest:-} = 'Y' ]]; then
+            propmanifest_capture "$fs" "$destfs" "$nextsnap" || true
+        fi
+
         if [[ $dryrun = 'N' ]]; then
             iscsi_rebuild_torn_down
         elif [[ $incremental = '' && ($allow_destructive = 'Y' || $force = 'Y') ]]; then
@@ -867,6 +880,11 @@ function send-receive {
         zfslock_release "$lock_source"; zfslock_release "$lock_dest"
 
     done
+
+    # Release the manifest store's temporary mount when this run made one
+    # (the library's EXIT trap covers abnormal ends).
+    propmanifest_finish
+
     echo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
     if [[ -n "$_sr_holds_file" ]]; then
         if [[ -s "$_sr_holds_file" ]]; then
