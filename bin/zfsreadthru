@@ -126,8 +126,23 @@ if [[ -n "$rate_limit" ]]; then
     fi
     log_msg "INFO: Enclosure rate cap applied: ${rate_limit}"
 fi
-declare -a pace_argv=()
-[[ -n "$rate_limit" ]] && pace_argv=(python3 "$pacer" "$rate_limit")
+# Read one send pass through the pacing pipeline. Composed by branch —
+# never an empty "${pace_argv[@]}" middle segment: bash runs a zero-word
+# pipeline segment as a null command that swallows the stream (bash 5.2),
+# so the unpaced path must have no pacer stage at all, exactly like
+# transfer_do's four-shape composition.
+read_pass() { # <zfs-send args...>
+    if [[ -n "$rate_limit" ]]; then
+        sudo zfs send "$@" \
+            | python3 "$pacer" "$rate_limit" \
+            | pv -s "$edited_size" -pterb \
+            | cat > /dev/null
+    else
+        sudo zfs send "$@" \
+            | pv -s "$edited_size" -pterb \
+            | cat > /dev/null
+    fi
+}
 
 # Part 1: Full read-through to $firstsnap/oldest snapshot.
 log_msg "INFO: Part one: Full read-through to then \$firstsnap/oldest snapshot."
@@ -140,11 +155,8 @@ if [[ $autoproceed != 'Y' ]]; then
     read -rp "Press enter to proceed."
 fi
 
-if ! sudo zfs send -wc "$firstsnap" \
-    | "${pace_argv[@]}" \
-    | pv -s "$edited_size" -pterb \
-    | cat > /dev/null; then
-        exit 8
+if ! read_pass -wc "$firstsnap"; then
+    exit 8
 fi
 
 # Part 2: Read-through to $lastsnap/newest snapshot.
@@ -159,10 +171,7 @@ if [[ $autoproceed != 'Y' ]]; then
     read -rp "Press enter to proceed."
 fi
 
-if ! sudo zfs send -wc -I "$firstsnap" "$lastsnap" \
-    | "${pace_argv[@]}" \
-    | pv -s "$edited_size" -pterb \
-    | cat > /dev/null; then
-        exit 8
+if ! read_pass -wc -I "$firstsnap" "$lastsnap"; then
+    exit 8
 fi
 

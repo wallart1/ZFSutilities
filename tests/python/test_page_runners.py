@@ -166,6 +166,9 @@ class TestBackupPageRun(unittest.TestCase):
             build_pre_backup_command=MagicMock(
                 return_value=BashStep(["echo", "pre"], "Pre-backup")
             ),
+            # Mocked so the pull-step test stays hermetic: the real fence
+            # shells out to `zfs list`, whose availability varies by runner.
+            prepare_rsync_destination=MagicMock(return_value=True),
             build_rsync_command=MagicMock(
                 return_value=BashStep(["echo", "rsync"], "Rsync step", is_rsync=True)
             ),

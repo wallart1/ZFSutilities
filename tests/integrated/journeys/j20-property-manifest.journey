@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # j20-property-manifest.journey — the backup property-fidelity journey.
 #
-# The property-manifest sidecar (campaign P1-P3): backup streams stay
+# The property-manifest sidecar (campaign P1-P6): backup streams stay
 # property-less (-cw) by design, and the engine captures each dataset's
 # locally-set properties into a small dedicated filesystem next to the
 # backup copies; zfsrestore replays them after the transfer.  Unit and
@@ -25,8 +25,21 @@
 #     missing key file WARNs with the dataset left locked.
 #   lockstep —  zfsoffsiteretain prunes the store's offsite snapshots
 #     exactly like the data copies'.
-#   GUI      —  the offsite-onward e2e pair (payload-e2e-driver), the
-#     mutation scenario the unprivileged container tier cannot run.
+#   sendstrm —  zfsrestoresendstream consumes a hand-made export: the
+#     .zfssendstream plus its .props sibling replays onto the received
+#     dataset; a sibling-less file restores silently (WARN-only contract).
+#   replay2  —  zfsreplayprops standalone: a restore made with
+#     replay_properties=N gets every setting back through the CLI.
+#   encrecv  —  receive-as-encrypted (campaign P6): zfsrestore with
+#     receive_encryption='Y' initial-receives every plain dataset as
+#     encrypted wearing the restore key (exactly one -o receive; the
+#     step-2 catch-up stays plain), the raw-stream child keeps its own
+#     encryption and stays locked (the documented skip-keylocation
+#     shape), and a non-file:// keylocation is FATAL before any
+#     transfer.
+#   GUI      —  the offsite-onward and restore e2e pairs
+#     (payload-e2e-driver), the mutation scenarios the unprivileged
+#     container tier cannot run.
 #
 # The chain shape mirrors production (threeamigos -> fivebays ->
 # offsite): sourcefs keeps its full name (removequalifiers=0), so the
@@ -115,6 +128,9 @@ zfs create zfstest1/j20fb
 zfs create zfstest1/j20pre
 zfs create zfstest1/j20offsite
 zfs create zfstest1/j20kl
+zfs create zfstest1/j20ss
+zfs create zfstest1/j20rp
+zfs create zfstest1/j20enc
 zfs list -o name,compression,recordsize,atime -r zfstest1/j20src zfstest1/j20old
 echo j20-setup-ok
 EOF
@@ -695,6 +711,375 @@ EOF
     fi
 
     # ------------------------------------------------------------------
+    # Stage SS: zfsrestoresendstream — a hand-made export (.zfssendstream
+    # + .props sibling) replays onto the received dataset; a sibling-less
+    # file restores silently
+    # ------------------------------------------------------------------
+
+    # The engine has no send-to-file mode; the sibling contract is
+    # consumption support for hand-made exports (commands.md).  The export
+    # is built the documented operator way: a plain zfs send of the backup
+    # copy with the store's manifest copied next to it.
+    local ssp_script="$ITF_RUN_DIR/guest-ss-prep.sh"
+    cat > "$ssp_script" <<EOF
+#!/bin/bash
+set -e
+# disk-0 carries the generation-1 stream PLUS its .props sibling; disk-1
+# carries the generation-2 stream with NO sibling (the silent skip).
+mkdir -p /root/j20-export
+zfs send zfstest2/zfstest1/j20src$g1snap > /root/j20-export/j20src-disk-0.zfssendstream
+zfs send zfstest2/zfstest1/j20src$g2snap > /root/j20-export/j20src-disk-1.zfssendstream
+zfs mount $store2
+cp "/$store2/zfstest1%2Fj20src$g1snap" /root/j20-export/j20src-disk-0.props
+zfs unmount $store2
+# zfsrestoresendstream is configured by editing its variables (its
+# documented configuration surface) — point it at the export and the
+# journey's destination container.
+sed -i \
+    -e "s|^[[:space:]]*local sourcedir=.*|    local sourcedir='/root/j20-export'|" \
+    -e "s|^[[:space:]]*local destfs=.*|    local destfs='zfstest1/j20ss'|" \
+    -e "s|^[[:space:]]*local filepattern=.*|    local filepattern='j20src-disk-*.zfssendstream'|" \
+    $tree/bin/zfsrestoresendstream
+test -s /root/j20-export/j20src-disk-0.props
+echo ss-prep-ok
+EOF
+    itf_guest_put "$guest_ip" "$ssp_script" /root/itf-j20-ssprep.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-ssprep.sh" \
+            > "$ITF_RUN_DIR/guest-ss-prep.log" 2>&1 \
+            && grep -q ss-prep-ok "$ITF_RUN_DIR/guest-ss-prep.log"; then
+        itf_step pass "hand-made export staged" \
+            "two send files + the generation-1 manifest as disk-0's .props" \
+            "sibling; zfsrestoresendstream pointed at them"
+    else
+        itf_step fail "hand-made export staged" \
+            "see guest-ss-prep.log"
+        return 1
+    fi
+
+    local ss_log="$ITF_RUN_DIR/guest-sendstream.log"
+    itf_guest_exec "$guest_ip" "$tree/bin/zfsrestoresendstream" \
+        > "$ss_log" 2>&1
+    local ss_rc=$?
+    itf_artifact "sendstream-transcript" "$ss_log"
+    if [[ $ss_rc -ne 0 ]]; then
+        itf_step fail "sendstream restore replays the .props sibling" \
+            "rc=$ss_rc — see guest-sendstream.log"
+        return 1
+    fi
+    local -a want_ss=(
+        "VERB: Replayed"
+        "onto zfstest1/j20ss/j20src-disk-0"
+        )
+    local -a forbid_ss=(
+        "onto zfstest1/j20ss/j20src-disk-1"
+        "FATAL"
+        "failed its sha256 check"
+        )
+    bad_markers=""
+    for marker in "${want_ss[@]}"; do
+        grep -qF "$marker" "$ss_log" || bad_markers+=" [missing: $marker]"
+    done
+    for marker in "${forbid_ss[@]}"; do
+        grep -qF "$marker" "$ss_log" && bad_markers+=" [unexpected: $marker]"
+    done
+    if [[ -n "$bad_markers" ]]; then
+        itf_step fail "sendstream restore replays the .props sibling" \
+            "$bad_markers — see guest-sendstream.log"
+        return 1
+    fi
+    local sss_script="$ITF_RUN_DIR/guest-ss-state.sh"
+    cat > "$sss_script" <<EOF
+#!/bin/bash
+set -e
+check() { # <want> <property> <dataset>
+    local got
+    got=\$(zfs get -Hpo value -s local "\$2" "\$3" 2>/dev/null || true)
+    test "\$got" = "\$1" || { echo "MISMATCH: \$3 \$2=\$got want \$1"; exit 1; }
+}
+zfs list -t snapshot -H -o name zfstest1/j20ss/j20src-disk-0$g1snap > /dev/null
+zfs list -t snapshot -H -o name zfstest1/j20ss/j20src-disk-1$g2snap > /dev/null
+check zstd compression zfstest1/j20ss/j20src-disk-0
+check 65536 recordsize zfstest1/j20ss/j20src-disk-0
+check off atime zfstest1/j20ss/j20src-disk-0
+check marker1 com.itf:j20 zfstest1/j20ss/j20src-disk-0
+# The sibling-less file must carry nothing local.
+! zfs get -Hpo property,value,source -s local all zfstest1/j20ss/j20src-disk-1 | grep -q .
+echo ss-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$sss_script" /root/itf-j20-ssstate.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-ssstate.sh" \
+            > "$ITF_RUN_DIR/guest-ss-state.log" 2>&1 \
+            && grep -q ss-state-ok "$ITF_RUN_DIR/guest-ss-state.log"; then
+        itf_step pass "sendstream restore replays the .props sibling" \
+            "disk-0's manifest applied (4 settings); disk-1 restored" \
+            "silently with nothing local"
+    else
+        itf_step fail "sendstream restore replays the .props sibling" \
+            "see guest-ss-state.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage RP: zfsreplayprops standalone — a restore made with
+    # replay_properties=N gets every setting back through the CLI
+    # ------------------------------------------------------------------
+
+    local rp1_log="$ITF_RUN_DIR/guest-rp-restore.log"
+    itf_guest_exec "$guest_ip" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;destfs=zfstest1/j20rp;replay_properties=N;autoproceed=Y'" \
+        > "$rp1_log" 2>&1
+    local rp1_rc=$?
+    itf_artifact "rp-restore-transcript" "$rp1_log"
+    if [[ $rp1_rc -ne 0 ]] || grep -qF "VERB: Replayed" "$rp1_log"; then
+        itf_step fail "replay-disabled restore carries no properties" \
+            "rc=$rp1_rc — see guest-rp-restore.log"
+        return 1
+    fi
+    local rps_script="$ITF_RUN_DIR/guest-rp-state.sh"
+    cat > "$rps_script" <<'EOF'
+#!/bin/bash
+set -e
+# Nothing local on the restored top dataset — replay stayed off.
+! zfs get -Hpo property,value,source -s local all zfstest1/j20rp/j20src | grep -q .
+echo rp-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$rps_script" /root/itf-j20-rpstate.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-rpstate.sh" \
+            > "$ITF_RUN_DIR/guest-rp-state.log" 2>&1 \
+            && grep -q rp-state-ok "$ITF_RUN_DIR/guest-rp-state.log"; then
+        itf_step pass "replay-disabled restore carries no properties" \
+            "rc=0, no replay lines, nothing local on the restored dataset"
+    else
+        itf_step fail "replay-disabled restore carries no properties" \
+            "see guest-rp-state.log"
+        return 1
+    fi
+
+    local rp2_log="$ITF_RUN_DIR/guest-rp-replay.log"
+    itf_guest_exec "$guest_ip" \
+        "$tree/bin/zfsreplayprops 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;destfs=zfstest1/j20rp'" \
+        > "$rp2_log" 2>&1
+    local rp2_rc=$?
+    itf_artifact "rp-replay-transcript" "$rp2_log"
+    if [[ $rp2_rc -ne 0 ]]; then
+        itf_step fail "standalone zfsreplayprops replays the tree" \
+            "rc=$rp2_rc — see guest-rp-replay.log"
+        return 1
+    fi
+    local -a want_rp2=(
+        "VERB: Replayed"
+        "VERB: Loaded the key for zfstest1/j20rp/j20src/enc from its keylocation."
+        "INFO: zfsreplayprops completed."
+        )
+    bad_markers=""
+    for marker in "${want_rp2[@]}"; do
+        grep -qF "$marker" "$rp2_log" || bad_markers+=" [missing: $marker]"
+    done
+    if [[ -n "$bad_markers" ]]; then
+        itf_step fail "standalone zfsreplayprops replays the tree" \
+            "$bad_markers — see guest-rp-replay.log"
+        return 1
+    fi
+    local rp2s_script="$ITF_RUN_DIR/guest-rp2-state.sh"
+    cat > "$rp2s_script" <<'EOF'
+#!/bin/bash
+set -e
+check() { # <want> <property> <dataset>
+    local got
+    got=$(zfs get -Hpo value -s local "$2" "$3" 2>/dev/null || true)
+    test "$got" = "$1" || { echo "MISMATCH: $3 $2=$got want $1"; exit 1; }
+}
+check zstd compression zfstest1/j20rp/j20src
+check 65536 recordsize zfstest1/j20rp/j20src
+check marker1 com.itf:j20 zfstest1/j20rp/j20src
+check lz4 compression zfstest1/j20rp/j20src/child
+check file:///root/j20.key keylocation zfstest1/j20rp/j20src/enc
+keystat=$(zfs get -Hpo value keystatus zfstest1/j20rp/j20src/enc)
+test "$keystat" = available
+echo rp2-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$rp2s_script" /root/itf-j20-rp2state.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-rp2state.sh" \
+            > "$ITF_RUN_DIR/guest-rp2-state.log" 2>&1 \
+            && grep -q rp2-state-ok "$ITF_RUN_DIR/guest-rp2-state.log"; then
+        itf_step pass "standalone zfsreplayprops replays the tree" \
+            "settings + user props + keylocation back on every dataset;" \
+            "the key loaded; rc=0 completion line"
+    else
+        itf_step fail "standalone zfsreplayprops replays the tree" \
+            "see guest-rp2-state.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage EE: receive-as-encrypted restore (campaign P6) — plain
+    # datasets arrive encrypted wearing the restore key; the raw-stream
+    # child keeps its own encryption and stays locked
+    # ------------------------------------------------------------------
+
+    itf_guest_exec "$guest_ip" "head -c 32 /dev/urandom > /root/j20enc.key" \
+        > /dev/null 2>&1
+    local ee_log="$ITF_RUN_DIR/guest-encrecv.log"
+    itf_guest_exec "$guest_ip" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;destfs=zfstest1/j20enc;receive_encryption=Y;receive_keylocation=file:///root/j20enc.key;propmanifest_skip_keylocation=Y;autoproceed=Y'" \
+        > "$ee_log" 2>&1
+    local ee_rc=$?
+    itf_artifact "encrecv-transcript" "$ee_log"
+    if [[ $ee_rc -ne 0 ]]; then
+        itf_step fail "receive-as-encrypted restore" \
+            "rc=$ee_rc — see guest-encrecv.log"
+        return 1
+    fi
+    # The -o encryption options ride exactly ONE receive per PLAIN
+    # dataset — each dataset's initial step-1 full copy (j20src, child,
+    # vol = 3; the encrypted child arrives as a raw stream and skips
+    # the overrides).  Every step-2 catch-up stays plain (the
+    # initial-receive-only rule, live).
+    local enc_receives
+    enc_receives=$(grep -cF -- "-o encryption=on -o keyformat=raw -o keylocation=file:///root/j20enc.key" "$ee_log")
+    local -a want_ee=(
+        "will be created by the receive itself as an encrypted dataset (receive_encryption='Y' — no destination pre-create)."
+        "(source zfstest2/zfstest1/j20src/vol is a volume or encrypted — no destination pre-create)."
+        "(source zfstest2/zfstest1/j20src/enc is a volume or encrypted — no destination pre-create)."
+        "WARN: keylocation on zfstest1/j20enc/j20src/enc skipped"
+        )
+    local -a forbid_ee=(
+        "FATAL"
+        "Could not set"
+        "keeps its inherited defaults"
+        "failed its sha256 check"
+        )
+    bad_markers=""
+    for marker in "${want_ee[@]}"; do
+        grep -qF "$marker" "$ee_log" || bad_markers+=" [missing: $marker]"
+    done
+    for marker in "${forbid_ee[@]}"; do
+        grep -qF "$marker" "$ee_log" && bad_markers+=" [unexpected: $marker]"
+    done
+    if [[ "$enc_receives" -ne 3 ]]; then
+        bad_markers+=" [encrypted receive count: $enc_receives (wanted 3 — one step-1 per plain dataset)]"
+    fi
+    if [[ -n "$bad_markers" ]]; then
+        itf_step fail "receive-as-encrypted restore" \
+            "$bad_markers — see guest-encrecv.log"
+        return 1
+    fi
+    local ees_script="$ITF_RUN_DIR/guest-encrecv-state.sh"
+    cat > "$ees_script" <<'EOF'
+#!/bin/bash
+set -e
+check() { # <want> <property> <dataset> — local source only
+    local got
+    got=$(zfs get -Hpo value -s local "$2" "$3" 2>/dev/null || true)
+    test "$got" = "$1" || { echo "MISMATCH: $3 $2=$got want $1"; exit 1; }
+}
+plain() { # <want> <property> <dataset> — any source
+    local got
+    got=$(zfs get -Hpo value "$2" "$3" 2>/dev/null || true)
+    test "$got" = "$1" || { echo "MISMATCH: $3 $2=$got want $1"; exit 1; }
+}
+encrypted() { # <dataset> — must wear encryption
+    local got
+    got=$(zfs get -Hpo value encryption "$1" 2>/dev/null || true)
+    [[ "$got" != "off" && "$got" != "-" && -n "$got" ]] \
+        || { echo "MISMATCH: $1 encryption=$got"; exit 1; }
+}
+# The top dataset: its own encryption root wearing the restore key,
+# loaded by the receive itself, with every captured setting replayed.
+encrypted zfstest1/j20enc/j20src
+plain zfstest1/j20enc/j20src encryptionroot zfstest1/j20enc/j20src
+plain available keystatus zfstest1/j20enc/j20src
+check file:///root/j20enc.key keylocation zfstest1/j20enc/j20src
+check zstd compression zfstest1/j20enc/j20src
+check 65536 recordsize zfstest1/j20enc/j20src
+check off atime zfstest1/j20enc/j20src
+check marker1 com.itf:j20 zfstest1/j20enc/j20src
+zfs mount zfstest1/j20enc/j20src
+grep -q g1-data /zfstest1/j20enc/j20src/file-a.txt
+grep -q g2-data /zfstest1/j20enc/j20src/file-b.txt
+zfs unmount zfstest1/j20enc/j20src
+# The plain child and the zvol arrived encrypted the same way.
+encrypted zfstest1/j20enc/j20src/child
+plain available keystatus zfstest1/j20enc/j20src/child
+check lz4 compression zfstest1/j20enc/j20src/child
+check marker2 com.itf:j20 zfstest1/j20enc/j20src/child
+encrypted zfstest1/j20enc/j20src/vol
+plain available keystatus zfstest1/j20enc/j20src/vol
+check 16777216 volsize zfstest1/j20enc/j20src/vol
+# The raw-stream child keeps the SOURCE's encryption and — the
+# documented skip-keylocation shape — stays locked.
+encrypted zfstest1/j20enc/j20src/enc
+plain unavailable keystatus zfstest1/j20enc/j20src/enc
+echo ee-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$ees_script" /root/itf-j20-eestate.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-eestate.sh" \
+            > "$ITF_RUN_DIR/guest-encrecv-state.log" 2>&1 \
+            && grep -q ee-state-ok "$ITF_RUN_DIR/guest-encrecv-state.log"; then
+        itf_step pass "receive-as-encrypted restore" \
+            "one -o receive; top + child + zvol encrypted under the" \
+            "restore key (loaded, data readable, props replayed); the" \
+            "raw child keeps its own encryption, locked with a WARN"
+    else
+        itf_step fail "receive-as-encrypted restore" \
+            "see guest-encrecv-state.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage EF: a non-file:// keylocation is FATAL before any transfer
+    # ------------------------------------------------------------------
+
+    local ef_log="$ITF_RUN_DIR/guest-encfatal.log"
+    itf_guest_exec "$guest_ip" \
+        "$tree/bin/zfsrestore 'restoresourcefs=zfstest2/zfstest1/j20src;sourcefsremovequalifiers=2;destfs=zfstest1/j20enc2;receive_encryption=Y;receive_keylocation=prompt;autoproceed=Y'" \
+        > "$ef_log" 2>&1
+    local ef_rc=$?
+    itf_artifact "encfatal-transcript" "$ef_log"
+    local -a want_ef=(
+        "FATAL: receive_encryption='Y' requires receive_keylocation to be a file:// path to a 32-byte raw key file (got 'prompt')."
+        )
+    local -a forbid_ef=(
+        "VERB: zfs receive"
+        "INFO: zfsrestore completed."
+        )
+    bad_markers=""
+    for marker in "${want_ef[@]}"; do
+        grep -qF "$marker" "$ef_log" || bad_markers+=" [missing: $marker]"
+    done
+    for marker in "${forbid_ef[@]}"; do
+        grep -qF "$marker" "$ef_log" && bad_markers+=" [unexpected: $marker]"
+    done
+    if [[ $ef_rc -ne 8 ]]; then
+        bad_markers+=" [rc=$ef_rc (wanted 8)]"
+    fi
+    if [[ -n "$bad_markers" ]]; then
+        itf_step fail "invalid keylocation is FATAL before any transfer" \
+            "$bad_markers — see guest-encfatal.log"
+        return 1
+    fi
+    local efs_script="$ITF_RUN_DIR/guest-encfatal-state.sh"
+    cat > "$efs_script" <<'EOF'
+#!/bin/bash
+set -e
+# Nothing was created — the refusal fired at engine entry.
+! zfs list -H -o name zfstest1/j20enc2 > /dev/null 2>&1
+! zfs list -H -o name zfstest1/j20enc2/j20src > /dev/null 2>&1
+echo ef-state-ok
+EOF
+    itf_guest_put "$guest_ip" "$efs_script" /root/itf-j20-efstate.sh > /dev/null 2>&1
+    if itf_guest_exec "$guest_ip" "bash /root/itf-j20-efstate.sh" \
+            > "$ITF_RUN_DIR/guest-encfatal-state.log" 2>&1 \
+            && grep -q ef-state-ok "$ITF_RUN_DIR/guest-encfatal-state.log"; then
+        itf_step pass "invalid keylocation is FATAL before any transfer" \
+            "rc=8 at engine entry; no receive ran, nothing was created"
+    else
+        itf_step fail "invalid keylocation is FATAL before any transfer" \
+            "see guest-encfatal-state.log"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
     # Stage P: retention lockstep — the offsite pruner treats the
     # stores exactly like the data copies
     # ------------------------------------------------------------------
@@ -765,22 +1150,24 @@ EOF
 
     local e2e_log="$ITF_RUN_DIR/guest-payload-e2e.log"
     if itf_guest_exec "$guest_ip" \
-            "cd /root/ZFSutilities && python3 tests/integrated/e2e/payload-e2e-driver.py --scenarios offsite-onward-" \
+            "cd /root/ZFSutilities && python3 tests/integrated/e2e/payload-e2e-driver.py --scenarios offsite-onward-,restore-" \
             > "$e2e_log" 2>&1; then
         if grep -qE 'payload e2e: [0-9]+ passed, 0 failed, [0-9]+ total' "$e2e_log" \
                 && grep -q 'offsite-onward-leg-manifest-travel' "$e2e_log" \
-                && grep -q 'offsite-onward-dryrun' "$e2e_log"; then
-            itf_step pass "payload e2e offsite-onward pair" \
+                && grep -q 'offsite-onward-dryrun' "$e2e_log" \
+                && grep -q 'restore-manifest-replay' "$e2e_log" \
+                && grep -q 'restore-receive-encrypted' "$e2e_log"; then
+            itf_step pass "payload e2e offsite-onward + restore pairs" \
                 "mutation + read scenarios green (see guest-payload-e2e.log)"
             itf_artifact "payload-e2e" "$e2e_log"
         else
-            itf_step fail "payload e2e offsite-onward pair" \
+            itf_step fail "payload e2e offsite-onward + restore pairs" \
                 "footer or scenario lines missing — see guest-payload-e2e.log"
             itf_artifact "payload-e2e" "$e2e_log"
             return 1
         fi
     else
-        itf_step fail "payload e2e offsite-onward pair" \
+        itf_step fail "payload e2e offsite-onward + restore pairs" \
             "see guest-payload-e2e.log"
         itf_artifact "payload-e2e" "$e2e_log"
         return 1
@@ -805,6 +1192,8 @@ EOF
         "property-manifest fidelity validated end to end: capture," \
         "exact-generation replay, generation-miss and pre-feature" \
         "degradation, offsite travel through the deeper store lookup," \
-        "missing-key WARN, retention lockstep, and the GUI onward pair"
+        "missing-key WARN, retention lockstep, sendstream consumption," \
+        "standalone replay, receive-as-encrypted (incl. its FATAL" \
+        "guard), and the GUI onward + restore pairs"
     return 0
 }

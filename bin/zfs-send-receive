@@ -37,7 +37,10 @@
 #                             (lib/property-manifest-lib.sh); 'N' skips. Fail-open: WARN only.
 #     $receive_encryption     'N' (default) receives plainly. 'Y' receives the step-1 (initial)
 #                             full-copy stream as encrypted (-o encryption=on -o keyformat=raw
-#                             -o keylocation=$receive_keylocation); the destination is created
+#                             -o keylocation=$receive_keylocation) sent PLAIN (no -cw): zfs
+#                             receive refuses embedded-data (-c) streams under encryption, so
+#                             property fidelity for this transfer is the manifest replay's
+#                             job. The destination is created
 #                             by the receive itself, and encrypted (raw-stream) sources keep
 #                             their own encryption — raw streams refuse the overrides.
 #     $receive_keylocation    file:// path to the 32-byte raw key file used when
@@ -178,9 +181,6 @@ function send-receive {
             receive_s_option='s'
         fi
 
-        sendoptions="-cw ${incremental_args[*]}"
-        receiveoptions="-uv$receive_F_option$receive_s_option"
-
         # Receive-as-encrypted (restore): encryption-family -o overrides
         # apply only to the initial receive that creates the destination —
         # step 1 of a full-copy pass (no incremental base). Step 2 and the
@@ -192,8 +192,40 @@ function send-receive {
             && ${#incremental_args[@]} -eq 0 && ${_src_encrypted:-0} -ne 1 ]]; then
             _enc_opts=(-o encryption=on -o keyformat=raw \
                 -o "keylocation=$receive_keylocation")
-            receiveoptions="${_enc_opts[*]} $receiveoptions"
         fi
+
+        # Destination-encryption probe — PER TRANSFER STEP, not once per
+        # dataset: step 1 of a receive_encryption='Y' pass CREATES the
+        # destination encrypted, so the probe must re-run before step 2
+        # (a once-per-dataset probe sees the destination's pre-step-1
+        # absence and stale-keeps -cw — j20's EE stage caught exactly
+        # that sequencing).
+        local _dest_enc _dest_encrypted=0
+        if zfs list -H "$destfs$restorefs" > /dev/null 2>&1; then
+            _dest_enc=$(zfs get -H -o value encryption "$destfs$restorefs" 2>/dev/null || true)
+            if [[ -n "$_dest_enc" && "$_dest_enc" != "off" && "$_dest_enc" != "-" ]]; then
+                _dest_encrypted=1
+            fi
+        fi
+
+        # The -cw stream is property-faithful but incompatible with an
+        # encrypted receive: -c advertises embedded blocks, which zfs
+        # receive refuses under encryption (measured on OpenZFS 2.2.2;
+        # the plain stream is the only form an encrypted receive takes).
+        # That covers the initial receive (the _enc_opts step 1) AND every
+        # later receive into a destination created that way (its step-2
+        # catch-up and incremental passes). Property fidelity for these
+        # transfers is the manifest replay's job; an encrypted SOURCE
+        # keeps -cw (its raw stream preserves the encryption itself).
+        if [[ ${#_enc_opts[@]} -gt 0 \
+            || ( ${_dest_encrypted:-0} -eq 1 && ${_src_encrypted:-0} -ne 1 ) ]]; then
+            sendoptions="${incremental_args[*]}"
+        else
+            sendoptions="-cw ${incremental_args[*]}"
+        fi
+        receiveoptions="-uv$receive_F_option$receive_s_option"
+        [[ ${#_enc_opts[@]} -gt 0 ]] \
+            && receiveoptions="${_enc_opts[*]} $receiveoptions"
 
         log_msg "VERB: zfs send $sendoptions $fs$nextsnap"
         log_msg "VERB: zfs receive $receiveoptions $destfs$restorefs"

@@ -39,12 +39,15 @@ apt-get install -y --no-install-recommends \
     zfsutils-linux
 
 # The GitHub runner (and Ubuntu-family hosts) may ship distro-installed
-# Pygments without pip metadata; when mkdocs-material resolves a newer
-# Pygments, pip cannot uninstall the distro copy ("RECORD file not
-# found — installed by debian") and aborts the whole install. Install
-# pip's own copy first, ignoring the distro one, so the main install
-# finds the requirement already satisfied.
-python3 -m pip install --break-system-packages --ignore-installed pygments
+# Python packages without pip metadata; when a requirement resolves a
+# newer version, pip cannot uninstall the distro copy ("RECORD file not
+# found — installed by debian") and aborts the whole install. Known
+# victims: Pygments (mkdocs-material resolves a newer one) and requests
+# (the Ubuntu 26 runner image ships debian requests 2.32.5 while
+# mkdocs-material >= 9.8 demands >= 2.33). Install pip's own copies
+# first, ignoring the distro ones, so the main install finds the
+# requirements already satisfied.
+python3 -m pip install --break-system-packages --ignore-installed pygments requests
 
 # --break-system-packages is required on Ubuntu 24.04's externally-managed
 # Python; it is accepted harmlessly where not required.

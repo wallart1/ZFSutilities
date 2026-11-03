@@ -170,7 +170,8 @@ known-hosts file: a fresh guest at a previously used address presents a
 ## GUI payload e2e matrix
 
 The GUI does its work by building bash payloads (python/offsite_runner.py,
-python/command_builders.py) and running them through BackupRunner. The
+python/command_builders.py, python/restore_runner.py) and running them
+through BackupRunner. The
 payload e2e matrix exercises exactly that code — the real builders, the
 real runner, real ZFS pools — instead of hand smoke tests. The scenarios
 live once in `tests/python/e2e_support.py` and run in three contexts:
@@ -194,7 +195,9 @@ live once in `tests/python/e2e_support.py` and run in three contexts:
 
 Scenario levels are declared per scenario (`none` / `read` / `mutation`)
 together with an engine mode: GUI payloads run under the input-hold
-protocol exactly as the GUI runner launches them; the CLI orchestrator
+protocol exactly as the GUI runner launches them — offsite, backup,
+prune, and restore payloads alike, including the Restore tab's property
+replay and receive-as-encrypted scenarios; the CLI orchestrator
 scenarios (zfssend, zfsfullcopy, zfsrestore, the zfshold round trip) run
 protocol-off as cron/terminal would, with known raw prompts pre-fed on
 the pty and any unexpected prompt caught by the watchdog.
@@ -217,8 +220,19 @@ a restore from the offsite copy replays through the traveled store (the
 deeper store-candidate lookup) — including the hidden-key WARN that
 leaves the dataset locked — before `zfsoffsiteretain` prunes the
 store's offsite snapshots in lockstep with the data copies'. The
-journey closes by running the payload-e2e driver's offsite-onward pair,
-the mutation scenario the unprivileged container tier cannot run.
+consumption surfaces follow: a hand-made export (`zfs send` to a file
+plus the store's manifest as its `.props` sibling) replays through
+`zfsrestoresendstream` while a sibling-less file restores silently, and
+a restore made with `replay_properties=N` gets every setting back
+through standalone `zfsreplayprops`. The receive-as-encrypted restore
+(campaign P6) then initial-receives every plain dataset as encrypted
+wearing the restore key — exactly one `-o encryption` receive, the
+step-2 catch-up stays plain, the raw-stream child keeps its own
+encryption and stays locked under the skip-`keylocation` WARN — with
+the non-`file://` keylocation refused FATAL (rc 8) before any transfer.
+The journey closes by running the payload-e2e driver's offsite-onward
+and restore pairs, the mutation scenarios the unprivileged container
+tier cannot run.
 
 ## Post-install baseline template
 

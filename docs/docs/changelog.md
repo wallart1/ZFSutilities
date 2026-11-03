@@ -1,5 +1,124 @@
 # Changelog
 
+## 0.138.0
+
+*Released 2026-11-03*
+
+### Added
+
+- **Backup property fidelity: the property manifest.** Backups send
+  property-less `-cw` streams by design, so a restored dataset wore the
+  destination hierarchy's inherited defaults instead of the source's
+  compression, recordsize, `keylocation`, and user properties. After
+  each verified transfer the engine now captures the dataset's
+  locally-set properties (`zfs get -s local`, minus what raw streams
+  already carry) into a dedicated
+  `<destfs>/<source pool>/zfsutilities-manifests` filesystem — one
+  checksummed file per dataset per generation, written under the same
+  `w`-lock discipline as every other mutation, mounted only while
+  writing, and fail-open throughout (a refused store WARNs once and
+  the backup still flows). The store snapshots under the same
+  generation snapname as the data, so existing retention prunes it in
+  lockstep, and offsite onward legs carry it to the offsite pool as an
+  ordinary dataset (capture off — copies hold no local properties).
+  On by default (`property_manifest='Y'`); nothing to enable.
+- **Property replay at restore.** Restores re-apply each dataset's
+  captured manifest after the transfer: `zfsreplayprops` (new shared
+  engine entry) verifies the header and checksum and re-applies each
+  property with `zfs set`; a `file://` keylocation additionally gets a
+  best-effort non-interactive `zfs load-key`. Wired into `zfsrestore`
+  (`replay_properties='Y'` default), the GUI restore payload (the
+  Restore tab's new *Replay properties* toggle), and
+  `zfsrestoresendstream`, which consumes a stream file's `.props`
+  sibling when one sits beside it. Replay finds traveled stores by
+  probing the deeper offsite-hop shape before the direct backup root.
+  Everything about replay is WARN-only — a missing, stale, or corrupt
+  manifest never fails a restore.
+- **Receive-as-encrypted restores.** The Restore tab's new *Receive as
+  encrypted* option (engine: `receive_encryption='Y'` with
+  `receive_keylocation=file://…`) receives each plain backup dataset
+  into a dataset created encrypted by the receive itself — its own
+  encryption root wearing the given raw key. Only the initial receive
+  carries the encryption `-o` options; a non-`file://` keylocation is
+  FATAL before any transfer; already-encrypted (raw-stream) sources
+  are skipped automatically. Works on every OpenZFS release in the
+  fleet, so no capability gate is needed.
+- **ZFS capability layer grown from measurement.** The j21 probe
+  matrix measured the receive-family behaviors the engine's design
+  rests on across the fleet's OpenZFS releases (Ubuntu LTS 2.2.2,
+  Debian 2.3.9, PVE 2.4.4): `zfs receive -o volblocksize` is refused
+  through 2.4.4, so its capability entry is pinned at 2.5.0, and
+  receive-family entries now gate on the smaller of the userland and
+  kernel-module versions (`RECEIVE_FAMILY` in
+  `python/zfs_capabilities.py`). A new ubuntu baseline template
+  profile joins the ITF's template set (it installs by direct kernel
+  boot — the ISO's grub handoff dies on the serial-only guest).
+- **ITF coverage for the campaign.** Journey j20 (backup property
+  fidelity) exercises manifest capture, offsite travel, replay
+  through the GUI payload, `.props`-sibling consumption, standalone
+  replay over a replay-skipped restore, the receive-as-encrypted
+  mixed-tree restore, and the FATAL keylocation guard; journey j21
+  runs the probe matrix per baseline template; the GUI payload e2e
+  matrix gained restore-manifest-replay and receive-as-encrypted
+  scenarios.
+
+### Fixed
+
+- **Receive-as-encrypted transfers could never run.** `zfs receive -o
+  encryption=on` refuses embedded-data (`-c`) streams, and the engine
+  sent every stream `-cw`. Sends for an encrypted receive now go
+  plain — the initial receive and every later receive into the
+  destination it created (the destination-encryption probe re-runs
+  per transfer step, because step 1 is what creates the destination);
+  encrypted sources keep their raw `-cw` path. Property fidelity for
+  these transfers is the manifest replay's job, which is exactly what
+  it is for.
+- **Unpaced restore/read-through pipelines never transferred.** With
+  no enclosure rate cap applied, `zfsrestoresendstream` and
+  `zfsreadthru` ran an empty pacer-array expansion as a pipeline
+  segment — a null command that swallows the stream (bash 5.2), so
+  the restore read instant EOF and the read-through silently stopped
+  reading. Both scripts now compose the pipeline by branch
+  (paced/unpaced), the same four-shape composition the transfer
+  engine uses. A regression of the 0.133.0 rate-governance rework,
+  hidden from unit mocks and caught by journey j20.
+- **CI dependency install on the Ubuntu 26 runner.** Distro Python
+  packages without pip metadata (Pygments, requests) aborted the
+  whole install when a requirement resolved a newer version; pip's
+  own copies are installed first with `--ignore-installed`.
+- **A unit test depended on the runner's ZFS state.** The backup-rsync
+  page-runner case called the real destination mount-chain fence (a
+  live `zfs list`), so on a runner where that query fails the step
+  was refused and the assertion failed. The fence is now mocked and
+  the case is hermetic.
+
+### Changed
+
+- Sends into an encrypted destination from an unencrypted source are
+  plain instead of `-cw` (see the receive-as-encrypted fix above);
+  every captured setting still comes back through property replay.
+
+### Tests
+
+- New suites for the manifest library, the replay entry, and the
+  engine's manifest integration; the receive-as-encrypted suite pins
+  the plain-send law (step-1 plain, plain catch-up into the created
+  destination, encrypted sources keep `-cw`); the restore-stream
+  suite guards the branch-composed pipeline shapes at the source
+  level; the page-runner backup case no longer shells out to the
+  host's ZFS.
+
+### Documentation
+
+- User guide: restore (property replay, receiving a restore as
+  encrypted, the plain-transfer behavior), daily backup, offsite
+  backup (manifest travel and lockstep retention), and the GTK GUI
+  page (Restore-tab toggles); messages-manual rows for every manifest
+  and replay message; developer guides (global variables, command and
+  module pages, integrated testing, ITF coverage); GLOSSARY entries
+  for property manifest, receive as encrypted, receive family, and
+  probe.
+
 ## 0.137.0
 
 *Released 2026-11-01*

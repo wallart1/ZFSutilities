@@ -14,8 +14,8 @@ speculative coverage). The journeys themselves are described in
 | Uninstall / reinstall / install over leftovers | j02, j03 | *(gap: uninstall/reinstall with live LUNs)* |
 | Post-install baseline (wiring, pools, product surface) | j04 | j05 verify stages |
 | Release upgrade (scan/salvage/deploy/activate) | j10, j12 (interrupted: SIGTERM early, SIGKILL mid-deploy), j19 (trust-on-first-upgrade baseline capture) | *(gap: two-node release upgrade — remote scan/salvage over SSH; interrupted variant with keys pending)* |
-| GUI payload e2e matrix (offsite chain, backup/prune/rsync orchestrators) | j11 (+dev-container/dev-host contexts) | — |
-| Backup property fidelity (manifest capture, offsite travel, replay, retention lockstep) | j20 (incl. the offsite-onward payload pair) | — |
+| GUI payload e2e matrix (offsite chain, backup/prune/rsync orchestrators, restore payloads incl. receive-as-encrypted) | j11 (+dev-container/dev-host contexts) | — |
+| Backup property fidelity (manifest capture, offsite travel, replay, retention lockstep, sendstream `.props` consumption, standalone replay, receive-as-encrypted restore + FATAL guard) | j20 (incl. the offsite-onward + restore payload pairs) | — |
 | ZFS-semantics probe matrix (receive `-o volblocksize`, stream fidelity plain/`-c`/`-cw`, keylocation prompt vs `file://`, receive-as-encrypted, raw `-o` refusal, encryptionroot-self) | j21 (`--template storage/compute/ubuntu`, per-template version-keyed expectations; `probes.tsv` = the measured truths behind `zfs_capabilities`' receive-family entries) | — |
 | First LUN round trip (new-vm-disk → iSCSI → VM config → save) | — | j05 (composed by every j06+ lab journey) |
 | Guest-probe validator (pools/datasets/PVE fetch, honest degradation) | — | j06 |

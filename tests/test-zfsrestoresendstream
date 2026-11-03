@@ -383,10 +383,34 @@ EOF
     test_pass
 }
 
+# ------------------------------------------------------------------
+# Test: no empty-array pipeline segment (source-shape guard)
+# ------------------------------------------------------------------
+# bash runs a zero-word pipeline segment ("${pace_argv[@]}" with the
+# array empty) as a null command that swallows the stream — the unpaced
+# restore could never transfer until this was composed by branch
+# (F-046). Mocks cannot see pipeline semantics, so the shape itself is
+# asserted: the idiom may not return in this script (or zfsreadthru,
+# which shared it).
+test_restoresendstream_pipeline_composed_by_branch() {
+    test_start "receive pipelines compose by branch (no empty pacer segment)"
+
+    local script
+    for script in zfsrestoresendstream zfsreadthru; do
+        if grep -n -- '| "${pace_argv[@]}"' "$old_mydir/bin/$script" > /dev/null; then
+            test_fail "$script still pipes through an empty pace_argv segment:" \
+                "$(grep -n -- '| "${pace_argv[@]}"' "$old_mydir/bin/$script")"
+            return
+        fi
+    done
+    test_pass
+}
+
 test_restoresendstream_acquires_locks
 test_restoresendstream_paces_at_enclosure_cap
 test_restoresendstream_resolver_failure_fails_open
 test_restoresendstream_applies_props_sibling
+test_restoresendstream_pipeline_composed_by_branch
 
 test_summary
 teardown_test_env

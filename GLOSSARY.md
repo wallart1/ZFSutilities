@@ -1,18 +1,27 @@
 # Glossary
 
 Items to add:
-    acls
-    LIO
-    DEL
-    cast
-    Phase-4 precedent
-    idiom
+    cast — no usage context found anywhere in the repository as of
+        2026-11-03; stays queued until a real sighting names it
 
 Plain-language definitions of terms as they are actually used in this
 repository — in agent work reports, SESSION_NOTES.md, CI output, and the
 docs. Entries are added alphabetically as jargon comes to light, without
 waiting for a request; a term belongs here the moment a report has to
 pause to explain it.
+
+## ACL
+
+Access Control List. In this repository the word almost always means
+the iSCSI kind, not filesystem permissions: inside each target's TPG,
+LIO keeps a per-initiator ACL saying which compute node may log in and
+which LUNs it may see — the "mapped LUN" grants. The pool state map
+(version 2) records every ACL grant — initiator, mapped LUN, LUN — so
+reconcile and the boot verifier can restore and check them exactly;
+losing a still-expected grant is refused (FATAL), never silently
+remapped. ZFS filesystem ACLs exist too (`acltype` and friends — a
+locally-set one simply rides the property manifests like any other
+dataset property), but nothing in the repository manages them directly.
 
 ## autoinstall
 
@@ -92,6 +101,16 @@ returning success); Dashboard shortfall rows clear. The exercise proves
 the 2026-10-27 incident class — the node silently coming up with 3 of 33
 LUNs mapped while every gate passed — is dead: nothing silent, nothing
 destroyed, one clean recovery.
+
+## DEL
+
+One of the three change classifications the upgrade tooling prints
+when comparing the currently deployed version against the new one
+(`upgrade_lib_classify` in the upgrade library): **MOD** — the file
+exists in both versions but differs; **ADD** — new in this version;
+**DEL** — the new version deletes it, so the upgrade removes it from
+the deployed tree (behind the usual safety checks). The upgrade ITF
+journeys exercise the classification live.
 
 ## dp module identity
 
@@ -179,6 +198,28 @@ pools. In the test suites the GTK layer is faked with the `mock_gtk`
 context so GUI code can be tested headless, and the one realized-window
 check runs under a private Xvfb display.
 
+## idiom
+
+A recurring, recognized code pattern that other work reuses by
+reference: "the datasets-page idiom," "the scroll save/restore
+idiom," "the workload-profile dialog idiom" each mean "build it the
+way that existing surface does" — the named page is the reference
+implementation. House style now uses the word sparingly in agent
+reports (name the pattern plainly instead), but the developer docs
+still use it freely.
+
+## LIO
+
+Linux-I/O target: the Linux kernel's built-in iSCSI target subsystem —
+the thing that actually serves this project's zvols to the compute
+node over the storage network. `targetcli` is its management shell,
+`/etc/rtslib-fb-target/` holds its saved configuration (saveconfig),
+and the "LIO tree" is its live configuration of targets, TPGs,
+backstores, and LUN mappings. Nearly every iSCSI feature here — the
+state map, reconcile, the boot verifier, the safe-save gate — reads or
+rebuilds the LIO tree; the test journeys' "LIO total loss" scenarios
+exercise losing it entirely.
+
 ## mock
 
 A stand-in that imitates a real dependency during tests, so suites can
@@ -197,6 +238,29 @@ exercise sequence file," they mean the controlled-reboot exercise is
 verified against that file's steps, not against a summary or memory.
 Distinguished from a mock (which fakes a dependency for testing): an
 oracle defines truth for a verification.
+
+## Phase-4 precedent
+
+Report shorthand for citing an earlier campaign phase that already
+settled a question, as the established way to do it now. The phrase is
+campaign-relative (several campaigns had their own Phase 4), but the
+one usually meant is the concurrency campaign's Phase 4, shared-state
+file locking: every shared JSON/state file got one advisory `flock`
+lock file, with Python's `fcntl.flock` and the bash `zfsconfig`
+helper interoperating on the same locks ("Resolved by Phase 4" in
+`concurrency-collisions.md`). Following the Phase-4 precedent for a
+new shared file means giving it its own lock file on that pattern
+rather than inventing a new scheme.
+
+## probe
+
+A small scripted live check of one ZFS behavior, run inside a test guest
+and judged against a version-keyed expectation — pass/fail, never
+best-effort. The j21-zfs-probes journey runs seven of them (the "probe
+matrix") across the three baseline templates to measure the OpenZFS
+behaviors the backup engine's design rests on; `probes.tsv` in the run
+report is the recorded outcome. Unrelated to the GUI's guest-filesystem
+probe (the Alignment view's validator, journey j06).
 
 ## property manifest
 
@@ -223,16 +287,6 @@ re-applies each property with `zfs set` — a `file://` keylocation
 additionally gets a best-effort non-interactive `zfs load-key`. Everything
 about replay is WARN-only: a missing, stale, or corrupt manifest never
 fails a restore; the dataset simply keeps its inherited defaults.
-
-## probe
-
-A small scripted live check of one ZFS behavior, run inside a test guest
-and judged against a version-keyed expectation — pass/fail, never
-best-effort. The j21-zfs-probes journey runs seven of them (the "probe
-matrix") across the three baseline templates to measure the OpenZFS
-behaviors the backup engine's design rests on; `probes.tsv` in the run
-report is the recorded outcome. Unrelated to the GUI's guest-filesystem
-probe (the Alignment view's validator, journey j06).
 
 ## receive as encrypted
 
@@ -273,6 +327,16 @@ change are the ones covering the files it touched. House rule (root
 AGENTS.md): during iteration run only the affected suites; run the full
 suite once, at the end — the full gate is `tests/run-tests`.
 
+## TCG
+
+Tiny Code Generator: QEMU's software CPU emulator — the fallback that
+runs a virtual machine entirely in code when hardware virtualization
+(KVM) is unavailable. The integration-test lab nests Proxmox inside its
+guests with no /dev/kvm passthrough, so every lab VM boots under TCG
+("a TCG boot", `kvm=0`): much slower than KVM but faithful, which is
+why lab boot proofs are timed generously and judged by behavior, not
+speed.
+
 ## TPG
 
 Target Portal Group: the container inside an iSCSI target (LIO/
@@ -283,16 +347,6 @@ the safe-iscsi-save gate compares against the expected-backstores
 manifest, and the thing the 2026-10-27 incident silently lost (33
 backstores defined, only 3 mapped, because the gates counted
 backstores instead of TPG mappings).
-
-## TCG
-
-Tiny Code Generator: QEMU's software CPU emulator — the fallback that
-runs a virtual machine entirely in code when hardware virtualization
-(KVM) is unavailable. The integration-test lab nests Proxmox inside its
-guests with no /dev/kvm passthrough, so every lab VM boots under TCG
-("a TCG boot", `kvm=0`): much slower than KVM but faithful, which is
-why lab boot proofs are timed generously and judged by behavior, not
-speed.
 
 ## TTL
 

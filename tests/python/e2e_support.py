@@ -52,9 +52,10 @@ if PYTHON_DIR not in sys.path:
     sys.path.insert(0, PYTHON_DIR)
 
 # Repo modules used to build payloads.  The whole import chain of these
-# three is stdlib-only, which is what lets the guest driver import them.
+# four is stdlib-only, which is what lets the guest driver import them.
 import command_builders
 import offsite_runner
+import restore_runner
 from command_builders import BashStep
 
 TEST_POOLS = ("zfstest1", "zfstest2", "zfstest3")
@@ -679,6 +680,15 @@ def backup_variables(**overrides):
     return variables
 
 
+def restore_variables(**overrides):
+    """RESTORE_DEFAULTS variables, exactly as the GUI loads them."""
+    from feature_config import RESTORE_DEFAULTS
+
+    variables = dict(RESTORE_DEFAULTS["variables"])
+    variables.update(overrides)
+    return variables
+
+
 _ISSUED_SNAPS = set()
 
 
@@ -778,6 +788,24 @@ def build_backup_step(source, dest, variables, nextsnap, dryrun=False):
     """The exact step object the Backup page builds for one send/receive step."""
     return command_builders.build_send_receive_command(
         source, dest, variables, BIN_DIR, nextsnap, dryrun=dryrun
+    )
+
+
+def build_restore_step(source, dest, variables, dryrun=False, recursive=False):
+    """The exact step object the Restore page's on_restore_run builds.
+
+    The removequalifiers/destfs pair is computed the same way the page
+    computes it (compute_restore_params over the chosen destination), so
+    the payload under test is byte-for-byte the GUI's."""
+    removequalifiers, destfs = restore_runner.compute_restore_params(source, dest)
+    return restore_runner.build_restore_command(
+        source,
+        removequalifiers,
+        destfs,
+        BIN_DIR,
+        variables,
+        dryrun=dryrun,
+        recursive=recursive,
     )
 
 
@@ -1426,6 +1454,84 @@ def backup_prune(h):
     # ... while the offsite-labeled snapshot is untouched by the
     # dailybackup prune.
     assert_snapshot(f"{src}{snap}")
+
+
+@scenario("restore-manifest-replay")
+def restore_manifest_replay(h):
+    """Restore-page payload: the backup's manifest replays onto the copy.
+
+    A Backup-page step captures the source's local settings into the
+    manifest store; the Restore tab's payload (the exact step
+    on_restore_run builds) must receive the copy and then replay every
+    captured setting — the replay step inside the same GUI payload,
+    after Part 2's transfer.
+    """
+    src = h.registry.create("zfstest1", "restmr")
+    zfs("set", "compression=lz4", "com.e2e:prop=marker", src)
+    snap = fresh_snap()
+    h.run(build_backup_step(src, "zfstest2", backup_variables(doincrementals="N"), snap))
+    copy = h.registry.register(dest_path_for("zfstest2", src))
+
+    dst = f"zfstest3/{src.split('/')[-1]}"
+    step = build_restore_step(copy, dst, restore_variables())
+    # Part 1 of the restore payload runs autoproceed="N" — the GUI's
+    # deliberate operator gate before the destructive full copy; the
+    # scenario answers it like the GUI runner would.
+    result = h.run(step, allow_prompts=True)
+    h.require_output(result, "VERB: Replayed")
+    restored = h.registry.register(dst)
+    assert_snapshot(f"{restored}{snap}")
+    for prop, want in (("compression", "lz4"), ("com.e2e:prop", "marker")):
+        got = zfs("get", "-Hpo", "value", "-s", "local", prop, restored).stdout.strip()
+        if got != want:
+            raise E2EError(f"{restored} {prop}={got} after replay (wanted {want})")
+
+
+@scenario("restore-receive-encrypted")
+def restore_receive_encrypted(h):
+    """Restore-page payload: Receive as encrypted end to end.
+
+    The payload must carry receive_encryption/receive_keylocation (and
+    propmanifest_skip_keylocation, with replay on) so the initial
+    receive creates the destination as an encrypted dataset wearing the
+    restore key — loaded by the receive itself — while the captured
+    properties still replay onto it.
+    """
+    src = h.registry.create("zfstest1", "restenc")
+    zfs("set", "compression=gzip", "com.e2e:prop=marker", src)
+    snap = fresh_snap()
+    h.run(build_backup_step(src, "zfstest2", backup_variables(doincrementals="N"), snap))
+    copy = h.registry.register(dest_path_for("zfstest2", src))
+
+    dst = f"zfstest3/{src.split('/')[-1]}"
+    key_path = f"/tmp/{dst.replace('/', '-')}.key"
+    with open(key_path, "wb") as fh:
+        fh.write(os.urandom(32))
+    try:
+        step = build_restore_step(
+            copy,
+            dst,
+            restore_variables(
+                receive_encryption="Y",
+                receive_keylocation=f"file://{key_path}",
+            ),
+        )
+        result = h.run(step, allow_prompts=True)
+    finally:
+        os.unlink(key_path)
+    h.require_output(result, "receive -o encryption=on -o keyformat=raw")
+    restored = h.registry.register(dst)
+    assert_snapshot(f"{restored}{snap}")
+    got = zfs("get", "-Hpo", "value", "encryption", restored).stdout.strip()
+    if got in ("off", "-", ""):
+        raise E2EError(f"{restored} encryption={got} — the receive was not encrypted")
+    got = zfs("get", "-Hpo", "value", "keystatus", restored).stdout.strip()
+    if got != "available":
+        raise E2EError(f"{restored} keystatus={got} (the receive must load the key)")
+    for prop, want in (("compression", "gzip"), ("com.e2e:prop", "marker")):
+        got = zfs("get", "-Hpo", "value", "-s", "local", prop, restored).stdout.strip()
+        if got != want:
+            raise E2EError(f"{restored} {prop}={got} after replay (wanted {want})")
 
 
 @scenario("rsync-local-step", level="none")

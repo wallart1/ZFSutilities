@@ -9,7 +9,8 @@ that the strict-mode campaign touched:
 - the prune step (zfscleanup over the backup's datasets),
 - the rsync step wrapper,
 - the flipped leaf orchestrators driven live (zfssend, zfsfullcopy,
-  zfsrestore) and the zfshold round trip.
+  zfsrestore) and the zfshold round trip,
+- restore-page payloads (manifest replay, receive-as-encrypted).
 
 Mutation-level scenarios self-skip in unprivileged contexts; the ITF
 guest driver runs the full matrix.
@@ -26,7 +27,7 @@ from test_offsite_e2e import BackupRunnerExecutor, isolate_runner_state
 BACKUP_SCENARIOS = [
     pytest.param(name, fn, level, engine, id=name)
     for name, fn, level, engine in e2e.scenarios_matching(
-        ("backup-", "prune-", "rsync-", "orch-", "holds-")
+        ("backup-", "prune-", "restore-", "rsync-", "orch-", "holds-")
     )
     if level != "none"
 ]
@@ -34,7 +35,7 @@ BACKUP_SCENARIOS = [
 NO_POOL_SCENARIOS = [
     pytest.param(name, fn, level, engine, id=name)
     for name, fn, level, engine in e2e.scenarios_matching(
-        ("backup-", "prune-", "rsync-", "orch-", "holds-")
+        ("backup-", "prune-", "restore-", "rsync-", "orch-", "holds-")
     )
     if level == "none"
 ]

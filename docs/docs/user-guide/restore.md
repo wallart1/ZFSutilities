@@ -180,6 +180,13 @@ How it behaves:
 - Only the step-1 (initial) receive carries the encryption options — the
   step that creates each destination dataset. The step-2 catch-up and
   Part 2 incremental receives, and resume-token receives, are untouched.
+- The step-1 transfer itself is sent **plain** (no `-cw`) — and so is
+  every later receive into the destination it created (the step-2
+  catch-up and later incremental passes): `zfs receive` refuses
+  embedded-data streams under encryption, initial or incremental alike.
+  These transfers give up the raw-stream form — every captured setting
+  still comes back through the property replay, which is exactly what it
+  is for.
 - **Already-encrypted sources are skipped automatically**: their raw
   streams refuse encryption-family `-o` overrides, so those datasets keep
   the encryption they arrived with (a VERB notes it).

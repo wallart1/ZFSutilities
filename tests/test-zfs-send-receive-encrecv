@@ -3,12 +3,15 @@
 # test-zfs-send-receive-encrecv — Engine contract tests for receive-as-
 # -encrypted: with receive_encryption='Y' and a valid file:// raw-key
 # location, the step-1 (initial) receive of a full-copy pass carries
-# -o encryption=on -o keyformat=raw -o keylocation=… while step 2, the
-# incremental passes, and encrypted (raw-stream) sources stay plain; an
-# invalid keylocation is FATAL before any transfer; the destination
-# pre-create is skipped so the receive itself creates the encrypted
-# dataset; the default 'N' changes nothing. The receive options are
-# asserted through the engine's own VERB/dry-run log lines.
+# -o encryption=on -o keyformat=raw -o keylocation=… and its send goes
+# PLAIN (no -cw); every later send into the destination that receive
+# created (step-2 catch-up, incrementals) is plain the same way, while
+# an encrypted (raw-stream) source keeps its -cw stream and skips the
+# -o overrides; an invalid keylocation is FATAL before any transfer;
+# the destination pre-create is skipped so the receive itself creates
+# the encrypted dataset; the default 'N' changes nothing. The send and
+# receive options are asserted through the engine's own VERB/dry-run
+# log lines.
 
 # shellcheck disable=SC2218
 # (source() override below is intentionally not active for test-lib.sh itself.)
@@ -187,9 +190,80 @@ test_step1_receive_carries_encryption_options() {
     test_pass
 }
 
+test_encrypted_step1_send_is_plain() {
+    test_start "full copy: the encrypted step-1 send drops -cw (plain stream)"
+
+    _setup_full_copy_world
+
+    capture_stderr
+    (
+        receive_encryption='Y'; receive_keylocation='file:///keys/k1'
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    # zfs receive refuses embedded-data (-c) streams under encryption, so
+    # the encrypted step-1 send must be plain while the step-2 catch-up
+    # keeps the engine's usual -cw.
+    local plain_sends cw_sends
+    plain_sends=$(grep 'VERB: zfs send' <<<"$log" | grep -vc -- '-cw')
+    cw_sends=$(grep -c -- 'VERB: zfs send -cw' <<<"$log")
+    if [[ "$plain_sends" != "1" || "$cw_sends" != "1" ]]; then
+        test_fail "expected 1 plain (step-1) + 1 -cw (step-2) send:" \
+            "$(grep 'VERB: zfs send' <<<"$log")"
+        return
+    fi
+    test_pass
+}
+
+test_incremental_into_encrypted_dest_sends_plain() {
+    test_start "full copy into an encrypted destination: every send is plain"
+
+    _setup_full_copy_world
+    _mock_zfs_props["pool/dest/data:encryption"]="aes-256-gcm"
+
+    capture_stderr
+    (
+        receive_encryption='Y'; receive_keylocation='file:///keys/k1'
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    # The step-1 -o receive creates the destination encrypted; the step-2
+    # catch-up lands in that encrypted dataset — BOTH sends must be plain
+    # (-c embedded streams are refused by encrypted receives, initial or
+    # incremental alike; measured on OpenZFS 2.2.2, j20's EE stage).
+    local cw_sends
+    cw_sends=$(grep -c -- 'zfs send -cw' <<<"$log")
+    if [[ "$cw_sends" != "0" ]]; then
+        test_fail "no -cw send expected into the encrypted destination:" \
+            "$(grep 'VERB: zfs send' <<<"$log")"
+        return
+    fi
+    if [[ "$(grep -c 'VERB: zfs send' <<<"$log")" -lt 2 ]]; then
+        test_fail "expected step-1 and step-2 sends:" \
+            "$(grep 'VERB: zfs send' <<<"$log")"
+        return
+    fi
+    test_pass
+}
+
 test_step2_incremental_stays_plain() {
     test_start "full copy: only the step-1 receive is encrypted"
-
     _setup_full_copy_world
 
     capture_stderr
@@ -417,6 +491,8 @@ test_dryrun_reports_encrypted_option() {
 # ---------------------------------------------------------------------------
 
 test_step1_receive_carries_encryption_options
+test_encrypted_step1_send_is_plain
+test_incremental_into_encrypted_dest_sends_plain
 test_step2_incremental_stays_plain
 test_incremental_pass_stays_plain
 test_encrypted_source_keeps_own_encryption

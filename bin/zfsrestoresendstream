@@ -79,7 +79,6 @@ function restoresendstream {
         log_msg "WARN: Enclosure rate resolution failed" \
             "(enclosure_rate.py not found); ignoring enclosure caps for this transfer"
     fi
-    local -a pace_argv=()
     if [[ -n "$rate_limit" ]]; then
         pacer=$(find_zfsutility_script pace_stream.py 2>/dev/null || true)
         if [[ -z "$pacer" ]]; then
@@ -87,7 +86,6 @@ function restoresendstream {
             source "$(find_zfsutility_script bashreturn)" 8
         fi
         log_msg "INFO: Enclosure rate cap applied: ${rate_limit}"
-        pace_argv=(python3 "$pacer" "$rate_limit")
     fi
 
     for file in "${files[@]}"; do
@@ -104,7 +102,19 @@ function restoresendstream {
             source "$(find_zfsutility_script bashreturn)" 8
         fi
         local receive_lock="$zfslock_id"
-        if ! pv "$file" | "${pace_argv[@]}" | zfs receive -v "$fulldestfs"; then
+        # Compose the pipeline by branch — never an empty
+        # "${pace_argv[@]}" middle segment: bash runs a zero-word pipeline
+        # segment as a null command that swallows the stream (bash 5.2),
+        # so the unpaced path must have no pacer stage at all, exactly
+        # like transfer_do's four-shape composition.
+        local _recv_rc=0
+        if [[ -n "$rate_limit" ]]; then
+            pv "$file" | python3 "$pacer" "$rate_limit" \
+                | zfs receive -v "$fulldestfs" || _recv_rc=$?
+        else
+            pv "$file" | zfs receive -v "$fulldestfs" || _recv_rc=$?
+        fi
+        if [[ $_recv_rc -ne 0 ]]; then
             zfslock_release "$receive_lock" || true
             log_msg 'FATAL: Unable to restore file.'
             source "$(find_zfsutility_script bashreturn)" 8
