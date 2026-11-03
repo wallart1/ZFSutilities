@@ -64,6 +64,16 @@ ITF_ISO_NAME=itf-debian-netinst.iso
 # ITF_PVE_ISO_URL=https://REPLACE-ME.invalid/proxmox-ve.iso
 # ITF_PVE_ISO_NAME=itf-pve.iso
 
+# Ubuntu probe-template profile (optional, opt-in — the third template
+# profile, a plain Ubuntu Server LTS with ZFS but no product install;
+# the OpenZFS version leg of the j21 ZFS-probe matrix).  The ISO pair is
+# both-or-neither like the PVE pair and follows the same shape rules;
+# the template name follows the same charset rule as
+# ITF_TEMPLATE_NAME (default below when commented out).
+# ITF_UBUNTU_ISO_URL=https://REPLACE-ME.invalid/ubuntu-live-server.iso
+# ITF_UBUNTU_ISO_NAME=itf-ubuntu-live-server.iso
+# ITF_UBUNTU_TEMPLATE_NAME=itf-template-ubuntu
+
 # Encrypted-key lab (optional, opt-in — used only by journeys that
 # provision the LUKS key-device lab, e.g. j05 --encrypted-keys).  Both
 # or neither: the LUKS passphrase protecting the lab key device and the

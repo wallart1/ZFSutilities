@@ -135,6 +135,41 @@ test_compute_freshness() {
     test_pass
 }
 
+test_stamp_ubuntu_round_trip() {
+    test_start "ubuntu-profile stamp uses ubuntu-iso as its source field"
+    local stamp parsed rc
+    stamp="$(itf_template_stamp_render ubuntu ubuntu-iso itf-ubuntu-24.04.iso \
+        zfs-2.2.2-0ubuntu1 6.8.0-1-generic cafebabe)"
+    parsed="$(itf_template_stamp_parse "$stamp")"
+    rc=$?
+    assert_rc 0 "$rc"
+    assert_contains "$parsed" "profile=ubuntu"
+    assert_contains "$parsed" "ubuntu-iso=itf-ubuntu-24.04.iso"
+    assert_contains "$parsed" "version=zfs-2.2.2-0ubuntu1"
+    test_pass
+}
+
+test_ubuntu_freshness() {
+    test_start "ubuntu freshness keys on profile + Ubuntu ISO name"
+    local iso="itf-ubuntu-24.04.iso"
+    local good bad
+    good="profile=ubuntu ubuntu-iso=$iso version=v kernel=k rev=r built=b"
+    bad="profile=ubuntu ubuntu-iso=itf-ubuntu-26.04.iso version=v kernel=k rev=r built=b"
+    ITF_UBUNTU_ISO_NAME=$iso _itf_template_ubuntu_fresh "$good"
+    assert_rc 0 $?
+    ITF_UBUNTU_ISO_NAME=$iso _itf_template_ubuntu_fresh "$bad" > /dev/null 2>&1
+    assert_rc 1 $?
+    # Storage-profile stamps never match ubuntu freshness, and an unset
+    # ISO pair (sites without the ubuntu profile) disables the check.
+    ITF_UBUNTU_ISO_NAME=$iso _itf_template_ubuntu_fresh \
+        "profile=storage sw-source=dev-tarball version=v rev=r kernel=k built=b" \
+        > /dev/null 2>&1
+    assert_rc 1 $?
+    ITF_UBUNTU_ISO_NAME='' _itf_template_ubuntu_fresh "$good" > /dev/null 2>&1
+    assert_rc 1 $?
+    test_pass
+}
+
 test_stamp_parse_rejects_foreign() {
     test_start "blank or foreign descriptions fail stamp parsing"
     itf_template_stamp_parse "" > /dev/null 2>&1
@@ -156,6 +191,50 @@ test_stamp_read_from_qm_config() {
     # A foreign description must not parse as a stamp.
     itf_template_stamp_read testbase 8005 > /dev/null 2>&1
     assert_rc 1 $?
+}
+
+# ------------------------------------------------------------------------------
+# Autoinstall seed rendering (ubuntu profile)
+# ------------------------------------------------------------------------------
+
+test_autoinstall_render_content() {
+    test_start "autoinstall seed pins key, packages, serial console, layout"
+    printf 'ssh-ed25519 AAAAC3NzaTESTtest itf@dev\n' > "$tmp_dir/itf-test-key.pub"
+    local ud="$tmp_dir/user-data" md="$tmp_dir/meta-data"
+    ITF_SSH_KEY="$tmp_dir/itf-test-key.pub" \
+        itf_autoinstall_render "$ud" "$md" probe-host
+    assert_rc 0 $?
+    local seed
+    seed="$(cat "$ud")"
+    assert_contains "$seed" "#cloud-config"
+    assert_contains "$seed" "autoinstall:"
+    assert_contains "$seed" "hostname: probe-host"
+    assert_contains "$seed" "username: itfadmin"
+    # Key-only ssh: the dev key is authorized, password login is off.
+    assert_contains "$seed" "allow-pw: false"
+    assert_contains "$seed" "ssh-ed25519 AAAAC3NzaTESTtest itf@dev"
+    # The probe substrate's package set: agent + ZFS userland + the test
+    # pools' partitioner.
+    assert_contains "$seed" "qemu-guest-agent"
+    assert_contains "$seed" "zfsutils-linux"
+    assert_contains "$seed" "- parted"
+    # One-disk-at-install-time rule and the serial-console grub rewrite
+    # (the Debian preseed's two invariants, in autoinstall form).
+    assert_contains "$seed" "name: direct"
+    assert_contains "$seed" "path: /dev/sda"
+    assert_contains "$seed" "console=ttyS0,115200n8"
+    assert_contains "$seed" "update-grub"
+    # Root key lands through late-commands, subiquity refusing "root" as
+    # the identity user.
+    assert_contains "$seed" "/target/root/.ssh/authorized_keys"
+    # meta-data: nocloud wants both files, with the hostname inside.
+    assert_contains "$(cat "$md")" "local-hostname: probe-host"
+
+    # A missing key file must be refused, not rendered keyless.
+    ITF_SSH_KEY="$tmp_dir/absent.pub" \
+        itf_autoinstall_render "$ud" "$md" probe-host > /dev/null 2>&1
+    assert_rc 1 $?
+    test_pass
 }
 
 # ------------------------------------------------------------------------------
@@ -362,7 +441,7 @@ test_build_profiles_thread_base_and_stages() {
         builtin source "$@"
     }
     itf_journey_stage_os() {
-        seq+="os|$1|$2|$3|$4| "; J_VMID=8002; J_GUEST_IP=10.0.0.2
+        seq+="os|$1|$2|$3|$4|$5|$6| "; J_VMID=8002; J_GUEST_IP=10.0.0.2
     }
     itf_journey_stage_pve_os() {
         seq+="pveos|$1|$2|$3|$4| "; J_VMID=8003; J_GUEST_IP=10.0.0.3
@@ -373,6 +452,7 @@ test_build_profiles_thread_base_and_stages() {
     itf_guest_exec() {
         case "$2" in
             pveversion) echo "pve-manager/9.2.2" ;;
+            'zfs version | head -1') echo "zfs-2.2.2-0ubuntu1" ;;
             *VERSION*) echo "9.9.9" ;;
             uname*) echo "k-test" ;;
         esac
@@ -403,6 +483,24 @@ test_build_profiles_thread_base_and_stages() {
     fi
     assert_contains "$_itf_exec_calls" \
         'testbase :: qm set 8003 --description itf-stamp\|\ profile=compute\ pve-iso=itf-pve-9.2-1.iso'
+    # Ubuntu profile: distro-flagged OS stage, no product install, and
+    # the ubuntu-iso stamp with the guest's ZFS version.
+    ITF_UBUNTU_ISO_NAME=itf-ubuntu-24.04.iso
+    ITF_UBUNTU_TEMPLATE_NAME=itf-template-ubuntu
+    seq=""
+    reset_exec_calls
+    itf_template_build --force --profile ubuntu --base testbase > /dev/null 2>&1
+    assert_rc 0 $?
+    assert_contains "$seq" \
+        "os|itf-template-ubuntu-build|itf-template-ubuntu|--base|testbase|--distro|ubuntu"
+    assert_contains "$seq" "upgrade:ubuntu| "
+    if [[ "$seq" == *install* ]]; then
+        test_fail "ubuntu profile must not run the product install stage"
+    else
+        test_pass
+    fi
+    assert_contains "$_itf_exec_calls" \
+        'testbase :: qm set 8002 --description itf-stamp\|\ profile=ubuntu\ ubuntu-iso=itf-ubuntu-24.04.iso'
     unset -f source
     itf_report_finish > /dev/null 2>&1 || true
 }
@@ -410,8 +508,11 @@ test_build_profiles_thread_base_and_stages() {
 test_stamp_round_trip
 test_stamp_compute_round_trip
 test_compute_freshness
+test_stamp_ubuntu_round_trip
+test_ubuntu_freshness
 test_stamp_parse_rejects_foreign
 test_stamp_read_from_qm_config
+test_autoinstall_render_content
 test_template_vmid_resolves_by_name
 test_guest_clone_command_shape
 test_guest_clone_without_template_fails

@@ -1,0 +1,504 @@
+#!/usr/bin/env bash
+# j21-zfs-probes.journey — the ZFS-semantics probe matrix across the
+# three baseline profiles.
+#
+# The backup property-fidelity campaign's measurement leg (P5): the
+# engine's -cw raw-stream design, the manifest exclusion set, and the
+# capability table's recv_o_volblocksize minimum all rest on OpenZFS
+# behaviors that must be MEASURED, not assumed.  This journey clones one
+# guest from a selected baseline profile (--template
+# storage|compute|ubuntu — Debian ≈ 2.3, PVE ≈ 2.4-pve, Ubuntu LTS ≈
+# 2.2), creates the documented test pools, reads the guest's zfs
+# version, and runs seven probes with version-keyed expectations:
+#
+#   p1  receive -o volblocksize (zvol)   MEASURED refused through
+#       2.4.4 on every profile (the recv_o_volblocksize pin in
+#       python/zfs_capabilities.py is 2.5.0 — this probe corrects it
+#       the day a newer template carries the feature)
+#   p2  volblocksize on a filesystem     refused on every version
+#   p3  stream fidelity plain/-c/-cw     local props stay local on
+#       receive; -c blocks stay compressed into compression=off; the
+#       -cw raw copy lands locked, loads from its key file, and its
+#       data matches byte for byte (the plain leg's compressratio is
+#       recorded, not asserted — the contrast measurement)
+#   p4  keylocation prompt vs file://    set keylocation=prompt sticks
+#       and blocks a no-passphrase load-key; file:// loads
+#       non-interactively (the manifest replay semantics)
+#   p5  receive-as-encrypted             an unencrypted stream received
+#       with -o encryption=on -o keyformat=raw -o keylocation=file://…
+#       (the restore-with-encryption groundwork)
+#   p6  encrypted-raw -o refusal         a send -w stream must refuse
+#       encryption-family -o overrides on every version (inert
+#       metadata overrides are the recorded contrast)
+#   p7  encryptionroot self              after a raw receive the copy is
+#       its own encryption root; its keylocation is NOT the source's
+#       (prompt on 2.2.2) — the manifest replay's set+load converges it
+#
+# Each probe writes its own log artifact and one pass/fail step; a
+# probe disagreeing with its expectation FAILS the journey — this is a
+# validator, not a best-effort survey.  probes.tsv (artifact) is the
+# measured-truths record for the capability table and its docs.
+#
+# Guest state required: the selected profile's baseline template
+# (compute needs the two-node site keys).  No product install and no
+# tree download: every probe is raw ZFS.
+# Snapshots produced: as-cloned, pools-created.
+
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+# _j21_probe <guest-ip> <n> <label> <expect-arg>
+#
+# Delivers $ITF_RUN_DIR/guest-p<n>.sh (the caller wrote it), runs it in
+# the guest with <expect-arg> as $1, records the verdict step, files
+# the log artifact, and appends the probes.tsv row.  Returns non-zero
+# when the probe's expectations were not met.
+_j21_probe() {
+    local ip="$1" n="$2" label="$3" expect="$4"
+    if ! itf_guest_put "$ip" "$ITF_RUN_DIR/guest-p${n}.sh" \
+            "/root/itf-p${n}.sh" > /dev/null 2>&1; then
+        itf_step fail "probe p${n}: $label" "script delivery failed"
+        return 1
+    fi
+    local log="$ITF_RUN_DIR/probe-p${n}.log"
+    if itf_guest_exec "$ip" "bash /root/itf-p${n}.sh $expect" \
+            > "$log" 2>&1; then
+        itf_step pass "probe p${n}: $label" \
+            "$(grep -m1 '^summary: ' "$log" | sed 's/^summary: //')"
+    else
+        itf_step fail "probe p${n}: $label" "see probe-p${n}.log"
+        itf_artifact "probe-p${n}" "$log"
+        return 1
+    fi
+    itf_artifact "probe-p${n}" "$log"
+    printf 'p%s\t%s\t%s\n' "$n" "$expect" \
+        "$(grep -m1 '^summary: ' "$log" | sed 's/^summary: //')" \
+        >> "$ITF_RUN_DIR/probes.tsv"
+    return 0
+}
+
+journey_main() {
+    local gname="j21"
+    local profile="${ITF_JOURNEY_TEMPLATE:-storage}"
+    local template="" base=""
+
+    case "$profile" in
+        compute)
+            template="${ITF_COMPUTE_TEMPLATE_NAME:-}"
+            base="${ITF_COMPUTE_BASE:-}"
+            ;;
+        ubuntu)
+            template="${ITF_UBUNTU_TEMPLATE_NAME:-}"
+            base="${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]:-}}"
+            ;;
+        *)
+            template="${ITF_TEMPLATE_NAME:-}"
+            base="${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]:-}}"
+            ;;
+    esac
+    if [[ -z "$template" || -z "$base" ]]; then
+        itf_step fail "site config: profile placement" \
+            "profile=$profile resolves no template name / base host —" \
+            "check the site config keys for the profile"
+        return 1
+    fi
+    itf_step info "journey start" \
+        "j21 ZFS probes; profile=$profile template=$template base=$base"
+
+    # ------------------------------------------------------------------
+    # Stages T + P: clone from the selected baseline, test pools
+    # ------------------------------------------------------------------
+
+    itf_journey_stage_from_template "$gname" --template "$template" \
+        --base "$base" || return 1
+    local guest_ip="$J_GUEST_IP"
+    local vmid="$J_VMID"
+
+    itf_journey_stage_test_pools "$gname" "$base" "$vmid" "$guest_ip" \
+        || return 1
+
+    # ------------------------------------------------------------------
+    # Stage V: the guest's OpenZFS version keys the p1 expectation
+    # ------------------------------------------------------------------
+
+    local vlog="$ITF_RUN_DIR/guest-zfs-version.log"
+    if ! itf_guest_exec "$guest_ip" 'zfs version' > "$vlog" 2>&1; then
+        itf_step fail "guest OpenZFS version" "zfs version failed — see guest-zfs-version.log"
+        itf_artifact "guest-zfs-version" "$vlog"
+        return 1
+    fi
+    itf_artifact "guest-zfs-version" "$vlog"
+    local ul km eff expect
+    # Marker-anchored, not line-positioned: itf_guest_exec's capture
+    # leads with the ssh known-hosts banner, and the pkgrel suffix is
+    # optional.
+    ul="$(sed -n 's/^zfs-\([0-9][0-9.]*\)\(-.*\)\{0,1\}$/\1/p' "$vlog" | head -1)"
+    km="$(sed -n 's/^zfs-kmod-\([0-9][0-9.]*\)\(-.*\)\{0,1\}$/\1/p' "$vlog" \
+        | head -1)"
+    if [[ -z "$ul" || -z "$km" ]]; then
+        itf_step fail "guest OpenZFS version" \
+            "cannot parse userland/kmod from zfs version output"
+        return 1
+    fi
+    # The receive option is userland, the reblock is kernel: the
+    # expectation keys on the SMALLER of the two — the same min() the
+    # capability table applies to receive-family entries.  The 2.5.0
+    # threshold mirrors python/zfs_capabilities.py's recv_o_volblocksize
+    # pin: measured ABSENT through 2.4.4 on every profile (this probe
+    # stands ready to correct the pin the day a newer template carries
+    # the feature).
+    local recv_vbs_min="2.5.0"
+    eff="$(printf '%s\n' "$ul" "$km" | sort -V | head -1)"
+    if [[ "$(printf '%s\n' "$recv_vbs_min" "$eff" | sort -V | head -1)" \
+            == "$recv_vbs_min" ]]; then
+        expect="expect-accept"
+    else
+        expect="expect-refuse"
+    fi
+    itf_step pass "guest OpenZFS version" \
+        "userland=$ul kmod=$km — receive -o volblocksize expected: $expect"
+    printf 'probe\texpectation\toutcome\n' > "$ITF_RUN_DIR/probes.tsv"
+    printf 'version\tuserland=%s kmod=%s\n' "$ul" "$km" \
+        >> "$ITF_RUN_DIR/probes.tsv"
+
+    # ------------------------------------------------------------------
+    # Probe p1: receive -o volblocksize on a zvol
+    # ------------------------------------------------------------------
+
+    cat > "$ITF_RUN_DIR/guest-p1.sh" <<'EOF'
+#!/bin/bash
+# p1: zvol receive with -o volblocksize — the recv_o_volblocksize truth.
+# $1 = expect-accept | expect-refuse
+zfs create -V 8M -o volblocksize=16K zfstest1/p1src
+zfs snapshot zfstest1/p1src@s1
+rc=0
+zfs send zfstest1/p1src@s1 \
+    | zfs receive -o volblocksize=32K zfstest1/p1dst || rc=$?
+echo "receive rc=$rc"
+if [[ "$1" == expect-refuse ]]; then
+    if (( rc != 0 )); then
+        echo "summary: refused as expected below the 2.5.0 pin (rc=$rc)"
+        exit 0
+    fi
+    echo "summary: EXPECTED refusal below the 2.5.0 pin but the receive succeeded"
+    exit 1
+fi
+if (( rc != 0 )); then
+    echo "summary: expected success at or above the 2.5.0 pin but rc=$rc"
+    exit 1
+fi
+vbs="$(zfs get -H -o value volblocksize zfstest1/p1dst)"
+if [[ "$vbs" == 32K ]]; then
+    echo "summary: received with the -o volblocksize=32K override applied"
+    exit 0
+fi
+echo "summary: receive succeeded but volblocksize=$vbs (wanted 32K)"
+exit 1
+EOF
+    _j21_probe "$guest_ip" 1 "receive -o volblocksize (zvol)" "$expect" \
+        || return 1
+
+    # ------------------------------------------------------------------
+    # Probe p2: volblocksize on a filesystem is refused everywhere
+    # ------------------------------------------------------------------
+
+    cat > "$ITF_RUN_DIR/guest-p2.sh" <<'EOF'
+#!/bin/bash
+# p2: -o volblocksize on a FILESYSTEM receive must be refused (the
+# property is zvol-only on every version).
+zfs create zfstest1/p2src
+echo probe > /zfstest1/p2src/f
+zfs snapshot zfstest1/p2src@s1
+rc=0
+zfs send zfstest1/p2src@s1 \
+    | zfs receive -o volblocksize=16K zfstest1/p2dst || rc=$?
+echo "receive rc=$rc"
+if (( rc != 0 )); then
+    if zfs list -H zfstest1/p2dst > /dev/null 2>&1; then
+        echo "summary: refused BUT the target exists (half state)"
+        exit 1
+    fi
+    echo "summary: volblocksize-on-filesystem refused (rc=$rc)"
+    exit 0
+fi
+echo "summary: volblocksize was ACCEPTED on a filesystem (rc=0)"
+exit 1
+EOF
+    _j21_probe "$guest_ip" 2 "volblocksize-on-filesystem refused" \
+        expect-refuse || return 1
+
+    # ------------------------------------------------------------------
+    # Probe p3: stream fidelity across plain / -c / -cw receives
+    # ------------------------------------------------------------------
+
+    cat > "$ITF_RUN_DIR/guest-p3.sh" <<'EOF'
+#!/bin/bash
+# p3: what a receive does to arriving blocks and to local properties.
+#  plain  target props stay local (destination-root efficiency); the
+#         arriving-block compressratio is RECORDED (contrast leg).
+#  -c     compressed blocks stay compressed into compression=off — no
+#         decompress/recompress.
+#  -cw    raw copy lands locked, loads from its key file, data matches.
+fail=0
+zfs create -o compression=zstd -o recordsize=16K zfstest1/p3src
+dd if=/dev/zero of=/zfstest1/p3src/f bs=1M count=32 2>/dev/null
+sha_src="$(sha256sum /zfstest1/p3src/f | awk '{print $1}')"
+zfs snapshot zfstest1/p3src@s1
+
+rc=0
+zfs send zfstest1/p3src@s1 \
+    | zfs receive -o compression=gzip -o recordsize=128K \
+        zfstest1/p3plain || rc=$?
+if (( rc != 0 )); then
+    echo "summary: plain receive failed rc=$rc"
+    exit 1
+fi
+v="$(zfs get -H -o value compression zfstest1/p3plain)"
+[[ "$v" == gzip ]] || { echo "plain: compression=$v (wanted gzip local)"; fail=1; }
+v="$(zfs get -H -o value recordsize zfstest1/p3plain)"
+[[ "$v" == 128K ]] || { echo "plain: recordsize=$v (wanted 128K local)"; fail=1; }
+ratio_plain="$(zfs get -H -o value compressratio zfstest1/p3plain)"
+sha="$(sha256sum /zfstest1/p3plain/f | awk '{print $1}')"
+[[ "$sha" == "$sha_src" ]] || { echo "plain: data mismatch"; fail=1; }
+
+rc=0
+zfs send -c zfstest1/p3src@s1 \
+    | zfs receive -o compression=off zfstest1/p3c || rc=$?
+if (( rc != 0 )); then
+    echo "summary: -c receive failed rc=$rc"
+    exit 1
+fi
+v="$(zfs get -H -o value compression zfstest1/p3c)"
+[[ "$v" == off ]] || { echo "-c: compression=$v (wanted off local)"; fail=1; }
+# The -c-into-off ratio is a RECORDED contrast measurement (2.2.2 stores
+# the arriving blocks uncompressed; the stable claim is integrity, not
+# the storage form).
+ratio_c="$(zfs get -H -o value compressratio zfstest1/p3c)"
+sha="$(sha256sum /zfstest1/p3c/f | awk '{print $1}')"
+[[ "$sha" == "$sha_src" ]] || { echo "-c: data mismatch"; fail=1; }
+
+head -c 32 /dev/urandom > /root/j21-p3.key
+zfs create -o encryption=on -o keyformat=raw \
+    -o keylocation=file:///root/j21-p3.key zfstest1/p3enc
+dd if=/dev/urandom of=/zfstest1/p3enc/f bs=1M count=8 2>/dev/null
+sha_enc="$(sha256sum /zfstest1/p3enc/f | awk '{print $1}')"
+zfs snapshot zfstest1/p3enc@s1
+rc=0
+zfs send -cw zfstest1/p3enc@s1 | zfs receive zfstest3/p3raw || rc=$?
+if (( rc != 0 )); then
+    echo "summary: -cw receive failed rc=$rc"
+    exit 1
+fi
+v="$(zfs get -H -o value keystatus zfstest3/p3raw)"
+[[ "$v" == unavailable ]] || {
+    echo "-cw: keystatus=$v (a raw receive must land locked)"
+    fail=1
+}
+loc_raw="$(zfs get -H -o value keylocation zfstest3/p3raw)"
+# A raw receive does NOT carry a usable keylocation forward (measured:
+# prompt on 2.2.2) — the manifest replay's set-then-load is the shape
+# that must work.
+zfs set keylocation=file:///root/j21-p3.key zfstest3/p3raw \
+    || { echo "-cw: replaying keylocation=file:// refused"; fail=1; }
+zfs load-key zfstest3/p3raw < /dev/null > /dev/null 2>&1 \
+    || { echo "-cw: load-key after the keylocation replay failed"; fail=1; }
+zfs mount zfstest3/p3raw > /dev/null 2>&1 || true
+sha="$(sha256sum /zfstest3/p3raw/f 2>/dev/null | awk '{print $1}')"
+[[ "$sha" == "$sha_enc" ]] || { echo "-cw: data mismatch"; fail=1; }
+v="$(zfs get -H -o value encryption zfstest3/p3raw)"
+[[ "$v" != off && -n "$v" ]] || { echo "-cw: encryption=$v"; fail=1; }
+
+if (( fail )); then
+    echo "summary: stream-fidelity violation (see lines above)"
+    exit 1
+fi
+echo "summary: props stay local; -c/-cw data intact, -cw lands locked" \
+     "and replays its keylocation (ratios recorded: plain $ratio_plain," \
+     "-c $ratio_c, raw keylocation $loc_raw)"
+exit 0
+EOF
+    _j21_probe "$guest_ip" 3 "stream fidelity plain/-c/-cw" expect-pass \
+        || return 1
+
+    # ------------------------------------------------------------------
+    # Probe p4: keylocation prompt vs file:// + non-interactive load-key
+    # ------------------------------------------------------------------
+
+    cat > "$ITF_RUN_DIR/guest-p4.sh" <<'EOF'
+#!/bin/bash
+# p4: the manifest replay's keylocation semantics.
+head -c 32 /dev/urandom > /root/j21-p4.key
+zfs create -o encryption=on -o keyformat=raw \
+    -o keylocation=file:///root/j21-p4.key zfstest1/p4enc
+ks="$(zfs get -H -o value keystatus zfstest1/p4enc)"
+[[ "$ks" == available ]] || {
+    echo "summary: create with file:// keylocation left keystatus=$ks"
+    exit 1
+}
+zfs set keylocation=prompt zfstest1/p4enc || {
+    echo "summary: zfs set keylocation=prompt refused"
+    exit 1
+}
+v="$(zfs get -H -o value keylocation zfstest1/p4enc)"
+[[ "$v" == prompt ]] || { echo "summary: keylocation=$v (wanted prompt)"; exit 1; }
+# zfs create auto-mounted the dataset; unload-key refuses while mounted.
+zfs umount zfstest1/p4enc || {
+    echo "summary: umount before unload-key failed"
+    exit 1
+}
+zfs unload-key zfstest1/p4enc || {
+    echo "summary: unload-key failed"
+    exit 1
+}
+rc=0
+zfs load-key zfstest1/p4enc < /dev/null > /dev/null 2>&1 || rc=$?
+if (( rc == 0 )); then
+    echo "summary: prompt load-key SUCCEEDED without a passphrase (rc=0)"
+    exit 1
+fi
+zfs set keylocation=file:///root/j21-p4.key zfstest1/p4enc || {
+    echo "summary: zfs set keylocation=file:// refused"
+    exit 1
+}
+zfs load-key zfstest1/p4enc < /dev/null > /dev/null 2>&1 || {
+    echo "summary: non-interactive load-key from file:// failed"
+    exit 1
+}
+ks="$(zfs get -H -o value keystatus zfstest1/p4enc)"
+[[ "$ks" == available ]] || { echo "summary: keystatus=$ks after load"; exit 1; }
+echo "summary: prompt sticks and blocks no-passphrase load; file:// loads non-interactively"
+exit 0
+EOF
+    _j21_probe "$guest_ip" 4 "keylocation prompt vs file://" expect-pass \
+        || return 1
+
+    # ------------------------------------------------------------------
+    # Probe p5: receive-as-encrypted
+    # ------------------------------------------------------------------
+
+    cat > "$ITF_RUN_DIR/guest-p5.sh" <<'EOF'
+#!/bin/bash
+# p5: an UNENCRYPTED stream received as encrypted via -o on the initial
+# receive (the restore-with-encryption groundwork; works without any
+# capability gating).
+head -c 32 /dev/urandom > /root/j21-p5.key
+zfs create zfstest1/p5src
+dd if=/dev/urandom of=/zfstest1/p5src/f bs=1M count=4 2>/dev/null
+sha_src="$(sha256sum /zfstest1/p5src/f | awk '{print $1}')"
+zfs snapshot zfstest1/p5src@s1
+rc=0
+zfs send zfstest1/p5src@s1 \
+    | zfs receive -o encryption=on -o keyformat=raw \
+        -o keylocation=file:///root/j21-p5.key zfstest1/p5dst || rc=$?
+if (( rc != 0 )); then
+    echo "summary: receive-as-encrypted refused (rc=$rc)"
+    exit 1
+fi
+v="$(zfs get -H -o value encryption zfstest1/p5dst)"
+[[ "$v" != off && -n "$v" ]] || { echo "summary: encryption=$v"; exit 1; }
+v="$(zfs get -H -o value keystatus zfstest1/p5dst)"
+[[ "$v" == available ]] || { echo "summary: keystatus=$v"; exit 1; }
+v="$(zfs get -H -o value encryptionroot zfstest1/p5dst)"
+[[ "$v" == zfstest1/p5dst ]] || { echo "summary: encryptionroot=$v (wanted self)"; exit 1; }
+sha="$(sha256sum /zfstest1/p5dst/f | awk '{print $1}')"
+[[ "$sha" == "$sha_src" ]] || { echo "summary: data mismatch"; exit 1; }
+echo "summary: unencrypted stream received as encrypted (raw file key, self root)"
+exit 0
+EOF
+    _j21_probe "$guest_ip" 5 "receive-as-encrypted" expect-pass || return 1
+
+    # ------------------------------------------------------------------
+    # Probe p6: encrypted-raw receive with -o override must be refused
+    # ------------------------------------------------------------------
+
+    cat > "$ITF_RUN_DIR/guest-p6.sh" <<'EOF'
+#!/bin/bash
+# p6: a send -w (raw) stream must refuse ENCRYPTION-family -o overrides
+# on every version — the raw+property crash class the -cw design stays
+# clear of.  Inert metadata overrides (compression, recordsize — the
+# blocks stay opaque, the prop only governs future writes) are a
+# RECORDED contrast (accepted on 2.2.2).
+head -c 32 /dev/urandom > /root/j21-p6.key
+zfs create -o encryption=on -o keyformat=raw \
+    -o keylocation=file:///root/j21-p6.key zfstest1/p6enc
+echo probe > /zfstest1/p6enc/f
+zfs snapshot zfstest1/p6enc@s1
+fail=0
+rc=0
+zfs send -w zfstest1/p6enc@s1 \
+    | zfs receive -o encryption=aes-256-gcm zfstest3/p6raw || rc=$?
+echo "encryption-override receive rc=$rc"
+if (( rc == 0 )); then
+    echo "p6: raw receive ACCEPTED an encryption override"
+    fail=1
+elif zfs list -H zfstest3/p6raw > /dev/null 2>&1; then
+    echo "p6: refused BUT the target exists (half state)"
+    fail=1
+fi
+rc=0
+zfs send -w zfstest1/p6enc@s1 \
+    | zfs receive -o keyformat=passphrase zfstest3/p6kf || rc=$?
+echo "keyformat-override receive rc=$rc"
+if (( rc == 0 )); then
+    echo "p6: raw receive ACCEPTED a keyformat override"
+    fail=1
+fi
+zfs destroy -Rf zfstest3/p6kf > /dev/null 2>&1 || true
+rc=0
+zfs send -w zfstest1/p6enc@s1 \
+    | zfs receive -o compression=lz4 zfstest3/p6meta || rc=$?
+inert="compression=lz4 rc=$rc"
+zfs destroy -Rf zfstest3/p6meta > /dev/null 2>&1 || true
+if (( fail )); then
+    echo "summary: raw receive accepted an encryption-family override"
+    exit 1
+fi
+echo "summary: raw receive refuses encryption-family -o (contrast:" \
+     "inert $inert)"
+exit 0
+EOF
+    _j21_probe "$guest_ip" 6 "encrypted-raw -o refusal" expect-refuse \
+        || return 1
+
+    # ------------------------------------------------------------------
+    # Probe p7: the raw copy is its own encryption root
+    # ------------------------------------------------------------------
+
+    cat > "$ITF_RUN_DIR/guest-p7.sh" <<'EOF'
+#!/bin/bash
+# p7: after a raw receive the copy is its OWN encryption root (the
+# source's root never travels), and the source's keylocation rides the
+# stream — the pairing the manifest replay relies on.
+zfs send -w zfstest1/p6enc@s1 | zfs receive zfstest3/p7raw || {
+    echo "summary: raw receive failed"
+    exit 1
+}
+v="$(zfs get -H -o value encryptionroot zfstest3/p7raw)"
+if [[ "$v" != zfstest3/p7raw ]]; then
+    echo "summary: encryptionroot=$v (wanted zfstest3/p7raw — self)"
+    exit 1
+fi
+# The raw copy's keylocation is NOT the source's (measured: prompt on
+# 2.2.2) — the manifest replay's set-then-load must converge it.
+loc="$(zfs get -H -o value keylocation zfstest3/p7raw)"
+zfs set keylocation=file:///root/j21-p6.key zfstest3/p7raw || {
+    echo "summary: replaying keylocation=file:// refused"
+    exit 1
+}
+zfs load-key zfstest3/p7raw < /dev/null > /dev/null 2>&1 || {
+    echo "summary: load-key after the keylocation replay failed"
+    exit 1
+}
+echo "summary: raw copy is its own encryption root; replay set+load" \
+     "converges the key (arrived keylocation: $loc)"
+exit 0
+EOF
+    _j21_probe "$guest_ip" 7 "encryptionroot self after raw receive" \
+        expect-pass || return 1
+
+    itf_artifact "probes" "$ITF_RUN_DIR/probes.tsv"
+    itf_step info "journey stage reached" \
+        "seven probes green on profile=$profile (userland=$ul kmod=$km);" \
+        "probes.tsv is the measured-truths record"
+    return 0
+}

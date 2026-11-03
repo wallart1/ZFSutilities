@@ -76,12 +76,13 @@ test_valid_config_loads_with_defaults() {
         ITF_SITE_CONFIG="$tmp_dir/valid.conf" itf_config_load
         fields="${ITF_HTTP_PORT}|${ITF_GUEST_NET_MODEL}|${ITF_RUNS_DIR}"
         fields+="|${ITF_STORAGE_BASE}|${ITF_COMPUTE_BASE}"
-        echo "${fields}|${ITF_CACHE_DIR}|${ITF_TEMPLATE_NAME}"
+        fields+="|${ITF_CACHE_DIR}|${ITF_TEMPLATE_NAME}|${ITF_UBUNTU_TEMPLATE_NAME}"
+        echo "${fields}"
     ) 2>/dev/null )
     assert_rc 0 $?
     assert_equals \
         "8000|virtio|$mydir/tests/integrated/results|zfstestvm1|zfstestvm2|\
-$mydir/tests/integrated/cache|itf-template" \
+$mydir/tests/integrated/cache|itf-template|itf-template-ubuntu" \
         "$out"
 }
 
@@ -284,6 +285,51 @@ test_keystore_pair_validated() {
     assert_rc 0 "$load_rc"
 }
 
+write_ubuntu_config() {
+    write_valid_config
+    cat >> "$tmp_dir/valid.conf" <<'EOF'
+ITF_UBUNTU_ISO_URL=https://releases.example.invalid/ubuntu-live-server.iso
+ITF_UBUNTU_ISO_NAME=itf-ubuntu-live-server.iso
+EOF
+}
+
+test_ubuntu_iso_pair_validated() {
+    test_start "Ubuntu ISO keys follow the both-or-neither rule with shape checks"
+    write_ubuntu_config
+    sed '/^ITF_UBUNTU_ISO_NAME=/d' "$tmp_dir/valid.conf" > "$tmp_dir/ubuntu.conf"
+    run_config_load "$tmp_dir/ubuntu.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_UBUNTU_ISO_URL and ITF_UBUNTU_ISO_NAME"
+    assert_contains "$load_err" "must be set together"
+
+    write_ubuntu_config
+    sed -i 's/^ITF_UBUNTU_ISO_NAME=.*/ITF_UBUNTU_ISO_NAME=ubuntu-live-server.iso/' \
+        "$tmp_dir/valid.conf"
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_UBUNTU_ISO_NAME must start with 'itf-'"
+
+    write_ubuntu_config
+    sed -i 's|^ITF_UBUNTU_ISO_URL=.*|ITF_UBUNTU_ISO_URL=ftp://nope.invalid/x.iso|' \
+        "$tmp_dir/valid.conf"
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_UBUNTU_ISO_URL must be an http(s) URL"
+
+    write_ubuntu_config
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 0 "$load_rc"
+}
+
+test_ubuntu_template_name_validated() {
+    test_start "Ubuntu template name charset is enforced"
+    write_valid_config
+    echo 'ITF_UBUNTU_TEMPLATE_NAME="bad name!"' >> "$tmp_dir/valid.conf"
+    run_config_load "$tmp_dir/valid.conf"
+    assert_rc 2 "$load_rc"
+    assert_contains "$load_err" "ITF_UBUNTU_TEMPLATE_NAME has invalid characters"
+}
+
 test_missing_config_is_fail_closed
 test_committed_example_passes_validation
 test_valid_config_loads_with_defaults
@@ -297,6 +343,8 @@ test_p2p_ips_validated
 test_pve_iso_pair_validated
 test_compute_template_and_base_validated
 test_keystore_pair_validated
+test_ubuntu_iso_pair_validated
+test_ubuntu_template_name_validated
 
 rm -rf "$tmp_dir"
 teardown_test_env

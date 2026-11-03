@@ -447,8 +447,9 @@ diagnostics.
 ### `zfs_capabilities.py`
 
 Runtime OpenZFS release-variation layer. Parses both userland and kernel-module
-versions from `zfs version`, gates features on the kernel-module version, and
-warns when the two differ.
+versions from `zfs version`, gates features on the kernel-module version
+(receive-family entries on the smaller of the two), and warns when the two
+differ.
 
 **Key classes:**
 
@@ -461,7 +462,8 @@ warns when the two differ.
 
 | Constant              | Purpose                                                                                                        |
 | --------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `FEATURE_MIN_VERSION` | Mapping of feature name to minimum `(major, minor, patch)`; patch matters for `zfs_rewrite` (2.3.4, not 2.3.0) |
+| `FEATURE_MIN_VERSION` | Mapping of feature name to minimum `(major, minor, patch)`; patch matters for `zfs_rewrite` (2.3.4, not 2.3.0); `recv_o_volblocksize` is the receive-family entry, pinned at 2.5.0 — measured absent through 2.4.4 on every j21 probe-matrix leg (Ubuntu 2.2.2, Debian 2.3.9, PVE 2.4.4-pve) |
+| `RECEIVE_FAMILY`      | Entries whose `supports()` gate is `min(userland, kmod)` — `zfs receive` runs in userland while the effect lands in the kernel module (the live split stack: 2.3.9 userland over 2.4.4-pve kmod); all other entries stay kernel-module-gated |
 
 **Called modules / imported helpers:**
 

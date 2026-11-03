@@ -193,7 +193,8 @@ test_journey_list_lists_committed_journeys() {
         j13-iscsi-storage-restore j14-iscsi-fence-recover \
         j15-iscsi-boot-keys j16-iscsi-total-loss \
         j17-iscsi-interrupted-ops j18-compute-power-events \
-        j19-baseline-capture j20-property-manifest; do
+        j19-baseline-capture j20-property-manifest \
+        j21-zfs-probes; do
         assert_contains "$run_out" "$j"
     done
 }
@@ -691,7 +692,7 @@ and reuses the guests"
 
 test_iso_unknown_selector_refused() {
     test_start "iso fetch/upload with a bad selector is refused (rc 2)"
-    run_itf iso fetch ubuntu
+    run_itf iso fetch mint
     assert_rc 2 "$run_rc"
     assert_contains "$run_err" "unknown ISO selector"
     run_itf iso upload base.invalid fedora
@@ -708,11 +709,27 @@ test_iso_pve_selector_without_config_fails_cleanly() {
     assert_contains "$run_err" "ISO 'pve' is not configured"
 }
 
+test_iso_ubuntu_selector_without_config_fails_cleanly() {
+    test_start "iso fetch ubuntu without site-configured Ubuntu keys fails cleanly"
+    run_itf iso fetch ubuntu
+    # Selector understood, keys absent: a clean configuration complaint,
+    # never a network attempt.
+    assert_rc 1 "$run_rc"
+    assert_contains "$run_err" "ISO 'ubuntu' is not configured"
+}
+
 test_template_build_bad_profile_refused() {
     test_start "template build with a bad profile prints usage (rc 2)"
     run_itf template build --profile hyperscale
     assert_rc 2 "$run_rc"
-    assert_contains "$run_err" "--profile must be 'storage' or 'compute'"
+    assert_contains "$run_err" "--profile must be 'storage', 'compute' or 'ubuntu'"
+}
+
+test_journey_run_bad_template_refused() {
+    test_start "journey run with a bad --template prints usage (rc 2)"
+    run_itf journey run j04-post-install-baseline --template mint
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "--template must be 'storage', 'compute' or 'ubuntu'"
 }
 
 test_template_destroy_without_template_fails_cleanly() {
@@ -1094,7 +1111,9 @@ test_template_build_fenced_by_interrupted_run_guests
 test_journey_rerun_of_interrupted_source_not_fenced
 test_iso_unknown_selector_refused
 test_iso_pve_selector_without_config_fails_cleanly
+test_iso_ubuntu_selector_without_config_fails_cleanly
 test_template_build_bad_profile_refused
+test_journey_run_bad_template_refused
 test_template_destroy_without_template_fails_cleanly
 test_journey_run_rerun_unknown_flag_refused
 test_journey_run_rerun_without_prior_run_refused

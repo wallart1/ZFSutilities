@@ -3,7 +3,8 @@
 The GUI and future pool-modification code must not assume a fixed OpenZFS
 release. This module parses the running userland and kernel-module versions
 from `zfs version`, exposes a feature-minimum-version table, and lets callers
-gate functionality on the kernel module version.
+gate functionality on the kernel-module version (receive-family entries
+gate on the smaller of userland and kernel module — see RECEIVE_FAMILY).
 """
 
 import re
@@ -35,7 +36,23 @@ FEATURE_MIN_VERSION: dict[str, tuple[int, int, int]] = {
     "direct_io": (2, 3, 0),
     "ssb_on_zvols": (2, 4, 0),
     "ssb_non_power_of_two": (2, 4, 0),
+    # `zfs receive -o volblocksize` (reblocking a zvol receive to a new
+    # volblocksize) is measured ABSENT through OpenZFS 2.4.4 — refused
+    # as an invalid property on every leg of the j21 probe matrix
+    # (Ubuntu LTS 2.2.2, Debian 2.3.9, PVE 2.4.4-pve).  The entry is
+    # pinned at 2.5.0, the first release that could possibly carry it;
+    # j21's p1 probe stands ready to measure and correct this the
+    # moment a newer baseline template exists.
+    "recv_o_volblocksize": (2, 5, 0),
 }
+
+# Receive-family entries: `zfs receive` runs in userland while the
+# effect lands in the kernel module, so BOTH halves must clear the
+# minimum — supports() gates these on min(userland, kmod). The live
+# case is a split stack (2.3.9 userland over a 2.4.4-pve kernel
+# module), where either half alone overstates the capability. All other
+# entries stay kernel-module-gated.
+RECEIVE_FAMILY: frozenset[str] = frozenset({"recv_o_volblocksize"})
 
 
 # Regex: (?:zfs|zfs-kmod)[^\d]*(\d+)\.(\d+)(?:\.(\d+))?
@@ -61,8 +78,9 @@ class ZfsCapabilities:
     """Runtime OpenZFS capability gating.
 
     The instance is constructed with an injectable `ZfsRepository` so tests can
-    supply a fake `zfs version` response. All feature decisions are gated on
-    the kernel-module version; a warning is emitted when userland and kmod
+    supply a fake `zfs version` response. Feature decisions are gated on
+    the kernel-module version (receive-family entries on the smaller of
+    userland and kmod); a warning is emitted when userland and kmod
     differ.
     """
 
@@ -124,10 +142,17 @@ class ZfsCapabilities:
         return ZfsVersion(userland, kmod)
 
     def supports(self, name: str) -> bool:
-        """Return True if the running kernel module supports *name*."""
+        """Return True if the running OpenZFS supports *name*.
+
+        Kernel-module-gated by default; receive-family entries (see
+        RECEIVE_FAMILY) gate on the smaller of the userland and
+        kernel-module versions.
+        """
         if name not in FEATURE_MIN_VERSION:
             return False
         required = FEATURE_MIN_VERSION[name]
+        if name in RECEIVE_FAMILY:
+            return min(self.version.userland, self.version.kmod) >= required
         return self.version.kmod >= required
 
     def requires(self, name: str) -> str:

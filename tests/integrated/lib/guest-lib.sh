@@ -284,19 +284,21 @@ itf_iso_path() {
     printf '%s/template/iso/%s' "$ITF_ISO_DIR" "${1:-$ITF_ISO_NAME}"
 }
 
-# itf_iso_fetch [debian|pve]
+# itf_iso_fetch [debian|pve|ubuntu]
 #
 # Downloads an installer ISO into the dev-side cache directory.  The
 # selector names the configured ISO (Debian netinst for storage-role
-# installs, Proxmox VE ISO for compute-role installs); it defaults to
-# the Debian one so existing callers keep working.
+# installs, Proxmox VE ISO for compute-role installs, Ubuntu Server LTS
+# for the ubuntu probe-template profile); it defaults to the Debian one
+# so existing callers keep working.
 itf_iso_fetch() {
     local sel="${1:-debian}" url name
     case "$sel" in
         debian) url="$ITF_DEBIAN_ISO_URL"; name="$ITF_ISO_NAME" ;;
         pve) url="$ITF_PVE_ISO_URL"; name="$ITF_PVE_ISO_NAME" ;;
+        ubuntu) url="$ITF_UBUNTU_ISO_URL"; name="$ITF_UBUNTU_ISO_NAME" ;;
         *)
-            echo "itf: unknown ISO selector: $sel (expected debian|pve)" >&2
+            echo "itf: unknown ISO selector: $sel (expected debian|pve|ubuntu)" >&2
             return 2
             ;;
     esac
@@ -544,6 +546,105 @@ echo "itf-first-boot-ok"
 HOOK
 }
 
+# _itf_iso_extract <iso> <tree-dir> <work-dir>
+#
+# Extracts a grub-booted installer ISO with 7z into <tree-dir>, which
+# must be empty/nonexistent, restoring the relative symlinks 7z refuses
+# to write.  7z extracts every regular file but REFUSES relative
+# symlinks (repo dists/ trees linking into the package pool), logging
+# each refusal as "Dangerous (symbolic) link path was ignored : <path>
+# : <target>" and exiting non-zero — the log is therefore the complete
+# list of what to restore by hand, and the rebuild stays faithful to
+# the stock repo layout instead of silently dropping links.  Every
+# restored link must resolve back inside the tree.  Failure cleans the
+# tree and returns non-zero; the extraction log stays at
+# <work-dir>/iso-7z.log for the run report.
+_itf_iso_extract() {
+    local iso="$1" tree="$2" work="$3"
+    local xlog="$work/iso-7z.log" xrc=0
+    mkdir -p "$tree" || return 1
+    7z x -y -o"$tree" "$iso" > /dev/null 2> "$xlog" || xrc=$?
+    if (( xrc != 0 && xrc != 2 )) \
+            || grep -v 'Dangerous \(symbolic \)\?link path was ignored' "$xlog" \
+                | grep -q '^ERROR'; then
+        rm -rf "$tree"
+        echo "itf: ISO extraction failed (see $xlog)" >&2
+        return 1
+    fi
+    awk -F' : ' '/Dangerous (symbolic )?link path was ignored/ {print $2 "\t" $3}' \
+        "$xlog" > "$work/iso-links.tsv"
+    local rel target n_restore=0 n_bad=0
+    while IFS=$'\t' read -r rel target; do
+        [[ -n "$rel" && -n "$target" ]] || continue
+        mkdir -p "$tree/$(dirname "$rel")"
+        ln -sfn "$target" "$tree/$rel"
+        n_restore=$(( n_restore + 1 ))
+        # Every restored link must resolve back inside the tree (a
+        # root-level "debian -> ." alias resolves to the tree root
+        # itself, which is fine).
+        case "$(readlink -m "$tree/$rel")" in
+            "$tree"|"$tree"/*) ;;
+            *)
+                echo "itf: restored link escapes tree: $rel -> $target" >&2
+                n_bad=$(( n_bad + 1 ))
+                ;;
+        esac
+    done < "$work/iso-links.tsv"
+    if (( n_bad > 0 )); then
+        rm -rf "$tree"
+        return 1
+    fi
+    echo "itf: restored $n_restore symlinks dropped by 7z" >&2
+    return 0
+}
+
+# _itf_iso_lba_repatch <stock-iso> <new-iso>
+#
+# grub's El Torito BIOS boot image carries a 16-byte load record at
+# boot-sector offset 8 — {2048-sector count, load LBA, byte size, tag}
+# — written by xorriso when the distro mastered the stock ISO.  The
+# LBA is an ABSOLUTE sector number, and genisoimage does not re-patch
+# it: a rebuilt ISO whose layout moved the boot image makes boot.img
+# fetch its core from whatever now lives at the stock sector, and the
+# guest hangs silently right after "Booting from DVD/CD...".  This
+# re-points the LBA at the boot image's actual sector in the rebuilt
+# ISO — the same patch xorriso applies at master time — and fails
+# loudly when the field does not hold the stock value (a future ISO
+# mastering change).
+_itf_iso_lba_repatch() {
+    python3 - "$1" "$2" <<'PYEOF'
+import struct
+import sys
+
+
+def boot_rba(path):
+    with open(path, "rb") as f:
+        f.seek(17 * 2048 + 71)
+        cat = struct.unpack("<I", f.read(4))[0]
+        f.seek(cat * 2048)
+        entry = f.read(64)
+    if entry[0] != 1 or entry[30:32] != b"\x55\xaa":
+        raise SystemExit(f"no El Torito catalog found in {path}")
+    boot = entry[32:64]
+    if boot[0] != 0x88 or boot[1] != 0x00:
+        raise SystemExit(f"unexpected El Torito entry in {path}")
+    return struct.unpack("<I", boot[8:12])[0]
+
+
+stock_rba = boot_rba(sys.argv[1])
+new_rba = boot_rba(sys.argv[2])
+with open(sys.argv[2], "r+b") as f:
+    f.seek(new_rba * 2048 + 12)
+    old = struct.unpack("<I", f.read(4))[0]
+    if old != stock_rba:
+        raise SystemExit(
+            f"boot image LBA field holds {old}, expected stock {stock_rba}"
+        )
+    f.seek(new_rba * 2048 + 12)
+    f.write(struct.pack("<I", new_rba))
+PYEOF
+}
+
 # itf_pve_iso_customize <base-host> <fqdn>
 #
 # Builds and uploads the automated-install boot ISO for a compute-role
@@ -609,48 +710,9 @@ itf_pve_iso_customize() {
 
         local tree="$ITF_CACHE_DIR/pve-iso-tree"
         rm -rf "$tree"
-        mkdir -p "$tree" || return 1
-        # 7z extracts every regular file but REFUSES the ISO's relative
-        # symlinks (the dists/ tree links into proxmox/packages, plus a
-        # root "debian -> ." alias), logging each refusal as
-        # "Dangerous (symbolic) link path was ignored : <path> : <target>"
-        # and exiting non-zero.  The log is therefore the complete list
-        # of what to restore by hand — and the rebuild stays faithful to
-        # the stock repo layout instead of silently dropping links.
-        local xlog="$work/pve-7z.log" xrc=0
-        7z x -y -o"$tree" "$ITF_CACHE_DIR/$ITF_PVE_ISO_NAME" > /dev/null 2> "$xlog" \
-            || xrc=$?
-        if (( xrc != 0 && xrc != 2 )) \
-                || grep -v 'Dangerous \(symbolic \)\?link path was ignored' "$xlog" \
-                    | grep -q '^ERROR'; then
-            rm -rf "$tree"
-            echo "itf: PVE ISO extraction failed (see $xlog)" >&2
+        if ! _itf_iso_extract "$ITF_CACHE_DIR/$ITF_PVE_ISO_NAME" "$tree" "$work"; then
             return 1
         fi
-        awk -F' : ' '/Dangerous (symbolic )?link path was ignored/ {print $2 "\t" $3}' \
-            "$xlog" > "$work/pve-links.tsv"
-        local rel target n_restore=0 n_bad=0
-        while IFS=$'\t' read -r rel target; do
-            [[ -n "$rel" && -n "$target" ]] || continue
-            mkdir -p "$tree/$(dirname "$rel")"
-            ln -sfn "$target" "$tree/$rel"
-            n_restore=$((n_restore + 1))
-            # Every restored link must resolve back inside the tree
-            # (the root-level "debian -> ." alias resolves to the tree
-            # root itself, which is fine).
-            case "$(readlink -m "$tree/$rel")" in
-                "$tree"|"$tree"/*) ;;
-                *)
-                    echo "itf: restored link escapes tree: $rel -> $target" >&2
-                    n_bad=$((n_bad + 1))
-                    ;;
-            esac
-        done < "$work/pve-links.tsv"
-        if (( n_bad > 0 )); then
-            rm -rf "$tree"
-            return 1
-        fi
-        echo "itf: restored $n_restore symlinks dropped by 7z" >&2
         if [[ ! -f "$tree/boot/grub/grub.cfg" || ! -f "$tree/boot/linux26" \
                 || ! -f "$tree/boot/grub/i386-pc/eltorito.img" ]]; then
             rm -rf "$tree"
@@ -691,49 +753,9 @@ itf_pve_iso_customize() {
             return 1
         fi
 
-        # grub's El Torito image carries a 16-byte load record at boot
-        # sector offset 8 — {2048-sector count, load LBA, byte size, tag}
-        # — written by xorriso when Proxmox mastered the stock ISO.  The
-        # LBA is an ABSOLUTE sector number, and genisoimage does not
-        # re-patch it: a rebuilt ISO whose layout moved the boot image
-        # makes boot.img fetch its core from whatever now lives at the
-        # stock sector, and the guest hangs silently right after
-        # "Booting from DVD/CD...".  Re-point the LBA at the boot image's
-        # actual sector in the rebuilt ISO — the same patch xorriso
-        # applies at master time — and fail loudly when the field does
-        # not hold the stock value (a future ISO mastering change).
-        if ! python3 - "$ITF_CACHE_DIR/$ITF_PVE_ISO_NAME" "$out" <<'PYEOF'
-import struct
-import sys
-
-
-def boot_rba(path):
-    with open(path, "rb") as f:
-        f.seek(17 * 2048 + 71)
-        cat = struct.unpack("<I", f.read(4))[0]
-        f.seek(cat * 2048)
-        entry = f.read(64)
-    if entry[0] != 1 or entry[30:32] != b"\x55\xaa":
-        raise SystemExit(f"no El Torito catalog found in {path}")
-    boot = entry[32:64]
-    if boot[0] != 0x88 or boot[1] != 0x00:
-        raise SystemExit(f"unexpected El Torito entry in {path}")
-    return struct.unpack("<I", boot[8:12])[0]
-
-
-stock_rba = boot_rba(sys.argv[1])
-new_rba = boot_rba(sys.argv[2])
-with open(sys.argv[2], "r+b") as f:
-    f.seek(new_rba * 2048 + 12)
-    old = struct.unpack("<I", f.read(4))[0]
-    if old != stock_rba:
-        raise SystemExit(
-            f"boot image LBA field holds {old}, expected stock {stock_rba}"
-        )
-    f.seek(new_rba * 2048 + 12)
-    f.write(struct.pack("<I", new_rba))
-PYEOF
-        then
+        # Re-point the El Torito boot-image LBA at its new sector (see
+        # _itf_iso_lba_repatch) — genisoimage does not do this itself.
+        if ! _itf_iso_lba_repatch "$ITF_CACHE_DIR/$ITF_PVE_ISO_NAME" "$out"; then
             rm -rf "$tree" "$out"
             echo "itf: PVE boot-image LBA re-patch failed" >&2
             return 1
@@ -745,6 +767,69 @@ PYEOF
     # when the cached build was reused.
     itf_iso_upload "$base" "$name" >&2 || return 1
     echo "$name"
+}
+
+# itf_ubuntu_boot_setup <base-host>
+#
+# Stages the Ubuntu boot pieces for a DIRECT kernel boot: extracts the
+# casper kernel and initrd from the cached pristine ISO (once — the
+# cache copy lives under ITF_CACHE_DIR/ubuntu-boot), uploads the ISO
+# itself as the casper medium, and uploads kernel + initrd into the
+# base's ISO directory (itf-ubuntu-vmlinuz / itf-ubuntu-initrd).
+#
+# Direct kernel boot replaces the ISO's own bootloader because the grub
+# handoff does not work on this guest model: under vga=serial0 the guest
+# has NO VGA card, and three live attempts (patched casper kernel lines,
+# gfxpayload=text, a real grub serial terminal) all left the kernel
+# RUNNING but dark and idle — grub's menu renders over serial, the
+# patched kernel line never produces a byte (earlyprintk included),
+# while qemu's -append is authoritative.  The caller composes the
+# -kernel/-initrd/-append qm args (itf_journey_stage_os's ubuntu
+# branch).  Echoes the ISO name (the guest's --iso value) on stdout.
+itf_ubuntu_boot_setup() {
+    local base="$1"
+    [[ -s "$ITF_CACHE_DIR/$ITF_UBUNTU_ISO_NAME" ]] || {
+        echo "itf: Ubuntu ISO not cached — run 'itf iso fetch ubuntu' first" >&2
+        return 1
+    }
+    command -v 7z > /dev/null 2>&1 || {
+        echo "itf: 7z is required to extract the casper kernel (not on PATH)" >&2
+        return 1
+    }
+
+    local bootdir="$ITF_CACHE_DIR/ubuntu-boot"
+    if [[ ! -s "$bootdir/vmlinuz" || ! -s "$bootdir/initrd" ]]; then
+        rm -rf "$bootdir"
+        mkdir -p "$bootdir" || return 1
+        if ! 7z e -y -o"$bootdir" "$ITF_CACHE_DIR/$ITF_UBUNTU_ISO_NAME" \
+                casper/vmlinuz casper/initrd > /dev/null 2>&1; then
+            rm -rf "$bootdir"
+            echo "itf: casper kernel/initrd extraction failed (unexpected ISO layout?)" >&2
+            return 1
+        fi
+        echo "itf: casper kernel+initrd extracted to $bootdir" >&2
+    fi
+
+    itf_iso_upload "$base" "$ITF_UBUNTU_ISO_NAME" >&2 || return 1
+    # Kernel and initrd ride the same staged upload path as ISOs: the
+    # unprivileged put lands in /tmp, the guarded move places them in
+    # the base's ISO directory where qemu (running as root) can read
+    # them for -kernel/-initrd.
+    local piece tmp
+    for piece in vmlinuz initrd; do
+        tmp="/tmp/itf-ubuntu-${piece}-$$"
+        if ! itf_base_put "$base" "$bootdir/$piece" "$tmp"; then
+            itf_base_exec "$base" "rm -f $(printf '%q' "$tmp")" || true
+            return 1
+        fi
+        if ! itf_base_exec "$base" \
+                "mv $(printf '%q' "$tmp") $(printf '%q' "$ITF_ISO_DIR/itf-ubuntu-${piece}")"; then
+            itf_base_exec "$base" "rm -f $(printf '%q' "$tmp")" || true
+            return 1
+        fi
+        itf_log_action "$base" "ubuntu-boot-piece: $piece"
+    done
+    echo "$ITF_UBUNTU_ISO_NAME"
 }
 
 # itf_preseed_render <outfile> <hostname>
@@ -844,10 +929,88 @@ d-i preseed/late_command string \\
     in-target mkdir -p /root/.ssh ; \\
     echo "$sshkey" > /target/root/.ssh/authorized_keys ; \\
     in-target chmod 700 /root/.ssh ; \\
-    in-target chmod 600 /root/.ssh/authorized_keys ; \\
-    in-target sed -i \
-        's/^#\?GRUB_CMDLINE_LINUX=.*/GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"/' \
+    in-target chmod 600 /target/root/.ssh/authorized_keys ; \\
+    in-target sed -i \\
+        's/^#\?GRUB_CMDLINE_LINUX=.*/GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"/' \\
         /etc/default/grub ; \\
     in-target update-grub || true
 PRESEED
+}
+
+# itf_autoinstall_render <user-data-out> <meta-data-out> <hostname>
+#
+# Writes the Ubuntu autoinstall seed pair for a disposable test guest:
+# an admin user carrying the dev key (subiquity refuses to create the
+# user "root" directly — the late-commands mirror the Debian preseed's
+# root-key outcome instead), no password ssh, qemu guest agent and the
+# ZFS userland installed, serial-console grub, single-disk direct
+# layout on /dev/sda (the pool disk hot-plugs only after the install —
+# the same one-disk-at-install-time rule as the Debian preseed).  The
+# pair must be served over HTTP from dev (ssh-lib's itf_http_serve);
+# the customized boot ISO points casper at the seed directory through
+# ds=nocloud-net (itf_ubuntu_iso_customize).
+itf_autoinstall_render() {
+    local userdata="$1" metadata="$2" hostname="$3"
+    local sshkey=""
+    [[ -f "$ITF_SSH_KEY" ]] && sshkey="$(tr -d '\n' < "$ITF_SSH_KEY")"
+    if [[ -z "$sshkey" ]]; then
+        echo "itf: no public key at $ITF_SSH_KEY — guests would be unreachable" >&2
+        return 1
+    fi
+
+    # The admin password is a random value nobody records: a VALID crypt
+    # hash, because subiquity validates the field's shape even though
+    # ssh allow-pw=false makes the password unusable over ssh (the same
+    # "valid hash or the installer prompts" rule as the Debian preseed).
+    local pw_hash=""
+    pw_hash="$(openssl passwd -6 "$(head -c 32 /dev/urandom | base64 | tr -d '\n')")"
+    if [[ -z "$pw_hash" || "$pw_hash" != \$6\$* ]]; then
+        echo "itf: cannot generate password hash — is openssl available?" >&2
+        return 1
+    fi
+
+    cat > "$userdata" <<AUTOINSTALL
+#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  identity:
+    hostname: $hostname
+    username: itfadmin
+    password: $pw_hash
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - $sshkey
+  storage:
+    layout:
+      name: direct
+      match:
+        path: /dev/sda
+  packages:
+    - qemu-guest-agent
+    - zfsutils-linux
+    - parted
+  # Power off (not reboot) when the install completes: the direct kernel
+  # boot rides qemu -kernel args that persist in the VM config, so a
+  # finishing REBOOT would land straight back in the installer — the
+  # stage clears the args and boots the installed disk from the powered
+  # off state instead.
+  shutdown: poweroff
+  late-commands:
+    - curtin in-target -- mkdir -p /root/.ssh
+    - echo "$sshkey" > /target/root/.ssh/authorized_keys
+    - chmod 700 /target/root/.ssh
+    - chmod 600 /target/root/.ssh/authorized_keys
+    - sed -i 's/^#\?GRUB_CMDLINE_LINUX=.*/GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"/' /target/etc/default/grub
+    - curtin in-target -- update-grub || true
+AUTOINSTALL
+
+    # nocloud fetches BOTH files from the seed directory; meta-data only
+    # needs a stable instance id and the hostname.
+    printf 'instance-id: iid-%s\nlocal-hostname: %s\n' "$hostname" "$hostname" \
+        > "$metadata"
 }

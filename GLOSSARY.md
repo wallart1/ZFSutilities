@@ -5,12 +5,23 @@ Items to add:
     LIO
     DEL
     cast
+    Phase-4 precedent
+    idiom
 
 Plain-language definitions of terms as they are actually used in this
 repository — in agent work reports, SESSION_NOTES.md, CI output, and the
 docs. Entries are added alphabetically as jargon comes to light, without
 waiting for a request; a term belongs here the moment a report has to
 pause to explain it.
+
+## autoinstall
+
+Ubuntu's unattended-installer format: a `#cloud-config` file (plus a
+companion `meta-data` file) that answers every installer question in
+advance. The itf ubuntu template profile uses one instead of a Debian
+preseed — the seed pair is served over the same dev-side HTTP server and
+the boot ISO points the installer at it (`ds=nocloud-net`). The Debian
+equivalent is a preseed; Proxmox uses its own answer TOML.
 
 ## capped table window
 
@@ -212,6 +223,25 @@ re-applies each property with `zfs set` — a `file://` keylocation
 additionally gets a best-effort non-interactive `zfs load-key`. Everything
 about replay is WARN-only: a missing, stale, or corrupt manifest never
 fails a restore; the dataset simply keeps its inherited defaults.
+
+## probe
+
+A small scripted live check of one ZFS behavior, run inside a test guest
+and judged against a version-keyed expectation — pass/fail, never
+best-effort. The j21-zfs-probes journey runs seven of them (the "probe
+matrix") across the three baseline templates to measure the OpenZFS
+behaviors the backup engine's design rests on; `probes.tsv` in the run
+report is the recorded outcome. Unrelated to the GUI's guest-filesystem
+probe (the Alignment view's validator, journey j06).
+
+## receive family
+
+The capability-table entries that describe `zfs receive` behavior
+(`recv_o_volblocksize` is the first). They are gated on the SMALLER of
+the userland and kernel-module versions, because `zfs receive` runs in
+userland while the effect lands in the kernel module — a split stack
+(one half old, one half new) must clear the bar on both sides. See
+`RECEIVE_FAMILY` in `python/zfs_capabilities.py`.
 
 ## shape
 

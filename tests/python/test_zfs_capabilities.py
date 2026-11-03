@@ -75,6 +75,10 @@ class TestZfsCapabilitiesGating(unittest.TestCase):
                 "json_output": False,
                 "zfs_rewrite": False,
                 "ssb_on_zvols": False,
+                # `receive -o volblocksize` measured absent through
+                # 2.4.4 on every j21 leg (Ubuntu 2.2.2, Debian 2.3.9,
+                # PVE 2.4.4-pve); the entry is pinned at 2.5.0.
+                "recv_o_volblocksize": False,
             },
             (2, 3, 0): {
                 "draid": True,
@@ -82,17 +86,24 @@ class TestZfsCapabilitiesGating(unittest.TestCase):
                 "raidz_expansion": True,
                 "zfs_rewrite": False,  # `zfs rewrite` first shipped in 2.3.4
                 "ssb_on_zvols": False,
+                "recv_o_volblocksize": False,
             },
             (2, 3, 3): {"json_output": True, "zfs_rewrite": False},
             (2, 3, 4): {"json_output": True, "zfs_rewrite": True},
-            (2, 3, 9): {"json_output": True, "zfs_rewrite": True},
+            (2, 3, 9): {
+                "json_output": True,
+                "zfs_rewrite": True,
+                "recv_o_volblocksize": False,
+            },
             (2, 4, 0): {
                 "draid": True,
                 "json_output": True,
                 "zfs_rewrite": True,
                 "ssb_on_zvols": True,
                 "ssb_non_power_of_two": True,
+                "recv_o_volblocksize": False,
             },
+            (2, 5, 0): {"recv_o_volblocksize": True},
         }
         for version, expected in expectations.items():
             with self.subTest(version=version):
@@ -112,6 +123,33 @@ class TestZfsCapabilitiesGating(unittest.TestCase):
         self.assertFalse(caps.supports("json_output"))
         self.assertTrue(any("differs" in m for m in logs))
 
+    def test_receive_family_gates_on_min_of_userland_and_kmod(self):
+        # The live split stack (tweety): userland 2.3.9 over kmod
+        # 2.4.4-pve1 — min() is 2.3.9, below the measured-absent 2.5.0
+        # pin.
+        stdout = "zfs-2.3.9-0+deb13u1\nzfs-kmod-2.4.4-pve1\n"
+        caps = ZfsCapabilities(_MockRepo(stdout))
+        self.assertFalse(caps.supports("recv_o_volblocksize"))
+        # A matched future pair clears the gate.
+        stdout = "zfs-2.5.0-1\nzfs-kmod-2.5.0-1\n"
+        caps = ZfsCapabilities(_MockRepo(stdout))
+        self.assertTrue(caps.supports("recv_o_volblocksize"))
+        # Reversed split: a newer userland cannot carry the option past
+        # an older kernel module.
+        stdout = "zfs-2.5.0-1\nzfs-kmod-2.4.0-1\n"
+        caps = ZfsCapabilities(_MockRepo(stdout))
+        self.assertFalse(caps.supports("recv_o_volblocksize"))
+        # Non-receive entries stay kmod-gated under the same split.
+        stdout = "zfs-2.2.2-0ubuntu1\nzfs-kmod-2.4.0-1\n"
+        caps = ZfsCapabilities(_MockRepo(stdout))
+        self.assertTrue(caps.supports("ssb_on_zvols"))
+        # An unparsable userland version never passes a receive-family
+        # gate (min() with (0, 0, 0) fails closed).
+        stdout = "\nzfs-kmod-2.4.0-1\n"
+        with capture_logs():
+            caps = ZfsCapabilities(_MockRepo(stdout))
+        self.assertFalse(caps.supports("recv_o_volblocksize"))
+
     def test_supports_unknown_feature_returns_false(self):
         caps = ZfsCapabilities(_MockRepo("zfs-2.4.0-1\nzfs-kmod-2.4.0-1\n"))
         self.assertFalse(caps.supports("nonexistent"))
@@ -121,6 +159,7 @@ class TestZfsCapabilitiesGating(unittest.TestCase):
         self.assertEqual(caps.requires("json_output"), "requires OpenZFS 2.3+")
         self.assertEqual(caps.requires("draid"), "requires OpenZFS 2.1+")
         self.assertEqual(caps.requires("zfs_rewrite"), "requires OpenZFS 2.3.4+")
+        self.assertEqual(caps.requires("recv_o_volblocksize"), "requires OpenZFS 2.5+")
         self.assertEqual(caps.requires("nonexistent"), "")
 
 

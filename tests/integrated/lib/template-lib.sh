@@ -15,7 +15,7 @@
 #         [--sw-source ..] [--force]
 #   itf template destroy [--base B] [--profile ..]  remove the template
 #
-# Two profiles share this machinery:
+# Three profiles share this machinery:
 #   storage  the Debian product baseline (site-config ITF_TEMPLATE_NAME,
 #            expected on the storage base): OS + product install + updates
 #            — the j01 first-time-user path.
@@ -24,6 +24,12 @@
 #            auto-installer, then package updates.  NO product install —
 #            the installer's deploy push to the compute host is part of
 #            what the two-node journey exercises.
+#   ubuntu   the Ubuntu Server LTS probe baseline (ITF_UBUNTU_TEMPLATE_NAME,
+#            expected on the storage base): installed from the Ubuntu ISO
+#            via autoinstall, then package updates.  NO product install —
+#            it is a plain OpenZFS-version leg for the j21 probe matrix,
+#            not a first-time-user baseline; freshness keys on the ISO
+#            (like compute), since there is no product version to track.
 #
 # Rebuilds are ALWAYS from scratch, never an in-place upgrade: the baseline
 # must keep first-time-user fidelity — no version-dir drift, no
@@ -75,9 +81,10 @@ itf_template_stamp_render() {
 #
 # Validates a raw stamp and echoes it normalized (marker dropped).  Fails
 # on blank or foreign descriptions.  The source field is sw-source=
-# (storage profile) or pve-iso= (compute profile); profile= itself is
-# optional so stamps from before the two-template split still parse
-# (they simply never match a compute freshness check).
+# (storage profile), pve-iso= (compute profile) or ubuntu-iso= (ubuntu
+# profile); profile= itself is optional so stamps from before the
+# two-template split still parse (they simply never match a compute or
+# ubuntu freshness check).
 itf_template_stamp_parse() {
     local s="${1:-}"
     [[ "$s" == "itf-stamp| "* ]] || return 1
@@ -86,7 +93,8 @@ itf_template_stamp_parse() {
     for f in version rev kernel built; do
         [[ "$s" == *"$f="* ]] || return 1
     done
-    [[ "$s" == *"sw-source="* || "$s" == *"pve-iso="* ]] || return 1
+    [[ "$s" == *"sw-source="* || "$s" == *"pve-iso="* \
+        || "$s" == *"ubuntu-iso="* ]] || return 1
     printf '%s' "$s"
 }
 
@@ -150,6 +158,20 @@ _itf_template_compute_fresh() {
     [[ -n "$stamp" ]] || return 1
     [[ -n "${ITF_PVE_ISO_NAME:-}" ]] || return 1
     [[ " $stamp " == *" profile=compute pve-iso=${ITF_PVE_ISO_NAME} "* ]]
+}
+
+# _itf_template_ubuntu_fresh <stamp>
+#
+# True when an existing ubuntu-profile template's stamp already reflects
+# the configured Ubuntu ISO.  Like the compute profile, the baseline
+# carries no product, so the ISO name — which encodes the Ubuntu release
+# and with it the OpenZFS version under test — is the freshness driver;
+# package-update drift inside is what --force is for.
+_itf_template_ubuntu_fresh() {
+    local stamp="$1"
+    [[ -n "$stamp" ]] || return 1
+    [[ -n "${ITF_UBUNTU_ISO_NAME:-}" ]] || return 1
+    [[ " $stamp " == *" profile=ubuntu ubuntu-iso=${ITF_UBUNTU_ISO_NAME} "* ]]
 }
 
 # itf_template_os_upgrade <guest-ip> [profile]
@@ -302,7 +324,9 @@ itf_template_clear_snapshots() {
 #
 # Human-readable template presence + stamp, one line per role: the
 # storage baseline where the site expects it, the compute baseline when
-# the site configures two-node keys.
+# the site configures two-node keys, the ubuntu probe baseline when the
+# site configures the Ubuntu ISO pair (it lives on the storage base —
+# it is an OS variant, not a node role).
 itf_template_status() {
     local vmid stamp
     local sbase="${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]:-}}"
@@ -329,13 +353,26 @@ itf_template_status() {
                 "(create: itf template build --base $ITF_COMPUTE_BASE --profile compute)"
         fi
     fi
+    if [[ -n "$sbase" && -n "${ITF_UBUNTU_ISO_NAME:-}" ]]; then
+        vmid="$(itf_template_vmid "$sbase" "$ITF_UBUNTU_TEMPLATE_NAME")" || vmid=""
+        if [[ -n "$vmid" ]]; then
+            stamp="$(itf_template_stamp_read "$sbase" "$vmid" 2>/dev/null)" \
+                || stamp="(no/foreign stamp — rebuild: itf template build --force)"
+            echo "  $sbase: $ITF_UBUNTU_TEMPLATE_NAME = vmid $vmid — ${stamp#itf-stamp| }"
+        else
+            echo "  $sbase: no template '$ITF_UBUNTU_TEMPLATE_NAME'" \
+                "(create: itf template build --profile ubuntu)"
+        fi
+    fi
 }
 
-# itf_template_build [--base B] [--profile storage|compute] [--sw-source ..] [--force]
+# itf_template_build [--base B] [--profile storage|compute|ubuntu]
+#                    [--sw-source ..] [--force]
 #
 # Rebuilds a baseline template from scratch through the shared journey
 # stages (storage: Debian OS + product install; compute: PVE from the
-# auto-installer ISO).  Refuses nothing except a fresh template without
+# auto-installer ISO; ubuntu: Ubuntu Server from the autoinstall seed —
+# no product install).  Refuses nothing except a fresh template without
 # --force; any failure leaves the previous template untouched and the
 # attempt behind under the name <template>-build, which the next build
 # cleans up.
@@ -355,8 +392,8 @@ itf_template_build() {
         *) echo "itf: --sw-source must be 'release' or 'dev-tarball'" >&2; return 2 ;;
     esac
     case "$profile" in
-        storage|compute) ;;
-        *) echo "itf: --profile must be 'storage' or 'compute'" >&2; return 2 ;;
+        storage|compute|ubuntu) ;;
+        *) echo "itf: --profile must be 'storage', 'compute' or 'ubuntu'" >&2; return 2 ;;
     esac
 
     local template_name
@@ -366,6 +403,14 @@ itf_template_build() {
         if [[ -z "$template_name" || -z "${ITF_PVE_ISO_NAME:-}" ]]; then
             echo "itf: compute profile needs ITF_COMPUTE_TEMPLATE_NAME and" \
                 "ITF_PVE_ISO_URL/ITF_PVE_ISO_NAME in the site config" >&2
+            return 2
+        fi
+    elif [[ "$profile" == ubuntu ]]; then
+        template_name="${ITF_UBUNTU_TEMPLATE_NAME:-}"
+        base="${base:-${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]:-}}}"
+        if [[ -z "$template_name" || -z "${ITF_UBUNTU_ISO_NAME:-}" ]]; then
+            echo "itf: ubuntu profile needs ITF_UBUNTU_TEMPLATE_NAME and" \
+                "ITF_UBUNTU_ISO_URL/ITF_UBUNTU_ISO_NAME in the site config" >&2
             return 2
         fi
     else
@@ -386,6 +431,8 @@ itf_template_build() {
         if (( ! force )); then
             if [[ "$profile" == compute ]]; then
                 _itf_template_compute_fresh "$old_stamp" && fresh=1
+            elif [[ "$profile" == ubuntu ]]; then
+                _itf_template_ubuntu_fresh "$old_stamp" && fresh=1
             else
                 _itf_template_fresh "$old_stamp" "$sw_source" && fresh=1
             fi
@@ -414,6 +461,9 @@ itf_template_build() {
     if [[ "$profile" == compute ]]; then
         itf_journey_stage_pve_os "$build_name" "$build_hostname" \
             --base "$base" || return 1
+    elif [[ "$profile" == ubuntu ]]; then
+        itf_journey_stage_os "$build_name" "$build_hostname" \
+            --base "$base" --distro ubuntu || return 1
     else
         itf_journey_stage_os "$build_name" "$build_hostname" --base "$base" || return 1
         itf_journey_stage_install "$J_GUEST_IP" || return 1
@@ -434,6 +484,13 @@ itf_template_build() {
         version="$(itf_guest_exec "$guest_ip" 'pveversion' 2>/dev/null)"
         src_key=pve-iso
         src_val="$ITF_PVE_ISO_NAME"
+    elif [[ "$profile" == ubuntu ]]; then
+        # The version that matters on the probe baseline is the ZFS
+        # userland it carries — the whole point of the ubuntu profile.
+        version="$(itf_guest_exec "$guest_ip" \
+            'zfs version | head -1' 2>/dev/null)"
+        src_key=ubuntu-iso
+        src_val="$ITF_UBUNTU_ISO_NAME"
     else
         version="$(itf_guest_exec "$guest_ip" \
             'cat /usr/local/lib/zfsutilities/current/VERSION' 2>/dev/null)"
@@ -496,7 +553,7 @@ itf_template_build() {
     return 0
 }
 
-# itf_template_destroy [--base B] [--profile storage|compute]
+# itf_template_destroy [--base B] [--profile storage|compute|ubuntu]
 #
 # Removes the template.  Clones are independent (full clones), so no guest
 # is affected; the override is scoped to this one guarded call.
@@ -510,14 +567,17 @@ itf_template_destroy() {
         esac
     done
     case "$profile" in
-        storage|compute) ;;
-        *) echo "itf: --profile must be 'storage' or 'compute'" >&2; return 2 ;;
+        storage|compute|ubuntu) ;;
+        *) echo "itf: --profile must be 'storage', 'compute' or 'ubuntu'" >&2; return 2 ;;
     esac
 
     local template_name
     if [[ "$profile" == compute ]]; then
         template_name="${ITF_COMPUTE_TEMPLATE_NAME:-}"
         base="${base:-${ITF_COMPUTE_BASE:-${ITF_BASE_HOSTS[0]:-}}}"
+    elif [[ "$profile" == ubuntu ]]; then
+        template_name="${ITF_UBUNTU_TEMPLATE_NAME:-}"
+        base="${base:-${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]:-}}}"
     else
         template_name="${ITF_TEMPLATE_NAME:-}"
         base="${base:-${ITF_STORAGE_BASE:-${ITF_BASE_HOSTS[0]:-}}}"

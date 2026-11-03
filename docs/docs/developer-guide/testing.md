@@ -500,7 +500,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 | `test_scrub_page` | Scrub page store schema, flicker-free refresh logic, and drag-and-drop priority ordering |
 | `test_session_log` | Per-run session log helpers (create, append, trailer, size cap) |
 | `test_workload_profiles` | Workload profile property filtering, profile matching, apply plan, `zfs set` command building, warnings |
-| `test_zfs_capabilities` | OpenZFS release-variation gating (incl. patch-level minimums such as `zfs_rewrite` at 2.3.4), pool-feature cross-check parsing |
+| `test_zfs_capabilities` | OpenZFS release-variation gating (incl. patch-level minimums such as `zfs_rewrite` at 2.3.4), receive-family min(userland, kmod) gating (the split-stack shapes), pool-feature cross-check parsing |
 | `test_zfs_diagnostics` | `gui_helpers.diagnose_dataset_busy` — detects each known cause via mocked `subprocess.run` |
 | `test_zfs_lock_manager` | `zfs_lock_manager` two-node lock behavior and stale-lock cleanup (including unverifiable holder scripts) |
 | `test_zfs_repository` | `zfs_repository.py` — ZFS/zpool subprocess isolation, importable-pool config parsing, zvol listing, `zpool create` (incl. RAID10 mirror pairs) and pool-growth/migration command building (incl. incremental `from_snap`) and execution |

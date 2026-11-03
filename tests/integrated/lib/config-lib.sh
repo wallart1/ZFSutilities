@@ -73,6 +73,11 @@ to run without a site configuration (fail-closed by design)."
     # empty on sites that never run it, validated as a pair below).
     ITF_KEYSTORE_PASSPHRASE="${ITF_KEYSTORE_PASSPHRASE:-}"
     ITF_KEYFILE_NAME="${ITF_KEYFILE_NAME:-}"
+    # Optional Ubuntu probe-template keys (the j21 ZFS-probe matrix's
+    # Ubuntu leg; the ISO pair is both-or-neither like the PVE pair).
+    ITF_UBUNTU_ISO_URL="${ITF_UBUNTU_ISO_URL:-}"
+    ITF_UBUNTU_ISO_NAME="${ITF_UBUNTU_ISO_NAME:-}"
+    ITF_UBUNTU_TEMPLATE_NAME="${ITF_UBUNTU_TEMPLATE_NAME:-itf-template-ubuntu}"
 
     itf_config_validate \
         || itf_config_die "site configuration validation failed (see messages above)"
@@ -226,6 +231,33 @@ itf_config_validate() {
             && ! "${ITF_COMPUTE_TEMPLATE_NAME:-}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
         echo "itf-config: ITF_COMPUTE_TEMPLATE_NAME has invalid characters:" \
             "$ITF_COMPUTE_TEMPLATE_NAME" >&2
+        problems=1
+    fi
+
+    # Ubuntu probe-template ISO (optional: the j21 ZFS-probe matrix's
+    # Ubuntu leg).  Both-or-neither, and the same shape rules as the
+    # Debian and PVE ISOs.
+    if [[ -n "${ITF_UBUNTU_ISO_URL:-}" || -n "${ITF_UBUNTU_ISO_NAME:-}" ]]; then
+        if [[ -z "${ITF_UBUNTU_ISO_URL:-}" || -z "${ITF_UBUNTU_ISO_NAME:-}" ]]; then
+            echo "itf-config: ITF_UBUNTU_ISO_URL and ITF_UBUNTU_ISO_NAME must be set together" >&2
+            problems=1
+        fi
+        if [[ -n "${ITF_UBUNTU_ISO_URL:-}" && ! "${ITF_UBUNTU_ISO_URL:-}" =~ ^https?:// ]]; then
+            echo "itf-config: ITF_UBUNTU_ISO_URL must be an http(s) URL" >&2
+            problems=1
+        fi
+        if [[ -n "${ITF_UBUNTU_ISO_NAME:-}" && ! "${ITF_UBUNTU_ISO_NAME:-}" =~ ^itf- ]]; then
+            echo "itf-config: ITF_UBUNTU_ISO_NAME must start with 'itf-' (upload guard)" >&2
+            problems=1
+        fi
+    fi
+
+    # The Ubuntu template name follows the same hostname/volid-safe rule
+    # as the other template names (it doubles as a guest hostname).
+    if [[ -n "${ITF_UBUNTU_TEMPLATE_NAME:-}" \
+            && ! "${ITF_UBUNTU_TEMPLATE_NAME:-}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
+        echo "itf-config: ITF_UBUNTU_TEMPLATE_NAME has invalid characters:" \
+            "$ITF_UBUNTU_TEMPLATE_NAME" >&2
         problems=1
     fi
 

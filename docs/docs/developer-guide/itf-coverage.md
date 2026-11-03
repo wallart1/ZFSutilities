@@ -16,6 +16,7 @@ speculative coverage). The journeys themselves are described in
 | Release upgrade (scan/salvage/deploy/activate) | j10, j12 (interrupted: SIGTERM early, SIGKILL mid-deploy), j19 (trust-on-first-upgrade baseline capture) | *(gap: two-node release upgrade — remote scan/salvage over SSH; interrupted variant with keys pending)* |
 | GUI payload e2e matrix (offsite chain, backup/prune/rsync orchestrators) | j11 (+dev-container/dev-host contexts) | — |
 | Backup property fidelity (manifest capture, offsite travel, replay, retention lockstep) | j20 (incl. the offsite-onward payload pair) | — |
+| ZFS-semantics probe matrix (receive `-o volblocksize`, stream fidelity plain/`-c`/`-cw`, keylocation prompt vs `file://`, receive-as-encrypted, raw `-o` refusal, encryptionroot-self) | j21 (`--template storage/compute/ubuntu`, per-template version-keyed expectations; `probes.tsv` = the measured truths behind `zfs_capabilities`' receive-family entries) | — |
 | First LUN round trip (new-vm-disk → iSCSI → VM config → save) | — | j05 (composed by every j06+ lab journey) |
 | Guest-probe validator (pools/datasets/PVE fetch, honest degradation) | — | j06 |
 | Archive / unarchive + target rebuild (IQN drift) | — | j07 |
@@ -47,8 +48,10 @@ recovery scenarios (the blind-recovery rule).
 
 ## Parked (standing policy)
 
-- **GUI automation** and **OS matrix** (more template profiles) — parked
-  by standing decision; reopened only by an explicit user trigger.
+- **GUI automation** and the remaining **OS matrix** (template profiles
+  beyond storage/compute/ubuntu) — parked by standing decision; reopened
+  only by an explicit user trigger (the ubuntu profile was the one named
+  exception: the j21 probe matrix needed a 2.2-era OpenZFS leg).
 - The 17 test-exempt legacy `bin/` commands are permanently excluded
   from journey scope (closed list, user decision 2026-10-26).
 

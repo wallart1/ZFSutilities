@@ -65,7 +65,11 @@ range, itf storages, ISO sources, guest sizing, and the software source
 (`release` or `dev-tarball`). Two-node keys (role bases, P2P addresses,
 compute template name, PVE ISO source) are optional and activate the
 compute-role machinery only when present; the role bases must be members
-of `ITF_BASE_HOSTS`. The optional keystore pair
+of `ITF_BASE_HOSTS`. The optional Ubuntu pair
+(`ITF_UBUNTU_ISO_URL` + `ITF_UBUNTU_ISO_NAME`, both-or-neither, plus
+the `ITF_UBUNTU_TEMPLATE_NAME` override) activates the ubuntu probe
+template; it lives on the storage base like the Debian one. The
+optional keystore pair
 (`ITF_KEYSTORE_PASSPHRASE` + `ITF_KEYFILE_NAME`, both-or-neither) feeds
 the LUKS key-device lab below — the passphrase is a secret and lives
 only in the gitignored site config.
@@ -85,14 +89,20 @@ tests/integrated/itf journey run j01-fresh-install
 tests/integrated/itf journey run <name> --rerun
                                     # replay on the previous run's guests
                                     # (rollback to as-cloned — no clone)
+tests/integrated/itf journey run j21-zfs-probes --template ubuntu
+                                    # start from a chosen baseline profile
+                                    # (storage|compute|ubuntu; default
+                                    # storage — supported by j21)
 tests/integrated/itf watch            # tail the active run — NOT a console
 tests/integrated/itf status           # guests + template + runs overview
 ```
 
 `iso fetch`/`iso upload` take an optional selector (`debian`, the
-default, or `pve`), and `template build` takes `--base` (target base
-host) and `--profile storage|compute` (storage = Debian + product, the
-default; compute = Proxmox VE from the ISO, see below).
+default, `pve`, or `ubuntu`), and `template build` takes `--base`
+(target base host) and `--profile storage|compute|ubuntu` (storage =
+Debian + product, the default; compute = Proxmox VE from the ISO,
+see below; ubuntu = Ubuntu Server LTS via autoinstall, a plain
+OpenZFS-version leg for the j21 probe matrix — no product install).
 
 Every run produces a progressive report under
 `tests/integrated/results/run-<timestamp>-<tag>/` (gitignored):
@@ -146,9 +156,11 @@ outcomes. The contract is documented in
 `tests/integrated/journeys/README.md`.
 
 OS installation inside the guest is automated with a Debian preseed
-served over HTTP from the development machine and driven over the
-serial console (`qm terminal`, `lib/serial_console.py`) — the substrate
-under test is ZFSutilities' installer experience, not Debian's.
+(or, for the ubuntu profile, an autoinstall seed — the same HTTP-serve
+and serial-console machinery) served over HTTP from the development
+machine and driven over the serial console (`qm terminal`,
+`lib/serial_console.py`) — the substrate under test is ZFSutilities'
+installer experience, not the OS installer's.
 
 Guests are disposable and their addresses are DHCP-recycled, so all
 guest ssh/scp traffic uses `StrictHostKeyChecking=no` with a throwaway
@@ -217,6 +229,18 @@ health gate) and converted to a Proxmox template (`itf template build`).
 `itf_journey_stage_from_template` full-clones it, so the journey is at
 the post-install point in a minute or two instead of repeating the
 ~15–20-minute install.
+
+Three profiles share the build machinery. **storage** (the default) is
+that Debian + product baseline; **compute** is a Proxmox VE host built
+from the configured PVE ISO by its auto-installer (no product — the
+installer's deploy push to the compute host is part of what the
+two-node journeys exercise); **ubuntu** is an Ubuntu Server LTS guest
+built from the configured Ubuntu ISO by autoinstall, carrying the ZFS
+userland but no product — it exists as a plain OpenZFS-version leg for
+the j21 probe matrix (Debian ≈ 2.3, PVE ≈ 2.4-pve, Ubuntu LTS ≈ 2.2),
+with freshness keyed on the ISO name like the compute profile. Journeys
+that support profile selection take it at run time
+(`itf journey run j21-zfs-probes --template ubuntu`).
 
 - **Full clones, by design.** The itf guest storage is LVM-thin, which
   does not support Proxmox linked clones — and full clones are the

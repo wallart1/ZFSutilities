@@ -261,6 +261,47 @@ test_single_node_lab_propagates_pools_failure() {
 }
 
 # ------------------------------------------------------------------------------
+# itf_journey_stage_os --distro selection
+# ------------------------------------------------------------------------------
+
+test_stage_os_distro_selects_renderer() {
+    test_start "stage_os --distro picks the seed renderer and validates values"
+    local work="$tmp_dir/stageos-distro"
+    mkdir -p "$work"
+    (
+        # shellcheck disable=SC2034  # consumed by the sourced stages
+        ITF_RUN_DIR="$work"
+        # shellcheck disable=SC1090
+        source "$ITF_COMMON"
+        itf_step() { :; }
+        itf_artifact() { :; }
+        _rendered=""
+        itf_preseed_render() { _rendered="preseed:$1"; return 0; }
+        itf_autoinstall_render() { _rendered="auto:$1:$2"; return 0; }
+        itf_dev_ip() { echo 127.0.0.1; }
+        # Fail the serve gate on purpose: the renderer dispatch happens
+        # before it, so the recorded call proves the distro selection
+        # without any real HTTP or transport.
+        itf_http_serve() { return 1; }
+        itf_journey_stage_os g h --distro bogus > /dev/null 2>&1
+        echo "$?" > "$work/rc-bad"
+        itf_journey_stage_os g h --distro ubuntu > /dev/null 2>&1
+        echo "$?" > "$work/rc-ubuntu"
+        printf '%s' "$_rendered" > "$work/rendered-ubuntu"
+        itf_journey_stage_os g h --distro debian > /dev/null 2>&1
+        echo "$?" > "$work/rc-debian"
+        printf '%s' "$_rendered" > "$work/rendered-debian"
+    ) > /dev/null 2>&1
+    assert_rc 2 "$(cat "$work/rc-bad")"
+    assert_rc 1 "$(cat "$work/rc-ubuntu")"
+    assert_contains "$(cat "$work/rendered-ubuntu")" \
+        "auto:$work/serve/seed-g/user-data:$work/serve/seed-g/meta-data"
+    assert_rc 1 "$(cat "$work/rc-debian")"
+    assert_contains "$(cat "$work/rendered-debian")" \
+        "preseed:$work/serve/preseed-g.cfg"
+}
+
+# ------------------------------------------------------------------------------
 # VM-OS image machinery (lib/vmos-lib.sh + driver dispatch)
 # ------------------------------------------------------------------------------
 
@@ -1584,6 +1625,7 @@ test_test_pools_guest_script_failure_fails_stage
 test_test_pools_dry_run_emits_guarded_attach
 test_single_node_lab_composes_prefix
 test_single_node_lab_propagates_pools_failure
+test_stage_os_distro_selects_renderer
 test_vmos_wait_guest_ping_arg_order
 test_vmos_stamp_short_circuit
 test_vmos_dump_command_shape

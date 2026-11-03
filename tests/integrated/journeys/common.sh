@@ -3,8 +3,12 @@
 #
 # Composable stages:
 #   itf_journey_stage_os <gname> <hostname> [--base B] [--role R] [--sysdisk GB]
-#       Fresh Debian guest: custom serial-console ISO + preseed install,
-#       IP discovery, root SSH, os-installed snapshot.
+#                                                                [--distro D]
+#       Fresh Debian (--distro debian, the default) or Ubuntu Server
+#       (--distro ubuntu) guest: custom serial-console boot ISO +
+#       unattended install (d-i preseed file / autoinstall nocloud seed,
+#       both served from dev over HTTP), IP discovery, root SSH,
+#       os-installed snapshot.
 #       --sysdisk overrides the site-config system-disk size (the VM-OS
 #       image build installs onto a small disk so the cached image fits
 #       the zvols it is restored onto).
@@ -84,19 +88,26 @@ itf_journey_stage_os() {
     local guest_hostname="$2"
     shift 2
     local base="${ITF_BASE_HOSTS[0]}" role="" sysdisk="${ITF_GUEST_SYSTEM_DISK_GB:-}"
+    local distro="debian"
     while (( $# > 0 )); do
         case "$1" in
             --base) base="$2"; shift 2 ;;
             --role) role="$2"; shift 2 ;;
             --sysdisk) sysdisk="$2"; shift 2 ;;
+            --distro) distro="$2"; shift 2 ;;
             *) echo "itf: unknown itf_journey_stage_os option: $1" >&2; return 2 ;;
         esac
     done
+    case "$distro" in
+        debian|ubuntu) ;;
+        *) echo "itf: --distro must be 'debian' or 'ubuntu'" >&2; return 2 ;;
+    esac
     # Per-guest record file: guest.txt by default, guest-<role>.txt when
     # the journey labels the stage's role.
     local guest_file="$ITF_RUN_DIR/guest.txt"
     [[ -n "$role" ]] && guest_file="$ITF_RUN_DIR/guest-${role}.txt"
     local vmid guest_ip dev_ip preseed_file serve_dir qname
+    local seed_rel=""
 
     # --rerun: replay on the previous run's guest — a rollback to the
     # os-installed checkpoint replaces the whole install machinery (the
@@ -213,12 +224,30 @@ itf_journey_stage_os() {
 
     serve_dir="$ITF_RUN_DIR/serve"
     mkdir -p "$serve_dir"
-    preseed_file="$serve_dir/preseed-${gname}.cfg"
-    if itf_preseed_render "$preseed_file" "$guest_hostname"; then
-        itf_step pass "preseed rendered" "$preseed_file"
+    # The unattended-install seed: a d-i preseed file (debian) or a
+    # nocloud seed directory holding user-data + meta-data (ubuntu).
+    # seed_rel is the URL part under the HTTP root shared by the serve
+    # gate, the self-check, and the guest-GET assertion below.
+    if [[ "$distro" == ubuntu ]]; then
+        seed_rel="seed-${gname}/user-data"
+        preseed_file="$serve_dir/seed-${gname}"
+        mkdir -p "$preseed_file"
+        if itf_autoinstall_render "$preseed_file/user-data" \
+                "$preseed_file/meta-data" "$guest_hostname"; then
+            itf_step pass "autoinstall seed rendered" "$preseed_file"
+        else
+            itf_step fail "autoinstall seed rendered"
+            return 1
+        fi
     else
-        itf_step fail "preseed rendered"
-        return 1
+        seed_rel="preseed-${gname}.cfg"
+        preseed_file="$serve_dir/preseed-${gname}.cfg"
+        if itf_preseed_render "$preseed_file" "$guest_hostname"; then
+            itf_step pass "preseed rendered" "$preseed_file"
+        else
+            itf_step fail "preseed rendered"
+            return 1
+        fi
     fi
 
     dev_ip="$(itf_dev_ip)"
@@ -231,10 +260,10 @@ itf_journey_stage_os() {
 
     J_PIDFILE="$ITF_RUN_DIR/http.pid"
     if itf_http_serve "$serve_dir" "$J_PIDFILE"; then
-        itf_step info "preseed HTTP serving" \
-            "http://${dev_ip}:${ITF_HTTP_PORT}/preseed-${gname}.cfg"
+        itf_step info "install seed HTTP serving" \
+            "http://${dev_ip}:${ITF_HTTP_PORT}/${seed_rel}"
     else
-        itf_step fail "preseed HTTP serving" \
+        itf_step fail "install seed HTTP serving" \
             "port $ITF_HTTP_PORT unavailable — see $ITF_RUN_DIR/http.log"
         J_PIDFILE=""
         return 1
@@ -252,13 +281,14 @@ itf_journey_stage_os() {
     }
     trap _journey_exit_cleanup EXIT
     # Fetch the URL ourselves before spending a guest install on it: a
-    # 404 here is exactly what sends d-i into interactive prompting.
+    # 404 here is exactly what sends d-i (or casper's datasource fetch)
+    # into interactive prompting.
     if curl -fsS --max-time 10 -o /dev/null \
-        "http://127.0.0.1:${ITF_HTTP_PORT}/preseed-${gname}.cfg"; then
-        itf_step pass "preseed URL serves" \
-            "200 OK from http://${dev_ip}:${ITF_HTTP_PORT}/preseed-${gname}.cfg"
+        "http://127.0.0.1:${ITF_HTTP_PORT}/${seed_rel}"; then
+        itf_step pass "install seed URL serves" \
+            "200 OK from http://${dev_ip}:${ITF_HTTP_PORT}/${seed_rel}"
     else
-        itf_step fail "preseed URL serves" "fetch failed — see $ITF_RUN_DIR/http.log"
+        itf_step fail "install seed URL serves" "fetch failed — see $ITF_RUN_DIR/http.log"
         itf_http_stop "$J_PIDFILE"
         J_PIDFILE=""
         return 1
@@ -267,13 +297,17 @@ itf_journey_stage_os() {
     # The installer's syslog target: d-i streams its log via UDP to the
     # base, which the journey pulls back as an artifact — the only
     # visibility into hangs that draw nothing on the serial console.
-    local base_ip boot_append boot_iso
-    base_ip="$(itf_read "$base" hostname -I | awk '{print $1}')"
-    if [[ -z "$base_ip" ]]; then
-        itf_step fail "base LAN IP discovered" "needed for the installer syslog target"
-        itf_http_stop "$J_PIDFILE"
-        J_PIDFILE=""
-        return 1
+    # Ubuntu's subiquity has no UDP-syslog install channel; its serial
+    # transcript is the artifact instead.
+    local base_ip="" boot_append boot_iso
+    if [[ "$distro" == debian ]]; then
+        base_ip="$(itf_read "$base" hostname -I | awk '{print $1}')"
+        if [[ -z "$base_ip" ]]; then
+            itf_step fail "base LAN IP discovered" "needed for the installer syslog target"
+            itf_http_stop "$J_PIDFILE"
+            J_PIDFILE=""
+            return 1
+        fi
     fi
 
     # Custom boot ISO: serial-console bootloader + auto-booted default
@@ -281,13 +315,29 @@ itf_journey_stage_os() {
     # the serial console is lossy under nested virt (observed twice:
     # characters dropped from auto=), so the installer must start with
     # zero keystrokes.  The hostname/domain/interface answers ride on
-    # the kernel command line because network preseeding loads only
-    # AFTER network config, and the hostname question comes during it.
-    boot_append="auto=true url=http://${dev_ip}:${ITF_HTTP_PORT}/preseed-${gname}.cfg"
-    boot_append+=" netcfg/get_hostname=${guest_hostname} netcfg/get_domain=localdomain"
-    boot_append+=" netcfg/choose_interface=auto log_host=${base_ip} console=ttyS0,115200n8 ---"
-    boot_iso="$(itf_iso_customize "$base" "$boot_append" \
-        2>"$ITF_RUN_DIR/iso-customize.log")"
+    # the kernel command line (debian) because network preseeding loads
+    # only AFTER network config, and the hostname question comes during
+    # it; ubuntu's answers live in the autoinstall seed itself.
+    if [[ "$distro" == ubuntu ]]; then
+        boot_append="autoinstall ds=nocloud-net;s=http://${dev_ip}:${ITF_HTTP_PORT}/seed-${gname}/"
+        # Direct kernel boot (itf_ubuntu_boot_setup): the pristine ISO is
+        # the casper medium and the kernel/initrd boot through qemu
+        # -kernel args — -append is authoritative, so the serial console
+        # is guaranteed from the kernel's first byte.  boot=casper makes
+        # the initramfs find the medium on the CD; the installer powers
+        # off at the end (shutdown: poweroff in the seed) so the args
+        # can be cleared before the installed disk's first boot.
+        boot_append+=" console=ttyS0,115200n8 earlyprintk=serial,ttyS0,115200"
+        boot_append+=" boot=casper"
+        boot_iso="$(itf_ubuntu_boot_setup "$base" \
+            2>"$ITF_RUN_DIR/iso-customize.log")"
+    else
+        boot_append="auto=true url=http://${dev_ip}:${ITF_HTTP_PORT}/preseed-${gname}.cfg"
+        boot_append+=" netcfg/get_hostname=${guest_hostname} netcfg/get_domain=localdomain"
+        boot_append+=" netcfg/choose_interface=auto log_host=${base_ip} console=ttyS0,115200n8 ---"
+        boot_iso="$(itf_iso_customize "$base" "$boot_append" \
+            2>"$ITF_RUN_DIR/iso-customize.log")"
+    fi
     if [[ -n "$boot_iso" ]]; then
         itf_step pass "custom boot ISO ready" \
             "$boot_iso (serial console, auto-boot, preseed append)"
@@ -312,29 +362,52 @@ itf_journey_stage_os() {
         J_PIDFILE=""
         return 1
     fi
+    if [[ "$distro" == ubuntu ]]; then
+        # The direct-kernel boot: qemu -kernel/-initrd/-append (the ISO
+        # stays attached as the casper medium).  The inner quotes keep
+        # the append one -append argument when qemu parses the string.
+        local kargs="-kernel $ITF_ISO_DIR/itf-ubuntu-vmlinuz"
+        kargs+=" -initrd $ITF_ISO_DIR/itf-ubuntu-initrd"
+        kargs+=" -append '$boot_append'"
+        if itf_qm "$base" set "$vmid" --args "$kargs" \
+                > "$ITF_RUN_DIR/kernel-args.log" 2>&1; then
+            itf_step pass "direct kernel args set" \
+                "casper kernel/initrd + autoinstall append"
+        else
+            itf_step fail "direct kernel args set" "see kernel-args.log"
+            itf_http_stop "$J_PIDFILE"
+            J_PIDFILE=""
+            return 1
+        fi
+    fi
     # Remember the guest for post-mortem/diagnostics even if we abort.
     # 4th field = the run-tagged qm NAME (fence ownership evidence);
     # "-" holds the IP slot until discovery.
     echo "$base $vmid - $qname" > "$guest_file"
 
     # Installer syslog capture listener on the base (target address was
-    # baked into the boot append above).
-    if itf_syslog_start "$base" "$vmid"; then
-        itf_step pass "syslog capture armed" \
-            "d-i logs -> ${base_ip}:514 -> /tmp/itf-syslog-${vmid}.log"
-    else
-        itf_step fail "syslog capture armed" "needed to diagnose installer hangs"
-        itf_http_stop "$J_PIDFILE"
-        J_PIDFILE=""
-        return 1
+    # baked into the boot append above) — d-i only.
+    if [[ "$distro" == debian ]]; then
+        if itf_syslog_start "$base" "$vmid"; then
+            itf_step pass "syslog capture armed" \
+                "d-i logs -> ${base_ip}:514 -> /tmp/itf-syslog-${vmid}.log"
+        else
+            itf_step fail "syslog capture armed" "needed to diagnose installer hangs"
+            itf_http_stop "$J_PIDFILE"
+            J_PIDFILE=""
+            return 1
+        fi
     fi
 
     # Power on FROZEN (no boot output yet), attach the serial console,
     # then resume — the console captures from the very first byte.  The
-    # custom ISO auto-boots into the preseeded install, so the driver
-    # only WATCHES: transcript + exit pattern (finishing reboot or the
-    # installed system's login prompt).  The blind keypress kick stays
-    # as a backstop if the resume ever races the attach.
+    # custom ISO auto-boots into the preseeded/autoinstalled install, so
+    # the driver only WATCHES: transcript + exit pattern (finishing
+    # reboot or the installed system's login prompt).  The blind
+    # keypress kick stays as a backstop if the resume ever races the
+    # attach — debian only: its custom isolinux menu holds a single
+    # entry, while ubuntu's grub menu is multi-entry and a down-arrow
+    # would boot a different entry.
     local serial_log driver_pid driver_rc
     serial_log="$ITF_RUN_DIR/serial-install.log"
     : > "$serial_log"
@@ -348,13 +421,18 @@ itf_journey_stage_os() {
         return 1
     fi
 
-    python3 "$ITF_ROOT/lib/serial_console.py" \
-        --host "$base" --user "$ITF_SSH_USER" --vmid "$vmid" \
-        --kick $'\x1b[B' --kick-delay 8 \
-        --wait 'Installation complete' --send $'\n' \
-        --exit-after 'Restarting system|Power down|login:' \
-        --timeout 3600 \
-        --log "$serial_log" > "$ITF_RUN_DIR/serial-console.log" 2>&1 &
+    local -a serial_args=(
+        --host "$base" --user "$ITF_SSH_USER" --vmid "$vmid"
+        --wait 'Installation complete' --send $'\n'
+        --exit-after 'Restarting system|Power down|login:'
+        --timeout 3600
+        --log "$serial_log"
+    )
+    if [[ "$distro" == debian ]]; then
+        serial_args+=(--kick $'\x1b[B' --kick-delay 8)
+    fi
+    python3 "$ITF_ROOT/lib/serial_console.py" "${serial_args[@]}" \
+        > "$ITF_RUN_DIR/serial-console.log" 2>&1 &
     driver_pid=$!
     sleep 5
 
@@ -370,12 +448,15 @@ itf_journey_stage_os() {
 
     wait "$driver_pid"
     driver_rc=$?
-    itf_syslog_stop "$base" "$vmid" "$ITF_RUN_DIR/installer-syslog.log" \
-        && itf_artifact "installer-syslog" "$ITF_RUN_DIR/installer-syslog.log" || true
+    if [[ "$distro" == debian ]]; then
+        itf_syslog_stop "$base" "$vmid" "$ITF_RUN_DIR/installer-syslog.log" \
+            && itf_artifact "installer-syslog" \
+                "$ITF_RUN_DIR/installer-syslog.log" || true
+    fi
     itf_artifact "serial-transcript" "$serial_log"
     if [[ $driver_rc -eq 0 ]]; then
         itf_step pass "serial install driven" \
-            "install ran to its finishing reboot (see serial-install.log)"
+            "install ran to its finish (see serial-install.log)"
     else
         itf_step fail "serial install driven" "driver rc=$driver_rc — see serial-install.log"
         itf_http_stop "$J_PIDFILE"
@@ -384,6 +465,29 @@ itf_journey_stage_os() {
     fi
     itf_http_stop "$J_PIDFILE"
     J_PIDFILE=""
+
+    if [[ "$distro" == ubuntu ]]; then
+        # The installer powered off at the end of the autoinstall (the
+        # seed's shutdown: poweroff — a finishing reboot would boot the
+        # installer kernel again while the -kernel args sit in the
+        # config).  Drop the args, drop the install-time CPU freeze (a
+        # fresh start re-applies the config's freeze flag — the debian
+        # flow never sees this because its installer's finishing reboot
+        # keeps the VM running), and boot the installed disk.
+        if itf_qm "$base" set "$vmid" --delete args \
+                > "$ITF_RUN_DIR/kernel-args-clear.log" 2>&1 \
+                && itf_qm "$base" set "$vmid" --freeze 0 \
+                    > "$ITF_RUN_DIR/guest-unfreeze.log" 2>&1 \
+                && itf_guest_start "$base" "$vmid" \
+                    > "$ITF_RUN_DIR/guest-diskboot.log" 2>&1; then
+            itf_step pass "installed disk booted" \
+                "kernel args cleared, vmid $vmid started from scsi0"
+        else
+            itf_step fail "installed disk booted" \
+                "see kernel-args-clear.log / guest-diskboot.log"
+            return 1
+        fi
+    fi
 
     # The installer is finishing its reboot now.  Boot order is disk-first,
     # so the ISO no longer wins; detach it anyway (best-effort) so no later
@@ -395,14 +499,15 @@ itf_journey_stage_os() {
         itf_step info "install ISO detach failed" "see iso-detach.log (non-fatal)"
     fi
 
-    # The guest itself must have fetched the preseed (the 127.0.0.1 GETs
-    # are our own probe and URL check; anything else is the installer).
+    # The guest itself must have fetched the install seed (the
+    # 127.0.0.1 GETs are our own probe and URL check; anything else is
+    # the installer).
     if grep -v '^127\.0\.0\.1' "$ITF_RUN_DIR/http.log" \
-            | grep -q "GET /preseed-${gname}.cfg"; then
-        itf_step pass "preseed fetched by guest" "GET logged in http.log"
+            | grep -q "GET /${seed_rel}"; then
+        itf_step pass "install seed fetched by guest" "GET logged in http.log"
     else
-        itf_step fail "preseed fetched by guest" \
-            "no guest GET in http.log — install ran without the preseed"
+        itf_step fail "install seed fetched by guest" \
+            "no guest GET in http.log — install ran without the seed"
         return 1
     fi
 
@@ -423,7 +528,7 @@ itf_journey_stage_os() {
     fi
 
     if itf_guest_snapshot "$base" "$vmid" os-installed > /dev/null 2>&1; then
-        itf_step pass "snapshot os-installed" "clean Debian checkpoint for later stages"
+        itf_step pass "snapshot os-installed" "clean OS checkpoint for later stages"
     else
         itf_step fail "snapshot os-installed"
     fi
