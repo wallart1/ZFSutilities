@@ -198,6 +198,39 @@ def create_restore_page(app, ctx):
     )
     adv_grid.attach(app.restore_pause_scrubs, 0, len(RESTORE_ADVANCED_VARIABLES), 2, 1)
 
+    # Receive-as-encrypted pair: the checkbox opts the restore's initial
+    # (full-copy step-1) receives into encryption; the key-location entry
+    # names the 32-byte raw key file and is only editable while checked.
+    app.restore_receive_encrypted_check = Gtk.CheckButton(label="Receive as encrypted")
+    app.restore_receive_encrypted_check.set_active(variables.get("receive_encryption", "N") == "Y")
+    app.restore_receive_encrypted_check.set_tooltip_text(
+        "Receive the restore's initial full-copy streams as encrypted "
+        "(keyformat=raw). Every restored dataset becomes its own encryption "
+        "root wearing the given key; already-encrypted (raw) sources keep "
+        "their own encryption. Uncheck to restore plainly, as before."
+    )
+    adv_grid.attach(
+        app.restore_receive_encrypted_check,
+        0,
+        len(RESTORE_ADVANCED_VARIABLES) + 1,
+        2,
+        1,
+    )
+
+    keyloc_lbl = Gtk.Label(label="receive_keylocation")
+    keyloc_lbl.set_halign(Gtk.Align.END)
+    adv_grid.attach(keyloc_lbl, 0, len(RESTORE_ADVANCED_VARIABLES) + 2, 1, 1)
+    app.restore_keylocation_entry = Gtk.Entry()
+    app.restore_keylocation_entry.set_text(variables.get("receive_keylocation", ""))
+    app.restore_keylocation_entry.set_hexpand(True)
+    app.restore_keylocation_entry.set_width_chars(1)
+    app.restore_keylocation_entry.set_tooltip_text(
+        "file:// path to the 32-byte raw key file used when Receive as "
+        "encrypted is checked, e.g. file:///mnt/ZFSkeys/restore.key. The "
+        "same key encrypts every dataset in the restore."
+    )
+    adv_grid.attach(app.restore_keylocation_entry, 1, len(RESTORE_ADVANCED_VARIABLES) + 2, 1, 1)
+
     adv_expander.add(adv_grid)
     box.pack_start(adv_expander, False, False, 0)
 
@@ -209,6 +242,10 @@ def create_restore_page(app, ctx):
         widget.connect("changed", lambda w, a=app: check_restore_dirty(a))
     app.restore_recursive_check.connect("toggled", lambda w, a=app: check_restore_dirty(a))
     app.restore_pause_scrubs.connect("toggled", lambda w, a=app: check_restore_dirty(a))
+    app.restore_receive_encrypted_check.connect(
+        "toggled", lambda w, a=app: _on_receive_encrypted_toggled(a)
+    )
+    app.restore_keylocation_entry.connect("changed", lambda w, a=app: check_restore_dirty(a))
 
     def _update_advanced_label(*_args):
         non_default = style_var_widgets_nondefault(
@@ -218,13 +255,27 @@ def create_restore_page(app, ctx):
         style_widget_value_nondefault(app.restore_pause_scrubs, pause_scrubs)
         if pause_scrubs:
             non_default = True
+        enc_on = app.restore_receive_encrypted_check.get_active()
+        keyloc = app.restore_keylocation_entry.get_text().strip()
+        style_widget_value_nondefault(app.restore_receive_encrypted_check, enc_on)
+        style_widget_value_nondefault(
+            app.restore_keylocation_entry,
+            keyloc != RESTORE_DEFAULTS["variables"]["receive_keylocation"],
+        )
+        if enc_on or keyloc:
+            non_default = True
         style_expander_label(adv_expander, "Advanced", non_default)
 
     app._restore_update_advanced_label = _update_advanced_label
     for _widget in app.restore_var_widgets.values():
         _widget.connect("changed", _update_advanced_label)
     app.restore_pause_scrubs.connect("toggled", _update_advanced_label)
+    app.restore_receive_encrypted_check.connect("toggled", _update_advanced_label)
+    app.restore_keylocation_entry.connect("changed", _update_advanced_label)
     _update_advanced_label()
+
+    # Apply the initial key-location sensitivity for the checkbox state.
+    _on_receive_encrypted_toggled(app)
 
     # Apply initial sensitivity state and auto-computed destination.
     _on_auto_dest_toggled(app)
@@ -248,6 +299,14 @@ def collect_restore_config(app):
             variables[key] = widget.get_active_text() or "Y"
         else:
             variables[key] = widget.get_text()
+
+    # The receive-as-encrypted pair rides "variables" too (the payload
+    # reads both from advanced_vars), but is collected explicitly — a
+    # CheckButton cannot ride the generic widget loops above.
+    variables["receive_encryption"] = (
+        "Y" if app.restore_receive_encrypted_check.get_active() else "N"
+    )
+    variables["receive_keylocation"] = app.restore_keylocation_entry.get_text().strip()
 
     return {
         "source": app.restore_source_entry.get_text().strip(),
@@ -282,6 +341,14 @@ def load_restore_config(app, config):
             widget.set_active(0 if val == "Y" else 1)
         else:
             widget.set_text(val)
+
+    app.restore_receive_encrypted_check.set_active(
+        config.get("variables", {}).get("receive_encryption", "N") == "Y"
+    )
+    app.restore_keylocation_entry.set_text(
+        config.get("variables", {}).get("receive_keylocation", "")
+    )
+    _on_receive_encrypted_toggled(app)
 
     app.restore_pause_scrubs.set_active(config.get("pause_scrubs", False))
     if hasattr(app, "_restore_update_advanced_label"):
@@ -339,6 +406,17 @@ def refresh_restore_destination(app):
 def _on_restore_source_changed(app):
     """Recompute the destination whenever the source changes."""
     refresh_restore_destination(app)
+
+
+def _on_receive_encrypted_toggled(app):
+    """Sync the key-location entry's sensitivity with the checkbox state.
+
+    The key location only matters (and is only editable) while Receive as
+    encrypted is checked; disabling the checkbox keeps the stored value
+    but makes the entry read-only until it is re-enabled.
+    """
+    app.restore_keylocation_entry.set_sensitive(app.restore_receive_encrypted_check.get_active())
+    check_restore_dirty(app)
 
 
 def _on_auto_dest_toggled(app):
@@ -402,6 +480,15 @@ def on_restore_run(app, ctx):
         log_msg(f"WARN: Error: {e}")
         return
 
+    enc_on = restore_cfg["variables"].get("receive_encryption", "N") == "Y"
+    keylocation = restore_cfg["variables"].get("receive_keylocation", "")
+    if enc_on and not (keylocation.startswith("file:///") and keylocation != "file:///"):
+        log_msg(
+            "WARN: Receive as encrypted requires a key location of the form "
+            "file:///path/to/raw-key (a 32-byte raw key file)"
+        )
+        return
+
     secondary = (
         "Runs in two parts: Part 1 (full copy from the oldest snapshot), "
         "then Part 2 (incremental copy of the remaining snapshots)."
@@ -420,6 +507,12 @@ def on_restore_run(app, ctx):
         "Only datasets without a verified lineage are destroyed and fully "
         "re-copied."
     )
+    if enc_on:
+        secondary += (
+            "\n\nDatasets will be received as encrypted (keyformat=raw, "
+            f"keylocation={keylocation}); each restored dataset becomes its "
+            "own encryption root wearing that key."
+        )
 
     dialog = Gtk.MessageDialog(
         transient_for=app,

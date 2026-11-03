@@ -234,6 +234,17 @@ behaviors the backup engine's design rests on; `probes.tsv` in the run
 report is the recorded outcome. Unrelated to the GUI's guest-filesystem
 probe (the Alignment view's validator, journey j06).
 
+## receive as encrypted
+
+Receiving an UNencrypted backup stream into a dataset created encrypted by
+the receive itself — `zfs receive -o encryption=on -o keyformat=raw -o
+keylocation=file://…` on the initial receive only (the Restore tab's
+*Receive as encrypted* option). The restored dataset becomes its own
+encryption root wearing the given raw key; already-encrypted sources are
+skipped automatically because raw streams refuse encryption-family `-o`
+overrides. Works on every OpenZFS release in the fleet, so no capability
+entry is needed. See "Receiving a Restore as Encrypted" in the user guide.
+
 ## receive family
 
 The capability-table entries that describe `zfs receive` behavior

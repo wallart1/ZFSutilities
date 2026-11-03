@@ -1,0 +1,429 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034
+# test-zfs-send-receive-encrecv — Engine contract tests for receive-as-
+# -encrypted: with receive_encryption='Y' and a valid file:// raw-key
+# location, the step-1 (initial) receive of a full-copy pass carries
+# -o encryption=on -o keyformat=raw -o keylocation=… while step 2, the
+# incremental passes, and encrypted (raw-stream) sources stay plain; an
+# invalid keylocation is FATAL before any transfer; the destination
+# pre-create is skipped so the receive itself creates the encrypted
+# dataset; the default 'N' changes nothing. The receive options are
+# asserted through the engine's own VERB/dry-run log lines.
+
+# shellcheck disable=SC2218
+# (source() override below is intentionally not active for test-lib.sh itself.)
+builtin source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+
+# zfs-send-receive sources helpers with $mydir-relative paths; in the repo
+# layout $mydir must be the bin/ directory.
+repo_root="$mydir"
+mydir="$mydir/bin"
+
+# Prevent re-sourcing bashinit / rootcheck / zfslockmanager / bashsetx /
+# iscsi-lib / property-manifest-lib inside send-receive from overwriting
+# our mocks, enabling xtrace, or requiring a real node configuration.
+source() {
+    local expanded="${1/#\~/$HOME}"
+    [[ "$expanded" == "$HOME/bashinit" ]] && return 0
+    # With the local-bashinit bootstrap, zfs-send-receive sources bashinit from
+    # its own directory. Skip that as well so test mocks remain in place.
+    [[ "$expanded" == "$repo_root/bin/bashinit" ]] && return 0
+    [[ "$expanded" == *"rootcheck" ]] && return 0
+    [[ "$expanded" == *"zfslockmanager" ]] && return 0
+    [[ "$expanded" == *"bashsetx" ]] && return 0
+    [[ "$expanded" == *"iscsi-lib.sh" ]] && return 0
+    [[ "$expanded" == *"property-manifest-lib.sh" ]] && return 0
+    builtin source "$@"
+}
+
+# iscsi-lib.sh is skipped above; provide the functions send-receive/delfs call.
+iscsi_rebuild_torn_down() { :; }
+iscsi_teardown_zvol() { return 0; }
+
+# property-manifest-lib.sh is skipped above; no-op fakes — capture behavior
+# has its own suite (test-zfs-send-receive-manifest).
+propmanifest_capture() { return 0; }
+propmanifest_finish() { return 0; }
+
+# Auto-answer interactive prompts (which use read -p); delegate everything
+# else to the real builtin so `while read` data loops terminate at EOF.
+read() {
+    local _a
+    for _a in "$@"; do
+        if [[ "$_a" == -*p* ]]; then
+            response="y"
+            return 0
+        fi
+    done
+    # shellcheck disable=SC2162
+    # Caller flags (e.g. -r) are forwarded verbatim.
+    builtin read "$@"
+}
+
+_TEST_LOG="$_mock_zfs_state_dir/sendrecv-encrecv.log"
+
+set_msg_level() {
+    msg_level="$1"
+}
+
+capture_stderr() {
+    exec 2>"$_TEST_LOG"
+}
+
+restore_stderr() {
+    exec 2>&1
+    # send-receive re-sources strict scripts (e.g. zfsdelfs) at runtime,
+    # which re-enables their set line in this shell mid-test. Restore the
+    # harness's option state after every captured call.
+    set +euo pipefail
+}
+
+get_stderr_log() {
+    # log_msg is redirected to the per-test log file by test-lib.sh.
+    cat "$(get_test_log_file)" 2>/dev/null
+}
+
+clear_log() {
+    : > "$_TEST_LOG"
+    : > "$(get_test_log_file)"
+}
+
+reset_mocks() {
+    _mock_zfs_fs_list=""
+    _mock_zfs_snap_list=""
+    _mock_zfs_props=()
+    _mock_zfs_snaps=()
+    _mock_zfs_datasets=()
+    _mock_zfs_snap_lists=()
+    _mock_zfs_guid_lists=()
+    _mock_zfs_send_size="0"
+    _mock_zpool_list=""
+    _mock_ask_yn_rc=0
+    clear_log
+}
+
+# One dataset, one common snapshot on both sides: the plain incremental
+# backup shape.
+_setup_incremental_world() {
+    reset_mocks
+    set_msg_level VERB
+    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_props["pool/src/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:origin"]="-"
+    _mock_zfs_props["pool/dest/data:receive_resume_token"]="-"
+    _mock_zfs_props["pool:available"]="10000000000"
+    _mock_zfs_props["pool/src/data@snap1:type"]="snapshot"
+    _mock_zfs_props["pool/dest/data@snap1:type"]="snapshot"
+    _mock_zfs_datasets["pool/dest/data"]=1
+    _mock_zfs_snap_lists["pool/src/data"]="pool/src/data@snap1"
+    _mock_zfs_snap_lists["pool/dest/data"]="pool/dest/data@snap1"
+    _mock_zfs_guid_lists["pool/src/data"]="guid1"
+    _mock_zfs_guid_lists["pool/dest/data"]="guid1"
+    _mock_zfs_send_size="1000000"
+}
+
+# Full-copy shape (doincrementals='N', force='Y'), modeled on the manifest
+# suite's world: creation times make snap1 both the oldest and the step-1
+# base; nextsnap names a different (nonexistent) target so the two-step
+# path runs — step 1 full copy plus step 2 incremental.
+_setup_full_copy_world() {
+    _setup_incremental_world
+    _mock_zfs_props["pool/src/data@snap1:creation"]="1700000000"
+    _mock_zfs_props["pool/dest/data@snap1:creation"]="1700000000"
+    _mock_zfs_snaps["pool/src/data@snap1"]=1
+    _mock_zfs_snaps["pool/dest/data@snap1"]=1
+    _mock_zfs_snap_lists["pool/dest"]="pool/dest/data@snap1"
+}
+
+# Destination-absent variant: the pre-create branch (and its receive-as-
+# -encrypted VERB) only runs when the destination dataset does not exist.
+_setup_full_copy_no_dest_world() {
+    _setup_full_copy_world
+    unset '_mock_zfs_datasets[pool/dest/data]'
+    unset '_mock_zfs_props[pool/dest/data@snap1:type]'
+    unset '_mock_zfs_props[pool/dest/data@snap1:creation]'
+    unset '_mock_zfs_snaps[pool/dest/data@snap1]'
+    unset '_mock_zfs_snap_lists[pool/dest/data]'
+    unset '_mock_zfs_guid_lists[pool/dest/data]'
+    _mock_zfs_snap_lists["pool/dest"]=""
+}
+
+source "$mydir/zfs-send-receive"
+# The script's strict line leaks into this test shell at the source point;
+# restore the test harness's own option state so a failing test reports
+# normally instead of aborting the suite.
+set +euo pipefail
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+test_step1_receive_carries_encryption_options() {
+    test_start "full copy: step-1 receive carries the -o encryption options"
+
+    _setup_full_copy_world
+
+    capture_stderr
+    (
+        receive_encryption='Y'; receive_keylocation='file:///keys/k1'
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    if ! grep -q \
+        'VERB: zfs receive -o encryption=on -o keyformat=raw -o keylocation=file:///keys/k1 -uvFs pool/dest/data' \
+        <<<"$log"; then
+        test_fail "step-1 receive options missing:" \
+            "$(grep 'VERB: zfs receive' <<<"$log")"
+        return
+    fi
+    test_pass
+}
+
+test_step2_incremental_stays_plain() {
+    test_start "full copy: only the step-1 receive is encrypted"
+
+    _setup_full_copy_world
+
+    capture_stderr
+    (
+        receive_encryption='Y'; receive_keylocation='file:///keys/k1'
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    if [[ "$(grep -c 'zfs receive -o encryption=on' <<<"$log")" != "1" ]]; then
+        test_fail "exactly one encrypted receive expected:" \
+            "$(grep 'VERB: zfs receive' <<<"$log")"
+        return
+    fi
+    if ! grep -q 'VERB: zfs receive -uvs pool/dest/data' <<<"$log"; then
+        test_fail "step-2 incremental receive not found:" \
+            "$(grep 'VERB: zfs receive' <<<"$log")"
+        return
+    fi
+    test_pass
+}
+
+test_incremental_pass_stays_plain() {
+    test_start "incremental pass (restore Part 2 shape): no -o encryption"
+
+    _setup_incremental_world
+
+    capture_stderr
+    (
+        receive_encryption='Y'; receive_keylocation='file:///keys/k1'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    if [[ "$(grep -c 'zfs receive -o encryption' <<<"$log")" != "0" ]]; then
+        test_fail "incremental receives must stay plain:" \
+            "$(grep 'VERB: zfs receive' <<<"$log")"
+        return
+    fi
+    if ! grep -q 'VERB: zfs receive -uv pool/dest/data' <<<"$log"; then
+        test_fail "the incremental receive itself not found:" \
+            "$(grep 'VERB: zfs receive' <<<"$log")"
+        return
+    fi
+    test_pass
+}
+
+test_encrypted_source_keeps_own_encryption() {
+    test_start "an encrypted (raw-stream) source skips the -o overrides"
+
+    _setup_full_copy_world
+    _mock_zfs_props["pool/src/data:encryption"]="aes-256-gcm"
+
+    capture_stderr
+    (
+        receive_encryption='Y'; receive_keylocation='file:///keys/k1'
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    if [[ "$(grep -c 'zfs receive -o encryption' <<<"$log")" != "0" ]]; then
+        test_fail "raw streams refuse the overrides — none expected:" \
+            "$(grep 'VERB: zfs receive' <<<"$log")"
+        return
+    fi
+    if ! grep -q 'VERB: zfs receive -uvFs pool/dest/data' <<<"$log"; then
+        test_fail "the step-1 receive itself not found:" \
+            "$(grep 'VERB: zfs receive' <<<"$log")"
+        return
+    fi
+    test_pass
+}
+
+test_precreate_skipped_for_encrypted_receive() {
+    test_start "plain-fs destination is created by the encrypted receive itself"
+
+    _setup_full_copy_no_dest_world
+
+    capture_stderr
+    (
+        receive_encryption='Y'; receive_keylocation='file:///keys/k1'
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" \
+        "VERB: pool/dest/data will be created by the receive itself as an encrypted dataset (receive_encryption='Y' — no destination pre-create)."
+    if [[ "$log" == *"Would create destination dataset pool/dest/data"* ]]; then
+        test_fail "the placeholder pre-create must be skipped (dry-run form)"
+        return
+    fi
+    test_pass
+}
+
+test_invalid_keylocation_fatals_before_transfer() {
+    test_start "an invalid keylocation is FATAL before any transfer"
+
+    local bad
+    for bad in "" "prompt" "file://" "file:///"; do
+        _setup_full_copy_world
+        set_msg_level INFO
+
+        capture_stderr
+        (
+            receive_encryption='Y'; receive_keylocation="$bad"
+            doincrementals='N'; force='Y'; allow_destructive='N'
+            autoproceed='Y'; sourcefsremovequalifiers=2
+            nextsnap='@test-2025-06-15T10:00-04:00-d'
+            send-receive "pool/src" "pool/dest"
+        )
+        local rc=$?
+        restore_stderr
+
+        if [[ "$rc" -ne 8 ]]; then
+            test_fail "keylocation '$bad' must FATAL (rc 8), got rc $rc"
+            return
+        fi
+        local log
+        log=$(get_stderr_log)
+        if ! grep -q "FATAL: receive_encryption='Y' requires receive_keylocation" \
+            <<<"$log"; then
+            test_fail "FATAL line missing for '$bad': $log"
+            return
+        fi
+        if grep -q 'zfs receive' <<<"$log"; then
+            test_fail "no receive may run for '$bad'"
+            return
+        fi
+    done
+    test_pass
+}
+
+test_default_off_changes_nothing() {
+    test_start "receive_encryption unset (default N): no options, no pre-create change"
+
+    _setup_full_copy_world
+    set_msg_level INFO
+
+    capture_stderr
+    (
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    if [[ "$(grep -c 'zfs receive -o encryption' <<<"$log")" != "0" ]]; then
+        test_fail "no -o options expected by default:" \
+            "$(grep 'zfs receive' <<<"$log")"
+        return
+    fi
+    if grep -q 'as an encrypted dataset' <<<"$log"; then
+        test_fail "encrypted pre-create VERB must not appear by default"
+        return
+    fi
+    test_pass
+}
+
+test_dryrun_reports_encrypted_option() {
+    test_start "dry-run: the options line reports receive as encrypted"
+
+    _setup_full_copy_no_dest_world
+
+    capture_stderr
+    (
+        receive_encryption='Y'; receive_keylocation='file:///keys/k1'
+        dryrun='Y'
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 0 "$rc"
+    local log
+    log=$(get_stderr_log)
+    if ! grep -q 'Dry-run:   Options:.*receive as encrypted' <<<"$log"; then
+        test_fail "dry-run options line missing 'receive as encrypted':" \
+            "$(grep 'Dry-run:   Options:' <<<"$log")"
+        return
+    fi
+    if ! grep -q 'as an encrypted dataset' <<<"$log"; then
+        test_fail "encrypted pre-create VERB missing in dry-run"
+        return
+    fi
+    test_pass
+}
+
+# ---------------------------------------------------------------------------
+# Run all tests
+# ---------------------------------------------------------------------------
+
+test_step1_receive_carries_encryption_options
+test_step2_incremental_stays_plain
+test_incremental_pass_stays_plain
+test_encrypted_source_keeps_own_encryption
+test_precreate_skipped_for_encrypted_receive
+test_invalid_keylocation_fatals_before_transfer
+test_default_off_changes_nothing
+test_dryrun_reports_encrypted_option
+
+test_summary
+teardown_test_env

@@ -176,6 +176,7 @@ reset_state() {
     dryrun="N"
     _propmanifest_ok=""
     _propmanifest_skip=""
+    propmanifest_skip_keylocation="N"
     _propmanifest_mounted=""
     _propmanifest_mnt=""
 }
@@ -415,6 +416,46 @@ test_apply_body_keylocation_non_file_never_loads() {
     fi
     assert_contains "$(get_log)" \
         "WARN: keylocation on tank/restored/data set to prompt; key not loaded (only file:// locations load non-interactively)."
+    test_pass
+}
+
+test_apply_body_keylocation_skip_flag() {
+    test_start "propmanifest_skip_keylocation='Y' skips keylocation (receive" \
+        "as encrypted keeps the restore key's location)"
+
+    reset_state
+    propmanifest_skip_keylocation="Y"
+    propmanifest_apply_body "compression=lz4
+keylocation=file:///mnt/ZFSkeys/key1" tank/restored/data
+    local capture
+    capture=$(cat "$_zfs_capture_file")
+    assert_contains "$capture" "zfs set compression=lz4 tank/restored/data"
+    if [[ "$capture" == *"keylocation"* ]]; then
+        test_fail "keylocation must not be set when the skip flag is on"
+        return
+    fi
+    if [[ "$capture" == *"load-key"* ]]; then
+        test_fail "load-key must not run when the skip flag is on"
+        return
+    fi
+    assert_contains "$(get_log)" \
+        "WARN: keylocation on tank/restored/data skipped — the dataset was received as encrypted and keeps its restore key's location (manifest records file:///mnt/ZFSkeys/key1)."
+    assert_contains "$(get_log)" \
+        "VERB: Replayed 1 properties onto tank/restored/data from its property manifest (1 skipped)."
+    test_pass
+}
+
+test_apply_body_keylocation_skip_flag_off_keeps_replay() {
+    test_start "the skip flag off (default) keeps today's keylocation replay"
+
+    reset_state
+    propmanifest_apply_body "keylocation=file:///mnt/ZFSkeys/key1" \
+        tank/restored/data
+    local capture
+    capture=$(cat "$_zfs_capture_file")
+    assert_contains "$capture" \
+        "zfs set keylocation=file:///mnt/ZFSkeys/key1 tank/restored/data"
+    assert_contains "$capture" "zfs load-key tank/restored/data"
     test_pass
 }
 
@@ -934,6 +975,8 @@ test_apply_body_excluded_property_never_set
 test_apply_body_keylocation_file_loads_key
 test_apply_body_keylocation_load_failure_warns
 test_apply_body_keylocation_non_file_never_loads
+test_apply_body_keylocation_skip_flag
+test_apply_body_keylocation_skip_flag_off_keeps_replay
 test_apply_file_roundtrip
 test_apply_file_corrupt_fails_open
 test_apply_file_dryrun

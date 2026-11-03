@@ -35,6 +35,14 @@
 #     $property_manifest     'Y' (default) captures each transferred dataset's local properties
 #                             into a manifest under <destfs>/<sourcepool>/zfsutilities-manifests
 #                             (lib/property-manifest-lib.sh); 'N' skips. Fail-open: WARN only.
+#     $receive_encryption     'N' (default) receives plainly. 'Y' receives the step-1 (initial)
+#                             full-copy stream as encrypted (-o encryption=on -o keyformat=raw
+#                             -o keylocation=$receive_keylocation); the destination is created
+#                             by the receive itself, and encrypted (raw-stream) sources keep
+#                             their own encryption — raw streams refuse the overrides.
+#     $receive_keylocation    file:// path to the 32-byte raw key file used when
+#                             $receive_encryption='Y' (validated at entry: a value that is not
+#                             file:///<non-empty path> is FATAL before any transfer).
 #     $releaseholds           'Y' releases matching holds when destroying snapshots.
 # Execution control:
 #     $autoproceed            'Y' (default) suppresses "press enter" confirmations.
@@ -173,6 +181,20 @@ function send-receive {
         sendoptions="-cw ${incremental_args[*]}"
         receiveoptions="-uv$receive_F_option$receive_s_option"
 
+        # Receive-as-encrypted (restore): encryption-family -o overrides
+        # apply only to the initial receive that creates the destination —
+        # step 1 of a full-copy pass (no incremental base). Step 2 and the
+        # incremental passes create nothing, resume tokens carry their own
+        # initial properties, and an encrypted source's raw stream refuses
+        # the overrides outright.
+        local -a _enc_opts=()
+        if [[ ${receive_encryption:-N} = 'Y' && $doincrementals != 'Y' \
+            && ${#incremental_args[@]} -eq 0 && ${_src_encrypted:-0} -ne 1 ]]; then
+            _enc_opts=(-o encryption=on -o keyformat=raw \
+                -o "keylocation=$receive_keylocation")
+            receiveoptions="${_enc_opts[*]} $receiveoptions"
+        fi
+
         log_msg "VERB: zfs send $sendoptions $fs$nextsnap"
         log_msg "VERB: zfs receive $receiveoptions $destfs$restorefs"
 
@@ -181,6 +203,7 @@ function send-receive {
             [[ ${#incremental_args[@]} -gt 0 ]] && _tt="incremental" || _tt="full copy"
             [[ "$receive_F_option" = 'F' ]] && _od="$_od force-receive"
             [[ "$receive_s_option" = 's' ]] && _od="$_od resumable"
+            [[ ${#_enc_opts[@]} -gt 0 ]] && _od="$_od receive as encrypted"
             if [[ -n "$_step_datatosend" && "$_step_datatosend" -gt 0 ]]; then
                 _sz=", ~$(echo "$_step_datatosend" | numfmt --to=iec-i)"
             fi
@@ -430,6 +453,19 @@ function send-receive {
     [[ ${releaseholds:-} = "" ]] && releaseholds="N"
     [[ ${preserve_target_holds:-} = "" ]] && preserve_target_holds='Y'
     [[ ${property_manifest:-} = "" ]] && property_manifest='Y'
+    [[ ${receive_encryption:-} = "" ]] && receive_encryption='N'
+    # Receive-as-encryption guard: keyformat=raw requires a file:// raw-key
+    # location, and encryption can only be applied by the initial receive —
+    # refuse the run up front rather than fail (or land unencrypted) part
+    # way through a destructive pass.
+    if [[ $receive_encryption = 'Y' ]] \
+        && { [[ ${receive_keylocation:-} != file:///* ]] \
+            || [[ ${receive_keylocation#file:///} = '' ]]; }; then
+        log_msg "FATAL: receive_encryption='Y' requires receive_keylocation" \
+            "to be a file:// path to a 32-byte raw key file" \
+            "(got '${receive_keylocation:-}')."
+        exit 8
+    fi
     [[ ${autoproceed:-} = "" ]] && autoproceed='Y'
     # Glob prefix check on declare -p output: test whether a variable is an
     # indexed or associative array.
@@ -558,6 +594,18 @@ function send-receive {
             fi
         fi
 
+        # Source-encryption probe (once per dataset, before any path that
+        # needs it): an encrypted source travels as a raw stream that
+        # refuses encryption-family -o overrides on receive, and its
+        # receive must create the destination itself. Probed
+        # unconditionally — the destination-existence paths below must not
+        # change the answer.
+        local _src_enc _src_encrypted=0
+        _src_enc=$(zfs get -H -o value encryption "$fs" 2>/dev/null || true)
+        if [[ -n "$_src_enc" && "$_src_enc" != "off" && "$_src_enc" != "-" ]]; then
+            _src_encrypted=1
+        fi
+
         if zfs list "$destfs""$restorefs" > /dev/null 2>&1; then
             resumetoken=$(zfs get -H receive_resume_token -o value \
                 "$destfs""$restorefs" 2>/dev/null || true)
@@ -648,21 +696,23 @@ function send-receive {
                 fi
             fi
         else
-            # A volume or encrypted source must create the destination
-            # itself: a pre-created unencrypted filesystem placeholder
-            # cannot be overwritten by the raw (-cw) stream (zfs receive
-            # -F refuses an encrypted stream onto an unencrypted dataset,
-            # and a filesystem cannot receive a zvol stream), so the
-            # pre-create runs only for plain filesystem sources.  Unknown
-            # probe values keep the historical pre-create.
-            local _src_type _src_encryption
+            # A volume, encrypted, or receive-as-encrypted destination must
+            # be created by the receive itself: a pre-created unencrypted
+            # filesystem placeholder cannot be overwritten by the raw (-cw)
+            # stream (zfs receive -F refuses an encrypted stream onto an
+            # unencrypted dataset, and a filesystem cannot receive a zvol
+            # stream), and encryption can only be applied by the initial
+            # receive that creates the dataset.  Unknown probe values keep
+            # the historical pre-create.
+            local _src_type
             _src_type=$(zfs get -H -o value type "$fs" 2>/dev/null || true)
-            _src_encryption=$(zfs get -H -o value encryption "$fs" 2>/dev/null || true)
-            if [[ "$_src_type" == "volume" ]] \
-                || { [[ -n "$_src_encryption" ]] \
-                    && [[ "$_src_encryption" != "off" && "$_src_encryption" != "-" ]]; }; then
+            if [[ "$_src_type" == "volume" ]] || [[ $_src_encrypted -eq 1 ]]; then
                 log_msg "VERB: $destfs$restorefs will be created by the receive itself" \
                     "(source $fs is a volume or encrypted — no destination pre-create)."
+            elif [[ ${receive_encryption:-N} = 'Y' ]]; then
+                log_msg "VERB: $destfs$restorefs will be created by the receive itself" \
+                    "as an encrypted dataset (receive_encryption='Y' — no destination" \
+                    "pre-create)."
             else
                 [[ $dryrun != 'N' ]] && log_msg \
                     "INFO: Dry-run: Would create destination dataset $destfs$restorefs"

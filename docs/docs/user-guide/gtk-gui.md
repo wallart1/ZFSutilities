@@ -696,6 +696,7 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
   | **label**                         | Snapshot label for matching. Only snapshots with this label are considered as source candidates. |
   | **Replay properties**             | Y/N combo (default Y). Replay each restored dataset's captured property manifest after the transfer, so the source's local settings come back instead of the destination's inherited defaults; missing manifests only warn. |
   | **Pause scrubs during each step** | Pause ZFS scrubs on the source and destination pools while the restore step is running.          |
+  | **Receive as encrypted**          | Checkbox (default off) + **receive_keylocation** entry. Receive the restore's initial full-copy streams as encrypted with a 32-byte raw key file (`file:///path`); every restored dataset becomes its own encryption root. The entry is only editable while the checkbox is checked — see [Receiving a Restore as Encrypted](restore.md#receiving-a-restore-as-encrypted). |
 
 - **Restore phases** — Every restore runs in two phases: a full copy from
   the oldest source snapshot, then an incremental copy of the remaining
@@ -703,7 +704,9 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
   **Replay properties** on, a property-replay step follows the incremental
   phase: each restored dataset's captured local properties are re-applied
   with `zfs set` before the iSCSI LUN helper runs (best-effort — see
-  [What a Restore Preserves](restore.md#what-a-restore-preserves)).
+  [What a Restore Preserves](restore.md#what-a-restore-preserves)). With
+  **Receive as encrypted** on, only the first phase's initial receives
+  carry the encryption options; the incremental phase stays plain.
 
 - **Interrupted restores** — A restore that is cancelled or interrupted can
   simply be run again. Before doing anything destructive, the restore

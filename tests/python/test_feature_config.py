@@ -111,6 +111,37 @@ class TestRestoreConfig(unittest.TestCase):
         self.assertEqual(restore["variables"]["replay_properties"], "Y")
         self.assertEqual(restore["variables"]["verify_after_transfer"], "N")
 
+    def test_receive_encryption_defaults_off(self):
+        config = {}
+        restore = feature_config.get_restore_config(config)
+        self.assertEqual(restore["variables"]["receive_encryption"], "N")
+        self.assertEqual(restore["variables"]["receive_keylocation"], "")
+
+    def test_receive_encryption_lazy_seeded_into_old_config(self):
+        config = {"restore": {"variables": {"verify_after_transfer": "N"}}}
+        restore = feature_config.get_restore_config(config)
+        # Old configs predate the pair: defaults are seeded without a
+        # version bump, preserving the values that were already there.
+        self.assertEqual(restore["variables"]["receive_encryption"], "N")
+        self.assertEqual(restore["variables"]["receive_keylocation"], "")
+        self.assertEqual(restore["variables"]["verify_after_transfer"], "N")
+
+    def test_receive_encryption_saved_value_survives_merge(self):
+        config = {
+            "restore": {
+                "variables": {
+                    "receive_encryption": "Y",
+                    "receive_keylocation": "file:///mnt/ZFSkeys/restore.key",
+                }
+            }
+        }
+        restore = feature_config.get_restore_config(config)
+        self.assertEqual(restore["variables"]["receive_encryption"], "Y")
+        self.assertEqual(
+            restore["variables"]["receive_keylocation"],
+            "file:///mnt/ZFSkeys/restore.key",
+        )
+
 
 class TestPoolsAndCheckagainst(unittest.TestCase):
     """Pools list and checkagainst list helpers."""

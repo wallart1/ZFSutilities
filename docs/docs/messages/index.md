@@ -88,7 +88,7 @@ DEBUG:  VERB:  INFO:  WARN:  FATAL:  [none]
 | `INFO: Skipping ... (running VMs).` | Running VMs found and the run is non-interactive or the operator declined | Dataset skipped, run continues |
 | `WARN: Proceeding despite running VMs - data corruption may occur!` | The operator answered y at the DANGEROUS prompt | Destructive preparation proceeds |
 | `INFO: Dry-run: Would ... (~...)` | Dry-run replacement for every real transfer step (send/receive or resume), with the size when known | Informational; nothing executed |
-| `INFO: Dry-run: Would send ... -> ... (incremental|full copy, ~...)` | Dry-run plan for the current step, including transfer type and size; a following `Options:` line shows force-receive/resumable flags | Informational; nothing executed |
+| `INFO: Dry-run: Would send ... -> ... (incremental|full copy, ~...)` | Dry-run plan for the current step, including transfer type and size; a following `Options:` line shows force-receive/resumable flags, and `receive as encrypted` when the step-1 receive carries the encryption overrides (`receive_encryption='Y'`) | Informational; nothing executed |
 | `Are there holds on ... snapshots?` | A real send/receive pipeline just failed; held destination snapshots are the suggested cause, and the holds are dumped | Script aborts (exit 8); release the listed holds or investigate |
 | `FATAL: Verification failed — destination snapshot ... does not exist.` | Post-transfer verification: the expected snapshot never appeared on the destination | Script aborts (exit 8) |
 | `FATAL: Verification failed — GUID mismatch for .....` | Source and destination snapshot GUIDs differ after the receive (source/dest GUIDs on the next lines) | Script aborts (exit 8) |
@@ -110,6 +110,7 @@ DEBUG:  VERB:  INFO:  WARN:  FATAL:  [none]
 | `WARN: Could not set ... on ... — skipped (not settable on this host).` | `zfs set` refused one property (older OpenZFS release, unknown property, invalid value for this dataset) | The remaining properties still apply; set the skipped property by hand if it matters |
 | `WARN: Could not load the key for ... (keylocation file missing or unreadable) — the dataset stays locked until its key is loaded.` | The replay set `keylocation` from the manifest but `zfs load-key` failed — the key file's path does not exist on the restore host | Restore the key file to the recorded path (or `zfs set keylocation=` to a working path), then `zfs load-key` |
 | `WARN: keylocation on ... set to ...; key not loaded (only file:// locations load non-interactively).` | The recorded keylocation is not a file:// location, so no load was attempted (loading it would prompt interactively) | Unlock the dataset by hand |
+| `WARN: keylocation on ... skipped — the dataset was received as encrypted and keeps its restore key's location (manifest records ...).` | Expected during a receive-as-encrypted restore: the dataset wears the restore key, and the manifest's captured (source) keylocation would repoint `load-key` at the wrong key file | Informational; the restore key's location is correct as-is |
 | `WARN: Property manifest ... not replayed (lock manager not loaded).` / `WARN: Property manifest ... not replayed (lock conflict on ...).` | The `.props` sibling replay could not take its write lock on the destination | The restore itself is unaffected; re-run `zfsreplayprops` when the lock is free |
 | `WARN: Property manifest ... could not be read — replay skipped for .....` | The `.props` sibling file is missing or unreadable | The restore itself is unaffected |
 | `WARN: Property manifest ... has an unknown format version — replay skipped for .....` | The manifest was written by a newer ZFSutilities format | Informational; upgrade to replay it |
@@ -136,6 +137,8 @@ DEBUG:  VERB:  INFO:  WARN:  FATAL:  [none]
 | `INFO: Dry-run: stream size estimate not available for ... ... (snapshot not created)` | Dry-run only: the estimate dry-run cannot run because dry-run never created the snapshot | Informational |
 | `INFO: Dry-run: Would create destination dataset ...` | Dry-run replacement for `zfs create -pu` of the destination | Informational |
 | `VERB: ... will be created by the receive itself (source ... is a volume or encrypted — no destination pre-create).` | The destination pre-create is skipped for a volume or encrypted source: the raw stream must create the destination (a pre-created unencrypted filesystem placeholder could not be overwritten) | Informational |
+| `VERB: ... will be created by the receive itself as an encrypted dataset (receive_encryption='Y' — no destination pre-create).` | The destination pre-create is skipped because the step-1 receive creates the dataset as encrypted (encryption can only be applied by the initial receive) | Informational |
+| `FATAL: receive_encryption='Y' requires receive_keylocation to be a file:// path to a 32-byte raw key file (got '...').` | Receive-as-encrypted was requested but the key location is missing or not a `file:///<path>` URI (keyformat `raw` cannot use passphrases non-interactively) | Run aborted (exit 8) before any transfer or destruction; fix `receive_keylocation` and re-run |
 | `INFO: Dry-run: Would rebuild iSCSI LUNs for ...` | Dry-run preview of the iSCSI rebuild step after a destructive full copy | Informational |
 | `WARN: Hold reapply on ... incomplete; see messages above.` | End of run: restoring the destination holds captured before a full copy failed for at least one hold | Check the destination's holds manually |
 
@@ -425,6 +428,7 @@ GUI Restore tab. Validates source/destination and launches the restore. The same
 | `WARN: Source dataset must be specified` | Run gate — empty source | Run aborted |
 | `WARN: Specify datasets, not snapshots (no '@' allowed)` | Source or destination contains a snapshot qualifier | Run aborted |
 | `WARN: Error: ...` (at run time) | Destination/parameter computation raised | Run aborted |
+| `WARN: Receive as encrypted requires a key location of the form file:///path/to/raw-key (a 32-byte raw key file)` | Run gate — Receive as encrypted is checked but the key location is missing or not a `file:///path` URI | Run aborted; the engine's FATAL validation is the backstop |
 | `WARN: Destination dataset must be specified, or enable auto-determine destination` | No destination given and auto-destination off | Run aborted |
 | `INFO: Restore cancelled` | User cancelled the warning/confirmation dialog (which spells out the resume behavior and destructiveness) | Run aborted |
 | `INFO: Dry run mode enabled — no changes will be made` | Dry-run active | Passed into the command builder |

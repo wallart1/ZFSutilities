@@ -1016,7 +1016,11 @@ Computes restore destination paths and builds the restore `BashStep`. The
 payload sources `zfsreplayprops` and — with the advanced `replay_properties`
 variable, default `Y` — replays each restored dataset's captured property
 manifest after Part 2, before the iSCSI helper; it also sets
-`property_manifest='N'` so restore targets never grow manifest stores.
+`property_manifest='N'` so restore targets never grow manifest stores. With
+the advanced `receive_encryption='Y'` (plus `receive_keylocation`), the
+preamble opts the initial full-copy receives into encryption and sets
+`propmanifest_skip_keylocation='Y'` so the replay never repoints those
+datasets' keylocation away from the restore key.
 
 **Key functions:**
 
@@ -1545,7 +1549,10 @@ detection, and snapshot-name generation.
 Restore tab: choose a source snapshot, compute an auto-destination, and run
 `zfs-send-receive` in restore mode. The Advanced expander includes the
 `replay_properties` Y/N combo (default `Y`) alongside
-`verify_after_transfer`, feeding `restore_runner`'s replay step.
+`verify_after_transfer`, feeding `restore_runner`'s replay step, plus the
+*Receive as encrypted* checkbox with its `receive_keylocation` entry
+(editable only while checked; the run gate refuses a missing or non-
+`file:///` key location before anything starts).
 
 **Key functions:**
 

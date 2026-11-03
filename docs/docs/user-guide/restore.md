@@ -158,6 +158,41 @@ sudo zfs mount pool/dataset
 See [ZFS Key Handling](../installation/zfs-keys.md) for the key-store layout
 and boot-time behavior.
 
+### Receiving a Restore as Encrypted
+
+Backups of unencrypted datasets are themselves unencrypted — the backup
+copies sit on the backup pool in the clear. The GUI Restore tab can change
+that at restore time: the **Advanced** → **Receive as encrypted** option
+(with its **receive_keylocation** entry) receives the *initial* full-copy
+stream of each dataset as encrypted, via
+`zfs receive -o encryption=on -o keyformat=raw -o keylocation=file://…`.
+
+How it behaves:
+
+- The key location must point at a **32-byte raw key file** through a
+  `file:///path` URI (keyformat `raw` cannot use passphrases
+  non-interactively). The GUI refuses to start the restore — and the
+  engine is FATAL before any transfer — when the entry is missing or not
+  a `file:///` path.
+- Every dataset in the restore becomes **its own encryption root** wearing
+  the given key; the key is loaded by the receive itself (datasets come
+  back unlocked and mounted).
+- Only the step-1 (initial) receive carries the encryption options — the
+  step that creates each destination dataset. The step-2 catch-up and
+  Part 2 incremental receives, and resume-token receives, are untouched.
+- **Already-encrypted sources are skipped automatically**: their raw
+  streams refuse encryption-family `-o` overrides, so those datasets keep
+  the encryption they arrived with (a VERB notes it).
+- The property replay suppresses `keylocation` for such restores: the
+  restored datasets wear the restore key, and replaying the source's
+  captured keylocation would repoint `load-key` at the wrong key file.
+- Works on every OpenZFS release in the fleet — no capability gating.
+
+This is a GUI Restore-tab feature (`receive_encryption` /
+`receive_keylocation` advanced variables); the bash `zfsrestore` keeps its
+plain behavior. Leave the checkbox off to restore plainly, exactly as
+before.
+
 ### Block size and compression at rest
 
 `zfs receive` never rewrites received data to match the destination's
@@ -238,6 +273,12 @@ also available on the Backup and Offsite tabs:
   with the destination's inherited settings only.
 - `transfer_rate_limit` — Optional rate limit used during the transfer,
   for example `100M` to cap throughput at 100 MB/s. Leave blank for no limit.
+- `receive_encryption` — Receive the restore's initial full-copy streams
+  as encrypted (default **N**). See
+  [Receiving a Restore as Encrypted](#receiving-a-restore-as-encrypted).
+- `receive_keylocation` — The `file:///path` location of the 32-byte raw
+  key file used when `receive_encryption` is **Y**; the entry is only
+  editable while the *Receive as encrypted* checkbox is checked.
 
 ## Interrupted Restores
 

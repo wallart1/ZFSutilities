@@ -216,6 +216,86 @@ class TestBuildRestoreCommand(unittest.TestCase):
         script = " ".join(step.command)
         self.assertIn("replayprops_datasets", script)
 
+    def test_payload_emits_receive_encryption(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={
+                "receive_encryption": "Y",
+                "receive_keylocation": "file:///mnt/ZFSkeys/restore.key",
+            },
+        )
+        script = " ".join(step.command)
+        self.assertIn("receive_encryption='Y'", script)
+        self.assertIn("receive_keylocation=file:///mnt/ZFSkeys/restore.key", script)
+        # The manifest's captured keylocation must not be replayed onto
+        # datasets encrypted with the restore key.
+        self.assertIn("propmanifest_skip_keylocation='Y'", script)
+
+    def test_payload_quotes_keylocation_with_spaces(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={
+                "receive_encryption": "Y",
+                "receive_keylocation": "file:///my keys/restore key",
+            },
+        )
+        script = " ".join(step.command)
+        self.assertIn("receive_keylocation='file:///my keys/restore key'", script)
+
+    def test_receive_encryption_absent_when_off(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={
+                "receive_encryption": "N",
+                "receive_keylocation": "file:///mnt/ZFSkeys/restore.key",
+            },
+        )
+        script = " ".join(step.command)
+        self.assertNotIn("receive_encryption", script)
+        self.assertNotIn("receive_keylocation", script)
+        self.assertNotIn("propmanifest_skip_keylocation", script)
+
+    def test_keylocation_skip_flag_needs_replay(self):
+        # Replay disabled: no skip flag even when encryption is on.
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={
+                "receive_encryption": "Y",
+                "receive_keylocation": "file:///mnt/ZFSkeys/restore.key",
+                "replay_properties": "N",
+            },
+        )
+        script = " ".join(step.command)
+        self.assertIn("receive_encryption='Y'", script)
+        self.assertNotIn("propmanifest_skip_keylocation", script)
+
+    def test_dry_run_keeps_receive_encryption(self):
+        step = rr.build_restore_command(
+            source="backuppool/threeamigos/proxmox",
+            removequalifiers=1,
+            destfs="threeamigos",
+            parent_dir="/usr/local/lib/zfsutilities/current/bin",
+            advanced_vars={
+                "receive_encryption": "Y",
+                "receive_keylocation": "file:///mnt/ZFSkeys/restore.key",
+            },
+            dryrun=True,
+        )
+        script = " ".join(step.command)
+        self.assertIn("receive_encryption='Y'", script)
+
     def test_payload_cleans_up_temp_file_on_every_exit(self):
         step = rr.build_restore_command(
             source="backuppool/threeamigos/proxmox",

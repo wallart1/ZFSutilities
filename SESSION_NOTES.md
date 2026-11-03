@@ -507,3 +507,58 @@ no-upstream-watching decision and removed.)
     "on".
 - Commit pending user confirmation; next: P6 restore-with-encryption,
   then P7 wrap-up.
+
+## Backup property fidelity — P6 restore-with-encryption (2026-11-03)
+
+- Engine (bin/zfs-send-receive): `receive_encryption` (default 'N') +
+  `receive_keylocation` globals; entry validation FATALs (exit 8, before
+  any transfer) on anything but file:///<non-empty path>; the per-dataset
+  source-encryption probe moved OUT of the destination-absent pre-create
+  branch to run unconditionally each iteration (`_src_encrypted` — the
+  pre-create else-branch only ran for absent destinations, so a guard
+  living there would miss existing-destination restores); step-1-only -o
+  application in transfer_step (doincrementals!='Y' AND no
+  incremental_args AND source not encrypted); resume-token receives
+  untouched; dry-run Options line gains "receive as encrypted";
+  pre-create skipped (own VERB) so the receive creates the encrypted
+  dataset; encrypted sources keep the volume/encrypted VERB verbatim.
+- Replay interplay (lib/property-manifest-lib.sh):
+  `propmanifest_skip_keylocation='Y'` makes propmanifest_apply_body skip
+  the captured keylocation with a WARN — a receive-as-encrypted dataset
+  wears the RESTORE key; replaying the source's keylocation would
+  repoint load-key at the wrong file (on stewie the old key files exist,
+  so the set would silently succeed). restore_runner sets the flag only
+  when encryption AND replay are both on.
+- GUI (restore_page/feature_config): RESTORE_DEFAULTS variables gain
+  receive_encryption 'N' + receive_keylocation '' (lazy merge, no
+  CONFIG_VERSION bump — P2 precedent; scheduled profiles inherit for
+  free); Advanced expander gains the CheckButton + keylocation entry
+  (pause_scrubs wiring pattern — CheckButtons cannot ride the generic
+  restore_var_widgets loops: collect uses get_active_text/get_text,
+  load's set_active branch check); entry sensitivity bound to the
+  checkbox; explicit collect/load; orange non-default styling feeds the
+  Advanced label; run gate refuses bad keylocation with a WARN;
+  confirmation dialog gains a "received as encrypted" line.
+- PRE-EXISTING BUG FIXED IN-THREAD (found by the new dry-run test):
+  transfer_step's dry-run branch used `$_sz` without initializing it —
+  under set -u a dry-run whose size estimate is unavailable (snapshot
+  never created — every GUI dry-run of a fresh label) died rc 1 at the
+  Would-send line. `local _tt='' _od=''` → `... _sz=''`.
+- Tests: new tests/test-zfs-send-receive-encrecv (8 contracts; worlds
+  modeled on the manifest suite; NOTE the pre-create VERB tests need the
+  destination-absent variant — the pre-create branch only runs when the
+  destination dataset does not exist, and the incremental world's
+  receives are -uv NOT -uvs: the forced -s belongs to the full-copy
+  branch only); test-zfsreplayprops +2 (skip flag on/off;
+  reset_state now neutralizes propmanifest_skip_keylocation);
+  test_restore_runner +6; test_restore_page +new classes (fixtures
+  _restore_app/_install_default_widgets gained the pair);
+  test_feature_config +3. e2e container matrix 9 pass/17 self-skip.
+- Docs: restore.md "Receiving a Restore as Encrypted" + Advanced rows;
+  gtk-gui.md table + phases; global-variables.md 3 rows; modules.md
+  engine table +2 + lib apply_body row; python-modules restore_runner/
+  restore_page; messages rows (FATAL, both pre-create VERBs, options
+  line, replay keylocation skip, GUI gate WARN); GLOSSARY "receive as
+  encrypted". Docs-integrity 23 green.
+- Commit pending user confirmation; next: P7 wrap-up (full gate, ruff +
+  shellcheck, headline numbers).

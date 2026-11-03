@@ -184,6 +184,24 @@ def build_restore_command(
     # zfsreplayprops — see the replay step in part 2 below.
     replay_properties = v.get("replay_properties", "Y").strip() or "Y"
 
+    # Receive-as-encryption: the engine receives the initial (full-copy
+    # step-1) streams as encrypted with this raw-key location and validates
+    # the file:// form up front. The manifest's captured keylocation is NOT
+    # replayed onto datasets received this way — they are encrypted with
+    # the restore key, and the source's keylocation would repoint load-key
+    # at the wrong key file.
+    receive_encryption = v.get("receive_encryption", "N").strip() or "N"
+    receive_keylocation = v.get("receive_keylocation", "").strip()
+
+    # Receive-as-encryption assignments (engine default 'N' keeps them
+    # absent entirely when the option is off). shlex.quote keeps key-file
+    # paths with spaces one assignment wide.
+    if receive_encryption == "Y":
+        adv += "receive_encryption='Y'; "
+        adv += f"receive_keylocation={shlex.quote(receive_keylocation)}; "
+        if replay_properties == "Y":
+            adv += "propmanifest_skip_keylocation='Y'; "
+
     # Post-restore helper: ensure VM disk zvols are exported as iSCSI LUNs.
     ensure_func = (
         "ensure_restored_iscsi() { "

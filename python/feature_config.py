@@ -116,6 +116,8 @@ RESTORE_DEFAULTS = {
         "endwith": "",
         "verify_after_transfer": "Y",
         "replay_properties": "Y",
+        "receive_encryption": "N",
+        "receive_keylocation": "",
         "transfer_rate_limit": "",
     },
     "pause_scrubs": False,

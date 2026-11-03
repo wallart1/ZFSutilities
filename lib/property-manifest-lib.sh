@@ -26,11 +26,15 @@
 # backup copy's manifest (exact generation first, newest available as the
 # fallback), verifies the header and body checksum, and re-applies the
 # properties with `zfs set` — keylocation additionally triggers a
-# best-effort non-interactive `zfs load-key`. The store is looked up at
-# two backup-root depths, deepest first: a direct backup root, and the
-# offsite hop, where an onward leg copied a whole backup root under
-# another pool. Used by bin/zfsreplayprops, which zfsrestore, the GUI
-# restore payload, and zfsrestoresendstream (.props siblings) share.
+# best-effort non-interactive `zfs load-key`. A restore received as
+# encrypted sets propmanifest_skip_keylocation='Y' first: those datasets
+# are encrypted with the restore key, and replaying the source's captured
+# keylocation would repoint load-key at the wrong key file. The store is
+# looked up at two backup-root depths, deepest first: a direct backup
+# root, and the offsite hop, where an onward leg copied a whole backup
+# root under another pool. Used by bin/zfsreplayprops, which zfsrestore,
+# the GUI restore payload, and zfsrestoresendstream (.props siblings)
+# share.
 #
 # The manifest dataset itself is snapshotted once per generation under
 # the same generation snapname as the data, so the existing cleanup /
@@ -411,6 +415,11 @@ function propmanifest_parse {
 # best-effort non-interactive `zfs load-key` (a missing/unreadable key
 # file WARNs — the dataset simply stays locked); any other location is
 # set but never loaded (loading it would need an interactive prompt).
+# A caller that received <dest> as encrypted sets
+# propmanifest_skip_keylocation='Y' (the GUI restore payload does): the
+# captured keylocation points at the SOURCE's key, but <dest> is encrypted
+# with the restore key — setting it would repoint load-key at the wrong
+# key file, so it is skipped with a WARN instead.
 # Usage: propmanifest_apply_body <body> <dest>
 function propmanifest_apply_body {
     local body="$1" dest="$2"
@@ -422,6 +431,14 @@ function propmanifest_apply_body {
         if propmanifest_excluded "$prop"; then
             log_msg "WARN: Property $prop is excluded from replay —" \
                 "skipped on $dest."
+            skipped=$((skipped + 1))
+            continue
+        fi
+        if [[ "$prop" = "keylocation" ]] \
+            && [[ ${propmanifest_skip_keylocation:-N} = 'Y' ]]; then
+            log_msg "WARN: keylocation on $dest skipped — the dataset was" \
+                "received as encrypted and keeps its restore key's location" \
+                "(manifest records $val)."
             skipped=$((skipped + 1))
             continue
         fi

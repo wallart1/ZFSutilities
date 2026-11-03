@@ -147,6 +147,8 @@ def _restore_app(source="", dest="", auto_dest=False, recursive=False):
     app.restore_recursive_check = _FakeCheckButton(recursive)
     app.restore_var_widgets = {}
     app.restore_pause_scrubs = _FakeCheckButton()
+    app.restore_receive_encrypted_check = _FakeCheckButton()
+    app.restore_keylocation_entry = _FakeEntry()
     app._restore_saved_state = None
     return app
 
@@ -425,6 +427,152 @@ class TestRestoreRunDialog(unittest.TestCase):
             self.assertNotIn("cannot start", msg)
 
 
+class TestReceiveEncrypted(unittest.TestCase):
+    """The Receive-as-encrypted checkbox / key-location entry pair."""
+
+    def test_collects_pair(self):
+        app = _restore_app()
+        app.restore_receive_encrypted_check.set_active(True)
+        app.restore_keylocation_entry.set_text("file:///mnt/ZFSkeys/restore.key")
+        cfg = rp.collect_restore_config(app)
+        self.assertEqual(cfg["variables"]["receive_encryption"], "Y")
+        self.assertEqual(
+            cfg["variables"]["receive_keylocation"],
+            "file:///mnt/ZFSkeys/restore.key",
+        )
+
+    def test_collects_defaults_when_unchecked(self):
+        app = _restore_app()
+        cfg = rp.collect_restore_config(app)
+        self.assertEqual(cfg["variables"]["receive_encryption"], "N")
+        self.assertEqual(cfg["variables"]["receive_keylocation"], "")
+
+    def test_loads_pair(self):
+        app = _restore_app()
+        rp.load_restore_config(
+            app,
+            {
+                "variables": {
+                    "receive_encryption": "Y",
+                    "receive_keylocation": "file:///mnt/ZFSkeys/restore.key",
+                }
+            },
+        )
+        self.assertTrue(app.restore_receive_encrypted_check.get_active())
+        self.assertEqual(
+            app.restore_keylocation_entry.get_text(),
+            "file:///mnt/ZFSkeys/restore.key",
+        )
+
+    def test_keylocation_entry_sensitivity_follows_checkbox(self):
+        app = _restore_app()
+        rp._on_receive_encrypted_toggled(app)
+        self.assertFalse(app.restore_keylocation_entry.get_sensitive())
+        app.restore_receive_encrypted_check.set_active(True)
+        rp._on_receive_encrypted_toggled(app)
+        self.assertTrue(app.restore_keylocation_entry.get_sensitive())
+
+    def test_page_builds_the_pair(self):
+        app, _expander = TestRestoreAdvancedLabel()._create_page()
+        self.assertTrue(hasattr(app, "restore_receive_encrypted_check"))
+        self.assertTrue(hasattr(app, "restore_keylocation_entry"))
+
+    def test_checkbox_turns_label_and_value_orange(self):
+        label_tc = TestRestoreAdvancedLabel()
+        app, expander = label_tc._create_page()
+        label_tc._install_default_widgets(app)
+        app.restore_receive_encrypted_check.set_active(True)
+        app._restore_update_advanced_label()
+        self.assertIn('foreground="orange"', label_tc._label_markup(expander))
+        self.assertIn(
+            "zfsu-nondefault",
+            app.restore_receive_encrypted_check.get_style_context().classes,
+        )
+
+    def test_keylocation_text_alone_turns_label_orange(self):
+        # A stale path with the checkbox off is still a non-default value.
+        label_tc = TestRestoreAdvancedLabel()
+        app, expander = label_tc._create_page()
+        label_tc._install_default_widgets(app)
+        app.restore_keylocation_entry.set_text("file:///old/key")
+        app._restore_update_advanced_label()
+        self.assertIn('foreground="orange"', label_tc._label_markup(expander))
+
+
+class TestReceiveEncryptedValidation(unittest.TestCase):
+    """on_restore_run refuses an invalid key location before starting."""
+
+    def _make_app(self):
+        return TestRestoreRunDialog()._make_app()
+
+    def _run_with(self, variables):
+        app = self._make_app()
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = rp.Gtk.ResponseType.OK
+        with (
+            patch.object(rp.Gtk, "MessageDialog", return_value=dialog_mock),
+            patch.object(
+                rp,
+                "collect_restore_config",
+                return_value={
+                    "source": "backuppool/threeamigos/data",
+                    "dest": "threeamigos/data",
+                    "auto_dest": False,
+                    "recursive": False,
+                    "variables": variables,
+                    "pause_scrubs": False,
+                },
+            ),
+            patch.object(rp, "build_restore_command") as mock_build,
+            patch.object(rp, "attach_step_scrub_callbacks"),
+            patch.object(rp, "log_msg") as mock_log,
+        ):
+            rp.on_restore_run(app, app.ctx)
+        return app, mock_log, mock_build, dialog_mock
+
+    def test_refuses_empty_keylocation(self):
+        _app, mock_log, mock_build, _dialog = self._run_with(
+            {"receive_encryption": "Y", "receive_keylocation": ""}
+        )
+        messages = [c[0][0] for c in mock_log.call_args_list]
+        self.assertTrue(any("file:///path/to/raw-key" in m for m in messages), messages)
+        mock_build.assert_not_called()
+
+    def test_refuses_prompt_keylocation(self):
+        _app, mock_log, mock_build, _dialog = self._run_with(
+            {"receive_encryption": "Y", "receive_keylocation": "prompt"}
+        )
+        messages = [c[0][0] for c in mock_log.call_args_list]
+        self.assertTrue(any("file:///path/to/raw-key" in m for m in messages), messages)
+        mock_build.assert_not_called()
+
+    def test_refuses_bare_file_prefix(self):
+        _app, mock_log, mock_build, _dialog = self._run_with(
+            {"receive_encryption": "Y", "receive_keylocation": "file:///"}
+        )
+        messages = [c[0][0] for c in mock_log.call_args_list]
+        self.assertTrue(any("file:///path/to/raw-key" in m for m in messages), messages)
+        mock_build.assert_not_called()
+
+    def test_valid_keylocation_mentions_encryption_in_dialog(self):
+        _app, _mock_log, _mock_build, dialog = self._run_with(
+            {
+                "receive_encryption": "Y",
+                "receive_keylocation": "file:///mnt/ZFSkeys/restore.key",
+            }
+        )
+        secondary = dialog.format_secondary_text.call_args[0][0]
+        self.assertIn("received as encrypted", secondary)
+        self.assertIn("file:///mnt/ZFSkeys/restore.key", secondary)
+
+    def test_no_encryption_note_when_off(self):
+        _app, _mock_log, _mock_build, dialog = self._run_with(
+            {"receive_encryption": "N", "receive_keylocation": ""}
+        )
+        secondary = dialog.format_secondary_text.call_args[0][0]
+        self.assertNotIn("received as encrypted", secondary)
+
+
 class _AppNamespace:
     """Real attribute bag so page-assigned callbacks are retrievable."""
 
@@ -469,6 +617,8 @@ class TestRestoreAdvancedLabel(unittest.TestCase):
                 widgets[key].set_text(defaults.get(key, ""))
         app.restore_var_widgets = widgets
         app.restore_pause_scrubs = _FakeCheckButton()
+        app.restore_receive_encrypted_check = _FakeCheckButton()
+        app.restore_keylocation_entry = _FakeEntry()
         return app
 
     def _label_markup(self, expander):
