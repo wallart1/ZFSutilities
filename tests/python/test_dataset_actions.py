@@ -1527,6 +1527,221 @@ class TestMount(unittest.TestCase):
             )
             mock_refresh.assert_not_called()
 
+    def test_lock_conflict_shows_warning_dialog_naming_holder(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        app.ctx.zfs_repository.get_property.return_value = "no"
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da.Gtk, "MessageDialog") as mock_dialog,
+        ):
+            mock_zlm.locks.side_effect = RuntimeError(
+                "conflict: cannot acquire w lock on tank/vm-100"
+            )
+            mock_zlm.conflicting_lock_holders.return_value = [
+                {
+                    "dataset": "tank",
+                    "type": "write",
+                    "pid": 4242,
+                    "script": "bash",
+                    "acquired": "2026-10-29T13:41:52-04:00",
+                    "description": "send-receive dest: temp -> tank",
+                }
+            ]
+            da.on_datasets_mount(app)
+
+            mock_subprocess.run.assert_not_called()
+            mock_refresh.assert_not_called()
+            mock_dialog.assert_called_once()
+            title = mock_dialog.call_args.kwargs["text"]
+            self.assertEqual(title, "Could not mount 1 selected item")
+            detail = mock_dialog.return_value.format_secondary_text.call_args.args[0]
+            self.assertIn("blocked by a write lock on tank", detail)
+            self.assertIn("send-receive dest: temp -> tank", detail)
+            # pid/script noise stays in the WARN log line, not the dialog.
+            self.assertNotIn("pid=4242", detail)
+
+    def test_lock_conflict_dialog_falls_back_to_exception_text(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        app.ctx.zfs_repository.get_property.return_value = "no"
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                    }
+                ],
+            ),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da.Gtk, "MessageDialog") as mock_dialog,
+        ):
+            mock_zlm.locks.side_effect = RuntimeError(
+                "conflict: cannot acquire w lock on tank/vm-100"
+            )
+            mock_zlm.conflicting_lock_holders.return_value = []
+            da.on_datasets_mount(app)
+
+            mock_dialog.assert_called_once()
+            detail = mock_dialog.return_value.format_secondary_text.call_args.args[0]
+            self.assertIn("conflict: cannot acquire w lock on tank/vm-100", detail)
+
+    def test_already_mounted_live_state_refreshes_without_dialog(self):
+        """A stale unmounted row that is really mounted refreshes silently."""
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        def _prop(ds, prop):
+            return "yes" if prop == "mounted" else "on"
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/vm-100",
+                        "zfs_type": "filesystem",
+                        "mounted": False,
+                    }
+                ],
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da.Gtk, "MessageDialog") as mock_dialog,
+        ):
+            da.on_datasets_mount(app)
+
+            mock_subprocess.run.assert_not_called()
+            mock_zlm.locks.assert_not_called()
+            mock_refresh.assert_called_once_with(app)
+            mock_dialog.assert_not_called()
+
+    def test_mixed_selection_mounts_free_and_reports_fenced(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        def _prop(ds, prop):
+            if prop == "mounted":
+                return "yes" if ds == "tank" else "no"
+            return "on"
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        def _locks(lock_type, targets):
+            if any("busy" in t for t in targets):
+                raise RuntimeError(f"conflict: cannot acquire w lock on {targets[-1]}")
+            return MagicMock()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/free",
+                        "zfs_type": "filesystem",
+                        "mounted": False,
+                    },
+                    {
+                        "type": "dataset",
+                        "name": "tank/busy",
+                        "zfs_type": "filesystem",
+                        "mounted": False,
+                    },
+                ],
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da.Gtk, "MessageDialog") as mock_dialog,
+        ):
+            mock_zlm.locks.side_effect = _locks
+            mock_zlm.conflicting_lock_holders.return_value = []
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            da.on_datasets_mount(app)
+
+            mock_subprocess.run.assert_called_once_with(
+                ["sudo", "zfs", "mount", "tank/free"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            mock_refresh.assert_called_once_with(app)
+            mock_dialog.assert_called_once()
+            title = mock_dialog.call_args.kwargs["text"]
+            self.assertEqual(title, "Could not mount 1 selected item")
+            detail = mock_dialog.return_value.format_secondary_text.call_args.args[0]
+            self.assertIn("tank/busy", detail)
+            self.assertNotIn("tank/free", detail)
+
+    def test_canmount_off_in_batch_is_reported_in_dialog(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        def _prop(ds, prop):
+            return "off" if prop == "canmount" and ds == "tank/nomount" else "no"
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/nomount",
+                        "zfs_type": "filesystem",
+                        "mounted": False,
+                    }
+                ],
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess") as mock_subprocess,
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da.Gtk, "MessageDialog") as mock_dialog,
+        ):
+            da.on_datasets_mount(app)
+
+            mock_subprocess.run.assert_not_called()
+            mock_zlm.locks.assert_not_called()
+            mock_refresh.assert_not_called()
+            mock_dialog.assert_called_once()
+            detail = mock_dialog.return_value.format_secondary_text.call_args.args[0]
+            self.assertIn("tank/nomount: canmount=off", detail)
+
     def test_mounts_snapshot_by_auto_mount_path(self):
         da = self._import_under_mock()
         app = self._make_app()
@@ -2027,6 +2242,56 @@ class TestMount(unittest.TestCase):
                 "  tank/vm-100@snap1",
             )
             self.assertEqual(mock_text_view.call_args[1]["min_height"], 150)
+
+    def test_parent_mount_failure_shows_warning_dialog(self):
+        """A refused parent-mount batch is reported, not silently dropped."""
+        da = self._import_under_mock()
+        app = self._make_app()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "snapshot",
+                        "dataset": "tank/vm-100",
+                        "name": "snap1",
+                        "mounted": False,
+                    }
+                ],
+            ),
+            patch.object(da, "get_snapshot_mountpoint"),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da, "create_dialog") as mock_create_dialog,
+            patch.object(da, "add_scrolled_text_view"),
+            patch.object(da.Gtk, "MessageDialog") as mock_dialog,
+        ):
+
+            def _prop(ds, prop):
+                return "on" if prop == "canmount" else "no"
+
+            app.ctx.zfs_repository.get_property.side_effect = _prop
+            mock_create_dialog.return_value.run.return_value = da.Gtk.ResponseType.OK
+            mock_zlm.locks.side_effect = RuntimeError("conflict: cannot acquire w lock on tank")
+            mock_zlm.conflicting_lock_holders.return_value = []
+            da.on_datasets_mount(app)
+
+            # The refused parent batch warns first; the still-blocked snapshot
+            # then reports its own refusal in the batch dialog.
+            self.assertEqual(mock_dialog.call_count, 2)
+            titles = [c.kwargs["text"] for c in mock_dialog.call_args_list]
+            self.assertEqual(titles[0], "Could not mount parent dataset(s)")
+            self.assertEqual(titles[1], "Could not mount 1 selected item")
+            parent_detail = mock_dialog.return_value.format_secondary_text.call_args_list[0].args[0]
+            self.assertIn("conflict: cannot acquire w lock on tank", parent_detail)
+            mock_log.assert_any_call(
+                "WARN: Not all parent datasets mounted; selected snapshots "
+                "that remain blocked will report warnings below."
+            )
 
     def test_mounts_shared_parent_once_for_multiple_snapshots(self):
         da = self._import_under_mock()
@@ -2845,7 +3110,7 @@ class TestVolumeLoopHelpers(unittest.TestCase):
         ):
             result = da._mount_one_volume(self._volume_item(), repo, app)
 
-        self.assertTrue(result)
+        self.assertIsNone(result)
         repo.loop_attach.assert_called_once_with("/dev/zvol/tank/vm-100-disk-0")
         mock_zlm.lock.assert_called_once_with(
             "tank/vm-100-disk-0", "w", "loop-mount tank/vm-100-disk-0"
@@ -2869,11 +3134,11 @@ class TestVolumeLoopHelpers(unittest.TestCase):
         ):
             result = da._mount_one_volume(self._volume_item(), repo, app)
 
-        self.assertTrue(result)
+        self.assertIsNone(result)
         repo.loop_attach.assert_not_called()
         mock_reload.assert_not_called()
 
-    def test_mount_volume_helper_returns_false_when_attach_fails(self):
+    def test_mount_volume_helper_returns_reason_when_attach_fails(self):
         da = self._import_under_mock()
         app = self._make_app()
         repo = app.ctx.zfs_repository
@@ -2887,7 +3152,7 @@ class TestVolumeLoopHelpers(unittest.TestCase):
         ):
             result = da._mount_one_volume(self._volume_item(), repo, app)
 
-        self.assertFalse(result)
+        self.assertEqual(result, "tank/vm-100-disk-0: could not attach a loop device")
         mock_reload.assert_not_called()
         mock_log.assert_any_call("WARN: Error attaching tank/vm-100-disk-0 to a loop device")
 
@@ -2905,7 +3170,7 @@ class TestVolumeLoopHelpers(unittest.TestCase):
             mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
             result = da._mount_one_volume_partition(self._part_item(), repo, app)
 
-        self.assertTrue(result)
+        self.assertIsNone(result)
         mountpoint = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
         mock_makedirs.assert_called_once_with(mountpoint, exist_ok=True)
         mock_subprocess.run.assert_called_once_with(
@@ -2930,12 +3195,12 @@ class TestVolumeLoopHelpers(unittest.TestCase):
                 self._part_item(fstype="No filesystem", has_filesystem=False), repo, app
             )
 
-        self.assertFalse(result)
+        self.assertEqual(result, "/dev/loop0p1: no filesystem detected")
         mock_makedirs.assert_not_called()
         mock_subprocess.run.assert_not_called()
         mock_log.assert_any_call("WARN: Cannot mount /dev/loop0p1: no filesystem detected")
 
-    def test_mount_partition_helper_returns_false_when_mount_fails(self):
+    def test_mount_partition_helper_returns_reason_when_mount_fails(self):
         da = self._import_under_mock()
         app = self._make_app()
         repo = app.ctx.zfs_repository
@@ -2949,7 +3214,7 @@ class TestVolumeLoopHelpers(unittest.TestCase):
             mock_subprocess.run.return_value = MagicMock(returncode=32, stderr="mount: unknown")
             result = da._mount_one_volume_partition(self._part_item(), repo, app)
 
-        self.assertFalse(result)
+        self.assertEqual(result, "/dev/loop0p1: mount: unknown")
         mock_log.assert_any_call("WARN: Error mounting /dev/loop0p1: mount: unknown")
 
     def test_unmount_partition_helper_umounts_resolved_mountpoint(self):

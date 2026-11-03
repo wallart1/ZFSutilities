@@ -88,9 +88,6 @@ reset_mocks() {
     clear_log
 }
 
-# Shared mock world: one source dataset with one snapshot, replicated to a
-# destination that carries a user hold tag on its snapshot.
-#
 # World for the destination pre-create contract: the same single source
 # dataset, but the DESTINATION does not exist — the first-copy-to-a-new-
 # destination shape where the engine's pre-create decision matters.
@@ -107,10 +104,17 @@ _setup_precreate_world() {
     _mock_zfs_guid_lists["pool/src/data"]="guid1"
 }
 
+# Shared mock world: one source dataset with one snapshot, replicated to a
+# destination that carries an offsite-* hold tag on its snapshot — the tag
+# class the destructive path actually processes (delallsnaps releases
+# offsite-* holds before destroying; user holds block the copy instead,
+# covered by their own test). The destination dataset is listed too, so the
+# full copy's delfs pass destroys it for real and the end-of-run reapply
+# re-creates the released tag.
 _setup_full_copy_world() {
     reset_mocks
     set_msg_level INFO
-    _mock_zfs_fs_list="pool/src/data"
+    _mock_zfs_fs_list=$'pool/src/data\npool/dest/data'
     _mock_zfs_props["pool/src/data:origin"]="-"
     _mock_zfs_props["pool/dest/data:origin"]="-"
     _mock_zfs_props["pool/dest/data:receive_resume_token"]="-"
@@ -127,7 +131,7 @@ _setup_full_copy_world() {
     _mock_zfs_snap_lists["pool/dest"]="pool/dest/data@snap1"
     _mock_zfs_guid_lists["pool/src/data"]="guid1"
     _mock_zfs_guid_lists["pool/dest/data"]="guid1"
-    _mock_zfs_holds["pool/dest/data@snap1"]="kept-tag"
+    _mock_zfs_holds["pool/dest/data@snap1"]="offsite-srctag"
 }
 
 source "$mydir/zfs-send-receive"
@@ -159,7 +163,7 @@ test_full_copy_preserves_destination_holds() {
     assert_rc 0 "$rc"
     local log
     log=$(get_stderr_log)
-    assert_contains "$log" "Applied hold kept-tag to pool/dest/data@snap1"
+    assert_contains "$log" "Applied hold offsite-srctag to pool/dest/data@snap1"
     assert_contains "$log" "Reapplied 1 holds on pool/dest"
     # Capture precedes the transfer; reapply follows it.
     local _copy_line _apply_line
@@ -170,6 +174,37 @@ test_full_copy_preserves_destination_holds() {
         test_pass
     else
         test_fail "Hold capture should precede the copy and reapply follow it"
+    fi
+}
+
+test_user_hold_blocks_destructive_full_copy() {
+    test_start "A user hold on the destination aborts the destructive copy"
+    _setup_full_copy_world
+    # A non-offsite hold: delallsnaps must refuse to delete the held
+    # snapshot and delfs must abort the copy rather than bypass it — the
+    # holds-before-destroy safety (user holds never ride through a
+    # destructive full copy by design).
+    _mock_zfs_holds["pool/dest/data@snap1"]="kept-tag"
+
+    capture_stderr
+    (
+        doincrementals='N'; force='Y'; allow_destructive='N'
+        autoproceed='Y'; sourcefsremovequalifiers=2
+        nextsnap='@test-2025-06-15T10:00-04:00-d'
+        send-receive "pool/src" "pool/dest"
+    )
+    local rc=$?
+    restore_stderr
+
+    assert_rc 8 "$rc"
+    local log
+    log=$(get_stderr_log)
+    assert_contains "$log" "Snapshot pool/dest/data@snap1 still has holds (kept-tag)"
+    assert_contains "$log" "pool/dest/data was NOT deleted"
+    if [[ "$log" == *"Applied hold"* ]]; then
+        test_fail "No hold may be re-applied after an aborted copy"
+    else
+        test_pass
     fi
 }
 

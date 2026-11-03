@@ -216,8 +216,7 @@ def _drain_dashboard_refresh_threads():
     import threading
 
     dp = sys.modules.get("dashboard_page")
-    if dp is not None and _ORIG_REFRESH_WORKER is None \
-            and hasattr(dp, "_dashboard_refresh_worker"):
+    if dp is not None and _ORIG_REFRESH_WORKER is None and hasattr(dp, "_dashboard_refresh_worker"):
         _ORIG_REFRESH_WORKER = dp._dashboard_refresh_worker
 
         def _tracking_refresh_worker(*args, **kwargs):

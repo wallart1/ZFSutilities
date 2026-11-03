@@ -175,6 +175,9 @@ def _make_app():
     app.config = {}
     app.ctx = MagicMock()
     app.ctx.zfs_caps = None
+    # The Survey dialog reads the Blocksize-scan selection from here; a
+    # mock auto-attribute would fake a selection, so name the unbuilt state.
+    app._alignment_chain_view = None
     return app
 
 
@@ -993,9 +996,10 @@ class TestLadderSection(_PageTestCase):
         self.assertTrue(widget.queue_draw.called)
 
     def test_ladder_font_and_width_follow_the_gui_base_font(self):
-        """The Cairo ladder's 13px text and its content-minimum width
-        request scale with the widget-resolved GUI base font (the tuned
-        values are per a 10pt default)."""
+        """The Cairo ladder's text (13px ticks/legend/placeholder, somewhat
+        smaller 11.5px row labels) and its content-minimum width request
+        scale with the widget-resolved GUI base font (the tuned values are
+        per a 10pt default)."""
         _mp, ap, _app = self._prepared()
         ladder = ap.BlocksizeLadder("Blocksize ladder")
         pools = ap.blocksize_ladder(_sample())
@@ -1010,7 +1014,9 @@ class TestLadderSection(_PageTestCase):
                 ap.ladder_minimum_width(pools, 1.25), ap.ladder_pixel_height(pools)
             )
             ladder._on_draw(widget, cr)
-        cr.set_font_size.assert_called_once_with(16.25)
+        self.assertEqual(
+            {call.args[0] for call in cr.set_font_size.call_args_list}, {16.25, 14.375}
+        )
 
 
 class TestReconcileRows(_PageTestCase):
@@ -1290,6 +1296,22 @@ _RESPONSE_OK = 1
 _NOT_SURVEYED = "(not surveyed)"
 
 
+def _chain_view_with_selection(keys):
+    """Fake the Blocksize-scan view with the given hidden row keys selected.
+
+    The dialog walks the selection's rows and reads each row's hidden
+    identity key (column 0); the fake hands the keys out in order, so a
+    list also models a multi-row selection with a non-dataset row first.
+    """
+    view = MagicMock()
+    model = MagicMock()
+    selection = MagicMock()
+    view.get_selection.return_value = selection
+    selection.get_selected_rows.return_value = (model, [MagicMock() for _ in keys])
+    model.get_value.side_effect = list(keys)
+    return view
+
+
 class TestAlignmentSurveyDialog(_PageTestCase):
     """The Survey… dialog from alignment_dialogs."""
 
@@ -1382,6 +1404,58 @@ class TestAlignmentSurveyDialog(_PageTestCase):
                 ad.open_alignment_survey(app)
         save.assert_not_called()
         self.assertNotIn("alignment_survey", app.config)
+
+    def test_survey_preloads_selected_vm_row(self):
+        """A VM row selected in the Blocksize scan is preloaded, with its
+        saved declaration synced into the workload combo."""
+        app = _make_app()
+        app._alignment_sample = _sample()
+        app._alignment_chain_view = _chain_view_with_selection(["VM:NVME1/vm-201-disk-0"])
+        app.config["alignment_survey"] = {"NVME1/vm-201-disk-0": "vm-os"}
+        app.config["workload_profiles"] = {"vm-os": {"description": "VM disks"}}
+        _ad, dataset_combo, profile_combo, _dialog, _refresh = self._open(app, None)
+        # Sorted combo order is NVME1/backups, NVME1/vm-201-disk-0; the
+        # selected VM row preloads the second entry, not the default first.
+        self.assertEqual(dataset_combo.get_active_text(), "NVME1/vm-201-disk-0")
+        self.assertEqual(profile_combo.get_active_text(), "vm-os")
+
+    def test_survey_preloads_selected_dataset_row(self):
+        """A Dataset row preloads too, even behind a non-dataset row in the
+        same selection."""
+        app = _make_app()
+        app._alignment_sample = _sample()
+        app._alignment_chain_view = _chain_view_with_selection(
+            ["Pool:NVME1", "Dataset:NVME1/vm-201-disk-0"]
+        )
+        _ad, dataset_combo, _profile, _dialog, _refresh = self._open(app, None)
+        self.assertEqual(dataset_combo.get_active_text(), "NVME1/vm-201-disk-0")
+
+    def test_survey_pool_row_selection_keeps_first_entry(self):
+        """Pool (and Device) rows name no single dataset: the combo keeps
+        its first entry, and that dataset's own declaration is what shows."""
+        app = _make_app()
+        app._alignment_sample = _sample()
+        app._alignment_chain_view = _chain_view_with_selection(["Pool:NVME1"])
+        app.config["alignment_survey"] = {"NVME1/vm-201-disk-0": "vm-os"}
+        _ad, dataset_combo, profile_combo, _dialog, _refresh = self._open(app, None)
+        self.assertEqual(dataset_combo.get_active_text(), "NVME1/backups")
+        self.assertEqual(profile_combo.get_active_text(), _NOT_SURVEYED)
+
+    def test_survey_without_selection_keeps_first_entry(self):
+        app = _make_app()
+        app._alignment_sample = _sample()
+        app._alignment_chain_view = _chain_view_with_selection([])
+        _ad, dataset_combo, _profile, _dialog, _refresh = self._open(app, None)
+        self.assertEqual(dataset_combo.get_active_text(), "NVME1/backups")
+
+    def test_survey_stale_selected_row_keeps_first_entry(self):
+        """A selected row whose dataset the last sample no longer carries
+        is not preloaded (the combo only offers sampled datasets)."""
+        app = _make_app()
+        app._alignment_sample = _sample()
+        app._alignment_chain_view = _chain_view_with_selection(["VM:NVME1/gone"])
+        _ad, dataset_combo, _profile, _dialog, _refresh = self._open(app, None)
+        self.assertEqual(dataset_combo.get_active_text(), "NVME1/backups")
 
 
 class TestTableViewPolish(_PageTestCase):

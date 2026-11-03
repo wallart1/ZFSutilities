@@ -62,6 +62,42 @@
   matrix gained restore-manifest-replay and receive-as-encrypted
   scenarios.
 
+- **Batched, connection-reused SSH probes (Dashboard).** On two-node
+  systems each Dashboard refresh now gathers every per-host fact it needs
+  — deployed version, ZFS version, OS detection, and (when the TTL cache
+  expires) the iSCSI fence state — in one SSH round-trip per remote host,
+  with each fact emitted between delimiters that the existing parsers
+  consume unchanged. Every Python-side root SSH command now goes through
+  `path_utils.ssh_command()`, which carries
+  `ControlMaster`/`ControlPersist` (600 s, private control-socket
+  directory with a plain-ssh fallback), so recurring callers ride one
+  reused connection instead of logging in per fact: the automatic
+  refresh no longer floods the compute node's system journal with login
+  noise (~14,000 lines/hour at the 30 s default cadence).
+- **Datasets mount-refusal visibility.** A refused Mount now surfaces in
+  one warning dialog naming the blocking dataset-lock holder(s) —
+  dataset, lock type, and description; pid/script noise stays in the log
+  line — instead of failing silently behind the enforcing lock fence. A
+  selected row whose live state is already mounted refreshes the stale
+  row, and the Mount button disables with an explanatory tooltip while a
+  running operation (backup, offsite transfer, or send/receive) holds a
+  conflicting dataset lock. `zfs_lock_manager` gained `check_local()`
+  (the lock walk over local files only — never the remote authority, so
+  it is safe for button sensitivity) and a public
+  `conflicting_lock_holders()` for refusal messages; a pool-root lock is
+  listed exactly once as a holder.
+- **Survey… selection preload (Blocksize Alignment).** The workload
+  survey dialog preloads the dataset named by the selected Blocksize-scan
+  row (Dataset and VM rows key the full dataset name; Pool and Device
+  rows, an empty selection, and stale keys fall back to the first entry
+  as before).
+- **Guest-config mirror procedure (Installation manual).** An optional,
+  per-site systemd trio (service + path + timer) that mirrors the PVE
+  guest configs to a directory a non-root diagnostic account can read —
+  pmxcfs permissions are fixed by design (chmod fails even for root) and
+  the www-data group route would expose PVE's private keys and
+  credential hashes.
+
 ### Fixed
 
 - **Receive-as-encrypted transfers could never run.** `zfs receive -o
@@ -92,11 +128,42 @@
   was refused and the assertion failed. The fence is now mocked and
   the case is hermetic.
 
+- **Guest-agent probe argv (Blocksize Alignment).** The prober sent the
+  invented `qm guest ping <vmid>` form, which PVE 9 rejects as an
+  unknown subcommand — every VM therefore reported "guest agent
+  unavailable" regardless of its actual state. The probe now sends the
+  canonical `qm guest cmd <vmid> ping`; failures are classified
+  specific-first against PVE's own die strings (agent not configured in
+  VM options, agent not running, VM not running, agent error with the
+  underlying description; unknown shapes keep the generic label plus a
+  short excerpt), and the raw stderr of a failed `qm` call is WARN-logged
+  so a mislabel can be re-diagnosed after the fact.
+  `validate-guestfs-probe`'s self-check now pins the exact ping argv.
+- **Hold reapply after lineage-skipped restores.** `zfsreapplyholds`
+  treated an already-held tag as a failure, so a restore whose
+  destructive pass was skipped by the verified-lineage gate ended with a
+  wall of "Failed to apply hold" WARNs over holds that were never
+  removed. An already-present tag is now reported as the desired end
+  state (VERB line, counted in the summary as "N already present");
+  genuine hold failures still WARN. The Bash test mocks were made
+  faithful to real zfs: `zfs hold` refuses duplicate tags, `zfs destroy`
+  drops the destroyed subtree's holds, and a forced-failure knob
+  exercises callers' genuine-failure branches.
+- **Scrub Manager Scan Line cell.** The cell drops zpool's redundant
+  `scan:` field label (the column header already says Scan Line); the
+  raw record is kept in `ScrubInfo` and in diagnostic logs.
+
 ### Changed
 
 - Sends into an encrypted destination from an unencrypted source are
   plain instead of `-cw` (see the receive-as-encrypted fix above);
   every captured setting still comes back through property replay.
+
+- **Blocksize ladder readability.** Ladder rows are deliberately
+  double-height in both renderers (matplotlib and the Cairo fallback
+  share `LADDER_ROW_HEIGHT`), with somewhat smaller row/Y-axis labels
+  (matplotlib 11 → 9.5; Cairo keeps 13 px ticks/legend with 11.5 px row
+  labels, the gutter re-measured at the label size).
 
 ### Tests
 
@@ -108,6 +175,27 @@
   level; the page-runner backup case no longer shells out to the
   host's ZFS.
 
+- Dashboard: gather-level pin that the batched probe result feeds the
+  Configuration card and the TTL-cached fence check (red-proofed by
+  dropping the call-site arguments); probe suites (script sections,
+  round-trip parsing, unreachable-host fallback, OS-detection precedence,
+  no per-command ssh when the probe map is passed).
+- `path_utils`: `ssh_command` argv (private control-socket dir selection,
+  plain-ssh fallback when no dir is creatable).
+- `zfs_lock_manager`: `check_local` walk (pool-root fence, never the
+  remote authority) and holder listing for refusal messages.
+- Datasets: mount-refusal dialog cases (holder naming, exception
+  fallback, already-mounted refresh, mixed batch, canmount=off batch,
+  refused parent-mount batch) and Mount-button lock-fence sensitivity
+  with tooltip precedence.
+- Alignment: the guestfs classifier against PVE's die strings including
+  the exact ping argv pin and raw-stderr WARN line; Survey preload cases
+  (Dataset/VM rows, Pool/Device, empty, stale keys); ladder font-size
+  assertions for both renderers.
+- Bash: faithful hold/destroy mocks, already-present tolerated vs
+  genuine-failure WARNed reapply tests, and a user-hold aborts the
+  destructive full copy.
+
 ### Documentation
 
 - User guide: restore (property replay, receiving a restore as
@@ -118,6 +206,19 @@
   module pages, integrated testing, ITF coverage); GLOSSARY entries
   for property manifest, receive as encrypted, receive family, and
   probe.
+
+- Messages manual: reapplyholds already-present row and new summary
+  format; Datasets mount lock-refusal WARN row and dialog notes.
+- User guide: Dashboard batched-probe note, Survey preload section and
+  button row, Mount row lock-fence description; Scrub Scan Line wording
+  stays accurate.
+- Developer guide: python-modules rows (`_probe_remote_host`,
+  `ssh_command`, `remote_version_path`, classifier, Survey preload);
+  charting ladder vocabulary; data-structures `vm_disks` /
+  `guest_fs_failures` rows; installation guest-config mirror procedure;
+  testing per-suite coverage rows refreshed.
+- GLOSSARY: dataset lock, guest agent, SSH connection reuse
+  (ControlMaster).
 
 ## 0.137.0
 

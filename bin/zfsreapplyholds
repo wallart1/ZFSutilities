@@ -176,6 +176,7 @@ reapplyholds_apply() {
     fi
 
     local _applied=0
+    local _present=0
     local _skipped=0
     local _input_stream
     if [[ "$input_file" == "-" ]]; then
@@ -203,11 +204,17 @@ reapplyholds_apply() {
         if [[ "$dryrun" == "Y" ]]; then
             log_msg "INFO: Dry-run: Would apply hold $tag to $snap."
         else
-            # Suppress "hold already exists" noise; the snapshot should not
-            # already have the tag after a fresh restore, but be tolerant.
+            # A lineage-skipped (or mixed) run reapplies over a destination
+            # that was never destroyed, so a tag can already be held — that
+            # is the desired end state, not a failure. Anything else is a
+            # genuine failure.
             if zfs hold "$tag" "$snap" 2>/dev/null; then
                 log_msg "INFO: Applied hold $tag to $snap."
                 ((_applied++))
+            elif zfs holds -H "$snap" 2>/dev/null \
+                | awk -v t="$tag" '$2 == t { found = 1 } END { exit !found }'; then
+                log_msg "VERB: Hold $tag already present on $snap."
+                ((_present++))
             else
                 log_msg "WARN: Failed to apply hold $tag to $snap."
                 ((_skipped++))
@@ -219,7 +226,8 @@ reapplyholds_apply() {
         zfslock_release "$_apply_lock"
     fi
 
-    log_msg "INFO: Reapplied $_applied holds on $dataset ($_skipped skipped)."
+    log_msg "INFO: Reapplied $_applied holds on $dataset ($_present already present," \
+        "$_skipped skipped)."
 }
 
 # ---------------------------------------------------------------------------

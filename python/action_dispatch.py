@@ -668,7 +668,10 @@ PAGE_SPECS = {
                 "Survey…",
                 "document-properties",
                 None,
-                "Run the blocksize-alignment survey and open its report.",
+                (
+                    "Run the blocksize-alignment survey; a Dataset or VM row "
+                    "selected in the Blocksize scan is preloaded."
+                ),
             ),
         ],
     },

@@ -187,10 +187,15 @@ load-bearing half: a `max_content_width` below the child's requested
 minimum makes GTK clamp the canvas to the window and silently drop the
 horizontal scrollbar (reproduced under Xvfb at mid window widths with
 an earlier half-page cap), so the ladder renders cut off with no way to
-scroll. The ladder's text also sits one notch above the rolling charts'
-sizes (title 11.5, row labels 11, ticks and legend 10.5 in matplotlib;
-13 px in the Cairo fallback), and the width estimate's per-character
-constant follows that scale (`LADDER_CHAR_WIDTH_PX`). Every chart's text
+scroll. The ladder's rows are deliberately double-height
+(`LADDER_ROW_HEIGHT`, the shared row geometry both renderers size their
+widgets by), and its text sits one notch above the rolling charts'
+sizes except the row (Y-axis) labels, which draw somewhat smaller than
+the rest (title 11.5, ticks and legend 10.5, row labels 9.5 in
+matplotlib; 13 px ticks/legend/placeholder and 11.5 px row labels in
+the Cairo fallback). The width estimate's per-character constant keeps
+its roomier scale (`LADDER_CHAR_WIDTH_PX`), leaving the label-gutter
+floor generous. Every chart's text
 — both renderers, rolling charts and ladder alike — scales with the GUI
 base font size (`chart_font_scale`: the widget's style-context font over
 a 10 pt reference, re-resolved on `style-updated` like the palette,

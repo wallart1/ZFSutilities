@@ -2729,9 +2729,12 @@ sudo zfsreapplyholds [--dry-run] --apply <dataset> [input-file]
 **Globals:** none.
 
 Snapshots that no longer exist when `--apply` runs are skipped with a warning.
-Existing holds on the destination are captured before `zfsrestore` destroys it,
-so tags that belong to the target (for example `offsite-<pool>` receipts) are
-not lost.
+A tag already present on the snapshot is counted as already present rather
+than failed: a restore rerun whose destructive pass was skipped by the
+verified-lineage gate never removed the destination's holds, so finding them
+in place is the desired end state. Existing holds on the destination are
+captured before `zfsrestore` destroys it, so tags that belong to the target
+(for example `offsite-<pool>` receipts) are not lost.
 
 When sourced, this script defines `reapplyholds_capture()`,
 `reapplyholds_release()`, and `reapplyholds_apply()`. Each accepts a trailing

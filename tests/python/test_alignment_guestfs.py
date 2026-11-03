@@ -15,6 +15,7 @@ import subprocess
 import sys
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
 PYTHON_SRC = os.path.join(REPO_ROOT, "python")
@@ -270,14 +271,38 @@ class TestParsers(unittest.TestCase):
         self.assertIsNone(agfs.expected_disk_name("virtio26"))
 
     def test_classify_agent_failure(self):
+        # PVE 9.2 die strings (QemuServer/Agent.pm), matched specific-first.
+        self.assertEqual(
+            agfs.classify_agent_failure("No QEMU guest agent configured\n"),
+            "guest agent not configured in VM options",
+        )
+        self.assertEqual(
+            agfs.classify_agent_failure("QEMU guest agent is not running\n"),
+            "guest agent not running",
+        )
         self.assertEqual(agfs.classify_agent_failure("VM 201 not running"), "VM not running")
+        self.assertEqual(agfs.classify_agent_failure("VM 215 is not running"), "VM not running")
         self.assertEqual(
-            agfs.classify_agent_failure("QEMU guest agent is not running"),
-            "guest agent unavailable",
+            agfs.classify_agent_failure("Agent error: can't execute command (lsblk)"),
+            "agent error: can't execute command (lsblk)",
+        )
+        # Long agent-error descriptions are collapsed and capped.
+        self.assertTrue(
+            agfs.classify_agent_failure("Agent error: " + "x" * 200).startswith("agent error: x")
+        )
+        self.assertLessEqual(
+            len(agfs.classify_agent_failure("Agent error: " + "x" * 200)), len("agent error: ") + 80
+        )
+        # Unknown shapes keep the generic label but carry PVE's message.
+        self.assertEqual(
+            agfs.classify_agent_failure(" network  unreachable"),
+            "guest agent unreachable (network unreachable)",
         )
         self.assertEqual(
-            agfs.classify_agent_failure(" network unreachable"), "guest agent unreachable"
+            agfs.classify_agent_failure("some novel failure mode\nsecond line"),
+            "guest agent unreachable (some novel failure mode)",
         )
+        self.assertEqual(agfs.classify_agent_failure(""), "guest agent unreachable")
 
 
 class TestMatchVolumes(unittest.TestCase):
@@ -400,7 +425,7 @@ class TestProbeVolumes(unittest.TestCase):
         self.assertEqual(probe.match_method, "signature")
         # Wire shape: ping, ONE lsblk round-trip (no /proc/mounts), stat.
         self.assertEqual(len(runner.argvs), 3)
-        self.assertEqual(runner.argvs[0], ["qm", "guest", "ping", "201"])
+        self.assertEqual(runner.argvs[0], ["qm", "guest", "cmd", "201", "ping"])
         self.assertEqual(
             runner.argvs[1],
             [
@@ -442,12 +467,52 @@ class TestProbeVolumes(unittest.TestCase):
         self.assertEqual(results["vm-201-disk-0"].reason, "VM not running")
         self.assertEqual(len(runner.argvs), 1)
 
-    def test_agent_unavailable_reason(self):
+    def test_agent_not_configured_reason(self):
+        # PVE checks the config line before the run state: a stopped VM
+        # without an agent: line reports the config condition.
+        prober, runner = self._prober(
+            [_ok(returncode=255, stdout="", stderr="No QEMU guest agent configured")]
+        )
+        results = prober.probe_volumes([self._volume()])
+        self.assertEqual(
+            results["vm-201-disk-0"].reason, "guest agent not configured in VM options"
+        )
+        self.assertEqual(len(runner.argvs), 1)
+
+    def test_agent_not_running_reason(self):
         prober, _runner = self._prober(
             [_ok(returncode=255, stdout="", stderr="QEMU guest agent is not running")]
         )
         results = prober.probe_volumes([self._volume()])
-        self.assertEqual(results["vm-201-disk-0"].reason, "guest agent unavailable")
+        self.assertEqual(results["vm-201-disk-0"].reason, "guest agent not running")
+
+    def test_exec_agent_error_reason(self):
+        # Ping answers, the exec stage dies with PVE's Agent error die —
+        # the description is the diagnosis, so it becomes the reason.
+        prober, _runner = self._prober(
+            [
+                _ok(),
+                _ok(returncode=255, stdout="", stderr="Agent error: can't execute command (lsblk)"),
+            ]
+        )
+        results = prober.probe_volumes([self._volume()])
+        self.assertEqual(
+            results["vm-201-disk-0"].reason, "agent error: can't execute command (lsblk)"
+        )
+
+    def test_qm_failure_logs_raw_stderr(self):
+        # The reason strings stay short; the WARN line is the only place
+        # the raw PVE stderr survives, so a mislabel can be re-diagnosed.
+        prober, _runner = self._prober(
+            [_ok(returncode=255, stdout="", stderr="No QEMU guest agent configured\ntrace")]
+        )
+        with mock.patch.object(agfs, "log_msg") as logged:
+            prober.probe_volumes([self._volume()])
+        logged.assert_called_once()
+        message = logged.call_args.args[0]
+        for part in ("cmd", "201", "rc=255", "No QEMU guest agent configured"):
+            self.assertIn(part, message)
+        self.assertNotIn("trace", message)  # first line only
 
     def test_command_failure_reason(self):
         prober, _runner = self._prober([OSError("qm missing")])

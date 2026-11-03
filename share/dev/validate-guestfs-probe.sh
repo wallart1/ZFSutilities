@@ -5,7 +5,7 @@
 # Run as root ON THE STORAGE HOST of a two-node install (or on the single
 # host): the probe reaches the compute node's `qm` over the same read-only
 # `ssh root@<compute>` channel the GUI uses. Everything it executes is
-# read-only — `qm guest ping`, `lsblk -bJ` and `stat -f` inside guests,
+# read-only — `qm guest cmd <vmid> ping`, `lsblk -bJ` and `stat -f` inside guests,
 # zpool/zfs property reads, the PVE config fetch — and it writes nothing
 # outside its scratch state dir.
 #
@@ -108,7 +108,12 @@ if self_check:
     )
 
     def runner(argv, timeout):
-        if "ping" in argv:
+        # Exact ping argv: the prober must send the canonical PVE form
+        # ``qm guest cmd <vmid> ping`` — a substring match here once
+        # blessed the invented ``qm guest ping <vmid>`` form, which PVE
+        # rejects as an unknown subcommand (usage text that the reason
+        # classifier then mistook for an agent failure).
+        if argv == ["qm", "guest", "cmd", "201", "ping"]:
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         if "lsblk" in argv:
             return qm_exec(lsblk)

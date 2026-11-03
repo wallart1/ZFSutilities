@@ -30,7 +30,7 @@ That mapping is resolved by a deterministic chain (see
    (``virtio2`` → ``vdc``, ``scsi1``/``sata1`` → ``sdb``) as tiebreak.
    Last resort for signature-less (blank) zvols.
 
-Per VM the probe runs ``qm guest ping`` (availability), one
+Per VM the probe runs ``qm guest cmd <vmid> ping`` (availability), one
 ``qm guest exec -- lsblk -bJ -o …`` (device tree with UUIDs, serials,
 mountpoints — children included, so device-mapper/LVM mounts attribute
 to their parent disk), and one batched
@@ -41,8 +41,9 @@ and Proxmox enrollment use. When the GUI host is the compute node the
 commands run locally.
 
 The module is pure subprocess with no GTK. Every failure degrades per
-volume with a short reason (agent absent, VM stopped, disk not matched,
-ambiguous clone signatures, non-Linux guest): probing never fails the
+volume with a short reason (agent not configured, agent not running,
+agent error, VM stopped, disk not matched, ambiguous clone signatures,
+non-Linux guest): probing never fails the
 sample that carries it. Results are cached per (vmid, volume, volsize)
 with a TTL because guest filesystem geometry is quasi-static — the
 1-300 s page refresh must not re-probe every cycle.
@@ -55,6 +56,7 @@ import time
 from dataclasses import dataclass, field
 
 import node_config
+from logging_config import log_msg
 
 # ssh options for the compute-node channel, matching proxmox_enroll (the
 # dashboard/pvesm read-only precedent): BatchMode never prompts, so a
@@ -377,16 +379,42 @@ def match_volumes(disks, volumes):
     return results
 
 
+def _first_line_excerpt(text, cap):
+    """Whitespace-collapsed first line of *text*, capped to *cap* chars."""
+    first = ((text or "").strip().splitlines() or [""])[0]
+    line = " ".join(first.split())
+    if len(line) > cap:
+        line = line[: cap - 1].rstrip() + "…"
+    return line
+
+
 def classify_agent_failure(stderr):
-    """Short reason string for a failed ``qm guest ping``."""
-    text = (stderr or "").lower()
-    # "agent" first: the agent-down error also says "not running", and
-    # the sharper reason wins.
-    if "agent" in text or "guest" in text:
-        return "guest agent unavailable"
-    if "not running" in text or "is not running" in text:
+    """Short reason string for a failed ``qm guest`` call.
+
+    PVE's own die strings name the condition, so they are matched
+    specific-first (all compared lowercased): ``No QEMU guest agent
+    configured`` (the VM's config lacks the ``agent:`` line — PVE checks
+    this before the run state), ``QEMU guest agent is not running`` (the
+    agent channel is down), ``VM <vmid> is not running``, and
+    ``Agent error: <desc>`` (an exec-stage failure, whose description is
+    the actual diagnosis). Anything else keeps the generic unreachable
+    label but carries a short excerpt of PVE's message, so an unseen
+    failure mode still identifies itself in the Alignment note.
+    """
+    text = " ".join((stderr or "").lower().split())
+    if "no qemu guest agent configured" in text:
+        return "guest agent not configured in VM options"
+    if "guest agent" in text and "not running" in text:
+        return "guest agent not running"
+    if "not running" in text:
         return "VM not running"
-    return "guest agent unreachable"
+    marker = "agent error:"
+    start = text.find(marker)
+    if start >= 0:
+        desc = _first_line_excerpt(text[start + len(marker) :], cap=80)
+        return f"agent error: {desc}" if desc else "agent error"
+    excerpt = _first_line_excerpt(stderr, cap=40)
+    return f"guest agent unreachable ({excerpt})" if excerpt else "guest agent unreachable"
 
 
 def _decode_exec(result):
@@ -440,6 +468,21 @@ class GuestFsProber:
                 self._channel = []
         return list(self._channel)
 
+    @staticmethod
+    def _log_qm_failure(argv, returncode, stderr_text):
+        """WARN line carrying the raw stderr of a failed ``qm`` call.
+
+        ``classify_agent_failure`` keeps only a short reason for the
+        Alignment note, so the underlying PVE message is recorded here —
+        without it a wrong label cannot be re-diagnosed after the fact.
+        """
+        cmd = argv[2] if len(argv) > 2 else "?"
+        vmid = argv[3] if len(argv) > 3 else "?"
+        log_msg(
+            f"WARN: qm guest {cmd} {vmid} failed (rc={returncode}): "
+            f"{_first_line_excerpt(stderr_text, cap=160)}"
+        )
+
     def _run(self, argv):
         """Run argv through the channel; ``(stdout, None)`` or reason."""
         try:
@@ -449,7 +492,9 @@ class GuestFsProber:
         except (OSError, subprocess.SubprocessError):
             return None, "command failed"
         if result.returncode != 0:
-            return None, classify_agent_failure(getattr(result, "stderr", "") or "")
+            stderr_text = getattr(result, "stderr", "") or ""
+            self._log_qm_failure(argv, result.returncode, stderr_text)
+            return None, classify_agent_failure(stderr_text)
         return result.stdout, None
 
     def _guest_exec(self, vmid, argv):
@@ -490,7 +535,7 @@ class GuestFsProber:
 
     def _probe_vm(self, vmid, group):
         """Probe one VM's volumes: one lsblk round-trip, one batched stat."""
-        _stdout, reason = self._run(["qm", "guest", "ping", str(vmid)])
+        _stdout, reason = self._run(["qm", "guest", "cmd", str(vmid), "ping"])
         if reason is not None:
             return {short: GuestFsProbe(reason=reason) for short, *_rest in group}
         out, reason = self._guest_exec(

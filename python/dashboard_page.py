@@ -27,7 +27,13 @@ from gui_helpers import (
 from log_index import LogIndex
 from logging_config import log_msg
 from logs_page import select_log_by_path
-from path_utils import get_version, resolve_local_bin, resolve_remote_version
+from path_utils import (
+    get_version,
+    remote_version_path,
+    resolve_local_bin,
+    resolve_remote_version,
+    ssh_command,
+)
 from zfs_lock_manager import list_active_locks
 from zfs_repository import get_default_repository
 
@@ -481,19 +487,127 @@ def _get_node_config():
     return cfg
 
 
-def _get_host_version(host):
-    """Return the zfsutilities version string for the given host."""
+# --- Batched remote host probe -------------------------------------------
+#
+# One multiplexed ssh round-trip per refresh gathers every per-host fact the
+# Dashboard needs (deployed version, zfs version, OS detection, fence state).
+# Each fact is emitted between BEGIN/END delimiters so the existing parsers
+# can consume it unchanged; a failed remote command yields an empty section
+# and the caller's "unknown" fallback applies, exactly as the previous
+# per-command probes did.  Together with the ControlMaster reuse in
+# path_utils.ssh_command this keeps the Dashboard poll from flooding the
+# remote node's journal with login noise.
+
+_PROBE_DELIM_BEGIN = "__ZFSU_PROBE_%s_BEGIN__"
+_PROBE_DELIM_END = "__ZFSU_PROBE_%s_END__"
+
+_PROBE_SECTION_VERSION = "version"
+_PROBE_SECTION_ZFS_VERSION = "zfs-version"
+_PROBE_SECTION_PVEVERSION = "pveversion"
+_PROBE_SECTION_OS_RELEASE = "os-release"
+_PROBE_SECTION_INXI = "inxi"
+_PROBE_SECTION_FENCE = "fence"
+
+_ALL_PROBE_SECTIONS = (
+    _PROBE_SECTION_VERSION,
+    _PROBE_SECTION_ZFS_VERSION,
+    _PROBE_SECTION_PVEVERSION,
+    _PROBE_SECTION_OS_RELEASE,
+    _PROBE_SECTION_INXI,
+    _PROBE_SECTION_FENCE,
+)
+
+
+def _remote_probe_script(include_fence):
+    """Build the compound remote script for one batched probe round-trip."""
+    sections = [
+        (_PROBE_SECTION_VERSION, f"cat {remote_version_path()} 2>/dev/null"),
+        (_PROBE_SECTION_ZFS_VERSION, "zfs version 2>/dev/null"),
+        (_PROBE_SECTION_PVEVERSION, "pveversion 2>/dev/null"),
+        (_PROBE_SECTION_OS_RELEASE, "cat /etc/os-release 2>/dev/null"),
+        (_PROBE_SECTION_INXI, "inxi -S 2>/dev/null"),
+    ]
+    if include_fence:
+        sections.append((_PROBE_SECTION_FENCE, f"systemctl is-failed {_FENCE_SERVICE} 2>/dev/null"))
+    lines = []
+    for section, command in sections:
+        lines.append("echo " + (_PROBE_DELIM_BEGIN % section))
+        lines.append(command)
+        lines.append("echo " + (_PROBE_DELIM_END % section))
+    return "\n".join(lines)
+
+
+def _parse_probe_sections(output):
+    """Split one probe round-trip's stdout into a ``{section: text}`` mapping.
+
+    Text between a section's BEGIN and END delimiters is returned stripped;
+    sections whose delimiters never appear are absent from the mapping.
+    """
+    sections = {}
+    current = None
+    collected = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if current is None:
+            for section in _ALL_PROBE_SECTIONS:
+                if stripped == (_PROBE_DELIM_BEGIN % section):
+                    current = section
+                    collected = []
+                    break
+        elif stripped == (_PROBE_DELIM_END % current):
+            sections[current] = "\n".join(collected).strip()
+            current = None
+            collected = []
+        else:
+            collected.append(line)
+    return sections
+
+
+def _probe_remote_host(host, include_fence=False):
+    """Gather every probe section for a remote *host* in one ssh round-trip.
+
+    Returns a ``{section: text}`` mapping, empty when the host is
+    unreachable; callers fall back to "unknown" values section by section,
+    matching the previous per-command behaviour.
+    """
+    try:
+        result = subprocess.run(
+            ssh_command(host, _remote_probe_script(include_fence)),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if result.returncode != 0:
+        return {}
+    return _parse_probe_sections(result.stdout)
+
+
+def _get_host_version(host, sections=None):
+    """Return the zfsutilities version string for the given host.
+
+    Remote hosts read the VERSION section of a batched probe when
+    *sections* is supplied (the Dashboard gather passes its shared
+    round-trip result); a lone remote query falls back to
+    ``resolve_remote_version``'s dedicated multiplexed connection.
+    """
     if host == _local_hostname():
         return get_version()
-    return resolve_remote_version(host)
+    if sections is None:
+        return resolve_remote_version(host)
+    return sections.get(_PROBE_SECTION_VERSION, "").strip() or "unknown"
 
 
-def _get_host_zfs_version(host):
+def _get_host_zfs_version(host, sections=None):
     """Return the output of ``zfs version`` for the given host.
 
     For the local host, runs ``zfs version`` directly.  For remote hosts,
-    SSHes as root and runs ``zfs version``.  Returns "unknown" if the
-    version cannot be determined.
+    reads the zfs-version section of a batched probe: *sections* carries an
+    already-gathered round-trip result (the Dashboard gather passes its
+    shared probe); without it a dedicated multiplexed round-trip is made.
+    Returns "unknown" if the version cannot be determined.
     """
     local_host = _local_hostname()
     if host == local_host:
@@ -511,19 +625,9 @@ def _get_host_zfs_version(host):
             pass
         return "unknown"
 
-    try:
-        result = subprocess.run(
-            ["ssh", f"root@{host}", "zfs version"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except (OSError, subprocess.TimeoutExpired):
-        pass
-    return "unknown"
+    if sections is None:
+        sections = _probe_remote_host(host)
+    return sections.get(_PROBE_SECTION_ZFS_VERSION, "").strip() or "unknown"
 
 
 def _parse_pve_version(output):
@@ -559,7 +663,7 @@ def _parse_inxi_distro(output):
     return None
 
 
-def _get_host_os_info(host):
+def _get_host_os_info(host, sections=None):
     """Return (os_name, os_version) for the given host.
 
     Detection order:
@@ -568,18 +672,27 @@ def _get_host_os_info(host):
       2. /etc/os-release NAME/VERSION (accurate for Mint, Ubuntu, etc.).
       3. ``inxi -S`` Distro line as a last resort.
 
-    For the local host commands are run directly; for remote hosts they are
-    run over ``ssh root@host``.  Returns ("unknown", "unknown") if the OS
-    cannot be determined.
+    The local host runs the detection commands directly.  Remote hosts use
+    the batched probe: every detection command runs in one round-trip and
+    the precedence above is applied locally to the parsed sections;
+    *sections* carries an already-gathered round-trip result (the Dashboard
+    gather passes its shared probe), without it a dedicated multiplexed
+    round-trip is made.  Returns ("unknown", "unknown") if the OS cannot be
+    determined.
     """
-    local_host = _local_hostname()
-    is_local = host == local_host
+    if host == _local_hostname():
+        return _get_local_os_info()
+    if sections is None:
+        sections = _probe_remote_host(host)
+    return _os_info_from_sections(sections)
 
+
+def _get_local_os_info():
+    """Detect the local OS via pveversion, /etc/os-release, then inxi -S."""
     # 1. Proxmox VE specific detection.
-    pve_cmd = ["pveversion"] if is_local else ["ssh", f"root@{host}", "pveversion"]
     try:
         result = subprocess.run(
-            pve_cmd,
+            ["pveversion"],
             capture_output=True,
             text=True,
             check=False,
@@ -593,12 +706,9 @@ def _get_host_os_info(host):
         pass
 
     # 2. Standard /etc/os-release.
-    os_cmd = (
-        ["cat", "/etc/os-release"] if is_local else ["ssh", f"root@{host}", "cat /etc/os-release"]
-    )
     try:
         result = subprocess.run(
-            os_cmd,
+            ["cat", "/etc/os-release"],
             capture_output=True,
             text=True,
             check=False,
@@ -612,10 +722,9 @@ def _get_host_os_info(host):
         pass
 
     # 3. Fallback to inxi -S (tool used by Linux Mint System Information).
-    inxi_cmd = ["inxi", "-S"] if is_local else ["ssh", f"root@{host}", "inxi -S"]
     try:
         result = subprocess.run(
-            inxi_cmd,
+            ["inxi", "-S"],
             capture_output=True,
             text=True,
             check=False,
@@ -632,6 +741,24 @@ def _get_host_os_info(host):
     except (OSError, subprocess.TimeoutExpired):
         pass
 
+    return ("unknown", "unknown")
+
+
+def _os_info_from_sections(sections):
+    """Apply the OS detection precedence to parsed probe sections."""
+    pve_version = _parse_pve_version(sections.get(_PROBE_SECTION_PVEVERSION, ""))
+    if pve_version:
+        return ("Proxmox VE", pve_version)
+    name, version = _parse_os_release(sections.get(_PROBE_SECTION_OS_RELEASE, ""))
+    if name:
+        return (name, version or "unknown")
+    distro = _parse_inxi_distro(sections.get(_PROBE_SECTION_INXI, ""))
+    if distro:
+        # Attempt to split "Distro Name version" into name/version.
+        match = re.match(r"^(.*?)\s+(\d[\w\s\.\(\)-]*)$", distro)
+        if match:
+            return (match.group(1).strip(), match.group(2).strip())
+        return (distro, "unknown")
     return ("unknown", "unknown")
 
 
@@ -920,18 +1047,25 @@ _fence_cache = {"time": 0.0, "warning": None}
 _fence_lock = threading.Lock()
 
 
-def _get_fence_failure_warning():
+def _fence_cache_expired():
+    """Return True when the fence warning TTL has elapsed (a re-probe is due)."""
+    with _fence_lock:
+        return (time.monotonic() - _fence_cache["time"]) >= _FENCE_CACHE_TTL
+
+
+def _get_fence_failure_warning(probe_map=None):
     """Report the compute host's failed iSCSI fence unit, TTL-cached.
 
     Wraps _compute_fence_failure_warning() with the disk-wear cache
     pattern so the Dashboard refresh cadence cannot turn the peer query
-    into an ssh flood.
+    into an ssh flood.  *probe_map* (the gather's batched remote probes)
+    lets an expired TTL be answered from data already collected this tick.
     """
     now = time.monotonic()
     with _fence_lock:
         if now - _fence_cache["time"] < _FENCE_CACHE_TTL:
             return _fence_cache["warning"]
-    warning = _compute_fence_failure_warning()
+    warning = _compute_fence_failure_warning(probe_map)
     now = time.monotonic()
     with _fence_lock:
         _fence_cache["warning"] = warning
@@ -939,37 +1073,46 @@ def _get_fence_failure_warning():
     return warning
 
 
-def _compute_fence_failure_warning():
+def _compute_fence_failure_warning(probe_map=None):
     """Query the peer's fence unit state; return a warning string or None.
 
     Runs ``systemctl is-failed zfsutilities-iscsi-fence.service`` on the
     compute host — directly when this host is the compute host, otherwise
-    over the Dashboard's ssh root@<host> channel. The fence is a
-    timer-driven oneshot, so ``inactive`` between ticks is healthy; only
-    the exact ``failed`` state warns. An unreachable peer or an unreadable
-    state produces no row (no false warning while the peer reboots).
+    over the Dashboard's multiplexed ssh root@<host> channel.  When
+    *probe_map* carries a fence section for the peer (the Dashboard gather
+    includes it in the batched probe whenever the TTL cache expires), that
+    already-fetched state is used instead of a second round-trip. The fence
+    is a timer-driven oneshot, so ``inactive`` between ticks is healthy;
+    only the exact ``failed`` state warns. An unreachable peer or an
+    unreadable state produces no row (no false warning while the peer
+    reboots).
     """
     if not _is_two_node():
         return None
     peer = _get_peer_host()
     if not peer:
         return None
-    cmd = (
-        ["systemctl", "is-failed", _FENCE_SERVICE]
-        if peer == _local_hostname()
-        else ["ssh", f"root@{peer}", f"systemctl is-failed {_FENCE_SERVICE}"]
-    )
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
+    state = None
+    if probe_map and peer != _local_hostname():
+        state = probe_map.get(peer, {}).get(_PROBE_SECTION_FENCE)
+    if state is None:
+        cmd = (
+            ["systemctl", "is-failed", _FENCE_SERVICE]
+            if peer == _local_hostname()
+            else ssh_command(peer, f"systemctl is-failed {_FENCE_SERVICE}")
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.stdout.strip() != "failed":
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        state = result.stdout.strip()
+    if state != "failed":
         return None
     return (
         f"iSCSI fence unit failed on {peer} — VM disk path recovery has been "
@@ -1611,9 +1754,14 @@ def _gather_dashboard_data(app):
             f"{row['name']} is mounted at {row['mountpoint']} but the path is "
             "unreachable (bad mount order) — use Repair Mount Order"
         )
+    # One multiplexed, batched ssh round-trip per remote host feeds the
+    # Configuration card and, when its TTL expires, the fence check below.
+    node_cfg = _get_node_config()
+    probe_map = _gather_remote_probes(node_cfg, include_fence=_fence_cache_expired())
+
     # Persistent fence failure on the compute host (crash-loop / reconcile
     # refusals the fence could not recover from).
-    fence_warning = _get_fence_failure_warning()
+    fence_warning = _get_fence_failure_warning(probe_map)
     if fence_warning:
         warnings.append(fence_warning)
     # Pool identity (renamed/replaced pool under a known name) — mirrors
@@ -1639,7 +1787,7 @@ def _gather_dashboard_data(app):
         warnings.append(f"Stale lock files: {stale_count}")
     warnings.extend(_get_disk_wear_warnings(app))
 
-    config_data = _gather_config_section_data(app)
+    config_data = _gather_config_section_data(app, node_cfg, probe_map)
 
     return {
         "threshold": threshold,
@@ -1759,14 +1907,35 @@ def refresh_dashboard_page(app, sync=False):
         _update_dashboard_ui(app, data)
 
 
-def _gather_config_section_data(app):
+def _gather_remote_probes(cfg, include_fence):
+    """Run one batched, multiplexed probe round-trip per remote host.
+
+    Returns a ``{host: sections}`` mapping; local hosts are skipped —
+    their facts come from direct local commands.
+    """
+    if cfg.get("mode") != "two-node":
+        return {}
+    local_host = _local_hostname()
+    probes = {}
+    for host, _roles in _get_host_role_list(cfg):
+        if host == local_host or host in probes:
+            continue
+        probes[host] = _probe_remote_host(host, include_fence=include_fence)
+    return probes
+
+
+def _gather_config_section_data(app, node_cfg=None, probe_map=None):
     """Collect data for the Configuration Info grid.
 
     This performs the expensive SSH/subprocess calls and is intended to run
     in a background thread.  It returns a dict that
     `_refresh_config_section_from_data` can render without further I/O.
+    When *node_cfg*/*probe_map* are supplied (the Dashboard gather's node
+    config and its shared batched round-trips), remote facts come from the
+    probes instead of per-command SSH logins.
     """
-    cfg = _get_node_config()
+    cfg = node_cfg or _get_node_config()
+    probe_map = probe_map or {}
     data = {
         "cfg": cfg,
         "mode": cfg["mode"],
@@ -1790,7 +1959,8 @@ def _gather_config_section_data(app):
     # Gather OS info once per host to avoid duplicate SSH calls.
     if cfg["mode"] == "two-node":
         data["os_info_map"] = {
-            host: _get_host_os_info(host) for host, _roles in _get_host_role_list(cfg)
+            host: _get_host_os_info(host, probe_map.get(host))
+            for host, _roles in _get_host_role_list(cfg)
         }
     else:
         data["os_info_map"] = {cfg["this_host"]: _get_host_os_info(cfg["this_host"])}
@@ -1798,8 +1968,8 @@ def _gather_config_section_data(app):
     # Versions
     if cfg["mode"] == "two-node":
         local_v = _get_host_version(cfg["this_host"])
-        storage_v = _get_host_version(cfg["storage_host"])
-        compute_v = _get_host_version(cfg["compute_host"])
+        storage_v = _get_host_version(cfg["storage_host"], probe_map.get(cfg["storage_host"]))
+        compute_v = _get_host_version(cfg["compute_host"], probe_map.get(cfg["compute_host"]))
         data["versions"] = f"local={local_v}  storage={storage_v}  compute={compute_v}"
     else:
         data["versions"] = _get_host_version(cfg["this_host"])
@@ -1808,7 +1978,7 @@ def _gather_config_section_data(app):
     if cfg["mode"] == "two-node":
         zfs_parts = []
         for host, roles in _get_host_role_list(cfg):
-            zfs_out = _get_host_zfs_version(host)
+            zfs_out = _get_host_zfs_version(host, probe_map.get(host))
             header = f"{host} ({','.join(roles)}):"
             zfs_parts.append(f"{header}\n{zfs_out}")
         data["zfs_versions"] = "\n\n".join(zfs_parts)

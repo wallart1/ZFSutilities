@@ -3,6 +3,7 @@
 Items to add:
     cast — no usage context found anywhere in the repository as of
         2026-11-03; stays queued until a real sighting names it
+    base, procuct, rebase — queued on the pub2 lane (2026-11-02)
 
 Plain-language definitions of terms as they are actually used in this
 repository — in agent work reports, SESSION_NOTES.md, CI output, and the
@@ -102,6 +103,19 @@ the 2026-10-27 incident class — the node silently coming up with 3 of 33
 LUNs mapped while every gate passed — is dead: nothing silent, nothing
 destroyed, one clean recovery.
 
+## dataset lock
+
+A reservation on a pool, dataset, or snapshot that serializes ZFS
+operations across everything the project runs — GUI actions, backups,
+offsite transfers, scrubs. Locks live as small JSON files under
+`/run/lock/zfsutilities/`, shared between the Python GUI and the bash
+tools, with three types: read (`r`), write (`w`), and destroy (`x`). They
+are hierarchical: a write lock on a pool root blocks write actions on
+every dataset below it, so an offsite transfer receiving into a pool
+fences mounting inside that pool until it finishes. When an action is
+refused because another operation holds the lock, the Datasets page
+names the holder in a warning dialog instead of failing silently.
+
 ## DEL
 
 One of the three change classifications the upgrade tooling prints
@@ -187,6 +201,21 @@ Passing. A suite, run, or CI check is green when every test in it passes
 "CI fixed green." One caution travels with the word: in the bash suites a
 failed test can display a misleading verdict line, so the failure count —
 not the displayed verdict — is the truth.
+
+## guest agent (QEMU guest agent, qga)
+
+The small service (`qemu-guest-agent`) inside a VM that lets the
+hypervisor ask the guest questions — for this project, the guest
+filesystem block sizes behind the Blocksize Alignment view
+(`alignment_guestfs.py` asks through `qm guest cmd <vmid> ping` /
+`qm guest exec`).
+Three separate conditions get confused under one label: the VM's PVE
+config lacking the `agent:` line ("not configured"), the service not
+answering ("not running"), and the VM being stopped — the classifier
+names them separately, and a failed probe logs PVE's raw stderr so the
+real cause survives. On the compute node the channel shows up as a
+`<vmid>.qga` socket plus a `virtio-serial` bus on each VM's `kvm`
+command line.
 
 ## GUI
 
@@ -317,6 +346,24 @@ backstores defined, only 3 LUNs mapped, and every count gate green. A
 config's or a systemd unit's shape is its fields and their structure.
 Claims about a shape are usually pinned by a fixture or a regex, so the
 pattern cannot drift silently.
+
+## SSH connection reuse (ControlMaster)
+
+OpenSSH's connection multiplexing: the first `ssh` to a host starts a
+background "master" connection, and later `ssh` commands to the same
+user@host reuse it through a control socket instead of logging in again.
+Configured with `-o ControlMaster=auto -o ControlPath=… -o
+ControlPersist=<seconds>`; the master closes itself after the persist
+window of inactivity, and a dead socket is replaced automatically. In this
+project `path_utils.ssh_command()` builds every Python-side remote command
+this way (600 s persist), matching the Bash side's `deploy-version` and
+`upgrade-zfsutilities`. Why it matters here: each fresh root login writes
+roughly two dozen journal lines plus a systemd user-session cycle on the
+target node — the Dashboard's automatic refresh once logged in three times
+per tick, which flooded the compute node's journal (~14,000 lines/hour at
+the 30 s default). With reuse plus the batched probe
+(`dashboard_page._probe_remote_host`), a refresh rides one existing
+connection and the poll becomes invisible in the remote journal.
 
 ## suite
 

@@ -853,7 +853,9 @@ def refresh_scrub_table(app):
             display_state = "scrubbing"
         progress = f"{info.progress_percent:.1f}%" if info.progress_percent is not None else "—"
         last = info.as_of or "—"
-        scan = info.scan_line or "—"
+        # The column header already says "Scan Line"; drop zpool's `scan:`
+        # field label so the cell starts with the status text itself.
+        scan = info.scan_line.removeprefix("scan:").strip() or "—"
         new_data[pool_name] = [pool_name, display_state, progress, last, scan]
 
     # Update existing rows in place

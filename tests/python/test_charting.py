@@ -723,12 +723,13 @@ class TestMatplotlibBlocksizeLadder(unittest.TestCase):
 
     def test_ladder_text_sizes(self):
         """The ladder's text sits a notch larger than the rolling charts'
-        vocabulary (user-visible sizing; the Cairo fallback's 13px font
-        matches this scale)."""
+        vocabulary, except the row (Y-axis) labels, which draw somewhat
+        smaller than the rest (user-visible sizing; the Cairo fallback's
+        13px base and 11.5px row labels match this scale)."""
         ladder, ax, _canvas, _fig, _backend = self._built()
         self.assertEqual(ax.set_title.call_args.kwargs.get("fontsize"), 11.5)
         ladder.update(_two_pool_ladder())
-        self.assertEqual(ax.set_yticklabels.call_args.kwargs.get("fontsize"), 11)
+        self.assertEqual(ax.set_yticklabels.call_args.kwargs.get("fontsize"), 9.5)
         self.assertEqual(ax.legend.call_args.kwargs.get("fontsize"), 10.5)
         self.assertEqual(ax.tick_params.call_args.kwargs.get("labelsize"), 10.5)
 
@@ -751,7 +752,7 @@ class TestMatplotlibBlocksizeLadder(unittest.TestCase):
         self.assertEqual(ax.set_title.call_args.kwargs.get("fontsize"), 14.375)
         pools = _two_pool_ladder()
         ladder.update(pools)
-        self.assertEqual(ax.set_yticklabels.call_args.kwargs.get("fontsize"), 13.75)
+        self.assertEqual(ax.set_yticklabels.call_args.kwargs.get("fontsize"), 11.875)
         self.assertEqual(ax.legend.call_args.kwargs.get("fontsize"), 13.125)
         self.assertEqual(ax.tick_params.call_args.kwargs.get("labelsize"), 13.125)
         canvas.set_size_request.assert_called_with(

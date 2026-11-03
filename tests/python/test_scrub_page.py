@@ -83,6 +83,48 @@ class TestScrubPageWidgets(unittest.TestCase):
 
         mock_mono.assert_called()
 
+    def test_refresh_scan_line_cell_drops_scan_prefix(self):
+        """The Scan Line cell drops zpool's `scan:` field label (the column
+        header already carries it); empty scan lines still render as —."""
+        with mock_gtk():
+            import pools_page as pp
+
+            app = MagicMock()
+            app.scrub_store = MagicMock()
+            app.scrub_store.get_iter_first.return_value = None
+            app.scrub_store.append = MagicMock(return_value=MagicMock())
+            app.scrub_queue = MagicMock()
+            app.scrub_queue.state_for_pool.return_value = sm.ScrubState.NONE
+            app.scrub_queue.ordered_names.return_value = ["tank", "other"]
+            app.scrub_queue.summary.return_value = {
+                "active": 0,
+                "pending": 0,
+                "paused": 0,
+                "finished": 0,
+                "target": 1,
+            }
+            app.scrub_summary_label = MagicMock()
+
+            finished = sm.ScrubInfo(
+                state=sm.ScrubState.FINISHED,
+                scan_line=(
+                    "scan: scrub repaired 0B in 00:00:02 with 0 errors on Sun May 10 00:24:03 2026"
+                ),
+            )
+            quiet = sm.ScrubInfo(state=sm.ScrubState.NONE)
+            with patch(
+                "pools_page.get_all_pool_scrub_states",
+                return_value={"tank": finished, "other": quiet},
+            ):
+                pp.refresh_scrub_table(app)
+
+        appended = {c.args[0][0]: c.args[0][4] for c in app.scrub_store.append.call_args_list}
+        self.assertEqual(
+            appended["tank"],
+            "scrub repaired 0B in 00:00:02 with 0 errors on Sun May 10 00:24:03 2026",
+        )
+        self.assertEqual(appended["other"], "—")
+
     def test_refresh_shows_canceled_scrub_date(self):
         with mock_gtk():
             import pools_page as pp

@@ -73,8 +73,10 @@ NICE_LADDER = (1, 2, 5)
 # the matplotlib renderer and the Cairo fallback draw the same picture.
 
 # Pixel height of one ladder row (header and rung rows share the grid; the
-# header is emphasised by weight and separators, not extra height).
-LADDER_ROW_HEIGHT = 22
+# header is emphasised by weight and separators, not extra height). Rows are
+# deliberately double-height: the ladder's content scales with this constant
+# in both renderers, which keeps the graph comfortably readable.
+LADDER_ROW_HEIGHT = 44
 # Margins: title + legend above the rows, X tick labels below them.
 LADDER_MARGIN_TOP = 40
 LADDER_MARGIN_BOTTOM = 26
@@ -864,7 +866,7 @@ class MatplotlibBlocksizeLadder:
             zorder=2,
         )
         ax.set_yticks(positions)
-        ax.set_yticklabels(labels, fontsize=11 * self._font_scale)
+        ax.set_yticklabels(labels, fontsize=9.5 * self._font_scale)
         for tick_label, label in zip(ax.get_yticklabels(), labels):
             if label in header_labels:
                 tick_label.set_fontweight("bold")

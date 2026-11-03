@@ -444,6 +444,16 @@ class TestGetHostVersion(unittest.TestCase):
         ver = dp._get_host_version("remote1")
         self.assertEqual(ver, "unknown")
 
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    def test_remote_version_from_probe_sections(self, _mock_host):
+        ver = dp._get_host_version("remote1", sections={"version": "v9.9.9"})
+        self.assertEqual(ver, "v9.9.9")
+
+    @patch("dashboard_page._local_hostname", return_value="myhost")
+    def test_remote_missing_probe_section_is_unknown(self, _mock_host):
+        ver = dp._get_host_version("remote1", sections={})
+        self.assertEqual(ver, "unknown")
+
 
 class TestComputeIscsiMissingLuns(unittest.TestCase):
     """_compute_iscsi_missing_luns() detects both shortfall shapes."""
@@ -803,8 +813,52 @@ class TestComputeFenceFailureWarning(unittest.TestCase):
             dp._compute_fence_failure_warning()
         cmd = run.call_args[0][0]
         self.assertEqual(cmd[0], "ssh")
-        self.assertEqual(cmd[1], "root@tweety")
+        self.assertIn("root@tweety", cmd)
         self.assertIn("is-failed", " ".join(cmd))
+
+    def test_fence_state_from_probe_map_avoids_ssh(self):
+        with ExitStack() as stack:
+            for p in self._peer_stack():
+                stack.enter_context(p)
+            run = stack.enter_context(patch.object(dp.subprocess, "run"))
+            warning = dp._compute_fence_failure_warning(
+                {"tweety": {dp._PROBE_SECTION_FENCE: "failed"}}
+            )
+        run.assert_not_called()
+        self.assertIsNotNone(warning)
+        self.assertIn("tweety", warning)
+
+    def test_probe_map_inactive_does_not_warn(self):
+        with ExitStack() as stack:
+            for p in self._peer_stack():
+                stack.enter_context(p)
+            run = stack.enter_context(patch.object(dp.subprocess, "run"))
+            self.assertIsNone(
+                dp._compute_fence_failure_warning({"tweety": {dp._PROBE_SECTION_FENCE: "inactive"}})
+            )
+        run.assert_not_called()
+
+    def test_probe_map_without_fence_section_falls_back_to_ssh(self):
+        with ExitStack() as stack:
+            for p in self._peer_stack():
+                stack.enter_context(p)
+            run = stack.enter_context(patch.object(dp.subprocess, "run"))
+            run.return_value = MagicMock(stdout="inactive", returncode=1)
+            with tempfile.TemporaryDirectory() as xdg:
+                with patch.dict(os.environ, {"XDG_RUNTIME_DIR": xdg}):
+                    dp._compute_fence_failure_warning({"tweety": {}})
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[0], "ssh")
+
+    def test_local_peer_ignores_probe_map(self):
+        with ExitStack() as stack:
+            for p in self._peer_stack(peer="stewie", local="stewie"):
+                stack.enter_context(p)
+            run = stack.enter_context(patch.object(dp.subprocess, "run"))
+            run.return_value = MagicMock(stdout="inactive", returncode=1)
+            dp._compute_fence_failure_warning({"stewie": {dp._PROBE_SECTION_FENCE: "failed"}})
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[0], "systemctl")
 
     def test_local_peer_queried_directly(self):
         with ExitStack() as stack:
@@ -3453,6 +3507,35 @@ class TestGatherDashboardData(unittest.TestCase):
             f"Expected the fence warning in {data['warnings']}",
         )
 
+    def test_gather_shares_batched_probe_with_config_section(self):
+        """The gather probes each remote host once (fence section only when
+        the fence TTL is expired) and feeds that one round-trip result to
+        both the Configuration gather and the fence check — the wiring that
+        keeps the Dashboard poll off the per-command ssh path."""
+        app = MagicMock()
+        app.config = {}
+        node_cfg = {"mode": "two-node", "this_host": "stewie"}
+        probe_map = {"tweety": {"version": "v9.9.9"}}
+        with (
+            patch.object(dp, "_get_pool_health", return_value=[]),
+            patch.object(dp, "_get_recent_entries", return_value=[]),
+            patch.object(dp, "_get_iscsi_missing_luns", return_value=([], False)),
+            patch.object(dp, "_count_stale_locks", return_value=0),
+            patch.object(dp, "_collect_running_tasks", return_value=[]),
+            patch.object(dp, "list_active_locks", return_value=[]),
+            patch.object(dp, "get_dashboard_config", return_value={"low_space_threshold": 80}),
+            patch.object(dp, "_get_node_config", return_value=node_cfg),
+            patch.object(dp, "_fence_cache_expired", return_value=True) as mock_expired,
+            patch.object(dp, "_gather_remote_probes", return_value=probe_map) as mock_probes,
+            patch.object(dp, "_get_fence_failure_warning", return_value=None) as mock_fence,
+            patch.object(dp, "_gather_config_section_data", return_value={}) as mock_config,
+        ):
+            dp._gather_dashboard_data(app)
+        mock_probes.assert_called_once_with(node_cfg, include_fence=True)
+        mock_expired.assert_called_once_with()
+        mock_fence.assert_called_once_with(probe_map)
+        mock_config.assert_called_once_with(app, node_cfg, probe_map)
+
 
 class TestCreateDashboardPage(unittest.TestCase):
     """Dashboard page layout and widget creation."""
@@ -3979,20 +4062,26 @@ class TestGetHostZfsVersion(unittest.TestCase):
 
     @patch("dashboard_page._local_hostname", return_value="myhost")
     def test_remote_returns_zfs_version_output(self, _mock_host):
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "zfs-2.1.5\nzfs-kmod-2.1.5\n"
-            ver = dp._get_host_zfs_version("remote1")
+        with tempfile.TemporaryDirectory() as xdg:
+            with patch.dict(os.environ, {"XDG_RUNTIME_DIR": xdg}):
+                with patch("subprocess.run") as mock_run:
+                    mock_run.return_value.returncode = 0
+                    mock_run.return_value.stdout = _probe_output(
+                        "zfs-version", "zfs-2.1.5\nzfs-kmod-2.1.5\n"
+                    )
+                    ver = dp._get_host_zfs_version("remote1")
         self.assertEqual(ver, "zfs-2.1.5\nzfs-kmod-2.1.5")
         mock_run.assert_called_once()
         args = mock_run.call_args[0][0]
         self.assertIn("root@remote1", args)
-        self.assertIn("zfs version", args)
+        self.assertIn("zfs version", " ".join(args))
 
     @patch("dashboard_page._local_hostname", return_value="myhost")
     def test_remote_ssh_failure_returns_unknown(self, _mock_host):
-        with patch("subprocess.run", side_effect=OSError("no route")):
-            ver = dp._get_host_zfs_version("remote1")
+        with tempfile.TemporaryDirectory() as xdg:
+            with patch.dict(os.environ, {"XDG_RUNTIME_DIR": xdg}):
+                with patch("subprocess.run", side_effect=OSError("no route")):
+                    ver = dp._get_host_zfs_version("remote1")
         self.assertEqual(ver, "unknown")
 
 
@@ -4338,12 +4427,17 @@ class TestGetHostOsInfo(unittest.TestCase):
     @patch("dashboard_page._local_hostname", return_value="myhost")
     @patch("subprocess.run")
     def test_remote_proxmox_detected_via_ssh(self, mock_run, _mock_local):
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = "pve-manager/8.1.0/abcdef1234567890\n"
-        name, version = dp._get_host_os_info("remote1")
+        with tempfile.TemporaryDirectory() as xdg:
+            with patch.dict(os.environ, {"XDG_RUNTIME_DIR": xdg}):
+                mock_run.return_value.returncode = 0
+                mock_run.return_value.stdout = _probe_output(
+                    "pveversion", "pve-manager/8.1.0/abcdef1234567890\n"
+                )
+                name, version = dp._get_host_os_info("remote1")
         mock_run.assert_called_once()
         args = mock_run.call_args[0][0]
-        self.assertEqual(args[:3], ["ssh", "root@remote1", "pveversion"])
+        self.assertIn("root@remote1", args)
+        self.assertIn("pveversion", " ".join(args))
         self.assertEqual(name, "Proxmox VE")
         self.assertEqual(version, "8.1.0")
 
@@ -4378,6 +4472,153 @@ class TestGetHostOsInfo(unittest.TestCase):
         name, version = dp._get_host_os_info("myhost")
         self.assertEqual(name, "unknown")
         self.assertEqual(version, "unknown")
+
+
+def _probe_output(section, text):
+    """Build one probe section's delimited output as the remote script emits it."""
+    begin = dp._PROBE_DELIM_BEGIN % section
+    end = dp._PROBE_DELIM_END % section
+    return f"{begin}\n{text}\n{end}\n"
+
+
+class TestProbeRemoteHost(unittest.TestCase):
+    """_probe_remote_host() gathers every section in one ssh round-trip."""
+
+    def test_script_contains_all_sections(self):
+        script = dp._remote_probe_script(include_fence=False)
+        for section in (
+            dp._PROBE_SECTION_VERSION,
+            dp._PROBE_SECTION_ZFS_VERSION,
+            dp._PROBE_SECTION_PVEVERSION,
+            dp._PROBE_SECTION_OS_RELEASE,
+            dp._PROBE_SECTION_INXI,
+        ):
+            self.assertIn(dp._PROBE_DELIM_BEGIN % section, script)
+            self.assertIn(dp._PROBE_DELIM_END % section, script)
+        self.assertNotIn(dp._PROBE_DELIM_BEGIN % dp._PROBE_SECTION_FENCE, script)
+        self.assertIn("zfs version", script)
+        self.assertIn("pveversion", script)
+
+    def test_script_includes_fence_when_requested(self):
+        script = dp._remote_probe_script(include_fence=True)
+        self.assertIn("systemctl is-failed", script)
+        self.assertIn(dp._PROBE_DELIM_BEGIN % dp._PROBE_SECTION_FENCE, script)
+
+    @patch("dashboard_page.ssh_command", return_value=["ssh", "root@remote1", "script"])
+    def test_round_trip_parses_sections(self, _mock_cmd):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = (
+                _probe_output("version", "v0.137.0")
+                + _probe_output("zfs-version", "zfs-2.3.9\nzfs-kmod-2.4.4")
+                + _probe_output("pveversion", "pve-manager/9.0.0/abcdef\n")
+            )
+            sections = dp._probe_remote_host("remote1")
+        self.assertEqual(sections["version"], "v0.137.0")
+        self.assertEqual(sections["zfs-version"], "zfs-2.3.9\nzfs-kmod-2.4.4")
+        self.assertEqual(sections["pveversion"], "pve-manager/9.0.0/abcdef")
+
+    @patch("dashboard_page.ssh_command", return_value=["ssh", "root@remote1", "script"])
+    def test_unreachable_host_returns_empty(self, _mock_cmd):
+        with patch("subprocess.run", side_effect=OSError("no route")):
+            self.assertEqual(dp._probe_remote_host("remote1"), {})
+
+    @patch("dashboard_page.ssh_command", return_value=["ssh", "root@remote1", "script"])
+    def test_nonzero_rc_returns_empty(self, _mock_cmd):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 255
+            mock_run.return_value.stdout = ""
+            self.assertEqual(dp._probe_remote_host("remote1"), {})
+
+    def test_parse_ignores_undelimited_output(self):
+        self.assertEqual(dp._parse_probe_sections("zfs-2.2.2\nplain text\n"), {})
+
+    def test_os_info_precedence_from_sections(self):
+        sections = {
+            dp._PROBE_SECTION_PVEVERSION: "pve-manager/9.0.0/abcdef\n",
+            dp._PROBE_SECTION_OS_RELEASE: 'NAME="Debian GNU/Linux"\nVERSION="13"\n',
+            dp._PROBE_SECTION_INXI: "  Desktop: Cinnamon Distro: Linux Mint 22 Wilma\n",
+        }
+        self.assertEqual(dp._os_info_from_sections(sections), ("Proxmox VE", "9.0.0"))
+
+    def test_os_info_falls_back_to_os_release_then_inxi(self):
+        self.assertEqual(
+            dp._os_info_from_sections(
+                {dp._PROBE_SECTION_OS_RELEASE: 'NAME="Ubuntu"\nVERSION="24.04"\n'}
+            ),
+            ("Ubuntu", "24.04"),
+        )
+        self.assertEqual(
+            dp._os_info_from_sections({dp._PROBE_SECTION_INXI: "Distro: Linux Mint 22 Wilma"}),
+            ("Linux Mint", "22 Wilma"),
+        )
+        self.assertEqual(dp._os_info_from_sections({}), ("unknown", "unknown"))
+
+
+class TestGatherRemoteProbes(unittest.TestCase):
+    """_gather_remote_probes() probes each remote host exactly once."""
+
+    def test_single_node_probes_nothing(self):
+        with patch.object(dp, "_probe_remote_host") as mock_probe:
+            result = dp._gather_remote_probes({"mode": "single-node"}, False)
+        self.assertEqual(result, {})
+        mock_probe.assert_not_called()
+
+    def test_two_node_probes_only_remote_hosts(self):
+        cfg = {
+            "mode": "two-node",
+            "this_host": "stewie",
+            "storage_host": "stewie",
+            "compute_host": "tweety",
+        }
+        with patch.object(dp, "_local_hostname", return_value="stewie"):
+            with patch.object(
+                dp, "_probe_remote_host", return_value={"version": "v1"}
+            ) as mock_probe:
+                probes = dp._gather_remote_probes(cfg, include_fence=True)
+        self.assertEqual(probes, {"tweety": {"version": "v1"}})
+        mock_probe.assert_called_once_with("tweety", include_fence=True)
+
+
+class TestGatherConfigSectionUsesProbes(unittest.TestCase):
+    """The config gather consumes the shared probes instead of extra SSH."""
+
+    def test_remote_facts_come_from_probe_map(self):
+        cfg = {
+            "mode": "two-node",
+            "this_host": "stewie",
+            "storage_host": "stewie",
+            "compute_host": "tweety",
+            "storage_ip": "",
+        }
+        app = MagicMock()
+        app.config = {}
+        sections = {
+            dp._PROBE_SECTION_VERSION: "v0.137.0",
+            dp._PROBE_SECTION_ZFS_VERSION: "zfs-2.3.9\nzfs-kmod-2.4.4",
+            dp._PROBE_SECTION_PVEVERSION: "pve-manager/9.0.0/abcdef\n",
+        }
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(dp, "_local_hostname", return_value="stewie"))
+            stack.enter_context(
+                patch.object(
+                    dp,
+                    "resolve_remote_version",
+                    side_effect=AssertionError("no per-command ssh expected"),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    dp,
+                    "_probe_remote_host",
+                    side_effect=AssertionError("probe map should have been passed"),
+                )
+            )
+            stack.enter_context(patch.object(dp.subprocess, "run"))
+            data = dp._gather_config_section_data(app, cfg, {"tweety": sections})
+        self.assertEqual(data["os_info_map"]["tweety"], ("Proxmox VE", "9.0.0"))
+        self.assertIn("compute=v0.137.0", data["versions"])
+        self.assertIn("zfs-2.3.9", data["zfs_versions"])
 
 
 class TestFixIscsiButton(unittest.TestCase):

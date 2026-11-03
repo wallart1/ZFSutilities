@@ -158,8 +158,13 @@ class BlocksizeLadder:
         height = widget.get_allocated_height()
         cr.set_source_rgb(*palette.background)
         cr.paint()
+        font_scale = chart_font_scale(widget)
+        # Ticks, legend, and the placeholder sit at the ladder's base size;
+        # the row (Y-axis) labels draw somewhat smaller.
+        base_size = 13 * font_scale
+        label_size = 11.5 * font_scale
         cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-        cr.set_font_size(13 * chart_font_scale(widget))
+        cr.set_font_size(base_size)
 
         if not self._pools:
             message = (
@@ -176,7 +181,9 @@ class BlocksizeLadder:
         for pool in self._pools:
             labels.append(pool.pool)
             labels.extend(bar.label for bar in pool.bars)
-        # Left gutter wide enough for the longest label, then the grid.
+        # Left gutter wide enough for the longest row label (measured at the
+        # label size, the font the rows actually draw in), then the grid.
+        cr.set_font_size(label_size)
         gutter = max(cr.text_extents(label).x_advance for label in labels) + 20
         left = max(64.0, gutter)
         right = width - 14.0
@@ -190,6 +197,7 @@ class BlocksizeLadder:
             return left + math.log2(size / x_min) / span * plot_w
 
         # Log2 grid with tick labels along the bottom.
+        cr.set_font_size(base_size)
         for tick in ticks:
             x = _x(tick)
             cr.set_source_rgb(*palette.grid)
@@ -202,12 +210,18 @@ class BlocksizeLadder:
             cr.move_to(x - extent.x_advance / 2, height - 6)
             cr.show_text(label)
 
+        # Row content centres vertically in the double-height rows; the bar
+        # keeps the matplotlib ladder's 0.62 share of the row.
+        baseline = LADDER_ROW_HEIGHT // 2 + 4
+        bar_height = LADDER_ROW_HEIGHT * 0.62
+        bar_inset = (LADDER_ROW_HEIGHT - bar_height) / 2
         y = top
         for pool in self._pools:
             # Header row: bold pool name with a separator under it.
             cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+            cr.set_font_size(label_size)
             cr.set_source_rgb(*palette.foreground)
-            cr.move_to(8, y + 14)
+            cr.move_to(8, y + baseline)
             cr.show_text(pool.pool)
             cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
             cr.set_source_rgb(*palette.grid)
@@ -219,10 +233,10 @@ class BlocksizeLadder:
             for bar in pool.bars:
                 color = palette.states.get(bar.state, palette.states["info"])
                 cr.set_source_rgb(*color)
-                cr.rectangle(left, y + 4, _x(bar.size) - left, LADDER_ROW_HEIGHT - 9)
+                cr.rectangle(left, y + bar_inset, _x(bar.size) - left, bar_height)
                 cr.fill()
                 cr.set_source_rgb(*palette.foreground)
-                cr.move_to(8, y + 14)
+                cr.move_to(8, y + baseline)
                 cr.show_text(bar.label)
                 y += LADDER_ROW_HEIGHT
             if pool.block is not None:
@@ -235,6 +249,7 @@ class BlocksizeLadder:
                 cr.set_dash([])
 
         # Legend, top-right: the shared state colour key.
+        cr.set_font_size(base_size)
         x = right
         for state, text in reversed(LADDER_LEGEND):
             extent = cr.text_extents(text)
@@ -579,6 +594,10 @@ def create_alignment_view(app):
         ],
     )
     box.pack_start(chain_scroll, False, False, 0)
+    # The Survey… dialog preloads the dataset named by the selected scan
+    # row, so the view (the selection's only holder) lives on the app like
+    # the scrub/datasets/logs views.
+    app._alignment_chain_view = _chain_view
 
     # --- Blocksize ladder ---
     # The visual companion of the scan table above: the same device → pool

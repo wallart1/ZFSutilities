@@ -522,9 +522,85 @@ See [ZFS Key Handling](zfs-keys.md) for the manual encrypted-zvol workflow.
 
 ### Two-node only (compute host)
 
-| Location                      | Contents                  |
-| ----------------------------- | ------------------------- |
-| `/etc/zfsutilities/node.conf` | Node configuration (copy) |
+| Location                                             | Contents                                    |
+| ---------------------------------------------------- | ------------------------------------------- |
+| `/etc/zfsutilities/node.conf`                        | Node configuration (copy)                   |
+| `/etc/systemd/system/pve-guest-config-mirror.*`      | Optional guest-config mirror units (below)  |
+| `/var/local/pve-guest-configs`                       | Optional mirror of `qemu-server/*.conf`     |
+
+#### Guest-config mirror for non-root diagnostics (optional)
+
+The PVE VM configs under `/etc/pve/nodes/<node>/qemu-server/` are the
+ground truth for guest-disk questions (agent settings, disk buses,
+serials), but a non-root account on the compute node cannot read them —
+and unlike a normal filesystem, this cannot be fixed with `chmod`.
+`/etc/pve` is **pmxcfs**, a FUSE filesystem whose permissions are fixed
+and path-based by design: `chmod`/`chown` are rejected with
+`Operation not permitted` **even for root**. The other apparent route —
+adding the diagnostic account to the `www-data` group, which holds
+group-read on the configs — must be avoided: PVE keeps its web UI
+private key (`pve-www.key`), credential hashes (`user.cfg`), node TLS
+keys, and storage credentials in that same group.
+
+The workaround is a root-side mirror: a small systemd trio that copies
+the live configs to a directory the diagnostic account can read,
+re-run on every config change plus an hourly safety refresh (inotify
+through FUSE is not something to bet on). Each run wipes and rebuilds
+the mirror, so removed VMs disappear and new ones appear automatically.
+First deployed on a PVE 9.2 two-node install; not part of the installer
+— apply it per site when a non-root account needs config read access.
+Substitute `<node>` and `<reader>` (the diagnostic account) below:
+
+```bash
+sudo bash <<'SETUP'
+cat >/etc/systemd/system/pve-guest-config-mirror.service <<'EOF'
+[Unit]
+Description=Mirror PVE guest configs to a <reader>-readable directory
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'umask 027; mkdir -p /var/local/pve-guest-configs; chown root:<reader> /var/local/pve-guest-configs; chmod 750 /var/local/pve-guest-configs; rm -f /var/local/pve-guest-configs/*.conf; for f in /etc/pve/nodes/<node>/qemu-server/*.conf; do install -m 0640 -o root -g <reader> "$$f" /var/local/pve-guest-configs/; done'
+EOF
+
+cat >/etc/systemd/system/pve-guest-config-mirror.path <<'EOF'
+[Unit]
+Description=Watch PVE guest configs for changes
+
+[Path]
+PathModified=/etc/pve/nodes/<node>/qemu-server
+PathChanged=/etc/pve/nodes/<node>/qemu-server
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat >/etc/systemd/system/pve-guest-config-mirror.timer <<'EOF'
+[Unit]
+Description=Hourly safety refresh of the PVE guest config mirror
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now pve-guest-config-mirror.path pve-guest-config-mirror.timer
+systemctl start pve-guest-config-mirror.service
+SETUP
+```
+
+Read the mirror as the diagnostic account at
+`/var/local/pve-guest-configs/<vmid>.conf`. The mirror is a copy, not a
+live view — bounded by the trigger (seconds on a config change, an hour
+at worst). Rollback:
+
+```bash
+sudo systemctl disable --now pve-guest-config-mirror.path pve-guest-config-mirror.timer
+sudo rm -rf /var/local/pve-guest-configs /etc/systemd/system/pve-guest-config-mirror.*
+```
 
 ## Editing Documentation
 

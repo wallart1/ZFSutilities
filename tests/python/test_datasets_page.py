@@ -1215,6 +1215,90 @@ class TestCanmountButtonSensitivity(unittest.TestCase):
         app.ctx.zfs_repository.get_property.assert_not_called()
 
 
+class TestLockFenceButtonSensitivity(unittest.TestCase):
+    """Mount stays disabled for unmounted filesystems fenced by a dataset lock."""
+
+    # The static PAGE_SPECS tooltip set_action_tooltip restores on clear.
+    _MOUNT_TOOLTIP = "Mount the selected dataset."
+
+    _FENCE_TOOLTIP = (
+        "Held by a running operation (backup, offsite transfer, or "
+        "send/receive); Mount is blocked until it finishes"
+    )
+
+    def _fs_item(self, **kw):
+        item = {
+            "type": "dataset",
+            "name": "tank/busy",
+            "zfs_type": "filesystem",
+            "mounted": False,
+        }
+        item.update(kw)
+        return item
+
+    def _make_app(self, items, fenced, canmount=None):
+        app = MagicMock()
+        app.datasets_view = MagicMock()
+        app._ds_mount_btn._action_tooltip = self._MOUNT_TOOLTIP
+        app.ctx.zfs_repository.loop_find.return_value = None
+        values = canmount or {}
+        app.ctx.zfs_repository.get_property.side_effect = lambda name, prop: values.get(name, "on")
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "zlm") as mock_zlm,
+        ):
+            mock_zlm.check_local.side_effect = lambda name, lock_type: name not in fenced
+            dp.update_ds_button_sensitivity(app)
+            app._zlm_mock = mock_zlm
+        return app
+
+    def test_fenced_dataset_disables_mount_with_tooltip(self):
+        app = self._make_app([self._fs_item()], fenced={"tank/busy"})
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with(self._FENCE_TOOLTIP)
+
+    def test_unfenced_dataset_enables_mount(self):
+        app = self._make_app([self._fs_item()], fenced=set())
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with(self._MOUNT_TOOLTIP)
+        app._zlm_mock.check_local.assert_called_once_with("tank/busy", "w")
+
+    def test_mounted_row_not_probed_for_locks(self):
+        """Mounted rows cannot be fenced into the Mount action anyway."""
+        app = self._make_app([self._fs_item(mounted=True)], fenced={"tank/busy"})
+        app.ctx.zfs_repository.get_property.assert_not_called()
+        app._zlm_mock.check_local.assert_not_called()
+
+    def test_mixed_fenced_and_free_keeps_mount_enabled(self):
+        """any() semantics: Mount stays enabled for the unfenced dataset."""
+        app = self._make_app(
+            [
+                self._fs_item(),
+                {
+                    "type": "dataset",
+                    "name": "tank/free",
+                    "zfs_type": "filesystem",
+                    "mounted": False,
+                },
+            ],
+            fenced={"tank/busy"},
+        )
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(True)
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with(self._MOUNT_TOOLTIP)
+
+    def test_canmount_off_tooltip_takes_precedence_over_fence(self):
+        """The permanent reason explains the disabled button, not the fence."""
+        app = self._make_app(
+            [self._fs_item()],
+            fenced={"tank/busy"},
+            canmount={"tank/busy": "off"},
+        )
+        app._ds_mount_btn.set_sensitive.assert_called_once_with(False)
+        app._ds_mount_btn.set_tooltip_text.assert_called_once_with(
+            "Datasets with canmount=off cannot be mounted"
+        )
+
+
 class TestUpdateMountedStatesVolumePartitions(unittest.TestCase):
     """update_mounted_states detects mounted loop partitions under volumes."""
 
