@@ -629,6 +629,7 @@ class TestPoolsPageLayout(unittest.TestCase):
         paned_mock.get_property.return_value = False
         self.assertFalse(divider_cb())
         paned_mock.set_position.assert_called_once_with(124)
+
     def test_scrub_view_attaches_cell_tooltips(self):
         """Ellipsized scrub cells show their full text on hover."""
         pp = _import_pools_page()

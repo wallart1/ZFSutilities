@@ -1945,7 +1945,7 @@ the map's history.
 
 | Argument | Description |
 | -------- | ----------- |
-| `--check` | Compare live state against the newest map found on any pool and report drift (manual `targetcli` edits since the last export); never writes. The boot drop-in for `rtslib-fb-targetctl.service` runs this after every boot restore (see [systemd Drop-ins](../developer-guide/two-node-config.md#systemd-drop-ins)) so degradation lands in the boot journal instead of staying silent |
+| `--check` | Compare live state against the newest map found on any pool and report drift (manual `targetcli` edits since the last export); never writes. Exits 0 on match, 3 when every drift line is keys-pending (each missing-live LUN traces to a locked encrypted dataset — the expected keys-absent-boot shape), 1 on any other drift. The boot drop-in for `rtslib-fb-targetctl.service` runs this after every boot restore (see [systemd Drop-ins](../developer-guide/two-node-config.md#systemd-drop-ins)) and journals the verdict as OK / PENDING / FAILED accordingly, so degradation lands in the boot journal instead of staying silent |
 | `--force` | Record the live state even when it would fail the degraded-state fence — fewer active backstores than the manifest expects, or LUN mappings dropped that the newest pool map still records while their backstores remain in the manifest |
 | `--print-map` | Print the newest pool-resident map to stdout, read-only — the fetch path [`repair-vm-disk-refs`](#repair-vm-disk-refs-compute-node) uses over ssh from the compute host; collects no live state and writes nothing |
 
@@ -1983,7 +1983,12 @@ the map's history.
    live state, print `DRIFT:` lines for moved LUNs, missing/extra backstores,
    ACL and node-identity changes, and pool GUID changes (a name whose GUID
    differs from the recorded one was renamed or replaced); exit 1 on drift,
-   0 on match. Never writes.
+   0 on match. Encrypted-aware verdict: when every drift line is a
+   map-recorded object missing live that traces to a backstore whose
+   dataset reports `keystatus unavailable`, the check names the locked
+   LUNs and exits 3 instead — the expected keys-absent-boot shape, not
+   unexpected drift. Keys already loaded, an unencrypted dataset, or an
+   unreadable dataset keeps exit 1 (fail closed). Never writes.
 6. Refuse to overwrite the newest pool map with a state that would drop
    still-expected LUN mappings: every `(iqn, lun) → backstore` entry in the
    recorded map must survive in the new one unless its backstore left the

@@ -408,7 +408,9 @@ def create_disks_page(app):
         "A max I/O rate caps every paced transfer that touches the "
         "enclosure's disks (backups, archives, clones, restores); when an "
         "activity limit also applies, the lower one wins. Blank means "
-        "unlimited."
+        "unlimited. ZFSutilities does not have a way to control the "
+        "absolute I/O rate to any device. This section controls only the "
+        "rate at which ZFSutilities scripts issue I/Os at the program level."
     )
     enc_desc.set_halign(Gtk.Align.START)
     enc_desc.set_line_wrap(True)
@@ -780,16 +782,38 @@ def _selected_enclosure_id(app) -> str:
     return enclosure_id if isinstance(enclosure_id, str) else ""
 
 
+# Rate-field syntax shown in the Set Max I/O Rate dialog (and its tooltip).
+# Mirrors lib/pace_stream.py: bare digits are bytes per second; suffixes are
+# 1024-based, so 100m = 100 MiB/s (not 100 million bytes/s).
+_ENCLOSURE_RATE_SYNTAX = (
+    "Rate syntax: digits mean bytes per second (100 = 100 bytes/s); an "
+    "optional suffix k, m, g, t, p or e (case-insensitive; i and b also "
+    "accepted) multiplies by 1024-based units — 100m = 100 MiB/s, "
+    "64KiB = 64 KiB/s. A rate of zero is refused; leave blank for unlimited."
+)
+
+
 def _enclosure_rate_problem(text: str) -> str | None:
     """Refusal line when *text* is not a valid pacer rate; None when valid.
 
     Accepts exactly the grammar lib/pace_stream.py enforces (digits plus an
     optional k/m/g/t/p/e multiplier with optional i and b, case-insensitive,
     1024-based) so the dialog never refuses a value the transfer-side
-    resolver would happily pace. An empty string is valid (unlimited).
+    resolver would happily pace. An empty string is valid (unlimited); a
+    zero-valued rate (0, 00k, 0MiB) is refused — the pacer divides by the
+    rate, so zero cannot be paced.
     """
     if not text:
         return None
+    # Zero check first: valid_rate_limit refuses zero too, but zero deserves
+    # its own line. Swapping the digits for 1 tests whether the value would
+    # be grammar but for its zero — "0k" is a zero rate, "0x5" is garbage.
+    digits = text[: len(text) - len(text.lstrip("0123456789"))]
+    if digits and int(digits) == 0 and valid_rate_limit(f"1{text[len(digits) :]}"):
+        return (
+            f"max I/O rate '{text}' is zero — use a value greater than "
+            "zero, or leave it blank for unlimited"
+        )
     if not valid_rate_limit(text):
         return (
             f"invalid max I/O rate '{text}' — use digits with an optional "
@@ -849,9 +873,17 @@ def _show_enclosure_rate_dialog(app, enclosure: EnclosureInfo, entry: dict):
     rate_entry.set_text(entry.get("max_rate", ""))
     rate_entry.set_placeholder_text("e.g. 100m")
     rate_entry.set_tooltip_text(
-        "Cap on this enclosure's total disk I/O, e.g. 100m or 64KiB — blank means unlimited"
+        "Cap on this enclosure's total disk I/O: digits are bytes per second "
+        "(100 = 100 bytes/s); an optional k/m/g/t/p/e suffix (i and b also "
+        "accepted, 1024-based) scales it — 100m = 100 MiB/s, 64KiB = 64 KiB/s; "
+        "zero is refused; blank means unlimited"
     )
     content.pack_start(rate_entry, False, False, 0)
+
+    syntax_label = Gtk.Label(label=_ENCLOSURE_RATE_SYNTAX)
+    syntax_label.set_halign(Gtk.Align.START)
+    syntax_label.set_line_wrap(True)
+    content.pack_start(syntax_label, False, False, 0)
 
     problem_label = Gtk.Label(label="")
     problem_label.set_halign(Gtk.Align.START)

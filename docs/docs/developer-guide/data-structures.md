@@ -434,10 +434,13 @@ never disagree:
 
 Rate grammar and comparison: values use the pacer grammar
 (`lib/pace_stream.py` — digits plus an optional `k`/`m`/`g`/`t`/`p`/`e`
-multiplier with optional `i`/`b`, 1024-based). Comparison is numeric through
-`pace_stream.parse_rate` so the grammar cannot drift from the pacer;
-`zfs_repository.valid_rate_limit` stays the GUI-side validator of values
-before they reach the config.
+multiplier with optional `i`/`b`, 1024-based; bare digits are bytes per
+second, and a rate of zero is refused everywhere because the pacer divides
+by the rate). Comparison is numeric through `pace_stream.parse_rate` so the
+grammar cannot drift from the pacer; `zfs_repository.valid_rate_limit`
+stays the GUI-side validator of values before they reach the config. A
+zero cap saved by an older version is non-grammar now and fails open like
+any other non-grammar cap.
 
 Fail-open policy (campaign decision): a resolver failure never blocks a
 transfer. On a nonzero exit the bash caller runs at its own activity limit
@@ -468,7 +471,7 @@ current name).
 
 | Key              | Type    | Purpose                                                       |
 | ---------------- | ------- | ------------------------------------------------------------- |
-| `refresh_seconds`| integer | Performance-tab auto-refresh interval while visible (default `5`) |
+| `refresh_seconds`| integer | Performance-tab sampling interval (the timer runs for the GUI's whole lifetime; default `5`) |
 
 ### Config migrations
 

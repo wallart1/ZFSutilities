@@ -96,7 +96,7 @@ class TestParseRate(unittest.TestCase):
                 self.assertEqual(self.pacer.parse_rate(text), want)
 
     def test_invalid_values(self):
-        for text in ("", "M100", "100X", "1.5M", "-5M", "5Q", "100MBx"):
+        for text in ("", "M100", "100X", "1.5M", "-5M", "5Q", "100MBx", "0", "0k", "00"):
             with self.subTest(text=text):
                 with self.assertRaises(ValueError):
                     self.pacer.parse_rate(text)

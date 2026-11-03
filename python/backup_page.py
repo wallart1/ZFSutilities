@@ -168,6 +168,14 @@ def create_backup_page(app, ctx):
     box.set_margin_top(10)
     box.set_margin_bottom(10)
     scrolled.add(box)
+    # NATURAL vscroll policy: the step tables' capped windows have tiny
+    # minimums, and the default MINIMUM policy would clamp the page box
+    # to a short window's height and crush the tables (schedule-page
+    # idiom). With NATURAL the page keeps its natural height and this
+    # scroller carries the overflow.
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
 
     title = Gtk.Label()
     title.set_markup("<big><b>Backup</b></big>")
@@ -214,7 +222,9 @@ def create_backup_page(app, ctx):
         ],
     )
     app.backup_pull_store = pull_elv.get_store()
-    pull_box.pack_start(pull_elv.get_widget(), True, True, 0)
+    # Non-expanding: the step table is only as tall as its rows (up to
+    # the 20-row cap) instead of stretching or being crushed to fill.
+    pull_box.pack_start(pull_elv.get_widget(), False, False, 0)
     pull_elv.set_data(
         [
             (
@@ -273,7 +283,8 @@ def create_backup_page(app, ctx):
         ],
     )
     app.backup_sr_store = sr_elv.get_store()
-    sr_box.pack_start(sr_elv.get_widget(), True, True, 0)
+    # Non-expanding, like the pull steps table above.
+    sr_box.pack_start(sr_elv.get_widget(), False, False, 0)
     sr_elv.set_data(
         [(s["active"], s["source"], s["dest"]) for s in backup_cfg["send_receive_steps"]]
     )
@@ -330,6 +341,18 @@ def create_backup_page(app, ctx):
         )
 
     # --- ZFS Keys Backup ---
+    # Both rows set the tooltip on the label AND the entry (the
+    # add_var_row contract): a label without one falls through to the
+    # Advanced expander's generic tooltip.
+    _zfs_keys_source_tip = (
+        "rsync endpoint where the key files currently live "
+        "(e.g. /mnt/ZFSkeys/ or storage-host:/backups/zfs-keys/)"
+    )
+    _zfs_keys_dest_tip = (
+        "rsync endpoint where the copied keys are placed; must resolve "
+        "to an encrypted ZFS dataset (the step is skipped with a warning "
+        "otherwise)"
+    )
     zfs_keys_grid = Gtk.Grid()
     zfs_keys_grid.set_row_spacing(5)
     zfs_keys_grid.set_column_spacing(10)
@@ -338,30 +361,27 @@ def create_backup_page(app, ctx):
 
     zfs_keys_lbl = Gtk.Label(label="ZFS keys source:")
     zfs_keys_lbl.set_halign(Gtk.Align.START)
+    zfs_keys_lbl.set_tooltip_text(_zfs_keys_source_tip)
+    app.backup_zfs_keys_source_lbl = zfs_keys_lbl
     zfs_keys_grid.attach(zfs_keys_lbl, 0, 0, 1, 1)
 
     app.backup_zfs_keys_path = Gtk.Entry()
     app.backup_zfs_keys_path.set_hexpand(True)
     app.backup_zfs_keys_path.set_width_chars(1)
     app.backup_zfs_keys_path.set_placeholder_text("host:/path/to/keys/")
-    app.backup_zfs_keys_path.set_tooltip_text(
-        "rsync endpoint where the key files currently live "
-        "(e.g. /mnt/ZFSkeys/ or storage-host:/backups/zfs-keys/)"
-    )
+    app.backup_zfs_keys_path.set_tooltip_text(_zfs_keys_source_tip)
     zfs_keys_grid.attach(app.backup_zfs_keys_path, 1, 0, 1, 1)
 
     zfs_keys_dest_lbl = Gtk.Label(label="ZFS keys dest:")
     zfs_keys_dest_lbl.set_halign(Gtk.Align.START)
+    zfs_keys_dest_lbl.set_tooltip_text(_zfs_keys_dest_tip)
+    app.backup_zfs_keys_dest_lbl = zfs_keys_dest_lbl
     zfs_keys_grid.attach(zfs_keys_dest_lbl, 0, 1, 1, 1)
 
     app.backup_zfs_keys_dest = Gtk.Entry()
     app.backup_zfs_keys_dest.set_hexpand(True)
     app.backup_zfs_keys_dest.set_width_chars(1)
-    app.backup_zfs_keys_dest.set_tooltip_text(
-        "rsync endpoint where the copied keys are placed; must resolve "
-        "to an encrypted ZFS dataset (the step is skipped with a warning "
-        "otherwise)"
-    )
+    app.backup_zfs_keys_dest.set_tooltip_text(_zfs_keys_dest_tip)
     zfs_keys_grid.attach(app.backup_zfs_keys_dest, 1, 1, 1, 1)
 
     advanced_box.pack_start(zfs_keys_grid, False, False, 0)

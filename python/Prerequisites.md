@@ -19,6 +19,7 @@ These must be present on any system running ZFSutilities:
 | gir1.2-gtk-3.0 | `apt install gir1.2-gtk-3.0` | GTK3 introspection data | 2026-01-29 |
 | gir1.2-webkit2-4.1 | `apt install gir1.2-webkit2-4.1` | WebKit2 introspection data for embedded docs viewer | 2026-05-22 |
 | libwebkit2gtk-4.1-0 | `apt install libwebkit2gtk-4.1-0` | WebKit2 runtime library | 2026-05-22 |
+| python3-matplotlib | `sudo apt install python3-matplotlib` | High-quality charts in the Performance page — the live ARC/L2ARC/SLOG rolling charts and the blocksize ladder render through it. Required (2026-11-02; optional before that): `check-prerequisites` fails when the import does not succeed for the user the GUI runs as, and the installers offer to install the system package. When absent the page still falls back to the built-in Cairo charts and the Performance header says so. A pip `--user` install under a home directory is invisible to the root-run GUI (the classic silent-Cairo cause) — that is why the system package is the required form. On the dev/test VM this supersedes the older `pip3 install --user` note. See the GUI Charting developer note. | 2026-10-17 |
 
 The GUI requires any GTK3-capable desktop environment or window manager. Cinnamon is the tested and reference environment, but GNOME, XFCE, or a plain Openbox session also work.
 
@@ -29,7 +30,6 @@ The GUI requires any GTK3-capable desktop environment or window manager. Cinnamo
 | python3-pip | `apt install python3-pip` | Required before pip packages can be used | 2026-01-29 |
 | mkdocs | `pip3 install mkdocs mkdocs-material` | Documentation site generator | 2026-02-21 |
 | mkdocs-material | *(installed with mkdocs above)* | Material theme for MkDocs | 2026-02-21 |
-| matplotlib | preferred: `sudo apt install python3-matplotlib` (system-wide; on the dev/test VM this supersedes the older `pip3 install --user` note) | High-quality charts in the Performance page — the live ARC/L2ARC/SLOG rolling charts and the blocksize ladder render through it when present. Optional: when absent the page falls back to the built-in Cairo charts, and the Performance header says so. The module must be importable **by the user the GUI runs as**: a pip `--user` install under a home directory is invisible to the root-run GUI (the classic silent-Cairo cause) — that is why the system package is preferred, and `check-prerequisites` warns with this hint when the import fails. See the GUI Charting developer note. | 2026-10-17 |
 
 ## Development-Only Tools
 

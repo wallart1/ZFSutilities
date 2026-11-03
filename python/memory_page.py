@@ -4,16 +4,19 @@ Two views share this page behind a radio switcher. "Live Charts" is the
 original monitor: sizes, rates, and hit ratios from
 /proc/spl/kstat/zfs counters plus per-device data from interval-mode
 ``zpool iostat -v`` (rates over a 1-second window measured at each
-refresh), refreshed on a user-configurable interval while the tab is
-visible.  Rolling time-series charts render through the shared charting
-module: matplotlib (``FigureCanvasGTK3Agg``) when the optional package is
-installed, with the Cairo ``RollingChart`` below as the fallback renderer
-so the page also works without it (see python/Prerequisites.md and the
-GUI-charting developer note).  "Alignment" (built
+refresh).  Sampling runs on a user-configurable interval for as long as
+the GUI is open — the Live Charts history stays uninterrupted whatever
+page is visible (see ``refresh_memory_charts``), while the Alignment
+view refreshes only while it is the visible view.  Rolling time-series
+charts render through the shared charting module: matplotlib
+(``FigureCanvasGTK3Agg``) when the optional package is installed, with
+the Cairo ``RollingChart`` below as the fallback renderer so the page
+also works without it (see python/Prerequisites.md and the GUI-charting
+developer note).  "Alignment" (built
 in alignment_page) shows blocksize alignment across device, pool,
 dataset, and VM layers with tuning advice from observed workloads and
-the user survey.  The shared refresh timer refreshes whichever view is
-visible.
+the user survey.  The shared refresh timer samples the charts and
+refreshes the Alignment view when it is visible.
 
 Data-source availability follows the model in memory_stats and
 alignment_stats: each source degrades on its own with an explanatory
@@ -34,12 +37,14 @@ gi.require_version("Pango", "1.0")
 from alignment_page import create_alignment_view, refresh_alignment_view
 from charting import (  # chart vocabulary shared with the matplotlib renderer
     CHART_MAX_SAMPLES,
+    ROLLING_CHART_HEIGHT,
     chart_font_scale,
     chart_palette,
     create_rolling_chart,
     format_age,
     nice_ceiling,
     renderer_label,
+    rolling_tick_count,
 )
 from config_core import (
     get_memory_config,
@@ -74,6 +79,49 @@ from memory_stats import (
 from zfs_repository import parse_rate_limit
 
 
+def _x_tick_layout(cr, t_span, left, plot_w):
+    """Compute the Cairo fallback's X-axis ticks: ``(x, label, label_x)``.
+
+    Same grammar as the matplotlib renderer (``charting.rolling_tick_count``):
+    ticks at fixed fractions of the window, the newest labelled "now", so
+    only the label text slides as the window advances.  Labels are
+    measured through *cr* (its font is already set): the first sits
+    left-aligned at the plot edge, the last right-aligned so "now" never
+    spills past it, the rest centred on their tick — and interior ticks
+    whose labels would overlap a neighbour drop out until the survivors
+    fit, so a narrow canvas shows fewer but distinct labels.
+    """
+    count = rolling_tick_count(t_span)
+    ticks = []
+    for i in range(count):
+        fraction = i / (count - 1)
+        age = t_span * (1.0 - fraction)
+        label = "now" if age < 1.0 else f"-{format_age(age)}"
+        ticks.append((left + plot_w * fraction, label, cr.text_extents(label).x_advance))
+
+    def _place(items):
+        placed = []
+        for index, (x, label, width) in enumerate(items):
+            if index == 0:
+                label_x = left
+            elif index == len(items) - 1:
+                label_x = left + plot_w - width
+            else:
+                label_x = x - width / 2
+            placed.append((x, label, label_x, width))
+        return placed
+
+    placed = _place(ticks)
+    while len(placed) > 2 and any(
+        placed[i][2] + placed[i][3] + 4 > placed[i + 1][2] for i in range(len(placed) - 1)
+    ):
+        # Drop the interior tick nearest the centre and re-place; the
+        # end ticks always stay.
+        del ticks[len(ticks) // 2]
+        placed = _place(ticks)
+    return [(x, label, label_x) for x, label, label_x, _width in placed]
+
+
 class RollingChart:
     """Rolling time-series chart drawn with Cairo on a Gtk.DrawingArea.
 
@@ -92,7 +140,7 @@ class RollingChart:
         series_names,
         max_samples=CHART_MAX_SAMPLES,
         percent=False,
-        height=110,
+        height=ROLLING_CHART_HEIGHT,
         formatter=format_bytes,
     ):
         self.title = title
@@ -189,13 +237,18 @@ class RollingChart:
             cr.show_text(label)
             cr.set_source_rgb(*palette.grid)
 
-        # X-axis age labels at both ends (draws happen right after appends,
-        # so the newest point is effectively "now").
+        # X-axis tick marks with age labels (draws happen right after
+        # appends, so the newest tick is effectively "now").
+        ticks = _x_tick_layout(cr, t_span, left, plot_w)
+        cr.set_source_rgb(*palette.spine)
+        for tick_x, _label, _label_x in ticks:
+            cr.move_to(tick_x, top + plot_h)
+            cr.line_to(tick_x, top + plot_h + 3)
+        cr.stroke()
         cr.set_source_rgb(*palette.muted)
-        cr.move_to(left, height - 4)
-        cr.show_text(f"-{format_age(t_span)}")
-        cr.move_to(left + plot_w - 24, height - 4)
-        cr.show_text("now")
+        for _tick_x, label, label_x in ticks:
+            cr.move_to(label_x, height - 4)
+            cr.show_text(label)
 
         # Reference line (dashed).
         if self._reference is not None:
@@ -648,13 +701,19 @@ def _on_memory_refresh_changed(spin, app):
     if memory_cfg.get("refresh_seconds") != value:
         memory_cfg["refresh_seconds"] = value
         save_memory_config(app.config, memory_cfg)
-        if hasattr(app, "_start_stop_memory_timer"):
-            app._start_stop_memory_timer("memory")
+        if hasattr(app, "_ensure_memory_timer"):
+            app._ensure_memory_timer()
 
 
 # ---------------------------------------------------------------------------
 # Refresh
 # ---------------------------------------------------------------------------
+
+# A gap between consecutive samples longer than this multiple of the
+# configured refresh interval (never below the floor) counts as a
+# sampling stall; see _apply_memory_sample.
+_STALL_MULTIPLE = 3.0
+_STALL_MIN_SECONDS = 60.0
 
 
 def _show_memory_refreshing(app):
@@ -669,12 +728,45 @@ def _hide_memory_refreshing(app):
         app.memory_refreshing_label.hide()
 
 
+def alignment_view_active(app):
+    """True when the Performance page is showing its Alignment view."""
+    stack = getattr(app, "stack", None)
+    return (
+        stack is not None
+        and stack.get_visible_child_name() == "memory"
+        and _current_memory_view(app) == "alignment"
+    )
+
+
 def refresh_memory_page(app):
     """Refresh whichever Performance view is visible, off-thread."""
-    if _current_memory_view(app) == "alignment":
+    if alignment_view_active(app):
         refresh_alignment_view(app)
         return
+    refresh_memory_charts(app)
 
+
+def on_memory_timer_tick(app):
+    """One Performance timer tick: sample the charts, always.
+
+    The charts sample regardless of which page is visible (uninterrupted
+    history); the Alignment view refreshes only while it is the visible
+    view, keeping its visible-only cadence.
+    """
+    refresh_memory_charts(app)
+    if alignment_view_active(app):
+        refresh_alignment_view(app)
+
+
+def refresh_memory_charts(app):
+    """Sample the Live Charts view off-thread, whatever page is visible.
+
+    The Performance timer calls this on every tick so the rolling charts
+    keep an uninterrupted history for as long as the GUI is open — the
+    visible page decides only who else refreshes.  Refresh actions and
+    page switches go through :func:`refresh_memory_page`, which dispatches
+    by the active view.
+    """
     if getattr(app, "_memory_refresh_pending", False):
         return
     app._memory_refresh_pending = True
@@ -695,7 +787,18 @@ def refresh_memory_page(app):
 
 def _apply_memory_sample(app, sample):
     """Synchronously apply one sample to the page widgets."""
-    rates = compute_rates(app._memory_sample, sample)
+    prev = app._memory_sample
+    # Sampling is continuous while the GUI runs, but a suspended host or
+    # a stalled collection can still leave the previous sample far
+    # behind — an interval rate averaged over such a gap reads as data
+    # that was never sampled, so the first sample after a stall
+    # re-baselines (rates "—") exactly like the first sample of a
+    # session.
+    refresh_seconds = get_memory_config(app.config).get("refresh_seconds", 5)
+    stalled = prev is not None and sample.monotonic - prev.monotonic > max(
+        _STALL_MIN_SECONDS, _STALL_MULTIPLE * refresh_seconds
+    )
+    rates = compute_rates(None if stalled else prev, sample)
     app._memory_sample = sample
     arc = sample.arc
 
@@ -732,7 +835,9 @@ def _apply_memory_sample(app, sample):
         app._memory_arc_size_chart.set_reference(
             c_max, f"c_max {format_bytes(c_max)}" if c_max else ""
         )
-        app._memory_arc_size_chart.append(sample.monotonic, [size if size is not None else 0])
+        # A None value drops the point from the series in both renderers
+        # (a zero would draw a dip that was never measured).
+        app._memory_arc_size_chart.append(sample.monotonic, [size])
         interval_rate = rates.arc_hit_rate
         if interval_rate is not None:
             app._memory_arc_rate_chart.append(sample.monotonic, [interval_rate])
@@ -769,10 +874,9 @@ def _apply_memory_sample(app, sample):
         set_text_if_changed(labels["Feeds"], format_count(arc.get("l2_feeds")))
         app._memory_l2_chart.append(
             sample.monotonic,
-            [
-                rates.l2_read_bps if rates.l2_read_bps is not None else 0,
-                rates.l2_write_bps if rates.l2_write_bps is not None else 0,
-            ],
+            # None rates drop the point from each series (see the ARC
+            # size append) instead of drawing an unmeasured zero.
+            [rates.l2_read_bps, rates.l2_write_bps],
         )
 
     l2_rows = {}
@@ -816,7 +920,7 @@ def _apply_memory_sample(app, sample):
         set_text_if_changed(labels["Commits/s"], format_per_second(rates.slog_commits_ps))
         app._memory_slog_chart.append(
             sample.monotonic,
-            [rates.slog_write_bps if rates.slog_write_bps is not None else 0],
+            [rates.slog_write_bps],  # None drops the point; see the ARC size append
         )
 
     slog_rows = {}

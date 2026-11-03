@@ -94,24 +94,40 @@ writes) are built through `charting.create_rolling_chart()`, which
 returns a `MatplotlibRollingChart` when the probe succeeds and the Cairo
 `RollingChart` (still in `memory_page.py`) otherwise. Both renderers
 take the same constructor arguments and expose the same interface —
-`widget` (the packed `Gtk.Widget`), `append(monotonic, values)`,
+`widget` (the packed Gtk.Widget), `append(monotonic, values)`,
 `set_reference(value, label)`, and `points` — and share one vocabulary
-(sample window, series colours, nice-ceiling ladder, age labels), so
-series semantics, the 300-sample window, Y scaling, legend text, and the
+(sample window, series colours, nice-ceiling ladder, age labels, the X
+tick grammar `rolling_tick_count`, and the fixed chart height
+`ROLLING_CHART_HEIGHT`), so series semantics, the 300-sample window, Y
+scaling, legend text, tick placement, and the
 fixed-height/pack-without-expand sizing behaviour are identical either
 way.
+
+Sampling itself is continuous: the Performance timer runs for the GUI's
+whole lifetime (`memory_page.on_memory_timer_tick` samples the charts on
+every tick whatever page is visible; the Alignment view refreshes only
+while it is the visible view), so the rolling window holds uninterrupted
+history. When a gap far beyond the configured interval still occurs
+(a suspended host, a stalled collection), the first sample after it
+re-baselines — interval rates show "—" and the rate charts skip the
+point — instead of averaging across the gap.
 
 The matplotlib renderer updates the line/fill/legend artists in place on
 every append and schedules `draw_idle()` on the canvas; tick positions
 are fixed fractions of the window so only the label text slides as the
-window advances. Verified end-to-end under real GTK with
+window advances (two ticks on a narrow window, three from a 12 s span,
+five from a minute up — the Cairo fallback draws the same positions,
+thinning interior labels that would collide at its measured font
+width). Verified end-to-end under real GTK with
 `spikes/live_charts_smoke_matplotlib.py` (run like the first spike,
 headless under `NO_AT_BRIDGE=1 xvfb-run -a`): the factory selects
 matplotlib, all four canvases render non-blank content, a mid-run window
 resize re-renders, warm full redraws cost ≤ ~40 ms per chart at the
-page's chart sizes (455–1220 px wide × 110 px tall) with ≤ ~16 ms of
+page's chart sizes with ≤ ~16 ms of
 artist updates per refresh tick, and a screenshot is written next to the
-spike for visual review.
+spike for visual review. The rolling charts' realized-window locks
+(doubled height, tick grammar under both renderers, post-stall
+re-baseline) live in `tests/python/rolling_realized_check.py`.
 
 Probe-cost notes measured on the test VM: the first successful probe
 costs a one-time ~0.7 s matplotlib import at page build (GUI pages are
@@ -206,12 +222,17 @@ them, and the ladder's width floor widens with its labels.
 | Production (Debian 13 trixie) | `python3-matplotlib` 3.10.1 | `sudo apt install python3-matplotlib` |
 
 Production feasibility was checked read-only on the storage node
-(Debian 13.6, Python 3.13.5): `python3-matplotlib` is not installed but
-is an available candidate in `trixie/main`, so the user installs one apt
-package; `python3-gi` is already a runtime prerequisite. Code must stick
+(Debian 13.6, Python 3.13.5): `python3-matplotlib` was an available
+candidate in `trixie/main`, so the package installs wherever apt does.
+It is a **required GUI prerequisite**: `check-prerequisites` fails its
+check when the import does not succeed for the user the GUI runs as, so
+the installers and the upgrade prerequisite gate offer to install the
+system package (a pip `--user` install under a home directory stays
+invisible to a root-run GUI — the classic silent-Cairo cause).
+Code must stick
 to APIs stable across matplotlib 3.10/3.11 (`Figure`,
 `FigureCanvasGTK3Agg`, artist `set_data`/`draw_artist`, `blit`).
 
 The dependency is **optional at runtime**: if the import fails the page
 must show its note and render with the Cairo fallback rather than break.
-See also `python/Prerequisites.md` (Optional Components).
+See also `python/Prerequisites.md` (System Prerequisites).

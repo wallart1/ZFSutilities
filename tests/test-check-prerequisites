@@ -111,7 +111,7 @@ EOF
     done
 
     # MATPLOTLIB_STUB=absent: python3 succeeds for everything except the
-    # matplotlib import probe (drives the optional-chart warn branch).
+    # matplotlib import probe (drives the required-module failure branch).
     if [[ "${MATPLOTLIB_STUB:-present}" == "absent" ]]; then
         # rm first: the loop above left python3 as a symlink, and cat >
         # would follow it into /bin/true instead of replacing it.
@@ -307,8 +307,8 @@ EOF
     return $rc
 }
 
-test_matplotlib_optional_warn_when_absent() {
-    test_start "matplotlib absence warns (Cairo fallback), never fails"
+test_matplotlib_absent_fails_with_remediation_package() {
+    test_start "matplotlib absence fails the check with the system package named"
 
     local output rc
     output=$(MATPLOTLIB_STUB=absent run_check_prerequisites_with_mock_env --single-node 2>&1)
@@ -319,21 +319,27 @@ test_matplotlib_optional_warn_when_absent() {
         return
     fi
 
-    # Optional component: the run still succeeds.
-    if [[ $rc -ne 0 ]]; then
-        test_fail "Expected exit 0 when matplotlib is absent, got $rc"
+    # Required GUI prerequisite: absence fails so the installers'
+    # remediation offer pulls the system package in.
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected exit 1 when matplotlib is absent, got $rc"
         return
     fi
-    if [[ "$output" != *"matplotlib not installed"* ]]; then
-        test_fail "Expected the matplotlib warn line in output"
+    if [[ "$output" != *"python3 module: matplotlib"* ]]; then
+        test_fail "Expected the matplotlib fail line in output"
         return
     fi
-    if [[ "$output" != *"python3-matplotlib"* ]]; then
-        test_fail "Expected the system-package hint in the warn line"
+
+    output=$(MATPLOTLIB_STUB=absent \
+        run_check_prerequisites_with_mock_env --single-node --list-failures 2>&1)
+    rc=$?
+    if [[ $rc -ne 1 ]]; then
+        test_fail "Expected --list-failures exit 1 when matplotlib is absent, got $rc"
         return
     fi
-    if printf '%s\n' "$output" | grep -q '^gui|matplotlib|'; then
-        test_fail "matplotlib absence must not land in the failure list"
+    if ! printf '%s\n' "$output" | grep -q \
+        '^gui|python3 module: matplotlib|python3-matplotlib|module not installed$'; then
+        test_fail "Expected the python3-matplotlib remediation row in the failure list"
         return
     fi
     test_pass
@@ -351,7 +357,11 @@ test_matplotlib_pass_when_importable() {
         return
     fi
 
-    if [[ "$output" != *"python3 module: matplotlib (Performance-page charts)"* ]]; then
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Expected exit 0 when matplotlib is importable, got $rc"
+        return
+    fi
+    if [[ "$output" != *"python3 module: matplotlib"* ]]; then
         test_fail "Expected the matplotlib pass line in output"
         return
     fi
@@ -732,7 +742,7 @@ test_module_row_when_not_built
 test_no_module_row_when_built
 test_module_check_skipped_without_modinfo
 test_module_row_alongside_missing_zfs_tools
-test_matplotlib_optional_warn_when_absent
+test_matplotlib_absent_fails_with_remediation_package
 test_matplotlib_pass_when_importable
 
 # ---------------------------------------------------------------------------

@@ -1,16 +1,25 @@
 # Glossary
 
-Items to add:
-    acls
-    LIO
-    DEL
-    cast
-
 Plain-language definitions of terms as they are actually used in this
 repository — in agent work reports, SESSION_NOTES.md, CI output, and the
 docs. Entries are added alphabetically as jargon comes to light, without
 waiting for a request; a term belongs here the moment a report has to
 pause to explain it.
+
+## ACL
+
+In this repository, "ACL" is the iSCSI initiator grant, not file
+permissions. Inside a target's TPG (see the TPG entry), the ACL admits
+one initiator — identified by its IQN — and carries the MappedLUN
+numbers that initiator is allowed to see, which is why reports say "ACL
+MappedLUN" for the grant and "TPG LUN mapping" for the export itself.
+The distinction is load-bearing in the boot-incident work:
+`iscsi-recover-encrypted-luns` originally rebuilt TPG LUN mappings but
+never ACL MappedLUNs, so a recovered node could come up with LUNs
+mapped yet no initiator granted; recovery now rebuilds both, and
+`safe-iscsi-save`'s authoritative gate compares every old TPG LUN
+mapping and every ACL MappedLUN grant whose backstore is still in the
+manifest, refusing before any write on a loss.
 
 ## capped table window
 
@@ -73,14 +82,33 @@ campaign's own — it appears nowhere in the code; the authoritative step
 list is the "Corrected exercise sequence" file. In brief: deploy the
 current release to both hosts first (the precondition); refresh the
 recovery authorities with `sudo safe-iscsi-save`; reboot once; expect the
-boot journal to log "post-restore verification FAILED" with DRIFT lines
+boot journal to log "post-restore verification PENDING" with DRIFT lines
 naming vm-101-disk-1 and vm-202-disk-5 (normal until the encryption keys
-load); converge within the same boot (load keys →
+load; the encrypted-aware verdict since repair plan 027 — an every-boot
+expected FAILED trained operators to ignore the verifier, so keys-pending
+drift now journals PENDING and FAILED is reserved for unexpected drift);
+converge within the same boot (load keys →
 `sudo iscsi-recover-encrypted-luns` → `sudo export-iscsi-state --check`
 returning success); Dashboard shortfall rows clear. The exercise proves
 the 2026-10-27 incident class — the node silently coming up with 3 of 33
 LUNs mapped while every gate passed — is dead: nothing silent, nothing
 destroyed, one clean recovery.
+
+## DEL
+
+`upgrade-zfsutilities` classifies every changed deployed file by
+comparing the live tree against a baseline manifest: **ADD** (new
+file), **MOD** (changed content), **DEL** (file gone). The baseline is
+*captured* on the first upgrade over an unmanaged tree
+(trust-on-first-upgrade, FINDINGS F-025: pre-existing local
+modifications are absorbed into the baseline, not flagged; nothing is
+salvaged from it). Later upgrades scan against that captured baseline
+and offer to salvage local content. The j19-baseline-capture journey
+(via the `ITF_UPGRADE_BASELINE` staging knob) was the first exercise of
+the DEL classification. The rule it taught: a DEL anchor must be a file
+inside a deployed tree — deploy-version copies `bin/ lib/ python/ docs/
+share/ VERSION` only, so a repo-root file (README.md) can never be the
+deleted file, while a docs/ file can.
 
 ## dp module identity
 
@@ -168,6 +196,21 @@ pools. In the test suites the GTK layer is faked with the `mock_gtk`
 context so GUI code can be tested headless, and the one realized-window
 check runs under a private Xvfb display.
 
+## LIO
+
+Linux-I/O target: the kernel subsystem (target_core) that turns a host
+into a SCSI/iSCSI *server*, fronted by `targetcli` over rtslib-fb. On
+this site, stewie serves the zvol-backed LUNs through LIO and tweety's
+VMs log into them. Its state is `/etc/rtslib-fb-target/saveconfig.json`
+(plus deployed drop-ins), and `safe-iscsi-save` refreshes it only under
+its loss-refusing gate. Report phrases anchored here: "LIO holds the
+zvol" — while a zvol is exported, ZFS destroy answers `dataset is busy`
+(holds before destroy); "concurrent LIO mutators" — anything else
+editing the target config while repo tooling runs (the F-040 fence
+work); "LIO portals are host-level sockets" — the j05 live correction:
+the `0.0.0.0:3260` wildcard binds `INADDR_ANY:3260`, and while any TPG
+rides it, no specific `:3260` portal can be created.
+
 ## mock
 
 A stand-in that imitates a real dependency during tests, so suites can
@@ -206,6 +249,16 @@ change are the ones covering the files it touched. House rule (root
 AGENTS.md): during iteration run only the affected suites; run the full
 suite once, at the end — the full gate is `tests/run-tests`.
 
+## TCG
+
+Tiny Code Generator: QEMU's software CPU emulator — the fallback that
+runs a virtual machine entirely in code when hardware virtualization
+(KVM) is unavailable. The integration-test lab nests Proxmox inside its
+guests with no /dev/kvm passthrough, so every lab VM boots under TCG
+("a TCG boot", `kvm=0`): much slower than KVM but faithful, which is
+why lab boot proofs are timed generously and judged by behavior, not
+speed.
+
 ## TPG
 
 Target Portal Group: the container inside an iSCSI target (LIO/
@@ -216,16 +269,6 @@ the safe-iscsi-save gate compares against the expected-backstores
 manifest, and the thing the 2026-10-27 incident silently lost (33
 backstores defined, only 3 mapped, because the gates counted
 backstores instead of TPG mappings).
-
-## TCG
-
-Tiny Code Generator: QEMU's software CPU emulator — the fallback that
-runs a virtual machine entirely in code when hardware virtualization
-(KVM) is unavailable. The integration-test lab nests Proxmox inside its
-guests with no /dev/kvm passthrough, so every lab VM boots under TCG
-("a TCG boot", `kvm=0`): much slower than KVM but faithful, which is
-why lab boot proofs are timed generously and judged by behavior, not
-speed.
 
 ## TTL
 

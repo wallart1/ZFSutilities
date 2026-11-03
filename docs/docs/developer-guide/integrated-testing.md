@@ -484,7 +484,7 @@ catalog against that lab: S1 (reboot with the key device absent: FAILED
 + DRIFT journal oracle, the encrypted-root VM is unusable — either a
 start abort or a start that "succeeds" against a stale device node and
 then never boots, blind recovery via `iscsi-recover-encrypted-luns`),
-S1c (the second reboot repeats the same FAILED shape — the
+S1c (the second reboot repeats the same PENDING shape — the
 recovery-then-reboot cycle is stable — and convergence is proven WITHIN
 the boot by a manual `--check` reporting no drift), S1b (a storage
 power event with both workload VMs running: the sessions CLING to the
@@ -498,15 +498,16 @@ S3 (`restart-iscsi-services` — the designed refusal with VMs running,
 then the one-command path with compute fallout), S4/M4/M1 (wrong
 passphrase, pool A's key against pool B, mistyped key-file paths at
 `new-vm-disk --encrypted`), and S5a/S5b: a `file://` keylocation on the
-unencrypted root filesystem still journals FAILED at boot (availability
+unencrypted root filesystem still journals PENDING at boot (availability
 is not loadedness — no loader exists), while the one posture that
 legitimately journals boot-time OK is a lab-authored one-shot
 key-loading unit ordered before the restore (the drop-in's "separate
 key-loading unit" clause), which also prototypes the ordering a shipped
 optional unit would need.  The boot-verdict oracle follows the
 documented semantics (`two-node-config.md`): every keys-absent boot
-journals `post-restore verification FAILED` with DRIFT detail until the
-key ceremony completes.
+journals `post-restore verification PENDING` (the encrypted-aware
+verdict, distinct from FAILED's unexpected drift) with DRIFT detail
+until the key ceremony completes.
 
 - **Scenario windows park the compute fence timer.** Operator-paced
   recovery arcs (j16's loss scenarios, j18's key ceremony) assume nothing
@@ -605,7 +606,7 @@ storage-less world (zero sessions ever established, so nothing clings
 and nothing rescan-able exists), the fence tick fires against the
 unreachable storage host (per-ref WARNs, rescan problems, the ssh-255
 WARN, the still-missing FATAL, never the reported-problems WARN),
-storage's late return journals the FAILED+DRIFT boot oracle for the
+storage's late return journals the PENDING+DRIFT boot oracle for the
 encrypted LUNs, and the post-return truth is measured live: the
 sessions and the plain LUNs return unaided, while the return tick
 stays red exactly for the keys-pending encrypted LUN (reconcile

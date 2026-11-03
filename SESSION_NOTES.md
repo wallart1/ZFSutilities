@@ -2369,3 +2369,165 @@ subprocess timeout under pub2's VM load; 110/110 green in isolation).
   Phase 5 leftovers: tests/python/test_zfsutilities_gui.py (+1 blank
   line) and the gtk-gui.md Warnings bullet (+8); this notes entry.
   Nothing committed — tree awaits the user's commit cue.
+
+## Backup-page follow-ups: keys tooltips, pull-table sizing, tooltip flicker (2026-11-02, pub3 lane)
+
+User-reported against the 0.137.0 tooltip/table work; three items.
+
+- ZFS keys source/dest: the ENTRIES carried good tooltips but the LABELS
+  had none, so hovering a label fell through to the Advanced expander's
+  generic tooltip. Fixed: both labels now carry their field's tooltip
+  (one string per field, set on label and entry; labels stored on app as
+  backup_zfs_keys_source_lbl/_dest_lbl). The add_var_row contract
+  (tooltip on BOTH label and widget) is now followed here too.
+- Pull Steps table showed 6 of 11 rows: the Backup page was missed by the
+  2026-10-31 natural-tables sweep — no NATURAL vscroll policy on the page
+  viewport and both EditableListViews packed expanding. Fixed with the
+  schedule/offsite idiom (NATURAL policy + non-expanding packs). New
+  realized check tests/python/backup_realized_check.py (+ pytest wrapper,
+  manifest entry, testing.md row): 11 pull rows in a 700x560 window stay
+  fully visible, table does not scroll internally, page scrollbar carries
+  the overflow. Red-proofed: with both hunks reverted the check fails
+  ("pull table crushed: 71px < 254px").
+- Post-Backup tooltip flicker ("Prune snapshots"/"Run post-backup
+  command", window at desktop bottom): NOT reproduced app-side after an
+  extensive probe campaign (scripts kept in /tmp/gtk3-tooltip-probe/):
+  bare widgets, page-viewport containers, the real ZFSUtilitiesWindow
+  build, Xvfb + bare/Xvfb+Muffin/live display, window bottom at the
+  screen/workarea edge, a 2-px-step 44-px borderline sweep across the
+  flip boundary, 20 Hz pointer jitter, and input-transparent custom
+  tooltip windows. In every configuration the tooltip window maps once
+  and never unmaps (verified via map/unmap event counters on custom
+  windows and xwininfo presence sampling). Measurable but benign: GTK
+  re-fires query-tooltip rapidly under motion (up to ~50 fires) without
+  any unmap. User facts gathered: panel always shown, tooltip "vanishes
+  repeatedly". Conclusion: the hide/show loop lives in the live-session
+  layer (physical high-rate pointer and/or compositor interaction), not
+  in this repo's code. No code change shipped for this item; next step
+  offered: a live-session probe of the running instance with the user's
+  explicit go-ahead (needs the real pointer), or a set-text-once
+  query-tooltip handler as a churn mitigation if the user wants one.
+- Probing per user instruction happens under Xvfb only — never on the
+  live session display (the real-display probes above preceded that
+  instruction; the pointer was restored each time).
+
+## 2026-11-02 (later) — Performance rolling charts: continuous sampling, X ticks, doubled height, matplotlib prerequisite
+
+User findings from the 2026-11-01 19:29 stewie screenshot (pub repo copy),
+all four addressed on the pub3 lane:
+
+- Straight lines: the Performance timer only sampled while its tab was
+  visible (zfsutilities_gui `_start_stop_memory_timer`), so the deque
+  held samples hours apart and the time-proportional polyline drew
+  straight interpolation across the dark periods. Per user decision the
+  fix is CONTINUOUS sampling, not gap breaks: `_ensure_memory_timer`
+  arms the timer for the GUI's lifetime, `on_memory_timer_tick`
+  (memory_page) samples the charts on every tick (Alignment view still
+  refreshes only while visible), and switching to the page still
+  refreshes the visible view once. Post-stall guard kept per the user's
+  "Option 1": a gap > max(60 s, 3x refresh interval) re-baselines rates
+  ("—") and the rate charts skip the point; None values now append None
+  (dropped per-series) instead of a drawn zero.
+- X ticks: grammar extracted to `charting.rolling_tick_count` (2/3/5);
+  the Cairo fallback now draws tick marks + intermediate age labels via
+  `_x_tick_layout` (edge-aligned ends, collision thinning by measured
+  text widths). Verified visually under both renderers.
+- "New and improved charts": the screenshot shows the CAIRO FALLBACK —
+  stewie's root GUI cannot import matplotlib. Answer + user decision:
+  python3-matplotlib promoted to a required GUI prerequisite in
+  check-prerequisites, so installers and the upgrade prereq gate offer
+  the apt package; on already-installed hosts the next upgrade's gate
+  will offer it (or one manual apt command).
+- Heights doubled: `charting.ROLLING_CHART_HEIGHT = 220` shared by both
+  renderers and all five rolling charts.
+
+New realized check tests/python/rolling_realized_check.py +
+test_rolling_realized.py (private Xvfb child; both renderers; locks
+height/tick grammar/stall re-baseline; screenshot to /tmp). Suites
+touched: test_charting, test_memory_page, test_zfsutilities_gui,
+test_alignment_page (dispatcher fixture now sets the stack page),
+test-check-prerequisites (matplotlib required). Docs: gtk-gui.md
+Performance section, charting.md rollout+deployment, Prerequisites.md
+(matplotlib moved to System Prerequisites), testing.md suite rows,
+data-structures.md refresh_seconds wording. Full gate green after the
+one fixture fix (4474 python tests + bash suites). Uncommitted; release
+prune session owns the other uncommitted files.
+
+## 2026-11-02 (night) — R-08 promoted: encrypted-aware boot verification (repair plan 027)
+
+User promoted R-08; plan approved and executed in one session
+(`tests/integrated/repair-plans/027-encrypted-aware-boot-verification.md`).
+
+- Three-verdict protocol: `export-iscsi-state --check` exits 0/3/1 (match /
+  all-drift-keys-pending / other). Attribution in `report_state_drift`
+  (missing-live backstore/LUN/grant lines only; suspects carried as
+  `KEYSUSPECT:` lines, internal, filtered from output); the keystatus probe
+  is deliberately in BASH main — the suite mocks zfs as a shell function a
+  python subprocess would bypass. All `unavailable` → WARN summary + exit 3;
+  available/"-"/unreadable → FAILED. Drop-in journals
+  `post-restore verification PENDING — encrypted LUN(s) await key load …`
+  on 3; old wrappers map 3 to FAILED (conservative skew, never false OK).
+- j15 S1/S1c/S2/S5a now expect PENDING; `itf_boot_journal_verdict` gained
+  the `pending` mode (lab-stages parser fixture added); j16 unchanged
+  (verdict-word agnostic; keys loaded there → FAILED by design).
+- Gotchas hit: mock fixtures join backstore lines with embedded `\n`
+  (a missing separator merges lines and the backstore never enters the
+  map — the fail-closed rc-1 was the symptom); `log_msg` writes to STDERR,
+  so --check verdict assertions must capture `2>&1` like the drop-in does.
+- End-user note: the user's own "Corrected exercise sequence" oracle still
+  says FAILED — user-owned file, flagged for their one-word update. First
+  live exercise = the still-pending controlled stewie reboot, after this
+  ships + deploys. j15 lab rerun on user cue only (ITF rationing).
+
+## Development-cycle wrap-up (2026-11-02, pub3 lane)
+
+- Seven-step wrap-up over everything since the 0.137.0 release merge
+  (6cfbc9d): commit a08a7af (dashboard/gui_helpers import pairing) plus
+  the working tree (backup-page follow-ups, Performance rolling charts,
+  R-08 / repair-plan 027, enclosure zero-rate refusal, README
+  screenshots, GLOSSARY).
+- Steps 1/4 skipped by their own precondition (pub-main-only; the lane's
+  PREEXISTING.md read before reporting — 3 entries, none actionable in
+  this lane).
+- Step 2: ruff check + format and shellcheck -S warning over the
+  documented set all clean. Two ruff-format nits that rode in with the
+  0.137.0 release merge (conftest.py backslash continuation,
+  test_pools_page.py missing blank line) fixed by the formatter itself.
+  No coding-policies violations in the manual diff review (zero-rate
+  mirrors, plan-027 exit protocol, GUI diffs, docs).
+- Step 3: coverage map of every new behavior — zero-rate refusal at all
+  four grammar mirrors, continuous sampling / tick dispatch /
+  alignment-visibility gating, stall re-baseline, None-not-zero appends,
+  tick grammar + doubled height (unit + realized, both renderers),
+  keys-label tooltips, pull-table natural sizing (realized), the
+  --check verdict matrix, the journey parser's pending mode, the
+  required-matplotlib failure — all covered behavior-level. One gap
+  fenced: test-switch-version's drop-in design test now requires the
+  rc-3 PENDING branch and the FAILED fallback; red-proofed by removing
+  the branch (exactly that test failed) and restoring the drop-in
+  md5-identical. Obsolete tests had already been replaced by the cycle
+  (matplotlib warn→required-fail, memory-timer semantics). Affected
+  suites green during iteration.
+- Step 5: docs integrity green; mkdocs build clean (standing
+  MkDocs-2.0/Material deprecation warning only — the mkdocs<2 pin
+  stance). One stale messages/index.md row removed: the old optional
+  matplotlib warn line no longer exists in check-prerequisites (the
+  generic required-module ✗ row covers the new failure).
+- Step 6: full no-soak gate green via tests/run-tests (0 failures; the
+  standing 18 dev-host python environment-preflight skips; over-budget
+  timing advisory only).
+- Step 7: codebase frozen. The wrap-up itself touched exactly: the two
+  format-nit files, tests/test-switch-version (PENDING fence),
+  docs/docs/messages/index.md (stale row), and this notes entry.
+  Nothing committed — tree awaits the user's commit cue.
+
+## Release 0.138.0 prep (pub3 lane, user-directed steps 8-10)
+
+- VERSION bumped to 0.138.0; changelog section written (Added: R-08
+  encrypted-aware boot verdict, rolling-chart X ticks + doubled height;
+  Fixed: Backup table crushing, straight-line interpolation; Changed:
+  required matplotlib, zero-rate refusal, --check exit contract; Tests;
+  Documentation). Site rebuilt clean (standing MkDocs-2.0 warning only).
+- Final full gate WITH soaks green via tests/run-tests --with-soak
+  (rc=0, all suites passed, soak suites exercised, zero failures).
+- Frozen at step 9; commit per step 10 (hash recorded in git).

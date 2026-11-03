@@ -1175,6 +1175,14 @@ test_shipped_rtslib_dropins_match_dropin_design() {
     elif [[ "${verify_line: -7}" != "exit 0'" ]]; then
         failed=1
         echo "    the verification ExecStartPost must end with exit 0 (never fail the unit)"
+    elif [[ "$verify_line" != *'rc" -eq 3'* \
+            || "$verify_line" != *'post-restore verification PENDING'* \
+            || "$verify_line" != *'post-restore verification FAILED'* ]]; then
+        # R-08 / repair plan 027: the wrapper maps --check rc 3 to the
+        # PENDING journal line (keys-pending drift) and keeps FAILED for
+        # every other drift — losing either branch skews the verdict.
+        failed=1
+        echo "    the verification ExecStartPost must map rc 3 to the PENDING verdict and keep FAILED for other drift"
     fi
 
     if [[ "$failed" -eq 0 ]]; then

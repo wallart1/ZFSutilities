@@ -14,7 +14,8 @@
 #   core     — bash, zfs, zpool, pv, python3 (transfer pacing via
 #              lib/pace_stream.py), rsync, smartctl
 #   proxmox  — pveversion (warn if absent; required only on two-node compute host)
-#   gui      — python3-gi, gir1.2-gtk-3.0, DISPLAY
+#   gui      — python3-gi, gir1.2-gtk-3.0, matplotlib (the Performance
+#              page's high-quality chart renderer), DISPLAY
 #   two-node — ssh, scp, open-iscsi (only in --two-node mode), plus the
 #              read-only post-restore iSCSI state detection (informational
 #              warns; lib/iscsi-lib.sh)
@@ -247,18 +248,15 @@ check_apt_pkg "gui" "gir1.2-gtk-3.0"
 check_apt_pkg "gui" "gir1.2-webkit2-4.1"
 check_apt_pkg "gui" "libwebkit2gtk-4.1-0"
 
-# Optional: the high-quality chart renderer for the Performance page.
-# Absence only downgrades the charts to the built-in Cairo renderer, so
-# this is a warn, never a failure.  The import must succeed for the user
-# the GUI runs as: a pip --user install under a home directory is
-# invisible to a root-run GUI (and check-prerequisites may itself run as
-# root during install), which is why the hint names the system package.
-if python3 -c "import matplotlib" >/dev/null 2>&1; then
-    pass "python3 module: matplotlib (Performance-page charts)"
-else
-    warn "matplotlib not installed — Performance-page charts fall back to the built-in Cairo renderer." \
-         "Install the system package python3-matplotlib (a pip --user install is invisible to a root-run GUI)."
-fi
+# Required: the high-quality chart renderer for the Performance page.
+# The GUI still works without it (the built-in Cairo renderer takes
+# over), but the system package installs everywhere apt does, so the
+# installers' remediation offer pulls it in rather than leaving hosts on
+# the fallback.  The import must succeed for the user the GUI runs as: a
+# pip --user install under a home directory is invisible to a root-run
+# GUI (and check-prerequisites may itself run as root during install),
+# which is why the remediation package is the system package.
+check_python_module matplotlib
 
 if [[ -n "${DISPLAY:-}" ]]; then
     pass "DISPLAY=$DISPLAY"

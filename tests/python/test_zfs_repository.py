@@ -1181,6 +1181,12 @@ class TestValidRateLimit(unittest.TestCase):
         for text in ("abc", "10x", "1.5m", "-5m", "100 mb", "100KiBx", "k", "i"):
             self.assertFalse(valid_rate_limit(text), text)
 
+    def test_rejects_zero_rates(self):
+        # Zero passes the shape of the grammar but cannot be paced — the
+        # pacer divides by the rate — so the validator refuses it too.
+        for text in ("0", "00", "0k", "0m", "0KiB", "000G"):
+            self.assertFalse(valid_rate_limit(text), text)
+
 
 class TestParseRateLimit(unittest.TestCase):
     """parse_rate_limit turns pacer-grammar rates into bytes/second.

@@ -191,6 +191,27 @@ class TestSharedVocabulary(unittest.TestCase):
         self.assertEqual(charting.format_age(299), "4m 59s")
         self.assertEqual(charting.format_age(3661), "1h 01m")
 
+    def test_rolling_tick_count_grammar(self):
+        """The shared X-tick grammar both renderers draw: two ticks while
+        the window is narrow, three from 12 s, five from a minute."""
+        charting = _charting()
+        self.assertEqual(charting.rolling_tick_count(0.0), 2)
+        self.assertEqual(charting.rolling_tick_count(11.9), 2)
+        self.assertEqual(charting.rolling_tick_count(12.0), 3)
+        self.assertEqual(charting.rolling_tick_count(59.9), 3)
+        self.assertEqual(charting.rolling_tick_count(60.0), 5)
+        self.assertEqual(charting.rolling_tick_count(111180.0), 5)
+
+    def test_rolling_chart_height_default(self):
+        """Both renderers' default height is the shared doubled constant."""
+        charting = _charting()
+        self.assertEqual(charting.ROLLING_CHART_HEIGHT, 220)
+        self.assertIn(
+            charting.ROLLING_CHART_HEIGHT,
+            charting.MatplotlibRollingChart.__init__.__defaults__,
+        )
+        self.assertIn(charting.ROLLING_CHART_HEIGHT, charting.create_rolling_chart.__defaults__)
+
 
 class TestBackendProbe(unittest.TestCase):
     def test_backend_unavailable_under_mocks(self):
@@ -280,10 +301,12 @@ class TestMatplotlibRollingChart(unittest.TestCase):
         return chart, ax, canvas, lines, fills, formatters, fig
 
     def test_construction_styles_canvas_and_axes(self):
+        charting = _charting()
         _chart, ax, canvas, lines, fills, _formatters, fig = self._built()
         # Height behavior from the pack layer: a fixed height request on
-        # the packed widget, exactly like the Cairo fallback.
-        canvas.set_size_request.assert_called_once_with(-1, 110)
+        # the packed widget (the shared doubled constant), exactly like
+        # the Cairo fallback.
+        canvas.set_size_request.assert_called_once_with(-1, charting.ROLLING_CHART_HEIGHT)
         # One artist pair per series, translucent fill under each line.
         self.assertEqual(len(lines), 2)
         self.assertEqual(len(fills), 2)
@@ -418,6 +441,16 @@ class TestMatplotlibRollingChart(unittest.TestCase):
         self.assertEqual(x_format(125.0, 0), "now")
         self.assertEqual(x_format(100.0, 0), "-25s")
         self.assertEqual(x_format(112.5, 0), "-12s")
+
+    def test_wide_window_gets_five_x_ticks(self):
+        """A window of a minute or more carries intermediate ticks — the
+        shared grammar renders as fixed fractions of the window, so the
+        labels between the ends exist (the Cairo fallback draws the same
+        picture through _x_tick_layout)."""
+        chart, ax, _canvas, _lines, _fills, _formatters, _fig = self._built()
+        chart.append(100.0, [1, 1])
+        chart.append(160.0, [2, 2])  # 60 s window -> 5 ticks
+        ax.set_xticks.assert_called_with([100.0, 115.0, 130.0, 145.0, 160.0])
 
     def test_reference_line_overlay_and_clear(self):
         chart, ax, _canvas, _lines, _fills, _formatters, _fig = self._built()

@@ -1165,38 +1165,36 @@ class TestMemoryTimer(unittest.TestCase):
             return window
 
     @patch("zfsutilities_gui.GLib")
-    def test_memory_page_starts_timer(self, mock_glib):
-        """Switching to Performance refreshes once and starts the configured timer."""
+    def test_memory_timer_armed_for_gui_lifetime(self, mock_glib):
+        """The sampling timer is armed with the configured interval and
+        never stops on page changes — the charts keep an uninterrupted
+        history whatever page is visible."""
         window = self._make_window()
         mock_glib.timeout_add_seconds.return_value = 42
-        with patch("zfsutilities_gui.refresh_memory_page") as mock_refresh:
-            window._start_stop_memory_timer("memory")
-        mock_refresh.assert_called_once_with(window)
+        window._ensure_memory_timer()
         mock_glib.timeout_add_seconds.assert_called_once_with(5, window._on_memory_timer_tick)
         self.assertEqual(window._memory_timer, 42)
 
     @patch("zfsutilities_gui.GLib")
-    def test_non_memory_page_stops_timer(self, mock_glib):
-        """Switching away from Performance removes the timer."""
+    def test_memory_timer_rearms_replacing_the_previous(self, mock_glib):
+        """A re-arm (refresh-interval change) removes the previous timeout
+        before arming the new one, so exactly one timer is ever live."""
         window = self._make_window()
         window._memory_timer = 7
-        window._start_stop_memory_timer("backup")
+        mock_glib.timeout_add_seconds.return_value = 8
+        window._ensure_memory_timer()
         mock_glib.source_remove.assert_called_once_with(7)
-        self.assertIsNone(window._memory_timer)
+        self.assertEqual(window._memory_timer, 8)
 
-    def test_timer_tick_refreshes_only_on_memory_page(self):
-        """The tick callback refreshes on Performance and stays alive."""
+    def test_timer_tick_samples_on_every_page(self):
+        """The tick callback samples the charts regardless of the visible
+        page (memory_page.on_memory_timer_tick) and stays alive."""
         window = self._make_window()
-        window.stack.get_visible_child_name.return_value = "memory"
-        with patch("zfsutilities_gui.refresh_memory_page") as mock_refresh:
-            self.assertTrue(window._on_memory_timer_tick())
-        mock_refresh.assert_called_once_with(window)
-
-        mock_refresh.reset_mock()
-        window.stack.get_visible_child_name.return_value = "backup"
-        with patch("zfsutilities_gui.refresh_memory_page") as mock_refresh:
-            self.assertTrue(window._on_memory_timer_tick())
-        mock_refresh.assert_not_called()
+        for page in ("memory", "backup"):
+            window.stack.get_visible_child_name.return_value = page
+            with patch("zfsutilities_gui.on_memory_timer_tick") as tick:
+                self.assertTrue(window._on_memory_timer_tick())
+            tick.assert_called_once_with(window)
 
     def test_destroy_removes_memory_timer(self):
         window = self._make_window()
@@ -1585,7 +1583,6 @@ class TestPageSidebar(unittest.TestCase):
             "_start_stop_scrub_timer",
             "_start_stop_pools_timer",
             "_start_stop_disks_timer",
-            "_start_stop_memory_timer",
             "_start_stop_schedule_timer",
         ):
             setattr(window, name, MagicMock())
@@ -1595,6 +1592,20 @@ class TestPageSidebar(unittest.TestCase):
         window.on_page_changed(stack, None)
 
         window.sidebar.select_row.assert_called_once_with(row)
+
+    def test_page_change_to_memory_refreshes_the_visible_view(self):
+        """Switching to Performance refreshes once immediately (sampling
+        itself never stopped — see _ensure_memory_timer)."""
+        window, _gui = self._make_window()
+        window._page_rows = {}
+        window.update_action_buttons = MagicMock()
+        window.sidebar = MagicMock()
+        stack = MagicMock()
+        stack.get_visible_child_name.return_value = "memory"
+
+        with patch("zfsutilities_gui.refresh_memory_page") as mock_refresh:
+            window.on_page_changed(stack, None)
+        mock_refresh.assert_called_once_with(window)
 
 
 class TestRedirectRootPycache(unittest.TestCase):

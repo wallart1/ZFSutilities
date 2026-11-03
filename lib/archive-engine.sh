@@ -36,14 +36,17 @@
 
 # True when $1 is a valid rate value (digits plus an optional K/M/G/T/P/E
 # suffix with optional i and B, case-insensitive; the grammar
-# lib/pace_stream.py parses) or is empty (= unlimited). Implemented with
-# parameter expansion and a case list so no regex exceeds the 10-character
-# policy limit.
+# lib/pace_stream.py parses) or is empty (= unlimited). A rate of zero is
+# refused — the pacer divides by the rate, so zero cannot be paced.
+# Implemented with parameter expansion and a case list so no regex exceeds
+# the 10-character policy limit.
 archive_valid_rate() {
     local rate="$1" num suffix lower
     [[ -z "$rate" ]] && return 0
     num="${rate%%[!0-9]*}"
     [[ -n "$num" ]] || return 1
+    # Strip the leading zeros; an empty remainder means the rate is zero.
+    [[ -n "${num#"${num%%[!0]*}"}" ]] || return 1
     suffix="${rate#"$num"}"
     lower="${suffix,,}"
     case "$lower" in

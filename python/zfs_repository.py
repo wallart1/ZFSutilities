@@ -727,9 +727,11 @@ def valid_rate_limit(text: str) -> bool:
     lib/archive-engine.sh): digits plus an optional case-insensitive
     multiplier suffix — k/m/g/t/p/e with an optional ``i`` and an optional
     ``b`` (1024-based, e.g. ``100M`` = 100 MiB/s, ``500KiB`` = 500 KiB/s,
-    ``4096`` = 4096 bytes/s). Implemented with string operations rather
-    than a regular expression, mirroring archive_valid_rate, so the
-    accepted set cannot drift from the grammar the pacer documents.
+    ``4096`` = 4096 bytes/s), and the value must be greater than zero —
+    the pacer divides by the rate, so zero cannot be paced. Implemented
+    with string operations rather than a regular expression, mirroring
+    archive_valid_rate, so the accepted set cannot drift from the grammar
+    the pacer documents.
     """
     if not text:
         return True
@@ -739,6 +741,8 @@ def valid_rate_limit(text: str) -> bool:
         i += 1
     digits, suffix = lowered[:i], lowered[i:]
     if not digits:
+        return False
+    if int(digits) == 0:
         return False
     if suffix.endswith("ib"):
         suffix = suffix[:-2]

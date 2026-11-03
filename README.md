@@ -10,7 +10,7 @@ option, and also for Proxmox VE users who need safe VM disk lifecycle management
 
 ---
 
-![ZFS Utilities GUI](<docs/images/Screenshot from 2026-10-22 13-55-54.png>)
+![ZFS Utilities GUI — Dashboard](<docs/images/Screenshot from 2026-11-02 18-19-31.png>)
 
 ## What is ZFS Utilities?
 
@@ -65,7 +65,7 @@ so concurrent jobs do not collide on the same datasets.
 Save a tab configuration as a reusable profile and schedule it with standard
 cron syntax:
 
-![Schedule tab](<docs/images/Screenshot from 2026-10-22 13-57-47.png>)
+![Schedule tab](<docs/images/Screenshot from 2026-11-02 18-20-40.png>)
 
 ## Requirements
 

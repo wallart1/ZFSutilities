@@ -64,6 +64,7 @@ targetcli() {
 # ZFS mock: dataset existence, mountpoint resolution, and create capture.
 declare -A _mock_zfs_dataset=()
 declare -A _mock_zfs_mountpoint=()
+declare -A _mock_zfs_keystatus=()
 _mock_zfs_create_calls=()
 _mock_zfs_create_log=""
 
@@ -95,6 +96,17 @@ zfs() {
             _mock_zfs_mountpoint["$2"]="${_mock_pools_root}/${p}"
         fi
         return 0
+    fi
+    # keystatus probe for the --check keys-pending verdict: answers from
+    # _mock_zfs_keystatus; an unset dataset fails like the real zfs would.
+    if [[ "$1" == "get" && "$2" == "-H" && "$3" == "-o" && "$4" == "value" \
+            && "$5" == "keystatus" ]]; then
+        local ds="$6"
+        if [[ -n "${_mock_zfs_keystatus[$ds]+x}" ]]; then
+            echo "${_mock_zfs_keystatus[$ds]}"
+            return 0
+        fi
+        return 1
     fi
     return 0
 }
@@ -176,6 +188,7 @@ reset_mocks() {
     _mock_acls_nvme1=""
     _mock_zfs_dataset=()
     _mock_zfs_mountpoint=()
+    _mock_zfs_keystatus=()
     _mock_zfs_create_calls=()
     _mock_zfs_create_log=""
     _mock_zpool_list=""
@@ -822,6 +835,209 @@ test_check_reports_grant_drift() {
     rm -f "$NODE_CONF"
 }
 
+# The healthy topology plus one encrypted LUN: vm-101-disk-1 @ lun1 on
+# threeamigos, granted to tweety as mapped_lun1 -> tpg_lun 1. The
+# keys-pending tests export this shape, then drop the LUN from the live
+# mocks — the keys-absent boot: backstore, LUN mapping, and grant all
+# missing live while the map still records them.
+load_topology_with_encrypted_lun() {
+    load_healthy_topology
+    _mock_backstores+='\n  o- vm-101-disk-1 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-1 '
+    _mock_backstores+='(2.0GiB) write-thru activated]'
+    _mock_luns_threeamigos+='\n  | o- lun1  [block/vm-101-disk-1 '
+    _mock_luns_threeamigos+='(/dev/zvol/threeamigos/proxmox/vm-101-disk-1) (default_tg_pt_gp)]'
+    _mock_acls_threeamigos+='\n  | o- mapped_lun1 ... [lun1 block/vm-101-disk-1 (rw)]'
+}
+
+# Keys-absent boot live shape: the plain healthy topology (load_healthy_
+# topology reassigns every mock the encrypted loader touched).
+drop_encrypted_lun_live() {
+    load_healthy_topology
+}
+
+test_check_keys_pending_verdict() {
+    reset_mocks
+    load_topology_with_encrypted_lun
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    drop_encrypted_lun_live
+    _mock_zfs_keystatus["threeamigos/proxmox/vm-101-disk-1"]="unavailable"
+
+    test_start "--check keys-pending drift (locked dataset), exit 3"
+
+    check_only=true
+    rc=0
+    out=$( main 2>&1 ) || rc=$?
+    check_only=false
+
+    if [[ "$rc" -eq 3 ]] \
+        && [[ "$out" == *"map LUN 1 -> vm-101-disk-1 is missing live"* ]] \
+        && [[ "$out" == *"grant mapped_lun 1 -> tpg_lun 1 is missing live"* ]] \
+        && [[ "$out" == *"backstore vm-101-disk-1: map backstore no longer exists live"* ]] \
+        && [[ "$out" == *"WARN: All drift is keys-pending — encrypted LUN(s) vm-101-disk-1 locked"* ]] \
+        && [[ "$out" != *"KEYSUSPECT"* ]] \
+        && [[ "$out" != *"WARN: Drift detected between live state and the pool map"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_check_keys_loaded_still_failed() {
+    reset_mocks
+    load_topology_with_encrypted_lun
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    # Keys already loaded (load-keys ran, recover not yet): the missing
+    # LUN is NOT keys-pending — unexpected drift, exit 1.
+    drop_encrypted_lun_live
+    _mock_zfs_keystatus["threeamigos/proxmox/vm-101-disk-1"]="available"
+
+    test_start "--check keys loaded, LUN missing: exit 1 (not keys-pending)"
+
+    check_only=true
+    rc=0
+    out=$( main 2>&1 ) || rc=$?
+    check_only=false
+
+    if [[ "$rc" -eq 1 ]] \
+        && [[ "$out" == *"WARN: Drift detected between live state and the pool map"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_check_keys_dataset_unreadable_failed() {
+    reset_mocks
+    load_topology_with_encrypted_lun
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    # The suspect dataset cannot be queried at all (pool gone / dataset
+    # destroyed): fail closed to the FAILED verdict, exit 1.
+    drop_encrypted_lun_live
+
+    test_start "--check keystatus query fails: exit 1 (fail closed)"
+
+    check_only=true
+    rc=0
+    out=$( main 2>&1 ) || rc=$?
+    check_only=false
+
+    if [[ "$rc" -eq 1 ]] \
+        && [[ "$out" == *"WARN: Drift detected between live state and the pool map"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_check_mixed_drift_not_keys_pending() {
+    reset_mocks
+    load_topology_with_encrypted_lun
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    # Keys-absent shape PLUS a moved LUN on nvme1: one unattributable
+    # line collapses the verdict to plain drift, exit 1.
+    drop_encrypted_lun_live
+    _mock_zfs_keystatus["threeamigos/proxmox/vm-101-disk-1"]="unavailable"
+    _mock_luns_nvme1='  | o- lun5  [block/vm-205-disk-4 '
+    _mock_luns_nvme1+='(/dev/zvol/NVME1/proxmox/vm-205-disk-4) (default_tg_pt_gp)]'
+    _mock_backstores='  o- vm-101-disk-0 ........ [/dev/zvol/threeamigos/proxmox/vm-101-disk-0 '
+    _mock_backstores+='(1.0MiB) write-thru activated]\n  o- vm-205-disk-4 ............ '
+    _mock_backstores+='[/dev/zvol/NVME1/proxmox/vm-205-disk-4 (401.0GiB) write-thru activated]'
+
+    test_start "--check mixed drift (keys-pending + moved LUN): exit 1"
+
+    check_only=true
+    rc=0
+    out=$( main 2>&1 ) || rc=$?
+    check_only=false
+
+    if [[ "$rc" -eq 1 ]] \
+        && [[ "$out" == *"LUN 5 moved: map -> vm-205-disk-3, live -> vm-205-disk-4"* ]] \
+        && [[ "$out" == *"WARN: Drift detected between live state and the pool map"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_check_unencrypted_missing_failed() {
+    reset_mocks
+    load_topology_with_encrypted_lun
+    register_online_pool "threeamigos"
+    use_temp_node_conf
+
+    local rc=0 out
+    out=$( main 2>/dev/null ) || rc=$?
+    [[ "$rc" -eq 0 ]] || {
+        test_fail "healthy export failed (rc=$rc)"
+        rm -f "$NODE_CONF"
+        return
+    }
+
+    # The missing LUN's dataset is unencrypted (keystatus "-"): never
+    # keys-pending, exit 1.
+    drop_encrypted_lun_live
+    _mock_zfs_keystatus["threeamigos/proxmox/vm-101-disk-1"]="-"
+
+    test_start "--check unencrypted missing LUN (keystatus -): exit 1"
+
+    check_only=true
+    rc=0
+    out=$( main 2>&1 ) || rc=$?
+    check_only=false
+
+    if [[ "$rc" -eq 1 ]] \
+        && [[ "$out" == *"WARN: Drift detected between live state and the pool map"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+    rm -f "$NODE_CONF"
+}
+
 test_check_legacy_list_map_no_false_drift() {
     reset_mocks
     load_healthy_topology
@@ -1084,6 +1300,11 @@ test_empty_manifest_broken_refuses
 test_check_no_drift
 test_check_reports_drift
 test_check_reports_grant_drift
+test_check_keys_pending_verdict
+test_check_keys_loaded_still_failed
+test_check_keys_dataset_unreadable_failed
+test_check_mixed_drift_not_keys_pending
+test_check_unencrypted_missing_failed
 test_check_legacy_list_map_no_false_drift
 test_pool_guid_unreadable_omitted
 test_check_reports_guid_drift
