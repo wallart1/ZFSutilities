@@ -98,6 +98,28 @@
   the www-data group route would expose PVE's private keys and
   credential hashes.
 
+- **Encrypted-aware boot verification (R-08).** `export-iscsi-state
+  --check` now speaks a three-verdict protocol: exit 0 on match, exit 3
+  when every drift line is keys-pending — each missing-live LUN/backstore/
+  grant traces to a map backstore whose dataset reports `keystatus
+  unavailable` (the expected keys-absent-boot shape; the keystatus probe
+  stays in bash) — and exit 1 on any other drift, fail-closed when keys
+  are already loaded, the dataset is unencrypted, or it cannot be read.
+  The boot drop-in journals exit 3 as `post-restore verification PENDING`
+  and reserves FAILED for unexpected drift: an every-boot *expected*
+  FAILED trained operators to ignore the verifier exactly when real
+  drift arrives. Older deployed drop-ins conservatively map exit 3 to
+  FAILED during a version skew — never a false OK. The j15/j18 journey
+  oracles expect PENDING and the boot-journal parser gained a `pending`
+  mode.
+- **Rolling-chart X ticks and doubled height.** The Performance rolling
+  charts share one X-tick grammar (`charting.rolling_tick_count`: two
+  ticks on a narrow window, three from a 12 s span, five from a minute)
+  drawn identically by both renderers — the Cairo fallback now draws
+  tick marks with age labels between the ends, thinning interior labels
+  that would collide at their measured font width. Every rolling chart
+  is twice as tall (`ROLLING_CHART_HEIGHT` = 220 px in both renderers).
+
 ### Fixed
 
 - **Receive-as-encrypted transfers could never run.** `zfs receive -o
@@ -153,6 +175,22 @@
   `scan:` field label (the column header already says Scan Line); the
   raw record is kept in `ScrubInfo` and in diagnostic logs.
 
+- **Backup page step tables were crushed at short window heights.** The
+  Pull Steps table showed only a few of its rows behind its own
+  scrollbar; the page now sizes naturally (NATURAL vscroll policy,
+  non-expanding tables) so every step row stays visible and the
+  page-level scrollbar carries the overflow — the same behavior as the
+  other tabs' tables. The ZFS keys labels also carry their entries'
+  tooltips now instead of falling through to the Advanced expander's
+  generic one.
+- **Performance charts drew straight interpolation lines across dark
+  periods.** Sampling only ran while the tab was visible, so the window
+  held samples hours apart. Sampling is now continuous for the GUI's
+  whole lifetime; a genuine stall (a gap beyond three intervals, floor
+  60 s — a suspended host) re-baselines interval rates to "—" and the
+  rate charts skip the point instead of averaging across the gap, and
+  unmeasured values no longer draw as zeros.
+
 ### Changed
 
 - Sends into an encrypted destination from an unencrypted source are
@@ -164,6 +202,22 @@
   share `LADDER_ROW_HEIGHT`), with somewhat smaller row/Y-axis labels
   (matplotlib 11 → 9.5; Cairo keeps 13 px ticks/legend with 11.5 px row
   labels, the gutter re-measured at the label size).
+
+- **`python3-matplotlib` is a required GUI prerequisite.** The
+  Performance page's high-quality renderer is offered by the installers
+  and the upgrade prerequisite gate (one apt package); a pip `--user`
+  install under a home directory remains invisible to the root-run GUI.
+  The built-in Cairo fallback still takes over at runtime when the
+  import fails, so the GUI keeps working either way.
+- **A rate of zero is refused everywhere.** The pacer divides by the
+  rate, so zero cannot be paced: `parse_rate` raises, the bash and GUI
+  validators refuse it, and the Set Max I/O Rate dialog shows the full
+  syntax (bare digits are bytes per second, suffixes are 1024-based)
+  with a zero-specific refusal line. A zero cap saved by an older
+  version fails open like any other non-grammar value.
+- **`export-iscsi-state --check` exit codes are part of the contract**
+  (0 / 3 / 1 as above) — wrappers that branch on its rc should treat 3
+  as the expected keys-absent-boot verdict.
 
 ### Tests
 
@@ -196,6 +250,20 @@
   genuine-failure WARNed reapply tests, and a user-hold aborts the
   destructive full copy.
 
+- New realized-window suites `test_backup_realized` and
+  `test_rolling_realized` (with their child-process checks and manifest
+  rows): the real Backup and Performance pages built in realized
+  windows on a private Xvfb — never the ambient display — locking the
+  pull table's natural sizing and, under both chart renderers, the
+  doubled height, the shared tick grammar, and the post-stall
+  re-baseline.
+- The `--check` verdict matrix (keys-pending exit 3, loaded/unencrypted/
+  unreadable fail-closed, mixed drift), the drop-in design test now
+  requires the PENDING branch and the FAILED fallback, the required-
+  matplotlib failure tests replaced the optional-warn ones, the
+  memory-timer lifetime tests replaced the start/stop ones, zero-rate
+  cases across all four grammar mirrors.
+
 ### Documentation
 
 - User guide: restore (property replay, receiving a restore as
@@ -219,6 +287,20 @@
   testing per-suite coverage rows refreshed.
 - GLOSSARY: dataset lock, guest agent, SSH connection reuse
   (ControlMaster).
+
+- Two-node guide: the `--check` exit codes; two-node-config: the three
+  boot verdicts and the version-skew behavior; messages manual: the
+  keys-pending WARN, the PENDING journal row, reworded DRIFT/FAILED
+  rows, and the removed stale optional-matplotlib warn row. GUI guide:
+  Performance continuous sampling, stall re-baseline, X ticks, required
+  matplotlib note; Backup natural sizing and keys hover; the enclosure
+  rate dialog's zero refusal and syntax. Charting note: continuous
+  sampling, tick grammar, required-prerequisite status. Concepts: the
+  absolute-I/O limitation spelled out. Data structures: `refresh_seconds`
+  semantics and the zero-rate grammar. Integrated testing: j15/j18
+  PENDING oracles. Testing guide: new suite rows. Prerequisites:
+  matplotlib moved to System Prerequisites. README screenshots
+  refreshed; `GLOSSARY.md` gains ACL, DEL, and related entries.
 
 ## 0.137.0
 

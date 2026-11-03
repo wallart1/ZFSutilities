@@ -554,6 +554,11 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
     for details and examples.
   
   Add or remove rows with the buttons; reorder by dragging rows.
+
+  The list sizes to its rows like the tables on the other tabs: it grows
+  with the steps up to 20 rows (longer lists scroll inside the table), and
+  when the window is shorter than the page, the page itself scrolls rather
+  than squeezing the table.
   
   A pull-step failure is **non-fatal**: it is logged as a warning, the backup
   continues with the remaining steps, and the job returns the failing pull's
@@ -582,6 +587,8 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
       Must resolve to an **encrypted ZFS dataset**; the step is skipped with a
       warning if it does not. See [Daily Backup — ZFS Keys Backup](daily-backup.md#zfs-keys-backup)
       for the security implications.
+
+    Hovering either the label or the entry shows the field's explanation.
 
 - **Post-Backup Steps** — Three checkboxes and a command entry:
   
@@ -1397,15 +1404,19 @@ removed manually via the **Prune Old** action button.
 
 The **Performance** tab monitors ZFS's memory tiers in real time: the **ARC**
 (the adaptive replacement cache in RAM), the **L2ARC** (read-cache
-devices), and the **SLOG** (intent-log devices). It refreshes
-automatically while visible on a user-configurable interval, and every
-refresh redraws rolling time-series charts. Charts render through
-matplotlib when that optional package is installed and through the
+devices), and the **SLOG** (intent-log devices). The Live Charts view
+samples on a user-configurable interval for as long as the GUI is open —
+sampling continues while other tabs are visible, so the rolling charts
+keep an uninterrupted history — and every sample redraws the rolling
+time-series charts. Charts render through
+matplotlib when that package is installed and through the
 built-in Cairo renderer otherwise, so the display updates dynamically
 either way (see the developer note on
 [GUI charting](../developer-guide/charting.md)). The Live Charts header
 names the active renderer, so a Cairo fallback is visible at a glance;
-its usual cause is the GUI running as root while matplotlib sits in a
+`python3-matplotlib` is a standard prerequisite the installers offer to
+install, but on hosts where it is still missing the usual cause is the
+GUI running as root while matplotlib sits in a
 user's pip `--user` site — install the system package
 (`python3-matplotlib`) instead. Chart colours follow
 the GTK theme — background, text, grid, and series colours resolve from
@@ -1431,7 +1442,11 @@ Summary rates (hits/s, misses/s, read/write B/s, commits/s) are computed
 from the deltas of these cumulative kstat counters between refreshes —
 arcstat-style — so the first refresh after opening the tab (or after a
 counter reset, e.g. a reboot) shows "—" for those until a second sample
-exists. The per-device table rates come from the iostat report's own
+exists. The same is true after a sampling stall (a gap far beyond the
+configured interval, e.g. a suspended host): the first sample afterwards
+re-baselines instead of averaging a rate across the gap, and the rate
+charts skip that point rather than draw a value that was never measured.
+The per-device table rates come from the iostat report's own
 1-second measurement window and are therefore live on the very first
 refresh; that measurement runs in the background collection thread, so
 the GUI never blocks waiting on it.
@@ -1489,7 +1504,10 @@ Enclosures table), so the right-most column always shows its true width
 and shrinks honestly when resized.
 
 Charts keep roughly 300 samples (about 25 minutes at the default 5 s
-interval) and auto-scale their Y axes. With matplotlib installed the
+interval) and auto-scale their Y axes. The X axis carries tick marks
+with age labels between the ends — more as the window widens — so a
+long history reads at a glance; both renderers draw the same tick
+positions. With matplotlib installed the
 charts gain antialiased lines with translucent fills, styled axes, and
 per-series legends that show each series' latest value; the dashed
 `c_max` reference line and the fixed-height behaviour are the same in
@@ -1542,8 +1560,10 @@ running, a small **Refreshing** indicator appears next to the spinner;
 both the auto-refresh timer and the toolbar Refresh button trigger it.
 The value is persisted to the config file
 (`memory.refresh_seconds`) and takes effect immediately — the timer is
-restarted with the new interval. Like the other data tabs, the Performance
-timer only runs while the tab is visible.
+restarted with the new interval. Unlike the other data tabs, the
+Performance sampling timer runs for as long as the GUI is open: the
+charts keep their history whatever page is visible, while the Alignment
+view refreshes only while it is the visible view.
 
 ### Alignment View
 
@@ -1787,8 +1807,14 @@ hardware reports the same bridge serial as its siblings:
 
 Select an enclosure and click **Set Max I/O Rate…** to give it a name and a
 rate cap. The rate accepts the pacer grammar — digits with an optional
-`k`/`m`/`g`/`t`/`p`/`e` suffix (`i` and `b` also accepted, 1024-based, e.g.
-`100m` or `64KiB`); leave it blank for unlimited. The cap governs every paced transfer
+`k`/`m`/`g`/`t`/`p`/`e` suffix (`i` and `b` also accepted, 1024-based).
+Bare digits mean bytes per second (`100` = 100 bytes/s), and the suffixes
+scale by 1024-based units (`100m` = 100 MiB/s ≈ 104.9 million bytes/s,
+`64KiB` = 64 KiB/s). A rate of zero is refused — it cannot be paced; leave
+the field blank for unlimited. The dialog shows this syntax under the rate
+field. ZFSutilities does not have a way to control the absolute I/O rate to
+any device; the cap controls only the rate at which ZFSutilities scripts
+issue I/Os at the program level. The cap governs every paced transfer
 that touches the enclosure's disks on the source *or* destination side, and
 the lower of it and any activity-specific rate limit always wins — see
 [Transfer Rate Limits and Enclosure Caps](concepts.md#transfer-rate-limits-and-enclosure-caps)

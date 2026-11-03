@@ -336,19 +336,34 @@ noisy and nothing is re-saved. Keys loaded later, after login, are handled by
 A second `ExecStartPost` runs
 [`export-iscsi-state --check`](../commands-and-modules/two-node.md#export-iscsi-state-storage-node)
 after the encrypted-LUN helper: the live LUN topology is compared against
-the pool-resident state map and the verdict lands in the boot journal —
-`post-restore verification OK` when live matches the map, or
-`post-restore verification FAILED — live LUNs differ from the pool map; do
-NOT save config until reconciled` with the check's DRIFT detail lines
-beneath it. This is what the 2026-10-27 boot lacked: a restore that brought
-back 3 of 33 LUN mappings looked healthy because nothing compared live
-state to the map. On a normal boot with encrypted LUNs whose keys are not
-yet loaded, the FAILED line is expected until `load-keys` +
-`iscsi-recover-encrypted-luns` complete — its guidance (do not save config
-until reconciled) is correct in that window, and `safe-iscsi-save`'s gate
-would refuse such a save anyway. The wrapper captures the check's output,
-is bounded by `timeout(1)`, and always exits 0, so a wedged `targetcli` can
-neither hang nor fail the unit.
+the pool-resident state map and the verdict lands in the boot journal.
+This is what the 2026-10-27 boot lacked: a restore that brought back 3 of
+33 LUN mappings looked healthy because nothing compared live state to the
+map. Three verdicts:
+
+- `post-restore verification OK — live LUNs match the pool map` (check
+  exit 0).
+- `post-restore verification PENDING — encrypted LUN(s) await key load
+  (see DRIFT lines); do NOT save config until reconciled` (check exit 3):
+  every missing LUN traces to a dataset whose `keystatus` is
+  `unavailable` — the expected shape of a keys-absent boot until
+  `load-keys` + `iscsi-recover-encrypted-luns` complete. The verdict is
+  deliberately distinct from FAILED: an every-boot *expected* FAILED
+  trained operators to ignore the verifier exactly when unexpected drift
+  arrives. The do-not-save guidance stays, and `safe-iscsi-save`'s gate
+  would refuse such a save anyway.
+- `post-restore verification FAILED — live LUNs differ from the pool map;
+  do NOT save config until reconciled` (any other check exit): unexpected
+  drift, with the check's DRIFT detail lines beneath it. Drift that only
+  looks keys-pending — keys already loaded, an unencrypted dataset, an
+  unreadable dataset, or any moved/extra/renamed object — lands here
+  (fail closed).
+
+An older drop-in that predates the PENDING branch maps exit 3 to this
+FAILED line during a version skew — the conservative behavior, never a
+false OK. The wrapper captures the check's output, is bounded by
+`timeout(1)`, and always exits 0, so a wedged `targetcli` can neither hang
+nor fail the unit.
 
 ### `pre-start-backup.conf`
 

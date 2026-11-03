@@ -1582,7 +1582,8 @@ class TestEnclosureRateProblem(unittest.TestCase):
 
     def test_blank_and_valid_rates_pass(self):
         dp = _import_disks_page()
-        for text in ("", "100m", "64KiB", "1G", "512kib"):
+        # "100" pins the bare-digits meaning: 100 bytes/s.
+        for text in ("", "100", "100m", "64KiB", "1G", "512kib"):
             self.assertIsNone(dp._enclosure_rate_problem(text), text)
 
     def test_invalid_rates_refuse(self):
@@ -1591,6 +1592,16 @@ class TestEnclosureRateProblem(unittest.TestCase):
             problem = dp._enclosure_rate_problem(text)
             self.assertIsNotNone(problem, text)
             self.assertIn("invalid max I/O rate", problem)
+            self.assertIn(text, problem)
+
+    def test_zero_rates_refuse_with_zero_message(self):
+        dp = _import_disks_page()
+        # Zero matches the grammar shape but cannot be paced; it gets its
+        # own refusal line, not the generic invalid-grammar one.
+        for text in ("0", "00", "0k", "0KiB"):
+            problem = dp._enclosure_rate_problem(text)
+            self.assertIsNotNone(problem, text)
+            self.assertIn("is zero", problem)
             self.assertIn(text, problem)
 
 
@@ -1651,6 +1662,38 @@ class TestEnclosureRateDialog(unittest.TestCase):
             )
         )
         dialog.destroy.assert_called_once()
+
+    def test_zero_rate_keeps_dialog_open_then_saves(self):
+        dp = _import_disks_page()
+        # Zero matches the grammar but cannot be paced; it is refused with
+        # the zero-specific line until a positive rate is entered.
+        result, dialog, labels = self._run_dialog(
+            dp, [dp.Gtk.ResponseType.OK, dp.Gtk.ResponseType.OK], ["", ""], ["0", "100m"]
+        )
+        self.assertEqual(result, ("", "100m"))
+        self.assertEqual(dialog.run.call_count, 2)
+        self.assertTrue(
+            any(
+                "max I/O rate '0' is zero" in str(call.args)
+                for label in labels
+                for call in label.set_text.call_args_list
+            )
+        )
+        dialog.destroy.assert_called_once()
+
+    def test_dialog_shows_rate_syntax(self):
+        dp = _import_disks_page()
+        # The syntax label must spell out both scales the grammar accepts:
+        # bare digits are bytes/s and the suffixes are 1024-based MiB/KiB.
+        _result, _dialog, labels = self._run_dialog(dp, [dp.Gtk.ResponseType.CANCEL], [""], [""])
+        self.assertTrue(
+            any(
+                "bytes per second" in label.created_text
+                and "100 MiB/s" in label.created_text
+                and "64 KiB/s" in label.created_text
+                for label in labels
+            )
+        )
 
     def test_cancel_returns_none(self):
         dp = _import_disks_page()

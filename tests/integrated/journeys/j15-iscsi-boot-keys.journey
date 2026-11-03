@@ -4,18 +4,19 @@
 # Storage reboots with encrypted LUNs in every posture an inexperienced
 # operator lands in, recovering through user-visible surfaces only:
 #   S1  reboot, key device absent: journal oracle (pre-start backup,
-#       boot-config restore, verifier FAILED + DRIFT naming each pending
+#       boot-config restore, verifier PENDING + DRIFT naming each pending
 #       encrypted LUN), keystatus unavailable, VM start aborts on the
 #       encrypted LUN, blind recovery via iscsi-recover-encrypted-luns
 #       (ACL rebind included), final --check OK.
-#   S1c second reboot after recovery: the SAME FAILED+DRIFT shape (the
+#   S1c second reboot after recovery: the SAME PENDING+DRIFT shape (the
 #       recovery-then-reboot cycle is stable, not a one-off), then
 #       convergence proven WITHIN that boot — load-keys + recover, then
 #       a manual export-iscsi-state --check reports rc 0, no drift.
 #       (The exercise sequence's "next boot journals OK" wording is a
 #       FINDING: no boot-time key loading exists, so a keys-absent boot
-#       always journals FAILED — two-node-config.md documents exactly
-#       that, and this journey proves it.)
+#       never journals OK — it journals the encrypted-aware PENDING
+#       verdict, FAILED before repair plan 027 / R-08; two-node-config.md
+#       documents exactly that, and this journey proves it.)
 #   S1b storage power event while both workload VMs run: compute fallout
 #       sampled through the outage (sessions, links, fence tick WARN on
 #       the ssh failure), unaided return of plain-LUN links vs. the
@@ -32,7 +33,7 @@
 #   M1  mistyped key-file paths at new-vm-disk --encrypted (relative,
 #       nonexistent, world-readable): abort each time, no zvol created.
 #   S5a encrypted LUN with keylocation=file:// on the unencrypted root
-#       filesystem: STILL FAILED+DRIFT at boot (availability is not
+#       filesystem: STILL PENDING+DRIFT at boot (availability is not
 #       loadedness — nothing loads zvol keys at boot); recovery needs
 #       no USB ceremony for it.
 #   S5b the one posture that legitimately journals boot-time OK: every
@@ -171,7 +172,7 @@ j15_iscsi_boot_keys_main() {
     itf_journey_stage_reboot_guest j15-s1 storage || return 1
     j15_read_coords || return 1
 
-    itf_storage_reboot_assert s1 "$s_ip" failed \
+    itf_storage_reboot_assert s1 "$s_ip" pending \
         "$J15_LUN_SPARE" "$J15_LUN_ENC_OS" || return 1
 
     itf_keystatus "$s_ip" "${J15_POOL_A}/proxmox/${J15_LUN_SPARE}" unavailable s1-spare \
@@ -256,7 +257,7 @@ j15_iscsi_boot_keys_main() {
     fi
 
     # ==================================================================
-    # S1c — second reboot after recovery: same FAILED shape, convergence
+    # S1c — second reboot after recovery: same PENDING shape, convergence
     # proven WITHIN the boot (the re-pointed oracle)
     # ==================================================================
 
@@ -264,10 +265,10 @@ j15_iscsi_boot_keys_main() {
     itf_journey_stage_reboot_guest j15-s1c storage || return 1
     j15_read_coords || return 1
 
-    itf_storage_reboot_assert s1c "$s_ip" failed \
+    itf_storage_reboot_assert s1c "$s_ip" pending \
         "$J15_LUN_SPARE" "$J15_LUN_ENC_OS" || return 1
     itf_step info "S1c shape recorded" \
-        "second keys-absent boot journals the SAME FAILED+DRIFT — the" \
+        "second keys-absent boot journals the SAME PENDING+DRIFT — the" \
         "recovery-then-reboot cycle is stable; the 'next boot OK' claim" \
         "is a FINDING against the exercise sequence (nothing loads keys" \
         "at boot)"
@@ -463,7 +464,7 @@ j15_iscsi_boot_keys_main() {
     itf_journey_stage_reboot_guest j15-s2 storage || return 1
     j15_read_coords || return 1
 
-    itf_storage_reboot_assert s2 "$s_ip" failed \
+    itf_storage_reboot_assert s2 "$s_ip" pending \
         "$J15_LUN_SPARE" "$J15_LUN_ENC_OS" || return 1
 
     itf_key_ceremony s2 "$s_base" "$s_vmid" "$s_ip" add || return 1
@@ -709,7 +710,7 @@ j15_iscsi_boot_keys_main() {
 
     # ==================================================================
     # S5a — file:// keylocation on the unencrypted root filesystem:
-    #       available is not loaded; the boot still journals FAILED
+    #       available is not loaded; the boot still journals PENDING
     # ==================================================================
 
     # shellcheck disable=SC2029  # expansions run on the storage guest
@@ -752,8 +753,10 @@ j15_iscsi_boot_keys_main() {
     # All four registered encrypted LUNs must appear in the DRIFT detail
     # — including the file:// one: the key file being AVAILABLE at boot
     # loads nothing (no loader exists; the removed automation stays
-    # removed).  Evidence for the doc-claim FINDINGS.
-    itf_storage_reboot_assert s5a "$s_ip" failed \
+    # removed) and keystatus stays unavailable, so the verdict is the
+    # encrypted-aware PENDING, not FAILED.  Evidence for the doc-claim
+    # FINDINGS.
+    itf_storage_reboot_assert s5a "$s_ip" pending \
         "$J15_LUN_SPARE" "$J15_LUN_ENC_OS" "$J15_LUN_POOL_B" "$J15_LUN_S5" \
         || return 1
     itf_keystatus "$s_ip" "${J15_POOL_C}/proxmox/${J15_LUN_S5}" unavailable s5a \
@@ -909,7 +912,7 @@ EOF
     fi
 
     itf_step info "journey complete" \
-        "S1 boot oracle + blind recovery; S1c stable FAILED shape + within-boot" \
+        "S1 boot oracle + blind recovery; S1c stable PENDING shape + within-boot" \
         "convergence; S1b fallout + fence self-heal; S2 add path; S3 safe" \
         "refusal + one-command restart; S4/M4/M1 wrong inputs; S5a" \
         "availability!=loadedness; S5b boot-time OK via key-loading unit"

@@ -1966,6 +1966,39 @@ wat
     test_pass
 }
 
+test_zero_rate_fatals() {
+    reset_mocks
+    test_start "Zero rate limit is refused like any invalid rate"
+
+    # Zero matches the grammar shape but cannot be paced (the pacer divides
+    # by the rate), so archive_valid_rate must refuse it with the same
+    # guidance as any invalid value.
+    local vmid="261"
+    local pve_dir="$_mock_zfs_state_dir/pve42"
+    local archive="$_mock_zfs_state_dir/archive42"
+    local mount="$_mock_zfs_state_dir/mount42"
+    mkdir -p "$archive" "$mount"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_read_response="${archive}
+0
+"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Zero rate reported success; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Invalid rate limit '0'"* ]]; then
+        test_fail "Missing zero-rate FATAL; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 test_missing_pacer_fatals_instead_of_running_unlimited() {
     reset_mocks
     test_start "Unresolvable pacer with a rate set refuses to pace, not to run"
@@ -2349,6 +2382,7 @@ test_single_node_removal_uses_zfsdelfs
 test_single_node_destroy_failure_keeps_config
 test_rate_limit_paces_copy_path
 test_invalid_rate_fatals
+test_zero_rate_fatals
 test_missing_pacer_fatals_instead_of_running_unlimited
 test_two_node_rate_forwarded_to_payload
 test_enclosure_cap_paces_archive_without_prompted_rate

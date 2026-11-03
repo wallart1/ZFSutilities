@@ -395,6 +395,9 @@ class TestPerformanceViewSwitcher(_PageTestCase):
 
     def test_dispatcher_routes_to_alignment_view(self):
         mp, _ap, app = self._prepared()
+        # The dispatcher serves the *visible* view: the Performance page
+        # must be showing for the Alignment view to refresh through it.
+        app.stack.get_visible_child_name.return_value = "memory"
         radios = app._memory_view_radios
         radios["charts"].get_active.return_value = False
         radios["alignment"].get_active.return_value = True
@@ -408,6 +411,7 @@ class TestPerformanceViewSwitcher(_PageTestCase):
 
     def test_dispatcher_charts_view_refreshes_charts(self):
         mp, _ap, app = self._prepared()
+        app.stack.get_visible_child_name.return_value = "memory"
         radios = app._memory_view_radios
         radios["charts"].get_active.return_value = True
         radios["alignment"].get_active.return_value = False

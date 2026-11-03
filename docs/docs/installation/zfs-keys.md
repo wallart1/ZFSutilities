@@ -54,7 +54,9 @@ support intact without any of the boot-time races.
     `file://` keylocation on a non-encrypted filesystem only makes the key
     file *readable*; keys stay unloaded until the operator runs the load
     step, and every keys-absent boot still journals the expected
-    post-restore verification FAILED for the encrypted LUNs. The one
+    post-restore verification PENDING for the encrypted LUNs (every
+    missing LUN traces to a locked dataset — distinct from the FAILED
+    verdict that unexpected drift produces). The one
     legitimate boot-time loader is a key-loading unit you author yourself,
     ordered before the iSCSI restore (`After=zfs-import-cache.service`,
     running `zfs load-key -a`) — the boot drop-in's own "separate

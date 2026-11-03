@@ -55,6 +55,11 @@ from memory_stats import format_percent
 # samples age out.
 CHART_MAX_SAMPLES = 300
 
+# Pixel height of one rolling chart (a size request in both renderers;
+# the pack layer never expands charts vertically).  Doubled from the
+# original 110 px so the rolling window reads at a glance.
+ROLLING_CHART_HEIGHT = 220
+
 # Chart series colours (RGB 0.0-1.0; matplotlib accepts the same tuples).
 SERIES_COLORS = [
     (0.20, 0.40, 0.70),  # blue
@@ -278,6 +283,22 @@ def format_age(seconds):
     return f"{hours}h {minutes:02d}m"
 
 
+def rolling_tick_count(t_span):
+    """Number of X-axis ticks for a rolling window spanning *t_span* seconds.
+
+    Shared grammar for both renderers: the tick positions are fixed
+    fractions of the window (see ``MatplotlibRollingChart._render`` and
+    the Cairo fallback's draw), so only the label text slides as the
+    window advances.  Two ticks while the window is too narrow for more,
+    three once a 12 s span separates them, five from a minute up.
+    """
+    if t_span >= 60:
+        return 5
+    if t_span >= 12:
+        return 3
+    return 2
+
+
 def ladder_pixel_height(pools):
     """Return the ladder widget's pixel height for the given pool set.
 
@@ -421,7 +442,7 @@ class MatplotlibRollingChart:
         series_names,
         max_samples=CHART_MAX_SAMPLES,
         percent=False,
-        height=110,
+        height=ROLLING_CHART_HEIGHT,
         formatter=format_bytes,
     ):
         backend = matplotlib_backend()
@@ -615,7 +636,7 @@ class MatplotlibRollingChart:
         # Tick positions are fixed fractions of the window, so only the
         # label text slides as the window advances; more ticks once the
         # window is wide enough for them to stay distinct.
-        ticks = 5 if t_span >= 60 else (3 if t_span >= 12 else 2)
+        ticks = rolling_tick_count(t_span)
         ax.set_xticks([t_first + t_span * i / (ticks - 1) for i in range(ticks)])
 
         for index, line in enumerate(self._lines):
@@ -919,7 +940,7 @@ def create_rolling_chart(
     series_names,
     max_samples=CHART_MAX_SAMPLES,
     percent=False,
-    height=110,
+    height=ROLLING_CHART_HEIGHT,
     formatter=format_bytes,
 ):
     """Return a rolling chart using the best renderer available.

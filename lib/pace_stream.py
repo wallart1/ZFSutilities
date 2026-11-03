@@ -24,7 +24,8 @@ Failure containment: a dead downstream consumer kills this process via SIGPIPE
 Rate grammar (same as archive_valid_rate in lib/archive-engine.sh): digits
 plus an optional case-insensitive suffix from k/m/g/t/p/e with optional i and
 optional b — 1024-based, e.g. 100M = 100 MiB/s, 500KiB = 500 KiB/s, 4096 = 4096
-bytes/s.
+bytes/s. A rate of zero is refused: pacing divides by the rate, so zero
+cannot be paced.
 """
 
 import signal
@@ -51,7 +52,8 @@ _sleep = time.sleep
 
 
 def parse_rate(text):
-    """Parse a rate string into bytes/second. Raises ValueError on garbage."""
+    """Parse a rate string into bytes/second. Raises ValueError on garbage
+    or a rate of zero."""
     lowered = text.strip().lower()
     i = 0
     while i < len(lowered) and lowered[i].isdigit():
@@ -65,7 +67,10 @@ def parse_rate(text):
         suffix = suffix[:-1]
     if suffix not in MULTIPLIERS:
         raise ValueError(f"invalid rate suffix: {text!r}")
-    return int(digits) * MULTIPLIERS[suffix]
+    rate = int(digits) * MULTIPLIERS[suffix]
+    if rate == 0:
+        raise ValueError(f"rate must be greater than zero: {text!r}")
+    return rate
 
 
 def chunk_size_for(rate):

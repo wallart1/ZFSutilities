@@ -632,9 +632,10 @@ $(cat "$ITF_RUN_DIR/workload-s15-resumed-${vm}.gaps")" \
     j15_read_coords || return 1
 
     # The boot oracle in the power-cycle shape: same restore chain +
-    # FAILED + DRIFT naming the encrypted LUNs (the power-off unloaded
-    # the keys — the expected-every-boot shape).
-    itf_storage_reboot_assert j18-s16 "$s_ip" failed \
+    # PENDING + DRIFT naming the encrypted LUNs (the power-off unloaded
+    # the keys — the expected-every-boot shape; the encrypted-aware
+    # verdict, FAILED before repair plan 027).
+    itf_storage_reboot_assert j18-s16 "$s_ip" pending \
         "$J15_LUN_SPARE" "$J15_LUN_ENC_OS" || return 1
 
     # Post-return convergence, classified per the G4 oracle ruling —

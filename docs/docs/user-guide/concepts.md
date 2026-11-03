@@ -247,6 +247,9 @@ did before caps existed.
 
 Known limitations:
 
+- **ZFSutilities does not have a way to control the absolute I/O rate to any
+  device.** These limits control only the rate at which ZFSutilities scripts
+  issue I/Os at the program level.
 - **Scrubs, resilvers, and destroys are monitored only.** Their I/O is
   kernel-driven on OpenZFS and cannot be throttled from userland; scrubs
   keep their `ionice -c3` idle-class priority and the pause controls. The

@@ -84,7 +84,7 @@ from input_requests import (
 )
 from logging_config import format_log_line_short, log_msg
 from logs_page import create_logs_page
-from memory_page import create_memory_page, refresh_memory_page
+from memory_page import create_memory_page, on_memory_timer_tick, refresh_memory_page
 from notifications_dialog import NotificationsDialog
 from offsite_page import create_offsite_page, do_detect_offsite_pool
 from path_utils import get_version
@@ -320,12 +320,17 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
 
         # Start/stop timers for the initial visible page (the notify signal
         # does not fire for the page that is already visible when the handler
-        # is connected).
+        # is connected).  The Performance sampling timer instead runs for
+        # the GUI's whole lifetime — its chart history stays uninterrupted
+        # on every page — and the page itself is refreshed once here when
+        # it starts visible, exactly as a later switch would.
         initial_page = self.stack.get_visible_child_name()
         self._start_stop_dashboard_timer(initial_page)
         self._start_stop_scrub_timer(initial_page)
         self._start_stop_disks_timer(initial_page)
-        self._start_stop_memory_timer(initial_page)
+        self._ensure_memory_timer()
+        if initial_page == "memory":
+            refresh_memory_page(self)
 
     def add_stack_page(self, name, title, widget):
         """Add a page to the stack and a labeled row to the sidebar."""
@@ -723,10 +728,13 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             self._start_stop_scrub_timer(page_name)
             self._start_stop_pools_timer(page_name)
             self._start_stop_disks_timer(page_name)
-            self._start_stop_memory_timer(page_name)
             self._start_stop_schedule_timer(page_name)
             if page_name == "dashboard":
                 refresh_dashboard_page(self)
+            elif page_name == "memory":
+                # Sampling never stops (see _ensure_memory_timer); the
+                # switch still refreshes the visible view immediately.
+                refresh_memory_page(self)
             elif page_name == "disks":
                 refresh_disks_page(self)
             elif page_name == "datasets":
@@ -811,24 +819,26 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             refresh_surface_test_status(self)
         return True
 
-    def _start_stop_memory_timer(self, page_name):
-        """Start the memory refresh timer when on Performance, stop otherwise."""
+    def _ensure_memory_timer(self):
+        """(Re)arm the Performance sampling timer for the GUI's lifetime.
+
+        The Live Charts history must stay uninterrupted whatever page is
+        visible, so this timer never stops on page changes — its tick
+        (``memory_page.on_memory_timer_tick``) samples the charts on
+        every page and refreshes the Alignment view only while it is the
+        visible view.
+        """
         if getattr(self, "_memory_timer", None) is not None:
             GLib.source_remove(self._memory_timer)
             self._memory_timer = None
-        if page_name == "memory":
-            refresh_memory_page(self)
-            from config_core import get_memory_config
+        from config_core import get_memory_config
 
-            seconds = get_memory_config(self.config).get("refresh_seconds", 5)
-            self._memory_timer = GLib.timeout_add_seconds(
-                max(1, seconds), self._on_memory_timer_tick
-            )
+        seconds = get_memory_config(self.config).get("refresh_seconds", 5)
+        self._memory_timer = GLib.timeout_add_seconds(max(1, seconds), self._on_memory_timer_tick)
 
     def _on_memory_timer_tick(self):
-        """Callback for memory auto-refresh. Returns True to keep timer alive."""
-        if self.stack.get_visible_child_name() == "memory":
-            refresh_memory_page(self)
+        """Callback for Performance auto-refresh. Returns True to keep timer alive."""
+        on_memory_timer_tick(self)
         return True
 
     def _on_dashboard_timer_tick(self):

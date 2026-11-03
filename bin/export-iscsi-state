@@ -21,6 +21,9 @@
 # Usage: sudo export-iscsi-state [--check] [--force] [--print-map]
 #   --check   Compare live state against the newest map found on any pool and
 #             report drift (manual targetcli edits since the last export).
+#             Exits 0 on match, 3 when all drift is keys-pending (every
+#             missing-live LUN traces to a locked encrypted dataset — the
+#             expected keys-absent-boot shape), 1 on any other drift.
 #   --force   Record the live state even when it is degraded (fewer active
 #             backstores than the manifest expects) or would drop LUN
 #             mappings the newest pool map still records while their
@@ -63,7 +66,9 @@ usage() {
     log_msg "INFO: Usage: export-iscsi-state [--check] [--force] [--print-map]"
     echo ""
     log_msg "INFO:   --check     Compare live state to the newest pool-resident map and report"
-    log_msg "INFO:               drift (manual targetcli edits since the last export)"
+    log_msg "INFO:               drift (manual targetcli edits since the last export);"
+    log_msg "INFO:               exits 0 on match, 3 when all drift is keys-pending,"
+    log_msg "INFO:               1 on any other drift"
     log_msg "INFO:   --force     Record a degraded live state over a healthy map (use with care)"
     log_msg "INFO:   --print-map Print the newest pool-resident map to stdout (read-only;"
     log_msg "INFO:               used by the compute host to fetch the recovery map)"
@@ -523,7 +528,15 @@ enforce_not_degraded() {
 # ------------------------------------------------------------------
 
 # Compare the live state ($2) with the recorded map ($1). Prints DRIFT lines
-# and returns 1 on drift, 0 when the recorded LUN topology matches live.
+# and exits 0 when the recorded LUN topology matches live, 1 on any drift a
+# locked key cannot explain, and 2 when every drift line is a map-recorded
+# object missing live that traces to a map backstore — the keys-pending
+# CANDIDATE. On exit 2 the report additionally carries one
+# "KEYSUSPECT: <backstore>=<dataset>" line per implicated backstore (after
+# the DRIFT lines) for the bash caller to probe with `zfs get keystatus`;
+# only that probe turns the candidate into the keys-pending verdict (exit 3
+# from main), because a locked key is the sole drift source the candidate
+# covers and only live keystatus can attest the lock.
 report_state_drift() {
     python3 - "$1" "$2" << 'PYEOF'
 import json, sys
@@ -533,6 +546,11 @@ with open(sys.argv[1]) as f:
 with open(sys.argv[2]) as f:
     new = json.load(f)
 
+# Each entry is (drift line, suspect backstore or None): a suspect is the
+# map backstore a missing-live line names, directly or through the LUN it
+# backs. None marks a line no key state can explain (moved, extra-live,
+# renamed, changed attribute, whole target gone) — one such line collapses
+# the verdict back to plain drift.
 drift = []
 
 def acl_records(a):
@@ -557,11 +575,11 @@ def grant_pairs(grants):
     return out
 
 if old.get("iqn_prefix") != new.get("iqn_prefix"):
-    drift.append("iqn_prefix: map has %r, live has %r"
-                 % (old.get("iqn_prefix"), new.get("iqn_prefix")))
+    drift.append(("iqn_prefix: map has %r, live has %r"
+                  % (old.get("iqn_prefix"), new.get("iqn_prefix")), None))
 if old.get("storage_ip") != new.get("storage_ip"):
-    drift.append("storage_ip: map has %r, live has %r"
-                 % (old.get("storage_ip"), new.get("storage_ip")))
+    drift.append(("storage_ip: map has %r, live has %r"
+                  % (old.get("storage_ip"), new.get("storage_ip")), None))
 
 # Pool identity: a GUID change on a name present in both means the pool was
 # renamed or replaced. A name present on one side only is deliberately not
@@ -572,34 +590,39 @@ old_pools = old.get("pools", {})
 new_pools = new.get("pools", {})
 for pool in sorted(set(old_pools) & set(new_pools)):
     if old_pools[pool] != new_pools[pool]:
-        drift.append("pools.%s: GUID changed: map has %r, live has %r"
-                     " (pool renamed or replaced?)" % (pool, old_pools[pool],
-                                                       new_pools[pool]))
+        drift.append(("pools.%s: GUID changed: map has %r, live has %r"
+                      " (pool renamed or replaced?)" % (pool, old_pools[pool],
+                                                        new_pools[pool]),
+                      None))
 
 old_tg = old.get("targets", {})
 new_tg = new.get("targets", {})
 for iqn in sorted(set(old_tg) | set(new_tg)):
     o, n = old_tg.get(iqn), new_tg.get(iqn)
     if o is None:
-        drift.append("target %s: live target is not in the map" % iqn)
+        drift.append(("target %s: live target is not in the map" % iqn, None))
         continue
     if n is None:
-        drift.append("target %s: map target no longer exists live" % iqn)
+        drift.append(("target %s: map target no longer exists live" % iqn, None))
         continue
     ol, nl = o.get("luns", {}), n.get("luns", {})
     for idx in sorted(set(ol) | set(nl), key=lambda s: int(s) if s.isdigit() else 0):
         if idx not in nl:
-            drift.append("target %s: map LUN %s -> %s is missing live" % (iqn, idx, ol[idx]))
+            drift.append(("target %s: map LUN %s -> %s is missing live"
+                          % (iqn, idx, ol[idx]), ol[idx]))
         elif idx not in ol:
-            drift.append("target %s: live LUN %s -> %s is not in the map" % (iqn, idx, nl[idx]))
+            drift.append(("target %s: live LUN %s -> %s is not in the map"
+                          % (iqn, idx, nl[idx]), None))
         elif ol[idx] != nl[idx]:
-            drift.append("target %s: LUN %s moved: map -> %s, live -> %s"
-                         % (iqn, idx, ol[idx], nl[idx]))
+            drift.append(("target %s: LUN %s moved: map -> %s, live -> %s"
+                          % (iqn, idx, ol[idx], nl[idx]), None))
     oa, na = acl_records(o.get("acls", [])), acl_records(n.get("acls", []))
     for a in sorted(set(oa) - set(na)):
-        drift.append("target %s: ACL initiator %s is missing live" % (iqn, a))
+        drift.append(("target %s: ACL initiator %s is missing live" % (iqn, a),
+                      None))
     for a in sorted(set(na) - set(oa)):
-        drift.append("target %s: live ACL initiator %s is not in the map" % (iqn, a))
+        drift.append(("target %s: live ACL initiator %s is not in the map"
+                      % (iqn, a), None))
     # Grant pairs are compared only when the MAP side records them (the
     # dict shape): a legacy list map carries no grant dimension to compare
     # against, and it is refreshed to the new shape at the next save.
@@ -609,33 +632,59 @@ for iqn in sorted(set(old_tg) | set(new_tg)):
             for ml in sorted(set(og) | set(ng),
                              key=lambda s: int(s) if s.isdigit() else 1 << 30):
                 if ml not in ng:
-                    drift.append("target %s: ACL %s grant mapped_lun %s -> tpg_lun %s"
-                                 " is missing live" % (iqn, a, ml, og[ml]))
+                    # The grant's tpg_lun names the map LUN whose backstore
+                    # the missing grant follows; a tpg_lun the map's LUN
+                    # section does not record cannot be traced (None).
+                    drift.append(("target %s: ACL %s grant mapped_lun %s -> tpg_lun %s"
+                                  " is missing live" % (iqn, a, ml, og[ml]),
+                                  ol.get(str(og[ml]))))
                 elif ml not in og:
-                    drift.append("target %s: ACL %s live grant mapped_lun %s ->"
-                                 " tpg_lun %s is not in the map" % (iqn, a, ml, ng[ml]))
+                    drift.append(("target %s: ACL %s live grant mapped_lun %s ->"
+                                  " tpg_lun %s is not in the map"
+                                  % (iqn, a, ml, ng[ml]), None))
                 elif og[ml] != ng[ml]:
-                    drift.append("target %s: ACL %s grant mapped_lun %s moved:"
-                                 " map -> tpg_lun %s, live -> tpg_lun %s"
-                                 % (iqn, a, ml, og[ml], ng[ml]))
+                    drift.append(("target %s: ACL %s grant mapped_lun %s moved:"
+                                  " map -> tpg_lun %s, live -> tpg_lun %s"
+                                  % (iqn, a, ml, og[ml], ng[ml]), None))
 
 old_bs = old.get("backstores", {})
 new_bs = new.get("backstores", {})
 for bs in sorted(set(old_bs) | set(new_bs)):
     o, n = old_bs.get(bs), new_bs.get(bs)
     if o is None:
-        drift.append("backstore %s: live backstore is not in the map" % bs)
+        drift.append(("backstore %s: live backstore is not in the map" % bs,
+                      None))
         continue
     if n is None:
-        drift.append("backstore %s: map backstore no longer exists live" % bs)
+        drift.append(("backstore %s: map backstore no longer exists live" % bs,
+                      bs))
         continue
     for k in ("dev", "target", "lun"):
         if o.get(k) != n.get(k):
-            drift.append("backstore %s: %s changed: map %r, live %r"
-                         % (bs, k, o.get(k), n.get(k)))
+            drift.append(("backstore %s: %s changed: map %r, live %r"
+                          % (bs, k, o.get(k), n.get(k)), None))
 
-for line in drift:
+for line, _ in drift:
     print("DRIFT: %s" % line)
+
+# Keys-pending candidate: every line traced to a backstore and every traced
+# backstore carrying a zvol dev path the bash side can turn into a dataset
+# probe. Any failure here stays plain drift (exit 1) — fail closed.
+if drift and all(s is not None for _, s in drift):
+    prefix = "/dev/zvol/"
+    suspects = sorted({s for _, s in drift})
+    pairs = []
+    for bs in suspects:
+        dev = old_bs.get(bs, {}).get("dev")
+        if not isinstance(dev, str) or not dev.startswith(prefix) \
+                or len(dev) <= len(prefix):
+            pairs = None
+            break
+        pairs.append((bs, dev[len(prefix):]))
+    if pairs is not None:
+        for bs, ds in pairs:
+            print("KEYSUSPECT: %s=%s" % (bs, ds))
+        sys.exit(2)
 sys.exit(1 if drift else 0)
 PYEOF
 }
@@ -679,7 +728,8 @@ json_tmp=$(mktemp "${TMPDIR:-/tmp}/iscsi-state.XXXXXX") || {
 emit_state_json > "$json_tmp"
 
 if [[ "$check_only" == true ]]; then
-    local map_file rc=0
+    local map_file rc=0 drift_out="" line pair ds ks
+    local -a suspects=()
     map_file=$(newest_iscsi_state_map || true)
     if [[ -z "$map_file" ]]; then
         log_msg "FATAL: No ${STATE_FILENAME} found on any online pool —" \
@@ -688,10 +738,47 @@ if [[ "$check_only" == true ]]; then
         exit 1
     fi
     log_msg "INFO: Comparing live state against ${map_file}"
-    report_state_drift "$map_file" "$json_tmp" || rc=$?
+    # Exit protocol from report_state_drift: 0 no drift · 1 drift with a
+    # line a locked key cannot explain · 2 every drift line traced to a map
+    # backstore missing live (KEYSUSPECT: <name>=<dataset> lines follow the
+    # DRIFT lines). The keystatus probes stay in bash on purpose: the test
+    # suite mocks zfs as a shell function, which a python-side subprocess
+    # would bypass.
+    drift_out=$(report_state_drift "$map_file" "$json_tmp") || rc=$?
+    # Re-emit the report minus the internal KEYSUSPECT lines; grep exits 1
+    # when it filters everything out, so fence it (pipefail is on).
+    if [[ -n "$drift_out" ]]; then
+        printf '%s\n' "$drift_out" | grep -v '^KEYSUSPECT:' || true
+    fi
     if [[ "$rc" -eq 0 ]]; then
         log_msg "INFO:   ✓ No drift — live state matches the newest pool map"
-    else
+    elif [[ "$rc" -eq 2 ]]; then
+        # Keys-pending candidate: the verdict holds only while every suspect
+        # dataset exists, is encrypted, and is locked (keystatus
+        # "unavailable"). Keys already loaded, an unencrypted dataset ("-"),
+        # or an unreadable dataset is unexpected drift — the FAILED verdict.
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            pair="${line#KEYSUSPECT: }"
+            ds="${pair#*=}"
+            ks=$(zfs get -H -o value keystatus "$ds" 2>/dev/null) || ks=""
+            if [[ "$ks" != "unavailable" ]]; then
+                rc=1
+                break
+            fi
+            suspects+=("${pair%%=*}")
+        done < <(printf '%s\n' "$drift_out" | grep '^KEYSUSPECT:' || true)
+        if [[ "$rc" -eq 2 ]]; then
+            log_msg "WARN: All drift is keys-pending — encrypted LUN(s)" \
+                "${suspects[*]} locked (keystatus unavailable): expected" \
+                "on a keys-absent boot"
+            log_msg "WARN:   Load keys and run iscsi-recover-encrypted-luns," \
+                "then re-check; do NOT save config until reconciled"
+            rm -f "$json_tmp"
+            exit 3
+        fi
+    fi
+    if [[ "$rc" -ne 0 ]]; then
         log_msg "WARN: Drift detected between live state and the pool map (see DRIFT lines)"
     fi
     rm -f "$json_tmp"

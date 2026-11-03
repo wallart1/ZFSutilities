@@ -2173,7 +2173,7 @@ itf_storage_boot_state() {
     return 0
 }
 
-# itf_boot_journal_verdict <journal-log> <order-log> <ok|failed> <lun>...
+# itf_boot_journal_verdict <journal-log> <order-log> <ok|pending|failed> <lun>...
 #
 # Pure parser over itf_storage_boot_state's captures (unit-testable with
 # fixtures).  Asserts, in order:
@@ -2183,6 +2183,8 @@ itf_storage_boot_state() {
 #     boot-config restore echo, then the verdict line;
 #   - mode failed: every named encrypted LUN appears on a DRIFT line
 #     AFTER the verdict (the check's re-emitted detail);
+#   - mode pending: same DRIFT-after-verdict shape, under the encrypted-
+#     aware PENDING verdict (every missing LUN keys-pending);
 #   - mode ok: every named encrypted LUN appears on an "✓ Added" line
 #     from the ExecStartPost add hook BEFORE the verdict.
 # Echoes the verdict word on stdout; rc 1 (with reasons on stderr) when
@@ -2205,18 +2207,18 @@ itf_boot_journal_verdict() {
         bad=1
     fi
 
-    local backup_n unit_restore_n verdict_n=""
+    local backup_n unit_restore_n verdict_n="" verdict_grep
+    case "$mode" in
+        ok)      verdict_grep='post-restore verification OK' ;;
+        pending) verdict_grep='post-restore verification PENDING' ;;
+        *)       verdict_grep='post-restore verification FAILED' ;;
+    esac
     backup_n="$(grep -n 'targetctl: backed up saveconfig.json' "$journal" 2>/dev/null \
         | head -n 1 | cut -d: -f1)"
     unit_restore_n="$(grep -n 'targetctl: restoring boot config' "$journal" 2>/dev/null \
         | head -n 1 | cut -d: -f1)"
-    if [[ "$mode" == ok ]]; then
-        verdict_n="$(grep -n 'post-restore verification OK' "$journal" 2>/dev/null \
-            | head -n 1 | cut -d: -f1)"
-    else
-        verdict_n="$(grep -n 'post-restore verification FAILED' "$journal" 2>/dev/null \
-            | head -n 1 | cut -d: -f1)"
-    fi
+    verdict_n="$(grep -n "$verdict_grep" "$journal" 2>/dev/null \
+        | head -n 1 | cut -d: -f1)"
     if [[ -z "$backup_n" || -z "$unit_restore_n" || -z "$verdict_n" ]] \
             || (( backup_n >= unit_restore_n || unit_restore_n >= verdict_n )); then
         echo "order: backup@${backup_n:-none} restore@${unit_restore_n:-none}" \
@@ -2244,13 +2246,13 @@ itf_boot_journal_verdict() {
                 bad=1
             fi
         done
-        echo failed
+        echo "$mode"
     fi
     (( bad )) && return 1
     return 0
 }
 
-# itf_storage_reboot_assert <label> <s_ip> <ok|failed> <lun>...
+# itf_storage_reboot_assert <label> <s_ip> <ok|pending|failed> <lun>...
 #
 # Post-reboot boot evidence as one gated step: capture the boot state,
 # then run the journal parser in the requested mode with the scenario's

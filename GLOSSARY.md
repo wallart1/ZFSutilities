@@ -15,12 +15,19 @@ pause to explain it.
 
 Access Control List. In this repository the word almost always means
 the iSCSI kind, not filesystem permissions: inside each target's TPG,
-LIO keeps a per-initiator ACL saying which compute node may log in and
-which LUNs it may see — the "mapped LUN" grants. The pool state map
-(version 2) records every ACL grant — initiator, mapped LUN, LUN — so
-reconcile and the boot verifier can restore and check them exactly;
-losing a still-expected grant is refused (FATAL), never silently
-remapped. ZFS filesystem ACLs exist too (`acltype` and friends — a
+LIO keeps a per-initiator ACL that admits one compute node — identified
+by its IQN — and says which LUNs it may see, the "mapped LUN" grants
+(reports say "ACL MappedLUN" for the grant and "TPG LUN mapping" for
+the export itself). The distinction is load-bearing in the
+boot-incident work: `iscsi-recover-encrypted-luns` originally rebuilt
+TPG LUN mappings but never ACL MappedLUNs, so a recovered node could
+come up with LUNs mapped yet no initiator granted; recovery now
+rebuilds both, the pool state map (version 2) records every grant —
+initiator, mapped LUN, LUN — so reconcile and the boot verifier can
+restore and check them exactly, losing a still-expected grant is
+refused (FATAL) never silently remapped, and `safe-iscsi-save`'s
+authoritative gate compares every old mapping and grant before any
+write. ZFS filesystem ACLs exist too (`acltype` and friends — a
 locally-set one simply rides the property manifests like any other
 dataset property), but nothing in the repository manages them directly.
 
@@ -94,9 +101,12 @@ campaign's own — it appears nowhere in the code; the authoritative step
 list is the "Corrected exercise sequence" file. In brief: deploy the
 current release to both hosts first (the precondition); refresh the
 recovery authorities with `sudo safe-iscsi-save`; reboot once; expect the
-boot journal to log "post-restore verification FAILED" with DRIFT lines
+boot journal to log "post-restore verification PENDING" with DRIFT lines
 naming vm-101-disk-1 and vm-202-disk-5 (normal until the encryption keys
-load); converge within the same boot (load keys →
+load; the encrypted-aware verdict since repair plan 027 — an every-boot
+expected FAILED trained operators to ignore the verifier, so keys-pending
+drift now journals PENDING and FAILED is reserved for unexpected drift);
+converge within the same boot (load keys →
 `sudo iscsi-recover-encrypted-luns` → `sudo export-iscsi-state --check`
 returning success); Dashboard shortfall rows clear. The exercise proves
 the 2026-10-27 incident class — the node silently coming up with 3 of 33
@@ -118,13 +128,20 @@ names the holder in a warning dialog instead of failing silently.
 
 ## DEL
 
-One of the three change classifications the upgrade tooling prints
-when comparing the currently deployed version against the new one
+One of the three change classifications `upgrade-zfsutilities` prints
+when comparing the deployed tree against the baseline manifest
 (`upgrade_lib_classify` in the upgrade library): **MOD** — the file
-exists in both versions but differs; **ADD** — new in this version;
-**DEL** — the new version deletes it, so the upgrade removes it from
-the deployed tree (behind the usual safety checks). The upgrade ITF
-journeys exercise the classification live.
+exists in both but differs; **ADD** — new in this version; **DEL** —
+the new version deletes it, so the upgrade removes it from the deployed
+tree (behind the usual safety checks). The baseline is *captured* on
+the first upgrade over an unmanaged tree (trust-on-first-upgrade,
+FINDINGS F-025: pre-existing local modifications are absorbed, not
+flagged); later upgrades scan against it and offer to salvage local
+content. The rule the j19-baseline-capture journey taught: a DEL anchor
+must be a file inside a deployed tree — deploy-version copies `bin/
+lib/ python/ docs/ share/ VERSION` only, so a repo-root file
+(README.md) can never be the deleted file, while a docs/ file can. The
+upgrade ITF journeys exercise the classification live.
 
 ## dp module identity
 
@@ -241,13 +258,22 @@ still use it freely.
 
 Linux-I/O target: the Linux kernel's built-in iSCSI target subsystem —
 the thing that actually serves this project's zvols to the compute
-node over the storage network. `targetcli` is its management shell,
-`/etc/rtslib-fb-target/` holds its saved configuration (saveconfig),
-and the "LIO tree" is its live configuration of targets, TPGs,
-backstores, and LUN mappings. Nearly every iSCSI feature here — the
-state map, reconcile, the boot verifier, the safe-save gate — reads or
-rebuilds the LIO tree; the test journeys' "LIO total loss" scenarios
-exercise losing it entirely.
+node over the storage network (on this site, stewie serves the
+zvol-backed LUNs through LIO and tweety's VMs log into them).
+`targetcli` is its management shell over rtslib-fb,
+`/etc/rtslib-fb-target/` holds its saved configuration (saveconfig,
+refreshed only under `safe-iscsi-save`'s loss-refusing gate), and the
+"LIO tree" is its live configuration of targets, TPGs, backstores,
+and LUN mappings. Nearly every iSCSI feature here — the state map,
+reconcile, the boot verifier, the safe-save gate — reads or rebuilds
+the LIO tree; the test journeys' "LIO total loss" scenarios exercise
+losing it entirely. Report phrases anchored here: "LIO holds the
+zvol" — while a zvol is exported, ZFS destroy answers `dataset is
+busy` (holds before destroy); "concurrent LIO mutators" — anything
+else editing the target config while repo tooling runs; "LIO portals
+are host-level sockets" — the `0.0.0.0:3260` wildcard binds
+`INADDR_ANY:3260`, and while any TPG rides it, no specific `:3260`
+portal can be created.
 
 ## mock
 

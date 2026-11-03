@@ -70,6 +70,9 @@ class _FakeWidgetBase:
     def set_hexpand(self, *args):
         pass
 
+    def set_halign(self, *args):
+        pass
+
     def set_width_chars(self, *args):
         pass
 
@@ -103,6 +106,26 @@ class _FakeEntry(_FakeWidgetBase):
 
     def get_text(self):
         return self._text
+
+
+class _FakeLabel(_FakeWidgetBase):
+    """Label-like fake that records markup, text, and tooltip."""
+
+    def __init__(self, label=None):
+        self.label = label
+        self.markup = None
+
+    def set_markup(self, markup):
+        self.markup = markup
+
+    def show_all(self):
+        pass
+
+    def set_text(self, text):
+        self.label = text
+
+    def get_text(self):
+        return self.label
 
 
 class _FakeCheckButton(_FakeWidgetBase):
@@ -303,6 +326,7 @@ class TestBackupStaticTooltips(unittest.TestCase):
 
             backup_page.Gtk.Entry = _FakeEntry
             backup_page.Gtk.CheckButton = _FakeCheckButton
+            backup_page.Gtk.Label = _FakeLabel
             gui_helpers.Gtk.Entry = _FakeEntry
             gui_helpers.Gtk.CheckButton = _FakeCheckButton
             backup_page.DirtyTracker = _NoOpDirtyTracker
@@ -419,6 +443,98 @@ class TestBackupStaticTooltips(unittest.TestCase):
             )
             for tip in tips:
                 self.assertTrue(tip and tip.strip())
+
+    def test_zfs_keys_labels_carry_entry_tooltips(self):
+        """The ZFS keys labels explain the fields, not the expander.
+
+        A label without its own tooltip falls through to the Advanced
+        expander's generic tooltip, which does not describe the field.
+        """
+        app = self._build_page()
+
+        for label, entry, hint in (
+            (app.backup_zfs_keys_source_lbl, app.backup_zfs_keys_path, "key files"),
+            (app.backup_zfs_keys_dest_lbl, app.backup_zfs_keys_dest, "encrypted"),
+        ):
+            self.assertTrue(isinstance(label, _FakeLabel), "label fixture not applied")
+            self.assertTrue(
+                label.tooltip and label.tooltip.strip(),
+                "ZFS keys label lacks a tooltip",
+            )
+            self.assertEqual(label.tooltip, entry.tooltip)
+            self.assertIn(hint, label.tooltip)
+
+
+class TestBackupPageNaturalSizing(unittest.TestCase):
+    """The Backup page follows the natural table sizing convention."""
+
+    def _build_page_with_elvs(self):
+        created = []
+
+        class _RecordingELV:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.view = MagicMock()
+                self.widget = MagicMock()
+                created.append(self)
+
+            def get_store(self):
+                return MagicMock()
+
+            def get_widget(self):
+                return self.widget
+
+            def set_data(self, _rows):
+                pass
+
+            def set_on_changed(self, _cb):
+                pass
+
+        with temp_config_dir(), mock_gtk(fresh=True) as gtk_mock:
+            import backup_page
+            import gui_helpers
+
+            backup_page.EditableListView = _RecordingELV
+            backup_page.Gtk.Entry = _FakeEntry
+            backup_page.Gtk.CheckButton = _FakeCheckButton
+            backup_page.Gtk.Label = _FakeLabel
+            gui_helpers.Gtk.Entry = _FakeEntry
+            gui_helpers.Gtk.CheckButton = _FakeCheckButton
+            backup_page.DirtyTracker = _NoOpDirtyTracker
+
+            app = _FakeApp()
+            page = backup_page.create_backup_page(app, app.ctx)
+        return page, created, gtk_mock
+
+    def test_page_viewport_uses_natural_vscroll_policy(self):
+        """The page viewport sizes the page by its natural height.
+
+        With the default MINIMUM policy a window shorter than the page
+        clamps the page box and crushes the step tables.
+        """
+        page, _created, gtk_mock = self._build_page_with_elvs()
+
+        page.get_child().set_vscroll_policy.assert_called_once_with(
+            gtk_mock.ScrollablePolicy.NATURAL
+        )
+
+    def test_step_tables_pack_non_expanding(self):
+        """Step tables hold their natural row height instead of stretching.
+
+        All Gtk.Box instances share the mock's return value, so every
+        pack_start call in the page is recorded on one list; each step
+        table widget must be packed non-expanding.
+        """
+        _page, created, gtk_mock = self._build_page_with_elvs()
+
+        self.assertEqual(len(created), 2, "expected pull and send/receive tables")
+        packs = gtk_mock.Box.return_value.pack_start.call_args_list
+        for elv in created:
+            self.assertIn(
+                (elv.widget, False, False, 0),
+                [c.args for c in packs],
+                "step table packed expanding",
+            )
 
 
 class TestBackupConfigHelpers(unittest.TestCase):

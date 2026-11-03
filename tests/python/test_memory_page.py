@@ -336,7 +336,7 @@ class TestCreateMemoryPage(unittest.TestCase):
                 app._memory_l2_chart,
                 app._memory_slog_chart,
             ):
-                chart.widget.set_size_request.assert_called_once_with(-1, 110)
+                chart.widget.set_size_request.assert_called_once_with(-1, mp.ROLLING_CHART_HEIGHT)
 
     def test_charts_built_through_renderer_factory(self):
         """All four live charts are created via the shared renderer factory.
@@ -378,7 +378,7 @@ class TestCreateMemoryPage(unittest.TestCase):
             save.assert_called_once()
             saved = save.call_args[0][1]
             self.assertEqual(saved["refresh_seconds"], 7)
-            app._start_stop_memory_timer.assert_called_once_with("memory")
+            app._ensure_memory_timer.assert_called_once_with()
 
 
 class TestPerformanceStaticTooltips(unittest.TestCase):
@@ -607,12 +607,127 @@ class TestApplyMemorySample(unittest.TestCase):
         # Reference line tracks c_max.
         self.assertEqual(app._memory_arc_size_chart._reference, 48318382080)
 
+    def test_unavailable_rates_append_none_not_zero(self):
+        """A sample without computable rates (the first of a session, or the
+        first after a stall) must drop its point from the rate series — a
+        zero would draw a dip that was never measured."""
+        mp, app = self._prepared()
+        mp._apply_memory_sample(app, _arc_sample(100.0))
+        self.assertEqual(app._memory_l2_chart.points[-1][1], (None, None))
+        self.assertEqual(app._memory_slog_chart.points[-1][1], (None,))
+        # The ARC size chart carries a gauge, not a rate: it keeps its point.
+        self.assertEqual(app._memory_arc_size_chart.points[-1][1], (32648235840,))
+
+    def test_post_stall_sample_rebaselines_rates(self):
+        """Sampling is continuous, but a gap far beyond the configured
+        interval (3x refresh_seconds, floored at 60 s) is a stall: the
+        first sample after it re-baselines exactly like the first sample
+        of a session instead of averaging rates across the gap."""
+        mp, app = self._prepared()
+        app.config["memory"] = {"refresh_seconds": 5}
+        mp._apply_memory_sample(app, _arc_sample(100.0))
+        mp._apply_memory_sample(app, _arc_sample(105.0, hits=1500, misses=150))
+        # 300 s later (threshold: max(60, 3*5) = 60 s) the interval rates
+        # were never measured over that window.
+        mp._apply_memory_sample(app, _arc_sample(405.0, hits=3000, misses=300))
+        app._memory_arc_labels["Hits/s"].set_text.assert_called_with("—")
+        app._memory_arc_labels["Hit rate (interval)"].set_text.assert_called_with("—")
+        # The hit-rate chart skipped the point; the size gauge still plots.
+        self.assertEqual(len(app._memory_arc_rate_chart.points), 1)
+        self.assertEqual(len(app._memory_arc_size_chart.points), 3)
+        # And sampling continues normally after the re-baseline.
+        mp._apply_memory_sample(app, _arc_sample(410.0, hits=4500, misses=450))
+        app._memory_arc_labels["Hits/s"].set_text.assert_called_with("300")
+        self.assertEqual(len(app._memory_arc_rate_chart.points), 2)
+
     def test_refresh_pending_guard(self):
         mp, app = self._prepared()
         app._memory_refresh_pending = True
         with patch.object(mp.threading, "Thread") as thread:
             mp.refresh_memory_page(app)
         thread.assert_not_called()
+
+
+class TestContinuousSampling(unittest.TestCase):
+    """The Performance timer samples the charts on every tick, whatever
+    page is visible; the Alignment view keeps its visible-only cadence."""
+
+    def _module(self):
+        with mock_gtk(fresh=True):
+            import memory_page as mp
+
+        return mp
+
+    def _app_on(self, mp, page, view):
+        app = _make_app()
+        app.stack.get_visible_child_name.return_value = page
+        charts_radio = MagicMock()
+        charts_radio.get_active.return_value = view == "charts"
+        app._memory_view_radios = {"charts": charts_radio, "alignment": MagicMock()}
+        return app
+
+    def test_alignment_view_active_requires_page_and_view(self):
+        mp = self._module()
+        for page, view, expected in (
+            ("memory", "charts", False),
+            ("memory", "alignment", True),
+            ("backup", "alignment", False),
+            (None, "alignment", False),
+        ):
+            app = self._app_on(mp, page, view)
+            if page is None:
+                app.stack = None
+            self.assertEqual(mp.alignment_view_active(app), expected, (page, view))
+
+    def test_tick_samples_charts_on_every_page(self):
+        mp = self._module()
+        for page in ("memory", "backup", "dashboard"):
+            app = self._app_on(mp, page, "charts")
+            app._memory_refresh_pending = False
+            with (
+                patch.object(mp, "refresh_memory_charts") as charts,
+                patch.object(mp, "refresh_alignment_view") as alignment,
+            ):
+                mp.on_memory_timer_tick(app)
+            charts.assert_called_once_with(app)
+            alignment.assert_not_called()
+
+    def test_tick_refreshes_alignment_only_while_visible(self):
+        mp = self._module()
+        app = self._app_on(mp, "memory", "alignment")
+        with (
+            patch.object(mp, "refresh_memory_charts") as charts,
+            patch.object(mp, "refresh_alignment_view") as alignment,
+        ):
+            mp.on_memory_timer_tick(app)
+        alignment.assert_called_once_with(app)
+        # The charts sample anyway — history stays uninterrupted while the
+        # user sits on the Alignment view.
+        charts.assert_called_once_with(app)
+
+        app = self._app_on(mp, "backup", "alignment")
+        with (
+            patch.object(mp, "refresh_memory_charts") as charts,
+            patch.object(mp, "refresh_alignment_view") as alignment,
+        ):
+            mp.on_memory_timer_tick(app)
+        alignment.assert_not_called()
+        charts.assert_called_once_with(app)
+
+    def test_refresh_memory_page_dispatches_by_visible_view(self):
+        """The Refresh action / page-switch entry point refreshes the
+        visible view: Alignment while it is shown, the charts otherwise."""
+        mp = self._module()
+        app = self._app_on(mp, "memory", "alignment")
+        with patch.object(mp, "refresh_alignment_view") as alignment:
+            mp.refresh_memory_page(app)
+        alignment.assert_called_once_with(app)
+
+        app = self._app_on(mp, "memory", "charts")
+        app._memory_refresh_pending = False
+        with patch.object(mp.threading, "Thread") as thread:
+            mp.refresh_memory_page(app)
+        thread.assert_called_once()
 
 
 class TestEnclosuresSection(unittest.TestCase):
@@ -957,6 +1072,16 @@ class TestRollingChart(unittest.TestCase):
     """The Cairo fallback renderer (matplotlib charts are tested in
     test_charting.py; the shared vocabulary moved there with it)."""
 
+    def _fake_cr(self, char_px=6.0):
+        """A cairo mock whose text_extents measures like a real font.
+
+        x_advance is what _x_tick_layout reads for label collision
+        thinning; a bare MagicMock cannot take part in the arithmetic.
+        """
+        cr = MagicMock()
+        cr.text_extents.side_effect = lambda text: SimpleNamespace(x_advance=char_px * len(text))
+        return cr
+
     def test_window_trims_to_max_samples(self):
         with mock_gtk():
             import memory_page as mp
@@ -966,6 +1091,15 @@ class TestRollingChart(unittest.TestCase):
                 chart.append(float(i), [i])
             self.assertEqual(len(chart.points), 3)
             self.assertEqual(chart.points[0][0], 2.0)
+
+    def test_default_height_is_the_shared_constant(self):
+        # mock_gtk hands every DrawingArea the same shared mock, so the
+        # call history spans the session — assert the latest request.
+        with mock_gtk():
+            import memory_page as mp
+
+            chart = mp.RollingChart("t", ["a"])
+            chart.widget.set_size_request.assert_called_with(-1, 220)
 
     def test_draw_smoke(self):
         """A full draw pass must not raise with two series and a reference."""
@@ -978,8 +1112,8 @@ class TestRollingChart(unittest.TestCase):
                 chart.append(float(i), [i * 100, i * 50])
             widget = chart.widget
             widget.get_allocated_width.return_value = 400
-            widget.get_allocated_height.return_value = 110
-            chart._on_draw(widget, MagicMock())
+            widget.get_allocated_height.return_value = 220
+            chart._on_draw(widget, self._fake_cr())
             self.assertTrue(widget.queue_draw.called)
 
     def test_draw_font_follows_the_gui_base_font(self):
@@ -993,11 +1127,71 @@ class TestRollingChart(unittest.TestCase):
                 chart.append(float(i), [i * 100, i * 50])
             widget = chart.widget
             widget.get_allocated_width.return_value = 400
-            widget.get_allocated_height.return_value = 110
-            cr = MagicMock()
+            widget.get_allocated_height.return_value = 220
+            cr = self._fake_cr()
             with patch.object(mp, "chart_font_scale", return_value=1.25):
                 chart._on_draw(widget, cr)
             cr.set_font_size.assert_called_once_with(11.25)
+
+    def test_draw_labels_interior_x_ticks_on_wide_windows(self):
+        """A window of a minute or more carries the shared grammar's five
+        ticks: tick marks below the plot and age labels between the ends
+        (the matplotlib renderer draws the same positions)."""
+        with mock_gtk():
+            import memory_page as mp
+
+            chart = mp.RollingChart("traffic", ["read", "write"])
+            chart.append(0.0, [10, 5])
+            chart.append(60.0, [20, 8])  # 60 s window -> 5 ticks
+            widget = chart.widget
+            widget.get_allocated_width.return_value = 400
+            widget.get_allocated_height.return_value = 220
+            cr = self._fake_cr()
+            chart._on_draw(widget, cr)
+            texts = [c.args[0] for c in cr.show_text.call_args_list]
+            self.assertIn("-45s", texts)
+            self.assertIn("-30s", texts)
+            self.assertIn("-15s", texts)
+            # Ends stay: the window age at the left (format_age's minute
+            # form at 60 s), "now" at the right.
+            self.assertIn("-1m 00s", texts)
+            self.assertIn("now", texts)
+
+    def test_x_tick_layout_thins_to_fitting_labels(self):
+        """Interior ticks whose labels would overlap drop out until the
+        survivors fit; the end ticks always stay."""
+        with mock_gtk():
+            import memory_page as mp
+
+            # 50 px plot, 24 px labels: the middle tick cannot fit between
+            # the edge-aligned ends, so only the two end ticks survive.
+            layout = mp._x_tick_layout(self._fake_cr(6.0), 60.0, 0.0, 50.0)
+            self.assertEqual([label for _x, label, _lx in layout], ["-1m 00s", "now"])
+
+            # Wide enough for all five: ages at the exact window fractions.
+            layout = mp._x_tick_layout(self._fake_cr(1.0), 60.0, 0.0, 1000.0)
+            self.assertEqual(
+                [label for _x, label, _lx in layout],
+                ["-1m 00s", "-45s", "-30s", "-15s", "now"],
+            )
+            self.assertEqual(
+                [round(x, 3) for x, _l, _lx in layout], [0.0, 250.0, 500.0, 750.0, 1000.0]
+            )
+
+    def test_x_tick_layout_aligns_end_labels_to_the_plot_edges(self):
+        """The first label is left-aligned at the plot edge; the last
+        ("now") is right-aligned so it never spills past the plot."""
+        with mock_gtk():
+            import memory_page as mp
+
+            layout = mp._x_tick_layout(self._fake_cr(6.0), 60.0, 58.0, 400.0)
+            first_x, _first_label, first_label_x = layout[0]
+            last_x, _last_label, last_label_x = layout[-1]
+            self.assertEqual(first_x, 58.0)
+            self.assertEqual(first_label_x, 58.0)
+            self.assertEqual(last_x, 458.0)
+            # "now" is 3 chars x 6 px wide: its right edge is the plot edge.
+            self.assertEqual(last_label_x, 458.0 - 18.0)
 
 
 if __name__ == "__main__":
