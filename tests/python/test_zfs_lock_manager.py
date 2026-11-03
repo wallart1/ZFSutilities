@@ -317,5 +317,82 @@ class TestLocalConflictDetails(unittest.TestCase):
         self.assertIn("dataset='localpool/parent/mid/leaf'", msg)
 
 
+class TestCheckLocal(unittest.TestCase):
+    """check_local answers from local lock files and never goes remote."""
+
+    def setUp(self):
+        self.lock_dir = tempfile.mkdtemp()
+        self._orig_dir = zlm.ZFSLOCK_DIR
+        zlm.ZFSLOCK_DIR = self.lock_dir
+        zlm.ZFSLOCK_LOCKS_DIR = os.path.join(self.lock_dir, ".locks")
+        zlm.ZFSLOCK_PIDS_DIR = os.path.join(self.lock_dir, ".pids")
+        os.makedirs(zlm.ZFSLOCK_LOCKS_DIR, exist_ok=True)
+        os.makedirs(zlm.ZFSLOCK_PIDS_DIR, exist_ok=True)
+        # localpool is not a storage-owned pool, so the lock stays local;
+        # threeamigos is storage-owned per _TWO_NODE_CFG (remote from tweety).
+        zlm._node_config_cache = _TWO_NODE_CFG
+        zlm._remote_holds.clear()
+        zlm._lock_refcounts.clear()
+
+    def tearDown(self):
+        zlm.ZFSLOCK_DIR = self._orig_dir
+        zlm.ZFSLOCK_LOCKS_DIR = os.path.join(self._orig_dir, ".locks")
+        zlm.ZFSLOCK_PIDS_DIR = os.path.join(self._orig_dir, ".pids")
+        zlm._node_config_cache = None
+        zlm._remote_holds.clear()
+        zlm._lock_refcounts.clear()
+
+    def _write_w_lock(self, dataset, pid, description="holder desc"):
+        data = {
+            "dataset": dataset,
+            "type": "w",
+            "pid": pid,
+            "script": "sleep",
+            "acquired": "2026-10-06T00:25:37-04:00",
+            "description": description,
+        }
+        with open(zlm._lock_file(dataset), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.write("\n")
+
+    def test_no_locks_means_acquirable(self):
+        self.assertTrue(zlm.check_local("localpool/fs", "w"))
+
+    def test_pool_root_w_lock_blocks_descendant(self):
+        # The Oct 29 production shape: an offsite send-receive held a write
+        # lock on the destination pool root, fencing every dataset below it.
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.terminate)
+        self._write_w_lock("localpool", holder.pid, "send-receive dest: temp -> localpool")
+
+        self.assertFalse(zlm.check_local("localpool/fs", "w"))
+        # The pool root is both the deepest ancestor and the explicit pool
+        # candidate; it must be listed as a holder exactly once.
+        holders = zlm.conflicting_lock_holders("localpool/fs", "w")
+        self.assertEqual(len(holders), 1)
+        self.assertEqual(holders[0]["dataset"], "localpool")
+        self.assertEqual(holders[0]["type"], "write")
+        self.assertEqual(holders[0]["description"], "send-receive dest: temp -> localpool")
+
+    def test_never_contacts_remote_authority(self):
+        with patch.object(zlm, "_check_remote", return_value=True) as mock_remote:
+            # check() consults the remote authority for a storage-owned pool...
+            self.assertTrue(zlm.check("threeamigos/pve", "w"))
+            mock_remote.assert_called_once_with("threeamigos/pve", "w")
+            # ...while check_local answers from local files only.
+            self.assertTrue(zlm.check_local("threeamigos/pve", "w"))
+            mock_remote.assert_called_once()
+
+    def test_check_local_reads_local_holder_lock(self):
+        holder = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.terminate)
+        # A local lock file for a remote-authority dataset is unusual but
+        # readable; check_local still reports it.
+        self._write_w_lock("threeamigos/pve", holder.pid)
+        self.assertFalse(zlm.check_local("threeamigos/pve", "w"))
+
+
 if __name__ == "__main__":
     unittest.main()

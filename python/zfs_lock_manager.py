@@ -260,12 +260,14 @@ def _pool(dataset: str) -> str | None:
     return None
 
 
-def _conflicting_lock_holders(dataset: str, lock_type: str) -> list[dict]:
+def conflicting_lock_holders(dataset: str, lock_type: str) -> list[dict]:
     """Return holder details for every lock blocking *lock_type* on *dataset*.
 
     Mirrors the hierarchy walk in check() (same dataset, ancestors, pool,
     descendants) but without stopping at the first conflict, so a raised
-    conflict error can name every blocking holder.
+    conflict error — or a user-facing refusal message — can name every
+    blocking holder. Only local lock files are read; remote-authority
+    holders are not listed.
     """
     type_names = {"r": "read", "w": "write", "x": "destroy"}
     candidates: list[tuple[str, str]] = [(_lock_file(dataset), "same")]
@@ -277,7 +279,14 @@ def _conflicting_lock_holders(dataset: str, lock_type: str) -> list[dict]:
     candidates.extend((p, "descendant") for p in glob.glob(prefix))
 
     holders: list[dict] = []
+    seen: set[str] = set()
     for lockfile, relationship in candidates:
+        # The explicit pool candidate repeats the deepest ancestor for any
+        # dataset path (it exists to match the bash walk); a lock on the pool
+        # root must still be listed exactly once.
+        if lockfile in seen:
+            continue
+        seen.add(lockfile)
         if not os.path.isfile(lockfile):
             continue
         existing_type = _read_field(lockfile, "type")
@@ -517,19 +526,12 @@ def _list_remote_locks() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def check(dataset: str, lock_type: str) -> bool:
-    """Return True if *lock_type* can be acquired on *dataset*.
+def _check_local_walk(dataset: str, lock_type: str) -> bool:
+    """Return True if local lock files show *lock_type* acquirable on *dataset*.
 
-    This cleans up stale locks first, then checks the target dataset, its
-    ancestors, and its descendants.
+    Cleans up stale locks first, then checks the target dataset, its
+    ancestors, and its descendants. Never contacts a remote authority.
     """
-    if not dataset or lock_type not in ("r", "w", "x"):
-        log_msg("WARN: zfs_lock_manager.check requires dataset and valid type")
-        return False
-
-    if _is_remote_dataset(dataset):
-        return _check_remote(dataset, lock_type)
-
     _cleanup_stale()
 
     # Same dataset.
@@ -553,6 +555,38 @@ def check(dataset: str, lock_type: str) -> bool:
             return False
 
     return True
+
+
+def check(dataset: str, lock_type: str) -> bool:
+    """Return True if *lock_type* can be acquired on *dataset*.
+
+    This cleans up stale locks first, then checks the target dataset, its
+    ancestors, and its descendants. Datasets whose lock authority is a
+    remote host are checked over ssh.
+    """
+    if not dataset or lock_type not in ("r", "w", "x"):
+        log_msg("WARN: zfs_lock_manager.check requires dataset and valid type")
+        return False
+
+    if _is_remote_dataset(dataset):
+        return _check_remote(dataset, lock_type)
+
+    return _check_local_walk(dataset, lock_type)
+
+
+def check_local(dataset: str, lock_type: str) -> bool:
+    """Return True if *lock_type* is acquirable going by local lock files only.
+
+    Same walk as check(), but never takes the remote branch, so it is safe
+    to call from latency-sensitive GUI paths (button sensitivity). For
+    remote-authority datasets it only sees locks recorded on this host;
+    runtime lock acquisition remains the enforcing fence.
+    """
+    if not dataset or lock_type not in ("r", "w", "x"):
+        log_msg("WARN: zfs_lock_manager.check_local requires dataset and valid type")
+        return False
+
+    return _check_local_walk(dataset, lock_type)
 
 
 def list_active_locks() -> list[dict]:
@@ -645,7 +679,7 @@ def acquire(dataset: str, lock_type: str, description: str = "") -> str:
         # File exists but we lost the refcount; treat as fresh acquisition.
 
     if not check(dataset, lock_type):
-        holders = _conflicting_lock_holders(dataset, lock_type)
+        holders = conflicting_lock_holders(dataset, lock_type)
         if holders:
             details = "; ".join(_format_lock_holder(h) for h in holders)
             raise RuntimeError(f"conflict: cannot acquire {lock_type} lock on {dataset}: {details}")

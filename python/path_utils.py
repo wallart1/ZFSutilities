@@ -8,6 +8,7 @@ locations.
 
 import os
 import subprocess
+import tempfile
 
 # Base directory for versioned deployments.  Overridable for tests and for
 # non-standard installations.
@@ -143,18 +144,79 @@ def get_profile_runner_path(script_dir=None):
     return os.path.join(_version_base(script_dir), _PYTHON_DIR, "profile_runner.py")
 
 
+# Seconds an idle multiplexed SSH master connection is kept alive (see
+# ``ssh_command``).  Comfortably exceeds the Dashboard refresh-interval
+# ceiling (300 s) so steady-state polling reuses one connection; the master
+# self-expires after the window, so a closed or crashed GUI leaves no
+# permanent sockets behind.
+SSH_CONTROL_PERSIST = 600
+
+
+def _mux_socket_dir():
+    """Return a private directory for SSH multiplex control sockets.
+
+    Tries an XDG runtime directory first, then ``/run/zfsutilities``, then a
+    uid-tagged temp directory.  Returns ``None`` when no candidate can be
+    created and written, in which case callers fall back to a plain ssh
+    argv without multiplexing.
+    """
+    candidates = []
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        candidates.append(os.path.join(xdg, "zfsutilities-ssh-mux"))
+    candidates.append("/run/zfsutilities/ssh-mux")
+    candidates.append(os.path.join(tempfile.gettempdir(), f"zfsutilities-ssh-mux-{os.getuid()}"))
+    for directory in candidates:
+        try:
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            os.chmod(directory, 0o700)
+        except OSError:
+            continue
+        if os.access(directory, os.W_OK):
+            return directory
+    return None
+
+
+def ssh_command(host, remote_cmd):
+    """Build the ssh argv used to run ``remote_cmd`` as root on ``host``.
+
+    Adds OpenSSH connection multiplexing (ControlMaster/ControlPersist) so
+    recurring callers — the Dashboard's periodic probes — reuse one
+    background connection instead of logging in for every call: each fresh
+    root login costs the remote host roughly two dozen journal lines plus a
+    systemd user-session cycle.  Mirrors the multiplexed ssh already used
+    by ``bin/deploy-version`` and ``bin/upgrade-zfsutilities``.  Falls back
+    to a plain ssh argv when no private control-socket directory is
+    available.
+    """
+    argv = ["ssh", "-o", "ConnectTimeout=10"]
+    socket_dir = _mux_socket_dir()
+    if socket_dir:
+        argv += [
+            "-o",
+            "ControlMaster=auto",
+            "-o",
+            "ControlPath=" + os.path.join(socket_dir, "%r@%h-%p"),
+            "-o",
+            f"ControlPersist={SSH_CONTROL_PERSIST}",
+        ]
+    return argv + [f"root@{host}", remote_cmd]
+
+
+def remote_version_path():
+    """Return the remote VERSION file path used by version probes."""
+    return _REMOTE_VERSION_PATH
+
+
 def resolve_remote_bin(host, timeout=15):
     """Resolve the remote active-version ``bin/`` directory over SSH.
 
     Returns the resolved path, or ``None`` if resolution fails.
     """
-    cmd = [
-        "ssh",
-        "-o",
-        "ConnectTimeout=10",
-        f"root@{host}",
+    cmd = ssh_command(
+        host,
         f"realpath {_REMOTE_BIN} 2>/dev/null || readlink -f {_REMOTE_BIN} 2>/dev/null",
-    ]
+    )
     try:
         result = subprocess.run(
             cmd,
@@ -177,13 +239,7 @@ def resolve_remote_version(host, timeout=15):
 
     Returns the version string, or ``"unknown"`` if it cannot be determined.
     """
-    cmd = [
-        "ssh",
-        "-o",
-        "ConnectTimeout=10",
-        f"root@{host}",
-        f"cat {_REMOTE_VERSION_PATH} 2>/dev/null",
-    ]
+    cmd = ssh_command(host, f"cat {_REMOTE_VERSION_PATH} 2>/dev/null")
     try:
         result = subprocess.run(
             cmd,

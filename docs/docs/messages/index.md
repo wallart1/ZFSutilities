@@ -586,8 +586,9 @@ Captures holds before a destructive operation and reapplies them afterwards (use
 | `INFO: Dataset ... does not exist; no target holds to capture.` / `INFO: Dataset ... does not exist; no holds to release.` | The target dataset is absent (e.g. after a migration) | Nothing to do |
 | `WARN: Could not acquire read lock on ...; aborting hold capture.` / `WARN: Could not acquire write lock on ...; aborting hold release.` / `WARN: Could not acquire write lock on ...; aborting hold reapply.` | The needed lock is unavailable | Operation aborts (return 1); resolve the lock |
 | `INFO: Dry-run: Would release hold ... on ....` / `INFO: Dry-run: Would apply hold ... to ....` | Dry-run: the release/apply is only reported | Informational |
-| `WARN: Failed to release hold ... on ....` / `WARN: Failed to apply hold ... to ....` | The `zfs release`/`zfs hold` command failed | Hold skipped; the counts below total the failures |
-| `INFO: Released ... holds on ... (... failed).` / `INFO: Reapplied ... holds on ... (... skipped).` | Final count summary | Informational |
+| `WARN: Failed to release hold ... on ....` / `WARN: Failed to apply hold ... to ....` | The `zfs release`/`zfs hold` command failed and the tag was not already held | Hold skipped; the counts below total the failures |
+| `VERB: Hold ... already present on ....` | The tag is already held on the snapshot (e.g. a lineage-skipped restore never destroyed the destination) | Desired end state; counted as already present below |
+| `INFO: Released ... holds on ... (... failed).` / `INFO: Reapplied ... holds on ... (... already present, ... skipped).` | Final count summary | Informational |
 | `WARN: Restored snapshot ... no longer exists; skipping hold .....` | A snapshot named in the captured set is missing on the restored dataset | Hold skipped; re-create the snapshot or drop the hold from the set |
 | `FATAL: Unknown option: ...` / `FATAL: Unexpected argument: ...` / `FATAL: Must specify --capture or --apply and a dataset.` / `FATAL: --release does not take an input file.` | CLI usage errors | Usage is printed; script exits 8 |
 
@@ -2092,8 +2093,9 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 | `VERB: Opened ...` / `Browsing snapshot ...` | The file manager was launched for the dataset/snapshot path | Browse succeeded |
 | `WARN: Error resolving mountpoint for ...: ...` / `FATAL: Error resolving mountpoint for ...: ...` | The mountpoint lookup raised while browsing (WARN) or while unmounting a dataset, snapshot, or loop partition (FATAL) | That item's browse/unmount aborted |
 | `WARN: ... is not mounted; mount the partition first` | A loop partition has no mountpoint | Mount the partition, then browse |
-| `INFO: Skipping ... (canmount=off)` | Gated skip — the dataset can never be mounted: excluded from the parent-mount plan as an ancestor, or skipped as a directly selected filesystem | That dataset skipped; other selected targets still handled |
+| `INFO: Skipping ... (canmount=off)` | Gated skip — the dataset can never be mounted: excluded from the parent-mount plan as an ancestor, or skipped as a directly selected filesystem | That dataset skipped; other selected targets still handled; a directly selected filesystem is named in the refusal dialog |
 | `WARN: Error mounting ...: ...` | `zfs mount` / read-only `mount` returned non-zero | That mount batch aborted |
+| `WARN: cannot mount ...: ...` (ending with the lock error) | A dataset lock could not be acquired for the mount — commonly a backup, offsite transfer, or send/receive holding the pool or an ancestor | Mount aborted; a warning dialog names the blocking lock holder(s) |
 | `VERB: Mounted ...` | Dataset mounted via `zfs mount` under a dataset lock | Continue |
 | `WARN: Error checking mount state for ...: ...` | The mounted/canmount property lookup raised while planning mounts | That snapshot's parent-mount offer/recovery skipped |
 | `WARN: Cannot mount ...: snapshots of ZFS volumes cannot be mounted` | The selected snapshot's parent is a zvol | That snapshot's mount aborted |
@@ -2103,7 +2105,7 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 | `WARN: Cannot mount ...: snapshot did not automount. Verify the parent dataset is healthy and try again.` | Listing the path did not produce a mounted snapshot | Verify parent health and retry |
 | `VERB: Mounted snapshot ...` | Snapshot automount verified | Continue |
 | `WARN: Error mounting snapshot ...: ...` | Unexpected exception resolving/mounting the snapshot | Aborted |
-| `WARN: Not all parent datasets mounted; selected snapshots that remain blocked will report warnings below.` | After the Mount All dialog, some parent mounts failed | Blocked snapshots warn individually |
+| `WARN: Not all parent datasets mounted; selected snapshots that remain blocked will report warnings below.` | After the Mount All dialog, some parent mounts failed | A warning dialog names the refused parent mounts; blocked snapshots warn individually |
 | `WARN: Error attaching ... to a loop device` / `Error attaching loop device for ...: ...` / `cannot attach loop device for ...: ...` | Loop attach failed (no device, subprocess error, or lock conflict) | Volume loop-mount aborted |
 | `INFO: Attached ... to read-only loop device ...` | The zvol was attached to a loop device | Row children reloaded |
 | `WARN: Cannot mount ...: no filesystem detected` | The loop partition has no detectable filesystem | Partition mount aborted |

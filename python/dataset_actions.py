@@ -625,12 +625,32 @@ def _unmounted_mountable_ancestors(dataset, repo):
     return ancestors
 
 
+def _lock_conflict_reason(targets, exc):
+    """Return a one-line, dialog-friendly reason for a lock conflict.
+
+    Builds the line from the structured holder list when local holders can be
+    read (holder dataset, lock type, description — pid/script noise stays in
+    the WARN log); falls back to the exception text when they cannot, e.g.
+    for locks held on the remote lock authority.
+    """
+    parts = []
+    for target in targets:
+        for holder in zlm.conflicting_lock_holders(target, "w"):
+            part = f"{target}: blocked by a {holder['type']} lock on {holder['dataset']}"
+            if holder["description"]:
+                part += f" ({holder['description']})"
+            parts.append(part)
+    return "; ".join(parts) if parts else str(exc)
+
+
 def _mount_dataset_targets(targets, dataset=None):
-    """Mount *targets* root-first under write locks; return True if all mounted.
+    """Mount *targets* root-first under write locks; return None if all mounted.
 
     The write locks are held only for the duration of the mount commands and
     are released on any exit path. *dataset* only labels the lock-conflict
-    warning; it defaults to the deepest target.
+    warning; it defaults to the deepest target. On failure (a lock conflict
+    or a failed zfs mount) the WARN is logged as before and a one-line reason
+    string is returned for the caller to surface to the user.
     """
     try:
         with zlm.locks("w", targets):
@@ -643,48 +663,51 @@ def _mount_dataset_targets(targets, dataset=None):
                 )
                 if result.returncode != 0:
                     log_msg(f"WARN: Error mounting {target}: {result.stderr.strip()}")
-                    return False
+                    return f"{target}: {result.stderr.strip()}"
                 log_msg(f"VERB: Mounted {target}")
-            return True
+            return None
     except RuntimeError as exc:
         log_msg(f"WARN: cannot mount {dataset or targets[-1]}: {exc}")
-        return False
+        return _lock_conflict_reason(targets, exc)
 
 
 def _mount_one_dataset(item, repo, app):
-    """Mount a single filesystem/pool dataset; return True if processed.
+    """Mount a single filesystem/pool dataset; return None if processed.
 
     Any unmounted ancestor datasets are mounted first so the target's
     mountpoint is not hidden by a later parent mount. Ancestors with
     canmount=off are skipped; they cannot be mounted and ZFS auto-creates
-    their mountpoint directory when the target mounts. A target with
+    their mountpoint directory when a descendant mounts. A target with
     canmount=off is skipped the same way — zfs mount can only fail on it.
+    Returns None on success — including a target found already mounted, so
+    the caller refreshes the stale row — or a one-line reason string when
+    the dataset was not mounted.
     """
     dataset = item["name"]
 
     try:
         if repo.get_property(dataset, "canmount") == "off":
             log_msg(f"INFO: Skipping {dataset} (canmount=off)")
-            return False
+            return f"{dataset}: canmount=off — ZFS never mounts it"
         targets_to_mount = _unmounted_mountable_ancestors(dataset, repo)
         if repo.get_property(dataset, "mounted") != "yes":
             targets_to_mount.append(dataset)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         log_msg(f"WARN: Error checking mount state for {dataset}: {e}")
-        return False
+        return f"{dataset}: could not check mount state ({e})"
 
     if not targets_to_mount:
-        return False
+        return None
 
     return _mount_dataset_targets(targets_to_mount, dataset)
 
 
 def _mount_one_snapshot(item, repo, app):
-    """Mount a single snapshot by accessing its .zfs path; return True if processed."""
+    """Mount a single snapshot by accessing its .zfs path; return None if processed."""
     full_snap = f"{item['dataset']}@{item['name']}"
     if item.get("parent_type") == "volume":
         log_msg(f"WARN: Cannot mount {full_snap}: snapshots of ZFS volumes cannot be mounted")
-        return False
+        return f"{full_snap}: snapshots of ZFS volumes cannot be mounted"
     try:
         path = get_snapshot_mountpoint(item["dataset"], item["name"], repo=repo)
         parent_mountpoint = path.rsplit("/.zfs/snapshot/", 1)[0]
@@ -695,7 +718,7 @@ def _mount_one_snapshot(item, repo, app):
                     f"WARN: Cannot mount {full_snap}: parent dataset "
                     f"{item['dataset']} is not mounted. Mount the parent first."
                 )
-                return False
+                return f"{full_snap}: parent dataset {item['dataset']} is not mounted"
 
             if not os.path.isdir(parent_mountpoint):
                 log_msg(
@@ -704,7 +727,7 @@ def _mount_one_snapshot(item, repo, app):
                     "mounted before its parent; remount the parent dataset "
                     "to restore access."
                 )
-                return False
+                return f"{full_snap}: parent mountpoint {parent_mountpoint} is missing"
 
             # The .zfs/snapshot stub may exist even when the snapshot is not
             # mounted, so always list it to trigger automount and then verify
@@ -713,22 +736,23 @@ def _mount_one_snapshot(item, repo, app):
                 os.listdir(path)
             except FileNotFoundError:
                 log_msg(f"WARN: Cannot mount {full_snap}: snapshot path {path} is not accessible.")
-                return False
+                return f"{full_snap}: snapshot path {path} is not accessible"
 
             if full_snap in get_mounted_snapshots():
                 log_msg(f"VERB: Mounted snapshot {full_snap}")
-                return True
+                return None
 
             log_msg(
                 f"WARN: Cannot mount {full_snap}: snapshot did not automount. "
                 f"Verify the parent dataset is healthy and try again."
             )
-            return False
+            return f"{full_snap}: snapshot did not automount"
     except RuntimeError as exc:
         log_msg(f"WARN: cannot mount {full_snap}: {exc}")
+        return f"{full_snap}: {exc}"
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         log_msg(f"WARN: Error mounting snapshot {full_snap}: {e}")
-    return False
+        return f"{full_snap}: {e}"
 
 
 def _snapshot_parent_mount_plan(snap_items, repo):
@@ -801,7 +825,9 @@ def _offer_snapshot_parent_mounts(snap_items, repo, app):
     if response != Gtk.ResponseType.OK:
         return
 
-    if not _mount_dataset_targets(mount_list):
+    reason = _mount_dataset_targets(mount_list)
+    if reason:
+        _warn_busy(app, "Could not mount parent dataset(s)", reason)
         log_msg(
             "WARN: Not all parent datasets mounted; selected snapshots "
             "that remain blocked will report warnings below."
@@ -815,10 +841,11 @@ def _volume_partition_mountpoint(item):
 
 
 def _mount_one_volume(item, repo, app):
-    """Attach a zvol to a read-only loop device; return True if processed.
+    """Attach a zvol to a read-only loop device; return None if processed.
 
     The volume row's children are reloaded afterwards so its partitions
-    appear in the tree.
+    appear in the tree. Returns a one-line reason string when the volume
+    was not attached.
     """
     dataset = item["name"]
     try:
@@ -828,34 +855,36 @@ def _mount_one_volume(item, repo, app):
                 loop_dev = repo.loop_attach(zvol_device_path(dataset))
                 if not loop_dev:
                     log_msg(f"WARN: Error attaching {dataset} to a loop device")
-                    return False
+                    return f"{dataset}: could not attach a loop device"
                 log_msg(f"INFO: Attached {dataset} to read-only loop device {loop_dev}")
             tree_iter = find_tree_iter_by_full_name(app.datasets_store, dataset)
             if tree_iter is not None:
                 reload_row_children(app.datasets_store, tree_iter, repo=repo)
-            return True
+            return None
     except RuntimeError as exc:
         log_msg(f"WARN: cannot attach loop device for {dataset}: {exc}")
+        return f"{dataset}: {exc}"
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         log_msg(f"WARN: Error attaching loop device for {dataset}: {e}")
-    return False
+        return f"{dataset}: {e}"
 
 
 def _mount_one_volume_partition(item, repo, app):
-    """Mount a loop partition at its derived mountpoint; return True if mounted.
+    """Mount a loop partition at its derived mountpoint; return None if mounted.
 
-    The loop device is read-only, so the partition mounts read-only.
+    The loop device is read-only, so the partition mounts read-only. Returns
+    a one-line reason string when the partition was not mounted.
     """
     device = item["device"]
     if not item.get("has_filesystem", False):
         log_msg(f"WARN: Cannot mount {device}: no filesystem detected")
-        return False
+        return f"{device}: no filesystem detected"
     mountpoint = _volume_partition_mountpoint(item)
     try:
         os.makedirs(mountpoint, exist_ok=True)
     except OSError as e:
         log_msg(f"WARN: Error creating mountpoint {mountpoint}: {e}")
-        return False
+        return f"{device}: could not create mountpoint {mountpoint} ({e})"
     result = subprocess.run(
         ["sudo", "mount", "-o", "ro", device, mountpoint],
         capture_output=True,
@@ -864,13 +893,19 @@ def _mount_one_volume_partition(item, repo, app):
     )
     if result.returncode != 0:
         log_msg(f"WARN: Error mounting {device}: {result.stderr.strip()}")
-        return False
+        return f"{device}: {result.stderr.strip()}"
     log_msg(f"INFO: Mounted {device} at {mountpoint} (read-only)")
-    return True
+    return None
 
 
 def on_datasets_mount(app):
-    """Mount all selected filesystems, snapshots, and volume loop devices."""
+    """Mount all selected filesystems, snapshots, and volume loop devices.
+
+    Items that could not be mounted (a lock conflict with a running backup
+    or offsite transfer, canmount=off in a mixed selection, a failed mount
+    command) are collected and reported in one warning dialog that names the
+    blocking lock holders, so a refused mount is never silent.
+    """
     repo = _repo(app)
     items = get_tree_selection_items(app.datasets_view)
     if not items:
@@ -893,17 +928,32 @@ def on_datasets_mount(app):
         _offer_snapshot_parent_mounts(pending_snaps, repo, app)
 
     processed = False
+    reasons = []
     for item in targets:
         if item.get("mounted", False):
             continue
         if item["type"] in ("pool", "dataset") and item.get("zfs_type") == "filesystem":
-            processed = _mount_one_dataset(item, repo, app) or processed
+            reason = _mount_one_dataset(item, repo, app)
         elif item["type"] in ("pool", "dataset") and item.get("zfs_type") == "volume":
-            processed = _mount_one_volume(item, repo, app) or processed
+            reason = _mount_one_volume(item, repo, app)
         elif item["type"] == "volume-partition":
-            processed = _mount_one_volume_partition(item, repo, app) or processed
+            reason = _mount_one_volume_partition(item, repo, app)
         elif item["type"] == "snapshot":
-            processed = _mount_one_snapshot(item, repo, app) or processed
+            reason = _mount_one_snapshot(item, repo, app)
+        else:
+            continue
+        if reason is None:
+            processed = True
+        else:
+            reasons.append(reason)
+
+    if reasons:
+        count = len(reasons)
+        _warn_busy(
+            app,
+            f"Could not mount {count} selected item{'s' if count != 1 else ''}",
+            "\n".join(f"• {reason}" for reason in reasons),
+        )
 
     if processed:
         update_mounted_states(app)
@@ -1618,7 +1668,11 @@ def _unmount_one_snapshot(item, repo, app):
 
 
 def _warn_busy(app, title, detail):
-    """Show a warning dialog listing busy processes blocking an unmount."""
+    """Show a warning dialog listing what blocks a dataset action.
+
+    *detail* lists the blockers: busy processes for an unmount, or lock
+    holders (e.g. a running backup or offsite transfer) for a refused mount.
+    """
     dialog = Gtk.MessageDialog(
         transient_for=app,
         modal=True,

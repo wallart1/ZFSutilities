@@ -102,18 +102,80 @@ test_reapplyholds_apply_skips_missing_snapshots() {
 
     local _in
     _in="$_mock_zfs_state_dir/apply_missing.tsv"
-    printf 'pool/dest@snap1\ttag1\npool/dest@gone\ttag2\n' > "$_in"
+    printf 'pool/dest@snap1\ttag9\npool/dest@gone\ttag2\n' > "$_in"
 
     reapplyholds_apply "pool/dest" "$_in"
     local rc=$?
     assert_rc 0 "$rc"
 
-    assert_contains "${_mock_zfs_holds[pool/dest@snap1]}" "tag1"
+    assert_contains "${_mock_zfs_holds[pool/dest@snap1]}" "tag9"
     [[ -z "${_mock_zfs_holds[pool/dest@gone]:-}" ]]
     if [[ $? -eq 0 ]]; then
         test_pass
     else
         test_fail "Missing snapshot should not have a hold"
+    fi
+}
+
+test_reapplyholds_apply_tolerates_already_present_tag() {
+    test_start "reapplyholds_apply treats an already-held tag as present, not a failure"
+    mock_zfs_dataset_exists "pool/dest"
+    mock_zfs_snap_exists "pool/dest@snap1"
+    mock_zfs_snap_list_for "pool/dest" "pool/dest@snap1"
+    # The tag is already held (e.g. a lineage-skipped restore never
+    # destroyed the destination): re-applying it must be the desired end
+    # state, reported as present — never as a WARN failure.
+    mock_zfs_holds "pool/dest@snap1" "kept-tag"
+
+    local _in
+    _in="$_mock_zfs_state_dir/apply_present.tsv"
+    printf 'pool/dest@snap1\tkept-tag\n' > "$_in"
+
+    # log_msg here is bashinit's real one (the helper re-sources it), so
+    # the assertions read captured stderr, not the test-log file.
+    local _err
+    _err="$_mock_zfs_state_dir/apply_present.err"
+    reapplyholds_apply "pool/dest" "$_in" 2>"$_err"
+    local rc=$?
+    assert_rc 0 "$rc"
+
+    assert_contains "${_mock_zfs_holds[pool/dest@snap1]}" "kept-tag"
+    local log
+    log=$(cat "$_err")
+    assert_contains "$log" "Hold kept-tag already present on pool/dest@snap1"
+    assert_contains "$log" "Reapplied 0 holds on pool/dest (1 already present, 0 skipped)"
+    if [[ "$log" == *"Failed to apply hold"* ]]; then
+        test_fail "An already-present tag must not WARN"
+    else
+        test_pass
+    fi
+}
+
+test_reapplyholds_apply_warns_on_genuine_failure() {
+    test_start "reapplyholds_apply still WARNs when the hold fails for another reason"
+    mock_zfs_dataset_exists "pool/dest"
+    mock_zfs_snap_exists "pool/dest@snap1"
+    mock_zfs_snap_list_for "pool/dest" "pool/dest@snap1"
+    mock_zfs_hold_fail "pool/dest@snap1" "broketag"
+
+    local _in
+    _in="$_mock_zfs_state_dir/apply_fail.tsv"
+    printf 'pool/dest@snap1\tbroketag\n' > "$_in"
+
+    local _err
+    _err="$_mock_zfs_state_dir/apply_fail.err"
+    reapplyholds_apply "pool/dest" "$_in" 2>"$_err"
+    local rc=$?
+    assert_rc 0 "$rc"
+
+    local log
+    log=$(cat "$_err")
+    assert_contains "$log" "WARN: Failed to apply hold broketag to pool/dest@snap1"
+    assert_contains "$log" "Reapplied 0 holds on pool/dest (0 already present, 1 skipped)"
+    if [[ "$log" == *"already present on pool/dest@snap1"* ]]; then
+        test_fail "A genuinely failed hold must not be reported as present"
+    else
+        test_pass
     fi
 }
 
@@ -331,6 +393,8 @@ test_reapplyholds_capture_to_stdout
 test_reapplyholds_capture_missing_dataset
 test_reapplyholds_apply_restores_holds
 test_reapplyholds_apply_skips_missing_snapshots
+test_reapplyholds_apply_tolerates_already_present_tag
+test_reapplyholds_apply_warns_on_genuine_failure
 test_reapplyholds_apply_dry_run
 test_reapplyholds_release_removes_all_holds
 test_reapplyholds_release_dry_run

@@ -11,6 +11,7 @@ import subprocess
 
 import gi
 import node_config
+import zfs_lock_manager as zlm
 
 gi.require_version("Gtk", "3.0")
 from command_builders import BashStep
@@ -416,7 +417,7 @@ def _on_ds_selection_changed(selection, app):
     update_ds_button_sensitivity(app)
 
 
-def _is_mountable(item, volume_loop_attached, canmount_off):
+def _is_mountable(item, volume_loop_attached, canmount_off, lock_fenced):
     """Return True if the Mount action applies to *item* right now."""
     if item["type"] == "volume-partition":
         return item.get("has_filesystem", False) and not item.get("mounted", False)
@@ -429,6 +430,9 @@ def _is_mountable(item, volume_loop_attached, canmount_off):
         return False
     if item["type"] in ("pool", "dataset") and item["name"] in canmount_off:
         # canmount=off filesystems can never be mounted by ZFS.
+        return False
+    if item["type"] in ("pool", "dataset") and item["name"] in lock_fenced:
+        # A running operation holds a conflicting dataset lock right now.
         return False
     return not item.get("mounted", False)
 
@@ -525,7 +529,13 @@ def update_ds_button_sensitivity(app):
     # Filesystem rows with canmount=off can never be mounted by ZFS, so they
     # never enable Mount. Only unmounted rows need the check: an off dataset
     # is never mounted, so mounted rows cannot change the verdict either way.
+    # The same rows are probed against local dataset locks: a row fenced by a
+    # running operation (backup, offsite transfer, send/receive) explains the
+    # disabled Mount button instead of failing silently on click. The probe
+    # reads local lock files only; lock acquisition at mount time remains the
+    # enforcing fence.
     canmount_off = set()
+    lock_fenced = set()
     for i in items:
         if (
             i["type"] in ("pool", "dataset")
@@ -537,6 +547,8 @@ def update_ds_button_sensitivity(app):
                     canmount_off.add(i["name"])
             except (subprocess.CalledProcessError, FileNotFoundError):
                 pass
+            if not zlm.check_local(i["name"], "w"):
+                lock_fenced.add(i["name"])
 
     # A loop-attached volume row reports mounted=True, but Browse has no
     # target for the volume itself; its partition rows are the browsable
@@ -547,7 +559,7 @@ def update_ds_button_sensitivity(app):
         and single.get("zfs_type") == "volume"
     )
     can_mount = all_browsable and any(
-        _is_mountable(i, volume_loop_attached, canmount_off) for i in items
+        _is_mountable(i, volume_loop_attached, canmount_off, lock_fenced) for i in items
     )
     can_unmount = all_browsable and any(_is_unmountable(i, volume_loop_attached) for i in items)
 
@@ -603,8 +615,9 @@ def update_ds_button_sensitivity(app):
             btn.set_sensitive(sensitive)
 
     # Explain the Mount-disabled cases that otherwise look like a bug:
-    # snapshots of volumes (no .zfs path, no block device of their own), and
-    # filesystems with canmount=off (ZFS refuses to mount them).
+    # snapshots of volumes (no .zfs path, no block device of their own),
+    # filesystems with canmount=off (ZFS refuses to mount them), and
+    # filesystems fenced by a running operation's dataset lock.
     mount_btn = getattr(app, "_ds_mount_btn", None)
     if mount_btn is not None:
         if not can_mount and any(
@@ -613,6 +626,12 @@ def update_ds_button_sensitivity(app):
             set_action_tooltip(mount_btn, "Snapshots of ZFS volumes cannot be mounted")
         elif not can_mount and canmount_off:
             set_action_tooltip(mount_btn, "Datasets with canmount=off cannot be mounted")
+        elif not can_mount and lock_fenced:
+            set_action_tooltip(
+                mount_btn,
+                "Held by a running operation (backup, offsite transfer, or "
+                "send/receive); Mount is blocked until it finishes",
+            )
         else:
             set_action_tooltip(mount_btn)
 

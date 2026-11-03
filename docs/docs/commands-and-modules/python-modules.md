@@ -1676,7 +1676,11 @@ peer, and warnings — including unreachable (shadowed/orphaned) mounts, for
 which the Dashboard enables the mount-order repair.
 
 Expensive data gathering (pool queries, SSH version checks) runs in a
-background thread by default so the GTK main loop stays responsive.
+background thread by default so the GTK main loop stays responsive. On
+two-node systems every per-host fact a refresh needs (deployed version, ZFS
+version, OS detection, the TTL-cached fence check) is collected in one
+batched, connection-reused SSH round-trip per remote host, so the automatic
+refresh does not flood the peer's system journal with login noise.
 
 **Key functions:**
 
@@ -1684,6 +1688,7 @@ background thread by default so the GTK main loop stays responsive.
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
 | `create_dashboard_page()`                  | Build the Dashboard tab widget                                                                                             |
 | `refresh_dashboard_page(sync=False)`       | Re-gather all dashboard data asynchronously (`sync=True` to block)                                                         |
+| `_probe_remote_host()`                     | One batched SSH round-trip per remote host; delimited sections feed the per-fact parsers                                    |
 | `_get_pool_health()`                       | Query `zpool list` via `ZfsRepository`                                                                                     |
 | `_get_warnings()`                          | Compile warning strings from all sources                                                                                   |
 | `_format_disk_wear_warnings()`             | Warning strings for SSD/NVMe disks at/above `DISK_WEAR_WARNING_THRESHOLD` (80%)                                            |
@@ -2021,7 +2026,7 @@ Guest filesystem blocksize probing for VM volumes (no GTK): a zvol's
 `volblocksize` only pays off when the filesystem the guest keeps on that
 volume writes blocks the volblock can carry whole, and that geometry is
 invisible from the storage host — so the prober asks the VM through the
-QEMU guest agent. Every command runs as `qm guest ping` / `qm guest exec`
+QEMU guest agent. Every command runs as `qm guest cmd <vmid> ping` / `qm guest exec`
 locally when this host is the compute node, or over `ssh root@<compute>`
 on two-node installs. The zvol↔guest-disk mapping is a deterministic
 chain (`match_volumes`): a pinned `serial=` on the PVE disk line first;
@@ -2035,8 +2040,13 @@ zvols. Clone-shared signatures are refused rather than guessed.
 Filesystem block sizes come from one batched `stat -f -c %S`. Results
 cache per (vmid, volume, volsize) with a TTL, because guest geometry is
 quasi-static and the page refreshes every 1-300 s. Every failure
-degrades per volume with a short reason (agent absent, VM stopped, disk
-not matched, clone-identical signatures, non-Linux guest).
+degrades per volume with a short reason that names the actual condition
+(`qm guest` failures are classified against PVE's own die strings:
+guest agent not configured in VM options, guest agent not running,
+agent error with the underlying description, VM not running; then disk
+not matched, clone-identical signatures, non-Linux guest). The raw
+stderr of a failed `qm` call is logged as a WARN line, since the short
+reason alone cannot be re-diagnosed after the fact.
 `share/dev/validate-guestfs-probe.sh` validates the deployed chain in
 production (run as root on the storage host; everything it executes is
 read-only) and carries a `--self-check` mode that proves the plumbing
@@ -2138,7 +2148,9 @@ holds its position too.
 
 The Survey… dialog (advisory input half of the Alignment view's
 recommendation basis): pick a dataset from the last sample and a declared
-workload profile — or "(not surveyed)" — and save. Registered as the
+workload profile — or "(not surveyed)" — and save. The dataset selected in
+the Blocksize scan (a Dataset or VM row; Pool and Device rows name no
+single dataset) is preloaded when the dialog opens. Registered as the
 always-enabled Survey… button for the Performance page in
 `action_dispatch` (`PAGE_SPECS["memory"]` / `ACTION_HANDLERS["memory"]`).
 
@@ -2158,7 +2170,9 @@ Shared path-resolution helpers for the Python layer. Mirrors the Bash
 `$mydir` / `find_zfsutility_script` / `remote_zfsutilities_bin` behavior so
 the GTK GUI can locate sibling scripts, read the deployed version, resolve
 the built docs path, and resolve remote SSH paths without hard-coding
-installation locations.
+installation locations. Remote SSH commands are multiplexed through
+`ssh_command()` (ControlMaster/ControlPersist), so recurring callers such
+as the Dashboard poll reuse one connection instead of logging in per call.
 
 **Key functions:**
 
@@ -2171,9 +2185,11 @@ installation locations.
 | `get_version(script_dir=None)`             | Read the `VERSION` file for the current layout     |
 | `get_docs_path(script_dir=None)`           | Path to built docs `index.html`, or `None`         |
 | `get_profile_runner_path(script_dir=None)` | Path to `profile_runner.py` for cron / Run Now     |
+| `ssh_command(host, remote_cmd)`            | Multiplexed ssh argv for a root command on a host  |
 | `resolve_remote_bin(host, timeout=15)`     | Resolve remote active-version `bin/` over SSH      |
 | `resolve_remote_script(host, name)`        | Remote path to a script, or just `name` on failure |
 | `resolve_remote_version(host, timeout=15)` | Read remote `VERSION` file over SSH                |
+| `remote_version_path()`                    | Remote `VERSION` path used by version probes       |
 
 **Environment overrides:**
 

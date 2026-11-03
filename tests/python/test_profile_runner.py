@@ -2586,7 +2586,12 @@ class TestCancelSubprocess(unittest.TestCase):
                         time.sleep(0.05)
                     self.assertTrue(started, "pre-backup step never appeared in the log")
                     os.kill(proc.pid, signal.SIGTERM)
-                    rc = proc.wait(timeout=15)
+                    # Generous deadline: under a full-gate worker load the
+                    # cancelled runner can be SIGKILLed only after the OS
+                    # schedules it out for a long stretch — a 15 s budget
+                    # timed out there while the same test passes in ~4 s
+                    # standalone (recorded flake, resolved by this raise).
+                    rc = proc.wait(timeout=60)
                 except Exception:
                     if proc.poll() is None:
                         proc.kill()

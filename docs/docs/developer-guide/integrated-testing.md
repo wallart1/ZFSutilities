@@ -459,7 +459,7 @@ operations, compute/power events) build on shared lab machinery in
   boots from its iSCSI LUN. The preseed installs the qemu guest agent,
   and the build self-verifies the exact property scenarios depend on:
   the dumped image is restored onto a blank disk, booted, and must
-  answer `qm guest ping` before anything is cached.
+  answer `qm agent <vmid> ping` before anything is cached.
 - **Workload helpers** drive that VM from the compute guest through the
   guest agent (never ssh into it): a boot gate (`itf_vm_boot_with_agent`,
   TCG like every lab boot proof), a 1 Hz timestamp writer with per-tick

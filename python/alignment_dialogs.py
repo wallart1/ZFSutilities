@@ -1,9 +1,10 @@
 """Alignment survey dialog — the user-declared workload half of the advice.
 
-One dataset at a time: pick a dataset (filesystems and volumes from the
-last Alignment-view sample) and a workload profile — or "(not surveyed)" —
-then Save.  The survey is stored by feature_config and consumed by
-alignment_analysis.analyse(); it is advisory input only, never an action.
+One dataset at a time: the dataset selected in the Blocksize scan (or any
+other filesystem/volume from the last Alignment-view sample) and a workload
+profile — or "(not surveyed)" — then Save.  The survey is stored by
+feature_config and consumed by alignment_analysis.analyse(); it is advisory
+input only, never an action.
 """
 
 import gi
@@ -29,6 +30,41 @@ def _info_dialog(app, message):
     dialog.show_all()
     dialog.run()
     dialog.destroy()
+
+
+def _selected_survey_dataset(app, datasets):
+    """Dataset named by the selected Blocksize-scan row, if any.
+
+    The Survey… button sits in the page action bar, so the row the user
+    last clicked in the scan table is the natural subject: Dataset and VM
+    rows map to exactly one sample dataset (their hidden identity key
+    carries the full name — VM rows display only the short tail).  Pool
+    and Device rows name no single dataset, so they — like an empty or
+    absent selection — yield None and the combo falls back to its first
+    entry.  *datasets* is the combo's list; a key naming a dataset the
+    last sample no longer carries is ignored the same way.
+    """
+    view = getattr(app, "_alignment_chain_view", None)
+    if view is None:
+        return None
+    selection = view.get_selection()
+    if selection is None:
+        return None
+    chosen = selection.get_selected_rows()
+    if not chosen:
+        return None
+    model, paths = chosen[0], chosen[1]
+    for path in paths or []:
+        tree_iter = model.get_iter(path) if model is not None else None
+        if tree_iter is None:
+            continue
+        key = model.get_value(tree_iter, 0)
+        if not isinstance(key, str):
+            continue
+        for prefix in ("Dataset:", "VM:"):
+            if key.startswith(prefix) and key[len(prefix) :] in datasets:
+                return key[len(prefix) :]
+    return None
 
 
 def open_alignment_survey(app):
@@ -64,9 +100,11 @@ def open_alignment_survey(app):
     dataset_combo = Gtk.ComboBoxText()
     for name in datasets:
         dataset_combo.append_text(name)
-    dataset_combo.set_active(0)
+    preselect = _selected_survey_dataset(app, datasets)
+    dataset_combo.set_active(datasets.index(preselect) if preselect else 0)
     dataset_combo.set_tooltip_text(
-        "Dataset the declaration below applies to (from the last Alignment-view sample)"
+        "Dataset the declaration below applies to (from the last Alignment-view "
+        "sample); a Dataset or VM row selected in the Blocksize scan is preloaded"
     )
 
     profile_combo = Gtk.ComboBoxText()

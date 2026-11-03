@@ -313,6 +313,53 @@ class TestRemoteResolution(unittest.TestCase):
             self.assertEqual(result, "unknown")
 
 
+class TestSshCommand(unittest.TestCase):
+    """ssh_command() multiplexes when a control-socket dir is available."""
+
+    def setUp(self):
+        """Point XDG_RUNTIME_DIR at a fresh dir so no real runtime dir is used."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.xdg = tmp.name
+        patcher = patch.dict(os.environ, {"XDG_RUNTIME_DIR": self.xdg})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_mux_socket_dir_creates_private_xdg_dir(self):
+        """_mux_socket_dir creates the XDG candidate with 0700 permissions."""
+        directory = path_utils._mux_socket_dir()
+        self.assertEqual(directory, os.path.join(self.xdg, "zfsutilities-ssh-mux"))
+        self.assertEqual(os.stat(directory).st_mode & 0o777, 0o700)
+
+    def test_argv_carries_mux_options(self):
+        """ssh_command emits ControlMaster/ControlPersist options."""
+        argv = path_utils.ssh_command("stewie", "true")
+        self.assertEqual(argv[0], "ssh")
+        self.assertIn("ConnectTimeout=10", argv)
+        self.assertIn("ControlMaster=auto", argv)
+        self.assertIn(
+            "ControlPath=" + os.path.join(self.xdg, "zfsutilities-ssh-mux", "%r@%h-%p"),
+            argv,
+        )
+        self.assertIn(f"ControlPersist={path_utils.SSH_CONTROL_PERSIST}", argv)
+        self.assertEqual(argv[-2:], ["root@stewie", "true"])
+
+    def test_argv_falls_back_without_socket_dir(self):
+        """Without a socket dir the argv is a plain ssh command."""
+        with patch.object(path_utils, "_mux_socket_dir", return_value=None):
+            argv = path_utils.ssh_command("stewie", "true")
+        self.assertEqual(argv, ["ssh", "-o", "ConnectTimeout=10", "root@stewie", "true"])
+
+    def test_mux_socket_dir_none_when_no_candidate_writable(self):
+        """_mux_socket_dir gives up when no candidate directory is creatable."""
+        with patch.object(path_utils.os, "makedirs", side_effect=OSError("denied")):
+            self.assertIsNone(path_utils._mux_socket_dir())
+
+    def test_remote_version_path_exposed(self):
+        """remote_version_path exposes the VERSION path used by probes."""
+        self.assertIn("VERSION", path_utils.remote_version_path())
+
+
 class TestEnvironmentOverrides(unittest.TestCase):
     """Tests for environment-variable overrides."""
 

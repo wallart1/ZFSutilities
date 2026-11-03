@@ -74,6 +74,42 @@ entries were removed, recoverable via `git log`.)
 
 ## Persistent gotchas (not documented in docs/)
 
+- Guest-agent probe: invalid ping argv was the root cause (2026-11-02):
+  the Blocksize Alignment note's uniform "guest agent unavailable" came
+  from the prober sending `qm guest ping <vmid>` — PVE 9's `qm guest`
+  map has only cmd/passwd/exec/exec-status, so EVERY ping died at CLI
+  usage-parse (usage text contains "guest", which the old substring
+  classifier collapsed to one label) regardless of VM state; no exec
+  ever ran and PVE's agent machinery was never invoked (zero
+  Monitor.pm syslog failures all day confirmed it). Fixed to the
+  canonical `qm guest cmd <vmid> ping` (the `qm agent <vmid> ping`
+  alias is upstream-deprecated; ITF's vmos-lib uses the alias and HAD
+  live-verified "no qm guest ping on PVE 9" — the knowledge never
+  reached the product). Complementary hardening from the same day:
+  classify_agent_failure now matches PVE's die strings specific-first
+  (not-configured / not-running / VM-not-running /
+  agent-error-with-description), GuestFsProber._run WARN-logs the raw
+  stderr, and validate-guestfs-probe's self-check dispatch pins the
+  EXACT ping argv (a substring match is what blessed the invented form
+  — mock-fidelity lesson: scripted runners must assert wire shapes, not
+  keywords). Fact source: tweety's /etc/pve guest configs are now
+  dan-readable via a root-side systemd mirror (/var/local/
+  pve-guest-configs, pve-guest-config-mirror.{service,path,timer};
+  pmxcfs permissions are FIXED by design — chmod EPERM even as root,
+  and www-data group membership would expose pve-www.key/user.cfg/
+  pve-ssl.key — documented in the Installation manual; ALL 12 real VMs
+  have `agent: 1`, only 999.conf lacks it). Other tweety facts: VMs
+  launch as `/usr/bin/kvm` (a `qemu-system` ps grep finds NOTHING —
+  grep `kvm -id` instead); failed qga/qmp commands are syslog'd by
+  Monitor.pm — "journalctl | grep 'command failed'" is the agent
+  observability channel. The recorded-but-unused `VMOption.agent` flag
+  (alignment_stats parses the config switch; nothing consumes it) is an
+  acknowledged gap, left unwired per plan scope. Evening re-check on the
+  user's screenshot report (0.134-era image): BOTH nodes now run 0.137.0
+  (current symlink switched Nov 1 22:20) and 0.137.0 still carries the
+  broken argv — the fix ships only with the next release; all 12 tweety
+  VM configs read `agent: 1` via the dan-readable mirror.
+
 - Logs tab two-list structure (2026-10-30): the main list keeps
   `_LOG_FILENAME_RE` (core types only, unchanged); everything
   session-shaped with a non-core type routes to the collapsed
@@ -2369,3 +2405,231 @@ subprocess timeout under pub2's VM load; 110/110 green in isolation).
   Phase 5 leftovers: tests/python/test_zfsutilities_gui.py (+1 blank
   line) and the gtk-gui.md Warnings bullet (+8); this notes entry.
   Nothing committed — tree awaits the user's commit cue.
+
+
+## 2026-11-02 — Blocksize ladder: double-height rows, smaller Y labels
+
+User request (Performance → Blocksize Alignment): the ladder graph twice
+as tall, Y-axis (row) labels somewhat smaller. Both renderers changed via
+the shared vocabulary: `LADDER_ROW_HEIGHT` 22→44 (charting.py) doubles the
+row-driven height in matplotlib (stewie) and Cairo (tweety/dev host)
+alike — fixed chrome (40px top, 26px bottom, 70px placeholder) unchanged,
+so a full ladder lands just under exactly 2×. matplotlib row labels
+11→9.5; Cairo row labels split from the shared 13px to their own 11.5
+(ticks/legend/placeholder stay 13) with the gutter re-measured at the
+label size. Cairo vertical offsets generalized for the taller rows
+(baseline `row/2+4`, bar 0.62 of row, centered — matches matplotlib's
+proportion). Tests: the three literal font assertions updated
+(11→9.5, 13.75→11.875, once-with-16.25→call-set {16.25, 14.375}); height
+tests derive from the constants and stayed green untouched. Docs:
+charting.md text-vocabulary sentence updated. Nothing committed.
+
+
+## 2026-11-02 (later) — restore lineage-skip hold-reapply WARN wall fixed
+
+User report (GUI restore run from pub, 2026-11-01 22:14): restore whose
+full copy was skipped by the verified-lineage gate still ran the
+end-of-run hold reapply over a destination that was never destroyed —
+13× "WARN: Failed to apply hold" + "Reapplied 0 holds (13 skipped)",
+all because `zfs hold` fails with "tag already exists" on holds that
+were never removed. Fix in `bin/zfsreapplyholds` `reapplyholds_apply`:
+on a failed hold, check `zfs holds -H` for the tag; already present →
+VERB + new `_present` counter ("desired end state"), genuine failure →
+WARN unchanged. Summary now "(N already present, N skipped)". zfs-send-
+receive untouched (mixed runs still need the reapply for destroyed
+datasets; idempotent apply is correct on every path). Mocks made
+faithful in tests/test-lib.sh: `zfs hold` refuses duplicate tags like
+real zfs; `zfs destroy` drops the destroyed subtree's holds;
+`mock_zfs_hold_fail` forces genuine failures. test-zfs-send-receive-
+holds world rewritten honestly: the tag that rides a destructive full
+copy is offsite-* (delallsnaps releases those; user holds BLOCK the
+copy — delfs exits 8), so the world's kept-tag became offsite-srctag
+and a NEW test pins the user-hold abort. Two new reapplyholds tests
+(already-present tolerated; genuine failure WARNs), red-proofed 2-red
+before the fix. Test 5's tag1→tag9 (cross-test state pollution under
+faithful mocks). PREEXISTING +1: the flat `_mock_zfs_fs_list` listing
+ignores the requested root (root-filter attempted and reverted — three
+suites need world rewrites first). pub's zfsreapplyholds is identical;
+the fix rides the lane merge to pub.
+
+
+## 2026-11-02 (evening) — Survey… preloads the Blocksize-scan selection
+
+User request: the Performance page's Survey… button made the user
+manually pick the dataset they were looking at. The chain TreeView was
+discarded at build (`_chain_view`); it now lives on
+`app._alignment_chain_view` (the scrub/datasets/logs idiom).
+`alignment_dialogs._selected_survey_dataset` reads the first selected
+row's hidden identity key (`Dataset:`/`VM:` prefixes; VM rows key the
+full zvol name though they display the short tail) and
+`open_alignment_survey` preloads it — the existing
+`_sync_profile_combo()` then loads its saved declaration. Pool/Device
+rows, no selection, and stale keys fall back to the first entry.
+Survey… button tooltip + dataset-combo tooltip updated (test_action_
+dispatch tuple assertion updated to match). Tests: five new
+TestAlignmentSurveyDialog cases via a `_chain_view_with_selection`
+fake; `_make_app` now names `_alignment_chain_view = None` (a mock
+auto-attribute would fake a selection). Docs: gtk-gui.md Survey dialog
+section + Actions row, python-modules.md alignment_dialogs section.
+Nothing committed.
+
+
+## 2026-11-02 (night) — Scrub Manager Scan Line cell drops the `scan:` label
+
+User item: the scrub table's Scan Line cell repeated zpool's `scan:`
+field label the column header already carries. One-line display-site
+change in pools_page.refresh_scrub_table —
+`info.scan_line.removeprefix("scan:").strip() or "—"` — ScrubInfo
+keeps the raw record (scrub-engine diagnostic logs and
+data-structures.md still quote it verbatim; only the first joined
+segment ever carries the label, so removeprefix is precisely scoped).
+One new test in test_scrub_page.py (prefix stripped; empty fallback
+"—"). Header tooltip and gtk-gui.md wording stay accurate. Nothing
+committed.
+
+
+## 2026-11-02 (night) — Datasets-page Mount refusals made visible (lock fence)
+
+User report: "Datasets page: Could not mount z22tb/zfsutilities" with a
+stewie journal excerpt that showed only benign property queries. Root
+cause (verified from the Oct 29 journal, the offsite session log, and
+the lock-manager code): the offsite profile (temp -> z22tb, started
+13:41:52, ran until 18:38) holds a w lock on the destination pool root
+z22tb for every dataset it copies; the Mount click at 13:43:34 passed
+pre-flight (canmount/mounted queries — exactly the journal's burst),
+then zlm.locks("w", [z22tb/zfsutilities]) hit the pool-root lock
+(hierarchical fence), raised RuntimeError, and on_datasets_mount
+swallowed it — no dialog, nothing visible. The fence is correct and
+stays; the invisibility was the defect. (The offsite transfer itself is
+invisible in the sudo journal because the runner's bash children call
+zfs directly as root.)
+
+Fix, three layers, fence unchanged:
+- zfs_lock_manager: check() local walk extracted to _check_local_walk;
+  new public check_local() (local files only, never the remote/ssh
+  branch — safe for GUI button sensitivity); _conflicting_lock_holders
+  renamed public conflicting_lock_holders for refusal messages.
+- dataset_actions: mount legs (_mount_dataset_targets and the four
+  _mount_one_* helpers) now return None on success or a one-line reason
+  string on refusal (WARN log lines byte-identical); on_datasets_mount
+  collects reasons and shows one _warn_busy-style warning dialog naming
+  the lock holder(s) (pid/script noise stays in the log line);
+  already-mounted live state now refreshes the stale row instead of
+  silently doing nothing; _offer_snapshot_parent_mounts warns too on a
+  refused parent batch.
+- datasets_page: update_ds_button_sensitivity probes
+  zlm.check_local(name, "w") for unmounted filesystem rows (same loop
+  as the canmount probe); _is_mountable takes a lock_fenced set and the
+  Mount button gets a fence tooltip ("Held by a running operation
+  (backup, offsite transfer, or send/receive)…"), mirroring the
+  canmount=off precedent. Runtime acquisition stays the enforcing
+  fence; the tooltip is advisory (locks can be taken any time).
+
+Tests: TestMount dialog/refusal cases (holder text, exception fallback,
+already-mounted refresh, mixed batch, canmount=off batch, parent-mount
+failure), TestCheckLocal in the zlm suite (pool-root w blocks
+descendant w; never contacts the remote authority),
+TestLockFenceButtonSensitivity in the datasets-page suite; six
+volume-helper tests adapted to the reason-or-None contract. Docs:
+messages manual gains the previously-missing `WARN: cannot mount ...`
+lock row plus dialog notes on two adjacent rows; gtk-gui.md Mount row
+describes the fence; GLOSSARY gains a "dataset lock" entry. Nothing
+committed.
+
+## 2026-11-02 (evening) — Dashboard poll path: batch + SSH reuse (tweety journal quieting)
+
+User named the standing tweety-journal todo and chose "both batching +
+SSH reuse"; interval stays a user knob. Plan approved as presented.
+
+- path_utils: new ssh_command(host, remote_cmd) — every Python-side
+  root@host argv now carries ControlMaster=auto + ControlPath (private
+  socket dir: XDG_RUNTIME_DIR/zfsutilities-ssh-mux, then
+  /run/zfsutilities/ssh-mux, then uid-tagged temp; 0700, degrade to plain
+  ssh when none creatable) + ControlPersist=600 (SSH_CONTROL_PERSIST).
+  resolve_remote_bin/resolve_remote_version route through it; new
+  remote_version_path() exposes the VERSION probe path.
+- dashboard_page: batched probe — _remote_probe_script/_parse_probe_sections/
+  _probe_remote_host emit delimited sections (version, zfs-version,
+  pveversion, os-release, inxi, fence-only-when-TTL-expired) in ONE ssh
+  round-trip per remote host per refresh. _get_host_version/_zfs_version/
+  os_info take optional parsed sections (signatures unchanged; local hosts
+  still run direct commands; local OS detection extracted to
+  _get_local_os_info, remote precedence in _os_info_from_sections).
+  _gather_remote_probes + _gather_dashboard_data wire the shared probe_map
+  into _gather_config_section_data and the fence check
+  (_fence_cache_expired; _compute_fence_failure_warning reads the probe's
+  fence section, falls back to its own mux'd query otherwise).
+- Tests: test_path_utils +TestSshCommand (mux argv, 0700 dir, no-dir
+  fallback, unwritable None); test_dashboard_page — remote zfs-version/
+  os-info/fence assertions moved to the batched shape (mux argv has
+  options before root@host; output wrapped in _probe_output delimiters),
+  +TestProbeRemoteHost (script sections, round-trip parse, failure→{},
+  precedence, undelimited ignore), +TestGatherRemoteProbes,
+  +TestGatherConfigSectionUsesProbes (no per-command ssh when probe_map
+  passed), fence probe_map cases (avoid ssh, inactive, fallback, local
+  peer ignores map), _get_host_version sections cases. NOTE: gather call
+  sites pass sections POSITIONALLY — the suite's dict.get side_effect
+  idiom rejects kwargs (one failure taught this).
+- Suites: path_utils 35, dashboard 319, consumers (gui_infrastructure,
+  profile_runner, schedule_page, command_builders, proxmox_enroll) 459 —
+  all green; ruff clean; real single-node gather smoke green on dev host.
+- Docs: gtk-gui.md Dashboard intro (one reused round-trip per remote
+  host, no journal flooding); python-modules.md probe row + path_utils
+  ssh_command/remote_version_path rows + mux intro; GLOSSARY "SSH
+  connection reuse (ControlMaster)" entry. Nothing committed.
+- Post-deploy verification pending (user deploys): read-only journalctl
+  sample on tweety with Dashboard open on stewie — expect ≤1 root login
+  per 10-min persist window (was 3 per tick).
+
+## Development-cycle wrap-up (2026-11-02 late, pub2 lane)
+
+Seven-step wrap-up over everything since 0.137.0 (merge state 6cfbc9d):
+the committed a08a7af (dashboard-suite import pairing) plus the working
+tree (guest-probe argv fix, reapply-holds idempotence, ladder sizing,
+Survey preload, `scan:` strip, mount-refusal visibility, batched probe +
+SSH reuse, docs/GLOSSARY).
+
+- Steps 1/4 (PREEXISTING resolution) skipped by their own precondition —
+  pub-main-only, this is the pub2 lane. 4 entries remain in the lane's
+  PREEXISTING.md.
+- Step 2: ruff check clean repo-wide. ruff format found two pre-existing
+  nits in files released with 0.137.0 (conftest.py backslash-join,
+  test_pools_page.py missing blank line) — fixed as trivial. shellcheck
+  clean over the documented set. Manual review of every changed product
+  file clean: the moved inxi-split regex kept its original comment (no new
+  regex this cycle); the new `((counter++))` in zfsreapplyholds verified
+  safe in all call contexts (both strict callers guard with `||`/`if !`,
+  the GUI payload is `bash -c` with no set -e).
+- Step 3: coverage map verified per feature; one missing test added —
+  TestGatherDashboardData.test_gather_shares_batched_probe_with_config_
+  section pins the gather wiring (probe_map + node_cfg into the config
+  gather and fence check), red-proofed by dropping the call-site args.
+  No obsolete or incorrect tests found.
+- Step 5: docs matched the code 1:1 (messages rows, gtk-gui, python-
+  modules, charting, data-structures, installation mirror procedure,
+  commands, integrated-testing, testing). Nine stale testing.md suite
+  rows updated for this cycle's new coverage; GLOSSARY pending-list
+  additions left as user edits. docs-integrity 23 passed; mkdocs rebuilt
+  rc 0 (standing MkDocs-2.0/Material nag only).
+- Step 6: full no-soak gate green — 108 suites, 6087 passed, 0 failed,
+  18 python environment-preflight skips; the recorded profile_runner
+  cancel-deadline flake did not appear. Log: /tmp/zfs-run-pub2-wrapup.log.
+- Step 7: codebase frozen. Nothing committed — the tree awaits the user's
+  commit cue.
+
+## Release 0.138.0 prep (pub2 lane, user-directed steps 8-10)
+
+- Step 8: VERSION → 0.138.0; changelog section written (Added / Fixed /
+  Changed / Tests / Documentation, house style, no test counts); mkdocs
+  rebuilt clean; docs integrity 23. Final with-soak gate round 1: 1
+  failure = the recorded profile_runner SIGTERM flake (standalone
+  110/110 in ~4 s — load-timing, not a defect; the diff touches no
+  runner code). Fixed with pub's known resolution (post-SIGTERM
+  proc.wait 15→60 s in the test) and the PREEXISTING entry removed
+  (3 entries remain). Round 2 GREEN: 108 suites, 6094 passed, 0 failed,
+  soaks exercised, 18 standing preflight skips
+  (log /tmp/zfs-run-pub2-wrapup-soak2.log).
+- Step 9: freeze held — only this notes entry afterwards.
+- Step 10: staged and committed (hash in the turn report; same-version
+  lane rule: pub3 already carries its own 0.138.0 commit, both ride the
+  combined release per the 0.137.0 precedent).

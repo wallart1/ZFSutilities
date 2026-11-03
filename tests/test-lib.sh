@@ -332,6 +332,7 @@ declare -gA _mock_zfs_datasets=()
 declare -gA _mock_zfs_snap_lists=()
 declare -gA _mock_zfs_guid_lists=()
 declare -gA _mock_zfs_holds=()
+declare -gA _mock_zfs_hold_fail=()
 declare -gA _mock_zfs_clones=()
 declare -gA _mock_zpool_guid=()
 declare -gA _mock_zfs_stale_tokens=()
@@ -468,6 +469,12 @@ mock_zfs_holds() {
     local snapshot="$1"
     shift
     _mock_zfs_holds["$snapshot"]="$*"
+}
+
+mock_zfs_hold_fail() {
+    # Force `zfs hold <tag> <snapshot>` to fail regardless of state, so
+    # callers' genuine-failure branches can be exercised deterministically.
+    _mock_zfs_hold_fail["$1 $2"]="Y"
 }
 
 mock_zpool_list() {
@@ -783,7 +790,30 @@ zfs() {
             return 0
             ;;
 
-        snapshot|create|destroy|rollback|set)
+        snapshot|create|rollback|set)
+            return 0
+            ;;
+
+        destroy)
+            # Real zfs drops a destroyed dataset's snapshot holds with it
+            # (its descendants' under -r); mirror that so capture →
+            # destroy → reapply flows behave like production.
+            local _destroy_target="${args[-1]}" _destroy_key
+            for _destroy_key in "${!_mock_zfs_holds[@]}"; do
+                if [[ "$_destroy_target" == *@* ]]; then
+                    # Snapshot destroy: only that snapshot's holds go.
+                    if [[ "$_destroy_key" == "$_destroy_target" ]]; then
+                        unset "_mock_zfs_holds[${_destroy_key}]"
+                    fi
+                else
+                    # Dataset destroy: the dataset's and any descendant
+                    # datasets' snapshot holds go with it.
+                    if [[ "$_destroy_key" == "$_destroy_target@"* \
+                        || "$_destroy_key" == "$_destroy_target/"* ]]; then
+                        unset "_mock_zfs_holds[${_destroy_key}]"
+                    fi
+                fi
+            done
             return 0
             ;;
 
@@ -800,7 +830,20 @@ zfs() {
         hold)
             local tag="${args[1]}"
             local snapshot="${args[2]}"
+            # Forced-failure marker (mock_zfs_hold_fail): exercise callers'
+            # genuine-failure branches without relying on a specific state.
+            if [[ "${_mock_zfs_hold_fail[$snapshot $tag]:-}" = "Y" ]]; then
+                return 1
+            fi
             local current="${_mock_zfs_holds[$snapshot]:-}"
+            local t
+            # Real zfs refuses a tag that already exists on the snapshot
+            # ("tag already exists"); mirror that so idempotence is testable.
+            for t in $current; do
+                if [[ "$t" == "$tag" ]]; then
+                    return 1
+                fi
+            done
             if [[ -n "$current" ]]; then
                 _mock_zfs_holds["$snapshot"]="$current $tag"
             else
