@@ -242,6 +242,12 @@ class TestHistoryLocking(unittest.TestCase):
         """Concurrent add_history_entry calls must not lose entries."""
         import multiprocessing
 
+        # Fork context: the workers must inherit this test's monkeypatched
+        # module state (HISTORY_PATH / HISTORY_LOCK_PATH), and the local
+        # add_one target cannot cross a pickling boundary — Python 3.14's
+        # forkserver default would break both.
+        mp = multiprocessing.get_context("fork")
+
         orig_path = backup_history.HISTORY_PATH
         orig_lock = file_locking.HISTORY_LOCK_PATH
         tmpdir = tempfile.TemporaryDirectory()
@@ -259,7 +265,7 @@ class TestHistoryLocking(unittest.TestCase):
                 )
                 backup_history.add_history_entry(entry)
 
-            procs = [multiprocessing.Process(target=add_one, args=(f"run-{i}",)) for i in range(4)]
+            procs = [mp.Process(target=add_one, args=(f"run-{i}",)) for i in range(4)]
             for p in procs:
                 p.start()
             for p in procs:

@@ -24,6 +24,12 @@ import file_locking as fl
 # fails the test, just later.
 HANDSHAKE_TIMEOUT = 300
 
+# Explicit fork start context: the helper children are bound methods (not
+# picklable), and Python 3.14's forkserver default would refuse to spawn
+# them — the lock-hold helpers only make sense as forked children of this
+# process anyway.
+MP_FORK = multiprocessing.get_context("fork")
+
 
 class TestLockPathDefaults(unittest.TestCase):
     """Default lock paths live under the centralized lock directory."""
@@ -120,8 +126,8 @@ class TestFileLockExclusivity(unittest.TestCase):
     def test_exclusive_lock_blocks_another_exclusive(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             lock_path = os.path.join(tmpdir, "test.lock")
-            queue = multiprocessing.Queue()
-            proc = multiprocessing.Process(target=self._acquire_and_hold, args=(lock_path, queue))
+            queue = MP_FORK.Queue()
+            proc = MP_FORK.Process(target=self._acquire_and_hold, args=(lock_path, queue))
             proc.start()
             try:
                 self.assertEqual(queue.get(timeout=HANDSHAKE_TIMEOUT), "held")
@@ -154,8 +160,8 @@ class TestSharedLocksAllowConcurrentReaders(unittest.TestCase):
     def test_shared_lock_allows_another_shared(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             lock_path = os.path.join(tmpdir, "test.lock")
-            queue = multiprocessing.Queue()
-            proc = multiprocessing.Process(target=self._hold_shared_lock, args=(lock_path, queue))
+            queue = MP_FORK.Queue()
+            proc = MP_FORK.Process(target=self._hold_shared_lock, args=(lock_path, queue))
             proc.start()
             try:
                 self.assertEqual(queue.get(timeout=HANDSHAKE_TIMEOUT), "held")

@@ -1084,7 +1084,17 @@ class TestScheduleSavedState(unittest.TestCase):
     def test_page_viewport_sizes_content_by_natural_height(self, _lst):
         """The page viewport uses NATURAL height so the profile table's
         capped window is never crushed at short window heights."""
-        schedule_page = self._import_schedule_page()
+        # fresh=True, not the class helper: the @patch decorator above
+        # imports schedule_page OUTSIDE any mock context, so on a
+        # GTK-capable host the class helper would return that real-toolkit
+        # binding, and on a shared mock binding the viewport call count
+        # accumulates across page builds. A fresh context re-binds this
+        # test's own mocks either way (same pattern as the offsite/logs
+        # viewport tests; the decorator's list_profiles patch then applies
+        # to the evicted module, so the page build reads live profiles
+        # harmlessly).
+        with mock_gtk(fresh=True):
+            import schedule_page
         app = MagicMock()
         app._ui_state.bind_treeview = MagicMock()
 

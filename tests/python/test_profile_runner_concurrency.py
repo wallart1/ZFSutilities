@@ -10,6 +10,11 @@ from unittest.mock import patch
 import profile_runner
 from test_support import capture_logs, temp_config_dir
 
+# Explicit fork start context: the child helpers are local closures (not
+# picklable) and rely on the parent's monkeypatched PROFILE_LOCK_DIR —
+# Python 3.14's forkserver default would break both.
+MP_FORK = multiprocessing.get_context("fork")
+
 
 class TestProfileLockHelpers(unittest.TestCase):
     def setUp(self):
@@ -87,8 +92,8 @@ class TestProfileLockHelpers(unittest.TestCase):
             profile_runner.release_profile_lock(fd, path)
             result_queue.put("released")
 
-        queue = multiprocessing.Queue()
-        proc = multiprocessing.Process(target=_hold_lock, args=(queue,))
+        queue = MP_FORK.Queue()
+        proc = MP_FORK.Process(target=_hold_lock, args=(queue,))
         proc.start()
         try:
             lock_path = queue.get(timeout=2)
