@@ -463,11 +463,14 @@ EOF
             _mock_zfs_props["${zvol}:snapdev"]="${_mock_snapdev:-hidden}"
             if [[ "${_mock_encryption:-off}" != "off" ]]; then
                 # Raw receive: the archive dataset arrives with the
-                # stream's volblocksize. (zfs receive runs as a pipeline
-                # component, so the mock cannot register the dataset
-                # itself — its mutations die with the pipeline subshell.)
+                # stream's volblocksize. Its post-receive existence is
+                # proven by test-lib's receive record (the pipelined
+                # receive mock appends to the state-dir file — array
+                # writes die with the pipeline subshell), so no
+                # pre-registration here: a pre-registered dataset would
+                # make the engine's completion-state probe see a phantom
+                # partial archive and destroy/re-make it every run.
                 _mock_zfs_props["${archive_base}/${zvol}:volblocksize"]="8K"
-                _mock_zfs_datasets["${archive_base}/${zvol}"]=1
             fi
             if [[ "$snapshots" == "existing" ]]; then
                 _mock_zfs_snap_lists["$zvol"]="${zvol}@dailybackup-2026-07-14T07:00-04:00-d"
@@ -537,6 +540,10 @@ reset_mocks() {
     unset _mock_snapdev _mock_preexisting_archive _mock_complete_archive
     unset _mock_zfsdelfs_rc _mock_remove_vm_disk_rc _mock_step4_zvols_remaining
     unset _mock_input_hold
+    # Fresh receive records per test: a dataset received by an earlier
+    # test must not exist in this test's freshly reset world.
+    [[ -n "${_mock_zfs_state_dir:-}" ]] \
+        && : > "$_mock_zfs_state_dir/received-datasets"
 }
 
 test_single_node_uses_existing_snapshot() {

@@ -2964,3 +2964,84 @@ User promoted R-08; plan approved and executed in one session
 - Final full gate WITH soaks green via tests/run-tests --with-soak
   (rc=0, all suites passed, soak suites exercised, zero failures).
 - Frozen at step 9; commit per step 10 (hash recorded in git).
+
+## Wrap-up on merged tree (pub main, post-0.138.0 lane merges, 2026-11-03)
+
+Cycle scope: changes since bd4f2b3 (pub2 4919f94 + pub3 c4feb54 lane
+merges) plus working tree.
+
+- Step 1 (PREEXISTING resolution — the flat `_mock_zfs_fs_list` mock
+  gap): completed the root-filtering fix that was sitting uncommitted in
+  tests/test-lib.sh. Rooted `zfs list <root>` now filters to root +
+  descendants and fails on unknown roots (existence proven by fs_list
+  row, `_mock_zfs_datasets`, a receive record, or descendants). New
+  receive persistence: the pipelined-receive state file now also proves
+  dataset existence (plain and rooted probes) — array writes die with
+  the pipeline subshell, the file does not; `zfs destroy` purges the
+  records (target + descendants). World rewrites: dryrun lock-test world
+  gained its destpool row; archive-vm dropped the encrypted fake
+  pre-registration (the phantom "partial archive" trigger); per-test
+  resets clear the receive-record file in the five receive-running
+  suites (cross-test resurrection otherwise flips destination
+  pre-create decisions — caught by test-zfs-send-receive-holds).
+  Root-caused a one-per-parallel-batch flake this fix had introduced:
+  `$(echo -e ...)` in the rooted branch FORKED, and under 13-suite load
+  the fork occasionally failed, silently killing the
+  `zfs list ... | grep -q` pipeline element (callers read "dataset
+  missing"; stderr eaten by the probe's 2>/dev/null). Instrumented a
+  list-probe trace, caught it red-handed (state perfect, rc line
+  missing = element death), made the decode and the receive-record
+  check fork-free. Five consecutive clean parallel batches after.
+  PREEXISTING.md emptied (1 resolved, 0 remain).
+- Step 2 (standards): shellcheck + ruff clean on everything changed; no
+  source-resolution directives needed. Delegated python diff review: no
+  P1s; fixed one P2 — `_mux_socket_dir` hard-coded
+  /run/zfsutilities/ssh-mux, now via paths.get_run_dir()
+  (ZFSUTILITIES_RUN_DIR-overridable). Fenced six `((x++))` counters in
+  zfsreapplyholds (2 new from the pub2 lane + 4 pre-existing in the
+  same two functions): from-zero increments return 1 and a strict
+  caller aborts mid-loop — all current call sites are `||`/`if !`
+  guarded today, one refactor away from a production abort. P3s
+  (single-expression one-call-site helpers, agent-failure classification
+  precedence) judged within the policy's testability exemption and
+  design-documented; left alone.
+- Step 3 (test suites): no obsolete/incorrect tests found (no flat-world
+  assertions, no new skips/TODO debt); lane coverage maps to every new
+  production surface (batched probes, mount-refusal visibility,
+  guest-probe fix, hold-reapply idempotence, rolling charts, zero-rate
+  refusal, keys-pending verdict). Added: six mock-semantics tests in
+  tests/test-test-lib (root filter, unknown-root failure,
+  existence-model root, receive persistence, destroy purge, flat
+  unrooted listing) and a ZFSUTILITIES_RUN_DIR mux-dir override test in
+  test_path_utils. One bug in my own destroy purge caught by the new
+  test: $BASHPID expands post-fork in redirection words but pre-fork in
+  command arguments — awk wrote .tmp.<child-pid> and mv looked for
+  .tmp.<parent-pid>; the temp name is now pinned in a local before the
+  redirect.
+- Step 4: PREEXISTING.md re-swept — empty, no new actionable entries
+  (every later find was either fixed in place or a documented-design
+  exemption).
+- Step 5: testing.md mock-state table + new semantics paragraph (root
+  filtering, header passthrough, receive persistence, destroy purge) and
+  the test-test-lib suite row extended; python-modules.md checked (mux
+  wording unaffected by the get_run_dir change). GLOSSARY: the queued
+  "world" term promoted to a full entry (mock world / world rewrite,
+  anchored to the 2026-11-03 fix); base/procuct/rebase stay queued.
+  docs integrity 23 passed; site rebuilt clean (standing MkDocs-2.0/
+  Material warning only). AGENTS.md was edited by the user mid-session
+  and left untouched per the Hard Rules.
+- Step 6: first full no-soak gate had one failing suite —
+  test-zfsshowbigstuff (2 tests, "got 8 more rows"): its world embeds a
+  non-`-H` header row in _mock_zfs_fs_list and the script's
+  `head -n N+1` budgets for it; the root filter had dropped the header
+  (NAME is not a dataset under the root). Fixed: header rows survive the
+  filter, and the receive-record fallback keeps a header first. Full
+  gate rerun green (112 suites, 0 failures, 1 env skip, 22 python env
+  skips). Not a pre-existing issue — introduced by this wrap-up's own
+  filter and fixed inside the step.
+- Step 7: codebase frozen. The wrap-up touched: tests/test-lib.sh,
+  tests/test-{archive-vm,zfs-send-receive-dryrun,-encrecv,-holds,
+  -manifest}, tests/test-test-lib, bin/zfsreapplyholds,
+  python/path_utils.py, tests/python/test_path_utils.py,
+  docs/docs/developer-guide/testing.md, GLOSSARY.md, PREEXISTING.md,
+  SESSION_NOTES.md. Nothing committed — tree awaits the user's cue.

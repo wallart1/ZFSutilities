@@ -331,6 +331,22 @@ class TestSshCommand(unittest.TestCase):
         self.assertEqual(directory, os.path.join(self.xdg, "zfsutilities-ssh-mux"))
         self.assertEqual(os.stat(directory).st_mode & 0o777, 0o700)
 
+    def test_mux_socket_dir_follows_run_dir_override(self):
+        """Without XDG, the mux candidate is the overridable run dir's ssh-mux.
+
+        The candidate must come from paths.get_run_dir() (honoring
+        ZFSUTILITIES_RUN_DIR), never a hard-coded /run path: deployments
+        that relocate the run dir must not grow a second stray directory.
+        """
+        env = dict(os.environ)
+        env.pop("XDG_RUNTIME_DIR", None)
+        run_dir = os.path.join(self.xdg, "relocated-run")
+        env["ZFSUTILITIES_RUN_DIR"] = run_dir
+        with patch.dict(os.environ, env, clear=True):
+            directory = path_utils._mux_socket_dir()
+        self.assertEqual(directory, os.path.join(run_dir, "ssh-mux"))
+        self.assertEqual(os.stat(directory).st_mode & 0o777, 0o700)
+
     def test_argv_carries_mux_options(self):
         """ssh_command emits ControlMaster/ControlPersist options."""
         argv = path_utils.ssh_command("stewie", "true")

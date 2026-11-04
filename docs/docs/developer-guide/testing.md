@@ -266,7 +266,7 @@ documentation-integrity suite. A scheduled nightly job runs
 | `test-startdocserver` | Server health checks, PID discovery, CWD mismatch, restart logic, static-site refresh on start |
 | `test-strict-mode` | Static guard: the migrated orchestrators keep `set -euo pipefail` (new strict-mode scripts register here) |
 | `test-switch-version` | Version switching, production wiring, prior-version uninstall, rollback, `--uninstall`, `--list`, and obsolete systemd artifact cleanup — including the iSCSI fence-unit gate (single-node skip, fresh two-node compute deploy with no node config yet) |
-| `test-test-lib` | Harness assertion helpers: pass/fail/skip counter semantics and golden assertions; per-PID `/tmp` artifact lifecycle (green suites remove log and mock-state dir, failed suites retain only the log, exit status survives the cleanup trap); the source-time orphan sweep (a dead suite's leftover mock-state dir is reaped by the next suite to source `test-lib.sh`, a live suite's dir is never touched) |
+| `test-test-lib` | Harness assertion helpers: pass/fail/skip counter semantics and golden assertions; per-PID `/tmp` artifact lifecycle (green suites remove log and mock-state dir, failed suites retain only the log, exit status survives the cleanup trap); the source-time orphan sweep (a dead suite's leftover mock-state dir is reaped by the next suite to source `test-lib.sh`, a live suite's dir is never touched); the `zfs` mock's dataset-listing semantics (root filtering, unknown-root failure, the existence-model and receive-record root proofs, destroy purging receive records, flat unrooted listings) |
 | `test-unarchive-vm` | `unarchive-vm` `--new-vmid` rewriting, UUID regeneration, conflict handling; METHOD-branching restores (copy reblock via sidecar volblocksize vs raw/legacy plain receive), sidecar policy (missing `.disk_info` fatal, missing volblocksize sidecar warn for raw / fatal for copy), unknown-method rejection; rate-limited restore copy (pacer pacing, dd conv=sparse, a single paced destination read-back with the source device read exactly once), in-flight source-hash coverage (hash read pattern, source-hash-failure abort with rollback); re-run idempotency (`RESTORED_AS` marker skip, unmarked-destination confirm/decline gates, completed-run clean exit); two-node restore staging (bash-format node conf, both hosts on the stub hostname so payloads take the local branches, ssh/targetcli mocks): Step-2 pool→target mapping via `pool_to_target` across two mapped pools and Step-3 by-path disk-line LUN rewrites; and static payload-routing checks (on_storage/on_compute, no compute bounce) |
 | `test-uninstall-some-versions` | Bulk version uninstall from an explicit list file |
 | `test-uninstall-version` | Single-version uninstall prompting with `-y`/`--yes` |
@@ -388,7 +388,7 @@ needed.
 
 | Variable | Purpose |
 |----------|---------|
-| `_mock_zfs_fs_list` | Output for general `zfs list` dataset listings |
+| `_mock_zfs_fs_list` | Rows for general `zfs list` dataset listings (rooted listings filter to the requested root and its descendants) |
 | `_mock_zfs_snap_lists[<dataset>]` | Snapshot names per dataset (for `zfs list -t snap`) |
 | `_mock_zfs_guid_lists[<dataset>]` | GUID list per dataset (for `zfs list -o guid`) |
 | `_mock_zfs_props[<dataset>:<property>]` | Property values returned by `zfs get` |
@@ -396,6 +396,21 @@ needed.
 | `_mock_zfs_datasets[<dataset>]` | Dataset existence flag (for `zfs list <dataset>`) |
 | `_mock_zfs_send_size` | Byte size returned by `zfs send -nP` |
 | `_mock_zpool_list` | Output for `zpool list -Ho name` |
+
+Rooted listings follow real-ZFS semantics: a `zfs list ... <root>` returns
+only the root and its descendants (a dataset from elsewhere in the mock
+world never leaks in) and fails when the root exists nowhere. A root is
+known when it has an `fs_list` row, an existence flag, a receive record,
+or listed descendants; a `NAME`-first-field row embedded in the list is a
+non-`-H` listing's header and passes through above the rows, where real
+zfs prints it. Pipelined receives (`zfs send | zfs receive`) run
+the mock in a subshell, so their dataset registrations die with the
+pipeline — a successful receive instead appends to a per-suite
+`received-datasets` state file, and that record is what later existence
+probes (plain and rooted) consult; `zfs destroy` purges the destroyed
+dataset's records (and its descendants' under `-r`) so a destroy cannot
+resurrect through a stale record. Suites that model fresh worlds per
+test clear the file in their `reset_mocks`.
 
 #### Setting Up Mocks
 

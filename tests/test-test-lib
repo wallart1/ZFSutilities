@@ -1,5 +1,6 @@
 #!/usr/bin/bash
-# test-test-lib — Verify test-lib.sh reporting helpers.
+# test-test-lib — Verify test-lib.sh reporting helpers and the zfs mock's
+# dataset-listing semantics (root filtering, receive persistence).
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 
@@ -170,6 +171,100 @@ test_source_keeps_live_suite_state_dirs() {
     test_pass
 }
 
+test_rooted_listing_filters_to_the_requested_root() {
+    test_start "rooted zfs list returns only the root and its descendants"
+    _reset_zfs_mock_world
+    _mock_zfs_fs_list=$'poolA/src/data\npoolA/src/other\npoolB/dest/data'
+    local out rc
+    out=$(zfs list -Hrt filesystem -o name poolA/src 2>/dev/null); rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_fail "rooted listing failed: rc=$rc"
+        return
+    fi
+    assert_equals $'poolA/src/data\npoolA/src/other' "$out"
+}
+
+test_rooted_listing_of_unknown_root_fails() {
+    test_start "rooted zfs list fails when the root exists nowhere"
+    _reset_zfs_mock_world
+    _mock_zfs_fs_list=$'poolA/src/data'
+    local out rc
+    out=$(zfs list -Hrt filesystem -o name poolB/nowhere 2>/dev/null); rc=$?
+    if [[ $rc -eq 0 || -n "$out" ]]; then
+        test_fail "unknown root must fail with no output; rc=$rc out=[$out]"
+        return
+    fi
+    test_pass
+}
+
+test_rooted_listing_knows_root_from_existence_model() {
+    test_start "a root registered only in the existence model lists as itself"
+    _reset_zfs_mock_world
+    _mock_zfs_fs_list=$'poolA/src/data'
+    _mock_zfs_datasets["poolB/lone"]=1
+    local out rc
+    out=$(zfs list -Hrt filesystem -o name poolB/lone 2>/dev/null); rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_fail "existence-only root must succeed: rc=$rc"
+        return
+    fi
+    assert_equals "poolB/lone" "$out"
+}
+
+test_receive_record_makes_dataset_exist() {
+    test_start "a pipelined receive's state-file record proves existence"
+    _reset_zfs_mock_world
+    _mock_zfs_fs_list=""
+    printf '%s\n' "pool/recv/data" >> "$_mock_zfs_state_dir/received-datasets"
+    local out rc
+    # Plain existence probe (the archive-vm verification shape).
+    out=$(zfs list -H "pool/recv/data" 2>/dev/null); rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_fail "receive-created dataset must exist for plain probes: rc=$rc"
+        return
+    fi
+    assert_equals "pool/recv/data" "$out"
+    # Rooted probe on the received dataset (completion-state shape).
+    out=$(zfs list -H -o name "pool/recv/data" 2>/dev/null); rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_fail "receive-created dataset must be a known listing root: rc=$rc"
+        return
+    fi
+    assert_equals "pool/recv/data" "$out"
+}
+
+test_destroy_purges_receive_records() {
+    test_start "zfs destroy removes the dataset's (and descendants') receive records"
+    _reset_zfs_mock_world
+    printf '%s\n' "pool/recv/data" "pool/recv/data/child" "pool/other" \
+        >> "$_mock_zfs_state_dir/received-datasets"
+    zfs destroy -r "pool/recv/data" >/dev/null 2>&1
+    local remaining
+    remaining=$(cat "$_mock_zfs_state_dir/received-datasets")
+    assert_equals "pool/other" "$remaining"
+}
+
+test_unrooted_listing_stays_flat() {
+    test_start "listings without a dataset argument keep the whole world"
+    _reset_zfs_mock_world
+    _mock_zfs_fs_list=$'poolA/src/data\npoolB/dest/data'
+    local out rc
+    out=$(zfs list -Hrt filesystem -o name 2>/dev/null); rc=$?
+    if [[ $rc -ne 0 ]]; then
+        test_fail "unrooted listing failed: rc=$rc"
+        return
+    fi
+    assert_equals $'poolA/src/data\npoolB/dest/data' "$out"
+}
+
+# Reset the zfs mock world between the mock-semantics tests, including the
+# per-suite receive-record file (each test builds only the records it needs).
+_reset_zfs_mock_world() {
+    _mock_zfs_fs_list=""
+    _mock_zfs_datasets=()
+    : > "$_mock_zfs_state_dir/received-datasets"
+}
+
 test_pass_counter_is_idempotent
 test_fail_counter_is_idempotent
 test_skip_counter_is_idempotent
@@ -179,5 +274,11 @@ test_failed_suite_retains_log_but_removes_state_dir
 test_suite_exit_status_preserved_through_cleanup
 test_source_reaps_orphaned_state_dirs
 test_source_keeps_live_suite_state_dirs
+test_rooted_listing_filters_to_the_requested_root
+test_rooted_listing_of_unknown_root_fails
+test_rooted_listing_knows_root_from_existence_model
+test_receive_record_makes_dataset_exist
+test_destroy_purges_receive_records
+test_unrooted_listing_stays_flat
 
 test_summary

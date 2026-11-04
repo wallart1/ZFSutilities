@@ -1,9 +1,7 @@
 # Glossary
 
 Items to add:
-    cast — no usage context found anywhere in the repository as of
-        2026-11-03; stays queued until a real sighting names it
-    base, procuct, rebase — queued on the pub2 lane (2026-11-02)
+
 
 Plain-language definitions of terms as they are actually used in this
 repository — in agent work reports, SESSION_NOTES.md, CI output, and the
@@ -432,3 +430,16 @@ are never cached, and repair paths reset or bypass the cache so the UI
 shows fresh state. "The TTL flake" is the CI-only failure class where a
 leaked real refresh thread outlived a test and wrote a stale entry into a
 cache the next test read.
+
+## world
+
+The complete fake ZFS state a bash suite defines for the `zfs()` mock in
+`tests/test-lib.sh` — every dataset row, existence flag, property, and
+snapshot the mock will answer with. Reports say "mock world" for the
+whole set and "world rewrite" for the fix shape where a suite's fake
+tree is completed instead of working around a gap: the 2026-11-03
+mock-fidelity fix made rooted `zfs list <root>` listings stay inside the
+requested root, which exposed suites whose worlds modeled only part of
+the tree (a destination that existed in the existence model but had no
+listing rows). Related: mock (the stand-in itself) and the standing
+mock-fidelity rule.

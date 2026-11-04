@@ -81,6 +81,10 @@ reset_mocks() {
     _mock_zfs_send_size="0"
     _mock_zpool_list=""
     _mock_ask_yn_rc=0
+    # Fresh receive records per test: a dataset received by an earlier
+    # test must not exist in this test's freshly reset world.
+    [[ -n "${_mock_zfs_state_dir:-}" ]] \
+        && : > "$_mock_zfs_state_dir/received-datasets"
     clear_log
 }
 
@@ -1428,7 +1432,8 @@ _setup_full_copy_lock_test() {
     reset_mocks
     set_msg_level INFO
 
-    _mock_zfs_fs_list="srcpool/data"
+    _mock_zfs_fs_list="srcpool/data
+destpool/srcpool/data"
     _mock_zfs_props["srcpool/data:origin"]="-"
     _mock_zfs_props["destpool/srcpool/data:origin"]="-"
     _mock_zfs_props["destpool/srcpool/data:receive_resume_token"]="-"

@@ -471,6 +471,26 @@ mock_zfs_holds() {
     _mock_zfs_holds["$snapshot"]="$*"
 }
 
+# Was <dataset> created by a zfs receive in this mock world? Pipelined
+# receives (zfs send | zfs receive) run the mock in a subshell, so the
+# array registration inside the receive branch dies with the pipeline —
+# the state-dir record it appends is the durable proof the dataset now
+# exists (the same channel the resume-token consumption logic reads).
+# Fork-free on purpose: callers run this inside `zfs list ... | grep`
+# pipeline producers, where an external grep's fork can fail under
+# parallel-suite load and kill the listing.
+_mock_zfs_receive_created() {
+    [[ -n "${_mock_zfs_state_dir:-}" ]] || return 1
+    [[ -f "$_mock_zfs_state_dir/received-datasets" ]] || return 1
+    local -a _rr=()
+    local _r
+    mapfile -t _rr < "$_mock_zfs_state_dir/received-datasets"
+    for _r in "${_rr[@]}"; do
+        [[ "$_r" == "$1" ]] && return 0
+    done
+    return 1
+}
+
 mock_zfs_hold_fail() {
     # Force `zfs hold <tag> <snapshot>` to fail regardless of state, so
     # callers' genuine-failure branches can be exercised deterministically.
@@ -646,7 +666,8 @@ zfs() {
 
             # Dataset existence check (no listing options)
             if [[ "$have_listing_opt" -eq 0 && -n "$specific_arg" && "$specific_arg" != -* ]]; then
-                if [[ -n "${_mock_zfs_datasets[$specific_arg]+x}" ]]; then
+                if [[ -n "${_mock_zfs_datasets[$specific_arg]+x}" ]] \
+                    || _mock_zfs_receive_created "$specific_arg"; then
                     echo "$specific_arg"
                     return 0
                 fi
@@ -654,7 +675,83 @@ zfs() {
             fi
 
             # General dataset listing
-            [[ -n "$_mock_zfs_fs_list" ]] && echo -e "$_mock_zfs_fs_list"
+            if [[ -n "$_mock_zfs_fs_list" || -n "$specific_arg" ]]; then
+                if [[ -n "$specific_arg" && "$specific_arg" != -* ]]; then
+                    # Rooted enumeration (zfs list -Hrt ... <root>): emit
+                    # only the root dataset itself and its descendants —
+                    # real zfs never crosses the requested root, so a
+                    # dataset from elsewhere in the mock world must not
+                    # leak into a rooted listing. Real zfs also FAILS the
+                    # listing when the requested root does not exist at
+                    # all. Existence is proven four ways: the root has a
+                    # row, the root is in the existence model
+                    # (_mock_zfs_datasets — listed as itself, the
+                    # lone-dataset shape delfs must see), the root was
+                    # created by a receive this world ran (state-file
+                    # record — pipelined receives run in a subshell where
+                    # array writes die, so the file is the durable proof),
+                    # or the root has descendants (children cannot exist
+                    # without the parent; the parent row itself stays
+                    # unlisted, the mock's tree convention). A root known
+                    # nowhere returns failure (mapfile, not while-read, so
+                    # suites that override read() cannot spin the loop).
+                    local -a _fs_rows=() _rooted_rows=()
+                    local _fs_entry _fs_name _root_known=0 _fs_list_expanded
+                    # Suites set the list with literal \n separators; the
+                    # unrooted branch decodes them with echo -e, so the
+                    # rooted filter must decode the same way — in-shell,
+                    # though (no $(echo -e) fork): this listing runs as the
+                    # producer of a `zfs list ... | grep -q` pipeline, and a
+                    # fork failure under parallel-suite load kills the
+                    # pipeline element, which callers read as "dataset
+                    # missing" (observed as a one-per-batch flake).
+                    _fs_list_expanded="${_mock_zfs_fs_list//\\n/$'\n'}"
+                    mapfile -t _fs_rows <<< "$_fs_list_expanded"
+                    for _fs_entry in "${_fs_rows[@]}"; do
+                        [[ -n "$_fs_entry" ]] || continue
+                        _fs_name="${_fs_entry%%$'\t'*}"
+                        # A row whose first field is NAME is a non -H
+                        # listing's header, not a dataset: real zfs prints
+                        # it above any rooted row set, so it must survive
+                        # the root filter (callers like zfsshowbigstuff
+                        # budget their head -n count for it).
+                        if [[ "$_fs_name" == "NAME" ]]; then
+                            _rooted_rows+=("$_fs_entry")
+                            continue
+                        fi
+                        if [[ "$_fs_name" == "$specific_arg" ]]; then
+                            _root_known=1
+                        fi
+                        if [[ "$_fs_name" == "$specific_arg" \
+                            || "$_fs_name" == "$specific_arg"/* ]]; then
+                            _rooted_rows+=("$_fs_entry")
+                        fi
+                    done
+                    if [[ $_root_known -eq 0 ]] \
+                        && { [[ -n "${_mock_zfs_datasets[$specific_arg]+x}" ]] \
+                            || _mock_zfs_receive_created "$specific_arg"; }; then
+                        # Keep a header row first (real zfs prints it above
+                        # the row set); with no header the root leads.
+                        if [[ ${#_rooted_rows[@]} -gt 0 \
+                            && "${_rooted_rows[0]%%$'\t'*}" == "NAME" ]]; then
+                            _rooted_rows=("${_rooted_rows[0]}" "$specific_arg" \
+                                "${_rooted_rows[@]:1}")
+                        else
+                            _rooted_rows=("$specific_arg" "${_rooted_rows[@]}")
+                        fi
+                        _root_known=1
+                    fi
+                    if [[ $_root_known -eq 0 && ${#_rooted_rows[@]} -gt 0 ]]; then
+                        _root_known=1
+                    fi
+                    if [[ $_root_known -eq 0 ]]; then
+                        return 1
+                    fi
+                    ((${#_rooted_rows[@]})) && printf '%s\n' "${_rooted_rows[@]}"
+                else
+                    echo -e "$_mock_zfs_fs_list"
+                fi
+            fi
             return 0
             ;;
 
@@ -814,6 +911,24 @@ zfs() {
                     fi
                 fi
             done
+            # A destroyed dataset must not resurrect through its receive
+            # record; -r takes descendant datasets with it, so drop the
+            # record itself and any record under it (awk string compares,
+            # not regex — dataset names are literals here). The temp name
+            # is pinned in a local before the redirect: $BASHPID expands
+            # post-fork in redirection words but pre-fork in command
+            # arguments, so an inline $BASHPID never matches between the
+            # awk and its mv.
+            if [[ "$_destroy_target" != *@* \
+                && -n "${_mock_zfs_state_dir:-}" \
+                && -f "$_mock_zfs_state_dir/received-datasets" ]]; then
+                local _rd="$_mock_zfs_state_dir/received-datasets"
+                local _rdtmp="${_rd}.tmp.${BASHPID}"
+                awk -v t="$_destroy_target" \
+                    'index($0, t "/") != 1 && $0 != t' "$_rd" \
+                    > "$_rdtmp"
+                mv "$_rdtmp" "$_rd"
+            fi
             return 0
             ;;
 

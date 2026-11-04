@@ -85,6 +85,10 @@ reset_mocks() {
     _mock_zfs_clones=()
     _mock_zfs_send_size="1000000"
     _mock_zpool_list=""
+    # Fresh receive records per test: a dataset received by an earlier
+    # test must not exist in this test's freshly reset world.
+    [[ -n "${_mock_zfs_state_dir:-}" ]] \
+        && : > "$_mock_zfs_state_dir/received-datasets"
     clear_log
 }
 

@@ -136,10 +136,10 @@ reapplyholds_release() {
             fi
             if zfs release "$_tag" "$_snap_name" 2>/dev/null; then
                 log_msg "INFO: Released hold $_tag on $_snap_name."
-                ((_released++))
+                ((_released++)) || true
             else
                 log_msg "WARN: Failed to release hold $_tag on $_snap_name."
-                ((_skipped++))
+                ((_skipped++)) || true
             fi
         done
     done
@@ -197,7 +197,9 @@ reapplyholds_apply() {
 
         if ! zfs list -H -t snapshot -o name "$snap" >/dev/null 2>&1; then
             log_msg "WARN: Restored snapshot $snap no longer exists; skipping hold $tag."
-            ((_skipped++))
+            # Fence the counter increments: ((x++)) from zero returns 1, and
+            # a strict caller (set -e) would abort the whole run mid-loop.
+            ((_skipped++)) || true
             continue
         fi
 
@@ -210,14 +212,14 @@ reapplyholds_apply() {
             # genuine failure.
             if zfs hold "$tag" "$snap" 2>/dev/null; then
                 log_msg "INFO: Applied hold $tag to $snap."
-                ((_applied++))
+                ((_applied++)) || true
             elif zfs holds -H "$snap" 2>/dev/null \
                 | awk -v t="$tag" '$2 == t { found = 1 } END { exit !found }'; then
                 log_msg "VERB: Hold $tag already present on $snap."
-                ((_present++))
+                ((_present++)) || true
             else
                 log_msg "WARN: Failed to apply hold $tag to $snap."
-                ((_skipped++))
+                ((_skipped++)) || true
             fi
         fi
     done

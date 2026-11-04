@@ -10,6 +10,8 @@ import os
 import subprocess
 import tempfile
 
+import paths
+
 # Base directory for versioned deployments.  Overridable for tests and for
 # non-standard installations.
 _DEPLOYMENT_BASE = os.environ.get("ZFSUTILITIES_VERSION_BASE", "/usr/local/lib/zfsutilities")
@@ -155,16 +157,19 @@ SSH_CONTROL_PERSIST = 600
 def _mux_socket_dir():
     """Return a private directory for SSH multiplex control sockets.
 
-    Tries an XDG runtime directory first, then ``/run/zfsutilities``, then a
-    uid-tagged temp directory.  Returns ``None`` when no candidate can be
-    created and written, in which case callers fall back to a plain ssh
-    argv without multiplexing.
+    Tries an XDG runtime directory first, then the ZFS Utilities run
+    directory (``paths.get_run_dir()``), then a uid-tagged temp directory.
+    Returns ``None`` when no candidate can be created and written, in which
+    case callers fall back to a plain ssh argv without multiplexing.
     """
     candidates = []
     xdg = os.environ.get("XDG_RUNTIME_DIR")
     if xdg:
         candidates.append(os.path.join(xdg, "zfsutilities-ssh-mux"))
-    candidates.append("/run/zfsutilities/ssh-mux")
+    # The shared run dir (env-overridable via ZFSUTILITIES_RUN_DIR by
+    # paths.get_run_dir), not a hard-coded /run path: deployments that
+    # relocate the run dir must not grow a second stray directory.
+    candidates.append(os.path.join(paths.get_run_dir(), "ssh-mux"))
     candidates.append(os.path.join(tempfile.gettempdir(), f"zfsutilities-ssh-mux-{os.getuid()}"))
     for directory in candidates:
         try:

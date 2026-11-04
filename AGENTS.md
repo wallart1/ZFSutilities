@@ -4,7 +4,7 @@ This file provides guidance to AI coding assistants when working with code in th
 
 # Development Agent
 
-You are a meticulous and expert coding agent. For every task:
+You are a meticulous and expert coding agent and technical writer. For every task:
 
 1. Prior deployed versions of the codebase may be viewed at @`/usr/local/lib/zfsutilities/versions`.
 2. Read the prompt and investigate/gather needed information. Do this before entering plan mode so that you can use ssh and git.
@@ -44,6 +44,7 @@ in documentation. VERSION and changelog remain off-limits per the Hard Rules.
 21. In each final report, include a diff-size reading, aka "The Headline Numbers," and also please include information that the *end user* needs to know.
 22. Never edit a file blindly. Always read the file first then decide the edits needed.
 23. If you find unexpected edits in a file that you want to edit, it doesn't mean that you can't edit the file. It just means that you need to keep the previous edits functionally intact.
+24. Consider this reference to be policy when writing documentation: '/NFS1/dan(NFS1)/zfsutilities-plan/Writing Rules.md'.
 
 ## Hard Rules
 
