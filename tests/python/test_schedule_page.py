@@ -1080,25 +1080,26 @@ class TestScheduleSavedState(unittest.TestCase):
         self.assertTrue(hasattr(app, "_schedule_saved_state"))
         self.assertTrue(app._schedule_saved_state)
 
-    @patch("schedule_page.list_profiles", return_value=[])
-    def test_page_viewport_sizes_content_by_natural_height(self, _lst):
+    def test_page_viewport_sizes_content_by_natural_height(self):
         """The page viewport uses NATURAL height so the profile table's
         capped window is never crushed at short window heights."""
-        # fresh=True, not the class helper: the @patch decorator above
-        # imports schedule_page OUTSIDE any mock context, so on a
+        # fresh=True, not the class helper: a @patch("schedule_page…")
+        # decorator imports the module OUTSIDE any mock context — on a
         # GTK-capable host the class helper would return that real-toolkit
         # binding, and on a shared mock binding the viewport call count
         # accumulates across page builds. A fresh context re-binds this
         # test's own mocks either way (same pattern as the offsite/logs
-        # viewport tests; the decorator's list_profiles patch then applies
-        # to the evicted module, so the page build reads live profiles
-        # harmlessly).
+        # viewport tests); list_profiles is patched on THAT fresh module,
+        # because the real reader touches /var/lib/zfsutilities and must
+        # not run on a non-root host.
         with mock_gtk(fresh=True):
             import schedule_page
-        app = MagicMock()
-        app._ui_state.bind_treeview = MagicMock()
 
-        page = schedule_page.create_schedule_page(app)
+            with patch.object(schedule_page, "list_profiles", return_value=[]):
+                app = MagicMock()
+                app._ui_state.bind_treeview = MagicMock()
+
+                page = schedule_page.create_schedule_page(app)
 
         page.get_child.return_value.set_vscroll_policy.assert_called_once_with(
             schedule_page.Gtk.ScrollablePolicy.NATURAL
