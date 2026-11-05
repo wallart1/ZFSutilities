@@ -177,3 +177,42 @@ missing — the same starting state a fresh install produces.
 | j19-baseline-capture | clone start from the stale template + the shared upgrade staging with baseline provisioning OFF (`ITF_UPGRADE_BASELINE=none` — no pristine tag tarball, no `ZFSUTILITIES_TAG_TARBALL_URL` override): inject modifications BEFORE the first upgrade — upgrade 1 must capture a trust-on-first-upgrade baseline manifest additively into the still-active old tree (pre-capture changes absorbed as pristine: not flagged, nothing salvageable; F-025, repair plan 021); modify again (modified + added + removed — the removal classification's first journey exercise) — upgrade 2 must scan against the CAPTURED baseline, detect and salvage all three with local content, degrade diffing honestly (no pristine source exists for the untagged version), deploy without activating — `switch-version`, wiring verify |
 | j20-property-manifest | clone start + test pools (j04 recipe) + today's tree, then the property-manifest fidelity chain against real ZFS: an engine backup captures per-dataset manifests (distinctive local props + user props, an encrypted child's `keylocation`, a zvol with `volblocksize` excluded) and snapshots the store under the generation snapname — rename the originals away and `zfsrestore` in place replays every setting (`zfs get -s local`), loads the key, leaves `volblocksize` stream-carried — a capture-disabled second generation exercises the exact-miss → newest-available WARN, a never-captured backup the pre-feature WARN + inherited defaults — the `zfssendoffsite` step-4 shape hops the backup pool onward with `property_manifest='N'` carrying the store as an ordinary dataset, a restore from the offsite copy replays through the traveled (deeper-candidate) store, a hidden key file WARNs with the dataset left locked, `zfsoffsiteretain` prunes the store's offsite snapshots in lockstep with the data copies' — then the consumption surfaces: a hand-made export (`zfs send` file + the store manifest as its `.props` sibling) replays through `zfsrestoresendstream` while a sibling-less file restores silently, and a `replay_properties=N` restore gets everything back through standalone `zfsreplayprops` — then receive-as-encrypted (P6): `zfsrestore` with `receive_encryption='Y'` initial-receives every plain dataset as encrypted wearing the restore key (exactly one `-o encryption` receive, step-2 catch-up plain, captured keylocation skipped with a WARN, the raw-stream child keeps its own encryption and stays locked), and a non-`file://` keylocation FATALs (rc 8) before any transfer — and the GUI-payload offsite-onward + restore e2e pairs (the mutation scenarios the unprivileged container tier cannot run) close the journey |
 | j21-zfs-probes | the ZFS-semantics probe matrix, one guest cloned from a `--template`-selected baseline profile (`storage`/`compute`/`ubuntu` — Debian ≈2.3, PVE ≈2.4-pve, Ubuntu LTS ≈2.2) + the documented test pools, no product install: reads the guest's `zfs version` (userland + kmod; the p1 expectation keys on the smaller — the same min() the capability table applies to receive-family entries) and runs seven version-keyed probes, each with its own log artifact and a fail-the-journey verdict — p1 zvol `receive -o volblocksize` (measured refused through 2.4.4 on every profile — the `recv_o_volblocksize` pin at 2.5.0 in `zfs_capabilities`), p2 `volblocksize`-on-filesystem refused everywhere, p3 stream fidelity plain/`-c`/`-cw` (local props stay local on receive; `-c` blocks stay compressed into `compression=off`; the raw `-cw` copy lands locked, loads from its traveled keylocation, data matches; the plain leg's compressratio is recorded as the contrast measurement), p4 `keylocation` prompt vs `file://` (prompt sticks and blocks a no-passphrase `load-key`; `file://` loads non-interactively), p5 receive-as-encrypted (unencrypted stream + `-o encryption=on -o keyformat=raw -o keylocation=file://…`, self encryption root), p6 encrypted-raw encryption-family `-o` overrides refused everywhere (inert overrides recorded as contrast), p7 the raw copy is its own encryption root with a prompt keylocation that the manifest replay's set+load converges — `probes.tsv` is the measured-truths artifact for the capability table and its docs |
+| j22-function-survey | the randomized end-user-function survey: at the start of each run a seeded sample of at least half the end-user-visible function universe is drawn in random order and archived (`survey/sample.py` + `universe.tsv`); the universe is the documented CLI command surface minus the two recorded exclusion tables, plus the GUI surface enumerated from the tree under test (L1 action buttons from `ACTION_HANDLERS`, L2 central-content widget interactions from `survey/gui_catalog.py`, L3 multi-widget composites that assert the central-area↔action-button linkage) — every item runs with a per-item response profile (accept/decline/cancel/invalid) so prompts, dialogs, and held inputs exercise varied scenarios; the lab shape follows the selection (two-node items compose the j05 lab), CLI items run from the staged tree with pinned config against survey-owned scratch state, GUI items run the real window under a private in-guest Xvfb via `survey/gui_probe.py` (crash-resume, one step per item, full transcripts); the archive lives in `survey/archives/` and replays exactly (`ITF_SURVEY_ARCHIVE=<file>`, or `--rerun` reusing the prior run's list) — the software under test is the working tree or any of the five most recent published releases (`ITF_SURVEY_SW`), enumerated and staged from the same fetched tree; findings in past releases are fixed forward in the dev tree (no back-porting), verified by replaying the same archive against the fixed tree |
+
+## The function survey (j22)
+
+j22 is not one scenario but a **sampling harness**: each run draws its
+own random ≥50% of the end-user-visible functions and shuffles the
+execution order, so repeated runs explore different corners of the
+surface while every run stays individually repeatable through its
+archive.
+
+- **Universe.** CLI: every command documented in
+  `docs/docs/commands-and-modules/commands.md` + `two-node.md`, minus
+  the misc-exempt commands (user decision 2026-10-26) and the
+  lifecycle/dev commands with dedicated journeys (user decision
+  2026-11-04) — both exclusion tables live as parsed comment rows in
+  `survey/universe.tsv`, and `tests/python/test_survey_sample.py` fails
+  on any drift in either direction. GUI: enumerated at run time from
+  the tree under test — the action buttons (`ACTION_HANDLERS`), the
+  central-content widget interactions, and the curated composites.
+- **Selection.** `random.Random(seed)`; `sample()` of ceil(fraction ×
+  universe) with fraction ≥ 0.5 (floor enforced), then `shuffle()`;
+  each item gets its response profile from the same stream. `--seed`
+  (`ITF_SURVEY_SEED`) pins the draw.
+- **Archive.** JSON in `survey/archives/` (plus the run dir): seed,
+  fraction, SW target, universe digest and counts, and the ordered
+  items with their profiles. Replay (`ITF_SURVEY_ARCHIVE=…`) reproduces
+  the exact run and reports universe drift honestly; `--rerun` reuses
+  the previous run's guests and, absent an env pin, its archived list.
+- **Recipes and depth.** CLI items run from the staged tree under a
+  pinned `ZFSCONFIG_PATH` against survey-owned scratch state; bespoke
+  recipes own the whole flow for commands needing setup/teardown
+  (new-vm-disk/remove-vm-disk create their own prey, clone-vm removes
+  its clone). Depth is disclosed per item — `deep` (full flow),
+  `argcheck` (argument-validation / graceful-refusal surface), and the
+  wrap-up reports the distribution.
+- **No back-porting.** A release-mode finding goes to `FINDINGS.md`,
+  is fixed forward in the dev tree, and is verified by replaying the
+  same archive against the fixed tree; `upgrade-zfsutilities` remains
+  the only update mechanism.

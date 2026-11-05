@@ -1,4 +1,6 @@
 #!/usr/bin/bash
+set -euo pipefail
+
 _local_bashinit=$(dirname "$(realpath "${BASH_SOURCE[0]}")")/bashinit
 if [[ -f "$_local_bashinit" ]]; then
     source "$_local_bashinit"
@@ -18,6 +20,35 @@ if ! command -v qm >/dev/null 2>&1; then
     log_msg "FATAL:   Non-Proxmox hypervisors are not supported."
     exit 1
 fi
+
+usage() {
+    log_msg "INFO: Usage: zfsaddisk <vmid> <disk-number> <storage-name> <size-GiB>"
+    echo ""
+    log_msg "INFO:   vmid          Numeric Proxmox VM ID"
+    log_msg "INFO:   disk-number   Disk number for the new disk (higher than any existing disk)"
+    log_msg "INFO:   storage-name  Proxmox storage name where the disk will reside"
+    log_msg "INFO:   size-GiB      Size of the new disk in GiB"
+    exit 1
+}
+
+# --- Argument validation ---
+[[ $# -eq 4 ]] || usage
+[[ "$1" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: vmid must be a number, got: $1"
+    exit 1
+}
+[[ "$2" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: disk number must be a number, got: $2"
+    exit 1
+}
+[[ -n "$3" ]] || {
+    log_msg "FATAL: storage name must not be empty"
+    exit 1
+}
+[[ "$4" =~ ^[0-9]+$ ]] || {
+    log_msg "FATAL: size (GiB) must be a number, got: $4"
+    exit 1
+}
 
 # Add a virtual disk to a VM.
 # This works around a problem in the Proxmox GUI where it assigns the wrong disk number

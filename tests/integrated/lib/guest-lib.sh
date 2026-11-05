@@ -225,6 +225,310 @@ itf_guest_destroy() {
     itf_qm "$base" destroy "$vmid" --destroy-unreferenced-disks 1 --purge
 }
 
+# itf_guest_records_resolve <run-dir>
+#
+# Resolves a run's guest*.txt records against the bases' own qm lists
+# (one query per involved base — the same authority rule as the orphan
+# fence in runlock-lib.sh) and prints one tab-separated line per record:
+#   <status>\t<gfile>\t<base>\t<vmid>\t<recorded-name>\t<record-path>
+#
+# status:
+#   ours         the live VMID still carries the recorded run-tagged
+#                name — this run's guest, safe to destroy
+#   vacated      the VMID no longer exists — the record is stale
+#   foreign      the live VMID carries a DIFFERENT name: itf_vmid_pick
+#                legitimately re-allocated it to another run's guest —
+#                never ours to destroy or roll back
+#   nameless     legacy record predating the name field — fail-closed
+#   unreachable  the base's qm list could not be read — fail-closed
+itf_guest_records_resolve() {
+    local run_dir="${1:-}"
+    local rec base vmid rec_name
+    local -a gfiles=() rec_bases=() vmids=() names=() paths=()
+    for rec in "$run_dir"/guest*.txt; do
+        [[ -f "$rec" ]] || continue
+        base="" vmid="" rec_name=""
+        read -r base vmid _ rec_name < "$rec" || true
+        [[ -n "$base" && "$vmid" =~ ^[0-9]+$ ]] || continue
+        gfiles+=("$(basename "$rec")")
+        rec_bases+=("$base")
+        vmids+=("$vmid")
+        names+=("$rec_name")
+        paths+=("$rec")
+    done
+    (( ${#paths[@]} > 0 )) || return 0
+
+    local -A want=() present=() present_name=() unreachable=()
+    local -a bases=()
+    local i b out v vname status
+    for b in "${rec_bases[@]}"; do
+        [[ -n "${want["$b"]:-}" ]] && continue
+        want["$b"]=1
+        bases+=("$b")
+    done
+    for b in "${bases[@]}"; do
+        if ! out="$(itf_qm "$b" list 2>/dev/null)"; then
+            unreachable["$b"]=1
+            continue
+        fi
+        while read -r v vname _; do
+            [[ "$v" =~ ^[0-9]+$ ]] || continue
+            present["$b/$v"]=1
+            present_name["$b/$v"]="$vname"
+        done <<< "$out"
+    done
+
+    for i in "${!paths[@]}"; do
+        b="${rec_bases[$i]}"
+        if [[ -n "${unreachable["$b"]:-}" ]]; then
+            status=unreachable
+        elif [[ -z "${present["$b/${vmids[$i]}"]:-}" ]]; then
+            status=vacated
+        elif [[ -z "${names[$i]}" ]]; then
+            status=nameless
+        elif [[ "${names[$i]}" != "${present_name["$b/${vmids[$i]}"]:-}" ]]; then
+            status=foreign
+        else
+            status=ours
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$status" "${gfiles[$i]}" "$b" \
+            "${vmids[$i]}" "${names[$i]}" "${paths[$i]}"
+    done
+    return 0
+}
+
+# itf_guest_teardown_run <run-dir>
+#
+# Verdict-time teardown for a GREEN finished run: destroy the run's own
+# guests and delete their guest*.txt records, keeping the invariant that
+# a run dir with guest records is a lab that may still exist — rerun
+# sourcing (_journey_rerun_prepare) and the orphan fence both rely on
+# exactly that. The audit trail is the INFO steps recorded here.
+#
+# Per record (itf_guest_records_resolve): ours → destroyed, record
+# removed; vacated/foreign → stale record removed, nothing destroyed (a
+# foreign VMID hosts another run's live guest); nameless/unreachable and
+# any destroy failure → fail-closed: record kept for manual triage, rc 1
+# — an unreachable base must never widen a teardown into guesswork.
+#
+# ITF_DRY_RUN=1 prints the destroy commands instead of executing them
+# (records kept). Needs an active report context (itf_step).
+itf_guest_teardown_run() {
+    local run_dir="${1:-}"
+    [[ -d "$run_dir" ]] || { echo "itf: teardown: no such run dir: $run_dir" >&2; return 1; }
+    local -a lines=()
+    mapfile -t lines < <(itf_guest_records_resolve "$run_dir")
+    (( ${#lines[@]} > 0 )) || return 0
+
+    local rc=0 line status gfile base vmid name path
+    for line in "${lines[@]}"; do
+        IFS=$'\t' read -r status gfile base vmid name path <<< "$line"
+        case "$status" in
+            vacated)
+                itf_step info "guest teardown" \
+                    "$gfile: $base/$vmid already vacated — stale record removed"
+                rm -f "$path"
+                ;;
+            foreign)
+                itf_step info "guest teardown" \
+                    "$gfile: claim on $base/$vmid stale (recorded '$name' no longer lives" \
+                    "there; another run's guest) — record removed, guest untouched"
+                rm -f "$path"
+                ;;
+            nameless)
+                itf_step info "guest teardown" \
+                    "$gfile: $base/$vmid NOT destroyed — record" \
+                    "predates guest naming; triage manually"
+                rc=1
+                ;;
+            unreachable)
+                itf_step info "guest teardown" \
+                    "$gfile: $base/$vmid NOT destroyed — $base unreachable; record kept"
+                rc=1
+                ;;
+            ours)
+                if [[ -n "${ITF_DRY_RUN:-}" ]]; then
+                    echo "itf: [dry-run] guest destroy $base $vmid ($name)"
+                    continue
+                fi
+                if itf_guest_destroy "$base" "$vmid" >/dev/null 2>&1; then
+                    itf_step info "guest teardown" \
+                        "$gfile: $base/$vmid ($name) destroyed at verdict — record removed"
+                    rm -f "$path"
+                else
+                    itf_step info "guest teardown" \
+                        "$gfile: $base/$vmid ($name) destroy failed — record kept"
+                    rc=1
+                fi
+                ;;
+        esac
+    done
+    return "$rc"
+}
+
+# itf_guest_verdict_teardown <rc> <keep-flag>
+#
+# The verdict-time guest disposition, called by the journey-run wrapper
+# between journey_main's verdict and itf_report_finish: a green run
+# either keeps its lab (--keep / ITF_KEEP_GUESTS=1, for --rerun
+# iteration) or tears it down; a red run always keeps it (post-mortem +
+# --rerun after the fix). Every outcome is an INFO step — a teardown
+# failure NEVER flips a green verdict; it leaves the records for
+# `itf guest sweep --apply`. Always returns 0 (the caller's rc is the
+# verdict, not the cleanup).
+itf_guest_verdict_teardown() {
+    local rc="$1" keep="$2"
+    if (( rc == 0 && ${ITF_STEPS_FAIL:-0} == 0 )); then
+        if (( keep )) || [[ -n "${ITF_KEEP_GUESTS:-}" ]]; then
+            itf_step info "guest lab kept" "--keep — retained for --rerun"
+        elif ! itf_guest_teardown_run "$ITF_RUN_DIR"; then
+            itf_step info "guest teardown incomplete" \
+                "records kept — settle with 'itf guest sweep --apply' after triage"
+        fi
+    else
+        itf_step info "guest lab kept" \
+            "red verdict — retained for post-mortem and --rerun"
+    fi
+    return 0
+}
+
+# itf_guest_sweep [--apply] [--force] [--age HOURS]
+#
+# Backlog cleanup for finished runs' kept labs: the verdict-time
+# teardown laws, on demand, for runs that predate that hook or kept
+# their lab (--keep, red verdicts awaiting triage). Walks THIS tree's
+# run records only — per-tree scope is the fence's designed boundary;
+# each repo lane sweeps its own guests. Takes the machine-global run
+# lock (runlock-lib.sh) so a sweep can never race a live journey in any
+# lane.
+#
+# Selection: DONE runs with guest records, GREEN (no fail rows in
+# steps.tsv — a red run's lab is post-mortem evidence, refused unless
+# --force), finished at least --age hours ago (default 24). Templates
+# are structurally safe: destroy fires only on a name match, and a
+# successful template build renames its VM away from the run-tagged
+# record name before the run finishes (template-lib.sh).
+#
+# Default is plan-only — prints what it would do and touches nothing;
+# --apply executes (destroys + record removal). rc 1 when something
+# needed attention it could not settle (unreachable base, destroy
+# failure, nameless record).
+#
+# Knobs (environment):
+#   ITF_SWEEP_AGE_HOURS  green-run age gate (default 24)
+#   ITF_DRY_RUN          same as plan-only
+itf_guest_sweep() {
+    local apply=0 force=0 age="${ITF_SWEEP_AGE_HOURS:-24}"
+    while (( $# > 0 )); do
+        case "$1" in
+            --apply) apply=1; shift ;;
+            --force) force=1; shift ;;
+            --age)
+                age="${2:-}"
+                shift 2
+                ;;
+            *)
+                echo "usage: itf guest sweep [--apply] [--force] [--age HOURS]" >&2
+                return 2
+                ;;
+        esac
+    done
+    [[ "$age" =~ ^[0-9]+$ ]] || age=24
+
+    # Serialize against any live journey (machine-global, cross-lane).
+    itf_runlock_acquire "guest sweep${apply:+ --apply}" || return 2
+
+    local runs_dir="${ITF_RUNS_DIR:-}"
+    [[ -d "$runs_dir" ]] || { echo "itf: sweep: no runs dir (${runs_dir:-unset})" >&2; return 1; }
+    local -a runs=()
+    mapfile -t runs < <(ls -1d "$runs_dir"/run-* 2>/dev/null | sort -r)
+    if (( ${#runs[@]} == 0 )); then
+        echo "itf: sweep: no runs — nothing to do"
+        return 0
+    fi
+
+    local now age_sec run state verdict finish_ts finish_epoch
+    now="$(date -u +%s)"
+    age_sec=$(( age * 3600 ))
+    local rc=0 line status gfile base vmid name path
+    local -a lines=()
+    for run in "${runs[@]}"; do
+        compgen -G "$run/guest*.txt" > /dev/null || continue
+        state="$(itf_run_state "$run")"
+        [[ "$state" == "done" ]] || continue
+        verdict=green
+        if awk -F'\t' '$2 == "fail" {found=1} END {exit !found}' \
+                "$run/steps.tsv" 2>/dev/null; then
+            verdict=red
+        fi
+        # Age on when the run finished; degraded meta.txt (no finished:
+        # stamp) falls back to the newest step timestamp, then mtime.
+        finish_ts="$(awk '/^finished:/{sub(/^finished:[ \t]*/, ""); print; exit}' \
+            "$run/meta.txt" 2>/dev/null)"
+        if [[ -z "$finish_ts" && -f "$run/steps.tsv" ]]; then
+            finish_ts="$(awk -F'\t' 'END {if ($1 != "") print $1}' "$run/steps.tsv")"
+        fi
+        finish_epoch="$(date -u -d "$finish_ts" +%s 2>/dev/null \
+            || stat -c %Y "$run/steps.tsv" 2>/dev/null \
+            || stat -c %Y "$run")"
+        if (( now - finish_epoch < age_sec )); then
+            echo "itf: sweep: keep $(basename "$run") — finished less than ${age}h ago"
+            continue
+        fi
+        if [[ "$verdict" == "red" ]] && (( ! force )); then
+            echo "itf: sweep: keep $(basename "$run") — red verdict" \
+                "(post-mortem lab; --force to include)"
+            continue
+        fi
+        lines=()
+        mapfile -t lines < <(itf_guest_records_resolve "$run")
+        for line in "${lines[@]}"; do
+            IFS=$'\t' read -r status gfile base vmid name path <<< "$line"
+            case "$status" in
+                vacated)
+                    echo "itf: sweep: $(basename "$run") $gfile:" \
+                        "$base/$vmid vacated — stale record"
+                    if (( apply )); then rm -f "$path"; fi
+                    ;;
+                foreign)
+                    echo "itf: sweep: $(basename "$run") $gfile:" \
+                        "$base/$vmid untouched — VMID hosts another run's guest;" \
+                        "stale record"
+                    if (( apply )); then rm -f "$path"; fi
+                    ;;
+                nameless)
+                    echo "itf: sweep: $(basename "$run") $gfile: $base/$vmid kept —" \
+                        "record predates guest naming; triage manually"
+                    rc=1
+                    ;;
+                unreachable)
+                    echo "itf: sweep: $(basename "$run") $gfile: $base/$vmid kept" \
+                        "— $base unreachable" >&2
+                    rc=1
+                    ;;
+                ours)
+                    if (( ! apply )); then
+                        echo "itf: sweep: $(basename "$run") $gfile:" \
+                            "would destroy $base/$vmid ($name)"
+                    elif itf_guest_destroy "$base" "$vmid" >/dev/null 2>&1; then
+                        echo "itf: sweep: $(basename "$run") $gfile:" \
+                            "destroyed $base/$vmid ($name) — record removed"
+                        rm -f "$path"
+                    else
+                        echo "itf: sweep: $(basename "$run") $gfile:" \
+                            "destroy FAILED on $base/$vmid — record kept" >&2
+                        rc=1
+                    fi
+                    ;;
+            esac
+        done
+    done
+    if (( ! apply )); then
+        echo "itf: sweep: plan only — pass --apply to execute"
+    fi
+    return "$rc"
+}
+
 # itf_guest_snapshot <base> <vmid> <snapname>
 itf_guest_snapshot() { itf_qm "$1" snapshot "$2" "$3"; }
 

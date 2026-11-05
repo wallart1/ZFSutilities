@@ -112,13 +112,14 @@ _runlock_wait_recorded() {
     grep -q "$needle" "$lock" 2>/dev/null
 }
 
-# _plant_run <runs-root> <run-dirname> <finished|running|interrupted> [guest-record...]
+# _plant_run <runs-root> <run-dirname> <finished|green|red|running|interrupted> [guest-record...]
 #
 # Plants a run directory with meta.txt (a "running" state carries the
 # test process's own live pid; an "interrupted" one carries a provably
 # dead pid — a just-reaped child — and no finished: line, exactly what
 # itf_run_state reports after a killed run) plus guest records of the
-# form "file:base vmid [ip]".
+# form "file:base vmid [ip [name]]". "green"/"red" additionally plant a
+# verdict-bearing steps.tsv (sweep tests).
 _plant_run() {
     local root="$1" dir="$2" state="$3" rec f deadpid
     shift 3
@@ -141,6 +142,15 @@ _plant_run() {
         wait "$deadpid"
         sed -i "s/^pid:      1$/pid:      $deadpid/" "$root/$dir/meta.txt"
         sed -i "/^finished:/d" "$root/$dir/meta.txt"
+    fi
+    # Verdict-bearing finished states for the guest-sweep tests: a done
+    # run's verdict lives in steps.tsv (green = no fail rows), which is
+    # exactly what itf_guest_sweep reads.
+    if [[ "$state" == "green" || "$state" == "red" ]]; then
+        printf '2026-01-01T00:00:30Z\tpass\tstep one\tdetail\n' > "$root/$dir/steps.tsv"
+        if [[ "$state" == "red" ]]; then
+            printf '2026-01-01T00:00:40Z\tfail\tstep two\tdetail\n' >> "$root/$dir/steps.tsv"
+        fi
     fi
     for rec in "$@"; do
         f="${rec%%:*}"
@@ -173,6 +183,76 @@ _fence_child() {
             echo "fence-rc=1"
         fi
     ' _ "$ITF_DRIVER" "$spec" 2>&1
+}
+
+# _teardown_child <keep-flag> <rc> <guest-record-line> <qm-list-table-file>
+#                 [qm-rc] [env-assignments]
+#
+# Runs itf_guest_verdict_teardown in a child shell with the real
+# report-lib + guest-lib and a stubbed itf_qm (canned qm list table, or
+# forced rc — the unreachable-base case); every itf_qm call is recorded
+# as "<verb> | <full args>" in $tmp_dir/teardown-calls. The child inits
+# a sandbox report, plants one guest record from <guest-record-line>,
+# applies the disposition, and prints markers for assertions:
+#   record=gone|kept   run-dir=<dir>   (steps.tsv holds the INFO steps)
+_teardown_child() {
+    local keep="$1" rc="$2" record="$3" table="$4" qmrc="${5:-0}" envs="${6:-}"
+    local runs="$tmp_dir/teardown-runs"
+    rm -rf "$runs"
+    mkdir -p "$runs"
+    env $envs \
+        ITF_RUNS_DIR="$runs" ITF_RUN_LOCK="$ITF_LOCK_FIXTURE" \
+        TEARDOWN_TABLE="$table" TEARDOWN_QM_RC="$qmrc" \
+        TEARDOWN_CALLS="$tmp_dir/teardown-calls" \
+        TEARDOWN_KEEP="$keep" TEARDOWN_RC="$rc" TEARDOWN_RECORD="$record" \
+    bash -c '
+        source "$(dirname "$1")/lib/report-lib.sh"
+        source "$(dirname "$1")/lib/guest-lib.sh"
+        : > "$TEARDOWN_CALLS"
+        itf_qm() {
+            echo "$2 | $*" >> "$TEARDOWN_CALLS"
+            [[ "$TEARDOWN_QM_RC" == 0 ]] || return "$TEARDOWN_QM_RC"
+            cat "$TEARDOWN_TABLE"
+        }
+        itf_report_init teardown-test > /dev/null
+        echo "$TEARDOWN_RECORD" > "$ITF_RUN_DIR/guest.txt"
+        itf_guest_verdict_teardown "$TEARDOWN_RC" "$TEARDOWN_KEEP"
+        if [[ -f "$ITF_RUN_DIR/guest.txt" ]]; then
+            echo "record=kept"
+        else
+            echo "record=gone"
+        fi
+        echo "run-dir=$ITF_RUN_DIR"
+    ' _ "$ITF_DRIVER" 2>&1
+}
+
+# _sweep_child <runs-dir> <qm-list-table-file> <sweep-args...>
+#
+# Runs itf_guest_sweep in a child shell over pre-planted runs with the
+# real report-lib + runlock-lib + guest-lib and the same stubbed/recording
+# itf_qm as _teardown_child. Prints the sweep output plus "sweep-rc=N".
+_sweep_child() {
+    local runs="$1" table="$2"
+    shift 2
+    ITF_RUNS_DIR="$runs" ITF_RUN_LOCK="$ITF_LOCK_FIXTURE" \
+        TEARDOWN_TABLE="$table" TEARDOWN_QM_RC=0 \
+        TEARDOWN_CALLS="$tmp_dir/teardown-calls" \
+    bash -c '
+        source "$(dirname "$1")/lib/report-lib.sh"
+        source "$(dirname "$1")/lib/runlock-lib.sh"
+        source "$(dirname "$1")/lib/guest-lib.sh"
+        : > "$TEARDOWN_CALLS"
+        itf_qm() {
+            echo "$2 | $*" >> "$TEARDOWN_CALLS"
+            [[ "$TEARDOWN_QM_RC" == 0 ]] || return "$TEARDOWN_QM_RC"
+            cat "$TEARDOWN_TABLE"
+        }
+        if itf_guest_sweep "${@:2}"; then
+            echo "sweep-rc=0"
+        else
+            echo "sweep-rc=1"
+        fi
+    ' _ "$ITF_DRIVER" "$@" 2>&1
 }
 
 # ------------------------------------------------------------------------------
@@ -1084,6 +1164,277 @@ EOF
     fi
 }
 
+# ------------------------------------------------------------------------------
+# Verdict-time guest teardown + guest sweep (guest-lib.sh)
+# ------------------------------------------------------------------------------
+
+# _teardown_steps <child-output> — echoes the child run's steps.tsv for
+# assertions (empty when the run dir marker was not printed).
+_teardown_steps() {
+    local rdir
+    rdir="$(printf '%s\n' "$1" | sed -n 's/^run-dir=//p')"
+    cat "$rdir/steps.tsv" 2>/dev/null || true
+}
+
+# _assert_no_destroy_call — pass/fail on the stubbed transport log never
+# showing a destroy (the structural never-destroy guards).
+_assert_no_destroy_call() {
+    if grep -q '^destroy ' "$tmp_dir/teardown-calls" 2>/dev/null; then
+        test_fail "itf_qm destroy was invoked but must not be"
+    else
+        test_pass
+    fi
+}
+
+test_teardown_green_default_destroys_own_guest() {
+    test_start "green verdict, no --keep: the run's own guest is destroyed and its record removed"
+    local table="$tmp_dir/teardown-table"
+    printf 'VMID NAME STATUS\n8005 j05-storage-20260101-010101 running\n' > "$table"
+    local out
+    out="$(_teardown_child 0 0 \
+        "base.invalid 8005 10.0.0.9 j05-storage-20260101-010101" "$table")"
+    assert_contains "$out" "record=gone"
+    assert_contains "$(cat "$tmp_dir/teardown-calls")" \
+        "destroy | base.invalid destroy 8005 --destroy-unreferenced-disks 1 --purge"
+    assert_contains "$(_teardown_steps "$out")" "destroyed at verdict"
+    if printf '%s\n' "$(_teardown_steps "$out")" | grep -q "guest lab kept"; then
+        test_fail "green default run recorded a keep step"
+    else
+        test_pass
+    fi
+}
+
+test_teardown_green_keep_flag_retains_lab() {
+    test_start "green verdict with --keep: lab retained, no destroy call"
+    local table="$tmp_dir/teardown-table"
+    printf 'VMID NAME STATUS\n8005 j05-storage-20260101-010101 running\n' > "$table"
+    local out
+    out="$(_teardown_child 1 0 \
+        "base.invalid 8005 10.0.0.9 j05-storage-20260101-010101" "$table")"
+    assert_contains "$out" "record=kept"
+    _assert_no_destroy_call
+    assert_contains "$(_teardown_steps "$out")" "retained for --rerun"
+}
+
+test_teardown_green_env_keep_retains_lab() {
+    test_start "green verdict with ITF_KEEP_GUESTS=1: lab retained"
+    local table="$tmp_dir/teardown-table"
+    printf 'VMID NAME STATUS\n8005 j05-storage-20260101-010101 running\n' > "$table"
+    local out
+    out="$(_teardown_child 0 0 \
+        "base.invalid 8005 10.0.0.9 j05-storage-20260101-010101" "$table" 0 "ITF_KEEP_GUESTS=1")"
+    assert_contains "$out" "record=kept"
+    _assert_no_destroy_call
+    assert_contains "$(_teardown_steps "$out")" "retained for --rerun"
+}
+
+test_teardown_red_verdict_retains_lab() {
+    test_start "red verdict: lab retained for post-mortem, no destroy call"
+    local table="$tmp_dir/teardown-table"
+    printf 'VMID NAME STATUS\n8005 j05-storage-20260101-010101 running\n' > "$table"
+    local out
+    out="$(_teardown_child 0 1 \
+        "base.invalid 8005 10.0.0.9 j05-storage-20260101-010101" "$table")"
+    assert_contains "$out" "record=kept"
+    _assert_no_destroy_call
+    assert_contains "$(_teardown_steps "$out")" "red verdict"
+}
+
+test_teardown_name_mismatch_never_destroys() {
+    test_start "live VMID hosting another run's guest: record stale-removed, guest untouched"
+    local table="$tmp_dir/teardown-table"
+    printf 'VMID NAME STATUS\n8005 other-run-20260101-020202 running\n' > "$table"
+    local out
+    out="$(_teardown_child 0 0 \
+        "base.invalid 8005 10.0.0.9 j05-storage-20260101-010101" "$table")"
+    assert_contains "$out" "record=gone"
+    _assert_no_destroy_call
+    assert_contains "$(_teardown_steps "$out")" "another run's guest"
+}
+
+test_teardown_vacated_vmid_cleans_record() {
+    test_start "vacated VMID: stale record removed, nothing destroyed"
+    local table="$tmp_dir/teardown-table"
+    printf 'VMID NAME STATUS\n8001 unrelated-20260101-000000 running\n' > "$table"
+    local out
+    out="$(_teardown_child 0 0 \
+        "base.invalid 8005 10.0.0.9 j05-storage-20260101-010101" "$table")"
+    assert_contains "$out" "record=gone"
+    _assert_no_destroy_call
+    assert_contains "$(_teardown_steps "$out")" "already vacated"
+}
+
+test_teardown_nameless_record_fails_closed() {
+    test_start "legacy nameless record: fail-closed, record kept for triage"
+    local table="$tmp_dir/teardown-table"
+    printf 'VMID NAME STATUS\n8005 j05-storage-20260101-010101 running\n' > "$table"
+    local out
+    out="$(_teardown_child 0 0 "base.invalid 8005 10.0.0.9" "$table")"
+    assert_contains "$out" "record=kept"
+    _assert_no_destroy_call
+    assert_contains "$(_teardown_steps "$out")" "predates guest naming"
+}
+
+test_teardown_unreachable_base_fails_closed() {
+    test_start "unreachable base: nothing destroyed, record kept, verdict unflipped"
+    local table="$tmp_dir/teardown-table"
+    : > "$table"
+    local out
+    out="$(_teardown_child 0 0 \
+        "base.invalid 8005 10.0.0.9 j05-storage-20260101-010101" "$table" 3)"
+    assert_contains "$out" "record=kept"
+    _assert_no_destroy_call
+    assert_contains "$(_teardown_steps "$out")" "unreachable"
+    assert_contains "$(_teardown_steps "$out")" "teardown incomplete"
+}
+
+test_teardown_dry_run_prints_without_destroying() {
+    test_start "ITF_DRY_RUN: destroy printed, not executed, record kept"
+    local table="$tmp_dir/teardown-table"
+    printf 'VMID NAME STATUS\n8005 j05-storage-20260101-010101 running\n' > "$table"
+    local out
+    out="$(_teardown_child 0 0 \
+        "base.invalid 8005 10.0.0.9 j05-storage-20260101-010101" "$table" 0 "ITF_DRY_RUN=1")"
+    assert_contains "$out" "record=kept"
+    assert_contains "$out" "[dry-run] guest destroy base.invalid 8005"
+    _assert_no_destroy_call
+}
+
+test_sweep_applies_old_green_lab() {
+    test_start "sweep --apply destroys an old green run's lab and removes records"
+    local runs="$tmp_dir/sweep-runs" table="$tmp_dir/teardown-table"
+    rm -rf "$runs"; mkdir -p "$runs"
+    _plant_run "$runs" run-20260101-010000-j05 green \
+        "guest.txt:base.invalid 8005 10.0.0.9 j05-storage-20260101-010101"
+    printf 'VMID NAME STATUS\n8005 j05-storage-20260101-010101 running\n' > "$table"
+    local out
+    out="$(_sweep_child "$runs" "$table" --age 0 --apply)"
+    assert_contains "$out" "sweep-rc=0"
+    assert_contains "$out" "destroyed base.invalid/8005"
+    assert_contains "$(cat "$tmp_dir/teardown-calls")" \
+        "destroy | base.invalid destroy 8005 --destroy-unreferenced-disks 1 --purge"
+    if [[ -f "$runs/run-20260101-010000-j05/guest.txt" ]]; then
+        test_fail "sweep --apply left the guest record behind"
+    else
+        test_pass
+    fi
+}
+
+test_sweep_plan_only_touches_nothing() {
+    test_start "sweep without --apply is plan-only: prints, keeps records, no destroy"
+    local runs="$tmp_dir/sweep-runs" table="$tmp_dir/teardown-table"
+    rm -rf "$runs"; mkdir -p "$runs"
+    _plant_run "$runs" run-20260101-010000-j05 green \
+        "guest.txt:base.invalid 8005 10.0.0.9 j05-storage-20260101-010101"
+    printf 'VMID NAME STATUS\n8005 j05-storage-20260101-010101 running\n' > "$table"
+    local out
+    out="$(_sweep_child "$runs" "$table" --age 0)"
+    assert_contains "$out" "sweep-rc=0"
+    assert_contains "$out" "would destroy base.invalid/8005"
+    assert_contains "$out" "plan only"
+    _assert_no_destroy_call
+    if [[ -f "$runs/run-20260101-010000-j05/guest.txt" ]]; then
+        test_pass
+    else
+        test_fail "plan-only sweep removed a guest record"
+    fi
+}
+
+test_sweep_red_lab_refused_without_force() {
+    test_start "sweep keeps a red run's lab unless --force"
+    local runs="$tmp_dir/sweep-runs" table="$tmp_dir/teardown-table"
+    rm -rf "$runs"; mkdir -p "$runs"
+    _plant_run "$runs" run-20260101-010000-j13 red \
+        "guest.txt:base.invalid 8006 10.0.0.9 j13-20260101-010000"
+    printf 'VMID NAME STATUS\n8006 j13-20260101-010000 running\n' > "$table"
+    local out
+    out="$(_sweep_child "$runs" "$table" --age 0 --apply)"
+    assert_contains "$out" "sweep-rc=0"
+    assert_contains "$out" "red verdict"
+    _assert_no_destroy_call
+    assert_contains "$out" "--force to include"
+}
+
+test_sweep_red_lab_destroyed_with_force() {
+    test_start "sweep --force --apply destroys a red run's lab"
+    local runs="$tmp_dir/sweep-runs" table="$tmp_dir/teardown-table"
+    rm -rf "$runs"; mkdir -p "$runs"
+    _plant_run "$runs" run-20260101-010000-j13 red \
+        "guest.txt:base.invalid 8006 10.0.0.9 j13-20260101-010000"
+    printf 'VMID NAME STATUS\n8006 j13-20260101-010000 running\n' > "$table"
+    local out
+    out="$(_sweep_child "$runs" "$table" --age 0 --force --apply)"
+    assert_contains "$out" "destroyed base.invalid/8006"
+    assert_contains "$(cat "$tmp_dir/teardown-calls")" "destroy | base.invalid destroy 8006"
+}
+
+test_sweep_age_gate_skips_young_lab() {
+    test_start "sweep keeps a lab younger than the age gate"
+    local runs="$tmp_dir/sweep-runs" table="$tmp_dir/teardown-table"
+    rm -rf "$runs"; mkdir -p "$runs"
+    _plant_run "$runs" run-20260101-010000-j05 green \
+        "guest.txt:base.invalid 8005 10.0.0.9 j05-storage-20260101-010101"
+    printf 'VMID NAME STATUS\n8005 j05-storage-20260101-010101 running\n' > "$table"
+    local out
+    out="$(_sweep_child "$runs" "$table" --age 999999 --apply)"
+    assert_contains "$out" "sweep-rc=0"
+    assert_contains "$out" "finished less than"
+    _assert_no_destroy_call
+}
+
+test_sweep_driver_empty_runs_dir_clean() {
+    test_start "driver-level sweep on an empty runs dir: nothing to do, rc 0"
+    local runs="$tmp_dir/sweep-empty-runs"
+    rm -rf "$runs"; mkdir -p "$runs"
+    run_itf_runs "$runs" guest sweep
+    assert_rc 0 "$run_rc"
+    assert_contains "$run_out" "no runs — nothing to do"
+}
+
+test_sweep_driver_red_lab_no_transport() {
+    test_start "driver-level sweep keeps a red lab without contacting any base"
+    local runs="$tmp_dir/sweep-red-runs"
+    rm -rf "$runs"; mkdir -p "$runs"
+    _plant_run "$runs" run-20260101-010000-j13 red \
+        "guest.txt:base.invalid 8006 10.0.0.9 j13-20260101-010000"
+    run_itf_runs "$runs" guest sweep
+    assert_rc 0 "$run_rc"
+    assert_contains "$run_out" "red verdict"
+    # The .invalid base is never contacted: the red lab is skipped
+    # before resolution, so no ssh noise can appear.
+    assert_contains "$run_out" "plan only"
+}
+
+test_journey_run_keep_flag_accepted_by_parser() {
+    test_start "journey run accepts --keep past arg validation (lock refusal, not usage)"
+    local lk="$tmp_dir/keep-parse.lock"
+    local runs_dir="$tmp_dir/keep-parse-runs"
+    mkdir -p "$runs_dir"
+    local hpid
+    hpid=$(_runlock_hold_bg "$lk" "journey run holder-run" 30)
+    if ! _runlock_wait_recorded "$lk" "holder-run"; then
+        kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+        test_fail "holder never recorded itself"
+        return
+    fi
+    run_out=""
+    run_rc=0
+    run_out=$(ITF_RUN_LOCK="$lk" ITF_RUNLOCK_WAIT=0 ITF_RUNS_DIR="$runs_dir" \
+        ITF_SITE_CONFIG="$tmp_dir/site.conf" \
+        bash "$ITF_DRIVER" journey run j04-post-install-baseline --keep \
+        2>"$tmp_dir/run.err") || run_rc=$?
+    run_err="$(cat "$tmp_dir/run.err")"
+    kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
+    assert_rc 2 "$run_rc"
+    assert_contains "$run_err" "another itf run is active"
+    if [[ "$run_err" == *"usage:"* ]]; then
+        test_fail "--keep was rejected by the arg parser"
+    else
+        test_pass
+    fi
+}
+
+
 test_journey_list_lists_committed_journeys
 test_journey_run_unknown_name_refused
 test_journey_run_missing_name_refused
@@ -1127,6 +1478,23 @@ test_stage_os_rerun_rolls_back_not_installs
 test_stage_os_fresh_run_still_installs
 test_run_installer_expected_rc_contract
 test_prepare_install_tolerates_expected_prereq_failure
+test_teardown_green_default_destroys_own_guest
+test_teardown_green_keep_flag_retains_lab
+test_teardown_green_env_keep_retains_lab
+test_teardown_red_verdict_retains_lab
+test_teardown_name_mismatch_never_destroys
+test_teardown_vacated_vmid_cleans_record
+test_teardown_nameless_record_fails_closed
+test_teardown_unreachable_base_fails_closed
+test_teardown_dry_run_prints_without_destroying
+test_sweep_applies_old_green_lab
+test_sweep_plan_only_touches_nothing
+test_sweep_red_lab_refused_without_force
+test_sweep_red_lab_destroyed_with_force
+test_sweep_age_gate_skips_young_lab
+test_sweep_driver_empty_runs_dir_clean
+test_sweep_driver_red_lab_no_transport
+test_journey_run_keep_flag_accepted_by_parser
 
 rm -rf "$tmp_dir"
 teardown_test_env

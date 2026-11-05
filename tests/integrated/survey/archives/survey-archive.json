@@ -1,0 +1,871 @@
+{
+ "format": 1,
+ "created": "2026-11-04T23:01:44-0500",
+ "seed": "99cb4eed05d5",
+ "fraction": 0.5,
+ "sw": {
+  "mode": "release",
+  "tag": "v0.138.0",
+  "version": "0.138.0",
+  "tarball": "https://api.github.com/repos/wallart1/ZFSutilities/tarball/v0.138.0"
+ },
+ "universe_digest": "dab30a95d16772ab",
+ "universe_counts": {
+  "total": 214,
+  "cli": 60,
+  "gui-button": 98,
+  "gui-widget": 44,
+  "gui-composite": 12
+ },
+ "sample_counts": {
+  "gui-widget": 16,
+  "gui-button": 48,
+  "cli": 39,
+  "gui-composite": 4
+ },
+ "items": [
+  {
+   "id": "gui-w-backup-toggle-step-active",
+   "kind": "gui-widget",
+   "name": "toggle a step row active",
+   "page": "backup",
+   "role": "toggle-active",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-datasets-Delete",
+   "kind": "gui-button",
+   "name": "Delete",
+   "page": "datasets",
+   "profile": "decline"
+  },
+  {
+   "id": "cli-zfscleanup",
+   "kind": "cli",
+   "name": "zfscleanup",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-zfsdelholds",
+   "kind": "cli",
+   "name": "zfsdelholds",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-watchall",
+   "kind": "cli",
+   "name": "watchall",
+   "lab": "single",
+   "node": "storage",
+   "depth": "bespoke",
+   "profile": "invalid"
+  },
+  {
+   "id": "cli-check-vm-disk-paths",
+   "kind": "cli",
+   "name": "check-vm-disk-paths",
+   "lab": "two",
+   "node": "compute",
+   "depth": "deep",
+   "profile": "invalid"
+  },
+  {
+   "id": "cli-repair-iscsi-luns",
+   "kind": "cli",
+   "name": "repair-iscsi-luns",
+   "lab": "two",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-offsite-Cancel",
+   "kind": "gui-button",
+   "name": "Cancel",
+   "page": "offsite",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-b-checkagainst-Get Entries",
+   "kind": "gui-button",
+   "name": "Get Entries",
+   "page": "checkagainst",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-restore-Run Restore",
+   "kind": "gui-button",
+   "name": "Run Restore",
+   "page": "restore",
+   "profile": "cancel"
+  },
+  {
+   "id": "cli-resize-vm-disk",
+   "kind": "cli",
+   "name": "resize-vm-disk",
+   "lab": "two",
+   "node": "compute",
+   "depth": "argcheck",
+   "profile": "decline"
+  },
+  {
+   "id": "gui-b-restore-Recall Profile",
+   "kind": "gui-button",
+   "name": "Recall Profile",
+   "page": "restore",
+   "profile": "cancel"
+  },
+  {
+   "id": "cli-detach-vm-disk",
+   "kind": "cli",
+   "name": "detach-vm-disk",
+   "lab": "two",
+   "node": "compute",
+   "depth": "argcheck",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-datasets-Mount",
+   "kind": "gui-button",
+   "name": "Mount",
+   "page": "datasets",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-checkagainst-Add pair...",
+   "kind": "gui-button",
+   "name": "Add pair...",
+   "page": "checkagainst",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-w-datasets-collapse-all",
+   "kind": "gui-widget",
+   "name": "collapse the dataset tree",
+   "page": "datasets",
+   "role": "collapse-all",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-w-datasets-select-dataset",
+   "kind": "gui-widget",
+   "name": "select a dataset row",
+   "page": "datasets",
+   "role": "select-first",
+   "profile": "cancel"
+  },
+  {
+   "id": "cli-watchit",
+   "kind": "cli",
+   "name": "watchit",
+   "lab": "single",
+   "node": "storage",
+   "depth": "bespoke",
+   "profile": "decline"
+  },
+  {
+   "id": "gui-w-logs-select-multi",
+   "kind": "gui-widget",
+   "name": "multi-select log rows",
+   "page": "logs",
+   "role": "select-multi",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-w-datasets-navigate",
+   "kind": "gui-widget",
+   "name": "open the Datasets page",
+   "page": "datasets",
+   "role": "navigate",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-retention-Revert",
+   "kind": "gui-button",
+   "name": "Revert",
+   "page": "retention",
+   "profile": "invalid"
+  },
+  {
+   "id": "cli-zfslockctl",
+   "kind": "cli",
+   "name": "zfslockctl",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-backup-Run Backup",
+   "kind": "gui-button",
+   "name": "Run Backup",
+   "page": "backup",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-startdocserver",
+   "kind": "cli",
+   "name": "startdocserver",
+   "lab": "single",
+   "node": "storage",
+   "depth": "bespoke",
+   "profile": "decline"
+  },
+  {
+   "id": "gui-b-offsite-Add Profile to Schedule",
+   "kind": "gui-button",
+   "name": "Add Profile to Schedule",
+   "page": "offsite",
+   "profile": "decline"
+  },
+  {
+   "id": "gui-b-restore-Cancel",
+   "kind": "gui-button",
+   "name": "Cancel",
+   "page": "restore",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-c-retention-add-policy-save",
+   "kind": "gui-composite",
+   "name": "Add Policy -> dirty -> Save persists the policy",
+   "page": "retention",
+   "profile": "decline"
+  },
+  {
+   "id": "cli-zfsdelfs",
+   "kind": "cli",
+   "name": "zfsdelfs",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-c-logs-selection-drives-delete",
+   "kind": "gui-composite",
+   "name": "log selection drives Delete Selected",
+   "page": "logs",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-zfsscruball",
+   "kind": "cli",
+   "name": "zfsscruball",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "decline"
+  },
+  {
+   "id": "cli-zfssend",
+   "kind": "cli",
+   "name": "zfssend",
+   "lab": "single",
+   "node": "storage",
+   "depth": "bespoke",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-disks-Enroll in Proxmox\u2026",
+   "kind": "gui-button",
+   "name": "Enroll in Proxmox\u2026",
+   "page": "disks",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-schedule-Revert",
+   "kind": "gui-button",
+   "name": "Revert",
+   "page": "schedule",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-offsite-Recall Profile",
+   "kind": "gui-button",
+   "name": "Recall Profile",
+   "page": "offsite",
+   "profile": "invalid"
+  },
+  {
+   "id": "cli-zfsmassdelsnaps",
+   "kind": "cli",
+   "name": "zfsmassdelsnaps",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "decline"
+  },
+  {
+   "id": "gui-b-backup-Select All",
+   "kind": "gui-button",
+   "name": "Select All",
+   "page": "backup",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-b-backup-Add Profile to Schedule",
+   "kind": "gui-button",
+   "name": "Add Profile to Schedule",
+   "page": "backup",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-b-retention-Save",
+   "kind": "gui-button",
+   "name": "Save",
+   "page": "retention",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-disks-Expand Vdev\u2026",
+   "kind": "gui-button",
+   "name": "Expand Vdev\u2026",
+   "page": "disks",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-b-retention-Remove Bucket",
+   "kind": "gui-button",
+   "name": "Remove Bucket",
+   "page": "retention",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-zfswipe",
+   "kind": "cli",
+   "name": "zfswipe",
+   "lab": "single",
+   "node": "storage",
+   "depth": "argcheck",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-checkagainst-Revert",
+   "kind": "gui-button",
+   "name": "Revert",
+   "page": "checkagainst",
+   "profile": "decline"
+  },
+  {
+   "id": "gui-b-dashboard-Fix Locks",
+   "kind": "gui-button",
+   "name": "Fix Locks",
+   "page": "dashboard",
+   "profile": "cancel"
+  },
+  {
+   "id": "cli-zfsaddisk",
+   "kind": "cli",
+   "name": "zfsaddisk",
+   "lab": "two",
+   "node": "compute",
+   "depth": "argcheck",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-c-datasets-selection-scopes-snapshot",
+   "kind": "gui-composite",
+   "name": "selection drives Snapshot sensitivity and scope",
+   "page": "datasets",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-logs-Delete Selected",
+   "kind": "gui-button",
+   "name": "Delete Selected",
+   "page": "logs",
+   "profile": "decline"
+  },
+  {
+   "id": "gui-c-datasets-expand-selected-tree",
+   "kind": "gui-composite",
+   "name": "Expand Selected / Collapse All track tree state",
+   "page": "datasets",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-w-restore-select-step",
+   "kind": "gui-widget",
+   "name": "edit a restore step field",
+   "page": "restore",
+   "role": "set-entry",
+   "profile": "decline"
+  },
+  {
+   "id": "cli-ensure-restored-vm-iscsi",
+   "kind": "cli",
+   "name": "ensure-restored-vm-iscsi",
+   "lab": "two",
+   "node": "storage",
+   "depth": "argcheck",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-dashboard-Refresh",
+   "kind": "gui-button",
+   "name": "Refresh",
+   "page": "dashboard",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-b-datasets-Rollback",
+   "kind": "gui-button",
+   "name": "Rollback",
+   "page": "datasets",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-zfsdelallsnaps",
+   "kind": "cli",
+   "name": "zfsdelallsnaps",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-disks-Wipe Labels\u2026",
+   "kind": "gui-button",
+   "name": "Wipe Labels\u2026",
+   "page": "disks",
+   "profile": "cancel"
+  },
+  {
+   "id": "cli-iscsi-restore-luns",
+   "kind": "cli",
+   "name": "iscsi-restore-luns",
+   "lab": "two",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "invalid"
+  },
+  {
+   "id": "cli-move-vm-disk",
+   "kind": "cli",
+   "name": "move-vm-disk",
+   "lab": "two",
+   "node": "compute",
+   "depth": "argcheck",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-zfsreadthru",
+   "kind": "cli",
+   "name": "zfsreadthru",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-zfsclone-vm",
+   "kind": "cli",
+   "name": "zfsclone-vm",
+   "lab": "two",
+   "node": "compute",
+   "depth": "argcheck",
+   "profile": "decline"
+  },
+  {
+   "id": "cli-clone-vm",
+   "kind": "cli",
+   "name": "clone-vm",
+   "lab": "two",
+   "node": "compute",
+   "depth": "bespoke",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-restart-iscsi-services",
+   "kind": "cli",
+   "name": "restart-iscsi-services",
+   "lab": "two",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "decline"
+  },
+  {
+   "id": "cli-enroll-proxmox-pool",
+   "kind": "cli",
+   "name": "enroll-proxmox-pool",
+   "lab": "two",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-w-backup-dry-run",
+   "kind": "gui-widget",
+   "name": "toggle Dry Run",
+   "page": "backup",
+   "role": "toggle-dry-run",
+   "profile": "cancel"
+  },
+  {
+   "id": "cli-zfsreapplyholds",
+   "kind": "cli",
+   "name": "zfsreapplyholds",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-pools-Import",
+   "kind": "gui-button",
+   "name": "Import",
+   "page": "pools",
+   "profile": "decline"
+  },
+  {
+   "id": "gui-w-checkagainst-select-row",
+   "kind": "gui-widget",
+   "name": "select a comparison row",
+   "page": "checkagainst",
+   "role": "select-first",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-b-schedule-Run Now",
+   "kind": "gui-button",
+   "name": "Run Now",
+   "page": "schedule",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-disks-Surface Test\u2026",
+   "kind": "gui-button",
+   "name": "Surface Test\u2026",
+   "page": "disks",
+   "profile": "invalid"
+  },
+  {
+   "id": "cli-show-lun-map",
+   "kind": "cli",
+   "name": "show-lun-map",
+   "lab": "two",
+   "node": "compute",
+   "depth": "deep",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-attach-vm-disk",
+   "kind": "cli",
+   "name": "attach-vm-disk",
+   "lab": "two",
+   "node": "compute",
+   "depth": "argcheck",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-sever-vm-clone",
+   "kind": "cli",
+   "name": "sever-vm-clone",
+   "lab": "two",
+   "node": "compute",
+   "depth": "argcheck",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-b-pools-Remove",
+   "kind": "gui-button",
+   "name": "Remove",
+   "page": "pools",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-w-retention-adjust-spin",
+   "kind": "gui-widget",
+   "name": "adjust a bucket spinbutton",
+   "page": "retention",
+   "role": "adjust-spin",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-zfsresume",
+   "kind": "cli",
+   "name": "zfsresume",
+   "lab": "single",
+   "node": "storage",
+   "depth": "argcheck",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-remove-vm",
+   "kind": "cli",
+   "name": "remove-vm",
+   "lab": "two",
+   "node": "compute",
+   "depth": "argcheck",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-w-pools-select-pool",
+   "kind": "gui-widget",
+   "name": "select a pool row",
+   "page": "pools",
+   "role": "select-first",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-disks-Create Pool\u2026",
+   "kind": "gui-button",
+   "name": "Create Pool\u2026",
+   "page": "disks",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-datasets-Snapshot",
+   "kind": "gui-button",
+   "name": "Snapshot",
+   "page": "datasets",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-w-logs-select-log",
+   "kind": "gui-widget",
+   "name": "select a log row",
+   "page": "logs",
+   "role": "select-first",
+   "profile": "decline"
+  },
+  {
+   "id": "gui-b-retention-Prune",
+   "kind": "gui-button",
+   "name": "Prune",
+   "page": "retention",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-b-disks-Add Infra Vdev\u2026",
+   "kind": "gui-button",
+   "name": "Add Infra Vdev\u2026",
+   "page": "disks",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-b-datasets-Sever Clone",
+   "kind": "gui-button",
+   "name": "Sever Clone",
+   "page": "datasets",
+   "profile": "invalid"
+  },
+  {
+   "id": "cli-zfsdailybackup",
+   "kind": "cli",
+   "name": "zfsdailybackup",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "decline"
+  },
+  {
+   "id": "gui-b-datasets-Collapse All",
+   "kind": "gui-button",
+   "name": "Collapse All",
+   "page": "datasets",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-w-retention-navigate",
+   "kind": "gui-widget",
+   "name": "open the Retention page",
+   "page": "retention",
+   "role": "navigate",
+   "profile": "decline"
+  },
+  {
+   "id": "cli-zfsholds",
+   "kind": "cli",
+   "name": "zfsholds",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "decline"
+  },
+  {
+   "id": "cli-zfslistkeys",
+   "kind": "cli",
+   "name": "zfslistkeys",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-b-pools-Start Scrub",
+   "kind": "gui-button",
+   "name": "Start Scrub",
+   "page": "pools",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-disks-Replace\u2026",
+   "kind": "gui-button",
+   "name": "Replace\u2026",
+   "page": "disks",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-w-offsite-navigate",
+   "kind": "gui-widget",
+   "name": "open the Offsite page",
+   "page": "offsite",
+   "role": "navigate",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-datasets-Apply Profile\u2026",
+   "kind": "gui-button",
+   "name": "Apply Profile\u2026",
+   "page": "datasets",
+   "profile": "decline"
+  },
+  {
+   "id": "gui-b-pools-Add Profile to Schedule",
+   "kind": "gui-button",
+   "name": "Add Profile to Schedule",
+   "page": "pools",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-datasets-Refresh",
+   "kind": "gui-button",
+   "name": "Refresh",
+   "page": "datasets",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-offsite-Revert Config",
+   "kind": "gui-button",
+   "name": "Revert Config",
+   "page": "offsite",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-memory-Survey\u2026",
+   "kind": "gui-button",
+   "name": "Survey\u2026",
+   "page": "memory",
+   "profile": "cancel"
+  },
+  {
+   "id": "cli-archive-vm",
+   "kind": "cli",
+   "name": "archive-vm",
+   "lab": "two",
+   "node": "compute",
+   "depth": "argcheck",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-dashboard-Repair Mount Order",
+   "kind": "gui-button",
+   "name": "Repair Mount Order",
+   "page": "dashboard",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-b-retention-Add Policy",
+   "kind": "gui-button",
+   "name": "Add Policy",
+   "page": "retention",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-b-retention-Recall Profile",
+   "kind": "gui-button",
+   "name": "Recall Profile",
+   "page": "retention",
+   "profile": "cancel"
+  },
+  {
+   "id": "cli-zfsunmount",
+   "kind": "cli",
+   "name": "zfsunmount",
+   "lab": "single",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "cancel"
+  },
+  {
+   "id": "cli-repair-vm-disk-refs",
+   "kind": "cli",
+   "name": "repair-vm-disk-refs",
+   "lab": "two",
+   "node": "compute",
+   "depth": "deep",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-checkagainst-Remove Row",
+   "kind": "gui-button",
+   "name": "Remove Row",
+   "page": "checkagainst",
+   "profile": "decline"
+  },
+  {
+   "id": "cli-reconcile-iscsi-state",
+   "kind": "cli",
+   "name": "reconcile-iscsi-state",
+   "lab": "two",
+   "node": "storage",
+   "depth": "deep",
+   "profile": "decline"
+  },
+  {
+   "id": "gui-w-backup-navigate",
+   "kind": "gui-widget",
+   "name": "open the Backup page",
+   "page": "backup",
+   "role": "navigate",
+   "profile": "cancel"
+  },
+  {
+   "id": "gui-w-backup-edit-step-cell",
+   "kind": "gui-widget",
+   "name": "edit a step cell",
+   "page": "backup",
+   "role": "edit-cell",
+   "profile": "invalid"
+  },
+  {
+   "id": "gui-b-datasets-Add Hold",
+   "kind": "gui-button",
+   "name": "Add Hold",
+   "page": "datasets",
+   "profile": "accept"
+  },
+  {
+   "id": "cli-rename-vm-disk",
+   "kind": "cli",
+   "name": "rename-vm-disk",
+   "lab": "two",
+   "node": "compute",
+   "depth": "argcheck",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-w-checkagainst-edit-cell",
+   "kind": "gui-widget",
+   "name": "edit a comparison cell",
+   "page": "checkagainst",
+   "role": "edit-cell",
+   "profile": "accept"
+  },
+  {
+   "id": "gui-b-disks-Detach\u2026",
+   "kind": "gui-button",
+   "name": "Detach\u2026",
+   "page": "disks",
+   "profile": "accept"
+  }
+ ]
+}

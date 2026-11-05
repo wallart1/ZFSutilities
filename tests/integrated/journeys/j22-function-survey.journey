@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# j22-function-survey.journey — randomized end-user-function survey.
+#
+# Tests a random >=50% sample of ALL end-user-visible functions — CLI
+# commands and GUI operations (action buttons, central-content widget
+# interactions, and multi-widget composites) — selected and shuffled
+# from the full universe AT THE START of the run, executed in the
+# sampled order with varied prompt responses (per-item response
+# profiles), and archived so the exact run repeats:
+#
+#   itf journey run j22-function-survey
+#       new random list (>=50%), archived to
+#       tests/integrated/survey/archives/ + the run dir
+#   ITF_SURVEY_ARCHIVE=<archive.json> itf journey run j22-function-survey
+#       replay exactly that list, order, and profiles
+#   itf journey run j22-function-survey --rerun
+#       replay the previous run's guests AND (absent ITF_SURVEY_ARCHIVE)
+#       its archived list when one exists
+#
+# Software under test: ITF_SURVEY_SW=tree (default, the working tree)
+# or any of the five most recent published GitHub releases
+# (latest | prev:N | tag:<v>) — the universe is enumerated from that
+# exact tree and the same tree is staged into the guest.  Defects found
+# in a past release go to FINDINGS.md and are fixed forward in the dev
+# tree (no back-porting); replaying the same archive against the fixed
+# tree is the repair verification.
+#
+# Env knobs: ITF_SURVEY_SEED, ITF_SURVEY_FRACTION (>=0.5),
+# ITF_SURVEY_SW, ITF_SURVEY_ARCHIVE.
+#
+# Guest state required: post-install baseline template; the two-node
+# shape (selected two-node items) additionally needs the compute
+# template + two-node site keys.  ITF_SW_SOURCE must be dev-tarball —
+# the surveyed tree is pushed from dev either way.
+# Snapshots produced: as-cloned, pools-created (per lab shape).
+
+# shellcheck source=survey-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/survey-lib.sh"
+
+journey_main() {
+    if [[ "${ITF_SW_SOURCE:-}" != "dev-tarball" ]]; then
+        itf_step fail "site config: dev tarball source" \
+            "ITF_SW_SOURCE=${ITF_SW_SOURCE:-?} — set dev-tarball (the survey" \
+            "pushes the enumerated tree from dev)"
+        return 1
+    fi
+    itf_step info "journey start" \
+        "j22 function survey; sw=${ITF_SURVEY_SW:-tree}" \
+        "fraction=${ITF_SURVEY_FRACTION:-0.5}"
+
+    # ------------------------------------------------------------------
+    # Stage S: selection FIRST — the list is drawn at the beginning of
+    # the run, and the lab shape follows what was drawn.
+    # ------------------------------------------------------------------
+
+    itf_survey_select || return 1
+
+    # ------------------------------------------------------------------
+    # Stage L: the lab the selection needs
+    # ------------------------------------------------------------------
+
+    local guest_ip
+    if (( SURVEY_NEEDS_TWO )); then
+        # shellcheck source=j05-two-node-install.journey
+        source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/j05-two-node-install.journey"
+        j05_two_node_lab_main || return 1
+        guest_ip="$(awk '{print $3}' "$ITF_RUN_DIR/guest-storage.txt")"
+    else
+        itf_single_node_lab_main j22-function-survey || return 1
+        guest_ip="$J_GUEST_IP"
+    fi
+    if [[ -z "$guest_ip" || "$guest_ip" == "-" ]]; then
+        itf_step fail "storage guest address" "no usable IP in the guest record"
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Stage T + P + G: the enumerated tree, scratch playground, GUI env
+    # ------------------------------------------------------------------
+
+    itf_survey_stage_tree "$guest_ip" || return 1
+    if (( SURVEY_NEEDS_TWO )); then
+        local c_ip
+        c_ip="$(awk '{print $3}' "$ITF_RUN_DIR/guest-compute.txt")"
+        itf_survey_stage_tree_compute "$guest_ip" "$c_ip" || return 1
+    fi
+    itf_survey_stage_playground "$guest_ip" || return 1
+    itf_survey_stage_gui_env "$guest_ip" || return 1
+
+    # ------------------------------------------------------------------
+    # Stage I: items, in archived order, every one logged
+    # ------------------------------------------------------------------
+
+    local failed=0
+    local id kind _name _page profile
+    local row command depth invoke profiles rcs feeds assert node
+    while IFS=$'\t' read -r id kind _name _page profile; do
+        [[ -n "$id" ]] || continue
+        if [[ "$kind" != "cli" ]]; then
+            continue   # GUI items run as one probe pass below
+        fi
+        row="$(awk -F'\t' -v i="$id" '$1==i' "$ITF_ROOT/survey/universe.tsv")"
+        # Column order is id,command,lab,node,depth,invoke,profiles,rcs,
+        # feeds,assert — the read consumes all ten (id and lab into
+        # fillers: the selection already resolved the lab shape).
+        IFS=$'\t' read -r _ command _lab node depth invoke profiles rcs feeds assert \
+            <<< "$row"
+        if [[ -z "$command" ]]; then
+            itf_step fail "item $id" "no universe.tsv row for selected id"
+            failed=1
+            continue
+        fi
+        itf_survey_run_cli_item "$guest_ip" "$id" "$command" "$depth" \
+            "$invoke" "$profiles" "$rcs" "$feeds" "$assert" "$profile" \
+            "$node" || failed=1
+    done < "$SURVEY_ITEMS"
+
+    # ------------------------------------------------------------------
+    # Stage G: the GUI probe over the GUI items (crash-resume retries)
+    # ------------------------------------------------------------------
+
+    itf_survey_run_gui_items "$guest_ip" || failed=1
+
+    # ------------------------------------------------------------------
+    # Stage W: results artifact, residue check, distributions
+    # ------------------------------------------------------------------
+
+    itf_survey_wrap "$guest_ip" || failed=1
+
+    if (( failed )); then
+        itf_step fail "survey verdict" \
+            "one or more selected items failed — see survey-results.tsv"
+        return 1
+    fi
+    itf_step pass "survey verdict" \
+        "every selected item passed (archive: $(basename "$SURVEY_ARCHIVE"))"
+    return 0
+}

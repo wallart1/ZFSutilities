@@ -1,0 +1,289 @@
+#!/usr/bin/env bash
+# test-itf-survey-journey — Unit tests for the j22 function-survey
+# library (tests/integrated/journeys/survey-lib.sh): selection +
+# archiving + replay + --rerun list reuse, the CLI item executor's
+# verdict logic (profile feeds, expected rcs, assert patterns, compute
+# routing), placeholder resolution, and the wrap-up's residue gate.
+#
+# Pattern (from test-itf-lab-stages): source the library in-process
+# inside a subshell with stubbed transports that record every call.
+# The selection tests run the real sampler against the real repo's
+# universe.tsv from a hermetic ITF_ROOT copy (SURVEY_REPO_ROOT points
+# enumeration at the real tree); no test can reach a real base host.
+
+source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
+setup_test_env
+
+REAL_SURVEY="$mydir/tests/integrated/survey"
+REAL_REPO="$mydir"
+tmp_root=$(mktemp -d)
+
+# Hermetic ITF_ROOT: a copy of survey/ (so archive writes land in the
+# copy) with enumeration pointed at the real repo.
+make_itf_root() {
+    local root="$1"
+    mkdir -p "$root/survey/archives" "$root/journeys"
+    cp "$REAL_SURVEY"/universe.tsv "$REAL_SURVEY"/sample.py \
+        "$REAL_SURVEY"/gui_catalog.py "$REAL_SURVEY"/gui_probe.py \
+        "$root/survey/" 2>/dev/null || true
+    echo "$root"
+}
+
+# _source_survey <itf-root> <run-dir> [extra-env...]
+_source_survey() {
+    local root="$1" run="$2"
+    shift 2
+    (
+        export ITF_ROOT="$root"
+        export ITF_RUN_DIR="$run"
+        export ITF_RUNS_DIR="$run/runs"
+        export SURVEY_REPO_ROOT="$REAL_REPO"
+        mkdir -p "$ITF_RUN_DIR" "$ITF_RUNS_DIR"
+        # shellcheck disable=SC2034
+        ITF_GITHUB_REPO="owner/repo"
+        export ITF_GITHUB_REPO
+        # shellcheck disable=SC1090
+        source "$mydir/tests/integrated/journeys/survey-lib.sh"
+        # Stub the report + transport surface the library uses.  The
+        # step stub records verb:name:detail — several asserts match on
+        # the detail text.
+        _steps=""
+        itf_step() {
+            _steps+="$1:$2:$3;"
+            return 0
+        }
+        itf_artifact() {
+            _steps+="artifact:$2;"
+            return 0
+        }
+        eval "$*" 2>/dev/null
+    )
+}
+
+# ------------------------------------------------------------------------------
+# Selection: new mode
+# ------------------------------------------------------------------------------
+
+test_select_new_creates_archive_and_half_sample() {
+    test_start "select (new) archives the list and samples at least half"
+    local root run
+    root="$(make_itf_root "$tmp_root/root1")"
+    run="$tmp_root/run1"; mkdir -p "$run"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        ITF_SURVEY_SEED=unitseed ITF_SURVEY_FRACTION=0.5 \
+            itf_survey_select > /dev/null 2>&1
+        echo "rc=$?"
+        wc -l < "'"$run"'/survey-items.tsv" 2>/dev/null
+        test -f "'"$run"'/survey-archive.json" && echo archive=yes
+        ls "'"$root"'/survey/archives/" | wc -l
+    ')"
+    assert_equals "rc=0" "$(echo "$out" | sed -n 1p)" "select rc"
+    local cli_total cli_sampled
+    cli_total="$(grep -cE $'^cli-[a-z0-9.-]+\tcli\t' "$REAL_SURVEY/universe.tsv")"
+    cli_sampled="$(grep -cE $'^cli-\S+\tcli\t' "$run/survey-items.tsv")"
+    if (( cli_sampled * 2 < cli_total )); then
+        test_fail "sampled $cli_sampled of $cli_total CLI items (<50%)"
+        return
+    fi
+    assert_contains "$out" "archive=yes"
+    assert_equals "1" "$(echo "$out" | sed -n 4p | tr -d ' ')" \
+        "durable archive copy count"
+    test_pass
+}
+
+test_select_new_deterministic() {
+    test_start "select (new) with a pinned seed is deterministic"
+    local root_a root_b run_a run_b
+    root_a="$(make_itf_root "$tmp_root/root2a")"
+    root_b="$(make_itf_root "$tmp_root/root2b")"
+    run_a="$tmp_root/run2a"; mkdir -p "$run_a"
+    run_b="$tmp_root/run2b"; mkdir -p "$run_b"
+    _source_survey "$root_a" "$run_a" '
+        ITF_SURVEY_SEED=unitseed itf_survey_select > /dev/null 2>&1'
+    _source_survey "$root_b" "$run_b" '
+        ITF_SURVEY_SEED=unitseed itf_survey_select > /dev/null 2>&1'
+    if ! diff -u "$run_a/survey-items.tsv" "$run_b/survey-items.tsv"; then
+        test_fail "same seed produced different selections"
+        return
+    fi
+    test_pass
+}
+
+# ------------------------------------------------------------------------------
+# Selection: replay + --rerun list reuse
+# ------------------------------------------------------------------------------
+
+test_select_replay_reproduces_the_list() {
+    test_start "select (replay) reproduces ids, order, and profiles"
+    local root run_new run_rep
+    root="$(make_itf_root "$tmp_root/root3")"
+    run_new="$tmp_root/run3new"; mkdir -p "$run_new"
+    run_rep="$tmp_root/run3rep"; mkdir -p "$run_rep"
+    _source_survey "$root" "$run_new" '
+        ITF_SURVEY_SEED=unitseed itf_survey_select > /dev/null 2>&1'
+    _source_survey "$root" "$run_rep" '
+        ITF_SURVEY_ARCHIVE="'"$run_new"'/survey-archive.json" \
+            itf_survey_select > /dev/null 2>&1'
+    if ! diff -u "$run_new/survey-items.tsv" "$run_rep/survey-items.tsv"; then
+        test_fail "replay diverged from the archived list"
+        return
+    fi
+    test_pass
+}
+
+test_select_rerun_reuses_prior_list() {
+    test_start "select reuses the prior run's list under --rerun semantics"
+    local root run prior
+    root="$(make_itf_root "$tmp_root/root4")"
+    run="$tmp_root/run4"; mkdir -p "$run/runs"
+    prior="$run/runs/run-111-j22-function-survey"
+    mkdir -p "$prior/runs"
+    _source_survey "$root" "$prior" '
+        ITF_SURVEY_SEED=unitseed itf_survey_select > /dev/null 2>&1'
+    # The new run pretends --rerun: rerun-guests.tsv present, no env pin.
+    echo "guest-storage.txt base.invalid 8001" > "$run/rerun-guests.tsv"
+    local out
+    out="$(_source_survey "$root" "$run" 'itf_survey_select > /dev/null 2>&1; echo rc=$?')"
+    assert_contains "$out" "rc=0"
+    if ! diff -u "$prior/survey-items.tsv" "$run/survey-items.tsv"; then
+        test_fail "--rerun without env did not reuse the prior list"
+        return
+    fi
+    test_pass
+}
+
+# ------------------------------------------------------------------------------
+# Feed / rc maps + placeholder resolution
+# ------------------------------------------------------------------------------
+
+test_feed_map_parsing() {
+    test_start "profile feed and rc maps parse per profile"
+    local out
+    out="$(_source_survey "$(make_itf_root "$tmp_root/root5")" "$tmp_root/run5" '
+        mkdir -p "'"$tmp_root"'/run5"
+        _survey_feed_for "accept=y\n;;decline=n\n;;invalid=zzz" decline | od -An -c | tr -s " "
+        _survey_feed_for "accept=y\n" accept | od -An -c | tr -s " "
+        _survey_rc_for "accept=0;;decline=1" decline
+        _survey_rc_for "accept=0" cancel
+    ')"
+    assert_contains "$out" "n \\n"
+    assert_contains "$out" "y \\n"
+    assert_contains "$out" "1"
+    assert_contains "$out" "*"
+    test_pass
+}
+
+test_placeholder_resolution() {
+    test_start "invoke placeholders resolve from the playground env"
+    local out
+    out="$(_source_survey "$(make_itf_root "$tmp_root/root6")" "$tmp_root/run6" '
+        mkdir -p "'"$tmp_root"'/run6"
+        SURVEY_DS=zfstest1/survey-x SURVEY_POOL2=zfstest2 SURVEY_VDISK=9
+        _survey_resolve "./bin/x {DS} {POOL2} {VDISK}"
+    ')"
+    assert_equals "./bin/x zfstest1/survey-x zfstest2 9" "$out"
+    test_pass
+}
+
+# ------------------------------------------------------------------------------
+# CLI item executor
+# ------------------------------------------------------------------------------
+
+test_cli_item_verdicts_and_routing() {
+    test_start "cli item: rc/assert verdicts, compute routing, steps"
+    local root run
+    root="$(make_itf_root "$tmp_root/root7")"
+    run="$tmp_root/run7"; mkdir -p "$run"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        _seen=""
+        itf_guest_exec_feed() {
+            _seen+="feed-ip:$1 cmd-has-timeout:$(echo "$3" | grep -c "timeout 300") "
+            echo "INFO: canned command output"
+            return "${_feed_rc:-0}"
+        }
+        # storage-node pass: rc matches, assert pattern present
+        itf_survey_run_cli_item 10.0.0.1 cli-zfsholds zfsholds deep \
+            "zfsholds {DS}" "-" "accept=0" "accept=\\n" "INFO" accept storage
+        echo "s1=$_steps"
+        _steps=""
+        # rc mismatch fails
+        _feed_rc=1
+        itf_survey_run_cli_item 10.0.0.1 cli-x x deep "x" "-" "accept=0" \
+            "accept=\\n" "INFO" accept storage
+        echo "s2=$_steps"
+        _steps=""
+        _feed_rc=0
+        # missing assert pattern fails
+        itf_survey_run_cli_item 10.0.0.1 cli-x x deep "x" "-" "accept=*" \
+            "accept=\\n" "NEVERSEEN" accept storage
+        echo "s3=$_steps"
+        _steps=""
+        # compute-node routing
+        echo "base.invalid 8001 10.9.9.9" > "'"$run"'/guest-compute.txt"
+        itf_survey_run_cli_item 10.0.0.1 cli-y y deep "y" "-" "accept=*" \
+            "accept=\\n" "-" accept compute
+        echo "s4=$_steps seen=$_seen"
+    ')"
+    assert_contains "$out" "pass:item cli-zfsholds"
+    assert_contains "$out" "fail:item cli-x"
+    assert_contains "$out" "output missing"
+    assert_contains "$out" "feed-ip:10.9.9.9"
+    assert_contains "$out" "cmd-has-timeout:1"
+    test_pass
+}
+
+# ------------------------------------------------------------------------------
+# Wrap-up
+# ------------------------------------------------------------------------------
+
+test_wrap_residue_gate_and_summary() {
+    test_start "wrap: summary + residue gate verdicts"
+    local root run
+    root="$(make_itf_root "$tmp_root/root8")"
+    run="$tmp_root/run8"; mkdir -p "$run"
+    printf 'id\tkind\tname\tpage\tprofile\n' > "$run/survey-items.tsv"
+    printf 'cli-x\tcli\tx\t-\taccept\n' >> "$run/survey-items.tsv"
+    printf 'gui-b-backup-Run Backup\tgui-button\tRun Backup\tbackup\tdecline\n' \
+        >> "$run/survey-items.tsv"
+    printf '%s%s\n' \
+        '{"id": "gui-b-backup-Run Backup", "verdict": "pass", ' \
+        '"detail": "ok", "duration": 1.5}' \
+        > "$run/survey-gui-results.jsonl"
+    local out
+    out="$(_source_survey "$root" "$run" '
+        itf_guest_exec() {
+            # residue grep: rc 1 = nothing left behind (pass shape)
+            return 1
+        }
+        itf_survey_wrap 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+        echo "steps=$_steps"
+    ')"
+    assert_contains "$out" "rc=0"
+    assert_contains "$out" "pass:survey residue check"
+    assert_contains "$out" "info:survey verdict distribution"
+    assert_contains "$out" "pass=1"
+    test -f "$run/survey-results.tsv" || { test_fail "no results tsv"; return; }
+    out="$(_source_survey "$root" "$run" '
+        itf_guest_exec() { return 0; }   # residue found -> fail
+        itf_survey_wrap 10.0.0.1 > /dev/null 2>&1
+        echo "rc=$?"
+    ')"
+    assert_contains "$out" "rc=1"
+    test_pass
+}
+
+test_select_new_creates_archive_and_half_sample
+test_select_new_deterministic
+test_select_replay_reproduces_the_list
+test_select_rerun_reuses_prior_list
+test_feed_map_parsing
+test_placeholder_resolution
+test_cli_item_verdicts_and_routing
+test_wrap_residue_gate_and_summary
+
+rm -rf "$tmp_root"
+teardown_test_env
+test_summary

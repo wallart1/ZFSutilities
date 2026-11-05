@@ -44,9 +44,14 @@ journey_main() {
 
     j05_two_node_lab_main || return 1
 
-    local s_vmid s_ip c_vmid c_ip
-    read -r _ s_vmid s_ip < "$ITF_RUN_DIR/guest-storage.txt"
-    read -r _ c_vmid c_ip < "$ITF_RUN_DIR/guest-compute.txt"
+    # Records carry a 4th field (the live qm guest name) since the
+    # name-based orphan fence; consume it so it cannot bleed into the IP
+    # (bash read puts the rest of the line into the last variable).
+    local s_vmid s_ip s_name c_vmid c_ip c_name
+    # shellcheck disable=SC2034  # name slot unused here
+    read -r _ s_vmid s_ip s_name < "$ITF_RUN_DIR/guest-storage.txt"
+    # shellcheck disable=SC2034  # name slot unused here
+    read -r _ c_vmid c_ip c_name < "$ITF_RUN_DIR/guest-compute.txt"
     if [[ -n "$s_ip" && -n "$c_ip" ]]; then
         itf_step pass "lab coordinates recovered" \
             "storage=$s_ip (vmid $s_vmid) compute=$c_ip (vmid $c_vmid)"

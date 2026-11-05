@@ -20,6 +20,11 @@
 #   itf guest ip BASE VMID [timeout]  discover guest IP via guest agent
 #   itf guest wait-ssh IP [timeout]
 #   itf guest list [BASE]
+#   itf guest sweep [--apply] [--force] [--age H]
+#                                     backlog cleanup: destroy this tree's
+#                                     DONE, GREEN run labs past the age gate
+#                                     (default 24h; red labs kept unless
+#                                     --force; plan-only until --apply)
 #   itf iso fetch [debian|pve|ubuntu]  download installer ISO to dev cache
 #   itf iso upload [BASE] [debian|pve|ubuntu]
 #                                     upload cached ISO to base ISO storage
@@ -39,6 +44,9 @@
 #                                     remove a baseline template
 #   itf journey list                  list available journeys
 #   itf journey run NAME              execute a journey under a run report
+#                                     (a green verdict destroys the run's
+#                                     own guests — pass --keep to retain
+#                                     the lab for --rerun iteration)
 #   itf journey run NAME --rerun      replay on the previous run's guests:
 #                                     rollback to the staging checkpoint
 #                                     (as-cloned / os-installed) instead
@@ -55,7 +63,8 @@
 #   itf version
 #
 # Environment: ITF_DRY_RUN=1 prints guarded base commands instead of
-# executing them.
+# executing them.  ITF_KEEP_GUESTS=1 retains a green run's guests (same
+# as --keep); ITF_SWEEP_AGE_HOURS overrides the sweep age gate.
 
 # Strict mode covers the driver's own plumbing (dispatch, preflight,
 # status, list, watch) — any unhandled error fails fast.  The journey and
@@ -375,6 +384,11 @@ cmd_guest() {
             itf_qm "$base" list | awk -v f="$ITF_VMID_FIRST" -v l="$ITF_VMID_LAST" \
                 'NR==1 || ($1>=f && $1<=l)' || true
             ;;
+        sweep)
+            # Backlog cleanup for finished runs' kept labs; serialized
+            # against live journeys by the machine-global run lock.
+            itf_guest_sweep "$@"
+            ;;
         *)
             echo "itf: unknown guest subcommand: $sub" >&2
             itf_usage 2
@@ -564,17 +578,18 @@ cmd_journey() {
         run)
             local name="${2:-}"
             [[ -z "$name" ]] && {
-                echo "usage: itf journey run NAME [--rerun] [--template P]" >&2
+                echo "usage: itf journey run NAME [--rerun] [--keep] [--template P]" >&2
                 return 2
             }
             shift 2
-            local rerun=0 jtemplate="storage"
+            local rerun=0 keep=0 jtemplate="storage"
             while (( $# > 0 )); do
                 case "$1" in
                     --rerun) rerun=1; shift ;;
+                    --keep) keep=1; shift ;;
                     --template) jtemplate="$2"; shift 2 ;;
                     *)
-                        echo "usage: itf journey run NAME [--rerun] [--template P]" >&2
+                        echo "usage: itf journey run NAME [--rerun] [--keep] [--template P]" >&2
                         return 2
                         ;;
                 esac
@@ -634,6 +649,12 @@ cmd_journey() {
             if (( rc != 0 )); then
                 itf_step fail "journey $name" "aborted with rc=$rc"
             fi
+            # Verdict-time guest disposition (guest-lib.sh): a green
+            # run's own guests are destroyed and their records removed —
+            # the lab is spent; --keep/ITF_KEEP_GUESTS retains it for
+            # --rerun iteration; a red verdict always keeps it. Never
+            # flips the verdict.
+            itf_guest_verdict_teardown "$rc" "$keep"
             itf_report_finish || rc=1
             echo "itf: report: $ITF_RUN_DIR/report.md"
             return "$rc"

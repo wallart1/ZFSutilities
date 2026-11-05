@@ -505,6 +505,46 @@ test_build_profiles_thread_base_and_stages() {
     itf_report_finish > /dev/null 2>&1 || true
 }
 
+test_build_removes_run_tagged_leftover() {
+    test_start "leftover-clean destroys run-tagged build VMs, spares near-names"
+    ITF_RUNS_DIR="$tmp_dir/runs"
+    ITF_RUN_CALLER="suite"
+    itf_report_init buildtest2 > /dev/null
+    # A recordless leftover from an interrupted build: run-tagged name
+    # (itf_guest_qname shape), no guest*.txt anywhere. 8004 is the
+    # near-name template (itf-template-pve) that must be spared.
+    local orig_table="$QM_TABLE"
+    QM_TABLE+='
+ 8003 itf-template-build-20260101-010101 stopped    8192          0          0'
+    source() {
+        if [[ "$1" == */journeys/common.sh ]]; then
+            return 0
+        fi
+        builtin source "$@"
+    }
+    itf_journey_stage_os() { J_VMID=8002; J_GUEST_IP=10.0.0.2; }
+    itf_journey_stage_install() { :; }
+    itf_journey_verify_installed() { :; }
+    itf_template_os_upgrade() { :; }
+    reset_exec_calls
+    itf_template_build --force --base testbase > /dev/null 2>&1
+    assert_rc 0 $?
+    # The run-tagged leftover is destroyed through the standard
+    # itf_guest_destroy transport (purge + unreferenced disks).
+    assert_contains "$_itf_exec_calls" \
+        "testbase :: qm destroy 8003 --destroy-unreferenced-disks 1 --purge"
+    # The new template VM (8002) and every near-name (8004) are spared;
+    # 8001's destroy is the legitimate previous-template replacement.
+    if printf '%s' "$_itf_exec_calls" | grep -Eq 'qm destroy (8002|8004)'; then
+        test_fail "destroy fired on a VM that is not a run-tagged leftover"
+    else
+        test_pass
+    fi
+    QM_TABLE="$orig_table"
+    unset -f source
+    itf_report_finish > /dev/null 2>&1 || true
+}
+
 test_stamp_round_trip
 test_stamp_compute_round_trip
 test_compute_freshness
@@ -523,6 +563,7 @@ test_fresh_detection_release_ignores_rev
 test_os_upgrade_command_is_one_argument
 test_os_upgrade_compute_gate
 test_build_profiles_thread_base_and_stages
+test_build_removes_run_tagged_leftover
 
 rm -rf "$tmp_dir"
 teardown_test_env

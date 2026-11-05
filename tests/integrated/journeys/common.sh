@@ -730,6 +730,12 @@ itf_journey_stage_download() {
     if [[ "$ITF_SW_SOURCE" == "dev-tarball" ]]; then
         local repo_root tarball serve_msg
         repo_root="$ITF_ROOT/../.."
+        # j22 release pin: when the survey provides a fetched release
+        # tree, stage THAT instead of the working tree — enumeration and
+        # staging must use the same tree (see survey/sample.py).
+        if [[ -n "${ITF_SURVEY_TREE_DIR:-}" && -d "${ITF_SURVEY_TREE_DIR:-}" ]]; then
+            repo_root="$ITF_SURVEY_TREE_DIR"
+        fi
         tarball="$ITF_RUN_DIR/serve/zfsutilities-dev.tar.gz"
         # The install path creates the serve dir for its preseed; the
         # clone-start path (j05) reaches this stage without one.

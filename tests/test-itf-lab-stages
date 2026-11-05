@@ -1065,6 +1065,91 @@ test_j05_encrypted_flag_contract() {
     assert_rc 0 $?
 }
 
+test_j05_same_ip_collision_convergence() {
+    test_start "j05: same-IP collision converges via a bounded storage re-lease"
+    local work="$tmp_dir/j05-collide"
+    mkdir -p "$work/run"
+    local j05="$mydir/tests/integrated/journeys/j05-two-node-install.journey"
+    # Success: agent-side lease bounce (never ssh to the collided IP), a
+    # DIFFERENT address back, the guest record rewritten 4-field, and
+    # the new IP echoed to the caller.
+    (
+        # shellcheck disable=SC1090
+        source "$j05"
+        itf_step() { return 0; }
+        itf_qm() {
+            echo "qm $*" >> "$work/calls"
+            return 0
+        }
+        itf_guest_ip() { echo "10.0.0.77"; }
+        itf_wait_ssh() { return 0; }
+        itf_guest_qname() { echo "j05-storage-20260101-010101"; }
+        ITF_RUN_DIR="$work/run"
+        _j05_storage_lease_reacquire testbase 8005 10.0.0.154 j05-storage \
+            > "$work/new-ip" 2>"$work/err"
+        echo "$?" > "$work/rc"
+    ) > /dev/null 2>&1
+    assert_rc 0 "$(cat "$work/rc")"
+    assert_equals "10.0.0.77" "$(cat "$work/new-ip")"
+    assert_contains "$(cat "$work/calls")" "qm testbase guest exec 8005"
+    # The bounce is the ifupdown lease cycle (dhcpcd underneath).
+    assert_contains "$(cat "$work/calls")" "ifdown"
+    assert_contains "$(cat "$work/calls")" "ifup"
+    assert_contains "$(cat "$work/run/guest-j05-storage.txt")" \
+        "testbase 8005 10.0.0.77 j05-storage-20260101-010101"
+    # Bounded: the same address coming back is a refusal, not a retry.
+    (
+        # shellcheck disable=SC1090
+        source "$j05"
+        itf_step() { return 0; }
+        itf_qm() { return 0; }
+        itf_guest_ip() { echo "10.0.0.154"; }
+        itf_wait_ssh() { return 0; }
+        itf_guest_qname() { echo "j05-storage-20260101-010101"; }
+        ITF_RUN_DIR="$work/run"
+        _j05_storage_lease_reacquire testbase 8005 10.0.0.154 j05-storage \
+            > /dev/null 2>&1
+        echo "$?" > "$work/rc-same"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc-same")"
+    # ssh never returning on the new address is a refusal too.
+    (
+        # shellcheck disable=SC1090
+        source "$j05"
+        itf_step() { return 0; }
+        itf_qm() { return 0; }
+        itf_guest_ip() { echo "10.0.0.77"; }
+        itf_wait_ssh() { return 1; }
+        itf_guest_qname() { echo "j05-storage-20260101-010101"; }
+        ITF_RUN_DIR="$work/run"
+        _j05_storage_lease_reacquire testbase 8005 10.0.0.154 j05-storage \
+            > /dev/null 2>&1
+        echo "$?" > "$work/rc-ssh"
+    ) > /dev/null 2>&1
+    assert_rc 1 "$(cat "$work/rc-ssh")"
+}
+
+test_two_node_journeys_read_four_field_records() {
+    test_start "j06/j07/j14 consume the 4-field guest records"
+    # Guest records have carried a 4th field (the live qm name) since
+    # the name-based fence; a 3-variable read bleeds the name into the
+    # IP and kills the first ssh (the j15 failure class).
+    local j f
+    for j in j06-guest-probe-validator j07-unarchive-iscsi-rebuild \
+            j14-iscsi-fence-recover; do
+        f="$mydir/tests/integrated/journeys/$j.journey"
+        grep -q 'read -r _ s_vmid s_ip s_name' "$f" || {
+            test_fail "$j lost the 4-field storage record read"
+            return
+        }
+        grep -q 'read -r _ c_vmid c_ip c_name' "$f" || {
+            test_fail "$j lost the 4-field compute record read"
+            return
+        }
+    done
+    test_pass
+}
+
 # ------------------------------------------------------------------------------
 # Boot-and-keys helpers (campaign G1, j15)
 # ------------------------------------------------------------------------------
@@ -1676,6 +1761,8 @@ test_keystore_unlock_mount_feeds_stdin
 test_encrypted_key_lun_stage_happy_path
 test_encrypted_key_lun_gates_on_config
 test_j05_encrypted_flag_contract
+test_j05_same_ip_collision_convergence
+test_two_node_journeys_read_four_field_records
 test_boot_journal_parser_failed_mode
 test_boot_journal_parser_pending_mode
 test_boot_journal_parser_ok_mode

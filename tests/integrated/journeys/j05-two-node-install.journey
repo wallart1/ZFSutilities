@@ -33,6 +33,59 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 # plain lab unchanged.  J05_ENCRYPTED_KEYS=1 in the environment is the
 # same opt-in for driver-launched standalone runs (itf journey run
 # passes no arguments to the journey).
+# _j05_storage_lease_reacquire <base> <vmid> <other-ip> <gname>
+#
+# Same-IP staging collision convergence. The compute template carries a
+# STATIC management address baked in at build time; while the compute
+# clone is still booting (not yet answering ARP), the LAN DHCP server
+# can lease that address to the storage clone, whose duplicate-address
+# detection is blind because the address's owner is down. Both role
+# records then carry one address and every ssh check lands on whichever
+# guest answers it.
+#
+# Bounded to ONE re-acquire: bounce the storage guest's DHCP lease
+# through the guest agent (out of band — ssh to the collided address
+# reaches whichever guest owns it), wait for a DIFFERENT address, wait
+# for ssh on it, and rewrite the guest record (4th field = the
+# run-tagged qm NAME, same shape itf_journey_stage_from_template
+# writes). Debian's dhcpcd DECLINEs the duplicate on re-acquire now
+# that the compute clone is up and answering for it. On success echoes
+# the new address and returns 0; any failure returns 1 (the caller
+# fails the hostname gate — no silent fallback).
+_j05_storage_lease_reacquire() {
+    local base="$1" vmid="$2" other_ip="$3" gname="$4"
+    local new_ip
+    itf_step info "guest hostnames" \
+        "same-IP collision ($other_ip on both guests) — re-acquiring the storage lease"
+    # The management NIC is the only NIC at this stage (the P2P NIC is
+    # attached later, in stage N). The guest-exec transcript lands in the
+    # run dir as the post-mortem artifact.
+    # shellcheck disable=SC2016  # the expansions run in the guest
+    itf_qm "$base" guest exec "$vmid" -- sh -c '
+        i=$(ls /sys/class/net | grep -v "^lo$" | sed -n 1p) || exit 3
+        ifdown "$i" 2>/dev/null || dhcpcd -k "$i" 2>/dev/null || true
+        sleep 2
+        ifup "$i" 2>/dev/null || dhcpcd "$i" 2>/dev/null || true
+    ' > "$ITF_RUN_DIR/lease-reacquire-${gname}.log" 2>&1 || true
+    new_ip="$(itf_guest_ip "$base" "$vmid" 600 || true)"
+    if [[ -z "$new_ip" || "$new_ip" == "$other_ip" ]]; then
+        itf_step fail "guest hostnames" \
+            "storage lease re-acquire did not yield a different address (${new_ip:-none})"
+        return 1
+    fi
+    if ! itf_wait_ssh "$new_ip" 300; then
+        itf_step fail "guest hostnames" \
+            "storage re-leased to $new_ip but ssh never came back"
+        return 1
+    fi
+    echo "$base $vmid $new_ip $(itf_guest_qname "$gname")" \
+        > "$ITF_RUN_DIR/guest-${gname}.txt"
+    itf_step info "guest hostnames" \
+        "storage re-leased to $new_ip — guest record rewritten"
+    echo "$new_ip"
+    return 0
+}
+
 j05_two_node_lab_main() {
     local encrypted_keys=0
     if [[ -n "${J05_ENCRYPTED_KEYS:-}" ]]; then
@@ -75,6 +128,30 @@ j05_two_node_lab_main() {
     c_hostname="$(itf_guest_exec "$c_ip" 'hostname -s' 2>/dev/null)"
     if [[ -n "$s_hostname" && -n "$c_hostname" && "$s_hostname" != "$c_hostname" ]]; then
         itf_step pass "guest hostnames" "storage=$s_hostname compute=$c_hostname"
+    elif [[ "$s_ip" == "$c_ip" ]]; then
+        # Same-IP staging collision (see _j05_storage_lease_reacquire):
+        # converge once through a bounded storage-side re-lease, then
+        # re-run the gate on the recovered coordinates.
+        local new_ip
+        if new_ip="$(_j05_storage_lease_reacquire "$s_base" "$s_vmid" "$c_ip" j05-storage)"; then
+            s_ip="$new_ip"
+            s_hostname="$(itf_guest_exec "$s_ip" 'hostname -s' 2>/dev/null)"
+            c_hostname="$(itf_guest_exec "$c_ip" 'hostname -s' 2>/dev/null)"
+            if [[ -n "$s_hostname" && -n "$c_hostname" && "$s_hostname" != "$c_hostname" ]]; then
+                itf_step pass "guest hostnames" \
+                    "storage=$s_hostname compute=$c_hostname (after same-IP collision convergence)"
+            else
+                itf_step fail "guest hostnames" \
+                    "storage=${s_hostname:-?} compute=${c_hostname:-?} — collision" \
+                    "converged but hostnames still disagree"
+                return 1
+            fi
+        else
+            itf_step fail "guest hostnames" \
+                "storage=${s_hostname:-?} compute=${c_hostname:-?} — same-IP" \
+                "collision did not converge"
+            return 1
+        fi
     else
         itf_step fail "guest hostnames" "storage=${s_hostname:-?} compute=${c_hostname:-?}"
         return 1

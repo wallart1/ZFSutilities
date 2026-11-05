@@ -37,6 +37,14 @@ tests/integrated/itf journey run <name> --rerun
                                     # (as-cloned / os-installed) instead
                                     # of re-cloning or reinstalling (fast
                                     # re-verify)
+tests/integrated/itf journey run <name> --keep
+                                    # retain a green run's lab for the
+                                    # --rerun loop (a green verdict
+                                    # otherwise destroys the run's own
+                                    # guests at verdict time)
+tests/integrated/itf guest sweep [--apply]
+                                    # backlog cleanup of finished runs'
+                                    # kept labs — plan-only until --apply
 tests/integrated/itf watch          # tail the active run — NOT the console
 ```
 
@@ -55,6 +63,18 @@ so each start also runs the acquire-time **orphan fence**: recorded
 guests of interrupted runs still present on a base refuse the new run
 (reuse them with `journey run <same> --rerun`, or discard with
 `itf guest destroy`) until the bases are clean.
+
+**Green verdicts clean up after themselves.** When a journey finishes
+green, the driver destroys the run's own guests and removes their
+`guest*.txt` records — ownership is name-verified against each base's
+own `qm list` (the orphan fence's law: a live VMID carrying a different
+name is another run's guest and is never touched), so finished labs no
+longer accumulate on the bases. `--keep` (or `ITF_KEEP_GUESTS=1`)
+retains the lab for `--rerun` iteration; a red verdict always keeps it
+(post-mortem + rerun after the fix). `itf guest sweep` settles whatever
+remains — done green runs past an age gate (`ITF_SWEEP_AGE_HOURS`,
+default 24 h), red-run labs only with `--force` — plan-only until
+`--apply`, and serialized against live journeys by the same run lock.
 
 Two-node cycle (second base host in the compute role) additionally:
 
@@ -87,6 +107,7 @@ Every run (journey or preflight) writes a progressive report under
 | `FINDINGS.md` | product issues found by journeys |
 | `REQUIREMENTS.md` | the recovery-requirements register — UX gaps and design directions seeded from journey outcomes, directing future coding |
 | `repair-plans/` | numbered fix proposals awaiting user approval |
+| `survey/` | the j22 function-survey engine: the CLI universe manifest (`universe.tsv`), the seeded sampler/archiver (`sample.py`), the GUI interaction catalog (`gui_catalog.py`), the in-guest GUI probe (`gui_probe.py`), and the durable sample archives (`archives/`) |
 | `results/` | run outputs (`run-*` gitignored) + curated phase reports |
 
 ## Safety model

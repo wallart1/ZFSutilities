@@ -234,6 +234,58 @@ The journey closes by running the payload-e2e driver's offsite-onward
 and restore pairs, the mutation scenarios the unprivileged container
 tier cannot run.
 
+## Function survey (j22)
+
+The **j22-function-survey** journey is a sampling harness rather than a
+fixed scenario: at the start of every run it draws a seeded random
+sample of **at least half** of the end-user-visible function universe,
+shuffles the order, archives the list, and then executes the items in
+that order with full logging. The archive makes a run exactly
+repeatable — `ITF_SURVEY_ARCHIVE=<file>` replays the same list, order,
+and prompt-response profiles, and `--rerun` reuses the previous run's
+guests and (absent an env pin) its archived list.
+
+The universe has two halves:
+
+- **CLI** — every command documented on the commands pages, minus two
+  recorded exclusion tables (the misc commands declared not worth
+  testing on 2026-10-26, and the lifecycle/dev commands owned by the
+  dedicated install/upgrade journeys, 2026-11-04). The tables are
+  parsed rows in `tests/integrated/survey/universe.tsv`; the sampler
+  test fails on drift in either direction, so a newly documented
+  command must be consciously added or excluded.
+- **GUI** — enumerated at run time from the tree under test: the
+  action buttons (`ACTION_HANDLERS`), the central-content widget
+  interactions (row selection, per-row toggles, cell edits, entries,
+  comboboxes, spinbuttons, the Dry Run toggle, page navigation —
+  `survey/gui_catalog.py`), and curated composites that assert the
+  linkage between central-area state and the action buttons
+  (selection-scoped actions, dirty-state flow through Save/Revert,
+  sensitivity wiring).
+
+Every item carries a **response profile** — accept, decline, cancel, or
+invalid — applied to CLI answer feeds, modal dialogs, and the numbered
+input-hold prompts, so a run exercises different scenarios instead of a
+constant safe default. The wrap-up reports the profile distribution as
+evidence of the variation.
+
+The software under test is the working tree (`ITF_SURVEY_SW=tree`, the
+default) or any of the **five most recent published releases**
+(`latest`, `prev:N`, `tag:<v>`, validated against the GitHub release
+list at run start). The universe is enumerated from that exact tree and
+the same tree is staged into the guest — a survey of an older release
+samples that release's real surface. GUI items run the real window
+under a private in-guest Xvfb (`survey/gui_probe.py`, crash-resume,
+per-item verdicts); CLI items run from the staged tree under a pinned
+`ZFSCONFIG_PATH` against survey-owned scratch state, with per-command
+recipes whose depth (full flow vs argument-validation surface) is
+disclosed per item.
+
+Defects found in a past release are recorded in `FINDINGS.md` and fixed
+**forward** in the dev tree — there is no back-porting; the release
+tarball stays a read-only input. The repair verification is the replay:
+the same archived list re-run against the fixed tree.
+
 ## Post-install baseline template
 
 Journeys whose scenario begins *after* installation start from a
@@ -387,8 +439,10 @@ journeys like j01/j08/j09). `itf journey run
   staging in coverage.  An install-start guest's checkpoint config
   still carries the installer-time CPU freeze, so the `stage_os` rerun
   clears it between the rollback and the start (clones get the same
-  clearing in `itf_guest_clone`). Destroy the guests (`itf guest
-  destroy`) when the loop is done.
+  clearing in `itf_guest_clone`). When the loop is done, nothing to
+  remember: a green verdict destroys the run's own guests at verdict
+  time — pass `--keep` on the runs you expect to iterate past, and
+  settle anything deliberately kept with `itf guest sweep --apply`.
 
 ## One run at a time: the run lock
 
@@ -435,6 +489,46 @@ guests of finished runs are exempt by design — they are the kept lab of
 the run → fix → `--rerun` loop, and only an interrupted run means the
 operator lost track of guests that are still consuming the base.
 
+## Guest lifecycle: verdict-time teardown and the sweep
+
+Finished labs used to accumulate on the base hosts — every run kept its
+guests for `--rerun` and post-mortem reading, cleanup was a manual
+`itf guest destroy` per guest, and no lane's fence could see another
+lane's leftovers. The disposition is now automatic, in the driver
+(`itf_guest_verdict_teardown`, called between the journey's verdict and
+`itf_report_finish`):
+
+- **Green verdict, no `--keep`** — the run's own guests are destroyed
+  and their `guest*.txt` records deleted. The audit trail is the INFO
+  steps this records; the invariant it preserves is that a run dir with
+  guest records is a lab that may still exist, which is exactly what
+  rerun sourcing and the orphan fence rely on (after a teardown, the
+  next `--rerun` refuses with the run-fresh remedy — the designed
+  degradation, never a silent fallback).
+- **`--keep` / `ITF_KEEP_GUESTS=1`** — the lab is retained for the
+  `--rerun` loop; pass it on runs you expect to iterate past.
+- **Red verdict** — the lab is always kept: post-mortem reading and the
+  fix-then-rerun loop need it.
+
+Ownership follows the fence's NAME law (`itf_guest_records_resolve`):
+one `qm list` per involved base is the authority; a guest is destroyed
+only when the live VMID still carries the record's run-tagged name. A
+different live name (a legitimately recycled VMID), a vacated VMID, a
+legacy nameless record, and an unreachable base are each fail-closed —
+nothing destroyed on guesswork, records kept or stale-removed exactly as
+the fence treats stale claims. Templates are structurally safe: destroy
+fires only on a name match, and a successful template build renames its
+VM away from the run-tagged record name before the run finishes.
+
+`itf guest sweep [--apply] [--force] [--age HOURS]` settles the
+remainder — the backlog that predates the hook, `--keep` labs whose loop
+ended, and red labs after triage. It walks this tree's run records only
+(each lane sweeps its own), takes the machine-global run lock so it can
+never race a live journey in any lane, selects done green runs past the
+age gate (`ITF_SWEEP_AGE_HOURS`, default 24 h; red runs only with
+`--force`), and resolves records with the same name law. It is
+plan-only until `--apply` — the printed plan is the exact destroy list.
+
 ## Two-node topology
 
 The cycle-2 journeys model the production two-node layout (storage node
@@ -477,6 +571,18 @@ The cycle-2 journeys model the production two-node layout (storage node
   on the compute host must arrive over iSCSI and be saved back on the
   storage side. (The lab-builder function is reusable: j06 composes the
   entire j05 sequence before its own stages.)
+- **Same-IP staging collisions converge once.** The compute template's
+  management address is a STATIC address baked in at build time; while
+  the compute clone is still booting, the LAN DHCP pool can lease that
+  address to the storage clone (whose duplicate-address detection is
+  blind while the address's owner is down), leaving both role records
+  on one address. j05's hostname gate detects the collision and
+  converges through one bounded storage-side re-lease: the bounce runs
+  through the guest agent (ssh to the collided address reaches
+  whichever guest answers it), the re-acquired address must differ
+  from the collided one, and the guest record is rewritten before the
+  gate re-runs. A re-lease that does not produce a different address
+  fails the journey — no silent fallback.
 - **j06-guest-probe-validator** composes the j05 lab and then runs
   `share/dev/validate-guestfs-probe.sh` live on the storage guest,
   the way production runs it: a positive pass must show a populated

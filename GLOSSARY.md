@@ -1,6 +1,7 @@
 # Glossary
 
-Items to add:
+**Items to be added by Zcode:**
+    Full gate
 
 
 Plain-language definitions of terms as they are actually used in this
@@ -180,6 +181,16 @@ private Xvfb display fencing tests off the real desktop, a gate fencing
 a degraded write. The house rule: fences rank above protocols; safety
 must hold when nobody is watching.
 
+## function survey
+
+The j22 journey: a randomized sweep over the end-user-visible
+functions. Each run draws a fresh random sample of at least half the
+sampling universe, shuffles the order, archives the list, and executes
+every item with full logging — CLI commands from the tree under test
+and GUI operations driven through the real window. Repeated runs
+explore different corners of the surface; the sample archive makes any
+single run exactly repeatable.
+
 ## full unit gate
 
 Running the complete unit-tier test gate — every suite, not just the
@@ -252,6 +263,19 @@ implementation. House style now uses the word sparingly in agent
 reports (name the pattern plainly instead), but the developer docs
 still use it freely.
 
+## IQN
+
+iSCSI Qualified Name — the unique permanent name every iSCSI
+participant answers by: each initiator (the compute node logging in)
+carries one from `/etc/iscsi/initiatorname.iscsi`, and each target
+carries one built from the site's `IQN_PREFIX`
+(`iqn.<year>-<month>.<domain>:<label>`). The two-node installer
+derives both from node.conf, and the pool state map records ACL
+initiators by IQN name — which is why a rebuild must re-grant by that
+exact name (the grant dimension, map schema version 2) and why a
+renamed initiator shows up as drift rather than silently losing its
+LUNs. Report phrases: "the initiator IQN," "IQN prefix mismatch."
+
 ## LIO
 
 Linux-I/O target: the Linux kernel's built-in iSCSI target subsystem —
@@ -272,6 +296,33 @@ else editing the target config while repo tooling runs; "LIO portals
 are host-level sockets" — the `0.0.0.0:3260` wildcard binds
 `INADDR_ANY:3260`, and while any TPG rides it, no specific `:3260`
 portal can be created.
+
+## load-bearing
+
+Report adjective for a thing other things silently depend on: remove
+or break it and nothing complains immediately — the failure surfaces
+much later, somewhere else. "Load-bearing comment" (the comment a
+future edit must read to keep a subtle invariant), "load-bearing
+record" (the run-tagged guest records: the invariant that a run dir
+with guest records is a lab that may still exist is exactly what
+`--rerun` sourcing and the orphan fence rely on — the verdict-time
+teardown deletes records only together with their guests), "the
+distinction is load-bearing" (ACL entry: mapped-LUN grants vs TPG
+mappings). Spotting one is a wrap-up finding in itself.
+
+## LUN
+
+Logical Unit Number — a numbered export slot inside an iSCSI target.
+In this project every LUN is a zvol: the storage node serves
+`vm-<vmid>-disk-<n>` zvols through LIO, and the compute node's VMs
+see them as SCSI disks after logging in. Two numbers ride the word:
+the **TPG LUN** (the mapping inside the target — export slot N is
+backstore X) and the **mapped LUN** (the ACL grant — initiator Y may
+see target LUN N as its local LUN M); they differ whenever a grant is
+non-identity (mapped 8 → TPG 0, the case that made the map's grants
+dimension necessary). The safe-save gate compares LUN mappings, not
+backstore counts, precisely because the 2026-10-27 incident passed
+every count gate with 33 backstores defined and only 3 LUNs mapped.
 
 ## mock
 
@@ -304,6 +355,19 @@ helper interoperating on the same locks ("Resolved by Phase 4" in
 `concurrency-collisions.md`). Following the Phase-4 precedent for a
 new shared file means giving it its own lock file on that pattern
 rather than inventing a new scheme.
+
+## pickling
+
+Python's `pickle` serialization, which `multiprocessing` uses to hand
+worker closures and bound methods from the test process to its child
+processes. The word appears in reports almost always in the failure
+"cannot pickle": a worker target defined as a nested closure or a
+bound method serializes fine under the classic **fork** start method
+(children inherit memory; nothing is pickled at all) but not under
+**spawn**/**forkserver** (children are fresh interpreters, so the
+target must pickle). Python 3.14 made forkserver the default, which is
+why several suites now pin the fork start context explicitly — the
+pickling constraint is about the process model, not the test logic.
 
 ## probe
 
@@ -360,6 +424,38 @@ the userland and kernel-module versions, because `zfs receive` runs in
 userland while the effect lands in the kernel module — a split stack
 (one half old, one half new) must clear the bar on both sides. See
 `RECEIVE_FAMILY` in `python/zfs_capabilities.py`.
+
+## response profile
+
+The per-item answer style a function-survey run applies to every prompt
+it meets: **accept** (yes/OK — the mutation really happens, then is
+asserted), **decline** (explicit no), **cancel** (dismiss the dialog or
+cancel the runner), or **invalid** (garbage input that must be refused
+without effect). Profiles are drawn from the seeded random stream and
+stored in the sample archive, so a replay reproduces the same scenario
+choices. The wrap-up reports the distribution as evidence that runs
+exercise varied scenarios instead of one constant safe default.
+
+## sample archive
+
+The JSON file a function-survey run writes (under
+`tests/integrated/survey/archives/` and the run dir): the seed, the
+fraction, the software target, a digest of the universe it was drawn
+from, and the ordered item list with each item's response profile.
+Replaying an archive (`ITF_SURVEY_ARCHIVE=<file>`) reproduces the exact
+run; a universe that has since changed is reported as drift, never
+silently dropped. This is also the repair-verification artifact: the
+same list re-run against a fixed tree proves the fix.
+
+## sampling universe
+
+The complete list of end-user-visible functions a function survey draws
+from: every documented CLI command (minus the two recorded exclusion
+tables) plus the GUI surface of the tree under test — action buttons,
+central-content widget interactions, and multi-widget composites. The
+GUI half is enumerated at run time from the product code, so it can
+never drift from what the user actually sees; the CLI half is a
+manifest whose sync with the docs is enforced by a test.
 
 ## shape
 

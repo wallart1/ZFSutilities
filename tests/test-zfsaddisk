@@ -1,0 +1,122 @@
+#!/usr/bin/bash
+# test-zfsaddisk — Unit tests for bin/zfsaddisk argument validation and
+# the constructed qm command (stubbed transport; the pattern of
+# test-attach-vm-disk: PATH stubs for id/qm, the real script under test,
+# Enter fed on stdin for the confirmation prompt).
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
+STUB_DIR=""
+ADDISK_RC=0
+ADDISK_OUTPUT=""
+
+# run_addisk_stubbed [script args...]
+#
+# Runs the real zfsaddisk with root-id and qm stubs on PATH; Enter is
+# fed on stdin so a run that reaches the confirmation proceeds (the
+# validation-failure runs exit before the prompt and never read it).
+# On return: ADDISK_RC, ADDISK_OUTPUT, and the qm call log at
+# $STUB_DIR/qm.calls (absent when nothing was issued).
+run_addisk_stubbed() {
+    rm -rf "$STUB_DIR"
+    STUB_DIR=$(mktemp -d)
+    ADDISK_RC=0
+
+    cat > "$STUB_DIR/id" << 'EOF'
+#!/usr/bin/bash
+if [[ "$1" == "-u" ]]; then
+    echo 0
+else
+    /usr/bin/id "$@"
+fi
+EOF
+
+    cat > "$STUB_DIR/qm" << EOF
+#!/usr/bin/bash
+echo "\$*" >> "$STUB_DIR/qm.calls"
+exit 0
+EOF
+    chmod +x "$STUB_DIR"/{id,qm}
+
+    ADDISK_OUTPUT=$(printf '\n' | env PATH="$STUB_DIR:$PATH" \
+        bash "$REPO_ROOT/bin/zfsaddisk" "$@" 2>&1) || ADDISK_RC=$?
+}
+
+# ------------------------------------------------------------------
+# Argument validation (fail fast with the script's own FATAL/usage —
+# never a malformed qm command for PVE to reject)
+# ------------------------------------------------------------------
+
+test_no_args_prints_usage() {
+    test_start "no arguments prints usage and exits 1"
+    run_addisk_stubbed
+    assert_rc 1 "$ADDISK_RC"
+    assert_contains "$ADDISK_OUTPUT" "Usage: zfsaddisk"
+    [[ -f "$STUB_DIR/qm.calls" ]] && test_fail "qm must not be invoked" || test_pass
+}
+
+test_empty_vmid_fatals_before_qm() {
+    test_start "empty vmid FATALs before any qm call"
+    run_addisk_stubbed "" 0 tank 8
+    assert_rc 1 "$ADDISK_RC"
+    assert_contains "$ADDISK_OUTPUT" "FATAL: vmid must be a number"
+    [[ -f "$STUB_DIR/qm.calls" ]] && test_fail "qm must not be invoked" || test_pass
+}
+
+test_garbage_vmid_fatals_before_qm() {
+    test_start "garbage vmid FATALs before any qm call"
+    run_addisk_stubbed vm101 0 tank 8
+    assert_rc 1 "$ADDISK_RC"
+    assert_contains "$ADDISK_OUTPUT" "FATAL: vmid must be a number"
+    [[ -f "$STUB_DIR/qm.calls" ]] && test_fail "qm must not be invoked" || test_pass
+}
+
+test_nonnumeric_disk_number_fatals() {
+    test_start "non-numeric disk number FATALs"
+    run_addisk_stubbed 101 five tank 8
+    assert_rc 1 "$ADDISK_RC"
+    assert_contains "$ADDISK_OUTPUT" "FATAL: disk number must be a number"
+    [[ -f "$STUB_DIR/qm.calls" ]] && test_fail "qm must not be invoked" || test_pass
+}
+
+test_empty_storage_name_fatals() {
+    test_start "empty storage name FATALs"
+    run_addisk_stubbed 101 5 "" 8
+    assert_rc 1 "$ADDISK_RC"
+    assert_contains "$ADDISK_OUTPUT" "FATAL: storage name must not be empty"
+    [[ -f "$STUB_DIR/qm.calls" ]] && test_fail "qm must not be invoked" || test_pass
+}
+
+test_nonnumeric_size_fatals() {
+    test_start "non-numeric size FATALs"
+    run_addisk_stubbed 101 5 tank eight
+    assert_rc 1 "$ADDISK_RC"
+    assert_contains "$ADDISK_OUTPUT" "FATAL: size (GiB) must be a number"
+    [[ -f "$STUB_DIR/qm.calls" ]] && test_fail "qm must not be invoked" || test_pass
+}
+
+# ------------------------------------------------------------------
+# The confirmed command
+# ------------------------------------------------------------------
+
+test_valid_args_issue_qm_command() {
+    test_start "valid arguments issue the explicit-slot qm set command"
+    run_addisk_stubbed 101 5 tank 20
+    assert_rc 0 "$ADDISK_RC"
+    assert_contains "$ADDISK_OUTPUT" "Command to be issued: qm set 101 --scsi5 tank:20"
+    assert_contains "$(cat "$STUB_DIR/qm.calls")" "set 101 --scsi5 tank:20"
+}
+
+test_no_args_prints_usage
+test_empty_vmid_fatals_before_qm
+test_garbage_vmid_fatals_before_qm
+test_nonnumeric_disk_number_fatals
+test_empty_storage_name_fatals
+test_nonnumeric_size_fatals
+test_valid_args_issue_qm_command
+
+rm -rf "$STUB_DIR"
+teardown_test_env
+test_summary

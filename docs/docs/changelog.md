@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.139.0
+
+*Released 2026-11-05*
+
+### Added
+
+- **Function survey (ITF journey j22).** A randomized sweep over the
+  end-user-visible functions: every run draws a seeded sample of at
+  least half the sampling universe (every documented CLI command minus
+  the two recorded exclusion tables, plus the GUI surface enumerated
+  at run time from the tree under test — action buttons,
+  central-content widget interactions, multi-widget composites),
+  shuffles the order, archives the list, and executes each item under
+  a drawn response profile (accept / decline / cancel / invalid) so
+  prompts and dialogs exercise varied scenarios. The sample archive
+  makes any run exactly repeatable (`ITF_SURVEY_ARCHIVE=`), `--rerun`
+  reuses the previous run's list, and the software under test can be
+  the working tree or any of the five most recent published releases
+  — a survey of an older release samples that release's real surface,
+  with findings fixed forward in the dev tree and verified by
+  replaying the same archive. GUI items run the real window under a
+  private in-guest Xvfb; CLI items run from the staged tree against
+  survey-owned scratch state.
+- **ITF guest lifecycle: verdict-time teardown and the sweep.** A
+  green journey verdict now destroys the run's own guests and removes
+  their records — finished labs no longer accumulate on the base
+  hosts. Ownership is name-verified against each base's own `qm list`
+  (the orphan fence's law: a live VMID carrying a different name is
+  another run's guest and is never touched); a red verdict always
+  keeps the lab for post-mortem and `--rerun`, `--keep`
+  (or `ITF_KEEP_GUESTS=1`) retains a green lab for the rerun loop,
+  and `itf guest sweep [--apply] [--force] [--age H]` settles the
+  backlog (plan-only until `--apply`, serialized against live
+  journeys by the machine-global run lock).
+- **Same-IP staging collision convergence (j05).** The compute
+  template's static management address can be DHCP-leased to the
+  storage clone while the compute clone is still booting; j05's
+  hostname gate now detects the collision and converges through one
+  bounded storage-side re-lease (guest-agent bounce, a different
+  address required, guest record rewritten) instead of failing the
+  staging.
+
+### Fixed
+
+- **`zfsaddisk` validates its arguments.** A missing or non-numeric
+  VM ID, disk number, or size — or an empty storage name — now exits
+  with the script's own fatal message (or the usage screen) before
+  any `qm` command is constructed, instead of handing Proxmox a
+  malformed `qm set` that fails with a 400 (found live by the j22
+  release survey). The script also runs under `set -euo pipefail`.
+- **j06/j07/j14 read the four-field guest records.** The journeys'
+  coordinate reads consumed three fields, so the record's guest-name
+  field bled into the IP and killed the first ssh — the same record
+  format change j15 was fixed for.
+- **Template-build leftover clean sees run-tagged build VMs.** The
+  pre-build scan for an interrupted build's leftover VM matched a bare
+  name that has not existed since guests got run-tagged names; it now
+  matches the run-tagged prefix and destroys through the standard
+  guest-destroy transport.
+- **CI on Python 3.14.** The multiprocessing suites pin the fork
+  start context (3.14's forkserver default cannot pickle their
+  worker closures), the schedule viewport test imports under a fresh
+  `mock_gtk` like the other viewport tests, and `list_profiles` is
+  patched on the freshly imported schedule module so the real profile
+  reader cannot run on the non-root CI runner.
+
 ## 0.138.0
 
 *Released 2026-11-03*

@@ -1,0 +1,141 @@
+# universe.tsv — the CLI sampling universe for the j22 function survey.
+#
+# One row per end-user-visible CLI command.  The universe is the documented
+# user-command surface: the union of the entries documented in
+# docs/docs/commands-and-modules/commands.md and
+# docs/docs/commands-and-modules/two-node.md, minus the exclusion tables
+# below.  tests/python/test_survey_sample.py enforces the sync in BOTH
+# directions (a documented command missing here, or a row naming something
+# undocumented/absent from bin/, fails the suite) — additions to either
+# exclusion table are deliberate, recorded decisions, never silent.
+#
+# Columns (TAB-separated):
+#   id        stable sampling id: cli-<command>
+#   command   bin/ script name (invoked from the tree under test)
+#   lab       minimum lab shape: single | two (two-node items force the
+#             j05 lab; single items run in either lab shape)
+#   node      guest the item runs on: storage | compute
+#   depth     recipe depth, disclosed per item in the run report:
+#             deep      full user flow against survey-owned scratch state
+#             argcheck  the argument-validation / graceful-refusal surface
+#                       (wrong or missing identifiers, usage, FATAL paths)
+#             bespoke   hand-written recipe in survey-lib.sh
+#             (survey_recipe_<command> overrides the table when present)
+#   invoke    command string with {PLACEHOLDER} tokens resolved by the
+#             runner (see survey-lib.sh itf_survey_resolve_vars); a "-"
+#             means the bespoke recipe owns the whole invocation
+#   profiles  comma list of response profiles that apply (the item's
+#             archived profile picks the feed/rc row), or "-" when the
+#             command has no prompts
+#   rcs       profile=expected-rc pairs ";;"-separated (rc "*" = any)
+#   feeds     profile=stdin pairs ";;"-separated, \n escapes, "-" = empty
+#   assert    extended regex the combined output must match, or "-"
+#
+# Placeholders (created by itf_survey_stage_playground):
+#   {RID}   per-run id       {POOL} zfstest1    {POOL2} zfstest2
+#   {POOL3} zfstest3         {DS}  scratch fs with data (zfstest1/survey-{RID})
+#   {DS2}   empty receive target (zfstest2/survey-{RID})
+#   {SNAP}  {DS}@survey-{RID}
+#   {SUB}   zfstest1/survey  {VOL} scratch zvol {STREAM} send-stream file
+#   {WORK}  /root/survey-{RID} guest work dir
+#   {VMID}  101 (the j05 lab VM)  {VDISK} 9 (the survey scratch disk slot)
+#
+# ---------------------------------------------------------------------------
+# EXCLUDED from the universe.  Every excluded DOCUMENTED command is listed
+# below, one per line with its reason class — the drift test parses these
+# lines, so the tables stay honest.  (Undocumented internal helpers need
+# no row: only the documented surface is accounted for here.)
+#
+# misc — declared not worth testing (user decision 2026-10-26, the closed
+#        list; viewer/reporter, acting-helper, sourced-helper, dev tools):
+#   misc: zfsstatus
+#   misc: zfsallthepools
+#   misc: zfsshowholds
+#   misc: zfsshowzpooldevices
+#   misc: zfsshowtuneables
+#   misc: zfswatcharc
+#   misc: zfsgetsnapage
+#   misc: zfsgetashift
+#   misc: zfsgetsendsize
+#   misc: zfsmountsnapshot
+#   misc: zfsrecurse
+#   misc: zfsoffsiteretain
+#   misc: zfssetarcsize
+#   misc: zfssendrepo
+#   misc: git-release
+#   misc: unroot
+# lifecycle — product lifecycle/dev commands (user decision 2026-11-04;
+#        dedicated journeys own them: j01-j03 j05 j08-j10 j12 j19):
+#   lifecycle: install-single-node
+#   lifecycle: install-two-node
+#   lifecycle: upgrade-zfsutilities
+#   lifecycle: switch-version
+#   lifecycle: deploy-version
+#   lifecycle: uninstall-version
+#   lifecycle: uninstall-some-versions
+#   lifecycle: uninstall-zfsutilities
+#   lifecycle: run-tests
+#   lifecycle: cleanup-zfsutilities-legacy
+# ---------------------------------------------------------------------------
+
+id	command	lab	node	depth	invoke	profiles	rcs	feeds	assert
+cli-check-prerequisites	check-prerequisites	single	storage	deep	./bin/check-prerequisites --single-node	-	-	-	-
+cli-startdocserver	startdocserver	single	storage	bespoke	-	-	-	-	-
+cli-watchall	watchall	single	storage	bespoke	-	-	-	-	-
+cli-watchit	watchit	single	storage	bespoke	-	-	-	-	-
+cli-zfscleanup	zfscleanup	single	storage	argcheck	zfscleanup	accept,decline	accept=*;;decline=*	accept=\n;;decline=\n	INFO|FATAL
+cli-zfsdailybackup	zfsdailybackup	single	storage	deep	zfsdailybackup	accept	accept=0	accept=\n	FATAL|ERROR|INFO
+cli-zfsdelallsnaps	zfsdelallsnaps	single	storage	deep	zfsdelallsnaps {DS} survey recursive	accept,decline	accept=0;;decline=0	accept=y\n;;decline=n\n	INFO
+cli-zfsdelfs	zfsdelfs	single	storage	deep	zfsdelfs {DS2}	accept,decline	accept=0;;decline=1	accept=y\n;;decline=n\n	INFO|FATAL
+cli-zfsdelholds	zfsdelholds	single	storage	deep	zfsdelholds {DS} survey	accept	accept=0	accept=\n	-
+cli-zfsholds	zfsholds	single	storage	deep	zfsholds {DS}	-	-	-	INFO
+cli-zfslistkeys	zfslistkeys	single	storage	deep	zfslistkeys	-	-	-	Keys for pool
+cli-zfslockctl	zfslockctl	single	storage	deep	zfslockctl list	-	-	-	-
+cli-zfsmassdelsnaps	zfsmassdelsnaps	single	storage	deep	zfsmassdelsnaps	accept,decline	accept=0;;decline=0	accept=y\n;;decline=n\n	INFO|FATAL
+cli-zfsmount	zfsmount	single	storage	deep	zfsmount mount {DS}	accept	accept=0	accept=\n	INFO|FATAL
+cli-zfsreadthru	zfsreadthru	single	storage	deep	zfsreadthru {DS}	-	-	-	INFO|FATAL
+cli-zfsreapplyholds	zfsreapplyholds	single	storage	deep	zfsreapplyholds --capture {DS} {WORK}/holds.tsv	-	-	-	-
+cli-zfsreplayprops	zfsreplayprops	single	storage	bespoke	-	-	-	-	-
+cli-zfsrestore	zfsrestore	single	storage	bespoke	-	-	-	-	-
+cli-zfsrestoresendstream	zfsrestoresendstream	single	storage	bespoke	-	-	-	-	-
+cli-zfsresume	zfsresume	single	storage	argcheck	zfsresume	invalid	invalid=8	invalid=-	FATAL: A resumable destination dataset
+cli-zfsscruball	zfsscruball	single	storage	deep	zfsscruball pause	-	-	-	-
+cli-zfssend	zfssend	single	storage	bespoke	-	-	-	-	-
+cli-zfssendoffsite	zfssendoffsite	single	storage	deep	zfssendoffsite	accept,decline	accept=0;;decline=0	accept=\n;;decline=\n	INFO|FATAL
+cli-zfsshowbigstuff	zfsshowbigstuff	single	storage	deep	zfsshowbigstuff {DS} largest 5	-	-	-	-
+cli-zfsunmount	zfsunmount	single	storage	deep	zfsunmount {DS}	-	-	-	-
+cli-zfswipe	zfswipe	single	storage	argcheck	zfswipe	invalid	invalid=8	invalid=-	FATAL
+cli-zfs-migrate-send	zfs-migrate-send	single	storage	argcheck	zfs-migrate-send	-	-	-	FATAL|Usage|INFO
+cli-archive-vm	archive-vm	two	compute	argcheck	archive-vm 999	invalid	invalid=1	invalid=-	FATAL
+cli-attach-vm-disk	attach-vm-disk	two	compute	argcheck	attach-vm-disk	invalid	invalid=1	invalid=-	FATAL: This script requires Proxmox VE|FATAL|Usage
+cli-check-vm-disk-paths	check-vm-disk-paths	two	compute	deep	check-vm-disk-paths	-	-	-	INFO|PASS|OK
+cli-clone-vm	clone-vm	two	compute	bespoke	-	-	-	-	-
+cli-detach-vm-disk	detach-vm-disk	two	compute	argcheck	detach-vm-disk	invalid	invalid=1	invalid=-	FATAL: This script requires Proxmox VE|FATAL|Usage
+cli-enroll-efi-keys-vm	enroll-efi-keys-vm	two	compute	argcheck	enroll-efi-keys-vm 999	invalid	invalid=1	invalid=-	FATAL
+cli-enroll-iscsi-pool	enroll-iscsi-pool	two	storage	deep	enroll-iscsi-pool --dry-run {POOL}	-	-	-	INFO|Usage
+cli-enroll-proxmox-pool	enroll-proxmox-pool	two	storage	deep	enroll-proxmox-pool --dry-run {POOL} surveypve	-	-	-	INFO|Usage
+cli-ensure-restored-vm-iscsi	ensure-restored-vm-iscsi	two	storage	argcheck	ensure-restored-vm-iscsi	invalid	invalid=1	invalid=-	Usage
+cli-export-iscsi-state	export-iscsi-state	two	storage	deep	export-iscsi-state --check	-	-	-	INFO|DRIFT|OK
+cli-iscsi-add-encrypted-luns	iscsi-add-encrypted-luns	two	storage	deep	iscsi-add-encrypted-luns	-	-	-	-
+cli-iscsi-recover-encrypted-luns	iscsi-recover-encrypted-luns	two	storage	deep	iscsi-recover-encrypted-luns	-	-	-	INFO|FATAL|Usage
+cli-iscsi-restore-luns	iscsi-restore-luns	two	storage	deep	iscsi-restore-luns	-	-	-	INFO|FATAL|Usage
+cli-list-vm-disks	list-vm-disks	two	compute	deep	list-vm-disks	-	-	-	INFO|zvol|LUN
+cli-move-vm-disk	move-vm-disk	two	compute	argcheck	move-vm-disk	invalid	invalid=1	invalid=-	FATAL: This script requires Proxmox VE|FATAL|Usage
+cli-new-vm-disk	new-vm-disk	two	compute	bespoke	-	-	-	-	-
+cli-reconcile-iscsi-state	reconcile-iscsi-state	two	storage	deep	reconcile-iscsi-state --dry-run	-	-	-	INFO|DRIFT|OK
+cli-remove-vm	remove-vm	two	compute	argcheck	remove-vm 999	invalid	invalid=*	invalid=-	INFO|FATAL
+cli-remove-vm-disk	remove-vm-disk	two	compute	bespoke	-	-	-	-	-
+cli-rename-vm-disk	rename-vm-disk	two	compute	argcheck	rename-vm-disk	invalid	invalid=1	invalid=-	FATAL: This script requires Proxmox VE|FATAL|Usage
+cli-repair-iscsi-luns	repair-iscsi-luns	two	storage	deep	repair-iscsi-luns --dry-run	-	-	-	INFO|DRIFT|OK
+cli-repair-vm-disk-refs	repair-vm-disk-refs	two	compute	deep	repair-vm-disk-refs --dry-run	-	-	-	INFO|DRIFT|OK
+cli-repair-vm-disk-sizes	repair-vm-disk-sizes	two	compute	deep	repair-vm-disk-sizes --dry-run	-	-	-	INFO|DRIFT|OK
+cli-rescan-storage	rescan-storage	two	compute	deep	rescan-storage	-	-	-	INFO
+cli-resize-vm-disk	resize-vm-disk	two	compute	argcheck	resize-vm-disk	invalid	invalid=1	invalid=-	FATAL: This script requires Proxmox VE|FATAL|Usage
+cli-restart-iscsi-services	restart-iscsi-services	two	storage	deep	restart-iscsi-services	decline	decline=0	decline=n\n	INFO|FATAL
+cli-safe-iscsi-save	safe-iscsi-save	two	storage	deep	safe-iscsi-save	-	-	-	INFO|Saved|saveconfig
+cli-setup-iscsi-targets	setup-iscsi-targets	two	storage	deep	setup-iscsi-targets	-	-	-	INFO
+cli-sever-vm-clone	sever-vm-clone	two	compute	argcheck	sever-vm-clone	invalid	invalid=1	invalid=-	FATAL: This script requires Proxmox VE|FATAL|Usage
+cli-show-lun-map	show-lun-map	two	compute	deep	show-lun-map	-	-	-	INFO|LUN
+cli-unarchive-vm	unarchive-vm	two	compute	argcheck	unarchive-vm	invalid	invalid=1	invalid=-	FATAL|Usage
+cli-zfsaddisk	zfsaddisk	two	compute	argcheck	zfsaddisk	invalid	invalid=*	invalid=999\n	400|unable to parse|FATAL
+cli-zfsclone-vm	zfsclone-vm	two	compute	argcheck	zfsclone-vm	invalid	invalid=1	invalid=-	FATAL: This script requires Proxmox VE|FATAL|Usage

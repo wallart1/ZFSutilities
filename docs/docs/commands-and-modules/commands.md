@@ -1088,6 +1088,11 @@ sudo zfsaddisk <vmid> <disk-number> <storage-name> <size-GiB>
 **Prerequisites:** Proxmox VE must be installed (`qm` command present). On a
 non-Proxmox host the script exits with a fatal message.
 
+All four arguments are validated before anything is constructed: a wrong
+argument count prints the usage screen, and a missing or non-numeric VM ID,
+disk number, or size — or an empty storage name — exits with the script's
+own fatal message instead of handing a malformed `qm set` to Proxmox.
+
 Prompts for confirmation before issuing the `qm set` command.
 
 **Called modules:** none.

@@ -444,10 +444,15 @@ itf_template_build() {
         fi
     fi
 
-    # A leftover <template>-build VM marks an interrupted build attempt.
+    # A leftover build VM marks an interrupted build attempt. Build VMs
+    # carry run-tagged names (<template>-build-YYYYMMDD-HHMMSS — see
+    # itf_guest_qname), so match the PREFIX: a bare name equality has
+    # not matched a current leftover since the name-based fence landed.
+    # The build itself holds the machine-global run lock, so no live
+    # build can be racing this scan.
     local leftover_vmid
     leftover_vmid="$(itf_qm "$base" list 2>/dev/null \
-        | awk -v n="$build_name" '$2 == n {print $1; exit}')"
+        | awk -v n="$build_name" '$2 ~ "^"n"-" {print $1; exit}')"
     if [[ -n "$leftover_vmid" ]]; then
         itf_step info "template: leftover build VM removed" "vmid $leftover_vmid"
         itf_guest_destroy "$base" "$leftover_vmid" > /dev/null 2>&1 || true

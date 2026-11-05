@@ -72,12 +72,15 @@ J15_LUN_POOL_B="vm-202-disk-1"
 J15_LUN_S5="vm-303-disk-0"
 
 # Re-read both role guests' coordinates (a reboot may re-lease the
-# storage address and rewrite its record).
+# storage address and rewrite its record).  Records carry a 4th field
+# (the live qm guest name) since the name-based orphan fence; consume it
+# so it cannot bleed into the IP — bash read puts the rest of the line
+# into the last variable.
 j15_read_coords() {
     # shellcheck disable=SC2034  # consumed by the journey's scenario code
-    read -r s_base s_vmid s_ip < "$ITF_RUN_DIR/guest-storage.txt" || return 1
+    read -r s_base s_vmid s_ip s_name < "$ITF_RUN_DIR/guest-storage.txt" || return 1
     # shellcheck disable=SC2034
-    read -r c_base c_vmid c_ip < "$ITF_RUN_DIR/guest-compute.txt" || return 1
+    read -r c_base c_vmid c_ip c_name < "$ITF_RUN_DIR/guest-compute.txt" || return 1
     return 0
 }
 

@@ -476,7 +476,8 @@ shellcheck -S warning \
     $(find bin -maxdepth 1 -type f ! -name watchall) \
     lib/*.sh tests/test-* tests/integration/* \
     tests/integrated/itf tests/integrated/lib/*.sh \
-    tests/integrated/journeys/*.journey share/dev/*
+    tests/integrated/journeys/*.journey \
+    tests/integrated/journeys/survey-lib.sh share/dev/*
 ```
 
 When a warning cannot be avoided without changing behavior (for example, a
