@@ -1,238 +1,700 @@
 #!/usr/bin/bash
+# shellcheck disable=SC2034
 # zfs-diagnose-busy
-# Diagnose why a ZFS dataset or snapshot is busy / cannot be destroyed.
+# Diagnose — and, when a human can answer, resolve — a "dataset is busy"
+# refusal from zfs destroy.
 #
-# Source this file (do not execute directly) and call:
+# Source this file (do not execute directly) and call one of:
 #   diagnose_dataset_busy <dataset_or_snapshot> [stderr_from_destroy]
+#     Report-only: prints who holds the target. Never acts, never prompts.
+#   busy_resolve_dataset_busy <dataset_or_snapshot> [stderr_from_destroy]
+#     The same evidence plus a guided remedy when a human can answer
+#     (a terminal, or the GUI's numbered input-hold panel). Unattended
+#     callers (cron, batch ssh) automatically get the report instead.
+#     Returns: 0 = resolved, retry the destroy once
+#              1 = not resolved / declined / remedy completed differently
+#              2 = report-only (no human reachable; findings printed)
 #
-# Checks performed:
-#   - Clone dependents (snapshots)
-#   - ZFS holds (snapshots)
-#   - Mounted / open files
-#   - Active send / receive
-#   - Bookmarks referencing the snapshot
-#   - iSCSI LUN exposure (zvols)
-#   - Running VM using the zvol
-#   - NFS / SMB shares
+# Holders are found from authoritative sources, never from dataset names:
+# a zvol's VM attachment is the VM config's target+LUN reference resolved
+# through the live LUN map to the backstore's device — the name
+# (vm-<id>-disk-<n>) is only a birth label. Set busyassist=N to force
+# report-only. BUSY_CONFIGFS_ROOT overrides the configfs root for the
+# targetcli-less backstore scan (tests).
 #
 # Sourced library (clone-vm, sever-vm-clone, zfsdelfs, zfsdelsnap) —
 # carries no set line on purpose: strictness belongs to the callers.
-# Every function is written to tolerate set -euo pipefail callers.
+# Every function is written to tolerate set -euo pipefail callers and
+# never calls exit.
 
-# Return 0 if $1 is exactly vm-<vmid>-disk-<n> with numeric vmid and disk
-# number. Implemented with a glob shape test plus fixed-string digit checks
-# on the numeric parts (no regex literals).
-is_vm_disk_basename() {
-    local _s="$1"
-    [[ "$_s" == vm-*-disk-* ]] || return 1
-    local _mid="${_s#vm-}"; _mid="${_mid%%-disk-*}"
-    local _end="${_s##*-disk-}"
-    [[ -n "$_mid" && "$_mid" != *[!0-9]* && -n "$_end" && "$_end" != *[!0-9]* \
-        && "${_s#*-disk-}" != *-disk-* ]]
+# ------------------------------------------------------------------
+# Evidence state (all fields reset by busy_state_reset; declare -g per the
+# sourced-library law, with =() initializers so set -u callers survive
+# length checks on empty arrays).
+# ------------------------------------------------------------------
+busy_state_reset() {
+    declare -ga busy_tags=()          # hold tags on the target (snapshots)
+    declare -gA busy_tag_kind=()      # tag -> "hold" | "leftover" (.send-*)
+    declare -g  busy_recv_token=""    # receive_resume_token value, "" if none
+    declare -ga busy_transfer_lines=()  # pgrep lines of matching zfs send/recv
+    declare -ga busy_snap_mounts=()   # "mountpoint|source" automounted snaps
+    declare -ga busy_ns_mounts=()     # "pid|mountpoint" other-namespace mounts
+    declare -g  busy_mountpoint=""    # mountpoint when mounted in this namespace
+    declare -g  busy_userspace=""     # " pid:comm" holders under the mount
+    declare -g  busy_export_bs=""     # backstore name exporting the zvol
+    declare -g  busy_export_dev=""    # its /dev/zvol device
+    declare -g  busy_export_target="" # full target IQN
+    declare -g  busy_export_lun=""    # LUN index on that target
+    declare -ga busy_vm_refs=()       # "vmid|vmname|diskkey" referencing VMs
+    declare -g  busy_any=false        # any holder evidence collected
 }
 
-function diagnose_dataset_busy {
+# ------------------------------------------------------------------
+# Probes — each is failure-tolerant, records into the state, and the
+# wrapper functions (busy_findmnt_zfs, busy_proc_mounts_files,
+# busy_backstore_devs, busy_lio_targets) exist so tests can stub the
+# kernel-facing reads.
+# ------------------------------------------------------------------
+
+# In-flight or interrupted receive state + matching zfs send/recv processes.
+busy_probe_transfers() {
+    local target="$1" line
+    busy_recv_token=$(zfs get -H -o value receive_resume_token "$target" \
+        2>/dev/null || true)
+    if [[ -z "$busy_recv_token" || "$busy_recv_token" == "-" ]]; then
+        busy_recv_token=""
+    else
+        busy_any=true
+    fi
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        case "$line" in
+            *"$target"*) busy_transfer_lines+=("$line") ;;
+        esac
+    done <<< "$(pgrep -af 'zfs (send|recv|receive)' 2>/dev/null || true)"
+    if [[ ${#busy_transfer_lines[@]} -gt 0 ]]; then
+        busy_any=true
+    fi
+    return 0
+}
+
+# Mounted in THIS namespace: mountpoint + the processes holding files open
+# (with PIDs — an operator needs them to act).
+busy_probe_mount() {
+    local target="$1" mounted out pid comm
+    mounted=$(zfs get -H -o value mounted "$target" 2>/dev/null || true)
+    [[ "$mounted" == "yes" ]] || return 0
+    busy_mountpoint=$(zfs get -H -o value mountpoint "$target" 2>/dev/null || true)
+    [[ "$busy_mountpoint" == /* ]] || { busy_mountpoint=""; return 0; }
+    busy_any=true
+    command -v fuser >/dev/null 2>&1 || return 0
+    out=$(fuser -m "$busy_mountpoint" 2>&1 || true)
+    out="${out##*:}"
+    for pid in $out; do
+        [[ "$pid" =~ ^[0-9]+$ ]] || continue
+        comm=$(ps -p "$pid" -o comm= 2>/dev/null || true)
+        busy_userspace+=" ${pid}:${comm:-unknown}"
+    done
+    return 0
+}
+
+# Mounted in ANOTHER mount namespace (docker/lxc) — invisible to fuser in
+# this namespace. Skips this namespace's own view (busy_mountpoint) so a
+# normally-mounted dataset does not list every process on the host.
+busy_proc_mounts_files() {
+    ls /proc/[0-9]*/mounts 2>/dev/null || true
+}
+
+busy_probe_ns_mounts() {
+    local target="$1" _bns_file _bns_pid _bns_mnt
+    while IFS= read -r _bns_file; do
+        [[ -n "$_bns_file" ]] || continue
+        _bns_mnt=$(awk -v ds="$target" '$1 == ds {print $2; exit}' \
+            "$_bns_file" 2>/dev/null)
+        [[ -n "$_bns_mnt" ]] || continue
+        [[ "$_bns_mnt" == "$busy_mountpoint" ]] && continue
+        _bns_pid="${_bns_file#/proc/}"
+        _bns_pid="${_bns_pid%/mounts}"
+        busy_ns_mounts+=("${_bns_pid}|${_bns_mnt}")
+        busy_any=true
+    done < <(busy_proc_mounts_files)
+    return 0
+}
+
+# Automounted snapshots: browsing .zfs/snapshot/<snap> leaves a real mount
+# of the snapshot that holds it busy (lsof and zfs holds show nothing).
+busy_findmnt_zfs() {
+    findmnt -rn -o TARGET,SOURCE -t zfs 2>/dev/null || true
+}
+
+busy_probe_snap_mounts() {
+    local target="$1" _bsm_mnt _bsm_src
+    while IFS=' ' read -r _bsm_mnt _bsm_src; do
+        [[ -n "$_bsm_src" ]] || continue
+        if [[ "$target" == *"@"* ]]; then
+            # The snapshot itself is the automounted source.
+            [[ "$_bsm_src" == "$target" ]] || continue
+        else
+            # A snapshot of this dataset automounts under its .zfs dir.
+            [[ "$_bsm_src" == "$target"@* ]] || continue
+        fi
+        busy_snap_mounts+=("${_bsm_mnt}|${_bsm_src}")
+        busy_any=true
+    done < <(busy_findmnt_zfs)
+    return 0
+}
+
+# Hold tags on a snapshot. ".send-*" tags are leftovers of a cancelled
+# transfer; everything else is a deliberate hold (backup rules included).
+busy_probe_holds() {
+    local target="$1" tags tag
+    [[ "$target" == *"@"* ]] || return 0
+    tags=$(zfs holds -H "$target" 2>/dev/null | awk '{print $2}' | sort -u) \
+        || tags=""
+    while IFS= read -r tag; do
+        [[ -n "$tag" ]] || continue
+        busy_tags+=("$tag")
+        case "$tag" in
+            .send-*) busy_tag_kind["$tag"]="leftover" ;;
+            *)       busy_tag_kind["$tag"]="hold" ;;
+        esac
+        busy_any=true
+    done <<< "$tags"
+    return 0
+}
+
+# All LIO iSCSI target IQNs on this host.
+busy_lio_targets() {
+    targetcli /iscsi ls 2>/dev/null | while IFS= read -r _t_line; do
+        read -ra _t_words <<< "$_t_line"
+        for _t in "${_t_words[@]}"; do
+            case "$_t" in iqn.*) printf '%s\n' "$_t" ;; esac
+        done
+    done
+}
+
+# Backstore-name + device pairs for EVERY block backstore (no vm-name
+# filter — the name is a birth label, the device is the truth). targetcli
+# listing when available; the kernel's configfs tree otherwise.
+busy_backstore_devs() {
+    local cfgroot="${BUSY_CONFIGFS_ROOT:-/sys/kernel/config}" d name udev
+    if command -v targetcli >/dev/null 2>&1; then
+        targetcli /backstores/block ls 2>/dev/null \
+            | while IFS= read -r _b_line; do
+                # Leaf lines: "  o- <name> .......... [/dev/<dev> (...)]".
+                case "$_b_line" in
+                    *"o-"*" [/dev/"*) ;;
+                    *) continue ;;
+                esac
+                _b_name="${_b_line#*o- }"
+                _b_name="${_b_name%%[[:space:]]*}"
+                _b_dev="${_b_line#*" [/dev/"}"
+                _b_dev="/dev/${_b_dev%%[[:space:]]*}"
+                [[ -n "$_b_name" && "$_b_dev" == "/dev/"*/* ]] || continue
+                printf '%s %s\n' "$_b_name" "$_b_dev"
+            done
+        return 0
+    fi
+    for d in "$cfgroot"/target/core/block_*/; do
+        [[ -d "$d" ]] || continue
+        udev=$(cat "${d}udev_path" 2>/dev/null) || continue
+        name="${d%/*}"
+        name="${name##*block_}"
+        [[ "$udev" == /* ]] || continue
+        printf '%s %s\n' "$name" "$udev"
+    done
+    return 0
+}
+
+# The LIO export holding this zvol open, found by DEVICE (the kernel holds
+# the block device open for as long as the backstore exists — lsof shows
+# nothing). Snapshots are not probed: their busy causes are holds and
+# automounts.
+busy_probe_lio_export() {
+    local dataset="$1" dev
+    dev="/dev/zvol/$dataset"
+    local bs found_dev="" lun_line lun
+    [[ "$dataset" != *"@"* ]] || return 0
+    while IFS=' ' read -r bs found_dev; do
+        [[ -n "$bs" && -n "$found_dev" ]] || continue
+        if [[ "$found_dev" == "$dev" ]]; then
+            busy_export_bs="$bs"
+            busy_export_dev="$dev"
+            busy_any=true
+            break
+        fi
+    done < <(busy_backstore_devs)
+    [[ -n "$busy_export_bs" ]] || return 0
+    while IFS= read -r bs; do
+        [[ -n "$bs" ]] || continue
+        lun_line=$(targetcli "/iscsi/${bs}/tpg1/luns" ls 2>/dev/null \
+            | grep -F -- "block/${busy_export_bs} ") || lun_line=""
+        [[ -n "$lun_line" ]] || continue
+        lun="${lun_line#*lun}"
+        lun="${lun%%[!0-9]*}"
+        [[ "$lun" =~ ^[0-9]+$ ]] || continue
+        busy_export_target="$bs"
+        busy_export_lun="$lun"
+        return 0
+    done < <(busy_lio_targets)
+    return 0
+}
+
+# VMs referencing the found export: list-vm-disks --gather-vm-info records
+# (VM|targetshort:lun|vmid|name|key) from the compute host — the same
+# authoritative gather the iSCSI detection helpers use. Fixture file
+# override: ISCSI_DETECT_VM_REFS_FILE.
+busy_probe_vm_refs() {
+    local target_iqn="$1" lun="$2"
+    local short="${target_iqn##*:}"
+    local vmdata="" rec f_disk vmid vname vkey
+    [[ -n "$target_iqn" ]] || return 0
+    if [[ -n "${ISCSI_DETECT_VM_REFS_FILE:-}" && -f "$ISCSI_DETECT_VM_REFS_FILE" ]]
+    then
+        vmdata=$(cat "$ISCSI_DETECT_VM_REFS_FILE" 2>/dev/null) || vmdata=""
+    elif declare -f iscsi_detect_vm_gather >/dev/null 2>&1 \
+            && [[ -n "${compute_host:-}" ]]; then
+        vmdata=$(iscsi_detect_vm_gather) || vmdata=""
+    fi
+    [[ -n "$vmdata" ]] || return 0
+    while IFS='|' read -ra rec; do
+        [[ "${rec[0]:-}" == "VM" ]] || continue
+        f_disk="${rec[1]:-}"
+        [[ "$f_disk" == "${short}:${lun}" ]] || continue
+        vmid="${rec[2]:-}"
+        vname="${rec[3]:-}"
+        vkey="${rec[4]:-}"
+        [[ "$vmid" =~ ^[0-9]+$ ]] || continue
+        busy_vm_refs+=("${vmid}|${vname:-unknown}|${vkey:-unknown}")
+    done <<< "$vmdata"
+    return 0
+}
+
+# VM run state: 0=stopped 1=running 2=unknown (iscsi-lib's two-node-aware
+# check when present, local qm otherwise).
+busy_vm_running() {
+    local vmid="$1" st
+    if declare -f iscsi_check_vm_running >/dev/null 2>&1; then
+        iscsi_check_vm_running "$vmid"
+        return $?
+    fi
+    command -v qm >/dev/null 2>&1 || return 2
+    st=$(qm status "$vmid" 2>/dev/null) || st=""
+    [[ -z "$st" ]] && return 2
+    [[ "$st" == *"status: running"* ]] && return 1
+    return 0
+}
+
+busy_find_holders() {
     local target="$1"
-    local destroy_stderr="${2:-}"
-    local found_cause=false
+    busy_state_reset
+    busy_probe_transfers "$target"
+    busy_probe_mount "$target"       # first: its result filters ns mounts
+    busy_probe_ns_mounts "$target"
+    busy_probe_snap_mounts "$target"
+    busy_probe_holds "$target"
+    busy_probe_lio_export "$target"
+    busy_probe_vm_refs "$busy_export_target" "$busy_export_lun"
+    return 0
+}
 
-    # Log the raw stderr from the failed destroy if provided
-    if [[ -n "$destroy_stderr" ]]; then
-        log_msg "WARN: ZFS reported: ${destroy_stderr}"
-    fi
+# ------------------------------------------------------------------
+# Report (shared by both entry points)
+# ------------------------------------------------------------------
 
-    log_msg "WARN: Diagnosing why ${target} cannot be destroyed..."
-
-    # ------------------------------------------------------------------
-    # Determine if target is a snapshot
-    # ------------------------------------------------------------------
-    local is_snapshot=false
+# Clone dependents block destruction too (with their own zfs error text,
+# not "dataset is busy"), and the old report called them out — keep that.
+_busy_report_clone_notes() {
+    local target="$1" clones
     if [[ "$target" == *"@"* ]]; then
-        is_snapshot=true
-    fi
-
-    # ------------------------------------------------------------------
-    # 1. Clone dependents
-    # ------------------------------------------------------------------
-    if [[ "$is_snapshot" == true ]]; then
-        local clones
         clones=$(zfs list -H -o clones "$target" 2>/dev/null || true)
         if [[ -n "$clones" && "$clones" != "-" ]]; then
             log_msg "WARN:   → Snapshot has clone dependents: ${clones}"
             log_msg "WARN:     Use 'sever-vm-clone' to sever the dependencies first."
-            found_cause=true
         fi
     else
-        # Dataset: check if any snapshot in its tree has clones
-        local clone_snaps
-        clone_snaps=$(zfs list -H -t snapshot -o clones -r "$target" 2>/dev/null \
+        clones=$(zfs list -H -t snapshot -o clones -r "$target" 2>/dev/null \
             | grep -v '^-$' || true)
-        if [[ -n "$clone_snaps" ]]; then
-            log_msg "WARN:   → One or more snapshots of ${target} have clone dependents."
+        if [[ -n "$clones" ]]; then
+            log_msg "WARN:   → One or more snapshots of ${target} have clone" \
+                "dependents."
             log_msg "WARN:     Use 'sever-vm-clone' to sever the dependencies first."
-            found_cause=true
         fi
     fi
+    return 0
+}
 
-    # ------------------------------------------------------------------
-    # 2. ZFS holds
-    # ------------------------------------------------------------------
-    if [[ "$is_snapshot" == true ]]; then
-        local holds
-        holds=$(zfs holds -H "$target" 2>/dev/null || true)
-        if [[ -n "$holds" ]]; then
-            local hold_tags
-            hold_tags=$(echo "$holds" | awk '{print $2}' | sort -u | tr '\n' ' ')
-            log_msg "WARN:   → Snapshot has holds: ${hold_tags}"
-            log_msg "WARN:     Use 'releaseholds' option or 'zfs release <tag> ${target}'."
-            found_cause=true
-        fi
-    fi
-
-    # ------------------------------------------------------------------
-    # 3. Mounted / open files
-    # ------------------------------------------------------------------
-    local mounted
-    mounted=$(zfs get -H -o value mounted "$target" 2>/dev/null || true)
-    if [[ "$mounted" == "yes" ]]; then
-        local mountpoint
-        mountpoint=$(zfs get -H -o value mountpoint "$target" 2>/dev/null || true)
-        log_msg "WARN:   → Dataset is mounted at ${mountpoint}."
-
-        local procs=""
-        if command -v fuser >/dev/null 2>&1; then
-            procs=$(fuser -m "$mountpoint" 2>/dev/null \
-                | sed 's/.*://' \
-                | tr -s ' ' '\n' \
-                | while read -r pid; do
-                [[ -n "$pid" ]] || continue
-                ps -p "$pid" -o comm= 2>/dev/null
-            done | sort -u | tr '\n' ' ' | sed 's/ *$//' || true)
-        fi
-        if [[ -z "$procs" ]] && command -v lsof >/dev/null 2>&1; then
-            procs=$(lsof +D "$mountpoint" 2>/dev/null \
-                | tail -n +2 \
-                | awk '{print $1}' \
-                | sort -u \
-                | tr '\n' ' ' \
-                | sed 's/ *$//' || true)
-        fi
-
-        if [[ -n "$procs" ]]; then
-            log_msg "WARN:     Open processes: ${procs}"
-            log_msg "WARN:     Stop the processes or unmount before destroying."
-        else
-            log_msg "WARN:     No open processes detected (try unmounting first)."
-        fi
-        found_cause=true
-    fi
-
-    # ------------------------------------------------------------------
-    # 4. Active send / receive
-    # ------------------------------------------------------------------
-    local recv_token
-    recv_token=$(zfs get -H -o value receive_resume_token "$target" 2>/dev/null || true)
-    if [[ -n "$recv_token" && "$recv_token" != "-" ]]; then
-        log_msg "WARN:   → Dataset has an active or interrupted receive (resume token present)."
-        log_msg "WARN:     Abort with 'zfs receive -A ${target}' or allow it to complete."
-        found_cause=true
-    fi
-
-    # Check for ongoing sends more broadly by looking at any send streams
-    # involving this dataset (best-effort, not foolproof)
-    if pgrep -f "zfs send.*${target}" >/dev/null 2>&1; then
-        log_msg "WARN:   → An active 'zfs send' involving ${target} is running."
-        log_msg "WARN:     Wait for it to complete before destroying."
-        found_cause=true
-    fi
-
-    # ------------------------------------------------------------------
-    # 5. iSCSI LUN exposure (zvols only)
-    # ------------------------------------------------------------------
-    local bsname="${target##*/}"
-    if is_vm_disk_basename "$bsname"; then
-        if command -v targetcli >/dev/null 2>&1; then
-            # Captured and grepped as a variable — a piped `grep -q`
-            # under `set -o pipefail` flips a found backstore to
-            # "missing" when grep exits on the match while targetcli is
-            # still writing (SIGPIPE -> 141 -> pipeline failed).
-            local _bs_listing
-            _bs_listing=$(targetcli /backstores/block ls 2>/dev/null || true)
-            if grep -q " ${bsname} " <<< "$_bs_listing"; then
-                local lun_info=""
-                local t
-                while IFS= read -r t; do
-                    local lun_num
-                    lun_num=$(targetcli "/iscsi/${t}/tpg1/luns" ls 2>/dev/null \
-                        | grep -F "block/${bsname} " | grep -oE 'lun[0-9]+' | head -1 \
-                        | sed 's/^lun//' || true)
-                    if [[ -n "$lun_num" ]]; then
-                        lun_info="${t} (LUN ${lun_num})"
-                        break
-                    fi
-                done < <(targetcli /iscsi ls 2>/dev/null | while IFS= read -r _t_line; do
-                    # targetcli separates each target name from its dotted
-                    # leader with a space, so the IQN is a whole token.
-                    read -ra _t_words <<< "$_t_line"
-                    for _t in "${_t_words[@]}"; do
-                        case "$_t" in iqn.*) printf '%s\n' "$_t" ;; esac
-                    done
-                done)
-
-                if [[ -n "$lun_info" ]]; then
-                    log_msg "WARN:   → Zvol is exposed as an iSCSI LUN on ${lun_info}."
+_busy_report() {
+    local target="$1"
+    local entry mnt src pid vmid vname vkey rc line tag
+    for line in "${busy_transfer_lines[@]}"; do
+        log_msg "WARN:   → A zfs transfer involving this dataset is running:" \
+            "${line}"
+        log_msg "WARN:     Wait for it to finish (or stop it) before destroying."
+    done
+    if [[ -n "$busy_export_bs" ]]; then
+        log_msg "WARN:   → Exported as an iSCSI network disk: target" \
+            "${busy_export_target##*:}, LUN ${busy_export_lun}" \
+            "(backstore ${busy_export_bs})."
+        log_msg "WARN:     The storage kernel holds the disk open for the" \
+            "export — no process appears in lsof/fuser."
+        if [[ ${#busy_vm_refs[@]} -gt 0 ]]; then
+            for entry in "${busy_vm_refs[@]}"; do
+                IFS='|' read -r vmid vname vkey <<< "$entry"
+                busy_vm_running "$vmid"
+                rc=$?
+                if [[ $rc -eq 1 ]]; then
+                    log_msg "WARN:     Attached to VM ${vmid} '${vname}'" \
+                        "(disk ${vkey}) — RUNNING"
                 else
-                    log_msg "WARN:   → Zvol has an iSCSI backstore (${bsname})" \
-                        "but no LUN mapping."
+                    log_msg "WARN:     Attached to VM ${vmid} '${vname}'" \
+                        "(disk ${vkey}) — stopped"
                 fi
-                log_msg "WARN:     Use 'remove-vm-disk' or targetcli to tear down iSCSI first."
-                found_cause=true
-            fi
+            done
+        else
+            log_msg "WARN:     No virtual machine references this export" \
+                "(left over)."
         fi
     fi
-
-    # ------------------------------------------------------------------
-    # 6. Running VM using the zvol
-    # ------------------------------------------------------------------
-    if is_vm_disk_basename "$bsname"; then
-        local vmid="${bsname#vm-}"
-        vmid="${vmid%%-disk-*}"
-        if command -v qm >/dev/null 2>&1; then
-            local vm_status
-            vm_status=$(qm status "$vmid" 2>/dev/null | awk '{print $2}' || true)
-            if [[ "$vm_status" == "running" ]]; then
-                log_msg "WARN:   → VM ${vmid} is RUNNING and may be using ${target}."
-                log_msg "WARN:     Stop the VM before destroying this zvol."
-                found_cause=true
+    if [[ ${#busy_tags[@]} -gt 0 ]]; then
+        local described=""
+        for tag in "${busy_tags[@]}"; do
+            if [[ "${busy_tag_kind[$tag]:-}" == "leftover" ]]; then
+                described+=" ${tag} (cancelled-transfer leftover),"
+            else
+                described+=" ${tag} (hold),"
             fi
+        done
+        log_msg "WARN:   → Snapshot has hold tags:${described%,}"
+        log_msg "WARN:     Release with 'zfs release <tag> <snapshot>' or mark" \
+            "it for deferred deletion with 'zfs destroy -d'."
+    fi
+    for entry in "${busy_snap_mounts[@]}"; do
+        mnt="${entry%%|*}"
+        src="${entry#*|}"
+        log_msg "WARN:   → Snapshot folder is held open (automounted):" \
+            "${mnt} (${src})"
+    done
+    if [[ ${#busy_snap_mounts[@]} -gt 0 ]]; then
+        log_msg "WARN:     Unmount with 'umount <folder>' — nothing is lost."
+    fi
+    for entry in "${busy_ns_mounts[@]}"; do
+        pid="${entry%%|*}"
+        mnt="${entry#*|}"
+        log_msg "WARN:   → Mounted inside another mount namespace (a" \
+            "container?): pid ${pid} at ${mnt}"
+        log_msg "WARN:     Stop the container or process holding that mount."
+    done
+    if [[ -n "$busy_mountpoint" ]]; then
+        log_msg "WARN:   → Dataset is mounted at ${busy_mountpoint}."
+        if [[ -n "$busy_userspace" ]]; then
+            log_msg "WARN:     Processes with files open:${busy_userspace}"
+        else
+            log_msg "WARN:     No userspace process reported by fuser."
+        fi
+        log_msg "WARN:     Close them, or force the unmount with" \
+            "'zfs destroy -f'."
+    fi
+    if [[ -n "$busy_recv_token" && ${#busy_transfer_lines[@]} -eq 0 ]]; then
+        log_msg "WARN:   → An interrupted receive is recorded (resume token" \
+            "present)."
+        log_msg "WARN:     Abort it with 'zfs receive -A ${target}' if the" \
+            "partial data is not wanted."
+    fi
+    if [[ "$busy_any" != true ]]; then
+        log_msg "WARN:   → No holder found in the live evidence. If a destroy" \
+            "was just refused, the holder may have released moments ago —" \
+            "try again."
+    fi
+    return 0
+}
+
+# Report-only entry point (the historical diagnose; never prompts).
+diagnose_dataset_busy() {
+    local target="$1" stderr="${2:-}"
+    if [[ -n "$stderr" ]]; then
+        log_msg "WARN: ZFS reported: ${stderr}"
+    fi
+    log_msg "WARN: Diagnosing why ${target} cannot be destroyed..."
+    busy_find_holders "$target"
+    _busy_report_clone_notes "$target"
+    _busy_report "$target"
+    return 0
+}
+
+# ------------------------------------------------------------------
+# Guided resolution (interactive ladder)
+# ------------------------------------------------------------------
+
+# Remove the export and let udev settle (the zvol minor closes
+# asynchronously — an immediate retry can lose the race).
+_busy_unplug() {
+    if ! declare -f iscsi_unplug_export >/dev/null 2>&1; then
+        log_msg "WARN: iSCSI unplug helper unavailable — remove LUN" \
+            "${busy_export_lun} and backstore ${busy_export_bs} with" \
+            "targetcli, then try the delete again."
+        return 1
+    fi
+    iscsi_unplug_export "$busy_export_target" "$busy_export_lun" \
+        "$busy_export_bs" ""
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm settle --timeout=10 >/dev/null 2>&1 || true
+    fi
+    sleep 2
+    return 0
+}
+
+# Detach the disk key from every referencing VM config.
+_busy_detach_all() {
+    local entry vmid vname vkey ok=true
+    for entry in "${busy_vm_refs[@]}"; do
+        IFS='|' read -r vmid vname vkey <<< "$entry"
+        if declare -f vm_config_remove_disk_key >/dev/null 2>&1; then
+            log_msg "INFO: Detaching ${vkey} from VM ${vmid} ('${vname}')..."
+            if vm_config_remove_disk_key "$vmid" "$vkey"; then
+                log_msg "INFO: ✓ Detached ${vkey} from VM ${vmid}"
+            else
+                log_msg "WARN: Could not detach ${vkey} from VM ${vmid}"
+                ok=false
+            fi
+        else
+            log_msg "WARN: Cannot reach the VM configs — detach ${vkey} from" \
+                "VM ${vmid} by hand."
+            ok=false
+        fi
+    done
+    [[ "$ok" == true ]]
+}
+
+# The iSCSI-export remedy, tailored to the evidence: stale export, stopped
+# VM(s), or running VM(s) with the plain-language choice menu.
+_busy_resolve_export() {
+    local target="$1" entry vmid vname vkey rc any_running=false q
+    if [[ ${#busy_vm_refs[@]} -eq 0 ]]; then
+        log_msg "INFO: No virtual machine references this export — it looks" \
+            "left over."
+        q="Remove the leftover export and try the delete again?"
+        q+=" (No VM is affected.)"
+        if ask_yn "$q" "Y"; then
+            _busy_unplug && return 0
+            return 1
+        fi
+        return 1
+    fi
+    for entry in "${busy_vm_refs[@]}"; do
+        IFS='|' read -r vmid vname vkey <<< "$entry"
+        busy_vm_running "$vmid"
+        rc=$?
+        if [[ $rc -eq 1 ]]; then
+            log_msg "INFO: Attached to VM ${vmid} '${vname}' (disk ${vkey})" \
+                "— RUNNING"
+            any_running=true
+        else
+            log_msg "INFO: Attached to VM ${vmid} '${vname}' (disk ${vkey})" \
+                "— stopped"
+        fi
+    done
+    if [[ "$any_running" != true ]]; then
+        q="Detach the disk from the VM(s) above, remove the export,"
+        q+=" and try the delete again?"
+        if ask_yn "$q" "Y"; then
+            _busy_detach_all || return 1
+            _busy_unplug && return 0
+            return 1
+        fi
+        return 1
+    fi
+    ask_line "Disk ${target} is attached to the VM(s) above and at least one is RUNNING. Choose:
+  1 - Unplug the disk now. The VM keeps running; if its guest system was
+      using this disk it may log errors.
+  2 - Shut the running VM(s) down for me first, then detach, unplug, delete.
+  3 - Do nothing.
+Choose 1-3:"
+    case "${REPLY:-}" in
+        1)
+            _busy_detach_all || return 1
+            _busy_unplug && return 0
+            return 1
+            ;;
+        2)
+            local ok=true
+            for entry in "${busy_vm_refs[@]}"; do
+                IFS='|' read -r vmid vname vkey <<< "$entry"
+                busy_vm_running "$vmid"
+                rc=$?
+                [[ $rc -eq 1 ]] || continue
+                if declare -f vm_shutdown_wait >/dev/null 2>&1; then
+                    if ! vm_shutdown_wait "$vmid" 180; then
+                        log_msg "WARN: VM ${vmid} did not stop in time —" \
+                            "nothing was detached."
+                        ok=false
+                    fi
+                else
+                    log_msg "WARN: Cannot shut VM ${vmid} down from here —" \
+                        "shut it down by hand and retry."
+                    ok=false
+                fi
+            done
+            [[ "$ok" == true ]] || return 1
+            _busy_detach_all || return 1
+            _busy_unplug && return 0
+            return 1
+            ;;
+        *)
+            log_msg "INFO: Left everything as it is."
+            return 1
+            ;;
+    esac
+}
+
+# Hold-tag remedy: release cancelled-transfer leftovers outright; anything
+# else defaults to deferred destruction (nothing is ever released by us).
+_busy_resolve_holds() {
+    local target="$1" tag ok leftovers=() others=() described="" q
+    for tag in "${busy_tags[@]}"; do
+        if [[ "${busy_tag_kind[$tag]:-}" == "leftover" ]]; then
+            leftovers+=("$tag")
+            described+=" ${tag} (cancelled-transfer leftover),"
+        else
+            others+=("$tag")
+            described+=" ${tag} (hold),"
+        fi
+    done
+    log_msg "WARN: The snapshot has hold tags:${described%,}"
+    if [[ ${#leftovers[@]} -gt 0 ]]; then
+        q="Release the cancelled-transfer tag(s) ${leftovers[*]}?"
+        q+=" The snapshot can then be deleted outright."
+        if ask_yn "$q" "Y"; then
+            ok=true
+            for tag in "${leftovers[@]}"; do
+                if zfs release "$tag" "$target" 2>/dev/null; then
+                    log_msg "INFO: ✓ Released ${tag}"
+                else
+                    log_msg "WARN: Could not release ${tag}"
+                    ok=false
+                fi
+            done
+            [[ "$ok" == true ]] && return 0
         fi
     fi
+    if [[ ${#others[@]} -gt 0 || ${#leftovers[@]} -gt 0 ]]; then
+        q="Mark the snapshot for automatic deletion once nothing holds it"
+        q+=" ('zfs destroy -d')? No hold is released now."
+        if ask_yn "$q" "Y"; then
+            if zfs destroy -d "$target" 2>/dev/null; then
+                log_msg "INFO: ✓ Marked for deferred destruction — the" \
+                    "snapshot disappears when its holds are released."
+                return 1
+            fi
+            log_msg "WARN: Deferred destruction was refused."
+        fi
+    fi
+    return 1
+}
 
-    # ------------------------------------------------------------------
-    # 7. NFS / SMB shares
-    # ------------------------------------------------------------------
-    local sharenfs sharesmb
-    sharenfs=$(zfs get -H -o value sharenfs "$target" 2>/dev/null || true)
-    sharesmb=$(zfs get -H -o value sharesmb "$target" 2>/dev/null || true)
-    if [[ -n "$sharenfs" && "$sharenfs" != "off" && "$sharenfs" != "-" ]]; then
-        log_msg "WARN:   → Dataset is shared via NFS (${sharenfs})."
-        log_msg "WARN:     Unshare with 'zfs set sharenfs=off ${target}' before destroying."
-        found_cause=true
+busy_resolve_dataset_busy() {
+    local target="$1" stderr="${2:-}" can_ask=false entry mnt q
+    if [[ -n "$stderr" ]]; then
+        log_msg "WARN: ZFS reported: ${stderr}"
     fi
-    if [[ -n "$sharesmb" && "$sharesmb" != "off" && "$sharesmb" != "-" ]]; then
-        log_msg "WARN:   → Dataset is shared via SMB (${sharesmb})."
-        log_msg "WARN:     Unshare with 'zfs set sharesmb=off ${target}' before destroying."
-        found_cause=true
+    if [[ "${busyassist:-}" != "N" ]]; then
+        if [[ -t 0 ]]; then
+            can_ask=true
+        elif [[ $(type -t _input_hold_active 2>/dev/null) == "function" ]] \
+                && _input_hold_active; then
+            can_ask=true
+        fi
+    fi
+    busy_find_holders "$target"
+    if [[ "$can_ask" != true ]]; then
+        log_msg "WARN: Diagnosing why ${target} cannot be destroyed..."
+        _busy_report_clone_notes "$target"
+        _busy_report "$target"
+        return 2
     fi
 
-    # ------------------------------------------------------------------
-    # Fallback
-    # ------------------------------------------------------------------
-    if [[ "$found_cause" == false ]]; then
-        log_msg "WARN:   → No specific cause identified. Common remaining reasons:"
-        log_msg "WARN:       • The dataset is referenced by a child snapshot that is busy."
-        log_msg "WARN:       • A process has the dataset open through a different path."
-        log_msg "WARN:       • The pool is undergoing a scrub or resilver."
-        log_msg "WARN:     Try: fuser -m <mountpoint>  or  lsof +D <mountpoint>"
+    if [[ "$busy_any" != true ]]; then
+        _busy_report_clone_notes "$target"
+        q="Nothing holds ${target} right now — the holder may have released"
+        q+=" moments ago. Try the delete again?"
+        if ask_yn "$q" "Y"; then
+            return 0
+        fi
+        return 1
     fi
+
+    _busy_report "$target"
+
+    if [[ ${#busy_transfer_lines[@]} -gt 0 ]]; then
+        q="Wait 10 seconds in case the transfer just finished,"
+        q+=" then try the delete again?"
+        if ask_yn "$q" "Y"; then
+            sleep 10
+            return 0
+        fi
+        log_msg "INFO: Left ${target} alone — retry after the transfer" \
+            "completes."
+        return 1
+    fi
+
+    if [[ -n "$busy_export_bs" ]]; then
+        _busy_resolve_export "$target"
+        return $?
+    fi
+
+    if [[ ${#busy_tags[@]} -gt 0 ]]; then
+        _busy_resolve_holds "$target"
+        return $?
+    fi
+
+    if [[ ${#busy_snap_mounts[@]} -gt 0 ]]; then
+        q="Unmount the snapshot folder(s) above and try the delete again?"
+        q+=" (Unmounting deletes nothing.)"
+        if ask_yn "$q" "Y"; then
+            local ok=true
+            for entry in "${busy_snap_mounts[@]}"; do
+                mnt="${entry%%|*}"
+                if umount -l "$mnt" 2>/dev/null; then
+                    log_msg "INFO: ✓ Unmounted ${mnt}"
+                else
+                    log_msg "WARN: Could not unmount ${mnt}"
+                    ok=false
+                fi
+            done
+            [[ "$ok" == true ]] && return 0
+        fi
+        return 1
+    fi
+
+    if [[ ${#busy_ns_mounts[@]} -gt 0 ]]; then
+        log_msg "INFO: These mounts belong to other processes or" \
+            "containers — nothing was touched."
+        return 1
+    fi
+
+    if [[ -n "$busy_mountpoint" ]]; then
+        q="The open processes above hold the mount. Close them, then"
+        q+=" try the delete again now?"
+        if ask_yn "$q" "N"; then
+            return 0
+        fi
+        return 1
+    fi
+
+    if [[ -n "$busy_recv_token" ]]; then
+        q="Discard the interrupted receive ('zfs receive -A') and try the"
+        q+=" delete again? The partial data is dropped."
+        if ask_yn "$q" "N"; then
+            if zfs receive -A "$target" 2>/dev/null; then
+                log_msg "INFO: ✓ Interrupted receive discarded"
+                return 0
+            fi
+            log_msg "WARN: Could not abort the interrupted receive."
+        fi
+        return 1
+    fi
+
+    # Evidence existed but no branch matched (should not happen): decline
+    # honestly rather than loop.
+    return 1
 }

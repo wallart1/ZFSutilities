@@ -663,25 +663,22 @@ class DiskRepository:
         disks = self.list_disks()
         by_id_map = self.resolve_by_id()
 
-        parent_health: dict[str, str] = {}
-        parent_wear: dict[str, int | None] = {}
         for disk in disks:
             disk.by_id = by_id_map.get(disk.path, "")
-            if disk.parent_path is None:
-                if disk.disk_type in ("SSD", "NVMe"):
-                    # SSDs/NVMe get the combined JSON probe (health + wear in
-                    # one call); HDDs keep the quick -H text check since they
-                    # report no wear and extended probes can be slow.
-                    health, wear = self._smart_health_and_wear(disk.path)
-                    disk.smart_health = health
-                    disk.wear_percent = wear
-                else:
-                    disk.smart_health = self.smart_health(disk.path)
-                parent_health[disk.path] = disk.smart_health
-                parent_wear[disk.path] = disk.wear_percent
+            if disk.parent_path is not None:
+                # SMART data pertains to the physical device, never to a
+                # partition: both columns stay blank on partition rows.
+                disk.smart_health = ""
+                continue
+            if disk.disk_type in ("SSD", "NVMe"):
+                # SSDs/NVMe get the combined JSON probe (health + wear in
+                # one call); HDDs keep the quick -H text check since they
+                # report no wear and extended probes can be slow.
+                health, wear = self._smart_health_and_wear(disk.path)
+                disk.smart_health = health
+                disk.wear_percent = wear
             else:
-                disk.smart_health = parent_health.get(disk.parent_path, "n/a")
-                disk.wear_percent = parent_wear.get(disk.parent_path)
+                disk.smart_health = self.smart_health(disk.path)
 
         by_path: dict[str, DiskInfo] = {}
         for disk in disks:

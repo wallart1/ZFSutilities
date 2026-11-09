@@ -306,6 +306,70 @@ via git log.)
   + disabled Mount button; no clone-based volume-snapshot mounting (user
   decision).
 
+- **remove-vm-disk/detach-vm-disk map-keyed refactor — parked (2026-11-04,
+  user cue).** Both commands carry their own copy of the LUN + backstore +
+  manifest + encrypted-conf teardown and derive the backstore from the
+  vm-<id>-disk-<n> name convention instead of the live LUN map and the
+  backstore's device. The busy-resolver campaign's resolver is map-keyed
+  (VM config target+LUN → LUN map → backstore → device) and shares the
+  extracted `iscsi_unplug_export`; folding both commands onto the same
+  helpers awaits the user's cue. Behavior of both commands is unchanged
+  until then.
+
+## 2026-11-04 — Assisted "dataset is busy" resolver (approved plan, executed)
+
+Deep-research turn → novice-translation turn → user directives (names are
+birth labels, never usage truth; least-intrusive remedy tailored to the
+specific occurrence; hold the user's hand; automate, ask only simple
+questions) → approved plan → executed same day. Scope: when a destroy is
+refused "dataset is busy", find the holder from authoritative evidence and
+offer a guided remedy; unattended runs keep report-only.
+
+- bin/zfs-diagnose-busy rewritten: `busy_find_holders` (evidence engine) +
+  `busy_resolve_dataset_busy` (gate + least-intrusive ladder) +
+  `diagnose_dataset_busy` (report-only view). Evidence: holds classified
+  (`.send-*` leftovers), send/recv pgrep, resume token, fuser holders WITH
+  pids, /proc/*/mounts namespace scan (own-namespace view filtered),
+  findmnt snapshot automounts, LIO export matched by DEVICE via
+  targetcli listing or configfs udev_path walk (BUSY_CONFIGFS_ROOT for
+  tests), VM refs via iscsi_detect_vm_gather records + run state.
+  Ladder: retry-offer → transfer wait → leftover-export unplug (no VM) →
+  stopped-VM detach+unplug → running-VM menu (unplug now / shut down for
+  me [tool runs qm shutdown + waits] / do nothing) → leftover-tag release
+  or `zfs destroy -d` default (product tags never auto-released) →
+  snapshot automount umount -l → namespace mounts report-only → receive
+  -A on explicit confirm. Gate: interactive iff (-t 0 or input-hold) and
+  busyassist!=N; prompts ONLY via ask_yn/ask_line (GUI panel carries
+  them); unattended → report + rc 2.
+- lib/iscsi-lib.sh: `iscsi_unplug_export` extracted from iscsi_teardown_zvol
+  (log strings kept; recorded for send-receive rebuild only when a dataset
+  rides it); new `vm_config_remove_disk_key` (qm set --delete over ssh) and
+  `vm_shutdown_wait` (clean shutdown + poll, never force).
+- Callers (stderr capture + ONE retry on resolver rc 0): zfsdelfs, zfsdelsnap
+  (success path now returns before the skip/FATAL block), sever-vm-clone
+  (local + remote heredoc arms), clone-vm (both cleanup blocks).
+- Tests: test-zfs-diagnose-busy rebuilt around FILE-based recording mocks
+  (array appends made inside $( )/pipelines vanish — subshell law) with
+  scripted ssh outcomes per call; 27 tests incl. the three menu outcomes,
+  gate, configfs fallback, name-agnostic export, helper units. delsnap
+  suite: resolver stubs in all stub files + retry-once test (file counter).
+  delfs suite: busy stub + retry subprocess test (PATH carries the zfs
+  stub; fsarray crosses exec as a FILE — arrays cannot be exported; the
+  pre-existing autoproceed subprocess test is vacuous by the same
+  array-export limitation, left as-is). sever mockbin gains the resolver
+  stub. 6 red-proofs fired (gate, unplug, deferred, delsnap retry, delfs
+  retry, extraction).
+- Docs: modules.md zfs-diagnose-busy section rewritten (evidence table,
+  ladder, rc 0/1/2, corrected caller list — the old table named three
+  callers that never called it); messages manual gains the full
+  zfs-diagnose-busy section (was entirely undocumented — closes the
+  standing gap) + updated zfsdelsnap/zfsdelfs rows + the busy-resolved
+  success line; global-variables gains $busyassist + rewritten $skipbusy
+  row; gtk-gui.md Delete row describes the guided questions; GLOSSARY
+  gains "mount namespace".
+- Deferred (parked, see above): folding remove-vm-disk/detach-vm-disk onto
+  iscsi_unplug_export + map-keyed lookup.
+
 ## Backup property fidelity campaign — COMPLETE (2026-11-02→03, pub)
 
 - Seven phases, one session each, plan file in the user's plan dir;
@@ -2964,3 +3028,126 @@ User promoted R-08; plan approved and executed in one session
 - Final full gate WITH soaks green via tests/run-tests --with-soak
   (rc=0, all suites passed, soak suites exercised, zero failures).
 - Frozen at step 9; commit per step 10 (hash recorded in git).
+
+## Restore destination rename freedom (2026-11-03, pub2 lane)
+
+- User request: retire the "destination must end with a suffix of the
+  source path" refusal (hit live on stewie restoring
+  z22tb/temp/machinebackup -> temp/machinebackupxxx); mapped dest stays
+  the default.
+- Constraint lived only in compute_restore_params (restore_runner.py);
+  the bash engine already handles a full strip (remove_leading_qualifiers
+  returns "" and every consumer concatenates destfs+restorefs with an
+  empty-restorfs guard), so the fix is Python-only: suffix mapping stays
+  primary, and a non-suffix dest falls back to (all components stripped,
+  destfs = whole typed dest) — the source is received exactly as typed
+  and descendants land under the new name. Old error text replaced by a
+  non-empty-input guard. Auto-determine (pool-suffix) default untouched.
+- on_restore_run's confirm dialog now notes the rename when the mapping
+  strips the whole source path (manual dest only).
+- Tests: rename fallback (the live pair), pool-root full-strip pin, empty
+  input guard added; profile-runner no-common-prefix test flipped from
+  raises to rename expectation. Docs: gtk-gui.md Restore Tab paragraph.
+- Full no-soak gate green as user (0 failures; standing environment
+  preflight skips incl. gi-gated GUI suites and the root/test-pools
+  integration suite — no bash changes, so that suite's subject is
+  unchanged). Nothing committed — awaits the user's cue.
+
+## Disks inventory: SMART data only on physical rows (2026-11-04, pub2 lane)
+
+- User item: wear/test percentage was repeating on partition rows; on plan
+  review the user extended it — SMART data never pertains to partitions, so
+  the SMART verdict column blanks on partition rows too ("information in
+  the rows where it belongs").
+- disk_inventory() no longer propagates parent smart_health/wear_percent
+  to partitions (parent_health/parent_wear dicts removed); partitions get
+  smart_health="" (blank cell, distinct from "n/a" = probe failed on a
+  real device) and wear_percent=None. Physical-row probing unchanged
+  (one smartctl call per SSD/NVMe still holds).
+- refresh_disks_page(): partition rows render a blank Wear/Test cell (no
+  wear %, no parent surface-test lookup — HDD test status keys on the
+  disk's own path now). Column tooltips + gtk-gui.md table rows say
+  physical-devices-only. Dashboard _format_disk_wear_warnings docstring
+  reworded (behavior unchanged; its dedup test feeds fabricated rows).
+- Tests: repository partition assertions flipped to blank/None; disks-page
+  partition tests assert blank cells in both columns (SSD-wear and
+  HDD-surface paths). Affected suites green; full gate pending/see below.
+
+## Performance → Alignment: counted Refreshing indicator (2026-11-04, pub2 lane)
+
+- User item: on the Blocksize Alignment view the "Refreshing" label next
+  to the refresh spinner was effectively never shown, unlike Dashboard.
+  Root cause: with the Alignment view visible, each timer tick runs TWO
+  refreshes (always-on charts sampling + the alignment gather); each
+  finish callback hid the shared label unconditionally, so the
+  millisecond charts sample dropped it while the alignment gather
+  (zpool status + disk survey + guest probes) was still running.
+- Fix: `_show/_hide_memory_refreshing` are now reference-counted on
+  `app._memory_refresh_inflight` (show on 0→1, hide only at 0;
+  initialized in create_memory_page beside the pending flags) — the
+  label now stays up until the last in-flight refresh finishes, the
+  Dashboard contract under two concurrent users. alignment_page needed
+  no change (it already drives the helpers).
+- Companion (required by the counted design): refresh_memory_charts'
+  worker had no exception guard — a raising collect_memory_sample would
+  have stranded the pending flag AND the count (label stuck visible,
+  charts auto-refresh dead until restart). Now mirrors the alignment
+  worker: catch → log WARN → sample=None; _finish_refresh applies only
+  non-None samples.
+- Tests: helper test re-pinned to the counter; new — overlap semantics,
+  tick-level regression (charts finish must not hide during the
+  alignment gather), worker-failure un-stranding. gtk-gui.md Refresh
+  control paragraph updated. Affected suites green (memory, alignment);
+  full gate: 112 suites, 1 failure — order-dependent
+  TestScheduleSavedState pair, verified pre-existing at HEAD (c4feb54)
+  in a clean clone, recorded in PREEXISTING.md (non-fresh mock_gtk +
+  real-GTK import via @patch under the conftest Xvfb).
+
+## Development-cycle wrap-up (2026-11-05, pub2 lane, 0.139.0)
+
+- Steps 1/4 skipped by precondition (pub-main-only; this is a lane).
+  PREEXISTING: +1 new entry (100-column policy deviations across
+  released pub-lane suites — assertion/fixture strings, out of scope
+  here); 4 entries total in this lane's file.
+- Standards pass: ruff check + format clean; shellcheck -S warning
+  clean on all changed bash files (no new directives needed); 15 NEW
+  over-100-column lines in zfs-diagnose-busy/test-zfs-diagnose-busy
+  reflowed (prompts via the archive-vm/sever_prompt += pattern,
+  fixtures byte-identically, test_fail reasons via a local var); the
+  934-line .t9debug scratch copy of the busy suite deleted (superseded,
+  nothing unique). Policies otherwise conformant (sourced-lib laws,
+  no set line, log_msg priorities, no hardcoded hosts in product code).
+- Test review: bottom-of-file list verified complete in the busy suite
+  (27/27 run); gap fills added — restore confirm-dialog rename-note
+  pair in test_restore_page (TestRestoreRunDialog) and a clone-vm
+  shape audit for the 4 busy-resolver cleanup sites (suite style).
+  delsnap suite's two destroy assertions strengthened to file markers
+  during the campaign were kept. All affected suites green solo.
+- Docs: modules.md iscsi-lib section lists the three new helpers +
+  resolver sourcing; python-modules.md disk_inventory and
+  compute_restore_params rows updated; GLOSSARY +4 (backstore,
+  deferred destruction, hold tag, resume token — mount namespace was
+  already added by the campaign); docs integrity green; mkdocs rc 0
+  (known MkDocs-2.0/Material banner only).
+- Full no-soak gate (background): all suites passed, python zero
+  failures (standing 22 env-gated e2e skips; the order-dependent
+  schedule pair did not fire). Codebase frozen at that point.
+- 0.139.0: VERSION bumped, changelog section written (busy resolver,
+  iscsi-lib helpers, restore rename freedom, SMART physical-only,
+  counted Refreshing indicator).
+- With-soak gate run 1: the pre-existing order-dependent
+  TestScheduleSavedState pair FIRED ("set_vscroll_policy called 2
+  times") — fixed in-step per the entry's own direction: the class's
+  two build tests now import fresh via `import_gui_fresh` with
+  `patch.object` on the freshly imported module (a class-wide fresh
+  import was tried first and REVERTED — it diverges from the
+  string-target `@patch` decorators of the three tab-switch tests,
+  which then called the real gui_helpers `set_button_markup_red`
+  against mock Gtk and died on `isinstance(MagicMock)`). Red-proof
+  (single-file stash + a pollute-then-test pair): pre-fix reproduces
+  "Called 2 times" deterministically; post-fix single test, single
+  class, whole file, and the polluted pair all pass. PREEXISTING entry
+  retired (3 remain). Final with-soak gate rerun green before the
+  commit; release/publish/deploy on the user's cue. Lane merge into
+  pub main will union this 0.139.0 section with pub's (established
+  same-version lane pattern).

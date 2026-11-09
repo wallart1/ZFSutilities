@@ -426,6 +426,44 @@ class TestRestoreRunDialog(unittest.TestCase):
             self.assertNotIn("while backup", msg)
             self.assertNotIn("cannot start", msg)
 
+    def _confirm_secondary(self, dest):
+        app = self._make_app()
+        dialog_mock = MagicMock()
+        dialog_mock.run.return_value = rp.Gtk.ResponseType.CANCEL
+        with (
+            patch.object(rp.Gtk, "MessageDialog", return_value=dialog_mock),
+            patch.object(
+                rp,
+                "collect_restore_config",
+                return_value={
+                    "source": "backuppool/threeamigos/data",
+                    "dest": dest,
+                    "auto_dest": False,
+                    "recursive": False,
+                    "variables": {},
+                    "pause_scrubs": False,
+                },
+            ),
+            patch.object(rp, "build_restore_command") as mock_build,
+            patch.object(rp, "attach_step_scrub_callbacks"),
+            patch.object(rp, "log_msg"),
+        ):
+            mock_build.return_value = MagicMock()
+            rp.on_restore_run(app, app.ctx)
+        return dialog_mock.format_secondary_text.call_args[0][0]
+
+    def test_rename_destination_note_in_confirm_dialog(self):
+        """A manual destination that shares no source-path suffix is a
+        rename — the confirm dialog must say so before the transfer."""
+        secondary = self._confirm_secondary("threeamigos/machinebackupxxx")
+        self.assertIn("does not share the source's path", secondary)
+        self.assertIn("typed destination (a rename)", secondary)
+
+    def test_no_rename_note_for_suffix_destination(self):
+        """The usual suffix mapping keeps the confirm dialog rename-free."""
+        secondary = self._confirm_secondary("threeamigos/data")
+        self.assertNotIn("(a rename)", secondary)
+
 
 class TestReceiveEncrypted(unittest.TestCase):
     """The Receive-as-encrypted checkbox / key-location entry pair."""

@@ -66,6 +66,7 @@ from gui_helpers import (
     set_text_if_changed,
     show_note,
 )
+from logging_config import log_msg
 from memory_stats import (
     collect_memory_sample,
     compute_rates,
@@ -410,6 +411,9 @@ def create_memory_page(app):
     app._memory_sample = None
     app._memory_refresh_pending = False
     app._alignment_refresh_pending = False
+    # Count of in-flight refreshes behind the shared 'Refreshing' label
+    # (charts sampling and the alignment gather can overlap on one tick).
+    app._memory_refresh_inflight = 0
 
     scrolled = Gtk.ScrolledWindow()
     scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -717,14 +721,27 @@ _STALL_MIN_SECONDS = 60.0
 
 
 def _show_memory_refreshing(app):
-    """Show the 'Refreshing' indicator next to the refresh interval spinner."""
-    if hasattr(app, "memory_refreshing_label"):
+    """Mark one more in-flight refresh; show the 'Refreshing' indicator.
+
+    The indicator is shared by two concurrent refresh users: while the
+    Alignment view is visible, every timer tick runs the (fast) charts
+    sampling and the (slow) alignment gather at the same time.  The label
+    must therefore stay up until the LAST refresh finishes — an
+    unconditional hide would let the quick charts sample drop it while
+    the alignment gather is still running (Dashboard's single refresh
+    path needs no such counting).
+    """
+    count = getattr(app, "_memory_refresh_inflight", 0) + 1
+    app._memory_refresh_inflight = count
+    if count == 1 and hasattr(app, "memory_refreshing_label"):
         app.memory_refreshing_label.show()
 
 
 def _hide_memory_refreshing(app):
-    """Hide the 'Refreshing' indicator after the refresh completes."""
-    if hasattr(app, "memory_refreshing_label"):
+    """Mark one in-flight refresh done; hide the indicator when all finish."""
+    count = max(0, getattr(app, "_memory_refresh_inflight", 1) - 1)
+    app._memory_refresh_inflight = count
+    if count == 0 and hasattr(app, "memory_refreshing_label"):
         app.memory_refreshing_label.hide()
 
 
@@ -773,12 +790,21 @@ def refresh_memory_charts(app):
     _show_memory_refreshing(app)
 
     def _collect():
-        sample = collect_memory_sample()
+        try:
+            sample = collect_memory_sample()
+        except Exception as exc:
+            # The pending flag and the indicator count only clear in the
+            # idle callback, so an exception escaping this worker would
+            # stop every future refresh until the GUI restarts (same
+            # shape as the alignment worker).
+            log_msg(f"WARN: Memory sample gathering failed: {exc}")
+            sample = None
         GLib.idle_add(_finish_refresh, app, sample)
 
     def _finish_refresh(_app, sample):
         _app._memory_refresh_pending = False
-        _apply_memory_sample(_app, sample)
+        if sample is not None:
+            _apply_memory_sample(_app, sample)
         _hide_memory_refreshing(_app)
         return False
 

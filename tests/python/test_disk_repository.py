@@ -432,7 +432,8 @@ class TestDiskRepositoryInventory(unittest.TestCase):
         self.assertEqual(disk.smart_health, "PASSED")
         self.assertIsNone(disk.wear_percent)
         self.assertEqual(part.by_id, "wwn-abc-part1")
-        self.assertEqual(part.smart_health, "PASSED")
+        # SMART data never pertains to a partition — blank, not inherited.
+        self.assertEqual(part.smart_health, "")
         self.assertIsNone(part.wear_percent)
         self.assertEqual(part.parent_path, "/dev/sda")
         self.assertNotIn("/dev/sda1", smartctl_calls)
@@ -511,8 +512,10 @@ class TestDiskRepositoryInventory(unittest.TestCase):
         part = inventory.by_path["/dev/sda1"]
         self.assertEqual(disk.smart_health, "PASSED")
         self.assertEqual(disk.wear_percent, 85)
-        self.assertEqual(part.wear_percent, 85)
-        # Exactly one smartctl call for the whole disk (partition inherits).
+        # SMART data stays on the physical device's row.
+        self.assertEqual(part.smart_health, "")
+        self.assertIsNone(part.wear_percent)
+        # Exactly one smartctl call for the whole disk.
         self.assertEqual(len(smartctl_calls), 1)
         self.assertIn("-j", smartctl_calls[0])
         self.assertIn("-A", smartctl_calls[0])

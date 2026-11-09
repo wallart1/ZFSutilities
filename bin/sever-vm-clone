@@ -597,11 +597,15 @@ sever_offer_origin_destroy() {
         return 0
     fi
 
-    if zfs destroy "$origin"; then
-        log_msg "INFO:     ✓ destroyed — its space is released."
-    else
+    local _busy_err=""
+    if ! _busy_err=$(zfs destroy "$origin" 2>&1); then
         log_msg "WARN: Could not destroy ${origin}."
-        diagnose_dataset_busy "$origin"
+        if busy_resolve_dataset_busy "$origin" "$_busy_err" \
+                && zfs destroy "$origin" 2>/dev/null; then
+            log_msg "INFO:     ✓ destroyed — busy was resolved."
+        fi
+    else
+        log_msg "INFO:     ✓ destroyed — its space is released."
     fi
     zfslock_release "$lock"
 }
@@ -649,11 +653,14 @@ if [[ -n "$tags" ]]; then
     exit 0
 fi
 
-if zfs destroy "$origin"; then
-    log_msg "INFO:     ✓ destroyed — its space is released."
-else
+if ! _busy_err=$(zfs destroy "$origin" 2>&1); then
     log_msg "WARN: Could not destroy ${origin}."
-    diagnose_dataset_busy "$origin"
+    if busy_resolve_dataset_busy "$origin" "$_busy_err" \
+            && zfs destroy "$origin" 2>/dev/null; then
+        log_msg "INFO:     ✓ destroyed — busy was resolved."
+    fi
+else
+    log_msg "INFO:     ✓ destroyed — its space is released."
 fi
 zfslock_release "$lock"
 SSHEOF

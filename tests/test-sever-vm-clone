@@ -1032,6 +1032,10 @@ MOCKENGINE
 diagnose_dataset_busy() {
     echo "INFO: (mock busy diagnosis for $*)" >&2
 }
+busy_resolve_dataset_busy() {
+    echo "INFO: (mock busy report for $1)" >&2
+    return 1
+}
 EOF
 
     # --- mock ssh executable: the storage-host delegation uses

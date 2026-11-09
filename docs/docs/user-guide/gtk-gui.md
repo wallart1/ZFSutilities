@@ -693,6 +693,13 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
   destination is also refreshed when the Restore tab is opened or when the
   source entry changes while auto-destination is enabled.
   
+  A manually entered destination does not have to mirror the source path.
+  When the destination ends with a suffix of the source path, the restore
+  keeps the source's relative path under the destination (the conventional
+  mapping). Any other destination is a rename: the source is received
+  directly as the typed name, and with **Restore entire subtree
+  (recursive)** enabled, its descendants restore beneath the new name.
+  
   Enable **Restore entire subtree (recursive)** to restore the named dataset
   and all of its descendants. When unchecked (the default), only the named
   dataset is restored. The Advanced **depth** field overrides this checkbox if
@@ -1555,9 +1562,12 @@ behaving against their caps.
 ### Refresh control
 
 The **Refresh every (s)** spinner sets the auto-refresh interval
-(1–300 seconds, default 5). While a refresh of the visible view is
-running, a small **Refreshing** indicator appears next to the spinner;
-both the auto-refresh timer and the toolbar Refresh button trigger it.
+(1–300 seconds, default 5). While any refresh is in flight, a small
+**Refreshing** indicator appears next to the spinner; both the
+auto-refresh timer and the toolbar Refresh button trigger it. The
+indicator reflects every in-flight refresh at once, so with the
+Alignment view visible it stays up for the whole (slower) alignment
+gather even though the quick charts sample has already finished.
 The value is persisted to the config file
 (`memory.refresh_seconds`) and takes effect immediately — the timer is
 restarted with the new interval. Unlike the other data tabs, the
@@ -1775,8 +1785,8 @@ pickers:
 | Transport | Transport type (e.g. `sata`, `nvme`, `sas`)                                                                                                                                                                                                    |
 | Enclosure | Display name of the multi-bay enclosure holding the disk (blank for internal disks; see [Enclosures](#enclosures))                                                                                                                              |
 | Pools     | Pool membership determined from vdev topology                                                                                                                                                                                                  |
-| SMART     | Overall SMART health (`PASSED`, `FAILED`, or `n/a`)                                                                                                                                                                                            |
-| Wear/Test | For SSD/NVMe, the wear percentage from SMART data (`85%`). For HDDs, the surface self-test status (see [Surface Test](#surface-test)): `-`, `42% (1h 23m)` while running, or `Passed`/`Failed`/`Aborted`/`Canceled`. `-` when neither applies. |
+| SMART     | Overall SMART health (`PASSED`, `FAILED`, or `n/a`). Physical devices only — partition rows are blank, since SMART data never pertains to a partition.                                                                                          |
+| Wear/Test | For SSD/NVMe, the wear percentage from SMART data (`85%`). For HDDs, the surface self-test status (see [Surface Test](#surface-test)): `-`, `42% (1h 23m)` while running, or `Passed`/`Failed`/`Aborted`/`Canceled`. `-` when neither applies. Physical devices only — partition rows are blank. |
 
 Device scans and SMART probes can be slow, so the inventory is loaded in a
 background thread and cached for a few seconds. Only SSD/NVMe disks get the
@@ -2651,7 +2661,7 @@ based on what is selected.
 | Button                         | Enabled when                                                                                                                          | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Snapshot**                   | One or more dataset or pool-root rows (filesystems or volumes) selected; snapshots, holds, and volume partitions disable it             | Creates a new snapshot on each selected dataset (prompts once for a name; suggests `manual-YYYY-mm-ddTHH:MM`). With multiple datasets selected, the dialog lists them and the snapshot is created on each in turn; per-dataset success and failure are logged, and a failure (e.g. the name already exists on that dataset) does not stop the remaining datasets.                                                                                                                                                     |
-| **Delete**                     | Only datasets, snapshots, and/or holds selected                                                                                       | Destroys the selected datasets (`zfs destroy`, with their snapshots and holds listed in the confirmation dialog). Releases the selected hold tags, then destroys the selected snapshots. If a selected snapshot still has holds that were not selected, the operation is aborted and the unselected hold tags are listed so you can select them as well.                                                                                                                                                           |
+| **Delete**                     | Only datasets, snapshots, and/or holds selected                                                                                       | Destroys the selected datasets (`zfs destroy`, with their snapshots and holds listed in the confirmation dialog). Releases the selected hold tags, then destroys the selected snapshots. If a selected snapshot still has holds that were not selected, the operation is aborted and the unselected hold tags are listed so you can select them as well. If a destroy is refused with "dataset is busy", the job log shows what holds it (an exported VM disk, a hold tag, a leftover transfer, a mounted snapshot folder), and the job panel's answer box offers one plain-language remedy at a time — for an exported VM disk, for example: unplug it now while the VM keeps running, shut the VM down for me first, or do nothing. Scheduled (unattended) jobs print the findings only and keep today's skip-or-fail behavior.                                                                                                                                                           |
 | **Add Hold**                   | At least one snapshot selected                                                                                                        | Prompts for a tag (default `keep`) and applies it to each selected snapshot                                                                                                                                                                                                                                                                                                                                                                      |
 | **Rollback**                   | Exactly one snapshot selected                                                                                                         | Rolls the dataset back to that snapshot (destroys newer snapshots and data updates)                                                                                                                                                                                                                                                                                                                                                              |
 | **Browse**                     | Exactly one mounted filesystem, snapshot, or volume partition selected                                                                | Opens the selected item in the default file manager. Filesystems (including pool root datasets) open at their ZFS mountpoint; snapshots open via `.zfs/snapshot/<name>`; volume partitions open at their loop-mount directory.                                                                                                                                                                                                                   |

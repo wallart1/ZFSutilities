@@ -356,8 +356,9 @@ _disk_wear_lock = threading.Lock()
 def _format_disk_wear_warnings(disks):
     """Build warning strings for disks at/above the wear threshold.
 
-    Partitions inherit the parent disk's wear, so each physical disk is
-    reported once (keyed by parent_path).
+    Wear pertains to physical devices (the inventory leaves partition wear
+    unset); rows are still keyed by parent_path so a disk is never reported
+    twice.
     """
     warnings = []
     seen = set()

@@ -273,13 +273,22 @@ if is_single_node; then
         # byte-identical to the plain send/receive it replaces.
         transfer_do "Clone copy of ${src_zvol}" "" \
             "-o compression=lz4 -o refreservation=none" "N" "0" "$snap" "$dst_zvol"
-        if ! zfs destroy "${dst_zvol}@clone-to-${dstvmid}" 2>/dev/null; then
+        if ! _busy_err=$(zfs destroy "${dst_zvol}@clone-to-${dstvmid}" 2>&1); then
             source_helper zfs-diagnose-busy
-            diagnose_dataset_busy "${dst_zvol}@clone-to-${dstvmid}"
+            if busy_resolve_dataset_busy "${dst_zvol}@clone-to-${dstvmid}" \
+                    "$_busy_err" \
+                    && zfs destroy "${dst_zvol}@clone-to-${dstvmid}" 2>/dev/null
+            then
+                :
+            fi
         fi
-        if ! zfs destroy "$snap" 2>/dev/null; then
+        if ! _busy_err=$(zfs destroy "$snap" 2>&1); then
             source_helper zfs-diagnose-busy
-            diagnose_dataset_busy "$snap"
+            if busy_resolve_dataset_busy "$snap" "$_busy_err" \
+                    && zfs destroy "$snap" 2>/dev/null
+            then
+                :
+            fi
         fi
         zfslock_release "$lock_dst"
         zfslock_release "$lock_src"
@@ -470,13 +479,22 @@ zfs snapshot "$snap"
 # plain send/receive it replaces).
 transfer_do "Clone copy of ${src_zvol}" "" \
     "-o compression=lz4 -o refreservation=none" "N" "0" "$snap" "$dst_zvol"
-if ! zfs destroy "${dst_zvol}@clone-to-${dst_vmid}" 2>/dev/null; then
+if ! _busy_err=$(zfs destroy "${dst_zvol}@clone-to-${dst_vmid}" 2>&1); then
     source_helper zfs-diagnose-busy
-    diagnose_dataset_busy "${dst_zvol}@clone-to-${dst_vmid}"
+    if busy_resolve_dataset_busy "${dst_zvol}@clone-to-${dst_vmid}" \
+            "$_busy_err" \
+            && zfs destroy "${dst_zvol}@clone-to-${dst_vmid}" 2>/dev/null
+    then
+        :
+    fi
 fi
-if ! zfs destroy "$snap" 2>/dev/null; then
+if ! _busy_err=$(zfs destroy "$snap" 2>&1); then
     source_helper zfs-diagnose-busy
-    diagnose_dataset_busy "$snap"
+    if busy_resolve_dataset_busy "$snap" "$_busy_err" \
+            && zfs destroy "$snap" 2>/dev/null
+    then
+        :
+    fi
 fi
 log_msg "INFO: ✓ Zvol cloned"
 

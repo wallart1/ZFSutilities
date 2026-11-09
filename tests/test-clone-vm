@@ -152,6 +152,18 @@ test_clone_vm_copies_route_through_transfer_do() {
     test_pass
 }
 
+test_clone_vm_cleanup_destroys_route_busy_failures_through_resolver() {
+    test_start "every failed cleanup destroy captures stderr and retries via the busy resolver"
+    local capture_count resolve_count
+    capture_count=$(grep -c '_busy_err=\$(zfs destroy' "$mydir/bin/clone-vm")
+    resolve_count=$(grep -c 'busy_resolve_dataset_busy' "$mydir/bin/clone-vm")
+    if [[ "$capture_count" -eq 4 && "$resolve_count" -eq 4 ]]; then
+        test_pass
+    else
+        test_fail "captures=$capture_count resolves=$resolve_count (expected 4 each)"
+    fi
+}
+
 test_heredoc_avoids_bash_source_bootstrap
 test_heredoc_uses_deployed_path_bootstrap
 test_heredoc_bootstrap_no_realpath_error
@@ -161,6 +173,7 @@ test_clone_vm_acquires_source_and_destination_locks
 test_clone_vm_releases_per_disk_locks
 test_clone_vm_sources_transfer_lib
 test_clone_vm_copies_route_through_transfer_do
+test_clone_vm_cleanup_destroys_route_busy_failures_through_resolver
 
 test_summary
 teardown_test_env

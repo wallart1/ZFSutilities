@@ -1,6 +1,14 @@
 #!/usr/bin/bash
 # shellcheck disable=SC1090,SC2034,SC2154
-# test-zfs-diagnose-busy — Unit tests for zfs-diagnose-busy
+# test-zfs-diagnose-busy — Unit tests for zfs-diagnose-busy: the report-only
+# diagnose, the evidence probes, and the interactive busy resolver ladder.
+# iscsi-lib is sourced with ISCSI_LIB_NO_BOOTSTRAP=1 (no bashinit re-run) so
+# the resolver's iscsi_unplug_export / vm_* helpers are real and exercised
+# against targetcli/ssh function mocks.
+#
+# Recording mocks append to FILES, not arrays: the probes invoke targetcli/
+# ssh/zfs inside pipelines and command substitutions, and an in-memory array
+# append made in those subshells never reaches the test shell.
 
 source "$(cd "$(dirname "$0")" && pwd)/test-lib.sh"
 setup_test_env
@@ -9,9 +17,26 @@ setup_test_env
 export msg_level="INFO"
 
 old_mydir="$mydir"
+
+# Fixture files the manifest/encrypted-conf helpers read and mutate.
+ISCSI_MANIFEST="$(mktemp)"
+ISCSI_ENCRYPTED_CONF="$(mktemp)"
+export ISCSI_MANIFEST ISCSI_ENCRYPTED_CONF
+
+_MOCK_DIR=$(mktemp -d)
+
+ISCSI_LIB_NO_BOOTSTRAP=1
+# shellcheck source=../../lib/iscsi-lib.sh
+source "$old_mydir/lib/iscsi-lib.sh"
 source "$old_mydir/bin/zfs-diagnose-busy"
 
-# Capture log_msg output to a file for assertions
+# Two-node shape for every status query (iscsi_check_vm_running's ssh
+# branch): the vm run state comes from scripted ssh outcomes per test.
+compute_host="tweety-test"
+
+# ------------------------------------------------------------------
+# Log capture
+# ------------------------------------------------------------------
 _DIAG_LOG=""
 _DIAG_CAPTURE=""
 
@@ -32,7 +57,6 @@ stop_capture() {
 }
 
 # Redirect log_msg to our capture file by overriding it locally.
-# The real log_msg writes to stderr; we tee it.
 log_msg() {
     if [[ -n "$_DIAG_LOG" ]]; then
         echo "$*" >> "$_DIAG_LOG"
@@ -42,38 +66,67 @@ log_msg() {
 }
 
 # ------------------------------------------------------------------
-# Mock helpers
+# Mock helpers. Call logs are files (subshell-safe); ssh replays scripted
+# outcomes from per-line files through a counter file.
 # ------------------------------------------------------------------
+mock_calls() { cat "$_MOCK_DIR/$1.log" 2>/dev/null || true; }
+mock_count() { cat "$_MOCK_DIR/$1.log" 2>/dev/null | grep -c . || true; }
 
 declare -A _mock_zfs_get_values=()
 declare -A _mock_zfs_list_values=()
 _mock_zfs_holds=""
-_mock_targetcli_backstores=""
-_mock_targetcli_iscsi=""
-_mock_targetcli_luns=""
 _mock_qm_status=""
 _mock_fuser_out=""
 _mock_lsof_out=""
 _mock_pgrep_out=""
+_mock_targetcli_backstores=""
+_mock_targetcli_iscsi=""
+_mock_targetcli_luns=""
+_mock_zfs_destroy_rc=0
+_mock_zfs_release_rc=0
+_mock_zfs_receive_rc=0
+_busy_answers=()
+_busy_prompts=()
 
 reset_mocks() {
     _mock_zfs_get_values=()
     _mock_zfs_list_values=()
-    # Re-declare as associative in case bash lost the type
     declare -A _mock_zfs_get_values
     declare -A _mock_zfs_list_values
     _mock_zfs_holds=""
-    _mock_targetcli_backstores=""
-    _mock_targetcli_iscsi=""
-    _mock_targetcli_luns=""
     _mock_qm_status=""
     _mock_fuser_out=""
     _mock_lsof_out=""
     _mock_pgrep_out=""
+    _mock_targetcli_backstores=""
+    _mock_targetcli_iscsi=""
+    _mock_targetcli_luns=""
+    _mock_zfs_destroy_rc=0
+    _mock_zfs_release_rc=0
+    _mock_zfs_receive_rc=0
+    _busy_answers=()
+    _busy_prompts=()
+    : > "$ISCSI_MANIFEST"
+    : > "$ISCSI_ENCRYPTED_CONF"
+    local _m
+    for _m in targetcli ssh zfs umount udevadm sleep; do
+        : > "$_MOCK_DIR/${_m}.log"
+    done
+    : > "$_MOCK_DIR/ssh.rc"
+    : > "$_MOCK_DIR/ssh.out"
+    : > "$_MOCK_DIR/ssh.n"
 }
 
-# Override zfs locally for the diagnostics we care about
+# Script ssh outcomes: each call returns the next rc/outcome line pair.
+mock_ssh_script() {
+    local rc out
+    printf '%s\n' "$1" > "$_MOCK_DIR/ssh.rc"
+    printf '%s\n' "$2" > "$_MOCK_DIR/ssh.out"
+    : > "$_MOCK_DIR/ssh.n"
+}
+
 zfs() {
+    echo "$*" >> "$_MOCK_DIR/zfs.log"
     local subcmd="$1"
     shift
     case "$subcmd" in
@@ -144,11 +197,21 @@ zfs() {
             fi
             return 0
             ;;
+        destroy)
+            return "$_mock_zfs_destroy_rc"
+            ;;
+        release)
+            return "$_mock_zfs_release_rc"
+            ;;
+        receive)
+            return "$_mock_zfs_receive_rc"
+            ;;
     esac
     return 0
 }
 
 targetcli() {
+    echo "$*" >> "$_MOCK_DIR/targetcli.log"
     local path="$1"
     shift
     case "$path" in
@@ -163,7 +226,7 @@ targetcli() {
             fi
             ;;
         *)
-            if [[ "$path" == /iscsi/*/tpg1/luns ]]; then
+            if [[ "$path" == /iscsi/*/tpg1/luns && "$1" == "ls" ]]; then
                 echo "$_mock_targetcli_luns"
             fi
             ;;
@@ -203,20 +266,87 @@ pgrep() {
 }
 
 ps() {
-    echo "mockproc"
+    if [[ "$1" == "-p" ]]; then
+        echo "proc-$2"
+    fi
     return 0
 }
 
+ssh() {
+    echo "$*" >> "$_MOCK_DIR/ssh.log"
+    local n out rc
+    n=$(cat "$_MOCK_DIR/ssh.n" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    echo "$n" > "$_MOCK_DIR/ssh.n"
+    rc=$(sed -n "${n}p" "$_MOCK_DIR/ssh.rc" 2>/dev/null)
+    out=$(sed -n "${n}p" "$_MOCK_DIR/ssh.out" 2>/dev/null)
+    [[ -n "$out" ]] && echo "$out"
+    return "${rc:-0}"
+}
+
+umount() {
+    echo "$*" >> "$_MOCK_DIR/umount.log"
+    return 0
+}
+
+udevadm() {
+    echo "$*" >> "$_MOCK_DIR/udevadm.log"
+    return 0
+}
+
+sleep() {
+    local total
+    total=$(cat "$_MOCK_DIR/sleep.log" 2>/dev/null || echo 0)
+    echo $((total + $1)) > "$_MOCK_DIR/sleep.log"
+    return 0
+}
+
+# Default no-op kernel wrappers (tests override to inject evidence).
+busy_findmnt_zfs() { :; }
+busy_proc_mounts_files() { :; }
+
+# Prompt mocks: interactive tests feed answers in prompt order.
+ask_yn() {
+    _busy_prompts+=("$1")
+    local a="${_busy_answers[0]:-n}"
+    _busy_answers=("${_busy_answers[@]:1}")
+    case "$a" in
+        y|Y|yes) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+ask_line() {
+    _busy_prompts+=("$1")
+    local a="${_busy_answers[0]:-}"
+    _busy_answers=("${_busy_answers[@]:1}")
+    REPLY="$a"
+    return 0
+}
+
+# Interactive-mode switch: the resolver asks only when the input-hold
+# protocol is active (the harness has no tty).
+_input_hold_active() { true; }
+
+interactive_on() {
+    unset busyassist
+}
+
+interactive_off() {
+    busyassist=N
+}
+
+# Default to report-only for the harness shell.
+interactive_off
+
 # ------------------------------------------------------------------
-# Tests
+# Report-mode tests (diagnose_dataset_busy)
 # ------------------------------------------------------------------
 
 test_diagnose_clone_dependents_snapshot() {
-    test_start "Detects clone dependents on snapshot"
+    test_start "Report: clone dependents on snapshot"
     reset_mocks
     _mock_zfs_list_values["pool/fs@snap1:clones"]="pool/fs/clone1"
-    _mock_zfs_get_values["pool/fs@snap1:mounted"]="no"
-    _mock_zfs_get_values["pool/fs@snap1:receive_resume_token"]="-"
     start_capture
     diagnose_dataset_busy "pool/fs@snap1"
     local out
@@ -229,44 +359,43 @@ test_diagnose_clone_dependents_snapshot() {
 }
 
 test_diagnose_holds() {
-    test_start "Detects holds on snapshot"
+    test_start "Report: hold tags with classification"
     reset_mocks
-    _mock_zfs_holds="pool/fs@snap1\toffsite\t2025-01-01"
-    _mock_zfs_get_values["pool/fs@snap1:mounted"]="no"
-    _mock_zfs_get_values["pool/fs@snap1:receive_resume_token"]="-"
+    _mock_zfs_holds="pool/fs@snap1\toffsite-2026-11-01\t2026-11-01"
+    _mock_zfs_holds+="\npool/fs@snap1\t.send-546-0\t2026-11-02"
     start_capture
     diagnose_dataset_busy "pool/fs@snap1"
     local out
     out=$(stop_capture)
-    if [[ "$out" == *"has holds"* && "$out" == *"offsite"* ]]; then
+    if [[ "$out" == *"has hold tags"* && "$out" == *"offsite-2026-11-01 (hold)"* \
+        && "$out" == *".send-546-0 (cancelled-transfer leftover)"* ]]; then
         test_pass
     else
-        test_fail "Expected 'has holds: offsite' in output, got: $out"
+        test_fail "Expected classified hold tags in output, got: $out"
     fi
 }
 
 test_diagnose_mounted_open_files() {
-    test_start "Detects mounted dataset with open processes"
+    test_start "Report: mounted dataset with PID-named holders"
     reset_mocks
     _mock_zfs_get_values["pool/fs:mounted"]="yes"
     _mock_zfs_get_values["pool/fs:mountpoint"]="/mnt/pool/fs"
-    _mock_zfs_get_values["pool/fs:receive_resume_token"]="-"
-    _mock_fuser_out="/mnt/pool/fs: 1234 5678"
+    _mock_fuser_out=" /mnt/pool/fs: 1234 5678"
     start_capture
     diagnose_dataset_busy "pool/fs"
     local out
     out=$(stop_capture)
-    if [[ "$out" == *"mounted at /mnt/pool/fs"* && "$out" == *"Open processes"* ]]; then
+    if [[ "$out" == *"mounted at /mnt/pool/fs"* && "$out" == *"1234:proc-1234"* \
+        && "$out" == *"5678:proc-5678"* ]]; then
         test_pass
     else
-        test_fail "Expected mount/process info, got: $out"
+        test_fail "Expected mount + pid:comm holders, got: $out"
     fi
 }
 
 test_diagnose_resume_token() {
-    test_start "Detects active receive (resume token)"
+    test_start "Report: interrupted receive (resume token)"
     reset_mocks
-    _mock_zfs_get_values["pool/fs:mounted"]="no"
     _mock_zfs_get_values["pool/fs:receive_resume_token"]="1-8e3b9c1e2-100"
     start_capture
     diagnose_dataset_busy "pool/fs"
@@ -279,73 +408,534 @@ test_diagnose_resume_token() {
     fi
 }
 
-test_diagnose_iscsi_lun() {
-    test_start "Detects iSCSI LUN on zvol"
+test_diagnose_transfer_running() {
+    test_start "Report: running zfs send named in output"
     reset_mocks
-    _mock_zfs_get_values["pool/proxmox/vm-105-disk-0:mounted"]="no"
-    _mock_zfs_get_values["pool/proxmox/vm-105-disk-0:receive_resume_token"]="-"
-    _mock_targetcli_backstores="  | o- vm-105-disk-0  [block/vm-105-disk-0]"
-    _mock_targetcli_iscsi="iqn.2025-01.local.storage"
-    _mock_targetcli_luns="  | o- lun0  [block/vm-105-disk-0 (/dev/zvol/pool/proxmox/vm-105-disk-0)]"
+    _mock_pgrep_out="12345 zfs send pool/fs@snap1"
     start_capture
-    diagnose_dataset_busy "pool/proxmox/vm-105-disk-0"
+    diagnose_dataset_busy "pool/fs@snap1"
     local out
     out=$(stop_capture)
-    if [[ "$out" == *"iSCSI LUN"* ]]; then
+    if [[ "$out" == *"zfs transfer involving this dataset is running"* \
+        && "$out" == *"12345 zfs send pool/fs@snap1"* ]]; then
         test_pass
     else
-        test_fail "Expected 'iSCSI LUN' in output, got: $out"
+        test_fail "Expected transfer line in output, got: $out"
     fi
 }
 
-test_diagnose_running_vm() {
-    test_start "Detects running VM using zvol"
+test_diagnose_snap_automount() {
+    test_start "Report: automounted snapshot folder"
     reset_mocks
-    _mock_zfs_get_values["pool/proxmox/vm-105-disk-0:mounted"]="no"
-    _mock_zfs_get_values["pool/proxmox/vm-105-disk-0:receive_resume_token"]="-"
-    _mock_qm_status="running"
+    busy_findmnt_zfs() {
+        printf '%s\n' "/pool/fs/.zfs/snapshot/snap1 pool/fs@snap1"
+    }
     start_capture
-    diagnose_dataset_busy "pool/proxmox/vm-105-disk-0"
+    diagnose_dataset_busy "pool/fs@snap1"
     local out
     out=$(stop_capture)
-    if [[ "$out" == *"VM 105 is RUNNING"* ]]; then
+    busy_findmnt_zfs() { :; }
+    if [[ "$out" == *"automounted"* && "$out" == *"/pool/fs/.zfs/snapshot/snap1"* ]]; then
         test_pass
     else
-        test_fail "Expected 'VM 105 is RUNNING' in output, got: $out"
+        test_fail "Expected automounted snapshot line, got: $out"
     fi
 }
 
-test_diagnose_nfs_share() {
-    test_start "Detects NFS share"
+test_diagnose_namespace_mount() {
+    test_start "Report: mount held inside another namespace"
     reset_mocks
-    _mock_zfs_get_values["pool/fs:mounted"]="no"
-    _mock_zfs_get_values["pool/fs:receive_resume_token"]="-"
-    _mock_zfs_get_values["pool/fs:sharenfs"]="rw=@192.168.1.0/24"
-    _mock_zfs_get_values["pool/fs:sharesmb"]="off"
+    local f
+    f=$(mktemp)
+    printf '%s\n' "pool/fs /rootfs/pool/fs zfs rw 0 0" > "$f"
+    busy_proc_mounts_files() { echo "$f"; }
     start_capture
     diagnose_dataset_busy "pool/fs"
     local out
     out=$(stop_capture)
-    if [[ "$out" == *"shared via NFS"* ]]; then
+    rm -f "$f"
+    busy_proc_mounts_files() { :; }
+    if [[ "$out" == *"another mount namespace"* && "$out" == *"at /rootfs/pool/fs"* ]]; then
         test_pass
     else
-        test_fail "Expected 'shared via NFS' in output, got: $out"
+        test_fail "Expected namespace-holder line, got: $out"
+    fi
+}
+
+test_diagnose_iscsi_lun_name_agnostic() {
+    test_start "Report: export found by device, not by name"
+    reset_mocks
+    _mock_targetcli_backstores="  o- backup-disk-7 .........."
+    _mock_targetcli_backstores+=" [/dev/zvol/pool/proxmox/backup-disk-7 (10GiB)]"
+    _mock_targetcli_iscsi="iqn.2026-02.local.stewie:threeamigos"
+    _mock_targetcli_luns="  | o- lun2  [block/backup-disk-7 (/dev/zvol/...)]"
+    unset ISCSI_DETECT_VM_REFS_FILE
+    start_capture
+    diagnose_dataset_busy "pool/proxmox/backup-disk-7"
+    local out
+    out=$(stop_capture)
+    if [[ "$out" == *"Exported as an iSCSI network disk"* \
+        && "$out" == *"threeamigos, LUN 2"* && "$out" == *"backup-disk-7"* ]]; then
+        test_pass
+    else
+        test_fail "Expected export details keyed by device, got: $out"
+    fi
+}
+
+test_diagnose_vm_refs_with_running_state() {
+    test_start "Report: VM attachment and run state from gather records"
+    reset_mocks
+    _mock_targetcli_backstores="  o- vm-105-disk-0 .........."
+    _mock_targetcli_backstores+=" [/dev/zvol/pool/proxmox/vm-105-disk-0 (4GiB)]"
+    _mock_targetcli_iscsi="iqn.2026-02.local.stewie:threeamigos"
+    _mock_targetcli_luns="  | o- lun0  [block/vm-105-disk-0 (/dev/zvol/...)]"
+    local refs
+    refs=$(mktemp)
+    printf 'VM|threeamigos:0|105|web-105|scsi0\n' > "$refs"
+    ISCSI_DETECT_VM_REFS_FILE="$refs"
+    printf '%s\n' "status: running" > "$_MOCK_DIR/ssh.out"
+    : > "$_MOCK_DIR/ssh.n"
+    start_capture
+    diagnose_dataset_busy "pool/proxmox/vm-105-disk-0"
+    local out
+    out=$(stop_capture)
+    rm -f "$refs"
+    unset ISCSI_DETECT_VM_REFS_FILE
+    if [[ "$out" == *"Attached to VM 105 'web-105' (disk scsi0) — RUNNING"* ]]; then
+        test_pass
+    else
+        test_fail "Expected VM attachment line, got: $out"
+    fi
+}
+
+test_diagnose_configfs_fallback() {
+    test_start "Report: configfs walk finds export without targetcli"
+    reset_mocks
+    local root _saved_targetcli
+    root=$(mktemp -d)
+    mkdir -p "$root/target/core/block_backup-disk-7"
+    printf '%s\n' "/dev/zvol/pool/proxmox/backup-disk-7" \
+        > "$root/target/core/block_backup-disk-7/udev_path"
+    BUSY_CONFIGFS_ROOT="$root"
+    # Hide targetcli for this test (restore after — unset -f would delete
+    # the recording mock for every later test).
+    _saved_targetcli=$(declare -f targetcli)
+    targetcli() { return 127; }
+    start_capture
+    diagnose_dataset_busy "pool/proxmox/backup-disk-7"
+    local out
+    out=$(stop_capture)
+    eval "$_saved_targetcli"
+    unset BUSY_CONFIGFS_ROOT
+    rm -rf "$root"
+    if [[ "$out" == *"backup-disk-7"* ]]; then
+        test_pass
+    else
+        test_fail "Expected configfs-found backstore in output, got: $out"
     fi
 }
 
 test_diagnose_fallback() {
-    test_start "Fallback message when no cause found"
+    test_start "Report: no holder found — retry hint, no folklore"
     reset_mocks
-    _mock_zfs_get_values["pool/fs:mounted"]="no"
-    _mock_zfs_get_values["pool/fs:receive_resume_token"]="-"
     start_capture
     diagnose_dataset_busy "pool/fs"
     local out
     out=$(stop_capture)
-    if [[ "$out" == *"No specific cause identified"* ]]; then
+    if [[ "$out" == *"No holder found in the live evidence"* \
+        && "$out" != *"scrub"* ]]; then
         test_pass
     else
-        test_fail "Expected fallback message, got: $out"
+        test_fail "Expected evidence-based fallback without scrub folklore, got: $out"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Gate tests (busy_resolve_dataset_busy)
+# ------------------------------------------------------------------
+
+test_resolver_report_only_when_unattended() {
+    test_start "Resolver: unattended runs report and return 2"
+    reset_mocks
+    interactive_off
+    _mock_targetcli_backstores="  o- vm-105-disk-0 .........."
+    _mock_targetcli_backstores+=" [/dev/zvol/pool/proxmox/vm-105-disk-0 (4GiB)]"
+    _mock_targetcli_iscsi="iqn.2026-02.local.stewie:threeamigos"
+    _mock_targetcli_luns="  | o- lun0  [block/vm-105-disk-0 (/dev/zvol/...)]"
+    local rc calls
+    busy_resolve_dataset_busy "pool/proxmox/vm-105-disk-0" \
+        "cannot destroy: dataset is busy" >/dev/null 2>&1
+    rc=$?
+    calls=$(mock_calls targetcli)
+    if [[ $rc -eq 2 && "$calls" != *"delete"* && ${#_busy_prompts[@]} -eq 0 ]]; then
+        test_pass
+    else
+        local fail_msg="Expected rc=2, no prompt, no mutation;"
+        fail_msg+=" rc=$rc calls=[$calls] prompts=${#_busy_prompts[@]}"
+        test_fail "$fail_msg"
+    fi
+}
+
+test_resolver_nothing_found_offers_retry() {
+    test_start "Resolver: holder gone — offers retry, returns 0 on yes"
+    reset_mocks
+    interactive_on
+    _busy_answers=(y)
+    local rc
+    busy_resolve_dataset_busy "pool/fs" "" >/dev/null 2>&1
+    rc=$?
+    interactive_off
+    if [[ $rc -eq 0 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=0 after retry offer, got $rc"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Ladder: iSCSI export
+# ------------------------------------------------------------------
+
+setup_export_world() {
+    _mock_targetcli_backstores=$'  o- vm-105-disk-0 ..........'
+    _mock_targetcli_backstores+=$' [/dev/zvol/pool/proxmox/vm-105-disk-0 (4GiB)]\n'
+    _mock_targetcli_backstores+=$'  o- vm-101-disk-0 ..........'
+    _mock_targetcli_backstores+=$' [/dev/zvol/pool/proxmox/vm-101-disk-0 (4GiB)]'
+    _mock_targetcli_iscsi="iqn.2026-02.local.stewie:threeamigos"
+    _mock_targetcli_luns="  | o- lun2  [block/vm-105-disk-0 (/dev/zvol/...)]"
+    printf '%s\n' "vm-105-disk-0" "vm-101-disk-0" > "$ISCSI_MANIFEST"
+}
+
+test_resolver_stale_export_unplugs() {
+    test_start "Resolver: leftover export unplugged without any VM impact"
+    reset_mocks
+    interactive_on
+    setup_export_world
+    local refs
+    refs=$(mktemp)
+    printf 'VM|threeamigos:0|101|web-101|scsi0\n' > "$refs"
+    ISCSI_DETECT_VM_REFS_FILE="$refs"
+    _busy_answers=(y)
+    busy_resolve_dataset_busy "pool/proxmox/vm-105-disk-0" "" >/dev/null 2>&1
+    local rc=$?
+    interactive_off
+    rm -f "$refs"
+    unset ISCSI_DETECT_VM_REFS_FILE
+    local calls manifest_left udev_calls
+    calls=$(mock_calls targetcli)
+    manifest_left=$(cat "$ISCSI_MANIFEST")
+    udev_calls=$(mock_calls udevadm)
+    if [[ $rc -eq 0 \
+        && "$calls" == *"/iscsi/iqn.2026-02.local.stewie:threeamigos/tpg1/luns delete lun2"* \
+        && "$calls" == *"/backstores/block delete vm-105-disk-0"* \
+        && "$manifest_left" == *"vm-101-disk-0"* \
+        && "$manifest_left" != *"vm-105-disk-0"* \
+        && "$udev_calls" == *"settle"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc calls=[$calls] manifest=[$manifest_left] udev=[$udev_calls]"
+    fi
+}
+
+test_resolver_stopped_vm_detaches_and_unplugs() {
+    test_start "Resolver: stopped VM — config detach then unplug"
+    reset_mocks
+    interactive_on
+    setup_export_world
+    local refs
+    refs=$(mktemp)
+    printf 'VM|threeamigos:2|105|web-105|scsi0\n' > "$refs"
+    ISCSI_DETECT_VM_REFS_FILE="$refs"
+    printf '%s\n' "status: stopped" > "$_MOCK_DIR/ssh.out"
+    : > "$_MOCK_DIR/ssh.n"
+    _busy_answers=(y)
+    busy_resolve_dataset_busy "pool/proxmox/vm-105-disk-0" "" >/dev/null 2>&1
+    local rc=$?
+    interactive_off
+    rm -f "$refs"
+    unset ISCSI_DETECT_VM_REFS_FILE
+    local ssh_calls calls
+    ssh_calls=$(mock_calls ssh)
+    calls=$(mock_calls targetcli)
+    if [[ $rc -eq 0 \
+        && "$ssh_calls" == *"qm set '105' --delete 'scsi0'"* \
+        && "$calls" == *"/backstores/block delete vm-105-disk-0"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc ssh=[$ssh_calls] calls=[$calls]"
+    fi
+}
+
+test_resolver_running_vm_menu_unplug_now() {
+    test_start "Resolver: running VM menu option 1 — unplug while running"
+    reset_mocks
+    interactive_on
+    setup_export_world
+    local refs
+    refs=$(mktemp)
+    printf 'VM|threeamigos:2|105|web-105|scsi0\n' > "$refs"
+    ISCSI_DETECT_VM_REFS_FILE="$refs"
+    # ssh outcomes in order: the report pass's run-state classification,
+    # the resolver's own classification, then the detach.
+    printf '%s\n' "0" "0" "0" > "$_MOCK_DIR/ssh.rc"
+    printf '%s\n' "status: running" "status: running" "" > "$_MOCK_DIR/ssh.out"
+    : > "$_MOCK_DIR/ssh.n"
+    _busy_answers=(1)
+    busy_resolve_dataset_busy "pool/proxmox/vm-105-disk-0" "" >/dev/null 2>&1
+    local rc=$?
+    interactive_off
+    rm -f "$refs"
+    unset ISCSI_DETECT_VM_REFS_FILE
+    local ssh_calls calls
+    ssh_calls=$(mock_calls ssh)
+    calls=$(mock_calls targetcli)
+    if [[ $rc -eq 0 \
+        && "$ssh_calls" == *"qm set '105' --delete 'scsi0'"* \
+        && "$calls" == *"/backstores/block delete vm-105-disk-0"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc ssh=[$ssh_calls] calls=[$calls]"
+    fi
+}
+
+test_resolver_running_vm_menu_shutdown_first() {
+    test_start "Resolver: running VM menu option 2 — shutdown, detach, unplug"
+    reset_mocks
+    interactive_on
+    setup_export_world
+    local refs
+    refs=$(mktemp)
+    printf 'VM|threeamigos:2|105|web-105|scsi0\n' > "$refs"
+    ISCSI_DETECT_VM_REFS_FILE="$refs"
+    # ssh outcomes, in order: the report pass's classification (running),
+    # the menu's classification (running), option 2's re-check (running),
+    # the qm shutdown command (quiet), one running poll, one stopped poll,
+    # then the config detach.
+    printf '%s\n' "0" "0" "0" "0" "0" "0" "0" > "$_MOCK_DIR/ssh.rc"
+    printf '%s\n' "status: running" "status: running" "status: running" "" \
+        "status: running" "status: stopped" "" > "$_MOCK_DIR/ssh.out"
+    : > "$_MOCK_DIR/ssh.n"
+    _busy_answers=(2)
+    busy_resolve_dataset_busy "pool/proxmox/vm-105-disk-0" "" >/dev/null 2>&1
+    local rc=$?
+    interactive_off
+    rm -f "$refs"
+    unset ISCSI_DETECT_VM_REFS_FILE
+    local ssh_calls
+    ssh_calls=$(mock_calls ssh)
+    if [[ $rc -eq 0 \
+        && "$ssh_calls" == *"qm shutdown '105'"* \
+        && "$ssh_calls" == *"qm set '105' --delete 'scsi0'"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc ssh=[$ssh_calls]"
+    fi
+}
+
+test_resolver_running_vm_menu_do_nothing() {
+    test_start "Resolver: running VM menu option 3 — nothing is touched"
+    reset_mocks
+    interactive_on
+    setup_export_world
+    local refs
+    refs=$(mktemp)
+    printf 'VM|threeamigos:2|105|web-105|scsi0\n' > "$refs"
+    ISCSI_DETECT_VM_REFS_FILE="$refs"
+    printf '%s\n' "status: running" > "$_MOCK_DIR/ssh.out"
+    : > "$_MOCK_DIR/ssh.n"
+    _busy_answers=(3)
+    busy_resolve_dataset_busy "pool/proxmox/vm-105-disk-0" "" >/dev/null 2>&1
+    local rc=$?
+    interactive_off
+    rm -f "$refs"
+    unset ISCSI_DETECT_VM_REFS_FILE
+    local calls ssh_calls
+    calls=$(mock_calls targetcli)
+    ssh_calls=$(mock_calls ssh)
+    if [[ $rc -eq 1 && "$calls" != *"delete"* \
+        && "$ssh_calls" != *"qm set"* && "$ssh_calls" != *"qm shutdown"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc calls=[$calls] ssh=[$ssh_calls]"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Ladder: holds, automounts, transfers, resume token
+# ------------------------------------------------------------------
+
+test_resolver_holds_leftover_released() {
+    test_start "Resolver: cancelled-transfer tag released, retry signalled"
+    reset_mocks
+    interactive_on
+    _mock_zfs_holds="pool/fs@snap1\t.send-546-0\t2026-11-02"
+    _busy_answers=(y)
+    busy_resolve_dataset_busy "pool/fs@snap1" "" >/dev/null 2>&1
+    local rc=$?
+    interactive_off
+    local zcalls
+    zcalls=$(mock_calls zfs)
+    if [[ $rc -eq 0 && "$zcalls" == *"release .send-546-0 pool/fs@snap1"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc zcalls=[$zcalls]"
+    fi
+}
+
+test_resolver_holds_deferred_default() {
+    test_start "Resolver: deliberate hold — deferred destroy, no release"
+    reset_mocks
+    interactive_on
+    _mock_zfs_holds="pool/fs@snap1\toffsite-2026-11-01\t2026-11-01"
+    _busy_answers=(y)
+    busy_resolve_dataset_busy "pool/fs@snap1" "" >/dev/null 2>&1
+    local rc=$?
+    interactive_off
+    local zcalls
+    zcalls=$(mock_calls zfs)
+    if [[ $rc -eq 1 && "$zcalls" == *"destroy -d pool/fs@snap1"* \
+        && "$zcalls" != *"release"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc zcalls=[$zcalls]"
+    fi
+}
+
+test_resolver_snap_mounts_unmounted() {
+    test_start "Resolver: automounted snapshot folders unmounted lazily"
+    reset_mocks
+    interactive_on
+    busy_findmnt_zfs() {
+        printf '%s\n' "/pool/fs/.zfs/snapshot/snap1 pool/fs@snap1"
+    }
+    _busy_answers=(y)
+    busy_resolve_dataset_busy "pool/fs@snap1" "" >/dev/null 2>&1
+    local rc=$?
+    interactive_off
+    busy_findmnt_zfs() { :; }
+    local ucalls
+    ucalls=$(mock_calls umount)
+    if [[ $rc -eq 0 && "$ucalls" == *"-l /pool/fs/.zfs/snapshot/snap1"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc umount=[$ucalls]"
+    fi
+}
+
+test_resolver_transfer_wait_retry() {
+    test_start "Resolver: running transfer — wait then retry signal"
+    reset_mocks
+    interactive_on
+    _mock_pgrep_out="12345 zfs send pool/fs@snap1"
+    _busy_answers=(y)
+    busy_resolve_dataset_busy "pool/fs@snap1" "" >/dev/null 2>&1
+    local rc=$?
+    interactive_off
+    local slept
+    slept=$(cat "$_MOCK_DIR/sleep.log" 2>/dev/null || echo 0)
+    if [[ $rc -eq 0 && "$slept" -eq 10 ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc slept=$slept"
+    fi
+}
+
+test_resolver_resume_token_abort() {
+    test_start "Resolver: interrupted receive aborted on explicit yes"
+    reset_mocks
+    interactive_on
+    _mock_zfs_get_values["pool/fs:receive_resume_token"]="1-8e3b9c1e2-100"
+    _busy_answers=(y)
+    busy_resolve_dataset_busy "pool/fs" "" >/dev/null 2>&1
+    local rc=$?
+    interactive_off
+    local zcalls
+    zcalls=$(mock_calls zfs)
+    if [[ $rc -eq 0 && "$zcalls" == *"receive -A pool/fs"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc zcalls=[$zcalls]"
+    fi
+}
+
+# ------------------------------------------------------------------
+# iscsi-lib helper units (used by the resolver)
+# ------------------------------------------------------------------
+
+test_vm_config_remove_disk_key_ssh_shape() {
+    test_start "Helper: vm_config_remove_disk_key issues qm set --delete"
+    reset_mocks
+    compute_host="tweety-test"
+    vm_config_remove_disk_key 301 scsi1 >/dev/null 2>&1
+    local rc=$?
+    local ssh_calls
+    ssh_calls=$(mock_calls ssh)
+    if [[ $rc -eq 0 && "$ssh_calls" == *"qm set '301' --delete 'scsi1'"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc ssh=[$ssh_calls]"
+    fi
+}
+
+test_vm_shutdown_wait_polls_until_stopped() {
+    test_start "Helper: vm_shutdown_wait waits for the stopped status"
+    reset_mocks
+    compute_host="tweety-test"
+    # ssh outcomes in order: the shutdown command, then status polls that
+    # answer running twice and stopped on the third poll.
+    mock_ssh_script "0
+0
+0
+0" ""
+    printf '%s\n' "" "status: running" "status: running" "status: stopped" \
+        > "$_MOCK_DIR/ssh.out"
+    vm_shutdown_wait 301 60 >/dev/null 2>&1
+    local rc=$?
+    local slept
+    slept=$(cat "$_MOCK_DIR/sleep.log" 2>/dev/null || echo 0)
+    if [[ $rc -eq 0 && "$slept" -gt 0 ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc slept=$slept"
+    fi
+}
+
+test_vm_shutdown_wait_timeout() {
+    test_start "Helper: vm_shutdown_wait gives up after the timeout"
+    reset_mocks
+    compute_host="tweety-test"
+    mock_ssh_script "0" ""
+    printf '%s\n' "status: running" > "$_MOCK_DIR/ssh.out"
+    vm_shutdown_wait 301 0 >/dev/null 2>&1
+    local rc=$?
+    if [[ $rc -eq 1 ]]; then
+        test_pass
+    else
+        test_fail "Expected rc=1 on timeout, got $rc"
+    fi
+}
+
+test_iscsi_unplug_export_manifest_and_record() {
+    test_start "Helper: iscsi_unplug_export removes manifests and records"
+    reset_mocks
+    printf '%s\n' "vm-105-disk-0" > "$ISCSI_MANIFEST"
+    iscsi_unplug_export "iqn.2026-02.local.stewie:threeamigos" 2 \
+        "vm-105-disk-0" "pool/proxmox/vm-105-disk-0" >/dev/null 2>&1
+    local rc=$?
+    local calls manifest_left
+    calls=$(mock_calls targetcli)
+    manifest_left=$(cat "$ISCSI_MANIFEST")
+    if [[ $rc -eq 0 \
+        && "$calls" == *"delete lun2"* \
+        && "$calls" == *"/backstores/block delete vm-105-disk-0"* \
+        && -z "$manifest_left" \
+        && "${iscsi_teardown[pool/proxmox/vm-105-disk-0]:-}" \
+            == "iqn.2026-02.local.stewie:threeamigos:2:vm-105-disk-0:N" ]]; then
+        test_pass
+    else
+        local fail_msg="rc=$rc calls=[$calls] manifest=[$manifest_left]"
+        fail_msg+=" teardown=[${iscsi_teardown[pool/proxmox/vm-105-disk-0]:-}]"
+        test_fail "$fail_msg"
     fi
 }
 
@@ -357,9 +947,28 @@ test_diagnose_clone_dependents_snapshot
 test_diagnose_holds
 test_diagnose_mounted_open_files
 test_diagnose_resume_token
-test_diagnose_iscsi_lun
-test_diagnose_running_vm
-test_diagnose_nfs_share
+test_diagnose_transfer_running
+test_diagnose_snap_automount
+test_diagnose_namespace_mount
+test_diagnose_iscsi_lun_name_agnostic
+test_diagnose_vm_refs_with_running_state
+test_diagnose_configfs_fallback
 test_diagnose_fallback
+test_resolver_report_only_when_unattended
+test_resolver_nothing_found_offers_retry
+test_resolver_stale_export_unplugs
+test_resolver_stopped_vm_detaches_and_unplugs
+test_resolver_running_vm_menu_unplug_now
+test_resolver_running_vm_menu_shutdown_first
+test_resolver_running_vm_menu_do_nothing
+test_resolver_holds_leftover_released
+test_resolver_holds_deferred_default
+test_resolver_snap_mounts_unmounted
+test_resolver_transfer_wait_retry
+test_resolver_resume_token_abort
+test_vm_config_remove_disk_key_ssh_shape
+test_vm_shutdown_wait_polls_until_stopped
+test_vm_shutdown_wait_timeout
+test_iscsi_unplug_export_manifest_and_record
 
 test_summary

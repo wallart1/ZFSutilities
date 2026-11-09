@@ -276,9 +276,14 @@ function delsnap {
         return 1
     fi
 
-    if ! zfs destroy "$snaptoremove"; then
-        rc=$?
-        diagnose_dataset_busy "$snaptoremove"
+    local _busy_err=""
+    if ! _busy_err=$(zfs destroy "$snaptoremove" 2>&1); then
+        if busy_resolve_dataset_busy "$snaptoremove" "$_busy_err" \
+                && zfs destroy "$snaptoremove"; then
+            zfslock_release "$delsnap_lock"
+            return 0
+        fi
+        rc=1
         if [[ $skipbusy = 'Y' ]]; then
             log_msg "WARN: Unable to remove snapshot $snaptoremove (rc=$rc). Skipping."
             zfslock_release "$delsnap_lock"

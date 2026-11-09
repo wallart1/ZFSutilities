@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.139.0
+
+*Released 2026-11-05*
+
+### Added
+
+- **Assisted "dataset is busy" resolution.** When `zfs destroy` refuses a
+  dataset or snapshot, the deleting commands (`zfsdelfs`, `zfsdelsnap`,
+  `clone-vm`, `sever-vm-clone`) now run the rewritten `zfs-diagnose-busy`
+  engine instead of printing a bare diagnosis. Holders are found from
+  authoritative live evidence — hold tags (with `.send-*`
+  cancelled-transfer leftovers classified apart from deliberate holds),
+  running send/receive processes and interrupted-receive resume tokens,
+  this-namespace mounts with `PID:command` holders, other-namespace
+  container mounts via `/proc/*/mounts`, automounted snapshot folders,
+  and the LIO export matched by device with per-VM run state read from
+  the compute host's VM configs (a backstore's name is a birth label,
+  never usage truth). A human-present session is offered one
+  plain-language remedy at a time up a least-intrusive ladder — ending,
+  for a disk attached to a running VM, in a three-way menu (unplug now /
+  shut the VM down for me first / do nothing). Unattended runs (cron
+  backups, scheduled retention, batch `ssh`) automatically get the
+  report only, and `busyassist=N` forces report-only everywhere. A
+  resolved holder retries the destroy exactly once; product hold tags
+  are never released automatically and nothing is ever killed.
+- **`iscsi-lib.sh` unplug helpers.** `iscsi_unplug_export` (LUN +
+  backstore + manifest/encrypted-conf removal, shared with
+  `iscsi_teardown_zvol`), `vm_config_remove_disk_key` (`qm set
+  --delete` over ssh), and `vm_shutdown_wait` (clean shutdown + poll,
+  never a force stop).
+
+### Changed
+
+- **Restore destination rename freedom.** A manually typed restore
+  destination no longer has to end with a suffix of the source path —
+  the old refusal is gone. A non-suffix destination is a rename: the
+  source is received exactly as the typed name, and with recursive
+  restore enabled its descendants land beneath the new name. The
+  confirm dialog says so before the transfer starts.
+- **Disks inventory: SMART data on physical rows only.** Partition rows
+  no longer inherit the parent disk's SMART verdict or wear/surface-test
+  status — both cells are blank on partitions (SMART data never
+  pertains to a partition; probing of physical devices is unchanged).
+- **Performance tab: counted Refreshing indicator.** The Refreshing
+  label next to the refresh spinner now tracks every in-flight refresh
+  at once, so with the Blocksize Alignment view visible it stays up for
+  the whole (slower) alignment gather instead of flickering off when
+  the quick charts sample finishes; a failed sample no longer strands
+  the indicator or the refresh cycle.
+
+### Tests
+
+- The Schedule-page saved-state suite no longer depends on session
+  import order: its two page-build tests import the module fresh with
+  their own mocks, so an earlier suite's page build can no longer leak
+  into their call-count assertions (an intermittent full-gate failure).
+
 ## 0.138.0
 
 *Released 2026-11-03*

@@ -534,8 +534,8 @@ Single-snapshot delete with age, hold, clone, and counterpart protections. Calle
 | `WARN: Deletion blocked - this is the last remaining common snapshot.` | `zfscheckagainst` found this is the only common snapshot | Snapshot kept |
 | `WARN: Snapshot ... still has holds (...); skipping deletion.` | After releasing the matching tags, other user holds remain | Snapshot kept; release the listed holds |
 | `WARN: Snapshot ... has clone dependents. Skipping deletion.` | The snapshot is a clone origin | Snapshot kept; sever ([sever-vm-clone](#sever-vm-clone)) or destroy the clones |
-| `WARN: Unable to remove snapshot ... (rc=...). Skipping.` | `zfs destroy` failed with busy-skip enabled (diagnostics were printed first) | Snapshot kept; address the busy cause |
-| `FATAL: Unable to remove snapshot .... rc=....` | `zfs destroy` failed without busy-skip (direct invocations) | Script aborts (exit 8); address the busy cause |
+| `WARN: Unable to remove snapshot ... (rc=...). Skipping.` | `zfs destroy` failed with busy-skip enabled; findings were printed first (interactive sessions were offered the [guided remedy](#zfs-diagnose-busy)) | Snapshot kept; address the busy cause |
+| `FATAL: Unable to remove snapshot .... rc=....` | `zfs destroy` failed without busy-skip (direct invocations); findings were printed first (interactive sessions were offered the [guided remedy](#zfs-diagnose-busy)) | Script aborts (exit 8); address the busy cause |
 
 ### [zfsdelfs](../commands-and-modules/commands.md#zfsdelfs)
 
@@ -551,9 +551,52 @@ Destroys a dataset subtree, ignoring holds. Refuses datasets with clone dependen
 | `FATAL: One or more datasets have ZFS clone dependents and cannot be deleted. Use sever-vm-clone to sever the dependencies first.` | Interactive pre-check found clone dependents | Script aborts (exit 8); sever the clones first |
 | `FATAL: ... has ZFS clone dependents — cannot delete. Use sever-vm-clone to sever the dependencies first.` | Per-dataset clone gate during deletion | Script aborts (exit 8); sever the clones first |
 | `FATAL: ... NOT deleted (running VM).` | iSCSI teardown failed (running VM or LUN teardown failure) | Script aborts (exit 8); stop the VM and rerun |
-| `FATAL: ... was NOT deleted.` | `zfs destroy` failed (diagnostics were printed first) | Script aborts (exit 8); address the busy cause |
+| `FATAL: ... was NOT deleted.` | `zfs destroy` failed and the [busy resolver](#zfs-diagnose-busy) could not clear it (findings were printed first; interactive sessions were offered a guided remedy) | Script aborts (exit 8); address the busy cause |
 | `FATAL: ... was NOT deleted because delallsnaps could not delete all of its snapshots.` | Snapshot cleanup incomplete, so the dataset destroy was skipped deliberately | Script aborts (exit 8); see the delallsnaps messages above |
 | `INFO: ... was deleted.` | Per-dataset success | Informational |
+| `INFO: ... was deleted (busy resolved).` | The destroy was refused as busy, the [busy resolver](#zfs-diagnose-busy) cleared the holder, and the retry succeeded | Informational |
+
+### [zfs-diagnose-busy](../commands-and-modules/modules.md#zfs-diagnose-busy)
+
+The shared busy-refusal engine. After a `zfs destroy` fails, every caller prints
+the findings (report-only when unattended) and — when a terminal or the GUI's
+input-hold panel can answer — offers one plain-language guided remedy at a
+time. Holders are found from live evidence; VM attachments are read from the
+VM configs' target+LUN references, never from dataset names.
+
+| Message prefix | Meaning | Response |
+| -------------- | ------- | -------- |
+| `WARN: ZFS reported: ...` | The failed destroy's own stderr, echoed for context | Informational |
+| `WARN: Diagnosing why ... cannot be destroyed...` | Evidence collection begins | Informational |
+| `WARN:   → A zfs transfer involving this dataset is running: ...` | A matching `zfs send`/`receive` process holds the dataset | Wait for it (or stop it) before destroying |
+| `WARN:   → Exported as an iSCSI network disk: target ..., LUN ... (backstore ...).` | The kernel holds the zvol open for the LIO export — no process appears in `lsof`/`fuser` | Remove the export (see the guided questions below) |
+| `WARN:     Attached to VM ... '...' (disk ...) — RUNNING` / `— stopped` | A VM config references the export's target+LUN, with its run state | Interactive sessions are offered the remedy menu |
+| `WARN:     No virtual machine references this export (left over).` | The export matches no VM config | Interactive sessions are offered the leftover-export removal |
+| `WARN:   → Snapshot has hold tags: ... (hold), ... (cancelled-transfer leftover)` | Hold tags, classified | Release deliberately-placed tags yourself; leftovers can be released by the resolver |
+| `WARN:   → Snapshot folder is held open (automounted): ... (...)` | Browsing `.zfs/snapshot` left a mount that holds the snapshot | Unmount it (the resolver can do it) |
+| `WARN:   → Mounted inside another mount namespace (a container?): pid ... at ...` | A container or other-namespace process holds a mount (invisible to `fuser`) | Stop the holding container/process |
+| `WARN:   → Dataset is mounted at ...` / `WARN:     Processes with files open: PID:command ...` | Normal mount with holders named by PID | Close them, or force with `zfs destroy -f` |
+| `WARN:   → An interrupted receive is recorded (resume token present).` | A resumable receive is outstanding | Abort with `zfs receive -A` if the partial data is not wanted |
+| `WARN:   → No holder found in the live evidence. ...` | Every probe came back empty (the holder may have released moments ago) | Try the delete again |
+| `INFO: Detaching <key> from VM ... (...)...` / `INFO: ✓ Detached ...` | Guided remedy: the disk key is removed from the VM config (`qm set --delete`) | Informational |
+| `INFO: Shutting down VM ... on ...` / `INFO: ✓ VM ... is stopped` | Guided remedy: clean shutdown, waited for | Informational |
+| `WARN: VM ... did not stop in time — nothing was detached.` | The shutdown wait timed out; no force stop is ever issued | Stop the VM yourself and retry |
+| `INFO: Removing iSCSI LUN ... + backstore ... from ...` / `INFO: iSCSI unplug complete: ... (LUN ...)` | The LUN mapping, backstore, and manifest/encrypted-conf entries are removed (shared with `iscsi_teardown_zvol`) | Informational |
+| `INFO: ✓ Released ...` | A cancelled-transfer hold tag was released on confirmation | Informational |
+| `INFO: ✓ Marked for deferred destruction — the snapshot disappears when its holds are released.` | Guided remedy: `zfs destroy -d`; no hold was released | Informational |
+| `INFO: ✓ Unmounted ...` | Guided remedy: a snapshot automount was lazily unmounted | Informational |
+| `INFO: ✓ Interrupted receive discarded` | Guided remedy: `zfs receive -A` on explicit confirmation | Informational |
+| `WARN: iSCSI unplug helper unavailable — ...` | The sourcing context has no iSCSI library (snapshot-only callers) | Remove the LUN/backstore with targetcli, then retry |
+| `WARN: Could not detach ... / Could not release ... / Could not unmount ...` | A guided step failed; nothing else is attempted | Address the named step and retry |
+| `INFO: Left everything as it is.` / `INFO: Left ... alone — retry after the transfer completes.` | The operator declined the offered remedy | Nothing was changed |
+
+Guided questions (interactive sessions only; every action requires an explicit
+answer, defaults are the safe choice): retry-after-settle, transfer wait,
+leftover-export removal, stopped-VM detach, the running-VM menu (`1` unplug now
+with the VM running, `2` shut the VM down for me first, `3` do nothing),
+leftover-tag release, deferred destruction, snapshot-folder unmount, and the
+interrupted-receive abort. Unattended runs (cron backups, scheduled retention,
+batch `ssh`) never see a question — they get the findings above.
 
 ### [zfsdelallsnaps](../commands-and-modules/commands.md#zfsdelallsnaps)
 

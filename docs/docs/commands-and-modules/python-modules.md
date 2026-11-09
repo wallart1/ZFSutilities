@@ -398,7 +398,7 @@ SMART.
 | `smart_health(path)`  | Return `PASSED`, `FAILED`, or `n/a` for a device                                                                                                                                             |
 | `smart_wear(path)`    | Return SSD/NVMe wear percentage (0-100) from `smartctl -j -A` JSON, or `None`                                                                                                                |
 | `smart_details(path)` | Return raw `smartctl -a` text or `n/a`                                                                                                                                                       |
-| `disk_inventory()`    | Combine the above into a single inventory object; SSD/NVMe disks get one combined `smartctl -j -H -A` probe yielding both health and `DiskInfo.wear_percent`, HDDs keep the quick `-H` check |
+| `disk_inventory()`    | Combine the above into a single inventory object; SSD/NVMe disks get one combined `smartctl -j -H -A` probe yielding both health and `DiskInfo.wear_percent`, HDDs keep the quick `-H` check. SMART data is probed only on physical devices — partition rows carry blank health and no wear |
 
 **Called modules / imported helpers:**
 
@@ -1027,7 +1027,7 @@ datasets' keylocation away from the restore key.
 | Function                                   | Purpose                                            |
 | ------------------------------------------ | -------------------------------------------------- |
 | `compute_auto_destination(...)`            | Derive default destination by stripping qualifiers |
-| `compute_restore_params(sourcefs, destfs)` | Compute send/receive parameters for restore        |
+| `compute_restore_params(sourcefs, destfs)` | Compute send/receive parameters for restore; a destination that shares no source-path suffix is a rename (every component stripped, destfs is the whole typed destination) |
 | `build_restore_command(...)`               | Build the `bash` command for a restore operation   |
 
 **Called modules / imported helpers:**
