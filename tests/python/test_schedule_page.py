@@ -6,9 +6,17 @@ import sys
 import time
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from test_support import REPO_ROOT, capture_logs, mock_gtk, requires_gi, temp_config_dir
+from test_support import (
+    REPO_ROOT,
+    capture_logs,
+    import_gui_fresh,
+    mock_gtk,
+    requires_gi,
+    temp_config_dir,
+)
 
 pytestmark = requires_gi
 
@@ -29,15 +37,30 @@ _FAKE_PATHS = {
 }
 
 
-class TestRegenerateCronPath(unittest.TestCase):
-    """Verify _regenerate_cron picks the correct runner_path."""
+class _FreshSchedulePageTestCase(unittest.TestCase):
+    """Base: every test imports a fresh schedule_page in its own mock context.
+
+    A plain ``mock_gtk(): import schedule_page`` binds the FIRST context's
+    mocks for the whole process (sys.modules caches the module), so any other
+    suite importing schedule_page first — directly or through a handler
+    module — left these tests asserting against drifted shared mocks
+    (order-dependent failures in one-process runs and under xdist after
+    worker grouping shifted; see PREEXISTING history). setUp imports the
+    module fresh via import_gui_fresh, and unittest applies @patch
+    decorators after setUp, so the suite's string-target patches keep
+    resolving against the fresh module.
+    """
+
+    def setUp(self):
+        with mock_gtk():
+            self._schedule_page = import_gui_fresh("schedule_page")
 
     def _import_schedule_page(self):
-        """Import schedule_page inside a GTK mock context."""
-        with mock_gtk():
-            import schedule_page
+        return self._schedule_page
 
-            return schedule_page
+
+class TestRegenerateCronPath(_FreshSchedulePageTestCase):
+    """Verify _regenerate_cron picks the correct runner_path."""
 
     def test_uses_current_symlink_when_deployed(self):
         schedule_page = self._import_schedule_page()
@@ -158,18 +181,12 @@ class FakeScheduleStore:
         self._rows.append(list(row))
 
 
-class TestScheduleDirtyTracking(unittest.TestCase):
+class TestScheduleDirtyTracking(_FreshSchedulePageTestCase):
     """Verify Save/Revert reflects active toggles and cron edits across rows."""
 
     COL_ACTIVE = 0
     COL_NAME = 1
     COL_NEXT_RUN_SORT = 6
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def _make_app(self, rows):
         app = MagicMock()
@@ -356,14 +373,8 @@ class TestScheduleDirtyTracking(unittest.TestCase):
         mock_red.assert_called_with(app._schedule_save_button, False)
 
 
-class TestConfigSummary(unittest.TestCase):
+class TestConfigSummary(_FreshSchedulePageTestCase):
     """Verify the Config Summary text view shows the full profile config."""
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def _make_app(self, rows):
         app = MagicMock()
@@ -556,14 +567,8 @@ class TestConfigSummary(unittest.TestCase):
         mock_enable_copy.assert_called_once_with(app.schedule_summary_textview)
 
 
-class TestConfigSummaryScroll(unittest.TestCase):
+class TestConfigSummaryScroll(_FreshSchedulePageTestCase):
     """Verify the Config Summary scroll position is preserved on refresh."""
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def _make_app(self, rows, existing_summary="", scroll_pos=0.0):
         app = MagicMock()
@@ -650,15 +655,8 @@ class TestConfigSummaryScroll(unittest.TestCase):
         vadj.set_value.assert_not_called()
 
 
-class TestSchedulePageWidgets(unittest.TestCase):
+class TestSchedulePageWidgets(_FreshSchedulePageTestCase):
     """Verify UI widget configuration for cron entries and sortable columns."""
-
-    def _import_schedule_page(self):
-        """Import schedule_page inside a GTK mock context."""
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     @patch("schedule_page.Gtk")
     @patch("schedule_page.list_profiles", return_value=[])
@@ -777,15 +775,8 @@ class TestSchedulePageWidgets(unittest.TestCase):
         self.assertIn("JSON dump", tips[0].args[0])
 
 
-class TestNextRunQueryTooltip(unittest.TestCase):
+class TestNextRunQueryTooltip(_FreshSchedulePageTestCase):
     """_on_next_run_query_tooltip resolves the hovered Next Run cell."""
-
-    def _import_schedule_page(self):
-        """Import schedule_page inside a GTK mock context."""
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def _make_view(self, hit):
         view = MagicMock()
@@ -852,15 +843,8 @@ class TestNextRunQueryTooltip(unittest.TestCase):
         tooltip.set_text.assert_not_called()
 
 
-class TestNextRunStrings(unittest.TestCase):
+class TestNextRunStrings(_FreshSchedulePageTestCase):
     """Verify _next_run_strings formatting and fallback behavior."""
-
-    def _import_schedule_page(self):
-        """Import schedule_page inside a GTK mock context."""
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     @patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN])
     def test_next_run_strings_formats_datetime(self, _mock_next):
@@ -884,7 +868,7 @@ class TestNextRunStrings(unittest.TestCase):
         self.assertEqual(sort_str, "")
 
 
-class TestNextRunDecoration(unittest.TestCase):
+class TestNextRunDecoration(_FreshSchedulePageTestCase):
     """Next Run display: no bucket word; UTC edge hint for snapshot profiles.
 
     The parenthesized retention-bucket word was removed because it read as
@@ -894,6 +878,7 @@ class TestNextRunDecoration(unittest.TestCase):
     """
 
     def setUp(self):
+        super().setUp()
         # Pin the local zone: the decoration compares the UTC date with the
         # local date, so the assertions must not depend on the host zone.
         self._orig_tz = os.environ.get("TZ")
@@ -908,9 +893,7 @@ class TestNextRunDecoration(unittest.TestCase):
         time.tzset()
 
     def _strings(self, when, label=None):
-        with mock_gtk():
-            import schedule_page
-
+        schedule_page = self._schedule_page
         schedule_page._NEXT_RUN_CACHE.clear()
         with patch("schedule_page.next_run_times", return_value=[when]):
             return schedule_page._next_run_strings({}, label)
@@ -959,8 +942,7 @@ class TestNextRunDecoration(unittest.TestCase):
         self.assertEqual(display, "Sat Oct 10 2026 23:30")
 
     def test_build_rows_decorates_only_snapshot_profiles(self):
-        with mock_gtk():
-            import schedule_page
+        schedule_page = self._schedule_page
 
         # An earlier test in the same minute may have cached the fallback
         # string under the retention row's key (empty cron, no label);
@@ -995,15 +977,8 @@ class TestNextRunDecoration(unittest.TestCase):
         self.assertEqual(rows[1][schedule_page.COL_NEXT_RUN], "Sat Oct 10 2026 23:30")
 
 
-class TestUpdateNextRunForIter(unittest.TestCase):
+class TestUpdateNextRunForIter(_FreshSchedulePageTestCase):
     """Verify _update_next_run_for_iter updates both display and sort columns."""
-
-    def _import_schedule_page(self):
-        """Import schedule_page inside a GTK mock context."""
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     @patch("schedule_page.next_run_times", return_value=[SAMPLE_NEXT_RUN])
     @patch("schedule_page.load_profile")
@@ -1027,15 +1002,8 @@ class TestUpdateNextRunForIter(unittest.TestCase):
         )
 
 
-class TestSchedulePageFrames(unittest.TestCase):
+class TestSchedulePageFrames(_FreshSchedulePageTestCase):
     """Tests for Schedule page layout helpers."""
-
-    def _import_schedule_page(self):
-        """Import schedule_page inside a GTK mock context."""
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     @patch("schedule_page.Gtk")
     @patch("schedule_page._refresh_profile_list")
@@ -1059,14 +1027,8 @@ class TestSchedulePageFrames(unittest.TestCase):
         expander.set_label_widget.assert_called_once()
 
 
-class TestScheduleSavedState(unittest.TestCase):
+class TestScheduleSavedState(_FreshSchedulePageTestCase):
     """Verify the Schedule tab dirty state is visible to action_dispatch."""
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     @patch("schedule_page.Gtk")
     @patch("schedule_page.list_profiles", return_value=[])
@@ -1133,14 +1095,8 @@ class TestScheduleSavedState(unittest.TestCase):
         mock_red.assert_called_once_with(app._schedule_save_button, False)
 
 
-class TestCronConsistency(unittest.TestCase):
+class TestCronConsistency(_FreshSchedulePageTestCase):
     """Verify _check_cron_consistency warns when crontab is out of sync."""
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def _profile(self, name, active=True, hour="12"):
         return {
@@ -1200,14 +1156,8 @@ class TestCronConsistency(unittest.TestCase):
         )
 
 
-class TestRunNow(unittest.TestCase):
+class TestRunNow(_FreshSchedulePageTestCase):
     """Verify the Run Now button launches selected profiles immediately."""
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def _make_app(self, rows, selected_paths):
         app = MagicMock()
@@ -1220,6 +1170,9 @@ class TestRunNow(unittest.TestCase):
         app._schedule_save_button = MagicMock()
         app._schedule_pending = {}
         app._schedule_ignore_changes = False
+        # A MagicMock auto-attr tracker would answer any_running() with a
+        # truthy mock; give the idle answer explicitly.
+        app.dataset_actions = SimpleNamespace(any_running=lambda: False)
         app.schedule_cron_entries = {
             "minute": MagicMock(),
             "hour": MagicMock(),
@@ -1509,14 +1462,8 @@ class TestRunNow(unittest.TestCase):
         app._update_progress.assert_not_called()
 
 
-class TestScheduleDelete(unittest.TestCase):
+class TestScheduleDelete(_FreshSchedulePageTestCase):
     """Verify the Delete button works with the MULTIPLE-selection TreeView."""
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def _make_app(self, rows, selected_paths):
         app = MagicMock()
@@ -1599,7 +1546,7 @@ class TestScheduleDelete(unittest.TestCase):
         mock_refresh.assert_not_called()
 
 
-class TestRefreshSchedulePage(unittest.TestCase):
+class TestRefreshSchedulePage(_FreshSchedulePageTestCase):
     """Verify refresh_schedule_page updates Next Run and preserves state."""
 
     COL_ACTIVE = 0
@@ -1611,6 +1558,7 @@ class TestRefreshSchedulePage(unittest.TestCase):
     COL_NEXT_RUN_SORT = 6
 
     def setUp(self):
+        super().setUp()
         # Pin the local zone: the Next Run decoration compares the UTC date
         # with the local date, so exact-string assertions must not depend on
         # the host zone.
@@ -1624,12 +1572,6 @@ class TestRefreshSchedulePage(unittest.TestCase):
         else:
             os.environ["TZ"] = self._orig_tz
         time.tzset()
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def _make_app(self, rows, selected_paths=None):
         app = MagicMock()
@@ -1782,14 +1724,8 @@ class TestRefreshSchedulePage(unittest.TestCase):
         selection.select_iter.assert_called_once()
 
 
-class TestRefreshScheduleAsync(unittest.TestCase):
+class TestRefreshScheduleAsync(_FreshSchedulePageTestCase):
     """Verify the default async refresh path does not block the main thread."""
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def test_async_refresh_starts_background_thread(self):
         schedule_page = self._import_schedule_page()
@@ -1831,14 +1767,8 @@ class TestRefreshScheduleAsync(unittest.TestCase):
         mock_threading.Thread.assert_not_called()
 
 
-class TestScheduleRefreshData(unittest.TestCase):
+class TestScheduleRefreshData(_FreshSchedulePageTestCase):
     """Verify data gathering uses the UI state captured on the main thread."""
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def test_gather_uses_captured_selection_and_store_names(self):
         schedule_page = self._import_schedule_page()
@@ -1860,14 +1790,8 @@ class TestScheduleRefreshData(unittest.TestCase):
         self.assertEqual(len(data["rows"]), 1)
 
 
-class TestLogProfileLine(unittest.TestCase):
+class TestLogProfileLine(_FreshSchedulePageTestCase):
     """Verify _log_profile_line updates status for pv lines but does not log them."""
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def _call_log_profile_line(self, schedule_page, app):
         """Call _log_profile_line with a numeric IOCondition mask.
@@ -1909,14 +1833,8 @@ class TestLogProfileLine(unittest.TestCase):
         mock_log.assert_called_once_with("[my-profile] INFO: Step finished")
 
 
-class TestConditionField(unittest.TestCase):
+class TestConditionField(_FreshSchedulePageTestCase):
     """Verify the optional shell condition field in the Schedule tab."""
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def _make_app(self, rows):
         app = MagicMock()
@@ -2162,14 +2080,8 @@ class TestConditionField(unittest.TestCase):
         self.assertIn(r"[ $(date +\%d) -ge 28 ]", actual)
 
 
-class TestNextRunCache(unittest.TestCase):
+class TestNextRunCache(_FreshSchedulePageTestCase):
     """Verify next-run caching is time-bucketed to avoid stale values."""
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     @patch("schedule_page.next_run_times")
     def test_cache_hits_within_same_minute(self, mock_next):
@@ -2204,16 +2116,10 @@ class TestNextRunCache(unittest.TestCase):
         self.assertEqual(mock_next.call_count, 2)
 
 
-class TestCommentColumn(unittest.TestCase):
+class TestCommentColumn(_FreshSchedulePageTestCase):
     """Verify comment display and editing on the Schedule page."""
 
     COL_COMMENT = 4
-
-    def _import_schedule_page(self):
-        with mock_gtk():
-            import schedule_page
-
-            return schedule_page
 
     def _make_app(self, rows):
         app = MagicMock()

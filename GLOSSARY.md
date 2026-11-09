@@ -113,6 +113,16 @@ the 2026-10-27 incident class — the node silently coming up with 3 of 33
 LUNs mapped while every gate passed — is dead: nothing silent, nothing
 destroyed, one clean recovery.
 
+## dataset action
+
+A GUI operation that mutates pools or datasets — destroy, sever clone,
+rewrite data, apply profile, create/grow/maintain/migrate a pool, wipe
+labels, enroll a pool. Each one runs on its own runner, and more than one
+may be in flight at a time; what serializes them is the
+[dataset lock](#dataset-lock) each one takes, not a shared queue. When a
+dataset action collides with another operation, its confirmation is
+refused with a warning that names the lock's holder.
+
 ## dataset lock
 
 A reservation on a pool, dataset, or snapshot that serializes ZFS
@@ -362,6 +372,19 @@ the userland and kernel-module versions, because `zfs receive` runs in
 userland while the effect lands in the kernel module — a split stack
 (one half old, one half new) must clear the bar on both sides. See
 `RECEIVE_FAMILY` in `python/zfs_capabilities.py`.
+
+## shadowed mount
+
+A dataset the kernel lists as mounted whose mountpoint path cannot be
+reached, because a later mount over an ancestor (typically a pool root
+mounted after its children) covers the path. Data written through the
+path lands in the covering filesystem instead, and `zfs unmount` fails
+with the misleading `no such pool or dataset`. The covering layer is
+called the *cover*; the GUI repairs the order by unmounting the affected
+set (detaching covers with an exact-layer `umount` so unrelated mounted
+children are not cascaded) and remounting parents-first. Contrast an
+*orphaned* mount, where an ancestor is unmounted and the path is simply
+missing.
 
 ## shape
 

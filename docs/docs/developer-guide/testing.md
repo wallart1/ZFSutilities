@@ -47,6 +47,10 @@ tests/run-tests --slowest 10
 
 # Persist the full console stream to a file (overwrites any previous file)
 tests/run-tests --log /tmp/zfs-run.log
+
+# Runner usage — prints the flag list and exits without running anything
+# (-h works too, anywhere in the argument list)
+tests/run-tests --help
 ```
 
 The `--log` option captures the harness's own console output, including
@@ -543,6 +547,9 @@ python3 -m pytest tests/python -q
 # Legacy entry points still work (runner.py prints a deprecation notice)
 ./tests/run-python-tests
 ./tests/run-python-tests test_backup_config
+
+# Wrapper usage — answered by the wrapper itself, before the shim or pytest
+./tests/run-python-tests --help
 ```
 
 `--failures-only` has no exact pytest equivalent; it maps to `-q`, which

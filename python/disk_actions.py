@@ -9,6 +9,7 @@ from disk_wipe import build_wipe_command, show_wipe_dialog, wipe_block_reason, w
 from disks_page import COL_D_BYID, COL_D_NAME, refresh_disks_page, update_disks_button_sensitivity
 from logging_config import log_msg
 from pools_page import on_pools_refresh
+from runner_factory import new_dataset_action_runner
 
 
 def _get_selected_disk_path(app):
@@ -53,14 +54,6 @@ def on_disks_wipe_labels(app):
         log_msg("WARN: Disk wipe is available only on the storage host")
         return
 
-    runner = getattr(app, "dataset_runner", None)
-    if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
-        return
-
     path = _get_selected_disk_path(app)
     if not path:
         log_msg("WARN: Select a disk to wipe")
@@ -85,7 +78,14 @@ def on_disks_wipe_labels(app):
         return
 
     cmd = build_wipe_command(disk)
-    lock_id = zlm.acquire(disk.path, "w", f"Wipe labels on {disk.path}")
+    runner = new_dataset_action_runner(app)
+    if runner is None:
+        return
+    try:
+        lock_id = zlm.acquire(disk.path, "w", f"Wipe labels on {disk.path}")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot wipe labels on {disk.path}: {exc}")
+        return
     step = BashStep(cmd, f"Wipe labels on {disk.path}", is_rsync=False, fatal=True)
 
     def _on_complete(cancelled=False, rc=None):

@@ -17,12 +17,14 @@ import gi
 gi.require_version("Gtk", "3.0")
 
 import node_config
+import zfs_lock_manager as zlm
 from backup_config import log_msg
 from command_builders import BashStep
 from disks_page import refresh_disks_page, update_disks_button_sensitivity
 from gi.repository import Gtk
 from path_utils import resolve_local_bin
 from pools_page import on_pools_refresh
+from runner_factory import new_dataset_action_runner
 
 # Characters allowed in an iSCSI target short name (mirrors the bash
 # derive_target_short character class: lowercase letters, digits, dot, hyphen).
@@ -136,9 +138,10 @@ def _show_enroll_dialog(app, pool_name: str, default_short: str) -> str | None:
 def offer_iscsi_enrollment(app, pool_name: str, on_done=None) -> bool:
     """Offer to enroll *pool_name* in two-node iSCSI after pool creation.
 
-    Returns True when the enrollment step was handed to the dataset runner,
-    False when the offer does not apply (single-node or compute host), the
-    pool is already enrolled, the runner is busy, or the user declined.
+    Returns True when the enrollment step was handed to a dataset action
+    runner, False when the offer does not apply (single-node or compute
+    host), the pool is already enrolled, the pool is locked by another
+    operation, or the user declined.
     *on_done* is called without arguments after the enrollment step finishes.
     """
     config = node_config.load_node_config()
@@ -147,11 +150,20 @@ def offer_iscsi_enrollment(app, pool_name: str, on_done=None) -> bool:
     if is_iscsi_managed_pool(pool_name, config):
         return False
 
-    runner = getattr(app, "dataset_runner", None)
-    if runner is None or runner.running:
+    runner = new_dataset_action_runner(app)
+    if runner is None:
         log_msg(
             f"INFO: iSCSI enrollment for pool '{pool_name}' skipped because a "
-            "dataset action is not available or already running. Manual steps:"
+            "dataset action runner is not available. Manual steps:"
+        )
+        log_manual_enrollment_steps(pool_name)
+        return False
+    try:
+        lock_id = zlm.acquire(pool_name, "w", f"Enroll pool {pool_name} in iSCSI")
+    except RuntimeError as exc:
+        log_msg(
+            f"INFO: iSCSI enrollment for pool '{pool_name}' skipped because the "
+            f"pool is locked by another operation: {exc}. Manual steps:"
         )
         log_manual_enrollment_steps(pool_name)
         return False
@@ -159,6 +171,9 @@ def offer_iscsi_enrollment(app, pool_name: str, on_done=None) -> bool:
     default_short = derive_target_short(pool_name)
     short_name = _show_enroll_dialog(app, pool_name, default_short)
     if short_name is None:
+        # No step runs, so _on_enroll_complete never fires — release here or
+        # the pool stays locked for the rest of the session (live GUI pid).
+        zlm.release(lock_id)
         log_msg(f"INFO: iSCSI enrollment for pool '{pool_name}' declined. Manual steps:")
         log_manual_enrollment_steps(pool_name)
         return False
@@ -177,6 +192,7 @@ def offer_iscsi_enrollment(app, pool_name: str, on_done=None) -> bool:
     )
 
     def _on_enroll_complete(cancelled=False, rc=None):
+        zlm.release(lock_id)
         update_disks_button_sensitivity(app)
         app._disks_inventory_cache.invalidate()
         refresh_disks_page(app)

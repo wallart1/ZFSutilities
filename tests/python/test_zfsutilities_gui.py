@@ -5,6 +5,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -285,10 +286,10 @@ class TestDryRunToggle(unittest.TestCase):
         label.set_markup.assert_called_with("<span color='red'>Dry Run</span>")
 
 
-class TestDatasetRunnerIntegration(unittest.TestCase):
-    """Dataset action runner is created and receives forwarded stdin input."""
+class TestDatasetActionRunnersIntegration(unittest.TestCase):
+    """Dataset actions get one runner each from the tracker; stdin routes to it."""
 
-    def test_dataset_runner_created(self):
+    def test_tracker_created_and_lazy(self):
         gui = _gui_module()
         with (
             patch.object(gui.ZFSUtilitiesWindow, "create_sidebar_and_stack"),
@@ -301,7 +302,7 @@ class TestDatasetRunnerIntegration(unittest.TestCase):
             mock_factory_instance = MagicMock()
             mock_factory.return_value = mock_factory_instance
 
-            def _make_runner(label):
+            def _make_runner(label, on_start=None):
                 runner = MagicMock()
                 runner.label = label
                 return runner
@@ -310,27 +311,46 @@ class TestDatasetRunnerIntegration(unittest.TestCase):
 
             window = gui.ZFSUtilitiesWindow(application=None)
 
+        # Only the four transfer runners exist at window init; dataset
+        # action runners are created on demand by the tracker.
         labels = [c.args[0] for c in mock_factory_instance.create.call_args_list]
-        self.assertIn("Dataset action", labels)
-        self.assertEqual(window.dataset_runner.label, "Dataset action")
+        self.assertEqual(labels, ["Backup", "Offsite backup", "Restore", "Prune"])
+        self.assertIsInstance(window.dataset_actions, gui.DatasetActionRunners)
+        self.assertEqual(
+            window._runners,
+            [
+                window.backup_runner,
+                window.offsite_runner,
+                window.restore_runner,
+                window.retention_runner,
+            ],
+        )
 
-    def test_input_forwarded_to_dataset_runner(self):
+        runner = window.dataset_actions.new_runner()
+        self.assertEqual(mock_factory_instance.create.call_args.args[0], "Dataset action")
+        self.assertEqual(runner.label, "Dataset action")
+        self.assertEqual(window.dataset_actions.live_runners(), [])
+        runner.start(on_complete=None)
+        self.assertEqual(window.dataset_actions.live_runners(), [runner])
+
+    def test_input_forwarded_to_dataset_action_runner(self):
         gui = _gui_module()
         with patch.object(gui.ZFSUtilitiesWindow, "__init__", lambda self, **kwargs: None):
             window = gui.ZFSUtilitiesWindow()
             window._input_registry = gui.InputRequestRegistry()
-            window.dataset_runner = MagicMock()
-            window.dataset_runner.label = "Dataset action"
-            window.dataset_runner.running = True
-            window.dataset_runner.step_active = True
-            window._runners = [window.dataset_runner]
+            runner = MagicMock()
+            runner.label = "Dataset action"
+            runner.running = True
+            runner.step_active = True
+            window._runners = []
+            window.dataset_actions = SimpleNamespace(live_runners=lambda: [runner])
             window.stdin_entry = MagicMock()
             window.stdin_entry.get_text.return_value = "yes"
 
             with patch("zfsutilities_gui.log_msg"):
                 window._send_stdin_text()
 
-            window.dataset_runner.send_input.assert_called_once_with("yes")
+            runner.send_input.assert_called_once_with("yes")
 
 
 class TestDashboardTimer(unittest.TestCase):

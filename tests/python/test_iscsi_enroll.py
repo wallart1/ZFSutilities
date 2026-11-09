@@ -4,6 +4,7 @@ import contextlib
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -67,6 +68,7 @@ def _node_config(two_node=True, storage=True, pools=()):
 def _make_app(runner=None):
     app = MagicMock()
     app.dataset_runner = runner if runner is not None else FakeDatasetRunner()
+    app.dataset_actions = SimpleNamespace(new_runner=lambda: app.dataset_runner)
     return app
 
 
@@ -181,34 +183,46 @@ class TestOfferGating(unittest.TestCase):
         self._assert_declined_silently(ie, _node_config(pools={"newpool"}))
 
 
-class TestOfferRunnerBusy(unittest.TestCase):
-    def test_runner_busy_skips_with_manual_steps(self):
+class TestOfferLockConflict(unittest.TestCase):
+    def test_lock_conflict_skips_with_manual_steps(self):
         ie = _import_enroll()
         runner = FakeDatasetRunner()
-        runner.running = True
         app = _make_app(runner=runner)
+        zlm = MagicMock()
+        zlm.acquire.side_effect = RuntimeError(
+            "conflict: cannot acquire w lock on newpool: "
+            "held by dataset='newpool' type=write pid=7 script=zfsdailybackup"
+        )
         with (
             patch.object(ie, "node_config", _node_config()),
+            patch.object(ie, "zlm", zlm),
             capture_logs() as logs,
         ):
             result = ie.offer_iscsi_enrollment(app, "newpool")
         self.assertFalse(result)
         self.assertEqual(runner.steps, [])
-        self.assertTrue(any("skipped" in line for line in logs), logs)
+        self.assertTrue(
+            any("skipped because the pool is locked by another operation" in line for line in logs),
+            logs,
+        )
+        self.assertTrue(any("script=zfsdailybackup" in line for line in logs), logs)
         self.assertTrue(any("setup-iscsi-targets" in line for line in logs), logs)
         self.assertTrue(any("rescan-storage" in line for line in logs), logs)
+        zlm.release.assert_not_called()
 
-    def test_runner_missing_skips_with_manual_steps(self):
+    def test_missing_tracker_skips_with_manual_steps(self):
         ie = _import_enroll()
-        app = _make_app(runner=None)
-        app.dataset_runner = None
+        app = _make_app()
+        app.dataset_actions = None
         with (
             patch.object(ie, "node_config", _node_config()),
             capture_logs() as logs,
         ):
             result = ie.offer_iscsi_enrollment(app, "newpool")
         self.assertFalse(result)
-        self.assertTrue(any("skipped" in line for line in logs), logs)
+        self.assertTrue(
+            any("dataset action runner is not available" in line for line in logs), logs
+        )
         self.assertTrue(any("rescan-storage" in line for line in logs), logs)
 
 
@@ -286,8 +300,11 @@ class TestOfferDialog(unittest.TestCase):
     def test_no_declines_with_manual_steps(self):
         ie = _import_enroll()
         app = _make_app()
+        zlm = MagicMock()
+        zlm.acquire.return_value = "/locks/newpool.lock"
         with (
             self._patch_offer(ie, None),
+            patch.object(ie, "zlm", zlm),
             capture_logs() as logs,
         ):
             result = ie.offer_iscsi_enrollment(app, "newpool")
@@ -296,6 +313,9 @@ class TestOfferDialog(unittest.TestCase):
         self.assertTrue(any("declined" in line for line in logs), logs)
         self.assertTrue(any("setup-iscsi-targets" in line for line in logs), logs)
         self.assertTrue(any("rescan-storage" in line for line in logs), logs)
+        # No step runs, so the completion callback never fires — the decline
+        # path itself must release the pool lock taken before the dialog.
+        zlm.release.assert_called_once_with("/locks/newpool.lock")
 
     def test_enrollment_failure_logs_warn_and_calls_on_done(self):
         ie = _import_enroll()

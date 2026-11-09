@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,6 +15,8 @@ if PYTHON_SRC not in sys.path:
 
 import backup_history
 import file_locking
+
+_LOCK_CHILD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lock_child.py")
 
 
 class TestParseHumanSize(unittest.TestCase):
@@ -239,31 +242,48 @@ class TestHistoryLocking(unittest.TestCase):
             tmpdir.cleanup()
 
     def test_add_history_entry_atomic_under_write_lock(self):
-        """Concurrent add_history_entry calls must not lose entries."""
-        import multiprocessing
+        """Concurrent add_history_entry calls must not lose entries.
 
+        The concurrent appenders run as fresh interpreters
+        (tests/python/lock_child.py), never multiprocessing forks of this
+        worker — a forked child of a loaded pytest-xdist worker can
+        deadlock before it reaches its first queue.put() (CI
+        2026-11-08..09), and a fresh child must also patch its own module
+        paths instead of inheriting the parent's monkeypatch.
+        """
         orig_path = backup_history.HISTORY_PATH
         orig_lock = file_locking.HISTORY_LOCK_PATH
         tmpdir = tempfile.TemporaryDirectory()
         try:
-            backup_history.HISTORY_PATH = os.path.join(tmpdir.name, "history.json")
-            file_locking.HISTORY_LOCK_PATH = os.path.join(tmpdir.name, ".history.lock")
+            history_path = os.path.join(tmpdir.name, "history.json")
+            lock_path = os.path.join(tmpdir.name, ".history.lock")
+            backup_history.HISTORY_PATH = history_path
+            file_locking.HISTORY_LOCK_PATH = lock_path
 
-            def add_one(name):
-                entry = backup_history.build_entry(
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                    run_type="backup",
-                    name=name,
-                    duration=1.0,
-                    result="success",
+            procs = []
+            for i in range(4):
+                procs.append(
+                    subprocess.Popen(
+                        [
+                            sys.executable,
+                            _LOCK_CHILD,
+                            "history-add",
+                            history_path,
+                            lock_path,
+                            f"run-{i}",
+                        ],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
                 )
-                backup_history.add_history_entry(entry)
-
-            procs = [multiprocessing.Process(target=add_one, args=(f"run-{i}",)) for i in range(4)]
-            for p in procs:
-                p.start()
-            for p in procs:
-                p.join(timeout=10)
+            for i, proc in enumerate(procs):
+                _, stderr = proc.communicate(timeout=60)
+                self.assertEqual(
+                    proc.returncode,
+                    0,
+                    f"history child run-{i} failed: {stderr.strip()}",
+                )
 
             entries = backup_history.load_history()
             names = {e["name"] for e in entries}

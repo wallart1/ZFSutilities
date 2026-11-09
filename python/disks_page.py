@@ -1026,9 +1026,6 @@ def update_disks_button_sensitivity(app):
     if btn:
         btn.set_sensitive(single_selection)
 
-    runner_busy = bool(
-        getattr(app, "dataset_runner", None) and getattr(app.dataset_runner, "running", False)
-    )
     compute_host = node_config.is_two_node() and not node_config.is_storage_host()
 
     create_btn = getattr(app, "_disks_create_pool_btn", None)
@@ -1036,15 +1033,14 @@ def update_disks_button_sensitivity(app):
         if compute_host:
             create_btn.set_sensitive(False)
             set_action_tooltip(create_btn, "Pool creation is available only on the storage host")
-        elif runner_busy:
-            create_btn.set_sensitive(False)
-            set_action_tooltip(create_btn, "A dataset action is already running")
         else:
             create_btn.set_sensitive(True)
             set_action_tooltip(create_btn)
 
     # Pool-growth/maintenance buttons share the Create Pool gating:
-    # compute-host, then runner-busy.
+    # storage-host only. Dataset locks refuse a conflicting operation at
+    # confirmation time, so the buttons stay enabled while other dataset
+    # actions run.
     growth_attrs = (
         ("_disks_add_vdev_btn", "Pool growth is available only on the storage host"),
         ("_disks_attach_btn", "Pool growth is available only on the storage host"),
@@ -1060,9 +1056,6 @@ def update_disks_button_sensitivity(app):
         if compute_host:
             btn.set_sensitive(False)
             set_action_tooltip(btn, host_tooltip)
-        elif runner_busy:
-            btn.set_sensitive(False)
-            set_action_tooltip(btn, "A dataset action is already running")
         else:
             btn.set_sensitive(True)
             set_action_tooltip(btn)
@@ -1077,9 +1070,6 @@ def update_disks_button_sensitivity(app):
             set_action_tooltip(
                 proxmox_btn, "Proxmox enrollment is available only on the storage host"
             )
-        elif runner_busy:
-            proxmox_btn.set_sensitive(False)
-            set_action_tooltip(proxmox_btn, "A dataset action is already running")
         else:
             proxmox_btn.set_sensitive(bool(pool_name))
             set_action_tooltip(
@@ -1092,9 +1082,6 @@ def update_disks_button_sensitivity(app):
         if compute_host:
             surf_btn.set_sensitive(False)
             set_action_tooltip(surf_btn, "Surface tests run on the storage host")
-        elif runner_busy:
-            surf_btn.set_sensitive(False)
-            set_action_tooltip(surf_btn, "A dataset action is already running")
         else:
             surf_btn.set_sensitive(bool(selected_hdd))
             set_action_tooltip(
@@ -1107,9 +1094,6 @@ def update_disks_button_sensitivity(app):
         if compute_host:
             wipe_btn.set_sensitive(False)
             set_action_tooltip(wipe_btn, "Disk wipe is available only on the storage host")
-        elif runner_busy:
-            wipe_btn.set_sensitive(False)
-            set_action_tooltip(wipe_btn, "A dataset action is already running")
         else:
             wipe_btn.set_sensitive(bool(wipeable))
             set_action_tooltip(

@@ -268,7 +268,7 @@ def create_backup_page(app, ctx):
     if saved:
         app.backup_nextsnap_entry.set_text(saved)
         app.backup_nextsnap_label.set_text("nextsnap (previous)")
-        log_msg(f"INFO: Previous snapshot name found: {saved}")
+        log_msg(f"VERB: Previous snapshot name found: {saved}")
     else:
         _do_generate_snap(app)
 
@@ -611,7 +611,7 @@ def _do_generate_snap(app):
     snap = generate_snapshot_name(label)
     app.backup_nextsnap_entry.set_text(snap)
     app.backup_nextsnap_label.set_text("nextsnap (new)")
-    log_msg(f"INFO: New snapshot name: {snap}")
+    log_msg(f"VERB: New snapshot name: {snap}")
 
 
 def _on_generate_snap(button, app):

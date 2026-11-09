@@ -319,6 +319,11 @@ def _format_lock_holder(holder: dict) -> str:
     return part
 
 
+def format_lock_holders(holders: list[dict]) -> str:
+    """Render conflicting-lock holder dicts as one log-friendly detail string."""
+    return "; ".join(_format_lock_holder(holder) for holder in holders)
+
+
 def _get_node_config() -> dict:
     """Return the cached node configuration."""
     global _node_config_cache

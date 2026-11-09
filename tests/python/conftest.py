@@ -11,6 +11,7 @@ connects to the operator's display — see ``_fence_display``.
 """
 
 import atexit
+import glob
 import os
 import shutil
 import subprocess
@@ -29,7 +30,8 @@ os.environ.setdefault("NO_AT_BRIDGE", "1")
 
 # Redirect advisory locks into an isolated, per-process temporary directory.
 # file_locking/cron_manager/feature_config bind lock paths at import time from
-# ZFSUTILITIES_LOCK_DIR (default /run/lock/zfsutilities), and tests must never
+# ZFSUTILITIES_LOCK_DIR (default /run/lock/zfsutilities), and
+# zfs_lock_manager binds from ZFSLOCK_DIR; tests must never
 # touch the host's real lock directory: it may be root-owned (breaking
 # non-root runs) or held by a live instance. pytest imports this module before
 # any test module, so the import-time bindings pick the temporary location up;
@@ -39,6 +41,8 @@ if "ZFSUTILITIES_LOCK_DIR" not in os.environ:
     _isolated_lock_dir = tempfile.mkdtemp(prefix="zfsutilities-test-locks-")
     os.environ["ZFSUTILITIES_LOCK_DIR"] = _isolated_lock_dir
     atexit.register(shutil.rmtree, _isolated_lock_dir, ignore_errors=True)
+if "ZFSLOCK_DIR" not in os.environ:
+    os.environ["ZFSLOCK_DIR"] = os.environ["ZFSUTILITIES_LOCK_DIR"]
 
 # Redirect bytecode caching out of the checkout for sudo test legs. A root
 # pytest run that imports a module with a missing or stale .pyc would leave
@@ -86,6 +90,39 @@ def pytest_configure(config):
         "may lead to deadlocks:DeprecationWarning",
     )
     _fence_display()
+
+
+# --- Dataset-lock leak reset -------------------------------------------------
+#
+# GUI handlers acquire real zfs_lock_manager locks. A test that starts an
+# action without driving its fake runner to completion leaves a lock file
+# whose recorded PID is the live worker process, so stale-lock detection
+# can never reap it — and every later real-lock acquisition in the same
+# worker for that dataset conflicts (the enrollment-offer suites hit this
+# as soon as the offers began locking the pool root). Reset the isolated
+# lock directory's leftovers and the module's bookkeeping after each test.
+
+
+@pytest.fixture(autouse=True)
+def _reset_dataset_lock_state():
+    yield
+    try:
+        import zfs_lock_manager as _zlm
+
+        for _pattern in (
+            os.path.join(_zlm.ZFSLOCK_LOCKS_DIR, "*.lock"),
+            os.path.join(_zlm.ZFSLOCK_LOCKS_DIR, ".remote-conflict.*"),
+            os.path.join(_zlm.ZFSLOCK_PIDS_DIR, "*"),
+        ):
+            for _path in glob.glob(_pattern):
+                try:
+                    os.unlink(_path)
+                except OSError:
+                    pass
+        _zlm._lock_refcounts.clear()
+        _zlm._remote_holds.clear()
+    except Exception:  # noqa: S110 - pragma: no cover; best-effort hygiene
+        pass
 
 
 # --- Private-display fence -------------------------------------------------

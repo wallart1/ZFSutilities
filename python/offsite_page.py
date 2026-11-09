@@ -204,7 +204,7 @@ def create_offsite_page(app, ctx):
     if saved:
         app.offsite_nextsnap_entry.set_text(saved)
         app.offsite_nextsnap_label.set_text("nextsnap (previous)")
-        log_msg(f"INFO: Offsite: previous snapshot name found: {saved}")
+        log_msg(f"VERB: Offsite: previous snapshot name found: {saved}")
     else:
         _do_generate_snap(app)
 
@@ -471,7 +471,7 @@ def _do_generate_snap(app):
     snap = generate_offsite_snapshot_name()
     app.offsite_nextsnap_entry.set_text(snap)
     app.offsite_nextsnap_label.set_text("nextsnap (new)")
-    log_msg(f"INFO: Offsite: new snapshot name: {snap}")
+    log_msg(f"VERB: Offsite: new snapshot name: {snap}")
 
 
 def do_detect_offsite_pool(app):

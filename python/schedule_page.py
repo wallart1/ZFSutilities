@@ -68,12 +68,12 @@ def _interactive_runner_active(app):
         "offsite_runner",
         "restore_runner",
         "retention_runner",
-        "dataset_runner",
     ):
         runner = getattr(app, name, None)
         if runner is not None and getattr(runner, "running", False) is True:
             return True
-    return False
+    tracker = getattr(app, "dataset_actions", None)
+    return tracker is not None and bool(tracker.any_running())
 
 
 def _update_profile_status(app, profile_name, line):

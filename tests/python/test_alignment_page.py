@@ -1817,12 +1817,28 @@ class TestGuestFsPresentation(_PageTestCase):
         vm_row = next(row for row in rows if row[1] == "VM")
         self.assertIn("guest fs unprobed: VM not running", vm_row[4])
 
-    def test_degrade_note_names_guest_probe_failures(self):
+    def test_degrade_note_counts_guest_probe_failures_by_reason(self):
+        # The note summarizes by reason (rows carry each volume's own
+        # reason), never enumerating volumes: a 21-volume wall of
+        # "vm-N-disk-N (reason), …" was the run-on this format replaced.
         _mp, ap, app = self._prepared()
-        sample = _sample(guest_fs_failures={"vm-201-disk-0": "VM not running"})
+        sample = _sample(
+            guest_fs={"vm-201-disk-1": [GuestFsEntry(mount="/", fstype="ext4", blocksize=4096)]},
+            guest_fs_failures={
+                "vm-201-disk-0": "VM not running",
+                "vm-215-disk-0": "VM not running",
+                "vm-202-disk-3": "guest agent not running",
+            },
+        )
         ap._apply_alignment_sample(app, sample)
         markup = app._alignment_note.set_markup.call_args[0][0]
-        self.assertIn("Guest filesystems unprobed for: vm-201-disk-0 (VM not running)", markup)
+        self.assertIn("Guest filesystems unprobed for 3 of 4 volumes", markup)
+        # Reasons ranked by count, then alphabetically.
+        self.assertIn("VM not running (2), guest agent not running (1)", markup)
+        self.assertIn("Reasons per volume appear in the VM rows", markup)
+        # The summary never names volumes — that detail lives in rows.
+        self.assertNotIn("vm-201-disk-0", markup)
+        self.assertNotIn("vm-215", markup)
 
     def test_no_guest_note_when_probed(self):
         _mp, ap, app = self._prepared()

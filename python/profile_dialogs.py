@@ -55,6 +55,7 @@ from profile_manager import (
     update_profile,
 )
 from profile_validation import validate_profiles
+from runner_factory import new_dataset_action_runner
 from workload_profiles import (
     LIVE_PROPERTIES,
     ZFS_GET_PROPERTIES,
@@ -273,10 +274,11 @@ def on_rewrite_data(app, datasets, refresh=None):
     """Rewrite data on *datasets* (all filesystems) using ``zfs rewrite -P``.
 
     Requires at least one filesystem dataset, OpenZFS 2.3.4+ (per
-    ``zfs_capabilities.FEATURE_MIN_VERSION``), the pool's
-    physical_rewrite feature, and a running dataset_runner. Unmounted
+    ``zfs_capabilities.FEATURE_MIN_VERSION``), and the pool's
+    physical_rewrite feature. Unmounted
     datasets are mounted temporarily and returned to their prior state
-    afterwards. Acquires one write lock per dataset, runs one BashStep per
+    afterwards. Acquires one write lock per dataset (refusing with a
+    holder-naming WARN on conflict), runs one BashStep per
     dataset sequentially, and invokes *refresh* on completion.
     """
     if node_config.is_two_node() and not node_config.is_storage_host():
@@ -299,12 +301,8 @@ def on_rewrite_data(app, datasets, refresh=None):
         log_msg(f"WARN: Rewrite Data {app.ctx.zfs_caps.requires('zfs_rewrite')}")
         return
 
-    runner = getattr(app, "dataset_runner", None)
+    runner = new_dataset_action_runner(app)
     if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
         return
 
     repo = app.ctx.zfs_repository
@@ -366,7 +364,11 @@ def on_rewrite_data(app, datasets, refresh=None):
         return
 
     dataset_names = [ds["name"] for ds in datasets]
-    lock_ids = zlm.acquire_multiple("w", dataset_names)
+    try:
+        lock_ids = zlm.acquire_multiple("w", dataset_names)
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot rewrite data on {', '.join(dataset_names)}: {exc}")
+        return
 
     results_path = _new_rewrite_results_path()
     steps = [
@@ -1088,12 +1090,8 @@ def on_apply_profile(app, datasets, profile, refresh=None):
         log_msg("WARN: Applying profiles is available only on the storage host")
         return
 
-    runner = getattr(app, "dataset_runner", None)
+    runner = new_dataset_action_runner(app)
     if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
         return
 
     repo = app.ctx.zfs_repository
@@ -1130,7 +1128,11 @@ def on_apply_profile(app, datasets, profile, refresh=None):
         return
 
     dataset_names = [ds["name"] for ds in datasets]
-    lock_ids = zlm.acquire_multiple("w", dataset_names)
+    try:
+        lock_ids = zlm.acquire_multiple("w", dataset_names)
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot apply profile to {', '.join(dataset_names)}: {exc}")
+        return
 
     steps = []
     for ds_name, _ds_type, cmd_pairs in ds_commands:
@@ -1214,6 +1216,58 @@ def show_add_profile_dialog(app, tab_type, config_dict, on_success=None, dry_run
     note.set_markup("<small>Only letters, digits, hyphens, and underscores allowed.</small>")
     note.set_halign(Gtk.Align.START)
     content.add(note)
+
+    # Optional overwrite picker: existing profiles of this tab type, so the
+    # user can click a row instead of retyping (and misspelling) a name.
+    existing = [p for p in list_profiles() if p.get("tab_type") == tab_type]
+    if existing:
+        list_label = Gtk.Label(label="Overwrite an existing profile (optional):")
+        list_label.set_halign(Gtk.Align.START)
+        list_label.set_selectable(True)
+        list_label.set_tooltip_text(
+            "Click a row to copy its name into the Name field; OK then asks "
+            "whether to overwrite that profile"
+        )
+        content.add(list_label)
+
+        store = Gtk.ListStore(str, str)
+        for profile in existing:
+            cron = profile.get("cron", {})
+            sched = "{} {} {} {} {}".format(
+                cron.get("minute", "*"),
+                cron.get("hour", "*"),
+                cron.get("day", "*"),
+                cron.get("month", "*"),
+                cron.get("weekday", "*"),
+            )
+            suffix = profile["profile_name"].removeprefix(prefix)
+            store.append([suffix, sched])
+
+        view = Gtk.TreeView(model=store)
+        view.set_grid_lines(Gtk.TreeViewGridLines.HORIZONTAL)
+
+        r0 = Gtk.CellRendererText()
+        c0 = Gtk.TreeViewColumn("Profile", r0, text=0)
+        set_column_header_tooltip(c0, "Profile", f"Existing {tab_type} profiles")
+        configure_treeview_column(c0, width=150)
+        view.append_column(c0)
+
+        r1 = Gtk.CellRendererText()
+        c1 = Gtk.TreeViewColumn("Schedule", r1, text=1)
+        set_column_header_tooltip(c1, "Schedule", "Cron schedule the profile runs on")
+        configure_treeview_column(c1, width=150)
+        view.append_column(c1)
+
+        def _on_selection_changed(selection):
+            model, tree_iter = selection.get_selected()
+            if tree_iter:
+                name_entry.set_text(model.get_value(tree_iter, 0))
+
+        view.get_selection().connect("changed", _on_selection_changed)
+
+        scroll = capped_treeview_scroll(view)
+        _ensure_treeview_scrolling(view)
+        content.add(scroll)
 
     dlg.show_all()
     response = dlg.run()

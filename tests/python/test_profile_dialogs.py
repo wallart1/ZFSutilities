@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
@@ -304,6 +305,7 @@ def _make_app(datasets=None, properties=None):
     app.enable_treeview_copy = MagicMock()
 
     app.dataset_runner = FakeDatasetRunner()
+    app.dataset_actions = SimpleNamespace(new_runner=lambda: app.dataset_runner)
 
     zfs_caps = MagicMock()
     zfs_caps.supports.return_value = False
@@ -810,21 +812,44 @@ class TestApplyProfileHandler(unittest.TestCase):
         self.assertFalse(app.dataset_runner.running)
         mock_message_dialog.assert_called_once()
 
-    def test_apply_profile_handler_warns_when_runner_busy(self):
+    def test_apply_profile_handler_lock_conflict_warns(self):
+        pd = _import_profile_dialogs()
+        app = _make_app()
+        app.config["workload_profiles"] = self._profiles()
+        datasets = [{"name": "pool1/data", "type": "filesystem"}]
+        zlm = MagicMock()
+        zlm.acquire_multiple.side_effect = RuntimeError(
+            "conflict: cannot acquire w lock on pool1/data: "
+            "held by dataset='pool1/data' type=write pid=7 script=zfsdailybackup"
+        )
+
+        with (
+            patch.object(pd, "zlm", zlm),
+            capture_logs() as logs,
+        ):
+            pd.on_apply_profile(app, datasets, self._profiles()["general"])
+
+        self.assertFalse(app.dataset_runner.steps)
+        self.assertTrue(
+            any(
+                "cannot apply profile to pool1/data" in line and "script=zfsdailybackup" in line
+                for line in logs
+            ),
+            logs,
+        )
+
+    def test_apply_profile_handler_runs_while_another_action_is_active(self):
+        """No global gate: apply profile starts even with another runner busy."""
         pd = _import_profile_dialogs()
         app = _make_app()
         app.config["workload_profiles"] = self._profiles()
         app.dataset_runner.running = True
         datasets = [{"name": "pool1/data", "type": "filesystem"}]
 
-        with capture_logs() as logs:
+        with patch.object(pd, "zlm"):
             pd.on_apply_profile(app, datasets, self._profiles()["general"])
 
-        self.assertFalse(app.dataset_runner.steps)
-        self.assertTrue(
-            any("dataset action is already running" in line for line in logs),
-            logs,
-        )
+        self.assertTrue(app.dataset_runner.steps)
 
 
 class _FakeEntry:
@@ -2331,6 +2356,126 @@ class TestProfileDialogStaticTooltips(unittest.TestCase):
         tip = dialog.get_widget_for_response.return_value.set_tooltip_text.call_args.args[0]
         self.assertTrue(tip.strip())
         self.assertIn("backup tab", tip)
+
+
+class TestAddProfileDialogExistingList(unittest.TestCase):
+    """Add Profile to Schedule lists same-type profiles for overwriting."""
+
+    _BACKUP_DAILY: ClassVar[dict] = {
+        "tab_type": "backup",
+        "profile_name": "tester-backup-daily",
+        "cron": {"minute": "30", "hour": "4"},
+    }
+    _BACKUP_WEEKLY: ClassVar[dict] = {
+        "tab_type": "backup",
+        "profile_name": "tester-backup-weekly",
+        "cron": {"weekday": "0"},
+    }
+    _OFFSITE: ClassVar[dict] = {
+        "tab_type": "offsite",
+        "profile_name": "tester-offsite-friday",
+        "cron": {},
+    }
+
+    def _cancel_dialog(self, pd):
+        dialog = MagicMock()
+        dialog.run.return_value = pd.Gtk.ResponseType.CANCEL
+        return dialog, patch.object(pd, "create_dialog", return_value=dialog)
+
+    def test_list_stores_same_type_suffixes_and_schedules(self):
+        pd = _import_profile_dialogs()
+        app = _make_app()
+        _dialog, dialog_patch = self._cancel_dialog(pd)
+
+        with (
+            dialog_patch,
+            patch.object(pd, "get_user", return_value="tester"),
+            patch.object(
+                pd,
+                "list_profiles",
+                return_value=[self._BACKUP_DAILY, self._OFFSITE, self._BACKUP_WEEKLY],
+            ),
+            patch.object(pd.Gtk, "ListStore", return_value=MagicMock()) as store_ctor,
+        ):
+            pd.show_add_profile_dialog(app, "backup", {})
+
+        rows = [c.args[0] for c in store_ctor.return_value.append.call_args_list]
+        self.assertEqual(
+            rows,
+            [["daily", "30 4 * * *"], ["weekly", "* * * * 0"]],
+        )
+
+    def test_selection_fills_name_entry_with_suffix(self):
+        pd = _import_profile_dialogs()
+        app = _make_app()
+        _dialog, dialog_patch = self._cancel_dialog(pd)
+
+        handlers = {}
+        selection = MagicMock()
+        selection.connect.side_effect = lambda sig, cb: handlers.setdefault(sig, cb)
+        model = MagicMock()
+        model.get_value.return_value = "daily"
+        selection.get_selected.return_value = (model, MagicMock())
+        view = MagicMock()
+        view.get_selection.return_value = selection
+
+        with (
+            dialog_patch,
+            patch.object(pd, "get_user", return_value="tester"),
+            patch.object(pd, "list_profiles", return_value=[dict(self._BACKUP_DAILY)]),
+            patch.object(pd.Gtk, "TreeView", return_value=view),
+        ):
+            pd.show_add_profile_dialog(app, "backup", {})
+
+        self.assertIn("changed", handlers)
+        handlers["changed"](selection)
+        texts = [c.args[0] for c in pd.Gtk.Entry.return_value.set_text.call_args_list]
+        self.assertIn("daily", texts)
+
+    def test_no_same_type_profiles_builds_no_list(self):
+        pd = _import_profile_dialogs()
+        app = _make_app()
+        _dialog, dialog_patch = self._cancel_dialog(pd)
+
+        with (
+            dialog_patch,
+            patch.object(pd, "get_user", return_value="tester"),
+            patch.object(pd, "list_profiles", return_value=[self._OFFSITE]),
+            patch.object(pd.Gtk, "TreeView") as tv_ctor,
+            patch.object(pd.Gtk, "ListStore") as ls_ctor,
+        ):
+            pd.show_add_profile_dialog(app, "backup", {})
+
+        tv_ctor.assert_not_called()
+        ls_ctor.assert_not_called()
+
+    def test_list_surfaces_carry_tooltips(self):
+        pd = _import_profile_dialogs()
+        app = _make_app()
+        _dialog, dialog_patch = self._cancel_dialog(pd)
+
+        with (
+            dialog_patch,
+            patch.object(pd, "get_user", return_value="tester"),
+            patch.object(pd, "list_profiles", return_value=[dict(self._BACKUP_DAILY)]),
+            patch.object(pd.Gtk, "ListStore", return_value=MagicMock()),
+            patch.object(pd, "set_column_header_tooltip") as recorder,
+        ):
+            pd.show_add_profile_dialog(app, "backup", {})
+
+        recorded = [(c.args[1], c.args[2]) for c in recorder.call_args_list]
+        self.assertEqual(
+            [title for title, _tip in recorded],
+            ["Profile", "Schedule"],
+        )
+        for _title, tip in recorded:
+            self.assertTrue(tip and tip.strip(), "column header tooltip is empty")
+
+        label_tips = [c.args[0] for c in pd.Gtk.Label.return_value.set_tooltip_text.call_args_list]
+        self.assertTrue(
+            any("Click a row" in t for t in label_tips),
+            "overwrite-picker section label lacks a tooltip",
+        )
 
 
 class TestActionDispatch(unittest.TestCase):

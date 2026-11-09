@@ -33,6 +33,7 @@ from gui_helpers import (
     get_tree_selection_items,
     reload_row_children,
 )
+from runner_factory import new_dataset_action_runner
 from zfs_repository import find_unreachable_mounts, mount_order_property_fixes, zvol_device_path
 
 # ---------------------------------------------------------------------------
@@ -291,7 +292,11 @@ def _delete_datasets(app, datasets):
     for ds_info in details:
         ds_name = ds_info["name"]
         if not zlm.check(ds_name, "x"):
-            log_msg(f"WARN: cannot destroy {ds_name}: dataset is locked by another operation")
+            holders = zlm.conflicting_lock_holders(ds_name, "x")
+            detail = f" ({zlm.format_lock_holders(holders)})" if holders else ""
+            log_msg(
+                f"WARN: cannot destroy {ds_name}: dataset is locked by another operation{detail}"
+            )
             return
 
     body = "\n".join(lines)
@@ -320,12 +325,8 @@ def _delete_datasets(app, datasets):
     if response != Gtk.ResponseType.OK:
         return
 
-    runner = getattr(app, "dataset_runner", None)
+    runner = new_dataset_action_runner(app)
     if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
         return
 
     parent_dir = app.parent_dir
@@ -526,12 +527,8 @@ def on_datasets_show_big_stuff(app):
 
     pool = pool_items[0]["name"]
 
-    runner = getattr(app, "dataset_runner", None)
+    runner = new_dataset_action_runner(app)
     if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
         return
 
     parent_dir = app.parent_dir
@@ -968,7 +965,8 @@ def _recover_orphaned_mount(target, repo):
     umount(2) fails with ENOENT — which libzfs renders as the misleading
     "no such pool or dataset". Recovery remounts the unmounted ancestors,
     root-first, and retries the unmount. If the retry still fails, every
-    ancestor mounted here is unmounted again (best effort) to restore the
+    ancestor mounted here is unmounted again (best effort, exact-layer
+    umount so their other mounted descendants stay mounted) to restore the
     original state.
     """
     try:
@@ -1008,8 +1006,19 @@ def _recover_orphaned_mount(target, repo):
                 return True
 
             for ancestor in reversed(ancestors):
+                try:
+                    mountpoint = repo.get_property(ancestor, "mountpoint")
+                except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                    log_msg(f"WARN: Error resolving mountpoint for {ancestor}: {e}")
+                    continue
+                if not mountpoint or not mountpoint.startswith("/"):
+                    log_msg(
+                        f"WARN: Could not restore unmounted state of {ancestor}: "
+                        f"mountpoint {mountpoint!r} is not a usable path"
+                    )
+                    continue
                 restore = subprocess.run(
-                    ["sudo", "zfs", "unmount", ancestor],
+                    ["sudo", "umount", mountpoint],
                     capture_output=True,
                     text=True,
                     check=False,
@@ -1072,10 +1081,17 @@ def _lift_and_unmount(target, candidates, lifted, app, repo):
     """Unmount *target* by lifting covering ancestors from *candidates*.
 
     A shadowed mount cannot be unmounted by path while a later mount covers
-    it, so each mounted ancestor is unmounted (shallowest first — only
+    it, so each mounted ancestor is lifted (shallowest first — only
     reachable covers can be detached) and the unmount retried after every
     lift. Lifted ancestors are appended to *lifted* so the caller can
     remount them afterwards. Returns True when *target* was unmounted.
+
+    Covers are detached with plain umount(8) on the ancestor's mountpoint,
+    never with ``zfs unmount``: by name or path, ``zfs unmount`` recurses
+    (OpenZFS 2.4.4 ``zfs_unmountall`` → ``changelist_prefix``) into every
+    mounted descendant, cascading unmounts it was never asked for and
+    aborting with "no such pool or dataset" as soon as one descendant is
+    itself shadowed. umount(8) detaches exactly the covering layer.
     """
     for ancestor in candidates:
         if ancestor in lifted:
@@ -1085,6 +1101,12 @@ def _lift_and_unmount(target, candidates, lifted, app, repo):
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             log_msg(f"FATAL: Error resolving mountpoint for {ancestor}: {e}")
             return False
+        if not mountpoint or not mountpoint.startswith("/"):
+            log_msg(
+                f"WARN: Skipping {ancestor} as a lift candidate: mountpoint "
+                f"{mountpoint!r} is not a usable path"
+            )
+            continue
         procs = get_busy_processes(mountpoint)
         if procs:
             proc_list = "\n".join(f"  • {name} (PID {pid})" for pid, name in procs)
@@ -1103,7 +1125,7 @@ def _lift_and_unmount(target, candidates, lifted, app, repo):
             )
             return False
         result = subprocess.run(
-            ["sudo", "zfs", "unmount", ancestor],
+            ["sudo", "umount", mountpoint],
             capture_output=True,
             text=True,
             check=False,

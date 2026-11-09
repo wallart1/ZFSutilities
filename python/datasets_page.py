@@ -48,6 +48,7 @@ from profile_dialogs import (
     show_apply_profile_dialog,
     show_manage_profiles_dialog,
 )
+from runner_factory import new_dataset_action_runner
 from workload_profiles import ZFS_GET_PROPERTIES, match_profile
 from zfs_repository import zvol_device_path
 
@@ -888,16 +889,23 @@ def on_datasets_sever_clone(app):
         log_msg("WARN: Select one or more clone datasets to sever")
         return
 
-    runner = getattr(app, "dataset_runner", None)
-    if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
-        return
-
     if not show_sever_clone_dialog(app, items):
         log_msg("INFO: Sever clone cancelled")
+        return
+
+    # Early visibility for dataset-lock conflicts; sever-vm-clone re-takes
+    # the locks itself, so this only makes the refusal readable.
+    for ds_name in datasets:
+        if not zlm.check_local(ds_name, "w"):
+            holders = zlm.conflicting_lock_holders(ds_name, "w")
+            detail = f" ({zlm.format_lock_holders(holders)})" if holders else ""
+            log_msg(
+                f"WARN: cannot sever clone {ds_name}: dataset is locked by another operation{detail}"
+            )
+            return
+
+    runner = new_dataset_action_runner(app)
+    if runner is None:
         return
 
     step = BashStep(

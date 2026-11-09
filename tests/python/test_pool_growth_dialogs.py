@@ -6,6 +6,7 @@ import contextlib
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -271,6 +272,9 @@ def _make_app(disks=None, topologies=None):
     app.disks_dataset_store = FakeListStoreIterable()
     app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [])
     app.dataset_runner = FakeDatasetRunner()
+    # Dataset actions get one runner each from the tracker; handler tests
+    # hand out the same fake so steps/finish stay observable.
+    app.dataset_actions = SimpleNamespace(new_runner=lambda: app.dataset_runner)
 
     app.known_pools = []
     app._pools_saved_state = []
@@ -559,20 +563,35 @@ class TestHandlerGuards(unittest.TestCase):
         self.assertEqual(app.dataset_runner.steps, [])
         self.assertTrue(any("storage host" in line for line in logs), logs)
 
-    def test_runner_busy_bails(self):
+    def test_lock_conflict_refuses_with_holder_detail(self):
+        """A dataset-lock conflict refuses after the dialog, naming the holder."""
         pgd = _import_dialogs()
         app = _make_app()
-        app.dataset_runner.running = True
         nc = MagicMock()
         nc.is_two_node.return_value = False
+        mock_zlm = MagicMock()
+        mock_zlm.acquire.side_effect = RuntimeError(
+            "conflict: cannot acquire w lock on pool1: "
+            "held by dataset='pool1' type=write pid=123 script=zfsdailybackup"
+        )
         with (
             patch.object(pgd, "node_config", nc),
-            patch.object(pgd, "show_add_vdev_dialog") as dialog,
+            patch.object(pgd, "zlm", mock_zlm),
+            patch.object(
+                pgd, "show_add_vdev_dialog", return_value=("pool1", ["zpool", "add", "pool1"])
+            ) as dialog,
             capture_logs() as logs,
         ):
             pgd.on_disks_add_vdev(app)
-        dialog.assert_not_called()
-        self.assertTrue(any("already running" in line for line in logs), logs)
+        dialog.assert_called_once()
+        self.assertTrue(
+            any("cannot add vdev to pool 'pool1'" in line for line in logs)
+            and any("script=zfsdailybackup" in line for line in logs),
+            logs,
+        )
+        self.assertEqual(app.dataset_runner.steps, [])
+        self.assertFalse(app.dataset_runner.running)
+        mock_zlm.release.assert_not_called()
 
     def test_no_imported_pools_bails(self):
         pgd = _import_dialogs()
@@ -616,6 +635,37 @@ class TestHandlerGuards(unittest.TestCase):
 
 class TestDialogFlow(unittest.TestCase):
     """End-to-end handler flow with a scripted Add-Vdev dialog."""
+
+    def test_second_action_starts_while_first_runs(self):
+        """No global gate: a second pool action gets its own runner while the
+        first is still running (the dataset locks own the serialization)."""
+        pgd = _import_dialogs()
+        app = _make_app()
+        runners = []
+
+        def _new_runner():
+            runner = FakeDatasetRunner()
+            runners.append(runner)
+            return runner
+
+        app.dataset_actions = SimpleNamespace(new_runner=_new_runner)
+        nc = MagicMock()
+        nc.is_two_node.return_value = False
+        mock_zlm = MagicMock()
+        mock_zlm.acquire.return_value = "/lock/pool1"
+        with (
+            patch.object(pgd, "node_config", nc),
+            patch.object(pgd, "zlm", mock_zlm),
+            patch.object(
+                pgd, "show_add_vdev_dialog", return_value=("pool1", ["zpool", "add", "pool1"])
+            ),
+            patch.object(pgd, "show_replace_dialog", return_value=("pool1", ["zpool", "replace"])),
+        ):
+            pgd.on_disks_add_vdev(app)
+            pgd.on_disks_replace_device(app)
+        self.assertEqual(len(runners), 2)
+        self.assertTrue(runners[0].running)
+        self.assertTrue(runners[1].running)
 
     def test_happy_path_adds_vdev(self):
         pgd = _import_dialogs()
@@ -1494,20 +1544,37 @@ class TestAttachHandlerGuards(unittest.TestCase):
         dialog.assert_not_called()
         self.assertTrue(any("storage host" in line for line in logs), logs)
 
-    def test_runner_busy_bails(self):
+    def test_lock_conflict_refuses_with_holder_detail(self):
+        """A dataset-lock conflict refuses after the dialog, naming the holder."""
         pgd = _import_dialogs()
         app = _stripe_app()
-        app.dataset_runner.running = True
         nc = MagicMock()
         nc.is_two_node.return_value = False
+        mock_zlm = MagicMock()
+        mock_zlm.acquire.side_effect = RuntimeError(
+            "conflict: cannot acquire w lock on pool1: "
+            "held by dataset='pool1' type=write pid=123 script=zfsdailybackup"
+        )
         with (
             patch.object(pgd, "node_config", nc),
-            patch.object(pgd, "show_attach_dialog") as dialog,
+            patch.object(pgd, "zlm", mock_zlm),
+            patch.object(
+                pgd,
+                "show_attach_dialog",
+                return_value=("pool1", ["zpool", "attach", "pool1"], "mirror"),
+            ) as dialog,
             capture_logs() as logs,
         ):
             pgd.on_disks_attach_device(app)
-        dialog.assert_not_called()
-        self.assertTrue(any("already running" in line for line in logs), logs)
+        dialog.assert_called_once()
+        self.assertTrue(
+            any("cannot expand vdev in pool 'pool1'" in line for line in logs)
+            and any("script=zfsdailybackup" in line for line in logs),
+            logs,
+        )
+        self.assertEqual(app.dataset_runner.steps, [])
+        self.assertFalse(app.dataset_runner.running)
+        mock_zlm.release.assert_not_called()
 
     def test_no_imported_pools_bails(self):
         pgd = _import_dialogs()
@@ -1973,20 +2040,35 @@ class TestReplaceHandlerGuards(unittest.TestCase):
         dialog.assert_not_called()
         self.assertTrue(any("storage host" in line for line in logs), logs)
 
-    def test_runner_busy_bails(self):
+    def test_lock_conflict_refuses_with_holder_detail(self):
+        """A dataset-lock conflict refuses after the dialog, naming the holder."""
         pgd = _import_dialogs()
         app = _stripe_app()
-        app.dataset_runner.running = True
         nc = MagicMock()
         nc.is_two_node.return_value = False
+        mock_zlm = MagicMock()
+        mock_zlm.acquire.side_effect = RuntimeError(
+            "conflict: cannot acquire w lock on pool1: "
+            "held by dataset='pool1' type=write pid=123 script=zfsdailybackup"
+        )
         with (
             patch.object(pgd, "node_config", nc),
-            patch.object(pgd, "show_replace_dialog") as dialog,
+            patch.object(pgd, "zlm", mock_zlm),
+            patch.object(
+                pgd, "show_replace_dialog", return_value=("pool1", ["zpool", "replace"])
+            ) as dialog,
             capture_logs() as logs,
         ):
             pgd.on_disks_replace_device(app)
-        dialog.assert_not_called()
-        self.assertTrue(any("already running" in line for line in logs), logs)
+        dialog.assert_called_once()
+        self.assertTrue(
+            any("cannot replace device in pool 'pool1'" in line for line in logs)
+            and any("script=zfsdailybackup" in line for line in logs),
+            logs,
+        )
+        self.assertEqual(app.dataset_runner.steps, [])
+        self.assertFalse(app.dataset_runner.running)
+        mock_zlm.release.assert_not_called()
 
     def test_no_imported_pools_bails(self):
         pgd = _import_dialogs()
@@ -2394,20 +2476,35 @@ class TestDetachHandlerGuards(unittest.TestCase):
         dialog.assert_not_called()
         msg_dialog.assert_called_once()
 
-    def test_runner_busy_bails(self):
+    def test_lock_conflict_refuses_with_holder_detail(self):
+        """A dataset-lock conflict refuses after the dialog, naming the holder."""
         pgd = _import_dialogs()
         app = _mirror_app()
-        app.dataset_runner.running = True
         nc = MagicMock()
         nc.is_two_node.return_value = False
+        mock_zlm = MagicMock()
+        mock_zlm.acquire.side_effect = RuntimeError(
+            "conflict: cannot acquire w lock on pool1: "
+            "held by dataset='pool1' type=write pid=123 script=zfsdailybackup"
+        )
         with (
             patch.object(pgd, "node_config", nc),
-            patch.object(pgd, "show_detach_dialog") as dialog,
+            patch.object(pgd, "zlm", mock_zlm),
+            patch.object(
+                pgd, "show_detach_dialog", return_value=("pool1", ["zpool", "detach"])
+            ) as dialog,
             capture_logs() as logs,
         ):
             pgd.on_disks_detach_device(app)
-        dialog.assert_not_called()
-        self.assertTrue(any("already running" in line for line in logs), logs)
+        dialog.assert_called_once()
+        self.assertTrue(
+            any("cannot detach device from pool 'pool1'" in line for line in logs)
+            and any("script=zfsdailybackup" in line for line in logs),
+            logs,
+        )
+        self.assertEqual(app.dataset_runner.steps, [])
+        self.assertFalse(app.dataset_runner.running)
+        mock_zlm.release.assert_not_called()
 
     def test_no_imported_pools_bails(self):
         pgd = _import_dialogs()
@@ -2784,20 +2881,37 @@ class TestInfraHandlerGuards(unittest.TestCase):
         self.assertEqual(app.dataset_runner.steps, [])
         self.assertTrue(any("storage host" in line for line in logs), logs)
 
-    def test_runner_busy_bails(self):
+    def test_lock_conflict_refuses_with_holder_detail(self):
+        """A dataset-lock conflict refuses after the dialog, naming the holder."""
         pgd = _import_dialogs()
         app = _make_app()
-        app.dataset_runner.running = True
         nc = MagicMock()
         nc.is_two_node.return_value = False
+        mock_zlm = MagicMock()
+        mock_zlm.acquire.side_effect = RuntimeError(
+            "conflict: cannot acquire w lock on pool1: "
+            "held by dataset='pool1' type=write pid=123 script=zfsdailybackup"
+        )
         with (
             patch.object(pgd, "node_config", nc),
-            patch.object(pgd, "show_add_infra_vdev_dialog") as dialog,
+            patch.object(pgd, "zlm", mock_zlm),
+            patch.object(
+                pgd,
+                "show_add_infra_vdev_dialog",
+                return_value=("pool1", "special", ["zpool", "add", "special"]),
+            ) as dialog,
             capture_logs() as logs,
         ):
             pgd.on_disks_add_infra_vdev(app)
-        dialog.assert_not_called()
-        self.assertTrue(any("already running" in line for line in logs), logs)
+        dialog.assert_called_once()
+        self.assertTrue(
+            any("cannot add special vdev to pool 'pool1'" in line for line in logs)
+            and any("script=zfsdailybackup" in line for line in logs),
+            logs,
+        )
+        self.assertEqual(app.dataset_runner.steps, [])
+        self.assertFalse(app.dataset_runner.running)
+        mock_zlm.release.assert_not_called()
 
     def test_no_imported_pools_bails(self):
         pgd = _import_dialogs()

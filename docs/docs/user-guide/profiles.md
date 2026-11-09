@@ -26,7 +26,9 @@ example `root-backup-daily` or `root-retention-weekly`.
 4. The profile is written to `~/.config/zfsutilities/profiles/` as a JSON file.
 
 To edit a profile, recall it from the tab where it was created, change the
-settings, and Add Profile to Schedule using the original name.
+settings, and Add Profile to Schedule using the original name. The dialog
+lists the existing profiles of that tab below the name field — click a row to
+copy its name into the field, then confirm the overwrite when asked.
 
 ## Scheduling profiles
 

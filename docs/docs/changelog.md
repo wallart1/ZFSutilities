@@ -1,5 +1,78 @@
 # Changelog
 
+## 0.139.0
+
+*Released 2026-11-09*
+
+### Added
+
+- **Concurrent dataset actions.** The GUI-global "a dataset action is
+  already running" gate is gone: every dataset action (destroy, show big
+  stuff, sever clone, rewrite data, apply profile, create/grow/maintain/
+  migrate a pool, wipe labels, iSCSI/Proxmox enrollment) runs on its own
+  runner and several may be in flight at once — the hierarchical dataset
+  locks are the only fence, exactly as they already were for the CLI.
+  Each action keeps its own session log and its own Dashboard
+  running-tasks row with a working Cancel button; chained phases (a
+  migration's copy → cutover, enrollment after pool creation) keep their
+  runner across the chain.
+- **Holder-naming refusals.** When a dataset action collides with another
+  operation, its confirmation is refused with a WARN naming every
+  blocking lock holder (dataset, lock type, pid, script, description).
+  Pool growth, creation, migration, and profile handlers previously
+  raised the lock conflict into the GTK callback as an invisible
+  traceback. The enrollment offers take a write lock on the pool root
+  and, on conflict, skip with the manual-steps INFO.
+- **Overwrite picker in Add Profile to Schedule.** The dialog lists the
+  existing profiles of that tab type with their cron schedules; click a
+  row to copy its name into the Name field and confirm the overwrite,
+  instead of retyping (and misspelling) it.
+- **`-h`/`--help` for the test runners.** `tests/run-tests` and
+  `tests/run-python-tests` print their flag list and exit without
+  running anything.
+
+### Fixed
+
+- **Repair Mount Order could never lift a covering pool root.** `zfs
+  unmount <name>` is recursive in OpenZFS 2.4.4 — it walks every mounted
+  descendant and aborts at the first shadowed one, so a shadowed mount's
+  cover was never detached and the repair died with "cannot unmount … no
+  such pool or dataset" (the 2026-11-09 stewie incident). Covers are now
+  detached with a plain `umount` of exactly that mount layer — unrelated
+  mounted children stay mounted — and the orphan-recovery restore path
+  uses the same exact-layer umount; lift candidates without a usable
+  mountpoint path (e.g. legacy) are skipped with a WARN.
+- **Alignment guest-filesystem probes failed for every running VM.**
+  PVE 9 prints `qm guest exec` guest stdout under the `out-data` key; the
+  decoder read an invented `out` key that every scripted fixture agreed
+  with, so live probes failed uniformly behind "unexpected qm output".
+  The decoder reads the real wire shape, an exec result that exits 0 but
+  does not parse WARN-logs its raw first line, and the availability note
+  counts unprobed volumes per reason (each volume's own reason stays in
+  its VM row) instead of enumerating every volume.
+- **Declining an enrollment offer stranded the pool lock.** The iSCSI and
+  Proxmox enrollment offers take the pool root's write lock before their
+  dialog; answering No returned without releasing it, leaving the pool
+  locked for the rest of the GUI session. The decline path now releases
+  the lock.
+- **Cross-process test holders could deadlock CI.** The lock holder in
+  the file-locking, profile-concurrency, and backup-history suites was a
+  multiprocessing fork of the pytest-xdist worker; a forked child of a
+  loaded worker can deadlock in inherited locks before its first
+  handshake (CI red on consecutive days after the runner image drifted).
+  Holders now run as fresh interpreters (`tests/python/lock_child.py`)
+  with marker-file handshakes, and a dead child fails in ~0 s instead of
+  after a 300 s timeout.
+
+### Changed
+
+- Disks-page pool and disk actions (Create Pool, growth, maintenance,
+  migration, wipe, enrollment) are no longer disabled while another
+  dataset action runs; a genuine lock conflict refuses at confirmation
+  time with the holder named, and operations on other pools proceed.
+- Snapshot-name log lines on the Backup and Offsite tabs (previous name
+  found / new name generated) are VERB instead of INFO.
+
 ## 0.138.0
 
 *Released 2026-11-03*

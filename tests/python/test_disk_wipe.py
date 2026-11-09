@@ -86,6 +86,7 @@ def _make_app(disk=None, importable=None):
     )
     app.dataset_runner = MagicMock()
     app.dataset_runner.running = False
+    app.dataset_actions = SimpleNamespace(new_runner=lambda: app.dataset_runner)
     return app
 
 
@@ -281,14 +282,38 @@ class TestOnDisksWipeLabels(unittest.TestCase):
         _assert_log_contains(logs, "WARN: Disk wipe is available only on the storage host")
         app.dataset_runner.set_steps.assert_not_called()
 
-    def test_busy_runner_refuses(self):
+    def test_lock_conflict_refuses_with_holder_detail(self):
+        da = _import_disk_actions()
+        app = _make_app(_disk("/dev/sdb"))
+        zlm = MagicMock()
+        zlm.acquire.side_effect = RuntimeError(
+            "conflict: cannot acquire w lock on /dev/sdb: "
+            "held by dataset='/dev/sdb' type=write pid=55 script=zfswipe"
+        )
+        with (
+            patch.object(da, "show_wipe_dialog", return_value=True),
+            patch.object(da, "zlm", zlm),
+            capture_logs() as logs,
+        ):
+            da.on_disks_wipe_labels(app)
+        _assert_log_contains(logs, "WARN: cannot wipe labels on /dev/sdb")
+        _assert_log_contains(logs, "script=zfswipe")
+        app.dataset_runner.set_steps.assert_not_called()
+        zlm.release.assert_not_called()
+
+    def test_runs_while_another_dataset_action_is_active(self):
+        """No global gate: wipe starts even with another runner busy."""
         da = _import_disk_actions()
         app = _make_app(_disk("/dev/sdb"))
         app.dataset_runner.running = True
-        with capture_logs() as logs:
+        with (
+            patch.object(da, "show_wipe_dialog", return_value=True),
+            patch.object(da, "zlm"),
+            patch.object(da, "build_wipe_command", return_value=["zfswipe", "/dev/sdb"]),
+        ):
             da.on_disks_wipe_labels(app)
-        _assert_log_contains(logs, "WARN: A dataset action is already running")
-        app.dataset_runner.set_steps.assert_not_called()
+        app.dataset_runner.set_steps.assert_called_once()
+        app.dataset_runner.start.assert_called_once()
 
     def test_pool_member_selection_refuses(self):
         da = _import_disk_actions()
@@ -358,13 +383,17 @@ class TestOnDisksWipeLabels(unittest.TestCase):
                 on_complete(cancelled=False, rc=8)
         _assert_log_contains(logs, "WARN: Wipe failed for /dev/sdb (rc=8)")
 
-    def test_missing_runner_refuses(self):
+    def test_missing_tracker_refuses(self):
         da = _import_disk_actions()
         app = _make_app(_disk("/dev/sdb"))
-        app.dataset_runner = None
-        with capture_logs() as logs:
+        app.dataset_actions = None
+        with (
+            patch.object(da, "show_wipe_dialog", return_value=True),
+            capture_logs() as logs,
+        ):
             da.on_disks_wipe_labels(app)
         _assert_log_contains(logs, "WARN: Dataset runner not available")
+        app.dataset_runner.set_steps.assert_not_called()
 
     def test_unknown_disk_in_selection_refuses(self):
         da = _import_disk_actions()

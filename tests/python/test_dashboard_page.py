@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from contextlib import ExitStack
 from datetime import datetime
@@ -1864,7 +1865,7 @@ class TestCollectRunningTasks(CollectRunningTasksIdleHostMixin):
 
 
 class TestCollectRunningTasksDatasetRunner(CollectRunningTasksIdleHostMixin):
-    """dataset_runner tasks in _collect_running_tasks (plan section 2)."""
+    """Tracked dataset-action runners in _collect_running_tasks."""
 
     def _dataset_app(self, operation_detail=None):
         app = MagicMock()
@@ -1886,7 +1887,11 @@ class TestCollectRunningTasksDatasetRunner(CollectRunningTasksIdleHostMixin):
         runner.current_step = 1
         runner._in_lock_wait = False
         runner._session_log_file = "/var/log/zfsutilities/sessions/dataset.log"
-        app.dataset_runner = runner
+        app.dataset_actions = types.SimpleNamespace(
+            running_entries=lambda: [(3, runner)],
+            live_runners=lambda: [runner],
+            runner_by_id=lambda action_id: runner if action_id == 3 else None,
+        )
         return app, runner
 
     def test_dataset_runner_task_uses_operation_detail(self):
@@ -1896,7 +1901,7 @@ class TestCollectRunningTasksDatasetRunner(CollectRunningTasksIdleHostMixin):
         self.assertEqual(tasks[0]["name"], "Migrate Pool: tank")
         self.assertEqual(tasks[0]["type"], "GUI")
         self.assertEqual(tasks[0]["status"], "Step 2/3")
-        self.assertEqual(tasks[0]["task_key"], "runner:dataset_runner")
+        self.assertEqual(tasks[0]["task_key"], "runner:dataset:3")
         self.assertEqual(
             tasks[0]["log_file"],
             "/var/log/zfsutilities/sessions/dataset.log",
@@ -1909,6 +1914,39 @@ class TestCollectRunningTasksDatasetRunner(CollectRunningTasksIdleHostMixin):
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["name"], "Dataset action")
 
+    def test_two_dataset_runners_each_listed(self):
+        """One row per tracked dataset action; both show concurrently."""
+        app = MagicMock()
+        app.backup_runner = None
+        app.offsite_runner = None
+        app.restore_runner = None
+        app.retention_runner = None
+        app.scrub_queue = None
+
+        def _runner(detail):
+            runner = MagicMock()
+            runner.running = True
+            runner.label = "Dataset action"
+            runner.operation_detail = detail
+            runner.steps = []
+            runner._finally_step = None
+            runner.current_step = 0
+            runner._in_lock_wait = False
+            runner._session_log_file = None
+            return runner
+
+        one, two = _runner("Destroy Dataset: tank/vm-1"), _runner("Replace: fivebays")
+        app.dataset_actions = types.SimpleNamespace(
+            running_entries=lambda: [(1, one), (2, two)],
+            live_runners=lambda: [one, two],
+        )
+        tasks = dp._collect_running_tasks(app)
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(
+            {t["name"] for t in tasks}, {"Destroy Dataset: tank/vm-1", "Replace: fivebays"}
+        )
+        self.assertEqual({t["task_key"] for t in tasks}, {"runner:dataset:1", "runner:dataset:2"})
+
     def test_dataset_runner_not_running_no_task(self):
         app = MagicMock()
         app.backup_runner = None
@@ -1918,7 +1956,9 @@ class TestCollectRunningTasksDatasetRunner(CollectRunningTasksIdleHostMixin):
         app.scrub_queue = None
         runner = MagicMock()
         runner.running = False
-        app.dataset_runner = runner
+        app.dataset_actions = types.SimpleNamespace(
+            running_entries=list, live_runners=lambda: [runner]
+        )
         tasks = dp._collect_running_tasks(app)
         self.assertEqual(tasks, [])
 
@@ -2518,9 +2558,19 @@ class TestCancelTask(unittest.TestCase):
         runner = MagicMock()
         runner.running = True
         runner.label = "Dataset action"
-        app.dataset_runner = runner
-        dp._cancel_task(app, "runner:dataset_runner")
+        app.dataset_actions = types.SimpleNamespace(
+            runner_by_id=lambda action_id: runner if action_id == 3 else None
+        )
+        dp._cancel_task(app, "runner:dataset:3")
         runner.cancel.assert_called_once()
+
+    def test_cancel_dataset_runner_unknown_id(self):
+        app = MagicMock()
+        app.dataset_actions = types.SimpleNamespace(runner_by_id=lambda action_id: None)
+        with patch("dashboard_page.log_msg") as mock_log:
+            dp._cancel_task(app, "runner:dataset:99")
+        mock_log.assert_called_once()
+        self.assertIn("not running", mock_log.call_args[0][0])
 
     def test_cancel_zfsop_key_not_cancellable(self):
         app = MagicMock()
