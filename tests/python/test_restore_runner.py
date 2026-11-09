@@ -88,6 +88,25 @@ class TestComputeRestoreParams(unittest.TestCase):
         self.assertEqual(n, 2)
         self.assertEqual(destfs, "poolA")
 
+    def test_renamed_destination_falls_back_to_full_strip(self):
+        # The reported GUI refusal: the dest leaf differs from the source
+        # leaf, so no suffix mapping exists. The source must be received
+        # exactly as the typed destination.
+        n, destfs = rr.compute_restore_params("z22tb/temp/machinebackup", "temp/machinebackupxxx")
+        self.assertEqual(n, 3)
+        self.assertEqual(destfs, "temp/machinebackupxxx")
+
+    def test_pool_root_destination_strips_everything(self):
+        n, destfs = rr.compute_restore_params("poolA/data", "poolB")
+        self.assertEqual(n, 2)
+        self.assertEqual(destfs, "poolB")
+
+    def test_empty_source_or_dest_raises(self):
+        with self.assertRaises(ValueError):
+            rr.compute_restore_params("", "poolB/data")
+        with self.assertRaises(ValueError):
+            rr.compute_restore_params("poolA/data", "")
+
 
 class TestBuildRestoreCommand(unittest.TestCase):
     """build_restore_command produces a BashStep with metadata."""

@@ -441,10 +441,11 @@ for the `installer-lib.sh` exception.
 
 ### `iscsi-lib.sh`
 
-Shared iSCSI teardown/rebuild helpers used by `zfsdelfs` and
-`zfs-send-receive`. Sourced at file level so `zfsdelfs` can tear down VM zvol
-LUNs before destroying them, and `zfs-send-receive` can rebuild them after a
-successful `zfs receive`.
+Shared iSCSI teardown/rebuild helpers used by `zfsdelfs`,
+`zfs-send-receive`, and the `zfs-diagnose-busy` resolver. Sourced at file
+level so `zfsdelfs` can tear down VM zvol LUNs before destroying them,
+`zfs-send-receive` can rebuild them after a successful `zfs receive`, and
+the busy resolver can unplug a leftover export and reach the VM configs.
 
 ```bash
 source_helper iscsi-lib.sh
@@ -470,6 +471,9 @@ source_helper iscsi-lib.sh
 | `manifest_add_backstore()`        | Add a backstore to the expected-backstores manifest.           |
 | `encrypted_conf_remove_backstore()` | Remove a backstore from the encrypted-LUNs config.           |
 | `encrypted_conf_add_backstore()`  | Add a backstore to the encrypted-LUNs config.                  |
+| `iscsi_unplug_export(<target>, <lun>, <backstore>, [<dataset>])` | Remove one LUN mapping + backstore + its manifest/encrypted-conf entries (shared by `iscsi_teardown_zvol` and the busy resolver); records `iscsi_teardown` only when a dataset rides it |
+| `vm_config_remove_disk_key(<vmid>, <key>)` | Remove one disk key from a VM's config on the compute host (`qm set --delete`) |
+| `vm_shutdown_wait(<vmid>, [<timeout>])` | Clean-shutdown a VM over ssh and poll until stopped; never force-stops |
 
 **Called modules:**
 
@@ -1111,50 +1115,71 @@ disks on the target pool (avoids false positives from name-matching alone).
 
 ### `zfs-diagnose-busy`
 
-Diagnoses why a ZFS dataset or snapshot cannot be destroyed.
+Diagnoses — and, when a human can answer, resolves — a "dataset is busy"
+refusal from `zfs destroy`.
 
 ```bash
 source_helper zfs-diagnose-busy
 diagnose_dataset_busy <dataset_or_snapshot> [stderr_from_failed_destroy]
+busy_resolve_dataset_busy <dataset_or_snapshot> [stderr_from_failed_destroy]
 ```
 
-**Checks performed (in order):**
+`diagnose_dataset_busy` is report-only: it prints who holds the target and
+never acts or prompts. `busy_resolve_dataset_busy` collects the same evidence
+and then walks a least-intrusive remedy ladder, asking plain-language
+questions — but only when a human can answer (a terminal, or the GUI's
+numbered input-hold panel). Unattended callers (cron backups, scheduled
+retention, batch `ssh`) automatically get the report instead. Set
+`busyassist=N` to force report-only everywhere.
 
-| Check                | What it looks for                                             |
-| -------------------- | ------------------------------------------------------------- |
-| Clone dependents     | `zfs list -o clones` shows non-`-` values                     |
-| ZFS holds            | `zfs holds` lists tags on the snapshot                        |
-| Mounted / open files | `mounted=yes` plus `fuser`/`lsof` on the mountpoint           |
-| Active send/receive  | `receive_resume_token` present, or `zfs send` process running |
-| iSCSI LUN            | `targetcli` shows the zvol as a backstore/LUN                 |
-| Running VM           | `qm status` reports `running` for the VM ID                   |
-| NFS/SMB share        | `sharenfs` or `sharesmb` is not `off`                         |
+**Evidence collected (authoritative sources; dataset names are birth labels,
+never usage truth — the VM link is VM config target+LUN → live LUN map →
+backstore → device):**
 
-If no specific cause is found, a fallback message suggests checking for open
-files via `fuser` or `lsof`, or verifying whether a pool scrub/resilver is in
-progress.
+| Holder                          | Source of truth                                            |
+| ------------------------------- | ---------------------------------------------------------- |
+| Clone dependents                | `zfs list -o clones` (reported; they refuse with their own error text) |
+| Hold tags                       | `zfs holds`, classified: deliberate hold vs `.send-*` cancelled-transfer leftover |
+| Running zfs send/receive        | `pgrep -af` lines naming the dataset; `receive_resume_token` |
+| Mounted in this namespace       | `mounted=yes`; holders listed as `PID:command` via `fuser -m` |
+| Mounted in another namespace    | `/proc/*/mounts` scan (container-held mounts — invisible to `fuser`) |
+| Automounted snapshots           | `findmnt` snapshot mounts under `.zfs/snapshot`             |
+| iSCSI export                    | Every block backstore's device (`targetcli`, or the configfs `udev_path` tree without it); the zvol is matched by device, any backstore name |
+| Referencing VMs                 | `list-vm-disks --gather-vm-info` records (VM\|target:lun\|vmid\|name\|key) plus per-VM run state |
+
+**Remedy ladder (interactive only; every action sits behind one question):**
+nothing-found retry offer → transfer wait → leftover export unplug (no VM
+affected) → stopped-VM detach + unplug → running-VM menu (unplug now with the
+VM running / shut the VM down first, the tool does it and waits / do nothing)
+→ hold-tag release (leftovers only) or deferred `zfs destroy -d` → snapshot
+automount unmount → namespace mounts reported, never touched → interrupted
+receive abort on explicit confirmation. Product hold tags are never released
+automatically; nothing is ever killed.
 
 **Integration:**
 
-| Caller               | When called                             |
-| -------------------- | --------------------------------------- |
-| `zfsdelsnap`         | After `zfs destroy` fails               |
-| `zfsdelfs`           | After `zfs destroy` fails               |
-| `remove-vm-disk`     | After `zfs destroy` fails               |
-| `archive-vm`         | After `zfs destroy` fails               |
-| `clone-vm`           | After cleanup `zfs destroy` fails       |
-| `dataset_actions.py` | From `_run_zfs_sudo` when destroy fails |
+| Caller           | When called                                                |
+| ---------------- | ---------------------------------------------------------- |
+| `zfsdelsnap`     | After `zfs destroy` fails; retries the destroy once on rc 0 |
+| `zfsdelfs`       | After `zfs destroy` fails; retries the destroy once on rc 0 |
+| `clone-vm`       | After cleanup `zfs destroy` fails; retries once on rc 0    |
+| `sever-vm-clone` | After the origin destroy fails; retries once on rc 0       |
 
-**Called modules:** none. `diagnose_dataset_busy` runs external commands
-(`zfs`, `fuser`, `lsof`, `targetcli`, `qm`) directly.
+**Called modules:** `iscsi-lib.sh` helpers when present in the sourcing
+context (`iscsi_unplug_export`, `iscsi_check_vm_running`, `vm_config_remove_disk_key`,
+`vm_shutdown_wait`, `iscsi_detect_vm_gather`); every probe degrades quietly
+when a helper is absent (for example snapshot-only contexts source no iSCSI
+library).
 
 **Data structures consumed / produced:** none.
 
 **Return codes:**
 
-| Code | Meaning                                                    |
-| ---- | ---------------------------------------------------------- |
-| 0    | Diagnosis completed (cause may or may not have been found) |
+| Code | Meaning                                                       |
+| ---- | ------------------------------------------------------------- |
+| 0    | `diagnose`: completed. `busy_resolve`: resolved — retry the destroy once |
+| 1    | `busy_resolve` only: not resolved / declined / remedy completed differently (e.g. deferred destroy) |
+| 2    | `busy_resolve` only: report-only (no human reachable)         |
 
 ---
 

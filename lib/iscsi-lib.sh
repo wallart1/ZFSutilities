@@ -85,6 +85,41 @@ function iscsi_check_vm_running {
     return 0
 }
 
+# Remove one disk key (e.g. scsi1) from a VM's config on the compute host,
+# through qm's own config mutation (repair-vm-disk-refs writes rewrites with
+# the same command shape). On a running VM qm attempts a hot-unplug and
+# refuses when the device cannot be hot-removed — callers treat any failure
+# as "not detached". Returns qm's exit status.
+function vm_config_remove_disk_key {
+    local vmid="$1" key="$2" out rc
+    out=$(ssh -o ConnectTimeout=10 "root@${compute_host}" \
+        "qm set '${vmid}' --delete '${key}'" 2>&1) && rc=0 || rc=$?
+    [[ -z "$out" ]] || log_msg "INFO: qm: ${out}"
+    return "$rc"
+}
+
+# Ask the compute host to shut a VM down cleanly and wait for it to stop.
+# Returns 0 once stopped, 1 if still not stopped after $2 seconds (default
+# 180 — a PVE guest stopping several disks can outlast shorter windows).
+# Never issues a force stop; the caller decides what to do on timeout.
+function vm_shutdown_wait {
+    local vmid="$1" timeout="${2:-180}" waited=0 rc
+    log_msg "INFO: Shutting down VM ${vmid} on ${compute_host}..."
+    ssh -o ConnectTimeout=10 "root@${compute_host}" \
+        "qm shutdown '${vmid}'" >/dev/null 2>&1 || true
+    while (( waited < timeout )); do
+        iscsi_check_vm_running "$vmid"
+        rc=$?
+        if [[ $rc -eq 0 ]]; then
+            log_msg "INFO: ✓ VM ${vmid} is stopped"
+            return 0
+        fi
+        sleep 5
+        waited=$((waited + 5))
+    done
+    return 1
+}
+
 # ------------------------------------------------------------------
 # Target state discovery
 # ------------------------------------------------------------------
@@ -1030,6 +1065,19 @@ function iscsi_teardown_zvol {
             "Proceeding."
     fi
 
+    iscsi_unplug_export "$target" "$lun_num" "$bsname" "$dataset"
+    return 0
+}
+
+# Remove one exported iSCSI LUN + its backstore + the manifest/encrypted-conf
+# entries that make the export "expected". Shared by iscsi_teardown_zvol
+# (dataset deletion) and the zfs-diagnose-busy resolver's unplug remedy.
+# Touches no VM configs, no sessions, no zvols. $4 (optional) is the dataset
+# whose removal should be recorded in iscsi_teardown[] for the post-receive
+# rebuild — pass '' when no dataset destruction rides the unplug (resolver).
+function iscsi_unplug_export {
+    local target="$1" lun_num="$2" bsname="$3" dataset="${4:-}"
+
     log_msg "INFO: Removing iSCSI LUN ${lun_num} + backstore ${bsname} from ${target}"
     targetcli "/iscsi/${target}/tpg1/luns" delete "lun${lun_num}" 2>/dev/null
     targetcli /backstores/block delete "$bsname" 2>/dev/null
@@ -1043,9 +1091,10 @@ function iscsi_teardown_zvol {
     manifest_remove_backstore "$bsname"
     encrypted_conf_remove_backstore "$bsname"
 
-    iscsi_teardown["$dataset"]="${target}:${lun_num}:${bsname}:${encrypted_flag}"
-    log_msg "INFO: iSCSI teardown complete: $bsname (LUN ${lun_num})"
-    return 0
+    if [[ -n "$dataset" ]]; then
+        iscsi_teardown["$dataset"]="${target}:${lun_num}:${bsname}:${encrypted_flag}"
+    fi
+    log_msg "INFO: iSCSI unplug complete: ${bsname} (LUN ${lun_num})"
 }
 
 # Rebuild iSCSI LUNs recorded in iscsi_teardown after a successful zfs receive.

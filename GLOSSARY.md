@@ -39,6 +39,16 @@ preseed — the seed pair is served over the same dev-side HTTP server and
 the boot ISO points the installer at it (`ds=nocloud-net`). The Debian
 equivalent is a preseed; Proxmox uses its own answer TOML.
 
+## backstore
+
+LIO's named handle for a block device it serves over iSCSI — the
+`/backstores/block/<name>` entry pointing at a zvol's `/dev/zvol/...`
+device. The VM-disk tooling here creates them named `vm-<id>-disk-<n>`,
+but the name is only a birth label: which device a backstore serves is
+the truth. The busy resolver matches exports by device and never by
+name, so a renamed or reused backstore cannot drag the wrong dataset
+into a diagnosis.
+
 ## capped table window
 
 Every treeview table in the GUI sits in its own scrolled window that
@@ -124,6 +134,14 @@ every dataset below it, so an offsite transfer receiving into a pool
 fences mounting inside that pool until it finishes. When an action is
 refused because another operation holds the lock, the Datasets page
 names the holder in a warning dialog instead of failing silently.
+
+## deferred destruction
+
+`zfs destroy -d`: marks a held snapshot for deletion instead of
+destroying it now — it disappears by itself once the last hold on it is
+released. The busy resolver offers this as its safe default for
+deliberate hold tags: no hold is released by the tool, and the hold's
+owner keeps control until they let go.
 
 ## DEL
 
@@ -253,6 +271,16 @@ pools. In the test suites the GTK layer is faked with the `mock_gtk`
 context so GUI code can be tested headless, and the one realized-window
 check runs under a private Xvfb display.
 
+## hold tag
+
+A named bookmark placed on a snapshot (`zfs hold`) that refuses its
+destruction until someone releases it by name (`zfs release`). The
+backup rules here place product holds (`offsite-*` and friends) through
+zfshold so retention stays honest. The busy resolver classifies the
+tags it finds into deliberate holds (never released by the tooling) and
+`.send-*` cancelled-transfer leftovers (safe to release on
+confirmation).
+
 ## idiom
 
 A recurring, recognized code pattern that other work reuses by
@@ -323,6 +351,17 @@ non-identity (mapped 8 → TPG 0, the case that made the map's grants
 dimension necessary). The safe-save gate compares LUN mappings, not
 backstore counts, precisely because the 2026-10-27 incident passed
 every count gate with 33 backstores defined and only 3 LUNs mapped.
+
+## mount namespace
+
+Each process on Linux sees mounts through a namespace: containers
+(Docker, LXC, systemd units with `PrivateMounts`) get their own, so a
+dataset can be mounted inside a container while the main namespace —
+and every "who has this file open" tool run from it (`fuser`, `lsof`)
+— reports nothing. That is the classic shape behind a "dataset is
+busy" refusal with an empty `lsof`: the busy-resolver's report names
+the holding pid and its mountpoint (found by scanning
+`/proc/*/mounts`), and never touches the container itself.
 
 ## mock
 
@@ -435,6 +474,15 @@ without effect). Profiles are drawn from the seeded random stream and
 stored in the sample archive, so a replay reproduces the same scenario
 choices. The wrap-up reports the distribution as evidence that runs
 exercise varied scenarios instead of one constant safe default.
+
+## resume token
+
+The handle OpenZFS leaves on a dataset after an interrupted
+`zfs receive` — a token that lets the receive continue where it stopped
+instead of restarting from scratch. While one is outstanding the
+dataset cannot be destroyed ("dataset is busy"); `zfs receive -A`
+discards the token together with the partial data. The busy resolver
+offers exactly that, as a destructive choice with a safe default.
 
 ## sample archive
 

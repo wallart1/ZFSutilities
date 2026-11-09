@@ -500,6 +500,12 @@ def on_restore_run(app, ctx):
         secondary += "\n\nOnly the named dataset will be restored."
     if auto_dest:
         secondary += "\n\nDestination was auto-determined from the source."
+    elif removequalifiers == len(source.strip("/").split("/")):
+        secondary += (
+            "\n\nThe destination does not share the source's path, so the "
+            "source is received directly as the typed destination (a "
+            "rename); descendants restore beneath the new name."
+        )
     secondary += (
         "\n\nInterrupted restores resume: destination datasets that already "
         "hold a verified snapshot lineage are caught up incrementally, and "

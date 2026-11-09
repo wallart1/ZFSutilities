@@ -40,9 +40,10 @@ class TestComputeRestoreParams(unittest.TestCase):
         self.assertEqual(rq, 1)
         self.assertEqual(destfs, "backup")
 
-    def test_no_common_prefix_raises(self):
-        with self.assertRaises(ValueError):
-            restore_runner.compute_restore_params("a/b", "c/d")
+    def test_no_common_prefix_is_a_rename(self):
+        rq, destfs = restore_runner.compute_restore_params("a/b", "c/d")
+        self.assertEqual(rq, 2)
+        self.assertEqual(destfs, "c/d")
 
     def test_identical_paths(self):
         rq, destfs = restore_runner.compute_restore_params("tank/data", "tank/data")

@@ -58,7 +58,9 @@ def compute_restore_params(source, dest):
         destfs + "/" + remove_leading_qualifiers(n, fs)
     where remove_leading_qualifiers strips n leading path components.
 
-    Examples (from zfsremoveleadingqualifiers):
+    When the destination ends with a suffix of the source path, the mapping
+    that keeps the source's relative path is used:
+
         source="poolA/data", dest="poolB/poolA/data"
         → (0, "poolB")   # strip 0 → "poolA/data", dest = poolB/poolA/data
 
@@ -68,6 +70,13 @@ def compute_restore_params(source, dest):
         source="poolA/data", dest="poolB/data"
         → (1, "poolB")   # strip 1 → "data", dest = poolB/data
 
+    When no suffix matches, the destination renames the dataset: every
+    source component is stripped (restorefs is empty, so the engine
+    receives the source exactly as destfs) and destfs is the whole typed
+    destination. Recursive restores then land descendants under the new
+    name (source="poolA/data", dest="poolB/renamed" → the source becomes
+    poolB/renamed and poolA/data/sub becomes poolB/renamed/sub).
+
     Args:
         source: Fully-qualified source dataset
         dest: Fully-qualified destination dataset
@@ -76,11 +85,17 @@ def compute_restore_params(source, dest):
         (sourcefsremovequalifiers, destfs) tuple.
 
     Raises:
-        ValueError: If source and dest are incompatible.
+        ValueError: If source or dest is empty.
     """
     src_parts = source.strip("/").split("/")
     dst_parts = dest.strip("/").split("/")
     destfs = dst_parts[0]
+
+    if not src_parts[0] or not destfs:
+        raise ValueError(
+            f"Cannot compute restore parameters: "
+            f"source '{source}' and dest '{dest}' must both be non-empty."
+        )
 
     for n in range(len(src_parts) + 1):
         tail_parts = src_parts[n:]
@@ -91,11 +106,11 @@ def compute_restore_params(source, dest):
         if candidate == dest:
             return n, destfs
 
-    raise ValueError(
-        f"Cannot compute restore parameters: "
-        f"source '{source}' and dest '{dest}' have no compatible mapping. "
-        f"The destination must end with a suffix of the source path."
-    )
+    # No suffix mapping: receive the source exactly as the typed
+    # destination (a rename). remove_leading_qualifiers returns an empty
+    # string once every component is stripped, so the engine's
+    # destfs + restorefs construction lands on destfs alone.
+    return len(src_parts), "/".join(dst_parts)
 
 
 def build_restore_command(

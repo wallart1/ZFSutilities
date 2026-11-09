@@ -364,7 +364,12 @@ def create_disks_page(app):
             ),
         ),
         (COL_D_POOLS, "Pools", 100, "Pools with this disk as a member."),
-        (COL_D_SMART, "SMART", 60, "SMART overall-health verdict, or '-' when unavailable."),
+        (
+            COL_D_SMART,
+            "SMART",
+            60,
+            "SMART overall-health verdict, or '-' when unavailable. Physical devices only — partitions show a blank cell.",
+        ),
         (
             COL_D_HEALTH,
             "Wear/Test",
@@ -373,7 +378,8 @@ def create_disks_page(app):
                 "SSD/NVMe: wear percentage from SMART data. HDD: surface "
                 "self-test status (percent and ETA while running, then "
                 "Passed/Failed/Aborted/Canceled). Select an HDD and use "
-                "Surface Test… to start one."
+                "Surface Test… to start one. Physical devices only — "
+                "partitions show a blank cell."
             ),
         ),
     ]
@@ -568,13 +574,14 @@ def refresh_disks_page(app):
     # Repopulate disk inventory
     app.disks_store.clear()
     for disk in data.disks:
-        if disk.wear_percent is not None:
+        if disk.parent_path is not None:
+            # Wear and surface-test progress pertain to the physical device,
+            # never to a partition: partition rows show a blank cell.
+            health_text = ""
+        elif disk.wear_percent is not None:
             health_text = f"{disk.wear_percent}%"
         else:
-            # HDDs (and their partitions, via parent_path) show surface-test status.
-            health_text = surface_cell_text(
-                surface_state["tests"].get(disk.parent_path or disk.path)
-            )
+            health_text = surface_cell_text(surface_state["tests"].get(disk.path))
         app.disks_store.append(
             [
                 disk.path,

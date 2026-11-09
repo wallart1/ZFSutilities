@@ -996,7 +996,10 @@ class TestRefreshingIndicator(unittest.TestCase):
     """The 'Refreshing' label next to the refresh interval spinner.
 
     Same feedback as the Dashboard's indicator: visible exactly while a
-    refresh of the visible view is in flight. Both the auto-refresh timer
+    refresh is in flight. The label is shared and reference-counted: while
+    the Alignment view is visible, every timer tick runs the fast charts
+    sampling and the slower alignment gather at once, and the label must
+    stay up until the last of them finishes. Both the auto-refresh timer
     and the toolbar Refresh button enter through refresh_memory_page, so
     the charts path shows it here and the alignment path (dispatched from
     the same entry point) covers it in test_alignment_page.py.
@@ -1011,10 +1014,80 @@ class TestRefreshingIndicator(unittest.TestCase):
     def test_show_and_hide_refreshing_helpers(self):
         mp = self._module()
         app = _make_app()
+        app._memory_refresh_inflight = 0
         mp._show_memory_refreshing(app)
         app.memory_refreshing_label.show.assert_called_once_with()
         mp._hide_memory_refreshing(app)
         app.memory_refreshing_label.hide.assert_called_once_with()
+
+    def test_overlapping_refreshes_keep_indicator_up(self):
+        """Two in-flight refreshes share the label: whichever finishes
+        first must not drop it while the other is still running."""
+        mp = self._module()
+        app = _make_app()
+        app._memory_refresh_inflight = 0
+        mp._show_memory_refreshing(app)  # charts sampling starts
+        mp._show_memory_refreshing(app)  # alignment gather starts
+        app.memory_refreshing_label.show.assert_called_once_with()
+        mp._hide_memory_refreshing(app)  # charts sample finishes first
+        app.memory_refreshing_label.hide.assert_not_called()
+        mp._hide_memory_refreshing(app)  # alignment gather finishes last
+        app.memory_refreshing_label.hide.assert_called_once_with()
+        self.assertEqual(app._memory_refresh_inflight, 0)
+
+    def test_alignment_tick_keeps_indicator_through_charts_finish(self):
+        """Regression: a timer tick with the Alignment view visible runs
+        both refreshes; the quick charts finish must not hide the label
+        before the slower alignment gather is done."""
+        mp = self._module()
+        app = _make_app()
+        app.stack.get_visible_child_name.return_value = "memory"
+        app._memory_view_radios = {"alignment": MagicMock()}
+        app._memory_refresh_pending = False
+        app._memory_refresh_inflight = 0
+        with (
+            patch.object(mp.threading, "Thread") as thread,
+            patch.object(mp, "collect_memory_sample", return_value=object()),
+            patch.object(
+                mp,
+                "refresh_alignment_view",
+                side_effect=lambda app: mp._show_memory_refreshing(app),
+            ),
+        ):
+            mp.on_memory_timer_tick(app)
+            charts_target = thread.call_args.kwargs["target"]
+        charts_target()
+        idle_cb, idle_app, sample_arg = mp.GLib.idle_add.call_args.args
+        with patch.object(mp, "_apply_memory_sample"):
+            self.assertFalse(idle_cb(idle_app, sample_arg))
+        app.memory_refreshing_label.hide.assert_not_called()
+        mp._hide_memory_refreshing(app)  # the alignment gather finishes
+        app.memory_refreshing_label.hide.assert_called_once_with()
+
+    def test_charts_worker_failure_unstrands_indicator(self):
+        """A raising collect must still reach the idle callback: the
+        pending flag and the indicator count clear, no sample is applied,
+        and a later tick can refresh again."""
+        mp = self._module()
+        app = _make_app()
+        app._memory_view_radios = {}
+        app._memory_refresh_pending = False
+        app._memory_refresh_inflight = 0
+        with (
+            patch.object(mp.threading, "Thread") as thread,
+            patch.object(mp, "collect_memory_sample", side_effect=RuntimeError("boom")),
+            patch.object(mp, "log_msg"),
+        ):
+            mp.refresh_memory_page(app)
+            thread.call_args.kwargs["target"]()
+        idle_cb, idle_app, sample_arg = mp.GLib.idle_add.call_args.args
+        self.assertIsNone(sample_arg)
+        with patch.object(mp, "_apply_memory_sample") as apply_sample:
+            self.assertFalse(idle_cb(idle_app, sample_arg))
+        apply_sample.assert_not_called()
+        app.memory_refreshing_label.hide.assert_called_once_with()
+        self.assertFalse(app._memory_refresh_pending)
+        self.assertEqual(app._memory_refresh_inflight, 0)
 
     def test_refreshing_label_built_hidden(self):
         app = _make_app()

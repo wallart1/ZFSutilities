@@ -8,7 +8,14 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from test_support import REPO_ROOT, capture_logs, mock_gtk, requires_gi, temp_config_dir
+from test_support import (
+    REPO_ROOT,
+    capture_logs,
+    import_gui_fresh,
+    mock_gtk,
+    requires_gi,
+    temp_config_dir,
+)
 
 pytestmark = requires_gi
 
@@ -1068,14 +1075,25 @@ class TestScheduleSavedState(unittest.TestCase):
 
             return schedule_page
 
-    @patch("schedule_page.Gtk")
-    @patch("schedule_page.list_profiles", return_value=[])
-    def test_create_schedule_page_sets_saved_state(self, _lst, _mock_gtk):
-        schedule_page = self._import_schedule_page()
-        app = MagicMock()
-        app._ui_state.bind_treeview = MagicMock()
+    def _import_fresh_patched(self):
+        # This class's two build tests assert shared-widget call counts
+        # (set_vscroll_policy called ONCE) and mock-shaped widgets, so
+        # the module under test must bind to THIS context's mocks — a
+        # copy cached by an earlier suite (real- or mock-bound) made the
+        # verdict depend on session import order. Patches apply to the
+        # freshly imported module itself, so they cannot diverge from
+        # the module the test drives.
+        with mock_gtk():
+            fresh = import_gui_fresh("schedule_page")
+            return fresh, patch.object(fresh, "list_profiles", return_value=[])
 
-        schedule_page.create_schedule_page(app)
+    def test_create_schedule_page_sets_saved_state(self):
+        schedule_page, list_patch = self._import_fresh_patched()
+        with list_patch:
+            app = MagicMock()
+            app._ui_state.bind_treeview = MagicMock()
+
+            schedule_page.create_schedule_page(app)
 
         self.assertTrue(hasattr(app, "_schedule_saved_state"))
         self.assertTrue(app._schedule_saved_state)
@@ -1083,23 +1101,12 @@ class TestScheduleSavedState(unittest.TestCase):
     def test_page_viewport_sizes_content_by_natural_height(self):
         """The page viewport uses NATURAL height so the profile table's
         capped window is never crushed at short window heights."""
-        # fresh=True, not the class helper: a @patch("schedule_page…")
-        # decorator imports the module OUTSIDE any mock context — on a
-        # GTK-capable host the class helper would return that real-toolkit
-        # binding, and on a shared mock binding the viewport call count
-        # accumulates across page builds. A fresh context re-binds this
-        # test's own mocks either way (same pattern as the offsite/logs
-        # viewport tests); list_profiles is patched on THAT fresh module,
-        # because the real reader touches /var/lib/zfsutilities and must
-        # not run on a non-root host.
-        with mock_gtk(fresh=True):
-            import schedule_page
+        schedule_page, list_patch = self._import_fresh_patched()
+        with list_patch:
+            app = MagicMock()
+            app._ui_state.bind_treeview = MagicMock()
 
-            with patch.object(schedule_page, "list_profiles", return_value=[]):
-                app = MagicMock()
-                app._ui_state.bind_treeview = MagicMock()
-
-                page = schedule_page.create_schedule_page(app)
+            page = schedule_page.create_schedule_page(app)
 
         page.get_child.return_value.set_vscroll_policy.assert_called_once_with(
             schedule_page.Gtk.ScrollablePolicy.NATURAL

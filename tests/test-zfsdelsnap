@@ -33,6 +33,9 @@ EOF
 function diagnose_dataset_busy {
     true
 }
+function busy_resolve_dataset_busy {
+    return 1
+}
 EOF
     cat > "$tmpdir/bashfatal" << 'EOF'
 #!/usr/bin/bash
@@ -145,6 +148,9 @@ EOF
 function diagnose_dataset_busy {
     true
 }
+function busy_resolve_dataset_busy {
+    return 1
+}
 EOF
     cat > "$tmpdir/bashfatal" << 'EOF'
 #!/usr/bin/bash
@@ -203,6 +209,9 @@ EOF
     cat > "$tmpdir/zfs-diagnose-busy" << 'EOF'
 function diagnose_dataset_busy {
     true
+}
+function busy_resolve_dataset_busy {
+    return 1
 }
 EOF
     cat > "$tmpdir/bashfatal" << 'EOF'
@@ -314,6 +323,9 @@ EOF
     cat > "$tmpdir/zfs-diagnose-busy" << 'EOF'
 function diagnose_dataset_busy {
     true
+}
+function busy_resolve_dataset_busy {
+    return 1
 }
 EOF
     cat > "$tmpdir/bashfatal" << 'EOF'
@@ -473,6 +485,9 @@ EOF
 function diagnose_dataset_busy {
     true
 }
+function busy_resolve_dataset_busy {
+    return 1
+}
 EOF
     cat > "$tmpdir/bashfatal" << 'EOF'
 #!/usr/bin/bash
@@ -532,6 +547,9 @@ EOF
 function diagnose_dataset_busy {
     true
 }
+function busy_resolve_dataset_busy {
+    return 1
+}
 EOF
     cat > "$tmpdir/bashfatal" << 'EOF'
 #!/usr/bin/bash
@@ -540,7 +558,8 @@ EOF
 
     output=$(
         env mydir="$tmpdir" \
-            _MOCK_CREATION=$(( $(date +%s) - 50*86400 )) bash -c '
+            _MOCK_CREATION=$(( $(date +%s) - 50*86400 )) \
+            _DESTROY_MARK="$tmpdir/destroyed" bash -c '
             zfs() {
                 case "$1" in
                     list) return 0 ;;
@@ -552,7 +571,7 @@ EOF
                         echo "-"
                         return 0
                         ;;
-                    destroy) echo "DESTROYED $*"; return 0 ;;
+                    destroy) echo "DESTROYED $*" >> "$_DESTROY_MARK"; return 0 ;;
                 esac
                 command zfs "$@"
             }
@@ -562,7 +581,7 @@ EOF
         ' 2>&1
     ) || rc=$?
 
-    if [[ $rc -eq 0 && "$output" == *"DESTROYED"* && "$output" != *"Minimum age"* ]]; then
+    if [[ $rc -eq 0 && -f "$tmpdir/destroyed" && "$output" != *"Minimum age"* ]]; then
         test_pass
     else
         test_fail "Expected destroy after gate pass, got rc=$rc output: $output"
@@ -592,6 +611,9 @@ EOF
 function diagnose_dataset_busy {
     true
 }
+function busy_resolve_dataset_busy {
+    return 1
+}
 EOF
     cat > "$tmpdir/bashfatal" << 'EOF'
 #!/usr/bin/bash
@@ -601,7 +623,7 @@ EOF
     # snapshot_age_days reports -1 (age unknown) when creation is not a
     # number; the gate treats unknown as not-young and proceeds.
     output=$(
-        env mydir="$tmpdir" bash -c '
+        env mydir="$tmpdir" _DESTROY_MARK="$tmpdir/destroyed" bash -c '
             zfs() {
                 case "$1" in
                     list) return 0 ;;
@@ -609,7 +631,7 @@ EOF
                         echo "-"
                         return 0
                         ;;
-                    destroy) echo "DESTROYED $*"; return 0 ;;
+                    destroy) echo "DESTROYED $*" >> "$_DESTROY_MARK"; return 0 ;;
                 esac
                 command zfs "$@"
             }
@@ -619,7 +641,7 @@ EOF
         ' 2>&1
     ) || rc=$?
 
-    if [[ $rc -eq 0 && "$output" == *"DESTROYED"* && "$output" != *"Minimum age"* ]]; then
+    if [[ $rc -eq 0 && -f "$tmpdir/destroyed" && "$output" != *"Minimum age"* ]]; then
         test_pass
     else
         test_fail "Expected destroy on unknown age, got rc=$rc output: $output"
@@ -659,6 +681,7 @@ zfslock_release() { true; }
 EOF
     cat > "$d/zfs-diagnose-busy" << 'EOF'
 function diagnose_dataset_busy { true; }
+function busy_resolve_dataset_busy { return 1; }
 EOF
 }
 
@@ -894,6 +917,83 @@ test_preview_gate_context_folds_into_keep_reason() {
     rm -rf "$tmpdir"
 }
 
+# ------------------------------------------------------------------
+# Test: a busy refusal resolved by the resolver is retried once
+# ------------------------------------------------------------------
+test_busy_resolved_retries_destroy_once() {
+    test_start "delsnap retries destroy once when the resolver resolves"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/zfscheckagainst" << 'EOF'
+checkagainst() { true; }
+remove_leading_qualifiers() { echo "$2"; }
+EOF
+    cat > "$tmpdir/zfsdelallholds" << 'EOF'
+delallholds() { true; }
+EOF
+    cat > "$tmpdir/zfslockmanager" << 'EOF'
+zfslock_init() { true; }
+zfslock_wait_or_resolve() { return 0; }
+zfslock_release() { true; }
+EOF
+    cat > "$tmpdir/zfs-diagnose-busy" << 'EOF'
+function diagnose_dataset_busy {
+    true
+}
+function busy_resolve_dataset_busy {
+    return 0
+}
+EOF
+    cat > "$tmpdir/bashfatal" << 'EOF'
+#!/usr/bin/bash
+exit ${1:-8}
+EOF
+
+    # Destroy fails once (busy), then succeeds after the resolver returns
+    # 0. The counter is a FILE: delsnap captures destroy's output through a
+    # command substitution, and a variable counter would reset per subshell.
+    zfs() {
+        if [[ "$1" == "list" && "$2" == "-t" && "$3" == "snapshot" ]]; then
+            return 0
+        elif [[ "$1" == "list" && "$2" == "-H" && "$3" == "-o" && "$4" == "clones" ]]; then
+            echo "-"
+        elif [[ "$1" == "destroy" ]]; then
+            echo x >> "$tmpdir/destroy-count"
+            if [[ $(grep -c . "$tmpdir/destroy-count") -ge 2 ]]; then
+                return 0
+            fi
+            echo "cannot destroy: dataset is busy" >&2
+            return 1
+        else
+            return 0
+        fi
+    }
+    export -f zfs
+    export tmpdir
+
+    local output rc=0
+    output=$(
+        mydir="$tmpdir"
+        bash -c "source '$old_mydir/bin/zfsdelsnap'; \
+                 delsnap 'pool@snap' '0' 'N' 'nocheckagainst'" 2>&1
+    ) || rc=$?
+
+    unset -f zfs
+    local attempts=0
+    [[ -f "$tmpdir/destroy-count" ]] && attempts=$(grep -c . "$tmpdir/destroy-count")
+    unset tmpdir
+
+    if [[ $rc -eq 0 && "$attempts" -eq 2 && "$output" != *"FATAL"* ]]; then
+        test_pass
+    else
+        test_fail "Expected retry-then-success, got rc=$rc attempts=$attempts output: $output"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
+test_busy_resolved_retries_destroy_once
 test_preview_gate_rc0_and_rc4_proceed
 test_preview_gate_rc7_keeps_last_common
 test_preview_gate_rc6_keeps_offline_counterpart

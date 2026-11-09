@@ -612,8 +612,8 @@ class TestRefreshDisksPage(unittest.TestCase):
             dp.refresh_disks_page(app)
         self.assertEqual(app.disks_store.rows[0][dp.COL_D_HEALTH], "60%")
 
-    def test_refresh_health_cell_inherited_for_hdd_partition(self):
-        """A partition row shows its parent disk's surface-test status."""
+    def test_refresh_health_cell_blank_for_hdd_partition(self):
+        """A partition row shows no surface-test status — physical rows only."""
         dp = _import_disks_page()
         sys.modules.pop("disk_surface_test", None)
         with mock_gtk(fresh=True):
@@ -631,7 +631,34 @@ class TestRefreshDisksPage(unittest.TestCase):
             dst, "load_surface_test_state", return_value={"tests": {"/dev/sdc": running}}
         ):
             dp.refresh_disks_page(app)
-        self.assertEqual(app.disks_store.rows[0][dp.COL_D_HEALTH], "20%")
+        self.assertEqual(app.disks_store.rows[0][dp.COL_D_HEALTH], "")
+
+    def test_refresh_smart_columns_blank_for_partition(self):
+        """Partition rows show blank SMART and Wear/Test cells; the parent
+        disk's rows keep their verdict and wear percentage."""
+        dp = _import_disks_page()
+        sys.modules.pop("disk_surface_test", None)
+        with mock_gtk(fresh=True):
+            import disk_surface_test as dst
+
+        disks = [
+            _disk(path="/dev/sda", model="SSD A", smart_health="PASSED", wear_percent=85),
+            _disk(
+                path="/dev/sda1",
+                model="",
+                disk_type="part",
+                parent_path="/dev/sda",
+                smart_health="",
+            ),
+        ]
+        app = _make_app(disks=disks, topologies={})
+        with patch.object(dst, "load_surface_test_state", return_value={"tests": {}}):
+            dp.refresh_disks_page(app)
+
+        self.assertEqual(app.disks_store.rows[0][dp.COL_D_SMART], "PASSED")
+        self.assertEqual(app.disks_store.rows[0][dp.COL_D_HEALTH], "85%")
+        self.assertEqual(app.disks_store.rows[1][dp.COL_D_SMART], "")
+        self.assertEqual(app.disks_store.rows[1][dp.COL_D_HEALTH], "")
 
     def test_refresh_maps_pool_membership(self):
         dp = _import_disks_page()
