@@ -734,8 +734,7 @@ an optional K/M/G/T/P/E suffix (optional `i`/`b`), 1024-based.
 
 ### `enclosure_rate.py`
 
-Per-enclosure transfer-rate resolver — the single min() of rate governance
-(Phase 1–2 of the rate-governance campaign; enforced by the Phase 3 wiring).
+Per-enclosure transfer-rate resolver — the single min() of rate governance.
 One transfer's effective rate is the minimum of the caller's per-activity
 rate limit and every configured cap of every enclosure touched by the
 source or destination pool; lower wins, because an enclosure may hold disks

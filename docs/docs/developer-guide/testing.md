@@ -526,8 +526,7 @@ mock_zfs_prop "pool/src@snap1" "type" "snapshot"
 
 Most Python suites are standard `unittest.TestCase` classes executed by
 [pytest](https://docs.pytest.org/) with
-[pytest-xdist](https://pytest-xdist.readthedocs.io/) parallelism — no test
-rewrite was needed and assertion failures get pytest's expected-vs-actual
+[pytest-xdist](https://pytest-xdist.readthedocs.io/) parallelism — assertion failures get pytest's expected-vs-actual
 diff output. A few suites (for example `test_golden`) use pytest fixtures
 directly. `tests/run-tests` remains the single entry point for both
 layers; `tests/python/runner.py` is a deprecated shim that forwards to
@@ -870,11 +869,11 @@ correctly.
 GUI and the sudo pytest legs run as root over a user-owned checkout, and a
 root import with a missing or stale `.pyc` used to leave root-owned
 `__pycache__` files behind — unwritable for the user and recurring after
-every sweep. Both entry points now redirect root bytecode caching to
+every sweep. Both entry points redirect root bytecode caching to
 `/var/cache/zfsutilities/pycache` when the process runs as root (the GUI
 entry `python/zfsutilities_gui.py` via `_redirect_root_pycache()`, the
 pytest bootstrap `tests/python/conftest.py` at import time), so root-owned
-cache files no longer appear in the tree. Override the location with
+cache files do not appear in the tree. Override the location with
 `ZFSUTILITIES_PYCACHE_DIR`; an interpreter-level `PYTHONPYCACHEPREFIX` is
 respected and left alone (the container run keeps its own
 `PYTHONDONTWRITEBYTECODE=1` setting). One residual: pytest writes

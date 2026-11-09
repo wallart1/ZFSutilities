@@ -774,7 +774,7 @@ sudo list-vm-disks [--with-devices]
 
 | Argument         | Description                                                                                                |
 | ---------------- | ---------------------------------------------------------------------------------------------------------- |
-| `--with-devices` | Accepted for backward compatibility; device information is now included by default. |
+| `--with-devices` | Accepted for backward compatibility; device information is included by default. |
 
 **Globals:** node-config globals only.
 
@@ -928,7 +928,7 @@ sudo detach-vm-disk <vmid> <disk-key>
 | Structure | Role | Reference |
 | --------- | ---- | --------- |
 | `/etc/pve/qemu-server/<vmid>.conf` | Source VM config | — |
-| `/etc/rtslib-fb-target/expected-backstores.txt` | Backstore removed so the detached disk is no longer expected | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
+| `/etc/rtslib-fb-target/expected-backstores.txt` | Backstore removed so the detached disk is not longer expected | [Expected-backstores manifest](../developer-guide/data-structures.md#iscsi-expected-backstores-manifest) |
 
 **Internal flow / algorithm:**
 
@@ -1036,8 +1036,7 @@ Enrolls a pool in two-node iSCSI export end to end:
 
 Idempotent — re-running for an already-enrolled pool skips the config change and
 just re-verifies the target and rescans. The Create Pool wizard offers this
-automatically after creating a pool on the storage host in two-node mode, so a
-new pool no longer needs the three manual enrollment steps.
+automatically after creating a pool on the storage host in two-node mode.
 
 ```bash
 sudo enroll-iscsi-pool [--dry-run] [--update-config-only] <pool> [short-name]
@@ -2117,7 +2116,7 @@ offers to run this script directly.
    so the node is rebuilt for the pair; a pair already present but mapping
    a different TPG LUN is refused, never remapped). Without recorded pairs
    (legacy name-list maps), explicit-mode initiators are granted every LUN
-   the target now has at its own TPG index (identity mapping — the
+   the target has at its own TPG index (identity mapping — the
    demo-mode equivalent); a grant failure is a FATAL and fails the run.
    Demo-mode TPGs are otherwise left alone — their pair-less ACL nodes
    self-generate on initiator login.

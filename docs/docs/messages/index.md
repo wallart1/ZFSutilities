@@ -286,7 +286,7 @@ Executes a built step list (backup, offsite, restore, prune) in the GUI. Message
 | `INFO: Interrupting lock wait` | Cancel requested while the child is waiting for a dataset lock | SIGINT sent to the child to break the wait |
 | `WARN: Post-step callback failed during cancel: ...` | A step post-callback raised during cancellation | Cancel path continues |
 | `INFO: ... cancelled` | Cancel completed; trailer written with cancelled status | Runner torn down; completion callback fires with cancelled=True |
-| `WARN: Error launching: ...` | Spawning a step failed (OSError/FileNotFoundError) | Paired with the FATAL below — the run no longer reports success for a step that never launched |
+| `WARN: Error launching: ...` | Spawning a step failed (OSError/FileNotFoundError) | Paired with the FATAL below. |
 | `FATAL: Could not launch step: ...` | A main-list step could not be spawned; the step is treated as failed (its post-callback stays unrun) | Run finishes rc=1 (the post-backup/finally step, if any, still runs first) |
 | `WARN: Pre-step callback failed: ...` | Step pre-callback raised before spawn | Step still runs |
 | `WARN: Post-step callback failed: ...` | Step post-callback raised after spawn failure or exit | Continue to the next step |
@@ -1455,9 +1455,9 @@ online pool (two-node only; silently no-ops in single-node mode).
 | `INFO: ✓ State map written to .../zfsutilities` / `INFO: ✓ State map written to ... pool(s)` | Per-pool and final write confirmations | Informational |
 | `LOSS: target ... LUN ... -> ... would be lost while still expected` (stdout lines) | Map-loss fence, per-loss detail lines: a `(iqn, lun) → backstore` mapping the newest pool map records would disappear from the new state while its backstore is still in the manifest (or the manifest is absent/empty with backstores live) — the count floor passes this shape when every backstore is loaded but few are mapped | The pool map was NOT overwritten; restore the missing mappings (load keys/import pools, or run `sudo reconcile-iscsi-state`), or rerun with `--force` to record it deliberately |
 | `FATAL: Live state would drop still-expected LUN mapping(s) from the pool map (see LOSS lines)` | The map-loss fence refusal summary (a mapping may vanish only when its backstore left the manifest — the intentional-change authority) | Resolve the degradation, or rerun with `--force` |
-| `WARN: N LUN mapping(s) would be lost while still expected — recording anyway (--force)` | The map-loss fence was overridden | The map now records the partial topology; re-export once the system is healthy |
+| `WARN: N LUN mapping(s) would be lost while still expected — recording anyway (--force)` | The map-loss fence was overridden | The map records the partial topology; re-export once the system is healthy |
 | `FATAL: Live state is degraded (... of ... expected backstores active)` | Count floor (applies when no prior map exists on any pool): fewer backstores are active than the manifest expects — recording this state would overwrite the recovery authority with a partial topology | The pool map was NOT overwritten; restore the missing LUNs (load keys/import pools), or rerun with `--force` to record the degraded state deliberately |
-| `WARN: Live backstores (...) below expected (...) — recording anyway (--force)` | The degraded-state gate was overridden | The map now records the partial topology; re-export once the system is healthy |
+| `WARN: Live backstores (...) below expected (...) — recording anyway (--force)` | The degraded-state gate was overridden | The map records the partial topology; re-export once the system is healthy |
 | `INFO: Comparing live state against ...` | `--check` located the newest map and started the comparison | Informational |
 | `INFO: ✓ No drift — live state matches the newest pool map` | `--check` found the live topology identical to the recorded map | Informational |
 | `WARN: All drift is keys-pending — encrypted LUN(s) ... locked (keystatus unavailable): expected on a keys-absent boot` (with the follow-up `WARN: Load keys and run iscsi-recover-encrypted-luns, then re-check; do NOT save config until reconciled`) | `--check` found drift, but every missing-live object traces to a backstore whose dataset reports `keystatus unavailable` — the expected keys-absent-boot shape, so the check exits 3 (the boot drop-in journals it as the PENDING verdict). The `DRIFT:` detail lines precede this summary | Expected until `load-keys` + `iscsi-recover-encrypted-luns` complete; re-run `--check` after. Do not save config in this window (the safe-iscsi-save gate refuses it anyway) |
@@ -1495,7 +1495,7 @@ mode). Create-only; identity conflicts are refused per item.
 | `INFO: ✓ Regenerated ... from the map` / `WARN: Regenerated manifest is empty; keeping ... unchanged` / `WARN: no ensured backstores survived apply — keeping ... unchanged` / `FATAL: Could not install regenerated manifest at ...` | The expected-backstores manifest was rebuilt from the ensured set (or the rewrite was refused — a run whose every apply action failed never installs a comment-only manifest) | On the FATAL, check permissions on the manifest directory and rerun |
 | `WARN: Nothing was ensured — skipping safe-iscsi-save` | No map entry could be ensured, so there is nothing to persist | Address the skip/refuse lines first |
 | `INFO: ✓ iSCSI configuration saved` / `FATAL: safe-iscsi-save failed — configuration may not be persistent` / `FATAL: safe-iscsi-save not available at ...` | Persistence result (the save runs with its map hook suppressed — reconcile owns the refresh) | On FATAL, run `sudo safe-iscsi-save` manually after resolving its messages |
-| `INFO: ✓ Pool LUN map refreshed` | The reconcile completed and the pool map now records the rebuilt topology | Informational |
+| `INFO: ✓ Pool LUN map refreshed` | The reconcile completed and the pool map records the rebuilt topology | Informational |
 | `WARN: Pool LUN map left unchanged — <blockers>; the map preserves the recovery authority for them` | Safety gate: the reconcile was not complete, so refreshing would overwrite the recovery map. Blockers name the reasons: refused identity-conflict entries; skipped entries; N VM disk ref(s) still missing; N VM disk ref(s) without a map entry; safe-iscsi-save did not persist the rebuilt tree; failed apply actions | Resolve the listed reasons and re-run; the map refreshes then |
 | `WARN: export-iscsi-state not available at ... — pool LUN map not refreshed` / `WARN: export-iscsi-state failed — pool LUN map not refreshed` | The refresh step could not run | Check the installation, then run `sudo export-iscsi-state` |
 | `WARN: Could not gather VM disk references from ... — VM-config cross-check skipped` | The compute host was unreachable over ssh; the target-side reconcile still stands | Informational; rerun `--dry-run` later to see the cross-check |
@@ -1753,7 +1753,7 @@ Parallel scrub scheduler with pause/resume modes tracked in a state file.
 
 ### [zfsallthepools](../commands-and-modules/commands.md#zfsallthepools)
 
-Emits no log messages; it is a deprecated compatibility shim that sources `zfsconfig` (the pool list now lives in the JSON config).
+Emits no log messages; it is a deprecated compatibility shim that sources `zfsconfig` (the pool list no lives in the JSON config).
 
 ### [zfsbuildfsarray](../commands-and-modules/modules.md#zfsbuildfsarray)
 
@@ -2049,7 +2049,7 @@ GUI Migrate Pool wizard (storage host only): copy phase, then a destructive cuto
 | `INFO: Migrate pool cancelled for ...` | The copy phase was cancelled | Lock released; holds file discarded; refresh |
 | `WARN: Migrate pool copy failed for '...' (rc=...); no destructive step was run` | The copy phase exited non-zero | Aborted before cutover; lock released; holds file discarded |
 | `WARN: Migrate pool start failed for '...' (...); captured-holds file discarded` | Starting the run itself failed (step build, lock acquisition, runner start) after the holds TSV was reserved | Nothing ran; lock released if taken; the error is re-raised — address it and rerun |
-| `INFO: Migrate pool copy complete for '...'; waiting for cutover confirmation` | Copy phase finished; the destructive phase is now gated | Layout re-check and running-VM warning, then the cutover dialog |
+| `INFO: Migrate pool copy complete for '...'; waiting for cutover confirmation` | Copy phase finished; the destructive phase is gated | Layout re-check and running-VM warning, then the cutover dialog |
 | `WARN: Migrate Pool aborted for '...': pool changed at cutover time (...)` | Safety gate — the layout changed since review at the cutover moment | Cutover aborted; snapshot/copies remain; re-review |
 | `INFO: Cutover deferred for '...' (running VMs declined); the migration snapshot and copies remain in place — rerun Migrate Pool to finish` | The running-VMs warning was declined at cutover | Cutover not run; state preserved for a later rerun |
 | `INFO: Cutover deferred for '...'; the migration snapshot and copies remain in place — rerun Migrate Pool to finish` | The typed cutover confirmation was cancelled | Cutover not run; state preserved |

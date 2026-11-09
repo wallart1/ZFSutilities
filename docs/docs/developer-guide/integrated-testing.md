@@ -491,10 +491,7 @@ operator lost track of guests that are still consuming the base.
 
 ## Guest lifecycle: verdict-time teardown and the sweep
 
-Finished labs used to accumulate on the base hosts — every run kept its
-guests for `--rerun` and post-mortem reading, cleanup was a manual
-`itf guest destroy` per guest, and no lane's fence could see another
-lane's leftovers. The disposition is now automatic, in the driver
+The disposition is automatic, in the driver
 (`itf_guest_verdict_teardown`, called between the journey's verdict and
 `itf_report_finish`):
 

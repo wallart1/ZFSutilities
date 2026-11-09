@@ -50,7 +50,7 @@ recovery scenarios (the blind-recovery rule).
 
 - **GUI automation** and the remaining **OS matrix** (template profiles
   beyond storage/compute/ubuntu) — parked by standing decision; reopened
-  only by an explicit user trigger (the ubuntu profile was the one named
+  only by an explicit user trigger (the ubuntu profile is the one named
   exception: the j21 probe matrix needed a 2.2-era OpenZFS leg).
 - The 17 test-exempt legacy `bin/` commands are permanently excluded
   from journey scope (closed list, user decision 2026-10-26).

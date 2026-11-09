@@ -9,7 +9,7 @@ A hierarchical dataset lock manager for ZFS utilities that prevents conflicting 
 - **Lock storage**: `/run/lock/zfsutilities/` (cleared on reboot)
 - **Stale detection**: PID-based (check if process exists) + EXIT traps
 - **CLI tool**: [zfslockctl](../commands-and-modules/commands.md#zfslockctl) for manual lock management
-- **Chain awareness**: Independent (no checkagainst integration for now)
+- **Chain awareness**: Independent (no checkagainst integration)
 
 ## Lock Types
 

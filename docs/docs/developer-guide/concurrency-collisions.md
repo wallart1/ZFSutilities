@@ -51,7 +51,7 @@ The following scripts and modules currently use the lock manager:
   `zfs_lock_manager` client to lock datasets around snapshot, delete, hold,
   rollback, and snapshot-unmount operations.
 
-The GUI no longer globally serializes `Backup`, `Offsite`, and `Restore`.
+The GUI dose not globally serialize `Backup`, `Offsite`, and `Restore`.
 All three may run concurrently; per-dataset locks still serialize them when
 they touch the same datasets. Each GUI runner keeps its Python-level log
 output in its own session log so concurrent runs do not cross-write.
@@ -119,7 +119,7 @@ while still serializing two restores targeting the same destination.
 ### 4. Snapshot-name collisions
 
 Snapshot names are generated from the current minute. Both bash and Python
-generators now serialize name generation with a brief global lock and record the
+generators serialize name generation with a brief global lock and record the
 issued name in a one-minute reservation file (`/run/lock/zfsutilities/.snapname.reserved`).
 
 * Bash callers use `zfssnapbuild`, which writes `/run/zfsutilities/nextsnap_<caller>`.
@@ -130,14 +130,11 @@ issued name in a one-minute reservation file (`/run/lock/zfsutilities/.snapname.
 
 The lock prevents two jobs from generating a name at the exact same instant. Two
 jobs that run sequentially within the same minute still receive the same name,
-but any collision on the same dataset is prevented by the per-dataset `w` locks
-from Phases 1 and 2.
+but any collision on the same dataset is prevented by the per-dataset `w` locks.
 
 ### 5. Config and state-file write races
 
-**Resolved by Phase 4.**
-
-Shared JSON/state files now use advisory `flock` locking with one lock file per
+Shared JSON/state files use advisory `flock` locking with one lock file per
 data file. Python callers use `fcntl.flock`; the `zfsconfig` bash helper uses
 the system `flock` command on the same lock files so both environments
 interoperate.
@@ -149,8 +146,7 @@ interoperate.
 | `/var/log/zfsutilities/sessions/.log_index.json` | `BackupRunner`, `profile_runner.py`, Logs tab | Logs tab | `/run/lock/zfsutilities/.log_index.lock` |
 | `/var/lib/zfsutilities/scrub_state.json` | `ScrubQueue` (GUI Pools tab/Dashboard, `profile_runner.py` scrub profiles) | `ScrubQueue` on restart and via `reload()` before each GUI/Dashboard tick | `/run/lock/zfsutilities/.scrub_state.lock` |
 
-The following files are still not lock-protected because they are outside the
-scope of this phase:
+The following files are still not lock-protected:
 
 | File | Writers | Readers | Risk |
 |------|---------|---------|------|
@@ -235,7 +231,7 @@ check that aborts if any selected pool is already locked. It does **not** block:
 Each of these has its own `running` flag (`retention_runner`,
 `dataset_runner`, `scrub_queue`, etc.), but there is no cross-type guard.
 
-The Backup, Offsite, and Restore tabs now offer an optional **Pause scrubs on
+The Backup, Offsite, and Restore tabs offer an optional **Pause scrubs on
 source/destination pools during each step** setting. When enabled, the runner
 pauses scrubs on the pools used by the current send/receive step and resumes
 them after the step finishes. This closes the scrub-versus-backup/restore gap
@@ -254,15 +250,15 @@ happens before or during destination preparation.
 
 | Risk | Severity | Currently detected? | Currently prevented? |
 |------|----------|---------------------|----------------------|
-| Prune deletes snapshot needed by running backup/restore | **High** | Only as a logged WARN | **Yes** (Phase 1 bash locks + Phase 2 GUI pre-check) |
-| Dataset destroy collides with backup/restore/prune | **High** | Error from `zfs` | **Yes** (Phase 1 bash `x` lock + Phase 2 GUI pre-check) |
-| Two restores targeting same destination | **High** | Per-dataset lock after prepare | **Yes** (Phase 1 bash `x` lock on `zfsdelfs` + `w` lock in `zfs-send-receive`) |
-| Snapshot-name collision | **Medium** | `zfs snapshot` fails | **Partially** (Phase 3 global lock + one-minute reservation) |
+| Prune deletes snapshot needed by running backup/restore | **High** | Only as a logged WARN | **Yes**  bash locks + GUI pre-check) |
+| Dataset destroy collides with backup/restore/prune | **High** | Error from `zfs` | **Yes** (bash `x` lock + GUI pre-check) |
+| Two restores targeting same destination | **High** | Per-dataset lock after prepare | **Yes** (bash `x` lock on `zfsdelfs` + `w` lock in `zfs-send-receive`) |
+| Snapshot-name collision | **Medium** | `zfs snapshot` fails | **Partially** (global lock + one-minute reservation) |
 | Concurrent snapshot creation on the same dataset | **High** | Rollback during receive | **Yes** (lock before snapshot in `zfs-send-receive`) |
-| Two prune jobs on same pool | **Medium** | Logged warnings | **Yes** (Phase 1 per-dataset `w` lock) |
-| History/log-index/config write races | **Medium** | Silent data loss or stale UI | **Yes** (Phase 4 file locking) |
+| Two prune jobs on same pool | **Medium** | Logged warnings | **Yes** (per-dataset `w` lock) |
+| History/log-index/config write races | **Medium** | Silent data loss or stale UI | **Yes** (file locking) |
 | Uncoordinated scrub paths | **Low** | Live state check + `zpool scrub` reject | **Yes** (live `zpool status` checks) |
-| Headless profile overlap | **Medium** | Waits, then `rc=9` only on timeout | **Yes** (Phase 5 per-profile `flock` + timed dataset waits) |
+| Headless profile overlap | **Medium** | Waits, then `rc=9` only on timeout | **Yes** (per-profile `flock` + timed dataset waits) |
 | Checkagainst during deletions | **Low** | Spurious mismatch or error | **No** |
 | rsync log truncation/interleaving | **Low** | Mixed or missing output | **No** |
 
@@ -293,11 +289,10 @@ on that dataset. This prevents prune vs. backup/restore collisions and
 overlapping prunes.
 2. ~~**`zfsdelfs`** should acquire an `x` lock on the dataset being destroyed
 before teardown and hold it until destruction is complete.~~ **Resolved:**
-`zfsdelfs` now acquires and holds an `x` lock for the duration of dataset
+`zfsdelfs` acquires and holds an `x` lock for the duration of dataset
 destruction.
-3. **Snapshot-name generation** is now serialized with a brief global lock and a
-   one-minute reservation file. The naming format was kept unchanged; a future
-   enhancement could add a sequence suffix if guaranteed distinct same-minute
+3. **Snapshot-name generation** is serialized with a brief global lock and a
+   one-minute reservation file. Add a sequence suffix if guaranteed distinct same-minute
    names become required.
 4. **Config/state-file writes** should use `flock` around the read-modify-write
 sequence, or move critical shared updates through a single writer process.
@@ -311,9 +306,9 @@ running, and vice versa.
 lock before starting, so cron cannot launch a second instance of the same
 profile while the first is still running.
 
-## Recently resolved (Phase 2)
+## Notes
 
-Python/GUI mutators now participate in the lock manager:
+### Python/GUI mutators participate in the lock manager:
 
 * New `python/zfs_lock_manager.py` reads and writes the same JSON
   lock files as `zfslockmanager`, so Python operations interoperate with bash
@@ -330,13 +325,9 @@ Python/GUI mutators now participate in the lock manager:
     already locked.
   - `retention_actions.on_retention_prune` aborts if any selected pool is
     already locked.
-* Scrub control has been moved out of the lock manager.  `scrub_manager`
-  consults live `zpool status` before start/pause/resume/stop, and `zfsscruball`
-  no longer acquires a pool lock while scrubbing.
+* `scrub_manager` consults live `zpool status` before start/pause/resume/stop.
 
-## Recently resolved (Phase 3)
-
-Snapshot-name generation is now coordinated across bash and Python:
+### Snapshot-name generation is coordinated across bash and Python:
 
 * Both `zfssnapbuild` and `feature_config.generate_snapshot_name()` /
   `generate_offsite_snapshot_name()` acquire a brief global lock
@@ -345,9 +336,7 @@ Snapshot-name generation is now coordinated across bash and Python:
   (`/run/lock/zfsutilities/.snapname.reserved`) shared between bash and Python.
 * The existing snapshot naming format is unchanged.
 
-## Recently resolved (Phase 6)
-
-Integration tests now exercise concurrent profile execution end-to-end, and
+### Integration tests exercise concurrent profile execution end-to-end, and
 user documentation explains the new behavior.
 
 * `tests/python/test_profile_integration.py` runs two profiles in separate
@@ -359,14 +348,8 @@ user documentation explains the new behavior.
     exits safely.
 * `docs/docs/user-guide/profiles.md` documents what profiles are, how they
   run concurrently, and how conflicts are resolved.
-* The severity summary table above has been refreshed to mark Phase 5
-  (headless profile overlap) and remaining Phase 1 gaps (two prunes on the same
-  pool, two restores to the same destination, scrub path coordination) as
-  resolved.
 
-## Recently resolved (snapshot-before-lock)
-
-`zfs-send-receive` now acquires `w` locks on the source and destination datasets
+### `zfs-send-receive` acquires `w` locks on the source and destination datasets
 before it creates or selects a snapshot.  This closes the race where two
 concurrent jobs could create snapshots on the same dataset, causing a later
 incremental receive with `-F` to roll back a newer ZFSutilities-generated
@@ -376,12 +359,10 @@ snapshot.
   `getcommonsnap`.
 * `tests/test-zfs-send-receive-dryrun` checks the lock-before-snapshot ordering.
 
-## Recently resolved (LIO mutator fence)
-
-The two iSCSI recovery mutators — `reconcile-iscsi-state` and
+### The two iSCSI recovery mutators — `reconcile-iscsi-state` and
 `iscsi-restore-luns` — share three authorities (the live LIO tree,
 `saveconfig.json`, and the expected-backstores manifest) with no mutual
-exclusion. They now hold the lock manager's global `iscsi-lio` `w` lock
+exclusion. They hold the lock manager's global `iscsi-lio` `w` lock
 for their whole mutate+persist extent (`zfslock_acquire_lio_mutator`).
 The key is deliberately slash-free, so the hierarchy walk treats it as a
 flat lock and the two-node forwarder ignores it; the semantics are
@@ -389,7 +370,7 @@ refuse, never wait — the refusal WARN names the running sibling by pid
 and command, and a lock-manager error also refuses (fail closed). Two
 residue classes died with the fence: reconcile's manifest regen can no
 longer install a comment-only manifest when every apply action failed,
-and its summary now prints apply-truthful counts (`created: N of M`)
+and its summary prints apply-truthful counts (`created: N of M`)
 instead of plan totals. Found live by the j17 journey (F-040); verified
 by unit suites and the journey's fenced-race gate.
 
@@ -405,16 +386,16 @@ by unit suites and the journey's fenced-race gate.
 - `zfs-send-receive` — example of per-dataset `w` locking.
 - `zfsdelsnap` — example of parent-dataset `w` locking.
 - `zfscleanup`, `zfsretain`, `zfsdelfs`, `zfsscruball`, `zfscheckagainst` —
-  lock-protected by Phase 1.
+  lock-protected.
 - `zfssnapbuild` and `python/feature_config.py` — snapshot-name
-  generation, now coordinated by Phase 3.
+  generation.
 - `python/zfs_lock_manager.py` — Python lock client.
 - `python/profile_runner.py`, `backup_runner.py`, `scrub_manager.py`,
   `dataset_actions.py`, `retention_actions.py` — Python dispatch paths.
 - `tests/test-zfslockmanager` — covers the lock manager itself.
-- `tests/test-zfssnapbuild` — Phase 3 bash coverage.
+- `tests/test-zfssnapbuild` — bash coverage.
 - `tests/python/test_zfs_lock_manager.py`,
   `tests/python/test_dataset_actions.py`,
   `tests/python/test_retention_actions.py`,
   `tests/python/test_scrub_manager.py`,
-  `tests/python/test_feature_config.py` — Phase 2 and Phase 3 coverage.
+  `tests/python/test_feature_config.py`.

@@ -29,8 +29,7 @@ Please wait: closing the previous ZFS Utilities window...
 If a previous launch crashed or hung without showing a usable window, it is
 detected as stuck and terminated automatically without prompting.
 
-The `--replace` command-line flag is still accepted for backward compatibility,
-but it is no longer required; replacement is now the default behavior.
+The `--replace` command-line flag is accepted for backward compatibility; replacement is the default behavior.
 
 For the underlying mechanism (PID file, D-Bus, window detection), see
 [Architecture — GUI ↔ Bash Integration](../developer-guide/architecture.md#gui-bash-integration-architecture).
@@ -62,9 +61,7 @@ Choosing **No** keeps the window open so the tasks can finish normally.
 
 Automatic UI-state saves (window size and position, divider positions, table
 column widths, font sizes, and view selections) update only the `ui_state`
-section of the JSON configuration. They can never overwrite data sections such
-as the Checkagainst table, so a window resize or restart can no longer bring
-back deleted rows.
+section of the JSON configuration.
 
 ## The Main Window
 
@@ -620,7 +617,7 @@ prompts from the job are held as numbered input requests above the **Input**
 entry; answer them as `N response` (see [Bottom panel](#bottom-panel)).
 
 !!! note "Concurrent GUI runners"
-    The Backup, Offsite, and Restore tabs are no longer globally serialized.
+    The Backup, Offsite, and Restore tabs are not globally serialized.
     You can start a backup while an offsite or restore job is running, provided
     they operate on disjoint datasets. Per-dataset locks still prevent two jobs
     from modifying the same dataset at the same time.

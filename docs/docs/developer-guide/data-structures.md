@@ -244,7 +244,7 @@ Top-level keys:
 | `offsite`                                                             | object                    | GUI Offsite tab settings                                                                                             |
 | `restore`                                                             | object                    | GUI Restore tab settings                                                                                             |
 | `memory`                                                              | object                    | GUI Performance tab settings (see below)                                                                             |
-| `msg_level`                                                           | string                    | Deprecated. Kept for backward compatibility; no longer used for filtering.                                           |
+| `msg_level`                                                           | string                    | Deprecated. Kept for backward compatibility.                                           |
 | `history_retention_days`                                              | integer                   | How many days of backup log history entries to keep (default `90`)                                                   |
 | `ui_state`                                                            | object                    | Saved GUI window geometry, pop-out state, TreeView column widths, and paned divider positions (see below)            |
 | `archive_rate_limit`                                                  | string                    | Default transfer rate limit for archive-vm/unarchive-vm (rate value, e.g. `100M`; empty = unlimited; prompt-saved, seeded by migration v28) |
@@ -954,8 +954,7 @@ Semantics:
   suppressed so entries whose zvols are still missing survive in it.
   [iscsi-recover-encrypted-luns](../commands-and-modules/two-node.md#iscsi-recover-encrypted-luns-storage-node)
   also reads the newest map as its fallback LUN-index source when
-  `saveconfig.json` no longer records the encrypted entries (a keys-pending
-  fence save can rewrite it without them); its ACL grant heal uses the same
+  `saveconfig.json`; its ACL grant heal uses the same
   recorded pairs, and an initiator whose recorded grant set does not include
   the LUN is left ungranted rather than blanket-granted at identity. A map
   generated on another host is never consulted for it.
