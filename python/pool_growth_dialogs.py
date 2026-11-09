@@ -67,6 +67,7 @@ from pool_growth import (
     validate_replace_pair,
 )
 from pools_page import on_pools_refresh
+from runner_factory import new_dataset_action_runner
 from zfs_repository import (
     TopologyNode,
     build_add_vdev_command,
@@ -1650,14 +1651,6 @@ def on_disks_add_vdev(app) -> None:
         log_msg("WARN: Pool growth is available only on the storage host")
         return
 
-    runner = getattr(app, "dataset_runner", None)
-    if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
-        return
-
     repository = app.ctx.zfs_repository
     data = app._disks_inventory_cache.get()
     pools = sorted(data.topologies)
@@ -1687,7 +1680,14 @@ def on_disks_add_vdev(app) -> None:
         return
     pool_name, cmd = result
 
-    lock_id = zlm.acquire(pool_name, "w", f"Add vdev to {pool_name}")
+    runner = new_dataset_action_runner(app)
+    if runner is None:
+        return
+    try:
+        lock_id = zlm.acquire(pool_name, "w", f"Add vdev to {pool_name}")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot add vdev to pool '{pool_name}': {exc}")
+        return
     step = BashStep(cmd, f"Add vdev to pool {pool_name}", is_rsync=False, fatal=True)
 
     def _on_complete(cancelled=False, rc=None):
@@ -1716,14 +1716,6 @@ def on_disks_detach_device(app) -> None:
         log_msg("WARN: Pool maintenance is available only on the storage host")
         return
 
-    runner = getattr(app, "dataset_runner", None)
-    if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
-        return
-
     data = app._disks_inventory_cache.get()
     pools = sorted(data.topologies)
     if not pools:
@@ -1745,7 +1737,14 @@ def on_disks_detach_device(app) -> None:
         return
     pool_name, cmd = result
 
-    lock_id = zlm.acquire(pool_name, "w", f"Detach device from {pool_name}")
+    runner = new_dataset_action_runner(app)
+    if runner is None:
+        return
+    try:
+        lock_id = zlm.acquire(pool_name, "w", f"Detach device from {pool_name}")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot detach device from pool '{pool_name}': {exc}")
+        return
     step = BashStep(cmd, f"Detach device from pool {pool_name}", is_rsync=False, fatal=True)
 
     def _on_complete(cancelled=False, rc=None):
@@ -1772,14 +1771,6 @@ def on_disks_replace_device(app) -> None:
     """Replace a device in an existing pool vdev (Disks page action)."""
     if node_config.is_two_node() and not node_config.is_storage_host():
         log_msg("WARN: Pool maintenance is available only on the storage host")
-        return
-
-    runner = getattr(app, "dataset_runner", None)
-    if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
         return
 
     repository = app.ctx.zfs_repository
@@ -1814,7 +1805,14 @@ def on_disks_replace_device(app) -> None:
         return
     pool_name, cmd = result
 
-    lock_id = zlm.acquire(pool_name, "w", f"Replace device in {pool_name}")
+    runner = new_dataset_action_runner(app)
+    if runner is None:
+        return
+    try:
+        lock_id = zlm.acquire(pool_name, "w", f"Replace device in {pool_name}")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot replace device in pool '{pool_name}': {exc}")
+        return
     step = BashStep(cmd, f"Replace device in pool {pool_name}", is_rsync=False, fatal=True)
 
     def _on_complete(cancelled=False, rc=None):
@@ -1845,14 +1843,6 @@ def on_disks_attach_device(app) -> None:
     """Expand a pool vdev via zpool attach (Disks page action)."""
     if node_config.is_two_node() and not node_config.is_storage_host():
         log_msg("WARN: Pool growth is available only on the storage host")
-        return
-
-    runner = getattr(app, "dataset_runner", None)
-    if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
         return
 
     repository = app.ctx.zfs_repository
@@ -1887,7 +1877,14 @@ def on_disks_attach_device(app) -> None:
         return
     pool_name, cmd, kind = result
 
-    lock_id = zlm.acquire(pool_name, "w", f"Expand vdev in {pool_name}")
+    runner = new_dataset_action_runner(app)
+    if runner is None:
+        return
+    try:
+        lock_id = zlm.acquire(pool_name, "w", f"Expand vdev in {pool_name}")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot expand vdev in pool '{pool_name}': {exc}")
+        return
     step = BashStep(cmd, f"Expand vdev in pool {pool_name}", is_rsync=False, fatal=True)
 
     def _on_complete(cancelled=False, rc=None):
@@ -1922,14 +1919,6 @@ def on_disks_add_infra_vdev(app) -> None:
         log_msg("WARN: Pool growth is available only on the storage host")
         return
 
-    runner = getattr(app, "dataset_runner", None)
-    if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
-        return
-
     repository = app.ctx.zfs_repository
     data = app._disks_inventory_cache.get()
     pools = sorted(data.topologies)
@@ -1959,7 +1948,14 @@ def on_disks_add_infra_vdev(app) -> None:
         return
     pool_name, kind, cmd = result
 
-    lock_id = zlm.acquire(pool_name, "w", f"Add {kind} vdev to {pool_name}")
+    runner = new_dataset_action_runner(app)
+    if runner is None:
+        return
+    try:
+        lock_id = zlm.acquire(pool_name, "w", f"Add {kind} vdev to {pool_name}")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot add {kind} vdev to pool '{pool_name}': {exc}")
+        return
     step = BashStep(cmd, f"Add {kind} vdev to pool {pool_name}", is_rsync=False, fatal=True)
 
     def _on_complete(cancelled=False, rc=None):

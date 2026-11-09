@@ -85,7 +85,6 @@ def _make_app():
 _GROWTH_TOOLTIP = "Pool growth is available only on the storage host"
 _MAINT_TOOLTIP = "Pool maintenance is available only on the storage host"
 _MIGRATE_TOOLTIP = "Pool migration is available only on the storage host"
-_BUSY_TOOLTIP = "A dataset action is already running"
 
 _GROWTH_ATTRS = (
     "_disks_add_vdev_btn",
@@ -157,7 +156,9 @@ class TestGrowthButtonSensitivity(unittest.TestCase):
         for attr in _GROWTH_ATTRS + _MAINT_ATTRS + _MIGRATE_ATTRS:
             getattr(app, attr).set_sensitive.assert_called_with(True)
 
-    def test_disabled_while_runner_busy(self):
+    def test_stays_enabled_while_dataset_action_runs(self):
+        """No global gate: buttons stay clickable while dataset actions run;
+        genuine lock conflicts refuse at confirmation time instead."""
         dp, app = self._make()
         app.dataset_runner.running = True
         with _single_host(dp):
@@ -165,12 +166,11 @@ class TestGrowthButtonSensitivity(unittest.TestCase):
         for attr in _GROWTH_ATTRS + _MAINT_ATTRS + _MIGRATE_ATTRS:
             with self.subTest(attr=attr):
                 btn = getattr(app, attr)
-                btn.set_sensitive.assert_called_with(False)
-                btn.set_tooltip_text.assert_called_with(_BUSY_TOOLTIP)
+                btn.set_sensitive.assert_called_with(True)
+                btn.set_tooltip_text.assert_called_with(btn._action_tooltip)
 
-    def test_compute_host_tooltip_takes_precedence_over_runner_busy(self):
+    def test_compute_host_tooltip_takes_precedence(self):
         dp, app = self._make()
-        app.dataset_runner.running = True
         with _compute_host(dp):
             dp.update_disks_button_sensitivity(app)
         for attr in _GROWTH_ATTRS:
@@ -247,13 +247,13 @@ class TestProxmoxButtonSensitivity(unittest.TestCase):
             dp.update_disks_button_sensitivity(app)
         btn.set_sensitive.assert_called_with(True)
 
-    def test_disabled_while_runner_busy(self):
+    def test_stays_enabled_while_dataset_action_runs(self):
+        """No global gate: enrollment stays clickable while actions run."""
         dp, app, btn = self._make()
         app.dataset_runner.running = True
         with _single_host(dp):
             dp.update_disks_button_sensitivity(app)
-        btn.set_sensitive.assert_called_with(False)
-        btn.set_tooltip_text.assert_called_with(_BUSY_TOOLTIP)
+        btn.set_sensitive.assert_called_with(True)
 
 
 if __name__ == "__main__":

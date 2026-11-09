@@ -252,8 +252,8 @@ GUI Backup tab. Builds and launches the backup run; also owns the snapfile (prev
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
-| `INFO: Previous snapshot name found: ...` | Snapfile on disk contained a saved snapshot name, preloaded into the entry | Informational; reused unless regenerated |
-| `INFO: New snapshot name: ...` | A fresh snapshot name was generated into the entry | Informational |
+| `VERB: Previous snapshot name found: ...` | Snapfile on disk contained a saved snapshot name, preloaded into the entry | Informational; reused unless regenerated |
+| `VERB: New snapshot name: ...` | A fresh snapshot name was generated into the entry | Informational |
 | `WARN: Generate or enter a snapshot name first` | Run Backup pressed with empty snapshot name | Run aborted |
 | `INFO: Backup cancelled` | User cancelled the pre-run confirmation dialog | Run aborted |
 | `INFO: Dry run mode enabled — no changes will be made` | Global dry-run toggle active for this run | Steps become "Would ..." messages; nothing executes |
@@ -346,8 +346,8 @@ GUI Offsite tab. Builds and launches the offsite run and owns the tab's Save/Rev
 
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
-| `INFO: Offsite: previous snapshot name found: ...` | The offsite snapfile had a saved name, preloaded | Informational |
-| `INFO: Offsite: new snapshot name: ...` | A fresh offsite snapshot name was generated | Informational |
+| `VERB: Offsite: previous snapshot name found: ...` | The offsite snapfile had a saved name, preloaded | Informational |
+| `VERB: Offsite: new snapshot name: ...` | A fresh offsite snapshot name was generated | Informational |
 | `WARN: Generate or enter a snapshot name first` | Run Offsite pressed with empty snapshot name | Run aborted |
 | `FATAL: No offsite pool online.` | None of the registry's offsite candidates is currently importable/online | Run aborted before the confirmation dialog |
 | `INFO: Offsite backup cancelled` | User cancelled the pre-run confirmation dialog | Run aborted |
@@ -1722,7 +1722,8 @@ GUI enrollment of a newly created pool into two-node iSCSI (offered after pool c
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `INFO: 1. add [...]="..." to POOL_TARGET in node.conf on both nodes` / `2. run 'sudo setup-iscsi-targets' on the storage host` / `3. run 'sudo rescan-storage' on the compute host` | Manual-step guidance when auto-enrollment was not taken | Operator performs the manual steps |
-| `INFO: iSCSI enrollment for pool '...' skipped because a dataset action is not available or already running. Manual steps:` | Runner missing/busy gate | Auto-enrollment skipped; manual steps follow |
+| `INFO: iSCSI enrollment for pool '...' skipped because a dataset action runner is not available. Manual steps:` | Runner tracker missing (defensive gate) | Auto-enrollment skipped; manual steps follow |
+| `INFO: iSCSI enrollment for pool '...' skipped because the pool is locked by another operation: ... Manual steps:` | The pool's write lock is held by another operation (the message names the holder) | Auto-enrollment skipped; manual steps follow |
 | `INFO: iSCSI enrollment for pool '...' declined. Manual steps:` | User answered No to the enrollment dialog | Enrollment skipped; manual steps follow |
 | `WARN: Invalid iSCSI short name '...' for pool '...' — falling back to '...'` | The entered short name failed character validation | Continue with the derived default |
 | `INFO: iSCSI enrollment for pool '...' cancelled` | The enrollment step was cancelled mid-run | Skipped; pages refreshed |
@@ -1740,7 +1741,8 @@ GUI registration of a pool with Proxmox (offered after pool creation or migratio
 | `WARN: Proxmox (pvesm) not reachable on compute host ... — pool '...' was not registered. Manual steps:` | The SSH probe for `pvesm` failed on the compute host (two-node only) | Skipped; manual steps follow |
 | `WARN: Could not read pvesm status — cannot tell whether pool '...' is already registered with Proxmox. Manual steps:` | The `pvesm status` query failed | Skipped; manual steps follow |
 | `INFO: Pool '...' is already registered with Proxmox as storage '...'` | The derived storage ID is present in the `pvesm` output | Enrollment skipped (already done) |
-| `INFO: Proxmox storage enrollment for pool '...' skipped because a dataset action is not available or already running. Manual steps:` | Runner missing/busy gate | Skipped; manual steps follow |
+| `INFO: Proxmox storage enrollment for pool '...' skipped because a dataset action runner is not available. Manual steps:` | Runner tracker missing (defensive gate) | Skipped; manual steps follow |
+| `INFO: Proxmox storage enrollment for pool '...' skipped because the pool is locked by another operation: ... Manual steps:` | The pool's write lock is held by another operation (the message names the holder) | Skipped; manual steps follow |
 | `INFO: Proxmox storage enrollment for pool '...' declined. Manual steps:` | User answered No to the register dialog | Skipped; manual steps follow |
 | `WARN: Invalid Proxmox storage ID '...' for pool '...' — falling back to '...'` | The entered ID failed the storage-ID validation | Continue with the derived default |
 | `INFO: Proxmox storage enrollment for pool '...' cancelled` | The BashStep was cancelled | Skipped; pages refreshed |
@@ -1748,7 +1750,6 @@ GUI registration of a pool with Proxmox (offered after pool creation or migratio
 | `INFO: Pool '...' registered with Proxmox as storage '...'` | The enrollment script completed | Informational |
 | `WARN: No pool selected for Proxmox enrollment` | Disks page pool selector empty | Aborted |
 | `WARN: Proxmox enrollment is available only on the storage host` | Two-node gate on the Disks page action | Aborted |
-| `WARN: A dataset action is already running` | Runner busy guard | Aborted |
 
 ## iSCSI Boot Drop-ins (rtslib-fb-targetctl)
 
@@ -2038,7 +2039,7 @@ GUI Create Pool wizard (storage host only); offers registry, iSCSI, and Proxmox 
 | `WARN: No pool profiles configured` | No pool profiles exist in the config, so the wizard cannot proceed | Wizard aborted before opening; use Advanced: Manage Pool Profiles on the Disks page |
 | `INFO: Added '...' to pool registry (unsaved)` | The register-pool offer was accepted and the pool appended to the known list | Save in the Pools tab to persist |
 | `WARN: Pool creation is available only on the storage host` | Two-node gate — invoked on the compute node | Action aborted |
-| `WARN: Dataset runner not available` / `A dataset action is already running` | Runner missing / busy guard | Action aborted |
+| `WARN: Dataset runner not available` / `WARN: cannot create pool '...': ...` | Runner tracker missing (defensive) / the new pool's write lock is held (the message names the holder) | Action aborted |
 | `WARN: Could not scan importable pools: ...` | The importable-devices scan failed during eligibility | Continue with an empty importable map |
 | `INFO: Create Pool cancelled for ...` | The run completed with cancelled=True | Lock released; pages refreshed; enrollment offers skipped |
 | `WARN: Create Pool failed for '...' (rc=...)` | The create step exited non-zero | Lock released; no register/iSCSI/Proxmox offers |
@@ -2059,7 +2060,7 @@ GUI dialogs for growing and maintaining pools: add data vdev, expand vdev (attac
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `WARN: Pool growth is available only on the storage host` / `Pool maintenance is available only on the storage host` | Two-node gates — invoked on the compute node | Action aborted |
-| `WARN: Dataset runner not available` / `A dataset action is already running` | Runner missing / busy guard | Action aborted |
+| `WARN: Dataset runner not available` / `WARN: cannot add vdev to pool '...': ...` / `cannot expand vdev in pool '...'` / `cannot replace device in pool '...'` / `cannot detach device from pool '...'` / `cannot add ... vdev to pool '...'` | Runner tracker missing (defensive) / the pool's write lock is held by another operation at confirmation time (the message names the holder) | Action aborted |
 | `WARN: No imported pools to grow` / `No imported pools to maintain` | The inventory cache has no imported pools | Action aborted |
 | `WARN: Could not scan importable pools: ...` | The importable-devices scan failed | Continue with an empty importable set (eligibility may be stricter) |
 | `INFO: Add vdev cancelled for ...` / `Detach cancelled for ...` / `Replace cancelled for ...` / `Expand vdev cancelled for ...` / `Add ... vdev cancelled for ...` | The corresponding step was cancelled before completing | Skipped; state refreshed |
@@ -2081,7 +2082,7 @@ GUI Migrate Pool wizard (storage host only): copy phase, then a destructive cuto
 | `WARN: Could not scan dataset mountpoints: ...` | The dataset scan for root-pool detection failed | The root pool is not excluded from holding pools |
 | `INFO: Snapshot holds captured from '...' are preserved in ...; once the pool is imported, reapply them with: zfsreapplyholds --apply ... ...` | After a failed/cancelled cutover, the captured-holds TSV is kept and the recovery command is spelled out | Re-apply holds manually after import |
 | `WARN: Pool migration is available only on the storage host` | Two-node gate — invoked on the compute node | Action aborted |
-| `WARN: Dataset runner not available` / `A dataset action is already running` | Runner missing / busy guard | Action aborted |
+| `WARN: Dataset runner not available` | Runner tracker missing (defensive; logged inside the start-failed warning below) | Action aborted |
 | `WARN: No imported pools to migrate` | No imported pools found | Action aborted |
 | `WARN: Could not list datasets of pool '...': ...` | Per-pool dataset listing failed during setup | Continue with an empty list for that pool |
 | `WARN: Could not read pool properties of '...': ...` | The curated pool-property read for the origin-derived defaults failed | The "Match origin pool" pseudo-profile falls back to empty pool properties; the wizard stays usable |
@@ -2091,7 +2092,7 @@ GUI Migrate Pool wizard (storage host only): copy phase, then a destructive cuto
 | `WARN: Migrate Pool aborted for '...': pool changed after the review (...)` | Safety gate — the live dataset layout differs from the reviewed plan before copy starts | Aborted; re-review the plan; nothing runs |
 | `INFO: Migrate pool cancelled for ...` | The copy phase was cancelled | Lock released; holds file discarded; refresh |
 | `WARN: Migrate pool copy failed for '...' (rc=...); no destructive step was run` | The copy phase exited non-zero | Aborted before cutover; lock released; holds file discarded |
-| `WARN: Migrate pool start failed for '...' (...); captured-holds file discarded` | Starting the run itself failed (step build, lock acquisition, runner start) after the holds TSV was reserved | Nothing ran; lock released if taken; the error is re-raised — address it and rerun |
+| `WARN: Migrate pool start failed for '...' (...); captured-holds file discarded` | Starting the run itself failed (step build, lock acquisition, runner start) after the holds TSV was reserved | Nothing ran; lock released if taken; a dataset-lock conflict (holder named in the message) is an expected refusal — wait for the holder or address it and rerun; unexpected errors are re-raised |
 | `INFO: Migrate pool copy complete for '...'; waiting for cutover confirmation` | Copy phase finished; the destructive phase is gated | Layout re-check and running-VM warning, then the cutover dialog |
 | `WARN: Migrate Pool aborted for '...': pool changed at cutover time (...)` | Safety gate — the layout changed since review at the cutover moment | Cutover aborted; snapshot/copies remain; re-review |
 | `INFO: Cutover deferred for '...' (running VMs declined); the migration snapshot and copies remain in place — rerun Migrate Pool to finish` | The running-VMs warning was declined at cutover | Cutover not run; state preserved for a later rerun |
@@ -2160,9 +2161,10 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 | `WARN: Error creating snapshot: ...` | The snapshot command failed for that dataset in a multi-selection batch | Remaining datasets still attempted |
 | `WARN: Created snapshot on N of M datasets` | Multi-selection summary — at least one dataset failed | Check the per-dataset warnings above |
 | `WARN: cannot snapshot ... / cannot destroy ... / cannot delete snapshots: ... / cannot release holds: ... / cannot set holds: ... / cannot rollback ...: ...` (ending with the lock error) | A dataset lock could not be acquired for that action | Action aborted; another operation holds the dataset |
-| `WARN: Error: zfs command not found` | The `zfs binary is missing from PATH | Action aborted |
-| `WARN: cannot destroy ...: dataset is locked by another operation` | Pre-flight lock check failed before the destroy dialog | Delete of all selected datasets aborted |
-| `WARN: Dataset runner not available` / `A dataset action is already running` | Runner missing / busy guard | Action aborted |
+| `WARN: Error: zfs command not found` | The `zfs` binary is missing from PATH | Action aborted |
+| `WARN: cannot destroy ...: dataset is locked by another operation (...)` | Pre-flight lock check failed before the destroy dialog; the parenthesised detail names every blocking holder when known | Delete of all selected datasets aborted |
+| `WARN: cannot sever clone ...: dataset is locked by another operation (...)` | A write lock on a selected clone dataset is unavailable at confirmation; the holder is named | Sever clone aborted |
+| `WARN: Dataset runner not available` | Runner tracker missing (defensive) | Action aborted |
 | `WARN: Cannot delete: the following snapshots have holds that were not selected:\n ...` | Safety gate — selected snapshots carry holds the user did not select for release | Batch delete aborted; select the holds too |
 | `INFO: Deleted ... snapshot(s)` | Final summary — all selected snapshots destroyed with zero errors after Yes/No confirm | Page refreshed |
 | `WARN: Error deleting ...` | Destroying one snapshot failed (busy diagnosis appended) | Error counted; other snapshots still attempted |
@@ -2200,6 +2202,7 @@ GUI Datasets tab actions: snapshot, delete (with hold gate), holds, rollback, br
 | `WARN: Could not list descendants of ...: ...` | Listing children for the child-first unmount order failed | Only the dataset itself is unmounted |
 | `FATAL: ... looks mounted but its mountpoint is not reachable (orphaned or shadowed mount) and could not be recovered automatically. Check which ancestor covers or precedes it, close any users, and retry.` | The unmount failed with "no such pool or dataset" and both recovery shapes (remount unmounted parents; lift covering ancestors) failed | Stop; resolve the ancestor state and retry |
 | `VERB: Unmounted ... to expose a shadowed mount` | A mounted ancestor was lifted so the target's mountpoint path resolves | Unmount retried immediately |
+| `WARN: Skipping ... as a lift candidate: mountpoint ... is not a usable path` | A covering ancestor's mountpoint is not an addressable path (e.g. legacy), so it cannot be detached to expose the shadowed mount | The next candidate is tried; unmount may fail if none work |
 | `VERB: Remounted ... after exposing a shadowed mount` | A lifted ancestor was restored after the unmount completed | Informational |
 | `WARN: Could not remount ... after exposing a shadowed mount: ... — it is unmounted; mount it from the Datasets page` | Restoring a lifted ancestor failed | The ancestor stays unmounted; mount it manually from the Datasets page |
 | `FATAL: cannot unmount ...: its mount is covered by ..., which is busy. Close what is using it and retry.` | The covering ancestor of a shadowed mount is in use (a dialog lists the holders) | Close the users and retry |
@@ -2263,7 +2266,7 @@ GUI Disks tab SMART actions and the Wipe Labels handler.
 | `WARN: SMART details unavailable for ...` | The details query returned empty or n/a | Dump aborted |
 | `INFO: SMART details for ...:` | Header of the smartctl output dump | Informational |
 | `WARN: Disk wipe is available only on the storage host` | Wipe Labels invoked on a two-node compute host | Action aborted |
-| `WARN: Dataset runner not available` / `WARN: A dataset action is already running` | Shared gate wording (also used by pool-growth handlers) | Action aborted |
+| `WARN: Dataset runner not available` / `WARN: cannot wipe labels on ...: ...` | Runner tracker missing (defensive) / the disk's write lock is held by another operation (the message names the holder) | Action aborted |
 | `WARN: Select a disk to wipe` | No disk row selected | Action aborted |
 | `WARN: ... is not in the disk inventory; refresh and retry` | The selected row is not in the cached inventory | Action aborted |
 | `WARN: ... cannot be wiped: ...` | The selection is not inactive (itself, its parent, or a sibling belongs to an imported pool) | Action aborted |
@@ -2900,7 +2903,7 @@ Workload-profile dialogs: Rewrite Data (zfs rewrite restripe) and Apply Profile,
 | `WARN: Select at least one dataset to rewrite data` | Empty dataset list | Action aborted |
 | `WARN: Rewrite Data supports filesystem datasets only; zfs rewrite cannot act on a volume's block device (...)` | The selection contains volumes | Action aborted |
 | `WARN: Rewrite Data requires OpenZFS 2.3.4+` | Capability gate — zfs rewrite unsupported | Action aborted |
-| `WARN: Dataset runner not available` / `A dataset action is already running` | Runner missing / busy guard | Action aborted |
+| `WARN: Dataset runner not available` / `WARN: cannot rewrite data on ...: ...` / `WARN: cannot apply profile to ...: ...` | Runner tracker missing (defensive) / a write lock on a selected dataset is held by another operation (the message names the holder) | Action aborted |
 | `WARN: Could not read properties for ...: ...` | The mountpoint/apply property query failed (plain-language explanation appended) | Rewrite preflight aborted / that dataset skipped in Apply |
 | `WARN: Cannot rewrite data for ...: mountpoint is '...'` | Mountpoint none/legacy/- cannot be rewritten via path | Aborted |
 | `WARN: Rewrite Data requires the physical_rewrite pool feature on ... (zpool set feature@physical_rewrite=enabled ...)` | Per-pool feature-flag gate | Aborted; enable the feature to proceed |
@@ -2968,6 +2971,15 @@ Alignment view of the Performance tab: off-thread sample collection and renderin
 | Message prefix | Meaning | Response |
 | -------------- | ------- | -------- |
 | `WARN: Alignment sample gathering failed: ...` | The background collection thread hit an unexpected exception | The refresh is skipped and the pending flag cleared (the view keeps its last sample); the next scheduled refresh retries |
+
+### [alignment_guestfs](../commands-and-modules/python-modules.md#alignment_guestfspy)
+
+Guest-filesystem probing behind the Alignment view (no GUI surface of its own): the QEMU guest-agent round-trips that read each VM volume's filesystem blocksizes.
+
+| Message prefix | Meaning | Response |
+| ------------- | ------- | -------- |
+| `WARN: qm guest <cmd> <vmid> failed (rc=...): ...` | A `qm guest` call exited non-zero; the excerpt is the first line of PVE's raw stderr | The failure is classified into the short per-volume reason shown in the Alignment note and the affected VM's volumes degrade; the rest of the sample is unaffected |
+| `WARN: qm guest exec <vmid> (<command>) returned unparseable output: ...` | A `qm guest exec` call exited 0 but its stdout was not PVE's exec-status JSON (a wire-shape drift); the excerpt is the raw first line | Same per-volume degrade; the excerpt is the only trace of what PVE actually printed — compare it against the installed PVE's result keys |
 
 ### [alignment_dialogs](../commands-and-modules/python-modules.md#alignment_dialogspy)
 

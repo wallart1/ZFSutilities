@@ -104,6 +104,7 @@ from pool_profiles import (
 )
 from pools_page import on_pools_refresh
 from proxmox_enroll import offer_proxmox_enrollment
+from runner_factory import new_dataset_action_runner
 from workload_profiles import LIVE_PROPERTIES
 from zfs_repository import (
     TopologyNode,
@@ -1824,14 +1825,6 @@ def on_disks_migrate_pool(app) -> None:
         log_msg("WARN: Pool migration is available only on the storage host")
         return
 
-    runner = getattr(app, "dataset_runner", None)
-    if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
-        return
-
     repository = app.ctx.zfs_repository
     data = app._disks_inventory_cache.get()
     pools_all = sorted(data.topologies)
@@ -1965,6 +1958,9 @@ def on_disks_migrate_pool(app) -> None:
     # the lock if it was taken) before letting the error surface.
     lock_id = None
     try:
+        runner = new_dataset_action_runner(app)
+        if runner is None:
+            raise RuntimeError("dataset action runner not available")
         copy_steps, cutover_steps = build_migration_steps(request)
         lock_id = zlm.acquire(request.source_pool, "w", f"Migrate pool {request.source_pool}")
 
@@ -2106,4 +2102,8 @@ def on_disks_migrate_pool(app) -> None:
             f"WARN: Migrate pool start failed for '{request.source_pool}' "
             f"({exc}); captured-holds file discarded"
         )
+        if isinstance(exc, RuntimeError):
+            # A dataset-lock conflict (or missing runner) is an expected
+            # refusal, not an error — the WARN above names the holders.
+            return
         raise

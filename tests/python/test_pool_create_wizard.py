@@ -278,6 +278,7 @@ def _make_app(disks=None, topologies=None):
     app.disks_dataset_store = FakeListStoreIterable()
     app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [])
     app.dataset_runner = FakeDatasetRunner()
+    app.dataset_actions = SimpleNamespace(new_runner=lambda: app.dataset_runner)
 
     app.known_pools = []
     app._pools_saved_state = []
@@ -1074,20 +1075,34 @@ class TestHandlerGuards(unittest.TestCase):
             logs,
         )
 
-    def test_runner_busy_bails(self):
+    def test_lock_conflict_refuses_with_holder_detail(self):
         pcw = _import_wizard()
         app = _make_app()
-        app.dataset_runner.running = True
         nc = MagicMock()
         nc.is_two_node.return_value = False
+        zlm = MagicMock()
+        zlm.acquire.side_effect = RuntimeError(
+            "conflict: cannot acquire w lock on newpool: "
+            "held by dataset='newpool' type=write pid=7 script=zfsdailybackup"
+        )
         with (
             patch.object(pcw, "node_config", nc),
-            patch.object(pcw, "show_create_pool_wizard") as wiz,
+            patch.object(pcw, "zlm", zlm),
+            patch.object(
+                pcw, "show_create_pool_wizard", return_value=("newpool", ["zpool", "create"])
+            ) as wiz,
             capture_logs() as logs,
         ):
             pcw.on_disks_create_pool(app)
-        wiz.assert_not_called()
-        self.assertTrue(any("already running" in line for line in logs), logs)
+        wiz.assert_called_once()
+        self.assertTrue(
+            any("cannot create pool 'newpool'" in line for line in logs)
+            and any("script=zfsdailybackup" in line for line in logs),
+            logs,
+        )
+        self.assertEqual(app.dataset_runner.steps, [])
+        self.assertFalse(app.dataset_runner.running)
+        zlm.release.assert_not_called()
 
     def test_no_eligible_disks_shows_info_dialog(self):
         pcw = _import_wizard()
@@ -1196,21 +1211,20 @@ class TestCreatePoolButtonSensitivity(unittest.TestCase):
         app._disks_create_pool_btn.set_sensitive.assert_called_with(True)
         app._disks_create_pool_btn.set_tooltip_text.assert_called_with(self._CREATE_TOOLTIP)
 
-    def test_disabled_while_runner_busy(self):
+    def test_stays_enabled_while_dataset_action_runs(self):
+        """No global gate: pool creation stays clickable while actions run;
+        a genuine lock conflict refuses at confirmation time instead."""
         dp, app = self._make()
         app.dataset_runner.running = True
         nc = MagicMock()
         nc.is_two_node.return_value = False
         with patch.object(dp, "node_config", nc):
             dp.update_disks_button_sensitivity(app)
-        app._disks_create_pool_btn.set_sensitive.assert_called_with(False)
-        app._disks_create_pool_btn.set_tooltip_text.assert_called_with(
-            "A dataset action is already running"
-        )
+        app._disks_create_pool_btn.set_sensitive.assert_called_with(True)
+        app._disks_create_pool_btn.set_tooltip_text.assert_called_with(self._CREATE_TOOLTIP)
 
-    def test_compute_host_tooltip_takes_precedence_over_runner_busy(self):
+    def test_compute_host_tooltip_takes_precedence(self):
         dp, app = self._make()
-        app.dataset_runner.running = True
         nc = MagicMock()
         nc.is_two_node.return_value = True
         nc.is_storage_host.return_value = False
@@ -1221,8 +1235,8 @@ class TestCreatePoolButtonSensitivity(unittest.TestCase):
             "Pool creation is available only on the storage host"
         )
 
-    def test_works_before_dataset_runner_exists(self):
-        """Regression: page creation runs before the window builds dataset_runner."""
+    def test_works_before_dataset_actions_exists(self):
+        """Regression: page creation runs before the window builds the tracker."""
         dp = _import_disks_page()
         create_btn = MagicMock()
         create_btn._action_tooltip = self._CREATE_TOOLTIP

@@ -1163,19 +1163,24 @@ snap different subsets, which would force the daily backup to roll back
 ### `runner_factory.py`
 
 Creates `BackupRunner` instances pre-bound to the main window's log,
-progress, and input-hold event callbacks (`input_event_func`).
+progress, and input-hold event callbacks (`input_event_func`). Also owns
+the dataset-action runner tracker: every GUI dataset action gets its own
+runner, and the dataset locks (`zfs_lock_manager`) — not a shared runner —
+serialize the actions.
 
 **Key class:**
 
-| Class           | Purpose                                       |
-| --------------- | --------------------------------------------- |
-| `RunnerFactory` | Factory for runners sharing the same GUI sink |
+| Class                 | Purpose                                                       |
+| --------------------- | ------------------------------------------------------------- |
+| `RunnerFactory`       | Factory for runners sharing the same GUI sink                 |
+| `DatasetActionRunners`| Per-action runners for dataset actions; tracks live ones for the quit guard, stdin routing, and the Dashboard |
 
 **Called modules / imported helpers:**
 
-| Module          | Purpose in this module |
-| --------------- | ---------------------- |
-| `backup_runner` | `BackupRunner`         |
+| Module          | Purpose in this module                        |
+| --------------- | ---------------------------------------------- |
+| `backup_runner` | `BackupRunner`                                 |
+| `backup_config` | `log_msg` for the runner-not-available warning |
 
 **Data structures consumed / produced:**
 
@@ -2057,14 +2062,21 @@ to their disk); size+bus position remains the last resort for blank
 zvols. Clone-shared signatures are refused rather than guessed.
 Filesystem block sizes come from one batched `stat -f -c %S`. Results
 cache per (vmid, volume, volsize) with a TTL, because guest geometry is
-quasi-static and the page refreshes every 1-300 s. Every failure
-degrades per volume with a short reason that names the actual condition
-(`qm guest` failures are classified against PVE's own die strings:
-guest agent not configured in VM options, guest agent not running,
-agent error with the underlying description, VM not running; then disk
-not matched, clone-identical signatures, non-Linux guest). The raw
-stderr of a failed `qm` call is logged as a WARN line, since the short
-reason alone cannot be re-diagnosed after the fact.
+quasi-static and the page refreshes every 1-300 s. Guest stdout comes
+back under the `out-data` key of PVE's exec-status result — the shape
+PVE itself prints, verified against the installed `QemuServer/Agent.pm`
+(an earlier decoder read an `out` key no PVE sends, and every scripted
+fixture agreed with it, so live probes failed uniformly behind
+"unexpected qm output" until a production screenshot exposed the
+drift). Every failure degrades per volume with a short reason that
+names the actual condition (`qm guest` failures are classified against
+PVE's own die strings: guest agent not configured in VM options, guest
+agent not running, agent error with the underlying description, VM not
+running; then disk not matched, clone-identical signatures, non-Linux
+guest). The raw stderr of a failed `qm` call — and the raw first line
+of an exec result that exited 0 but did not parse — are logged as WARN
+lines, since the short reason alone cannot be re-diagnosed after the
+fact.
 `share/dev/validate-guestfs-probe.sh` validates the deployed chain in
 production (run as root on the storage host; everything it executes is
 read-only) and carries a `--self-check` mode that proves the plumbing

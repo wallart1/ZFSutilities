@@ -138,8 +138,15 @@ SINGLE_NODE = {
 
 
 def _qm_exec(stdout, exitcode=0):
-    """A successful qm guest exec CompletedProcess with *stdout* inside."""
-    payload = json.dumps({"exitcode": exitcode, "out": stdout, "err": ""})
+    """A successful qm guest exec CompletedProcess with *stdout* inside.
+
+    The payload is PVE's real exec-status hash (QemuServer/Agent.pm):
+    guest stdout under ``out-data``, stderr under ``err-data``. An
+    earlier fixture invented an ``out`` key that agreed with a wrong
+    decoder — every scripted test passed while live PVE answers failed,
+    so the shape here is load-bearing, not cosmetic.
+    """
+    payload = json.dumps({"exitcode": exitcode, "out-data": stdout, "err-data": ""})
     return SimpleNamespace(returncode=0, stdout=payload, stderr="")
 
 
@@ -174,11 +181,33 @@ GUEST_LSBLK_ARGS = [
 class TestParsers(unittest.TestCase):
     def test_parse_qm_exec_output(self):
         self.assertEqual(
-            agfs.parse_qm_exec_output('{"exitcode": 0, "out": "hi\\n"}'),
-            {"exitcode": 0, "out": "hi\n"},
+            agfs.parse_qm_exec_output('{"exitcode": 0, "out-data": "hi\\n"}'),
+            {"exitcode": 0, "out-data": "hi\n"},
         )
         self.assertIsNone(agfs.parse_qm_exec_output("not json"))
         self.assertIsNone(agfs.parse_qm_exec_output('["a", "list"]'))
+
+    def test_decode_exec_reads_pve_out_data(self):
+        # PVE prints the agent's exec-status hash: guest stdout under
+        # "out-data". The decoder must refuse a result that carries any
+        # other stdout key — an invented "out" shape once passed these
+        # tests while live PVE answers failed as "unexpected qm output".
+        self.assertEqual(
+            agfs._decode_exec({"exitcode": 0, "out-data": "hi\n", "err-data": ""}),
+            ("hi\n", None),
+        )
+        # Empty guest stdout decodes as empty, not as a shape failure —
+        # the caller reports the command-level consequence honestly.
+        self.assertEqual(agfs._decode_exec({"exitcode": 0, "out-data": ""}), ("", None))
+        self.assertEqual(
+            agfs._decode_exec({"exitcode": 0, "out": "hi\n"}),
+            (None, "unexpected qm output"),
+        )
+        self.assertEqual(
+            agfs._decode_exec({"exitcode": 1, "out-data": ""}),
+            (None, "guest command failed"),
+        )
+        self.assertEqual(agfs._decode_exec(None), (None, "unexpected qm output"))
 
     def test_parse_lsblk_json_builds_the_tree(self):
         disks = agfs.parse_lsblk_json(LSBLK_JSON)
@@ -513,6 +542,22 @@ class TestProbeVolumes(unittest.TestCase):
         for part in ("cmd", "201", "rc=255", "No QEMU guest agent configured"):
             self.assertIn(part, message)
         self.assertNotIn("trace", message)  # first line only
+
+    def test_unparseable_exec_output_logs_raw_stdout(self):
+        # rc was 0, so the raw-stderr WARN never fires; the shape WARN is
+        # the only log trace of a wire-shape drift, carrying the raw
+        # first line — without it the drift needs a live screenshot to
+        # even be noticed (the 0.138-era "unexpected qm output" wall).
+        prober, _runner = self._prober(
+            [_ok(), _ok(stdout='{"exitcode": 0, "out": "hi"}\nsecond line')]
+        )
+        with mock.patch.object(agfs, "log_msg") as logged:
+            prober.probe_volumes([self._volume()])
+        logged.assert_called_once()
+        message = logged.call_args.args[0]
+        for part in ("exec", "201", "lsblk", "unparseable", '{"exitcode": 0, "out": "hi"}'):
+            self.assertIn(part, message)
+        self.assertNotIn("second line", message)  # first line only
 
     def test_command_failure_reason(self):
         prober, _runner = self._prober([OSError("qm missing")])

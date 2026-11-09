@@ -82,14 +82,18 @@ import node_config  # noqa: E402
 
 
 def qm_exec(stdout, exitcode=0):
-    payload = json.dumps({"exitcode": exitcode, "out": stdout, "err": ""})
+    # PVE's real exec-status hash: guest stdout under "out-data" — an
+    # earlier scripted "out" key agreed with a wrong decoder, so the
+    # self-check blessed the very shape live PVE never sends.
+    payload = json.dumps({"exitcode": exitcode, "out-data": stdout, "err-data": ""})
     return SimpleNamespace(returncode=0, stdout=payload, stderr="")
 
 
 if self_check:
     # One scripted guest: vdb (10G, whole-disk ext4 on /data) matched by
-    # its storage-side signature, stat answering 4K — the wire shapes the
-    # test-suite fixtures use. No host is touched.
+    # its storage-side signature, stat answering 4K — the wire shapes
+    # live PVE sends (verified against QemuServer/Agent.pm). No host is
+    # touched.
     uuid_c = "73973a54-3a68-4925-98fa-89ae40630cbe"
     lsblk = json.dumps(
         {

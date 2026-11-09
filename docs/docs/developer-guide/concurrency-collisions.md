@@ -47,14 +47,25 @@ The following scripts and modules currently use the lock manager:
   acquire `w` or `x` locks on the affected zvols.
 * **Hold helpers** (`zfshold`, `zfsholds`, `zfsdelallholds`, etc.) acquire
   `w`/`r` locks on the affected datasets.
-* **GUI dataset actions** in `python/dataset_actions.py` use the Python
-  `zfs_lock_manager` client to lock datasets around snapshot, delete, hold,
-  rollback, and snapshot-unmount operations.
+* **GUI dataset actions** (`python/dataset_actions.py`,
+  `python/datasets_page.py`, `python/disk_actions.py`,
+  `python/pool_growth_dialogs.py`, `python/pool_create_wizard.py`,
+  `python/pool_migrate_dialogs.py`, `python/profile_dialogs.py`, and the
+  enrollment modules) use the Python `zfs_lock_manager` client to lock the
+  datasets they touch — per-dataset locks for dataset operations, a write
+  lock on the pool root for pool-wide operations. Each action runs on its
+  own `BackupRunner` (created per action by the `DatasetActionRunners`
+  tracker in `python/runner_factory.py`); there is no shared-runner gate.
+  Handler-level lock acquisition fails with a WARN that names every
+  blocking holder, and the underlying scripts re-acquire the same locks as
+  the enforcing fence.
 
-The GUI dose not globally serialize `Backup`, `Offsite`, and `Restore`.
-All three may run concurrently; per-dataset locks still serialize them when
-they touch the same datasets. Each GUI runner keeps its Python-level log
-output in its own session log so concurrent runs do not cross-write.
+The GUI dose not globally serialize `Backup`, `Offsite`, and `Restore`,
+and dataset actions are not serialized behind a single shared runner
+either. Transfer runs and dataset actions may proceed concurrently;
+per-dataset locks serialize them when they touch the same datasets. Each
+GUI runner keeps its Python-level log output in its own session log so
+concurrent runs do not cross-write.
 
 Everything else runs without coordination.
 
@@ -219,17 +230,19 @@ disappears before it finishes, or it may report spurious mismatches.
 
 ### 9. GUI tab isolation is incomplete
 
-The GUI blocks `Backup`, `Offsite`, and `Restore` from starting while another
-of those three is running, and `Retention` pruning performs a pre-flight lock
-check that aborts if any selected pool is already locked. It does **not** block:
+The GUI no longer gates one operation type on another: `Backup`, `Offsite`,
+`Restore`, and every dataset action may be in flight at the same time (each on
+its own runner), and `Retention` pruning performs a pre-flight lock check that
+aborts if any selected pool is already locked. Nothing in the GUI blocks:
 
 * Dataset destroy while Backup/Offsite/Restore/Prune is running.
 * Scrub while any of the above is running.
 * Snapshot creation while any of the above is running.
 * Checkagainst while Prune is running.
 
-Each of these has its own `running` flag (`retention_runner`,
-`dataset_runner`, `scrub_queue`, etc.), but there is no cross-type guard.
+Each of these has its own `running` flag (`backup_runner`,
+`retention_runner`, the per-action dataset runners, `scrub_queue`, etc.), but
+there is no cross-type guard — the per-dataset locks are the fence.
 
 The Backup, Offsite, and Restore tabs offer an optional **Pause scrubs on
 source/destination pools during each step** setting. When enabled, the runner

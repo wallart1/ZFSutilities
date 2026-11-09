@@ -1,5 +1,6 @@
 #!/usr/bin/bash
-# test-run-tests-preflight — Unit tests for the run-tests environment preflight.
+# test-run-tests-preflight — Unit tests for the run-tests harness (preflight,
+# list mode, cleanup, -h/--help).
 # shellcheck disable=SC1090,SC2034,SC2154,SC2016
 
 # The preflight functions in tests/run-tests are extracted by name with sed
@@ -14,6 +15,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
 setup_test_env
 
 RUN_TESTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-tests"
+RUN_PYTHON_TESTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run-python-tests"
 
 # Load a named top-level function from run-tests without executing the script.
 load_helper_from_run_tests() {
@@ -542,12 +544,84 @@ test_cleanup_completes_when_pytest_dies_under_term() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# -h / --help
+# ---------------------------------------------------------------------------
+
+test_run_tests_help_prints_usage_and_exits_clean() {
+    test_start "run-tests --help prints usage, exits 0, runs nothing"
+    local out rc=0 ok=1
+    out=$(bash "$RUN_TESTS" --help 2>&1) || rc=$?
+    [[ $rc -eq 0 ]] || ok=0
+    grep -q -- '--with-soak' <<<"$out" || ok=0
+    grep -q -- '--failures-only' <<<"$out" || ok=0
+    grep -q -- '--jobs N' <<<"$out" || ok=0
+    grep -q -- '--slowest N' <<<"$out" || ok=0
+    grep -q -- '--log <file>' <<<"$out" || ok=0
+    grep -q -- '--list' <<<"$out" || ok=0
+    # Nothing ran: no preflight capability lines, no per-suite or total counts.
+    if grep -qE 'Capabilities|SUITE|^Total:' <<<"$out"; then ok=0; fi
+    if [[ $ok == 1 ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+}
+
+test_run_tests_h_matches_help() {
+    test_start "run-tests -h prints the same usage as --help"
+    local out_help out_h
+    out_help=$(bash "$RUN_TESTS" --help 2>&1)
+    out_h=$(bash "$RUN_TESTS" -h 2>&1)
+    if [[ -n "$out_help" && "$out_help" == "$out_h" ]]; then
+        test_pass
+    else
+        test_fail "--help and -h outputs differ"
+    fi
+}
+
+test_run_tests_help_beats_log_and_runs_nothing() {
+    test_start "run-tests --help after --log exits without creating the log"
+    local tmp out rc=0
+    tmp=$(mktemp -u)
+    out=$(bash "$RUN_TESTS" --log "$tmp" --help 2>&1) || rc=$?
+    if [[ $rc -eq 0 && ! -e "$tmp" && "$out" == *"--log <file>"* ]]; then
+        test_pass
+    else
+        local log_state
+        log_state=$( [[ -e "$tmp" ]] && echo present || echo absent )
+        test_fail "rc=$rc log=$log_state out='$out'"
+    fi
+    rm -f "$tmp"
+}
+
+test_run_python_tests_help_prints_wrapper_usage() {
+    test_start "run-python-tests --help prints wrapper usage without pytest"
+    local out rc=0 ok=1
+    out=$(bash "$RUN_PYTHON_TESTS" --help 2>&1) || rc=$?
+    [[ $rc -eq 0 ]] || ok=0
+    grep -q -- '--failures-only' <<<"$out" || ok=0
+    grep -q -- '-b' <<<"$out" || ok=0
+    grep -q -- '--list' <<<"$out" || ok=0
+    # The wrapper answers before the deprecated shim or pytest can print.
+    if grep -q 'runner.py is deprecated\|usage: pytest' <<<"$out"; then ok=0; fi
+    if [[ $ok == 1 ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc out='$out'"
+    fi
+}
+
 test_missing_requirements_with_fabricated_caps
 test_is_skipped_soak_rules
 test_pytest_exit5_with_skips_is_clean
 test_cleanup_removes_py_tmpout_and_state_dir
 test_cleanup_tolerates_unset_py_tmpout
 test_cleanup_completes_when_pytest_dies_under_term
+test_run_tests_help_prints_usage_and_exits_clean
+test_run_tests_h_matches_help
+test_run_tests_help_beats_log_and_runs_nothing
+test_run_python_tests_help_prints_wrapper_usage
 
 test_summary
 teardown_test_env

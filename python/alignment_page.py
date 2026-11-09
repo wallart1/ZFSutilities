@@ -356,14 +356,20 @@ def _availability_note(sample):
     if missing:
         notes.append("Unavailable on this host: " + ", ".join(missing) + ".")
     if sample.guest_fs_failures:
-        # Per-volume degrade: the guest agent answered for other volumes,
-        # so each unprobed volume names its own reason.
+        # Per-volume degrade, summarized by reason: each volume's own
+        # reason already sits in its VM chain row, so the note counts
+        # per reason instead of enumerating every volume — a large
+        # install would otherwise turn this note into a run-on list.
+        counts = {}
+        for reason in sample.guest_fs_failures.values():
+            counts[reason] = counts.get(reason, 0) + 1
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        summary = ", ".join(f"{reason} ({count})" for reason, count in ranked)
+        total = len(sample.guest_fs_failures) + len(sample.guest_fs)
         notes.append(
-            "Guest filesystems unprobed for: "
-            + ", ".join(
-                f"{short} ({reason})" for short, reason in sorted(sample.guest_fs_failures.items())
-            )
-            + "."
+            f"Guest filesystems unprobed for {len(sample.guest_fs_failures)} of "
+            f"{total} volumes: {summary}. "
+            "Reasons per volume appear in the VM rows."
         )
     if sample.dataset_read_failures:
         # Per-pool degrade: the failed pools lost only their dataset rows;

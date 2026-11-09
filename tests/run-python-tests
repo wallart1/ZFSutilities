@@ -1,16 +1,34 @@
 #!/usr/bin/env bash
 # run-python-tests — Python test harness for ZFS Utilities.
 #
-# Usage:
-#   ./tests/run-python-tests              # Run all Python tests
-#   ./tests/run-python-tests test-foo     # Run specific test(s)
-#   ./tests/run-python-tests -q           # Quiet: suppress PASS/SKIP lines
-#   ./tests/run-python-tests --failures-only  # Only show failures
-#   ./tests/run-python-tests -b           # Buffer stdout/stderr; only show on failure
-#   ./tests/run-python-tests --list       # Print per-suite live test counts without running
-#   ./tests/run-python-tests --count      # Alias for --list
+# Usage: tests/run-python-tests --help   (or -h)
+#
+# Forwards to pytest via the deprecated tests/python/runner.py shim, which
+# translates the legacy flags below (see docs/docs/developer-guide/testing.md).
 
 set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: tests/run-python-tests [flags] [test ...]
+
+  tests/run-python-tests              Run all Python tests
+  tests/run-python-tests test-foo     Run specific test(s)
+  tests/run-python-tests -q           Quiet: suppress PASS/SKIP lines (alias: --quiet)
+  tests/run-python-tests --failures-only  Only show failures
+  tests/run-python-tests -b           Buffer stdout/stderr; only show on failure
+  tests/run-python-tests --list       Print per-suite live test counts without running
+  tests/run-python-tests --count      Alias for --list
+  tests/run-python-tests -h | --help  Show this usage and exit (nothing runs)
+EOF
+    exit 0
+}
+
+for arg in "$@"; do
+    if [[ "$arg" == "--help" || "$arg" == "-h" ]]; then
+        usage
+    fi
+done
 
 mydir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$mydir/.." && pwd)"

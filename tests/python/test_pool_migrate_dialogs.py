@@ -6,6 +6,7 @@ import shlex
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -1344,6 +1345,7 @@ def _make_app(pools=("pool1", "pool2"), root_pool=None):
     app.disks_dataset_store = FakeListStoreIterable()
     app.disks_dataset_view = FakeTreeView(app.disks_dataset_store, [])
     app.dataset_runner = FakeDatasetRunner()
+    app.dataset_actions = SimpleNamespace(new_runner=lambda: app.dataset_runner)
 
     app.known_pools = []
     app._pools_saved_state = []
@@ -1446,17 +1448,61 @@ class TestHandlerGuards(unittest.TestCase):
         dialog.assert_not_called()
         self.assertTrue(any("storage host" in m for m in logs))
 
-    def test_runner_busy_warns(self):
+    def test_lock_conflict_warns_and_discards_holds_file(self):
         pmd = _import_dialogs()
         app = _make_app()
-        app.dataset_runner.running = True
+        request = _request(pmd)
+        zlm = MagicMock()
+        zlm.acquire.side_effect = RuntimeError(
+            "conflict: cannot acquire w lock on pool1: "
+            "held by dataset='pool1' type=write pid=7 script=zfsdailybackup"
+        )
+        mock_zlm, stack = _drive_handler(pmd, app, request, zlm=zlm)
+        try:
+            self.assertEqual(app.dataset_runner.steps, [])
+            self.assertFalse(app.dataset_runner.running)
+            mock_zlm.release.assert_not_called()
+        finally:
+            stack.close()
+
+    def test_lock_conflict_message_names_holder(self):
+        pmd = _import_dialogs()
+        app = _make_app()
+        request = _request(pmd)
+        zlm = MagicMock()
+        zlm.acquire.side_effect = RuntimeError(
+            "conflict: cannot acquire w lock on pool1: "
+            "held by dataset='pool1' type=write pid=7 script=zfsdailybackup"
+        )
+        nc = MagicMock()
+        nc.is_two_node.return_value = False
         with (
-            patch.object(pmd, "show_migrate_pool_dialog") as dialog,
+            patch.object(pmd, "show_migrate_pool_dialog", return_value=request),
+            patch.object(pmd, "node_config", nc),
+            patch.object(pmd, "zlm", zlm),
             capture_logs() as logs,
         ):
             pmd.on_disks_migrate_pool(app)
-        dialog.assert_not_called()
-        self.assertTrue(any("already running" in m for m in logs))
+        self.assertTrue(
+            any(
+                "Migrate pool start failed for 'pool1'" in line and "script=zfsdailybackup" in line
+                for line in logs
+            ),
+            logs,
+        )
+
+    def test_runs_while_another_dataset_action_is_active(self):
+        """No global gate: migrate starts even with another runner busy."""
+        pmd = _import_dialogs()
+        app = _make_app()
+        app.dataset_runner.running = True
+        request = _request(pmd)
+        _mock_zlm, stack = _drive_handler(pmd, app, request)
+        try:
+            self.assertTrue(app.dataset_runner.running)
+            self.assertEqual(app.dataset_runner.operation_detail, "Migrate Pool: pool1")
+        finally:
+            stack.close()
 
     def test_no_pools_warns(self):
         pmd = _import_dialogs()
@@ -1574,7 +1620,11 @@ class TestHandlerExecution(unittest.TestCase):
             app._disks_inventory_cache.invalidate.assert_called_once()
 
     def test_start_failure_discards_holds_file(self):
-        """A run that fails to start must not strand the captured-holds TSV."""
+        """A run that fails to start must not strand the captured-holds TSV.
+
+        A lock conflict is an expected refusal: WARN (naming the holder via
+        the zlm error), discard the file, return — no traceback.
+        """
         pmd = _import_dialogs()
         app = _make_app()
         request = _request(pmd)
@@ -1599,11 +1649,12 @@ class TestHandlerExecution(unittest.TestCase):
                 patch.object(pmd, "zlm", zlm),
                 capture_logs() as logs,
             ):
-                with self.assertRaises(RuntimeError):
-                    pmd.on_disks_migrate_pool(app)
+                pmd.on_disks_migrate_pool(app)
             self.assertEqual(len(created), 1)
             self.assertFalse(os.path.exists(created[0]))
             self.assertTrue(any("start failed" in line for line in logs), logs)
+            self.assertEqual(app.dataset_runner.steps, [])
+            self.assertFalse(app.dataset_runner.running)
             zlm.release.assert_not_called()
 
     def test_deferred_cutover_releases_lock_without_cutover(self):

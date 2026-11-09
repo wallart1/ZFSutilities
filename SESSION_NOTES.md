@@ -306,6 +306,24 @@ recoverable via `git log`.)
 
 ## Active / parked threads
 
+- **Alignment guest-probe exec decode + note rewrite (2026-11-09,
+  pub3, uncommitted).** The 0.138.0 ping-argv fix worked (pings answer,
+  stopped VMs classify), but `_decode_exec` read an invented `out` key —
+  PVE 9 prints guest stdout under `out-data` (verified against tweety's
+  installed QemuServer/Agent.pm, pve-manager 9.2.11), so every running
+  VM's exec "succeeded" into "unexpected qm output" and the availability
+  note enumerated 21 volumes in a run-on (user screenshot
+  2026-11-08 10-08-25, lives UNTRACKED at pub repo root — remove when
+  the fix ships). Fixed: decode reads `out-data`; rc=0-but-unparseable
+  exec output now WARN-logs the raw first line (the reason string alone
+  hid this for a release); the note counts per reason + points to the
+  VM rows (rows already carried each volume's reason via
+  `guest fs unprobed:`); test `_qm_exec` fixture and the validator
+  self-check runner now emit the real wire shape (mock-fidelity: same
+  trap class as the ping argv, third occurrence — fixture, unit test,
+  and validator all agreed on the invented shape). Live proof needs a
+  node deploy (user-cued). Guest-probe future work below still open.
+
 - **Guest-probe future work (validation COMPLETE 2026-10-23):** surface
   sample.pve_failure inside the Alignment view when VM layers are
   missing.
@@ -3185,3 +3203,162 @@ User promoted R-08; plan approved and executed in one session
   commit; release/publish/deploy on the user's cue. Lane merge into
   pub main will union this 0.139.0 section with pub's (established
   same-version lane pattern).
+
+*(lane history block, unioned at the 0.139.0 pub3-lane merge — pruned
+at the next release prune)*
+
+## Dataset-action gate removal (pub3, 2026-11-04)
+
+- User directive: eliminate the GUI-global "a dataset action is already
+  running" gate entirely — dataset-level zfs locking (already in place)
+  is the fence; no pool-scoped replacement gate was wanted.
+- Design shipped: `DatasetActionRunners` tracker in python/runner_factory.py
+  hands each dataset action its own BackupRunner (label "Dataset action"),
+  auto-dropping a runner when its completion callback doesn't restart it
+  (migrate create→enroll chains keep theirs). No conflict logic in the
+  tracker — `zlm` decides.
+- All 17 gate sites converted (dataset_actions, datasets_page sever,
+  disk_actions wipe, pool_create_wizard, pool_growth x5, pool_migrate,
+  profile_dialogs rewrite/apply, proxmox/iscsi enrollment). Handler-level
+  zlm acquires now try/except into WARNs that name blocking holders
+  (growth/create/profile previously raised into the GTK callback as an
+  invisible traceback — fixed as part of this). Enrollments take a w lock
+  on the pool root; on conflict they skip with the manual-steps INFO.
+- Window wiring: `app.dataset_actions` replaces `app.dataset_runner`;
+  `_all_runners` merges tracked runners; Dashboard rows use
+  `runner:dataset:<id>` task keys with cancel via the tracker; schedule
+  `_interactive_runner_active` consults the tracker. Disks-page buttons
+  lost the runner_busy branch entirely.
+- conftest now isolates ZFSLOCK_DIR alongside ZFSUTILITIES_LOCK_DIR —
+  previously zfs_lock_manager bound the real /run/lock dir in tests, so
+  any unmocked zlm.acquire ran as dan against root-owned paths.
+- Tests: new test_runner_factory (tracker lifecycle, helper WARN,
+  format_lock_holders); 13 suites updated (busy-gate tests became
+  lock-conflict refusal tests + runs-while-busy tests; fake apps expose
+  `dataset_actions`). All affected suites green standalone.
+- Docs updated: gtk-gui.md (gate wording gone), messages/index.md rows,
+  concurrency-collisions.md GUI bullet, GLOSSARY dataset-action entry.
+  docs/site NOT rebuilt yet (wrap-up item).
+- Found + filed in PREEXISTING.md: 12 order-dependent schedule-page
+  failures when six suites share one pytest process (reproduces on clean
+  c4feb54 tree; xdist does not reproduce).
+- Gate-chase addendum (same day): first two full gates failed 6 python
+  tests (e2e BackupRunnerMechanics + one NoPool scenario; 60s watchdog,
+  no io dispatch). Root cause chain, verified by forced-order pair runs
+  on BOTH trees: (1) latent pre-existing class — a suite importing
+  backup_runner inside a module-level mock_gtk() caches a mock-bound GLib
+  for the worker's life (reproduced on clean c4feb54 with
+  `pytest test_runner_factory.py test_offsite_e2e.py`); (2) my change
+  ACTIVATED it gate-wide — `from runner_factory import ...` added to nine
+  handler modules made every mock-collected handler suite transitively
+  import backup_runner BEFORE the e2e suites' real collection import.
+  Fix (structural): RunnerFactory.create imports BackupRunner lazily
+  (comment in runner_factory.py explains), so no product module imports
+  backup_runner at module level at all; test_runner_factory now imports
+  backup_runner real via import_or_skip_gi (manifest line added) and
+  needs no mock_gtk. Forced-order pair now green in 1.7s.
+- conftest also gained a per-test dataset-lock reset (leaked live-PID
+  lock files from tests that never finish their fake runner poisoned
+  later real zlm acquisitions in the same worker — hit by the enrollment
+  offer tests) and ZFSLOCK_DIR isolation alongside ZFSUTILITIES_LOCK_DIR.
+- Final full gate GREEN via tests/run-tests ("All test suites passed!").
+  One earlier gate saw a one-off test_file_locking 300s multiprocessing
+  handshake timeout under load; standalone and the final gate green.
+
+## 2026-11-09 (pub3): Repair Mount Order — cover-lift must be exact-layer umount
+
+- Stewie incident (deployed 0.138.0): Repair Mount Order FATAL
+  "cannot unmount fivebays/threeamigos/proxmox/Rocky: its mount is
+  covered by fivebays, which could not be unmounted: cannot unmount
+  '/fivebays/zfsutilities': no such pool or dataset". Mount table read
+  pre-plan-mode: fivebays pool root is the LAST zfs mount — it covers
+  all 8 shadowed children (the Dashboard warnings).
+- Root cause, source-anchored to OpenZFS 2.4.4 (stewie runs
+  zfs-2.4.4-pve1): `zfs unmount <name>` is RECURSIVE —
+  unshare_unmount() → zfs_unmountall() → changelist_prefix() unmounts
+  the fs plus every mounted descendant and aborts at the first failure;
+  a shadowed descendant's path can't resolve → umount2 ENOENT →
+  EZFS_NOENT, rendered "no such pool or dataset". So lifting the cover
+  by name could never work, and even on success would cascade-unmount
+  descendants it was never asked to touch.
+- Fix (python/dataset_actions.py): `_lift_and_unmount` detaches covers
+  with `sudo umount <mountpoint>` (exact layer, no recursion; busy gate
+  unchanged; non-path mountpoints like legacy are skipped with a WARN);
+  `_recover_orphaned_mount`'s restore loop got the same exact-layer
+  umount. Plan members are still zfs-unmounted by name, deepest-first —
+  recursion is a no-op there because descendants are unmounted first.
+- Tests: four lift-flow argv assertions updated to the umount lift;
+  orphan-restore test updated; NEW regression test reproducing the
+  production topology (pool root covers two shadowed members; asserts
+  lift == `sudo umount /tank`, never `zfs unmount tank`, repair
+  completes parents-first); NEW guard test for unusable-mountpoint
+  candidates. Suite 119/119.
+- Docs: gtk-gui.md unreachable-mounts note +one sentence (plain umount,
+  why); GLOSSARY.md + "shadowed mount" entry; messages manual + the new
+  skip WARN row.
+- Full gate: 110 bash suites green; python suite 4601/4602 — the one
+  failure is the KNOWN order-dependent schedule flake (TestScheduleSavedState
+  viewport test, set_vscroll_policy 2× shared-mock drift), now also seen
+  under xdist after worker-grouping shifted; standalone 82/82 green, no
+  coupling to changed code. PREEXISTING.md entry updated with the xdist
+  manifestation.
+- End-user note: stewie's 8 shadowed mounts persist until the fixed
+  repair runs; after deploy, rerun Repair Mount Order (a reboot would
+  also restore order — the failed run already persisted its canmount=on
+  fixes before aborting).
+
+## 2026-11-09 (pub3, later): CI red two days — fork-of-worker deadlock in test_file_locking
+
+- Scheduled `tests` workflow on origin main failed 11-08 AND 11-09, one
+  failure each: TestSharedLocksAllowConcurrentReaders handshake
+  queue.get(300s) → Empty (5 of 7 run-minutes burned per run). SAME head
+  commit f1b5495 was GREEN on 11-07 → GitHub's ubuntu-26 image drifted
+  (cairo/gi-cairo apt state changed), not our code. a8263d2's MP_FORK
+  pin (py3.14 forkserver pickling) did not cover the real hazard.
+- Mechanism: the lock holder was a multiprocessing fork of the
+  pytest-xdist worker; a forked child of a loaded worker (GLib/GTK state
+  from GUI suites) can deadlock in inherited locks before its first
+  queue.put(). Same class as the one-off dev-host hang noted 2026-11-05.
+- Fix: lock holders are now fresh interpreters — new helper
+  tests/python/lock_child.py (modes flock / profile-hold / history-add;
+  follows the alignment_realized_check.py helper convention) with
+  marker-file handshakes. Converted: test_file_locking (both
+  cross-process tests, shared _child_holding_flock contextmanager, early
+  child-exit detection — dead children now fail in ~0s, not 300s),
+  test_profile_runner_concurrency (acquire-waits; child keeps the 0.5s
+  unconditional hold so the parent's blocked acquire still overlaps),
+  test_backup_history (4 concurrent history-add children, rc asserted).
+  test_profile_integration left as-is (module-level worker + explicit
+  lock-wait sync, passing).
+- Three suites 55/55 standalone; full gate GREEN (111 suites). Ruff clean.
+- Merge note for the next lane merge: pub3's test_file_locking predates
+  main's MP_FORK pin (a8263d2), and pub3 also rewrote
+  test_profile_runner_concurrency/test_backup_history which main pinned
+  — all three conflict; resolution = pub3's subprocess versions.
+- CI turns green only after lane merge + push to origin main (owner cue;
+  git mutations need explicit confirmation).
+
+## 2026-11-09 (pub3): 0.139.0 wrap-up
+
+- Review-pass finds, both fixed in-task and red-proofed:
+  - Enrollment decline leaked the pool-root w lock (iscsi + proxmox
+    offers took it before the dialog; answering No returned without
+    releasing — live GUI pid, so never reaped). Release added to both
+    decline paths; decline tests now assert release with the acquired id.
+  - Order-dependent schedule-suite failures fixed at the root (the
+    PREEXISTING entry is pruned): test_schedule_page classes rebased on
+    _FreshSchedulePageTestCase, whose setUp imports a FRESH schedule_page
+    via import_gui_fresh inside its own mock_gtk() — unittest applies
+    @patch decorators after setUp, so every string-target patch still
+    resolves against the fresh module (pub2's patch.object conversion was
+    not needed). Six-suite one-process combo green (was 12 failures);
+    both full gates green with no flake under xdist.
+- Docs: concurrency-collisions section 9 still claimed Backup/Offsite/
+  Restore cross-blocking and named the removed dataset_runner — rewritten
+  to the no-cross-gate reality; messages manual backtick row repaired.
+- Gates: no-soak 112 suites green; with-soak 112 suites green (python
+  suite passed in full both times, 22 env-preflight skips only).
+- VERSION 0.139.0, changelog section written, docs/site rebuilt twice
+  (before and after the changelog).
+- Pre-existing issues: 1 addressed this turn (order-dependent schedule
+  failures); PREEXISTING.md now holds 1 entry (flat mock listing).

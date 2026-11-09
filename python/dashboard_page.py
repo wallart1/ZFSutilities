@@ -2460,15 +2460,25 @@ def _collect_running_tasks(app):
     """
     tasks = []
 
-    # 1. GUI runners
-    for runner_name in (
-        "backup_runner",
-        "offsite_runner",
-        "restore_runner",
-        "retention_runner",
-        "dataset_runner",
-    ):
-        runner = getattr(app, runner_name, None)
+    # 1. GUI runners: the four transfer runners plus every live
+    # dataset-action runner (one per action; the dataset locks serialize
+    # them, so several may be in flight at once).
+    runner_items = [
+        (f"runner:{runner_name}", getattr(app, runner_name, None))
+        for runner_name in (
+            "backup_runner",
+            "offsite_runner",
+            "restore_runner",
+            "retention_runner",
+        )
+    ]
+    tracker = getattr(app, "dataset_actions", None)
+    if tracker is not None:
+        runner_items.extend(
+            (f"runner:dataset:{action_id}", runner)
+            for action_id, runner in tracker.running_entries()
+        )
+    for task_key, runner in runner_items:
         if runner and getattr(runner, "running", False):
             label = getattr(runner, "operation_detail", None) or runner.label
             total = len(runner.steps)
@@ -2486,7 +2496,7 @@ def _collect_running_tasks(app):
                     "name": label,
                     "type": "GUI",
                     "status": status,
-                    "task_key": f"runner:{runner_name}",
+                    "task_key": task_key,
                     "log_file": getattr(runner, "_session_log_file", None),
                     "waiting_for_lock": waiting_for_lock,
                     "started": _epoch_to_local_iso(getattr(runner, "_session_start_time", None)),
@@ -2725,7 +2735,23 @@ def on_dashboard_fix_locks(app):
 
 def _cancel_task(app, task_key):
     """Cancel a single task by its task_key."""
-    if task_key.startswith("runner:"):
+    if task_key.startswith("runner:dataset:"):
+        tracker = getattr(app, "dataset_actions", None)
+        try:
+            action_id = int(task_key.rsplit(":", 1)[1])
+        except ValueError:
+            action_id = None
+        runner = (
+            tracker.runner_by_id(action_id)
+            if tracker is not None and action_id is not None
+            else None
+        )
+        if runner and getattr(runner, "running", False):
+            runner.cancel()
+            log_msg(f"INFO: Cancelled {runner.label}")
+        else:
+            log_msg(f"WARN: Dataset action {action_id} is not running")
+    elif task_key.startswith("runner:"):
         runner_name = task_key.split(":", 1)[1]
         runner = getattr(app, runner_name, None)
         if runner and getattr(runner, "running", False):

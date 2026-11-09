@@ -56,6 +56,7 @@ from pool_profiles import (
 )
 from pools_page import on_pools_refresh, refresh_pools_page
 from proxmox_enroll import offer_proxmox_enrollment
+from runner_factory import new_dataset_action_runner
 from zfs_repository import TopologyNode, build_create_pool_command
 
 # Custom dialog response ids for the wizard buttons. Distinct from
@@ -967,14 +968,6 @@ def on_disks_create_pool(app) -> None:
         log_msg("WARN: Pool creation is available only on the storage host")
         return
 
-    runner = getattr(app, "dataset_runner", None)
-    if runner is None:
-        log_msg("WARN: Dataset runner not available")
-        return
-    if runner.running:
-        log_msg("WARN: A dataset action is already running")
-        return
-
     repository = app.ctx.zfs_repository
     data = app._disks_inventory_cache.get()
     imported = _leaf_paths_by_pool(data.topologies)
@@ -999,7 +992,14 @@ def on_disks_create_pool(app) -> None:
         return
     pool_name, cmd = result
 
-    lock_id = zlm.acquire(pool_name, "w", f"Create pool {pool_name}")
+    runner = new_dataset_action_runner(app)
+    if runner is None:
+        return
+    try:
+        lock_id = zlm.acquire(pool_name, "w", f"Create pool {pool_name}")
+    except RuntimeError as exc:
+        log_msg(f"WARN: cannot create pool '{pool_name}': {exc}")
+        return
     step = BashStep(cmd, f"Create pool {pool_name}", is_rsync=False, fatal=True)
 
     def _on_complete(cancelled=False, rc=None):

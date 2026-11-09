@@ -4,6 +4,7 @@ import contextlib
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -68,6 +69,7 @@ def _node_config(two_node=True, storage=True, pools=()):
 def _make_app(runner=None):
     app = MagicMock()
     app.dataset_runner = runner if runner is not None else FakeDatasetRunner()
+    app.dataset_actions = SimpleNamespace(new_runner=lambda: app.dataset_runner)
     return app
 
 
@@ -288,35 +290,49 @@ class TestOfferGating(unittest.TestCase):
         self.assertTrue(any("enroll-proxmox-pool newpool" in line for line in logs), logs)
 
 
-class TestOfferRunnerBusy(unittest.TestCase):
-    def _offer(self, ie, app, two_node=True, pools=("newpool",)):
-        with (
-            patch.object(ie, "node_config", _node_config(two_node=two_node, pools=pools)),
-            patch.object(ie, "proxmox_present", return_value=True),
-            patch.object(ie, "query_storage_ids", return_value=set()),
-            capture_logs() as logs,
-        ):
-            result = ie.offer_proxmox_enrollment(app, "newpool")
+class TestOfferLockConflict(unittest.TestCase):
+    def _offer(self, ie, app, two_node=True, pools=("newpool",), zlm=None):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch.object(ie, "node_config", _node_config(two_node=two_node, pools=pools))
+            )
+            stack.enter_context(patch.object(ie, "proxmox_present", return_value=True))
+            stack.enter_context(patch.object(ie, "query_storage_ids", return_value=set()))
+            if zlm is not None:
+                stack.enter_context(patch.object(ie, "zlm", zlm))
+            with capture_logs() as logs:
+                result = ie.offer_proxmox_enrollment(app, "newpool")
         return result, logs
 
-    def test_runner_busy_skips_with_manual_steps(self):
+    def test_lock_conflict_skips_with_manual_steps(self):
         ie = _import_enroll()
         runner = FakeDatasetRunner()
-        runner.running = True
         app = _make_app(runner=runner)
-        result, logs = self._offer(ie, app)
+        zlm = MagicMock()
+        zlm.acquire.side_effect = RuntimeError(
+            "conflict: cannot acquire w lock on newpool: "
+            "held by dataset='newpool' type=write pid=7 script=zfsdailybackup"
+        )
+        result, logs = self._offer(ie, app, zlm=zlm)
         self.assertFalse(result)
         self.assertEqual(runner.steps, [])
-        self.assertTrue(any("skipped" in line for line in logs), logs)
+        self.assertTrue(
+            any("skipped because the pool is locked by another operation" in line for line in logs),
+            logs,
+        )
+        self.assertTrue(any("script=zfsdailybackup" in line for line in logs), logs)
         self.assertTrue(any("enroll-proxmox-pool newpool" in line for line in logs), logs)
+        zlm.release.assert_not_called()
 
-    def test_runner_missing_skips_with_manual_steps(self):
+    def test_missing_tracker_skips_with_manual_steps(self):
         ie = _import_enroll()
-        app = _make_app(runner=None)
-        app.dataset_runner = None
+        app = _make_app()
+        app.dataset_actions = None
         result, logs = self._offer(ie, app)
         self.assertFalse(result)
-        self.assertTrue(any("skipped" in line for line in logs), logs)
+        self.assertTrue(
+            any("dataset action runner is not available" in line for line in logs), logs
+        )
 
 
 class TestOfferDialog(unittest.TestCase):
@@ -417,8 +433,11 @@ class TestOfferDialog(unittest.TestCase):
     def test_no_declines_with_manual_steps(self):
         ie = _import_enroll()
         app = _make_app()
+        zlm = MagicMock()
+        zlm.acquire.return_value = "/locks/newpool.lock"
         with (
             self._patch_offer(ie, None),
+            patch.object(ie, "zlm", zlm),
             capture_logs() as logs,
         ):
             result = ie.offer_proxmox_enrollment(app, "newpool")
@@ -426,6 +445,9 @@ class TestOfferDialog(unittest.TestCase):
         self.assertEqual(app.dataset_runner.steps, [])
         self.assertTrue(any("declined" in line for line in logs), logs)
         self.assertTrue(any("enroll-proxmox-pool newpool" in line for line in logs), logs)
+        # No step runs, so the completion callback never fires — the decline
+        # path itself must release the pool lock taken before the dialog.
+        zlm.release.assert_called_once_with("/locks/newpool.lock")
 
     def test_enrollment_failure_logs_warn_and_calls_on_done(self):
         ie = _import_enroll()
@@ -476,7 +498,8 @@ class TestDisksAction(unittest.TestCase):
         offer.assert_not_called()
         self.assertTrue(any("storage host" in line for line in logs), logs)
 
-    def test_runner_busy_warns(self):
+    def test_busy_runner_still_offers(self):
+        """No global gate: the manual enroll button offers while actions run."""
         ie = _import_enroll()
         runner = FakeDatasetRunner()
         runner.running = True
@@ -484,12 +507,10 @@ class TestDisksAction(unittest.TestCase):
         app.dataset_runner = runner
         with (
             patch.object(ie, "node_config", _node_config()),
-            capture_logs() as logs,
             patch.object(ie, "offer_proxmox_enrollment") as offer,
         ):
             ie.on_disks_enroll_proxmox(app)
-        offer.assert_not_called()
-        self.assertTrue(any("already running" in line for line in logs), logs)
+        offer.assert_called_once_with(app, "newpool")
 
     def test_happy_path_offers_for_selected_pool(self):
         ie = _import_enroll()

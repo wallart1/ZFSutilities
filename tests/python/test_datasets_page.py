@@ -4,6 +4,7 @@ import os
 import sys
 import unittest
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -1937,6 +1938,7 @@ class TestOnDatasetsSeverClone(unittest.TestCase):
         app.datasets_view = MagicMock()
         app.dataset_runner = MagicMock()
         app.dataset_runner.running = False
+        app.dataset_actions = SimpleNamespace(new_runner=lambda: app.dataset_runner)
         self._items = items
         return app
 
@@ -1973,30 +1975,54 @@ class TestOnDatasetsSeverClone(unittest.TestCase):
         app.dataset_runner.set_steps.assert_not_called()
         log.assert_called_once_with("INFO: Sever clone cancelled")
 
-    def test_missing_runner_refuses(self):
+    def test_missing_tracker_refuses(self):
+        from test_support import capture_logs
+
         items = [_clone_volume()]
         app = self._app(items)
-        app.dataset_runner = None
+        app.dataset_actions = None
         with (
             patch.object(dp, "get_tree_selection_items", return_value=items),
             patch.object(dp, "show_sever_clone_dialog", return_value=True),
+            capture_logs() as logs,
+        ):
+            dp.on_datasets_sever_clone(app)
+        self.assertTrue(any("WARN: Dataset runner not available" in line for line in logs), logs)
+        app.dataset_runner.set_steps.assert_not_called()
+
+    def test_locked_dataset_refuses(self):
+        items = [_clone_volume()]
+        app = self._app(items)
+        zlm_mock = MagicMock()
+        zlm_mock.check_local.return_value = False
+        zlm_mock.conflicting_lock_holders.return_value = []
+        with (
+            patch.object(dp, "get_tree_selection_items", return_value=items),
+            patch.object(dp, "show_sever_clone_dialog", return_value=True),
+            patch.object(dp, "zlm", zlm_mock),
             patch.object(dp, "log_msg") as log,
         ):
             dp.on_datasets_sever_clone(app)
-        log.assert_called_once_with("WARN: Dataset runner not available")
+        log.assert_called_once_with(
+            "WARN: cannot sever clone tank/proxmox/vm-310-disk-0: "
+            "dataset is locked by another operation"
+        )
+        app.dataset_runner.set_steps.assert_not_called()
 
-    def test_busy_runner_refuses(self):
+    def test_runs_while_another_dataset_action_is_active(self):
+        """No global gate: sever clone starts even with another runner busy."""
         items = [_clone_volume()]
         app = self._app(items)
         app.dataset_runner.running = True
         with (
             patch.object(dp, "get_tree_selection_items", return_value=items),
             patch.object(dp, "show_sever_clone_dialog", return_value=True),
-            patch.object(dp, "log_msg") as log,
+            patch.object(dp, "resolve_local_bin", return_value="/repo/bin/sever-vm-clone"),
+            patch.object(dp, "log_msg"),
         ):
             dp.on_datasets_sever_clone(app)
-        log.assert_called_once_with("WARN: A dataset action is already running")
-        app.dataset_runner.set_steps.assert_not_called()
+        app.dataset_runner.set_steps.assert_called_once()
+        app.dataset_runner.start.assert_called_once()
 
     def test_confirmed_dialog_starts_step_with_selected_datasets_only(self):
         items = [

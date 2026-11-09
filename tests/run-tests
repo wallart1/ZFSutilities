@@ -1,20 +1,7 @@
 #!/usr/bin/env bash
 # run-tests — Main test harness for ZFS Utilities.
 #
-# Usage:
-#   ./tests/run-tests                  # Run all tests (*-soak suites skipped)
-#   ./tests/run-tests test-foo         # Run specific test(s)
-#   ./tests/run-tests --with-soak      # Include *-soak timing suites
-#   ./tests/run-tests -q               # Quiet: suppress PASS/SKIP lines
-#   ./tests/run-tests --failures-only  # Only show failures
-#   ./tests/run-tests --list           # Print per-suite live test counts (bash suites
-#                                      #   run quietly to count them; Python collected)
-#   ./tests/run-tests --count          # Alias for --list
-#   ./tests/run-tests --jobs N         # Bash suites: run N at once (default: nproc-1,
-#                                      #   min 2; --jobs 1 is the serial debug mode)
-#   ./tests/run-tests --slowest N      # Print the N slowest bash suites at the end
-#                                      #   (default 10 when N omitted)
-#   ./tests/run-tests --log <file>     # Also write full console output to <file>
+# Usage: tests/run-tests --help   (or -h)
 #
 # Environment preflight: capabilities (gi, pv, zfs, root, test pools) are
 # detected up front; suites whose declared requirements (see
@@ -41,6 +28,28 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
+
+usage() {
+    cat <<'EOF'
+Usage: tests/run-tests [flags] [suite ...]
+
+  tests/run-tests                      Run all tests (*-soak suites skipped)
+  tests/run-tests test-foo             Run specific test(s)
+  tests/run-tests --with-soak          Include *-soak timing suites
+  tests/run-tests -q                   Quiet: suppress PASS/SKIP lines (alias: --quiet)
+  tests/run-tests --failures-only      Only show failures
+  tests/run-tests --list               Print per-suite live test counts (bash suites
+                                       run quietly to count them; Python collected)
+  tests/run-tests --count              Alias for --list
+  tests/run-tests --jobs N             Bash suites: run N at once (default: nproc-1,
+                                       min 2; --jobs 1 is the serial debug mode)
+  tests/run-tests --slowest N          Print the N slowest bash suites at the end
+                                       (default 10 when N omitted)
+  tests/run-tests --log <file>         Also write full console output to <file>
+  tests/run-tests -h | --help          Show this usage and exit (nothing runs)
+EOF
+    exit 0
+}
 
 # ---------------------------------------------------------------------------
 # Output-reduction and harness flags
@@ -69,6 +78,11 @@ if [[ $# -gt 0 ]]; then
     arg_i=0
     while [[ $arg_i -lt ${#args[@]} ]]; do
         arg="${args[$arg_i]}"
+        # Print usage and exit 0 before anything runs (any position in the
+        # argument list; exits before the --log tee, preflight, and enumeration).
+        if [[ "$arg" == "--help" || "$arg" == "-h" ]]; then
+            usage
+        fi
         if [[ "$arg" == "-q" || "$arg" == "--quiet" ]]; then
             quiet_mode=1
             ((++arg_i))

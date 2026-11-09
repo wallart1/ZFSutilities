@@ -155,8 +155,9 @@ def parse_qm_exec_output(text):
     """Parse ``qm guest exec`` stdout into its result dict, or None.
 
     PVE prints the agent result as one JSON object (``exitcode`` plus
-    ``out``/``err`` when the command produced output). None means the
-    output was not JSON — an older/plain printer or an error page.
+    ``out-data``/``err-data`` when the command produced output). None
+    means the output was not JSON — an older/plain printer or an error
+    page.
     """
     try:
         parsed = json.loads(text.strip())
@@ -418,12 +419,17 @@ def classify_agent_failure(stderr):
 
 
 def _decode_exec(result):
-    """Validate one qm guest exec result dict; ``(out, None)`` or reason."""
+    """Validate one qm guest exec result dict; ``(out, None)`` or reason.
+
+    PVE prints the agent's exec-status hash: guest stdout under
+    ``out-data`` (base64 already decoded by PVE itself — see
+    QemuServer::Agent::qemu_exec_status), stderr under ``err-data``.
+    """
     if not isinstance(result, dict):
         return None, "unexpected qm output"
     if result.get("exitcode") not in (0, "0"):
         return None, "guest command failed"
-    out = result.get("out")
+    out = result.get("out-data")
     if not isinstance(out, str):
         return None, "unexpected qm output"
     return out, None
@@ -483,6 +489,21 @@ class GuestFsProber:
             f"{_first_line_excerpt(stderr_text, cap=160)}"
         )
 
+    @staticmethod
+    def _log_qm_shape_failure(vmid, argv, stdout_text):
+        """WARN line carrying the raw stdout of an unparseable exec result.
+
+        The call exited 0, so ``_log_qm_failure`` never fired, and the
+        reason stays the generic "unexpected qm output" — without this
+        line a wire-shape drift (PVE renaming its result keys) is
+        invisible in the logs and only a live screenshot can expose it.
+        """
+        command = argv[0] if argv else "?"
+        log_msg(
+            f"WARN: qm guest exec {vmid} ({command}) returned unparseable "
+            f"output: {_first_line_excerpt(stdout_text, cap=160)}"
+        )
+
     def _run(self, argv):
         """Run argv through the channel; ``(stdout, None)`` or reason."""
         try:
@@ -504,6 +525,8 @@ class GuestFsProber:
         if reason is not None:
             return None, reason
         out, reason = _decode_exec(parse_qm_exec_output(stdout or ""))
+        if reason == "unexpected qm output":
+            self._log_qm_shape_failure(vmid, argv, stdout or "")
         return out, reason
 
     def probe_volumes(self, volumes):

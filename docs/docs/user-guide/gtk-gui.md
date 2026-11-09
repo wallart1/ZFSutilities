@@ -609,7 +609,7 @@ This tab configures and runs the daily backup job ([`zfsdailybackup`](../command
 | **Select None**             | Marks every step as inactive                                                                                                                                                                               |
 | **Save Config**             | Persists the current tab state to JSON. Turns **red** while there are unsaved changes.                                                                                                                     |
 | **Revert Config**           | Discards edits and reloads from JSON                                                                                                                                                                       |
-| **Add Profile to Schedule** | Saves a snapshot of current backup settings as a scheduled profile (see [Schedule tab](#schedule-tab)). Label turns **red** alongside Save Config while there are unsaved changes.                          |
+| **Add Profile to Schedule** | Saves a snapshot of current backup settings as a scheduled profile (see [Schedule tab](#schedule-tab)). Label turns **red** alongside Save Config while there are unsaved changes. The dialog lists existing profiles of this tab for click-to-overwrite.                          |
 | **Recall Profile**          | Loads a previously-saved profile into this tab so you can edit it and/or run on demand (see [Recalling profiles](#recalling-and-editing-profiles))                                                         |
 
 While a backup runs, messages stream to the log panel and any interactive
@@ -660,7 +660,7 @@ This tab configures offsite backups ([`zfssendoffsite`](../commands-and-modules/
 | **Select All / Select None** | Mark every step active or inactive                                                                                                                                                                                                                               |
 | **Save Config**              | Persists the tab state; turns **red** when there are unsaved changes.                                                                                                                                                                                            |
 | **Revert Config**            | Reloads from JSON and refreshes the detected pool label                                                                                                                                                                                                          |
-| **Add Profile to Schedule**  | Saves a copy of the current offsite settings as a profile in the Schedule tab. Label turns **red** alongside Save Config while there are unsaved changes.                                                                                                        |
+| **Add Profile to Schedule**  | Saves a copy of the current offsite settings as a profile in the Schedule tab. Label turns **red** alongside Save Config while there are unsaved changes. The dialog lists existing profiles of this tab for click-to-overwrite.                                                                                                        |
 | **Recall Profile**           | Loads a previously-saved offsite profile into this tab for editing or on-demand execution                                                                                                                                                                        |
 
 !!! note "Concurrent GUI runners"
@@ -743,7 +743,7 @@ This tab restores a backup dataset ([`zfsrestore`](../commands-and-modules/comma
 | **Cancel**                  | Stops a running restore                                                                                                                                                   |
 | **Save Config**             | Saves settings; turns **red** when there are unsaved changes                                                                                                              |
 | **Revert Config**           | Reloads from saved settings                                                                                                                                               |
-| **Add Profile to Schedule** | Saves the current restore settings as a profile in the Schedule tab. Label turns **red** alongside Save Config while there are unsaved changes.                           |
+| **Add Profile to Schedule** | Saves the current restore settings as a profile in the Schedule tab. Label turns **red** alongside Save Config while there are unsaved changes. The dialog lists existing profiles of this tab for click-to-overwrite.                           |
 | **Recall Profile**          | Loads a previously-saved Schedule tab profile into this tab for editing or on-demand execution. Click the Add Profile to Schedule button to save changes to the schedule. |
 
 !!! note "Concurrent GUI runners"
@@ -830,8 +830,11 @@ log line came from which running profile.
 Profiles are **not** created from the Schedule tab. Go to the relevant
 tab, configure the settings you want, and click **Add Profile to Schedule** in
 the Actions panel. A dialog asks for a custom name and prepends the
-`<user>-<tab>-` prefix automatically. The current tab settings — including the
-**Dry Run** toggle state — are placed into the profile file.
+`<user>-<tab>-` prefix automatically. When profiles of that tab type already
+exist, the dialog also lists them below the name field — click a row to copy
+its name into the field and confirm the overwrite when asked. The current
+tab settings — including the **Dry Run** toggle state — are placed into the
+profile file.
 
 !!! note
     Clicking **Add Profile to Schedule** does **not** save the tab's normal config
@@ -848,8 +851,9 @@ widgets, just as if you had typed them manually.
 This is useful for two workflows:
 
 1. **Edit and re-save** — Recall a profile, tweak the settings, then click
-   **Add Profile to Schedule** again and give it the same name (to overwrite)
-   or a new name (to create a variant).
+   **Add Profile to Schedule** again and pick the same profile from the
+   dialog's list (or type the same name) to overwrite, or give it a new name
+   to create a variant.
 2. **Run on demand** — Either click **Run Now** on the Schedule tab to run the
    selected profile(s) immediately, or recall a profile and click the tab's
    **Run** button. The job executes using the saved profile settings without
@@ -1017,7 +1021,7 @@ or when a Min Age is set on a bucket whose Retain Count is 0.
 | **Remove Bucket**           | Removes the selected bucket row                                                                                                                                                                                   |
 | **Save**                    | Saves the policy for the currently-selected pool, any pending bucket edits made to other pools, the prune snapshot label, and the advanced prune options                                                          |
 | **Revert**                  | Discards all pending edits (for every pool) and reloads the saved policy, prune label, and advanced prune options                                                                                                 |
-| **Add Profile to Schedule** | Saves a snapshot of current prune settings (label + selected pools) as a scheduled profile. Label turns **red** alongside Save while there are unsaved changes.                                                    |
+| **Add Profile to Schedule** | Saves a snapshot of current prune settings (label + selected pools) as a scheduled profile. Label turns **red** alongside Save while there are unsaved changes. The dialog lists existing profiles of this tab for click-to-overwrite.                                                    |
 | **Recall Profile**          | Loads a previously-saved retention profile into this tab for editing or on-demand execution                                                                                                                       |
 
 ### Prune runner
@@ -1714,9 +1718,11 @@ blank, signature-less zvols. Cloned volumes share signatures — when the
 intersection is not unique the volume is reported as ambiguous rather
 than guessed. LVM/RAID stacks inside the guest attribute through the
 device tree. Volumes that cannot be probed — agent absent, VM stopped,
-disk not matched, clone ambiguity, non-Linux guests — are named with
-their reason in the note while the other volumes keep their probed
-rows and rungs.
+disk not matched, clone ambiguity, non-Linux guests — are counted per
+reason in the availability note (for example `VM not running (2)`)
+while the other volumes keep their probed rows and rungs; each volume's
+own reason appears in its VM row, so the note stays a summary instead
+of a volume-by-volume list.
 
 Refreshes keep the page steady: the tables update their rows in place
 (a finding keeps its position even while the numbers inside it drift),
@@ -1980,7 +1986,9 @@ dangerous the operation is, and a confirmation step matched to that danger.
 Disk eligibility uses the same rules as create-pool, and an operation is refused while
 the pool's scrub is running or paused — stop the scrub (or wait for it to finish)
 from the Pools tab Scrub Manager first. On two-node systems the buttons are available only on
-the storage host, and all six are disabled while a dataset action is running.
+the storage host. A growth or maintenance operation is also refused, at
+confirmation time, when the pool is locked by another operation — the warning
+names the dataset lock's holder — but operations on other pools are unaffected.
 
 #### Add Data Vdev
 
@@ -2294,39 +2302,46 @@ ZFS default and what "(not set)" / an empty field means.
 The pool- and disk-scoped actions (Create Pool, Add Data Vdev, Expand Vdev,
 Replace, Detach, Add Infra Vdev, Migrate Pool, Wipe Labels, SMART Details,
 Surface Test) follow the same gating: on two-node systems they are restricted
-to the storage host, and they are disabled while a dataset action is running.
+to the storage host. Dataset locking is per dataset (and per pool root for
+pool-wide operations), so these actions are not disabled by other running
+actions — each one is refused, at confirmation time, only when the datasets or
+pool it touches are locked by another operation, and the warning names the
+lock's holder.
 
 - **Create Pool…** — open the create-pool wizard to build a new pool from
   unused disks (see [Creating Pools](#creating-pools)). Storage host only on
-  two-node systems; disabled while a dataset action is running. The system
+  two-node systems. The system
   boot disk and its partitions never appear in the disk picker.
 - **Add Data Vdev…** — add a new data vdev to an existing pool (see
   [Add Data Vdev](#add-data-vdev)). Storage host only on two-node systems;
-  disabled while a dataset action is running.
+  refused at confirmation while another operation holds the pool's lock.
 - **Expand Vdev…** — expand a pool vdev by attaching a device: convert a
   stripe to a mirror, grow a mirror, or expand a raidz vdev (see
   [Expand Vdev](#expand-vdev)). Storage host only on two-node systems;
-  disabled while a dataset action is running. Raidz expansion additionally
+  refused at confirmation while another operation holds the pool's lock.
+  Raidz expansion additionally
   requires OpenZFS 2.3+ in the running kernel module — without it, raidz
   rows are greyed and only the mirror-related tasks are available.
 - **Replace…** — replace a pool member with an eligible disk and watch the
   resilver (see [Replace](#replace)). Storage host only on two-node systems;
-  disabled while a dataset action is running.
+  refused at confirmation while another operation holds the pool's lock.
 - **Detach…** — detach a member from a mirror vdev (see [Detach](#detach)).
-  Storage host only on two-node systems; disabled while a dataset action is
-  running.
+  Storage host only on two-node systems;
+  refused at confirmation while another operation holds the pool's lock.
 - **Add Infra Vdev…** — add a special, log (SLOG), or cache (L2ARC) vdev (see
   [Add Infrastructure Vdev](#add-infrastructure-vdev)). Storage host only on
-  two-node systems; disabled while a dataset action is running.
+  two-node systems;
+  refused at confirmation while another operation holds the pool's lock.
 - **Migrate Pool…** — copy a pool to new disks (or via a holding pool) to
   change its topology or blocksize, then swap (see [Migrate Pool](#migrate-pool)).
-  Storage host only on two-node systems; disabled while a dataset action is
-  running.
+  Storage host only on two-node systems;
+  refused at confirmation while another operation holds the source pool's lock.
 - **Enroll in Proxmox…** — register the pool selected in the pool drop-down as
   a Proxmox storage (see [Creating Pools](#creating-pools)). This is the same
   enrollment offered automatically after Create Pool, made available any time
   for pools created or imported earlier. Available in both views; storage host
-  only on two-node systems; disabled while a dataset action is running.
+  only on two-node systems; skipped with manual steps if another operation
+  holds the pool's lock.
 - **Advanced: Manage Pool Profiles…** — maintain the pool profiles that
   Create Pool and Migrate Pool apply (see [Pool profiles](#pool-profiles)).
   Always available — it edits saved profiles, not live pools.
@@ -2342,8 +2357,7 @@ to the storage host, and they are disabled while a dataset action is running.
 - **Set Max I/O Rate…** — name the selected enclosure and set its transfer
   rate cap (see [Enclosures](#enclosures)). Storage host only on two-node
   systems; requires an enclosure row to be selected. Editing the rate only
-  changes saved configuration, so it stays available while a dataset action
-  runs.
+  changes saved configuration, so it is never blocked by running operations.
 - **Refresh** — reloads the disk inventory and topology from cache.
 
 ### Wipe Labels
@@ -2556,7 +2570,7 @@ buttons to control them.
 | **Pause Scrub**             | Pauses selected active or pending scrubs (`zpool scrub -p`)                                                                                                                        |
 | **Resume Scrub**            | Returns selected paused pools to the pending queue. They resume when a scrub slot is available and do not preempt scrubs that are already running.                                 |
 | **Stop Scrub**              | Stops selected scrubs (`zpool scrub -s`) and removes them from the queue                                                                                                           |
-| **Add Profile to Schedule** | Saves selected pools and all settings as a scheduled profile. When the profile runs, it is as if the **Start Scrub** button were clicked.                                          |
+| **Add Profile to Schedule** | Saves selected pools and all settings as a scheduled profile. When the profile runs, it is as if the **Start Scrub** button were clicked. The dialog lists existing profiles of this tab for click-to-overwrite.                                          |
 
 After any scrub action, the status table refreshes in a short burst so state
 changes appear quickly even when the normal refresh interval is long.
@@ -2709,7 +2723,10 @@ Right-click any cell for a context menu:
     mounted but a later mount over an ancestor covers the path — typically a
     pool root with `canmount=noauto` mounted after its children) is recovered
     by unmounting the covering ancestor ("lifting the cover"), retrying, and
-    remounting what was lifted afterwards. If recovery fails, the message
+    remounting what was lifted afterwards. The cover is detached with a plain
+    `umount` of its mountpoint — exactly that one mount layer — because
+    `zfs unmount` on an ancestor also walks every mounted descendant and
+    stops at the first shadowed one. If recovery fails, the message
     names the covering ancestor and what is using it — close that and retry;
     no reboot is needed. Never try to `mkdir` the missing mountpoint: that
     creates a new directory that the real mount is not attached to and only

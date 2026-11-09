@@ -1,7 +1,8 @@
 """Tests for profile_runner.py per-profile locking."""
 
-import multiprocessing
 import os
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -10,10 +11,12 @@ from unittest.mock import patch
 import profile_runner
 from test_support import capture_logs, temp_config_dir
 
-# Explicit fork start context: the child helpers are local closures (not
-# picklable) and rely on the parent's monkeypatched PROFILE_LOCK_DIR —
-# Python 3.14's forkserver default would break both.
-MP_FORK = multiprocessing.get_context("fork")
+# The cross-process lock holder runs as a fresh interpreter, never a
+# multiprocessing fork of this worker (a forked child of a loaded
+# pytest-xdist worker can deadlock before it reaches its first
+# queue.put(); CI 2026-11-08..09).
+_LOCK_CHILD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lock_child.py")
+_MARKER_POLL_SECONDS = 0.01
 
 
 class TestProfileLockHelpers(unittest.TestCase):
@@ -84,19 +87,42 @@ class TestProfileLockHelpers(unittest.TestCase):
 
     def test_acquire_waits_then_acquires(self):
         """A blocked acquire_profile_lock should succeed once the lock is released."""
-
-        def _hold_lock(result_queue):
-            fd, path = profile_runner.acquire_profile_lock("daily", timeout=0.5)
-            result_queue.put(path)
-            time.sleep(0.5)
-            profile_runner.release_profile_lock(fd, path)
-            result_queue.put("released")
-
-        queue = MP_FORK.Queue()
-        proc = MP_FORK.Process(target=_hold_lock, args=(queue,))
-        proc.start()
+        held_marker = os.path.join(self.lock_dir, "child-held")
+        released_marker = os.path.join(self.lock_dir, "child-released")
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                _LOCK_CHILD,
+                "profile-hold",
+                self.lock_dir,
+                "daily",
+                held_marker,
+                released_marker,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         try:
-            lock_path = queue.get(timeout=2)
+
+            def _await_marker(path, what):
+                deadline = time.monotonic() + 2
+                while not os.path.exists(path):
+                    if proc.poll() is not None:
+                        stderr = proc.stderr.read() if proc.stderr else ""
+                        self.fail(
+                            f"lock child exited {proc.returncode} before {what}: {stderr.strip()}"
+                        )
+                    self.assertLess(
+                        time.monotonic(),
+                        deadline,
+                        f"lock child never reported {what}",
+                    )
+                    time.sleep(_MARKER_POLL_SECONDS)
+
+            _await_marker(held_marker, "holding")
+            with open(held_marker) as f:
+                lock_path = f.read().strip()
             waiting_path = os.path.join(self.lock_dir, "daily.waiting")
             fd2, path2 = profile_runner.acquire_profile_lock("daily", timeout=2.0)
             self.assertIsNotNone(fd2)
@@ -106,12 +132,17 @@ class TestProfileLockHelpers(unittest.TestCase):
                 "waiting file should be removed once the lock is acquired",
             )
             profile_runner.release_profile_lock(fd2, path2)
-            self.assertEqual(queue.get(timeout=2), "released")
+            _await_marker(released_marker, "releasing")
         finally:
-            proc.join(timeout=3)
-            if proc.is_alive():
-                proc.terminate()
-                proc.join()
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.terminate()
+                    proc.wait(timeout=10)
+            for pipe in (proc.stdout, proc.stderr):
+                if pipe is not None:
+                    pipe.close()
 
     def test_waiting_file_removed_on_timeout(self):
         """A blocked acquire removes its .waiting file when the timeout expires."""

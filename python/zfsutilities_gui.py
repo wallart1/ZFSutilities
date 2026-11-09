@@ -92,7 +92,7 @@ from pools_page import create_pools_page, on_pools_refresh
 from profile_manager import load_profile
 from restore_page import create_restore_page
 from retention_page import create_retention_page, refresh_prune_pools
-from runner_factory import RunnerFactory
+from runner_factory import DatasetActionRunners, RunnerFactory
 from schedule_page import create_schedule_page, refresh_schedule_page
 
 # Pool Registry refresh interval while the Pools tab is visible (seconds).
@@ -263,13 +263,16 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
         self.offsite_runner = runner_factory.create("Offsite backup")
         self.restore_runner = runner_factory.create("Restore")
         self.retention_runner = runner_factory.create("Prune")
-        self.dataset_runner = runner_factory.create("Dataset action")
+        # Dataset actions get one runner each, created on demand; the
+        # dataset locks (zfs_lock_manager) serialize them, not a shared
+        # runner.  The tracker keeps live ones enumerable for the quit
+        # guard, stdin routing, and the Dashboard.
+        self.dataset_actions = DatasetActionRunners(runner_factory)
         self._runners = [
             self.backup_runner,
             self.offsite_runner,
             self.restore_runner,
             self.retention_runner,
-            self.dataset_runner,
         ]
 
         self._ui_state.restore()
@@ -1178,8 +1181,16 @@ class ZFSUtilitiesWindow(Gtk.ApplicationWindow):
             self.stdin_entry.grab_focus()
 
     def _all_runners(self):
-        """Every task runner sharing the info panel, oldest first."""
-        return [runner for runner in getattr(self, "_runners", []) if runner is not None]
+        """Every task runner sharing the info panel, oldest first.
+
+        Includes every live dataset-action runner from the tracker, so the
+        quit guard, stdin sensitivity, and input routing see them all.
+        """
+        runners = [runner for runner in getattr(self, "_runners", []) if runner is not None]
+        tracker = getattr(self, "dataset_actions", None)
+        if tracker is not None:
+            runners.extend(tracker.live_runners())
+        return runners
 
     def _on_input_event(self, runner, event, uuid, text):
         """Handle input-hold protocol events raised by a runner."""
