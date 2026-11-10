@@ -100,15 +100,19 @@ function delallsnaps {
                 "$zfsdelallsnaps_fs." \
                 "\nThis will disregard system offsite-* holds and snapshot age;" \
                 "user holds will block individual snapshots from being deleted."
-            local now
-            now=$(date +%s)
-            for snap in "${snaparray[@]}"; do
-                local snap_creation
-                snap_creation=$(zfs get -Hp -o value creation "$snap")
-                local age_days=$(( (now - snap_creation) / 86400 ))
-                printf "%-60s  (%d days old)\n" "$snap" "$age_days"
-            done
+            # The per-snapshot listing exists to inform the confirm gate;
+            # with autoproceed there is no gate, so the listing is skipped
+            # (the header above already carries the count and the hold
+            # policy). zfsdelfs gates its own dataset listing the same way.
             if [[ "${autoproceed:-}" != "Y" ]]; then
+                local now
+                now=$(date +%s)
+                for snap in "${snaparray[@]}"; do
+                    local snap_creation
+                    snap_creation=$(zfs get -Hp -o value creation "$snap")
+                    local age_days=$(( (now - snap_creation) / 86400 ))
+                    printf "%-60s  (%d days old)\n" "$snap" "$age_days"
+                done
                 ask_line "Press enter to continue."
             fi
             local _delallsnaps_failed=0

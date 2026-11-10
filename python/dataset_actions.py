@@ -34,7 +34,13 @@ from gui_helpers import (
     reload_row_children,
 )
 from runner_factory import new_dataset_action_runner
-from zfs_repository import find_unreachable_mounts, mount_order_property_fixes, zvol_device_path
+from zfs_repository import (
+    find_unreachable_mounts,
+    mount_order_property_fixes,
+    mountpoint_unreachable,
+    mounts_stacked_on,
+    zvol_device_path,
+)
 
 # ---------------------------------------------------------------------------
 # Local helpers
@@ -1077,6 +1083,47 @@ def _mounted_ancestors_of(dataset, repo):
     return mounted
 
 
+def _path_mountpoint(dataset, repo):
+    """Return *dataset*'s mountpoint when it is an absolute path, else None."""
+    try:
+        mountpoint = repo.get_property(dataset, "mountpoint")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    return mountpoint if mountpoint and mountpoint.startswith("/") else None
+
+
+def _mount_hidden(dataset, repo):
+    """Return True when a mounted *dataset*'s mountpoint does not reach it.
+
+    This is the shadowed/orphaned-mount test for a failed ``zfs unmount``.
+    The stderr cannot be trusted to say so: with no directory left at the
+    path the kernel answers ENOENT ("no such pool or dataset"), but with a
+    leftover empty directory of the same name inside the covering
+    filesystem it answers EINVAL ("unmount failed").
+    """
+    mountpoint = _path_mountpoint(dataset, repo)
+    return mountpoint is not None and mountpoint_unreachable(mountpoint)
+
+
+def _cover_holders(mountpoint):
+    """Describe what keeps the covering mount at *mountpoint* attached."""
+    found = []
+    stacked = mounts_stacked_on(mountpoint)
+    if stacked is None:
+        found.append("the mount table could not be read to look for mounts on top of it")
+    elif stacked:
+        found.append(
+            "mounted on top of it: "
+            + ", ".join(f"{m.source} at {m.mountpoint} ({m.fstype})" for m in stacked)
+        )
+    procs = get_busy_processes(mountpoint)
+    if procs:
+        found.append("in use by: " + ", ".join(f"{name} (PID {pid})" for pid, name in procs))
+    if not found:
+        return f"No mount or process holding {mountpoint} was found; retry the action."
+    return f"{mountpoint} is held — {'; '.join(found)}. Release it, then retry the action."
+
+
 def _lift_and_unmount(target, candidates, lifted, app, repo):
     """Unmount *target* by lifting covering ancestors from *candidates*.
 
@@ -1133,7 +1180,8 @@ def _lift_and_unmount(target, candidates, lifted, app, repo):
         if result.returncode != 0:
             log_msg(
                 f"FATAL: cannot unmount {target}: its mount is covered by "
-                f"{ancestor}, which could not be unmounted: {result.stderr.strip()}"
+                f"{ancestor} (mounted at {mountpoint}), which could not be "
+                f"detached: {result.stderr.strip()}. {_cover_holders(mountpoint)}"
             )
             return False
         lifted.append(ancestor)
@@ -1146,6 +1194,13 @@ def _lift_and_unmount(target, candidates, lifted, app, repo):
         )
         if retry.returncode == 0:
             return True
+    if not any(ancestor in lifted for ancestor in candidates):
+        log_msg(
+            f"FATAL: cannot unmount {target}: none of its covering ancestors "
+            f"({', '.join(candidates)}) has a mountpoint path that can be detached. "
+            "Give the cover a path mountpoint or unmount it by hand, then retry."
+        )
+        return False
     log_msg(
         f"FATAL: {target} looks mounted but its mountpoint stayed unreachable "
         "after lifting every mounted ancestor. Check its mountpoint and its "
@@ -1281,7 +1336,7 @@ def _unmount_one_dataset(item, repo, app):
                         any_unmounted = True
                         log_msg(f"VERB: {target} was already unmounted")
                         continue
-                    if "no such pool or dataset" in stderr:
+                    if _mount_hidden(target, repo):
                         # Orphaned mount: the kernel still lists the dataset
                         # as mounted, but its mountpoint path is unreachable.
                         if _recover_orphaned_mount(target, repo):
@@ -1297,17 +1352,21 @@ def _unmount_one_dataset(item, repo, app):
                             if _all_ancestors_mounted(target, repo)
                             else []
                         )
-                        if candidates and _lift_and_unmount(target, candidates, lifted, app, repo):
-                            any_unmounted = True
-                            log_msg(f"VERB: Unmounted {target}")
-                            continue
-                        log_msg(
-                            f"FATAL: {target} looks mounted but its mountpoint "
-                            "is not reachable (orphaned or shadowed mount) and "
-                            "could not be recovered automatically. Check which "
-                            "ancestor covers or precedes it, close any users, "
-                            "and retry."
-                        )
+                        if candidates:
+                            # _lift_and_unmount logs its own specific FATAL.
+                            if _lift_and_unmount(target, candidates, lifted, app, repo):
+                                any_unmounted = True
+                                log_msg(f"VERB: Unmounted {target}")
+                                continue
+                        else:
+                            log_msg(
+                                f"FATAL: cannot unmount {target}: its mountpoint "
+                                f"{_path_mountpoint(target, repo)} is unreachable "
+                                f"({stderr}) and remounting its unmounted parents "
+                                "did not expose it. Use Repair Mount Order (Dashboard "
+                                "or Datasets page) to remount the whole set "
+                                "parents-first, then retry."
+                            )
                     elif "busy" in stderr.lower():
                         log_msg(
                             f"FATAL: Dataset {target} is busy. "
@@ -1427,6 +1486,31 @@ def _remount_repair_set(app, plan):
     return failed
 
 
+def _repair_leftovers(plan, repo):
+    """Classify the plan's remount set after a repair attempt.
+
+    Returns ``(unknown, unmounted, hidden)``: members whose mount state
+    could not be read, members not mounted, and ``(name, mountpoint)``
+    pairs mounted but unreachable at their path. All three empty means
+    the order is correct. Non-path mountpoints (legacy, none) cannot be
+    tested by path and are not warned about by the Dashboard either.
+    """
+    unknown, unmounted, hidden = [], [], []
+    for name in plan["remount"]:
+        try:
+            mounted = repo.get_property(name, "mounted") == "yes"
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            unknown.append(name)
+            continue
+        if not mounted:
+            unmounted.append(name)
+            continue
+        mountpoint = _path_mountpoint(name, repo)
+        if mountpoint is not None and mountpoint_unreachable(mountpoint):
+            hidden.append((name, mountpoint))
+    return unknown, unmounted, hidden
+
+
 def execute_mount_repair(app, plan):
     """Execute a mount-order repair plan; return True on verified success.
 
@@ -1434,8 +1518,10 @@ def execute_mount_repair(app, plan):
     converges to the correct order at the next boot. The unmount phase
     lifts covering ancestors as needed (shadowed mounts cannot be unmounted
     by path while covered); on any failure everything still unmounted is
-    remounted parents-first — strictly better ordered than before — and a
-    FATAL names what to do next.
+    remounted parents-first — strictly better ordered than before. The
+    result is then verified with the Dashboard's own reachability test:
+    success when every member is mounted and reachable (even after a
+    mid-repair failure), otherwise a FATAL lists what is still wrong.
     """
     repo = _repo(app)
 
@@ -1509,7 +1595,7 @@ def execute_mount_repair(app, plan):
                     log_msg(f"VERB: Unmounted {name}")
                     continue
                 stderr = result.stderr.strip()
-                if "no such pool or dataset" in stderr:
+                if _mount_hidden(name, repo):
                     # Expose the target: remount unmounted plan members on
                     # its path (they are remounted at the end regardless),
                     # then lift mounted covers from the plan's unmount set.
@@ -1545,49 +1631,57 @@ def execute_mount_repair(app, plan):
                         continue
                     candidates = [a for a in plan["unmount"] if _is_name_ancestor(a, name)]
                     candidates.sort(key=lambda n: n.count("/"))
-                    if candidates and _lift_and_unmount(name, candidates, lifted, app, repo):
-                        log_msg(f"VERB: Unmounted {name}")
-                        continue
-                    log_msg(f"FATAL: Mount-order repair could not unmount {name}.")
+                    if candidates:
+                        # _lift_and_unmount logs its own specific FATAL.
+                        if _lift_and_unmount(name, candidates, lifted, app, repo):
+                            log_msg(f"VERB: Unmounted {name}")
+                            continue
+                    else:
+                        log_msg(
+                            f"FATAL: Mount-order repair could not unmount {name}: "
+                            f"its mountpoint {_path_mountpoint(name, repo)} is "
+                            f"unreachable ({retry.stderr.strip()}) and no mounted "
+                            "ancestor covers it."
+                        )
                 else:
                     log_msg(f"FATAL: Error unmounting {name} during repair: {stderr}")
                 aborted = True
                 break
 
-            failed = _remount_repair_set(app, plan)
+            _remount_repair_set(app, plan)
+
+            # Verification: every remounted member must be mounted and
+            # reachable at its mountpoint — the same test the Dashboard uses.
+            unknown, unmounted, hidden = _repair_leftovers(plan, repo)
+            if unknown or unmounted or hidden:
+                problems = []
+                if hidden:
+                    problems.append(
+                        "still unreachable (covered by a later mount): "
+                        + ", ".join(f"{n} at {mp}" for n, mp in hidden)
+                    )
+                if unmounted:
+                    problems.append("not mounted: " + ", ".join(unmounted))
+                if unknown:
+                    problems.append("mount state could not be read: " + ", ".join(unknown))
+                next_step = (
+                    "Resolve the failure above, then run Repair Mount Order again."
+                    if aborted
+                    else "Run Repair Mount Order again; mount any dataset that stays "
+                    "unmounted from the Datasets page."
+                )
+                log_msg(
+                    f"FATAL: Mount-order repair incomplete — {'; '.join(problems)}. "
+                    "The Dashboard keeps warning about these until they are fixed. "
+                    f"{next_step}"
+                )
+                return False
             if aborted:
                 log_msg(
-                    "FATAL: Mount-order repair incomplete: everything was "
-                    "remounted parents-first, but the ordering may still be "
-                    "wrong. Resolve the failure above and run the repair again."
+                    "INFO: Mount order is correct now: remounting parents-first "
+                    "made every mount reachable despite the failure above"
                 )
-                return False
-            if failed:
-                log_msg(
-                    "FATAL: Mount-order repair could not remount: "
-                    f"{', '.join(failed)}. Retry the repair or mount them from "
-                    "the Datasets page."
-                )
-                return False
-
-            # Verification: every remounted member must be a real mountpoint.
-            bad = []
-            for name in plan["remount"]:
-                try:
-                    mountpoint = repo.get_property(name, "mountpoint")
-                    mounted = repo.get_property(name, "mounted") == "yes"
-                except (subprocess.CalledProcessError, FileNotFoundError):
-                    bad.append(name)
-                    continue
-                if not mounted or not os.path.ismount(mountpoint):
-                    bad.append(name)
-            if bad:
-                log_msg(
-                    f"FATAL: Mount-order repair verification failed for: "
-                    f"{', '.join(bad)}. Retry the repair; if it persists, check "
-                    "zpool status and the datasets' mountpoint properties."
-                )
-                return False
+                return True
             log_msg(
                 f"INFO: Repaired mount order: unmounted {len(plan['unmount'])} "
                 f"filesystem(s), remounted {len(plan['remount'])} parents-first"
@@ -1707,95 +1801,175 @@ def _warn_busy(app, title, detail):
     dialog.destroy()
 
 
-def _unmount_one_volume_partition(item, repo, app):
-    """Unmount a mounted loop partition; return True on success."""
-    device = item["device"]
-    try:
-        mountpoint = repo.device_mountpoint(device)
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log_msg(f"FATAL: Error resolving mountpoint for {device}: {e}")
-        return False
-    if not mountpoint:
-        return False
+_MAX_LOOP_UMOUNT_ROUNDS = 8
 
-    procs = get_busy_processes(mountpoint)
-    if procs:
-        proc_list = "\n".join(f"  • {name} (PID {pid})" for pid, name in procs)
-        _warn_busy(
-            app,
-            "Partition is busy",
-            f"{device} is currently in use by:\n\n{proc_list}\n\n"
-            "Please close the listed application(s), then try unmounting again.",
+
+def _unmount_device_layers(device, repo):
+    """Unmount every mount of *device* by device name; return True when done.
+
+    umount(8) resolves a device argument to that device's own mount, so the
+    exact layer comes off even when a foreign mount is stacked on (or covers)
+    the mountpoint — foreign covers are never touched. Every round verifies
+    with findmnt, so a device that is mounted more than once is fully
+    unmounted (each umount call removes one instance). Bounded by
+    _MAX_LOOP_UMOUNT_ROUNDS so a device that keeps reporting mounted fails
+    loudly instead of looping.
+    """
+    for _ in range(_MAX_LOOP_UMOUNT_ROUNDS):
+        try:
+            mountpoint = repo.device_mountpoint(device)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            log_msg(f"FATAL: Error resolving mountpoint for {device}: {e}")
+            return False
+        if not mountpoint:
+            return True
+        result = subprocess.run(
+            ["sudo", "umount", device], capture_output=True, text=True, check=False
         )
-        log_msg(f"FATAL: Partition {device} is busy; unmount aborted")
-        return False
-
-    result = subprocess.run(
-        ["sudo", "umount", mountpoint], capture_output=True, text=True, check=False
-    )
-    if result.returncode == 0:
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            if "busy" in stderr.lower():
+                log_msg(
+                    f"FATAL: Partition {device} is busy. "
+                    "Please close any file manager windows and try again."
+                )
+            else:
+                log_msg(f"FATAL: Error unmounting {device}: {stderr}")
+            return False
         log_msg(f"INFO: Unmounted {device} from {mountpoint}")
-        return True
-
-    stderr = result.stderr.strip()
-    if "busy" in stderr.lower():
-        log_msg(
-            f"FATAL: Partition {device} is busy. "
-            "Please close any file manager windows and try again."
-        )
-    else:
-        log_msg(f"FATAL: Error unmounting {device}: {stderr}")
+    log_msg(
+        f"FATAL: {device} still reports mounted after "
+        f"{_MAX_LOOP_UMOUNT_ROUNDS} unmount rounds; not retrying further"
+    )
     return False
 
 
+def _unmount_one_volume_partition(item, repo, app):
+    """Unmount a mounted loop partition; return True on success.
+
+    The unmount targets the device, so exactly this partition's layer comes
+    off even when another mount covers the mountpoint. A partition that is
+    already unmounted is an idempotent success — the page row may simply be
+    stale, and returning True refreshes it. Holds the volume's write lock for
+    the whole sequence, like every other dataset action.
+    """
+    device = item["device"]
+    try:
+        with zlm.lock(item["volume"], "w", f"loop-unmount {device}"):
+            try:
+                mountpoint = repo.device_mountpoint(device)
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                log_msg(f"FATAL: Error resolving mountpoint for {device}: {e}")
+                return False
+            if not mountpoint:
+                log_msg(f"VERB: {device} is not mounted; nothing to unmount")
+                return True
+
+            procs = get_busy_processes(mountpoint)
+            if procs:
+                proc_list = "\n".join(f"  • {name} (PID {pid})" for pid, name in procs)
+                _warn_busy(
+                    app,
+                    "Partition is busy",
+                    f"{device} is currently in use by:\n\n{proc_list}\n\n"
+                    "Please close the listed application(s), then try unmounting again.",
+                )
+                log_msg(f"FATAL: Partition {device} is busy; unmount aborted")
+                return False
+
+            return _unmount_device_layers(device, repo)
+    except RuntimeError as exc:
+        log_msg(f"FATAL: cannot unmount {device}: {exc}")
+        return False
+
+
 def _unmount_one_volume(item, repo, app):
-    """Detach a volume's loop device, unmounting its partitions first."""
+    """Detach a volume's loop device, unmounting its partitions first.
+
+    Every partition is unmounted by device (see _unmount_device_layers), so
+    foreign mounts stacked on a partition's mountpoint are never touched and
+    every mount of each device comes off. A volume with no loop device
+    attached is an idempotent success — the page row may simply be stale,
+    and returning True refreshes it. The whole sequence holds the volume's
+    write lock, like every other dataset action.
+    """
     dataset = item["name"]
     try:
-        loop_dev = repo.loop_find(zvol_device_path(dataset))
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log_msg(f"FATAL: Error finding loop device for {dataset}: {e}")
-        return False
-    if not loop_dev:
-        return False
+        with zlm.lock(dataset, "w", f"loop-unmount {dataset}"):
+            try:
+                loop_dev = repo.loop_find(zvol_device_path(dataset))
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                log_msg(f"FATAL: Error finding loop device for {dataset}: {e}")
+                return False
+            if not loop_dev:
+                log_msg(f"VERB: {dataset} is not loop-attached; nothing to unmount")
+                return True
 
-    try:
-        parts = repo.loop_partitions(loop_dev)
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        log_msg(f"FATAL: Error listing partitions on {loop_dev}: {e}")
+            try:
+                parts = repo.loop_partitions(loop_dev)
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                log_msg(f"FATAL: Error listing partitions on {loop_dev}: {e}")
+                return False
+
+            # Live mount state per device — the lsblk listing may be stale.
+            live_mounted = []
+            for part in parts:
+                try:
+                    mountpoint = repo.device_mountpoint(part.device)
+                except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                    log_msg(f"FATAL: Error resolving mountpoint for {part.device}: {e}")
+                    return False
+                if mountpoint:
+                    live_mounted.append((part.device, mountpoint))
+
+            # Refuse before unmounting anything if any partition is busy, so a
+            # busy partition never leaves the volume half-unmounted.
+            for device, mountpoint in live_mounted:
+                procs = get_busy_processes(mountpoint)
+                if procs:
+                    proc_list = "\n".join(f"  • {name} (PID {pid})" for pid, name in procs)
+                    _warn_busy(
+                        app,
+                        "Partition is busy",
+                        f"{device} is currently in use by:\n\n{proc_list}\n\n"
+                        "Please close the listed application(s), then try unmounting again.",
+                    )
+                    log_msg(f"FATAL: Partition {device} is busy; unmount aborted")
+                    return False
+
+            for device, _mountpoint in live_mounted:
+                if not _unmount_device_layers(device, repo):
+                    return False
+
+            if not repo.loop_detach(loop_dev):
+                held = []
+                try:
+                    held = [p for p in repo.loop_partitions(loop_dev) if p.mountpoint]
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    pass
+                if held:
+                    held_list = ", ".join(f"{p.device} at {p.mountpoint}" for p in held)
+                    log_msg(
+                        f"FATAL: Error detaching {loop_dev} from {dataset}: "
+                        f"still mounted: {held_list}. Close what is using "
+                        "them and try again."
+                    )
+                else:
+                    log_msg(
+                        f"FATAL: Error detaching {loop_dev} from {dataset}: "
+                        "no partition reports mounted, so a process is "
+                        "holding the loop device itself open. Close it and "
+                        "try again."
+                    )
+                return False
+            log_msg(f"INFO: Detached {dataset} from loop device {loop_dev}")
+            tree_iter = find_tree_iter_by_full_name(app.datasets_store, dataset)
+            if tree_iter is not None:
+                reload_row_children(app.datasets_store, tree_iter, repo=repo)
+            return True
+    except RuntimeError as exc:
+        log_msg(f"FATAL: cannot unmount {dataset}: {exc}")
         return False
-
-    mounted_parts = [p for p in parts if p.mountpoint]
-    for part in mounted_parts:
-        procs = get_busy_processes(part.mountpoint)
-        if procs:
-            proc_list = "\n".join(f"  • {name} (PID {pid})" for pid, name in procs)
-            _warn_busy(
-                app,
-                "Partition is busy",
-                f"{part.device} is currently in use by:\n\n{proc_list}\n\n"
-                "Please close the listed application(s), then try unmounting again.",
-            )
-            log_msg(f"FATAL: Partition {part.device} is busy; unmount aborted")
-            return False
-
-    for part in mounted_parts:
-        result = subprocess.run(
-            ["sudo", "umount", part.mountpoint], capture_output=True, text=True, check=False
-        )
-        if result.returncode != 0:
-            log_msg(f"FATAL: Error unmounting {part.device}: {result.stderr.strip()}")
-            return False
-        log_msg(f"INFO: Unmounted {part.device} from {part.mountpoint}")
-
-    if not repo.loop_detach(loop_dev):
-        log_msg(f"FATAL: Error detaching {loop_dev} from {dataset}")
-        return False
-    log_msg(f"INFO: Detached {dataset} from loop device {loop_dev}")
-    tree_iter = find_tree_iter_by_full_name(app.datasets_store, dataset)
-    if tree_iter is not None:
-        reload_row_children(app.datasets_store, tree_iter, repo=repo)
-    return True
 
 
 def on_datasets_unmount(app):

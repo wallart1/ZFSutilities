@@ -130,7 +130,11 @@ archive_resolve_rate() {
         return 0
     fi
     if [[ -n "$combined" && "$combined" != "$rate_limit" ]]; then
-        log_msg "INFO: Enclosure rate cap applied: ${combined}"
+        # Pace-changing notice: the run is about to move at a rate the
+        # operator did not type, so it is shown even when a driven flow
+        # gates INFO off the terminal (the empty prefix assignment lifts
+        # the ZFSUTILITIES_MSG_LEVEL gate for this one call only).
+        ZFSUTILITIES_MSG_LEVEL='' log_msg "INFO: Enclosure rate cap applied: ${combined}"
     fi
     printf '%s' "$combined"
 }
@@ -179,13 +183,13 @@ archive_copy_devices() {
         ( set -o pipefail
           python3 "$_archive_pacer" "$transfer_rate_limit" -- "$src" \
               | tee "$fifo" \
-              | dd of="$dst" bs=16M conv=sparse,notrunc iflag=fullblock
+              | dd of="$dst" bs=16M conv=sparse,notrunc iflag=fullblock status=none
         ) || pipe_rc=1
     else
         ( set -o pipefail
-          dd if="$src" bs=16M iflag=fullblock \
+          dd if="$src" bs=16M iflag=fullblock status=none \
               | tee "$fifo" \
-              | dd of="$dst" bs=16M conv=sparse,notrunc iflag=fullblock
+              | dd of="$dst" bs=16M conv=sparse,notrunc iflag=fullblock status=none
         ) || pipe_rc=1
     fi
     # The wait closes the truncated-stream race: only after sha256sum
@@ -637,5 +641,214 @@ unarchive_rollback_created() {
     if [[ -n "$created_root" ]]; then
         zfs destroy -r "$created_root" 2>/dev/null || true
         log_msg "WARN: Removed created parent ${created_root}"
+    fi
+}
+
+# ------------------------------------------------------------------
+# Archive listing (unarchive-vm --list)
+# ------------------------------------------------------------------
+
+# Parse a zfs human size value ("10G", "1.50M", plain digits) into bytes;
+# prints -1 when the value does not parse. Parameter expansion and a case
+# list only, like archive_valid_rate, so no regex exceeds the 10-character
+# policy limit; the decimal part is scaled by digit concatenation so the
+# math stays integer.
+archive_size_bytes() {
+    local value="$1" num int frac unit mult scale i
+    num="${value%%[!0-9.]*}"
+    [[ -n "$num" ]] || { echo -1; return 0; }
+    unit="${value#"$num"}"
+    int="${num%%.*}"
+    frac="${num#*.}"
+    [[ "$num" == *.* ]] || frac=""
+    [[ "$int" =~ ^[0-9]+$ ]] || { echo -1; return 0; }
+    [[ -z "$frac" || "$frac" =~ ^[0-9]+$ ]] || { echo -1; return 0; }
+    case "${unit,,}" in
+        ""|b)          mult=1 ;;
+        k|ki|kb|kib)   mult=1024 ;;
+        m|mi|mb|mib)   mult=$((1024 * 1024)) ;;
+        g|gi|gb|gib)   mult=$((1024 * 1024 * 1024)) ;;
+        t|ti|tb|tib)   mult=$((1024 * 1024 * 1024 * 1024)) ;;
+        p|pi|pb|pib)   mult=$((1024 * 1024 * 1024 * 1024 * 1024)) ;;
+        e|ei|eb|eib)   mult=$((1024 * 1024 * 1024 * 1024 * 1024 * 1024)) ;;
+        *) echo -1; return 0 ;;
+    esac
+    scale=1
+    for (( i = 0; i < ${#frac}; i++ )); do
+        (( scale *= 10 ))
+    done
+    # 10# forces base 10: zfs prints decimals with leading zeros ("1.08G",
+    # "2.05T"), and plain bash arithmetic would read "08" as an invalid
+    # octal literal. The empty frac keeps its bare-name zero (10# with no
+    # digits is a syntax error).
+    local frac_term=0
+    [[ -n "$frac" ]] && frac_term=$(( 10#$frac * mult / scale ))
+    # A negative result is 64-bit wraparound (values past the exabyte
+    # range no real zvol reaches); report it as unparseable.
+    local out=$(( 10#$int * mult + frac_term ))
+    if (( out < 0 )); then
+        echo -1
+    else
+        echo "$out"
+    fi
+}
+
+# Humanize <bytes> the way zfs prints sizes: the largest of B..E that keeps
+# the value at or above 1, one decimal, trailing ".0" trimmed ("360G",
+# "1.5T", "512K").
+archive_size_human() {
+    local bytes="$1" div=1 unit_idx=0 whole tenths
+    local -a labels=(B K M G T P E)
+    while (( bytes / div >= 1024 && unit_idx < 6 )); do
+        (( div *= 1024 ))
+        (( ++unit_idx ))
+    done
+    whole=$(( bytes / div ))
+    tenths=$(( (bytes % div) * 10 / div ))
+    if (( tenths == 0 )); then
+        echo "${whole}${labels[$unit_idx]}"
+    else
+        echo "${whole}.${tenths}${labels[$unit_idx]}"
+    fi
+}
+
+# Print one VM's listing block. <disk_rows> carries the VM's original zvol
+# paths (relative to the archive base), one per line. Helper of
+# archive_list_vms; path_under_mount comes from node-lib.
+archive_list_one_vm() {
+    local vmid="$1" disk_rows="$2" archive_base="$3" archive_mount="$4"
+    local pve_conf_dir="$5"
+    local conf vm_name name_line tail volsize bytes total=0 size_ok=1
+    local info_file markers marker marked=0 disk_count=0 no_sidecar=0
+    local disk_note disk_line
+    local -a restored_list=() disk_lines=()
+    local -A restored_set=()
+
+    conf="$(path_under_mount "$archive_mount" \
+        "${pve_conf_dir}/${vmid}.conf")"
+    vm_name="(no archived config)"
+    if [[ -f "$conf" ]]; then
+        vm_name="(unnamed)"
+        # || true: a config without a name line is an empty answer handled
+        # by the -n check below, not a failure.
+        name_line=$(grep '^name: ' "$conf" 2>/dev/null | head -1 || true)
+        [[ -n "$name_line" ]] && vm_name="${name_line#name: }"
+    fi
+
+    while IFS= read -r tail; do
+        [[ -n "$tail" ]] || continue
+        ((++disk_count))
+        volsize=$(zfs get -H -o value volsize "${archive_base}/${tail}" \
+            2>/dev/null || true)
+        [[ -n "$volsize" && "$volsize" != "-" ]] || volsize="unknown"
+        bytes=$(archive_size_bytes "$volsize")
+        if [[ "$bytes" -lt 0 ]]; then
+            size_ok=0
+        else
+            total=$(( total + bytes ))
+        fi
+        info_file="$(path_under_mount "$archive_mount" "${tail}.disk_info")"
+        disk_note=""
+        if [[ ! -f "$info_file" ]]; then
+            disk_note="  [no sidecar]"
+            ((++no_sidecar))
+        fi
+        # Fixed-string grep: markers are exact RESTORED_AS=vm-<id>-disk-<n>
+        # lines the restore appends after verification. || true keeps a
+        # marker-less sidecar an empty answer.
+        markers=$(grep -F 'RESTORED_AS=vm-' "$info_file" 2>/dev/null || true)
+        if [[ -n "$markers" ]]; then
+            ((++marked))
+        fi
+        while IFS= read -r marker; do
+            [[ -n "$marker" ]] || continue
+            marker="${marker#RESTORED_AS=vm-}"
+            marker="${marker%%-disk-*}"
+            [[ "$marker" =~ ^[0-9]+$ ]] || continue
+            if [[ -z "${restored_set[$marker]+x}" ]]; then
+                restored_set[$marker]=1
+                restored_list+=("$marker")
+            fi
+        done <<< "$markers"
+        disk_lines+=("INFO:   ${tail}  ${volsize}${disk_note}")
+    done <<< "$disk_rows"
+
+    local total_str="unknown"
+    [[ "$size_ok" == "1" ]] && total_str=$(archive_size_human "$total")
+    local state=""
+    if (( ${#restored_list[@]} > 0 )); then
+        local joined="${restored_list[0]}"
+        for marker in "${restored_list[@]:1}"; do
+            joined+=", ${marker}"
+        done
+        if [[ "$marked" == "$disk_count" ]]; then
+            state=" — restored as: ${joined}"
+        else
+            state=" — partially restored as: ${joined}"
+        fi
+    fi
+    if (( disk_count > 0 && no_sidecar == disk_count )); then
+        state+=" — pre-sidecar archive (manual restore)"
+    fi
+    local disk_word="disks"
+    (( disk_count == 1 )) && disk_word="disk"
+    log_msg "INFO: VM ${vmid} — ${vm_name} — ${disk_count} ${disk_word}," \
+        "${total_str} total${state}"
+    for disk_line in "${disk_lines[@]}"; do
+        log_msg "$disk_line"
+    done
+}
+
+# List every archived VM under <archive_base> (mounted at <archive_mount>):
+# groups the archived zvols by vmid and prints each VM's name (from the
+# archived Proxmox config), its disks with volsize, the summed size, and
+# the restore state recorded in the .disk_info sidecars. Read-only. Runs
+# wherever the archive datasets live — inline on a single node, inside the
+# two-node storage payload — so both node modes run literally the same
+# listing code, like the transfer paths. path_under_mount comes from
+# node-lib.
+# Usage: archive_list_vms <archive_base> <archive_mount> <pve_conf_dir>
+archive_list_vms() {
+    local archive_base="$1" archive_mount="$2" pve_conf_dir="$3"
+    local all_zvols row tail vm_part vmid disknum vm_count=0
+    local -a vmids=()
+    local -A vm_known=() vm_disk_rows=()
+
+    # Same rooted enumeration as the restore discovery; the || true keeps an
+    # empty archive an empty answer under pipefail.
+    all_zvols=$(zfs list -H -t volume -o name -r "$archive_base" 2>/dev/null \
+        | grep -F "${archive_base}/" \
+        | sort \
+        || true)
+
+    while IFS= read -r row; do
+        [[ -n "$row" ]] || continue
+        tail="${row#"${archive_base}"/}"
+        # Only VM-disk zvols count: <pool>/proxmox/vm-<vmid>-disk-<n> with
+        # a numeric vmid and disk number; anything else under the base is
+        # skipped silently.
+        [[ "$tail" == *"/proxmox/vm-"*"-disk-"* ]] || continue
+        vm_part="${tail##*/proxmox/vm-}"
+        vmid="${vm_part%-disk-*}"
+        disknum="${vm_part#*-disk-}"
+        [[ "$vmid" =~ ^[0-9]+$ && "$disknum" =~ ^[0-9]+$ ]] || continue
+        if [[ -z "${vm_known[$vmid]+x}" ]]; then
+            vm_known[$vmid]=1
+            vmids+=("$vmid")
+        fi
+        vm_disk_rows[$vmid]+="${tail}"$'\n'
+    done <<< "$all_zvols"
+
+    log_msg "INFO: === Archived VMs under ${archive_base} ==="
+    if (( ${#vmids[@]} > 0 )); then
+        mapfile -t vmids < <(printf '%s\n' "${vmids[@]}" | sort -n)
+    fi
+    for vmid in "${vmids[@]}"; do
+        ((++vm_count))
+        archive_list_one_vm "$vmid" "${vm_disk_rows[$vmid]}" \
+            "$archive_base" "$archive_mount" "$pve_conf_dir"
+    done
+    if (( vm_count == 0 )); then
+        log_msg "INFO: No archived VMs under ${archive_base}."
     fi
 }

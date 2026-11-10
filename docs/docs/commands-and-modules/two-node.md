@@ -1511,7 +1511,7 @@ dataset(s) — see the GUI reference under
 Removes a VM disk from iSCSI and destroys the zvol.
 
 ```bash
-sudo remove-vm-disk <pool> <vmid> <disk-num>
+sudo remove-vm-disk <pool> <vmid> <disk-num> [--skip-rescan] [--from-archive]
 ```
 
 **Arguments:**
@@ -1521,6 +1521,13 @@ sudo remove-vm-disk <pool> <vmid> <disk-num>
 | `pool`     | ZFS pool              |
 | `vmid`     | Proxmox VM ID         |
 | `disk-num` | Disk number to remove |
+
+**Options:**
+
+| Option          | Description                                  |
+| --------------- | -------------------------------------------- |
+| `--skip-rescan` | Skip the compute-host rescan; the caller runs its own |
+| `--from-archive` | Driven by `archive-vm`: skip the confirm prompts (the caller verified the VM is stopped and removes the Proxmox config itself) and log only warnings and failures on the terminal |
 
 **Globals:** node-config globals; `EXPECTED_BACKSTORES_MANIFEST` optionally
 overrides the expected-backstores manifest path.
@@ -1546,16 +1553,22 @@ overrides the expected-backstores manifest path.
    `ssh -t` (TTY-allocating, so the remote confirm prompts are visible; the
    input-hold env prefix keeps numbered GUI prompts working across the hop)
    with `--skip-rescan` — the wrapper performs one compute-host rescan itself,
-   even when the remote run failed.
+   even when the remote run failed. With `--from-archive` the delegation
+   carries the flag and the terminal message-level gate instead of a TTY,
+   since the driven run prompts nothing.
 2. Resolve the zvol path, target, and backstore name.
 3. Prompt twice for confirmation; declining either exits 0 having destroyed
-   nothing.
+   nothing. `--from-archive` skips both prompts: the caller already verified
+   the VM is stopped and holds the operator's single removal confirmation.
 4. In two-node mode:
-    - Find and remove the LUN mapping (skipping gracefully if already gone).
+    - Find and remove the LUN mapping (skipping gracefully if already gone);
+      targetcli's own output prints only when a delete fails.
     - Remove the block backstore (likewise).
     - Remove entries from `expected-backstores.txt` and
       `/etc/zfsutilities/iscsi-encrypted-luns.conf`.
-    - Save iSCSI config via `safe-iscsi-save`.
+    - Save iSCSI config via `safe-iscsi-save`, telling it the zvol is about
+      to be destroyed (`SAFE_ISCSI_SAVE_PENDING_DESTROY`) so the save does
+      not warn about the in-flight removal.
 5. Destroy the zvol via `zfsdelfs ... autoproceed='Y'` — any VM that has run
    through dailybackup carries child snapshots (usually held), which a bare
    `zfs destroy` refuses; `zfsdelfs` deletes the subtree bottom-up, releasing
@@ -1581,6 +1594,7 @@ each restored zvol and rewrites the Proxmox config disk lines with new LUN numbe
 
 ```bash
 sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
+sudo unarchive-vm --list [archive_base]
 ```
 
 **Arguments:**
@@ -1590,6 +1604,12 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | `vmid`         | VM ID of the archived VM to restore                                                                      |
 | `archive_base` | Optional ZFS dataset that contains the archive. If not specified, the last-used `archive-base` is used.  |
 | `--new-vmid`   | Optional new VM ID for restored zvols, iSCSI resources, and Proxmox config                               |
+| `--list`       | List the archived VMs the archive holds and exit (restores nothing)                                      |
+
+`--list` works from either node. The archive datasets live on the storage
+host, so the listing runs there as an `on_storage` payload and prints back
+through the invoking shell. See the
+[command reference](commands.md#unarchive-vm) for the listing's contents.
 
 **Globals:** node-config globals; `transfer_rate_limit` (transfer rate limit,
 empty = unlimited; prompted with the JSON-config default `archive_rate_limit`).
@@ -1618,7 +1638,10 @@ empty = unlimited; prompted with the JSON-config default `archive_rate_limit`).
    and compute-side operations through `on_compute` (local on the compute
    host) — no delegate-to-compute bounce.
 2. Resolve the archive base (argument, JSON config, or prompt), then prompt
-   for the transfer rate limit (saved as the shared JSON default).
+   for the transfer rate limit (saved as the shared JSON default). With
+   `--list`, the script stops here instead: it runs the shared engine's
+   listing function (`archive_list_vms` in `lib/archive-engine.sh`) on the
+   storage host through `on_storage` and exits before the rate prompt.
 3. Discover archived zvol datasets and the archived Proxmox config.
 4. Verify the `.disk_info` sidecars exist, then classify existing
    destinations for re-run idempotency: a `RESTORED_AS` marker means the
@@ -1873,7 +1896,9 @@ sudo safe-iscsi-save
    `targetcli saveconfig` manually. A mapping whose backstore left the
    manifest (the `remove-vm-disk` / `move-vm-disk` removal order) may
    disappear, and it draws a WARN when its zvol still exists (stale-manifest
-   signal).
+   signal) — unless the caller names the device in
+   `SAFE_ISCSI_SAVE_PENDING_DESTROY`, which `remove-vm-disk` does for the
+   zvol it destroys right after the save.
 7. Install the staged config atomically (`mv` in the destination directory —
    a reader never sees a partial file).
 8. Generate `saveconfig-boot.json` by stripping encrypted backstores listed in
@@ -1997,8 +2022,9 @@ the map's history.
    export after install), fall back to the manifest-count floor instead.
    `--force` overrides either fence; this keeps a half-restored LIO tree from
    destroying the recovery authority.
-7. For every pool in the node config: skip offline pools with a warning;
-   create the `<pool>/zfsutilities` dataset on first use; atomically install
+7. For every pool in the node config: skip offline pools with an informational
+   note (a deliberately offline pool is a standing condition); create the
+   `<pool>/zfsutilities` dataset on first use; atomically install
    `iscsi-state.json` and the `node.conf` copy (temp file + `mv` in the
    destination directory).
 8. Fail when no pool received the map.

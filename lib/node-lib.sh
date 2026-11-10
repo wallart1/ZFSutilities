@@ -275,32 +275,37 @@ converge_iqn_prefix() {
     return 0
 }
 
-# Warn once per IQN when the constructed target does not exist in the local
-# LIO tree. This catches IQN-prefix drift: node.conf's iqn_prefix differs
-# from the prefix of the live targets (e.g. after a reinstall in a different
-# month), so LUN mapping would target a fresh/empty target while Proxmox
-# still logs in to the old one. Best-effort and read-only: it never changes
-# pool_to_target's result, runs only on the storage host (the only host
-# with a LIO target tree), and stays silent when targetcli is absent or no
-# targets exist yet (fresh install before setup-iscsi-targets).
+# Warn once per IQN when IQN-prefix drift is PROVEN: the constructed target
+# is absent from the live LIO tree while a live target carries the same
+# short name under a different prefix (e.g. after a reinstall in a
+# different month), so LUN mapping would target a fresh/empty target while
+# Proxmox still logs in to the old one. A pool with no live target under
+# ANY prefix is not drift and stays silent: POOL_TARGET also names the
+# pools export-iscsi-state writes its state map to, so configured pools
+# routinely and deliberately run no iSCSI target. Best-effort and
+# read-only: it never changes pool_to_target's result, runs only on the
+# storage host (the only host with a LIO target tree), and stays silent
+# when targetcli is absent or no targets exist yet (fresh install before
+# setup-iscsi-targets).
 _warn_when_target_missing() {
-    local iqn="$1"
+    local iqn="$1" live_iqn drifted=""
     [[ "$(hostname -s)" == "$storage_host" ]] || return 0
     command -v targetcli >/dev/null 2>&1 || return 0
-    if [[ -z "$_lio_target_list" ]]; then
-        lio_refresh_target_list || true
-    fi
-    printf '%s\n' "$_lio_target_list" | grep -q "iqn\." || return 0
+    target_in_live_tree "$iqn" && return 0
+    # Drift signature: a live target shares the short name under another
+    # prefix. Any match counts — the constructed IQN is already absent.
+    while IFS= read -r live_iqn; do
+        [[ -n "$live_iqn" ]] && drifted="$live_iqn"
+    done < <(find_live_short_targets "${iqn##*:}")
+    [[ -n "$drifted" ]] || return 0
     if [[ -n "${_lio_warned_targets[$iqn]:-}" ]]; then
         return 0
     fi
-    if ! printf '%s\n' "$_lio_target_list" | grep -q "$iqn"; then
-        _lio_warned_targets["$iqn"]=1
-        log_msg "WARN: pool_to_target: target $iqn does not exist in the local LIO target tree"
-        log_msg "WARN:   If targets exist under a different IQN prefix, node.conf's IQN_PREFIX"
-        log_msg "WARN:   has drifted from the live targets — LUNs would map to the wrong target."
-        log_msg "WARN:   Check 'targetcli /iscsi ls' and the IQN_PREFIX in $NODE_CONF."
-    fi
+    _lio_warned_targets["$iqn"]=1
+    log_msg "WARN: pool_to_target: target $iqn does not exist in the local LIO target tree"
+    log_msg "WARN:   but ${drifted} does — node.conf's IQN_PREFIX has drifted"
+    log_msg "WARN:   from the live targets; LUNs would map to the wrong target."
+    log_msg "WARN:   Check 'targetcli /iscsi ls' and the IQN_PREFIX in $NODE_CONF."
     return 0
 }
 

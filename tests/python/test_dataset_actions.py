@@ -882,6 +882,7 @@ class TestUnmountDataset(unittest.TestCase):
             patch.object(da, "log_msg") as mock_log,
             patch.object(da, "subprocess") as mock_subprocess,
             patch.object(da, "zlm"),
+            patch.object(da, "mountpoint_unreachable", return_value=False),
         ):
             mock_subprocess.run.return_value = MagicMock(
                 returncode=1,
@@ -1089,6 +1090,7 @@ class TestUnmountDataset(unittest.TestCase):
             patch.object(da, "log_msg") as mock_log,
             patch.object(da, "subprocess") as mock_subprocess,
             patch.object(da, "zlm") as mock_zlm,
+            patch.object(da, "mountpoint_unreachable", return_value=True),
         ):
             mock_subprocess.run.side_effect = [
                 _result(1, orphan_error),  # orphaned child unmount fails
@@ -1168,6 +1170,7 @@ class TestUnmountDataset(unittest.TestCase):
             patch.object(da, "log_msg") as mock_log,
             patch.object(da, "subprocess") as mock_subprocess,
             patch.object(da, "zlm"),
+            patch.object(da, "mountpoint_unreachable", return_value=True),
         ):
             mock_subprocess.run.side_effect = [
                 _result(1, orphan_error),  # orphaned child unmount fails
@@ -1190,13 +1193,17 @@ class TestUnmountDataset(unittest.TestCase):
             fatal_orphan = [
                 c.args[0]
                 for c in mock_log.call_args_list
-                if c.args and "looks mounted" in c.args[0]
+                if c.args and "is unreachable" in c.args[0]
             ]
-            self.assertTrue(fatal_orphan, "expected an orphaned-mount message")
+            self.assertTrue(fatal_orphan, "expected an unreachable-mount message")
             self.assertTrue(
                 all(msg.startswith("FATAL:") for msg in fatal_orphan),
-                f"orphaned-mount message must be FATAL: {fatal_orphan}",
+                f"unreachable-mount message must be FATAL: {fatal_orphan}",
             )
+            # Actionable: names the path, carries ZFS's error, points at the repair.
+            self.assertIn("/tank/vm-100/sub1/deep", fatal_orphan[0])
+            self.assertIn(orphan_error, fatal_orphan[0])
+            self.assertIn("Repair Mount Order", fatal_orphan[0])
             self.assertFalse(
                 any("Unmounted tank/vm-100/sub1" in str(c) for c in mock_log.call_args_list)
             )
@@ -2930,11 +2937,16 @@ class TestVolumeLoopActions(unittest.TestCase):
         mock_log.assert_any_call("WARN: /dev/loop0p1 is not mounted; mount the partition first")
         mock_subprocess.Popen.assert_not_called()
 
-    def test_unmount_partition_umounts_mountpoint(self):
+    def test_unmount_partition_umounts_by_device(self):
         da = self._import_under_mock()
         app = self._make_app()
         repo = app.ctx.zfs_repository
-        repo.device_mountpoint.return_value = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
+        # Live resolutions: pre-busy check, helper round, verify (unmounted).
+        repo.device_mountpoint.side_effect = [
+            "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+            "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+            None,
+        ]
 
         with (
             patch.object(
@@ -2945,13 +2957,17 @@ class TestVolumeLoopActions(unittest.TestCase):
             patch.object(da, "get_busy_processes", return_value=[]),
             patch.object(da, "update_mounted_states") as mock_refresh,
             patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm") as mock_zlm,
             patch.object(da, "subprocess") as mock_subprocess,
         ):
             mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
             da.on_datasets_unmount(app)
 
+        mock_zlm.lock.assert_called_once_with(
+            "tank/vm-100-disk-0", "w", "loop-unmount /dev/loop0p1"
+        )
         mock_subprocess.run.assert_called_once_with(
-            ["sudo", "umount", "/tmp/zm/tank/vm-100-disk-0/loop0p1"],
+            ["sudo", "umount", "/dev/loop0p1"],
             capture_output=True,
             text=True,
             check=False,
@@ -2960,6 +2976,90 @@ class TestVolumeLoopActions(unittest.TestCase):
             "INFO: Unmounted /dev/loop0p1 from /tmp/zm/tank/vm-100-disk-0/loop0p1"
         )
         mock_refresh.assert_called_once_with(app)
+
+    def test_unmount_partition_umounts_each_layer_of_multi_mounted_device(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        # The device reports mounted through two unmount rounds, then clear.
+        repo.device_mountpoint.side_effect = [
+            "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+            "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+            "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+            None,
+        ]
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[self._part_item(mounted=True)],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg"),
+            patch.object(da, "zlm"),
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            da.on_datasets_unmount(app)
+
+        self.assertEqual(mock_subprocess.run.call_count, 2)
+        for run_args in mock_subprocess.run.call_args_list:
+            self.assertEqual(run_args.args[0], ["sudo", "umount", "/dev/loop0p1"])
+        mock_refresh.assert_called_once_with(app)
+
+    def test_unmount_partition_idempotent_when_not_mounted(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.device_mountpoint.return_value = None
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[self._part_item(mounted=True)],
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm"),
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            da.on_datasets_unmount(app)
+
+        mock_log.assert_any_call("VERB: /dev/loop0p1 is not mounted; nothing to unmount")
+        mock_subprocess.run.assert_not_called()
+        mock_refresh.assert_called_once_with(app)
+
+    def test_unmount_partition_refused_when_lock_held(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[self._part_item(mounted=True)],
+            ),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_zlm.lock.side_effect = RuntimeError(
+                "lock held by: zfsbackup tank/vm-100-disk-0 (pid 4242)"
+            )
+            da.on_datasets_unmount(app)
+
+        mock_log.assert_any_call(
+            "FATAL: cannot unmount /dev/loop0p1: "
+            "lock held by: zfsbackup tank/vm-100-disk-0 (pid 4242)"
+        )
+        repo.device_mountpoint.assert_not_called()
+        mock_subprocess.run.assert_not_called()
+        mock_refresh.assert_not_called()
 
     def test_unmount_partition_shows_busy_dialog(self):
         da = self._import_under_mock()
@@ -2976,6 +3076,7 @@ class TestVolumeLoopActions(unittest.TestCase):
             patch.object(da, "get_busy_processes", return_value=[(1234, "bash")]),
             patch.object(da, "update_mounted_states") as mock_refresh,
             patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm"),
             patch.object(da, "subprocess") as mock_subprocess,
         ):
             da.on_datasets_unmount(app)
@@ -2996,6 +3097,18 @@ class TestVolumeLoopActions(unittest.TestCase):
             LoopPartition("/dev/loop0p2", "", "", False),
         ]
         repo.loop_detach.return_value = True
+        # Per-device mount answers, in call order: busy scan, helper resolve,
+        # verify after the umount. p2 is not mounted.
+        mounts = {
+            "/dev/loop0p1": [
+                "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+                "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+                None,
+            ]
+        }
+        repo.device_mountpoint.side_effect = lambda dev: (
+            mounts[dev].pop(0) if dev in mounts else None
+        )
 
         with (
             patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
@@ -3004,13 +3117,17 @@ class TestVolumeLoopActions(unittest.TestCase):
             patch.object(da, "get_busy_processes", return_value=[]),
             patch.object(da, "update_mounted_states") as mock_refresh,
             patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm") as mock_zlm,
             patch.object(da, "subprocess") as mock_subprocess,
         ):
             mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
             da.on_datasets_unmount(app)
 
+        mock_zlm.lock.assert_called_once_with(
+            "tank/vm-100-disk-0", "w", "loop-unmount tank/vm-100-disk-0"
+        )
         mock_subprocess.run.assert_called_once_with(
-            ["sudo", "umount", "/tmp/zm/tank/vm-100-disk-0/loop0p1"],
+            ["sudo", "umount", "/dev/loop0p1"],
             capture_output=True,
             text=True,
             check=False,
@@ -3031,12 +3148,18 @@ class TestVolumeLoopActions(unittest.TestCase):
             LoopPartition("/dev/loop0p1", "ext4", "/tmp/zm/tank/vm-100-disk-0/loop0p1", True),
         ]
         repo.loop_detach.return_value = True
+        # Only the busy-scan resolution happens before the abort.
+        mounts = {"/dev/loop0p1": ["/tmp/zm/tank/vm-100-disk-0/loop0p1"]}
+        repo.device_mountpoint.side_effect = lambda dev: (
+            mounts[dev].pop(0) if dev in mounts else None
+        )
 
         with (
             patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
             patch.object(da, "get_busy_processes", return_value=[(1234, "vi")]),
             patch.object(da, "update_mounted_states") as mock_refresh,
             patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm"),
             patch.object(da, "subprocess") as mock_subprocess,
         ):
             da.on_datasets_unmount(app)
@@ -3057,12 +3180,23 @@ class TestVolumeLoopActions(unittest.TestCase):
             LoopPartition("/dev/loop0p1", "ext4", "/tmp/zm/tank/vm-100-disk-0/loop0p1", True),
         ]
         repo.loop_detach.return_value = True
+        # Busy scan and helper resolve; the failed umount never verifies.
+        mounts = {
+            "/dev/loop0p1": [
+                "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+                "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+            ]
+        }
+        repo.device_mountpoint.side_effect = lambda dev: (
+            mounts[dev].pop(0) if dev in mounts else None
+        )
 
         with (
             patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
             patch.object(da, "get_busy_processes", return_value=[]),
             patch.object(da, "update_mounted_states") as mock_refresh,
             patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm"),
             patch.object(da, "subprocess") as mock_subprocess,
         ):
             mock_subprocess.run.return_value = MagicMock(
@@ -3077,19 +3211,117 @@ class TestVolumeLoopActions(unittest.TestCase):
         )
         mock_refresh.assert_not_called()
 
-    def test_unmount_volume_without_loop_does_nothing(self):
+    def test_unmount_volume_refused_when_lock_held(self):
         da = self._import_under_mock()
         app = self._make_app()
-        app.ctx.zfs_repository.loop_find.return_value = None
+        repo = app.ctx.zfs_repository
 
         with (
             patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
             patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm") as mock_zlm,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_zlm.lock.side_effect = RuntimeError(
+                "lock held by: zfsbackup tank/vm-100-disk-0 (pid 4242)"
+            )
+            da.on_datasets_unmount(app)
+
+        mock_log.assert_any_call(
+            "FATAL: cannot unmount tank/vm-100-disk-0: "
+            "lock held by: zfsbackup tank/vm-100-disk-0 (pid 4242)"
+        )
+        repo.loop_find.assert_not_called()
+        mock_subprocess.run.assert_not_called()
+        mock_refresh.assert_not_called()
+
+    def test_unmount_volume_without_loop_is_idempotent_success(self):
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = None
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm"),
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            da.on_datasets_unmount(app)
+
+        mock_log.assert_any_call(
+            "VERB: tank/vm-100-disk-0 is not loop-attached; nothing to unmount"
+        )
+        repo.loop_partitions.assert_not_called()
+        mock_subprocess.run.assert_not_called()
+        mock_refresh.assert_called_once_with(app)
+
+    def test_unmount_volume_detach_failure_names_still_mounted_partition(self):
+        from zfs_repository import LoopPartition
+
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = "/dev/loop0"
+        repo.loop_partitions.return_value = [
+            LoopPartition("/dev/loop0p1", "ext4", "/tmp/zm/tank/vm-100-disk-0/loop0p1", True),
+        ]
+        repo.loop_detach.return_value = False
+        # Live resolutions: scan, helper round, verify (unmounted).
+        repo.device_mountpoint.side_effect = [
+            "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+            "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+            None,
+        ]
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm"),
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            da.on_datasets_unmount(app)
+
+        mock_log.assert_any_call(
+            "FATAL: Error detaching /dev/loop0 from tank/vm-100-disk-0: "
+            "still mounted: /dev/loop0p1 at /tmp/zm/tank/vm-100-disk-0/loop0p1. "
+            "Close what is using them and try again."
+        )
+        mock_refresh.assert_not_called()
+
+    def test_unmount_volume_detach_failure_hints_at_open_loop_device(self):
+        from zfs_repository import LoopPartition
+
+        da = self._import_under_mock()
+        app = self._make_app()
+        repo = app.ctx.zfs_repository
+        repo.loop_find.return_value = "/dev/loop0"
+        repo.loop_partitions.return_value = [
+            LoopPartition("/dev/loop0p1", "ext4", "", False),
+        ]
+        repo.loop_detach.return_value = False
+        repo.device_mountpoint.return_value = None
+
+        with (
+            patch.object(da, "get_tree_selection_items", return_value=[self._volume_item()]),
+            patch.object(da, "update_mounted_states") as mock_refresh,
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "zlm"),
             patch.object(da, "subprocess") as mock_subprocess,
         ):
             da.on_datasets_unmount(app)
 
         mock_subprocess.run.assert_not_called()
+        mock_log.assert_any_call(
+            "FATAL: Error detaching /dev/loop0 from tank/vm-100-disk-0: "
+            "no partition reports mounted, so a process is holding the loop "
+            "device itself open. Close it and try again."
+        )
         mock_refresh.assert_not_called()
 
 
@@ -3233,6 +3465,26 @@ class TestVolumeLoopHelpers(unittest.TestCase):
         mock_subprocess.run.assert_not_called()
         mock_log.assert_any_call("WARN: Cannot mount /dev/loop0p1: no filesystem detected")
 
+    def test_unmount_device_layers_fails_loudly_after_bounded_rounds(self):
+        """A device that keeps reporting mounted stops at the round bound."""
+        da = self._import_under_mock()
+        repo = self._make_app().ctx.zfs_repository
+        repo.device_mountpoint.return_value = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
+
+        with (
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stderr="")
+            result = da._unmount_device_layers("/dev/loop0p1", repo)
+
+        self.assertFalse(result)
+        self.assertEqual(mock_subprocess.run.call_count, da._MAX_LOOP_UMOUNT_ROUNDS)
+        mock_log.assert_any_call(
+            f"FATAL: /dev/loop0p1 still reports mounted after "
+            f"{da._MAX_LOOP_UMOUNT_ROUNDS} unmount rounds; not retrying further"
+        )
+
     def test_mount_partition_helper_returns_reason_when_mount_fails(self):
         da = self._import_under_mock()
         app = self._make_app()
@@ -3250,11 +3502,16 @@ class TestVolumeLoopHelpers(unittest.TestCase):
         self.assertEqual(result, "/dev/loop0p1: mount: unknown")
         mock_log.assert_any_call("WARN: Error mounting /dev/loop0p1: mount: unknown")
 
-    def test_unmount_partition_helper_umounts_resolved_mountpoint(self):
+    def test_unmount_partition_helper_umounts_by_device(self):
         da = self._import_under_mock()
         app = self._make_app()
         repo = app.ctx.zfs_repository
-        repo.device_mountpoint.return_value = "/tmp/zm/tank/vm-100-disk-0/loop0p1"
+        # Pre-busy resolution, helper resolve, verify after the umount.
+        repo.device_mountpoint.side_effect = [
+            "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+            "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+            None,
+        ]
 
         with (
             patch.object(da, "get_busy_processes", return_value=[]),
@@ -3266,7 +3523,7 @@ class TestVolumeLoopHelpers(unittest.TestCase):
 
         self.assertTrue(result)
         mock_subprocess.run.assert_called_once_with(
-            ["sudo", "umount", "/tmp/zm/tank/vm-100-disk-0/loop0p1"],
+            ["sudo", "umount", "/dev/loop0p1"],
             capture_output=True,
             text=True,
             check=False,
@@ -3316,16 +3573,20 @@ class TestVolumeLoopHelpers(unittest.TestCase):
             "umount: /tmp/zm/tank/vm-100-disk-0/loop0p1: not mounted"
         )
 
-    def test_unmount_partition_helper_returns_false_when_not_mounted(self):
+    def test_unmount_partition_helper_idempotent_when_not_mounted(self):
         da = self._import_under_mock()
         app = self._make_app()
         repo = app.ctx.zfs_repository
         repo.device_mountpoint.return_value = None
 
-        with patch.object(da, "subprocess") as mock_subprocess:
+        with (
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
             result = da._unmount_one_volume_partition(self._part_item(mounted=True), repo, app)
 
-        self.assertFalse(result)
+        self.assertTrue(result)
+        mock_log.assert_any_call("VERB: /dev/loop0p1 is not mounted; nothing to unmount")
         mock_subprocess.run.assert_not_called()
 
     def test_unmount_volume_helper_unmounts_partitions_then_detaches(self):
@@ -3340,6 +3601,18 @@ class TestVolumeLoopHelpers(unittest.TestCase):
             LoopPartition("/dev/loop0p2", "", "", False),
         ]
         repo.loop_detach.return_value = True
+        # Per-device mount answers, in call order: busy scan, helper resolve,
+        # verify after the umount. p2 is not mounted.
+        mounts = {
+            "/dev/loop0p1": [
+                "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+                "/tmp/zm/tank/vm-100-disk-0/loop0p1",
+                None,
+            ]
+        }
+        repo.device_mountpoint.side_effect = lambda dev: (
+            mounts[dev].pop(0) if dev in mounts else None
+        )
 
         with (
             patch.object(da, "find_tree_iter_by_full_name", return_value=MagicMock()),
@@ -3353,7 +3626,7 @@ class TestVolumeLoopHelpers(unittest.TestCase):
 
         self.assertTrue(result)
         mock_subprocess.run.assert_called_once_with(
-            ["sudo", "umount", "/tmp/zm/tank/vm-100-disk-0/loop0p1"],
+            ["sudo", "umount", "/dev/loop0p1"],
             capture_output=True,
             text=True,
             check=False,
@@ -3372,6 +3645,11 @@ class TestVolumeLoopHelpers(unittest.TestCase):
         repo.loop_partitions.return_value = [
             LoopPartition("/dev/loop0p1", "ext4", "/tmp/zm/tank/vm-100-disk-0/loop0p1", True),
         ]
+        # Only the busy-scan resolution happens before the abort.
+        mounts = {"/dev/loop0p1": ["/tmp/zm/tank/vm-100-disk-0/loop0p1"]}
+        repo.device_mountpoint.side_effect = lambda dev: (
+            mounts[dev].pop(0) if dev in mounts else None
+        )
 
         with (
             patch.object(da, "get_busy_processes", return_value=[(1234, "vi")]),
@@ -3385,17 +3663,24 @@ class TestVolumeLoopHelpers(unittest.TestCase):
         mock_subprocess.run.assert_not_called()
         repo.loop_detach.assert_not_called()
 
-    def test_unmount_volume_helper_returns_false_without_loop_device(self):
+    def test_unmount_volume_helper_idempotent_without_loop_device(self):
         da = self._import_under_mock()
         app = self._make_app()
         repo = app.ctx.zfs_repository
         repo.loop_find.return_value = None
 
-        with patch.object(da, "subprocess") as mock_subprocess:
+        with (
+            patch.object(da, "log_msg") as mock_log,
+            patch.object(da, "subprocess") as mock_subprocess,
+        ):
             result = da._unmount_one_volume(self._volume_item(), repo, app)
 
-        self.assertFalse(result)
+        self.assertTrue(result)
+        mock_log.assert_any_call(
+            "VERB: tank/vm-100-disk-0 is not loop-attached; nothing to unmount"
+        )
         mock_subprocess.run.assert_not_called()
+        repo.loop_partitions.assert_not_called()
         repo.loop_detach.assert_not_called()
 
 
@@ -3466,6 +3751,7 @@ class TestUnmountShadowedMounts(unittest.TestCase):
             patch.object(da, "log_msg"),
             patch.object(da, "subprocess"),
             patch.object(da, "zlm"),
+            patch.object(da, "mountpoint_unreachable", return_value=True),
         ):
             da.subprocess.run.side_effect = [
                 self._result(1, orphan_error),  # Rocky unmount fails ENOENT
@@ -3527,6 +3813,7 @@ class TestUnmountShadowedMounts(unittest.TestCase):
             patch.object(da, "log_msg"),
             patch.object(da, "subprocess"),
             patch.object(da, "zlm"),
+            patch.object(da, "mountpoint_unreachable", return_value=True),
         ):
             da.subprocess.run.side_effect = [
                 self._result(1, orphan_error),  # Rocky unmount fails ENOENT
@@ -3587,6 +3874,7 @@ class TestUnmountShadowedMounts(unittest.TestCase):
             patch.object(da, "log_msg"),
             patch.object(da, "subprocess"),
             patch.object(da, "zlm"),
+            patch.object(da, "mountpoint_unreachable", return_value=True),
         ):
             da.subprocess.run.side_effect = [
                 self._result(1, orphan_error),  # Rocky unmount fails ENOENT
@@ -3632,6 +3920,8 @@ class TestUnmountShadowedMounts(unittest.TestCase):
             patch.object(da, "log_msg"),
             patch.object(da, "subprocess"),
             patch.object(da, "zlm"),
+            patch.object(da, "mountpoint_unreachable", return_value=True),
+            patch.object(da, "mounts_stacked_on", return_value=[]),
         ):
             da.subprocess.run.side_effect = [
                 self._result(1, orphan_error),  # Rocky unmount fails ENOENT
@@ -3643,6 +3933,180 @@ class TestUnmountShadowedMounts(unittest.TestCase):
         fatal = [t for t in ctx.log_calls if "covered by tank" in t]
         self.assertTrue(fatal, f"expected a covering-ancestor FATAL: {ctx.log_calls}")
         self.assertTrue(all(t.startswith("FATAL:") for t in fatal))
+        self.assertIn("mounted at /tank", fatal[0])
+        self.assertIn("umount: /tank: target is busy", fatal[0])
+        self.assertIn("No mount or process holding /tank was found", fatal[0])
+        # The lift FATAL is the whole story: no generic follow-up FATAL.
+        self.assertEqual(len([t for t in ctx.log_calls if t.startswith("FATAL:")]), 1)
+
+    def test_lift_failure_names_what_holds_the_cover(self):
+        """The cover's own holders — mounts stacked on it, processes — are named."""
+        from zfs_repository import StackedMount
+
+        da = self._import_under_mock()
+        app = self._make_app()
+        ctx = self._Ctx()
+        stacked = [StackedMount(mountpoint="/tank/scratch", fstype="tmpfs", source="tmpfs")]
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/proxmox/Rocky",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            # selection busy gate, lift busy gate, then the post-failure probe
+            patch.object(da, "get_busy_processes", side_effect=[[], [], [("77", "rsync")]]),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+            patch.object(da, "mountpoint_unreachable", return_value=True),
+            patch.object(da, "mounts_stacked_on", return_value=stacked),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(1, "cannot unmount '/tank/proxmox/Rocky': unmount failed"),
+                self._result(1, "umount: /tank: target is busy"),
+            ]
+            da.on_datasets_unmount(app)
+            ctx.snapshot(da)
+        fatal = [t for t in ctx.log_calls if "covered by tank" in t]
+        self.assertTrue(fatal, ctx.log_calls)
+        self.assertIn("mounted on top of it: tmpfs at /tank/scratch (tmpfs)", fatal[0])
+        self.assertIn("in use by: rsync (PID 77)", fatal[0])
+
+    def test_unmount_lifts_cover_when_leftover_directory_masks_enoent(self):
+        """Production regression (2026-11-08, stewie): a leftover empty
+        directory of the same name inside the cover makes the by-name unmount
+        fail with "unmount failed" (EINVAL), not "no such pool or dataset".
+        The path test still sees the mount as hidden and lifts the cover."""
+        da = self._import_under_mock()
+        app = self._make_app()
+        ctx = self._Ctx()
+        masked = "cannot unmount '/tank/zfsutilities': unmount failed"
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/zfsutilities",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+            patch.object(da, "mountpoint_unreachable", return_value=True),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(1, masked),  # by-name unmount hits the leftover dir
+                self._result(0),  # lift: exact-layer umount of the cover
+                self._result(0),  # retry succeeds (path reaches the mount)
+                self._result(0),  # restore: remount the lifted cover
+            ]
+            da.on_datasets_unmount(app)
+            ctx.snapshot(da)
+        self.assertEqual(
+            ctx.run_calls,
+            [
+                ["sudo", "zfs", "unmount", "tank/zfsutilities"],
+                ["sudo", "umount", "/tank"],
+                ["sudo", "zfs", "unmount", "tank/zfsutilities"],
+                ["sudo", "zfs", "mount", "tank"],
+            ],
+        )
+        self.assertFalse(any(t.startswith("FATAL:") for t in ctx.log_calls), ctx.log_calls)
+
+    def test_unmount_reachable_failure_does_not_lift(self):
+        """A failure on a reachable mount is a plain error, never a lift."""
+        da = self._import_under_mock()
+        app = self._make_app()
+        ctx = self._Ctx()
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/zfsutilities",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+            patch.object(da, "mountpoint_unreachable", return_value=False),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(1, "cannot unmount '/tank/zfsutilities': unmount failed"),
+            ]
+            da.on_datasets_unmount(app)
+            ctx.snapshot(da)
+        self.assertEqual(ctx.run_calls, [["sudo", "zfs", "unmount", "tank/zfsutilities"]])
+        self.assertTrue(any(t.startswith("FATAL: Error unmounting") for t in ctx.log_calls))
+
+    def test_lift_with_only_non_path_covers_names_them(self):
+        """Every covering ancestor has a non-path mountpoint: say so, once."""
+        da = self._import_under_mock()
+        app = self._make_app()
+        ctx = self._Ctx()
+
+        def _prop(ds, prop):
+            if prop == "mountpoint":
+                return "legacy" if ds != "tank/proxmox/Rocky" else "/tank/proxmox/Rocky"
+            if prop == "mounted":
+                return "yes"
+            return "on"
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+
+        with (
+            patch.object(
+                da,
+                "get_tree_selection_items",
+                return_value=[
+                    {
+                        "type": "dataset",
+                        "name": "tank/proxmox/Rocky",
+                        "zfs_type": "filesystem",
+                        "mounted": True,
+                    }
+                ],
+            ),
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "update_mounted_states"),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+            patch.object(da, "mountpoint_unreachable", return_value=True),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(1, "cannot unmount '/tank/proxmox/Rocky': unmount failed"),
+            ]
+            da.on_datasets_unmount(app)
+            ctx.snapshot(da)
+        fatals = [t for t in ctx.log_calls if t.startswith("FATAL:")]
+        self.assertEqual(len(fatals), 1, ctx.log_calls)
+        self.assertIn("none of its covering ancestors (tank, tank/proxmox)", fatals[0])
 
     def test_unmount_lift_skips_unusable_mountpoint_candidates(self):
         """A lift candidate without a usable mountpoint is skipped, not run."""
@@ -3678,6 +4142,7 @@ class TestUnmountShadowedMounts(unittest.TestCase):
             patch.object(da, "log_msg"),
             patch.object(da, "subprocess"),
             patch.object(da, "zlm"),
+            patch.object(da, "mountpoint_unreachable", return_value=True),
         ):
             da.subprocess.run.side_effect = [
                 self._result(1, orphan_error),  # Rocky unmount fails ENOENT
@@ -3789,7 +4254,7 @@ class TestMountRepair(unittest.TestCase):
             patch.object(da, "log_msg"),
             patch.object(da, "subprocess"),
             patch.object(da, "zlm"),
-            patch("os.path.ismount", return_value=True),
+            patch.object(da, "mountpoint_unreachable", return_value=False),
         ):
             da.subprocess.run.side_effect = [
                 self._result(0),  # zfs set canmount=on tank
@@ -3855,7 +4320,9 @@ class TestMountRepair(unittest.TestCase):
             patch.object(da, "log_msg"),
             patch.object(da, "subprocess"),
             patch.object(da, "zlm"),
-            patch("os.path.ismount", return_value=True),
+            # Shadowed while the cover is in place; reachable once remounted.
+            patch.object(da, "_mount_hidden", return_value=True),
+            patch.object(da, "mountpoint_unreachable", return_value=False),
         ):
             da.subprocess.run.side_effect = [
                 self._result(1, covered),  # Rocky by-name unmount fails (shadowed)
@@ -3925,6 +4392,9 @@ class TestMountRepair(unittest.TestCase):
             patch.object(da, "log_msg"),
             patch.object(da, "subprocess"),
             patch.object(da, "zlm"),
+            # The busy target is reachable; the remounted set stays hidden.
+            patch.object(da, "_mount_hidden", return_value=False),
+            patch.object(da, "mountpoint_unreachable", return_value=True),
         ):
             da.subprocess.run.side_effect = [
                 self._result(0),  # zfs set canmount=on tank
@@ -3947,7 +4417,143 @@ class TestMountRepair(unittest.TestCase):
                 ["sudo", "zfs", "mount", "tank/a/b"],
             ],
         )
-        self.assertTrue(any("Mount-order repair incomplete" in t for t in log_calls))
+        incomplete = [t for t in log_calls if "Mount-order repair incomplete" in t]
+        self.assertTrue(incomplete, log_calls)
+        self.assertTrue(incomplete[0].startswith("FATAL:"))
+        self.assertIn("still unreachable (covered by a later mount): tank at /tank", incomplete[0])
+        self.assertIn("tank/a/b at /tank/a/b", incomplete[0])
+        self.assertIn("The Dashboard keeps warning", incomplete[0])
+        self.assertIn("Resolve the failure above", incomplete[0])
+        self.assertNotIn("may still be wrong", " ".join(log_calls))
+
+    def test_execute_lifts_cover_when_leftover_directory_masks_enoent(self):
+        """Production regression (2026-11-08, stewie): "unmount failed"
+        (a leftover directory under the cover) still triggers the lift."""
+        da = self._import_under_mock()
+        app = self._make_app()
+        plan = {
+            "rows": [{"name": "tank/zfsutilities", "mountpoint": "/tank/zfsutilities"}],
+            "unmount": ["tank/zfsutilities", "tank"],
+            "remount": ["tank", "tank/zfsutilities"],
+            "property_fixes": [],
+        }
+        masked = "cannot unmount '/tank/zfsutilities': unmount failed"
+        with (
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+            patch.object(da, "_mount_hidden", return_value=True),
+            patch.object(da, "mountpoint_unreachable", return_value=False),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(1, masked),  # by-name unmount hits the leftover dir
+                self._result(1, masked),  # retry after the (no-op) remount pass
+                self._result(0),  # exact-layer lift: umount /tank
+                self._result(0),  # target unmounts
+                self._result(0),  # remount tank
+                self._result(0),  # remount tank/zfsutilities
+            ]
+            ok = da.execute_mount_repair(app, plan)
+            run_calls = [c.args[0] for c in da.subprocess.run.call_args_list]
+        self.assertTrue(ok)
+        self.assertIn(["sudo", "umount", "/tank"], run_calls)
+        self.assertNotIn(["sudo", "zfs", "unmount", "tank"], run_calls)
+
+    def test_execute_aborted_but_clean_end_state_succeeds(self):
+        """A mid-repair failure whose parents-first remount fixed everything
+        is reported as success, not as a guess that order "may" be wrong."""
+        da = self._import_under_mock()
+        app = self._make_app()
+        plan = self._plan()
+        with (
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+            patch.object(da, "_mount_hidden", return_value=False),
+            patch.object(da, "mountpoint_unreachable", return_value=False),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(0),  # zfs set canmount=on tank
+                self._result(1, "cannot unmount 'tank/a/b': target is busy"),
+                self._result(0),  # remount phase
+                self._result(0),
+                self._result(0),
+            ]
+            ok = da.execute_mount_repair(app, plan)
+            log_calls = [c.args[0] for c in da.log_msg.call_args_list]
+        self.assertTrue(ok)
+        self.assertTrue(any(t.startswith("INFO: Mount order is correct now") for t in log_calls))
+        self.assertFalse(any("incomplete" in t for t in log_calls))
+
+    def test_execute_reports_unmounted_leftovers(self):
+        """Members left unmounted after the remount pass are listed."""
+        da = self._import_under_mock()
+        app = self._make_app()
+        plan = self._plan()
+
+        def _prop(ds, prop):
+            if prop == "mountpoint":
+                return "/" + ds
+            if prop == "mounted":
+                return "no" if ds == "tank/a" else "yes"
+            return "on"
+
+        app.ctx.zfs_repository.get_property.side_effect = _prop
+        with (
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+            patch.object(da, "mountpoint_unreachable", return_value=False),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(0),  # zfs set canmount=on tank
+                self._result(0),  # unmount deepest-first
+                self._result(0),
+                self._result(0),
+                self._result(0),  # remount tank
+                self._result(1, "cannot mount 'tank/a': I/O error"),
+                self._result(0),
+            ]
+            ok = da.execute_mount_repair(app, plan)
+            log_calls = [c.args[0] for c in da.log_msg.call_args_list]
+        self.assertFalse(ok)
+        incomplete = [t for t in log_calls if "Mount-order repair incomplete" in t]
+        self.assertTrue(incomplete, log_calls)
+        self.assertIn("not mounted: tank/a", incomplete[0])
+        self.assertIn("Datasets page", incomplete[0])
+
+    def test_execute_hidden_member_without_cover_names_reason(self):
+        """No mounted ancestor to lift: one specific FATAL, no bare repeat."""
+        da = self._import_under_mock()
+        app = self._make_app()
+        plan = {
+            "rows": [{"name": "tank", "mountpoint": "/tank"}],
+            "unmount": ["tank"],
+            "remount": ["tank"],
+            "property_fixes": [],
+        }
+        with (
+            patch.object(da, "get_busy_processes", return_value=[]),
+            patch.object(da, "log_msg"),
+            patch.object(da, "subprocess"),
+            patch.object(da, "zlm"),
+            patch.object(da, "_mount_hidden", return_value=True),
+            patch.object(da, "mountpoint_unreachable", return_value=False),
+        ):
+            da.subprocess.run.side_effect = [
+                self._result(1, "cannot unmount '/tank': unmount failed"),
+                self._result(1, "cannot unmount '/tank': unmount failed"),
+                self._result(0),  # remount phase
+            ]
+            da.execute_mount_repair(app, plan)
+            log_calls = [c.args[0] for c in da.log_msg.call_args_list]
+        could_not = [t for t in log_calls if "could not unmount tank" in t]
+        self.assertEqual(len(could_not), 1, log_calls)
+        self.assertIn("no mounted ancestor covers it", could_not[0])
+        self.assertIn("unmount failed", could_not[0])
 
     def test_run_mount_repair_gates_on_approval(self):
         da = self._import_under_mock()

@@ -110,18 +110,24 @@ proxmoxconfig="${pve_conf_dir}/${vmid}.conf"
 # =====================================================================
 
 # Collect candidate zvols named vm-<vmid>-disk-<digits> across all pools.
-# Prints one zvol path per line. In two-node mode the scan runs on the
-# storage host, where the zvols actually live.
+# Prints one zvol path per line. Only the exact
+# <pool>/proxmox/vm-<vmid>-disk-<n> shape counts (the discover_zvols law in
+# iscsi-lib.sh): deeper nesting is a replicated backup copy on another pool
+# — the backup system's property, never a candidate for this VM's removal.
+# In two-node mode the scan runs on the storage host, where the zvols
+# actually live.
 collect_candidate_zvols() {
     if is_single_node; then
         # || true: "no candidate zvols" is an empty answer (the caller
-        # checks for it), not a failure — grep finds nothing under pipefail.
+        # checks for it), not a failure under pipefail.
         zfs list -H -t volume -o name 2>/dev/null \
-            | grep -F "/proxmox/vm-${vmid}-disk-" \
             | while IFS= read -r zvol; do
-                disk_suffix="${zvol##*disk-}"
-                [[ "$disk_suffix" =~ ^[0-9]+$ ]] || continue
-                [[ "$zvol" == *"/proxmox/vm-${vmid}-disk-${disk_suffix}" ]] || continue
+                zvol_parent="${zvol%/*}"
+                zvol_base="${zvol##*/}"
+                [[ "$zvol_parent" == */proxmox && "$zvol_parent" != */*/* ]] || continue
+                disk_suffix="${zvol_base#vm-${vmid}-disk-}"
+                [[ "$zvol_base" == "vm-${vmid}-disk-${disk_suffix}" \
+                    && "$disk_suffix" =~ ^[0-9]+$ ]] || continue
                 echo "$zvol"
             done | sort \
             || true
@@ -133,13 +139,17 @@ bashinit
 
 set -euo pipefail
 vmid="$1"
-# || true as above: no candidates is an empty answer, not a failure.
+# || true as above: no candidates is an empty answer, not a failure. The
+# same exact-shape test as the single-node branch — deeper nesting is a
+# replicated backup copy, never a candidate.
 zfs list -H -t volume -o name 2>/dev/null \
-    | grep -F "/proxmox/vm-${vmid}-disk-" \
     | while IFS= read -r zvol; do
-        disk_suffix="${zvol##*disk-}"
-        [[ "$disk_suffix" =~ ^[0-9]+$ ]] || continue
-        [[ "$zvol" == *"/proxmox/vm-${vmid}-disk-${disk_suffix}" ]] || continue
+        zvol_parent="${zvol%/*}"
+        zvol_base="${zvol##*/}"
+        [[ "$zvol_parent" == */proxmox && "$zvol_parent" != */*/* ]] || continue
+        disk_suffix="${zvol_base#vm-${vmid}-disk-}"
+        [[ "$zvol_base" == "vm-${vmid}-disk-${disk_suffix}" \
+            && "$disk_suffix" =~ ^[0-9]+$ ]] || continue
         echo "$zvol"
     done | sort \
     || true
@@ -152,6 +162,7 @@ SSHEOF
 parse_single_node_refs_from_config() {
     local config="$1" owner_vmid="$2"
     local line key rest storage disk_part disk_num zvol
+    local zvol_parent zvol_base
 
     [[ -f "$config" ]] || return 0
     while IFS= read -r line; do
@@ -168,9 +179,15 @@ parse_single_node_refs_from_config() {
         disk_num="${disk_part##*vm-"${vmid}"-disk-}"
         disk_num="${disk_num%%[!0-9]*}"
         [[ "$disk_part" == "vm-${vmid}-disk-${disk_num}"* ]] || continue
+        # Resolve to the exact <pool>/proxmox/vm-<vmid>-disk-<n> shape only
+        # (the discover_zvols law): a replicated backup copy on another pool
+        # shares the name but is never this config's disk.
         zfs list -H -t volume -o name 2>/dev/null \
             | while IFS= read -r zvol; do
-                if [[ "$zvol" == *"/proxmox/vm-${vmid}-disk-${disk_num}" ]]; then
+                zvol_parent="${zvol%/*}"
+                zvol_base="${zvol##*/}"
+                [[ "$zvol_parent" == */proxmox && "$zvol_parent" != */*/* ]] || continue
+                if [[ "$zvol_base" == "vm-${vmid}-disk-${disk_num}" ]]; then
                     printf '%s\t%s\n' "$zvol" "$owner_vmid"
                     break
                 fi

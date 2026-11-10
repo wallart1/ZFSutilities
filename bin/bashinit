@@ -107,14 +107,74 @@ function __log_msg_terminal_p {
     [[ -t 2 && "${TERM}" != "dumb" ]]
 }
 
+# Map a message-level token ($1) to its priority rank (DEBUG < VERB < INFO <
+# WARN < FATAL, the MSG_LEVELS order logging_config.py defines) and store
+# it in the caller-visible variable named by $2 (declare it local at the
+# call site; printf -v assigns through bash's dynamic scoping, so the
+# lookup stays fork-free on the log_msg hot path). Stores -1 for anything
+# else, including the empty string.
+function __log_level_rank {
+    case "$1" in
+        DEBUG) printf -v "$2" '%s' 0 ;;
+        VERB)  printf -v "$2" '%s' 1 ;;
+        INFO)  printf -v "$2" '%s' 2 ;;
+        WARN)  printf -v "$2" '%s' 3 ;;
+        FATAL) printf -v "$2" '%s' 4 ;;
+        *)     printf -v "$2" '%s' -1 ;;
+    esac
+}
+
+# Return true when the ZFSUTILITIES_MSG_LEVEL stderr gate suppresses the
+# message ($1 = the full message text). Driven flows (e.g. archive-vm's
+# child scripts) set the env so only messages at or above the gate reach
+# the terminal; the session log always keeps every message. An unset or
+# invalid gate never gates, and a message without a recognized LEVEL:
+# prefix is never gated either (the implied-NONE law the GUI viewers
+# apply — unlabelled output is always displayed).
+function __log_msg_gated_p {
+    [[ -n "${ZFSUTILITIES_MSG_LEVEL:-}" ]] || return 1
+    local gate_rank msg_rank
+    __log_level_rank "${ZFSUTILITIES_MSG_LEVEL}" gate_rank
+    [[ "$gate_rank" -ge 0 ]] || return 1
+    __log_level_rank "${1%%:*}" msg_rank
+    [[ "$msg_rank" -ge 0 ]] || return 1
+    [[ "$msg_rank" -lt "$gate_rank" ]]
+}
+
+# Run a command with the stderr message-level gate set to $1 (see
+# __log_msg_gated_p), restoring the caller's gate afterwards. Runs in the
+# current shell — no subshell — so shell state the command changes and the
+# EXIT traps it registers stay with the caller. Returns the command's exit
+# status. Like any command run under `if`/`||`, the callee runs with
+# errexit ignored.
+# Usage: with_msg_level WARN some_function arg...
+function with_msg_level {
+    local level="$1"
+    shift
+    local had_level="${ZFSUTILITIES_MSG_LEVEL+set}"
+    local prev_level="${ZFSUTILITIES_MSG_LEVEL:-}"
+    local rc=0
+    export ZFSUTILITIES_MSG_LEVEL="$level"
+    "$@" || rc=$?
+    if [[ -n "$had_level" ]]; then
+        export ZFSUTILITIES_MSG_LEVEL="$prev_level"
+    else
+        unset ZFSUTILITIES_MSG_LEVEL
+    fi
+    return "$rc"
+}
+
 # Logging function with automatic prefix.
 # Usage:
 # log_msg "This is a message"
 # log_msg "DEBUG: verbose diagnostic"
 # log_msg --long-prefix "DEBUG: verbose diagnostic"
-# All messages are always emitted to stderr and appended to the session log
-# file when one is configured and owned by this process. Message-level
-# filtering is performed by the GUI log viewers, not by this function.
+# All messages are appended to the session log file when one is configured
+# and owned by this process, and emitted to stderr unless the
+# ZFSUTILITIES_MSG_LEVEL gate suppresses them (see __log_msg_gated_p; the
+# gate is unset by default, so every message is emitted). Viewing-time
+# message-level filtering is performed by the GUI log viewers, not by this
+# function.
 #
 # By default, when stderr is a terminal the message is emitted without the
 # file:line prefix for readability. Pass --long-prefix as the first argument
@@ -151,16 +211,19 @@ function log_msg {
 
     local full="${prefix}${prefix:+ }$*"
 
-    # Colorize stderr output when connected to a terminal.
-    if __log_msg_terminal_p; then
-        local colored="${full}"
-        case "$*" in
-            WARN:*) colored="\033[38;5;208m${full}\033[0m" ;;
-            FATAL:*) colored="\033[1;31m${full}\033[0m" ;;
-        esac
-        echo -e "${colored}" >&2
-    else
-        echo -e "${full}" >&2
+    # Emit to stderr unless the message-level gate suppresses the message;
+    # colorize the output when connected to a terminal.
+    if ! __log_msg_gated_p "$*"; then
+        if __log_msg_terminal_p; then
+            local colored="${full}"
+            case "$*" in
+                WARN:*) colored="\033[38;5;208m${full}\033[0m" ;;
+                FATAL:*) colored="\033[1;31m${full}\033[0m" ;;
+            esac
+            echo -e "${colored}" >&2
+        else
+            echo -e "${full}" >&2
+        fi
     fi
 
     # Append to session log file if one is configured and we own it.

@@ -94,6 +94,30 @@ export ZFSUTILITIES_LOG_FILE="/var/log/zfsutilities/sessions/manual.log"
 ./zfs-send-receive
 ```
 
+### Terminal message-level gate
+
+`log_msg` writes every message to the terminal by default. A script that
+drives other scripts can set `ZFSUTILITIES_MSG_LEVEL` so its children show
+only messages at or above one level (`DEBUG`, `VERB`, `INFO`, `WARN`,
+`FATAL`). The gate has three properties:
+
+- It filters terminal (stderr) output only. The session log and the GUI log
+  sink still receive every message.
+- A message without a `LEVEL:` prefix always passes, matching the log viewers.
+- An unset or unrecognized value gates nothing.
+
+Bash and Python `log_msg` apply the same rule. In bash,
+`with_msg_level <LEVEL> <command...>` scopes the gate to one call and restores
+the caller's value afterward. The helper runs the command in the current
+shell, so shell state and exit traps stay with the caller.
+
+`archive-vm` sets the gate to `WARN` for the transfer engine and for
+`remove-vm-disk --from-archive`. An archive run therefore narrates its own
+steps, and its child scripts speak only when something is wrong. A message
+that must survive a driven gate lifts the gate for one call
+(`ZFSUTILITIES_MSG_LEVEL='' log_msg ...`); the engine does this for the
+`Enclosure rate cap applied` notice.
+
 ### Session log size cap
 
 To prevent a runaway subprocess from filling disk, the Python runners enforce a

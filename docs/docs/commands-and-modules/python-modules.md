@@ -330,6 +330,8 @@ and tests easy to mock.
 | `is_dataset_encrypted(path)`             | Return `True` if *path* resides on an encrypted ZFS dataset                                                                                            |
 | `validate_dest_mount_chain(dest)`        | Validate that *dest* is reachable through its ZFS mount chain: every covering dataset `mounted=yes` and its path a real mountpoint; refuses unmounted, shadowed, and unverifiable destinations |
 | `find_unreachable_mounts()`              | Mounted filesystems whose mountpoint path is unreachable (shadowed or orphaned), cause-agnostic; `[]` when mount state cannot be queried                |
+| `mountpoint_unreachable(mountpoint)`     | `True` when the path is missing or not a real mountpoint — the shadowed/orphaned test shared by the detector, the mount-chain check, Unmount, and the repair |
+| `mounts_stacked_on(mountpoint)`          | `StackedMount` rows (mountpoint, fstype, source) attached on top of the topmost mount at *mountpoint*, read from `/proc/self/mountinfo` — what keeps a cover from detaching; `None` when the table cannot be read |
 | `mount_order_property_fixes(rows)`       | `canmount=on` corrections for `noauto` ancestors of erroneous mounts, so boot mounts parents before children                                            |
 | `zvol_device_path(dataset)`              | Return the `/dev/zvol/…` block-device path for a ZFS volume                                                                                            |
 | `get_property(dataset, prop)`            | Value of a single ZFS property                                                                                                                         |

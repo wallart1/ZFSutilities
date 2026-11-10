@@ -340,7 +340,11 @@ state_dataset_mountpoint() {
 
     mnt=$(zfs list -H -o mountpoint "$ds" 2>/dev/null || true)
     if [[ -z "$mnt" || "$mnt" == "-" || ! -d "$mnt" ]]; then
-        log_msg "WARN: Dataset ${ds} has no usable mountpoint (${mnt:-none}) —" \
+        # Not an alarm: a configured pool whose state dataset is currently
+        # unmounted is a standing condition (backup pools spend most of
+        # their time this way); the map still reaches every pool that can
+        # take it.
+        log_msg "INFO: Dataset ${ds} has no usable mountpoint (${mnt:-none}) —" \
             "pool ${pool} skipped"
         return 1
     fi
@@ -358,7 +362,10 @@ write_state_to_pools() {
     while IFS= read -r pool; do
         [[ -z "$pool" ]] && continue
         if ! grep -qxF -- "$pool" <<< "$online"; then
-            log_msg "WARN: Pool ${pool} is offline — state map not written there"
+            # Not an alarm: a configured pool that is deliberately offline
+            # (rotation/backup pool) is a standing condition; the map is
+            # still written to every online pool.
+            log_msg "INFO: Pool ${pool} is offline — state map not written there"
             continue
         fi
         mnt=$(state_dataset_mountpoint "$pool") || continue

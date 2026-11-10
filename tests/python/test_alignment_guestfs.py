@@ -533,15 +533,48 @@ class TestProbeVolumes(unittest.TestCase):
         # The reason strings stay short; the WARN line is the only place
         # the raw PVE stderr survives, so a mislabel can be re-diagnosed.
         prober, _runner = self._prober(
-            [_ok(returncode=255, stdout="", stderr="No QEMU guest agent configured\ntrace")]
+            [_ok(returncode=255, stdout="", stderr="ssh: connect to host refused\ntrace")]
         )
         with mock.patch.object(agfs, "log_msg") as logged:
             prober.probe_volumes([self._volume()])
         logged.assert_called_once()
         message = logged.call_args.args[0]
-        for part in ("cmd", "201", "rc=255", "No QEMU guest agent configured"):
+        for part in ("WARN:", "cmd", "201", "rc=255", "ssh: connect to host refused"):
             self.assertIn(part, message)
         self.assertNotIn("trace", message)  # first line only
+
+    def test_vm_state_failures_are_not_logged(self):
+        # A stopped VM, an unconfigured agent, or an agent not started is
+        # the VM's own state, not a fault: the per-volume reason carries
+        # it and the log stays silent.
+        cases = (
+            ("VM 201 is not running", "VM not running"),
+            ("No QEMU guest agent configured", "guest agent not configured in VM options"),
+            ("QEMU guest agent is not running", "guest agent not running"),
+        )
+        for stderr, reason in cases:
+            with self.subTest(stderr=stderr):
+                self.assertIn(reason, agfs.VM_STATE_REASONS)
+                prober, _runner = self._prober([_ok(returncode=255, stdout="", stderr=stderr)])
+                with mock.patch.object(agfs, "log_msg") as logged:
+                    results = prober.probe_volumes([self._volume()])
+                self.assertEqual(results["vm-201-disk-0"].reason, reason)
+                logged.assert_not_called()
+
+    def test_exec_agent_error_is_logged(self):
+        # An exec-stage failure on a reachable agent is a real fault.
+        prober, _runner = self._prober(
+            [
+                _ok(),
+                _ok(returncode=255, stdout="", stderr="Agent error: can't execute command (lsblk)"),
+            ]
+        )
+        with mock.patch.object(agfs, "log_msg") as logged:
+            prober.probe_volumes([self._volume()])
+        logged.assert_called_once()
+        message = logged.call_args.args[0]
+        for part in ("WARN:", "exec", "201", "Agent error"):
+            self.assertIn(part, message)
 
     def test_unparseable_exec_output_logs_raw_stdout(self):
         # rc was 0, so the raw-stderr WARN never fires; the shape WARN is

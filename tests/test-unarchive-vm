@@ -116,6 +116,14 @@ run_unarchive() {
     shift 2
     local vmid="$1"
     shift
+    # --list in the vmid position switches the harness to listing mode: the
+    # mock staging below still keys on _mock_orig_vmid, but the script is
+    # invoked with only --list (plus any extra args, e.g. a base argument).
+    local list_mode=0
+    if [[ "$vmid" == "--list" ]]; then
+        list_mode=1
+        vmid="${_mock_orig_vmid}"
+    fi
     local stdin_input="${_mock_read_response:-}"
     local capture_dir="$_mock_zfs_state_dir/capture"
     mkdir -p "$capture_dir"
@@ -153,21 +161,46 @@ run_unarchive() {
         export JSON_CONFIG="$_mock_zfs_state_dir/zfsutilities.json"
         # Empty JSON config per run: the state dir is shared across tests,
         # and a rate limit saved by an earlier test must not leak in.
-        printf '{}\n' > "$JSON_CONFIG"
+        # Listing mode seeds archive_path so the no-argument --list form
+        # resolves the staged base as the saved default.
+        if [[ "$list_mode" == "1" ]]; then
+            printf '{"archive_path": "%s"}\n' "$archive_base" > "$JSON_CONFIG"
+        else
+            printf '{}\n' > "$JSON_CONFIG"
+        fi
         export _capture_dir="$capture_dir"
         export _mock_hash_dst="${_mock_hash_dst:-}"
         export _mock_sha_fail="${_mock_sha_fail:-}"
 
-        # Mock zfs state.
+        # Mock zfs state. _mock_empty_archive stages the base dataset with
+        # no archived zvols (the empty-listing shape).
         local arc_dataset="${archive_base}/threeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0"
-        _mock_zfs_fs_list="${archive_base}
-${arc_dataset}"
+        _mock_zfs_fs_list="${archive_base}"
         _mock_zfs_datasets["${archive_base}"]=1
         _mock_zfs_props["${archive_base}:mountpoint"]="${archive_base}"
-        _mock_zfs_props["threeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0:volblocksize"]="8K"
-        _mock_zfs_props["${arc_dataset}:volsize"]="10G"
-        _mock_zfs_props["${arc_dataset}:snapdev"]="hidden"
-        _mock_zfs_snap_lists["${arc_dataset}"]="${arc_dataset}@snap1"
+        if [[ "${_mock_empty_archive:-}" != "1" ]]; then
+            _mock_zfs_fs_list="${_mock_zfs_fs_list}
+${arc_dataset}"
+            _mock_zfs_props["threeamigos/proxmox/vm-${_mock_orig_vmid}-disk-0:volblocksize"]="8K"
+            _mock_zfs_props["${arc_dataset}:volsize"]="10G"
+            _mock_zfs_props["${arc_dataset}:snapdev"]="hidden"
+            _mock_zfs_snap_lists["${arc_dataset}"]="${arc_dataset}@snap1"
+        fi
+
+        # Extra archived zvols for multi-VM listing tests: newline-separated
+        # "dataset|volsize" rows (volsize "-" registers the dataset only).
+        if [[ -n "${_mock_extra_archived_zvols:-}" ]]; then
+            local _row _ds _vs
+            while IFS= read -r _row; do
+                [[ -n "$_row" ]] || continue
+                _ds="${_row%%|*}"
+                _vs="${_row#*|}"
+                _mock_zfs_datasets["$_ds"]=1
+                _mock_zfs_fs_list="${_mock_zfs_fs_list}"$'\n'"$_ds"
+                [[ -n "$_vs" && "$_vs" != "-" ]] \
+                    && _mock_zfs_props["${_ds}:volsize"]="$_vs"
+            done <<< "$_mock_extra_archived_zvols"
+        fi
 
         # Record engine zfs/cp/hash activity; creations register datasets
         # and their creation properties, like real zfs.
@@ -477,7 +510,11 @@ ${_arc_ds3}"
             touch "${pve_dir}/${_mock_new_vmid}.conf"
         fi
 
-        set -- "$vmid" "$archive_base" "$@"
+        if [[ "$list_mode" == "1" ]]; then
+            set -- --list "$@"
+        else
+            set -- "$vmid" "$archive_base" "$@"
+        fi
         source "$mydir/bin/unarchive-vm"
     ) <<< "$stdin_input" 2>&1
     local rc=$?
@@ -501,7 +538,8 @@ reset_unretire_mocks() {
         _mock_new_config_present _mock_read_response _mock_hash_dst \
         _mock_sha_fail \
         _mock_dest_zvol_present _mock_dest_zvol_marked _mock_two_node \
-        _mock_iqn_prefix _mock_live_targets
+        _mock_iqn_prefix _mock_live_targets \
+        _mock_extra_archived_zvols _mock_empty_archive
     rm -f "${_mock_zfs_state_dir}"/node.conf.bak-* 2>/dev/null || true
 }
 
@@ -1688,6 +1726,257 @@ y"
 }
 
 # ------------------------------------------------------------------
+# Listing (--list)
+# ------------------------------------------------------------------
+
+test_list_shows_archived_vms() {
+    reset_unretire_mocks
+    test_start "--list shows every archived VM with name, disks, and sizes"
+
+    _mock_orig_vmid="904"
+    local pve_dir="$_mock_zfs_state_dir/pve_list"
+    local archive="$_mock_zfs_state_dir/archive_list"
+    mkdir -p "$pve_dir"
+    # Two archived VMs: 904 (staged by the harness defaults) and 1005 on
+    # the same pool, staged as files here and as a dataset via the knob.
+    setup_archive "$archive" "904" "$pve_dir"
+    setup_archive "$archive" "1005" "$pve_dir"
+    sed -i 's/^name: test-vm$/name: second-vm/' "${archive}${pve_dir}/1005.conf"
+    _mock_extra_archived_zvols="${archive}/threeamigos/proxmox/vm-1005-disk-0|4G"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" --list)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"=== Archived VMs under ${archive} ==="* ]]; then
+        test_fail "Listing header missing; output:\n$out"
+        return
+    fi
+    local vm904_line="VM 904 — test-vm — 1 disk, 10G total"
+    local vm1005_line="VM 1005 — second-vm — 1 disk, 4G total"
+    if [[ "$out" != *"$vm904_line"* || "$out" != *"$vm1005_line"* ]]; then
+        test_fail "VM summary lines missing; want '${vm904_line}' and"
+        test_fail "'${vm1005_line}'; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"threeamigos/proxmox/vm-904-disk-0  10G"* ]] \
+        || [[ "$out" != *"threeamigos/proxmox/vm-1005-disk-0  4G"* ]]; then
+        test_fail "Disk lines missing; output:\n$out"
+        return
+    fi
+    # Numeric vmid order: 904 must precede 1005 (lexical order flips them).
+    local line904 line1005
+    line904=$(printf '%s\n' "$out" | grep -nF "VM 904 — test-vm" \
+        | head -1 | cut -d: -f1)
+    line1005=$(printf '%s\n' "$out" | grep -nF "VM 1005 — second-vm" \
+        | head -1 | cut -d: -f1)
+    if [[ -z "$line904" || -z "$line1005" || "$line904" -ge "$line1005" ]]; then
+        test_fail "VM order not numeric (904 must precede 1005); output:\n$out"
+        return
+    fi
+    # Listing is read-only: no rate prompt, no restore actions.
+    if [[ "$out" == *"Transfer rate limit"* ]]; then
+        test_fail "Listing prompted for a rate; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"CREATE:"* || "$out" == *"DD:"* || "$out" == *"RECEIVE:"* ]]; then
+        test_fail "Listing performed restore actions; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_list_reports_restored_state() {
+    reset_unretire_mocks
+    test_start "--list reports the RESTORED_AS completion state"
+
+    _mock_orig_vmid="904"
+    local pve_dir="$_mock_zfs_state_dir/pve_listdone"
+    local archive="$_mock_zfs_state_dir/archive_listdone"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+    echo "RESTORED_AS=vm-910-disk-0" \
+        >> "$archive/threeamigos/proxmox/vm-904-disk-0.disk_info"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" --list)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    local want="VM 904 — test-vm — 1 disk, 10G total — restored as: 910"
+    if [[ "$out" != *"$want"* ]]; then
+        test_fail "Restored-as state missing; want '${want}'; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_list_flags_missing_sidecars() {
+    reset_unretire_mocks
+    test_start "--list flags disks without sidecars as a pre-sidecar archive"
+
+    _mock_orig_vmid="904"
+    local pve_dir="$_mock_zfs_state_dir/pve_listnoside"
+    local archive="$_mock_zfs_state_dir/archive_listnoside"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+    rm -f "$archive/threeamigos/proxmox/vm-904-disk-0.disk_info"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" --list)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"vm-904-disk-0  10G  [no sidecar]"* ]]; then
+        test_fail "Per-disk no-sidecar note missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"pre-sidecar archive (manual restore)"* ]]; then
+        test_fail "Pre-sidecar VM note missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_list_empty_archive() {
+    reset_unretire_mocks
+    test_start "--list on an empty archive reports no VMs (rc 0, base argument form)"
+
+    _mock_orig_vmid="904"
+    _mock_empty_archive="1"
+    local pve_dir="$_mock_zfs_state_dir/pve_listempty"
+    local archive="$_mock_zfs_state_dir/archive_listempty"
+    mkdir -p "$pve_dir"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" --list "$archive")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"No archived VMs under ${archive}."* ]]; then
+        test_fail "Empty-archive message missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_list_two_node_runs_via_storage() {
+    reset_unretire_mocks
+    test_start "--list (two-node) lists through on_storage with both pools' disks"
+
+    _mock_orig_vmid="904"
+    _mock_two_node=1
+    local pve_dir="$_mock_zfs_state_dir/pve_list2n"
+    local archive="$_mock_zfs_state_dir/archive_list2n"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" --list)
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if printf '%s\n' "$out" | grep -q "FATAL"; then
+        test_fail "FATAL in output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"VM 904 — test-vm — 2 disks, 360G total"* ]]; then
+        test_fail "Two-disk summary missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"threeamigos/proxmox/vm-904-disk-0  10G"* ]] \
+        || [[ "$out" != *"NVME1/proxmox/vm-904-disk-3  350G"* ]]; then
+        test_fail "Per-disk lines missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_list_rejects_incompatible_args() {
+    reset_unretire_mocks
+    test_start "--list rejects --new-vmid and extra positional arguments"
+
+    _mock_orig_vmid="904"
+    local pve_dir="$_mock_zfs_state_dir/pve_listusage"
+    local archive="$_mock_zfs_state_dir/archive_listusage"
+    mkdir -p "$pve_dir"
+    setup_archive "$archive" "904" "$pve_dir"
+
+    local out rc
+    out=$(run_unarchive "$pve_dir" "$archive" --list --new-vmid 910)
+    rc=$?
+    assert_rc 1 "$rc"
+
+    out=$(run_unarchive "$pve_dir" "$archive" --list a b)
+    rc=$?
+    assert_rc 1 "$rc"
+}
+
+test_archive_size_helpers() {
+    test_start "archive_size_bytes / archive_size_human parse and humanize"
+
+    # The engine is a sourced library of function definitions only.
+    # shellcheck source=lib/archive-engine.sh
+    source "$mydir/lib/archive-engine.sh"
+
+    # <zfs size value>|<expected bytes>; -1 marks an unparseable value.
+    # "1.08G"/"2.05T" pin the base-10 decimal law (zfs prints leading
+    # zeros; bare bash arithmetic would read "08" as invalid octal);
+    # "9E"/"10E" pin the 64-bit wraparound guard.
+    local -a byte_cases=(
+        "10G|10737418240" "1.50M|1572864" "512K|524288" "1024|1024"
+        "3t|3298534883328" "1.5g|1610612736" "2MiB|2097152" "7b|7"
+        "1.08G|1159641169" "2.05T|2253998836940" "08G|8589934592"
+        "|-1" "abc|-1" "10X|-1" "1.2.3G|-1" "-|-1" "9E|-1" "10E|-1"
+    )
+    # <bytes>|<expected zfs-style size> ("2T" pins tenths-truncation).
+    local -a human_cases=(
+        "10737418240|10G" "1572864|1.5M" "524288|512K" "512|512B"
+        "1536|1.5K" "3298534883328|3T" "0|0B" "2223697212621|2T"
+    )
+    local case_row got failures=""
+    for case_row in "${byte_cases[@]}"; do
+        got=$(archive_size_bytes "${case_row%%|*}") || true
+        [[ "$got" == "${case_row##*|}" ]] \
+            || failures+="bytes('${case_row%%|*}') = ${got}," \
+                " want ${case_row##*|}\n"
+    done
+    for case_row in "${human_cases[@]}"; do
+        got=$(archive_size_human "${case_row%%|*}") || true
+        [[ "$got" == "${case_row##*|}" ]] \
+            || failures+="human(${case_row%%|*}) = ${got}," \
+                " want ${case_row##*|}\n"
+    done
+
+    if [[ -n "$failures" ]]; then
+        test_fail "size helper mismatches:\n${failures}"
+        return
+    fi
+    test_pass
+}
+
+# ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
 test_usage_rejects_invalid_new_vmid
@@ -1720,6 +2009,13 @@ test_two_node_step2_creates_missing_targets_and_logs_in
 test_two_node_step2_refuses_ambiguous_duplicate_targets
 test_payloads_route_through_node_transports
 test_archived_config_path_has_no_double_slash
+test_list_shows_archived_vms
+test_list_reports_restored_state
+test_list_flags_missing_sidecars
+test_list_empty_archive
+test_list_two_node_runs_via_storage
+test_list_rejects_incompatible_args
+test_archive_size_helpers
 
 test_summary
 rm -rf "${_unarchive_vm_lock_dir:-}"

@@ -627,6 +627,170 @@ EOF
     test_pass
 }
 
+test_single_node_backup_replicas_ignored() {
+    test_start "Single-node: replicated backup copies are not candidates"
+
+    local vmid="350"
+    local pve_dir="$_mock_zfs_state_dir/pve10"
+    setup_pve_config "$pve_dir" "$vmid"
+
+    local replica1="fivebays/threeamigos/proxmox/vm-${vmid}-disk-0"
+    local replica2="z40tb/fivebays/threeamigos/proxmox/vm-${vmid}-disk-0"
+    local out rc
+    out=$(run_remove single-node "$pve_dir" "$vmid" "y" \
+        "threeamigos/proxmox/vm-${vmid}-disk-0 ${replica1} ${replica2}")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"$replica1"* || "$out" == *"$replica2"* ]]; then
+        test_fail "Backup replica listed as a candidate; output:\n$out"
+        return
+    fi
+
+    local calls
+    calls=$(zfsdelfs_calls)
+    if [[ "$calls" == *"$replica1"* || "$calls" == *"$replica2"* ]]; then
+        test_fail "Backup replica destroyed; calls:\n$calls"
+        return
+    fi
+    if [[ "$calls" != *"threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
+        test_fail "Referenced zvol was not destroyed; calls:\n$calls"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_cleanup_orphans_spares_backup_replicas() {
+    test_start "Single-node: --cleanup-orphans spares replicated backup copies"
+
+    local vmid="351"
+    local pve_dir="$_mock_zfs_state_dir/pve11"
+    setup_pve_config "$pve_dir" "$vmid"
+
+    local replica="fivebays/threeamigos/proxmox/vm-${vmid}-disk-0"
+    local zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    zvols_list+=" threeamigos/proxmox/vm-${vmid}-disk-5 ${replica}"
+    local out rc
+    out=$(run_remove single-node "$pve_dir" "$vmid" "y" "$zvols_list" \
+        "" "--cleanup-orphans")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"$replica"* ]]; then
+        test_fail "Backup replica listed as a candidate; output:\n$out"
+        return
+    fi
+
+    local calls
+    calls=$(zfsdelfs_calls)
+    if [[ "$calls" != *"vm-${vmid}-disk-0"* || "$calls" != *"vm-${vmid}-disk-5"* ]]; then
+        test_fail "Real zvols (referenced + orphan) not both destroyed; calls:\n$calls"
+        return
+    fi
+    if [[ "$calls" == *"$replica"* ]]; then
+        test_fail "Backup replica destroyed with --cleanup-orphans; calls:\n$calls"
+        return
+    fi
+
+    test_pass
+}
+
+test_single_node_config_ref_never_resolves_to_replica() {
+    test_start "Single-node: config reference never resolves to a replica"
+
+    local vmid="352"
+    local pve_dir="$_mock_zfs_state_dir/pve12"
+    setup_pve_config "$pve_dir" "$vmid"
+
+    # Only the replicated backup copy exists; the real disk is long gone.
+    # The config still references the disk name, which must not pull the
+    # replica into the removal set.
+    local replica="fivebays/threeamigos/proxmox/vm-${vmid}-disk-0"
+    local out rc
+    out=$(run_remove single-node "$pve_dir" "$vmid" "y" "$replica")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"$replica"* ]]; then
+        test_fail "Backup replica listed; output:\n$out"
+        return
+    fi
+
+    local calls
+    calls=$(zfsdelfs_calls)
+    if [[ -n "$calls" ]]; then
+        test_fail "zfsdelfs should not have been called; calls:\n$calls"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_candidate_payload_ignores_replicas() {
+    test_start "Two-node: storage-host candidate scan ignores backup replicas"
+
+    local vmid="353"
+    local real="threeamigos/proxmox/vm-${vmid}-disk-0"
+    local replica1="fivebays/threeamigos/proxmox/vm-${vmid}-disk-0"
+    local replica2="z40tb/fivebays/threeamigos/proxmox/vm-${vmid}-disk-0"
+
+    # The two-node scan runs inside the ssh heredoc, which the run_remove
+    # ssh mock bypasses — so run the payload itself for real. Extract it
+    # from the file (first SSHEOF heredoc, opened by collect_candidate_
+    # zvols), drop the bashinit bootstrap lines (they would load the
+    # deployed tree), and guard against a vacuous extraction.
+    local start
+    start=$(grep -n -F 'bash -s "$vmid" << ' "$mydir/bin/remove-vm" \
+        | head -1 | cut -d: -f1)
+    [[ -n "$start" ]] || { test_fail "candidate-scan opener not found"; return; }
+    local end
+    end=$(awk -v s="$start" 'NR > s && /^SSHEOF$/ { print NR; exit }' \
+        "$mydir/bin/remove-vm")
+    [[ -n "$end" ]] || { test_fail "candidate-scan terminator not found"; return; }
+    local payload
+    payload=$(sed -n "$((start + 1)),$((end - 1))p" "$mydir/bin/remove-vm" \
+        | grep -v -x -F \
+            -e 'mydir=$(realpath /usr/local/lib/zfsutilities/current/bin)' \
+            -e 'source "$mydir/bashinit"' -e 'bashinit')
+    if [[ "$payload" != *"zvol_parent"* || "$payload" != *"zfs list"* ]]; then
+        test_fail "payload extraction was vacuous:\n$payload"
+        return
+    fi
+
+    # A PATH-carried zfs stub stands in for the storage host's zfs.
+    local stub_dir="$_mock_zfs_state_dir/payload_stub"
+    mkdir -p "$stub_dir"
+    printf '%s\n%s\n%s\n' "$real" "$replica1" "$replica2" > "$stub_dir/volumes"
+    cat > "$stub_dir/zfs" << EOF
+#!/usr/bin/bash
+cat "$stub_dir/volumes"
+EOF
+    chmod +x "$stub_dir/zfs"
+
+    local out
+    out=$(PATH="$stub_dir:$PATH" bash -s "$vmid" <<< "$payload")
+    if [[ "$out" != *"$real"* ]]; then
+        test_fail "Real zvol missing from scan output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"$replica1"* || "$out" == *"$replica2"* ]]; then
+        test_fail "Backup replica in scan output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 # ------------------------------------------------------------------
 # Run
 # ------------------------------------------------------------------
@@ -641,5 +805,9 @@ test_single_node_cleanup_orphans_removes
 test_single_node_reassigned_not_removed
 test_single_node_cleanup_orphans_keeps_reassigned
 test_two_node_reassigned_not_removed
+test_single_node_backup_replicas_ignored
+test_single_node_cleanup_orphans_spares_backup_replicas
+test_single_node_config_ref_never_resolves_to_replica
+test_two_node_candidate_payload_ignores_replicas
 
 test_summary

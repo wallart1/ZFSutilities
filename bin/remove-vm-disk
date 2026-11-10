@@ -44,25 +44,48 @@ usage() {
     else
         pool_choices=$(zpool list -H -o name 2>/dev/null | paste -sd '|' -)
     fi
-    log_msg "INFO: Usage: remove-vm-disk <pool> <vmid> <disk-num>"
+    log_msg "INFO: Usage: remove-vm-disk <pool> <vmid> <disk-num> [--skip-rescan]"
+    log_msg "INFO:                                        [--from-archive]"
     echo ""
     log_msg "INFO:   pool      ZFS pool name (${pool_choices})"
     log_msg "INFO:   vmid      Proxmox VM ID"
     log_msg "INFO:   disk-num  Disk number"
     echo ""
-    log_msg "INFO:   WARNING: Stop the VM and remove the disk from Proxmox GUI before running."
+    log_msg "INFO:   --skip-rescan    Skip the compute-host iSCSI rescan (the caller"
+    log_msg "INFO:                    runs its own after all disks are done)"
+    log_msg "INFO:   --from-archive   Driven by archive-vm: skip the confirm prompts"
+    log_msg "INFO:                    (the caller verified the VM is stopped and"
+    log_msg "INFO:                    removes the Proxmox config itself) and speak"
+    log_msg "INFO:                    only when something is wrong"
+    echo ""
+    log_msg "INFO:   WARNING: Stop the VM and remove the disk from Proxmox GUI before running"
+    log_msg "INFO:            (not required with --from-archive)."
     echo ""
     log_msg "INFO: Example: remove-vm-disk threeamigos 300 0"
     exit 1
 }
 
-# Filter --skip-rescan from args
+# Filter the option flags from args
 skip_rescan=false
+from_archive=false
 clean_args=()
 for arg in "$@"; do
-    [[ "$arg" == "--skip-rescan" ]] && skip_rescan=true || clean_args+=("$arg")
+    case "$arg" in
+        --skip-rescan)  skip_rescan=true ;;
+        --from-archive) from_archive=true ;;
+        *) clean_args+=("$arg") ;;
+    esac
 done
 set -- "${clean_args[@]}"
+
+if [[ "$from_archive" == true ]]; then
+    # Driven by archive-vm: the caller already verified the VM is stopped,
+    # holds the operator's single removal confirmation, and deletes the
+    # Proxmox config itself after all disks are gone. Run non-interactively
+    # and speak only when something is wrong; the session log still records
+    # every message.
+    export ZFSUTILITIES_MSG_LEVEL=WARN
+fi
 
 # --- Argument validation ---
 [[ $# -eq 3 ]] || usage
@@ -96,10 +119,15 @@ fi
 if is_two_node && [[ "$my_host" != "$storage_host" ]]; then
     log_msg "INFO: Connecting to $storage_host for storage operations..."
     remote_script=$(remote_zfsutility_script "$storage_host" "remove-vm-disk")
+    remote_flags="--skip-rescan"
+    [[ "$from_archive" == true ]] && remote_flags+=" --from-archive"
     storage_rc=0
-    ssh -t root@"$storage_host" \
-        "$(input_hold_env_prefix)$remote_script '$pool' '$vmid' '$disknum' --skip-rescan" \
-        || storage_rc=$?
+    # The msg-level gate rides along (empty value = ungated) so a driven
+    # invocation stays quiet on the storage host too.
+    remote_cmd="$(input_hold_env_prefix)"
+    remote_cmd+="ZFSUTILITIES_MSG_LEVEL='${ZFSUTILITIES_MSG_LEVEL:-}' "
+    remote_cmd+="$remote_script '$pool' '$vmid' '$disknum' ${remote_flags}"
+    ssh -t root@"$storage_host" "$remote_cmd" || storage_rc=$?
     # Rescan even when the storage half failed: the remote may already have
     # removed this disk's LUN before failing on a later step, and the local
     # iSCSI sessions must drop it either way.
@@ -158,16 +186,20 @@ zvol_size=$(zfs get -H -o value volsize "$zvol_name" 2>/dev/null || echo "unknow
 log_msg "INFO:   Zvol size: $zvol_size"
 echo ""
 
-# --- Confirm before destruction ---
-log_msg "WARN: This will PERMANENTLY DESTROY the following:"
-log_msg "INFO:   - iSCSI LUN for $backstore_name"
-log_msg "INFO:   - Zvol $zvol_name (all data lost)"
-echo ""
-read -rp "  Have you stopped the VM and removed the disk from Proxmox? (y/N): " response
-[[ "$response" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
+# --- Confirm before destruction (skipped when driven by archive-vm: the
+# caller verified the VM is stopped, holds the operator's single removal
+# confirmation, and removes the Proxmox config itself) ---
+if [[ "$from_archive" != true ]]; then
+    log_msg "WARN: This will PERMANENTLY DESTROY the following:"
+    log_msg "INFO:   - iSCSI LUN for $backstore_name"
+    log_msg "INFO:   - Zvol $zvol_name (all data lost)"
+    echo ""
+    read -rp "  Have you stopped the VM and removed the disk from Proxmox? (y/N): " response
+    [[ "$response" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
 
-read -rp "  Are you sure you want to destroy $zvol_name? (y/N): " response2
-[[ "$response2" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
+    read -rp "  Are you sure you want to destroy $zvol_name? (y/N): " response2
+    [[ "$response2" =~ ^[Yy]$ ]] || { log_msg "INFO: Aborted."; exit 0; }
+fi
 
 # --- Encrypted-LUN conf removal (runs inside the iSCSI teardown) ---
 # Deletes the conf line that describes THIS zvol (name:device:target),
@@ -209,7 +241,14 @@ if is_two_node; then
 
     if [[ -n "$lun_num" ]]; then
         log_msg "INFO: Removing LUN $lun_num from target..."
-        targetcli "/iscsi/${target}/tpg1/luns" delete "lun${lun_num}"
+        # targetcli's own chatter ("Deleted LUN N.") prints only on failure;
+        # success is narrated by the ✓ line below.
+        if ! _tcli_out=$(targetcli "/iscsi/${target}/tpg1/luns" \
+                delete "lun${lun_num}" 2>&1); then
+            log_msg "FATAL: targetcli failed to remove LUN ${lun_num}:"
+            log_msg "FATAL:   ${_tcli_out}"
+            exit 1
+        fi
         log_msg "INFO: ✓ LUN removed from target"
     else
         log_msg "WARN: LUN not found in target — skipping LUN removal"
@@ -223,7 +262,11 @@ if is_two_node; then
     _bs_listing=$(targetcli /backstores/block ls 2>/dev/null || true)
     if grep -q " ${backstore_name} " <<< "$_bs_listing"; then
         log_msg "INFO: Removing backstore $backstore_name..."
-        targetcli /backstores/block delete "$backstore_name"
+        if ! _tcli_out=$(targetcli /backstores/block delete "$backstore_name" 2>&1); then
+            log_msg "FATAL: targetcli failed to remove backstore ${backstore_name}:"
+            log_msg "FATAL:   ${_tcli_out}"
+            exit 1
+        fi
         log_msg "INFO: ✓ Backstore removed"
     else
         log_msg "WARN: Backstore $backstore_name not found — skipping"
@@ -246,7 +289,13 @@ if is_two_node; then
         log_msg "FATAL: Could not locate safe-iscsi-save"
         exit 1
     fi
-    if ! "$safe_save_path"; then
+    # SAFE_ISCSI_SAVE_PENDING_DESTROY tells safe-iscsi-save this zvol is
+    # about to be destroyed, so its permitted-loss check does not warn that
+    # the manifest line left while the device still exists (this flow
+    # destroys the zvol right after the save; a destroy failure below is
+    # the alarm).
+    if ! SAFE_ISCSI_SAVE_PENDING_DESTROY="/dev/zvol/${zvol_name}" \
+            "$safe_save_path"; then
         log_msg "FATAL: safe-iscsi-save failed — iSCSI configuration NOT saved"
         exit 1
     fi

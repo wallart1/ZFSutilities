@@ -119,6 +119,23 @@ gui prereq set) remains the open product finding in FINDINGS.md,
 awaiting a repair-plan decision. The cycle entries were removed,
 recoverable via `git log`.)
 
+(2026-11-10 release prune: the 0.140.0 cycle — the loop-mounted-zvol
+unmount rewrite (device-keyed unmount, zlm fences, idempotent no-ops,
+holder diagnostics; 2026-11-09 entry), the 0.139.0 lane-merge/j11/
+wrap-up-rerun entry (committed at 0871a06), and the wrap-up additions
+below — is committed in the 0.140.0 release commit; recoverable via
+`git log`. Design and behavior live in docs/ (commands.md, modules.md,
+python-modules.md, two-node.md, architecture.md, conventions.md,
+coding-policies.md, gtk-gui.md, proxmox-integration.md, messages) and
+GLOSSARY.md. The alignment out-data decode thread (pub3's, rode
+0.139.0) is condensed to its live remainder below. NOTE: the two
+older "lane history block" markers (0.138.0/0.139.0 pub2 merges) still
+delimit accumulated cross-lane history whose boundaries are not
+cleanly separable from interleaved pub-main entries — a dedicated
+SESSION_NOTES maintenance pass should remove them wholesale; left
+intact here rather than risk cutting pub-main's own history on a
+release commit.)
+
 ## Persistent gotchas (not documented in docs/)
 
 - Guest-agent probe: invalid ping argv was the root cause (2026-11-02):
@@ -306,23 +323,13 @@ recoverable via `git log`.)
 
 ## Active / parked threads
 
-- **Alignment guest-probe exec decode + note rewrite (2026-11-09,
-  pub3, uncommitted).** The 0.138.0 ping-argv fix worked (pings answer,
-  stopped VMs classify), but `_decode_exec` read an invented `out` key —
-  PVE 9 prints guest stdout under `out-data` (verified against tweety's
-  installed QemuServer/Agent.pm, pve-manager 9.2.11), so every running
-  VM's exec "succeeded" into "unexpected qm output" and the availability
-  note enumerated 21 volumes in a run-on (user screenshot
-  2026-11-08 10-08-25, lives UNTRACKED at pub repo root — remove when
-  the fix ships). Fixed: decode reads `out-data`; rc=0-but-unparseable
-  exec output now WARN-logs the raw first line (the reason string alone
-  hid this for a release); the note counts per reason + points to the
-  VM rows (rows already carried each volume's reason via
-  `guest fs unprobed:`); test `_qm_exec` fixture and the validator
-  self-check runner now emit the real wire shape (mock-fidelity: same
-  trap class as the ping argv, third occurrence — fixture, unit test,
-  and validator all agreed on the invented shape). Live proof needs a
-  node deploy (user-cued). Guest-probe future work below still open.
+- **Alignment guest-probe decode — live remainder (fix rode 0.139.0
+  via the pub3 lane merge; committed on main at `4cc0998`).** The
+  `out-data` decode + per-reason note + WARN-raw-stderr hardening are
+  in the tree; LIVE proof still needs a node deploy (user-cued). The
+  user screenshot 2026-11-08 10-08-25 still lives UNTRACKED at the pub
+  repo root — remove when the fix ships (i.e. after deploy). Guest-probe
+  future work below still open.
 
 - **Guest-probe future work (validation COMPLETE 2026-10-23):** surface
   sample.pve_failure inside the Alignment view when VM layers are
@@ -365,41 +372,40 @@ recoverable via `git log`.)
   helpers awaits the user's cue. Behavior of both commands is unchanged
   until then.
 
-## 2026-11-09 — 0.139.0 lane merges + j11 + wrap-up rerun (user-cued, numbered steps)
+## 2026-11-10 — Development-cycle wrap-up and 0.140.0 release
 
-- Pre-merge leftovers: the user's docs hand-edit sweep committed verbatim
-  (`feb69c8`). pub2 lane merged (`ee3900c`; changelog sections unioned,
-  GLOSSARY fused, SESSION_NOTES seam, PREEXISTING union-minus-retired —
-  the flat-listing entry dropped because its root-filtered mock fix was
-  already on main, verified in-tree and by the holds/delfs/busy suites;
-  the schedule viewport test took pub2's `_import_fresh_patched` form).
-  pub3 lane merged (`4cc0998`; the lock-child suites supersede main's
-  MP_FORK pin, `TestScheduleSavedState` rebased on pub3's
-  `_FreshSchedulePageTestCase`, the user's hand-edited wording kept
-  where lanes touched the same sentences, requirements.manifest
-  unioned, the changelog's CI-3.14 bullet trimmed of the superseded
-  fork-context sentence).
-- Post-merge gate green first try: ruff check+format, shellcheck clean,
-  docs-integrity, mkdocs (standing banner only), full run WITH soaks —
-  all suites green. Both lanes ff'd to `4cc0998`; all three repos now
-  sit at one head, unpushed.
-- j11-payload-e2e against pub's merged tree
-  (run-20261109-183126): green — payload matrix all scenarios, guest
-  destroyed at verdict, no leftovers.
-- Wrap-up steps 1–7 rerun. Step 1 resolved both merged PREEXISTING
-  entries: the vacuous delfs autoproceed subprocess test now runs the
-  real loop (PATH-carried zfs stub + file-based fsarray; asserts the
-  positive "was deleted." line; red-proofed — the old runner shape
-  fails with empty output) and the 100-column deviations in the five
-  released suites were reflowed (assertion args via in-quote
-  backslash-newline splices with col-0 continuations; single-quoted
-  JSON payloads as adjacent quoted pieces; journal-fixture lines moved
-  from quoted heredocs to printf appends — quoted heredocs cannot wrap
-  in place). All five suites green and shellcheck-clean; the bytes the
-  fixtures deliver are unchanged. Steps 2–5 green (ruff, shellcheck,
-  100-col sweep, docs-integrity, mkdocs). Committed at the user's cue
-  as part of the 0.139.0 cycle (changelog Tests section records both
-  fixes).
+- Wrap-up sequence on the working tree (0.139.0 + wrap-up-step fixes;
+  frozen before VERSION/changelog). Step 1 resolved the one PREEXISTING
+  entry: `remove-vm` candidate matching now accepts only the exact
+  `<pool>/proxmox/vm-<vmid>-disk-<n>` shape at all three sites (the
+  `discover_zvols` law) — replicated backup copies on other pools are
+  never listed and `--cleanup-orphans` can no longer destroy them.
+  Four new tests (three single-node classification shapes + the
+  two-node storage-host payload extracted and run against a `zfs`
+  stub); red-proofed in a /tmp scratch tree (exactly the four new
+  tests fail on the pre-fix scan).
+- Step 3 test review found and fixed one in-scope defect:
+  `archive_size_bytes` aborted on zfs sizes with leading-zero decimals
+  ("1.08G", "2.05T" — bare bash arithmetic reads "08" as invalid
+  octal), which would have killed `unarchive-vm --list` on such an
+  archive. Math is now explicitly base-10; table-driven unit suite
+  added (unarchive-vm suite). Also pinned: both export-iscsi-state
+  INFO demotions (offline pool, unmounted state dataset; the offline
+  test renamed from ..._with_warning), and the quiet dd write
+  (`status=none`, exact argv).
+- Steps 2/4/5: ruff + shellcheck + 100-col clean across the changeset;
+  PREEXISTING 0 entries both passes; docs updated for the remove-vm
+  shape law (commands.md + messages row), the zfsdelallsnaps listing
+  gate, `with_msg_level` + `$ZFSUTILITIES_MSG_LEVEL` (bashinit tables),
+  and the two now-false "log_msg always emits" claims (conventions,
+  coding-policies) — each linking the architecture gate section.
+  GLOSSARY queue: Full gate / universe / probe covered by existing
+  entries (cleared); "rid-suffixed datasets" stays queued (no usage
+  context anywhere). docs-integrity green; mkdocs rebuilt.
+- Gates: full no-soak run green; full `--with-soak` run green after
+  the VERSION/changelog bump. Not pushed, not tagged, not deployed —
+  those follow at the owner's cue (0.139.0's push/tag/release also
+  still pending).
 
 *(lane history block, unioned at the 0.139.0 pub2-lane merge — pruned
 at the next release prune)*
@@ -3398,3 +3404,128 @@ at the next release prune)*
   (before and after the changelog).
 - Pre-existing issues: 1 addressed this turn (order-dependent schedule
   failures); PREEXISTING.md now holds 1 entry (flat mock listing).
+
+## 2026-11-10 (pub): Log Viewer path line
+
+- New item executed: Logs page → Log Viewer now shows the loaded log's full
+  path in a selectable line above the viewer toolbar (left-ellipsized so the
+  file name stays visible; hover shows the full path; hidden until a log is
+  selected). While popped out, the pop-out window title carries the file
+  name — base title constant `_LOGS_POPOUT_BASE_TITLE`;
+  `_update_logs_path_label` drives label + title from the two branch points
+  of `_on_selection_changed` (the only runtime mutator of
+  `_logs_current_path`).
+- Tests: `TestLogViewerPathLabel` (select/clear drive label + title) plus a
+  construction test in `TestCreateLogsPage` using membership assertions —
+  mock_gtk's shared `Gtk.Label()` instance accumulates call history across
+  construction tests, so exact-count asserts there are order-fragile.
+- Docs: "Path line" bullet added to the Log viewer section of gtk-gui.md.
+- Gates: targeted suite green; full `tests/run-tests` green (python suite
+  green with env-preflight skips only; bash suites all-pass). ruff clean on
+  both changed files.
+
+## 2026-11-10 (pub): unarchive-vm --list
+
+- New item executed: `unarchive-vm --list [archive_base]` prints every VM the
+  archive holds and exits — vmid, name (from the archived config), per-disk
+  volsize, summed total, and RESTORED_AS state (`restored as` /
+  `partially restored as`); disks without sidecars flagged `[no sidecar]`, a
+  VM with none flagged pre-sidecar archive. Read-only: no rate prompt, no
+  JSON writes; empty archive = `No archived VMs` + rc 0.
+- Engine: `archive_list_vms` (+ `archive_list_one_vm` helper,
+  `archive_size_bytes`/`archive_size_human`) in lib/archive-engine.sh, so
+  single-node and the two-node `on_storage` payload run literally the same
+  listing code (payload conditionally sources node-lib for
+  `path_under_mount`, mirroring the Step-2 iSCSI payload).
+- Tests: 6 new in test-unarchive-vm (multi-VM listing + numeric order,
+  restored state, missing sidecars, empty archive via the positional-base
+  form, two-node via on_storage, incompatible-args usage). Harness knobs:
+  `_mock_extra_archived_zvols` (dataset|volsize rows), `_mock_empty_archive`;
+  `run_unarchive` accepts `--list` in the vmid position and seeds
+  `archive_path` in the JSON config.
+- Docs: commands.md (usage/table/listing paragraph), two-node.md (usage,
+  table, internal-flow note), proxmox-integration.md (usage + user
+  sentence), messages/index.md (5 listing rows), modules.md (3 engine
+  function rows).
+- Gates: test-unarchive-vm 36/36, test-archive-vm + test-transfer-lib +
+  test-node-lib 145 green; full gate run at wrap-up.
+
+## 2026-11-10 (pub): archive-vm message discipline + WARN correctness
+
+User report from a live `archive-vm 215` on tweety (0.138.0): WARNs about
+pools the flow has no business in, extraneous messages everywhere, and the
+nonsensical "Have you stopped the VM and removed the disk from Proxmox?"
+prompt inside the archive flow. Rule of record: children speak only when
+something is wrong.
+
+- Level gate (W5): `ZFSUTILITIES_MSG_LEVEL` (DEBUG/VERB/INFO/WARN/FATAL)
+  gates log_msg's TERMINAL emission only — session log and GUI sink keep
+  everything; unlabelled messages always pass (the implied-NONE law).
+  Bash (bashinit `__log_level_rank`/`__log_msg_gated_p`, fork-free) and
+  Python (`logging_config._msg_level_gated`) parity. New bashinit helper
+  `with_msg_level <LEVEL> cmd...` scopes the gate to one call IN THE
+  CURRENT SHELL (no subshell: engine's exit-trap backstops and mock state
+  must stay with the caller — a subshell wrapper broke test-archive-vm's
+  in-process zfs mock before this was corrected).
+- Drift fence (W1, node-lib): `_warn_when_target_missing` warns only on
+  PROVEN drift (constructed IQN absent AND a live target carries the same
+  short name under another prefix, via `find_live_short_targets` /
+  `target_in_live_tree`). Pools with no target under any prefix (temp,
+  fivebays, z22tb on stewie — POOL_TARGET maps all five pools but also
+  drives where the state map is written) stay silent. This killed the
+  12-WARN-lines-per-disk export-iscsi-state spam.
+- Standing conditions (W2, export-iscsi-state): "Pool X is offline" and
+  "Dataset X has no usable mountpoint" demoted WARN→INFO (fivebays'
+  zfsutilities dataset was unmounted during the run; mounted again since).
+- False stale-manifest WARN (W3): remove-vm-disk passes
+  `SAFE_ISCSI_SAVE_PENDING_DESTROY=/dev/zvol/<zvol>` so safe-iscsi-save's
+  permitted-loss check does not warn about the zvol it destroys right
+  after the save. Save-then-destroy order unchanged (boot-restore safety:
+  saved config must never reference a missing zvol).
+- Driven mode (W4): `remove-vm-disk --from-archive` skips both confirm
+  prompts and the PERMANENTLY-DESTROY block, exports the WARN gate for
+  itself + children, forwards flag+gate through its ssh delegation;
+  targetcli delete output captured and shown only on failure ("Deleted
+  LUN N." chatter gone in all modes). archive-vm Step 4 uses the flag,
+  drops `ssh -t` (also kills "Connection to stewie closed."), adds a
+  `✓ Removed disk N` line per disk. Standalone remove-vm-disk unchanged.
+- Engine/quiet (W5 rest): dd `status=none` in archive_copy_devices;
+  two-node Step-2 payload exports the WARN gate; single-node wraps
+  archive_one_zvol in `with_msg_level WARN`; zfsdelallsnaps prints its
+  per-snapshot listing only when the enter-gate follows (autoproceed
+  skips it, like zfsdelfs's own listing); rate prompt compares
+  case-insensitively and saves as typed. `Enclosure rate cap applied`
+  stays terminal-visible under any gate (per-message lift:
+  `ZFSUTILITIES_MSG_LEVEL='' log_msg ...` — verified temporary in bash
+  5.2 non-posix). Step-3 verification line now states the method
+  ("device copy" / "raw send/receive") so method visibility survives the
+  engine gate.
+- Discovery scoping (W6, archive-vm): single-node constructs
+  `<pool>/proxmox/vm-<vmid>-disk-<n>` directly (old suffix match over all
+  volumes could pick a backup-pool copy); orphan scans (both modes) match
+  only the exact 3-component shape — fivebays/threeamigos/... and
+  z40tb/fivebays/... replicas are no longer flagged.
+- Tests: gate tests in test-logging (+ with_msg_level
+  scoping/restore/status) and tests/python/test_logging_config.py;
+  targetless-pool silence in test-node-lib; driven-mode, targetcli
+  capture, pending-destroy context, wrapper forwarding in
+  test-remove-vm-disk; matched WARN/suppression pair in
+  test-safe-iscsi-save; autoproceed listing gate + interactive keeper in
+  test-zfsdelallsnaps; archive-vm reworked for the quiet contract
+  (method asserted on the verification line, hash read-back via capture)
+  + backup-copy-not-orphan in both modes (two-node via `two-node-local`
+  real-payload execution, `_mock_lio_zvols` knob, disk-9 positive
+  control) + rate case-compare. Source-audit
+  test-iscsi-fresh-install-guards taught the env-prefixed guarded-save
+  shape.
+- Docs: messages/index.md (drift row, stale-manifest row, two INFO
+  demotions, method/verification + removed-disk + targetcli-failure rows,
+  engine rows marked session-log-only), commands.md + two-node.md
+  (driven removal flow, --from-archive, pending-destroy context,
+  offline-pool note), architecture.md "Terminal message-level gate"
+  section, GLOSSARY "message-level gate".
+- PREEXISTING: 1 new entry — remove-vm's candidate scan shares the
+  any-depth suffix match, so `--cleanup-orphans` would DESTROY replicated
+  backup copies on fivebays/z40tb; fix candidate noted, not applied
+  (outside approved plan, destructive-tool behavior change needs an
+  explicit decision).

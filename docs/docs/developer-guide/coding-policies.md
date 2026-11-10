@@ -390,7 +390,10 @@ log_msg("DEBUG: variable =", value)
 - Priority levels: `DEBUG` < `VERB` < `INFO` < `WARN` < `FATAL` < none
 - Messages without a recognized `LEVEL:` prefix use the implied "(none)" level
   and are always displayed in the log viewers
-- `log_msg` always emits every message; filtering is done by the GUI log viewers
+- `log_msg` records every message in the session log and the GUI sink;
+  viewing-time filtering is done by the GUI log viewers. Terminal output alone
+  can be gated by a driving script through `ZFSUTILITIES_MSG_LEVEL` (see
+  [Terminal message-level gate](architecture.md#terminal-message-level-gate))
 - Default threshold is `INFO` (controlled by the `msg_level` environment
   variable)
 - When `ZFSUTILITIES_LOG_FILE` is set, both bash and Python `log_msg` append

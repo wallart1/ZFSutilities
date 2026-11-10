@@ -400,7 +400,8 @@ def classify_agent_failure(stderr):
     ``Agent error: <desc>`` (an exec-stage failure, whose description is
     the actual diagnosis). Anything else keeps the generic unreachable
     label but carries a short excerpt of PVE's message, so an unseen
-    failure mode still identifies itself in the Alignment note.
+    failure mode still identifies itself in the Alignment note. The
+    first three are VM states, listed in ``VM_STATE_REASONS``.
     """
     text = " ".join((stderr or "").lower().split())
     if "no qemu guest agent configured" in text:
@@ -416,6 +417,15 @@ def classify_agent_failure(stderr):
         return f"agent error: {desc}" if desc else "agent error"
     excerpt = _first_line_excerpt(stderr, cap=40)
     return f"guest agent unreachable ({excerpt})" if excerpt else "guest agent unreachable"
+
+
+# classify_agent_failure reasons that describe the VM's own state, not a
+# fault: whether a VM runs, or has its agent configured and started, is the
+# operator's business. They surface only as per-volume Alignment reasons
+# and never reach the log.
+VM_STATE_REASONS = frozenset(
+    {"VM not running", "guest agent not configured in VM options", "guest agent not running"}
+)
 
 
 def _decode_exec(result):
@@ -481,6 +491,8 @@ class GuestFsProber:
         ``classify_agent_failure`` keeps only a short reason for the
         Alignment note, so the underlying PVE message is recorded here —
         without it a wrong label cannot be re-diagnosed after the fact.
+        Recognized VM states (``VM_STATE_REASONS``) are not faults and
+        are never passed here.
         """
         cmd = argv[2] if len(argv) > 2 else "?"
         vmid = argv[3] if len(argv) > 3 else "?"
@@ -514,8 +526,10 @@ class GuestFsProber:
             return None, "command failed"
         if result.returncode != 0:
             stderr_text = getattr(result, "stderr", "") or ""
-            self._log_qm_failure(argv, result.returncode, stderr_text)
-            return None, classify_agent_failure(stderr_text)
+            reason = classify_agent_failure(stderr_text)
+            if reason not in VM_STATE_REASONS:
+                self._log_qm_failure(argv, result.returncode, stderr_text)
+            return None, reason
         return result.stdout, None
 
     def _guest_exec(self, vmid, argv):

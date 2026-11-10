@@ -598,6 +598,7 @@ If you later need to restore an archived VM from archive, use
 
 ```bash
 sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
+sudo unarchive-vm --list [archive_base]
 ```
 
 | Argument       | Description                                                                                |
@@ -605,6 +606,11 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | `vmid`         | VM ID of the archived VM to restore                                                        |
 | `archive_base` | Optional ZFS dataset that contains the archive (defaults to the path saved in JSON config) |
 | `--new-vmid`   | Optional new VM ID to use for restored resources                                           |
+| `--list`       | List the archived VMs and exit (restores nothing)                                          |
+
+To see which VMs the archive holds, run `sudo unarchive-vm --list`. The
+listing shows each VM's ID, name, disks, and sizes, and marks VMs that were
+already restored. It changes nothing, so it is safe to run at any time.
 
 The script discovers archived zvols and restores each one with its original
 `volblocksize` — copy-method archives are device-copied onto a freshly created

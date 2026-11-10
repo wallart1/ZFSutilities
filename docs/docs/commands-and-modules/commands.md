@@ -1395,7 +1395,7 @@ is automatically called to diagnose the specific cause.
 
 1. Build a local `$snaparray` from `zfs list -t snapshot` for the target dataset.
 2. Optionally filter by the substring in `$2`.
-3. Prompt for confirmation (unless `$autoproceed='Y'`).
+3. List each snapshot with its age, then prompt for confirmation. `$autoproceed='Y'` skips both the listing and the prompt; the preceding summary still states the snapshot count and the hold policy.
 4. Call `delsnap` for each snapshot, passing `minage=0` and `'nocheckagainst'` so the explicit deletion is not blocked by age or counterpart checks.
 
 **Return codes:**
@@ -3116,16 +3116,22 @@ sudo archive-vm <vmid>
 6. **Archive config** — Copies `/etc/pve/qemu-server/<vmid>.conf` into the archive mount
 7. **Verify** — Confirms all archived datasets and the config file exist and have expected
    sizes, and that each archived zvol's `volblocksize` matches what its method implies
-   (1M for copy archives, the sidecar original for raw archives)
+   (1M for copy archives, the sidecar original for raw archives); each per-disk
+   verification line states the size, the archive method (device copy or raw
+   send/receive), and the `volblocksize`
 8. **Remove VM** — Asks whether to remove the VM; if yes, removes each referenced zvol
    and — only when every disk is gone — the Proxmox config. Two-node mode delegates each
-   disk to `remove-vm-disk` over a TTY-allocating ssh (its confirm prompts appear on the
-   calling terminal; per-disk rescans are suppressed in favor of one compute-host rescan
-   after the loop) and verifies each removal by outcome — the zvol must actually be gone —
-   since a declined remote confirm exits 0. Single-node mode destroys via `zfsdelfs`
-   (snapshot children and holds included). If any disk survives, the Proxmox config is
-   kept, the survivors are listed with the exact `remove-vm-disk` commands to finish, and
-   the script exits non-zero without a success summary.
+   disk to `remove-vm-disk --from-archive` over a query-only ssh: the caller already
+   verified the VM is stopped and holds the operator's single confirmation, so the
+   delegated run asks nothing (per-disk rescans are suppressed in favor of one
+   compute-host rescan after the loop) and each removal is verified by outcome — the
+   zvol must actually be gone — since a remote run can exit 0 without finishing.
+   Single-node mode destroys via `zfsdelfs` (snapshot children and holds included).
+   During the archive and removal steps the child scripts log only warnings and
+   failures on the terminal; `archive-vm` itself narrates the run. If any disk
+   survives, the Proxmox config is kept, the survivors are listed with the exact
+   `remove-vm-disk` commands to finish, and the script exits non-zero without a
+   success summary.
 
 **Globals:**
 
@@ -3171,8 +3177,8 @@ sudo archive-vm <vmid>
    `volblocksize`. Sidecars record the original `volblocksize` and the archive method.
 5. Copy the Proxmox config into the archive.
 6. Verify archive integrity.
-7. Optionally remove the VM: per-disk `remove-vm-disk` delegation with visible
-   confirmations and outcome verification (two-node), `zfsdelfs` destroy
+7. Optionally remove the VM: per-disk `remove-vm-disk --from-archive` delegation with
+   outcome verification (two-node), `zfsdelfs` destroy
    (single-node); the Proxmox config is removed only when every disk is gone,
    then one compute-host rescan runs (two-node).
 
@@ -3200,6 +3206,7 @@ cleanly when the whole restore is already complete.
 
 ```bash
 sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
+sudo unarchive-vm --list [archive_base]
 ```
 
 **Arguments:**
@@ -3209,6 +3216,24 @@ sudo unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
 | `vmid`         | VM ID of the archived VM to restore                                               |
 | `archive_base` | Optional ZFS dataset that contains the archive (defaults to JSON-configured path) |
 | `--new-vmid`   | Optional new VM ID to use for restored zvols, iSCSI resources, and Proxmox config |
+| `--list`       | List the archived VMs the archive holds and exit (restores nothing)               |
+
+**Listing the archive:** `--list` answers "what is in the archive?" before you
+commit to a restore. It prints one block per archived VM:
+
+- The VM ID, the `name` from its archived Proxmox config, the disk count, and
+  the summed `volsize` (an unreportable size shows as `unknown`).
+- One line per disk with its original zvol path and `volsize`; a disk without
+  a `.disk_info` sidecar is flagged `[no sidecar]`.
+- The restore state recorded in the sidecars: `restored as: <vmid>` when
+  every disk carries a `RESTORED_AS` marker, `partially restored as: <vmid>`
+  when only some do. A VM whose disks all lack sidecars is a pre-sidecar
+  archive, flagged for the manual restore procedure.
+
+The listing is read-only: it never prompts for a transfer rate and never
+writes the JSON config. In two-node mode it runs on the storage host through
+`on_storage` (the shared engine's listing function, the same code both node
+modes run). An empty archive reports `No archived VMs` and exits `0`.
 
 **Flow:**
 
@@ -3314,6 +3339,12 @@ and are destroyed only when `--cleanup-orphans` is passed. This protects other
 VMs from accidental data loss while still allowing leftover disks to be
 cleaned up on request.
 
+Only zvols at exactly `<pool>/proxmox/vm-<vmid>-disk-<N>` count as matching.
+A replicated backup copy nested deeper on another pool (for example
+`<backup-pool>/<pool>/proxmox/vm-<vmid>-disk-<N>`) carries the same name but
+belongs to the backup system. `remove-vm` never lists such a copy and never
+destroys it, with or without `--cleanup-orphans`.
+
 ```bash
 sudo remove-vm [--cleanup-orphans] <vmid>
 ```
@@ -3331,8 +3362,9 @@ sudo remove-vm [--cleanup-orphans] <vmid>
    resolves each referenced disk to its zvol. In single-node mode this parses
    the local ZFS disk lines; in two-node mode it resolves iSCSI target/LUN
    pairs on the storage host.
-2. **Scan all pools** — Scans all pools for zvols matching `vm-<vmid>-disk-<N>`.
-   In two-node mode this runs on the storage host.
+2. **Scan all pools** — Scans all pools for zvols at exactly
+   `<pool>/proxmox/vm-<vmid>-disk-<N>`. Replicated backup copies nested deeper
+   are skipped. In two-node mode the scan runs on the storage host.
 3. **Classify** — Compares every matching zvol against all VM configs. Zvols
    referenced by the target VM are selected for removal; zvols referenced by
    another VM are reported as reassigned and skipped; zvols referenced by no

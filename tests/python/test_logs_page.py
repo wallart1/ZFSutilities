@@ -1470,6 +1470,25 @@ class TestCreateLogsPage(unittest.TestCase):
 
     @patch("logs_page._sync_log_list")
     @patch("logs_page._update_success_rate_label")
+    def test_create_logs_page_builds_path_label(self, _mock_update, _mock_sync):
+        """The viewer gets a selectable, left-ellipsized path line."""
+        app = MagicMock()
+        app.config = {}
+        app._ui_state.bind_treeview = MagicMock()
+        app._ui_state.bind_popout = MagicMock()
+
+        lp.create_logs_page(app)
+
+        label = app.logs_path_label
+        # mock_gtk hands every Gtk.Label() call the same shared instance, so
+        # other construction tests may have contributed history; assert this
+        # test's configuration calls are present rather than counted.
+        self.assertIn(call(True), label.set_selectable.call_args_list)
+        self.assertIn(call(lp.Pango.EllipsizeMode.START), label.set_ellipsize.call_args_list)
+        self.assertIn(call(True), label.set_no_show_all.call_args_list)
+
+    @patch("logs_page._sync_log_list")
+    @patch("logs_page._update_success_rate_label")
     def test_create_logs_page_binds_log_popout_to_ui_state(self, _mock_update, _mock_sync):
         app = MagicMock()
         app.config = {}
@@ -1683,6 +1702,62 @@ class TestLogViewerStatusLabel(unittest.TestCase):
 
         app.logs_status_label.set_text.assert_called_with("")
         app.logs_status_label.hide.assert_called_once()
+
+
+class TestLogViewerPathLabel(unittest.TestCase):
+    """Verify the viewer path line and pop-out title track the loaded log."""
+
+    def _make_app(self, path, status="Done"):
+        app = MagicMock()
+        app._logs_clearing_other_view = False
+        app._logs_current_path = None
+        app._logs_tail_timer = None
+        app.logs_view.get_selection().count_selected_rows.return_value = 0
+        app.logs_misc_view.get_selection().count_selected_rows.return_value = 0
+        app.logs_search.entry.get_text.return_value = ""
+        buf = MagicMock()
+        app.logs_text.get_buffer.return_value = buf
+        selection = MagicMock()
+        model = MagicMock()
+        tree_iter = MagicMock()
+        model.get_iter.return_value = tree_iter
+
+        def get_value(it, col):
+            if col == lp.COL_PATH:
+                return path
+            if col == lp.COL_STATUS:
+                return status
+            return None
+
+        model.get_value.side_effect = get_value
+        selection.get_selected_rows.return_value = (model, [MagicMock()])
+        return app, selection
+
+    def test_selection_shows_path_and_updates_popout_title(self):
+        path = "/var/log/zfsutilities/sessions/2026-01-02_03-04-05_backup_gui.log"
+        app, selection = self._make_app(path)
+
+        with patch("logs_page._load_log_into_viewer"):
+            lp._on_selection_changed(selection, app, app.logs_view)
+
+        app.logs_path_label.set_text.assert_called_once_with(path)
+        app.logs_path_label.set_tooltip_text.assert_called_once_with(path)
+        app.logs_path_label.show.assert_called_once()
+        app.logs_popout_window.set_title.assert_called_once_with(
+            "ZFS Utilities — Log Viewer — 2026-01-02_03-04-05_backup_gui.log"
+        )
+
+    def test_cleared_selection_hides_path_and_resets_title(self):
+        app, selection = self._make_app("/tmp/gone.log")
+        selection.get_selected_rows.return_value = (MagicMock(), [])
+
+        with patch("logs_page._load_log_into_viewer"):
+            lp._on_selection_changed(selection, app, app.logs_view)
+
+        app.logs_path_label.set_text.assert_called_once_with("")
+        app.logs_path_label.set_tooltip_text.assert_called_once_with("")
+        app.logs_path_label.hide.assert_called_once()
+        app.logs_popout_window.set_title.assert_called_once_with("ZFS Utilities — Log Viewer")
 
 
 if __name__ == "__main__":

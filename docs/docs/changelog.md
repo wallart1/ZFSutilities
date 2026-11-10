@@ -1,5 +1,172 @@
 # Changelog
 
+## 0.140.0
+
+*Released 2026-11-10*
+
+### Added
+
+- **`unarchive-vm --list`.** A read-only answer to "what is in the
+  archive?" before committing to a restore. The listing prints one block
+  per archived VM: the VM ID, the `name` from its archived Proxmox
+  config, the disk count, and the summed `volsize`; one line per disk
+  with its original zvol path and size; and the restore state recorded
+  in the `.disk_info` sidecars (`restored as:` / `partially restored
+  as:` / a pre-sidecar-archive flag for the manual-restore era). It
+  never prompts and never writes the JSON config; in two-node mode the
+  same listing code runs on the storage host through `on_storage`.
+- **Terminal message-level gate.** A driving script can set
+  `ZFSUTILITIES_MSG_LEVEL` so its children show only messages at or
+  above one level on the terminal; the session log and the GUI log sink
+  keep every message. The gate never applies to messages without a
+  `LEVEL:` prefix, and an unset or unrecognized value gates nothing.
+  Both `log_msg` implementations (bash, Python) apply the same rule.
+  `with_msg_level` (bashinit) scopes the gate to one call and restores
+  the caller's value afterward, running in the current shell so state
+  and exit traps stay with the caller.
+- **remove-vm-disk `--from-archive`.** Driven by `archive-vm`: the flag
+  skips the two confirm prompts (the caller verified the VM is stopped
+  and holds the operator's single confirmation) and gates the run's
+  informational lines off the terminal. The flag and the gate ride
+  along the storage-host delegation.
+- **Logs tab: Log Viewer path line.** A line above the viewer toolbar
+  shows the full path of the loaded log, shortened from the left so the
+  file name stays visible; the text is selectable for copying. While
+  the viewer is popped out, the window title carries the loaded log's
+  file name so the detached window stays identifiable.
+- **`mounts_stacked_on` (zfs_repository).** Reads `/proc/self/mountinfo`
+  and returns the mounts attached on top of the topmost mount at a path
+  — the evidence for why a cover cannot be detached. Handles the
+  kernel's octal escapes; returns `None` when the table cannot be read.
+
+### Fixed
+
+- **`remove-vm` no longer treats replicated backup copies as VM disks.**
+  Candidate matching at all three sites (single-node scan, two-node
+  storage-host scan, config-reference resolution) now accepts only the
+  exact `<pool>/proxmox/vm-<vmid>-disk-<n>` shape. Replicated backup
+  copies nested deeper on other pools (for example
+  `<backup-pool>/<pool>/proxmox/vm-<vmid>-disk-<n>`) share the name but
+  belong to the backup system: they are never listed, and `--cleanup-
+  orphans` can no longer destroy them. `archive-vm`'s discovery scans
+  carry the same shape law (referenced-disk resolution constructs the
+  path directly; orphan scans match the exact shape), so both VM-removal
+  tools agree with `discover_zvols`.
+- **`unarchive-vm --list` no longer aborts on zfs sizes with leading-
+  zero decimals.** `zfs get volsize` prints values such as `1.08G` and
+  `2.05T`; the size parser's bare arithmetic read `08` as an invalid
+  octal literal and killed the listing. The math is now explicitly
+  base-10. Found and red-proofed while unit-testing the parser.
+- **safe-iscsi-save no longer misreports an in-flight removal.** A
+  permitted manifest loss whose zvol still exists draws the stale-
+  manifest WARN — unless the caller names the device in
+  `SAFE_ISCSI_SAVE_PENDING_DESTROY` (a destruction scheduled right
+  after the save), which `remove-vm-disk` now does.
+
+### Changed
+
+- **`archive-vm` narrates its own run; child scripts speak only when
+  something is wrong.** The transfer engine and the driven
+  `remove-vm-disk` run under a `WARN` message gate, per-disk lines
+  state what happened (`✓ Archived`, the archive method on the
+  verification line, `✓ Removed disk`), and `dd` runs quiet. The
+  enclosure rate-cap notice always shows on the terminal — the run is
+  about to move at a rate the operator did not type. The two-node
+  disk-removal hop drops its TTY allocation (the driven run prompts
+  nothing). Rate-limit changes compare case-insensitively, so re-typing
+  `50M` against a saved `50m` no longer announces or re-saves.
+- **Loop-volume unmount rewritten around the device, not the
+  mountpoint.** `umount` now names the device, so exactly that device's
+  mount comes off — a foreign mount stacked on the partition's
+  mountpoint is never touched, and a device mounted more than once is
+  fully unmounted, one layer per round, bounded loudly. Both unmount
+  paths hold the volume's dataset write lock (with holder-naming
+  refusal); a request with nothing to do (no loop device attached,
+  partition already unmounted) is an idempotent success that refreshes
+  the row; a failed detach names the partitions still mounted or a
+  process holding the loop device itself open. Busy partitions are
+  detected before anything is unmounted, so a busy volume is never left
+  half-unmounted.
+- **Unreachable mounts are detected by path, not by error text.** A
+  dataset the kernel reports as mounted can have nothing at its path
+  (`no such pool or dataset`) or a leftover empty directory under a
+  cover (`unmount failed`); both stderr shapes were sniffed before.
+  Unmount and the repair engine now test the mountpoint itself (the
+  Dashboard's reachability test), the cover-lift failure names what
+  holds the cover (mounts stacked on top, processes in use), and the
+  no-liftable-cover case says so instead of offering advice that cannot
+  work. **Repair Mount Order** verifies its result with the same test:
+  a mid-repair failure whose parents-first remount leaves every member
+  reachable now reports success instead of demanding another pass, and
+  the incomplete FATAL lists exactly what is still wrong plus the next
+  step.
+- **The IQN drift fence warns only on proven drift.** `pool_to_target`
+  no longer warns whenever a constructed target is absent from the live
+  LIO tree; it warns only when a live target carries the same short
+  name under a different prefix. Pools that deliberately run no iSCSI
+  target (every pool `export-iscsi-state` writes its map to) stay
+  silent, and the warning names the live target it found.
+- **VM-state findings stay out of the log.** The Alignment guest probe
+  no longer WARN-logs `qm guest` failures that describe the VM's own
+  state (not running, agent not configured, agent not running) —
+  whether a VM runs is the operator's business; the per-volume reasons
+  still report them. Genuine failures (unreachable node, unrecognized
+  errors, guest `Agent error:`) keep their WARN with the raw stderr.
+- **Two standing conditions demoted WARN → INFO in
+  `export-iscsi-state`.** A configured pool that is offline (rotation/
+  backup pool) and a state dataset that is not mounted draw an
+  informational note; the map still reaches every pool that can take
+  it. `remove-vm-disk`'s targetcli deletes print their output only on
+  failure, with a FATAL naming what targetcli said.
+- **`zfsdelallsnaps` skips the per-snapshot listing under
+  autoproceed.** The listing exists to inform the press-enter prompt,
+  which autoproceed already skips; the plan summary (count + hold
+  policy) still prints.
+
+### Tests
+
+- `remove-vm` gains replica-coverage tests in all three match shapes:
+  replicated backup copies are not candidates, survive `--cleanup-
+  orphans`, are never resolved from a config reference, and the
+  two-node storage-host scan payload itself (extracted and run against
+  a `zfs` stub) ignores them. All four fail against the pre-fix scan.
+- The size parser/humanizer behind `unarchive-vm --list` gained a
+  table-driven unit suite (leading-zero decimals, mixed case, suffix
+  family, unparseable values, the 64-bit wraparound guard, tenths
+  truncation).
+- The `export-iscsi-state` skip lines are pinned at INFO (offline pool,
+  unmounted state dataset); the quiet `dd` device-copy write is pinned
+  to its exact argv; the bash gate suite covers `with_msg_level`
+  scope/restore/exit-status and unlabelled-message passthrough; the
+  Python gate suite covers stderr suppression, invalid-gate no-op, and
+  session-log/sink completeness.
+- The loop-volume unmount suites pin by-device layer unmounting,
+  multi-mount drain to the round bound, lock refusal with holder
+  naming, idempotent no-ops, detach diagnostics, and the repair
+  engine's verified-despite-failure success; `zfs_repository` suites
+  pin `mountpoint_unreachable` and `mounts_stacked_on` (octal escapes,
+  top-layer selection, unreadable table).
+
+### Documentation
+
+- New **Terminal message-level gate** section in the architecture guide;
+  the `bashinit` reference documents `with_msg_level` and
+  `ZFSUTILITIES_MSG_LEVEL`; the `log_msg` behavior notes in the
+  conventions and coding-policy pages no longer claim unconditional
+  terminal emission.
+- `unarchive-vm --list` documented across the command reference,
+  two-node guide, and Proxmox integration guide; `remove-vm-disk`
+  options table and driven-delegation flow updated.
+- The `remove-vm` reference states the exact-shape candidate law and
+  what it protects; the messages manual rows follow every changed or
+  added message (archive narrative lines, listing block, loop-unmount
+  FATALs, repair-verification outcomes, VM-state suppression, INFO
+  demotions, pending-destroy WARN, proven-drift wording).
+- GTK guide: Log Viewer path line, loop-volume unmount semantics,
+  Repair Mount Order verification behavior, the unreachable-mounts note
+  (both stderr shapes, path-based decision), and the Alignment VM-state
+  note. GLOSSARY gained "loop device" and "message-level gate" entries.
+
 ## 0.139.0
 
 *Released 2026-11-05*

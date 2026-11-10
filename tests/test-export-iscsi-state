@@ -472,24 +472,54 @@ test_dataset_created_on_first_use() {
     rm -f "$NODE_CONF"
 }
 
-test_offline_pool_skipped_with_warning() {
+test_offline_pool_skipped_with_info() {
     reset_mocks
     load_healthy_topology
     register_online_pool "threeamigos"
     # NVME1 configured in node.conf but not imported.
     _mock_zpool_list="threeamigos"
     use_temp_node_conf
-    test_start "Offline pools are skipped; online pools still written"
+    test_start "Offline pools are skipped with INFO; online pools still written"
 
+    # A deliberately offline configured pool (rotation/backup pool) is a
+    # standing condition, so the skip is an INFO line, never a WARN.
     local rc=0 out
-    out=$( main 2>/dev/null ) || rc=$?
+    out=$( main 2>&1 ) || rc=$?
 
     if [[ "$rc" -eq 0 ]] \
         && [[ ! -e "${_mock_pools_root}/NVME1" ]] \
-        && [[ -f "${_mock_pools_root}/threeamigos/iscsi-state.json" ]]; then
+        && [[ -f "${_mock_pools_root}/threeamigos/iscsi-state.json" ]] \
+        && [[ "$out" == *"INFO: Pool NVME1 is offline"* ]] \
+        && [[ "$out" != *"WARN: Pool NVME1"* ]]; then
         test_pass
     else
-        test_fail "rc=$rc pools_written=$pools_written"
+        test_fail "rc=$rc pools_written=$pools_written; output:\n$out"
+    fi
+    rm -f "$NODE_CONF"
+}
+
+test_unmounted_state_dataset_skipped_with_info() {
+    reset_mocks
+    load_healthy_topology
+    register_online_pool "threeamigos"
+    register_online_pool "NVME1"
+    # NVME1 is online but its state dataset is not mounted (the standing
+    # condition of a backup pool): no directory behind the mountpoint.
+    rm -rf "${_mock_pools_root:?}/NVME1"
+    use_temp_node_conf
+    test_start "Unmounted state dataset skips the pool with INFO, not WARN"
+
+    local rc=0 out
+    out=$( main 2>&1 ) || rc=$?
+
+    if [[ "$rc" -eq 0 ]] \
+        && [[ -f "${_mock_pools_root}/threeamigos/iscsi-state.json" ]] \
+        && [[ "$out" == *"INFO: Dataset NVME1/zfsutilities has no usable mountpoint"* ]] \
+        && [[ "$out" == *"pool NVME1 skipped"* ]] \
+        && [[ "$out" != *"WARN: Dataset NVME1/zfsutilities"* ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc pools_written=$pools_written; output:\n$out"
     fi
     rm -f "$NODE_CONF"
 }
@@ -1294,7 +1324,8 @@ test_unmapped_backstore_dev_only
 test_state_written_to_all_online_pools
 test_no_temp_files_left_behind
 test_dataset_created_on_first_use
-test_offline_pool_skipped_with_warning
+test_offline_pool_skipped_with_info
+test_unmounted_state_dataset_skipped_with_info
 test_no_pool_written_fails
 test_degraded_refuses_overwrite
 test_degraded_force_records

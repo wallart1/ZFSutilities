@@ -122,6 +122,17 @@ disk_key_for_zvol() {
     done < "$proxmoxconfig"
 }
 
+# Human wording for an archive method marker (copy | raw) on the
+# verification line: the engine speaks only when something is wrong, so
+# this script states how each disk was archived (a raw archive of an
+# encrypted zvol needs its keys at restore time).
+archive_method_words() {
+    case "$1" in
+        copy) echo "device copy" ;;
+        *)    echo "raw send/receive" ;;
+    esac
+}
+
 # --- Ensure a snapshot exists for archiving -----------------------------
 # Returns the full snapshot name (e.g. pool/dataset@snap) on stdout.
 # In two-node mode this runs on the storage host.
@@ -221,15 +232,14 @@ collect_referenced_zvols() {
                 && [[ "$config_line" == "$key:"* && "$rest_of_line" == *:* ]] \
                 && [[ -n "$storage" && "$disk_part" == "vm-${vmid}-disk-"* ]] \
                 && [[ -n "$disk_num" ]]; then
-                # Find the zvol whose path ends with this disk reference.
-                zvol_path=""
-                while IFS= read -r vol; do
-                    if [[ "$vol" == *"/proxmox/vm-${vmid}-disk-${disk_num}" ]]; then
-                        zvol_path="$vol"
-                        break
-                    fi
-                done < <(zfs list -H -t volume -o name 2>/dev/null)
-                if [[ -z "$zvol_path" ]]; then
+                # The zvol lives at <pool>/proxmox/vm-<vmid>-disk-<n> — the
+                # same construction every disk tool uses. Constructing the
+                # path directly (instead of suffix-matching every volume on
+                # every pool) keeps replicated backup copies on other pools
+                # from ever being picked up as this VM's disk.
+                zvol_path="${storage}/proxmox/vm-${vmid}-disk-${disk_num}"
+                if ! zfs list -H -o name "$zvol_path" 2>/dev/null \
+                        | grep -qxF -- "$zvol_path"; then
                     log_msg "WARN: Config references vm-${vmid}-disk-${disk_num}" \
                         "but no zvol was found"
                     continue
@@ -241,10 +251,17 @@ collect_referenced_zvols() {
             fi
         done < "$proxmoxconfig"
 
-        # Warn about VM zvols that are not referenced in the config.
+        # Warn about VM zvols that are not referenced in the config. Only
+        # the exact <pool>/proxmox/vm-<vmid>-disk-<n> shape counts: deeper
+        # nesting is a replicated backup copy on another pool, not a live
+        # LUN candidate (the discover_zvols law in iscsi-lib.sh).
         while IFS= read -r vol; do
-            vol_tail="${vol##*"/proxmox/vm-${vmid}-disk-"}"
-            [[ "$vol_tail" =~ ^[0-9]+$ ]] || continue
+            vol_parent="${vol%/*}"
+            vol_base="${vol##*/}"
+            [[ "$vol_parent" == */proxmox && "$vol_parent" != */*/* ]] || continue
+            vol_tail="${vol_base#vm-${vmid}-disk-}"
+            [[ "$vol_base" == "vm-${vmid}-disk-${vol_tail}" \
+                && "$vol_tail" =~ ^[0-9]+$ ]] || continue
             if [[ -z "${referenced_zvols[$vol]:-}" ]]; then
                 log_msg "WARN: Orphaned zvol not referenced in config:" "$vol"
             fi
@@ -331,7 +348,10 @@ while [[ $# -ge 2 ]]; do
     referenced_zvols["$zvol"]=1
 done
 
-# Warn about VM zvols that are not referenced in the config.
+# Warn about VM zvols that are not referenced in the config. Only the exact
+# <pool>/proxmox/vm-<vmid>-disk-<n> shape counts: deeper nesting is a
+# replicated backup copy on another pool, not a live LUN candidate (the
+# discover_zvols law in iscsi-lib.sh).
 while IFS= read -r orphan_zvol; do
     [[ -n "$orphan_zvol" ]] || continue
     if [[ -z "${referenced_zvols[$orphan_zvol]:-}" ]]; then
@@ -339,8 +359,12 @@ while IFS= read -r orphan_zvol; do
             "${orphan_zvol}"
     fi
 done < <(zfs list -H -t volume -o name 2>/dev/null | while IFS= read -r vol; do
-    vol_tail="${vol##*"/proxmox/vm-${vmid}-disk-"}"
-    [[ "$vol_tail" =~ ^[0-9]+$ ]] && echo "$vol"
+    vol_parent="${vol%/*}"
+    vol_base="${vol##*/}"
+    [[ "$vol_parent" == */proxmox && "$vol_parent" != */*/* ]] || continue
+    vol_tail="${vol_base#vm-${vmid}-disk-}"
+    [[ "$vol_base" == "vm-${vmid}-disk-${vol_tail}" \
+        && "$vol_tail" =~ ^[0-9]+$ ]] && echo "$vol"
 done)
 SSHEOF
     fi
@@ -538,7 +562,10 @@ if ! archive_valid_rate "$archive_rate"; then
 fi
 # shellcheck disable=SC2034  # used by on_storage/on_compute and lib functions
 transfer_rate_limit="$archive_rate"
-if [[ "$archive_rate" != "$configured_rate" ]]; then
+# The rate grammar is case-insensitive: compare lowercased so "50M" against
+# a saved "50m" is not a change worth announcing or saving. A real change
+# is saved exactly as typed.
+if [[ "${archive_rate,,}" != "${configured_rate,,}" ]]; then
     save_json_config_key archive_rate_limit "$archive_rate"
     log_msg "INFO:   ✓ Saved transfer rate limit to JSON config"
 fi
@@ -605,8 +632,12 @@ for zvol in $zvols; do
             continue
         fi
         log_msg "INFO:   Archiving ${zvol}${snap_name} → ${archive_dataset}"
-        if ! archive_one_zvol "$zvol" "$snap_name" "$archive_dataset" \
-                "$archive_mount"; then
+        # The engine speaks only when something is wrong — this script
+        # narrates each disk. with_msg_level scopes the stderr gate to the
+        # engine call (in this shell, so the engine's exit-trap backstops
+        # stay registered here); its WARN/FATAL still surface.
+        if ! with_msg_level WARN archive_one_zvol "$zvol" "$snap_name" \
+                "$archive_dataset" "$archive_mount"; then
             { log_msg "FATAL: Failed to archive ${zvol}"; exit 1; }
         fi
 
@@ -630,6 +661,10 @@ for zvol in $zvols; do
 mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 source "$mydir/bashinit"
 bashinit
+
+# Driven by archive-vm: the engine speaks only when something is wrong;
+# the orchestrator narrates each disk.
+export ZFSUTILITIES_MSG_LEVEL=WARN
 
 engine=$(find_zfsutility_script archive-engine.sh)
 [[ -n "$engine" ]] || {
@@ -788,7 +823,8 @@ for zvol in $zvols; do
                     "${expected_vbs}, got ${vbs}"
                 ((++errors))
             else
-                log_msg "INFO:   ✓ ${archive_dataset} (${size}, volblocksize ${vbs})"
+                log_msg "INFO:   ✓ ${archive_dataset} (${size}," \
+                    "$(archive_method_words "$method"), volblocksize ${vbs})"
             fi
         fi
     else
@@ -823,7 +859,8 @@ SSHEOF
                     "${expected_vbs}, got ${vbs}"
                 ((++errors))
             else
-                log_msg "INFO:   ✓ ${archive_dataset} (${size}, volblocksize ${vbs})"
+                log_msg "INFO:   ✓ ${archive_dataset} (${size}," \
+                    "$(archive_method_words "$method"), volblocksize ${vbs})"
             fi
         fi
     fi
@@ -898,28 +935,32 @@ else
         log_msg "INFO:     Removing disk ${disknum} from pool ${pool}..."
         if [[ "$my_host" == "$storage_host" ]]; then
             # Orchestrating on the storage host: remove-vm-disk runs
-            # directly — its confirm prompts appear on this terminal and
-            # its own wrapper rescans the compute host.
+            # directly. --from-archive drives it non-interactively (the VM
+            # was verified stopped at the start of this run, the operator
+            # already confirmed "Remove VM", and this script deletes the
+            # Proxmox config itself once every disk is gone).
             rmd_path=$(find_zfsutility_script remove-vm-disk)
-            "$rmd_path" "$pool" "$vmid" "$disknum" --skip-rescan \
+            "$rmd_path" "$pool" "$vmid" "$disknum" --skip-rescan --from-archive \
                 || true
         else
-            # Over ssh, -t gives the remote confirms a terminal — bash
-            # suppresses read -p prompts when stdin is not a tty — and the
-            # env prefix carries the numbered input-hold protocol across
-            # the hop.
+            # Over ssh: --from-archive means no remote prompts, so no -t is
+            # needed (a plain query-only hop also drops ssh's "Connection
+            # to ... closed." notice); -n keeps the hop from draining a
+            # piped-stdin answer feed.
             remote_remove_vm_disk=$(remote_zfsutility_script "$storage_host" "remove-vm-disk")
             remote_cmd="$(input_hold_env_prefix)$remote_remove_vm_disk"
-            remote_cmd+=" '$pool' '$vmid' '$disknum' --skip-rescan"
-            ssh -t root@"$storage_host" "$remote_cmd" || true
+            remote_cmd+=" '$pool' '$vmid' '$disknum' --skip-rescan --from-archive"
+            ssh -n root@"$storage_host" "$remote_cmd" || true
         fi
-        # remove-vm-disk exits 0 even when an operator declines its confirm,
-        # so judge by outcome: the zvol must actually be gone.
+        # remove-vm-disk exits 0 even when it cannot finish, so judge by
+        # outcome: the zvol must actually be gone.
         still_present=$(ssh -n root@"$storage_host" \
             "zfs list -H -o name '$zvol'" 2>/dev/null || true)
         if [[ -n "$still_present" ]]; then
             log_msg "WARN: ${zvol} was not removed"
             leftover_zvols+=("$zvol")
+        else
+            log_msg "INFO:     ✓ Removed disk ${disknum}: ${zvol}"
         fi
     done
 

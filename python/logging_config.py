@@ -272,6 +272,25 @@ def _stderr_is_terminal():
     return hasattr(sys.stderr, "isatty") and sys.stderr.isatty() and _term != "dumb"
 
 
+def _msg_level_gated(msg):
+    """Return True when the ZFSUTILITIES_MSG_LEVEL gate suppresses *msg*.
+
+    Driven flows (e.g. archive-vm's child helpers) set the env so only
+    messages at or above the gate reach the terminal. The gate applies to
+    stderr emission only: the GUI sink and the session log always receive
+    every message. An unset or invalid gate, or a message without a
+    recognized LEVEL: prefix, is never gated (the implied-NONE law the GUI
+    viewers apply).
+    """
+    gate = os.environ.get("ZFSUTILITIES_MSG_LEVEL", "")
+    if gate not in _MSG_PRIORITY:
+        return False
+    level = parse_msg_level(msg)
+    if level is NONE_LEVEL:
+        return False
+    return _MSG_PRIORITY[level] < _MSG_PRIORITY[gate]
+
+
 def log_msg(
     *parts,
     long_prefix=False,
@@ -281,9 +300,11 @@ def log_msg(
 ):
     """Log a message with file:line prefix, GUI sink, and session log file.
 
-    All messages are always emitted (to the GUI sink or stderr) and appended
-    to the session log file when one is configured. Filtering by message level
-    is performed by the GUI log viewers.
+    All messages go to the GUI sink (when set) and to the session log file
+    when one is configured; stderr emission can be suppressed by the
+    ZFSUTILITIES_MSG_LEVEL gate (see _msg_level_gated; unset by default, so
+    every message is emitted). Viewing-time filtering by message level is
+    performed by the GUI log viewers.
 
     By default, when stderr is a terminal the message is emitted without the
     file:line prefix. Pass ``--long-prefix`` as the first positional argument,
@@ -334,7 +355,7 @@ def log_msg(
 
     if _gui_log_sink is not None:
         _gui_log_sink(full)
-    else:
+    elif not _msg_level_gated(msg):
         if _stderr_is_terminal():
             if msg.startswith("WARN:"):
                 print(f"\033[38;5;208m{full}\033[0m", file=sys.stderr)

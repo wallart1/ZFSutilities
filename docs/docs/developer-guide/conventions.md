@@ -173,9 +173,12 @@ highest):
 DEBUG:  VERB:  INFO:  WARN:  FATAL:  [none]
 ```
 
-`log_msg` always emits every message to stderr (or the GUI sink) and to the
-session log file. Filtering by priority is performed by the GUI log viewers,
-not by `log_msg`. The main info panel and the Logs tab viewer each have an
+`log_msg` sends every message to the GUI sink and to the session log file. On
+a terminal it also prints every message, unless a driving script sets the
+`ZFSUTILITIES_MSG_LEVEL` gate (see
+[Terminal message-level gate](architecture.md#terminal-message-level-gate)).
+Viewing-time filtering by priority is performed by the GUI log viewers, not by
+`log_msg`. The main info panel and the Logs tab viewer each have an
 independent **Level** selector. A message without a recognized prefix uses the
 implied "(none)" level and is always displayed.
 

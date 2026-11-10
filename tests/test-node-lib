@@ -393,6 +393,28 @@ test_pool_to_target_silent_when_target_in_lio() {
     fi
 }
 
+# A pool that runs no iSCSI target under ANY prefix is not drift: POOL_TARGET
+# also names the pools the state map is written to, so configured pools can
+# deliberately be target-less (archive/backup/offline pools). The fence must
+# stay silent for them instead of warning on every pool_to_target call.
+test_pool_to_target_silent_for_targetless_pool() {
+    test_start "pool_to_target stays silent when no live target carries the short name"
+    clear_test_log_file
+    local result
+    result=$(NODE_CONF="$two_node_conf" source "$mydir/lib/node-lib.sh";
+        hostname() { echo stewie; }
+        targetcli() { printf 'Target 1: iqn.2026-02.local.stewie:nvme1\n'; }
+        pool_to_target "threeamigos" 2>/dev/null)
+    assert_equals "iqn.2025-01.com.zfsutilities:threeamigos" "$result"
+    local log
+    log=$(get_test_log_file)
+    if grep -q "does not exist in the local" "$log"; then
+        test_fail "WARN logged for a deliberately target-less pool: $log"
+    else
+        test_pass
+    fi
+}
+
 # The warn path must never fire off the storage host (the compute host has
 # no LIO tree to verify against), even with targetcli present.
 test_pool_to_target_no_lio_probe_off_storage_host() {
@@ -1027,6 +1049,7 @@ test_pool_to_target_known
 test_pool_to_target_unknown
 test_pool_to_target_warns_when_target_missing_in_lio
 test_pool_to_target_silent_when_target_in_lio
+test_pool_to_target_silent_for_targetless_pool
 test_pool_to_target_no_lio_probe_off_storage_host
 test_pool_map_survives_source_helper_load
 test_on_storage_remote_payload_mode_runs_helpers

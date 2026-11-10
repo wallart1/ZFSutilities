@@ -1,7 +1,7 @@
 # Glossary
 
 **Items to be added by Zcode:**
-    Full gate
+    rid-suffixed datasets
 
 
 Plain-language definitions of terms as they are actually used in this
@@ -348,6 +348,19 @@ teardown deletes records only together with their guests), "the
 distinction is load-bearing" (ACL entry: mapped-LUN grants vs TPG
 mappings). Spotting one is a wrap-up finding in itself.
 
+## loop device
+
+A pseudo block device the kernel binds to a file or another block
+device (`losetup`). The Datasets page uses one to make a ZFS volume
+mountable: **Mount** on a volume attaches its `/dev/zvol/...` device to
+a read-only loop device with partition scanning, and the volume's
+partitions then mount read-only under `/mnt/zfsutilities/...`. The
+attach is read-only on purpose — these volumes are often live VM disks
+served over iSCSI. **Unmount** on the volume row unmounts every
+partition by device (an exact-layer `umount`, so a foreign mount stacked
+on a partition's mountpoint is never touched) and then detaches the
+loop device.
+
 ## LUN
 
 Logical Unit Number — a numbered export slot inside an iSCSI target.
@@ -361,6 +374,16 @@ non-identity (mapped 8 → TPG 0, the case that made the map's grants
 dimension necessary). The safe-save gate compares LUN mappings, not
 backstore counts, precisely because the 2026-10-27 incident passed
 every count gate with 33 backstores defined and only 3 LUNs mapped.
+
+## message-level gate
+
+A filter on what a script prints to the terminal, set with the
+`ZFSUTILITIES_MSG_LEVEL` environment variable (`DEBUG`, `VERB`, `INFO`,
+`WARN`, or `FATAL`). Messages below the chosen level stay off the
+terminal; the session log still records every message. `archive-vm` runs
+its helper scripts under a `WARN` gate, so an archive run prints its own
+step-by-step narrative and the helpers speak only when something is
+wrong. Unset (the default), every message prints.
 
 ## mount namespace
 
@@ -521,7 +544,10 @@ A dataset the kernel lists as mounted whose mountpoint path cannot be
 reached, because a later mount over an ancestor (typically a pool root
 mounted after its children) covers the path. Data written through the
 path lands in the covering filesystem instead, and `zfs unmount` fails
-with the misleading `no such pool or dataset`. The covering layer is
+with a misleading error: `no such pool or dataset` when nothing is left
+at the path, or `unmount failed` when an empty leftover directory of the
+same name sits inside the cover. The GUI therefore tests the path (is it
+a real mountpoint?) rather than the error text. The covering layer is
 called the *cover*; the GUI repairs the order by unmounting the affected
 set (detaching covers with an exact-layer `umount` so unrelated mounted
 children are not cascaded) and remounting parents-first. Contrast an

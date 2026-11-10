@@ -62,8 +62,8 @@ run_remove_vm_disk() {
     local capture_dir="$_mock_zfs_state_dir/capture"
     mkdir -p "$capture_dir"
     rm -f "$capture_dir/zfsdelfs_calls" "$capture_dir/ssh" "$capture_dir/rescan" \
-        "$capture_dir/iscsi_save" "$capture_dir/zfs-destroy" \
-        "$capture_dir/remove-vm-disk-argv"
+        "$capture_dir/iscsi_save" "$capture_dir/iscsi_save_env" \
+        "$capture_dir/zfs-destroy" "$capture_dir/remove-vm-disk-argv"
 
     local zvol="${pool}/proxmox/vm-${vmid}-disk-${disknum}"
     local backstore="vm-${vmid}-disk-${disknum}"
@@ -101,6 +101,10 @@ EOF
         cat > "$_mock_zfs_state_dir/safe-iscsi-save" << 'EOF'
 #!/usr/bin/bash
 echo "SAVE" >> "$_capture_dir/iscsi_save"
+# Caller-context env the save runs under (the pending-destroy device and
+# the stderr message-level gate), one record per save.
+printf 'pending=%s level=%s\n' "${SAFE_ISCSI_SAVE_PENDING_DESTROY:-}" \
+    "${ZFSUTILITIES_MSG_LEVEL:-}" >> "$_capture_dir/iscsi_save_env"
 exit 0
 EOF
         chmod +x "$_mock_zfs_state_dir/safe-iscsi-save"
@@ -173,6 +177,10 @@ EOF
                     return 0
                 fi
                 if [[ "$verb" == "delete" ]]; then
+                    if [[ "${_mock_targetcli_delete_fail:-}" == "lun" ]]; then
+                        echo "Could not delete LUN: device busy"
+                        return 1
+                    fi
                     local _lun="${3#lun}"
                     awk -v t="$_t" -v l="$_lun" '!($1 == t && $2 == l)' \
                         "$_test_luns_file" > "${_test_luns_file}.new"
@@ -250,6 +258,10 @@ rescans() {
 
 iscsi_saves() {
     cat "$_mock_zfs_state_dir/capture/iscsi_save" 2>/dev/null || true
+}
+
+iscsi_save_env() {
+    cat "$_mock_zfs_state_dir/capture/iscsi_save_env" 2>/dev/null || true
 }
 
 direct_destroys() {
@@ -340,6 +352,20 @@ test_happy_path_teardown_and_zfsdelfs_destroy() {
         test_fail "safe-iscsi-save was not run"
         return
     fi
+    # The save is told which zvol this flow is about to destroy (so its
+    # permitted-loss check does not misreport the in-flight destruction),
+    # and a standalone run leaves the stderr message-level gate unset.
+    local save_env
+    save_env=$(iscsi_save_env)
+    if [[ "$save_env" != "pending=/dev/zvol/threeamigos/proxmox/vm-205-disk-0 level=" ]]; then
+        test_fail "safe-iscsi-save ran under the wrong context; env:\n$save_env"
+        return
+    fi
+    # targetcli's own chatter prints only on failure.
+    if [[ "$out" == *"Deleted LUN"* || "$out" == *"Deleted storage object"* ]]; then
+        test_fail "targetcli chatter leaked on success; output:\n$out"
+        return
+    fi
 
     local calls
     calls=$(zfsdelfs_calls)
@@ -420,6 +446,86 @@ test_missing_zvol_fatals() {
     test_pass
 }
 
+test_from_archive_runs_without_prompts() {
+    test_start "--from-archive tears down with no confirm prompts and gates children at WARN"
+
+    # No answers on stdin at all: a standalone run would abort at the first
+    # confirm; the driven run must complete the whole teardown.
+    local out rc
+    out=$(run_remove_vm_disk "$(hostname -s)" threeamigos 205 0 "" "" \
+        "--skip-rescan --from-archive")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Aborted."* ]]; then
+        test_fail "Driven run stopped at a confirm prompt; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"PERMANENTLY DESTROY"* ]]; then
+        test_fail "Driven run printed the confirm block; output:\n$out"
+        return
+    fi
+    if [[ -n "$(luns_state)" || -n "$(backstores_state)" ]]; then
+        test_fail "Driven run left the LUN/backstore; luns:\n$(luns_state)"
+        return
+    fi
+    local calls
+    calls=$(zfsdelfs_calls)
+    if [[ "$calls" != *"threeamigos/proxmox/vm-205-disk-0"* ]]; then
+        test_fail "Driven run did not destroy the zvol; calls:\n$calls"
+        return
+    fi
+    # Children (safe-iscsi-save, export-iscsi-state, zfsdelfs) inherit the
+    # WARN gate, and the save still learns the pending destroy.
+    local save_env
+    save_env=$(iscsi_save_env)
+    if [[ "$save_env" != "pending=/dev/zvol/threeamigos/proxmox/vm-205-disk-0 level=WARN" ]]; then
+        test_fail "Driven save ran under the wrong context; env:\n$save_env"
+        return
+    fi
+
+    test_pass
+}
+
+test_targetcli_lun_delete_failure_fatals() {
+    test_start "A failing targetcli LUN delete fails loudly with targetcli's output"
+
+    _mock_targetcli_delete_fail="lun"
+    local out rc
+    out=$(run_remove_vm_disk "$(hostname -s)" threeamigos 205 0 $'y\ny' "" "--skip-rescan")
+    rc=$?
+    unset _mock_targetcli_delete_fail
+
+    if [[ $rc -eq 0 ]]; then
+        test_fail "Failed LUN delete reported success; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"FATAL: targetcli failed to remove LUN 0:"* ]]; then
+        test_fail "Missing LUN-delete FATAL; output:\n$out"
+        return
+    fi
+    # The captured targetcli output is what explains the failure.
+    if [[ "$out" != *"Could not delete LUN: device busy"* ]]; then
+        test_fail "targetcli's failure output not shown; output:\n$out"
+        return
+    fi
+    # Nothing downstream ran: the zvol must not be destroyed under a LUN
+    # that is still mapped.
+    if [[ -n "$(zfsdelfs_calls)" ]]; then
+        test_fail "zfsdelfs ran after a failed LUN delete; calls:\n$(zfsdelfs_calls)"
+        return
+    fi
+    if [[ -n "$(iscsi_saves)" ]]; then
+        test_fail "Config saved after a failed LUN delete"
+        return
+    fi
+
+    test_pass
+}
+
 test_wrapper_delegates_with_tty_input_hold_and_skip_rescan() {
     test_start "Compute-host wrapper delegates via ssh -t with input-hold and --skip-rescan"
 
@@ -446,8 +552,42 @@ test_wrapper_delegates_with_tty_input_hold_and_skip_rescan() {
         test_fail "Delegation missing quoted args/--skip-rescan; argv:\n$argv"
         return
     fi
+    # A standalone run forwards an empty (= ungated) message-level gate and
+    # no driven flag.
+    if [[ "$argv" != *"ZFSUTILITIES_MSG_LEVEL='' "* || "$argv" == *"--from-archive"* ]]; then
+        test_fail "Standalone delegation carried a gate or driven flag; argv:\n$argv"
+        return
+    fi
     if [[ -z "$(rescans)" ]]; then
         test_fail "Wrapper did not rescan after successful removal"
+        return
+    fi
+
+    test_pass
+}
+
+test_wrapper_forwards_from_archive() {
+    test_start "Compute-host wrapper forwards --from-archive and the WARN gate"
+
+    local out rc
+    out=$(run_remove_vm_disk stewie threeamigos 205 0 "" "" "--from-archive")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+
+    local argv
+    argv=$(delegation_argv)
+    local needle="ZFSUTILITIES_MSG_LEVEL='WARN' "
+    if [[ "$argv" != *"$needle"* ]]; then
+        test_fail "Delegation did not forward the WARN gate; argv:\n$argv"
+        return
+    fi
+    needle="'threeamigos' '205' '0' --skip-rescan --from-archive"
+    if [[ "$argv" != *"$needle"* ]]; then
+        test_fail "Delegation did not forward --from-archive; argv:\n$argv"
         return
     fi
 
@@ -487,7 +627,10 @@ test_decline_aborts_without_teardown
 test_happy_path_teardown_and_zfsdelfs_destroy
 test_rerun_after_lun_removal_still_destroys
 test_missing_zvol_fatals
+test_from_archive_runs_without_prompts
+test_targetcli_lun_delete_failure_fatals
 test_wrapper_delegates_with_tty_input_hold_and_skip_rescan
+test_wrapper_forwards_from_archive
 test_wrapper_rescans_and_fails_when_storage_fails
 
 test_summary

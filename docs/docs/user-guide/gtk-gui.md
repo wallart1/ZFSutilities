@@ -1343,6 +1343,12 @@ self-truncation (`rsync`), like the cron log.
   be changed with **View → Log Viewer Font** (see [View Menu](#view-menu)) and
   is remembered across GUI restarts.
 
+- **Path line** — a line above the viewer toolbar shows the full path of the
+  loaded log. Long paths are shortened from the left so the file name stays
+  visible; hovering shows the full path, and the text is selectable for
+  copying. While the viewer is popped out, the window title carries the
+  file name as well.
+
 - **Level filter** — a dropdown above the text view lets you show only messages
   at the selected priority or higher. It works the same way as the bottom-panel
   **Log** level filter and does not affect what is stored in the log file.
@@ -1722,7 +1728,9 @@ disk not matched, clone ambiguity, non-Linux guests — are counted per
 reason in the availability note (for example `VM not running (2)`)
 while the other volumes keep their probed rows and rungs; each volume's
 own reason appears in its VM row, so the note stays a summary instead
-of a volume-by-volume list.
+of a volume-by-volume list. A stopped VM, or one whose guest agent is
+not configured or not running, is only reported this way. It adds
+nothing to the log, because whether a VM runs is your decision.
 
 Refreshes keep the page steady: the tables update their rows in place
 (a finding keeps its position even while the numbers inside it drift),
@@ -2678,7 +2686,7 @@ based on what is selected.
 | **Browse**                     | Exactly one mounted filesystem, snapshot, or volume partition selected                                                                | Opens the selected item in the default file manager. Filesystems (including pool root datasets) open at their ZFS mountpoint; snapshots open via `.zfs/snapshot/<name>`; volume partitions open at their loop-mount directory.                                                                                                                                                                                                                   |
 | **Mount**                      | One or more mountable filesystems, snapshots, or volumes selected                                                                     | Mounts each selected filesystem (`sudo zfs mount`) or triggers ZFS auto-mount for each selected snapshot. Unmounted ancestor datasets are mounted first so the target's mountpoint is not hidden. Ancestors with `canmount=off` are skipped — they cannot be mounted, and ZFS creates their mountpoint directory automatically when the target mounts. Filesystems with `canmount=off` (including pool roots) can never be mounted either: Mount is disabled for them with an explanatory tooltip, and when a mixed selection is mounted they are skipped with the same gated-skip message as ancestors. Mount is also disabled while a running operation (backup, offsite transfer, or send/receive) holds a conflicting dataset lock on every mountable selected filesystem — the tooltip says so — and any selected item that still cannot be mounted (a lock conflict with a running operation, a failed mount command, or a `canmount=off` filesystem in a mixed selection) is reported in one warning dialog naming the blocking lock holder, never silently dropped. If a selected snapshot's parent dataset is unmounted, a dialog first lists the unmounted parent datasets and the snapshots they block and offers to mount them all: confirming mounts the parents root-first and then the snapshots; cancelling skips the mounts, and the snapshots report the parent-not-mounted warning. A selected volume is attached to a read-only loop device and its partitions are listed under the volume's entry (see below). Partitions labeled `No filesystem` cannot be mounted. Snapshots of volumes cannot be mounted; Mount is disabled for them with an explanatory tooltip. Disabled for holds.                                         |
 | **Unmount**                    | One or more mounted filesystems, snapshots, volume partitions, or loop-attached volumes selected                                      | Unmounts each selected filesystem (`sudo zfs unmount`) or snapshot (`sudo umount` on its `.zfs/snapshot/<name>` path). Pool root datasets can be unmounted. Unmounting a filesystem also unmounts its mounted children (see the note below). Unmounting a volume detaches its loop device after unmounting its mounted partitions. If processes are still using an item, a warning dialog lists them and asks you to close them before retrying. Unreachable (orphaned or shadowed) mounts are recovered automatically (see the note below). |
-| **Repair Mount Order**         | Exactly one filesystem or pool-root row selected                                                                                      | Repairs bad mount ordering inside the selected subtree. A confirmation dialog lists exactly what will happen: which filesystems are unmounted (shadowed covers lifted as needed), the parents-first remount order, and any `canmount=on` corrections on noauto ancestors so the correct order also comes up at boot. Nothing runs without approval; datasets in use abort the repair before any unmount, and a mid-repair failure remounts everything parents-first and reports what to do. The Dashboard offers the same repair automatically for every unreachable mount it detects. |
+| **Repair Mount Order**         | Exactly one filesystem or pool-root row selected                                                                                      | Repairs bad mount ordering inside the selected subtree. A confirmation dialog lists exactly what will happen: which filesystems are unmounted (shadowed covers lifted as needed), the parents-first remount order, and any `canmount=on` corrections on noauto ancestors so the correct order also comes up at boot. Nothing runs without approval; datasets in use abort the repair before any unmount, and a mid-repair failure remounts everything parents-first. The repair then checks every dataset in the set the same way the Dashboard does: it reports success when all are mounted and reachable, otherwise it lists the ones still unreachable or unmounted and names the next step. The Dashboard offers the same repair automatically for every unreachable mount it detects. |
 | **Apply Profile…**             | Exactly one pool/dataset row (filesystem or volume) selected; snapshots, holds, volume partitions, and multi-selections disable it | Shows the workload-profile picker for the selected dataset; the list contains only the profiles whose *applies to* includes the dataset's type (filesystem or volume). A preview lists the exact `zfs set` commands; profiles that may be unsafe (e.g. `sync=disabled`) require explicit confirmation. Applying to a pool root sets pool-wide inheritance defaults. See [Workload profiles](#workload-profiles).          |
 | **Rewrite Data**               | Every selected item is a filesystem dataset, and OpenZFS 2.3.4+/2.4+ with the pool's `physical_rewrite` feature                       | Runs `zfs rewrite -P -r -x -v <mountpoint>` on each selected dataset in turn, physically rewriting existing blocks so they match the current properties (see [Workload profiles](#workload-profiles)). Volumes cannot be rewritten. Unmounted datasets are mounted temporarily and returned to their prior state. This may take a long time and cannot be undone. The completion summary states what was actually rewritten — the per-dataset file counts captured from `zfs rewrite -v` — and says "rewrote nothing" when the command finished rc=0 without rewriting any file, never a bare "complete".                   |
 | **Sever Clone**                | At least one selected row is a clone dataset — a volume whose Origin column names a snapshot                                            | Runs `sever-vm-clone` on the selected clone dataset(s) only — never on the unselected disks of the same VM. A typed-confirmation dialog names the selected dataset(s), their origin snapshot(s), and the owning VM(s) (derived from the `vm-<id>-disk-<n>` name), and states that severance is a full copy and that the VM(s) must be stopped for the cutover phase. The script's remaining questions (transfer mode, tight-space holding pool, origin-snapshot destruction) appear as prompts in the log panel, and the tree refreshes when the step finishes. See [Severing a Clone](../user-guide/concepts.md#severing-a-clone) for what severance does and why `zfs promote` is not it.                                  |
@@ -2715,8 +2723,11 @@ Right-click any cell for a context menu:
 
 !!! note "Unreachable mounts (dataset shows mounted but its path is missing)"
     If a dataset is listed as mounted but its mountpoint directory cannot be
-    reached, `zfs unmount` fails with the misleading `no such pool or
-    dataset` error. Two shapes exist and the GUI recovers both automatically
+    reached, `zfs unmount` fails with a misleading error: `no such pool or
+    dataset` when nothing is left at the path, or `unmount failed` when an
+    empty leftover directory of the same name sits inside the covering
+    filesystem. The GUI decides by checking the path itself, not the error
+    text. Two shapes exist and the GUI recovers both automatically
     during **Unmount**: an *orphaned* mount (an ancestor is unmounted, for
     example after a parent was lazily unmounted) is recovered by remounting
     the unmounted parents and retrying; a *shadowed* mount (every ancestor is
@@ -2727,7 +2738,8 @@ Right-click any cell for a context menu:
     `umount` of its mountpoint — exactly that one mount layer — because
     `zfs unmount` on an ancestor also walks every mounted descendant and
     stops at the first shadowed one. If recovery fails, the message
-    names the covering ancestor and what is using it — close that and retry;
+    names the covering ancestor, its mountpoint, and what holds it — mounts
+    made on top of it or processes using it — close or unmount that and retry;
     no reboot is needed. Never try to `mkdir` the missing mountpoint: that
     creates a new directory that the real mount is not attached to and only
     masks the problem. Shadowed mounts are also detected on their own: the
@@ -2773,10 +2785,25 @@ volume snapshot has no `.zfs/snapshot` path and no block device of its own —
 so **Mount** stays disabled for those rows (hover the button for the
 explanation).
 
-Unmounting a mounted partition row (`sudo umount`) releases just that
-partition. Unmounting the volume row itself unmounts any mounted partitions
-and then detaches the loop device (`losetup -d`), removing the partition rows
-from the tree.
+Unmounting a mounted partition row releases just that partition. Unmounting
+the volume row itself unmounts every mounted partition and then detaches the
+loop device (`losetup -d`), removing the partition rows from the tree.
+
+The unmount commands name the device, not the mountpoint, so exactly that
+device's mount comes off. A filesystem stacked on the same mountpoint is
+never touched, and a device mounted more than once is fully unmounted, one
+layer per round. The volume row checks every partition for busy processes
+before unmounting anything, so a busy partition never leaves the volume
+half-unmounted.
+
+Both unmounts take the volume's dataset lock first. A running backup or
+other dataset action that already holds the lock refuses the unmount with a
+message naming the holder. An unmount with nothing to do — no loop device
+attached, or a partition already unmounted — is a success, not an error: it
+logs a VERB line and refreshes the row, clearing a stale mount flag.
+
+A failed detach names its cause: any partition that is still mounted, or a
+process holding the loop device itself open.
 
 ---
 

@@ -165,7 +165,9 @@ PYEOF
 # written. A mapping may disappear only when its backstore left the manifest
 # (the intentional-change authority remove-vm-disk / move-vm-disk / archive
 # maintain) — and such a permitted loss still draws a WARN when the backstore's
-# zvol survives, the stale-manifest signal. Detail FATAL/WARN lines are printed
+# zvol survives, the stale-manifest signal, unless the caller names the device
+# in SAFE_ISCSI_SAVE_PENDING_DESTROY (a destruction scheduled right after this
+# save; remove-vm-disk does). Detail FATAL/WARN lines are printed
 # by the embedded python (the report_state_drift precedent); returns 1 when
 # the save must be refused.
 verify_no_expected_lun_loss() {
@@ -270,13 +272,19 @@ if mapping_losses or grant_losses:
     sys.exit(1)
 
 # Permitted losses (backstore left the manifest — intentional removal) still
-# draw a WARN when the zvol survives: the removal flows destroy the zvol
-# before saving, so an existing device means the manifest line left early.
+# draw a WARN when the zvol survives: a removal flow destroys the zvol before
+# or right after saving, so an existing device usually means the manifest
+# line left early. A flow that destroys the zvol AFTER this save passes the
+# device(s) in SAFE_ISCSI_SAVE_PENDING_DESTROY (one /dev/zvol path per line)
+# so the in-flight destruction is not misreported.
+pending_destroy = set(
+    d for d in os.environ.get("SAFE_ISCSI_SAVE_PENDING_DESTROY", "").splitlines() if d
+)
 devs = {so.get("name"): so.get("dev")
         for so in old.get("storage_objects", []) if so.get("name")}
 for wwn, idx, bs in permitted:
     dev = devs.get(bs)
-    if dev and os.path.exists(dev):
+    if dev and dev not in pending_destroy and os.path.exists(dev):
         print("WARN: %s: manifest no longer expects it but zvol %s still exists —"
               " the manifest may be stale" % (bs, dev))
 sys.exit(0)

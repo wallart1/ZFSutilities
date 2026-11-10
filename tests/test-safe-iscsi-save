@@ -843,6 +843,57 @@ but zvol ${zvol} still exists"* ]] || ok=false
     rm -rf "$tmpdir"
 }
 
+# The same shape with the caller's pending-destroy context: remove-vm-disk
+# destroys the zvol right after the save, so the surviving device is an
+# in-flight destruction, not a stale manifest line — no WARN.
+test_pending_destroy_silences_stale_zvol_warn() {
+    test_start "SAFE_ISCSI_SAVE_PENDING_DESTROY suppresses the stale-manifest WARN"
+
+    local tmpdir manifest savefile live zvol
+    tmpdir=$(mktemp -d)
+    manifest="$tmpdir/expected-backstores.txt"
+    savefile="$tmpdir/saveconfig.json"
+    live="$tmpdir/live-config.json"
+    zvol="$tmpdir/still-here"
+    touch "$zvol"
+
+    printf 'vm-100-disk-0\n' > "$manifest"
+    _render_config_fixture "$live" 1 1
+    python3 - "$savefile" "$zvol" <<'PYEOF'
+import json, sys
+cfg = {
+    "storage_objects": [
+        {"name": "vm-100-disk-0", "dev": "/dev/zvol/threeamigos/proxmox/vm-100-disk-0"},
+        {"name": "vm-101-disk-0", "dev": sys.argv[2]}],
+    "targets": [{"wwn": "iqn.2026-02.local.stewie:threeamigos", "tpgs": [{
+        "luns": [
+            {"storage_object": "/backstores/block/vm-100-disk-0", "index": 0},
+            {"storage_object": "/backstores/block/vm-101-disk-0", "index": 1}],
+        "node_acls": [{"node_wwn": "iqn.2026-02.local.tweety",
+                  "mapped_luns": [{"index": 0, "tpg_lun": 0},
+                                  {"index": 1, "tpg_lun": 1}]}],
+    }]}],
+}
+with open(sys.argv[1], "w") as f:
+    json.dump(cfg, f, indent=2)
+PYEOF
+
+    local output rc=0
+    output=$(SAFE_ISCSI_SAVE_PENDING_DESTROY="$zvol" \
+        _run_safe_iscsi_save_core "$manifest" "$savefile" 1 "$live" "" "") || rc=$?
+
+    local ok=true
+    [[ "$rc" -eq 0 ]] || ok=false
+    [[ "$output" != *"manifest no longer expects it"* ]] || ok=false
+
+    if [[ "$ok" == true ]]; then
+        test_pass
+    else
+        test_fail "rc=$rc output='$output'"
+    fi
+    rm -rf "$tmpdir"
+}
+
 test_saveconfig_failure_refuses_save() {
     test_start "A failing targetcli saveconfig leaves the saved config untouched"
     local tmpdir manifest savefile
@@ -893,6 +944,7 @@ test_incident_shape_refuses_save
 test_legitimate_shrinkage_saves
 test_mappedlun_loss_refuses_save
 test_stale_zvol_warns_on_permitted_loss
+test_pending_destroy_silences_stale_zvol_warn
 test_saveconfig_failure_refuses_save
 
 test_summary

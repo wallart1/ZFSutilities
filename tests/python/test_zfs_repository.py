@@ -39,6 +39,8 @@ from zfs_repository import (
     find_unreachable_mounts,
     is_dataset_encrypted,
     mount_order_property_fixes,
+    mountpoint_unreachable,
+    mounts_stacked_on,
     parse_rate_limit,
     valid_rate_limit,
     validate_dest_mount_chain,
@@ -2037,6 +2039,71 @@ class TestFindUnreachableMounts(unittest.TestCase):
             )
             found = find_unreachable_mounts()
         self.assertEqual(found, [])
+
+
+class TestMountpointUnreachable(unittest.TestCase):
+    """The path test that decides a mounted dataset is shadowed/orphaned."""
+
+    def test_missing_path_is_unreachable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertTrue(mountpoint_unreachable(os.path.join(tmp, "gone")))
+
+    def test_leftover_directory_under_a_cover_is_unreachable(self):
+        # The stewie shape: the path resolves to an empty directory inside
+        # the covering filesystem, which is not a mountpoint.
+        with tempfile.TemporaryDirectory() as tmp:
+            leftover = os.path.join(tmp, "NVME1")
+            os.mkdir(leftover)
+            self.assertTrue(mountpoint_unreachable(leftover))
+
+    def test_real_mountpoint_is_reachable(self):
+        self.assertFalse(mountpoint_unreachable("/"))
+
+
+class TestMountsStackedOn(unittest.TestCase):
+    """mountinfo parsing finds the mounts that hold a covering layer."""
+
+    # Shaped like stewie's 2026-11-09 table: children mounted BEFORE the
+    # cover (113, the pool root) attach to the root filesystem underneath
+    # it; 200 and 201 were mounted on top of the cover afterwards, one with
+    # a space in its path.
+    MOUNTINFO_LINES = (
+        "34 1 0:30 / / rw,relatime shared:1 - ext4 /dev/sda1 rw",
+        "69 34 0:50 / /tank/zfsutilities rw,noatime shared:61 - zfs tank/zfsutilities rw",
+        "115 34 0:51 / /tank/NVME1 rw,noatime shared:83 - zfs tank/NVME1 rw",
+        "113 34 0:48 / /tank rw,noatime shared:141 - zfs tank rw,xattr",
+        "200 113 0:90 / /tank/scratch rw shared:150 - tmpfs tmpfs rw",
+        r"201 113 0:91 / /tank/my\040data rw shared:151 - zfs tank/my\040data rw",
+        "202 115 0:92 / /tank/NVME1/proxmox rw shared:152 - zfs tank/NVME1/proxmox rw",
+    )
+    MOUNTINFO = "\n".join(MOUNTINFO_LINES)
+
+    def _write(self, tmp, text):
+        path = os.path.join(tmp, "mountinfo")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text + "\n")
+        return path
+
+    def test_returns_only_mounts_on_the_topmost_layer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stacked = mounts_stacked_on("/tank", self._write(tmp, self.MOUNTINFO))
+        self.assertEqual(
+            [(m.mountpoint, m.fstype, m.source) for m in stacked],
+            [("/tank/scratch", "tmpfs", "tmpfs"), ("/tank/my data", "zfs", "tank/my data")],
+        )
+
+    def test_cover_with_nothing_on_top_returns_empty(self):
+        text = "\n".join(self.MOUNTINFO_LINES[:4])
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(mounts_stacked_on("/tank/", self._write(tmp, text)), [])
+
+    def test_path_not_mounted_returns_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(mounts_stacked_on("/nowhere", self._write(tmp, self.MOUNTINFO)), [])
+
+    def test_unreadable_table_returns_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(mounts_stacked_on("/tank", os.path.join(tmp, "missing")))
 
 
 class TestMountOrderPropertyFixes(unittest.TestCase):

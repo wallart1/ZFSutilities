@@ -139,8 +139,17 @@ EOF
         # across tests, and a rate/path saved by an earlier test must not
         # become the default a later test's empty answer falls back to.
         printf '{}\n' > "$JSON_CONFIG"
+        # A test can pre-seed the saved transfer rate (the prompt default).
+        if [[ -n "${_mock_saved_rate:-}" ]]; then
+            printf '{"archive_rate_limit": "%s"}\n' "$_mock_saved_rate" \
+                > "$JSON_CONFIG"
+        fi
         export _mock_zvol="threeamigos/proxmox/vm-${vmid}-disk-0"
         export _mock_zvols_list="${_mock_zvols_list:-$_mock_zvol}"
+        # Zvols the canned LIO layout actually exports (defaults to the full
+        # volume list): a test can add replicated backup copies to the volume
+        # list while only the real disks carry LUNs.
+        export _mock_lio_zvols="${_mock_lio_zvols:-$_mock_zvols_list}"
         export _mock_archive_base="$archive_base"
         export _mock_archive_mount="$archive_mount"
         export _capture_dir="$capture_dir"
@@ -421,8 +430,9 @@ EOF
         }
         targetcli() {
             # Canned iSCSI layout for locally-executed storage payloads
-            # (invoked-on-storage mode): every mock zvol is exported as
-            # lun0 of the threeamigos target.
+            # (invoked-on-storage mode): every LIO-exported mock zvol
+            # (_mock_lio_zvols) is exported as lun0 of the threeamigos
+            # target.
             case "$1" in
                 /iscsi)
                     [[ "${2:-}" == "ls" ]] \
@@ -432,7 +442,7 @@ EOF
                 */tpg1/luns)
                     [[ "${2:-}" == "ls" ]] || return 0
                     local _tz
-                    for _tz in $_mock_zvols_list; do
+                    for _tz in $_mock_lio_zvols; do
                         echo "  lun0 [block/${_tz##*/} (/dev/zvol/${_tz})]"
                     done
                     return 0
@@ -440,7 +450,7 @@ EOF
                 /backstores/block)
                     [[ "${2:-}" == "ls" ]] || return 0
                     local _tz
-                    for _tz in $_mock_zvols_list; do
+                    for _tz in $_mock_lio_zvols; do
                         echo "  ${_tz##*/}  /dev/zvol/${_tz}  (default_tg_pt)"
                     done
                     return 0
@@ -539,7 +549,7 @@ reset_mocks() {
         _mock_volsize
     unset _mock_snapdev _mock_preexisting_archive _mock_complete_archive
     unset _mock_zfsdelfs_rc _mock_remove_vm_disk_rc _mock_step4_zvols_remaining
-    unset _mock_input_hold
+    unset _mock_input_hold _mock_saved_rate _mock_lio_zvols
     # Fresh receive records per test: a dataset received by an earlier
     # test must not exist in this test's freshly reset world.
     [[ -n "${_mock_zfs_state_dir:-}" ]] \
@@ -972,6 +982,106 @@ n"
     test_pass
 }
 
+# A replicated backup copy of the VM's disk on another pool nests deeper
+# than <pool>/proxmox/ and is none of archive-vm's business: it must not be
+# flagged as an orphan, and — listed first here, where the old suffix match
+# over every volume would have picked it — it must never be archived in
+# place of the real disk.
+test_single_node_backup_copy_is_not_orphan() {
+    reset_mocks
+    test_start "Single-node: replicated backup copy is neither orphan nor archive source"
+
+    local vmid="222"
+    local pve_dir="$_mock_zfs_state_dir/pve8"
+    local archive="$_mock_zfs_state_dir/archive8"
+    local mount="$_mock_zfs_state_dir/mount8"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid" "single-node"
+    _mock_zvols_list="fivebays/threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_zvols_list+=" threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@"* ]]; then
+        test_fail "Real disk not archived; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Snapshot to archive: fivebays/"* ]]; then
+        test_fail "Backup copy archived in place of the real disk; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Orphaned zvol"* ]]; then
+        test_fail "Backup copy flagged as an orphan; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_two_node_backup_copy_is_not_orphan() {
+    reset_mocks
+    test_start "Two-node (storage-local): replicated backup copies draw no orphan warning"
+
+    local vmid="223"
+    local pve_dir="$_mock_zfs_state_dir/pve9"
+    local archive="$_mock_zfs_state_dir/archive9"
+    local mount="$_mock_zfs_state_dir/mount9"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    # The volume list carries replicated backup copies (deeper nesting) and
+    # a real same-pool orphan; the LIO layout exports only the referenced
+    # disk. Storage-local mode executes the real collection payload.
+    _mock_zvols_list="fivebays/threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_zvols_list+=" threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_zvols_list+=" z40tb/fivebays/threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_zvols_list+=" threeamigos/proxmox/vm-${vmid}-disk-9"
+    _mock_lio_zvols="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(run_archive two-node-local existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    # The rendered warning names the zvol after the colon; the payload
+    # source (echoed by the harness's ssh capture) must not false-positive.
+    if [[ "$out" == *"Orphaned zvol not referenced in config: fivebays/"* ]] \
+            || [[ "$out" == *"Orphaned zvol not referenced in config: z40tb/"* ]]; then
+        test_fail "Backup copies flagged as orphans; output:\n$out"
+        return
+    fi
+    # Positive control: the same-pool unreferenced disk still warns.
+    local _orphan_needle="Orphaned zvol not referenced in config:"
+    _orphan_needle+=" threeamigos/proxmox/vm-${vmid}-disk-9"
+    if [[ "$out" != *"$_orphan_needle"* ]]; then
+        test_fail "Real orphan no longer warned; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Snapshot to archive: threeamigos/proxmox/vm-${vmid}-disk-0@"* ]]; then
+        test_fail "Referenced disk not archived; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
 test_two_node_prompt_mentions_storage_host() {
     reset_mocks
     test_start "Two-node: archive prompt mentions storage host"
@@ -1264,8 +1374,14 @@ n"
         test_fail "Unexpected exit code $rc; output:\n$out"
         return
     fi
-    if [[ "$out" != *"Archive method: device copy (reblock to 1M)"* ]]; then
-        test_fail "Copy method not reported; output:\n$out"
+    # The engine speaks only when something is wrong; the orchestrator's
+    # verification line states how the disk was archived.
+    if [[ "$out" != *"device copy, volblocksize 1M)"* ]]; then
+        test_fail "Copy method not reported on the verification line; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Archive method:"* || "$out" == *"Original volblocksize"* ]]; then
+        test_fail "Engine detail lines leaked past the stderr gate; output:\n$out"
         return
     fi
     local _create_line="CREATE:create -s -V 10G -o volblocksize=1M"
@@ -1286,8 +1402,19 @@ n"
         test_fail "Sparse archive-device write not recorded; output:\n$out"
         return
     fi
-    if [[ "$out" != *"✓ Copy verified (sha256 match)"* ]]; then
-        test_fail "Copy verification missing; output:\n$out"
+    # dd runs quiet (status=none): the run's progress narrative comes from
+    # archive-vm itself, not from dd's transfer statistics.
+    local _dd_quiet="DD:of=${cp_dst} bs=16M conv=sparse,notrunc iflag=fullblock"
+    _dd_quiet+=" status=none"
+    if [[ "$out" != *"${_dd_quiet}"* ]]; then
+        test_fail "dd write not quiet (status=none missing); want '${_dd_quiet}'"
+        test_fail "output:\n$out"
+        return
+    fi
+    # Verification itself is proven by the destination read-back the mock
+    # records (the engine's "Copy verified" line is gated off the terminal).
+    if [[ "$out" != *"SHA256:${cp_dst}"* ]]; then
+        test_fail "Destination read-back (copy verification) missing; output:\n$out"
         return
     fi
     if [[ "$out" != *"SNAP:${archive}/threeamigos/proxmox/vm-${vmid}-disk-0@archive"* ]]; then
@@ -1333,8 +1460,10 @@ n"
         test_fail "Unexpected exit code $rc; output:\n$out"
         return
     fi
-    if [[ "$out" != *"Archive method: raw send/receive (encrypted)"* ]]; then
-        test_fail "Raw method not reported; output:\n$out"
+    # The orchestrator's verification line states the method (the engine's
+    # own "Archive method" line is gated off the terminal).
+    if [[ "$out" != *"raw send/receive, volblocksize 8K)"* ]]; then
+        test_fail "Raw method not reported on the verification line; output:\n$out"
         return
     fi
     if [[ "$out" == *"CREATE:create -s -V"* ]]; then
@@ -1640,9 +1769,9 @@ n"
 # Step 4: VM removal
 # ------------------------------------------------------------------
 
-test_two_node_removal_delegates_with_tty_and_skip_rescan() {
+test_two_node_removal_delegates_driven_with_skip_rescan() {
     reset_mocks
-    test_start "Two-node: removal delegates via ssh -t with input-hold and --skip-rescan"
+    test_start "Two-node: removal delegates driven (no tty, --from-archive, --skip-rescan)"
 
     local vmid="250"
     local pve_dir="$_mock_zfs_state_dir/pve30"
@@ -1666,17 +1795,28 @@ y"
         return
     fi
 
-    # The delegation must allocate a TTY and carry the input-hold protocol
-    # across the hop, so the remote confirm prompts are visible.
-    local needle="-t root@stewie ZFSUTILITIES_INPUT_HOLD=Y"
+    # Driven removal asks nothing over the hop, so no TTY is allocated (a
+    # plain query-only hop also avoids ssh's "Connection ... closed."
+    # notice); the input-hold protocol still rides along for the prompts
+    # this script asks locally.
+    local needle="-n root@stewie ZFSUTILITIES_INPUT_HOLD=Y"
     if [[ "$out" != *"$needle"* ]]; then
-        test_fail "ssh -t delegation missing input-hold prefix; output:\n$out"
+        test_fail "driven delegation missing -n/input-hold prefix; output:\n$out"
         return
     fi
-    # Per-disk rescans are suppressed; archive-vm rescans once itself.
-    needle="remove-vm-disk 'threeamigos' '$vmid' '0' --skip-rescan"
+    if [[ "$out" == *"-t root@stewie"* ]]; then
+        test_fail "driven delegation still allocates a TTY; output:\n$out"
+        return
+    fi
+    # Per-disk rescans are suppressed (archive-vm rescans once itself) and
+    # the driven flag skips remove-vm-disk's own confirm prompts.
+    needle="remove-vm-disk 'threeamigos' '$vmid' '0' --skip-rescan --from-archive"
     if [[ "$out" != *"$needle"* ]]; then
-        test_fail "remove-vm-disk not invoked with --skip-rescan; output:\n$out"
+        test_fail "remove-vm-disk not invoked driven with --skip-rescan; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"✓ Removed disk 0: threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
+        test_fail "per-disk removal success line missing; output:\n$out"
         return
     fi
     local rescan_count
@@ -1695,7 +1835,7 @@ y"
 
 test_two_node_declined_disk_removal_keeps_config() {
     reset_mocks
-    test_start "Two-node: declined remove-vm-disk confirm (exit 0) keeps config and fails"
+    test_start "Two-node: remove-vm-disk rc 0 with surviving zvol keeps config and fails"
 
     local vmid="251"
     local pve_dir="$_mock_zfs_state_dir/pve31"
@@ -1709,7 +1849,7 @@ test_two_node_declined_disk_removal_keeps_config() {
 
 y
 y"
-    # remove-vm-disk exits 0 when an operator declines its confirm; only the
+    # remove-vm-disk can exit 0 without finishing its work; only the
     # surviving zvol tells the truth.
     _mock_step4_zvols_remaining="$zvol"
 
@@ -1937,6 +2077,52 @@ n"
     fi
     if [[ "$out" != *"✓ Saved transfer rate limit to JSON config"* ]]; then
         test_fail "Missing rate-saved message; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_rate_case_change_is_not_a_save() {
+    reset_mocks
+    test_start "Rate limit: retyping the saved rate in another case saves nothing"
+
+    local vmid="266"
+    local pve_dir="$_mock_zfs_state_dir/pve46"
+    local archive="$_mock_zfs_state_dir/archive46"
+    local mount="$_mock_zfs_state_dir/mount46"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_saved_rate="50m"
+    _mock_read_response="${archive}
+50M
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    # Same rate, different case: not a change worth announcing or saving.
+    if [[ "$out" == *"✓ Saved transfer rate limit to JSON config"* ]]; then
+        test_fail "Case-only difference announced as a save; output:\n$out"
+        return
+    fi
+    if ! grep -q '"archive_rate_limit": "50m"' \
+            "$_mock_zfs_state_dir/zfsutilities.json"; then
+        test_fail "Saved rate was rewritten; content:" \
+            "$(cat "$_mock_zfs_state_dir/zfsutilities.json" 2>/dev/null)"
+        return
+    fi
+    # The typed value still paces the copy.
+    if [[ "$out" != *"PACE:50M --"* ]]; then
+        test_fail "Typed rate not applied; output:\n$out"
         return
     fi
 
@@ -2298,8 +2484,16 @@ n"
         test_fail "$hash_fail_msg"
         return
     fi
-    if [[ "$out" != *"✓ Copy verified (sha256 match)"* ]]; then
-        test_fail "Copy verification missing; output:\n$out"
+    # The verification result itself is proven by the run reaching the
+    # per-disk success line with no mismatch FATAL — "✓ Archived" only
+    # prints after archive_hash_verify compared the digests (the engine's
+    # own "Copy verified" line is gated off the terminal).
+    if [[ "$out" == *"Hash mismatch"* ]]; then
+        test_fail "Verification reported a mismatch; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"✓ Archived:"* ]]; then
+        test_fail "Copy verification outcome missing; output:\n$out"
         return
     fi
 
@@ -2366,6 +2560,8 @@ test_two_node_target_and_lun_travel_as_separate_args
 test_sidecar_lun_lookup_grep_survives_slash_prefix
 test_single_node_archives_only_referenced_disks
 test_single_node_warns_on_orphaned_zvol
+test_single_node_backup_copy_is_not_orphan
+test_two_node_backup_copy_is_not_orphan
 test_single_node_copy_path_reblocks_to_1m
 test_single_node_encrypted_zvol_archives_raw
 test_copy_hash_mismatch_aborts_and_cleans_up
@@ -2382,12 +2578,13 @@ test_running_vm_aborts_before_archive
 test_reports_disks_with_dependent_clones
 test_severs_clones_when_confirmed
 test_running_clone_vm_aborts_severance
-test_two_node_removal_delegates_with_tty_and_skip_rescan
+test_two_node_removal_delegates_driven_with_skip_rescan
 test_two_node_declined_disk_removal_keeps_config
 test_two_node_failed_disk_removal_keeps_config
 test_single_node_removal_uses_zfsdelfs
 test_single_node_destroy_failure_keeps_config
 test_rate_limit_paces_copy_path
+test_rate_case_change_is_not_a_save
 test_invalid_rate_fatals
 test_zero_rate_fatals
 test_missing_pacer_fatals_instead_of_running_unlimited

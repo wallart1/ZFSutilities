@@ -1,7 +1,9 @@
 #!/usr/bin/bash
-# unarchive-vm <vmid> [archive_base]
+# unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]
+# unarchive-vm --list [archive_base]
 # Restores an archived VM from archive: recreates zvols, Proxmox config,
-# and iSCSI infrastructure (two-node).
+# and iSCSI infrastructure (two-node). --list shows the archived VMs
+# instead (read-only).
 #
 # Install to: /usr/local/lib/zfsutilities/bin/unarchive-vm on BOTH hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
@@ -55,11 +57,13 @@ JSON_CONFIG="${JSON_CONFIG:-${ZFSUTILITIES_CONFIG_PATH:-/var/lib/zfsutilities/co
 
 usage() {
     log_msg "INFO: Usage: unarchive-vm <vmid> [archive_base] [--new-vmid <new_vmid>]"
+    log_msg "INFO:        unarchive-vm --list [archive_base]"
     echo ""
     log_msg "INFO:   vmid         VM ID of the retired VM to restore"
     log_msg "INFO:   archive_base Optional ZFS dataset that contains the archive"
     log_msg "INFO:                (defaults to the path saved in JSON config)"
     log_msg "INFO:   --new-vmid   Optional new VM ID to use for restored resources"
+    log_msg "INFO:   --list       Show the archived VMs and exit (restores nothing)"
     echo ""
     log_msg "INFO: If the original vmid is already in use and --new-vmid is not given,"
     log_msg "INFO: you will be prompted for a new VM ID (or cancel)."
@@ -75,6 +79,7 @@ usage() {
     log_msg "INFO: Example: unarchive-vm 904"
     log_msg "INFO: Example: unarchive-vm 904 temp/archive"
     log_msg "INFO: Example: unarchive-vm 904 temp/archive --new-vmid 910"
+    log_msg "INFO: Example: unarchive-vm --list"
     exit 1
 }
 
@@ -175,9 +180,14 @@ zvol_marked_restored() {
 # get_json_archive_path is provided by node-lib.sh (sourced above).
 
 newvmid=""
+list_mode=0
 pos_args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --list)
+            list_mode=1
+            shift
+            ;;
         --new-vmid)
             shift
             newvmid="${1:-}"
@@ -191,12 +201,21 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ ${#pos_args[@]} -ge 1 && ${#pos_args[@]} -le 2 ]] || usage
+if [[ "$list_mode" == "1" ]]; then
+    # Listing takes only the optional archive base: there is no vmid to
+    # restore, so --new-vmid has nothing to apply to.
+    [[ ${#pos_args[@]} -le 1 && -z "$newvmid" ]] || usage
+    vmid=""
+    archive_base="${pos_args[0]:-}"
+else
+    [[ ${#pos_args[@]} -ge 1 && ${#pos_args[@]} -le 2 ]] || usage
 
-vmid="${pos_args[0]}"
-archive_base="${pos_args[1]:-}"
+    vmid="${pos_args[0]}"
+    archive_base="${pos_args[1]:-}"
 
-[[ "$vmid" =~ ^[0-9]+$ ]] || { log_msg "FATAL: vmid must be a number, got: $vmid"; exit 1; }
+    [[ "$vmid" =~ ^[0-9]+$ ]] \
+        || { log_msg "FATAL: vmid must be a number, got: $vmid"; exit 1; }
+fi
 if [[ -n "$newvmid" && ! "$newvmid" =~ ^[0-9]+$ ]]; then
     log_msg "FATAL: new-vmid must be a number, got: $newvmid"
     exit 1
@@ -216,10 +235,13 @@ fi
 # through on_compute (local when this IS the compute host). The old
 # delegate-to-compute bounce is gone.
 
-log_msg "INFO: === unarchive-vm ===="
-log_msg "INFO:   VM: ${vmid}"
-[[ -n "$newvmid" && "$newvmid" != "$vmid" ]] && log_msg "INFO:   New VM: ${newvmid}"
-echo ""
+if [[ "$list_mode" != "1" ]]; then
+    log_msg "INFO: === unarchive-vm ===="
+    log_msg "INFO:   VM: ${vmid}"
+    [[ -n "$newvmid" && "$newvmid" != "$vmid" ]] \
+        && log_msg "INFO:   New VM: ${newvmid}"
+    echo ""
+fi
 
 # =======================================================================
 # Resolve archive base
@@ -260,6 +282,47 @@ if is_single_node; then
 else
     archive_mount=$(ssh -n root@"$storage_host" \
         "zfs get -H -o value mountpoint '$archive_base'")
+fi
+
+# =======================================================================
+# --list: show the archived VMs and exit
+# =======================================================================
+
+# Read-only: no rate prompt (nothing moves), no JSON writes. The listing
+# itself is the shared engine function, so single-node and the two-node
+# storage payload run literally the same code, like the transfer paths.
+if [[ "$list_mode" == "1" ]]; then
+    if is_single_node; then
+        archive_list_vms "$archive_base" "$archive_mount" "$pve_conf_dir"
+    else
+        if ! on_storage "$archive_base" "$archive_mount" "$pve_conf_dir" \
+                << 'SSHEOF'
+mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
+source "$mydir/bashinit"
+bashinit
+
+engine=$(find_zfsutility_script archive-engine.sh)
+[[ -n "$engine" ]] || {
+    log_msg "FATAL: Could not locate archive-engine.sh on storage host"
+    exit 1
+}
+source "$engine"
+
+# path_under_mount comes from node-lib (the same conditional source as the
+# iSCSI rebuild payload: a locally-run payload inherits it from the
+# orchestrator's shell; a payload shipped over ssh sources node-lib from
+# the storage host's deployed tree).
+declare -f path_under_mount >/dev/null 2>&1 || source_helper node-lib.sh
+
+set -euo pipefail
+archive_list_vms "$1" "$2" "$3"
+SSHEOF
+        then
+            log_msg "FATAL: Archive listing failed on ${storage_host}"
+            exit 1
+        fi
+    fi
+    exit 0
 fi
 
 # Always prompt for the transfer rate limit (shared JSON key with

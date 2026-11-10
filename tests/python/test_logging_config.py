@@ -100,6 +100,7 @@ class TestLogMsg(unittest.TestCase):
         os.environ.pop("ZFSUTILITIES_LOG_FILE", None)
         os.environ.pop("ZFSUTILITIES_LOG_INHERIT", None)
         os.environ.pop("msg_level", None)
+        os.environ.pop("ZFSUTILITIES_MSG_LEVEL", None)
 
     def test_log_msg_emits_to_sink(self):
         sink = MagicMock()
@@ -276,6 +277,54 @@ class TestLogMsg(unittest.TestCase):
         output = sink.call_args[0][0]
         self.assertIn("INFO: gui message", output)
         self.assertIn(": INFO: gui message", output)
+
+    @patch("logging_config._stderr_is_terminal")
+    @patch("sys.stderr", new_callable=io.StringIO)
+    def test_msg_level_gate_hides_below_gate_on_stderr(self, mock_stderr, mock_terminal):
+        """ZFSUTILITIES_MSG_LEVEL=WARN hides lower levels on stderr only."""
+        mock_terminal.return_value = False
+        os.environ["ZFSUTILITIES_MSG_LEVEL"] = "WARN"
+        log_msg("DEBUG: d")
+        log_msg("VERB: v")
+        log_msg("INFO: i")
+        log_msg("WARN: w")
+        log_msg("FATAL: f")
+        log_msg("unlabelled")
+        output = mock_stderr.getvalue()
+        self.assertIn("WARN: w", output)
+        self.assertIn("FATAL: f", output)
+        self.assertIn("unlabelled", output)
+        for hidden in ("DEBUG: d", "VERB: v", "INFO: i"):
+            self.assertNotIn(hidden, output)
+
+    @patch("logging_config._stderr_is_terminal")
+    @patch("sys.stderr", new_callable=io.StringIO)
+    def test_msg_level_gate_invalid_value_gates_nothing(self, mock_stderr, mock_terminal):
+        """An unrecognized gate value leaves emission unchanged."""
+        mock_terminal.return_value = False
+        os.environ["ZFSUTILITIES_MSG_LEVEL"] = "BOGUS"
+        log_msg("INFO: i")
+        self.assertIn("INFO: i", mock_stderr.getvalue())
+
+    @patch("logging_config._stderr_is_terminal")
+    def test_msg_level_gate_keeps_session_log_and_sink(self, mock_terminal):
+        """The gate touches stderr only; sink and session log keep all."""
+        mock_terminal.return_value = False
+        os.environ["ZFSUTILITIES_MSG_LEVEL"] = "WARN"
+        sink = MagicMock()
+        set_log_sink(sink)
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            path = f.name
+        try:
+            os.environ["ZFSUTILITIES_LOG_FILE"] = path
+            log_msg("INFO: hidden on stderr, kept downstream")
+            sink_messages = [call[0][0] for call in sink.call_args_list]
+            self.assertTrue(any("hidden on stderr" in m for m in sink_messages))
+            with open(path) as fh:
+                content = fh.read()
+            self.assertIn("INFO: hidden on stderr, kept downstream", content)
+        finally:
+            os.unlink(path)
 
     def test_get_log_sink_returns_current_sink(self):
         sink = MagicMock()

@@ -145,7 +145,7 @@ def validate_dest_mount_chain(dest):
                 ),
                 None,
             )
-        if not os.path.isdir(mountpoint) or not os.path.ismount(mountpoint):
+        if mountpoint_unreachable(mountpoint):
             return (
                 False,
                 (
@@ -178,9 +178,88 @@ def find_unreachable_mounts():
     for name, mountpoint, mounted in rows:
         if mounted != "yes":
             continue
-        if not os.path.isdir(mountpoint) or not os.path.ismount(mountpoint):
+        if mountpoint_unreachable(mountpoint):
             unreachable.append({"name": name, "mountpoint": mountpoint})
     return unreachable
+
+
+def mountpoint_unreachable(mountpoint):
+    """Return True when *mountpoint* does not lead to a mount of its own.
+
+    For a dataset ZFS reports as mounted, a missing path or a path that is
+    not a mountpoint means its mount is shadowed (a later mount over an
+    ancestor sits on top) or orphaned (its parent mount is gone). Under a
+    cover the path may still resolve — to a leftover empty directory of the
+    same name inside the covering filesystem — so the mountpoint test, not
+    existence alone, decides.
+    """
+    return not os.path.isdir(mountpoint) or not os.path.ismount(mountpoint)
+
+
+@dataclass
+class StackedMount:
+    """A mount attached on top of another mount (a /proc mountinfo row)."""
+
+    mountpoint: str
+    fstype: str
+    source: str
+
+
+# Regex: \\([0-7]{3})
+# Matches one octal escape as the kernel writes it in /proc/self/mountinfo
+# path fields, e.g. "\040" for a space in "/tank/my data". Group 1 is the
+# three octal digits. Used with re.sub to restore the real path.
+_MOUNTINFO_ESCAPE_RE = re.compile(r"\\([0-7]{3})")
+
+
+def _mountinfo_unescape(field):
+    """Decode the kernel's octal escapes in a mountinfo path field."""
+    return _MOUNTINFO_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 8)), field)
+
+
+def mounts_stacked_on(mountpoint, mountinfo_path="/proc/self/mountinfo"):
+    """Return the mounts attached on top of the topmost mount at *mountpoint*.
+
+    These are what keep umount(8) from detaching that layer ("target is
+    busy" even with no process using it). Mounts made BEFORE a cover was
+    mounted attach to the layer underneath and do not hold the cover.
+    Returns a list of ``StackedMount`` (empty when nothing is stacked), or
+    None when the mount table cannot be read.
+    """
+    try:
+        with open(mountinfo_path, encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return None
+    target = os.path.normpath(mountpoint)
+    entries = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 7 or "-" not in fields[6:]:
+            continue
+        sep = fields.index("-", 6)
+        if len(fields) < sep + 3:
+            continue
+        entries.append(
+            (
+                fields[0],
+                fields[1],
+                _mountinfo_unescape(fields[4]),
+                fields[sep + 1],
+                _mountinfo_unescape(fields[sep + 2]),
+            )
+        )
+    top_id = None
+    for mount_id, _parent, path, _fstype, _source in entries:
+        if path == target:
+            top_id = mount_id  # later rows stack on earlier ones
+    if top_id is None:
+        return []
+    return [
+        StackedMount(mountpoint=path, fstype=fstype, source=source)
+        for mount_id, parent, path, fstype, source in entries
+        if parent == top_id and mount_id != top_id
+    ]
 
 
 def mount_order_property_fixes(rows):

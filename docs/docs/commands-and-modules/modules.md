@@ -72,13 +72,14 @@ rootcheck
 | Function                 | Purpose                                                                                                                                                                                    |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `bashinit`               | Sets `$mydir` to the caller's directory and auto-creates a session log for CLI scripts                                                                                                     |
-| `log_msg`                | Logs messages with `file:line:` prefix to stderr and to the session log                                                                                                                    |
+| `log_msg`                | Logs messages with `file:line:` prefix to stderr and to the session log; a set `ZFSUTILITIES_MSG_LEVEL` gate can hold a message off the terminal ([gate](../developer-guide/architecture.md#terminal-message-level-gate)) |
 | `msg_prefix`             | Emits the same `file:line:` prefix without the message body                                                                                                                                |
-| `calledbybash`           | Returns true when the current file was executed directly (not sourced)                                                                                                                     |
+| `calledbybash`           | Returns true when the current file was executed directly (not sourced)                                                                                                                      |
 | `snapname_timestamp`     | Renders the canonical snapshot-name timestamp — UTC with a literal `Z` suffix (`2026-10-07T01:46Z`); optional epoch argument selects a specific instant (deterministic across zones)       |
 | `ask_yn`                 | Prompts for yes/no with an optional default answer (`Y`/`N`)                                                                                                                               |
 | `ask_line`               | Prompts for a single-line answer, stores it in the named variable (default `REPLY`), and returns `read`'s exit status                                                                      |
 | `input_hold_env_prefix`  | Expands to `ZFSUTILITIES_INPUT_HOLD=Y ` under the input-hold protocol and to nothing otherwise — prepended to `ssh -t` delegated commands ([conventions](../developer-guide/conventions.md#interactive-prompts)) |
+| `with_msg_level`         | Runs a command with the terminal message-level gate set to one level and restores the caller's gate afterward; runs in the current shell, so state and exit traps stay with the caller      |
 | `die`                    | Logs a `FATAL` message and terminates the process                                                                                                                                          |
 | `warn`                   | Logs a `WARN` message                                                                                                                                                                      |
 | `find_zfsutility_script` | Locates a sibling script/library across repo or deployed layouts; respects `ZFSUTILITIES_BIN_DIR`, `ZFSUTILITIES_CURRENT_BIN_DIR`, and `ZFSUTILITIES_SYSTEM_LIB_DIR`; prints absolute path |
@@ -92,6 +93,7 @@ rootcheck
 | `$ZFSUTILITIES_LOG_DIR`         | Directory for session log files (default `/var/log/zfsutilities/sessions`)                                              | [Infrastructure](../developer-guide/global-variables.md#infrastructure)                                              |
 | `$ZFSUTILITIES_LOG_FILE`        | Path of the active session log (set by `bashinit`)                                                                      | [Session log index](../developer-guide/data-structures.md#session-log-index-varlogzfsutilitiessessionslog_indexjson) |
 | `$ZFSUTILITIES_LOG_INHERIT`     | `'Y'` to reuse a parent runner's log instead of creating a new one                                                      | [Session log index](../developer-guide/data-structures.md#session-log-index-varlogzfsutilitiessessionslog_indexjson) |
+| `$ZFSUTILITIES_MSG_LEVEL`       | Terminal message-level gate for driven flows: messages below the level stay off the terminal; the session log keeps everything | [Terminal message-level gate](../developer-guide/architecture.md#terminal-message-level-gate)                 |
 | `$ZFSUTILITIES_FROM_CRON`       | `'Y'` on cron job lines; `profile_runner.py` silences its own output once its session log exists                         | [Single-writer session log](../developer-guide/architecture.md#single-writer-session-log)                             |
 | `$ZFSUTILITIES_HEADLESS`        | When `'Y'`, suppresses interactive prompts in lock-manager code                                                         | [Execution Control](../developer-guide/global-variables.md#execution-control)                                        |
 | `$ZFSUTILITIES_BIN_DIR`         | Override active PATH bin directory for `find_zfsutility_script` (default `/usr/local/lib/zfsutilities/bin`)             | —                                                                                                                    |
@@ -114,7 +116,7 @@ rootcheck
 
 1. `bashinit` derives `$mydir` from `BASH_SOURCE[1]` only when it is not already set.
 2. If the script is executed directly and log inheritance is not enabled, it creates a timestamped log file under `$ZFSUTILITIES_LOG_DIR` and exports `$ZFSUTILITIES_LOG_FILE` when the file is writable (otherwise messages go to stderr only).
-3. `log_msg` builds a `realpath(file):line:` prefix (falling back to the raw caller path when `realpath` cannot resolve it, e.g. a relative script path after a `cd`), writes the message to stderr (with color when connected to a terminal), and appends a timestamped copy to the session log when one is owned by the process.
+3. `log_msg` builds a `realpath(file):line:` prefix (falling back to the raw caller path when `realpath` cannot resolve it, e.g. a relative script path after a `cd`), writes the message to stderr (with color when connected to a terminal) unless the message-level gate suppresses it, and appends a timestamped copy to the session log when one is owned by the process.
 4. `ask_yn` loops until the user enters `y`, `yes`, `n`, or `no`. An optional second argument sets the default answer used when the user presses Enter (`N` if omitted).
 5. `warn` is a thin wrapper around `log_msg` that prefixes the message with `WARN:`.
 6. `die` logs `FATAL:` and sources `bashfatal` to terminate with exit code `1`.
@@ -608,6 +610,9 @@ FATAL (a paced run never silently runs unlimited).
 | `archive_resolver()`               | Resolve `lib/enclosure_rate.py` once into `_archive_resolver` (`$ZFSUTILITIES_ENCLOSURE_RATE` overrides). |
 | `archive_resolve_rate(<src>, <dst>, <rate>)` | Effective rate = min(`<rate>`, enclosure caps of both pools); fail-open WARN prints `<rate>` unchanged on any resolver failure. |
 | `archive_method_of(<file>)`       | Read the `METHOD=` marker (defaults to `raw` for legacy archives).   |
+| `archive_size_bytes(<value>)`     | Parse a zfs human size (`10G`, `1.50M`, digits) into bytes; `-1` when unparseable. |
+| `archive_size_human(<bytes>)`     | Inverse of the parser: zfs-style human size with one trimmed decimal. |
+| `archive_list_vms(<base>, <mount>, <confdir>)` | Read-only `--list` listing: groups archived zvols by vmid and prints name, disks, sizes, and `RESTORED_AS` state. |
 | `unarchive_one_zvol(...)`         | Restore one archived zvol per its method.                            |
 | `unarchive_rollback_created(...)` | Restore-side mirror of the rollback helper.                          |
 

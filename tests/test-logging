@@ -213,6 +213,102 @@ test_log_msg_log_file_always_long_prefix() {
     unset ZFSUTILITIES_LOG_FILE ZFSUTILITIES_LOG_INHERIT msg_level
 }
 
+test_log_msg_msg_level_gate_hides_below_gate() {
+    test_start "ZFSUTILITIES_MSG_LEVEL gate hides below-gate messages on stderr"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            bashinit
+            export ZFSUTILITIES_MSG_LEVEL="WARN"
+            log_msg "DEBUG: d"
+            log_msg "VERB: v"
+            log_msg "INFO: i"
+            log_msg "WARN: w"
+            log_msg "FATAL: f"
+            log_msg "unlabelled"
+        ) 2>&1 >/dev/null
+    )"
+    assert_contains "$stderr" "WARN: w"
+    assert_contains "$stderr" "FATAL: f"
+    assert_contains "$stderr" "unlabelled"
+    if [[ "$stderr" == *"DEBUG: d"* || "$stderr" == *"VERB: v"* \
+            || "$stderr" == *"INFO: i"* ]]; then
+        test_fail "below-gate messages leaked to stderr: $stderr"
+    else
+        test_pass
+    fi
+}
+
+test_log_msg_msg_level_gate_invalid_is_noop() {
+    test_start "invalid ZFSUTILITIES_MSG_LEVEL gates nothing"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            bashinit
+            export ZFSUTILITIES_MSG_LEVEL="BOGUS"
+            log_msg "INFO: i"
+        ) 2>&1 >/dev/null
+    )"
+    assert_contains "$stderr" "INFO: i"
+}
+
+test_log_msg_msg_level_gate_keeps_session_log() {
+    test_start "gate suppresses stderr only; the session log keeps everything"
+    local logfile
+    logfile="$(mktemp)"
+    (
+        source ~/bashinit
+        bashinit
+        export ZFSUTILITIES_MSG_LEVEL="WARN"
+        export ZFSUTILITIES_LOG_FILE="$logfile"
+        export ZFSUTILITIES_LOG_INHERIT="N"
+        log_msg "INFO: hidden on stderr, logged"
+        log_msg "WARN: visible and logged"
+    ) >/dev/null 2>&1
+    local content
+    content="$(cat "$logfile")"
+    assert_contains "$content" "INFO: hidden on stderr, logged"
+    assert_contains "$content" "WARN: visible and logged"
+    rm -f "$logfile"
+    unset ZFSUTILITIES_LOG_FILE ZFSUTILITIES_LOG_INHERIT msg_level
+}
+
+test_with_msg_level_scopes_and_restores() {
+    test_start "with_msg_level gates only the wrapped call and restores the caller's gate"
+    local stderr
+    stderr="$(
+        (
+            source ~/bashinit
+            bashinit
+            noisy() {
+                log_msg "INFO: inside"
+                log_msg "WARN: inside-warn"
+                return 7
+            }
+            # Unset before: stays unset after, and the status propagates.
+            unset ZFSUTILITIES_MSG_LEVEL
+            with_msg_level WARN noisy
+            echo "rc=$? after=[${ZFSUTILITIES_MSG_LEVEL-unset}]" >&2
+            log_msg "INFO: outside"
+            # A caller-set gate is restored, not cleared.
+            export ZFSUTILITIES_MSG_LEVEL="FATAL"
+            with_msg_level WARN true
+            echo "restored=[${ZFSUTILITIES_MSG_LEVEL-unset}]" >&2
+        ) 2>&1 >/dev/null
+    )"
+    assert_contains "$stderr" "WARN: inside-warn"
+    assert_contains "$stderr" "rc=7 after=[unset]"
+    assert_contains "$stderr" "INFO: outside"
+    assert_contains "$stderr" "restored=[FATAL]"
+    if [[ "$stderr" == *"INFO: inside"* ]]; then
+        test_fail "INFO leaked through the scoped WARN gate: $stderr"
+    else
+        test_pass
+    fi
+}
+
 test_log_msg_writes_to_file_when_owned
 test_log_msg_writes_all_levels
 test_log_msg_prints_all_to_stderr
@@ -222,6 +318,10 @@ test_log_msg_short_prefix_on_terminal
 test_log_msg_long_prefix_with_flag_on_terminal
 test_log_msg_long_prefix_off_terminal
 test_log_msg_log_file_always_long_prefix
+test_log_msg_msg_level_gate_hides_below_gate
+test_log_msg_msg_level_gate_invalid_is_noop
+test_log_msg_msg_level_gate_keeps_session_log
+test_with_msg_level_scopes_and_restores
 
 test_warn_long_prefix_on_terminal() {
     test_start "warn --long-prefix uses long prefix on a terminal"

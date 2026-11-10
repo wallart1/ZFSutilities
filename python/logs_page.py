@@ -79,6 +79,10 @@ MAX_VIEWER_BUFFER_CHARS = 2 * 1024 * 1024  # 2 MB
 # exhaust GUI memory.
 MAX_GZIP_DECOMPRESSED_BYTES = 256 * 1024 * 1024  # 256 MB
 
+# Base title of the Log Viewer pop-out window; the loaded log's file name is
+# appended while a log is selected so the window is identifiable on its own.
+_LOGS_POPOUT_BASE_TITLE = "ZFS Utilities — Log Viewer"
+
 
 def _last_pv_line(text):
     """Return the last line in *text* that looks like pv progress, or None."""
@@ -98,6 +102,26 @@ def _update_logs_status_label(app, text):
     else:
         label.set_text("")
         label.hide()
+
+
+def _update_logs_path_label(app, path):
+    """Show or hide the log viewer path line and sync the pop-out title.
+
+    The pop-out window carries the loaded log's file name in its title so it
+    stays identifiable while detached from the Logs tab (where the list with
+    the file names remains).
+    """
+    label = app.logs_path_label
+    if path:
+        label.set_text(path)
+        label.set_tooltip_text(path)
+        label.show()
+        app.logs_popout_window.set_title(f"{_LOGS_POPOUT_BASE_TITLE} — {os.path.basename(path)}")
+    else:
+        label.set_text("")
+        label.set_tooltip_text("")
+        label.hide()
+        app.logs_popout_window.set_title(_LOGS_POPOUT_BASE_TITLE)
 
 
 # Regex: ^(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})_(\w+)_(.+)\.log$
@@ -516,6 +540,21 @@ def create_logs_page(app):
     )
     viewer_toolbar.pack_start(app._logs_popout_toggle, False, False, 0)
 
+    # Path line above the toolbar: the full path of the log in the viewer.
+    # Hidden until a log is selected; ellipsized from the left so the file
+    # name stays visible when the directory prefix is cut.
+    app.logs_path_label = Gtk.Label()
+    app.logs_path_label.set_halign(Gtk.Align.START)
+    app.logs_path_label.set_selectable(True)
+    app.logs_path_label.set_ellipsize(Pango.EllipsizeMode.START)
+    app.logs_path_label.set_no_show_all(True)
+    app.logs_path_label.get_style_context().add_class("status-bar-label")
+    app.logs_path_label.set_margin_start(5)
+    app.logs_path_label.set_margin_end(5)
+    app.logs_path_label.set_margin_top(2)
+    app.logs_path_label.set_margin_bottom(2)
+    viewer_box.pack_start(app.logs_path_label, False, False, 0)
+
     viewer_box.pack_start(viewer_toolbar, False, False, 0)
     viewer_box.pack_start(app.logs_text_scroll, True, True, 0)
 
@@ -533,7 +572,7 @@ def create_logs_page(app):
     # Create pop-out window for log viewer (hidden by default)
     app.logs_popout_window = LogPopoutWindow(
         app,
-        title="ZFS Utilities — Log Viewer",
+        title=_LOGS_POPOUT_BASE_TITLE,
         toggle_widget=app._logs_popout_toggle,
     )
     if hasattr(app, "_ui_state") and app._ui_state is not None:
@@ -1053,6 +1092,7 @@ def _on_selection_changed(selection, app, source_view):
         app.logs_load_full_btn.hide()
         app.logs_search.clear()
         _update_logs_status_label(app, "")
+        _update_logs_path_label(app, None)
         return
 
     tree_iter = model.get_iter(pathlist[0])
@@ -1066,6 +1106,7 @@ def _on_selection_changed(selection, app, source_view):
         return
 
     app._logs_current_path = path
+    _update_logs_path_label(app, path)
     app._logs_read_offset = 0
     app._logs_full_mode = False
     try:
