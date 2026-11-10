@@ -289,7 +289,9 @@ test_ensure_refusal_fails_open_and_latches() {
     local rc=0
     propmanifest_ensure_dataset backup/tank/zfsutilities-manifests || rc=$?
     assert_rc 0 "$rc"
-    assert_contains "$(get_log)" "WARN: Could not create property-manifest dataset backup/tank/zfsutilities-manifests — skipping property manifests for this run"
+    assert_contains "$(get_log)" \
+        "WARN: Could not create property-manifest dataset backup/tank/zfsutilities-manifests — \
+skipping property manifests for this run"
     clear_test_log_file
     _pmock_create_rc=0
     propmanifest_ensure_dataset backup/tank/zfsutilities-manifests
@@ -348,12 +350,15 @@ test_capture_happy_path() {
         test_fail "temporary file left behind"
         return
     fi
-    assert_contains "$(get_log)" "VERB: Wrote property manifest for tank/src/data to backup/tank/zfsutilities-manifests (5 properties)."
+    assert_contains "$(get_log)" \
+        "VERB: Wrote property manifest for tank/src/data to backup/tank/zfsutilities-manifests (5 \
+properties)."
     local capture
     capture=$(cat "$_zfs_capture_file")
     if [[ "$capture" != *"zfs create -pu backup/tank/zfsutilities-manifests"* \
           || "$capture" != *"zfs mount backup/tank/zfsutilities-manifests"* \
-          || "$capture" != *"zfs snapshot backup/tank/zfsutilities-manifests@daily-20261102T0500Z-d"* \
+          || "$capture" != *"zfs snapshot \
+backup/tank/zfsutilities-manifests@daily-20261102T0500Z-d"* \
           || "$capture" != *"zfslock_release"* ]]; then
         test_fail "missing expected zfs calls: $capture"
         return
@@ -374,7 +379,9 @@ test_capture_empty_props_writes_header_only() {
         return
     fi
     assert_equals "" "$(awk 'NR > 5' "$mfile")"
-    assert_contains "$(get_log)" "VERB: Wrote property manifest for tank to backup/tank/zfsutilities-manifests (0 properties)."
+    assert_contains "$(get_log)" \
+        "VERB: Wrote property manifest for tank to backup/tank/zfsutilities-manifests (0 \
+properties)."
     test_pass
 }
 
@@ -400,7 +407,9 @@ test_capture_dryrun_logs_and_does_nothing() {
     local rc=0
     propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
     assert_rc 0 "$rc"
-    assert_contains "$(get_log)" "INFO: Dry-run: Would capture property manifest for tank/src/data under backup/tank/zfsutilities-manifests"
+    assert_contains "$(get_log)" \
+        "INFO: Dry-run: Would capture property manifest for tank/src/data under \
+backup/tank/zfsutilities-manifests"
     if [[ -s "$_zfs_capture_file" ]]; then
         test_fail "dry-run must not call zfs: $(cat "$_zfs_capture_file")"
         return
@@ -426,7 +435,9 @@ test_capture_lock_conflict_fails_open() {
     assert_rc 0 "$rc"
     eval "$saved_wait"
     eval "$saved_release"
-    assert_contains "$(get_log)" "WARN: Property manifest for tank/src/data not written (lock conflict on backup/tank/zfsutilities-manifests)."
+    assert_contains "$(get_log)" \
+        "WARN: Property manifest for tank/src/data not written (lock conflict on \
+backup/tank/zfsutilities-manifests)."
     if [[ "$(grep -c zfslock_release "$_zfs_capture_file")" != "0" ]]; then
         test_fail "release must not run for a lock never acquired"
         return
@@ -446,7 +457,8 @@ test_capture_get_failure_fails_open() {
     local rc=0
     propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
     assert_rc 0 "$rc"
-    assert_contains "$(get_log)" "WARN: Property manifest for tank/src/data not written (zfs get failed)."
+    assert_contains "$(get_log)" \
+        "WARN: Property manifest for tank/src/data not written (zfs get failed)."
     test_pass
 }
 
@@ -459,7 +471,9 @@ test_capture_write_failure_fails_open() {
     local rc=0
     propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
     assert_rc 0 "$rc"
-    assert_contains "$(get_log)" "WARN: Property manifest for tank/src/data not written (write to backup/tank/zfsutilities-manifests failed)."
+    assert_contains "$(get_log)" \
+        "WARN: Property manifest for tank/src/data not written (write to \
+backup/tank/zfsutilities-manifests failed)."
     test_pass
 }
 
@@ -471,7 +485,9 @@ test_capture_mount_refusal_latches_skip() {
     local rc=0
     propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
     assert_rc 0 "$rc"
-    assert_contains "$(get_log)" "WARN: Could not mount backup/tank/zfsutilities-manifests — skipping property manifests for this run."
+    assert_contains "$(get_log)" \
+        "WARN: Could not mount backup/tank/zfsutilities-manifests — skipping property manifests \
+for this run."
     clear_test_log_file
     _pmock_mount_rc=0
     propmanifest_capture tank/other/data backup '@daily-20261102T0500Z-d' || true
@@ -490,7 +506,9 @@ test_capture_legacy_mountpoint_latches_skip() {
     local rc=0
     propmanifest_capture tank/src/data backup '@daily-20261102T0500Z-d' || rc=$?
     assert_rc 0 "$rc"
-    assert_contains "$(get_log)" "WARN: Property-manifest dataset backup/tank/zfsutilities-manifests has no usable mountpoint ('legacy') — skipping property manifests for this run."
+    assert_contains "$(get_log)" \
+        "WARN: Property-manifest dataset backup/tank/zfsutilities-manifests has no usable \
+mountpoint ('legacy') — skipping property manifests for this run."
     test_pass
 }
 

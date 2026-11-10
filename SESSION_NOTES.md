@@ -365,6 +365,42 @@ recoverable via `git log`.)
   helpers awaits the user's cue. Behavior of both commands is unchanged
   until then.
 
+## 2026-11-09 — 0.139.0 lane merges + j11 + wrap-up rerun (user-cued, numbered steps)
+
+- Pre-merge leftovers: the user's docs hand-edit sweep committed verbatim
+  (`feb69c8`). pub2 lane merged (`ee3900c`; changelog sections unioned,
+  GLOSSARY fused, SESSION_NOTES seam, PREEXISTING union-minus-retired —
+  the flat-listing entry dropped because its root-filtered mock fix was
+  already on main, verified in-tree and by the holds/delfs/busy suites;
+  the schedule viewport test took pub2's `_import_fresh_patched` form).
+  pub3 lane merged (`4cc0998`; the lock-child suites supersede main's
+  MP_FORK pin, `TestScheduleSavedState` rebased on pub3's
+  `_FreshSchedulePageTestCase`, the user's hand-edited wording kept
+  where lanes touched the same sentences, requirements.manifest
+  unioned, the changelog's CI-3.14 bullet trimmed of the superseded
+  fork-context sentence).
+- Post-merge gate green first try: ruff check+format, shellcheck clean,
+  docs-integrity, mkdocs (standing banner only), full run WITH soaks —
+  all suites green. Both lanes ff'd to `4cc0998`; all three repos now
+  sit at one head, unpushed.
+- j11-payload-e2e against pub's merged tree
+  (run-20261109-183126): green — payload matrix all scenarios, guest
+  destroyed at verdict, no leftovers.
+- Wrap-up steps 1–7 rerun. Step 1 resolved both merged PREEXISTING
+  entries: the vacuous delfs autoproceed subprocess test now runs the
+  real loop (PATH-carried zfs stub + file-based fsarray; asserts the
+  positive "was deleted." line; red-proofed — the old runner shape
+  fails with empty output) and the 100-column deviations in the five
+  released suites were reflowed (assertion args via in-quote
+  backslash-newline splices with col-0 continuations; single-quoted
+  JSON payloads as adjacent quoted pieces; journal-fixture lines moved
+  from quoted heredocs to printf appends — quoted heredocs cannot wrap
+  in place). All five suites green and shellcheck-clean; the bytes the
+  fixtures deliver are unchanged. Steps 2–5 green (ruff, shellcheck,
+  100-col sweep, docs-integrity, mkdocs). Committed at the user's cue
+  as part of the 0.139.0 cycle (changelog Tests section records both
+  fixes).
+
 *(lane history block, unioned at the 0.139.0 pub2-lane merge — pruned
 at the next release prune)*
 

@@ -929,7 +929,8 @@ make_identity_fixtures() {
 # the individual fixture files to build each finding.
 stage_identity_fixtures() {
     local fx="$1"
-    printf '{"version":1,"generated":"2026-10-28T10:00:00+00:00","host":"stewie","pools":{"threeamigos":"4338716537971988948"}}\n' \
+    printf '{"version":1,"generated":"2026-10-28T10:00:00+00:00","host":"stewie","pools":{'\
+'"threeamigos":"4338716537971988948"}}\n' \
         > "${fx}/map/iscsi-state.json"
     printf 'threeamigos/zfsutilities|%s/map\n' "$fx" > "${fx}/mountpoints"
     : > "${fx}/saveconfig.json"
@@ -975,7 +976,9 @@ test_two_node_identity_guid_mismatch_warns() {
         test_fail "Expected exit 0 with identity findings, got $rc"
         return
     fi
-    if [[ "$output" != *"iSCSI pool-identity detection: pool threeamigos renamed or replaced — map recorded GUID 4338716537971988948, live GUID 111222333444555666"* ]]; then
+    if [[ "$output" != *"iSCSI pool-identity detection: pool threeamigos renamed or \
+replaced — map recorded GUID 4338716537971988948, live GUID \
+111222333444555666"* ]]; then
         test_fail "Expected the GUID-mismatch warn line in output"
         return
     fi
@@ -992,7 +995,8 @@ test_two_node_identity_expected_pool_missing_warns() {
     local fx output rc
     fx=$(make_identity_fixtures)
     stage_identity_fixtures "$fx"
-    printf '{"version":1,"generated":"2026-10-28T10:00:00+00:00","host":"stewie","pools":{"threeamigos":"4338716537971988948","NVME1":"252995746834113014"}}\n' \
+    printf '{"version":1,"generated":"2026-10-28T10:00:00+00:00","host":"stewie","pools":{'\
+'"threeamigos":"4338716537971988948","NVME1":"252995746834113014"}}\n' \
         > "${fx}/map/iscsi-state.json"
     # NVME1 (recorded in the map) is not imported.
     output=$(run_identity_check "$fx" --two-node 2>&1)
@@ -1007,7 +1011,8 @@ test_two_node_identity_expected_pool_missing_warns() {
         test_fail "Expected exit 0 with identity findings, got $rc"
         return
     fi
-    if [[ "$output" != *"expected pool NVME1 is not imported — offline, renamed, or replaced"* ]]; then
+    if [[ "$output" != *"expected pool NVME1 is not imported — offline, renamed, or \
+replaced"* ]]; then
         test_fail "Expected the expected-pool-missing warn line in output"
         return
     fi
@@ -1020,12 +1025,15 @@ test_two_node_identity_offsite_candidate_exempt() {
     local fx output rc cfg
     fx=$(make_identity_fixtures)
     stage_identity_fixtures "$fx"
-    printf '{"version":1,"generated":"2026-10-28T10:00:00+00:00","host":"stewie","pools":{"threeamigos":"4338716537971988948","NVME1":"252995746834113014","fivebays":"777888999000111222"}}\n' \
+    printf '{"version":1,"generated":"2026-10-28T10:00:00+00:00","host":"stewie","pools":{'\
+'"threeamigos":"4338716537971988948","NVME1":"252995746834113014","fivebays":'\
+'"777888999000111222"}}\n' \
         > "${fx}/map/iscsi-state.json"
     # GUI config: NVME1 is an offsite rotation candidate (disconnected on
     # purpose), fivebays is not — both are absent from zpool-list.
     cfg="${fx}/config.json"
-    printf '{"config_version": 31, "pools": [{"name": "threeamigos"}, {"name": "NVME1", "offsite_candidate": true}, {"name": "fivebays"}]}\n' \
+    printf '{"config_version": 31, "pools": [{"name": "threeamigos"}, {"name": "NVME1",'\
+' "offsite_candidate": true}, {"name": "fivebays"}]}\n' \
         > "$cfg"
     output=$(ZFSUTILITIES_CONFIG_PATH="$cfg" run_identity_check "$fx" --two-node 2>&1)
     rc=$?
@@ -1043,7 +1051,8 @@ test_two_node_identity_offsite_candidate_exempt() {
         test_fail "Offsite-candidate pool must be exempt from the not-imported warn"
         return
     fi
-    if [[ "$output" != *"expected pool fivebays is not imported — offline, renamed, or replaced"* ]]; then
+    if [[ "$output" != *"expected pool fivebays is not imported — offline, renamed, or \
+replaced"* ]]; then
         test_fail "Non-offsite missing pool must still warn (exemption is selective)"
         return
     fi
@@ -1070,7 +1079,8 @@ test_two_node_identity_unexpected_pool_warns() {
         test_fail "Expected exit 0 with identity findings, got $rc"
         return
     fi
-    if [[ "$output" != *"imported pool temp is not in the node config — an unexpected pool is serving data here"* ]]; then
+    if [[ "$output" != *"imported pool temp is not in the node config — an unexpected \
+pool is serving data here"* ]]; then
         test_fail "Expected the unexpected-pool warn line in output"
         return
     fi
@@ -1105,7 +1115,8 @@ EOF
         test_fail "Expected exit 0 with identity findings, got $rc"
         return
     fi
-    if [[ "$output" != *"an importable pool is also named threeamigos (id 999888777666555444) on non-zvol devices"* ]]; then
+    if [[ "$output" != *"an importable pool is also named threeamigos (id \
+999888777666555444) on non-zvol devices"* ]]; then
         test_fail "Expected the duplicate-name warn line in output"
         return
     fi

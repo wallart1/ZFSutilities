@@ -565,9 +565,11 @@ test_vm_workload_helpers_use_agent_channel() {
             # masked the parser bug until the first live j15 run).
             case "$2" in
                 *cat\ /workload.log*)
-                    printf '{\n   "exitcode" : 0,\n   "exited" : 1,\n   "out-data" : "1700000000\\n1700000001\\n",\n   "out-truncated" : 0\n}\n' ;;
+                    printf '{\n   "exitcode" : 0,\n   "exited" : 1,\n   "out-data" :'\
+' "1700000000\\n1700000001\\n",\n   "out-truncated" : 0\n}\n' ;;
                 *cksum*)
-                    printf '{\n   "exitcode" : 0,\n   "exited" : 1,\n   "out-data" : "4294967295 42 /workload.log\\n",\n   "out-truncated" : 0\n}\n' ;;
+                    printf '{\n   "exitcode" : 0,\n   "exited" : 1,\n   "out-data" :'\
+' "4294967295 42 /workload.log\\n",\n   "out-truncated" : 0\n}\n' ;;
                 *) return 0 ;;
             esac
             return 0
@@ -1162,15 +1164,21 @@ test_boot_journal_parser_failed_mode() {
 Mar 01 10:00:01 storage systemd[1]: Started rtslib-fb-targetctl.service.
 Mar 01 10:00:01 storage bash[123]: targetctl: backed up saveconfig.json
 Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted backstores excluded)
-Mar 01 10:00:04 storage bash[126]: targetctl: post-restore verification FAILED — live LUNs differ from the pool map; do NOT save config until reconciled
-Mar 01 10:00:04 storage bash[126]: DRIFT: target iqn.2000-01.com.example:zfstest1: map LUN 2 -> vm-202-disk-0 is missing live
-Mar 01 10:00:04 storage bash[126]: DRIFT: backstore vm-101-disk-1: map backstore no longer exists live
 EOF
+    printf '%s\n' \
+        'Mar 01 10:00:04 storage bash[126]: targetctl: post-restore verification FAILED — live '\
+'LUNs differ from the pool map; do NOT save config until reconciled'\
+        'Mar 01 10:00:04 storage bash[126]: DRIFT: target iqn.2000-01.com.example:zfstest1: map '\
+'LUN 2 -> vm-202-disk-0 is missing live'\
+        'Mar 01 10:00:04 storage bash[126]: DRIFT: backstore vm-101-disk-1: map backstore no '\
+'longer exists live' >> "$work/journal"
     cat > "$work/order" <<'EOF'
 12:Mar 01 09:59:50 storage systemd[1]: Finished zfs-import-cache.service.
 18:Mar 01 10:00:01 storage bash[123]: targetctl: backed up saveconfig.json
-20:Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted backstores excluded)
 EOF
+    printf '%s\n' \
+        '20:Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted '\
+'backstores excluded)' >> "$work/order"
     (
         # shellcheck disable=SC1090
         source "$ITF_COMMON"
@@ -1190,15 +1198,21 @@ test_boot_journal_parser_pending_mode() {
 Mar 01 10:00:01 storage systemd[1]: Started rtslib-fb-targetctl.service.
 Mar 01 10:00:01 storage bash[123]: targetctl: backed up saveconfig.json
 Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted backstores excluded)
-Mar 01 10:00:04 storage bash[126]: targetctl: post-restore verification PENDING — encrypted LUN(s) await key load (see DRIFT lines); do NOT save config until reconciled
-Mar 01 10:00:04 storage bash[126]: DRIFT: target iqn.2000-01.com.example:zfstest1: map LUN 2 -> vm-202-disk-0 is missing live
-Mar 01 10:00:04 storage bash[126]: DRIFT: backstore vm-101-disk-1: map backstore no longer exists live
 EOF
+    printf '%s\n' \
+        'Mar 01 10:00:04 storage bash[126]: targetctl: post-restore verification PENDING — '\
+'encrypted LUN(s) await key load (see DRIFT lines); do NOT save config until reconciled'\
+        'Mar 01 10:00:04 storage bash[126]: DRIFT: target iqn.2000-01.com.example:zfstest1: map '\
+'LUN 2 -> vm-202-disk-0 is missing live'\
+        'Mar 01 10:00:04 storage bash[126]: DRIFT: backstore vm-101-disk-1: map backstore no '\
+'longer exists live' >> "$work/journal"
     cat > "$work/order" <<'EOF'
 12:Mar 01 09:59:50 storage systemd[1]: Finished zfs-import-cache.service.
 18:Mar 01 10:00:01 storage bash[123]: targetctl: backed up saveconfig.json
-20:Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted backstores excluded)
 EOF
+    printf '%s\n' \
+        '20:Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted '\
+'backstores excluded)' >> "$work/order"
     (
         # shellcheck disable=SC1090
         source "$ITF_COMMON"
@@ -1217,14 +1231,22 @@ test_boot_journal_parser_ok_mode() {
     cat > "$work/journal" <<'EOF'
 Mar 01 10:00:01 storage bash[123]: targetctl: backed up saveconfig.json
 Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted backstores excluded)
-Mar 01 10:00:03 storage iscsi-add-encrypted-luns[125]: /usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns:108: INFO:   ✓ Added vm-101-disk-1 (LUN 1)
-Mar 01 10:00:03 storage iscsi-add-encrypted-luns[125]: /usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns:108: INFO:   ✓ Added vm-303-disk-0 (LUN 4)
-Mar 01 10:00:05 storage bash[126]: targetctl: post-restore verification OK — live LUNs match the pool map
 EOF
+    printf '%s\n' \
+        'Mar 01 10:00:03 storage iscsi-add-encrypted-luns[125]: '\
+'/usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns:108: INFO:   ✓ Added '\
+'vm-101-disk-1 (LUN 1)'\
+        'Mar 01 10:00:03 storage iscsi-add-encrypted-luns[125]: '\
+'/usr/local/lib/zfsutilities/bin/iscsi-add-encrypted-luns:108: INFO:   ✓ Added '\
+'vm-303-disk-0 (LUN 4)'\
+        'Mar 01 10:00:05 storage bash[126]: targetctl: post-restore verification OK — live LUNs '\
+'match the pool map' >> "$work/journal"
     cat > "$work/order" <<'EOF'
 12:Mar 01 09:59:50 storage systemd[1]: Finished zfs-import-cache.service.
-20:Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted backstores excluded)
 EOF
+    printf '%s\n' \
+        '20:Mar 01 10:00:02 storage bash[124]: targetctl: restoring boot config (encrypted '\
+'backstores excluded)' >> "$work/order"
     (
         # shellcheck disable=SC1090
         source "$ITF_COMMON"
@@ -1243,9 +1265,11 @@ test_boot_journal_parser_rejects_disorder() {
     cat > "$work/journal" <<'EOF'
 targetctl: backed up saveconfig.json
 targetctl: restoring boot config (encrypted backstores excluded)
-targetctl: post-restore verification FAILED — live LUNs differ from the pool map; do NOT save config until reconciled
-DRIFT: backstore vm-101-disk-1: map backstore no longer exists live
 EOF
+    printf '%s\n' \
+        'targetctl: post-restore verification FAILED — live LUNs differ from the pool map; do NOT '\
+'save config until reconciled'\
+        'DRIFT: backstore vm-101-disk-1: map backstore no longer exists live' >> "$work/journal"
     cat > "$work/order-ok" <<'EOF'
 12:Finished zfs-import-cache.service.
 20:targetctl: restoring boot config (encrypted backstores excluded)
@@ -1266,8 +1290,10 @@ EOF
 targetctl: backed up saveconfig.json
 targetctl: restoring boot config (encrypted backstores excluded)
 DRIFT: backstore vm-101-disk-1: map backstore no longer exists live
-targetctl: post-restore verification FAILED — live LUNs differ from the pool map; do NOT save config until reconciled
 EOF
+        printf '%s\n' \
+            'targetctl: post-restore verification FAILED — live LUNs differ from the pool map; do '\
+'NOT save config until reconciled' >> "$work/journal2"
         itf_boot_journal_verdict "$work/journal2" "$work/order-ok" failed \
             vm-101-disk-1 > /dev/null 2>&1
         echo "$?" > "$work/rc-disorder"

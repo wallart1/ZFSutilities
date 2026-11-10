@@ -328,7 +328,8 @@ org.debian:periodic-scrub=disable" tank/restored/data
     assert_contains "$capture" \
         "zfs set org.debian:periodic-scrub=disable tank/restored/data"
     assert_contains "$(get_log)" \
-        "VERB: Replayed 3 properties onto tank/restored/data from its property manifest (0 skipped)."
+        "VERB: Replayed 3 properties onto tank/restored/data from its property manifest (0 \
+skipped)."
     test_pass
 }
 
@@ -348,9 +349,11 @@ recordsize=131072" tank/restored/data
         return
     fi
     assert_contains "$(get_log)" \
-        "WARN: Could not set recordsize on tank/restored/data — skipped (not settable on this host)."
+        "WARN: Could not set recordsize on tank/restored/data — skipped (not settable on this \
+host)."
     assert_contains "$(get_log)" \
-        "VERB: Replayed 1 properties onto tank/restored/data from its property manifest (1 skipped)."
+        "VERB: Replayed 1 properties onto tank/restored/data from its property manifest (1 \
+skipped)."
     test_pass
 }
 
@@ -396,9 +399,11 @@ test_apply_body_keylocation_load_failure_warns() {
     propmanifest_apply_body "keylocation=file:///mnt/ZFSkeys/key1" \
         tank/restored/data
     assert_contains "$(get_log)" \
-        "WARN: Could not load the key for tank/restored/data (keylocation file missing or unreadable) — the dataset stays locked until its key is loaded."
+        "WARN: Could not load the key for tank/restored/data (keylocation file missing or \
+unreadable) — the dataset stays locked until its key is loaded."
     assert_contains "$(get_log)" \
-        "VERB: Replayed 1 properties onto tank/restored/data from its property manifest (0 skipped)."
+        "VERB: Replayed 1 properties onto tank/restored/data from its property manifest (0 \
+skipped)."
     test_pass
 }
 
@@ -415,7 +420,8 @@ test_apply_body_keylocation_non_file_never_loads() {
         return
     fi
     assert_contains "$(get_log)" \
-        "WARN: keylocation on tank/restored/data set to prompt; key not loaded (only file:// locations load non-interactively)."
+        "WARN: keylocation on tank/restored/data set to prompt; key not loaded (only file:// \
+locations load non-interactively)."
     test_pass
 }
 
@@ -439,9 +445,11 @@ keylocation=file:///mnt/ZFSkeys/key1" tank/restored/data
         return
     fi
     assert_contains "$(get_log)" \
-        "WARN: keylocation on tank/restored/data skipped — the dataset was received as encrypted and keeps its restore key's location (manifest records file:///mnt/ZFSkeys/key1)."
+        "WARN: keylocation on tank/restored/data skipped — the dataset was received as encrypted \
+and keeps its restore key's location (manifest records file:///mnt/ZFSkeys/key1)."
     assert_contains "$(get_log)" \
-        "VERB: Replayed 1 properties onto tank/restored/data from its property manifest (1 skipped)."
+        "VERB: Replayed 1 properties onto tank/restored/data from its property manifest (1 \
+skipped)."
     test_pass
 }
 
@@ -495,7 +503,8 @@ test_apply_file_corrupt_fails_open() {
         return
     fi
     assert_contains "$(get_log)" \
-        "WARN: Property manifest $f failed its sha256 check — replay skipped for tank/restored/data."
+        "WARN: Property manifest $f failed its sha256 check — replay skipped for \
+tank/restored/data."
     test_pass
 }
 
@@ -560,7 +569,8 @@ test_replay_falls_back_to_newest_manifest() {
     propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
     assert_rc 0 "$rc"
     assert_contains "$(get_log)" \
-        "WARN: Exact-generation manifest @daily-20261102T0500Z-d not found for tank/src/data — using the newest available (tank%2Fsrc%2Fdata@daily-20261101T0500Z-d)."
+        "WARN: Exact-generation manifest @daily-20261102T0500Z-d not found for tank/src/data — \
+using the newest available (tank%2Fsrc%2Fdata@daily-20261101T0500Z-d)."
     assert_contains "$(cat "$_zfs_capture_file")" \
         "zfs set compression=on tank/src/data"
     test_pass
@@ -577,7 +587,8 @@ test_replay_no_manifest_keeps_defaults() {
     propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
     assert_rc 0 "$rc"
     assert_contains "$(get_log)" \
-        "WARN: No property manifest for tank/src/data in backup/tank/zfsutilities-manifests — tank/src/data keeps its inherited defaults."
+        "WARN: No property manifest for tank/src/data in backup/tank/zfsutilities-manifests — \
+tank/src/data keeps its inherited defaults."
     if grep -q "zfs set" "$_zfs_capture_file"; then
         test_fail "nothing may be set when no manifest exists"
         return
@@ -594,7 +605,8 @@ test_replay_no_store_predates_feature() {
     propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
     assert_rc 0 "$rc"
     assert_contains "$(get_log)" \
-        "WARN: No property-manifest store backup/tank/zfsutilities-manifests — tank/src/data keeps its inherited defaults (backup predates property manifests)."
+        "WARN: No property-manifest store backup/tank/zfsutilities-manifests — tank/src/data keeps \
+its inherited defaults (backup predates property manifests)."
     test_pass
 }
 
@@ -636,7 +648,8 @@ test_replay_dryrun() {
     propmanifest_replay backup/tank/src/data tank/src/data || rc=$?
     assert_rc 0 "$rc"
     assert_contains "$(get_log)" \
-        "INFO: Dry-run: Would replay property manifest for tank/src/data from backup/tank/zfsutilities-manifests"
+        "INFO: Dry-run: Would replay property manifest for tank/src/data from \
+backup/tank/zfsutilities-manifests"
     if [[ -s "$_zfs_capture_file" ]]; then
         test_fail "dry-run must not touch zfs: $(cat "$_zfs_capture_file")"
         return
@@ -764,10 +777,12 @@ test_store_candidates_derivation() {
         "backup/tank/zfsutilities-manifests tank" \
         "$(propmanifest_store_candidates backup/tank)"
     assert_equals \
-        $'backup/tank/src/zfsutilities-manifests src/data\nbackup/tank/zfsutilities-manifests tank/src/data' \
+        $'backup/tank/src/zfsutilities-manifests src/data\n'\
+$'backup/tank/zfsutilities-manifests tank/src/data' \
         "$(propmanifest_store_candidates backup/tank/src/data)"
     assert_equals \
-        $'offsite/fivebays/tank/zfsutilities-manifests tank/src/data\noffsite/fivebays/zfsutilities-manifests fivebays/tank/src/data' \
+        $'offsite/fivebays/tank/zfsutilities-manifests tank/src/data\n'\
+$'offsite/fivebays/zfsutilities-manifests fivebays/tank/src/data' \
         "$(propmanifest_store_candidates offsite/fivebays/tank/src/data)"
     local rc=0
     propmanifest_store_candidates backup >/dev/null 2>&1 || rc=$?

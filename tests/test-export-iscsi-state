@@ -646,7 +646,8 @@ test_map_loss_refuses_and_lists_losses() {
     local map_file="${_mock_pools_root}/threeamigos/iscsi-state.json"
 
     if [[ "$rc" -eq 1 ]] \
-        && [[ "$out" == *"LOSS: target iqn.2026-02.local.stewie:nvme1 LUN 5 -> vm-205-disk-3 would be lost while still expected"* ]] \
+        && [[ "$out" == *"LOSS: target iqn.2026-02.local.stewie:nvme1 LUN 5 -> vm-205-disk-3 \
+would be lost while still expected"* ]] \
         && [[ "$out" == *"pool state map was NOT overwritten"* ]] \
         && grep -q 'vm-205-disk-3' "$map_file"; then
         test_pass
@@ -826,8 +827,10 @@ test_check_reports_grant_drift() {
     check_only=false
 
     if [[ "$rc" -eq 1 ]] \
-        && [[ "$out" == *"ACL iqn.2026-02.local.tweety grant mapped_lun 0 -> tpg_lun 0 is missing live"* ]] \
-        && [[ "$out" == *"ACL iqn.2026-02.local.dummy grant mapped_lun 8 moved: map -> tpg_lun 0, live -> tpg_lun 5"* ]]; then
+        && [[ "$out" == *"ACL iqn.2026-02.local.tweety grant mapped_lun 0 -> tpg_lun 0 is \
+missing live"* ]] \
+        && [[ "$out" == *"ACL iqn.2026-02.local.dummy grant mapped_lun 8 moved: map -> \
+tpg_lun 0, live -> tpg_lun 5"* ]]; then
         test_pass
     else
         test_fail "rc=$rc out='$out'"
@@ -883,7 +886,8 @@ test_check_keys_pending_verdict() {
         && [[ "$out" == *"map LUN 1 -> vm-101-disk-1 is missing live"* ]] \
         && [[ "$out" == *"grant mapped_lun 1 -> tpg_lun 1 is missing live"* ]] \
         && [[ "$out" == *"backstore vm-101-disk-1: map backstore no longer exists live"* ]] \
-        && [[ "$out" == *"WARN: All drift is keys-pending — encrypted LUN(s) vm-101-disk-1 locked"* ]] \
+        && [[ "$out" == *"WARN: All drift is keys-pending — encrypted LUN(s) vm-101-disk-1 \
+locked"* ]] \
         && [[ "$out" != *"KEYSUSPECT"* ]] \
         && [[ "$out" != *"WARN: Drift detected between live state and the pool map"* ]]; then
         test_pass
@@ -1138,7 +1142,8 @@ test_check_reports_guid_drift() {
     check_only=false
 
     if [[ "$rc" -eq 1 ]] \
-        && [[ "$out" == *"pools.threeamigos: GUID changed: map has '4338716537971988948', live has '111222333444555666'"* ]] \
+        && [[ "$out" == *"pools.threeamigos: GUID changed: map has '4338716537971988948', \
+live has '111222333444555666'"* ]] \
         && [[ "$out" == *"pool renamed or replaced"* ]]; then
         test_pass
     else

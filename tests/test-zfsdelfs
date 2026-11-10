@@ -337,8 +337,18 @@ node_mode=single-node
 is_single_node() { return 0; }
 is_two_node() { return 1; }
 EOF
-    cat > "$_mock_bin/zfsbuildfsarray" <<'EOF'
-buildfsarray() { fsarray=("${_mock_delfs_fsarray[@]}"); }
+    # The dataset list crosses the exec boundary as a file — bash cannot
+    # export arrays, so an env-prefix array would arrive empty and the
+    # per-dataset loop would run zero iterations (the vacuous-pass shape
+    # this runner used to have).
+    printf '%s\n' "pool/data" > "$_state_dir/fsarray"
+    cat > "$_mock_bin/zfsbuildfsarray" <<EOF
+buildfsarray() {
+    fsarray=()
+    while IFS= read -r _fsa_line; do
+        fsarray+=("\$_fsa_line")
+    done < "$_state_dir/fsarray"
+}
 EOF
     cat > "$_mock_bin/zfsdelallsnaps" <<'EOF'
 delallsnaps() { return 0; }
@@ -380,7 +390,9 @@ esac
 EOF
     chmod +x "$_mock_bin/zfs"
 
-    _mock_delfs_fsarray=(pool/data) \
+    # PATH carries the zfs stub (ZFSUTILITIES_BIN_DIR only steers helper
+    # lookups — the zfs command itself resolves through PATH).
+    PATH="$_mock_bin:$PATH" \
         HOME="$_mock_home" \
         NODE_CONF="$_state_dir/node.conf" \
         ZFSUTILITIES_BIN_DIR="$_mock_bin" \
@@ -403,12 +415,14 @@ test_delfs_autoproceed_override_subprocess() {
     _combined=$(cat "$_state_dir/out" "$_state_dir/err" 2>/dev/null)
     test_start "delfs honors autoproceed='Y' override when executed as subprocess"
     # With the override honored, the interactive "About to delete..." prompt
-    # block is skipped entirely. If the override is dropped, that message is
-    # emitted and the script then waits at read -p.
-    if [[ "$rc" -eq 0 && "$_combined" != *"About to delete"* ]]; then
+    # block is skipped entirely and the dataset IS deleted — the positive
+    # "was deleted." line proves the per-dataset loop actually ran (an
+    # empty run would pass rc=0 + no-prompt vacuously).
+    if [[ "$rc" -eq 0 && "$_combined" == *"pool/data was deleted."* \
+        && "$_combined" != *"About to delete"* ]]; then
         test_pass
     else
-        test_fail "Expected rc=0 and no 'About to delete' prompt, got rc=$rc, output: $_combined"
+        test_fail "Expected rc=0, 'pool/data was deleted.', and no 'About to delete' prompt, got rc=$rc, output: $_combined"
     fi
 }
 

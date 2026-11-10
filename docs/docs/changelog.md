@@ -173,6 +173,14 @@
   import order: its two page-build tests import the module fresh with
   their own mocks, so an earlier suite's page build can no longer leak
   into their call-count assertions (an intermittent full-gate failure).
+- The `zfsdelfs` autoproceed subprocess test now exercises the real
+  per-dataset loop (the `zfs` stub rides PATH, the dataset list crosses
+  the exec boundary as a file) and asserts the positive deletion line —
+  the previous rc=0/no-prompt assertion also passed on a silently-empty
+  run. Red-proofed: the old runner shape fails the strengthened test.
+- The five released suites carrying over-100-column lines (long
+  assertions, JSON payloads, journal fixtures) were reflowed to the
+  100-column policy; the bytes every fixture delivers are unchanged.
 
 ## 0.138.0
 
