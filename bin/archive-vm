@@ -2,7 +2,8 @@
 # archive-vm <vmid>
 # Archives a VM: verifies it is stopped (never stops it), offers to sever
 # dependent clones, archives zvols + config, verifies the archive, and
-# optionally removes the VM.
+# optionally removes the VM. Long transfers show a live pv progress line
+# on the terminal (see archive-engine.sh) — never in the session log.
 #
 # Install to: /usr/local/lib/zfsutilities/bin/archive-vm on BOTH hosts
 # Run from:   either host — storage-side and compute-side work run through
@@ -40,6 +41,22 @@ source_helper rootcheck
 [[ ${ARCHIVE_VM_TEST_NO_ROOT:-0} == "1" ]] || rootcheck
 
 my_host=$(hostname -s)
+
+# Progress display mode for the shared engine (see archive-engine.sh's
+# header): a live pv line when stderr is a terminal, forced output for a
+# capturing parent, nothing headless. Decided here, once, because this
+# shell's stderr is the operator's — the storage-side payload's stderr is
+# an ssh pipe, so the mode rides over as a payload argument. pv writes
+# only to stderr, never through log_msg: progress never grows the session
+# log. ARCHIVE_PROGRESS_MODE (tty|force|off) overrides the detection for
+# tests and unusual deployments.
+archive_progress_mode=""
+[[ -t 2 ]] && archive_progress_mode="tty"
+[[ "${ZFSUTILITIES_LOG_INHERIT:-}" == "Y" ]] && archive_progress_mode="force"
+case "${ARCHIVE_PROGRESS_MODE:-}" in
+    tty|force) archive_progress_mode="$ARCHIVE_PROGRESS_MODE" ;;
+    off) archive_progress_mode="" ;;
+esac
 
 # qm lives only on the compute host. When this shell IS the storage host
 # (two-node), every compute-side operation runs through on_compute instead,
@@ -657,7 +674,8 @@ for zvol in $zvols; do
         config_b64=$(base64 -w0 "$proxmoxconfig")
         log_msg "INFO:   Archiving ${zvol}${snap_name} → ${archive_dataset}"
         if ! on_storage "$zvol" "$snap_name" \
-                "$archive_dataset" "$archive_mount" "$vmid" "$config_b64" << 'SSHEOF'
+                "$archive_dataset" "$archive_mount" "$vmid" "$config_b64" \
+                "$archive_progress_mode" << 'SSHEOF'
 mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 source "$mydir/bashinit"
 bashinit
@@ -680,6 +698,9 @@ archive_dataset="$3"
 archive_mount="$4"
 vmid="$5"
 config_b64="$6"
+# The orchestrator's progress display mode: this payload's own stderr is a
+# pipe when it runs over ssh, so it cannot test the operator's terminal.
+archive_progress_mode="${7:-}"
 
 # Re-run idempotency: a verified archive is skipped; an unverified leftover
 # from an interrupted run is removed and re-made below.

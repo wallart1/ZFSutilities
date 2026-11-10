@@ -1392,13 +1392,14 @@ under the dataset runner.
 | `on_apply_profile(app, datasets, profile, refresh)`                          | Run the `zfs set` steps for the chosen profile (requires the dialog to have been confirmed) |
 | `show_manage_profiles_dialog(app)` / `show_profile_editor_dialog(app, name)` | Workload profile manager and add/edit dialog                                                |
 | `on_rewrite_data(app, datasets, refresh)`                                    | Run `zfs rewrite -P -r -x -v` on filesystem datasets, one write lock each                   |
-| `_build_rewrite_command(ds_name, mountpoint)`                                | Bash script for one rewrite: mount-if-needed, rewrite, restore prior mount state            |
+| `_build_rewrite_command(ds_name, mountpoint, capture_path, results_path, rewrite_log)` | Bash script for one rewrite: mount-if-needed, rewrite with the `-v` file list appended to the Rewrite Data log and counted, restore prior mount state |
 | `_topology_has_special_vdev(topology)`                                       | Whether a pool topology tree contains a special vdev                                        |
 
 **Called modules / imported helpers:**
 
 | Module              | Purpose in this module                             |
 | ------------------- | -------------------------------------------------- |
+| `config_core`       | `get_paths_config` (Rewrite Data log path)         |
 | `feature_config`    | Workload profile getters/setters                   |
 | `workload_profiles` | Profile matching, apply plan, and command builders |
 | `zfs_lock_manager`  | Advisory locks for dataset actions                 |
@@ -2414,13 +2415,16 @@ profiles exist).
 ### `logrotate_manager.py`
 
 Writes the logrotate drop-in that keeps the persistent logs bounded: the
-cron log and the scrub-manager event log are rotated weekly (eight
-generations, early rotation past a size guard), compressed, and recreated
-readable by non-root users. All paths come from the `paths` section of the
-main configuration file; the drop-in is rewritten whenever the cron schedule
-is saved, converged to the current format at GUI startup and at the start of
-every scheduled run (`cron_manager.converge_scheduler_files`), and removed
-by `uninstall-zfsutilities`.
+cron log, the scrub-manager event log, and the Rewrite Data file-list log
+are rotated weekly (eight generations, early rotation past a size guard) and
+compressed. The cron and scrub-manager logs are recreated readable by
+non-root users. The Rewrite Data log is rotated by `copytruncate` instead,
+because a dataset rewrite keeps it open for hours. All paths come from the
+`paths` section of the main configuration file; the drop-in is rewritten
+whenever the cron schedule is saved, converged to the current format at GUI
+startup and at the start of every scheduled run
+(`cron_manager.converge_scheduler_files`), and removed by
+`uninstall-zfsutilities`.
 
 **Key functions:**
 
@@ -2510,7 +2514,7 @@ devices.
 | `on_datasets_delete()`                                       | Delete selected datasets/snapshots/holds  |
 | `on_datasets_hold()`                                         | Place holds on selected snapshots         |
 | `on_datasets_rollback()`                                     | Rollback a dataset to a selected snapshot |
-| `on_datasets_browse()`                                       | Open the selected filesystem or snapshot in the default file manager |
+| `on_datasets_browse()`                                       | Open the selected filesystem or snapshot in the default file manager; refuses with a warning when the target is not mounted (or the snapshot's parent is not) or the mountpoint path is unreachable despite `mounted=yes` (orphaned/shadowed mount — the warning points at Repair Mount Order) |
 | `on_datasets_show_big_stuff()`                               | Run `zfsshowbigstuff` on the selected pool and log the output |
 | `on_datasets_mount()`                                        | Mount selected filesystems/snapshots/volume loop devices (and volume partitions); unmounted ancestors are mounted first (root-first), skipping `canmount=off` ancestors; directly selected `canmount=off` filesystems are skipped the same way; for snapshots whose parent is unmounted, a dialog offers to mount the parent datasets root-first before the snapshots |
 | `on_datasets_unmount()`                                      | Unmount selected filesystems/snapshots/volume loop devices (and volume partitions); mounted children are unmounted first (deepest-first), with automatic recovery of unreachable mounts (remount unmounted parents for orphaned mounts; lift covering ancestors and remount them afterwards for shadowed mounts) |

@@ -5,6 +5,7 @@ Runs sequential steps (rsync pulls, zfs send/receive, post-backup) via
 subprocess.Popen with non-blocking I/O integrated into the GTK main loop.
 """
 
+import codecs
 import inspect
 import os
 import pty
@@ -19,7 +20,7 @@ from datetime import datetime
 
 import session_log
 from backup_history import _parse_human_size, add_history_entry, build_entry
-from command_builders import _PV_RATE_RE, _diagnose_rsync_failure
+from command_builders import _PV_RATE_RE, _diagnose_rsync_failure, _get_local_hostname
 from gi.repository import GLib
 from logging_config import log_msg, restore_session_log, set_session_log
 from notifications import notify_run_finished
@@ -55,6 +56,55 @@ _ZFS_RECEIVED_RE = re.compile(r"received\s+(\S+)\s+stream\s+in\s+([\d.]+)\s+seco
 #   "ZFSU-INPUT-ACK|inp-1-2-3"                  -> match
 #   "INFO: sending tank/data@snap"              -> no match
 _INPUT_MARKER_RE = re.compile(r"^ZFSU-INPUT-(REQ|ACK)\|([^|]+)(?:\|(.*))?$")
+
+# Regex: \r\n|\r|\n
+# Purpose: Split step output into lines/segments at any line terminator; a
+#          CRLF pair counts once, and a bare \r ends a pv progress update.
+# Example: "a\r\nb\rc\nd" -> ["a", "b", "c", "d"]
+_LINE_END_RE = re.compile(r"\r\n|\r|\n")
+
+# How long a stream must stay silent before an unterminated fragment (a
+# prompt without a newline, the newest pv update) is shown as-is.  Shorter
+# than the 250 ms process-poll tick, so one tick always flushes it.
+_PARTIAL_LINE_FLUSH_SECONDS = 0.2
+
+
+class _LineAssembler:
+    """Reassemble one output stream's 8 KiB reads into whole lines.
+
+    Reads end wherever the pipe buffer did, not at line ends, so the text
+    after a read's last terminator is held until the rest of its line
+    arrives.  The UTF-8 decoder is incremental for the same reason: a
+    multi-byte character can straddle two reads.
+    """
+
+    def __init__(self, handler):
+        self.handler = handler
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._partial = ""
+        self._last_data = 0.0
+
+    def feed(self, data):
+        """Return the whole lines completed by *data*; hold the remainder."""
+        parts = _LINE_END_RE.split(self._partial + self._decoder.decode(data))
+        self._partial = parts.pop()
+        self._last_data = time.monotonic()
+        return parts
+
+    def take_partial(self, max_age=None):
+        """Return and clear the held fragment, or None.
+
+        With *max_age*, the fragment is released only after the stream has
+        been silent that long; without it, any held fragment is released.
+        """
+        if max_age is None:
+            self._partial += self._decoder.decode(b"", final=True)
+        if not self._partial:
+            return None
+        if max_age is not None and time.monotonic() - self._last_data < max_age:
+            return None
+        fragment, self._partial = self._partial, ""
+        return fragment
 
 
 def _ensure_rsync_log_dir():
@@ -145,6 +195,8 @@ class BackupRunner:
         self._lock_wait_started = None
         self._last_log_size_check = 0.0
         self._current_rsync_stderr = []
+        # Per-stream (pipe fd) line reassembly for the current step.
+        self._line_assemblers = {}
 
     def set_steps(self, steps):
         """Set the list of steps as BashStep objects."""
@@ -267,6 +319,9 @@ class BackupRunner:
         self.running = False
         if self.process and self.process.poll() is None:
             self.process.terminate()
+        # Keep the step's last unterminated output in the log.
+        self._flush_partial_lines()
+        self._line_assemblers = {}
         if not self._is_finally and self.current_step < len(self.steps):
             step = self.steps[self.current_step]
             if step.post_callback is not None:
@@ -275,19 +330,33 @@ class BackupRunner:
                 except Exception as exc:
                     self._log(f"WARN: Post-step callback failed during cancel: {exc}")
         self._cleanup_io()
+        self._end_cancelled()
+
+    def _end_cancelled(self):
+        """Close out a run the operator cancelled.
+
+        Shared by cancel() and the rc=9 user-abort exit so both endings
+        leave the same record: a cancelled session-log trailer, a cancelled
+        history entry (the Dashboard Tasks list draws finished rows from
+        history), and a cancelled run notification.  The caller has already
+        stopped the step process and released its I/O.
+        """
+        self.running = False
         self._write_raw_line(f"INFO: {self.label} cancelled")
         self._log(f"INFO: {self.label} cancelled")
         self._clear_input_events()
         self.set_stdin_enabled(False)
         if self.progress:
             self.progress(None, None)
+        duration = time.time() - self._session_start_time if self._session_start_time else None
         self._write_session_trailer(cancelled=True)
+        self._record_history("cancelled", duration or 0.0)
         notify_run_finished(
             result="cancelled",
             name=self.label,
             run_type=self._get_tab_type(),
             rc=None,
-            duration=time.time() - self._session_start_time if self._session_start_time else None,
+            duration=duration,
             bytes_transferred=self._total_bytes_received,
             log_file=self._session_log_file,
             session_log_file=self._session_log_file,
@@ -299,6 +368,26 @@ class BackupRunner:
         self._session_start_time = None
         if self._on_complete:
             self._on_complete(cancelled=True)
+
+    def _record_history(self, result, duration):
+        """Append this run's history entry, named as the Dashboard showed it live.
+
+        ``operation_detail`` (e.g. "Rewrite Data: pool/ds") names the entry
+        when a dialog set one; the type still comes from the runner label.
+        """
+        try:
+            entry = build_entry(
+                timestamp=datetime.now().isoformat(),
+                run_type=self._get_tab_type(),
+                name=self.operation_detail or self.label,
+                duration=duration,
+                result=result,
+                bytes_transferred=self._total_bytes_received,
+                log_file=self._session_log_file,
+            )
+            add_history_entry(entry)
+        except Exception as exc:
+            self._log(f"WARN: Could not add history entry: {exc}")
 
     def send_input(self, text):
         if self._pty_master_fd is not None:
@@ -349,6 +438,8 @@ class BackupRunner:
         """Spawn a subprocess with PTY and wire up I/O watchers."""
         self._current_desc = desc
         self._current_pv_text = ""
+        # A new process brings new pipes; fd numbers may be reused.
+        self._line_assemblers = {}
         if is_rsync:
             self._current_rsync_stderr = []
         self._log(f"INFO: {self._step_progress_text(desc)}")
@@ -496,74 +587,37 @@ class BackupRunner:
             try:
                 data = os.read(fd, 8192)
                 if data:
-                    for line in data.decode("utf-8", errors="replace").splitlines():
-                        received_match = _ZFS_RECEIVED_RE.search(line)
-                        if received_match:
-                            self._total_bytes_received += _parse_human_size(received_match.group(1))
-                        if "Waiting for lock" in line:
-                            self._in_lock_wait = True
-                            self._lock_wait_started = time.time()
-                        elif "Lock is now available" in line or "Wait interrupted" in line:
-                            self._in_lock_wait = False
-                            self._lock_wait_started = None
-                        self.log(line)
-                        self._write_raw_line(line)
+                    assembler = self._line_assembler(fd, self._handle_stdout_line)
+                    for line in assembler.feed(data):
+                        self._handle_stdout_line(line)
                     return True
             except OSError:
                 pass
         self._stdout_source = None
         return False
 
+    def _handle_stdout_line(self, line):
+        """Process one whole line from a separate (unmerged) stdout stream."""
+        received_match = _ZFS_RECEIVED_RE.search(line)
+        if received_match:
+            self._total_bytes_received += _parse_human_size(received_match.group(1))
+        if "Waiting for lock" in line:
+            self._in_lock_wait = True
+            self._lock_wait_started = time.time()
+        elif "Lock is now available" in line or "Wait interrupted" in line:
+            self._in_lock_wait = False
+            self._lock_wait_started = None
+        self.log(line)
+        self._write_raw_line(line)
+
     def _on_stderr(self, fd, condition):
         if condition & GLib.IOCondition.IN:
             try:
                 data = os.read(fd, 8192)
                 if data:
-                    text = data.decode("utf-8", errors="replace")
-                    # Regex: [\r\n]+
-                    # Purpose: Split raw byte stream into logical lines, handling mixed
-                    # \r\n, \n, \r.
-                    # Example: "line1\r\nline2\nline3" -> ["line1", "line2", "line3"]
-                    for segment in re.split(r"[\r\n]+", text):
-                        segment = segment.strip()
-                        if not segment:
-                            continue
-                        marker = _INPUT_MARKER_RE.match(segment)
-                        if marker:
-                            kind = marker.group(1).lower()
-                            self._emit_input_event(kind, marker.group(2), marker.group(3))
-                            continue
-                        if _PV_RATE_RE.search(segment):
-                            self._current_pv_text = segment
-                            self._update_progress(self._step_progress_text(segment))
-                        else:
-                            # Regex: INFO: Processing\s+(.+?)\.\s*$
-                            # Purpose: Extract the dataset name from a log line announcing
-                            #          the start of a new send/receive step.
-                            # Group 1: dataset name  e.g. "threeamigos/proxmox"
-                            # Example: "INFO: Processing threeamigos/proxmox. " -> match
-                            #          "INFO: sending threeamigos/proxmox@snap" -> no match
-                            processing_match = re.search(r"INFO: Processing\s+(.+?)\.\s*$", segment)
-                            if processing_match:
-                                self._current_pv_text = ""
-                                self._update_progress(
-                                    self._step_progress_text(processing_match.group(1))
-                                )
-                            received_match = _ZFS_RECEIVED_RE.search(segment)
-                            if received_match:
-                                self._total_bytes_received += _parse_human_size(
-                                    received_match.group(1)
-                                )
-                            if "Waiting for lock" in segment:
-                                self._in_lock_wait = True
-                                self._lock_wait_started = time.time()
-                            elif (
-                                "Lock is now available" in segment or "Wait interrupted" in segment
-                            ):
-                                self._in_lock_wait = False
-                                self._lock_wait_started = None
-                            self.log(segment)
-                            self._write_raw_line(segment)
+                    assembler = self._line_assembler(fd, self._handle_output_segment)
+                    for segment in assembler.feed(data):
+                        self._handle_output_segment(segment)
                     return True
             except OSError:
                 pass
@@ -571,6 +625,46 @@ class BackupRunner:
         # non-rsync steps, so clear the stdout source ID when the stream ends.
         self._stdout_source = None
         return False
+
+    def _handle_output_segment(self, segment):
+        """Process one whole segment of a merged (or stderr) output stream.
+
+        Segments are the pieces between ``\\r``/``\\n`` terminators, so each
+        pv carriage-return update arrives as its own segment.
+        """
+        segment = segment.strip()
+        if not segment:
+            return
+        marker = _INPUT_MARKER_RE.match(segment)
+        if marker:
+            kind = marker.group(1).lower()
+            self._emit_input_event(kind, marker.group(2), marker.group(3))
+            return
+        if _PV_RATE_RE.search(segment):
+            self._current_pv_text = segment
+            self._update_progress(self._step_progress_text(segment))
+            return
+        # Regex: INFO: Processing\s+(.+?)\.\s*$
+        # Purpose: Extract the dataset name from a log line announcing
+        #          the start of a new send/receive step.
+        # Group 1: dataset name  e.g. "threeamigos/proxmox"
+        # Example: "INFO: Processing threeamigos/proxmox. " -> match
+        #          "INFO: sending threeamigos/proxmox@snap" -> no match
+        processing_match = re.search(r"INFO: Processing\s+(.+?)\.\s*$", segment)
+        if processing_match:
+            self._current_pv_text = ""
+            self._update_progress(self._step_progress_text(processing_match.group(1)))
+        received_match = _ZFS_RECEIVED_RE.search(segment)
+        if received_match:
+            self._total_bytes_received += _parse_human_size(received_match.group(1))
+        if "Waiting for lock" in segment:
+            self._in_lock_wait = True
+            self._lock_wait_started = time.time()
+        elif "Lock is now available" in segment or "Wait interrupted" in segment:
+            self._in_lock_wait = False
+            self._lock_wait_started = None
+        self.log(segment)
+        self._write_raw_line(segment)
 
     def _on_rsync_stdout(self, fd, condition):
         if condition & GLib.IOCondition.IN:
@@ -590,19 +684,24 @@ class BackupRunner:
             try:
                 data = os.read(fd, 8192)
                 if data:
-                    desc = getattr(self, "_current_desc", "rsync")
-                    for line in data.decode("utf-8", errors="replace").splitlines():
-                        stripped = line.strip()
-                        if stripped:
-                            self._current_rsync_stderr.append(stripped)
-                            formatted = f"{desc}: {line}"
-                            self.log(formatted)
-                            self._write_raw_line(formatted)
+                    assembler = self._line_assembler(fd, self._handle_rsync_stderr_line)
+                    for line in assembler.feed(data):
+                        self._handle_rsync_stderr_line(line)
                     return True
             except OSError:
                 pass
         self._stderr_source = None
         return False
+
+    def _handle_rsync_stderr_line(self, line):
+        """Process one whole rsync stderr line: keep it for diagnosis, log it."""
+        stripped = line.strip()
+        if stripped:
+            desc = getattr(self, "_current_desc", "rsync")
+            self._current_rsync_stderr.append(stripped)
+            formatted = f"{desc}: {line}"
+            self.log(formatted)
+            self._write_raw_line(formatted)
 
     def _check_process(self):
         if self.process is None:
@@ -612,6 +711,10 @@ class BackupRunner:
         self._maybe_truncate_session_log()
         try:
             rc = self.process.poll()
+            if rc is None:
+                # Show a fragment the step left unterminated (a prompt, the
+                # newest pv update) once its stream has paused.
+                self._flush_partial_lines(_PARTIAL_LINE_FLUSH_SECONDS)
             if rc is not None:
                 self._log(f"DEBUG: Step {self.current_step} process exited rc={rc}")
                 self._drain_remaining()
@@ -639,7 +742,7 @@ class BackupRunner:
                 if step.is_rsync:
                     desc = step.description
                     self._log(f"INFO: {desc} ... done (rc={rc})")
-                    self._log(f"INFO: Rsync log: {RSYNC_LOG_FILE}")
+                    self._log(f"VERB: Rsync log on {_get_local_hostname()}: {RSYNC_LOG_FILE}")
                     if self._rsync_log_fh:
                         self._rsync_log_fh.close()
                         self._rsync_log_fh = None
@@ -653,18 +756,7 @@ class BackupRunner:
                     if rc == 9:
                         self._log(f"INFO: {self.label} aborted by user")
                         self._cleanup_io()
-                        self.set_stdin_enabled(False)
-                        self._write_session_trailer(rc=9)
-                        if self._session_log_prev is not None:
-                            restore_session_log(self._session_log_prev)
-                            self._session_log_prev = None
-                        self._session_log_file = None
-                        self._session_start_time = None
-                        self.running = False
-                        if self.progress:
-                            self.progress(None, None)
-                        if self._on_complete:
-                            self._on_complete(cancelled=True)
+                        self._end_cancelled()
                         return False
                     if step.fatal:
                         self._log(f"FATAL: Aborting {self.label.lower()} because step failed")
@@ -693,6 +785,13 @@ class BackupRunner:
             return False
 
     def _drain_remaining(self):
+        """Read what the exited step left in its pipes, then flush every fragment.
+
+        Lines go through the same per-stream handler as the live callbacks,
+        so the tail of a step is treated exactly like the rest of its output;
+        a fragment still buffered at exit is the step's last, unterminated
+        line and is emitted as-is.
+        """
         if self.process is None:
             return
         is_rsync = (
@@ -702,27 +801,49 @@ class BackupRunner:
             if pipe is None or pipe.closed:
                 continue
             try:
+                fd = pipe.fileno()
+                if is_rsync and not is_err:
+                    while True:
+                        data = os.read(fd, 8192)
+                        if not data:
+                            break
+                        if self._rsync_log_fh:
+                            self._rsync_log_fh.write(data.decode("utf-8", errors="replace"))
+                    continue
+                handler = (
+                    self._handle_rsync_stderr_line if is_rsync else self._handle_output_segment
+                )
+                assembler = self._line_assembler(fd, handler)
                 while True:
-                    data = os.read(pipe.fileno(), 8192)
+                    data = os.read(fd, 8192)
                     if not data:
                         break
-                    text = data.decode("utf-8", errors="replace")
-                    if is_rsync and not is_err:
-                        if self._rsync_log_fh:
-                            self._rsync_log_fh.write(text)
-                    else:
-                        for line in text.splitlines():
-                            line = line.strip()
-                            if line and not _PV_RATE_RE.search(line):
-                                received_match = _ZFS_RECEIVED_RE.search(line)
-                                if received_match:
-                                    self._total_bytes_received += _parse_human_size(
-                                        received_match.group(1)
-                                    )
-                                self.log(line)
-                                self._write_raw_line(line)
+                    for line in assembler.feed(data):
+                        assembler.handler(line)
             except (OSError, ValueError):
                 pass
+        self._flush_partial_lines()
+        self._line_assemblers = {}
+
+    def _line_assembler(self, fd, handler):
+        """Return the line assembler for output stream *fd*, creating it if new."""
+        assembler = self._line_assemblers.get(fd)
+        if assembler is None:
+            assembler = _LineAssembler(handler)
+            self._line_assemblers[fd] = assembler
+        return assembler
+
+    def _flush_partial_lines(self, max_age=None):
+        """Emit buffered unterminated fragments through their stream handlers.
+
+        With *max_age*, only fragments whose stream has been silent at least
+        that long are emitted — a prompt without a newline or the newest pv
+        update.  Without it (step exit, cancel) every fragment is emitted.
+        """
+        for assembler in list(self._line_assemblers.values()):
+            fragment = assembler.take_partial(max_age)
+            if fragment is not None:
+                assembler.handler(fragment)
 
     def _cleanup_io(self):
         try:
@@ -777,19 +898,7 @@ class BackupRunner:
 
         duration = time.time() - self._session_start_time if self._session_start_time else 0.0
         result = "success" if rc == 0 else "failed"
-        try:
-            entry = build_entry(
-                timestamp=datetime.now().isoformat(),
-                run_type=self._get_tab_type(),
-                name=self.label,
-                duration=duration,
-                result=result,
-                bytes_transferred=self._total_bytes_received,
-                log_file=self._session_log_file,
-            )
-            add_history_entry(entry)
-        except Exception as exc:
-            self._log(f"WARN: Could not add history entry: {exc}")
+        self._record_history(result, duration)
 
         # Pass the session-log path explicitly: delivery may continue on a
         # daemon thread after this runner has cleared its own references.

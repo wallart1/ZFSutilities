@@ -1,0 +1,132 @@
+#!/usr/bin/bash
+# shellcheck disable=SC1090,SC2034
+# test-archive-engine — Unit tests for the shared archive/unarchive
+# transfer engine's progress display stage (archive_pv_args): mode
+# selection, flag construction, size arming, and fail-open behavior.
+
+builtin source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-lib.sh"
+setup_test_env
+
+# The engine defines functions only and never sources bashinit itself, so
+# test-lib's log_msg mock already satisfies its harness requirements.
+source "$mydir/lib/archive-engine.sh"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+reset_state() {
+    clear_test_log_file
+    archive_pv_args=()
+    archive_progress_mode=""
+}
+
+joined_pv_args() {
+    printf '%s ' "${archive_pv_args[@]}"
+}
+
+# ---------------------------------------------------------------------------
+# archive_pv_args
+# ---------------------------------------------------------------------------
+
+test_pv_args_off_by_default() {
+    test_start "archive_pv_args empty with no display mode"
+    reset_state
+    archive_pv_args 2>/dev/null
+    assert_array_len 0 "${archive_pv_args[@]}"
+}
+
+test_pv_args_unknown_mode_off() {
+    test_start "archive_pv_args empty for an unrecognized mode"
+    reset_state
+    archive_progress_mode="bogus"
+    archive_pv_args 2>/dev/null
+    assert_array_len 0 "${archive_pv_args[@]}"
+}
+
+test_pv_args_tty() {
+    test_start "archive_pv_args tty mode: natural display flags"
+    reset_state
+    archive_progress_mode="tty"
+    archive_pv_args 2>/dev/null
+    assert_equals "-pterb -B 16M " "$(joined_pv_args)"
+}
+
+test_pv_args_force() {
+    test_start "archive_pv_args force mode adds -f"
+    reset_state
+    archive_progress_mode="force"
+    archive_pv_args 2>/dev/null
+    assert_equals "-fpterb -B 16M " "$(joined_pv_args)"
+}
+
+test_pv_args_tty_with_size() {
+    test_start "archive_pv_args arms -s when the total is known"
+    reset_state
+    archive_progress_mode="tty"
+    archive_pv_args "10737418240" 2>/dev/null
+    assert_equals "-pterb -B 16M -s 10737418240 " "$(joined_pv_args)"
+}
+
+test_pv_args_empty_size_disarms_s() {
+    test_start "archive_pv_args omits -s when the total is empty"
+    reset_state
+    archive_progress_mode="force"
+    archive_pv_args "" 2>/dev/null
+    assert_equals "-fpterb -B 16M " "$(joined_pv_args)"
+}
+
+test_pv_args_missing_pv_fails_open() {
+    test_start "archive_pv_args empty when pv is not installed"
+    reset_state
+    archive_progress_mode="force"
+    mkdir -p "$_mock_zfs_state_dir/no-pv-bin"
+    local _save_path="$PATH"
+    # Intentional PATH replacement: this dir holds no pv binary, so the
+    # engine's command -v pv probe must fail and the display must drop.
+    # shellcheck disable=SC2123
+    PATH="$_mock_zfs_state_dir/no-pv-bin"
+    archive_pv_args "100" 2>/dev/null
+    PATH="$_save_path"
+    assert_array_len 0 "${archive_pv_args[@]}"
+}
+
+test_pv_args_never_rate_limits() {
+    test_start "archive_pv_args carries display flags only, never -L"
+    reset_state
+    archive_progress_mode="force"
+    archive_pv_args "100" 2>/dev/null
+    if printf '%s\n' "${archive_pv_args[@]}" | grep -q -- '-L'; then
+        test_fail "archive_pv_args still rate limits: ${archive_pv_args[*]}"
+        return
+    fi
+    test_pass
+}
+
+test_pv_args_off_mode_value() {
+    test_start "archive_pv_args treats off as no display"
+    reset_state
+    # The invoking scripts map ARCHIVE_PROGRESS_MODE=off to an empty mode
+    # before the engine runs, but the engine must also treat a stray
+    # "off" value as display-off rather than an unknown-but-armed mode.
+    archive_progress_mode="off"
+    archive_pv_args 2>/dev/null
+    assert_array_len 0 "${archive_pv_args[@]}"
+}
+
+# ---------------------------------------------------------------------------
+# Run
+# ---------------------------------------------------------------------------
+
+test_pv_args_off_by_default
+test_pv_args_unknown_mode_off
+test_pv_args_off_mode_value
+test_pv_args_tty
+test_pv_args_force
+test_pv_args_tty_with_size
+test_pv_args_empty_size_disarms_s
+test_pv_args_missing_pv_fails_open
+test_pv_args_never_rate_limits
+
+test_summary
+teardown_test_env

@@ -261,7 +261,10 @@ def create_pools_page(app):
     # natural request sizes the initial divider.
     scrolled = capped_treeview_scroll(app.pool_view)
     setup_row_scroll(scrolled, app.pool_view)
-    top_box.pack_start(scrolled, True, True, 0)
+    # Non-expanding: the table is only as tall as its rows (up to the
+    # 20-row cap); taller panes keep the blank below instead of stretching
+    # the window past the cap.
+    top_box.pack_start(scrolled, False, False, 0)
 
     # Summary + dirty indicator
     app.pool_summary_label = Gtk.Label()
@@ -384,7 +387,10 @@ def create_pools_page(app):
     # natural request sizes the initial divider.
     scrub_scrolled = capped_treeview_scroll(app.scrub_view)
     setup_row_scroll(scrub_scrolled, app.scrub_view)
-    bottom_box.pack_start(scrub_scrolled, True, True, 0)
+    # Non-expanding: the queue window is only as tall as the queue (up to
+    # the 20-row cap) and never stretches past it — longer queues scroll
+    # inside the window.
+    bottom_box.pack_start(scrub_scrolled, False, False, 0)
 
     # Initialize scrub queue
     app.scrub_queue = ScrubQueue(target=int(scrub_cfg.get("simultaneous", 1)))
@@ -409,7 +415,19 @@ def create_pools_page(app):
     GLib.idle_add(_default_divider_position)
     box.pack_start(paned, True, True, 0)
 
-    return box
+    # Wrap the page so the whole tab scrolls vertically on short windows:
+    # the paned's panes keep their natural heights instead of crushing the
+    # tables to their minimums.
+    scrolled = Gtk.ScrolledWindow()
+    scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    scrolled.add(box)
+    # NATURAL vscroll policy: both tables' capped windows have tiny
+    # minimums, and the default MINIMUM policy would clamp the page to the
+    # window height and shrink-crush them (dashboard-page idiom).
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
+    return scrolled
 
 
 # ---------------------------------------------------------------------------

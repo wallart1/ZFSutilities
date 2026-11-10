@@ -553,6 +553,20 @@ def on_datasets_show_big_stuff(app):
     runner.start()
 
 
+def _warn_browse_unreachable(target, repair_dataset, path):
+    """Refuse a browse whose *path* does not exist despite mounted=yes.
+
+    The kernel still lists the dataset as mounted, but its mountpoint cannot
+    be reached — an orphaned or shadowed mount. Launching the file manager
+    would open nothing while logging success, so point at the repair action.
+    """
+    log_msg(
+        f"WARN: Cannot browse {target}: {path} is not reachable even though "
+        "the dataset is mounted (an orphaned or shadowed mount). "
+        f"Run Repair Mount Order on {repair_dataset}, then browse."
+    )
+
+
 def on_datasets_browse(app):
     """Open the selected filesystem or snapshot in the default file manager."""
     repo = _repo(app)
@@ -570,6 +584,15 @@ def on_datasets_browse(app):
             if not mountpoint.startswith("/"):
                 log_msg(f"WARN: Cannot open {dataset}: mountpoint is {mountpoint}")
                 return
+            if repo.get_property(dataset, "mounted") != "yes":
+                log_msg(
+                    f"WARN: Cannot browse {dataset}: it is not mounted. "
+                    "Mount it first, then browse."
+                )
+                return
+            if not os.path.isdir(mountpoint):
+                _warn_browse_unreachable(dataset, dataset, mountpoint)
+                return
             subprocess.Popen(["xdg-open", mountpoint])
             log_msg(f"VERB: Opened {mountpoint}")
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
@@ -579,7 +602,16 @@ def on_datasets_browse(app):
     if item_type == "snapshot":
         full_snap = f"{item['dataset']}@{item['name']}"
         try:
+            if repo.get_property(item["dataset"], "mounted") != "yes":
+                log_msg(
+                    f"WARN: Cannot browse {full_snap}: parent dataset "
+                    f"{item['dataset']} is not mounted. Mount the parent first."
+                )
+                return
             path = get_snapshot_mountpoint(item["dataset"], item["name"], repo=repo)
+            if not os.path.isdir(path):
+                _warn_browse_unreachable(full_snap, item["dataset"], path)
+                return
             subprocess.Popen(["xdg-open", path])
             log_msg(f"VERB: Browsing snapshot {full_snap}")
             update_ds_button_sensitivity(app)
@@ -1434,7 +1466,16 @@ def plan_mount_repair(app, scope=None):
 
 def _format_repair_plan(plan):
     """Render the plan lines shown in the confirmation dialog."""
-    lines = ["The following mounts are unreachable and will be reordered:"]
+    lines = [
+        (
+            "This repair unmounts and remounts the listed filesystems. Their "
+            "files are briefly inaccessible while it runs — close anything "
+            "using them (file managers, VMs, backups) first; the repair "
+            "refuses to start while any is in use."
+        ),
+        "",
+        "The following mounts are unreachable and will be reordered:",
+    ]
     for row in plan["rows"]:
         lines.append(f"  • {row['name']} (mountpoint {row['mountpoint']})")
     lines.append("")
@@ -1453,18 +1494,24 @@ def _format_repair_plan(plan):
 
 
 def _confirm_mount_repair(app, plan):
-    """Show the approval dialog for a repair plan; True when approved."""
+    """Show the approval dialog for a repair plan; True when approved.
+
+    A disruptive operation (unmount + remount), so it follows the
+    destructive-confirm convention: warning styling, Yes/No buttons, and
+    No as the default response — an accidental Enter cancels, not starts.
+    """
     dialog = Gtk.MessageDialog(
         transient_for=app,
         modal=True,
-        message_type=Gtk.MessageType.QUESTION,
-        buttons=Gtk.ButtonsType.OK_CANCEL,
+        message_type=Gtk.MessageType.WARNING,
+        buttons=Gtk.ButtonsType.YES_NO,
         text="Repair mount order?",
     )
     dialog.format_secondary_text(_format_repair_plan(plan))
+    dialog.set_default_response(Gtk.ResponseType.NO)
     response = dialog.run()
     dialog.destroy()
-    return response == Gtk.ResponseType.OK
+    return response == Gtk.ResponseType.YES
 
 
 def _remount_repair_set(app, plan):

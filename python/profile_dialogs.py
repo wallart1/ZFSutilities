@@ -26,6 +26,7 @@ import zfs_lock_manager as zlm
 gi.require_version("Gtk", "3.0")
 
 from command_builders import BashStep
+from config_core import get_paths_config
 from feature_config import (
     DEFAULT_WORKLOAD_PROFILES,
     delete_workload_profile,
@@ -119,7 +120,7 @@ def _topology_has_special_vdev(topology: TopologyNode | None) -> bool:
 
 
 def _build_rewrite_command(
-    ds_name: str, mountpoint: str, capture_path: str, results_path: str
+    ds_name: str, mountpoint: str, capture_path: str, results_path: str, rewrite_log: str
 ) -> str:
     """Build the bash script that rewrites *ds_name* in place via its mountpoint.
 
@@ -129,16 +130,22 @@ def _build_rewrite_command(
     1. Records whether the dataset is already mounted.
     2. Mounts it (non-recursively) only if it is not mounted; the mount must
        succeed or the script exits non-zero.
-    3. Runs ``zfs rewrite -P -r -x -v <mountpoint>`` — physical rewrite (so
-       rewritten blocks do not inflate later incremental send streams),
-       recursive, never crossing filesystem mount points (so child datasets
-       mounted beneath this one are not rewritten), verbose for log progress.
-       ``-v`` prints one line per successfully rewritten file, so the output
-       is streamed live through ``tee`` *and* captured: the captured line
-       count is this dataset's rewritten-file total, appended as
-       ``count<TAB>dataset`` to *results_path* for the completion summary —
-       an rc of 0 alone cannot tell "rewrote data" from "nothing to
-       rewrite", and the summary must not claim work that did not happen.
+    3. Appends a header block (time, dataset, mountpoint, session log) to
+       the persistent Rewrite Data log *rewrite_log* and logs a pointer to
+       it, then runs ``zfs rewrite -P -r -x -v <mountpoint>`` — physical
+       rewrite (so rewritten blocks do not inflate later incremental send
+       streams), recursive, never crossing filesystem mount points (so child
+       datasets mounted beneath this one are not rewritten), verbose.
+       ``-v`` prints one line per successfully rewritten file on stdout.
+       That file list is far too large for the session log (a single run
+       can list tens of thousands of files, and the capped session log
+       would drop its middle), so it is appended live to *rewrite_log*
+       through ``tee -a`` and captured: the captured line count is this
+       dataset's rewritten-file total, appended as ``count<TAB>dataset`` to
+       *results_path* for the completion summary — an rc of 0 alone cannot
+       tell "rewrote data" from "nothing to rewrite", and the summary must
+       not claim work that did not happen.  stderr is not merged into the
+       list: real errors stay in the session log and are never counted.
     4. Unmounts the dataset only if this script mounted it, restoring the
        prior state. An unmount failure is reported but does not mask the
        rewrite's exit code.
@@ -150,6 +157,8 @@ def _build_rewrite_command(
     q_mp = shlex.quote(mountpoint)
     q_cap = shlex.quote(capture_path)
     q_res = shlex.quote(results_path)
+    q_log = shlex.quote(rewrite_log)
+    q_title = shlex.quote(f"Rewrite Data: {ds_name} ({mountpoint})")
     return (
         "source ~/bashinit; bashinit\n"
         f"mounted_before=$(zfs get -H -o value mounted {q_ds})\n"
@@ -161,7 +170,15 @@ def _build_rewrite_command(
         "    fi\n"
         "    mounted_by_us=1\n"
         "fi\n"
-        f"zfs rewrite -P -r -x -v {q_mp} 2>&1 | tee -- {q_cap}\n"
+        f"rewrite_log={q_log}\n"
+        'mkdir -p -- "$(dirname -- "$rewrite_log")" 2>/dev/null || true\n'
+        "rule='============================================================'\n"
+        f'if ! printf \'%s\\n\' "" "$rule" "$(date \'+%Y-%m-%d %H:%M:%S\') "{q_title} \\\n'
+        '        "Session log: ${ZFSUTILITIES_LOG_FILE:-none}" "$rule" >> "$rewrite_log"; then\n'
+        '    log_msg "WARN: Rewrite Data: cannot write the file-list log $rewrite_log"\n'
+        "fi\n"
+        f'log_msg "INFO: Rewrite Data: file list for {ds_name} → $rewrite_log"\n'
+        f'zfs rewrite -P -r -x -v {q_mp} | tee -a -- "$rewrite_log" > {q_cap}\n'
         "rewrite_rc=${PIPESTATUS[0]}\n"
         # Count the captured -v lines: one per successfully rewritten file.
         # A missing/unreadable capture or a non-numeric answer degrades to
@@ -371,6 +388,7 @@ def on_rewrite_data(app, datasets, refresh=None):
         return
 
     results_path = _new_rewrite_results_path()
+    rewrite_log = get_paths_config(app.config, persist=False)["rewrite_data_log"]
     steps = [
         BashStep(
             [
@@ -381,6 +399,7 @@ def on_rewrite_data(app, datasets, refresh=None):
                     mountpoints[ds_name],
                     f"{results_path}.{index}.out",
                     results_path,
+                    rewrite_log,
                 ),
             ],
             f"Rewrite data on {ds_name}",

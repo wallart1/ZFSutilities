@@ -28,6 +28,20 @@
 # 1.5-3.5x the cap after every ZFS txg/throttle stall). Empty or unset
 # means unlimited (a plain dd reader).
 #
+# Progress: every data movement — device copy, hash verification, raw
+# send/receive — can show a live one-line progress display (bar, percent,
+# elapsed, ETA, rate, bytes) through a display-only pv stage, the same law
+# as lib/transfer-lib.sh's transfer_pv_args: natural in-place display when
+# stderr is a terminal, forced output (-f) when a capturing parent set
+# ZFSUTILITIES_LOG_INHERIT=Y, and no stage otherwise. The stage is
+# display-only: pv writes to stderr, never through log_msg, so a run with
+# progress showing adds nothing to the session log. The invoking script
+# sets $archive_progress_mode (tty|force|empty) once from ITS stderr —
+# across a two-node ssh hop the remote engine's stderr is a pipe and
+# cannot test the operator's terminal itself, so the mode rides over as
+# an on_storage payload argument. A missing pv binary or an unknown mode
+# silently drops the display; progress must never fail a transfer.
+#
 # Integrity: the device-copy path carries no stream checksums, so its
 # source is hashed in flight — the copy stream is teed to a background
 # sha256sum through a fifo — and the destination is read back after the
@@ -154,16 +168,22 @@ archive_resolve_rate() {
 # seeks all-zero input rather than writing it, at the dd block-size
 # granularity, so a thin archive zvol stays thin either way.
 #
+# Progress: the optional $4 (total bytes) arms a display-only pv stage
+# between the tee and the writer dd (see archive_pv_args); omitted or
+# empty plus a display mode leaves the stage sizeless, and no display
+# mode leaves the pipelines byte-identical to a display-less run.
+#
 # Failure containment: a dead hash consumer or a dead writer breaks the
 # pipeline via SIGPIPE and pipefail, so a partial copy or a truncated
 # hash can never return success.
 archive_copy_devices() {
-    local src="$1" dst="$2" hash_var="$3"
+    local src="$1" dst="$2" hash_var="$3" total_bytes="${4:-}"
     local tmp_dir fifo hash_file sha_pid pipe_rc=0 sha_rc=0 hash=""
     if [[ -n "${transfer_rate_limit:-}" ]] && ! archive_pacer; then
         log_msg "FATAL: Rate limit set but pace_stream.py not found"
         return 1
     fi
+    archive_pv_args "$total_bytes"
     tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/zfsutilities-copy.XXXXXX") || return 1
     fifo="${tmp_dir}/hash.fifo"
     hash_file="${tmp_dir}/src.sha256"
@@ -179,10 +199,28 @@ archive_copy_devices() {
     fi
     sha256sum < "$fifo" > "$hash_file" 2>/dev/null &
     sha_pid=$!
-    if [[ -n "${transfer_rate_limit:-}" ]]; then
+    # Four explicit pipeline variants (the transfer_do law): an empty pv
+    # array cannot collapse into the next segment, and a paced reader and
+    # a display stage are independent choices. Every dd runs quiet
+    # (status=none); the pv stage owns the terminal display.
+    if [[ -n "${transfer_rate_limit:-}" && ${#archive_pv_args[@]} -gt 0 ]]; then
         ( set -o pipefail
           python3 "$_archive_pacer" "$transfer_rate_limit" -- "$src" \
               | tee "$fifo" \
+              | pv "${archive_pv_args[@]}" \
+              | dd of="$dst" bs=16M conv=sparse,notrunc iflag=fullblock status=none
+        ) || pipe_rc=1
+    elif [[ -n "${transfer_rate_limit:-}" ]]; then
+        ( set -o pipefail
+          python3 "$_archive_pacer" "$transfer_rate_limit" -- "$src" \
+              | tee "$fifo" \
+              | dd of="$dst" bs=16M conv=sparse,notrunc iflag=fullblock status=none
+        ) || pipe_rc=1
+    elif [[ ${#archive_pv_args[@]} -gt 0 ]]; then
+        ( set -o pipefail
+          dd if="$src" bs=16M iflag=fullblock status=none \
+              | tee "$fifo" \
+              | pv "${archive_pv_args[@]}" \
               | dd of="$dst" bs=16M conv=sparse,notrunc iflag=fullblock status=none
         ) || pipe_rc=1
     else
@@ -210,7 +248,9 @@ archive_copy_devices() {
 
 # Build the optional pacing segment for a raw send/receive pipeline into
 # the pace_pipe array (empty when unlimited). Usage:
-#   archive_pace_pipe; zfs send ... | "${pace_pipe[@]}" zfs receive ...
+#   archive_pace_pipe; zfs send ... | "${pace_pipe[@]}" | zfs receive ...
+# The pacer is a standalone filter segment (its CLI takes <rate> [--] [file]
+# only — trailing pipeline words belong to the NEXT segment, never here).
 # Returns 1 (with a FATAL log) when a rate is set but the pacer cannot be
 # resolved.
 archive_pace_pipe() {
@@ -222,6 +262,36 @@ archive_pace_pipe() {
         fi
         pace_pipe=(python3 "$_archive_pacer" "$transfer_rate_limit")
     fi
+}
+
+# Build the optional progress display options into the archive_pv_args
+# array (empty when off) — the engine counterpart of transfer-lib's
+# transfer_pv_args. Usage:
+#   archive_pv_args [total_bytes]
+#   ... | pv "${archive_pv_args[@]}" | <next stage> ...
+# The array holds OPTION WORDS ONLY: pv must stand as its own pipeline
+# segment, because any word after pv's options would be taken as a file
+# operand — `... | "${archive_pv_args[@]}" dd of=...` would make pv try to
+# open "dd" and "of=..." as input files. $archive_progress_mode is set
+# once by the invoking script (tty|force|empty; see the header). -B 16M
+# matches the dd writer's block size so the display stage cannot throttle
+# the copy; -s is added only when the caller knows the total. A missing
+# pv binary or an unrecognized mode silently drops the display.
+archive_pv_args() {
+    archive_pv_args=()
+    case "${archive_progress_mode:-}" in
+        tty|force) ;;
+        *) return 0 ;;
+    esac
+    command -v pv >/dev/null 2>&1 || return 0
+    local -a pv_opts=(-pterb -B 16M)
+    if [[ "$archive_progress_mode" == "force" ]]; then
+        pv_opts=(-fpterb -B 16M)
+    fi
+    if [[ -n "${1:-}" ]]; then
+        pv_opts+=(-s "$1")
+    fi
+    archive_pv_args=("${pv_opts[@]}")
 }
 
 # Wait for a /dev/zvol device node to appear (udev settle after
@@ -244,10 +314,13 @@ archive_dev_wait() {
 # integrity for the device-copy path, which has no stream checksums. Only
 # the destination is read; $1 names the source for the mismatch messages.
 # Prints the verification result; returns 1 on mismatch or hash failure.
+# The optional $4 (total bytes) sizes the display-only pv stage (see
+# archive_pv_args); with no display mode the pipelines are unchanged.
 archive_hash_verify() {
-    local src="$1" dst="$2" expected="$3"
+    local src="$1" dst="$2" expected="$3" total_bytes="${4:-}"
     local h2
     log_msg "INFO:   Verifying copy integrity (sha256)..."
+    archive_pv_args "$total_bytes"
     if [[ -n "${transfer_rate_limit:-}" ]]; then
         # Rate-capped hashing: read the device through the pacer so the
         # verify pass cannot saturate the pool; sha256sum of stdin yields
@@ -256,8 +329,23 @@ archive_hash_verify() {
             log_msg "FATAL: Rate limit set but pace_stream.py not found"
             return 1
         fi
-        h2=$(python3 "$_archive_pacer" "$transfer_rate_limit" -- "$dst" \
-            | sha256sum 2>/dev/null) || {
+        if [[ ${#archive_pv_args[@]} -gt 0 ]]; then
+            h2=$(python3 "$_archive_pacer" "$transfer_rate_limit" -- "$dst" \
+                | pv "${archive_pv_args[@]}" | sha256sum 2>/dev/null) || {
+                log_msg "FATAL: Failed to hash devices"
+                return 1
+            }
+        else
+            h2=$(python3 "$_archive_pacer" "$transfer_rate_limit" -- "$dst" \
+                | sha256sum 2>/dev/null) || {
+                log_msg "FATAL: Failed to hash devices"
+                return 1
+            }
+        fi
+    elif [[ ${#archive_pv_args[@]} -gt 0 ]]; then
+        # Unlimited with a display: pv is the reader (the device is its
+        # file operand) and sha256sum digests the stream.
+        h2=$(pv "${archive_pv_args[@]}" "$dst" | sha256sum 2>/dev/null) || {
             log_msg "FATAL: Failed to hash devices"
             return 1
         }
@@ -326,6 +414,7 @@ archive_one_zvol() {
     local orig_vbs encryption volsize snapdev_prev method
     local created_root="" dataset_created=0 snapdev_changed=0
     local src_dev dst_dev snapdev_arg copy_src_hash=""
+    local volsize_bytes="" raw_size=""
 
     # One resolver call per run (rate governance): the local shadow of
     # transfer_rate_limit carries the combined rate — min(prompted rate,
@@ -350,6 +439,9 @@ archive_one_zvol() {
         method=copy
         log_msg "INFO:   Archive method: device copy (reblock to 1M)"
         volsize=$(zfs get -H -o value volsize "$zvol")
+        # Exact bytes for the progress display's -s total (parsable -p).
+        volsize_bytes=$(zfs get -Hp -o value volsize "$zvol" 2>/dev/null \
+            || true)
         snapdev_prev=$(zfs get -H -o value snapdev "$zvol")
         if [[ "$snapdev_prev" != "visible" ]]; then
             if ! zfs set snapdev=visible "$zvol"; then
@@ -405,7 +497,8 @@ archive_one_zvol() {
             archive_rollback_created "$archive_dataset" "$dataset_created" "$created_root"
             return 1
         fi
-        if ! archive_copy_devices "$src_dev" "$dst_dev" copy_src_hash; then
+        if ! archive_copy_devices "$src_dev" "$dst_dev" copy_src_hash \
+                "$volsize_bytes"; then
             log_msg "FATAL: Device copy failed (${src_dev} → ${dst_dev})"
             if [[ "$snapdev_changed" == "1" ]]; then
                 zfs set snapdev="$snapdev_arg" "$zvol" 2>/dev/null || true
@@ -415,7 +508,8 @@ archive_one_zvol() {
             return 1
         fi
         sync "$dst_dev" 2>/dev/null || sync
-        if ! archive_hash_verify "$src_dev" "$dst_dev" "$copy_src_hash"; then
+        if ! archive_hash_verify "$src_dev" "$dst_dev" "$copy_src_hash" \
+                "$volsize_bytes"; then
             if [[ "$snapdev_changed" == "1" ]]; then
                 zfs set snapdev="$snapdev_arg" "$zvol" 2>/dev/null || true
                 snapdev_changed=0
@@ -443,9 +537,36 @@ archive_one_zvol() {
             archive_rollback_created "$archive_dataset" "$dataset_created" "$created_root"
             return 1
         fi
-        if ! ( set -o pipefail
-               zfs send -cw "${zvol}${snap_name}" \
-                 | "${pace_pipe[@]}" zfs receive "$archive_dataset" ); then
+        # awk '/^size/ {print $2}'  —  Extract the stream's byte size from
+        # the send dry-run for the progress display. Fails open: an empty
+        # probe shows rate/bytes/elapsed without percent/ETA.
+        raw_size=$(zfs send -nPcw "${zvol}${snap_name}" 2>/dev/null \
+            | awk '/^size/ {print $2}' || true)
+        archive_pv_args "$raw_size"
+        # Four explicit pipeline variants (the transfer_do law): stage
+        # order keeps the pacer before pv so the displayed rate is the
+        # paced rate the destination actually receives.
+        local send_rc=0
+        if [[ ${#pace_pipe[@]} -gt 0 && ${#archive_pv_args[@]} -gt 0 ]]; then
+            ( set -o pipefail
+              zfs send -cw "${zvol}${snap_name}" \
+                | "${pace_pipe[@]}" | pv "${archive_pv_args[@]}" \
+                | zfs receive "$archive_dataset" ) || send_rc=$?
+        elif [[ ${#pace_pipe[@]} -gt 0 ]]; then
+            ( set -o pipefail
+              zfs send -cw "${zvol}${snap_name}" \
+                | "${pace_pipe[@]}" | zfs receive "$archive_dataset" ) || send_rc=$?
+        elif [[ ${#archive_pv_args[@]} -gt 0 ]]; then
+            ( set -o pipefail
+              zfs send -cw "${zvol}${snap_name}" \
+                | pv "${archive_pv_args[@]}" \
+                | zfs receive "$archive_dataset" ) || send_rc=$?
+        else
+            ( set -o pipefail
+              zfs send -cw "${zvol}${snap_name}" \
+                | zfs receive "$archive_dataset" ) || send_rc=$?
+        fi
+        if [[ $send_rc -ne 0 ]]; then
             log_msg "FATAL: Failed to archive ${zvol} (raw send/receive)"
             archive_rollback_created "$archive_dataset" "$dataset_created" "$created_root"
             return 1
@@ -520,6 +641,7 @@ unarchive_one_zvol() {
     local info_file vbs_file method orig_vbs
     local snap snap_name volsize snapdev_prev snapdev_changed=0
     local created_root="" dataset_created=0 src_dev dst_dev copy_src_hash=""
+    local volsize_bytes="" raw_size=""
 
     # One resolver call per run (rate governance): the local shadow of
     # transfer_rate_limit carries the combined rate — min(prompted rate,
@@ -561,6 +683,9 @@ unarchive_one_zvol() {
         orig_vbs=$(cat "$vbs_file")
         log_msg "INFO:   Restore method: copy (reblock to ${orig_vbs})"
         volsize=$(zfs get -H -o value volsize "$arc_dataset")
+        # Exact bytes for the progress display's -s total (parsable -p).
+        volsize_bytes=$(zfs get -Hp -o value volsize "$arc_dataset" \
+            2>/dev/null || true)
         snapdev_prev=$(zfs get -H -o value snapdev "$arc_dataset")
         if [[ "$snapdev_prev" != "visible" ]]; then
             if ! zfs set snapdev=visible "$arc_dataset"; then
@@ -595,7 +720,8 @@ unarchive_one_zvol() {
             unarchive_rollback_created "$new_zvol" "$dataset_created" "$created_root"
             return 1
         fi
-        if ! archive_copy_devices "$src_dev" "$dst_dev" copy_src_hash; then
+        if ! archive_copy_devices "$src_dev" "$dst_dev" copy_src_hash \
+                "$volsize_bytes"; then
             log_msg "FATAL: Device copy failed (${src_dev} → ${dst_dev})"
             [[ "$snapdev_changed" == "1" ]] \
                 && zfs set snapdev="$snapdev_prev" "$arc_dataset" 2>/dev/null || true
@@ -603,7 +729,8 @@ unarchive_one_zvol() {
             return 1
         fi
         sync "$dst_dev" 2>/dev/null || sync
-        if ! archive_hash_verify "$src_dev" "$dst_dev" "$copy_src_hash"; then
+        if ! archive_hash_verify "$src_dev" "$dst_dev" "$copy_src_hash" \
+                "$volsize_bytes"; then
             [[ "$snapdev_changed" == "1" ]] \
                 && zfs set snapdev="$snapdev_prev" "$arc_dataset" 2>/dev/null || true
             unarchive_rollback_created "$new_zvol" "$dataset_created" "$created_root"
@@ -619,9 +746,36 @@ unarchive_one_zvol() {
             unarchive_rollback_created "$new_zvol" "$dataset_created" "$created_root"
             return 1
         fi
-        if ! ( set -o pipefail
-               zfs send -cw "${arc_dataset}${snap_name}" \
-                 | "${pace_pipe[@]}" zfs receive "$new_zvol" ); then
+        # awk '/^size/ {print $2}'  —  Extract the stream's byte size from
+        # the send dry-run for the progress display. Fails open: an empty
+        # probe shows rate/bytes/elapsed without percent/ETA.
+        raw_size=$(zfs send -nPcw "${arc_dataset}${snap_name}" 2>/dev/null \
+            | awk '/^size/ {print $2}' || true)
+        archive_pv_args "$raw_size"
+        # Four explicit pipeline variants (the transfer_do law): stage
+        # order keeps the pacer before pv so the displayed rate is the
+        # paced rate the destination actually receives.
+        local send_rc=0
+        if [[ ${#pace_pipe[@]} -gt 0 && ${#archive_pv_args[@]} -gt 0 ]]; then
+            ( set -o pipefail
+              zfs send -cw "${arc_dataset}${snap_name}" \
+                | "${pace_pipe[@]}" | pv "${archive_pv_args[@]}" \
+                | zfs receive "$new_zvol" ) || send_rc=$?
+        elif [[ ${#pace_pipe[@]} -gt 0 ]]; then
+            ( set -o pipefail
+              zfs send -cw "${arc_dataset}${snap_name}" \
+                | "${pace_pipe[@]}" | zfs receive "$new_zvol" ) || send_rc=$?
+        elif [[ ${#archive_pv_args[@]} -gt 0 ]]; then
+            ( set -o pipefail
+              zfs send -cw "${arc_dataset}${snap_name}" \
+                | pv "${archive_pv_args[@]}" \
+                | zfs receive "$new_zvol" ) || send_rc=$?
+        else
+            ( set -o pipefail
+              zfs send -cw "${arc_dataset}${snap_name}" \
+                | zfs receive "$new_zvol" ) || send_rc=$?
+        fi
+        if [[ $send_rc -ne 0 ]]; then
             log_msg "FATAL: Failed to restore ${new_zvol} (raw send/receive)"
             unarchive_rollback_created "$new_zvol" "$dataset_created" "$created_root"
             return 1

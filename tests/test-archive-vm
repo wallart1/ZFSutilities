@@ -94,7 +94,7 @@ run_archive() {
         "$capture_dir/zfsdelfs" "$capture_dir/rescan" \
         "$capture_dir/remove-vm-disk-argv" \
         "$capture_dir/pace" "$capture_dir/dd" \
-        "$capture_dir/tee" "$capture_dir/sha256"
+        "$capture_dir/tee" "$capture_dir/sha256" "$capture_dir/pv"
 
     local sever_stub="$capture_dir/sever-vm-clone-stub"
     cat > "$sever_stub" << 'EOF'
@@ -126,6 +126,7 @@ EOF
         setup_test_env
         mock_date "$date_iso" "$date_dow" "$date_dom"
         setup_node_config "$mode"
+        _mock_zfs_send_size="${_mock_archive_send_size:-10737418240}"
 
         export ARCHIVE_VM_TEST_NO_ROOT=1
         export NODE_LIB="$mydir/lib/node-lib.sh"
@@ -175,6 +176,10 @@ EOF
         export _mock_zfsdelfs_stub="$zfsdelfs_stub"
         export _mock_rescan_stub="$rescan_stub"
         export ZFSUTILITIES_INPUT_HOLD="${_mock_input_hold:-}"
+        # Real-ZFS send dry-run size for the progress display's -s total.
+        # test-lib's re-source resets _mock_zfs_send_size, so the knob
+        # travels under its own name and lands after that reset.
+        export _mock_archive_send_size="${_mock_archive_send_size:-}"
 
         # Note: ask_yn cannot be mocked here — sourcing archive-vm re-runs
         # bashinit (via ~/bashinit), which unconditionally redefines it.
@@ -397,6 +402,17 @@ EOF
                 return $?
             fi
             echo "PACE:${*:2}" >> "$_capture_dir/pace"
+            # Real-CLI contract (pace_stream.py main): <rate> [--] [file] —
+            # one to three words after the script, a third only behind
+            # "--". The real pacer answers anything else with usage and
+            # rc 2, so a pipeline that splices the next stage's words onto
+            # the pacer segment must die here as it does in production.
+            local -a _pacer_words=("${@:2}")
+            if [[ ${#_pacer_words[@]} -lt 1 || ${#_pacer_words[@]} -gt 3 ]] \
+                || [[ ${#_pacer_words[@]} -eq 3 && "${_pacer_words[1]}" != "--" ]]; then
+                echo "usage: pace_stream.py <rate> [--] [file]" >&2
+                return 2
+            fi
             local -a _pyargv=("$@") _pi
             for _pi in "${!_pyargv[@]}"; do
                 if [[ "${_pyargv[$_pi]}" == "--" ]]; then
@@ -427,6 +443,29 @@ EOF
             done
             cat > /dev/null
             return 0
+        }
+        pv() {
+            # Progress display stage (archive_pv_args), argv recorded. A
+            # display stage must never alter the data flow: the stream
+            # form passes stdin through, and the file-operand form (the
+            # unpaced verify read-back) reads the named device — which
+            # never exists in the harness, so nothing is produced, the
+            # same law as the dd reader. -B and -s take a value word.
+            echo "PV:$*" >> "$_capture_dir/pv"
+            local -a _pvargv=("$@")
+            local _pvi _pvfile=""
+            for ((_pvi = 0; _pvi < ${#_pvargv[@]}; _pvi++)); do
+                case "${_pvargv[$_pvi]}" in
+                    -B|-s) ((++_pvi)) ;;
+                    -*) ;;
+                    *) _pvfile="${_pvargv[$_pvi]}" ;;
+                esac
+            done
+            if [[ -n "$_pvfile" ]]; then
+                [[ -e "$_pvfile" ]] && cat -- "$_pvfile"
+                return 0
+            fi
+            cat
         }
         targetcli() {
             # Canned iSCSI layout for locally-executed storage payloads
@@ -535,6 +574,7 @@ EOF
     cat "$capture_dir/dd" 2>/dev/null || true
     cat "$capture_dir/tee" 2>/dev/null || true
     cat "$capture_dir/sha256" 2>/dev/null || true
+    cat "$capture_dir/pv" 2>/dev/null || true
     return $rc
 }
 
@@ -550,6 +590,7 @@ reset_mocks() {
     unset _mock_snapdev _mock_preexisting_archive _mock_complete_archive
     unset _mock_zfsdelfs_rc _mock_remove_vm_disk_rc _mock_step4_zvols_remaining
     unset _mock_input_hold _mock_saved_rate _mock_lio_zvols
+    unset _mock_archive_send_size
     # Fresh receive records per test: a dataset received by an earlier
     # test must not exist in this test's freshly reset world.
     [[ -n "${_mock_zfs_state_dir:-}" ]] \
@@ -2012,6 +2053,364 @@ y"
 }
 
 # ------------------------------------------------------------------
+# Progress display
+# ------------------------------------------------------------------
+
+test_progress_off_by_default() {
+    reset_mocks
+    test_start "Progress: no display stage when headless (default)"
+
+    local vmid="280"
+    local pve_dir="$_mock_zfs_state_dir/pve60"
+    local archive="$_mock_zfs_state_dir/archive60"
+    local mount="$_mock_zfs_state_dir/mount60"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"DD:of=/dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
+        test_fail "Device copy did not run; output:\n$out"
+        return
+    fi
+    if printf '%s\n' "$out" | grep -q '^PV:'; then
+        test_fail "Display stage armed while headless; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_progress_forced_paced_copy() {
+    reset_mocks
+    test_start "Progress: forced display arms pv in paced copy and verify"
+
+    local vmid="281"
+    local pve_dir="$_mock_zfs_state_dir/pve61"
+    local archive="$_mock_zfs_state_dir/archive61"
+    local mount="$_mock_zfs_state_dir/mount61"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+100M
+y
+n"
+
+    local out rc
+    out=$(ARCHIVE_PROGRESS_MODE=force run_archive single-node existing \
+        "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    # volsize 10G comes back as exact bytes through the parsable get.
+    # One stream-form pv in the copy pipeline, one in the paced verify.
+    local pv_line="PV:-fpterb -B 16M -s 10737418240"
+    local pv_count tee_count pace_count
+    pv_count=$(printf '%s\n' "$out" | grep -cFx -- "$pv_line")
+    if [[ "$pv_count" -ne 2 ]]; then
+        test_fail "Want pv in copy + verify (saw ${pv_count}); output:\n$out"
+        return
+    fi
+    # The hash side-channel and the writer stay intact around the stage.
+    tee_count=$(printf '%s\n' "$out" | grep -c '^TEE:')
+    if [[ "$tee_count" -ne 1 ]]; then
+        test_fail "In-flight hash fan-out changed (${tee_count}); output:\n$out"
+        return
+    fi
+    pace_count=$(printf '%s\n' "$out" | grep -c '^PACE:')
+    if [[ "$pace_count" -ne 2 ]]; then
+        test_fail "Pacer count changed (${pace_count}); output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"✓ Copy verified (sha256 match)"* ]]; then
+        test_fail "Copy verification missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_progress_forced_unlimited_copy() {
+    reset_mocks
+    test_start "Progress: forced display arms pv in unlimited copy and read-back"
+
+    local vmid="282"
+    local pve_dir="$_mock_zfs_state_dir/pve62"
+    local archive="$_mock_zfs_state_dir/archive62"
+    local mount="$_mock_zfs_state_dir/mount62"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(ARCHIVE_PROGRESS_MODE=force run_archive single-node existing \
+        "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    # Copy stage: stream form, no file operand.
+    local copy_line="PV:-fpterb -B 16M -s 10737418240"
+    if ! printf '%s\n' "$out" | grep -qFx -- "$copy_line"; then
+        test_fail "Copy display stage missing; output:\n$out"
+        return
+    fi
+    # Verify stage: pv is the reader and names the destination device.
+    local verify_line="PV:-fpterb -B 16M -s 10737418240"
+    verify_line+=" /dev/zvol/${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"
+    if ! printf '%s\n' "$out" | grep -qFx -- "$verify_line"; then
+        test_fail "Verify display stage missing; output:\n$out"
+        return
+    fi
+    if printf '%s\n' "$out" | grep -q '^PACE:'; then
+        test_fail "Unlimited run must not pace; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"✓ Copy verified (sha256 match)"* ]]; then
+        test_fail "Copy verification missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_progress_forced_raw_send() {
+    reset_mocks
+    test_start "Progress: forced display arms pv in raw send/receive"
+
+    local vmid="283"
+    local pve_dir="$_mock_zfs_state_dir/pve63"
+    local archive="$_mock_zfs_state_dir/archive63"
+    local mount="$_mock_zfs_state_dir/mount63"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_encryption="aes-256-gcm"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(ARCHIVE_PROGRESS_MODE=force run_archive single-node existing \
+        "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Archive method: raw send/receive (encrypted)"* ]]; then
+        test_fail "Raw method not reported; output:\n$out"
+        return
+    fi
+    # -s comes from the send dry-run probe (_mock_zfs_send_size).
+    if [[ "$out" != *"PV:-fpterb -B 16M -s 10737418240"* ]]; then
+        test_fail "Raw-send display stage missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_rate_limit_paces_raw_send() {
+    reset_mocks
+    test_start "Rate limit: raw send/receive runs through a standalone pacer stage"
+
+    local vmid="286"
+    local pve_dir="$_mock_zfs_state_dir/pve66"
+    local archive="$_mock_zfs_state_dir/archive66"
+    local mount="$_mock_zfs_state_dir/mount66"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_encryption="aes-256-gcm"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+100M
+y
+n"
+
+    local out rc
+    out=$(run_archive single-node existing "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"Archive method: raw send/receive (encrypted)"* ]]; then
+        test_fail "Raw method not reported; output:\n$out"
+        return
+    fi
+    # The pacer is its own pipeline segment and gets the rate alone: the
+    # real CLI takes <rate> [--] [file] and refuses anything spliced on
+    # after it (usage, rc 2), which fails the whole transfer.
+    local pace_count
+    pace_count=$(printf '%s\n' "$out" | grep -cFx -- "PACE:100M")
+    if [[ "$pace_count" -ne 1 ]]; then
+        test_fail "Want one bare-rate pacer stage (saw ${pace_count}); output:\n$out"
+        return
+    fi
+    if printf '%s\n' "$out" | grep -q '^PV:'; then
+        test_fail "Display stage armed while headless; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Failed to archive"* ]]; then
+        test_fail "Paced raw transfer failed; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_progress_forced_paced_raw_send() {
+    reset_mocks
+    test_start "Progress: forced display arms pv after the pacer in raw send/receive"
+
+    local vmid="287"
+    local pve_dir="$_mock_zfs_state_dir/pve67"
+    local archive="$_mock_zfs_state_dir/archive67"
+    local mount="$_mock_zfs_state_dir/mount67"
+    mkdir -p "$archive" "$mount" "$mount/threeamigos/proxmox" \
+        "$(dirname "$mount/etc/pve/qemu-server")"
+    setup_pve_config "$pve_dir" "$vmid"
+    _mock_encryption="aes-256-gcm"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+100M
+y
+n"
+
+    local out rc
+    out=$(ARCHIVE_PROGRESS_MODE=force run_archive single-node existing \
+        "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    local pace_count
+    pace_count=$(printf '%s\n' "$out" | grep -cFx -- "PACE:100M")
+    if [[ "$pace_count" -ne 1 ]]; then
+        test_fail "Want one bare-rate pacer stage (saw ${pace_count}); output:\n$out"
+        return
+    fi
+    # -s comes from the send dry-run probe (_mock_zfs_send_size).
+    if [[ "$out" != *"PV:-fpterb -B 16M -s 10737418240"* ]]; then
+        test_fail "Raw-send display stage missing; output:\n$out"
+        return
+    fi
+    if [[ "$out" == *"Failed to archive"* ]]; then
+        test_fail "Paced raw transfer failed; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_progress_two_node_local_carries_mode() {
+    reset_mocks
+    test_start "Progress: two-node local payload receives the display mode"
+
+    local vmid="284"
+    local pve_dir="$_mock_zfs_state_dir/pve64"
+    local archive="$_mock_zfs_state_dir/archive64"
+    local mount="$_mock_zfs_state_dir/mount64"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(ARCHIVE_PROGRESS_MODE=force run_archive two-node-local existing \
+        "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    if ! printf '%s\n' "$out" | grep -q '^PV:'; then
+        test_fail "Display stage missing in local payload run; output:\n$out"
+        return
+    fi
+    if [[ "$out" != *"✓ Archived: ${archive}/threeamigos/proxmox/vm-${vmid}-disk-0"* ]]; then
+        test_fail "Archive completion line missing; output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+test_progress_two_node_ssh_threads_mode() {
+    reset_mocks
+    test_start "Progress: two-node ssh payload argv ends with the display mode"
+
+    local vmid="285"
+    local pve_dir="$_mock_zfs_state_dir/pve65"
+    local archive="$_mock_zfs_state_dir/archive65"
+    local mount="$_mock_zfs_state_dir/mount65"
+    mkdir -p "$pve_dir"
+    setup_pve_config "$pve_dir" "$vmid" "two-node"
+    _mock_zvols_list="threeamigos/proxmox/vm-${vmid}-disk-0"
+    _mock_read_response="${archive}
+
+y
+n"
+
+    local out rc
+    out=$(ARCHIVE_PROGRESS_MODE=force run_archive two-node existing \
+        "$pve_dir" "$archive" "$mount" "$vmid")
+    rc=$?
+
+    if [[ $rc -ne 0 ]]; then
+        test_fail "Unexpected exit code $rc; output:\n$out"
+        return
+    fi
+    # The storage-side archive payload's positional arguments travel after
+    # "bash -s"; the forwarded mode is the last of them, and no other ssh
+    # call in this scenario carries it.
+    local force_tail_count
+    force_tail_count=$(printf '%s\n' "$out" | grep -c '^SSH:.*bash -s.* force$')
+    if [[ "$force_tail_count" -ne 1 ]]; then
+        test_fail "Want exactly one mode-threaded payload (saw ${force_tail_count}); output:\n$out"
+        return
+    fi
+
+    test_pass
+}
+
+# ------------------------------------------------------------------
 # Transfer rate limiting
 # ------------------------------------------------------------------
 
@@ -2583,6 +2982,14 @@ test_two_node_declined_disk_removal_keeps_config
 test_two_node_failed_disk_removal_keeps_config
 test_single_node_removal_uses_zfsdelfs
 test_single_node_destroy_failure_keeps_config
+test_progress_off_by_default
+test_progress_forced_paced_copy
+test_progress_forced_unlimited_copy
+test_progress_forced_raw_send
+test_rate_limit_paces_raw_send
+test_progress_forced_paced_raw_send
+test_progress_two_node_local_carries_mode
+test_progress_two_node_ssh_threads_mode
 test_rate_limit_paces_copy_path
 test_rate_case_change_is_not_a_save
 test_invalid_rate_fatals

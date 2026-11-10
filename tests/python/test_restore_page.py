@@ -179,6 +179,38 @@ class TestRestorePageFrames(unittest.TestCase):
             expander.set_label.assert_not_called()
             expander.set_label_widget.assert_called_once()
 
+    @patch.object(rp, "_on_auto_dest_toggled")
+    @patch.object(rp, "_style_restore_save_button")
+    def test_page_viewport_uses_natural_vscroll_policy(self, _mock_style, _mock_auto):
+        """The page viewport sizes the page by its natural height.
+
+        The default MINIMUM policy would clamp the page box to the window
+        height instead of growing the page-level scrollbar.
+        """
+        app = MagicMock()
+        app.ctx = MagicMock()
+        app.ctx.config = {}
+        app.config = {}
+
+        # The frames test above leaves exhausted side_effect iterators on
+        # the shared Frame/Expander mocks; restore the default shared
+        # instances this build relies on.
+        rp.Gtk.Frame.side_effect = None
+        rp.Gtk.Expander.side_effect = None
+        # Its page build also recorded calls on the shared ScrolledWindow
+        # mock's viewport; count only this build's calls.
+        rp.Gtk.ScrolledWindow.return_value.get_child.return_value.set_vscroll_policy.reset_mock()
+
+        page = rp.create_restore_page(app, app.ctx)
+
+        page.set_policy.assert_any_call(
+            rp.Gtk.PolicyType.NEVER,
+            rp.Gtk.PolicyType.AUTOMATIC,
+        )
+        page.get_child.return_value.set_vscroll_policy.assert_called_once_with(
+            rp.Gtk.ScrollablePolicy.NATURAL
+        )
+
 
 class TestRefreshRestoreDestination(unittest.TestCase):
     """Tests for refresh_restore_destination."""

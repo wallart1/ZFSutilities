@@ -211,7 +211,17 @@ def create_datasets_page(app):
     # Initial load
     refresh_datasets_page(app)
 
-    return box
+    # Wrap the page so the whole tab scrolls vertically on short windows.
+    scrolled = Gtk.ScrolledWindow()
+    scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    scrolled.add(box)
+    # NATURAL vscroll policy: the tree's capped window has a tiny minimum,
+    # and the default MINIMUM policy would clamp the page to the window
+    # height and shrink-crush it (dashboard-page idiom).
+    viewport = scrolled.get_child()
+    if hasattr(viewport, "set_vscroll_policy"):
+        viewport.set_vscroll_policy(Gtk.ScrollablePolicy.NATURAL)
+    return scrolled
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 """Logrotate drop-in management for the zfsutilities persistent logs.
 
 Writes the logrotate drop-in (path from config_core.get_paths_config) so the
-cron output log and the scrub-manager event log are rotated weekly instead of
-growing without bound.  Rotated generations stay readable by non-root users.
+cron output log, the scrub-manager event log, and the Rewrite Data file-list
+log are rotated weekly instead of growing without bound.  Rotated
+generations stay readable by non-root users.
 """
 
 import os
@@ -15,8 +16,8 @@ from backup_config import log_msg
 #   compress              — the GUI log viewer reads .gz rotations transparently
 #   create 0644 root root — every generation stays readable by non-root users
 #   missingok / notifempty — harmless before the log first exists
-# Rename+create rotation is safe here: all writers are short-lived processes
-# that open the log in append mode per run.
+# Rename+create rotation is safe for the cron and scrub-manager logs: their
+# writers are short-lived processes that open the log in append mode per run.
 _STANZA_DIRECTIVES = (
     "    weekly\n"
     "    rotate 8\n"
@@ -25,6 +26,27 @@ _STANZA_DIRECTIVES = (
     "    notifempty\n"
     "    compress\n"
     "    create 0644 root root"
+)
+
+# The Rewrite Data file-list log is held open (tee -a) for the whole rewrite
+# of a dataset, which can run for hours.  Rename+create would leave that
+# writer appending to the rotated (then compressed) file, so this log is
+# rotated by copytruncate: the live file keeps its inode and the O_APPEND
+# writer continues at the truncated end.
+_COPYTRUNCATE_DIRECTIVES = (
+    "    weekly\n"
+    "    rotate 8\n"
+    "    maxsize 100M\n"
+    "    missingok\n"
+    "    notifempty\n"
+    "    compress\n"
+    "    copytruncate"
+)
+
+_LOG_STANZAS = (
+    ("cron_log", _STANZA_DIRECTIVES),
+    ("scrub_manager_log", _STANZA_DIRECTIVES),
+    ("rewrite_data_log", _COPYTRUNCATE_DIRECTIVES),
 )
 
 _HEADER = (
@@ -36,8 +58,8 @@ _HEADER = (
 def build_logrotate_content(paths_cfg):
     """Return the drop-in content for the persistent logs in *paths_cfg*."""
     sections = []
-    for key in ("cron_log", "scrub_manager_log"):
-        sections.append(f"{paths_cfg[key]} {{\n{_STANZA_DIRECTIVES}\n}}")
+    for key, directives in _LOG_STANZAS:
+        sections.append(f"{paths_cfg[key]} {{\n{directives}\n}}")
     return _HEADER + "\n" + "\n\n".join(sections) + "\n"
 
 

@@ -27,6 +27,7 @@ def _make_scan_app():
             "cron_log": "/nonexistent-test-logs/cron.log",
             "scrub_manager_log": "/nonexistent-test-logs/scrub-manager.log",
             "rsync_pull_log": "/nonexistent-test-logs/rsync-pull.log",
+            "rewrite_data_log": "/nonexistent-test-logs/rewrite-data.log",
             "logrotate_file": "/nonexistent-test-logs/logrotate.d/zfsutilities",
         }
     }
@@ -590,6 +591,7 @@ class TestScanCronLogRows(unittest.TestCase):
                 "cron_log": cron_log,
                 "scrub_manager_log": "/nonexistent/scrub-manager.log",
                 "rsync_pull_log": "/nonexistent/rsync-pull.log",
+                "rewrite_data_log": "/nonexistent/rewrite-data.log",
                 "logrotate_file": "/nonexistent/logrotate.d/zfsutilities",
             }
         }
@@ -646,7 +648,7 @@ class TestScanCronLogRows(unittest.TestCase):
 
 
 class TestScanPersistentLogRows(unittest.TestCase):
-    """The scrub-manager and rsync-pull logs list in the Miscellaneous rows."""
+    """The scrub-manager, rsync-pull, and rewrite-data logs list in the Miscellaneous rows."""
 
     def _make_app(self, log_dir):
         app = _make_scan_app()
@@ -655,6 +657,7 @@ class TestScanPersistentLogRows(unittest.TestCase):
                 "cron_log": os.path.join(log_dir, "cron.log"),
                 "scrub_manager_log": os.path.join(log_dir, "scrub-manager.log"),
                 "rsync_pull_log": os.path.join(log_dir, "rsync-pull.log"),
+                "rewrite_data_log": os.path.join(log_dir, "rewrite-data.log"),
                 "logrotate_file": "/nonexistent/logrotate.d/zfsutilities",
             }
         }
@@ -667,6 +670,8 @@ class TestScanPersistentLogRows(unittest.TestCase):
                 "scrub-manager.log.1.gz",
                 "rsync-pull.log",
                 "rsync-pull.log.1",
+                "rewrite-data.log",
+                "rewrite-data.log.1.gz",
                 # Near-misses and unrelated logs must not match either prefix.
                 "cron.log",
                 "rsync-backup.log",
@@ -687,6 +692,10 @@ class TestScanPersistentLogRows(unittest.TestCase):
             )
             self.assertEqual(
                 sorted(by_type.get("rsync", [])), ["rsync-pull.log", "rsync-pull.log.1"]
+            )
+            self.assertEqual(
+                sorted(by_type.get("rewrite", [])),
+                ["rewrite-data.log", "rewrite-data.log.1.gz"],
             )
             self.assertNotIn("cron", by_type)
             for row in rows:

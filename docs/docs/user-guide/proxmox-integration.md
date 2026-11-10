@@ -588,6 +588,12 @@ disks that already passed verification are skipped, an interrupted run's
 unverified leftovers are removed and re-made, and a restore that already
 completed reports so and exits without touching anything.
 
+Both scripts show a live progress line on your terminal while a disk
+transfers. The line reports a bar, percent done, elapsed time, estimated
+time remaining, and transfer rate, and it updates in place. Progress is
+display only: the session log receives none of it. A run without a terminal
+shows no progress line.
+
 For the exact archive layout and single-node vs two-node behavior, see the
 [`archive-vm` command reference](../commands-and-modules/commands.md#archive-vm).
 

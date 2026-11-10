@@ -337,6 +337,30 @@ declare -gA _mock_zfs_clones=()
 declare -gA _mock_zpool_guid=()
 declare -gA _mock_zfs_stale_tokens=()
 _mock_zfs_send_size="0"
+
+# mock_size_to_bytes — convert a suffixed size ("10G", "512MiB") to plain
+# bytes, mirroring real zfs's parsable (-p) output for size properties.
+# Anything without a digits+optional-suffix shape (booleans, names, plain
+# numbers, decimals) is printed back unchanged, so non-size properties are
+# never mangled. Pure parameter expansion — no regex.
+mock_size_to_bytes() {
+    local v="$1" num suf mult=1
+    num="${v%%[!0-9]*}"
+    suf="${v#"$num"}"
+    case "${suf,,}" in
+        "") ;;
+        k|ki|kb|kib) mult=1024 ;;
+        m|mi|mb|mib) mult=$((1024 * 1024)) ;;
+        g|gi|gb|gib) mult=$((1024 * 1024 * 1024)) ;;
+        t|ti|tb|tib) mult=$((1024 * 1024 * 1024 * 1024)) ;;
+        p|pi|pb|pib) mult=$((1024 * 1024 * 1024 * 1024 * 1024)) ;;
+        e|ei|eb|eib) mult=$((1024 * 1024 * 1024 * 1024 * 1024 * 1024)) ;;
+        *) printf '%s' "$v"; return 0 ;;
+    esac
+    [[ -n "$num" ]] || { printf '%s' "$v"; return 0; }
+    printf '%s' "$(( num * mult ))"
+}
+
 _mock_zpool_list=""
 _mock_zfs_last_sequence=""  # tracks -s / -S passed to zfs list
 _mock_zfs_guid_list=""
@@ -756,11 +780,17 @@ zfs() {
             ;;
 
         get)
-            local outcols="" output_value_only=0
+            local outcols="" output_value_only=0 parsable=0
             local -a _props=()
             while [[ $# -gt 0 ]]; do
                 case "$1" in
-                    -H*|-p*) shift ;;
+                    -H*|-p*)
+                        # A p anywhere in a short-option cluster (-Hp, -p,
+                        # -Hpo) means parsable: real zfs prints exact
+                        # bytes for sizes, so suffixed stored values are
+                        # converted at serve time (mock_size_to_bytes).
+                        case "$1" in -*p*) parsable=1 ;; esac
+                        shift ;;
                     -o)
                         outcols="$2"
                         [[ "$2" == "value" ]] && output_value_only=1
@@ -815,6 +845,11 @@ zfs() {
             else
                 value="-"
             fi
+            # Parsable sizes come back as exact bytes (real -p semantics);
+            # any other value shape passes through untouched.
+            if [[ $parsable -eq 1 && "$value" != "-" ]]; then
+                value=$(mock_size_to_bytes "$value")
+            fi
             # A completed receive consumes the resume token (real-ZFS
             # semantics). The receive branch records completions in a
             # state-dir file because pipelined receives run it in a
@@ -835,7 +870,11 @@ zfs() {
         send)
             local is_dryrun=0 _send_token=""
             for a in "$@"; do
-                [[ "$a" == "-nP" ]] && is_dryrun=1
+                # -n may hide inside a short-option cluster (the archive
+                # engine probes size with `zfs send -nPcw`).
+                case "$a" in
+                    -n*|-[!-]*n*) is_dryrun=1 ;;
+                esac
                 # Track the resume token: the argv word after -t.
                 if [[ -n "$_send_token" ]]; then
                     _send_token="$a"

@@ -302,9 +302,10 @@ Persisted by `UIStateManager` in `python/gui_helpers.py`.
 ### `paths` object
 
 Installation-specific file paths live here rather than hard-coded in the
-modules that use them. The section is seeded by the v27 migration; at
-runtime, missing keys are seeded on first access from the centralized path
-layer (`paths.py`, which honours `ZFSUTILITIES_*` environment overrides) and
+modules that use them. The section is seeded by the v27 migration (with the
+`rewrite_data_log` and `rsync_pull_log` keys added by v32); at runtime,
+missing keys are seeded on first access from the centralized path layer
+(`paths.py`, which honours `ZFSUTILITIES_*` environment overrides) and
 persisted by the GUI; user-set values always win. Headless readers derive
 without writing.
 
@@ -313,7 +314,8 @@ without writing.
 | `cron_log`           | string | Persistent cron output log (default `/var/log/zfsutilities/cron.log`); embedded in the generated cron lines |
 | `scrub_manager_log`  | string | Scrub-manager event log (default `/var/log/zfsutilities/scrub-manager.log`)                       |
 | `rsync_pull_log`     | string | Pull-step rsync output log on the source host (default `/var/log/zfsutilities/rsync-pull.log`); truncated once per day by the offsite pull step |
-| `logrotate_file`     | string | Logrotate drop-in managed for the cron and scrub-manager logs above (rsync-pull self-truncates daily) (default `/etc/logrotate.d/zfsutilities`) |
+| `rewrite_data_log`   | string | Rewrite Data file-list log (default `/var/log/zfsutilities/rewrite-data.log`); one header-plus-list block per dataset rewrite, rotated weekly by logrotate |
+| `logrotate_file`     | string | Logrotate drop-in managed for the cron, scrub-manager, and rewrite-data logs above (rsync-pull self-truncates daily) (default `/etc/logrotate.d/zfsutilities`) |
 
 ### Python access
 
@@ -482,7 +484,7 @@ the software release version. When the config structure changes, bump
 **Migration chain** (`config_migrations.py`):
 
 ```python
-CONFIG_VERSION = 30
+CONFIG_VERSION = 32
 
 MIGRATIONS = [
     _migrate_1_to_2,
@@ -514,6 +516,8 @@ MIGRATIONS = [
     _migrate_27_to_28,
     _migrate_28_to_29,
     _migrate_29_to_30,
+    _migrate_30_to_31,
+    _migrate_31_to_32,
 ]
 ```
 

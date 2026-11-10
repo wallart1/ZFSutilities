@@ -3,7 +3,8 @@
 # unarchive-vm --list [archive_base]
 # Restores an archived VM from archive: recreates zvols, Proxmox config,
 # and iSCSI infrastructure (two-node). --list shows the archived VMs
-# instead (read-only).
+# instead (read-only). Long transfers show a live pv progress line on
+# the terminal (see archive-engine.sh) — never in the session log.
 #
 # Install to: /usr/local/lib/zfsutilities/bin/unarchive-vm on BOTH hosts
 # Run from:   the compute host (or the storage host directly — delegates via SSH)
@@ -228,6 +229,22 @@ if [[ $EUID -ne 0 && ${UNARCHIVE_VM_TEST_NO_ROOT:-0} != "1" ]]; then
     log_msg "FATAL: Must run as root (use sudo)"
     exit 1
 fi
+
+# Progress display mode for the shared engine (see archive-engine.sh's
+# header): a live pv line when stderr is a terminal, forced output for a
+# capturing parent, nothing headless. Decided here, once, because this
+# shell's stderr is the operator's — the storage-side payload's stderr is
+# an ssh pipe, so the mode rides over as a payload argument. pv writes
+# only to stderr, never through log_msg: progress never grows the session
+# log. ARCHIVE_PROGRESS_MODE (tty|force|off) overrides the detection for
+# tests and unusual deployments.
+archive_progress_mode=""
+[[ -t 2 ]] && archive_progress_mode="tty"
+[[ "${ZFSUTILITIES_LOG_INHERIT:-}" == "Y" ]] && archive_progress_mode="force"
+case "${ARCHIVE_PROGRESS_MODE:-}" in
+    tty|force) archive_progress_mode="$ARCHIVE_PROGRESS_MODE" ;;
+    off) archive_progress_mode="" ;;
+esac
 
 # --- Node-agnostic orchestration ---------------------------------------
 # This script runs wherever it was invoked: storage-side work goes through
@@ -660,7 +677,7 @@ else
         esac
     done
     if ! on_storage "$archive_mount" "$dataset_count" \
-            "$newvmid" "$restore_actions" \
+            "$newvmid" "$restore_actions" "$archive_progress_mode" \
             "${archive_datasets[@]}" "${original_zvols[@]}" "${new_zvols[@]}" << 'SSHEOF'
 mydir="${ZFSUTILITIES_BIN_DIR:-$(realpath /usr/local/lib/zfsutilities/current/bin)}"
 source "$mydir/bashinit"
@@ -680,7 +697,10 @@ archive_mount="$1"
 dataset_count="$2"
 newvmid="$3"
 restore_actions="$4"
-shift 4
+# The orchestrator's progress display mode: this payload's own stderr is
+# a pipe when it runs over ssh, so it cannot test the operator's terminal.
+archive_progress_mode="$5"
+shift 5
 
 archive_datasets=("${@:1:$dataset_count}")
 original_zvols=("${@:$((dataset_count + 1)):$dataset_count}")

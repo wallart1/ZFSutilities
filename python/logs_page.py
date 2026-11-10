@@ -330,6 +330,7 @@ def _scan_cron_log_rows(app):
 _PERSISTENT_LOG_SPECS = (
     ("scrub_manager_log", "scrub"),
     ("rsync_pull_log", "rsync"),
+    ("rewrite_data_log", "rewrite"),
 )
 
 

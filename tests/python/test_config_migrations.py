@@ -181,8 +181,8 @@ class TestIndividualMigrations(unittest.TestCase):
         self.assertEqual(result["checkagainst"][2], "not-a-dict")
         self.assertEqual(result["checkagainst"][3]["comment"], "existing")
 
-    def test_config_version_is_31(self):
-        self.assertEqual(config_migrations.CONFIG_VERSION, 31)
+    def test_config_version_is_32(self):
+        self.assertEqual(config_migrations.CONFIG_VERSION, 32)
 
     def test_migrate_19_to_20_drops_offsite_pools(self):
         config = {
@@ -533,6 +533,34 @@ class TestIndividualMigrations(unittest.TestCase):
         result = config_migrations._migrate_30_to_31(config)
         self.assertEqual(result["config_version"], 31)
         self.assertNotIn("restore", result)
+
+    def test_migrate_31_to_32_seeds_persistent_log_paths(self):
+        config = {
+            "config_version": 31,
+            "paths": {"cron_log": "/srv/logs/cron.log"},
+        }
+        result = config_migrations._migrate_31_to_32(config)
+        self.assertEqual(result["config_version"], 32)
+        paths_cfg = result["paths"]
+        # The new key and the previously lazy-only rsync pull log are seeded.
+        self.assertTrue(paths_cfg["rewrite_data_log"].endswith("rewrite-data.log"))
+        self.assertTrue(paths_cfg["rsync_pull_log"].endswith("rsync-pull.log"))
+        # A user-set path is preserved.
+        self.assertEqual(paths_cfg["cron_log"], "/srv/logs/cron.log")
+
+    def test_migrate_31_to_32_preserves_user_rewrite_log(self):
+        config = {
+            "config_version": 31,
+            "paths": {"rewrite_data_log": "/srv/logs/rewrite.log"},
+        }
+        result = config_migrations._migrate_31_to_32(config)
+        self.assertEqual(result["paths"]["rewrite_data_log"], "/srv/logs/rewrite.log")
+
+    def test_migrate_31_to_32_is_idempotent(self):
+        config = {"config_version": 31}
+        result1 = config_migrations._migrate_31_to_32(dict(config))
+        result2 = config_migrations._migrate_31_to_32(result1)
+        self.assertEqual(result1, result2)
 
     def test_migrate_15_to_16_adds_prune_pools_order(self):
         config = {"config_version": 15}
